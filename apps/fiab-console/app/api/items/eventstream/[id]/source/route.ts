@@ -45,11 +45,13 @@ import {
   type AdfLinkedService,
   type AdfPipeline,
 } from '@/lib/azure/adf-client';
+import { provisionMirrorCdf } from '@/lib/azure/mirror-cdf-producer';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+export const maxDuration = 300;
 
-type SourceKind = 'eventhub' | 'iothub' | 'sample' | 'cdc-mirror' | 'kafka' | 'custom-app';
+type SourceKind = 'eventhub' | 'iothub' | 'sample' | 'cdc-mirror' | 'kafka' | 'custom-app' | 'mirror-cdf';
 
 interface ProvisionedEndpoint {
   fqdn?: string;
@@ -76,6 +78,10 @@ interface SourceConfig {
   cdcDatabase?: string;
   cdcTable?: string;
   cdcUsername?: string;
+  mirrorItemId?: string;
+  mirrorWorkspaceId?: string;
+  mirrorTables?: string[];
+  cdfStartingVersion?: number;
   [k: string]: unknown;
 }
 
@@ -382,6 +388,32 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
         ? `The namespace has disableLocalAuth: true — push events to https://${fqdn}/${hubName}/messages with an Entra bearer token (or Kafka OAUTHBEARER). Set disableLocalAuth=false in eventhubs.bicep (Commercial only) to enable SAS connection strings.`
         : 'A Send SAS connection string was issued. Prefer Entra auth where possible.';
       cfg.eventHubName = hubName;
+    } else if (kind === 'mirror-cdf') {
+      if (!cfg.mirrorItemId || !cfg.mirrorWorkspaceId) {
+        return NextResponse.json({ ok: false, error: 'Select a mirrored database for the change-feed source.' }, { status: 422 });
+      }
+      const tables = Array.isArray(cfg.mirrorTables) ? cfg.mirrorTables.map((t) => String(t)) : [];
+      if (!tables.length) {
+        return NextResponse.json({ ok: false, error: 'Select at least one mirror table for the change feed.' }, { status: 422 });
+      }
+      const prov = await provisionMirrorCdf({
+        eventstreamId: id,
+        nodeIdx: nodeIdx >= 0 ? nodeIdx : 0,
+        mirrorId: String(cfg.mirrorItemId),
+        mirrorWorkspaceId: String(cfg.mirrorWorkspaceId),
+        tables,
+        startingVersion: typeof cfg.cdfStartingVersion === 'number' ? cfg.cdfStartingVersion : 0,
+      });
+      if (!prov.ok && prov.gate) return gate(prov.gate.missing, prov.gate.message);
+      if (!prov.ok) {
+        return NextResponse.json({ ok: false, error: prov.error || 'could not provision the mirror change feed' }, { status: 502 });
+      }
+      const fqdn = prov.fqdn || nsFqdn();
+      endpoint = { fqdn, entityPath: prov.hub, kafkaBootstrap: `${fqdn}:9093`, auth: 'entra', connectionString: null, localAuthDisabled: true };
+      hint =
+        `Spark CDF reader batch ${prov.jobId ?? '(submitted)'} is reading the mirror's Delta change feed for ` +
+        `${prov.tables.length} table(s) into the staging area. When it finishes, use "Produce staged changes to ` +
+        `Event Hub" to send the change rows to "${prov.hub}" (the ingest endpoint downstream operators read).`;
     } else {
       return NextResponse.json({ ok: false, error: `unsupported source kind: ${kind}` }, { status: 400 });
     }

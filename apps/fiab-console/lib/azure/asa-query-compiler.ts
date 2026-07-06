@@ -27,8 +27,17 @@
 // zero dependency on the React component file.
 // ============================================================
 
-export type SourceKind = 'eventhub' | 'iothub' | 'sample' | 'cdc-mirror' | 'kafka' | 'custom-app';
-export type TransformKind = 'filter' | 'aggregate' | 'group-by' | 'project' | 'union' | 'join' | 'window';
+export type SourceKind =
+  | 'eventhub' | 'iothub' | 'sample' | 'cdc-mirror' | 'kafka' | 'custom-app'
+  // rel-T90: a Mirrored-Database change feed — reads the mirror's Bronze Delta
+  // change-data-feed (readChangeFeed) via a Synapse Spark batch and produces the
+  // change rows to an Event Hub the downstream operators read.
+  | 'mirror-cdf';
+export type TransformKind =
+  | 'filter' | 'aggregate' | 'group-by' | 'project' | 'union' | 'join' | 'window'
+  // rel-T91: DeltaFlow CDC-flatten — Debezium before/after/op/ts envelope →
+  // flattened tabular rows + change-metadata columns (__op / __changed_at / …).
+  | 'cdc-flatten';
 export type SinkKind = 'kusto' | 'lakehouse' | 'eventhub' | 'reflex' | 'derivedStream';
 
 export type AsaAggregateFunc = 'AVG' | 'SUM' | 'COUNT' | 'MIN' | 'MAX';
@@ -74,6 +83,12 @@ export interface SourceNode {
   cdcTable?: string;
   cdcUsername?: string;
   cdcAdfPipelineName?: string;
+  // Mirrored-Database change-feed source (mirror-cdf, rel-T90): the bound
+  // mirror item + the tables whose Bronze Delta CDF is read and produced to EH.
+  mirrorItemId?: string;
+  mirrorWorkspaceId?: string;
+  mirrorTables?: string[]; // "schema.table" entries (mirror's managed Delta names)
+  cdfStartingVersion?: number; // Delta commit version to read change feed from (default 0)
   // Filled after provisioning by /api/items/eventstream/[id]/source.
   provisionedEndpoint?: ProvisionedEndpoint;
 }
@@ -99,6 +114,16 @@ export interface TransformNode {
   joinType?: AsaJoinType;
   joinOn?: string; // ON condition ── allowed 1:1 expression slot
   joinDurationSeconds?: number; // DATEDIFF bound
+  // DeltaFlow CDC-flatten (cdc-flatten, rel-T91): flatten a Debezium change
+  // envelope into tabular rows + change-metadata columns. All slots are typed
+  // config (field-name pickers + a column list) — no freeform JSON.
+  cdcColumns?: string[]; // source table data columns to flatten (from after/before)
+  cdcBeforeField?: string; // Debezium "before" record field (default 'before')
+  cdcAfterField?: string; // Debezium "after" record field (default 'after')
+  cdcOpField?: string; // Debezium op field: c/r/u/d (default 'op')
+  cdcTsField?: string; // Debezium ts_ms epoch-millis field (default 'ts_ms')
+  cdcSourceField?: string; // optional Debezium "source" record → __schema/__table
+  cdcMetaPrefix?: string; // metadata-column prefix (default '__')
   // Legacy / misc (kept wire-compatible with pre-existing Cosmos state)
   columns?: string[];
   window?: string;
@@ -204,6 +229,47 @@ function havingClause(t: TransformNode): string {
 }
 
 /**
+ * DeltaFlow CDC-flatten SELECT list (rel-T91). Turns a Debezium change envelope
+ * ({ before, after, op, ts_ms, source }) into a flat row: each data column is
+ * COALESCE(after.col, before.col) (so deletes keep their key/columns from
+ * `before`), plus DeltaFlow-style metadata columns:
+ *   __op          Insert | Update | Delete   (from op c/r → Insert, u → Update, d → Delete)
+ *   __changed_at  event commit time           (ts_ms epoch-millis → datetime)
+ *   __schema / __table   when a Debezium `source` record field is named.
+ * Grounded in the Fabric "DeltaFlow output transformation" doc + the Stream
+ * Analytics Query Language reference (record navigation, CASE, DATEADD, CAST).
+ * Exported so the editor's operator-tab emitter reuses the exact same SQL.
+ */
+export function cdcFlattenSelectList(t: TransformNode): string {
+  const after = (t.cdcAfterField || 'after').trim() || 'after';
+  const before = (t.cdcBeforeField || 'before').trim() || 'before';
+  const op = (t.cdcOpField || 'op').trim() || 'op';
+  const ts = (t.cdcTsField || 'ts_ms').trim() || 'ts_ms';
+  const prefix = (t.cdcMetaPrefix ?? '__');
+  const cols = (t.cdcColumns || []).map((c) => c.trim()).filter(Boolean);
+  const parts: string[] = [];
+  // Data columns: prefer the post-image (after); fall back to the pre-image
+  // (before) so a delete event still carries its key columns.
+  for (const c of cols) {
+    parts.push(`COALESCE(${after}.${c}, ${before}.${c}) AS ${c}`);
+  }
+  // Change-metadata columns (DeltaFlow parity).
+  parts.push(
+    `CASE ${op} WHEN 'c' THEN 'Insert' WHEN 'r' THEN 'Insert' WHEN 'u' THEN 'Update' ` +
+    `WHEN 'd' THEN 'Delete' ELSE ${op} END AS ${prefix}op`,
+  );
+  parts.push(
+    `DATEADD(millisecond, CAST(${ts} AS bigint), CAST('1970-01-01T00:00:00Z' AS datetime)) AS ${prefix}changed_at`,
+  );
+  const src = (t.cdcSourceField || '').trim();
+  if (src) {
+    parts.push(`${src}.schema AS ${prefix}schema`);
+    parts.push(`${src}.table AS ${prefix}table`);
+  }
+  return parts.length ? parts.join(', ') : '*';
+}
+
+/**
  * The SELECT column list for a transform (without the leading "SELECT").
  */
 function selectListFor(t: TransformNode): string {
@@ -216,6 +282,8 @@ function selectListFor(t: TransformNode): string {
       return (t.selectFields && t.selectFields.length)
         ? t.selectFields.map((c) => c.trim()).filter(Boolean).join(', ')
         : '*';
+    case 'cdc-flatten':
+      return cdcFlattenSelectList(t);
     case 'join':
       return 'L.*, R.*';
     case 'filter':
