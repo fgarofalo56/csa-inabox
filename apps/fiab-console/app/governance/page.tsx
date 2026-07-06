@@ -32,7 +32,7 @@ import {
   DataTrending20Regular, Shield20Regular, Tag20Regular, Branch20Regular,
   DatabaseSearch20Regular, DocumentBulletList20Regular, Beaker20Regular,
   Open16Regular, ArrowSync20Regular, Box20Regular, ShieldCheckmark20Regular,
-  History20Regular, type FluentIcon,
+  History20Regular, ShieldGlobe20Regular, type FluentIcon,
 } from '@fluentui/react-icons';
 import { PageShell } from '@/lib/components/page-shell';
 import { EmptyState } from '@/lib/components/empty-state';
@@ -231,6 +231,7 @@ const SECTIONS: {
     items: [
       { href: '/governance/policies', label: 'Access policies', desc: 'DLP, masking, RLS, retention, access.', icon: Shield20Regular, color: 'var(--loom-accent-orange)' },
       { href: '/governance/protection-policies', label: 'Protection policies', desc: 'Label-driven restrict-only allow-lists → real RBAC reconcile (sovereign, no Fabric).', icon: ShieldCheckmark20Regular, color: 'var(--loom-accent-red)' },
+      { href: '/governance/workspace-egress', label: 'Outbound access protection', desc: 'Per-workspace egress allow-list → real Azure NSG outbound rules (sovereign, no Fabric).', icon: ShieldGlobe20Regular, color: 'var(--loom-accent-azure)' },
       { href: '/governance/access-requests', label: 'Access requests', desc: 'Multi-tier approval inbox → real Azure RBAC grant.', icon: ShieldCheckmark20Regular, color: 'var(--loom-accent-violet)' },
       { href: '/governance/data-quality', label: 'Data quality', desc: 'Author rules, run on your engine, results + Delta/Lakehouse monitors.', icon: Beaker20Regular, color: 'var(--loom-accent-cyan)' },
       { href: '/governance/mdm', label: 'Master data', desc: 'Golden-record match/merge + reference data (Azure-native).', icon: Box20Regular, color: 'var(--loom-accent-indigo)' },
