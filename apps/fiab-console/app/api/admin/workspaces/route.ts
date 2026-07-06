@@ -45,8 +45,16 @@ export async function GET() {
     );
   }
   try {
-    const workspaces = await listAllWorkspacesAdmin();
-    return NextResponse.json({ ok: true, total: workspaces.length, workspaces });
+    const { workspaces, degraded, degradedReasons } = await listAllWorkspacesAdmin();
+    return NextResponse.json({
+      ok: true,
+      total: workspaces.length,
+      workspaces,
+      // rel-T108: when a best-effort enrichment (item counts / owner roles) fell
+      // back to defaults, say so — the UI can flag "counts may be stale / store
+      // unreachable" instead of showing 0 as if it were the truth.
+      ...(degraded ? { degraded: true, degradedReasons } : {}),
+    });
   } catch (e: any) {
     return apiServerError(e);
   }

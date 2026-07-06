@@ -75,10 +75,29 @@ interface RawWorkspaceDoc {
 }
 
 /**
+ * Result of {@link listAllWorkspacesAdmin}. `degraded` is TRUE when a
+ * best-effort enrichment sub-query (item counts / last-activity or the
+ * owner-role resolve) failed and its fields fell back to defaults (0 counts /
+ * `[createdBy]` owners). It lets the UI distinguish "this workspace really has
+ * 0 items" from "the count store was unreachable", instead of both looking
+ * identical (rel-T108). `degradedReasons` names which enrichment(s) fell back.
+ */
+export interface AdminWorkspacesResult {
+  workspaces: WorkspaceAdminRecord[];
+  degraded: boolean;
+  degradedReasons: string[];
+}
+
+/**
  * Enumerate EVERY workspace in the tenant with live item counts, last-activity,
  * and resolved owners. Cross-partition Cosmos reads only.
+ *
+ * The primary workspace scan is authoritative — it THROWS on failure (the route
+ * genericizes it via apiServerError). The two enrichment sub-queries are
+ * best-effort: a failure degrades their fields to defaults AND is surfaced via
+ * the returned `degraded` flag so a store blip can't silently read as "empty".
  */
-export async function listAllWorkspacesAdmin(): Promise<WorkspaceAdminRecord[]> {
+export async function listAllWorkspacesAdmin(): Promise<AdminWorkspacesResult> {
   const wsC = await workspacesContainer();
 
   // 1) Every workspace, all partitions (no partitionKey option = cross-partition fan-out).
@@ -86,15 +105,18 @@ export async function listAllWorkspacesAdmin(): Promise<WorkspaceAdminRecord[]> 
     .query<RawWorkspaceDoc>({ query: 'SELECT * FROM c' })
     .fetchAll();
 
-  if (docs.length === 0) return [];
+  if (docs.length === 0) return { workspaces: [], degraded: false, degradedReasons: [] };
 
   const ids = docs.map((w) => w.id);
   const inParams = ids.map((id, i) => ({ name: `@w${i}`, value: id }));
   const inExpr = inParams.map((p) => p.name).join(',');
 
+  const degradedReasons: string[] = [];
+
   // 2) Batch item-count + last-activity for ALL workspaces in one cross-partition
   //    GROUP BY (same proven pattern as GET /api/workspaces?count=true). Degrades
-  //    gracefully to zero counts if the aggregate fails (e.g. RU pressure).
+  //    gracefully to zero counts if the aggregate fails (e.g. RU pressure) — and
+  //    records the degradation so the caller can flag it.
   const counts = new Map<string, number>();
   const lastActivity = new Map<string, string>();
   try {
@@ -112,7 +134,8 @@ export async function listAllWorkspacesAdmin(): Promise<WorkspaceAdminRecord[]> 
       if (r.lastActivity) lastActivity.set(r.workspaceId, r.lastActivity);
     }
   } catch {
-    // leave counts/lastActivity empty — record falls back to 0 / workspace.updatedAt
+    // leave counts/lastActivity empty — records fall back to 0 / workspace.updatedAt
+    degradedReasons.push('item-counts');
   }
 
   // 3) Resolve owners: creator + every Admin-role principal (F5 workspace-roles).
@@ -135,9 +158,10 @@ export async function listAllWorkspacesAdmin(): Promise<WorkspaceAdminRecord[]> 
     }
   } catch {
     // leave adminsByWs empty — owners fall back to [createdBy]
+    degradedReasons.push('owner-roles');
   }
 
-  return docs.map((w) => {
+  const workspaces = docs.map((w) => {
     const createdBy = w.createdBy || w.tenantId || 'unknown';
     const owners = new Set<string>();
     if (createdBy) owners.add(createdBy);
@@ -159,4 +183,6 @@ export async function listAllWorkspacesAdmin(): Promise<WorkspaceAdminRecord[]> 
       owners: Array.from(owners),
     };
   });
+
+  return { workspaces, degraded: degradedReasons.length > 0, degradedReasons };
 }
