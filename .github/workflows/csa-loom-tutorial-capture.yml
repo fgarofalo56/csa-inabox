@@ -15,6 +15,14 @@ on:
         description: 'Console URL to drive (default = Front Door)'
         type: string
         default: https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net
+      sub:
+        description: 'Subscription id hosting the console (for reading the session secret). Pass the target deployment sub.'
+        type: string
+        default: '00000000-0000-0000-0000-000000000000'
+      admin_rg:
+        description: 'Admin-plane resource group of the console (holds the session-secret container-app secret / Key Vault).'
+        type: string
+        default: rg-csa-loom-admin-eastus2
       types:
         description: 'LOOM_TUTORIAL_TYPES — comma list of item slugs (blank = all editors)'
         type: string
@@ -34,8 +42,8 @@ permissions:
   contents: read
 
 env:
-  SUB: 00000000-0000-0000-0000-000000000000
-  ADMIN_RG: rg-csa-loom-admin-eastus2
+  SUB: ${{ inputs.sub }}
+  ADMIN_RG: ${{ inputs.admin_rg }}
 
 jobs:
   capture:
