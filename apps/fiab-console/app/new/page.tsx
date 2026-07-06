@@ -8,7 +8,7 @@
  * entry opens the same dialog inline without a full navigation.
  */
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Body1, makeStyles, tokens } from '@fluentui/react-components';
 import { PageShell } from '@/lib/components/page-shell';
@@ -21,7 +21,12 @@ const useStyles = makeStyles({
 export default function NewItemPage() {
   const styles = useStyles();
   const router = useRouter();
-  const [open, setOpen] = useState(true);
+  // Open AFTER mount (not during SSR/first hydration): rendering the Fluent
+  // Dialog open during server render caused a hydration mismatch (React #418),
+  // which left the /new deep-link with no gallery. Start closed, open on the
+  // client so the portal only mounts post-hydration.
+  const [open, setOpen] = useState(false);
+  useEffect(() => { setOpen(true); }, []);
 
   return (
     <PageShell
