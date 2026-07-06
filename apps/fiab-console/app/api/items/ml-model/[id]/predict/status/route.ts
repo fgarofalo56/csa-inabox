@@ -26,12 +26,15 @@ import {
   submitLivyStatement, getLivyStatement, getLivySession, normalizeLivyOutput,
 } from '@/lib/azure/synapse-livy-client';
 import { parsePredictResult } from '@/lib/azure/predict-codegen';
+import { apiError, apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+/** Honest 4xx gate envelope ({ok:false,error,hint}) — delegates to apiError.
+ *  5xx paths use apiServerError so raw exception text never leaks. */
 function err(error: string, status: number, hint?: string) {
-  return NextResponse.json({ ok: false, error, hint }, { status });
+  return apiError(error, status, hint ? { hint } : undefined);
 }
 
 export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
@@ -140,6 +143,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
 
     return err(`unsupported runId format: ${runId}`, 400);
   } catch (e: any) {
-    return err(e?.message || String(e), e?.status || 502, e?.hint);
+    if (e?.status && e.status < 500) return err(e.message, e.status, e?.hint);
+    return apiServerError(e, 'scoring status check failed', 'predict_status_error');
   }
 }

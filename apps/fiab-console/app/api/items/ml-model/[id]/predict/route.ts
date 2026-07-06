@@ -42,12 +42,16 @@ import {
   type PredictSpec, type FeatureMapping, type PredictResultType,
 } from '@/lib/azure/predict-codegen';
 import { createLivySession, getLivySession } from '@/lib/azure/synapse-livy-client';
+import { apiError, apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+/** Honest 4xx/503 gate envelope ({ok:false,error,hint}) — delegates to the
+ *  unified apiError so the BFF error shape stays consistent. 5xx paths use
+ *  apiServerError so raw exception text never reaches the client. */
 function err(error: string, status: number, hint?: string) {
-  return NextResponse.json({ ok: false, error, hint }, { status });
+  return apiError(error, status, hint ? { hint } : undefined);
 }
 
 /**
@@ -330,6 +334,8 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       generatedCode: code,
     });
   } catch (e: any) {
-    return err(e?.message || String(e), e?.status || 502, e?.hint);
+    // Honest gate errors carry an explicit <500 status (+ hint) — surface them.
+    if (e?.status && e.status < 500) return err(e.message, e.status, e?.hint);
+    return apiServerError(e, 'scoring job submission failed', 'predict_submit_error');
   }
 }
