@@ -184,7 +184,7 @@ parity-gap · **D** = stubbed/broken · **❌** = missing.
 | Unified Job Scheduler + schedule store | Cosmos schedule + provisioner | **❌** | P7 |
 | Monitoring Hub (cross-item runs) | Livy + Log Analytics aggregation | **C** | P7 |
 | Fabric events → Event Grid webhooks | Event Grid system topic + subs | **C** | P7 |
-| Loom SDK (Python/TS) + Terraform provider | published packages | **❌** | P7 |
+| Loom SDK (Python/TS) + Terraform provider | published packages ([roadmap](../../../docs/fiab/roadmap/loom-sdk-terraform.md)) | **❌ (roadmap)** | P7 |
 
 ---
 
