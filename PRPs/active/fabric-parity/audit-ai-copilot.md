@@ -45,7 +45,7 @@ Foundry playground. Everything else grades **A/B**.
 | Ops Copilot (admin capacity) → `/api/admin/ops-copilot` | A | Real AOAI (`resolveAoaiTarget`+`loadTenantCopilotConfig`), ARM credential, Graph, `classifyOpsIntent` tool dispatch, Cosmos session store. | — | — |
 | DSPM-AI posture (`/api/admin/dspm-ai`) | A | `computeDspmAiPosture` real (`:48`). | — | — |
 | AutoML / ML Experiment / ML Model editors | B | 9 / 13 / 16 real `/api/...` calls respectively; zero stub markers. Not deep-traced end-to-end this pass but no vaporware signatures. | Spot-verify the train/deploy POSTs hit real ARM/Databricks in a follow-up. | P2 |
-| aip-logic run-agent, operations-agent deploy, data-agent m365-copilot publish | A | `runAgentAndInspect` (real Foundry agent run), Dataverse publish for m365. | — | — |
+| aip-logic run-agent, operations-agent deploy, data-agent m365-copilot publish | A | `runAgentAndInspect` (real Foundry agent run), Dataverse publish for m365. Publish now surfaces real follow-up deep links (Copilot Studio Channels tab + M365 admin-center approval); no fabricated Teams `l/chat` bot link (T93). | — | — |
 
 ## Cross-cutting note — `resolveAoaiTarget()` config-passing inconsistency
 

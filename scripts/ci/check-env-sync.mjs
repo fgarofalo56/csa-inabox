@@ -89,6 +89,8 @@ const ALLOWLIST = new Set([
   'LOOM_PYLSP_DEBUG',               // dev-only language-server debug flag
   'LOOM_PYLSP_PYTHON',              // dev-only python path override
   'LOOM_POWERPLATFORM_ASSUME_CRED', // opt-in Power Platform cred mode
+  'LOOM_COPILOT_STUDIO_PORTAL_URL',  // opt-in cloud override for the Copilot Studio maker-portal deep link (default commercial copilotstudio.microsoft.com; set for Gov) — T93
+  'LOOM_M365_ADMIN_CENTER_URL',      // opt-in cloud override for the M365 admin-center approval link (default commercial admin.microsoft.com; admin.microsoft.us for Gov) — T93
   'LOOM_INTERNAL_ALLOWED_OIDS',     // opt-in allowlist of automation oids for the token-gated internal surface (rel-T10/B3); unset default = any well-formed GUID
   'LOOM_MCP_EGRESS_ALLOW',          // opt-in SSRF egress allow-list for admin MCP test-connection (rel-T13)
   'LOOM_MULTIUSER_ACL',             // opt-out kill switch for the multi-user ACL fallback (default on in code; rel-T11)
