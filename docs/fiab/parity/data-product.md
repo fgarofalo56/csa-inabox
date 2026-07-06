@@ -80,3 +80,50 @@ The Cosmos containers (`dataproducts`, `access-requests`, `governance-domains`,
 the sanctioned Cosmos init step per `no-vaporware.md` (same mechanism as every other
 console container), so a fresh environment needs no extra ARM/Bicep step beyond the
 account+database and works with `LOOM_DEFAULT_FABRIC_WORKSPACE` unset.
+
+## Data contract (schema + SLOs + quality) — data-mesh / Fabric parity
+
+The Purview details page exposes SLA only as free text. Real data-product platforms
+(data mesh / Microsoft Fabric data products, Open Data Contract Standard) publish a
+formal, machine-checkable **data contract**: an output-port **schema**, quantified
+**SLOs**, and **data-quality expectations**. Loom now builds this with a designer
+(no free-typed JSON — `loom_no_freeform_config.md`) and persists it to the
+data-product `state.contract` (Cosmos — Azure-native, no Fabric/Power BI dependency).
+
+Source: Open Data Contract Standard (schema + SLA/quality sections); Microsoft Fabric
+data-type families; Purview data-quality rules
+(https://learn.microsoft.com/purview/unified-catalog-data-quality-rules).
+
+| # | Contract capability | Status | Backend |
+|---|---------------------|--------|---------|
+| C1 | Contract **version** (semver) | built ✅ | `PATCH /api/data-products/[id]` `{ contract.version }` → Cosmos |
+| C2 | **Schema designer** — add/remove columns; name, 14-value type (`string`…`variant`), description, nullable, primary-key, 9-value sensitivity classification | built ✅ | `sanitizeContract()` → `state.contract.schema[]` (Cosmos replace) |
+| C3 | **SLO editor** — freshness (8 cadences), availability (5 targets), latency P95, completeness, retention (7 windows), support response (6 SLAs) | built ✅ | `state.contract.slo` |
+| C4 | **Quality-expectation designer** — per-column or table-level rule (not-null / unique / primary-key / accepted-values / min / max / range / regex / freshness / row-count), value, error/warning severity | built ✅ | `state.contract.quality[]` |
+| C5 | Contract authored in the **create wizard** (optional step 4) | built ✅ | `POST /api/data-products` `{ contract }` → `sanitizeContract` → `state.contract` |
+| C6 | Contract editable in the **studio** (Contract tab, load + Save) | built ✅ | `DataContractStudioTab` → `GET`/`PATCH /api/data-products/[id]` |
+| C7 | Contract shown **read-only** on the details page + the consumer view (Contract tab) | built ✅ | `DataContractSummary` reads `product.contract` / `state.contract` |
+| C8 | Automated enforcement of quality expectations against the live backend (run on schedule, feed the DQ score) | MISSING ❌ | future: bind `state.contract.quality[]` to the DQ-rules engine / ADX KQL so expectations are executed, not just declared |
+
+Backend per control: model + validator = `lib/dataproducts/contract.ts`
+(`sanitizeContract`, enum-bounded — unknown types/rules coerced to safe defaults,
+counts capped). Persistence = the existing partial-merge `PATCH /api/data-products/[id]`
+(new recognised `contract` field; `null` clears) and the wizard `POST`. Read
+projection = `itemToProduct()` surfaces `state.contract` on `product.contract`.
+UI = `lib/editors/components/data-contract-designer.tsx` (`DataContractDesigner`
+controlled editor, `DataContractStudioTab` self-saving wrapper, `DataContractSummary`
+read-only). Fully functional with `LOOM_DEFAULT_FABRIC_WORKSPACE` unset and Purview
+unconfigured — the contract lives entirely in Loom's Cosmos.
+
+### Linked resources parity (already built, for completeness)
+
+| # | Capability | Status | Backend |
+|---|------------|--------|---------|
+| L1 | Glossary terms — search Purview glossary + link/unlink | built ✅ | `GET/POST/DELETE /api/data-products/[id]/glossary-terms` (`state.glossaryLinks`) |
+| L2 | OKRs — objectives & key results CRUD | built ✅ | `GET/POST/DELETE /api/data-products/[id]/okrs` (Cosmos `okrs` container) |
+| L3 | Critical Data Elements — auto-derived from mapped-asset classifications (read-only) | built ✅ / honest-gate ⚠️ | `GET /api/data-products/[id]/cdes` (Purview; honest gate when unprovisioned) |
+
+**Coverage counts (this pass):** built ✅ 22 · honest-gate ⚠️ 3 · MISSING ❌ 1 (C8 —
+automated contract enforcement, tracked as a follow-up; declaration + persistence +
+display are all real today).
+

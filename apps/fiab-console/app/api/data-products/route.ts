@@ -50,6 +50,7 @@ import {
   DATA_PRODUCT_AUDIENCE_VALUES,
   isValidDataProductType,
 } from '@/lib/catalog/data-product-enums';
+import { sanitizeContract } from '@/lib/dataproducts/contract';
 import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
@@ -290,6 +291,10 @@ export async function POST(req: NextRequest) {
     : [];
   const customAttributes: Record<string, unknown> =
     body?.customAttributes && typeof body.customAttributes === 'object' ? body.customAttributes : {};
+  // Optional data contract from the wizard's "Data contract" step. Sanitized to
+  // the enum-bounded shape; a malformed contract is dropped (never blocks the
+  // draft) rather than 400ing the whole create.
+  const contract = 'contract' in (body ?? {}) ? sanitizeContract(body.contract) : null;
 
   // ── Validation (mirrors Purview's real constraints) ──────────────────────
   if (!displayName) return NextResponse.json({ ok: false, error: 'Name is required.' }, { status: 400 });
@@ -336,6 +341,7 @@ export async function POST(req: NextRequest) {
     endorsed,
     owners,
     customAttributes,
+    ...(contract ? { contract } : {}),
     purviewRegistered: purview.registered,
     ...(purview.dataProductId ? { purviewDataProductId: purview.dataProductId } : {}),
     ...(purview.hint ? { purviewHint: purview.hint } : {}),

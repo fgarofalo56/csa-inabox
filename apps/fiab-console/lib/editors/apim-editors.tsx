@@ -31,7 +31,7 @@ import {
   Document20Regular, Code20Regular, Library20Regular, Play20Regular, BranchFork20Regular,
   ArrowImport20Regular, Add20Regular, Delete20Regular, Eye20Regular, EyeOff20Regular, Key20Regular, Edit20Regular,
   Pulse20Regular, Database20Regular, Warning20Filled, MoreHorizontal20Regular, Link20Regular,
-  ChevronDown16Regular,
+  ChevronDown16Regular, DocumentBulletList20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { EmptyState } from '@/lib/components/empty-state';
@@ -51,6 +51,7 @@ import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { LinkedResourcesPanel } from './components/linked-resources';
+import { DataContractStudioTab } from './components/data-contract-designer';
 import { DataProductEditDialog } from './data-product-edit-dialog';
 import { useSharedEditorStyles } from './shared-styles';
 
@@ -2309,10 +2310,10 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
   // Tabs: Overview | Datasets | Data assets | Glossary | Linked resources | Lineage | Access policies | Observability
   // Initial tab can be deep-linked via ?tab= (e.g. the details page's
   // "Manage policies" action opens directly on the policies tab).
-  type DpTab = 'overview' | 'datasets' | 'data-assets' | 'glossary' | 'linked-resources' | 'lineage' | 'policies' | 'observability';
+  type DpTab = 'overview' | 'contract' | 'datasets' | 'data-assets' | 'glossary' | 'linked-resources' | 'lineage' | 'policies' | 'observability';
   const initialTab = ((): DpTab => {
     const t = searchParams?.get('tab');
-    return t === 'datasets' || t === 'data-assets' || t === 'glossary' || t === 'linked-resources' || t === 'lineage' || t === 'policies' || t === 'observability'
+    return t === 'contract' || t === 'datasets' || t === 'data-assets' || t === 'glossary' || t === 'linked-resources' || t === 'lineage' || t === 'policies' || t === 'observability'
       ? t
       : 'overview';
   })();
@@ -3051,6 +3052,7 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
 
         <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as typeof tab)}>
           <Tab value="overview" icon={<Document20Regular />}>Overview</Tab>
+          <Tab value="contract" icon={<DocumentBulletList20Regular />}>Contract</Tab>
           <Tab value="datasets" icon={<Code20Regular />}>Datasets</Tab>
           <Tab value="data-assets" icon={<Database20Regular />}>Data assets</Tab>
           <Tab value="glossary" icon={<Library20Regular />}>Glossary</Tab>
@@ -3129,6 +3131,10 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
               </>
             )}
           </>
+        )}
+
+        {tab === 'contract' && (
+          <DataContractStudioTab id={id} />
         )}
 
         {tab === 'datasets' && (

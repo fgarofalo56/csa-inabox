@@ -6,6 +6,8 @@
  * live entirely in Cosmos and are governed by Loom-native governance domains.
  */
 
+import type { DataContract } from '@/lib/dataproducts/contract';
+
 export type DataProductStatus = 'Draft' | 'Published' | 'Expired';
 
 export interface DataProductOwner {
@@ -66,6 +68,8 @@ export interface DataProductDoc {
   termsOfUse?: DataProductLink[];
   documentation?: DataProductLink[];
   dataAssets?: DataProductAsset[];
+  /** Formal data contract — output-port schema + SLOs + quality expectations. */
+  contract?: DataContract;
   createdAt: string;
   updatedAt: string;
   _etag?: string;
