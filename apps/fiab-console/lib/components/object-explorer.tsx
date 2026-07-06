@@ -28,7 +28,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   OverlayDrawer, DrawerHeader, DrawerHeaderTitle, DrawerBody,
   Button, Tooltip, Input, Dropdown, Option, Badge, Spinner,
-  Caption1, Spinner, MessageBar, MessageBarBody,
+  Caption1, MessageBar, MessageBarBody,
   Menu, MenuTrigger, MenuPopover, MenuList, MenuItem,
   makeStyles, tokens,
 } from '@fluentui/react-components';
