@@ -12,7 +12,7 @@ import {
 import { putKeyVaultSecret, kvSecretsConfigGate } from '@/lib/azure/kv-secrets-client';
 import { connectionsContainer } from '@/lib/azure/cosmos-client';
 import type { LoomConnection } from '@/lib/azure/connections-store';
-import { apiServerError } from '@/lib/api/respond';
+import { apiServerError, apiError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -130,6 +130,8 @@ export async function DELETE(
     await deleteConnection(session, params.id);
     return NextResponse.json({ ok: true });
   } catch (e: any) {
+    // Referential-integrity gate: item(s) still bind this connection (409).
+    if (e?.status === 409) return apiError(e.message, 409, { dependents: e.dependents });
     return apiServerError(e);
   }
 }
