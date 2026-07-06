@@ -127,7 +127,7 @@ Grouped by dimension; each is a direct file:line finding. (High-verified finding
 - M10 Warehouse missing time-travel/CLONE/restore-points/COPY INTO/snapshots (`warehouse/[id]/` route set; README:146-149). *Verified; High for a release audit but tracked P3.*
 - M11 Data Wrangler entirely absent (`README.md:141` ❌ P3/P5). *Verified.*
 - M12 Parity ledger stale in both directions (Activator/UDF/DAB/protection-policies marked D/❌ though shipped; PBI-gated Scorecard marked built; MASTER-SCORECARD dated 06-10).
-- M13 AI functions 5 of 9 (missing similarity/fix_grammar/generate_response/embeddings) (`ai-functions-client.ts:44-52`).
+- M13 AI functions **9 of 9 ✅** (rel-T85 added similarity/fix_grammar/generate_response/embed; embed/similarity on the unified `aoaiEmbed`; per-call token/cost metering into usage-chargeback) (`ai-functions-client.ts`).
 - M14 Airflow is BYO-webserver only; day-one OSS `airflow.bicep` host unbuilt (`airflow-job/[id]/connection/route.ts`).
 - M15 PREDICT guided batch scoring absent (`README.md:152` ❌ P5).
 - M16 RESOLVED (rel-T87): people-picker "Grant people access" dialog (`lib/dialogs/share-item-dialog.tsx`) is wired on EVERY editor via `ItemEditorChrome` → real grant route `[type]/[id]/permissions/route.ts` (Cosmos `item-permissions` + ADLS ACL + Storage RBAC), and item read/write now resolves item-level grants: `lib/auth/item-access.ts` (`resolveItemAccessByOid`) chains owner → workspace ACL → item-grant, consulted by `/api/cosmos-items/[type]/[id]`. Share-link tokens (`[type]/[id]/share/route.ts`) remain the separate anonymous-link path. Grade D→B.

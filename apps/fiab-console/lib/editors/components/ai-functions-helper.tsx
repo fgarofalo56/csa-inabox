@@ -58,14 +58,26 @@ import { Sparkle20Regular } from '@fluentui/react-icons';
 // in the server module (which imports @azure/identity).
 import type { AiFn } from '@/lib/azure/ai-functions-client';
 
-/** The five AI functions (kept in sync with AI_FN_NAMES on the server). */
+/** The nine AI functions (kept in sync with AI_FN_NAMES on the server). The
+ *  first seven run in-database on Databricks (Comm/GCC) or via AOAI chat; embed
+ *  and similarity are AOAI-embeddings only (no column SQL builtin). */
 const FN_OPTIONS: { key: AiFn; label: string; desc: string }[] = [
   { key: 'sentiment', label: 'Sentiment', desc: 'positive / negative / neutral over a text column' },
   { key: 'classify', label: 'Classify', desc: 'assign exactly one of your labels' },
   { key: 'translate', label: 'Translate', desc: 'translate the text to a target language' },
   { key: 'summarize', label: 'Summarize', desc: 'a concise 2–3 sentence summary' },
   { key: 'extract', label: 'Extract', desc: 'pull named fields out as JSON' },
+  { key: 'fix_grammar', label: 'Fix grammar', desc: 'correct spelling, grammar & punctuation' },
+  { key: 'generate_response', label: 'Generate response', desc: 'draft a reply to the text' },
+  { key: 'embed', label: 'Embeddings', desc: 'vector embedding of the text (AOAI)' },
+  { key: 'similarity', label: 'Similarity', desc: 'cosine similarity vs a second text (AOAI)' },
 ];
+
+/** Functions with a direct Databricks `ai_*` SQL builtin (in-database path).
+ *  embed / similarity have none and always take the AOAI path. */
+const DBX_SUPPORTED = new Set<AiFn>([
+  'sentiment', 'classify', 'translate', 'summarize', 'extract', 'fix_grammar', 'generate_response',
+]);
 
 const useStyles = makeStyles({
   body: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL, minWidth: '520px' },
@@ -105,6 +117,10 @@ interface AoaiResult {
   result: string;
   model?: string;
   usage?: { totalTokens: number };
+  /** `embed`: the embedding vector. */
+  vector?: number[];
+  /** `similarity`: cosine similarity in [-1, 1]. */
+  similarity?: number;
 }
 type RunResult = DbxResult | AoaiResult;
 
@@ -141,6 +157,7 @@ export function AiFunctionsHelper(props: AiFunctionsHelperProps) {
   const [labels, setLabels] = useState<string>('positive, negative, neutral');
   const [fields, setFields] = useState<string>('');
   const [targetLang, setTargetLang] = useState<string>('English');
+  const [compareTo, setCompareTo] = useState<string>('');
   const [sampleInput, setSampleInput] = useState<string>('');
 
   const [running, setRunning] = useState(false);
@@ -177,15 +194,16 @@ export function AiFunctionsHelper(props: AiFunctionsHelperProps) {
   }, [open, itemType, itemId]);
 
   // Whether the in-database Databricks path is the one this run will take.
-  const useDbx = !!(probe && !probe.govPath && probe.dbxAvailable && warehouseId);
+  const useDbx = !!(probe && !probe.govPath && probe.dbxAvailable && warehouseId && DBX_SUPPORTED.has(fn));
 
   const optionsPayload = useMemo(() => {
     const o: Record<string, unknown> = {};
     if (fn === 'classify') o.labels = labels.split(',').map((x) => x.trim()).filter(Boolean);
     if (fn === 'extract') o.fields = fields.split(',').map((x) => x.trim()).filter(Boolean);
     if (fn === 'translate') o.targetLang = targetLang.trim();
+    if (fn === 'similarity') o.compareTo = compareTo.trim();
     return o;
-  }, [fn, labels, fields, targetLang]);
+  }, [fn, labels, fields, targetLang, compareTo]);
 
   // Build the Databricks AI SQL snippet (for Insert + as the displayed contract).
   const generatedSql = useMemo(() => {
@@ -209,6 +227,8 @@ export function AiFunctionsHelper(props: AiFunctionsHelperProps) {
         expr = `ai_extract(${col}, ARRAY(${fs.map((f) => `'${f.replace(/'/g, "''")}'`).join(', ')}))`;
         break;
       }
+      case 'fix_grammar': expr = `ai_fix_grammar(${col})`; break;
+      case 'generate_response': expr = `ai_gen(${col})`; break;
       default: expr = `ai_query(${col})`;
     }
     return `SELECT ${col}, ${expr} AS ai_result\nFROM ${tbl}\nLIMIT 50;`;
@@ -228,6 +248,10 @@ export function AiFunctionsHelper(props: AiFunctionsHelperProps) {
     if (!column.trim()) { setError('Pick or name a column first.'); return; }
     if (!useDbx && !sampleInput.trim()) {
       setError('On the Azure OpenAI path, paste a sample value from the column to enrich.');
+      return;
+    }
+    if (fn === 'similarity' && !compareTo.trim()) {
+      setError('Similarity needs a second text to compare against.');
       return;
     }
     setRunning(true);
@@ -258,7 +282,7 @@ export function AiFunctionsHelper(props: AiFunctionsHelperProps) {
     } finally {
       setRunning(false);
     }
-  }, [reset, column, useDbx, sampleInput, itemType, itemId, fn, warehouseId, table, catalog, schema, optionsPayload]);
+  }, [reset, column, useDbx, sampleInput, compareTo, itemType, itemId, fn, warehouseId, table, catalog, schema, optionsPayload]);
 
   const activeFn = FN_OPTIONS.find((f) => f.key === fn);
 
@@ -354,6 +378,17 @@ export function AiFunctionsHelper(props: AiFunctionsHelperProps) {
                       <Input value={targetLang} onChange={(_, d) => { setTargetLang(d.value); reset(); }} />
                     </Field>
                   )}
+                  {fn === 'similarity' && (
+                    <Field label="Compare to" hint="Second text; cosine similarity is computed against the sample value below (Azure OpenAI embeddings)">
+                      <Textarea
+                        value={compareTo}
+                        onChange={(_, d) => { setCompareTo(d.value); reset(); }}
+                        placeholder="e.g. The checkout experience was smooth and fast."
+                        resize="vertical"
+                        rows={2}
+                      />
+                    </Field>
+                  )}
 
                   {useDbx ? (
                     <Field label="Generated AI SQL" hint="Inserted into the query editor or run against the warehouse">
@@ -414,8 +449,29 @@ export function AiFunctionsHelper(props: AiFunctionsHelperProps) {
                         Azure OpenAI{result.model ? ` · ${result.model}` : ''}
                         {result.usage ? ` · ${result.usage.totalTokens} tokens` : ''}
                       </Caption1>
-                      <Body1><strong>{fn}</strong> of <span className={s.mono}>{result.column}</span>:</Body1>
-                      <div className={s.mono}>{result.result}</div>
+                      {result.fn === 'similarity' ? (
+                        <>
+                          <Body1><strong>Cosine similarity</strong> of <span className={s.mono}>{result.column}</span> vs the compare text:</Body1>
+                          <div className={s.mono} style={{ fontSize: tokens.fontSizeBase500 }}>
+                            {typeof result.similarity === 'number' ? result.similarity.toFixed(4) : result.result}
+                          </div>
+                        </>
+                      ) : result.fn === 'embed' ? (
+                        <>
+                          <Body1><strong>Embedding</strong> of <span className={s.mono}>{result.column}</span>: {result.result}</Body1>
+                          {result.vector && result.vector.length > 0 && (
+                            <div className={s.mono}>
+                              [{result.vector.slice(0, 8).map((v) => v.toFixed(4)).join(', ')}
+                              {result.vector.length > 8 ? `, … (+${result.vector.length - 8} more)` : ''}]
+                            </div>
+                          )}
+                        </>
+                      ) : (
+                        <>
+                          <Body1><strong>{fn}</strong> of <span className={s.mono}>{result.column}</span>:</Body1>
+                          <div className={s.mono}>{result.result}</div>
+                        </>
+                      )}
                     </div>
                   )}
                 </>

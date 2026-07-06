@@ -16,6 +16,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { apiUnauthorized, apiServerError } from '@/lib/api/respond';
 import { searchCatalog } from '@/lib/azure/catalog-search';
 
 export const runtime = 'nodejs';
@@ -23,7 +24,7 @@ export const dynamic = 'force-dynamic';
 
 export async function GET(req: NextRequest) {
   const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  if (!s) return apiUnauthorized();
 
   const q = (req.nextUrl.searchParams.get('q') || '').trim();
   const limit = Math.min(parseInt(req.nextUrl.searchParams.get('limit') || '30', 10) || 30, 200);
@@ -43,6 +44,6 @@ export async function GET(req: NextRequest) {
     });
     return NextResponse.json(result);
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e, 'catalog search failed', 'catalog_search_error');
   }
 }

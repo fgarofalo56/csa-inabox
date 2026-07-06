@@ -29,6 +29,36 @@ const col = (r: LogQueryResult, name: string) => r.columns.indexOf(name);
 const numAt = (row: unknown[], i: number) => (i < 0 ? 0 : Number(row[i] ?? 0) || 0);
 const strAt = (row: unknown[], i: number) => (i < 0 ? '' : String(row[i] ?? ''));
 
+/**
+ * Azure OpenAI published list price per 1K tokens (USD), keyed by a model
+ * substring. Used to derive an ESTIMATED cost from the REAL token counts (the
+ * numbers themselves are live AOAI usage; only the $ rate is list-price). Keyed
+ * loosely so `gpt-4o-mini-2024-07-18` matches `gpt-4o-mini`. Embeddings models
+ * bill input-only. A conservative default covers unrecognized deployments.
+ */
+const PRICE_PER_1K: Record<string, { in: number; out: number }> = {
+  'gpt-4o-mini': { in: 0.00015, out: 0.0006 },
+  'gpt-4.1-mini': { in: 0.0004, out: 0.0016 },
+  'gpt-4.1-nano': { in: 0.0001, out: 0.0004 },
+  'gpt-4.1': { in: 0.002, out: 0.008 },
+  'gpt-4o': { in: 0.005, out: 0.015 },
+  'o4-mini': { in: 0.0011, out: 0.0044 },
+  'o3-mini': { in: 0.0011, out: 0.0044 },
+  'text-embedding-3-large': { in: 0.00013, out: 0 },
+  'text-embedding-3-small': { in: 0.00002, out: 0 },
+  'text-embedding-ada-002': { in: 0.0001, out: 0 },
+};
+const DEFAULT_PRICE = { in: 0.002, out: 0.008 };
+function priceFor(model: string): { in: number; out: number } {
+  const m = (model || '').toLowerCase();
+  const key = Object.keys(PRICE_PER_1K).find((k) => m.includes(k));
+  return key ? PRICE_PER_1K[key] : DEFAULT_PRICE;
+}
+function estCostUsd(model: string, promptTokens: number, completionTokens: number): number {
+  const p = priceFor(model);
+  return Number(((promptTokens / 1000) * p.in + (completionTokens / 1000) * p.out).toFixed(4));
+}
+
 export async function GET(req: NextRequest) {
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
@@ -85,31 +115,53 @@ union isfuzzy=true (AppEvents | where Name == "copilot.usage")
       return NextResponse.json({ ok: true, data: null, noEvents: true });
     }
 
-    const byPersona = byPersonaR.rows.map((row) => ({
-      persona: strAt(row, col(byPersonaR, 'persona')) || 'unknown',
-      promptTokens: numAt(row, col(byPersonaR, 'prompt_tokens')),
-      completionTokens: numAt(row, col(byPersonaR, 'completion_tokens')),
-      totalTokens: numAt(row, col(byPersonaR, 'total_tokens')),
-      calls: numAt(row, col(byPersonaR, 'calls')),
-    }));
+    const byDay = byDayR.rows.map((row) => {
+      const promptTokens = numAt(row, col(byDayR, 'prompt_tokens'));
+      const completionTokens = numAt(row, col(byDayR, 'completion_tokens'));
+      const model = strAt(row, col(byDayR, 'model'));
+      return {
+        day: strAt(row, col(byDayR, 'day')).slice(0, 10),
+        model,
+        persona: strAt(row, col(byDayR, 'persona')) || 'unknown',
+        promptTokens,
+        completionTokens,
+        totalTokens: numAt(row, col(byDayR, 'total_tokens')),
+        calls: numAt(row, col(byDayR, 'calls')),
+        // Estimated $ from real tokens × the model's published list price.
+        estCostUsd: estCostUsd(model, promptTokens, completionTokens),
+      };
+    });
 
-    const byDay = byDayR.rows.map((row) => ({
-      day: strAt(row, col(byDayR, 'day')).slice(0, 10),
-      model: strAt(row, col(byDayR, 'model')),
-      persona: strAt(row, col(byDayR, 'persona')) || 'unknown',
-      promptTokens: numAt(row, col(byDayR, 'prompt_tokens')),
-      completionTokens: numAt(row, col(byDayR, 'completion_tokens')),
-      totalTokens: numAt(row, col(byDayR, 'total_tokens')),
-      calls: numAt(row, col(byDayR, 'calls')),
-    }));
+    // Per-persona cost, summed from the model-aware daily rows (the persona
+    // rollup itself has no model column, so its $ is derived here).
+    const personaCost = new Map<string, number>();
+    for (const d of byDay) personaCost.set(d.persona, (personaCost.get(d.persona) || 0) + d.estCostUsd);
 
-    const byUser = byUserR.rows.map((row) => ({
-      userHash: strAt(row, col(byUserR, 'user_hash')),
-      promptTokens: numAt(row, col(byUserR, 'prompt_tokens')),
-      completionTokens: numAt(row, col(byUserR, 'completion_tokens')),
-      totalTokens: numAt(row, col(byUserR, 'total_tokens')),
-      calls: numAt(row, col(byUserR, 'calls')),
-    }));
+    const byPersona = byPersonaR.rows.map((row) => {
+      const persona = strAt(row, col(byPersonaR, 'persona')) || 'unknown';
+      return {
+        persona,
+        promptTokens: numAt(row, col(byPersonaR, 'prompt_tokens')),
+        completionTokens: numAt(row, col(byPersonaR, 'completion_tokens')),
+        totalTokens: numAt(row, col(byPersonaR, 'total_tokens')),
+        calls: numAt(row, col(byPersonaR, 'calls')),
+        estCostUsd: Number((personaCost.get(persona) || 0).toFixed(4)),
+      };
+    });
+
+    const byUser = byUserR.rows.map((row) => {
+      const promptTokens = numAt(row, col(byUserR, 'prompt_tokens'));
+      const completionTokens = numAt(row, col(byUserR, 'completion_tokens'));
+      return {
+        userHash: strAt(row, col(byUserR, 'user_hash')),
+        promptTokens,
+        completionTokens,
+        totalTokens: numAt(row, col(byUserR, 'total_tokens')),
+        calls: numAt(row, col(byUserR, 'calls')),
+        // Per-user rows carry no model → default-priced estimate.
+        estCostUsd: estCostUsd('', promptTokens, completionTokens),
+      };
+    });
 
     const totals = byPersona.reduce(
       (acc, p) => ({
@@ -117,15 +169,19 @@ union isfuzzy=true (AppEvents | where Name == "copilot.usage")
         completionTokens: acc.completionTokens + p.completionTokens,
         totalTokens: acc.totalTokens + p.totalTokens,
         calls: acc.calls + p.calls,
+        estCostUsd: acc.estCostUsd + p.estCostUsd,
       }),
-      { promptTokens: 0, completionTokens: 0, totalTokens: 0, calls: 0 },
+      { promptTokens: 0, completionTokens: 0, totalTokens: 0, calls: 0, estCostUsd: 0 },
     );
+    totals.estCostUsd = Number(totals.estCostUsd.toFixed(4));
 
     const models = Array.from(new Set(byDay.map((d) => d.model).filter(Boolean)));
 
     return NextResponse.json({
       ok: true,
-      data: { byPersona, byDay, byUser, totals, models, days },
+      // pricing:'list' flags that estCostUsd is a list-price estimate over real
+      // token counts (not a billed figure) — the UI labels it "estimated".
+      data: { byPersona, byDay, byUser, totals, models, days, pricing: 'list' },
     });
   } catch (e) {
     if (e instanceof MonitorNotConfiguredError) {
