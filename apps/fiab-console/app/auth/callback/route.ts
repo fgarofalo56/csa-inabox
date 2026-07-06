@@ -20,7 +20,7 @@ import { saveUserToken } from '@/lib/azure/user-token-store';
 import { saveUserSqlToken } from '@/lib/azure/sql-user-token-store';
 import { savePbiUserToken } from '@/lib/azure/pbi-user-token-store';
 import { saveUserOboToken } from '@/lib/azure/mcp-obo-token-store';
-import { REMOTE_BUILTIN_MCP_CATALOG, msRemoteMcpScopeUris } from '@/lib/mcp/catalog';
+import { REMOTE_BUILTIN_MCP_CATALOG, msRemoteMcpScopeUris, effectiveRemoteState } from '@/lib/mcp/catalog';
 import { armBase, getSqlSuffix, getPbiScope } from '@/lib/azure/cloud-endpoints';
 import type { UserClaims } from '@/lib/auth/msal';
 
@@ -175,19 +175,29 @@ async function captureUserMsRemoteMcpTokens(
   // (and delegated back through mcp-obo-token-store) — skip them here.
   const loginCachedIds = new Set(['azure-arm', 'powerbi-remote']);
   const acquired = new Set<string>();
+  // Per-tenant inline overrides so a server enabled from the admin UI (env left
+  // it off) also gets its per-user delegated token minted here. Never throws.
+  let overrides: Record<string, import('@/lib/mcp/catalog').RemoteBuiltinOverride> = {};
+  try {
+    const { getRemoteBuiltinOverrides } = await import('@/lib/azure/mcp-remote-config-store');
+    overrides = await getRemoteBuiltinOverrides(oid);
+  } catch {
+    /* Cosmos unreachable — fall back to pure-env behaviour (honest). */
+  }
   for (const entry of REMOTE_BUILTIN_MCP_CATALOG) {
     if (entry.auth !== 'entra-obo' || loginCachedIds.has(entry.id)) continue;
-    if (!entry.configured()) continue;
+    const eff = effectiveRemoteState(entry, overrides[entry.id]);
+    if (!eff.configured) continue;
     const scopeUris = msRemoteMcpScopeUris(entry.id);
     if (scopeUris.length === 0) continue; // resource not resolvable → honest gate stays
     // The OBO audience this token is keyed by — mirrors the catalog's derivation:
-    // the explicit oboResource, else the configured endpoint's origin (per-org
+    // the explicit oboResource, else the effective endpoint's origin (per-org
     // servers like Dataverse). saveUserOboToken normalizes it to the cache key
     // that mcp-shim later reads with the same resource.
     let resource = (entry.oboResource ?? '').trim();
     if (!resource) {
       try {
-        resource = new URL(entry.endpoint).origin;
+        resource = new URL(eff.endpoint).origin;
       } catch {
         continue; // no resolvable audience → leave the honest gate in place
       }

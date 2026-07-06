@@ -30,8 +30,8 @@ describe('dlp-graph-client', () => {
     vi.restoreAllMocks();
   });
 
-  it('throws DlpNotConfiguredError when LOOM_DLP_ENABLED is unset', async () => {
-    delete process.env.LOOM_DLP_ENABLED;
+  it('throws DlpNotConfiguredError when LOOM_DLP_ENABLED is explicitly false (admin opt-out)', async () => {
+    process.env.LOOM_DLP_ENABLED = 'false';
     const mod = await import('../dlp-graph-client');
     await expect(mod.listDlpPolicies()).rejects.toBeInstanceOf(mod.DlpNotConfiguredError);
     try {
@@ -42,6 +42,15 @@ describe('dlp-graph-client', () => {
         expect.objectContaining({ name: 'Policy.Read.All' }),
       ]));
     }
+  });
+
+  it('is ON by default (opt-out): unset LOOM_DLP_ENABLED does NOT throw the env gate', async () => {
+    delete process.env.LOOM_DLP_ENABLED;
+    const mod = await import('../dlp-graph-client');
+    expect(mod.dlpEnabled()).toBe(true);
+    // With DLP default-on, listDlpPolicies proceeds to Graph (gov gate / segment
+    // gate / real data) — it does NOT throw the "not configured" env gate.
+    expect(() => mod.__testing.assertEnabled()).not.toThrow();
   });
 
   it('honest-gates when Graph has no DLP policies segment for the tenant (404)', async () => {

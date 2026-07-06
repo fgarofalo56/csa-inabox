@@ -17,13 +17,13 @@ import { clientFetch } from '@/lib/client-fetch';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Button, Dialog, DialogTrigger, DialogContent, DialogBody, DialogTitle,
-  Dropdown, Option, Field, Input, Checkbox, Spinner, Badge, Link,
+  Button, Dialog, DialogTrigger, DialogContent, DialogBody, DialogTitle, DialogActions,
+  Dropdown, Option, Field, Input, Checkbox, Switch, Spinner, Badge, Link,
   MessageBar, MessageBarBody, MessageBarTitle,
   Caption1, Body1, Text, makeStyles, tokens, Divider,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
 } from '@fluentui/react-components';
-import { Add20Regular, Edit20Regular, Delete20Regular, ArrowClockwise20Regular, Checkmark20Regular, Sparkle20Regular, Search20Regular, PlugDisconnected24Regular, DataPie24Regular, Open16Regular, BookGlobe24Regular, Cloud24Regular, BranchFork24Regular, PeopleTeam24Regular, Shield24Regular, Database24Regular, PlugConnected24Regular } from '@fluentui/react-icons';
+import { Add20Regular, Edit20Regular, Delete20Regular, ArrowClockwise20Regular, Checkmark20Regular, Sparkle20Regular, Search20Regular, PlugDisconnected24Regular, DataPie24Regular, Open16Regular, BookGlobe24Regular, Cloud24Regular, BranchFork24Regular, PeopleTeam24Regular, Shield24Regular, Database24Regular, PlugConnected24Regular, Settings20Regular } from '@fluentui/react-icons';
 import { Section } from '@/lib/components/ui/section';
 import { McpCatalogBrowser } from '@/lib/components/admin/mcp-catalog-wizard';
 import type { McpServerConfig, McpServerConfigDoc } from '@/lib/types/mcp-config';
@@ -172,6 +172,8 @@ const useStyles = makeStyles({
     flexWrap: 'wrap',
     marginTop: tokens.spacingVerticalM,
   },
+  cfgForm: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL, marginTop: tokens.spacingVerticalM },
+  cfgSwitchRow: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS },
 });
 
 function McpServerForm({
@@ -962,6 +964,19 @@ interface MsRemoteStatus {
   tokenNote?: string;
   // configured:false
   gate?: MsRemoteGate;
+  // Inline-config facets (both states) — drive the typed Configure dialog.
+  config?: {
+    supportsEndpoint: boolean;
+    supportsSecret: boolean;
+    secretEnv?: string;
+    enabled: boolean;
+    endpoint: string;
+    secretName?: string;
+    source: 'env' | 'admin';
+    envForced: boolean;
+    missing: string[];
+  };
+  override?: { enabled?: boolean; endpoint?: string; secretName?: string } | null;
 }
 
 /** Category → Fluent icon (web3-ui: every card carries a section icon). */
@@ -975,6 +990,183 @@ function iconForMsCategory(category?: string) {
     case 'Database': return <Database24Regular />;
     default: return <PlugConnected24Regular />;
   }
+}
+
+/**
+ * MsRemoteConfigDialog — the INLINE configuration surface for one remote built-in
+ * MCP server. Typed Fluent fields driven by the server's declared shape
+ * (loom-no-freeform-config), NOT a JSON box:
+ *   • Enabled — a Switch (disabled + explained when the deployment env force-on it).
+ *   • Endpoint — an Input, only for servers whose descriptor exposes an endpoint
+ *     env (the not-yet-GA Microsoft remote servers).
+ *   • Key Vault secret name — an Input, only for the key-vault (GitHub PAT) server.
+ * Saves to PUT /api/admin/mcp-servers/ms-remote/config (real Cosmos persistence);
+ * on success the parent reloads so the card reflects the new effective state.
+ */
+function MsRemoteConfigDialog({
+  status,
+  open,
+  onOpenChange,
+  onSaved,
+}: {
+  status: MsRemoteStatus;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onSaved: () => void;
+}) {
+  const s = useStyles();
+  const cfg = status.config;
+  const [enabled, setEnabled] = useState<boolean>(status.override?.enabled ?? cfg?.enabled ?? false);
+  const [endpoint, setEndpoint] = useState<string>(status.override?.endpoint ?? '');
+  const [secretName, setSecretName] = useState<string>(status.override?.secretName ?? '');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Re-seed the form from the latest persisted override each time it opens.
+  useEffect(() => {
+    if (open) {
+      setEnabled(status.override?.enabled ?? cfg?.enabled ?? false);
+      setEndpoint(status.override?.endpoint ?? '');
+      setSecretName(status.override?.secretName ?? '');
+      setError(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
+  const envForced = cfg?.envForced === true;
+
+  const save = useCallback(async () => {
+    setSaving(true);
+    setError(null);
+    try {
+      const payload: Record<string, unknown> = { id: status.id, enabled };
+      if (cfg?.supportsEndpoint) payload.endpoint = endpoint.trim();
+      if (cfg?.supportsSecret) payload.secretName = secretName.trim();
+      const r = await clientFetch('/api/admin/mcp-servers/ms-remote/config', {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const j = await r.json();
+      if (!j.ok) {
+        setError(j.error || `HTTP ${r.status}`);
+        return;
+      }
+      onOpenChange(false);
+      onSaved();
+    } catch (e: any) {
+      setError(e?.message || String(e));
+    } finally {
+      setSaving(false);
+    }
+  }, [status.id, enabled, endpoint, secretName, cfg, onOpenChange, onSaved]);
+
+  return (
+    <Dialog open={open} onOpenChange={(_, d) => onOpenChange(d.open)}>
+      <DialogContent>
+        <DialogBody>
+          <DialogTitle>Configure {status.name}</DialogTitle>
+          <div className={s.cfgForm}>
+            <div className={s.cfgSwitchRow}>
+              <Switch
+                checked={enabled}
+                disabled={envForced || saving}
+                onChange={(_, d) => setEnabled(d.checked)}
+                label={enabled ? 'Enabled' : 'Disabled'}
+              />
+              {envForced ? (
+                <Caption1 className={s.hint}>
+                  Enabled by the deployment (<code>{status.enableEnv}</code>). Set it to{' '}
+                  <code>false</code> in the app configuration to disable — it cannot be turned off
+                  from here.
+                </Caption1>
+              ) : (
+                <Caption1 className={s.hint}>
+                  {status.auth === 'entra-obo'
+                    ? 'Enable this opt-in server for your tenant. Sign in again afterward to consent the delegated scopes.'
+                    : status.auth === 'key-vault'
+                      ? 'Enable this opt-in server. It becomes callable once a Key Vault secret name is set below.'
+                      : 'Enable this server for your tenant.'}
+                </Caption1>
+              )}
+            </div>
+
+            {cfg?.supportsEndpoint && (
+              <Field
+                label="Endpoint"
+                hint={
+                  <>
+                    Streamable-HTTP endpoint (overrides <code>{status.endpointEnv}</code>). Required for
+                    servers whose Microsoft-hosted endpoint is not yet GA.
+                  </>
+                }
+              >
+                <Input
+                  value={endpoint}
+                  onChange={(_, d) => setEndpoint(d.value)}
+                  placeholder={status.endpoint || 'https://…'}
+                  disabled={saving}
+                />
+              </Field>
+            )}
+
+            {cfg?.supportsSecret && (
+              <Field
+                label="Key Vault secret name"
+                hint={
+                  <>
+                    Name of the Key Vault secret holding the bearer token / GitHub PAT (never the
+                    value). Overrides <code>{cfg.secretEnv}</code>. The secret must already exist in
+                    the console&apos;s Key Vault.
+                  </>
+                }
+              >
+                <Input
+                  value={secretName}
+                  onChange={(_, d) => setSecretName(d.value)}
+                  placeholder={cfg.secretName || 'github-mcp-pat'}
+                  disabled={saving}
+                />
+              </Field>
+            )}
+
+            {cfg?.missing && cfg.missing.length > 0 && (
+              <MessageBar intent="warning">
+                <MessageBarBody>
+                  <MessageBarTitle>Still required to go live</MessageBarTitle>
+                  Set the following on the console so this server becomes callable:{' '}
+                  {cfg.missing.map((m, i) => (
+                    <span key={m}>
+                      {i > 0 ? ', ' : ''}
+                      <code>{m}</code>
+                    </span>
+                  ))}
+                  .
+                </MessageBarBody>
+              </MessageBar>
+            )}
+
+            {error && (
+              <MessageBar intent="error">
+                <MessageBarBody>
+                  <MessageBarTitle>Save failed</MessageBarTitle>
+                  {error}
+                </MessageBarBody>
+              </MessageBar>
+            )}
+          </div>
+          <DialogActions>
+            <Button appearance="secondary" onClick={() => onOpenChange(false)} disabled={saving}>
+              Cancel
+            </Button>
+            <Button appearance="primary" onClick={() => void save()} disabled={saving}>
+              {saving ? 'Saving…' : 'Save configuration'}
+            </Button>
+          </DialogActions>
+        </DialogBody>
+      </DialogContent>
+    </Dialog>
+  );
 }
 
 /**
@@ -1008,6 +1200,7 @@ function MsRemoteMcpCard({
   const [connecting, setConnecting] = useState(false);
   const [connectError, setConnectError] = useState<string | null>(null);
   const [connectNote, setConnectNote] = useState<string | null>(null);
+  const [configOpen, setConfigOpen] = useState(false);
 
   useEffect(() => { setStatus(initial); }, [initial]);
 
@@ -1224,34 +1417,55 @@ function MsRemoteMcpCard({
       </div>
 
       {/* Footer actions — only when configured (a gated server has nothing to call). */}
-      {status.configured && (
-        <div className={s.pbiFoot}>
-          {status.docs && (
-            <Link href={status.docs} target="_blank" rel="noreferrer" className={s.docsLink}>
-              <Open16Regular /> {status.attribution || 'Docs'}
-            </Link>
-          )}
-          <div className={s.spacer} />
-          <Button
-            icon={<ArrowClockwise20Regular />}
-            size="small"
-            onClick={() => void runProbe()}
-            disabled={testing || connecting || busy || !status.endpoint}
-          >
-            {testing ? 'Testing…' : 'Test connection'}
-          </Button>
-          {!status.defaultOn && (
+      {/* Footer — Configure is available in BOTH states (this is how an admin
+          ENABLES an opted-out server inline); Test/Connect only once configured. */}
+      <div className={s.pbiFoot}>
+        {status.docs && (
+          <Link href={status.docs} target="_blank" rel="noreferrer" className={s.docsLink}>
+            <Open16Regular /> {status.attribution || 'Docs'}
+          </Link>
+        )}
+        <div className={s.spacer} />
+        <Button
+          icon={<Settings20Regular />}
+          size="small"
+          onClick={() => setConfigOpen(true)}
+          disabled={busy}
+        >
+          Configure
+        </Button>
+        {status.configured && (
+          <>
             <Button
-              appearance="primary"
+              icon={<ArrowClockwise20Regular />}
               size="small"
-              icon={status.registered ? <Checkmark20Regular /> : <Add20Regular />}
-              onClick={() => void connect()}
-              disabled={connecting || testing || busy}
+              onClick={() => void runProbe()}
+              disabled={testing || connecting || busy || !status.endpoint}
             >
-              {connecting ? 'Connecting…' : status.registered ? 'Re-register' : 'Connect'}
+              {testing ? 'Testing…' : 'Test connection'}
             </Button>
-          )}
-        </div>
+            {!status.defaultOn && (
+              <Button
+                appearance="primary"
+                size="small"
+                icon={status.registered ? <Checkmark20Regular /> : <Add20Regular />}
+                onClick={() => void connect()}
+                disabled={connecting || testing || busy}
+              >
+                {connecting ? 'Connecting…' : status.registered ? 'Re-register' : 'Connect'}
+              </Button>
+            )}
+          </>
+        )}
+      </div>
+
+      {status.config && (
+        <MsRemoteConfigDialog
+          status={status}
+          open={configOpen}
+          onOpenChange={setConfigOpen}
+          onSaved={() => { void refresh(); onChanged(); }}
+        />
       )}
     </div>
   );

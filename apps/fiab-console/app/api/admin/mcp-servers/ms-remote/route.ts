@@ -70,8 +70,14 @@ import {
   REMOTE_BUILTIN_MCP_CATALOG,
   msRemoteMcp,
   msRemoteMcpScopeUris,
+  effectiveRemoteState,
   type RemoteBuiltinMcpEntry,
+  type EffectiveRemoteState,
 } from '@/lib/mcp/catalog';
+import {
+  getRemoteBuiltinOverrides,
+  getRemoteBuiltinOverride,
+} from '@/lib/azure/mcp-remote-config-store';
 import type { McpServerConfig, McpServerConfigDoc } from '@/lib/types/mcp-config';
 import { apiServerError } from '@/lib/api/respond';
 
@@ -101,11 +107,12 @@ function authMethodFor(entry: RemoteBuiltinMcpEntry): McpServerConfig['authMetho
  * msRemoteMcpScopeUris() so the registered audience, the scope URIs, and the
  * per-user token lookup all agree. '' for non-OBO entries or when unresolvable.
  */
-function resolveOboResource(entry: RemoteBuiltinMcpEntry): string {
+function resolveOboResource(entry: RemoteBuiltinMcpEntry, endpoint?: string): string {
   if (entry.auth !== 'entra-obo') return '';
   if (entry.oboResource && entry.oboResource.trim()) return entry.oboResource.trim();
+  const ep = endpoint?.trim() || entry.endpoint;
   try {
-    return entry.endpoint ? new URL(entry.endpoint).origin : '';
+    return ep ? new URL(ep).origin : '';
   } catch {
     return '';
   }
@@ -125,13 +132,16 @@ function attributionUrl(attribution: string): string {
  * per no-vaporware. `entry.gate` is the descriptor's human copy; the structured
  * fields let the panel render a precise MessageBar + remediation.
  */
-function gateFor(entry: RemoteBuiltinMcpEntry): Record<string, unknown> {
+function gateFor(entry: RemoteBuiltinMcpEntry, eff: EffectiveRemoteState): Record<string, unknown> {
   const g: Record<string, unknown> = {
     message: entry.gate,
     enableEnv: entry.enableEnv,
     endpointEnv: entry.endpointEnv,
     attribution: entry.attribution,
     docs: attributionUrl(entry.attribution),
+    // Honest remaining prerequisites the admin STILL can't set inline (e.g. the
+    // shared OBO confidential client) after applying any override.
+    missing: eff.missing,
   };
   if (entry.auth === 'entra-obo') {
     g.scopes = msRemoteMcpScopeUris(entry.id);
@@ -195,6 +205,7 @@ async function statusFor(
   entry: RemoteBuiltinMcpEntry,
   oid: string,
   registered: McpServerConfigDoc | null,
+  eff: EffectiveRemoteState,
 ): Promise<Record<string, unknown>> {
   const common = {
     id: entry.id,
@@ -203,7 +214,7 @@ async function statusFor(
     desc: entry.desc,
     transport: entry.transport,
     auth: entry.auth,
-    endpoint: entry.endpoint,
+    endpoint: eff.endpoint,
     endpointEnv: entry.endpointEnv,
     enableEnv: entry.enableEnv,
     defaultOn: entry.defaultOn,
@@ -212,12 +223,30 @@ async function statusFor(
     attribution: entry.attribution,
     docs: attributionUrl(entry.attribution),
     tenantSetting: entry.tenantSetting,
+    // Inline-config facets the admin form binds to (no-freeform: typed, per the
+    // descriptor's declared shape). `config` is the CURRENT effective config +
+    // where it came from (deployment env vs admin override); `override` is the
+    // persisted admin-set values (so the form pre-fills exactly what was saved).
+    config: {
+      // Which typed fields this server exposes for inline config.
+      supportsEndpoint: !!entry.endpointEnv,
+      supportsSecret: entry.auth === 'key-vault',
+      secretEnv: entry.secretRefEnv,
+      // Effective resolved values.
+      enabled: eff.enabled,
+      endpoint: eff.endpoint,
+      secretName: eff.secretName,
+      source: eff.source,       // 'env' | 'admin'
+      envForced: eff.envForced, // deployment env force-on → cannot disable here
+      missing: eff.missing,
+    },
+    override: (await getRemoteBuiltinOverride(oid, entry.id)) ?? null,
   };
 
-  // Opt-in gate (no-fabric-dependency): nothing exists until the descriptor's
-  // `configured()` is satisfied. 200 + configured:false + honest gate.
-  if (!entry.configured()) {
-    return { ok: true, configured: false, ...common, gate: gateFor(entry) };
+  // Opt-in gate (no-fabric-dependency): nothing exists until the EFFECTIVE state
+  // (env + admin override) is configured. 200 + configured:false + honest gate.
+  if (!eff.configured) {
+    return { ok: true, configured: false, ...common, gate: gateFor(entry, eff) };
   }
 
   // Per-credential readiness. Learn (none) + GitHub (key-vault) are "ready" once
@@ -232,7 +261,7 @@ async function statusFor(
 
   if (entry.auth === 'entra-obo') {
     scopeUris = msRemoteMcpScopeUris(entry.id);
-    oboResource = resolveOboResource(entry) || undefined;
+    oboResource = resolveOboResource(entry, eff.endpoint) || undefined;
     const userToken = oboResource ? await getUserOboToken(oid, oboResource) : null;
     tokenReady = !!userToken;
     if (!tokenReady) {
@@ -273,12 +302,13 @@ async function probeEntry(
   oid: string,
   tenantId: string,
   registered: McpServerConfigDoc | null,
+  eff: EffectiveRemoteState,
 ): Promise<Record<string, unknown>> {
-  if (!entry.endpoint) {
+  if (!eff.endpoint) {
     return {
       reachable: false,
       skipped: true,
-      reason: `No endpoint resolved — set ${entry.endpointEnv} to the published endpoint.`,
+      reason: `No endpoint resolved — set ${entry.endpointEnv} or configure it inline.`,
     };
   }
 
@@ -287,7 +317,7 @@ async function probeEntry(
   const authMethod = authMethodFor(entry);
 
   if (entry.auth === 'entra-obo') {
-    const resource = resolveOboResource(entry);
+    const resource = resolveOboResource(entry, eff.endpoint);
     userToken = (resource ? await getUserOboToken(oid, resource) : null) || undefined;
     if (!userToken) {
       return {
@@ -300,11 +330,12 @@ async function probeEntry(
     }
   } else if (entry.auth === 'key-vault') {
     // The Key Vault secret NAME (never the value); resolveAuthHeader fetches it.
-    authValue = entry.secretRefEnv ? process.env[entry.secretRefEnv]?.trim() : undefined;
+    // Effective value: the admin override wins, else the descriptor's env var.
+    authValue = eff.secretName;
   }
 
   try {
-    const tools = await listMcpTools(entry.endpoint, authMethod, authValue, 8000, userToken);
+    const tools = await listMcpTools(eff.endpoint, authMethod, authValue, 8000, userToken);
     if (registered) {
       await updateMcpServerTestResult(tenantId, registered.serverId, {
         toolCount: tools.length,
@@ -326,6 +357,7 @@ export async function GET(req: NextRequest) {
 
   const oid = session.claims.oid;
   const id = req.nextUrl.searchParams.get('id');
+  const overrides = await getRemoteBuiltinOverrides(oid);
 
   // No id → summarize the whole Microsoft remote MCP family (no probe; the panel
   // renders cards and never hangs on load).
@@ -333,7 +365,12 @@ export async function GET(req: NextRequest) {
     const registeredMap = await findAllRegistered(oid);
     const servers = await Promise.all(
       REMOTE_BUILTIN_MCP_CATALOG.map((entry) =>
-        statusFor(entry, oid, registeredMap.get(entry.id) ?? null),
+        statusFor(
+          entry,
+          oid,
+          registeredMap.get(entry.id) ?? null,
+          effectiveRemoteState(entry, overrides[entry.id]),
+        ),
       ),
     );
     return NextResponse.json({ ok: true, servers });
@@ -344,13 +381,14 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ ok: false, error: `unknown remote MCP server: ${id}` }, { status: 404 });
   }
 
+  const eff = effectiveRemoteState(entry, overrides[entry.id]);
   const registered = await findRegistered(oid, entry.id);
-  const status = await statusFor(entry, oid, registered);
+  const status = await statusFor(entry, oid, registered, eff);
 
   // Real connectivity probe (no-vaporware) — opt-in via ?probe=1. Only meaningful
   // when configured; the gate already explains an unconfigured server.
   if (req.nextUrl.searchParams.get('probe') === '1' && status.configured === true) {
-    const probe = await probeEntry(entry, oid, oid, registered);
+    const probe = await probeEntry(entry, oid, oid, registered, eff);
     return NextResponse.json({ ...status, probe });
   }
 
@@ -375,21 +413,23 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // Opt-in gate (no-fabric-dependency): refuse to register an opted-out server.
-  // Honest gate, never a silent or fake success.
-  if (!entry.configured()) {
-    return NextResponse.json({ ok: false, configured: false, gate: gateFor(entry) }, { status: 409 });
+  const tenantId = session.claims.oid;
+  const eff = effectiveRemoteState(entry, await getRemoteBuiltinOverride(tenantId, entry.id));
+
+  // Opt-in gate (no-fabric-dependency): refuse to register a server that is not
+  // effectively enabled (env + admin override). Honest gate, never fake success.
+  if (!eff.configured) {
+    return NextResponse.json({ ok: false, configured: false, gate: gateFor(entry, eff) }, { status: 409 });
   }
 
-  const tenantId = session.claims.oid;
   const who = session.claims.upn || session.claims.email || tenantId;
 
-  // Build the McpServerConfig row straight from the descriptor. No secret value is
-  // ever accepted or stored: entra-obo carries a per-user token resolved at call
-  // time; key-vault stores only the Key Vault secret NAME.
+  // Build the McpServerConfig row straight from the descriptor + effective config.
+  // No secret value is ever accepted or stored: entra-obo carries a per-user token
+  // resolved at call time; key-vault stores only the Key Vault secret NAME.
   const config: McpServerConfig = {
     name: entry.name,
-    endpoint: entry.endpoint,
+    endpoint: eff.endpoint,
     authMethod: authMethodFor(entry),
     description: entry.desc,
     enabled: true,
@@ -402,12 +442,11 @@ export async function POST(req: NextRequest) {
     // store classifies by audience — routing the ARM / Azure SQL / Power BI
     // audiences to their existing login-cached sibling stores, others to the
     // generalized per-(user,resource) store (mcp-obo-token-store).
-    config.oboResource = resolveOboResource(entry) || undefined;
+    config.oboResource = resolveOboResource(entry, eff.endpoint) || undefined;
     config.oboScopes = entry.oboScopes ? [...entry.oboScopes] : undefined;
-  } else if (entry.auth === 'key-vault' && entry.secretRefEnv) {
-    // Store the Key Vault secret NAME (env-named), never the PAT literal.
-    const secretName = process.env[entry.secretRefEnv]?.trim();
-    if (secretName) config.authValue = secretName;
+  } else if (entry.auth === 'key-vault' && eff.secretName) {
+    // Store the Key Vault secret NAME (admin override or env-named), never the PAT.
+    config.authValue = eff.secretName;
   }
 
   try {
@@ -418,7 +457,7 @@ export async function POST(req: NextRequest) {
     // Real connectivity probe (no-vaporware) under the real credential. Never
     // throws — a 401/403 (consent/scope/tenant-setting still missing) is surfaced
     // honestly on the row rather than failing the registration.
-    const probe = await probeEntry(entry, tenantId, tenantId, doc);
+    const probe = await probeEntry(entry, tenantId, tenantId, doc, eff);
     if (typeof probe.toolCount === 'number') {
       doc.lastTestResult = { at: new Date().toISOString(), toolCount: probe.toolCount as number };
     } else if (typeof probe.error === 'string') {

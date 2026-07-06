@@ -85,6 +85,7 @@ import {
 import { PUBLISH_STATUSES, type PublishStatus } from '@/lib/azure/loom-data-products-search';
 import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
 import { isUpdateFrequency, sanitizeExternalLinks } from '@/lib/dataproducts/attributes';
+import { sanitizeContract } from '@/lib/dataproducts/contract';
 import type { DataProductDoc as EditDoc } from '@/lib/dataproducts/edit-model';
 import type {
   DataProductDoc, DataProductOwner, DataProductCustomAttribute,
@@ -245,6 +246,9 @@ function itemToProduct(item: WithEtag, tenantId: string | null): DataProductDoc 
     customAttributes: toCustomAttributes(st.customAttributes),
     termsOfUse: toLinks(st.termsOfUse),
     documentation: toLinks(st.documentation),
+    contract: (st.contract && typeof st.contract === 'object' && !Array.isArray(st.contract))
+      ? (st.contract as DataProductDoc['contract'])
+      : undefined,
     createdAt: item.createdAt,
     updatedAt: item.updatedAt,
     _etag: item._etag,
@@ -501,6 +505,18 @@ export async function PATCH(req: NextRequest, props: { params: Promise<{ id: str
     if (!links) return err('documentation must be an array of { label, url, assetId? }', 400, 'bad_docs');
     statePatch.documentation = links;
     patched.push('documentation');
+  }
+
+  // ---- Data contract (schema + SLOs + quality expectations) ----------------
+  if ('contract' in body) {
+    if (body.contract === null) {
+      statePatch.contract = undefined; // explicit clear
+    } else {
+      const contract = sanitizeContract(body.contract);
+      if (!contract) return err('contract must be a { version?, schema[], slo{}, quality[] } object', 400, 'bad_contract');
+      statePatch.contract = contract;
+    }
+    patched.push('contract');
   }
 
   // ---- Marketplace editor fields (data-marketplace.tsx) --------------------

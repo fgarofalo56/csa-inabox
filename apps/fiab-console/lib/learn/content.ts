@@ -86,8 +86,41 @@ export function loomDocUrl(relPath: string): string {
  */
 export function loomThumbUrl(slug: string): string | undefined {
   if (!EDITOR_THUMB_SLUGS.has(slug)) return undefined;
-  return `${LOOM_DOCS_BASE}/fiab/tutorials/img/editor-${slug}-1.png`;
+  return `${LOOM_DOCS_BASE}/fiab/tutorials/img/editor-${slug}-${1}.png`;
 }
+
+/**
+ * Build the URL for the Nth published step screenshot of an editor slug
+ * (`editor-<slug>-<n>.png`), or `undefined` when that step's screenshot has not
+ * been captured yet. This is what the multi-step visual walkthrough renders.
+ *
+ * Honesty gate (no_scaffold / no-vaporware): a URL is emitted ONLY when the
+ * step index is within the slug's captured-count in `EDITOR_STEP_IMAGE_COUNTS`.
+ * A step beyond the captured set returns `undefined`, so the StepWalkthrough
+ * renders an honest "screenshot coming" placeholder rather than a broken image.
+ * When the tutorial-capture UAT regenerates a slug's screenshots (writing
+ * `editor-<slug>-1.png … -N.png`), bump its count here and the images slot in.
+ */
+export function loomStepImageUrl(slug: string, n: number): string | undefined {
+  if (n < 1) return undefined;
+  const captured = EDITOR_STEP_IMAGE_COUNTS[slug] ?? (EDITOR_THUMB_SLUGS.has(slug) ? 1 : 0);
+  if (n > captured) return undefined;
+  return `${LOOM_DOCS_BASE}/fiab/tutorials/img/editor-${slug}-${n}.png`;
+}
+
+/**
+ * How many ordered step screenshots (`editor-<slug>-1.png … -N.png`) are
+ * actually published on disk for a slug. Every slug in `EDITOR_THUMB_SLUGS`
+ * ships at least the landing shot (`-1`), so the default is 1 and this map only
+ * needs an ENTRY when a slug has a full multi-step capture (count > 1). Kept in
+ * lockstep with `docs/fiab/tutorials/img/`; the tutorial-capture UAT + a manual
+ * review update it when a multi-step walkthrough is regenerated. Until then a
+ * single landing shot + authored step captions is the honest, shipped state.
+ */
+export const EDITOR_STEP_IMAGE_COUNTS: Readonly<Record<string, number>> = {
+  // (No slug has a multi-step capture published yet — each ships the `-1`
+  //  landing shot. Add `'<slug>': N` here after regenerating N step images.)
+};
 
 /**
  * The 117 item-type slugs that have a real per-editor Loom doc at
@@ -713,6 +746,50 @@ export function getLearn(itemType: string): LearnEntry | null {
     : { ...legacy! };
 
   return { ...base, docsUrl, loomDocPath, msLearnUrl, hasLoomDoc };
+}
+
+/* ── Visual step-by-step walkthroughs ──────────────────────────────────────── */
+
+/**
+ * One numbered step of a visual walkthrough: a concise caption of what to do,
+ * an optional longer action detail, and the clean step screenshot when one has
+ * been captured (else `imgUrl` is undefined → the renderer shows an honest
+ * "screenshot coming" placeholder, never a broken image).
+ */
+export interface WalkthroughStep {
+  n: number;
+  /** Short imperative caption ("Load files into Delta tables"). */
+  caption: string;
+  /** Optional longer detail for the step. */
+  action?: string;
+  /** Clean step screenshot URL, or undefined when not yet captured. */
+  imgUrl?: string;
+  /** True when a real screenshot backs this step (drives the placeholder). */
+  hasImage: boolean;
+}
+
+/**
+ * Build the ordered visual walkthrough for an editor item type.
+ *
+ * Captions come from the item's REAL authored Learn content
+ * (`getLearn(slug).steps` — titled getting-started steps that already exist for
+ * every catalog item), so there is no invented text. Screenshots attach by
+ * index via `loomStepImageUrl` and are gated on what has actually been captured
+ * (`EDITOR_STEP_IMAGE_COUNTS`) — so a slug with one landing shot renders step 1
+ * with its screenshot and steps 2..N with an honest "coming" placeholder until
+ * the multi-step capture is regenerated. Returns `null` when the item has no
+ * authored steps (the card then keeps its doc links only, no empty walkthrough).
+ */
+export function getWalkthrough(slug: string): WalkthroughStep[] | null {
+  const learn = getLearn(slug);
+  if (!learn?.steps || learn.steps.length === 0) return null;
+  return learn.steps.map((raw, i) => {
+    const n = i + 1;
+    const caption = typeof raw === 'string' ? raw : raw.title;
+    const action = typeof raw === 'string' ? undefined : raw.body;
+    const imgUrl = loomStepImageUrl(slug, n);
+    return { n, caption, action, imgUrl, hasImage: !!imgUrl };
+  });
 }
 
 /* ── Learn-library catalog (powers the /learn portal) ──────────────────────── */

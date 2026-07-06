@@ -28,7 +28,7 @@ import {
   ALL_PERMISSION_TYPES,
   type ItemPermissionType,
 } from '@/lib/azure/item-permissions-client';
-import { listDlpPolicies, DlpNotConfiguredError } from '@/lib/azure/dlp-graph-client';
+import { listDlpPolicies, DlpNotConfiguredError, dlpEnabled } from '@/lib/azure/dlp-graph-client';
 import type { WorkspaceItem, Workspace } from '@/lib/types/workspace';
 import { apiServerError } from '@/lib/api/respond';
 
@@ -96,7 +96,7 @@ async function resolveDlp(item: WorkspaceItem): Promise<{ restricted: boolean; p
     return { restricted: true, policyName: state.dlpPolicyName || undefined };
   }
   const labelId: string | undefined = state.sensitivityLabelId || (item as any).sensitivityLabelId;
-  if (!labelId || process.env.LOOM_DLP_ENABLED !== 'true') return { restricted: false };
+  if (!labelId || !dlpEnabled()) return { restricted: false };
   try {
     const policies = await listDlpPolicies();
     for (const p of policies) {

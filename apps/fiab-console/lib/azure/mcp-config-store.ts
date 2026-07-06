@@ -9,7 +9,14 @@
  */
 
 import { mcpServersContainer } from './cosmos-client';
-import { defaultOnRemoteMcps, msRemoteMcp, type RemoteBuiltinMcpEntry } from '../mcp/catalog';
+import {
+  REMOTE_BUILTIN_MCP_CATALOG,
+  msRemoteMcp,
+  effectiveRemoteState,
+  type RemoteBuiltinMcpEntry,
+  type RemoteBuiltinOverride,
+} from '../mcp/catalog';
+import { getRemoteBuiltinOverrides } from './mcp-remote-config-store';
 import type { McpServerConfig, McpServerConfigDoc } from '../types/mcp-config';
 
 const TTL_MS = 30_000;
@@ -29,10 +36,14 @@ const _cache = new Map<string, CacheEntry<McpServerConfigDoc[]>>();
  * 'entra-obo' (per-user delegated token, keyed by `oboResourceKey` = the descriptor
  * id), or 'key-vault' (a stored PAT secret NAME, never a literal — GitHub).
  */
-function remoteBuiltinToConfig(e: RemoteBuiltinMcpEntry): McpServerConfig {
+function remoteBuiltinToConfig(
+  e: RemoteBuiltinMcpEntry,
+  ov?: RemoteBuiltinOverride,
+): McpServerConfig {
+  const endpoint = ov?.endpoint?.trim() || e.endpoint;
   const cfg: McpServerConfig = {
     name: e.name,
-    endpoint: e.endpoint,
+    endpoint,
     authMethod: e.auth, // 'none' | 'entra-obo' | 'key-vault' — all valid McpServerConfig authMethods
     enabled: true,
     source: 'remote-builtin',
@@ -43,44 +54,51 @@ function remoteBuiltinToConfig(e: RemoteBuiltinMcpEntry): McpServerConfig {
     cfg.oboResource = e.oboResource || undefined; // '' (per-org, e.g. Dataverse) → derived from endpoint at OBO time
     cfg.oboScopes = e.oboScopes;
     cfg.oboResourceKey = e.id; // per-resource per-user token lookup key (no secret)
-  } else if (e.auth === 'key-vault' && e.secretRefEnv) {
-    // Key Vault secret NAME (never the value) lives in the env var the descriptor names.
-    const secretName = process.env[e.secretRefEnv]?.trim();
+  } else if (e.auth === 'key-vault') {
+    // Key Vault secret NAME (never the value): the admin override wins, else the
+    // env var the descriptor names.
+    const secretName = ov?.secretName?.trim() || (e.secretRefEnv ? process.env[e.secretRefEnv]?.trim() : undefined);
     if (secretName) cfg.authValue = secretName;
   }
   return cfg;
 }
 
 /**
- * Apply the remote built-in MCP policy to a tenant's persisted server list:
+ * Apply the remote built-in MCP policy to a tenant's persisted server list, given
+ * the tenant's inline config overrides (catalogId → override; {} for none):
  *
  *  1. **Drop opted-out remote-builtin rows.** A `source: 'remote-builtin'` row
- *     whose descriptor `configured()` is now false (its enable-env toggle was
- *     cleared, the shared OBO client / endpoint went away, or a PAT secret name
- *     was removed) must NEVER be advertised — otherwise `buildMcpShim` would try
- *     to reach an opted-out Microsoft server. Rows with no matching descriptor
- *     (manually-registered remote endpoints we don't model) are kept as-is.
+ *     whose EFFECTIVE state (env + override) is now unconfigured (its enable
+ *     toggle was cleared, the shared OBO client / endpoint went away, or a PAT
+ *     secret name was removed) must NEVER be advertised — otherwise `buildMcpShim`
+ *     would try to reach an opted-out Microsoft server. Rows with no matching
+ *     descriptor (manually-registered remote endpoints we don't model) are kept.
  *  2. **Fold in the default-on synthetic rows.** The single source of the
  *     "Microsoft Learn is live day-one with zero config" behavior
  *     (no-fabric-dependency: Learn is the SOLE default-on server — public,
- *     no-auth, no Fabric/Power BI dependency). `defaultOnRemoteMcps()` already
- *     filters on `defaultOn && configured()`, so Learn drops out automatically
- *     when `LOOM_MS_LEARN_MCP_ENABLED=false`. We only append a synthetic row when
- *     the same descriptor id isn't already persisted (admin-registered) — no
- *     duplicate. Consumed by `buildMcpShim` (tool discovery) + the admin panel.
+ *     no-auth). A defaultOn descriptor is injected when its effective state is
+ *     configured and it isn't already persisted (admin-registered) — no duplicate.
+ *
+ * Env-first + additive: `effectiveRemoteState` keeps every env-configured server
+ * exactly as before; overrides only ADD servers the deployment env left off, so
+ * this can never drop a server a prior release advertised.
  */
-function decorateMcpServers(persisted: McpServerConfig[]): McpServerConfig[] {
+function decorateMcpServers(
+  persisted: McpServerConfig[],
+  overrides: Record<string, RemoteBuiltinOverride>,
+): McpServerConfig[] {
   const kept = persisted.filter((srv) => {
     if (srv.source !== 'remote-builtin' || !srv.catalogId) return true;
     const d = msRemoteMcp(srv.catalogId);
-    return d ? d.configured() : true;
+    return d ? effectiveRemoteState(d, overrides[srv.catalogId]).configured : true;
   });
   const present = new Set(
     kept.filter((s) => s.source === 'remote-builtin' && s.catalogId).map((s) => s.catalogId),
   );
-  const synthetic = defaultOnRemoteMcps()
-    .filter((e) => !present.has(e.id))
-    .map(remoteBuiltinToConfig);
+  const synthetic = REMOTE_BUILTIN_MCP_CATALOG.filter((e) => {
+    if (!e.defaultOn || present.has(e.id)) return false;
+    return effectiveRemoteState(e, overrides[e.id]).configured;
+  }).map((e) => remoteBuiltinToConfig(e, overrides[e.id]));
   return synthetic.length ? [...kept, ...synthetic] : kept;
 }
 
@@ -94,9 +112,12 @@ function decorateMcpServers(persisted: McpServerConfig[]): McpServerConfig[] {
  */
 export async function listMcpServers(tenantId: string): Promise<McpServerConfig[]> {
   if (!tenantId) return [];
+  // Per-tenant inline overrides (env + admin merge). Never throws — returns {}
+  // on any Cosmos error so tool discovery falls back to pure-env behaviour.
+  const overrides = await getRemoteBuiltinOverrides(tenantId);
   const hit = _cache.get(tenantId);
   if (hit && Date.now() - hit.at < TTL_MS) {
-    return decorateMcpServers((hit.value || []).map((doc) => stripDoc(doc)));
+    return decorateMcpServers((hit.value || []).map((doc) => stripDoc(doc)), overrides);
   }
   try {
     const c = await mcpServersContainer();
@@ -107,12 +128,12 @@ export async function listMcpServers(tenantId: string): Promise<McpServerConfig[
     const { resources } = await c.items.query<McpServerConfigDoc>(q).fetchAll();
     const value = resources || [];
     _cache.set(tenantId, { value, at: Date.now() });
-    return decorateMcpServers(value.map((doc) => stripDoc(doc)));
+    return decorateMcpServers(value.map((doc) => stripDoc(doc)), overrides);
   } catch (e: any) {
     _cache.set(tenantId, { value: null, at: Date.now() });
     // Cosmos unreachable: still advertise the default-on Microsoft Learn row so its
     // tools are live day-one even before any persisted MCP config exists.
-    return decorateMcpServers([]);
+    return decorateMcpServers([], overrides);
   }
 }
 

@@ -79,6 +79,15 @@ export interface DspmAiResult {
   agents: DspmAiAgentRow[];
   summary: DspmAiSummary;
   gates: Partial<Record<'mip' | 'usage', NotConfiguredHint>>;
+  /**
+   * Non-fatal degradations: an enrichment source (label ordering / usage
+   * metering) that FAILED for a reason other than "not configured" (a heavy-
+   * window timeout, a transient 5xx). The core label-exposure report still
+   * rendered; each entry names the source + reason so the UI can surface an
+   * honest "showing partial results — narrow the window or retry" bar. Empty
+   * when every source resolved cleanly.
+   */
+  degraded: { source: 'mip' | 'usage'; reason: string }[];
   source: 'live';
   updatedAt: string;
 }
@@ -161,10 +170,22 @@ interface EstateItem {
   displayName?: string;
   itemType?: string;
   workspaceId?: string;
-  state?: Record<string, any>;
+  /** Only the two state sub-fields the exposure join needs (projected, not the
+   *  whole state blob — see loadTenantItems). */
+  sensitivityLabel?: string | null;
+  sources?: any[];
 }
 
-/** Load every item in the tenant's workspaces (state carries label + sources). */
+/**
+ * Load every item in the tenant's workspaces. PERF: the exposure join only ever
+ * reads two things off each item's `state` — its `sensitivityLabel` (the join
+ * value) and, for agent items, its `sources` (the grounding list). Projecting
+ * JUST those two sub-fields instead of `SELECT c.state` avoids pulling every
+ * item's full editor-config blob (which can be tens of KB each — canvas
+ * definitions, query text, schema trees) across the wire for the whole estate,
+ * which is a large part of why this report was slow enough to trip the client
+ * timeout. Cross-partition (items span workspaces), paged internally by fetchAll.
+ */
 async function loadTenantItems(tenantId: string): Promise<EstateItem[]> {
   const wsC = await workspacesContainer();
   const itC = await itemsContainer();
@@ -177,7 +198,7 @@ async function loadTenantItems(tenantId: string): Promise<EstateItem[]> {
   if (!wsIds.length) return [];
 
   const { resources } = await itC.items.query<EstateItem>({
-    query: 'SELECT c.id, c.displayName, c.itemType, c.workspaceId, c.state FROM c WHERE ARRAY_CONTAINS(@w, c.workspaceId) AND (NOT IS_DEFINED(c.state._recycled) OR c.state._recycled = null)',
+    query: 'SELECT c.id, c.displayName, c.itemType, c.workspaceId, c.state.sensitivityLabel, c.state.sources FROM c WHERE ARRAY_CONTAINS(@w, c.workspaceId) AND (NOT IS_DEFINED(c.state._recycled) OR c.state._recycled = null)',
     parameters: [{ name: '@w', value: wsIds }],
   }).fetchAll();
   return resources;
@@ -188,7 +209,7 @@ function buildExposureIndex(items: EstateItem[]): { byId: Map<string, string>; b
   const byId = new Map<string, string>();
   const byName = new Map<string, string>();
   for (const it of items) {
-    const label = it.state?.sensitivityLabel;
+    const label = it.sensitivityLabel;
     if (!label) continue;
     if (it.id) byId.set(it.id, label);
     if (it.displayName) byName.set(it.displayName.toLowerCase(), label);
@@ -247,7 +268,7 @@ const USAGE_GATE_HINT: NotConfiguredHint = {
   followUp: 'Set LOOM_LOG_ANALYTICS_WORKSPACE_ID to the workspace customerId (GUID). Per-agent usage appears after the next real data-agent chat call (the agent_id dimension is emitted by the chat path). For GCC-High/IL5 also set LOOM_LOG_ANALYTICS_ENDPOINT=https://api.loganalytics.us.',
 };
 
-async function computeAgentUsage(days: number): Promise<{ byAgent: Map<string, AgentUsage>; gate?: NotConfiguredHint }> {
+async function computeAgentUsage(days: number): Promise<{ byAgent: Map<string, AgentUsage>; gate?: NotConfiguredHint; degraded?: string }> {
   const kql = `AppEvents
 | where Name == "copilot.usage"
 | extend agent_id = tostring(Properties.agent_id)
@@ -270,8 +291,17 @@ async function computeAgentUsage(days: number): Promise<{ byAgent: Map<string, A
     }
     return { byAgent };
   } catch (e) {
+    // Log Analytics unconfigured is an honest GATE (blank usage cols + how to
+    // wire it). Any OTHER failure — a per-request timeout on a heavy window, a
+    // transient 5xx — must NOT fail the whole posture report: DEGRADE to blank
+    // usage with a reason so the label-exposure report (the core value) still
+    // renders. This is what lets one slow subscription/window return partial
+    // instead of erroring wholesale.
     if (e instanceof MonitorNotConfiguredError) return { byAgent: new Map(), gate: USAGE_GATE_HINT };
-    throw e;
+    const reason = e instanceof Error ? e.message : String(e);
+    // eslint-disable-next-line no-console
+    console.warn('[dspm-ai] usage metering degraded (label-exposure still computed):', reason);
+    return { byAgent: new Map(), degraded: reason };
   }
 }
 
@@ -314,35 +344,106 @@ const AGENT_ITEM_TYPES = new Set(
 );
 
 /**
- * Compute the DSPM-for-AI posture for one tenant: every AI agent, the
- * sensitivity labels of the data it touches, its real usage, and whether the
- * most-sensitive data is protected. Live from Cosmos + Graph + Monitor; each
- * non-Cosmos source degrades to a `gates[...]` entry.
+ * DEFAULT usage window (days). Narrowed from 30 → 14 so the default report
+ * runs a lighter Log Analytics scan (the copilot.usage KQL scans `AppEvents`
+ * over `P<days>D`, so the window is the dominant cost knob). Narrowing the
+ * window only changes usage ATTRIBUTION — every agent still appears (the agent
+ * list comes from Cosmos, not the usage query), its usage just reflects the
+ * chosen window. Override the default with LOOM_DSPM_AI_WINDOW_DAYS; the panel
+ * lets the operator pick 7/14/30/60/90 per query. Clamped 1..90.
  */
-export async function computeDspmAiPosture(tenantId: string, days = 30): Promise<DspmAiResult> {
-  assertCosmosConfigured();
+export const DSPM_AI_DEFAULT_WINDOW_DAYS: number = (() => {
+  const n = Number(process.env.LOOM_DSPM_AI_WINDOW_DAYS);
+  return Number.isFinite(n) && n >= 1 && n <= 90 ? Math.floor(n) : 14;
+})();
 
-  const items = await loadTenantItems(tenantId);
-  const exposureIdx = buildExposureIndex(items);
+/**
+ * Short server-side memo for the whole posture computation, keyed by
+ * tenant+window. The report joins the full estate (Cosmos) with Graph + Log
+ * Analytics on every load / Refresh; none of that shifts second-to-second, so a
+ * revisit / Refresh-spam inside the TTL is served from process memory instead
+ * of re-running the heavy multi-source join. We cache the PROMISE (not the
+ * resolved value) so N concurrent callers share ONE computation, and evict on
+ * failure so the next call retries. Same pattern as monitor-client's `cached()`.
+ */
+const DSPM_TTL_MS = Number(process.env.LOOM_DSPM_AI_TTL_MS) || 60_000;
+interface DspmCacheEntry { at: number; val: Promise<DspmAiResult> }
+const _dspmCache = new Map<string, DspmCacheEntry>();
 
-  // Graph label ordering / protection (gated → static rank, protected=false).
-  let labelIndex: Map<string, LabelMeta> | null = null;
-  let mipGate: NotConfiguredHint | undefined;
+/** Drop all memoized posture results (test hook / explicit hard-refresh path). */
+export function clearDspmAiCache(): void { _dspmCache.clear(); }
+
+/**
+ * Resolve the tenant's Graph sensitivity-label ordering, NEVER throwing. MIP
+ * unconfigured → an honest `gate` (static rank fallback + how to wire it); any
+ * other failure (timeout / transient 5xx) → `degraded` with a reason (static
+ * rank fallback) so label ordering degrading can't fail the whole report.
+ */
+async function loadLabelIndexResilient(): Promise<{
+  index: Map<string, LabelMeta> | null;
+  gate?: NotConfiguredHint;
+  degraded?: string;
+}> {
   try {
     const labels = await listSensitivityLabels();
-    labelIndex = buildLabelIndex(labels);
+    return { index: buildLabelIndex(labels) };
   } catch (e) {
-    if (e instanceof MipNotConfiguredError) { mipGate = e.hint; }
-    else throw e;
+    if (e instanceof MipNotConfiguredError) return { index: null, gate: e.hint };
+    const reason = e instanceof Error ? e.message : String(e);
+    // eslint-disable-next-line no-console
+    console.warn('[dspm-ai] label ordering degraded (static rank fallback):', reason);
+    return { index: null, degraded: reason };
   }
+}
 
-  // Real per-agent usage (gated → blank usage columns).
-  const usage = await computeAgentUsage(days);
+/**
+ * Compute the DSPM-for-AI posture for one tenant: every AI agent, the
+ * sensitivity labels of the data it touches, its real usage, and whether the
+ * most-sensitive data is protected. Live from Cosmos + Graph + Monitor.
+ *
+ * PERF/RESILIENCE: the three sources — the Cosmos estate load, the Graph label
+ * ordering, and the Log Analytics usage query — are INDEPENDENT, so they run in
+ * PARALLEL (previously serial: sum of three round-trips, which was slow enough
+ * to trip the client timeout). Only the Cosmos load is load-bearing; the two
+ * enrichment sources each resolve to a `gate` (not configured) or a `degraded`
+ * reason (timeout / transient failure) rather than failing the whole report, so
+ * a slow/failing usage window returns PARTIAL results the panel can surface with
+ * an honest "narrow the window or retry" bar. TTL-memoized per tenant+window.
+ */
+export async function computeDspmAiPosture(tenantId: string, days = DSPM_AI_DEFAULT_WINDOW_DAYS): Promise<DspmAiResult> {
+  assertCosmosConfigured();
+  const windowDays = Math.max(1, Math.min(90, Math.floor(days) || DSPM_AI_DEFAULT_WINDOW_DAYS));
+  const key = `${tenantId}:${windowDays}`;
+  const now = Date.now();
+  const hit = _dspmCache.get(key);
+  if (hit && now - hit.at < DSPM_TTL_MS) return hit.val;
+  const entry: DspmCacheEntry = {
+    at: now,
+    val: _computeDspmAiPosture(tenantId, windowDays).catch((e) => {
+      if (_dspmCache.get(key) === entry) _dspmCache.delete(key); // don't cache failures
+      throw e;
+    }),
+  };
+  _dspmCache.set(key, entry);
+  return entry.val;
+}
+
+async function _computeDspmAiPosture(tenantId: string, days: number): Promise<DspmAiResult> {
+  // Run the three independent sources concurrently. loadTenantItems is the only
+  // load-bearing one (its failure rejects the whole call → the route's honest
+  // gate / 500); the two enrichment loaders never throw.
+  const [items, labelRes, usage] = await Promise.all([
+    loadTenantItems(tenantId),
+    loadLabelIndexResilient(),
+    computeAgentUsage(days),
+  ]);
+  const exposureIdx = buildExposureIndex(items);
+  const labelIndex = labelRes.index;
 
   const agents: DspmAiAgentRow[] = [];
   for (const it of items) {
     if (!AGENT_ITEM_TYPES.has(String(it.itemType))) continue;
-    const rawSources = Array.isArray(it.state?.sources) ? (it.state!.sources as any[]) : [];
+    const rawSources = Array.isArray(it.sources) ? it.sources : [];
     const sources: DspmAiSourceRow[] = rawSources.map((s) => ({
       name: String(s?.name || s?.id || 'source'),
       type: String(s?.type || 'unknown'),
@@ -396,8 +497,12 @@ export async function computeDspmAiPosture(tenantId: string, days = 30): Promise
     .sort((a, b) => metaFor(b.label, labelIndex).rank - metaFor(a.label, labelIndex).rank);
 
   const gates: DspmAiResult['gates'] = {};
-  if (mipGate) gates.mip = mipGate;
+  if (labelRes.gate) gates.mip = labelRes.gate;
   if (usage.gate) gates.usage = usage.gate;
+
+  const degraded: DspmAiResult['degraded'] = [];
+  if (labelRes.degraded) degraded.push({ source: 'mip', reason: labelRes.degraded });
+  if (usage.degraded) degraded.push({ source: 'usage', reason: usage.degraded });
 
   return {
     agents,
@@ -409,6 +514,7 @@ export async function computeDspmAiPosture(tenantId: string, days = 30): Promise
       windowDays: days,
     },
     gates,
+    degraded,
     source: 'live',
     updatedAt: new Date().toISOString(),
   };

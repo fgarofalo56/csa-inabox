@@ -882,11 +882,13 @@ async function probeDeltaSharing(): Promise<CheckResult> {
 
 async function probeDlpGraphRoles(): Promise<CheckResult> {
   const base = { id: 'probe-dlp-graph-roles', category: 'catalog-governance' as const, title: 'DLP / Information-Protection Graph roles', severity: 'optional' as const };
-  if (env('LOOM_DLP_ENABLED') !== 'true') {
+  // DLP is ON by default (opt-out). Only an explicit LOOM_DLP_ENABLED=false
+  // disables the live Graph DLP reads — flag that as a deliberate opt-out.
+  if (env('LOOM_DLP_ENABLED') === 'false') {
     return {
       ...base, status: 'warn',
-      detail: 'DLP/Information-Protection Graph integration disabled (LOOM_DLP_ENABLED ≠ true).',
-      remediation: 'Set LOOM_DLP_ENABLED=true AND grant the Console UAMI the Graph app roles SecurityAlert.Read.All + SecurityIncident.Read.All + InformationProtectionPolicy.Read.All (scripts/csa-loom/grant-graph-approles.sh), then a Tenant Admin grants admin consent. Optional — classifications/labels work Loom-native without it.',
+      detail: 'DLP/Information-Protection Graph integration explicitly disabled (LOOM_DLP_ENABLED=false).',
+      remediation: 'Remove LOOM_DLP_ENABLED=false (DLP defaults ON) AND grant the Console UAMI the Graph app roles SecurityAlert.Read.All + SecurityIncident.Read.All + InformationProtectionPolicy.Read.All (scripts/csa-loom/grant-graph-approles.sh), then a Tenant Admin grants admin consent. The Loom-native policy library authors + saves regardless.',
       redeploy: true,
       docs: 'https://learn.microsoft.com/graph/permissions-reference',
     };

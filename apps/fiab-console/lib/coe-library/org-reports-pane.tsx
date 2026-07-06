@@ -15,6 +15,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { clientFetch } from '@/lib/client-fetch';
 import {
   Spinner, Badge, Caption1, Body1, Button, Text,
   MessageBar, MessageBarBody, makeStyles, tokens,
@@ -91,7 +92,7 @@ export function OrgReportsPane(): React.ReactElement {
   const load = useCallback(async () => {
     setLoading(true); setError(null);
     try {
-      const r = await fetch('/api/org-reports');
+      const r = await clientFetch('/api/org-reports');
       const j = await r.json();
       if (!j.ok) { setError(j.error || 'failed to load'); return; }
       setReports(j.reports || []);

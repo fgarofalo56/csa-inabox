@@ -10,9 +10,20 @@ import {
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import { Section, Toolbar } from '@/lib/components/ui/section';
-import { Add24Regular, ArrowSync24Regular, Delete20Regular, Folder20Regular, Document20Regular, ArrowUp16Regular } from '@fluentui/react-icons';
+import { TileGrid } from '@/lib/components/ui/tile-grid';
+import {
+  Add24Regular, ArrowSync24Regular, Delete20Regular, Folder20Regular, Document20Regular, ArrowUp16Regular,
+  CheckmarkCircle20Filled, Person24Regular, Money24Regular, Wallet24Regular, HeartPulse24Regular,
+  Globe24Regular, Key24Regular, LockClosed24Regular,
+} from '@fluentui/react-icons';
 import { GovernanceShell } from '@/lib/components/governance-shell';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
+
+interface DlpPreset {
+  id: string; name: string; description: string; category: string; icon: string;
+  regulation?: string; sensitiveInfoTypes: string[]; action: string; sharedWith: 'external' | 'any'; learnUrl: string;
+}
+interface Sit { id: string; name: string; category: string; }
 
 interface Policy {
   id: string;
@@ -27,6 +38,13 @@ interface Policy {
   /** Set true by the DLP restrict-access action when this grant was revoked. */
   dlpRestricted?: boolean;
   dlpRestrictedAt?: string;
+  /** DLP-kind structured rule (sensitive-info types + action + condition). */
+  dlp?: { sensitiveInfoTypes: string[]; action: string; sharedWith: 'external' | 'any' };
+  /** Preset provenance, e.g. `preset:pci-dss`. */
+  source?: string;
+  /** True for the seeded best-practice default policy. */
+  builtin?: boolean;
+  category?: string;
 }
 
 interface DlpViolation {
@@ -50,7 +68,50 @@ const useStyles = makeStyles({
   dlpToolbar: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', marginBottom: tokens.spacingVerticalS, flexWrap: 'wrap' },
   pickList: { display: 'flex', flexDirection: 'column', gap: '4px', maxHeight: '160px', overflowY: 'auto' },
   chips: { display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' },
+  presetCard: {
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS,
+    padding: tokens.spacingVerticalL,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusLarge,
+    backgroundColor: tokens.colorNeutralBackground1,
+    boxShadow: tokens.shadow4,
+    minWidth: 0,
+    transitionProperty: 'box-shadow, transform',
+    transitionDuration: tokens.durationNormal,
+    ':hover': { boxShadow: tokens.shadow16, transform: 'translateY(-2px)' },
+  },
+  presetHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM, minWidth: 0 },
+  presetIcon: {
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    width: '40px', height: '40px', flexShrink: 0,
+    borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: tokens.colorBrandBackground2,
+    color: tokens.colorBrandForeground1,
+  },
+  presetBody: { color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200, minHeight: '54px' },
+  presetMeta: { display: 'flex', gap: tokens.spacingHorizontalXS, flexWrap: 'wrap', alignItems: 'center' },
+  presetFoot: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: tokens.spacingHorizontalS, marginTop: tokens.spacingVerticalXS, flexWrap: 'wrap' },
 });
+
+/** Preset icon key → Fluent icon (kept in the client, presets stay icon-free). */
+function presetIcon(key: string): JSX.Element {
+  switch (key) {
+    case 'person': return <Person24Regular />;
+    case 'money': return <Money24Regular />;
+    case 'card': return <Wallet24Regular />;
+    case 'health': return <HeartPulse24Regular />;
+    case 'bank': return <Money24Regular />;
+    case 'globe': return <Globe24Regular />;
+    case 'key': return <Key24Regular />;
+    case 'lock': return <LockClosed24Regular />;
+    default: return <LockClosed24Regular />;
+  }
+}
+
+function categoryColor(c: string): any {
+  return c === 'Security' ? 'danger' : c === 'Financial' || c === 'Regulatory' ? 'warning'
+    : c === 'Healthcare' ? 'success' : 'brand';
+}
 
 function kindColor(k: string): any {
   return k === 'DLP' || k === 'Retention' ? 'danger' :
@@ -107,13 +168,23 @@ export default function PoliciesPage() {
   const [domains, setDomains] = useState<Array<{ id: string; name: string }>>([]);
   // Per-kind rule wizard fields.
   const [w, setW] = useState<Record<string, string>>({
-    dlpDetect: 'Email', dlpAction: 'Audit',
+    dlpAction: 'Audit',
     maskColumn: '', maskFn: 'Hash',
     rlsColumn: '', rlsOp: '=', rlsValue: '',
     retPeriod: '90', retUnit: 'Days', retAction: 'Delete',
     accPrincipal: '', accPermission: 'Read',
   });
   const setWf = (k: string, v: string) => setW((p) => ({ ...p, [k]: v }));
+  // DLP custom-policy wizard — multi-select sensitive-info types + condition.
+  const [dlpSits, setDlpSits] = useState<string[]>([]);
+  const [dlpShared, setDlpShared] = useState<'external' | 'any'>('external');
+  // Policy library — curated presets + the SIT catalog (loaded from the BFF).
+  const [presets, setPresets] = useState<DlpPreset[]>([]);
+  const [sits, setSits] = useState<Sit[]>([]);
+  const [enabledSources, setEnabledSources] = useState<string[]>([]);
+  const [libLoading, setLibLoading] = useState(true);
+  const [libErr, setLibErr] = useState<string | null>(null);
+  const [enablingId, setEnablingId] = useState<string | null>(null);
   // Access policy: Entra principal search + ADLS container scope (real RBAC).
   const [accQuery, setAccQuery] = useState('');
   const [accKind, setAccKind] = useState<'user' | 'group'>('user');
@@ -187,9 +258,17 @@ export default function PoliciesPage() {
   }, []);
 
   const buildScope = (): string => scopeType === 'tenant' ? 'tenant' : `${scopeType}:${scopeTarget}`;
+  const sitName = useCallback((id: string) => sits.find((s) => s.id === id)?.name || id, [sits]);
+  const dlpRuleString = useCallback((): string => {
+    const names = dlpSits.map(sitName);
+    const shown = names.slice(0, 3).join(', ') || '<no types>';
+    const more = names.length > 3 ? ` +${names.length - 3}` : '';
+    const where = dlpShared === 'external' ? 'shared externally' : 'any location';
+    return `detect ${shown}${more} → ${w.dlpAction} (${where})`;
+  }, [dlpSits, dlpShared, w.dlpAction, sitName]);
   const buildRule = (): string => {
     switch (draftKind) {
-      case 'DLP': return `detect:${w.dlpDetect} action:${w.dlpAction}`;
+      case 'DLP': return dlpRuleString();
       case 'Masking': return `mask column:${w.maskColumn || '<column>'} using:${w.maskFn}`;
       case 'RLS': return `filter ${w.rlsColumn || '<column>'} ${w.rlsOp} ${w.rlsValue || '<value>'}`;
       case 'Retention': return `retain ${w.retPeriod} ${w.retUnit} then:${w.retAction}`;
@@ -240,6 +319,38 @@ export default function PoliciesPage() {
     finally { setVLoading(false); }
   }, []);
   useEffect(() => { loadDlp(); }, [loadDlp]);
+
+  // Load the curated DLP policy-library catalog + which presets are enabled.
+  const loadLibrary = useCallback(async () => {
+    setLibLoading(true); setLibErr(null);
+    try {
+      const r = await clientFetch('/api/governance/dlp/library');
+      const j = await r.json();
+      if (!j.ok) { setLibErr(j.error || `HTTP ${r.status}`); return; }
+      setPresets(j.presets || []);
+      setSits(j.sensitiveInfoTypes || []);
+      setEnabledSources(j.enabledSources || []);
+    } catch (e: any) { setLibErr(e?.message || String(e)); }
+    finally { setLibLoading(false); }
+  }, []);
+  useEffect(() => { loadLibrary(); }, [loadLibrary]);
+
+  // One-click enable a curated preset (writes a real DLP policy to the store).
+  async function enablePreset(preset: DlpPreset) {
+    setEnablingId(preset.id); setActionErr(null);
+    try {
+      const r = await clientFetch('/api/governance/dlp/library', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ presetId: preset.id }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setActionErr(j.error || `HTTP ${r.status}`); return; }
+      if (j.policies) setPolicies(j.policies);
+      setEnabledSources((prev) => prev.includes(`preset:${preset.id}`) ? prev : [...prev, `preset:${preset.id}`]);
+      load();
+    } catch (e: any) { setActionErr(e?.message || String(e)); }
+    finally { setEnablingId(null); }
+  }
 
   async function triggerScan() {
     setScanning(true); setScanMsg(null);
@@ -344,6 +455,11 @@ export default function PoliciesPage() {
   async function create() {
     if (!draftName.trim()) { setActionErr('name required'); return; }
     const body: Record<string, unknown> = { name: draftName.trim(), kind: draftKind, scope: buildScope(), rule: buildRule(), enabled: true };
+    if (draftKind === 'DLP') {
+      if (dlpSits.length === 0) { setActionErr('Select at least one sensitive information type to detect.'); return; }
+      body.dlp = { sensitiveInfoTypes: dlpSits, action: w.dlpAction, sharedWith: dlpShared };
+      body.category = 'Security';
+    }
     if (draftKind === 'Access') {
       if (!accPicked) { setActionErr('Search and pick a principal for the access policy.'); return; }
       body.principalId = accPicked.id;
@@ -374,6 +490,7 @@ export default function PoliciesPage() {
       setOpen(false);
       setDraftName(''); setScopeType('tenant'); setScopeTarget('');
       setAccPicked(null); setAccContainer(''); setAccQuery(''); setAccResults([]);
+      setDlpSits([]); setDlpShared('external');
     } catch (e: any) { setActionErr(e?.message || String(e)); }
     finally { setBusy(false); }
   }
@@ -411,6 +528,12 @@ export default function PoliciesPage() {
         return (
           <span>
             <code className={s.rule}>{p.rule || '—'}</code>
+            {p.builtin && (
+              <Badge appearance="tint" size="small" color="brand" style={{ marginLeft: tokens.spacingHorizontalSNudge }}
+                title="Seeded best-practice default DLP policy">
+                default
+              </Badge>
+            )}
             {p.enforcement && (
               <Badge appearance="tint" size="small" style={{ marginLeft: tokens.spacingHorizontalSNudge }}
                 color={p.enforcement.status === 'active' ? 'success' : p.enforcement.status === 'error' ? 'danger' : 'warning'}
@@ -565,11 +688,11 @@ export default function PoliciesPage() {
         {vGate && (
           <MessageBar intent="warning" style={{ marginBottom: tokens.spacingVerticalS }}>
             <MessageBarBody>
-              <MessageBarTitle>DLP not wired in this deployment</MessageBarTitle>
-              {vGate} Set <code>LOOM_DLP_ENABLED=true</code> on the Console Container App and grant the
+              <MessageBarTitle>Live DLP violations need Graph consent</MessageBarTitle>
+              {vGate} DLP is on by default — to surface live Purview DLP violations, grant the Console UAMI the
               <code> SecurityAlert.Read.All</code> + <code>SecurityIncident.Read.All</code> Graph AppRoles
-              (post-deploy bootstrap <code>grant-graph-approles.sh</code>), then have a Tenant Admin grant
-              admin consent.
+              (post-deploy bootstrap <code>grant-graph-approles.sh</code>) and have a Tenant Admin grant admin
+              consent. The policy library and best-practice default policy below author and save regardless.
             </MessageBarBody>
           </MessageBar>
         )}
@@ -617,6 +740,60 @@ export default function PoliciesPage() {
               ))}
             </div>
           </>
+        )}
+      </Section>
+
+      {/* ── Policy library — curated best-practice DLP presets (one-click enable) ── */}
+      <Section title="Policy library" actions={
+        <Button size="small" icon={<ArrowSync24Regular />} onClick={loadLibrary} disabled={libLoading}>Refresh</Button>
+      }>
+        <Body1 style={{ color: tokens.colorNeutralForeground3, marginBottom: tokens.spacingVerticalM }}>
+          Curated, best-practice DLP policies you can enable with one click — each maps to a real Microsoft
+          Purview policy template (the same sensitive-information types and action). Enabling a preset creates
+          a live governance policy in the table below. Build your own with <strong>New policy</strong>.
+        </Body1>
+        {libErr && (
+          <MessageBar intent="error" style={{ marginBottom: tokens.spacingVerticalS }}>
+            <MessageBarBody><MessageBarTitle>Could not load the policy library</MessageBarTitle>{libErr}</MessageBarBody>
+          </MessageBar>
+        )}
+        {libLoading && <Spinner size="tiny" label="Loading policy library…" />}
+        {!libLoading && presets.length > 0 && (
+          <TileGrid minTileWidth={300}>
+            {presets.map((preset) => {
+              const enabled = enabledSources.includes(`preset:${preset.id}`);
+              return (
+                <div key={preset.id} className={s.presetCard}>
+                  <div className={s.presetHead}>
+                    <div className={s.presetIcon}>{presetIcon(preset.icon)}</div>
+                    <div style={{ minWidth: 0 }}>
+                      <Subtitle2 style={{ display: 'block' }}>{preset.name}</Subtitle2>
+                      {preset.regulation && (
+                        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{preset.regulation}</Caption1>
+                      )}
+                    </div>
+                  </div>
+                  <div className={s.presetMeta}>
+                    <Badge appearance="tint" size="small" color={categoryColor(preset.category)}>{preset.category}</Badge>
+                    <Badge appearance="outline" size="small">{preset.sensitiveInfoTypes.length} info types</Badge>
+                    <Badge appearance="outline" size="small" color={preset.action === 'Block' ? 'danger' : 'informative'}>{preset.action}</Badge>
+                  </div>
+                  <div className={s.presetBody}>{preset.description}</div>
+                  <div className={s.presetFoot}>
+                    <a href={preset.learnUrl} target="_blank" rel="noreferrer" style={{ color: tokens.colorBrandForeground1, fontSize: tokens.fontSizeBase200 }}>Learn more</a>
+                    {enabled ? (
+                      <Badge appearance="filled" color="success" icon={<CheckmarkCircle20Filled />}>Enabled</Badge>
+                    ) : (
+                      <Button size="small" appearance="primary" onClick={() => enablePreset(preset)}
+                        disabled={enablingId === preset.id}>
+                        {enablingId === preset.id ? 'Enabling…' : 'Enable'}
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </TileGrid>
         )}
       </Section>
 
@@ -674,17 +851,44 @@ export default function PoliciesPage() {
                 {/* Rule wizard — fields depend on the policy kind */}
                 <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Configure the {draftKind} rule</Caption1>
                 {draftKind === 'DLP' && (
-                  <div style={{ display: 'flex', gap: tokens.spacingHorizontalM }}>
-                    <Field label="Detect" style={{ flex: 1 }}>
-                      <Dropdown value={w.dlpDetect} selectedOptions={[w.dlpDetect]} onOptionSelect={(_, d) => setWf('dlpDetect', d.optionValue || '')}>
-                        {['Email', 'SSN', 'Credit card', 'Phone', 'IP address', 'Custom classification'].map((o) => <Option key={o} value={o}>{o}</Option>)}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalM }}>
+                    <Field label="Sensitive information to detect"
+                      hint="Pick one or more Microsoft Purview sensitive-information types. The rule matches content containing any selected type.">
+                      <Dropdown multiselect placeholder="Select information types…"
+                        selectedOptions={dlpSits}
+                        value={dlpSits.length ? `${dlpSits.length} selected` : ''}
+                        onOptionSelect={(_, d) => setDlpSits(d.selectedOptions)}>
+                        {sits.map((it) => <Option key={it.id} value={it.id} text={it.name}>{it.name}</Option>)}
                       </Dropdown>
                     </Field>
-                    <Field label="Action" style={{ flex: 1 }}>
-                      <Dropdown value={w.dlpAction} selectedOptions={[w.dlpAction]} onOptionSelect={(_, d) => setWf('dlpAction', d.optionValue || '')}>
-                        {['Audit', 'Block', 'Notify', 'Quarantine'].map((o) => <Option key={o} value={o}>{o}</Option>)}
-                      </Dropdown>
-                    </Field>
+                    {dlpSits.length > 0 && (
+                      <div className={s.chips}>
+                        {dlpSits.map((id) => (
+                          <Badge key={id} appearance="tint" color="brand" style={{ cursor: 'pointer' }}
+                            onClick={() => setDlpSits((p) => p.filter((x) => x !== id))}
+                            title="Click to remove">
+                            {sitName(id)} ✕
+                          </Badge>
+                        ))}
+                      </div>
+                    )}
+                    <div style={{ display: 'flex', gap: tokens.spacingHorizontalM }}>
+                      <Field label="Condition" style={{ flex: 1 }}
+                        hint="When the rule evaluates.">
+                        <Dropdown value={dlpShared === 'external' ? 'Shared outside the organization' : 'Any location'}
+                          selectedOptions={[dlpShared]}
+                          onOptionSelect={(_, d) => setDlpShared((d.optionValue as 'external' | 'any') || 'external')}>
+                          <Option value="external">Shared outside the organization</Option>
+                          <Option value="any">Any location</Option>
+                        </Dropdown>
+                      </Field>
+                      <Field label="Action" style={{ flex: 1 }}
+                        hint="What happens on a match.">
+                        <Dropdown value={w.dlpAction} selectedOptions={[w.dlpAction]} onOptionSelect={(_, d) => setWf('dlpAction', d.optionValue || 'Audit')}>
+                          {['Audit', 'Block', 'Notify', 'Quarantine'].map((o) => <Option key={o} value={o}>{o}</Option>)}
+                        </Dropdown>
+                      </Field>
+                    </div>
                   </div>
                 )}
                 {draftKind === 'Masking' && (

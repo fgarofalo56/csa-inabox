@@ -37,6 +37,8 @@ import {
   PersonAdd20Regular, Save20Regular,
 } from '@fluentui/react-icons';
 import { PageShell } from '@/lib/components/page-shell';
+import { DataContractDesigner } from '@/lib/editors/components/data-contract-designer';
+import { EMPTY_CONTRACT, contractStats, type DataContract } from '@/lib/dataproducts/contract';
 import {
   DATA_PRODUCT_TYPES, DATA_PRODUCT_AUDIENCES, DATA_PRODUCT_DESCRIPTION_MAX,
 } from '@/lib/catalog/data-product-enums';
@@ -83,7 +85,7 @@ const useStyles = makeStyles({
   attrGroup: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, padding: tokens.spacingHorizontalM, borderRadius: tokens.borderRadiusLarge, border: `1px solid ${tokens.colorNeutralStroke2}` },
 });
 
-type Step = 1 | 2 | 3;
+type Step = 1 | 2 | 3 | 4;
 
 interface Owner { id: string; upn: string; displayName: string }
 interface DomainOption { id: string; name: string; description?: string }
@@ -115,6 +117,9 @@ export function DataProductCreateWizard() {
 
   // Page 3 — Custom attributes
   const [customAttributes, setCustomAttributes] = useState<Record<string, string | string[] | boolean>>({});
+
+  // Page 4 — Data contract (optional): schema + SLOs + quality expectations.
+  const [contract, setContract] = useState<DataContract>(EMPTY_CONTRACT);
 
   // Workspace (Loom storage partition for the draft).
   const [workspaces, setWorkspaces] = useState<WorkspaceLite[]>([]);
@@ -255,6 +260,7 @@ export function DataProductCreateWizard() {
           endorsed,
           owners,
           customAttributes,
+          ...(contractStats(contract).defined ? { contract } : {}),
         }),
       });
       const j = await r.json();
@@ -263,7 +269,7 @@ export function DataProductCreateWizard() {
     } catch (e: any) {
       setSubmitError(e?.message || String(e));
     } finally { setSubmitting(false); }
-  }, [workspaceId, displayName, description, type, audience, governanceDomainId, domains, useCase, endorsed, owners, customAttributes, router]);
+  }, [workspaceId, displayName, description, type, audience, governanceDomainId, domains, useCase, endorsed, owners, customAttributes, contract, router]);
 
   const stepChip = (n: Step, label: string) => {
     const done = step > n;
@@ -295,6 +301,8 @@ export function DataProductCreateWizard() {
         {stepChip(2, 'Business details')}
         <ArrowRight20Regular />
         {stepChip(3, 'Custom attributes')}
+        <ArrowRight20Regular />
+        {stepChip(4, 'Data contract')}
       </div>
       <Divider />
 
@@ -475,6 +483,20 @@ export function DataProductCreateWizard() {
         </div>
       )}
 
+      {/* ── PAGE 4 — DATA CONTRACT (optional) ────────────────────────────── */}
+      {step === 4 && (
+        <div style={{ marginTop: 16, minWidth: 0 }}>
+          <MessageBar intent="info" style={{ marginBottom: 12 }}>
+            <MessageBarBody>
+              <MessageBarTitle>Data contract (optional)</MessageBarTitle>
+              Define the schema, service-level objectives, and data-quality expectations this product
+              commits to. You can skip this and add it later in the studio&apos;s Contract tab.
+            </MessageBarBody>
+          </MessageBar>
+          <DataContractDesigner value={contract} onChange={setContract} />
+        </div>
+      )}
+
       {submitError && (
         <MessageBar intent="error" style={{ maxWidth: 760, marginTop: 12 }}>
           <MessageBarBody><MessageBarTitle>Create failed</MessageBarTitle>{submitError}</MessageBarBody>
@@ -486,12 +508,12 @@ export function DataProductCreateWizard() {
         <Button icon={<ArrowLeft20Regular />} disabled={step === 1 || submitting} onClick={() => setStep((step - 1) as Step)}>
           Back
         </Button>
-        {step < 3 ? (
+        {step < 4 ? (
           <Button
             appearance="primary"
             icon={<ArrowRight20Regular />}
             iconPosition="after"
-            disabled={(step === 1 && !page1Valid)}
+            disabled={(step === 1 && !page1Valid) || (step === 3 && missingRequired.length > 0)}
             onClick={() => setStep((step + 1) as Step)}
           >
             Next

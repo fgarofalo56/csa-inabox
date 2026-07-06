@@ -13,7 +13,6 @@ import { listMcpServers } from './mcp-config-store';
 import { listMcpTools, callMcpTool } from './mcp-client';
 import { getPbiUserToken } from './pbi-user-token-store';
 import { getUserOboToken } from './mcp-obo-token-store';
-import { defaultOnRemoteMcps } from '../mcp/catalog';
 import type { LoomToolRegistry, ToolDef } from './copilot-orchestrator';
 import type { McpServerConfig } from '../types/mcp-config';
 
@@ -48,56 +47,6 @@ function mcpToolPrefixSlug(srv: McpServerConfig): string {
 }
 
 /**
- * Synthesize enabled McpServerConfig rows for the default-on remote built-in MCP
- * servers — in practice **Microsoft Learn** (the SOLE default-on entry in
- * REMOTE_BUILTIN_MCP_CATALOG) — so their tools register day-one with ZERO admin
- * action and ZERO Cosmos rows. This is what makes Learn live out of the box
- * (no-fabric-dependency: Learn is public, `auth: 'none'`, and the only server on
- * any default code path; every other remote server is opt-in + gated).
- *
- * Rules:
- *  - Only descriptors whose `configured()` is true are returned (Learn is
- *    configured unless LOOM_MS_LEARN_MCP_ENABLED=false) — `defaultOnRemoteMcps()`
- *    already applies that filter.
- *  - A descriptor with no resolved endpoint is skipped (honest no-vaporware:
- *    nothing to register rather than a speculative host).
- *  - An admin-registered row for the same descriptor (same catalogId or endpoint)
- *    ALWAYS wins — the synthetic row is suppressed so there is never a duplicate.
- *  - `auth: 'none'` maps to `authMethod: 'header'` with NO `authValue`:
- *    resolveAuthHeader (mcp-client) returns '' for that, so NO Authorization
- *    header is sent on the wire — exactly what the no-auth Learn endpoint needs.
- *    (Any future default-on OBO/KV descriptor maps to its own auth method and is
- *    resolved per-user in buildMcpShim below.)
- *  - `catalogId` is set so mcpToolPrefixSlug derives the stable `mcp_<slug>_`
- *    prefix from the descriptor id (e.g. `ms-learn` → `mcp_mslearn_…`).
- */
-function syntheticDefaultOnServers(registered: McpServerConfig[]): McpServerConfig[] {
-  const norm = (u: string) => (u || '').trim().replace(/\/+$/, '').toLowerCase();
-  const taken = new Set<string>();
-  for (const s of registered) {
-    if (s.catalogId) taken.add(`id:${s.catalogId}`);
-    if (s.endpoint) taken.add(`ep:${norm(s.endpoint)}`);
-  }
-  const out: McpServerConfig[] = [];
-  for (const e of defaultOnRemoteMcps()) {
-    if (!e.endpoint) continue; // no endpoint resolved → nothing to register (no-vaporware)
-    if (taken.has(`id:${e.id}`) || taken.has(`ep:${norm(e.endpoint)}`)) continue; // admin row wins
-    out.push({
-      name: e.name,
-      endpoint: e.endpoint,
-      // 'none' → 'header' + empty authValue ⇒ resolveAuthHeader sends no header.
-      authMethod: e.auth === 'none' ? 'header' : e.auth,
-      oboResource: e.oboResource,
-      oboScopes: e.oboScopes,
-      enabled: true,
-      catalogId: e.id, // stable mcp_<slug>_ prefix via mcpToolPrefixSlug
-      source: 'remote-builtin',
-    });
-  }
-  return out;
-}
-
-/**
  * Fetch all enabled MCP servers' tool lists and register them in the Loom registry.
  *
  * Each tool is registered as:
@@ -110,12 +59,14 @@ export async function buildMcpShim(registry: LoomToolRegistry, tenantId: string)
   // `tenantId` here is the signed-in user's oid (orchestrate() calls
   // buildMcpShim(reg, userOid)) — used both as the per-tenant server-list key and
   // as the per-USER lookup key for the per-resource OBO token below.
-  const registered = await listMcpServers(tenantId);
-  // Day-one: also register the default-on remote built-in MCP servers (Microsoft
-  // Learn) even when the tenant has NO Cosmos-registered servers, so Learn tools
-  // are live with zero admin action (no-fabric-dependency — Learn is public, no
-  // auth, the SOLE default-on server). Admin-registered rows always win.
-  const servers = [...registered, ...syntheticDefaultOnServers(registered)];
+  //
+  // listMcpServers() already applies the remote built-in policy
+  // (decorateMcpServers): it drops opted-out Microsoft rows AND folds in the
+  // default-on Microsoft Learn synthetic row — env + per-tenant admin override
+  // aware — so Learn tools are live day-one with zero admin action
+  // (no-fabric-dependency), and an admin-enabled server is honored here without a
+  // second, override-unaware injection.
+  const servers = await listMcpServers(tenantId);
   if (servers.length === 0) return; // No MCP servers configured and none default-on
 
   // Fetch tool lists in parallel (with timeout)

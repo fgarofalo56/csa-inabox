@@ -2175,3 +2175,124 @@ export function defaultOnRemoteMcps(): RemoteBuiltinMcpEntry[] {
   return REMOTE_BUILTIN_MCP_CATALOG.filter((e) => e.defaultOn && e.configured());
 }
 
+// ── Inline (admin-set) config overrides for the remote built-in family ─────────
+//
+// The descriptor `configured()` gate above reads ONLY process.env — it answers
+// "did the DEPLOYMENT wire this server up?". That is authoritative but immutable
+// at runtime: a tenant admin cannot turn a server on from the /admin/mcp-servers
+// UI. This block adds a small, typed, PERSISTED override layer (stored per-tenant
+// in Cosmos by lib/azure/mcp-remote-config-store.ts) so the admin can enable +
+// configure each opt-in server inline — the enable toggle, the endpoint (for the
+// not-yet-GA servers), and the GitHub Key Vault secret NAME — driven by each
+// descriptor's declared shape (enableEnv / endpointEnv / secretRefEnv / auth),
+// never a freeform JSON box (loom-no-freeform-config).
+//
+// The override is strictly ADDITIVE (no-vaporware, zero regression): when the
+// deployment env already enables a server, that force-on wins and the admin
+// cannot disable it here (surfaced honestly as `envForced`). Overrides only add
+// capability when the env left a server OFF. When no override is present the
+// result is byte-for-byte identical to `entry.configured()` today, so every
+// existing env-configured deployment behaves exactly as before.
+
+/** One server's admin-set override (persisted per-tenant). No secret VALUES —
+ * `secretName` is the Key Vault secret NAME the GitHub PAT lives under. */
+export interface RemoteBuiltinOverride {
+  /** Admin enable toggle. Only meaningful when the deployment env left this OFF. */
+  enabled?: boolean;
+  /** Endpoint override (for the not-yet-GA servers whose defaultEndpoint is ''). */
+  endpoint?: string;
+  /** Key Vault secret NAME for the bearer token (GitHub PAT). Never the value. */
+  secretName?: string;
+}
+
+/** The effective, runtime-resolved state of a remote built-in server given the
+ * deployment env AND any admin override. `configured` is what every consumer
+ * (status/gate/register/probe, the login token mint, tool discovery) keys off. */
+export interface EffectiveRemoteState {
+  /** Enabled for tool discovery + registration. */
+  enabled: boolean;
+  /** Resolved HTTPS endpoint (override wins, else env/default). '' when unknown. */
+  endpoint: string;
+  /** Resolved Key Vault secret NAME (key-vault auth only). */
+  secretName?: string;
+  /** True ⇒ fully wired and callable (the single gate every consumer uses). */
+  configured: boolean;
+  /** Honest remaining prerequisites the admin still must satisfy elsewhere
+   * (e.g. LOOM_MSAL_CLIENT_ID for OBO, or the endpoint env for a not-GA server). */
+  missing: string[];
+  /** Where the effective enable/config came from: the deployment env or an admin. */
+  source: 'env' | 'admin';
+  /** True ⇒ the deployment env force-enabled this; the admin cannot disable here. */
+  envForced: boolean;
+}
+
+/**
+ * Resolve a remote built-in descriptor + optional admin override to its effective
+ * runtime state. Env-first + additive (see the block comment above): env force-on
+ * always wins; overrides only add capability when the env left the server off.
+ * When `ov` is empty/undefined the result matches `entry.configured()` exactly.
+ */
+export function effectiveRemoteState(
+  entry: RemoteBuiltinMcpEntry,
+  ov?: RemoteBuiltinOverride,
+): EffectiveRemoteState {
+  const o = ov ?? {};
+  const envConfigured = entry.configured(); // authoritative env gate (incl. PBI special-case)
+  const envSecret =
+    entry.auth === 'key-vault' && entry.secretRefEnv
+      ? process.env[entry.secretRefEnv]?.trim() || undefined
+      : undefined;
+
+  // Env force-on wins — never disable a deployment-enabled server from the UI.
+  if (envConfigured) {
+    return {
+      enabled: true,
+      endpoint: entry.endpoint,
+      secretName: envSecret,
+      configured: true,
+      missing: [],
+      source: 'env',
+      envForced: true,
+    };
+  }
+
+  // Env left it OFF → apply the admin override additively.
+  const endpoint = o.endpoint?.trim() || entry.endpoint;
+  const secretName = o.secretName?.trim() || envSecret;
+  const missing: string[] = [];
+  let enabled: boolean;
+  let configured: boolean;
+
+  if (entry.auth === 'none') {
+    enabled = o.enabled === true;
+    configured = enabled && !!endpoint;
+    if (enabled && !endpoint && entry.endpointEnv) missing.push(entry.endpointEnv);
+  } else if (entry.auth === 'key-vault') {
+    enabled = o.enabled === true || !!secretName;
+    configured = enabled && !!secretName && !!endpoint;
+    if (enabled && !secretName) missing.push(entry.secretRefEnv ?? 'Key Vault secret name');
+    if (enabled && !endpoint && entry.endpointEnv) missing.push(entry.endpointEnv);
+  } else {
+    // entra-obo — the per-user delegated exchange reuses the shared Loom
+    // confidential client (LOOM_MSAL_CLIENT_ID); that is a platform prerequisite
+    // the admin cannot set from this page, so it stays an honest `missing` entry.
+    enabled = o.enabled === true;
+    const obo = hasOboClient();
+    configured = enabled && obo && !!endpoint;
+    if (enabled && !obo) missing.push('LOOM_MSAL_CLIENT_ID');
+    if (enabled && !endpoint && entry.endpointEnv) missing.push(entry.endpointEnv);
+  }
+
+  const hasOverride =
+    o.enabled !== undefined || !!o.endpoint?.trim() || !!o.secretName?.trim();
+  return {
+    enabled,
+    endpoint,
+    secretName,
+    configured,
+    missing,
+    source: hasOverride ? 'admin' : 'env',
+    envForced: false,
+  };
+}
+
