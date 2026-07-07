@@ -14,7 +14,7 @@
  * publish in Admin → Organizational visuals; everyone else views here.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactElement } from 'react';
 import { clientFetch } from '@/lib/client-fetch';
 import {
   Spinner, Badge, Caption1, Body1, Button, Text,
@@ -22,20 +22,49 @@ import {
 } from '@fluentui/react-components';
 import {
   Open20Regular, ArrowSync24Regular, DataPie24Regular, DocumentTable24Regular,
+  Money24Regular, ShieldCheckmark24Regular, BoxMultiple24Regular, Key24Regular,
+  ClipboardTask24Regular, Pulse24Regular, BuildingMultiple24Regular, People24Regular,
+  DataArea24Regular,
 } from '@fluentui/react-icons';
 import { Section, Toolbar } from '@/lib/components/ui/section';
 import { ReportViewerDialog } from '@/lib/coe-library/report-render/report-viewer-dialog';
 
 interface OrgReport {
   id: string;
-  /** 'report' = CoE PBIP clone, 'dashboard' = Loom-native builder dashboard. */
-  kind?: 'report' | 'dashboard';
+  /**
+   * 'report' = CoE PBIP clone, 'dashboard' = Loom-native builder dashboard,
+   * 'loom-report' = report-designer snapshot published from the designer.
+   */
+  kind?: 'report' | 'dashboard' | 'loom-report';
   templateId: string;
   displayName: string;
   title: string;
   category: string;
   publishedBy?: string;
   publishedAt?: string;
+}
+
+/**
+ * Per-report icon — chosen by CoE category, falling back to the report kind.
+ * Gives every report card a recognisable glyph (matching the category gradient)
+ * instead of a bare thumbnail.
+ */
+const CATEGORY_ICON: Record<string, ReactElement> = {
+  'Adoption & Maturity': <People24Regular />,
+  'FinOps': <Money24Regular />,
+  'Security & Compliance': <ShieldCheckmark24Regular />,
+  'Inventory & Optimization': <BoxMultiple24Regular />,
+  'Identity & Access': <Key24Regular />,
+  'Data Governance': <ClipboardTask24Regular />,
+  'Operations': <Pulse24Regular />,
+  'Platform & Governance': <BuildingMultiple24Regular />,
+};
+
+function reportIcon(r: OrgReport): ReactElement {
+  return (
+    CATEGORY_ICON[r.category] ||
+    (r.kind === 'dashboard' ? <DataArea24Regular /> : r.kind === 'report' ? <DocumentTable24Regular /> : <DataPie24Regular />)
+  );
 }
 
 const GRAD: Record<string, string> = {
@@ -58,8 +87,14 @@ const useStyles = makeStyles({
     transition: 'box-shadow .15s ease, transform .15s ease',
     ':hover': { boxShadow: tokens.shadow16, transform: 'translateY(-2px)' },
   },
-  thumb: { height: '88px', display: 'flex', alignItems: 'flex-end', padding: tokens.spacingHorizontalM, color: '#fff' },
+  thumb: { position: 'relative', height: '88px', display: 'flex', alignItems: 'flex-end', padding: tokens.spacingHorizontalM, color: '#fff' },
   thumbTitle: { fontWeight: tokens.fontWeightSemibold, fontSize: tokens.fontSizeBase400, textShadow: '0 1px 4px #0008' },
+  thumbIcon: {
+    position: 'absolute', top: tokens.spacingVerticalS, right: tokens.spacingHorizontalM,
+    display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: '34px', height: '34px',
+    borderRadius: tokens.borderRadiusMedium, backgroundColor: '#ffffff22', color: '#fff',
+    backdropFilter: 'blur(2px)', boxShadow: '0 1px 4px #0006',
+  },
   body: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, padding: tokens.spacingHorizontalM, flexGrow: 1 },
   meta: { color: tokens.colorNeutralForeground3 },
   actions: { display: 'flex', gap: tokens.spacingHorizontalS, padding: tokens.spacingHorizontalM, paddingTop: 0 },
@@ -141,6 +176,7 @@ export function OrgReportsPane(): React.ReactElement {
             {filtered.map((r) => (
               <div key={r.id} className={s.card}>
                 <div className={s.thumb} style={{ background: GRAD[r.category] || 'linear-gradient(135deg,#444,#1B1A29)' }}>
+                  <span className={s.thumbIcon} aria-hidden>{reportIcon(r)}</span>
                   <span className={s.thumbTitle}>{r.displayName}</span>
                 </div>
                 <div className={s.body}>
