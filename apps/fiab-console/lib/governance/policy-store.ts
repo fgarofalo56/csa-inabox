@@ -13,6 +13,11 @@
 import { tenantSettingsContainer, CosmosNotConfiguredError } from '@/lib/azure/cosmos-client';
 import type { AccessPermission, AccessScopeType, PrincipalType } from '@/lib/azure/access-policy-client';
 import { defaultDlpPolicyBody, type DlpPolicyRule, type DlpPresetCategory } from '@/lib/governance/dlp-policy-library';
+import {
+  defaultLabelPolicyBody, DEFAULT_LABEL_POLICY_PRESET_ID,
+  type LabelPolicyBody, type LabelPresetCategory,
+} from '@/lib/governance/label-policy-library';
+import { DEFAULT_DLP_PRESET_ID } from '@/lib/governance/dlp-policy-library';
 export type { DlpPolicyRule, DlpPresetCategory } from '@/lib/governance/dlp-policy-library';
 
 export interface PolicyEnforcement {
@@ -25,7 +30,7 @@ export interface PolicyEnforcement {
 export interface Policy {
   id: string;
   name: string;
-  kind: 'DLP' | 'Masking' | 'RLS' | 'Retention' | 'Access';
+  kind: 'DLP' | 'Label' | 'Masking' | 'RLS' | 'Retention' | 'Access';
   scope: string;
   rule: string;
   enabled: boolean;
@@ -33,12 +38,14 @@ export interface Policy {
   createdBy: string;
   // DLP-kind structured fields (real rule shape — SITs + action + condition).
   dlp?: DlpPolicyRule;
+  // Label-kind structured fields (MIP label-policy shape — Loom-native).
+  label?: LabelPolicyBody;
   /** Preset provenance, e.g. `preset:pci-dss`. Absent for hand-authored policies. */
   source?: string;
   /** True for the seeded best-practice default policy. */
   builtin?: boolean;
   /** Compliance category for grouping (from the preset). */
-  category?: DlpPresetCategory;
+  category?: DlpPresetCategory | LabelPresetCategory;
   // Access-kind structured fields (enable real RBAC enforcement).
   principalId?: string;
   principalName?: string;
@@ -55,13 +62,15 @@ export interface PoliciesDoc {
   tenantId: string;
   kind: 'policies';
   items: Policy[];
+  /** Built-in default source-keys already seeded once — so a later disable/delete
+   *  by an operator is never re-seeded (day-one default-on, without fighting opt-out). */
+  seededDefaults?: string[];
   updatedAt: string;
 }
 
-/** Build the seeded best-practice default DLP policy for a brand-new tenant doc. */
-function seedItems(tenantId: string): Policy[] {
-  const body = defaultDlpPolicyBody();
-  return [{
+/** Turn a preset body ({name,kind,...}) into a persisted Policy for a tenant. */
+function policyFromBody(body: any, tenantId: string): Policy {
+  return {
     id: crypto.randomUUID(),
     name: body.name,
     kind: body.kind,
@@ -71,28 +80,70 @@ function seedItems(tenantId: string): Policy[] {
     createdAt: new Date().toISOString(),
     createdBy: `system:${tenantId}`,
     dlp: body.dlp,
+    label: body.label,
     source: body.source,
     builtin: body.builtin,
     category: body.category,
-  }];
+  };
+}
+
+/** The built-in defaults seeded day-one: best-practice DLP + label policy. */
+function builtinDefaults() {
+  return [
+    { key: `preset:${DEFAULT_DLP_PRESET_ID}`, body: defaultDlpPolicyBody() },
+    { key: `preset:${DEFAULT_LABEL_POLICY_PRESET_ID}`, body: defaultLabelPolicyBody() },
+  ];
+}
+
+/** Build the seeded best-practice defaults for a brand-new tenant doc. */
+function seedItems(tenantId: string): Policy[] {
+  return builtinDefaults().map((d) => policyFromBody(d.body, tenantId));
 }
 
 /**
- * Read the tenant policy doc, seeding a best-practice default DLP policy when
- * the doc is first created (DLP default-on, out of box). Idempotent — the seed
- * only runs on the initial create, so an operator who later disables or deletes
- * the default is not fought by a re-seed.
+ * Ensure every built-in default has been seeded ONCE (default-on, day one) —
+ * covering EXISTING tenant docs created before a given default existed. Records
+ * each seeded source-key in `seededDefaults` so a later operator disable/delete
+ * is respected (never re-seeded). Returns true when the doc was mutated.
+ */
+function ensureSeededDefaults(doc: PoliciesDoc, tenantId: string): boolean {
+  const seeded = new Set(doc.seededDefaults || []);
+  let changed = false;
+  for (const d of builtinDefaults()) {
+    if (seeded.has(d.key)) continue;               // already seeded once — respect opt-out
+    if (!doc.items.some((p) => p.source === d.key)) {
+      doc.items.push(policyFromBody(d.body, tenantId));
+      changed = true;
+    }
+    seeded.add(d.key);
+    changed = true;
+  }
+  if (changed) doc.seededDefaults = Array.from(seeded);
+  return changed;
+}
+
+/**
+ * Read the tenant policy doc, seeding best-practice default DLP + label policies
+ * so both are ON day one (out of box). Idempotent — each default is seeded at
+ * most once per tenant (tracked in `seededDefaults`), so an operator who later
+ * disables or deletes a default is not fought by a re-seed.
  */
 export async function loadOrSeedPolicies(tenantId: string): Promise<PoliciesDoc> {
   const c = await tenantSettingsContainer();
   const docId = `policies:${tenantId}`;
   try {
     const { resource } = await c.item(docId, tenantId).read<PoliciesDoc>();
-    if (resource) return resource;
+    if (resource) {
+      // Existing doc: backfill any built-in default not yet seeded (fixes tenants
+      // whose doc predates a default — e.g. the label policy / broadened DLP).
+      if (ensureSeededDefaults(resource, tenantId)) return await savePolicies(resource);
+      return resource;
+    }
   } catch (e: any) { if (e?.code !== 404) throw e; }
   const seed: PoliciesDoc = {
     id: docId, tenantId, kind: 'policies',
     items: seedItems(tenantId),
+    seededDefaults: builtinDefaults().map((d) => d.key),
     updatedAt: new Date().toISOString(),
   };
   await c.items.create(seed);
