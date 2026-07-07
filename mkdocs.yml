@@ -210,6 +210,16 @@ nav:
   - Home: index.md
 
   # ============================================================
+  # 0. CSA LOOM — what the product is (Copilot grounding foundation)
+  # ============================================================
+  - CSA Loom:
+      - What is CSA Loom: loom/index.md
+      - Architecture: loom/architecture.md
+      - Fabric to Azure-native mapping: loom/fabric-to-azure-mapping.md
+      - Loom Apps: loom/loom-apps.md
+      - Item catalog: loom/item-catalog.md
+
+  # ============================================================
   # 1. GET STARTED — first 30 minutes for any new visitor
   # ============================================================
   - Get Started:
