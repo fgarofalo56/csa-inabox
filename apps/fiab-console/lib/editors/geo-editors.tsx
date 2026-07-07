@@ -430,7 +430,7 @@ function detectGeometryEncoding(value: unknown): 'GeoJSON' | 'WKB' | 'WKT' | nul
  * Pure presentational — driven by the real {columns, rows} the Synapse
  * Serverless query route returns.
  */
-function GeoSchemaPanel({ columns, rows, geomColumn }: { columns: string[]; rows: unknown[][]; geomColumn: string }) {
+export function GeoSchemaPanel({ columns, rows, geomColumn }: { columns: string[]; rows: unknown[][]; geomColumn: string }) {
   const s = useStyles();
   const row0 = Array.isArray(rows) && rows.length > 0 ? rows[0] : [];
   return (
