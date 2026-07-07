@@ -301,6 +301,62 @@ function ConditionalFormattingEditor({ viz, rules, columns, onChange }: {
   );
 }
 
+/**
+ * Base-queries panel — the editable list of shared KQL snippets (referenced
+ * from tiles via $baseQuery('name')). Extracted as a pure component so its
+ * render + Add/Remove/Update behaviour can be unit-tested directly, without
+ * mounting the full editor and opening the Fluent Dialog portal (that heavy
+ * async path chronically flaked under `vitest run --coverage`, so it was only
+ * papered over by CI retry). The parent KqlDashboardEditor still owns the
+ * baseQueries state — this is pure presentation + callbacks.
+ */
+export function BaseQueriesPanel({
+  baseQueries,
+  onAdd,
+  onUpdate,
+  onRemove,
+}: {
+  baseQueries: DashBaseQuery[];
+  onAdd: () => void;
+  onUpdate: (idx: number, patch: Partial<DashBaseQuery>) => void;
+  onRemove: (idx: number) => void;
+}) {
+  return (
+    <>
+      <Caption1>
+        Define shared KQL snippets once and reference them from any tile with
+        <code> $baseQuery('name')</code>. At run time the snippet is inlined as a
+        parenthesised sub-query, so a common filter or projection backs many tiles
+        without copy-paste (Fabric Real-Time Dashboard base-query parity).
+      </Caption1>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, marginTop: tokens.spacingVerticalS}}>
+        {baseQueries.map((q, idx) => (
+          <div key={q.id} style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge, padding: tokens.spacingVerticalS, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS}}>
+            <div style={{ display: 'flex', gap: tokens.spacingVerticalS, alignItems: 'flex-end' }}>
+              <div style={{ flex: 1 }}>
+                <Caption1>Name (referenced as $baseQuery('…'))</Caption1>
+                <Input value={q.name} onChange={(_: unknown, d: any) => onUpdate(idx, { name: d.value })} placeholder="Filtered" aria-label="Base query name" />
+              </div>
+              <Button appearance="subtle" icon={<Delete20Regular />} onClick={() => onRemove(idx)} aria-label="Remove base query" />
+            </div>
+            <Caption1>KQL</Caption1>
+            <MonacoTextarea
+              value={q.kql}
+              onChange={(v) => onUpdate(idx, { kql: v })}
+              language="kql"
+              height={120}
+              minHeight={90}
+              ariaLabel={`Base query ${idx + 1} KQL`}
+            />
+          </div>
+        ))}
+        {baseQueries.length === 0 && <Caption1>No base queries yet. Add one to share a KQL snippet across tiles.</Caption1>}
+        <Button appearance="outline" icon={<Add20Regular />} onClick={onAdd}>Add base query</Button>
+      </div>
+    </>
+  );
+}
+
 export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   const [state, setState] = useState<DashboardState | null>(null);
@@ -1420,36 +1476,7 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
           <DialogBody>
             <DialogTitle>Base queries</DialogTitle>
             <DialogContent>
-              <Caption1>
-                Define shared KQL snippets once and reference them from any tile with
-                <code> $baseQuery('name')</code>. At run time the snippet is inlined as a
-                parenthesised sub-query, so a common filter or projection backs many tiles
-                without copy-paste (Fabric Real-Time Dashboard base-query parity).
-              </Caption1>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, marginTop: tokens.spacingVerticalS}}>
-                {baseQueries.map((q, idx) => (
-                  <div key={q.id} style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge, padding: tokens.spacingVerticalS, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS}}>
-                    <div style={{ display: 'flex', gap: tokens.spacingVerticalS, alignItems: 'flex-end' }}>
-                      <div style={{ flex: 1 }}>
-                        <Caption1>Name (referenced as $baseQuery('…'))</Caption1>
-                        <Input value={q.name} onChange={(_: unknown, d: any) => updateBaseQuery(idx, { name: d.value })} placeholder="Filtered" aria-label="Base query name" />
-                      </div>
-                      <Button appearance="subtle" icon={<Delete20Regular />} onClick={() => removeBaseQuery(idx)} aria-label="Remove base query" />
-                    </div>
-                    <Caption1>KQL</Caption1>
-                    <MonacoTextarea
-                      value={q.kql}
-                      onChange={(v) => updateBaseQuery(idx, { kql: v })}
-                      language="kql"
-                      height={120}
-                      minHeight={90}
-                      ariaLabel={`Base query ${idx + 1} KQL`}
-                    />
-                  </div>
-                ))}
-                {baseQueries.length === 0 && <Caption1>No base queries yet. Add one to share a KQL snippet across tiles.</Caption1>}
-                <Button appearance="outline" icon={<Add20Regular />} onClick={addBaseQuery}>Add base query</Button>
-              </div>
+              <BaseQueriesPanel baseQueries={baseQueries} onAdd={addBaseQuery} onUpdate={updateBaseQuery} onRemove={removeBaseQuery} />
             </DialogContent>
             <DialogActions>
               <Button appearance="primary" onClick={() => setBaseQueriesOpen(false)}>Close</Button>
