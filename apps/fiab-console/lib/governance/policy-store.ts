@@ -14,10 +14,9 @@ import { tenantSettingsContainer, CosmosNotConfiguredError } from '@/lib/azure/c
 import type { AccessPermission, AccessScopeType, PrincipalType } from '@/lib/azure/access-policy-client';
 import { defaultDlpPolicyBody, type DlpPolicyRule, type DlpPresetCategory } from '@/lib/governance/dlp-policy-library';
 import {
-  defaultLabelPolicyBody, DEFAULT_LABEL_POLICY_PRESET_ID,
+  defaultLabelPolicyBody,
   type LabelPolicyBody, type LabelPresetCategory,
 } from '@/lib/governance/label-policy-library';
-import { DEFAULT_DLP_PRESET_ID } from '@/lib/governance/dlp-policy-library';
 export type { DlpPolicyRule, DlpPresetCategory } from '@/lib/governance/dlp-policy-library';
 
 export interface PolicyEnforcement {
@@ -89,9 +88,14 @@ function policyFromBody(body: any, tenantId: string): Policy {
 
 /** The built-in defaults seeded day-one: best-practice DLP + label policy. */
 function builtinDefaults() {
+  const dlp = defaultDlpPolicyBody();
+  const label = defaultLabelPolicyBody();
+  // Key is namespaced by KIND: both defaults use the preset id 'loom-baseline',
+  // so keying/matching by source alone would let the DLP pass shadow the Label
+  // pass and never seed the label default. Match presence by kind + source too.
   return [
-    { key: `preset:${DEFAULT_DLP_PRESET_ID}`, body: defaultDlpPolicyBody() },
-    { key: `preset:${DEFAULT_LABEL_POLICY_PRESET_ID}`, body: defaultLabelPolicyBody() },
+    { key: `DLP:${dlp.source}`, kind: dlp.kind, source: dlp.source, body: dlp },
+    { key: `Label:${label.source}`, kind: label.kind, source: label.source, body: label },
   ];
 }
 
@@ -103,15 +107,16 @@ function seedItems(tenantId: string): Policy[] {
 /**
  * Ensure every built-in default has been seeded ONCE (default-on, day one) —
  * covering EXISTING tenant docs created before a given default existed. Records
- * each seeded source-key in `seededDefaults` so a later operator disable/delete
- * is respected (never re-seeded). Returns true when the doc was mutated.
+ * each seeded (kind-namespaced) key in `seededDefaults` so a later operator
+ * disable/delete is respected (never re-seeded). Returns true when the doc was
+ * mutated.
  */
 function ensureSeededDefaults(doc: PoliciesDoc, tenantId: string): boolean {
   const seeded = new Set(doc.seededDefaults || []);
   let changed = false;
   for (const d of builtinDefaults()) {
     if (seeded.has(d.key)) continue;               // already seeded once — respect opt-out
-    if (!doc.items.some((p) => p.source === d.key)) {
+    if (!doc.items.some((p) => p.kind === d.kind && p.source === d.source)) {
       doc.items.push(policyFromBody(d.body, tenantId));
       changed = true;
     }
