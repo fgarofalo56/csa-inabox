@@ -38,7 +38,8 @@ import {
 import {
   ArrowSync20Regular, Play20Regular, ShieldTask20Regular, Copy20Regular,
   Open16Regular, Dismiss24Regular, Add20Regular, Edit20Regular, Delete20Regular,
-  Pause20Regular,
+  Pause20Regular, DataPie20Regular, ChartMultiple20Regular, Warning20Regular,
+  TagMultiple20Regular, ArrowTrendingLines20Regular, Money20Regular, Filter20Regular,
 } from '@fluentui/react-icons';
 import { MonitorAlertEditor, type ScheduledQueryRuleLite } from '@/lib/monitor/monitor-alert-editor';
 import { MonitorConditionsBuilder, freqLabel } from '@/lib/monitor/monitor-conditions-builder';
@@ -52,6 +53,8 @@ import { MetricChart } from '@/lib/components/monitor/metric-chart';
 import { KqlChart, type KqlChartType } from '@/lib/components/monitor/kql-chart';
 import { Section } from '@/lib/components/ui/section';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
+import { LoomChart } from '@/lib/components/charts/loom-chart';
+import { EmptyState } from '@/lib/components/empty-state';
 import { CopilotUsageInline } from '@/lib/components/admin/copilot-usage';
 
 /**
@@ -135,6 +138,46 @@ const useStyles = makeStyles({
   skelGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: tokens.spacingHorizontalL },
   skelCard: { height: '92px', borderRadius: tokens.borderRadiusLarge },
   rowActions: { display: 'flex', gap: tokens.spacingHorizontalXS, alignItems: 'center' },
+  // ── Cost tab: chart cards + anomaly cards (web3 elevation + token spacing) ──
+  costChartGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: tokens.spacingHorizontalL },
+  chartCard: {
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS,
+    padding: tokens.spacingVerticalM,
+    backgroundColor: tokens.colorNeutralBackground1,
+    border: `${tokens.strokeWidthThin} solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusLarge,
+    boxShadow: tokens.shadow4,
+    transitionProperty: 'box-shadow', transitionDuration: tokens.durationNormal,
+    ':hover': { boxShadow: tokens.shadow16 },
+    minWidth: 0,
+  },
+  chartCardHead: {
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS,
+    fontWeight: tokens.fontWeightSemibold, color: tokens.colorNeutralForeground1,
+  },
+  chartCardIcon: { color: tokens.colorBrandForeground1, display: 'flex' },
+  anomalyGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: tokens.spacingHorizontalL },
+  anomalyCard: {
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS,
+    padding: tokens.spacingVerticalM,
+    backgroundColor: tokens.colorNeutralBackground1,
+    border: `${tokens.strokeWidthThin} solid ${tokens.colorNeutralStroke2}`,
+    borderLeft: `${tokens.strokeWidthThicker} solid ${tokens.colorNeutralStroke1}`,
+    borderRadius: tokens.borderRadiusLarge,
+    boxShadow: tokens.shadow4,
+    transitionProperty: 'box-shadow', transitionDuration: tokens.durationNormal,
+    ':hover': { boxShadow: tokens.shadow16 },
+  },
+  anomalyHigh: { borderLeftColor: tokens.colorPaletteRedBorderActive },
+  anomalyMed: { borderLeftColor: tokens.colorPaletteYellowBorderActive },
+  anomalyTop: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: tokens.spacingHorizontalS },
+  anomalyDate: { fontWeight: tokens.fontWeightSemibold, color: tokens.colorNeutralForeground1, display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS },
+  anomalyDev: { fontSize: tokens.fontSizeBase500, fontWeight: tokens.fontWeightBold, lineHeight: 1.1 },
+  anomalyDevHigh: { color: tokens.colorPaletteRedForeground1 },
+  anomalyDevMed: { color: tokens.colorPaletteYellowForeground1 },
+  anomalyMeta: { fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground3, fontVariantNumeric: 'tabular-nums' },
+  subCaption: { color: tokens.colorNeutralForeground3, fontVariantNumeric: 'tabular-nums' },
+  groupToolbar: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' },
 });
 
 function healthBadge(state: string) {
@@ -1379,6 +1422,7 @@ function AlertsTab({ onUnauth }: { onUnauth: () => void }) {
 // ── Cost (M3: multi-subscription Cost Management spend + forecast + budgets) ──
 interface CostBreakdownRow { key: string; cost: number; }
 interface CostBudget { name: string; subscription: string; amount: number; currentSpend: number; percentUsed: number; timeGrain: string; scope: string; }
+interface CostAnomaly { date: string; cost: number; expected: number; deviationPct: number; severity: 'high' | 'medium'; }
 interface CostSummary {
   currency: string;
   timeframe: string;
@@ -1391,10 +1435,14 @@ interface CostSummary {
   bySubscription: CostBreakdownRow[];
   byResource: CostBreakdownRow[];
   byLocation: CostBreakdownRow[];
+  byTag: CostBreakdownRow[];
+  tagKey: string;
   daily: { date: string; cost: number }[];
+  anomalies: CostAnomaly[];
   budgets: CostBudget[];
   loomResourceGroups: string[];
   subscriptions: string[];
+  subscriptionNames: Record<string, string>;
   subscriptionErrors: { subscription: string; error: string }[];
 }
 
@@ -1408,12 +1456,16 @@ const COST_TIMEFRAMES: { value: string; label: string }[] = [
 
 const shortSub = (s: string) => (s.length > 12 ? `${s.slice(0, 8)}…${s.slice(-4)}` : s);
 
+/** Dimensions the unified "Cost breakdown" table can group + sort + filter by. */
+type GroupDim = 'service' | 'resourceGroup' | 'subscription' | 'resource' | 'location' | 'tag';
+
 function CostTab({ onUnauth }: { onUnauth: () => void }) {
   const styles = useStyles();
   const [data, setData] = useState<CostSummary | null>(null);
   const [gate, setGate] = useState<Gate | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [timeframe, setTimeframe] = useState('MonthToDate');
+  const [groupDim, setGroupDim] = useState<GroupDim>('service');
   const [tick, setTick] = useState(0);
 
   useEffect(() => {
@@ -1450,10 +1502,14 @@ function CostTab({ onUnauth }: { onUnauth: () => void }) {
   const money = (n: number, cur: string) => `${cur === 'USD' ? '$' : ''}${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}${cur !== 'USD' ? ' ' + cur : ''}`;
   const tfLabel = COST_TIMEFRAMES.find((t) => t.value === timeframe)?.label || timeframe;
   const isMtd = timeframe === 'MonthToDate' || timeframe === 'BillingMonthToDate';
+  const cur = data?.currency || 'USD';
+  const total = data?.monthToDate || 0;
+  // Friendly subscription name (falls back to the id) + a short-id caption.
+  const subName = useCallback((id: string) => data?.subscriptionNames?.[id] || shortSub(id), [data]);
+  const svcLabel = (k: string) => k.replace(/^Microsoft\.?/, '');
 
   const kpis = useMemo(() => {
     if (!data) return [];
-    const cur = data.currency;
     const trend = data.trendPct;
     const out: { label: string; value: string | number; accent?: string }[] = [
       { label: `Total (${tfLabel})`, value: money(data.monthToDate, cur) },
@@ -1466,15 +1522,63 @@ function CostTab({ onUnauth }: { onUnauth: () => void }) {
         accent: trend > 0 ? styles.statAccentDanger : styles.statAccentSuccess,
       });
     }
+    if (data.anomalies.length) {
+      out.push({ label: 'Cost anomalies', value: data.anomalies.length, accent: data.anomalies.some((a) => a.severity === 'high') ? styles.statAccentDanger : styles.statAccentWarn });
+    }
     out.push({ label: 'Subscriptions', value: data.subscriptions.length });
-    out.push({ label: 'Top service', value: data.byService[0] ? data.byService[0].key.replace(/^Microsoft\.?/, '') : '—' });
+    // Top subscription + service now shown by NAME (id kept as the caption).
+    out.push({ label: 'Top subscription', value: data.bySubscription[0] ? subName(data.bySubscription[0].key) : '—' });
+    out.push({ label: 'Top service', value: data.byService[0] ? svcLabel(data.byService[0].key) : '—' });
     return out;
-  }, [data, styles, tfLabel, isMtd]);
+  }, [data, styles, tfLabel, isMtd, cur, subName]);
 
-  const mkCols = (label: string): LoomColumn<CostBreakdownRow>[] => [
-    { key: 'key', label, width: 340, render: (r) => <strong>{r.key}</strong>, getValue: (r) => r.key },
-    { key: 'cost', label: `Cost (${tfLabel})`, width: 170, getValue: (r) => r.cost, render: (r) => money(r.cost, data?.currency || 'USD') },
-  ];
+  // The dimension the unified breakdown is grouped by → its rows + label + icon.
+  const groupDims = useMemo(() => ([
+    { value: 'service' as const, label: 'Service', rows: data?.byService ?? [] },
+    { value: 'resourceGroup' as const, label: 'Resource group', rows: data?.byResourceGroup ?? [] },
+    { value: 'subscription' as const, label: 'Subscription', rows: data?.bySubscription ?? [] },
+    { value: 'resource' as const, label: 'Resource', rows: data?.byResource ?? [] },
+    { value: 'location' as const, label: 'Region', rows: data?.byLocation ?? [] },
+    { value: 'tag' as const, label: `Tag · ${data?.tagKey || 'Environment'}`, rows: data?.byTag ?? [] },
+  ]), [data]);
+  const activeGroup = groupDims.find((g) => g.value === groupDim) || groupDims[0];
+
+  // Build donut rows ({label,value}) for a breakdown, top-N + names for subs.
+  const donutRows = useCallback((rows: CostBreakdownRow[], kind: GroupDim, topN = 8) => {
+    const top = rows.slice(0, topN);
+    const rest = rows.slice(topN).reduce((s, r) => s + r.cost, 0);
+    const label = (k: string) => (kind === 'subscription' ? subName(k) : kind === 'service' ? svcLabel(k) : k);
+    const out = top.map((r) => ({ label: label(r.key), value: Math.round(r.cost * 100) / 100 }));
+    if (rest > 0) out.push({ label: 'Other', value: Math.round(rest * 100) / 100 });
+    return out;
+  }, [subName]);
+
+  // Columns for the unified group-by table: name (sub → friendly name + id
+  // caption), cost, and % of total. Sortable + filterable via LoomDataTable.
+  const groupCols = useMemo((): LoomColumn<CostBreakdownRow>[] => {
+    const nameCol: LoomColumn<CostBreakdownRow> = groupDim === 'subscription'
+      ? {
+          key: 'key', label: 'Subscription', width: 360, filterType: 'text',
+          getValue: (r) => subName(r.key),
+          render: (r) => (
+            <span title={r.key} style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+              <strong style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{subName(r.key)}</strong>
+              <Caption1 className={styles.subCaption}>{shortSub(r.key)}</Caption1>
+            </span>
+          ),
+        }
+      : {
+          key: 'key', label: activeGroup.label, width: 360, filterType: 'text',
+          getValue: (r) => (groupDim === 'service' ? svcLabel(r.key) : r.key),
+          render: (r) => <strong>{groupDim === 'service' ? svcLabel(r.key) : r.key}</strong>,
+        };
+    return [
+      nameCol,
+      { key: 'cost', label: `Cost (${tfLabel})`, width: 170, filterable: false, getValue: (r) => r.cost, render: (r) => money(r.cost, cur) },
+      { key: 'pct', label: '% of total', width: 130, filterable: false, getValue: (r) => (total > 0 ? Math.round((r.cost / total) * 1000) / 10 : 0), render: (r) => `${total > 0 ? ((r.cost / total) * 100).toFixed(1) : '0.0'}%` },
+    ];
+  }, [groupDim, activeGroup.label, tfLabel, cur, total, subName, styles]);
+
   const loading = data === null && !gate && !err;
 
   return (
@@ -1560,35 +1664,151 @@ function CostTab({ onUnauth }: { onUnauth: () => void }) {
         </Section>
       )}
 
-      <Section title="Cost by subscription">
-        <LoomDataTable columns={mkCols('Subscription')} rows={data?.bySubscription ?? []} getRowId={(r) => r.key}
-          loading={loading} empty={gate ? 'Grant Cost Management Reader to see spend by subscription.' : 'No cost recorded.'}
-          ariaLabel="Cost by subscription" />
+      {/* Cost anomalies — daily-spend outliers derived from the daily series
+          (mean+σ / DoD jump), no extra Azure call. */}
+      {data && (
+        <Section title="Cost anomalies">
+          {data.anomalies.length === 0 ? (
+            <EmptyState
+              icon={<ArrowTrendingLines20Regular />}
+              title="No spend anomalies detected"
+              body={`No day in ${tfLabel.toLowerCase()} exceeded 2σ over the mean or jumped >50% over the prior day. Anomalies appear here automatically when a daily spike is detected.`}
+            />
+          ) : (
+            <div className={styles.anomalyGrid}>
+              {data.anomalies.map((a) => {
+                const high = a.severity === 'high';
+                return (
+                  <div key={a.date} className={`${styles.anomalyCard} ${high ? styles.anomalyHigh : styles.anomalyMed}`}>
+                    <div className={styles.anomalyTop}>
+                      <span className={styles.anomalyDate}>
+                        <Warning20Regular style={{ color: high ? tokens.colorPaletteRedForeground1 : tokens.colorPaletteYellowForeground1 }} />
+                        {a.date}
+                      </span>
+                      <Badge color={high ? 'danger' : 'warning'} appearance="filled">{high ? 'High' : 'Medium'}</Badge>
+                    </div>
+                    <span className={`${styles.anomalyDev} ${high ? styles.anomalyDevHigh : styles.anomalyDevMed}`}>
+                      {a.deviationPct > 0 ? '+' : ''}{a.deviationPct}%
+                    </span>
+                    <span className={styles.anomalyMeta}>
+                      {money(a.cost, cur)} vs. expected {money(a.expected, cur)}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </Section>
+      )}
+
+      {/* Distribution donuts — hover a segment for its exact value + share. */}
+      {data && total > 0 && (
+        <Section title="Cost distribution">
+          <div className={styles.costChartGrid}>
+            {[
+              { icon: <ChartMultiple20Regular />, title: 'By service', rows: donutRows(data.byService, 'service') },
+              { icon: <DataPie20Regular />, title: 'By subscription', rows: donutRows(data.bySubscription, 'subscription') },
+              { icon: <Money20Regular />, title: 'By resource group', rows: donutRows(data.byResourceGroup, 'resourceGroup') },
+            ].map((c) => (
+              <div key={c.title} className={styles.chartCard}>
+                <span className={styles.chartCardHead}>
+                  <span className={styles.chartCardIcon}>{c.icon}</span>{c.title}
+                </span>
+                {c.rows.length ? (
+                  <LoomChart type="donut" rows={c.rows} height={240} />
+                ) : (
+                  <span className={styles.anomalyMeta}>No cost recorded.</span>
+                )}
+              </div>
+            ))}
+          </div>
+        </Section>
+      )}
+
+      {/* Unified breakdown: group-by any dimension, sortable + filterable table
+          + a donut of the selected dimension. Hover a segment for its share. */}
+      <Section
+        title="Cost breakdown"
+        actions={
+          <div className={styles.groupToolbar}>
+            <Filter20Regular aria-hidden />
+            <Text size={200} weight="semibold">Group by</Text>
+            <Dropdown
+              aria-label="Group cost breakdown by"
+              value={activeGroup.label}
+              selectedOptions={[groupDim]}
+              onOptionSelect={(_, d) => d.optionValue && setGroupDim(d.optionValue as GroupDim)}
+              style={{ minWidth: 200 }}
+            >
+              {groupDims.map((g) => <Option key={g.value} value={g.value} text={g.label}>{g.label}</Option>)}
+            </Dropdown>
+          </div>
+        }
+      >
+        {groupDim === 'tag' && activeGroup.rows.length === 0 ? (
+          <MessageBar intent="warning">
+            <MessageBarBody>
+              No cost-allocation tags found for tag key <strong>{data?.tagKey || 'Environment'}</strong>. Tag your
+              Azure resources with this key (or set <strong>LOOM_COST_TAG_KEY</strong> to a tag your estate already
+              uses) to break spend down by tag value.
+            </MessageBarBody>
+          </MessageBar>
+        ) : (
+          <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 2fr) minmax(0, 1fr)', gap: tokens.spacingHorizontalL, alignItems: 'start' }}>
+            <LoomDataTable
+              columns={groupCols}
+              rows={activeGroup.rows}
+              getRowId={(r) => r.key}
+              loading={loading}
+              empty={gate ? 'Grant Cost Management Reader to see this breakdown.' : 'No cost recorded.'}
+              ariaLabel={`Cost by ${activeGroup.label}`}
+            />
+            {total > 0 && activeGroup.rows.length > 0 && (
+              <div className={styles.chartCard}>
+                <span className={styles.chartCardHead}>
+                  <span className={styles.chartCardIcon}><DataPie20Regular /></span>Share
+                </span>
+                <LoomChart type="donut" rows={donutRows(activeGroup.rows, groupDim, 10)} height={260} />
+              </div>
+            )}
+          </div>
+        )}
       </Section>
 
-      <Section title="Cost by service">
-        <LoomDataTable columns={mkCols('Service')} rows={data?.byService ?? []} getRowId={(r) => r.key}
-          loading={loading} empty={gate ? 'Grant Cost Management Reader to see spend by service.' : 'No cost recorded.'}
-          ariaLabel="Cost by service" />
-      </Section>
-
-      <Section title="Cost by resource group">
-        <LoomDataTable columns={mkCols('Resource group')} rows={data?.byResourceGroup ?? []} getRowId={(r) => r.key}
-          loading={loading} empty={gate ? 'Grant Cost Management Reader to see spend by resource group.' : 'No cost recorded.'}
-          ariaLabel="Cost by resource group" />
-      </Section>
-
-      <Section title="Top resources by cost">
-        <LoomDataTable columns={mkCols('Resource')} rows={data?.byResource ?? []} getRowId={(r) => r.key}
-          loading={loading} empty={gate ? 'Grant Cost Management Reader to see spend by resource.' : 'No cost recorded.'}
-          ariaLabel="Top resources by cost" />
-      </Section>
-
-      <Section title="Cost by region">
-        <LoomDataTable columns={mkCols('Region')} rows={data?.byLocation ?? []} getRowId={(r) => r.key}
-          loading={loading} empty={gate ? 'Grant Cost Management Reader to see spend by region.' : 'No cost recorded.'}
-          ariaLabel="Cost by region" />
-      </Section>
+      {/* Dedicated tag (chargeback) breakdown — honest gate when the estate
+          carries no such tag key. */}
+      {data && (
+        <Section title={`Cost allocation by tag · ${data.tagKey}`}>
+          {data.byTag.length === 0 ? (
+            <MessageBar intent="warning">
+              <MessageBarBody>
+                No cost-allocation tags found. Loom groups spend by the <strong>{data.tagKey}</strong> tag value; set{' '}
+                <strong>LOOM_COST_TAG_KEY</strong> to a tag your Azure estate already applies (e.g. CostCenter,
+                Project, Owner) to see chargeback by tag.
+              </MessageBarBody>
+            </MessageBar>
+          ) : (
+            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 2fr) minmax(0, 1fr)', gap: tokens.spacingHorizontalL, alignItems: 'start' }}>
+              <LoomDataTable
+                columns={[
+                  { key: 'key', label: data.tagKey, width: 300, filterType: 'text', getValue: (r: CostBreakdownRow) => r.key, render: (r: CostBreakdownRow) => <strong>{r.key}</strong> },
+                  { key: 'cost', label: `Cost (${tfLabel})`, width: 170, filterable: false, getValue: (r: CostBreakdownRow) => r.cost, render: (r: CostBreakdownRow) => money(r.cost, cur) },
+                  { key: 'pct', label: '% of total', width: 130, filterable: false, getValue: (r: CostBreakdownRow) => (total > 0 ? Math.round((r.cost / total) * 1000) / 10 : 0), render: (r: CostBreakdownRow) => `${total > 0 ? ((r.cost / total) * 100).toFixed(1) : '0.0'}%` },
+                ]}
+                rows={data.byTag}
+                getRowId={(r) => r.key}
+                ariaLabel={`Cost by ${data.tagKey} tag`}
+              />
+              <div className={styles.chartCard}>
+                <span className={styles.chartCardHead}>
+                  <span className={styles.chartCardIcon}><TagMultiple20Regular /></span>{data.tagKey}
+                </span>
+                <LoomChart type="donut" rows={donutRows(data.byTag, 'tag', 10)} height={260} />
+              </div>
+            </div>
+          )}
+        </Section>
+      )}
 
       {/* Copilot token consumption rolls into the cost context — real App
           Insights metering, honest-gated when unconfigured. */}
