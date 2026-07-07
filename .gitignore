@@ -383,3 +383,8 @@ apps/*/node_modules/
 
 # Live browser-walk audit screenshots (session artifacts, not shipped)
 browser-walk/
+
+# In-product Copilot RAG corpus — staged into the image at build time by
+# scripts/csa-loom/stage-copilot-corpus.sh (keep the dir via .gitkeep, ignore contents).
+apps/fiab-console/copilot-corpus/*
+!apps/fiab-console/copilot-corpus/.gitkeep

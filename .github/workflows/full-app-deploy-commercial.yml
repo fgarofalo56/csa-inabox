@@ -204,6 +204,15 @@ jobs:
       # reverting the temporary public-access toggle mid-build. SHA is stamped so
       # /build-marker.txt matches what loom-roll-and-validate probes. Retried 3×
       # for transient ACR Task scheduling hiccups.
+      - name: Stage Copilot RAG corpus (loom-console only)
+        if: matrix.app == 'loom-console'
+        shell: bash
+        run: |
+          # Repo-root docs/ + PRPs/ are outside the apps/fiab-console build
+          # context; stage a markdown copy in so the loom-docs Copilot index is
+          # populated (otherwise it's empty — "No corpus chunks discovered").
+          bash scripts/csa-loom/stage-copilot-corpus.sh
+
       - name: Build + push via ACR Tasks (az acr build)
         shell: bash
         run: |

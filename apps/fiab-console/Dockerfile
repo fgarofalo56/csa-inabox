@@ -95,6 +95,13 @@ COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 # the install provisioner uploads them into the tenant's own ADLS.
 COPY --from=builder --chown=nextjs:nodejs /app/samples ./samples
 
+# In-product Copilot RAG corpus — repo-root docs/ + PRPs/ are OUTSIDE this
+# build context, so scripts/csa-loom/stage-copilot-corpus.sh stages a markdown
+# copy into ./copilot-corpus BEFORE the build. It's not part of Next's traced
+# standalone output, so copy it explicitly next to server.js; lib/azure/
+# loom-docs-index.ts reads <cwd>/copilot-corpus to build the loom-docs index.
+COPY --from=builder --chown=nextjs:nodejs /app/copilot-corpus ./copilot-corpus
+
 # Overwrite any source-tree marker with one stamped at build time.
 # Validator probes /build-marker.txt and grep's for sha=<expected>.
 RUN echo "loom-build-marker sha=${LOOM_BUILD_SHA} stamp=${LOOM_BUILD_TIMESTAMP} token=LOOM_LIVE_BUILD" > /app/public/build-marker.txt && \
