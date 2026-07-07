@@ -19,6 +19,8 @@ export interface DqRunRecord {
   ranBy: string;
   /** Optional table filter the operator ran against. */
   tables?: string[];
+  /** Set when this run enforced a data product's CONTRACT (C8), for per-product filtering. */
+  productId?: string;
 }
 
 interface DqRunsDoc {

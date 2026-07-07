@@ -21,15 +21,16 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { clientFetch } from '@/lib/client-fetch';
 import {
   Badge, Body1, Button, Caption1, Card, CardHeader, Dropdown, Field, Input, Option,
-  Spinner, Subtitle2, Switch,
+  ProgressBar, Spinner, Subtitle2, Switch,
   Table, TableBody, TableCell, TableHeader, TableHeaderCell, TableRow,
   MessageBar, MessageBarBody, MessageBarTitle,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
-  Add20Regular, Delete20Regular, DocumentBulletList20Regular, Save20Regular,
+  Add20Regular, Delete20Regular, DocumentBulletList20Regular, Play20Regular, Save20Regular,
   ShieldCheckmark20Regular, Timer20Regular, Table20Regular,
 } from '@fluentui/react-icons';
+import { EmptyState } from '@/lib/components/empty-state';
 import {
   CONTRACT_COLUMN_TYPES, CONTRACT_CLASSIFICATIONS, QUALITY_RULES, QUALITY_SEVERITIES,
   SLO_FRESHNESS, SLO_AVAILABILITY, SLO_SUPPORT_RESPONSE, SLO_RETENTION,
@@ -59,6 +60,11 @@ const useStyles = makeStyles({
   spacer: { flex: 1 },
   version: { maxWidth: '160px' },
   hint: { color: tokens.colorNeutralForeground3 },
+  scoreRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalL, flexWrap: 'wrap' },
+  scoreGauge: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, minWidth: '220px', flex: 1 },
+  scoreHead: { display: 'flex', alignItems: 'baseline', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' },
+  tallies: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, flexWrap: 'wrap' },
+  mono: { fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase100, color: tokens.colorNeutralForeground3 },
 });
 
 // ---------------------------------------------------------------------------
@@ -310,6 +316,214 @@ export function DataContractDesigner({
 }
 
 // ---------------------------------------------------------------------------
+// Contract quality ENFORCEMENT panel (C8)
+//
+// Runs the product's DECLARED contract quality expectations
+// (state.contract.quality[]) against its bound ADX table via
+// POST /api/data-products/[id]/contract-quality (real KQL), and shows the
+// per-expectation pass/fail + measured % + a composite DQ score. Enforcement
+// runs against the PERSISTED contract, so the run gating + count come from the
+// route's own GET (saved count) — a `dirty` studio prompts a save first.
+// ---------------------------------------------------------------------------
+
+interface ExpectationResult {
+  expectationId: string;
+  column: string;
+  rule: string;
+  severity: 'error' | 'warning';
+  percentage: number | null;
+  pass: boolean;
+  detail: string;
+}
+interface ContractQualityResponse {
+  ok: boolean;
+  error?: string;
+  database?: string;
+  tableName?: string | null;
+  expectationCount?: number;
+  lastRun?: { ranAt: string; score: number | null; passingRules: number; ruleCount: number } | null;
+  gate?: { adx?: { missing: string }; table?: boolean };
+  run?: {
+    results: ExpectationResult[];
+    passed: number; failed: number; warnings: number; errored: number; evaluated: number;
+    score: number | null; computedAt: string;
+  };
+}
+
+function scoreColor(score: number): 'success' | 'warning' | 'error' {
+  if (score >= 90) return 'success';
+  if (score >= 70) return 'warning';
+  return 'error';
+}
+
+export function ContractQualityRunPanel({ id, reloadKey = 0, dirty = false }: { id: string; reloadKey?: number; dirty?: boolean }) {
+  const s = useStyles();
+  const [meta, setMeta] = useState<ContractQualityResponse | null>(null);
+  const [run, setRun] = useState<ContractQualityResponse['run'] | null>(null);
+  const [running, setRunning] = useState(false);
+  const [loadingMeta, setLoadingMeta] = useState(id !== 'new');
+  const [err, setErr] = useState<string | null>(null);
+
+  const loadMeta = useCallback(async () => {
+    if (id === 'new') { setLoadingMeta(false); return; }
+    setLoadingMeta(true); setErr(null); setRun(null);
+    try {
+      const r = await clientFetch(`/api/data-products/${encodeURIComponent(id)}/contract-quality`);
+      const j = (await r.json()) as ContractQualityResponse;
+      if (j.ok) setMeta(j); else setErr(j.error || `HTTP ${r.status}`);
+    } catch (e: any) { setErr(e?.message || String(e)); }
+    finally { setLoadingMeta(false); }
+  }, [id, reloadKey]);
+
+  useEffect(() => { void loadMeta(); }, [loadMeta]);
+
+  const doRun = useCallback(async () => {
+    setRunning(true); setErr(null);
+    try {
+      const r = await clientFetch(`/api/data-products/${encodeURIComponent(id)}/contract-quality`, { method: 'POST' });
+      const j = (await r.json()) as ContractQualityResponse;
+      if (!j.ok) { setErr(j.error || `HTTP ${r.status}`); return; }
+      setMeta(j);
+      setRun(j.run ?? null);
+    } catch (e: any) { setErr(e?.message || String(e)); }
+    finally { setRunning(false); }
+  }, [id]);
+
+  if (id === 'new') return null;
+
+  const gate = meta?.gate;
+  const lastRun = meta?.lastRun;
+  const savedCount = meta?.expectationCount ?? 0;
+  const displayScore = run?.score ?? lastRun?.score ?? null;
+  const canRun = !running && savedCount > 0 && !gate?.adx && !gate?.table;
+
+  return (
+    <Card className={s.card}>
+      <CardHeader
+        image={<ShieldCheckmark20Regular />}
+        header={<Subtitle2>Quality enforcement</Subtitle2>}
+        description={<Caption1 className={s.hint}>Run the declared expectations against the product&apos;s live Azure Data Explorer table — the pass rate feeds the data-quality score.</Caption1>}
+        action={
+          <Button size="small" appearance="primary" icon={running ? <Spinner size="tiny" /> : <Play20Regular />} disabled={!canRun} onClick={doRun}>
+            {running ? 'Running…' : 'Run quality checks'}
+          </Button>
+        }
+      />
+
+      {loadingMeta && !meta ? (
+        <Spinner size="tiny" label="Loading enforcement status…" />
+      ) : (
+        <div className={s.col}>
+          {meta?.tableName && (
+            <Caption1 className={s.hint}>ADX database <code className={s.mono}>{meta.database}</code> · table <code className={s.mono}>{meta.tableName}</code></Caption1>
+          )}
+
+          {dirty && (
+            <MessageBar intent="info">
+              <MessageBarBody>You have unsaved contract changes. Save the contract to enforce your latest expectations.</MessageBarBody>
+            </MessageBar>
+          )}
+
+          {/* Honest gates */}
+          {gate?.adx && (
+            <MessageBar intent="warning">
+              <MessageBarBody>
+                <MessageBarTitle>ADX not configured</MessageBarTitle>
+                Contract enforcement queries Azure Data Explorer. Set <code>{gate.adx.missing}</code> to the ADX cluster URI
+                (e.g. <code>https://adx-csa-loom-shared.eastus2.kusto.windows.net</code>) in the loom-console container env —
+                wired by <code>platform/fiab/bicep/modules/admin-plane/adx-cluster.bicep</code>. No checks run until ADX is reachable.
+              </MessageBarBody>
+            </MessageBar>
+          )}
+          {!gate?.adx && gate?.table && (
+            <MessageBar intent="warning">
+              <MessageBarBody>
+                <MessageBarTitle>No bound table</MessageBarTitle>
+                This data product has no bound ADX table to enforce against. Add a dataset (Datasets tab) or set the backing
+                table so the contract&apos;s expectations can run.
+              </MessageBarBody>
+            </MessageBar>
+          )}
+          {!gate?.adx && !gate?.table && savedCount === 0 && !dirty && (
+            <EmptyState
+              icon={<ShieldCheckmark20Regular />}
+              title="No expectations declared"
+              body="Add a data-quality expectation above (e.g. a not-null key or an accepted-values set) and save, then run the checks to enforce the contract against the live table."
+            />
+          )}
+
+          {err && <MessageBar intent="error"><MessageBarBody>{err}</MessageBarBody></MessageBar>}
+
+          {/* Score + tallies */}
+          {(run || (lastRun && displayScore != null)) && (
+            <div className={s.scoreRow}>
+              <div className={s.scoreGauge}>
+                <div className={s.scoreHead}>
+                  <Caption1 className={s.hint}>Contract DQ score</Caption1>
+                  {displayScore != null
+                    ? <Body1><strong>{displayScore}%</strong></Body1>
+                    : <Caption1 className={s.hint}>—</Caption1>}
+                </div>
+                {displayScore != null && (
+                  <ProgressBar value={displayScore / 100} color={scoreColor(displayScore)} thickness="large" aria-label={`Contract data quality score ${displayScore} percent`} />
+                )}
+              </div>
+              {run && (
+                <div className={s.tallies}>
+                  <Badge appearance="tint" color="success">{run.passed} passed</Badge>
+                  {run.failed > 0 && <Badge appearance="tint" color="danger">{run.failed} failed</Badge>}
+                  {run.warnings > 0 && <Badge appearance="tint" color="warning">{run.warnings} warning{run.warnings === 1 ? '' : 's'}</Badge>}
+                  {run.errored > 0 && <Badge appearance="outline">{run.errored} couldn&apos;t run</Badge>}
+                </div>
+              )}
+            </div>
+          )}
+          {!run && lastRun && displayScore != null && (
+            <Caption1 className={s.hint}>Last run {new Date(lastRun.ranAt).toLocaleString()} · {lastRun.passingRules}/{lastRun.ruleCount} passing. Run again for the per-expectation breakdown.</Caption1>
+          )}
+          {run && <Caption1 className={s.hint}>Ran {new Date(run.computedAt).toLocaleString()}.</Caption1>}
+
+          {/* Per-expectation results */}
+          {run && run.results.length > 0 && (
+            <div className={s.scroll}>
+              <Table size="small" aria-label="Contract quality results">
+                <TableHeader>
+                  <TableRow>
+                    <TableHeaderCell>Target</TableHeaderCell>
+                    <TableHeaderCell>Rule</TableHeaderCell>
+                    <TableHeaderCell>Severity</TableHeaderCell>
+                    <TableHeaderCell>Measured</TableHeaderCell>
+                    <TableHeaderCell>Result</TableHeaderCell>
+                    <TableHeaderCell>Status</TableHeaderCell>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {run.results.map((r) => {
+                    const ruleDef = QUALITY_RULES.find((q) => q.value === r.rule);
+                    const status = r.pass ? 'pass' : r.percentage == null ? 'error' : r.severity === 'warning' ? 'warn' : 'fail';
+                    const badgeColor = status === 'pass' ? 'success' : status === 'warn' ? 'warning' : status === 'error' ? 'subtle' : 'danger';
+                    return (
+                      <TableRow key={r.expectationId}>
+                        <TableCell>{r.column || <Caption1 className={s.hint}>whole table</Caption1>}</TableCell>
+                        <TableCell>{ruleDef?.label ?? r.rule}</TableCell>
+                        <TableCell><Badge appearance="outline" color={r.severity === 'error' ? 'danger' : 'warning'}>{r.severity}</Badge></TableCell>
+                        <TableCell>{r.percentage == null ? <span className={s.hint}>—</span> : `${r.percentage.toFixed(1)}%`}</TableCell>
+                        <TableCell>{r.detail}</TableCell>
+                        <TableCell><Badge appearance="filled" color={badgeColor as 'success' | 'warning' | 'danger' | 'subtle'}>{status}</Badge></TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Studio tab — load + save the contract for a persisted product
 // ---------------------------------------------------------------------------
 
@@ -321,6 +535,9 @@ export function DataContractStudioTab({ id }: { id: string }) {
   const [dirty, setDirty] = useState(false);
   const [msg, setMsg] = useState<{ intent: 'success' | 'error'; text: string } | null>(null);
   const [loadErr, setLoadErr] = useState<string | null>(null);
+  // Bumped on every successful save so the enforcement panel refetches the
+  // persisted expectation count + clears any stale run.
+  const [savedVersion, setSavedVersion] = useState(0);
 
   const load = useCallback(async () => {
     if (id === 'new') { setLoading(false); return; }
@@ -354,6 +571,7 @@ export function DataContractStudioTab({ id }: { id: string }) {
       const saved = (j.product?.contract ?? contract) as DataContract;
       setContract({ ...EMPTY_CONTRACT, ...saved });
       setDirty(false);
+      setSavedVersion((v) => v + 1);
       setMsg({ intent: 'success', text: 'Data contract saved.' });
     } catch (e: any) {
       setMsg({ intent: 'error', text: e?.message || String(e) });
@@ -388,6 +606,7 @@ export function DataContractStudioTab({ id }: { id: string }) {
       </div>
       {msg && <MessageBar intent={msg.intent}><MessageBarBody>{msg.text}</MessageBarBody></MessageBar>}
       <DataContractDesigner value={contract} onChange={onChange} />
+      <ContractQualityRunPanel id={id} reloadKey={savedVersion} dirty={dirty} />
     </div>
   );
 }

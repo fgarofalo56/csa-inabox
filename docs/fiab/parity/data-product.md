@@ -103,7 +103,7 @@ data-type families; Purview data-quality rules
 | C5 | Contract authored in the **create wizard** (optional step 4) | built ✅ | `POST /api/data-products` `{ contract }` → `sanitizeContract` → `state.contract` |
 | C6 | Contract editable in the **studio** (Contract tab, load + Save) | built ✅ | `DataContractStudioTab` → `GET`/`PATCH /api/data-products/[id]` |
 | C7 | Contract shown **read-only** on the details page + the consumer view (Contract tab) | built ✅ | `DataContractSummary` reads `product.contract` / `state.contract` |
-| C8 | Automated enforcement of quality expectations against the live backend (run on schedule, feed the DQ score) | MISSING ❌ | future: bind `state.contract.quality[]` to the DQ-rules engine / ADX KQL so expectations are executed, not just declared |
+| C8 | Automated **enforcement** of quality expectations against the live backend (run the declared checks, feed the DQ score) | built ✅ | `runContractQuality()` compiles each `state.contract.quality[]` expectation into KQL and runs it on the product's bound ADX table (`executeQuery`); `POST /api/data-products/[id]/contract-quality` persists the run to `dq-runs:<tenantId>`; Contract-tab **Run quality checks** panel shows per-expectation pass/fail + measured % + composite score. Honest ADX / no-table / no-expectation gates |
 
 Backend per control: model + validator = `lib/dataproducts/contract.ts`
 (`sanitizeContract`, enum-bounded — unknown types/rules coerced to safe defaults,
@@ -112,8 +112,17 @@ counts capped). Persistence = the existing partial-merge `PATCH /api/data-produc
 projection = `itemToProduct()` surfaces `state.contract` on `product.contract`.
 UI = `lib/editors/components/data-contract-designer.tsx` (`DataContractDesigner`
 controlled editor, `DataContractStudioTab` self-saving wrapper, `DataContractSummary`
-read-only). Fully functional with `LOOM_DEFAULT_FABRIC_WORKSPACE` unset and Purview
-unconfigured — the contract lives entirely in Loom's Cosmos.
+read-only, `ContractQualityRunPanel` enforcement runner). Enforcement (C8) =
+`runContractQuality()` in `lib/azure/data-quality-client.ts` compiles each declared
+expectation into a KQL aggregate over the product's bound ADX table (reusing the
+not-null / unique / range / regex / freshness builders; adding accepted-values, min,
+max, row-count; primary-key → not-null AND unique) and runs it via the SAME
+`executeQuery` path as `computeDqScore`; KQL is built safely (bracket-quoted
+identifiers via `qName`/`colRef`, double-quote-escaped string literals, `Number()`-coerced
+numerics). `POST /api/data-products/[id]/contract-quality` persists each run to the
+shared `dq-runs:<tenantId>` history; honest ADX / no-table / no-expectation gates. Fully
+functional with `LOOM_DEFAULT_FABRIC_WORKSPACE` unset and Purview unconfigured — the
+contract lives entirely in Loom's Cosmos, enforced against Azure Data Explorer.
 
 ### Linked resources parity (already built, for completeness)
 
@@ -123,7 +132,8 @@ unconfigured — the contract lives entirely in Loom's Cosmos.
 | L2 | OKRs — objectives & key results CRUD | built ✅ | `GET/POST/DELETE /api/data-products/[id]/okrs` (Cosmos `okrs` container) |
 | L3 | Critical Data Elements — auto-derived from mapped-asset classifications (read-only) | built ✅ / honest-gate ⚠️ | `GET /api/data-products/[id]/cdes` (Purview; honest gate when unprovisioned) |
 
-**Coverage counts (this pass):** built ✅ 22 · honest-gate ⚠️ 3 · MISSING ❌ 1 (C8 —
-automated contract enforcement, tracked as a follow-up; declaration + persistence +
-display are all real today).
+**Coverage counts (this pass):** built ✅ 23 · honest-gate ⚠️ 3 · MISSING ❌ 0 (C8 —
+automated contract enforcement — is now built: declaration + persistence + display +
+**live ADX execution + DQ score** are all real. Live E2E against a bound ADX table is
+owed on the next roll — the worktree cannot reach the in-VNet cluster).
 
