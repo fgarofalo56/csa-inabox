@@ -8,6 +8,10 @@
  *   - month-to-date / period actual cost + previous-period total (trend %)
  *   - a simple linear period-end FORECAST from the daily run-rate
  *   - breakdowns by service, resource group, SUBSCRIPTION, top RESOURCE, location
+ *   - a cost-allocation breakdown by TAG value (LOOM_COST_TAG_KEY, default
+ *     'Environment'); honestly empty when the tenant applies no such tag
+ *   - resolved subscription DISPLAY NAMES (best-effort ARM GET per sub)
+ *   - daily-spend ANOMALIES derived from the daily series (mean+σ / DoD jump)
  *   - the daily series, and any Consumption BUDGETS with current burn
  *
  * Real REST only (no mocks). Auth: the same UAMI/Chained credential as every
@@ -34,6 +38,16 @@ const ARM = armBase();
 const ARM_SCOPE = armScope();
 const COST_API = '2023-03-01';
 const BUDGETS_API = '2023-05-01';
+const SUB_API = '2020-01-01';
+
+/**
+ * Tag key used for the cost-allocation ("chargeback by tag") breakdown. The
+ * Cost Management query groups spend by the VALUES of this tag. Defaults to
+ * 'Environment' (the tag the Loom bicep stamps on every resource); override
+ * per-deployment with LOOM_COST_TAG_KEY. When no resource carries the tag the
+ * breakdown is honestly empty (no error) — the UI surfaces the env-var hint.
+ */
+const COST_TAG_KEY = process.env.LOOM_COST_TAG_KEY || 'Environment';
 
 /**
  * Per-request ceiling for a single Microsoft.CostManagement/query round-trip.
@@ -121,6 +135,20 @@ function colIndex(cols: any[], name: string): number {
 }
 
 export interface CostBreakdownRow { key: string; cost: number; }
+/**
+ * A daily-spend outlier derived PURELY from the daily series (no extra Azure
+ * call): a day whose cost exceeds mean + 2σ (severity 'high' when > 3σ, else
+ * 'medium'), OR a day-over-day jump > 50% that also sits above the mean.
+ */
+export interface CostAnomaly {
+  date: string;
+  cost: number;
+  /** The series mean the day is compared against (the "expected" run-rate). */
+  expected: number;
+  /** Signed % deviation of `cost` from `expected`. */
+  deviationPct: number;
+  severity: 'high' | 'medium';
+}
 export interface CostBudget {
   name: string;
   subscription: string;
@@ -146,10 +174,18 @@ export interface CostSummary {
   bySubscription: CostBreakdownRow[];
   byResource: CostBreakdownRow[];
   byLocation: CostBreakdownRow[];
+  /** Spend grouped by the values of the cost-allocation tag (see COST_TAG_KEY). */
+  byTag: CostBreakdownRow[];
+  /** The tag key `byTag` is grouped on (echoed so the UI can label + hint). */
+  tagKey: string;
   daily: { date: string; cost: number }[];
+  /** Daily-spend outliers computed from `daily` (no extra Azure call). */
+  anomalies: CostAnomaly[];
   budgets: CostBudget[];
   loomResourceGroups: string[];
   subscriptions: string[];
+  /** Resolved subscriptionId → displayName (best-effort; falls back to the id). */
+  subscriptionNames: Record<string, string>;
   /** Per-subscription query errors (e.g. one sub missing Cost Management Reader). */
   subscriptionErrors: { subscription: string; error: string }[];
 }
@@ -205,6 +241,68 @@ async function listBudgets(sub: string): Promise<CostBudget[]> {
 
 export interface CostOptions { timeframe?: CostTimeframe; }
 
+/**
+ * Best-effort: resolve each subscriptionId → its human displayName via a single
+ * ARM GET per sub. Falls back to the id itself on any error (a sub the UAMI
+ * can't read still shows, just by id) so a name lookup NEVER blocks the cost
+ * summary. Runs concurrently with the cost queries.
+ *   GET {ARM}/subscriptions/{id}?api-version=2020-01-01
+ */
+async function resolveSubscriptionNames(subs: string[]): Promise<Record<string, string>> {
+  const out: Record<string, string> = {};
+  await Promise.all(subs.map(async (sub) => {
+    out[sub] = sub; // fallback: the id
+    try {
+      const t = await credential.getToken(ARM_SCOPE);
+      if (!t?.token) return;
+      const res = await fetchWithTimeout(`${ARM}/subscriptions/${sub}?api-version=${SUB_API}`, {
+        headers: { authorization: `Bearer ${t.token}`, accept: 'application/json' }, cache: 'no-store',
+      });
+      if (!res.ok) return;
+      const j = await res.json().catch(() => null);
+      const name = j?.displayName;
+      if (name) out[sub] = String(name);
+    } catch { /* keep the id fallback */ }
+  }));
+  return out;
+}
+
+/**
+ * Derive daily-spend anomalies from the daily series alone (no extra Azure
+ * call). Flags a day when its cost is a statistical outlier (> mean + 2σ; 'high'
+ * when > 3σ) OR when it jumps > 50% over the prior day AND sits above the mean.
+ * `expected` is the series mean; `deviationPct` is the signed % over it. Needs
+ * at least 3 days of data to have a meaningful mean/σ; otherwise returns [].
+ */
+function computeAnomalies(daily: { date: string; cost: number }[]): CostAnomaly[] {
+  if (daily.length < 3) return [];
+  const costs = daily.map((d) => d.cost);
+  const n = costs.length;
+  const mean = costs.reduce((a, b) => a + b, 0) / n;
+  const variance = costs.reduce((a, b) => a + (b - mean) ** 2, 0) / n;
+  const stddev = Math.sqrt(variance);
+  const r2 = (x: number) => Math.round(x * 100) / 100;
+  const out: CostAnomaly[] = [];
+  for (let i = 0; i < daily.length; i += 1) {
+    const { date, cost } = daily[i];
+    const prev = i > 0 ? daily[i - 1].cost : null;
+    const dod = prev != null && prev > 0 ? ((cost - prev) / prev) * 100 : null;
+    const sigmaOutlier = stddev > 0 && cost > mean + 2 * stddev;
+    const dodOutlier = dod != null && dod > 50 && cost > mean;
+    if (!sigmaOutlier && !dodOutlier) continue;
+    const severity: CostAnomaly['severity'] = stddev > 0 && cost > mean + 3 * stddev ? 'high' : 'medium';
+    out.push({
+      date,
+      cost: r2(cost),
+      expected: r2(mean),
+      deviationPct: mean > 0 ? Math.round(((cost - mean) / mean) * 1000) / 10 : 0,
+      severity,
+    });
+  }
+  // Most-severe / costliest first.
+  return out.sort((a, b) => (a.severity === b.severity ? b.cost - a.cost : a.severity === 'high' ? -1 : 1));
+}
+
 /** Build the multi-subscription cost summary for the Loom deployment. */
 export async function getLoomCostSummary(opts: CostOptions = {}): Promise<CostSummary> {
   const cfg = readMonitorConfig(); // throws MonitorNotConfiguredError if unset
@@ -218,6 +316,7 @@ export async function getLoomCostSummary(opts: CostOptions = {}): Promise<CostSu
   const bySub = new Map<string, number>();
   const byResource = new Map<string, number>();
   const byLocation = new Map<string, number>();
+  const byTagMap = new Map<string, number>();
   const dailyMap = new Map<string, number>();
   const budgets: CostBudget[] = [];
   const subscriptionErrors: { subscription: string; error: string }[] = [];
@@ -226,6 +325,10 @@ export async function getLoomCostSummary(opts: CostOptions = {}): Promise<CostSu
   let currency = 'USD';
   const prevTf = PREV_TIMEFRAME[timeframe];
 
+  // Resolve friendly subscription names concurrently with the cost queries —
+  // best-effort, never blocks the summary (falls back to the id).
+  const namesPromise = resolveSubscriptionNames(subs);
+
   // Query each subscription independently; one sub failing (e.g. no Cost
   // Management Reader) is folded into subscriptionErrors, not fatal.
   await Promise.all(subs.map(async (sub) => {
@@ -233,7 +336,7 @@ export async function getLoomCostSummary(opts: CostOptions = {}): Promise<CostSu
     // independent groupings of the same period, so the wall-clock cost is the
     // slowest single query — not the sum — which keeps the aggregate under the
     // gateway timeout (the sequential version reliably 504'd on multi-grouping).
-    const [groupedR, dailyR, resR, locR, prevR, budgetsR] = await Promise.allSettled([
+    const [groupedR, dailyR, resR, locR, prevR, budgetsR, tagR] = await Promise.allSettled([
       // 1) RG × Service (totals, byRg, bySvc, bySub) — the only REQUIRED query.
       costQuery(sub, {
         type: 'ActualCost', timeframe,
@@ -283,6 +386,20 @@ export async function getLoomCostSummary(opts: CostOptions = {}): Promise<CostSu
       prevTf ? periodTotal(sub, prevTf, loomRgs) : Promise.resolve(null),
       // 6) Budgets.
       listBudgets(sub),
+      // 7) By cost-allocation TAG value (best-effort). Groups RG × TagKey so we
+      //    can still filter to Loom RGs. A tenant with no such tag key returns
+      //    no tagged rows (or the query 400s) → the breakdown is honestly empty.
+      costQuery(sub, {
+        type: 'ActualCost', timeframe,
+        dataset: {
+          granularity: 'None',
+          aggregation: { totalCost: { name: 'Cost', function: 'Sum' } },
+          grouping: [
+            { type: 'Dimension', name: 'ResourceGroupName' },
+            { type: 'TagKey', name: COST_TAG_KEY },
+          ],
+        },
+      }),
     ]);
 
     // The grouped query is the gate: if it failed (e.g. no Cost Management
@@ -348,6 +465,24 @@ export async function getLoomCostSummary(opts: CostOptions = {}): Promise<CostSu
     if (budgetsR.status === 'fulfilled') {
       budgets.push(...budgetsR.value);
     }
+
+    // Tag breakdown: the tag-VALUE column is whichever column isn't Cost /
+    // ResourceGroupName / Currency (robust to the API naming the column after
+    // the tag key vs. "TagKey"). Rows with no value for the tag are folded into
+    // "(untagged)" so unallocated spend is visible.
+    if (tagR.status === 'fulfilled') {
+      const tCols = tagR.value?.properties?.columns || [];
+      const tRows: any[][] = tagR.value?.properties?.rows || [];
+      const tCost = colIndex(tCols, 'Cost');
+      const tRg = colIndex(tCols, 'ResourceGroupName');
+      const tCur = colIndex(tCols, 'Currency');
+      const tTag = (tCols as any[]).findIndex((_c, idx) => idx !== tCost && idx !== tRg && idx !== tCur);
+      for (const row of tRows) {
+        if (tRg >= 0 && !inLoom(String(row[tRg] ?? ''), loomRgs)) continue;
+        const raw = tTag >= 0 ? String(row[tTag] ?? '').trim() : '';
+        addTo(byTagMap, raw || '(untagged)', Number(row[tCost]) || 0);
+      }
+    }
   }));
 
   const daily = Array.from(dailyMap.entries()).sort((a, b) => a[0].localeCompare(b[0])).map(([date, cost]) => ({ date, cost }));
@@ -367,6 +502,16 @@ export async function getLoomCostSummary(opts: CostOptions = {}): Promise<CostSu
     : null;
   const r2 = (n: number) => Math.round(n * 100) / 100;
 
+  // Tag breakdown: honestly empty when the tenant carries no such tag — i.e.
+  // the only bucket is "(untagged)". A mix of real values + untagged keeps the
+  // untagged row (unallocated spend is meaningful signal).
+  const byTagAll = sortDesc(byTagMap);
+  const hasRealTag = byTagAll.some((r) => r.key !== '(untagged)');
+  const byTag = hasRealTag ? byTagAll : [];
+
+  const anomalies = computeAnomalies(daily);
+  const subscriptionNames = await namesPromise;
+
   return {
     currency,
     timeframe,
@@ -379,10 +524,14 @@ export async function getLoomCostSummary(opts: CostOptions = {}): Promise<CostSu
     bySubscription: sortDesc(bySub),
     byResource: sortDesc(byResource).slice(0, 25),
     byLocation: sortDesc(byLocation),
+    byTag,
+    tagKey: COST_TAG_KEY,
     daily,
+    anomalies,
     budgets: budgets.sort((a, b) => b.percentUsed - a.percentUsed),
     loomResourceGroups: cfg.resourceGroups,
     subscriptions: subs,
+    subscriptionNames,
     subscriptionErrors,
   };
 }

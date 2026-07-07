@@ -1,8 +1,9 @@
 /**
  * GET /api/monitor/cost — Azure Cost Management spend for the Loom deployment
  * (Monitor Cost tab, M3). Real Microsoft.CostManagement query REST scoped to
- * the Loom resource groups: month-to-date by service + RG, daily series, and a
- * linear month-end forecast.
+ * the Loom resource groups: total by service / RG / SUBSCRIPTION / resource /
+ * region / cost-allocation TAG, resolved subscription DISPLAY NAMES, the daily
+ * series + a linear month-end forecast, and daily-spend ANOMALIES.
  *
  * Shape: { ok, data: CostSummary } | { ok:false, gate } | { ok:false, error }
  */
@@ -10,6 +11,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { getLoomCostSummary, type CostTimeframe } from '@/lib/azure/cost-client';
 import { MonitorNotConfiguredError, MonitorError } from '@/lib/azure/monitor-client';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -42,7 +44,12 @@ export async function GET(req: NextRequest) {
         },
       });
     }
-    const status = e instanceof MonitorError ? e.status : 500;
-    return NextResponse.json({ ok: false, error: (e as Error).message }, { status });
+    // Other MonitorErrors carry an honest, non-500 status (e.g. upstream 429/503)
+    // and a safe message — surface them; genuine internal failures are
+    // genericized + logged via apiServerError so nothing leaks to the client.
+    if (e instanceof MonitorError && e.status !== 500) {
+      return NextResponse.json({ ok: false, error: e.message }, { status: e.status });
+    }
+    return apiServerError(e, 'Failed to load cost summary', 'cost_query_failed');
   }
 }
