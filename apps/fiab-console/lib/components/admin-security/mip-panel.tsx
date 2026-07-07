@@ -20,12 +20,12 @@
  * config is via guided forms — never raw JSON.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactElement } from 'react';
 import {
   TabList, Tab, type SelectTabData, type SelectTabEvent,
   Spinner, Button, Badge,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
-  MessageBar, MessageBarBody, MessageBarTitle, Caption1, Subtitle2,
+  MessageBar, MessageBarBody, MessageBarTitle, Caption1, Subtitle2, Body1, Divider,
   Textarea, Field, Input, Switch, Checkbox,
   Dropdown, Option, Radio, RadioGroup,
   Dialog, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
@@ -33,8 +33,12 @@ import {
 } from '@fluentui/react-components';
 import {
   ArrowSync24Regular, Add24Regular, Edit20Regular, Delete20Regular, Tag24Regular,
-  Search16Regular,
+  Search16Regular, CheckmarkCircle20Filled,
+  ShieldCheckmark24Regular, LockClosed24Regular, Building24Regular,
+  Money24Regular, HeartPulse24Regular, Shield24Regular,
 } from '@fluentui/react-icons';
+import { clientFetch } from '@/lib/client-fetch';
+import { TileGrid } from '@/lib/components/ui/tile-grid';
 import { NotConfiguredBar, type NotConfiguredHint } from './not-configured-bar';
 
 const useStyles = makeStyles({
@@ -108,6 +112,37 @@ const useStyles = makeStyles({
     marginTop: tokens.spacingVerticalS, fontSize: '11px', backgroundColor: tokens.colorNeutralBackground2,
     padding: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusMedium, overflow: 'auto', maxHeight: '240px',
   },
+  // Best-practice policy library (mirrors the DLP policy-library cards)
+  libIntro: { color: tokens.colorNeutralForeground3, marginBottom: tokens.spacingVerticalM },
+  libDivider: { marginTop: tokens.spacingVerticalXL, marginBottom: tokens.spacingVerticalL },
+  presetCard: {
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS,
+    padding: tokens.spacingVerticalL,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusLarge,
+    backgroundColor: tokens.colorNeutralBackground1,
+    boxShadow: tokens.shadow4,
+    minWidth: 0,
+    transitionProperty: 'box-shadow, transform',
+    transitionDuration: tokens.durationNormal,
+    ':hover': { boxShadow: tokens.shadow16, transform: 'translateY(-2px)' },
+  },
+  presetHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM, minWidth: 0 },
+  presetIcon: {
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    width: '40px', height: '40px', flexShrink: 0,
+    borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: tokens.colorBrandBackground2,
+    color: tokens.colorBrandForeground1,
+  },
+  presetHeadText: { minWidth: 0 },
+  presetBody: { color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200, minHeight: '72px' },
+  presetMeta: { display: 'flex', gap: tokens.spacingHorizontalXS, flexWrap: 'wrap', alignItems: 'center' },
+  presetFoot: {
+    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+    gap: tokens.spacingHorizontalS, marginTop: tokens.spacingVerticalXS, flexWrap: 'wrap',
+  },
+  presetLearn: { color: tokens.colorBrandForeground1, fontSize: tokens.fontSizeBase200 },
 });
 
 const LABEL_COLORS = [
@@ -168,6 +203,37 @@ interface PolicyRow {
   labels?: string[]; enabled?: boolean;
 }
 interface PoliciesPayload { ok: boolean; policies?: PolicyRow[]; }
+
+/** A curated best-practice label-policy preset (from GET /api/governance/labels/library). */
+interface LabelPreset {
+  id: string; name: string; description: string; category: string; icon: string;
+  regulation?: string; labels: string[]; defaultLabelId: string;
+  mandatory: boolean; justificationOnDowngrade: boolean; scope: string; learnUrl: string;
+}
+/** GET /api/governance/labels/library envelope (Loom-native, no SCC sidecar). */
+interface LabelLibraryPayload {
+  ok: boolean; presets?: LabelPreset[];
+  defaultPresetId?: string; enabledSources?: string[]; error?: string;
+}
+
+/** Preset icon key → Fluent icon (the store/route stay icon-free). */
+function presetIcon(key: string): ReactElement {
+  switch (key) {
+    case 'shield': return <ShieldCheckmark24Regular />;
+    case 'lock': return <LockClosed24Regular />;
+    case 'gov': return <Building24Regular />;
+    case 'money': return <Money24Regular />;
+    case 'health': return <HeartPulse24Regular />;
+    default: return <Shield24Regular />;
+  }
+}
+
+/** Preset category → Badge color. */
+function presetCategoryColor(c: string): 'danger' | 'warning' | 'success' | 'brand' {
+  return c === 'Government' ? 'danger'
+    : c === 'Financial' || c === 'Regulated' ? 'warning'
+    : c === 'Healthcare' ? 'success' : 'brand';
+}
 
 const ADMIN_PORTAL = 'https://compliance.microsoft.com/informationprotection';
 
@@ -526,12 +592,63 @@ function PoliciesSection({ labelsState }: { labelsState: ApiState<LabelsPayload>
   const [opOk, setOpOk] = useState<string | null>(null);
   const [filter, setFilter] = useState('');
 
+  // Best-practice label-policy library (Loom-native — independent of the SCC
+  // sidecar). Presets author + save a real governance policy (kind:'Label') to
+  // Cosmos, so this section works with LOOM_MIP_ENABLED unset.
+  const [presets, setPresets] = useState<LabelPreset[]>([]);
+  const [defaultPresetId, setDefaultPresetId] = useState<string>('');
+  const [enabledSources, setEnabledSources] = useState<string[]>([]);
+  const [libLoading, setLibLoading] = useState(true);
+  const [libErr, setLibErr] = useState<string | null>(null);
+  const [libGate, setLibGate] = useState<string | null>(null);
+  const [enablingId, setEnablingId] = useState<string | null>(null);
+
   const load = useCallback(async () => {
     setState({ loading: true, data: null });
     const r = await fetchJson<PoliciesPayload>('/api/admin/security/mip/policies');
     setState({ loading: false, data: r.data, notConfigured: r.notConfigured, error: r.error, errorStatus: r.status });
   }, []);
   useEffect(() => { load(); }, [load]);
+
+  // Load the curated label-policy library + which presets are already enabled.
+  const loadLibrary = useCallback(async () => {
+    setLibLoading(true); setLibErr(null); setLibGate(null);
+    try {
+      const r = await clientFetch('/api/governance/labels/library');
+      const j: LabelLibraryPayload = await r.json();
+      if (!j.ok) {
+        // 503 cosmos_not_configured is an honest infra gate, not an error.
+        if (r.status === 503) setLibGate(j.error || 'The label-policy library requires Cosmos DB.');
+        else setLibErr(j.error || `HTTP ${r.status}`);
+        return;
+      }
+      setPresets(j.presets || []);
+      setDefaultPresetId(j.defaultPresetId || '');
+      setEnabledSources(j.enabledSources || []);
+    } catch (e: unknown) { setLibErr(e instanceof Error ? e.message : String(e)); }
+    finally { setLibLoading(false); }
+  }, []);
+  useEffect(() => { loadLibrary(); }, [loadLibrary]);
+
+  // One-click enable / disable a curated preset. Writes a REAL Loom governance
+  // policy (kind:'Label') to Cosmos and reflects `enabledSources`.
+  const togglePreset = useCallback(async (preset: LabelPreset, enable: boolean) => {
+    setEnablingId(preset.id); setOpError(null); setOpOk(null);
+    try {
+      const r = await clientFetch('/api/governance/labels/library', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ presetId: preset.id, enable }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setOpError(j.error || `HTTP ${r.status}`); return; }
+      const source = `preset:${preset.id}`;
+      setEnabledSources((prev) => enable
+        ? (prev.includes(source) ? prev : [...prev, source])
+        : prev.filter((x) => x !== source));
+      setOpOk(`${enable ? 'Enabled' : 'Disabled'} best-practice policy "${preset.name}".`);
+    } catch (e: unknown) { setOpError(e instanceof Error ? e.message : String(e)); }
+    finally { setEnablingId(null); }
+  }, []);
 
   const lookupLabel = (id?: string): string | undefined => {
     if (!id) return undefined;
@@ -562,6 +679,81 @@ function PoliciesSection({ labelsState }: { labelsState: ApiState<LabelsPayload>
 
   return (
     <div className={s.section}>
+      {/* ── Best-practice policy library — ALWAYS rendered, Loom-native ── */}
+      <div className={s.toolbar}>
+        <Subtitle2 className={s.spread}>Best-practice policy library</Subtitle2>
+        <Button size="small" icon={<ArrowSync24Regular />} onClick={loadLibrary} disabled={libLoading}>Refresh</Button>
+      </div>
+      <Body1 as="p" className={s.libIntro}>
+        Curated, best-practice sensitivity-label policies you can turn on with one click. Each publishes the Loom
+        handling levels (Public → Restricted), sets a default label and downgrade-justification behaviour, and
+        writes a real governance policy — <strong>no Microsoft Purview / Fabric workspace required</strong>. The
+        <strong> Loom Baseline</strong> policy is on by default so day-one labelling works out of the box. Build your
+        own with <strong>New policy</strong> below.
+      </Body1>
+
+      {libErr && (
+        <MessageBar intent="error" className={s.mbSpace}>
+          <MessageBarBody><MessageBarTitle>Could not load the policy library</MessageBarTitle>{libErr}</MessageBarBody>
+        </MessageBar>
+      )}
+      {libGate && (
+        <MessageBar intent="warning" className={s.mbSpace}>
+          <MessageBarBody>
+            <MessageBarTitle>Policy store not configured</MessageBarTitle>
+            {libGate}
+          </MessageBarBody>
+        </MessageBar>
+      )}
+      {libLoading && <Spinner size="tiny" label="Loading policy library…" />}
+      {!libLoading && presets.length > 0 && (
+        <TileGrid minTileWidth={300}>
+          {presets.map((preset) => {
+            const source = `preset:${preset.id}`;
+            const enabled = enabledSources.includes(source);
+            const isDefault = preset.id === defaultPresetId;
+            return (
+              <div key={preset.id} className={s.presetCard}>
+                <div className={s.presetHead}>
+                  <div className={s.presetIcon}>{presetIcon(preset.icon)}</div>
+                  <div className={s.presetHeadText}>
+                    <Subtitle2 block>{preset.name}</Subtitle2>
+                    {preset.regulation && <Caption1 className={s.muted}>{preset.regulation}</Caption1>}
+                  </div>
+                </div>
+                <div className={s.presetMeta}>
+                  <Badge appearance="tint" size="small" color={presetCategoryColor(preset.category)}>{preset.category}</Badge>
+                  <Badge appearance="outline" size="small">{preset.labels.length} labels</Badge>
+                  {preset.mandatory && <Badge appearance="outline" size="small" color="warning">Mandatory</Badge>}
+                  {isDefault && <Badge appearance="tint" size="small" color="brand">Default</Badge>}
+                </div>
+                <div className={s.presetBody}>{preset.description}</div>
+                <div className={s.presetFoot}>
+                  <a href={preset.learnUrl} target="_blank" rel="noreferrer" className={s.presetLearn}>Learn more</a>
+                  {enabled ? (
+                    <div className={s.rowActions}>
+                      <Badge appearance="filled" color="success" icon={<CheckmarkCircle20Filled />}>Enabled</Badge>
+                      <Button size="small" appearance="secondary"
+                        onClick={() => togglePreset(preset, false)} disabled={enablingId === preset.id}>
+                        {enablingId === preset.id ? 'Working…' : 'Disable'}
+                      </Button>
+                    </div>
+                  ) : (
+                    <Button size="small" appearance="primary"
+                      onClick={() => togglePreset(preset, true)} disabled={enablingId === preset.id}>
+                      {enablingId === preset.id ? 'Enabling…' : 'Enable'}
+                    </Button>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </TileGrid>
+      )}
+
+      <Divider className={s.libDivider} />
+
+      {/* ── Live label policies (Microsoft Information Protection sidecar) ── */}
       <div className={s.toolbar}>
         <Subtitle2 className={s.spread}>Label policies</Subtitle2>
         {allPolicies.length > 0 && (
@@ -576,7 +768,6 @@ function PoliciesSection({ labelsState }: { labelsState: ApiState<LabelsPayload>
           />
         )}
         <Button icon={<Add24Regular />} appearance="primary"
-          disabled={!!state.notConfigured}
           onClick={() => { setOpError(null); setOpOk(null); setDialog({ kind: 'create' }); }}>New policy</Button>
         <Button icon={<ArrowSync24Regular />} onClick={load} disabled={state.loading}>Refresh</Button>
       </div>
@@ -585,10 +776,6 @@ function PoliciesSection({ labelsState }: { labelsState: ApiState<LabelsPayload>
       {opError && <MessageBar intent="error" className={s.mbSpace}><MessageBarBody>{opError}</MessageBarBody></MessageBar>}
 
       {state.loading && <Spinner label="Loading label policies…" />}
-      {state.notConfigured && (
-        <NotConfiguredBar surface="Label policies" hint={state.notConfigured}
-          portalLink={ADMIN_PORTAL} portalLabel="Open Information Protection (Microsoft Purview)" />
-      )}
       {state.error && !state.notConfigured && (
         <MessageBar intent="error">
           <MessageBarBody><MessageBarTitle>Failed (HTTP {state.errorStatus})</MessageBarTitle>{state.error}</MessageBarBody>
@@ -639,6 +826,22 @@ function PoliciesSection({ labelsState }: { labelsState: ApiState<LabelsPayload>
             })}
           </TableBody>
         </Table>
+      )}
+
+      {/* Live Microsoft Information Protection sync is OPTIONAL — the library +
+          New policy above already work without it. When the SCC sidecar isn't
+          wired we surface the honest infra hint here, reframed as a connect note. */}
+      {state.notConfigured && (
+        <div>
+          <Body1 as="p" className={s.libIntro} style={{ marginTop: tokens.spacingVerticalM }}>
+            <strong>Connect live Microsoft Information Protection sync (optional).</strong>{' '}
+            The best-practice library and <strong>New policy</strong> above already publish and enforce Loom
+            label policies without this. Wiring the sidecar additionally mirrors these policies into Microsoft
+            Purview and lists your live MIP label policies below.
+          </Body1>
+          <NotConfiguredBar surface="Live Microsoft Information Protection sync" hint={state.notConfigured}
+            portalLink={ADMIN_PORTAL} portalLabel="Open Information Protection (Microsoft Purview)" />
+        </div>
       )}
 
       {dialog && (
