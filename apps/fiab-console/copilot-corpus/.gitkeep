@@ -1,0 +1,2 @@
+# Placeholder so the Copilot corpus dir always exists in the Docker build context.
+# Populated at build time by scripts/csa-loom/stage-copilot-corpus.sh (contents gitignored).

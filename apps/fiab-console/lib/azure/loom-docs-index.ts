@@ -297,8 +297,22 @@ interface RepoRoots {
 }
 
 function detectRoots(): RepoRoots {
-  // Resolve from cwd. In ACA `cwd` is the next standalone server dir;
-  // in dev it's `apps/fiab-console`. Walk up until we find `mkdocs.yml`.
+  // 1) Production image: the corpus is staged into ./copilot-corpus at build
+  //    time (scripts/csa-loom/stage-copilot-corpus.sh) because the repo-root
+  //    docs/ + PRPs/ are OUTSIDE the apps/fiab-console Docker build context and
+  //    would otherwise never be packaged — leaving the RAG index empty. The
+  //    Dockerfile COPYs this dir next to server.js, so it sits at cwd here.
+  const bundled = path.join(process.cwd(), 'copilot-corpus');
+  if (fs.existsSync(path.join(bundled, 'docs'))) {
+    return {
+      repoRoot: bundled,
+      docsRoot: path.join(bundled, 'docs'),
+      consoleLibRoot: path.join(bundled, 'lib'),
+      prpRoot: path.join(bundled, 'PRPs', 'active', 'csa-loom'),
+      adrRoot: path.join(bundled, 'docs', 'fiab', 'adr'),
+    };
+  }
+  // 2) Dev / repo checkout: walk up from cwd until we find `mkdocs.yml`.
   let dir = process.cwd();
   for (let i = 0; i < 8; i++) {
     if (fs.existsSync(path.join(dir, 'mkdocs.yml'))) break;
