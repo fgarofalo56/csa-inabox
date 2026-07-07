@@ -47,7 +47,7 @@ export async function GET() {
   try {
     const doc = await loadOrSeedPolicies(s.claims.oid);
     enabledSources = doc.items
-      .filter((p) => p.enabled && typeof p.source === 'string' && p.source.startsWith('preset:'))
+      .filter((p) => p.kind === 'DLP' && p.enabled && typeof p.source === 'string' && p.source.startsWith('preset:'))
       .map((p) => p.source!);
   } catch (e) {
     if (e instanceof CosmosNotConfiguredError) return cosmosGate();
@@ -74,7 +74,7 @@ export async function POST(req: NextRequest) {
     const tenantId = s.claims.oid;
     const doc = await loadOrSeedPolicies(tenantId);
     const source = `preset:${preset.id}`;
-    const existing = doc.items.find((p) => p.source === source);
+    const existing = doc.items.find((p) => p.kind === 'DLP' && p.source === source);
     if (existing) {
       // Idempotent — re-enable if it had been disabled, otherwise no-op.
       if (!existing.enabled) { existing.enabled = true; await savePolicies(doc); }
