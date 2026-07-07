@@ -283,6 +283,18 @@ export async function searchDocs(query: string, top = 5, kind?: DocChunk['kind']
 
 // ---------- Corpus walker ----------
 
+/**
+ * Key-safe document id. Azure AI Search document KEYS and Cosmos document IDS
+ * both reject '/', '.', '#', ':' (Cosmos also '\\' and '?') — but the natural
+ * `${kind}:${relpath}#${idx}` form is full of them, so every AI Search upload
+ * batch 400'd ("Invalid document key") and every Cosmos upsert silently failed,
+ * leaving the corpus index empty. base64url of the source id is valid for both
+ * backends and stays deterministic; the human-readable path lives in `path`.
+ */
+function docKey(kind: string, rel: string, idx: number): string {
+  return `${Buffer.from(`${kind}:${rel}`, 'utf-8').toString('base64url')}_${idx}`;
+}
+
 interface RepoRoots {
   /** Repo root (parent of `apps/`). */
   repoRoot: string;
@@ -475,7 +487,7 @@ export async function buildCorpus(): Promise<DocChunk[]> {
       const rel = path.relative(src.prefix, file).replace(/\\/g, '/');
       const blocks = chunkMarkdown(raw);
       blocks.forEach((b, idx) => {
-        const id = `${src.kind}:${rel}#${idx}`;
+        const id = docKey(src.kind, rel, idx);
         chunks.push({
           id,
           kind: src.kind,
@@ -503,7 +515,7 @@ export async function buildCorpus(): Promise<DocChunk[]> {
     const stat = fs.statSync(file);
     const rel = path.relative(roots.repoRoot, file).replace(/\\/g, '/');
     chunks.push({
-      id: `repo:${rel}#0`,
+      id: docKey('repo', rel, 0),
       kind: 'repo',
       path: rel,
       content: summary,
