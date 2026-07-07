@@ -12,6 +12,16 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+
+// Stub the heavy visualization children so the editor mounts fast + deterministically
+// under v8 coverage. GeoDatasetEditor renders a GeoJsonMap (SVG/canvas map) and a
+// React-Flow DataPipelineEditor; mounting those under coverage was borderline-slow and
+// the schema-panel assertions below intermittently blew the waitFor budget (the flake).
+// None of these assertions inspect the map or the pipeline canvas, so stubbing them to
+// null is behaviour-preserving for this test.
+vi.mock('@/lib/components/graph/geojson-map', () => ({ GeoJsonMap: () => null }));
+vi.mock('@/lib/editors/data-pipeline-editor', () => ({ DataPipelineEditor: () => null }));
+
 import { GeoDatasetEditor } from '../geo-editors';
 import { makeItem, installFetchMock } from './test-helpers';
 
