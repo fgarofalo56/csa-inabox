@@ -42,6 +42,7 @@ import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { AiSearchServiceTree } from '@/lib/components/ai-search/ai-search-tree';
+import { KnowledgeBasesPanel } from '@/lib/components/ai-search/knowledge-bases-panel';
 import { IndexerOpsPanel } from '@/lib/components/ai-search/indexer-ops';
 import { ScoringProfilesDesigner, AnalyzersDesigner, CorsAndCmkDesigner } from '@/lib/components/ai-search/index-designers';
 import { AiSearchServicePanel } from '@/lib/components/ai-search/ai-search-service-panel';
@@ -1815,6 +1816,10 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
   // left service navigator behaves like clicking an index in the portal.
   const [navIndex, setNavIndex] = useState<string | null>(null);
   const [treeRefresh, setTreeRefresh] = useState(0);
+  // Knowledge Bases (agentic retrieval / Foundry IQ) surface toggle. Opened from
+  // the service navigator's "Knowledge bases" group; mutually exclusive with an
+  // open index.
+  const [kbView, setKbView] = useState(false);
 
   // Catalog list mode (no specific item) — list every index on the service.
   const [list, reloadList] = useApi<{ indexes: any[] }>(isNew && !navIndex ? '/api/items/ai-search-index' : null);
@@ -2092,14 +2097,21 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
     <AiSearchServiceTree
       selectedIndex={navIndex}
       refreshKey={treeRefresh}
-      onOpenIndex={(name) => { setNavIndex(name); setShowService(false); setTab('schema'); setHits(null); setAnalyzeRes(null); setIndexerData(null); }}
-      onNewIndex={() => { setNavIndex(null); setShowService(false); /* fall back to the create dialog within the tree */ }}
-      onOpenService={() => setShowService(true)}
+      knowledgeActive={kbView}
+      onOpenIndex={(name) => { setKbView(false); setShowService(false); setNavIndex(name); setTab('schema'); setHits(null); setAnalyzeRes(null); setIndexerData(null); }}
+      onNewIndex={() => { setKbView(false); setShowService(false); setNavIndex(null); /* fall back to the create dialog within the tree */ }}
+      onOpenKnowledge={() => { setNavIndex(null); setShowService(false); setKbView(true); }}
+      onOpenService={() => { setKbView(false); setShowService(true); }}
     />
   );
   const chrome = (main: ReactNode) => (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon} leftPanel={serviceTree} main={main} />
   );
+
+  // -------- Knowledge Bases (agentic retrieval) surface --------
+  if (kbView) {
+    return chrome(<KnowledgeBasesPanel />);
+  }
 
   // AIF-17 — service administration panel (keys / networking / monitoring / stats),
   // opened from the navigator's ⚙ Service action. Renders over the index surface.

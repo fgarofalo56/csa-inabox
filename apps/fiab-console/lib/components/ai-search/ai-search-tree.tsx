@@ -367,11 +367,16 @@ export interface AiSearchServiceTreeProps {
   onOpenService?: () => void;
   /** Increment to force a refresh from the parent (e.g. after a save/create). */
   refreshKey?: number;
+  /** Open the Knowledge Bases (agentic retrieval) surface in the host editor. */
+  onOpenKnowledge?: () => void;
+  /** True when the Knowledge Bases surface is the active pane (highlight the group). */
+  knowledgeActive?: boolean;
 }
 
 /** A typed, AI-Search-faithful service navigator. */
 export function AiSearchServiceTree({
   selectedIndex = null, onOpenIndex, onNewIndex, onOpenService, refreshKey = 0,
+  onOpenKnowledge, knowledgeActive = false,
 }: AiSearchServiceTreeProps) {
   const s = useStyles();
 
@@ -820,6 +825,21 @@ export function AiSearchServiceTree({
               ))}
             </Tree>
           </TreeItem>
+
+          {/* Knowledge bases (agentic retrieval / Foundry IQ). Opens the full
+              Knowledge Bases surface (sources + bases + retrieve-test) in the
+              host editor — a pane, not tree leaves. */}
+          {onOpenKnowledge && (
+            <TreeItem itemType="leaf" value="g-knowledge">
+              <TreeItemLayout
+                iconBefore={<BrainCircuit20Regular />}
+                style={{ cursor: 'pointer', fontWeight: knowledgeActive ? tokens.fontWeightSemibold : undefined }}
+                onClick={() => onOpenKnowledge()}
+              >
+                <span className={s.leafRow}><span>Knowledge bases</span></span>
+              </TreeItemLayout>
+            </TreeItem>
+          )}
 
           {/* Debug sessions (ARM management-plane). Create/list/delete + portal
               deep-link to the visual skill-graph trace (portal-only rendering). */}
