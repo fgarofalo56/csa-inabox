@@ -68,22 +68,37 @@ function joinPath(base: string, key: string | number): string {
 function walk(oldVal: unknown, newVal: unknown, path: string, out: FieldChange[]): void {
   if (out.length >= MAX_CHANGES) return;
 
-  // Both objects → recurse over the union of keys.
-  if (isPlainObject(oldVal) && isPlainObject(newVal)) {
-    const keys = new Set<string>([...Object.keys(oldVal), ...Object.keys(newVal)]);
+  const oldIsObj = isPlainObject(oldVal);
+  const newIsObj = isPlainObject(newVal);
+  const oldIsArr = Array.isArray(oldVal);
+  const newIsArr = Array.isArray(newVal);
+
+  // Object recursion: both objects, or one is an object and the other is
+  // absent (undefined). Recursing into the present side against an empty
+  // object emits leaf-level added/removed paths (e.g. `tables[2].name`)
+  // rather than reporting the whole node. A defined leaf on the other side
+  // is NOT recursed here — that is a shape change handled below as `changed`.
+  if ((oldIsObj || newIsObj) && !oldIsArr && !newIsArr &&
+      (oldIsObj || oldVal === undefined) && (newIsObj || newVal === undefined)) {
+    const src = oldIsObj ? (oldVal as Record<string, unknown>) : {};
+    const dst = newIsObj ? (newVal as Record<string, unknown>) : {};
+    const keys = new Set<string>([...Object.keys(src), ...Object.keys(dst)]);
     // Stable, deterministic order so the diff (and any snapshot test) is stable.
     for (const key of [...keys].sort()) {
-      walk(oldVal[key], newVal[key], joinPath(path, key), out);
+      walk(src[key], dst[key], joinPath(path, key), out);
       if (out.length >= MAX_CHANGES) return;
     }
     return;
   }
 
-  // Both arrays → recurse by index over the longer length.
-  if (Array.isArray(oldVal) && Array.isArray(newVal)) {
-    const len = Math.max(oldVal.length, newVal.length);
+  // Array recursion: both arrays, or one is an array and the other is absent.
+  if ((oldIsArr || newIsArr) &&
+      (oldIsArr || oldVal === undefined) && (newIsArr || newVal === undefined)) {
+    const src = oldIsArr ? (oldVal as unknown[]) : [];
+    const dst = newIsArr ? (newVal as unknown[]) : [];
+    const len = Math.max(src.length, dst.length);
     for (let i = 0; i < len; i++) {
-      walk(oldVal[i], newVal[i], joinPath(path, i), out);
+      walk(src[i], dst[i], joinPath(path, i), out);
       if (out.length >= MAX_CHANGES) return;
     }
     return;

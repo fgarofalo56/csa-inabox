@@ -39,6 +39,7 @@ import {
   DialogBody,
   Divider,
   makeStyles,
+  shorthands,
   tokens,
 } from '@fluentui/react-components';
 import {
@@ -90,7 +91,7 @@ const useStyles = makeStyles({
     border: `1px solid ${tokens.colorNeutralStroke2}`, backgroundColor: tokens.colorNeutralBackground1,
     cursor: 'pointer',
   },
-  rowSelected: { borderColor: tokens.colorBrandStroke1, backgroundColor: tokens.colorBrandBackground2 },
+  rowSelected: { ...shorthands.borderColor(tokens.colorBrandStroke1), backgroundColor: tokens.colorBrandBackground2 },
   rowTop: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, justifyContent: 'space-between' },
   rowTitle: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, minWidth: 0 },
   who: { fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground2 },
