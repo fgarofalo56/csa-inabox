@@ -95,6 +95,7 @@ const ALLOWLIST = new Set([
   'LOOM_MCP_EGRESS_ALLOW',          // opt-in SSRF egress allow-list for admin MCP test-connection (rel-T13)
   'LOOM_MULTIUSER_ACL',             // opt-out kill switch for the multi-user ACL fallback (default on in code; rel-T11)
   'LOOM_SCHEDULER_EMAIL_WEBHOOK',   // opt-in email relay (ACS/Logic App/SMTP) for scheduler failure alerts (rel-T81); unset = alerts land in the Loom inbox + optional webhook only
+  'LOOM_ITEM_VERSION_CAP',          // opt-in tuning knob for the per-item version-history retention cap (W6); unset default = 50 in code (lib/versions/item-version-store.ts)
 
   // ---- Derived from an emitted var at runtime (KV name<->url, cosmos endpoint<->id, etc.) ----
   'LOOM_KEY_VAULT_NAME',            // derived from LOOM_KEY_VAULT_URL

@@ -17,6 +17,7 @@ import { itemsContainer } from '@/lib/azure/cosmos-client';
 import { resolveItemAccessByOid } from '@/lib/auth/item-access';
 import type { WorkspaceItem } from '@/lib/types/workspace';
 import { apiError } from '@/lib/api/respond';
+import { recordItemVersion } from '@/lib/versions/item-version-store';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -65,6 +66,13 @@ export async function PATCH(req: NextRequest, props: { params: Promise<{ type: s
     };
     const items = await itemsContainer();
     const { resource } = await items.item(item.id, item.workspaceId).replace<WorkspaceItem>(next);
+    // Version-history snapshot (Wave-2 W6) — record this save as a version at the
+    // SHARED save chokepoint so all editors that persist via this generic route
+    // get history for free. Best-effort inside the helper; never fails the save.
+    await recordItemVersion(item, resource ?? next, {
+      oid: session.claims.oid,
+      name: session.claims.name || session.claims.upn || session.claims.email,
+    });
     return NextResponse.json(resource);
   } catch (e: any) {
     return err(e?.message || 'Failed to update item', 500, 'cosmos_error');

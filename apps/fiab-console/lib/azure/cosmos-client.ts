@@ -184,6 +184,17 @@ let _tenantTopology: Container | null = null;
 // grows unbounded. Created lazily so a fresh environment needs no extra ARM/Bicep
 // step beyond the account+database.
 let _rateLimits: Container | null = null;
+// Item version history (Wave-2 W6) — one row per saved snapshot of an item's
+// content, partitioned by /itemId so every per-item history list + snapshot-cap
+// prune hits a single physical partition. Kept as a DEDICATED container (not the
+// `items` container) so version docs never pollute the ~13 untyped
+// `SELECT * FROM c WHERE c.workspaceId=@w` item-list / count / reindex queries —
+// same per-item sidecar convention as comments / saved-queries / item-permissions
+// (all PK /itemId). Snapshots are capped at LOOM_ITEM_VERSION_CAP (default 50)
+// oldest-evicted on each save. Created lazily so a fresh environment needs no
+// extra ARM/Bicep step beyond the account+database (the Console UAMI already
+// holds Cosmos DB Built-in Data Contributor at account scope).
+let _itemVersions: Container | null = null;
 let _ensured = false;
 
 /**
@@ -742,6 +753,10 @@ async function ensure() {
     defaultTtl: -1, // TTL enabled; each doc carries its own `ttl` (no default expiry)
   });
   _rateLimits = rl;
+  // Item version history (Wave-2 W6) — PK /itemId so every per-item history read
+  // + snapshot-cap prune is a single-partition operation. Dedicated container, no
+  // TTL (versions are retained until the cap evicts the oldest on save).
+  _itemVersions = await mk('item-versions', '/itemId');
   _ensured = true;
 }
 
@@ -803,6 +818,8 @@ export async function metastoreRegistrationsContainer(): Promise<Container> { aw
 export async function tenantTopologyContainer(): Promise<Container> { await ensure(); return _tenantTopology!; }
 /** Durable rate-limiter store (rel-T16) — fixed-window counters + dedupe markers, PK /key, TTL-enabled. */
 export async function rateLimitsContainer(): Promise<Container> { await ensure(); return _rateLimits!; }
+/** Item version history (Wave-2 W6) — per-item content snapshots, PK /itemId. */
+export async function itemVersionsContainer(): Promise<Container> { await ensure(); return _itemVersions!; }
 
 // Foundation admin containers (shared cloud-endpoints resolver task).
 /** Admin Workspace Catalog — one row per Loom-managed workspace, PK /tenantId. */
@@ -958,6 +975,7 @@ const KNOWN_CONTAINER_IDS = [
   'env-config',
   'metastore-registrations',
   'rate-limits',
+  'item-versions',
 ];
 
 /** List all Loom containers with their current throughput shape.
