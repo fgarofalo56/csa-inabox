@@ -601,7 +601,7 @@ const PipelineCanvasInner = forwardRef<CanvasHandle, PipelineCanvasProps>(functi
               onAlign={alignSelection}
               onDistribute={distributeSelection}
             />
-            <span style={{ width: 1, alignSelf: 'stretch', backgroundColor: tokens.colorNeutralStroke2, marginLeft: 2, marginRight: 2 }} aria-hidden="true" />
+            <span style={{ width: 1, alignSelf: 'stretch', backgroundColor: tokens.colorNeutralStroke2, marginLeft: tokens.spacingHorizontalXXS, marginRight: tokens.spacingHorizontalXXS }} aria-hidden="true" />
             <Tooltip content={`${showNestedPreviews ? 'Hide' : 'Show'} nested activity preview (N)`} relationship="label">
               <Button
                 size="small"
