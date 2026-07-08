@@ -71,9 +71,13 @@ silent omission and never a Fabric/Power BI dependency.
 5. **Bicep-synced.** Every new Azure resource, env var, role assignment, and Cosmos container is
    wired into `platform/fiab/bicep/**` and the `admin-plane` env list, and a from-scratch
    `az deployment sub create` reproduces the feature set.
-6. **Migration-safe.** Every new backend ships behind a `LOOM_<SERVICE>_*` flag / env var with a
-   documented reversible default (default-on where Gov-safe and cost-benign; default-off / honest-gate
-   where it provisions a metered account).
+6. **Migration-safe & default-ON.** Per the WAVES.md global principle (default-ON / opt-out), every new
+   Loom capability here ships **enabled by default** with an admin opt-out toggle — never an opt-in
+   enablement gate. The `LOOM_<SERVICE>_*` env var is a wiring/target selector, not a switch a user must
+   flip on. The only "off" state is the **honest infra gate**: where a service provisions a metered Azure
+   account (or isn't GA in the tenant's Gov region), the feature renders fully behind a MessageBar naming
+   the exact resource to deploy — a deployment fact, not a policy gate. Cost is bounded by scale-to-zero /
+   idle-stop defaults on the backing compute, not by gating the feature.
 
 ---
 

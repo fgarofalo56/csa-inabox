@@ -12,6 +12,39 @@
 
 ---
 
+## Global principle — default-ON / opt-out (2026-07-08)
+
+**Standing operator directive (verbatim intent):** *"No gates. Allow admins to shut down / disable,
+but everything should be enabled by default with an opt-out approach, not opt-in."*
+
+Every Loom-native feature in these waves ships **enabled by default**. There is no spend-approval gate,
+no tenant-admin enablement gate, and no "opt-in before you can use it" flag on any Loom capability.
+Instead:
+
+- **Default ON.** A feature is live the moment its code deploys — no one has to turn it on.
+- **Cost control = scale-to-zero / idle-stop defaults, not gates.** Metered compute (ACA apps, Spark,
+  ACA Jobs, AML compute) defaults to autoscale-to-zero or an idle-stop timer so the resting cost is ~$0.
+  Spend is bounded by these defaults plus the cost/capacity *reporting and admin toggles* below — never
+  by blocking the feature up front.
+- **Admin opt-out, not user opt-in.** Admins get explicit disable / shutdown controls (per-item and, where
+  it applies, a tenant-wide kill switch) in tenant settings. The control removes a running default; it is
+  not a prerequisite for the feature to work.
+
+**The one exception (do NOT flip):** **real Microsoft Fabric / Power BI service backends stay strictly
+opt-IN** per the die-hard `no-fabric-dependency.md` rule. Every item is 100% functional Azure-native by
+default; a Fabric/Power BI backend is only ever selected explicitly via `LOOM_<ITEM>_BACKEND=fabric` +
+a bound workspace. First-party Databricks/ADT/Photon alternate backends are likewise opt-in.
+
+**Still allowed (these are NOT enablement gates):**
+- **Honest infra gates** — a Fluent `MessageBar intent="warning"` naming the exact missing env var / role /
+  Azure resource (including metered resources not yet deployed, or a service not GA in a Gov region). This
+  is a deployment fact, not a policy gate; the full UI still renders.
+- **Governance-as-the-feature** — approval workflows admins *configure* as the product itself (e.g.
+  approval-gated deployment-pipeline stage promotion, data-contract breaking-change gates, admission
+  control / spend caps / chargeback). These are user-owned controls, kept as designed.
+
+---
+
 ## How this plan is ordered
 
 Three ordering forces, applied in this priority:
@@ -153,7 +186,7 @@ The cognitive-client family that every other AI service reuses, plus the one-cli
 
 The marquee hosted-app gap and the API-token foundation the whole developer-platform track rides.
 
-- **DBX-1** `loom-app-runtime` — one-click hosted Python/Node apps on ACA (autoscale-to-zero, OAuth-scoped). **Foundation for DBX-2/9.** `[DBX, P0, XL]`
+- **DBX-1** `loom-app-runtime` — one-click hosted Python/Node apps on ACA (autoscale-to-zero, OAuth-scoped). Deploy **default-allowed / no spend gate**; cost bounded by scale-to-zero; admin **per-app disable + tenant-wide runtime kill switch** (opt-out). **Foundation for DBX-2/9.** `[DBX, P0, XL]`
 - **DBX-2** Custom agent hosting (bring-your-own harness — rides DBX-1). `[DBX, P1, L]`
 - **DBX-9** Publish a Data Agent as a Managed MCP Server (rides DBX-1). `[DBX, P2, M]`
 - **BR-PAT** Scoped API tokens / PAT for non-interactive access (`loomPatTokens` + `resolvePat()` middleware + `/admin/developer/tokens`). **Foundation for BR-OPENAPI/TERRAFORM/SCIM.** `[BREADTH, P0, M]`
