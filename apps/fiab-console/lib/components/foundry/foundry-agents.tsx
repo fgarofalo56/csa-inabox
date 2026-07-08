@@ -22,6 +22,7 @@ import { clientFetch } from '@/lib/client-fetch';
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { buildToolDefinition, BROWSER_TOOL_ENV } from '@/lib/azure/agent-tool-kinds';
 import {
   Subtitle2, Body1, Caption1, Badge, Spinner, Button, Input, Textarea, Field,
   Dropdown, Option, Checkbox,
@@ -30,6 +31,7 @@ import {
 } from '@fluentui/react-components';
 import {
   Add20Regular, ArrowSync16Regular, Delete16Regular, Bot24Regular, Play16Regular,
+  History16Regular, ArrowClockwise16Regular,
 } from '@fluentui/react-icons';
 import { mcpToolOptions } from '@/lib/copilot/agent-tool-catalog';
 
@@ -39,6 +41,7 @@ const useStyles = makeStyles({
   col: { display: 'flex', flexDirection: 'column', gap: '8px', minWidth: '0' },
   toolbar: { display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' },
   list: { display: 'flex', flexDirection: 'column', gap: '4px', maxHeight: '260px', overflow: 'auto', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: '4px', padding: '4px' },
+  threadList: { maxHeight: '160px' },
   agentRow: { display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 8px', borderRadius: '4px', cursor: 'pointer' },
   agentRowSel: { backgroundColor: tokens.colorNeutralBackground1Selected },
   grow: { flex: '1', minWidth: '0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
@@ -61,6 +64,8 @@ const TOOL_TYPES = [
   { value: 'mcp', label: 'MCP server' },
   { value: 'openapi', label: 'OpenAPI' },
   { value: 'connected_agent', label: 'Connected agent' },
+  // Browser automation (AIF-18) — honest-gated on a deployed Playwright runner.
+  { value: 'browser_automation', label: 'Browser automation' },
 ] as const;
 type ToolType = (typeof TOOL_TYPES)[number]['value'];
 
@@ -72,6 +77,17 @@ interface AgentRow {
 }
 
 interface DeploymentRow { name: string; modelName?: string }
+
+/** A persisted run thread summary (AIF-14 durable memory). */
+interface ThreadSummary {
+  threadId: string;
+  runId?: string;
+  status: string;
+  tier?: string;
+  question: string;
+  answerPreview: string;
+  createdAt: string;
+}
 
 interface Gate { msg: string; hint?: string }
 
@@ -95,7 +111,9 @@ function agentToolTypes(a: AgentRow): ToolType[] {
   const tools = Array.isArray(def?.tools) ? def.tools : [];
   const out: ToolType[] = [];
   for (const t of tools) {
-    const ty = typeof t?.type === 'string' ? t.type : '';
+    let ty = typeof t?.type === 'string' ? t.type : '';
+    // browser_automation serializes as a named function tool (agent-tool-kinds).
+    if (ty === 'function' && t?.function?.name === 'browser_automation') ty = 'browser_automation';
     if (TOOL_TYPES.some((x) => x.value === ty) && !out.includes(ty as ToolType)) out.push(ty as ToolType);
   }
   return out;
@@ -120,6 +138,10 @@ export function FoundryAgentsPanel({ active, nonce = 0, acct = null }: { active:
   // model deployments for the picker (from the selected account)
   const [deployments, setDeployments] = useState<DeploymentRow[]>([]);
 
+  // browser-automation runner gate (AIF-18): null = unknown, true = a Playwright
+  // runner is deployed, false = honest-gate the browser_automation tool.
+  const [browserConfigured, setBrowserConfigured] = useState<boolean | null>(null);
+
   // ---- editor form ----
   const [selected, setSelected] = useState<string | null>(null);
   const [fName, setFName] = useState('');
@@ -141,8 +163,14 @@ export function FoundryAgentsPanel({ active, nonce = 0, acct = null }: { active:
   const [pgQuestion, setPgQuestion] = useState('');
   const [pgRunning, setPgRunning] = useState(false);
   const [pgResult, setPgResult] = useState<any>(null);
+  const [pgTier, setPgTier] = useState<string | null>(null);
   const [pgGate, setPgGate] = useState<string | null>(null);
   const [pgError, setPgError] = useState<string | null>(null);
+
+  // ---- durable threads (AIF-14) ----
+  const [threads, setThreads] = useState<ThreadSummary[]>([]);
+  const [threadsLoading, setThreadsLoading] = useState(false);
+  const [threadReloadNonce, setThreadReloadNonce] = useState(0);
 
   const accountKey = `${acct?.name || ''}|${acct?.resourceGroup || ''}`;
 
@@ -183,11 +211,20 @@ export function FoundryAgentsPanel({ active, nonce = 0, acct = null }: { active:
     } catch { setDeployments([]); }
   }, [withAccount]);
 
+  const loadBrowserStatus = useCallback(async () => {
+    try {
+      const res = await clientFetch('/api/foundry/browser-tool/status');
+      const j = await readJson(res);
+      setBrowserConfigured(j?.ok ? !!j.configured : false);
+    } catch { setBrowserConfigured(false); }
+  }, []);
+
   useEffect(() => {
     if (!active) return;
     loadAgents();
     loadDeployments();
-  }, [active, nonce, accountKey, loadAgents, loadDeployments]);
+    loadBrowserStatus();
+  }, [active, nonce, accountKey, loadAgents, loadDeployments, loadBrowserStatus]);
 
   const mcpOpts = useMemo(() => mcpToolOptions(), []);
 
@@ -239,6 +276,11 @@ export function FoundryAgentsPanel({ active, nonce = 0, acct = null }: { active:
       if (t === 'connected_agent') {
         const target = fConnectedAgent.trim();
         return { type: 'connected_agent', connected_agent: { id: target || undefined, name: target || 'sub_agent', description: `Delegate to ${target || 'the connected agent'}` } };
+      }
+      if (t === 'browser_automation') {
+        // Shared tool-kind contract (agent-tool-kinds.ts) — Foundry + MAF + the
+        // AIF-5 catalog serialize browser automation identically.
+        return buildToolDefinition(t, { functionName: fFnName });
       }
       return { type: t };
     });
@@ -305,11 +347,20 @@ export function FoundryAgentsPanel({ active, nonce = 0, acct = null }: { active:
   const runPlayground = useCallback(async () => {
     const agent = pgAgent.trim(); const q = pgQuestion.trim();
     if (!agent || !q || pgRunning) return;
-    setPgRunning(true); setPgResult(null); setPgGate(null); setPgError(null);
+    setPgRunning(true); setPgResult(null); setPgTier(null); setPgGate(null); setPgError(null);
     try {
+      // Pass the selected agent's definition (instructions + model) so the MAF
+      // Gov runtime tier can serve the run when no Foundry Agent Service host is
+      // reachable (GCC-High / IL5) — it has no Foundry project to load it from.
+      // The Foundry tier loads the agent by name and ignores these.
+      const def = agents.find((a) => a.name === agent);
       const res = await clientFetch('/api/foundry/agents/run', {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ agent, question: q }),
+        body: JSON.stringify({
+          agent, question: q,
+          instructions: def ? agentInstructions(def) : (selected === agent ? fInstructions : undefined),
+          model: def ? agentModel(def) : (selected === agent ? fModel : undefined),
+        }),
       });
       const j = await readJson(res);
       if (res.status === 501 || j?.code === 'not_configured') {
@@ -318,12 +369,54 @@ export function FoundryAgentsPanel({ active, nonce = 0, acct = null }: { active:
       }
       if (!j.ok) { setPgError(j.error || `HTTP ${res.status}`); return; }
       setPgResult(j.data);
+      setPgTier(typeof j.tier === 'string' ? j.tier : null);
+      // Refresh the persisted-threads list (the run was just saved server-side).
+      setThreadReloadNonce((n) => n + 1);
     } catch (e: any) {
       setPgError(e?.message || String(e));
     } finally {
       setPgRunning(false);
     }
-  }, [pgAgent, pgQuestion, pgRunning]);
+  }, [pgAgent, pgQuestion, pgRunning, agents, selected, fInstructions, fModel]);
+
+  // ---- durable threads (AIF-14): list + resume + delete ----
+  const loadThreads = useCallback(async (agentName: string) => {
+    const a = agentName.trim();
+    if (!a) { setThreads([]); return; }
+    setThreadsLoading(true);
+    try {
+      const res = await clientFetch(`/api/foundry/agents/threads?agent=${encodeURIComponent(a)}`);
+      const j = await readJson(res);
+      setThreads(j?.ok && Array.isArray(j.threads) ? j.threads : []);
+    } catch { setThreads([]); }
+    finally { setThreadsLoading(false); }
+  }, []);
+
+  useEffect(() => { if (active && pgAgent.trim()) loadThreads(pgAgent); else setThreads([]); }, [active, pgAgent, threadReloadNonce, loadThreads]);
+
+  const resumeThread = useCallback(async (threadId: string) => {
+    const a = pgAgent.trim();
+    if (!a || !threadId) return;
+    setPgError(null); setPgGate(null);
+    try {
+      const res = await clientFetch(`/api/foundry/agents/threads?agent=${encodeURIComponent(a)}&threadId=${encodeURIComponent(threadId)}`);
+      const j = await readJson(res);
+      if (!j?.ok || !j.thread) { setPgError(j?.error || 'Could not load thread'); return; }
+      const t = j.thread;
+      setPgQuestion(t.question || '');
+      setPgResult({ threadId: t.threadId, runId: t.runId, status: t.status, answer: t.answer, steps: t.steps || [] });
+      setPgTier(typeof t.tier === 'string' ? t.tier : null);
+    } catch (e: any) { setPgError(e?.message || String(e)); }
+  }, [pgAgent]);
+
+  const deleteThread = useCallback(async (threadId: string) => {
+    const a = pgAgent.trim();
+    if (!a || !threadId) return;
+    try {
+      await clientFetch(`/api/foundry/agents/threads?agent=${encodeURIComponent(a)}&threadId=${encodeURIComponent(threadId)}`, { method: 'DELETE' });
+      await loadThreads(a);
+    } catch { /* best-effort */ }
+  }, [pgAgent, loadThreads]);
 
   const deploymentNames = useMemo(() => {
     const names = deployments.map((d) => d.name).filter(Boolean);
@@ -428,6 +521,17 @@ export function FoundryAgentsPanel({ active, nonce = 0, acct = null }: { active:
                 ))}
               </div>
             </Field>
+            {fTools.includes('browser_automation') && browserConfigured === false && (
+              <MessageBar intent="warning">
+                <MessageBarBody>
+                  <MessageBarTitle>Browser-automation runner not deployed</MessageBarTitle>
+                  The browser automation tool needs a Loom-owned Playwright runner. Deploy{' '}
+                  <code>platform/fiab/bicep/modules/copilot/browser-tool.bicep</code> (a scale-to-zero
+                  Azure Container Apps Job) and set <code>{BROWSER_TOOL_ENV}</code> to the job resource id.
+                  You can still add the tool to the agent now — it will run once the runner is wired.
+                </MessageBarBody>
+              </MessageBar>
+            )}
             {fTools.includes('function') && (
               <Field label="Function name (for the function tool)">
                 <Input value={fFnName} onChange={(_, d) => setFFnName(d.value)} placeholder="my_function" />
@@ -519,6 +623,39 @@ export function FoundryAgentsPanel({ active, nonce = 0, acct = null }: { active:
               </Button>
             </div>
 
+            {/* Durable threads (AIF-14) — resume a past conversation. The agent
+                also recalls durable facts learned in earlier threads. */}
+            {pgAgent.trim() && (
+              <div>
+                <div className={s.toolbar}>
+                  <History16Regular />
+                  <Caption1>Threads{threadsLoading ? ' · loading…' : ` (${threads.length})`}</Caption1>
+                  <Badge appearance="tint" color="brand" title="This agent remembers durable facts across threads">durable memory</Badge>
+                  <div style={{ flex: 1 }} />
+                  <Button size="small" appearance="subtle" icon={<ArrowClockwise16Regular />} onClick={() => loadThreads(pgAgent)} disabled={threadsLoading} aria-label="Refresh threads" />
+                </div>
+                <div className={`${s.list} ${s.threadList}`}>
+                  {!threadsLoading && threads.length === 0 && <div className={s.empty}>No saved threads yet. Run a question to start one.</div>}
+                  {threads.map((t) => (
+                    <div key={t.threadId} className={s.agentRow} role="button" tabIndex={0}
+                      onClick={() => resumeThread(t.threadId)}
+                      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); resumeThread(t.threadId); } }}>
+                      <History16Regular />
+                      <span className={s.grow}>
+                        <strong>{t.question || '(no prompt)'}</strong>
+                        <br />
+                        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                          {new Date(t.createdAt).toLocaleString()} · {t.status}{t.tier === 'maf' ? ' · MAF' : ''}
+                        </Caption1>
+                      </span>
+                      <Button size="small" appearance="subtle" icon={<Delete16Regular />} aria-label={`Delete thread ${t.threadId}`}
+                        onClick={(e) => { e.stopPropagation(); deleteThread(t.threadId); }} />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {pgGate && (
               <MessageBar intent="warning">
                 <MessageBarBody>
@@ -533,6 +670,17 @@ export function FoundryAgentsPanel({ active, nonce = 0, acct = null }: { active:
               <div>
                 <div className={s.toolbar}>
                   <Badge appearance="filled" color={pgResult.status === 'completed' ? 'success' : pgResult.status === 'failed' ? 'danger' : 'warning'}>{pgResult.status}</Badge>
+                  {pgTier && (
+                    <Badge
+                      appearance="tint"
+                      color={pgTier === 'maf' ? 'important' : 'brand'}
+                      title={pgTier === 'maf'
+                        ? 'Served by the Microsoft Agent Framework OSS runtime tier (Gov AOAI direct) — the GCC-High / IL5 backstop'
+                        : 'Served by the Azure AI Foundry Agent Service tier'}
+                    >
+                      {pgTier === 'maf' ? 'runtime · MAF (Gov)' : 'runtime · Foundry'}
+                    </Badge>
+                  )}
                   {pgResult.runId && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>run {pgResult.runId}</Caption1>}
                 </div>
                 {pgResult.lastError && <MessageBar intent="error" style={{ marginTop: tokens.spacingVerticalSNudge }}><MessageBarBody>{pgResult.lastError}</MessageBarBody></MessageBar>}

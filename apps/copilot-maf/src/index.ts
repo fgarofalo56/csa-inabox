@@ -12,6 +12,7 @@
  */
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { orchestrateMaf } from './agent-loop.js';
+import { runAgentInspectMaf } from './agent-run.js';
 import { isGovCloud } from './cloud-scope.js';
 
 const PORT = parseInt(process.env.PORT || '3100', 10);
@@ -76,6 +77,41 @@ async function handleOrchestrate(req: IncomingMessage, res: ServerResponse): Pro
   }
 }
 
+/**
+ * POST /agent-run — the Gov backstop for the Foundry Agent Service
+ * thread/run/step inspector. Runs a single agent turn (system=instructions,
+ * user=question) against Gov AOAI direct and returns an `AgentRunInspection`
+ * object byte-identical to the Console's Foundry tier, so the Agents playground
+ * + data-agent inspector render identically in GCC-High / IL5.
+ *
+ *   body { instructions, model?, question, enableTools?, maxIterations? }
+ *   → 200 { ok, data: AgentRunInspection }
+ * Auth: trusted x-user-oid header (VNet-internal; forwarded for tool OBO).
+ */
+async function handleAgentRun(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const userOid = (req.headers['x-user-oid'] as string | undefined)?.trim();
+  if (!userOid) {
+    sendJson(res, 401, { ok: false, error: 'x-user-oid header required' });
+    return;
+  }
+  const body = await readJsonBody(req);
+  const instructions = (body?.instructions || '').trim();
+  const question = (body?.question || '').trim();
+  if (!question) {
+    sendJson(res, 400, { ok: false, error: 'question is required' });
+    return;
+  }
+  const data = await runAgentInspectMaf({
+    instructions,
+    model: typeof body?.model === 'string' ? body.model : undefined,
+    question,
+    userOid,
+    enableTools: body?.enableTools !== false,
+    maxIterations: typeof body?.maxIterations === 'number' ? body.maxIterations : undefined,
+  });
+  sendJson(res, 200, { ok: true, data });
+}
+
 const server = createServer((req, res) => {
   const url = (req.url || '').split('?')[0];
 
@@ -91,6 +127,14 @@ const server = createServer((req, res) => {
 
   if (req.method === 'POST' && url === '/orchestrate') {
     handleOrchestrate(req, res).catch((e) => {
+      if (!res.headersSent) sendJson(res, 500, { ok: false, error: e?.message || String(e) });
+      else res.end();
+    });
+    return;
+  }
+
+  if (req.method === 'POST' && url === '/agent-run') {
+    handleAgentRun(req, res).catch((e) => {
       if (!res.headersSent) sendJson(res, 500, { ok: false, error: e?.message || String(e) });
       else res.end();
     });

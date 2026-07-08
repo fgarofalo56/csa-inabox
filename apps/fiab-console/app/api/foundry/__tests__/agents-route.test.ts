@@ -2,7 +2,9 @@
  * BFF route tests for the AI Foundry Agents surface:
  *   GET  /api/foundry/agents        → listAgents
  *   POST /api/foundry/agents        → createOrUpdateAgent (right args)
- *   POST /api/foundry/agents/run    → runAgentAndInspect
+ *   POST /api/foundry/agents/run    → runAgentInspectTiered → runAgentAndInspect
+ *                                     (Foundry tier is the default; the MAF Gov
+ *                                     tier is exercised in agent-runtime-tier.test)
  *
  * Asserts: (1) unauthed → 401, (2) happy paths call the real client with the
  * expected arguments, (3) the honest gate — FoundryAgentNotConfiguredError —
@@ -149,7 +151,7 @@ describe('POST /api/foundry/agents', () => {
 });
 
 describe('POST /api/foundry/agents/run', () => {
-  it('runs the agent via runAgentAndInspect(agent, question) and returns the inspection', async () => {
+  it('runs the agent via the Foundry tier (default) and returns the inspection', async () => {
     runAgentAndInspect.mockResolvedValue({
       threadId: 't1', runId: 'r1', status: 'completed', answer: '42',
       steps: [{ id: 's1', type: 'tool_calls', status: 'completed', toolCalls: [] }],
@@ -159,9 +161,13 @@ describe('POST /api/foundry/agents/run', () => {
     const j = await r.json();
     expect(r.status).toBe(200);
     expect(j.ok).toBe(true);
+    expect(j.tier).toBe('foundry-agent-service');
     expect(j.data.answer).toBe('42');
     expect(j.data.steps).toHaveLength(1);
-    expect(runAgentAndInspect).toHaveBeenCalledWith('finance', 'meaning of life?');
+    // The tier wrapper calls the real client with (agentName, question, opts).
+    const [agentArg, questionArg] = runAgentAndInspect.mock.calls[0];
+    expect(agentArg).toBe('finance');
+    expect(questionArg).toBe('meaning of life?');
   });
 
   it('honest gate → 501 code:not_configured when the run route is unconfigured', async () => {

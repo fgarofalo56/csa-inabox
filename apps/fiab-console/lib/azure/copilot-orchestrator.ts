@@ -1102,6 +1102,40 @@ export function buildDefaultRegistry(): LoomToolRegistry {
   // REST; honest message when unconfigured. No Fabric dependency.
   registerKnowledgeTools(r);
 
+  // -------- Browser automation (AIF-18) --------
+  // Drives a real web page via a Loom-owned Playwright runner (Azure Container
+  // Apps — HTTP runner or scale-to-zero Job). Honest-gated: when no runner is
+  // wired the tool returns the exact env var / bicep module to provision instead
+  // of a mock. No external browser service — Gov-portable. (agent-tool-kinds.ts)
+  r.register({
+    name: 'browser_automation',
+    service: 'Browser',
+    description:
+      'Drive a headless web browser: open a URL and run ordered actions ' +
+      '(click / type / read / screenshot), returning the page text. Backed by a ' +
+      'Loom-owned Playwright runner (Azure Container Apps). Returns an honest ' +
+      'config gate when no runner is deployed — never fabricated page content.',
+    whenToUse: 'Navigate/scrape a live web page or drive a web UI as a tool.',
+    parameters: obj(
+      {
+        url: S_STRING,
+        actions: { type: 'array', description: 'Ordered actions: {op:"click"|"type"|"read"|"screenshot", selector?, text?}.', items: S_OBJECT },
+      },
+      ['url'],
+    ),
+    handler: async ({ url, actions }) => {
+      const { runBrowserTask, BrowserToolNotConfiguredError } = await import('./browser-tool-client');
+      try {
+        return await runBrowserTask({ url: String(url), actions: Array.isArray(actions) ? actions : [] });
+      } catch (e: any) {
+        if (e instanceof BrowserToolNotConfiguredError) {
+          return { ok: false, gated: true, missing: e.missing, hint: e.hint };
+        }
+        throw e;
+      }
+    },
+  });
+
   return r;
 }
 

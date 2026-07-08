@@ -217,6 +217,11 @@ The operator's standard is unchanged: **Loom is Fabric-class AI on pure Azure + 
 
 **Priority P1 · Effort XL.**
 
+**Build status (Wave 5).**
+- ✅ **Orchestrator tier** — the cross-item Copilot orchestrator MAF tier is built and live: `apps/copilot-maf/` (real agent loop against Gov AOAI direct, Console tool-dispatch callback with OBO), auto-selected in `copilot-orchestrator.ts` by `isGovCloud() && LOOM_MAF_ENDPOINT`, `platform/fiab/bicep/modules/copilot/maf.bicep` deploys it.
+- ✅ **Agent-run tier (this wave)** — the Foundry Agent Service thread/run/step inspector path now has the Gov backstop: `apps/copilot-maf/src/agent-run.ts` (`POST /agent-run` → real agent loop → `AgentRunInspection`), Console selection plumbing `lib/azure/agent-runtime-tier.ts` (`selectAgentTier()` + `runAgentInspectTiered()`), wired into `app/api/foundry/agents/run/route.ts`; the Agents playground passes the agent definition + badges which runtime served the run. Unit-tested (`agent-runtime-tier.test.ts`). No new bicep params (reuses `LOOM_MAF_ENDPOINT`).
+- ⬜ **TODO (advanced tool-parity, deferred):** streaming deltas from the MAF agent-run; multi-turn thread reuse (MAF thread ids are synthetic per-run today); connected-agent sub-agent fan-out on the MAF tier; native `code_interpreter` / `file_search` emulation; and Loom-native (Cosmos-persisted) agent AUTHORING/LISTING so a Gov-no-Foundry deployment can populate the Agents list without a Foundry project (the panel currently sources agent definitions from the Foundry project list — AIF-14's per-agent Cosmos persistence is the substrate for this).
+
 ---
 
 ## AIF-9 — Foundry Connections CRUD
@@ -337,6 +342,23 @@ The operator's standard is unchanged: **Loom is Fabric-class AI on pure Azure + 
 
 **Priority P2 · Effort M.**
 
+**Build status (Wave 5) — ✅ built.** New Cosmos container `loom-agent-memory`
+(PK `/agentId`, NO TTL) created via `cosmos-client.ts` `ensure()` +
+`KNOWN_CONTAINER_IDS` and ARM-provisioned in `cosmos.bicep` loomContainers (like
+Wave-2's item-versions). `lib/azure/agent-memory-client.ts` stores two doc kinds:
+`docType:'thread'` (resumable run transcripts, capped by `LOOM_AGENT_THREAD_CAP`,
+default 50) and `docType:'memory'` (durable facts summarized from a completed run
+via one `aoaiChatJson` call, capped by `LOOM_AGENT_MEMORY_CAP`). The agents/run
+route retrieves top-K memories and injects them before each run (into the MAF
+system prompt or the Foundry question turn), then persists the thread + extracts
+new memories after a completed run — default-on, opt out with
+`LOOM_AGENT_MEMORY_ENABLED=false`. `/api/foundry/agents/threads` (GET list / GET
+one / DELETE) backs a Threads list + Resume UI on the Agents playground. Unit-
+tested (`agent-memory-client.test.ts`, 9 specs incl. retention-cap eviction).
+⬜ TODO (deferred): AI Search vector retrieval over memory docs at scale (today's
+retrieval is recency top-K); a dedicated `memory` tool-kind entry once AIF-5's
+catalog lands (memory currently injects via the run path, not a discrete tool).
+
 ---
 
 ## AIF-15 — AI Red Teaming Agent (PyRIT adversarial scan)
@@ -415,6 +437,26 @@ The operator's standard is unchanged: **Loom is Fabric-class AI on pure Azure + 
 **Acceptance.** Deploy the Playwright ACA, attach the `browser_automation` tool to an agent, and show a traced run where the agent drives a real page (screenshot/console from the tool). Absent the endpoint, the honest-gate MessageBar renders.
 
 **Priority P3 · Effort M.**
+
+**Build status (Wave 5) — ✅ built.** Shared tool-kind contract
+`lib/azure/agent-tool-kinds.ts` (canonical `AGENT_TOOL_KINDS` + `browser_automation`
+kind + `buildToolDefinition` + `toolKindGate` — the single module AIF-5's typed
+catalog extends). The Agents editor adds `browser_automation` to its tool
+checkboxes and renders an honest MessageBar (naming `LOOM_BROWSER_TOOL_JOB` + the
+bicep module) when no runner is deployed, via `/api/foundry/browser-tool/status`.
+Real execution path `lib/azure/browser-tool-client.ts`: POSTs to a synchronous
+HTTP runner (`LOOM_BROWSER_TOOL_ENDPOINT`) or starts an Azure Container Apps Job
+execution via ARM (`LOOM_BROWSER_TOOL_JOB`), honest-gated (never a mock) when
+neither is set; also registered as a real `browser_automation` tool in the
+cross-item Copilot registry. Bicep module
+`platform/fiab/bicep/modules/copilot/browser-tool.bicep` (scale-to-zero ACA Job +
+UAMI) and a real Playwright runner `platform/runners/browser-tool/` (Dockerfile +
+`runner.mjs`). Opt-in env vars allowlisted in `check-env-sync`. Unit-tested
+(`agent-tool-kinds.test.ts`, 8 specs). ⬜ TODO (deferred): wire the ACA-Job module
+into `admin-plane/main.bicep` conditional deploy (blocked on the 256-param
+ceiling — needs a derived enablement flag, not a new param) and the async
+job-execution → agent-turn result round-trip (the HTTP-runner path is synchronous
+today).
 
 ---
 
