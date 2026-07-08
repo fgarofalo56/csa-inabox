@@ -46,6 +46,9 @@ import { DataAgentConfigCopilotPanel } from '../data-agent-config-copilot';
 import { mergeSuggestionIntoSources } from '../_da-config-merge';
 import { ConnectedAgentsEditor } from '@/lib/copilot/connected-agents-editor';
 import { normalizeSubAgents, type SubAgentRef } from '@/lib/copilot/connected-agents';
+import { migrateLegacyTools, type AgentTool } from '@/lib/copilot/agent-tool-catalog';
+import { AgentFlowCanvas } from './agent-flow-canvas';
+import type { LayoutMap } from './agent-flow-layout';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
@@ -149,6 +152,10 @@ interface DataAgentState {
   conversationStarters?: string[];
   /** Connected sub-agents (AIF-4) — this agent orchestrates them at run time. */
   subAgents?: SubAgentRef[];
+  /** Non-source capability tools (AIF-5) authored on the workflow canvas. */
+  tools?: AgentTool[];
+  /** Persisted canvas node positions (AIF-6). */
+  flowLayout?: LayoutMap;
   // Back-compat with the legacy free-text bag (read-only on load).
   systemPrompt?: string; model?: string;
   foundryAgentId?: string; foundryProjectId?: string; publishedAt?: string;
@@ -197,10 +204,10 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
   });
   // Initial tab honors a ?tab= deep-link (the /data-agent pane's "Configure"
   // and "Publish…" actions route here with ?tab=copilot / ?tab=publish).
-  const [tab, setTab] = useState<'build' | 'copilot' | 'test' | 'evaluate' | 'consume' | 'publish' | 'inspect' | 'monitor'>(() => {
+  const [tab, setTab] = useState<'build' | 'design' | 'copilot' | 'test' | 'evaluate' | 'consume' | 'publish' | 'inspect' | 'monitor'>(() => {
     if (typeof window === 'undefined') return 'build';
     const t = new URLSearchParams(window.location.search).get('tab');
-    return (t === 'copilot' || t === 'test' || t === 'evaluate' || t === 'consume' || t === 'publish' || t === 'inspect' || t === 'monitor') ? t : 'build';
+    return (t === 'design' || t === 'copilot' || t === 'test' || t === 'evaluate' || t === 'consume' || t === 'publish' || t === 'inspect' || t === 'monitor') ? t : 'build';
   });
 
   // ---- source picker data (real Loom items) ----
@@ -565,6 +572,7 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
       { label: 'Agent', actions: [
         { label: saving ? 'Saving…' : 'Save', onClick: () => save(), disabled: saving || dirty === false },
         { label: 'Build', onClick: () => setTab('build') },
+        { label: 'Design', onClick: () => setTab('design') },
         { label: 'Config Copilot', onClick: () => setTab('copilot') },
         { label: 'Test chat', onClick: () => setTab('test') },
         { label: 'Evaluate', onClick: () => setTab('evaluate') },
@@ -582,6 +590,7 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
         <div className={s.tabBar}>
           <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as typeof tab)}>
             <Tab value="build">Build ({sources.length}/5 sources)</Tab>
+            <Tab value="design">Design</Tab>
             <Tab value="copilot">Config Copilot</Tab>
             <Tab value="test">Test chat</Tab>
             <Tab value="evaluate">Evaluate</Tab>
@@ -733,6 +742,25 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
                 }
               />
             </>
+          )}
+
+          {tab === 'design' && (
+            <AgentFlowCanvas
+              id={id}
+              agentName={state.alias || item.displayName || 'Orchestrator'}
+              sources={sources.map((x) => ({ id: x.id, name: x.name, type: x.type }))}
+              tools={migrateLegacyTools(state.tools)}
+              subAgents={subAgents}
+              layout={(state.flowLayout || {}) as LayoutMap}
+              onPatch={(patch) => setState((p) => ({
+                ...p,
+                ...(patch.tools ? { tools: patch.tools } : {}),
+                ...(patch.subAgents ? { subAgents: patch.subAgents } : {}),
+                ...(patch.layout ? { flowLayout: patch.layout } : {}),
+              }))}
+              dirty={dirty}
+              save={save}
+            />
           )}
 
           {tab === 'copilot' && (
