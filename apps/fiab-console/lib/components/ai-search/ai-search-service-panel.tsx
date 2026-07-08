@@ -15,6 +15,7 @@
  * panel renders the honest infra-gate MessageBar. No mocks.
  */
 
+import { clientFetch } from '@/lib/client-fetch';
 import { useCallback, useEffect, useState } from 'react';
 import {
   TabList, Tab, Button, Caption1, Badge, Spinner, Input, Field, Dropdown, Option,
@@ -94,7 +95,7 @@ export function AiSearchServicePanel({ onClose }: { onClose?: () => void }) {
 
   const load = useCallback(async () => {
     setLoading(true); setError(null);
-    const j = await readJson(await fetch('/api/ai-search/service'));
+    const j = await readJson(await clientFetch('/api/ai-search/service'));
     if (j?.code === 'not_configured') { setGate({ missing: j.missing || [] }); setLoading(false); return; }
     setGate(null);
     if (!j?.ok) { setError(j?.error || 'failed to load service'); setLoading(false); return; }
@@ -105,7 +106,7 @@ export function AiSearchServicePanel({ onClose }: { onClose?: () => void }) {
 
   const loadMetrics = useCallback(async () => {
     setMetricsLoading(true); setMetricsError(null);
-    const j = await readJson(await fetch(`/api/ai-search/service/metrics?timespan=${encodeURIComponent(metricsTimespan)}`));
+    const j = await readJson(await clientFetch(`/api/ai-search/service/metrics?timespan=${encodeURIComponent(metricsTimespan)}`));
     if (!j?.ok) { setMetricsError(j?.error || 'failed to load metrics'); setMetrics([]); }
     else setMetrics(j.metrics || []);
     setMetricsLoading(false);
@@ -115,7 +116,7 @@ export function AiSearchServicePanel({ onClose }: { onClose?: () => void }) {
 
   const post = async (payload: any): Promise<any> => {
     setBusy(true); setMsg(null);
-    const j = await readJson(await fetch('/api/ai-search/service', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) }));
+    const j = await readJson(await clientFetch('/api/ai-search/service', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) }));
     setBusy(false);
     if (!j?.ok) { setMsg({ intent: 'error', text: j?.error || 'action failed' }); return null; }
     return j;
