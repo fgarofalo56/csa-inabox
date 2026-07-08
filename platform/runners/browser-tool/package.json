@@ -1,0 +1,13 @@
+{
+  "name": "loom-browser-tool",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "CSA Loom — one-shot Playwright browser-automation runner (AIF-18) for an Azure Container Apps Job.",
+  "scripts": {
+    "start": "node runner.mjs"
+  },
+  "dependencies": {
+    "playwright": "1.48.0"
+  }
+}

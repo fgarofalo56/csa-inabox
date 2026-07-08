@@ -22,6 +22,7 @@ import { clientFetch } from '@/lib/client-fetch';
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { buildToolDefinition, BROWSER_TOOL_ENV } from '@/lib/azure/agent-tool-kinds';
 import {
   Subtitle2, Body1, Caption1, Badge, Spinner, Button, Input, Textarea, Field,
   Dropdown, Option, Checkbox,
@@ -56,6 +57,8 @@ const TOOL_TYPES = [
   { value: 'code_interpreter', label: 'Code interpreter' },
   { value: 'file_search', label: 'File search' },
   { value: 'function', label: 'Function calling' },
+  // Browser automation (AIF-18) — honest-gated on a deployed Playwright runner.
+  { value: 'browser_automation', label: 'Browser automation' },
 ] as const;
 type ToolType = (typeof TOOL_TYPES)[number]['value'];
 
@@ -101,7 +104,9 @@ function agentToolTypes(a: AgentRow): ToolType[] {
   const tools = Array.isArray(def?.tools) ? def.tools : [];
   const out: ToolType[] = [];
   for (const t of tools) {
-    const ty = typeof t?.type === 'string' ? t.type : '';
+    let ty = typeof t?.type === 'string' ? t.type : '';
+    // browser_automation serializes as a named function tool (agent-tool-kinds).
+    if (ty === 'function' && t?.function?.name === 'browser_automation') ty = 'browser_automation';
     if (TOOL_TYPES.some((x) => x.value === ty) && !out.includes(ty as ToolType)) out.push(ty as ToolType);
   }
   return out;
@@ -125,6 +130,10 @@ export function FoundryAgentsPanel({ active, nonce = 0, acct = null }: { active:
 
   // model deployments for the picker (from the selected account)
   const [deployments, setDeployments] = useState<DeploymentRow[]>([]);
+
+  // browser-automation runner gate (AIF-18): null = unknown, true = a Playwright
+  // runner is deployed, false = honest-gate the browser_automation tool.
+  const [browserConfigured, setBrowserConfigured] = useState<boolean | null>(null);
 
   // ---- editor form ----
   const [selected, setSelected] = useState<string | null>(null);
@@ -190,11 +199,20 @@ export function FoundryAgentsPanel({ active, nonce = 0, acct = null }: { active:
     } catch { setDeployments([]); }
   }, [withAccount]);
 
+  const loadBrowserStatus = useCallback(async () => {
+    try {
+      const res = await clientFetch('/api/foundry/browser-tool/status');
+      const j = await readJson(res);
+      setBrowserConfigured(j?.ok ? !!j.configured : false);
+    } catch { setBrowserConfigured(false); }
+  }, []);
+
   useEffect(() => {
     if (!active) return;
     loadAgents();
     loadDeployments();
-  }, [active, nonce, accountKey, loadAgents, loadDeployments]);
+    loadBrowserStatus();
+  }, [active, nonce, accountKey, loadAgents, loadDeployments, loadBrowserStatus]);
 
   const resetForm = useCallback(() => {
     setSelected(null); setFName(''); setFModel(''); setFInstructions('');
@@ -217,15 +235,11 @@ export function FoundryAgentsPanel({ active, nonce = 0, acct = null }: { active:
     setFTools((prev) => (checked ? Array.from(new Set([...prev, t])) : prev.filter((x) => x !== t)));
   }, []);
 
-  /** Build the free-form FoundryAgentBody.tools array from the checked types. */
+  /** Build the FoundryAgentBody.tools array from the checked types via the
+   *  shared tool-kind contract (agent-tool-kinds.ts) so Foundry + MAF + the
+   *  parallel AIF-5 catalog all serialize identically. */
   const buildTools = useCallback((): Array<Record<string, unknown>> => {
-    return fTools.map((t) => {
-      if (t === 'function') {
-        const name = fFnName.trim() || 'my_function';
-        return { type: 'function', function: { name, parameters: { type: 'object', properties: {} } } };
-      }
-      return { type: t };
-    });
+    return fTools.map((t) => buildToolDefinition(t, { functionName: fFnName }));
   }, [fTools, fFnName]);
 
   const save = useCallback(async () => {
@@ -463,6 +477,17 @@ export function FoundryAgentsPanel({ active, nonce = 0, acct = null }: { active:
                 ))}
               </div>
             </Field>
+            {fTools.includes('browser_automation') && browserConfigured === false && (
+              <MessageBar intent="warning">
+                <MessageBarBody>
+                  <MessageBarTitle>Browser-automation runner not deployed</MessageBarTitle>
+                  The browser automation tool needs a Loom-owned Playwright runner. Deploy{' '}
+                  <code>platform/fiab/bicep/modules/copilot/browser-tool.bicep</code> (a scale-to-zero
+                  Azure Container Apps Job) and set <code>{BROWSER_TOOL_ENV}</code> to the job resource id.
+                  You can still add the tool to the agent now — it will run once the runner is wired.
+                </MessageBarBody>
+              </MessageBar>
+            )}
             {fTools.includes('function') && (
               <Field label="Function name (for the function tool)">
                 <Input value={fFnName} onChange={(_, d) => setFFnName(d.value)} placeholder="my_function" />

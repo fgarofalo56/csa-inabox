@@ -438,6 +438,26 @@ catalog lands (memory currently injects via the run path, not a discrete tool).
 
 **Priority P3 · Effort M.**
 
+**Build status (Wave 5) — ✅ built.** Shared tool-kind contract
+`lib/azure/agent-tool-kinds.ts` (canonical `AGENT_TOOL_KINDS` + `browser_automation`
+kind + `buildToolDefinition` + `toolKindGate` — the single module AIF-5's typed
+catalog extends). The Agents editor adds `browser_automation` to its tool
+checkboxes and renders an honest MessageBar (naming `LOOM_BROWSER_TOOL_JOB` + the
+bicep module) when no runner is deployed, via `/api/foundry/browser-tool/status`.
+Real execution path `lib/azure/browser-tool-client.ts`: POSTs to a synchronous
+HTTP runner (`LOOM_BROWSER_TOOL_ENDPOINT`) or starts an Azure Container Apps Job
+execution via ARM (`LOOM_BROWSER_TOOL_JOB`), honest-gated (never a mock) when
+neither is set; also registered as a real `browser_automation` tool in the
+cross-item Copilot registry. Bicep module
+`platform/fiab/bicep/modules/copilot/browser-tool.bicep` (scale-to-zero ACA Job +
+UAMI) and a real Playwright runner `platform/runners/browser-tool/` (Dockerfile +
+`runner.mjs`). Opt-in env vars allowlisted in `check-env-sync`. Unit-tested
+(`agent-tool-kinds.test.ts`, 8 specs). ⬜ TODO (deferred): wire the ACA-Job module
+into `admin-plane/main.bicep` conditional deploy (blocked on the 256-param
+ceiling — needs a derived enablement flag, not a new param) and the async
+job-execution → agent-turn result round-trip (the HTTP-runner path is synchronous
+today).
+
 ---
 
 ## Global acceptance & guardrails (applies to every item)

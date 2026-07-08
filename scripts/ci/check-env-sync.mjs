@@ -209,6 +209,12 @@ const ALLOWLIST = new Set([
   'LOOM_ADMIN_CENTER_MCP_ENDPOINT', // opt-in M365 Admin Center MCP
   'LOOM_DATAVERSE_MCP_ENDPOINT',    // opt-in Dataverse MCP
   'LOOM_ONEDRIVE_SHAREPOINT_MCP_ENDPOINT', // opt-in OneDrive/SharePoint MCP
+  // AIF-18 — browser-automation tool runner. Opt-in, unset by default (the tool
+  // honest-gates). Deploy platform/fiab/bicep/modules/copilot/browser-tool.bicep
+  // (ACA Job) and set LOOM_BROWSER_TOOL_JOB to its resource id, or point
+  // LOOM_BROWSER_TOOL_ENDPOINT at a synchronous HTTP Playwright runner.
+  'LOOM_BROWSER_TOOL_JOB',          // opt-in Playwright ACA-job resource id (default off — honest gate)
+  'LOOM_BROWSER_TOOL_ENDPOINT',     // opt-in synchronous Playwright HTTP runner (default off — honest gate)
 ]);
 
 // ── Filesystem helpers (no deps) ──
