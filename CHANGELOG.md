@@ -25,6 +25,53 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.58.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.57.0...csa-inabox-v0.58.0) (2026-07-08)
+
+
+### Features
+
+* **admin,bicep:** Wave 1 — continuous SIEM audit stream (LoomAudit_CL DCR + admin-mutation emitters) (BR-SIEM) ([#1722](https://github.com/fgarofalo56/csa-inabox/issues/1722)) ([87d6be0](https://github.com/fgarofalo56/csa-inabox/commit/87d6be0ccee4f28fe4b20e0255039ae3390379f5))
+* **agents:** Wave 5 — MAF Gov runtime tier + durable agent memory + browser tool (AIF-8/14/18) ([#1739](https://github.com/fgarofalo56/csa-inabox/issues/1739)) ([7e02fc3](https://github.com/fgarofalo56/csa-inabox/commit/7e02fc36870d33e39475821a324bb717dcc6330e))
+* **agents:** Wave 5 — typed tool catalog + connected agents + multi-agent canvas (AIF-5/4/6) ([#1738](https://github.com/fgarofalo56/csa-inabox/issues/1738)) ([169d71d](https://github.com/fgarofalo56/csa-inabox/commit/169d71d8137fb1595ae14224769809ee6db3dd9e))
+* **ai:** Wave 4 — ai-enrichment batch item + AI-fn breadth/model-tier (AIF-7/FGC-19) ([#1734](https://github.com/fgarofalo56/csa-inabox/issues/1734)) ([4408dc4](https://github.com/fgarofalo56/csa-inabox/commit/4408dc4ecc9acf81a5f773363d090b8b941b1408))
+* **canvas:** Wave 2 — undo/redo, copy/paste, align/distribute, shortcuts, palette (W1/W2/W3/W20/W21) ([#1728](https://github.com/fgarofalo56/csa-inabox/issues/1728)) ([32c42c2](https://github.com/fgarofalo56/csa-inabox/commit/32c42c2067bdef8b61b1ce7d28e81d54d898cf5d))
+* **catalog:** LIN-GC — lineage metadata cleanup on delete + orphan reconciliation + deleted-node guard ([#1732](https://github.com/fgarofalo56/csa-inabox/issues/1732)) ([f4ddada](https://github.com/fgarofalo56/csa-inabox/commit/f4ddada5d80faca15bf021859d8543c2ecaaa6a1))
+* **catalog:** Wave 2 — impact analysis before delete/edit (W8) ([#1724](https://github.com/fgarofalo56/csa-inabox/issues/1724)) ([83b4aaa](https://github.com/fgarofalo56/csa-inabox/commit/83b4aaacb0dfd19785c9e5e1bc00b0bf883d42cd))
+* **copilot:** Wave 2 — cross-item Explain-this (pipeline/notebook/warehouse) (W19) ([#1725](https://github.com/fgarofalo56/csa-inabox/issues/1725)) ([bb42427](https://github.com/fgarofalo56/csa-inabox/commit/bb4242771c27b666ac4838c9e7555f328c6ccbad))
+* **copilot:** Wave 5 — per-turn transparency, grounding citations, context meter (CTS-01/02/04/05) ([#1737](https://github.com/fgarofalo56/csa-inabox/issues/1737)) ([ed4ca2b](https://github.com/fgarofalo56/csa-inabox/commit/ed4ca2b6c18c33784a87b253b15ae5ab85da9a3e))
+* **foundry,search:** Wave 3 — connections CRUD + embeddings & integrated vectorization designers (AIF-9/AIF-2) ([#1730](https://github.com/fgarofalo56/csa-inabox/issues/1730)) ([7c70a9e](https://github.com/fgarofalo56/csa-inabox/commit/7c70a9e9f9a6f5daf54b1f0e9a1b78b408274e29))
+* **items:** Wave 2 — version history timeline + visual diff + restore (W6) ([#1727](https://github.com/fgarofalo56/csa-inabox/issues/1727)) ([68bf9c4](https://github.com/fgarofalo56/csa-inabox/commit/68bf9c45a15a07654873fb256edd17aedd7b0f7e))
+* **mcp:** Microsoft MCP servers default-ON (opt-out) per operator directive ([#1719](https://github.com/fgarofalo56/csa-inabox/issues/1719)) ([69c80fe](https://github.com/fgarofalo56/csa-inabox/commit/69c80fe4c660b0ccb3fbe924ce9b4bbd3061c674))
+* **pipeline,ai:** Wave 4 — AI-enrichment activity family (doc-intel/vision/language/translate/moderate) (SVC-1/SVC-8) ([#1735](https://github.com/fgarofalo56/csa-inabox/issues/1735)) ([0b1e097](https://github.com/fgarofalo56/csa-inabox/commit/0b1e0974e589e99aa92e160cc2f24b936483edad))
+* **search,copilot:** Wave 3 — knowledge sources & knowledge bases (agentic retrieval) (AIF-1) ([#1729](https://github.com/fgarofalo56/csa-inabox/issues/1729)) ([51a687e](https://github.com/fgarofalo56/csa-inabox/commit/51a687ee08865dbc837c76d5bebef112f705f04b))
+* **search,rag:** Wave 4 — index-my-estate wizard (lakehouse/warehouse/ADX -&gt; vectorized index) (AIF-3) ([#1733](https://github.com/fgarofalo56/csa-inabox/issues/1733)) ([21ce65b](https://github.com/fgarofalo56/csa-inabox/commit/21ce65b2ed4928bc9e37f48f74db3f1cd525b453))
+* **search:** Wave 3 — indexer ops, designer depth, service administration (AIF-10/16/17) ([#1731](https://github.com/fgarofalo56/csa-inabox/issues/1731)) ([b8c48c7](https://github.com/fgarofalo56/csa-inabox/commit/b8c48c7ea081904ca58dce285ce84db61a749bae))
+* **search:** Wave 5 — cognitive skill-chain designer + knowledge store (SVC-2) ([#1736](https://github.com/fgarofalo56/csa-inabox/issues/1736)) ([f06301f](https://github.com/fgarofalo56/csa-inabox/commit/f06301ff8a3f0f1508885cb799dccb0d3bc12833))
+
+
+### Bug Fixes
+
+* **bicep,docs:** Wave 1 — publicNetworkAccess Disabled across data-plane modules + honest compliance claims (DOC-2) ([#1723](https://github.com/fgarofalo56/csa-inabox/issues/1723)) ([4893d8b](https://github.com/fgarofalo56/csa-inabox/commit/4893d8beb8bf88da9e15aa4c7345b648be12e4f9))
+* **bicep:** SESSION_SECRET follows the KV-backed path on the default bootstrap estate ([#1534](https://github.com/fgarofalo56/csa-inabox/issues/1534)) ([#1710](https://github.com/fgarofalo56/csa-inabox/issues/1710)) ([d49ec03](https://github.com/fgarofalo56/csa-inabox/commit/d49ec03bc1d679e8e5d12beb71d145be3c965b48))
+* **fiab-console/admin:** tenant-admin cross-partition workspace access — settings flyout + subroutes + bulk-delete (#tenant-wide 404s) ([#1716](https://github.com/fgarofalo56/csa-inabox/issues/1716)) ([10935b6](https://github.com/fgarofalo56/csa-inabox/commit/10935b6eefbe45a26880b1a290a5758cdd7ad415))
+* **fiab-console/install:** synapse-pipeline artifact refs + upsertNotebook 5xx retry/honest-gate ([#1576](https://github.com/fgarofalo56/csa-inabox/issues/1576)) ([#1714](https://github.com/fgarofalo56/csa-inabox/issues/1714)) ([58cb17d](https://github.com/fgarofalo56/csa-inabox/commit/58cb17de9708ab167351230a8c52e818e81509c8))
+* **fiab-console:** data-product observability 30s client fetch budget ([#1709](https://github.com/fgarofalo56/csa-inabox/issues/1709)) ([e751832](https://github.com/fgarofalo56/csa-inabox/commit/e7518321b4d1368928630808b5691a48d37fcce5))
+
+
+### Documentation
+
+* **fiab:** Wave 1 — PBI-Premium opt-in truth + deploy-button removal + AAS-native semantic-model spec (DOC-1/3/4) ([#1721](https://github.com/fgarofalo56/csa-inabox/issues/1721)) ([f743218](https://github.com/fgarofalo56/csa-inabox/commit/f743218302bf1c09092233bffabb68646bb09345))
+* **prps:** backlog LIN-GC — lineage garbage collection on item/workspace delete (live-found bug) ([#1726](https://github.com/fgarofalo56/csa-inabox/issues/1726)) ([1dd972f](https://github.com/fgarofalo56/csa-inabox/commit/1dd972f79d24dc04c0d756822d513c5f428c33e5))
+* **prps:** default-ON/opt-out posture across next-waves (operator directive 2026-07-08) ([#1715](https://github.com/fgarofalo56/csa-inabox/issues/1715)) ([6510906](https://github.com/fgarofalo56/csa-inabox/commit/65109060b54e53890540f3fb5c5dd9fb8fd98152))
+* **prps:** next-waves backlog — 5 deep-research PRPs + 18-wave plan + copilot-ai G1-G6 verification ([#1713](https://github.com/fgarofalo56/csa-inabox/issues/1713)) ([609d5e8](https://github.com/fgarofalo56/csa-inabox/commit/609d5e8cc1623ebcf7131de9660e0c09a5a33631))
+* **prps:** PRP — copilot transparency, skills library & long-term memory (ATLAS-class) ([#1717](https://github.com/fgarofalo56/csa-inabox/issues/1717)) ([03c07f4](https://github.com/fgarofalo56/csa-inabox/commit/03c07f40e0d067c3bfba4878851353ae023c7a65))
+* **prps:** PRP — ultimate data product (guided wizard, certification pipeline, mesh-class feature set) ([#1718](https://github.com/fgarofalo56/csa-inabox/issues/1718)) ([4d0fa1a](https://github.com/fgarofalo56/csa-inabox/commit/4d0fa1a1dc29f0e3d55ffa91db22429f5a13cbf3))
+
+
+### Miscellaneous
+
+* **prps:** archive shipped pillar-era PRP set (22 shipped / 3 superseded / 0 open) ([#1712](https://github.com/fgarofalo56/csa-inabox/issues/1712)) ([4c9f395](https://github.com/fgarofalo56/csa-inabox/commit/4c9f395476bba9465deac5e56dfe1c5ec2e8b9f8))
+
 ## [0.57.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.56.0...csa-inabox-v0.57.0) (2026-07-08)
 
 
