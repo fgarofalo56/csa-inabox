@@ -14,8 +14,10 @@ import { getSession } from '@/lib/auth/session';
 import {
   listIndexers, listDataSources, listSkillsets, runIndexer, resetIndexer, getIndexerStatus,
   getIndexer, updateIndexerSchedule, validateScheduleInterval,
+  resetIndexerDocs, resetIndexerSkills, updateIndexerFieldMappings,
   SearchNotDeployedError, SearchDataError,
 } from '@/lib/azure/search-index-client';
+import { buildFieldMappings } from '@/lib/azure/search-indexer-shapes';
 import {
   resolveSearchBinding, searchBindingErrorResponse, SEARCH_ITEM_TYPE,
 } from '@/lib/azure/search-binding';
@@ -64,8 +66,8 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   const body = await req.json().catch(() => ({}));
   const action = body?.action;
   const indexer = typeof body?.indexer === 'string' ? body.indexer.trim() : '';
-  if (!['run', 'reset', 'status', 'get', 'setSchedule'].includes(action)) {
-    return NextResponse.json({ ok: false, error: "action must be 'run', 'reset', 'status', 'get' or 'setSchedule'" }, { status: 400 });
+  if (!['run', 'reset', 'resetDocs', 'resetSkills', 'setFieldMappings', 'status', 'get', 'setSchedule'].includes(action)) {
+    return NextResponse.json({ ok: false, error: "action must be 'run', 'reset', 'resetDocs', 'resetSkills', 'setFieldMappings', 'status', 'get' or 'setSchedule'" }, { status: 400 });
   }
   if (!indexer) return NextResponse.json({ ok: false, error: 'indexer name is required' }, { status: 400 });
   // Validate schedule interval up front (before resolving the binding).
@@ -83,6 +85,23 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   try {
     if (action === 'run') { await runIndexer(indexer, service); return NextResponse.json({ ok: true, action: 'run', indexer }); }
     if (action === 'reset') { await resetIndexer(indexer, service); return NextResponse.json({ ok: true, action: 'reset', indexer }); }
+    if (action === 'resetDocs') {
+      const documentKeys = Array.isArray(body?.documentKeys) ? body.documentKeys.map((k: any) => String(k)).filter(Boolean) : undefined;
+      const overwrite = typeof body?.overwrite === 'boolean' ? body.overwrite : undefined;
+      await resetIndexerDocs(indexer, { documentKeys, overwrite }, service);
+      return NextResponse.json({ ok: true, action: 'resetDocs', indexer });
+    }
+    if (action === 'resetSkills') {
+      const skillNames = Array.isArray(body?.skillNames) ? body.skillNames.map((k: any) => String(k)).filter(Boolean) : undefined;
+      await resetIndexerSkills(indexer, { skillNames }, service);
+      return NextResponse.json({ ok: true, action: 'resetSkills', indexer });
+    }
+    if (action === 'setFieldMappings') {
+      const fieldMappings = Array.isArray(body?.fieldMappings) ? buildFieldMappings(body.fieldMappings) : undefined;
+      const outputFieldMappings = Array.isArray(body?.outputFieldMappings) ? buildFieldMappings(body.outputFieldMappings) : undefined;
+      const def = await updateIndexerFieldMappings(indexer, { fieldMappings, outputFieldMappings }, service);
+      return NextResponse.json({ ok: true, action: 'setFieldMappings', indexer, definition: def });
+    }
     if (action === 'get') {
       const def = await getIndexer(indexer, service);
       if (!def) return NextResponse.json({ ok: false, error: `indexer ${indexer} not found` }, { status: 404 });
