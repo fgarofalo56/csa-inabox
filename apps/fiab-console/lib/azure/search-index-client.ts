@@ -36,6 +36,13 @@ import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { getSearchSuffix } from './cloud-endpoints';
 
 export const SEARCH_DATA_API = '2024-07-01';
+/**
+ * Preview data-plane api-version for the operations that are not yet in the
+ * `2024-07-01` GA surface: `POST /indexers/{n}/resetskills` (selective skill
+ * reset) is preview-only. Reset-docs is GA under SEARCH_DATA_API.
+ * Grounded in Learn: https://learn.microsoft.com/azure/search/search-howto-run-reset-indexers
+ */
+export const SEARCH_PREVIEW_API = '2024-11-01-preview';
 const SEARCH_SCOPE = 'https://search.azure.com/.default';
 
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
@@ -423,6 +430,72 @@ export async function resetIndexer(name: string, service?: string): Promise<{ ok
   if (res.status === 202 || res.status === 204 || res.ok) return { ok: true };
   await readJsonGuarded(res, `reset indexer ${name}`);
   return { ok: true };
+}
+
+/**
+ * POST /indexers/{name}/resetdocs — selectively reset (re-index) specific
+ * documents on the next run without a full reset. `documentKeys` are the index
+ * document keys; `datasourceDocumentIds` (alternative) are the data-source keys.
+ * `overwrite:true` REPLACES the pending reset-doc list; false APPENDS. Empty
+ * lists with overwrite:true clear the pending reset. 204 → ok. Grounded in Learn:
+ *   https://learn.microsoft.com/azure/search/search-howto-run-reset-indexers#reset-docs
+ */
+export async function resetIndexerDocs(
+  name: string,
+  opts: { documentKeys?: string[]; datasourceDocumentIds?: string[]; overwrite?: boolean } = {},
+  service?: string,
+): Promise<{ ok: true }> {
+  const body: any = {};
+  if (opts.documentKeys && opts.documentKeys.length) body.documentKeys = opts.documentKeys;
+  if (opts.datasourceDocumentIds && opts.datasourceDocumentIds.length) body.datasourceDocumentIds = opts.datasourceDocumentIds;
+  const query = typeof opts.overwrite === 'boolean' ? { overwrite: String(opts.overwrite) } : undefined;
+  const res = await call(`/indexers/${encodeURIComponent(name)}/resetdocs`, { service, method: 'POST', body, query });
+  if (res.status === 202 || res.status === 204 || res.ok) return { ok: true };
+  await readJsonGuarded(res, `reset docs ${name}`);
+  return { ok: true };
+}
+
+/**
+ * POST /indexers/{name}/resetskills — reset cached skill output so the named
+ * skills re-run on the next indexer run (leaving the rest of the cache intact).
+ * `skillNames` empty → reset all skills. Preview-only api-version. 204 → ok.
+ *   https://learn.microsoft.com/azure/search/search-howto-run-reset-indexers#reset-skills
+ */
+export async function resetIndexerSkills(
+  name: string,
+  opts: { skillNames?: string[] } = {},
+  service?: string,
+): Promise<{ ok: true }> {
+  const body: any = {};
+  if (opts.skillNames && opts.skillNames.length) body.skillNames = opts.skillNames;
+  const res = await call(`/indexers/${encodeURIComponent(name)}/resetskills`, { service, method: 'POST', body, apiVersion: SEARCH_PREVIEW_API });
+  if (res.status === 202 || res.status === 204 || res.ok) return { ok: true };
+  await readJsonGuarded(res, `reset skills ${name}`);
+  return { ok: true };
+}
+
+/**
+ * Update only the field / output-field mappings on an existing indexer,
+ * preserving every other property (schedule, parameters, disabled). We GET the
+ * current definition, replace `fieldMappings` + `outputFieldMappings`, then PUT
+ * /indexers/{name}. Pass `undefined` to leave that array untouched. Grounded in
+ * Learn: https://learn.microsoft.com/azure/search/search-indexer-field-mappings
+ */
+export async function updateIndexerFieldMappings(
+  name: string,
+  mappings: { fieldMappings?: any[]; outputFieldMappings?: any[] },
+  service?: string,
+): Promise<any> {
+  const current = await getIndexer(name, service);
+  if (!current) throw new SearchDataError(404, undefined, `indexer ${name} not found`);
+  const def: any = { ...current };
+  delete def['@odata.context'];
+  delete def['@odata.etag'];
+  if (mappings.fieldMappings !== undefined) def.fieldMappings = mappings.fieldMappings;
+  if (mappings.outputFieldMappings !== undefined) def.outputFieldMappings = mappings.outputFieldMappings;
+  def.name = name;
+  const res = await call(`/indexers/${encodeURIComponent(name)}`, { service, method: 'PUT', body: def });
+  return readJsonGuarded(res, `update indexer field mappings ${name}`);
 }
 
 /** GET /datasources — list data source connections (name, type). */

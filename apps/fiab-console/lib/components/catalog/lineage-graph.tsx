@@ -16,7 +16,7 @@ import { Spinner, Caption1, MessageBar, MessageBarBody, makeStyles, tokens } fro
 import { BranchFork16Regular } from '@fluentui/react-icons';
 import { EmptyState } from '@/lib/components/empty-state';
 
-interface Node { id: string; label: string; type?: string; source: string; }
+interface Node { id: string; label: string; type?: string; source: string; deleted?: boolean; }
 interface Edge { from: string; to: string; type?: string; }
 
 interface Props {
@@ -104,13 +104,26 @@ export function LineageGraph({ source, id, host, workspaceId }: Props) {
           const p = positions.get(n.id);
           if (!p) return null;
           const isFocus = n.id === id;
+          // Deleted-in-Loom node (LIN-GC-3): dashed, muted circle + struck-through
+          // label so a metadata-plane leftover never reads as a live asset.
+          const deleted = !!n.deleted;
           return (
-            <g key={n.id} transform={`translate(${p.x}, ${p.y})`}>
-              <circle r={isFocus ? 12 : 8} fill={isFocus ? tokens.colorBrandBackground : tokens.colorNeutralBackground3} stroke={tokens.colorBrandStroke1} strokeWidth="1.5" />
-              <text x="14" y="4" fontSize="11" fill={tokens.colorNeutralForeground1}>
-                {n.label.slice(0, 32)}
+            <g key={n.id} transform={`translate(${p.x}, ${p.y})`} opacity={deleted ? 0.55 : 1}>
+              <circle
+                r={isFocus ? 12 : 8}
+                fill={deleted ? tokens.colorNeutralBackground3 : (isFocus ? tokens.colorBrandBackground : tokens.colorNeutralBackground3)}
+                stroke={deleted ? tokens.colorNeutralStroke2 : tokens.colorBrandStroke1}
+                strokeWidth="1.5"
+                strokeDasharray={deleted ? '3 2' : undefined}
+              />
+              <text
+                x="14" y="4" fontSize="11"
+                fill={deleted ? tokens.colorNeutralForeground3 : tokens.colorNeutralForeground1}
+                textDecoration={deleted ? 'line-through' : undefined}
+              >
+                {n.label.slice(0, 32)}{deleted ? ' (deleted)' : ''}
               </text>
-              <title>{`${n.source} · ${n.type || '?'} · ${n.id}`}</title>
+              <title>{`${deleted ? 'DELETED · ' : ''}${n.source} · ${n.type || '?'} · ${n.id}`}</title>
             </g>
           );
         })}

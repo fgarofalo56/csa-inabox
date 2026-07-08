@@ -137,6 +137,12 @@ const ALLOWLIST = new Map([
   ['apps/fiab-console/app/api/admin/mcp-servers/route.ts', 'admin gate + SSRF egress guard owned by sibling PR #1599 (requireTenantAdmin on POST/PUT); excluded here to avoid a merge conflict — remove this entry once #1599 lands'],
   ['apps/fiab-console/app/api/admin/mcp-servers/test-connection/route.ts', 'stateless connectivity probe; admin gate + egress guard owned by sibling PR #1599; no per-tenant data'],
   ['apps/fiab-console/app/api/admin/tenant-settings/groups/route.ts', 'ambient-tenant group read (Graph); tenant is from the token'],
+  // AI-enrichment "test on a sample" probe (SVC-1/SVC-8): stateless call over the
+  // deployment's SHARED Azure Cognitive Services backend (doc-intel/vision/
+  // language/translator/content-safety) resolved by the [service] segment. No
+  // per-tenant Cosmos resource is read/written — auth = signed-in + Console-UAMI
+  // RBAC, exactly like the content-safety BFF routes.
+  ['apps/fiab-console/app/api/items/ai-enrich/[service]/preview/route.ts', 'stateless cognitive-services sample probe resolved by [service]; no per-tenant Cosmos data'],
 ]);
 
 // ── Specific-per-item-TYPE routes over a SHARED Azure backend ────────────────

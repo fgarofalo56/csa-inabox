@@ -12,7 +12,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { itemsContainer, workspacesContainer, foldersContainer } from '@/lib/azure/cosmos-client';
 import { deleteLoomDoc, docForItem, upsertLoomDoc } from '@/lib/azure/loom-search';
-import { reconcileThreadEdgesOnDelete } from '@/lib/thread/thread-edges';
+import { cleanupItemMetadata } from '@/lib/azure/lineage-gc';
 import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
 import { apiError } from '@/lib/api/respond';
 
@@ -128,18 +128,21 @@ export async function DELETE(
         try {
           await items.item(p.id, p.workspaceId).delete();
           void deleteLoomDoc(`it:${p.id}`);
-          // Reconcile lineage for cascade-deleted paired items too (audit B9).
-          void reconcileThreadEdgesOnDelete(s.claims.oid, p.id, { mode: 'remove' });
+          // GC the metadata plane for cascade-deleted paired items too (audit B9 +
+          // LIN-GC-1): hard-remove Weave/Thread edges AND soft-delete the Purview
+          // Atlas entity so lineage never renders the dead asset.
+          void cleanupItemMetadata(p, s.claims.oid);
         } catch { /* ignore individual paired-delete failures */ }
       }
     } catch { /* ignore cascade query failures */ }
 
     await items.item(found.item.id, found.item.workspaceId).delete();
     void deleteLoomDoc(`it:${found.item.id}`);
-    // Auto-reconcile Thread/Weave lineage — this is a HARD delete, so hard-remove
-    // every edge touching this item (audit B9: this route previously skipped
-    // reconcile, which only ran from item-crud.ts, leaving orphan lineage edges).
-    void reconcileThreadEdgesOnDelete(s.claims.oid, found.item.id, { mode: 'remove' });
+    // GC the metadata plane — this is a HARD delete, so hard-remove every Weave/
+    // Thread edge touching this item AND offboard its Purview Atlas entity
+    // (LIN-GC-1). Previously this route only reconciled Thread edges (audit B9)
+    // and left the Purview entity serving stale lineage.
+    void cleanupItemMetadata(found.item, s.claims.oid);
     return NextResponse.json({ ok: true });
   } catch (e: any) {
     return err(e?.message || 'Failed to delete item', 500, 'cosmos_error');

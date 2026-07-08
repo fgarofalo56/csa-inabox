@@ -92,6 +92,7 @@ import { asTable, asSummary } from '@/lib/components/copilot-result-tagger';
 import { buildActivatorTools } from '@/lib/copilot/activator-tools';
 import { resolvePersona, type CopilotPersonaDef } from './copilot-personas';
 import { registerDaxTools } from '@/lib/copilot/dax-tools';
+import { registerKnowledgeTools } from '@/lib/copilot/knowledge-tools';
 // Opt-in Power BI remote MCP (no-fabric-dependency): config state + per-user
 // delegated token. Used ONLY by the powerbi_mcp_status meta-tool below — never
 // to reach a Fabric/Power BI host on a default path. The remote MCP's tools
@@ -1081,6 +1082,11 @@ export function buildDefaultRegistry(): LoomToolRegistry {
   // via Synapse SQL — zero api.powerbi.com on this path. Surfaced on the `dax`
   // persona (toolPrefixes ['dax_','loom_']).
   registerDaxTools(r);
+  // -------- Agentic retrieval (Foundry IQ): knowledge_base_retrieve / _list --------
+  // Grounds RAG answers on Loom's own indexed estate via Azure AI Search
+  // agentic retrieval (query decomposition + semantic rerank). Real AI Search
+  // REST; honest message when unconfigured. No Fabric dependency.
+  registerKnowledgeTools(r);
 
   return r;
 }

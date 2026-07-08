@@ -75,7 +75,11 @@ each a sortable grid with create / open / delete:
 4. **Skillsets** — list, **Add skillset** (JSON editor), open, Delete.
 5. **Synonym maps** — list, **Add synonym map**, open, Delete.
 6. **Aliases** — list, **Add alias**, open, Delete.
-7. **Knowledge sources / knowledge base (preview)** — agentic retrieval objects.
+7. **Knowledge sources / knowledge base (agentic retrieval / Foundry IQ)** — a
+   "Knowledge bases" navigator group opens a full surface: create knowledge
+   sources over existing indexes, compose them into knowledge bases, and a
+   retrieve-test pane (query → subqueries + citations + grounding/answer). Real
+   `2026-04-01` GA REST. Detailed parity: `parity/ai-search-knowledge-bases.md`.
 
 ### B. Index designer / management (per-index)
 8. **Add index — visual field designer**: per-field grid with Name, Type, and
@@ -145,7 +149,7 @@ MISSING ❌
 | 4 | Skillsets list + ＋New (JSON) + delete | ✅ built | tree + create dialog |
 | 5 | Synonym maps list + ＋New + delete | ✅ built | tree |
 | 6 | Aliases list + ＋New + delete | ✅ built | tree |
-| 7 | Knowledge sources / knowledge base (preview agentic) | ❌ MISSING | not present |
+| 7 | Knowledge sources / knowledge base (agentic retrieval / Foundry IQ) | ✅ built | "Knowledge bases" navigator group opens the `KnowledgeBasesPanel` (sources + bases + retrieve-test) — real `2026-04-01` GA REST. See `parity/ai-search-knowledge-bases.md` |
 
 ### B. Index designer / management
 | # | Capability | Loom status | Where |
