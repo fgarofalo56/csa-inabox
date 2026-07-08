@@ -195,6 +195,13 @@ let _rateLimits: Container | null = null;
 // extra ARM/Bicep step beyond the account+database (the Console UAMI already
 // holds Cosmos DB Built-in Data Contributor at account scope).
 let _itemVersions: Container | null = null;
+// Durable cross-session agent memory + per-agent thread persistence (AIF-14).
+// One container, PK /agentId, NO TTL — holds two doc kinds: `docType:'thread'`
+// (a completed run's transcript so the Agents playground can list + resume it)
+// and `docType:'memory'` (durable fact/preference docs an agent recalls across
+// unrelated threads). Created lazily (createIfNotExists) here AND ARM-provisioned
+// in cosmos.bicep's loomContainers — the lazy call is the hotfix fallback.
+let _agentMemory: Container | null = null;
 let _ensured = false;
 
 /**
@@ -757,6 +764,11 @@ async function ensure() {
   // + snapshot-cap prune is a single-partition operation. Dedicated container, no
   // TTL (versions are retained until the cap evicts the oldest on save).
   _itemVersions = await mk('item-versions', '/itemId');
+  // Durable agent memory + per-agent thread persistence (AIF-14). PK /agentId so
+  // every per-agent thread list + memory retrieve hits a single physical
+  // partition. NO defaultTtl — memory facts are durable and threads are retained
+  // until the per-agent retention cap evicts the oldest.
+  _agentMemory = await mk('loom-agent-memory', '/agentId');
   _ensured = true;
 }
 
@@ -820,6 +832,8 @@ export async function tenantTopologyContainer(): Promise<Container> { await ensu
 export async function rateLimitsContainer(): Promise<Container> { await ensure(); return _rateLimits!; }
 /** Item version history (Wave-2 W6) — per-item content snapshots, PK /itemId. */
 export async function itemVersionsContainer(): Promise<Container> { await ensure(); return _itemVersions!; }
+/** Durable agent memory + per-agent thread persistence (AIF-14), PK /agentId. */
+export async function agentMemoryContainer(): Promise<Container> { await ensure(); return _agentMemory!; }
 
 // Foundation admin containers (shared cloud-endpoints resolver task).
 /** Admin Workspace Catalog — one row per Loom-managed workspace, PK /tenantId. */
@@ -976,6 +990,7 @@ const KNOWN_CONTAINER_IDS = [
   'metastore-registrations',
   'rate-limits',
   'item-versions',
+  'loom-agent-memory',
 ];
 
 /** List all Loom containers with their current throughput shape.

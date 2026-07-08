@@ -30,6 +30,7 @@ import {
 } from '@fluentui/react-components';
 import {
   Add20Regular, ArrowSync16Regular, Delete16Regular, Bot24Regular, Play16Regular,
+  History16Regular, ArrowClockwise16Regular,
 } from '@fluentui/react-icons';
 
 const useStyles = makeStyles({
@@ -38,6 +39,7 @@ const useStyles = makeStyles({
   col: { display: 'flex', flexDirection: 'column', gap: '8px', minWidth: '0' },
   toolbar: { display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' },
   list: { display: 'flex', flexDirection: 'column', gap: '4px', maxHeight: '260px', overflow: 'auto', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: '4px', padding: '4px' },
+  threadList: { maxHeight: '160px' },
   agentRow: { display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 8px', borderRadius: '4px', cursor: 'pointer' },
   agentRowSel: { backgroundColor: tokens.colorNeutralBackground1Selected },
   grow: { flex: '1', minWidth: '0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
@@ -65,6 +67,17 @@ interface AgentRow {
 }
 
 interface DeploymentRow { name: string; modelName?: string }
+
+/** A persisted run thread summary (AIF-14 durable memory). */
+interface ThreadSummary {
+  threadId: string;
+  runId?: string;
+  status: string;
+  tier?: string;
+  question: string;
+  answerPreview: string;
+  createdAt: string;
+}
 
 interface Gate { msg: string; hint?: string }
 
@@ -132,6 +145,11 @@ export function FoundryAgentsPanel({ active, nonce = 0, acct = null }: { active:
   const [pgTier, setPgTier] = useState<string | null>(null);
   const [pgGate, setPgGate] = useState<string | null>(null);
   const [pgError, setPgError] = useState<string | null>(null);
+
+  // ---- durable threads (AIF-14) ----
+  const [threads, setThreads] = useState<ThreadSummary[]>([]);
+  const [threadsLoading, setThreadsLoading] = useState(false);
+  const [threadReloadNonce, setThreadReloadNonce] = useState(0);
 
   const accountKey = `${acct?.name || ''}|${acct?.resourceGroup || ''}`;
 
@@ -294,12 +312,53 @@ export function FoundryAgentsPanel({ active, nonce = 0, acct = null }: { active:
       if (!j.ok) { setPgError(j.error || `HTTP ${res.status}`); return; }
       setPgResult(j.data);
       setPgTier(typeof j.tier === 'string' ? j.tier : null);
+      // Refresh the persisted-threads list (the run was just saved server-side).
+      setThreadReloadNonce((n) => n + 1);
     } catch (e: any) {
       setPgError(e?.message || String(e));
     } finally {
       setPgRunning(false);
     }
   }, [pgAgent, pgQuestion, pgRunning, agents, selected, fInstructions, fModel]);
+
+  // ---- durable threads (AIF-14): list + resume + delete ----
+  const loadThreads = useCallback(async (agentName: string) => {
+    const a = agentName.trim();
+    if (!a) { setThreads([]); return; }
+    setThreadsLoading(true);
+    try {
+      const res = await clientFetch(`/api/foundry/agents/threads?agent=${encodeURIComponent(a)}`);
+      const j = await readJson(res);
+      setThreads(j?.ok && Array.isArray(j.threads) ? j.threads : []);
+    } catch { setThreads([]); }
+    finally { setThreadsLoading(false); }
+  }, []);
+
+  useEffect(() => { if (active && pgAgent.trim()) loadThreads(pgAgent); else setThreads([]); }, [active, pgAgent, threadReloadNonce, loadThreads]);
+
+  const resumeThread = useCallback(async (threadId: string) => {
+    const a = pgAgent.trim();
+    if (!a || !threadId) return;
+    setPgError(null); setPgGate(null);
+    try {
+      const res = await clientFetch(`/api/foundry/agents/threads?agent=${encodeURIComponent(a)}&threadId=${encodeURIComponent(threadId)}`);
+      const j = await readJson(res);
+      if (!j?.ok || !j.thread) { setPgError(j?.error || 'Could not load thread'); return; }
+      const t = j.thread;
+      setPgQuestion(t.question || '');
+      setPgResult({ threadId: t.threadId, runId: t.runId, status: t.status, answer: t.answer, steps: t.steps || [] });
+      setPgTier(typeof t.tier === 'string' ? t.tier : null);
+    } catch (e: any) { setPgError(e?.message || String(e)); }
+  }, [pgAgent]);
+
+  const deleteThread = useCallback(async (threadId: string) => {
+    const a = pgAgent.trim();
+    if (!a || !threadId) return;
+    try {
+      await clientFetch(`/api/foundry/agents/threads?agent=${encodeURIComponent(a)}&threadId=${encodeURIComponent(threadId)}`, { method: 'DELETE' });
+      await loadThreads(a);
+    } catch { /* best-effort */ }
+  }, [pgAgent, loadThreads]);
 
   const deploymentNames = useMemo(() => {
     const names = deployments.map((d) => d.name).filter(Boolean);
@@ -461,6 +520,39 @@ export function FoundryAgentsPanel({ active, nonce = 0, acct = null }: { active:
                 {pgRunning ? 'Running…' : 'Run'}
               </Button>
             </div>
+
+            {/* Durable threads (AIF-14) — resume a past conversation. The agent
+                also recalls durable facts learned in earlier threads. */}
+            {pgAgent.trim() && (
+              <div>
+                <div className={s.toolbar}>
+                  <History16Regular />
+                  <Caption1>Threads{threadsLoading ? ' · loading…' : ` (${threads.length})`}</Caption1>
+                  <Badge appearance="tint" color="brand" title="This agent remembers durable facts across threads">durable memory</Badge>
+                  <div style={{ flex: 1 }} />
+                  <Button size="small" appearance="subtle" icon={<ArrowClockwise16Regular />} onClick={() => loadThreads(pgAgent)} disabled={threadsLoading} aria-label="Refresh threads" />
+                </div>
+                <div className={`${s.list} ${s.threadList}`}>
+                  {!threadsLoading && threads.length === 0 && <div className={s.empty}>No saved threads yet. Run a question to start one.</div>}
+                  {threads.map((t) => (
+                    <div key={t.threadId} className={s.agentRow} role="button" tabIndex={0}
+                      onClick={() => resumeThread(t.threadId)}
+                      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); resumeThread(t.threadId); } }}>
+                      <History16Regular />
+                      <span className={s.grow}>
+                        <strong>{t.question || '(no prompt)'}</strong>
+                        <br />
+                        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                          {new Date(t.createdAt).toLocaleString()} · {t.status}{t.tier === 'maf' ? ' · MAF' : ''}
+                        </Caption1>
+                      </span>
+                      <Button size="small" appearance="subtle" icon={<Delete16Regular />} aria-label={`Delete thread ${t.threadId}`}
+                        onClick={(e) => { e.stopPropagation(); deleteThread(t.threadId); }} />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {pgGate && (
               <MessageBar intent="warning">

@@ -342,6 +342,23 @@ The operator's standard is unchanged: **Loom is Fabric-class AI on pure Azure + 
 
 **Priority P2 · Effort M.**
 
+**Build status (Wave 5) — ✅ built.** New Cosmos container `loom-agent-memory`
+(PK `/agentId`, NO TTL) created via `cosmos-client.ts` `ensure()` +
+`KNOWN_CONTAINER_IDS` and ARM-provisioned in `cosmos.bicep` loomContainers (like
+Wave-2's item-versions). `lib/azure/agent-memory-client.ts` stores two doc kinds:
+`docType:'thread'` (resumable run transcripts, capped by `LOOM_AGENT_THREAD_CAP`,
+default 50) and `docType:'memory'` (durable facts summarized from a completed run
+via one `aoaiChatJson` call, capped by `LOOM_AGENT_MEMORY_CAP`). The agents/run
+route retrieves top-K memories and injects them before each run (into the MAF
+system prompt or the Foundry question turn), then persists the thread + extracts
+new memories after a completed run — default-on, opt out with
+`LOOM_AGENT_MEMORY_ENABLED=false`. `/api/foundry/agents/threads` (GET list / GET
+one / DELETE) backs a Threads list + Resume UI on the Agents playground. Unit-
+tested (`agent-memory-client.test.ts`, 9 specs incl. retention-cap eviction).
+⬜ TODO (deferred): AI Search vector retrieval over memory docs at scale (today's
+retrieval is recency top-K); a dedicated `memory` tool-kind entry once AIF-5's
+catalog lands (memory currently injects via the run path, not a discrete tool).
+
 ---
 
 ## AIF-15 — AI Red Teaming Agent (PyRIT adversarial scan)

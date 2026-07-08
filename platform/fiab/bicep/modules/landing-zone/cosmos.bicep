@@ -191,6 +191,12 @@ var loomContainers = [
   // version docs never pollute the untyped item-list/count/reindex queries.
   // createIfNotExists in cosmos-client.ts ensure() remains the hotfix fallback.
   { name: 'item-versions',     partitionKey: '/itemId' }
+  // Durable cross-session agent memory + per-agent thread persistence (AIF-14).
+  // PK /agentId so every per-agent thread list + memory retrieve hits a single
+  // physical partition. NO TTL — memory facts are durable; threads are retained
+  // until the per-agent retention cap (LOOM_AGENT_THREAD_CAP) evicts the oldest.
+  // createIfNotExists in cosmos-client.ts ensure() remains the hotfix fallback.
+  { name: 'loom-agent-memory', partitionKey: '/agentId' }
 ]
 
 resource loomDb 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases@2024-12-01-preview' = {
