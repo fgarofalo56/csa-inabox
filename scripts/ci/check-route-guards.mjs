@@ -116,6 +116,7 @@ const ALLOWLIST = new Map([
   // scope; gated by getSession + a type gate.
   ['apps/fiab-console/app/api/items/[type]/[id]/alerts/route.ts', 'analytics alerts over a shared Azure backend resolved by item type'],
   ['apps/fiab-console/app/api/items/[type]/[id]/assist/route.ts', 'AOAI assist resolved by item type; no per-tenant Cosmos read'],
+  ['apps/fiab-console/app/api/items/[type]/[id]/explain/route.ts', 'AOAI explain grounded on the caller-supplied live definition; no per-tenant Cosmos read'],
   ['apps/fiab-console/app/api/items/[type]/[id]/monitoring/route.ts', 'read-only monitoring over a shared Azure backend resolved by item type'],
   ['apps/fiab-console/app/api/items/[type]/[id]/optimize/route.ts', 'optimize action over a shared Azure backend resolved by item type'],
   ['apps/fiab-console/app/api/items/[type]/[id]/security/route.ts', 'security-scan over a shared Azure backend resolved by item-type gate'],
