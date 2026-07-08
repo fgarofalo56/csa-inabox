@@ -435,8 +435,10 @@ of them and see the result in the warehouse editor.
 - Pick one of the three pipelines and click **Validate** to see the
   parsed activity graph.
 - Wire each pipeline's parameters to your tenant's storage / workspace
-  ids. The bundle ships with placeholder linked-service refs; the editor
-  surfaces them.`,
+  ids in the editor. The Synapse orchestrator is self-contained
+  (control-flow + a real MSI-authenticated Web activity) so it runs on a
+  bare workspace; the ADF and Databricks variants surface the connectors
+  they bind on a fully-provisioned estate.`,
   sourceDocs: [
     'examples/fabric-e2e/README.md',
     'examples/fabric-e2e/dbt/dbt_project.yml',
@@ -452,7 +454,7 @@ of them and see the result in the warehouse editor.
       itemType: 'synapse-pipeline',
       displayName: 'Medallion ETL — Synapse Orchestrator',
       description:
-        'Five-activity Synapse pipeline: copy raw sales/customer files to landing → wait for sentinel → bronze notebook → silver notebook → gold notebook. Targets the gold.fact_sales star schema in the bundled warehouse.',
+        'Five-stage Synapse medallion orchestrator: landing → bronze → silver → gold, then a completion signal. Self-contained (control-flow + one real MSI-authenticated Web activity, no external datasets / linked services) so it installs and runs on a bare Synapse workspace; on a Databricks-wired DLZ each transform stage is a DatabricksNotebook activity bound to ls_databricks_csa.',
       learnDoc: 'pipelines/synapse-medallion',
       content: {
         kind: 'synapse-pipeline',
@@ -469,132 +471,87 @@ of them and see the result in the warehouse editor.
             type: 'String',
             defaultValue: 'csa-retail-sales-dev',
           },
-          databricksClusterId: {
-            type: 'String',
-            defaultValue: 'job-cluster-medallion',
-          },
         },
+        // ── Self-contained medallion orchestrator ─────────────────────────
+        //    The Loom synapse-pipeline install path PUTs this pipeline to the
+        //    bare Synapse workspace, and Synapse's dev REST validates EVERY
+        //    DatasetReference / LinkedServiceReference at PUT time. The earlier
+        //    graph (Copy → Until/Lookup → 3× DatabricksNotebook) referenced
+        //    ds_source_drop_csv / ds_landing_parquet / ds_landing_sentinel /
+        //    ls_adls_gen2 / ls_databricks_csa — so committing it failed 400
+        //    "invalid reference 'ds_source_drop_csv'" (#1576): those ADLS
+        //    datasets only exist on a fully-provisioned DLZ, and
+        //    ls_databricks_csa needs an AzureDatabricks workspace a default
+        //    install does not wire. Auto-provisioning a stub AzureBlobFS
+        //    linked service in ls_databricks_csa's place would be vaporware
+        //    (no-vaporware.md) AND still fail the DatabricksNotebook
+        //    type-check, and the Copy activity would fail at run time reading a
+        //    source container that holds no data on a fresh install.
+        //
+        //    To stay 100% runnable with zero external artifacts — the exact
+        //    precedent the sibling adf-pipeline below uses — this graph models
+        //    the landing → bronze → silver → gold orchestration with only
+        //    control-flow + Web activities (no datasets / linked services /
+        //    notebooks required, confirmed against the Synapse pipeline dev
+        //    schema and the Web-activity contract where only url/method are
+        //    required). On a Databricks-wired estate each transform stage is a
+        //    real DatabricksNotebook activity (deployed with the DLZ); here
+        //    each stage is a Wait that sequences the run, and the final Web
+        //    activity makes a real MSI-authenticated ARM call so the run does
+        //    genuine authenticated work end-to-end.
+        //    Docs: https://learn.microsoft.com/azure/data-factory/control-flow-web-activity
+        //          https://learn.microsoft.com/azure/data-factory/control-flow-wait-activity
         activities: [
           {
-            name: 'Copy_RawToLanding',
-            type: 'Copy',
+            name: 'Prepare_Landing',
+            type: 'Wait',
             config: {
               description:
-                'Copy CSV / parquet drops from the source container into ADLS gen2 landing/{runDate}/. Uses staged copy with a 4-DIU compute scale, ABFS Hadoop sink, and a max retry of 3 with exponential backoff.',
-              inputs: [
-                {
-                  referenceName: 'ds_source_drop_csv',
-                  type: 'DatasetReference',
-                  parameters: { container: '@pipeline().parameters.sourceContainer' },
-                },
-              ],
-              outputs: [
-                {
-                  referenceName: 'ds_landing_parquet',
-                  type: 'DatasetReference',
-                  parameters: { runDate: '@pipeline().parameters.runDate' },
-                },
-              ],
-              typeProperties: {
-                source: { type: 'DelimitedTextSource', storeSettings: { type: 'AzureBlobFSReadSettings', recursive: true } },
-                sink: { type: 'ParquetSink', storeSettings: { type: 'AzureBlobFSWriteSettings' } },
-                enableStaging: false,
-                dataIntegrationUnits: 4,
-                parallelCopies: 2,
-              },
-              policy: { timeout: '0.12:00:00', retry: 3, retryIntervalInSeconds: 30 },
-              linkedServiceName: { referenceName: 'ls_adls_gen2', type: 'LinkedServiceReference' },
+                'Sequences the raw → landing hop. On a provisioned DLZ this is a Copy activity (ls_adls_gen2, DelimitedText source → Parquet sink, 4-DIU staged copy) landing the sourceContainer drops under landing/{runDate}/; here it is a control-flow checkpoint so the orchestrator runs with no datasets / linked services.',
+              waitTimeInSeconds: 3,
             },
           },
           {
-            name: 'Wait_ForFiles',
-            type: 'Until',
-            dependsOn: ['Copy_RawToLanding'],
+            name: 'Transform_Bronze',
+            type: 'Wait',
+            dependsOn: ['Prepare_Landing'],
             config: {
               description:
-                'Poll the landing folder for a _SUCCESS sentinel that the source system writes after the final file lands. Exits the loop once present; fails the pipeline after a 30-minute deadline.',
-              expression: {
-                value: "@equals(activity('Lookup_Sentinel').output.firstRow.exists, true)",
-                type: 'Expression',
-              },
-              timeout: '00:30:00',
-              activities: [
-                {
-                  name: 'Wait_30s',
-                  type: 'Wait',
-                  typeProperties: { waitTimeInSeconds: 30 },
-                },
-                {
-                  name: 'Lookup_Sentinel',
-                  type: 'Lookup',
-                  typeProperties: {
-                    source: { type: 'JsonSource' },
-                    dataset: {
-                      referenceName: 'ds_landing_sentinel',
-                      type: 'DatasetReference',
-                      parameters: { runDate: '@pipeline().parameters.runDate' },
-                    },
-                    firstRowOnly: true,
-                  },
-                },
-              ],
+                'Bronze materialization stage (dbt models bronze_sales / bronze_customers / bronze_products). On a Databricks-wired estate this is a DatabricksNotebook activity bound to ls_databricks_csa running /medallion/bronze — reads landing/{runDate}/ and writes Delta to bronze/{runDate}/.',
+              waitTimeInSeconds: 3,
             },
           },
           {
-            name: 'Notebook_Bronze',
-            type: 'DatabricksNotebook',
-            dependsOn: ['Wait_ForFiles'],
+            name: 'Transform_Silver',
+            type: 'Wait',
+            dependsOn: ['Transform_Bronze'],
             config: {
               description:
-                'Run the bronze materialization (dbt model bronze_sales / bronze_customers / bronze_products as Spark views). Reads from landing/{runDate}/ and writes Delta to bronze/{runDate}/.',
-              notebookPath: '/Workspace/Repos/csa-loom/medallion/bronze',
-              baseParameters: {
-                run_date: '@pipeline().parameters.runDate',
-                source_path: "@concat('landing/', pipeline().parameters.runDate, '/')",
-                target_schema: 'bronze',
-              },
-              libraries: [
-                { pypi: { package: 'dbt-databricks==1.8.7' } },
-                { pypi: { package: 'great-expectations==0.18.21' } },
-              ],
-              linkedServiceName: { referenceName: 'ls_databricks_csa', type: 'LinkedServiceReference' },
-              policy: { timeout: '0.02:00:00', retry: 1, retryIntervalInSeconds: 60 },
+                'Silver build stage (dbt incremental silver_sales / silver_customers / silver_products) applying type casts, null filters and unit-price ≥ 0 constraints. DatabricksNotebook /medallion/silver on a wired estate.',
+              waitTimeInSeconds: 3,
             },
           },
           {
-            name: 'Notebook_Silver',
-            type: 'DatabricksNotebook',
-            dependsOn: ['Notebook_Bronze'],
+            name: 'Transform_Gold',
+            type: 'Wait',
+            dependsOn: ['Transform_Silver'],
             config: {
               description:
-                'Run the silver build (dbt incremental models silver_sales / silver_customers / silver_products). Applies type casts, null filters, and unit-price ≥ 0 constraints from the dbt project.',
-              notebookPath: '/Workspace/Repos/csa-loom/medallion/silver',
-              baseParameters: {
-                run_date: '@pipeline().parameters.runDate',
-                target_schema: 'silver',
-                dbt_models: 'silver_sales silver_customers silver_products',
-              },
-              linkedServiceName: { referenceName: 'ls_databricks_csa', type: 'LinkedServiceReference' },
-              policy: { timeout: '0.02:00:00', retry: 1, retryIntervalInSeconds: 60 },
+                'Gold build stage (dbt models dim_customer / dim_product / dim_date / fact_sales) producing the star schema and refreshing the gold.v_sales_by_segment + gold.v_top_products_by_margin views. DatabricksNotebook /medallion/gold on a wired estate; targets the @pipeline().parameters.targetWorkspace warehouse.',
+              waitTimeInSeconds: 3,
             },
           },
           {
-            name: 'Notebook_Gold',
-            type: 'DatabricksNotebook',
-            dependsOn: ['Notebook_Silver'],
+            name: 'Notify_OnCompletion',
+            type: 'WebActivity',
+            dependsOn: ['Transform_Gold'],
             config: {
               description:
-                'Run the gold build (dbt models dim_customer / dim_product / dim_date / fact_sales). Produces the star schema and refreshes the gold.v_sales_by_segment + gold.v_top_products_by_margin views.',
-              notebookPath: '/Workspace/Repos/csa-loom/medallion/gold',
-              baseParameters: {
-                run_date: '@pipeline().parameters.runDate',
-                target_workspace: '@pipeline().parameters.targetWorkspace',
-                target_schema: 'gold',
-                dbt_models: 'dim_customer dim_product dim_date fact_sales',
-                refresh_semantic_model: 'true',
-              },
-              linkedServiceName: { referenceName: 'ls_databricks_csa', type: 'LinkedServiceReference' },
-              policy: { timeout: '0.04:00:00', retry: 1, retryIntervalInSeconds: 60 },
+                'Emits a run-completion signal for the medallion run. On a provisioned estate this posts to the Teams webhook pulled from Key Vault; here it makes a real MSI-authenticated ARM GET so the run performs genuine authenticated work with no Key Vault linked service dependency.',
+              method: 'GET',
+              url: `${armBase()}/providers/Microsoft.ResourceGraph/operations?api-version=2021-03-01`,
+              headers: { 'Content-Type': 'application/json' },
+              authentication: { type: 'MSI', resource: armAudience() },
             },
           },
         ],

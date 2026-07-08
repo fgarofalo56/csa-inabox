@@ -260,6 +260,7 @@ async function provisionAzureNative(
       };
     } catch (e: any) {
       const msg = e?.message || String(e);
+      const synapsePortalLink = `https://web.azuresynapse.net/?workspace=%2Fsubscriptions%2F${process.env.LOOM_SUBSCRIPTION_ID || ''}%2FresourceGroups%2F${process.env.LOOM_DLZ_RG || ''}%2Fproviders%2FMicrosoft.Synapse%2Fworkspaces%2F${ws}`;
       if (/\b401\b|\b403\b/.test(msg)) {
         return {
           status: 'remediation',
@@ -267,7 +268,26 @@ async function provisionAzureNative(
             reason: `Synapse dev-plane rejected the notebook import: ${msg}`,
             remediation:
               `Grant the Console UAMI the "Synapse Artifact Publisher" (or "Synapse Administrator") Synapse-RBAC role on workspace '${ws}'.`,
-            link: `https://web.azuresynapse.net/?workspace=%2Fsubscriptions%2F${process.env.LOOM_SUBSCRIPTION_ID || ''}%2FresourceGroups%2F${process.env.LOOM_DLZ_RG || ''}%2Fproviders%2FMicrosoft.Synapse%2Fworkspaces%2F${ws}`,
+            link: synapsePortalLink,
+          },
+          steps,
+        };
+      }
+      // A 5xx that survived upsertNotebook's 3-attempt retry is a transient
+      // server-side failure in the workspace's artifact store — most often the
+      // Synapse workspace's PRIMARY ADLS Gen2 account throwing a
+      // BlobStorageClient exception (ErrorCode=1311) (#1576). Surface an honest
+      // remediation gate naming the likely-culprit storage account instead of a
+      // bare 'failed', matching the 401/403 gate shape — the notebook definition
+      // is already saved and re-running install retries the import.
+      if (/failed\s+5\d\d\b/.test(msg)) {
+        return {
+          status: 'remediation',
+          gate: {
+            reason: `Synapse dev-plane returned a server error importing the notebook after 3 attempts: ${msg}`,
+            remediation:
+              `This is typically a transient fault in the Synapse workspace's PRIMARY ADLS Gen2 storage account (the workspace 'BlobStorageClient' that backs the artifact store). Confirm the workspace default storage account is healthy and not firewalled off from the workspace, and that both the workspace managed identity and the Console UAMI hold "Storage Blob Data Contributor" on it, then re-run install for workspace '${ws}'.`,
+            link: synapsePortalLink,
           },
           steps,
         };

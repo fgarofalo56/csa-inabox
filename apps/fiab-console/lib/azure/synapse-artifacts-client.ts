@@ -308,10 +308,24 @@ export async function listNotebooks(): Promise<SynapseNotebook[]> {
 }
 
 export async function upsertNotebook(name: string, spec: SynapseNotebook): Promise<SynapseNotebook> {
-  const r = await callDev(`/notebooks/${encodeURIComponent(name)}?api-version=${DEV_API}`, {
-    method: 'PUT',
-    body: JSON.stringify({ name: spec.name || name, properties: spec.properties }),
-  });
+  const path = `/notebooks/${encodeURIComponent(name)}?api-version=${DEV_API}`;
+  const body = JSON.stringify({ name: spec.name || name, properties: spec.properties });
+  // The Synapse dev-plane notebook PUT can return a TRANSIENT 5xx while the
+  // workspace's artifact store settles — e.g. "500 Unhandled BlobStorageClient
+  // Exception, ErrorCode=1311, UnknownException" from the workspace's primary
+  // ADLS Gen2 account (#1576). A single PUT then hard-failed the whole app
+  // install. Retry on 5xx ONLY (2s then 5s backoff, 3 attempts total); 4xx is
+  // deterministic (bad request / 401 / 403) and surfaces immediately so the
+  // caller's auth/config gates still fire. If the 5xx persists after retries,
+  // jsonOrThrow throws the verbatim "failed 5xx" error the caller maps to an
+  // honest storage-account remediation gate.
+  const backoffMs = [2000, 5000];
+  let r = await callDev(path, { method: 'PUT', body });
+  for (let attempt = 0; r.status >= 500 && attempt < backoffMs.length; attempt++) {
+    try { await r.text(); } catch { /* free the socket before retrying */ }
+    await new Promise((res) => setTimeout(res, backoffMs[attempt]));
+    r = await callDev(path, { method: 'PUT', body });
+  }
   return jsonOrThrow<SynapseNotebook>(r, `upsertNotebook(${name})`);
 }
 
