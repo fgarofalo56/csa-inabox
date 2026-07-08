@@ -35,7 +35,7 @@ function captureFetch(impl: (url: string, init?: RequestInit) => { status?: numb
   return calls;
 }
 
-const HOST = /^https:\/\/svc-test\.search\.windows\.net/;
+const HOST = /^https:\/\/svc-test\.search\.windows\.net\//;
 
 describe('knowledge sources', () => {
   it('listKnowledgeSources GETs /knowledgesources with $select and summarizes rows', async () => {

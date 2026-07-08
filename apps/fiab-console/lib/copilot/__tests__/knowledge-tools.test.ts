@@ -11,7 +11,7 @@ const govGateMock = vi.fn(() => null as any);
 const listBasesMock = vi.fn();
 const retrieveMock = vi.fn();
 
-vi.mock('../azure/aisearch-knowledge', () => ({
+vi.mock('../../azure/aisearch-knowledge', () => ({
   isSearchConfigured: () => isConfiguredMock(),
   knowledgeGovGate: () => govGateMock(),
   listKnowledgeBases: (...a: unknown[]) => listBasesMock(...a),
