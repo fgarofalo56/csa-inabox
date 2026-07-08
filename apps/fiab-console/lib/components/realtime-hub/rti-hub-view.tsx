@@ -159,7 +159,11 @@ export function RtiHubView() {
 
   function load() {
     setData(null); setGate(null); setLoadErr(null);
-    clientFetch('/api/rti-hub').then(async (r) => {
+    // /api/rti-hub discovers raw Azure sources (Event Hubs / IoT Hub / ADX) via a
+    // multi-subscription Resource Graph query — legitimately heavier than the 6s
+    // first-paint default, so give it the longer action budget (matches the
+    // Monitor pane's actionFetch) instead of timing out with "took longer than 6s".
+    clientFetch('/api/rti-hub', undefined, 60_000).then(async (r) => {
       if (r.status === 401) { setUnauth(true); setData({ ok: false }); return; }
       const j: RtiHubResponse = await r.json().catch(() => ({ ok: false, error: 'Bad response' }));
       if (r.status === 503 || j.code === 'not_configured') { setGate(j); setData(j); return; }
