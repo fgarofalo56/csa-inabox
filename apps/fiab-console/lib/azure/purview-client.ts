@@ -429,6 +429,9 @@ export interface PurviewLineageNode {
   guid: string;
   displayText?: string;
   typeName?: string;
+  /** Atlas unique attribute — carried so the render-side deleted-node guard can
+   *  map a `loom://…` entity back to its Loom item and test liveness (LIN-GC-3). */
+  qualifiedName?: string;
 }
 
 export interface PurviewLineageEdge {
@@ -680,6 +683,7 @@ export async function getLineageSubgraph(guid: string, depth = 3): Promise<Purvi
       guid: k,
       displayText: e.displayText || e.attributes?.qualifiedName || e.attributes?.name,
       typeName: e.typeName,
+      qualifiedName: e.attributes?.qualifiedName,
     };
   }
   const relations: PurviewLineageEdge[] = (j.relations || []).map((r: any) => ({

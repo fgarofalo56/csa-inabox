@@ -558,3 +558,20 @@ and any Loom-native Weave lineage edges keep serving lineage for dead assets
   instead of appearing alive (defense-in-depth while GC propagates). `[CATALOG, P2, S]`
 
 **Slot:** ride Wave 2's W8 (impact analysis) plumbing — same lineage clients + shared delete choke points.
+
+### Status — DELIVERED (feat/lin-gc-lineage-cleanup)
+
+- **LIN-GC-1 ✅** New `lib/azure/lineage-gc.ts` (`cleanupItemMetadata` / `cleanupWorkspaceMetadata`)
+  composes the existing `offboardFromPurview` (Atlas soft-delete by the `loom://<tenant>/<ws>/<type>/<id>`
+  qualifiedName + scan-source retire) and `reconcileThreadEdgesOnDelete` (hard-remove Weave/Thread edges).
+  Fire-and-forget with a per-item outcome; wired into the three shared choke points that previously only
+  cleaned Cosmos + loom-search: the per-item DELETE (`app/api/workspaces/[id]/items/[itemId]`), the
+  workspace cascade DELETE (`app/api/workspaces/[id]`), and `POST /api/workspaces/bulk-delete`.
+- **LIN-GC-2 ✅** `POST /api/admin/lineage/reconcile` (isTenantAdmin-gated, `{dryRun}` default true):
+  `findLineageOrphans` lists Loom-provisioned Purview entities (`loom://` scheme) and diffs against live
+  Cosmos items; `purgeLineageOrphans` deletes the orphans (best-effort, per-entity outcome). Admin UI:
+  "Reconcile lineage" action on `/governance/lineage` (dry-run preview table → explicit purge confirm).
+  Running it non-dry-run post-deploy performs the one-time cleanup of the 07-08 debris.
+- **LIN-GC-3 ✅** `annotateDeletedLoomNodes` flags `loom://` lineage nodes whose item is gone; the shared
+  `LineageCanvas` (and legacy SVG `LineageGraph`) render them as a dashed, muted "Deleted"-badged ghost with
+  the open-item link suppressed. Wired into both `/api/catalog/lineage` and `/api/catalog/lineage/item`.

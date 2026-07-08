@@ -351,6 +351,21 @@ export const ENV_CHECKS: EnvSpec[] = [
     role: 'Cognitive Services OpenAI User (UAMI) on the AOAI/Foundry account',
   },
   {
+    // SVC-1 / SVC-8 — AI-enrichment pipeline activities (Document Intelligence,
+    // Vision, Language, Translator, Content Safety). Each endpoint is a wiring
+    // selector for its cognitive account; unset → honest infra gate on the AI
+    // enrich canvas node + preview route (default-ON / opt-out per WAVES.md).
+    id: 'svc-ai-enrich', category: 'azure-services', title: 'Azure AI enrichment (pipeline AI activities)', severity: 'optional',
+    required: [
+      'LOOM_DOCINTEL_ENDPOINT', 'LOOM_VISION_ENDPOINT', 'LOOM_LANGUAGE_ENDPOINT',
+      'LOOM_TRANSLATOR_ENDPOINT', 'LOOM_CONTENT_SAFETY_ENDPOINT',
+    ],
+    warnOnMiss: true,
+    remediation: 'Set LOOM_DOCINTEL_ENDPOINT / LOOM_VISION_ENDPOINT / LOOM_LANGUAGE_ENDPOINT / LOOM_TRANSLATOR_ENDPOINT / LOOM_CONTENT_SAFETY_ENDPOINT to the deployed cognitive account endpoints so the AI-enrich pipeline activities (Document Intelligence / Vision / Language / Translator / Content Safety) run. Each is an independent account — set only the ones you use.',
+    provisionedBy: 'platform/fiab/bicep/modules/deploy-planner/cognitive-account.bicep (single-kind FormRecognizer / ComputerVision / TextAnalytics / TextTranslation / ContentSafety accounts, Entra-only) wired by main.bicep dp* modules; grant the Console UAMI + ADF factory MI "Cognitive Services User".',
+    role: 'Cognitive Services User (Console UAMI + ADF factory managed identity) on each account',
+  },
+  {
     id: 'svc-monitor-alerts', category: 'azure-services', title: 'Azure Monitor (Activator alerts)', severity: 'optional',
     required: ['LOOM_LOG_ANALYTICS_RESOURCE_ID'], anyOf: [['LOOM_ALERT_RG', 'LOOM_ADMIN_RG']], warnOnMiss: true,
     remediation: 'Set LOOM_LOG_ANALYTICS_RESOURCE_ID (alert query scope) + LOOM_ALERT_RG so the Azure-native Activator can create scheduled-query alert rules. A push-button deploy wires both day-one (LOOM_ALERT_RG defaults to the admin RG) and provisions a default alert set — Console availability, 5xx errors, replica restarts — plus a default action group (modules/admin-plane/monitoring-default-alerts.bicep), so /monitor Alerts shows a real default set out of the box.',

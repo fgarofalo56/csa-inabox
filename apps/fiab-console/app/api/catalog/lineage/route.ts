@@ -24,6 +24,7 @@ import {
 import {
   getWorkspaceLineage, OneLakeError, OneLakeLineageNotSupportedError,
 } from '@/lib/azure/onelake-catalog-client';
+import { annotateDeletedLoomNodes } from '@/lib/azure/lineage-gc';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -34,6 +35,10 @@ export interface LineageNode {
   type?: string;
   source: 'purview' | 'unity-catalog' | 'onelake';
   multiSource?: string[];
+  /** Atlas unique attribute (Purview nodes) — powers the deleted-node guard. */
+  qualifiedName?: string;
+  /** Set when the node's `loom://` entity no longer maps to a live item (LIN-GC-3). */
+  deleted?: boolean;
 }
 
 export interface LineageEdge {
@@ -59,7 +64,11 @@ export async function GET(req: NextRequest) {
       const graph = await getLineageSubgraph(id);
       const nodes: LineageNode[] = Object.values(graph.guidEntityMap).map((n) => ({
         id: n.guid, label: n.displayText || n.guid, type: n.typeName, source: 'purview',
+        qualifiedName: n.qualifiedName,
       }));
+      // Flag any `loom://` entity whose backing item was deleted so the canvas
+      // renders it as a deleted ghost instead of a live node (LIN-GC-3).
+      await annotateDeletedLoomNodes(nodes);
       const edges: LineageEdge[] = graph.relations.map((r) => ({
         from: r.fromEntityId, to: r.toEntityId, type: r.relationshipType,
       }));
