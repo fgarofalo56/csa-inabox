@@ -28,15 +28,22 @@ Grounded in Microsoft Learn (microsoft_docs_search / docs_fetch, 2026-06):
 
 ## No-fabric-dependency posture (`.claude/rules/no-fabric-dependency.md`)
 
-- **Microsoft Learn is the SOLE default-on server** — `auth: 'none'`, zero
-  config, zero Fabric dependency. `defaultOnRemoteMcps()` (catalog) →
-  `syntheticDefaultOnServers()` (`mcp-shim.ts`) / `listMcpServers()`
-  (`mcp-config-store.ts`) inject it as a synthetic enabled row so its tools
-  (`mcp_mslearn_*`) are live day-one with no admin action.
-- **Every other remote server is STRICTLY OPT-IN** and inert until its
-  descriptor `configured()` is true (an `enableEnv`, an endpoint, and either the
-  shared Entra OBO client or a Key Vault PAT). Each renders an honest Fluent
-  MessageBar gate until then; it is registered/called on NO code path.
+- **Every Microsoft/Azure remote server is ON BY DEFAULT (opt-OUT)** — operator
+  directive 2026-07-08 ("everything enabled by default, opt-OUT not opt-in").
+  Each descriptor now carries `defaultOn: true`, so `effectiveRemoteState()`
+  defaults its enable state to ON with no admin action. Microsoft Learn
+  (`auth: 'none'`, zero config, zero Fabric dependency) is live day-one; the
+  others go live as their infra gate is satisfied. `listMcpServers()` /
+  `decorateMcpServers()` (`mcp-config-store.ts`) inject each default-on server as
+  a synthetic enabled row **only when `effectiveRemoteState(e, override).configured`
+  is true**, so their tools are advertised without admin action once wired.
+- **Default-on stays HONESTLY GATED.** A server becomes a live Copilot tool only
+  when its effective state is `configured` — a real endpoint AND either the
+  shared Entra OBO client (+ per-user consent) or a Key Vault PAT. A default-on
+  server that is not yet wired renders an honest Fluent MessageBar gate and is
+  registered/called on NO code path. **A tenant admin can disable any server
+  per-tenant** — an `enabled:false` override BEATS `defaultOn` in
+  `effectiveRemoteState()`.
 - **The Fabric / Power BI family is explicit opt-in only.** The Fabric Core and
   Fabric RTI deployable entries carry `govSafe:false`, `defaultRecommended:false`,
   `fabricFamily:true`, `externalHosts:['api.fabric.microsoft.com']`; the Power BI
@@ -60,16 +67,16 @@ the per-user token is minted at call time from the shared confidential client
 | Server | id | Endpoint (env override) | Auth | OBO resource / scopes | Default | Status |
 |--------|----|--------------------------|------|------------------------|---------|--------|
 | Microsoft Learn | `ms-learn` | `https://learn.microsoft.com/api/mcp` (`LOOM_MS_LEARN_MCP_ENDPOINT`) | none | — | **on** ✅ | built ✅ — live day-one |
-| Azure Resources (ARM) | `azure-arm` | _(set `LOOM_AZURE_ARM_MCP_ENDPOINT`)_ | entra-obo | `https://management.azure.com` / `user_impersonation` | opt-in | honest-gate ⚠️ (preview) |
-| Microsoft Foundry | `ms-foundry` | `https://mcp.ai.azure.com` (`LOOM_FOUNDRY_MCP_ENDPOINT`) | entra-obo | `https://ai.azure.com` / `.default` | opt-in | honest-gate ⚠️ (preview) |
-| GitHub | `github` | `https://api.githubcopilot.com/mcp` (`LOOM_GITHUB_MCP_ENDPOINT`) | key-vault | PAT (GitHub OAuth, **not** Entra) | opt-in | honest-gate ⚠️ |
-| Microsoft Graph (Enterprise) | `ms-graph` | `https://mcp.svc.cloud.microsoft/enterprise` (`LOOM_MS_GRAPH_MCP_ENDPOINT`) | entra-obo | `https://graph.microsoft.com` / `.default` | opt-in | honest-gate ⚠️ (preview) |
-| Microsoft 365 | `m365` | _(set `LOOM_M365_MCP_ENDPOINT`)_ | entra-obo | `https://graph.microsoft.com` / `.default` | opt-in | honest-gate ⚠️ (preview, endpoint not GA) |
-| Microsoft Teams | `teams` | _(set `LOOM_TEAMS_MCP_ENDPOINT`)_ | entra-obo | `https://graph.microsoft.com` / `.default` | opt-in | honest-gate ⚠️ (preview, endpoint not GA) |
-| OneDrive & SharePoint | `onedrive-sharepoint` | _(set `LOOM_ONEDRIVE_SHAREPOINT_MCP_ENDPOINT`)_ | entra-obo | `https://graph.microsoft.com` / `.default` | opt-in | honest-gate ⚠️ (preview, endpoint not GA) |
-| Microsoft Sentinel | `ms-sentinel` | `https://sentinel.microsoft.com/mcp/data-exploration` (`LOOM_SENTINEL_MCP_ENDPOINT`) | entra-obo | `https://sentinel.microsoft.com` / `.default` | opt-in | honest-gate ⚠️ (preview, Security Reader+) |
-| Microsoft 365 Admin Center | `admin-center` | _(set `LOOM_ADMIN_CENTER_MCP_ENDPOINT`)_ | entra-obo | `https://graph.microsoft.com` / `.default` | opt-in | honest-gate ⚠️ (preview, endpoint not GA) |
-| Microsoft Dataverse | `dataverse` | _(set `LOOM_DATAVERSE_MCP_ENDPOINT` → `https://<org>.crm.dynamics.com/api/mcp`)_ | entra-obo | per-org (endpoint origin) / `.default` | opt-in | honest-gate ⚠️ (preview, tenant setting) |
+| Azure Resources (ARM) | `azure-arm` | _(set `LOOM_AZURE_ARM_MCP_ENDPOINT`)_ | entra-obo | `https://management.azure.com` / `user_impersonation` | on by default | honest-gate ⚠️ (preview) |
+| Microsoft Foundry | `ms-foundry` | `https://mcp.ai.azure.com` (`LOOM_FOUNDRY_MCP_ENDPOINT`) | entra-obo | `https://ai.azure.com` / `.default` | on by default | honest-gate ⚠️ (preview) |
+| GitHub | `github` | `https://api.githubcopilot.com/mcp` (`LOOM_GITHUB_MCP_ENDPOINT`) | key-vault | PAT (GitHub OAuth, **not** Entra) | on by default | honest-gate ⚠️ |
+| Microsoft Graph (Enterprise) | `ms-graph` | `https://mcp.svc.cloud.microsoft/enterprise` (`LOOM_MS_GRAPH_MCP_ENDPOINT`) | entra-obo | `https://graph.microsoft.com` / `.default` | on by default | honest-gate ⚠️ (preview) |
+| Microsoft 365 | `m365` | _(set `LOOM_M365_MCP_ENDPOINT`)_ | entra-obo | `https://graph.microsoft.com` / `.default` | on by default | honest-gate ⚠️ (preview, endpoint not GA) |
+| Microsoft Teams | `teams` | _(set `LOOM_TEAMS_MCP_ENDPOINT`)_ | entra-obo | `https://graph.microsoft.com` / `.default` | on by default | honest-gate ⚠️ (preview, endpoint not GA) |
+| OneDrive & SharePoint | `onedrive-sharepoint` | _(set `LOOM_ONEDRIVE_SHAREPOINT_MCP_ENDPOINT`)_ | entra-obo | `https://graph.microsoft.com` / `.default` | on by default | honest-gate ⚠️ (preview, endpoint not GA) |
+| Microsoft Sentinel | `ms-sentinel` | `https://sentinel.microsoft.com/mcp/data-exploration` (`LOOM_SENTINEL_MCP_ENDPOINT`) | entra-obo | `https://sentinel.microsoft.com` / `.default` | on by default | honest-gate ⚠️ (preview, Security Reader+) |
+| Microsoft 365 Admin Center | `admin-center` | _(set `LOOM_ADMIN_CENTER_MCP_ENDPOINT`)_ | entra-obo | `https://graph.microsoft.com` / `.default` | on by default | honest-gate ⚠️ (preview, endpoint not GA) |
+| Microsoft Dataverse | `dataverse` | _(set `LOOM_DATAVERSE_MCP_ENDPOINT` → `https://<org>.crm.dynamics.com/api/mcp`)_ | entra-obo | per-org (endpoint origin) / `.default` | on by default | honest-gate ⚠️ (preview, tenant setting) |
 | Power BI (Fabric family) | `powerbiremote` | `https://api.fabric.microsoft.com/v1/mcp/powerbi` (`LOOM_POWERBI_MCP_ENDPOINT`) | entra-obo | `https://analysis.windows.net/powerbi/api` / `Dataset.Read.All`, `MLModel.Execute.All`, `Workspace.Read.All` | **opt-in (never default)** | honest-gate ⚠️ — gated by `isPbiMcpConfigured()` |
 
 Enable toggles: `LOOM_<SERVER>_MCP_ENABLED` (Learn defaults true; all others must

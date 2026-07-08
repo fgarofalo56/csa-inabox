@@ -1788,11 +1788,26 @@ export interface RemoteBuiltinMcpEntry {
   secretRefEnv?: string;
   /** A tenant/admin setting the consumer must surface in the gate (no probe possible). */
   tenantSetting?: string;
-  /** True only for Microsoft Learn — the sole default-on server (no-fabric-dependency). */
+  /**
+   * Default-ON posture (operator directive 2026-07-08 — "everything enabled by
+   * default, opt-OUT not opt-in"). `true` ⇒ this server's enable toggle DEFAULTS
+   * to ON in effectiveRemoteState(). It stays HONESTLY GATED: `configured` still
+   * requires the real endpoint / shared OBO client / Key Vault secret / consent,
+   * so default-on on an un-wired server is INERT and is never advertised to the
+   * Copilot. A tenant admin can disable it per-server (an `enabled:false`
+   * override BEATS defaultOn). `true` for every Microsoft/Azure remote built-in;
+   * `false` ONLY for the Fabric/Power BI-family entry, which must never sit on a
+   * default path (no-fabric-dependency).
+   */
   defaultOn: boolean;
   /** Preview feature → catalog "Preview" badge. */
   preview: boolean;
-  /** Opt-in only — never wired onto a default code path (false only for Learn). */
+  /**
+   * Historic "opt-in only" flag. Under the default-ON posture it is `false` for
+   * every Microsoft/Azure remote built-in (they are on by default) and stays
+   * `true` ONLY for the Fabric/Power BI-family entry (kept opt-in per
+   * no-fabric-dependency). Retained for the admin badge + status payload.
+   */
   optIn: boolean;
   /** Upstream attribution (repo / Learn doc) shown on the card. */
   attribution: string;
@@ -1855,6 +1870,12 @@ const POWERBI_REMOTE_ENTRY: RemoteBuiltinMcpEntry = {
   oboScopes: [...REMOTE_BUILTIN_MCP.delegatedScopes],
   enableEnv: REMOTE_BUILTIN_MCP.clientIdEnv,
   tenantSetting: REMOTE_BUILTIN_MCP.tenantSetting,
+  // Deliberately NOT default-on. Every other Microsoft/Azure remote built-in is
+  // now on by default (opt-OUT), but Power BI is the Fabric/Power BI family and
+  // the BLOCKING-GLOBAL no-fabric-dependency rule forbids it on any default path
+  // (defaulting it on would make it `configured` — reaching a Power BI host —
+  // whenever the shared OBO client is present). It stays strictly opt-in, gated
+  // by isPbiMcpConfigured() (LOOM_POWERBI_MCP_CLIENT_ID).
   defaultOn: false,
   preview: REMOTE_BUILTIN_MCP.preview,
   optIn: REMOTE_BUILTIN_MCP.optIn,
@@ -1864,10 +1885,18 @@ const POWERBI_REMOTE_ENTRY: RemoteBuiltinMcpEntry = {
 };
 
 /**
- * The generalized remote built-in MCP catalog. Microsoft Learn is the SOLE
- * default-on entry (no auth, no config, no Fabric dependency); everything else is
- * opt-in and inert until its gate is satisfied. The Power BI entry is projected
- * in at the end, unchanged.
+ * The generalized remote built-in MCP catalog. DEFAULT-ON posture (operator
+ * directive 2026-07-08): every Microsoft/Azure remote built-in is enabled by
+ * default (opt-OUT, not opt-in) — its enable toggle defaults ON in
+ * effectiveRemoteState(). Each stays HONESTLY GATED: it becomes a live Copilot
+ * tool only once effectiveRemoteState().configured is true (real endpoint +
+ * shared OBO client / Key Vault secret / consent). A default-on server that is
+ * not yet wired is inert and is never advertised; a tenant admin can disable any
+ * server per-tenant (an `enabled:false` override beats defaultOn). Microsoft
+ * Learn (no auth, no config) is live day-one; the others go live as their infra
+ * gate is satisfied. The Power BI entry is projected in at the end and is the
+ * ONE exception — kept opt-in (defaultOn:false) because the Fabric/Power BI
+ * family must never sit on a default path (no-fabric-dependency).
  *
  * Endpoint provenance (microsoft_docs_search, 2026-06):
  *  - ms-learn       : https://learn.microsoft.com/api/mcp                 (GA, no auth) ✅
@@ -1917,11 +1946,11 @@ export const REMOTE_BUILTIN_MCP_CATALOG: RemoteBuiltinMcpEntry[] = [
     oboResource: 'https://management.azure.com',
     oboScopes: ['user_impersonation'],
     enableEnv: 'LOOM_AZURE_ARM_MCP_ENABLED',
-    defaultOn: false,
+    defaultOn: true,
     preview: true,
-    optIn: true,
+    optIn: false,
     attribution: 'github.com/microsoft/mcp',
-    gate: 'Opt-in. Self-host the Azure MCP server with OBO (learn.microsoft.com → azure-mcp-server / deploy-remote-mcp-server-on-behalf-of), then set LOOM_AZURE_ARM_MCP_ENDPOINT and LOOM_AZURE_ARM_MCP_ENABLED=true. Reuses the Loom confidential client (LOOM_MSAL_CLIENT_ID) for the per-user OBO exchange against https://management.azure.com/user_impersonation.',
+    gate: 'On by default (opt-out) — honestly gated until an endpoint exists. Self-host the Azure MCP server with OBO (learn.microsoft.com → azure-mcp-server / deploy-remote-mcp-server-on-behalf-of) and set LOOM_AZURE_ARM_MCP_ENDPOINT (or configure it inline); it then goes live using the shared Loom confidential client (LOOM_MSAL_CLIENT_ID) for the per-user OBO exchange against https://management.azure.com/user_impersonation. A tenant admin can disable it per-server, or set LOOM_AZURE_ARM_MCP_ENABLED=false to force it off deployment-wide.',
     configured: () =>
       enabledWhenTrue('LOOM_AZURE_ARM_MCP_ENABLED') &&
       hasOboClient() &&
@@ -1940,11 +1969,11 @@ export const REMOTE_BUILTIN_MCP_CATALOG: RemoteBuiltinMcpEntry[] = [
     oboResource: 'https://ai.azure.com',
     oboScopes: ['.default'],
     enableEnv: 'LOOM_FOUNDRY_MCP_ENABLED',
-    defaultOn: false,
+    defaultOn: true,
     preview: true,
-    optIn: true,
+    optIn: false,
     attribution: 'learn.microsoft.com/azure/foundry/mcp',
-    gate: 'Opt-in (preview). Set LOOM_FOUNDRY_MCP_ENABLED=true. Reuses the Loom confidential client (LOOM_MSAL_CLIENT_ID) for the per-user OBO exchange against https://ai.azure.com/.default. Note: the hosted Foundry MCP server does not support network isolation (public endpoint only).',
+    gate: 'On by default (opt-out, preview) — live once the shared Loom confidential client (LOOM_MSAL_CLIENT_ID) is present and the signed-in user consents; the per-user OBO exchange runs against https://ai.azure.com/.default. Note: the hosted Foundry MCP server does not support network isolation (public endpoint only). A tenant admin can disable it per-server, or set LOOM_FOUNDRY_MCP_ENABLED=false to force it off deployment-wide.',
     configured: () => enabledWhenTrue('LOOM_FOUNDRY_MCP_ENABLED') && hasOboClient(),
   },
   {
@@ -1959,11 +1988,11 @@ export const REMOTE_BUILTIN_MCP_CATALOG: RemoteBuiltinMcpEntry[] = [
     auth: 'key-vault',
     secretRefEnv: 'LOOM_GITHUB_MCP_PAT_SECRET',
     enableEnv: 'LOOM_GITHUB_MCP_ENABLED',
-    defaultOn: false,
+    defaultOn: true,
     preview: false,
-    optIn: true,
+    optIn: false,
     attribution: 'github.com/github/github-mcp-server',
-    gate: 'Opt-in. Store a GitHub PAT in Key Vault and set LOOM_GITHUB_MCP_PAT_SECRET to the secret NAME (sent as Authorization: Bearer <PAT>). GitHub uses GitHub OAuth / PAT, not Entra — there is no OBO exchange. Optionally override the endpoint via LOOM_GITHUB_MCP_ENDPOINT for GitHub Enterprise.',
+    gate: 'On by default (opt-out) — honestly gated until a GitHub PAT is supplied. Store a PAT in Key Vault and set LOOM_GITHUB_MCP_PAT_SECRET to the secret NAME (sent as Authorization: Bearer <PAT>), or set it inline from the admin page. GitHub uses GitHub OAuth / PAT, not Entra — there is no OBO exchange. Optionally override the endpoint via LOOM_GITHUB_MCP_ENDPOINT for GitHub Enterprise. A tenant admin can disable it per-server, or set LOOM_GITHUB_MCP_ENABLED=false to force it off deployment-wide.',
     configured: () => !!process.env.LOOM_GITHUB_MCP_PAT_SECRET?.trim(),
   },
   {
@@ -1979,11 +2008,11 @@ export const REMOTE_BUILTIN_MCP_CATALOG: RemoteBuiltinMcpEntry[] = [
     oboResource: 'https://graph.microsoft.com',
     oboScopes: ['.default'],
     enableEnv: 'LOOM_MS_GRAPH_MCP_ENABLED',
-    defaultOn: false,
+    defaultOn: true,
     preview: true,
-    optIn: true,
+    optIn: false,
     attribution: 'learn.microsoft.com/graph/mcp-server',
-    gate: 'Opt-in (preview). Grant the Loom app the MCP.* delegated Graph permissions + admin consent, then set LOOM_MS_GRAPH_MCP_ENABLED=true. Reuses LOOM_MSAL_CLIENT_ID for the per-user OBO exchange against https://graph.microsoft.com/.default. Read-only; respects the signed-in user\'s Graph permissions (100 calls/min/user).',
+    gate: 'On by default (opt-out, preview) — live once the shared Loom confidential client (LOOM_MSAL_CLIENT_ID) is present; grant the Loom app the MCP.* delegated Graph permissions + admin consent so the per-user OBO exchange against https://graph.microsoft.com/.default succeeds (until consented, calls return an honest consent error). Read-only; respects the signed-in user\'s Graph permissions (100 calls/min/user). A tenant admin can disable it per-server, or set LOOM_MS_GRAPH_MCP_ENABLED=false to force it off deployment-wide.',
     configured: () => enabledWhenTrue('LOOM_MS_GRAPH_MCP_ENABLED') && hasOboClient(),
   },
   {
@@ -1999,11 +2028,11 @@ export const REMOTE_BUILTIN_MCP_CATALOG: RemoteBuiltinMcpEntry[] = [
     oboResource: 'https://graph.microsoft.com',
     oboScopes: ['.default'],
     enableEnv: 'LOOM_M365_MCP_ENABLED',
-    defaultOn: false,
+    defaultOn: true,
     preview: true,
-    optIn: true,
+    optIn: false,
     attribution: 'github.com/microsoft/mcp',
-    gate: 'Opt-in (preview). The Microsoft 365 remote MCP endpoint is not yet GA — set LOOM_M365_MCP_ENDPOINT to the published endpoint and LOOM_M365_MCP_ENABLED=true. Reuses LOOM_MSAL_CLIENT_ID for the per-user OBO exchange against https://graph.microsoft.com/.default.',
+    gate: 'On by default (opt-out, preview) — honestly gated until the endpoint exists. The Microsoft 365 remote MCP endpoint is not yet GA; set LOOM_M365_MCP_ENDPOINT (or configure it inline) and it goes live using the shared Loom confidential client (LOOM_MSAL_CLIENT_ID) for the per-user OBO exchange against https://graph.microsoft.com/.default. A tenant admin can disable it per-server, or set LOOM_M365_MCP_ENABLED=false to force it off deployment-wide.',
     configured: () =>
       enabledWhenTrue('LOOM_M365_MCP_ENABLED') &&
       hasOboClient() &&
@@ -2022,11 +2051,11 @@ export const REMOTE_BUILTIN_MCP_CATALOG: RemoteBuiltinMcpEntry[] = [
     oboResource: 'https://graph.microsoft.com',
     oboScopes: ['.default'],
     enableEnv: 'LOOM_TEAMS_MCP_ENABLED',
-    defaultOn: false,
+    defaultOn: true,
     preview: true,
-    optIn: true,
+    optIn: false,
     attribution: 'github.com/microsoft/mcp',
-    gate: 'Opt-in (preview). The Microsoft Teams remote MCP endpoint is not yet GA — set LOOM_TEAMS_MCP_ENDPOINT and LOOM_TEAMS_MCP_ENABLED=true. Reuses LOOM_MSAL_CLIENT_ID for the per-user OBO exchange against https://graph.microsoft.com/.default.',
+    gate: 'On by default (opt-out, preview) — honestly gated until the endpoint exists. The Microsoft Teams remote MCP endpoint is not yet GA; set LOOM_TEAMS_MCP_ENDPOINT (or configure it inline) and it goes live using the shared Loom confidential client (LOOM_MSAL_CLIENT_ID) for the per-user OBO exchange against https://graph.microsoft.com/.default. A tenant admin can disable it per-server, or set LOOM_TEAMS_MCP_ENABLED=false to force it off deployment-wide.',
     configured: () =>
       enabledWhenTrue('LOOM_TEAMS_MCP_ENABLED') &&
       hasOboClient() &&
@@ -2045,11 +2074,11 @@ export const REMOTE_BUILTIN_MCP_CATALOG: RemoteBuiltinMcpEntry[] = [
     oboResource: 'https://graph.microsoft.com',
     oboScopes: ['.default'],
     enableEnv: 'LOOM_ONEDRIVE_SHAREPOINT_MCP_ENABLED',
-    defaultOn: false,
+    defaultOn: true,
     preview: true,
-    optIn: true,
+    optIn: false,
     attribution: 'github.com/microsoft/mcp',
-    gate: 'Opt-in (preview). The OneDrive / SharePoint remote MCP endpoint is not yet GA — set LOOM_ONEDRIVE_SHAREPOINT_MCP_ENDPOINT and LOOM_ONEDRIVE_SHAREPOINT_MCP_ENABLED=true. Reuses LOOM_MSAL_CLIENT_ID for the per-user OBO exchange against https://graph.microsoft.com/.default.',
+    gate: 'On by default (opt-out, preview) — honestly gated until the endpoint exists. The OneDrive / SharePoint remote MCP endpoint is not yet GA; set LOOM_ONEDRIVE_SHAREPOINT_MCP_ENDPOINT (or configure it inline) and it goes live using the shared Loom confidential client (LOOM_MSAL_CLIENT_ID) for the per-user OBO exchange against https://graph.microsoft.com/.default. A tenant admin can disable it per-server, or set LOOM_ONEDRIVE_SHAREPOINT_MCP_ENABLED=false to force it off deployment-wide.',
     configured: () =>
       enabledWhenTrue('LOOM_ONEDRIVE_SHAREPOINT_MCP_ENABLED') &&
       hasOboClient() &&
@@ -2068,11 +2097,11 @@ export const REMOTE_BUILTIN_MCP_CATALOG: RemoteBuiltinMcpEntry[] = [
     oboResource: 'https://sentinel.microsoft.com',
     oboScopes: ['.default'],
     enableEnv: 'LOOM_SENTINEL_MCP_ENABLED',
-    defaultOn: false,
+    defaultOn: true,
     preview: true,
-    optIn: true,
+    optIn: false,
     attribution: 'learn.microsoft.com/azure/sentinel/datalake/sentinel-mcp-overview',
-    gate: 'Opt-in (preview). Requires at least the Security Reader role on the Sentinel data lake. Set LOOM_SENTINEL_MCP_ENABLED=true. Reuses LOOM_MSAL_CLIENT_ID for the per-user OBO exchange against https://sentinel.microsoft.com/.default. Optionally point LOOM_SENTINEL_MCP_ENDPOINT at a custom tool collection (.../mcp/custom/<name>).',
+    gate: 'On by default (opt-out, preview) — live once the shared Loom confidential client (LOOM_MSAL_CLIENT_ID) is present and the signed-in user holds at least the Security Reader role on the Sentinel data lake (the per-user OBO exchange runs against https://sentinel.microsoft.com/.default; without the role, calls return an honest 403). Optionally point LOOM_SENTINEL_MCP_ENDPOINT at a custom tool collection (.../mcp/custom/<name>). A tenant admin can disable it per-server, or set LOOM_SENTINEL_MCP_ENABLED=false to force it off deployment-wide.',
     configured: () => enabledWhenTrue('LOOM_SENTINEL_MCP_ENABLED') && hasOboClient(),
   },
   {
@@ -2088,11 +2117,11 @@ export const REMOTE_BUILTIN_MCP_CATALOG: RemoteBuiltinMcpEntry[] = [
     oboResource: 'https://graph.microsoft.com',
     oboScopes: ['.default'],
     enableEnv: 'LOOM_ADMIN_CENTER_MCP_ENABLED',
-    defaultOn: false,
+    defaultOn: true,
     preview: true,
-    optIn: true,
+    optIn: false,
     attribution: 'github.com/microsoft/mcp',
-    gate: 'Opt-in (preview). The Microsoft 365 Admin Center remote MCP endpoint is not yet GA — set LOOM_ADMIN_CENTER_MCP_ENDPOINT and LOOM_ADMIN_CENTER_MCP_ENABLED=true. Reuses LOOM_MSAL_CLIENT_ID for the per-user OBO exchange against https://graph.microsoft.com/.default.',
+    gate: 'On by default (opt-out, preview) — honestly gated until the endpoint exists. The Microsoft 365 Admin Center remote MCP endpoint is not yet GA; set LOOM_ADMIN_CENTER_MCP_ENDPOINT (or configure it inline) and it goes live using the shared Loom confidential client (LOOM_MSAL_CLIENT_ID) for the per-user OBO exchange against https://graph.microsoft.com/.default. A tenant admin can disable it per-server, or set LOOM_ADMIN_CENTER_MCP_ENABLED=false to force it off deployment-wide.',
     configured: () =>
       enabledWhenTrue('LOOM_ADMIN_CENTER_MCP_ENABLED') &&
       hasOboClient() &&
@@ -2113,11 +2142,11 @@ export const REMOTE_BUILTIN_MCP_CATALOG: RemoteBuiltinMcpEntry[] = [
     enableEnv: 'LOOM_DATAVERSE_MCP_ENABLED',
     tenantSetting:
       'Power Platform admin center → Environment → Settings → Product → Features → Dataverse Model Context Protocol → "Allow MCP clients to interact with Dataverse MCP server"',
-    defaultOn: false,
+    defaultOn: true,
     preview: true,
-    optIn: true,
+    optIn: false,
     attribution: 'learn.microsoft.com/power-apps/maker/data-platform/data-platform-mcp',
-    gate: 'Opt-in (preview). Set LOOM_DATAVERSE_MCP_ENDPOINT to your environment URL + /api/mcp (e.g. https://contoso.crm.dynamics.com/api/mcp), enable the Dataverse MCP tenant setting in the Power Platform admin center, and set LOOM_DATAVERSE_MCP_ENABLED=true. Reuses LOOM_MSAL_CLIENT_ID for the per-user OBO exchange (audience = your org origin + /.default).',
+    gate: 'On by default (opt-out, preview) — honestly gated until the environment endpoint exists. Set LOOM_DATAVERSE_MCP_ENDPOINT to your environment URL + /api/mcp (e.g. https://contoso.crm.dynamics.com/api/mcp; or configure it inline) and enable the Dataverse MCP tenant setting in the Power Platform admin center; it then goes live using the shared Loom confidential client (LOOM_MSAL_CLIENT_ID) for the per-user OBO exchange (audience = your org origin + /.default). A tenant admin can disable it per-server, or set LOOM_DATAVERSE_MCP_ENABLED=false to force it off deployment-wide.',
     configured: () =>
       enabledWhenTrue('LOOM_DATAVERSE_MCP_ENABLED') &&
       hasOboClient() &&
@@ -2165,11 +2194,16 @@ export function msRemoteMcpScopeUris(id: string): string[] {
 }
 
 /**
- * The remote built-in servers that are LIVE day-one with zero per-server config —
- * i.e. defaultOn AND currently configured(). In practice this is Microsoft Learn
- * (unless LOOM_MS_LEARN_MCP_ENABLED=false). listMcpServers / buildMcpShim inject
- * these as synthetic enabled rows so their tools are advertised without any admin
- * action (no-fabric-dependency: Learn is the SOLE default-on server).
+ * The remote built-in servers that are LIVE day-one purely from the deployment
+ * ENV with zero per-server admin action — i.e. defaultOn AND env-`configured()`.
+ * In practice this is Microsoft Learn (no auth; unless LOOM_MS_LEARN_MCP_ENABLED=
+ * false). NOTE: under the default-ON posture the authoritative fold-into-Copilot
+ * path is `decorateMcpServers()` (mcp-config-store), which keys off
+ * `effectiveRemoteState(e, override).configured` — that is what surfaces every
+ * OTHER default-on Microsoft/Azure server once its endpoint / OBO client / secret
+ * is present, honoring per-tenant admin opt-out. This env-only helper is a
+ * convenience for the pure-env, no-override case and is not the gate any consumer
+ * relies on.
  */
 export function defaultOnRemoteMcps(): RemoteBuiltinMcpEntry[] {
   return REMOTE_BUILTIN_MCP_CATALOG.filter((e) => e.defaultOn && e.configured());
@@ -2256,19 +2290,30 @@ export function effectiveRemoteState(
     };
   }
 
-  // Env left it OFF → apply the admin override additively.
+  // Env left it OFF → apply the default-ON posture + admin override additively.
   const endpoint = o.endpoint?.trim() || entry.endpoint;
   const secretName = o.secretName?.trim() || envSecret;
   const missing: string[] = [];
   let enabled: boolean;
   let configured: boolean;
 
+  // Default-ON (operator directive 2026-07-08 — "everything enabled by default,
+  // opt-OUT not opt-in"): with no explicit admin toggle, the enable state DEFAULTS
+  // to the descriptor's `defaultOn`. An admin override wins in BOTH directions —
+  // `enabled:false` is a hard opt-out that BEATS defaultOn; `enabled:true`
+  // force-enables a (rare) defaultOn:false entry. `configured` below is unchanged:
+  // it still requires the real endpoint / shared OBO client / Key Vault secret, so
+  // a default-on-but-unwired server stays gated and is NEVER advertised — the
+  // single safety invariant every consumer keys off.
+  const enabledDefault = o.enabled ?? entry.defaultOn;
+
   if (entry.auth === 'none') {
-    enabled = o.enabled === true;
+    enabled = enabledDefault;
     configured = enabled && !!endpoint;
     if (enabled && !endpoint && entry.endpointEnv) missing.push(entry.endpointEnv);
   } else if (entry.auth === 'key-vault') {
-    enabled = o.enabled === true || !!secretName;
+    // A supplied secret name implies intent-to-enable, but an explicit opt-out wins.
+    enabled = o.enabled === false ? false : enabledDefault || !!secretName;
     configured = enabled && !!secretName && !!endpoint;
     if (enabled && !secretName) missing.push(entry.secretRefEnv ?? 'Key Vault secret name');
     if (enabled && !endpoint && entry.endpointEnv) missing.push(entry.endpointEnv);
@@ -2276,7 +2321,7 @@ export function effectiveRemoteState(
     // entra-obo — the per-user delegated exchange reuses the shared Loom
     // confidential client (LOOM_MSAL_CLIENT_ID); that is a platform prerequisite
     // the admin cannot set from this page, so it stays an honest `missing` entry.
-    enabled = o.enabled === true;
+    enabled = enabledDefault;
     const obo = hasOboClient();
     configured = enabled && obo && !!endpoint;
     if (enabled && !obo) missing.push('LOOM_MSAL_CLIENT_ID');

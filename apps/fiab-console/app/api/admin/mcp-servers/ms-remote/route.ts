@@ -3,8 +3,9 @@
  *
  * GENERALIZES app/api/admin/mcp-servers/powerbi/route.ts to the whole curated
  * Microsoft "remote built-in" MCP catalog (lib/mcp/catalog.ts
- * REMOTE_BUILTIN_MCP_CATALOG): Microsoft Learn (the SOLE default-on, no-auth
- * entry), the Entra-OBO servers (Azure Resources/ARM, Microsoft Foundry,
+ * REMOTE_BUILTIN_MCP_CATALOG): all default-ON (opt-OUT) but honestly gated —
+ * Microsoft Learn (no-auth, live day-one), the Entra-OBO servers (Azure
+ * Resources/ARM, Microsoft Foundry,
  * Microsoft Graph / M365 / Teams / OneDrive-SharePoint, Sentinel, Admin Center,
  * Dataverse, and the projected-in Power BI entry), and GitHub (Key Vault PAT).
  * It is NOT a parallel system — every server registers as the SAME
@@ -126,8 +127,8 @@ function attributionUrl(attribution: string): string {
 }
 
 /**
- * The honest opt-in config gate for an entry (shared by GET + POST). Names the
- * exact env toggle, endpoint override, delegated scopes / OBO resource (for
+ * The honest config gate for a default-on-but-unconfigured entry (shared by GET +
+ * POST). Names the exact endpoint override, delegated scopes / OBO resource (for
  * entra-obo), Key Vault secret env (for GitHub), and any admin tenant setting —
  * per no-vaporware. `entry.gate` is the descriptor's human copy; the structured
  * fields let the panel render a precise MessageBar + remediation.
@@ -243,8 +244,9 @@ async function statusFor(
     override: (await getRemoteBuiltinOverride(oid, entry.id)) ?? null,
   };
 
-  // Opt-in gate (no-fabric-dependency): nothing exists until the EFFECTIVE state
-  // (env + admin override) is configured. 200 + configured:false + honest gate.
+  // Honest gate (no-fabric-dependency): a default-on server is advertised only
+  // once the EFFECTIVE state (env + admin override) is configured. 200 +
+  // configured:false + honest gate until then.
   if (!eff.configured) {
     return { ok: true, configured: false, ...common, gate: gateFor(entry, eff) };
   }
@@ -416,8 +418,8 @@ export async function POST(req: NextRequest) {
   const tenantId = session.claims.oid;
   const eff = effectiveRemoteState(entry, await getRemoteBuiltinOverride(tenantId, entry.id));
 
-  // Opt-in gate (no-fabric-dependency): refuse to register a server that is not
-  // effectively enabled (env + admin override). Honest gate, never fake success.
+  // Honest gate (no-fabric-dependency): refuse to register a default-on server
+  // that is not yet effectively configured (env + admin override). Never fake success.
   if (!eff.configured) {
     return NextResponse.json({ ok: false, configured: false, gate: gateFor(entry, eff) }, { status: 409 });
   }
