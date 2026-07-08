@@ -1,7 +1,10 @@
 # For Azure Commercial
 
 The baseline deployment. Full feature set; UC managed catalog; Foundry
-Agent Service; Container Apps everywhere; Power BI Premium F-SKU.
+Agent Service; Container Apps everywhere. Semantic models + reports run
+on the **Azure-native tabular layer (Azure Analysis Services)** by
+default — **no Power BI Premium is required**; Power BI is strictly
+opt-in for Direct Lake parity (see below).
 
 ## Prerequisites
 
@@ -9,11 +12,16 @@ Agent Service; Container Apps everywhere; Power BI Premium F-SKU.
 |---|---|
 | Azure Commercial subscription | Not GCC tenant (Azure Commercial under M365 GCC) |
 | Region | Any Azure Commercial region with Databricks Premium + ADX + AOAI quota (recommended: eastus2, westus2, eastus, westeurope) |
-| Power BI Premium F-SKU capacity | F8 minimum for production |
 | Quota for Databricks Premium workspace | `az vm list-usage --location eastus2` |
 | Quota for ADX cluster (D14_v2 min recommended) | |
 | Quota for AOAI (gpt-4o + text-embedding-3-large) | 50K TPM minimum |
 | Compliance tags | Customer-supplied (CostCenter, Owner, etc.) |
+
+> **Optional — only with `LOOM_SEMANTIC_MODEL_BACKEND=powerbi`.** A Power BI
+> Premium F-SKU capacity (F8 minimum for production) is required **only** if you
+> opt into the Power BI / Direct-Lake-Shim backend for sub-30-second semantic-model
+> freshness. On the default Azure-native path (Azure Analysis Services), no Power
+> BI Premium capacity is provisioned or billed.
 
 ## Deploy
 
@@ -56,11 +64,10 @@ Then sign in via browser, verify:
 - Catalog shows the canary dataset
 - Monitoring Hub health green across all pillars
 
-## Cost (F8 Commercial baseline)
+## Cost (Azure-native Commercial baseline)
 
 | Component | Approximate $/month |
 |---|---|
-| Power BI Premium F8 | $1,049 |
 | Databricks Premium (1 workspace, 10-50 DBU/day) | $500-2,500 |
 | Synapse Serverless (light usage) | $5-50 |
 | ADX cluster (D14_v2 base) | $500 |
@@ -71,7 +78,12 @@ Then sign in via browser, verify:
 | Container Apps Env + workloads | $50-200 |
 | AI Foundry Hub | $0 base + AOAI consumption |
 | Misc (KV, LA, App Insights) | $50 |
-| **Total** | **~$3,100-5,600/mo** |
+| **Total** | **~$2,050-4,550/mo** |
+
+**Optional add-on — only with `LOOM_SEMANTIC_MODEL_BACKEND=powerbi`:** a Power
+BI Premium F8 capacity for the Direct-Lake-Shim path adds **~$1,049/mo**. This is
+**not** part of the Azure-native baseline above — the default Azure Analysis
+Services tabular layer carries no separate capacity charge.
 
 CSA Loom IP itself is free in v1.
 

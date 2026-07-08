@@ -71,7 +71,9 @@ approvals so customers can promote Dev → Stage → Prod.
 
     Azure Government FedRAMP High regions. Use this for FedRAMP High
     customers whose audit boundary requires Azure Government (not
-    Azure Commercial). P-SKU Power BI (no F-SKU; no Direct Lake parity).
+    Azure Commercial). Azure-native semantic models by default; if the
+    opt-in Power BI backend is selected it is P-SKU only (no F-SKU; no
+    Direct Lake parity).
 
 -   :material-shield-account: [**Azure Government — GCC-High / IL4**](gcc-high.md)
 
@@ -130,11 +132,17 @@ Before you start, you need:
 | Available **/16 IP range per DLZ** (private address space, peerable to Admin Plane hub) | Hub default `10.0.0.0/16`; DLZ defaults `10.N.0.0/16` |
 | `az` CLI installed (latest) | For `azd up` path |
 | `azd` CLI installed | For `azd up` path |
-| Power BI Premium F-SKU (GCC-H / IL5) or P-SKU (GCC) | For semantic model + Direct Lake parity |
 | Quota for Databricks Premium workspace in target region | Check via `az vm list-usage` |
 | Quota for ADX cluster (D14_v2 minimum recommended) | |
 | Quota for Azure OpenAI capacity (TPM allocation) | gpt-4o or gpt-4.1; usgovvirginia for Gov |
 | Internet egress for ACR image pulls (or pre-loaded ACR) | Container images come from a Microsoft public ACR; pre-mirror to your ACR if egress restricted |
+
+> **Optional — only with `LOOM_SEMANTIC_MODEL_BACKEND=powerbi`.** Semantic models
+> + reports run on the Azure-native tabular layer by default (Azure Analysis
+> Services in Commercial/GCC; the Loom-native / Synapse Serverless path in
+> GCC-High / IL5) — **no Power BI capacity is required**. A Power BI Premium
+> capacity (F-SKU for GCC-H / IL5, P-SKU for GCC) is needed **only** if you opt
+> into the Power BI / Direct-Lake-Shim backend.
 
 Detailed per-boundary prerequisite checklists in the per-boundary
 guides above.
@@ -154,14 +162,15 @@ A v1 multi-sub deploy creates roughly:
 | Databricks workspaces | 0 | 1 |
 | Synapse workspaces | 0 | 1 |
 | ADX clusters | 1 (shared) | 0 (database on shared) |
-| Power BI Premium workspaces | 0 | 1+ per workspace |
+| Power BI Premium workspaces (opt-in only — `LOOM_SEMANTIC_MODEL_BACKEND=powerbi`) | 0 | 0 by default (1+ per workspace only if the Power BI backend is selected) |
 | AI Foundry / Azure ML Hub | 1 | 0 |
 | AI Search | 1 (S1+) | 0 |
 | Purview accounts | 1 (Commercial/GCC/GCC-H) | 0 |
 | Key Vault Premium HSM | 1 | 1 |
 
-Cost estimate (Commercial F8-sizing): ~$3-5K/month underlying Azure
-consumption + zero Loom IP cost in v1.
+Cost estimate (Azure-native Commercial baseline): ~$2-4.5K/month
+underlying Azure consumption + zero Loom IP cost in v1. The opt-in Power
+BI Premium backend adds ~$1K/month if selected.
 
 ## Validation gates per deploy
 

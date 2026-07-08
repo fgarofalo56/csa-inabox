@@ -34,9 +34,15 @@ FedRAMP High + DoD IL4 + ITAR-eligible.
 | Region | `usgovvirginia` recommended (most services + AOAI chat models) + `usgovarizona` for OpenAI embeddings |
 | Microsoft 365 GCC-High tenant | Identity provider |
 | `az` + `azd` CLI | Same as Commercial |
-| Power BI Premium F-SKU | F8 minimum |
 | AOAI quota in usgovvirginia | gpt-4o + gpt-4.1 + o3-mini + gpt-5.1 |
 | AOAI quota in usgovarizona | text-embedding-3-large (Standard mode is usgovarizona-only) |
+
+> **Optional — only with `LOOM_SEMANTIC_MODEL_BACKEND=powerbi`.** Azure Analysis
+> Services is not offered in Azure Government, so the default GCC-High semantic-model
+> path is the **Loom-native tabular layer** (definition persisted with the item,
+> emitted as TMSL, queried via **Synapse Serverless `OPENROWSET(... FORMAT='DELTA')`**)
+> — **no Power BI capacity is required**. If you opt into the Power BI backend,
+> GCC-High supports **F-SKU (F8 minimum)**.
 
 ## Critical GCC-High dispatch deltas (vs Commercial)
 
@@ -138,13 +144,12 @@ GCC-High supports ITAR-eligible workloads. Customer responsibility:
 
 See [ITAR compliance page](../compliance/itar-fiab.md).
 
-## Cost (F8 GCC-High baseline)
+## Cost (Azure-native GCC-High baseline)
 
 GCC-High pricing is typically **10-25% above** Azure Commercial:
 
 | Component | Approximate $/month |
 |---|---|
-| Power BI Premium F8 | $1,200 |
 | Databricks Premium classic | $600-3,000 |
 | Synapse Serverless | $5-50 |
 | ADX cluster D14_v2 | $600 |
@@ -154,7 +159,12 @@ GCC-High pricing is typically **10-25% above** Azure Commercial:
 | Purview | $350 |
 | AKS cluster + workloads | $200-500 |
 | Misc (KV Premium HSM, LA, Sentinel) | $200 |
-| **Total** | **~$4,000-7,000/mo** |
+| **Total** | **~$2,800-5,800/mo** |
+
+**Optional add-on — only with `LOOM_SEMANTIC_MODEL_BACKEND=powerbi`:** a Power BI
+Premium F8 capacity for the opt-in Power BI backend adds **~$1,200/mo**. It is
+**not** part of the Azure-native baseline above — the default Loom-native /
+Synapse Serverless semantic-model path carries no separate capacity charge.
 
 ## Forward migration
 
