@@ -17,8 +17,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
-import { workspacesContainer } from '@/lib/azure/cosmos-client';
+import { resolveAdminWorkspace } from '@/lib/auth/workspace-guard';
 import { loadBinding, resolveSecret } from '@/lib/azure/git-binding-store';
 import {
   adoListProjects, adoListRepos, adoListBranches,
@@ -29,27 +28,14 @@ import {
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-async function assertOwner(workspaceId: string, tenantId: string) {
-  const ws = await workspacesContainer();
-  try {
-    const { resource } = await ws.item(workspaceId, tenantId).read<any>();
-    if (!resource || resource.tenantId !== tenantId) return null;
-    return resource;
-  } catch (e: any) {
-    if (e?.code === 404) return null;
-    throw e;
-  }
-}
-
 function fail(error: string, status: number, extra?: Record<string, unknown>) {
   return NextResponse.json({ ok: false, error, ...extra }, { status });
 }
 
 export async function GET(req: NextRequest, props: { params: Promise<{ id: string }> }) {
   const params = await props.params;
-  const s = getSession();
-  if (!s) return fail('unauthenticated', 401);
-  if (!(await assertOwner(params.id, s.claims.oid))) return fail('workspace not found', 404);
+  const resolved = await resolveAdminWorkspace(params.id);
+  if (resolved.resp) return resolved.resp;
 
   const q = req.nextUrl.searchParams;
   const action = q.get('action') || '';

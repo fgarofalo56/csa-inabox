@@ -17,8 +17,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
-import { workspacesContainer } from '@/lib/azure/cosmos-client';
+import { resolveAdminWorkspace } from '@/lib/auth/workspace-guard';
 import { detectLoomCloud, cloudBoundaryLabel } from '@/lib/azure/cloud-endpoints';
 import {
   loadBinding, saveBinding, deleteBinding, toView,
@@ -32,27 +31,14 @@ import {
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-async function assertOwner(workspaceId: string, tenantId: string) {
-  const ws = await workspacesContainer();
-  try {
-    const { resource } = await ws.item(workspaceId, tenantId).read<any>();
-    if (!resource || resource.tenantId !== tenantId) return null;
-    return resource;
-  } catch (e: any) {
-    if (e?.code === 404) return null;
-    throw e;
-  }
-}
-
 function fail(error: string, status: number, extra?: Record<string, unknown>) {
   return NextResponse.json({ ok: false, error, ...extra }, { status });
 }
 
 export async function GET(_req: NextRequest, props: { params: Promise<{ id: string }> }) {
   const params = await props.params;
-  const s = getSession();
-  if (!s) return fail('unauthenticated', 401);
-  if (!(await assertOwner(params.id, s.claims.oid))) return fail('workspace not found', 404);
+  const resolved = await resolveAdminWorkspace(params.id);
+  if (resolved.resp) return resolved.resp;
   const binding = await loadBinding(params.id);
   return NextResponse.json({
     ok: true,
@@ -63,9 +49,9 @@ export async function GET(_req: NextRequest, props: { params: Promise<{ id: stri
 
 export async function POST(req: NextRequest, props: { params: Promise<{ id: string }> }) {
   const params = await props.params;
-  const s = getSession();
-  if (!s) return fail('unauthenticated', 401);
-  if (!(await assertOwner(params.id, s.claims.oid))) return fail('workspace not found', 404);
+  const resolved = await resolveAdminWorkspace(params.id);
+  if (resolved.resp) return resolved.resp;
+  const s = resolved.session;
 
   const body = await req.json().catch(() => ({}));
   const provider = String(body?.provider || '') as GitProvider;
@@ -122,9 +108,8 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
 
 export async function DELETE(_req: NextRequest, props: { params: Promise<{ id: string }> }) {
   const params = await props.params;
-  const s = getSession();
-  if (!s) return fail('unauthenticated', 401);
-  if (!(await assertOwner(params.id, s.claims.oid))) return fail('workspace not found', 404);
+  const resolved = await resolveAdminWorkspace(params.id);
+  if (resolved.resp) return resolved.resp;
   await deleteBinding(params.id);
   return NextResponse.json({ ok: true });
 }

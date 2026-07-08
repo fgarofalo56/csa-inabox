@@ -8,16 +8,26 @@
  *       storageAccountId/m365GroupId/m365SiteUrl. When `capacity` changes and a
  *       Fabric/Power BI group is bound, re-assign the capacity best-effort.
  *
- * Real Cosmos read/write; partition-keyed by the caller's oid (tenantId ==
- * owning oid in this codebase) so an admin can never read another tenant's
- * workspace. Azure-native by default — no Fabric workspace required.
+ * DELETE /api/admin/workspaces/{id} — tenant-admin cascade delete of ANY
+ *       workspace (items → loom-search docs → the workspace doc), for cleaning
+ *       up cross-tenant / UAT debris the admin does not personally own.
+ *
+ * Real Cosmos read/write. Access is resolved OWNER-FIRST then, for a tenant
+ * admin only, CROSS-PARTITION: a workspace lives in its creator's partition
+ * (tenantId == creator oid), so an owner reads their own workspace directly
+ * while a tenant admin can additionally resolve any workspace in the tenant to
+ * run the Settings flyout / govern it. A non-admin can still only ever read or
+ * patch a workspace they own (resolveAdminWorkspace enforces the admin gate
+ * before any cross-partition read). Azure-native by default — no Fabric
+ * workspace required.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
-import { workspacesContainer } from '@/lib/azure/cosmos-client';
-import { upsertLoomDoc, docForWorkspace } from '@/lib/azure/loom-search';
+import { isTenantAdmin } from '@/lib/auth/feature-gate';
+import { resolveAdminWorkspace } from '@/lib/auth/workspace-guard';
+import { workspacesContainer, itemsContainer } from '@/lib/azure/cosmos-client';
+import { upsertLoomDoc, deleteLoomDoc, docForWorkspace } from '@/lib/azure/loom-search';
 import { assignWorkspaceToCapacity, FabricError } from '@/lib/azure/fabric-client';
-import type { Workspace, WorkspaceLicenseMode } from '@/lib/types/workspace';
+import type { Workspace, WorkspaceItem, WorkspaceLicenseMode } from '@/lib/types/workspace';
 import { apiError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
@@ -31,18 +41,6 @@ const VALID_LICENSE_MODES: WorkspaceLicenseMode[] = [
   'Org', 'Trial', 'Pro', 'Premium', 'PremiumPerUser', 'Embedded', 'Delegated',
 ];
 
-async function loadWorkspace(id: string, tenantId: string): Promise<Workspace | null> {
-  const c = await workspacesContainer();
-  try {
-    const { resource } = await c.item(id, tenantId).read<Workspace>();
-    if (!resource || resource.tenantId !== tenantId) return null;
-    return resource;
-  } catch (e: any) {
-    if (e?.code === 404) return null;
-    throw e;
-  }
-}
-
 /** Default ADLS Gen2 storage-account ARM id used for OneLake usage (deployment default). */
 export function defaultStorageAccountId(): string | null {
   const sub = process.env.LOOM_SUBSCRIPTION_ID;
@@ -54,11 +52,10 @@ export function defaultStorageAccountId(): string | null {
 
 export async function GET(_req: NextRequest, props: { params: Promise<{ id: string }> }) {
   const params = await props.params;
-  const s = getSession();
-  if (!s) return err('Unauthorized', 401, 'unauthorized');
+  const resolved = await resolveAdminWorkspace(params.id);
+  if (resolved.resp) return resolved.resp;
+  const { ws } = resolved;
   try {
-    const ws = await loadWorkspace(params.id, s.claims.oid);
-    if (!ws) return err('Workspace not found', 404, 'not_found');
     const base = process.env.LOOM_ONELAKE_BASE;
     const oneLake = base ? `${base.replace(/\/$/, '')}/${encodeURIComponent(ws.name)}` : null;
     return NextResponse.json({
@@ -75,14 +72,12 @@ export async function GET(_req: NextRequest, props: { params: Promise<{ id: stri
 
 export async function PATCH(req: NextRequest, props: { params: Promise<{ id: string }> }) {
   const params = await props.params;
-  const s = getSession();
-  if (!s) return err('Unauthorized', 401, 'unauthorized');
+  const resolved = await resolveAdminWorkspace(params.id);
+  if (resolved.resp) return resolved.resp;
+  const { ws } = resolved;
   let body: any;
   try { body = await req.json(); } catch { return err('Invalid JSON', 400, 'bad_json'); }
   try {
-    const ws = await loadWorkspace(params.id, s.claims.oid);
-    if (!ws) return err('Workspace not found', 404, 'not_found');
-
     const capacityChanged = 'capacity' in body && (body.capacity?.trim() || undefined) !== ws.capacity;
 
     const next: Workspace = {
@@ -148,5 +143,47 @@ export async function PATCH(req: NextRequest, props: { params: Promise<{ id: str
     return NextResponse.json({ ok: true, workspace: resource });
   } catch (e: any) {
     return err(e?.message || 'Failed to update workspace', 500, 'cosmos_error');
+  }
+}
+
+/**
+ * DELETE /api/admin/workspaces/{id} — tenant-admin cascade delete.
+ *
+ * Restricted to tenant admins (this is the org-wide govern surface; an owner
+ * deletes their OWN workspace via DELETE /api/workspaces/[id]). Cascade matches
+ * that owner route EXACTLY: items first (partition-keyed by `workspaceId`) with
+ * their loom-search docs, then the workspace doc + its loom-search doc. Because
+ * the workspace is resolved cross-partition, `ws.tenantId` is the creator's
+ * partition — the delete is keyed by the LOADED doc's ids, not the caller's oid,
+ * so it deletes UAT/foreign debris the admin does not personally own.
+ */
+export async function DELETE(_req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
+  const resolved = await resolveAdminWorkspace(params.id);
+  if (resolved.resp) return resolved.resp;
+  const { session, ws } = resolved;
+  // Destructive tenant-wide delete is admin-only; a non-admin owner uses the
+  // self-service DELETE /api/workspaces/[id] route instead.
+  if (!isTenantAdmin(session)) {
+    return err('Only a tenant admin can delete a workspace from the admin console.', 403, 'admin_only');
+  }
+  try {
+    const items = await itemsContainer();
+    const { resources: children } = await items.items
+      .query<WorkspaceItem>({
+        query: 'SELECT c.id, c.workspaceId FROM c WHERE c.workspaceId = @w',
+        parameters: [{ name: '@w', value: ws.id }],
+      }, { partitionKey: ws.id })
+      .fetchAll();
+    for (const child of children) {
+      await items.item(child.id, ws.id).delete().catch(() => {});
+      void deleteLoomDoc(`it:${child.id}`);
+    }
+    const c = await workspacesContainer();
+    await c.item(ws.id, ws.tenantId).delete();
+    void deleteLoomDoc(`ws:${ws.id}`);
+    return NextResponse.json({ ok: true });
+  } catch (e: any) {
+    return err(e?.message || 'Failed to delete workspace', 500, 'cosmos_error');
   }
 }

@@ -12,6 +12,39 @@
 
 ---
 
+## Global principle — default-ON / opt-out (2026-07-08)
+
+**Standing operator directive (verbatim intent):** *"No gates. Allow admins to shut down / disable,
+but everything should be enabled by default with an opt-out approach, not opt-in."*
+
+Every Loom-native feature in these waves ships **enabled by default**. There is no spend-approval gate,
+no tenant-admin enablement gate, and no "opt-in before you can use it" flag on any Loom capability.
+Instead:
+
+- **Default ON.** A feature is live the moment its code deploys — no one has to turn it on.
+- **Cost control = scale-to-zero / idle-stop defaults, not gates.** Metered compute (ACA apps, Spark,
+  ACA Jobs, AML compute) defaults to autoscale-to-zero or an idle-stop timer so the resting cost is ~$0.
+  Spend is bounded by these defaults plus the cost/capacity *reporting and admin toggles* below — never
+  by blocking the feature up front.
+- **Admin opt-out, not user opt-in.** Admins get explicit disable / shutdown controls (per-item and, where
+  it applies, a tenant-wide kill switch) in tenant settings. The control removes a running default; it is
+  not a prerequisite for the feature to work.
+
+**The one exception (do NOT flip):** **real Microsoft Fabric / Power BI service backends stay strictly
+opt-IN** per the die-hard `no-fabric-dependency.md` rule. Every item is 100% functional Azure-native by
+default; a Fabric/Power BI backend is only ever selected explicitly via `LOOM_<ITEM>_BACKEND=fabric` +
+a bound workspace. First-party Databricks/ADT/Photon alternate backends are likewise opt-in.
+
+**Still allowed (these are NOT enablement gates):**
+- **Honest infra gates** — a Fluent `MessageBar intent="warning"` naming the exact missing env var / role /
+  Azure resource (including metered resources not yet deployed, or a service not GA in a Gov region). This
+  is a deployment fact, not a policy gate; the full UI still renders.
+- **Governance-as-the-feature** — approval workflows admins *configure* as the product itself (e.g.
+  approval-gated deployment-pipeline stage promotion, data-contract breaking-change gates, admission
+  control / spend caps / chargeback). These are user-owned controls, kept as designed.
+
+---
+
 ## How this plan is ordered
 
 Three ordering forces, applied in this priority:
@@ -153,7 +186,7 @@ The cognitive-client family that every other AI service reuses, plus the one-cli
 
 The marquee hosted-app gap and the API-token foundation the whole developer-platform track rides.
 
-- **DBX-1** `loom-app-runtime` — one-click hosted Python/Node apps on ACA (autoscale-to-zero, OAuth-scoped). **Foundation for DBX-2/9.** `[DBX, P0, XL]`
+- **DBX-1** `loom-app-runtime` — one-click hosted Python/Node apps on ACA (autoscale-to-zero, OAuth-scoped). Deploy **default-allowed / no spend gate**; cost bounded by scale-to-zero; admin **per-app disable + tenant-wide runtime kill switch** (opt-out). **Foundation for DBX-2/9.** `[DBX, P0, XL]`
 - **DBX-2** Custom agent hosting (bring-your-own harness — rides DBX-1). `[DBX, P1, L]`
 - **DBX-9** Publish a Data Agent as a Managed MCP Server (rides DBX-1). `[DBX, P2, M]`
 - **BR-PAT** Scoped API tokens / PAT for non-interactive access (`loomPatTokens` + `resolvePat()` middleware + `/admin/developer/tokens`). **Foundation for BR-OPENAPI/TERRAFORM/SCIM.** `[BREADTH, P0, M]`
@@ -450,3 +483,55 @@ CTS-13 nightly consolidation pass. The MCP default-ON flip (CTS-09's companion) 
 **Portable-extras triage.** Of ATLAS's 11 portable extras: 8 KEEP (→ CTS-11…17, with household-scope folded
 into CTS-08 and parallelism telemetry folded into CTS-02), 1 DROP (talking-head avatar / real-time voice —
 not relevant to an enterprise analytics console). Full table in the PRP.
+
+---
+
+## Addendum (2026-07-08, post-plan): Data Product — ultimate experience (DP-1…DP-17)
+
+`PRP-data-product-ultimate.md` (this folder) audited the four poorly-reconciled "data product" surfaces +
+two look-alike sibling item types and specs a 17-item program to (a) **fix the model** (one canonical
+status vocabulary, projection parity, taxonomy cleanup, the 3 freeform violations), (b) build the
+operator-asked **guided wizard**, **certification state machine**, **walkthroughs + Copilot builder**, and
+(c) close the **mesh-class gaps** (ports, versioning+deprecation, subscription fulfillment, feedback,
+sample-data, SLO monitoring, value metrics, governed↔infra linkage, shareable end-state). Tag legend adds
+source `DP`.
+
+**Dedupe — DP items that RIDE existing plan items (reference, do not rebuild):**
+- **DP-9** breaking-change gate at publish → rides **W10** (Data Contract item) + **BR-CONTRACT-GATE**
+  (Wave 11); DP-9 adds only the data-product version-history + deprecation glue.
+- **DP-5** certification DQ-score check → consumes **W11** (DQ Rule Engine, Wave 11) + the shipped
+  `ContractQualityRunPanel`.
+- **DP-16** external sharing → rides **FGC-30** (cross-tenant B2B + scoped ADLS grant, Wave 8) + the shipped
+  bidirectional **Delta Sharing** (PR #1578); surfaces a "Share externally" action, not a new engine.
+- **DP-11** feedback/usage analytics → reuses **W18** (marketplace listing analytics + subscriber webhooks,
+  Wave 6) + **BR-WEBHOOK** + **BR-COMMENTS/W4** comment plumbing.
+- **DP-14** cost/value → reuses **FGC-28** chargeback + **BR-COSTATTR** (Wave 8).
+
+**Dependency ordering (governs the slotting):** DP-1 (model unification) is the keystone — DP-3/DP-5/DP-8/
+DP-16 all assume it, so it lands with the earliest DP work. DP-9 must follow W10/BR-CONTRACT-GATE (Wave 11);
+DP-10/DP-16 follow FGC-30 (Wave 8); DP-11 follows W18 (Wave 6) — all of which precede the two new waves below.
+
+**Recommended slotting:**
+
+- **Fold the 3 P0 correctness/foundation items into the existing Wave 11** (governance/quality/contract —
+  same subsystem as W10 Data Contract + W11 DQ Engine + DOC-6): **DP-1** (unify the data-product model),
+  **DP-2** (item-type taxonomy cleanup), **DP-17** (fix the 3 freeform violations). These are P0 model-truth
+  fixes that must precede any depth build and share the Wave-11 subsystem.
+- **New Wave 19 — Data Product guided creation & certification** *(P0/P1 marquee; after Wave 11)*:
+  **DP-3** guided creation wizard `[DP, P0, XL]` · **DP-5** certification pipeline `[DP, P0, XL]` ·
+  **DP-4** template gallery + instance provenance `[DP, P1, L]` · **DP-6** walkthroughs + LearnPopovers
+  `[DP, P1, M]` · **DP-7** Copilot data-product builder `[DP, P1, L]` · **DP-8** input/output/management
+  ports `[DP, P1, L]`. (6 items.) *Operator action:* none new (reuses AOAI/ADX/Cosmos/Graph).
+- **New Wave 20 — Data Product mesh-class depth & shareable end-state** *(P1/P2; after Waves 8, 11, 19)*:
+  **DP-9** versioning + deprecation `[DP, P1, L]` (rides W10/BR-CONTRACT-GATE) · **DP-10** subscription
+  approval + automated fulfillment `[DP, P1, L]` · **DP-16** editable/consumable/shareable end state
+  `[DP, P1, M]` (rides FGC-30 + PR #1578) · **DP-11** consumer feedback/ratings/usage `[DP, P2, M]` (rides
+  W18) · **DP-12** sample data + starter notebook `[DP, P2, M]` · **DP-13** live SLO monitoring `[DP, P2, M]` ·
+  **DP-14** value metrics (OKRs+CDEs+cost) `[DP, P2, M]` · **DP-15** governed↔infra cross-linking `[DP, P2, L]`.
+  (8 items.) *Operator action:* Console UAMI **User Access Administrator** (or scoped custom role) on the
+  data-plane RG for DP-10 automated fulfillment (default-off, honest-gated); Azure Monitor scheduled-query
+  alert rule for DP-13 (reuses the RTI Activator substitute); Cosmos containers via `createIfNotExists` for
+  DP-11/DP-12 (no new resource type).
+
+This raises the plan to **20 waves** (18 existing + 2 new) and **~133 scheduled items** (~116 + 17 DP), with
+3 DP items folded into Wave 11 and 14 across the two new waves.
