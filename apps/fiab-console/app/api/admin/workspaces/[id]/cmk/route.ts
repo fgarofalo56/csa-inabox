@@ -15,7 +15,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { resolveAdminWorkspace } from '@/lib/auth/workspace-guard';
 import { workspacesContainer } from '@/lib/azure/cosmos-client';
 import type { Workspace } from '@/lib/types/workspace';
 import {
@@ -81,32 +81,18 @@ function configGateResponse() {
   });
 }
 
-async function loadWorkspace(id: string, tenantId: string): Promise<Workspace | null> {
-  const c = await workspacesContainer();
-  try {
-    const { resource } = await c.item(id, tenantId).read<Workspace>();
-    if (!resource || resource.tenantId !== tenantId) return null;
-    return resource;
-  } catch (e: any) {
-    if (e?.code === 404) return null;
-    throw e;
-  }
-}
-
 // ---------------------------------------------------------------------------
 // GET
 // ---------------------------------------------------------------------------
 
 export async function GET(req: NextRequest, props: { params: Promise<{ id: string }> }) {
   const { id } = await props.params;
-  const session = getSession();
-  if (!session) return err('Unauthorized', 401, 'unauthorized');
+  const resolved = await resolveAdminWorkspace(id);
+  if (resolved.resp) return resolved.resp;
+  const { ws } = resolved;
 
   const gate = configGateResponse();
   if (gate) return gate;
-
-  const ws = await loadWorkspace(id, session.claims.oid).catch(() => null);
-  if (!ws) return err('Workspace not found', 404, 'not_found');
 
   // Lazy picker data for the bind wizard.
   const vaultUriParam = req.nextUrl.searchParams.get('vaultUri') || cmkVaultUrl() || undefined;
@@ -150,8 +136,9 @@ export async function GET(req: NextRequest, props: { params: Promise<{ id: strin
 
 export async function POST(req: NextRequest, props: { params: Promise<{ id: string }> }) {
   const { id } = await props.params;
-  const session = getSession();
-  if (!session) return err('Unauthorized', 401, 'unauthorized');
+  const resolved = await resolveAdminWorkspace(id);
+  if (resolved.resp) return resolved.resp;
+  const { ws } = resolved;
 
   const gate = configGateResponse();
   if (gate) return gate;
@@ -167,9 +154,6 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
   const bindCosmos = body?.bindCosmos === true;
   if (!keyName) return err('keyName is required', 400, 'missing_key');
   if (!vaultUri) return err('vaultUri could not be resolved', 400, 'missing_vault');
-
-  const ws = await loadWorkspace(id, session.claims.oid).catch(() => null);
-  if (!ws) return err('Workspace not found', 404, 'not_found');
 
   const uami = encryptionUamiResourceId()!;
 
@@ -225,14 +209,12 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
 
 export async function DELETE(_req: NextRequest, props: { params: Promise<{ id: string }> }) {
   const { id } = await props.params;
-  const session = getSession();
-  if (!session) return err('Unauthorized', 401, 'unauthorized');
+  const resolved = await resolveAdminWorkspace(id);
+  if (resolved.resp) return resolved.resp;
+  const { ws } = resolved;
 
   const gate = configGateResponse();
   if (gate) return gate;
-
-  const ws = await loadWorkspace(id, session.claims.oid).catch(() => null);
-  if (!ws) return err('Workspace not found', 404, 'not_found');
 
   try {
     const ref = resolveStorageAccount(ws.storageAccountId);

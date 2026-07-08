@@ -29,7 +29,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { resolveAdminWorkspace } from '@/lib/auth/workspace-guard';
 import { workspacesContainer } from '@/lib/azure/cosmos-client';
 import { upsertLoomDoc, docForWorkspace } from '@/lib/azure/loom-search';
 import { applyWorkspaceBindings } from '@/lib/azure/workspace-bindings';
@@ -60,26 +60,17 @@ function sanitizeBranchName(raw: string): string | null {
   return b;
 }
 
-async function loadWorkspace(id: string, tenantId: string): Promise<Workspace | null> {
-  const c = await workspacesContainer();
-  try {
-    const { resource } = await c.item(id, tenantId).read<Workspace>();
-    if (!resource || resource.tenantId !== tenantId) return null;
-    return resource;
-  } catch (e: any) {
-    if (e?.code === 404) return null;
-    throw e;
-  }
-}
-
 export async function POST(req: NextRequest, props: { params: Promise<{ id: string }> }) {
   const params = await props.params;
-  const s = getSession();
-  if (!s) return fail('unauthenticated', 401);
+  // Owner-first, tenant-admin cross-partition fallback. The branched workspace
+  // is created under the CALLER's partition (tenantId below), so an admin who
+  // branches out from a workspace they don't own becomes the owner of the new
+  // branch — the source is only READ here.
+  const resolved = await resolveAdminWorkspace(params.id);
+  if (resolved.resp) return resolved.resp;
+  const s = resolved.session;
+  const source = resolved.ws;
   const tenantId = s.claims.oid;
-
-  const source = await loadWorkspace(params.id, tenantId);
-  if (!source) return fail('workspace not found', 404);
 
   const body = await req.json().catch(() => ({}));
   const newBranch = sanitizeBranchName(String(body?.newBranchName || ''));
