@@ -128,10 +128,12 @@ export function impactKind(type?: string): string {
   if (exact[t]) return exact[t];
   // Fuzzy fallbacks for Atlas type names (azure_sql_table, powerbi_report, …).
   if (t.includes('column')) return 'Column';
-  if (t.includes('powerbi') || t.includes('power_bi') || t.includes('power-bi')) return 'Power BI model';
-  if (t.includes('semantic')) return 'Semantic model';
+  // Report/dashboard must resolve before the generic Power BI fallback so a
+  // Power BI *report* (Atlas `powerbi_report`) groups as a Report, not a model.
   if (t.includes('report')) return 'Report';
   if (t.includes('dashboard')) return 'Dashboard';
+  if (t.includes('powerbi') || t.includes('power_bi') || t.includes('power-bi')) return 'Power BI model';
+  if (t.includes('semantic')) return 'Semantic model';
   if (t.includes('notebook')) return 'Notebook';
   if (t.includes('dataflow')) return 'Dataflow';
   if (t.includes('pipeline')) return 'Pipeline';

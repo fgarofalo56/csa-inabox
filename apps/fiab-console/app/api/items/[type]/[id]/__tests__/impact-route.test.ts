@@ -21,7 +21,7 @@ vi.mock('@/lib/azure/cosmos-client', () => ({
 vi.mock('@/lib/azure/unified-lineage', () => ({ getUnifiedLineage: vi.fn() }));
 vi.mock('@/lib/azure/cloud-endpoints', () => ({ detectLoomCloud: vi.fn(() => 'Commercial') }));
 
-import { GET } from '../[id]/impact/route';
+import { GET } from '../impact/route';
 import { getSession } from '@/lib/auth/session';
 import { itemsContainer, workspacesContainer } from '@/lib/azure/cosmos-client';
 import { getUnifiedLineage } from '@/lib/azure/unified-lineage';

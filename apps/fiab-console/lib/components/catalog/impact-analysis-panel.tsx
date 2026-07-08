@@ -218,7 +218,7 @@ export function ImpactAnalysisPanel({ type, id, itemName, action = 'delete', onR
             {(data?.groups || []).map((g) => (
               <AccordionItem key={g.kind} value={g.kind}>
                 <AccordionHeader>
-                  {g.kind} <span style={{ color: tokens.colorNeutralForeground3, marginLeft: 6 }}>({g.count})</span>
+                  {g.kind} <span style={{ color: tokens.colorNeutralForeground3, marginLeft: tokens.spacingHorizontalXS }}>({g.count})</span>
                 </AccordionHeader>
                 <AccordionPanel>
                   <div className={styles.groupList}>
