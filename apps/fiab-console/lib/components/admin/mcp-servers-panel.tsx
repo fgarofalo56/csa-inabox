@@ -1542,27 +1542,44 @@ function MicrosoftMcpServersSection({
         if (j.ok) enabled++; else failed++;
       } catch { failed++; }
     }
-    // Re-read fresh status so the cards + the honest summary reflect the real
-    // effective state (configured vs gated) the server computes.
+    // Base summary from the enable loop — set FIRST so the confirmation always
+    // shows, even if the (heavier) status refresh below is slow or fails.
+    setEnableAllMsg({
+      intent: failed ? 'warning' : 'success',
+      text:
+        `Enabled ${enabled} Microsoft MCP server${enabled === 1 ? '' : 's'} for this tenant.` +
+        (failed ? ` ${failed} could not be enabled.` : '') +
+        ' Each becomes a live Copilot tool once its endpoint / Key Vault secret is set and its delegated scopes are consented — see each card.',
+    });
+    // Re-read fresh status so the cards + the summary reflect the real effective
+    // state (configured vs gated). The /ms-remote GET computes effective state
+    // for every server and can exceed the default 6s client budget, so give it
+    // a 30s budget; if it still fails, the base summary above stays.
     try {
-      const j = await clientFetch('/api/admin/mcp-servers/ms-remote').then((r) => r.json());
+      const j = await clientFetch('/api/admin/mcp-servers/ms-remote', undefined, 30_000).then((r) => r.json());
       const list = (Array.isArray(j.servers) ? j.servers : [])
         .filter((e: MsRemoteStatus) => e.id !== 'powerbi-remote') as MsRemoteStatus[];
-      setServers(list);
-      const live = list.filter((e) => e.configured).length;
-      const gated = list.length - live;
-      setEnableAllMsg({
-        intent: failed ? 'warning' : 'success',
-        text:
-          `Enabled ${enabled} Microsoft MCP server${enabled === 1 ? '' : 's'} for this tenant. ` +
-          `${live} ${live === 1 ? 'is' : 'are'} ready for the Loom Copilot now; ` +
-          `${gated} still need a per-user Connect (delegated consent), a Key Vault secret, or a GA endpoint — see each card.` +
-          (failed ? ` ${failed} could not be enabled.` : ''),
-      });
-    } catch { /* keep prior card state; the per-card status is still accurate */ }
-    onChanged();
+      if (list.length) {
+        setServers(list);
+        const live = list.filter((e) => e.configured).length;
+        const gated = list.length - live;
+        setEnableAllMsg({
+          intent: failed ? 'warning' : 'success',
+          text:
+            `Enabled ${enabled} Microsoft MCP server${enabled === 1 ? '' : 's'} for this tenant. ` +
+            `${live} ${live === 1 ? 'is' : 'are'} ready for the Loom Copilot now; ` +
+            `${gated} still need a per-user Connect (delegated consent), a Key Vault secret, or a GA endpoint — see each card.` +
+            (failed ? ` ${failed} could not be enabled.` : ''),
+        });
+      }
+    } catch { /* keep the base summary above; per-card status is still accurate */ }
+    // NOTE: deliberately do NOT call the parent onChanged() here. It runs the
+    // parent panel's load(), which flips the panel into its full-page Spinner
+    // and UNMOUNTS this section — wiping the summary the admin just triggered.
+    // Enabling Microsoft remotes doesn't change the parent's other lists, and
+    // the inline setServers above already refreshes this section's own state.
     setEnablingAll(false);
-  }, [servers, onChanged]);
+  }, [servers]);
 
   // Nothing to show and no error (route returned an empty family) → render
   // nothing rather than an empty heading.

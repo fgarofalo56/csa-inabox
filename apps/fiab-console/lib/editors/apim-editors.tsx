@@ -2929,7 +2929,7 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
     )} main={
       <div className={s.pad}>
         {state.purviewDataProductId ? (
-          <MessageBar intent="success">
+          <MessageBar intent="success" layout="multiline">
             <MessageBarBody>
               <MessageBarTitle>Registered with Purview Unified Catalog</MessageBarTitle>
               Data product <code>{state.purviewDataProductId}</code> is live in the catalog.{' '}
@@ -2938,7 +2938,7 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
             </MessageBarBody>
           </MessageBar>
         ) : (
-          <MessageBar intent="warning">
+          <MessageBar intent="warning" layout="multiline">
             <MessageBarBody>
               <MessageBarTitle>Not yet registered with Purview Unified Catalog</MessageBarTitle>
               The item persists configuration to Cosmos, but it has not been published to the canonical Purview Data Product catalog. Click <strong>Register with Purview</strong> below to create the Unified Catalog data product via <code>POST /datagovernance/catalog/dataProducts</code>. Requires a Purview account (<code>LOOM_PURVIEW_ACCOUNT</code>), a <code>businessDomainId</code> GUID in <code>state.domain</code>, and the Loom UAMI to hold the <code>Data Curator</code> + <code>Data Product Owner</code> roles. See <code>docs/fiab/data-product-parity-spec.md</code>.
@@ -2947,7 +2947,7 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
         )}
 
         {purviewHint && (
-          <MessageBar intent="warning">
+          <MessageBar intent="warning" layout="multiline">
             <MessageBarBody>
               <MessageBarTitle>Purview is not provisioned in this deployment</MessageBarTitle>
               Missing env var: <code>{purviewHint.missingEnvVar}</code>.{' '}
@@ -3036,7 +3036,7 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
           </MessageBar>
         )}
         {state.lifecycleStatus === 'EXPIRED' && (
-          <MessageBar intent="warning">
+          <MessageBar intent="warning" layout="multiline">
             <MessageBarBody>
               <MessageBarTitle>This data product is expired</MessageBarTitle>
               It is visible only to stewards and owners. Consumers cannot discover it in the catalog or request access. Use <strong>Publish</strong> to make it discoverable again.
