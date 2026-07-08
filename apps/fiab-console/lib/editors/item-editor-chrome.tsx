@@ -25,7 +25,12 @@ import { ShareItemDialog } from '@/lib/dialogs/share-item-dialog';
 import { EndorsementControl } from '@/lib/editors/endorsement-control';
 import { useUnsavedChangesGuard } from '@/lib/editors/use-unsaved-changes-guard';
 import { ExplainThisButton, type ExplainConfig } from '@/lib/components/explain-this';
+import { IndexMyDataButton } from '@/lib/components/ai-search/index-my-data-wizard';
+import type { IndexableSourceType } from '@/lib/azure/index-my-data';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
+
+/** Item slugs that expose the AIF-3 index-my-estate wizard in their editor header. */
+const INDEXABLE_SOURCE_SLUGS = new Set<string>(['lakehouse', 'warehouse', 'kql-database']);
 
 const useStyles = makeStyles({
   meta: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center' },
@@ -255,6 +260,13 @@ export function ItemEditorChrome({ item, id, ribbon, leftPanel, main, rightPanel
                 Share
               </Button>
             </Tooltip>
+          )}
+          {/* Index-my-estate wizard (AIF-3) — one-click "Add search index" from a
+              lakehouse / warehouse / ADX item: derives the ADLS Gen2 data source,
+              builds the chunk+embed skillset, vector index, and indexer, then runs
+              it. Warehouse / ADX show the honest recommended path in the wizard. */}
+          {!isNew && INDEXABLE_SOURCE_SLUGS.has(item.slug) && (
+            <IndexMyDataButton source={{ sourceType: item.slug as IndexableSourceType, itemId: id, itemName: resolvedName ?? item.displayName }} />
           )}
           <ItemSidePanel type={item.slug} id={id} />
         </div>
