@@ -570,6 +570,13 @@ export async function deleteDataSource(name: string, service?: string): Promise<
 // Skillsets — create (from JSON) / delete
 // ----------------------------------------------------------------------------
 
+/** GET /skillsets/{name} — full skillset definition (skills + knowledgeStore). 404 → null. */
+export async function getSkillset(name: string, service?: string): Promise<any | null> {
+  const res = await call(`/skillsets/${encodeURIComponent(name)}`, { service });
+  if (res.status === 404) return null;
+  return readJsonGuarded(res, `get skillset ${name}`);
+}
+
 /** PUT /skillsets/{name} — create-or-update a skillset from a full definition. */
 export async function createSkillset(def: any, service?: string): Promise<any> {
   if (!def?.name) throw new SearchDataError(400, def, 'create skillset requires name');
