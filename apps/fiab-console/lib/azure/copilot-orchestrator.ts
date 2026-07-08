@@ -112,10 +112,15 @@ import { POWERBI_REMOTE_MCP_GATE_TEXT } from '@/lib/copilot/powerbi-skills';
 // parallel system. Microsoft Learn is the sole default-on MCP; every other server
 // is opt-in and emits an honest catalog gate until connected (no-fabric-dependency,
 // no-vaporware).
-import { msSkillSystemBlocksForPane, msMcpPrefix } from '@/lib/copilot/ms-skills';
+import { msSkillSystemBlocksForPane, msMcpPrefix, msSkillsForPane } from '@/lib/copilot/ms-skills';
 // rel-T85 list-price estimator (CTS-01) — pure, shared with the admin usage
 // dashboard so the per-turn $ figure uses one source of truth.
 import { estCostUsd } from '@/lib/copilot/cost-estimate';
+// Pure segmented context-window builder + token estimator (CTS-05).
+import { buildContextUsagePayload, estimateTokens } from '@/lib/copilot/context-usage';
+// Tool-provenance → grounding citation mapper (CTS-04). Pure; maps a tool
+// result's known provenance shapes into the Citation[] the transcript renders.
+import { extractCitationsFromToolResult, mergeCitations } from '@/lib/copilot/tool-citations';
 
 // ---------- item-type slug normalization (build-assist robustness) ----------
 // The model often guesses item-type slugs with underscores or marketing names
@@ -2018,6 +2023,9 @@ export async function* orchestrate(opts: OrchestrateOptions): AsyncIterable<Orch
   // durationMs, ok, error?}) attached to the final step so the collapsible detail
   // badge can render the full tool table with "via <server>" attribution.
   const turnTools: TurnToolDetail[] = [];
+  // CTS-04: accumulate grounding citations mapped from tool provenance (docs RAG
+  // hits, agentic knowledge-base retrieval, schema reads) across the turn.
+  let turnCitations: Citation[] = [];
 
   for (let i = 0; i < maxIter; i++) {
     let resp: any;
@@ -2082,6 +2090,9 @@ export async function* orchestrate(opts: OrchestrateOptions): AsyncIterable<Orch
         costUsd: estCostUsd(target.deployment, usage.promptTokens, usage.completionTokens),
         // CTS-02: the per-turn tool roll-up (empty tools = a no-tool answer).
         turnDetail: { tools: turnTools },
+        // CTS-04: grounding citations (omit the key entirely when none, so older
+        // turns / no-grounding turns render exactly as before).
+        ...(turnCitations.length ? { citations: turnCitations } : {}),
       };
       await persistStep(sessionId, userOid, finalStep);
       yield finalStep;
@@ -2143,6 +2154,8 @@ export async function* orchestrate(opts: OrchestrateOptions): AsyncIterable<Orch
             result: publicResult,
           };
           turnTools.push({ name: tc.function.name, serverName: tool.serverName, durationMs: okDurationMs, ok: true });
+          // CTS-04: map any grounding provenance the tool returned into citations.
+          turnCitations = mergeCitations(turnCitations, extractCitationsFromToolResult(tc.function.name, publicResult));
           messages.push({
             role: 'tool',
             tool_call_id: tc.id,
