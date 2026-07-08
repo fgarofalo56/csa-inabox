@@ -42,6 +42,9 @@ import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { AiSearchServiceTree } from '@/lib/components/ai-search/ai-search-tree';
+import { IndexerOpsPanel } from '@/lib/components/ai-search/indexer-ops';
+import { ScoringProfilesDesigner, AnalyzersDesigner, CorsAndCmkDesigner } from '@/lib/components/ai-search/index-designers';
+import { AiSearchServicePanel } from '@/lib/components/ai-search/ai-search-service-panel';
 import {
   type FieldRow, type VectorQuery,
   type SemanticConfig, type VectorAlgorithm, type VectorProfile, type VectorMetric,
@@ -1889,6 +1892,10 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
   const [indexersLoading, setIndexersLoading] = useState(false);
   // Which indexer's schedule panel is expanded (by name).
   const [scheduleEditFor, setScheduleEditFor] = useState<string | null>(null);
+  // Which indexer's operations panel (history + field mappings + reset) is expanded.
+  const [opsFor, setOpsFor] = useState<string | null>(null);
+  // Whether the service-administration panel is showing (AIF-17).
+  const [showService, setShowService] = useState(false);
 
   const idx = detail.data?.index;
   const fields: any[] = idx?.fields || [];
@@ -2085,13 +2092,20 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
     <AiSearchServiceTree
       selectedIndex={navIndex}
       refreshKey={treeRefresh}
-      onOpenIndex={(name) => { setNavIndex(name); setTab('schema'); setHits(null); setAnalyzeRes(null); setIndexerData(null); }}
-      onNewIndex={() => { setNavIndex(null); /* fall back to the create dialog within the tree */ }}
+      onOpenIndex={(name) => { setNavIndex(name); setShowService(false); setTab('schema'); setHits(null); setAnalyzeRes(null); setIndexerData(null); }}
+      onNewIndex={() => { setNavIndex(null); setShowService(false); /* fall back to the create dialog within the tree */ }}
+      onOpenService={() => setShowService(true)}
     />
   );
   const chrome = (main: ReactNode) => (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon} leftPanel={serviceTree} main={main} />
   );
+
+  // AIF-17 — service administration panel (keys / networking / monitoring / stats),
+  // opened from the navigator's ⚙ Service action. Renders over the index surface.
+  if (showService) {
+    return chrome(<AiSearchServicePanel onClose={() => setShowService(false)} />);
+  }
 
   // -------- Catalog list mode (no item, no navigator selection) --------
   if (isNew && !navIndex) {
@@ -2297,6 +2311,13 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
 
               {/* Semantic configuration designer — visual builder for index.semantic.configurations[]. */}
               <SemanticConfigDesigner idx={idx} indexBase={indexBase} onSaved={() => { reloadDetail(); setTreeRefresh((n) => n + 1); }} />
+
+              {/* AIF-16 — visual designers for the sections that were JSON-only:
+                  scoring profiles, custom analyzers, and CORS + customer-managed key.
+                  Each writes into the same PUT /indexes/{name} (applyDesignerSections). */}
+              <ScoringProfilesDesigner idx={idx} indexBase={indexBase} onSaved={() => { reloadDetail(); setTreeRefresh((n) => n + 1); }} />
+              <AnalyzersDesigner idx={idx} indexBase={indexBase} onSaved={() => { reloadDetail(); setTreeRefresh((n) => n + 1); }} />
+              <CorsAndCmkDesigner idx={idx} indexBase={indexBase} onSaved={() => { reloadDetail(); setTreeRefresh((n) => n + 1); }} />
 
               {/* rel-T107 — PARITY JSON VIEW (allowed). This is NOT a raw item-config
                   blob: the typed Fields designer above (name / type / key / searchable /
@@ -2597,6 +2618,9 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
                                 <Button size="small" onClick={() => indexerAction('reset', ix.name)}>Reset</Button>{' '}
                                 <Button size="small" appearance="primary" onClick={() => setScheduleEditFor((cur) => (cur === ix.name ? null : ix.name))}>
                                   {scheduleEditFor === ix.name ? 'Close' : 'Schedule'}
+                                </Button>{' '}
+                                <Button size="small" onClick={() => setOpsFor((cur) => (cur === ix.name ? null : ix.name))}>
+                                  {opsFor === ix.name ? 'Close ops' : 'Ops'}
                                 </Button>
                               </TableCell>
                             </TableRow>
@@ -2617,6 +2641,13 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
                         initialDisabled={ix.disabled}
                         onSaved={() => { setScheduleEditFor(null); loadIndexers(); }}
                       />
+                    );
+                  })()}
+                  {opsFor && (() => {
+                    const ix = (indexerData.indexers || []).find((x: any) => x.name === opsFor);
+                    if (!ix) return null;
+                    return (
+                      <IndexerOpsPanel route={indexersRoute} indexer={ix.name} skillsetName={ix.skillsetName} />
                     );
                   })()}
                   <Subtitle2 style={{ marginTop: tokens.spacingVerticalM }}>Data sources ({(indexerData.dataSources || []).length})</Subtitle2>
