@@ -41,7 +41,15 @@ import {
   Beaker24Regular, ClipboardTaskListLtr24Regular, DataTrending24Regular, Gauge24Regular,
   Globe24Regular, ShieldKeyhole24Regular, Key24Regular, History24Regular,
   Server24Regular, Database24Regular, TaskListSquareLtr24Regular, Box24Regular,
+  Add24Regular, Delete20Regular,
 } from '@fluentui/react-icons';
+import {
+  CONNECTION_CATEGORIES,
+  isKeyVaultSecretUri,
+  isValidConnectionName,
+  type ConnectionCategory,
+  type ConnectionAuthMode,
+} from '@/lib/azure/foundry-connection-shapes';
 import { EmptyState } from '@/lib/components/empty-state';
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
@@ -271,38 +279,255 @@ function OverviewPanel({ nonce, onWorkspace }: { nonce: number; onWorkspace?: (w
 function ConnectionsPanel({ active, nonce }: { active: boolean; nonce: number }) {
   const s = useStyles();
   // Connections live on the hub workspace, not the CS account — no account selector.
-  const [st] = useLazyFetch<{ ok: boolean; connections: any[] }>(`/api/foundry/connections`, active, nonce);
+  const [st, reload] = useLazyFetch<{ ok: boolean; connections: any[] }>(`/api/foundry/connections`, active, nonce);
+  const [createOpen, setCreateOpen] = useState(false);
+  const [delTarget, setDelTarget] = useState<string | null>(null);
+  const [delBusy, setDelBusy] = useState(false);
+  const [banner, setBanner] = useState<{ intent: 'success' | 'error'; text: string } | null>(null);
+
+  const doDelete = async () => {
+    if (!delTarget) return;
+    setDelBusy(true); setBanner(null);
+    try {
+      const r = await clientFetch(`/api/foundry/connections?name=${encodeURIComponent(delTarget)}`, { method: 'DELETE' });
+      const j = await r.json();
+      if (!j.ok) { setBanner({ intent: 'error', text: j.error || 'Delete failed' }); return; }
+      setBanner({ intent: 'success', text: `Connection "${delTarget}" deleted.` });
+      setDelTarget(null);
+      reload();
+    } catch (e: any) { setBanner({ intent: 'error', text: e?.message || String(e) }); }
+    finally { setDelBusy(false); }
+  };
+
   if (!active) return null;
   if (st.loading) return <div className={s.pad}><Spinner size="small" label="Loading connections…" labelPosition="after" /></div>;
   if (st.error) return <div className={s.pad}><GateBar msg={st.error} hint={st.hint} notDeployed={st.notDeployed} /></div>;
   const items = Array.isArray(st.data?.connections) ? st.data!.connections : [];
-  if (!items.length) return <EmptyPane icon={<PlugConnected24Regular />} title="No connections yet" body="No connections are registered on this hub yet. Connections link the hub to Azure OpenAI, AI Search, storage and other resources." />;
+
   return (
     <div className={s.pad}>
-      <Caption1>{items.length} connection(s)</Caption1>
-      <div className={s.tableWrap}>
-        <Table aria-label="Connections" size="small">
-          <TableHeader><TableRow>
-            <TableHeaderCell>Name</TableHeaderCell>
-            <TableHeaderCell>Category</TableHeaderCell>
-            <TableHeaderCell>Auth</TableHeaderCell>
-            <TableHeaderCell>Target</TableHeaderCell>
-            <TableHeaderCell>Shared</TableHeaderCell>
-          </TableRow></TableHeader>
-          <TableBody>
-            {items.map((c) => (
-              <TableRow key={c.id || c.name}>
-                <TableCell className={s.cell}><strong>{c.name}</strong></TableCell>
-                <TableCell className={s.cell}>{c.category || '—'}</TableCell>
-                <TableCell className={s.cell}>{c.authType || '—'}</TableCell>
-                <TableCell className={s.cell}>{c.target || '—'}</TableCell>
-                <TableCell className={s.cell}>{c.isSharedToAll ? 'Yes' : 'No'}</TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
+      <div className={s.toolbar}>
+        <Caption1>{items.length} connection(s)</Caption1>
+        <span style={{ flex: 1 }} />
+        <Button appearance="primary" size="small" icon={<Add24Regular />} onClick={() => setCreateOpen(true)}>
+          New connection
+        </Button>
       </div>
+      {banner && (
+        <MessageBar intent={banner.intent}><MessageBarBody>{banner.text}</MessageBarBody></MessageBar>
+      )}
+      {items.length === 0 ? (
+        <div className={s.emptyCompact}>
+          <span className={s.emptyChip}><PlugConnected24Regular /></span>
+          <div>
+            <Body1>No connections are registered on this hub yet.</Body1>
+            <br />
+            <Caption1>Connections link the hub to Azure OpenAI, AI Search, storage and other resources — create one with <strong>New connection</strong> so agents, flows and knowledge sources can reference it by name.</Caption1>
+          </div>
+        </div>
+      ) : (
+        <div className={s.tableWrap}>
+          <Table aria-label="Connections" size="small">
+            <TableHeader><TableRow>
+              <TableHeaderCell>Name</TableHeaderCell>
+              <TableHeaderCell>Category</TableHeaderCell>
+              <TableHeaderCell>Auth</TableHeaderCell>
+              <TableHeaderCell>Target</TableHeaderCell>
+              <TableHeaderCell>Shared</TableHeaderCell>
+              <TableHeaderCell>Actions</TableHeaderCell>
+            </TableRow></TableHeader>
+            <TableBody>
+              {items.map((c) => (
+                <TableRow key={c.id || c.name}>
+                  <TableCell className={s.cell}><strong>{c.name}</strong></TableCell>
+                  <TableCell className={s.cell}>{c.category || '—'}</TableCell>
+                  <TableCell className={s.cell}>{c.authType || '—'}</TableCell>
+                  <TableCell className={s.cell}>{c.target || '—'}</TableCell>
+                  <TableCell className={s.cell}>{c.isSharedToAll ? 'Yes' : 'No'}</TableCell>
+                  <TableCell className={s.cell}>
+                    <Tooltip content="Delete connection" relationship="label">
+                      <Button size="small" appearance="subtle" icon={<Delete20Regular />}
+                        aria-label={`Delete ${c.name}`} onClick={() => setDelTarget(c.name)} />
+                    </Tooltip>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      )}
+
+      <CreateConnectionDialog
+        open={createOpen}
+        onClose={() => setCreateOpen(false)}
+        onCreated={(name) => { setBanner({ intent: 'success', text: `Connection "${name}" created.` }); reload(); }}
+      />
+
+      <Dialog open={!!delTarget} onOpenChange={(_, d) => { if (!d.open) setDelTarget(null); }}>
+        <DialogSurface>
+          <DialogBody>
+            <DialogTitle>Delete connection</DialogTitle>
+            <DialogContent>
+              <Body1>Delete connection <strong>{delTarget}</strong>? Agents, flows or knowledge sources that reference it by name will stop resolving. This calls a real DELETE on the workspace connection.</Body1>
+            </DialogContent>
+            <DialogActions>
+              <Button appearance="secondary" onClick={() => setDelTarget(null)} disabled={delBusy}>Cancel</Button>
+              <Button appearance="primary" onClick={doDelete} disabled={delBusy}>{delBusy ? 'Deleting…' : 'Delete'}</Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
     </div>
+  );
+}
+
+/**
+ * Typed create-connection dialog — the category picker drives the credential
+ * field set (portal parity). Entra ID (managed identity) is the default and
+ * needs no secret; key-based modes accept ONLY a Key Vault secret identifier
+ * (validated client-side + server-side), so a raw secret never leaves the form.
+ */
+function CreateConnectionDialog({
+  open, onClose, onCreated,
+}: { open: boolean; onClose: () => void; onCreated: (name: string) => void }) {
+  const [name, setName] = useState('');
+  const [category, setCategory] = useState<ConnectionCategory>('AzureOpenAI');
+  const [target, setTarget] = useState('');
+  const [authMode, setAuthMode] = useState<ConnectionAuthMode>('AAD');
+  const [kvUri, setKvUri] = useState('');
+  const [customRows, setCustomRows] = useState<{ key: string; uri: string }[]>([{ key: '', uri: '' }]);
+  const [shared, setShared] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ intent: 'success' | 'error' | 'warning'; text: string } | null>(null);
+
+  const catRow = useMemo(() => CONNECTION_CATEGORIES.find((c) => c.value === category)!, [category]);
+
+  // Keep the auth mode valid for the selected category.
+  useEffect(() => {
+    if (!catRow.authModes.includes(authMode)) setAuthMode(catRow.authModes[0]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [category]);
+
+  const reset = () => {
+    setName(''); setCategory('AzureOpenAI'); setTarget(''); setAuthMode('AAD');
+    setKvUri(''); setCustomRows([{ key: '', uri: '' }]); setShared(true); setMsg(null);
+  };
+
+  const nameValid = !name || isValidConnectionName(name);
+  const kvValid = authMode !== 'ApiKey' || (!!kvUri && isKeyVaultSecretUri(kvUri));
+
+  const submit = async () => {
+    setMsg(null);
+    if (!name.trim()) { setMsg({ intent: 'error', text: 'Name is required.' }); return; }
+    if (!isValidConnectionName(name)) { setMsg({ intent: 'error', text: 'Name must be 2–63 chars: letters, digits, _ . -' }); return; }
+    if (!target.trim()) { setMsg({ intent: 'error', text: 'Target endpoint is required.' }); return; }
+    const body: any = { name: name.trim(), category, target: target.trim(), authMode, isSharedToAll: shared };
+    if (authMode === 'ApiKey') {
+      if (!isKeyVaultSecretUri(kvUri)) { setMsg({ intent: 'error', text: 'Provide a Key Vault secret identifier (https://<vault>.vault.azure.net/secrets/<name>). Raw keys are not accepted.' }); return; }
+      body.keyVaultSecretUri = kvUri.trim();
+    } else if (authMode === 'CustomKeys') {
+      const refs: Record<string, string> = {};
+      for (const r of customRows) {
+        if (!r.key.trim()) continue;
+        if (!isKeyVaultSecretUri(r.uri)) { setMsg({ intent: 'error', text: `Key "${r.key}" needs a Key Vault secret identifier (raw values are not accepted).` }); return; }
+        refs[r.key.trim()] = r.uri.trim();
+      }
+      if (!Object.keys(refs).length) { setMsg({ intent: 'error', text: 'Add at least one key referencing a Key Vault secret.' }); return; }
+      body.customKeyVaultRefs = refs;
+    }
+    setBusy(true);
+    try {
+      const r = await clientFetch('/api/foundry/connections', {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+      });
+      const j = await r.json();
+      if (!j.ok) { setMsg({ intent: j.code === 'raw_secret_rejected' ? 'warning' : 'error', text: j.error || 'Create failed' }); return; }
+      onCreated(j.connection?.name || name.trim());
+      reset(); onClose();
+    } catch (e: any) { setMsg({ intent: 'error', text: e?.message || String(e) }); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={(_, d) => { if (!d.open) { reset(); onClose(); } }}>
+      <DialogSurface>
+        <DialogBody>
+          <DialogTitle>New connection</DialogTitle>
+          <DialogContent>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
+              <Field label="Name" required validationState={nameValid ? 'none' : 'error'}
+                validationMessage={nameValid ? undefined : '2–63 chars: letters, digits, _ . -'}>
+                <Input value={name} onChange={(_, d) => setName(d.value)} placeholder="my-aoai-connection" />
+              </Field>
+              <Field label="Category" required>
+                <Dropdown value={catRow.label} selectedOptions={[category]}
+                  onOptionSelect={(_, d) => { if (d.optionValue) setCategory(d.optionValue as ConnectionCategory); }}>
+                  {CONNECTION_CATEGORIES.map((c) => (<Option key={c.value} value={c.value} text={c.label}>{c.label}</Option>))}
+                </Dropdown>
+              </Field>
+              <Field label="Target endpoint" required>
+                <Input value={target} onChange={(_, d) => setTarget(d.value)} placeholder={catRow.targetPlaceholder} />
+              </Field>
+              <Field label="Authentication" required>
+                <Dropdown value={authMode === 'AAD' ? 'Microsoft Entra ID (managed identity)' : authMode === 'ApiKey' ? 'API key (Key Vault reference)' : 'Custom keys (Key Vault references)'}
+                  selectedOptions={[authMode]}
+                  onOptionSelect={(_, d) => { if (d.optionValue) setAuthMode(d.optionValue as ConnectionAuthMode); }}>
+                  {catRow.authModes.map((m) => (
+                    <Option key={m} value={m} text={m === 'AAD' ? 'Microsoft Entra ID (managed identity)' : m === 'ApiKey' ? 'API key (Key Vault reference)' : 'Custom keys (Key Vault references)'}>
+                      {m === 'AAD' ? 'Microsoft Entra ID (managed identity)' : m === 'ApiKey' ? 'API key (Key Vault reference)' : 'Custom keys (Key Vault references)'}
+                    </Option>
+                  ))}
+                </Dropdown>
+              </Field>
+
+              {authMode === 'AAD' && (
+                <MessageBar intent="info">
+                  <MessageBarBody>
+                    The hub's managed identity authenticates to the target — no secret is stored. Grant that identity the
+                    appropriate data-plane role on the target resource (e.g. <strong>Cognitive Services OpenAI User</strong> for Azure OpenAI).
+                  </MessageBarBody>
+                </MessageBar>
+              )}
+
+              {authMode === 'ApiKey' && (
+                <Field label="Key Vault secret identifier" required validationState={kvValid ? 'none' : 'error'}
+                  validationMessage={kvValid ? undefined : 'Must be https://<vault>.vault.azure.net/secrets/<name>'}>
+                  <Input value={kvUri} onChange={(_, d) => setKvUri(d.value)}
+                    placeholder="https://my-kv.vault.azure.net/secrets/aoai-key" />
+                </Field>
+              )}
+
+              {authMode === 'CustomKeys' && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS }}>
+                  <Caption1>Each key references a Key Vault secret — raw values are not accepted.</Caption1>
+                  {customRows.map((r, i) => (
+                    <div key={i} style={{ display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center' }}>
+                      <Input placeholder="key name" value={r.key}
+                        onChange={(_, d) => setCustomRows((rows) => rows.map((x, n) => n === i ? { ...x, key: d.value } : x))} />
+                      <Input placeholder="https://<vault>.vault.azure.net/secrets/<name>" value={r.uri}
+                        style={{ flex: 1 }}
+                        onChange={(_, d) => setCustomRows((rows) => rows.map((x, n) => n === i ? { ...x, uri: d.value } : x))} />
+                      <Button size="small" appearance="subtle" icon={<Delete20Regular />} aria-label="Remove key"
+                        onClick={() => setCustomRows((rows) => rows.filter((_, n) => n !== i))} />
+                    </div>
+                  ))}
+                  <Button size="small" appearance="secondary" icon={<Add24Regular />}
+                    onClick={() => setCustomRows((rows) => [...rows, { key: '', uri: '' }])}>Add key</Button>
+                </div>
+              )}
+
+              <Switch label="Share with everyone in the hub" checked={shared} onChange={(_, d) => setShared(!!d.checked)} />
+
+              {msg && <MessageBar intent={msg.intent}><MessageBarBody>{msg.text}</MessageBarBody></MessageBar>}
+            </div>
+          </DialogContent>
+          <DialogActions>
+            <Button appearance="secondary" onClick={() => { reset(); onClose(); }} disabled={busy}>Cancel</Button>
+            <Button appearance="primary" onClick={submit} disabled={busy || !kvValid}>{busy ? 'Creating…' : 'Create connection'}</Button>
+          </DialogActions>
+        </DialogBody>
+      </DialogSurface>
+    </Dialog>
   );
 }
 

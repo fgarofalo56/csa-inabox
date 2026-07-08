@@ -14,6 +14,7 @@ import { getSession } from '@/lib/auth/session';
 import { requireTenantAdmin } from '@/lib/auth/feature-gate';
 import { pdpCheck } from '@/lib/auth/pdp/enforce';
 import { tenantSettingsContainer, auditLogContainer } from '@/lib/azure/cosmos-client';
+import { emitAuditEvent } from '@/lib/admin/audit-stream';
 import {
   defaultSettings,
   numericDefaults,
@@ -229,6 +230,23 @@ export async function PUT(req: NextRequest) {
         }).catch(() => {});
       }
     } catch { /* audit failures are non-blocking */ }
+
+    // SIEM audit stream (BR-SIEM) — one summary event per save (governance
+    // toggles: DLP, sensitivity labels, feature enablement). Changed keys are
+    // enumerated in Detail so a SIEM rule can alert on a security toggle flip.
+    emitAuditEvent({
+      actorOid: s.claims.oid,
+      actorUpn: who,
+      action: 'tenant-settings.update',
+      targetType: 'tenant-settings',
+      targetId: `tenant-settings:${tenantId}`,
+      tenantId: s.claims.tid || tenantId,
+      detail: {
+        toggleChanges: changes,
+        scopeChangedCount: scopeChanges.length,
+        numericChangedCount: numericChanges.length,
+      },
+    });
 
     return NextResponse.json({
       ok: true,

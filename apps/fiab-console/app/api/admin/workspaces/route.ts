@@ -24,6 +24,7 @@ import { applyWorkspaceBindings } from '@/lib/azure/workspace-bindings';
 import { domainExists, DEFAULT_DOMAIN_ID } from '@/lib/azure/domain-registry';
 import type { Workspace, WorkspaceLicenseMode } from '@/lib/types/workspace';
 import { apiServerError } from '@/lib/api/respond';
+import { emitAuditEvent } from '@/lib/admin/audit-stream';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -151,6 +152,16 @@ export async function POST(req: NextRequest) {
     }
 
     void upsertLoomDoc(docForWorkspace(merged));
+    // SIEM audit stream (BR-SIEM) — workspace create is a tenant-topology change.
+    emitAuditEvent({
+      actorOid: s.claims.oid,
+      actorUpn: s.claims.upn || s.claims.email || s.claims.oid,
+      action: 'workspace.create',
+      targetType: 'workspace',
+      targetId: merged.id,
+      tenantId: s.claims.tid || s.claims.oid,
+      detail: { name: merged.name, domain: merged.domain, licenseMode: merged.licenseMode },
+    });
     return NextResponse.json({ ok: true, workspace: merged }, { status: 201 });
   } catch (e: any) {
     return apiServerError(e, 'Failed to create workspace');

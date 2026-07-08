@@ -53,6 +53,7 @@ import {
 import { putKeyVaultSecret, deleteKeyVaultSecret, vaultUrl, sanitizeSecretName } from '@/lib/azure/kv-secrets-client';
 import { isGovCloud, cloudBoundaryLabel } from '@/lib/azure/cloud-endpoints';
 import { getCatalogEntry, validateConfigValues, type McpCatalogEntry } from '@/lib/mcp/catalog';
+import { emitAuditEvent } from '@/lib/admin/audit-stream';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -302,6 +303,18 @@ async function deployCatalogServer(
         image: entry.image,
       }).catch(() => {});
     } catch { /* audit is best-effort */ }
+
+    // SIEM audit stream (BR-SIEM) — deploying a catalog MCP server provisions a
+    // new Container App + KV secrets; a deploy-class SIEM signal.
+    emitAuditEvent({
+      actorOid: session.claims.oid,
+      actorUpn: who,
+      action: 'mcp-server.deploy',
+      targetType: 'mcp-server',
+      targetId: doc.serverId,
+      tenantId: session.claims.tid || tenantId,
+      detail: { name: doc.name, catalogId: entry.id, containerApp: appName, image: entry.image },
+    });
 
     return NextResponse.json({
       ok: true,

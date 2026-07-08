@@ -127,6 +127,9 @@ export const VALUE_HINT: Record<string, string> = {
   // from the monitoring module). Operators normally never set these by hand.
   LOOM_ORG_VISUALS_URL: 'https://<adls-account>.blob.<storage-suffix>/org-visuals',
   LOOM_LOG_ANALYTICS_WORKSPACE_ID: '<log-analytics-workspace-customer-id-guid>',
+  // SIEM audit stream (BR-SIEM) — DCE ingestion endpoint + DCR immutable id.
+  LOOM_AUDIT_DCR_ENDPOINT: 'https://dce-loom-audit-<region>-<hash>.<region>.ingest.monitor.azure.com',
+  LOOM_AUDIT_DCR_ID: 'dcr-<32-hex-immutable-id>',
   // ── new surfaces / data-plane day-one config (this expansion) ──
   LOOM_DATABRICKS_HOSTNAME: 'adb-<workspace-id>.<n>.azuredatabricks.net',
   LOOM_PURVIEW_UC_ENDPOINT: 'https://<purview-account>.purview.azure.com',
@@ -555,6 +558,13 @@ export const ENV_CHECKS: EnvSpec[] = [
     remediation: 'Set LOOM_ONELAKE_SECURITY_ACL=true so lakehouse OneLake-security roles are ENFORCED as real ADLS Gen2 POSIX ACLs on the Delta folders (deploy admin-plane + synapse.bicep with loomOnelakeSecurityEnabled=true). Requires the Console UAMI to hold "Storage Blob Data Owner" on the DLZ storage account and the LOOM_{LANDING,BRONZE,SILVER,GOLD}_URL container URLs to be set. Role definitions still author + persist without it — only ACL enforcement is gated.',
     provisionedBy: 'modules/admin-plane/main.bicep (param loomOnelakeSecurityEnabled → LOOM_ONELAKE_SECURITY_ACL, ~3484) + modules/landing-zone/synapse.bicep (Storage Blob Data Owner grant)',
     role: 'Storage Blob Data Owner (Console UAMI) on the DLZ storage account',
+  },
+  {
+    id: 'svc-audit-siem-stream', category: 'security', title: 'SIEM audit stream — LoomAudit_CL DCR (BR-SIEM)', severity: 'optional',
+    required: ['LOOM_AUDIT_DCR_ENDPOINT', 'LOOM_AUDIT_DCR_ID'], warnOnMiss: true,
+    remediation: 'Set LOOM_AUDIT_DCR_ENDPOINT (the DCE logs-ingestion endpoint) + LOOM_AUDIT_DCR_ID (the DCR immutable id) so every admin-plane mutation streams to the LoomAudit_CL custom table via the Azure Monitor Logs Ingestion API, where Microsoft Sentinel / any SIEM can alert continuously (docs/fiab/operations/siem-audit-stream.md). The push-button deploy wires both from modules/admin-plane/audit-stream.bicep. Without them the emitter silently no-ops — the Cosmos audit trail on /admin/audit-logs is unaffected. The Console UAMI needs "Monitoring Metrics Publisher" on the DCR (granted by the module).',
+    provisionedBy: 'modules/admin-plane/audit-stream.bicep (DCE + DCR + LoomAudit_CL table) → admin-plane/main.bicep apps[] env LOOM_AUDIT_DCR_ENDPOINT / LOOM_AUDIT_DCR_ID',
+    role: 'Monitoring Metrics Publisher (Console UAMI) on the audit DCR',
   },
   {
     id: 'svc-azure-maps', category: 'azure-services', title: 'Azure Maps (map visuals / Geo)', severity: 'optional',

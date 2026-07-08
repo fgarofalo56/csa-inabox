@@ -1521,6 +1521,27 @@ module defaultAlerts 'monitoring-default-alerts.bicep' = {
   }
 }
 
+// SIEM audit stream (Wave-1 BR-SIEM) — DCE + DCR + LoomAudit_CL custom table on
+// the monitoring LAW, plus Monitoring Metrics Publisher on the DCR for the
+// Console UAMI. Every admin-plane mutation (role/permission change, workspace +
+// domain delete, tenant-settings / env-config write, MCP deploy/teardown,
+// platform update-apply) is POSTed here via the Logs Ingestion API so a SIEM
+// (Sentinel) can alert continuously — docs/fiab/operations/siem-audit-stream.md.
+// Default-ON like the sibling monitoring modules; no new admin-plane param (at
+// the 256 ceiling) — names derive from location, RBAC reuses skipRoleGrants.
+// Outputs wire LOOM_AUDIT_DCR_ENDPOINT / LOOM_AUDIT_DCR_ID into the Console env
+// below; the app-side emitter silently no-ops until they are set.
+module auditStream 'audit-stream.bicep' = {
+  name: 'audit-stream'
+  params: {
+    location: location
+    complianceTags: complianceTags
+    lawName: monitoring.outputs.lawName
+    consolePrincipalId: identity.outputs.uamiConsolePrincipalId
+    skipRoleGrants: skipRoleGrants
+  }
+}
+
 // =====================================================================
 // 2. Network foundation
 // =====================================================================
@@ -1984,6 +2005,11 @@ module aiFoundry 'ai-foundry.bicep' = if (aiFoundryEnabled && empty(existingFoun
     privateDnsZoneNotebooksId: network.outputs.privateDnsZoneIds.notebooks
     adminEntraGroupId: adminEntraGroupId
     consolePrincipalId: identity.outputs.uamiConsolePrincipalId
+    // Grant the AI Search system MSI Cognitive Services OpenAI User on the AOAI
+    // account so an integrated-vectorization vectorizer / AzureOpenAIEmbedding
+    // skill can embed server-side as the search identity (AIF-2). Empty when AI
+    // Search is disabled / BYO.
+    searchServicePrincipalId: (aiSearchEnabled && empty(existingAiSearchService)) ? aiSearch!.outputs.searchPrincipalId : ''
     skipRoleGrants: skipRoleGrants
     complianceTags: complianceTags
   }
@@ -2606,6 +2632,13 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // also withholds APPLICATIONINSIGHTS_CONNECTION_STRING when false.
             { name: 'LOOM_CONSOLE_TELEMETRY_ENABLED', value: loomConsoleTelemetryEnabled ? 'true' : '' }
             { name: 'LOOM_LOG_ANALYTICS_RESOURCE_ID', value: monitoring.outputs.lawId }
+            // SIEM audit stream (BR-SIEM) — the DCE ingestion endpoint + DCR
+            // immutable id the Console POSTs admin-mutation events to (Logs
+            // Ingestion API → LoomAudit_CL). Both are required for the emitter to
+            // leave its silent no-op; unset = honest gate (Cosmos audit trail is
+            // unaffected). The UAMI holds Monitoring Metrics Publisher on the DCR.
+            { name: 'LOOM_AUDIT_DCR_ENDPOINT', value: auditStream.outputs.dceLogsIngestionEndpoint }
+            { name: 'LOOM_AUDIT_DCR_ID', value: auditStream.outputs.dcrImmutableId }
             // audit-T29 — release-environment (Apollo/Shuttle parity). Optional
             // Azure Deployment Environments project; empty = honest infra-gate in
             // the editor (ARM history + promotions still function). No Fabric.

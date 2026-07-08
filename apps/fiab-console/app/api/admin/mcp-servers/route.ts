@@ -19,6 +19,7 @@ import { auditLogContainer } from '@/lib/azure/cosmos-client';
 import { listMcpServers, getMcpServer, saveMcpServer, deleteMcpServer, updateMcpServerTestResult } from '@/lib/azure/mcp-config-store';
 import { listMcpTools } from '@/lib/azure/mcp-client';
 import { assertMcpEgressAllowed, McpEgressError } from '@/lib/azure/mcp-egress-guard';
+import { emitAuditEvent } from '@/lib/admin/audit-stream';
 import type { McpServerConfig, McpServerConfigDoc } from '@/lib/types/mcp-config';
 
 export const runtime = 'nodejs';
@@ -156,6 +157,17 @@ export async function POST(req: NextRequest) {
         name: config.name,
       }).catch(() => {});
     } catch { /* audit is best-effort */ }
+    // SIEM audit stream (BR-SIEM) — registering an MCP server adds an external
+    // tool surface reachable by Copilot; a SIEM signal on new endpoints matters.
+    emitAuditEvent({
+      actorOid: s.claims.oid,
+      actorUpn: who,
+      action: 'mcp-server.create',
+      targetType: 'mcp-server',
+      targetId: doc.serverId,
+      tenantId: s.claims.tid || tenantId,
+      detail: { name: config.name, endpoint: config.endpoint },
+    });
     return NextResponse.json({ ok: true, server: toView(doc) });
   } catch (e: any) {
     return apiError(e?.message || String(e), 400);
@@ -234,6 +246,16 @@ export async function DELETE(req: NextRequest) {
         name: existing.name,
       }).catch(() => {});
     } catch { /* audit is best-effort */ }
+    // SIEM audit stream (BR-SIEM).
+    emitAuditEvent({
+      actorOid: s.claims.oid,
+      actorUpn: who,
+      action: 'mcp-server.delete',
+      targetType: 'mcp-server',
+      targetId: serverId,
+      tenantId: s.claims.tid || tenantId,
+      detail: { name: existing.name },
+    });
     return NextResponse.json({ ok: true });
   } catch (e: any) {
     return apiServerError(e);

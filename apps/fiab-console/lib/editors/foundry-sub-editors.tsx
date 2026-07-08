@@ -43,15 +43,20 @@ import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { AiSearchServiceTree } from '@/lib/components/ai-search/ai-search-tree';
 import { KnowledgeBasesPanel } from '@/lib/components/ai-search/knowledge-bases-panel';
+import { IndexerOpsPanel } from '@/lib/components/ai-search/indexer-ops';
+import { ScoringProfilesDesigner, AnalyzersDesigner, CorsAndCmkDesigner } from '@/lib/components/ai-search/index-designers';
+import { AiSearchServicePanel } from '@/lib/components/ai-search/ai-search-service-panel';
 import {
   type FieldRow, type VectorQuery,
   type SemanticConfig, type VectorAlgorithm, type VectorProfile, type VectorMetric,
+  type Vectorizer,
   FIELD_TYPES, ANALYZERS, isVectorFieldType, apiFieldToRow, applyFieldRows,
   semanticConfigNames, vectorProfileNames, scoringProfileNames, facetableFieldNames,
   SCHEDULE_PRESETS, validateScheduleInterval, describeScheduleInterval,
   buildSemanticSection, parseSemanticSection, semanticEligibleFieldNames,
   VECTOR_METRICS, defaultHnswParameters, buildVectorSearchSection,
   parseVectorSearchSection, indexHasVectorField,
+  EMBEDDING_MODELS, defaultAzureOpenAIVectorizer,
 } from '@/lib/azure/search-field-shapes';
 import { PromptFlowBuilder } from '@/lib/prompt-flow/flow-builder';
 import {
@@ -1504,16 +1509,18 @@ function VectorSearchDesigner({
   const parsed = useMemo(() => parseVectorSearchSection(idx), [idx]);
   const [algorithms, setAlgorithms] = useState<VectorAlgorithm[]>(parsed.algorithms);
   const [profiles, setProfiles] = useState<VectorProfile[]>(parsed.profiles);
+  const [vectorizers, setVectorizers] = useState<Vectorizer[]>(parsed.vectorizers);
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState<{ intent: 'success' | 'error'; text: string } | null>(null);
 
   useEffect(() => {
     const p = parseVectorSearchSection(idx);
-    setAlgorithms(p.algorithms); setProfiles(p.profiles); setDirty(false); setMsg(null);
+    setAlgorithms(p.algorithms); setProfiles(p.profiles); setVectorizers(p.vectorizers); setDirty(false); setMsg(null);
   }, [idx]);
 
   const algoNames = useMemo(() => algorithms.map((a) => a.name).filter(Boolean), [algorithms]);
+  const vecNames = useMemo(() => vectorizers.map((v) => v.name).filter(Boolean), [vectorizers]);
 
   const patchAlgo = (i: number, patch: Partial<VectorAlgorithm>) => {
     setAlgorithms((as) => as.map((a, n) => (n === i ? { ...a, ...patch } : a))); setDirty(true);
@@ -1530,11 +1537,29 @@ function VectorSearchDesigner({
   const addProfile = () => { setProfiles((ps) => [...ps, { name: `profile-${ps.length + 1}`, algorithm: algoNames[0] || '' }]); setDirty(true); };
   const removeProfile = (i: number) => { setProfiles((ps) => ps.filter((_, n) => n !== i)); setDirty(true); };
 
+  const patchVectorizer = (i: number, patch: Partial<Vectorizer['azureOpenAIParameters']>) => {
+    setVectorizers((vs) => vs.map((v, n) => (n === i ? { ...v, azureOpenAIParameters: { ...v.azureOpenAIParameters, ...patch } } : v))); setDirty(true);
+  };
+  const patchVectorizerName = (i: number, name: string) => {
+    setVectorizers((vs) => vs.map((v, n) => (n === i ? { ...v, name } : v))); setDirty(true);
+  };
+  const addVectorizer = () => { setVectorizers((vs) => [...vs, defaultAzureOpenAIVectorizer(`aoai-vectorizer-${vs.length + 1}`)]); setDirty(true); };
+  const removeVectorizer = (i: number) => {
+    const removed = vectorizers[i]?.name;
+    setVectorizers((vs) => vs.filter((_, n) => n !== i));
+    // Detach any profile pointing at the removed vectorizer.
+    if (removed) setProfiles((ps) => ps.map((p) => (p.vectorizer === removed ? { ...p, vectorizer: undefined } : p)));
+    setDirty(true);
+  };
+
   const save = async () => {
     if (algorithms.some((a) => !a.name.trim())) { setMsg({ intent: 'error', text: 'Every algorithm needs a name.' }); return; }
     if (profiles.some((p) => !p.name.trim() || !p.algorithm)) { setMsg({ intent: 'error', text: 'Every profile needs a name and an algorithm.' }); return; }
+    if (vectorizers.some((v) => !v.name.trim() || !v.azureOpenAIParameters.resourceUri.trim() || !v.azureOpenAIParameters.deploymentId.trim())) {
+      setMsg({ intent: 'error', text: 'Every vectorizer needs a name, an Azure OpenAI endpoint, and an embedding deployment.' }); return;
+    }
     setSaving(true); setMsg(null);
-    const definition = { ...idx, vectorSearch: buildVectorSearchSection(algorithms, profiles) };
+    const definition = { ...idx, vectorSearch: buildVectorSearchSection(algorithms, profiles, vectorizers) };
     const j = await putIndexDefinition(indexBase, definition);
     setSaving(false);
     if (!j.ok) setMsg({ intent: 'error', text: j.error || 'Save failed' });
@@ -1614,11 +1639,12 @@ function VectorSearchDesigner({
       <div className={s.tableWrap}>
         <Table size="small" aria-label="Vector profiles">
           <TableHeader><TableRow>
-            <TableHeaderCell>Name</TableHeaderCell><TableHeaderCell>Algorithm</TableHeaderCell><TableHeaderCell></TableHeaderCell>
+            <TableHeaderCell>Name</TableHeaderCell><TableHeaderCell>Algorithm</TableHeaderCell>
+            <TableHeaderCell>Vectorizer (integrated vectorization)</TableHeaderCell><TableHeaderCell></TableHeaderCell>
           </TableRow></TableHeader>
           <TableBody>
             {profiles.length === 0 && (
-              <TableRow><TableCell colSpan={3}><Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{algoNames.length ? 'No profiles — add a profile so a vector field can reference an algorithm.' : 'Add an algorithm first, then create a profile that binds to it.'}</Caption1></TableCell></TableRow>
+              <TableRow><TableCell colSpan={4}><Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{algoNames.length ? 'No profiles — add a profile so a vector field can reference an algorithm.' : 'Add an algorithm first, then create a profile that binds to it.'}</Caption1></TableCell></TableRow>
             )}
             {profiles.map((p, i) => (
               <TableRow key={i}>
@@ -1629,7 +1655,61 @@ function VectorSearchDesigner({
                     {algoNames.map((n) => (<Option key={n} value={n}>{n}</Option>))}
                   </Dropdown>
                 </TableCell>
+                <TableCell>
+                  <Dropdown size="small" value={p.vectorizer || '(none)'} selectedOptions={p.vectorizer ? [p.vectorizer] : ['']} placeholder="(none)" aria-label={`profile-${i}-vectorizer`}
+                    onOptionSelect={(_, d) => patchProfile(i, { vectorizer: d.optionValue || undefined })}>
+                    <Option value="" text="(none)">(none — raw vectors only)</Option>
+                    {vecNames.map((n) => (<Option key={n} value={n}>{n}</Option>))}
+                  </Dropdown>
+                </TableCell>
                 <TableCell><Button size="small" appearance="subtle" onClick={() => removeProfile(i)} aria-label={`profile-${i}-delete`}>Delete</Button></TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </div>
+
+      {/* Vectorizers (integrated vectorization) */}
+      <div className={s.toolbar} style={{ marginTop: tokens.spacingVerticalM }}>
+        <Subtitle2 style={{ fontSize: tokens.fontSizeBase300 }}>Vectorizers ({vectorizers.length})</Subtitle2>
+        <Button size="small" onClick={addVectorizer}>＋ Add Azure OpenAI vectorizer</Button>
+      </div>
+      <Caption1>
+        A vectorizer lets AI Search embed query text <strong>server-side</strong> at query time (integrated vectorization),
+        so a <code>kind:&apos;text&apos;</code> vector query needs no client-side embedding. Bind a profile to a vectorizer above.
+      </Caption1>
+      {vectorizers.length > 0 && (
+        <MessageBar intent="warning">
+          <MessageBarBody>
+            <MessageBarTitle>Grant the search identity access to Azure OpenAI</MessageBarTitle>
+            The vectorizer calls the embedding deployment as the search service&apos;s managed identity. Grant that identity
+            the <strong>Cognitive Services OpenAI User</strong> role on the Azure OpenAI (Foundry) account, or the server-side
+            embed call returns 403. (bicep: ai-foundry.bicep wires this grant when the search principal id is passed.)
+          </MessageBarBody>
+        </MessageBar>
+      )}
+      <div className={s.tableWrap}>
+        <Table size="small" aria-label="Vectorizers">
+          <TableHeader><TableRow>
+            <TableHeaderCell>Name</TableHeaderCell><TableHeaderCell>Azure OpenAI endpoint</TableHeaderCell>
+            <TableHeaderCell>Embedding deployment</TableHeaderCell><TableHeaderCell>Model</TableHeaderCell><TableHeaderCell></TableHeaderCell>
+          </TableRow></TableHeader>
+          <TableBody>
+            {vectorizers.length === 0 && (
+              <TableRow><TableCell colSpan={5}><Caption1 style={{ color: tokens.colorNeutralForeground3 }}>No vectorizers — add an Azure OpenAI vectorizer to enable integrated (server-side) vectorization.</Caption1></TableCell></TableRow>
+            )}
+            {vectorizers.map((v, i) => (
+              <TableRow key={i}>
+                <TableCell><Input size="small" value={v.name} aria-label={`vectorizer-${i}-name`} onChange={(_, d) => patchVectorizerName(i, d.value)} className={s.fdInput} /></TableCell>
+                <TableCell><Input size="small" value={v.azureOpenAIParameters.resourceUri} aria-label={`vectorizer-${i}-uri`} placeholder="https://<name>.openai.azure.com" onChange={(_, d) => patchVectorizer(i, { resourceUri: d.value })} className={s.fdInput} /></TableCell>
+                <TableCell><Input size="small" value={v.azureOpenAIParameters.deploymentId} aria-label={`vectorizer-${i}-deployment`} placeholder="text-embedding-3-large" onChange={(_, d) => patchVectorizer(i, { deploymentId: d.value })} className={s.fdInput} /></TableCell>
+                <TableCell>
+                  <Dropdown size="small" value={v.azureOpenAIParameters.modelName || ''} selectedOptions={v.azureOpenAIParameters.modelName ? [v.azureOpenAIParameters.modelName] : []} placeholder="model" aria-label={`vectorizer-${i}-model`}
+                    onOptionSelect={(_, d) => patchVectorizer(i, { modelName: d.optionValue || '' })}>
+                    {EMBEDDING_MODELS.map((m) => (<Option key={m.model} value={m.model}>{`${m.model} (${m.dimensions}d)`}</Option>))}
+                  </Dropdown>
+                </TableCell>
+                <TableCell><Button size="small" appearance="subtle" onClick={() => removeVectorizer(i)} aria-label={`vectorizer-${i}-delete`}>Delete</Button></TableCell>
               </TableRow>
             ))}
           </TableBody>
@@ -1817,6 +1897,10 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
   const [indexersLoading, setIndexersLoading] = useState(false);
   // Which indexer's schedule panel is expanded (by name).
   const [scheduleEditFor, setScheduleEditFor] = useState<string | null>(null);
+  // Which indexer's operations panel (history + field mappings + reset) is expanded.
+  const [opsFor, setOpsFor] = useState<string | null>(null);
+  // Whether the service-administration panel is showing (AIF-17).
+  const [showService, setShowService] = useState(false);
 
   const idx = detail.data?.index;
   const fields: any[] = idx?.fields || [];
@@ -2014,9 +2098,10 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
       selectedIndex={navIndex}
       refreshKey={treeRefresh}
       knowledgeActive={kbView}
-      onOpenIndex={(name) => { setKbView(false); setNavIndex(name); setTab('schema'); setHits(null); setAnalyzeRes(null); setIndexerData(null); }}
-      onNewIndex={() => { setKbView(false); setNavIndex(null); /* fall back to the create dialog within the tree */ }}
-      onOpenKnowledge={() => { setNavIndex(null); setKbView(true); }}
+      onOpenIndex={(name) => { setKbView(false); setShowService(false); setNavIndex(name); setTab('schema'); setHits(null); setAnalyzeRes(null); setIndexerData(null); }}
+      onNewIndex={() => { setKbView(false); setShowService(false); setNavIndex(null); /* fall back to the create dialog within the tree */ }}
+      onOpenKnowledge={() => { setNavIndex(null); setShowService(false); setKbView(true); }}
+      onOpenService={() => { setKbView(false); setShowService(true); }}
     />
   );
   const chrome = (main: ReactNode) => (
@@ -2026,6 +2111,12 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
   // -------- Knowledge Bases (agentic retrieval) surface --------
   if (kbView) {
     return chrome(<KnowledgeBasesPanel />);
+  }
+
+  // AIF-17 — service administration panel (keys / networking / monitoring / stats),
+  // opened from the navigator's ⚙ Service action. Renders over the index surface.
+  if (showService) {
+    return chrome(<AiSearchServicePanel onClose={() => setShowService(false)} />);
   }
 
   // -------- Catalog list mode (no item, no navigator selection) --------
@@ -2232,6 +2323,13 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
 
               {/* Semantic configuration designer — visual builder for index.semantic.configurations[]. */}
               <SemanticConfigDesigner idx={idx} indexBase={indexBase} onSaved={() => { reloadDetail(); setTreeRefresh((n) => n + 1); }} />
+
+              {/* AIF-16 — visual designers for the sections that were JSON-only:
+                  scoring profiles, custom analyzers, and CORS + customer-managed key.
+                  Each writes into the same PUT /indexes/{name} (applyDesignerSections). */}
+              <ScoringProfilesDesigner idx={idx} indexBase={indexBase} onSaved={() => { reloadDetail(); setTreeRefresh((n) => n + 1); }} />
+              <AnalyzersDesigner idx={idx} indexBase={indexBase} onSaved={() => { reloadDetail(); setTreeRefresh((n) => n + 1); }} />
+              <CorsAndCmkDesigner idx={idx} indexBase={indexBase} onSaved={() => { reloadDetail(); setTreeRefresh((n) => n + 1); }} />
 
               {/* rel-T107 — PARITY JSON VIEW (allowed). This is NOT a raw item-config
                   blob: the typed Fields designer above (name / type / key / searchable /
@@ -2532,6 +2630,9 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
                                 <Button size="small" onClick={() => indexerAction('reset', ix.name)}>Reset</Button>{' '}
                                 <Button size="small" appearance="primary" onClick={() => setScheduleEditFor((cur) => (cur === ix.name ? null : ix.name))}>
                                   {scheduleEditFor === ix.name ? 'Close' : 'Schedule'}
+                                </Button>{' '}
+                                <Button size="small" onClick={() => setOpsFor((cur) => (cur === ix.name ? null : ix.name))}>
+                                  {opsFor === ix.name ? 'Close ops' : 'Ops'}
                                 </Button>
                               </TableCell>
                             </TableRow>
@@ -2552,6 +2653,13 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
                         initialDisabled={ix.disabled}
                         onSaved={() => { setScheduleEditFor(null); loadIndexers(); }}
                       />
+                    );
+                  })()}
+                  {opsFor && (() => {
+                    const ix = (indexerData.indexers || []).find((x: any) => x.name === opsFor);
+                    if (!ix) return null;
+                    return (
+                      <IndexerOpsPanel route={indexersRoute} indexer={ix.name} skillsetName={ix.skillsetName} />
                     );
                   })()}
                   <Subtitle2 style={{ marginTop: tokens.spacingVerticalM }}>Data sources ({(indexerData.dataSources || []).length})</Subtitle2>

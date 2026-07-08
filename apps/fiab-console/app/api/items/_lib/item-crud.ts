@@ -19,6 +19,7 @@ import {
 import { autoOnboardToPurview, offboardFromPurview } from '@/lib/azure/purview-autoonboard';
 import { reconcileThreadEdgesOnDelete, restoreThreadEdgesForItem } from '@/lib/thread/thread-edges';
 import { labelRank } from '@/lib/governance/label-propagation';
+import { recordItemVersion } from '@/lib/versions/item-version-store';
 import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
 import { apiError } from '@/lib/api/respond';
 
@@ -362,6 +363,13 @@ export async function updateOwnedItem(
   };
   const items = await itemsContainer();
   const { resource } = await items.item(current.id, current.workspaceId).replace<WorkspaceItem>(next);
+  // Version-history snapshot (Wave-2 W6) — record this save at the SHARED
+  // per-type save chokepoint (the sibling of the generic cosmos-items PATCH
+  // route) so every editor that persists through updateOwnedItem gets history.
+  // Best-effort inside the helper; never throws. `actor.name` is unavailable
+  // here (this helper only receives the tenant/oid), so the timeline shows the
+  // oid — the generic route path carries the display name.
+  await recordItemVersion(current, resource ?? next, { oid: tenantId });
   void upsertLoomDoc(docForItem(resource!, tenantId));
   void mirrorDataProduct(resource!, tenantId);
   void mirrorGovernanceDoc(resource!, tenantId);

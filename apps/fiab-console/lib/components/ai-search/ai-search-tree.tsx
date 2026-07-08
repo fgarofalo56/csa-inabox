@@ -48,6 +48,7 @@ import {
   BrainCircuit20Regular, TextBulletListSquare20Regular, BranchFork20Regular,
   Bug20Regular, ChevronDown16Regular, ChevronRight16Regular,
   BrainCircuit20Regular as BrainCircuit16Regular, Dismiss16Regular, Add16Regular,
+  Settings16Regular,
 } from '@fluentui/react-icons';
 
 const useStyles = makeStyles({
@@ -362,6 +363,8 @@ export interface AiSearchServiceTreeProps {
   onOpenIndex?: (name: string) => void;
   /** Start a brand-new index in the host editor. Falls back to the inline starter-index dialog when absent. */
   onNewIndex?: () => void;
+  /** Open the service-administration panel (keys / networking / monitoring / stats) in the host editor. */
+  onOpenService?: () => void;
   /** Increment to force a refresh from the parent (e.g. after a save/create). */
   refreshKey?: number;
   /** Open the Knowledge Bases (agentic retrieval) surface in the host editor. */
@@ -372,7 +375,7 @@ export interface AiSearchServiceTreeProps {
 
 /** A typed, AI-Search-faithful service navigator. */
 export function AiSearchServiceTree({
-  selectedIndex = null, onOpenIndex, onNewIndex, refreshKey = 0,
+  selectedIndex = null, onOpenIndex, onNewIndex, onOpenService, refreshKey = 0,
   onOpenKnowledge, knowledgeActive = false,
 }: AiSearchServiceTreeProps) {
   const s = useStyles();
@@ -661,6 +664,11 @@ export function AiSearchServiceTree({
               </MenuList>
             </MenuPopover>
           </Menu>
+          {onOpenService && (
+            <Tooltip content="Service administration (keys, networking, monitoring, statistics)" relationship="label">
+              <Button size="small" appearance="subtle" icon={<Settings16Regular />} onClick={onOpenService} aria-label="Service administration" />
+            </Tooltip>
+          )}
           <Tooltip content="Refresh" relationship="label">
             <Button size="small" appearance="subtle" icon={<ArrowSync16Regular />} onClick={loadAll} disabled={loading} aria-label="Refresh search service" />
           </Tooltip>

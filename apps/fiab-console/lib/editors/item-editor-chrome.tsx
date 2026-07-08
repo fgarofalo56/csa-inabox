@@ -18,11 +18,13 @@ import { Ribbon, type RibbonTab } from '@/lib/components/ribbon';
 import { ItemSidePanel } from '@/lib/components/item-side-panel';
 import { useCollapsibleState, CollapsedRail, CollapseToggle, RAIL_WIDTH } from '@/lib/components/collapsible-side-panel';
 import { LineageDrawer } from '@/lib/components/onelake/lineage-drawer';
+import { VersionHistoryDrawer } from '@/lib/components/versions/version-history-drawer';
 import { ThreadMenu } from '@/lib/components/thread/thread-menu';
 import { BundleContentBar } from '@/lib/components/bundle-content-bar';
 import { ShareItemDialog } from '@/lib/dialogs/share-item-dialog';
 import { EndorsementControl } from '@/lib/editors/endorsement-control';
 import { useUnsavedChangesGuard } from '@/lib/editors/use-unsaved-changes-guard';
+import { ExplainThisButton, type ExplainConfig } from '@/lib/components/explain-this';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 
 const useStyles = makeStyles({
@@ -122,9 +124,19 @@ interface Props {
    * omitting it is a no-op regression-wise.
    */
   displayName?: string;
+  /**
+   * Cross-item "Explain this" action (Wave-2 W19). When supplied, the header
+   * renders an `Explain` button that sends the artifact's LIVE structured
+   * definition (via {@link ExplainConfig.getDefinition}) to the shared
+   * `/api/items/[type]/[id]/explain` edge and renders a plain-English summary +
+   * inputs/outputs/risks in a Drawer. Only the pipeline / notebook / warehouse
+   * editors pass it; every other editor omits it (no button) — so it is a
+   * strictly additive, opt-in surface.
+   */
+  explain?: ExplainConfig;
 }
 
-export function ItemEditorChrome({ item, id, ribbon, leftPanel, main, rightPanel, rightPanelLabel = 'Copilot', dirty = false, displayName }: Props) {
+export function ItemEditorChrome({ item, id, ribbon, leftPanel, main, rightPanel, rightPanelLabel = 'Copilot', dirty = false, displayName, explain }: Props) {
   const styles = useStyles();
   // Shared unsaved-changes guard — one wiring covers every editor that threads
   // a `dirty` signal. Returns the confirm dialog (or null) to render below.
@@ -219,10 +231,19 @@ export function ItemEditorChrome({ item, id, ribbon, leftPanel, main, rightPanel
               Copilot
             </Button>
           </Tooltip>
+          {/* Cross-item "Explain this" (Wave-2 W19) — pipeline / notebook /
+              warehouse editors opt in by passing an `explain` config; the
+              button sends the live artifact definition to the /explain edge. */}
+          {!isNew && explain && (
+            <ExplainThisButton itemType={item.slug} itemId={id} family={explain.family} getDefinition={explain.getDefinition} />
+          )}
           {/* Loom Thread — weave this item into upstream/downstream Loom services. */}
           <ThreadMenu type={item.slug} id={id} name={title} />
           {/* OneLake item-to-item lineage drawer (upstream/downstream graph). */}
           {!isNew && <LineageDrawer type={item.slug} id={id} displayName={item.displayName} />}
+          {/* Version-history timeline + visual diff + restore (Wave-2 W6) —
+              real Cosmos-snapshot history captured at the shared save path. */}
+          {!isNew && <VersionHistoryDrawer type={item.slug} id={id} displayName={resolvedName ?? item.displayName} />}
           {/* Generic endorsement (Promote / Certify / Master data) — real Azure-
               native backend (Cosmos state.endorsement), on every editor. */}
           {!isNew && <EndorsementControl itemType={item.slug} itemId={id} />}

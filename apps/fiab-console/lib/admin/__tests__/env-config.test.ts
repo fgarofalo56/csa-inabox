@@ -122,15 +122,17 @@ describe('admin/env-config registry', () => {
     expect(aliasSatisfiedKeys((k) => adminRgSet.has(k)).has('LOOM_ALERT_RG')).toBe(true);
   });
 
-  it('exposes exactly the 60 editable runtime variables (catalog completeness)', () => {
+  it('exposes exactly the 62 editable runtime variables (catalog completeness)', () => {
     // The env-config catalog is the union of every required + anyOf key across
     // ENV_CHECKS. The /admin/env-config coverage badge reads N-of-<count>; this
     // pins the catalog size so a drift in ENV_CHECKS is caught in CI. Bumped to
     // 60 by the wave-2 coverage fix (SWA publish, Activator ADX scope, managed-PE
     // subnet, Plan SQL writeback, DAB preview runtime, UDF invoke base, OneLake
     // ACL enforcement, Azure Maps backend/credential) — previously these keys
-    // were silently DROPPED by PUT /api/admin/env-config.
-    expect(EDITABLE_ENV.length).toBe(60);
+    // were silently DROPPED by PUT /api/admin/env-config. Bumped to 62 by
+    // BR-SIEM (LOOM_AUDIT_DCR_ENDPOINT + LOOM_AUDIT_DCR_ID, the LoomAudit_CL
+    // SIEM audit-stream wiring).
+    expect(EDITABLE_ENV.length).toBe(62);
   });
 
   it('surfaces the wave-2 env vars as settable (previously dropped by the whitelist)', () => {

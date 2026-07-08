@@ -17,8 +17,12 @@ import {
 import { Search20Regular } from '@fluentui/react-icons';
 import { FABRIC_ITEM_TYPES } from '@/lib/catalog/fabric-item-types';
 import { NAV_ITEMS } from '@/lib/nav/nav-items';
+import { getCanvasCommands, subscribeCanvasCommands } from '@/lib/components/canvas/canvas-command-registry';
 
-interface Cmd { id: string; label: string; sub: string; href: string; group: string; }
+// A palette entry is either a navigation target (href) OR an in-app action
+// (run) — the latter powers canvas-scoped commands (W21) registered by the
+// focused canvas host.
+interface Cmd { id: string; label: string; sub: string; group: string; href?: string; run?: () => void; }
 
 // Presentation-only one-liner hints per destination. The DESTINATIONS themselves
 // (href + label) come from the shared NAV_ITEMS source of truth, so this palette
@@ -112,7 +116,19 @@ export function CommandPalette() {
   const [cursor, setCursor] = useState(0);
   const [hits, setHits] = useState<Cmd[]>([]);
   const [searching, setSearching] = useState(false);
+  // Canvas-scoped action commands (W21) contributed by the focused canvas host.
+  const [canvasCmds, setCanvasCmds] = useState<Cmd[]>([]);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Mirror the canvas-command registry into local state so the palette re-renders
+  // when a canvas registers/deregisters its actions (on focus/blur).
+  useEffect(() => {
+    const sync = () => setCanvasCmds(getCanvasCommands().map((c) => ({
+      id: c.id, label: c.label, sub: c.sub, group: 'Canvas', run: c.run,
+    })));
+    sync();
+    return subscribeCanvasCommands(sync);
+  }, []);
 
   // Debounced live search against /api/search/items (tenant items + workspaces).
   useEffect(() => {
@@ -181,7 +197,7 @@ export function CommandPalette() {
       href: `/items/${t.slug}/new`,
       group: 'Create',
     }));
-    const all = [...PAGES, ...ofTypes];
+    const all = [...canvasCmds, ...PAGES, ...ofTypes];
     const qq = q.trim().toLowerCase();
     const filtered = qq
       ? all.filter((c) =>
@@ -193,11 +209,13 @@ export function CommandPalette() {
     // Real-data hits land first so users find their own items, not catalog
     // entries with the same name.
     return [...hits, ...filtered];
-  }, [q, hits]);
+  }, [q, hits, canvasCmds]);
 
   function go(c: Cmd) {
     setOpen(false);
-    router.push(c.href);
+    // Canvas-scoped commands run an in-app action; navigation entries route.
+    if (c.run) { c.run(); return; }
+    if (c.href) router.push(c.href);
   }
 
   function onInputKey(e: React.KeyboardEvent<HTMLInputElement>) {

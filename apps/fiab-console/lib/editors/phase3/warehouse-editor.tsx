@@ -429,6 +429,12 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon}
+      explain={{ family: 'warehouse', getDefinition: () => ({
+        schemas: schema?.schemas ?? {},
+        views: schema?.views ?? [],
+        procedures: schema?.procedures ?? [],
+        functions: schema?.functions ?? [],
+      }) }}
       leftPanel={
         <div style={{ padding: tokens.spacingVerticalS }}>
           <Tree aria-label="Warehouse explorer" defaultOpenItems={['schemas', 'starter', 'starter-queries', 'dbt-models']}>
