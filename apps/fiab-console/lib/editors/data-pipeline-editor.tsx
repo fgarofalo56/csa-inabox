@@ -1198,6 +1198,7 @@ export function DataPipelineEditor({ item, id, runtimePreset, templateId }: Prop
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon} dirty={dirty}
       rightPanelLabel="Copilot"
+      explain={{ family: 'pipeline', getDefinition: () => ({ properties: spec.properties }) }}
       rightPanel={
         // A12 — docked Pipeline Copilot. ItemEditorChrome renders this in a
         // collapsible right rail (Fluent v9 CollapseToggle / CollapsedRail,
