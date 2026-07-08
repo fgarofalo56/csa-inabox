@@ -42,6 +42,7 @@ import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { AiSearchServiceTree } from '@/lib/components/ai-search/ai-search-tree';
+import { KnowledgeBasesPanel } from '@/lib/components/ai-search/knowledge-bases-panel';
 import {
   type FieldRow, type VectorQuery,
   type SemanticConfig, type VectorAlgorithm, type VectorProfile, type VectorMetric,
@@ -1735,6 +1736,10 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
   // left service navigator behaves like clicking an index in the portal.
   const [navIndex, setNavIndex] = useState<string | null>(null);
   const [treeRefresh, setTreeRefresh] = useState(0);
+  // Knowledge Bases (agentic retrieval / Foundry IQ) surface toggle. Opened from
+  // the service navigator's "Knowledge bases" group; mutually exclusive with an
+  // open index.
+  const [kbView, setKbView] = useState(false);
 
   // Catalog list mode (no specific item) — list every index on the service.
   const [list, reloadList] = useApi<{ indexes: any[] }>(isNew && !navIndex ? '/api/items/ai-search-index' : null);
@@ -2008,13 +2013,20 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
     <AiSearchServiceTree
       selectedIndex={navIndex}
       refreshKey={treeRefresh}
-      onOpenIndex={(name) => { setNavIndex(name); setTab('schema'); setHits(null); setAnalyzeRes(null); setIndexerData(null); }}
-      onNewIndex={() => { setNavIndex(null); /* fall back to the create dialog within the tree */ }}
+      knowledgeActive={kbView}
+      onOpenIndex={(name) => { setKbView(false); setNavIndex(name); setTab('schema'); setHits(null); setAnalyzeRes(null); setIndexerData(null); }}
+      onNewIndex={() => { setKbView(false); setNavIndex(null); /* fall back to the create dialog within the tree */ }}
+      onOpenKnowledge={() => { setNavIndex(null); setKbView(true); }}
     />
   );
   const chrome = (main: ReactNode) => (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon} leftPanel={serviceTree} main={main} />
   );
+
+  // -------- Knowledge Bases (agentic retrieval) surface --------
+  if (kbView) {
+    return chrome(<KnowledgeBasesPanel />);
+  }
 
   // -------- Catalog list mode (no item, no navigator selection) --------
   if (isNew && !navIndex) {
