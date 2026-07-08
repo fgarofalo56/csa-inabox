@@ -226,4 +226,30 @@ export const azureAiFoundryItems: FabricItemType[] = [
       ],
       "docsUrl": "https://learn.microsoft.com/azure/machine-learning/concept-data"
     } },
+  // AIF-7 — batch LLM augmentation over a source table's columns (Fabric AI
+  // functions "batch over a column" parity, Azure-native, no Fabric dependency).
+  { slug: 'ai-enrichment', displayName: 'AI enrichment', restType: 'AiEnrichment', category: 'Azure AI Foundry',
+    description: 'Batch LLM augmentation over a table column — summarize / classify / extract / translate / custom prompt into a new Delta column, on Azure OpenAI + Databricks SQL. No Fabric dependency.',
+    learnContent: {
+      "overview": "AI enrichment runs a batch large-language-model operation over one column of a lakehouse or warehouse table and writes the result to a new output column — the durable, first-class item form of Fabric's AI functions. It is 100% Azure-native: on Commercial/GCC with a Databricks SQL Warehouse the enriched column is computed IN-DATABASE by Databricks' ai_* SQL builtins (one CREATE TABLE AS SELECT produces a new Delta table with the new column populated); custom prompts and Gov boundaries run per-row against the live Azure OpenAI deployment with bounded concurrency and retry. No Microsoft Fabric capacity or Power BI workspace is required.",
+      "steps": [
+        {
+          "title": "Pick a source table",
+          "body": "Choose a Databricks SQL Warehouse, then a catalog / schema / table from the live Unity Catalog schema browser, and the text column to enrich."
+        },
+        {
+          "title": "Choose an operation",
+          "body": "Summarize, Classify (your labels), Sentiment, Extract (named fields as JSON), Translate, Fix grammar, Generate response, or a Custom prompt. Name the new output column."
+        },
+        {
+          "title": "Tune batch + model tier",
+          "body": "Set batch size and concurrency, and pick the Fast (default) or Advanced (higher-reasoning) model tier — the Advanced tier can pass a reasoning-effort level."
+        },
+        {
+          "title": "Preview, then run",
+          "body": "Preview enriches the first N real rows with real model output and reports a cost estimate grounded in measured tokens. Run materialises the whole enriched table; each run is recorded in the run history."
+        }
+      ],
+      "docsUrl": "https://learn.microsoft.com/fabric/data-science/ai-functions/overview"
+    } },
 ];

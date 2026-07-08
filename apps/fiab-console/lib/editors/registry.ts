@@ -104,6 +104,8 @@ export const EDITOR_REGISTRY: Record<string, EditorComponent> = {
   'ml-model':             reg(() => import('./ml-model-editor'),            'MlModelEditor'),
   'ml-experiment':        reg(() => import('./ml-experiment-editor'),     'MlExperimentEditor'),
   'automl':               reg(() => import('./automl-editor'),            'AutoMlEditor'),
+  // AIF-7 — batch LLM augmentation over a table column (Fabric AI-functions item).
+  'ai-enrichment':        reg(() => import('./ai-enrichment-editor'),     'AiEnrichmentEditor'),
   'graphql-api':          reg(() => import('./phase4/graphql-api-editor'),      'GraphqlApiEditor'),
   'user-data-function':   reg(() => import('./phase4/user-data-function-editor'), 'UserDataFunctionEditor'),
   'variable-library':     reg(() => import('./phase4/variable-library-editor'), 'VariableLibraryEditor'),

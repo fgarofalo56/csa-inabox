@@ -12,7 +12,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import {
-  listSkillsets, createSkillset, deleteSkillset,
+  listSkillsets, getSkillset, createSkillset, deleteSkillset,
   searchConfigGate, SearchNotDeployedError, SearchDataError,
 } from '@/lib/azure/search-index-client';
 
@@ -32,12 +32,20 @@ function fail(e: any) {
   return NextResponse.json({ ok: false, error: e?.message || String(e), body: e?.body }, { status });
 }
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   const g = gate(); if (g) return g;
-  try { return NextResponse.json({ ok: true, skillsets: await listSkillsets() }); }
-  catch (e: any) { return fail(e); }
+  // ?name=N → full definition (for editing an existing chain); else list.
+  const name = req.nextUrl.searchParams.get('name');
+  try {
+    if (name) {
+      const definition = await getSkillset(name);
+      if (!definition) return NextResponse.json({ ok: false, error: `skillset ${name} not found` }, { status: 404 });
+      return NextResponse.json({ ok: true, definition });
+    }
+    return NextResponse.json({ ok: true, skillsets: await listSkillsets() });
+  } catch (e: any) { return fail(e); }
 }
 
 export async function POST(req: NextRequest) {

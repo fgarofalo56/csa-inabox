@@ -96,6 +96,16 @@ const ALLOWLIST = new Set([
   'LOOM_MULTIUSER_ACL',             // opt-out kill switch for the multi-user ACL fallback (default on in code; rel-T11)
   'LOOM_SCHEDULER_EMAIL_WEBHOOK',   // opt-in email relay (ACS/Logic App/SMTP) for scheduler failure alerts (rel-T81); unset = alerts land in the Loom inbox + optional webhook only
   'LOOM_ITEM_VERSION_CAP',          // opt-in tuning knob for the per-item version-history retention cap (W6); unset default = 50 in code (lib/versions/item-version-store.ts)
+  // SVC-1/SVC-8 — AI-enrichment cognitive endpoints. Independent single-kind
+  // Cognitive Services accounts provisioned by deploy-planner/cognitive-account.bicep
+  // and set per-deployment via /admin/env-config; NOT emitted by admin-plane
+  // (which is at the 256-param ceiling). Unset default = honest infra gate on the
+  // AI-enrich canvas node + preview route.
+  'LOOM_DOCINTEL_ENDPOINT',         // opt-in Document Intelligence endpoint (deploy-planner cognitive account)
+  'LOOM_VISION_ENDPOINT',           // opt-in Azure AI Vision endpoint (deploy-planner cognitive account)
+  'LOOM_LANGUAGE_ENDPOINT',         // opt-in Azure AI Language endpoint (deploy-planner cognitive account)
+  'LOOM_TRANSLATOR_ENDPOINT',       // opt-in Azure AI Translator endpoint (deploy-planner cognitive account)
+  'LOOM_TRANSLATOR_REGION',         // opt-in Translator resource region (Ocp-Apim-Subscription-Region header)
 
   // ---- Derived from an emitted var at runtime (KV name<->url, cosmos endpoint<->id, etc.) ----
   'LOOM_KEY_VAULT_NAME',            // derived from LOOM_KEY_VAULT_URL

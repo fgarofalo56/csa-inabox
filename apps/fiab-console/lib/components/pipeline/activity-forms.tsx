@@ -29,7 +29,10 @@ import { ExpressionField, isDynamicExpression } from './expression-field';
 import { DatasetSelectOrCreate, type DatasetProvider } from './dataset-wizard';
 import { LinkedServicePicker, type LinkedServiceEngine } from './linked-service-gallery';
 import { DataFlowPicker } from './dataflow-picker';
-import { activityByType, type ActivityDef, type ActivitySettingField } from './activity-catalog';
+import {
+  activityByType, type ActivityDef, type ActivitySettingField,
+  aiEnrichEndpoint, AI_ENRICH_SERVER_ENV, type AiEnrichService,
+} from './activity-catalog';
 import { branchesOf, totalInnerCount } from './drill-path';
 import type { PipelineActivity, PipelineParameter, PipelineVariable } from './types';
 
@@ -937,11 +940,345 @@ function SubActivityAffordance({
  * Returns null only for activities with no schema, no inventory entry, and no
  * nesting (the caller then shows the raw-JSON fallback).
  */
+// =============================================================================
+// AI-enrich form (SVC-1 / SVC-8) — Document Intelligence / Vision / Language /
+// Translator / Content Safety. Each activity is a real ADF WebActivity whose URL
+// + request body are composed here from TYPED controls (dropdowns / multiselect /
+// expression fields) — never a raw JSON textarea (loom-no-freeform-config). A
+// live "Test on a sample" button hits the real cognitive backend via the
+// preview BFF route (no-vaporware receipt). Honest gate: when the endpoint env
+// var is unset the URL stays blank and a MessageBar names LOOM_<SVC>_ENDPOINT +
+// the bicep module.
+// =============================================================================
+
+const AI_ENRICH_KINDS = new Set([
+  'DocumentIntelligenceAnalyze', 'VisionAnalyzeImage',
+  'LanguageAnalyzeText', 'TranslateText', 'ModerateText',
+]);
+
+const DOCINTEL_MODEL_OPTIONS = [
+  'prebuilt-layout', 'prebuilt-read', 'prebuilt-document', 'prebuilt-invoice',
+  'prebuilt-receipt', 'prebuilt-idDocument', 'prebuilt-businessCard',
+];
+const VISION_FEATURE_OPTIONS: Array<{ id: string; label: string }> = [
+  { id: 'Caption', label: 'Caption' },
+  { id: 'DenseCaptions', label: 'Dense captions' },
+  { id: 'Read', label: 'Read (OCR)' },
+  { id: 'Tags', label: 'Tags' },
+  { id: 'Objects', label: 'Objects' },
+  { id: 'People', label: 'People' },
+  { id: 'SmartCrops', label: 'Smart crops' },
+];
+const LANGUAGE_TASK_OPTIONS: Array<{ id: string; label: string }> = [
+  { id: 'PiiEntityRecognition', label: 'PII detection / redaction' },
+  { id: 'SentimentAnalysis', label: 'Sentiment' },
+  { id: 'EntityRecognition', label: 'Entity recognition' },
+  { id: 'KeyPhraseExtraction', label: 'Key phrases' },
+];
+const MODERATE_CATEGORY_OPTIONS = ['Hate', 'SelfHarm', 'Sexual', 'Violence'];
+
+/** Recompute the WebActivity analyze URL for the given service + friendly config. */
+function aiComposeUrl(service: AiEnrichService, endpoint: string, cfg: Record<string, any>): string {
+  if (!endpoint) return '';
+  switch (service) {
+    case 'doc-intel':
+      return `${endpoint}/documentintelligence/documentModels/${cfg.modelId || 'prebuilt-layout'}:analyze?api-version=2024-11-30`;
+    case 'vision': {
+      const feats = (Array.isArray(cfg.features) && cfg.features.length ? cfg.features : ['Caption', 'Read']).join(',');
+      return `${endpoint}/computervision/imageanalysis:analyze?api-version=2024-02-01&features=${encodeURIComponent(feats)}&language=${encodeURIComponent(cfg.language || 'en')}`;
+    }
+    case 'language':
+      return `${endpoint}/language/:analyze-text?api-version=2024-11-01`;
+    case 'translator': {
+      const p = new URLSearchParams();
+      p.set('api-version', '3.0');
+      for (const t of (Array.isArray(cfg.to) && cfg.to.length ? cfg.to : ['fr'])) if (t) p.append('to', t);
+      if (cfg.from) p.set('from', cfg.from);
+      return `${endpoint}/translator/text/v3.0/translate?${p.toString()}`;
+    }
+    case 'content-safety':
+      return `${endpoint}/contentsafety/text:analyze?api-version=2024-09-01`;
+  }
+}
+
+function useAiEnrichStyles() {
+  return useFormStyles();
+}
+
+function AiEnrichForm(props: ActivityFormProps & { loomKind: string }) {
+  const { activity, onPatch, parameters, variables, allActivities } = props;
+  const styles = useAiEnrichStyles();
+  const up = Array.isArray(activity.userProperties) ? activity.userProperties : [];
+  const service = (up.find((p) => p.name === '_loomService')?.value as AiEnrichService) || 'doc-intel';
+  const endpoint = aiEnrichEndpoint(service);
+  const serverVar = AI_ENRICH_SERVER_ENV[service];
+
+  const tp = (activity.typeProperties as Record<string, any>) || {};
+  const body = tp.body;
+
+  // Parse friendly config out of the current URL + body so the controls are
+  // controlled by the activity (no drift between the form and the saved WebActivity).
+  const url: string = typeof tp.url === 'string' ? tp.url : '';
+  const q = (() => { try { return new URL(url).searchParams; } catch { return new URLSearchParams(); } })();
+  const modelId = (up.find((p) => p.name === '_loomModelId')?.value as string)
+    || url.match(/documentModels\/([^:]+):analyze/)?.[1] || 'prebuilt-layout';
+  const features = (q.get('features') || 'Caption,Read').split(',').filter(Boolean);
+  const visionLang = q.get('language') || 'en';
+  const toLangs = q.getAll('to');
+  const fromLang = q.get('from') || '';
+
+  const [busy, setBusy] = useState(false);
+  const [testOk, setTestOk] = useState<string | null>(null);
+  const [testErr, setTestErr] = useState<string | null>(null);
+
+  /** Recompute url + body and patch the activity + carry the model discriminator. */
+  function apply(nextCfg: Record<string, any>, nextBody: any, nextUserProps?: Array<{ name: string; value: string }>) {
+    const nextUrl = aiComposeUrl(service, endpoint, nextCfg);
+    onPatch({
+      typeProperties: { ...tp, url: nextUrl, method: 'POST', body: nextBody },
+      ...(nextUserProps ? { userProperties: nextUserProps } : {}),
+    });
+  }
+
+  async function testSample() {
+    setBusy(true); setTestOk(null); setTestErr(null);
+    try {
+      const sample = AI_ENRICH_SAMPLE[service];
+      const r = await clientFetch(`/api/items/ai-enrich/${service}/preview`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(sample),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (r.ok && j?.ok) {
+        setTestOk(JSON.stringify(j.result).slice(0, 300));
+        return;
+      }
+      setTestErr(j?.gate?.hint || j?.error || `Request failed (${r.status}).`);
+    } catch (e) {
+      setTestErr((e as Error)?.message || String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const exprCommon = {
+    parameters, variables, activities: allActivities,
+    pipelineId: props.pipelineId, workspaceId: props.workspaceId, selfName: activity.name,
+  };
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS }}>
+      <Caption1>
+        Azure AI enrichment — a real Data Factory <strong>Web activity</strong> calling the
+        cognitive endpoint with the factory managed identity. Every field is a typed control;
+        the request URL + body are composed for you.
+      </Caption1>
+
+      {!endpoint && (
+        <MessageBar intent="warning">
+          <MessageBarBody>
+            <MessageBarTitle>Cognitive endpoint not configured</MessageBarTitle>
+            Set <code>{serverVar}</code> (and its <code>NEXT_PUBLIC_</code> mirror) to a deployed
+            Azure AI account endpoint. Provision it via
+            {' '}<code>platform/fiab/bicep/modules/deploy-planner/cognitive-account.bicep</code>
+            {' '}and grant the factory + Console UAMI <em>Cognitive Services User</em>. The activity
+            still saves; it will run once the endpoint is set.
+          </MessageBarBody>
+        </MessageBar>
+      )}
+
+      {service === 'doc-intel' && (
+        <>
+          <Field label="Prebuilt model">
+            <Dropdown
+              value={modelId} selectedOptions={[modelId]}
+              onOptionSelect={(_, d) => {
+                const m = d.optionValue || 'prebuilt-layout';
+                const nextUp: Array<{ name: string; value: string }> = [
+                  ...up.filter((p) => p.name !== '_loomModelId').map((p) => ({ name: p.name, value: String(p.value ?? '') })),
+                  { name: '_loomModelId', value: m },
+                ];
+                apply({ modelId: m }, body, nextUp);
+              }}
+            >
+              {DOCINTEL_MODEL_OPTIONS.map((m) => <Option key={m} value={m}>{m}</Option>)}
+            </Dropdown>
+          </Field>
+          <ExpressionField
+            {...exprCommon}
+            label="Source document URL (public or SAS)" required
+            placeholder="@pipeline().parameters.documentUrl"
+            value={typeof body?.urlSource === 'string' ? body.urlSource : ''}
+            onChange={(v) => apply({ modelId }, { ...(body || {}), urlSource: v })}
+          />
+        </>
+      )}
+
+      {service === 'vision' && (
+        <>
+          <Field label="Visual features" hint="One or more Image Analysis 4.0 features.">
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: tokens.spacingHorizontalS }}>
+              {VISION_FEATURE_OPTIONS.map((f) => (
+                <Switch
+                  key={f.id} label={f.label}
+                  checked={features.includes(f.id)}
+                  onChange={(_, d) => {
+                    const next = d.checked ? [...features, f.id] : features.filter((x) => x !== f.id);
+                    apply({ features: next, language: visionLang }, body);
+                  }}
+                />
+              ))}
+            </div>
+          </Field>
+          <Field label="Language (BCP-47)">
+            <Input value={visionLang} onChange={(_, d) => apply({ features, language: d.value || 'en' }, body)} />
+          </Field>
+          <ExpressionField
+            {...exprCommon}
+            label="Image URL (public or SAS)" required
+            placeholder="@pipeline().parameters.imageUrl"
+            value={typeof body?.url === 'string' ? body.url : ''}
+            onChange={(v) => apply({ features, language: visionLang }, { ...(body || {}), url: v })}
+          />
+        </>
+      )}
+
+      {service === 'language' && (() => {
+        const doc = body?.analysisInput?.documents?.[0] || { id: '1', language: 'en', text: '' };
+        const kind = typeof body?.kind === 'string' ? body.kind : 'PiiEntityRecognition';
+        const setDoc = (patch: Record<string, any>, nextKind?: string) => {
+          const nextDoc = { ...doc, ...patch };
+          apply({}, { ...(body || {}), kind: nextKind || kind, analysisInput: { documents: [nextDoc] } });
+        };
+        return (
+          <>
+            <Field label="Task">
+              <Dropdown
+                value={LANGUAGE_TASK_OPTIONS.find((t) => t.id === kind)?.label || kind}
+                selectedOptions={[kind]}
+                onOptionSelect={(_, d) => setDoc({}, d.optionValue || 'PiiEntityRecognition')}
+              >
+                {LANGUAGE_TASK_OPTIONS.map((t) => <Option key={t.id} value={t.id}>{t.label}</Option>)}
+              </Dropdown>
+            </Field>
+            <Field label="Language (BCP-47)">
+              <Input value={doc.language || 'en'} onChange={(_, d) => setDoc({ language: d.value || 'en' })} />
+            </Field>
+            <ExpressionField
+              {...exprCommon}
+              label="Text to analyze" required multiline
+              placeholder="@item().comments"
+              value={typeof doc.text === 'string' ? doc.text : ''}
+              onChange={(v) => setDoc({ text: v })}
+            />
+          </>
+        );
+      })()}
+
+      {service === 'translator' && (
+        <>
+          <Field label="Target languages" hint="Comma-separated BCP-47 codes, e.g. fr, de, es.">
+            <Input
+              value={toLangs.join(', ')}
+              placeholder="fr, de"
+              onChange={(_, d) => apply({ to: d.value.split(',').map((x) => x.trim()).filter(Boolean), from: fromLang }, body)}
+            />
+          </Field>
+          <Field label="Source language (optional — auto-detected when blank)">
+            <Input value={fromLang} onChange={(_, d) => apply({ to: toLangs, from: d.value.trim() }, body)} />
+          </Field>
+          <ExpressionField
+            {...exprCommon}
+            label="Text to translate" required multiline
+            placeholder="@item().description"
+            value={Array.isArray(body) && typeof body[0]?.Text === 'string' ? body[0].Text : ''}
+            onChange={(v) => apply({ to: toLangs, from: fromLang }, [{ Text: v }])}
+          />
+        </>
+      )}
+
+      {service === 'content-safety' && (
+        <>
+          <Field label="Categories to screen" hint="Leave all off to screen every category.">
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: tokens.spacingHorizontalS }}>
+              {MODERATE_CATEGORY_OPTIONS.map((c) => {
+                const cats: string[] = Array.isArray(body?.categories) ? body.categories : [];
+                return (
+                  <Switch
+                    key={c} label={c} checked={cats.includes(c)}
+                    onChange={(_, d) => {
+                      const next = d.checked ? [...cats, c] : cats.filter((x) => x !== c);
+                      apply({}, { ...(body || {}), categories: next });
+                    }}
+                  />
+                );
+              })}
+            </div>
+          </Field>
+          <ExpressionField
+            {...exprCommon}
+            label="Text to moderate" required multiline
+            placeholder="@item().freeText"
+            value={typeof body?.text === 'string' ? body.text : ''}
+            onChange={(v) => apply({}, { ...(body || {}), text: v })}
+          />
+        </>
+      )}
+
+      <div className={styles.branchRow}>
+        <Button appearance="primary" size="small" disabled={busy || !endpoint} onClick={testSample}>
+          {busy ? <Spinner size="tiny" label="Testing…" /> : 'Test on a sample'}
+        </Button>
+        <Caption1>Runs the real cognitive call on a built-in sample.</Caption1>
+      </div>
+      {testOk && (
+        <MessageBar intent="success">
+          <MessageBarBody>
+            <MessageBarTitle>Real response (first 300 chars)</MessageBarTitle>
+            <code style={{ wordBreak: 'break-all' }}>{testOk}</code>
+          </MessageBarBody>
+        </MessageBar>
+      )}
+      {testErr && (
+        <MessageBar intent="error"><MessageBarBody>{testErr}</MessageBarBody></MessageBar>
+      )}
+    </div>
+  );
+}
+
+/** Built-in samples the "Test on a sample" button sends to the preview route. */
+const AI_ENRICH_SAMPLE: Record<AiEnrichService, Record<string, unknown>> = {
+  'doc-intel': {
+    modelId: 'prebuilt-read',
+    urlSource: 'https://raw.githubusercontent.com/Azure-Samples/cognitive-services-REST-api-samples/master/curl/form-recognizer/sample-invoice.pdf',
+  },
+  vision: {
+    url: 'https://learn.microsoft.com/azure/ai-services/computer-vision/media/quickstarts/presentation.png',
+    features: ['caption', 'read'],
+  },
+  language: { kind: 'KeyPhraseExtraction', text: 'The new analytics platform cut our reporting time from days to minutes.' },
+  translator: { text: 'Hello, world.', to: ['fr', 'de'] },
+  'content-safety': { text: 'You are a wonderful person and I appreciate your help.' },
+};
+
 export function ActivityForm(props: ActivityFormProps) {
   const { activity, onDrillInto } = props;
   // Discriminate Loom palette variants that share an ADF wire type (e.g.
   // Approval vs plain Webhook — both ADF type `WebHook`) via `_loomKind`.
   const loomKind = activityLoomKind(activity);
+  // AI-enrichment activities (SVC-1/SVC-8) share the ADF `WebActivity` wire type
+  // but render a dedicated typed form that composes the cognitive URL + body.
+  if (loomKind && AI_ENRICH_KINDS.has(loomKind)) {
+    return (
+      <>
+        <Caption1>
+          Typed configuration for <strong>{activity.name}</strong> — Azure AI enrichment
+          on the pipeline canvas.
+        </Caption1>
+        <AiEnrichForm {...props} loomKind={loomKind} />
+      </>
+    );
+  }
   const flatSchema = (loomKind && ACTIVITY_FORMS[loomKind])
     ? ACTIVITY_FORMS[loomKind]
     : (activity.type ? ACTIVITY_FORMS[activity.type] : undefined);

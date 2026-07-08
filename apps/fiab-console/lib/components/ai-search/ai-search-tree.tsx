@@ -34,8 +34,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Tree, TreeItem, TreeItemLayout,
-  Button, Input, Field, Caption1, Badge, Spinner, Dropdown, Option, Textarea,
-  Checkbox, Divider,
+  Button, Input, Field, Caption1, Badge, Spinner, Dropdown, Option, OptionGroup, Textarea,
+  Checkbox, Divider, Combobox,
   Menu, MenuTrigger, MenuPopover, MenuList, MenuItem,
   Dialog, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
   Tooltip, MessageBar, MessageBarBody, MessageBarTitle,
@@ -48,8 +48,17 @@ import {
   BrainCircuit20Regular, TextBulletListSquare20Regular, BranchFork20Regular,
   Bug20Regular, ChevronDown16Regular, ChevronRight16Regular,
   BrainCircuit20Regular as BrainCircuit16Regular, Dismiss16Regular, Add16Regular,
-  Settings16Regular,
+  Settings16Regular, ArrowUp16Regular, ArrowDown16Regular, Edit16Regular,
+  Storage16Regular,
 } from '@fluentui/react-icons';
+import {
+  type BuiltSkill, type SkillType, type KnowledgeStoreModel,
+  SKILL_CATALOG, skillsByCategory,
+  ENTITY_CATEGORIES, PII_CATEGORIES, IMAGE_VISUAL_FEATURES, IMAGE_DETAILS, LANGUAGE_CODES,
+  defaultSkill, assembleSkillsetDef,
+  reorderSkill, availableSourcePaths, contextOptions,
+  buildKnowledgeStore, emptyKnowledgeStore, knowledgeStoreIsEmpty, parseSkillset,
+} from '@/lib/azure/skillset-chain';
 
 const useStyles = makeStyles({
   root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalS, padding: tokens.spacingHorizontalS, height: '100%', minWidth: '240px' },
@@ -94,109 +103,74 @@ function statusColor(status?: string) {
 }
 
 // ---------------------------------------------------------------
-// Skillset builder types + helpers
+// Skillset builder — the cognitive skill-chain model + logic is owned by the
+// server-free `lib/azure/skillset-chain` module (imported above). The pieces
+// below are the CLIENT-only surface: a path picker, a multi-select chip group,
+// and the per-skill card.
 // ---------------------------------------------------------------
 
-type SkillType =
-  | '#Microsoft.Skills.Text.SplitSkill'
-  | '#Microsoft.Skills.Text.V3.EntityRecognitionSkill'
-  | '#Microsoft.Skills.Text.KeyPhraseExtractionSkill'
-  | '#Microsoft.Skills.Text.LanguageDetectionSkill'
-  | '#Microsoft.Skills.Text.MergeSkill'
-  | '#Microsoft.Skills.Vision.OcrSkill'
-  | '#Microsoft.Skills.Text.AzureOpenAIEmbeddingSkill';
-
-interface SkillIo { name: string; source: string; targetName?: string }
-
-interface BuiltSkill {
-  id: string; // local UUID for React key
-  type: SkillType;
-  context: string;
-  // SplitSkill
-  textSplitMode?: 'pages' | 'sentences';
-  maximumPageLength?: number;
-  // EntityRecognitionSkill
-  categories?: string[];
-  minimumPrecision?: number;
-  // KeyPhraseExtractionSkill
-  defaultLanguageCode?: string;
-  // OcrSkill
-  detectOrientation?: boolean;
-  // AzureOpenAIEmbeddingSkill
-  resourceUri?: string;
-  deploymentId?: string;
-  modelName?: string;
-  // inputs/outputs
-  inputs: SkillIo[];
-  outputs: SkillIo[];
+/**
+ * A no-freeform path picker: a Combobox seeded with the enrichment-tree paths
+ * available at this point in the chain, but still accepting an exact path the
+ * user types (freeform). This is the context-path / source-field builder — no
+ * hand-authored JSON.
+ */
+function PathCombobox({ value, onChange, options, placeholder, disabled }: {
+  value: string; onChange: (v: string) => void; options: string[]; placeholder?: string; disabled?: boolean;
+}) {
+  return (
+    <Combobox
+      size="small"
+      freeform
+      disabled={disabled}
+      value={value}
+      selectedOptions={value ? [value] : []}
+      placeholder={placeholder || '/document/…'}
+      onOptionSelect={(_, d) => onChange(d.optionValue ?? '')}
+      onChange={(e) => onChange((e.target as HTMLInputElement).value)}
+      style={{ minWidth: 0 }}
+    >
+      {options.map((o) => <Option key={o} value={o} text={o}>{o}</Option>)}
+    </Combobox>
+  );
 }
 
-const SKILL_LABELS: Record<SkillType, string> = {
-  '#Microsoft.Skills.Text.SplitSkill': 'Split text',
-  '#Microsoft.Skills.Text.V3.EntityRecognitionSkill': 'Entity recognition',
-  '#Microsoft.Skills.Text.KeyPhraseExtractionSkill': 'Key phrase extraction',
-  '#Microsoft.Skills.Text.LanguageDetectionSkill': 'Language detection',
-  '#Microsoft.Skills.Text.MergeSkill': 'Merge text',
-  '#Microsoft.Skills.Vision.OcrSkill': 'OCR',
-  '#Microsoft.Skills.Text.AzureOpenAIEmbeddingSkill': 'Azure OpenAI embedding',
-};
-
-const SKILL_TYPES = Object.keys(SKILL_LABELS) as SkillType[];
-
-const ENTITY_CATEGORIES = ['Person', 'Location', 'Organization', 'Quantity', 'DateTime', 'URL', 'Email', 'PersonType', 'Event', 'Product', 'Skill', 'Address', 'PhoneNumber', 'IPAddress'];
-
-function mkOut(name: string, targetName?: string): SkillIo {
-  return { name, source: '', targetName: targetName || name };
+/** A wrap of checkboxes for selecting a set of string values (categories, features). */
+function MultiCheck({ all, selected, onToggle }: { all: string[]; selected: string[]; onToggle: (v: string) => void }) {
+  return (
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: tokens.spacingHorizontalXS, marginBottom: tokens.spacingVerticalS }}>
+      {all.map((v) => (
+        <Checkbox key={v} size="medium" label={v} checked={selected.includes(v)} onChange={() => onToggle(v)} />
+      ))}
+    </div>
+  );
 }
 
-function defaultSkill(type: SkillType): BuiltSkill {
-  const base: BuiltSkill = { id: Math.random().toString(36).slice(2), type, context: '/document', inputs: [{ name: 'text', source: '/document/content' }], outputs: [mkOut('output')] };
-  if (type === '#Microsoft.Skills.Text.SplitSkill') return { ...base, textSplitMode: 'pages', maximumPageLength: 5000, inputs: [{ name: 'text', source: '/document/content' }], outputs: [mkOut('textItems')] };
-  if (type === '#Microsoft.Skills.Text.V3.EntityRecognitionSkill') return { ...base, categories: ['Organization'], minimumPrecision: 0.5, outputs: [mkOut('organizations')] };
-  if (type === '#Microsoft.Skills.Text.KeyPhraseExtractionSkill') return { ...base, defaultLanguageCode: 'en', outputs: [mkOut('keyPhrases')] };
-  if (type === '#Microsoft.Skills.Text.LanguageDetectionSkill') return { ...base, inputs: [], outputs: [mkOut('languageCode')] };
-  if (type === '#Microsoft.Skills.Text.MergeSkill') return { ...base, inputs: [{ name: 'text', source: '/document/content' }, { name: 'itemsToInsert', source: '/document/pages/*' }], outputs: [mkOut('mergedText')] };
-  if (type === '#Microsoft.Skills.Vision.OcrSkill') return { ...base, detectOrientation: true, inputs: [{ name: 'image', source: '/document/normalized_images/*' }], outputs: [mkOut('text')] };
-  if (type === '#Microsoft.Skills.Text.AzureOpenAIEmbeddingSkill') return { ...base, resourceUri: '', deploymentId: 'text-embedding-ada-002', modelName: 'text-embedding-ada-002', inputs: [{ name: 'text', source: '/document/content' }], outputs: [mkOut('embedding')] };
-  return base;
-}
-
-function serializeSkill(s: BuiltSkill): Record<string, any> {
-  const base: Record<string, any> = {
-    '@odata.type': s.type,
-    context: s.context,
-    inputs: s.inputs.filter((i) => i.name).map((i) => ({ name: i.name, source: i.source })),
-    outputs: s.outputs.filter((o) => o.name).map((o) => ({ name: o.name, targetName: o.targetName || o.name })),
-  };
-  if (s.type === '#Microsoft.Skills.Text.SplitSkill') {
-    base.textSplitMode = s.textSplitMode || 'pages';
-    if (s.maximumPageLength) base.maximumPageLength = s.maximumPageLength;
-  }
-  if (s.type === '#Microsoft.Skills.Text.V3.EntityRecognitionSkill') {
-    if (s.categories?.length) base.categories = s.categories;
-    if (s.minimumPrecision != null) base.minimumPrecision = s.minimumPrecision;
-  }
-  if (s.type === '#Microsoft.Skills.Text.KeyPhraseExtractionSkill' && s.defaultLanguageCode) {
-    base.defaultLanguageCode = s.defaultLanguageCode;
-  }
-  if (s.type === '#Microsoft.Skills.Vision.OcrSkill') {
-    base.detectOrientation = !!s.detectOrientation;
-  }
-  if (s.type === '#Microsoft.Skills.Text.AzureOpenAIEmbeddingSkill') {
-    if (s.resourceUri) base.resourceUri = s.resourceUri;
-    if (s.deploymentId) base.deploymentId = s.deploymentId;
-    if (s.modelName) base.modelName = s.modelName;
-  }
-  return base;
-}
-
-function assembleSkillsetDef(name: string, skills: BuiltSkill[]): Record<string, any> {
-  return { name, skills: skills.map(serializeSkill) };
+/** A language-code picker backed by the curated list, freeform for the long tail. */
+function LangPicker({ label, value, onChange, required }: { label: string; value?: string; onChange: (v: string) => void; required?: boolean }) {
+  return (
+    <Field label={label} required={required} style={{ marginBottom: tokens.spacingVerticalS }}>
+      <Combobox size="small" freeform value={value || ''} selectedOptions={value ? [value] : []} placeholder="en"
+        onOptionSelect={(_, d) => onChange(d.optionValue ?? '')} onChange={(e) => onChange((e.target as HTMLInputElement).value)}>
+        {LANGUAGE_CODES.map((c) => <Option key={c} value={c} text={c}>{c}</Option>)}
+      </Combobox>
+    </Field>
+  );
 }
 
 // ---- SkillCard sub-component ----
-function SkillCard({ skill, onChange, onRemove }: { skill: BuiltSkill; onChange: (s: BuiltSkill) => void; onRemove: () => void }) {
+function SkillCard({ skill, index, total, onChange, onRemove, onMove, sourceOptions, contexts }: {
+  skill: BuiltSkill;
+  index: number;
+  total: number;
+  onChange: (s: BuiltSkill) => void;
+  onRemove: () => void;
+  onMove: (dir: 'up' | 'down') => void;
+  sourceOptions: string[];
+  contexts: string[];
+}) {
   const [open, setOpen] = useState(true);
+  const meta = SKILL_CATALOG[skill.type];
 
   const upd = (patch: Partial<BuiltSkill>) => onChange({ ...skill, ...patch });
 
@@ -214,9 +188,9 @@ function SkillCard({ skill, onChange, onRemove }: { skill: BuiltSkill; onChange:
   const addOutput = () => upd({ outputs: [...skill.outputs, { name: '', source: '', targetName: '' }] });
   const removeOutput = (idx: number) => upd({ outputs: skill.outputs.filter((_, i) => i !== idx) });
 
-  const toggleCategory = (cat: string) => {
-    const cats = skill.categories || [];
-    upd({ categories: cats.includes(cat) ? cats.filter((c) => c !== cat) : [...cats, cat] });
+  const toggleIn = (key: 'categories' | 'piiCategories' | 'visualFeatures' | 'details', v: string) => {
+    const cur = (skill[key] as string[] | undefined) || [];
+    upd({ [key]: cur.includes(v) ? cur.filter((c) => c !== v) : [...cur, v] } as Partial<BuiltSkill>);
   };
 
   const cardStyle: React.CSSProperties = {
@@ -228,27 +202,45 @@ function SkillCard({ skill, onChange, onRemove }: { skill: BuiltSkill; onChange:
   };
   const headerStyle: React.CSSProperties = {
     display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS,
-    cursor: 'pointer', userSelect: 'none',
+    userSelect: 'none',
   };
   const rowStyle: React.CSSProperties = { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', marginTop: tokens.spacingVerticalXS };
 
   return (
-    <div style={cardStyle}>
-      <div style={headerStyle} onClick={() => setOpen((o) => !o)} role="button" tabIndex={0}
-        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOpen((o) => !o); } }}>
-        <BrainCircuit16Regular style={{ color: tokens.colorBrandForeground1, flexShrink: 0 }} />
-        <Body1Strong style={{ flex: 1 }}>{SKILL_LABELS[skill.type]}</Body1Strong>
-        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{skill.type.split('.').pop()}</Caption1>
-        {open ? <ChevronDown16Regular /> : <ChevronRight16Regular />}
+    <div style={cardStyle} data-skill-type={skill.type}>
+      <div style={headerStyle}>
+        {/* Chain-order badge + move controls */}
+        <Badge size="small" appearance="filled" color="brand" aria-label={`Step ${index + 1}`}>{index + 1}</Badge>
+        <div style={{ display: 'flex', flexDirection: 'column' }}>
+          <Tooltip content="Move up" relationship="label">
+            <Button size="small" appearance="subtle" icon={<ArrowUp16Regular />} disabled={index === 0}
+              onClick={() => onMove('up')} aria-label={`Move ${meta.label} earlier`} />
+          </Tooltip>
+          <Tooltip content="Move down" relationship="label">
+            <Button size="small" appearance="subtle" icon={<ArrowDown16Regular />} disabled={index === total - 1}
+              onClick={() => onMove('down')} aria-label={`Move ${meta.label} later`} />
+          </Tooltip>
+        </div>
+        <div
+          style={{ flex: 1, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS }}
+          role="button" tabIndex={0} onClick={() => setOpen((o) => !o)}
+          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOpen((o) => !o); } }}
+        >
+          <BrainCircuit16Regular style={{ color: tokens.colorBrandForeground1, flexShrink: 0 }} />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <Body1Strong style={{ display: 'block' }}>{meta.label}</Body1Strong>
+            <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{meta.short}</Caption1>
+          </div>
+          {open ? <ChevronDown16Regular /> : <ChevronRight16Regular />}
+        </div>
         <Button size="small" appearance="subtle" icon={<Dismiss16Regular />}
-          onClick={(e) => { e.stopPropagation(); onRemove(); }}
-          aria-label="Remove skill" style={{ marginLeft: tokens.spacingHorizontalXS }} />
+          onClick={onRemove} aria-label={`Remove ${meta.label} skill`} />
       </div>
 
       {open && (
         <div style={{ marginTop: tokens.spacingVerticalS }}>
-          <Field label="Context path" style={{ marginBottom: tokens.spacingVerticalS }}>
-            <Input size="small" value={skill.context} onChange={(_, d) => upd({ context: d.value })} placeholder="/document" />
+          <Field label="Context path" hint="The enrichment-tree node this skill iterates over" style={{ marginBottom: tokens.spacingVerticalS }}>
+            <PathCombobox value={skill.context} onChange={(v) => upd({ context: v })} options={contexts} placeholder="/document" />
           </Field>
 
           {/* SplitSkill */}
@@ -272,33 +264,97 @@ function SkillCard({ skill, onChange, onRemove }: { skill: BuiltSkill; onChange:
           {skill.type === '#Microsoft.Skills.Text.V3.EntityRecognitionSkill' && (
             <>
               <Label size="small" style={{ display: 'block', marginBottom: tokens.spacingVerticalXS }}>Categories</Label>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: tokens.spacingHorizontalXS, marginBottom: tokens.spacingVerticalS }}>
-                {ENTITY_CATEGORIES.map((cat) => (
-                  <Checkbox key={cat} size="medium" label={cat} checked={(skill.categories || []).includes(cat)}
-                    onChange={() => toggleCategory(cat)} />
-                ))}
-              </div>
+              <MultiCheck all={ENTITY_CATEGORIES} selected={skill.categories || []} onToggle={(v) => toggleIn('categories', v)} />
               <Field label="Min precision (0–1)" style={{ marginBottom: tokens.spacingVerticalS }}>
                 <Input size="small" type="number" value={String(skill.minimumPrecision ?? 0.5)}
                   onChange={(_, d) => upd({ minimumPrecision: parseFloat(d.value) || 0 })} />
               </Field>
+              <LangPicker label="Default language code" value={skill.defaultLanguageCode} onChange={(v) => upd({ defaultLanguageCode: v })} />
             </>
           )}
 
           {/* KeyPhraseExtractionSkill */}
           {skill.type === '#Microsoft.Skills.Text.KeyPhraseExtractionSkill' && (
-            <Field label="Default language code" style={{ marginBottom: tokens.spacingVerticalS }}>
-              <Input size="small" value={skill.defaultLanguageCode || 'en'}
-                onChange={(_, d) => upd({ defaultLanguageCode: d.value })} placeholder="en" />
-            </Field>
+            <LangPicker label="Default language code" value={skill.defaultLanguageCode} onChange={(v) => upd({ defaultLanguageCode: v })} />
+          )}
+
+          {/* LanguageDetectionSkill — no parameters */}
+
+          {/* SentimentSkill (V3) */}
+          {skill.type === '#Microsoft.Skills.Text.V3.SentimentSkill' && (
+            <>
+              <LangPicker label="Default language code" value={skill.defaultLanguageCode} onChange={(v) => upd({ defaultLanguageCode: v })} />
+              <div style={{ marginBottom: tokens.spacingVerticalS }}>
+                <Checkbox label="Include opinion mining (aspect-based sentiment)" checked={!!skill.includeOpinionMining}
+                  onChange={(_, d) => upd({ includeOpinionMining: !!d.checked })} />
+              </div>
+            </>
+          )}
+
+          {/* PIIDetectionSkill */}
+          {skill.type === '#Microsoft.Skills.Text.PIIDetectionSkill' && (
+            <>
+              <LangPicker label="Default language code" value={skill.defaultLanguageCode} onChange={(v) => upd({ defaultLanguageCode: v })} />
+              <Field label="Min precision (0–1)" style={{ marginBottom: tokens.spacingVerticalS }}>
+                <Input size="small" type="number" value={String(skill.minimumPrecision ?? 0.5)}
+                  onChange={(_, d) => upd({ minimumPrecision: parseFloat(d.value) || 0 })} />
+              </Field>
+              <Field label="Masking mode" style={{ marginBottom: tokens.spacingVerticalS }}>
+                <Dropdown size="small" value={skill.maskingMode || 'none'} selectedOptions={[skill.maskingMode || 'none']}
+                  onOptionSelect={(_, d) => upd({ maskingMode: (d.optionValue as any) || 'none' })}>
+                  <Option value="none">none</Option>
+                  <Option value="replace">replace</Option>
+                </Dropdown>
+              </Field>
+              {skill.maskingMode === 'replace' && (
+                <Field label="Masking character" style={{ marginBottom: tokens.spacingVerticalS }}>
+                  <Input size="small" maxLength={1} value={skill.maskingCharacter || '*'}
+                    onChange={(_, d) => upd({ maskingCharacter: d.value.slice(0, 1) || '*' })} />
+                </Field>
+              )}
+              <Label size="small" style={{ display: 'block', marginBottom: tokens.spacingVerticalXS }}>
+                PII categories <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>(none selected ⇒ all)</Caption1>
+              </Label>
+              <MultiCheck all={PII_CATEGORIES} selected={skill.piiCategories || []} onToggle={(v) => toggleIn('piiCategories', v)} />
+            </>
+          )}
+
+          {/* TranslationSkill */}
+          {skill.type === '#Microsoft.Skills.Text.TranslationSkill' && (
+            <>
+              <LangPicker label="Translate to (default)" required value={skill.defaultToLanguageCode} onChange={(v) => upd({ defaultToLanguageCode: v })} />
+              <LangPicker label="Translate from (optional — auto-detect if empty)" value={skill.defaultFromLanguageCode} onChange={(v) => upd({ defaultFromLanguageCode: v })} />
+            </>
           )}
 
           {/* OcrSkill */}
           {skill.type === '#Microsoft.Skills.Vision.OcrSkill' && (
-            <div style={{ marginBottom: tokens.spacingVerticalS }}>
-              <Checkbox label="Detect orientation" checked={!!skill.detectOrientation}
-                onChange={(_, d) => upd({ detectOrientation: !!d.checked })} />
-            </div>
+            <>
+              <div style={{ marginBottom: tokens.spacingVerticalS }}>
+                <Checkbox label="Detect orientation" checked={!!skill.detectOrientation}
+                  onChange={(_, d) => upd({ detectOrientation: !!d.checked })} />
+              </div>
+              <LangPicker label="Default language code" value={skill.defaultLanguageCode} onChange={(v) => upd({ defaultLanguageCode: v })} />
+              <Field label="Line ending" style={{ marginBottom: tokens.spacingVerticalS }}>
+                <Dropdown size="small" value={skill.lineEnding || 'Space'} selectedOptions={[skill.lineEnding || 'Space']}
+                  onOptionSelect={(_, d) => upd({ lineEnding: (d.optionValue as any) || 'Space' })}>
+                  <Option value="Space">Space</Option>
+                  <Option value="CarriageReturn">CarriageReturn</Option>
+                  <Option value="LineFeed">LineFeed</Option>
+                </Dropdown>
+              </Field>
+            </>
+          )}
+
+          {/* ImageAnalysisSkill */}
+          {skill.type === '#Microsoft.Skills.Vision.ImageAnalysisSkill' && (
+            <>
+              <Label size="small" style={{ display: 'block', marginBottom: tokens.spacingVerticalXS }}>Visual features</Label>
+              <MultiCheck all={IMAGE_VISUAL_FEATURES} selected={skill.visualFeatures || []} onToggle={(v) => toggleIn('visualFeatures', v)} />
+              <Label size="small" style={{ display: 'block', marginBottom: tokens.spacingVerticalXS }}>Details</Label>
+              <MultiCheck all={IMAGE_DETAILS} selected={skill.details || []} onToggle={(v) => toggleIn('details', v)} />
+              <LangPicker label="Default language code" value={skill.defaultLanguageCode} onChange={(v) => upd({ defaultLanguageCode: v })} />
+            </>
           )}
 
           {/* AzureOpenAIEmbeddingSkill */}
@@ -310,24 +366,53 @@ function SkillCard({ skill, onChange, onRemove }: { skill: BuiltSkill; onChange:
               </Field>
               <Field label="Deployment ID" style={{ marginBottom: tokens.spacingVerticalS }}>
                 <Input size="small" value={skill.deploymentId || ''}
-                  onChange={(_, d) => upd({ deploymentId: d.value })} placeholder="text-embedding-ada-002" />
+                  onChange={(_, d) => upd({ deploymentId: d.value })} placeholder="text-embedding-3-large" />
               </Field>
               <Field label="Model name" style={{ marginBottom: tokens.spacingVerticalS }}>
                 <Input size="small" value={skill.modelName || ''}
-                  onChange={(_, d) => upd({ modelName: d.value })} placeholder="text-embedding-ada-002" />
+                  onChange={(_, d) => upd({ modelName: d.value })} placeholder="text-embedding-3-large" />
               </Field>
             </>
           )}
 
-          {/* Inputs */}
+          {/* Custom WebApiSkill */}
+          {skill.type === '#Microsoft.Skills.Custom.WebApiSkill' && (
+            <>
+              <Field label="Name" style={{ marginBottom: tokens.spacingVerticalS }}>
+                <Input size="small" value={skill.name || ''} onChange={(_, d) => upd({ name: d.value })} placeholder="myCustomSkill" />
+              </Field>
+              <Field label="URI (https only)" required style={{ marginBottom: tokens.spacingVerticalS }}>
+                <Input size="small" value={skill.uri || ''} onChange={(_, d) => upd({ uri: d.value })} placeholder="https://my-func.azurewebsites.net/api/enrich" />
+              </Field>
+              <Field label="HTTP method" style={{ marginBottom: tokens.spacingVerticalS }}>
+                <Dropdown size="small" value={skill.httpMethod || 'POST'} selectedOptions={[skill.httpMethod || 'POST']}
+                  onOptionSelect={(_, d) => upd({ httpMethod: (d.optionValue as any) || 'POST' })}>
+                  <Option value="POST">POST</Option>
+                  <Option value="PUT">PUT</Option>
+                </Dropdown>
+              </Field>
+              <div style={{ display: 'flex', gap: tokens.spacingHorizontalS }}>
+                <Field label="Batch size" style={{ flex: 1, marginBottom: tokens.spacingVerticalS }}>
+                  <Input size="small" type="number" value={String(skill.batchSize ?? 1000)}
+                    onChange={(_, d) => upd({ batchSize: parseInt(d.value) || 1000 })} />
+                </Field>
+                <Field label="Timeout (ISO 8601)" style={{ flex: 1, marginBottom: tokens.spacingVerticalS }}>
+                  <Input size="small" value={skill.timeout || 'PT30S'} onChange={(_, d) => upd({ timeout: d.value })} placeholder="PT30S" />
+                </Field>
+              </div>
+            </>
+          )}
+
+          {/* Inputs — source uses the enrichment-tree path picker */}
           <Body1Strong style={{ display: 'block', marginBottom: tokens.spacingVerticalXS }}>Inputs</Body1Strong>
           {skill.inputs.map((inp, idx) => (
             <div key={idx} style={rowStyle}>
-              <Input size="small" style={{ flex: 1 }} placeholder="name" value={inp.name}
-                onChange={(_, d) => setInput(idx, 'name', d.value)} />
+              <Input size="small" style={{ flex: 1, minWidth: 0 }} placeholder="name" value={inp.name}
+                onChange={(_, d) => setInput(idx, 'name', d.value)} aria-label="input name" />
               <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>←</Caption1>
-              <Input size="small" style={{ flex: 2 }} placeholder="/document/content" value={inp.source}
-                onChange={(_, d) => setInput(idx, 'source', d.value)} />
+              <div style={{ flex: 2, minWidth: 0 }}>
+                <PathCombobox value={inp.source} onChange={(v) => setInput(idx, 'source', v)} options={sourceOptions} placeholder="/document/content" />
+              </div>
               <Button size="small" appearance="subtle" icon={<Dismiss16Regular />} aria-label="Remove input"
                 onClick={() => removeInput(idx)} />
             </div>
@@ -339,11 +424,11 @@ function SkillCard({ skill, onChange, onRemove }: { skill: BuiltSkill; onChange:
           <Body1Strong style={{ display: 'block', marginTop: tokens.spacingVerticalS, marginBottom: tokens.spacingVerticalXS }}>Outputs</Body1Strong>
           {skill.outputs.map((out, idx) => (
             <div key={idx} style={rowStyle}>
-              <Input size="small" style={{ flex: 1 }} placeholder="name" value={out.name}
-                onChange={(_, d) => setOutput(idx, 'name', d.value)} />
+              <Input size="small" style={{ flex: 1, minWidth: 0 }} placeholder="name" value={out.name}
+                onChange={(_, d) => setOutput(idx, 'name', d.value)} aria-label="output name" />
               <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>→</Caption1>
-              <Input size="small" style={{ flex: 2 }} placeholder="targetName" value={out.targetName || ''}
-                onChange={(_, d) => setOutput(idx, 'targetName', d.value)} />
+              <Input size="small" style={{ flex: 2, minWidth: 0 }} placeholder="targetName" value={out.targetName || ''}
+                onChange={(_, d) => setOutput(idx, 'targetName', d.value)} aria-label="output target name" />
               <Button size="small" appearance="subtle" icon={<Dismiss16Regular />} aria-label="Remove output"
                 onClick={() => removeOutput(idx)} />
             </div>
@@ -422,6 +507,11 @@ export function AiSearchServiceTree({
   const [cSkillsetAdvancedOpen, setCSkillsetAdvancedOpen] = useState(false);
   const [cSkillsetAdvancedJson, setCSkillsetAdvancedJson] = useState('');
   const [cSkillsetAdvancedDirty, setCSkillsetAdvancedDirty] = useState(false);
+  const [cSkillsetEditing, setCSkillsetEditing] = useState<string | null>(null);
+  // knowledge store (projections)
+  const [cKsOpen, setCKsOpen] = useState(false);
+  const [cKsConn, setCKsConn] = useState('');
+  const [cKs, setCKs] = useState<KnowledgeStoreModel>(emptyKnowledgeStore());
   // synonym map
   const [cSynonyms, setCSynonyms] = useState('');
   // alias
@@ -492,7 +582,29 @@ export function AiSearchServiceTree({
     setCName(''); setCDataSource(''); setCTargetIndex(''); setCSkillset('');
     setCDsType('azureblob'); setCDsConn(''); setCDsContainer(''); setCDsQuery('');
     setCSkillsetSkills([]); setCSkillsetAdvancedOpen(false); setCSkillsetAdvancedJson(''); setCSkillsetAdvancedDirty(false);
+    setCSkillsetEditing(null); setCKsOpen(false); setCKsConn(''); setCKs(emptyKnowledgeStore());
     setCSynonyms(''); setCAliasIndex(''); setCDebugIndexer('');
+  }, []);
+
+  /** Load an existing skillset's full definition into the guided builder for editing. */
+  const openEditSkillset = useCallback(async (name: string) => {
+    setBusy(true); setError(null);
+    try {
+      const res = await fetch(`${R.skillsets}?name=${encodeURIComponent(name)}`);
+      const body = await readJson(res);
+      if (applyGate(body)) { setBusy(false); return; }
+      if (!body.ok || !body.definition) { setError(body.error || `Could not load skillset ${name}`); setBusy(false); return; }
+      const parsed = parseSkillset(body.definition);
+      setCreateGroup('skillset'); setCreateError(null);
+      setCName(parsed.name || name);
+      setCSkillsetSkills(parsed.skills);
+      setCSkillsetAdvancedOpen(false); setCSkillsetAdvancedJson(''); setCSkillsetAdvancedDirty(false);
+      setCSkillsetEditing(name);
+      setCKs(parsed.knowledgeStore); setCKsConn(parsed.storageConnectionString);
+      setCKsOpen(!knowledgeStoreIsEmpty(parsed.knowledgeStore));
+    } catch (e: any) {
+      setError(e?.message || String(e));
+    } finally { setBusy(false); }
   }, []);
 
   const submitCreate = useCallback(async () => {
@@ -517,9 +629,12 @@ export function AiSearchServiceTree({
           try { def = JSON.parse(cSkillsetAdvancedJson); } catch (e: any) { setCreateError(`Advanced JSON is invalid: ${e?.message}`); setBusy(false); return; }
           if (!def.name) def.name = cName.trim();
         } else {
-          // Guided builder — assemble from the skill cards.
+          // Guided builder — assemble the ordered chain + optional knowledge store.
           if (cSkillsetSkills.length === 0) { setCreateError('Add at least one skill.'); setBusy(false); return; }
-          def = assembleSkillsetDef(cName.trim(), cSkillsetSkills);
+          const missingUri = cSkillsetSkills.find((sk) => sk.type === '#Microsoft.Skills.Custom.WebApiSkill' && !(sk.uri || '').trim());
+          if (missingUri) { setCreateError('Custom Web API skill requires an https URI.'); setBusy(false); return; }
+          const knowledgeStore = buildKnowledgeStore(cKsConn, cKs);
+          def = assembleSkillsetDef(cName.trim(), cSkillsetSkills, { knowledgeStore });
         }
         route = R.skillsets; payload = { definition: def };
       } else if (createGroup === 'synonymmap') {
@@ -545,7 +660,7 @@ export function AiSearchServiceTree({
     } finally {
       setBusy(false);
     }
-  }, [createGroup, cName, cDataSource, cTargetIndex, cSkillset, cDsType, cDsConn, cDsContainer, cDsQuery, cSkillsetSkills, cSkillsetAdvancedDirty, cSkillsetAdvancedJson, cSynonyms, cAliasIndex, cDebugIndexer, debugStorageConn, loadAll, loadDebugSessions]);
+  }, [createGroup, cName, cDataSource, cTargetIndex, cSkillset, cDsType, cDsConn, cDsContainer, cDsQuery, cSkillsetSkills, cSkillsetAdvancedDirty, cSkillsetAdvancedJson, cKsConn, cKs, cSynonyms, cAliasIndex, cDebugIndexer, debugStorageConn, loadAll, loadDebugSessions]);
 
   const delDebugSession = useCallback(async (name: string) => {
     setBusy(true); setError(null);
@@ -775,6 +890,7 @@ export function AiSearchServiceTree({
                       <span>{sk.name}</span>
                       <span className={s.leafActions} onClick={(e) => e.stopPropagation()}>
                         <Caption1>{sk.skillCount} skills</Caption1>
+                        <Tooltip content="Edit chain" relationship="label"><Button size="small" appearance="subtle" icon={<Edit16Regular />} disabled={busy} onClick={() => openEditSkillset(sk.name)} aria-label={`Edit ${sk.name}`} /></Tooltip>
                         <Tooltip content="Delete" relationship="label"><Button size="small" appearance="subtle" icon={<Delete16Regular />} disabled={busy} onClick={() => del(R.skillsets, sk.name)} aria-label={`Delete ${sk.name}`} /></Tooltip>
                       </span>
                     </span>
@@ -993,22 +1109,31 @@ export function AiSearchServiceTree({
                     <Input value={cName} onChange={(_, d) => setCName(d.value)} placeholder="lowercase-with-dashes" />
                   </Field>
 
-                  {/* Skill list */}
+                  {/* Ordered skill chain */}
                   <Body1Strong style={{ display: 'block', marginBottom: tokens.spacingVerticalXS }}>
-                    Skills ({cSkillsetSkills.length})
+                    Skill chain ({cSkillsetSkills.length}) — runs top to bottom
                   </Body1Strong>
 
                   {cSkillsetSkills.length === 0 && (
                     <Caption1 style={{ display: 'block', color: tokens.colorNeutralForeground3, marginBottom: tokens.spacingVerticalS }}>
-                      No skills yet — add one below to start building the enrichment pipeline.
+                      No skills yet — add one below to start building the enrichment chain. Each skill can bind inputs to the
+                      outputs of any skill above it.
                     </Caption1>
                   )}
 
-                  <div style={{ maxHeight: 340, overflowY: 'auto' }}>
+                  <div style={{ maxHeight: 360, overflowY: 'auto' }}>
                     {cSkillsetSkills.map((sk, idx) => (
                       <SkillCard
                         key={sk.id}
                         skill={sk}
+                        index={idx}
+                        total={cSkillsetSkills.length}
+                        sourceOptions={availableSourcePaths(cSkillsetSkills, idx)}
+                        contexts={contextOptions(cSkillsetSkills, idx)}
+                        onMove={(dir) => {
+                          setCSkillsetSkills((prev) => reorderSkill(prev, idx, dir));
+                          setCSkillsetAdvancedDirty(false);
+                        }}
                         onChange={(updated) => {
                           setCSkillsetSkills((prev) => prev.map((s, i) => i === idx ? updated : s));
                           setCSkillsetAdvancedDirty(false);
@@ -1021,27 +1146,106 @@ export function AiSearchServiceTree({
                     ))}
                   </div>
 
-                  {/* Add skill picker */}
+                  {/* Add skill picker — grouped by category */}
                   <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, marginTop: tokens.spacingVerticalS }}>
                     <Dropdown
                       size="small"
                       placeholder="Add a skill…"
                       style={{ flex: 1 }}
+                      selectedOptions={[]}
+                      value=""
                       onOptionSelect={(_, d) => {
                         if (!d.optionValue) return;
                         setCSkillsetSkills((prev) => [...prev, defaultSkill(d.optionValue as SkillType)]);
                         setCSkillsetAdvancedDirty(false);
                       }}
                     >
-                      {SKILL_TYPES.map((t) => (
-                        <Option key={t} value={t} text={SKILL_LABELS[t]}>{SKILL_LABELS[t]}</Option>
+                      {skillsByCategory().map((grp) => (
+                        <OptionGroup key={grp.category} label={grp.category}>
+                          {grp.types.map((t) => (
+                            <Option key={t} value={t} text={SKILL_CATALOG[t].label}>{SKILL_CATALOG[t].label}</Option>
+                          ))}
+                        </OptionGroup>
                       ))}
                     </Dropdown>
                   </div>
 
                   <Caption1 style={{ display: 'block', marginTop: tokens.spacingVerticalXS, color: tokens.colorNeutralForeground3 }}>
-                    Assembled skillset is sent via <code>PUT /skillsets/{'{name}'}</code>.
+                    Assembled chain is sent via <code>PUT /skillsets/{'{name}'}</code>{cSkillsetEditing ? ' (updates the existing skillset)' : ''}.
                   </Caption1>
+
+                  {/* Knowledge store (projections) — optional, collapsed by default */}
+                  <Divider style={{ margin: `${tokens.spacingVerticalM} 0 ${tokens.spacingVerticalXS}` }} />
+                  <div
+                    style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, cursor: 'pointer', userSelect: 'none' }}
+                    role="button" tabIndex={0}
+                    onClick={() => setCKsOpen((o) => !o)}
+                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setCKsOpen((o) => !o); } }}
+                  >
+                    {cKsOpen ? <ChevronDown16Regular /> : <ChevronRight16Regular />}
+                    <Storage16Regular style={{ color: tokens.colorBrandForeground1 }} />
+                    <Body1 style={{ color: tokens.colorNeutralForeground2, flex: 1 }}>Knowledge store — project enrichments to Azure Storage</Body1>
+                    {!knowledgeStoreIsEmpty(cKs) && <Badge size="small" appearance="tint" color="brand">{cKs.tables.length + cKs.objects.length + cKs.files.length} projection(s)</Badge>}
+                  </div>
+
+                  {cKsOpen && (
+                    <div style={{ marginTop: tokens.spacingVerticalS }}>
+                      <Field label="Storage connection string" hint="StorageV2 account that will hold the projected tables/objects/files" style={{ marginBottom: tokens.spacingVerticalS }}>
+                        <Input size="small" value={cKsConn} onChange={(_, d) => setCKsConn(d.value)} placeholder="DefaultEndpointsProtocol=https;AccountName=…;AccountKey=…;" />
+                      </Field>
+
+                      {/* Table projections */}
+                      <Body1Strong style={{ display: 'block', marginBottom: tokens.spacingVerticalXS }}>Table projections</Body1Strong>
+                      {cKs.tables.map((t, i) => (
+                        <div key={i} style={{ display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', marginTop: tokens.spacingVerticalXS }}>
+                          <Input size="small" style={{ flex: 1, minWidth: 0 }} placeholder="table name" value={t.name}
+                            onChange={(_, d) => setCKs((p) => ({ ...p, tables: p.tables.map((r, j) => j === i ? { ...r, name: d.value } : r) }))} aria-label="table name" />
+                          <div style={{ flex: 2, minWidth: 0 }}>
+                            <PathCombobox value={t.source} onChange={(v) => setCKs((p) => ({ ...p, tables: p.tables.map((r, j) => j === i ? { ...r, source: v } : r) }))}
+                              options={availableSourcePaths(cSkillsetSkills, cSkillsetSkills.length)} placeholder="/document/tableprojection" />
+                          </div>
+                          <Button size="small" appearance="subtle" icon={<Dismiss16Regular />} aria-label="Remove table projection"
+                            onClick={() => setCKs((p) => ({ ...p, tables: p.tables.filter((_, j) => j !== i) }))} />
+                        </div>
+                      ))}
+                      <Button size="small" appearance="subtle" icon={<Add16Regular />} style={{ marginTop: tokens.spacingVerticalXS }}
+                        onClick={() => setCKs((p) => ({ ...p, tables: [...p.tables, { name: '', source: '' }] }))}>Add table</Button>
+
+                      {/* Object projections */}
+                      <Body1Strong style={{ display: 'block', marginTop: tokens.spacingVerticalS, marginBottom: tokens.spacingVerticalXS }}>Object projections (blobs)</Body1Strong>
+                      {cKs.objects.map((o, i) => (
+                        <div key={i} style={{ display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', marginTop: tokens.spacingVerticalXS }}>
+                          <Input size="small" style={{ flex: 1, minWidth: 0 }} placeholder="container" value={o.storageContainer}
+                            onChange={(_, d) => setCKs((p) => ({ ...p, objects: p.objects.map((r, j) => j === i ? { ...r, storageContainer: d.value } : r) }))} aria-label="object container" />
+                          <div style={{ flex: 2, minWidth: 0 }}>
+                            <PathCombobox value={o.source} onChange={(v) => setCKs((p) => ({ ...p, objects: p.objects.map((r, j) => j === i ? { ...r, source: v } : r) }))}
+                              options={availableSourcePaths(cSkillsetSkills, cSkillsetSkills.length)} placeholder="/document/objectprojection" />
+                          </div>
+                          <Button size="small" appearance="subtle" icon={<Dismiss16Regular />} aria-label="Remove object projection"
+                            onClick={() => setCKs((p) => ({ ...p, objects: p.objects.filter((_, j) => j !== i) }))} />
+                        </div>
+                      ))}
+                      <Button size="small" appearance="subtle" icon={<Add16Regular />} style={{ marginTop: tokens.spacingVerticalXS }}
+                        onClick={() => setCKs((p) => ({ ...p, objects: [...p.objects, { storageContainer: '', source: '' }] }))}>Add object</Button>
+
+                      {/* File projections */}
+                      <Body1Strong style={{ display: 'block', marginTop: tokens.spacingVerticalS, marginBottom: tokens.spacingVerticalXS }}>File projections (images)</Body1Strong>
+                      {cKs.files.map((f, i) => (
+                        <div key={i} style={{ display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', marginTop: tokens.spacingVerticalXS }}>
+                          <Input size="small" style={{ flex: 1, minWidth: 0 }} placeholder="container" value={f.storageContainer}
+                            onChange={(_, d) => setCKs((p) => ({ ...p, files: p.files.map((r, j) => j === i ? { ...r, storageContainer: d.value } : r) }))} aria-label="file container" />
+                          <div style={{ flex: 2, minWidth: 0 }}>
+                            <PathCombobox value={f.source} onChange={(v) => setCKs((p) => ({ ...p, files: p.files.map((r, j) => j === i ? { ...r, source: v } : r) }))}
+                              options={['/document/normalized_images/*']} placeholder="/document/normalized_images/*" />
+                          </div>
+                          <Button size="small" appearance="subtle" icon={<Dismiss16Regular />} aria-label="Remove file projection"
+                            onClick={() => setCKs((p) => ({ ...p, files: p.files.filter((_, j) => j !== i) }))} />
+                        </div>
+                      ))}
+                      <Button size="small" appearance="subtle" icon={<Add16Regular />} style={{ marginTop: tokens.spacingVerticalXS }}
+                        onClick={() => setCKs((p) => ({ ...p, files: [...p.files, { storageContainer: '', source: '/document/normalized_images/*' }] }))}>Add file</Button>
+                    </div>
+                  )}
 
                   {/* Advanced JSON collapsible — secondary, collapsed by default */}
                   <Divider style={{ margin: `${tokens.spacingVerticalM} 0 ${tokens.spacingVerticalXS}` }} />
@@ -1053,7 +1257,7 @@ export function AiSearchServiceTree({
                       if (!cSkillsetAdvancedOpen) {
                         // Sync the assembled JSON into the textarea on first open (if not dirty).
                         if (!cSkillsetAdvancedDirty && cName.trim()) {
-                          setCSkillsetAdvancedJson(JSON.stringify(assembleSkillsetDef(cName.trim(), cSkillsetSkills), null, 2));
+                          setCSkillsetAdvancedJson(JSON.stringify(assembleSkillsetDef(cName.trim(), cSkillsetSkills, { knowledgeStore: buildKnowledgeStore(cKsConn, cKs) }), null, 2));
                         }
                       }
                       setCSkillsetAdvancedOpen((o) => !o);

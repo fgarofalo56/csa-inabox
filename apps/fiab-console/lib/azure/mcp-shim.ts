@@ -103,7 +103,7 @@ export async function buildMcpShim(registry: LoomToolRegistry, tenantId: string)
         // `prefix` is the stable tool-name slug (catalog id for remote-builtin
         // rows, display name otherwise) — see mcpToolPrefixSlug. This is what
         // makes the registered names match the advertised mcp_powerbiremote_*.
-        return { serverId: srv.name, name: srv.name, prefix: mcpToolPrefixSlug(srv), endpoint: srv.endpoint, authMethod: srv.authMethod, authValue: srv.authValue, userToken, tools };
+        return { serverId: srv.name, serverName: srv.name, name: srv.name, prefix: mcpToolPrefixSlug(srv), endpoint: srv.endpoint, authMethod: srv.authMethod, authValue: srv.authValue, userToken, tools };
       } catch (e: any) {
         // Log but don't fail the whole orchestration
         console.warn(`Failed to fetch tools from MCP server ${srv.name}: ${e?.message}`);
@@ -115,13 +115,16 @@ export async function buildMcpShim(registry: LoomToolRegistry, tenantId: string)
   // Register successfully fetched tools
   for (const result of toolLists) {
     if (result.status !== 'fulfilled' || !result.value) continue;
-    const { prefix, endpoint, authMethod, authValue, userToken, tools } = result.value;
+    const { prefix, serverName, endpoint, authMethod, authValue, userToken, tools } = result.value;
 
     for (const tool of tools) {
       const mcpToolName = `mcp_${prefix}_${tool.name.replace(/[^a-z0-9_]/gi, '_')}`;
       const toolDef: ToolDef = {
         name: mcpToolName,
         service: 'MCP Servers',
+        // CTS-02/09: carry the backing server's display name so a tool call can
+        // be badged "via <server>" (distinct from an always-on native tool).
+        serverName,
         description: tool.description || `External tool: ${tool.name}`,
         parameters: tool.inputSchema || { type: 'object', properties: {}, required: [] },
         handler: async (args: any) => {

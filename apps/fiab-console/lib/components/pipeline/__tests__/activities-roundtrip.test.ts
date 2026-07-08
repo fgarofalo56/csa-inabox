@@ -85,8 +85,9 @@ describe('activities <-> pipeline JSON round-trip', () => {
 // ----------------------------------------------------------------------------
 
 describe('activity palette catalog', () => {
-  it('declares the three ADF/Fabric palette categories in order', () => {
-    expect(ACTIVITY_CATEGORY_ORDER.map((c) => c.id)).toEqual(['move-transform', 'orchestration', 'control-flow']);
+  it('declares the ADF/Fabric palette categories in order (incl. AI enrich)', () => {
+    // AI enrich (SVC-1/SVC-8) is appended after the three ADF/Fabric groups.
+    expect(ACTIVITY_CATEGORY_ORDER.map((c) => c.id)).toEqual(['move-transform', 'orchestration', 'control-flow', 'ai-enrich']);
     for (const c of ACTIVITY_CATEGORY_ORDER) expect(byCategory(c.id).length).toBeGreaterThan(0);
   });
 

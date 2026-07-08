@@ -33,6 +33,7 @@ import {
   Add20Regular, ArrowSync16Regular, Delete16Regular, Bot24Regular, Play16Regular,
   History16Regular, ArrowClockwise16Regular,
 } from '@fluentui/react-icons';
+import { mcpToolOptions } from '@/lib/copilot/agent-tool-catalog';
 
 const useStyles = makeStyles({
   root: { display: 'flex', flexDirection: 'column', gap: '12px', padding: '16px', minHeight: '0', flex: '1' },
@@ -53,10 +54,16 @@ const useStyles = makeStyles({
   empty: { color: tokens.colorNeutralForeground3, fontStyle: 'italic', padding: '8px' },
 });
 
+// Shared typed tool catalog (AIF-5). The Foundry project builder exposes the
+// same kinds as the Loom item agents; `mcp` / `openapi` bind to a typed config
+// below rather than a freeform box.
 const TOOL_TYPES = [
   { value: 'code_interpreter', label: 'Code interpreter' },
   { value: 'file_search', label: 'File search' },
   { value: 'function', label: 'Function calling' },
+  { value: 'mcp', label: 'MCP server' },
+  { value: 'openapi', label: 'OpenAPI' },
+  { value: 'connected_agent', label: 'Connected agent' },
   // Browser automation (AIF-18) — honest-gated on a deployed Playwright runner.
   { value: 'browser_automation', label: 'Browser automation' },
 ] as const;
@@ -143,6 +150,11 @@ export function FoundryAgentsPanel({ active, nonce = 0, acct = null }: { active:
   const [fTools, setFTools] = useState<ToolType[]>([]);
   const [fDescription, setFDescription] = useState('');
   const [fFnName, setFFnName] = useState('');
+  // Typed config for the mcp / openapi tool kinds (AIF-5).
+  const [fMcpServerId, setFMcpServerId] = useState('');
+  const [fOpenapiUrl, setFOpenapiUrl] = useState('');
+  // Connected sub-agent (AIF-4) — the agent this agent delegates to.
+  const [fConnectedAgent, setFConnectedAgent] = useState('');
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState<{ intent: 'success' | 'error'; text: string } | null>(null);
 
@@ -214,9 +226,12 @@ export function FoundryAgentsPanel({ active, nonce = 0, acct = null }: { active:
     loadBrowserStatus();
   }, [active, nonce, accountKey, loadAgents, loadDeployments, loadBrowserStatus]);
 
+  const mcpOpts = useMemo(() => mcpToolOptions(), []);
+
   const resetForm = useCallback(() => {
     setSelected(null); setFName(''); setFModel(''); setFInstructions('');
-    setFTools([]); setFDescription(''); setFFnName(''); setSaveMsg(null);
+    setFTools([]); setFDescription(''); setFFnName(''); setFMcpServerId(''); setFOpenapiUrl(''); setFConnectedAgent('');
+    setSaveMsg(null);
   }, []);
 
   const openAgent = useCallback((a: AgentRow) => {
@@ -227,20 +242,49 @@ export function FoundryAgentsPanel({ active, nonce = 0, acct = null }: { active:
     setFTools(agentToolTypes(a));
     setFDescription(a.description || '');
     setFFnName('');
+    // Best-effort round-trip of the mcp / openapi bindings from the definition.
+    const def = (a.definition || {}) as any;
+    const toolsArr = Array.isArray(def?.tools) ? def.tools : [];
+    const mcp = toolsArr.find((x: any) => x?.type === 'mcp');
+    setFMcpServerId(mcp ? (mcpOpts.find((o) => o.endpoint && o.endpoint === mcp.server_url)?.id || '') : '');
+    const oapi = toolsArr.find((x: any) => x?.type === 'openapi');
+    setFOpenapiUrl(oapi?.openapi?.spec_url ? String(oapi.openapi.spec_url) : '');
+    const conn = toolsArr.find((x: any) => x?.type === 'connected_agent');
+    setFConnectedAgent(conn?.connected_agent?.id ? String(conn.connected_agent.id) : '');
     setSaveMsg(null);
     setPgAgent(a.name);
-  }, []);
+  }, [mcpOpts]);
 
   const toggleTool = useCallback((t: ToolType, checked: boolean) => {
     setFTools((prev) => (checked ? Array.from(new Set([...prev, t])) : prev.filter((x) => x !== t)));
   }, []);
 
-  /** Build the FoundryAgentBody.tools array from the checked types via the
-   *  shared tool-kind contract (agent-tool-kinds.ts) so Foundry + MAF + the
-   *  parallel AIF-5 catalog all serialize identically. */
+  /** Build the FoundryAgentBody.tools array from the checked types + typed config. */
   const buildTools = useCallback((): Array<Record<string, unknown>> => {
-    return fTools.map((t) => buildToolDefinition(t, { functionName: fFnName }));
-  }, [fTools, fFnName]);
+    return fTools.map((t) => {
+      if (t === 'function') {
+        const name = fFnName.trim() || 'my_function';
+        return { type: 'function', function: { name, parameters: { type: 'object', properties: {} } } };
+      }
+      if (t === 'mcp') {
+        const opt = mcpOpts.find((o) => o.id === fMcpServerId);
+        return { type: 'mcp', server_label: opt?.label || fMcpServerId || 'mcp', server_url: opt?.endpoint || undefined };
+      }
+      if (t === 'openapi') {
+        return { type: 'openapi', openapi: { name: 'openapi_tool', spec_url: fOpenapiUrl.trim() || undefined, auth: { type: 'anonymous' } } };
+      }
+      if (t === 'connected_agent') {
+        const target = fConnectedAgent.trim();
+        return { type: 'connected_agent', connected_agent: { id: target || undefined, name: target || 'sub_agent', description: `Delegate to ${target || 'the connected agent'}` } };
+      }
+      if (t === 'browser_automation') {
+        // Shared tool-kind contract (agent-tool-kinds.ts) — Foundry + MAF + the
+        // AIF-5 catalog serialize browser automation identically.
+        return buildToolDefinition(t, { functionName: fFnName });
+      }
+      return { type: t };
+    });
+  }, [fTools, fFnName, fMcpServerId, fOpenapiUrl, fConnectedAgent, mcpOpts]);
 
   const save = useCallback(async () => {
     const name = fName.trim();
@@ -491,6 +535,39 @@ export function FoundryAgentsPanel({ active, nonce = 0, acct = null }: { active:
             {fTools.includes('function') && (
               <Field label="Function name (for the function tool)">
                 <Input value={fFnName} onChange={(_, d) => setFFnName(d.value)} placeholder="my_function" />
+              </Field>
+            )}
+            {fTools.includes('mcp') && (
+              <Field label="MCP server (for the MCP tool)">
+                <Dropdown
+                  value={mcpOpts.find((o) => o.id === fMcpServerId)?.label || ''}
+                  selectedOptions={fMcpServerId ? [fMcpServerId] : []}
+                  placeholder="Select an MCP server"
+                  onOptionSelect={(_, d) => d.optionValue && setFMcpServerId(d.optionValue)}
+                >
+                  {mcpOpts.map((o) => <Option key={o.id} value={o.id} text={o.label}>{o.label}{o.optIn ? ' (opt-in)' : ''}</Option>)}
+                </Dropdown>
+              </Field>
+            )}
+            {fTools.includes('openapi') && (
+              <Field label="OpenAPI spec URL (for the OpenAPI tool)">
+                <Input value={fOpenapiUrl} onChange={(_, d) => setFOpenapiUrl(d.value)} placeholder="https://api.example.com/openapi.json" />
+              </Field>
+            )}
+            {fTools.includes('connected_agent') && (
+              <Field label="Sub-agent (for the connected-agent tool)" hint="Pick another agent in this project to delegate to.">
+                {agents.filter((a) => a.name !== fName).length > 0 ? (
+                  <Dropdown
+                    value={fConnectedAgent}
+                    selectedOptions={fConnectedAgent ? [fConnectedAgent] : []}
+                    placeholder="Select an agent to connect"
+                    onOptionSelect={(_, d) => d.optionValue && setFConnectedAgent(d.optionValue)}
+                  >
+                    {agents.filter((a) => a.name !== fName).map((a) => <Option key={a.name} value={a.name} text={a.name}>{a.name}</Option>)}
+                  </Dropdown>
+                ) : (
+                  <Input value={fConnectedAgent} onChange={(_, d) => setFConnectedAgent(d.value)} placeholder="sub-agent name" />
+                )}
               </Field>
             )}
             <Field label="Description (optional — orchestrators see this)">

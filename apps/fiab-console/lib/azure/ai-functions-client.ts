@@ -102,6 +102,22 @@ export interface AiFnOptions {
    * no session of its own, so it relies on the caller to populate this.
    */
   tenantConfig?: TenantCopilotConfig | null;
+  /**
+   * FGC-19 model-tier: an explicit chat deployment name to run this function
+   * against, overriding the resolved default. The Fast/default tier passes
+   * nothing (uses the resolved deployment); the Advanced tier passes a
+   * higher-reasoning deployment the user picked from the live deployments list.
+   * Only the deployment segment of the resolved endpoint is swapped — the
+   * endpoint host + api-version stay as resolved (same Foundry account).
+   */
+  deployment?: string;
+  /**
+   * FGC-19 reasoning-effort — passed through as `reasoning_effort` on the chat
+   * body for reasoning-class deployments (o-series / gpt-5 / MAI-*). Ignored by
+   * gpt-4o-class models; if a deployment rejects it with a 400 the client
+   * retries once without it (same fallback shape as the temperature retry).
+   */
+  reasoningEffort?: 'minimal' | 'low' | 'medium' | 'high';
 }
 
 export interface AiFnUsage {
@@ -244,41 +260,60 @@ export async function callAiFn(
   }
 
   // ── Chat-completions functions ────────────────────────────────────────────
+  return chatComplete(systemPromptFor(fn, options), input, options, `AI function "${fn}"`);
+}
+
+/**
+ * Shared chat-completions core for every text AI function AND the ai-enrichment
+ * `custom_prompt` path. Resolves the AOAI target, applies the FGC-19 model-tier
+ * deployment override + reasoning-effort, and runs a single round-trip with the
+ * reasoning-model fallback (drops `temperature` + `reasoning_effort` on retry).
+ */
+async function chatComplete(
+  systemPrompt: string,
+  input: string,
+  options: AiFnOptions,
+  label: string,
+): Promise<AiFnResult> {
   const target = await resolveAoaiTarget(options.tenantConfig ?? false);
   const token = await aoaiToken();
-  const url = `${target.endpoint}/openai/deployments/${encodeURIComponent(target.deployment)}/chat/completions?api-version=${target.apiVersion}`;
+  // FGC-19 model-tier: swap ONLY the deployment segment when an explicit
+  // Advanced-tier deployment is supplied (same endpoint host + api-version).
+  const deployment = (options.deployment && options.deployment.trim()) || target.deployment;
+  const url = `${target.endpoint}/openai/deployments/${encodeURIComponent(deployment)}/chat/completions?api-version=${target.apiVersion}`;
 
   const messages = [
-    { role: 'system' as const, content: systemPromptFor(fn, options) },
+    { role: 'system' as const, content: systemPrompt },
     { role: 'user' as const, content: input },
   ];
+  const reasoningEffort = options.reasoningEffort;
 
-  // Single round-trip with the reasoning-model temperature fallback copied
-  // verbatim from data-agent-client.ts::runChat. Body built via the shared
-  // model contract (centralizes the max_completion_tokens key + canonical
-  // ordering); `temperature` is omitted on the retry shape (withTemp=false).
-  const send = async (withTemp: boolean) => fetchWithTimeout(url, {
-    method: 'POST',
-    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-    body: JSON.stringify(buildAoaiBody({
+  const send = async (full: boolean) => {
+    const body = buildAoaiBody({
       messages,
       maxCompletionTokens: options.maxTokens ?? 800,
-      temperature: withTemp ? 0 : undefined,
-    })),
-  }, LLM_FETCH_TIMEOUT_MS);
+      temperature: full ? 0 : undefined,
+    });
+    if (full && reasoningEffort) body.reasoning_effort = reasoningEffort;
+    return fetchWithTimeout(url, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    }, LLM_FETCH_TIMEOUT_MS);
+  };
 
   let res = await send(true);
   if (res.status === 400) {
     const t = await res.text();
-    if (/unsupported_value|does not support|Only the default \(1\) value is supported/i.test(t) && /temperature|top_p/i.test(t)) {
+    if (/unsupported_value|does not support|Only the default \(1\) value is supported|reasoning_effort/i.test(t) && /temperature|top_p|reasoning_effort/i.test(t)) {
       res = await send(false);
     } else {
-      throw new Error(`AI function "${fn}" failed (400): ${t.slice(0, 400)}`);
+      throw new Error(`${label} failed (400): ${t.slice(0, 400)}`);
     }
   }
   if (!res.ok) {
     const t = await res.text();
-    throw new Error(`AI function "${fn}" failed (${res.status}): ${t.slice(0, 400)}`);
+    throw new Error(`${label} failed (${res.status}): ${t.slice(0, 400)}`);
   }
 
   const j: any = await res.json();
@@ -287,7 +322,7 @@ export async function callAiFn(
 
   return {
     result: stripFences(content),
-    model: target.deployment,
+    model: deployment,
     usage: (u.total_tokens != null)
       ? {
           promptTokens: u.prompt_tokens ?? 0,
@@ -296,6 +331,22 @@ export async function callAiFn(
         }
       : undefined,
   };
+}
+
+/**
+ * Run a user-authored custom prompt over one input value — the ai-enrichment
+ * `custom_prompt` op. The prompt IS the content (the one allowed freeform field
+ * per no-freeform-config); `input` is wrapped as the user message. Same live
+ * AOAI deployment, model-tier override, and honest gate as `callAiFn`.
+ */
+export async function callCustomPrompt(
+  systemPrompt: string,
+  input: string,
+  options: AiFnOptions = {},
+): Promise<AiFnResult> {
+  const prompt = (systemPrompt || '').trim();
+  if (!prompt) throw new Error('custom_prompt requires a non-empty prompt.');
+  return chatComplete(prompt, input, options, 'Custom-prompt enrichment');
 }
 
 /** Persona tag used for AI-function usage receipts in App Insights / the

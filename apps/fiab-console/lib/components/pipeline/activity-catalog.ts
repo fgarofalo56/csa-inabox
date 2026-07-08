@@ -47,14 +47,100 @@ function hdiCluster(): string {
  *                        Set/Append variable, Filter, Web, Webhook, Fail,
  *                        Validation, Office 365 Outlook
  */
-export type ActivityCategory = 'move-transform' | 'orchestration' | 'control-flow';
+export type ActivityCategory = 'move-transform' | 'orchestration' | 'control-flow' | 'ai-enrich';
 
 /** Fabric/ADF palette group display order + labels. */
 export const ACTIVITY_CATEGORY_ORDER: Array<{ id: ActivityCategory; label: string }> = [
   { id: 'move-transform', label: 'Move & transform' },
   { id: 'orchestration',  label: 'Orchestration' },
   { id: 'control-flow',   label: 'Control flow' },
+  // AI enrich (SVC-1/SVC-8) — Azure AI transform steps (Document Intelligence,
+  // Vision, Language, Translator, Content Safety) that enrich free-text /
+  // documents / images landing in bronze into silver/gold. Each is a real ADF
+  // WebActivity with managed-identity auth to the cognitive endpoint (mirrors
+  // the ApprovalWebhook pattern — shared wire type + a `_loomKind` discriminator),
+  // so it saves + runs against the deployed factory with no Fabric dependency.
+  { id: 'ai-enrich',      label: 'AI enrich' },
 ];
+
+/**
+ * AI-enrichment cognitive endpoint, exposed client-side so the activity build()
+ * can pre-fill the WebActivity URL. Bicep wires both the server var
+ * (LOOM_<SVC>_ENDPOINT, read by the clients + preview route) and its
+ * NEXT_PUBLIC_ mirror (read here on the canvas). When unset the URL is left
+ * blank and the AI-enrich form surfaces an honest MessageBar naming the exact
+ * LOOM_<SVC>_ENDPOINT to set (no-vaporware.md).
+ */
+export type AiEnrichService = 'doc-intel' | 'vision' | 'language' | 'translator' | 'content-safety';
+const AI_ENRICH_ENV: Record<AiEnrichService, string> = {
+  'doc-intel': 'NEXT_PUBLIC_LOOM_DOCINTEL_ENDPOINT',
+  vision: 'NEXT_PUBLIC_LOOM_VISION_ENDPOINT',
+  language: 'NEXT_PUBLIC_LOOM_LANGUAGE_ENDPOINT',
+  translator: 'NEXT_PUBLIC_LOOM_TRANSLATOR_ENDPOINT',
+  'content-safety': 'NEXT_PUBLIC_LOOM_CONTENT_SAFETY_ENDPOINT',
+};
+/** The exact server-side env var name for a service (surfaced in honest gates). */
+export const AI_ENRICH_SERVER_ENV: Record<AiEnrichService, string> = {
+  'doc-intel': 'LOOM_DOCINTEL_ENDPOINT',
+  vision: 'LOOM_VISION_ENDPOINT',
+  language: 'LOOM_LANGUAGE_ENDPOINT',
+  translator: 'LOOM_TRANSLATOR_ENDPOINT',
+  'content-safety': 'LOOM_CONTENT_SAFETY_ENDPOINT',
+};
+export function aiEnrichEndpoint(service: AiEnrichService): string {
+  const key = AI_ENRICH_ENV[service];
+  const v = (typeof process !== 'undefined' && process.env?.[key]) || '';
+  return v.replace(/\/+$/, '');
+}
+
+/** The `Ocp-Apim-Subscription-Region` value for the Cognitive Services MSI audience. */
+const COGNITIVE_MSI_RESOURCE = 'https://cognitiveservices.azure.com';
+
+/** Build the analyze-endpoint URL for an AI-enrich WebActivity (blank when unconfigured). */
+export function aiEnrichAnalyzeUrl(service: AiEnrichService, opts?: { modelId?: string }): string {
+  const ep = aiEnrichEndpoint(service);
+  if (!ep) return '';
+  switch (service) {
+    case 'doc-intel':
+      return `${ep}/documentintelligence/documentModels/${opts?.modelId || 'prebuilt-layout'}:analyze?api-version=2024-11-30`;
+    case 'vision':
+      return `${ep}/computervision/imageanalysis:analyze?api-version=2024-02-01&features=Caption,Read&language=en`;
+    case 'language':
+      return `${ep}/language/:analyze-text?api-version=2024-11-01`;
+    case 'translator':
+      return `${ep}/translator/text/v3.0/translate?api-version=3.0&to=fr`;
+    case 'content-safety':
+      return `${ep}/contentsafety/text:analyze?api-version=2024-09-01`;
+  }
+}
+
+/** Shared WebActivity typeProperties factory for the AI-enrich family. */
+function aiEnrichWebActivity(
+  name: string,
+  service: AiEnrichService,
+  loomKind: string,
+  body: Record<string, unknown>,
+  opts?: { modelId?: string },
+): PipelineActivity {
+  return {
+    name, type: 'WebActivity', dependsOn: [],
+    typeProperties: {
+      url: aiEnrichAnalyzeUrl(service, opts),
+      method: 'POST',
+      // ADF calls the cognitive data plane with the factory's managed identity —
+      // no key. The factory MI needs "Cognitive Services User" on the account
+      // (same role the Console UAMI gets in cognitive-account.bicep).
+      authentication: { type: 'MSI', resource: COGNITIVE_MSI_RESOURCE },
+      headers: { 'Content-Type': 'application/json' },
+      body,
+    },
+    userProperties: [
+      { name: '_loomKind', value: loomKind },
+      { name: '_loomService', value: service },
+      ...(opts?.modelId ? [{ name: '_loomModelId', value: opts.modelId }] : []),
+    ],
+  };
+}
 
 export interface ActivityTypeDef {
   /** Stable key shown in the palette. */
@@ -634,6 +720,68 @@ export const ACTIVITY_CATALOG: ActivityTypeDef[] = [
       typeProperties: { waitTimeInSeconds: 5 },
     }),
   },
+
+  // ============ AI enrich (SVC-1 / SVC-8) ============
+  // Each entry is a REAL ADF WebActivity (managed-identity auth to the Cognitive
+  // Services endpoint) discriminated by `_loomKind` — mirroring ApprovalWebhook.
+  // The typed AI-enrich form (activity-forms.tsx) composes the URL + request body
+  // from dropdowns (model / feature / task / language) and offers a live "test on
+  // a sample" against the real cognitive backend. runnable:true — a native ADF
+  // WebActivity runs against the deployed factory. Honest gate: when the endpoint
+  // env var is unset the URL is blank and the form names LOOM_<SVC>_ENDPOINT +
+  // the bicep module (cognitive-account.bicep). No Fabric dependency.
+  {
+    key: 'DocumentIntelligenceAnalyze', label: 'Document Intelligence',
+    description: 'Extract layout / prebuilt fields (OCR, tables, key-value pairs) from a document with Azure AI Document Intelligence. Requires LOOM_DOCINTEL_ENDPOINT.',
+    category: 'ai-enrich', type: 'WebActivity', namePrefix: 'DocIntel',
+    color: '#7c3aed', fg: '#fff', runnable: true,
+    build: (name) => aiEnrichWebActivity(
+      name, 'doc-intel', 'DocumentIntelligenceAnalyze',
+      { urlSource: '' },
+      { modelId: 'prebuilt-layout' },
+    ),
+  },
+  {
+    key: 'VisionAnalyzeImage', label: 'Vision analyze image',
+    description: 'Analyze an image with Azure AI Vision — caption, OCR read, tags, objects, people. Requires LOOM_VISION_ENDPOINT.',
+    category: 'ai-enrich', type: 'WebActivity', namePrefix: 'VisionAnalyze',
+    color: '#7c3aed', fg: '#fff', runnable: true,
+    build: (name) => aiEnrichWebActivity(
+      name, 'vision', 'VisionAnalyzeImage',
+      { url: '' },
+    ),
+  },
+  {
+    key: 'LanguageAnalyzeText', label: 'Language analyze text',
+    description: 'Enrich free text with Azure AI Language — PII detection, sentiment, entity recognition, key phrases. Requires LOOM_LANGUAGE_ENDPOINT.',
+    category: 'ai-enrich', type: 'WebActivity', namePrefix: 'LanguageAnalyze',
+    color: '#7c3aed', fg: '#fff', runnable: true,
+    build: (name) => aiEnrichWebActivity(
+      name, 'language', 'LanguageAnalyzeText',
+      { kind: 'PiiEntityRecognition', analysisInput: { documents: [{ id: '1', language: 'en', text: '' }] } },
+    ),
+  },
+  {
+    key: 'TranslateText', label: 'Translate text',
+    description: 'Translate free text into one or more target languages with Azure AI Translator. Requires LOOM_TRANSLATOR_ENDPOINT.',
+    category: 'ai-enrich', type: 'WebActivity', namePrefix: 'Translate',
+    color: '#7c3aed', fg: '#fff', runnable: true,
+    build: (name) => aiEnrichWebActivity(
+      name, 'translator', 'TranslateText',
+      [{ Text: '' }] as unknown as Record<string, unknown>,
+    ),
+  },
+  {
+    // SVC-8 — extends the already-built Content Safety client as a pipeline step.
+    key: 'ModerateText', label: 'Moderate text (Content Safety)',
+    description: 'Screen a free-text column for harmful content (Hate / SelfHarm / Sexual / Violence) with Azure AI Content Safety before it lands in silver/gold. Requires LOOM_CONTENT_SAFETY_ENDPOINT.',
+    category: 'ai-enrich', type: 'WebActivity', namePrefix: 'ModerateText',
+    color: '#7c3aed', fg: '#fff', runnable: true,
+    build: (name) => aiEnrichWebActivity(
+      name, 'content-safety', 'ModerateText',
+      { text: '' },
+    ),
+  },
 ];
 
 /** Lookup by ADF type string. */
@@ -735,6 +883,8 @@ export function canvasCategoryForType(type?: string): CanvasNodeCategory {
       case 'control-flow':   return 'control';
       case 'move-transform': return 'move';   // any non-listed move-transform tile
       case 'orchestration':  return 'transform';
+      // AI-enrich activities call an external cognitive REST endpoint.
+      case 'ai-enrich':      return 'external';
     }
   }
 
