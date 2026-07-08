@@ -863,6 +863,8 @@ export function CopilotPane() {
                   completionTokens={m.completionTokens}
                   turnLatencyMs={m.turnLatencyMs}
                   costUsd={m.costUsd}
+                  turnDetail={m.turnDetail}
+                  citations={m.citations}
                 />
               )}
               {m.who === 'copilot' && !m.streaming && m.msgIndex !== undefined && (

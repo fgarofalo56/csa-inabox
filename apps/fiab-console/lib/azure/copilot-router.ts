@@ -270,5 +270,18 @@ export async function* routeCopilot(opts: RouteCopilotOptions): AsyncIterable<Ro
 
   const id = buildAgentIdentity(opts);
   yield { kind: 'agent', agentId: id.agentId, agentName: id.agentName, reason: decision.reason };
-  yield* orchestrate(opts);
+  // Re-yield the build orchestrator's stream, folding the routing decision into
+  // the final step's turnDetail (CTS-02) so the per-message detail badge shows
+  // WHO answered + WHY on every surface — not only the pane's `agent` chip.
+  for await (const step of orchestrate(opts)) {
+    if (step.kind === 'final') {
+      const detail = step.turnDetail ?? { tools: [] };
+      yield {
+        ...step,
+        turnDetail: { ...detail, routedAgentName: id.agentName, routedReason: decision.reason },
+      };
+    } else {
+      yield step;
+    }
+  }
 }

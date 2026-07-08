@@ -15,12 +15,15 @@
  * persisted before this wave (or a MAF-tier turn) still renders whatever it has.
  */
 
-import { Badge, Caption1, Tooltip, makeStyles, tokens } from '@fluentui/react-components';
+import { useState } from 'react';
+import { Badge, Button, Tooltip, makeStyles, tokens } from '@fluentui/react-components';
 import {
   Bot16Regular, ArrowUp12Regular, ArrowDown12Regular,
   Money16Regular, Timer16Regular, Wrench16Regular,
+  ChevronDown12Regular, ChevronUp12Regular,
 } from '@fluentui/react-icons';
-import type { CopilotUsage, TurnMeta } from './types';
+import { TurnDetailPanel } from './turn-detail-panel';
+import type { Citation, CopilotUsage, TurnDetail, TurnMeta } from './types';
 
 const useStyles = makeStyles({
   bar: {
@@ -69,11 +72,22 @@ function fmtCost(usd: number): string {
 export interface MessageMetadataBarProps extends TurnMeta {
   model?: string;
   usage?: CopilotUsage;
+  /** CTS-02 per-message detail (tool table + routing) behind the chevron. */
+  turnDetail?: TurnDetail;
+  /** CTS-04 grounding citations grouped under "Sources" in the detail panel. */
+  citations?: Citation[];
 }
 
 export function MessageMetadataBar(props: MessageMetadataBarProps) {
   const s = useStyles();
-  const { model, provider, usage } = props;
+  const [expanded, setExpanded] = useState(false);
+  const { model, provider, usage, turnDetail, citations } = props;
+  // The detail chevron appears when there is anything worth expanding: a tool
+  // roll-up, routing info, or grounding citations.
+  const hasDetail = !!(
+    (turnDetail && (turnDetail.tools.length > 0 || turnDetail.routedAgentName || turnDetail.routedReason)) ||
+    (citations && citations.length > 0)
+  );
   // Prefer the split counts (CTS-01); fall back to usage for older turns.
   const promptTokens = props.promptTokens ?? usage?.promptTokens;
   const completionTokens = props.completionTokens ?? usage?.completionTokens;
@@ -83,11 +97,12 @@ export function MessageMetadataBar(props: MessageMetadataBarProps) {
   const aoaiCalls = usage?.aoaiCalls;
 
   // Nothing meaningful to show → render nothing (keeps error turns clean).
-  if (!model && totalTokens == null && props.turnLatencyMs == null && props.costUsd == null) {
+  if (!model && totalTokens == null && props.turnLatencyMs == null && props.costUsd == null && !hasDetail) {
     return null;
   }
 
   return (
+    <>
     <div className={s.bar} data-testid="copilot-metadata-bar" aria-label="Turn details">
       {model && (
         <Tooltip content={`${provider || 'Azure OpenAI'} · ${model}`} relationship="label">
@@ -128,6 +143,23 @@ export function MessageMetadataBar(props: MessageMetadataBarProps) {
           <span className={s.chip}><Wrench16Regular aria-hidden />{toolCalls}</span>
         </Tooltip>
       )}
+
+      {hasDetail && (
+        <Button
+          appearance="subtle"
+          size="small"
+          data-testid="copilot-detail-toggle"
+          icon={expanded ? <ChevronUp12Regular /> : <ChevronDown12Regular />}
+          iconPosition="after"
+          onClick={() => setExpanded((v) => !v)}
+          aria-expanded={expanded}
+          aria-label={expanded ? 'Hide turn details' : 'Show turn details'}
+        >
+          Details
+        </Button>
+      )}
     </div>
+    {hasDetail && expanded && <TurnDetailPanel detail={turnDetail} citations={citations} />}
+    </>
   );
 }

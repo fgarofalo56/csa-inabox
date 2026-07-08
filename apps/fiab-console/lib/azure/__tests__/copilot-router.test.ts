@@ -145,4 +145,21 @@ describe('routeCopilot', () => {
     const agent = steps.find((s) => (s as { kind?: string }).kind === 'agent') as { agentName: string };
     expect(agent.agentName).toBe('Help & docs');
   });
+
+  it('CTS-02: folds the routing decision into the build final step turnDetail', async () => {
+    // Build branch: the orchestrator mock yields a final step with a tool
+    // roll-up; the router must augment it with routedAgentName + reason without
+    // dropping the tools already recorded.
+    orchestrateMock.mockImplementationOnce(async function* () {
+      yield { kind: 'final', content: 'ok', turnDetail: { tools: [{ name: 'loom_x', durationMs: 5, ok: true }] } };
+    });
+    const steps: unknown[] = [];
+    for await (const s of routeCopilot({ prompt: 'optimize', sessionId: 's', userOid: 'u', contextSlug: 'warehouse', autoRoute: false } as never)) steps.push(s);
+    const final = steps.find((s) => (s as { kind?: string }).kind === 'final') as {
+      turnDetail: { tools: unknown[]; routedAgentName?: string; routedReason?: string };
+    };
+    expect(final.turnDetail.routedAgentName).toBe('Warehouse Copilot');
+    expect(final.turnDetail.routedReason).toContain('Warehouse Copilot');
+    expect(final.turnDetail.tools).toHaveLength(1);
+  });
 });

@@ -352,6 +352,12 @@ export interface ToolDef {
    * console badges these so the user knows the tool grounds on what's open.
    */
   readsContext?: boolean;
+  /**
+   * Display name of the MCP server backing this tool (CTS-02/09). Set by
+   * buildMcpShim for external MCP tools; absent for always-on native Loom tools
+   * (which the detail panel labels "built-in").
+   */
+  serverName?: string;
 }
 
 export class LoomToolRegistry {
@@ -2008,6 +2014,11 @@ export async function* orchestrate(opts: OrchestrateOptions): AsyncIterable<Orch
   // the final step can report total cost (parity with the data-agent chat).
   const usage: OrchestratorUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0, aoaiCalls: 0, toolCalls: 0 };
 
+  // CTS-02: roll every tool call into a per-turn detail list ({name, serverName?,
+  // durationMs, ok, error?}) attached to the final step so the collapsible detail
+  // badge can render the full tool table with "via <server>" attribution.
+  const turnTools: TurnToolDetail[] = [];
+
   for (let i = 0; i < maxIter; i++) {
     let resp: any;
     try {
@@ -2069,6 +2080,8 @@ export async function* orchestrate(opts: OrchestrateOptions): AsyncIterable<Orch
         completionTokens: usage.completionTokens,
         turnLatencyMs: Date.now() - turnStart,
         costUsd: estCostUsd(target.deployment, usage.promptTokens, usage.completionTokens),
+        // CTS-02: the per-turn tool roll-up (empty tools = a no-tool answer).
+        turnDetail: { tools: turnTools },
       };
       await persistStep(sessionId, userOid, finalStep);
       yield finalStep;
@@ -2121,13 +2134,15 @@ export async function* orchestrate(opts: OrchestrateOptions): AsyncIterable<Orch
           const truncated = serialized.length > 16_000
             ? serialized.slice(0, 16_000) + '...[truncated]'
             : serialized;
+          const okDurationMs = Date.now() - started;
           resultStep = {
             kind: 'tool_result',
             name: tc.function.name,
             callId: tc.id,
-            durationMs: Date.now() - started,
+            durationMs: okDurationMs,
             result: publicResult,
           };
+          turnTools.push({ name: tc.function.name, serverName: tool.serverName, durationMs: okDurationMs, ok: true });
           messages.push({
             role: 'tool',
             tool_call_id: tc.id,
@@ -2171,6 +2186,15 @@ export async function* orchestrate(opts: OrchestrateOptions): AsyncIterable<Orch
         }
       }
 
+      // CTS-02: record the unknown-tool / error tool_result (the success case is
+      // recorded inline above before its early `continue`).
+      turnTools.push({
+        name: tc.function.name,
+        serverName: tool?.serverName,
+        durationMs: resultStep.kind === 'tool_result' ? resultStep.durationMs : 0,
+        ok: false,
+        error: resultStep.kind === 'tool_result' ? resultStep.error : undefined,
+      });
       await persistStep(sessionId, userOid, resultStep);
       yield resultStep;
     }
