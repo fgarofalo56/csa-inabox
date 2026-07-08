@@ -1966,6 +1966,7 @@ export function NotebookEditor({ item, id }: Props) {
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon} dirty={dirty}
+      explain={{ family: 'notebook', getDefinition: () => ({ cells, defaultLang }) }}
       leftPanel={
         <div className={s.treePad}>
           <Subtitle2 className={s.sectionHeader} style={{ marginBottom: tokens.spacingVerticalS }}>
