@@ -92,6 +92,14 @@ export interface CanvasLineageNode {
    * layout. Surfaces that don't track a per-node status omit it.
    */
   statusDot?: { color: string; title: string };
+  /**
+   * Set by the deleted-node guard (LIN-GC-3): the node's backing Loom item was
+   * deleted but a metadata-plane entity (a Purview Atlas asset that hasn't GC'd
+   * yet) still returns it. Rendered as a dashed, muted "ghost" with a Deleted
+   * badge — and its open-item link is suppressed — so the graph never presents a
+   * dead asset as live while GC propagates.
+   */
+  deleted?: boolean;
 }
 
 export interface CanvasLineageEdge {
@@ -187,11 +195,16 @@ function LineageNodeImpl({ data, selected }: NodeProps) {
   const { node, dimmed } = data as LineageNodeData;
   const style = styleForType(node.type);
   const Icon = style.Icon;
+  const deleted = !!node.deleted;
+  // A deleted-in-Loom asset that a metadata-plane entity still reports: mute the
+  // accent, dash the border, and drop the opacity so it reads as a tombstone.
+  const accent = deleted ? tokens.colorNeutralForeground4 : style.color;
   return (
     <div
       data-lineage-node-id={node.id}
       data-lineage-source={node.source}
-      aria-label={`${style.kind} ${node.label} from ${SOURCE_LABEL[node.source]}`}
+      data-lineage-deleted={deleted ? 'true' : undefined}
+      aria-label={`${deleted ? 'Deleted ' : ''}${style.kind} ${node.label} from ${SOURCE_LABEL[node.source]}`}
       style={{
         position: 'relative',
         width: NODE_W,
@@ -201,17 +214,18 @@ function LineageNodeImpl({ data, selected }: NodeProps) {
         paddingLeft: tokens.spacingHorizontalSNudge,
         paddingRight: tokens.spacingHorizontalSNudge,
         borderRadius: tokens.borderRadiusMedium,
-        background: tokens.colorNeutralBackground1,
-        borderLeft: `4px solid ${style.color}`,
-        border: `1px solid ${selected ? tokens.colorBrandStroke1 : tokens.colorNeutralStroke2}`,
+        background: deleted ? tokens.colorNeutralBackground3 : tokens.colorNeutralBackground1,
+        borderLeft: `4px solid ${accent}`,
+        border: `1px ${deleted ? 'dashed' : 'solid'} ${selected ? tokens.colorBrandStroke1 : tokens.colorNeutralStroke2}`,
         borderLeftWidth: 4,
-        borderLeftColor: style.color,
+        borderLeftStyle: deleted ? 'dashed' : 'solid',
+        borderLeftColor: accent,
         boxShadow: node.focus
-          ? `0 0 0 2px ${style.color}, ${tokens.shadow8}`
+          ? `0 0 0 2px ${accent}, ${tokens.shadow8}`
           : selected
             ? `0 0 0 2px ${tokens.colorBrandBackground2}, ${tokens.shadow8}`
             : tokens.shadow4,
-        opacity: dimmed ? 0.25 : 1,
+        opacity: deleted ? (dimmed ? 0.2 : 0.55) : (dimmed ? 0.25 : 1),
         transition: 'opacity 120ms ease',
         display: 'flex',
         flexDirection: 'column',
@@ -220,7 +234,7 @@ function LineageNodeImpl({ data, selected }: NodeProps) {
         userSelect: 'none',
       }}
     >
-      <Handle type="target" position={Position.Left} style={portStyle('in', style.color)} />
+      <Handle type="target" position={Position.Left} style={portStyle('in', accent)} />
       {node.statusDot && (
         <span
           aria-hidden
@@ -239,10 +253,19 @@ function LineageNodeImpl({ data, selected }: NodeProps) {
         />
       )}
       <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalSNudge }}>
-        <span style={{ color: style.color, display: 'inline-flex' }}><Icon fontSize={tokens.fontSizeBase400} /></span>
-        <Text size={200} weight={node.focus ? 'semibold' : 'medium'} truncate wrap={false} style={{ flex: 1 }}>
+        <span style={{ color: accent, display: 'inline-flex' }}><Icon fontSize={tokens.fontSizeBase400} /></span>
+        <Text
+          size={200}
+          weight={node.focus ? 'semibold' : 'medium'}
+          truncate
+          wrap={false}
+          style={{ flex: 1, textDecoration: deleted ? 'line-through' : undefined }}
+        >
           {node.label}
         </Text>
+        {deleted && (
+          <Badge size="extra-small" appearance="tint" color="danger">Deleted</Badge>
+        )}
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS }}>
         <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{style.kind}</Caption1>
@@ -252,7 +275,7 @@ function LineageNodeImpl({ data, selected }: NodeProps) {
           <Badge size="extra-small" appearance="tint" color="informative" style={{ marginLeft: 'auto' }}>merged</Badge>
         )}
       </div>
-      <Handle type="source" position={Position.Right} style={portStyle('out', style.color)} />
+      <Handle type="source" position={Position.Right} style={portStyle('out', accent)} />
     </div>
   );
 }
@@ -609,11 +632,19 @@ const LineageCanvasInner = forwardRef<LineageCanvasHandle, LineageCanvasProps>(f
           onKeyDown={(e) => { if (e.key === 'Escape') setSelectedId(null); }}
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, marginBottom: tokens.spacingVerticalM }}>
-            <span style={{ color: styleForType(selected.type).color, display: 'inline-flex' }}>
+            <span style={{ color: selected.deleted ? tokens.colorNeutralForeground4 : styleForType(selected.type).color, display: 'inline-flex' }}>
               {(() => { const I = styleForType(selected.type).Icon; return <I fontSize={tokens.fontSizeBase400} />; })()}
             </span>
-            <Text weight="semibold" size={300} style={{ wordBreak: 'break-all' }}>{selected.label}</Text>
+            <Text weight="semibold" size={300} style={{ wordBreak: 'break-all', textDecoration: selected.deleted ? 'line-through' : undefined }}>{selected.label}</Text>
+            {selected.deleted && <Badge size="small" appearance="tint" color="danger">Deleted</Badge>}
           </div>
+          {selected.deleted && (
+            <Caption1 style={{ display: 'block', color: tokens.colorNeutralForeground3, marginBottom: tokens.spacingVerticalM }}>
+              This asset was deleted in Loom. It still appears here from a metadata-plane
+              entity (e.g. a Purview catalog asset) that hasn&rsquo;t been garbage-collected
+              yet. Run Reconcile lineage on the Lineage admin surface to purge it.
+            </Caption1>
+          )}
 
           <div className={s.detailRow}>
             <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Source</Caption1>
@@ -653,7 +684,7 @@ const LineageCanvasInner = forwardRef<LineageCanvasHandle, LineageCanvasProps>(f
             <Button size="small" appearance="primary" icon={<TargetRegular />} onClick={() => { setFocusMode(true); focusOn(selected.id); }}>
               Focus chain
             </Button>
-            {selected.openHref && (
+            {selected.openHref && !selected.deleted && (
               <Button size="small" appearance="secondary" as="a" href={selected.openHref}>
                 Open item
               </Button>

@@ -39,7 +39,8 @@ import { isTenantAdmin } from '@/lib/auth/feature-gate';
 import { itemsContainer, workspacesContainer } from '@/lib/azure/cosmos-client';
 import { loadWorkspaceAdmin } from '@/lib/clients/workspaces-client';
 import { deleteLoomDoc } from '@/lib/azure/loom-search';
-import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
+import { cleanupWorkspaceMetadata, type CleanupItem } from '@/lib/azure/lineage-gc';
+import type { Workspace } from '@/lib/types/workspace';
 import { apiError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
@@ -68,9 +69,11 @@ async function loadWorkspace(id: string, tenantId: string): Promise<Workspace | 
 async function deleteOne(ws: Workspace): Promise<void> {
   const items = await itemsContainer();
   const { resources: children } = await items.items
-    .query<WorkspaceItem>(
+    .query<CleanupItem>(
       {
-        query: 'SELECT c.id, c.workspaceId FROM c WHERE c.workspaceId = @w',
+        // Select the fields lineage GC needs (itemType + state.purviewSourceName)
+        // alongside id/workspaceId so the metadata plane can be reconciled.
+        query: 'SELECT c.id, c.workspaceId, c.itemType, c.state FROM c WHERE c.workspaceId = @w',
         parameters: [{ name: '@w', value: ws.id }],
       },
       { partitionKey: ws.id },
@@ -80,6 +83,11 @@ async function deleteOne(ws: Workspace): Promise<void> {
     await items.item(child.id, ws.id).delete().catch(() => {});
     void deleteLoomDoc(`it:${child.id}`);
   }
+  // GC the metadata plane for every item purged in this bulk delete (LIN-GC-1):
+  // soft-delete each Purview Atlas entity + hard-remove its Weave/Thread lineage
+  // edges. This is the exact path the 07-08 UAT purge took that left 160
+  // workspaces' worth of lineage debris. Best-effort, never blocks the delete.
+  void cleanupWorkspaceMetadata(children, ws.tenantId);
   const wsContainer = await workspacesContainer();
   await wsContainer.item(ws.id, ws.tenantId).delete();
   void deleteLoomDoc(`ws:${ws.id}`);

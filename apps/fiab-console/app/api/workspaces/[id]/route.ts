@@ -2,8 +2,9 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { itemsContainer, workspacesContainer } from '@/lib/azure/cosmos-client';
 import { upsertLoomDoc, deleteLoomDoc, docForWorkspace } from '@/lib/azure/loom-search';
+import { cleanupWorkspaceMetadata, type CleanupItem } from '@/lib/azure/lineage-gc';
 import { resolveWorkspaceAccessByOid, type WorkspaceAccess } from '@/lib/auth/workspace-access';
-import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
+import type { Workspace } from '@/lib/types/workspace';
 import { apiError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
@@ -96,11 +97,13 @@ export async function DELETE(_req: NextRequest, props: { params: Promise<{ id: s
       return err('Only the workspace owner or an Admin can delete a workspace.', 403, 'owner_or_admin_required');
     }
     const ws = access.workspace;
-    // Cascade delete items first
+    // Cascade delete items first. Select the fields lineage GC needs (itemType
+    // + state.purviewSourceName) alongside id/workspaceId so the metadata plane
+    // can be reconciled per item.
     const items = await itemsContainer();
     const { resources: children } = await items.items
-      .query<WorkspaceItem>({
-        query: 'SELECT c.id, c.workspaceId FROM c WHERE c.workspaceId = @w',
+      .query<CleanupItem>({
+        query: 'SELECT c.id, c.workspaceId, c.itemType, c.state FROM c WHERE c.workspaceId = @w',
         parameters: [{ name: '@w', value: ws.id }],
       }, { partitionKey: ws.id })
       .fetchAll();
@@ -108,6 +111,12 @@ export async function DELETE(_req: NextRequest, props: { params: Promise<{ id: s
       await items.item(child.id, ws.id).delete().catch(() => {});
       void deleteLoomDoc(`it:${child.id}`);
     }
+    // GC the metadata plane for every cascade-deleted item (LIN-GC-1): soft-delete
+    // each Purview Atlas entity + hard-remove its Weave/Thread lineage edges, so
+    // the Analyze → Lineage surfaces don't keep serving deleted assets. Best-effort
+    // and fire-and-forget — never blocks the workspace delete. tenantId is the
+    // workspace owner's partition (the value items were onboarded with).
+    void cleanupWorkspaceMetadata(children, ws.tenantId);
     const wsContainer = await workspacesContainer();
     await wsContainer.item(ws.id, ws.tenantId).delete();
     void deleteLoomDoc(`ws:${ws.id}`);
