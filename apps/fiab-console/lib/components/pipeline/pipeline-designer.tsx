@@ -37,7 +37,7 @@
  * .claude/rules/no-vaporware.md).
  */
 
-import { forwardRef, useCallback, useImperativeHandle, useMemo, useRef, useState } from 'react';
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import {
   Breadcrumb, BreadcrumbItem, BreadcrumbButton, BreadcrumbDivider,
   Button, Caption1, Input, Tab, TabList, Tooltip,
@@ -62,6 +62,8 @@ import { getActivityVisual, accentTint, accentGradient } from '@/lib/components/
 // per-surface height to localStorage. Pointer + keyboard + ARIA live in the
 // primitive; this surface only declares its bounds/storage key.
 import { ResizableCanvasRegion } from '@/lib/components/canvas/resizable-canvas';
+import { useCanvasHistory } from '@/lib/components/canvas/use-canvas-history';
+import { registerCanvasCommands, type CanvasCommand } from '@/lib/components/canvas/canvas-command-registry';
 import type {
   PipelineActivity, PipelineParameter, PipelineVariable,
 } from './types';
@@ -247,6 +249,9 @@ export const PipelineDesigner = forwardRef<PipelineDesignerHandle, PipelineDesig
   const [snapToGrid] = useState(true);
   const [showGrid] = useState(true);
   const [paletteCollapsed, setPaletteCollapsed] = useState(false);
+  // Whether keyboard focus is inside this designer — gates W21 command-palette
+  // registration so canvas commands are only searchable while the canvas is active.
+  const [focused, setFocused] = useState(false);
 
   // --- Drill navigation -----------------------------------------------------
   // The trail of (container, branch) steps the user has drilled into. Empty =
@@ -274,11 +279,56 @@ export const PipelineDesigner = forwardRef<PipelineDesignerHandle, PipelineDesig
     [activities, drillPath],
   );
 
+  // --- Undo/redo history (W1) ----------------------------------------------
+  // Snapshot history over the TOP-LEVEL activities tree (the single source of
+  // truth). Every user mutation routes through `applyActivities`, which records
+  // the new tree AND emits it upward; undo/redo re-emit a prior snapshot WITHOUT
+  // re-recording. A ref tracks the last tree we ourselves emitted so a genuinely
+  // external change to `activities` (initial load, host reset) rebases history
+  // rather than being mistaken for a user edit.
+  const history = useCanvasHistory<PipelineActivity[]>(activities);
+  const lastEmittedRef = useRef<PipelineActivity[]>(activities);
+
+  useEffect(() => {
+    if (activities !== lastEmittedRef.current) {
+      history.reset(activities);
+      lastEmittedRef.current = activities;
+    }
+    // history.reset is stable; intentionally only re-run on `activities` identity.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activities]);
+
+  // Record + emit a new top-level tree (the recorded, undoable path).
+  const applyActivities = useCallback((nextTree: PipelineActivity[]) => {
+    if (readOnly) return;
+    lastEmittedRef.current = nextTree;
+    history.commit(nextTree);
+    onActivitiesChange(nextTree);
+  }, [history, onActivitiesChange, readOnly]);
+
+  // Emit a prior snapshot without recording (undo/redo path).
+  const emitWithoutRecording = useCallback((tree: PipelineActivity[]) => {
+    lastEmittedRef.current = tree;
+    onActivitiesChange(tree);
+  }, [onActivitiesChange]);
+
+  const doUndo = useCallback(() => {
+    if (readOnly) return;
+    const snap = history.undo();
+    if (snap) { emitWithoutRecording(snap); setSelectedName(null); }
+  }, [history, readOnly, emitWithoutRecording, setSelectedName]);
+
+  const doRedo = useCallback(() => {
+    if (readOnly) return;
+    const snap = history.redo();
+    if (snap) { emitWithoutRecording(snap); setSelectedName(null); }
+  }, [history, readOnly, emitWithoutRecording, setSelectedName]);
+
   // Write a mutated current-level array back into the full top-level tree.
   const commitLevel = useCallback((nextLevel: PipelineActivity[]) => {
     if (readOnly) return;
-    onActivitiesChange(setLevelActivities(activities, drillPath, nextLevel));
-  }, [activities, drillPath, onActivitiesChange, readOnly]);
+    applyActivities(setLevelActivities(activities, drillPath, nextLevel));
+  }, [activities, drillPath, applyActivities, readOnly]);
 
   const selected = useMemo(
     () => levelActivities.find((a) => a.name === selectedName) || null,
@@ -301,6 +351,15 @@ export const PipelineDesigner = forwardRef<PipelineDesignerHandle, PipelineDesig
     commitLevel([...levelActivities, a]);
     setTimeout(() => setSelectedName(newName), 0);
   }, [levelActivities, commitLevel, readOnly, setSelectedName, addRuleFor]);
+
+  // Append already-built clones (copy/paste + duplicate, W2). The canvas builds
+  // the fresh-named, config-preserving clones (it owns positions + selection);
+  // the designer commits them into the model at the current level.
+  const addActivitiesAtLevel = useCallback((toAdd: PipelineActivity[]) => {
+    if (readOnly || toAdd.length === 0) return;
+    commitLevel([...levelActivities, ...toAdd]);
+    setTimeout(() => setSelectedName(toAdd[toAdd.length - 1].name), 0);
+  }, [levelActivities, commitLevel, readOnly, setSelectedName]);
 
   const patchActivity = useCallback((name: string, patch: Partial<PipelineActivity>) => {
     if (readOnly) return;
@@ -406,10 +465,10 @@ export const PipelineDesigner = forwardRef<PipelineDesignerHandle, PipelineDesig
     const parentLevel = getLevelActivities(activities, parentPath);
     const updatedParent = parentLevel.map((a) =>
       a.name === currentContainer.name ? { ...a, typeProperties: tp } : a);
-    onActivitiesChange(setLevelActivities(activities, parentPath, updatedParent));
+    applyActivities(setLevelActivities(activities, parentPath, updatedParent));
     setNewCaseValue('');
     setCurrentBranch({ caseValue: v });
-  }, [readOnly, currentContainer, drillPath, activities, onActivitiesChange, setCurrentBranch]);
+  }, [readOnly, currentContainer, drillPath, activities, applyActivities, setCurrentBranch]);
 
   const removeSwitchCase = useCallback((value: string) => {
     if (readOnly || !currentContainer || currentContainer.type !== 'Switch') return;
@@ -420,11 +479,11 @@ export const PipelineDesigner = forwardRef<PipelineDesignerHandle, PipelineDesig
     const parentLevel = getLevelActivities(activities, parentPath);
     const updatedParent = parentLevel.map((a) =>
       a.name === currentContainer.name ? { ...a, typeProperties: tp } : a);
-    onActivitiesChange(setLevelActivities(activities, parentPath, updatedParent));
+    applyActivities(setLevelActivities(activities, parentPath, updatedParent));
     // If we were editing the removed case, fall back to Default.
     const cur = drillPath[drillPath.length - 1]?.branch;
     if (cur && typeof cur === 'object' && cur.caseValue === value) setCurrentBranch('default');
-  }, [readOnly, currentContainer, drillPath, activities, onActivitiesChange, setCurrentBranch]);
+  }, [readOnly, currentContainer, drillPath, activities, applyActivities, setCurrentBranch]);
 
   // --- Breadcrumb labels ----------------------------------------------------
   // Each crumb shows the container name plus, for If/Switch, the active branch
@@ -446,6 +505,32 @@ export const PipelineDesigner = forwardRef<PipelineDesignerHandle, PipelineDesig
     [currentContainer],
   );
 
+  // --- W21: register canvas-scoped commands with the global palette ---------
+  // While the designer has focus, expose undo/redo/duplicate/align/fit-view and
+  // an "Add <activity>" command per catalog type into Ctrl+K. All commands are
+  // sourced so the palette can never list an action the canvas can't perform;
+  // they de-register the moment focus leaves the canvas.
+  useEffect(() => {
+    if (!focused || readOnly) return;
+    const addCommands: CanvasCommand[] = ACTIVITY_CATALOG
+      .filter((def) => addRuleFor(def.type).allowed)
+      .map((def) => ({
+        id: `canvas:add:${def.key}`,
+        label: `Canvas: Add ${def.label}`,
+        sub: 'Insert activity at this level',
+        run: () => insertActivity(def),
+      }));
+    const dispose = registerCanvasCommands([
+      { id: 'canvas:undo', label: 'Canvas: Undo', sub: 'Ctrl+Z', run: doUndo, disabled: () => !history.canUndo },
+      { id: 'canvas:redo', label: 'Canvas: Redo', sub: 'Ctrl+Shift+Z', run: doRedo, disabled: () => !history.canRedo },
+      { id: 'canvas:duplicate', label: 'Canvas: Duplicate selection', sub: 'Ctrl+D', run: () => canvasRef.current?.duplicateSelection() },
+      { id: 'canvas:auto-align', label: 'Canvas: Auto-align graph', sub: 'ELK layout (A)', run: () => canvasRef.current?.autoAlign() },
+      { id: 'canvas:fit-view', label: 'Canvas: Zoom to fit', sub: 'F', run: () => canvasRef.current?.fitToScreen() },
+      ...addCommands,
+    ]);
+    return dispose;
+  }, [focused, readOnly, addRuleFor, insertActivity, doUndo, doRedo, history.canUndo, history.canRedo]);
+
   return (
     // User-resizable outer height (drag the bottom grip or use the keyboard),
     // persisted per-surface. Bounds: minPx 360 (the inherent layout floor for
@@ -457,7 +542,12 @@ export const PipelineDesigner = forwardRef<PipelineDesignerHandle, PipelineDesig
       minPx={360}
       ariaLabel="Resize pipeline design canvas height"
     >
-    <div className={s.shell} data-pipeline-designer>
+    <div
+      className={s.shell}
+      data-pipeline-designer
+      onFocus={() => setFocused(true)}
+      onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setFocused(false); }}
+    >
       {paletteCollapsed ? (
         <div className={s.paletteRail}>
           <Tooltip content="Expand activities" relationship="label">
@@ -612,6 +702,12 @@ export const PipelineDesigner = forwardRef<PipelineDesignerHandle, PipelineDesig
               insertActivity(def);
             }}
             onConnect={connect}
+            onUndo={doUndo}
+            onRedo={doRedo}
+            canUndo={history.canUndo}
+            canRedo={history.canRedo}
+            onAddActivities={addActivitiesAtLevel}
+            readOnly={readOnly}
           />
         </div>
         {/* Bottom properties dock — ADF Studio edits the selected sub-resource

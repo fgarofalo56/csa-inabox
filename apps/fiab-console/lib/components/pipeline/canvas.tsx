@@ -34,13 +34,17 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { Button, Caption1, Tooltip, makeStyles, tokens } from '@fluentui/react-components';
-import { Organization20Regular, FullScreenMaximize20Regular, Flowchart20Regular, Flow24Regular } from '@fluentui/react-icons';
+import { Organization20Regular, FullScreenMaximize20Regular, Flowchart20Regular, Flow24Regular, Keyboard20Regular } from '@fluentui/react-icons';
 import { FlowActivityNode, FLOW_NODE_W, type ActivityNodeData } from './flow-activity-node';
 import { LoomBezierEdge, type LoomEdgeData } from './loom-bezier-edge';
 import { elkLayout, topoFallback, shouldVirtualize, type XY } from './flow-layout';
 import { CONNECTOR_COLORS, type ConnectorCondition } from './connector';
 import { isContainerType } from './drill-path';
 import { getActivityVisual, accentTint } from '@/lib/components/canvas/canvas-node-kit';
+import { cloneSelection, type ClonableEdge } from '@/lib/components/canvas/canvas-clipboard';
+import { alignPositions, distributePositions, type AlignMode, type DistributeAxis, type AlignNode } from '@/lib/components/canvas/canvas-align';
+import { CanvasPowerToolbar } from '@/lib/components/canvas/canvas-power-toolbar';
+import { CanvasShortcutDialog } from '@/lib/components/canvas/canvas-shortcut-dialog';
 import { EmptyState } from '@/lib/components/empty-state';
 import type { PipelineActivity } from './types';
 
@@ -150,7 +154,12 @@ export interface CanvasHandle {
   zoomIn: () => void;
   zoomOut: () => void;
   autoAlign: () => void;
+  /** Duplicate the current node selection in place (W2 — palette/command entry). */
+  duplicateSelection: () => void;
 }
+
+/** The full activity config a node carries — used to clone on copy/paste. */
+const FLOW_NODE_H = NODE_H;
 
 export interface PipelineCanvasProps {
   activities: PipelineActivity[];
@@ -183,6 +192,22 @@ export interface PipelineCanvasProps {
   showGrid?: boolean;
   /** Bubble zoom changes up so a toolbar can show the % readout. */
   onZoomChange?: (zoom: number) => void;
+  /** Undo the last recorded change (W1). Wired to Ctrl+Z + the toolbar. */
+  onUndo?: () => void;
+  /** Redo the last undone change (W1). Wired to Ctrl+Shift+Z / Ctrl+Y + the toolbar. */
+  onRedo?: () => void;
+  /** Whether an undo is available (drives the toolbar button + Ctrl+Z no-op). */
+  canUndo?: boolean;
+  /** Whether a redo is available. */
+  canRedo?: boolean;
+  /**
+   * Append copy/paste + duplicate clones (W2). The canvas builds the fresh-named,
+   * config-preserving clones (it owns positions + selection) and hands the model
+   * mutation to the host, which commits it through the undoable save path.
+   */
+  onAddActivities?: (clones: PipelineActivity[]) => void;
+  /** Suppress mutating shortcuts while a save is in flight. */
+  readOnly?: boolean;
 }
 
 // --- edge derivation: one Bezier edge per (from, condition) pair ---------
@@ -211,7 +236,8 @@ function buildEdges(activities: PipelineActivity[]): Edge[] {
 }
 
 const PipelineCanvasInner = forwardRef<CanvasHandle, PipelineCanvasProps>(function PipelineCanvasInner(
-  { activities, selectedName, onSelect, onDropPaletteKey, onConnect, onDrillInto, onDrillBack, snapToGrid = true, showGrid = true, onZoomChange },
+  { activities, selectedName, onSelect, onDropPaletteKey, onConnect, onDrillInto, onDrillBack, snapToGrid = true, showGrid = true, onZoomChange,
+    onUndo, onRedo, canUndo = false, canRedo = false, onAddActivities, readOnly = false },
   ref,
 ) {
   const s = useStyles();
@@ -220,6 +246,15 @@ const PipelineCanvasInner = forwardRef<CanvasHandle, PipelineCanvasProps>(functi
   const positionsRef = useRef<Map<string, XY>>(new Map());
   const pendingDropRef = useRef<XY | null>(null);
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
+  // In-memory clipboard for copy/paste (W2): the selected activities + the
+  // pipeline edges wholly within the selection + a cascade counter so repeated
+  // pastes fan out instead of stacking on one spot.
+  const clipboardRef = useRef<{ activities: PipelineActivity[]; edges: ClonableEdge[] } | null>(null);
+  const pasteSeqRef = useRef(0);
+  // Align chord (W3): Alt+A arms it; the next letter picks the axis/edge.
+  const alignChordRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // "?" shortcut cheat-sheet overlay (W20).
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
   // Fabric "updated canvas experience" — when on, container nodes render an
   // inline mini-preview of their inner activities. Toggled by N / the toolbar.
   const [showNestedPreviews, setShowNestedPreviews] = useState(false);
@@ -320,8 +355,130 @@ const PipelineCanvasInner = forwardRef<CanvasHandle, PipelineCanvasProps>(functi
     }
   }, [activities, rf, setNodes]);
 
-  useImperativeHandle(ref, () => ({ fitToScreen, resetZoom, zoomIn, zoomOut, autoAlign }),
-    [fitToScreen, resetZoom, zoomIn, zoomOut, autoAlign]);
+  // --- selection helpers ----------------------------------------------------
+  // The current node selection: React Flow's multi-select (rubber-band / shift)
+  // marks nodes `.selected`; fall back to the singly-selected activity so a
+  // copy/duplicate works even with a plain click-selection.
+  const getSelectedNodes = useCallback((): Node[] => {
+    const multi = nodes.filter((n) => n.selected);
+    if (multi.length) return multi;
+    if (selectedName) { const one = nodes.find((n) => n.id === selectedName); if (one) return [one]; }
+    return [];
+  }, [nodes, selectedName]);
+
+  const selectedCount = useMemo(() => {
+    const multi = nodes.filter((n) => n.selected).length;
+    return multi || (selectedName ? 1 : 0);
+  }, [nodes, selectedName]);
+
+  // --- copy / paste / duplicate (W2) ----------------------------------------
+  // Materialise clones of `srcNodes` (config preserved), offset by `offset`.
+  // The canvas allocates fresh unique names (vs the current level), seeds the
+  // position map so the clones land at the offset spot, and hands the model
+  // mutation to the host through `onAddActivities` (the undoable save path).
+  const materializeClones = useCallback((srcNodes: Node[], srcEdges: ClonableEdge[], offset: XY) => {
+    if (readOnly || !onAddActivities || srcNodes.length === 0) return;
+    const clonable = srcNodes.map((n) => ({
+      id: n.id,
+      position: positionsRef.current.get(n.id) || n.position,
+      data: (n.data as ActivityNodeData).activity,
+    }));
+    const existingIds = nodes.map((n) => n.id);
+    const { nodes: cloned, idMap } = cloneSelection(clonable, srcEdges, { offset, existingIds });
+    const clones: PipelineActivity[] = cloned.map((cn) => {
+      const a = cn.data as PipelineActivity;
+      return {
+        ...a,
+        name: cn.id,
+        // Re-point only intra-selection dependencies; drop edges to nodes
+        // outside the selection so a paste never auto-wires into the original.
+        dependsOn: (a.dependsOn || [])
+          .filter((d) => idMap[d.activity])
+          .map((d) => ({ ...d, activity: idMap[d.activity] })),
+      };
+    });
+    // Seed transient positions so the clones render at the offset location.
+    for (const cn of cloned) positionsRef.current.set(cn.id, cn.position);
+    onAddActivities(clones);
+  }, [readOnly, onAddActivities, nodes]);
+
+  const buildIntraEdges = useCallback((selIds: Set<string>): ClonableEdge[] =>
+    buildEdges(activities)
+      .filter((e) => selIds.has(e.source) && selIds.has(e.target))
+      .map((e) => ({ id: e.id, source: e.source, target: e.target })),
+  [activities]);
+
+  const copySelection = useCallback(() => {
+    const sel = getSelectedNodes();
+    if (!sel.length) return;
+    const selIds = new Set(sel.map((n) => n.id));
+    clipboardRef.current = {
+      activities: sel.map((n) => (n.data as ActivityNodeData).activity),
+      edges: buildIntraEdges(selIds),
+    };
+    pasteSeqRef.current = 0;
+  }, [getSelectedNodes, buildIntraEdges]);
+
+  const paste = useCallback(() => {
+    const clip = clipboardRef.current;
+    if (!clip || !clip.activities.length) return;
+    pasteSeqRef.current += 1;
+    const off = 40 * pasteSeqRef.current;
+    // Rebuild transient node shells from the clipboard activities so clones
+    // carry the copied config even after the selection changed.
+    const srcNodes = clip.activities.map((a) => ({
+      id: a.name,
+      position: positionsRef.current.get(a.name) || { x: 40, y: 40 },
+      data: { activity: a } as ActivityNodeData,
+    })) as unknown as Node[];
+    materializeClones(srcNodes, clip.edges, { x: off, y: off });
+  }, [materializeClones]);
+
+  const duplicateSelection = useCallback(() => {
+    const sel = getSelectedNodes();
+    if (!sel.length) return;
+    const selIds = new Set(sel.map((n) => n.id));
+    materializeClones(sel, buildIntraEdges(selIds), { x: 40, y: 40 });
+  }, [getSelectedNodes, buildIntraEdges, materializeClones]);
+
+  // --- align / distribute (W3) ----------------------------------------------
+  // Operate on the selected nodes' positions. Pipeline node positions are
+  // canvas-transient (the model has no viewport concept — ELK/topo re-derive
+  // them), so this rearranges the live canvas via the same position-capture
+  // path a drag uses. ≥2 nodes align; ≥3 distribute.
+  const applyPositionMap = useCallback((moves: Record<string, XY>) => {
+    const ids = Object.keys(moves);
+    if (!ids.length) return;
+    for (const id of ids) positionsRef.current.set(id, moves[id]);
+    setNodes((prev) => prev.map((n) => (moves[n.id] ? { ...n, position: moves[n.id] } : n)));
+  }, [setNodes]);
+
+  const alignSelection = useCallback((mode: AlignMode) => {
+    const sel = getSelectedNodes();
+    if (sel.length < 2) return;
+    const anodes: AlignNode[] = sel.map((n) => ({
+      id: n.id,
+      position: positionsRef.current.get(n.id) || n.position,
+      width: FLOW_NODE_W,
+      height: FLOW_NODE_H,
+    }));
+    applyPositionMap(alignPositions(anodes, mode));
+  }, [getSelectedNodes, applyPositionMap]);
+
+  const distributeSelection = useCallback((axis: DistributeAxis) => {
+    const sel = getSelectedNodes();
+    if (sel.length < 3) return;
+    const anodes: AlignNode[] = sel.map((n) => ({
+      id: n.id,
+      position: positionsRef.current.get(n.id) || n.position,
+      width: FLOW_NODE_W,
+      height: FLOW_NODE_H,
+    }));
+    applyPositionMap(distributePositions(anodes, axis));
+  }, [getSelectedNodes, applyPositionMap]);
+
+  useImperativeHandle(ref, () => ({ fitToScreen, resetZoom, zoomIn, zoomOut, autoAlign, duplicateSelection }),
+    [fitToScreen, resetZoom, zoomIn, zoomOut, autoAlign, duplicateSelection]);
 
   // --- keyboard map (Fabric Data Factory parity) ----------------------------
   // Learn: data-factory/keyboard-shortcuts.
@@ -337,6 +494,41 @@ const PipelineCanvasInner = forwardRef<CanvasHandle, PipelineCanvasProps>(functi
       target.tagName === 'SELECT' || target.isContentEditable
     ) return;
     const key = e.key;
+
+    // --- history (W1): Ctrl/Cmd+Z undo, Ctrl+Shift+Z / Ctrl+Y redo ---
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && (key === 'z' || key === 'Z')) {
+      e.preventDefault();
+      if (e.shiftKey) onRedo?.(); else onUndo?.();
+      return;
+    }
+    if ((e.ctrlKey || e.metaKey) && (key === 'y' || key === 'Y')) { e.preventDefault(); onRedo?.(); return; }
+
+    // --- clipboard (W2): Ctrl/Cmd + C / V / D ---
+    if ((e.ctrlKey || e.metaKey) && !e.altKey) {
+      if (key === 'c' || key === 'C') { e.preventDefault(); copySelection(); return; }
+      if (key === 'v' || key === 'V') { e.preventDefault(); paste(); return; }
+      if (key === 'd' || key === 'D') { e.preventDefault(); duplicateSelection(); return; }
+    }
+
+    // --- align chord (W3): Alt+A then a letter ---
+    if (e.altKey && (key === 'a' || key === 'A')) {
+      e.preventDefault();
+      if (alignChordRef.current) clearTimeout(alignChordRef.current);
+      alignChordRef.current = setTimeout(() => { alignChordRef.current = null; }, 1500);
+      return;
+    }
+    if (alignChordRef.current) {
+      const map: Record<string, AlignMode> = { l: 'left', c: 'center-h', r: 'right', t: 'top', m: 'middle', b: 'bottom' };
+      const low = key.toLowerCase();
+      if (map[low]) { e.preventDefault(); clearTimeout(alignChordRef.current); alignChordRef.current = null; alignSelection(map[low]); return; }
+      if (low === 'h' || low === 'v') { e.preventDefault(); clearTimeout(alignChordRef.current); alignChordRef.current = null; distributeSelection(low as DistributeAxis); return; }
+      // Any other key cancels the chord and falls through.
+      clearTimeout(alignChordRef.current); alignChordRef.current = null;
+    }
+
+    // --- shortcut cheat-sheet (W20): "?" ---
+    if (key === '?') { e.preventDefault(); setShortcutsOpen(true); return; }
+
     if (key === 'i' || key === 'I') { e.preventDefault(); rf.zoomIn({ duration: 120 }); return; }
     if (key === 'o' || key === 'O') { e.preventDefault(); rf.zoomOut({ duration: 120 }); return; }
     if (key === 'f' || key === 'F') { e.preventDefault(); rf.fitView({ padding: 0.2, duration: 200 }); return; }
@@ -350,7 +542,7 @@ const PipelineCanvasInner = forwardRef<CanvasHandle, PipelineCanvasProps>(functi
       if (key === 'ArrowLeft')  { e.preventDefault(); rf.setViewport(shiftViewport(rf.getViewport(), PAN, 0), { duration: 120 }); return; }
       if (key === 'ArrowRight') { e.preventDefault(); rf.setViewport(shiftViewport(rf.getViewport(), -PAN, 0), { duration: 120 }); return; }
     }
-  }, [rf, autoAlign, onDrillBack]);
+  }, [rf, autoAlign, onDrillBack, onUndo, onRedo, copySelection, paste, duplicateSelection, alignSelection, distributeSelection]);
 
   return (
     <div
@@ -362,8 +554,9 @@ const PipelineCanvasInner = forwardRef<CanvasHandle, PipelineCanvasProps>(functi
       onDrop={onDrop}
       data-testid="pipeline-canvas"
       data-canvas="pipeline"
-      aria-label="Pipeline design canvas. Keyboard: I/O zoom, F fit, A align, N nested preview, Shift+arrows pan, Backspace back."
+      aria-label="Pipeline design canvas. Keyboard: Ctrl+Z/Ctrl+Shift+Z undo/redo, Ctrl+C/V/D copy/paste/duplicate, ? for all shortcuts, I/O zoom, F fit, A align, N nested preview, Shift+arrows pan, Backspace back."
     >
+      <CanvasShortcutDialog open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
       <ReactFlow
         nodes={nodes}
         edges={edges}
@@ -399,6 +592,16 @@ const PipelineCanvasInner = forwardRef<CanvasHandle, PipelineCanvasProps>(functi
         )}
         <Panel position="top-right">
           <div className={s.toolbar}>
+            <CanvasPowerToolbar
+              canUndo={canUndo}
+              canRedo={canRedo}
+              onUndo={() => onUndo?.()}
+              onRedo={() => onRedo?.()}
+              selectionCount={selectedCount}
+              onAlign={alignSelection}
+              onDistribute={distributeSelection}
+            />
+            <span style={{ width: 1, alignSelf: 'stretch', backgroundColor: tokens.colorNeutralStroke2, marginLeft: 2, marginRight: 2 }} aria-hidden="true" />
             <Tooltip content={`${showNestedPreviews ? 'Hide' : 'Show'} nested activity preview (N)`} relationship="label">
               <Button
                 size="small"
@@ -416,6 +619,9 @@ const PipelineCanvasInner = forwardRef<CanvasHandle, PipelineCanvasProps>(functi
             </Tooltip>
             <Tooltip content="Zoom to fit — F" relationship="label">
               <Button size="small" appearance="subtle" icon={<FullScreenMaximize20Regular />} aria-label="Zoom to fit" onClick={fitToScreen} />
+            </Tooltip>
+            <Tooltip content="Keyboard shortcuts — ?" relationship="label">
+              <Button size="small" appearance="subtle" icon={<Keyboard20Regular />} aria-label="Show keyboard shortcuts" onClick={() => setShortcutsOpen(true)} />
             </Tooltip>
           </div>
         </Panel>
