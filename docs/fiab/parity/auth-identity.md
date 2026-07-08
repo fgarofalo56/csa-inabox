@@ -25,7 +25,7 @@ Identity & Admin step + `/admin/permissions` bootstrap.
 | Public-client / device-code flows | built ✅ | `az ad app update --set isFallbackPublicClient=true` |
 | Delegated Graph `User.Read` | built ✅ | `az ad app update --required-resource-accesses` (`e1fe6dd8-…`) |
 | Client secret in Key Vault | built ✅ | `az ad app credential reset` → `az keyvault secret set` → ACA KV-backed secretRef |
-| `SESSION_SECRET` always set + KV-backed | built ✅ | admin-plane env (unconditional) + `session-secret` ACA secret (KV-backed when script-provisioned, else stable per-RG GUID) |
+| `SESSION_SECRET` always set + KV-backed | built ✅ | admin-plane env (unconditional) + `session-secret` ACA secret (KV-backed whenever the app-reg flow owns the secret — in-bicep script OR post-deploy bootstrap, GH #1534; else stable per-RG GUID) |
 | Bootstrap admin never blank | built ✅ | `effectiveTenantAdminOid = loomTenantAdminOid ?? deployer().objectId` → `LOOM_TENANT_ADMIN_OID` |
 | Honest gate when MSAL unset | built ✅ | `app/auth/sign-in/route.ts` 503 on `LOOM_MSAL_CLIENT_ID`/`_SECRET`/`AZURE_TENANT_ID`; `self-audit.ts` `entra-app` check re-keyed onto the MSAL vars |
 | Scan-and-choose (CLI) | built ✅ | `scripts/csa-loom/scan-and-deploy.sh` + `scan-modules/auth-identity.sh` (existing/new/disable + signed-in-user admin recommendation) |

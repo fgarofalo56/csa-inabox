@@ -1689,8 +1689,21 @@ var effectiveMsalClientId = !empty(loomMsalClientId) ? loomMsalClientId : (msalA
 // pinned AND the app-reg flow is the source of the secret (in-bicep script
 // provisioned it, OR the flag is on so the bootstrap writes/rotates it in KV);
 // when neither holds the prior inline behaviour is preserved.
+//
+// SAME BUG CLASS for SESSION_SECRET (GH #1534): the sessionSecretKvBacked
+// condition below originally read `msalAppRegProvisioned && empty(...)`, which
+// omits the `|| loomMsalAppRegEnabled` half of the MSAL predicate. On the
+// DEFAULT push-button estate there is no in-bicep deploymentScript identity
+// (msalAppRegProvisioned=false), so the condition was ALWAYS false and the
+// secret fell back to the predictable literal guid(seed,'loom-session-secret-v1').
+// But bootstrap-msal-app-reg.sh writes a REAL random session-secret to KV and
+// points the Container App at a keyvaultref (session-secret) — so any later
+// bicep redeploy silently reverted the app to the stale predictable literal,
+// re-keying every live session. The fix mirrors msalSecretKvBacked exactly: the
+// bootstrap writes `session-secret` to the same KV, so the unversioned KV
+// reference is valid whenever the app-reg flow owns the secret.
 var msalSecretKvBacked = empty(loomMsalClientSecret) && (msalAppRegProvisioned || loomMsalAppRegEnabled)
-var sessionSecretKvBacked = msalAppRegProvisioned && empty(loomSessionSecret)
+var sessionSecretKvBacked = (msalAppRegProvisioned || loomMsalAppRegEnabled) && empty(loomSessionSecret)
 
 // Console's own `loom` Cosmos — HUB-scoped. Only deployed in tenant/dlz-attach
 // topologies (deployConsoleCosmos), where no local DLZ exists to host the
