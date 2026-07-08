@@ -147,6 +147,7 @@ export function ActivityPalette({ onInsert, addRuleFor }: PaletteProps) {
     'move-transform': false,
     'orchestration': false,
     'control-flow': false,
+    'ai-enrich': false,
   });
 
   const q = query.trim().toLowerCase();
