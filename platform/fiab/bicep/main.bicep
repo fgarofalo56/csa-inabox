@@ -222,6 +222,15 @@ param storageRequireCmk bool = false
 @maxValue(365)
 param recycleRetentionDays int = 30
 
+@description('DLZ lakehouse storage SKU (replication). Default Standard_ZRS = zone-redundant single region (shipped default DR posture). Opt into Standard_GZRS/Standard_GRS/Standard_RAGZRS for a cross-region geo-redundant DR tier — an operator cost/DR decision; see docs/fiab/operations/disaster-recovery.md.')
+@allowed([
+  'Standard_ZRS'
+  'Standard_GZRS'
+  'Standard_GRS'
+  'Standard_RAGZRS'
+])
+param storageSkuName string = 'Standard_ZRS'
+
 @description('Key Vault Premium HSM isolated (true at IL5)')
 param keyVaultHsmIsolated bool = false
 
@@ -1423,6 +1432,7 @@ module singleDlz 'modules/landing-zone/main.bicep' = if (useSingleDlz) {
     consolePrincipalNeedsCmkBind: consolePrincipalNeedsCmkBind
     shirAdminPassword: effShirAdminPassword
     recycleRetentionDays: recycleRetentionDays
+    storageSkuName: storageSkuName
     cosmosGraphVectorEnabled: cosmosGraphVectorEnabled
     weaveOntologyEnabled: weaveOntologyEnabled
     // RTI (Real-Time Intelligence) opt-out flags + existing-namespace reuse.
@@ -1519,6 +1529,7 @@ module dlz 'modules/landing-zone/main.bicep' = [for (subId, i) in dlzSubscriptio
     consolePrincipalNeedsCmkBind: consolePrincipalNeedsCmkBind
     shirAdminPassword: effShirAdminPassword
     recycleRetentionDays: recycleRetentionDays
+    storageSkuName: storageSkuName
     cosmosGraphVectorEnabled: cosmosGraphVectorEnabled
     weaveOntologyEnabled: weaveOntologyEnabled
     // RTI opt-out flags. Multi-sub: each DLZ provisions its OWN Event Hubs
@@ -1632,6 +1643,7 @@ module dlzAttach 'modules/landing-zone/main.bicep' = if (topology == 'dlz-attach
     consolePrincipalNeedsCmkBind: consolePrincipalNeedsCmkBind
     shirAdminPassword: effShirAdminPassword
     recycleRetentionDays: recycleRetentionDays
+    storageSkuName: storageSkuName
     cosmosGraphVectorEnabled: cosmosGraphVectorEnabled
     weaveOntologyEnabled: weaveOntologyEnabled
     // RTI opt-out flags. dlz-attach: the attached DLZ provisions its own Event

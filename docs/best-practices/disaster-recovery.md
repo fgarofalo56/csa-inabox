@@ -1,6 +1,6 @@
 ---
 title: Disaster Recovery Best Practices
-description: Comprehensive DR guidance for CSA-in-a-Box data platforms — replication, failover, drills, and readiness checklists.
+description: Generic DR reference guidance (data-platform patterns) for the older deploy/bicep reference architecture — not a description of what CSA Loom ships by default.
 tags:
     - disaster-recovery
     - high-availability
@@ -13,13 +13,31 @@ tags:
 
 ![Disaster recovery best practice hero: two datacenter racks (Primary and Secondary) linked by a dashed failover arc in green gradient](../assets/images/hero/best-practices/disaster-recovery.svg){ .architecture-hero loading="eager" }
 
+!!! warning "Scope — generic reference guidance, not the shipped CSA Loom posture"
+    This page is **generic disaster-recovery guidance** for building resilient
+    data platforms, written against the older `deploy/bicep/` **reference
+    architecture** (active-passive multi-region, GRS storage, paired-region
+    failover). It describes a **target pattern you can build toward** — it does
+    **not** describe what a default CSA Loom deployment ships today.
+
+    **CSA Loom ships single-region with zone redundancy** (no GRS/RA-GRS, no
+    paired-region failover wired by default). For the honest, per-component DR
+    posture of the *actual* deployed platform — what exists, what does not, the
+    real RPO/RTO numbers, and the opt-in geo-redundant tier — read the
+    Loom-specific page instead:
+    **[CSA Loom disaster recovery →](../fiab/operations/disaster-recovery.md)**.
+
+    Treat the multi-region topology, GRS SKUs, and automated-failover claims
+    below as *aspirational reference patterns*, not deployed capabilities.
+
 ## Overview
 
-Disaster recovery (DR) for analytics platforms goes far beyond "turn on GRS." A resilient CSA-in-a-Box deployment must protect **data, compute, metadata, and orchestration** — and prove that protection works through regular drills.
+Disaster recovery (DR) for analytics platforms goes far beyond "turn on GRS." A fully resilient analytics platform must protect **data, compute, metadata, and orchestration** — and prove that protection works through regular drills. The patterns below are the reference target; for what CSA Loom deploys by default (single-region + zone-redundant) and how to opt into a geo-redundant tier, see [CSA Loom disaster recovery](../fiab/operations/disaster-recovery.md).
 
 !!! tip "Related Guides"
 | Guide | Purpose |
 |-------|---------|
+| [CSA Loom disaster recovery](../fiab/operations/disaster-recovery.md) | **What the shipped Loom platform actually provides** (honest posture + opt-in DR tier) |
 | [DR Architecture](../DR.md) | Platform-level DR design and Azure service capabilities |
 | [Multi-Region Deployment](../MULTI_REGION.md) | Active-active and active-passive region patterns |
 | [DR Drill Runbook](../runbooks/dr-drill.md) | Step-by-step drill execution playbook |
@@ -474,7 +492,7 @@ curl -X GET "https://purview-csa.purview.azure.com/catalog/api/atlas/v2/glossary
 
 ## DR Readiness Checklist
 
-Use this checklist to assess your DR posture. **All items should be green before going to production.**
+Use this checklist to assess your DR posture **if you are building toward the multi-region reference target above**. A default CSA Loom deployment does **not** turn these on (it is single-region + zone-redundant by design) — for the shipped Loom posture and its own drill, use the [CSA Loom DR page](../fiab/operations/disaster-recovery.md).
 
 ### Data Protection
 

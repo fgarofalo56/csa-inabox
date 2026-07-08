@@ -42,6 +42,15 @@ param complianceTags object
 @maxValue(365)
 param recycleRetentionDays int = 30
 
+@description('Storage account SKU (replication). Default Standard_ZRS = zone-redundant, single region (the shipped default DR posture). Opt into a geo-redundant tier (Standard_GZRS / Standard_GRS / Standard_RAGZRS) for cross-region survivability — an operator DR decision with added cost; see docs/fiab/operations/disaster-recovery.md.')
+@allowed([
+  'Standard_ZRS'
+  'Standard_GZRS'
+  'Standard_GRS'
+  'Standard_RAGZRS'
+])
+param storageSkuName string = 'Standard_ZRS'
+
 var saName = take('saloom${replace(domainName, '-', '')}${uniqueString(resourceGroup().id)}', 24)
 
 resource sa 'Microsoft.Storage/storageAccounts@2025-01-01' = {
@@ -49,7 +58,7 @@ resource sa 'Microsoft.Storage/storageAccounts@2025-01-01' = {
   location: location
   tags: complianceTags
   kind: 'StorageV2'
-  sku: { name: 'Standard_ZRS' }
+  sku: { name: storageSkuName }
   identity: requireCmk ? {
     type: 'UserAssigned'
     userAssignedIdentities: {
