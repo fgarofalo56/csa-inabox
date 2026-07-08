@@ -71,6 +71,11 @@ param complianceTags object
 var serverName = take('psql-loom-weave-${domainName}-${uniqueString(resourceGroup().id)}', 63)
 var weaveDatabaseName = 'loom-weave'
 
+@description('Deny public network access (publicNetworkAccess=Disabled) — reachable only over a private endpoint / VNet path. Hardened default true. The orchestrator passes false in topologies with no private-endpoint wiring for this service, keeping it reachable over Entra-only public access until a private endpoint is added. Derivation mirrors admin-plane/ai-foundry.bicep.')
+param privateEndpointsEnabled bool = true
+
+var effectivePublicNetworkAccess = privateEndpointsEnabled ? 'Disabled' : 'Enabled'
+
 resource pg 'Microsoft.DBforPostgreSQL/flexibleServers@2024-08-01' = {
   name: serverName
   location: location
@@ -90,7 +95,7 @@ resource pg 'Microsoft.DBforPostgreSQL/flexibleServers@2024-08-01' = {
       tenantId: tenantId
     }
     network: {
-      publicNetworkAccess: 'Enabled'
+      publicNetworkAccess: effectivePublicNetworkAccess
     }
     highAvailability: {
       mode: 'Disabled'
@@ -148,7 +153,7 @@ resource cfgExtensions 'Microsoft.DBforPostgreSQL/flexibleServers/configurations
 // The Console runs in-VNet; this 0.0.0.0 rule is the Azure-services special
 // case (start==end==0.0.0.0) — Entra-only auth still gates every connection,
 // so there is no anonymous access. Mirrors the deploy-planner firewall pattern.
-resource fwAzure 'Microsoft.DBforPostgreSQL/flexibleServers/firewallRules@2024-08-01' = {
+resource fwAzure 'Microsoft.DBforPostgreSQL/flexibleServers/firewallRules@2024-08-01' = if (!privateEndpointsEnabled) {
   parent: pg
   name: 'AllowAllAzureServicesAndResourcesWithinAzureIps'
   properties: {

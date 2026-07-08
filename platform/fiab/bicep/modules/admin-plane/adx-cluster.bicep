@@ -91,6 +91,11 @@ param activatorPrincipalId string = ''
 @description('When true, skip all role grants (e.g. re-deploy where RBAC already exists or the deployer lacks User Access Administrator).')
 param skipRoleGrants bool = false
 
+@description('Deny public network access (publicNetworkAccess=Disabled) — reachable only over a private endpoint / VNet path. Hardened default true. The orchestrator passes false in topologies with no private-endpoint wiring for this service, keeping it reachable over Entra-only public access until a private endpoint is added. Derivation mirrors admin-plane/ai-foundry.bicep.')
+param privateEndpointsEnabled bool = true
+
+var effectivePublicNetworkAccess = privateEndpointsEnabled ? 'Disabled' : 'Enabled'
+
 resource adxCluster 'Microsoft.Kusto/clusters@2024-04-13' = {
   name: clusterName
   location: location
@@ -114,7 +119,11 @@ resource adxCluster 'Microsoft.Kusto/clusters@2024-04-13' = {
     // Exposed as a param (default true) so callers can override per environment.
     enablePurge: enablePurge
     enableAutoStop: true
-    publicNetworkAccess: 'Enabled'
+    // publicNetworkAccess derives from privateEndpointsEnabled (hardened default
+    // Disabled). ADX has no private-endpoint wiring in the current topology, so the
+    // admin-plane orchestrator passes privateEndpointsEnabled:false → Enabled, with
+    // Entra-only auth (AllDatabasesAdmin via principalAssignment) gating access.
+    publicNetworkAccess: effectivePublicNetworkAccess
     // Optimized auto-scale — null when disabled (Dev/Basic SKUs reject it).
     // version is always 1 per the ARM schema. Mirrors the runtime ARM PATCH
     // surfaced in the Eventhouse editor (Manage › Auto-scale).

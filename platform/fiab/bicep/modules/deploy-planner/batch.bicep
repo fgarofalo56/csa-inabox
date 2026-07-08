@@ -31,6 +31,11 @@ var saName = take('sabatchloom${suffix}', 24)
 var batchName = take('batchloom${suffix}', 24)
 
 // Auto-storage account for the Batch account (application packages + node data).
+@description('Deny public network access (publicNetworkAccess=Disabled) — reachable only over a private endpoint. Default false: this opt-in deploy-planner sandbox service is provisioned with no private-endpoint wiring, so it stays publicly reachable behind Entra-only auth. Set true after wiring a private endpoint to harden. Derivation mirrors admin-plane/ai-foundry.bicep.')
+param privateEndpointsEnabled bool = false
+
+var effectivePublicNetworkAccess = privateEndpointsEnabled ? 'Disabled' : 'Enabled'
+
 resource sa 'Microsoft.Storage/storageAccounts@2024-01-01' = {
   name: saName
   location: location
@@ -51,7 +56,7 @@ resource batch 'Microsoft.Batch/batchAccounts@2024-02-01' = {
   identity: { type: 'SystemAssigned' }
   properties: {
     poolAllocationMode: 'BatchService'
-    publicNetworkAccess: 'Enabled'
+    publicNetworkAccess: effectivePublicNetworkAccess
     autoStorage: {
       storageAccountId: sa.id
       // Batch authenticates to auto-storage via its own managed identity,

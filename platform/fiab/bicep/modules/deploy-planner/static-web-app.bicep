@@ -30,6 +30,11 @@ param complianceTags object
 
 var siteName = take('swa-loom-${uniqueString(resourceGroup().id)}', 60)
 
+@description('Deny public network access (publicNetworkAccess=Disabled) — reachable only over a private endpoint. Default false: this opt-in deploy-planner sandbox service is provisioned with no private-endpoint wiring, so it stays publicly reachable behind Entra-only auth. Set true after wiring a private endpoint to harden. Derivation mirrors admin-plane/ai-foundry.bicep.')
+param privateEndpointsEnabled bool = false
+
+var effectivePublicNetworkAccess = privateEndpointsEnabled ? 'Disabled' : 'Enabled'
+
 resource swa 'Microsoft.Web/staticSites@2024-04-01' = {
   name: siteName
   location: location
@@ -44,7 +49,7 @@ resource swa 'Microsoft.Web/staticSites@2024-04-01' = {
     // connected later from the SWA navigator.
     allowConfigFileUpdates: true
     stagingEnvironmentPolicy: 'Enabled'
-    publicNetworkAccess: 'Enabled'
+    publicNetworkAccess: effectivePublicNetworkAccess
   }
 }
 

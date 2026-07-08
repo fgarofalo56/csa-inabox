@@ -36,6 +36,11 @@ param workspaceId string = ''
 @description('Compliance tags')
 param complianceTags object
 
+@description('Deny public network access (publicNetworkAccess=Disabled) — reachable only over a private endpoint / VNet path. Hardened default true. The orchestrator passes false in topologies with no private-endpoint wiring for this service, keeping it reachable over Entra-only public access until a private endpoint is added. Derivation mirrors admin-plane/ai-foundry.bicep.')
+param privateEndpointsEnabled bool = true
+
+var effectivePublicNetworkAccess = privateEndpointsEnabled ? 'Disabled' : 'Enabled'
+
 resource topic 'Microsoft.EventGrid/topics@2024-06-01-preview' = {
   name: topicName
   location: location
@@ -43,7 +48,7 @@ resource topic 'Microsoft.EventGrid/topics@2024-06-01-preview' = {
   properties: {
     inputSchema: inputSchema
     disableLocalAuth: disableLocalAuth
-    publicNetworkAccess: 'Enabled'
+    publicNetworkAccess: effectivePublicNetworkAccess
   }
 }
 

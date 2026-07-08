@@ -30,13 +30,18 @@ param complianceTags object
 
 var factoryName = take('adf-loom-${uniqueString(resourceGroup().id)}', 63)
 
+@description('Deny public network access (publicNetworkAccess=Disabled) — reachable only over a private endpoint. Default false: this opt-in deploy-planner sandbox service is provisioned with no private-endpoint wiring, so it stays publicly reachable behind Entra-only auth. Set true after wiring a private endpoint to harden. Derivation mirrors admin-plane/ai-foundry.bicep.')
+param privateEndpointsEnabled bool = false
+
+var effectivePublicNetworkAccess = privateEndpointsEnabled ? 'Disabled' : 'Enabled'
+
 resource adf 'Microsoft.DataFactory/factories@2018-06-01' = {
   name: factoryName
   location: location
   tags: complianceTags
   identity: { type: 'SystemAssigned' }
   properties: {
-    publicNetworkAccess: 'Enabled'
+    publicNetworkAccess: effectivePublicNetworkAccess
   }
 }
 

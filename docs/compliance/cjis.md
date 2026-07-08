@@ -139,7 +139,9 @@ Diagnostic Settings on every deployed resource route logs to a central Log Analy
 
 ### Network isolation with private endpoints
 
-Every data-plane service in the platform deploys with Private Endpoints and `publicNetworkAccess: Disabled`. Combined with the [Hub-Spoke Topology](../reference-architecture/hub-spoke-topology.md) and Azure Firewall, this ensures CJI never traverses the public internet. NSG rules enforce deny-by-default with explicit allow rules for authorized traffic.
+The core data-plane services — ADLS Gen2, Synapse, Databricks, Event Hubs, Service Bus, Event Grid, Cosmos, Key Vault, Microsoft Purview, AI Search, AI Foundry, and Container Registry — deploy with Private Endpoints and `publicNetworkAccess: Disabled`. Combined with the [Hub-Spoke Topology](../reference-architecture/hub-spoke-topology.md) and Azure Firewall, this ensures CJI in those stores never traverses the public internet. NSG rules enforce deny-by-default with explicit allow rules for authorized traffic.
+
+A small set of services is an explicit exception: the **opt-in deploy-planner sandbox** (public-by-default behind Entra-only auth until you wire a private endpoint), a few **Entra-only control-plane services** (Azure Data Explorer, the Airflow and Weave metadata Postgres servers, and the Business Events topic) that currently run with public network access + Entra-only auth pending private-endpoint wiring, and **transient deployment-script staging storage** that holds no CJI. Each exposes a `privateEndpointsEnabled` bicep param to harden it to `Disabled` once a private endpoint is in place — see [Security & Compliance › Private Endpoints for All PaaS Services](../best-practices/security-compliance.md#private-endpoints-for-all-paas-services). For a CJIS boundary, confirm no CJI is placed in the exception services, or add their private endpoints before assessment.
 
 ## Common CJIS audit findings
 

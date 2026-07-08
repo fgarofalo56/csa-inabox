@@ -69,6 +69,11 @@ param scriptUamiId string
 // =====================================================================
 var scriptStagingSaName = take('sadsloomscim${uniqueString(resourceGroup().id, 'databricks-scim-staging')}', 24)
 
+@description('Deny public network access on the transient script-staging storage. Default false: Azure deploymentScripts mount the staging file share from an ACI over its public endpoint and do NOT support storage firewall rules (Microsoft Learn), so this SA — which holds only ephemeral script staging and never customer data — must stay publicly reachable. Exposed for audit/discoverability; true would require redesigning the bootstrap to a VNet-injected ACI. Derivation mirrors admin-plane/ai-foundry.bicep.')
+param privateEndpointsEnabled bool = false
+
+var effectivePublicNetworkAccess = privateEndpointsEnabled ? 'Disabled' : 'Enabled'
+
 resource scriptStagingStorage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
   name: scriptStagingSaName
   location: location
@@ -84,9 +89,9 @@ resource scriptStagingStorage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
     supportsHttpsTrafficOnly: true
     // deploymentScripts do not support storage firewall rules (Learn), so the
     // staging SA keeps default public network access; it carries no data.
-    publicNetworkAccess: 'Enabled'
+    publicNetworkAccess: effectivePublicNetworkAccess
     networkAcls: {
-      defaultAction: 'Allow'
+      defaultAction: privateEndpointsEnabled ? 'Deny' : 'Allow'
       bypass: 'AzureServices'
     }
   }

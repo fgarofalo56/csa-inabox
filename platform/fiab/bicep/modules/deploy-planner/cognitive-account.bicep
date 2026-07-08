@@ -46,6 +46,11 @@ param complianceTags object
 
 var accountName = take('cog-${nameFragment}-loom-${uniqueString(resourceGroup().id)}', 64)
 
+@description('Deny public network access (publicNetworkAccess=Disabled) — reachable only over a private endpoint. Default false: this opt-in deploy-planner sandbox service is provisioned with no private-endpoint wiring, so it stays publicly reachable behind Entra-only auth. Set true after wiring a private endpoint to harden. Derivation mirrors admin-plane/ai-foundry.bicep.')
+param privateEndpointsEnabled bool = false
+
+var effectivePublicNetworkAccess = privateEndpointsEnabled ? 'Disabled' : 'Enabled'
+
 resource account 'Microsoft.CognitiveServices/accounts@2024-10-01' = {
   name: accountName
   location: location
@@ -56,9 +61,9 @@ resource account 'Microsoft.CognitiveServices/accounts@2024-10-01' = {
   properties: {
     customSubDomainName: accountName
     disableLocalAuth: true
-    publicNetworkAccess: 'Enabled'
+    publicNetworkAccess: effectivePublicNetworkAccess
     networkAcls: {
-      defaultAction: 'Allow'
+      defaultAction: privateEndpointsEnabled ? 'Deny' : 'Allow'
     }
   }
 }

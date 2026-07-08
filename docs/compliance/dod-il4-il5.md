@@ -186,7 +186,7 @@ The CSP (Microsoft Azure Government) holds the infrastructure PA. Your system in
 
 | Typical finding                   | Impact | CSA-in-a-Box mitigation                                                  |
 | --------------------------------- | ------ | ------------------------------------------------------------------------ |
-| Public endpoints on PaaS services | High   | All Bicep modules: `publicNetworkAccess: 'Disabled'` + Private Endpoints |
+| Public endpoints on PaaS services | High   | Core data-plane modules (ADLS, Synapse, Databricks, Event Hubs, Service Bus, Event Grid, Cosmos, Key Vault, Purview, AI Search, AI Foundry, ACR): `publicNetworkAccess: 'Disabled'` + Private Endpoints. Exceptions requiring action before an IL4/IL5 boundary: the opt-in deploy-planner sandbox, a few Entra-only control-plane services (ADX, Airflow/Weave Postgres, Business Events topic) pending PE wiring, and transient no-data deployment-script staging storage — each exposes a `privateEndpointsEnabled` param to harden. See [Security & Compliance](../best-practices/security-compliance.md#private-endpoints-for-all-paas-services). |
 | Missing FIPS 140-2 key management | High   | Key Vault Premium (HSM-backed, FIPS 140-2 L2) with purge protection      |
 | No CAC/PIV enforcement            | High   | Entra ID CBA + Conditional Access policy templates                       |
 | Insufficient audit log retention  | Medium | 1-year hot + 6-year immutable cold retention policy                      |

@@ -33,6 +33,11 @@ param complianceTags object
 
 var signalrName = take('signalr-loom-${uniqueString(resourceGroup().id)}', 63)
 
+@description('Deny public network access (publicNetworkAccess=Disabled) — reachable only over a private endpoint. Default false: this opt-in deploy-planner sandbox service is provisioned with no private-endpoint wiring, so it stays publicly reachable behind Entra-only auth. Set true after wiring a private endpoint to harden. Derivation mirrors admin-plane/ai-foundry.bicep.')
+param privateEndpointsEnabled bool = false
+
+var effectivePublicNetworkAccess = privateEndpointsEnabled ? 'Disabled' : 'Enabled'
+
 resource signalr 'Microsoft.SignalRService/signalR@2024-03-01' = {
   name: signalrName
   location: location
@@ -45,7 +50,7 @@ resource signalr 'Microsoft.SignalRService/signalR@2024-03-01' = {
   identity: { type: 'SystemAssigned' }
   properties: {
     disableLocalAuth: true
-    publicNetworkAccess: 'Enabled'
+    publicNetworkAccess: effectivePublicNetworkAccess
     tls: {
       clientCertEnabled: false
     }
