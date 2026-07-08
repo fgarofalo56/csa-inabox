@@ -20,12 +20,13 @@ import { getTableLineage, UnityCatalogNotConfiguredError, UnityCatalogError } fr
 import { getWorkspaceLineage, OneLakeError, OneLakeLineageNotSupportedError } from '@/lib/azure/onelake-catalog-client';
 import { getFabricItem } from '@/lib/azure/fabric-client';
 import { getUnifiedLineage } from '@/lib/azure/unified-lineage';
+import { annotateDeletedLoomNodes } from '@/lib/azure/lineage-gc';
 import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export interface CanvasLineageNode { id: string; label: string; type?: string; source: 'purview'|'unity-catalog'|'onelake'|'weave'; focus?: boolean; columns?: string[]; openHref?: string; multiSource?: string[]; identity?: string; }
+export interface CanvasLineageNode { id: string; label: string; type?: string; source: 'purview'|'unity-catalog'|'onelake'|'weave'; focus?: boolean; columns?: string[]; openHref?: string; multiSource?: string[]; identity?: string; qualifiedName?: string; deleted?: boolean; }
 export interface CanvasLineageEdge { from: string; to: string; type?: string; }
 
 export async function GET(req: NextRequest) {
@@ -61,7 +62,9 @@ export async function GET(req: NextRequest) {
   try {
     if (source === 'purview') {
       const graph = await getLineageSubgraph(id);
-      const nodes: CanvasLineageNode[] = Object.values(graph.guidEntityMap).map((n) => ({ id: n.guid, label: n.displayText || n.guid, type: n.typeName, source: 'purview', focus: n.guid === id }));
+      const nodes: CanvasLineageNode[] = Object.values(graph.guidEntityMap).map((n) => ({ id: n.guid, label: n.displayText || n.guid, type: n.typeName, source: 'purview', focus: n.guid === id, qualifiedName: n.qualifiedName }));
+      // Flag deleted-in-Loom `loom://` entities so the canvas ghosts them (LIN-GC-3).
+      await annotateDeletedLoomNodes(nodes);
       const edges: CanvasLineageEdge[] = graph.relations.map((r) => ({ from: r.fromEntityId, to: r.toEntityId, type: r.relationshipType }));
       return NextResponse.json({ ok: true, source, nodes, edges, focusId: id });
     }

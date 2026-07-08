@@ -39,6 +39,7 @@ import {
   LineageCanvas, type CanvasLineageNode, type CanvasLineageEdge,
 } from '@/lib/components/catalog/lineage-canvas';
 import { LineagePanel } from '@/lib/components/catalog/lineage-panel';
+import { ReconcileLineageButton } from '@/lib/components/catalog/reconcile-lineage-dialog';
 import {
   STATUS_LABEL, type PropagationStatus,
 } from '@/lib/governance/label-propagation';
@@ -359,13 +360,16 @@ function LineageInner() {
         </>
       }
     >
-      <TabList
-        selectedValue={scope}
-        onTabSelect={(_e: SelectTabEvent, d: SelectTabData) => setScope(d.value as Scope)}
-        style={{ marginBottom: tokens.spacingVerticalS }}
-      >
-        {SCOPES.map((sc) => <Tab key={sc.value} value={sc.value}>{sc.label}</Tab>)}
-      </TabList>
+      <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM, marginBottom: tokens.spacingVerticalS }}>
+        <TabList
+          selectedValue={scope}
+          onTabSelect={(_e: SelectTabEvent, d: SelectTabData) => setScope(d.value as Scope)}
+        >
+          {SCOPES.map((sc) => <Tab key={sc.value} value={sc.value}>{sc.label}</Tab>)}
+        </TabList>
+        {/* Admin-gated: purge Purview lineage that outlived its item (LIN-GC-2). */}
+        <div style={{ marginLeft: 'auto' }}><ReconcileLineageButton /></div>
+      </div>
       <Body1 className={s.hint}>{activeHint}</Body1>
 
       {scope === 'governed' && <GovernedScope focusId={focusId} />}
