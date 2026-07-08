@@ -49,6 +49,9 @@ import { CopilotDiff, type ProposedChange } from './copilot-diff';
 import { applyChange } from '@/lib/copilot/apply-change';
 import { CitationChips, type Citation } from './help-copilot/citations';
 import { receiptScopeFromTutorialId } from './help-copilot/tutorial-scope';
+import { MessageMetadataBar } from './copilot/message-metadata-bar';
+import { ContextUsagePanel } from './copilot/context-usage-panel';
+import type { TurnMeta, TurnDetail, ContextUsage } from './copilot/types';
 
 /**
  * Render a tabular_* tool result ({ columns, rows }) as a real LoomDataTable
@@ -87,8 +90,9 @@ type Step =
   | { kind: 'thought'; content: string }
   | { kind: 'tool_call'; name: string; callId: string; args?: unknown }
   | { kind: 'tool_result'; name: string; callId: string; durationMs: number; result?: unknown; error?: string }
-  | { kind: 'final'; content: string; usage?: CopilotUsage; model?: string }
+  | ({ kind: 'final'; content: string; usage?: CopilotUsage; model?: string; turnDetail?: TurnDetail; citations?: Citation[]; contextUsage?: ContextUsage } & TurnMeta)
   | { kind: 'error'; error: string; code?: string }
+  | { kind: 'context_usage'; usage: ContextUsage }
   | { kind: 'proposed_change'; target: string; before: string; after: string; lang?: string; callId?: string; summary?: string }
   // Unified-router steps: `agent` is the attribution badge (which agent
   // answered + why); `citation`/`handoff` flow through from the docs agent.
@@ -96,13 +100,17 @@ type Step =
   | { kind: 'citation'; citations: Citation[] }
   | { kind: 'handoff'; reason: string; deepLink: string; suggestedPrompt: string };
 
-interface Msg {
+interface Msg extends TurnMeta {
   who: 'you' | 'copilot' | 'system';
   text: string;
   steps?: Step[];
   streaming?: boolean;
   usage?: CopilotUsage;
   model?: string;
+  /** CTS-02 per-message detail roll-up (tool table + routing). */
+  turnDetail?: TurnDetail;
+  /** CTS-05 segmented context-window breakdown for this turn. */
+  contextUsage?: ContextUsage;
   /** Index of this (copilot) message in the thread — the feedback key. */
   msgIndex?: number;
   /** ATLAS-style attribution: which agent/persona answered this turn + why. */
@@ -516,7 +524,19 @@ export function CopilotPane() {
                 if (step.kind === 'final') {
                   // Assign a stable, monotonic index used as the feedback key.
                   const idx = msgIndexRef.current++;
-                  return { ...x, text: step.content, streaming: false, usage: step.usage, model: step.model, msgIndex: idx };
+                  return {
+                    ...x, text: step.content, streaming: false, usage: step.usage, model: step.model, msgIndex: idx,
+                    // CTS-01/02/04/05 transparency metadata off the final step.
+                    provider: step.provider, promptTokens: step.promptTokens, completionTokens: step.completionTokens,
+                    turnLatencyMs: step.turnLatencyMs, costUsd: step.costUsd,
+                    turnDetail: step.turnDetail,
+                    citations: step.citations && step.citations.length ? [...(x.citations ?? []), ...step.citations] : x.citations,
+                    contextUsage: step.contextUsage ?? x.contextUsage,
+                  };
+                }
+                // CTS-05: the context meter arrives before `final`; stash it.
+                if (step.kind === 'context_usage') {
+                  return { ...x, contextUsage: step.usage };
                 }
                 if (step.kind === 'error') return { ...x, text: `Error: ${step.error}`, streaming: false };
                 // Attribution badge: which agent answered this turn + why.
@@ -643,7 +663,12 @@ export function CopilotPane() {
       for (const st of steps) {
         if (st.kind === 'final') {
           const idx = msgIndexRef.current++;
-          replay.push({ who: 'copilot', text: st.content, steps: toolSteps, usage: st.usage, model: st.model, msgIndex: idx });
+          replay.push({
+            who: 'copilot', text: st.content, steps: toolSteps, usage: st.usage, model: st.model, msgIndex: idx,
+            provider: st.provider, promptTokens: st.promptTokens, completionTokens: st.completionTokens,
+            turnLatencyMs: st.turnLatencyMs, costUsd: st.costUsd, turnDetail: st.turnDetail,
+            citations: st.citations, contextUsage: st.contextUsage,
+          });
           toolSteps = [];
         } else if (st.kind === 'error') {
           replay.push({ who: 'copilot', text: `Error: ${st.error}` });
@@ -661,6 +686,15 @@ export function CopilotPane() {
   function send() {
     void sendText(draft);
   }
+
+  // CTS-05: the context meter reflects the most recent turn that reported a
+  // breakdown (docked under the chat, updates each turn).
+  const latestContextUsage = (() => {
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      if (msgs[i].who === 'copilot' && msgs[i].contextUsage) return msgs[i].contextUsage;
+    }
+    return undefined;
+  })();
 
   if (!open) return null;
 
@@ -830,13 +864,18 @@ export function CopilotPane() {
                   </Button>
                 </div>
               )}
-              {m.who === 'copilot' && !m.streaming && m.usage && (
-                <Caption1 className={s.stepRow} style={{ color: tokens.colorNeutralForeground3 }}>
-                  {m.usage.toolCalls > 0 ? `${m.usage.toolCalls} tool${m.usage.toolCalls === 1 ? '' : 's'} · ` : ''}
-                  {m.usage.totalTokens.toLocaleString()} tokens
-                  {m.usage.aoaiCalls > 1 ? ` · ${m.usage.aoaiCalls} turns` : ''}
-                  {m.model ? ` · ${m.model}` : ''}
-                </Caption1>
+              {m.who === 'copilot' && !m.streaming && (m.usage || m.model) && (
+                <MessageMetadataBar
+                  model={m.model}
+                  provider={m.provider}
+                  usage={m.usage}
+                  promptTokens={m.promptTokens}
+                  completionTokens={m.completionTokens}
+                  turnLatencyMs={m.turnLatencyMs}
+                  costUsd={m.costUsd}
+                  turnDetail={m.turnDetail}
+                  citations={m.citations}
+                />
               )}
               {m.who === 'copilot' && !m.streaming && m.msgIndex !== undefined && (
                 <div className={s.feedbackRow}>
@@ -867,6 +906,12 @@ export function CopilotPane() {
             </div>
           ))}
         </div>
+        {latestContextUsage && (
+          <ContextUsagePanel
+            usage={latestContextUsage}
+            messageCount={msgs.filter((m) => m.who !== 'system').length}
+          />
+        )}
         {msgs.length <= 1 && (
           <div className={s.chipsBar}>
             <CopilotChips ctx={copilotCtx} busy={busy} onSelect={(prompt) => void sendText(prompt)} />

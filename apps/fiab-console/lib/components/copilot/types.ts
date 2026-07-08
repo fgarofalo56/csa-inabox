@@ -13,14 +13,76 @@ export interface CopilotUsage {
   toolCalls: number;
 }
 
+/**
+ * Per-turn transparency metadata carried on the `final` step (CTS-01/02).
+ * Additive: every field is optional so older clients (and the persisted step
+ * docs written before this wave) render exactly as before.
+ */
+export interface TurnMeta {
+  /** Provider family for the badge, e.g. 'Azure OpenAI'. */
+  provider?: string;
+  /** Prompt (input) tokens for this turn — split out of `usage.totalTokens`. */
+  promptTokens?: number;
+  /** Completion (output) tokens for this turn. */
+  completionTokens?: number;
+  /** Wall-clock latency of the whole turn, ms (first prompt → final answer). */
+  turnLatencyMs?: number;
+  /** Estimated USD from the rel-T85 list-price table over the real token counts. */
+  costUsd?: number;
+}
+
 /** A single streamed orchestrator step (superset of both legacy Step shapes). */
 export type Step =
   | { kind: 'thought'; content: string }
   | { kind: 'tool_call'; name: string; args?: unknown; callId: string }
   | { kind: 'tool_result'; name: string; callId: string; durationMs: number; result?: unknown; error?: string }
-  | { kind: 'final'; content: string; usage?: CopilotUsage; model?: string; citations?: Citation[] }
+  | ({ kind: 'final'; content: string; usage?: CopilotUsage; model?: string; citations?: Citation[]; turnDetail?: TurnDetail; contextUsage?: ContextUsage } & TurnMeta)
   | { kind: 'error'; error: string; code?: string }
+  | { kind: 'context_usage'; usage: ContextUsage }
   | { kind: 'proposed_change'; target: string; before: string; after: string; lang?: string; callId?: string; summary?: string };
+
+/** One tool call rolled into the per-message detail badge (CTS-02). */
+export interface TurnToolDetail {
+  name: string;
+  /** MCP server that backed the call; absent for always-on native Loom tools. */
+  serverName?: string;
+  durationMs: number;
+  ok: boolean;
+  error?: string;
+}
+
+/** Per-message collapsible detail (CTS-02): tool roll-up + routing. */
+export interface TurnDetail {
+  tools: TurnToolDetail[];
+  /** Persona/agent that routed the turn, when a route was involved. */
+  routedAgentName?: string;
+  /** Why that agent was chosen (model-supplied or derived). */
+  routedReason?: string;
+}
+
+/**
+ * Segmented context-window breakdown (CTS-05), computed server-side by the pure
+ * {@link buildContextUsagePayload} with the segment-sum invariant. Emitted once
+ * per turn as a `context_usage` step (and mirrored onto the `final` step).
+ */
+export interface ContextUsage {
+  contextWindow: number;
+  systemPromptTokens: number;
+  personaContextTokens: number;
+  skills: { count: number; tokens: number; names: string[] };
+  tools: { count: number; tokens: number; names: string[] };
+  memory: { tokens: number };
+  knowledge: { tokens: number };
+  conversationHistory: { messages: number; tokens: number };
+  totalInputTokens: number;
+  remainingTokens: number;
+  utilizationPct: number;
+  /** Sum of every segment — equals totalInputTokens when segmentsConsistent. */
+  segmentSum: number;
+  segmentsConsistent: boolean;
+  /** First ~2k chars of the assembled system prompt for the preview modal. */
+  systemPromptPreview: string;
+}
 
 export interface Citation {
   id: string;
@@ -56,7 +118,7 @@ export interface SessionSummary {
  * intermediate tool steps + the final content). Built from the flat step
  * stream by groupTurns().
  */
-export interface Turn {
+export interface Turn extends TurnMeta {
   /** Known user prompt for this turn (the session's first prompt, or live). */
   user?: string;
   /** Intermediate steps (thought / tool_call / tool_result / proposed_change). */
@@ -68,6 +130,10 @@ export interface Turn {
   usage?: CopilotUsage;
   model?: string;
   citations?: Citation[];
+  /** Per-message detail badge roll-up (CTS-02). */
+  turnDetail?: TurnDetail;
+  /** Segmented context-window breakdown (CTS-05). */
+  contextUsage?: ContextUsage;
   /** True while this turn is still streaming. */
   streaming?: boolean;
   /** Monotonic index of the final answer — the feedback key (matches server). */
@@ -102,11 +168,23 @@ export function groupTurns(
       cur.usage = st.usage;
       cur.model = st.model;
       cur.citations = st.citations;
+      // CTS-01/02/05 transparency metadata threaded off the final step.
+      cur.provider = st.provider;
+      cur.promptTokens = st.promptTokens;
+      cur.completionTokens = st.completionTokens;
+      cur.turnLatencyMs = st.turnLatencyMs;
+      cur.costUsd = st.costUsd;
+      cur.turnDetail = st.turnDetail;
+      if (st.contextUsage) cur.contextUsage = st.contextUsage;
       cur.msgIndex = finalCount++;
       closeOpen();
     } else if (st.kind === 'error') {
       cur.error = st.error;
       closeOpen();
+    } else if (st.kind === 'context_usage') {
+      // Context meter (CTS-05): emitted once at message-build, before `final`.
+      // Attach to the in-flight turn; not a rendered transcript row.
+      cur.contextUsage = st.usage;
     } else {
       cur.steps.push(st);
     }

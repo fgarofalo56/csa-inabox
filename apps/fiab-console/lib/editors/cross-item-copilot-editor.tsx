@@ -35,6 +35,7 @@ import type { RibbonTab } from '@/lib/components/ribbon';
 import { SessionList } from '@/lib/components/copilot/session-list';
 import { ToolsPanel } from '@/lib/components/copilot/tools-panel';
 import { Transcript } from '@/lib/components/copilot/transcript';
+import { ContextUsagePanel } from '@/lib/components/copilot/context-usage-panel';
 import { groupTurns, type Step, type Tool, type SessionSummary, type Turn } from '@/lib/components/copilot/types';
 import {
   POWERBI_AUTHORING_SKILLS,
@@ -625,6 +626,11 @@ export function CopilotConsoleView({ embedded = false, contextSlug = 'default', 
   const regenerate = useCallback((turn: Turn) => { if (turn.user) void runOrchestrate(turn.user); }, [runOrchestrate]);
 
   const hasTranscript = turns.length > 0;
+  // CTS-05: most recent turn's context-window breakdown (docked meter).
+  const latestContextUsage = useMemo(() => {
+    for (let i = turns.length - 1; i >= 0; i--) if (turns[i].contextUsage) return turns[i].contextUsage;
+    return undefined;
+  }, [turns]);
 
   const body = (
     <div className={s.shell}>
@@ -711,6 +717,11 @@ export function CopilotConsoleView({ embedded = false, contextSlug = 'default', 
             />
           )}
         </div>
+
+        {/* CTS-05: segmented context-window meter for the latest turn. */}
+        {latestContextUsage && (
+          <ContextUsagePanel usage={latestContextUsage} messageCount={userPrompts.length} />
+        )}
 
         {/* Pinned composer */}
         <div className={s.composer}>

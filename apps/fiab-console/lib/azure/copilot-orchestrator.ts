@@ -112,7 +112,15 @@ import { POWERBI_REMOTE_MCP_GATE_TEXT } from '@/lib/copilot/powerbi-skills';
 // parallel system. Microsoft Learn is the sole default-on MCP; every other server
 // is opt-in and emits an honest catalog gate until connected (no-fabric-dependency,
 // no-vaporware).
-import { msSkillSystemBlocksForPane, msMcpPrefix } from '@/lib/copilot/ms-skills';
+import { msSkillSystemBlocksForPane, msMcpPrefix, msSkillsForPane } from '@/lib/copilot/ms-skills';
+// rel-T85 list-price estimator (CTS-01) — pure, shared with the admin usage
+// dashboard so the per-turn $ figure uses one source of truth.
+import { estCostUsd } from '@/lib/copilot/cost-estimate';
+// Pure segmented context-window builder + token estimator (CTS-05).
+import { buildContextUsagePayload, estimateTokens } from '@/lib/copilot/context-usage';
+// Tool-provenance → grounding citation mapper (CTS-04). Pure; maps a tool
+// result's known provenance shapes into the Citation[] the transcript renders.
+import { extractCitationsFromToolResult, mergeCitations } from '@/lib/copilot/tool-citations';
 
 // ---------- item-type slug normalization (build-assist robustness) ----------
 // The model often guesses item-type slugs with underscores or marketing names
@@ -349,6 +357,12 @@ export interface ToolDef {
    * console badges these so the user knows the tool grounds on what's open.
    */
   readsContext?: boolean;
+  /**
+   * Display name of the MCP server backing this tool (CTS-02/09). Set by
+   * buildMcpShim for external MCP tools; absent for always-on native Loom tools
+   * (which the detail panel labels "built-in").
+   */
+  serverName?: string;
 }
 
 export class LoomToolRegistry {
@@ -1093,12 +1107,74 @@ export function buildDefaultRegistry(): LoomToolRegistry {
 
 export interface OrchestratorUsage { promptTokens: number; completionTokens: number; totalTokens: number; aoaiCalls: number; toolCalls: number; }
 
+// Per-turn transparency shapes (CTS-01/02/05). Mirror the client-side
+// definitions in lib/components/copilot/types.ts (kept in sync by hand — the
+// client module can't import the server orchestrator, which pulls in the Azure
+// SDK). All additive/optional so older clients render unchanged.
+export interface TurnToolDetail {
+  name: string;
+  serverName?: string;
+  durationMs: number;
+  ok: boolean;
+  error?: string;
+}
+export interface TurnDetail {
+  tools: TurnToolDetail[];
+  routedAgentName?: string;
+  routedReason?: string;
+}
+/** Grounding citation shape the transcript renders (CTS-04). Mirrors the UI
+ *  `Citation` in lib/components/help-copilot/citations + copilot/types. */
+export interface Citation {
+  id: string;
+  path: string;
+  kind: string;
+  heading?: string;
+  url?: string;
+  preview: string;
+}
+export interface ContextUsage {
+  contextWindow: number;
+  systemPromptTokens: number;
+  personaContextTokens: number;
+  skills: { count: number; tokens: number; names: string[] };
+  tools: { count: number; tokens: number; names: string[] };
+  memory: { tokens: number };
+  knowledge: { tokens: number };
+  conversationHistory: { messages: number; tokens: number };
+  totalInputTokens: number;
+  remainingTokens: number;
+  utilizationPct: number;
+  segmentSum: number;
+  segmentsConsistent: boolean;
+  systemPromptPreview: string;
+}
+
 export type OrchestratorStep =
   | { kind: 'thought'; content: string }
   | { kind: 'tool_call'; name: string; args: unknown; callId: string }
   | { kind: 'tool_result'; name: string; callId: string; durationMs: number; result?: unknown; error?: string }
-  | { kind: 'final'; content: string; usage?: OrchestratorUsage; model?: string }
+  | {
+      kind: 'final';
+      content: string;
+      usage?: OrchestratorUsage;
+      model?: string;
+      // CTS-01 status-bar metadata.
+      provider?: string;
+      promptTokens?: number;
+      completionTokens?: number;
+      turnLatencyMs?: number;
+      costUsd?: number;
+      // CTS-02 per-message detail roll-up.
+      turnDetail?: TurnDetail;
+      // CTS-04 grounding citations mapped from tool provenance.
+      citations?: Citation[];
+      // CTS-05 context-window breakdown (also emitted standalone below).
+      contextUsage?: ContextUsage;
+    }
   | { kind: 'error'; error: string; code?: string }
+  // CTS-05: emitted once per turn at message-build time, before the AOAI loop.
+  | { kind: 'context_usage'; usage: ContextUsage }
   // A tool proposed a code/query/transform change. The pane renders a Monaco
   // DiffEditor (before|after) and applies it ONLY on explicit Keep — never
   // automatically. `target` is a deterministic editor-bridge key
@@ -1728,8 +1804,26 @@ function msConnectedMcpPrefixes(reg: LoomToolRegistry): string[] {
   return [...connected];
 }
 
+/**
+ * Approximate model context window (tokens) for a deployment name, for the
+ * CTS-05 utilization gauge. Loose substring match; a conservative 128k default
+ * covers the current AOAI chat models. Only affects the meter's denominator —
+ * never gates a call.
+ */
+export function contextWindowForDeployment(deployment: string): number {
+  const m = (deployment || '').toLowerCase();
+  if (/o1|o3|o4|gpt-4\.1/.test(m)) return 200000;
+  if (/gpt-4o|gpt-4-turbo|gpt-35-turbo-16k|gpt-3\.5-turbo-16k/.test(m)) return 128000;
+  if (/gpt-4-32k/.test(m)) return 32768;
+  if (/gpt-35-turbo|gpt-3\.5-turbo|gpt-4\b/.test(m)) return 16385;
+  return 128000;
+}
+
 export async function* orchestrate(opts: OrchestrateOptions): AsyncIterable<OrchestratorStep> {
   const { prompt, sessionId, userOid } = opts;
+  // CTS-01: turn wall-clock — measured from the first line of orchestration to
+  // the `final` step so the status bar reports real end-to-end latency.
+  const turnStart = Date.now();
   // Copilot surface tag for per-persona usage metering (string, defaults to
   // `cross-item`). Distinct from the resolved CopilotPersonaDef below.
   const personaTag = opts.persona || 'cross-item';
@@ -1940,6 +2034,41 @@ export async function* orchestrate(opts: OrchestrateOptions): AsyncIterable<Orch
   // the final step can report total cost (parity with the data-agent chat).
   const usage: OrchestratorUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0, aoaiCalls: 0, toolCalls: 0 };
 
+  // CTS-02: roll every tool call into a per-turn detail list ({name, serverName?,
+  // durationMs, ok, error?}) attached to the final step so the collapsible detail
+  // badge can render the full tool table with "via <server>" attribution.
+  const turnTools: TurnToolDetail[] = [];
+  // CTS-04: accumulate grounding citations mapped from tool provenance (docs RAG
+  // hits, agentic knowledge-base retrieval, schema reads) across the turn.
+  let turnCitations: Citation[] = [];
+
+  // ── CTS-05: context-window meter ──────────────────────────────────────────
+  // Tokenize each prompt contributor at message-build time (before the AOAI
+  // call) and emit ONE `context_usage` step so the segmented meter renders with
+  // real per-segment counts. memory/knowledge are 0 until CTS-08 / RAG
+  // pre-injection land — first-class segments now so the meter needs no reshape.
+  const skillNames = msSkillsForPane(opts.contextSlug).map((sk) => sk.name);
+  const toolNames = (tools as Array<{ function?: { name?: string } }>).map((t) => t?.function?.name || '').filter(Boolean);
+  const systemMessagesText = messages.filter((m) => m.role === 'system').map((m) => m.content || '').join('\n\n');
+  const contextUsage = buildContextUsagePayload({
+    contextWindow: contextWindowForDeployment(target.deployment),
+    // messages[0] is always the base system prompt (persona/pane).
+    systemPromptTokens: estimateTokens(messages[0]?.content || ''),
+    personaContextTokens: opts.personaContext && Object.keys(opts.personaContext).length
+      ? estimateTokens(`Current editor context (JSON): ${JSON.stringify(opts.personaContext).slice(0, 4000)}`)
+      : 0,
+    skills: { count: skillNames.length, tokens: estimateTokens(msSkillBlocks), names: skillNames },
+    tools: { count: toolNames.length, tokens: estimateTokens(JSON.stringify(tools)), names: toolNames },
+    memoryTokens: 0,
+    knowledgeTokens: 0,
+    conversation: { messages: 1, tokens: estimateTokens(prompt) },
+    systemPromptPreview: systemMessagesText,
+  });
+  const contextUsageStep: OrchestratorStep = { kind: 'context_usage', usage: contextUsage };
+  await persistStep(sessionId, userOid, contextUsageStep);
+  yield contextUsageStep;
+  // ──────────────────────────────────────────────────────────────────────────
+
   for (let i = 0; i < maxIter; i++) {
     let resp: any;
     try {
@@ -1989,7 +2118,27 @@ export async function* orchestrate(opts: OrchestrateOptions): AsyncIterable<Orch
           return;
         }
       }
-      const finalStep: OrchestratorStep = { kind: 'final', content: msg.content || '', usage, model: target.deployment };
+      const finalStep: OrchestratorStep = {
+        kind: 'final',
+        content: msg.content || '',
+        usage,
+        model: target.deployment,
+        // CTS-01: split token counts, real turn latency, provider badge, and a
+        // list-price $ estimate (rel-T85 table) over the REAL token counts.
+        provider: 'Azure OpenAI',
+        promptTokens: usage.promptTokens,
+        completionTokens: usage.completionTokens,
+        turnLatencyMs: Date.now() - turnStart,
+        costUsd: estCostUsd(target.deployment, usage.promptTokens, usage.completionTokens),
+        // CTS-02: the per-turn tool roll-up (empty tools = a no-tool answer).
+        turnDetail: { tools: turnTools },
+        // CTS-04: grounding citations (omit the key entirely when none, so older
+        // turns / no-grounding turns render exactly as before).
+        ...(turnCitations.length ? { citations: turnCitations } : {}),
+        // CTS-05: mirror the context-window breakdown onto the final step so a
+        // replayed session restores the meter without a separate lookup.
+        contextUsage,
+      };
       await persistStep(sessionId, userOid, finalStep);
       yield finalStep;
       // Fire-and-forget App Insights receipt — real token counts, never awaited.
@@ -2041,13 +2190,17 @@ export async function* orchestrate(opts: OrchestrateOptions): AsyncIterable<Orch
           const truncated = serialized.length > 16_000
             ? serialized.slice(0, 16_000) + '...[truncated]'
             : serialized;
+          const okDurationMs = Date.now() - started;
           resultStep = {
             kind: 'tool_result',
             name: tc.function.name,
             callId: tc.id,
-            durationMs: Date.now() - started,
+            durationMs: okDurationMs,
             result: publicResult,
           };
+          turnTools.push({ name: tc.function.name, serverName: tool.serverName, durationMs: okDurationMs, ok: true });
+          // CTS-04: map any grounding provenance the tool returned into citations.
+          turnCitations = mergeCitations(turnCitations, extractCitationsFromToolResult(tc.function.name, publicResult));
           messages.push({
             role: 'tool',
             tool_call_id: tc.id,
@@ -2091,6 +2244,15 @@ export async function* orchestrate(opts: OrchestrateOptions): AsyncIterable<Orch
         }
       }
 
+      // CTS-02: record the unknown-tool / error tool_result (the success case is
+      // recorded inline above before its early `continue`).
+      turnTools.push({
+        name: tc.function.name,
+        serverName: tool?.serverName,
+        durationMs: resultStep.kind === 'tool_result' ? resultStep.durationMs : 0,
+        ok: false,
+        error: resultStep.kind === 'tool_result' ? resultStep.error : undefined,
+      });
       await persistStep(sessionId, userOid, resultStep);
       yield resultStep;
     }
