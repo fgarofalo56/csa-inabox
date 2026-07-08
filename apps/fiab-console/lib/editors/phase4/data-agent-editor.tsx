@@ -44,6 +44,8 @@ import { safeModelJson } from '../model-fetch';
 import { DataAgentResultViz } from '../data-agent-result-viz';
 import { DataAgentConfigCopilotPanel } from '../data-agent-config-copilot';
 import { mergeSuggestionIntoSources } from '../_da-config-merge';
+import { ConnectedAgentsEditor } from '@/lib/copilot/connected-agents-editor';
+import { normalizeSubAgents, type SubAgentRef } from '@/lib/copilot/connected-agents';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
@@ -145,6 +147,8 @@ interface DataAgentState {
   evalRuns?: DaEvalRun[];
   /** Suggested prompts surfaced to consumers + in the test-pane empty state. */
   conversationStarters?: string[];
+  /** Connected sub-agents (AIF-4) — this agent orchestrates them at run time. */
+  subAgents?: SubAgentRef[];
   // Back-compat with the legacy free-text bag (read-only on load).
   systemPrompt?: string; model?: string;
   foundryAgentId?: string; foundryProjectId?: string; publishedAt?: string;
@@ -479,6 +483,7 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
   }, [loading, state.sources]);
 
   const sources = normalizeDaSources(state.sources);
+  const subAgents = normalizeSubAgents(state.subAgents);
   const instrLen = (typeof state.instructions === 'string' ? state.instructions : '').length;
 
   // ---- evaluation (ground-truth set + runs) ----
@@ -703,6 +708,20 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
                 {sources.length === 0 && (
                   <MessageBar intent="info"><MessageBarBody><Sparkle20Regular style={{ verticalAlign: 'middle', marginRight: tokens.spacingHorizontalSNudge }} />Attach up to five typed sources. Each becomes a grounded tool for the agent. Test chat and Publish both need at least one.</MessageBarBody></MessageBar>
                 )}
+              </div>
+
+              {/* Connected sub-agents (AIF-4) — this agent orchestrates them. */}
+              <div className={s.daSection}>
+                <div className={s.daSectionHead}>
+                  <span className={s.daSectionIcon}><BranchFork20Regular /></span>
+                  <Subtitle2>Connected agents</Subtitle2>
+                  <Badge appearance="tint" color={subAgents.length ? 'brand' : 'informative'}>{subAgents.length ? `${subAgents.length} sub-agent${subAgents.length === 1 ? '' : 's'}` : 'orchestrator'}</Badge>
+                </div>
+                <ConnectedAgentsEditor
+                  subAgents={subAgents}
+                  selfId={id}
+                  onChange={(next) => setState((p) => ({ ...p, subAgents: next }))}
+                />
               </div>
               <SaveBar
                 saving={saving} savedAt={savedAt} error={error} dirty={dirty} onSave={() => save()}

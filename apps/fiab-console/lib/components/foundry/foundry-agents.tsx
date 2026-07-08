@@ -60,6 +60,7 @@ const TOOL_TYPES = [
   { value: 'function', label: 'Function calling' },
   { value: 'mcp', label: 'MCP server' },
   { value: 'openapi', label: 'OpenAPI' },
+  { value: 'connected_agent', label: 'Connected agent' },
 ] as const;
 type ToolType = (typeof TOOL_TYPES)[number]['value'];
 
@@ -130,6 +131,8 @@ export function FoundryAgentsPanel({ active, nonce = 0, acct = null }: { active:
   // Typed config for the mcp / openapi tool kinds (AIF-5).
   const [fMcpServerId, setFMcpServerId] = useState('');
   const [fOpenapiUrl, setFOpenapiUrl] = useState('');
+  // Connected sub-agent (AIF-4) — the agent this agent delegates to.
+  const [fConnectedAgent, setFConnectedAgent] = useState('');
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState<{ intent: 'success' | 'error'; text: string } | null>(null);
 
@@ -190,7 +193,7 @@ export function FoundryAgentsPanel({ active, nonce = 0, acct = null }: { active:
 
   const resetForm = useCallback(() => {
     setSelected(null); setFName(''); setFModel(''); setFInstructions('');
-    setFTools([]); setFDescription(''); setFFnName(''); setFMcpServerId(''); setFOpenapiUrl('');
+    setFTools([]); setFDescription(''); setFFnName(''); setFMcpServerId(''); setFOpenapiUrl(''); setFConnectedAgent('');
     setSaveMsg(null);
   }, []);
 
@@ -209,6 +212,8 @@ export function FoundryAgentsPanel({ active, nonce = 0, acct = null }: { active:
     setFMcpServerId(mcp ? (mcpOpts.find((o) => o.endpoint && o.endpoint === mcp.server_url)?.id || '') : '');
     const oapi = toolsArr.find((x: any) => x?.type === 'openapi');
     setFOpenapiUrl(oapi?.openapi?.spec_url ? String(oapi.openapi.spec_url) : '');
+    const conn = toolsArr.find((x: any) => x?.type === 'connected_agent');
+    setFConnectedAgent(conn?.connected_agent?.id ? String(conn.connected_agent.id) : '');
     setSaveMsg(null);
     setPgAgent(a.name);
   }, [mcpOpts]);
@@ -231,9 +236,13 @@ export function FoundryAgentsPanel({ active, nonce = 0, acct = null }: { active:
       if (t === 'openapi') {
         return { type: 'openapi', openapi: { name: 'openapi_tool', spec_url: fOpenapiUrl.trim() || undefined, auth: { type: 'anonymous' } } };
       }
+      if (t === 'connected_agent') {
+        const target = fConnectedAgent.trim();
+        return { type: 'connected_agent', connected_agent: { id: target || undefined, name: target || 'sub_agent', description: `Delegate to ${target || 'the connected agent'}` } };
+      }
       return { type: t };
     });
-  }, [fTools, fFnName, fMcpServerId, fOpenapiUrl, mcpOpts]);
+  }, [fTools, fFnName, fMcpServerId, fOpenapiUrl, fConnectedAgent, mcpOpts]);
 
   const save = useCallback(async () => {
     const name = fName.trim();
@@ -439,6 +448,22 @@ export function FoundryAgentsPanel({ active, nonce = 0, acct = null }: { active:
             {fTools.includes('openapi') && (
               <Field label="OpenAPI spec URL (for the OpenAPI tool)">
                 <Input value={fOpenapiUrl} onChange={(_, d) => setFOpenapiUrl(d.value)} placeholder="https://api.example.com/openapi.json" />
+              </Field>
+            )}
+            {fTools.includes('connected_agent') && (
+              <Field label="Sub-agent (for the connected-agent tool)" hint="Pick another agent in this project to delegate to.">
+                {agents.filter((a) => a.name !== fName).length > 0 ? (
+                  <Dropdown
+                    value={fConnectedAgent}
+                    selectedOptions={fConnectedAgent ? [fConnectedAgent] : []}
+                    placeholder="Select an agent to connect"
+                    onOptionSelect={(_, d) => d.optionValue && setFConnectedAgent(d.optionValue)}
+                  >
+                    {agents.filter((a) => a.name !== fName).map((a) => <Option key={a.name} value={a.name} text={a.name}>{a.name}</Option>)}
+                  </Dropdown>
+                ) : (
+                  <Input value={fConnectedAgent} onChange={(_, d) => setFConnectedAgent(d.value)} placeholder="sub-agent name" />
+                )}
               </Field>
             )}
             <Field label="Description (optional — orchestrators see this)">
