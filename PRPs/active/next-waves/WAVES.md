@@ -439,3 +439,55 @@ Exact work items with target files. All P0/P1, one agent per item, parallel-safe
 - **G6** Agentic publish depth (description_for_model, deliver-as-is, connected-agent, auth mode) `[AGENTS, P2, M]`.
 
 Recommended slotting: G5+G1 with the AIF multi-agent waves (3–6); G2 with SVC-1's wave; G3 standalone; G4/G6 in the P2 tail.
+
+---
+
+## Addendum (2026-07-08, post-plan): Data Product — ultimate experience (DP-1…DP-17)
+
+`PRP-data-product-ultimate.md` (this folder) audited the four poorly-reconciled "data product" surfaces +
+two look-alike sibling item types and specs a 17-item program to (a) **fix the model** (one canonical
+status vocabulary, projection parity, taxonomy cleanup, the 3 freeform violations), (b) build the
+operator-asked **guided wizard**, **certification state machine**, **walkthroughs + Copilot builder**, and
+(c) close the **mesh-class gaps** (ports, versioning+deprecation, subscription fulfillment, feedback,
+sample-data, SLO monitoring, value metrics, governed↔infra linkage, shareable end-state). Tag legend adds
+source `DP`.
+
+**Dedupe — DP items that RIDE existing plan items (reference, do not rebuild):**
+- **DP-9** breaking-change gate at publish → rides **W10** (Data Contract item) + **BR-CONTRACT-GATE**
+  (Wave 11); DP-9 adds only the data-product version-history + deprecation glue.
+- **DP-5** certification DQ-score check → consumes **W11** (DQ Rule Engine, Wave 11) + the shipped
+  `ContractQualityRunPanel`.
+- **DP-16** external sharing → rides **FGC-30** (cross-tenant B2B + scoped ADLS grant, Wave 8) + the shipped
+  bidirectional **Delta Sharing** (PR #1578); surfaces a "Share externally" action, not a new engine.
+- **DP-11** feedback/usage analytics → reuses **W18** (marketplace listing analytics + subscriber webhooks,
+  Wave 6) + **BR-WEBHOOK** + **BR-COMMENTS/W4** comment plumbing.
+- **DP-14** cost/value → reuses **FGC-28** chargeback + **BR-COSTATTR** (Wave 8).
+
+**Dependency ordering (governs the slotting):** DP-1 (model unification) is the keystone — DP-3/DP-5/DP-8/
+DP-16 all assume it, so it lands with the earliest DP work. DP-9 must follow W10/BR-CONTRACT-GATE (Wave 11);
+DP-10/DP-16 follow FGC-30 (Wave 8); DP-11 follows W18 (Wave 6) — all of which precede the two new waves below.
+
+**Recommended slotting:**
+
+- **Fold the 3 P0 correctness/foundation items into the existing Wave 11** (governance/quality/contract —
+  same subsystem as W10 Data Contract + W11 DQ Engine + DOC-6): **DP-1** (unify the data-product model),
+  **DP-2** (item-type taxonomy cleanup), **DP-17** (fix the 3 freeform violations). These are P0 model-truth
+  fixes that must precede any depth build and share the Wave-11 subsystem.
+- **New Wave 19 — Data Product guided creation & certification** *(P0/P1 marquee; after Wave 11)*:
+  **DP-3** guided creation wizard `[DP, P0, XL]` · **DP-5** certification pipeline `[DP, P0, XL]` ·
+  **DP-4** template gallery + instance provenance `[DP, P1, L]` · **DP-6** walkthroughs + LearnPopovers
+  `[DP, P1, M]` · **DP-7** Copilot data-product builder `[DP, P1, L]` · **DP-8** input/output/management
+  ports `[DP, P1, L]`. (6 items.) *Operator action:* none new (reuses AOAI/ADX/Cosmos/Graph).
+- **New Wave 20 — Data Product mesh-class depth & shareable end-state** *(P1/P2; after Waves 8, 11, 19)*:
+  **DP-9** versioning + deprecation `[DP, P1, L]` (rides W10/BR-CONTRACT-GATE) · **DP-10** subscription
+  approval + automated fulfillment `[DP, P1, L]` · **DP-16** editable/consumable/shareable end state
+  `[DP, P1, M]` (rides FGC-30 + PR #1578) · **DP-11** consumer feedback/ratings/usage `[DP, P2, M]` (rides
+  W18) · **DP-12** sample data + starter notebook `[DP, P2, M]` · **DP-13** live SLO monitoring `[DP, P2, M]` ·
+  **DP-14** value metrics (OKRs+CDEs+cost) `[DP, P2, M]` · **DP-15** governed↔infra cross-linking `[DP, P2, L]`.
+  (8 items.) *Operator action:* Console UAMI **User Access Administrator** (or scoped custom role) on the
+  data-plane RG for DP-10 automated fulfillment (default-off, honest-gated); Azure Monitor scheduled-query
+  alert rule for DP-13 (reuses the RTI Activator substitute); Cosmos containers via `createIfNotExists` for
+  DP-11/DP-12 (no new resource type).
+
+This raises the plan to **20 waves** (18 existing + 2 new) and **~133 scheduled items** (~116 + 17 DP), with
+3 DP items folded into Wave 11 and 14 across the two new waves.
