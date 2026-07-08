@@ -3219,7 +3219,7 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
               <TableBody>
                 {(state.datasets || []).length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={5} style={{ padding: 0 }}>
+                    <TableCell colSpan={5}>
                       <EmptyState
                         icon={<Code20Regular />}
                         title="No datasets mapped yet"
@@ -3287,7 +3287,7 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
               <TableBody>
                 {assets.length === 0 && !assetsLoading && (
                   <TableRow>
-                    <TableCell colSpan={6} style={{ padding: 0 }}>
+                    <TableCell colSpan={6}>
                       <EmptyState
                         icon={<Database20Regular />}
                         title="No data assets attached yet"
@@ -3367,7 +3367,7 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
               <TableBody>
                 {(state.glossaryLinks || []).length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={3} style={{ padding: 0 }}>
+                    <TableCell colSpan={3}>
                       <EmptyState
                         icon={<Library20Regular />}
                         title="No glossary terms linked yet"
@@ -3439,7 +3439,7 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
               <TableBody>
                 {(!state.accessPolicy?.allowedPurposes?.length) && (
                   <TableRow>
-                    <TableCell colSpan={2} style={{ padding: 0 }}>
+                    <TableCell colSpan={2}>
                       <EmptyState
                         icon={<Key20Regular />}
                         title="No purposes defined yet"
