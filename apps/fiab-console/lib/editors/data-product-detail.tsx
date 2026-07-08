@@ -105,6 +105,16 @@ export interface ObservabilityData {
   error?: string;
 }
 
+// Longer client ceiling for the data-product Observability / DQ reads and
+// user-triggered health actions. The observability GET runs real ADX KQL
+// health/DQ queries + a Purview classic Data Map lineage lookup, and the
+// health-action POSTs trigger real Purview scans / ADX DQ recomputes / Atlas
+// lineage re-pulls — all of which can legitimately run past the 6s page-load
+// budget `clientFetch` defaults to. This aligns the client budget with the
+// server per-request budget (DEFAULT_SERVER_FETCH_TIMEOUT_MS = 30s). Fast
+// first-paint reads (e.g. the scan-name list) keep the plain 6s default.
+const DATA_PRODUCT_OBS_TIMEOUT_MS = 30_000;
+
 export function useObservability(id: string) {
   const [data, setData] = useState<ObservabilityData | null>(null);
   const [loading, setLoading] = useState(false);
@@ -114,7 +124,7 @@ export function useObservability(id: string) {
     if (!id || id === 'new') return;
     setLoading(true); setErr(null);
     try {
-      const r = await clientFetch(`/api/data-products/${encodeURIComponent(id)}/observability`);
+      const r = await clientFetch(`/api/data-products/${encodeURIComponent(id)}/observability`, undefined, DATA_PRODUCT_OBS_TIMEOUT_MS);
       const j = (await r.json()) as ObservabilityData;
       if (!j.ok) { setErr(j.error || `HTTP ${r.status}`); setData(j); return; }
       setData(j);
@@ -281,7 +291,7 @@ function TriggerScanCard({ id }: { id: string }) {
       const r = await clientFetch(`/api/data-products/${encodeURIComponent(id)}/health-actions`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ action: 'trigger-scan', source, scan }),
-      });
+      }, DATA_PRODUCT_OBS_TIMEOUT_MS);
       const j = await r.json();
       if (!j.ok) { setMsg({ intent: 'error', text: j.error || `HTTP ${r.status}` }); return; }
       setMsg({ intent: 'success', text: j.result?.outcome || 'Scan triggered.' });
@@ -331,7 +341,7 @@ function ActionCard({
       const r = await clientFetch(`/api/data-products/${encodeURIComponent(id)}/health-actions`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ action }),
-      });
+      }, DATA_PRODUCT_OBS_TIMEOUT_MS);
       const j = await r.json();
       if (!j.ok) {
         const gate = j.gate?.missing ? ` Set ${j.gate.missing}.` : '';
