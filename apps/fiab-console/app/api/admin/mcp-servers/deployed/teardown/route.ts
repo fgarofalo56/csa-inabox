@@ -26,6 +26,7 @@ import {
 } from '@/lib/azure/container-apps-arm-client';
 import { deleteKeyVaultSecret } from '@/lib/azure/kv-secrets-client';
 import { apiServerError } from '@/lib/api/respond';
+import { emitAuditEvent } from '@/lib/admin/audit-stream';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -97,6 +98,17 @@ export async function DELETE(req: NextRequest) {
       containerApp: doc.deployment.containerAppName,
     }).catch(() => {});
   } catch { /* audit is best-effort */ }
+
+  // SIEM audit stream (BR-SIEM) — teardown deletes a Container App + KV secrets.
+  emitAuditEvent({
+    actorOid: session.claims.oid,
+    actorUpn: who,
+    action: 'mcp-server.teardown',
+    targetType: 'mcp-server',
+    targetId: serverId,
+    tenantId: session.claims.tid || tenantId,
+    detail: { name: doc.name, containerApp: doc.deployment.containerAppName },
+  });
 
   return NextResponse.json({ ok: true });
 }

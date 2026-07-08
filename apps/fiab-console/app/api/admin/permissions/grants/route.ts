@@ -15,6 +15,7 @@ import { getSession, tenantScopeId } from '@/lib/auth/session';
 import { enforceCapability, type FeatureGrant, type FeatureRole } from '@/lib/auth/feature-gate';
 import { featurePermissionsContainer } from '@/lib/azure/cosmos-client';
 import { getCapability } from '@/lib/auth/feature-catalog';
+import { emitAuditEvent } from '@/lib/admin/audit-stream';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -75,6 +76,18 @@ export async function POST(req: NextRequest) {
     grantedAt: new Date().toISOString(),
   };
   const { resource } = await c.items.upsert(doc);
+  // SIEM audit stream (BR-SIEM) — a privilege change is the highest-value SIEM
+  // signal. Fire-and-forget; never blocks the grant.
+  emitAuditEvent({
+    actorOid: s!.claims.oid,
+    actorUpn: s!.claims.upn || s!.claims.oid,
+    action: 'feature-grant.upsert',
+    targetType: 'feature-grant',
+    targetId: stableId,
+    tenantId: s!.claims.tid || tenantId,
+    detail: { capabilityId, principalId, principalType, role,
+      principalUpn: body?.principalUpn || undefined },
+  });
   return NextResponse.json({ ok: true, grant: resource });
 }
 
@@ -92,5 +105,14 @@ export async function DELETE(req: NextRequest) {
     if (e?.code === 404) return NextResponse.json({ ok: false, error: 'grant not found' }, { status: 404 });
     throw e;
   }
+  // SIEM audit stream (BR-SIEM) — revoking a privilege is SIEM-relevant.
+  emitAuditEvent({
+    actorOid: s!.claims.oid,
+    actorUpn: s!.claims.upn || s!.claims.oid,
+    action: 'feature-grant.delete',
+    targetType: 'feature-grant',
+    targetId: id,
+    tenantId: s!.claims.tid || tenantId,
+  });
   return NextResponse.json({ ok: true });
 }

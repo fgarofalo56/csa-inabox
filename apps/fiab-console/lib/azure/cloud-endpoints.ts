@@ -736,6 +736,28 @@ export function logAnalyticsTokenScope(): string {
     : 'https://api.loganalytics.io/.default';
 }
 
+/**
+ * AAD `.default` token SCOPE for the Azure Monitor **Logs Ingestion API**
+ * (DCR-based custom-table ingestion — the LoomAudit_CL SIEM stream). Used by
+ * lib/admin/audit-stream.ts to authenticate the POST to the DCE ingestion
+ * endpoint.
+ *
+ * Per-cloud audience (grounded in Microsoft Learn — "Logs Ingestion API in
+ * Azure Monitor", request-headers table):
+ *   Commercial / GCC : https://monitor.azure.com
+ *   GCC-High / IL5 / DoD (AzureUSGovernment) : https://monitor.azure.us
+ *
+ * `LOOM_MONITOR_INGESTION_SCOPE` overrides outright for clouds we don't
+ * enumerate (e.g. air-gapped / China `https://monitor.azure.cn`).
+ */
+export function monitorIngestionScope(): string {
+  const explicit = process.env.LOOM_MONITOR_INGESTION_SCOPE;
+  if (explicit) return explicit.endsWith('/.default') ? explicit : `${explicit.replace(/\/+$/, '')}/.default`;
+  return isGovCloud()
+    ? 'https://monitor.azure.us/.default'
+    : 'https://monitor.azure.com/.default';
+}
+
 /** Azure Blob storage hostname suffix (no leading dot, no account prefix). */
 export function getBlobSuffix(): string {
   return isGovCloud() ? 'blob.core.usgovcloudapi.net' : 'blob.core.windows.net';

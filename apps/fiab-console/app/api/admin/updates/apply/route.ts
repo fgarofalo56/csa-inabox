@@ -19,6 +19,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { denyIfNoDlzAccess } from '@/lib/auth/dlz-gate';
 import { auditLogContainer } from '@/lib/azure/cosmos-client';
+import { emitAuditEvent } from '@/lib/admin/audit-stream';
 import {
   updateContainerAppImage,
   getContainerApp,
@@ -222,6 +223,23 @@ export async function POST(req: NextRequest) {
   await audit(tenantId, who, allSucceeded ? 'loom-update.succeeded' : 'loom-update.partial', {
     to: ok.target.tag_name,
     results: results.map((r) => ({ app: r.app, status: r.status })),
+  });
+
+  // SIEM audit stream (BR-SIEM) — an in-place platform roll (new container
+  // images across the estate) is a deploy-class SIEM signal.
+  emitAuditEvent({
+    actorOid: s.claims.oid,
+    actorUpn: who,
+    action: 'platform.update-apply',
+    targetType: 'loom-update',
+    targetId: ok.target.tag_name,
+    tenantId: s.claims.tid || tenantId,
+    outcome: allSucceeded ? 'success' : 'failure',
+    detail: {
+      from: ok.current,
+      to: ok.target.tag_name,
+      results: results.map((r) => ({ app: r.app, status: r.status })),
+    },
   });
 
   return NextResponse.json({
