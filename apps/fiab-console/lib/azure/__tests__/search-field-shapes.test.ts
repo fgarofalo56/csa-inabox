@@ -37,10 +37,14 @@ import {
   parseVectorSearchSection,
   indexHasVectorField,
   defaultHnswParameters,
+  defaultAzureOpenAIVectorizer,
+  vectorizerNames,
+  EMBEDDING_MODELS,
   type FieldRow,
   type SemanticConfig,
   type VectorAlgorithm,
   type VectorProfile,
+  type Vectorizer,
 } from '../search-field-shapes';
 
 describe('buildSearchBody — Search Explorer query options', () => {
@@ -379,5 +383,54 @@ describe('buildVectorSearchSection / parseVectorSearchSection — vector designe
     expect(indexHasVectorField({ fields: [{ name: 'v', type: 'Collection(Edm.Single)' }] })).toBe(true);
     expect(indexHasVectorField({ fields: [{ name: 's', type: 'Edm.String' }] })).toBe(false);
     expect(indexHasVectorField({})).toBe(false);
+  });
+});
+
+describe('integrated-vectorization vectorizers (AIF-2)', () => {
+  it('emits an azureOpenAI vectorizer with system-MI auth (authIdentity null)', () => {
+    const vecs: Vectorizer[] = [defaultAzureOpenAIVectorizer('aoai-v')];
+    vecs[0].azureOpenAIParameters.resourceUri = 'https://x.openai.azure.com';
+    const out = buildVectorSearchSection([], [], vecs);
+    expect(out.vectorizers).toHaveLength(1);
+    expect(out.vectorizers[0]).toEqual({
+      name: 'aoai-v',
+      kind: 'azureOpenAI',
+      azureOpenAIParameters: {
+        resourceUri: 'https://x.openai.azure.com',
+        deploymentId: 'text-embedding-3-large',
+        modelName: 'text-embedding-3-large',
+        authIdentity: null,
+      },
+    });
+  });
+
+  it('drops incomplete vectorizers (missing endpoint or deployment)', () => {
+    const out = buildVectorSearchSection([], [], [defaultAzureOpenAIVectorizer('empty')]);
+    expect(out.vectorizers).toBeUndefined();
+  });
+
+  it('omits the vectorizers key entirely for the legacy 2-arg call', () => {
+    const out = buildVectorSearchSection([{ name: 'a', kind: 'hnsw', hnswParameters: defaultHnswParameters() }], [{ name: 'p', algorithm: 'a' }]);
+    expect(out.vectorizers).toBeUndefined();
+  });
+
+  it('binds a profile to a vectorizer by name and round-trips', () => {
+    const vecs: Vectorizer[] = [defaultAzureOpenAIVectorizer('v1')];
+    vecs[0].azureOpenAIParameters.resourceUri = 'https://x.openai.azure.com';
+    const section = buildVectorSearchSection(
+      [{ name: 'h', kind: 'hnsw', hnswParameters: defaultHnswParameters() }],
+      [{ name: 'p', algorithm: 'h', vectorizer: 'v1' }],
+      vecs,
+    );
+    const idx = { vectorSearch: section };
+    expect(vectorizerNames(idx)).toEqual(['v1']);
+    const parsed = parseVectorSearchSection(idx);
+    expect(parsed.profiles[0].vectorizer).toBe('v1');
+    expect(parsed.vectorizers[0].name).toBe('v1');
+    expect(parsed.vectorizers[0].azureOpenAIParameters.deploymentId).toBe('text-embedding-3-large');
+  });
+
+  it('exposes known embedding models with dimensions', () => {
+    expect(EMBEDDING_MODELS.find((m) => m.model === 'text-embedding-3-large')?.dimensions).toBe(3072);
   });
 });

@@ -152,8 +152,8 @@ MISSING ❌
 |---|------------|-------------|-------|
 | 8 | **Visual field designer** (add/remove fields, toggle attribute checkboxes, analyzer/type pickers) | ✅ built | Schema tab is now a full per-field designer: ＋Add field, per-row Name `Input`, Type `Dropdown` (FIELD_TYPES), Key/Searchable/Filterable/Sortable/Facetable/Retrievable `Checkbox`es (vector-aware disabling), analyzer `Dropdown` for searchable strings, dimensions + vector-profile pickers for vector fields, per-row Delete. Save → real `PUT /indexes/{name}`; Revert; dirty-state guard. `foundry-sub-editors.tsx:1146-1249` |
 | 8 | Field grid (read-only view of attributes) | ✅ built | superseded by the editable designer above |
-| 9 | Semantic configuration **designer** | ⚠️ honest-gate | "Not yet wired" row; editable only via Schema JSON |
-| 10 | Vector profile / algorithm / vectorizer **designer** | ⚠️ honest-gate | "Not yet wired" row; editable only via Schema JSON; vector profiles shown read-only as a `Caption1` |
+| 9 | Semantic configuration **designer** | ✅ built | `SemanticConfigDesigner` — title/content/keyword field pickers → `PUT /indexes` (`foundry-sub-editors.tsx`) |
+| 10 | Vector profile / algorithm / vectorizer **designer** | ✅ built | `VectorSearchDesigner` — HNSW/exhaustiveKnn algorithm rows + profile rows (algorithm + vectorizer binding) + **Azure OpenAI vectorizer** rows (endpoint / embedding deployment / model) for integrated vectorization; honest MessageBar names the `Cognitive Services OpenAI User` grant the search identity needs. Save → real `PUT /indexes/{name}`. `search-field-shapes.ts` `buildVectorSearchSection(..., vectorizers)` (AIF-2) |
 | 11 | Scoring-profile designer | ❌ MISSING (JSON-only) | only via raw Schema JSON; no designer, not even flagged |
 | 12 | Suggesters / analyzers / normalizers / tokenizers designers | ❌ MISSING (JSON-only) | only via raw Schema JSON |
 | 13 | CORS / encryptionKey (CMK) designer | ❌ MISSING (JSON-only) | only via raw Schema JSON |

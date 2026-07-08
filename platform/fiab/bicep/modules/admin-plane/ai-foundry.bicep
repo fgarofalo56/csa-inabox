@@ -47,6 +47,13 @@ param adminEntraGroupId string
 @description('Console UAMI principal ID — granted Cognitive Services Contributor on the model-hosting account so the BFF can deploy models / read quota / read keys. Empty skips the role assignment.')
 param consolePrincipalId string = ''
 
+@description('''AI Search service SYSTEM-assigned MSI principal (object) ID. When
+set, it is granted Cognitive Services OpenAI User on the AOAI (AIServices)
+account so an AI Search integrated-vectorization vectorizer / AzureOpenAIEmbedding
+skill can call the embedding deployment as the search service identity (AIF-2).
+Empty skips the grant. Pass aiSearch.outputs.searchPrincipalId from the caller.''')
+param searchServicePrincipalId string = ''
+
 @description('Skip role-assignment grants — set true when re-provisioning an environment that already has the grants, to avoid RoleAssignmentExists.')
 param skipRoleGrants bool = false
 
@@ -335,6 +342,26 @@ resource aiServicesOpenAIUserRole 'Microsoft.Authorization/roleAssignments@2022-
       'Microsoft.Authorization/roleDefinitions',
       '5e0bd9bd-7b93-4f28-af87-19fc36ad61bd')
     principalId: consolePrincipalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+// Grant the AI Search service's system-assigned MSI Cognitive Services OpenAI
+// User on the AOAI account (AIF-2). This is what lets an AI Search integrated-
+// vectorization vectorizer (or AzureOpenAIEmbedding skill) call the embedding
+// deployment as the search identity — `authIdentity: null` on the vectorizer
+// means "use the search service system MI", which returns 403 without this
+// grant. Guarded on searchServicePrincipalId so it is skipped when AI Search is
+// disabled / BYO. Role id 5e0bd9bd-7b93-4f28-af87-19fc36ad61bd.
+resource searchOpenAIUserRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(searchServicePrincipalId) && !skipRoleGrants) {
+  scope: aiServices
+  name: guid(aiServices.id, searchServicePrincipalId, '5e0bd9bd-7b93-4f28-af87-19fc36ad61bd')
+  properties: {
+    // Cognitive Services OpenAI User — inference-only (embeddings)
+    roleDefinitionId: subscriptionResourceId(
+      'Microsoft.Authorization/roleDefinitions',
+      '5e0bd9bd-7b93-4f28-af87-19fc36ad61bd')
+    principalId: searchServicePrincipalId
     principalType: 'ServicePrincipal'
   }
 }

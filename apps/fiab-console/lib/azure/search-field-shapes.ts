@@ -452,16 +452,87 @@ export interface VectorAlgorithm {
   exhaustiveKnnParameters?: { metric?: VectorMetric };
 }
 
-/** One vector-search profile (binds a profile name to an algorithm). */
+/** One vector-search profile (binds a profile name to an algorithm + optional vectorizer). */
 export interface VectorProfile { name: string; algorithm: string; vectorizer?: string; }
+
+// ----------------------------------------------------------------------------
+// Integrated-vectorization vectorizers (index.vectorSearch.vectorizers[])
+//
+// A vectorizer lets AI Search embed query text (and skillset output) SERVER-side
+// at query/index time instead of a hand-rolled client embedding loop. The
+// `azureOpenAI` vectorizer points at an Azure OpenAI embedding deployment; a
+// vector-search PROFILE references it by name so a `kind:'text'` vector query
+// (integrated vectorization) works. `authIdentity: null` means the SEARCH
+// service's system-assigned managed identity calls the AOAI account — which is
+// why the service identity needs the "Cognitive Services OpenAI User" role on
+// the Foundry AOAI account (honest gate surfaced in the designer).
+//
+// Grounded in Microsoft Learn:
+//   https://learn.microsoft.com/azure/search/vector-search-integrated-vectorization
+//   https://learn.microsoft.com/azure/search/vector-search-how-to-configure-vectorizer
+// ----------------------------------------------------------------------------
+
+/** Parameters for an `azureOpenAI` vectorizer. */
+export interface AzureOpenAIVectorizerParameters {
+  /** AOAI account endpoint, e.g. https://<name>.openai.azure.com. */
+  resourceUri: string;
+  /** Embedding deployment name (e.g. text-embedding-3-large). */
+  deploymentId: string;
+  /** Embedding model name — REQUIRED for text-embedding-3-* models. */
+  modelName: string;
+  /**
+   * Resource id of a user-assigned identity, or null/undefined to use the search
+   * service's SYSTEM-assigned managed identity (the default keyless path).
+   */
+  authIdentity?: string | null;
+}
+
+/** One vectorizer (currently `azureOpenAI` — the integrated-vectorization kind). */
+export interface Vectorizer {
+  name: string;
+  kind: 'azureOpenAI';
+  azureOpenAIParameters: AzureOpenAIVectorizerParameters;
+}
+
+/** Common embedding models + their dimensions (drives the vectorizer + field designer). */
+export const EMBEDDING_MODELS: { model: string; dimensions: number }[] = [
+  { model: 'text-embedding-3-large', dimensions: 3072 },
+  { model: 'text-embedding-3-small', dimensions: 1536 },
+  { model: 'text-embedding-ada-002', dimensions: 1536 },
+];
+
+/** A fresh `azureOpenAI` vectorizer stub (system-MI auth by default). */
+export function defaultAzureOpenAIVectorizer(name: string): Vectorizer {
+  return {
+    name,
+    kind: 'azureOpenAI',
+    azureOpenAIParameters: {
+      resourceUri: '',
+      deploymentId: 'text-embedding-3-large',
+      modelName: 'text-embedding-3-large',
+      authIdentity: null,
+    },
+  };
+}
+
+/** Names of the vectorizers defined on an index (valid profile→vectorizer targets). */
+export function vectorizerNames(index: any): string[] {
+  const vs = index?.vectorSearch?.vectorizers;
+  if (!Array.isArray(vs)) return [];
+  return vs.map((v: any) => v?.name).filter((n: any): n is string => typeof n === 'string' && !!n);
+}
 
 /** Default HNSW parameters (the Azure defaults: m=4, efConstruction=400, efSearch=500, cosine). */
 export function defaultHnswParameters(): NonNullable<VectorAlgorithm['hnswParameters']> {
   return { m: 4, efConstruction: 400, efSearch: 500, metric: 'cosine' };
 }
 
-/** Build the `index.vectorSearch` section from a designer's algorithms + profiles. */
-export function buildVectorSearchSection(algorithms: VectorAlgorithm[], profiles: VectorProfile[]): any {
+/**
+ * Build the `index.vectorSearch` section from a designer's algorithms + profiles
+ * (+ optional integrated-vectorization vectorizers). `vectorizers` is emitted
+ * only when non-empty so existing 2-arg callers keep their exact wire shape.
+ */
+export function buildVectorSearchSection(algorithms: VectorAlgorithm[], profiles: VectorProfile[], vectorizers: Vectorizer[] = []): any {
   const algos = (algorithms || []).map((a) => {
     const out: any = { name: a.name, kind: a.kind };
     if (a.kind === 'hnsw') {
@@ -485,11 +556,26 @@ export function buildVectorSearchSection(algorithms: VectorAlgorithm[], profiles
       if (p.vectorizer) out.vectorizer = p.vectorizer;
       return out;
     });
-  return { algorithms: algos, profiles: profs };
+  const section: any = { algorithms: algos, profiles: profs };
+  const vecs = (vectorizers || [])
+    .filter((v) => v?.name && v?.azureOpenAIParameters?.resourceUri && v?.azureOpenAIParameters?.deploymentId)
+    .map((v) => {
+      const ap = v.azureOpenAIParameters;
+      const azureOpenAIParameters: any = {
+        resourceUri: ap.resourceUri.trim(),
+        deploymentId: ap.deploymentId.trim(),
+      };
+      if (ap.modelName) azureOpenAIParameters.modelName = ap.modelName.trim();
+      // null / undefined authIdentity → the search service's SYSTEM-assigned MI.
+      azureOpenAIParameters.authIdentity = ap.authIdentity ? ap.authIdentity : null;
+      return { name: v.name, kind: 'azureOpenAI', azureOpenAIParameters };
+    });
+  if (vecs.length) section.vectorizers = vecs;
+  return section;
 }
 
-/** Parse `index.vectorSearch` into editable algorithms + profiles. */
-export function parseVectorSearchSection(index: any): { algorithms: VectorAlgorithm[]; profiles: VectorProfile[] } {
+/** Parse `index.vectorSearch` into editable algorithms + profiles + vectorizers. */
+export function parseVectorSearchSection(index: any): { algorithms: VectorAlgorithm[]; profiles: VectorProfile[]; vectorizers: Vectorizer[] } {
   const vs = index?.vectorSearch || {};
   const algorithms: VectorAlgorithm[] = Array.isArray(vs.algorithms)
     ? vs.algorithms.map((a: any) => {
@@ -514,7 +600,24 @@ export function parseVectorSearchSection(index: any): { algorithms: VectorAlgori
   const profiles: VectorProfile[] = Array.isArray(vs.profiles)
     ? vs.profiles.map((p: any) => ({ name: p?.name ?? '', algorithm: p?.algorithm ?? '', vectorizer: p?.vectorizer }))
     : [];
-  return { algorithms, profiles };
+  const vectorizers: Vectorizer[] = Array.isArray(vs.vectorizers)
+    ? vs.vectorizers
+        .filter((v: any) => (v?.kind || 'azureOpenAI') === 'azureOpenAI')
+        .map((v: any) => {
+          const ap = v?.azureOpenAIParameters || {};
+          return {
+            name: v?.name ?? '',
+            kind: 'azureOpenAI' as const,
+            azureOpenAIParameters: {
+              resourceUri: ap.resourceUri ?? '',
+              deploymentId: ap.deploymentId ?? '',
+              modelName: ap.modelName ?? '',
+              authIdentity: ap.authIdentity ?? null,
+            },
+          };
+        })
+    : [];
+  return { algorithms, profiles, vectorizers };
 }
 
 /** True when an index has at least one vector field (the gate for the vector designer). */
