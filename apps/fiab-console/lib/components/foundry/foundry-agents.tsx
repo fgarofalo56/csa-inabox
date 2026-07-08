@@ -129,6 +129,7 @@ export function FoundryAgentsPanel({ active, nonce = 0, acct = null }: { active:
   const [pgQuestion, setPgQuestion] = useState('');
   const [pgRunning, setPgRunning] = useState(false);
   const [pgResult, setPgResult] = useState<any>(null);
+  const [pgTier, setPgTier] = useState<string | null>(null);
   const [pgGate, setPgGate] = useState<string | null>(null);
   const [pgError, setPgError] = useState<string | null>(null);
 
@@ -270,11 +271,20 @@ export function FoundryAgentsPanel({ active, nonce = 0, acct = null }: { active:
   const runPlayground = useCallback(async () => {
     const agent = pgAgent.trim(); const q = pgQuestion.trim();
     if (!agent || !q || pgRunning) return;
-    setPgRunning(true); setPgResult(null); setPgGate(null); setPgError(null);
+    setPgRunning(true); setPgResult(null); setPgTier(null); setPgGate(null); setPgError(null);
     try {
+      // Pass the selected agent's definition (instructions + model) so the MAF
+      // Gov runtime tier can serve the run when no Foundry Agent Service host is
+      // reachable (GCC-High / IL5) — it has no Foundry project to load it from.
+      // The Foundry tier loads the agent by name and ignores these.
+      const def = agents.find((a) => a.name === agent);
       const res = await clientFetch('/api/foundry/agents/run', {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ agent, question: q }),
+        body: JSON.stringify({
+          agent, question: q,
+          instructions: def ? agentInstructions(def) : (selected === agent ? fInstructions : undefined),
+          model: def ? agentModel(def) : (selected === agent ? fModel : undefined),
+        }),
       });
       const j = await readJson(res);
       if (res.status === 501 || j?.code === 'not_configured') {
@@ -283,12 +293,13 @@ export function FoundryAgentsPanel({ active, nonce = 0, acct = null }: { active:
       }
       if (!j.ok) { setPgError(j.error || `HTTP ${res.status}`); return; }
       setPgResult(j.data);
+      setPgTier(typeof j.tier === 'string' ? j.tier : null);
     } catch (e: any) {
       setPgError(e?.message || String(e));
     } finally {
       setPgRunning(false);
     }
-  }, [pgAgent, pgQuestion, pgRunning]);
+  }, [pgAgent, pgQuestion, pgRunning, agents, selected, fInstructions, fModel]);
 
   const deploymentNames = useMemo(() => {
     const names = deployments.map((d) => d.name).filter(Boolean);
@@ -465,6 +476,17 @@ export function FoundryAgentsPanel({ active, nonce = 0, acct = null }: { active:
               <div>
                 <div className={s.toolbar}>
                   <Badge appearance="filled" color={pgResult.status === 'completed' ? 'success' : pgResult.status === 'failed' ? 'danger' : 'warning'}>{pgResult.status}</Badge>
+                  {pgTier && (
+                    <Badge
+                      appearance="tint"
+                      color={pgTier === 'maf' ? 'important' : 'brand'}
+                      title={pgTier === 'maf'
+                        ? 'Served by the Microsoft Agent Framework OSS runtime tier (Gov AOAI direct) — the GCC-High / IL5 backstop'
+                        : 'Served by the Azure AI Foundry Agent Service tier'}
+                    >
+                      {pgTier === 'maf' ? 'runtime · MAF (Gov)' : 'runtime · Foundry'}
+                    </Badge>
+                  )}
                   {pgResult.runId && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>run {pgResult.runId}</Caption1>}
                 </div>
                 {pgResult.lastError && <MessageBar intent="error" style={{ marginTop: tokens.spacingVerticalSNudge }}><MessageBarBody>{pgResult.lastError}</MessageBarBody></MessageBar>}

@@ -14,11 +14,13 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { FoundryAgentError } from '@/lib/azure/foundry-agent-client';
 import {
-  runAgentAndInspect,
+  runAgentInspectTiered,
+  selectAgentTier,
   FoundryAgentNotConfiguredError,
-  FoundryAgentError,
-} from '@/lib/azure/foundry-agent-client';
+  MafAgentDefinitionRequiredError,
+} from '@/lib/azure/agent-runtime-tier';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -32,17 +34,34 @@ export async function POST(req: NextRequest) {
   try { body = await req.json(); } catch { body = {}; }
   const agent = typeof body?.agent === 'string' ? body.agent.trim() : '';
   const question = typeof body?.question === 'string' ? body.question.trim() : '';
+  // Agent definition passed from the editor — REQUIRED only when the MAF Gov
+  // tier serves the run (no Foundry project to load the definition from). The
+  // Foundry tier loads the agent by name from the project and ignores these.
+  const instructions = typeof body?.instructions === 'string' ? body.instructions : undefined;
+  const model = typeof body?.model === 'string' ? body.model : undefined;
   if (!agent) return NextResponse.json({ ok: false, error: 'agent (agent name) required' }, { status: 400 });
   if (!question) return NextResponse.json({ ok: false, error: 'question required' }, { status: 400 });
 
   try {
-    const data = await runAgentAndInspect(agent, question);
-    return NextResponse.json({ ok: true, data });
+    const { tier, inspection } = await runAgentInspectTiered({
+      agentName: agent,
+      question,
+      userOid: session.claims.oid,
+      instructions,
+      model,
+    });
+    return NextResponse.json({ ok: true, tier, data: inspection });
   } catch (e: any) {
     if (e instanceof FoundryAgentNotConfiguredError) {
       return NextResponse.json(
         { ok: false, code: 'not_configured', error: e.message, hint: e.hint, missing: 'LOOM_FOUNDRY_PROJECT_ENDPOINT' },
         { status: 501 },
+      );
+    }
+    if (e instanceof MafAgentDefinitionRequiredError) {
+      return NextResponse.json(
+        { ok: false, code: 'maf_needs_definition', error: e.message, tier: selectAgentTier().tier },
+        { status: 400 },
       );
     }
     const status = e instanceof FoundryAgentError ? e.status : 502;

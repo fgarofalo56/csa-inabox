@@ -217,6 +217,11 @@ The operator's standard is unchanged: **Loom is Fabric-class AI on pure Azure + 
 
 **Priority P1 · Effort XL.**
 
+**Build status (Wave 5).**
+- ✅ **Orchestrator tier** — the cross-item Copilot orchestrator MAF tier is built and live: `apps/copilot-maf/` (real agent loop against Gov AOAI direct, Console tool-dispatch callback with OBO), auto-selected in `copilot-orchestrator.ts` by `isGovCloud() && LOOM_MAF_ENDPOINT`, `platform/fiab/bicep/modules/copilot/maf.bicep` deploys it.
+- ✅ **Agent-run tier (this wave)** — the Foundry Agent Service thread/run/step inspector path now has the Gov backstop: `apps/copilot-maf/src/agent-run.ts` (`POST /agent-run` → real agent loop → `AgentRunInspection`), Console selection plumbing `lib/azure/agent-runtime-tier.ts` (`selectAgentTier()` + `runAgentInspectTiered()`), wired into `app/api/foundry/agents/run/route.ts`; the Agents playground passes the agent definition + badges which runtime served the run. Unit-tested (`agent-runtime-tier.test.ts`). No new bicep params (reuses `LOOM_MAF_ENDPOINT`).
+- ⬜ **TODO (advanced tool-parity, deferred):** streaming deltas from the MAF agent-run; multi-turn thread reuse (MAF thread ids are synthetic per-run today); connected-agent sub-agent fan-out on the MAF tier; native `code_interpreter` / `file_search` emulation; and Loom-native (Cosmos-persisted) agent AUTHORING/LISTING so a Gov-no-Foundry deployment can populate the Agents list without a Foundry project (the panel currently sources agent definitions from the Foundry project list — AIF-14's per-agent Cosmos persistence is the substrate for this).
+
 ---
 
 ## AIF-9 — Foundry Connections CRUD
