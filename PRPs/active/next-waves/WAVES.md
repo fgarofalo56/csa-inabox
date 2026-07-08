@@ -535,3 +535,26 @@ DP-10/DP-16 follow FGC-30 (Wave 8); DP-11 follows W18 (Wave 6) — all of which 
 
 This raises the plan to **20 waves** (18 existing + 2 new) and **~133 scheduled items** (~116 + 17 DP), with
 3 DP items folded into Wave 11 and 14 across the two new waves.
+
+---
+
+## Addendum (2026-07-08, live-found bug): Lineage garbage collection on delete (LIN-GC)
+
+**Live repro:** after the 07-08 purge of 160 UAT workspaces (+435 items), the Analyze → Lineage surfaces
+still render those items and their lineage. Root cause: item/workspace delete paths (per-item DELETE,
+workspace cascade, `POST /api/workspaces/bulk-delete`) remove the Cosmos doc + `deleteLoomDoc` search doc
+but never clean the **metadata plane** — the Purview Data Map entities (registered at provision/scan time)
+and any Loom-native Weave lineage edges keep serving lineage for dead assets
+(`app/api/catalog/lineage/route.ts` federates Purview Atlas / UC / OneLake, so deleted-in-Loom ≠ deleted-in-lineage).
+
+- **LIN-GC-1** Delete-time metadata cleanup: extend the shared item/workspace delete + bulk-delete cascade to
+  best-effort delete the matching Purview entity (Atlas by qualifiedName/guid via `purview-client`) and any
+  Weave/edge-graph edges referencing the item; fire-and-forget with outcome recorded, never blocks the delete. `[CATALOG, P1, M]`
+- **LIN-GC-2** Orphan reconciliation sweep: an admin-triggerable (and scheduled) job that diffs Purview entities
+  tagged as Loom-provisioned against live Cosmos items and flags/purges orphans — this also performs the
+  **one-time cleanup of the debris already live** from the 07-08 purge. Admin UI: a "Reconcile lineage" action
+  on the Lineage/Catalog admin surface with a dry-run preview list before purge. `[CATALOG, P1, M]`
+- **LIN-GC-3** Lineage views render-side guard: nodes whose Loom item 404s get a "deleted" badge/ghost style
+  instead of appearing alive (defense-in-depth while GC propagates). `[CATALOG, P2, S]`
+
+**Slot:** ride Wave 2's W8 (impact analysis) plumbing — same lineage clients + shared delete choke points.
