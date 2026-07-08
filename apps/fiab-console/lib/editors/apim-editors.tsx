@@ -2591,7 +2591,31 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
     }
   }, [id]);
 
-  const setBundleText = (text: string) => patchState({ bundle: text.split('\n').map(s => s.trim()).filter(Boolean) });
+  // Bundle composition is DERIVED from the real attached components — never
+  // free-typed (no-freeform-config). It reflects exactly what this data product
+  // wraps: curated Data Map assets, registered datasets, linked glossary terms,
+  // the access policy, and any published API. Persisted into state.bundle so the
+  // Purview register call (register-purview) always ships accurate descriptors.
+  const derivedBundle = useMemo(() => {
+    const lines: string[] = [];
+    for (const a of (state.dataAssets || [])) lines.push(`Data asset: ${a.name}${a.entityType ? ` (${a.entityType})` : ''}`);
+    for (const d of (state.datasets || [])) lines.push(`Dataset: ${d.name}${d.typeName ? ` (${d.typeName})` : ''}`);
+    for (const g of (state.glossaryLinks || [])) lines.push(`Glossary term: ${g.name}`);
+    if (state.accessPolicy) lines.push('Access policy: configured');
+    if (state.apimApiId) lines.push(`Published API: ${state.apimApiPath || state.apimApiId}`);
+    return lines;
+  }, [state.dataAssets, state.datasets, state.glossaryLinks, state.accessPolicy, state.apimApiId, state.apimApiPath]);
+
+  // Keep the persisted bundle in sync with the derived composition. Uses the
+  // functional setState updater (fresh prev) + an equality guard so it never
+  // loops and never spuriously marks the form dirty on load.
+  useEffect(() => {
+    setState((prev) => {
+      const cur = prev.bundle || [];
+      if (cur.length === derivedBundle.length && cur.every((v, i) => v === derivedBundle[i])) return prev;
+      return { ...prev, bundle: derivedBundle };
+    });
+  }, [derivedBundle]);
 
   // ---- F6 lifecycle: Publish / Set to draft / Set to expired ----
   // The server (/api/data-products/[id]/status) is the authoritative guard:
@@ -3118,17 +3142,25 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
                   <Option value="Expired">Expired</Option>
                 </Dropdown>
               </Field>
-              <Field label="Bundle (one per line — datasets, contracts, APIs, policies)" style={{ gridColumn: '1 / -1' }}>
-                <Textarea value={state.bundle.join('\n')} onChange={(_, d) => setBundleText(d.value)} rows={6} placeholder={'Dataset: silver_revenue (Delta)\nSemantic contract: orders.yaml (v2)\nAPIM API: orders-api v2.1'} />
-              </Field>
             </div>
-            {state.bundle.length > 0 && (
-              <>
-                <Subtitle2 style={{ marginTop: tokens.spacingVerticalS }}><Library20Regular style={{ verticalAlign: 'text-bottom', marginRight: tokens.spacingHorizontalXS }} />Bundle preview</Subtitle2>
-                <div className={s.cardGrid}>
-                  {state.bundle.map((b, i) => <div key={i} className={s.card}>{b}</div>)}
-                </div>
-              </>
+            <Subtitle2 style={{ marginTop: tokens.spacingVerticalM }}>
+              <Library20Regular style={{ verticalAlign: 'text-bottom', marginRight: tokens.spacingHorizontalXS }} />
+              Bundle composition
+            </Subtitle2>
+            <Caption1 style={{ display: 'block', marginBottom: tokens.spacingVerticalS, color: tokens.colorNeutralForeground3 }}>
+              Auto-composed from what this product wraps — add components in the <strong>Data assets</strong>, <strong>Datasets</strong>, <strong>Glossary</strong>, and <strong>Access policies</strong> tabs. These descriptors ship to the Purview Unified Catalog on registration.
+            </Caption1>
+            {state.bundle.length > 0 ? (
+              <div className={s.cardGrid}>
+                {state.bundle.map((b, i) => <div key={i} className={s.card}>{b}</div>)}
+              </div>
+            ) : (
+              <EmptyState
+                icon={<Library20Regular />}
+                title="Nothing bundled yet"
+                body="This data product doesn't wrap any components yet. Attach curated Data Map assets, register datasets, link glossary terms, or set an access policy — the bundle composition builds itself from what you add."
+                primaryAction={{ label: 'Add data assets', onClick: () => setTab('data-assets') }}
+              />
             )}
           </>
         )}
@@ -3185,7 +3217,17 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
                 <TableHeaderCell />
               </TableRow></TableHeader>
               <TableBody>
-                {(state.datasets || []).length === 0 && <TableRow><TableCell>No datasets mapped yet.</TableCell><TableCell /><TableCell /><TableCell /><TableCell /></TableRow>}
+                {(state.datasets || []).length === 0 && (
+                  <TableRow>
+                    <TableCell colSpan={5} style={{ padding: 0 }}>
+                      <EmptyState
+                        icon={<Code20Regular />}
+                        title="No datasets mapped yet"
+                        body="Register data assets (Atlas entities) into Purview and map them to this data product using the form above. Classifications attach inline from the tenant label taxonomy."
+                      />
+                    </TableCell>
+                  </TableRow>
+                )}
                 {(state.datasets || []).map((d) => (
                   <TableRow key={d.qualifiedName}>
                     <TableCell><strong>{d.name}</strong></TableCell>
@@ -3244,7 +3286,16 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
               </TableRow></TableHeader>
               <TableBody>
                 {assets.length === 0 && !assetsLoading && (
-                  <TableRow><TableCell>No data assets attached yet. Click <strong>Add assets</strong> to search the Data Map.</TableCell><TableCell /><TableCell /><TableCell /><TableCell /><TableCell /></TableRow>
+                  <TableRow>
+                    <TableCell colSpan={6} style={{ padding: 0 }}>
+                      <EmptyState
+                        icon={<Database20Regular />}
+                        title="No data assets attached yet"
+                        body="Curate the physical assets this product wraps from the Microsoft Purview Data Map. The publish guard requires at least one attached asset."
+                        primaryAction={id === 'new' ? undefined : { label: 'Add assets', onClick: () => setAssetPanelOpen(true) }}
+                      />
+                    </TableCell>
+                  </TableRow>
                 )}
                 {assets.map((a) => (
                   <TableRow key={a.guid}>
@@ -3314,7 +3365,17 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
             <Table size="small" aria-label="Glossary terms">
               <TableHeader><TableRow><TableHeaderCell>Term</TableHeaderCell><TableHeaderCell>GUID</TableHeaderCell><TableHeaderCell /></TableRow></TableHeader>
               <TableBody>
-                {(state.glossaryLinks || []).length === 0 && <TableRow><TableCell>No glossary terms linked yet.</TableCell><TableCell /><TableCell /></TableRow>}
+                {(state.glossaryLinks || []).length === 0 && (
+                  <TableRow>
+                    <TableCell colSpan={3} style={{ padding: 0 }}>
+                      <EmptyState
+                        icon={<Library20Regular />}
+                        title="No glossary terms linked yet"
+                        body="Create a business glossary term and link it to this data product using the form above. Linked terms carry the product's semantics into the Purview Unified Catalog."
+                      />
+                    </TableCell>
+                  </TableRow>
+                )}
                 {(state.glossaryLinks || []).map((g) => (
                   <TableRow key={g.name}>
                     <TableCell><strong>{g.name}</strong></TableCell>
@@ -3376,7 +3437,18 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
             <Table size="small" aria-label="Permitted purposes">
               <TableHeader><TableRow><TableHeaderCell>Purpose</TableHeaderCell><TableHeaderCell>Description</TableHeaderCell></TableRow></TableHeader>
               <TableBody>
-                {(!state.accessPolicy?.allowedPurposes?.length) && <TableRow><TableCell>No purposes defined yet — click Manage policies.</TableCell><TableCell /></TableRow>}
+                {(!state.accessPolicy?.allowedPurposes?.length) && (
+                  <TableRow>
+                    <TableCell colSpan={2} style={{ padding: 0 }}>
+                      <EmptyState
+                        icon={<Key20Regular />}
+                        title="No purposes defined yet"
+                        body="Access to this data product is governed by permitted purposes. Click Manage policies to define who can request access and for what purpose — enforced by the Purview access-policy engine."
+                        primaryAction={isNew ? undefined : { label: 'Manage policies', onClick: () => setPoliciesOpen(true) }}
+                      />
+                    </TableCell>
+                  </TableRow>
+                )}
                 {(state.accessPolicy?.allowedPurposes || []).map((p) => (
                   <TableRow key={p.name}><TableCell><strong>{p.name}</strong></TableCell><TableCell>{p.description || '—'}</TableCell></TableRow>
                 ))}
