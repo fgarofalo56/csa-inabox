@@ -597,6 +597,9 @@ param speechServicesEnabled bool = false
 @description('Deploy a single-kind Language (CognitiveServices TextAnalytics) account, Entra-only.')
 param languageServicesEnabled bool = false
 
+@description('Deploy a single-kind Translator (CognitiveServices TextTranslation) account, Entra-only. Backs the TranslateText AI-enrichment pipeline activity (SVC-1).')
+param translatorEnabled bool = false
+
 @description('Deploy an Azure Machine Learning workspace + its KV/Storage/AppInsights dependencies. Default ON (zero-gate notebook AML path) — opt OUT for GCC-High/DoD or cost-sensitive deploys.')
 param mlWorkspaceEnabled bool = true
 
@@ -2078,6 +2081,21 @@ module dpLanguage 'modules/deploy-planner/cognitive-account.bicep' = if (useSing
     location: location
     kind: 'TextAnalytics'
     nameFragment: 'language'
+    consolePrincipalId: dpConsolePrincipalId
+    skipRoleGrants: skipRoleGrants
+    complianceTags: complianceTags
+  }
+}
+
+// SVC-1 — Translator (TextTranslation) account backing the TranslateText
+// AI-enrichment pipeline activity. Console UAMI granted Cognitive Services User.
+module dpTranslator 'modules/deploy-planner/cognitive-account.bicep' = if (useSingleDlz && translatorEnabled) {
+  name: 'dp-translator'
+  scope: singleDlzRg
+  params: {
+    location: location
+    kind: 'TextTranslation'
+    nameFragment: 'translator'
     consolePrincipalId: dpConsolePrincipalId
     skipRoleGrants: skipRoleGrants
     complianceTags: complianceTags

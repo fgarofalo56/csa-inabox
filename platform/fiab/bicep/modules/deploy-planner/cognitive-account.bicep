@@ -7,6 +7,7 @@
 //   - visionServices        → kind 'ComputerVision'
 //   - speechServices        → kind 'SpeechServices'
 //   - languageServices      → kind 'TextAnalytics'      (Language service)
+//   - translator            → kind 'TextTranslation'    (Translator service, SVC-1)
 //
 // Self-contained: a single Microsoft.CognitiveServices/accounts resource with
 // local auth disabled (Entra-only), a custom subdomain (required for token
@@ -22,8 +23,8 @@ targetScope = 'resourceGroup'
 @description('Primary region')
 param location string
 
-@description('Cognitive Services account kind: CognitiveServices (multi), FormRecognizer (Document Intelligence), ContentSafety, ComputerVision (Vision), SpeechServices (Speech), or TextAnalytics (Language).')
-@allowed(['CognitiveServices', 'FormRecognizer', 'ContentSafety', 'ComputerVision', 'SpeechServices', 'TextAnalytics'])
+@description('Cognitive Services account kind: CognitiveServices (multi), FormRecognizer (Document Intelligence), ContentSafety, ComputerVision (Vision), SpeechServices (Speech), TextAnalytics (Language), or TextTranslation (Translator).')
+@allowed(['CognitiveServices', 'FormRecognizer', 'ContentSafety', 'ComputerVision', 'SpeechServices', 'TextAnalytics', 'TextTranslation'])
 param kind string
 
 @description('Short name fragment (e.g. aiservices / docintel / contentsafety) used in the resource name + subdomain.')

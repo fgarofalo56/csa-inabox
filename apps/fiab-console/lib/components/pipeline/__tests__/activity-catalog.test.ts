@@ -5,14 +5,34 @@ import {
 import { ACTIVITY_FORMS, activityLoomKind } from '../activity-forms';
 
 describe('activity-catalog', () => {
-  it('exposes all three Fabric palette categories', () => {
+  it('exposes all four palette categories (incl. AI enrich)', () => {
     const mt = byCategory('move-transform');
     const orch = byCategory('orchestration');
     const cf = byCategory('control-flow');
+    const ai = byCategory('ai-enrich');
     expect(mt.length).toBeGreaterThan(0);
     expect(orch.length).toBeGreaterThan(0);
     expect(cf.length).toBeGreaterThan(0);
-    expect(mt.length + orch.length + cf.length).toBe(ACTIVITY_CATALOG.length);
+    expect(ai.length).toBe(4); // SVC-1 — Document Intelligence / Vision / Language / Translator
+    expect(mt.length + orch.length + cf.length + ai.length).toBe(ACTIVITY_CATALOG.length);
+  });
+
+  it('AI-enrich activities are real WebActivity nodes discriminated by _loomKind', () => {
+    const kinds = ['DocumentIntelligenceAnalyze', 'VisionAnalyzeImage', 'LanguageAnalyzeText', 'TranslateText'];
+    for (const k of kinds) {
+      const def = findByKey(k);
+      expect(def, k).toBeDefined();
+      expect(def!.category).toBe('ai-enrich');
+      // Emitted as a native ADF WebActivity so it saves + runs against the factory.
+      const a = def!.build(`${def!.namePrefix}1`);
+      expect(a.type).toBe('WebActivity');
+      expect(activityLoomKind(a)).toBe(k);
+      const tp = a.typeProperties as Record<string, any>;
+      expect(tp.method).toBe('POST');
+      expect(tp.authentication?.type).toBe('MSI');
+    }
+    // Plain Web still resolves first for a bare type lookup (no _loomKind).
+    expect(findByType('WebActivity')?.key).toBe('Web');
   });
 
   it('covers all Fabric activity types required by the parity spec', () => {
