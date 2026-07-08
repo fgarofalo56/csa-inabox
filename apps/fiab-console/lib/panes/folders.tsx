@@ -51,6 +51,7 @@ import { findItemType } from '@/lib/catalog/fabric-item-types';
 import { getItemTypeIcon } from '@/lib/components/item-type-icon';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { endorsementBadge } from '@/lib/editors/endorsement-control';
+import { ImpactAnalysisPanel } from '@/lib/components/catalog/impact-analysis-panel';
 
 const useStyles = makeStyles({
   toolbar: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, marginBottom: tokens.spacingVerticalS, flexWrap: 'wrap' },
@@ -375,6 +376,9 @@ export function FoldersPane({ workspaceId }: FoldersPaneProps): React.JSX.Elemen
   const [renameItem, setRenameItem] = useState<WorkspaceItem | null>(null);
   const [renameItemName, setRenameItemName] = useState('');
   const [confirmItemDelete, setConfirmItemDelete] = useState<WorkspaceItem | null>(null);
+  // W8 impact-analysis gate: the delete may only proceed once the impact panel
+  // reports readiness (no downstream dependents, or an explicit typed confirm).
+  const [impactReady, setImpactReady] = useState(false);
   const [moveItem, setMoveItem] = useState<WorkspaceItem | null>(null);
 
   // ---- multi-select + bulk actions --------------------------------------
@@ -508,7 +512,7 @@ export function FoldersPane({ workspaceId }: FoldersPaneProps): React.JSX.Elemen
             <MenuItem onClick={() => router.push(`/items/${it.itemType}/${it.id}`)}>Open</MenuItem>
             <MenuItem onClick={() => setMoveItem(it)}>Move to folder…</MenuItem>
             <MenuItem onClick={() => openRenameItem(it)}>Rename</MenuItem>
-            <MenuItem onClick={() => setConfirmItemDelete(it)}>Delete</MenuItem>
+            <MenuItem onClick={() => { setImpactReady(false); setConfirmItemDelete(it); }}>Delete</MenuItem>
           </MenuList>
         </MenuPopover>
       </Menu>
@@ -896,7 +900,7 @@ export function FoldersPane({ workspaceId }: FoldersPaneProps): React.JSX.Elemen
       </Dialog>
 
       {/* Confirm delete item */}
-      <Dialog open={!!confirmItemDelete} onOpenChange={(_e, d) => { if (!d.open) setConfirmItemDelete(null); }}>
+      <Dialog open={!!confirmItemDelete} onOpenChange={(_e, d) => { if (!d.open) { setConfirmItemDelete(null); setImpactReady(false); } }}>
         <DialogSurface>
           <DialogBody>
             <DialogTitle>Delete item</DialogTitle>
@@ -905,11 +909,23 @@ export function FoldersPane({ workspaceId }: FoldersPaneProps): React.JSX.Elemen
                 Delete &quot;{confirmItemDelete?.displayName}&quot;? This removes the item from the
                 workspace catalog. Linked back-end resources are not affected.
               </Body1>
+              {/* W8 — cross-catalog impact analysis over the real lineage store. */}
+              {confirmItemDelete && (
+                <div style={{ marginTop: tokens.spacingVerticalM }}>
+                  <ImpactAnalysisPanel
+                    type={confirmItemDelete.itemType}
+                    id={confirmItemDelete.id}
+                    itemName={confirmItemDelete.displayName}
+                    action="delete"
+                    onReadyChange={(ready) => setImpactReady(ready)}
+                  />
+                </div>
+              )}
             </DialogContent>
             <DialogActions>
-              <Button appearance="secondary" onClick={() => setConfirmItemDelete(null)}>Cancel</Button>
-              <Button appearance="primary" disabled={busy}
-                onClick={async () => { if (confirmItemDelete) await onDeleteItem(confirmItemDelete.id); setConfirmItemDelete(null); }}>
+              <Button appearance="secondary" onClick={() => { setConfirmItemDelete(null); setImpactReady(false); }}>Cancel</Button>
+              <Button appearance="primary" disabled={busy || !impactReady}
+                onClick={async () => { if (confirmItemDelete) await onDeleteItem(confirmItemDelete.id); setConfirmItemDelete(null); setImpactReady(false); }}>
                 Delete
               </Button>
             </DialogActions>
