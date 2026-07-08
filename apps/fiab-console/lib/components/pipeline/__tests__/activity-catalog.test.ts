@@ -13,12 +13,12 @@ describe('activity-catalog', () => {
     expect(mt.length).toBeGreaterThan(0);
     expect(orch.length).toBeGreaterThan(0);
     expect(cf.length).toBeGreaterThan(0);
-    expect(ai.length).toBe(4); // SVC-1 — Document Intelligence / Vision / Language / Translator
+    expect(ai.length).toBe(5); // SVC-1 (4) + SVC-8 ModerateText
     expect(mt.length + orch.length + cf.length + ai.length).toBe(ACTIVITY_CATALOG.length);
   });
 
   it('AI-enrich activities are real WebActivity nodes discriminated by _loomKind', () => {
-    const kinds = ['DocumentIntelligenceAnalyze', 'VisionAnalyzeImage', 'LanguageAnalyzeText', 'TranslateText'];
+    const kinds = ['DocumentIntelligenceAnalyze', 'VisionAnalyzeImage', 'LanguageAnalyzeText', 'TranslateText', 'ModerateText'];
     for (const k of kinds) {
       const def = findByKey(k);
       expect(def, k).toBeDefined();

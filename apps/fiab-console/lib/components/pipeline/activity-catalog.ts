@@ -771,6 +771,17 @@ export const ACTIVITY_CATALOG: ActivityTypeDef[] = [
       [{ Text: '' }] as unknown as Record<string, unknown>,
     ),
   },
+  {
+    // SVC-8 — extends the already-built Content Safety client as a pipeline step.
+    key: 'ModerateText', label: 'Moderate text (Content Safety)',
+    description: 'Screen a free-text column for harmful content (Hate / SelfHarm / Sexual / Violence) with Azure AI Content Safety before it lands in silver/gold. Requires LOOM_CONTENT_SAFETY_ENDPOINT.',
+    category: 'ai-enrich', type: 'WebActivity', namePrefix: 'ModerateText',
+    color: '#7c3aed', fg: '#fff', runnable: true,
+    build: (name) => aiEnrichWebActivity(
+      name, 'content-safety', 'ModerateText',
+      { text: '' },
+    ),
+  },
 ];
 
 /** Lookup by ADF type string. */
