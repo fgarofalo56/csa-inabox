@@ -802,7 +802,20 @@ function RegisterSourceWizard({ onRegistered }: { onRegistered: () => void }) {
                   </div>
                   {submitError && (
                     <MessageBar intent="error">
-                      <MessageBarBody><MessageBarTitle>Register failed</MessageBarTitle>{submitError}</MessageBarBody>
+                      <MessageBarBody>
+                        <MessageBarTitle>Register failed</MessageBarTitle>
+                        {submitError}
+                        {/* Databricks Unity Catalog needs the workspace's UC metastore id,
+                            which only the account-admin discovery on Catalog → Metastores can
+                            resolve. Turn the honest gate into a one-click hand-off. */}
+                        {/metastore/i.test(submitError) && (
+                          <div style={{ marginTop: tokens.spacingVerticalS }}>
+                            <a className={s.linkOut} href="/catalog/metastores">
+                              Open Catalog → Metastores <Open16Regular />
+                            </a>
+                          </div>
+                        )}
+                      </MessageBarBody>
                     </MessageBar>
                   )}
                 </>

@@ -1491,6 +1491,8 @@ function MicrosoftMcpServersSection({
   const [servers, setServers] = useState<MsRemoteStatus[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [enablingAll, setEnablingAll] = useState(false);
+  const [enableAllMsg, setEnableAllMsg] = useState<{ intent: 'success' | 'warning'; text: string } | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true); setError(null);
@@ -1508,6 +1510,60 @@ function MicrosoftMcpServersSection({
 
   useEffect(() => { void load(); }, [load]);
 
+  // "Enable all" — opt every configurable Microsoft remote MCP server IN for
+  // this tenant in one action (loom "enable all + on by default"). We PUT
+  // enabled:true to the per-tenant override store for each server that isn't
+  // force-on'd by the deployment env, preserving any endpoint/secret already
+  // set. This is HONEST, not vaporware: enabling flips the opt-in bit, but a
+  // server only becomes a live Copilot tool when its effective state is
+  // `configured` (real endpoint + satisfiable auth). The refresh + summary
+  // below reports exactly how many are Copilot-ready now vs still need a
+  // per-user Connect (entra-obo consent), a Key Vault secret, or a GA endpoint
+  // — each card shows its own precise gate.
+  const enableAll = useCallback(async () => {
+    const current = servers;
+    if (!current || current.length === 0) return;
+    setEnablingAll(true);
+    setEnableAllMsg(null);
+    let enabled = 0;
+    let failed = 0;
+    for (const sv of current) {
+      if (sv.config?.envForced) continue; // env force-on — already enabled, immutable from UI
+      const payload: Record<string, unknown> = { id: sv.id, enabled: true };
+      if (sv.config?.supportsEndpoint) payload.endpoint = (sv.override?.endpoint ?? sv.endpoint ?? '').trim();
+      if (sv.config?.supportsSecret) payload.secretName = (sv.override?.secretName ?? '').trim();
+      try {
+        const r = await clientFetch('/api/admin/mcp-servers/ms-remote/config', {
+          method: 'PUT',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        const j = await r.json();
+        if (j.ok) enabled++; else failed++;
+      } catch { failed++; }
+    }
+    // Re-read fresh status so the cards + the honest summary reflect the real
+    // effective state (configured vs gated) the server computes.
+    try {
+      const j = await clientFetch('/api/admin/mcp-servers/ms-remote').then((r) => r.json());
+      const list = (Array.isArray(j.servers) ? j.servers : [])
+        .filter((e: MsRemoteStatus) => e.id !== 'powerbi-remote') as MsRemoteStatus[];
+      setServers(list);
+      const live = list.filter((e) => e.configured).length;
+      const gated = list.length - live;
+      setEnableAllMsg({
+        intent: failed ? 'warning' : 'success',
+        text:
+          `Enabled ${enabled} Microsoft MCP server${enabled === 1 ? '' : 's'} for this tenant. ` +
+          `${live} ${live === 1 ? 'is' : 'are'} ready for the Loom Copilot now; ` +
+          `${gated} still need a per-user Connect (delegated consent), a Key Vault secret, or a GA endpoint — see each card.` +
+          (failed ? ` ${failed} could not be enabled.` : ''),
+      });
+    } catch { /* keep prior card state; the per-card status is still accurate */ }
+    onChanged();
+    setEnablingAll(false);
+  }, [servers, onChanged]);
+
   // Nothing to show and no error (route returned an empty family) → render
   // nothing rather than an empty heading.
   if (!loading && !error && (!servers || servers.length === 0)) return null;
@@ -1518,12 +1574,31 @@ function MicrosoftMcpServersSection({
       <div className={s.msSectionHead}>
         <Text weight="semibold">Microsoft MCP servers</Text>
         <Badge appearance="tint" color="brand" size="small">Preview</Badge>
+        <div style={{ flex: 1 }} />
+        <Button
+          size="small"
+          appearance="primary"
+          icon={<Checkmark20Regular />}
+          disabled={busy || enablingAll || loading || !servers || servers.length === 0}
+          onClick={() => { void enableAll(); }}
+        >
+          {enablingAll ? 'Enabling…' : 'Enable all'}
+        </Button>
       </div>
       <Caption1 className={s.meta}>
         Curated Microsoft-hosted MCP servers (<Link href="https://github.com/microsoft/mcp" target="_blank" rel="noreferrer">github.com/microsoft/mcp</Link>).
-        Microsoft Learn is on by default with no authentication; every other server is opt-in and
-        inert until you set its env var / Key Vault secret and consent the delegated scopes.
+        Microsoft Learn is on by default with no authentication; every other server is opt-in. Use <strong>Enable all</strong>
+        {' '}to opt every server in for this tenant — each then becomes a live Copilot tool once its endpoint / Key Vault secret is set and its delegated scopes are consented.
       </Caption1>
+
+      {enableAllMsg && (
+        <MessageBar intent={enableAllMsg.intent}>
+          <MessageBarBody>
+            <MessageBarTitle>{enableAllMsg.intent === 'success' ? 'Servers enabled' : 'Enabled with follow-ups'}</MessageBarTitle>
+            {enableAllMsg.text}
+          </MessageBarBody>
+        </MessageBar>
+      )}
 
       {error && (
         <MessageBar intent="error">
