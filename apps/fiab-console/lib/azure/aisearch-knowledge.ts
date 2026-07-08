@@ -40,9 +40,7 @@ import {
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import {
   searchServiceEndpoint,
-  resolveServiceName,
   SearchDataError,
-  SearchNotDeployedError,
 } from './search-index-client';
 import { detectLoomCloud, type LoomCloud } from './cloud-endpoints';
 
@@ -494,4 +492,4 @@ export async function retrieveKnowledge(name: string, input: RetrieveInput, serv
 }
 
 /** Resolve the configured service name (throws SearchNotDeployedError when unset). */
-export { resolveServiceName };
+export { resolveServiceName } from './search-index-client';
