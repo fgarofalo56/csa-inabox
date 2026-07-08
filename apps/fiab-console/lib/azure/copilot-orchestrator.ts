@@ -1804,6 +1804,21 @@ function msConnectedMcpPrefixes(reg: LoomToolRegistry): string[] {
   return [...connected];
 }
 
+/**
+ * Approximate model context window (tokens) for a deployment name, for the
+ * CTS-05 utilization gauge. Loose substring match; a conservative 128k default
+ * covers the current AOAI chat models. Only affects the meter's denominator —
+ * never gates a call.
+ */
+export function contextWindowForDeployment(deployment: string): number {
+  const m = (deployment || '').toLowerCase();
+  if (/o1|o3|o4|gpt-4\.1/.test(m)) return 200000;
+  if (/gpt-4o|gpt-4-turbo|gpt-35-turbo-16k|gpt-3\.5-turbo-16k/.test(m)) return 128000;
+  if (/gpt-4-32k/.test(m)) return 32768;
+  if (/gpt-35-turbo|gpt-3\.5-turbo|gpt-4\b/.test(m)) return 16385;
+  return 128000;
+}
+
 export async function* orchestrate(opts: OrchestrateOptions): AsyncIterable<OrchestratorStep> {
   const { prompt, sessionId, userOid } = opts;
   // CTS-01: turn wall-clock — measured from the first line of orchestration to
@@ -2027,6 +2042,33 @@ export async function* orchestrate(opts: OrchestrateOptions): AsyncIterable<Orch
   // hits, agentic knowledge-base retrieval, schema reads) across the turn.
   let turnCitations: Citation[] = [];
 
+  // ── CTS-05: context-window meter ──────────────────────────────────────────
+  // Tokenize each prompt contributor at message-build time (before the AOAI
+  // call) and emit ONE `context_usage` step so the segmented meter renders with
+  // real per-segment counts. memory/knowledge are 0 until CTS-08 / RAG
+  // pre-injection land — first-class segments now so the meter needs no reshape.
+  const skillNames = msSkillsForPane(opts.contextSlug).map((sk) => sk.name);
+  const toolNames = (tools as Array<{ function?: { name?: string } }>).map((t) => t?.function?.name || '').filter(Boolean);
+  const systemMessagesText = messages.filter((m) => m.role === 'system').map((m) => m.content || '').join('\n\n');
+  const contextUsage = buildContextUsagePayload({
+    contextWindow: contextWindowForDeployment(target.deployment),
+    // messages[0] is always the base system prompt (persona/pane).
+    systemPromptTokens: estimateTokens(messages[0]?.content || ''),
+    personaContextTokens: opts.personaContext && Object.keys(opts.personaContext).length
+      ? estimateTokens(`Current editor context (JSON): ${JSON.stringify(opts.personaContext).slice(0, 4000)}`)
+      : 0,
+    skills: { count: skillNames.length, tokens: estimateTokens(msSkillBlocks), names: skillNames },
+    tools: { count: toolNames.length, tokens: estimateTokens(JSON.stringify(tools)), names: toolNames },
+    memoryTokens: 0,
+    knowledgeTokens: 0,
+    conversation: { messages: 1, tokens: estimateTokens(prompt) },
+    systemPromptPreview: systemMessagesText,
+  });
+  const contextUsageStep: OrchestratorStep = { kind: 'context_usage', usage: contextUsage };
+  await persistStep(sessionId, userOid, contextUsageStep);
+  yield contextUsageStep;
+  // ──────────────────────────────────────────────────────────────────────────
+
   for (let i = 0; i < maxIter; i++) {
     let resp: any;
     try {
@@ -2093,6 +2135,9 @@ export async function* orchestrate(opts: OrchestrateOptions): AsyncIterable<Orch
         // CTS-04: grounding citations (omit the key entirely when none, so older
         // turns / no-grounding turns render exactly as before).
         ...(turnCitations.length ? { citations: turnCitations } : {}),
+        // CTS-05: mirror the context-window breakdown onto the final step so a
+        // replayed session restores the meter without a separate lookup.
+        contextUsage,
       };
       await persistStep(sessionId, userOid, finalStep);
       yield finalStep;

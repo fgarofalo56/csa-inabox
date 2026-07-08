@@ -50,6 +50,7 @@ import { applyChange } from '@/lib/copilot/apply-change';
 import { CitationChips, type Citation } from './help-copilot/citations';
 import { receiptScopeFromTutorialId } from './help-copilot/tutorial-scope';
 import { MessageMetadataBar } from './copilot/message-metadata-bar';
+import { ContextUsagePanel } from './copilot/context-usage-panel';
 import type { TurnMeta, TurnDetail, ContextUsage } from './copilot/types';
 
 /**
@@ -686,6 +687,15 @@ export function CopilotPane() {
     void sendText(draft);
   }
 
+  // CTS-05: the context meter reflects the most recent turn that reported a
+  // breakdown (docked under the chat, updates each turn).
+  const latestContextUsage = (() => {
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      if (msgs[i].who === 'copilot' && msgs[i].contextUsage) return msgs[i].contextUsage;
+    }
+    return undefined;
+  })();
+
   if (!open) return null;
 
   // Keep: apply the approved change to the registered editor bridge. If the
@@ -896,6 +906,12 @@ export function CopilotPane() {
             </div>
           ))}
         </div>
+        {latestContextUsage && (
+          <ContextUsagePanel
+            usage={latestContextUsage}
+            messageCount={msgs.filter((m) => m.who !== 'system').length}
+          />
+        )}
         {msgs.length <= 1 && (
           <div className={s.chipsBar}>
             <CopilotChips ctx={copilotCtx} busy={busy} onSelect={(prompt) => void sendText(prompt)} />
