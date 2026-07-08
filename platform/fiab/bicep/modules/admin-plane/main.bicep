@@ -1984,6 +1984,11 @@ module aiFoundry 'ai-foundry.bicep' = if (aiFoundryEnabled && empty(existingFoun
     privateDnsZoneNotebooksId: network.outputs.privateDnsZoneIds.notebooks
     adminEntraGroupId: adminEntraGroupId
     consolePrincipalId: identity.outputs.uamiConsolePrincipalId
+    // Grant the AI Search system MSI Cognitive Services OpenAI User on the AOAI
+    // account so an integrated-vectorization vectorizer / AzureOpenAIEmbedding
+    // skill can embed server-side as the search identity (AIF-2). Empty when AI
+    // Search is disabled / BYO.
+    searchServicePrincipalId: (aiSearchEnabled && empty(existingAiSearchService)) ? aiSearch!.outputs.searchPrincipalId : ''
     skipRoleGrants: skipRoleGrants
     complianceTags: complianceTags
   }

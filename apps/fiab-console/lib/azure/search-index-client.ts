@@ -234,10 +234,13 @@ export {
   // Vector search designer
   VECTOR_METRICS, defaultHnswParameters, buildVectorSearchSection,
   parseVectorSearchSection, indexHasVectorField,
+  // Integrated-vectorization vectorizers
+  EMBEDDING_MODELS, defaultAzureOpenAIVectorizer, vectorizerNames,
 } from './search-field-shapes';
 export type {
   IndexerSchedule, SemanticConfig, SemanticFieldRef,
   VectorAlgorithm, VectorProfile, VectorMetric,
+  Vectorizer, AzureOpenAIVectorizerParameters,
 } from './search-field-shapes';
 
 /** GET /indexes — list every index on the service (summary form). */
