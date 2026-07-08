@@ -1083,10 +1083,10 @@ function MsRemoteConfigDialog({
               ) : (
                 <Caption1 className={s.hint}>
                   {status.auth === 'entra-obo'
-                    ? 'Enable this opt-in server for your tenant. Sign in again afterward to consent the delegated scopes.'
+                    ? 'On by default for your tenant — turn this off to opt out. When on, sign in again to consent the delegated scopes.'
                     : status.auth === 'key-vault'
-                      ? 'Enable this opt-in server. It becomes callable once a Key Vault secret name is set below.'
-                      : 'Enable this server for your tenant.'}
+                      ? 'On by default for your tenant — turn this off to opt out. It becomes callable once a Key Vault secret name is set below.'
+                      : 'On by default for your tenant — turn this off to opt out.'}
                 </Caption1>
               )}
             </div>
@@ -1273,7 +1273,7 @@ function MsRemoteMcpCard({
         <div className={s.pbiTitleCol}>
           <div className={s.pbiTitleRow}>
             <Text weight="semibold">{status.name}</Text>
-            {status.defaultOn && <Badge appearance="tint" color="success" size="small">Core</Badge>}
+            {status.defaultOn && <Badge appearance="tint" color="success" size="small">On by default</Badge>}
             {status.preview && <Badge appearance="tint" color="brand" size="small">Preview</Badge>}
             {!status.defaultOn && status.optIn && <Badge appearance="outline" color="informative" size="small">Opt-in</Badge>}
             {status.configured && status.registered && <Badge appearance="tint" color="success" size="small">Connected</Badge>}
@@ -1289,10 +1289,10 @@ function MsRemoteMcpCard({
         {!status.configured ? (
           <MessageBar intent="warning">
             <MessageBarBody>
-              <MessageBarTitle>Opt-in — not configured</MessageBarTitle>
+              <MessageBarTitle>On by default — not yet configured</MessageBarTitle>
               {g?.message}
               <Caption1 className={s.gateDetail}>
-                {g?.enableEnv && <>Set <code>{g.enableEnv}=true</code> to enable. </>}
+                {g?.enableEnv && <>On by default — set <code>{g.enableEnv}=false</code> to disable. </>}
                 {g?.endpointEnv && <>Set <code>{g.endpointEnv}</code> to the published endpoint. </>}
                 {g?.secretEnv && <>Provide the GitHub PAT as the Key Vault secret named in <code>{g.secretEnv}</code>. </>}
                 {g?.oboResource && <>Delegated access is exchanged against <code>{g.oboResource}</code>. </>}
@@ -1510,16 +1510,16 @@ function MicrosoftMcpServersSection({
 
   useEffect(() => { void load(); }, [load]);
 
-  // "Enable all" — opt every configurable Microsoft remote MCP server IN for
-  // this tenant in one action (loom "enable all + on by default"). We PUT
-  // enabled:true to the per-tenant override store for each server that isn't
-  // force-on'd by the deployment env, preserving any endpoint/secret already
-  // set. This is HONEST, not vaporware: enabling flips the opt-in bit, but a
+  // "Enable all" — every Microsoft/Azure remote MCP server is ALREADY on by
+  // default (opt-OUT posture), so this button is now a one-click REPAIR / reset:
+  // it PUTs enabled:true to the per-tenant override store for each server that
+  // isn't force-on'd by the deployment env, clearing any prior admin opt-out and
+  // preserving any endpoint/secret already set. This is HONEST, not vaporware: a
   // server only becomes a live Copilot tool when its effective state is
-  // `configured` (real endpoint + satisfiable auth). The refresh + summary
-  // below reports exactly how many are Copilot-ready now vs still need a
-  // per-user Connect (entra-obo consent), a Key Vault secret, or a GA endpoint
-  // — each card shows its own precise gate.
+  // `configured` (real endpoint + satisfiable auth). The refresh + summary below
+  // reports exactly how many are Copilot-ready now vs still need a per-user
+  // consent (entra-obo), a Key Vault secret, or a GA endpoint — each card shows
+  // its own precise gate.
   const enableAll = useCallback(async () => {
     const current = servers;
     if (!current || current.length === 0) return;
@@ -1604,8 +1604,7 @@ function MicrosoftMcpServersSection({
       </div>
       <Caption1 className={s.meta}>
         Curated Microsoft-hosted MCP servers (<Link href="https://github.com/microsoft/mcp" target="_blank" rel="noreferrer">github.com/microsoft/mcp</Link>).
-        Microsoft Learn is on by default with no authentication; every other server is opt-in. Use <strong>Enable all</strong>
-        {' '}to opt every server in for this tenant — each then becomes a live Copilot tool once its endpoint / Key Vault secret is set and its delegated scopes are consented.
+        Every server is <strong>on by default</strong> (opt-out) — each becomes a live Copilot tool once its endpoint / Key Vault secret is set and its delegated scopes are consented; until then it stays honestly gated. Disable any server per-tenant from its <strong>Configure</strong> dialog. <strong>Enable all</strong> is a one-click reset that re-enables anything you have turned off.
       </Caption1>
 
       {enableAllMsg && (

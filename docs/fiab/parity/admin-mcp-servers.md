@@ -3,8 +3,10 @@
 Source UI: Loom-native admin surface (`/admin/mcp-servers`). Not a 1:1 mirror of a
 single Azure/Fabric page — it is Loom's own control plane for the Model Context
 Protocol tools Loom Copilot can call. Parity here means **every server in the
-catalog can be seen, enabled, configured, and probed from this one page** — no
-env-var redeploy required for the opt-in remote family.
+catalog can be seen, enabled/disabled, configured, and probed from this one page**
+— no env-var redeploy required. The Microsoft/Azure remote family is on by default
+(opt-OUT); an admin disables any server per-tenant or configures its endpoint / KV
+secret inline.
 
 ## Server classes on the page
 

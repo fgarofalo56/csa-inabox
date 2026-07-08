@@ -36,11 +36,13 @@
  *   • ~30 Microsoft agent skills (github.com/microsoft/skills, in
  *     lib/copilot/ms-skills) ground Loom Copilot in Azure-native tools and light
  *     up the matching MS MCP tools once a server is connected.
- *   • no-fabric-dependency: Microsoft Learn (https://learn.microsoft.com/api/mcp,
- *     no auth) is the SOLE default-on server; every other server is strictly
- *     opt-in (per-user Microsoft Entra On-Behalf-Of, or a GitHub PAT in Key
- *     Vault), and Microsoft Fabric / Power BI MCP servers never sit on a default
- *     path. No api.fabric / api.powerbi host is reached unless explicitly opted in.
+ *   • Default-ON posture (operator directive 2026-07-08): every Microsoft/Azure
+ *     remote server is on by default (opt-OUT), honestly gated until its endpoint
+ *     / per-user Entra On-Behalf-Of consent / GitHub PAT (Key Vault) exists; a
+ *     tenant admin disables any per-server. no-fabric-dependency is the ONE
+ *     exception: Microsoft Fabric / Power BI MCP servers stay opt-in and never sit
+ *     on a default path. No api.fabric / api.powerbi host is reached unless
+ *     explicitly opted in.
  *
  * Honest Fluent MessageBar gates (named env var / role / scope / Key Vault secret
  * / bicep module) come from the panels themselves whenever a prerequisite
@@ -80,15 +82,16 @@ export default function McpServersPage() {
         content: 'The single home for Model Context Protocol tools Loom Copilot can call. Browse the curated, gov-safe catalog and deploy a server with a guided wizard (internal Azure Container App + per-field Key Vault secretRef + auto registration), manage deployed servers with live status and teardown, and register external MCP endpoints. Includes the Microsoft MCP + agent-skills family and publishes Loom itself as one MCP endpoint.',
         tips: [
           'Deploy secrets go to Key Vault as secretRefs — never plaintext in the form.',
-          'Microsoft Learn (learn.microsoft.com/api/mcp) is the only default-on server; every other server is strictly opt-in.',
-          'Enable + configure each opt-in Microsoft remote server inline — the enable toggle, the endpoint, and the Key Vault secret name — no env-var redeploy required.',
-          'Fabric / Power BI MCP servers never sit on a default path — they connect only when explicitly opted in.',
+          'Every Microsoft/Azure remote MCP server is on by default (opt-out) — each stays honestly gated until its endpoint / Key Vault secret / delegated consent exists; disable any per-tenant from its Configure dialog.',
+          'Configure each Microsoft remote server inline — the endpoint and the Key Vault secret name — no env-var redeploy required.',
+          'Fabric / Power BI MCP servers are the one exception — they never sit on a default path and connect only when explicitly opted in (no-fabric-dependency).',
         ],
       }}
     >
       {/* Page intro — names the Microsoft MCP + agent-skills family so the page
-          title/intro copy reflects what the panel surfaces (web3-ui Loom tokens,
-          no-fabric-dependency: Learn is the only default-on entry). */}
+          title/intro copy reflects what the panel surfaces (web3-ui Loom tokens;
+          default-ON posture: every Microsoft/Azure remote server is on by default
+          and opt-out, except the Fabric/Power BI family per no-fabric-dependency). */}
       <div className={styles.intro}>
         <Body1 className={styles.lead}>
           Browse, deploy, and connect Model Context Protocol (MCP) servers so Loom Copilot can
@@ -103,10 +106,12 @@ export default function McpServersPage() {
           that ground Copilot in Azure-native tools.
         </Body1>
         <Caption1 className={styles.attribution}>
-          Microsoft Learn is connected day-one — no auth, no Microsoft Fabric dependency. Every
-          other server is strictly opt-in (per-user Microsoft Entra On-Behalf-Of, or a GitHub PAT
-          stored in Key Vault) and shows an honest gate naming the exact env var, scope, or secret
-          to provide; Microsoft Fabric / Power BI MCP servers never sit on a default path.
+          Every Microsoft/Azure remote server is on by default (opt-out) — Microsoft Learn is
+          connected day-one with no auth, and the rest go live as their per-user Microsoft Entra
+          On-Behalf-Of consent, GitHub PAT (Key Vault), or GA endpoint is satisfied; until then each
+          shows an honest gate naming the exact env var, scope, or secret to provide. Disable any
+          server per-tenant from its Configure dialog. Microsoft Fabric / Power BI MCP servers are
+          the one exception — they never sit on a default path (no-fabric-dependency).
         </Caption1>
       </div>
       <McpServersPanel />

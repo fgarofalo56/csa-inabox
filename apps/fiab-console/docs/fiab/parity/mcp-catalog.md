@@ -266,29 +266,36 @@ their OWN delegated token (defaults to `oboResource`).
 
 | id | server | auth | resolved endpoint (env override) | default-on? |
 |----|--------|------|----------------------------------|-------------|
-| `ms-learn` | Microsoft Learn | none | `https://learn.microsoft.com/api/mcp` | **YES — sole default-on** |
-| `azure-arm` | Azure Resources (ARM) | entra-obo (`management.azure.com/user_impersonation`) | endpoint-env-gated (self-host w/ OBO) | opt-in |
-| `ms-foundry` | Microsoft Foundry | entra-obo (`ai.azure.com/.default`) | `https://mcp.ai.azure.com` (preview) | opt-in |
-| `github` | GitHub | key-vault PAT | `https://api.githubcopilot.com/mcp` | opt-in |
-| `ms-graph` | Microsoft Graph (Enterprise) | entra-obo (`graph.microsoft.com/.default`) | `https://mcp.svc.cloud.microsoft/enterprise` (preview) | opt-in |
-| `m365` | Microsoft 365 | entra-obo (Graph) | endpoint-env-gated (not GA) | opt-in |
-| `teams` | Microsoft Teams | entra-obo (Graph) | endpoint-env-gated (not GA) | opt-in |
-| `onedrive-sharepoint` | OneDrive & SharePoint | entra-obo (Graph) | endpoint-env-gated (not GA) | opt-in |
-| `ms-sentinel` | Microsoft Sentinel | entra-obo (`sentinel.microsoft.com/.default`) | `https://sentinel.microsoft.com/mcp/data-exploration` (preview) | opt-in |
-| `admin-center` | M365 Admin Center | entra-obo (Graph) | endpoint-env-gated (not GA) | opt-in |
-| `dataverse` | Microsoft Dataverse | entra-obo (per-org origin) | endpoint-env-gated (`https://<org>.crm.dynamics.com/api/mcp`) | opt-in |
-| `powerbi-remote` | Power BI (remote) | entra-obo (`analysis.windows.net/powerbi/api`) | `https://api.fabric.microsoft.com/v1/mcp/powerbi` | opt-in (unchanged) |
+| `ms-learn` | Microsoft Learn | none | `https://learn.microsoft.com/api/mcp` | **on by default** (live day-one, no auth) |
+| `azure-arm` | Azure Resources (ARM) | entra-obo (`management.azure.com/user_impersonation`) | endpoint-env-gated (self-host w/ OBO) | on by default (gated: endpoint) |
+| `ms-foundry` | Microsoft Foundry | entra-obo (`ai.azure.com/.default`) | `https://mcp.ai.azure.com` (preview) | on by default (gated: OBO client + consent) |
+| `github` | GitHub | key-vault PAT | `https://api.githubcopilot.com/mcp` | on by default (gated: KV PAT) |
+| `ms-graph` | Microsoft Graph (Enterprise) | entra-obo (`graph.microsoft.com/.default`) | `https://mcp.svc.cloud.microsoft/enterprise` (preview) | on by default (gated: OBO client + consent) |
+| `m365` | Microsoft 365 | entra-obo (Graph) | endpoint-env-gated (not GA) | on by default (gated: endpoint) |
+| `teams` | Microsoft Teams | entra-obo (Graph) | endpoint-env-gated (not GA) | on by default (gated: endpoint) |
+| `onedrive-sharepoint` | OneDrive & SharePoint | entra-obo (Graph) | endpoint-env-gated (not GA) | on by default (gated: endpoint) |
+| `ms-sentinel` | Microsoft Sentinel | entra-obo (`sentinel.microsoft.com/.default`) | `https://sentinel.microsoft.com/mcp/data-exploration` (preview) | on by default (gated: OBO client + Security Reader) |
+| `admin-center` | M365 Admin Center | entra-obo (Graph) | endpoint-env-gated (not GA) | on by default (gated: endpoint) |
+| `dataverse` | Microsoft Dataverse | entra-obo (per-org origin) | endpoint-env-gated (`https://<org>.crm.dynamics.com/api/mcp`) | on by default (gated: endpoint + tenant setting) |
+| `powerbi-remote` | Power BI (remote) | entra-obo (`analysis.windows.net/powerbi/api`) | `https://api.fabric.microsoft.com/v1/mcp/powerbi` | **opt-in — never default** (Fabric family) |
 
-**`no-fabric-dependency`:** Microsoft Learn (auth `none`, zero config) is the
-**SOLE default-on** entry — `defaultOnRemoteMcps()` returns it, and
-`listMcpServers` / `buildMcpShim` inject it as a synthetic enabled row so
-`mcp_mslearn_*` tools are live day-one with zero admin action. Every other entry
-is inert until its gate is satisfied. Where a Microsoft host is not yet GA
-(`m365` / `teams` / `onedrive-sharepoint` / `admin-center` / `azure-arm`) the
-`defaultEndpoint` is **empty** and the admin must supply `endpointEnv` first — so
-an unconfirmed host is NEVER on a live path. No `api.fabric.microsoft.com` /
-`api.powerbi.com` host appears on any default path; the Power BI + Dataverse
-(tenant-setting) + Fabric rows stay strictly opt-in.
+**Default-ON posture (operator directive 2026-07-08):** every Microsoft/Azure
+remote entry carries `defaultOn: true` and is enabled by default (opt-OUT). Each
+stays HONESTLY GATED — `listMcpServers` / `decorateMcpServers` inject a synthetic
+enabled row (so its tools are advertised) **only when
+`effectiveRemoteState(e, override).configured` is true** (real endpoint + shared
+OBO client / consent / KV PAT). Microsoft Learn (auth `none`, zero config) is
+live day-one; the rest go live as their gate is satisfied. Where a Microsoft host
+is not yet GA (`m365` / `teams` / `onedrive-sharepoint` / `admin-center` /
+`azure-arm`) the `defaultEndpoint` is **empty**, so a default-on-but-unwired
+server is inert and NEVER on a live path. A tenant admin can disable any server
+per-tenant (`enabled:false` override beats `defaultOn`).
+
+**`no-fabric-dependency` (the ONE exception):** the Power BI remote entry is
+**NOT** default-on — it stays strictly opt-in, gated by `isPbiMcpConfigured()`,
+because the Fabric/Power BI family must never sit on a default path. No
+`api.fabric.microsoft.com` / `api.powerbi.com` host appears on any default path;
+the Fabric Core / Fabric-RTI deployable rows stay explicit opt-ins too.
 
 Selectors mirror the Power BI helpers: `msRemoteMcp(id)`,
 `msRemoteMcpConfigured(id)` (generalized `isPbiMcpConfigured()`),
@@ -352,7 +359,9 @@ appear automatically in the existing `McpCatalogBrowser`.
 - **`LOOM_MS_LEARN_MCP_ENABLED` defaults true** → Learn tools live day-one with
   zero config (synthetic enabled row from `defaultOnRemoteMcps()`); set `=false`
   to disable, or `LOOM_MS_LEARN_MCP_ENDPOINT` to override.
-- Per-server opt-in toggles (`LOOM_<SERVER>_MCP_ENABLED`) + endpoint/scope
+- Per-server toggles (`LOOM_<SERVER>_MCP_ENABLED`) now act as an opt-OUT / force
+  override: unset ⇒ the server follows its `defaultOn: true` posture (on by
+  default); `=false` forces it off deployment-wide. These + endpoint/scope
   overrides fold into the `loomBackends.mcp` sub-object — the same
   under-the-256-ARM-param trick as `loomWarehouseBackend` / the Power BI envs.
 - OBO servers **reuse the existing confidential client** (`LOOM_MSAL_CLIENT_ID` +
@@ -362,9 +371,11 @@ appear automatically in the existing `McpCatalogBrowser`.
 
 ## Rule compliance
 
-- **`no-fabric-dependency`**: Microsoft Learn (no auth) is the SOLE default-on
-  server; everything else opt-in; Fabric / Fabric-RTI / Power BI / Dataverse are
-  explicit opt-ins; no `api.fabric` / `api.powerbi` host on any default path.
+- **`no-fabric-dependency`**: every Microsoft/Azure remote server is on by default
+  (opt-OUT) yet honestly gated — only `configured` servers reach the Copilot.
+  Microsoft Learn (no auth) is live day-one. The Fabric/Power BI family is the ONE
+  exception: Fabric / Fabric-RTI / Power BI remain explicit opt-ins (never
+  default-on); no `api.fabric` / `api.powerbi` host on any default path.
 - **`no-vaporware`**: real endpoints + auth; honest Fluent MessageBar gate naming
   the exact env / secret / scope / consent when unconfigured; `?probe=1` makes a
   REAL `initialize → tools/list` call; not-yet-GA hosts are endpoint-env-gated.
