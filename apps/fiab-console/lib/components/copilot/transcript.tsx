@@ -30,6 +30,7 @@ import { CopilotResult } from '@/lib/components/copilot-result';
 import { tagResult } from '@/lib/components/copilot-result-tagger';
 import { CitationChips } from '@/lib/components/help-copilot/citations';
 import { CopilotMarkdown } from './markdown';
+import { MessageMetadataBar } from './message-metadata-bar';
 import type { Step, Turn } from './types';
 
 const useStyles = makeStyles({
@@ -197,12 +198,16 @@ export function Transcript({ turns, assistantName = 'Copilot', ratings, onFeedba
                     <CitationChips citations={turn.citations} />
                   )}
 
-                  {turn.usage && (
-                    <Caption1 className={s.usage}>
-                      {turn.usage.toolCalls > 0 ? `${turn.usage.toolCalls} tool${turn.usage.toolCalls === 1 ? '' : 's'} · ` : ''}
-                      {turn.usage.totalTokens.toLocaleString()} tokens
-                      {turn.usage.aoaiCalls > 1 ? ` · ${turn.usage.aoaiCalls} turns` : ''}
-                    </Caption1>
+                  {turn.final !== undefined && !turn.streaming && (
+                    <MessageMetadataBar
+                      model={turn.model}
+                      provider={turn.provider}
+                      usage={turn.usage}
+                      promptTokens={turn.promptTokens}
+                      completionTokens={turn.completionTokens}
+                      turnLatencyMs={turn.turnLatencyMs}
+                      costUsd={turn.costUsd}
+                    />
                   )}
 
                   {turn.final !== undefined && !turn.streaming && (

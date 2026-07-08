@@ -113,6 +113,9 @@ import { POWERBI_REMOTE_MCP_GATE_TEXT } from '@/lib/copilot/powerbi-skills';
 // is opt-in and emits an honest catalog gate until connected (no-fabric-dependency,
 // no-vaporware).
 import { msSkillSystemBlocksForPane, msMcpPrefix } from '@/lib/copilot/ms-skills';
+// rel-T85 list-price estimator (CTS-01) — pure, shared with the admin usage
+// dashboard so the per-turn $ figure uses one source of truth.
+import { estCostUsd } from '@/lib/copilot/cost-estimate';
 
 // ---------- item-type slug normalization (build-assist robustness) ----------
 // The model often guesses item-type slugs with underscores or marketing names
@@ -1093,12 +1096,74 @@ export function buildDefaultRegistry(): LoomToolRegistry {
 
 export interface OrchestratorUsage { promptTokens: number; completionTokens: number; totalTokens: number; aoaiCalls: number; toolCalls: number; }
 
+// Per-turn transparency shapes (CTS-01/02/05). Mirror the client-side
+// definitions in lib/components/copilot/types.ts (kept in sync by hand — the
+// client module can't import the server orchestrator, which pulls in the Azure
+// SDK). All additive/optional so older clients render unchanged.
+export interface TurnToolDetail {
+  name: string;
+  serverName?: string;
+  durationMs: number;
+  ok: boolean;
+  error?: string;
+}
+export interface TurnDetail {
+  tools: TurnToolDetail[];
+  routedAgentName?: string;
+  routedReason?: string;
+}
+/** Grounding citation shape the transcript renders (CTS-04). Mirrors the UI
+ *  `Citation` in lib/components/help-copilot/citations + copilot/types. */
+export interface Citation {
+  id: string;
+  path: string;
+  kind: string;
+  heading?: string;
+  url?: string;
+  preview: string;
+}
+export interface ContextUsage {
+  contextWindow: number;
+  systemPromptTokens: number;
+  personaContextTokens: number;
+  skills: { count: number; tokens: number; names: string[] };
+  tools: { count: number; tokens: number; names: string[] };
+  memory: { tokens: number };
+  knowledge: { tokens: number };
+  conversationHistory: { messages: number; tokens: number };
+  totalInputTokens: number;
+  remainingTokens: number;
+  utilizationPct: number;
+  segmentSum: number;
+  segmentsConsistent: boolean;
+  systemPromptPreview: string;
+}
+
 export type OrchestratorStep =
   | { kind: 'thought'; content: string }
   | { kind: 'tool_call'; name: string; args: unknown; callId: string }
   | { kind: 'tool_result'; name: string; callId: string; durationMs: number; result?: unknown; error?: string }
-  | { kind: 'final'; content: string; usage?: OrchestratorUsage; model?: string }
+  | {
+      kind: 'final';
+      content: string;
+      usage?: OrchestratorUsage;
+      model?: string;
+      // CTS-01 status-bar metadata.
+      provider?: string;
+      promptTokens?: number;
+      completionTokens?: number;
+      turnLatencyMs?: number;
+      costUsd?: number;
+      // CTS-02 per-message detail roll-up.
+      turnDetail?: TurnDetail;
+      // CTS-04 grounding citations mapped from tool provenance.
+      citations?: Citation[];
+      // CTS-05 context-window breakdown (also emitted standalone below).
+      contextUsage?: ContextUsage;
+    }
   | { kind: 'error'; error: string; code?: string }
+  // CTS-05: emitted once per turn at message-build time, before the AOAI loop.
+  | { kind: 'context_usage'; usage: ContextUsage }
   // A tool proposed a code/query/transform change. The pane renders a Monaco
   // DiffEditor (before|after) and applies it ONLY on explicit Keep — never
   // automatically. `target` is a deterministic editor-bridge key
@@ -1730,6 +1795,9 @@ function msConnectedMcpPrefixes(reg: LoomToolRegistry): string[] {
 
 export async function* orchestrate(opts: OrchestrateOptions): AsyncIterable<OrchestratorStep> {
   const { prompt, sessionId, userOid } = opts;
+  // CTS-01: turn wall-clock — measured from the first line of orchestration to
+  // the `final` step so the status bar reports real end-to-end latency.
+  const turnStart = Date.now();
   // Copilot surface tag for per-persona usage metering (string, defaults to
   // `cross-item`). Distinct from the resolved CopilotPersonaDef below.
   const personaTag = opts.persona || 'cross-item';
@@ -1989,7 +2057,19 @@ export async function* orchestrate(opts: OrchestrateOptions): AsyncIterable<Orch
           return;
         }
       }
-      const finalStep: OrchestratorStep = { kind: 'final', content: msg.content || '', usage, model: target.deployment };
+      const finalStep: OrchestratorStep = {
+        kind: 'final',
+        content: msg.content || '',
+        usage,
+        model: target.deployment,
+        // CTS-01: split token counts, real turn latency, provider badge, and a
+        // list-price $ estimate (rel-T85 table) over the REAL token counts.
+        provider: 'Azure OpenAI',
+        promptTokens: usage.promptTokens,
+        completionTokens: usage.completionTokens,
+        turnLatencyMs: Date.now() - turnStart,
+        costUsd: estCostUsd(target.deployment, usage.promptTokens, usage.completionTokens),
+      };
       await persistStep(sessionId, userOid, finalStep);
       yield finalStep;
       // Fire-and-forget App Insights receipt — real token counts, never awaited.

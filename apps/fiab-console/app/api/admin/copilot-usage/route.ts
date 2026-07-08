@@ -21,6 +21,9 @@ import { getSession } from '@/lib/auth/session';
 import { requireTenantAdmin } from '@/lib/auth/feature-gate';
 import { queryLogs, MonitorError, MonitorNotConfiguredError, type LogQueryResult } from '@/lib/azure/monitor-client';
 import { apiServerError, apiHonestError } from '@/lib/api/respond';
+// rel-T85 list-price table + estimator — shared with the per-turn transparency
+// status bar (CTS-01) so the $ rate is derived in exactly one place.
+import { estCostUsd } from '@/lib/copilot/cost-estimate';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -28,36 +31,6 @@ export const dynamic = 'force-dynamic';
 const col = (r: LogQueryResult, name: string) => r.columns.indexOf(name);
 const numAt = (row: unknown[], i: number) => (i < 0 ? 0 : Number(row[i] ?? 0) || 0);
 const strAt = (row: unknown[], i: number) => (i < 0 ? '' : String(row[i] ?? ''));
-
-/**
- * Azure OpenAI published list price per 1K tokens (USD), keyed by a model
- * substring. Used to derive an ESTIMATED cost from the REAL token counts (the
- * numbers themselves are live AOAI usage; only the $ rate is list-price). Keyed
- * loosely so `gpt-4o-mini-2024-07-18` matches `gpt-4o-mini`. Embeddings models
- * bill input-only. A conservative default covers unrecognized deployments.
- */
-const PRICE_PER_1K: Record<string, { in: number; out: number }> = {
-  'gpt-4o-mini': { in: 0.00015, out: 0.0006 },
-  'gpt-4.1-mini': { in: 0.0004, out: 0.0016 },
-  'gpt-4.1-nano': { in: 0.0001, out: 0.0004 },
-  'gpt-4.1': { in: 0.002, out: 0.008 },
-  'gpt-4o': { in: 0.005, out: 0.015 },
-  'o4-mini': { in: 0.0011, out: 0.0044 },
-  'o3-mini': { in: 0.0011, out: 0.0044 },
-  'text-embedding-3-large': { in: 0.00013, out: 0 },
-  'text-embedding-3-small': { in: 0.00002, out: 0 },
-  'text-embedding-ada-002': { in: 0.0001, out: 0 },
-};
-const DEFAULT_PRICE = { in: 0.002, out: 0.008 };
-function priceFor(model: string): { in: number; out: number } {
-  const m = (model || '').toLowerCase();
-  const key = Object.keys(PRICE_PER_1K).find((k) => m.includes(k));
-  return key ? PRICE_PER_1K[key] : DEFAULT_PRICE;
-}
-function estCostUsd(model: string, promptTokens: number, completionTokens: number): number {
-  const p = priceFor(model);
-  return Number(((promptTokens / 1000) * p.in + (completionTokens / 1000) * p.out).toFixed(4));
-}
 
 export async function GET(req: NextRequest) {
   const s = getSession();
