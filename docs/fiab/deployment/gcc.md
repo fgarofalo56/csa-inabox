@@ -22,8 +22,14 @@ require GCC-High.
 |---|---|
 | Azure Commercial subscription paired with your M365 GCC tenant | `az account show --query tenantId` should match your GCC tenant |
 | Region | Any Azure Commercial US region (eastus, westus, eastus2, etc.) |
-| **Power BI Premium P-SKU** (P1 minimum) — **NOT F-SKU; F-SKU is unavailable in GCC** | Power BI admin portal |
 | Other prereqs same as Commercial baseline | See [Commercial deployment](commercial.md) |
+
+> **Optional — only with `LOOM_SEMANTIC_MODEL_BACKEND=powerbi`.** Semantic models
+> + reports run on the Azure-native tabular layer (Azure Analysis Services, which
+> is available in GCC's Commercial regions) by default — **no Power BI capacity is
+> required**. If you opt into the Power BI backend, GCC supports **P-SKU only
+> (P1 minimum) — F-SKU is unavailable in GCC**, provisioned via the Power BI admin
+> portal.
 
 ## Critical GCC limitations
 

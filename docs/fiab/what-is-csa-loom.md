@@ -39,12 +39,12 @@ as four things working together:
 ### 1. A push-button deployment
 
 - `azd up` CLI for platform engineers
-- "Deploy to Azure" template button for evaluators
+- `az deployment sub create` for CLI-first / pipeline deploys
 - Lands the full Loom stack into your own Azure subscription
 - 60–100 minutes from "begin" to "Loom Console open and ready"
-- Two-tier surface (azd + Deploy-to-Azure button); Azure Marketplace
-  Managed Application listing **deferred to backlog** per locked
-  decision LD-4 — Loom is currently free; you pay only for the
+- Two-tier surface (`azd up` + `az deployment sub create`); Azure
+  Marketplace Managed Application listing **deferred to backlog** per
+  locked decision LD-4 — Loom is currently free; you pay only for the
   underlying Azure consumption it stands up
 
 ### 2. A custom SaaS-feel front end (Loom Console)

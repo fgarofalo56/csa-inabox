@@ -4,7 +4,7 @@
 > listing.** Per [ADR fiab-0008](../adr/0008-deployment-shape.md) and
 > [AMENDMENTS A4](https://github.com/fgarofalo56/csa-inabox/blob/csa-loom-pillar/temp/fiab-prd/AMENDMENTS.md), the Marketplace
 > surface + pricing model are explicitly deferred to backlog. v1 ships
-> as `azd up` + Deploy-to-Azure button only.
+> as `azd up` + `az deployment sub create` only.
 
 ## Why deferred
 
@@ -45,7 +45,7 @@ only for Azure consumption underneath; Loom IP is **free in v1**.
 Triggers for revisiting Marketplace publishing:
 
 - Loom adoption reaches ~50+ customer installs across `azd up`
-  + Deploy-to-Azure paths
+  + `az deployment sub create` paths
 - Microsoft federal team requests Marketplace SKU for procurement
   reasons
 - Pricing strategy decision is locked (likely flat fee per capacity

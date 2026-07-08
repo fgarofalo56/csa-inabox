@@ -91,8 +91,9 @@ exactly what this product does:
 
 - **The threads** are your existing Azure-native services —
   Synapse Spark + Synapse Serverless SQL, Azure Databricks, Azure
-  Data Explorer, Microsoft Fabric Foundry, Power BI Premium, ADF,
-  APIM, Purview, AI Search, Azure OpenAI, Dataverse, Copilot Studio.
+  Data Explorer, Microsoft Fabric Foundry, Azure Analysis Services
+  (Power BI Premium opt-in), ADF, APIM, Purview, AI Search, Azure
+  OpenAI, Dataverse, Copilot Studio.
   Each one is a powerful primitive on its own.
 - **The fabric** is a single Fluent UI workspace that *looks and feels
   like Microsoft Fabric* — Lakehouse, Notebook, Warehouse, Semantic
@@ -150,7 +151,7 @@ weave that produces the Fabric experience inside any Azure tenant*.
 
 -   :material-rocket: [**Deployment**](deployment/index.md)
 
-    Quick start, per-path guides (azd CLI, Deploy-to-Azure button),
+    Quick start, per-path guides (azd CLI, `az deployment sub create`),
     per-boundary deployment.
 
 -   :material-cog: [**Workloads**](workloads/index.md)
@@ -187,12 +188,12 @@ Short, accurate answers to the most common questions:
 | # | Decision | Locked value |
 |---|---|---|
 | LD-1 | Public brand | **CSA Loom** (repo-internal nickname: `fiab`) |
-| LD-2 | Primary compute | Hybrid — Azure Databricks + Synapse Serverless + Azure Data Explorer + Power BI Premium |
+| LD-2 | Primary compute | Azure Databricks + Synapse Serverless + Azure Data Explorer + Azure Analysis Services (Power BI opt-in for Direct Lake parity) |
 | LD-3 | Cloud boundaries (v1) | Azure Commercial + GCC + GCC-High |
-| LD-4 | Deployment shape | Two-tier (azd CLI + Deploy-to-Azure button); Marketplace listing deferred to backlog |
+| LD-4 | Deployment shape | Two-tier (azd CLI + `az deployment sub create`); Marketplace listing deferred to backlog |
 | LD-5 | Console framework | Next.js 14 + Fluent UI v9 + MSAL BFF |
 | LD-6 | Tenancy | Single-sub + multi-sub modes |
-| LD-7 | Direct Lake parity | Power BI Premium Import + warm-cache materializer |
+| LD-7 | Direct Lake parity | Azure Analysis Services warm-cache materializer (default); Power BI Premium Import Direct-Lake-Shim (opt-in) |
 | LD-8 | IL5 catalog (v1.1) | Apache Atlas on AKS |
 | LD-9 | Mirroring engine | OSS Debezium + Spark Structured Streaming + Delta MERGE |
 | LD-10 | ADX model | Shared cluster per Admin Plane; database-per-DLZ |
