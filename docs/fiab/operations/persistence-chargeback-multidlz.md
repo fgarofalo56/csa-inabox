@@ -171,6 +171,6 @@ That guided flow is the gap that closes the partial state. Until it ships, the C
 - [Disaster recovery](disaster-recovery.md)
 - [Forward to Fabric migration](forward-to-fabric.md)
 - [Multi-sub / multi-tenant deployment guide](../deployment/multi-sub-multi-tenant.md)
-- [PRP-04 Setup Wizard](../../../PRPs/active/csa-loom/PRP-04-setup-wizard.md)
-- [PRP-05 Self-hosted Azure MCP Server](../../../PRPs/active/csa-loom/PRP-05-mcp-server.md)
+- [PRP-04 Setup Wizard](../../../PRPs/completed/csa-loom-pillar/PRP-04-setup-wizard.md)
+- [PRP-05 Self-hosted Azure MCP Server](../../../PRPs/completed/csa-loom-pillar/PRP-05-mcp-server.md)
 - Tasks #134 (Phase 2 real provisioning), #151 (PHASE 2 MEGA install wizard + RBAC)

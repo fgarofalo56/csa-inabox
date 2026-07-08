@@ -84,5 +84,5 @@ docker run -p 8000:8000 loom-setup-orchestrator
 ## Related
 
 - [Setup Wizard parity doc](../../docs/fiab/parity/setup-wizard.md)
-- [PRP-04](../../PRPs/active/csa-loom/PRP-04-setup-wizard.md)
+- [PRP-04](../../PRPs/completed/csa-loom-pillar/PRP-04-setup-wizard.md)
 - ADR: [fiab-0009 Copilot orchestration](../../docs/fiab/adr/0009-copilot-orchestration.md)

@@ -384,14 +384,14 @@ build plan:
 - **v2 (+6 months) — Fabric IQ family** — Ontology, Graph, Plan,
   Maps, HorizonDB-equivalent
 
-Per [PRP-00 README](../../PRPs/active/csa-loom/PRP-00-README.md) for
+Per [PRP-00 README](../../PRPs/completed/csa-loom-pillar/PRP-00-README.md) for
 the full PRP decomposition + wave schedule.
 
 ## Get involved
 
 - **GitHub epic:** [#279 — CSA Loom v1 build roadmap](https://github.com/fgarofalo56/csa-inabox/issues/279)
 - **Branch:** `csa-loom-pillar`
-- **Source documents:** [PRD](../../temp/fiab-prd/00-README.md), [Research wave](../../temp/fiab-research/), [PRPs](../../PRPs/active/csa-loom/PRP-00-README.md)
+- **Source documents:** [PRD](../../temp/fiab-prd/00-README.md), [Research wave](../../temp/fiab-research/), [PRPs](../../PRPs/completed/csa-loom-pillar/PRP-00-README.md)
 
 ## References
 

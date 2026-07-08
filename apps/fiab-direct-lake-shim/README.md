@@ -8,7 +8,7 @@ refresh against associated Power BI Premium semantic models.
 sub-second Direct Lake on OneLake documented openly in
 [Direct Lake parity workload page](../../docs/fiab/workloads/direct-lake-parity.md).
 
-**Status**: SCAFFOLDED. Real implementation per [PRP-08](../../PRPs/active/csa-loom/PRP-08-direct-lake-shim.md)
+**Status**: SCAFFOLDED. Real implementation per [PRP-08](../../PRPs/completed/csa-loom-pillar/PRP-08-direct-lake-shim.md)
 + [ADR fiab-0004](../../docs/fiab/adr/0004-direct-lake-parity.md).
 
 ## Tech stack
@@ -65,6 +65,6 @@ apps/fiab-direct-lake-shim/
 
 - [Direct-Lake Shim service docs](../../docs/fiab/services/direct-lake-shim.md)
 - [Direct Lake parity workload](../../docs/fiab/workloads/direct-lake-parity.md)
-- [PRP-08](../../PRPs/active/csa-loom/PRP-08-direct-lake-shim.md)
+- [PRP-08](../../PRPs/completed/csa-loom-pillar/PRP-08-direct-lake-shim.md)
 - [Direct-Lake-Shim stuck runbook](../../docs/fiab/runbooks/direct-lake-shim-stuck.md)
 - Research: [`temp/fiab-research/03-fabric-only-internals.md` §1](../../temp/fiab-research/03-fabric-only-internals.md)

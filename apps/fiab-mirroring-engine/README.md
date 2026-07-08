@@ -20,7 +20,7 @@ Fabric Mirroring parity. OSS Debezium + Spark Structured Streaming
 partner publishers (SAP / Qlik / Striim / Informatica) work
 unchanged.
 
-**Status**: SCAFFOLDED. Real implementation per [PRP-07](../../PRPs/active/csa-loom/PRP-07-mirroring-engine.md)
+**Status**: SCAFFOLDED. Real implementation per [PRP-07](../../PRPs/completed/csa-loom-pillar/PRP-07-mirroring-engine.md)
 + [ADR fiab-0006](../../docs/fiab/adr/0006-mirroring-engine.md).
 
 ## Tech stack
@@ -77,5 +77,5 @@ apps/fiab-mirroring-engine/
 
 - [Mirroring Engine service docs](../../docs/fiab/services/mirroring-engine.md)
 - [Mirroring parity workload](../../docs/fiab/workloads/mirroring-parity.md)
-- [PRP-07](../../PRPs/active/csa-loom/PRP-07-mirroring-engine.md)
+- [PRP-07](../../PRPs/completed/csa-loom-pillar/PRP-07-mirroring-engine.md)
 - [Mirroring CDC lag runbook](../../docs/fiab/runbooks/mirroring-cdc-lag.md)

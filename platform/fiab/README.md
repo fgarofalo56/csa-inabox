@@ -75,7 +75,7 @@ platform/fiab/
 **SCAFFOLDED.** Module stubs + parameter files + `main.bicep`
 top-level orchestrator are in place. Per-module Bicep implementation
 is the engineering work tracked under
-[PRP-02](../../PRPs/active/csa-loom/PRP-02-platform-bicep.md).
+[PRP-02](../../PRPs/completed/csa-loom-pillar/PRP-02-platform-bicep.md).
 
 To validate the scaffold:
 ```bash
@@ -100,7 +100,7 @@ azd up
 ## Reuse from existing csa-inabox
 
 Per [`temp/fiab-research/05-eslz-marketplace.md` §1](../../temp/fiab-research/05-eslz-marketplace.md)
-and [PRP-02](../../PRPs/active/csa-loom/PRP-02-platform-bicep.md):
+and [PRP-02](../../PRPs/completed/csa-loom-pillar/PRP-02-platform-bicep.md):
 
 **Reuse 1:1 from `Azure/data-management-zone` + `Azure/data-landing-zone`**:
 - `modules/network.bicep` → `modules/admin-plane/network.bicep`
@@ -116,5 +116,5 @@ and [PRP-02](../../PRPs/active/csa-loom/PRP-02-platform-bicep.md):
 - [Deployment overview](../../docs/fiab/deployment/index.md)
 - [Reference architecture](../../docs/fiab/architecture.md)
 - [Per-boundary dispatch matrix](../../docs/fiab/architecture.md#per-boundary-dispatch-matrix)
-- PRP: [PRP-02](../../PRPs/active/csa-loom/PRP-02-platform-bicep.md)
+- PRP: [PRP-02](../../PRPs/completed/csa-loom-pillar/PRP-02-platform-bicep.md)
 - ADR: [fiab-0008 Deployment shape](../../docs/fiab/adr/0008-deployment-shape.md), [fiab-0010 Container host](../../docs/fiab/adr/0010-container-host.md)

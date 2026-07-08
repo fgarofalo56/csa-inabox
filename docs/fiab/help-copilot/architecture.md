@@ -31,7 +31,7 @@
   - Streams `HelpStep` events: `tool_call`, `tool_result`, `citation`,
     `handoff`, `final`, `error`.
 - **RAG retriever** — `apps/fiab-console/lib/azure/loom-docs-index.ts`
-  - Builds the corpus by walking `docs/`, `PRPs/active/csa-loom`,
+  - Builds the corpus by walking `docs/`, `PRPs/completed/csa-loom-pillar`,
     `docs/fiab/adr`, and `apps/fiab-console/lib/{azure,editors,components}`.
   - Pushes chunks to either Azure AI Search (`loom-docs` index) or a
     Cosmos `help-copilot-corpus` container (PK `/kind`).

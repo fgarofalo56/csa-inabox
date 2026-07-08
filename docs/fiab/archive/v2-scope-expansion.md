@@ -148,7 +148,7 @@ the same pace as v1.
 ## Tracking
 
 - v2 scope locked in this doc, dated 2026-05-23
-- PRP-26 through PRP-40 stubs to be authored in `PRPs/active/csa-loom/`
+- PRP-26 through PRP-40 stubs to be authored in `PRPs/completed/csa-loom-pillar/`
   before any code begins
 - Each PRP gets a GitHub issue + label `csa-loom-v2`
 - v2 epic to be opened referencing this doc
