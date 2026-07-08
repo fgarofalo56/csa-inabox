@@ -116,6 +116,15 @@ param skipRoleGrants bool = false
 @maxValue(365)
 param recycleRetentionDays int = 30
 
+@description('DLZ storage account SKU (replication). Default Standard_ZRS = zone-redundant single region. Opt into Standard_GZRS/Standard_GRS/Standard_RAGZRS for a geo-redundant DR tier; see docs/fiab/operations/disaster-recovery.md.')
+@allowed([
+  'Standard_ZRS'
+  'Standard_GZRS'
+  'Standard_GRS'
+  'Standard_RAGZRS'
+])
+param storageSkuName string = 'Standard_ZRS'
+
 @description('Grant the Console UAMI "Storage Account Contributor" on the DLZ storage account so the OneLake Lifecycle Management rules editor can read/write blob lifecycle policies (managementPolicies/default). Off by default; set true when the lifecycle feature is enabled.')
 param consolePrincipalNeedsLifecycleWrite bool = false
 
@@ -176,6 +185,7 @@ module storage 'storage.bicep' = {
     workspaceId: adminPlaneLawId
     complianceTags: complianceTags
     recycleRetentionDays: recycleRetentionDays
+    storageSkuName: storageSkuName
   }
 }
 

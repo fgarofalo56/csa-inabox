@@ -122,10 +122,15 @@ single-region + zone-redundant posture, these are the honest, real options — e
 is an operator decision with cost and (for Cosmos multi-region) consistency
 implications:
 
-- **Geo-redundant data lake** — deploy the landing-zone storage as `Standard_GZRS`
-  (zone + geo) or `Standard_GRS` instead of `ZRS`. This adds an asynchronously
-  replicated secondary; failover is customer- or Microsoft-initiated and drops to
-  a single copy post-failover until re-paired.
+- **Geo-redundant data lake** — set the `storageSkuName` bicep param to
+  `Standard_GZRS` (zone + geo), `Standard_GRS`, or `Standard_RAGZRS` instead of
+  the default `Standard_ZRS`. The param is wired through
+  `platform/fiab/bicep/main.bicep` → `modules/landing-zone/main.bicep` →
+  `modules/landing-zone/storage.bicep`, so a single parameter override on
+  `az deployment sub create` promotes the lakehouse to a geo-redundant DR tier.
+  This adds an asynchronously replicated secondary; failover is customer- or
+  Microsoft-initiated and drops to a single copy post-failover until re-paired.
+  It is an opt-in cost/DR decision — the default stays `ZRS`.
 - **Multi-region Cosmos** — add a second `locations[]` region (and optionally
   `enableAutomaticFailover`) to `loom-console-cosmos.bicep`. Note: the account is
   currently **Serverless**, which requires a single write region — enabling
@@ -137,6 +142,30 @@ implications:
 
 Wire any of these through the bicep params and validate with a drill before
 relying on them — do not assume a value in a doc equals a deployed capability.
+
+!!! note "Known gap — no turnkey control-plane multi-region failover (tracked)"
+    The opt-ins above harden the **data** tier (lakehouse, Cosmos backup). What
+    the platform does **not** ship today is a **turnkey active-passive
+    control-plane**: a secondary Loom Console (ACA) in a paired region behind
+    Front Door with Cosmos multi-write and a documented RTO/RPO failover runbook.
+    You can assemble the pieces manually (multi-region Cosmos + a second ACA
+    environment + Front Door origin group), but there is no single flag that
+    stands it up. This is tracked as backlog item **`BR-CONTROLPLANE-DR`** in
+    `PRPs/active/next-waves/WAVES.md` (Wave 18 — "Loom control-plane multi-region
+    active-passive: Cosmos multi-write + secondary ACA behind Front Door + RTO/RPO
+    runbook"). Until it lands, plan region-loss recovery as a redeploy-from-Git of
+    the Console plus a Cosmos PITR restore, per the runbook above.
+
+## Generic DR reference guidance
+
+The broader, platform-agnostic DR patterns (active-passive multi-region
+topology, Delta deep-clone jobs, replication-lag monitoring, a full production
+readiness checklist) live in
+[Disaster Recovery Best Practices](../../best-practices/disaster-recovery.md).
+That page describes the older `deploy/bicep/` **reference architecture** — a
+target you can build toward — and is **not** a description of what a default
+CSA Loom deployment ships. This page (the one you are reading) is the honest,
+per-component posture of the *actual* shipped platform.
 
 ## DR drill (what you can actually rehearse)
 
@@ -155,6 +184,7 @@ A meaningful drill for the shipped posture:
 ## Related
 
 - [Cosmos PITR restore runbook](../runbooks/cosmos-pitr-restore.md)
+- [Disaster Recovery Best Practices (generic reference guidance)](../../best-practices/disaster-recovery.md)
 - [Capacity management](capacity-management.md)
 - [Upgrade & migration](upgrade-migration.md)
 - [Deployment — supported availability model](../deployment/quickstart.md#supported-availability-model)
