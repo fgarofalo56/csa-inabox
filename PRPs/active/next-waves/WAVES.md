@@ -406,3 +406,47 @@ Exact work items with target files. All P0/P1, one agent per item, parallel-safe
 - **G6** Agentic publish depth (description_for_model, deliver-as-is, connected-agent, auth mode) `[AGENTS, P2, M]`.
 
 Recommended slotting: G5+G1 with the AIF multi-agent waves (3–6); G2 with SVC-1's wave; G3 standalone; G4/G6 in the P2 tail.
+
+---
+
+## Addendum (2026-07-08, post-plan): Copilot transparency, skills library & long-term memory (CTS-01…17)
+
+`PRP-copilot-transparency-skills-memory.md` (this folder) ports the ATLAS-class chat UX onto Loom's
+Azure-native stack (Cosmos + Azure AI Search vectors — never Mongo/Qdrant/Neo4j). 17 items across five
+scope areas: per-message transparency/grounding, the segmented context-window meter, a skills library with
+per-skill toggles, a long-term memory brain, and MCP-in-chat visibility. Die-hard posture: **default-ON,
+opt-out — no enablement gate.** Slot alongside the AIF waves (shared Copilot/agent subsystem):
+
+- **Ships immediately — pair with the MCP default-ON flip (Wave 6 companion PR):**
+  - **CTS-09** MCP visibility in chat ("MCP this conversation" panel + per-call "via &lt;server&gt;" badge). `[CTS, P1, M]`
+- **Wave 5 (multi-agent spine — transparency rides the agent work):**
+  - **CTS-01** Per-message transparency status bar (model/tokens-in-out/cost-via-rel-T85/latency/tool-count). `[CTS, P1, M]`
+  - **CTS-02** Per-message collapsible detail badge (per-tool status, routing, delegation, parallelism). `[CTS, P1, M]`
+  - **CTS-04** Sources/grounding attribution on the cross-item orchestrator (docs/schema/memory citations). `[CTS, P1, M]`
+  - **CTS-05** Context-expander graphic (segmented window breakdown + pure invariant-tested segment-sum). `[CTS, P1, L]`
+- **Wave 6 (skills + app-runtime — skills library lands with the AIF skills work):**
+  - **CTS-07** Skills library + management (registry, custom builder, per-skill tenant-default-ON/user-opt-out). `[CTS, P1, XL]`
+  - **CTS-03** Admin-only deep debug/trace panel (Flow/JSON/Routing/Tools/Knowledge/Timeline). `[CTS, P2, L]`
+  - **CTS-10** Extend transparency + context meter to every AI surface (scoped per-pane assists). `[CTS, P2, M]`
+- **New dedicated "Memory & Brain" wave (slot as Wave 6.5, between Waves 6 and 7 — memory is its own item, from-scratch on Cosmos + AI Search):**
+  - **CTS-08** Long-term memory / brain (user + workspace scope, L0–L3 layered recall, admin visibility/purge). **Foundation.** `[CTS, P1, XL]`
+  - **CTS-12** Memory-write security guard (4-layer: injection scan + classifier + secret redaction + locked-field gate + audit). **Gov-critical hard dependency of CTS-08.** `[CTS, P2, L]`
+  - **CTS-06** "Dump conversation to long-term memory" action (pre-compaction extraction; manual override of auto-flush). `[CTS, P1, M]`
+  - **CTS-13** Nightly memory consolidation pass (REM-analog, Cosmos-native; dedupe/contradiction/topic-promotion). `[CTS, P3, L]`
+- **P2/P3 tail — fold into existing depth/tail waves (dedupe notes):**
+  - **CTS-14** Copilot replay → eval-suite harness. → **Wave 7**, alongside **AIF-13** AgentOps (shared trace store + redactor). `[CTS, P2, M]`
+  - **CTS-15** Proactive / ambient context injection. → **Wave 18**, feeds **BR-AMBIENT-FEED**. `[CTS, P2, M]`
+  - **CTS-16** Per-provider circuit breaker + learned model routing. → **Wave 9**, deepens **AIF-12** Model Router. `[CTS, P3, M]`
+  - **CTS-11** Skills self-evolution (auto-learn + guided synthesis). → **Wave 9** tail, rides CTS-07. `[CTS, P3, L]`
+  - **CTS-17** AI spend burn-rate projection + budget alert. → **Wave 15**, slices into **W14** FinOps / **FGC-28** chargeback. `[CTS, P3, S]`
+
+**Operator actions (new):** new Cosmos containers (`copilot-skills`, `copilot-skill-states`,
+`copilot-memory`, `copilot-memory-flush-log`, `copilot-memory-write-audit`, `copilot-memory-contradictions`,
+`copilot-topic-pages`, `copilot-routing-stats`) — all via `createIfNotExists`, no new resource type; an
+Azure AI Search **vector index** (`copilot-memory-vec`) provisioned by the existing `loom-docs-index`
+bootstrap (honest-gates to a Cosmos keyword fallback if absent); and an ACA Job / Function timer for the
+CTS-13 nightly consolidation pass. The MCP default-ON flip (CTS-09's companion) is tracked separately.
+
+**Portable-extras triage.** Of ATLAS's 11 portable extras: 8 KEEP (→ CTS-11…17, with household-scope folded
+into CTS-08 and parallelism telemetry folded into CTS-02), 1 DROP (talking-head avatar / real-time voice —
+not relevant to an enterprise analytics console). Full table in the PRP.
