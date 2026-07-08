@@ -18,6 +18,7 @@ import { Ribbon, type RibbonTab } from '@/lib/components/ribbon';
 import { ItemSidePanel } from '@/lib/components/item-side-panel';
 import { useCollapsibleState, CollapsedRail, CollapseToggle, RAIL_WIDTH } from '@/lib/components/collapsible-side-panel';
 import { LineageDrawer } from '@/lib/components/onelake/lineage-drawer';
+import { VersionHistoryDrawer } from '@/lib/components/versions/version-history-drawer';
 import { ThreadMenu } from '@/lib/components/thread/thread-menu';
 import { BundleContentBar } from '@/lib/components/bundle-content-bar';
 import { ShareItemDialog } from '@/lib/dialogs/share-item-dialog';
@@ -223,6 +224,9 @@ export function ItemEditorChrome({ item, id, ribbon, leftPanel, main, rightPanel
           <ThreadMenu type={item.slug} id={id} name={title} />
           {/* OneLake item-to-item lineage drawer (upstream/downstream graph). */}
           {!isNew && <LineageDrawer type={item.slug} id={id} displayName={item.displayName} />}
+          {/* Version-history timeline + visual diff + restore (Wave-2 W6) —
+              real Cosmos-snapshot history captured at the shared save path. */}
+          {!isNew && <VersionHistoryDrawer type={item.slug} id={id} displayName={resolvedName ?? item.displayName} />}
           {/* Generic endorsement (Promote / Certify / Master data) — real Azure-
               native backend (Cosmos state.endorsement), on every editor. */}
           {!isNew && <EndorsementControl itemType={item.slug} itemId={id} />}

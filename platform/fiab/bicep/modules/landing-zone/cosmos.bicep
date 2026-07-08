@@ -185,6 +185,12 @@ var loomContainers = [
   // "Add landing zone" flow + the orchestrator's dlz-attach path read it so hub
   // coordinates are never free-typed. PK /tenantId → single-partition read.
   { name: 'tenant-topology',   partitionKey: '/tenantId' }
+  // Item version history (Wave-2 W6). One row per saved snapshot of an item's
+  // content, PK /itemId so every per-item history list + snapshot-cap prune hits
+  // a single physical partition. Dedicated sidecar container (NOT `items`) so
+  // version docs never pollute the untyped item-list/count/reindex queries.
+  // createIfNotExists in cosmos-client.ts ensure() remains the hotfix fallback.
+  { name: 'item-versions',     partitionKey: '/itemId' }
 ]
 
 resource loomDb 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases@2024-12-01-preview' = {
