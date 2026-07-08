@@ -61,6 +61,11 @@ var wsName = take('aml-loom-${suffix}', 33)
 var defaultCiName = take('ci-loom-${suffix}', 24)
 
 // --- AML dependency 1: Key Vault ---
+@description('Deny public network access (publicNetworkAccess=Disabled) — reachable only over a private endpoint. Default false: this opt-in deploy-planner sandbox service is provisioned with no private-endpoint wiring, so it stays publicly reachable behind Entra-only auth. Set true after wiring a private endpoint to harden. Derivation mirrors admin-plane/ai-foundry.bicep.')
+param privateEndpointsEnabled bool = false
+
+var effectivePublicNetworkAccess = privateEndpointsEnabled ? 'Disabled' : 'Enabled'
+
 resource kv 'Microsoft.KeyVault/vaults@2024-04-01-preview' = {
   name: kvName
   location: location
@@ -70,7 +75,7 @@ resource kv 'Microsoft.KeyVault/vaults@2024-04-01-preview' = {
     sku: { family: 'A', name: 'standard' }
     enableRbacAuthorization: true
     enableSoftDelete: true
-    publicNetworkAccess: 'Enabled'
+    publicNetworkAccess: effectivePublicNetworkAccess
   }
 }
 
@@ -121,7 +126,7 @@ resource workspace 'Microsoft.MachineLearningServices/workspaces@2023-04-01' = {
     keyVault: kv.id
     storageAccount: sa.id
     applicationInsights: appInsights.id
-    publicNetworkAccess: 'Enabled'
+    publicNetworkAccess: effectivePublicNetworkAccess
   }
 }
 

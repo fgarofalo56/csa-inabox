@@ -25,6 +25,11 @@ param complianceTags object
 
 var saName = take('saqloom${uniqueString(resourceGroup().id)}', 24)
 
+@description('Deny public network access (publicNetworkAccess=Disabled) — reachable only over a private endpoint. Default false: this opt-in deploy-planner sandbox service is provisioned with no private-endpoint wiring, so it stays publicly reachable behind Entra-only auth. Set true after wiring a private endpoint to harden. Derivation mirrors admin-plane/ai-foundry.bicep.')
+param privateEndpointsEnabled bool = false
+
+var effectivePublicNetworkAccess = privateEndpointsEnabled ? 'Disabled' : 'Enabled'
+
 resource sa 'Microsoft.Storage/storageAccounts@2024-01-01' = {
   name: saName
   location: location
@@ -37,7 +42,7 @@ resource sa 'Microsoft.Storage/storageAccounts@2024-01-01' = {
     defaultToOAuthAuthentication: true
     minimumTlsVersion: 'TLS1_2'
     supportsHttpsTrafficOnly: true
-    publicNetworkAccess: 'Enabled'
+    publicNetworkAccess: effectivePublicNetworkAccess
   }
 }
 

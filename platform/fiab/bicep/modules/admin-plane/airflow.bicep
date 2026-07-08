@@ -98,6 +98,11 @@ var dagsStorageLink = 'airflowdags'
 var logsStorageLink = 'airflowlogs'
 
 // ── Metadata DB: Azure Database for PostgreSQL Flexible Server ────────────────
+@description('Deny public network access (publicNetworkAccess=Disabled) — reachable only over a private endpoint / VNet path. Hardened default true. The orchestrator passes false in topologies with no private-endpoint wiring for this service, keeping it reachable over Entra-only public access until a private endpoint is added. Derivation mirrors admin-plane/ai-foundry.bicep.')
+param privateEndpointsEnabled bool = true
+
+var effectivePublicNetworkAccess = privateEndpointsEnabled ? 'Disabled' : 'Enabled'
+
 resource pg 'Microsoft.DBforPostgreSQL/flexibleServers@2024-08-01' = {
   name: pgServerName
   location: location
@@ -118,7 +123,7 @@ resource pg 'Microsoft.DBforPostgreSQL/flexibleServers@2024-08-01' = {
       passwordAuth: 'Enabled'
     }
     network: {
-      publicNetworkAccess: 'Enabled'
+      publicNetworkAccess: effectivePublicNetworkAccess
     }
     highAvailability: {
       mode: 'Disabled'
@@ -130,7 +135,7 @@ resource pg 'Microsoft.DBforPostgreSQL/flexibleServers@2024-08-01' = {
 // off here (password auth), so the metadata DB is gated by the strong seed-derived
 // password + TLS (sslmode=require). start==end==0.0.0.0 is the Azure-services
 // special case, NOT anonymous internet access.
-resource pgFwAzure 'Microsoft.DBforPostgreSQL/flexibleServers/firewallRules@2024-08-01' = {
+resource pgFwAzure 'Microsoft.DBforPostgreSQL/flexibleServers/firewallRules@2024-08-01' = if (!privateEndpointsEnabled) {
   parent: pg
   name: 'AllowAllAzureServicesAndResourcesWithinAzureIps'
   properties: {

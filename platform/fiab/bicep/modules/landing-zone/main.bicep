@@ -421,6 +421,11 @@ module eventgridBusiness 'eventgrid-business.bicep' = {
     workspaceId: adminPlaneLawId
     skipRoleGrants: skipRoleGrants
     complianceTags: complianceTags
+    // The always-on Business Events topic has no private-endpoint wiring in this
+    // DLZ — pass false so it stays publish-reachable over Entra-only public access
+    // (disableLocalAuth keeps SAS off). Compliance carve-out per
+    // docs/best-practices/security-compliance.md; set true after adding a PE.
+    privateEndpointsEnabled: false
   }
 }
 
@@ -760,6 +765,11 @@ module postgresWeave 'postgres-weave.bicep' = if (weaveOntologyEnabled) {
     consolePrincipalId: consolePrincipalId
     workspaceId: adminPlaneLawId
     complianceTags: complianceTags
+    // Weave Postgres+AGE has no private-endpoint wiring in this DLZ — pass false so
+    // it keeps its Azure-services firewall rule + public network access (Entra-only
+    // token auth gates every connection). Compliance carve-out per
+    // docs/best-practices/security-compliance.md; set true after adding a PE.
+    privateEndpointsEnabled: false
   }
 }
 

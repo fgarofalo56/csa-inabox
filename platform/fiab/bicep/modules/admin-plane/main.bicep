@@ -2178,6 +2178,11 @@ module adxCluster 'adx-cluster.bicep' = if (adxEnabled && empty(existingAdxClust
     workspaceId: monitoring.outputs.lawId
     complianceTags: complianceTags
     skipRoleGrants: skipRoleGrants
+    // No private-endpoint wiring for ADX in this topology — pass false so the
+    // cluster stays reachable over Entra-only public access (compliance carve-out,
+    // see docs/best-practices/security-compliance.md). Set true after adding a PE to
+    // harden to publicNetworkAccess=Disabled.
+    privateEndpointsEnabled: false
     // Console UAMI → Monitoring Contributor on the cluster (alert rules + diagnostics).
     consolePrincipalId: identity.outputs.uamiConsolePrincipalId
     // Activator UAMI → AllDatabasesViewer (the "alert identity" for continuous
@@ -4259,6 +4264,11 @@ module airflow 'airflow.bicep' = if (airflowHostActive) {
     webserverSecretKey: airflowWebserverSecretKey
     appInsightsConnectionString: monitoring.outputs.appInsightsConnectionString
     complianceTags: complianceTags
+    // Airflow's Postgres metadata DB has no private-endpoint wiring here — pass
+    // false so it keeps its Azure-services firewall rule + public network access
+    // (Entra is off on this control-plane metadata DB; the seed-derived password +
+    // TLS gate it). Compliance carve-out per docs/best-practices/security-compliance.md.
+    privateEndpointsEnabled: false
   }
 }
 

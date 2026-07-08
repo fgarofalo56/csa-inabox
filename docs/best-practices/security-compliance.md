@@ -108,6 +108,48 @@ Every PaaS service **must** connect through a Private Endpoint. This removes the
 - Microsoft Purview (`account`, `portal`)
 - Azure Data Factory (`dataFactory`)
 
+!!! note "CSA Loom shipped posture — hardened set vs. documented exceptions"
+    The Private-Endpoint-locked (`publicNetworkAccess: 'Disabled'`) data-plane
+    modules that ship this way **by default** are: ADLS Gen2
+    (`landing-zone/storage.bicep`), Synapse (`synapse.bicep`), Databricks
+    (`databricks.bicep`, VNet-injected), Event Hubs (`eventhubs.bicep`), Service
+    Bus (`servicebus.bicep`), Event Grid (`eventgrid.bicep`), Cosmos
+    (`cosmos.bicep`, `cosmos-graph-vector.bicep`), Key Vault (`keyvault.bicep`),
+    Microsoft Purview / Data Map (`catalog.bicep`), AI Search (`ai-search.bicep`),
+    AI Foundry (`ai-foundry.bicep`), Container Registry (`registry.bicep`), and the
+    Console Cosmos (`loom-console-cosmos.bicep`).
+
+    Three sets are **honest exceptions**, not covered by a blanket "everything is
+    Disabled" claim:
+
+    1. **Deploy-planner sandbox services** (`modules/deploy-planner/*`: batch,
+       data-factory, event-grid, ml-workspace, mysql, postgres, redis, service-bus,
+       signalr, static-web-app, storage-queues, cognitive accounts). These are an
+       **opt-in** exploration sandbox provisioned without private-endpoint wiring,
+       so they default to public network access behind **Entra-only auth**. Each
+       now exposes a `privateEndpointsEnabled` param — set it `true` after wiring a
+       private endpoint to harden that service to `Disabled`.
+    2. **Entra-only control-plane services with no PE in the current topology** —
+       Azure Data Explorer (`adx-cluster.bicep`), the Airflow metadata Postgres
+       (`airflow.bicep`), the Weave ontology Postgres+AGE (`postgres-weave.bicep`),
+       and the always-on Business Events Event Grid topic
+       (`eventgrid-business.bicep`). These now default their
+       `privateEndpointsEnabled` param to `true`, but the orchestrators pass `false`
+       (documented at the call site) because no private endpoint is wired for them
+       yet; access is gated by Entra-only auth (plus TLS + the Azure-services
+       firewall rule for the Postgres servers). Adding a private endpoint and
+       flipping the param to `true` hardens them.
+    3. **Transient deployment-script staging storage**
+       (`databricks-scim-bootstrap.bicep`, `databricks-uc-bootstrap.bicep`). Azure
+       `deploymentScripts` mount their staging file share from a public ACI and do
+       **not** support storage firewall rules, so these accounts — which hold only
+       ephemeral script staging and **never customer data** — stay publicly
+       reachable. They carry no data-plane exposure.
+
+    A private-endpoint redeploy is required for any newly-hardened posture to take
+    effect. Track the PE-wiring gaps for set (2) before asserting universal
+    `publicNetworkAccess: 'Disabled'` in an ATO package.
+
 ### NSG Rules — Deny by Default
 
 Every subnet must have an NSG attached with an explicit **deny-all inbound** rule at the lowest priority. Allow only required traffic.
