@@ -15,7 +15,7 @@
     documentation before making decisions.
 
 
-Comprehensive cross-check of every PRP in `PRPs/active/csa-loom/` against
+Comprehensive cross-check of every PRP in `PRPs/completed/csa-loom-pillar/` against
 what shipped. Status icons:
 
 - ✅ **Shipped + validated** (real code + tests where applicable)
@@ -27,7 +27,7 @@ what shipped. Status icons:
 gained a deterministic pytest harness asserting the contract the live
 deployment must honor (state-machine progression, schema validation,
 ARM-emit correctness, security boundary). See per-PRP `## Validation
-receipt` section in each file under `PRPs/active/csa-loom/`. The 4
+receipt` section in each file under `PRPs/completed/csa-loom-pillar/`. The 4
 outstanding parity items below have specific operator-action steps
 documented (no remaining code gates).
 

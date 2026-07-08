@@ -230,5 +230,5 @@ For the side-by-side: [CSA-in-a-Box vs Microsoft Fabric](../comparison/csa-inabo
 ## Related
 
 - **GitHub epic:** [#279 — CSA Loom v1 build roadmap](https://github.com/fgarofalo56/csa-inabox/issues/279)
-- **Source documents:** [PRD](../../temp/fiab-prd/00-README.md), [Research wave](../../temp/fiab-research/), [PRPs](../../PRPs/active/csa-loom/PRP-00-README.md)
+- **Source documents:** [PRD](../../temp/fiab-prd/00-README.md), [Research wave](../../temp/fiab-research/), [PRPs](../../PRPs/completed/csa-loom-pillar/PRP-00-README.md)
 - **Existing context:** [Fabric in Azure Government](../fabric-in-gov-cloud.md), [CSA-in-a-Box vs Fabric comparison](../comparison/csa-inabox-vs-fabric.md), [ADR-0010 Fabric strategic target](../adr/0010-fabric-strategic-target.md)

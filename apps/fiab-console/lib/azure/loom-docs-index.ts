@@ -5,7 +5,7 @@
  *   - docs/fiab/**\/*.md      (published CSA Loom pages)
  *   - docs/**\/*.md           (broader csa-inabox docs)
  *   - apps/fiab-console/lib/**\/*.{ts,tsx} summaries
- *   - PRPs/active/csa-loom/*.md
+ *   - PRPs/completed/csa-loom-pillar/*.md
  *   - docs/fiab/adr/*.md
  *
  * Two backends:
@@ -302,7 +302,7 @@ interface RepoRoots {
   docsRoot: string;
   /** `apps/fiab-console/lib/` */
   consoleLibRoot: string;
-  /** `PRPs/active/csa-loom/` */
+  /** `PRPs/completed/csa-loom-pillar/` */
   prpRoot: string;
   /** `docs/fiab/adr/` */
   adrRoot: string;
@@ -320,7 +320,7 @@ function detectRoots(): RepoRoots {
       repoRoot: bundled,
       docsRoot: path.join(bundled, 'docs'),
       consoleLibRoot: path.join(bundled, 'lib'),
-      prpRoot: path.join(bundled, 'PRPs', 'active', 'csa-loom'),
+      prpRoot: path.join(bundled, 'PRPs', 'completed', 'csa-loom-pillar'),
       adrRoot: path.join(bundled, 'docs', 'fiab', 'adr'),
     };
   }
@@ -334,7 +334,7 @@ function detectRoots(): RepoRoots {
     repoRoot: dir,
     docsRoot: path.join(dir, 'docs'),
     consoleLibRoot: path.join(dir, 'apps', 'fiab-console', 'lib'),
-    prpRoot: path.join(dir, 'PRPs', 'active', 'csa-loom'),
+    prpRoot: path.join(dir, 'PRPs', 'completed', 'csa-loom-pillar'),
     adrRoot: path.join(dir, 'docs', 'fiab', 'adr'),
   };
 }

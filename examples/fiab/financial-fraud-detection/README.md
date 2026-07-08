@@ -61,5 +61,5 @@ databricks jobs run-now --job-name csa-loom-fraud-scoring
 
 ## Related
 
-- [PRP-14 — examples port wave 1](../../../PRPs/active/csa-loom/PRP-14-examples-port-wave1.md)
+- [PRP-14 — examples port wave 1](../../../PRPs/completed/csa-loom-pillar/PRP-14-examples-port-wave1.md)
 - [Financial fraud use case docs](../../../docs/fiab/examples/financial-fraud-detection.md)

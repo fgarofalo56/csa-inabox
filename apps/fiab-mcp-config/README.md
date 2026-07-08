@@ -4,7 +4,7 @@ Self-hosted Azure MCP server (from canonical `microsoft/mcp` repo)
 configured for CSA Loom's deployment + management tools.
 
 **Status**: SCAFFOLDED. Real container build + tool catalog config
-per [PRP-05](../../PRPs/active/csa-loom/PRP-05-mcp-server.md).
+per [PRP-05](../../PRPs/completed/csa-loom-pillar/PRP-05-mcp-server.md).
 
 ## What it does
 
@@ -54,6 +54,6 @@ apps/fiab-mcp-config/
 ## Related
 
 - [MCP troubleshooting runbook](../../docs/fiab/runbooks/mcp-troubleshooting.md)
-- [PRP-05](../../PRPs/active/csa-loom/PRP-05-mcp-server.md)
+- [PRP-05](../../PRPs/completed/csa-loom-pillar/PRP-05-mcp-server.md)
 - Upstream: [`microsoft/mcp/servers/Azure.Mcp.Server`](https://github.com/microsoft/mcp/blob/main/servers/Azure.Mcp.Server/README.md)
 - Research: [`temp/fiab-research/06-copilot-driven-deploy.md` §2.1](../../temp/fiab-research/06-copilot-driven-deploy.md)

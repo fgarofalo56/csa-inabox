@@ -39,7 +39,7 @@ all docs/diagnostic-focused:
 
 | Tool             | Purpose                                                                          |
 |------------------|----------------------------------------------------------------------------------|
-| `searchDocs`     | RAG over `docs/fiab/`, `docs/`, `PRPs/active/csa-loom`, `docs/fiab/adr`         |
+| `searchDocs`     | RAG over `docs/fiab/`, `docs/`, `PRPs/completed/csa-loom-pillar`, `docs/fiab/adr`         |
 | `searchRepo`     | RAG over `apps/fiab-console/lib/{azure,editors,components}` source summaries    |
 | `openLoomPage`   | Tells the frontend to `router.push()` to a specific page                         |
 | `runDiagnostic`  | Probes live config (AOAI, AI Search, Cosmos, version, tenant)                    |

@@ -3,7 +3,7 @@
 Reflex / Data Activator parity service. NRules + Redis + Function
 dispatcher backed by ADX.
 
-**Status**: SCAFFOLDED. Real implementation per [PRP-06](../../PRPs/active/csa-loom/PRP-06-activator-engine.md)
+**Status**: SCAFFOLDED. Real implementation per [PRP-06](../../PRPs/completed/csa-loom-pillar/PRP-06-activator-engine.md)
 + [ADR fiab-0005](../../docs/fiab/adr/0005-activator-engine.md).
 
 ## Tech stack
@@ -69,5 +69,5 @@ apps/fiab-activator-engine/
 
 - [Activator Engine service docs](../../docs/fiab/services/activator-engine.md)
 - [Data Activator parity workload](../../docs/fiab/workloads/data-activator-parity.md)
-- [PRP-06](../../PRPs/active/csa-loom/PRP-06-activator-engine.md)
+- [PRP-06](../../PRPs/completed/csa-loom-pillar/PRP-06-activator-engine.md)
 - [Activator rules not firing runbook](../../docs/fiab/runbooks/activator-rules-not-firing.md)
