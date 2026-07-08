@@ -15,6 +15,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { loadOwnedItem } from '../../../_lib/item-crud';
 import { chatGrounded, NoAoaiDeploymentError, type DataAgentConfig, type ChatTurn } from '@/lib/azure/data-agent-client';
+import { orchestrate, type SubAgentRuntime } from '@/lib/azure/agent-orchestrator';
+import { normalizeSubAgents } from '@/lib/copilot/connected-agents';
 import { emitCopilotUsage } from '@/lib/azure/copilot-orchestrator';
 import { resolveAgentSourceLabels } from '@/lib/azure/dspm-ai-client';
 import type { WorkspaceItem } from '@/lib/types/workspace';
@@ -46,6 +48,44 @@ function stateToConfig(state: Record<string, unknown>): DataAgentConfig {
   };
 }
 
+/** Build a grounded config from an operations-agent item (Eventhouse → kql source). */
+function opsStateToConfig(state: Record<string, unknown>, name: string): DataAgentConfig {
+  const eventhouse = typeof state.eventhouse === 'string' ? state.eventhouse : '';
+  return {
+    instructions: String(state.systemPrompt || state.instructions || ''),
+    description: state.description ? String(state.description) : undefined,
+    sources: eventhouse
+      ? [{ id: eventhouse, type: 'kql', name: `${name} · Eventhouse` }]
+      : [],
+  };
+}
+
+/**
+ * Resolve each connected sub-agent ref into a runnable SubAgentRuntime by
+ * loading the referenced (owner-scoped) item and building its grounded config.
+ * A ref whose item can't be loaded becomes an honest gate in the trace.
+ */
+async function resolveSubAgents(state: Record<string, unknown>, oid: string): Promise<SubAgentRuntime[]> {
+  const refs = normalizeSubAgents(state.subAgents);
+  if (refs.length === 0) return [];
+  return Promise.all(refs.map(async (ref): Promise<SubAgentRuntime> => {
+    try {
+      const sub = await loadOwnedItem(ref.itemId, ref.itemType, oid);
+      if (!sub) return { name: ref.name, role: ref.role, config: { instructions: '', sources: [] }, gate: `Connected agent "${ref.name}" not found or not owned by you.` };
+      const subState = (sub.state || {}) as Record<string, unknown>;
+      const config = ref.itemType === 'operations-agent'
+        ? opsStateToConfig(subState, sub.displayName)
+        : stateToConfig(subState);
+      if (config.sources.length === 0 && !config.instructions.trim()) {
+        return { name: ref.name, role: ref.role, config, gate: `Connected agent "${ref.name}" has no sources/instructions yet.` };
+      }
+      return { name: ref.name, role: ref.role, config };
+    } catch {
+      return { name: ref.name, role: ref.role, config: { instructions: '', sources: [] }, gate: `Connected agent "${ref.name}" could not be loaded.` };
+    }
+  }));
+}
+
 export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
@@ -67,10 +107,17 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   }
   if (!item) return NextResponse.json({ ok: false, error: 'data-agent item not found' }, { status: 404 });
 
-  const cfg = stateToConfig((item.state || {}) as Record<string, unknown>);
+  const itemState = (item.state || {}) as Record<string, unknown>;
+  const cfg = stateToConfig(itemState);
 
   try {
-    const answer = await chatGrounded(cfg, history, question);
+    // AIF-4: when this agent has connected sub-agents, delegate through the
+    // Azure-native Loom orchestrator (real grounded run per sub-agent + a
+    // synthesis pass); otherwise run the single grounded turn as before.
+    const subAgents = await resolveSubAgents(itemState, session.claims.oid);
+    const answer = subAgents.length > 0
+      ? await orchestrate(cfg, subAgents, history, question)
+      : await chatGrounded(cfg, history, question);
 
     // Fire-and-forget DSPM-for-AI usage receipt: stamp the copilot.usage event
     // with the agent id + the sensitivity labels of the data this agent touched

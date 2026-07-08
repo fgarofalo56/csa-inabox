@@ -25,6 +25,8 @@ import {
   type FoundryAgentBody,
 } from '@/lib/azure/foundry-agent-client';
 import { sourcesToFoundryTools, type DataAgentSource } from '@/lib/azure/data-agent-client';
+import { migrateLegacyTools, toolsToFoundryTools } from '@/lib/copilot/agent-tool-catalog';
+import { normalizeSubAgents, subAgentsToFoundryTools, foundryAgentNameFor } from '@/lib/copilot/connected-agents';
 import type { WorkspaceItem } from '@/lib/types/workspace';
 import { apiServerError } from '@/lib/api/respond';
 
@@ -67,6 +69,15 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   // Custom display alias (editor's "Agent name / alias"); falls back to the item name.
   const alias = String(body?.alias || state.alias || item.displayName || '').slice(0, 128);
 
+  // AIF-5 typed tools + AIF-4 connected sub-agents → Foundry tool JSON. The
+  // connected-agent references resolve to the sibling agents' deterministic
+  // published names (loom-data-* / loom-ops-*).
+  const structuredTools = toolsToFoundryTools(migrateLegacyTools(state.tools));
+  const connectedTools = subAgentsToFoundryTools(
+    normalizeSubAgents(state.subAgents),
+    (itemId, itemType) => foundryAgentNameFor(itemId, itemType),
+  );
+
   const agentName = foundryAgentName(item.id);
   // The NL2SQL/NL2DAX orchestration model defaults to the resolved hub AOAI
   // deployment name; consumers can override on their side.
@@ -76,7 +87,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     name: agentName,
     model,
     instructions,
-    tools: sourcesToFoundryTools(sources),
+    tools: [...sourcesToFoundryTools(sources), ...structuredTools, ...connectedTools],
     description,
     metadata: {
       loomItemId: item.id,

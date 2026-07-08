@@ -40,18 +40,22 @@ import {
 import {
   Bot24Regular, Database20Regular, Add20Regular, Sparkle20Regular,
   Flash20Regular, Play20Regular, Pulse20Regular, ShieldCheckmark20Regular,
-  ArrowSync16Regular, CheckmarkCircle20Regular, Settings20Regular,
+  ArrowSync16Regular, CheckmarkCircle20Regular, Settings20Regular, Wrench20Regular,
 } from '@fluentui/react-icons';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { ItemEditorChrome } from '../item-editor-chrome';
 import { safeModelJson } from '../model-fetch';
 import { DataAgentResultViz } from '../data-agent-result-viz';
+import { AgentToolsEditor } from '@/lib/copilot/agent-tool-catalog-editor';
+import { migrateLegacyTools, type AgentTool } from '@/lib/copilot/agent-tool-catalog';
 import { useItemState, SaveBar, useStyles } from './shared';
 
 // ----- state --------------------------------------------------------------
 interface AgentState {
-  systemPrompt: string; model: string; tools: string;
+  systemPrompt: string; model: string;
+  /** Typed tool catalog (AIF-5) — replaces the legacy freeform tool string. */
+  tools: AgentTool[];
   eventhouse: string; ontology: string;
   foundryAgentId?: string; foundryProjectId?: string; lastDeployedAt?: string;
   rules?: unknown[];
@@ -79,10 +83,22 @@ export function OperationsAgentEditor({ item, id }: { item: FabricItemType; id: 
   const isNew = !id || id === 'new';
   const { state, setState, loading, saving, error, savedAt, save, reload, dirty } = useItemState<AgentState>('operations-agent', id, {
     systemPrompt: 'You monitor real-time operational signals and trigger actions when thresholds are breached.',
-    model: 'gpt-4o', tools: 'eventhouse-query, activator-trigger', eventhouse: '', ontology: '',
+    model: 'gpt-4o', tools: [], eventhouse: '', ontology: '',
   });
 
   const [tab, setTab] = useState<'configure' | 'run' | 'triggers' | 'proposals'>('configure');
+
+  // Typed tool catalog (AIF-5). Normalize a legacy freeform tool string (or a
+  // string[]) into structured AgentTool[] the first time an old record loads so
+  // it both renders AND re-saves in the new schema (no freeform tool box).
+  const toolsArr = useMemo(() => migrateLegacyTools(state.tools), [state.tools]);
+  useEffect(() => {
+    if (loading) return;
+    if (state.tools !== undefined && !Array.isArray(state.tools)) {
+      setState((p) => ({ ...p, tools: migrateLegacyTools(p.tools) }));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, state.tools]);
 
   // ---- typed binding pickers (no freeform ids — loom_no_freeform_config) ----
   const [ehOpts, setEhOpts] = useState<ItemOption[]>([]);
@@ -174,13 +190,16 @@ export function OperationsAgentEditor({ item, id }: { item: FabricItemType; id: 
                 <Field label="System prompt" hint="What the agent watches for and when it should act.">
                   <Textarea value={state.systemPrompt} rows={6} onChange={(_, d) => setState((p) => ({ ...p, systemPrompt: d.value }))} />
                 </Field>
-                <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: tokens.spacingHorizontalM }}>
-                  <Field label="Model" hint="AOAI deployment name (e.g. gpt-4o).">
-                    <Input value={state.model} onChange={(_, d) => setState((p) => ({ ...p, model: d.value }))} />
-                  </Field>
-                  <Field label="Tools (comma-separated)">
-                    <Input value={state.tools} onChange={(_, d) => setState((p) => ({ ...p, tools: d.value }))} />
-                  </Field>
+                <Field label="Model" hint="AOAI deployment name (e.g. gpt-4o).">
+                  <Input value={state.model} onChange={(_, d) => setState((p) => ({ ...p, model: d.value }))} />
+                </Field>
+                <div style={{ marginTop: tokens.spacingVerticalM }}>
+                  <div className={s.daSectionHead} style={{ marginBottom: tokens.spacingVerticalXS }}>
+                    <span className={s.daSectionIcon}><Wrench20Regular /></span>
+                    <Subtitle2>Tools</Subtitle2>
+                    <Badge appearance="tint" color="brand">typed catalog</Badge>
+                  </div>
+                  <AgentToolsEditor tools={toolsArr} onChange={(next) => setState((p) => ({ ...p, tools: next }))} />
                 </div>
               </div>
 
