@@ -12,9 +12,9 @@
  */
 import { NextResponse } from 'next/server';
 import { NetworkingNotConfiguredError, NetworkingArmError } from '@/lib/clients/networking-client';
-import { getSession, type SessionPayload } from '@/lib/auth/session';
+import { type SessionPayload } from '@/lib/auth/session';
 import { isTenantAdmin } from '@/lib/auth/feature-gate';
-import { workspacesContainer } from '@/lib/azure/cosmos-client';
+import { resolveAdminWorkspace } from '@/lib/auth/workspace-guard';
 
 /** Network Contributor built-in role definition id. */
 export const NETWORK_CONTRIBUTOR_ROLE_ID = '4d97b98b-1d4f-4787-a291-c67834d212e7';
@@ -83,18 +83,22 @@ export function storageTrustedAccessErrorResponse(e: unknown): NextResponse {
  * ANY signed-in user POST an Allow 0.0.0.0/0 rule (or DELETE a Deny rule) and
  * bypass the deployment firewall. We now require BOTH:
  *
- *   1. assertOwner  — the caller owns the workspace [id] they are acting through
- *                     (same ownership check as
- *                     app/api/admin/workspaces/[id]/git/route.ts), and
+ *   1. the workspace [id] must RESOLVE — via the caller's own partition (owner)
+ *      OR, for a tenant admin, cross-partition (resolveAdminWorkspace). The
+ *      previous owner-only point-read spuriously 404'd for an admin acting on a
+ *      workspace they did not create; the admin gate below still bounds the
+ *      mutation, so allowing an admin to resolve any workspace does not weaken
+ *      the firewall protection.
  *   2. isTenantAdmin — networking is shared landing-zone infrastructure, so only
  *                      a tenant admin may mutate it (matches the sibling
  *                      admin/workspaces/[id]/* task-flows/folders routes, and the
  *                      denyIfNoDlzAccess gate the scaling routes use for the same
- *                      class of shared DLZ infra).
+ *                      class of shared DLZ infra). A non-admin owner still gets a
+ *                      403 here, exactly as before.
  *
  * Honest note: the ip-rules NSG is deployment-level / shared, so [id] scopes the
- * ownership check but the rule write targets the shared NSG — the admin gate is
- * what actually authorizes the mutation. For inbound/outbound/trusted the [id]
+ * resolution but the rule write targets the shared NSG — the admin gate is what
+ * actually authorizes the mutation. For inbound/outbound/trusted the [id]
  * additionally names the per-workspace private endpoints / allowlist registry.
  */
 const NETWORKING_ADMIN_REASON =
@@ -103,22 +107,11 @@ const NETWORKING_ADMIN_REASON =
   'set LOOM_TENANT_ADMIN_OID / LOOM_TENANT_ADMIN_GROUP_ID, or grant access at ' +
   '/admin/permissions.';
 
-/** Verify the workspace exists and belongs to the calling tenant (oid). */
-async function assertOwner(workspaceId: string, tenantId: string): Promise<boolean> {
-  const ws = await workspacesContainer();
-  try {
-    const { resource } = await ws.item(workspaceId, tenantId).read<any>();
-    return !!resource && resource.tenantId === tenantId;
-  } catch (e: any) {
-    if (e?.code === 404) return false;
-    throw e;
-  }
-}
-
 /**
  * Resolve + authorize the request. Returns `{ session, id }` when the caller is
- * authenticated, owns the workspace, and is a tenant admin; otherwise returns
- * `{ resp }` carrying the 401 / 404 / 403 response the handler should return.
+ * authenticated, the workspace resolves (owner or admin cross-partition), AND
+ * the caller is a tenant admin; otherwise returns `{ resp }` carrying the
+ * 401 / 404 / 403 response the handler should return.
  */
 export async function authorizeNetworking(
   ctx: { params: Promise<{ id: string }> },
@@ -126,14 +119,13 @@ export async function authorizeNetworking(
   | { resp: NextResponse; session?: undefined; id?: undefined }
   | { resp?: undefined; session: SessionPayload; id: string }
 > {
-  const session = getSession();
-  if (!session) {
-    return { resp: NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 }) };
-  }
   const { id } = await ctx.params;
-  if (!(await assertOwner(id, session.claims.oid))) {
-    return { resp: NextResponse.json({ ok: false, error: 'workspace not found' }, { status: 404 }) };
-  }
+  // Owner-first, tenant-admin cross-partition fallback (401 unauth / 404 when it
+  // does not resolve for this caller).
+  const resolved = await resolveAdminWorkspace(id);
+  if (resolved.resp) return { resp: resolved.resp };
+  const { session } = resolved;
+  // Shared networking infra remains tenant-admin-only: a non-admin owner 403s.
   if (!isTenantAdmin(session)) {
     return {
       resp: NextResponse.json(

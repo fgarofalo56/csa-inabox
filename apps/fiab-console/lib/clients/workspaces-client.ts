@@ -27,6 +27,7 @@ import {
   itemsContainer,
   workspaceRolesContainer,
 } from '@/lib/azure/cosmos-client';
+import type { Workspace } from '@/lib/types/workspace';
 
 /** Explicit lifecycle enum (no free-form string — per loom-no-freeform-config). */
 export type WorkspaceState = 'Active' | 'Provisioning' | 'Suspended' | 'Deleted';
@@ -185,4 +186,33 @@ export async function listAllWorkspacesAdmin(): Promise<AdminWorkspacesResult> {
   });
 
   return { workspaces, degraded: degradedReasons.length > 0, degradedReasons };
+}
+
+/**
+ * Load ONE workspace by id across EVERY partition — the admin-scoped counterpart
+ * to the owner point-read `container.item(id, ownerOid).read()`.
+ *
+ * Each workspace doc is partitioned by `/tenantId` where `tenantId === the
+ * creating user's oid`, so an admin acting on a workspace they did not create
+ * does not know its partition key. A single `SELECT * FROM c WHERE c.id = @id`
+ * with NO `{ partitionKey }` option fans the read out across all partitions and
+ * returns the one matching doc (ids are unique account-wide in this container).
+ *
+ * SECURITY: this bypasses partition isolation, so it must ONLY be called AFTER a
+ * tenant-admin check — see `resolveAdminWorkspace` in lib/auth/workspace-guard.ts,
+ * which is the single caller that gates it. The Console UAMI's account-scoped
+ * "Cosmos DB Built-in Data Contributor" role already authorises the fan-out.
+ *
+ * Mirrors {@link listAllWorkspacesAdmin}'s query style + error handling. Returns
+ * `null` when no workspace has that id.
+ */
+export async function loadWorkspaceAdmin(id: string): Promise<Workspace | null> {
+  const wsC = await workspacesContainer();
+  const { resources } = await wsC.items
+    .query<Workspace>({
+      query: 'SELECT * FROM c WHERE c.id = @id',
+      parameters: [{ name: '@id', value: id }],
+    })
+    .fetchAll();
+  return resources[0] ?? null;
 }

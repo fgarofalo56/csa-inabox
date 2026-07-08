@@ -16,40 +16,18 @@
  * the exact env vars to set + the Monitoring Reader role to grant. No mocks.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
-import { workspacesContainer } from '@/lib/azure/cosmos-client';
+import { resolveAdminWorkspace } from '@/lib/auth/workspace-guard';
 import { fetchMetrics, MonitorError } from '@/lib/azure/monitor-client';
-import type { Workspace } from '@/lib/types/workspace';
 import { defaultStorageAccountId } from '../route';
-import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-async function loadWorkspace(id: string, tenantId: string): Promise<Workspace | null> {
-  const c = await workspacesContainer();
-  try {
-    const { resource } = await c.item(id, tenantId).read<Workspace>();
-    if (!resource || resource.tenantId !== tenantId) return null;
-    return resource;
-  } catch (e: any) {
-    if (e?.code === 404) return null;
-    throw e;
-  }
-}
-
 export async function GET(_req: NextRequest, props: { params: Promise<{ id: string }> }) {
   const params = await props.params;
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
-
-  let ws: Workspace | null;
-  try {
-    ws = await loadWorkspace(params.id, s.claims.oid);
-  } catch (e: any) {
-    return apiServerError(e, 'Cosmos error');
-  }
-  if (!ws) return NextResponse.json({ ok: false, error: 'Workspace not found' }, { status: 404 });
+  const resolved = await resolveAdminWorkspace(params.id);
+  if (resolved.resp) return resolved.resp;
+  const { ws } = resolved;
 
   const accountId = ws.storageAccountId || defaultStorageAccountId();
   if (!accountId) {

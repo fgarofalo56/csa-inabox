@@ -13,10 +13,14 @@
  * from lib/auth/feature-gate (LOOM_TENANT_ADMIN_GROUP_ID membership OR
  * LOOM_TENANT_ADMIN_OID match). Non-admins get 403 — no new auth scheme.
  *
- * Because a workspace's partition key is its owning user's oid, this reuses
- * the per-workspace load that scopes to the caller's partition. A workspace
- * the caller cannot resolve in their partition reports an honest per-id
- * failure (`not_found`) rather than silently "succeeding" — no vaporware.
+ * Because a workspace's partition key is its owning user's oid, each id is
+ * resolved OWNER-FIRST (the caller's own partition) and, for a TENANT ADMIN
+ * only, CROSS-PARTITION as a fallback (loadWorkspaceAdmin). This is exactly
+ * what makes admin cleanup of UAT/test-estate debris — workspaces the admin did
+ * not personally create — actually delete instead of every id reporting
+ * `not_found`. A non-admin can still only ever resolve (and delete) workspaces
+ * they own. A workspace that resolves for nobody reports an honest per-id
+ * `not_found` rather than silently "succeeding" — no vaporware.
  *
  * Contract:
  *   Request : { ids: string[] }
@@ -33,6 +37,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { isTenantAdmin } from '@/lib/auth/feature-gate';
 import { itemsContainer, workspacesContainer } from '@/lib/azure/cosmos-client';
+import { loadWorkspaceAdmin } from '@/lib/clients/workspaces-client';
 import { deleteLoomDoc } from '@/lib/azure/loom-search';
 import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
 import { apiError } from '@/lib/api/respond';
@@ -124,7 +129,10 @@ export async function POST(req: NextRequest) {
 
   for (const id of ids) {
     try {
-      const ws = await loadWorkspace(id, tenantId);
+      // Owner-partition first; for a tenant admin, fall back to a cross-partition
+      // read so foreign-owned (UAT/test) workspaces resolve and delete.
+      let ws = await loadWorkspace(id, tenantId);
+      if (!ws && admin) ws = await loadWorkspaceAdmin(id);
       if (!ws) {
         failed.push({ id, error: 'not_found' });
         continue;

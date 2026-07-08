@@ -15,9 +15,9 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
-import { workspacesContainer, itemsContainer } from '@/lib/azure/cosmos-client';
-import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
+import { resolveAdminWorkspace } from '@/lib/auth/workspace-guard';
+import { itemsContainer } from '@/lib/azure/cosmos-client';
+import type { WorkspaceItem } from '@/lib/types/workspace';
 import { loadBinding, resolveSecret, recordSync } from '@/lib/azure/git-binding-store';
 import {
   serializeItem, itemFilePath, workspaceManifestPath, serializeManifest,
@@ -29,29 +29,15 @@ import {
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-async function loadWorkspace(id: string, tenantId: string): Promise<Workspace | null> {
-  const c = await workspacesContainer();
-  try {
-    const { resource } = await c.item(id, tenantId).read<Workspace>();
-    if (!resource || resource.tenantId !== tenantId) return null;
-    return resource;
-  } catch (e: any) {
-    if (e?.code === 404) return null;
-    throw e;
-  }
-}
-
 function fail(error: string, status: number, extra?: Record<string, unknown>) {
   return NextResponse.json({ ok: false, error, ...extra }, { status });
 }
 
 export async function POST(_req: NextRequest, props: { params: Promise<{ id: string }> }) {
   const params = await props.params;
-  const s = getSession();
-  if (!s) return fail('unauthenticated', 401);
-
-  const ws = await loadWorkspace(params.id, s.claims.oid);
-  if (!ws) return fail('workspace not found', 404);
+  const resolved = await resolveAdminWorkspace(params.id);
+  if (resolved.resp) return resolved.resp;
+  const { ws } = resolved;
 
   const binding = await loadBinding(params.id);
   if (!binding) return fail('No Git binding for this workspace. Connect a repository first.', 400, { code: 'not_connected' });
