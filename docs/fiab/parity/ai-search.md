@@ -72,7 +72,10 @@ each a sortable grid with create / open / delete:
    docs/skills** (preview), Delete, status + execution history.
 3. **Data sources** — list, **Add data source** (typed connection form per
    source type), open, Delete.
-4. **Skillsets** — list, **Add skillset** (JSON editor), open, Delete.
+4. **Skillsets** — list, **Add skillset** (ordered cognitive skill-CHAIN
+   designer: full built-in skill family + Custom Web API, per-skill typed
+   config, enrichment-tree context/source pickers, drag-order via move
+   controls, knowledge-store projection config), **Edit chain**, open, Delete.
 5. **Synonym maps** — list, **Add synonym map**, open, Delete.
 6. **Aliases** — list, **Add alias**, open, Delete.
 7. **Knowledge sources / knowledge base (agentic retrieval / Foundry IQ)** — a
@@ -146,7 +149,13 @@ MISSING ❌
 | 1 | Index list **column sort** (doc count / storage / vector quota) | ❌ MISSING | tree shows name + fieldCount only |
 | 2 | Indexers list + ＋New + delete + Run + Reset + Status | ✅ built | `ai-search-tree.tsx` Indexers group |
 | 3 | Data sources list + ＋New (typed form) + delete | ✅ built | tree + create dialog |
-| 4 | Skillsets list + ＋New (JSON) + delete | ✅ built | tree + create dialog |
+| 4 | Skillsets list + ＋New + Edit + delete | ✅ built | tree + create dialog |
+| 4a | Skill-chain designer — **full built-in cognitive-skill family** (Split, Merge, Language detection, Entity recognition, Key-phrase, **Sentiment (V3)**, **PII detection**, **Text translation**, OCR, **Image analysis**, Azure OpenAI embedding) + **Custom Web API** skill | ✅ built | `skillset-chain.ts` + `SkillCard` in `ai-search-tree.tsx`; grouped picker, per-skill typed config |
+| 4b | **Ordered chain** — arrange skill order (move up/down), per-skill inputs/outputs with enrichment-tree **context-path + source-field pickers** (no JSON) | ✅ built | `reorderSkill` / `availableSourcePaths` / `contextOptions`; `PathCombobox` |
+| 4c | **Knowledge store** — projections (tables / objects / files) with source-path pickers + connection string | ✅ built | `buildKnowledgeStore`; KS section of the skillset dialog |
+| 4d | **Edit existing skillset** — load full definition into the guided builder | ✅ built | `GET /skillsets?name=` → `parseSkillset` → `openEditSkillset` |
+| 4e | Attach skillset to an indexer (AI enrichment) | ✅ built | Add-indexer dialog skillset dropdown → `PUT /indexers/{n}` |
+| 4f | Advanced — raw skillset JSON (power-user escape hatch, portal "JSON view" parity) | ✅ built | collapsible advanced editor, secondary to the guided builder |
 | 5 | Synonym maps list + ＋New + delete | ✅ built | tree |
 | 6 | Aliases list + ＋New + delete | ✅ built | tree |
 | 7 | Knowledge sources / knowledge base (agentic retrieval / Foundry IQ) | ✅ built | "Knowledge bases" navigator group opens the `KnowledgeBasesPanel` (sources + bases + retrieve-test) — real `2026-04-01` GA REST. See `parity/ai-search-knowledge-bases.md` |
