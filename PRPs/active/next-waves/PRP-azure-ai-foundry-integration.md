@@ -29,7 +29,7 @@ The operator's standard is unchanged: **Loom is Fabric-class AI on pure Azure + 
 |----|------|----------------|-----------|----------|--------|
 | AIF-1 | Knowledge Sources + Knowledge Bases (agentic retrieval / Foundry IQ) | AI Search + Foundry Agent Service | MISSING | P0 | L |
 | AIF-2 | Embedding client + integrated-vectorization (skillset + vector-profile designers) | AI Search + AOAI embeddings | MISSING | P0 | L |
-| AIF-3 | Index-my-lakehouse / warehouse / ADX wizard | AI Search Import-and-vectorize wizard over Loom's estate | MISSING | P0 | XL |
+| AIF-3 | Index-my-lakehouse / warehouse / ADX wizard | AI Search Import-and-vectorize wizard over Loom's estate | ✅ DONE (Wave 4) | P0 | XL |
 | AIF-4 | Connected-agent (multi-agent) composition | Foundry Agent Service — connected agents | PARTIAL | P0 | M |
 | AIF-5 | Typed agent tool catalog (MCP / OpenAPI / grounding) | Foundry Agent Service tool catalog | PARTIAL | P0 | M |
 | AIF-6 | Visual multi-agent workflow canvas | Agent Framework graph workflows / Foundry flow designer | PARTIAL | P1 | L |

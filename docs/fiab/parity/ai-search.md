@@ -180,7 +180,7 @@ MISSING ❌
 ### D. Prototyping & inspection tools
 | # | Capability | Loom status | Where |
 |---|------------|-------------|-------|
-| 21 | **Import data** wizard (datasource+skillset+index+indexer in one flow, chunking + vectorization) | ⚠️ honest-gate | "Not yet wired" row; user must build each piece individually |
+| 21 | **Import data** wizard (datasource+skillset+index+indexer in one flow, chunking + vectorization) | ✅ built | **Index-my-estate wizard (AIF-3)** — one-click "Import and vectorize data" over Loom's own estate. Launches from the AI Search editor ribbon (estate picker) AND from the lakehouse / warehouse / ADX editor headers (source pre-bound). 5 typed steps: source auto-derive (lakehouse ADLS Gen2 root; warehouse/ADX honest-gated with the recommended export path) → content preset (Documents OCR+chunk+embed / Structured JSON) + confirm source→Edm field mapping → chunk size/overlap + AOAI embedding target → optional schedule → orchestrate. Server-side orchestration with **rollback-on-failure** creates the `adlsgen2` data source (keyless MI ResourceId), vector index (parent/chunk/title/text_vector + azureOpenAI vectorizer + semantic config), chunk→embed→indexProjections skillset, and indexer (creating runs it), then a live test-query pane. `lib/components/ai-search/index-my-data-wizard.tsx`, `lib/azure/index-my-data.ts`, `app/api/ai-search/index-my-data/{prepare,run,sources}` |
 | 22 | **Search explorer** — basic query (search/filter/select/top), results grid, facets, count | ✅ built | Search tab → `POST /docs/search` |
 | 22 | Search explorer — **Query options** (semantic / vector / queryType picker / search fields / orderby / select / top / count / filter) | ✅ built | queryType `Dropdown` (simple/full/semantic), semantic-config picker, search-fields, OData filter, select, orderby, top, count — all wired into the real `POST /docs/search` payload, with the raw request body echoed. `foundry-sub-editors.tsx:1267-1370` |
 | 22 | **Vector query builder** (k-NN / hybrid; text-vectorize or raw embedding; per-query field + k) | ✅ built | ＋Add vector query, kind text/vector, field picker, k; posts `vectorQueries[]`. `foundry-sub-editors.tsx:1312-1358` |
@@ -274,8 +274,9 @@ B-grade, and the two flagship index surfaces now meet the `ui-parity.md` bar:
 Remaining gaps keep it off A: **no indexer scheduling**, no execution history,
 no field/output mappings; **semantic-config + vector-profile designers** are
 honest-gated (JSON-only); **scoring-profile / analyzer / CORS / CMK** designers
-are JSON-only; **Import data wizard, Debug sessions, Demo app** are honest-gated
-or missing; service admin (Keys, Identity, Networking, Monitoring, service
+are JSON-only; **Debug sessions, Demo app** are honest-gated or missing (the
+**Import data wizard** now ships as the AIF-3 index-my-estate wizard, row 21);
+service admin (Keys, Identity, Networking, Monitoring, service
 stats) is absent from the surface (scale lives on a different page). It is NOT
 vaporware (no mocks, real backend, honest gates). Grade: **B**.
 
@@ -289,8 +290,11 @@ vaporware (no mocks, real backend, honest gates). Grade: **B**.
    and per-run status detail (docs succeeded/failed, warnings, errors).
 4. **Semantic configuration + vector profile designers** — promote the two
    "Not yet wired" gates to real designers (still PUT the index def).
-5. **Import data wizard** — the no-code datasource→skillset→index→indexer flow
-   with chunking + integrated vectorization.
+5. ~~**Import data wizard**~~ — ✅ SHIPPED as the AIF-3 index-my-estate wizard
+   (`lib/components/ai-search/index-my-data-wizard.tsx`): the no-code
+   datasource→skillset→index→indexer flow with chunking + integrated
+   vectorization, launchable from the AI Search editor and from lakehouse /
+   warehouse / ADX source editors.
 6. **Service stats / quotas panel** — consume the existing `getServiceStats()`
    (add a route) for an Overview/usage surface.
 7. **Debug sessions** + **Create demo app** (lower priority preview/utility tools).

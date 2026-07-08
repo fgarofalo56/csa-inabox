@@ -34,6 +34,7 @@ import {
   ShieldTask20Regular, Search20Regular, BranchCompare20Regular,
   Server20Regular, Database20Regular,
   Folder20Regular, Document20Regular, FolderOpen20Regular, ArrowUp20Regular, TableSimple20Regular,
+  DocumentBulletList20Regular,
 } from '@fluentui/react-icons';
 import { DeltaPreviewGrid, type ColStat } from './components/delta-preview-grid';
 import { EmptyState } from '@/lib/components/empty-state';
@@ -42,6 +43,7 @@ import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { AiSearchServiceTree } from '@/lib/components/ai-search/ai-search-tree';
+import { IndexMyDataWizard } from '@/lib/components/ai-search/index-my-data-wizard';
 import { KnowledgeBasesPanel } from '@/lib/components/ai-search/knowledge-bases-panel';
 import { IndexerOpsPanel } from '@/lib/components/ai-search/indexer-ops';
 import { ScoringProfilesDesigner, AnalyzersDesigner, CorsAndCmkDesigner } from '@/lib/components/ai-search/index-designers';
@@ -1938,12 +1940,22 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
   const toggleFacet = (name: string, on: boolean) =>
     setSelectedFacets((prev) => (on ? [...new Set([...prev, name])] : prev.filter((f) => f !== name)));
 
+  // Index-my-estate wizard (AIF-3) — estate-pick entry point from the AI Search
+  // editor's ribbon (the source-editor entry points live in ItemEditorChrome).
+  const [imdOpen, setImdOpen] = useState(false);
+
   const ribbon = useMemo(() => {
     const armId = idx?.id || idx?.armId;
     const portalUrl = armId
       ? `https://portal.azure.com/#@/resource${armId}/overview`
       : 'https://portal.azure.com/';
-    return buildBaseRibbon(isNew ? reloadList : reloadDetail, portalUrl);
+    const base = buildBaseRibbon(isNew ? reloadList : reloadDetail, portalUrl);
+    // Add an "Ingest" group with the one-click index-my-data wizard.
+    return base.map((t) =>
+      t.id === 'home'
+        ? { ...t, groups: [...t.groups, { label: 'Ingest', actions: [{ label: 'Index my data', icon: <DocumentBulletList20Regular />, onClick: () => setImdOpen(true), title: 'Import & vectorize a lakehouse / warehouse / ADX source into a new search index' }] }] }
+        : t,
+    );
   }, [isNew, reloadList, reloadDetail, idx]);
 
   const runSearch = async () => {
@@ -2105,7 +2117,10 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
     />
   );
   const chrome = (main: ReactNode) => (
-    <ItemEditorChrome item={item} id={id} ribbon={ribbon} leftPanel={serviceTree} main={main} />
+    <>
+      <ItemEditorChrome item={item} id={id} ribbon={ribbon} leftPanel={serviceTree} main={main} />
+      <IndexMyDataWizard open={imdOpen} onOpenChange={setImdOpen} />
+    </>
   );
 
   // -------- Knowledge Bases (agentic retrieval) surface --------
