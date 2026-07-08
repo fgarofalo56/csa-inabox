@@ -25,6 +25,59 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.57.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.56.0...csa-inabox-v0.57.0) (2026-07-08)
+
+
+### Features
+
+* **admin-security:** no-freeform Register-source wizard auto-populated from the Loom estate ([#1698](https://github.com/fgarofalo56/csa-inabox/issues/1698)) ([0436b64](https://github.com/fgarofalo56/csa-inabox/commit/0436b640683a09e8f8a9937d1e30c7a728e3ca53)), closes [#92](https://github.com/fgarofalo56/csa-inabox/issues/92)
+* **admin:** one-click "Enable all" Microsoft MCP servers + Databricks-UC register hand-off ([#1707](https://github.com/fgarofalo56/csa-inabox/issues/1707)) ([eb73ce9](https://github.com/fgarofalo56/csa-inabox/commit/eb73ce9a1e1341d68b2ff355558f70cda1e6a0f7))
+* **data-product:** enforce contract quality expectations against live ADX (C8) ([#1688](https://github.com/fgarofalo56/csa-inabox/issues/1688)) ([968049a](https://github.com/fgarofalo56/csa-inabox/commit/968049af7f6857c6d4e42c426354cf9c5a220b89))
+* **governance:** Loom-native label-policy library + day-one defaults (DLP + Label) ([#1694](https://github.com/fgarofalo56/csa-inabox/issues/1694)) ([ffe8112](https://github.com/fgarofalo56/csa-inabox/commit/ffe811298bbb8163f762c5ecbc012afd5e52243b))
+* **mip:** wire Label policies tab to Loom-native label-policy library (ungate + best-practice presets) ([#1695](https://github.com/fgarofalo56/csa-inabox/issues/1695)) ([5033cba](https://github.com/fgarofalo56/csa-inabox/commit/5033cba3c09b90a4876d37c37c2596ce22e91b44))
+* **monitor/cost:** max out the Cost tab — donut charts, anomalies, tag chargeback, subscription names ([#1697](https://github.com/fgarofalo56/csa-inabox/issues/1697)) ([9704f50](https://github.com/fgarofalo56/csa-inabox/commit/9704f50ad6619748989b9f3b55ab0ffb62139b0d))
+* **org-reports:** add a per-report icon to each report card ([#1693](https://github.com/fgarofalo56/csa-inabox/issues/1693)) ([cd680d7](https://github.com/fgarofalo56/csa-inabox/commit/cd680d75b697b287acb3c69b5168f06302b8aace))
+
+
+### Bug Fixes
+
+* **admin,data-product:** persist MCP enable-all summary + fix banner clipping overlap ([#1708](https://github.com/fgarofalo56/csa-inabox/issues/1708)) ([9c8e18f](https://github.com/fgarofalo56/csa-inabox/commit/9c8e18f98b6ef1f74d030320afd26c64d2ed822e))
+* **copilot:** bundle docs corpus into the image (in-product Copilot index was empty) ([#1699](https://github.com/fgarofalo56/csa-inabox/issues/1699)) ([3984445](https://github.com/fgarofalo56/csa-inabox/commit/3984445a596bb4172c0a80deb9d73f7d2fbe1310))
+* **copilot:** key-safe doc ids so the RAG index actually populates ([#1700](https://github.com/fgarofalo56/csa-inabox/issues/1700)) ([8c0ff0c](https://github.com/fgarofalo56/csa-inabox/commit/8c0ff0c236674736f2a17023200b51b312687a3d))
+* **data-product:** repair broken empty-states + derive Bundle (no freeform) ([#1706](https://github.com/fgarofalo56/csa-inabox/issues/1706)) ([42d285c](https://github.com/fgarofalo56/csa-inabox/commit/42d285c3c213e2ab94401ca97a2ad10105402527))
+* **new:** open the create dialog after mount to avoid SSR hydration mismatch ([#1686](https://github.com/fgarofalo56/csa-inabox/issues/1686)) ([abc40fa](https://github.com/fgarofalo56/csa-inabox/commit/abc40fa884fee4092c302ae092a3b5c8884c4129))
+* **rti:** give Discover-sources the 60s action budget (was timing out at 6s) ([#1705](https://github.com/fgarofalo56/csa-inabox/issues/1705)) ([c258c60](https://github.com/fgarofalo56/csa-inabox/commit/c258c6081172dd50fbc32d40016c2cb3fde94ba9))
+
+
+### Documentation
+
+* **copilot:** make the docs-site Copilot Loom-aware + open the docs sweep ([#1692](https://github.com/fgarofalo56/csa-inabox/issues/1692)) ([9832403](https://github.com/fgarofalo56/csa-inabox/commit/9832403cb5f4adbc7268275f7245756ac19a54bd))
+* **loom:** author core CSA Loom pages + wire into nav (Copilot grounding) ([#1696](https://github.com/fgarofalo56/csa-inabox/issues/1696)) ([c94d3ae](https://github.com/fgarofalo56/csa-inabox/commit/c94d3ae4c7fc568ae1f54b610666980d952e0657))
+* **parity:** add 7 missing editor parity docs (batch A) ([#1704](https://github.com/fgarofalo56/csa-inabox/issues/1704)) ([284f7d9](https://github.com/fgarofalo56/csa-inabox/commit/284f7d9658d7edfd6a6eb3ad19b8bd7a4d9ed519))
+* **parity:** add 7 missing editor parity docs (batch B) ([#1703](https://github.com/fgarofalo56/csa-inabox/issues/1703)) ([04dadd4](https://github.com/fgarofalo56/csa-inabox/commit/04dadd486c620a0774cae4f3aaf9393d4454a97d))
+* **parity:** add 7 missing editor parity docs (batch C) ([#1701](https://github.com/fgarofalo56/csa-inabox/issues/1701)) ([3a50820](https://github.com/fgarofalo56/csa-inabox/commit/3a508207cc08117982643c18fdf32f2b0cb2f866))
+* **parity:** add 7 missing editor parity docs (batch D) ([#1702](https://github.com/fgarofalo56/csa-inabox/issues/1702)) ([5a0abb8](https://github.com/fgarofalo56/csa-inabox/commit/5a0abb8d2ea26cdb554a41deb45a1c96217156e7))
+
+
+### Tests
+
+* **geo-dataset:** render GeoSchemaPanel directly to kill the coverage flake (fixes main red) ([#1690](https://github.com/fgarofalo56/csa-inabox/issues/1690)) ([9968857](https://github.com/fgarofalo56/csa-inabox/commit/996885720fa33d396691d64c43082549d2f8a622))
+* **geo-dataset:** stub heavy viz children to kill the render-timeout flake ([#1689](https://github.com/fgarofalo56/csa-inabox/issues/1689)) ([a02750f](https://github.com/fgarofalo56/csa-inabox/commit/a02750f1bf63712342fa9507642fe29d627af33b))
+* **kql-dashboard:** extract BaseQueriesPanel + test it directly (kill retry-masked flake) ([#1691](https://github.com/fgarofalo56/csa-inabox/issues/1691)) ([f4d3091](https://github.com/fgarofalo56/csa-inabox/commit/f4d3091d481c0e6cd5ecfdeb0014ed445a467201))
+
+
+### Continuous Integration
+
+* **tutorial-capture:** parameterize sub + admin_rg as dispatch inputs ([#1685](https://github.com/fgarofalo56/csa-inabox/issues/1685)) ([7ec3810](https://github.com/fgarofalo56/csa-inabox/commit/7ec3810f223cef35552fbb0c7c0016535d87a0e5))
+* **tutorial-capture:** pin pnpm 9 + --no-frozen-lockfile (match fiab-console-ci) ([#1687](https://github.com/fgarofalo56/csa-inabox/issues/1687)) ([e921ed6](https://github.com/fgarofalo56/csa-inabox/commit/e921ed6fffc33279d697b2ae72dbdd5a9911a59a))
+
+
+### Miscellaneous
+
+* **deps:** Bump @azure/msal-react in /portal/react-webapp ([#1609](https://github.com/fgarofalo56/csa-inabox/issues/1609)) ([d88ef89](https://github.com/fgarofalo56/csa-inabox/commit/d88ef89e375d7db23e3e06e443254d2d84d7d7b0))
+* **deps:** Bump @radix-ui/react-label in /portal/react-webapp ([#1615](https://github.com/fgarofalo56/csa-inabox/issues/1615)) ([0bf3954](https://github.com/fgarofalo56/csa-inabox/commit/0bf3954c01112d80181522c42ed44739a66ea8c8))
+* **deps:** Bump axios from 1.18.0 to 1.18.1 in /portal/react-webapp ([#1616](https://github.com/fgarofalo56/csa-inabox/issues/1616)) ([5f5628d](https://github.com/fgarofalo56/csa-inabox/commit/5f5628d4e66b200e1fc24b2b9990b58d4477b925))
+
 ## [0.56.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.55.0...csa-inabox-v0.56.0) (2026-07-06)
 
 
