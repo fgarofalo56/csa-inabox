@@ -27,6 +27,7 @@ import {
   type FoundryAgentBody,
 } from '@/lib/azure/foundry-agent-client';
 import { loadOwnedItem } from '../../../_lib/item-crud';
+import { migrateLegacyTools, toolsToFoundryTools } from '@/lib/copilot/agent-tool-catalog';
 import type { WorkspaceItem } from '@/lib/types/workspace';
 import { apiServerError } from '@/lib/api/respond';
 
@@ -43,13 +44,11 @@ function foundryAgentName(itemId: string): string {
   return trimmed.replace(/^-+|-+$/g, '') || `loom-ops-${itemId.slice(0, 8)}`;
 }
 
-function parseToolsCsv(raw: unknown): Array<Record<string, unknown>> {
-  if (typeof raw !== 'string') return [];
-  return raw
-    .split(',')
-    .map((t) => t.trim())
-    .filter(Boolean)
-    .map((tool) => ({ type: tool }));
+// Typed tool catalog (AIF-5): map the structured `state.tools[]` to Foundry
+// Agent Service tool JSON, tolerating a legacy comma-separated string via
+// migrateLegacyTools. Replaces the old CSV-splitting `parseToolsCsv`.
+function stateToolsToFoundry(raw: unknown): Array<Record<string, unknown>> {
+  return toolsToFoundryTools(migrateLegacyTools(raw));
 }
 
 export async function POST(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
@@ -101,7 +100,7 @@ export async function POST(_req: NextRequest, ctx: { params: Promise<{ id: strin
     name: agentName,
     model,
     instructions: systemPrompt,
-    tools: parseToolsCsv(state.tools),
+    tools: stateToolsToFoundry(state.tools),
     description: `Loom operations-agent: ${item.displayName}`.slice(0, 512),
     metadata,
     kind: 'prompt',
