@@ -69,6 +69,11 @@ const ALLOWLIST = new Map([
   // "Edit model (JSON)" advanced dialog). Primary authoring is the visual tile
   // canvas; this editable JSON dialog mirrors the portal's JSON view.
   ['apps/fiab-console/lib/editors/phase3/kql-dashboard-editor.tsx', 'ADX/Fabric dashboard raw-JSON model view (1:1 portal code view; canvas is primary)'],
+  // The only free-text surface here is a natural-language "Custom prompt"
+  // Textarea (a per-row instruction sent to Azure OpenAI) — NOT a raw item-config
+  // JSON blob. It trips the Textarea heuristic only because an adjacent, unrelated
+  // "Fields" hint mentions "returned as JSON" within the 6-line context window.
+  ['apps/fiab-console/lib/editors/ai-enrichment-editor.tsx', 'Free-text natural-language custom-prompt Textarea (Azure OpenAI per-row instruction), not raw-JSON config; "JSON" only appears in an adjacent Fields hint'],
 ]);
 
 function walk(dir, out = []) {
