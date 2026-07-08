@@ -60,6 +60,7 @@ import {
   DomainGroupError,
 } from '@/lib/azure/domain-groups';
 import { apiServerError } from '@/lib/api/respond';
+import { emitAuditEvent } from '@/lib/admin/audit-stream';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -462,6 +463,17 @@ export async function DELETE(req: NextRequest) {
     });
     doc.updatedAt = new Date().toISOString();
     await c.item(docId, tenantId).replace(doc);
+    // SIEM audit stream (BR-SIEM) — deleting a governance domain reshapes the
+    // tenant topology; a destructive governance action worth a SIEM signal.
+    emitAuditEvent({
+      actorOid: s.claims.oid,
+      actorUpn: s.claims.upn || tenantId,
+      action: 'domain.delete',
+      targetType: 'governance-domain',
+      targetId: id,
+      tenantId: s.claims.tid || tenantId,
+      detail: { name: removed.name, parentId: removed.parentId },
+    });
     return NextResponse.json({ ok: true, domains: doc.items, mirror });
   } catch (e: any) {
     return apiServerError(e);

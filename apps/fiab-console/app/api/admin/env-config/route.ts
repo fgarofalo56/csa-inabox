@@ -47,6 +47,7 @@ import {
   aliasSatisfiedKeys,
 } from '@/lib/admin/env-config';
 import { CTX } from '@/lib/admin/self-audit';
+import { emitAuditEvent } from '@/lib/admin/audit-stream';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -308,6 +309,22 @@ export async function PUT(req: NextRequest) {
       }).catch(() => {});
     }
   } catch { /* audit failures are non-blocking */ }
+
+  // SIEM audit stream (BR-SIEM) — runtime env-config writes reshape the running
+  // deployment; secret values are NEVER included (names only).
+  emitAuditEvent({
+    actorOid: session!.claims.oid,
+    actorUpn: who,
+    action: 'env-config.update',
+    targetType: 'env-config',
+    targetId: `env-config:${tenantId}`,
+    tenantId: session!.claims.tid || tenantId,
+    detail: {
+      changed: Object.keys(plainChanges),
+      secretsChanged: Object.keys(secretChanges),
+      platform: onAks ? 'aks' : 'aca',
+    },
+  });
 
   const { cliScript, bicepEnvSnippet } = buildSyncArtifacts(plainChanges, Object.keys(secretChanges));
 

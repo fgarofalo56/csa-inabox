@@ -27,6 +27,7 @@ import { resolveAdminWorkspace } from '@/lib/auth/workspace-guard';
 import { workspacesContainer, itemsContainer } from '@/lib/azure/cosmos-client';
 import { upsertLoomDoc, deleteLoomDoc, docForWorkspace } from '@/lib/azure/loom-search';
 import { assignWorkspaceToCapacity, FabricError } from '@/lib/azure/fabric-client';
+import { emitAuditEvent } from '@/lib/admin/audit-stream';
 import type { Workspace, WorkspaceItem, WorkspaceLicenseMode } from '@/lib/types/workspace';
 import { apiError } from '@/lib/api/respond';
 
@@ -182,6 +183,17 @@ export async function DELETE(_req: NextRequest, props: { params: Promise<{ id: s
     const c = await workspacesContainer();
     await c.item(ws.id, ws.tenantId).delete();
     void deleteLoomDoc(`ws:${ws.id}`);
+    // SIEM audit stream (BR-SIEM) — a cascade workspace delete (with its item
+    // count) is a top SIEM "mass delete" signal.
+    emitAuditEvent({
+      actorOid: session.claims.oid,
+      actorUpn: session.claims.upn || session.claims.email || session.claims.oid,
+      action: 'workspace.delete',
+      targetType: 'workspace',
+      targetId: ws.id,
+      tenantId: session.claims.tid || session.claims.oid,
+      detail: { name: ws.name, deletedItems: children.length },
+    });
     return NextResponse.json({ ok: true });
   } catch (e: any) {
     return err(e?.message || 'Failed to delete workspace', 500, 'cosmos_error');
