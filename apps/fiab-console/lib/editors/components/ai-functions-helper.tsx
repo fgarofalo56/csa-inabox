@@ -164,6 +164,14 @@ export function AiFunctionsHelper(props: AiFunctionsHelperProps) {
   const [result, setResult] = useState<RunResult | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  // FGC-19 — model-tier selector (Fast/default vs Advanced) + reasoning-effort.
+  // Applies to the Azure OpenAI path only (the in-database Databricks path uses
+  // the warehouse's own ai_* runtime, not an AOAI deployment).
+  const [tier, setTier] = useState<'fast' | 'advanced'>('fast');
+  const [deployments, setDeployments] = useState<{ name: string; modelName?: string }[]>([]);
+  const [deployment, setDeployment] = useState<string>('');
+  const [reasoningEffort, setReasoningEffort] = useState<'minimal' | 'low' | 'medium' | 'high'>('medium');
+
   // --- Boundary probe whenever the dialog opens ---
   useEffect(() => {
     if (!open) return;
@@ -195,6 +203,24 @@ export function AiFunctionsHelper(props: AiFunctionsHelperProps) {
 
   // Whether the in-database Databricks path is the one this run will take.
   const useDbx = !!(probe && !probe.govPath && probe.dbxAvailable && warehouseId && DBX_SUPPORTED.has(fn));
+
+  // Load the live model deployments when the Advanced tier is selected on the
+  // AOAI path (honest: if the list can't load the dropdown stays empty and Fast
+  // is used). Runs once per dialog open.
+  useEffect(() => {
+    if (useDbx || tier !== 'advanced' || deployments.length) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await clientFetch('/api/foundry/model-deployments');
+        const j = await r.json();
+        if (!cancelled && j.ok && Array.isArray(j.deployments)) {
+          setDeployments(j.deployments.map((d: any) => ({ name: d.name, modelName: d.modelName })));
+        }
+      } catch { /* honest empty state */ }
+    })();
+    return () => { cancelled = true; };
+  }, [useDbx, tier, deployments.length]);
 
   const optionsPayload = useMemo(() => {
     const o: Record<string, unknown> = {};
@@ -268,6 +294,9 @@ export function AiFunctionsHelper(props: AiFunctionsHelperProps) {
           schema: useDbx ? (schema || undefined) : undefined,
           input: useDbx ? undefined : sampleInput.trim(),
           options: optionsPayload,
+          // FGC-19 model-tier: only forwarded on the AOAI path (Advanced tier).
+          deployment: !useDbx && tier === 'advanced' && deployment ? deployment : undefined,
+          reasoningEffort: !useDbx && tier === 'advanced' ? reasoningEffort : undefined,
         }),
       });
       const j = await r.json();
@@ -282,7 +311,7 @@ export function AiFunctionsHelper(props: AiFunctionsHelperProps) {
     } finally {
       setRunning(false);
     }
-  }, [reset, column, useDbx, sampleInput, compareTo, itemType, itemId, fn, warehouseId, table, catalog, schema, optionsPayload]);
+  }, [reset, column, useDbx, sampleInput, compareTo, itemType, itemId, fn, warehouseId, table, catalog, schema, optionsPayload, tier, deployment, reasoningEffort]);
 
   const activeFn = FN_OPTIONS.find((f) => f.key === fn);
 
@@ -388,6 +417,50 @@ export function AiFunctionsHelper(props: AiFunctionsHelperProps) {
                         rows={2}
                       />
                     </Field>
+                  )}
+
+                  {/* FGC-19 — model tier + reasoning effort (Azure OpenAI path only). */}
+                  {!useDbx && (
+                    <div className={s.row}>
+                      <Field label="Model tier" className={s.flex1} hint="Fast = default deployment · Advanced = higher-reasoning">
+                        <Dropdown
+                          value={tier === 'fast' ? 'Fast (default)' : 'Advanced'}
+                          selectedOptions={[tier]}
+                          onOptionSelect={(_, d) => { if (d.optionValue) { setTier(d.optionValue as 'fast' | 'advanced'); reset(); } }}
+                        >
+                          <Option value="fast" text="Fast (default)">Fast (default) — cost-efficient deployment</Option>
+                          <Option value="advanced" text="Advanced">Advanced — higher-reasoning deployment</Option>
+                        </Dropdown>
+                      </Field>
+                      {tier === 'advanced' && (
+                        <Field label="Deployment" className={s.flex1} hint={deployments.length ? 'Live model deployments' : 'None listed — Fast used'}>
+                          <Dropdown
+                            value={deployment}
+                            selectedOptions={deployment ? [deployment] : []}
+                            placeholder="Default"
+                            disabled={!deployments.length}
+                            onOptionSelect={(_, d) => { if (d.optionValue) { setDeployment(d.optionValue); reset(); } }}
+                          >
+                            {deployments.map((dp) => (
+                              <Option key={dp.name} value={dp.name} text={dp.name}>{dp.name}{dp.modelName ? ` · ${dp.modelName}` : ''}</Option>
+                            ))}
+                          </Dropdown>
+                        </Field>
+                      )}
+                      {tier === 'advanced' && (
+                        <Field label="Reasoning effort" className={s.flex1} hint="Passed to reasoning-class models">
+                          <Dropdown
+                            value={reasoningEffort}
+                            selectedOptions={[reasoningEffort]}
+                            onOptionSelect={(_, d) => { if (d.optionValue) { setReasoningEffort(d.optionValue as 'minimal' | 'low' | 'medium' | 'high'); reset(); } }}
+                          >
+                            {(['minimal', 'low', 'medium', 'high'] as const).map((e) => (
+                              <Option key={e} value={e} text={e}>{e}</Option>
+                            ))}
+                          </Dropdown>
+                        </Field>
+                      )}
+                    </div>
                   )}
 
                   {useDbx ? (

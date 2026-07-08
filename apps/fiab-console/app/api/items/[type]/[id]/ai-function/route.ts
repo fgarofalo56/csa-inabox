@@ -104,6 +104,14 @@ function parseOptions(o: unknown): AiFnOptions {
     if (typeof obj.compareTo === 'string' && obj.compareTo.trim()) opts.compareTo = obj.compareTo.trim();
     if (typeof obj.embeddingDeployment === 'string' && obj.embeddingDeployment.trim())
       opts.embeddingDeployment = obj.embeddingDeployment.trim();
+    // FGC-19 model-tier: explicit chat deployment (Advanced tier) + reasoning-effort.
+    if (typeof obj.deployment === 'string' && obj.deployment.trim()) opts.deployment = obj.deployment.trim();
+    if (
+      typeof obj.reasoningEffort === 'string' &&
+      ['minimal', 'low', 'medium', 'high'].includes(obj.reasoningEffort)
+    ) {
+      opts.reasoningEffort = obj.reasoningEffort as 'minimal' | 'low' | 'medium' | 'high';
+    }
   }
   return opts;
 }
