@@ -31,7 +31,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   OverlayDrawer, DrawerHeader, DrawerHeaderTitle, DrawerBody,
   Badge, Button, Caption1, Subtitle2, Body1, Input, Textarea, Select, Switch, Checkbox,
-  Field, Divider, Spinner, Tooltip, Tag, TagGroup,
+  Field, Divider, Spinner, Tooltip, Tag, TagGroup, TabList, Tab,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   Accordion, AccordionItem, AccordionHeader, AccordionPanel,
   MessageBar, MessageBarBody, MessageBarTitle,
@@ -47,6 +47,8 @@ import { EmptyState } from '@/lib/components/empty-state';
 import {
   WRANGLER_OPERATIONS, type WranglerOp, type WranglerField, SAMPLE_CSV,
 } from '@/lib/notebook/wrangler-operations';
+import { WranglerAiTab } from './wrangler-ai-tab';
+import type { WranglerStep } from '@/lib/notebook/wrangler-ai';
 
 const useStyles = makeStyles({
   body: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, height: '100%', minHeight: 0 },
@@ -95,6 +97,10 @@ export interface DataWranglerPanelProps {
   onInsertCell: (source: string, lang: 'pyspark' | 'python') => void;
   /** DataFrame variable the generated code should operate on (Fabric uses `df`). */
   dfVar?: string;
+  /** Notebook item type + id — enable the AI-assist tab's per-column AI functions
+   *  (they call this item's ai-function endpoint). Absent on an unsaved notebook. */
+  itemType?: string;
+  itemId?: string;
 }
 
 /** Minimal, dependency-free CSV parse for the pasted / sample data. */
@@ -117,8 +123,9 @@ function parseCsv(text: string): Sample {
   return { columns, rows };
 }
 
-export function DataWranglerPanel({ open, onOpenChange, onInsertCell, dfVar = 'df' }: DataWranglerPanelProps) {
+export function DataWranglerPanel({ open, onOpenChange, onInsertCell, dfVar = 'df', itemType, itemId }: DataWranglerPanelProps) {
   const s = useStyles();
+  const [mode, setMode] = useState<'prepare' | 'ai'>('prepare');
   const [dataText, setDataText] = useState('');
   const [sample, setSample] = useState<Sample>({ columns: [], rows: [] });
   const [steps, setSteps] = useState<QueuedStep[]>([]);
@@ -212,6 +219,23 @@ export function DataWranglerPanel({ open, onOpenChange, onInsertCell, dfVar = 'd
   }, []);
 
   const clearAll = useCallback(() => { setSteps([]); }, []);
+
+  // Append AI-assist steps (suggestions / NL-to-transform) to the recipe. The
+  // live-preview effect then runs them on the real pandas host — so applying an
+  // AI suggestion is executed for real, identical to a gallery-picked step.
+  const addSteps = useCallback((next: WranglerStep[]) => {
+    if (!next?.length) return;
+    setSteps((prev) => [...prev, ...(next as QueuedStep[])]);
+  }, []);
+
+  // Current data profile the AI tab reasons over: the live preview (post-steps)
+  // when available, else the raw parsed sample.
+  const aiProfile = useMemo(() => ({
+    columns: preview?.columns.length ? preview.columns : sample.columns,
+    rows: preview?.rows.length ? preview.rows : sample.rows,
+    summary: preview?.summary ?? [],
+    rowCount: preview?.rowCount ?? sample.rows.length,
+  }), [preview, sample]);
 
   const insert = useCallback((lang: 'pyspark' | 'python') => {
     const code = lang === 'pyspark' ? preview?.code.pyspark : preview?.code.pandas;
@@ -328,10 +352,25 @@ export function DataWranglerPanel({ open, onOpenChange, onInsertCell, dfVar = 'd
             <EmptyState
               icon={<BroomRegular />}
               title="Prep your data visually"
-              body="Paste a CSV sample (or Load sample data), then pick cleaning operations from the gallery. Each step runs on a real pandas backend and generates pandas + PySpark code you can insert into the notebook — a 1:1 match for Microsoft Fabric's Data Wrangler."
+              body="Paste a CSV sample (or Load sample data), then pick cleaning operations from the gallery — or use AI assist for suggestions, per-column AI functions, and describe-a-change. Each step runs on a real pandas backend and generates pandas + PySpark code you can insert into the notebook — a 1:1 match for Microsoft Fabric's Data Wrangler."
               primaryAction={{ label: 'Load sample data', onClick: () => loadSample(SAMPLE_CSV) }}
             />
           ) : (
+            <>
+            <TabList selectedValue={mode} onTabSelect={(_e, d) => setMode(d.value as 'prepare' | 'ai')}>
+              <Tab value="prepare" icon={<BroomRegular />}>Prepare</Tab>
+              <Tab value="ai" icon={<Sparkle20Regular />}>AI assist</Tab>
+            </TabList>
+            {mode === 'ai' ? (
+              <WranglerAiTab
+                notebookId={itemId || 'new'}
+                itemType={itemType}
+                itemId={itemId}
+                profile={aiProfile}
+                onAddSteps={(next) => { addSteps(next); setMode('prepare'); }}
+                onInsertCell={onInsertCell}
+              />
+            ) : (
             <div className={s.main}>
               {/* Left rail: operation gallery + parameter form. */}
               <div className={s.rail}>
@@ -441,6 +480,8 @@ export function DataWranglerPanel({ open, onOpenChange, onInsertCell, dfVar = 'd
                 </div>
               </div>
             </div>
+            )}
+            </>
           )}
         </div>
       </DrawerBody>

@@ -37,6 +37,7 @@ import {
   buildPredictPySpark, validatePredictSpec, PREDICT_RESULT_TYPES,
   type PredictSpec, type FeatureMapping, type PredictResultType,
 } from '@/lib/azure/predict-codegen';
+import type { PredictHistoryEntry, PredictRunStatus } from '@/lib/azure/predict-history';
 
 const useStyles = makeStyles({
   root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL, maxWidth: '860px' },
@@ -83,6 +84,16 @@ interface RunState {
   rows?: number | null;
   errorText?: string;
   textPlain?: string;
+}
+
+/** Fluent Badge color per persisted run status. */
+function runStatusColor(status: PredictRunStatus): 'success' | 'danger' | 'warning' | 'informative' {
+  switch (status) {
+    case 'succeeded': return 'success';
+    case 'failed': return 'danger';
+    case 'running': return 'warning';
+    default: return 'informative';
+  }
 }
 
 const RESULT_TYPE_LABELS: Record<PredictResultType, string> = {
@@ -134,6 +145,17 @@ export function PredictWizard({ apiBase, modelName, workspaceName, versions, def
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [run, setRun] = useState<RunState | null>(null);
+
+  // Run history (persisted on the item — FGC-18 "run history persisted").
+  const [history, setHistory] = useState<PredictHistoryEntry[]>([]);
+  const loadHistory = useCallback(async () => {
+    try {
+      const r = await clientFetch(`${apiBase}/predict/history`);
+      const j = await r.json();
+      if (j.ok && Array.isArray(j.runs)) setHistory(j.runs);
+    } catch { /* non-critical — history is a convenience */ }
+  }, [apiBase]);
+  useEffect(() => { void loadHistory(); }, [loadHistory]);
 
   // Load pickers when entering step 2 (or when the version changes there).
   useEffect(() => {
@@ -207,6 +229,7 @@ export function PredictWizard({ apiBase, modelName, workspaceName, versions, def
         textPlain: ok ? out.textPlain : undefined,
         errorText: ok ? undefined : `${out.ename || 'Error'}: ${out.evalue || 'scoring job failed'}`,
       });
+      void loadHistory(); // the status poll just stamped a terminal history entry
       return;
     }
     // Still running — update status/runId and schedule the next poll.
@@ -217,7 +240,7 @@ export function PredictWizard({ apiBase, modelName, workspaceName, versions, def
       // Terminal state without output — surface honestly.
       setRun((prev) => prev ? { ...prev, done: true, ok: false, errorText: `Job ended in state '${j.status}' with no output` } : prev);
     }
-  }, [apiBase]);
+  }, [apiBase, loadHistory]);
 
   const submit = useCallback(async () => {
     setSubmitting(true); setSubmitError(null); setRun(null);
@@ -514,6 +537,39 @@ export function PredictWizard({ apiBase, modelName, workspaceName, versions, def
         <div className={s.actions}>
           <Button appearance="secondary" onClick={() => { setStep(1); setRun(null); }}>New scoring job</Button>
         </div>
+      )}
+
+      {/* ---- Run history (persisted on the item) ---- */}
+      {history.length > 0 && (
+        <Card className={s.card}>
+          <div className={s.stepHead}><DocumentBulletList20Regular /><Subtitle2>Run history ({history.length})</Subtitle2></div>
+          <div style={{ overflowX: 'auto' }}>
+            <Table size="small" aria-label="Batch-scoring run history">
+              <TableHeader>
+                <TableRow>
+                  <TableHeaderCell>Started</TableHeaderCell>
+                  <TableHeaderCell>Version</TableHeaderCell>
+                  <TableHeaderCell>Compute</TableHeaderCell>
+                  <TableHeaderCell>Status</TableHeaderCell>
+                  <TableHeaderCell>Rows</TableHeaderCell>
+                  <TableHeaderCell>Output</TableHeaderCell>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {history.map((h) => (
+                  <TableRow key={h.runId}>
+                    <TableCell>{new Date(h.startedAt).toLocaleString()}</TableCell>
+                    <TableCell>v{h.version}</TableCell>
+                    <TableCell>{h.backend === 'aml' ? 'AML Spark' : 'Synapse Spark'}</TableCell>
+                    <TableCell><Badge appearance="tint" color={runStatusColor(h.status)}>{h.status}</Badge></TableCell>
+                    <TableCell>{typeof h.rows === 'number' ? h.rows.toLocaleString() : '—'}</TableCell>
+                    <TableCell><span className={s.monoInline}>{h.outputRef || '—'}</span>{h.error ? <Caption1 style={{ color: tokens.colorPaletteRedForeground1 }}>{h.error}</Caption1> : null}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        </Card>
       )}
     </div>
   );
