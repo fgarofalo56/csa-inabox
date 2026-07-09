@@ -2,35 +2,34 @@
  * POST /api/deployment-pipelines/loom/[id]/deploy
  *   body: { sourceStageId, targetStageId, items?:[{sourceItemId, itemType}], note? }
  *
- * Selective (or full) deploy of content from one stage to the next. For each
- * chosen source item, this:
- *   1. computes the patched ProvisionTarget by applying the TARGET stage's
- *      deployment rules (parameter / data-source overrides) to the env-resolved
- *      base target — the Azure-native parity for Fabric "deployment rules";
- *   2. promotes the item's definition (state.content) into the target stage's
- *      workspace — updating the paired item if one already exists, else creating
- *      a new one;
- *   3. re-runs the SAME real provisioner the install path uses against the
- *      patched target, so the model/report/etc. is materialized in Test/Prod
- *      bound to the Test/Prod data sources.
+ * Selective (or full) deploy of content from one stage to the next. The heavy
+ * lifting — Variable-Library rebind (FGC-24), stage-rule application, re-provision
+ * through the real Azure-native provisioners, and the history receipt — lives in
+ * the shared `_lib/promote.ts` engine so this route and the approval route run
+ * one identical implementation.
  *
- * The receipt (diff + deployed item ids) is returned and persisted to history.
+ * BR-APPROVAL: when the TARGET stage has an enabled required-reviewer policy, the
+ * deploy does NOT execute here. Instead a pending approval request is created
+ * (carrying a diff summary of what would promote) and the route returns
+ * `{ status: 'pending-approval', requestId }`. Once the required approvals are
+ * cast (POST .../approvals/[requestId]), that route runs the SAME promotion.
+ *
  * Cosmos + the Azure-native provisioner backends only — no Fabric / Power BI.
  *
  * Shape: { ok, data: { operationId, status, diff, deployedItemIds, steps } }
+ *   or   { ok, data: { status:'pending-approval', requestId, requiredApprovals } }
  */
 import { NextRequest } from 'next/server';
 import crypto from 'node:crypto';
-import { listAllOwnedItems, createOwnedItem, updateOwnedItem } from '@/app/api/items/_lib/item-crud';
-import { PROVISIONERS, resolveTarget } from '@/lib/install/provisioning-engine';
-import { applyStageRules } from '@/lib/install/pipeline-deploy';
-import { computePipelineDiff, pairKey } from '@/lib/install/pipeline-compare';
-import { pipelineHistoryContainer } from '@/lib/azure/cosmos-client';
-import type { ProvisionResult } from '@/lib/install/provisioners/types';
-import type { LoomPipelineHistoryRecord } from '@/lib/types/loom-pipeline';
-import type { WorkspaceItem } from '@/lib/types/workspace';
-import { jok, jerr, loadPipeline, stageWorkspaceId, loadStageRules, resolveCaller } from '../../_lib/pipeline-store';
+import { listAllOwnedItems } from '@/app/api/items/_lib/item-crud';
+import { computePipelineDiff } from '@/lib/install/pipeline-compare';
+import { emitAuditEvent } from '@/lib/admin/audit-stream';
 import { emitLoomEvent } from '@/lib/events/webhook-emitter';
+import type { LoomApprovalRequest } from '@/lib/types/loom-pipeline';
+import {
+  jok, jerr, loadPipeline, resolveCaller, loadApprovalPolicy, createApprovalRequest,
+} from '../../_lib/pipeline-store';
+import { resolvePromotionStages, runPromotion } from '../../_lib/promote';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -60,151 +59,95 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     const pipeline = await loadPipeline(tenantId, id);
     if (!pipeline) return jerr('pipeline not found', 404, 'not_found');
 
-    const srcWs = stageWorkspaceId(pipeline, sourceStageId);
-    const tgtWs = stageWorkspaceId(pipeline, targetStageId);
-    if (!srcWs) return jerr('source stage not found in pipeline', 400, 'bad_request');
-    if (!tgtWs) return jerr('target stage not found in pipeline', 400, 'bad_request');
-    if (srcWs === tgtWs) {
-      // Legacy pipelines created before the distinct-workspace guard could
-      // bind two stages to the same workspace. Such a pipeline can never
-      // promote (the deploy would modify its own source). Tell the operator
-      // exactly how to fix it rather than surfacing a raw "promote error".
-      const srcName = pipeline.stages.find((st) => st.id === sourceStageId)?.displayName || 'source';
-      const tgtName = pipeline.stages.find((st) => st.id === targetStageId)?.displayName || 'target';
-      return jerr(
-        `Stages "${srcName}" and "${tgtName}" are bound to the same workspace, so content can't be promoted between them. Re-bind one stage to a distinct workspace, then deploy again.`,
-        400,
-        'duplicate_workspace',
-      );
-    }
+    const stages = resolvePromotionStages(pipeline, sourceStageId, targetStageId);
+    if ('error' in stages) return jerr(stages.error, stages.status, stages.code);
+    const { srcWs, tgtWs, targetStage } = stages;
 
-    const [sourceItemsAll, targetItemsBefore, rules] = await Promise.all([
-      listAllOwnedItems(tenantId, srcWs),
-      listAllOwnedItems(tenantId, tgtWs),
-      loadStageRules(id, targetStageId),
-    ]);
-
-    // The receipt diff is the source-vs-target comparison that motivated the deploy.
-    const { pairs, summary } = computePipelineDiff(sourceItemsAll, targetItemsBefore);
-
-    // Resolve the set of source items to deploy.
-    let toDeploy = sourceItemsAll;
+    // Selective deploy that names only non-existent items is a client error.
     if (chosen) {
-      const wanted = new Set(chosen.map((c) => c.sourceItemId));
-      toDeploy = sourceItemsAll.filter((it) => wanted.has(it.id));
-      if (toDeploy.length === 0) return jerr('none of the chosen items exist in the source stage', 400, 'bad_request');
+      const sourceItems = await listAllOwnedItems(tenantId, srcWs);
+      const ids = new Set(sourceItems.map((it) => it.id));
+      if (!chosen.some((c) => ids.has(c.sourceItemId))) {
+        return jerr('none of the chosen items exist in the source stage', 400, 'bad_request');
+      }
     }
 
-    const targetByKey = new Map<string, WorkspaceItem>();
-    for (const it of targetItemsBefore) targetByKey.set(pairKey(it), it);
-
-    const baseTarget = resolveTarget('shared');
-    const steps: string[] = [];
-    const deployedItemIds: string[] = [];
-    let anyCreated = false;
-    let anyFailed = false;
-
-    for (const src of toDeploy) {
-      const content = (src.state as any)?.content ?? null;
-      const { target: patched, applied } = applyStageRules(baseTarget, rules, src.itemType, src.displayName);
-      if (applied.length) steps.push(`[${src.displayName}] ${applied.join('; ')}`);
-
-      // Locate or create the paired item in the target workspace.
-      const existing = targetByKey.get(pairKey(src));
-      let targetItemId: string;
-      if (existing) {
-        targetItemId = existing.id;
-      } else {
-        const created = await createOwnedItem(s, src.itemType, {
-          workspaceId: tgtWs,
-          displayName: src.displayName,
-          description: src.description,
-          state: { ...(src.state || {}) },
-        });
-        if (!created.ok) {
-          anyFailed = true;
-          steps.push(`[${src.displayName}] target item create failed (${created.status}): ${created.error}`);
-          continue;
-        }
-        targetItemId = created.item.id;
-        steps.push(`[${src.displayName}] created target item ${targetItemId} in ${targetStageId}.`);
-      }
-
-      // Re-run the real provisioner against the patched (rule-applied) target.
-      let result: ProvisionResult | undefined;
-      const provisioner = PROVISIONERS[src.itemType];
-      if (provisioner) {
-        try {
-          result = await provisioner({
-            session: s,
-            target: patched,
-            cosmosItemId: targetItemId,
-            workspaceId: tgtWs,
-            displayName: src.displayName,
-            content,
-            appId: 'loom-pipeline-deploy',
-          });
-        } catch (e: any) {
-          result = { status: 'failed', error: e?.message || String(e), steps: ['provisioner threw'] };
-        }
-        steps.push(`[${src.displayName}] provisioner(${src.itemType}) → ${result.status}.`);
-        if (result.status === 'created' || result.status === 'exists') anyCreated = true;
-        else if (result.status === 'failed' || result.status === 'remediation') anyFailed = true;
-      } else {
-        steps.push(`[${src.displayName}] ${src.itemType} is Cosmos-only — definition promoted, no backend re-provision.`);
-        anyCreated = true;
-      }
-
-      // Persist the promoted definition + provision receipt onto the target item.
-      await updateOwnedItem(targetItemId, src.itemType, tenantId, {
-        state: {
-          ...(src.state || {}),
-          deployedFrom: src.id,
-          deployedFromStage: sourceStageId,
-          deployedAt: new Date().toISOString(),
-          ...(result ? { provisionResult: result } : {}),
-        },
+    // BR-APPROVAL — gate: an enabled policy with ≥1 required approval and ≥1
+    // named approver defers the promotion to a pending approval request instead
+    // of running it now.
+    const policy = await loadApprovalPolicy(id, targetStageId);
+    if (policy?.enabled && (policy.requiredApprovals || 0) > 0 && (policy.approvers?.length || 0) > 0) {
+      const [source, before] = await Promise.all([
+        listAllOwnedItems(tenantId, srcWs),
+        listAllOwnedItems(tenantId, tgtWs),
+      ]);
+      const { summary } = computePipelineDiff(source, before);
+      const diffSummary = `${summary.different} changed · ${summary.onlyInSource} new · ${summary.same} unchanged`;
+      const now = new Date().toISOString();
+      const request: LoomApprovalRequest = {
+        id: `approval-request:${crypto.randomUUID()}`,
+        docType: 'approval-request',
+        pipelineId: id,
+        tenantId,
+        sourceStageId,
+        targetStageId,
+        requiredApprovals: policy.requiredApprovals,
+        approvers: policy.approvers,
+        items: chosen,
+        note,
+        diffSummary,
+        status: 'pending',
+        decisions: [],
+        requestedBy: caller.actor,
+        requestedByOid: tenantId,
+        createdAt: now,
+        updatedAt: now,
+      };
+      await createApprovalRequest(request);
+      emitAuditEvent({
+        actorOid: s.claims.oid,
+        actorUpn: s.claims.upn || s.claims.email || s.claims.oid,
+        action: 'pipeline.promotion.requested',
+        targetType: 'deployment-pipeline',
+        targetId: id,
+        tenantId: s.claims.tid || tenantId,
+        detail: { requestId: request.id, sourceStageId, targetStageId, requiredApprovals: policy.requiredApprovals, diffSummary },
       });
-      deployedItemIds.push(targetItemId);
+      return jok({
+        status: 'pending-approval',
+        requestId: request.id,
+        requiredApprovals: policy.requiredApprovals,
+        stageName: targetStage.displayName,
+        diffSummary,
+      });
     }
 
-    const status: LoomPipelineHistoryRecord['status'] =
-      deployedItemIds.length === 0 ? 'failed' : anyFailed && anyCreated ? 'partial' : anyFailed ? 'failed' : 'succeeded';
-
-    const now = new Date().toISOString();
-    const record: LoomPipelineHistoryRecord = {
-      id: crypto.randomUUID(),
-      pipelineId: id,
-      sourceStageId,
-      targetStageId,
-      status,
-      note,
-      diff: pairs,
-      deployedItemIds,
-      steps,
-      startedAt: now,
-      completedAt: now,
-      startedBy: caller.actor,
-    };
-    try {
-      const hist = await pipelineHistoryContainer();
-      await hist.items.create(record);
-    } catch (e) {
-      steps.push(`History write failed (non-fatal): ${(e as Error).message}`);
-    }
+    // No gate — run the promotion now.
+    const result = await runPromotion({
+      tenantId, session: s, actor: caller.actor,
+      pipeline, srcWs, tgtWs, sourceStageId, targetStageId, targetStage,
+      chosen, note,
+    });
 
     // BR-WEBHOOK — deployment-pipeline run reached a terminal receipt; fan the
     // outcome out to any subscribed outbound webhook (best-effort, non-blocking).
     emitLoomEvent({
-      type: status === 'failed' ? 'pipeline.run.failed' : 'pipeline.run.completed',
+      type: result.status === 'failed' ? 'pipeline.run.failed' : 'pipeline.run.completed',
       tenantId,
       subject: id,
       subjectName: pipeline.displayName,
       actor: { oid: s.claims.oid, upn: s.claims.upn || s.claims.email },
-      data: { operationId: record.id, status, sourceStageId, targetStageId, deployedItemIds, summary },
+      data: {
+        operationId: result.operationId,
+        status: result.status,
+        sourceStageId,
+        targetStageId,
+        deployedItemIds: result.deployedItemIds,
+        summary: result.summary,
+      },
     });
 
-    return jok({ operationId: record.id, status, diff: pairs, summary, deployedItemIds, steps });
+    return jok(result);
   } catch (e) {
     return jerr((e as Error).message || 'Deploy failed');
   }
