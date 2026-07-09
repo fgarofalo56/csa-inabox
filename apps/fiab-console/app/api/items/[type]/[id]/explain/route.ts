@@ -39,15 +39,47 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { getSession, type SessionPayload } from '@/lib/auth/session';
 import { enforceRateLimit } from '@/lib/azure/rate-limiter';
 import {
   resolveAoaiTarget,
   NoAoaiDeploymentError,
 } from '@/lib/azure/copilot-orchestrator';
 import { aoaiChatJson } from '@/lib/azure/aoai-chat-client';
+import { listThreadEdges } from '@/lib/thread/thread-edges';
 
 type Family = 'pipeline' | 'notebook' | 'warehouse';
+
+/**
+ * Explanation scope. `item` (default) explains the whole artifact; `node`
+ * explains a SINGLE step inside it (a pipeline activity), grounded on that
+ * node's definition plus its in-canvas neighbors. Node scope backs the canvas
+ * node "Explain this step" action (W19 gap build).
+ */
+type Scope = 'item' | 'node';
+
+/**
+ * In-canvas neighbor context for a node-scoped explanation. The client (the
+ * canvas host) supplies the focus step's name and the names of the steps
+ * immediately upstream (it depends on) / downstream (that depend on it) — all
+ * WITHIN the same artifact, so no backend lookup is needed for intra-item flow.
+ */
+interface FocusContext {
+  name?: string;
+  upstream?: string[];
+  downstream?: string[];
+}
+
+/**
+ * Cross-item lineage neighbors resolved from the Loom Thread edge graph
+ * (real Cosmos read via {@link listThreadEdges}). `upstream` feeds this item;
+ * `downstream` consumes it. Best-effort — an empty graph or a read error yields
+ * empty arrays, never a failure (the explanation still renders).
+ */
+interface LineageContext {
+  upstream: string[];
+  downstream: string[];
+}
 
 /** item-type slug → artifact family. Any slug NOT in this map is unsupported. */
 const FAMILY: Record<string, Family> = {
@@ -107,29 +139,104 @@ const FAMILY_SHAPE: Record<Family, string> = {
 };
 
 /**
+ * Resolve the item's cross-item lineage neighbors from the Loom Thread edge
+ * graph — a REAL Cosmos read (`listThreadEdges`), the SAME source the /thread
+ * lineage view and the OneLake lineage drawer draw on (per the W19 gap: ground
+ * the explanation with the item's lineage neighbors). Best-effort: any failure
+ * (unconfigured Cosmos, empty graph) returns empty arrays so the explanation is
+ * never blocked. Names are de-duplicated and capped to keep the prompt budgeted.
+ */
+async function resolveLineage(
+  session: SessionPayload,
+  itemId: string,
+): Promise<LineageContext> {
+  try {
+    const edges = await listThreadEdges(session);
+    const upstream = new Set<string>();
+    const downstream = new Set<string>();
+    for (const e of edges) {
+      // An edge feeds INTO this item → the source is an upstream neighbor.
+      if (e.toItemId === itemId && !e.toExternal) {
+        upstream.add(`${e.fromName || e.fromItemId} (${e.fromType})`);
+      }
+      // An edge flows OUT of this item → the target is a downstream consumer.
+      if (e.fromItemId === itemId) {
+        downstream.add(`${e.toName || e.toItemId} (${e.toType})`);
+      }
+    }
+    const cap = (s: Set<string>) => Array.from(s).slice(0, 24);
+    return { upstream: cap(upstream), downstream: cap(downstream) };
+  } catch {
+    return { upstream: [], downstream: [] };
+  }
+}
+
+/** Render the cross-item lineage neighbors as a grounding block (or ''). */
+function lineageBlock(lineage: LineageContext): string {
+  if (lineage.upstream.length === 0 && lineage.downstream.length === 0) return '';
+  const up = lineage.upstream.length ? `Upstream (feeds this): ${lineage.upstream.join('; ')}.` : 'Upstream (feeds this): none recorded.';
+  const down = lineage.downstream.length ? `Downstream (consumes this): ${lineage.downstream.join('; ')}.` : 'Downstream (consumes this): none recorded.';
+  return (
+    `\n\nLineage context from the Loom Thread graph (real recorded connections — ` +
+    `use it to ground the inputs/outputs, but do NOT invent lineage beyond it):\n${up}\n${down}`
+  );
+}
+
+/**
  * Build the persona + grounded user message for a family. The system prompt
  * pins the model to the structured JSON contract; the user message carries the
- * (truncated) artifact JSON.
+ * (truncated) artifact JSON plus, when known, the cross-item lineage neighbors
+ * and (node scope) the in-canvas neighbor steps.
  */
 function buildMessages(
   family: Family,
   definitionJson: string,
+  opts: { scope: Scope; lineage: LineageContext; focus?: FocusContext },
 ): { role: 'system' | 'user'; content: string }[] {
+  const { scope, lineage, focus } = opts;
+  const subject =
+    scope === 'node'
+      ? `a SINGLE step inside a ${FAMILY_NOUN[family]}`
+      : `a ${FAMILY_NOUN[family]}`;
+  const stepGuidance =
+    family === 'pipeline'
+      ? 'activities in dependency order'
+      : family === 'notebook'
+        ? 'what each code cell does, in order'
+        : 'the notable tables/views and their role';
   const system =
-    `You are the CSA Loom "Explain this" assistant. Explain a ${FAMILY_NOUN[family]} to a ` +
+    `You are the CSA Loom "Explain this" assistant. Explain ${subject} to a ` +
     `data engineer in plain English, grounded ONLY in the definition provided (never invent ` +
     `names or steps that are not present). ${FAMILY_SHAPE[family]}\n\n` +
+    (scope === 'node'
+      ? `You are explaining ONE step; keep it focused on that step, but use the neighbor ` +
+        `steps supplied for context (what it receives / hands off to).\n\n`
+      : '') +
     `Return a STRICT JSON object with these fields:\n` +
-    `  "summary": string  — 2-4 sentences on what this ${family} does and its business intent.\n` +
-    `  "steps": string[]  — the ordered steps (${family === 'pipeline' ? 'activities in dependency order' : family === 'notebook' ? 'what each code cell does, in order' : 'the notable tables/views and their role'}); [] if none.\n` +
+    `  "summary": string  — 2-4 sentences on what this ${scope === 'node' ? 'step' : family} does and its business intent.\n` +
+    `  "steps": string[]  — ${scope === 'node' ? 'the sub-operations this step performs, in order' : `the ordered steps (${stepGuidance})`}; [] if none.\n` +
     `  "inputs": string[] — data/params it consumes (sources, parameters, upstream tables); [] if none.\n` +
     `  "outputs": string[]— what it produces (sinks, result tables/files, downstream artifacts); [] if none.\n` +
     `  "risks": string[]  — concrete risks or gotchas (failure modes, cost, data-quality, ` +
     `security, idempotency, missing error handling); [] if none obvious.\n` +
     `Reference the ACTUAL names from the definition. No markdown, no prose outside the JSON object.`;
+
+  let user = scope === 'node'
+    ? `Step definition (JSON):\n${definitionJson}`
+    : `${FAMILY_NOUN[family]} definition (JSON):\n${definitionJson}`;
+  if (scope === 'node' && focus) {
+    const upstream = (focus.upstream || []).filter((s) => s.trim());
+    const downstream = (focus.downstream || []).filter((s) => s.trim());
+    const bits: string[] = [];
+    if (focus.name) bits.push(`This step is named "${focus.name}".`);
+    if (upstream.length) bits.push(`In-canvas upstream steps it depends on: ${upstream.join(', ')}.`);
+    if (downstream.length) bits.push(`In-canvas downstream steps that depend on it: ${downstream.join(', ')}.`);
+    if (bits.length) user += `\n\nCanvas neighbors:\n${bits.join('\n')}`;
+  }
+  user += lineageBlock(lineage);
   return [
     { role: 'system', content: system },
-    { role: 'user', content: `${FAMILY_NOUN[family]} definition (JSON):\n${definitionJson}` },
+    { role: 'user', content: user },
   ];
 }
 
@@ -159,7 +266,7 @@ export async function POST(
   const limited = await enforceRateLimit(session, 'aoai');
   if (limited) return limited;
 
-  const { type } = await ctx.params;
+  const { type, id } = await ctx.params;
   const family = FAMILY[type];
   if (!family) {
     return NextResponse.json(
@@ -169,6 +276,19 @@ export async function POST(
   }
 
   const body = await req.json().catch(() => ({}));
+  const scope: Scope = (body as any)?.scope === 'node' ? 'node' : 'item';
+  const focus: FocusContext | undefined =
+    scope === 'node' && (body as any)?.focus && typeof (body as any).focus === 'object'
+      ? {
+          name: typeof (body as any).focus.name === 'string' ? (body as any).focus.name : undefined,
+          upstream: Array.isArray((body as any).focus.upstream)
+            ? (body as any).focus.upstream.map((x: unknown) => String(x)).slice(0, 24)
+            : undefined,
+          downstream: Array.isArray((body as any).focus.downstream)
+            ? (body as any).focus.downstream.map((x: unknown) => String(x)).slice(0, 24)
+            : undefined,
+        }
+      : undefined;
   const definition = (body as any)?.definition;
   if (definition == null || (typeof definition === 'object' && Object.keys(definition).length === 0)) {
     return NextResponse.json(
@@ -217,7 +337,13 @@ export async function POST(
     );
   }
 
-  const messages = buildMessages(family, definitionJson);
+  // Ground the explanation with the item's cross-item lineage neighbors from the
+  // Loom Thread graph (real Cosmos read; best-effort). This runs for both scopes
+  // — the whole item AND a single node benefit from knowing what feeds/consumes
+  // the artifact (the W19 gap: pre-ground with the item's lineage neighbors).
+  const lineage = await resolveLineage(session, id);
+
+  const messages = buildMessages(family, definitionJson, { scope, lineage, focus });
 
   try {
     // Unified AOAI client, JSON mode: same target resolution, cogScope token,
@@ -236,7 +362,7 @@ export async function POST(
         { status: 502 },
       );
     }
-    return NextResponse.json({ ok: true, family, explanation });
+    return NextResponse.json({ ok: true, family, scope, explanation });
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }

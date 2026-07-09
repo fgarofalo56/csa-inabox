@@ -3,13 +3,19 @@
 /**
  * Explain-this — the cross-item "Explain this" Copilot action (Wave-2 W19).
  *
- * A toolbar action rendered by {@link ItemEditorChrome} on every pipeline /
- * notebook / warehouse editor. It sends the artifact's LIVE structured
- * definition (from the editor's in-memory state via {@link ExplainConfig.getDefinition})
- * to the shared `POST /api/items/[type]/[id]/explain` edge, which returns a
- * STRUCTURED explanation — a plain-English summary plus steps, inputs, outputs
- * and risks — and renders it in a Fluent Drawer. This generalizes the report's
- * smart-narrative / Q&A layer to the three data-engineering item families.
+ * Two entry points share one backend + one drawer UI:
+ *  - {@link ExplainThisButton} — a header/ribbon action rendered by
+ *    {@link ItemEditorChrome} on every pipeline / notebook / warehouse editor.
+ *    It explains the WHOLE artifact from the editor's live in-memory state.
+ *  - {@link ExplainNodeDrawer} — a canvas node action ("Explain this step").
+ *    It explains a SINGLE step (a pipeline activity) grounded on that node's
+ *    definition plus its in-canvas neighbors.
+ *
+ * Both send to the shared `POST /api/items/[type]/[id]/explain` edge, which
+ * returns a STRUCTURED explanation — a plain-English summary plus steps, inputs,
+ * outputs and risks — and is additionally grounded server-side with the item's
+ * cross-item lineage neighbors from the Loom Thread graph. This generalizes the
+ * report's smart-narrative / Q&A layer to the data-engineering item families.
  *
  * Rules compliance:
  *  - no-vaporware.md: the explanation is a REAL Azure OpenAI completion over the
@@ -22,7 +28,7 @@
  *    deployment); nothing here reaches a Fabric / Power BI host.
  */
 
-import { useCallback, useState, type ReactElement } from 'react';
+import { useCallback, useEffect, useState, type ReactElement } from 'react';
 import {
   Button, Tooltip, Drawer, DrawerHeader, DrawerHeaderTitle, DrawerBody,
   Spinner, Body1, Caption1,
@@ -50,12 +56,19 @@ export interface ExplainConfig {
 }
 
 /** Structured explanation returned by the /explain edge. */
-interface ExplainResult {
+export interface ExplainResult {
   summary: string;
   steps?: string[];
   inputs?: string[];
   outputs?: string[];
   risks?: string[];
+}
+
+/** POST payload the /explain edge accepts (item OR node scope). */
+interface ExplainRequest {
+  definition: unknown;
+  scope?: 'item' | 'node';
+  focus?: { name?: string; upstream?: string[]; downstream?: string[] };
 }
 
 const FAMILY_LABEL: Record<ExplainFamily, string> = {
@@ -78,63 +91,51 @@ const useStyles = makeStyles({
   loading: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, paddingTop: tokens.spacingVerticalXL, justifyContent: 'center' },
 });
 
-interface Props {
-  itemType: string;
-  itemId: string;
-  family: ExplainFamily;
-  getDefinition: () => unknown;
+/** Fetch state shared by both the button and the node drawer. */
+interface ExplainState {
+  busy: boolean;
+  result: ExplainResult | null;
+  error: string | null;
+  gate: string | null;
 }
 
-export function ExplainThisButton({ itemType, itemId, family, getDefinition }: Props) {
-  const styles = useStyles();
-  const [open, setOpen] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [result, setResult] = useState<ExplainResult | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [gate, setGate] = useState<string | null>(null);
-  const label = FAMILY_LABEL[family];
-
-  const run = useCallback(async () => {
-    setBusy(true);
-    setError(null);
-    setGate(null);
-    setResult(null);
+/**
+ * Shared fetch hook — POSTs the request to the /explain edge and maps the
+ * response into the honest three-way state (gate / error / result). Returns a
+ * `run(payload)` the caller invokes when its drawer opens (and on Retry).
+ */
+function useExplainRun(itemType: string, itemId: string) {
+  const [state, setState] = useState<ExplainState>({ busy: false, result: null, error: null, gate: null });
+  const run = useCallback(async (payload: ExplainRequest) => {
+    setState({ busy: true, result: null, error: null, gate: null });
     try {
-      const definition = getDefinition();
-      const res = await clientFetch(`/api/items/${encodeURIComponent(itemType)}/${encodeURIComponent(itemId)}/explain`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ definition }),
-      });
+      const res = await clientFetch(
+        `/api/items/${encodeURIComponent(itemType)}/${encodeURIComponent(itemId)}/explain`,
+        { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) },
+      );
       const j = await res.json().catch(() => ({}));
       if (res.status === 503 && j?.code === 'no_aoai') {
-        setGate(j.hint || j.error || 'Azure OpenAI is not configured for this deployment.');
+        setState({ busy: false, result: null, error: null, gate: j.hint || j.error || 'Azure OpenAI is not configured for this deployment.' });
         return;
       }
       if (!res.ok || !j?.ok) {
-        setError(j?.error || `Explain failed (HTTP ${res.status}).`);
+        setState({ busy: false, result: null, error: j?.error || `Explain failed (HTTP ${res.status}).`, gate: null });
         return;
       }
-      setResult(j.explanation as ExplainResult);
+      setState({ busy: false, result: j.explanation as ExplainResult, error: null, gate: null });
     } catch (e: any) {
-      setError(e?.message || String(e));
-    } finally {
-      setBusy(false);
+      setState({ busy: false, result: null, error: e?.message || String(e), gate: null });
     }
-  }, [getDefinition, itemType, itemId]);
+  }, [itemType, itemId]);
+  return { ...state, run };
+}
 
-  const onOpen = useCallback(() => {
-    setOpen(true);
-    // Kick off the explanation as soon as the drawer opens (mirrors the report
-    // smart-narrative auto-run); Retry re-issues on demand.
-    void run();
-  }, [run]);
+/** Presentational drawer body — the busy / gate / error / result rendering. */
+function ExplainDrawerBody({ state, label }: { state: ExplainState; label: string }) {
+  const styles = useStyles();
+  const { busy, gate, error, result } = state;
 
-  const renderList = (
-    icon: ReactElement,
-    title: string,
-    items: string[] | undefined,
-  ) =>
+  const renderList = (icon: ReactElement, title: string, items: string[] | undefined) =>
     items && items.length > 0 ? (
       <div className={styles.section}>
         <div className={styles.sectionHead}>
@@ -151,6 +152,92 @@ export function ExplainThisButton({ itemType, itemId, family, getDefinition }: P
 
   return (
     <>
+      {busy && (
+        <div className={styles.loading}>
+          <Spinner size="small" label={`Explaining this ${label}…`} />
+        </div>
+      )}
+
+      {!busy && gate && (
+        <MessageBar intent="warning">
+          <MessageBarBody>
+            <MessageBarTitle>Azure OpenAI not configured</MessageBarTitle>
+            {gate}
+          </MessageBarBody>
+        </MessageBar>
+      )}
+
+      {!busy && error && (
+        <MessageBar intent="error">
+          <MessageBarBody>
+            <MessageBarTitle>Couldn’t explain this {label}</MessageBarTitle>
+            {error}
+          </MessageBarBody>
+        </MessageBar>
+      )}
+
+      {!busy && !gate && !error && result && (
+        <div className={styles.body}>
+          <div className={styles.summary}>
+            <Body1>{result.summary}</Body1>
+          </div>
+          {renderList(<ListBar20Regular />, 'Steps', result.steps)}
+          {renderList(<ArrowStepIn20Regular />, 'Inputs', result.inputs)}
+          {renderList(<ArrowStepOut20Regular />, 'Outputs', result.outputs)}
+          {renderList(<Warning20Regular />, 'Risks & gotchas', result.risks)}
+          <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+            Generated by Azure OpenAI over this {label}’s live definition and its Loom Thread lineage. Verify before acting on it.
+          </Caption1>
+        </div>
+      )}
+    </>
+  );
+}
+
+/** Shared drawer header (Sparkle title + Re-explain + Close). */
+function ExplainDrawerHeaderTitle({ title, busy, onRetry, onClose }: { title: string; busy: boolean; onRetry: () => void; onClose: () => void }) {
+  return (
+    <DrawerHeaderTitle
+      action={
+        <div style={{ display: 'flex', gap: tokens.spacingHorizontalXS }}>
+          <Tooltip content="Re-explain" relationship="label">
+            <Button appearance="subtle" icon={<ArrowClockwise16Regular />} aria-label="Re-explain" disabled={busy} onClick={onRetry} />
+          </Tooltip>
+          <Button appearance="subtle" icon={<Dismiss24Regular />} aria-label="Close" onClick={onClose} />
+        </div>
+      }
+    >
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXS }}>
+        <Sparkle24Regular /> {title}
+      </span>
+    </DrawerHeaderTitle>
+  );
+}
+
+interface ButtonProps {
+  itemType: string;
+  itemId: string;
+  family: ExplainFamily;
+  getDefinition: () => unknown;
+}
+
+/** Whole-artifact "Explain" action (item scope) — rendered in the editor chrome. */
+export function ExplainThisButton({ itemType, itemId, family, getDefinition }: ButtonProps) {
+  const [open, setOpen] = useState(false);
+  const { busy, result, error, gate, run } = useExplainRun(itemType, itemId);
+  const label = FAMILY_LABEL[family];
+
+  const doRun = useCallback(() => { void run({ definition: getDefinition(), scope: 'item' }); }, [run, getDefinition]);
+
+  const onOpen = useCallback(() => {
+    setOpen(true);
+    // Kick off the explanation as soon as the drawer opens (mirrors the report
+    // smart-narrative auto-run); Retry re-issues on demand.
+    doRun();
+  }, [doRun]);
+
+  return (
+    <>
       <Tooltip content={`Explain this ${label} in plain English — a real AI summary of what it does, its inputs/outputs, and risks`} relationship="label">
         <Button appearance="subtle" size="small" icon={<Lightbulb20Regular />} onClick={onOpen}>
           Explain
@@ -158,63 +245,73 @@ export function ExplainThisButton({ itemType, itemId, family, getDefinition }: P
       </Tooltip>
       <Drawer open={open} onOpenChange={(_, d) => { if (!d.open) setOpen(false); }} position="end" size="medium">
         <DrawerHeader>
-          <DrawerHeaderTitle
-            action={
-              <div style={{ display: 'flex', gap: tokens.spacingHorizontalXS }}>
-                <Tooltip content="Re-explain" relationship="label">
-                  <Button appearance="subtle" icon={<ArrowClockwise16Regular />} aria-label="Re-explain"
-                    disabled={busy} onClick={() => void run()} />
-                </Tooltip>
-                <Button appearance="subtle" icon={<Dismiss24Regular />} aria-label="Close" onClick={() => setOpen(false)} />
-              </div>
-            }
-          >
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXS }}>
-              <Sparkle24Regular /> Explain this {label}
-            </span>
-          </DrawerHeaderTitle>
+          <ExplainDrawerHeaderTitle title={`Explain this ${label}`} busy={busy} onRetry={doRun} onClose={() => setOpen(false)} />
         </DrawerHeader>
         <DrawerBody>
-          {busy && (
-            <div className={styles.loading}>
-              <Spinner size="small" label={`Explaining this ${label}…`} />
-            </div>
-          )}
-
-          {!busy && gate && (
-            <MessageBar intent="warning">
-              <MessageBarBody>
-                <MessageBarTitle>Azure OpenAI not configured</MessageBarTitle>
-                {gate}
-              </MessageBarBody>
-            </MessageBar>
-          )}
-
-          {!busy && error && (
-            <MessageBar intent="error">
-              <MessageBarBody>
-                <MessageBarTitle>Couldn’t explain this {label}</MessageBarTitle>
-                {error}
-              </MessageBarBody>
-            </MessageBar>
-          )}
-
-          {!busy && !gate && !error && result && (
-            <div className={styles.body}>
-              <div className={styles.summary}>
-                <Body1>{result.summary}</Body1>
-              </div>
-              {renderList(<ListBar20Regular />, 'Steps', result.steps)}
-              {renderList(<ArrowStepIn20Regular />, 'Inputs', result.inputs)}
-              {renderList(<ArrowStepOut20Regular />, 'Outputs', result.outputs)}
-              {renderList(<Warning20Regular />, 'Risks & gotchas', result.risks)}
-              <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
-                Generated by Azure OpenAI over this {label}’s live definition. Verify before acting on it.
-              </Caption1>
-            </div>
-          )}
+          <ExplainDrawerBody state={{ busy, result, error, gate }} label={label} />
         </DrawerBody>
       </Drawer>
     </>
+  );
+}
+
+/** The focus node the canvas host hands to {@link ExplainNodeDrawer}. */
+export interface ExplainNodeTarget {
+  /** The step's display name (e.g. the activity name). */
+  name: string;
+  /** The step's structured definition (the single activity JSON). */
+  definition: unknown;
+  /** In-canvas upstream neighbor names (steps this one depends on). */
+  upstream?: string[];
+  /** In-canvas downstream neighbor names (steps that depend on this one). */
+  downstream?: string[];
+}
+
+interface NodeDrawerProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  itemType: string;
+  itemId: string;
+  family: ExplainFamily;
+  /** The node to explain; null while closed (nothing is fetched). */
+  node: ExplainNodeTarget | null;
+}
+
+/**
+ * Canvas node "Explain this step" drawer (node scope). Controlled by the canvas
+ * host: it opens when a node's Explain action fires, auto-runs a node-scoped
+ * explanation grounded on the single step's definition + its in-canvas
+ * neighbors, and reuses the same honest states + drawer body as the button.
+ */
+export function ExplainNodeDrawer({ open, onOpenChange, itemType, itemId, family, node }: NodeDrawerProps) {
+  const { busy, result, error, gate, run } = useExplainRun(itemType, itemId);
+  const nodeName = node?.name ?? '';
+
+  const doRun = useCallback(() => {
+    if (!node) return;
+    void run({
+      definition: node.definition,
+      scope: 'node',
+      focus: { name: node.name, upstream: node.upstream || [], downstream: node.downstream || [] },
+    });
+  }, [run, node]);
+
+  // Auto-run whenever a new node is opened (open transitions true with a node).
+  useEffect(() => {
+    if (open && node) doRun();
+    // Re-run when the focused node changes while the drawer stays open.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, nodeName]);
+
+  const label = nodeName || 'step';
+  return (
+    <Drawer open={open} onOpenChange={(_, d) => { if (!d.open) onOpenChange(false); }} position="end" size="medium">
+      <DrawerHeader>
+        <ExplainDrawerHeaderTitle title={nodeName ? `Explain "${nodeName}"` : 'Explain this step'} busy={busy} onRetry={doRun} onClose={() => onOpenChange(false)} />
+      </DrawerHeader>
+      <DrawerBody>
+        <ExplainDrawerBody state={{ busy, result, error, gate }} label={label} />
+      </DrawerBody>
+    </Drawer>
   );
 }
