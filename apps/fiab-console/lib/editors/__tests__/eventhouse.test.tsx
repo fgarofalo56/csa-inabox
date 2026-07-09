@@ -44,8 +44,11 @@ describe('EventhouseEditor', () => {
     const dbTab = await screen.findByRole('tab', { name: /Databases/i });
     fireEvent.click(dbTab);
     await waitFor(() => {
-      expect(screen.getByText('loomdb-default')).toBeInTheDocument();
-      expect(screen.getByText('iot-telemetry')).toBeInTheDocument();
+      // getAllByText: the database name legitimately renders more than once —
+      // the Databases card list AND the SC-2 DetailsPanel's related-elements
+      // list both show it.
+      expect(screen.getAllByText('loomdb-default').length).toBeGreaterThan(0);
+      expect(screen.getAllByText('iot-telemetry').length).toBeGreaterThan(0);
     });
   });
 
