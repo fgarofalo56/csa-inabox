@@ -111,6 +111,16 @@ Close the loose ends from prior sessions before opening new scope.
 The roots the rest of the DAG stands on, plus the release-truth docs fixes (fast, high blast-radius).
 Build these **first**; almost everything later rides one of them.
 
+> **⚠️ ALREADY SHIPPED (2026-07-09, rev 0000211 / 0.60.0) — DO NOT REBUILD:** the consolidation analysis
+> graded from PRP `Status: proposed` headers and did not reconcile against what shipped on 07-08/07-09.
+> These Phase-1 items are **already merged + live**: **Wave 1 docs/compliance** (DOC-1…DOC-5 + BR-SIEM,
+> PRs #1720–#1723), **BR-PAT** scoped API tokens (#1743), **DBX-1** loom-app-runtime (#1745), and **W1**
+> undo/redo `useCanvasHistory` (#1728, plus W2/W3/W20/W21). Also fully shipped: **Waves 1–10** (fabric-gap,
+> RAG spine, AI-enrichment, multi-agent, app-runtime, RTI depth, ALM/capacity, data-science, Databricks),
+> the pipeline-UI + notebook-backend + lineage-GC fix programs, node-kit v2 (#1767) and the pipeline/
+> eventstream Fabric-UX upgrades (#1768/#1765). **The GENUINELY-UNBUILT Phase-1 roots are just U0 and
+> PSR-A.** Verify each item's real state (grep the repo / `gh pr list --state merged`) before building.
+
 - **U0 — shared UX component library** *(PRP-ux-baseline-program, SC-1…SC-10)* — `node-kit v2`,
   `<DetailsPanel>`, `<DockedInspector>`, `<GuidedEmptyState>`, `<PreviewTable>`, `useTeachingToast`,
   `<ExplorerTree>`, `<ItemTabStrip>`/`<ToolbarCrossLinks>`, `<CommandSearch>`, `<EntityDiagram>`.
