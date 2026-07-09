@@ -27,7 +27,12 @@
 
 import type { WorkspaceItem } from '@/lib/types/workspace';
 import { offboardFromPurview, loomTypeToAtlasTypeName } from './purview-autoonboard';
-import { reconcileThreadEdgesOnDelete } from '@/lib/thread/thread-edges';
+import {
+  reconcileThreadEdgesOnDelete,
+  listAllThreadEdges,
+  removeThreadEdge,
+  type ThreadEdge,
+} from '@/lib/thread/thread-edges';
 import {
   isPurviewConfigured,
   searchDataMapAssets,
@@ -294,6 +299,110 @@ export async function purgeLineageOrphans(orphans: LineageOrphan[]): Promise<Pur
       /* edge reconcile is best-effort */
     }
     out.push(rec);
+  }
+  return out;
+}
+
+// ── Thread / Weave edge orphan reconciliation (LIN-GC-4) ─────────────────────
+//
+// The Purview sweep above only covers externally-registered Atlas entities. The
+// Loom-native Weave/Thread edges (Cosmos `thread-edges`, rendered on /thread)
+// have their OWN pre-existing debris: edges whose source or target item was
+// permanently deleted BEFORE delete-time reconciliation was wired
+// (reconcileThreadEdgesOnDelete). Those orphaned edges keep the /thread graph
+// showing dead endpoints regardless of whether Purview is configured — so this
+// sweep runs even when LOOM_PURVIEW_ACCOUNT is unset.
+
+/** A Thread edge with at least one endpoint whose Loom item no longer exists. */
+export interface ThreadEdgeOrphan {
+  edgeId: string;
+  tenantId: string;
+  fromItemId: string;
+  fromType: string;
+  fromName?: string;
+  toItemId: string;
+  toType: string;
+  toName?: string;
+  /** True when the target is an external asset (not a Loom item) — never counted missing. */
+  toExternal?: boolean;
+  /** Which endpoint(s) resolved to no live Cosmos item. */
+  missing: Array<'from' | 'to'>;
+}
+
+export interface ThreadEdgeScan {
+  /** Total Thread edges examined (deployment-wide, including tombstoned). */
+  scanned: number;
+  orphans: ThreadEdgeOrphan[];
+}
+
+/**
+ * Diff every Thread/Weave edge against live Cosmos items and return the orphans
+ * — edges where the source item, or a non-external target item, no longer
+ * exists. Recycled (soft-deleted) items still exist in the items container, so
+ * their tombstoned edges are correctly treated as LIVE (recoverable) and are NOT
+ * flagged. External targets (e.g. a Power BI service URL) are not Loom items and
+ * are never counted as missing. Best-effort: on a query error, `liveItemIds`
+ * fails safe (treats ids as live), so an unprovable edge is never flagged.
+ */
+export async function findThreadEdgeOrphans(): Promise<ThreadEdgeScan> {
+  const edges: ThreadEdge[] = await listAllThreadEdges();
+  if (edges.length === 0) return { scanned: 0, orphans: [] };
+
+  // Collect the Loom item ids to verify: every source, plus every NON-external
+  // target. External targets are excluded — they aren't Loom items.
+  const idsToCheck = new Set<string>();
+  for (const e of edges) {
+    if (e.fromItemId) idsToCheck.add(e.fromItemId);
+    if (e.toItemId && !e.toExternal) idsToCheck.add(e.toItemId);
+  }
+  const live = await liveItemIds([...idsToCheck]);
+
+  const orphans: ThreadEdgeOrphan[] = [];
+  for (const e of edges) {
+    const missing: Array<'from' | 'to'> = [];
+    if (e.fromItemId && !live.has(e.fromItemId)) missing.push('from');
+    if (e.toItemId && !e.toExternal && !live.has(e.toItemId)) missing.push('to');
+    if (missing.length === 0) continue;
+    orphans.push({
+      edgeId: e.id,
+      tenantId: e.tenantId,
+      fromItemId: e.fromItemId,
+      fromType: e.fromType,
+      fromName: e.fromName,
+      toItemId: e.toItemId,
+      toType: e.toType,
+      toName: e.toName,
+      toExternal: e.toExternal,
+      missing,
+    });
+  }
+  return { scanned: edges.length, orphans };
+}
+
+export interface ThreadEdgePurgeOutcome {
+  edgeId: string;
+  tenantId: string;
+  /** 'deleted' = edge removed (or already gone); 'error' = removal failed. */
+  result: 'deleted' | 'error';
+}
+
+/**
+ * Hard-remove the given orphaned Thread edges via the shared `removeThreadEdge`
+ * primitive (partition-keyed by tenantId). Per-edge outcome; never throws — a
+ * failed removal is recorded and the sweep continues.
+ */
+export async function purgeThreadEdgeOrphans(
+  orphans: ThreadEdgeOrphan[],
+): Promise<ThreadEdgePurgeOutcome[]> {
+  const out: ThreadEdgePurgeOutcome[] = [];
+  for (const o of orphans) {
+    let ok = false;
+    try {
+      ok = await removeThreadEdge(o.tenantId, o.edgeId);
+    } catch {
+      ok = false;
+    }
+    out.push({ edgeId: o.edgeId, tenantId: o.tenantId, result: ok ? 'deleted' : 'error' });
   }
   return out;
 }

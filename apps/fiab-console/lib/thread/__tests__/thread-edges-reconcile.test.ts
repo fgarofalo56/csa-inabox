@@ -19,6 +19,7 @@ vi.mock('@/lib/azure/cosmos-client', () => ({
 
 import {
   reconcileThreadEdgesOnDelete, restoreThreadEdgesForItem, listThreadEdges,
+  listAllThreadEdges, removeThreadEdge,
   type ThreadEdge,
 } from '../thread-edges';
 
@@ -88,6 +89,46 @@ describe('restoreThreadEdgesForItem', () => {
     const doc = h.upsert.mock.calls[0][0] as ThreadEdge;
     expect(doc.staleItemIds).toEqual(['nb-1']);
     expect(doc.deletedAt).toBe('2026-02-01T00:00:00.000Z');
+  });
+});
+
+describe('listAllThreadEdges', () => {
+  it('enumerates every edge cross-partition (no tenant filter, includes tombstoned)', async () => {
+    h.query.mockResolvedValue({ resources: [edge({ id: 'e1' }), edge({ id: 'e2', deletedAt: '2026-02-01T00:00:00.000Z' })] });
+    const all = await listAllThreadEdges();
+    const spec = h.query.mock.calls[0][0];
+    expect(spec.query).toBe('SELECT * FROM c');
+    expect(spec.parameters).toBeUndefined();
+    expect(all.map((e) => e.id)).toEqual(['e1', 'e2']);
+  });
+
+  it('is best-effort — returns [] on a query error', async () => {
+    h.query.mockRejectedValue(new Error('cosmos down'));
+    await expect(listAllThreadEdges()).resolves.toEqual([]);
+  });
+});
+
+describe('removeThreadEdge', () => {
+  it('hard-deletes the edge by id (partition-keyed by tenant)', async () => {
+    h.itemDelete.mockResolvedValue(undefined);
+    await expect(removeThreadEdge(TENANT, 'edge_9')).resolves.toBe(true);
+    expect(h.itemDelete).toHaveBeenCalledWith('edge_9', TENANT);
+  });
+
+  it('treats a 404 (already gone) as success', async () => {
+    h.itemDelete.mockRejectedValue({ code: 404 });
+    await expect(removeThreadEdge(TENANT, 'edge_gone')).resolves.toBe(true);
+  });
+
+  it('returns false on a real failure without throwing', async () => {
+    h.itemDelete.mockRejectedValue(new Error('boom'));
+    await expect(removeThreadEdge(TENANT, 'edge_x')).resolves.toBe(false);
+  });
+
+  it('no-ops (false) when tenantId or edgeId is missing', async () => {
+    await expect(removeThreadEdge('', 'e')).resolves.toBe(false);
+    await expect(removeThreadEdge(TENANT, '')).resolves.toBe(false);
+    expect(h.itemDelete).not.toHaveBeenCalled();
   });
 });
 
