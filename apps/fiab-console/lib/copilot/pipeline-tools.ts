@@ -24,6 +24,16 @@ import type { AoaiTarget } from '../azure/copilot-orchestrator';
 import type { PipelineSpec } from '../components/pipeline/types';
 import * as adf from '../azure/adf-client';
 import * as synapseDev from '../azure/synapse-dev-client';
+import {
+  deleteFactoryObject,
+  factoryOpsGate,
+  isFactoryObjectDeletable,
+  normalizeFactoryObjectKind,
+  backendLabel,
+  FACTORY_OBJECT_KINDS,
+  FACTORY_OBJECT_KIND_LABELS,
+  type FactoryObjectKind,
+} from '../azure/adf-resource-ops';
 
 export type PipelineBackend = 'adf' | 'synapse';
 
@@ -328,4 +338,160 @@ export async function handlePipelineExplainError(
   }));
   const run = await synapseDev.getPipelineRun(runId).catch(() => null);
   return { runId, status: run?.status, failedActivities: failed, runMessage: run?.message };
+}
+
+// ============================================================
+// 8. Delete / remove factory objects (DESTRUCTIVE — confirm-intent guarded)
+// ============================================================
+//
+// The Copilot could always CREATE and EDIT factory objects; it could never
+// remove one. These handlers close that gap using the real delete REST shared
+// in adf-resource-ops.ts (the same clients the Factory Resources tree's Delete
+// buttons call). Because deletes are irreversible, every handler is guarded by
+// a confirm-intent flag: on the first call (`confirm !== true`) NOTHING is
+// deleted — the tool returns a summary telling the model to confirm with the
+// user first, then re-call with `confirm: true`. The transcript renders the
+// returned summary markdown so the user always sees exactly what happened.
+
+/**
+ * Typed Copilot tool result for a destructive factory op. Shaped as a
+ * copilot-result-tagger `SummaryResult` (kind:'summary' → rendered markdown)
+ * plus structured fields (deleted / awaitingConfirmation / …) the transcript
+ * ignores but tests + telemetry read.
+ */
+export interface FactoryDeleteResult {
+  kind: 'summary';
+  title: string;
+  markdown: string;
+  /** True only when a real backend delete actually executed. */
+  deleted: boolean;
+  /** True when the tool declined and is asking the user to confirm. */
+  awaitingConfirmation: boolean;
+  /** True when an honest config/support gate blocked the op. */
+  gated: boolean;
+  objectKind: FactoryObjectKind;
+  name: string;
+  backend: PipelineBackend;
+}
+
+function deleteResult(partial: Omit<FactoryDeleteResult, 'kind'>): FactoryDeleteResult {
+  return { kind: 'summary', ...partial };
+}
+
+/**
+ * Shared core for both delete tools: honest config gate → backend-support gate
+ * → confirm-intent guard → real delete. `boundPipeline` (when the caller is the
+ * docked pipeline editor) drives an extra "this is the pipeline you have open"
+ * warning in the confirm step.
+ */
+async function removeFactoryObjectCore(args: {
+  kind: FactoryObjectKind;
+  name: string;
+  backend: PipelineBackend;
+  confirm?: boolean;
+  boundPipeline?: string;
+}): Promise<FactoryDeleteResult> {
+  const { kind, backend } = args;
+  const name = String(args.name || '').trim();
+  const label = FACTORY_OBJECT_KIND_LABELS[kind];
+  const be = backendLabel(backend);
+  const base = { deleted: false, awaitingConfirmation: false, gated: false, objectKind: kind, name, backend };
+
+  if (!name) throw new Error(`A ${label} name is required to delete.`);
+
+  // 1. Honest config gate — backend not wired in this deployment.
+  const gate = factoryOpsGate(backend);
+  if (gate) {
+    return deleteResult({
+      ...base,
+      gated: true,
+      title: `Delete blocked — ${be} not configured`,
+      markdown:
+        `Cannot delete the ${label} **${name}**: the ${be} backend is not configured in this deployment ` +
+        `(missing \`${gate.missing}\`). No changes were made.`,
+    });
+  }
+
+  // 2. Backend-support gate — kind not removable on this backend via Loom.
+  if (!isFactoryObjectDeletable(backend, kind)) {
+    return deleteResult({
+      ...base,
+      gated: true,
+      title: `Delete not supported on ${be}`,
+      markdown:
+        `Removing a ${label} on the ${be} backend isn't wired in CSA Loom yet — ` +
+        `remove **${name}** from Synapse Studio instead. No changes were made.`,
+    });
+  }
+
+  // 3. Confirm-intent guard — never delete on the first, unconfirmed call.
+  if (args.confirm !== true) {
+    const boundWarning =
+      kind === 'pipeline' && args.boundPipeline && args.boundPipeline === name
+        ? ' — note this is the pipeline you currently have open in the editor'
+        : '';
+    return deleteResult({
+      ...base,
+      awaitingConfirmation: true,
+      title: `Confirm delete of ${label} "${name}"`,
+      markdown:
+        `⚠️ This will **permanently delete** the ${be} ${label} **${name}**${boundWarning}. ` +
+        `This cannot be undone. Confirm with the user, then call this tool again with \`confirm: true\` to proceed.`,
+    });
+  }
+
+  // 4. Real, irreversible backend delete.
+  await deleteFactoryObject(backend, kind, name);
+  return deleteResult({
+    ...base,
+    deleted: true,
+    title: `Deleted ${label} "${name}"`,
+    markdown: `🗑️ Deleted the ${be} ${label} **${name}**.`,
+  });
+}
+
+/**
+ * Delete a NAMED pipeline in the factory (distinct from the bound one the
+ * editor is on). Confirm-intent guarded; warns when the named pipeline is the
+ * one currently open.
+ */
+export async function handlePipelineDeletePipeline(args: {
+  name: string;
+  backend: PipelineBackend;
+  confirm?: boolean;
+  boundPipeline?: string;
+}): Promise<FactoryDeleteResult> {
+  return removeFactoryObjectCore({
+    kind: 'pipeline',
+    name: args.name,
+    backend: args.backend,
+    confirm: args.confirm,
+    boundPipeline: args.boundPipeline,
+  });
+}
+
+/**
+ * Remove a factory object by type + name (dataset / linked-service / trigger /
+ * integration-runtime / data flow / CDC / managed private endpoint). The
+ * `objectType` is normalized from free-form aliases; an unknown type throws
+ * with the supported list. Confirm-intent guarded.
+ */
+export async function handlePipelineRemoveFactoryObject(args: {
+  objectType: string;
+  name: string;
+  backend: PipelineBackend;
+  confirm?: boolean;
+}): Promise<FactoryDeleteResult> {
+  const kind = normalizeFactoryObjectKind(args.objectType);
+  if (!kind) {
+    throw new Error(
+      `Unknown factory object type "${args.objectType}". Supported types: ${FACTORY_OBJECT_KINDS.join(', ')}.`,
+    );
+  }
+  return removeFactoryObjectCore({
+    kind,
+    name: args.name,
+    backend: args.backend,
+    confirm: args.confirm,
+  });
 }

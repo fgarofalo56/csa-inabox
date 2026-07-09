@@ -81,6 +81,30 @@ export const azureDatabricksItems: FabricItemType[] = [
       ],
       "docsUrl": "https://learn.microsoft.com/azure/databricks/compute/"
     } },
+  { slug: 'databricks-pipeline',         displayName: 'Lakeflow pipeline (DLT)',     restType: 'DatabricksPipeline',        category: 'Azure Databricks',
+    description: 'Lakeflow Declarative Pipelines (DLT) visual editor — DAG canvas, streaming tables / materialized views, expectations, run history + event log.',
+    learnContent: {
+      "overview": "A Lakeflow Declarative Pipeline (formerly Delta Live Tables / DLT) is a managed, dependency-aware ETL graph of streaming tables and materialized views with data-quality expectations. In Loom you author it on a visual canvas (source → streaming table / materialized view → expectation nodes); the canvas compiles to real DLT SQL, imports it as a workspace notebook, and creates + runs the pipeline via /api/2.0/pipelines against the Loom-deployed Databricks workspace. This item applies only when Databricks is the chosen backend — the Azure-native Data pipeline (Synapse/ADF) is the default pipeline surface, so nothing hard-requires Databricks.",
+      "steps": [
+        {
+          "title": "Add a source",
+          "body": "Drop a source node — Auto Loader over an ADLS path (read_files) or a Unity Catalog table stream."
+        },
+        {
+          "title": "Add datasets",
+          "body": "Wire the source into a streaming table (incremental) or a materialized view (recomputed), each with typed config — no JSON."
+        },
+        {
+          "title": "Attach expectations",
+          "body": "Add expectation nodes (name + condition + warn/drop/fail) to enforce data quality; they compile to CONSTRAINT … EXPECT clauses."
+        },
+        {
+          "title": "Save, run, and monitor",
+          "body": "Save compiles + creates the pipeline; Start returns a real update id; the run-history grid and event-log panel show real states and expectation pass/fail counts."
+        }
+      ],
+      "docsUrl": "https://learn.microsoft.com/azure/databricks/dlt/"
+    } },
   { slug: 'databricks-sql-warehouse',    displayName: 'Databricks SQL warehouse',    restType: 'DatabricksSqlWarehouse',    category: 'Azure Databricks',
     description: 'Serverless / classic SQL warehouse with Unity Catalog and Photon.',
     learnContent: {

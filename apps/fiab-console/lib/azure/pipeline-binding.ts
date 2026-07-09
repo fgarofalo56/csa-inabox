@@ -58,19 +58,30 @@ export class ItemNotFoundError extends Error {
 /**
  * Load a Loom item by (id, itemType) scoped to the caller's tenant. Mirrors
  * the loadItem() in /api/cosmos-items so RBAC stays consistent.
+ *
+ * `itemType` accepts a single type OR a list of acceptable types. This matters
+ * because the pipeline family aliases at creation time: an interactively-created
+ * `adf-pipeline` / `synapse-pipeline` tile (both `aliasOf:'data-pipeline'` in the
+ * catalog) is PERSISTED with `itemType:'data-pipeline'`, while a bundle-installed
+ * item may genuinely carry `itemType:'adf-pipeline'` (or `'synapse-pipeline'`).
+ * The ADF/Synapse route handlers therefore pass BOTH their own type and
+ * `'data-pipeline'` so either persisted form resolves. The list is matched via a
+ * parameterized `IN (...)` — no string concatenation of values.
  */
 export async function loadPipelineItem(
   itemId: string,
-  itemType: string,
+  itemType: string | string[],
   tenantId: string,
 ): Promise<WorkspaceItem | null> {
+  const types = (Array.isArray(itemType) ? itemType : [itemType]).filter(Boolean);
   const items = await itemsContainer();
+  const typePlaceholders = types.map((_, i) => `@t${i}`);
   const { resources } = await items.items
     .query<WorkspaceItem>({
-      query: 'SELECT * FROM c WHERE c.id = @id AND c.itemType = @t',
+      query: `SELECT * FROM c WHERE c.id = @id AND c.itemType IN (${typePlaceholders.join(', ')})`,
       parameters: [
         { name: '@id', value: itemId },
-        { name: '@t', value: itemType },
+        ...types.map((t, i) => ({ name: `@t${i}`, value: t })),
       ],
     })
     .fetchAll();
@@ -107,13 +118,17 @@ function readBindingFromState(item: WorkspaceItem): { pipelineName?: string; fac
  */
 export async function resolveBinding(
   itemId: string,
-  itemType: string,
+  itemType: string | string[],
   tenantId: string,
 ): Promise<PipelineBinding> {
   const item = await loadPipelineItem(itemId, itemType, tenantId);
-  if (!item) throw new ItemNotFoundError(itemType, itemId);
+  // For not-found messages use the caller's primary (first) requested type —
+  // e.g. 'adf-pipeline' — since the item genuinely doesn't exist. When the item
+  // IS found, prefer its ACTUAL persisted itemType (often 'data-pipeline').
+  const primaryType = Array.isArray(itemType) ? itemType[0] : itemType;
+  if (!item) throw new ItemNotFoundError(primaryType, itemId);
   const { pipelineName, factory, workspace } = readBindingFromState(item);
-  if (!pipelineName) throw new UnboundPipelineError(itemType, itemId);
+  if (!pipelineName) throw new UnboundPipelineError(item.itemType || primaryType, itemId);
   return { pipelineName, factory, workspace, item };
 }
 
@@ -123,12 +138,13 @@ export async function resolveBinding(
  */
 export async function persistBinding(
   itemId: string,
-  itemType: string,
+  itemType: string | string[],
   tenantId: string,
   binding: { pipelineName: string; factory?: string; workspace?: string },
 ): Promise<WorkspaceItem> {
   const item = await loadPipelineItem(itemId, itemType, tenantId);
-  if (!item) throw new ItemNotFoundError(itemType, itemId);
+  const primaryType = Array.isArray(itemType) ? itemType[0] : itemType;
+  if (!item) throw new ItemNotFoundError(primaryType, itemId);
   if (!binding.pipelineName || !binding.pipelineName.trim()) {
     throw new Error('pipelineName is required to bind');
   }

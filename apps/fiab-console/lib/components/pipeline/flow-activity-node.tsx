@@ -42,7 +42,9 @@ import {
   CanvasNode,
   getActivityVisual,
   portStyle,
+  standardNodeActions,
   type CanvasNodeStatus,
+  type PortKind,
 } from '@/lib/components/canvas/canvas-node-kit';
 import type { PipelineActivity } from './types';
 
@@ -54,6 +56,15 @@ const COND_LABEL: Record<ConnectorCondition, string> = {
   Failed: 'Upon Failure',
   Completed: 'Upon Completion',
   Skipped: 'Upon Skip',
+};
+// ADF condition → the kit's typed port kind, so the four output handles render
+// as Fabric-style small COLORED SQUARES (green/red/brand/neutral) while the
+// handle `id` stays the ConnectorCondition the canvas onConnect maps from.
+const COND_TO_PORT: Record<ConnectorCondition, PortKind> = {
+  Succeeded: 'success',
+  Failed: 'fail',
+  Completed: 'complete',
+  Skipped: 'skip',
 };
 // Vertical placement (as a % of node height) of the four stacked output ports.
 const PORT_TOP: Record<ConnectorCondition, string> = {
@@ -84,6 +95,12 @@ export interface ActivityNodeData {
    * unchanged.
    */
   status?: CanvasNodeStatus;
+  /** Inline live-status detail ('Loading data…' / 'Running Copy…'). */
+  statusDetail?: string;
+  /** Inline node action-bar callbacks (delete / view-JSON / clone). Optional. */
+  onDelete?: (name: string) => void;
+  onViewJson?: (name: string) => void;
+  onClone?: (name: string) => void;
   [key: string]: unknown;
 }
 
@@ -95,6 +112,12 @@ function FlowActivityNodeImpl({ data, selected }: NodeProps) {
   const isContainer = isContainerType(activity.type);
   const innerCount = isContainer ? totalInnerCount(activity) : 0;
 
+  const actionBar = standardNodeActions({
+    onViewJson: nodeData.onViewJson ? () => nodeData.onViewJson!(activity.name) : undefined,
+    onClone: nodeData.onClone ? () => nodeData.onClone!(activity.name) : undefined,
+    onDelete: nodeData.onDelete ? () => nodeData.onDelete!(activity.name) : undefined,
+  });
+
   return (
     <CanvasNode
       width={FLOW_NODE_W}
@@ -103,6 +126,8 @@ function FlowActivityNodeImpl({ data, selected }: NodeProps) {
       typeLabel={def?.label || activity.type || 'Unknown'}
       selected={selected}
       status={nodeData.status}
+      statusDetail={nodeData.statusDetail}
+      actionBar={actionBar.length > 0 ? actionBar : undefined}
       description={activity.description as string | undefined}
       framed={isContainer}
       branchChips={
@@ -171,7 +196,9 @@ function FlowActivityNodeImpl({ data, selected }: NodeProps) {
             position={Position.Right}
             data-handle-condition={cond}
             aria-label={`${COND_LABEL[cond]} output — drag to connect`}
-            style={{ ...portStyle(cond, CONNECTOR_COLORS[cond]), right: -6, top: PORT_TOP[cond] }}
+            // Typed COLORED SQUARE per condition (kit derives the palette colour
+            // from the mapped port kind); id stays the ConnectorCondition.
+            style={{ ...portStyle(COND_TO_PORT[cond], CONNECTOR_COLORS[cond]), right: -6, top: PORT_TOP[cond] }}
           />
         </Tooltip>
       ))}

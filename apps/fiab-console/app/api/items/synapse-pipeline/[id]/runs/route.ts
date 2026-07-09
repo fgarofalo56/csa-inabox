@@ -20,6 +20,10 @@ import { resolveBinding, UnboundPipelineError, ItemNotFoundError } from '@/lib/a
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+// Accept the aliased persist form ('data-pipeline') alongside the native type —
+// see pipeline-binding.ts loadPipelineItem for why.
+const ACCEPTED_TYPES = ['synapse-pipeline', 'data-pipeline'];
+
 const ALLOWED_STATUS = new Set(['Queued', 'InProgress', 'Succeeded', 'Failed', 'Cancelled', 'Cancelling']);
 
 function emptyRuns(after?: string, before?: string, status?: string) {
@@ -44,7 +48,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
   // for a pipeline that doesn't exist (which surfaced as an opaque 502 in UAT).
   let pipelineName: string;
   try {
-    ({ pipelineName } = await resolveBinding(id, 'synapse-pipeline', session.claims.oid));
+    ({ pipelineName } = await resolveBinding(id, ACCEPTED_TYPES, session.claims.oid));
   } catch (e) {
     if (e instanceof UnboundPipelineError || e instanceof ItemNotFoundError) {
       return emptyRuns(after, before, status);

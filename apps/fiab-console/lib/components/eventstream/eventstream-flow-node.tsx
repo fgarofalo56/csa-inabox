@@ -19,17 +19,12 @@ import { memo } from 'react';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
 import type { JSX } from 'react';
 import {
-  makeStyles, mergeClasses, shorthands, tokens,
-  Menu, MenuTrigger, MenuPopover, MenuList, MenuItem, Caption1,
-} from '@fluentui/react-components';
-import {
   CloudArrowUp20Regular, Filter20Regular, DatabaseArrowRight20Regular,
   Database20Regular, Flowchart20Regular, BranchFork20Regular,
-  Add20Regular, Sparkle20Regular,
 } from '@fluentui/react-icons';
 import {
-  CanvasNode, CATEGORY_ACCENT, portStyle,
-  type CanvasNodeCategory, type CanvasVisual,
+  CanvasNode, CATEGORY_ACCENT, portStyle, standardNodeActions,
+  type CanvasNodeCategory, type CanvasNodeStatus, type CanvasVisual,
 } from '@/lib/components/canvas/canvas-node-kit';
 
 export type NodeRole = 'source' | 'transform' | 'sink';
@@ -39,6 +34,14 @@ export interface EsNodeData {
   kind: string;
   role: NodeRole;
   subtitle?: string;
+  /** Optional run/preview state → header StatusChip (default 'idle'). */
+  status?: CanvasNodeStatus;
+  /** Inline live-status detail ('Loading data…') shown under the header. */
+  statusDetail?: string;
+  /** Inline node action-bar callbacks (view-JSON / clone / delete). Optional. */
+  onViewJson?: () => void;
+  onClone?: () => void;
+  onDelete?: () => void;
   [key: string]: unknown;
 }
 
@@ -75,6 +78,12 @@ function EventstreamFlowNodeImpl({ data, selected }: NodeProps) {
   const d = data as EsNodeData;
   const visual = eventstreamVisual(d.role, d.kind);
 
+  const actionBar = standardNodeActions({
+    onViewJson: d.onViewJson,
+    onClone: d.onClone,
+    onDelete: d.onDelete,
+  });
+
   return (
     <CanvasNode
       width={NODE_WIDTH}
@@ -82,6 +91,9 @@ function EventstreamFlowNodeImpl({ data, selected }: NodeProps) {
       visual={visual}
       selected={selected}
       typeLabel={d.kind}
+      status={d.status}
+      statusDetail={d.statusDetail}
+      actionBar={actionBar.length > 0 ? actionBar : undefined}
       description={d.subtitle}
       rootProps={{
         'data-es-role': d.role,
@@ -110,78 +122,3 @@ function EventstreamFlowNodeImpl({ data, selected }: NodeProps) {
 }
 
 export const EventstreamFlowNode = memo(EventstreamFlowNodeImpl);
-
-// ============================================================
-// GhostNextStepNode — a large dashed placeholder that trails the flow and
-// teaches the next authoring step, exactly like Fabric Eventstream (which
-// pre-draws source → stream → ghost "Transform events or add destination").
-// It carries an INPUT handle so the trailing edge connects, and offers the
-// same add-transform / add-destination pickers the palette does via a small
-// dropdown menu. Purely a UI scaffold — it holds no persisted state; clicking
-// an option adds a real node through the host callbacks.
-// ============================================================
-
-export interface EsGhostData {
-  role: 'ghost';
-  label: string;
-  onAddTransform: () => void;
-  onAddSink: () => void;
-  [key: string]: unknown;
-}
-
-const useGhostStyles = makeStyles({
-  root: {
-    width: '200px',
-    ...shorthands.borderRadius(tokens.borderRadiusLarge),
-    ...shorthands.border('1.5px', 'dashed', tokens.colorNeutralStroke2),
-    backgroundColor: tokens.colorNeutralBackground2,
-    ...shorthands.padding(tokens.spacingVerticalM, tokens.spacingHorizontalM),
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    gap: tokens.spacingVerticalXS,
-    cursor: 'pointer',
-    color: tokens.colorNeutralForeground3,
-    ':hover': {
-      ...shorthands.borderColor(tokens.colorBrandStroke1),
-      color: tokens.colorNeutralForeground2,
-    },
-  },
-  glyph: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    width: '32px',
-    height: '32px',
-    ...shorthands.borderRadius(tokens.borderRadiusCircular),
-    backgroundColor: tokens.colorNeutralBackground4,
-    color: tokens.colorBrandForeground1,
-  },
-  label: {
-    textAlign: 'center',
-  },
-});
-
-function GhostNextStepNodeImpl({ data }: NodeProps) {
-  const d = data as EsGhostData;
-  const g = useGhostStyles();
-  return (
-    <Menu>
-      <MenuTrigger disableButtonEnhancement>
-        <div className={mergeClasses(g.root)} role="button" tabIndex={0} aria-label={d.label} data-es-role="ghost">
-          <Handle id="in" type="target" position={Position.Left} style={{ ...portStyle('in', tokens.colorBrandStroke1), left: -6 }} />
-          <div className={g.glyph}><Add20Regular /></div>
-          <Caption1 className={g.label}>{d.label}</Caption1>
-        </div>
-      </MenuTrigger>
-      <MenuPopover>
-        <MenuList>
-          <MenuItem icon={<Sparkle20Regular />} onClick={d.onAddTransform}>Transform events</MenuItem>
-          <MenuItem icon={<DatabaseArrowRight20Regular />} onClick={d.onAddSink}>Add destination</MenuItem>
-        </MenuList>
-      </MenuPopover>
-    </Menu>
-  );
-}
-
-export const GhostNextStepNode = memo(GhostNextStepNodeImpl);

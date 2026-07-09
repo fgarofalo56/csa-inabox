@@ -34,6 +34,7 @@
  */
 
 import type { AppBundle } from './types';
+import { backendUtilShimCell, loomSecret } from './notebook-backend';
 
 // ════════════════════════════════════════════════════════════════════════
 //  BACKEND-AWARE SQL DIALECT
@@ -93,6 +94,11 @@ function rtaCells<T extends { source?: string | string[] }>(cells: T[]): T[] {
 // ════════════════════════════════════════════════════════════════════════
 
 const NB_BOOTSTRAP_CELLS = [
+  // Backend-aware utility shim FIRST so every cell below can call the
+  // loom_get_secret / loom_get_arg / loom_mount_adls / loom_fs_ls helpers and
+  // run correctly on Synapse Spark (default), Databricks, Fabric, or Azure ML
+  // Spark — instead of a raw `dbutils.*` that NameErrors off Databricks.
+  backendUtilShimCell(),
   {
     id: 'boot-md-intro',
     type: 'markdown' as const,
@@ -197,32 +203,30 @@ const NB_BOOTSTRAP_CELLS = [
     id: 'boot-code-mount',
     type: 'code' as const,
     lang: 'pyspark' as const,
+    // Backend-agnostic ADLS Gen2 setup (databricks-setup.md, generalized to every
+    // Loom Spark engine). The loom_* helpers come from the shim cell above:
+    //   • Databricks/Synapse/Fabric → mounts to /mnt/data via the engine's util.
+    //   • Azure ML Spark (no mount surface) → returns the abfss:// root read
+    //     directly after configuring SP OAuth on spark.conf.
+    // Secrets come from Key Vault via the workspace identity — never hard-coded.
     source:
-      '# Mount ADLS Gen2 with a service principal (databricks-setup.md).\n' +
-      'configs = {\n' +
-      '    "fs.azure.account.auth.type": "OAuth",\n' +
-      '    "fs.azure.account.oauth.provider.type":\n' +
-      '        "org.apache.hadoop.fs.azurebfs.oauth2.ClientCredsTokenProvider",\n' +
-      '    "fs.azure.account.oauth2.client.id":\n' +
-      '        dbutils.secrets.get("kv-secrets", "sp-client-id"),\n' +
-      '    "fs.azure.account.oauth2.client.secret":\n' +
-      '        dbutils.secrets.get("kv-secrets", "sp-client-secret"),\n' +
-      '    "fs.azure.account.oauth2.client.endpoint":\n' +
-      '        f"https://login.microsoftonline.com/{tenant_id}/oauth2/token",\n' +
-      '}\n\n' +
-      '# Customer-supplied ADLS Gen2 account + container (no hard-coded placeholder).\n' +
-      '# Set these as notebook widgets or job params; the mount is illustrative\n' +
-      '# setup, not a Loom-managed data load.\n' +
-      'adls_account = dbutils.widgets.get("adls_account") if "adls_account" in [w.name for w in dbutils.widgets.getAll()] else spark.conf.get("spark.loom.adlsAccount", "")\n' +
+      '# Resolve the ADLS Gen2 data root the streaming + batch jobs read/write, in a\n' +
+      '# way that works on Synapse Spark (default), Databricks, Fabric, or Azure ML.\n' +
+      `sp_client_id     = ${loomSecret('kv-secrets', 'sp-client-id')}\n` +
+      `sp_client_secret = ${loomSecret('kv-secrets', 'sp-client-secret')}\n` +
+      'tenant_id        = loom_get_arg("tenant_id") or spark.conf.get("spark.loom.tenantId", "")\n\n' +
+      '# Customer-supplied ADLS Gen2 account + container (notebook parameter or\n' +
+      '# spark.conf; illustrative setup, not a Loom-managed data load).\n' +
+      'adls_account   = loom_get_arg("adls_account") or spark.conf.get("spark.loom.adlsAccount", "")\n' +
       'adls_container = "landing"\n' +
-      'assert adls_account, "Set the adls_account widget (or spark.loom.adlsAccount) to your ADLS Gen2 account."\n' +
-      'if not any(m.mountPoint == "/mnt/data" for m in dbutils.fs.mounts()):\n' +
-      '    dbutils.fs.mount(\n' +
-      '        source=f"abfss://{adls_container}@{adls_account}.dfs.core.windows.net/",\n' +
-      '        mount_point="/mnt/data",\n' +
-      '        extra_configs=configs,\n' +
-      '    )\n\n' +
-      'display(dbutils.fs.ls("/mnt/data"))',
+      'assert adls_account, "Set the adls_account parameter (or spark.loom.adlsAccount) to your ADLS Gen2 account."\n\n' +
+      '# SP OAuth for direct abfss reads — required on Azure ML (no mount), harmless\n' +
+      '# on the mount-capable engines.\n' +
+      'loom_configure_oauth(adls_account, sp_client_id, sp_client_secret, tenant_id)\n\n' +
+      '# Mount where supported, else use the direct abfss path (AML). Either way\n' +
+      '# data_root is the root the cells below load Delta tables from.\n' +
+      'data_root = loom_mount_adls(adls_container, adls_account, "/mnt/data")\n' +
+      'display(loom_fs_ls(data_root))',
   },
 ];
 
@@ -406,9 +410,11 @@ const NB_OPENAI_CELLS = [
     lang: 'pyspark' as const,
     source:
       'from openai import AzureOpenAI\n\n' +
+      '# Key Vault secrets via the backend-agnostic shim at the top of this notebook\n' +
+      '# (works on Synapse/Databricks/Fabric/AML — no raw dbutils).\n' +
       'client = AzureOpenAI(\n' +
-      '    azure_endpoint=dbutils.secrets.get("kv-secrets", "azure-openai-endpoint"),\n' +
-      '    api_key=dbutils.secrets.get("kv-secrets", "azure-openai-key"),\n' +
+      `    azure_endpoint=${loomSecret('kv-secrets', 'azure-openai-endpoint')},\n` +
+      `    api_key=${loomSecret('kv-secrets', 'azure-openai-key')},\n` +
       '    api_version="2024-02-15-preview",\n' +
       ')',
   },
@@ -832,7 +838,10 @@ const bundle: AppBundle = {
         'layer for natural-language→SQL, automated insight generation, and ' +
         'anomaly explanation. (azure-openai.md.)',
       learnDoc: 'azure-realtime-analytics',
-      content: { kind: 'notebook', defaultLang: 'pyspark', cells: rtaCells(NB_OPENAI_CELLS) },
+      // Prepend the backend-util shim so this standalone notebook's loom_get_secret
+      // calls resolve on Synapse/Databricks/Fabric/AML (it does not share notebook
+      // 01's session).
+      content: { kind: 'notebook', defaultLang: 'pyspark', cells: [backendUtilShimCell(), ...rtaCells(NB_OPENAI_CELLS)] },
     },
 
     // ─── Warehouse: data-quality + streaming metrics (seeded) ─────────────

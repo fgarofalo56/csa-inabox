@@ -133,6 +133,8 @@ export const EDITOR_REGISTRY: Record<string, EditorComponent> = {
   'databricks-job':              reg(() => import('./databricks/job-editor'),          'DatabricksJobEditor'),
   'databricks-cluster':          reg(() => import('./databricks/cluster-editor'),      'DatabricksClusterEditor'),
   'databricks-sql-warehouse':    reg(() => import('./databricks/sql-warehouse-editor'), 'DatabricksSqlWarehouseEditor'),
+  // Lakeflow Declarative Pipelines (DLT) visual editor (DBX-3).
+  'databricks-pipeline':         reg(() => import('./databricks/pipeline-editor'),     'DatabricksPipelineEditor'),
   'adf-pipeline':                reg(() => import('./azure-services-editors'), 'AdfPipelineEditor'),
   'adf-dataset':                 reg(() => import('./azure-services-editors'), 'AdfDatasetEditor'),
   'adf-trigger':                 reg(() => import('./azure-services-editors'), 'AdfTriggerEditor'),
