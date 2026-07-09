@@ -68,6 +68,18 @@ DAIS 2026 shipped a large batch — Lakebase GA, Lakeflow Designer GA, UC Metric
 
 **Acceptance criteria (real-backend receipt).** Deploy a Streamlit app from pasted source in a UAMI-only environment (Databricks unbound): receipt = the ACR build run id + the ARM PUT response + the live `https://<app>.<region>.azurecontainerapps.io` URL returning HTTP 200 behind Entra auth, plus a Playwright screenshot of the running app. Autoscale-to-zero verified (replica count → 0 when idle, cold-start on hit). Stop/Delete lifecycle returns real ARM responses. No mock arrays; no `return []`.
 
+**STATUS — DELIVERED (Wave 6, feat/wave6-dbx1-loom-apps).** The `loom-app-runtime` item type ships COMPLETE for the template + public-git build paths:
+- Catalog item `loom-app-runtime` (Loom Apps family) + `LoomAppRuntimeEditor` (Overview / Source / Deploy / Bindings / Logs / History tabs, Fluent v9 + Loom tokens, Monaco source panes, no-freeform dropdowns).
+- `lib/azure/loom-apps-runtime-templates.ts` — 5 real starter bundles (Streamlit/Dash/Gradio/Flask/Node-Express), Dockerfile generator, build-context assembly, a minimal ustar tar writer, the env-name allowlist, and the ACA container-app + Entra authConfig ARM body builders (all pure + unit-tested, 20 tests).
+- `lib/azure/loom-apps-client.ts` — real ACR quick-build (`listBuildSourceUploadUrl` → gzip-tar upload → `scheduleRun` DockerBuildRequest → poll `runs/{id}`) and real Container Apps deploy (external ingress, `minReplicas:0`, Entra Easy-Auth wrapper via the Console MSAL app reg) + start/stop/delete + Log Analytics log tail. Honest gate (`LoomAppsNotConfiguredError`) names the exact env + bicep.
+- BFF routes `app/api/items/loom-app-runtime/{config,[id],[id]/build,[id]/deploy,[id]/lifecycle,[id]/logs}` — owner-scoped via `resolveItemAccessByOid`; 6 route tests.
+- Default-ON/opt-out kill switch: `LOOM_APPS_RUNTIME_ENABLED` env (default true) + tenant-settings toggle `apps.runtimeEnabled`. NO spend/approval gate; cost bounded by scale-to-zero.
+- Bicep: `LOOM_APPS_CAE_ID`/`LOOM_APPS_ACR_LOGIN_SERVER`/`LOOM_APPS_UAMI_ID`/`LOOM_APPS_RUNTIME_ENABLED` emitted (no new top-level params — reuses the existing CAE + ACR + MCP UAMI) + an AcrPull grant for the app identity on the Loom ACR. Parity doc: `docs/fiab/parity/loom-app-runtime.md`.
+
+**DEFERRED (named follow-ups, honest-gated — no fake surface):**
+- **Private git-source builds (PAT/OAuth).** Only public https repos (github/dev.azure/gitlab/bitbucket) build today; a credentialed/private git URL returns a precise 400 pointing at this follow-up. Add a KV-backed source-credential to the ACR `DockerBuildRequest`.
+- **Dedicated "Agent" runtime template + Data-Agent compose-back** — this is PRP item #2 (Custom agent hosting), which rides on this runtime.
+
 ---
 
 ## 2 — Custom agent hosting — P1, L

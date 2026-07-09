@@ -2736,6 +2736,21 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_ACA_ENV_ID', value: containerPlatformModule.outputs.caeId }
             { name: 'LOOM_ACA_ENV_DOMAIN', value: containerPlatformModule.outputs.caeDefaultDomain }
             { name: 'LOOM_MCP_CATALOG_UAMI_ID', value: identity.outputs.uamiMcpId }
+            // Loom App Runtime (DBX-1) — Databricks-Apps-class hosted apps. The
+            // build/deploy BFF (app/api/items/loom-app-runtime/[id]/*) runs an
+            // ACR quick-build (Console UAMI Contributor covers scheduleRun +
+            // push) then PUTs an autoscale-to-zero, Entra-gated Container App
+            // into the SAME managed environment. LOOM_APPS_UAMI_ID is the app
+            // identity (uami-loom-mcp) — it holds AcrPull on the Loom ACR (grant
+            // below) so the app pulls its private image. Wired only on the
+            // Container Apps boundary; on AKS the runtime honest-gates. Empty CAE
+            // → the editor's honest infra MessageBar. LOOM_APPS_RUNTIME_ENABLED
+            // is the deployment-wide kill switch (default 'true', opt-out; the
+            // tenant-settings toggle apps.runtimeEnabled is the no-redeploy flip).
+            { name: 'LOOM_APPS_CAE_ID', value: (containerPlatform == 'containerApps' && deployAppsEnabled) ? containerPlatformModule.outputs.caeId : '' }
+            { name: 'LOOM_APPS_ACR_LOGIN_SERVER', value: (containerPlatform == 'containerApps' && deployAppsEnabled) ? registry.outputs.acrLoginServer : '' }
+            { name: 'LOOM_APPS_UAMI_ID', value: identity.outputs.uamiMcpId }
+            { name: 'LOOM_APPS_RUNTIME_ENABLED', value: 'true' }
             // Built-in MCP tool server (azure-functions/mcp-server) /api/mcp
             // endpoint. The admin → External MCP Tools "Built-in server" card +
             // GET /api/admin/mcp-servers/builtin read this for one-click
@@ -4366,6 +4381,30 @@ resource scriptRunnerAcrPull 'Microsoft.Authorization/roleAssignments@2022-04-01
   properties: {
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d')
     principalId: scriptRunnerUami!.properties.principalId
+    principalType: 'ServicePrincipal'
+  }
+  dependsOn: [
+    registry
+  ]
+}
+
+// Loom App Runtime (DBX-1): the app identity (uami-loom-mcp — the SAME identity
+// assigned to catalog MCP servers, reused as the hosted-app identity) needs
+// AcrPull on the Loom ACR so a deployed loom-app-runtime Container App can pull
+// its PRIVATE image (the ACR is publicNetworkAccess=Disabled). The Console UAMI
+// already builds+pushes via its RG-scoped Contributor (scaling-rbac) and assigns
+// this identity via Managed Identity Operator (mcp-catalog-rbac). guid()-named ⇒
+// idempotent; gated on !skipRoleGrants + the Container Apps app-deploy boundary.
+resource loomAppsAcrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (containerPlatform == 'containerApps' && deployAppsEnabled && !skipRoleGrants) {
+  scope: acrForScriptRunner
+  // The name seed must be calculable at deployment START (BCP120), so it uses a
+  // constant discriminator rather than identity.outputs.uamiMcpPrincipalId (a
+  // runtime module output). guid(acr.id, constant) is still deterministic +
+  // idempotent; the runtime principalId is fine in properties (not the name).
+  name: guid(acrForScriptRunner.id, 'uami-loom-mcp', 'loom-apps-acrpull')
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d')
+    principalId: identity.outputs.uamiMcpPrincipalId
     principalType: 'ServicePrincipal'
   }
   dependsOn: [
