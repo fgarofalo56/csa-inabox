@@ -213,6 +213,13 @@ let _itemVersions: Container | null = null;
 // unrelated threads). Created lazily (createIfNotExists) here AND ARM-provisioned
 // in cosmos.bicep's loomContainers — the lazy call is the hotfix fallback.
 let _agentMemory: Container | null = null;
+// Scoped API tokens (PAT) — BR-PAT. One doc per token, PK /id so the hot
+// resolvePat() path (every non-interactive API request) is a single-partition
+// point-read by the token id carried in the Authorization: Bearer header. Stores
+// a SHA-256 HASH of the secret only (never the secret), plus scope/expiry/
+// createdBy/revoked. Created lazily (createIfNotExists) here AND ARM-provisioned
+// in cosmos.bicep's loomContainers — the lazy call is the hotfix fallback.
+let _loomPatTokens: Container | null = null;
 let _ensured = false;
 
 /**
@@ -788,6 +795,10 @@ async function ensure() {
   // partition. NO defaultTtl — memory facts are durable and threads are retained
   // until the per-agent retention cap evicts the oldest.
   _agentMemory = await mk('loom-agent-memory', '/agentId');
+  // Scoped API tokens (PAT, BR-PAT). PK /id — resolvePat() point-reads by the
+  // token id in the bearer header (the hot path); the management lists are the
+  // infrequent surface and filter by tenantId/createdByOid across partitions.
+  _loomPatTokens = await mk('loom-pat-tokens', '/id');
   _ensured = true;
 }
 
@@ -859,6 +870,8 @@ export async function rateLimitsContainer(): Promise<Container> { await ensure()
 export async function itemVersionsContainer(): Promise<Container> { await ensure(); return _itemVersions!; }
 /** Durable agent memory + per-agent thread persistence (AIF-14), PK /agentId. */
 export async function agentMemoryContainer(): Promise<Container> { await ensure(); return _agentMemory!; }
+/** Scoped API tokens (PAT, BR-PAT) — PK /id; stores a SHA-256 hash of the secret only. */
+export async function loomPatTokensContainer(): Promise<Container> { await ensure(); return _loomPatTokens!; }
 
 // Foundation admin containers (shared cloud-endpoints resolver task).
 /** Admin Workspace Catalog — one row per Loom-managed workspace, PK /tenantId. */
@@ -1019,6 +1032,7 @@ const KNOWN_CONTAINER_IDS = [
   'report-subscriptions', 'report-delivery-log',
   'webhook-subscriptions', 'webhook-deliveries',
   'data-product-analytics',
+  'loom-pat-tokens',
 ];
 
 /** List all Loom containers with their current throughput shape.

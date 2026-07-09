@@ -1811,6 +1811,8 @@ nav:
               - Synapse Audit Query Pack: fiab/runbooks/synapse-audit-query-pack.md
               - Loom LAW Monitoring + Alert Pack: fiab/runbooks/loom-law-monitoring.md
               - Secrets Bootstrap (per boundary): fiab/runbooks/secrets-bootstrap.md
+          - Developer:
+              - Scoped API tokens (PAT): fiab/developer/api-tokens.md
 
       # ------------------------------------------------------------
       # 9. Governance & Compliance

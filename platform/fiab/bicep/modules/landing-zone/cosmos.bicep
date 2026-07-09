@@ -197,6 +197,12 @@ var loomContainers = [
   // until the per-agent retention cap (LOOM_AGENT_THREAD_CAP) evicts the oldest.
   // createIfNotExists in cosmos-client.ts ensure() remains the hotfix fallback.
   { name: 'loom-agent-memory', partitionKey: '/agentId' }
+  // Scoped API tokens (PAT, BR-PAT). One doc per token, PK /id so resolvePat()
+  // — the hot path on every non-interactive API request — is a single-partition
+  // point-read by the token id in the Authorization: Bearer header. Stores a
+  // SHA-256 hash of the secret only (never the secret). createIfNotExists in
+  // cosmos-client.ts ensure() remains the hotfix fallback.
+  { name: 'loom-pat-tokens',   partitionKey: '/id' }
 ]
 
 resource loomDb 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases@2024-12-01-preview' = {
