@@ -1,6 +1,7 @@
 'use client';
 
 import { clientFetch } from '@/lib/client-fetch';
+import { CopilotBuilderPane } from '@/lib/components/shared/copilot-builder-pane';
 /**
  * Graph + Vector editors — Cosmos Gremlin, Cypher, GQL, and Vector store.
  *
@@ -386,6 +387,17 @@ export function GqlGraphEditor({ item, id }: { item: FabricItemType; id: string 
   const [result, setResult] = useState<any>(null);
   const [loading, setLoading] = useState(false);
 
+  // After a Copilot Apply/Restore, load the saved graph-query draft into the
+  // editor so the user can Run it against the real ADX cluster.
+  const loadCopilotGraphDraft = useCallback(async () => {
+    try {
+      const r = await clientFetch(`/api/items/gql-graph/${encodeURIComponent(id)}/assist?action=doc`);
+      const j = await r.json().catch(() => ({}));
+      const draft = typeof j?.doc?.query === 'string' ? j.doc.query : '';
+      if (draft) setQuery(draft);
+    } catch { /* best-effort: the draft is already saved server-side */ }
+  }, [id]);
+
   // Toggle the editor language; swap to the matching sample so the editor is
   // never left holding the other dialect's syntax. Only replaces the buffer
   // when it still holds the *other* dialect's untouched sample (so user edits
@@ -596,6 +608,22 @@ export function GqlGraphEditor({ item, id }: { item: FabricItemType; id: string 
             </div>
           )}
           <ResultsPreview result={result} />
+
+          {id !== 'new' && (
+            <>
+              <Divider />
+              <Subtitle2>Copilot</Subtitle2>
+              <CopilotBuilderPane
+                endpoint={`/api/items/gql-graph/${id}/assist`}
+                title="Copilot — author the graph query in natural language"
+                intro="Describe the traversal and Copilot proposes an ADX graph query (make-graph / graph-match / openCypher) grounded on this graph's source edge table. Review, then Apply to save a reversible draft that loads into the editor above and runs on the real Azure Data Explorer cluster. Azure-native — no Microsoft Fabric required."
+                fieldLabel="Describe the graph query"
+                fieldHint="Plain English. Copilot grounds the query on the real source edge table and waits for your approval before saving."
+                placeholder={'e.g. "Find all accounts within two hops of a flagged account and project their names and risk scores."'}
+                onApplied={loadCopilotGraphDraft}
+              />
+            </>
+          )}
         </div>
       }
     />

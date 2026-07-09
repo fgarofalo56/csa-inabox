@@ -52,6 +52,7 @@ import {
 import { ItemEditorChrome } from '../item-editor-chrome';
 import { OpenInPbiDesktopButton } from '../components/open-in-pbi-desktop-button';
 import { EmptyState } from '@/lib/components/empty-state';
+import { CopilotBuilderPane } from '@/lib/components/shared/copilot-builder-pane';
 import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
 import { GuidedEmptyState } from '@/lib/components/shared/guided-empty-state';
 import { EntityDiagram } from '@/lib/components/shared/entity-diagram';
@@ -130,6 +131,17 @@ export function LakehouseEditor({ item, id }: Props) {
   );
   const [sqlResult, setSqlResult] = useState<PreviewResponse | null>(null);
   const [sqlLoading, setSqlLoading] = useState(false);
+
+  // After a Copilot Apply/Restore, load the saved SQL draft into the SQL editor
+  // and switch to it so the user can Run it against the real Delta backend.
+  const loadCopilotDraft = useCallback(async () => {
+    try {
+      const r = await clientFetch(`/api/items/lakehouse/${encodeURIComponent(id)}/assist?action=doc`);
+      const j = await r.json().catch(() => ({}));
+      const draft = typeof j?.doc?.query === 'string' ? j.doc.query : '';
+      if (draft) { setSqlText(draft); setTab('sql'); }
+    } catch { /* best-effort: the draft is already saved server-side */ }
+  }, [id]);
   // ---- History tab (Delta time travel) --------------------------------
   const [historyTable, setHistoryTable] = useState<string | null>(null);
   const [historyRows, setHistoryRows] = useState<HistoryRow[] | null>(null);
@@ -2552,11 +2564,23 @@ export function LakehouseEditor({ item, id }: Props) {
               <Tab value="sql" icon={<Play20Regular />}>SQL</Tab>
               <Tab value="shortcuts" icon={<CloudLink20Regular />}>Shortcuts</Tab>
               <Tab value="security" icon={<ShieldTask20Regular />}>Security</Tab>
+              <Tab value="copilot" icon={<Sparkle20Regular />}>Copilot</Tab>
             </TabList>
           </div>
           <div className={s.pad}>
             {tab === 'security' && (
               <OneLakeSecurityTab itemId={id} itemType="lakehouse" container={activeContainer || 'gold'} />
+            )}
+            {tab === 'copilot' && (
+              <CopilotBuilderPane
+                endpoint={`/api/items/lakehouse/${id}/assist`}
+                title="Copilot — query the lakehouse in natural language"
+                intro="Describe the data you want and Copilot proposes a read-only SQL SELECT grounded on this lakehouse's real Delta tables. Review the plan, then Apply to save a reversible draft you can run in the SQL tab (Synapse serverless over Delta). Azure-native — no Microsoft Fabric required."
+                fieldLabel="Ask Copilot for a query"
+                fieldHint="Plain English. Copilot grounds the SELECT in the real Delta table names and waits for your approval before saving."
+                placeholder={'e.g. "Show total revenue by product category for the last 90 days from the gold sales table."'}
+                onApplied={loadCopilotDraft}
+              />
             )}
             {/* SC-10 shared <EntityDiagram> — Overview ⇄ Entity-diagram over the REAL
                 Delta catalog (/api/lakehouse/tables) with best-effort column

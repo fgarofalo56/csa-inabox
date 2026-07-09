@@ -1,6 +1,7 @@
 'use client';
 
 import { clientFetch } from '@/lib/client-fetch';
+import { CopilotBuilderPane } from '@/lib/components/shared/copilot-builder-pane';
 /**
  * AutoML editor — the low-code Automated ML wizard over Azure Machine Learning
  * AutoML (Fabric Build 2026 #37; there is no Fabric "AutoML" item, so this is
@@ -177,7 +178,7 @@ function statusIcon(status?: string) {
 
 export function AutoMlEditor({ item, id }: { item: FabricItemType; id: string }) {
   const styles = useStyles();
-  const [tab, setTab] = useState<'wizard' | 'runs'>('wizard');
+  const [tab, setTab] = useState<'wizard' | 'runs' | 'copilot'>('wizard');
 
   // ---- Wizard state ----
   const [step, setStep] = useState<StepName>('Task');
@@ -286,6 +287,22 @@ export function AutoMlEditor({ item, id }: { item: FabricItemType; id: string })
       setJobsLoading(false);
     }
   }, []);
+
+  // After a Copilot Apply/Restore, pre-fill the wizard fields from the saved
+  // config draft and switch to the wizard so the user can review + Submit.
+  const loadCopilotConfig = useCallback(async () => {
+    try {
+      const r = await clientFetch(`/api/items/automl/${encodeURIComponent(id)}/assist?action=doc`);
+      const j = await r.json().catch(() => ({}));
+      const c = (j?.doc || {}) as Record<string, unknown>;
+      if (c.task === 'Classification' || c.task === 'Regression' || c.task === 'Forecasting') setTask(c.task);
+      if (typeof c.targetColumn === 'string') setTargetColumn(c.targetColumn);
+      if (typeof c.primaryMetric === 'string') setPrimaryMetric(c.primaryMetric);
+      if (typeof c.maxTrials === 'number' && Number.isFinite(c.maxTrials)) setMaxTrials(c.maxTrials);
+      if (typeof c.experimentTimeoutMinutes === 'number' && Number.isFinite(c.experimentTimeoutMinutes)) setExperimentTimeoutMinutes(c.experimentTimeoutMinutes);
+      setTab('wizard');
+    } catch { /* best-effort: the config draft is already saved server-side */ }
+  }, [id]);
 
   useEffect(() => {
     if (isNew) return;
@@ -423,9 +440,10 @@ export function AutoMlEditor({ item, id }: { item: FabricItemType; id: string })
     <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
       <div className={styles.pad}>
         <div className={styles.tabBar}>
-          <TabList selectedValue={tab} onTabSelect={(_, d) => { const v = d.value as 'wizard' | 'runs'; setTab(v); if (v === 'runs') loadJobs(); }}>
+          <TabList selectedValue={tab} onTabSelect={(_, d) => { const v = d.value as 'wizard' | 'runs' | 'copilot'; setTab(v); if (v === 'runs') loadJobs(); }}>
             <Tab value="wizard">New AutoML job</Tab>
             <Tab value="runs">Runs</Tab>
+            <Tab value="copilot">Copilot</Tab>
           </TabList>
         </div>
 
@@ -779,6 +797,19 @@ export function AutoMlEditor({ item, id }: { item: FabricItemType; id: string })
               </div>
             )}
           </div>
+        )}
+
+        {tab === 'copilot' && (
+          <CopilotBuilderPane
+            endpoint={`/api/items/automl/${id}/assist`}
+            title="Copilot — configure the AutoML run in natural language"
+            intro="Describe the modeling goal and Copilot proposes a structured AutoML config (task, target column, primary metric, trial budget) grounded on the current draft. Review, then Apply to save a reversible config that pre-fills the wizard. Azure-native (Azure Machine Learning); no Microsoft Fabric required."
+            fieldLabel="Describe the AutoML job"
+            fieldHint="Plain English. Copilot only emits valid task/metric combinations and waits for your approval before saving."
+            placeholder={'e.g. "Classify churn on the is_churned column, optimize for AUC weighted, up to 30 trials in 45 minutes."'}
+            opNoun="change"
+            onApplied={loadCopilotConfig}
+          />
         )}
       </div>
     } />

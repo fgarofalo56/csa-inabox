@@ -42,6 +42,7 @@ import { EmptyState } from '@/lib/components/empty-state';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
+import { CopilotBuilderPane } from '@/lib/components/shared/copilot-builder-pane';
 import { AsaTransformInspector } from '@/lib/components/eventstream/visual-designer';
 import { compileToSaql, type TransformNode, type SourceNode, type SinkNode } from '@/lib/azure/asa-query-compiler';
 import { MetricChart } from '@/lib/components/monitor/metric-chart';
@@ -142,10 +143,22 @@ export function StreamAnalyticsJobEditor({ item, id }: { item: FabricItemType; i
   const s = useStyles();
   const [jobs, setJobs] = useState<AsaJob[] | null>(null);
   const [selected, setSelected] = useState<string>(id !== 'new' ? id : '');
-  const [tab, setTab] = useState<'query' | 'builder' | 'test' | 'inputs' | 'outputs' | 'functions' | 'monitoring'>('query');
+  const [tab, setTab] = useState<'query' | 'builder' | 'test' | 'inputs' | 'outputs' | 'functions' | 'monitoring' | 'copilot'>('query');
   const [job, setJob] = useState<AsaJob | null>(null);
   const [query, setQuery] = useState(STARTER_QUERY);
   const [origQuery, setOrigQuery] = useState(STARTER_QUERY);
+
+  // After a Copilot Apply/Restore, load the saved SAQL draft into the Query
+  // editor and switch to it so the user can validate it against the live job.
+  const loadCopilotDraft = useCallback(async () => {
+    if (!selected) return;
+    try {
+      const r = await fetch(`/api/items/stream-analytics-job/${encodeURIComponent(selected)}/assist?action=doc`);
+      const j = await r.json().catch(() => ({}));
+      const draft = typeof j?.doc?.query === 'string' ? j.doc.query : '';
+      if (draft) { setQuery(draft); setTab('query'); }
+    } catch { /* best-effort: the draft is already saved server-side */ }
+  }, [selected]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [hint, setHint] = useState<string | null>(null);
@@ -610,6 +623,7 @@ export function StreamAnalyticsJobEditor({ item, id }: { item: FabricItemType; i
               <Tab value="outputs" icon={<ArrowExportLtr20Regular />}>Outputs ({job?.outputs?.length ?? 0})</Tab>
               <Tab value="functions" icon={<MathFormula20Regular />}>Functions ({job?.functions?.length ?? 0})</Tab>
               <Tab value="monitoring" icon={<ChartMultiple20Regular />}>Monitoring</Tab>
+              <Tab value="copilot" icon={<Flow20Regular />}>Copilot</Tab>
             </TabList>
           </div>
 
@@ -618,6 +632,22 @@ export function StreamAnalyticsJobEditor({ item, id }: { item: FabricItemType; i
               <Caption1>SAQL — Stream Analytics Query Language. Reference inputs/outputs by their alias in square brackets, e.g. <code>FROM [input-eventhub]</code>.</Caption1>
               <MonacoTextarea value={query} onChange={setQuery} language="sql" height={280} minHeight={200} ariaLabel="ASA query" />
             </>
+          )}
+
+          {tab === 'copilot' && (
+            selected ? (
+              <CopilotBuilderPane
+                endpoint={`/api/items/stream-analytics-job/${encodeURIComponent(selected)}/assist`}
+                title="Copilot — author the streaming query in natural language"
+                intro="Describe the streaming logic and Copilot proposes SAQL grounded on this job's real inputs / outputs. Review, then Apply to save a reversible draft you can load into the Query tab and validate against the live Azure Stream Analytics job. Azure-native — no Microsoft Fabric required."
+                fieldLabel="Describe the streaming query"
+                fieldHint="Plain English. Copilot grounds the SAQL in the real input/output aliases and waits for your approval before saving."
+                placeholder={'e.g. "Count events per device every 1 minute using a tumbling window and write to the output."'}
+                onApplied={loadCopilotDraft}
+              />
+            ) : (
+              <MessageBar intent="warning"><MessageBarBody>Select or save a job first — the Copilot query builder grounds on a specific job&apos;s inputs and outputs.</MessageBarBody></MessageBar>
+            )
           )}
 
           {tab === 'builder' && (

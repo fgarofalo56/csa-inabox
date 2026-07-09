@@ -47,6 +47,7 @@ import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { KeyValueGrid } from '@/lib/components/ui/key-value-grid';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { EmptyState } from '@/lib/components/empty-state';
+import { CopilotBuilderPane } from '@/lib/components/shared/copilot-builder-pane';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import {
@@ -198,6 +199,17 @@ export function MaterializedLakeViewEditor({ item, id }: { item: FabricItemType;
     finally { setLoading(false); }
   }, [id]);
   useEffect(() => { reload(); }, [reload]);
+
+  // After a Copilot Apply/Restore, load the saved Spark SQL draft into the
+  // Definition editor and switch to it so the user can review + Save/Refresh.
+  const loadCopilotDraft = useCallback(async () => {
+    try {
+      const r = await clientFetch(`/api/items/materialized-lake-view/${encodeURIComponent(id)}/assist?action=doc`);
+      const j = await r.json().catch(() => ({}));
+      const draft = typeof j?.doc?.query === 'string' ? j.doc.query : '';
+      if (draft) { setLanguage('sql'); setSql(draft); markDirty(); setTab('definition'); }
+    } catch { /* best-effort: the draft is already saved server-side */ }
+  }, [id]);
 
   const save = useCallback(async () => {
     const spec = buildSpec();
@@ -410,6 +422,7 @@ export function MaterializedLakeViewEditor({ item, id }: { item: FabricItemType;
             <Tab value="lineage">Lineage</Tab>
             <Tab value="refresh">Refresh</Tab>
             <Tab value="preview">Preview</Tab>
+            <Tab value="copilot">Copilot</Tab>
           </TabList>
         </div>
         <div className={styles.tabBody}>
@@ -623,6 +636,18 @@ export function MaterializedLakeViewEditor({ item, id }: { item: FabricItemType;
                 />
               ))}
             </>
+          )}
+
+          {tab === 'copilot' && (
+            <CopilotBuilderPane
+              endpoint={`/api/items/materialized-lake-view/${id}/assist`}
+              title="Copilot — draft the view definition in natural language"
+              intro="Describe the transformation and Copilot proposes a Spark SQL SELECT grounded on this view's real target container / schema. Review the plan, then Apply to save a reversible draft you can load into the Definition tab. Azure-native — no Microsoft Fabric required."
+              fieldLabel="Describe the materialized view"
+              fieldHint="Plain English. Copilot grounds the SELECT in the real target schema and waits for your approval before saving."
+              placeholder={'e.g. "Aggregate daily order totals by region from the silver orders and customers tables."'}
+              onApplied={loadCopilotDraft}
+            />
           )}
 
           {saveMsg && <MessageBar intent="success"><MessageBarBody>{saveMsg}</MessageBarBody></MessageBar>}
