@@ -56,6 +56,8 @@ import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { KqlResultsPanel, type KqlResult } from './kql-results';
 import { AnomalyForecastDialog } from './anomaly-forecast';
 import { useStyles } from './styles';
+import { DetailsPanel } from '@/lib/components/shared/details-panel';
+import { ItemTabStrip, ToolbarCrossLinks } from '@/lib/components/shared/item-tab-strip';
 
 // ----- KQL Database -----
 // Ribbon is built inside the editor via useMemo. Every action is wired to a
@@ -527,6 +529,36 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editorTab, graphData, id]);
+
+  // SC-2 DetailsPanel — current database-level caching + retention policy days,
+  // read from the live cluster (GET /api/adx/policies) so the details panel
+  // shows the ACTUAL values before an inline edit. Best-effort parse of the
+  // ADX timespan ("D.HH:MM:SS") from the caching (DataHotSpan) + retention
+  // (SoftDeletePeriod) policy objects. The panel itself never fetches — this
+  // caller-side loader feeds it, per the SC-2 contract.
+  const [dbPolicyDays, setDbPolicyDays] = useState<{ cachingHotDays?: number; retentionDays?: number }>({});
+  const loadDbPolicies = useCallback(async () => {
+    if (!id || id === 'new') return;
+    try {
+      const r = await clientFetch(`/api/adx/policies?id=${id}`);
+      const j = await r.json();
+      if (!j?.ok || !Array.isArray(j.policies)) return;
+      const dayFromTimespan = (raw: string): number | undefined => {
+        const m = /(\d+)\.\d{2}:\d{2}:\d{2}/.exec(raw) || /"(\d+)\.\d{2}:\d{2}:\d{2}"/.exec(raw);
+        return m ? Number(m[1]) : undefined;
+      };
+      let cachingHotDays: number | undefined;
+      let retentionDays: number | undefined;
+      for (const p of j.policies as Array<{ kind?: string; policy?: unknown; raw?: string }>) {
+        const raw = typeof p.raw === 'string' ? p.raw : JSON.stringify(p.policy ?? '');
+        const kind = String(p.kind || '').toLowerCase();
+        if (kind.includes('caching') || raw.includes('DataHotSpan')) cachingHotDays = cachingHotDays ?? dayFromTimespan(raw);
+        if (kind.includes('retention') || raw.includes('SoftDeletePeriod')) retentionDays = retentionDays ?? dayFromTimespan(raw);
+      }
+      setDbPolicyDays({ cachingHotDays, retentionDays });
+    } catch { /* details panel falls back to defaults + honest hint */ }
+  }, [id]);
+  useEffect(() => { void loadDbPolicies(); }, [loadDbPolicies]);
 
   // Drop a table / materialized-view / function from the diagram. Issues a real
   // `.drop ... ifexists` mgmt command via the existing /query route (mgmt
@@ -1249,6 +1281,37 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
               </MessageBarBody>
             </MessageBar>
           )}
+
+          {/* SC-8 — item-level tab strip (Eventhouse | Database) + RTI toolbar
+              cross-links, one-for-one with the Fabric KQL item chrome.
+              Routing-only: every link targets an existing Loom route. */}
+          {info?.ok && id && id !== 'new' && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM, flexWrap: 'wrap' }}>
+              <ItemTabStrip
+                ariaLabel="Database item views"
+                selectedKey="database"
+                tabs={[
+                  { key: 'eventhouse', label: 'Eventhouse', icon: <Flowchart20Regular /> },
+                  { key: 'database', label: 'Database', icon: <Play20Regular /> },
+                ]}
+                onSelect={(k) => { if (k === 'eventhouse') router.push('/items/eventhouse/new'); }}
+              />
+              <div style={{ marginLeft: 'auto' }}>
+                <ToolbarCrossLinks
+                  ariaLabel="Real-Time Intelligence surfaces"
+                  maxInline={5}
+                  links={[
+                    { key: 'queryset', label: 'KQL Queryset', href: '/items/kql-queryset/new' },
+                    { key: 'notebook', label: 'Notebook', href: '/items/notebook/new' },
+                    { key: 'dashboard', label: 'Real-Time Dashboard', href: '/items/kql-dashboard/new' },
+                    { key: 'agent', label: 'Data Agent', href: '/items/data-agent/new' },
+                    { key: 'ops', label: 'Operations Agent', href: '/items/operations-agent/new' },
+                    { key: 'onelake', label: 'OneLake', href: '/onelake' },
+                  ]}
+                />
+              </div>
+            </div>
+          )}
           <TabList
             selectedValue={editorTab}
             onTabSelect={(_: unknown, d: any) => setEditorTab(d.value as 'query' | 'diagram')}
@@ -1447,7 +1510,9 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
           )}
 
           {editorTab === 'diagram' && (
-            id && id !== 'new'
+            <div style={{ display: 'flex', gap: tokens.spacingHorizontalL, alignItems: 'flex-start', minWidth: 0 }}>
+            <div style={{ flex: '1 1 0', minWidth: 0 }}>
+            {id && id !== 'new'
               ? graphLoading
                 ? <Spinner label="Loading entity diagram…" />
                 : graphError
@@ -1479,7 +1544,101 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
                     The entity diagram appears once this database is saved and bound to a Kusto database.
                   </MessageBarBody>
                 </MessageBar>
-              )
+              )}
+            </div>
+
+            {/* SC-2 — right-docked Database details panel (Fabric KQL anatomy):
+                copyable Query URI + ADX connection string, inline-editable
+                database caching + retention policies (PATCH the real
+                /api/adx/policy-authoring route), related tables / materialized
+                views / functions with find-by-name. */}
+            {info?.ok && id && id !== 'new' && (() => {
+              const cluster = info.cluster || '';
+              const database = info.database || '';
+              const authorPolicy = async (body: Record<string, unknown>): Promise<{ ok: boolean; error?: string }> => {
+                try {
+                  const r = await clientFetch(`/api/adx/policy-authoring?id=${id}`, {
+                    method: 'POST',
+                    headers: { 'content-type': 'application/json' },
+                    body: JSON.stringify(body),
+                  });
+                  const ct = r.headers.get('content-type') || '';
+                  const j = ct.includes('application/json') ? await r.json() : { ok: false, error: `HTTP ${r.status}` };
+                  if (j.ok) { void loadDbPolicies(); return { ok: true }; }
+                  return { ok: false, error: j.error || 'Policy update failed' };
+                } catch (e: any) {
+                  return { ok: false, error: e?.message || String(e) };
+                }
+              };
+              const related = [
+                ...(info.tables || []).map((t) => ({
+                  id: `t:${t.name}`, name: t.name, kind: 'Table',
+                  icon: <Play20Regular />,
+                  onClick: () => { setKql(`["${t.name}"]\n| take 100`); setEditorTab('query'); },
+                })),
+                ...(info.materializedViews || []).map((m) => ({
+                  id: `mv:${m.name}`, name: m.name, kind: 'Materialized view',
+                  icon: <Flowchart20Regular />,
+                  onClick: () => { setKql(`["${m.name}"]\n| take 100`); setEditorTab('query'); },
+                })),
+                ...(info.functions || []).map((f) => ({
+                  id: `fn:${f.name}`, name: f.name, kind: 'Function',
+                  icon: <Play20Regular />,
+                  onClick: () => { setKql(`${f.name}()`); setEditorTab('query'); },
+                })),
+              ];
+              return (
+                <DetailsPanel
+                  title="Database details"
+                  subtitle={database || undefined}
+                  icon={<Flowchart20Regular />}
+                  sections={[
+                    ...(cluster ? [{
+                      key: 'overview',
+                      title: 'Overview',
+                      uris: [
+                        { key: 'query', label: 'Query URI', value: cluster, href: cluster },
+                        { key: 'conn', label: 'Connection string', value: `Data Source=${cluster};Initial Catalog=${database}` },
+                      ],
+                    }] : []),
+                    {
+                      key: 'policies',
+                      title: 'Policies',
+                      policies: [
+                        {
+                          key: 'caching',
+                          label: 'Caching policy (hot cache)',
+                          value: dbPolicyDays.cachingHotDays ?? 31,
+                          type: 'number' as const,
+                          unit: 'days',
+                          min: 0,
+                          editable: !info.isFollower,
+                          hint: info.isFollower ? 'Read-only on a follower database.' : 'Hot-cache window kept on SSD for low-latency queries.',
+                          onSave: (next) => authorPolicy({ kind: 'caching', scope: 'database', hotValue: Number(next), hotUnit: 'd' }),
+                        },
+                        {
+                          key: 'retention',
+                          label: 'Retention policy (soft delete)',
+                          value: dbPolicyDays.retentionDays ?? 365,
+                          type: 'number' as const,
+                          unit: 'days',
+                          min: 1,
+                          editable: !info.isFollower,
+                          hint: info.isFollower ? 'Read-only on a follower database.' : 'Data older than this is removed from the database.',
+                          onSave: (next) => authorPolicy({ kind: 'retention', scope: 'database', softDeleteDays: Number(next), recoverability: 'Enabled' }),
+                        },
+                      ],
+                    },
+                  ]}
+                  related={{
+                    title: 'Related elements',
+                    emptyText: 'No tables, views, or functions yet.',
+                    items: related,
+                  }}
+                />
+              );
+            })()}
+            </div>
           )}
 
           {/* Delete-from-diagram confirmation — issues a real .drop ... ifexists

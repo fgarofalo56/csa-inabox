@@ -39,6 +39,8 @@ import type { RibbonTab } from '@/lib/components/ribbon';
 import { ResultChart } from './kql-results';
 import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
 import { useStyles } from './styles';
+import { DetailsPanel } from '@/lib/components/shared/details-panel';
+import { ItemTabStrip, ToolbarCrossLinks } from '@/lib/components/shared/item-tab-strip';
 
 interface EventhouseDb {
   name: string;
@@ -1625,6 +1627,47 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
           </Dialog>
         </div>
 
+        {/* SC-8 — item-level tab strip (Eventhouse | Database) + RTI toolbar
+            cross-links, one-for-one with the Fabric Eventhouse/KQL item chrome.
+            Routing-only: every link targets an existing Loom route/handler. */}
+        {state?.ok && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM, flexWrap: 'wrap' }}>
+            <ItemTabStrip
+              ariaLabel="Eventhouse item views"
+              selectedKey="eventhouse"
+              tabs={[
+                { key: 'eventhouse', label: 'Eventhouse', icon: <Database20Regular /> },
+                {
+                  key: 'database',
+                  label: 'Database',
+                  icon: <Database20Regular />,
+                  badge: dbCount || undefined,
+                  disabled: !selectedDb,
+                },
+              ]}
+              onSelect={(k) => { if (k === 'database' && selectedDb) openKqlEditor(selectedDb); }}
+            />
+            <div style={{ marginLeft: 'auto' }}>
+              <ToolbarCrossLinks
+                ariaLabel="Real-Time Intelligence surfaces"
+                maxInline={5}
+                links={[
+                  { key: 'query', label: 'Query with code', primary: true,
+                    onClick: selectedDb ? () => openKqlEditor(selectedDb) : undefined,
+                    disabled: !selectedDb,
+                    tooltip: selectedDb ? undefined : 'Select a database first' },
+                  { key: 'queryset', label: 'KQL Queryset', href: '/items/kql-queryset/new' },
+                  { key: 'notebook', label: 'Notebook', href: '/items/notebook/new' },
+                  { key: 'dashboard', label: 'Real-Time Dashboard', onClick: () => { void createDashboard(); } },
+                  { key: 'agent', label: 'Data Agent', href: '/items/data-agent/new' },
+                  { key: 'ops', label: 'Operations Agent', href: '/items/operations-agent/new' },
+                  { key: 'onelake', label: 'OneLake', href: '/onelake' },
+                ]}
+              />
+            </div>
+          </div>
+        )}
+
         {state?.ok && (
           <div className={s.tabBar}>
             <TabList selectedValue={activeTab} onTabSelect={(_: unknown, d: any) => setActiveTab(d.value as EhTab)}>
@@ -1662,6 +1705,8 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
 
         {state?.ok && activeTab === 'databases' && (
           <>
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: tokens.spacingHorizontalL, minWidth: 0 }}>
+            <div style={{ flex: '1 1 0', minWidth: 0, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingVerticalS}}>
               <Subtitle2>Databases ({dbCount})</Subtitle2>
               <div style={{ marginLeft: 'auto', display: 'flex', gap: tokens.spacingVerticalXS}} role="group" aria-label="Database view">
@@ -1812,6 +1857,99 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
                 </Table>
               </div>
             )}
+            </div>
+
+            {/* SC-2 — right-docked Database details panel (Fabric Eventhouse
+                anatomy): compressed/original size stats, copyable Query URI +
+                ADX connection string, inline-editable caching + retention
+                policies (PATCH the real /policies route), related databases
+                with find-by-name. Renders when a database is selected. */}
+            {selectedDb && (() => {
+              const selDb = (state.databases || []).find((d) => d.name === selectedDb);
+              if (!selDb) return null;
+              const cluster = state.cluster || '';
+              const patchPolicy = async (patch: Record<string, unknown>): Promise<{ ok: boolean; error?: string }> => {
+                try {
+                  const r = await clientFetch(`/api/items/eventhouse/${id}/policies`, {
+                    method: 'POST',
+                    headers: { 'content-type': 'application/json' },
+                    body: JSON.stringify({ database: selectedDb, ...patch }),
+                  });
+                  const ct = r.headers.get('content-type') || '';
+                  const j = ct.includes('application/json') ? await r.json() : { ok: false, error: `HTTP ${r.status}` };
+                  if (j.ok) { load(); return { ok: true }; }
+                  return { ok: false, error: j.error || 'Policy update failed' };
+                } catch (e: any) {
+                  return { ok: false, error: e?.message || String(e) };
+                }
+              };
+              return (
+                <DetailsPanel
+                  title="Database details"
+                  subtitle={selDb.prettyName && selDb.prettyName !== selDb.name ? selDb.prettyName : selectedDb}
+                  icon={<Database20Regular />}
+                  onClose={() => setSelectedDb('')}
+                  sections={[
+                    {
+                      key: 'storage',
+                      title: 'Storage',
+                      stats: [
+                        { key: 'size', label: 'Total size (compressed)', value: fmtDbSize(selDb.totalSizeMb) },
+                        { key: 'tables', label: 'Tables', value: typeof selDb.tableCount === 'number' ? selDb.tableCount : '—' },
+                      ],
+                    },
+                    ...(cluster ? [{
+                      key: 'overview',
+                      title: 'Overview',
+                      uris: [
+                        { key: 'query', label: 'Query URI', value: cluster, href: cluster },
+                        { key: 'conn', label: 'Connection string', value: `Data Source=${cluster};Initial Catalog=${selectedDb}` },
+                      ],
+                    }] : []),
+                    {
+                      key: 'policies',
+                      title: 'Policies',
+                      policies: [
+                        {
+                          key: 'caching',
+                          label: 'Caching policy (hot cache)',
+                          value: typeof selDb.hotCacheDays === 'number' ? selDb.hotCacheDays : 7,
+                          type: 'number' as const,
+                          unit: 'days',
+                          min: 0,
+                          hint: 'Hot-cache window kept on SSD for low-latency queries.',
+                          onSave: (next) => patchPolicy({ hotCacheDays: Number(next) }),
+                        },
+                        {
+                          key: 'retention',
+                          label: 'Retention policy (soft delete)',
+                          value: typeof selDb.retentionDays === 'number' ? selDb.retentionDays : 30,
+                          type: 'number' as const,
+                          unit: 'days',
+                          min: 1,
+                          hint: 'Data older than this is removed from the database.',
+                          onSave: (next) => patchPolicy({ softDeleteDays: Number(next) }),
+                        },
+                      ],
+                    },
+                  ]}
+                  related={{
+                    title: 'Related databases',
+                    emptyText: 'No other databases in this eventhouse.',
+                    items: (state.databases || [])
+                      .filter((d) => d.name !== selectedDb)
+                      .map((d) => ({
+                        id: d.name,
+                        name: d.name,
+                        kind: 'KQL database',
+                        icon: <Database20Regular />,
+                        onClick: () => setSelectedDb(d.name),
+                      })),
+                  }}
+                />
+              );
+            })()}
+            </div>
 
             {/* Delete confirmation */}
             <Dialog open={!!deleteTarget} onOpenChange={(_, d) => { if (!d.open) { setDeleteTarget(null); setDeleteErr(null); } }}>
