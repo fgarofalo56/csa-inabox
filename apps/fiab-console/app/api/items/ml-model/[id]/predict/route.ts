@@ -43,6 +43,9 @@ import {
 } from '@/lib/azure/predict-codegen';
 import { createLivySession, getLivySession } from '@/lib/azure/synapse-livy-client';
 import { apiError, apiServerError } from '@/lib/api/respond';
+import {
+  upsertPredictHistory, type PredictHistoryEntry, type PredictHistoryMap,
+} from '@/lib/azure/predict-history';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -212,7 +215,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   if (!session) return err('unauthenticated', 401);
   const { id } = await ctx.params;
 
-  let binding;
+  let binding: Awaited<ReturnType<typeof resolveModelBinding>>;
   try {
     binding = await resolveModelBinding(id, ML_MODEL_ITEM_TYPE, session.claims.oid);
   } catch (e) {
@@ -262,16 +265,40 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
 
   const backend = resolveSparkBackend();
 
+  // Build a run-history entry (persisted on the item so the wizard can list past
+  // scoring jobs — FGC-18 "run history persisted"). Filled with the runId below.
+  const makeHistoryEntry = (runId: string, be: 'aml' | 'synapse', status: PredictHistoryEntry['status']): PredictHistoryEntry => ({
+    runId, backend: be, version, inputRef: spec.inputRef, outputRef: spec.outputRef,
+    featureCount: spec.features.length, startedAt: new Date().toISOString(), status,
+  });
+
+  /** Best-effort: persist a history entry onto the item (never blocks the run). */
+  async function persistHistory(entry: PredictHistoryEntry, extraState?: Record<string, unknown>): Promise<void> {
+    try {
+      const items = await itemsContainer();
+      const item = binding.item;
+      const state = (item.state as any) || {};
+      const predictHistory: PredictHistoryMap = upsertPredictHistory(state.predictHistory, entry);
+      await items.item(item.id, item.workspaceId).replace({
+        ...item,
+        state: { ...state, ...(extraState || {}), predictHistory },
+        updatedAt: new Date().toISOString(),
+      } as WorkspaceItem);
+    } catch { /* non-fatal — history is a convenience, not the run itself */ }
+  }
+
   try {
     // ---- AML Serverless Spark (Commercial / GCC, LOOM_AML_SPARK set) ----
     if (backend === 'aml') {
       const { submitAmlSparkCell, AmlSparkNotConfiguredError } = await import('@/lib/azure/aml-spark-client');
       try {
         const sub = await submitAmlSparkCell(code, `predict-${id}`);
+        const runId = `aml:${sub.jobName}`;
+        await persistHistory(makeHistoryEntry(runId, 'aml', 'submitted'));
         return NextResponse.json({
           ok: true,
           backend: 'aml',
-          runId: `aml:${sub.jobName}`,
+          runId,
           status: 'Queued',
           outputRef: spec.outputRef,
           generatedCode: code,
@@ -315,12 +342,18 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
 
     // Persist the pending statement + session so the status poller submits it
     // once the session reaches idle (Front Door can't hold a 60-90s cold start).
+    // Also record the run-history entry (keyed by the base runId) so the wizard
+    // can list past scoring jobs (FGC-18 "run history persisted").
     try {
       const predictRuns = { ...(state.predictRuns || {}) };
       predictRuns[runId] = { source: code, outputRef: spec.outputRef, cellId: `predict-${id}` };
+      const predictHistory: PredictHistoryMap = upsertPredictHistory(
+        state.predictHistory,
+        makeHistoryEntry(runId, 'synapse', 'submitted'),
+      );
       await items.item(item.id, item.workspaceId).replace({
         ...item,
-        state: { ...state, predictRuns, predictSparkSession: { pool, id: sessionId, kind: 'pyspark' } },
+        state: { ...state, predictRuns, predictHistory, predictSparkSession: { pool, id: sessionId, kind: 'pyspark' } },
         updatedAt: new Date().toISOString(),
       } as WorkspaceItem);
     } catch { /* non-fatal — the poller re-derives from runId */ }

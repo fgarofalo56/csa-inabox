@@ -27,6 +27,7 @@ import {
 } from '@/lib/azure/synapse-livy-client';
 import { parsePredictResult } from '@/lib/azure/predict-codegen';
 import { apiError, apiServerError } from '@/lib/api/respond';
+import { applyHistoryStatus, type PredictHistoryEntry } from '@/lib/azure/predict-history';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -42,7 +43,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
   if (!session) return err('unauthenticated', 401);
   const { id } = await ctx.params;
 
-  let binding;
+  let binding: Awaited<ReturnType<typeof resolveModelBinding>>;
   try {
     binding = await resolveModelBinding(id, ML_MODEL_ITEM_TYPE, session.claims.oid);
   } catch (e) {
@@ -52,6 +53,29 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
 
   const runId = decodeURIComponent(req.nextUrl.searchParams.get('runId') || '');
   if (!runId) return err('runId required', 400);
+
+  /**
+   * Best-effort: stamp a terminal status onto the run's history entry (FGC-18
+   * "run history persisted"). Re-reads the item to avoid clobbering a concurrent
+   * write, matches the entry by runId (prefix-aware for Synapse), and no-ops when
+   * nothing changed. Never throws — history is a convenience, not the job.
+   */
+  async function markHistory(
+    id2: string,
+    patch: Partial<Pick<PredictHistoryEntry, 'status' | 'rows' | 'error' | 'finishedAt' | 'outputRef'>>,
+  ): Promise<void> {
+    try {
+      const items = await itemsContainer();
+      const { resource } = await items.item(binding.item.id, binding.item.workspaceId).read<any>();
+      if (!resource) return;
+      const state = resource.state || {};
+      const nextHistory = applyHistoryStatus(state.predictHistory, id2, { finishedAt: new Date().toISOString(), ...patch });
+      if (nextHistory === state.predictHistory) return; // no matching entry / no change
+      await items.item(resource.id, resource.workspaceId).replace({
+        ...resource, state: { ...state, predictHistory: nextHistory }, updatedAt: new Date().toISOString(),
+      });
+    } catch { /* non-fatal */ }
+  }
 
   try {
     // ---- AML Serverless Spark ----
@@ -66,11 +90,15 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
       const text = raw?.textPlain;
       const result = parsePredictResult(text);
       if (raw && raw.status === 'error') {
+        await markHistory(runId, { status: 'failed', error: `${raw.ename || 'Error'}: ${raw.evalue || 'scoring failed'}` });
         return NextResponse.json({
           ok: true, backend: 'aml', status: job.status, runId,
           output: { status: 'error', ename: raw.ename, evalue: raw.evalue, traceback: raw.traceback },
         });
       }
+      await markHistory(runId, job.succeeded
+        ? { status: 'succeeded', rows: result?.rows ?? null }
+        : { status: 'failed', error: `AML Spark job ${jobName} ended ${job.status}` });
       return NextResponse.json({
         ok: true, backend: 'aml', status: job.status, runId,
         output: job.succeeded
@@ -116,6 +144,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
           });
         }
         if (['error', 'dead', 'killed'].includes(sess.state)) {
+          await markHistory(runId, { status: 'failed', error: `Spark session entered '${sess.state}'` });
           return NextResponse.json({
             ok: true, backend: 'synapse', status: sess.state, runId, phase: 'session-dead',
             output: { status: 'error', ename: 'SessionDead', evalue: `Spark session entered '${sess.state}'` },
@@ -130,6 +159,11 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
       const stmt = await getLivyStatement(pool, sessionId, stmtId);
       const out = stmt.output ? normalizeLivyOutput(stmt.output) : null;
       const result = out?.status === 'ok' ? parsePredictResult(out.textPlain) : null;
+      if (out) {
+        await markHistory(runId, out.status === 'ok'
+          ? { status: 'succeeded', rows: result?.rows ?? null }
+          : { status: 'failed', error: `${out.ename || 'Error'}: ${out.evalue || 'scoring failed'}` });
+      }
       return NextResponse.json({
         ok: true, backend: 'synapse', status: stmt.state, runId, phase: 'statement-running', outputRef: stmtOutputRef,
         output: out
