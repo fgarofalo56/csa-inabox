@@ -15,7 +15,10 @@ import {
 } from '@/lib/azure/cosmos-client';
 import { getSession, type SessionPayload } from '@/lib/auth/session';
 import { isValidInternalToken, INTERNAL_USER_OID_HEADER } from '@/lib/auth/internal-token';
-import type { LoomPipeline, LoomDeployRule, LoomPipelineStageRulesDoc } from '@/lib/types/loom-pipeline';
+import type {
+  LoomPipeline, LoomDeployRule, LoomPipelineStageRulesDoc,
+  LoomApprovalPolicyDoc, LoomApprovalRequest, LoomApprover,
+} from '@/lib/types/loom-pipeline';
 import type { Workspace } from '@/lib/types/workspace';
 import { apiError } from '@/lib/api/respond';
 
@@ -187,4 +190,98 @@ export async function saveStageRules(
   };
   await c.items.upsert(doc);
   return rules;
+}
+
+// ---------------------------------------------------------------------------
+// BR-APPROVAL — required-reviewer promotion gates.
+//
+// The approval policy (per stage) and the request lifecycle share the
+// `pipeline-stage-rules` container (PK /pipelineId), discriminated by `docType`
+// and an id prefix — so no new Cosmos container / bicep param is added. Policies
+// are point-read by id; requests are point-read by id AND listed per-pipeline
+// with a partitioned query filtered on docType.
+// ---------------------------------------------------------------------------
+
+const approvalPolicyDocId = (pipelineId: string, stageId: string) => `approval-policy:${pipelineId}:${stageId}`;
+
+/** Load a stage's approval policy (null when never configured). */
+export async function loadApprovalPolicy(pipelineId: string, stageId: string): Promise<LoomApprovalPolicyDoc | null> {
+  const c = await pipelineStageRulesContainer();
+  try {
+    const { resource } = await c.item(approvalPolicyDocId(pipelineId, stageId), pipelineId).read<LoomApprovalPolicyDoc>();
+    if (!resource || resource.docType !== 'approval-policy') return null;
+    return resource;
+  } catch (e: any) {
+    if (e?.code === 404) return null;
+    throw e;
+  }
+}
+
+/** Upsert a stage's approval policy. */
+export async function saveApprovalPolicy(
+  pipelineId: string,
+  stageId: string,
+  policy: { enabled: boolean; requiredApprovals: number; approvers: LoomApprover[] },
+  updatedBy: string,
+): Promise<LoomApprovalPolicyDoc> {
+  const c = await pipelineStageRulesContainer();
+  const doc: LoomApprovalPolicyDoc = {
+    id: approvalPolicyDocId(pipelineId, stageId),
+    docType: 'approval-policy',
+    pipelineId,
+    stageId,
+    enabled: policy.enabled,
+    requiredApprovals: policy.requiredApprovals,
+    approvers: policy.approvers,
+    updatedAt: new Date().toISOString(),
+    updatedBy,
+  };
+  await c.items.upsert(doc);
+  return doc;
+}
+
+/** Create a new pending approval request. */
+export async function createApprovalRequest(request: LoomApprovalRequest): Promise<LoomApprovalRequest> {
+  const c = await pipelineStageRulesContainer();
+  await c.items.create(request);
+  return request;
+}
+
+/** Point-read an approval request scoped to its pipeline (null when missing). */
+export async function loadApprovalRequest(pipelineId: string, requestId: string): Promise<LoomApprovalRequest | null> {
+  const c = await pipelineStageRulesContainer();
+  try {
+    const { resource } = await c.item(requestId, pipelineId).read<LoomApprovalRequest>();
+    if (!resource || resource.docType !== 'approval-request' || resource.pipelineId !== pipelineId) return null;
+    return resource;
+  } catch (e: any) {
+    if (e?.code === 404) return null;
+    throw e;
+  }
+}
+
+/** List a pipeline's approval requests (newest first), optionally by status. */
+export async function listApprovalRequests(
+  pipelineId: string,
+  opts: { status?: LoomApprovalRequest['status'] } = {},
+): Promise<LoomApprovalRequest[]> {
+  const c = await pipelineStageRulesContainer();
+  const params: Array<{ name: string; value: string }> = [{ name: '@p', value: pipelineId }];
+  let query = "SELECT * FROM c WHERE c.pipelineId = @p AND c.docType = 'approval-request'";
+  if (opts.status) {
+    query += ' AND c.status = @s';
+    params.push({ name: '@s', value: opts.status });
+  }
+  query += ' ORDER BY c.createdAt DESC';
+  const { resources } = await c.items
+    .query<LoomApprovalRequest>({ query, parameters: params }, { partitionKey: pipelineId })
+    .fetchAll();
+  return resources || [];
+}
+
+/** Upsert an updated approval request. */
+export async function saveApprovalRequest(request: LoomApprovalRequest): Promise<LoomApprovalRequest> {
+  const c = await pipelineStageRulesContainer();
+  await c.items.upsert(request);
+  return request;
 }

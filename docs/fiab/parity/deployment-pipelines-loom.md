@@ -60,10 +60,63 @@ selective deploy to Test re-runs `semanticModelProvisioner` against a target who
 tabular backend; no `api.fabric.microsoft.com` / `api.powerbi.com` call on the
 default path.
 
+## Variable-library-aware promotion (FGC-24)
+
+Fabric's FabCon-2026 flagship CI/CD feature — a workspace-scoped Variable Library
+whose values resolve **per environment** so promotion swaps stage-appropriate
+values — is delivered Azure-native with **zero new infra**:
+
+- The Variable Library is the existing Cosmos-backed `variable-library` item;
+  `state.variables[]` already carry a per-value-set override map (`default` / `dev`
+  / `test` / `prod`).
+- On promotion, `_lib/promote.ts` maps the **target** stage to its value set
+  (`stageValueSet` — Development→dev, Test/Staging→test, Production→prod), collects
+  that set's values from the pipeline's variable libraries (target-workspace
+  libraries win a name clash, mirroring Fabric's per-workspace active set), and
+  **rebinds** every `{{var:NAME}}` placeholder token in the promoted item's
+  `state.content` to the resolved value **before** it is written to the
+  destination workspace and handed to the provisioner. The rebound content is
+  what the provisioner materializes and what is persisted on the target item.
+- **`secret-ref`** typed variables are **never inlined** into promoted JSON — their
+  tokens are left verbatim and resolved from Key Vault by the runtime dereference
+  layer, so no secret material lands in Cosmos.
+- A **"Variable overrides"** section on the pipeline pane (`GET .../loom/[id]/variables`)
+  shows every variable's value per stage and flags which ones `differ` — mirroring
+  Fabric's variable-library view in the compare. Values are edited in the Variable
+  Library item (structured; no freeform config here).
+
+## Approval-gated promotion (BR-APPROVAL)
+
+A stage can require **N approvals from named users/groups** before a promotion INTO
+it runs — governance-as-the-feature (admins **configure** the gate):
+
+- Per-stage policy (`PUT .../loom/[id]/stages/[stageId]/approvals`): `enabled`,
+  `requiredApprovals` (1–10), and an `approvers[]` list of user oids / Entra group
+  ids. Default is **opt-out** (disabled ⇒ promotes freely). An enabled gate with
+  no approvers, or `requiredApprovals` above the approver count, is rejected.
+- When a gated target is deployed to, the deploy route **does not promote** — it
+  creates a **pending approval request** carrying a diff summary of what would
+  promote and returns `{ status: 'pending-approval', requestId }`.
+- Approvers (matched by oid **or** group membership) approve/reject via
+  `POST .../loom/[id]/approvals/[requestId]`. The **requester cannot self-approve**
+  (separation of duties) but may reject/cancel. On the **final** required approval
+  the route runs the **same** `runPromotion` engine the deploy route uses — under a
+  synthetic **owner** session so item-crud reaches the owner's stage workspaces.
+- Every decision emits a `pipeline.promotion.*` event to the **`LoomAudit_CL` SIEM
+  stream** (BR-SIEM, honest-gated on `LOOM_AUDIT_DCR_*`). **BR-WEBHOOK** (`emitLoomEvent`)
+  is not on `origin/main` yet, so no outbound webhook is emitted — audit only; when
+  BR-WEBHOOK lands, add a `void emitLoomEvent(...)` beside each audit emit.
+
+Both features are **Cosmos-only** and add **no** container or bicep param — the
+approval policy + request lifecycle share the existing `pipeline-stage-rules`
+container, discriminated by a `docType` field + id prefix.
+
 ## Cosmos containers (lazy `createIfNotExists`, no extra ARM step)
 
 - `loom-pipelines` (PK `/tenantId`) — pipeline catalog
-- `pipeline-stage-rules` (PK `/pipelineId`) — per-stage deployment rules
+- `pipeline-stage-rules` (PK `/pipelineId`) — per-stage deployment rules **plus**
+  approval policies (`approval-policy:<pipelineId>:<stageId>`) and approval requests
+  (`approval-request:<uuid>`), discriminated by `docType`
 - `pipeline-history` (PK `/pipelineId`) — deploy receipts
 
 The Console UAMI already holds **Cosmos DB Built-in Data Contributor** at account
@@ -83,3 +136,15 @@ scope, so no new role assignment or bicep module is required.
   the Fabric-path equivalents: deploy short-circuits a same-workspace promote
   before calling Fabric REST, and stage-workspace assign rejects a workspace
   already bound to another stage.
+- `lib/install/__tests__/pipeline-variables.test.ts` (FGC-24) — stage→value-set
+  mapping, value collection (secret exclusion, target-wins merge), `{{var:NAME}}`
+  rebind (nested strings, deep-clone/no-mutation, secret + unknown tokens left
+  verbatim), and the per-stage variable diff.
+- `lib/install/__tests__/pipeline-approvals.test.ts` (BR-APPROVAL) — eligibility
+  by oid/group, distinct-approver counting, status derivation, and `applyDecision`
+  (not-eligible / self-approval / threshold-reached / reject / overwrite / immutable).
+- `app/api/deployment-pipelines/__tests__/wave8-alm-routes.test.ts` — the variables
+  route diff, deploy-time variable rebind (provisioner + persisted item carry the
+  resolved value), approval-policy CRUD + validation, the deploy gate (pending
+  request, no promotion), and the approve→promote flow (eligible approve promotes;
+  self-approval 403; non-approver 403; requester cancel).

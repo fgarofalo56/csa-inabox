@@ -26,7 +26,7 @@ import { clientFetch } from '@/lib/client-fetch';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Tab, TabList, Spinner, Badge, Button, Dropdown, Option, Textarea, Checkbox, Input, Field, Switch,
+  Tab, TabList, Spinner, Badge, Button, Dropdown, Option, Textarea, Checkbox, Input, Field, Switch, SpinButton,
   MessageBar, MessageBarBody, MessageBarTitle, Text, Caption1,
   Dialog, DialogTrigger, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
   Table, TableHeader, TableHeaderCell, TableRow, TableBody, TableCell,
@@ -37,6 +37,7 @@ import {
   Beaker20Regular, Server20Regular, Globe20Regular, BranchFork20Regular,
   Add20Regular, Link20Regular, PlugDisconnected20Regular, ArrowUpload20Regular, ArrowDownload20Regular,
   CheckmarkCircle20Filled, Warning20Filled, Delete20Regular, Branch20Regular,
+  ShieldCheckmark20Regular, People20Regular, Checkmark20Regular, Dismiss20Regular,
 } from '@fluentui/react-icons';
 import { SignInRequired } from '@/lib/components/sign-in-required';
 import { Section } from '@/lib/components/ui/section';
@@ -1803,6 +1804,10 @@ function LoomPipelineDetail({ pipeline, onDeleted }: { pipeline: LoomPipe; onDel
                     </div>
                     <div className={styles.stageActions}>
                       <LoomRulesDialog pipelineId={pipeline.id} stage={st} />
+                      {/* BR-APPROVAL — the required-reviewer gate is configured on
+                          the stage a promotion lands IN, so it hangs off every
+                          stage that can be a target (i.e. not the first). */}
+                      {i > 0 && <LoomApprovalPolicyDialog pipelineId={pipeline.id} stage={st} onChanged={reload} />}
                     </div>
                     {next && (
                       <div className={styles.deployRow}>
@@ -1816,6 +1821,18 @@ function LoomPipelineDetail({ pipeline, onDeleted }: { pipeline: LoomPipe; onDel
             );
           })}
         </div>
+      </Section>
+
+      <Section title="Variable overrides">
+        {stages.length < 2 ? (
+          <div className={styles.stageMeta}>Add at least two stages to see per-stage variable values.</div>
+        ) : (
+          <LoomVariableOverrides pipelineId={pipeline.id} stages={stages} tick={tick} />
+        )}
+      </Section>
+
+      <Section title="Approvals">
+        <LoomApprovalsPanel pipelineId={pipeline.id} stages={stages} tick={tick} onChanged={reload} />
       </Section>
 
       <Section title="Compare / sync status">
@@ -2003,6 +2020,12 @@ function LoomDeployDialog({ pipelineId, source, target, onDeployed }: { pipeline
       });
       const j = await r.json();
       if (!j.ok) { setMsg({ kind: 'error', text: j.error || 'Deployment failed' }); return; }
+      // BR-APPROVAL — a gated target defers the promotion to a pending request.
+      if (j.data.status === 'pending-approval') {
+        setMsg({ kind: 'success', text: `${target.displayName} requires ${j.data.requiredApprovals} approval(s) before promoting. A request was submitted — track it under Approvals (what would promote: ${j.data.diffSummary}).` });
+        onDeployed();
+        return;
+      }
       setReceipt({ status: j.data.status, deployedItemIds: j.data.deployedItemIds || [] });
       setMsg({ kind: 'success', text: `Deploy ${j.data.status}: ${(j.data.deployedItemIds || []).length} item(s) re-provisioned into ${target.displayName}.` });
       onDeployed();
@@ -2193,6 +2216,328 @@ function LoomRulesDialog({ pipelineId, stage }: { pipelineId: string; stage: Loo
         </DialogBody>
       </DialogSurface>
     </Dialog>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// FGC-24 — Variable overrides: per-stage Variable Library value diff.
+// Mirrors Fabric's variable-library view in the deployment-pipeline compare —
+// shows every variable's resolved value for each stage's value set, highlighting
+// which ones get rebound on promotion. Read-only diff; the values are edited in
+// the Variable Library item editor (structured, no freeform config here).
+// ---------------------------------------------------------------------------
+
+interface VariableDiffRow {
+  name: string; type: string; isSecret: boolean;
+  perStage: Record<string, { valueSet: string; value: string }>;
+  differs: boolean;
+}
+interface StageValueSet { id: string; displayName: string; valueSet: string }
+
+function LoomVariableOverrides({ pipelineId, stages, tick }: { pipelineId: string; stages: LoomStage[]; tick: number }) {
+  const styles = useStyles();
+  const [data, setData] = useState<{ stages: StageValueSet[]; variables: VariableDiffRow[] } | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    setData(null); setErr(null);
+    clientFetch(`/api/deployment-pipelines/loom/${pipelineId}/variables`).then(async (r) => {
+      const j = await r.json();
+      if (!j.ok) { setErr(j.error || 'Failed to load variables'); setData({ stages: [], variables: [] }); return; }
+      setData(j.data);
+    }).catch((e) => { setErr(String(e)); setData({ stages: [], variables: [] }); });
+  }, [pipelineId, tick]);
+
+  if (data === null) return <Spinner size="tiny" label="Loading variable overrides…" />;
+  const orderedStages = data.stages.length ? data.stages : stages.map((s) => ({ id: s.id, displayName: s.displayName, valueSet: '' }));
+
+  return (
+    <div className={styles.section}>
+      <MessageBar intent="info">
+        <MessageBarBody>
+          On promotion, <code>{'{{var:NAME}}'}</code> tokens in an item's definition are rebound to the
+          <strong> target stage's Variable Library value set</strong> (dev / test / prod). Rows below show each
+          variable's value per stage; <Badge color="warning" appearance="tint" size="small">differs</Badge> marks
+          ones that change between stages. Edit the values in the <strong>Variable Library</strong> item.
+          Secret-ref values are masked and resolved from Key Vault at runtime, never inlined.
+        </MessageBarBody>
+      </MessageBar>
+      {err && <MessageBar intent="error"><MessageBarBody>{err}</MessageBarBody></MessageBar>}
+      {data.variables.length === 0 ? (
+        <div className={styles.empty}>
+          No Variable Library found in this pipeline's stage workspaces.<br />
+          Create a <strong>Variable Library</strong> item, define variables with per-value-set (dev/test/prod)
+          values, then reference them as <code>{'{{var:NAME}}'}</code> in your items.
+        </div>
+      ) : (
+        <Table aria-label="Variable overrides per stage" size="small">
+          <TableHeader>
+            <TableRow>
+              <TableHeaderCell>Variable</TableHeaderCell>
+              <TableHeaderCell>Type</TableHeaderCell>
+              {orderedStages.map((s) => (
+                <TableHeaderCell key={s.id}>{s.displayName}{s.valueSet ? <span className={styles.itemType}> ({s.valueSet})</span> : null}</TableHeaderCell>
+              ))}
+              <TableHeaderCell style={{ width: 90 }} />
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {data.variables.map((v) => (
+              <TableRow key={v.name}>
+                <TableCell><code>{v.name}</code></TableCell>
+                <TableCell><span className={styles.itemType}>{v.type}</span></TableCell>
+                {orderedStages.map((s) => {
+                  const cell = v.perStage[s.id];
+                  return (
+                    <TableCell key={s.id} className={styles.mono}>
+                      {v.isSecret ? <Badge appearance="tint" color="informative" size="small">secret</Badge> : (cell?.value || <em style={{ color: tokens.colorNeutralForeground3 }}>(empty)</em>)}
+                    </TableCell>
+                  );
+                })}
+                <TableCell>{v.differs ? <Badge color="warning" appearance="tint" size="small">differs</Badge> : <Badge color="success" appearance="outline" size="small">same</Badge>}</TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// BR-APPROVAL — required-reviewer promotion gates.
+// Config: per-stage policy (N approvals from named users/groups). Runtime: a
+// pending request per gated promotion, with approve/reject/cancel + diff.
+// ---------------------------------------------------------------------------
+
+interface Approver { id: string; type: 'user' | 'group'; displayName: string }
+interface ApprovalPolicy { enabled: boolean; requiredApprovals: number; approvers: Approver[] }
+interface ApprovalDecision { approverOid: string; approverName: string; decision: 'approve' | 'reject'; comment?: string; at: string }
+interface ApprovalRequest {
+  id: string; sourceStageId: string; targetStageId: string;
+  status: 'pending' | 'approved' | 'rejected' | 'cancelled' | 'promoted' | 'promotion-failed';
+  requiredApprovals: number; approvers: Approver[]; decisions: ApprovalDecision[];
+  diffSummary: string; note?: string; requestedBy: string; createdAt: string; updatedAt: string;
+  viewerCanApprove?: boolean; viewerIsRequester?: boolean;
+}
+
+function approvalStatusBadge(status: ApprovalRequest['status']) {
+  switch (status) {
+    case 'pending': return <Badge color="brand" appearance="filled">Pending</Badge>;
+    case 'approved': return <Badge color="success" appearance="tint">Approved</Badge>;
+    case 'promoted': return <Badge color="success" appearance="filled">Promoted</Badge>;
+    case 'rejected': return <Badge color="danger" appearance="filled">Rejected</Badge>;
+    case 'cancelled': return <Badge color="subtle" appearance="outline">Cancelled</Badge>;
+    case 'promotion-failed': return <Badge color="danger" appearance="tint">Promotion failed</Badge>;
+    default: return <Badge appearance="outline">{status}</Badge>;
+  }
+}
+
+function LoomApprovalPolicyDialog({ pipelineId, stage, onChanged }: { pipelineId: string; stage: LoomStage; onChanged: () => void }) {
+  const styles = useStyles();
+  const [open, setOpen] = useState(false);
+  const [policy, setPolicy] = useState<ApprovalPolicy | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ kind: 'error' | 'success'; text: string } | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    setPolicy(null); setMsg(null);
+    clientFetch(`/api/deployment-pipelines/loom/${pipelineId}/stages/${stage.id}/approvals`).then(async (r) => {
+      const j = await r.json();
+      if (!j.ok) { setMsg({ kind: 'error', text: j.error || 'Failed to load policy' }); setPolicy({ enabled: false, requiredApprovals: 1, approvers: [] }); return; }
+      setPolicy(j.data.policy);
+    }).catch((e) => { setMsg({ kind: 'error', text: String(e) }); setPolicy({ enabled: false, requiredApprovals: 1, approvers: [] }); });
+  }, [open, pipelineId, stage.id]);
+
+  const patch = (p: Partial<ApprovalPolicy>) => setPolicy((prev) => (prev ? { ...prev, ...p } : prev));
+  const setApprover = (i: number, a: Partial<Approver>) => setPolicy((prev) => prev ? { ...prev, approvers: prev.approvers.map((x, idx) => idx === i ? { ...x, ...a } : x) } : prev);
+  const addApprover = () => setPolicy((prev) => prev ? { ...prev, approvers: [...prev.approvers, { id: '', type: 'user', displayName: '' }] } : prev);
+  const removeApprover = (i: number) => setPolicy((prev) => prev ? { ...prev, approvers: prev.approvers.filter((_, idx) => idx !== i) } : prev);
+
+  const save = useCallback(async () => {
+    if (!policy) return;
+    setBusy(true); setMsg(null);
+    try {
+      const approvers = policy.approvers.map((a) => ({ id: a.id.trim(), type: a.type, displayName: a.displayName.trim() || a.id.trim() })).filter((a) => a.id);
+      if (policy.enabled && approvers.length === 0) { setMsg({ kind: 'error', text: 'Add at least one approver to enable the gate.' }); setBusy(false); return; }
+      if (policy.enabled && policy.requiredApprovals > approvers.length) { setMsg({ kind: 'error', text: `Required approvals (${policy.requiredApprovals}) can't exceed the ${approvers.length} approver(s).` }); setBusy(false); return; }
+      const r = await clientFetch(`/api/deployment-pipelines/loom/${pipelineId}/stages/${stage.id}/approvals`, {
+        method: 'PUT', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ enabled: policy.enabled, requiredApprovals: policy.requiredApprovals, approvers }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setMsg({ kind: 'error', text: j.error || 'Save failed' }); return; }
+      setMsg({ kind: 'success', text: policy.enabled ? `Promotions into ${stage.displayName} now require ${policy.requiredApprovals} approval(s).` : `Approval gate on ${stage.displayName} disabled.` });
+      onChanged();
+    } catch (e) { setMsg({ kind: 'error', text: String(e) }); } finally { setBusy(false); }
+  }, [policy, pipelineId, stage.id, stage.displayName, onChanged]);
+
+  return (
+    <Dialog open={open} onOpenChange={(_, d) => setOpen(d.open)}>
+      <DialogTrigger disableButtonEnhancement>
+        <Button appearance="subtle" size="small" icon={<ShieldCheckmark20Regular />}>Approvals</Button>
+      </DialogTrigger>
+      <DialogSurface style={{ maxWidth: 760 }}>
+        <DialogBody>
+          <DialogTitle>Required reviewers — {stage.displayName}</DialogTitle>
+          <DialogContent>
+            <Text block size={200} style={{ marginBottom: tokens.spacingVerticalS }}>
+              When enabled, a promotion INTO <strong>{stage.displayName}</strong> is held as a pending request until
+              the required number of named reviewers approve it. Approvers see a summary of what would promote; the
+              requester can't approve their own request.
+            </Text>
+            {policy === null ? <Spinner size="tiny" label="Loading policy…" /> : (
+              <div className={styles.formGrid}>
+                <Switch label={policy.enabled ? 'Approval gate enabled' : 'Approval gate disabled'} checked={policy.enabled} onChange={(_, d) => patch({ enabled: !!d.checked })} />
+                <Field label="Required approvals">
+                  <SpinButton min={1} max={10} value={policy.requiredApprovals} onChange={(_, d) => {
+                    const v = d.value ?? (d.displayValue ? parseInt(d.displayValue, 10) : undefined);
+                    if (typeof v === 'number' && Number.isFinite(v)) patch({ requiredApprovals: Math.min(10, Math.max(1, v)) });
+                  }} style={{ maxWidth: 140 }} />
+                </Field>
+                <Text weight="semibold">Approvers (users or Entra groups)</Text>
+                <Table aria-label="Approvers" size="small">
+                  <TableHeader><TableRow>
+                    <TableHeaderCell>Kind</TableHeaderCell>
+                    <TableHeaderCell>Object id (user oid / group id)</TableHeaderCell>
+                    <TableHeaderCell>Display name</TableHeaderCell>
+                    <TableHeaderCell style={{ width: 40 }} />
+                  </TableRow></TableHeader>
+                  <TableBody>
+                    {policy.approvers.length === 0 ? (
+                      <TableRow><TableCell colSpan={4}><Text size={200} style={{ color: tokens.colorNeutralForeground3 }}>No approvers yet — add a user or group.</Text></TableCell></TableRow>
+                    ) : policy.approvers.map((a, i) => (
+                      <TableRow key={i}>
+                        <TableCell>
+                          <Dropdown aria-label="Approver kind" value={a.type === 'group' ? 'Group' : 'User'} selectedOptions={[a.type]} onOptionSelect={(_, d) => d.optionValue && setApprover(i, { type: d.optionValue as Approver['type'] })} style={{ minWidth: 110 }}>
+                            <Option value="user" text="User">User</Option>
+                            <Option value="group" text="Group">Group</Option>
+                          </Dropdown>
+                        </TableCell>
+                        <TableCell><Input aria-label="Object id" value={a.id} placeholder="00000000-0000-0000-0000-000000000000" onChange={(_, d) => setApprover(i, { id: d.value })} style={{ minWidth: 240 }} /></TableCell>
+                        <TableCell><Input aria-label="Display name" value={a.displayName} placeholder="optional" onChange={(_, d) => setApprover(i, { displayName: d.value })} style={{ minWidth: 140 }} /></TableCell>
+                        <TableCell><Button appearance="subtle" size="small" icon={<Delete20Regular />} onClick={() => removeApprover(i)} aria-label={`Remove approver ${i + 1}`} /></TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+                <div><Button appearance="subtle" icon={<Add20Regular />} onClick={addApprover}>Add approver</Button></div>
+              </div>
+            )}
+            {msg && <MessageBar intent={msg.kind === 'success' ? 'success' : 'error'} style={{ marginTop: tokens.spacingVerticalMNudge }}><MessageBarBody>{msg.text}</MessageBarBody></MessageBar>}
+          </DialogContent>
+          <DialogActions>
+            <DialogTrigger disableButtonEnhancement><Button appearance="secondary" disabled={busy}>Close</Button></DialogTrigger>
+            <Button appearance="primary" icon={<ShieldCheckmark20Regular />} onClick={save} disabled={busy || policy === null}>{busy ? 'Saving…' : 'Save policy'}</Button>
+          </DialogActions>
+        </DialogBody>
+      </DialogSurface>
+    </Dialog>
+  );
+}
+
+function LoomApprovalsPanel({ pipelineId, stages, tick, onChanged }: { pipelineId: string; stages: LoomStage[]; tick: number; onChanged: () => void }) {
+  const styles = useStyles();
+  const [requests, setRequests] = useState<ApprovalRequest[] | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [localTick, setLocalTick] = useState(0);
+  const [actioning, setActioning] = useState<string | null>(null);
+  const [msg, setMsg] = useState<{ kind: 'error' | 'success'; text: string } | null>(null);
+
+  const stageName = (id: string) => stages.find((s) => s.id === id)?.displayName || id;
+
+  useEffect(() => {
+    setRequests(null); setErr(null);
+    clientFetch(`/api/deployment-pipelines/loom/${pipelineId}/approvals`).then(async (r) => {
+      const j = await r.json();
+      if (!j.ok) { setErr(j.error || 'Failed to load approvals'); setRequests([]); return; }
+      setRequests(j.data.requests || []);
+    }).catch((e) => { setErr(String(e)); setRequests([]); });
+  }, [pipelineId, tick, localTick]);
+
+  const act = useCallback(async (requestId: string, action: 'approve' | 'reject' | 'cancel') => {
+    setActioning(`${requestId}:${action}`); setMsg(null);
+    try {
+      const r = await clientFetch(`/api/deployment-pipelines/loom/${pipelineId}/approvals/${encodeURIComponent(requestId)}`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setMsg({ kind: 'error', text: j.error || `${action} failed` }); return; }
+      const status = j.data.request?.status;
+      setMsg({ kind: 'success', text: status === 'promoted' ? `Approved — promotion ran (${j.data.promotion?.deployedItemIds?.length || 0} item(s)).` : `Request ${status}.` });
+      setLocalTick((t) => t + 1);
+      onChanged();
+    } catch (e) { setMsg({ kind: 'error', text: String(e) }); } finally { setActioning(null); }
+  }, [pipelineId, onChanged]);
+
+  if (requests === null) return <Spinner size="tiny" label="Loading approvals…" />;
+
+  const pending = requests.filter((r) => r.status === 'pending');
+  const settled = requests.filter((r) => r.status !== 'pending').slice(0, 20);
+
+  return (
+    <div className={styles.section}>
+      <MessageBar intent="info">
+        <MessageBarBody>
+          <strong>Approval-gated promotions</strong> land here as pending requests. Configure a stage's required
+          reviewers via <strong>Approvals</strong> on that stage card. Named approvers see the diff summary and can
+          approve or reject; on the final approval the promotion runs automatically.
+        </MessageBarBody>
+      </MessageBar>
+      {err && <MessageBar intent="error"><MessageBarBody>{err}</MessageBarBody></MessageBar>}
+      {msg && <MessageBar intent={msg.kind === 'success' ? 'success' : 'error'}><MessageBarBody>{msg.text}</MessageBarBody></MessageBar>}
+
+      {requests.length === 0 ? (
+        <div className={styles.stageMeta}>No approval requests. Gated promotions will appear here awaiting review.</div>
+      ) : (
+        <Table aria-label="Approval requests" size="small">
+          <TableHeader><TableRow>
+            <TableHeaderCell>Promotion</TableHeaderCell>
+            <TableHeaderCell>What would promote</TableHeaderCell>
+            <TableHeaderCell>Approvals</TableHeaderCell>
+            <TableHeaderCell>Requested by</TableHeaderCell>
+            <TableHeaderCell>Status</TableHeaderCell>
+            <TableHeaderCell style={{ minWidth: 170 }}>Action</TableHeaderCell>
+          </TableRow></TableHeader>
+          <TableBody>
+            {[...pending, ...settled].map((rq) => {
+              const approvals = (rq.decisions || []).filter((d) => d.decision === 'approve').length;
+              return (
+                <TableRow key={rq.id}>
+                  <TableCell>{stageName(rq.sourceStageId)} <ArrowRight20Regular style={{ verticalAlign: 'middle', width: 14, height: 14 }} /> {stageName(rq.targetStageId)}</TableCell>
+                  <TableCell><Text size={200}>{rq.diffSummary}</Text>{rq.note ? <Caption1 style={{ display: 'block', color: tokens.colorNeutralForeground3 }}>{rq.note}</Caption1> : null}</TableCell>
+                  <TableCell><span className={styles.syncDot}><People20Regular style={{ width: 14, height: 14 }} />{approvals}/{rq.requiredApprovals}</span></TableCell>
+                  <TableCell><Text size={200}>{rq.requestedBy}</Text></TableCell>
+                  <TableCell>{approvalStatusBadge(rq.status)}</TableCell>
+                  <TableCell>
+                    {rq.status === 'pending' ? (
+                      <div style={{ display: 'flex', gap: tokens.spacingHorizontalSNudge, flexWrap: 'wrap' }}>
+                        {rq.viewerCanApprove && (
+                          <>
+                            <Button appearance="primary" size="small" icon={<Checkmark20Regular />} disabled={actioning !== null} onClick={() => act(rq.id, 'approve')}>Approve</Button>
+                            <Button appearance="secondary" size="small" icon={<Dismiss20Regular />} disabled={actioning !== null} onClick={() => act(rq.id, 'reject')}>Reject</Button>
+                          </>
+                        )}
+                        {rq.viewerIsRequester && (
+                          <>
+                            <Button appearance="subtle" size="small" icon={<Dismiss20Regular />} disabled={actioning !== null} onClick={() => act(rq.id, 'reject')} title="Reject your own request">Reject</Button>
+                            <Button appearance="subtle" size="small" icon={<Delete20Regular />} disabled={actioning !== null} onClick={() => act(rq.id, 'cancel')}>Cancel</Button>
+                          </>
+                        )}
+                        {!rq.viewerCanApprove && !rq.viewerIsRequester && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Awaiting a named approver</Caption1>}
+                      </div>
+                    ) : (
+                      <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{new Date(rq.updatedAt).toLocaleString()}</Caption1>
+                    )}
+                  </TableCell>
+                </TableRow>
+              );
+            })}
+          </TableBody>
+        </Table>
+      )}
+    </div>
   );
 }
 

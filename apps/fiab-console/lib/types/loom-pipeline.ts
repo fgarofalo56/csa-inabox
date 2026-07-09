@@ -102,6 +102,83 @@ export interface LoomPipelineStageRulesDoc {
   updatedBy: string;
 }
 
+// ---------------------------------------------------------------------------
+// BR-APPROVAL — required-reviewer promotion gates.
+//
+// A stage can require N approvals from named users/groups before a promotion
+// INTO it runs. The policy + the request lifecycle live in the SAME Cosmos
+// container as the stage rules (`pipeline-stage-rules`, PK /pipelineId) —
+// discriminated by `docType` and an id prefix — so no new container / bicep
+// param is introduced. The pure state machine is lib/install/pipeline-approvals.
+// ---------------------------------------------------------------------------
+
+/** A named reviewer (user or Entra group) permitted to approve a promotion. */
+export interface LoomApprover {
+  /** Entra object id — a user oid or a group id (matched against session claims). */
+  id: string;
+  type: 'user' | 'group';
+  /** Display name for the reviewer list (UPN / group name). */
+  displayName: string;
+}
+
+/** Per-stage required-reviewer policy (`approval-policy:<pipelineId>:<stageId>`). */
+export interface LoomApprovalPolicyDoc {
+  /** id = `approval-policy:<pipelineId>:<stageId>`. */
+  id: string;
+  docType: 'approval-policy';
+  /** Partition key. */
+  pipelineId: string;
+  stageId: string;
+  /** When false the stage promotes without any gate (default / opt-out). */
+  enabled: boolean;
+  /** How many distinct approvals are required before the promotion runs. */
+  requiredApprovals: number;
+  approvers: LoomApprover[];
+  updatedAt: string;
+  updatedBy: string;
+}
+
+export type LoomApprovalStatus =
+  | 'pending' | 'approved' | 'rejected' | 'cancelled' | 'promoted' | 'promotion-failed';
+
+/** One reviewer's decision on a request. */
+export interface LoomApprovalDecision {
+  approverOid: string;
+  approverName: string;
+  decision: 'approve' | 'reject';
+  comment?: string;
+  at: string;
+}
+
+/** A pending/settled promotion approval request (`approval-request:<uuid>`). */
+export interface LoomApprovalRequest {
+  /** id = `approval-request:<uuid>`. */
+  id: string;
+  docType: 'approval-request';
+  /** Partition key. */
+  pipelineId: string;
+  /** Owning tenant (oid) — carried for audit scoping. */
+  tenantId: string;
+  sourceStageId: string;
+  targetStageId: string;
+  /** Snapshot of the policy at request time (approvers can change later). */
+  requiredApprovals: number;
+  approvers: LoomApprover[];
+  /** Optional selective-deploy item list to promote once approved. */
+  items?: Array<{ sourceItemId: string; itemType: string }>;
+  note?: string;
+  /** A short diff summary the approver sees ("what would promote"). */
+  diffSummary: string;
+  status: LoomApprovalStatus;
+  decisions: LoomApprovalDecision[];
+  requestedBy: string;
+  requestedByOid: string;
+  createdAt: string;
+  updatedAt: string;
+  /** Set once promoted — the pipeline-history operation id. */
+  promotionOperationId?: string;
+}
+
 /** A deployment receipt — one row per selective/full deploy (`pipeline-history`). */
 export interface LoomPipelineHistoryRecord {
   /** uuid. */

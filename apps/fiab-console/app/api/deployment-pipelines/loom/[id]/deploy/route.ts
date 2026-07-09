@@ -5,15 +5,29 @@
  * Selective (or full) deploy of content from one stage to the next. The heavy
  * lifting — Variable-Library rebind (FGC-24), stage-rule application, re-provision
  * through the real Azure-native provisioners, and the history receipt — lives in
- * the shared `_lib/promote.ts` engine so this route stays thin.
+ * the shared `_lib/promote.ts` engine so this route and the approval route run
+ * one identical implementation.
+ *
+ * BR-APPROVAL: when the TARGET stage has an enabled required-reviewer policy, the
+ * deploy does NOT execute here. Instead a pending approval request is created
+ * (carrying a diff summary of what would promote) and the route returns
+ * `{ status: 'pending-approval', requestId }`. Once the required approvals are
+ * cast (POST .../approvals/[requestId]), that route runs the SAME promotion.
  *
  * Cosmos + the Azure-native provisioner backends only — no Fabric / Power BI.
  *
  * Shape: { ok, data: { operationId, status, diff, deployedItemIds, steps } }
+ *   or   { ok, data: { status:'pending-approval', requestId, requiredApprovals } }
  */
 import { NextRequest } from 'next/server';
+import crypto from 'node:crypto';
 import { listAllOwnedItems } from '@/app/api/items/_lib/item-crud';
-import { jok, jerr, loadPipeline, resolveCaller } from '../../_lib/pipeline-store';
+import { computePipelineDiff } from '@/lib/install/pipeline-compare';
+import { emitAuditEvent } from '@/lib/admin/audit-stream';
+import type { LoomApprovalRequest } from '@/lib/types/loom-pipeline';
+import {
+  jok, jerr, loadPipeline, resolveCaller, loadApprovalPolicy, createApprovalRequest,
+} from '../../_lib/pipeline-store';
 import { resolvePromotionStages, runPromotion } from '../../_lib/promote';
 
 export const runtime = 'nodejs';
@@ -57,6 +71,57 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       }
     }
 
+    // BR-APPROVAL — gate: an enabled policy with ≥1 required approval and ≥1
+    // named approver defers the promotion to a pending approval request instead
+    // of running it now.
+    const policy = await loadApprovalPolicy(id, targetStageId);
+    if (policy?.enabled && (policy.requiredApprovals || 0) > 0 && (policy.approvers?.length || 0) > 0) {
+      const [source, before] = await Promise.all([
+        listAllOwnedItems(tenantId, srcWs),
+        listAllOwnedItems(tenantId, tgtWs),
+      ]);
+      const { summary } = computePipelineDiff(source, before);
+      const diffSummary = `${summary.different} changed · ${summary.onlyInSource} new · ${summary.same} unchanged`;
+      const now = new Date().toISOString();
+      const request: LoomApprovalRequest = {
+        id: `approval-request:${crypto.randomUUID()}`,
+        docType: 'approval-request',
+        pipelineId: id,
+        tenantId,
+        sourceStageId,
+        targetStageId,
+        requiredApprovals: policy.requiredApprovals,
+        approvers: policy.approvers,
+        items: chosen,
+        note,
+        diffSummary,
+        status: 'pending',
+        decisions: [],
+        requestedBy: caller.actor,
+        requestedByOid: tenantId,
+        createdAt: now,
+        updatedAt: now,
+      };
+      await createApprovalRequest(request);
+      emitAuditEvent({
+        actorOid: s.claims.oid,
+        actorUpn: s.claims.upn || s.claims.email || s.claims.oid,
+        action: 'pipeline.promotion.requested',
+        targetType: 'deployment-pipeline',
+        targetId: id,
+        tenantId: s.claims.tid || tenantId,
+        detail: { requestId: request.id, sourceStageId, targetStageId, requiredApprovals: policy.requiredApprovals, diffSummary },
+      });
+      return jok({
+        status: 'pending-approval',
+        requestId: request.id,
+        requiredApprovals: policy.requiredApprovals,
+        stageName: targetStage.displayName,
+        diffSummary,
+      });
+    }
+
+    // No gate — run the promotion now.
     const result = await runPromotion({
       tenantId, session: s, actor: caller.actor,
       pipeline, srcWs, tgtWs, sourceStageId, targetStageId, targetStage,
