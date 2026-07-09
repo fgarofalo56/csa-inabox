@@ -17,6 +17,7 @@ import { recordCostAttribution } from '@/lib/azure/cost-attribution';
 import { tenantScopeId } from '@/lib/auth/session';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
 import { substituteNotebookPlaceholders } from '@/lib/apps/notebook-placeholders';
+import { cellToStatements } from '@/lib/notebook/sql-split';
 import type { WorkspaceItem } from '@/lib/types/workspace';
 
 export const runtime = 'nodejs';
@@ -125,9 +126,19 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       if (v === 'sparkr' || v === 'r') return 'sparkr';
       return 'pyspark';
     };
-    const runQueue: Array<{ source: string; lang: string }> = cellSource ? [] : allCells
-      .filter((c) => c?.type === 'code' && typeof c.source === 'string' && c.source.trim())
-      .map((c) => ({ source: substituteNotebookPlaceholders(c.source), lang: kindOfCell(c.lang) }));
+    // Each code cell expands to one-or-more Livy statements: SQL cells split on
+    // `;` (Livy's sql kind is single-statement — a cell with three
+    // `CREATE DATABASE …;` else fails "extra input 'CREATE'"); other kinds stay
+    // whole. A single-cell SQL run splits the same way so per-cell SQL matches.
+    const runQueue: Array<{ source: string; lang: string }> = cellSource
+      ? cellToStatements(substituteNotebookPlaceholders(cellSource), kindOfCell(cellLang) as any)
+          .map((s) => ({ source: s.source, lang: s.lang }))
+      : allCells
+          .filter((c) => c?.type === 'code' && typeof c.source === 'string' && c.source.trim())
+          .flatMap((c) =>
+            cellToStatements(substituteNotebookPlaceholders(c.source), kindOfCell(c.lang) as any)
+              .map((s) => ({ source: s.source, lang: s.lang })),
+          );
 
     // Map cell-lang to the statement-kind that Livy / Databricks expects.
     // Livy session-kind affects cold-start; statement-kind controls per-cell
@@ -371,12 +382,14 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       try {
         const items = await itemsContainer();
         const pendingRuns = { ...(state.pendingRuns || {}) };
-        if (cellSource) {
+        if (runQueue.length > 0) {
+          // Both whole-notebook AND single-cell runs drain a per-statement queue
+          // (a SQL cell can expand to multiple statements). qIdx = next to submit;
+          // cellId is retained so the editor can attribute output to its cell.
+          pendingRuns[runIdStr] = { queue: runQueue, qIdx: 0, cellId: cellId || undefined, startedAt: new Date().toISOString() };
+        } else if (cellSource) {
+          // Fallback (should be unreachable — empty code already 400s above).
           pendingRuns[runIdStr] = { source: cellSource, lang: effectiveStmtKind, cellId, startedAt: new Date().toISOString() };
-        } else if (runQueue.length > 0) {
-          // Whole-notebook run: persist the per-cell statement queue (drained
-          // by the poller) — NOT the joined blob. qIdx = next cell to submit.
-          pendingRuns[runIdStr] = { queue: runQueue, qIdx: 0, startedAt: new Date().toISOString() };
         }
         await items.item(nb.id, workspaceId).replace({
           ...nb,
