@@ -361,6 +361,21 @@ export function buildDevRunParameters(
  * the bundle's already-portal-shaped config under typeProperties and lift the
  * well-known siblings so the activity validates in Studio.
  */
+/**
+ * Synapse/ADF's commit validator textually scans EVERY string in the doc —
+ * including plain-prose `description` fields — for `@pipeline().parameters.X`
+ * references and fails the PUT when X isn't a defined parameter. Its parser is
+ * greedy across spaces (a description saying "targets the
+ * @pipeline().parameters.targetWorkspace warehouse" fails with
+ * "Missing parameter definition for 'targetWorkspace warehouse'", #1576).
+ * Descriptions are documentation, not expressions — strip the expression `@`
+ * so the prose survives verbatim minus the trigger.
+ */
+function sanitizeDescription(d: unknown): string | undefined {
+  if (typeof d !== 'string' || !d) return undefined;
+  return d.replace(/@(?=pipeline\(\))/g, '');
+}
+
 export function buildDevPipelineProperties(content: any): DevPipelineProperties {
   const activities = Array.isArray(content?.activities) ? content.activities : [];
   return {
@@ -368,7 +383,8 @@ export function buildDevPipelineProperties(content: any): DevPipelineProperties 
       const cfg = a?.config && typeof a.config === 'object' ? { ...a.config } : {};
       // Lift the well-known activity-root siblings out of config; whatever
       // remains is the activity's typeProperties.
-      const { policy, linkedServiceName, inputs, outputs, description, ...typeProperties } = cfg;
+      const { policy, linkedServiceName, inputs, outputs, description: rawDescription, ...typeProperties } = cfg;
+      const description = sanitizeDescription(rawDescription);
       return {
         name: a.name,
         type: a.type,
