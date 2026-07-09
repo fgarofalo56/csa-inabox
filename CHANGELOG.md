@@ -25,6 +25,30 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.59.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.58.0...csa-inabox-v0.59.0) (2026-07-09)
+
+
+### Features
+
+* **ai:** Wave 9 — model router (deployment + native tier) + router transparency + sharing posture flip (AIF-12/CTS-16) ([#1752](https://github.com/fgarofalo56/csa-inabox/issues/1752)) ([6fdbb26](https://github.com/fgarofalo56/csa-inabox/commit/6fdbb265908388a072f1bd7161b478a5fa262cfb))
+* **alm:** Wave 8 — variable-library promotion + approval-gated stages (FGC-24/BR-APPROVAL) ([#1749](https://github.com/fgarofalo56/csa-inabox/issues/1749)) ([9075f7f](https://github.com/fgarofalo56/csa-inabox/commit/9075f7fed4cf1335c39c9f32fc620d5cf7bbe0e3))
+* **apps:** Wave 6 — loom-app runtime: one-click hosted apps on ACA (DBX-1) ([#1745](https://github.com/fgarofalo56/csa-inabox/issues/1745)) ([19cac06](https://github.com/fgarofalo56/csa-inabox/commit/19cac067548e7cfb1ebb1aec8adf1d3dfc02ed4d))
+* **auth:** Wave 6 — scoped API tokens (PAT) + developer tokens UI (BR-PAT) ([#1743](https://github.com/fgarofalo56/csa-inabox/issues/1743)) ([1de49ce](https://github.com/fgarofalo56/csa-inabox/commit/1de49cec8e254fd17d70e1f39783f01a02eafa45))
+* **data:** Wave 8 — SQL PITR restore + external B2B data sharing (FGC-20/30) ([#1751](https://github.com/fgarofalo56/csa-inabox/issues/1751)) ([7a58ec3](https://github.com/fgarofalo56/csa-inabox/commit/7a58ec32da86eb51daaad4c0680dced011895242))
+* **ds:** Wave 9 — in-notebook AI wrangler + batch PREDICT scoring (FGC-16/18) ([#1753](https://github.com/fgarofalo56/csa-inabox/issues/1753)) ([c1b24ab](https://github.com/fgarofalo56/csa-inabox/commit/c1b24ab55638fd80171bcd3bbfa0d40a0b221b9a))
+* **events:** Wave 6 — outbound webhook registry + marketplace analytics/SLA events (BR-WEBHOOK/W18) ([#1744](https://github.com/fgarofalo56/csa-inabox/issues/1744)) ([268c7e4](https://github.com/fgarofalo56/csa-inabox/commit/268c7e40f6d02fa015412edf4e634861b1d2adbf))
+* **finops:** Wave 8 — surge protection + chargeback + cost attribution (FGC-25/28/BR-COSTATTR) ([#1750](https://github.com/fgarofalo56/csa-inabox/issues/1750)) ([977f4ec](https://github.com/fgarofalo56/csa-inabox/commit/977f4ec6b332f38b9c586df84e1d74f0ba6261f9))
+* **foundry:** Wave 7 — PTU/Batch deployments + AgentOps tracing & rollups (AIF-11/13) ([#1747](https://github.com/fgarofalo56/csa-inabox/issues/1747)) ([b2b2c86](https://github.com/fgarofalo56/csa-inabox/commit/b2b2c86e45a046737a75fd2ee078f4402773f455))
+* **rti:** Wave 7 — activator trigger depth + RT-hub sources + eventstream DeltaFlow (FGC-13/14/15) ([#1748](https://github.com/fgarofalo56/csa-inabox/issues/1748)) ([da988b8](https://github.com/fgarofalo56/csa-inabox/commit/da988b8a5683e7060bca168b35b0dd9ec8345777))
+* **rti:** Wave 7 — digital twin builder (ADX-native default, ADT opt-in) (FGC-12) ([#1746](https://github.com/fgarofalo56/csa-inabox/issues/1746)) ([9293c0c](https://github.com/fgarofalo56/csa-inabox/commit/9293c0c470058a2ab44e71d9e697dabef2167777))
+* **semantic:** Wave 9 — semantic link + DAX query view + model health scan (FGC-17/21/22) ([#1754](https://github.com/fgarofalo56/csa-inabox/issues/1754)) ([2ae6d9c](https://github.com/fgarofalo56/csa-inabox/commit/2ae6d9c06e00634839d537d587c44465e1ff184d))
+
+
+### Bug Fixes
+
+* **catalog:** LIN-GC — reconcile sweeps Thread/Weave edge orphans too (live gap on /thread) ([#1741](https://github.com/fgarofalo56/csa-inabox/issues/1741)) ([1e44d7f](https://github.com/fgarofalo56/csa-inabox/commit/1e44d7f4ae9773c18f514d6577f8313bb5dda438))
+* **posture:** external B2B sharing default-ON (opt-out) per standing directive ([#1755](https://github.com/fgarofalo56/csa-inabox/issues/1755)) ([c6852b1](https://github.com/fgarofalo56/csa-inabox/commit/c6852b179f4ece1d62545c26acae9962d9522abb))
+
 ## [0.58.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.57.0...csa-inabox-v0.58.0) (2026-07-08)
 
 
