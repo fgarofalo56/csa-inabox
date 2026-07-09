@@ -37,6 +37,8 @@
 
 import { uamiArmCredential } from '@/lib/azure/arm-credential';
 import { monitorIngestionScope } from '@/lib/azure/cloud-endpoints';
+import { emitLoomEvent } from '@/lib/events/webhook-emitter';
+import { auditActionToEventType } from '@/lib/events/event-types';
 
 /** The DCR stream name (matches the bicep streamDeclarations key + table). */
 export const AUDIT_STREAM = 'Custom-LoomAudit_CL';
@@ -201,5 +203,26 @@ export function emitAuditEvent(ev: AdminAuditEvent): void {
     // Synchronous failure (config/serialisation) — still non-fatal.
     // eslint-disable-next-line no-console
     console.warn('[audit-stream] emit failed:', (e as Error)?.message || e);
+  }
+  // BR-WEBHOOK — fan the SAME admin-plane mutation out to any subscribed
+  // outbound webhook. This reuses every choke point BR-SIEM already instruments
+  // (workspace/permission/mcp-server/tenant-settings/env-config/domain/platform)
+  // with zero new edits to those routes. Fire-and-forget; never blocks/throws.
+  try {
+    void emitLoomEvent({
+      type: auditActionToEventType(ev.action),
+      tenantId: ev.tenantId || ev.actorOid,
+      subject: ev.targetId,
+      actor: { oid: ev.actorOid, upn: ev.actorUpn },
+      data: {
+        action: ev.action,
+        targetType: ev.targetType,
+        targetId: ev.targetId,
+        outcome: ev.outcome || 'success',
+        detail: typeof ev.detail === 'string' ? ev.detail : ev.detail,
+      },
+    });
+  } catch {
+    /* webhook fan-out is best-effort */
   }
 }

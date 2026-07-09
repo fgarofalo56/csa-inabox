@@ -126,6 +126,17 @@ let _pipelineHistory: Container | null = null;
 let _scorecardConfig: Container | null = null;
 let _reportSubscriptions: Container | null = null;
 let _reportDeliveryLog: Container | null = null;
+// BR-WEBHOOK — outbound webhook / event-subscription registry. One row per
+// registered endpoint (PK /tenantId → the tenant's hook list is a single
+// physical partition). The delivery log is append-only, PK /webhookId, capped
+// at the last 100 attempts per hook. Both created lazily so a fresh environment
+// needs no extra ARM/Bicep step beyond the account+database.
+let _webhookSubscriptions: Container | null = null;
+let _webhookDeliveries: Container | null = null;
+// W18 — marketplace listing analytics. One counter row per data product
+// (PK /dataProductId) holding real view/subscribe totals incremented on the
+// existing detail-read + access-request(subscribe) paths.
+let _dataProductAnalytics: Container | null = null;
 // F16 Azure Connections — per-workspace ADLS Gen2 + Log Analytics bindings.
 // Partitioned by /workspaceId so every per-workspace connection list hits a
 // single physical partition. Distinct from the tenant-scoped 'connections'
@@ -718,6 +729,14 @@ async function ensure() {
   // Logic App. No Microsoft Fabric dependency.
   _reportSubscriptions = await mk('report-subscriptions', '/reportId');
   _reportDeliveryLog = await mk('report-delivery-log', '/subscriptionId');
+  // BR-WEBHOOK — webhook registrations (PK /tenantId) + append-only delivery
+  // log (PK /webhookId, capped at 100/hook). Azure-native default: direct HTTPS
+  // POST with an HMAC-SHA256 signature; Event Grid is an opt-in alternative when
+  // LOOM_EVENTGRID_TOPIC_ENDPOINT is set. No Fabric dependency.
+  _webhookSubscriptions = await mk('webhook-subscriptions', '/tenantId');
+  _webhookDeliveries = await mk('webhook-deliveries', '/webhookId');
+  // W18 — marketplace listing analytics counters (PK /dataProductId).
+  _dataProductAnalytics = await mk('data-product-analytics', '/dataProductId');
   // F16 Azure Connections — per-workspace ADLS Gen2 (dataflow staging) +
   // Log Analytics (query-log export) bindings. PK /workspaceId so every
   // per-workspace connection list hits a single physical partition. Created
@@ -821,6 +840,12 @@ export async function scorecardConfigContainer(): Promise<Container> { await ens
 export async function reportSubscriptionsContainer(): Promise<Container> { await ensure(); return _reportSubscriptions!; }
 /** Report delivery log (append-only delivery history) — PK /subscriptionId. */
 export async function reportDeliveryLogContainer(): Promise<Container> { await ensure(); return _reportDeliveryLog!; }
+/** BR-WEBHOOK — webhook registrations, PK /tenantId. */
+export async function webhookSubscriptionsContainer(): Promise<Container> { await ensure(); return _webhookSubscriptions!; }
+/** BR-WEBHOOK — append-only webhook delivery log (last 100/hook), PK /webhookId. */
+export async function webhookDeliveriesContainer(): Promise<Container> { await ensure(); return _webhookDeliveries!; }
+/** W18 — marketplace listing analytics counters, PK /dataProductId. */
+export async function dataProductAnalyticsContainer(): Promise<Container> { await ensure(); return _dataProductAnalytics!; }
 /** F16 Azure Connections — per-workspace ADLS Gen2 + Log Analytics bindings (PK /workspaceId). */
 export async function azureConnectionsContainer(): Promise<Container> { await ensure(); return _azureConnections!; }
 /** Task flows (F11) — visual step-sequence canvases, PK /workspaceId. */
@@ -1004,6 +1029,9 @@ const KNOWN_CONTAINER_IDS = [
   'rate-limits',
   'item-versions',
   'loom-agent-memory',
+  'report-subscriptions', 'report-delivery-log',
+  'webhook-subscriptions', 'webhook-deliveries',
+  'data-product-analytics',
   'loom-pat-tokens',
 ];
 

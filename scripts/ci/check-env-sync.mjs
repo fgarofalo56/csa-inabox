@@ -225,6 +225,13 @@ const ALLOWLIST = new Set([
   // LOOM_BROWSER_TOOL_ENDPOINT at a synchronous HTTP Playwright runner.
   'LOOM_BROWSER_TOOL_JOB',          // opt-in Playwright ACA-job resource id (default off — honest gate)
   'LOOM_BROWSER_TOOL_ENDPOINT',     // opt-in synchronous Playwright HTTP runner (default off — honest gate)
+  // BR-WEBHOOK — outbound webhook delivery. DIRECT HTTPS + HMAC is the zero-infra
+  // DEFAULT (default-ON); Event Grid is the opt-in ALTERNATIVE transport. The
+  // topic endpoint is unset unless the operator deploys the standalone
+  // platform/fiab/bicep/modules/admin-plane/event-grid-webhooks.bicep module
+  // (NOT wired into admin-plane/main.bicep — that file is at the 256-param
+  // ceiling). LOOM_EVENTGRID_TOPIC_KEY is a secret (matched by the _KEY pattern).
+  'LOOM_EVENTGRID_TOPIC_ENDPOINT',  // opt-in Event Grid custom-topic endpoint (default off — direct HTTPS delivery is used)
 ]);
 
 // ── Filesystem helpers (no deps) ──
