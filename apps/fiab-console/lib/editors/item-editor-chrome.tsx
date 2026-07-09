@@ -139,9 +139,15 @@ interface Props {
    * strictly additive, opt-in surface.
    */
   explain?: ExplainConfig;
+  /**
+   * SC-9 — render the in-ribbon command-search box (Ctrl+Q / Alt+Q). Editors
+   * that also register their ribbon actions (via `useRegisterRibbonCommands`)
+   * opt in by passing `commandSearch`. Additive: omitting it changes nothing.
+   */
+  commandSearch?: boolean;
 }
 
-export function ItemEditorChrome({ item, id, ribbon, leftPanel, main, rightPanel, rightPanelLabel = 'Copilot', dirty = false, displayName, explain }: Props) {
+export function ItemEditorChrome({ item, id, ribbon, leftPanel, main, rightPanel, rightPanelLabel = 'Copilot', dirty = false, displayName, explain, commandSearch }: Props) {
   const styles = useStyles();
   // Shared unsaved-changes guard — one wiring covers every editor that threads
   // a `dirty` signal. Returns the confirm dialog (or null) to render below.
@@ -273,7 +279,7 @@ export function ItemEditorChrome({ item, id, ribbon, leftPanel, main, rightPanel
       }
     >
       <div className={styles.layout}>
-        <Ribbon tabs={ribbon} />
+        <Ribbon tabs={ribbon} commandSearch={commandSearch} />
         <BundleContentBar itemType={item.slug} itemId={id} />
         {/* Unsaved-changes confirm dialog (rel-T70) — rendered when a guarded
             internal navigation is attempted while the editor is dirty. */}

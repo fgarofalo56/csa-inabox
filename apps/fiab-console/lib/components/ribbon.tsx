@@ -24,6 +24,7 @@ import {
   type ButtonProps,
 } from '@fluentui/react-components';
 import { ChevronDown16Regular, ChevronUp16Regular } from '@fluentui/react-icons';
+import { CommandSearch } from '@/lib/components/shared/command-search';
 
 /** Persisted per-user ribbon density. Shared across every editor so the choice
  *  ("give me more canvas") sticks wherever you go. */
@@ -51,6 +52,16 @@ const useStyles = makeStyles({
     paddingLeft: '8px',
   },
   collapseBtn: { flexShrink: 0 },
+  // In-ribbon command search (SC-9) — sits between the tab strip and the
+  // collapse toggle, right-aligned like Fabric's "Search (Alt+Q)".
+  search: {
+    flexShrink: 1,
+    display: 'flex',
+    alignItems: 'center',
+    paddingLeft: tokens.spacingHorizontalS,
+    paddingRight: tokens.spacingHorizontalXS,
+    minWidth: 0,
+  },
   body: {
     display: 'flex',
     alignItems: 'stretch',
@@ -123,9 +134,16 @@ export interface RibbonTab {
 interface Props {
   tabs: RibbonTab[];
   defaultTabId?: string;
+  /**
+   * SC-9 — when true, render the in-ribbon <CommandSearch> box (Ctrl+Q / Alt+Q)
+   * in the header row. The box surfaces whatever surface actions have been
+   * registered in the shared command registry (see `useRegisterRibbonCommands`).
+   * Opt-in per editor so only ribbons that register their actions show it.
+   */
+  commandSearch?: boolean;
 }
 
-export function Ribbon({ tabs, defaultTabId }: Props) {
+export function Ribbon({ tabs, defaultTabId, commandSearch }: Props) {
   const styles = useStyles();
   const [active, setActive] = useState(defaultTabId ?? tabs[0]?.id ?? '');
   // Collapsed = show only the tab strip, hiding the action body → reclaims
@@ -153,6 +171,11 @@ export function Ribbon({ tabs, defaultTabId }: Props) {
             <Tab key={t.id} value={t.id}>{t.label}</Tab>
           ))}
         </TabList>
+        {commandSearch && (
+          <div className={styles.search}>
+            <CommandSearch />
+          </div>
+        )}
         <Tooltip
           relationship="label"
           content={collapsed ? 'Expand the ribbon' : 'Collapse the ribbon for more space'}

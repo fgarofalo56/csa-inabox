@@ -64,6 +64,7 @@ import type { PipelineRuntimeContext } from '@/lib/components/pipeline/types';
 import { createItem } from '@/lib/api/workspaces';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
+import { useRegisterRibbonCommands } from '@/lib/components/shared/ribbon-commands';
 
 // Common Azure regions for the "Create new factory" location picker (Commercial
 // + US Government). The default is the chosen resource group's location.
@@ -699,6 +700,12 @@ export function PipelineEditorCore({
     ];
   }, [config.supportsValidate, isAdf, busy, bound, dirty, save, kick, validate, openTriggers, openManageHub, quickInsert, checkAuthoringErrors]);
 
+  // SC-9 — publish this editor's ribbon actions to the shared command registry
+  // so the in-ribbon Ctrl+Q / Alt+Q CommandSearch surfaces Save / Run / Debug /
+  // Validate / Insert / Manage without duplicating any handler. Called before
+  // the `isNew` early return so Rules of Hooks hold.
+  useRegisterRibbonCommands(ribbon, config.slug);
+
   // ------------------------------------------------------------------
   // Render
   // ------------------------------------------------------------------
@@ -806,7 +813,7 @@ export function PipelineEditorCore({
   }
 
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={ribbon}
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon} commandSearch
       rightPanel={
         <PipelineCopilotPane apiBase={apiBase} bound={bound} onApplySpec={applyGeneratedSpec} />
       }
