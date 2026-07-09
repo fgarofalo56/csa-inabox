@@ -100,6 +100,15 @@ export async function executeSourceQuery(source: DataAgentSource, query: string)
         const res = await synapseExecute(serverlessTarget(db), capSql(query));
         return { executed: true, columns: res.columns, rows: res.rows.slice(0, MAX_ROWS), rowCount: res.rowCount, truncated: res.rowCount > MAX_ROWS };
       }
+      case 'metric-view': {
+        // A governed metric view is queried with SQL over the Azure-native
+        // warehouse (Synapse dedicated) exactly like a warehouse source — the
+        // model GROUP BYs governed dimensions + selects governed measures (its
+        // grounding carries those definitions). Real rows, read-only, capped.
+        assertReadonlySql(query);
+        const res = await synapseExecute(dedicatedTarget(), capSql(query));
+        return { executed: true, columns: res.columns, rows: res.rows.slice(0, MAX_ROWS), rowCount: res.rowCount, truncated: res.rowCount > MAX_ROWS };
+      }
       case 'kql': {
         const gate = kustoConfigGate();
         if (gate) {

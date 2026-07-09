@@ -41,6 +41,7 @@ export type DataAgentSourceType =
   | 'lakehouse'
   | 'kql'
   | 'semantic-model'
+  | 'metric-view'
   | 'ai-search'
   | 'ontology'
   | 'graph'
@@ -87,6 +88,7 @@ const QUERY_LANG: Record<DataAgentSourceType, string> = {
   lakehouse: 'Spark SQL',
   kql: 'KQL',
   'semantic-model': 'DAX',
+  'metric-view': 'SQL over the governed metric view (GROUP BY governed dimensions, select the governed measure expressions)',
   'ai-search': 'an Azure AI Search query',
   ontology: 'an ontology / Fabric IQ semantic query',
   graph: 'a GQL / Cypher graph traversal',
