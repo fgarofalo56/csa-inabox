@@ -575,3 +575,74 @@ and any Loom-native Weave lineage edges keep serving lineage for dead assets
 - **LIN-GC-3 ✅** `annotateDeletedLoomNodes` flags `loom://` lineage nodes whose item is gone; the shared
   `LineageCanvas` (and legacy SVG `LineageGraph`) render them as a dashed, muted "Deleted"-badged ghost with
   the open-item link suppressed. Wired into both `/api/catalog/lineage` and `/api/catalog/lineage/item`.
+
+---
+
+## Addendum (2026-07-09, post-plan): UX Baseline Program — every Loom surface to Fabric grade (UX-Waves 0–13)
+
+`PRP-ux-baseline-program.md` (this folder) graded **≈170 Loom UX surface rows** against the live Fabric
+baseline captured on 2026-07-09 (`scratchpad/fabric-ux-observations.md`) by reading the merged code, not the
+names. Result: **no D/vaporware** (the no-vaporware enforcement held), but a two-tier UX gap versus Fabric —
+**≈73 B-grade** surfaces (real deep backends, missing specific bar items) and **≈93 C-grade** surfaces
+(functional-but-plain, no teaching UI). The just-merged node-kit v2 + pipeline (#1768) + eventstream (#1765)
+work is the product's first true **A-grade** UX and proves the whole baseline is achievable Azure-native.
+
+**The bet is SHARED-FIRST** — the same ten missing bar items recur across dozens of surfaces, so build them
+once and adopt them surface-by-surface (exactly how the node-kit made three editors A-grade at once). This
+adds **14 UX waves (U0–U13)** and **181 work items** = **10 shared components** + **1 Fabric capture task**
++ **170 per-surface items** (5 A-grade codified as reference, 72 B-grade adopt-shared, 93 C-grade build).
+
+### The shared library (UX-Wave 0 — hard prerequisite for every later UX wave)
+
+| SC | Component (new/extend) | Closes baseline bar item | Lifts |
+|----|------------------------|--------------------------|-------|
+| SC-1 | node-kit v2 adoption (extend `components/canvas/canvas-node-kit.tsx`) | rich node anatomy / ghost node / draft-publish | ~12 canvases |
+| SC-2 | `<DetailsPanel>` (`components/shared/details-panel.tsx`) | right details panel — copyable Query/MCP URI + inline-edit policies | ~10 data items |
+| SC-3 | `<DockedInspector>` (`components/shared/docked-inspector.tsx`) | docked inspector w/ **red validation-dot tabs** | ~10 canvases |
+| SC-4 | `<GuidedEmptyState>` (`components/shared/guided-empty-state.tsx`) | multi-path launcher cards + Ask-Copilot | ~30 surfaces |
+| SC-5 | `<PreviewTable>` (`components/shared/preview-table.tsx`) | type-badged live preview + timing status bar | ~10 data items |
+| SC-6 | `useTeachingToast` (`components/shared/teaching-toast.tsx`) | teaching toasts/banners | ~15 surfaces |
+| SC-7 | `<ExplorerTree>` (`components/shared/explorer-tree.tsx`) | typed-icon tree + right-click context menu | ~7 trees |
+| SC-8 | `<ItemTabStrip>`/`<ToolbarCrossLinks>` (`components/shared/item-tab-strip.tsx`) | item-tab-strip + sibling cross-links | ~8 items |
+| SC-9 | `<CommandSearch>` (`components/shared/command-search.tsx`) | command search (Ctrl+Q / Alt+Q) | every ribbon |
+| SC-10 | `<EntityDiagram>` (`components/shared/entity-diagram.tsx`) | **entity/schema relationship-diagram** (biggest recurring gap) | ~8 data items |
+
+**CAP-R2 (capture round 2, prerequisite task):** live Fabric walks of the seven un-captured surfaces
+(Real-Time Dashboard, Report editor, Semantic model view, KQL Queryset, Copy job, Map, task flows) —
+required before the *final grading* of their Loom counterparts. Owner: orchestrator/browser → extend
+`fabric-ux-observations.md` PART 3.
+
+### UX-Wave interleave with feature Waves 11–20
+
+U0 slots immediately, in parallel with feature Wave 11. Each subsequent UX wave pairs with a feature wave so
+one build session covers a feature + a same-subsystem UX sweep (builders share context). Each per-surface
+item is gated on the **no-scaffold receipt** (real-backend screenshot **and** a physical click-walk with
+`LOOM_DEFAULT_FABRIC_WORKSPACE` unset — DOM strings ≠ parity) + a `docs/fiab/parity/<slug>.md` note.
+
+| UX-Wave | Theme | Items | Pairs with feature wave |
+|---------|-------|-------|-------------------------|
+| **U0** | Shared foundation (SC-1…10) + CAP-R2 | 11 | 11 (parallel — prereq) |
+| **U1** | Data-integration navigators (C→B/A) | 9 | 14 (Data Eng / Data Factory depth) |
+| **U2** | Streaming, messaging & RTI thin surfaces (C→B/A) | 6 | 13 (streaming/media services) |
+| **U3** | Databases & migration tail (C→B/A) | 4 | 10 (Databricks/SQL/Lakebase) |
+| **U4** | AI / Foundry / Copilot tail (C→B/A) | 9 | 5 (multi-agent) / 3 (RAG) |
+| **U5** | Apps, Palantir & compute tail (C→B/A) | 10 | 6 (App Runtime) / 16 (dev platform) |
+| **U6** | Governance pages (C→B/A) | 9 | 8 (ALM & governance) |
+| **U7** | Catalog, marketplace & data-product tail (C→B/A) | 10 | 19/20 (data product) |
+| **U8** | Admin: identity, security & platform (C→B/A) | 10 | 15 (admin/FinOps) |
+| **U9** | Admin: data-governance, labeling & ops (C→B/A) | 12 | 15 (admin/FinOps) |
+| **U10** | Hubs, launchers & shell pages (C→B/A) | 14 | 12 (collaboration/IA) |
+| **U11** | B-sweep: canvases, RTI & modeling editors | 18 | 7 (RTI depth) / 9 (data science) |
+| **U12** | B-sweep: SQL / data / ML / Foundry / Palantir / apps | 27 | 10/13/16 |
+| **U13** | B-sweep: catalog / marketplace / monitor / admin / hub pages | 27 | 15/17/18 |
+
+**Operator action:** **none new.** Every shared component and surface upgrade reuses already-provisioned
+Azure backends (Cosmos, AOAI, Synapse/TDS, ADX/Kusto, ADLS, Purview, Azure Monitor, Maps). EntityDiagram /
+PreviewTable / DetailsPanel read existing data-plane schema/policy endpoints — no new resource, role, or
+spend.
+
+### Program total impact
+
+With this program folded in, the master plan grows to **34 waves** (20 feature + 14 UX) and **~314 scheduled
+items** (~133 feature + 181 UX), the UX waves running interleaved so every feature surface ships **at or above
+the Fabric baseline** per the standing operator directive.
