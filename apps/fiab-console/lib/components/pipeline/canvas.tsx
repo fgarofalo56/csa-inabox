@@ -40,7 +40,12 @@ import { LoomBezierEdge, type LoomEdgeData } from './loom-bezier-edge';
 import { elkLayout, topoFallback, shouldVirtualize, type XY } from './flow-layout';
 import { CONNECTOR_COLORS, type ConnectorCondition } from './connector';
 import { isContainerType } from './drill-path';
-import { getActivityVisual, accentTint } from '@/lib/components/canvas/canvas-node-kit';
+import {
+  getActivityVisual, accentTint,
+  GhostNextStepNode, ghostAnchorPosition, ghostEdgeId, GHOST_NODE_ID,
+  type GhostNodeData, type AnchorNode,
+} from '@/lib/components/canvas/canvas-node-kit';
+import { DocumentArrowRight16Regular, Flowchart16Regular, Search16Regular } from '@fluentui/react-icons';
 import { cloneSelection, type ClonableEdge } from '@/lib/components/canvas/canvas-clipboard';
 import { alignPositions, distributePositions, type AlignMode, type DistributeAxis, type AlignNode } from '@/lib/components/canvas/canvas-align';
 import { CanvasPowerToolbar } from '@/lib/components/canvas/canvas-power-toolbar';
@@ -50,7 +55,7 @@ import type { PipelineActivity } from './types';
 
 const NODE_H = 84;
 
-const nodeTypes: NodeTypes = { activity: FlowActivityNode };
+const nodeTypes: NodeTypes = { activity: FlowActivityNode, ghost: GhostNextStepNode };
 const edgeTypes: EdgeTypes = { loom: LoomBezierEdge };
 
 /** Pan a viewport by (dx, dy) screen pixels, preserving zoom. */
@@ -274,7 +279,7 @@ const PipelineCanvasInner = forwardRef<CanvasHandle, PipelineCanvasProps>(functi
       nextPos.set(a.name, p);
     }
     positionsRef.current = nextPos;
-    setNodes(activities.map((a) => ({
+    const activityNodes: Node[] = activities.map((a) => ({
       id: a.name,
       type: 'activity',
       position: nextPos.get(a.name) || { x: 40, y: 40 },
@@ -290,13 +295,70 @@ const PipelineCanvasInner = forwardRef<CanvasHandle, PipelineCanvasProps>(functi
       selected: selectedName === a.name,
       sourcePosition: Position.Right,
       targetPosition: Position.Left,
-    })));
-  }, [activities, selectedName, setNodes, onDrillInto, showNestedPreviews]);
+    }));
+
+    // Ghost next-step node (v2) — trails the graph and inserts+places a new
+    // activity at the ghost position via the real palette-drop path. Hidden in
+    // readOnly mode and when the pipeline is empty (the guided empty state
+    // covers the empty canvas).
+    if (!readOnly && activityNodes.length > 0) {
+      const anchor = ghostAnchorPosition(
+        activityNodes.map((n) => ({ id: n.id, position: n.position, width: FLOW_NODE_W, height: NODE_H })) as AnchorNode[],
+        { gapX: 72, nodeWidth: FLOW_NODE_W },
+      );
+      if (anchor) {
+        const insert = (key: string) => onDropPaletteKey(key, anchor.x, anchor.y);
+        const ghostData: GhostNodeData = {
+          label: 'Add next activity',
+          hint: 'Copy · Data flow · Lookup — or drag from the palette',
+          withTarget: true,
+          options: [
+            { key: 'Copy', label: 'Copy data', icon: <DocumentArrowRight16Regular />, onSelect: () => insert('Copy') },
+            { key: 'ExecuteDataFlow', label: 'Mapping data flow', icon: <Flowchart16Regular />, onSelect: () => insert('ExecuteDataFlow') },
+            { key: 'Lookup', label: 'Lookup', icon: <Search16Regular />, onSelect: () => insert('Lookup') },
+          ],
+        };
+        activityNodes.push({
+          id: GHOST_NODE_ID, type: 'ghost', position: anchor,
+          data: ghostData as unknown as Record<string, unknown>,
+          selectable: false, draggable: false,
+        });
+      }
+    }
+    setNodes(activityNodes);
+  }, [activities, selectedName, setNodes, onDrillInto, showNestedPreviews, readOnly, onDropPaletteKey]);
 
   // Re-sync when the activity set / their deps change.
   useEffect(() => { syncNodes(); }, [syncNodes]);
 
-  const edges = useMemo(() => buildEdges(activities), [activities]);
+  const edges = useMemo(() => {
+    const base = buildEdges(activities);
+    // Dashed edge into the trailing ghost node (v2). The ghost trails the
+    // right-most activity, so anchor the edge on that same node.
+    if (!readOnly && activities.length > 0) {
+      const anchor = ghostAnchorPosition(
+        activities.map((a) => ({ id: a.name, position: positionsRef.current.get(a.name) || { x: 40, y: 40 }, width: FLOW_NODE_W, height: NODE_H })) as AnchorNode[],
+        { gapX: 72, nodeWidth: FLOW_NODE_W },
+      );
+      // Recover which activity is right-most (max right edge) to source the edge.
+      let trailing: string | null = null;
+      let bestRight = -Infinity;
+      for (const a of activities) {
+        const p = positionsRef.current.get(a.name) || { x: 40, y: 40 };
+        const right = p.x + FLOW_NODE_W;
+        if (right > bestRight) { bestRight = right; trailing = a.name; }
+      }
+      if (anchor && trailing) {
+        base.push({
+          id: ghostEdgeId(trailing), source: trailing, target: GHOST_NODE_ID,
+          sourceHandle: 'Succeeded', targetHandle: 'in', type: 'default',
+          style: { stroke: tokens.colorNeutralStroke1, strokeWidth: 1.5, strokeDasharray: '5 4', opacity: 0.7 },
+          selectable: false,
+        });
+      }
+    }
+    return base;
+  }, [activities, readOnly, nodes]);
 
   // onNodesChange (from useNodesState) already applies changes to node state;
   // we just additionally capture position changes so a later activities-driven
