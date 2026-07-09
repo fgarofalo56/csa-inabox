@@ -52,6 +52,7 @@
  */
 
 import type { AppBundle } from './types';
+import { backendUtilShimCell, loomSecret } from './notebook-backend';
 
 // ─── Eventstream: Cosmos change feed -> fan-out destinations ─────────────
 // Models the Azure-Functions fan-out from Step 3 declaratively. The source
@@ -375,6 +376,9 @@ const CFP_CELLS = [
 // ─── Notebook: Delta Lake sync (Step 4) ──────────────────────────────────
 
 const DELTA_CELLS = [
+  // Backend-util shim so the secret reads below work on Synapse Spark (default),
+  // Databricks, Fabric, or Azure ML — not just Databricks dbutils.
+  backendUtilShimCell(),
   {
     id: 'delta-md-intro',
     type: 'markdown' as const,
@@ -396,9 +400,10 @@ const DELTA_CELLS = [
     source:
       'from pyspark.sql.functions import *\n' +
       'from delta.tables import DeltaTable\n\n' +
-      '# Secrets resolved from the workspace secret scope, never hard-coded.\n' +
-      'cosmos_endpoint = dbutils.secrets.get("cfp", "cosmos-endpoint")\n' +
-      'cosmos_key      = dbutils.secrets.get("cfp", "cosmos-key")\n\n' +
+      '# Secrets via the backend-agnostic shim (Key Vault / secret scope), never\n' +
+      '# hard-coded — resolves on Synapse/Databricks/Fabric/AML.\n' +
+      `cosmos_endpoint = ${loomSecret('cfp', 'cosmos-endpoint')}\n` +
+      `cosmos_key      = ${loomSecret('cfp', 'cosmos-key')}\n\n` +
       'DELTA_PATH       = "Tables/orders"\n' +
       'CHECKPOINT       = "Files/checkpoints/cosmos_sync"',
   },

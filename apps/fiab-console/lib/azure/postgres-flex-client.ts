@@ -94,6 +94,14 @@ export interface PostgresFlexServer {
   storageGb?: number;
   sku?: { name?: string; tier?: string };
   resourceGroup?: string;
+  /** HA mode: 'Disabled' | 'ZoneRedundant' | 'SameZone'. */
+  highAvailability?: string;
+  /** ISO timestamp — the earliest point a PITR branch can restore to. */
+  earliestRestoreDate?: string;
+  /** For a PITR-branch / replica: the source flexible-server resource id. */
+  sourceServerResourceId?: string;
+  /** 'Primary' | 'AsyncReplica' | 'None' — read-replica role. */
+  replicationRole?: string;
 }
 
 function rgOf(id: string): string | undefined {
@@ -113,6 +121,10 @@ function mapServer(s: any): PostgresFlexServer {
     storageGb: s.properties?.storage?.storageSizeGB,
     sku: s.sku ? { name: s.sku.name, tier: s.sku.tier } : undefined,
     resourceGroup: rgOf(s.id),
+    highAvailability: s.properties?.highAvailability?.mode,
+    earliestRestoreDate: s.properties?.backup?.earliestRestoreDate,
+    sourceServerResourceId: s.properties?.sourceServerResourceId,
+    replicationRole: s.properties?.replicationRole,
   };
 }
 
@@ -357,6 +369,197 @@ export async function executePostgresQuery(fqdn: string, database: string, sql: 
   } finally {
     await client.end().catch(() => { /* already closed */ });
   }
+}
+
+// ============================================================
+// Provision wizard catalogs (dropdown sources — no-freeform-config)
+// ============================================================
+
+export interface PgSkuOption {
+  /** ARM sku name, e.g. Standard_B1ms. */
+  name: string;
+  /** Compute tier the sku belongs to. */
+  tier: 'Burstable' | 'GeneralPurpose' | 'MemoryOptimized';
+  label: string;
+  vCores: number;
+  memoryGb: number;
+}
+
+/** A curated, real subset of Flexible Server SKUs for the provision wizard.
+ *  Names are the exact ARM `sku.name` values (Microsoft.DBforPostgreSQL). */
+export const PG_SKU_CATALOG: readonly PgSkuOption[] = [
+  { name: 'Standard_B1ms', tier: 'Burstable', label: 'Burstable B1ms — 1 vCore / 2 GiB', vCores: 1, memoryGb: 2 },
+  { name: 'Standard_B2s', tier: 'Burstable', label: 'Burstable B2s — 2 vCores / 4 GiB', vCores: 2, memoryGb: 4 },
+  { name: 'Standard_D2ds_v5', tier: 'GeneralPurpose', label: 'General Purpose D2ds_v5 — 2 vCores / 8 GiB', vCores: 2, memoryGb: 8 },
+  { name: 'Standard_D4ds_v5', tier: 'GeneralPurpose', label: 'General Purpose D4ds_v5 — 4 vCores / 16 GiB', vCores: 4, memoryGb: 16 },
+  { name: 'Standard_E2ds_v5', tier: 'MemoryOptimized', label: 'Memory Optimized E2ds_v5 — 2 vCores / 16 GiB', vCores: 2, memoryGb: 16 },
+  { name: 'Standard_E4ds_v5', tier: 'MemoryOptimized', label: 'Memory Optimized E4ds_v5 — 4 vCores / 32 GiB', vCores: 4, memoryGb: 32 },
+] as const;
+
+/** Storage sizes (GiB) offered in the wizard — real Flexible Server increments. */
+export const PG_STORAGE_OPTIONS: readonly number[] = [32, 64, 128, 256, 512, 1024];
+
+/** Supported PostgreSQL major versions (Flexible Server GA versions). */
+export const PG_VERSION_OPTIONS: readonly string[] = ['16', '15', '14', '13'];
+
+export type PgHaMode = 'Disabled' | 'SameZone' | 'ZoneRedundant';
+
+export const PG_HA_OPTIONS: readonly { value: PgHaMode; label: string }[] = [
+  { value: 'Disabled', label: 'No high availability (single zone)' },
+  { value: 'SameZone', label: 'Same-zone HA (standby in the same zone)' },
+  { value: 'ZoneRedundant', label: 'Zone-redundant HA (standby in a different zone)' },
+];
+
+/** Look up a curated SKU by ARM name (used to validate the wizard selection). */
+export function findSku(name: string): PgSkuOption | undefined {
+  return PG_SKU_CATALOG.find((s) => s.name === name);
+}
+
+// ============================================================
+// Branch (git-style) = point-in-time-restore as a NEW flexible server
+// ============================================================
+
+export interface CreateBranchSpec {
+  /** Source server (name or full resource id). */
+  sourceServerNameOrId: string;
+  /** New (branch) server name. */
+  newServerName: string;
+  /** ISO-8601 UTC point-in-time to restore to. Must be >= earliestRestoreDate. */
+  pointInTimeUTC: string;
+  /** Resource group for the branch (defaults to the source's rg). */
+  resourceGroup?: string;
+  /** Location for the branch (defaults to the source's location). */
+  location?: string;
+  subscriptionId?: string;
+}
+
+/**
+ * Create a "branch" of a Lakebase Postgres server — a real Flexible Server PITR
+ * restore (createMode: PointInTimeRestore) into a NEW server, which is the
+ * Azure-native approximation of Lakebase's git-style branching. Long-running
+ * ARM PUT; returns the accept pointer / new server id.
+ */
+export async function createBranch(
+  spec: CreateBranchSpec,
+): Promise<{ ok: true; id: string; provisioningState?: string } | { ok: false; error: string; status: number }> {
+  const sub = spec.subscriptionId || process.env.LOOM_SUBSCRIPTION_ID;
+  if (!sub) return { ok: false, error: 'LOOM_SUBSCRIPTION_ID not set', status: 400 };
+  if (!spec.newServerName || !spec.pointInTimeUTC) {
+    return { ok: false, error: 'newServerName and pointInTimeUTC are required', status: 400 };
+  }
+  let source: PostgresFlexServer;
+  try {
+    source = await getServer(spec.sourceServerNameOrId);
+  } catch (e: any) {
+    return { ok: false, error: e?.message || 'source server not found', status: e?.status || 404 };
+  }
+  const rg = spec.resourceGroup || source.resourceGroup;
+  const location = spec.location || source.location;
+  if (!rg) return { ok: false, error: 'resourceGroup could not be resolved for the branch', status: 400 };
+  const path =
+    `/subscriptions/${sub}/resourceGroups/${encodeURIComponent(rg)}` +
+    `/providers/Microsoft.DBforPostgreSQL/flexibleServers/${encodeURIComponent(spec.newServerName)}?api-version=${PG_API_VERSION}`;
+  const body = {
+    location,
+    properties: {
+      createMode: 'PointInTimeRestore',
+      sourceServerResourceId: source.id,
+      pointInTimeUTC: spec.pointInTimeUTC,
+    },
+  };
+  try {
+    const res = await armRequest<any>(path, { method: 'PUT', body: JSON.stringify(body) });
+    return { ok: true, id: res?.id || path, provisioningState: res?.properties?.state };
+  } catch (e: any) {
+    return { ok: false, error: e?.message || String(e), status: e?.status || 502 };
+  }
+}
+
+// ============================================================
+// Read replicas (DR) — ARM list + create (createMode: Replica)
+// ============================================================
+
+export async function listReplicas(serverNameOrId: string): Promise<PostgresFlexServer[]> {
+  const scope = await resolveScope(serverNameOrId);
+  const res = await armRequest<{ value: any[] }>(`${scope}/replicas?api-version=${PG_API_VERSION}`);
+  return (res.value || []).map(mapServer);
+}
+
+export interface CreateReplicaSpec {
+  sourceServerNameOrId: string;
+  newServerName: string;
+  resourceGroup?: string;
+  location?: string;
+  subscriptionId?: string;
+}
+
+/**
+ * Create a read replica of a Lakebase Postgres server (createMode: Replica) —
+ * the DR / read-scale path. Long-running ARM PUT.
+ */
+export async function createReplica(
+  spec: CreateReplicaSpec,
+): Promise<{ ok: true; id: string; provisioningState?: string } | { ok: false; error: string; status: number }> {
+  const sub = spec.subscriptionId || process.env.LOOM_SUBSCRIPTION_ID;
+  if (!sub) return { ok: false, error: 'LOOM_SUBSCRIPTION_ID not set', status: 400 };
+  if (!spec.newServerName) return { ok: false, error: 'newServerName is required', status: 400 };
+  let source: PostgresFlexServer;
+  try {
+    source = await getServer(spec.sourceServerNameOrId);
+  } catch (e: any) {
+    return { ok: false, error: e?.message || 'source server not found', status: e?.status || 404 };
+  }
+  const rg = spec.resourceGroup || source.resourceGroup;
+  const location = spec.location || source.location;
+  if (!rg) return { ok: false, error: 'resourceGroup could not be resolved for the replica', status: 400 };
+  const path =
+    `/subscriptions/${sub}/resourceGroups/${encodeURIComponent(rg)}` +
+    `/providers/Microsoft.DBforPostgreSQL/flexibleServers/${encodeURIComponent(spec.newServerName)}?api-version=${PG_API_VERSION}`;
+  const body = {
+    location,
+    properties: { createMode: 'Replica', sourceServerResourceId: source.id },
+  };
+  try {
+    const res = await armRequest<any>(path, { method: 'PUT', body: JSON.stringify(body) });
+    return { ok: true, id: res?.id || path, provisioningState: res?.properties?.state };
+  } catch (e: any) {
+    return { ok: false, error: e?.message || String(e), status: e?.status || 502 };
+  }
+}
+
+// ============================================================
+// pgvector — server-parameter allowlist (azure.extensions) via ARM
+// ============================================================
+
+/** Read the `azure.extensions` server configuration value (comma list, or ''). */
+export async function getExtensionsAllowlist(serverNameOrId: string): Promise<{ value: string; extensions: string[] }> {
+  const scope = await resolveScope(serverNameOrId);
+  const res = await armRequest<any>(`${scope}/configurations/azure.extensions?api-version=${PG_API_VERSION}`);
+  const value: string = res?.properties?.value || '';
+  const extensions = value.split(',').map((x) => x.trim()).filter(Boolean);
+  return { value, extensions };
+}
+
+/**
+ * Add an extension to the `azure.extensions` server-parameter allowlist via ARM
+ * (real PUT on .../configurations/azure.extensions). This is the control-plane
+ * half of enabling pgvector — the CREATE EXTENSION statement (data-plane) is run
+ * separately over the pg wire protocol. Idempotent: no-ops when already present.
+ */
+export async function allowlistExtension(serverNameOrId: string, extensionToken: string): Promise<{ value: string; extensions: string[] }> {
+  const scope = await resolveScope(serverNameOrId);
+  const current = await getExtensionsAllowlist(serverNameOrId);
+  const token = extensionToken.trim().toUpperCase();
+  const set = new Set(current.extensions.map((x) => x.toUpperCase()));
+  if (set.has(token)) return current;
+  set.add(token);
+  const nextValue = Array.from(set).join(',');
+  const res = await armRequest<any>(
+    `${scope}/configurations/azure.extensions?api-version=${PG_API_VERSION}`,
+    { method: 'PUT', body: JSON.stringify({ properties: { value: nextValue, source: 'user-override' } }) },
+  );
+  const value: string = res?.properties?.value || nextValue;
+  return { value, extensions: value.split(',').map((x) => x.trim()).filter(Boolean) };
 }
 
 export interface PgBatchStatement {

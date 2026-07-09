@@ -29,6 +29,10 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 const ITEM_TYPE = 'adf-pipeline';
+// An interactively-created pipeline tile aliases to 'data-pipeline' at persist
+// time (catalog aliasOf), while bundle-installed items may carry 'adf-pipeline'.
+// Accept BOTH so every persisted form of an ADF pipeline resolves.
+const ACCEPTED_TYPES = [ITEM_TYPE, 'data-pipeline'];
 const NAME_RE = /^[A-Za-z0-9_-]{1,140}$/;
 
 export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
@@ -42,7 +46,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
   // env-default factory (unchanged).
   const override = factoryOverrideFromSearchParams(req.nextUrl.searchParams);
   try {
-    const item = await loadPipelineItem(id, ITEM_TYPE, session.claims.oid);
+    const item = await loadPipelineItem(id, ACCEPTED_TYPES, session.claims.oid);
     if (!item) throw new ItemNotFoundError(ITEM_TYPE, id);
     const bound = typeof item.state?.pipelineName === 'string' ? (item.state.pipelineName as string) : null;
     // Best-effort: list real pipelines for the picker. If the factory env vars
@@ -102,7 +106,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
         upsertPipeline(pipelineName, { name: pipelineName, properties: { activities: [] } }),
       );
     }
-    const item = await persistBinding(id, ITEM_TYPE, session.claims.oid, {
+    const item = await persistBinding(id, ACCEPTED_TYPES, session.claims.oid, {
       pipelineName,
       factory: override?.factoryName ?? '',
       factorySubscriptionId: override?.subscriptionId ?? '',

@@ -192,6 +192,9 @@ interface SchemaResponse {
   columns?: string[];
   views?: string[];
   functions?: string[];
+  /** DBX-7: DLT-backed objects, classified from information_schema.table_type. */
+  streamingTables?: string[];
+  materializedViews?: string[];
   message?: string;
   error?: string;
 }

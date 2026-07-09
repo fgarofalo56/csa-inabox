@@ -19,6 +19,7 @@ import * as tools from '../copilot/pipeline-tools';
 import type { PipelineBackend } from '../copilot/pipeline-tools';
 import * as adf from './adf-client';
 import * as synapseDev from './synapse-dev-client';
+import { FACTORY_OBJECT_KINDS } from './adf-resource-ops';
 import type { PipelineSpec } from '../components/pipeline/types';
 
 export const PIPELINE_COPILOT_SYSTEM_PROMPT = `You are CSA Loom Pipeline Copilot — the AI assistant embedded in the CSA Loom data-pipeline canvas editor. You generate, run, summarize, and debug Azure-native data pipelines (Azure Data Factory / Synapse Integrate). CSA Loom is its OWN product and runs entirely on Azure — never say "Microsoft Fabric"; you may name ADF / Synapse as the real backend.
@@ -36,6 +37,10 @@ Other intents:
   - "what's the status of <runId>"  → call pipeline_get_run_status.
   - "what does this pipeline do?"    → call pipeline_summarize.
   - "why did <runId> fail?" / "explain the error" → call pipeline_explain_error.
+  - "delete the <name> pipeline"     → call pipeline_delete_pipeline.
+  - "remove the <name> dataset/linked service/trigger/integration runtime" → call pipeline_remove_factory_object with the objectType + name.
+
+DESTRUCTIVE OPS (delete/remove) are IRREVERSIBLE. Always call the delete tool with confirm:false FIRST (the default) — it will NOT delete; it returns a confirmation prompt. Relay that to the user, and ONLY after they explicitly say yes, call the SAME tool again with confirm:true to actually delete. Never pass confirm:true on the first call for a given object.
 
 Use tools immediately — never say "I would" or "I will". Keep your final summary short; the user already sees the step trace.`;
 
@@ -179,6 +184,68 @@ export function buildPipelineRegistry(
       additionalProperties: false,
     },
     handler: async (args) => tools.handlePipelineExplainError({ runId: args.runId, backend, pipelineName }),
+  });
+
+  r.register({
+    name: 'pipeline_delete_pipeline',
+    service: 'Pipeline',
+    description:
+      `Permanently delete a NAMED pipeline in this ${backendLabel} (not necessarily the bound one). DESTRUCTIVE and ` +
+      'irreversible. Call with confirm:false (default) FIRST — that returns a confirmation prompt WITHOUT deleting; ' +
+      'only after the user explicitly confirms, call again with confirm:true to actually delete.',
+    parameters: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Name of the pipeline to delete.' },
+        confirm: {
+          type: 'boolean',
+          description: 'Set true ONLY after the user has explicitly confirmed. Omit/false to get the confirmation prompt.',
+        },
+      },
+      required: ['name'],
+      additionalProperties: false,
+    },
+    handler: async (args) =>
+      tools.handlePipelineDeletePipeline({
+        name: args.name,
+        backend,
+        confirm: args.confirm === true,
+        boundPipeline: pipelineName,
+      }),
+  });
+
+  r.register({
+    name: 'pipeline_remove_factory_object',
+    service: 'Pipeline',
+    description:
+      `Permanently remove a factory object from this ${backendLabel} by type + name — datasets, linked services ` +
+      '(connections), triggers, integration runtimes, data flows, CDC, or managed private endpoints. DESTRUCTIVE and ' +
+      'irreversible. Call with confirm:false (default) FIRST to get the confirmation prompt; only call confirm:true ' +
+      'after the user explicitly confirms.',
+    parameters: {
+      type: 'object',
+      properties: {
+        objectType: {
+          type: 'string',
+          description: 'The kind of factory object to remove.',
+          enum: [...FACTORY_OBJECT_KINDS],
+        },
+        name: { type: 'string', description: 'Name of the object to remove.' },
+        confirm: {
+          type: 'boolean',
+          description: 'Set true ONLY after the user has explicitly confirmed. Omit/false to get the confirmation prompt.',
+        },
+      },
+      required: ['objectType', 'name'],
+      additionalProperties: false,
+    },
+    handler: async (args) =>
+      tools.handlePipelineRemoveFactoryObject({
+        objectType: args.objectType,
+        name: args.name,
+        backend,
+        confirm: args.confirm === true,
+      }),
   });
 
   return r;

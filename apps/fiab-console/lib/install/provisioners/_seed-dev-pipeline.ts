@@ -87,6 +87,102 @@ export function collectPipelineRefs(content: any): PipelineRefs {
   return { linkedServices, datasets };
 }
 
+/**
+ * Databricks-family activity types. Synapse Studio / ADF REJECT any of these
+ * with a schema-validation 400 unless the activity carries a
+ * `linkedServiceName` reference to an AzureDatabricks linked service — a
+ * `notebookPath` / `pythonFile` alone is NOT sufficient. Several content
+ * bundles (RTA "Daily Batch Processing Pipeline", ml-pipeline "MLOps
+ * Orchestration Pipeline") emit these activities with only the type-properties
+ * and no linkedServiceName, which turned a legitimate honest-gate condition
+ * ("no Databricks bound on this estate") into a hard install `status:'failed'`.
+ * We normalize those activities to carry a canonical reference so the graph is
+ * either satisfiable (Databricks wired → auto-stub the LS) or cleanly gated
+ * (no Databricks → precise remediation) — never a bare PUT 400.
+ */
+const DATABRICKS_ACTIVITY_TYPES = new Set([
+  'DatabricksNotebook',
+  'DatabricksSparkJar',
+  'DatabricksSparkPython',
+  'DatabricksJar',
+  'DatabricksPython',
+]);
+
+/** Canonical name for the auto-injected / auto-stubbed Databricks linked
+ * service when a Databricks activity omits its own. */
+export const CANONICAL_DATABRICKS_LS = 'AzureDatabricks_LinkedService';
+
+/** Resolve the opt-in Databricks workspace domain (https URL, no trailing
+ * slash) from env, or null when Databricks isn't wired on this estate.
+ * Databricks is an Azure-native compute — this is NOT a Fabric dependency. */
+function databricksDomain(): string | null {
+  const raw = process.env.LOOM_DATABRICKS_HOSTNAME || process.env.LOOM_DATABRICKS_WORKSPACE_URL;
+  if (!raw) return null;
+  const host = raw.replace(/^https?:\/\//i, '').replace(/\/+$/, '');
+  return host ? `https://${host}` : null;
+}
+
+/** Minimal, schema-valid AzureDatabricks linked service for the stub. Uses MSI
+ * auth (the Console UAMI) + a job-cluster spec so the pipeline document
+ * validates on PUT. Best-effort: if the estate rejects it, the caller falls
+ * through to an honest remediation gate rather than a hard failure. */
+function buildDatabricksLinkedService(domain: string): Record<string, unknown> {
+  const workspaceResourceId = process.env.LOOM_DATABRICKS_WORKSPACE_RESOURCE_ID;
+  return {
+    type: 'AzureDatabricks',
+    typeProperties: {
+      domain,
+      authentication: 'MSI',
+      ...(workspaceResourceId ? { workspaceResourceId } : {}),
+      newClusterNodeType: 'Standard_DS3_v2',
+      newClusterVersion: '13.3.x-scala2.12',
+      newClusterNumOfWorker: '1',
+    },
+    annotations: ['loom-autoprovisioned'],
+  };
+}
+
+/**
+ * Deep-clone the bundle content and ensure every Databricks-family activity
+ * carries a `config.linkedServiceName` (ADF/Synapse require it). We NEVER
+ * mutate the shared bundle object — installs run concurrently and the content
+ * is registry-owned. Returns the normalized clone plus the set of Databricks
+ * linked-service names now referenced (usually just CANONICAL_DATABRICKS_LS,
+ * unless a bundle already named its own). Descends into nested activity
+ * containers (Until / ForEach / If under `config.activities`).
+ */
+export function normalizePipelineContent(rawContent: any): { content: any; databricksLs: Set<string> } {
+  const databricksLs = new Set<string>();
+  // structuredClone is available in the Node runtime + vitest env; fall back to
+  // JSON round-trip for exotic shapes (content is plain JSON anyway).
+  let content: any;
+  try {
+    content = typeof structuredClone === 'function' ? structuredClone(rawContent) : JSON.parse(JSON.stringify(rawContent));
+  } catch {
+    content = JSON.parse(JSON.stringify(rawContent ?? {}));
+  }
+  const preferredLs = process.env.LOOM_DATABRICKS_LINKED_SERVICE || CANONICAL_DATABRICKS_LS;
+  const visit = (list: any): void => {
+    if (!Array.isArray(list)) return;
+    for (const a of list) {
+      if (!a || typeof a !== 'object') continue;
+      if (typeof a.type === 'string' && DATABRICKS_ACTIVITY_TYPES.has(a.type)) {
+        const cfg = a.config && typeof a.config === 'object' ? a.config : (a.config = {});
+        const ref = cfg.linkedServiceName;
+        if (!ref || typeof ref !== 'object' || typeof ref.referenceName !== 'string') {
+          cfg.linkedServiceName = { referenceName: preferredLs, type: 'LinkedServiceReference' };
+        }
+        databricksLs.add(cfg.linkedServiceName.referenceName);
+      }
+      // Descend into control-flow activity containers.
+      if (a.config && Array.isArray(a.config.activities)) visit(a.config.activities);
+      if (Array.isArray(a.activities)) visit(a.activities);
+    }
+  };
+  visit(Array.isArray(content?.activities) ? content.activities : []);
+  return { content, databricksLs };
+}
+
 /** Best-effort ADLS Gen2 endpoint for the stub linked service — derived from
  * the DLZ container env vars. A placeholder still commits (Synapse validates
  * reference existence, not connectivity, at PUT time). */
@@ -111,13 +207,55 @@ function adlsStubUrl(): string {
 async function ensurePipelineReferences(
   adapter: DevPipelineAdapter,
   content: any,
+  databricksLs: Set<string>,
   steps: string[],
-): Promise<void> {
-  if (!adapter.upsertLinkedService || !adapter.upsertDataset) return;
+): Promise<{ unresolvedDatabricks: string[]; authGate?: { status: number; message: string } }> {
+  // No reference-upsert surface on this adapter: any Databricks activity is
+  // unresolvable here (caller gates). Non-Databricks refs are left to the PUT.
+  if (!adapter.upsertLinkedService || !adapter.upsertDataset) {
+    return { unresolvedDatabricks: [...databricksLs] };
+  }
   const refs = collectPipelineRefs(content);
-  if (refs.linkedServices.size === 0 && refs.datasets.size === 0) return;
+
+  // ── Databricks linked services need an AzureDatabricks-typed LS (NOT the
+  //    AzureBlobFS stub used for ADLS refs). Auto-stub from the opt-in
+  //    LOOM_DATABRICKS_HOSTNAME; if that's absent (or the operator points us at
+  //    an already-registered LS via LOOM_DATABRICKS_LINKED_SERVICE), we don't
+  //    fabricate one — the caller turns any residual into an honest gate.
+  const unresolvedDatabricks: string[] = [];
+  const preRegistered = process.env.LOOM_DATABRICKS_LINKED_SERVICE; // operator-supplied existing LS
+  const domain = databricksDomain();
+  for (const ls of databricksLs) {
+    if (preRegistered && ls === preRegistered) {
+      // Operator asserts this LS already exists in the workspace — trust it.
+      steps.push(`${adapter.label}: using operator-registered Databricks linked service '${ls}'.`);
+      continue;
+    }
+    if (!domain) { unresolvedDatabricks.push(ls); continue; }
+    try {
+      await adapter.upsertLinkedService(ls, buildDatabricksLinkedService(domain));
+      steps.push(`${adapter.label}: ensured Databricks linked service '${ls}' → ${domain}.`);
+    } catch (e: any) {
+      const msg = e?.message || String(e);
+      const status = statusFromError(msg);
+      // An auth failure authoring the LS is an RBAC gate, not a missing
+      // reference — surface it precisely so the operator grants the role.
+      if (status === 401 || status === 403) {
+        return { unresolvedDatabricks, authGate: { status, message: msg } };
+      }
+      steps.push(`${adapter.label}: could not auto-create Databricks linked service '${ls}': ${msg}`);
+      unresolvedDatabricks.push(ls);
+    }
+  }
+  // A Databricks activity that can't bind its LS on this estate → the pipeline
+  // PUT would 400. Short-circuit to an honest gate; skip the rest of the stubs.
+  if (unresolvedDatabricks.length > 0) return { unresolvedDatabricks };
+
+  // ── ADLS / dataset stubs (unchanged) for every NON-Databricks reference. ──
+  const nonDbxLinkedServices = [...refs.linkedServices].filter((n) => !databricksLs.has(n));
+  if (nonDbxLinkedServices.length === 0 && refs.datasets.size === 0) return { unresolvedDatabricks: [] };
   const url = adlsStubUrl();
-  const lsList = [...refs.linkedServices];
+  const lsList = nonDbxLinkedServices;
   for (const ls of lsList) {
     try {
       await adapter.upsertLinkedService(ls, {
@@ -157,6 +295,7 @@ async function ensurePipelineReferences(
     }
   }
   steps.push(`${adapter.label}: ensured ${lsList.length} linked service(s) + ${refs.datasets.size} dataset(s) the pipeline references.`);
+  return { unresolvedDatabricks: [] };
 }
 
 export interface DevPipelineSeedResult {
@@ -256,12 +395,17 @@ export function buildDevPipelineProperties(content: any): DevPipelineProperties 
 export async function upsertAndRunDevPipeline(
   adapter: DevPipelineAdapter,
   pipelineName: string,
-  content: any,
+  rawContent: any,
   opts: { maxPolls?: number; pollMs?: number } = {},
 ): Promise<DevPipelineSeedResult> {
   const steps: string[] = [];
   const maxPolls = opts.maxPolls ?? 2;
   const pollMs = opts.pollMs ?? 3000;
+
+  // Normalize: deep-clone + ensure every Databricks-family activity carries a
+  // linkedServiceName (ADF/Synapse require it; several bundles omit it, which
+  // otherwise 400s the PUT as a hard failure). Never mutates the shared bundle.
+  const { content, databricksLs } = normalizePipelineContent(rawContent);
   const props = buildDevPipelineProperties(content);
   const runParams = buildDevRunParameters(content?.parameters);
 
@@ -269,7 +413,37 @@ export async function upsertAndRunDevPipeline(
   //    its document validates on commit (Synapse/ADF reject a pipeline that
   //    references a non-existent dataset/linked service: "invalid reference
   //    '<name>'"). Best-effort; residual unresolved refs become an honest gate.
-  await ensurePipelineReferences(adapter, content, steps);
+  const refResult = await ensurePipelineReferences(adapter, content, databricksLs, steps);
+
+  // Authoring the Databricks linked service was refused (401/403) — the UAMI
+  // lacks the workspace RBAC. Surface the auth gate (the provisioner maps it to
+  // a precise "grant the role" remediation), NOT a hard failure.
+  if (refResult.authGate) {
+    return { upserted: false, triggered: false, steps, authGate: refResult.authGate };
+  }
+  const { unresolvedDatabricks } = refResult;
+
+  // A Databricks-orchestrating pipeline on an estate with no Databricks bound
+  // (LOOM_DATABRICKS_HOSTNAME unset) can't have its notebook/Spark activities
+  // satisfied — surface a precise, honest remediation gate BEFORE the failing
+  // PUT rather than letting Synapse/ADF reject the document with an opaque 400
+  // that reads as a hard product failure. Databricks is Azure-native compute,
+  // so this is an Azure infra gate, NOT a Fabric dependency.
+  if (unresolvedDatabricks.length > 0) {
+    const names = unresolvedDatabricks.join(', ');
+    return {
+      upserted: false,
+      triggered: false,
+      steps,
+      needsReference: {
+        message:
+          `Pipeline '${pipelineName}' orchestrates Databricks notebook/Spark activities that require an ` +
+          `AzureDatabricks linked service (${names}), but no Databricks workspace is bound on this estate. ` +
+          `Set LOOM_DATABRICKS_HOSTNAME (workspace hostname, no scheme) — optionally LOOM_DATABRICKS_WORKSPACE_RESOURCE_ID ` +
+          `for MSI auth, or LOOM_DATABRICKS_LINKED_SERVICE to reuse an already-registered linked service — then re-run install.`,
+      },
+    };
+  }
 
   // 1) Upsert the pipeline (create or update by name).
   try {

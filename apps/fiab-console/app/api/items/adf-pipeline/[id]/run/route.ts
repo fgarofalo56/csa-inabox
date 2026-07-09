@@ -16,6 +16,10 @@ import { resolveBinding, bindingErrorResponse, bindingFactoryOverride } from '@/
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+// Accept the aliased persist form ('data-pipeline') alongside the native type —
+// see pipeline-binding.ts loadPipelineItem for why.
+const ACCEPTED_TYPES = ['adf-pipeline', 'data-pipeline'];
+
 export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
@@ -23,7 +27,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   const body = await req.json().catch(() => ({}));
   let binding: Awaited<ReturnType<typeof resolveBinding>>;
   try {
-    binding = await resolveBinding(id, 'adf-pipeline', session.claims.oid);
+    binding = await resolveBinding(id, ACCEPTED_TYPES, session.claims.oid);
   } catch (e) {
     const { status, body: errBody } = bindingErrorResponse(e);
     return NextResponse.json(errBody, { status });

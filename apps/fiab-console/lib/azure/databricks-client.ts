@@ -2363,9 +2363,34 @@ export interface DltPipelineCreateSpec {
   libraries: DltPipelineLibrary[];
   continuous?: boolean;
   development?: boolean;
+  photon?: boolean;          // Photon vectorized engine (default on)
+  serverless?: boolean;      // serverless compute (Azure-first default)
+  channel?: 'CURRENT' | 'PREVIEW';
   catalog?: string;          // UC target catalog (publishes tables to UC)
   target?: string;           // target schema
   configuration?: Record<string, string>;
+}
+
+/** One row from GET /api/2.0/pipelines/{id}/events (the pipeline event log). */
+export interface DltPipelineEvent {
+  id?: string;
+  timestamp?: string;
+  /** INFO | WARN | ERROR | METRICS. */
+  level?: string;
+  event_type?: string;
+  message?: string;
+  /** Structured detail — e.g. flow_progress.data_quality for expectations. */
+  details?: Record<string, unknown>;
+  origin?: Record<string, unknown>;
+}
+
+/** One row from GET /api/2.0/pipelines/{id}/updates (run/update history). */
+export interface DltPipelineUpdate {
+  update_id: string;
+  state?: string;            // QUEUED | INITIALIZING | RUNNING | COMPLETED | FAILED | CANCELED …
+  creation_time?: number;
+  cause?: string;
+  full_refresh?: boolean;
 }
 
 /** GET /api/2.0/pipelines — list DLT pipelines (paginated next_page_token). */
@@ -2396,11 +2421,72 @@ export async function createDltPipeline(spec: DltPipelineCreateSpec): Promise<{ 
     continuous: spec.continuous ?? false,
     development: spec.development ?? true,
   };
+  if (spec.photon !== undefined) body.photon = spec.photon;
+  if (spec.serverless !== undefined) body.serverless = spec.serverless;
+  if (spec.channel) body.channel = spec.channel;
   if (spec.catalog) body.catalog = spec.catalog;
   if (spec.target) body.target = spec.target;
   if (spec.configuration && Object.keys(spec.configuration).length) body.configuration = spec.configuration;
   const res = await dbxFetch('/api/2.0/pipelines', { method: 'POST', body: JSON.stringify(body) });
   return asJsonOrThrow<{ pipeline_id: string }>(res, 'createDltPipeline');
+}
+
+/**
+ * GET /api/2.0/pipelines/{id}/events — the pipeline event log (info/warn/error
+ * rows incl. expectation `flow_progress.data_quality` metrics). Ordered newest
+ * first by the API; `max_results` caps the page (Databricks max 250).
+ */
+export async function getDltPipelineEvents(
+  pipelineId: string,
+  maxResults = 100,
+): Promise<DltPipelineEvent[]> {
+  const capped = Math.min(Math.max(1, maxResults), 250);
+  const res = await dbxFetch(
+    `/api/2.0/pipelines/${encodeURIComponent(pipelineId)}/events?max_results=${capped}&order=timestamp%20desc`,
+  );
+  const body = await asJsonOrThrow<{ events?: DltPipelineEvent[] }>(res, 'getDltPipelineEvents');
+  return body.events || [];
+}
+
+/**
+ * GET /api/2.0/pipelines/{id}/updates — the pipeline's run/update history
+ * (each Start produces one update). Newest first.
+ */
+export async function getDltPipelineUpdates(
+  pipelineId: string,
+  maxResults = 25,
+): Promise<DltPipelineUpdate[]> {
+  const capped = Math.min(Math.max(1, maxResults), 100);
+  const res = await dbxFetch(
+    `/api/2.0/pipelines/${encodeURIComponent(pipelineId)}/updates?max_results=${capped}`,
+  );
+  const body = await asJsonOrThrow<{ updates?: DltPipelineUpdate[] }>(res, 'getDltPipelineUpdates');
+  return body.updates || [];
+}
+
+/**
+ * Import the compiled DLT SQL as a workspace notebook and create + return a new
+ * pipeline referencing it as its single library. This is the full Azure-first
+ * DLT authoring flow used by the pipeline editor's Save: compile the canvas →
+ * SQL → import → create pipeline. `libraryPath` should be a workspace path the
+ * Console MI can write (e.g. `/Shared/loom-dlt/<name>`).
+ */
+export async function createDltPipelineFromSql(
+  spec: Omit<DltPipelineCreateSpec, 'libraries'>,
+  libraryPath: string,
+  sql: string,
+): Promise<{ pipeline_id: string; libraryPath: string }> {
+  // Ensure the parent folder exists, then import the SQL as a notebook.
+  const parent = libraryPath.replace(/\/[^/]*$/, '');
+  if (parent) {
+    await dbxFetch('/api/2.0/workspace/mkdirs', {
+      method: 'POST',
+      body: JSON.stringify({ path: parent }),
+    }).then((r) => asJsonOrThrow<unknown>(r, 'mkdirs')).catch(() => { /* folder may already exist */ });
+  }
+  await importNotebook(libraryPath, 'SQL', sql, true);
+  const created = await createDltPipeline({ ...spec, libraries: [{ notebook: { path: libraryPath } }] });
+  return { pipeline_id: created.pipeline_id, libraryPath };
 }
 
 /** POST /api/2.0/pipelines/{id}/updates — trigger a pipeline update (optionally full refresh). */

@@ -31,7 +31,8 @@
  */
 
 import {
-  Badge, Caption1, Spinner, makeStyles, mergeClasses, tokens,
+  Badge, Button, Caption1, Menu, MenuTrigger, MenuPopover, MenuList, MenuItem,
+  Slider, Spinner, Text, Tooltip, makeStyles, mergeClasses, tokens,
 } from '@fluentui/react-components';
 import {
   // Category section glyphs
@@ -56,9 +57,23 @@ import {
   ArrowJoin20Regular, DocumentBulletList20Regular, TextQuote20Regular,
   ArrowSortDown20Regular, TableEdit20Regular,
 } from '@fluentui/react-icons';
+import {
+  // v2 node-action-bar + ghost + right-rail glyphs
+  Delete16Regular, Code16Regular, Copy16Regular, Open16Regular,
+  Add24Regular, ChevronDown16Regular, ZoomIn20Regular, ZoomOut20Regular,
+  FullScreenMaximize20Regular, Organization20Regular,
+  ChevronDoubleRight20Regular, ChevronDoubleLeft20Regular,
+} from '@fluentui/react-icons';
 import type { JSX } from 'react';
-import { BaseEdge, getBezierPath, type EdgeProps } from '@xyflow/react';
+import { BaseEdge, getBezierPath, Handle, Position, type EdgeProps, type NodeProps } from '@xyflow/react';
+import { memo } from 'react';
 import { transformByType, type TransformDef, type TransformCategory } from '@/lib/pipeline/dataflow-transform-catalog';
+import {
+  PORT_COLOR_KEY, isConditionalPort, resolvePortShape, portGeometry, ghostAnchorPosition,
+  ghostEdgeId, GHOST_NODE_ID,
+  type PortKind, type PortShape, type PortColorKey,
+  type AnchorNode, type GhostAnchorOpts,
+} from './canvas-anatomy';
 
 // =============================================================================
 // A. Visual-mapping types + exports
@@ -297,19 +312,57 @@ export function accentGradient(accent: string): string {
 }
 
 /**
- * Handle style for a typed port. `cond` is the port kind:
- *   - 'in'  → target handle, brand-stroke border
- *   - 'out' or a ConnectorCondition string → source handle, accent border
- * Geometry is the fixed 11px circle React Flow needs, identical to every
- * existing canvas, so wiring + hit-testing are unchanged.
+ * Semantic port-colour KEY (from canvas-anatomy) → a theme-aware Loom token.
+ * The kit owns the key→token mapping so anatomy stays colour-string-free.
  */
-export function portStyle(cond: string, accent: string): React.CSSProperties {
-  const border = cond === 'in' ? tokens.colorBrandStroke1 : accent;
+export const PORT_COLOR_TOKEN: Record<PortColorKey, string> = {
+  green: tokens.colorPaletteGreenForeground1,
+  red: tokens.colorPaletteRedForeground1,
+  neutral: tokens.colorNeutralForeground3,
+  brand: tokens.colorBrandForeground1,
+  stroke: tokens.colorBrandStroke1,
+};
+
+export interface PortStyleOpts {
+  /** Force a shape; defaults to square for typed conditions, circle otherwise. */
+  shape?: PortShape;
+  /**
+   * When a known `PortKind` ('in'|'out'|'success'|'fail'|'skip'|'complete') is
+   * passed as `cond`, the border colour is derived from the typed palette and
+   * `accent` is ignored. Any other `cond` string keeps the legacy behaviour
+   * (accent border, circle) so every existing call site is byte-for-byte
+   * unchanged.
+   */
+  filled?: boolean;
+}
+
+/**
+ * Handle style for a port. Back-compat: `portStyle('in', accent)` and
+ * `portStyle('out', accent)` behave exactly as before (11px circle, brand /
+ * accent border). NEW (v2): pass a typed condition ('success'|'fail'|'skip'|
+ * 'complete') to get Fabric-style small COLORED SQUARES whose colour comes from
+ * the typed palette, and/or pass `opts.shape` to force circle↔square. Geometry
+ * stays raw px because React Flow hit-tests the handle DOM box.
+ */
+export function portStyle(cond: string, accent: string, opts: PortStyleOpts = {}): React.CSSProperties {
+  const typed = isConditionalPort(cond as PortKind);
+  // Only the four typed conditions route through the palette + square default.
+  // 'in' → brand-stroke, 'out'/legacy strings → accent circle (byte-for-byte
+  // back-compat with every pre-v2 call site).
+  const border = cond === 'in'
+    ? tokens.colorBrandStroke1
+    : typed
+      ? PORT_COLOR_TOKEN[PORT_COLOR_KEY[cond as PortKind]]
+      : accent;
+  const shape = typed
+    ? resolvePortShape(cond as PortKind, opts.shape)
+    : (opts.shape ?? 'circle');
+  const geo = portGeometry(shape);
   return {
-    width: 11,
-    height: 11,
-    borderRadius: '50%',
-    background: tokens.colorNeutralBackground1,
+    width: geo.size,
+    height: geo.size,
+    borderRadius: geo.borderRadius,
+    background: opts.filled ? border : tokens.colorNeutralBackground1,
     border: `2px solid ${border}`,
     zIndex: 3,
   };
@@ -378,13 +431,36 @@ const useStyles = makeStyles({
       boxShadow: tokens.shadow16,
       transform: 'translateY(-1px)',
     },
+    // Inline node action bar reveals on node hover (Fabric shows it on
+    // hover/select). Selected nodes keep it pinned — see `.selected` below.
+    '& .loom-node-actionbar': {
+      opacity: 0,
+      pointerEvents: 'none',
+      transitionProperty: 'opacity',
+      transitionDuration: tokens.durationFast,
+      transitionTimingFunction: tokens.curveEasyEase,
+    },
+    '&:hover .loom-node-actionbar': {
+      opacity: 1,
+      pointerEvents: 'auto',
+    },
+    '&:focus-within .loom-node-actionbar': {
+      opacity: 1,
+      pointerEvents: 'auto',
+    },
     '@media (prefers-reduced-motion: reduce)': {
       transitionDuration: '0.01ms',
       ':hover': { transform: 'none' },
+      '& .loom-node-actionbar': { transitionDuration: '0.01ms' },
     },
   },
   selected: {
     border: `1px solid ${tokens.colorBrandStroke1}`,
+    // Pin the action bar visible while selected.
+    '& .loom-node-actionbar': {
+      opacity: 1,
+      pointerEvents: 'auto',
+    },
   },
   error: {
     border: `1px solid ${tokens.colorPaletteRedBorder2}`,
@@ -484,6 +560,112 @@ const useStyles = makeStyles({
     borderRadius: tokens.borderRadiusCircular,
     flexShrink: 0,
   },
+  // ── v2: inline node action bar (delete / view-JSON / clone / open) ─────────
+  actionBar: {
+    position: 'absolute',
+    top: tokens.spacingVerticalXS,
+    right: tokens.spacingHorizontalXS,
+    zIndex: 4,
+    display: 'flex',
+    alignItems: 'center',
+    gap: '1px',
+    padding: '1px',
+    borderRadius: tokens.borderRadiusMedium,
+    background: tokens.colorNeutralBackground1,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    boxShadow: tokens.shadow8,
+  },
+  actionDanger: {
+    color: tokens.colorPaletteRedForeground1,
+  },
+  // ── v2: inline live-status detail row ('Loading data…') ───────────────────
+  statusDetail: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXS,
+    paddingLeft: tokens.spacingHorizontalM,
+    paddingRight: tokens.spacingHorizontalS,
+    paddingBottom: tokens.spacingVerticalXS,
+    color: tokens.colorBrandForeground1,
+    fontSize: tokens.fontSizeBase200,
+  },
+  // ── v2: ghost next-step placeholder node ──────────────────────────────────
+  ghost: {
+    position: 'relative',
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: tokens.spacingVerticalXS,
+    paddingTop: tokens.spacingVerticalL,
+    paddingBottom: tokens.spacingVerticalL,
+    paddingLeft: tokens.spacingHorizontalM,
+    paddingRight: tokens.spacingHorizontalM,
+    borderRadius: tokens.borderRadiusLarge,
+    border: `1.5px dashed ${tokens.colorNeutralStroke1}`,
+    background: tokens.colorNeutralBackground1,
+    color: tokens.colorNeutralForeground3,
+    cursor: 'pointer',
+    transitionProperty: 'border-color, background, color',
+    transitionDuration: tokens.durationFast,
+    transitionTimingFunction: tokens.curveEasyEase,
+    ':hover': {
+      border: `1.5px dashed ${tokens.colorBrandStroke1}`,
+      color: tokens.colorBrandForeground1,
+      background: accentTint('var(--loom-accent-blue)', 6),
+    },
+    '@media (prefers-reduced-motion: reduce)': {
+      transitionDuration: '0.01ms',
+    },
+  },
+  ghostIcon: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '32px',
+    height: '32px',
+    borderRadius: tokens.borderRadiusCircular,
+    border: `1.5px dashed currentColor`,
+  },
+  ghostLabel: {
+    fontWeight: tokens.fontWeightSemibold,
+    color: 'inherit',
+    textAlign: 'center',
+  },
+  ghostHint: {
+    color: tokens.colorNeutralForeground4,
+    textAlign: 'center',
+  },
+  // ── v2: standardized canvas right rail ────────────────────────────────────
+  rail2: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    gap: tokens.spacingVerticalXXS,
+    padding: tokens.spacingVerticalXS,
+    borderRadius: tokens.borderRadiusLarge,
+    background: tokens.colorNeutralBackground1,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    boxShadow: tokens.shadow8,
+  },
+  railZoomText: {
+    fontSize: tokens.fontSizeBase200,
+    color: tokens.colorNeutralForeground3,
+    fontVariantNumeric: 'tabular-nums',
+    minWidth: '34px',
+    textAlign: 'center',
+  },
+  railSlider: {
+    // Vertical Fluent slider inside the rail.
+    height: '96px',
+  },
+  railDivider: {
+    width: '60%',
+    height: '1px',
+    background: tokens.colorNeutralStroke2,
+    marginTop: tokens.spacingVerticalXXS,
+    marginBottom: tokens.spacingVerticalXXS,
+  },
 });
 
 /** Per-status colour (tokens only) + visible label for the StatusChip. */
@@ -539,6 +721,22 @@ export const StatusChip: React.FC<{ status: CanvasNodeStatus; idleLabel: string;
   );
 };
 
+/**
+ * A single inline node action (Fabric shows delete / view-code </> / clone /
+ * open on hover/select). The kit owns layout/visibility/hover; each host wires
+ * its own callbacks. Use `standardNodeActions()` for the common 4-action set.
+ */
+export interface NodeAction {
+  key: string;
+  icon: JSX.Element;
+  /** aria-label + tooltip text. */
+  label: string;
+  onClick: (e: React.MouseEvent) => void;
+  /** Tint the button red (e.g. delete). */
+  danger?: boolean;
+  disabled?: boolean;
+}
+
 export interface CanvasNodeProps {
   width: number;                       // 200 pipeline, 210 data-flow
   title: string;
@@ -549,6 +747,18 @@ export interface CanvasNodeProps {
   typeLabel: string;
   error?: boolean;
   description?: string;
+  /**
+   * Inline live-status detail shown as a row under the header (e.g.
+   * 'Loading data…' with a spinner) — surfaced only when present. Pairs with
+   * status='running' to bring Fabric's in-node "Loading data…" affordance.
+   */
+  statusDetail?: string;
+  /**
+   * Inline node action bar (delete / view-JSON / clone / open). Rendered
+   * top-right, revealed on node hover / focus and pinned while selected. Empty
+   * / undefined → no bar (every pre-v2 call site renders identically).
+   */
+  actionBar?: NodeAction[];
   /** Extra meta badges (Preview / Save-only / Activities(n)) rendered in the body. */
   badges?: React.ReactNode;
   /** Header trailing slot (e.g. the container pencil/drill button). */
@@ -572,7 +782,8 @@ export interface CanvasNodeProps {
  */
 export const CanvasNode: React.FC<CanvasNodeProps> = ({
   width, title, visual, selected, status = 'idle', typeLabel, error,
-  description, badges, headerAction, children, framed, branchChips, rootProps,
+  description, statusDetail, actionBar, badges, headerAction, children,
+  framed, branchChips, rootProps,
 }) => {
   const styles = useStyles();
   const { accent } = visual;
@@ -603,6 +814,32 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
     >
       {/* Accent rail anchoring the category colour. */}
       <span className={styles.rail} style={{ background: accent }} aria-hidden="true" />
+
+      {/* Inline node action bar — revealed on hover/focus, pinned on select.
+          `nodrag`/`nopan` keep clicks off the React Flow drag+pan handlers. */}
+      {actionBar && actionBar.length > 0 && (
+        <div
+          className={mergeClasses(styles.actionBar, 'loom-node-actionbar', 'nodrag', 'nopan')}
+          role="toolbar"
+          aria-label={`${title} actions`}
+          data-node-actionbar={title}
+        >
+          {actionBar.map((a) => (
+            <Tooltip key={a.key} content={a.label} relationship="label">
+              <Button
+                size="small"
+                appearance="subtle"
+                icon={a.icon}
+                aria-label={a.label}
+                disabled={a.disabled}
+                data-node-action={a.key}
+                className={a.danger ? styles.actionDanger : undefined}
+                onClick={(e) => { e.stopPropagation(); a.onClick(e); }}
+              />
+            </Tooltip>
+          ))}
+        </div>
+      )}
 
       {/* Header strip with category gradient. */}
       <div className={styles.header} style={{ background: accentGradient(accent), marginLeft: '6px' }}>
@@ -637,6 +874,14 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
         </div>
       )}
 
+      {/* Inline live-status detail row (Fabric's in-node 'Loading data…'). */}
+      {statusDetail && (
+        <div className={styles.statusDetail} style={{ marginLeft: '6px' }} aria-live="polite">
+          {status === 'running' && <Spinner size="extra-tiny" />}
+          <span>{statusDetail}</span>
+        </div>
+      )}
+
       {/* Body — description + meta badges (only rendered when present). */}
       {(description || badges) && (
         <div className={styles.body} style={{ marginLeft: '6px' }}>
@@ -650,3 +895,233 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
     </div>
   );
 };
+
+// =============================================================================
+// D. v2 shared primitives — node action set, ghost next-step node, right rail.
+// =============================================================================
+
+/**
+ * The common Fabric node action set: delete / view-JSON (</>) / clone / open.
+ * Pass only the callbacks a host supports — omitted ones drop out of the bar,
+ * so every host gets a consistent icon + order without re-importing glyphs.
+ */
+export function standardNodeActions(opts: {
+  onViewJson?: (e: React.MouseEvent) => void;
+  onClone?: (e: React.MouseEvent) => void;
+  onOpen?: (e: React.MouseEvent) => void;
+  onDelete?: (e: React.MouseEvent) => void;
+  labels?: Partial<Record<'viewJson' | 'clone' | 'open' | 'delete', string>>;
+}): NodeAction[] {
+  const l = opts.labels ?? {};
+  const actions: NodeAction[] = [];
+  if (opts.onOpen) actions.push({ key: 'open', icon: <Open16Regular />, label: l.open ?? 'Open', onClick: opts.onOpen });
+  if (opts.onViewJson) actions.push({ key: 'view-json', icon: <Code16Regular />, label: l.viewJson ?? 'View JSON', onClick: opts.onViewJson });
+  if (opts.onClone) actions.push({ key: 'clone', icon: <Copy16Regular />, label: l.clone ?? 'Clone', onClick: opts.onClone });
+  if (opts.onDelete) actions.push({ key: 'delete', icon: <Delete16Regular />, label: l.delete ?? 'Delete', onClick: opts.onDelete, danger: true });
+  return actions;
+}
+
+// ── Ghost next-step node ─────────────────────────────────────────────────────
+
+export interface GhostNextStepOption {
+  key: string;
+  label: string;
+  icon?: JSX.Element;
+  onSelect: () => void;
+}
+
+/**
+ * Data carried on a ghost React Flow node (`type: 'ghost'`). Hosts compute the
+ * position with `ghostAnchorPosition(...)` and register `GhostNextStepNode` in
+ * their `nodeTypes`. A single-action ghost uses `onClick`; a menu ghost uses
+ * `options`.
+ */
+export interface GhostNodeData {
+  /** Primary prompt, e.g. 'Add a destination'. */
+  label: string;
+  /** Secondary line, e.g. 'Transform events or route to a sink'. */
+  hint?: string;
+  icon?: JSX.Element;
+  /** Single click-to-insert action (no dropdown). */
+  onClick?: () => void;
+  /** Multiple next-step choices → renders a menu. */
+  options?: GhostNextStepOption[];
+  /** Accent CSS var (defaults to move/blue). */
+  accent?: string;
+  /** Render a left target handle so an edge can connect into the ghost. */
+  withTarget?: boolean;
+  [k: string]: unknown;
+}
+
+const GHOST_WIDTH = 190;
+
+/** Presentational ghost card (no React Flow dependency — unit/story friendly). */
+export const GhostNextStepCard: React.FC<{ data: GhostNodeData; width?: number }> = ({ data, width = GHOST_WIDTH }) => {
+  const styles = useStyles();
+  const accent = data.accent ?? CATEGORY_ACCENT.move;
+  const icon = data.icon ?? <Add24Regular />;
+
+  const inner = (
+    <>
+      <span className={styles.ghostIcon} style={{ color: accent }} aria-hidden="true">{icon}</span>
+      <Caption1 className={styles.ghostLabel}>{data.label}</Caption1>
+      {data.hint && <Caption1 className={styles.ghostHint}>{data.hint}</Caption1>}
+    </>
+  );
+
+  if (data.options && data.options.length > 0) {
+    return (
+      <Menu positioning="below">
+        <MenuTrigger disableButtonEnhancement>
+          <div
+            className={mergeClasses(styles.ghost, 'nodrag', 'nopan')}
+            style={{ width }}
+            role="button"
+            tabIndex={0}
+            aria-label={data.label}
+            aria-haspopup="menu"
+            data-ghost-node="menu"
+          >
+            {inner}
+            <Badge appearance="ghost" size="small" icon={<ChevronDown16Regular />} iconPosition="after">
+              Choose
+            </Badge>
+          </div>
+        </MenuTrigger>
+        <MenuPopover>
+          <MenuList>
+            {data.options.map((o) => (
+              <MenuItem key={o.key} icon={o.icon} onClick={o.onSelect} data-ghost-option={o.key}>
+                {o.label}
+              </MenuItem>
+            ))}
+          </MenuList>
+        </MenuPopover>
+      </Menu>
+    );
+  }
+
+  return (
+    <div
+      className={mergeClasses(styles.ghost, 'nodrag', 'nopan')}
+      style={{ width }}
+      role="button"
+      tabIndex={0}
+      aria-label={data.label}
+      data-ghost-node="single"
+      onClick={data.onClick}
+      onKeyDown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && data.onClick) { e.preventDefault(); data.onClick(); } }}
+    >
+      {inner}
+    </div>
+  );
+};
+
+/**
+ * React Flow custom node wrapping GhostNextStepCard. Register under
+ * `nodeTypes.ghost` and give the ghost node id `GHOST_NODE_ID`. The optional
+ * left target handle lets the trailing real node draw a dashed edge into it.
+ */
+function GhostNextStepNodeImpl({ data }: NodeProps) {
+  const d = data as GhostNodeData;
+  return (
+    <>
+      {d.withTarget && (
+        <Handle
+          id="in"
+          type="target"
+          position={Position.Left}
+          style={{ ...portStyle('in', tokens.colorNeutralStroke1), left: -6, opacity: 0.6 }}
+          isConnectable={false}
+        />
+      )}
+      <GhostNextStepCard data={d} />
+    </>
+  );
+}
+export const GhostNextStepNode = memo(GhostNextStepNodeImpl);
+
+// ── Standardized canvas right rail ───────────────────────────────────────────
+
+export interface CanvasRightRailProps {
+  /** Current zoom (React Flow viewport.zoom). Drives the slider + % readout. */
+  zoom: number;
+  minZoom?: number;
+  maxZoom?: number;
+  onZoomChange: (zoom: number) => void;
+  onZoomIn: () => void;
+  onZoomOut: () => void;
+  onFit: () => void;
+  /** Optional ELK/auto-layout action — button hidden when omitted. */
+  onAutoLayout?: () => void;
+  /** Collapsed rail shows only the expand toggle. */
+  collapsed?: boolean;
+  onToggleCollapse?: () => void;
+}
+
+/**
+ * The standardized canvas right rail: collapse toggle + zoom-in / vertical zoom
+ * slider / zoom % / zoom-out + fit + auto-layout. Presentational — the host
+ * wires callbacks to `useReactFlow()` and drops this into a
+ * `<Panel position="bottom-right">` (or "top-right"). One rail for every canvas
+ * so zoom/fit/auto-layout read + behave identically surface to surface.
+ */
+export function CanvasRightRail({
+  zoom, minZoom = 0.25, maxZoom = 2, onZoomChange, onZoomIn, onZoomOut,
+  onFit, onAutoLayout, collapsed, onToggleCollapse,
+}: CanvasRightRailProps) {
+  const styles = useStyles();
+  const pct = `${Math.round(zoom * 100)}%`;
+
+  if (collapsed) {
+    return (
+      <div className={styles.rail2} role="toolbar" aria-label="Canvas controls (collapsed)" data-canvas-rail="collapsed">
+        <Tooltip content="Show canvas controls" relationship="label">
+          <Button size="small" appearance="subtle" icon={<ChevronDoubleLeft20Regular />} aria-label="Expand canvas controls" onClick={onToggleCollapse} />
+        </Tooltip>
+      </div>
+    );
+  }
+
+  return (
+    <div className={styles.rail2} role="toolbar" aria-label="Canvas controls" data-canvas-rail="expanded">
+      {onToggleCollapse && (
+        <Tooltip content="Collapse controls" relationship="label">
+          <Button size="small" appearance="subtle" icon={<ChevronDoubleRight20Regular />} aria-label="Collapse canvas controls" onClick={onToggleCollapse} />
+        </Tooltip>
+      )}
+      <Tooltip content="Zoom in" relationship="label">
+        <Button size="small" appearance="subtle" icon={<ZoomIn20Regular />} aria-label="Zoom in" onClick={onZoomIn} />
+      </Tooltip>
+      <Slider
+        className={styles.railSlider}
+        vertical
+        min={Math.round(minZoom * 100)}
+        max={Math.round(maxZoom * 100)}
+        value={Math.round(zoom * 100)}
+        onChange={(_, d) => onZoomChange(d.value / 100)}
+        aria-label="Zoom level"
+      />
+      <Text className={styles.railZoomText} aria-hidden="true">{pct}</Text>
+      <Tooltip content="Zoom out" relationship="label">
+        <Button size="small" appearance="subtle" icon={<ZoomOut20Regular />} aria-label="Zoom out" onClick={onZoomOut} />
+      </Tooltip>
+      <span className={styles.railDivider} aria-hidden="true" />
+      <Tooltip content="Zoom to fit" relationship="label">
+        <Button size="small" appearance="subtle" icon={<FullScreenMaximize20Regular />} aria-label="Zoom to fit" onClick={onFit} />
+      </Tooltip>
+      {onAutoLayout && (
+        <Tooltip content="Auto-layout" relationship="label">
+          <Button size="small" appearance="subtle" icon={<Organization20Regular />} aria-label="Auto-layout" onClick={onAutoLayout} />
+        </Tooltip>
+      )}
+    </div>
+  );
+}
+
+// ── Re-export the pure anatomy helpers so hosts import everything from the kit ─
+export {
+  ghostAnchorPosition, ghostEdgeId, GHOST_NODE_ID,
+  resolvePortShape, portGeometry, isConditionalPort, PORT_COLOR_KEY,
+};
+export type { PortKind, PortShape, PortColorKey, AnchorNode, GhostAnchorOpts };
