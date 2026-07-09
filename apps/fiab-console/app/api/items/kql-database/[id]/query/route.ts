@@ -8,6 +8,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { enforceRateLimit } from '@/lib/azure/rate-limiter';
+import { enforceAdmissionControl } from '@/lib/azure/capacity-guardrails';
+import { recordCostAttribution } from '@/lib/azure/cost-attribution';
+import { tenantScopeId } from '@/lib/auth/session';
 import {
   executeQuery, executeMgmtCommand, loadKustoItem, resolveDatabase, KustoError,
 } from '@/lib/azure/kusto-client';
@@ -49,9 +52,27 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
 
     const database = (body?.db && String(body.db)) || resolveDatabase(item);
     const isMgmt = kql.startsWith('.');
+
+    // FGC-25 — capacity surge protection. A KQL query is an ADX compute job; when
+    // the cluster is over its rejection threshold, admit-control rejects it early
+    // (429) before it adds to the load. Read-only `.show`/mgmt is exempt (cheap
+    // control-plane), and a rejection carries the rule + admin override path.
+    if (!isMgmt) {
+      const surge = await enforceAdmissionControl(session, { engine: 'adx', workspaceId: item?.workspaceId });
+      if (surge) return surge;
+    }
+
     const result = isMgmt
       ? await executeMgmtCommand(database, kql)
       : await executeQuery(database, kql);
+    // BR-COSTATTR — tag each ADX query for the chargeback per-user drill-down.
+    if (!isMgmt) {
+      void recordCostAttribution({
+        tenantId: tenantScopeId(session), userOid: session.claims.oid, userName: session.claims.upn,
+        engine: 'adx', workspaceId: item?.workspaceId, itemId: item?.id, itemType: 'kql-database',
+        resourceId: database, domainId: (item as any)?.domainId,
+      });
+    }
     return NextResponse.json({
       ok: true,
       database,

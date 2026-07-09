@@ -220,6 +220,20 @@ let _agentMemory: Container | null = null;
 // createdBy/revoked. Created lazily (createIfNotExists) here AND ARM-provisioned
 // in cosmos.bicep's loomContainers — the lazy call is the hotfix fallback.
 let _loomPatTokens: Container | null = null;
+// FGC-25 — Capacity surge protection (admission control). One tenant-scoped doc
+// (id = tenantId, PK /tenantId) holding the surge-protection policy: master
+// switch, capacity-level rejection threshold %, per-engine overrides, and the
+// per-workspace LCU/hour cap. Single-partition point-read per tenant. Ships
+// default-ON (a cost-protection control, not an enablement gate). Created lazily
+// (createIfNotExists) here AND ARM-provisioned in cosmos.bicep's loomContainers.
+let _capacityGuardrails: Container | null = null;
+// BR-COSTATTR — per-execution cost attribution. Append-only, one row per job/
+// query submit (Spark / Databricks / ADX / AOAI), PK /tenantId so every
+// per-tenant chargeback drill-down (per-user / per-domain / per-workspace) hits a
+// single physical partition. TTL-enabled (default 90d) so the ledger self-evicts
+// and never grows unbounded. Feeds FGC-28's chargeback page + the FGC-25
+// per-workspace LCU/hour cap. Created lazily here AND ARM-provisioned in bicep.
+let _costAttribution: Container | null = null;
 let _ensured = false;
 
 /**
@@ -799,6 +813,18 @@ async function ensure() {
   // token id in the bearer header (the hot path); the management lists are the
   // infrequent surface and filter by tenantId/createdByOid across partitions.
   _loomPatTokens = await mk('loom-pat-tokens', '/id');
+  // FGC-25 — Capacity surge protection policy. One doc per tenant (id=tenantId),
+  // PK /tenantId → single-partition point-read per tenant.
+  _capacityGuardrails = await mk('capacity-guardrails', '/tenantId');
+  // BR-COSTATTR — per-execution cost attribution ledger. Append-only, PK
+  // /tenantId, TTL-enabled (each row carries its own `ttl`) so the ledger
+  // self-evicts. Distinct createIfNotExists (not `mk`) to set defaultTtl.
+  const { container: costAttr } = await database.containers.createIfNotExists({
+    id: 'cost-attribution',
+    partitionKey: { paths: ['/tenantId'] },
+    defaultTtl: -1, // TTL enabled; each row carries its own `ttl` (default 90d)
+  });
+  _costAttribution = costAttr;
   _ensured = true;
 }
 
@@ -872,6 +898,10 @@ export async function itemVersionsContainer(): Promise<Container> { await ensure
 export async function agentMemoryContainer(): Promise<Container> { await ensure(); return _agentMemory!; }
 /** Scoped API tokens (PAT, BR-PAT) — PK /id; stores a SHA-256 hash of the secret only. */
 export async function loomPatTokensContainer(): Promise<Container> { await ensure(); return _loomPatTokens!; }
+/** FGC-25 — Capacity surge-protection policy (one doc per tenant), PK /tenantId. */
+export async function capacityGuardrailsContainer(): Promise<Container> { await ensure(); return _capacityGuardrails!; }
+/** BR-COSTATTR — per-execution cost attribution ledger (append-only, TTL), PK /tenantId. */
+export async function costAttributionContainer(): Promise<Container> { await ensure(); return _costAttribution!; }
 
 // Foundation admin containers (shared cloud-endpoints resolver task).
 /** Admin Workspace Catalog — one row per Loom-managed workspace, PK /tenantId. */
@@ -1033,6 +1063,8 @@ const KNOWN_CONTAINER_IDS = [
   'webhook-subscriptions', 'webhook-deliveries',
   'data-product-analytics',
   'loom-pat-tokens',
+  'capacity-guardrails',
+  'cost-attribution',
 ];
 
 /** List all Loom containers with their current throughput shape.
