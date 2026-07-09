@@ -101,6 +101,12 @@ export interface ActivityNodeData {
   onDelete?: (name: string) => void;
   onViewJson?: (name: string) => void;
   onClone?: (name: string) => void;
+  /**
+   * "Explain this step" (W19) — opens the node-scoped Explain drawer for this
+   * activity (a real AOAI summary grounded on the activity JSON + its canvas /
+   * lineage neighbors). Wired by the canvas; absent → no Explain action.
+   */
+  onExplain?: (name: string) => void;
   [key: string]: unknown;
 }
 
@@ -113,6 +119,7 @@ function FlowActivityNodeImpl({ data, selected }: NodeProps) {
   const innerCount = isContainer ? totalInnerCount(activity) : 0;
 
   const actionBar = standardNodeActions({
+    onExplain: nodeData.onExplain ? () => nodeData.onExplain!(activity.name) : undefined,
     onViewJson: nodeData.onViewJson ? () => nodeData.onViewJson!(activity.name) : undefined,
     onClone: nodeData.onClone ? () => nodeData.onClone!(activity.name) : undefined,
     onDelete: nodeData.onDelete ? () => nodeData.onDelete!(activity.name) : undefined,

@@ -31,6 +31,18 @@ vi.mock('@/lib/azure/cloud-endpoints', async (importOriginal) => ({
   cogScope: () => 'https://cognitiveservices.azure.com/.default',
 }));
 
+// Loom Thread lineage neighbors (real Cosmos read in prod) — mocked so tests
+// are hermetic. `threadEdges` is mutated per-test to exercise the grounding;
+// `threadEdgesShouldThrow` proves the grounding is best-effort (non-fatal).
+let threadEdges: any[] = [];
+let threadEdgesShouldThrow = false;
+vi.mock('@/lib/thread/thread-edges', () => ({
+  listThreadEdges: async () => {
+    if (threadEdgesShouldThrow) throw new Error('cosmos down');
+    return threadEdges;
+  },
+}));
+
 vi.mock('@azure/identity', () => {
   class Cred {
     async getToken() {
@@ -60,6 +72,8 @@ const EXPLANATION = {
 
 beforeEach(() => {
   resolveShouldThrow = false;
+  threadEdges = [];
+  threadEdgesShouldThrow = false;
   getSessionMock.mockReturnValue({ claims: { oid: 'oid-1', upn: 'u@t.com', name: 'U' }, exp: Date.now() / 1000 + 3600 } as any);
   fetchMock.mockReset();
   fetchMock.mockResolvedValue({
@@ -163,6 +177,62 @@ describe('POST /api/items/[type]/[id]/explain', () => {
     const { POST } = await import('../route');
     const r = await POST(req({ definition: { properties: { activities: [{ name: 'A' }] } } }), ctx('data-pipeline', 'i1'));
     expect(r.status).toBe(502);
+  });
+
+  it('grounds the prompt with the item lineage neighbors from the Thread graph', async () => {
+    // Two edges touching item i1: one feeding IN (upstream), one flowing OUT.
+    threadEdges = [
+      { fromItemId: 'src1', fromType: 'lakehouse', fromName: 'Bronze Lake', toItemId: 'i1', toType: 'data-pipeline' },
+      { fromItemId: 'i1', fromType: 'data-pipeline', toItemId: 'dst1', toType: 'warehouse', toName: 'Sales WH' },
+    ];
+    const { POST } = await import('../route');
+    const r = await POST(req({ definition: { properties: { activities: [{ name: 'CopyOrders', type: 'Copy' }] } } }), ctx('data-pipeline', 'i1'));
+    expect(r.status).toBe(200);
+    const sentBody = JSON.parse((fetchMock.mock.calls[0][1] as any).body);
+    const userMsg = sentBody.messages.find((m: any) => m.role === 'user').content;
+    expect(userMsg).toContain('Lineage context');
+    expect(userMsg).toContain('Bronze Lake');   // upstream feeder
+    expect(userMsg).toContain('Sales WH');       // downstream consumer
+  });
+
+  it('omits the lineage block when there are no edges', async () => {
+    threadEdges = [];
+    const { POST } = await import('../route');
+    const r = await POST(req({ definition: { properties: { activities: [{ name: 'A', type: 'Copy' }] } } }), ctx('data-pipeline', 'i1'));
+    expect(r.status).toBe(200);
+    const sentBody = JSON.parse((fetchMock.mock.calls[0][1] as any).body);
+    const userMsg = sentBody.messages.find((m: any) => m.role === 'user').content;
+    expect(userMsg).not.toContain('Lineage context');
+  });
+
+  it('node scope → focuses on a single step with its canvas neighbors', async () => {
+    const { POST } = await import('../route');
+    const r = await POST(
+      req({
+        definition: { name: 'CopyOrders', type: 'Copy' },
+        scope: 'node',
+        focus: { name: 'CopyOrders', upstream: ['GetWatermark'], downstream: ['NotifyDone'] },
+      }),
+      ctx('data-pipeline', 'i1'),
+    );
+    expect(r.status).toBe(200);
+    const j = await r.json();
+    expect(j.scope).toBe('node');
+    const sentBody = JSON.parse((fetchMock.mock.calls[0][1] as any).body);
+    const sysMsg = sentBody.messages.find((m: any) => m.role === 'system').content;
+    const userMsg = sentBody.messages.find((m: any) => m.role === 'user').content;
+    expect(sysMsg).toContain('SINGLE step');
+    expect(userMsg).toContain('Canvas neighbors');
+    expect(userMsg).toContain('GetWatermark');   // upstream neighbor
+    expect(userMsg).toContain('NotifyDone');      // downstream neighbor
+  });
+
+  it('lineage read failure is non-fatal (best-effort grounding)', async () => {
+    // A thrown listThreadEdges must NOT fail the explanation.
+    threadEdgesShouldThrow = true;
+    const { POST } = await import('../route');
+    const r = await POST(req({ definition: { properties: { activities: [{ name: 'A', type: 'Copy' }] } } }), ctx('data-pipeline', 'i1'));
+    expect(r.status).toBe(200);
   });
 
   it('retries without temperature on a reasoning-model 400', async () => {

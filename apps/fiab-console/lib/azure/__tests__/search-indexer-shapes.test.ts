@@ -13,6 +13,7 @@ import { describe, it, expect } from 'vitest';
 import {
   buildFieldMapping, buildFieldMappings, parseFieldMapping, parseIndexerMappings,
   parseExecutionHistory, runDuration, functionHasParameters, emptyFieldMappingRow,
+  normalizeResyncOptions, RESYNC_OPTIONS,
   type FieldMappingRow,
 } from '../search-indexer-shapes';
 
@@ -111,5 +112,26 @@ describe('execution-history reader', () => {
     expect(runDuration({ startTime: '2026-07-01T00:00:00Z', endTime: '2026-07-01T00:00:05Z' })).toBe('5s');
     expect(runDuration({ startTime: '2026-07-01T00:00:00Z', endTime: '2026-07-01T00:01:30Z' })).toBe('1m 30s');
     expect(runDuration({ startTime: undefined })).toBe('—');
+  });
+});
+
+describe('resync options normalizer', () => {
+  it('defaults to permissions when empty or undefined', () => {
+    expect(normalizeResyncOptions(undefined)).toEqual(['permissions']);
+    expect(normalizeResyncOptions([])).toEqual(['permissions']);
+    expect(normalizeResyncOptions(['  '])).toEqual(['permissions']);
+  });
+
+  it('keeps only supported options and trims', () => {
+    expect(normalizeResyncOptions([' permissions '])).toEqual(['permissions']);
+    expect(normalizeResyncOptions(['permissions', 'notReal'])).toEqual(['permissions']);
+  });
+
+  it('de-duplicates repeated options', () => {
+    expect(normalizeResyncOptions(['permissions', 'permissions'])).toEqual(['permissions']);
+  });
+
+  it('drops all-invalid selections back to the default', () => {
+    expect(normalizeResyncOptions(['bogus', 'nope'])).toEqual([...RESYNC_OPTIONS]);
   });
 });

@@ -14,6 +14,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { loadOwnedItem } from '../../../_lib/item-crud';
+import { enrichSemanticModelSources } from '../../../semantic-model/_lib/prep-for-ai-store';
 import { chatGrounded, NoAoaiDeploymentError, type DataAgentConfig, type ChatTurn } from '@/lib/azure/data-agent-client';
 import { orchestrate, type SubAgentRuntime } from '@/lib/azure/agent-orchestrator';
 import { normalizeSubAgents } from '@/lib/copilot/connected-agents';
@@ -109,6 +110,11 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
 
   const itemState = (item.state || {}) as Record<string, unknown>;
   const cfg = stateToConfig(itemState);
+  // G5 consumption: fold each bound semantic-model's curated Verified Answers +
+  // AI instructions + exposed-schema (Prep for AI) into that source's grounding
+  // so the agent actually sees the trusted NL→DAX pairs. Owner-scoped; a no-op
+  // for non-semantic sources or a model that can't be loaded.
+  cfg.sources = await enrichSemanticModelSources(cfg.sources, session.claims.oid);
 
   try {
     // AIF-4: when this agent has connected sub-agents, delegate through the

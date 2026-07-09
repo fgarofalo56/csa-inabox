@@ -262,6 +262,33 @@ The operator's standard is unchanged: **Loom is Fabric-class AI on pure Azure + 
 
 **Priority P1 · Effort M.**
 
+**Build status — ✅ built.** The full indexer lifecycle is live against real AI
+Search REST (api-version `2024-07-01`, preview for reset-skills/resync):
+- **Client** (`lib/azure/search-index-client.ts`): `updateIndexerSchedule`
+  (schedule PUT preserving every other property), `getIndexerStatus`,
+  `runIndexer`, `resetIndexer`, `resetIndexerDocs`, `resetIndexerSkills`,
+  **`resyncIndexer`** (`POST /indexers/{n}/resync` `{options:['permissions']}`,
+  `SEARCH_RESYNC_API=2026-05-01-preview`), and `updateIndexerFieldMappings`.
+- **Pure shaping** (`lib/azure/search-indexer-shapes.ts`): field-mapping
+  builder/parser (`buildFieldMappings`/`parseIndexerMappings`, all 8 mapping
+  functions), execution-history normalizer (`parseExecutionHistory`,
+  per-run counts + errors/warnings), and **`normalizeResyncOptions`** — unit
+  tested (`search-indexer-shapes.test.ts`, 16 specs).
+- **Routes** (`app/api/ai-search/indexers` service-scoped +
+  `app/api/items/ai-search-index/[id]/indexers` item-scoped, session-gated via
+  `resolveSearchBinding`): actions `run`/`reset`/`resetDocs`/`resetSkills`/
+  **`resync`**/`setFieldMappings`/`status`/`get`/`setSchedule`, honest 503 gate
+  when `LOOM_AI_SEARCH_SERVICE` is unset.
+- **UI**: the schedule editor (`IndexerSchedulePanel` in `foundry-sub-editors.tsx`
+  — preset-interval Dropdown 5min–1day / custom / start-time / disable) and
+  `IndexerOpsPanel` (`lib/components/ai-search/indexer-ops.tsx` —
+  execution-history table with expandable per-run errors/warnings, typed
+  field-/output-field-mapping designer with mapping-function picker, and a
+  reset accordion covering reset-docs, reset-skills, **resync (typed options
+  checkboxes) + Run-now**). Wired into the AI Search navigator tree
+  (`ai-search-tree.tsx`) and both the service-navigator and item editors. No
+  new bicep. No Fabric dependency.
+
 ---
 
 ## AIF-11 — PTU + Batch deployment types

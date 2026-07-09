@@ -62,7 +62,7 @@ import {
   Delete16Regular, Code16Regular, Copy16Regular, Open16Regular,
   Add24Regular, ChevronDown16Regular, ZoomIn20Regular, ZoomOut20Regular,
   FullScreenMaximize20Regular, Organization20Regular,
-  ChevronDoubleRight20Regular, ChevronDoubleLeft20Regular,
+  ChevronDoubleRight20Regular, ChevronDoubleLeft20Regular, Lightbulb16Regular,
 } from '@fluentui/react-icons';
 import type { JSX } from 'react';
 import { BaseEdge, getBezierPath, Handle, Position, type EdgeProps, type NodeProps } from '@xyflow/react';
@@ -906,15 +906,19 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
  * so every host gets a consistent icon + order without re-importing glyphs.
  */
 export function standardNodeActions(opts: {
+  onExplain?: (e: React.MouseEvent) => void;
   onViewJson?: (e: React.MouseEvent) => void;
   onClone?: (e: React.MouseEvent) => void;
   onOpen?: (e: React.MouseEvent) => void;
   onDelete?: (e: React.MouseEvent) => void;
-  labels?: Partial<Record<'viewJson' | 'clone' | 'open' | 'delete', string>>;
+  labels?: Partial<Record<'viewJson' | 'clone' | 'open' | 'delete' | 'explain', string>>;
 }): NodeAction[] {
   const l = opts.labels ?? {};
   const actions: NodeAction[] = [];
   if (opts.onOpen) actions.push({ key: 'open', icon: <Open16Regular />, label: l.open ?? 'Open', onClick: opts.onOpen });
+  // "Explain this step" (W19) — a real AOAI summary of the single node grounded
+  // on its definition + its canvas/lineage neighbors.
+  if (opts.onExplain) actions.push({ key: 'explain', icon: <Lightbulb16Regular />, label: l.explain ?? 'Explain', onClick: opts.onExplain });
   if (opts.onViewJson) actions.push({ key: 'view-json', icon: <Code16Regular />, label: l.viewJson ?? 'View JSON', onClick: opts.onViewJson });
   if (opts.onClone) actions.push({ key: 'clone', icon: <Copy16Regular />, label: l.clone ?? 'Clone', onClick: opts.onClone });
   if (opts.onDelete) actions.push({ key: 'delete', icon: <Delete16Regular />, label: l.delete ?? 'Delete', onClick: opts.onDelete, danger: true });
