@@ -36,6 +36,7 @@ import {
   Table20Regular, Flowchart20Regular,
   Sparkle16Regular, Info16Regular, Wrench16Regular,
 } from '@fluentui/react-icons';
+import { EntityDiagram } from '@/lib/components/shared/entity-diagram';
 import { AdxDatabaseTree } from '@/lib/components/adx/adx-database-tree';
 import { AdxRbacPanel } from '@/lib/components/adx/adx-rbac-panel';
 import { AdxClusterEditor } from '@/lib/components/adx/adx-cluster-editor';
@@ -218,7 +219,7 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
   // Query | Diagram tab — the Diagram tab is the React Flow entity diagram of
   // the live ADX database (tables / MVs / functions / shortcuts + dependency
   // edges), Fabric RTI schema-graph parity built on the Azure-native cluster.
-  const [editorTab, setEditorTab] = useState<'query' | 'diagram'>('query');
+  const [editorTab, setEditorTab] = useState<'query' | 'diagram' | 'entity'>('query');
   const [graphData, setGraphData] = useState<{ nodes: SchemaGraphNode[]; edges: SchemaGraphEdge[] } | null>(null);
   const [graphLoading, setGraphLoading] = useState(false);
   const [graphError, setGraphError] = useState<string | null>(null);
@@ -1251,11 +1252,12 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
           )}
           <TabList
             selectedValue={editorTab}
-            onTabSelect={(_: unknown, d: any) => setEditorTab(d.value as 'query' | 'diagram')}
+            onTabSelect={(_: unknown, d: any) => setEditorTab(d.value as 'query' | 'diagram' | 'entity')}
             style={{ marginBottom: tokens.spacingVerticalXS}}
           >
             <Tab value="query" icon={<Play20Regular />}>Query</Tab>
             <Tab value="diagram" icon={<Flowchart20Regular />}>Diagram</Tab>
+            <Tab value="entity" icon={<Table20Regular />}>Entity diagram</Tab>
           </TabList>
 
           {editorTab === 'query' && (
@@ -1472,6 +1474,23 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
                       }}
                     />
                   )
+              : (
+                <MessageBar intent="info">
+                  <MessageBarBody>
+                    <MessageBarTitle>Save the KQL database first</MessageBarTitle>
+                    The entity diagram appears once this database is saved and bound to a Kusto database.
+                  </MessageBarBody>
+                </MessageBar>
+              )
+          )}
+
+          {/* SC-10 shared <EntityDiagram> — Overview ⇄ Entity-diagram toggle over the
+              REAL ADX `.show database schema as json` (via /api/adx/overview). Table
+              cards with type-badged column lists; ADX has no FKs so this is a
+              schema view. Azure-native; no Fabric/Power BI dependency. */}
+          {editorTab === 'entity' && (
+            id && id !== 'new'
+              ? <EntityDiagram source={{ kind: 'kql-database', itemId: id }} height={560} />
               : (
                 <MessageBar intent="info">
                   <MessageBarBody>
