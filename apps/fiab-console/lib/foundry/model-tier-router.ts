@@ -90,7 +90,7 @@ const REASONING_RE =
   /\b(?:why|design|architect(?:ure)?|debug|troubleshoot|root[\s-]?cause|optimi[sz]e|refactor|prove|derive|algorithm|strateg(?:y|ize)|trade[\s-]?off|compare|analy[sz]e|plan\b|reason|step[\s-]?by[\s-]?step|complex|migrate|diagnose)\b/i;
 
 /** Code/query signals — a fenced block or a heavy SQL/KQL/DAX keyword. */
-const CODE_RE = /```|\b(?:select\s+.*\bfrom\b|create\s+table|def\s+\w+|class\s+\w+|summarize\s+.*\bby\b|evaluate\s*\(|\| where\b|\| summarize\b)/i;
+const CODE_RE = /```|\b(?:select\s.*\bfrom\b|create\s+table|def\s+\w+|class\s+\w+|summarize\s.*\bby\b|evaluate\s*\(|\| where\b|\| summarize\b)/i;
 
 /** Lightweight signals: short lookups, greetings, yes/no, simple "what is". */
 const LIGHTWEIGHT_RE =

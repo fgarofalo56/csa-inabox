@@ -33,6 +33,20 @@ describe('classifyTaskClass', () => {
   it('empty prompt is general (never lightweight)', () => {
     expect(classifyTaskClass('')).toBe('general');
   });
+  // Regression: CODE_RE must not exhibit polynomial ReDoS (js/polynomial-redos).
+  // A `select`/`summarize` keyword followed by a long run of whitespace with no
+  // terminating `from`/`by` used to backtrack quadratically (\s+ adjacent to .*).
+  it('classifies pathological whitespace runs in bounded time (no ReDoS)', () => {
+    // Interior tabs (a trailing non-space defeats trim()) with no `from`/`by`
+    // terminator: CODE_RE.test() scans the whole run before the len>600
+    // short-circuit, so this drives the previously-quadratic backtracking.
+    const evil = `select${'\t'.repeat(100000)}x`;
+    const evil2 = `summarize${'\t'.repeat(100000)}x`;
+    const start = Date.now();
+    expect(classifyTaskClass(evil)).toBe('reasoning'); // via len>600, CODE_RE is false
+    expect(classifyTaskClass(evil2)).toBe('reasoning');
+    expect(Date.now() - start).toBeLessThan(1000);
+  });
 });
 
 describe('selectTier — default policy (no tiers wired) is a no-op', () => {
