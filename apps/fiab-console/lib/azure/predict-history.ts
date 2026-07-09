@@ -96,8 +96,14 @@ export function applyHistoryStatus(
   // `key` is null unless it is a safe, own property of `map` (matchHistoryKey
   // enforces both), so this write can never target a prototype-chain slot.
   if (!key || !isSafeHistoryKey(key)) return map;
-  const next: PredictHistoryMap = { ...map };
-  next[key] = { ...map[key], ...patch };
+  // Rebuild the map by iterating its OWN keys rather than writing to a computed
+  // property derived from the client-supplied runId. The write target `k` comes
+  // from Object.keys(map) (not remote input); `key` is only compared, never used
+  // as a write index — so no runId-tainted value can reach a property write.
+  const next: PredictHistoryMap = {};
+  for (const k of Object.keys(map)) {
+    next[k] = k === key ? { ...map[k], ...patch } : map[k];
+  }
   return next;
 }
 
