@@ -25,6 +25,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { withFactoryFromRequest } from '@/lib/azure/adf-factory-context';
 import {
   adfConfigGate, DEFAULT_MANAGED_VNET,
   listManagedVnets, ensureManagedVnet,
@@ -65,86 +66,92 @@ function approvalNextStep(resourceId: string, peName: string): { note: string; p
   };
 }
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  const g = gate(); if (g) return g;
-  try {
-    const mvnets = await listManagedVnets();
-    const managedVnetPresent = mvnets.some((v) => v.name === DEFAULT_MANAGED_VNET) || mvnets.length > 0;
-    const mvnetName = mvnets[0]?.name || DEFAULT_MANAGED_VNET;
-    // PEs live under a managed VNet — only list when one exists.
-    const managedPrivateEndpoints = managedVnetPresent
-      ? await listManagedPrivateEndpoints(mvnetName)
-      : [];
-    return NextResponse.json({ ok: true, managedVnetName: mvnetName, managedVnetPresent, managedPrivateEndpoints });
-  } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
-  }
+  return withFactoryFromRequest(req, async () => {
+    const g = gate(); if (g) return g;
+    try {
+      const mvnets = await listManagedVnets();
+      const managedVnetPresent = mvnets.some((v) => v.name === DEFAULT_MANAGED_VNET) || mvnets.length > 0;
+      const mvnetName = mvnets[0]?.name || DEFAULT_MANAGED_VNET;
+      // PEs live under a managed VNet — only list when one exists.
+      const managedPrivateEndpoints = managedVnetPresent
+        ? await listManagedPrivateEndpoints(mvnetName)
+        : [];
+      return NextResponse.json({ ok: true, managedVnetName: mvnetName, managedVnetPresent, managedPrivateEndpoints });
+    } catch (e: any) {
+      return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
+    }
+  });
 }
 
 export async function POST(req: NextRequest) {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  const g = gate(); if (g) return g;
   const body = await req.json().catch(() => ({}));
+  return withFactoryFromRequest(req, async () => {
+    const g = gate(); if (g) return g;
 
-  try {
-    // Create the managed VNet (prerequisite for any managed private endpoint).
-    if (body?.action === 'create-mvnet') {
-      const mvnet = await ensureManagedVnet(DEFAULT_MANAGED_VNET);
+    try {
+      // Create the managed VNet (prerequisite for any managed private endpoint).
+      if (body?.action === 'create-mvnet') {
+        const mvnet = await ensureManagedVnet(DEFAULT_MANAGED_VNET);
+        return NextResponse.json({
+          ok: true,
+          action: 'create-mvnet',
+          managedVnetName: mvnet.name,
+          message:
+            `Managed virtual network “${mvnet.name}” created on the factory. Managed private ` +
+            `endpoints can now be added to reach PE-locked sources privately. Note: the factory's ` +
+            `Managed IR must run inside this managed VNet for the endpoints to be used.`,
+        });
+      }
+
+      // Otherwise: create a managed private endpoint to a target resource.
+      const name: string = typeof body?.name === 'string' ? body.name.trim() : '';
+      const privateLinkResourceId: string = typeof body?.privateLinkResourceId === 'string' ? body.privateLinkResourceId.trim() : '';
+      const groupId: string = typeof body?.groupId === 'string' ? body.groupId.trim() : '';
+      const fqdns: string[] | undefined = Array.isArray(body?.fqdns)
+        ? body.fqdns.map((f: unknown) => String(f).trim()).filter(Boolean)
+        : undefined;
+
+      if (!name) return NextResponse.json({ ok: false, error: 'name is required' }, { status: 400 });
+      if (!PE_NAME_RE.test(name)) {
+        return NextResponse.json({ ok: false, error: "name must be 1-127 chars: letters, digits, _ or - (start/end alphanumeric or _)" }, { status: 400 });
+      }
+      if (!privateLinkResourceId || !privateLinkResourceId.startsWith('/subscriptions/')) {
+        return NextResponse.json({ ok: false, error: 'privateLinkResourceId must be the full ARM resource id of the target (/subscriptions/…)' }, { status: 400 });
+      }
+      if (!groupId) return NextResponse.json({ ok: false, error: 'groupId is required (e.g. dfs, blob, sqlServer, vault)' }, { status: 400 });
+
+      const pe = await upsertManagedPrivateEndpoint(name, { privateLinkResourceId, groupId, fqdns });
+      const next = approvalNextStep(privateLinkResourceId, pe.name || name);
       return NextResponse.json({
         ok: true,
-        action: 'create-mvnet',
-        managedVnetName: mvnet.name,
-        message:
-          `Managed virtual network “${mvnet.name}” created on the factory. Managed private ` +
-          `endpoints can now be added to reach PE-locked sources privately. Note: the factory's ` +
-          `Managed IR must run inside this managed VNet for the endpoints to be used.`,
+        action: 'create-pe',
+        managedPrivateEndpoint: pe,
+        nextStep: next,
+        message: next.note,
       });
+    } catch (e: any) {
+      return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
     }
-
-    // Otherwise: create a managed private endpoint to a target resource.
-    const name: string = typeof body?.name === 'string' ? body.name.trim() : '';
-    const privateLinkResourceId: string = typeof body?.privateLinkResourceId === 'string' ? body.privateLinkResourceId.trim() : '';
-    const groupId: string = typeof body?.groupId === 'string' ? body.groupId.trim() : '';
-    const fqdns: string[] | undefined = Array.isArray(body?.fqdns)
-      ? body.fqdns.map((f: unknown) => String(f).trim()).filter(Boolean)
-      : undefined;
-
-    if (!name) return NextResponse.json({ ok: false, error: 'name is required' }, { status: 400 });
-    if (!PE_NAME_RE.test(name)) {
-      return NextResponse.json({ ok: false, error: "name must be 1-127 chars: letters, digits, _ or - (start/end alphanumeric or _)" }, { status: 400 });
-    }
-    if (!privateLinkResourceId || !privateLinkResourceId.startsWith('/subscriptions/')) {
-      return NextResponse.json({ ok: false, error: 'privateLinkResourceId must be the full ARM resource id of the target (/subscriptions/…)' }, { status: 400 });
-    }
-    if (!groupId) return NextResponse.json({ ok: false, error: 'groupId is required (e.g. dfs, blob, sqlServer, vault)' }, { status: 400 });
-
-    const pe = await upsertManagedPrivateEndpoint(name, { privateLinkResourceId, groupId, fqdns });
-    const next = approvalNextStep(privateLinkResourceId, pe.name || name);
-    return NextResponse.json({
-      ok: true,
-      action: 'create-pe',
-      managedPrivateEndpoint: pe,
-      nextStep: next,
-      message: next.note,
-    });
-  } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
-  }
+  });
 }
 
 export async function DELETE(req: NextRequest) {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  const g = gate(); if (g) return g;
-  const name = req.nextUrl.searchParams.get('name')?.trim();
-  if (!name) return NextResponse.json({ ok: false, error: 'name query param is required' }, { status: 400 });
-  try {
-    await deleteManagedPrivateEndpoint(name);
-    return NextResponse.json({ ok: true });
-  } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
-  }
+  return withFactoryFromRequest(req, async () => {
+    const g = gate(); if (g) return g;
+    const name = req.nextUrl.searchParams.get('name')?.trim();
+    if (!name) return NextResponse.json({ ok: false, error: 'name query param is required' }, { status: 400 });
+    try {
+      await deleteManagedPrivateEndpoint(name);
+      return NextResponse.json({ ok: true });
+    } catch (e: any) {
+      return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
+    }
+  });
 }

@@ -12,7 +12,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { debugPipeline } from '@/lib/azure/adf-client';
-import { resolveBinding, bindingErrorResponse } from '@/lib/azure/pipeline-binding';
+import { withFactoryOverride } from '@/lib/azure/adf-factory-context';
+import { resolveBinding, bindingErrorResponse, bindingFactoryOverride } from '@/lib/azure/pipeline-binding';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -22,17 +23,21 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   const { id } = await ctx.params;
   const body = await req.json().catch(() => ({}));
-  let pipelineName: string;
+  let binding: Awaited<ReturnType<typeof resolveBinding>>;
   try {
-    ({ pipelineName } = await resolveBinding(id, 'adf-pipeline', session.claims.oid));
+    binding = await resolveBinding(id, 'adf-pipeline', session.claims.oid);
   } catch (e) {
     const { status, body: errBody } = bindingErrorResponse(e);
     return NextResponse.json(errBody, { status });
   }
-  try {
-    const res = await debugPipeline(pipelineName, body?.params || {});
-    return NextResponse.json({ ok: true, boundTo: pipelineName, ...res });
-  } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
-  }
+  const { pipelineName } = binding;
+  // Debug-run against the SAME factory the item was bound against.
+  return withFactoryOverride(bindingFactoryOverride(binding), async () => {
+    try {
+      const res = await debugPipeline(pipelineName, body?.params || {});
+      return NextResponse.json({ ok: true, boundTo: pipelineName, ...res });
+    } catch (e: any) {
+      return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
+    }
+  });
 }

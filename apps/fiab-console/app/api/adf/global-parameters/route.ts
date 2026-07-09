@@ -20,6 +20,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { withFactoryFromRequest } from '@/lib/azure/adf-factory-context';
 import {
   adfConfigGate, getGlobalParameters, updateGlobalParameters,
   type AdfGlobalParameterSpec, type AdfGlobalParameterType,
@@ -87,29 +88,33 @@ function validateParams(input: unknown): { params?: Record<string, AdfGlobalPara
   return { params: out };
 }
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  const g = gate(); if (g) return g;
-  try {
-    const parameters = await getGlobalParameters();
-    return NextResponse.json({ ok: true, parameters });
-  } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
-  }
+  return withFactoryFromRequest(req, async () => {
+    const g = gate(); if (g) return g;
+    try {
+      const parameters = await getGlobalParameters();
+      return NextResponse.json({ ok: true, parameters });
+    } catch (e: any) {
+      return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
+    }
+  });
 }
 
 export async function PUT(req: NextRequest) {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  const g = gate(); if (g) return g;
   const body = await req.json().catch(() => ({}));
-  const { params, error } = validateParams(body?.parameters);
-  if (error) return NextResponse.json({ ok: false, error }, { status: 400 });
-  try {
-    const parameters = await updateGlobalParameters(params!);
-    return NextResponse.json({ ok: true, parameters });
-  } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
-  }
+  return withFactoryFromRequest(req, async () => {
+    const g = gate(); if (g) return g;
+    const { params, error } = validateParams(body?.parameters);
+    if (error) return NextResponse.json({ ok: false, error }, { status: 400 });
+    try {
+      const parameters = await updateGlobalParameters(params!);
+      return NextResponse.json({ ok: true, parameters });
+    } catch (e: any) {
+      return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
+    }
+  });
 }

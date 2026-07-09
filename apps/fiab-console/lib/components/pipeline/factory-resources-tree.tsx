@@ -44,6 +44,7 @@ import {
   Search20Regular, Warning20Regular, ArrowRepeatAll20Regular,
   Globe20Regular, PlugConnected20Regular, Edit16Regular,
 } from '@fluentui/react-icons';
+import { appendFactoryCoords, type SelectedFactoryCoords } from './factory-coords';
 
 const useStyles = makeStyles({
   root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalS, padding: tokens.spacingHorizontalS, height: '100%', minWidth: '240px' },
@@ -86,15 +87,25 @@ export interface FactoryResourcesTreeProps {
   onOpenCdc?: (name: string) => void;
   /** Increment to force a refresh from the parent (e.g. after a bind/create). */
   refreshKey?: number;
+  /**
+   * The SELECTED Data Factory (from the editor's cross-sub picker). Its coords
+   * are appended to every `/api/adf/*` call so the tree lists/creates/deletes
+   * against the SAME factory the bind dropdown targets. Absent → the env-pinned
+   * deployment default (unchanged behaviour).
+   */
+  factory?: SelectedFactoryCoords | null;
 }
 
 /**
  * A typed, ADF-Studio-faithful Factory Resources navigator.
  */
 export function FactoryResourcesTree({
-  boundPipeline, onOpenPipeline, onOpenManage, onOpenCdc, refreshKey = 0,
+  boundPipeline, onOpenPipeline, onOpenManage, onOpenCdc, refreshKey = 0, factory = null,
 }: FactoryResourcesTreeProps) {
   const s = useStyles();
+  // Append the selected-factory coords to a factory-scoped route so every list/
+  // create/delete targets the SELECTED factory (or the env default when none).
+  const R = useCallback((route: string) => appendFactoryCoords(route, factory), [factory]);
 
   const [filter, setFilter] = useState('');
   const [gate, setGate] = useState<{ missing: string } | null>(null);
@@ -146,15 +157,15 @@ export function FactoryResourcesTree({
     setLoading(true); setError(null);
     try {
       const [pr, dr, fr, tr, lr, ir, cr, gpr, mper] = await Promise.all([
-        fetch(PIPE_ROUTE).then(readJson),
-        fetch(DS_ROUTE).then(readJson),
-        fetch(DF_ROUTE).then(readJson),
-        fetch(TRG_ROUTE).then(readJson),
-        fetch(LS_ROUTE).then(readJson),
-        fetch(IR_ROUTE).then(readJson),
-        fetch(CDC_ROUTE).then(readJson),
-        fetch(GP_ROUTE).then(readJson),
-        fetch(MPE_ROUTE).then(readJson),
+        fetch(R(PIPE_ROUTE)).then(readJson),
+        fetch(R(DS_ROUTE)).then(readJson),
+        fetch(R(DF_ROUTE)).then(readJson),
+        fetch(R(TRG_ROUTE)).then(readJson),
+        fetch(R(LS_ROUTE)).then(readJson),
+        fetch(R(IR_ROUTE)).then(readJson),
+        fetch(R(CDC_ROUTE)).then(readJson),
+        fetch(R(GP_ROUTE)).then(readJson),
+        fetch(R(MPE_ROUTE)).then(readJson),
       ]);
       // Any route reporting not_configured gates the whole tree (same factory).
       for (const b of [pr, dr, fr, tr, lr, ir, cr, gpr, mper]) { if (applyGate(b)) { setLoading(false); return; } }
@@ -177,7 +188,7 @@ export function FactoryResourcesTree({
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [R]);
 
   useEffect(() => { loadAll(); }, [loadAll, refreshKey]);
 
@@ -210,7 +221,7 @@ export function FactoryResourcesTree({
           },
         };
       }
-      const res = await fetch(route, {
+      const res = await fetch(R(route), {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload),
       });
       const body = await readJson(res);
@@ -226,24 +237,24 @@ export function FactoryResourcesTree({
     } finally {
       setBusy(false);
     }
-  }, [createGroup, createName, createDsType, createDsLinkedService, loadAll, onOpenPipeline]);
+  }, [createGroup, createName, createDsType, createDsLinkedService, loadAll, onOpenPipeline, R]);
 
   const del = useCallback(async (route: string, name: string) => {
     setBusy(true); setError(null);
     try {
-      const res = await fetch(`${route}?name=${encodeURIComponent(name)}`, { method: 'DELETE' });
+      const res = await fetch(R(`${route}?name=${encodeURIComponent(name)}`), { method: 'DELETE' });
       const body = await readJson(res);
       if (applyGate(body)) { setBusy(false); return; }
       if (!body.ok) { setError(body.error || 'delete failed'); setBusy(false); return; }
       await loadAll();
     } catch (e: any) { setError(e?.message || String(e)); }
     finally { setBusy(false); }
-  }, [loadAll]);
+  }, [loadAll, R]);
 
   const triggerLifecycle = useCallback(async (name: string, action: 'start' | 'stop') => {
     setBusy(true); setError(null);
     try {
-      const res = await fetch(TRG_ROUTE, {
+      const res = await fetch(R(TRG_ROUTE), {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name, action }),
       });
       const body = await readJson(res);
@@ -252,14 +263,14 @@ export function FactoryResourcesTree({
       await loadAll();
     } catch (e: any) { setError(e?.message || String(e)); }
     finally { setBusy(false); }
-  }, [loadAll]);
+  }, [loadAll, R]);
 
   // Start / Stop a Change Data Capture (preview) resource (real ARM REST via
   // POST /api/adf/cdc { name, action }). Delete uses the generic `del` helper.
   const cdcLifecycle = useCallback(async (name: string, action: 'start' | 'stop') => {
     setBusy(true); setError(null);
     try {
-      const res = await fetch(CDC_ROUTE, {
+      const res = await fetch(R(CDC_ROUTE), {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name, action }),
       });
       const body = await readJson(res);
@@ -268,7 +279,7 @@ export function FactoryResourcesTree({
       await loadAll();
     } catch (e: any) { setError(e?.message || String(e)); }
     finally { setBusy(false); }
-  }, [loadAll]);
+  }, [loadAll, R]);
 
   // ---------------------------------------------------------------
   // Global parameters — open the editor (rows) / save the whole set (PUT)
@@ -319,7 +330,7 @@ export function FactoryResourcesTree({
       dict[name] = { type: row.type, value };
     }
     try {
-      const res = await fetch(GP_ROUTE, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ parameters: dict }) });
+      const res = await fetch(R(GP_ROUTE), { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ parameters: dict }) });
       const body = await readJson(res);
       if (applyGate(body)) { setBusy(false); return; }
       if (!body.ok) { setGpError(body.error || 'save failed'); setBusy(false); return; }
@@ -327,7 +338,7 @@ export function FactoryResourcesTree({
       await loadAll();
     } catch (e: any) { setGpError(e?.message || String(e)); }
     finally { setBusy(false); }
-  }, [gpRows, loadAll]);
+  }, [gpRows, loadAll, R]);
 
   // ---------------------------------------------------------------
   // Managed private endpoints — create the managed VNet / create a PE (real ARM)
@@ -335,14 +346,14 @@ export function FactoryResourcesTree({
   const createMvnet = useCallback(async () => {
     setBusy(true); setError(null);
     try {
-      const res = await fetch(MPE_ROUTE, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'create-mvnet' }) });
+      const res = await fetch(R(MPE_ROUTE), { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'create-mvnet' }) });
       const body = await readJson(res);
       if (applyGate(body)) { setBusy(false); return; }
       if (!body.ok) { setError(body.error || 'failed to create managed virtual network'); setBusy(false); return; }
       await loadAll();
     } catch (e: any) { setError(e?.message || String(e)); }
     finally { setBusy(false); }
-  }, [loadAll]);
+  }, [loadAll, R]);
 
   const openMpe = useCallback(() => {
     setMpeName(''); setMpeResourceId(''); setMpeGroupId('dfs'); setMpeError(null); setMpeNote(null); setMpeOpen(true);
@@ -352,7 +363,7 @@ export function FactoryResourcesTree({
     if (!mpeName.trim() || !mpeResourceId.trim() || !mpeGroupId.trim()) return;
     setBusy(true); setMpeError(null); setMpeNote(null);
     try {
-      const res = await fetch(MPE_ROUTE, {
+      const res = await fetch(R(MPE_ROUTE), {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ name: mpeName.trim(), privateLinkResourceId: mpeResourceId.trim(), groupId: mpeGroupId.trim() }),
       });
@@ -364,7 +375,7 @@ export function FactoryResourcesTree({
       await loadAll();
     } catch (e: any) { setMpeError(e?.message || String(e)); }
     finally { setBusy(false); }
-  }, [mpeName, mpeResourceId, mpeGroupId, loadAll]);
+  }, [mpeName, mpeResourceId, mpeGroupId, loadAll, R]);
 
   // ---------------------------------------------------------------
   // Filtering
