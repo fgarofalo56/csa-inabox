@@ -19,7 +19,7 @@ import { clientFetch } from '@/lib/client-fetch';
 import { useCallback, useEffect, useState } from 'react';
 import {
   TabList, Tab, Button, Caption1, Badge, Spinner, Input, Field, Dropdown, Option,
-  Subtitle2, Body1Strong,
+  Subtitle2, Body1Strong, SpinButton,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   MessageBar, MessageBarBody, MessageBarTitle, Tooltip,
   Dialog, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
@@ -29,7 +29,15 @@ import {
   Key20Regular, ShieldTask20Regular, Globe20Regular, DataArea20Regular,
   Server20Regular, Eye16Regular, EyeOff16Regular, ArrowSync16Regular,
   Add16Regular, Delete16Regular, ArrowCounterclockwise16Regular,
+  TopSpeed20Regular, Save16Regular,
 } from '@fluentui/react-icons';
+
+/** Partition counts Azure AI Search accepts (mirrors ALLOWED_PARTITIONS in the
+ * server-side aisearch-admin client; duplicated here so this client component
+ * does not import the @azure/identity-bearing admin module). */
+const PARTITION_OPTIONS = [1, 2, 3, 4, 6, 12] as const;
+const REPLICA_MIN = 1;
+const REPLICA_MAX = 12;
 
 const useStyles = makeStyles({
   root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, padding: tokens.spacingHorizontalM },
@@ -49,7 +57,7 @@ const useStyles = makeStyles({
   tableWrap: { overflowX: 'auto', width: '100%' },
 });
 
-type Tab5 = 'overview' | 'keys' | 'networking' | 'monitoring' | 'stats';
+type Tab5 = 'overview' | 'scale' | 'keys' | 'networking' | 'monitoring' | 'stats';
 
 interface ServiceProps {
   id: string; name: string; location: string; sku: string;
@@ -79,6 +87,7 @@ export function AiSearchServicePanel({ onClose }: { onClose?: () => void }) {
   const [tab, setTab] = useState<Tab5>('overview');
   const [data, setData] = useState<Overview | null>(null);
   const [gate, setGate] = useState<{ missing: string[] } | null>(null);
+  const [forbidden, setForbidden] = useState<{ reason?: string; remediation?: string } | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -87,6 +96,11 @@ export function AiSearchServicePanel({ onClose }: { onClose?: () => void }) {
   const [revealAdmin, setRevealAdmin] = useState(false);
   const [newQueryKeyName, setNewQueryKeyName] = useState('');
   const [confirmRegen, setConfirmRegen] = useState<'primary' | 'secondary' | null>(null);
+
+  // Scale draft (null until the service loads, then mirrors current counts).
+  const [scaleReplicas, setScaleReplicas] = useState<number | null>(null);
+  const [scalePartitions, setScalePartitions] = useState<number | null>(null);
+  const [confirmScale, setConfirmScale] = useState(false);
 
   const [metrics, setMetrics] = useState<Metric[] | null>(null);
   const [metricsTimespan, setMetricsTimespan] = useState('PT6H');
@@ -98,8 +112,12 @@ export function AiSearchServicePanel({ onClose }: { onClose?: () => void }) {
     const j = await readJson(await clientFetch('/api/ai-search/service'));
     if (j?.code === 'not_configured') { setGate({ missing: j.missing || [] }); setLoading(false); return; }
     setGate(null);
+    if (j?.error === 'forbidden') { setForbidden({ reason: j.reason, remediation: j.remediation }); setLoading(false); return; }
+    setForbidden(null);
     if (!j?.ok) { setError(j?.error || 'failed to load service'); setLoading(false); return; }
-    setData(j); setLoading(false);
+    setData(j);
+    if (j.service) { setScaleReplicas(j.service.replicaCount); setScalePartitions(j.service.partitionCount); }
+    setLoading(false);
   }, []);
 
   useEffect(() => { load(); }, [load]);
@@ -144,6 +162,20 @@ export function AiSearchServicePanel({ onClose }: { onClose?: () => void }) {
     const j = await post({ action: 'setSemanticTier', tier });
     if (j) { setMsg({ intent: 'success', text: `Semantic ranker set to "${tier}".` }); setData((d) => d ? { ...d, service: j.service } : d); }
   };
+  const applyScale = async () => {
+    setConfirmScale(false);
+    const cur = data?.service;
+    const payload: { action: 'scale'; replicaCount?: number; partitionCount?: number } = { action: 'scale' };
+    if (scaleReplicas != null && scaleReplicas !== cur?.replicaCount) payload.replicaCount = scaleReplicas;
+    if (scalePartitions != null && scalePartitions !== cur?.partitionCount) payload.partitionCount = scalePartitions;
+    if (payload.replicaCount == null && payload.partitionCount == null) { setMsg({ intent: 'error', text: 'No scale change to apply.' }); return; }
+    const j = await post(payload);
+    if (j) {
+      setMsg({ intent: 'success', text: `Scaling to ${j.service.replicaCount} replica(s) × ${j.service.partitionCount} partition(s). Azure rebalances asynchronously — status shows "provisioning" until complete.` });
+      setData((d) => d ? { ...d, service: j.service } : d);
+      setScaleReplicas(j.service.replicaCount); setScalePartitions(j.service.partitionCount);
+    }
+  };
 
   if (gate) {
     return (
@@ -162,7 +194,26 @@ export function AiSearchServicePanel({ onClose }: { onClose?: () => void }) {
     );
   }
 
+  if (forbidden) {
+    return (
+      <div className={s.root}>
+        <div className={s.head}><Subtitle2>AI Search service administration</Subtitle2><div className={s.spacer} />{onClose && <Button size="small" onClick={onClose}>Close</Button>}</div>
+        <MessageBar intent="warning">
+          <MessageBarBody>
+            <MessageBarTitle>Tenant-admin or domain-admin access required</MessageBarTitle>
+            {forbidden.reason || 'Service administration (keys, scale, networking, semantic tier) is restricted to tenant admins and domain admins.'}
+            {forbidden.remediation ? ` ${forbidden.remediation}` : ''}
+          </MessageBarBody>
+        </MessageBar>
+      </div>
+    );
+  }
+
   const svc = data?.service;
+  const scaleDirty = !!svc && (
+    (scaleReplicas != null && scaleReplicas !== svc.replicaCount) ||
+    (scalePartitions != null && scalePartitions !== svc.partitionCount)
+  );
 
   return (
     <div className={s.root}>
@@ -181,6 +232,7 @@ export function AiSearchServicePanel({ onClose }: { onClose?: () => void }) {
 
       <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as Tab5)}>
         <Tab value="overview" icon={<Server20Regular />}>Overview</Tab>
+        <Tab value="scale" icon={<TopSpeed20Regular />}>Scale</Tab>
         <Tab value="keys" icon={<Key20Regular />}>Keys</Tab>
         <Tab value="networking" icon={<Globe20Regular />}>Networking</Tab>
         <Tab value="monitoring" icon={<DataArea20Regular />}>Monitoring</Tab>
@@ -204,7 +256,48 @@ export function AiSearchServicePanel({ onClose }: { onClose?: () => void }) {
                 <Caption1>Semantic ranker</Caption1><span><Badge appearance="tint" color={svc.semanticSearch === 'disabled' ? 'informative' : 'brand'}>{svc.semanticSearch}</Badge></span>
                 <Caption1>CMK enforcement</Caption1><span>{svc.cmkEnforcement || '—'}</span>
               </div>
-              <Caption1>Scale (replicas/partitions) and cost are managed on the Scaling admin page and via the ARM PATCH; this view is read-only for scale.</Caption1>
+              <Caption1>Adjust replicas and partitions on the <strong>Scale</strong> tab. The SKU tier is fixed once the service is created.</Caption1>
+            </div>
+          )}
+
+          {tab === 'scale' && (
+            <div className={s.card}>
+              <div className={s.head}><Body1Strong>Replica &amp; partition scale</Body1Strong><div className={s.spacer} />
+                <Badge appearance="tint" color="brand">{svc.sku}</Badge>
+                {svc.provisioningState && <Badge appearance="tint" color={/succeed/i.test(svc.provisioningState) ? 'success' : 'warning'}>{svc.provisioningState}</Badge>}
+              </div>
+              <div className={s.kv}>
+                <Caption1>Current</Caption1>
+                <span>{svc.replicaCount} replica{svc.replicaCount === 1 ? '' : 's'} × {svc.partitionCount} partition{svc.partitionCount === 1 ? '' : 's'} = <strong>{svc.replicaCount * svc.partitionCount}</strong> search unit{svc.replicaCount * svc.partitionCount === 1 ? '' : 's'}</span>
+              </div>
+              <div className={s.actions}>
+                <Field label="Replicas (query throughput + HA)" hint={`${REPLICA_MIN}–${REPLICA_MAX}`}>
+                  <SpinButton
+                    min={REPLICA_MIN} max={REPLICA_MAX} step={1}
+                    value={scaleReplicas ?? svc.replicaCount}
+                    aria-label="replica-count"
+                    onChange={(_, d) => { const v = d.value ?? (d.displayValue ? parseInt(d.displayValue, 10) : NaN); if (Number.isFinite(v)) setScaleReplicas(Math.max(REPLICA_MIN, Math.min(REPLICA_MAX, v as number))); }}
+                  />
+                </Field>
+                <Field label="Partitions (index storage + indexing throughput)">
+                  <Dropdown
+                    value={String(scalePartitions ?? svc.partitionCount)}
+                    selectedOptions={[String(scalePartitions ?? svc.partitionCount)]}
+                    aria-label="partition-count"
+                    onOptionSelect={(_, d) => d.optionValue && setScalePartitions(parseInt(d.optionValue, 10))}
+                  >
+                    {PARTITION_OPTIONS.map((p) => <Option key={p} value={String(p)}>{String(p)}</Option>)}
+                  </Dropdown>
+                </Field>
+              </div>
+              <Caption1>
+                New billable units = {(scaleReplicas ?? svc.replicaCount)} × {(scalePartitions ?? svc.partitionCount)} = <strong>{(scaleReplicas ?? svc.replicaCount) * (scalePartitions ?? svc.partitionCount)}</strong>.
+                Adding replicas raises query throughput and enables the query SLA (≥2 read, ≥3 read-write). Adding partitions raises index storage and indexing throughput. Azure rebalances the service asynchronously and it stays queryable during the change; the SKU tier caps the maximum counts.
+              </Caption1>
+              <div className={s.actions}>
+                <Button size="small" appearance="primary" icon={<Save16Regular />} disabled={busy || !scaleDirty} onClick={() => setConfirmScale(true)}>Apply scale</Button>
+                <Button size="small" appearance="secondary" disabled={busy || !scaleDirty} onClick={() => { setScaleReplicas(svc.replicaCount); setScalePartitions(svc.partitionCount); }}>Reset</Button>
+              </div>
             </div>
           )}
 
@@ -366,6 +459,25 @@ export function AiSearchServicePanel({ onClose }: { onClose?: () => void }) {
           )}
         </>
       )}
+
+      {/* Scale confirmation */}
+      <Dialog open={confirmScale} onOpenChange={(_, d) => { if (!d.open) setConfirmScale(false); }}>
+        <DialogSurface>
+          <DialogBody>
+            <DialogTitle>Apply new scale?</DialogTitle>
+            <DialogContent>
+              Scaling {svc?.name} to <strong>{scaleReplicas ?? svc?.replicaCount}</strong> replica(s) × <strong>{scalePartitions ?? svc?.partitionCount}</strong> partition(s).
+              This is a billable change (search units = replicas × partitions) and Azure rebalances asynchronously —
+              the service stays queryable and shows &quot;provisioning&quot; until it completes. The SKU tier caps the maximum counts;
+              an out-of-range request is rejected with the exact Azure reason.
+            </DialogContent>
+            <DialogActions>
+              <Button appearance="secondary" onClick={() => setConfirmScale(false)}>Cancel</Button>
+              <Button appearance="primary" disabled={busy} onClick={applyScale}>Apply scale</Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
 
       {/* Regenerate-key confirmation */}
       <Dialog open={confirmRegen !== null} onOpenChange={(_, d) => { if (!d.open) setConfirmRegen(null); }}>

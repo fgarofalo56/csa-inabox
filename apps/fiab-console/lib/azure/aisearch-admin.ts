@@ -227,6 +227,67 @@ export async function setSemanticTier(tier: 'disabled' | 'free' | 'standard', cf
 }
 
 // ---------------------------------------------------------------------------
+// Replica / partition scaling (ARM PATCH properties.replicaCount/partitionCount)
+//
+// The SKU TIER is immutable once a Search service exists (basic→standard etc.
+// requires a new service + re-index) — only replicas and partitions scale in
+// place, so this in-editor Scale control deliberately adjusts ONLY those two.
+// Replicas govern query throughput + HA; partitions govern index storage +
+// indexing throughput. Azure validates the requested counts against the SKU
+// server-side and returns a precise 400 we surface verbatim.
+// https://learn.microsoft.com/azure/search/search-capacity-planning
+// ---------------------------------------------------------------------------
+
+export const REPLICA_MIN = 1;
+export const REPLICA_MAX = 12;
+/** Partition counts Azure AI Search accepts (billable search units = replicas × partitions). */
+export const ALLOWED_PARTITIONS = [1, 2, 3, 4, 6, 12] as const;
+export type PartitionCount = (typeof ALLOWED_PARTITIONS)[number];
+
+export interface ScaleRequest { replicaCount?: number; partitionCount?: number; }
+
+/**
+ * Validate a replica/partition scale request against Azure's accepted ranges.
+ * Pure — no I/O — so it is unit-tested and reused by the route + client. Does
+ * NOT know the SKU's own ceilings (basic caps at 3×3); Azure enforces those and
+ * returns a precise 400 that {@link scaleService} surfaces.
+ */
+export function validateScale(req: ScaleRequest): { ok: boolean; error?: string } {
+  const { replicaCount, partitionCount } = req;
+  if (replicaCount == null && partitionCount == null) {
+    return { ok: false, error: 'Specify a new replica or partition count.' };
+  }
+  if (replicaCount != null) {
+    if (!Number.isInteger(replicaCount) || replicaCount < REPLICA_MIN || replicaCount > REPLICA_MAX) {
+      return { ok: false, error: `replicaCount must be an integer between ${REPLICA_MIN} and ${REPLICA_MAX}.` };
+    }
+  }
+  if (partitionCount != null) {
+    if (!(ALLOWED_PARTITIONS as readonly number[]).includes(partitionCount)) {
+      return { ok: false, error: `partitionCount must be one of ${ALLOWED_PARTITIONS.join(', ')}.` };
+    }
+  }
+  return { ok: true };
+}
+
+/**
+ * PATCH replica/partition counts, then re-GET the normalized service props so
+ * the editor reflects the new (often `provisioning`) state. The PATCH is
+ * long-running: Azure accepts it (200/202) and rebalances asynchronously —
+ * `provisioningState` reads `provisioning` until it completes.
+ */
+export async function scaleService(req: ScaleRequest, cfg?: SearchServiceConfig): Promise<ServiceProperties> {
+  const v = validateScale(req);
+  if (!v.ok) throw new SearchAdminError(400, req, v.error);
+  const c = cfg || readSearchConfig();
+  const properties: Record<string, number> = {};
+  if (req.replicaCount != null) properties.replicaCount = req.replicaCount;
+  if (req.partitionCount != null) properties.partitionCount = req.partitionCount;
+  await armJson(`${serviceUrl(c)}?api-version=${ADMIN_API}`, { method: 'PATCH', body: JSON.stringify({ properties }) }, 'scaleService');
+  return getServiceProperties(c);
+}
+
+// ---------------------------------------------------------------------------
 // Monitor metrics + service statistics
 // ---------------------------------------------------------------------------
 
