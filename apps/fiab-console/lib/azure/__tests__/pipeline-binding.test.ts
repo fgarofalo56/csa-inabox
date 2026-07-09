@@ -24,8 +24,21 @@ vi.mock('@/lib/azure/cosmos-client', () => {
   return {
     itemsContainer: async () => ({
       items: {
-        query: () => ({
-          fetchAll: async () => ({ resources: state.itemDoc ? [state.itemDoc] : [] }),
+        // Honor the real query's parameterized filter: match c.id = @id AND
+        // c.itemType IN (@t0, @t1, ...). This lets tests prove the alias fix —
+        // a 'data-pipeline'-typed doc resolves when the route asks for
+        // ['adf-pipeline','data-pipeline'], and a foreign type does NOT.
+        query: (spec: any) => ({
+          fetchAll: async () => {
+            const doc = state.itemDoc;
+            if (!doc) return { resources: [] };
+            const params: Array<{ name: string; value: any }> = spec?.parameters || [];
+            const idParam = params.find((p) => p.name === '@id');
+            const typeValues = params.filter((p) => p.name.startsWith('@t')).map((p) => p.value);
+            const idOk = idParam ? doc.id === idParam.value : true;
+            const typeOk = typeValues.length ? typeValues.includes(doc.itemType) : true;
+            return { resources: idOk && typeOk ? [doc] : [] };
+          },
         }),
       },
       item: (id: string, pk: string) => ({
@@ -95,6 +108,81 @@ describe('resolveBinding', () => {
     const b = await resolveBinding('guid-aaaa-bbbb', 'adf-pipeline', TENANT);
     expect(b.factory).toBe('adf-other');
     expect(b.workspace).toBe('syn-other');
+  });
+});
+
+describe('itemType aliasing — adf/synapse routes accept data-pipeline-typed items', () => {
+  // The real 'Bind failed' 404: interactively-created pipeline tiles persist as
+  // itemType:'data-pipeline' (catalog aliasOf), but the ADF/Synapse routes used
+  // to filter on their own type only → zero rows → ItemNotFoundError. The routes
+  // now pass ['adf-pipeline','data-pipeline'] (or synapse variant) and BOTH must
+  // resolve. Bundle-installed items may genuinely carry the native type.
+  it('resolves a data-pipeline-typed item when the route asks for adf-pipeline+data-pipeline', async () => {
+    state.itemDoc = makeItem({ itemType: 'data-pipeline' });
+    const { loadPipelineItem, resolveBinding } = await import('../pipeline-binding');
+    const loaded = await loadPipelineItem('guid-aaaa-bbbb', ['adf-pipeline', 'data-pipeline'], TENANT);
+    expect(loaded?.itemType).toBe('data-pipeline');
+    const b = await resolveBinding('guid-aaaa-bbbb', ['adf-pipeline', 'data-pipeline'], TENANT);
+    expect(b.pipelineName).toBe('ingest_orders');
+  });
+
+  it('still resolves a natively adf-pipeline-typed (bundle-installed) item', async () => {
+    state.itemDoc = makeItem({ itemType: 'adf-pipeline' });
+    const { loadPipelineItem } = await import('../pipeline-binding');
+    const loaded = await loadPipelineItem('guid-aaaa-bbbb', ['adf-pipeline', 'data-pipeline'], TENANT);
+    expect(loaded?.itemType).toBe('adf-pipeline');
+  });
+
+  it('resolves a data-pipeline-typed item for the synapse-pipeline route list too', async () => {
+    state.itemDoc = makeItem({ itemType: 'data-pipeline' });
+    const { loadPipelineItem } = await import('../pipeline-binding');
+    const loaded = await loadPipelineItem('guid-aaaa-bbbb', ['synapse-pipeline', 'data-pipeline'], TENANT);
+    expect(loaded?.itemType).toBe('data-pipeline');
+  });
+
+  it('does NOT resolve a foreign itemType (still tenant/type scoped)', async () => {
+    state.itemDoc = makeItem({ itemType: 'lakehouse' });
+    const { loadPipelineItem } = await import('../pipeline-binding');
+    const loaded = await loadPipelineItem('guid-aaaa-bbbb', ['adf-pipeline', 'data-pipeline'], TENANT);
+    expect(loaded).toBeNull();
+  });
+
+  it('still rejects a data-pipeline-typed item from a foreign tenant', async () => {
+    state.itemDoc = makeItem({ itemType: 'data-pipeline' });
+    state.workspaceDoc = { id: 'ws-1', tenantId: 'someone-else' };
+    const { resolveBinding, ItemNotFoundError } = await import('../pipeline-binding');
+    await expect(
+      resolveBinding('guid-aaaa-bbbb', ['adf-pipeline', 'data-pipeline'], TENANT),
+    ).rejects.toBeInstanceOf(ItemNotFoundError);
+  });
+
+  it('UnboundPipelineError reports the item ACTUAL type (data-pipeline) when found unbound', async () => {
+    state.itemDoc = makeItem({ itemType: 'data-pipeline', state: {} });
+    const { resolveBinding, UnboundPipelineError } = await import('../pipeline-binding');
+    await expect(
+      resolveBinding('guid-aaaa-bbbb', ['adf-pipeline', 'data-pipeline'], TENANT),
+    ).rejects.toMatchObject({ itemType: 'data-pipeline' });
+    // sanity: it is the right error class
+    await expect(
+      resolveBinding('guid-aaaa-bbbb', ['adf-pipeline', 'data-pipeline'], TENANT),
+    ).rejects.toBeInstanceOf(UnboundPipelineError);
+  });
+
+  it('ItemNotFoundError keeps the primary requested type (adf-pipeline) when absent', async () => {
+    state.itemDoc = null;
+    const { resolveBinding } = await import('../pipeline-binding');
+    await expect(
+      resolveBinding('nope', ['adf-pipeline', 'data-pipeline'], TENANT),
+    ).rejects.toMatchObject({ itemType: 'adf-pipeline' });
+  });
+
+  it('persistBinding preserves the stored itemType (does not rewrite it to adf-pipeline)', async () => {
+    state.itemDoc = makeItem({ itemType: 'data-pipeline', state: { existing: 'keep' } });
+    const { persistBinding } = await import('../pipeline-binding');
+    const updated = await persistBinding('guid-aaaa-bbbb', ['adf-pipeline', 'data-pipeline'], TENANT, { pipelineName: 'p2' });
+    expect(updated.itemType).toBe('data-pipeline');
+    expect(state.replaced.doc.itemType).toBe('data-pipeline');
+    expect(updated.state?.pipelineName).toBe('p2');
   });
 });
 

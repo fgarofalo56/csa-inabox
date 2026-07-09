@@ -28,6 +28,10 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 const ITEM_TYPE = 'synapse-pipeline';
+// An interactively-created pipeline tile aliases to 'data-pipeline' at persist
+// time (catalog aliasOf), while bundle-installed items may carry 'synapse-pipeline'.
+// Accept BOTH so every persisted form of a Synapse pipeline resolves.
+const ACCEPTED_TYPES = [ITEM_TYPE, 'data-pipeline'];
 const NAME_RE = /^[A-Za-z0-9_-]{1,140}$/;
 
 export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
@@ -35,7 +39,7 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   const { id } = await ctx.params;
   try {
-    const item = await loadPipelineItem(id, ITEM_TYPE, session.claims.oid);
+    const item = await loadPipelineItem(id, ACCEPTED_TYPES, session.claims.oid);
     if (!item) throw new ItemNotFoundError(ITEM_TYPE, id);
     const bound = typeof item.state?.pipelineName === 'string' ? (item.state.pipelineName as string) : null;
     let pipelines: Array<{ name: string }> = [];
@@ -74,7 +78,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     if (create) {
       await upsertPipeline(pipelineName, { name: pipelineName, properties: { activities: [] } });
     }
-    const item = await persistBinding(id, ITEM_TYPE, session.claims.oid, { pipelineName });
+    const item = await persistBinding(id, ACCEPTED_TYPES, session.claims.oid, { pipelineName });
     return NextResponse.json({ ok: true, bound: pipelineName, created: create, item });
   } catch (e) {
     const { status, body: errBody } = bindingErrorResponse(e);

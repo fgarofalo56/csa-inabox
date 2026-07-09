@@ -28,13 +28,17 @@ import { getPipeline } from '@/lib/azure/adf-client';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+// Accept the aliased persist form ('data-pipeline') alongside the native type —
+// see pipeline-binding.ts loadPipelineItem for why.
+const ACCEPTED_TYPES = ['adf-pipeline', 'data-pipeline'];
+
 export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   const { id } = await ctx.params;
   let pipelineName: string;
   try {
-    ({ pipelineName } = await resolveBinding(id, 'adf-pipeline', session.claims.oid));
+    ({ pipelineName } = await resolveBinding(id, ACCEPTED_TYPES, session.claims.oid));
   } catch (e) {
     const { status, body } = bindingErrorResponse(e);
     return NextResponse.json(body, { status });
