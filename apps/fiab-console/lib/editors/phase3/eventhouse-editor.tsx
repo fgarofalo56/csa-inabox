@@ -37,6 +37,7 @@ import { ItemEditorChrome } from '../item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { ResultChart } from './kql-results';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
 import { useStyles } from './styles';
 
 interface EventhouseDb {
@@ -1523,6 +1524,14 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
       <div className={s.pad}>
+        {/* Teaching banner (SC-6) — Fabric's RTI "analyze" guidance, keyed per
+            surface with a persistent dismiss. */}
+        <TeachingBanner
+          surfaceKey="eventhouse-analyze"
+          title="Analyze real-time data"
+          message="Create a KQL database, then query it with KQL, build Real-Time dashboards, or run cross-service queries — powered by Azure Data Explorer, no Fabric required."
+          learnMoreHref="https://learn.microsoft.com/azure/data-explorer/kusto/query/"
+        />
         <div className={s.toolbar}>
           <Badge appearance="filled" color="brand">Eventhouse · shared cluster</Badge>
           <Caption1>{state?.cluster || 'loading…'}</Caption1>
