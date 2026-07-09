@@ -39,6 +39,9 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 const ITEM_TYPE = 'adf-pipeline';
+// Accept the aliased persist form ('data-pipeline') alongside the native type —
+// see pipeline-binding.ts loadPipelineItem for why.
+const ACCEPTED_TYPES = [ITEM_TYPE, 'data-pipeline'];
 const BACKEND = 'adf' as const;
 
 export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
@@ -50,7 +53,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   // The copilot needs the real Azure pipeline name — bind required.
   let pipelineName: string;
   try {
-    ({ pipelineName } = await resolveBinding(id, ITEM_TYPE, session.claims.oid));
+    ({ pipelineName } = await resolveBinding(id, ACCEPTED_TYPES, session.claims.oid));
   } catch (e) {
     const { status, body } = bindingErrorResponse(e);
     return NextResponse.json(body, { status });

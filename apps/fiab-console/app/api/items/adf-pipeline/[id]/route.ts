@@ -18,6 +18,9 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 const ITEM_TYPE = 'adf-pipeline';
+// Accept the aliased persist form ('data-pipeline') alongside the native type —
+// see pipeline-binding.ts loadPipelineItem for why.
+const ACCEPTED_TYPES = [ITEM_TYPE, 'data-pipeline'];
 
 export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
@@ -25,7 +28,7 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
   const { id } = await ctx.params;
   let binding: Awaited<ReturnType<typeof resolveBinding>>;
   try {
-    binding = await resolveBinding(id, ITEM_TYPE, session.claims.oid);
+    binding = await resolveBinding(id, ACCEPTED_TYPES, session.claims.oid);
   } catch (e) {
     // Unbound item: a bundle-installed pipeline that was never bound to a live
     // Azure pipeline (e.g. the ADF factory env vars weren't set at install
@@ -35,7 +38,7 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
     // on a real binding. Only fall through to the bind-picker 412 when the item
     // genuinely has no content to render.
     if ((e as any)?.code === 'unbound') {
-      const item = await loadPipelineItem(id, ITEM_TYPE, session.claims.oid).catch(() => null);
+      const item = await loadPipelineItem(id, ACCEPTED_TYPES, session.claims.oid).catch(() => null);
       const fromContent = pipelineDefinitionFromContent(item?.state?.content);
       if (fromContent) {
         return NextResponse.json({ ok: true, pipeline: fromContent, boundTo: null, fromContent: true, unbound: true });
@@ -77,7 +80,7 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
   }
   let pipelineName: string;
   try {
-    ({ pipelineName } = await resolveBinding(id, ITEM_TYPE, session.claims.oid));
+    ({ pipelineName } = await resolveBinding(id, ACCEPTED_TYPES, session.claims.oid));
   } catch (e) {
     const { status, body: errBody } = bindingErrorResponse(e);
     return NextResponse.json(errBody, { status });
@@ -96,7 +99,7 @@ export async function DELETE(_req: NextRequest, ctx: { params: Promise<{ id: str
   const { id } = await ctx.params;
   let pipelineName: string;
   try {
-    ({ pipelineName } = await resolveBinding(id, ITEM_TYPE, session.claims.oid));
+    ({ pipelineName } = await resolveBinding(id, ACCEPTED_TYPES, session.claims.oid));
   } catch (e) {
     const { status, body } = bindingErrorResponse(e);
     return NextResponse.json(body, { status });
