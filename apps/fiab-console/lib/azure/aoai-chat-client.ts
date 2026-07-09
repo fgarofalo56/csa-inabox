@@ -49,6 +49,7 @@ import {
 } from './copilot-orchestrator';
 import { buildAoaiBody, type AoaiChatMessage, type AoaiResponseFormat } from './aoai-model-contract';
 import type { TenantCopilotConfig } from '../types/copilot-config';
+import { resolveTierForTurn, type ModelTier, type TaskClass } from '@/lib/foundry/model-tier-router';
 
 // Re-export so unified-client callers can `instanceof`-check the 503 gate
 // without also importing the orchestrator.
@@ -65,6 +66,30 @@ function aoaiHost(endpoint: string): string {
 /** Build the chat-completions data-plane URL for a resolved target. */
 function chatUrl(target: AoaiTarget): string {
   return `${target.endpoint}/openai/deployments/${encodeURIComponent(target.deployment)}/chat/completions?api-version=${target.apiVersion}`;
+}
+
+/**
+ * AIF-12 — apply the Loom-native tier router to a resolved target.
+ *
+ * When the caller supplies a `tier` or `taskClass` (and did NOT pre-resolve a
+ * `target` — an explicit target/deployment is the per-call override that always
+ * wins), consult the tenant's tier policy and swap ONLY the deployment segment
+ * so cheap task classes ride a mini deployment and hard ones ride a strong
+ * deployment. A no-op when no tier deployments are configured (routed=false) or
+ * when no tier hint is given — existing callers are unaffected.
+ */
+function applyTierRouting(
+  base: AoaiTarget,
+  opts: { cfg?: TenantCopilotConfig | null; tier?: ModelTier; taskClass?: TaskClass; target?: AoaiTarget },
+): AoaiTarget {
+  if (opts.target) return base; // explicit target = per-call override; never re-route.
+  if (!opts.tier && !opts.taskClass) return base; // no hint → no change.
+  const sel = resolveTierForTurn(opts.cfg ?? null, {
+    overrideTier: opts.tier,
+    taskClass: opts.taskClass,
+    baseDeployment: base.deployment,
+  });
+  return sel.routed && sel.deployment ? { ...base, deployment: sel.deployment } : base;
 }
 
 /** Parse an LLM JSON reply, tolerating ```json fences and surrounding prose.
@@ -102,8 +127,16 @@ export interface AoaiChatOptions {
   /** Pre-resolved target. When supplied (e.g. a route that already called
    *  {@link resolveAoaiTarget} to surface its honest 503 gate), the client
    *  reuses it instead of re-resolving — avoiding a redundant second Foundry
-   *  lookup per call. When omitted the client resolves via resolveAoaiTarget(cfg). */
+   *  lookup per call. When omitted the client resolves via resolveAoaiTarget(cfg).
+   *  Supplying a `target` also PINS the deployment: it is treated as the
+   *  Wave-4-style per-call override and the AIF-12 tier router is skipped. */
   target?: AoaiTarget;
+  /** AIF-12: force a specific model tier for this call (mini/standard/strong).
+   *  Wins over the task-class mapping. Ignored when `target` is supplied. */
+  tier?: ModelTier;
+  /** AIF-12: task class for the tier router when `tier` is not forced. When both
+   *  are omitted the tier router is a no-op (the resolved deployment stands). */
+  taskClass?: TaskClass;
 }
 
 /** Options for {@link aoaiChatJson}. */
@@ -127,6 +160,10 @@ export interface AoaiChatRawOptions {
   /** Optional token cap (the legacy tool loop sends none). */
   maxCompletionTokens?: number;
   cfg?: TenantCopilotConfig | null;
+  /** AIF-12: force a model tier (ignored when `target` is supplied). */
+  tier?: ModelTier;
+  /** AIF-12: task class for the tier router when `tier` is not forced. */
+  taskClass?: TaskClass;
 }
 
 // ── Text completion ──────────────────────────────────────────────────────────
@@ -142,7 +179,7 @@ export interface AoaiChatRawOptions {
 export async function aoaiChat(opts: AoaiChatOptions): Promise<string> {
   const { messages, temperature, responseFormat } = opts;
   const maxCompletionTokens = opts.maxCompletionTokens ?? 2048;
-  const target = opts.target ?? (await resolveAoaiTarget(opts.cfg ?? null));
+  const target = applyTierRouting(opts.target ?? (await resolveAoaiTarget(opts.cfg ?? null)), opts);
   const url = chatUrl(target);
   const token = await aoaiToken();
   const send = (withTemperature: boolean) =>
@@ -186,7 +223,7 @@ export async function aoaiChatJson<T = Record<string, unknown>>(opts: AoaiChatJs
   const { messages, temperature } = opts;
   const maxCompletionTokens = opts.maxCompletionTokens ?? 2048;
   const responseFormat: AoaiResponseFormat = opts.responseFormat ?? 'json_object';
-  const target = opts.target ?? (await resolveAoaiTarget(opts.cfg ?? null));
+  const target = applyTierRouting(opts.target ?? (await resolveAoaiTarget(opts.cfg ?? null)), opts);
   const url = chatUrl(target);
   const token = await aoaiToken();
   const send = (withTemperature: boolean) =>
@@ -233,7 +270,7 @@ export async function aoaiChatJson<T = Record<string, unknown>>(opts: AoaiChatJs
 export async function aoaiChatRaw(opts: AoaiChatRawOptions): Promise<any> {
   const { messages, tools, temperature, maxCompletionTokens } = opts;
   const toolChoice = opts.toolChoice ?? 'auto';
-  const target = opts.target ?? (await resolveAoaiTarget(opts.cfg ?? null));
+  const target = applyTierRouting(opts.target ?? (await resolveAoaiTarget(opts.cfg ?? null)), opts);
   const url = chatUrl(target);
   let token: string;
   try {

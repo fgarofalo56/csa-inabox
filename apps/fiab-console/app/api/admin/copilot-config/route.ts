@@ -27,6 +27,9 @@ import {
 } from '@/lib/azure/copilot-config-store';
 import { listAccounts, resolveAccount, CsNotConfiguredError } from '@/lib/azure/foundry-cs-client';
 import type { TenantCopilotConfig } from '@/lib/types/copilot-config';
+import {
+  MODEL_TIERS, TASK_CLASSES, type ModelTier, type TaskClass, type TierDeployments,
+} from '@/lib/foundry/model-tier-router';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -52,6 +55,32 @@ function sanitize(input: any): TenantCopilotConfig {
   // Opt-in Fabric Copilot backend flag (boolean). Only `true` is persisted;
   // anything else clears it so the Azure-native path stays the silent default.
   out.fabricCopilotBackend = input?.fabricCopilotBackend === true ? true : undefined;
+
+  // AIF-12 tier router. DEFAULT-ON: persist `false` to opt out; anything else
+  // (incl. undefined) leaves it enabled by omission.
+  out.modelTierRoutingEnabled = input?.modelTierRoutingEnabled === false ? false : undefined;
+  // Per-tier deployment names — validated to the known tiers, string-only.
+  const tiersIn = input?.modelTiers;
+  if (tiersIn && typeof tiersIn === 'object') {
+    const tiers: TierDeployments = {};
+    for (const tier of MODEL_TIERS) {
+      const v = tiersIn[tier];
+      if (typeof v === 'string' && v.trim()) tiers[tier] = v.trim();
+    }
+    if (Object.keys(tiers).length) out.modelTiers = tiers;
+  }
+  // task-class → tier mapping — both keys and values validated to the enums.
+  const mapIn = input?.modelTierTaskMap;
+  if (mapIn && typeof mapIn === 'object') {
+    const map: Partial<Record<TaskClass, ModelTier>> = {};
+    for (const tc of TASK_CLASSES) {
+      const v = mapIn[tc];
+      if (typeof v === 'string' && (MODEL_TIERS as readonly string[]).includes(v)) {
+        map[tc] = v as ModelTier;
+      }
+    }
+    if (Object.keys(map).length) out.modelTierTaskMap = map;
+  }
   return out;
 }
 

@@ -22,6 +22,8 @@
  * the env var / role / resource to provision (see .claude/rules/no-vaporware.md).
  */
 
+import type { ModelTier, TaskClass, TierDeployments } from '@/lib/foundry/model-tier-router';
+
 /** Admin-scoped, tenant-wide Copilot & Agents config. */
 export interface TenantCopilotConfig {
   /** Cognitive Services / AIServices account NAME hosting model deployments. */
@@ -52,6 +54,18 @@ export interface TenantCopilotConfig {
   routerDeployment?: string;
   /** Deployment name of the embedding model (e.g. "text-embedding-3-large"). */
   embeddingDeployment?: string;
+  /**
+   * AIF-12 Loom-native tier router — DEFAULT-ON. Only `false` disables it; when
+   * enabled but no `modelTiers` are wired it is a silent no-op (every turn rides
+   * `copilotChatDeployment`). Cheap task classes route to a mini deployment,
+   * hard ones to a strong deployment. See lib/foundry/model-tier-router.ts.
+   */
+  modelTierRoutingEnabled?: boolean;
+  /** Per-tier deployment names picked from the live deployments list. `standard`
+   *  falls back to `copilotChatDeployment` when unset. */
+  modelTiers?: TierDeployments;
+  /** Admin override of the task-class → tier mapping (defaults are sensible). */
+  modelTierTaskMap?: Partial<Record<TaskClass, ModelTier>>;
   /** Optional AI Search service name used for RAG grounding. */
   groundingSearchService?: string;
   /** Optional AI Search index used for RAG grounding. */

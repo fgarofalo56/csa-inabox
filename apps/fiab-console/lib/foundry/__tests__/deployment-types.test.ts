@@ -5,6 +5,7 @@ import { describe, it, expect } from 'vitest';
 import {
   deploymentTypeFor, isProvisioned, isBatch, capacityUnitFor,
   offeredDeploymentTypes, validateCapacity, DEPLOYMENT_TYPES,
+  isModelRouterModel, modelRouterAvailability, MODEL_ROUTER_MODEL, ROUTER_MODES,
 } from '../deployment-types';
 
 describe('deploymentTypeFor / kinds', () => {
@@ -76,5 +77,27 @@ describe('validateCapacity', () => {
   it('accepts a small positive capacity for standard SKUs', () => {
     expect(validateCapacity('GlobalStandard', 1).ok).toBe(true);
     expect(validateCapacity('Standard', 10).ok).toBe(true);
+  });
+});
+
+describe('AIF-12 — model-router', () => {
+  it('detects the model-router model name case-insensitively', () => {
+    expect(isModelRouterModel('model-router')).toBe(true);
+    expect(isModelRouterModel('MODEL-ROUTER')).toBe(true);
+    expect(isModelRouterModel(' model-router ')).toBe(true);
+    expect(isModelRouterModel('gpt-4o')).toBe(false);
+    expect(isModelRouterModel(undefined)).toBe(false);
+    expect(isModelRouterModel(null)).toBe(false);
+    expect(MODEL_ROUTER_MODEL).toBe('model-router');
+  });
+  it('is available in Commercial but honest-gated in Gov', () => {
+    expect(modelRouterAvailability(false).available).toBe(true);
+    const gov = modelRouterAvailability(true);
+    expect(gov.available).toBe(false);
+    expect(gov.reason).toMatch(/Azure Government/);
+    expect(gov.reason).toMatch(/tier router/i);
+  });
+  it('offers Quality and Cost routing modes', () => {
+    expect(ROUTER_MODES.map((m) => m.value)).toEqual(['quality', 'cost']);
   });
 });

@@ -157,6 +157,58 @@ export function offeredDeploymentTypes(
     .map((info) => ({ ...info, govGated: isGov && !info.govGA }));
 }
 
+// ── AIF-12 — Model Router deployment (a MODEL, not a SKU) ────────────────────
+
+/**
+ * The Azure OpenAI **Model Router** model name. It is deployed via the SAME
+ * `PUT accounts/{a}/deployments/{d}` REST as any other model (a Standard SKU) —
+ * it is a special *model*, not a new deployment TYPE — and at inference time it
+ * auto-selects the best underlying model per request (Quality vs Cost mode).
+ *
+ * Gov: Model Router is **not available in Azure Government** (Learn Gov feature
+ * table), so the Deploy dialog honest-gates it in a Gov boundary and points the
+ * operator at Loom's app-layer tier router (Admin → Copilot & Agents → Model
+ * tiers) instead — same intent, Gov-native.
+ */
+export const MODEL_ROUTER_MODEL = 'model-router';
+
+/** True when a model name is the Azure OpenAI Model Router (case-insensitive). */
+export function isModelRouterModel(modelName: string | undefined | null): boolean {
+  return (modelName || '').trim().toLowerCase() === MODEL_ROUTER_MODEL;
+}
+
+/** Routing preference offered when deploying a Model Router. */
+export type RouterMode = 'quality' | 'cost';
+
+export const ROUTER_MODES: { value: RouterMode; label: string; hint: string }[] = [
+  { value: 'quality', label: 'Quality', hint: 'Prefer the strongest model that fits the request.' },
+  { value: 'cost', label: 'Cost', hint: 'Prefer the cheapest model that can answer the request.' },
+];
+
+export interface ModelRouterAvailability {
+  /** False in a Gov boundary — the managed Model Router is not Gov-GA. */
+  available: boolean;
+  /** Honest-gate copy when unavailable (names the Loom-native alternative). */
+  reason?: string;
+}
+
+/**
+ * Whether the managed Model Router deployment kind is offerable in this cloud.
+ * Gov boundaries get an honest gate pointing at the app-layer tier router.
+ */
+export function modelRouterAvailability(isGov: boolean): ModelRouterAvailability {
+  if (isGov) {
+    return {
+      available: false,
+      reason:
+        'Azure OpenAI Model Router is not available in Azure Government. Use Loom’s built-in ' +
+        'tier router instead (Admin → Copilot & Agents → Model tiers) — it routes cheap ' +
+        'requests to a mini deployment and hard requests to a strong one, Gov-native.',
+    };
+  }
+  return { available: true };
+}
+
 export interface PtuValidation {
   ok: boolean;
   /** Present when ok=false — a human-readable reason for the form gate. */
