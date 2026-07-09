@@ -2072,6 +2072,11 @@ module agentFoundry '../ai/foundry-project.bicep' = if (agentFoundryEnabled) {
     // the loom-copilot-maf Container App can call Gov AOAI direct. Empty in
     // non-Gov boundaries → grant skipped.
     mafPrincipalId: (copilotMafEnabled && (boundary == 'GCC-High' || boundary == 'IL5')) ? identity.outputs.uamiMafPrincipalId : ''
+    // AIF-2 — grant the AI Search service's system-MI Cognitive Services OpenAI
+    // User on this AOAI account so its server-side integrated vectorizer can
+    // embed with this account's text-embedding deployment (keyless). Only when
+    // Loom provisions the Search service (BYO Search grants this manually).
+    searchPrincipalId: (aiSearchEnabled && empty(existingAiSearchService)) ? aiSearch!.outputs.searchPrincipalId : ''
     skipRoleGrants: skipRoleGrants
     workspaceId: monitoring.outputs.lawId
     complianceTags: complianceTags

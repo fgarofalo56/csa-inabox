@@ -119,6 +119,14 @@ param consolePrincipalId string = ''
 @description('MAF orchestration-tier UAMI principal (object) id — granted Cognitive Services OpenAI User on this account so the MAF Container App can call Gov AOAI direct. Empty skips the grant (Gov-only tier).')
 param mafPrincipalId string = ''
 
+@description('''AI Search service system-assigned MI principal (object) id — granted
+Cognitive Services OpenAI User on this account so the Search service can call this
+account''s text-embedding deployment SERVER-SIDE for integrated vectorization (an
+`azureOpenAI` vectorizer / `AzureOpenAIEmbeddingSkill` authenticating with the
+Search service identity, not a key). AIF-2 — without this grant the vectorizer
+returns 401 at index/query time. Empty skips the grant (BYO/keyed Search).''')
+param searchPrincipalId string = ''
+
 @description('principalType for the role assignments. ServicePrincipal for a UAMI.')
 @allowed(['ServicePrincipal', 'User', 'Group'])
 param principalType string = 'ServicePrincipal'
@@ -289,6 +297,23 @@ resource raMafOpenAIUser 'Microsoft.Authorization/roleAssignments@2022-04-01' = 
   properties: {
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roleCognitiveServicesOpenAIUser)
     principalId: mafPrincipalId
+    principalType: principalType
+  }
+}
+
+// AI Search integrated vectorization (AIF-2) — grant the AI Search service's
+// system-assigned MI Cognitive Services OpenAI User on this AOAI account so the
+// server-side `azureOpenAI` vectorizer / AzureOpenAIEmbeddingSkill can embed
+// text with THIS account's text-embedding deployment using its own identity
+// (keyless, disableLocalAuth-compatible). Account-scope, in-module — the
+// principalId is passed in as a param (start-time-known here), so no BCP177.
+// Without this grant the integrated vectorizer returns 401 at index/query time.
+resource raSearchOpenAIUser 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(searchPrincipalId) && !skipRoleGrants) {
+  scope: account
+  name: guid(account.id, searchPrincipalId, roleCognitiveServicesOpenAIUser)
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roleCognitiveServicesOpenAIUser)
+    principalId: searchPrincipalId
     principalType: principalType
   }
 }
