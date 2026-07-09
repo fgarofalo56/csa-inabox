@@ -12,7 +12,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   buildScoringProfile, buildScoringProfiles, parseScoringProfiles, defaultScoringFunction,
-  buildCustomAnalyzer, buildCustomAnalyzers, parseCustomAnalyzers, emptyCustomAnalyzer,
+  buildCustomAnalyzer, buildCustomAnalyzers, parseCustomAnalyzers, customAnalyzerNames, emptyCustomAnalyzer,
   buildCorsOptions, parseCorsOptions, buildEncryptionKey, parseEncryptionKey,
   applyDesignerSections,
   type ScoringProfileRow,
@@ -84,6 +84,18 @@ describe('custom analyzers', () => {
     const rows = parseCustomAnalyzers(idx);
     expect(rows).toHaveLength(1);
     expect(rows[0].name).toBe('c1');
+  });
+
+  it('lists custom-analyzer names (deduped, nameless dropped) for the field picker', () => {
+    const idx = { analyzers: [
+      { '@odata.type': '#Microsoft.Azure.Search.CustomAnalyzer', name: 'c1', tokenizer: 'whitespace' },
+      { '@odata.type': '#Microsoft.Azure.Search.CustomAnalyzer', name: 'c1', tokenizer: 'keyword_v2' },
+      { '@odata.type': '#Microsoft.Azure.Search.CustomAnalyzer', name: '', tokenizer: 'letter' },
+      { '@odata.type': '#Microsoft.Azure.Search.PatternAnalyzer', name: 'builtinish' },
+    ] };
+    expect(customAnalyzerNames(idx)).toEqual(['c1']);
+    expect(customAnalyzerNames({})).toEqual([]);
+    expect(customAnalyzerNames(null)).toEqual([]);
   });
 });
 

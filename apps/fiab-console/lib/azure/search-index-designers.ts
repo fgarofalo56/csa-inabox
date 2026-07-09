@@ -215,6 +215,23 @@ export function parseCustomAnalyzers(index: any): CustomAnalyzerRow[] {
     }));
 }
 
+/**
+ * Names of the custom analyzers defined on an index. These join the built-in
+ * analyzer list in the Schema-tab field designer's per-field analyzer dropdown,
+ * so an analyzer authored in `AnalyzersDesigner` can actually be assigned to a
+ * field (closing the AIF-16 loop — authoring a custom analyzer is only useful if
+ * a field can reference it). Nameless rows are dropped; the result is de-duped.
+ */
+export function customAnalyzerNames(index: any): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const a of parseCustomAnalyzers(index)) {
+    const name = (a.name || '').trim();
+    if (name && !seen.has(name)) { seen.add(name); out.push(name); }
+  }
+  return out;
+}
+
 // ---------------------------------------------------------------------------
 // CORS  (index.corsOptions)
 // ---------------------------------------------------------------------------
