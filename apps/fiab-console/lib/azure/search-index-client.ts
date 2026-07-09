@@ -43,6 +43,14 @@ export const SEARCH_DATA_API = '2024-07-01';
  * Grounded in Learn: https://learn.microsoft.com/azure/search/search-howto-run-reset-indexers
  */
 export const SEARCH_PREVIEW_API = '2024-11-01-preview';
+/**
+ * Preview data-plane api-version for `POST /indexers/{n}/resync`. Resync is only
+ * exposed on the 2025/2026 preview surface (the reference example uses
+ * `2026-05-01-preview`), so it carries its own version rather than reusing
+ * SEARCH_PREVIEW_API. Grounded in Learn:
+ *   https://learn.microsoft.com/azure/search/search-howto-run-reset-indexers#how-to-resync-indexers-preview
+ */
+export const SEARCH_RESYNC_API = '2026-05-01-preview';
 const SEARCH_SCOPE = 'https://search.azure.com/.default';
 
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
@@ -471,6 +479,29 @@ export async function resetIndexerSkills(
   const res = await call(`/indexers/${encodeURIComponent(name)}/resetskills`, { service, method: 'POST', body, apiVersion: SEARCH_PREVIEW_API });
   if (res.status === 202 || res.status === 204 || res.ok) return { ok: true };
   await readJsonGuarded(res, `reset skills ${name}`);
+  return { ok: true };
+}
+
+/**
+ * POST /indexers/{name}/resync — place the indexer in resync mode so the NEXT
+ * run does a partial reindex of only the selected `options` (currently only
+ * `permissions`: re-ingest ADLS Gen2 ACL / RBAC scope whose last-modified time
+ * didn't change, which ordinary change-tracking misses). More efficient than a
+ * full reset for large datasets and needs no document-key list. After this call
+ * the caller must RUN the indexer to apply it. Preview api-version. 204 → ok.
+ *   https://learn.microsoft.com/azure/search/search-howto-run-reset-indexers#how-to-resync-indexers-preview
+ */
+export async function resyncIndexer(
+  name: string,
+  opts: { options?: string[] } = {},
+  service?: string,
+): Promise<{ ok: true }> {
+  const options = opts.options && opts.options.length ? opts.options : ['permissions'];
+  const res = await call(`/indexers/${encodeURIComponent(name)}/resync`, {
+    service, method: 'POST', body: { options }, apiVersion: SEARCH_RESYNC_API,
+  });
+  if (res.status === 202 || res.status === 204 || res.ok) return { ok: true };
+  await readJsonGuarded(res, `resync ${name}`);
   return { ok: true };
 }
 

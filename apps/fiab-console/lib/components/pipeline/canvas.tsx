@@ -211,6 +211,12 @@ export interface PipelineCanvasProps {
    * mutation to the host, which commits it through the undoable save path.
    */
   onAddActivities?: (clones: PipelineActivity[]) => void;
+  /**
+   * "Explain this step" (W19) — fired by a node's inline Explain action with the
+   * activity name. The host resolves the activity + its canvas neighbors and
+   * opens the node-scoped Explain drawer. Absent → no Explain action on nodes.
+   */
+  onExplainNode?: (name: string) => void;
   /** Suppress mutating shortcuts while a save is in flight. */
   readOnly?: boolean;
   /**
@@ -248,7 +254,7 @@ function buildEdges(activities: PipelineActivity[]): Edge[] {
 
 const PipelineCanvasInner = forwardRef<CanvasHandle, PipelineCanvasProps>(function PipelineCanvasInner(
   { activities, selectedName, onSelect, onDropPaletteKey, onConnect, onDrillInto, onDrillBack, snapToGrid = true, showGrid = true, onZoomChange,
-    onUndo, onRedo, canUndo = false, canRedo = false, onAddActivities, readOnly = false, hideEmptyState = false },
+    onUndo, onRedo, canUndo = false, canRedo = false, onAddActivities, onExplainNode, readOnly = false, hideEmptyState = false },
   ref,
 ) {
   const s = useStyles();
@@ -294,6 +300,9 @@ const PipelineCanvasInner = forwardRef<CanvasHandle, PipelineCanvasProps>(functi
         // Only container activities get a drill handler (→ the pencil button
         // renders). Non-containers leave it undefined.
         onDrill: onDrillInto && isContainerType(a.type) ? onDrillInto : undefined,
+        // "Explain this step" (W19) — surfaces the node Explain action when the
+        // host wires it; leaf + container nodes alike.
+        onExplain: onExplainNode,
         // Inline nested-activity preview (N toggle) — only meaningful on
         // containers, but harmless on leaf nodes (they render nothing).
         showNestedPreview: showNestedPreviews,
@@ -332,7 +341,7 @@ const PipelineCanvasInner = forwardRef<CanvasHandle, PipelineCanvasProps>(functi
       }
     }
     setNodes(activityNodes);
-  }, [activities, selectedName, setNodes, onDrillInto, showNestedPreviews, readOnly, onDropPaletteKey]);
+  }, [activities, selectedName, setNodes, onDrillInto, onExplainNode, showNestedPreviews, readOnly, onDropPaletteKey]);
 
   // Re-sync when the activity set / their deps change.
   useEffect(() => { syncNodes(); }, [syncNodes]);

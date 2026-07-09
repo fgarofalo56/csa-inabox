@@ -14,10 +14,10 @@ import { getSession } from '@/lib/auth/session';
 import {
   listIndexers, listDataSources, listSkillsets, runIndexer, resetIndexer, getIndexerStatus,
   getIndexer, updateIndexerSchedule, validateScheduleInterval,
-  resetIndexerDocs, resetIndexerSkills, updateIndexerFieldMappings,
+  resetIndexerDocs, resetIndexerSkills, resyncIndexer, updateIndexerFieldMappings,
   SearchNotDeployedError, SearchDataError,
 } from '@/lib/azure/search-index-client';
-import { buildFieldMappings } from '@/lib/azure/search-indexer-shapes';
+import { buildFieldMappings, normalizeResyncOptions } from '@/lib/azure/search-indexer-shapes';
 import {
   resolveSearchBinding, searchBindingErrorResponse, SEARCH_ITEM_TYPE,
 } from '@/lib/azure/search-binding';
@@ -66,8 +66,8 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   const body = await req.json().catch(() => ({}));
   const action = body?.action;
   const indexer = typeof body?.indexer === 'string' ? body.indexer.trim() : '';
-  if (!['run', 'reset', 'resetDocs', 'resetSkills', 'setFieldMappings', 'status', 'get', 'setSchedule'].includes(action)) {
-    return NextResponse.json({ ok: false, error: "action must be 'run', 'reset', 'resetDocs', 'resetSkills', 'setFieldMappings', 'status', 'get' or 'setSchedule'" }, { status: 400 });
+  if (!['run', 'reset', 'resetDocs', 'resetSkills', 'resync', 'setFieldMappings', 'status', 'get', 'setSchedule'].includes(action)) {
+    return NextResponse.json({ ok: false, error: "action must be 'run', 'reset', 'resetDocs', 'resetSkills', 'resync', 'setFieldMappings', 'status', 'get' or 'setSchedule'" }, { status: 400 });
   }
   if (!indexer) return NextResponse.json({ ok: false, error: 'indexer name is required' }, { status: 400 });
   // Validate schedule interval up front (before resolving the binding).
@@ -95,6 +95,11 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       const skillNames = Array.isArray(body?.skillNames) ? body.skillNames.map((k: any) => String(k)).filter(Boolean) : undefined;
       await resetIndexerSkills(indexer, { skillNames }, service);
       return NextResponse.json({ ok: true, action: 'resetSkills', indexer });
+    }
+    if (action === 'resync') {
+      const options = normalizeResyncOptions(Array.isArray(body?.options) ? body.options.map((o: any) => String(o)) : undefined);
+      await resyncIndexer(indexer, { options }, service);
+      return NextResponse.json({ ok: true, action: 'resync', indexer, options });
     }
     if (action === 'setFieldMappings') {
       const fieldMappings = Array.isArray(body?.fieldMappings) ? buildFieldMappings(body.fieldMappings) : undefined;

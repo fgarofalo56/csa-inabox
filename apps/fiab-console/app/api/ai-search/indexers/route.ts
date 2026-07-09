@@ -14,10 +14,10 @@ import { getSession } from '@/lib/auth/session';
 import {
   listIndexers, createIndexer, deleteIndexer, runIndexer, resetIndexer, getIndexerStatus,
   getIndexer, updateIndexerSchedule, validateScheduleInterval,
-  resetIndexerDocs, resetIndexerSkills, updateIndexerFieldMappings,
+  resetIndexerDocs, resetIndexerSkills, resyncIndexer, updateIndexerFieldMappings,
   searchConfigGate, SearchNotDeployedError, SearchDataError,
 } from '@/lib/azure/search-index-client';
-import { buildFieldMappings } from '@/lib/azure/search-indexer-shapes';
+import { buildFieldMappings, normalizeResyncOptions } from '@/lib/azure/search-indexer-shapes';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -53,8 +53,8 @@ export async function POST(req: NextRequest) {
   if (body?.action) {
     const indexer = typeof body?.indexer === 'string' ? body.indexer.trim() : '';
     if (!indexer) return NextResponse.json({ ok: false, error: 'indexer name required' }, { status: 400 });
-    if (!['run', 'reset', 'resetDocs', 'resetSkills', 'setFieldMappings', 'status', 'get', 'setSchedule'].includes(body.action)) {
-      return NextResponse.json({ ok: false, error: "action must be 'run', 'reset', 'resetDocs', 'resetSkills', 'setFieldMappings', 'status', 'get' or 'setSchedule'" }, { status: 400 });
+    if (!['run', 'reset', 'resetDocs', 'resetSkills', 'resync', 'setFieldMappings', 'status', 'get', 'setSchedule'].includes(body.action)) {
+      return NextResponse.json({ ok: false, error: "action must be 'run', 'reset', 'resetDocs', 'resetSkills', 'resync', 'setFieldMappings', 'status', 'get' or 'setSchedule'" }, { status: 400 });
     }
     try {
       if (body.action === 'run') { await runIndexer(indexer); return NextResponse.json({ ok: true, action: 'run', indexer }); }
@@ -69,6 +69,11 @@ export async function POST(req: NextRequest) {
         const skillNames = Array.isArray(body?.skillNames) ? body.skillNames.map((k: any) => String(k)).filter(Boolean) : undefined;
         await resetIndexerSkills(indexer, { skillNames });
         return NextResponse.json({ ok: true, action: 'resetSkills', indexer });
+      }
+      if (body.action === 'resync') {
+        const options = normalizeResyncOptions(Array.isArray(body?.options) ? body.options.map((o: any) => String(o)) : undefined);
+        await resyncIndexer(indexer, { options });
+        return NextResponse.json({ ok: true, action: 'resync', indexer, options });
       }
       if (body.action === 'setFieldMappings') {
         const fieldMappings = Array.isArray(body?.fieldMappings) ? buildFieldMappings(body.fieldMappings) : undefined;

@@ -28,13 +28,15 @@ import {
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
-  ArrowSync16Regular, Add16Regular, Dismiss16Regular,
-  ArrowCounterclockwise16Regular, History20Regular, ArrowRouting20Regular,
+  ArrowSync16Regular, Add16Regular, Dismiss16Regular, Play16Regular,
+  ArrowCounterclockwise16Regular, ArrowClockwise16Regular,
+  History20Regular, ArrowRouting20Regular,
 } from '@fluentui/react-icons';
 import {
   type FieldMappingRow, type IndexerRun,
   MAPPING_FUNCTIONS, MAPPING_FUNCTION_LABELS, emptyFieldMappingRow,
   functionHasParameters, parseIndexerMappings, parseExecutionHistory, runDuration,
+  RESYNC_OPTIONS, RESYNC_OPTION_LABELS,
 } from '@/lib/azure/search-indexer-shapes';
 
 const useStyles = makeStyles({
@@ -103,6 +105,7 @@ export function IndexerOpsPanel({ route, indexer, skillsetName }: IndexerOpsPane
   // Reset controls
   const [docKeys, setDocKeys] = useState('');
   const [skillNames, setSkillNames] = useState('');
+  const [resyncOpts, setResyncOpts] = useState<string[]>([...RESYNC_OPTIONS]);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ intent: 'success' | 'error'; text: string } | null>(null);
 
@@ -186,6 +189,26 @@ export function IndexerOpsPanel({ route, indexer, skillsetName }: IndexerOpsPane
         ? (payload.documentKeys ? `Reset ${payload.documentKeys.length} document(s) — re-indexed next run.` : 'Reset-docs list cleared.')
         : (payload.skillNames ? `Reset ${payload.skillNames.length} skill(s) cache — re-runs next run.` : 'All skills cache reset — re-runs next run.'),
     });
+  };
+
+  const doResync = async () => {
+    setBusy(true); setMsg(null);
+    const options = resyncOpts.length ? resyncOpts : [...RESYNC_OPTIONS];
+    const r = await fetch(route, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'resync', indexer, options }) });
+    const j = await readJson(r);
+    setBusy(false);
+    if (!j?.ok) { setMsg({ intent: 'error', text: j?.error || `HTTP ${r.status}` }); return; }
+    setMsg({ intent: 'success', text: `Resync mode set for [${options.join(', ')}]. Run the indexer to apply it.` });
+  };
+
+  const doRun = async () => {
+    setBusy(true); setMsg(null);
+    const r = await fetch(route, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'run', indexer }) });
+    const j = await readJson(r);
+    setBusy(false);
+    if (!j?.ok) { setMsg({ intent: 'error', text: j?.error || `HTTP ${r.status}` }); return; }
+    setMsg({ intent: 'success', text: 'Indexer run started (POST /indexers/run). Refresh execution history for the result.' });
+    loadStatus();
   };
 
   const mappingTable = (kind: 'field' | 'output', rows: FieldMappingRow[], help: string) => (
@@ -355,6 +378,21 @@ export function IndexerOpsPanel({ route, indexer, skillsetName }: IndexerOpsPane
               </Field>
               <div className={s.actions}>
                 <Button appearance="primary" disabled={busy || !skillsetName} icon={<ArrowCounterclockwise16Regular />} onClick={() => doReset('resetSkills')}>Reset skills</Button>
+              </div>
+            </div>
+            <div className={s.card}>
+              <Subtitle2>Resync (preview)</Subtitle2>
+              <Caption1>Place the indexer in resync mode for an efficient partial reindex — used when a change (e.g. an ADLS Gen2 ACL edit) doesn&apos;t bump the source last-modified time, so ordinary change-tracking misses it. Cheaper than a full reset and needs no document keys. <code>POST /indexers/{indexer}/resync</code>, then run.</Caption1>
+              <div className={s.actions}>
+                {RESYNC_OPTIONS.map((opt) => (
+                  <Checkbox key={opt} checked={resyncOpts.includes(opt)} label={RESYNC_OPTION_LABELS[opt] ?? opt} aria-label={`resync-option-${opt}`}
+                    onChange={(_, d) => setResyncOpts((cur) => (d.checked ? Array.from(new Set([...cur, opt])) : cur.filter((o) => o !== opt)))} />
+                ))}
+              </div>
+              <div className={s.actions}>
+                <Button appearance="primary" disabled={busy || resyncOpts.length === 0} icon={<ArrowClockwise16Regular />} onClick={doResync}>Resync</Button>
+                <Button disabled={busy} icon={<Play16Regular />} onClick={doRun}>Run indexer now</Button>
+                <Caption1>After a resync (or reset), run the indexer to apply it.</Caption1>
               </div>
             </div>
           </AccordionPanel>
