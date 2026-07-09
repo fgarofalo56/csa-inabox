@@ -1,32 +1,32 @@
 'use client';
 
 /**
- * PropertiesPanel — right rail tabbed editor for the selected activity.
+ * PropertiesPanel — right-rail / bottom-dock tabbed editor for the selected
+ * pipeline activity. It is now a thin CONSUMER of the shared
+ * `<DockedInspector>` (lib/components/shared/docked-inspector.tsx) — the
+ * generalized version of this very panel (PRP-ux-baseline-program §3, SC-3). The
+ * shared shell owns the accent-gradient header, the validation-dot tab strip,
+ * the collapse toggle, and the scrollable body; this file supplies the pipeline-
+ * specific tab CONTENT and the pre-run validation counts.
  *
  * Tabs (Fabric parity):
  *   - General        — name, description, dependsOn
- *   - Source / Sink  — when activity has source/sink typeProperties
- *   - Settings       — typeProperties JSON (fallback for not-yet-form-ified types)
- *   - Parameters     — show pipeline params, allow @pipeline().parameters.foo refs
+ *   - Source/Sink…   — Copy activity's Source / Destination / Mapping / Settings,
+ *                      or a generic Source/Sink tab for Lookup / GetMetadata / …
+ *   - Settings       — activity form (or raw typeProperties JSON) + activity policy
+ *   - Parameters     — pipeline params/variables reference
  *   - User properties— optional userProperties[] entries
  *
- * Edits go through a single `onPatchActivity` callback so the editor's
- * undo/save lifecycle stays consistent.
- *
- * Web-5.0 chrome: the panel REUSES the shared canvas-node-kit so its header
- * carries the SAME per-type glyph + per-category accent the canvas node uses
- * for the selected activity (`getActivityVisual`) — accent-tinted icon chip,
- * gradient header, accent type-chip. Section headers carry a Fluent glyph +
- * `Subtitle2`/`Caption1` hint, panels get elevation + `borderRadiusLarge`, and
- * the no-selection pane uses the shared `EmptyState`. Every colour / space /
- * radius / shadow is a Fluent v9 `tokens.*` value or a `--loom-accent-*` var
- * combined via the kit's token-only `accentTint` / `accentGradient` helpers —
- * no raw px / hex / hardcoded shadow.
+ * Each tab carries the SAME red superscript validation dot the shared inspector
+ * renders (pre-run, from `tabIssueCounts`). Edits go through a single
+ * `onPatch` callback so the editor's undo/save lifecycle stays consistent.
+ * Every colour / space / radius / shadow is a Fluent v9 `tokens.*` value — no
+ * raw px / hex / hardcoded shadow.
  */
 
 import { useState, useEffect } from 'react';
 import {
-  Tab, TabList, Input, Field, Textarea, Caption1, Button, Subtitle2, Link, Tooltip,
+  Input, Field, Textarea, Caption1, Button, Subtitle2,
   Table, TableHeader, TableHeaderCell, TableBody, TableRow, TableCell,
   MessageBar, MessageBarBody, MessageBarTitle, Badge, makeStyles, tokens, Select, Switch,
   Dropdown, Option, Accordion, AccordionItem, AccordionHeader, AccordionPanel,
@@ -35,7 +35,6 @@ import {
   Add20Regular, Delete20Regular, Cursor20Regular, Settings20Regular,
   BranchCompare20Regular, Timer20Regular,
   BracesVariable20Regular, TagMultiple20Regular,
-  Open16Regular, ChevronDown16Regular, ChevronUp16Regular,
 } from '@fluentui/react-icons';
 import { findForActivity, canvasCategoryForType } from './activity-catalog';
 import { tabIssueCounts, type PipelineTabId } from './pipeline-validation';
@@ -46,81 +45,12 @@ import { SinkTab } from './copy/sink-tab';
 import { MappingTab } from './copy/mapping-tab';
 import { CopySettingsTab } from './copy/copy-settings-tab';
 import { useCopyResources } from './copy/use-copy-resources';
-import {
-  getActivityVisual, CATEGORY_ICON, accentTint, accentGradient,
-} from '@/lib/components/canvas/canvas-node-kit';
+import { getActivityVisual, CATEGORY_ICON } from '@/lib/components/canvas/canvas-node-kit';
 import { EmptyState } from '@/lib/components/empty-state';
-import type { PipelineActivity, PipelineParameter, PipelineParameterType, PipelineVariable } from './types';
+import { DockedInspector, type DockedInspectorTab } from '@/lib/components/shared/docked-inspector';
+import type { PipelineActivity, PipelineParameter, PipelineVariable } from './types';
 
 const useStyles = makeStyles({
-  // Right-rail layout (legacy callers).
-  root: {
-    display: 'flex', flexDirection: 'column',
-    width: '380px', minWidth: '320px',
-    backgroundColor: tokens.colorNeutralBackground1,
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusLarge,
-    boxShadow: tokens.shadow4,
-    overflow: 'hidden',
-  },
-  // Bottom-dock layout (ADF Studio parity) — full width, fixed height,
-  // header + horizontal tab strip + scrollable body.
-  dockRoot: {
-    // Fills the resizable bottom dock (height is owned by the parent splitter
-    // pane); the body scrolls internally so section expand/collapse never grows
-    // the dock or resizes the canvas above it.
-    display: 'flex', flexDirection: 'column',
-    width: '100%', height: '100%', minHeight: 0,
-    backgroundColor: tokens.colorNeutralBackground1,
-    overflow: 'hidden',
-  },
-  // Accent-gradient header (category-tinted, matches the canvas node header).
-  header: {
-    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS,
-    paddingTop: tokens.spacingVerticalM, paddingBottom: tokens.spacingVerticalM,
-    paddingLeft: tokens.spacingHorizontalL, paddingRight: tokens.spacingHorizontalL,
-    borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
-  },
-  headerTop: {
-    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS,
-    minWidth: 0,
-  },
-  iconChip: {
-    flexShrink: 0,
-    width: '32px', height: '32px',
-    borderRadius: tokens.borderRadiusMedium,
-    display: 'flex', alignItems: 'center', justifyContent: 'center',
-  },
-  headerTitleCol: { display: 'flex', flexDirection: 'column', minWidth: 0, flex: 1 },
-  headerMeta: { display: 'flex', gap: tokens.spacingHorizontalXS, alignItems: 'center', flexWrap: 'wrap' },
-  // Tab strip — subtle background lane so it reads as a distinct band.
-  tabStrip: {
-    paddingLeft: tokens.spacingHorizontalS, paddingRight: tokens.spacingHorizontalS,
-    borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
-    backgroundColor: tokens.colorNeutralBackground2,
-  },
-  // Tab label wrapper so the red validation dot can superscript it (Fabric parity).
-  tabLabel: { position: 'relative', display: 'inline-flex', alignItems: 'center' },
-  // Red superscript dot on a tab whose fields have unmet required config.
-  tabDot: {
-    position: 'absolute',
-    top: '-3px', right: '-9px',
-    minWidth: '8px', height: '8px',
-    borderRadius: tokens.borderRadiusCircular,
-    backgroundColor: tokens.colorPaletteRedBackground3,
-    border: `1px solid ${tokens.colorNeutralBackground1}`,
-  },
-  // Collapse toggle sits at the right edge of the header top row.
-  collapseBtn: { flexShrink: 0, marginLeft: 'auto' },
-  learnRow: {
-    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXXS,
-  },
-  body: {
-    paddingTop: tokens.spacingVerticalL, paddingBottom: tokens.spacingVerticalL,
-    paddingLeft: tokens.spacingHorizontalL, paddingRight: tokens.spacingHorizontalL,
-    overflowY: 'auto', display: 'flex', flexDirection: 'column',
-    gap: tokens.spacingVerticalM, flex: 1,
-  },
   // Section header — Fluent glyph + Subtitle2 + Caption1 hint.
   sectionHead: {
     display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS,
@@ -216,7 +146,6 @@ type TabId =
 
 export function PropertiesPanel({ activity, allActivities, parameters, variables, onPatch, onDelete, layout = 'rail', itemId, pipelineId, workspaceId, apiSlug, parentActivity = null, onDrillInto }: PropertiesPanelProps) {
   const s = useStyles();
-  const rootClass = layout === 'dock' ? s.dockRoot : s.root;
   const [tab, setTab] = useState<TabId>('general');
   const [typePropsText, setTypePropsText] = useState('');
   const [typePropsErr, setTypePropsErr] = useState<string | null>(null);
@@ -227,12 +156,6 @@ export function PropertiesPanel({ activity, allActivities, parameters, variables
   // Pre-run validation — per-tab counts of unmet required fields, so each tab can
   // carry Fabric's red superscript dot BEFORE the pipeline is ever run.
   const tabCounts = tabIssueCounts(activity);
-  const dotFor = (id: PipelineTabId) => ((tabCounts[id] || 0) > 0
-    ? <span className={s.tabDot} aria-label="has required fields to complete" />
-    : null);
-  const tabChild = (id: PipelineTabId, label: string) => (
-    <span className={s.tabLabel}>{label}{dotFor(id)}</span>
-  );
 
   // Factory datasets + linked services — backs the Source/Sink dataset pickers,
   // the Copy Mapping schema import, and the Settings staging/redirect linked-
@@ -257,13 +180,20 @@ export function PropertiesPanel({ activity, allActivities, parameters, variables
 
   if (!activity) {
     return (
-      <div className={rootClass} data-properties-dock={layout === 'dock' ? '' : undefined}>
-        <EmptyState
-          icon={<Cursor20Regular />}
-          title="No activity selected"
-          body="Select an activity on the canvas to edit its properties — General, Source / Sink, Settings, Parameters, and User properties all appear here."
-        />
-      </div>
+      <DockedInspector
+        layout={layout}
+        title="No activity selected"
+        tabs={[]}
+        selectedTab=""
+        onSelectTab={() => {}}
+        emptyState={
+          <EmptyState
+            icon={<Cursor20Regular />}
+            title="No activity selected"
+            body="Select an activity on the canvas to edit its properties — General, Source / Sink, Settings, Parameters, and User properties all appear here."
+          />
+        }
+      />
     );
   }
 
@@ -277,510 +207,500 @@ export function PropertiesPanel({ activity, allActivities, parameters, variables
   const accent = visual.accent;
   const sectionGlyph = CATEGORY_ICON[canvasCategoryForType(activity.type)];
 
-  return (
-    <div className={rootClass} data-properties-dock={layout === 'dock' ? '' : undefined}>
-      <div className={s.header} style={{ background: accentGradient(accent) }}>
-        <div className={s.headerTop}>
-          <span
-            className={s.iconChip}
-            style={{ background: accentTint(accent, 16), color: accent, border: `1px solid ${accentTint(accent, 28)}` }}
-            aria-hidden="true"
-          >
-            {visual.icon}
-          </span>
-          <div className={s.headerTitleCol}>
-            <Subtitle2>{activity.name}</Subtitle2>
-            <div className={s.headerMeta}>
-              <Badge
-                appearance="tint"
-                size="small"
-                style={{ backgroundColor: accentTint(accent, 14), color: accent, borderColor: accentTint(accent, 28) }}
-              >
-                {def?.label || activity.type || 'Unknown'}
-              </Badge>
-              {def && !def.runnable && (
-                <Badge appearance="outline" size="small" color="warning" title={def.remediation}>Save-only</Badge>
-              )}
-              {/* Learn-more — the same contextual help link Fabric/ADF shows. */}
-              <Link
-                className={s.learnRow}
-                href={learnUrlForActivity(activity.type)}
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                Learn more <Open16Regular />
-              </Link>
-            </div>
-          </div>
-          {layout === 'dock' && (
-            <Tooltip content={collapsed ? 'Expand properties' : 'Collapse properties'} relationship="label">
-              <Button
-                className={s.collapseBtn}
-                appearance="subtle"
-                size="small"
-                aria-label={collapsed ? 'Expand properties panel' : 'Collapse properties panel'}
-                aria-expanded={!collapsed}
-                icon={collapsed ? <ChevronUp16Regular /> : <ChevronDown16Regular />}
-                onClick={() => setCollapsed((v) => !v)}
-              />
-            </Tooltip>
-          )}
+  // Validation-dot props for a tab, driven by the pre-run issue counts.
+  const dot = (id: PipelineTabId) => ({
+    hasValidationIssue: (tabCounts[id] || 0) > 0,
+    issueCount: tabCounts[id],
+  });
+
+  // Header meta badges — activity type + save-only marker (Fabric parity).
+  const badges = (
+    <>
+      <Badge appearance="tint" size="small">{def?.label || activity.type || 'Unknown'}</Badge>
+      {def && !def.runnable && (
+        <Badge appearance="outline" size="small" color="warning" title={def.remediation}>Save-only</Badge>
+      )}
+    </>
+  );
+
+  // Header-level warnings (infra-gate + thread-safety) rendered under the header.
+  const headerExtra = (
+    <>
+      {def && !def.runnable && (
+        <MessageBar intent="warning">
+          <MessageBarBody>
+            <MessageBarTitle>Activity will not execute on this backing</MessageBarTitle>
+            {def.remediation}
+          </MessageBarBody>
+        </MessageBar>
+      )}
+      {(activity.type === 'SetVariable' || activity.type === 'AppendVariable')
+        && parentActivity?.type === 'ForEach'
+        && (parentActivity.typeProperties as Record<string, unknown> | undefined)?.isSequential === false && (
+        <MessageBar intent="warning">
+          <MessageBarBody>
+            <MessageBarTitle>Thread-safety risk — parallel ForEach</MessageBarTitle>
+            {activity.type} inside the non-sequential ForEach{' '}
+            <strong>{parentActivity.name}</strong> may produce non-deterministic
+            results. ADF runs each ForEach iteration concurrently when{' '}
+            <strong>isSequential</strong> is <code>false</code> — concurrent writes
+            to the same pipeline-scoped variable are not atomic, so the last write
+            wins. To fix: turn the parent ForEach&apos;s <strong>Sequential</strong>{' '}
+            toggle on, or accumulate results in an external store (SQL table,
+            Cosmos container) instead of a pipeline variable.
+          </MessageBarBody>
+        </MessageBar>
+      )}
+    </>
+  );
+
+  // ── Tab CONTENT (unchanged behaviour; now hosted by DockedInspector) ─────────
+
+  const generalContent = (
+    <>
+      <div className={s.sectionHead}>
+        <span className={s.sectionIcon} aria-hidden="true">{sectionGlyph}</span>
+        <div>
+          <Subtitle2>General</Subtitle2>
+          <Caption1 as="p" className={s.sectionHint}>Name, description, and run-order dependencies.</Caption1>
         </div>
-        {def && !def.runnable && (
-          <MessageBar intent="warning">
-            <MessageBarBody>
-              <MessageBarTitle>Activity will not execute on this backing</MessageBarTitle>
-              {def.remediation}
-            </MessageBarBody>
-          </MessageBar>
-        )}
-        {/* Thread-safety warning: SetVariable / AppendVariable inside a parallel
-            (non-sequential) ForEach. ADF evaluates iterations concurrently when
-            isSequential is false — concurrent writes to a pipeline-scoped
-            variable are not atomic and the last write wins (non-deterministic). */}
-        {(activity.type === 'SetVariable' || activity.type === 'AppendVariable')
-          && parentActivity?.type === 'ForEach'
-          && (parentActivity.typeProperties as Record<string, unknown> | undefined)?.isSequential === false && (
-          <MessageBar intent="warning">
-            <MessageBarBody>
-              <MessageBarTitle>Thread-safety risk — parallel ForEach</MessageBarTitle>
-              {activity.type} inside the non-sequential ForEach{' '}
-              <strong>{parentActivity.name}</strong> may produce non-deterministic
-              results. ADF runs each ForEach iteration concurrently when{' '}
-              <strong>isSequential</strong> is <code>false</code> — concurrent writes
-              to the same pipeline-scoped variable are not atomic, so the last write
-              wins. To fix: turn the parent ForEach&apos;s <strong>Sequential</strong>{' '}
-              toggle on, or accumulate results in an external store (SQL table,
-              Cosmos container) instead of a pipeline variable.
-            </MessageBarBody>
-          </MessageBar>
-        )}
       </div>
-
-      {!(layout === 'dock' && collapsed) && (
-      <>
-      <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as TabId)} size="small"
-        className={s.tabStrip}>
-        <Tab value="general">{tabChild('general', 'General')}</Tab>
-        {isCopyActivity && <Tab value="source">{tabChild('source', 'Source')}</Tab>}
-        {isCopyActivity && <Tab value="sink">{tabChild('sink', 'Destination')}</Tab>}
-        {isCopyActivity && <Tab value="mapping">{tabChild('mapping', 'Mapping')}</Tab>}
-        {isCopyActivity && <Tab value="copy-settings">{tabChild('copy-settings', 'Settings')}</Tab>}
-        {!isCopyActivity && hasSourceSink && <Tab value="source-sink">{tabChild('source-sink', 'Source / Sink')}</Tab>}
-        <Tab value="settings">{tabChild('settings', isCopyActivity ? 'Activity policy' : 'Settings')}</Tab>
-        <Tab value="parameters">Parameters</Tab>
-        <Tab value="user-props">User properties</Tab>
-      </TabList>
-
-      <div className={s.body}>
-        {tab === 'general' && (
-          <>
-            <div className={s.sectionHead}>
-              <span className={s.sectionIcon} aria-hidden="true">{sectionGlyph}</span>
-              <div>
-                <Subtitle2>General</Subtitle2>
-                <Caption1 as="p" className={s.sectionHint}>Name, description, and run-order dependencies.</Caption1>
-              </div>
-            </div>
-            <div className={s.card}>
-              <Field label="Name" required>
-                <Input value={activity.name} onChange={(_, d) => onPatch({ name: d.value })} />
-              </Field>
-              <Field label="Description">
-                <Textarea value={activity.description || ''} rows={2}
-                  onChange={(_, d) => onPatch({ description: d.value })} />
-              </Field>
-              <Field label="Depends on">
-                <Caption1>Click to toggle a dependency on another activity.</Caption1>
-                <div className={s.dependsRow}>
-                  {allActivities.filter((a) => a.name !== activity.name).map((a) => {
-                    const dep = (activity.dependsOn || []).find((d) => d.activity === a.name);
-                    const conds = dep?.dependencyConditions || [];
-                    return (
-                      <div key={a.name} className={s.dependsItem}>
-                        <Button size="small"
-                          appearance={dep ? 'primary' : 'outline'}
-                          onClick={() => {
-                            const ds = activity.dependsOn || [];
-                            if (dep) onPatch({ dependsOn: ds.filter((d) => d.activity !== a.name) });
-                            else onPatch({ dependsOn: [...ds, { activity: a.name, dependencyConditions: ['Succeeded'] }] });
-                          }}>{a.name}</Button>
-                        {dep && (
-                          <Select size="small"
-                            value={conds[0] || 'Succeeded'}
-                            onChange={(_, d) => {
-                              const ds = activity.dependsOn || [];
-                              onPatch({
-                                dependsOn: ds.map((x) => x.activity === a.name
-                                  ? { ...x, dependencyConditions: [d.value] } : x),
-                              });
-                            }}>
-                            <option value="Succeeded">Succeeded</option>
-                            <option value="Failed">Failed</option>
-                            <option value="Completed">Completed</option>
-                            <option value="Skipped">Skipped</option>
-                          </Select>
-                        )}
-                      </div>
-                    );
-                  })}
-                  {allActivities.length <= 1 && <Caption1>No other activities to depend on yet.</Caption1>}
+      <div className={s.card}>
+        <Field label="Name" required>
+          <Input value={activity.name} onChange={(_, d) => onPatch({ name: d.value })} />
+        </Field>
+        <Field label="Description">
+          <Textarea value={activity.description || ''} rows={2}
+            onChange={(_, d) => onPatch({ description: d.value })} />
+        </Field>
+        <Field label="Depends on">
+          <Caption1>Click to toggle a dependency on another activity.</Caption1>
+          <div className={s.dependsRow}>
+            {allActivities.filter((a) => a.name !== activity.name).map((a) => {
+              const dep = (activity.dependsOn || []).find((d) => d.activity === a.name);
+              const conds = dep?.dependencyConditions || [];
+              return (
+                <div key={a.name} className={s.dependsItem}>
+                  <Button size="small"
+                    appearance={dep ? 'primary' : 'outline'}
+                    onClick={() => {
+                      const ds = activity.dependsOn || [];
+                      if (dep) onPatch({ dependsOn: ds.filter((d) => d.activity !== a.name) });
+                      else onPatch({ dependsOn: [...ds, { activity: a.name, dependencyConditions: ['Succeeded'] }] });
+                    }}>{a.name}</Button>
+                  {dep && (
+                    <Select size="small"
+                      value={conds[0] || 'Succeeded'}
+                      onChange={(_, d) => {
+                        const ds = activity.dependsOn || [];
+                        onPatch({
+                          dependsOn: ds.map((x) => x.activity === a.name
+                            ? { ...x, dependencyConditions: [d.value] } : x),
+                        });
+                      }}>
+                      <option value="Succeeded">Succeeded</option>
+                      <option value="Failed">Failed</option>
+                      <option value="Completed">Completed</option>
+                      <option value="Skipped">Skipped</option>
+                    </Select>
+                  )}
                 </div>
-              </Field>
-            </div>
-            <Button appearance="subtle" icon={<Delete20Regular />} onClick={onDelete}
-              className={s.deleteBtn}>
-              Delete activity
-            </Button>
-          </>
-        )}
+              );
+            })}
+            {allActivities.length <= 1 && <Caption1>No other activities to depend on yet.</Caption1>}
+          </div>
+        </Field>
+      </div>
+      <Button appearance="subtle" icon={<Delete20Regular />} onClick={onDelete}
+        className={s.deleteBtn}>
+        Delete activity
+      </Button>
+    </>
+  );
 
-        {tab === 'source' && isCopyActivity && (
+  const sourceSinkContent = (
+    <>
+      <div className={s.sectionHead}>
+        <span className={s.sectionIcon} aria-hidden="true"><BranchCompare20Regular /></span>
+        <div>
+          <Subtitle2>Source / Sink</Subtitle2>
+          <Caption1 as="p" className={s.sectionHint}>Bind factory datasets and tune copy behaviour for this activity.</Caption1>
+        </div>
+      </div>
+      <div className={s.card}>
+      {(() => {
+        const inputName = ((activity.inputs as any[]) || [])[0]?.referenceName as string | undefined;
+        const outputName = ((activity.outputs as any[]) || [])[0]?.referenceName as string | undefined;
+        const refOrEmpty = (name: string) => name
+          ? [{ referenceName: name, type: 'DatasetReference', parameters: {} }]
+          : [];
+        return (
+          <>
+            <Caption1>
+              Bind a factory dataset to this activity. Selecting a source/sink dataset sets the
+              activity&apos;s <code>inputs</code>/<code>outputs</code> DatasetReference. Manage datasets
+              in the ribbon&apos;s <strong>Manage</strong> hub. {datasetNames.length === 0 && '(No datasets found — create one in Manage, or the factory isn’t configured.)'}
+            </Caption1>
+            <Field label="Source dataset (inputs[0])">
+              <Dropdown
+                placeholder={datasetNames.length ? 'Select a dataset' : 'No datasets available'}
+                value={inputName || ''}
+                selectedOptions={inputName ? [inputName] : []}
+                disabled={!datasetNames.length}
+                onOptionSelect={(_, d) => onPatch({ inputs: refOrEmpty(d.optionValue || '') })}
+              >
+                <Option value="" text="(none)">(none)</Option>
+                {datasetNames.map((n) => <Option key={n} value={n} text={n}>{n}</Option>)}
+              </Dropdown>
+            </Field>
+            <Field label="Sink dataset (outputs[0])">
+              <Dropdown
+                placeholder={datasetNames.length ? 'Select a dataset' : 'No datasets available'}
+                value={outputName || ''}
+                selectedOptions={outputName ? [outputName] : []}
+                disabled={!datasetNames.length}
+                onOptionSelect={(_, d) => onPatch({ outputs: refOrEmpty(d.optionValue || '') })}
+              >
+                <Option value="" text="(none)">(none)</Option>
+                {datasetNames.map((n) => <Option key={n} value={n} text={n}>{n}</Option>)}
+              </Dropdown>
+            </Field>
+          </>
+        );
+      })()}
+      {(() => {
+        const tp = (activity.typeProperties || {}) as any;
+        const src = tp.source || {};
+        const sink = tp.sink || {};
+        const patchSrc = (patch: any) => onPatch({ typeProperties: { ...tp, source: { ...src, ...patch } } });
+        const patchSink = (patch: any) => onPatch({ typeProperties: { ...tp, sink: { ...sink, ...patch } } });
+        return (
+          <>
+            <Field label="Parallel copies" hint="Degree of copy parallelism (blank = auto).">
+              <Input type="number" value={tp.parallelCopies != null ? String(tp.parallelCopies) : ''}
+                onChange={(_, d) => onPatch({ typeProperties: { ...tp, parallelCopies: d.value ? Number(d.value) : undefined } })} />
+            </Field>
+            <Field label="Recursive (file source)" hint="Read sub-folders recursively.">
+              <Switch checked={!!src.recursive} onChange={(_, d) => patchSrc({ recursive: d.checked })} />
+            </Field>
+            <Field label="Sink write behavior">
+              <Dropdown value={sink.writeBehavior || ''} selectedOptions={sink.writeBehavior ? [sink.writeBehavior] : []}
+                onOptionSelect={(_, d) => patchSink({ writeBehavior: d.optionValue || undefined })}>
+                <Option value="" text="(default)">(default)</Option>
+                <Option value="insert" text="Insert">Insert</Option>
+                <Option value="upsert" text="Upsert">Upsert</Option>
+              </Dropdown>
+            </Field>
+          </>
+        );
+      })()}
+      <Accordion collapsible>
+        <AccordionItem value="copy-advanced">
+          <AccordionHeader>Advanced — source / sink connector JSON</AccordionHeader>
+          <AccordionPanel>
+            <Caption1>Raw connector settings — target any source/sink type (e.g. wildcards, queries, staging).</Caption1>
+            <Field label="source">
+              <textarea
+                className={s.jsonArea}
+                value={JSON.stringify((activity.typeProperties as any)?.source || {}, null, 2)}
+                onChange={(e) => {
+                  try {
+                    const v = JSON.parse(e.target.value);
+                    onPatch({ typeProperties: { ...(activity.typeProperties || {}), source: v } });
+                  } catch { /* let the user finish typing */ }
+                }}
+              />
+            </Field>
+            <Field label="sink">
+              <textarea
+                className={s.jsonArea}
+                value={JSON.stringify((activity.typeProperties as any)?.sink || {}, null, 2)}
+                onChange={(e) => {
+                  try {
+                    const v = JSON.parse(e.target.value);
+                    onPatch({ typeProperties: { ...(activity.typeProperties || {}), sink: v } });
+                  } catch { /* ignore */ }
+                }}
+              />
+            </Field>
+          </AccordionPanel>
+        </AccordionItem>
+      </Accordion>
+      </div>
+    </>
+  );
+
+  const settingsContent = (
+    <>
+      <div className={s.sectionHead}>
+        <span className={s.sectionIcon} aria-hidden="true"><Settings20Regular /></span>
+        <div>
+          <Subtitle2>{isCopyActivity ? 'Activity policy' : 'Settings'}</Subtitle2>
+          <Caption1 as="p" className={s.sectionHint}>Type-specific configuration and run-time policy for this activity.</Caption1>
+        </div>
+      </div>
+      {hasActivityForm(activity.type) ? (
+        <>
+          <ActivityForm
+            activity={activity}
+            onPatch={onPatch}
+            parameters={parameters}
+            variables={variables}
+            allActivities={allActivities}
+            itemId={itemId}
+            pipelineId={pipelineId}
+            workspaceId={workspaceId}
+            apiSlug={apiSlug}
+            onDrillInto={onDrillInto}
+          />
+          <Accordion collapsible>
+            <AccordionItem value="raw-json">
+              <AccordionHeader>Advanced — raw typeProperties JSON</AccordionHeader>
+              <AccordionPanel>
+                <Field validationMessage={typePropsErr || undefined}
+                  validationState={typePropsErr ? 'error' : 'none'}>
+                  <textarea
+                    className={s.jsonArea}
+                    value={typePropsText}
+                    onChange={(e) => {
+                      setTypePropsText(e.target.value);
+                      try {
+                        const v = JSON.parse(e.target.value);
+                        setTypePropsErr(null);
+                        onPatch({ typeProperties: v });
+                      } catch (err: any) {
+                        setTypePropsErr(err?.message || 'invalid JSON');
+                      }
+                    }}
+                  />
+                </Field>
+              </AccordionPanel>
+            </AccordionItem>
+          </Accordion>
+        </>
+      ) : (
+        <Field label="typeProperties (JSON)" validationMessage={typePropsErr || undefined}
+          validationState={typePropsErr ? 'error' : 'none'}>
+          <textarea
+            className={s.jsonArea}
+            value={typePropsText}
+            onChange={(e) => {
+              setTypePropsText(e.target.value);
+              try {
+                const v = JSON.parse(e.target.value);
+                setTypePropsErr(null);
+                onPatch({ typeProperties: v });
+              } catch (err: any) {
+                setTypePropsErr(err?.message || 'invalid JSON');
+              }
+            }}
+          />
+        </Field>
+      )}
+      <div className={s.card}>
+        <div className={s.sectionHead}>
+          <span className={s.sectionIcon} aria-hidden="true"><Timer20Regular /></span>
+          <div>
+            <Subtitle2>Activity policy</Subtitle2>
+            <Caption1 as="p" className={s.sectionHint}>Run-time behaviour. Defaults: timeout 7 days, retry 0, retry interval 30s.</Caption1>
+          </div>
+        </div>
+        <Field label="Timeout (D.HH:MM:SS)">
+          <Input
+            value={(activity.policy as any)?.timeout || ''}
+            placeholder="7.00:00:00"
+            onChange={(_, d) => onPatch({ policy: { ...(activity.policy || {}), timeout: d.value } })}
+          />
+        </Field>
+        <div className={s.rowSplit}>
+          <Field label="Retry">
+            <Input type="number" min={0} value={String((activity.policy as any)?.retry ?? 0)}
+              onChange={(_, d) => onPatch({ policy: { ...(activity.policy || {}), retry: Math.max(0, parseInt(d.value, 10) || 0) } })}
+            />
+          </Field>
+          <Field label="Retry interval (s)">
+            <Input type="number" min={30} max={86400} value={String((activity.policy as any)?.retryIntervalInSeconds ?? 30)}
+              onChange={(_, d) => onPatch({ policy: { ...(activity.policy || {}), retryIntervalInSeconds: Math.max(30, Math.min(86400, parseInt(d.value, 10) || 30)) } })}
+            />
+          </Field>
+        </div>
+        <Field label="Secure input">
+          <Switch
+            checked={!!(activity.policy as any)?.secureInput}
+            label="Don't log input for monitoring"
+            onChange={(_, d) => onPatch({ policy: { ...(activity.policy || {}), secureInput: d.checked } })}
+          />
+        </Field>
+        <Field label="Secure output">
+          <Switch
+            checked={!!(activity.policy as any)?.secureOutput}
+            label="Don't log output for monitoring"
+            onChange={(_, d) => onPatch({ policy: { ...(activity.policy || {}), secureOutput: d.checked } })}
+          />
+        </Field>
+      </div>
+    </>
+  );
+
+  const parametersContent = (
+    <>
+      <div className={s.sectionHead}>
+        <span className={s.sectionIcon} aria-hidden="true"><BracesVariable20Regular /></span>
+        <div>
+          <Subtitle2>Parameters &amp; variables</Subtitle2>
+          <Caption1 as="p" className={s.sectionHint}>Pipeline-scoped values this activity can reference.</Caption1>
+        </div>
+      </div>
+      <div className={s.card}>
+        <Caption1>Pipeline-scoped parameters available to this activity. Reference with <code>@pipeline().parameters.&lt;name&gt;</code>.</Caption1>
+        <Table size="small">
+          <TableHeader>
+            <TableRow>
+              <TableHeaderCell>Name</TableHeaderCell>
+              <TableHeaderCell>Type</TableHeaderCell>
+              <TableHeaderCell>Default</TableHeaderCell>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {parameters.length === 0 && (
+              <TableRow><TableCell colSpan={3}><Caption1>None — add some in the Parameters tab above.</Caption1></TableCell></TableRow>
+            )}
+            {parameters.map((p) => (
+              <TableRow key={p.name}>
+                <TableCell><code>{p.name}</code></TableCell>
+                <TableCell>{p.type}</TableCell>
+                <TableCell>{String(p.defaultValue ?? '')}</TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+        <Caption1>Pipeline-scoped variables (use with SetVariable / AppendVariable):</Caption1>
+        <Table size="small">
+          <TableHeader>
+            <TableRow>
+              <TableHeaderCell>Name</TableHeaderCell>
+              <TableHeaderCell>Type</TableHeaderCell>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {variables.length === 0 && (
+              <TableRow><TableCell colSpan={2}><Caption1>None.</Caption1></TableCell></TableRow>
+            )}
+            {variables.map((v) => (
+              <TableRow key={v.name}>
+                <TableCell><code>{v.name}</code></TableCell>
+                <TableCell>{v.type}</TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </div>
+    </>
+  );
+
+  const userPropsContent = (
+    <>
+      <div className={s.sectionHead}>
+        <span className={s.sectionIcon} aria-hidden="true"><TagMultiple20Regular /></span>
+        <div>
+          <Subtitle2>User properties</Subtitle2>
+          <Caption1 as="p" className={s.sectionHint}>Tag pipeline runs for monitoring — keys/values appear in ADF run history.</Caption1>
+        </div>
+      </div>
+      <div className={s.card}>
+        {(activity.userProperties || []).map((up, i) => (
+          <div key={i} className={s.upRow}>
+            <Input value={up.name} placeholder="key"
+              onChange={(_, d) => {
+                const ups = [...(activity.userProperties || [])];
+                ups[i] = { ...ups[i], name: d.value };
+                onPatch({ userProperties: ups });
+              }} />
+            <Input value={String(up.value ?? '')} placeholder="value"
+              onChange={(_, d) => {
+                const ups = [...(activity.userProperties || [])];
+                ups[i] = { ...ups[i], value: d.value };
+                onPatch({ userProperties: ups });
+              }} />
+            <Button size="small" appearance="subtle" icon={<Delete20Regular />}
+              aria-label="Remove user property"
+              onClick={() => {
+                const ups = [...(activity.userProperties || [])];
+                ups.splice(i, 1);
+                onPatch({ userProperties: ups });
+              }} />
+          </div>
+        ))}
+        <Button size="small" icon={<Add20Regular />}
+          onClick={() => onPatch({ userProperties: [...(activity.userProperties || []), { name: '', value: '' }] })}>
+          Add user property
+        </Button>
+      </div>
+    </>
+  );
+
+  // ── Assemble the tab strip (Fabric parity ordering) ──────────────────────────
+  const tabs: DockedInspectorTab[] = [
+    { id: 'general', label: 'General', ...dot('general'), content: generalContent },
+  ];
+  if (isCopyActivity) {
+    tabs.push(
+      {
+        id: 'source', label: 'Source', ...dot('source'),
+        content: (
           <SourceTab activity={activity} datasets={datasets} linkedServices={linkedServices} gateError={gateError}
             parameters={parameters} variables={variables} allActivities={allActivities}
             onPatch={onPatch} onDatasetsChanged={() => { void reloadCopyResources(); }} />
-        )}
-        {tab === 'sink' && isCopyActivity && (
+        ),
+      },
+      {
+        id: 'sink', label: 'Destination', ...dot('sink'),
+        content: (
           <SinkTab activity={activity} datasets={datasets} linkedServices={linkedServices} gateError={gateError}
             parameters={parameters} variables={variables} allActivities={allActivities}
             onPatch={onPatch} onDatasetsChanged={() => { void reloadCopyResources(); }} />
-        )}
-        {tab === 'mapping' && isCopyActivity && (
+        ),
+      },
+      {
+        id: 'mapping', label: 'Mapping', ...dot('mapping'),
+        content: (
           <MappingTab activity={activity} datasets={datasets}
             parameters={parameters} variables={variables} allActivities={allActivities}
             onPatch={onPatch} />
-        )}
-        {tab === 'copy-settings' && isCopyActivity && (
+        ),
+      },
+      {
+        id: 'copy-settings', label: 'Settings', ...dot('copy-settings'),
+        content: (
           <CopySettingsTab activity={activity} linkedServices={linkedServices}
             gateError={gateError} onPatch={onPatch} />
-        )}
+        ),
+      },
+    );
+  }
+  if (!isCopyActivity && hasSourceSink) {
+    tabs.push({ id: 'source-sink', label: 'Source / Sink', ...dot('source-sink'), content: sourceSinkContent });
+  }
+  tabs.push(
+    { id: 'settings', label: isCopyActivity ? 'Activity policy' : 'Settings', ...dot('settings'), content: settingsContent },
+    { id: 'parameters', label: 'Parameters', content: parametersContent },
+    { id: 'user-props', label: 'User properties', content: userPropsContent },
+  );
 
-        {tab === 'source-sink' && hasSourceSink && (
-          <>
-            <div className={s.sectionHead}>
-              <span className={s.sectionIcon} aria-hidden="true"><BranchCompare20Regular /></span>
-              <div>
-                <Subtitle2>Source / Sink</Subtitle2>
-                <Caption1 as="p" className={s.sectionHint}>Bind factory datasets and tune copy behaviour for this activity.</Caption1>
-              </div>
-            </div>
-            <div className={s.card}>
-            {(() => {
-              const inputName = ((activity.inputs as any[]) || [])[0]?.referenceName as string | undefined;
-              const outputName = ((activity.outputs as any[]) || [])[0]?.referenceName as string | undefined;
-              const refOrEmpty = (name: string) => name
-                ? [{ referenceName: name, type: 'DatasetReference', parameters: {} }]
-                : [];
-              return (
-                <>
-                  <Caption1>
-                    Bind a factory dataset to this activity. Selecting a source/sink dataset sets the
-                    activity&apos;s <code>inputs</code>/<code>outputs</code> DatasetReference. Manage datasets
-                    in the ribbon&apos;s <strong>Manage</strong> hub. {datasetNames.length === 0 && '(No datasets found — create one in Manage, or the factory isn’t configured.)'}
-                  </Caption1>
-                  <Field label="Source dataset (inputs[0])">
-                    <Dropdown
-                      placeholder={datasetNames.length ? 'Select a dataset' : 'No datasets available'}
-                      value={inputName || ''}
-                      selectedOptions={inputName ? [inputName] : []}
-                      disabled={!datasetNames.length}
-                      onOptionSelect={(_, d) => onPatch({ inputs: refOrEmpty(d.optionValue || '') })}
-                    >
-                      <Option value="" text="(none)">(none)</Option>
-                      {datasetNames.map((n) => <Option key={n} value={n} text={n}>{n}</Option>)}
-                    </Dropdown>
-                  </Field>
-                  <Field label="Sink dataset (outputs[0])">
-                    <Dropdown
-                      placeholder={datasetNames.length ? 'Select a dataset' : 'No datasets available'}
-                      value={outputName || ''}
-                      selectedOptions={outputName ? [outputName] : []}
-                      disabled={!datasetNames.length}
-                      onOptionSelect={(_, d) => onPatch({ outputs: refOrEmpty(d.optionValue || '') })}
-                    >
-                      <Option value="" text="(none)">(none)</Option>
-                      {datasetNames.map((n) => <Option key={n} value={n} text={n}>{n}</Option>)}
-                    </Dropdown>
-                  </Field>
-                </>
-              );
-            })()}
-            {/* Guided Copy settings (ADF-Studio-style) — no JSON for the common
-                90%. Raw source/sink connector JSON moves to Advanced below for
-                power users / exotic connectors. */}
-            {(() => {
-              const tp = (activity.typeProperties || {}) as any;
-              const src = tp.source || {};
-              const sink = tp.sink || {};
-              const patchSrc = (patch: any) => onPatch({ typeProperties: { ...tp, source: { ...src, ...patch } } });
-              const patchSink = (patch: any) => onPatch({ typeProperties: { ...tp, sink: { ...sink, ...patch } } });
-              return (
-                <>
-                  <Field label="Parallel copies" hint="Degree of copy parallelism (blank = auto).">
-                    <Input type="number" value={tp.parallelCopies != null ? String(tp.parallelCopies) : ''}
-                      onChange={(_, d) => onPatch({ typeProperties: { ...tp, parallelCopies: d.value ? Number(d.value) : undefined } })} />
-                  </Field>
-                  <Field label="Recursive (file source)" hint="Read sub-folders recursively.">
-                    <Switch checked={!!src.recursive} onChange={(_, d) => patchSrc({ recursive: d.checked })} />
-                  </Field>
-                  <Field label="Sink write behavior">
-                    <Dropdown value={sink.writeBehavior || ''} selectedOptions={sink.writeBehavior ? [sink.writeBehavior] : []}
-                      onOptionSelect={(_, d) => patchSink({ writeBehavior: d.optionValue || undefined })}>
-                      <Option value="" text="(default)">(default)</Option>
-                      <Option value="insert" text="Insert">Insert</Option>
-                      <Option value="upsert" text="Upsert">Upsert</Option>
-                    </Dropdown>
-                  </Field>
-                </>
-              );
-            })()}
-            <Accordion collapsible>
-              <AccordionItem value="copy-advanced">
-                <AccordionHeader>Advanced — source / sink connector JSON</AccordionHeader>
-                <AccordionPanel>
-                  <Caption1>Raw connector settings — target any source/sink type (e.g. wildcards, queries, staging).</Caption1>
-                  <Field label="source">
-                    <textarea
-                      className={s.jsonArea}
-                      value={JSON.stringify((activity.typeProperties as any)?.source || {}, null, 2)}
-                      onChange={(e) => {
-                        try {
-                          const v = JSON.parse(e.target.value);
-                          onPatch({ typeProperties: { ...(activity.typeProperties || {}), source: v } });
-                        } catch { /* let the user finish typing */ }
-                      }}
-                    />
-                  </Field>
-                  <Field label="sink">
-                    <textarea
-                      className={s.jsonArea}
-                      value={JSON.stringify((activity.typeProperties as any)?.sink || {}, null, 2)}
-                      onChange={(e) => {
-                        try {
-                          const v = JSON.parse(e.target.value);
-                          onPatch({ typeProperties: { ...(activity.typeProperties || {}), sink: v } });
-                        } catch { /* ignore */ }
-                      }}
-                    />
-                  </Field>
-                </AccordionPanel>
-              </AccordionItem>
-            </Accordion>
-            </div>
-          </>
-        )}
-
-        {tab === 'settings' && (
-          <>
-            <div className={s.sectionHead}>
-              <span className={s.sectionIcon} aria-hidden="true"><Settings20Regular /></span>
-              <div>
-                <Subtitle2>{isCopyActivity ? 'Activity policy' : 'Settings'}</Subtitle2>
-                <Caption1 as="p" className={s.sectionHint}>Type-specific configuration and run-time policy for this activity.</Caption1>
-              </div>
-            </div>
-            {hasActivityForm(activity.type) ? (
-              <>
-                <ActivityForm
-                  activity={activity}
-                  onPatch={onPatch}
-                  parameters={parameters}
-                  variables={variables}
-                  allActivities={allActivities}
-                  itemId={itemId}
-                  pipelineId={pipelineId}
-                  workspaceId={workspaceId}
-                  apiSlug={apiSlug}
-                  onDrillInto={onDrillInto}
-                />
-                <Accordion collapsible>
-                  <AccordionItem value="raw-json">
-                    <AccordionHeader>Advanced — raw typeProperties JSON</AccordionHeader>
-                    <AccordionPanel>
-                      <Field validationMessage={typePropsErr || undefined}
-                        validationState={typePropsErr ? 'error' : 'none'}>
-                        <textarea
-                          className={s.jsonArea}
-                          value={typePropsText}
-                          onChange={(e) => {
-                            setTypePropsText(e.target.value);
-                            try {
-                              const v = JSON.parse(e.target.value);
-                              setTypePropsErr(null);
-                              onPatch({ typeProperties: v });
-                            } catch (err: any) {
-                              setTypePropsErr(err?.message || 'invalid JSON');
-                            }
-                          }}
-                        />
-                      </Field>
-                    </AccordionPanel>
-                  </AccordionItem>
-                </Accordion>
-              </>
-            ) : (
-              <Field label="typeProperties (JSON)" validationMessage={typePropsErr || undefined}
-                validationState={typePropsErr ? 'error' : 'none'}>
-                <textarea
-                  className={s.jsonArea}
-                  value={typePropsText}
-                  onChange={(e) => {
-                    setTypePropsText(e.target.value);
-                    try {
-                      const v = JSON.parse(e.target.value);
-                      setTypePropsErr(null);
-                      onPatch({ typeProperties: v });
-                    } catch (err: any) {
-                      setTypePropsErr(err?.message || 'invalid JSON');
-                    }
-                  }}
-                />
-              </Field>
-            )}
-            <div className={s.card}>
-              <div className={s.sectionHead}>
-                <span className={s.sectionIcon} aria-hidden="true"><Timer20Regular /></span>
-                <div>
-                  <Subtitle2>Activity policy</Subtitle2>
-                  <Caption1 as="p" className={s.sectionHint}>Run-time behaviour. Defaults: timeout 7 days, retry 0, retry interval 30s.</Caption1>
-                </div>
-              </div>
-              <Field label="Timeout (D.HH:MM:SS)">
-                <Input
-                  value={(activity.policy as any)?.timeout || ''}
-                  placeholder="7.00:00:00"
-                  onChange={(_, d) => onPatch({ policy: { ...(activity.policy || {}), timeout: d.value } })}
-                />
-              </Field>
-              <div className={s.rowSplit}>
-                <Field label="Retry">
-                  <Input type="number" min={0} value={String((activity.policy as any)?.retry ?? 0)}
-                    onChange={(_, d) => onPatch({ policy: { ...(activity.policy || {}), retry: Math.max(0, parseInt(d.value, 10) || 0) } })}
-                  />
-                </Field>
-                <Field label="Retry interval (s)">
-                  <Input type="number" min={30} max={86400} value={String((activity.policy as any)?.retryIntervalInSeconds ?? 30)}
-                    onChange={(_, d) => onPatch({ policy: { ...(activity.policy || {}), retryIntervalInSeconds: Math.max(30, Math.min(86400, parseInt(d.value, 10) || 30)) } })}
-                  />
-                </Field>
-              </div>
-              <Field label="Secure input">
-                <Switch
-                  checked={!!(activity.policy as any)?.secureInput}
-                  label="Don't log input for monitoring"
-                  onChange={(_, d) => onPatch({ policy: { ...(activity.policy || {}), secureInput: d.checked } })}
-                />
-              </Field>
-              <Field label="Secure output">
-                <Switch
-                  checked={!!(activity.policy as any)?.secureOutput}
-                  label="Don't log output for monitoring"
-                  onChange={(_, d) => onPatch({ policy: { ...(activity.policy || {}), secureOutput: d.checked } })}
-                />
-              </Field>
-            </div>
-          </>
-        )}
-
-        {tab === 'parameters' && (
-          <>
-            <div className={s.sectionHead}>
-              <span className={s.sectionIcon} aria-hidden="true"><BracesVariable20Regular /></span>
-              <div>
-                <Subtitle2>Parameters &amp; variables</Subtitle2>
-                <Caption1 as="p" className={s.sectionHint}>Pipeline-scoped values this activity can reference.</Caption1>
-              </div>
-            </div>
-            <div className={s.card}>
-              <Caption1>Pipeline-scoped parameters available to this activity. Reference with <code>@pipeline().parameters.&lt;name&gt;</code>.</Caption1>
-              <Table size="small">
-                <TableHeader>
-                  <TableRow>
-                    <TableHeaderCell>Name</TableHeaderCell>
-                    <TableHeaderCell>Type</TableHeaderCell>
-                    <TableHeaderCell>Default</TableHeaderCell>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {parameters.length === 0 && (
-                    <TableRow><TableCell colSpan={3}><Caption1>None — add some in the Parameters tab above.</Caption1></TableCell></TableRow>
-                  )}
-                  {parameters.map((p) => (
-                    <TableRow key={p.name}>
-                      <TableCell><code>{p.name}</code></TableCell>
-                      <TableCell>{p.type}</TableCell>
-                      <TableCell>{String(p.defaultValue ?? '')}</TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-              <Caption1>Pipeline-scoped variables (use with SetVariable / AppendVariable):</Caption1>
-              <Table size="small">
-                <TableHeader>
-                  <TableRow>
-                    <TableHeaderCell>Name</TableHeaderCell>
-                    <TableHeaderCell>Type</TableHeaderCell>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {variables.length === 0 && (
-                    <TableRow><TableCell colSpan={2}><Caption1>None.</Caption1></TableCell></TableRow>
-                  )}
-                  {variables.map((v) => (
-                    <TableRow key={v.name}>
-                      <TableCell><code>{v.name}</code></TableCell>
-                      <TableCell>{v.type}</TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
-          </>
-        )}
-
-        {tab === 'user-props' && (
-          <>
-            <div className={s.sectionHead}>
-              <span className={s.sectionIcon} aria-hidden="true"><TagMultiple20Regular /></span>
-              <div>
-                <Subtitle2>User properties</Subtitle2>
-                <Caption1 as="p" className={s.sectionHint}>Tag pipeline runs for monitoring — keys/values appear in ADF run history.</Caption1>
-              </div>
-            </div>
-            <div className={s.card}>
-              {(activity.userProperties || []).map((up, i) => (
-                <div key={i} className={s.upRow}>
-                  <Input value={up.name} placeholder="key"
-                    onChange={(_, d) => {
-                      const ups = [...(activity.userProperties || [])];
-                      ups[i] = { ...ups[i], name: d.value };
-                      onPatch({ userProperties: ups });
-                    }} />
-                  <Input value={String(up.value ?? '')} placeholder="value"
-                    onChange={(_, d) => {
-                      const ups = [...(activity.userProperties || [])];
-                      ups[i] = { ...ups[i], value: d.value };
-                      onPatch({ userProperties: ups });
-                    }} />
-                  <Button size="small" appearance="subtle" icon={<Delete20Regular />}
-                    aria-label="Remove user property"
-                    onClick={() => {
-                      const ups = [...(activity.userProperties || [])];
-                      ups.splice(i, 1);
-                      onPatch({ userProperties: ups });
-                    }} />
-                </div>
-              ))}
-              <Button size="small" icon={<Add20Regular />}
-                onClick={() => onPatch({ userProperties: [...(activity.userProperties || []), { name: '', value: '' }] })}>
-                Add user property
-              </Button>
-            </div>
-          </>
-        )}
-      </div>
-      </>
-      )}
-    </div>
+  return (
+    <DockedInspector
+      layout={layout}
+      title={activity.name}
+      icon={visual.icon}
+      accent={accent}
+      badges={badges}
+      learnMoreHref={learnUrlForActivity(activity.type)}
+      headerExtra={headerExtra}
+      tabs={tabs}
+      selectedTab={tab}
+      onSelectTab={(id) => setTab(id as TabId)}
+      collapsed={collapsed}
+      onToggleCollapse={() => setCollapsed((v) => !v)}
+    />
   );
 }

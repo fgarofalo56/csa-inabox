@@ -28,10 +28,13 @@ import {
 import {
   Add20Regular, Save20Regular, ArrowSync20Regular, Play20Regular, Delete20Regular, Flow20Regular,
   Sparkle20Regular,
+  Add24Regular,
+  Flow24Regular, Table24Regular, DocumentTable24Regular, DocumentText24Regular,
+  Database24Regular, Globe24Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { useCollapsibleState, CollapsedRail } from '@/lib/components/collapsible-side-panel';
-import { EmptyState } from '@/lib/components/empty-state';
+import { GuidedEmptyState, type GuidedPath } from '@/lib/components/shared/guided-empty-state';
 import { PowerQueryHost } from '@/lib/components/pipeline/dataflow/power-query-host';
 import { DataflowCopilotPane } from '@/lib/components/pipeline/dataflow/dataflow-copilot-pane';
 import { DestinationPicker } from '@/lib/components/pipeline/dataflow/destination-picker';
@@ -94,6 +97,83 @@ shared Query1 = let
     Filtered = Table.SelectRows(Source, each [amount] > 0)
 in
     Filtered;`;
+
+/** Blank single-query section — the "start from nothing" import path. */
+const BLANK_M = `section Section1;
+
+shared Query1 = let
+    Source = ""
+in
+    Source;`;
+
+/**
+ * Real Power Query (M) starter templates, one per get-data source (Fabric's
+ * Dataflow "import from …" cards, fabric-ux-observations §29). Each writes a
+ * runnable-once-configured M query with a clearly-editable placeholder — exactly
+ * how Fabric seeds starter queries — so every card performs a real action
+ * (no dead tiles, per no-vaporware.md). Placeholders are replaced by the author
+ * in the Power Query editor; on Run the M compiles to an ADF WranglingDataFlow.
+ */
+const IMPORT_SOURCES: { key: string; title: string; body: string; icon: GuidedPath['icon']; m: string }[] = [
+  {
+    key: 'blank', title: 'Blank query', body: 'Start from an empty query and build it step by step in Power Query.',
+    icon: Flow24Regular, m: BLANK_M,
+  },
+  {
+    key: 'sample', title: 'Sample table', body: 'Begin from a small in-memory table you can transform immediately.',
+    icon: Table24Regular,
+    m: `section Section1;
+
+shared Query1 = let
+    Source = #table({"region","amount"}, {{"east", 10}, {"west", 20}}),
+    Filtered = Table.SelectRows(Source, each [amount] > 0)
+in
+    Filtered;`,
+  },
+  {
+    key: 'excel', title: 'Import from Excel', body: 'Load a workbook — replace the URL with your .xlsx source.',
+    icon: DocumentTable24Regular,
+    m: `section Section1;
+
+shared Query1 = let
+    Source = Excel.Workbook(Web.Contents("https://REPLACE_WITH_YOUR_WORKBOOK_URL/book.xlsx"), null, true),
+    Sheet1 = Source{[Item="Sheet1",Kind="Sheet"]}[Data]
+in
+    Sheet1;`,
+  },
+  {
+    key: 'csv', title: 'Import from Text/CSV', body: 'Parse a delimited file — replace the URL with your .csv source.',
+    icon: DocumentText24Regular,
+    m: `section Section1;
+
+shared Query1 = let
+    Source = Csv.Document(Web.Contents("https://REPLACE_WITH_YOUR_CSV_URL/data.csv"), [Delimiter=",", Encoding=65001]),
+    Promoted = Table.PromoteHeaders(Source, [PromoteAllScalars=true])
+in
+    Promoted;`,
+  },
+  {
+    key: 'sql', title: 'SQL Server / Azure SQL', body: 'Query a table — replace server, database, and table names.',
+    icon: Database24Regular,
+    m: `section Section1;
+
+shared Query1 = let
+    Source = Sql.Database("REPLACE_SERVER.database.windows.net", "REPLACE_DATABASE"),
+    Table = Source{[Schema="dbo",Item="REPLACE_TABLE"]}[Data]
+in
+    Table;`,
+  },
+  {
+    key: 'odata', title: 'OData feed', body: 'Connect to an OData service — replace the feed URL.',
+    icon: Globe24Regular,
+    m: `section Section1;
+
+shared Query1 = let
+    Source = OData.Feed("https://REPLACE_WITH_YOUR_ODATA_SERVICE_URL", null, [Implementation="2.0"])
+in
+    Source;`,
+  },
+];
 
 function toB64(s: string): string {
   return typeof window === 'undefined' ? Buffer.from(s, 'utf-8').toString('base64')
@@ -363,11 +443,20 @@ export function DataflowGen2Editor({ item, id }: Props) {
           )}
 
           {!dataflowId && (
-            <EmptyState
-              icon={<Flow20Regular />}
-              title="No dataflow selected"
-              body="Pick a dataflow from the left rail to author its Power Query, set an output destination, and Run it on ADF — no Fabric required."
-              primaryAction={canCreate ? { label: 'New dataflow', onClick: () => setCreateOpen(true) } : undefined}
+            <GuidedEmptyState
+              variant="block"
+              heroIcon={Flow24Regular}
+              title="Design a dataflow"
+              intro="Author Power Query (M), set an output destination, and Run it on ADF — no Fabric required. Start with a blank dataflow, then bring in Excel, CSV, SQL Server, or OData sources in the Power Query editor."
+              columns={1}
+              ariaLabel="Create a dataflow"
+              paths={canCreate ? [{
+                key: 'new', title: 'New dataflow',
+                body: 'Create a dataflow in this workspace, then choose a get-data source.',
+                icon: Add24Regular, onClick: () => setCreateOpen(true),
+              }] : []}
+              askCopilot={{ onClick: () => setCopilotOpen(true), body: 'Describe the transform in words and let Copilot draft the Power Query.' }}
+              learnMoreHref="https://learn.microsoft.com/power-query/power-query-what-is-power-query"
             />
           )}
           {dataflowId && dirty && <Badge appearance="outline" color="warning" style={{ alignSelf: 'flex-start' }}>unsaved</Badge>}
@@ -381,7 +470,22 @@ export function DataflowGen2Editor({ item, id }: Props) {
             </TabList>
           </div>
 
-          {tab === 'authoring' && (
+          {tab === 'authoring' && isM && dataflowId && defText === STARTER_M && !dirty && (
+            <GuidedEmptyState
+              variant="block"
+              heroIcon={Flow24Regular}
+              title="Get data"
+              intro="Choose a source to start your Power Query. Each option drops a real, editable M query on the canvas — replace the placeholders with your connection details, then Run on ADF."
+              ariaLabel="Import data into this dataflow"
+              paths={IMPORT_SOURCES.map((src) => ({
+                key: src.key, title: src.title, body: src.body, icon: src.icon,
+                onClick: () => { setDefText(src.m); setDirty(true); },
+              }))}
+              askCopilot={{ onClick: () => setCopilotOpen(true), body: 'Describe the transform in words and let Copilot draft the Power Query.' }}
+              learnMoreHref="https://learn.microsoft.com/power-query/connectors/"
+            />
+          )}
+          {tab === 'authoring' && !(isM && dataflowId && defText === STARTER_M && !dirty) && (
             isM ? (
               <div style={{ display: 'flex', gap: tokens.spacingHorizontalM, flex: 1, minHeight: 0 }}>
                 <PowerQueryHost
