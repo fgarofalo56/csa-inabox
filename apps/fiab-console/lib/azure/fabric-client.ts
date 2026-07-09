@@ -756,6 +756,15 @@ export const RTH_SOURCE_TYPES = [
   'FabricJobEvents',
   'FabricOneLakeEvents',
   'FabricCapacityUtilizationEvents',
+  // Real-Time hub 2025-2026 source depth (FGC-14). MongoDB / Oracle CDC are
+  // documented Fabric Eventstream sources; HTTP / Solace PubSub+ / Real-time
+  // weather are the Azure-native Loom additions (Debezium-on-ACA, a Loom-native
+  // HTTP ingester, and a public-weather Function into Event Hubs — no Fabric).
+  'MongoDBCDC',
+  'OracleDBCDC',
+  'Http',
+  'SolacePubSub',
+  'RealTimeWeather',
 ] as const;
 
 export type RthSourceType = (typeof RTH_SOURCE_TYPES)[number];
