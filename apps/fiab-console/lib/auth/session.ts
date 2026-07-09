@@ -40,11 +40,35 @@ function getKey(): Buffer {
   return Buffer.from(ab as ArrayBuffer);
 }
 
+/**
+ * Marker attached to a session that was resolved from a scoped API token (PAT)
+ * rather than the browser `loom_session` cookie (BR-PAT). The cookie path NEVER
+ * sets this — `getSession()` returns a payload with `pat` UNDEFINED — so
+ * `session.pat` is the single, reliable signal that "this caller is a
+ * non-interactive token, not an interactive human". Guards read it to (a)
+ * enforce the token's scope (read-only rejects mutations), (b) forbid a token
+ * from minting further tokens or reaching /admin unless it is admin-scoped AND
+ * its creator is a tenant admin at resolve time. See lib/auth/pat.ts.
+ */
+export interface PatSessionContext {
+  /** The public token id (the `<id>` in `loom_pat_<id>_<secret>`). */
+  tokenId: string;
+  /** Typed scope the token was minted with. */
+  scope: 'read-only' | 'read-write' | 'admin';
+}
+
 export interface SessionPayload {
   /** Claims are the only thing in the cookie. Small + sufficient for /api/me + UI. */
   claims: UserClaims;
   /** Unix seconds. */
   exp: number;
+  /**
+   * Present ONLY when this session was resolved from a scoped API token (PAT)
+   * via {@link resolvePat}. Undefined for every cookie-backed session — so the
+   * cookie code path in this file is byte-for-byte unchanged. Its presence
+   * downgrades the caller to the token's scope in the API guards.
+   */
+  pat?: PatSessionContext;
 }
 
 /**
