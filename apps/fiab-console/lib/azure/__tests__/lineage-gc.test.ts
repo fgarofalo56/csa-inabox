@@ -13,6 +13,8 @@ const h = vi.hoisted(() => ({
   offboardFromPurview: vi.fn(),
   loomTypeToAtlasTypeName: vi.fn((t: string) => (t === 'lakehouse' ? 'fabric_lakehouse' : 'DataSet')),
   reconcileThreadEdgesOnDelete: vi.fn(),
+  listAllThreadEdges: vi.fn(),
+  removeThreadEdge: vi.fn(),
   isPurviewConfigured: vi.fn(() => true),
   searchDataMapAssets: vi.fn(),
   deleteAtlasEntityByQualifiedName: vi.fn(),
@@ -26,6 +28,8 @@ vi.mock('../purview-autoonboard', () => ({
 }));
 vi.mock('@/lib/thread/thread-edges', () => ({
   reconcileThreadEdgesOnDelete: h.reconcileThreadEdgesOnDelete,
+  listAllThreadEdges: h.listAllThreadEdges,
+  removeThreadEdge: h.removeThreadEdge,
 }));
 vi.mock('../purview-client', () => ({
   isPurviewConfigured: h.isPurviewConfigured,
@@ -43,6 +47,8 @@ import {
   findLineageOrphans,
   purgeLineageOrphans,
   annotateDeletedLoomNodes,
+  findThreadEdgeOrphans,
+  purgeThreadEdgeOrphans,
 } from '../lineage-gc';
 
 const item = (id: string, itemType = 'lakehouse') => ({ id, workspaceId: 'ws1', itemType, state: {} });
@@ -181,5 +187,80 @@ describe('annotateDeletedLoomNodes', () => {
     const nodes = [{ id: 'g1', qualifiedName: 'mssql://x' }];
     await annotateDeletedLoomNodes(nodes as any);
     expect(h.itemsContainer).not.toHaveBeenCalled();
+  });
+});
+
+// ── findThreadEdgeOrphans (LIN-GC-4) ─────────────────────────────────────────
+
+const tedge = (over: Record<string, any> = {}) => ({
+  id: 'e1', tenantId: 't1',
+  fromItemId: 'lh-1', fromType: 'lakehouse', fromName: 'Sales LH',
+  toItemId: 'nb-1', toType: 'notebook', toName: 'Explore',
+  action: 'analyze-in-notebook', createdAt: '2026-01-01T00:00:00.000Z',
+  ...over,
+});
+
+describe('findThreadEdgeOrphans', () => {
+  it('returns an empty scan when there are no edges', async () => {
+    h.listAllThreadEdges.mockResolvedValue([]);
+    const scan = await findThreadEdgeOrphans();
+    expect(scan).toEqual({ scanned: 0, orphans: [] });
+    expect(h.itemsContainer).not.toHaveBeenCalled(); // no existence check needed
+  });
+
+  it('keeps edges whose both endpoints are live, flags edges with a missing endpoint', async () => {
+    h.listAllThreadEdges.mockResolvedValue([
+      tedge({ id: 'live', fromItemId: 'lh-1', toItemId: 'nb-1' }),      // both live → kept
+      tedge({ id: 'deadTo', fromItemId: 'lh-1', toItemId: 'gone-1' }),  // target gone → orphan
+      tedge({ id: 'deadFrom', fromItemId: 'gone-2', toItemId: 'nb-1' }),// source gone → orphan
+      tedge({ id: 'deadBoth', fromItemId: 'gone-3', toItemId: 'gone-4' }), // both gone → orphan
+    ]);
+    mockLiveIds(['lh-1', 'nb-1']); // only lh-1 and nb-1 still exist
+
+    const scan = await findThreadEdgeOrphans();
+    expect(scan.scanned).toBe(4);
+    expect(scan.orphans.map((o) => o.edgeId).sort()).toEqual(['deadBoth', 'deadFrom', 'deadTo']);
+    expect(scan.orphans.find((o) => o.edgeId === 'deadTo')!.missing).toEqual(['to']);
+    expect(scan.orphans.find((o) => o.edgeId === 'deadFrom')!.missing).toEqual(['from']);
+    expect(scan.orphans.find((o) => o.edgeId === 'deadBoth')!.missing).toEqual(['from', 'to']);
+  });
+
+  it('never counts an external target as missing (only the source is checked)', async () => {
+    h.listAllThreadEdges.mockResolvedValue([
+      tedge({ id: 'ext', fromItemId: 'lh-1', toItemId: 'pbi-xyz', toExternal: true, toLink: 'https://app.powerbi.com/x' }),
+    ]);
+    mockLiveIds(['lh-1']); // source live; external target never verified
+
+    const scan = await findThreadEdgeOrphans();
+    expect(scan.orphans).toHaveLength(0);
+    // Only the source id was submitted for existence checking (not the external target).
+    const submitted = h.query.mock.calls[0][0].parameters[0].value;
+    expect(submitted).toEqual(['lh-1']);
+  });
+});
+
+describe('purgeThreadEdgeOrphans', () => {
+  it('removes each orphan edge via removeThreadEdge and reports per-edge outcome', async () => {
+    h.removeThreadEdge
+      .mockResolvedValueOnce(true)   // deleted
+      .mockResolvedValueOnce(false); // failed
+    const out = await purgeThreadEdgeOrphans([
+      { edgeId: 'e1', tenantId: 't1', fromItemId: 'a', fromType: 'x', toItemId: 'gone', toType: 'y', missing: ['to'] },
+      { edgeId: 'e2', tenantId: 't2', fromItemId: 'gone', fromType: 'x', toItemId: 'b', toType: 'y', missing: ['from'] },
+    ]);
+    expect(h.removeThreadEdge).toHaveBeenNthCalledWith(1, 't1', 'e1');
+    expect(h.removeThreadEdge).toHaveBeenNthCalledWith(2, 't2', 'e2');
+    expect(out).toEqual([
+      { edgeId: 'e1', tenantId: 't1', result: 'deleted' },
+      { edgeId: 'e2', tenantId: 't2', result: 'error' },
+    ]);
+  });
+
+  it('records error (never throws) when the primitive throws', async () => {
+    h.removeThreadEdge.mockRejectedValue(new Error('cosmos down'));
+    const out = await purgeThreadEdgeOrphans([
+      { edgeId: 'e1', tenantId: 't1', fromItemId: 'a', fromType: 'x', toItemId: 'gone', toType: 'y', missing: ['to'] },
+    ]);
+    expect(out).toEqual([{ edgeId: 'e1', tenantId: 't1', result: 'error' }]);
   });
 });

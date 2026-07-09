@@ -181,6 +181,46 @@ export async function listThreadEdges(
 }
 
 /**
+ * List EVERY Thread edge in the deployment (cross-partition, all tenants,
+ * INCLUDING tombstoned ones). Used by the admin lineage-reconcile sweep to find
+ * orphaned edges — pre-existing debris whose endpoints were permanently deleted
+ * before delete-time reconciliation was wired (the 2026-07-08 UAT purge left
+ * such edges on /thread). Best-effort — returns [] on error. Deployment-wide, so
+ * this is only reachable from the tenant-admin-gated reconcile route.
+ */
+export async function listAllThreadEdges(): Promise<ThreadEdge[]> {
+  try {
+    const container = await threadEdgesContainer();
+    const { resources } = await container.items
+      .query<ThreadEdge>({ query: 'SELECT * FROM c' })
+      .fetchAll();
+    return resources || [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Hard-remove a single Thread edge by id (best-effort). The shared edge-removal
+ * primitive used by both `reconcileThreadEdgesOnDelete` (mode:'remove') and the
+ * admin orphan sweep (`purgeThreadEdgeOrphans`), so an orphaned edge can be
+ * purged precisely without touching sibling edges that share an endpoint.
+ * Returns true when the edge is gone (deleted now, or already absent), false on
+ * a real failure. Never throws.
+ */
+export async function removeThreadEdge(tenantId: string, edgeId: string): Promise<boolean> {
+  if (!tenantId || !edgeId) return false;
+  try {
+    const container = await threadEdgesContainer();
+    await container.item(edgeId, tenantId).delete();
+    return true;
+  } catch (e: any) {
+    if (e?.code === 404) return true; // already gone — treat as success
+    return false;
+  }
+}
+
+/**
  * Auto-reconcile the lineage graph when a Loom item is deleted.
  *
  * Finds every edge where the item is the source OR the target (within the
@@ -215,7 +255,7 @@ export async function reconcileThreadEdgesOnDelete(
     for (const edge of resources || []) {
       try {
         if (opts.mode === 'remove') {
-          await container.item(edge.id, tenantId).delete();
+          await removeThreadEdge(tenantId, edge.id);
         } else {
           const staleItemIds = Array.from(new Set([...(edge.staleItemIds || []), itemId]));
           await container.items.upsert<ThreadEdge>({
