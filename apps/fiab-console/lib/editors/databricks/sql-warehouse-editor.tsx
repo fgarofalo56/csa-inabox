@@ -33,6 +33,7 @@ import {
   History20Regular, ShieldTask20Regular, Link20Regular,
   ArrowUpload20Regular, CloudArrowUp24Regular, Dismiss16Regular,
   BuildingShop20Regular, ShieldLock20Regular, People20Regular, Star20Regular,
+  Stream20Regular, ArrowClockwise20Regular, CalendarClock20Regular,
 } from '@fluentui/react-icons';
 import { ModelViewPanel } from '../components/model-view-canvas';
 import { ItemEditorChrome } from '../item-editor-chrome';
@@ -53,6 +54,8 @@ import { registerSqlIntelliSense, createEmptyCache, type SqlSchemaCache } from '
 import { WarehouseAlerts } from '../components/warehouse-alerts';
 import { SqlCopilotEditor } from '@/lib/components/editor/sql-copilot-editor';
 import { VisualQueryCanvas, type VqSourceTable } from '../components/visual-query-canvas';
+import { StreamingObjectDialog, RefreshScheduleDialog } from './streaming-object-dialog';
+import type { StreamingObjectKind } from './streaming-sql';
 import { downloadResultsCsv, downloadResultsJson } from '../components/result-export';
 import { CodeCell } from '@/lib/components/notebook/code-cell';
 import { MarkdownCell } from '@/lib/components/notebook/markdown-cell';
@@ -149,6 +152,11 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
   const [tables, setTables] = useState<string[]>([]);
   const [views, setViews] = useState<string[]>([]);
   const [functions, setFunctions] = useState<string[]>([]);
+  // DBX-7: DLT-backed streaming tables + materialized views (own tree nodes).
+  const [streamingTables, setStreamingTables] = useState<string[]>([]);
+  const [materializedViews, setMaterializedViews] = useState<string[]>([]);
+  const [newStreamKind, setNewStreamKind] = useState<StreamingObjectKind | null>(null);
+  const [refreshTarget, setRefreshTarget] = useState<{ kind: StreamingObjectKind; fullName: string } | null>(null);
   // Registered models — a UC securable subtype of FUNCTION (browsed via the UC
   // Models REST, governed via the FUNCTION permissions path).
   const [models, setModels] = useState<string[]>([]);
@@ -277,6 +285,8 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
     setViews([]);
     setFunctions([]);
     setModels([]);
+    setStreamingTables([]);
+    setMaterializedViews([]);
     refreshState().then((st) => { if (st?.state === 'RUNNING') refreshCatalogs(); });
   }, [warehouseId, refreshState, refreshCatalogs]);
 
@@ -290,6 +300,8 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
     setViews([]);
     setFunctions([]);
     setModels([]);
+    setStreamingTables([]);
+    setMaterializedViews([]);
     const r = await clientFetch(
       `/api/items/databricks-sql-warehouse/${id}/schema?warehouseId=${encodeURIComponent(warehouseId)}&catalog=${encodeURIComponent(cat)}`,
     );
@@ -307,6 +319,8 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
     setViews([]);
     setFunctions([]);
     setModels([]);
+    setStreamingTables([]);
+    setMaterializedViews([]);
     const r = await clientFetch(
       `/api/items/databricks-sql-warehouse/${id}/schema?warehouseId=${encodeURIComponent(warehouseId)}&catalog=${encodeURIComponent(cat)}&schema=${encodeURIComponent(sch)}`,
     );
@@ -316,6 +330,8 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
       schemaCacheRef.current.tables.set(`${cat}.${sch}`, j.tables || []);
       setViews(j.views || []);
       setFunctions(j.functions || []);
+      setStreamingTables(j.streamingTables || []);
+      setMaterializedViews(j.materializedViews || []);
     }
     // Registered models (UC securable subtype of FUNCTION) — best-effort; the
     // models REST is a separate UC surface from the schema browse and is honest-
@@ -931,6 +947,12 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
             <Tooltip content="Create volume (UC REST)" relationship="label">
               <Button size="small" appearance="outline" icon={<Add20Regular />} onClick={() => setUcCreateVolumeOpen(true)}>Volume</Button>
             </Tooltip>
+            <Tooltip content="New streaming table (CREATE STREAMING TABLE — DLT-backed, incremental)" relationship="label">
+              <Button size="small" appearance="outline" icon={<Add20Regular />} onClick={() => setNewStreamKind('streaming_table')}>Streaming table</Button>
+            </Tooltip>
+            <Tooltip content="New materialized view (CREATE MATERIALIZED VIEW — DLT-backed, scheduled refresh)" relationship="label">
+              <Button size="small" appearance="outline" icon={<Add20Regular />} onClick={() => setNewStreamKind('materialized_view')}>Materialized view</Button>
+            </Tooltip>
             <Tooltip content="Manage grants (UC permissions)" relationship="label">
               <Button size="small" appearance="outline" icon={<Key20Regular />} onClick={() => { setUcGrantSeed(null); setUcGrantsOpen(true); }} aria-label="Manage grants" />
             </Tooltip>
@@ -1085,6 +1107,58 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
                                     onScriptDrop={() => dbxLoadScript(c, sch, v, 'view', 'drop')} />}>
                                   {v}{' '}
                                   <SqlRowCountBadge cacheKey={`v-${c}.${sch}.${v}`} load={() => dbxCountRows(c, sch, v)} />
+                                </TreeItemLayout>
+                              </TreeItem>
+                            ))}
+                            {/* Streaming tables (DBX-7 — DLT-backed, incremental) */}
+                            {activeSchema === sch && streamingTables.map((t) => (
+                              <TreeItem
+                                key={`st-${c}.${sch}.${t}`}
+                                itemType="leaf"
+                                value={`st-${c}.${sch}.${t}`}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setSqlText(`SELECT * FROM \`${c}\`.\`${sch}\`.\`${t}\` LIMIT 100;`);
+                                }}
+                              >
+                                <TreeItemLayout
+                                  iconBefore={<Stream20Regular />}
+                                  actions={
+                                    <Tooltip content={`Refresh / schedule ${t}`} relationship="label">
+                                      <Button size="small" appearance="subtle" icon={<CalendarClock20Regular />}
+                                        aria-label={`Refresh or schedule ${t}`}
+                                        onClick={(e) => { e.stopPropagation(); setRefreshTarget({ kind: 'streaming_table', fullName: `${c}.${sch}.${t}` }); }} />
+                                    </Tooltip>
+                                  }
+                                >
+                                  {t}
+                                  <Badge appearance="ghost" color="brand" size="small" style={{ marginLeft: tokens.spacingHorizontalXXS }}>streaming</Badge>
+                                </TreeItemLayout>
+                              </TreeItem>
+                            ))}
+                            {/* Materialized views (DBX-7 — DLT-backed, recomputed) */}
+                            {activeSchema === sch && materializedViews.map((mv) => (
+                              <TreeItem
+                                key={`mv-${c}.${sch}.${mv}`}
+                                itemType="leaf"
+                                value={`mv-${c}.${sch}.${mv}`}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setSqlText(`SELECT * FROM \`${c}\`.\`${sch}\`.\`${mv}\` LIMIT 100;`);
+                                }}
+                              >
+                                <TreeItemLayout
+                                  iconBefore={<ArrowClockwise20Regular />}
+                                  actions={
+                                    <Tooltip content={`Refresh / schedule ${mv}`} relationship="label">
+                                      <Button size="small" appearance="subtle" icon={<CalendarClock20Regular />}
+                                        aria-label={`Refresh or schedule ${mv}`}
+                                        onClick={(e) => { e.stopPropagation(); setRefreshTarget({ kind: 'materialized_view', fullName: `${c}.${sch}.${mv}` }); }} />
+                                    </Tooltip>
+                                  }
+                                >
+                                  {mv}
+                                  <Badge appearance="ghost" color="brand" size="small" style={{ marginLeft: tokens.spacingHorizontalXXS }}>materialized</Badge>
                                 </TreeItemLayout>
                               </TreeItem>
                             ))}
@@ -1852,6 +1926,31 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
             open={alertsOpen}
             onOpenChange={setAlertsOpen}
           />
+          {/* DBX-7: streaming-table / materialized-view typed builders + refresh scheduling */}
+          {newStreamKind && (
+            <StreamingObjectDialog
+              open={!!newStreamKind}
+              onOpenChange={(o) => { if (!o) setNewStreamKind(null); }}
+              kind={newStreamKind}
+              itemId={id}
+              warehouseId={warehouseId}
+              defaultCatalog={activeCatalog ?? undefined}
+              defaultSchema={activeSchema ?? undefined}
+              onInsertSql={(sql) => setSqlText(sql)}
+              onCreated={() => { if (activeCatalog && activeSchema) void openSchema(activeCatalog, activeSchema); }}
+            />
+          )}
+          {refreshTarget && (
+            <RefreshScheduleDialog
+              open={!!refreshTarget}
+              onOpenChange={(o) => { if (!o) setRefreshTarget(null); }}
+              kind={refreshTarget.kind}
+              fullName={refreshTarget.fullName}
+              itemId={id}
+              warehouseId={warehouseId}
+              onDone={() => { if (activeCatalog && activeSchema) void openSchema(activeCatalog, activeSchema); }}
+            />
+          )}
           <Dialog open={ucSecOpen} onOpenChange={(_, d) => setUcSecOpen(d.open)}>
             <DialogSurface style={{ maxWidth: '980px', width: '94vw' }}>
               <DialogBody>
