@@ -69,6 +69,15 @@ import {
 import { QueryParamsBar, substituteDbx, type QueryParam } from '../components/query-params';
 import { ResultVisualize } from '../components/result-visualize';
 import { useStyles, fmtTime } from './shared';
+import { UC_TABLE_FORMATS, requiresDdlPath, type UcTableFormat } from '@/lib/sql/uc-table-format-builders';
+
+// Human labels for the DBX-11 table-format dropdown (no freeform — dropdown +
+// toggles). Delta is the default; UniForm / Iceberg compile to real DDL.
+const TABLE_FORMAT_LABELS: Record<UcTableFormat, string> = {
+  DELTA: 'Delta (default)',
+  DELTA_UNIFORM: 'Delta + UniForm (Iceberg reads)',
+  ICEBERG: 'Managed Iceberg',
+};
 
 
 // ============================================================
@@ -272,6 +281,12 @@ function UnityCatalogWriteDialogs(props: UcWriteDialogsProps) {
   const [tblComment, setTblComment] = useState('');
   const [tblType, setTblType] = useState<'MANAGED' | 'EXTERNAL'>('MANAGED');
   const [tblFormat, setTblFormat] = useState('DELTA');
+  // DBX-11 — table-format selector (Delta / UniForm-Iceberg / managed Iceberg) +
+  // deletion-vector / row-lineage toggles for MANAGED tables. UniForm / Iceberg /
+  // a toggle route through the SQL-DDL create path (needs a warehouse).
+  const [tblTableFormat, setTblTableFormat] = useState<UcTableFormat>('DELTA');
+  const [tblDeletionVectors, setTblDeletionVectors] = useState(false);
+  const [tblRowLineage, setTblRowLineage] = useState(false);
   const [tblStorage, setTblStorage] = useState('');
   const [tblCols, setTblCols] = useState<NewColumn[]>([{ name: 'id', type_name: 'BIGINT', nullable: false, comment: '' }]);
   const [tblBusy, setTblBusy] = useState(false);
@@ -360,12 +375,44 @@ function UnityCatalogWriteDialogs(props: UcWriteDialogsProps) {
   const patchCol = useCallback((i: number, p: Partial<NewColumn>) => setTblCols((c) => c.map((col, j) => (j === i ? { ...col, ...p } : col))), []);
   const delCol = useCallback((i: number) => setTblCols((c) => (c.length <= 1 ? c : c.filter((_, j) => j !== i))), []);
 
+  // DBX-11 — a MANAGED table in UniForm/Iceberg format, or with deletion-vectors
+  // / row-lineage on, needs TBLPROPERTIES the REST create API can't carry, so it
+  // routes through the SQL-DDL create path (which needs a warehouse).
+  const tblNeedsDdl = tblType === 'MANAGED' && requiresDdlPath({ format: tblTableFormat, deletionVectors: tblDeletionVectors, rowLineage: tblRowLineage });
+
+  const resetCreateTable = useCallback(() => {
+    setTblName(''); setTblComment(''); setTblStorage('');
+    setTblCols([{ name: 'id', type_name: 'BIGINT', nullable: false, comment: '' }]);
+    setTblTableFormat('DELTA'); setTblDeletionVectors(false); setTblRowLineage(false);
+  }, []);
+
   const createTable = useCallback(async () => {
     if (!tblCatalog || !tblSchema || !tblName.trim()) return;
     if (tblCols.some((c) => !c.name.trim())) { setTblErr('Every column needs a name.'); return; }
     if (tblType === 'EXTERNAL' && !tblStorage.trim()) { setTblErr('EXTERNAL tables require a storage location (abfss://…).'); return; }
     setTblBusy(true); setTblErr(null);
     try {
+      // DDL path — Iceberg / UniForm / deletion-vectors / row-lineage.
+      if (tblNeedsDdl) {
+        if (!warehouseId) { setTblErr('Iceberg / UniForm tables are created via SQL DDL — bind or start a SQL Warehouse first, or choose Delta.'); return; }
+        const r = await clientFetch('/api/databricks/unity-catalog/tables', {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            mode: 'ddl',
+            name: tblName.trim(), catalog_name: tblCatalog, schema_name: tblSchema,
+            table_format: tblTableFormat,
+            deletion_vectors: tblDeletionVectors, row_lineage: tblRowLineage,
+            warehouse_id: warehouseId,
+            comment: tblComment.trim() || undefined,
+            columns: tblCols.map((c) => ({ name: c.name.trim(), type_name: c.type_name, nullable: c.nullable, comment: c.comment.trim() || undefined })),
+          }),
+        });
+        const j = await r.json();
+        if (!j.ok) { setTblErr(j.error || `HTTP ${r.status}`); return; }
+        setCreateTableOpen(false); resetCreateTable();
+        onChanged();
+        return;
+      }
       const r = await clientFetch('/api/databricks/unity-catalog/tables', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -378,12 +425,11 @@ function UnityCatalogWriteDialogs(props: UcWriteDialogsProps) {
       });
       const j = await r.json();
       if (!j.ok) { setTblErr(j.error || `HTTP ${r.status}`); return; }
-      setCreateTableOpen(false); setTblName(''); setTblComment(''); setTblStorage('');
-      setTblCols([{ name: 'id', type_name: 'BIGINT', nullable: false, comment: '' }]);
+      setCreateTableOpen(false); resetCreateTable();
       onChanged();
     } catch (e: any) { setTblErr(e?.message || String(e)); }
     finally { setTblBusy(false); }
-  }, [tblCatalog, tblSchema, tblName, tblComment, tblType, tblFormat, tblStorage, tblCols, onChanged, setCreateTableOpen]);
+  }, [tblCatalog, tblSchema, tblName, tblComment, tblType, tblFormat, tblStorage, tblCols, tblNeedsDdl, tblTableFormat, tblDeletionVectors, tblRowLineage, warehouseId, onChanged, setCreateTableOpen, resetCreateTable]);
 
   // ---- Grants ----
   const [grSecurable, setGrSecurable] = useState<UcSecurable>('SCHEMA');
@@ -720,6 +766,42 @@ function UnityCatalogWriteDialogs(props: UcWriteDialogsProps) {
                         <Input value={tblStorage} onChange={(_, d) => setTblStorage(d.value)} placeholder="abfss://container@account.dfs.core.windows.net/path" />
                       </Field>
                     )}
+                    {/* DBX-11 — managed table format selector + open-format toggles. */}
+                    {tblType === 'MANAGED' && (
+                      <div className={s.dlgRow}>
+                        <Field label="Table format" className={s.flex2} hint="Delta reads via Iceberg with UniForm; Managed Iceberg is a native Iceberg table">
+                          <Dropdown
+                            value={TABLE_FORMAT_LABELS[tblTableFormat]}
+                            selectedOptions={[tblTableFormat]}
+                            onOptionSelect={(_, d) => d.optionValue && setTblTableFormat(d.optionValue as UcTableFormat)}
+                          >
+                            {UC_TABLE_FORMATS.map((f) => <Option key={f} value={f} text={TABLE_FORMAT_LABELS[f]}>{TABLE_FORMAT_LABELS[f]}</Option>)}
+                          </Dropdown>
+                        </Field>
+                        {tblTableFormat !== 'ICEBERG' && (
+                          <Field label="Delta features" className={s.flex2}>
+                            <div style={{ display: 'flex', gap: tokens.spacingHorizontalL, flexWrap: 'wrap' }}>
+                              <Switch checked={tblDeletionVectors} label="Deletion vectors" onChange={(_, d) => setTblDeletionVectors(!!d.checked)} />
+                              <Switch checked={tblRowLineage} label="Row lineage" onChange={(_, d) => setTblRowLineage(!!d.checked)} />
+                            </div>
+                          </Field>
+                        )}
+                      </div>
+                    )}
+                    {tblNeedsDdl && !warehouseId && (
+                      <MessageBar intent="warning"><MessageBarBody>
+                        <MessageBarTitle>SQL Warehouse required</MessageBarTitle>
+                        Iceberg / UniForm / deletion-vector / row-lineage tables are created via a
+                        <code> CREATE TABLE … USING … TBLPROPERTIES(…)</code> statement on a SQL Warehouse.
+                        Bind or start a warehouse, or choose Delta with no extra features.
+                      </MessageBarBody></MessageBar>
+                    )}
+                    {tblNeedsDdl && warehouseId && (
+                      <Caption1>
+                        Runs <code>CREATE TABLE … USING {tblTableFormat === 'ICEBERG' ? 'ICEBERG' : 'DELTA'} … TBLPROPERTIES(…)</code>
+                        {' '}on the bound warehouse (the REST create API can't carry these properties).
+                      </Caption1>
+                    )}
                     <Divider>Columns</Divider>
                     {tblCols.map((c, i) => (
                       <div key={i} className={s.colRow}>
@@ -817,7 +899,7 @@ function UnityCatalogWriteDialogs(props: UcWriteDialogsProps) {
             <DialogActions>
               <Button appearance="secondary" onClick={() => setCreateTableOpen(false)} disabled={tblBusy}>Cancel</Button>
               {tblSource === 'columns' ? (
-                <Button appearance="primary" onClick={createTable} disabled={tblBusy || !tblCatalog || !tblSchema || !tblName.trim()}>{tblBusy ? 'Creating…' : 'Create table'}</Button>
+                <Button appearance="primary" onClick={createTable} disabled={tblBusy || !tblCatalog || !tblSchema || !tblName.trim() || (tblNeedsDdl && !warehouseId)}>{tblBusy ? 'Creating…' : 'Create table'}</Button>
               ) : (
                 <Button appearance="primary" onClick={createTableFromFile} disabled={tblBusy || !tblCatalog || !tblSchema || !tblName.trim() || !tblVolume || !tblFileContent || !warehouseId}>{tblBusy ? 'Importing…' : 'Create from file'}</Button>
               )}
