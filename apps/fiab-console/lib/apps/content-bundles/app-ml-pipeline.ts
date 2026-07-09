@@ -53,12 +53,17 @@
  */
 
 import type { AppBundle } from './types';
+import { backendUtilShimCell } from './notebook-backend';
 
 // ════════════════════════════════════════════════════════════════════════
 //  NOTEBOOK CELLS — Step 1: Feature Engineering Pipeline
 // ════════════════════════════════════════════════════════════════════════
 
 const NB_FEATURES_CELLS = [
+  // Backend-util shim: defines _loom_runtime() so the scheduler cell below can
+  // gate the Databricks-only Jobs API on the actual engine (Databricks vs the
+  // Synapse/AML default) instead of NameErroring on a raw dbutils call.
+  backendUtilShimCell(),
   {
     id: 'feat-md-intro',
     type: 'markdown' as const,
@@ -70,8 +75,13 @@ const NB_FEATURES_CELLS = [
       '| Output | Description |\n' +
       '| --- | --- |\n' +
       '| `ml.features.customer_churn_features` | One row per `customer_id` with spend / recency / volatility features |\n\n' +
-      'Scheduled daily at 06:00 UTC via `dbutils.jobs.submit_run`. Mirrors ' +
-      '`docs/learn/08-solutions/ml-pipeline` Step 1.',
+      '> **Backend note.** Feature Engineering in Unity Catalog + the MLflow ' +
+      '`databricks-uc` registry are **Databricks** capabilities (Databricks is an ' +
+      'opt-in Azure-native backend — not Microsoft Fabric). On the Synapse Spark / ' +
+      'Azure ML default the feature table is a plain Delta table written with ' +
+      '`spark.write.saveAsTable(...)` and the daily refresh is driven by the sibling ' +
+      '**MLOps Orchestration Pipeline** data-pipeline item, not an in-notebook ' +
+      'scheduler. Mirrors `docs/learn/08-solutions/ml-pipeline` Step 1.',
   },
   {
     id: 'feat-code-imports',
@@ -135,17 +145,36 @@ const NB_FEATURES_CELLS = [
     type: 'code' as const,
     lang: 'pyspark' as const,
     source:
-      '# Schedule a daily 06:00 UTC feature refresh.\n' +
-      'dbutils.jobs.submit_run(\n' +
-      '    run_name="refresh_customer_features",\n' +
-      '    notebook_task={\n' +
-      '        "notebook_path": "/Repos/ml/features/customer_features",\n' +
-      '    },\n' +
-      '    schedule={\n' +
-      '        "quartz_cron_expression": "0 0 6 * * ?",\n' +
-      '        "timezone_id": "UTC",\n' +
-      '    },\n' +
-      ')',
+      '# Schedule the daily 06:00 UTC feature refresh.\n' +
+      '#\n' +
+      '# The Databricks Jobs API applies ONLY on the Databricks backend (real SDK,\n' +
+      "# not the non-existent `dbutils.jobs`). On the Synapse/AML default the sibling\n" +
+      '# "MLOps Orchestration Pipeline" data-pipeline item runs this notebook on a\n' +
+      '# trigger — so this cell is a no-op there.\n' +
+      'if _loom_runtime() == "dbutils":\n' +
+      '    from databricks.sdk import WorkspaceClient\n' +
+      '    from databricks.sdk.service import jobs\n\n' +
+      '    w = WorkspaceClient()\n' +
+      '    w.jobs.create(\n' +
+      '        name="refresh_customer_features",\n' +
+      '        tasks=[\n' +
+      '            jobs.Task(\n' +
+      '                task_key="refresh_customer_features",\n' +
+      '                notebook_task=jobs.NotebookTask(\n' +
+      '                    notebook_path="/Repos/ml/features/customer_features",\n' +
+      '                ),\n' +
+      '            )\n' +
+      '        ],\n' +
+      '        schedule=jobs.CronSchedule(\n' +
+      '            quartz_cron_expression="0 0 6 * * ?",\n' +
+      '            timezone_id="UTC",\n' +
+      '        ),\n' +
+      '    )\n' +
+      'else:\n' +
+      '    print(\n' +
+      '        "Feature refresh is scheduled by the \'MLOps Orchestration Pipeline\' "\n' +
+      '        "data-pipeline item on the Synapse/AML backend — no in-notebook job."\n' +
+      '    )',
   },
 ];
 
