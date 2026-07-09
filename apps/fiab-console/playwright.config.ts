@@ -27,7 +27,12 @@ export default defineConfig({
     baseURL: process.env.LOOM_UAT_BASE_URL || process.env.LOOM_URL || 'https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net',
     screenshot: 'only-on-failure',
     trace: 'retain-on-failure',
-    actionTimeout: 15_000,
+    // 30s, not 15s: actionTimeout also caps page.request.* API calls, and the
+    // live console under a serial 29-app install sweep routinely takes >15s to
+    // answer POST /api/workspaces or accept an Install click while a previous
+    // app's provisioning is still running. 15s produced a 16-test false-fail
+    // band on run loom-uat-a0cz4b8 (2026-07-09) with realFails=0.
+    actionTimeout: 30_000,
     navigationTimeout: 30_000,
     extraHTTPHeaders: {},
     // Auth: prefer storageState from `pnpm uat` launcher; falls back to

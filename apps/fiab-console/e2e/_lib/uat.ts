@@ -193,6 +193,10 @@ export function pageSlug(p: string): string {
 export async function createWorkspace(page: Page, name?: string, domain = 'default'): Promise<string> {
   const r = await page.request.post(`${BASE}/api/workspaces`, {
     data: { name: name || `uat-${Date.now()}`, domain },
+    // Explicit 60s: the config actionTimeout (30s) also governs API calls, and
+    // workspace creation behind Front Door can queue behind an in-flight app
+    // provisioning burst. A timed-out create fails the whole test at setup.
+    timeout: 60_000,
   });
   if (!r.ok()) {
     throw new Error(

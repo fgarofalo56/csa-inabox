@@ -131,7 +131,11 @@ const APP_IDS = [
 
 for (const appId of APP_IDS) {
   test(`use-case app via UI — ${appId}`, async ({ browser }) => {
-    test.setTimeout(180_000);
+    // 300s, not 180s: the supercharge-* installs provision multi-item bundles
+    // (Spark + warehouse + pipeline) and legitimately run past 3 minutes on a
+    // cold estate — 180s failed Bronze/Silver/ML as pure timeouts on the
+    // 2026-07-09 run while the installs themselves were healthy (realFails=0).
+    test.setTimeout(300_000);
     const ctx = await browser.newContext();
     await signIn(ctx);
     const page = await ctx.newPage();
@@ -151,7 +155,7 @@ for (const appId of APP_IDS) {
       // The explicit Install-button visibility wait below is the correct
       // readiness gate.
       await page.goto(`${BASE}/apps/${appId}`, { waitUntil: 'domcontentloaded' });
-      await expect(page.getByRole('button', { name: /^Install/i }).first()).toBeVisible({ timeout: 30_000 });
+      await expect(page.getByRole('button', { name: /^Install/i }).first()).toBeVisible({ timeout: 60_000 });
       await page.screenshot({ path: path.join(SHOT_DIR, `${appId}-1-detail.png`), fullPage: true });
 
       // 2) click Install → dialog opens
