@@ -161,6 +161,34 @@ export async function createConnection(input: CreateConnectionInput): Promise<Fo
   return shapeConnection({ ...j, name: j?.name || name });
 }
 
+/**
+ * Update (edit) an existing connection. The ARM connections REST has no PATCH —
+ * a PUT replaces the connection's properties — so this 404-guards first (editing
+ * a connection that does not exist is an error, NOT a silent create) and then
+ * PUTs the rebuilt body. `category` is immutable in the portal, so callers pass
+ * the existing category through unchanged. Secret handling is identical to
+ * create: a raw plaintext secret throws RawSecretRejectedError (KV reference
+ * only). A non-2xx from ARM throws FoundryError.
+ */
+export async function updateConnection(input: CreateConnectionInput): Promise<FoundryConnection> {
+  const name = (input.name || '').trim();
+  if (!name) throw new FoundryError(400, input, 'connection name is required');
+  if (!isValidConnectionName(name)) {
+    throw new FoundryError(400, input, 'connection name must be 2–63 chars: letters, digits, _ . -');
+  }
+  const existing = await getConnection(name);
+  if (!existing) {
+    throw new FoundryError(404, { name }, `connection "${name}" not found — cannot edit a connection that does not exist`);
+  }
+  const body = buildConnectionBody(input); // throws RawSecretRejectedError on a raw secret
+  const res = await armFetch(`${workspaceBase()}/connections/${encodeURIComponent(name)}`, {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  });
+  const j = await readOrThrow<any>(res, `update connection ${name}`);
+  return shapeConnection({ ...j, name: j?.name || name });
+}
+
 /** DELETE a connection. 404/204 → ok (idempotent). */
 export async function deleteConnection(name: string): Promise<void> {
   const res = await armFetch(`${workspaceBase()}/connections/${encodeURIComponent(name)}`, { method: 'DELETE' });
