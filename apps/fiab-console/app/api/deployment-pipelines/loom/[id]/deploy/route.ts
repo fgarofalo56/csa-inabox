@@ -30,6 +30,7 @@ import type { ProvisionResult } from '@/lib/install/provisioners/types';
 import type { LoomPipelineHistoryRecord } from '@/lib/types/loom-pipeline';
 import type { WorkspaceItem } from '@/lib/types/workspace';
 import { jok, jerr, loadPipeline, stageWorkspaceId, loadStageRules, resolveCaller } from '../../_lib/pipeline-store';
+import { emitLoomEvent } from '@/lib/events/webhook-emitter';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -191,6 +192,17 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     } catch (e) {
       steps.push(`History write failed (non-fatal): ${(e as Error).message}`);
     }
+
+    // BR-WEBHOOK — deployment-pipeline run reached a terminal receipt; fan the
+    // outcome out to any subscribed outbound webhook (best-effort, non-blocking).
+    emitLoomEvent({
+      type: status === 'failed' ? 'pipeline.run.failed' : 'pipeline.run.completed',
+      tenantId,
+      subject: id,
+      subjectName: pipeline.displayName,
+      actor: { oid: s.claims.oid, upn: s.claims.upn || s.claims.email },
+      data: { operationId: record.id, status, sourceStageId, targetStageId, deployedItemIds, summary },
+    });
 
     return jok({ operationId: record.id, status, diff: pairs, summary, deployedItemIds, steps });
   } catch (e) {
