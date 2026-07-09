@@ -1440,6 +1440,7 @@ nav:
           - "Architecture Diagrams (topology, deploy flows, RBAC, data flow)": fiab/diagrams/README.md
           - Portal Architecture (where admins + users go): fiab/portal-architecture.md
           - Console Access Patterns: fiab/access-patterns.md
+          - "UX Standards (Fabric-grade floor for every surface)": fiab/ux-standards.md
           - ADRs:
               - Overview: fiab/adr/README.md
               - "fiab-0001 — Fabric feature scope": fiab/adr/0001-fabric-feature-scope.md
