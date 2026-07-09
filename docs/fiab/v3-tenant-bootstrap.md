@@ -584,6 +584,66 @@ service principal against the Microsoft Graph SP
   expressed in ARM/bicep — hence the bootstrap step +
   `scripts/csa-loom/grant-graph-approles.sh`.
 
+## External (cross-tenant) data sharing — Entra B2B {#external-data-sharing}
+
+Loom's **External data sharing** (the Share dialog → *External tenant* tab, and
+the recipient's *Shared with me* view) shares a lakehouse / dataset in-place to a
+guest in **another Entra tenant**, read-only, scoped to a folder/table subset,
+with an expiry — the Azure-native parity for Fabric *External Data Sharing*. It
+is **off by default** and gated on one env flag + one Graph app-role:
+
+| Setting | Value | Why |
+|---|---|---|
+| `LOOM_EXTERNAL_SHARING_ENABLED` | `true` (opt-in; unset = feature off) | Sending a foreign B2B invite is a deliberate governance action, so the operator opts in. |
+| Graph app-role `User.Invite.All` | `09850681-111b-4a89-9bed-3f2cae46d706` on the Console UAMI SP | Backs `POST /invitations` (invite the foreign user as a B2B guest). |
+
+**How it works (no Microsoft Fabric, no Power BI):**
+
+1. The owner picks a foreign guest UPN, a folder/table subset under the item's
+   ADLS root, and an expiry. Loom invites the guest via **Microsoft Graph
+   `POST /invitations`** (or reuses an existing guest), then applies a **scoped
+   ADLS POSIX ACL**: read+traverse on the shared leaf path, and **traverse-only
+   (`--x`) on every ancestor** — so the guest can read *only* the shared subset
+   and nothing else in the container. A share record (source item, target
+   tenant/UPN, subset, read-only, expiry, lifecycle) is stored in the Cosmos
+   `external-shares` container.
+2. The guest redeems the invite, lands on **`/external-shares/received`**, and
+   accepts — then reads the shared path with their guest identity (read-only).
+3. **Revoke** removes the guest's ACL entries on every granted path and flips the
+   share to `revoked`; expiry flips it to `expired` automatically.
+
+**One-time grant (only if `POST /invitations` 403s).** Assigning `User.Invite.All`
+to the Console UAMI uses the same mechanism as the MIP/DLP app-roles above, so the
+same bootstrap prerequisite applies (`AppRoleAssignment.ReadWrite.All` on the
+deploy principal). Manual grant:
+
+```bash
+az login   # user/SP with AppRoleAssignment.ReadWrite.All on Graph
+CONSOLE_UAMI_PRINCIPAL=$(az identity show -g <admin-rg> -n <console-uami> --query principalId -o tsv)
+GRAPH_SP_ID=$(az ad sp list --filter "appId eq '00000003-0000-0000-c000-000000000000'" --query "[0].id" -o tsv)
+INVITE_ROLE=09850681-111b-4a89-9bed-3f2cae46d706
+az rest --method POST \
+  --url "https://graph.microsoft.com/v1.0/servicePrincipals/$CONSOLE_UAMI_PRINCIPAL/appRoleAssignments" \
+  --headers "Content-Type=application/json" \
+  --body "{\"principalId\":\"$CONSOLE_UAMI_PRINCIPAL\",\"resourceId\":\"$GRAPH_SP_ID\",\"appRoleId\":\"$INVITE_ROLE\"}"
+```
+
+Until both the flag and the app-role are in place, the *External tenant* tab
+renders the honest `503` gate naming the exact env var + Graph permission — never
+a fake success. **Gov note:** cross-cloud B2B (Commercial ↔ Gov) is constrained
+by cross-cloud guest support; within a single cloud (Commercial↔Commercial or
+Gov↔Gov) it works with the same grant.
+
+### Bicep sync
+
+- `external-shares` Cosmos container is created lazily by the console
+  (`cosmos-client.ts` `createIfNotExists`) — no extra ARM step.
+- `LOOM_EXTERNAL_SHARING_ENABLED` is a runtime opt-in flag (`_ENABLED` — default
+  off, code has a fallback); set it on the `loom-console` Container App (or
+  `az containerapp update`) to enable the feature.
+- `User.Invite.All` is a **Graph-plane** grant and intentionally cannot be
+  expressed in ARM/bicep — hence the one-time app-role assignment above.
+
 ## DLP policy CRUD — SCC PowerShell sidecar {#dlp-scc-sidecar}
 
 The DLP **reads** (policies/rules/alerts/violations/simulate) and the
