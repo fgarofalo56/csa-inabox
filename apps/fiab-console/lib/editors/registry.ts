@@ -193,6 +193,9 @@ export const EDITOR_REGISTRY: Record<string, EditorComponent> = {
   // point of CSA Loom: Fabric isn't available, so SQL = Azure SQL/PG/MI.
   'postgres-flexible-server':    reg(() => import('./unified-sql-database-editor'), 'UnifiedSqlDatabaseEditor'),
   'sql-database':                reg(() => import('./unified-sql-database-editor'), 'UnifiedSqlDatabaseEditor'),
+  // DBX-4 — Lakebase serverless Postgres OLTP (branching/snapshots + pgvector).
+  // Azure-native default = PostgreSQL Flexible Server; Databricks Lakebase opt-in.
+  'lakebase-postgres':           reg(() => import('./lakebase-editor'),         'LakebaseEditor'),
 
   // v3 — Geoanalytics (Azure Maps + lakehouse geometry + H3/S2 + spatial T-SQL/KQL)
   'geo-map':                     reg(() => import('./geo-editors'),            'GeoMapEditor'),

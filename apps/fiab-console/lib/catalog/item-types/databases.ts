@@ -70,4 +70,18 @@ export const databasesItems: FabricItemType[] = [
       ],
       "docsUrl": "https://learn.microsoft.com/azure/templates/microsoft.documentdb/2024-11-15/databaseaccounts"
     } },
+  // --- DBX-4 — Lakebase: serverless Postgres OLTP (Databricks-parity, Azure-native default) ---
+  { slug: 'lakebase-postgres', displayName: 'Lakebase (Postgres OLTP)', restType: 'LakebasePostgres', category: 'Databases',
+    description: 'Serverless Postgres OLTP with branching/snapshots + pgvector hybrid search — Azure Database for PostgreSQL Flexible Server by default; Databricks Lakebase opt-in.',
+    learnContent: {
+      "overview": "Lakebase is Databricks' serverless Postgres OLTP engine (GA June 2026) with git-style branching, snapshots, and hybrid vector + full-text search. In CSA Loom the DEFAULT backend is Azure Database for PostgreSQL Flexible Server (Microsoft.DBforPostgreSQL/flexibleServers) — 100% functional with no Databricks dependency: provision a server via ARM, run SQL over the real pg wire protocol with a Microsoft Entra token, branch via point-in-time restore, add read replicas for DR, and enable pgvector for vector-distance search. Databricks Lakebase is an opt-in alternate backend, selected with LOOM_LAKEBASE_BACKEND=databricks and a bound workspace.",
+      "steps": [
+        { "title": "Provision or bind a server", "body": "Run the provision wizard (compute SKU, storage, HA mode, PostgreSQL version, admin) to create a Flexible Server via ARM PUT, or bind an existing one from the subscription inventory." },
+        { "title": "Query", "body": "Use the pg-dialect query tool (Monaco) to create tables, insert rows, and run SQL over the real pg wire protocol authenticated with a Microsoft Entra token." },
+        { "title": "Branch & snapshot", "body": "Capture a point-in-time snapshot marker, then create a branch — a real point-in-time restore into a new server (Lakebase git-branching parity)." },
+        { "title": "Enable pgvector", "body": "Allowlist the vector extension on the server (ARM) and CREATE EXTENSION, then run a vector-distance (kNN) query for hybrid semantic search." },
+        { "title": "Read replicas", "body": "Add async read replicas for DR / read-scale, or list existing ones." }
+      ],
+      "docsUrl": "https://learn.microsoft.com/azure/postgresql/flexible-server/overview"
+    } },
 ];

@@ -51,6 +51,7 @@ const ORPHAN_ALLOWLIST = new Map([
   ['platform/fiab/bicep/modules/copilot/browser-tool.bicep', 'standalone entrypoint (AIF-18): scale-to-zero Playwright browser-automation ACA Job, deployed out-of-band (az deployment -f browser-tool.bicep) then LOOM_BROWSER_TOOL_JOB set to its resource id; the browser_automation agent tool honest-gates until wired'],
   ['platform/fiab/bicep/modules/landing-zone/databricks-scim-bootstrap.bicep', 'opt-in Databricks SCIM bootstrap; run out-of-band during DLZ setup'],
   ['platform/fiab/bicep/modules/landing-zone/workspace-identity.bicep', 'opt-in per-workspace identity module; deployed on demand by the workspace provisioner'],
+  ['platform/fiab/bicep/modules/landing-zone/postgres-flexible.bicep', 'standalone entrypoint (DBX-4 Lakebase): STRICTLY opt-in, METERED PostgreSQL Flexible Server (+pgvector allowlist) — the Azure-native DEFAULT Lakebase backend. Deployed out-of-band (az deployment group create -f postgres-flexible.bicep) OR the lakebase-postgres editor provisions/binds a server directly via ARM; no Databricks/Fabric dependency. Not wired into an orchestrator (metered + main.bicep at 256-param ceiling)'],
   ['platform/fiab/bicep/modules/integration/adt-instance.bicep', 'standalone entrypoint (FGC-12): STRICTLY opt-in Azure Digital Twins instance; the default Digital Twin Builder backend is ADX-native and needs none of this. Deployed out-of-band (az deployment -f adt-instance.bicep) then LOOM_ADT_ENDPOINT set to its hostName; the editor honest-gates until wired'],
 ]);
 
