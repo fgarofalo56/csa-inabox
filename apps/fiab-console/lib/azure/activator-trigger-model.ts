@@ -101,7 +101,9 @@ function kqlValue(v: unknown): string {
   if (v === null || v === undefined || v === '') return '""';
   if (typeof v === 'number') return String(v);
   if (typeof v === 'string' && /^-?\d+(\.\d+)?$/.test(v.trim())) return v.trim();
-  return `"${String(v).replace(/"/g, '\\"')}"`;
+  // Escape backslashes FIRST, then double-quotes, so a trailing backslash in
+  // the input can't escape the closing quote and break out of the KQL literal.
+  return `"${String(v).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
 }
 
 /** Column reference that tolerates a missing column at query time (won't error). */

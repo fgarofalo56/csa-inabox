@@ -72,7 +72,9 @@ function kqlValue(v: any): string {
   if (v === null || v === undefined || v === '') return '""';
   if (typeof v === 'number') return String(v);
   if (typeof v === 'string' && /^-?\d+(\.\d+)?$/.test(v.trim())) return v.trim();
-  return `"${String(v).replace(/"/g, '\\"')}"`;
+  // Escape backslashes FIRST, then double-quotes, so a trailing backslash in
+  // the input can't escape the closing quote and break out of the KQL literal.
+  return `"${String(v).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
 }
 
 /** Extract the typed trigger model (FGC-13) from a rule. The kind lives at the
