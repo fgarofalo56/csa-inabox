@@ -34,6 +34,7 @@ import {
   MathFormula20Regular,
 } from '@fluentui/react-icons';
 import { PbiModelViewPanel } from '../components/pbi-model-view-panel';
+import { EntityDiagram } from '@/lib/components/shared/entity-diagram';
 import { ModelTabsExtra } from '../components/model-tabs-extra';
 import { PowerBiTree } from '@/lib/components/powerbi/powerbi-tree';
 import { validateRlsDax } from '@/lib/azure/aas-dax-validate';
@@ -1078,7 +1079,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
   const [refreshing, setRefreshing] = useState(false);
   const [refreshErr, setRefreshErr] = useState<string | null>(null);
   const [relationships, setRelationships] = useState<Array<{ name?: string; fromTable?: string; fromColumn?: string; toTable?: string; toColumn?: string; crossFilteringBehavior?: string }>>([]);
-  const [tab, setTab] = useState<'tables' | 'relationships' | 'model' | 'modeling' | 'measures' | 'metrics' | 'daxquery' | 'health' | 'build' | 'aggregations' | 'refresh' | 'incremental' | 'config' | 'direct-lake' | 'direct-lake-query' | 'security' | 'access' | 'governance' | 'embed' | 'calcGroups' | 'fieldParams' | 'datasource' | 'copilot'>('tables');
+  const [tab, setTab] = useState<'tables' | 'relationships' | 'model' | 'entity' | 'modeling' | 'measures' | 'metrics' | 'daxquery' | 'health' | 'build' | 'aggregations' | 'refresh' | 'incremental' | 'config' | 'direct-lake' | 'direct-lake-query' | 'security' | 'access' | 'governance' | 'embed' | 'calcGroups' | 'fieldParams' | 'datasource' | 'copilot'>('tables');
   // --- Calculation groups + field parameters (calc-group / field-param editor)
   // Loom-native by default: saved to the item's Cosmos content + emitted in TMSL
   // at provision time. AAS / Fabric backends persist to a live model (opt-in).
@@ -2373,6 +2374,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                   <Tab value="tables">Tables ({detail?.tables?.length ?? 0})</Tab>
                   <Tab value="relationships">Relationships ({relationships.length})</Tab>
                   <Tab value="model">Model view</Tab>
+                  <Tab value="entity" icon={<Table20Regular />}>Entity diagram</Tab>
                   <Tab value="modeling" icon={<Table20Regular />}>Modeling</Tab>
                   <Tab value="measures">Measures (DAX)</Tab>
                   <Tab value="metrics" icon={<MathFormula20Regular />}>Metrics</Tab>
@@ -2700,6 +2702,17 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                   <PbiModelViewPanel
                     workspaceId={workspaceId || undefined}
                     datasetId={datasetId}
+                  />
+                )}
+                {/* SC-10 shared <EntityDiagram> — the signature relationship canvas
+                    over the Azure-native model route (TMSL tables + relationships;
+                    renders with NO Power BI / Fabric workspace bound). Table cards
+                    with type-badged columns + typed relationship lines carrying
+                    1/* cardinality markers, Overview ⇄ Entity-diagram toggle. */}
+                {tab === 'entity' && (
+                  <EntityDiagram
+                    source={{ kind: 'semantic-model', itemId: datasetId, workspaceId: workspaceId || undefined }}
+                    height={600}
                   />
                 )}
                 {tab === 'modeling' && (

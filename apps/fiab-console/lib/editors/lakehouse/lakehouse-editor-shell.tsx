@@ -54,6 +54,7 @@ import { OpenInPbiDesktopButton } from '../components/open-in-pbi-desktop-button
 import { EmptyState } from '@/lib/components/empty-state';
 import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
 import { GuidedEmptyState } from '@/lib/components/shared/guided-empty-state';
+import { EntityDiagram } from '@/lib/components/shared/entity-diagram';
 import { DeltaMaintenanceDialog } from '../components/delta-maintenance-dialog';
 import { TierDialog, type BlobAccessTier } from '@/lib/components/onelake/tier-dialog';
 import { parseDdlColumns } from '@/lib/azure/delta-maintenance';
@@ -2544,6 +2545,7 @@ export function LakehouseEditor({ item, id }: Props) {
             <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as string)}>
               <Tab value="files" icon={<DocumentTable20Regular />}>Files</Tab>
               <Tab value="tables" icon={<TableSimple20Regular />}>Tables</Tab>
+              <Tab value="entity" icon={<TableSimple20Regular />}>Entity diagram</Tab>
               <Tab value="history" icon={<History20Regular />}>History</Tab>
               <Tab value="schemas" icon={<Database20Regular />}>Schemas</Tab>
               <Tab value="preview" icon={<Eye20Regular />}>Preview</Tab>
@@ -2555,6 +2557,16 @@ export function LakehouseEditor({ item, id }: Props) {
           <div className={s.pad}>
             {tab === 'security' && (
               <OneLakeSecurityTab itemId={id} itemType="lakehouse" container={activeContainer || 'gold'} />
+            )}
+            {/* SC-10 shared <EntityDiagram> — Overview ⇄ Entity-diagram over the REAL
+                Delta catalog (/api/lakehouse/tables) with best-effort column
+                enrichment via the lakehouse SQL analytics endpoint. Azure-native
+                (ADLS Gen2 + Synapse Serverless); no Fabric/OneLake dependency. */}
+            {tab === 'entity' && (
+              <EntityDiagram
+                source={{ kind: 'lakehouse', itemId: id, containers: activeContainer || undefined }}
+                height={560}
+              />
             )}
             {tab === 'files' && (
               <>
