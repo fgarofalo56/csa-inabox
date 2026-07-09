@@ -12,6 +12,8 @@
  * palette and any host without a provider, and unit-tested directly.
  */
 
+import type { ReactNode } from 'react';
+
 export interface CanvasCommand {
   /** Stable id, e.g. "canvas:undo". */
   id: string;
@@ -23,6 +25,16 @@ export interface CanvasCommand {
   run: () => void;
   /** Optional disabled predicate (e.g. undo with an empty stack). */
   disabled?: () => boolean;
+  /**
+   * Optional leading Fluent glyph shown next to the label (SC-9 CommandSearch +
+   * the Ctrl+K palette). Purely presentational — omitting it is a no-op.
+   */
+  icon?: ReactNode;
+  /**
+   * Optional group header the surfacing UI buckets this command under (e.g. a
+   * ribbon tab label). Falls back to a generic group when absent.
+   */
+  group?: string;
 }
 
 type Listener = () => void;

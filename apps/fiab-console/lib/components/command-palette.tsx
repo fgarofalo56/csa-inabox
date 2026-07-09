@@ -124,7 +124,7 @@ export function CommandPalette() {
   // when a canvas registers/deregisters its actions (on focus/blur).
   useEffect(() => {
     const sync = () => setCanvasCmds(getCanvasCommands().map((c) => ({
-      id: c.id, label: c.label, sub: c.sub, group: 'Canvas', run: c.run,
+      id: c.id, label: c.label, sub: c.sub, group: c.group ?? 'Canvas', run: c.run,
     })));
     sync();
     return subscribeCanvasCommands(sync);

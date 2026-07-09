@@ -17,16 +17,20 @@
 
 import { useCallback, useMemo, useState, type ReactElement } from 'react';
 import {
-  Body1, Caption1, Subtitle2, Button, Input, Textarea, Dropdown, Option, Field, Badge,
-  Switch, MessageBar, MessageBarBody, MessageBarTitle, Tooltip,
+  Body1, Caption1, Subtitle2, Button, Input, Textarea, Dropdown, Option, Field,
+  Switch, MessageBar, MessageBarBody, MessageBarTitle,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
-  Add20Regular, Delete20Regular, ArrowUp16Regular, ArrowDown16Regular,
+  Add20Regular, Delete20Regular, Delete16Regular, ArrowUp16Regular, ArrowDown16Regular,
   Chat20Regular, QuestionCircle20Regular, BranchFork20Regular, Flow20Regular, Code20Regular,
-  ChatMultiple20Regular, BotSparkle24Regular,
+  ChatMultiple20Regular, BotSparkle24Regular, Flash20Regular,
 } from '@fluentui/react-icons';
 import { EmptyState } from '@/lib/components/empty-state';
+import {
+  CanvasNode, CATEGORY_ACCENT,
+  type CanvasVisual, type CanvasNodeCategory, type NodeAction,
+} from '@/lib/components/canvas/canvas-node-kit';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import {
   parseTopicFlow, serializeTopicFlow, isStructuredRepresentable, newStepId,
@@ -39,22 +43,6 @@ const useStyles = makeStyles({
   steps: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
   sectionHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, color: tokens.colorNeutralForeground1 },
   sectionIcon: { display: 'flex', color: tokens.colorBrandForeground1 },
-  node: {
-    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge,
-    padding: tokens.spacingVerticalM, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS,
-    backgroundColor: tokens.colorNeutralBackground1, minWidth: 0,
-    boxShadow: tokens.shadow4,
-    transitionProperty: 'box-shadow',
-    transitionDuration: tokens.durationNormal,
-    transitionTimingFunction: tokens.curveEasyEase,
-    ':hover': { boxShadow: tokens.shadow16 },
-  },
-  nodeHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, justifyContent: 'space-between', minWidth: 0 },
-  nodeHeadLeft: {
-    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, minWidth: 0,
-    overflowWrap: 'anywhere', wordBreak: 'break-word',
-  },
-  nodeActions: { display: 'flex', gap: tokens.spacingHorizontalXS, flexShrink: 0 },
   addRow: { display: 'flex', gap: tokens.spacingHorizontalXS, flexWrap: 'wrap' },
   branch: {
     border: `1px dashed ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium,
@@ -64,7 +52,31 @@ const useStyles = makeStyles({
   phraseRow: { display: 'flex', gap: tokens.spacingHorizontalXS, alignItems: 'center', minWidth: 0 },
   phraseInput: { flexGrow: 1, minWidth: 0 },
   condBody: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
+  // SC-1 — form region hosted inside a canvas-node-kit CanvasNode (below the
+  // gradient header). The node owns the rail/header/status-chip/action-bar chrome.
+  nodeBody: {
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS,
+    paddingLeft: tokens.spacingHorizontalM, paddingRight: tokens.spacingHorizontalM,
+    paddingTop: tokens.spacingVerticalXS, paddingBottom: tokens.spacingVerticalM,
+    minWidth: 0,
+  },
 });
+
+// SC-1 — map each topic-step kind onto a canvas-node-kit category so the node
+// header carries a distinct Loom accent + gradient (message=blue, question=teal,
+// condition=amber, action=violet, advanced=magenta).
+const NODE_CATEGORY: Record<string, CanvasNodeCategory> = {
+  message: 'move',
+  question: 'control',
+  condition: 'iteration',
+  action: 'transform',
+  raw: 'external',
+};
+
+function stepVisual(kind: string): CanvasVisual {
+  const category = NODE_CATEGORY[kind] ?? 'move';
+  return { icon: NODE_META[kind]?.icon ?? <Chat20Regular />, category, accent: CATEGORY_ACCENT[category] };
+}
 
 // Each step carries a client id for stable React keys; kept out of the model.
 type IdStep = TopicStep & { _id: string };
@@ -186,23 +198,25 @@ export function CopilotTopicCanvas({ flowYaml, triggerPhrases, onChange, ariaLab
         </MessageBar>
       )}
 
-      {/* Trigger */}
-      <div className={s.node}>
-        <div className={s.nodeHead}>
-          <div className={s.nodeHeadLeft}>
-            <Badge appearance="filled" color="brand">Trigger</Badge>
-            <Body1><strong>Phrases that start this topic</strong></Body1>
-          </div>
+      {/* Trigger — canvas-node-kit node (SC-1): accent rail + gradient header. */}
+      <CanvasNode
+        width={320}
+        title="Trigger"
+        typeLabel="Starts this topic"
+        visual={{ icon: <Flash20Regular />, category: 'control', accent: CATEGORY_ACCENT.control }}
+        rootProps={{ style: { width: '100%', cursor: 'default' } }}
+      >
+        <div className={s.nodeBody}>
+          {triggerPhrases.length === 0 && <Caption1>No trigger phrases yet — add at least one.</Caption1>}
+          {triggerPhrases.map((p, i) => (
+            <div key={i} className={s.phraseRow}>
+              <Input className={s.phraseInput} value={p} placeholder="e.g. reset my password" onChange={(_, d) => setPhrase(i, d.value)} />
+              <Button size="small" appearance="subtle" icon={<Delete20Regular />} onClick={() => removePhrase(i)} aria-label="Remove phrase" />
+            </div>
+          ))}
+          <div><Button size="small" appearance="outline" icon={<Add20Regular />} onClick={addPhrase}>Add phrase</Button></div>
         </div>
-        {triggerPhrases.length === 0 && <Caption1>No trigger phrases yet — add at least one.</Caption1>}
-        {triggerPhrases.map((p, i) => (
-          <div key={i} className={s.phraseRow}>
-            <Input className={s.phraseInput} value={p} placeholder="e.g. reset my password" onChange={(_, d) => setPhrase(i, d.value)} />
-            <Button size="small" appearance="subtle" icon={<Delete20Regular />} onClick={() => removePhrase(i)} aria-label="Remove phrase" />
-          </div>
-        ))}
-        <div><Button size="small" appearance="outline" icon={<Add20Regular />} onClick={addPhrase}>Add phrase</Button></div>
-      </div>
+      </CanvasNode>
 
       {/* Steps */}
       <div className={s.sectionHead}>
@@ -217,28 +231,30 @@ export function CopilotTopicCanvas({ flowYaml, triggerPhrases, onChange, ariaLab
             body="Add a Message, Question, Condition, or Action below to build out what this topic does when triggered."
           />
         )}
-        {steps.map((st, idx) => (
-          <div key={st._id} className={s.node}>
-            <div className={s.nodeHead}>
-              <div className={s.nodeHeadLeft}>
-                {NODE_META[st.kind]?.icon}
-                <Body1><strong>{NODE_META[st.kind]?.label || st.kind}</strong></Body1>
+        {steps.map((st, idx) => {
+          // SC-1 — reorder/delete move into the kit's inline node action bar
+          // (revealed on hover / pinned on select), keeping identical behaviour.
+          const actions: NodeAction[] = [
+            { key: 'up', icon: <ArrowUp16Regular />, label: 'Move up', onClick: () => moveStep(idx, -1), disabled: idx === 0 },
+            { key: 'down', icon: <ArrowDown16Regular />, label: 'Move down', onClick: () => moveStep(idx, 1), disabled: idx === steps.length - 1 },
+            { key: 'delete', icon: <Delete16Regular />, label: 'Delete step', onClick: () => removeStep(idx), danger: true },
+          ];
+          return (
+            <CanvasNode
+              key={st._id}
+              width={320}
+              title={NODE_META[st.kind]?.label || st.kind}
+              typeLabel={`Step ${idx + 1}`}
+              visual={stepVisual(st.kind)}
+              actionBar={actions}
+              rootProps={{ style: { width: '100%', cursor: 'default' } }}
+            >
+              <div className={s.nodeBody}>
+                <StepBody step={st} onPatch={(patch) => updateStep(idx, patch)} />
               </div>
-              <div className={s.nodeActions}>
-                <Tooltip content="Move up" relationship="label">
-                  <Button size="small" appearance="subtle" icon={<ArrowUp16Regular />} disabled={idx === 0} onClick={() => moveStep(idx, -1)} />
-                </Tooltip>
-                <Tooltip content="Move down" relationship="label">
-                  <Button size="small" appearance="subtle" icon={<ArrowDown16Regular />} disabled={idx === steps.length - 1} onClick={() => moveStep(idx, 1)} />
-                </Tooltip>
-                <Tooltip content="Delete step" relationship="label">
-                  <Button size="small" appearance="subtle" icon={<Delete20Regular />} onClick={() => removeStep(idx)} />
-                </Tooltip>
-              </div>
-            </div>
-            <StepBody step={st} onPatch={(patch) => updateStep(idx, patch)} />
-          </div>
-        ))}
+            </CanvasNode>
+          );
+        })}
       </div>
 
       <div className={s.addRow}>

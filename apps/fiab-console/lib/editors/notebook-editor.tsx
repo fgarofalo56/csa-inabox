@@ -44,6 +44,7 @@ import { ItemEditorChrome } from './item-editor-chrome';
 import { useAutosave, AutosaveIndicator } from './use-autosave';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
+import { useRegisterRibbonCommands } from '@/lib/components/shared/ribbon-commands';
 import { CodeCell } from '@/lib/components/notebook/code-cell';
 import { MarkdownCell } from '@/lib/components/notebook/markdown-cell';
 import { CellAdder } from '@/lib/components/notebook/cell-adder';
@@ -1964,8 +1965,13 @@ export function NotebookEditor({ item, id }: Props) {
     splitCell, mergeCellDown, convertCell,
   ]);
 
+  // SC-9 — publish notebook ribbon actions (Run all, Save, Insert cell, Data
+  // Wrangler, Copilot, session config…) to the shared command registry so the
+  // in-ribbon Ctrl+Q / Alt+Q CommandSearch can run them.
+  useRegisterRibbonCommands(ribbon, 'notebook');
+
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={ribbon} dirty={dirty}
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon} dirty={dirty} commandSearch
       explain={{ family: 'notebook', getDefinition: () => ({ cells, defaultLang }) }}
       leftPanel={
         <div className={s.treePad}>

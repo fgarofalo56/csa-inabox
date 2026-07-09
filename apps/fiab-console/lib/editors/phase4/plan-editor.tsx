@@ -34,6 +34,7 @@ import {
   ChevronRight16Regular, ChevronDown16Regular, ChevronLeft16Regular,
   Add16Regular, Edit16Regular, CheckmarkCircle20Regular, ArrowUndo16Regular,
   Send20Regular, ArrowSplit20Regular, History20Regular, Camera20Regular,
+  Delete16Regular, Circle20Regular, PlayCircle20Regular,
 } from '@fluentui/react-icons';
 import { useQuery } from '@tanstack/react-query';
 import { getItem } from '@/lib/api/workspaces';
@@ -46,6 +47,10 @@ import { DataAgentConfigCopilotPanel } from '../data-agent-config-copilot';
 import { mergeSuggestionIntoSources } from '../_da-config-merge';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
+import {
+  CanvasNode,
+  type CanvasVisual, type CanvasNodeCategory, type NodeAction,
+} from '@/lib/components/canvas/canvas-node-kit';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { ComputePicker } from '@/lib/components/compute-picker';
 import { KeyValueRows } from '@/lib/components/ui/key-value-rows';
@@ -144,6 +149,27 @@ interface PlanState {
   // via the ordinary item PATCH (Cosmos). See _plan-model takeSnapshot/restore.
   snapshots?: PlanSnapshot[];
   [k: string]: unknown;
+}
+
+// SC-1 — Project-task cards adopt the canvas-node-kit anatomy (accent rail +
+// gradient header + status chip + inline action bar). Status drives the accent:
+// to-do=blue, in-progress=amber, done=green; overdue tasks render the error ring.
+const TASK_STATUS_LABEL: Record<PlanTask['status'], string> = {
+  todo: 'To do', doing: 'In progress', done: 'Done',
+};
+const TASK_STATUS_ACCENT: Record<PlanTask['status'], string> = {
+  todo: 'var(--loom-accent-blue)',
+  doing: 'var(--loom-accent-amber)',
+  done: 'var(--loom-accent-green)',
+};
+function taskVisual(status: PlanTask['status']): CanvasVisual {
+  const icon = status === 'done'
+    ? <CheckmarkCircle20Regular />
+    : status === 'doing'
+      ? <PlayCircle20Regular />
+      : <Circle20Regular />;
+  const category: CanvasNodeCategory = status === 'done' ? 'move' : status === 'doing' ? 'iteration' : 'control';
+  return { icon, category, accent: TASK_STATUS_ACCENT[status] };
 }
 
 /**
@@ -2719,34 +2745,55 @@ export function PlanEditor({ item, id }: { item: FabricItemType; id: string }) {
                 <div style={{ width: `${pct}%`, height: '100%', backgroundColor: tokens.colorBrandStroke1, transition: 'width 0.2s' }} />
               </div>
             </div>
-            <Table aria-label="Plan tasks" size="small">
-              <TableHeader><TableRow>
-                <TableHeaderCell>Task</TableHeaderCell>
-                <TableHeaderCell>Owner</TableHeaderCell>
-                <TableHeaderCell>Due</TableHeaderCell>
-                <TableHeaderCell>Status</TableHeaderCell>
-                <TableHeaderCell>Depends on</TableHeaderCell>
-                <TableHeaderCell />
-              </TableRow></TableHeader>
-              <TableBody>
-                {taskList.map((t, i) => (
-                  <TableRow key={i}>
-                    <TableCell><Input value={t.title} onChange={(_, d) => update(i, { title: d.value })} /></TableCell>
-                    <TableCell><Input value={t.owner} onChange={(_, d) => update(i, { owner: d.value })} /></TableCell>
-                    <TableCell><Input type="date" value={t.due} onChange={(_, d) => update(i, { due: d.value })} /></TableCell>
-                    <TableCell>
-                      <select value={t.status} onChange={(e) => update(i, { status: e.target.value as PlanTask['status'] })}
-                        style={{ padding: tokens.spacingVerticalXS, borderRadius: tokens.borderRadiusMedium, border: `1px solid ${tokens.colorNeutralStroke2}`, background: tokens.colorNeutralBackground1, color: tokens.colorNeutralForeground1 }}>
-                        <option value="todo">todo</option><option value="doing">doing</option><option value="done">done</option>
-                      </select>
-                    </TableCell>
-                    <TableCell><Input value={t.dependsOn || ''} onChange={(_, d) => update(i, { dependsOn: d.value })} placeholder="task title" /></TableCell>
-                    <TableCell><Button size="small" onClick={() => remove(i)}>Delete</Button></TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-            <Button onClick={add} style={{ alignSelf: 'flex-start' }}>+ New task</Button>
+            {/* SC-1 — each task is a canvas-node-kit card: accent rail + gradient
+                header (title + status chip) + inline delete action, with every
+                field editable in the body (identical handlers to the prior grid). */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
+              {taskList.length === 0 && (
+                <EmptyState
+                  icon={<ShieldCheckmark20Regular />}
+                  title="No tasks yet"
+                  body="Add a delivery task to track this plan's rollout — set an owner, due date, status, and dependencies."
+                />
+              )}
+              {taskList.map((t, i) => {
+                const isOverdue = t.status !== 'done' && !!t.due && t.due < today;
+                const actions: NodeAction[] = [
+                  { key: 'delete', icon: <Delete16Regular />, label: 'Delete task', onClick: () => remove(i), danger: true },
+                ];
+                return (
+                  <CanvasNode
+                    key={i}
+                    width={360}
+                    title={t.title.trim() || 'Untitled task'}
+                    typeLabel={TASK_STATUS_LABEL[t.status]}
+                    visual={taskVisual(t.status)}
+                    error={isOverdue}
+                    actionBar={actions}
+                    rootProps={{ style: { width: '100%', cursor: 'default' } }}
+                  >
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, padding: tokens.spacingVerticalM }}>
+                      <Field label="Task"><Input value={t.title} onChange={(_, d) => update(i, { title: d.value })} /></Field>
+                      <div style={{ display: 'flex', gap: tokens.spacingHorizontalM, flexWrap: 'wrap' }}>
+                        <Field label="Owner" style={{ flex: '1 1 160px', minWidth: 140 }}><Input value={t.owner} onChange={(_, d) => update(i, { owner: d.value })} /></Field>
+                        <Field label="Due" style={{ flex: '1 1 160px', minWidth: 140 }}><Input type="date" value={t.due} onChange={(_, d) => update(i, { due: d.value })} /></Field>
+                      </div>
+                      <div style={{ display: 'flex', gap: tokens.spacingHorizontalM, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+                        <Field label="Status" style={{ minWidth: 140 }}>
+                          <select value={t.status} onChange={(e) => update(i, { status: e.target.value as PlanTask['status'] })}
+                            style={{ padding: tokens.spacingVerticalXS, borderRadius: tokens.borderRadiusMedium, border: `1px solid ${tokens.colorNeutralStroke2}`, background: tokens.colorNeutralBackground1, color: tokens.colorNeutralForeground1 }}>
+                            <option value="todo">todo</option><option value="doing">doing</option><option value="done">done</option>
+                          </select>
+                        </Field>
+                        <Field label="Depends on" style={{ flex: '1 1 200px', minWidth: 160 }}><Input value={t.dependsOn || ''} onChange={(_, d) => update(i, { dependsOn: d.value })} placeholder="task title" /></Field>
+                      </div>
+                      {isOverdue && <Caption1 style={{ color: tokens.colorPaletteRedForeground1 }}>Overdue — due {t.due}</Caption1>}
+                    </div>
+                  </CanvasNode>
+                );
+              })}
+            </div>
+            <Button onClick={add} style={{ alignSelf: 'flex-start' }} icon={<Add20Regular />}>New task</Button>
             <PlanApprovalPanel id={id} tasks={taskList} state={state} setState={setState} save={save} />
           </div>
         )}
