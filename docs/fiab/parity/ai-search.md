@@ -80,9 +80,16 @@ each a sortable grid with create / open / delete:
 6. **Aliases** — list, **Add alias**, open, Delete.
 7. **Knowledge sources / knowledge base (agentic retrieval / Foundry IQ)** — a
    "Knowledge bases" navigator group opens a full surface: create knowledge
-   sources over existing indexes, compose them into knowledge bases, and a
-   retrieve-test pane (query → subqueries + citations + grounding/answer). Real
-   `2026-04-01` GA REST. Detailed parity: `parity/ai-search-knowledge-bases.md`.
+   sources over existing indexes, compose them into knowledge bases (with an
+   **Answer-mode selector** — extractive grounding vs LLM answer synthesis — and
+   an **Azure OpenAI chat-model binding** for query planning / synthesis), **edit**
+   an existing base (PUT upsert, prefilled from its live definition), and a
+   retrieve-test pane (query → subqueries + citations + grounding/answer). The
+   model picker is fed by the Foundry `model-deployments` route (chat deployments
+   only); when no Azure OpenAI chat deployment is bound, synthesis is honest-gated
+   with a MessageBar while extractive stays fully functional. Real `2026-04-01`
+   GA REST (synthesis uses the `2026-05-01-preview` version). Detailed parity:
+   `parity/ai-search-knowledge-bases.md`.
 
 ### B. Index designer / management (per-index)
 8. **Add index — visual field designer**: per-field grid with Name, Type, and
