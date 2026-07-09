@@ -28,11 +28,11 @@
  * shows a single honest infra-gate MessageBar.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useState, type ReactElement } from 'react';
 import {
-  Tree, TreeItem, TreeItemLayout,
+  Tree, TreeItem, TreeItemLayout, type TreeOpenChangeData, type TreeItemValue,
   Button, Input, Textarea, Field, Caption1, Badge, Spinner, Dropdown, Option,
-  Menu, MenuTrigger, MenuPopover, MenuList, MenuItem,
+  Menu, MenuTrigger, MenuPopover, MenuList, MenuItem, MenuDivider,
   Dialog, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
   Tooltip, MessageBar, MessageBarBody, MessageBarTitle,
   makeStyles, tokens,
@@ -43,17 +43,31 @@ import {
   Link20Regular, Server20Regular, Play16Regular, Stop16Regular, Open16Regular,
   Search20Regular, Warning20Regular, ArrowRepeatAll20Regular,
   Globe20Regular, PlugConnected20Regular, Edit16Regular,
+  Code20Regular, Copy20Regular, Rename20Regular, ChevronDown20Regular, ChevronUp20Regular,
 } from '@fluentui/react-icons';
+import { clientFetch } from '@/lib/client-fetch';
+import {
+  rowActionsFor, groupActionsFor, canConfirmDelete,
+  KIND_ROUTE, RESOURCE_JSON_TYPE, ALL_GROUP_VALUES,
+  type RowKind, type GroupKind, type RowActionKey, type GroupActionKey,
+  type RowActionDescriptor, type GroupActionDescriptor,
+} from './factory-resource-actions';
 
 const useStyles = makeStyles({
   root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalS, padding: tokens.spacingHorizontalS, height: '100%', minWidth: '240px' },
   header: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, justifyContent: 'space-between' },
   title: { fontWeight: tokens.fontWeightSemibold, fontSize: tokens.fontSizeBase300 },
-  groupLayout: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalSNudge, width: '100%' },
-  groupActions: { marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXXS },
-  leafRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, width: '100%' },
-  leafActions: { marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXXS },
-  gateRow: { padding: '4px 8px' },
+  groupLayout: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalSNudge, width: '100%', minWidth: 0 },
+  groupActions: { marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXXS, flexShrink: 0 },
+  leafRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, width: '100%', minWidth: 0 },
+  leafActions: { marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXXS, flexShrink: 0 },
+  // Long single-token resource names (e.g. Retail_OLTP_Mirror_…) must stay
+  // readable: truncate with an ellipsis in the fixed-width nav pane, never
+  // clip silently or force horizontal overflow. The full name is on a Tooltip
+  // + native `title`. `minWidth:0` lets the flex child actually shrink.
+  nameText: { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: '1 1 auto' },
+  gateRow: { padding: tokens.spacingHorizontalXS },
+  mpeGate: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, padding: `${tokens.spacingVerticalXS} 0` },
 });
 
 const PIPE_ROUTE = '/api/adf/pipelines';
@@ -74,6 +88,95 @@ async function readJson(res: Response): Promise<any> {
 interface NamedRow { name: string; [k: string]: unknown }
 
 type CreatableGroup = 'pipeline' | 'dataset' | 'dataflow' | 'trigger';
+
+// ── Right-click context-menu primitives ────────────────────────────────────
+// Each tree row (and group node) is wrapped in a Fluent `Menu openOnContext`,
+// so right-click anchors an ADF-Studio-parity actions menu at the cursor. The
+// ordered action list per resource type comes from the pure `rowActionsFor` /
+// `groupActionsFor` model (factory-resource-actions.ts) so it stays testable.
+
+const ROW_ACTION_ICON: Record<RowActionKey, ReactElement> = {
+  open: <Open16Regular />,
+  bind: <Link20Regular />,
+  start: <Play16Regular />,
+  stop: <Stop16Regular />,
+  viewJson: <Code20Regular />,
+  clone: <Copy20Regular />,
+  rename: <Rename20Regular />,
+  edit: <Edit16Regular />,
+  delete: <Delete16Regular />,
+};
+
+const GROUP_ACTION_ICON: Record<GroupActionKey, ReactElement> = {
+  new: <Add20Regular />,
+  refresh: <ArrowSync16Regular />,
+  expandAll: <ChevronDown20Regular />,
+  collapseAll: <ChevronUp20Regular />,
+};
+
+/**
+ * A resource name cell: full-name Tooltip + native `title` + ellipsis
+ * truncation so long single-token names (Retail_OLTP_Mirror_…) stay readable in
+ * the narrow nav pane instead of clipping silently. Optionally clickable (Open).
+ * Module-scope (stable identity) so it doesn't remount on every parent render.
+ */
+function NameCell({
+  name, className, onOpen, bound,
+}: {
+  name: string;
+  className: string;
+  onOpen?: () => void;
+  bound?: boolean;
+}) {
+  return (
+    <Tooltip content={name} relationship="label">
+      <span
+        className={className}
+        title={name}
+        role={onOpen ? 'button' : undefined}
+        tabIndex={onOpen ? 0 : undefined}
+        style={{ cursor: onOpen ? 'pointer' : undefined, fontWeight: bound ? tokens.fontWeightSemibold : undefined }}
+        onClick={onOpen}
+        onKeyDown={onOpen ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen(); } } : undefined}
+      >
+        {name}{bound ? ' ·' : ''}
+      </span>
+    </Tooltip>
+  );
+}
+
+/** Wrap a row/group in a right-click (context) menu built from action descriptors. */
+function ContextMenu({
+  actions, onAction, disabled, children,
+}: {
+  actions: Array<RowActionDescriptor | GroupActionDescriptor>;
+  onAction: (key: RowActionKey | GroupActionKey) => void;
+  disabled?: boolean;
+  children: ReactElement;
+}) {
+  if (!actions.length) return children;
+  return (
+    <Menu openOnContext>
+      <MenuTrigger disableButtonEnhancement>{children}</MenuTrigger>
+      <MenuPopover>
+        <MenuList>
+          {actions.map((a, i) => {
+            const icon = a.key in GROUP_ACTION_ICON
+              ? GROUP_ACTION_ICON[a.key as GroupActionKey]
+              : ROW_ACTION_ICON[a.key as RowActionKey];
+            const destructive = (a as RowActionDescriptor).destructive;
+            return (
+              <Fragment key={a.key}>
+                {destructive && i > 0 && <MenuDivider />}
+                <MenuItem icon={icon} disabled={disabled} onClick={() => onAction(a.key)}>{a.label}</MenuItem>
+              </Fragment>
+            );
+          })}
+        </MenuList>
+      </MenuPopover>
+    </Menu>
+  );
+}
 
 export interface FactoryResourcesTreeProps {
   /** The currently bound pipeline name (highlighted in the tree). */
@@ -137,6 +240,28 @@ export function FactoryResourcesTree({
   const [mpeError, setMpeError] = useState<string | null>(null);
   const [mpeNote, setMpeNote] = useState<string | null>(null);
 
+  // ---- Tree expand/collapse (controlled) ----
+  // ADF Studio keeps expansion per session and lets you bulk expand/collapse;
+  // this Tree is controlled so the header "Expand all"/"Collapse all" buttons
+  // (and the group right-click menu) can drive every group at once. Pipelines
+  // opens by default, matching the previous uncontrolled behaviour.
+  const [openItems, setOpenItems] = useState<TreeItemValue[]>(['g-pipelines']);
+  const expandAll = useCallback(() => setOpenItems([...ALL_GROUP_VALUES]), []);
+  const collapseAll = useCallback(() => setOpenItems([]), []);
+
+  // ---- right-click actions: delete (typed-confirm), clone/rename, view JSON ----
+  const [deleteTarget, setDeleteTarget] = useState<{ kind: RowKind; name: string } | null>(null);
+  const [deleteConfirmText, setDeleteConfirmText] = useState('');
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  const [crState, setCrState] = useState<{ mode: 'clone' | 'rename'; kind: RowKind; name: string } | null>(null);
+  const [crNewName, setCrNewName] = useState('');
+  const [crError, setCrError] = useState<string | null>(null);
+
+  const [jsonView, setJsonView] = useState<{ title: string; text: string } | null>(null);
+  const [jsonLoading, setJsonLoading] = useState(false);
+  const [jsonError, setJsonError] = useState<string | null>(null);
+
   function applyGate(body: any): boolean {
     if (body?.code === 'not_configured' && body?.missing) { setGate({ missing: body.missing }); return true; }
     return false;
@@ -146,15 +271,15 @@ export function FactoryResourcesTree({
     setLoading(true); setError(null);
     try {
       const [pr, dr, fr, tr, lr, ir, cr, gpr, mper] = await Promise.all([
-        fetch(PIPE_ROUTE).then(readJson),
-        fetch(DS_ROUTE).then(readJson),
-        fetch(DF_ROUTE).then(readJson),
-        fetch(TRG_ROUTE).then(readJson),
-        fetch(LS_ROUTE).then(readJson),
-        fetch(IR_ROUTE).then(readJson),
-        fetch(CDC_ROUTE).then(readJson),
-        fetch(GP_ROUTE).then(readJson),
-        fetch(MPE_ROUTE).then(readJson),
+        clientFetch(PIPE_ROUTE).then(readJson),
+        clientFetch(DS_ROUTE).then(readJson),
+        clientFetch(DF_ROUTE).then(readJson),
+        clientFetch(TRG_ROUTE).then(readJson),
+        clientFetch(LS_ROUTE).then(readJson),
+        clientFetch(IR_ROUTE).then(readJson),
+        clientFetch(CDC_ROUTE).then(readJson),
+        clientFetch(GP_ROUTE).then(readJson),
+        clientFetch(MPE_ROUTE).then(readJson),
       ]);
       // Any route reporting not_configured gates the whole tree (same factory).
       for (const b of [pr, dr, fr, tr, lr, ir, cr, gpr, mper]) { if (applyGate(b)) { setLoading(false); return; } }
@@ -210,7 +335,7 @@ export function FactoryResourcesTree({
           },
         };
       }
-      const res = await fetch(route, {
+      const res = await clientFetch(route, {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload),
       });
       const body = await readJson(res);
@@ -228,22 +353,10 @@ export function FactoryResourcesTree({
     }
   }, [createGroup, createName, createDsType, createDsLinkedService, loadAll, onOpenPipeline]);
 
-  const del = useCallback(async (route: string, name: string) => {
-    setBusy(true); setError(null);
-    try {
-      const res = await fetch(`${route}?name=${encodeURIComponent(name)}`, { method: 'DELETE' });
-      const body = await readJson(res);
-      if (applyGate(body)) { setBusy(false); return; }
-      if (!body.ok) { setError(body.error || 'delete failed'); setBusy(false); return; }
-      await loadAll();
-    } catch (e: any) { setError(e?.message || String(e)); }
-    finally { setBusy(false); }
-  }, [loadAll]);
-
   const triggerLifecycle = useCallback(async (name: string, action: 'start' | 'stop') => {
     setBusy(true); setError(null);
     try {
-      const res = await fetch(TRG_ROUTE, {
+      const res = await clientFetch(TRG_ROUTE, {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name, action }),
       });
       const body = await readJson(res);
@@ -259,7 +372,7 @@ export function FactoryResourcesTree({
   const cdcLifecycle = useCallback(async (name: string, action: 'start' | 'stop') => {
     setBusy(true); setError(null);
     try {
-      const res = await fetch(CDC_ROUTE, {
+      const res = await clientFetch(CDC_ROUTE, {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name, action }),
       });
       const body = await readJson(res);
@@ -319,7 +432,7 @@ export function FactoryResourcesTree({
       dict[name] = { type: row.type, value };
     }
     try {
-      const res = await fetch(GP_ROUTE, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ parameters: dict }) });
+      const res = await clientFetch(GP_ROUTE, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ parameters: dict }) });
       const body = await readJson(res);
       if (applyGate(body)) { setBusy(false); return; }
       if (!body.ok) { setGpError(body.error || 'save failed'); setBusy(false); return; }
@@ -335,7 +448,7 @@ export function FactoryResourcesTree({
   const createMvnet = useCallback(async () => {
     setBusy(true); setError(null);
     try {
-      const res = await fetch(MPE_ROUTE, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'create-mvnet' }) });
+      const res = await clientFetch(MPE_ROUTE, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'create-mvnet' }) });
       const body = await readJson(res);
       if (applyGate(body)) { setBusy(false); return; }
       if (!body.ok) { setError(body.error || 'failed to create managed virtual network'); setBusy(false); return; }
@@ -352,7 +465,7 @@ export function FactoryResourcesTree({
     if (!mpeName.trim() || !mpeResourceId.trim() || !mpeGroupId.trim()) return;
     setBusy(true); setMpeError(null); setMpeNote(null);
     try {
-      const res = await fetch(MPE_ROUTE, {
+      const res = await clientFetch(MPE_ROUTE, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ name: mpeName.trim(), privateLinkResourceId: mpeResourceId.trim(), groupId: mpeGroupId.trim() }),
       });
@@ -365,6 +478,152 @@ export function FactoryResourcesTree({
     } catch (e: any) { setMpeError(e?.message || String(e)); }
     finally { setBusy(false); }
   }, [mpeName, mpeResourceId, mpeGroupId, loadAll]);
+
+  // ---------------------------------------------------------------
+  // Right-click actions — View JSON (read-only), Delete (typed-confirm),
+  // Clone / Rename (real create[+delete]). All real ADF REST.
+  // ---------------------------------------------------------------
+
+  // View the resource's full ARM definition read-only. Types with a
+  // resource-json getter fetch it; globalParam / MPE pass their inline object
+  // (already fully loaded client-side) so no round-trip is needed.
+  const openViewJson = useCallback(async (kind: RowKind, name: string, inline?: unknown) => {
+    const title = `${name} — JSON`;
+    if (inline !== undefined) {
+      setJsonView({ title, text: JSON.stringify(inline, null, 2) });
+      setJsonError(null); setJsonLoading(false);
+      return;
+    }
+    const type = RESOURCE_JSON_TYPE[kind];
+    if (!type) return;
+    setJsonView({ title, text: '' }); setJsonLoading(true); setJsonError(null);
+    try {
+      const res = await clientFetch(`/api/adf/resource-json?type=${encodeURIComponent(type)}&name=${encodeURIComponent(name)}`);
+      const body = await readJson(res);
+      if (!body.ok) { setJsonError(body.error || 'failed to load definition'); setJsonLoading(false); return; }
+      setJsonView({ title, text: JSON.stringify(body.definition ?? {}, null, 2) });
+    } catch (e: any) { setJsonError(e?.message || String(e)); }
+    finally { setJsonLoading(false); }
+  }, []);
+
+  const openDelete = useCallback((kind: RowKind, name: string) => {
+    setDeleteTarget({ kind, name }); setDeleteConfirmText(''); setDeleteError(null);
+  }, []);
+
+  // Execute the delete only after the operator has typed the exact name
+  // (canConfirmDelete gates the button). globalParam removal PUTs the set minus
+  // the key; every other kind hits its DELETE route.
+  const confirmDelete = useCallback(async () => {
+    if (!deleteTarget) return;
+    const { kind, name } = deleteTarget;
+    if (!canConfirmDelete(deleteConfirmText, name)) return;
+    setBusy(true); setDeleteError(null);
+    try {
+      if (kind === 'globalParam') {
+        const next: Record<string, { type: string; value: unknown }> = { ...globalParams };
+        delete next[name];
+        const res = await clientFetch(GP_ROUTE, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ parameters: next }) });
+        const body = await readJson(res);
+        if (applyGate(body)) { setBusy(false); return; }
+        if (!body.ok) { setDeleteError(body.error || 'delete failed'); setBusy(false); return; }
+      } else {
+        const route = KIND_ROUTE[kind];
+        const res = await clientFetch(`${route}?name=${encodeURIComponent(name)}`, { method: 'DELETE' });
+        const body = await readJson(res);
+        if (applyGate(body)) { setBusy(false); return; }
+        if (!body.ok) { setDeleteError(body.error || 'delete failed'); setBusy(false); return; }
+      }
+      setDeleteTarget(null);
+      await loadAll();
+    } catch (e: any) { setDeleteError(e?.message || String(e)); }
+    finally { setBusy(false); }
+  }, [deleteTarget, deleteConfirmText, globalParams, loadAll]);
+
+  const openCloneRename = useCallback((mode: 'clone' | 'rename', kind: RowKind, name: string) => {
+    setCrState({ mode, kind, name });
+    setCrNewName(mode === 'clone' ? `${name}_copy` : name);
+    setCrError(null);
+  }, []);
+
+  // Clone = fetch the full definition → create a copy under the new name.
+  // Rename = clone, then delete the original once the copy lands.
+  const submitCloneRename = useCallback(async () => {
+    if (!crState) return;
+    const { mode, kind, name } = crState;
+    const newName = crNewName.trim();
+    if (!newName) { setCrError('Enter a name.'); return; }
+    if (mode === 'rename' && newName === name) { setCrError('Enter a name different from the current one.'); return; }
+    const type = RESOURCE_JSON_TYPE[kind];
+    const route = KIND_ROUTE[kind];
+    if (!type) { setCrError('This resource type cannot be cloned or renamed.'); return; }
+    setBusy(true); setCrError(null);
+    try {
+      const gres = await clientFetch(`/api/adf/resource-json?type=${encodeURIComponent(type)}&name=${encodeURIComponent(name)}`);
+      const gbody = await readJson(gres);
+      if (applyGate(gbody)) { setBusy(false); return; }
+      if (!gbody.ok) { setCrError(gbody.error || 'failed to load the source definition'); setBusy(false); return; }
+      const properties = gbody.definition?.properties;
+      if (!properties) { setCrError('The source definition has no properties to copy.'); setBusy(false); return; }
+      const cres = await clientFetch(route, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: newName, properties }) });
+      const cbody = await readJson(cres);
+      if (applyGate(cbody)) { setBusy(false); return; }
+      if (!cbody.ok) { setCrError(cbody.error || 'create failed'); setBusy(false); return; }
+      if (mode === 'rename') {
+        const dres = await clientFetch(`${route}?name=${encodeURIComponent(name)}`, { method: 'DELETE' });
+        const dbody = await readJson(dres);
+        if (!dbody.ok) {
+          setCrError(`Copied to "${newName}", but deleting the original "${name}" failed: ${dbody.error || 'delete failed'}. Both now exist — delete one manually.`);
+          setBusy(false); await loadAll(); return;
+        }
+      }
+      setCrState(null);
+      await loadAll();
+      if (kind === 'pipeline') onOpenPipeline(newName);
+    } catch (e: any) { setCrError(e?.message || String(e)); }
+    finally { setBusy(false); }
+  }, [crState, crNewName, loadAll, onOpenPipeline]);
+
+  // Dispatch a row's right-click action key to the right real handler.
+  const onRowAction = useCallback((kind: RowKind, name: string, key: RowActionKey, opts?: { inline?: unknown }) => {
+    switch (key) {
+      case 'open':
+        if (kind === 'pipeline') onOpenPipeline(name);
+        else if (kind === 'cdc') onOpenCdc?.(name);
+        else onOpenManage();
+        break;
+      case 'bind': onOpenPipeline(name); break;
+      case 'start':
+        if (kind === 'trigger') triggerLifecycle(name, 'start');
+        else if (kind === 'cdc') cdcLifecycle(name, 'start');
+        break;
+      case 'stop':
+        if (kind === 'trigger') triggerLifecycle(name, 'stop');
+        else if (kind === 'cdc') cdcLifecycle(name, 'stop');
+        break;
+      case 'viewJson': openViewJson(kind, name, opts?.inline); break;
+      case 'clone': openCloneRename('clone', kind, name); break;
+      case 'rename': openCloneRename('rename', kind, name); break;
+      case 'edit': openGp(); break;
+      case 'delete': openDelete(kind, name); break;
+    }
+  }, [onOpenPipeline, onOpenCdc, onOpenManage, triggerLifecycle, cdcLifecycle, openViewJson, openCloneRename, openGp, openDelete]);
+
+  const onGroupAction = useCallback((kind: GroupKind, key: GroupActionKey) => {
+    switch (key) {
+      case 'refresh': loadAll(); break;
+      case 'expandAll': expandAll(); break;
+      case 'collapseAll': collapseAll(); break;
+      case 'new':
+        if (kind === 'pipelines') openCreate('pipeline');
+        else if (kind === 'datasets') openCreate('dataset');
+        else if (kind === 'dataflows') openCreate('dataflow');
+        else if (kind === 'triggers') openCreate('trigger');
+        else if (kind === 'linkedServices' || kind === 'integrationRuntimes') onOpenManage();
+        else if (kind === 'globalParams') openGp();
+        else if (kind === 'managedPrivateEndpoints') openMpe();
+        break;
+    }
+  }, [loadAll, expandAll, collapseAll, openCreate, onOpenManage, openGp, openMpe]);
 
   // ---------------------------------------------------------------
   // Filtering
@@ -384,21 +643,30 @@ export function FactoryResourcesTree({
   // ---------------------------------------------------------------
   // Render helpers
   // ---------------------------------------------------------------
+
+  // A group (parent) node header. Wrapped in a right-click ContextMenu exposing
+  // New <type> (when creatable) + Refresh + Expand all + Collapse all, matching
+  // ADF Studio's group context menu. Keeps the inline ＋ New button too.
   const groupHeader = (
-    label: string, icon: React.ReactElement, count: number,
+    label: string, icon: React.ReactElement, count: number, groupKind: GroupKind,
     onAdd?: () => void, addTitle?: string,
   ) => (
     <TreeItemLayout iconBefore={icon}>
-      <span className={s.groupLayout}>
-        <span>{label} ({count})</span>
-        <span className={s.groupActions} onClick={(e) => e.stopPropagation()}>
-          {onAdd && (
-            <Tooltip content={addTitle || `New ${label.toLowerCase()}`} relationship="label">
-              <Button size="small" appearance="subtle" icon={<Add20Regular />} onClick={onAdd} disabled={busy} aria-label={addTitle || `New ${label}`} />
-            </Tooltip>
-          )}
+      <ContextMenu
+        actions={groupActionsFor(groupKind, { canCreate: !!onAdd })}
+        onAction={(k) => onGroupAction(groupKind, k as GroupActionKey)}
+      >
+        <span className={s.groupLayout}>
+          <span className={s.nameText} title={`${label} (${count})`}>{label} ({count})</span>
+          <span className={s.groupActions} onClick={(e) => e.stopPropagation()}>
+            {onAdd && (
+              <Tooltip content={addTitle || `New ${label.toLowerCase()}`} relationship="label">
+                <Button size="small" appearance="subtle" icon={<Add20Regular />} onClick={onAdd} disabled={busy} aria-label={addTitle || `New ${label}`} />
+              </Tooltip>
+            )}
+          </span>
         </span>
-      </span>
+      </ContextMenu>
     </TreeItemLayout>
   );
 
@@ -441,6 +709,12 @@ export function FactoryResourcesTree({
               </MenuList>
             </MenuPopover>
           </Menu>
+          <Tooltip content="Expand all groups" relationship="label">
+            <Button size="small" appearance="subtle" icon={<ChevronDown20Regular />} onClick={expandAll} aria-label="Expand all groups" />
+          </Tooltip>
+          <Tooltip content="Collapse all groups" relationship="label">
+            <Button size="small" appearance="subtle" icon={<ChevronUp20Regular />} onClick={collapseAll} aria-label="Collapse all groups" />
+          </Tooltip>
           <Tooltip content="Refresh" relationship="label">
             <Button size="small" appearance="subtle" icon={<ArrowSync16Regular />} onClick={loadAll} disabled={loading} aria-label="Refresh resources" />
           </Tooltip>
@@ -463,30 +737,29 @@ export function FactoryResourcesTree({
       )}
 
       <div style={{ overflow: 'auto', flex: 1 }}>
-        <Tree aria-label="Factory resources" defaultOpenItems={['g-pipelines']}>
+        <Tree
+          aria-label="Factory resources"
+          openItems={openItems}
+          onOpenChange={(_e, data: TreeOpenChangeData) => setOpenItems(Array.from(data.openItems))}
+        >
           {/* Pipelines */}
           <TreeItem itemType="branch" value="g-pipelines">
-            {groupHeader('Pipelines', <Flow20Regular />, pipelines.length, () => openCreate('pipeline'), 'New pipeline')}
+            {groupHeader('Pipelines', <Flow20Regular />, pipelines.length, 'pipelines', () => openCreate('pipeline'), 'New pipeline')}
             <Tree>
               {fPipelines.length === 0 && <TreeItem itemType="leaf" value="p-empty"><TreeItemLayout><Caption1>{f ? 'No matches' : 'No pipelines'}</Caption1></TreeItemLayout></TreeItem>}
               {fPipelines.map((p) => (
                 <TreeItem key={p.name} itemType="leaf" value={`p-${p.name}`}>
                   <TreeItemLayout iconBefore={<Flow20Regular />}>
-                    <span className={s.leafRow}>
-                      <span
-                        role="button" tabIndex={0}
-                        style={{ cursor: 'pointer', fontWeight: boundPipeline === p.name ? tokens.fontWeightSemibold : undefined }}
-                        onClick={() => onOpenPipeline(p.name)}
-                        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpenPipeline(p.name); } }}
-                      >
-                        {p.name}{boundPipeline === p.name ? ' ·' : ''}
+                    <ContextMenu actions={rowActionsFor('pipeline')} onAction={(k) => onRowAction('pipeline', p.name, k as RowActionKey)} disabled={busy}>
+                      <span className={s.leafRow}>
+                        <NameCell className={s.nameText} name={p.name} bound={boundPipeline === p.name} onOpen={() => onOpenPipeline(p.name)} />
+                        <span className={s.leafActions} onClick={(e) => e.stopPropagation()}>
+                          {typeof p.activities === 'number' && <Caption1>{p.activities as number} act</Caption1>}
+                          <Tooltip content="Open" relationship="label"><Button size="small" appearance="subtle" icon={<Open16Regular />} onClick={() => onOpenPipeline(p.name)} aria-label={`Open ${p.name}`} /></Tooltip>
+                          <Tooltip content="Delete" relationship="label"><Button size="small" appearance="subtle" icon={<Delete16Regular />} disabled={busy} onClick={() => openDelete('pipeline', p.name)} aria-label={`Delete ${p.name}`} /></Tooltip>
+                        </span>
                       </span>
-                      <span className={s.leafActions} onClick={(e) => e.stopPropagation()}>
-                        {typeof p.activities === 'number' && <Caption1>{p.activities as number} act</Caption1>}
-                        <Tooltip content="Open" relationship="label"><Button size="small" appearance="subtle" icon={<Open16Regular />} onClick={() => onOpenPipeline(p.name)} aria-label={`Open ${p.name}`} /></Tooltip>
-                        <Tooltip content="Delete" relationship="label"><Button size="small" appearance="subtle" icon={<Delete16Regular />} disabled={busy} onClick={() => del(PIPE_ROUTE, p.name)} aria-label={`Delete ${p.name}`} /></Tooltip>
-                      </span>
-                    </span>
+                    </ContextMenu>
                   </TreeItemLayout>
                 </TreeItem>
               ))}
@@ -495,19 +768,21 @@ export function FactoryResourcesTree({
 
           {/* Datasets */}
           <TreeItem itemType="branch" value="g-datasets">
-            {groupHeader('Datasets', <DocumentTable20Regular />, datasets.length, () => openCreate('dataset'), 'New dataset')}
+            {groupHeader('Datasets', <DocumentTable20Regular />, datasets.length, 'datasets', () => openCreate('dataset'), 'New dataset')}
             <Tree>
               {fDatasets.length === 0 && <TreeItem itemType="leaf" value="d-empty"><TreeItemLayout><Caption1>{f ? 'No matches' : 'No datasets'}</Caption1></TreeItemLayout></TreeItem>}
               {fDatasets.map((d) => (
                 <TreeItem key={d.name} itemType="leaf" value={`d-${d.name}`}>
                   <TreeItemLayout iconBefore={<DocumentTable20Regular />}>
-                    <span className={s.leafRow}>
-                      <span>{d.name}</span>
-                      <span className={s.leafActions} onClick={(e) => e.stopPropagation()}>
-                        <Tooltip content="Edit in Manage" relationship="label"><Button size="small" appearance="subtle" icon={<Open16Regular />} onClick={onOpenManage} aria-label={`Edit ${d.name}`} /></Tooltip>
-                        <Tooltip content="Delete" relationship="label"><Button size="small" appearance="subtle" icon={<Delete16Regular />} disabled={busy} onClick={() => del(DS_ROUTE, d.name)} aria-label={`Delete ${d.name}`} /></Tooltip>
+                    <ContextMenu actions={rowActionsFor('dataset')} onAction={(k) => onRowAction('dataset', d.name, k as RowActionKey)} disabled={busy}>
+                      <span className={s.leafRow}>
+                        <NameCell className={s.nameText} name={d.name} onOpen={onOpenManage} />
+                        <span className={s.leafActions} onClick={(e) => e.stopPropagation()}>
+                          <Tooltip content="Edit in Manage" relationship="label"><Button size="small" appearance="subtle" icon={<Open16Regular />} onClick={onOpenManage} aria-label={`Edit ${d.name}`} /></Tooltip>
+                          <Tooltip content="Delete" relationship="label"><Button size="small" appearance="subtle" icon={<Delete16Regular />} disabled={busy} onClick={() => openDelete('dataset', d.name)} aria-label={`Delete ${d.name}`} /></Tooltip>
+                        </span>
                       </span>
-                    </span>
+                    </ContextMenu>
                   </TreeItemLayout>
                 </TreeItem>
               ))}
@@ -516,19 +791,21 @@ export function FactoryResourcesTree({
 
           {/* Data flows */}
           <TreeItem itemType="branch" value="g-dataflows">
-            {groupHeader('Data flows', <DataUsage20Regular />, dataflows.length, () => openCreate('dataflow'), 'New data flow')}
+            {groupHeader('Data flows', <DataUsage20Regular />, dataflows.length, 'dataflows', () => openCreate('dataflow'), 'New data flow')}
             <Tree>
               {fDataflows.length === 0 && <TreeItem itemType="leaf" value="f-empty"><TreeItemLayout><Caption1>{f ? 'No matches' : 'No data flows'}</Caption1></TreeItemLayout></TreeItem>}
               {fDataflows.map((d) => (
                 <TreeItem key={d.name} itemType="leaf" value={`f-${d.name}`}>
                   <TreeItemLayout iconBefore={<DataUsage20Regular />}>
-                    <span className={s.leafRow}>
-                      <span>{d.name}</span>
-                      <span className={s.leafActions} onClick={(e) => e.stopPropagation()}>
-                        {typeof d.type === 'string' && <Caption1>{(d.type as string).replace('DataFlow', '')}</Caption1>}
-                        <Tooltip content="Delete" relationship="label"><Button size="small" appearance="subtle" icon={<Delete16Regular />} disabled={busy} onClick={() => del(DF_ROUTE, d.name)} aria-label={`Delete ${d.name}`} /></Tooltip>
+                    <ContextMenu actions={rowActionsFor('dataflow')} onAction={(k) => onRowAction('dataflow', d.name, k as RowActionKey)} disabled={busy}>
+                      <span className={s.leafRow}>
+                        <NameCell className={s.nameText} name={d.name} onOpen={onOpenManage} />
+                        <span className={s.leafActions} onClick={(e) => e.stopPropagation()}>
+                          {typeof d.type === 'string' && <Caption1>{(d.type as string).replace('DataFlow', '')}</Caption1>}
+                          <Tooltip content="Delete" relationship="label"><Button size="small" appearance="subtle" icon={<Delete16Regular />} disabled={busy} onClick={() => openDelete('dataflow', d.name)} aria-label={`Delete ${d.name}`} /></Tooltip>
+                        </span>
                       </span>
-                    </span>
+                    </ContextMenu>
                   </TreeItemLayout>
                 </TreeItem>
               ))}
@@ -537,22 +814,24 @@ export function FactoryResourcesTree({
 
           {/* Triggers */}
           <TreeItem itemType="branch" value="g-triggers">
-            {groupHeader('Triggers', <Clock20Regular />, triggers.length, () => openCreate('trigger'), 'New trigger')}
+            {groupHeader('Triggers', <Clock20Regular />, triggers.length, 'triggers', () => openCreate('trigger'), 'New trigger')}
             <Tree>
               {fTriggers.length === 0 && <TreeItem itemType="leaf" value="t-empty"><TreeItemLayout><Caption1>{f ? 'No matches' : 'No triggers'}</Caption1></TreeItemLayout></TreeItem>}
               {fTriggers.map((t) => (
                 <TreeItem key={t.name} itemType="leaf" value={`t-${t.name}`}>
                   <TreeItemLayout iconBefore={<Clock20Regular />}>
-                    <span className={s.leafRow}>
-                      <span>{t.name}</span>
-                      <span className={s.leafActions} onClick={(e) => e.stopPropagation()}>
-                        <Badge size="small" appearance="filled" color={t.runtimeState === 'Started' ? 'success' : t.runtimeState === 'Stopped' ? 'informative' : 'warning'}>{t.runtimeState || '—'}</Badge>
-                        {t.runtimeState === 'Started'
-                          ? <Tooltip content="Stop" relationship="label"><Button size="small" appearance="subtle" icon={<Stop16Regular />} disabled={busy} onClick={() => triggerLifecycle(t.name, 'stop')} aria-label={`Stop ${t.name}`} /></Tooltip>
-                          : <Tooltip content="Start" relationship="label"><Button size="small" appearance="subtle" icon={<Play16Regular />} disabled={busy} onClick={() => triggerLifecycle(t.name, 'start')} aria-label={`Start ${t.name}`} /></Tooltip>}
-                        <Tooltip content="Delete" relationship="label"><Button size="small" appearance="subtle" icon={<Delete16Regular />} disabled={busy} onClick={() => del(TRG_ROUTE, t.name)} aria-label={`Delete ${t.name}`} /></Tooltip>
+                    <ContextMenu actions={rowActionsFor('trigger', { running: t.runtimeState === 'Started' })} onAction={(k) => onRowAction('trigger', t.name, k as RowActionKey)} disabled={busy}>
+                      <span className={s.leafRow}>
+                        <NameCell className={s.nameText} name={t.name} />
+                        <span className={s.leafActions} onClick={(e) => e.stopPropagation()}>
+                          <Badge size="small" appearance="filled" color={t.runtimeState === 'Started' ? 'success' : t.runtimeState === 'Stopped' ? 'informative' : 'warning'}>{t.runtimeState || '—'}</Badge>
+                          {t.runtimeState === 'Started'
+                            ? <Tooltip content="Stop" relationship="label"><Button size="small" appearance="subtle" icon={<Stop16Regular />} disabled={busy} onClick={() => triggerLifecycle(t.name, 'stop')} aria-label={`Stop ${t.name}`} /></Tooltip>
+                            : <Tooltip content="Start" relationship="label"><Button size="small" appearance="subtle" icon={<Play16Regular />} disabled={busy} onClick={() => triggerLifecycle(t.name, 'start')} aria-label={`Start ${t.name}`} /></Tooltip>}
+                          <Tooltip content="Delete" relationship="label"><Button size="small" appearance="subtle" icon={<Delete16Regular />} disabled={busy} onClick={() => openDelete('trigger', t.name)} aria-label={`Delete ${t.name}`} /></Tooltip>
+                        </span>
                       </span>
-                    </span>
+                    </ContextMenu>
                   </TreeItemLayout>
                 </TreeItem>
               ))}
@@ -561,16 +840,18 @@ export function FactoryResourcesTree({
 
           {/* Linked services (managed in the Manage hub) */}
           <TreeItem itemType="branch" value="g-linked">
-            {groupHeader('Linked services', <Link20Regular />, linkedServices.length, onOpenManage, 'New linked service (Manage hub)')}
+            {groupHeader('Linked services', <Link20Regular />, linkedServices.length, 'linkedServices', onOpenManage, 'New linked service (Manage hub)')}
             <Tree>
               {fLinked.length === 0 && <TreeItem itemType="leaf" value="l-empty"><TreeItemLayout><Caption1>{f ? 'No matches' : 'No linked services'}</Caption1></TreeItemLayout></TreeItem>}
               {fLinked.map((l) => (
-                <TreeItem key={l.name} itemType="leaf" value={`l-${l.name}`} onClick={onOpenManage}>
+                <TreeItem key={l.name} itemType="leaf" value={`l-${l.name}`}>
                   <TreeItemLayout iconBefore={<Link20Regular />}>
-                    <span className={s.leafRow}>
-                      <span>{l.name}</span>
-                      <span className={s.leafActions}>{typeof (l.properties as any)?.type === 'string' && <Caption1>{(l.properties as any).type}</Caption1>}</span>
-                    </span>
+                    <ContextMenu actions={rowActionsFor('linkedService')} onAction={(k) => onRowAction('linkedService', l.name, k as RowActionKey)} disabled={busy}>
+                      <span className={s.leafRow}>
+                        <NameCell className={s.nameText} name={l.name} onOpen={onOpenManage} />
+                        <span className={s.leafActions} onClick={(e) => e.stopPropagation()}>{typeof (l.properties as any)?.type === 'string' && <Caption1>{(l.properties as any).type}</Caption1>}</span>
+                      </span>
+                    </ContextMenu>
                   </TreeItemLayout>
                 </TreeItem>
               ))}
@@ -579,16 +860,18 @@ export function FactoryResourcesTree({
 
           {/* Integration runtimes (managed in the Manage hub) */}
           <TreeItem itemType="branch" value="g-runtimes">
-            {groupHeader('Integration runtimes', <Server20Regular />, runtimes.length, onOpenManage, 'New integration runtime (Manage hub)')}
+            {groupHeader('Integration runtimes', <Server20Regular />, runtimes.length, 'integrationRuntimes', onOpenManage, 'New integration runtime (Manage hub)')}
             <Tree>
               {fRuntimes.length === 0 && <TreeItem itemType="leaf" value="r-empty"><TreeItemLayout><Caption1>{f ? 'No matches' : 'No integration runtimes'}</Caption1></TreeItemLayout></TreeItem>}
               {fRuntimes.map((r) => (
-                <TreeItem key={r.name} itemType="leaf" value={`r-${r.name}`} onClick={onOpenManage}>
+                <TreeItem key={r.name} itemType="leaf" value={`r-${r.name}`}>
                   <TreeItemLayout iconBefore={<Server20Regular />}>
-                    <span className={s.leafRow}>
-                      <span>{r.name}</span>
-                      <span className={s.leafActions}>{typeof r.type === 'string' && <Caption1>{r.type as string}</Caption1>}{typeof r.state === 'string' && <Badge size="small" appearance="outline">{r.state as string}</Badge>}</span>
-                    </span>
+                    <ContextMenu actions={rowActionsFor('integrationRuntime')} onAction={(k) => onRowAction('integrationRuntime', r.name, k as RowActionKey)} disabled={busy}>
+                      <span className={s.leafRow}>
+                        <NameCell className={s.nameText} name={r.name} onOpen={onOpenManage} />
+                        <span className={s.leafActions} onClick={(e) => e.stopPropagation()}>{typeof r.type === 'string' && <Caption1>{r.type as string}</Caption1>}{typeof r.state === 'string' && <Badge size="small" appearance="outline">{r.state as string}</Badge>}</span>
+                      </span>
+                    </ContextMenu>
                   </TreeItemLayout>
                 </TreeItem>
               ))}
@@ -601,7 +884,7 @@ export function FactoryResourcesTree({
               real ARM REST; Open inspects the source→target mapping + live
               status before executing (the "preview CDC output" workflow). */}
           <TreeItem itemType="branch" value="g-cdc">
-            {groupHeader('Change Data Capture (preview)', <ArrowRepeatAll20Regular />, cdcs.length)}
+            {groupHeader('Change Data Capture (preview)', <ArrowRepeatAll20Regular />, cdcs.length, 'cdc')}
             <Tree>
               {fCdcs.length === 0 && <TreeItem itemType="leaf" value="c-empty"><TreeItemLayout><Caption1>{f ? 'No matches' : 'No CDC resources'}</Caption1></TreeItemLayout></TreeItem>}
               {fCdcs.map((c) => {
@@ -611,22 +894,20 @@ export function FactoryResourcesTree({
                 return (
                   <TreeItem key={c.name} itemType="leaf" value={`c-${c.name}`}>
                     <TreeItemLayout iconBefore={<ArrowRepeatAll20Regular />}>
-                      <span className={s.leafRow}>
-                        <span
-                          role="button" tabIndex={0} style={{ cursor: onOpenCdc ? 'pointer' : undefined }}
-                          onClick={() => onOpenCdc?.(c.name)}
-                          onKeyDown={(e) => { if (onOpenCdc && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onOpenCdc(c.name); } }}
-                        >{c.name}</span>
-                        <span className={s.leafActions} onClick={(e) => e.stopPropagation()}>
-                          {typeof c.targetCount === 'number' && <Caption1>{(c.sourceCount ?? 0)}→{c.targetCount} tbl</Caption1>}
-                          <Badge size="small" appearance="filled" color={color}>{c.status || '—'}</Badge>
-                          {running
-                            ? <Tooltip content="Stop" relationship="label"><Button size="small" appearance="subtle" icon={<Stop16Regular />} disabled={busy || transitioning} onClick={() => cdcLifecycle(c.name, 'stop')} aria-label={`Stop ${c.name}`} /></Tooltip>
-                            : <Tooltip content="Start" relationship="label"><Button size="small" appearance="subtle" icon={<Play16Regular />} disabled={busy || transitioning} onClick={() => cdcLifecycle(c.name, 'start')} aria-label={`Start ${c.name}`} /></Tooltip>}
-                          {onOpenCdc && <Tooltip content="Open" relationship="label"><Button size="small" appearance="subtle" icon={<Open16Regular />} onClick={() => onOpenCdc(c.name)} aria-label={`Open ${c.name}`} /></Tooltip>}
-                          <Tooltip content="Delete" relationship="label"><Button size="small" appearance="subtle" icon={<Delete16Regular />} disabled={busy} onClick={() => del(CDC_ROUTE, c.name)} aria-label={`Delete ${c.name}`} /></Tooltip>
+                      <ContextMenu actions={rowActionsFor('cdc', { running })} onAction={(k) => onRowAction('cdc', c.name, k as RowActionKey)} disabled={busy || transitioning}>
+                        <span className={s.leafRow}>
+                          <NameCell className={s.nameText} name={c.name} onOpen={onOpenCdc ? () => onOpenCdc(c.name) : undefined} />
+                          <span className={s.leafActions} onClick={(e) => e.stopPropagation()}>
+                            {typeof c.targetCount === 'number' && <Caption1>{(c.sourceCount ?? 0)}→{c.targetCount} tbl</Caption1>}
+                            <Badge size="small" appearance="filled" color={color}>{c.status || '—'}</Badge>
+                            {running
+                              ? <Tooltip content="Stop" relationship="label"><Button size="small" appearance="subtle" icon={<Stop16Regular />} disabled={busy || transitioning} onClick={() => cdcLifecycle(c.name, 'stop')} aria-label={`Stop ${c.name}`} /></Tooltip>
+                              : <Tooltip content="Start" relationship="label"><Button size="small" appearance="subtle" icon={<Play16Regular />} disabled={busy || transitioning} onClick={() => cdcLifecycle(c.name, 'start')} aria-label={`Start ${c.name}`} /></Tooltip>}
+                            {onOpenCdc && <Tooltip content="Open" relationship="label"><Button size="small" appearance="subtle" icon={<Open16Regular />} onClick={() => onOpenCdc(c.name)} aria-label={`Open ${c.name}`} /></Tooltip>}
+                            <Tooltip content="Delete" relationship="label"><Button size="small" appearance="subtle" icon={<Delete16Regular />} disabled={busy} onClick={() => openDelete('cdc', c.name)} aria-label={`Delete ${c.name}`} /></Tooltip>
+                          </span>
                         </span>
-                      </span>
+                      </ContextMenu>
                     </TreeItemLayout>
                   </TreeItem>
                 );
@@ -638,31 +919,31 @@ export function FactoryResourcesTree({
               whole set is edited in one dialog (add/edit/remove) and PUT back. */}
           <TreeItem itemType="branch" value="g-globalparams">
             <TreeItemLayout iconBefore={<Globe20Regular />}>
-              <span className={s.groupLayout}>
-                <span>Global parameters ({Object.keys(globalParams).length})</span>
-                <span className={s.groupActions} onClick={(e) => e.stopPropagation()}>
-                  <Tooltip content="Edit global parameters" relationship="label">
-                    <Button size="small" appearance="subtle" icon={<Edit16Regular />} onClick={openGp} disabled={busy} aria-label="Edit global parameters" />
-                  </Tooltip>
+              <ContextMenu actions={groupActionsFor('globalParams', { canCreate: true })} onAction={(k) => onGroupAction('globalParams', k as GroupActionKey)}>
+                <span className={s.groupLayout}>
+                  <span className={s.nameText} title={`Global parameters (${Object.keys(globalParams).length})`}>Global parameters ({Object.keys(globalParams).length})</span>
+                  <span className={s.groupActions} onClick={(e) => e.stopPropagation()}>
+                    <Tooltip content="Edit global parameters" relationship="label">
+                      <Button size="small" appearance="subtle" icon={<Edit16Regular />} onClick={openGp} disabled={busy} aria-label="Edit global parameters" />
+                    </Tooltip>
+                  </span>
                 </span>
-              </span>
+              </ContextMenu>
             </TreeItemLayout>
             <Tree>
               {gpEntries.length === 0 && <TreeItem itemType="leaf" value="gp-empty"><TreeItemLayout><Caption1>{f ? 'No matches' : 'No global parameters — Edit to add'}</Caption1></TreeItemLayout></TreeItem>}
               {gpEntries.map(([name, spec]) => (
                 <TreeItem key={name} itemType="leaf" value={`gp-${name}`}>
                   <TreeItemLayout iconBefore={<Globe20Regular />}>
-                    <span className={s.leafRow}>
-                      <span
-                        role="button" tabIndex={0} style={{ cursor: 'pointer' }}
-                        onClick={openGp}
-                        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openGp(); } }}
-                      >{name}</span>
-                      <span className={s.leafActions} onClick={(e) => e.stopPropagation()}>
-                        <Caption1>{(spec?.type as string) || 'String'}</Caption1>
-                        <Tooltip content="Edit" relationship="label"><Button size="small" appearance="subtle" icon={<Edit16Regular />} onClick={openGp} disabled={busy} aria-label={`Edit ${name}`} /></Tooltip>
+                    <ContextMenu actions={rowActionsFor('globalParam')} onAction={(k) => onRowAction('globalParam', name, k as RowActionKey, { inline: spec })} disabled={busy}>
+                      <span className={s.leafRow}>
+                        <NameCell className={s.nameText} name={name} onOpen={openGp} />
+                        <span className={s.leafActions} onClick={(e) => e.stopPropagation()}>
+                          <Caption1>{(spec?.type as string) || 'String'}</Caption1>
+                          <Tooltip content="Edit" relationship="label"><Button size="small" appearance="subtle" icon={<Edit16Regular />} onClick={openGp} disabled={busy} aria-label={`Edit ${name}`} /></Tooltip>
+                        </span>
                       </span>
-                    </span>
+                    </ContextMenu>
                   </TreeItemLayout>
                 </TreeItem>
               ))}
@@ -674,22 +955,24 @@ export function FactoryResourcesTree({
               has no managed VNet, an honest inline "create it" affordance shows. */}
           <TreeItem itemType="branch" value="g-mpe">
             <TreeItemLayout iconBefore={<PlugConnected20Regular />}>
-              <span className={s.groupLayout}>
-                <span>Managed private endpoints ({mpes.length})</span>
-                <span className={s.groupActions} onClick={(e) => e.stopPropagation()}>
-                  {managedVnetPresent && (
-                    <Tooltip content="New managed private endpoint" relationship="label">
-                      <Button size="small" appearance="subtle" icon={<Add20Regular />} onClick={openMpe} disabled={busy} aria-label="New managed private endpoint" />
-                    </Tooltip>
-                  )}
+              <ContextMenu actions={groupActionsFor('managedPrivateEndpoints', { canCreate: managedVnetPresent })} onAction={(k) => onGroupAction('managedPrivateEndpoints', k as GroupActionKey)}>
+                <span className={s.groupLayout}>
+                  <span className={s.nameText} title={`Managed private endpoints (${mpes.length})`}>Managed private endpoints ({mpes.length})</span>
+                  <span className={s.groupActions} onClick={(e) => e.stopPropagation()}>
+                    {managedVnetPresent && (
+                      <Tooltip content="New managed private endpoint" relationship="label">
+                        <Button size="small" appearance="subtle" icon={<Add20Regular />} onClick={openMpe} disabled={busy} aria-label="New managed private endpoint" />
+                      </Tooltip>
+                    )}
+                  </span>
                 </span>
-              </span>
+              </ContextMenu>
             </TreeItemLayout>
             <Tree>
               {!managedVnetPresent && (
                 <TreeItem itemType="leaf" value="mpe-gate">
                   <TreeItemLayout>
-                    <span style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, padding: '4px 0' }}>
+                    <span className={s.mpeGate}>
                       <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
                         This factory has no managed virtual network. Create one to add managed private endpoints for private access to PE-locked sources.
                       </Caption1>
@@ -706,18 +989,18 @@ export function FactoryResourcesTree({
                 const color = st === 'Approved' ? 'success' : (st === 'Rejected' || st === 'Disconnected') ? 'danger' : 'warning';
                 return (
                   <TreeItem key={m.name} itemType="leaf" value={`mpe-${m.name}`}>
-                    <Tooltip content={m.privateLinkResourceId || m.name} relationship="description">
-                      <TreeItemLayout iconBefore={<PlugConnected20Regular />}>
+                    <TreeItemLayout iconBefore={<PlugConnected20Regular />}>
+                      <ContextMenu actions={rowActionsFor('managedPrivateEndpoint')} onAction={(k) => onRowAction('managedPrivateEndpoint', m.name, k as RowActionKey, { inline: m })} disabled={busy}>
                         <span className={s.leafRow}>
-                          <span>{m.name}</span>
+                          <NameCell className={s.nameText} name={m.name} />
                           <span className={s.leafActions} onClick={(e) => e.stopPropagation()}>
                             {m.groupId && <Caption1>{m.groupId}</Caption1>}
                             <Badge size="small" appearance="filled" color={color}>{st}</Badge>
-                            <Tooltip content="Delete" relationship="label"><Button size="small" appearance="subtle" icon={<Delete16Regular />} disabled={busy} onClick={() => del(MPE_ROUTE, m.name)} aria-label={`Delete ${m.name}`} /></Tooltip>
+                            <Tooltip content="Delete" relationship="label"><Button size="small" appearance="subtle" icon={<Delete16Regular />} disabled={busy} onClick={() => openDelete('managedPrivateEndpoint', m.name)} aria-label={`Delete ${m.name}`} /></Tooltip>
                           </span>
                         </span>
-                      </TreeItemLayout>
-                    </Tooltip>
+                      </ContextMenu>
+                    </TreeItemLayout>
                   </TreeItem>
                 );
               })}
@@ -892,6 +1175,98 @@ export function FactoryResourcesTree({
             <DialogActions>
               <Button appearance="secondary" onClick={() => setMpeOpen(false)} disabled={busy}>{mpeNote ? 'Close' : 'Cancel'}</Button>
               {!mpeNote && <Button appearance="primary" onClick={submitMpe} disabled={busy || !mpeName.trim() || !mpeResourceId.trim()}>{busy ? 'Creating…' : 'Create'}</Button>}
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
+
+      {/* Delete confirm — typed-name gate. Every destructive action funnels here
+          (per no-vaporware.md); the primary button unlocks only when the typed
+          text matches the resource name exactly (canConfirmDelete). */}
+      <Dialog open={deleteTarget !== null} onOpenChange={(_, d) => { if (!d.open && !busy) { setDeleteTarget(null); } }}>
+        <DialogSurface style={{ maxWidth: 520 }}>
+          <DialogBody>
+            <DialogTitle>Delete {deleteTarget?.kind === 'globalParam' ? 'global parameter' : deleteTarget?.kind}</DialogTitle>
+            <DialogContent>
+              <Caption1 style={{ display: 'block', marginBottom: tokens.spacingVerticalS, color: tokens.colorNeutralForeground3 }}>
+                This permanently deletes <strong>{deleteTarget?.name}</strong> from the Data Factory. This can&apos;t be
+                undone, and any pipeline/dataset that references it may break. Type the name to confirm.
+              </Caption1>
+              <Field label={`Type "${deleteTarget?.name ?? ''}" to confirm`} required>
+                <Input
+                  value={deleteConfirmText}
+                  onChange={(_, d) => setDeleteConfirmText(d.value)}
+                  placeholder={deleteTarget?.name ?? ''}
+                  onKeyDown={(e) => { if (e.key === 'Enter' && deleteTarget && canConfirmDelete(deleteConfirmText, deleteTarget.name)) confirmDelete(); }}
+                />
+              </Field>
+              {deleteError && <MessageBar intent="error" style={{ marginTop: tokens.spacingVerticalM }}><MessageBarBody><MessageBarTitle>Delete failed</MessageBarTitle>{deleteError}</MessageBarBody></MessageBar>}
+            </DialogContent>
+            <DialogActions>
+              <Button appearance="secondary" onClick={() => setDeleteTarget(null)} disabled={busy}>Cancel</Button>
+              <Button
+                appearance="primary"
+                onClick={confirmDelete}
+                disabled={busy || !deleteTarget || !canConfirmDelete(deleteConfirmText, deleteTarget.name)}
+              >
+                {busy ? 'Deleting…' : 'Delete'}
+              </Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
+
+      {/* Clone / Rename — fetches the full definition, then creates a copy under
+          the new name (Rename additionally deletes the original). Real ADF REST. */}
+      <Dialog open={crState !== null} onOpenChange={(_, d) => { if (!d.open && !busy) { setCrState(null); } }}>
+        <DialogSurface style={{ maxWidth: 520 }}>
+          <DialogBody>
+            <DialogTitle>{crState?.mode === 'rename' ? 'Rename' : 'Clone'} {crState?.kind}</DialogTitle>
+            <DialogContent>
+              <Field label="New name" required>
+                <Input
+                  value={crNewName}
+                  onChange={(_, d) => setCrNewName(d.value)}
+                  placeholder="my_resource"
+                  onKeyDown={(e) => { if (e.key === 'Enter' && crNewName.trim()) submitCloneRename(); }}
+                />
+              </Field>
+              <Caption1 style={{ display: 'block', marginTop: tokens.spacingVerticalS, color: tokens.colorNeutralForeground3 }}>
+                {crState?.mode === 'rename'
+                  ? 'Rename copies the definition to the new name, then deletes the original. References to the old name elsewhere are NOT auto-updated — fix them after renaming.'
+                  : 'Clone creates an independent copy of the definition under the new name.'}
+              </Caption1>
+              {crError && <MessageBar intent="error" style={{ marginTop: tokens.spacingVerticalM }}><MessageBarBody><MessageBarTitle>{crState?.mode === 'rename' ? 'Rename failed' : 'Clone failed'}</MessageBarTitle>{crError}</MessageBarBody></MessageBar>}
+            </DialogContent>
+            <DialogActions>
+              <Button appearance="secondary" onClick={() => setCrState(null)} disabled={busy}>Cancel</Button>
+              <Button appearance="primary" onClick={submitCloneRename} disabled={busy || !crNewName.trim()}>
+                {busy ? 'Working…' : crState?.mode === 'rename' ? 'Rename' : 'Clone'}
+              </Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
+
+      {/* View JSON — read-only ARM definition (the ADF Studio "{} Code" view). */}
+      <Dialog open={jsonView !== null} onOpenChange={(_, d) => { if (!d.open) setJsonView(null); }}>
+        <DialogSurface style={{ maxWidth: 760 }}>
+          <DialogBody>
+            <DialogTitle>{jsonView?.title ?? 'JSON'}</DialogTitle>
+            <DialogContent>
+              {jsonLoading && <div style={{ padding: tokens.spacingVerticalS }}><Spinner size="tiny" label="Loading definition…" /></div>}
+              {jsonError && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Failed to load</MessageBarTitle>{jsonError}</MessageBarBody></MessageBar>}
+              {!jsonLoading && !jsonError && jsonView && (
+                <Textarea
+                  readOnly
+                  aria-label="Resource definition JSON (read-only)"
+                  value={jsonView.text}
+                  style={{ width: '100%', minHeight: '360px', fontFamily: tokens.fontFamilyMonospace }}
+                />
+              )}
+            </DialogContent>
+            <DialogActions>
+              <Button appearance="secondary" onClick={() => setJsonView(null)}>Close</Button>
             </DialogActions>
           </DialogBody>
         </DialogSurface>
