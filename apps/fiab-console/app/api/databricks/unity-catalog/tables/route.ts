@@ -25,6 +25,11 @@ import {
   getUcTable, createUcTable, createUcTableFromFile, deleteUcTable, patchUcTable,
   type UcColumnSpec,
 } from '@/lib/azure/databricks-client';
+import { createUcTableWithFormat } from '@/lib/azure/unity-catalog-client';
+import {
+  TableFormatBuildError, UC_TABLE_FORMATS,
+  type UcTableFormat, type UcTableFormatColumn,
+} from '@/lib/sql/uc-table-format-builders';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -119,6 +124,44 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: true, result });
     } catch (e: any) {
       return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: e?.status || 502 });
+    }
+  }
+
+  // ---- Create table in a chosen TABLE FORMAT (DBX-11: Managed Iceberg /
+  // UniForm / deletion vectors / row lineage) ----
+  // These need TBLPROPERTIES the REST create API can't carry, so they compile to
+  // real `CREATE TABLE … USING … TBLPROPERTIES(...)` DDL run on a SQL Warehouse.
+  if (body?.mode === 'ddl') {
+    const rawFmt = String(body?.table_format || 'DELTA').toUpperCase() as UcTableFormat;
+    if (!UC_TABLE_FORMATS.includes(rawFmt)) {
+      return NextResponse.json({ ok: false, error: `table_format must be one of ${UC_TABLE_FORMATS.join(', ')}` }, { status: 400 });
+    }
+    const warehouse_id = String(body?.warehouse_id || '').trim();
+    if (!warehouse_id) {
+      return NextResponse.json({ ok: false, error: 'warehouse_id is required — Iceberg / UniForm tables are created via SQL DDL on a SQL Warehouse. Bind or start a warehouse first.' }, { status: 400 });
+    }
+    if (!name || !catalog_name || !schema_name) {
+      return NextResponse.json({ ok: false, error: 'name, catalog_name and schema_name are required' }, { status: 400 });
+    }
+    const columns: UcTableFormatColumn[] = (Array.isArray(body?.columns) ? body.columns : []).map((c: any) => ({
+      name: String(c?.name || '').trim(),
+      type: String(c?.type_name || c?.type || 'STRING').trim(),
+      nullable: c?.nullable !== false,
+      comment: c?.comment ? String(c.comment) : undefined,
+    }));
+    if (!columns.length) return NextResponse.json({ ok: false, error: 'at least one column is required' }, { status: 400 });
+    try {
+      const r = await createUcTableWithFormat(warehouse_id, {
+        catalog: catalog_name, schema: schema_name, name, columns,
+        format: rawFmt,
+        deletionVectors: body?.deletion_vectors === true,
+        rowLineage: body?.row_lineage === true,
+        comment: body?.comment ? String(body.comment) : undefined,
+      }, body?.preview === true);
+      return NextResponse.json({ ok: true, preview: body?.preview === true, sql: r.sql, executionMs: r.executionMs });
+    } catch (e: any) {
+      const status = e instanceof TableFormatBuildError ? 400 : (e?.status || 502);
+      return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status });
     }
   }
 

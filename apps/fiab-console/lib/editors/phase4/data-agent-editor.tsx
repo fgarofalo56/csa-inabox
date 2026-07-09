@@ -17,7 +17,7 @@ import {
   MessageBar, MessageBarBody, MessageBarTitle,
   Tree, TreeItem, TreeItemLayout, Checkbox,
   Dialog, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
-  Field, Dropdown, Option, Switch, SpinButton,
+  Field, Dropdown, Option, Switch, SpinButton, Tooltip,
   Menu, MenuTrigger, MenuPopover, MenuList, MenuItem, MenuDivider,
   makeStyles, tokens,
 } from '@fluentui/react-components';
@@ -33,7 +33,7 @@ import {
   Cube20Regular, Calculator20Regular, Ruler20Regular, Layer20Regular,
   ChevronRight16Regular, ChevronDown16Regular, ChevronLeft16Regular,
   Add16Regular, Edit16Regular, CheckmarkCircle20Regular, ArrowUndo16Regular,
-  Wrench16Regular,
+  Wrench16Regular, Open20Regular,
 } from '@fluentui/react-icons';
 import { useQuery } from '@tanstack/react-query';
 import { getItem } from '@/lib/api/workspaces';
@@ -85,6 +85,7 @@ import {
   parseUdfFunctions,
   normalizeDaSources,
   daSupportsExampleQueries,
+  databricksGenieUrl,
   shapeDaHistory,
   canSendDaQuestion,
   type VarType,
@@ -170,6 +171,10 @@ const DA_SOURCE_TYPES: { value: DaSourceType; label: string; itemType: string }[
   { value: 'lakehouse', label: 'Lakehouse', itemType: 'lakehouse' },
   { value: 'kql', label: 'KQL database', itemType: 'kql-database' },
   { value: 'semantic-model', label: 'Semantic model', itemType: 'semantic-model' },
+  // Governed metric view (DBX-6). Not a standalone Loom item — grounds the agent
+  // on the governed measure definitions (typed into the card) and executes SQL
+  // over the Azure-native warehouse. itemType '' skips the item picker.
+  { value: 'metric-view', label: 'Metric view', itemType: '' },
   { value: 'ai-search', label: 'AI Search', itemType: 'ai-search-index' },
   { value: 'ontology', label: 'Ontology', itemType: 'ontology' },
   { value: 'graph', label: 'Graph model', itemType: 'graph-model' },
@@ -229,6 +234,22 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
   }, []);
   useEffect(() => { if (!available[pickerType]) loadAvailable(pickerType); }, [pickerType, available, loadAvailable]);
 
+  // DBX-5 delta: "Open in Databricks Genie" deep link — resolved ONLY when a
+  // Databricks workspace host is bound (Loom's own Data Agent stays the default;
+  // this is a power-user convenience). Absent otherwise, so the link never 404s.
+  const [genieUrl, setGenieUrl] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await clientFetch('/api/databricks/workspace');
+        const j = await r.json().catch(() => ({}));
+        if (!cancelled && j?.ok && j.workspace?.hostname) setGenieUrl(databricksGenieUrl(j.workspace.hostname));
+      } catch { /* no workspace bound → link stays hidden */ }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
   const [pickSel, setPickSel] = useState('');
   const addSource = () => {
     if (arr<DaSource>(state.sources).length >= 5) return;
@@ -243,6 +264,24 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
           name: 'Microsoft 365',
           tables: '', description: '', instructions: DA_INSTRUCTION_TEMPLATE, examples: [],
           graph: { kind: 'site' } as DaGraphScope,
+        }],
+      }));
+      return;
+    }
+    // Metric view (DBX-6): no backing Loom item — add directly; the governed
+    // view name + measure definitions are entered on the source card, and the
+    // agent grounds on those governed definitions.
+    if (pickerType === 'metric-view') {
+      setState((p) => ({
+        ...p,
+        sources: [...arr<DaSource>(p.sources), {
+          id: `metric-view:mv:${Date.now()}`,
+          type: 'metric-view' as DaSourceType,
+          name: 'Metric view',
+          tables: '',
+          description: 'Governed KPIs (measures) sliced by governed dimensions.',
+          instructions: '## Governed metric view\nName the metric view and list its governed dimensions + measures below. Answer KPI questions by GROUP BY the governed dimension(s) and selecting the governed measure expression(s) — do not invent alternative aggregations.\n',
+          examples: [],
         }],
       }));
       return;
@@ -634,6 +673,14 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
                   <span className={s.daSectionIcon}><Database20Regular /></span>
                   <Subtitle2>Data sources</Subtitle2>
                   <Badge appearance="tint" color={sources.length >= 5 ? 'warning' : 'brand'}>{sources.length}/5</Badge>
+                  <div style={{ flex: 1 }} />
+                  {genieUrl && (
+                    <Tooltip relationship="description" content="Open Databricks Genie for the bound workspace (power-user path). Loom's own Data Agent remains the default.">
+                      <Button as="a" href={genieUrl} target="_blank" rel="noreferrer" size="small" appearance="subtle" icon={<Open20Regular />}>
+                        Open in Databricks Genie
+                      </Button>
+                    </Tooltip>
+                  )}
                 </div>
                 <div className={s.daAddBar}>
                   <Field label="Type">
@@ -683,6 +730,10 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
                       <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
                         Semantic models are scoped in Power BI &ldquo;Prep for AI&rdquo; Verified Answers — no table selection here.
                       </Caption1>
+                    ) : src.type === 'metric-view' ? (
+                      <Field label="Governed metric view" hint="catalog.schema.metric_view (Databricks) or the metric-view name — the agent grounds on its governed measures.">
+                        <Input value={src.tables || ''} onChange={(_, d) => updateSource(src.id, { tables: d.value })} placeholder="main.sales.orders_mv" />
+                      </Field>
                     ) : (
                       <SourceSchemaTree id={id} src={src} onChange={(tables) => updateSource(src.id, { tables })} />
                     )}

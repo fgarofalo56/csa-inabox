@@ -591,6 +591,7 @@ export type DaSourceType =
   | 'lakehouse'
   | 'kql'
   | 'semantic-model'
+  | 'metric-view'
   | 'ai-search'
   | 'ontology'
   | 'graph'
@@ -655,6 +656,7 @@ const DA_SOURCE_TYPE_VALUES: DaSourceType[] = [
   'lakehouse',
   'kql',
   'semantic-model',
+  'metric-view',
   'ai-search',
   'ontology',
   'graph',
@@ -674,9 +676,41 @@ export function daSupportsExampleQueries(type: DaSourceType): boolean {
   return type !== 'semantic-model' && type !== 'ontology';
 }
 
+/**
+ * Build a deep link to Databricks Genie for the "Open in Databricks Genie"
+ * power-user action on the Data Agent (DBX-5 delta). Loom's own Data Agent is
+ * always the default; this link is a convenience that renders ONLY when a
+ * Databricks workspace host is bound. Returns null when no host is configured
+ * (so the caller hides the action) — never a broken/relative link.
+ *
+ * `host` is the workspace URL or bare host (e.g. `adb-123.4.azuredatabricks.net`
+ * or `https://adb-123.4.azuredatabricks.net`). When a Genie space id is known
+ * the link deep-links to that room; otherwise it opens the Genie landing.
+ * Pure + unit-tested.
+ */
+export function databricksGenieUrl(host?: string | null, spaceId?: string | null): string | null {
+  const raw = String(host ?? '').trim();
+  if (!raw) return null;
+  // Normalise to an https origin; strip any path/query the caller passed.
+  let origin: string;
+  try {
+    const u = new URL(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`);
+    if (!u.hostname) return null;
+    origin = `https://${u.hostname}`;
+  } catch {
+    return null;
+  }
+  const space = String(spaceId ?? '').trim();
+  // Genie space ids are hex/alphanumeric; reject anything else so the path can
+  // never carry an injected segment.
+  if (space && /^[A-Za-z0-9]+$/.test(space)) return `${origin}/genie/rooms/${space}`;
+  return `${origin}/genie`;
+}
+
 /** Guess a DaSourceType from a free-text legacy source name. */
 export function guessDaSourceType(name: string): DaSourceType {
   const n = name.toLowerCase();
+  if (/metric\s*view|\bkpi\b|\bmetric\b/.test(n)) return 'metric-view';
   if (/semantic|dataset|power\s*bi|\bpbi\b/.test(n)) return 'semantic-model';
   if (/lakehouse|\blh\b|delta|gold|silver|bronze/.test(n)) return 'lakehouse';
   if (/kql|kusto|eventhouse|adx/.test(n)) return 'kql';

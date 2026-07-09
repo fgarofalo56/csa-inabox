@@ -27,6 +27,7 @@ import {
   parseWktGeometry, geoFeaturesFromInspectRows,
   parseUdfFunctions,
   normalizeDaSources, guessDaSourceType, daSupportsExampleQueries,
+  databricksGenieUrl,
   shapeDaHistory, canSendDaQuestion,
   safeSqlIdent, buildInsertSql, buildUpdateSql, buildDeleteSql, buildAtelierWhere,
 } from '../_family-utils';
@@ -566,8 +567,32 @@ describe('guessDaSourceType', () => {
     expect(guessDaSourceType('supply-chain graph model')).toBe('graph');
     expect(guessDaSourceType('routes gql')).toBe('graph');
   });
+  it('maps metric-view keywords (DBX-5)', () => {
+    expect(guessDaSourceType('sales metric view')).toBe('metric-view');
+    expect(guessDaSourceType('revenue KPI')).toBe('metric-view');
+  });
   it('defaults unknown names to warehouse', () => {
     expect(guessDaSourceType('mystery-thing')).toBe('warehouse');
+  });
+});
+
+describe('databricksGenieUrl (DBX-5 deep link)', () => {
+  it('returns null when no host is bound (so the action is hidden)', () => {
+    expect(databricksGenieUrl(null)).toBeNull();
+    expect(databricksGenieUrl('')).toBeNull();
+    expect(databricksGenieUrl('   ')).toBeNull();
+  });
+  it('builds a Genie landing link from a bare host', () => {
+    expect(databricksGenieUrl('adb-123.4.azuredatabricks.net')).toBe('https://adb-123.4.azuredatabricks.net/genie');
+  });
+  it('accepts a full URL and strips any path/query', () => {
+    expect(databricksGenieUrl('https://adb-123.4.azuredatabricks.net/some/path?x=1')).toBe('https://adb-123.4.azuredatabricks.net/genie');
+  });
+  it('deep-links to a specific space id when given', () => {
+    expect(databricksGenieUrl('adb-123.4.azuredatabricks.net', '01ef9a2b')).toBe('https://adb-123.4.azuredatabricks.net/genie/rooms/01ef9a2b');
+  });
+  it('ignores a malformed space id (no path injection)', () => {
+    expect(databricksGenieUrl('adb-1.azuredatabricks.net', '../../evil')).toBe('https://adb-1.azuredatabricks.net/genie');
   });
 });
 

@@ -159,6 +159,11 @@ const ALLOWLIST = new Map([
   // routes (loom-app-runtime/[id]/**) thread resolveItemAccessByOid and pass on
   // their own owner-check.
   ['apps/fiab-console/app/api/items/loom-app-runtime/config/route.ts', 'static runtime-template catalog + deployment-wide Loom Apps infra status; no per-tenant Cosmos data'],
+  // DBX-6 metric-view default backend: compiles a client-supplied spec + runs
+  // read-only SQL against the SHARED Synapse Dedicated pool resolved purely from
+  // env config (LOOM_SYNAPSE_*) — same shared-backend class as the allowlisted
+  // /api/warehouse navigator; no per-tenant Cosmos resource read by id.
+  ['apps/fiab-console/app/api/semantic-model/metric-view/route.ts', 'compile + read-only run against the shared Synapse Dedicated pool resolved by env config; no per-tenant Cosmos read'],
 ]);
 
 // ── Specific-per-item-TYPE routes over a SHARED Azure backend ────────────────
