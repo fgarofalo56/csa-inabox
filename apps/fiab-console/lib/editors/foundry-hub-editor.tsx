@@ -61,6 +61,7 @@ import { FoundryAgentsPanel } from '@/lib/components/foundry/foundry-agents';
 import { LineChart, BarChart, StatTile, type LineSeries, type Bar } from '@/lib/components/foundry/foundry-charts';
 import {
   offeredDeploymentTypes, deploymentTypeFor, validateCapacity,
+  isModelRouterModel, modelRouterAvailability,
   type OfferedDeploymentType,
 } from '@/lib/foundry/deployment-types';
 
@@ -600,7 +601,13 @@ function DeployModelDialog({ open, onClose, onDeployed, acct }: { open: boolean;
     return `Quota: ${used} / ${limit} ${hit.unit || ''} used${limit ? ` · ${Math.max(0, limit - used)} remaining` : ''}`;
   }, [quota.data, skuName, modelName]);
 
-  const deployDisabled = busy || !modelName || !deploymentName || !capValidation.ok || govGated || (needsPricingConfirm && !confirmPricing);
+  // AIF-12: Model Router is a special model (auto-selects the best underlying
+  // model per request). It deploys via the same PUT, but is NOT available in
+  // Azure Government — honest-gate it there and point at Loom's tier router.
+  const isRouter = isModelRouterModel(modelName);
+  const routerAvail = modelRouterAvailability(isGov);
+  const routerGated = isRouter && !routerAvail.available;
+  const deployDisabled = busy || !modelName || !deploymentName || !capValidation.ok || govGated || routerGated || (needsPricingConfirm && !confirmPricing);
 
   const submit = async () => {
     setBusy(true); setMsg(null);
@@ -668,6 +675,26 @@ function DeployModelDialog({ open, onClose, onDeployed, acct }: { open: boolean;
                     ({catalog.data?.account?.location || acct?.location || 'usgov'}). Choose <strong>Regional Provisioned (PTU)</strong> or
                     <strong> Standard (Regional)</strong>, or verify availability for your Gov region. Global / Data-Zone / Batch types are
                     Commercial-only.
+                  </MessageBarBody>
+                </MessageBar>
+              )}
+              {isRouter && (
+                <MessageBar intent={routerGated ? 'warning' : 'info'}>
+                  <MessageBarBody>
+                    <MessageBarTitle>
+                      {routerGated ? 'Model Router is not available in Azure Government' : 'Model Router'}
+                    </MessageBarTitle>
+                    {routerGated ? (
+                      routerAvail.reason
+                    ) : (
+                      <>
+                        Model Router auto-selects the best underlying model per request. It deploys like any
+                        model here; Quality vs Cost preference is chosen per request at inference time. For a
+                        cloud-portable equivalent, Loom’s built-in <strong>tier router</strong> (Admin → Copilot
+                        &amp; Agents → Model tiers) routes cheap requests to a mini deployment and hard ones to a
+                        strong deployment on any cloud.
+                      </>
+                    )}
                   </MessageBarBody>
                 </MessageBar>
               )}

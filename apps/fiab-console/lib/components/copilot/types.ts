@@ -29,6 +29,13 @@ export interface TurnMeta {
   turnLatencyMs?: number;
   /** Estimated USD from the rel-T85 list-price table over the real token counts. */
   costUsd?: number;
+  /**
+   * CTS-16: which tier the AIF-12 model tier router chose for this turn
+   * ('mini' | 'standard' | 'strong'). Present only when routing actively swapped
+   * the deployment away from the resolved default — surfaced as a chip in the
+   * CTS-01 metadata bar so "which tier answered this" is never hidden.
+   */
+  routedTier?: 'mini' | 'standard' | 'strong';
 }
 
 /** A single streamed orchestrator step (superset of both legacy Step shapes). */
@@ -174,6 +181,7 @@ export function groupTurns(
       cur.completionTokens = st.completionTokens;
       cur.turnLatencyMs = st.turnLatencyMs;
       cur.costUsd = st.costUsd;
+      cur.routedTier = st.routedTier; // CTS-16
       cur.turnDetail = st.turnDetail;
       if (st.contextUsage) cur.contextUsage = st.contextUsage;
       cur.msgIndex = finalCount++;

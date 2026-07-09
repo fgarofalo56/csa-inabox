@@ -207,6 +207,7 @@ export function Transcript({ turns, assistantName = 'Copilot', ratings, onFeedba
                       completionTokens={turn.completionTokens}
                       turnLatencyMs={turn.turnLatencyMs}
                       costUsd={turn.costUsd}
+                      routedTier={turn.routedTier}
                       turnDetail={turn.turnDetail}
                       citations={turn.citations}
                     />

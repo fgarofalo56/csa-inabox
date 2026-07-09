@@ -32,6 +32,10 @@ import {
   RECOMMENDED_CHAT_MODELS, RECOMMENDED_EMBED_MODELS, looksLikeEmbedding,
   type TenantCopilotConfig,
 } from '@/lib/types/copilot-config';
+import {
+  MODEL_TIERS, TASK_CLASSES, TIER_LABELS, TASK_CLASS_LABELS,
+  DEFAULT_TASK_TIER_MAP, type ModelTier, type TaskClass,
+} from '@/lib/foundry/model-tier-router';
 
 interface AccountRow { name: string; rg: string; sub?: string; location?: string; kind?: string; endpoint?: string }
 interface DeploymentRow { name: string; modelName?: string; modelVersion?: string; provisioningState?: string }
@@ -88,6 +92,17 @@ export function CopilotAgentsConfig() {
 
   const set = useCallback((patch: Partial<TenantCopilotConfig>) => {
     setConfig((c) => ({ ...c, ...patch }));
+  }, []);
+
+  // AIF-12 tier-router setters (merge into the nested modelTiers / task map).
+  const setTier = useCallback((tier: ModelTier, v: string | undefined) => {
+    setConfig((c) => {
+      const tiers = { ...(c.modelTiers || {}), [tier]: v || undefined };
+      return { ...c, modelTiers: tiers };
+    });
+  }, []);
+  const setTaskTier = useCallback((tc: TaskClass, tier: ModelTier) => {
+    setConfig((c) => ({ ...c, modelTierTaskMap: { ...(c.modelTierTaskMap || {}), [tc]: tier } }));
   }, []);
 
   const load = useCallback(async () => {
@@ -347,6 +362,58 @@ export function CopilotAgentsConfig() {
           'Embedding model', config.embeddingDeployment, embedDeployments,
           (v) => set({ embeddingDeployment: v }), RECOMMENDED_EMBED_MODELS,
           'Used for RAG grounding. Recommend text-embedding-3-large / -small (or ada-002 for legacy parity).',
+        )}
+
+        {/* ── AIF-12: Loom-native model tier router (default-ON) ───────────── */}
+        <Field
+          className={s.full}
+          label="Model tier router"
+          hint={
+            'ON (default): the Copilot buckets each turn by complexity and rides a cheaper "Mini" deployment ' +
+            'for lightweight requests, a "Strong" deployment for reasoning-heavy ones, and the Copilot chat ' +
+            'model for everything else. Leave the tier deployments below empty to keep every turn on the ' +
+            'Copilot chat model (a safe no-op). The chosen tier is shown in each answer’s transparency bar.'
+          }
+        >
+          <Switch
+            checked={config.modelTierRoutingEnabled !== false}
+            label={config.modelTierRoutingEnabled === false ? 'Off (single deployment)' : 'On (route by task complexity)'}
+            onChange={(_, d) => set({ modelTierRoutingEnabled: d.checked ? undefined : false })}
+          />
+        </Field>
+
+        {config.modelTierRoutingEnabled !== false && (
+          <>
+            {deploymentDropdown(
+              'Mini tier deployment', config.modelTiers?.mini, chatDeployments,
+              (v) => setTier('mini', v), ['mini', 'gpt-4o-mini', 'gpt-5-mini'],
+              'Cheapest model — lightweight lookups / classification / greetings. Empty ⇒ rides the Copilot chat model.',
+            )}
+            {deploymentDropdown(
+              'Standard tier deployment', config.modelTiers?.standard, chatDeployments,
+              (v) => setTier('standard', v), RECOMMENDED_CHAT_MODELS,
+              'General chat + build requests. Empty ⇒ falls back to the Copilot chat model above.',
+            )}
+            {deploymentDropdown(
+              'Strong tier deployment', config.modelTiers?.strong, chatDeployments,
+              (v) => setTier('strong', v), ['gpt-4.1', 'o3', 'o1', 'gpt-5'],
+              'Strongest model — design / debug / multi-step / long-context. Empty ⇒ falls back to Standard.',
+            )}
+
+            {TASK_CLASSES.map((tc) => (
+              <Field key={tc} label={`Route: ${TASK_CLASS_LABELS[tc]}`} hint="Which tier this task class maps to.">
+                <Dropdown
+                  value={TIER_LABELS[config.modelTierTaskMap?.[tc] ?? DEFAULT_TASK_TIER_MAP[tc]]}
+                  selectedOptions={[config.modelTierTaskMap?.[tc] ?? DEFAULT_TASK_TIER_MAP[tc]]}
+                  onOptionSelect={(_, d) => d.optionValue && setTaskTier(tc, d.optionValue as ModelTier)}
+                >
+                  {MODEL_TIERS.map((t) => (
+                    <Option key={t} value={t} text={TIER_LABELS[t]}>{TIER_LABELS[t]}</Option>
+                  ))}
+                </Dropdown>
+              </Field>
+            ))}
+          </>
         )}
 
         <Field label="Foundry project endpoint (optional)" hint="Agent Service endpoint for workspace data agents: https://<acct>.services.ai.azure.com/api/projects/<project>">

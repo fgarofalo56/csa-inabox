@@ -63,6 +63,7 @@ import {
   isFabricCopilotEnabled,
   resolveCopilotFabricWorkspace,
 } from '../types/copilot-config';
+import { resolveTierForTurn, type ModelTier } from '@/lib/foundry/model-tier-router';
 import {
   executeQuery as synapseExecute,
   dedicatedTarget,
@@ -1199,6 +1200,10 @@ export type OrchestratorStep =
       completionTokens?: number;
       turnLatencyMs?: number;
       costUsd?: number;
+      // CTS-16: which tier the AIF-12 tier router chose for this turn (surfaced
+      // in the CTS-01 metadata bar). Present only when routing actively swapped
+      // the deployment away from the resolved default.
+      routedTier?: ModelTier;
       // CTS-02 per-message detail roll-up.
       turnDetail?: TurnDetail;
       // CTS-04 grounding citations mapped from tool provenance.
@@ -1902,6 +1907,28 @@ export async function* orchestrate(opts: OrchestrateOptions): AsyncIterable<Orch
     return;
   }
 
+  // ── AIF-12: Loom-native model tier router (default-ON, opt-out) ─────────────
+  // Bucket the turn by complexity and, when the tenant admin has wired a mini /
+  // strong deployment (Admin → Copilot & Agents → Model tiers), ride the tier's
+  // deployment instead of the single resolved default — cheap turns → mini,
+  // hard turns → strong. When no tiers are configured this is a silent no-op
+  // (routed=false → the resolved default stands). The chosen tier is surfaced
+  // on the final step for the CTS-01 metadata bar (CTS-16). A pre-resolved
+  // deployment (Wave-4 model-tier override via tenantConfig) still wins because
+  // it becomes the `standard`/base the selector falls back to.
+  let routedTier: ModelTier | undefined;
+  try {
+    const sel = resolveTierForTurn(opts.tenantConfig ?? null, {
+      prompt,
+      hasTools: !opts.registryOverride && !opts.registry,
+      baseDeployment: target.deployment,
+    });
+    if (sel.routed && sel.deployment) {
+      target = { ...target, deployment: sel.deployment };
+      routedTier = sel.tier;
+    }
+  } catch { /* routing is best-effort — never block a turn */ }
+
   const reg = opts.registryOverride ?? opts.registry ?? getRegistry();
   // Register any connected external MCP tool servers (Build 2026 "Connect MCP
   // tools") so agent-loom can call them alongside the built-in Loom tools.
@@ -2164,6 +2191,8 @@ export async function* orchestrate(opts: OrchestrateOptions): AsyncIterable<Orch
         completionTokens: usage.completionTokens,
         turnLatencyMs: Date.now() - turnStart,
         costUsd: estCostUsd(target.deployment, usage.promptTokens, usage.completionTokens),
+        // CTS-16: the AIF-12 tier the router chose (omitted when no active swap).
+        ...(routedTier ? { routedTier } : {}),
         // CTS-02: the per-turn tool roll-up (empty tools = a no-tool answer).
         turnDetail: { tools: turnTools },
         // CTS-04: grounding citations (omit the key entirely when none, so older
