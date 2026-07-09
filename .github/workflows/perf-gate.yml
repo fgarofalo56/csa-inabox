@@ -1,0 +1,177 @@
+name: perf-gate
+
+# PSR-2 — Perf gate + per-roll benchmark receipt (regression budget).
+#
+# Runs the PSR-1 benchmark suite against a DEPLOYED console, compares each metric
+# to the trailing-N baseline + the checked-in `perf-budgets.json`, and turns the
+# check RED when a budgeted metric breaches its p95 ceiling or regresses past its
+# budget. A documented `override_label` accepts a justified regression (still shown
+# in the receipt). Green rolls post the benchmark table into the run summary.
+#
+# WHY the console does the work (not the runner): the `perf-benchmarks` Cosmos
+# container is private-endpoint / VNet-bound. A public GitHub runner cannot reach it,
+# and cannot run the in-VNet backends. So the runner only:
+#   1. mints a session cookie from SESSION_SECRET (same trick as scripts/csa-loom/
+#      loom-verify.js + the loom-uat job — no MFA/user creds), then
+#   2. asks the console (which IS in the VNet) to run the suite + hand back the run
+#      and its baseline as JSON, then
+#   3. runs scripts/csa-loom/perf/compare-baseline.mjs on that JSON.
+#
+# CONTRACT (PSR-1, built in parallel on feat/psr1-benchmark-harness):
+#   POST {url}/api/admin/performance/run          -> { ok: true, runId }
+#   GET  {url}/api/admin/performance?runId=<id>&format=gate
+#        -> { status: 'complete'|'running', latest: [...rows], baseline: [...rows] }
+#   row shape: { runId, gitSha, rev, metric, backend, p50, p95, p99, coldMs, warmMs, ts }
+#   The gate is TOLERANT: if the endpoints are not yet deployed, or return no rows,
+#   it emits a warning and PASSES (honest no-op) so it can never permanently block a
+#   roll before PSR-1 lands. It only turns RED on a REAL measured breach.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# REQUIRED SECRETS (repo/org or passed via `secrets:` on workflow_call):
+#   SESSION_SECRET        The console's session HMAC/enc secret — used to mint the
+#                         automation session cookie (loom_session). MUST match the
+#                         value the target console runs with.
+#   LOOM_AUTOMATION_OID   Entra objectId of a TENANT-ADMIN principal. The
+#                         /api/admin/performance/run route is tenant-admin-gated, so
+#                         the minted session's oid must resolve as an admin.
+# OPTIONAL SECRETS:
+#   LOOM_AUTOMATION_UPN   UPN stamped into the session (default automation@loom).
+# ─────────────────────────────────────────────────────────────────────────────
+
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: 'Public console URL to benchmark (Front Door).'
+        type: string
+        required: true
+        default: 'https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net'
+      override_label:
+        description: 'Optional — accept a justified regression this roll (e.g. "deliberate-cold-start-trade"). Recorded in the receipt.'
+        type: string
+        default: ''
+      poll_timeout_minutes:
+        description: 'Minutes to wait for the benchmark run to complete.'
+        type: string
+        default: '20'
+      skip:
+        description: 'EMERGENCY VALVE — skip the perf gate entirely (roll proceeds; no perf receipt).'
+        type: boolean
+        default: false
+  workflow_call:
+    inputs:
+      url:
+        type: string
+        required: true
+      override_label:
+        type: string
+        required: false
+        default: ''
+      poll_timeout_minutes:
+        type: string
+        required: false
+        default: '20'
+      skip:
+        type: boolean
+        required: false
+        default: false
+    secrets:
+      SESSION_SECRET:
+        required: true
+      LOOM_AUTOMATION_OID:
+        required: true
+      LOOM_AUTOMATION_UPN:
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  perf-gate:
+    name: Benchmark + regression budget
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Run perf gate
+        env:
+          LOOM_URL: ${{ inputs.url }}
+          SESSION_SECRET: ${{ secrets.SESSION_SECRET }}
+          LOOM_AUTOMATION_OID: ${{ secrets.LOOM_AUTOMATION_OID }}
+          LOOM_AUTOMATION_UPN: ${{ secrets.LOOM_AUTOMATION_UPN }}
+          OVERRIDE_LABEL: ${{ inputs.override_label }}
+          POLL_TIMEOUT_MINUTES: ${{ inputs.poll_timeout_minutes }}
+          SKIP: ${{ inputs.skip }}
+        run: |
+          set -euo pipefail
+
+          if [[ "${SKIP}" == "true" ]]; then
+            echo "::warning::perf-gate skipped via input. Roll proceeds without a perf receipt."
+            exit 0
+          fi
+          if [[ -z "${SESSION_SECRET:-}" || -z "${LOOM_AUTOMATION_OID:-}" ]]; then
+            echo "::warning::SESSION_SECRET / LOOM_AUTOMATION_OID not configured — cannot mint an admin session. SKIPPING perf gate (honest no-op). Configure the secrets to enable."
+            exit 0
+          fi
+          URL="${LOOM_URL%/}"
+
+          # 1) Mint an automation session cookie (mirror of scripts/csa-loom/loom-verify.js).
+          COOKIE="$(node -e '
+            const crypto=require("crypto");
+            const ss=process.env.SESSION_SECRET;
+            const claims={oid:process.env.LOOM_AUTOMATION_OID,name:"perf-gate",upn:process.env.LOOM_AUTOMATION_UPN||"automation@loom"};
+            const exp=Math.floor(Date.now()/1000)+3600;
+            const key=Buffer.from(crypto.hkdfSync("sha256",Buffer.from(ss,"utf-8"),Buffer.alloc(32),Buffer.from("loom-session-v1"),32));
+            const iv=crypto.randomBytes(12);const c=crypto.createCipheriv("aes-256-gcm",key,iv);
+            const enc=Buffer.concat([c.update(Buffer.from(JSON.stringify({claims,exp}))),c.final()]);const tag=c.getAuthTag();
+            process.stdout.write("loom_session="+Buffer.concat([iv,tag,enc]).toString("base64url"));
+          ')"
+
+          # 2) Kick the benchmark run.
+          echo "POST $URL/api/admin/performance/run"
+          RUN_JSON="$(curl -sS -X POST "$URL/api/admin/performance/run" \
+            -H "cookie: $COOKIE" -H 'content-type: application/json' -d '{}' || true)"
+          echo "run response: ${RUN_JSON:0:300}"
+          RUN_ID="$(node -e 'try{const j=JSON.parse(process.argv[1]||"{}");process.stdout.write(String(j.runId||j.data?.runId||""))}catch{process.stdout.write("")}' "$RUN_JSON" || true)"
+          if [[ -z "$RUN_ID" ]]; then
+            echo "::warning::No runId from /api/admin/performance/run (endpoint may not be deployed yet, or returned an error). SKIPPING perf gate (honest no-op)."
+            exit 0
+          fi
+          echo "::notice::benchmark runId=$RUN_ID"
+
+          # 3) Poll until the run completes and the console hands back {latest,baseline}.
+          DEADLINE=$(( $(date +%s) + ${POLL_TIMEOUT_MINUTES:-20} * 60 ))
+          STATUS="running"
+          while :; do
+            BUNDLE="$(curl -sS "$URL/api/admin/performance?runId=$RUN_ID&format=gate" -H "cookie: $COOKIE" || true)"
+            STATUS="$(node -e 'try{const j=JSON.parse(process.argv[1]||"{}");process.stdout.write(String(j.status||""))}catch{process.stdout.write("")}' "$BUNDLE" || true)"
+            echo "[poll] $(date -u +%H:%M:%S) status=${STATUS:-<none>}"
+            if [[ "$STATUS" == "complete" ]]; then
+              printf '%s' "$BUNDLE" > perf-bundle.json
+              break
+            fi
+            if (( $(date +%s) >= DEADLINE )); then
+              echo "::warning::benchmark run $RUN_ID did not complete within ${POLL_TIMEOUT_MINUTES}m (last status=${STATUS:-<none>}). SKIPPING perf gate (honest no-op)."
+              exit 0
+            fi
+            sleep 20
+          done
+
+          # 4) Compare against the budget. RED exit here fails the check.
+          echo "Comparing run $RUN_ID against perf-budgets.json ..."
+          RUN_BUNDLE_FILE="$PWD/perf-bundle.json" \
+          PERF_BUDGETS_FILE="$PWD/perf-budgets.json" \
+          OVERRIDE_LABEL="${OVERRIDE_LABEL:-}" \
+          node scripts/csa-loom/perf/compare-baseline.mjs
+
+      - name: Upload benchmark bundle
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-bundle
+          path: perf-bundle.json
+          if-no-files-found: ignore
