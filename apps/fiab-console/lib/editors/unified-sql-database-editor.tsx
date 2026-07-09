@@ -48,6 +48,7 @@ import {
   ArrowEnter20Regular, Dismiss20Regular,
   BookmarkMultiple20Regular, Save20Regular, Rename20Regular, DocumentCopy20Regular,
   MoreHorizontal20Regular, Folder20Regular, Open20Regular, ArrowClockwise20Regular,
+  History20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { useCollapsibleState, CollapsedRail } from '@/lib/components/collapsible-side-panel';
@@ -61,6 +62,7 @@ import { SqlDbTree } from '@/lib/components/sqldb/sqldb-tree';
 import { SqlSecurityPanel } from '@/lib/panes/sql-security-panel';
 import { ShareDialog } from './components/share-dialog';
 import { SqlScalePanel } from './components/sql-scale-panel';
+import { SqlRestorePanel } from './components/sql-restore-panel';
 import { useJobsStore } from '@/lib/state/jobs-store';
 import { SqlPerformanceDashboard } from '@/lib/editors/components/sql-performance-dashboard';
 import { EmptyState } from '@/lib/components/empty-state';
@@ -822,7 +824,7 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
   }, [id, family, server, database]);
 
   // ---- query ----
-  const [tab, setTab] = useState<'connect' | 'provision' | 'query' | 'queries' | 'schema' | 'admin' | 'security' | 'performance' | 'catalog' | 'mirroring' | 'scale' | 'get-data' | 'share' | 'git'>('connect');
+  const [tab, setTab] = useState<'connect' | 'provision' | 'query' | 'queries' | 'schema' | 'admin' | 'security' | 'performance' | 'catalog' | 'mirroring' | 'scale' | 'restore' | 'get-data' | 'share' | 'git'>('connect');
   const dialect = family === 'postgres' ? 'sql' : 'tsql';
   const [sqlText, setSqlText] = useState(
     `-- ${family === 'postgres' ? 'PostgreSQL' : 'Azure SQL'} smoke query\nSELECT 1 AS smoke;`,
@@ -1408,6 +1410,7 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
         { label: 'Entra admin', onClick: server ? () => setTab('admin') : undefined, disabled: !server, title: !server ? 'Pick a server first' : 'Set the Microsoft Entra admin' },
         { label: 'Geo-replication', onClick: server ? () => setTab('admin') : undefined, disabled: !server, title: !server ? 'Pick a server first' : 'Create a geo-secondary' },
         { label: 'Scale compute', onClick: (family === 'azure-sql' && server && database) ? () => setTab('scale') : undefined, disabled: !(family === 'azure-sql' && server && database), title: family !== 'azure-sql' ? 'Azure SQL only' : !(server && database) ? 'Pick a server + database first' : 'Change DTU / vCore tier, serverless auto-pause, and max storage' },
+        { label: 'Restore', onClick: (family === 'azure-sql' && server && database) ? () => setTab('restore') : undefined, disabled: !(family === 'azure-sql' && server && database), title: family !== 'azure-sql' ? 'Azure SQL only' : !(server && database) ? 'Pick a server + database first' : 'Point-in-time restore to a new database, or restore a dropped database' },
       ]},
       { label: 'Data security', actions: [
         { label: 'GRANT / RLS / masking', onClick: (server && database && family === 'azure-sql') ? () => setTab('security') : undefined, disabled: !(server && database && family === 'azure-sql'), title: family !== 'azure-sql' ? 'Azure SQL only' : !(server && database) ? 'Pick a server + database first' : 'Object/column GRANT, Row-Level Security, Dynamic Data Masking' },
@@ -1526,6 +1529,7 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
             <Tab value="get-data" icon={<ArrowDownload20Regular />}>Get data</Tab>
             {family === 'azure-sql' && <Tab value="mirroring" icon={<ShieldKeyhole20Regular />}>Mirroring</Tab>}
             {family === 'azure-sql' && <Tab value="scale" icon={<TopSpeed20Regular />}>Compute &amp; Storage</Tab>}
+            {family === 'azure-sql' && <Tab value="restore" icon={<History20Regular />}>Restore</Tab>}
             <Tab value="git" icon={<BranchFork20Regular />}>Source control</Tab>
           </TabList>
 
@@ -2365,6 +2369,23 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
                   <MessageBarBody>
                     <MessageBarTitle>Compute &amp; Storage scaling applies to Azure SQL Database</MessageBarTitle>
                     SQL Managed Instance scaling uses the instance SKU (<code>Microsoft.Sql/managedInstances</code> PATCH) and PostgreSQL flexible server uses a distinct compute ARM surface — wire those separately. Select an Azure SQL database to scale its compute and storage here.
+                  </MessageBarBody>
+                </MessageBar>
+              )
+          )}
+
+          {/* ---------------- Restore (point-in-time / dropped-database) ---------------- */}
+          {tab === 'restore' && (
+            family === 'azure-sql'
+              ? <SqlRestorePanel
+                  id={id} server={server} database={database}
+                  existingNames={databasesFull.map((d) => d.name)}
+                />
+              : (
+                <MessageBar intent="info">
+                  <MessageBarBody>
+                    <MessageBarTitle>Point-in-time restore applies to Azure SQL Database</MessageBarTitle>
+                    SQL Managed Instance and PostgreSQL flexible server restore through their own ARM surfaces (managed-database PITR / server restore). Select an Azure SQL database to restore it to an earlier point in time here.
                   </MessageBarBody>
                 </MessageBar>
               )

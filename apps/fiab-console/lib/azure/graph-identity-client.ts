@@ -574,6 +574,89 @@ export async function listUsersWithLicenses(
   return out;
 }
 
+// ----------------------------------------------------------------------------
+// External (cross-tenant) B2B invitation — FGC-30
+//
+// The Azure-native cross-tenant mechanism: invite a user from a FOREIGN Entra
+// tenant as a B2B guest in THIS tenant, then grant that guest scoped ADLS
+// access. Backing call: POST /v1.0/invitations (Microsoft Graph, available in
+// all national clouds). Requires the app permission User.Invite.All
+// (09850681-111b-4a89-9bed-3f2cae46d706) — admin-consented. A 403 surfaces as a
+// GraphIdentityError so the caller renders an honest gate naming the permission.
+// ----------------------------------------------------------------------------
+
+/** Graph AppRole for sending B2B invitations. */
+export const INVITE_APP_ROLE = {
+  name: 'User.Invite.All',
+  appRoleId: '09850681-111b-4a89-9bed-3f2cae46d706',
+  scope: 'Microsoft Graph (app permission, admin-consented)',
+};
+
+export interface InvitedGuest {
+  /** Object id of the created/looked-up guest user in THIS tenant. */
+  invitedUserId?: string;
+  /** The redemption URL the guest follows to accept. */
+  inviteRedeemUrl?: string;
+  /** Invitation status (PendingAcceptance / Accepted / …). */
+  status?: string;
+  /** The foreign email that was invited. */
+  email: string;
+}
+
+/**
+ * Send a B2B invitation to a foreign-tenant user. `redirectUrl` is where the
+ * guest lands after redeeming (the Loom recipient view). `sendInvitationMessage`
+ * defaults to false (Loom surfaces the redeem URL itself). Returns the created
+ * guest's object id (used as the ADLS grant principal) + the redeem URL.
+ *
+ * Throws GraphIdentityError(403) when User.Invite.All is not consented — the
+ * caller MUST surface this honestly (no-vaporware.md), not fake a guest.
+ */
+export async function inviteExternalGuest(opts: {
+  email: string;
+  redirectUrl: string;
+  displayName?: string;
+  sendInvitationMessage?: boolean;
+}): Promise<InvitedGuest> {
+  const endpoint = '/invitations';
+  const res = await graphFetch(endpoint, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      invitedUserEmailAddress: opts.email,
+      inviteRedirectUrl: opts.redirectUrl,
+      ...(opts.displayName ? { invitedUserDisplayName: opts.displayName } : {}),
+      sendInvitationMessage: opts.sendInvitationMessage === true,
+    }),
+  });
+  const j = await readJson<any>(res, endpoint);
+  return {
+    invitedUserId: j?.invitedUser?.id,
+    inviteRedeemUrl: j?.inviteRedeemUrl,
+    status: j?.status,
+    email: opts.email,
+  };
+}
+
+/**
+ * Look up an existing guest user in THIS tenant by their foreign email (guests
+ * are stored with mail == the invited address, and a `#EXT#` userPrincipalName).
+ * Used to make external sharing idempotent — if the guest already exists we
+ * reuse them instead of re-inviting. Returns null when not found.
+ */
+export async function findGuestByEmail(email: string): Promise<IdentityHit | null> {
+  const phrase = searchPhrase(email);
+  if (!phrase) return null;
+  const endpoint =
+    `/users?$filter=${encodeURIComponent(`mail eq '${escapeSqlLiteral(phrase)}'`)}` +
+    `&$select=id,displayName,userPrincipalName,mail,userType&$top=1`;
+  const res = await graphFetch(endpoint);
+  const j = await readJson<{ value?: any[] }>(res, endpoint);
+  const u = (j?.value || [])[0];
+  if (!u) return null;
+  return { id: u.id, type: 'user', displayName: u.displayName || email, upn: u.userPrincipalName, mail: u.mail };
+}
+
 // Test-only: expose internal helpers for unit tests.
 export const __testing = {
   notConfiguredHint,

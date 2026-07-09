@@ -24,7 +24,8 @@ import {
   Persona, Spinner, Tab, TabList, Divider, Caption1,
   makeStyles, tokens,
 } from '@fluentui/react-components';
-import { Search16Regular, ShieldKeyholeRegular } from '@fluentui/react-icons';
+import { Search16Regular, ShieldKeyholeRegular, People16Regular, Globe16Regular } from '@fluentui/react-icons';
+import { ExternalSharePanel } from './external-share-panel';
 
 export type PrincipalKind = 'user' | 'group';
 
@@ -114,6 +115,7 @@ export function ShareItemDialog({
   onClose, onGranted,
 }: ShareItemDialogProps) {
   const styles = useStyles();
+  const [scope, setScope] = useState<'internal' | 'external'>('internal');
   const [step, setStep] = useState<1 | 2>(1);
   const [kind, setKind] = useState<PrincipalKind>('user');
   const [q, setQ] = useState('');
@@ -129,6 +131,7 @@ export function ShareItemDialog({
   // Reset on (re)open.
   useEffect(() => {
     if (open) {
+      setScope('internal');
       setStep(1); setSelected(null); setQ(''); setHits([]); setError(null);
       setChecked(new Set(['Read']));
     }
@@ -193,6 +196,15 @@ export function ShareItemDialog({
         <DialogBody>
           <DialogTitle>Grant people access</DialogTitle>
           <DialogContent>
+            <TabList selectedValue={scope} onTabSelect={(_e, d) => setScope(d.value as 'internal' | 'external')}>
+              <Tab value="internal" icon={<People16Regular />}>People in your org</Tab>
+              <Tab value="external" icon={<Globe16Regular />}>External tenant</Tab>
+            </TabList>
+
+            {scope === 'external' ? (
+              <ExternalSharePanel itemId={itemId} itemType={itemType} hasStoragePath={hasStoragePath} />
+            ) : (
+            <>
             {dlpRestricted && (
               <MessageBar intent="warning" icon={<ShieldKeyholeRegular />}>
                 <MessageBarBody>
@@ -299,20 +311,24 @@ export function ShareItemDialog({
                 </Caption1>
               </>
             )}
+            </>
+            )}
           </DialogContent>
           <DialogActions>
             <DialogTrigger disableButtonEnhancement>
-              <Button appearance="secondary" onClick={onClose}>Cancel</Button>
+              <Button appearance="secondary" onClick={onClose}>{scope === 'external' ? 'Close' : 'Cancel'}</Button>
             </DialogTrigger>
-            {step === 1 ? (
-              <Button appearance="primary" disabled={!selected} onClick={() => setStep(2)}>Next</Button>
-            ) : (
-              <>
-                <Button appearance="secondary" onClick={() => setStep(1)}>Back</Button>
-                <Button appearance="primary" disabled={saving} onClick={grant}>
-                  {saving ? 'Granting…' : 'Grant'}
-                </Button>
-              </>
+            {scope === 'internal' && (
+              step === 1 ? (
+                <Button appearance="primary" disabled={!selected} onClick={() => setStep(2)}>Next</Button>
+              ) : (
+                <>
+                  <Button appearance="secondary" onClick={() => setStep(1)}>Back</Button>
+                  <Button appearance="primary" disabled={saving} onClick={grant}>
+                    {saving ? 'Granting…' : 'Grant'}
+                  </Button>
+                </>
+              )
             )}
           </DialogActions>
         </DialogBody>

@@ -71,6 +71,7 @@ let _scorecardGoals: Container | null = null;
 let _scorecardCheckins: Container | null = null;
 let _governanceDomains: Container | null = null;
 let _itemPermissions: Container | null = null;
+let _externalShares: Container | null = null;
 let _wsRoles: Container | null = null;
 let _labelAssignments: Container | null = null;
 // F16 — Access-request approval workflow (manager → privacy → approver →
@@ -659,6 +660,15 @@ async function ensure() {
   // truth for the "Manage permissions" list. Created lazily so a fresh
   // environment needs no extra ARM/Bicep step beyond the account+database.
   _itemPermissions = await mk('item-permissions', '/itemId');
+  // External (cross-tenant) data shares (FGC-30) — one row per external share
+  // of a Loom item to a foreign Entra tenant guest, partitioned by the SOURCE
+  // item id so every per-item "who have I shared this with externally" lookup is
+  // a single-partition read. Records the target tenant/UPN, the shared folder/
+  // table subset, read-only flag, expiry, and lifecycle state (pending →
+  // accepted → revoked/expired). The Azure-native grant (Entra B2B guest +
+  // scoped ADLS POSIX ACL on just the shared path) is applied by the
+  // external-share-client; Cosmos is the source of truth for the share list.
+  _externalShares = await mk('external-shares', '/sourceItemId');
   // Workspace roles (F5 — Manage Access) — Azure-native workspace RBAC mirror.
   // One row per principal (user / group / SP) per workspace, partitioned by the
   // workspace so the Manage Access pane hits a single physical partition. Keyed
@@ -843,6 +853,7 @@ export async function postureAggregatesAdminContainer(): Promise<Container> { aw
 export async function recommendedActionsAdminContainer(): Promise<Container> { await ensure(); return _recommendedActionsAdmin!; }
 export async function onelakeSecurityRolesContainer(): Promise<Container> { await ensure(); return _onelakeSecurityRoles!; }
 export async function itemPermissionsContainer(): Promise<Container> { await ensure(); return _itemPermissions!; }
+export async function externalSharesContainer(): Promise<Container> { await ensure(); return _externalShares!; }
 export async function workspaceRolesContainer(): Promise<Container> { await ensure(); return _wsRoles!; }
 export async function governanceDomainsContainer(): Promise<Container> { await ensure(); return _governanceDomains!; }
 export async function labelAssignmentsContainer(): Promise<Container> { await ensure(); return _labelAssignments!; }
@@ -1038,7 +1049,7 @@ const KNOWN_CONTAINER_IDS = [
   'posture-aggregates', 'recommended-actions',
   'posture-aggregates-admin', 'recommended-actions-admin',
   'onelake-security-roles',
-  'item-permissions', 'workspace-roles', 'governance-domains', 'label-assignments',
+  'item-permissions', 'external-shares', 'workspace-roles', 'governance-domains', 'label-assignments',
   'dataproducts', 'dataproduct-jobs', 'access-requests',
   'attribute-groups', 'okrs',
   'scorecard-goals', 'scorecard-checkins',

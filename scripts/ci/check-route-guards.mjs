@@ -143,6 +143,16 @@ const ALLOWLIST = new Map([
   // per-tenant Cosmos resource is read/written — auth = signed-in + Console-UAMI
   // RBAC, exactly like the content-safety BFF routes.
   ['apps/fiab-console/app/api/items/ai-enrich/[service]/preview/route.ts', 'stateless cognitive-services sample probe resolved by [service]; no per-tenant Cosmos data'],
+  // External (cross-tenant) data sharing (FGC-30). Each route IS scoped to the
+  // caller, but via tenantScopeId(session)/email-match rather than a signal the
+  // heuristic recognizes: `received` lists ONLY shares whose targetEmail == the
+  // caller's own email (self endpoint, no id from the URL); `[id]` GET/DELETE
+  // load the share then reject unless share.tenantId === tenantScopeId(session);
+  // `[id]/accept` rejects unless the caller's own email === share.targetEmail
+  // (only the addressed guest may accept). No cross-tenant hole.
+  ['apps/fiab-console/app/api/external-shares/received/route.ts', 'recipient self-endpoint: returns only shares addressed to the caller\'s own email'],
+  ['apps/fiab-console/app/api/external-shares/[id]/route.ts', 'GET/DELETE verify share.tenantId === tenantScopeId(session) before returning/revoking'],
+  ['apps/fiab-console/app/api/external-shares/[id]/accept/route.ts', 'accept verifies caller email === share.targetEmail (only the addressed guest may accept)'],
   // Loom App Runtime (DBX-1) type-level config: returns the fixed runtime-template
   // catalog (static) + the deployment-wide Container Apps/ACR infra status. No
   // per-tenant Cosmos resource — auth = signed-in + deployment RBAC. The per-item
@@ -199,6 +209,7 @@ const SHARED_BACKEND_ITEM_ROUTES = [
   'apps/fiab-console/app/api/items/azure-sql-database/[id]/query/cancel/route.ts',
   'apps/fiab-console/app/api/items/azure-sql-database/[id]/query/route.ts',
   'apps/fiab-console/app/api/items/azure-sql-database/[id]/replication/route.ts',
+  'apps/fiab-console/app/api/items/azure-sql-database/[id]/restore/route.ts',
   'apps/fiab-console/app/api/items/azure-sql-database/[id]/scale/route.ts',
   'apps/fiab-console/app/api/items/azure-sql-database/[id]/search-management/route.ts',
   'apps/fiab-console/app/api/items/azure-sql-database/[id]/share/route.ts',
