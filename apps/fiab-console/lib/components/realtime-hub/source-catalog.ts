@@ -14,6 +14,7 @@
  */
 
 import type { RthSourceType } from '@/lib/azure/fabric-client';
+import { sampleStreamOptions } from './sample-streams';
 
 export type SourceCategory =
   | 'Microsoft sources'
@@ -108,6 +109,12 @@ export interface SourceConnector {
   sourceType: RthSourceType;
   description: string;
   preview?: boolean;
+  /** Honest infra-gate note (FGC-14): when this connector needs Azure
+   *  infrastructure that may not be deployed (Debezium-on-ACA for Mongo/Oracle
+   *  CDC, a public-weather Function), name the exact resource to provision. The
+   *  connect dialog surfaces it as a warning MessageBar; the eventstream item is
+   *  still created, but events only flow once the infra exists. */
+  infraNote?: string;
   /** Connection fields → eventstream source `properties`. Empty = no extra config (e.g. SampleData, Fabric/Azure events). */
   fields: SourceField[];
 }
@@ -255,6 +262,44 @@ export const SOURCE_CONNECTORS: SourceConnector[] = [
       },
     ],
   },
+  {
+    id: 'mongodb-cdc',
+    name: 'MongoDB Database CDC',
+    category: 'Database CDC',
+    sourceType: 'MongoDBCDC',
+    description: 'Stream inserts/updates/deletes from a MongoDB collection change stream.',
+    preview: true,
+    infraNote:
+      'Azure has no managed MongoDB CDC service. Loom captures the change stream with Debezium running on Azure Container Apps and lands events in Event Hubs. Deploy the Debezium connector (platform/fiab/bicep/modules/streaming/debezium-aca.bicep) and set the connection below.',
+    fields: [
+      { key: 'databaseName', label: 'Database', required: true, placeholder: 'inventory' },
+      { key: 'collectionName', label: 'Collection', required: true, placeholder: 'orders' },
+      {
+        key: 'dataConnectionId', label: 'Connection', kind: 'resource-select',
+        help: 'A Loom connection to the MongoDB server (or Cosmos DB for MongoDB). None? Add one under Connections.',
+        source: { optionsKind: 'connections' },
+      },
+    ],
+  },
+  {
+    id: 'oracle-cdc',
+    name: 'Oracle Database CDC',
+    category: 'Database CDC',
+    sourceType: 'OracleDBCDC',
+    description: 'Stream changes from an Oracle Database (LogMiner-based capture).',
+    preview: true,
+    infraNote:
+      'Azure has no managed Oracle CDC service. Loom captures Oracle redo via Debezium (LogMiner) on Azure Container Apps into Event Hubs — GoldenGate is an alternative. Deploy the Debezium connector (platform/fiab/bicep/modules/streaming/debezium-aca.bicep) and set the connection below.',
+    fields: [
+      { key: 'schemaName', label: 'Schema', required: true, placeholder: 'SALES' },
+      { key: 'tableName', label: 'Table', required: true, placeholder: 'ORDERS' },
+      {
+        key: 'dataConnectionId', label: 'Connection', kind: 'resource-select',
+        help: 'A Loom connection to the Oracle Database. None? Add one under Connections.',
+        source: { optionsKind: 'connections' },
+      },
+    ],
+  },
   // ---- External streams -------------------------------------------------
   {
     id: 'apache-kafka',
@@ -370,6 +415,72 @@ export const SOURCE_CONNECTORS: SourceConnector[] = [
       },
     ],
   },
+  {
+    id: 'http-source',
+    name: 'HTTP',
+    category: 'External streams',
+    sourceType: 'Http',
+    description: 'Ingest events over HTTP — poll a REST endpoint on a schedule, or receive pushed events at a Loom webhook.',
+    preview: true,
+    infraNote:
+      'The Loom-native HTTP ingester forwards received/polled events to an Event Hub via /api/realtime-hub/http-source. Set LOOM_EVENTHUBS_NAMESPACE and grant the Console UAMI "Azure Event Hubs Data Sender" so events can land.',
+    fields: [
+      {
+        key: 'mode', label: 'Mode', kind: 'select', defaultValue: 'webhook',
+        help: 'Webhook: your app POSTs events to a Loom URL. Poll: Loom GETs a URL on a schedule.',
+        options: [
+          { value: 'webhook', label: 'Webhook (push to Loom)' },
+          { value: 'poll', label: 'Poll (Loom GETs a URL)' },
+        ],
+      },
+      { key: 'url', label: 'Endpoint URL (poll mode)', placeholder: 'https://api.example.com/events', help: 'The REST endpoint Loom polls in poll mode (leave blank for webhook).' },
+      {
+        key: 'pollSeconds', label: 'Poll interval (seconds)', kind: 'select', defaultValue: '60',
+        options: [{ value: '30', label: '30s' }, { value: '60', label: '60s' }, { value: '300', label: '5m' }, { value: '900', label: '15m' }],
+        help: 'How often Loom polls the endpoint in poll mode.',
+      },
+      { key: 'eventHubName', label: 'Target event hub', required: true, placeholder: 'http-ingest', help: 'The Event Hub that received events land in.' },
+    ],
+  },
+  {
+    id: 'solace-pubsub',
+    name: 'Solace PubSub+',
+    category: 'External streams',
+    sourceType: 'SolacePubSub',
+    description: 'Ingest from a Solace PubSub+ event broker over AMQP/MQTT with TLS/mTLS.',
+    preview: true,
+    fields: [
+      { key: 'brokerUrl', label: 'Broker URL', required: true, placeholder: 'amqps://broker.solace.cloud:5671', help: 'Supported protocols: amqps://, ssl://, wss://.' },
+      { key: 'queueOrTopic', label: 'Queue / topic', required: true, placeholder: 'events/orders' },
+      { key: 'username', label: 'Username', placeholder: 'solace-user' },
+      { key: 'password', label: 'Password', kind: 'password', help: 'Broker password. Stored in Key Vault — never in Cosmos or the browser.' },
+      {
+        key: 'useMtls', label: 'Use TLS/mTLS settings', kind: 'toggle', section: 'TLS / mTLS settings',
+        help: 'Enable for brokers with a custom CA or that require client-certificate (mutual TLS) authentication.',
+      },
+      { key: 'caCertName', label: 'Trust CA certificate', kind: 'cert', showWhen: 'useMtls', section: 'TLS / mTLS settings', help: 'Server CA certificate (Key Vault certificate object, PEM).' },
+      { key: 'clientCertName', label: 'Client certificate and key', kind: 'cert', showWhen: 'useMtls', section: 'TLS / mTLS settings', help: 'Client certificate + private key (Key Vault certificate object) for mutual-TLS auth.' },
+    ],
+  },
+  {
+    id: 'realtime-weather',
+    name: 'Real-time weather',
+    category: 'External streams',
+    sourceType: 'RealTimeWeather',
+    description: 'Stream current conditions for a location from a public weather API on a schedule.',
+    preview: true,
+    infraNote:
+      'Backed by a scheduled Azure Function pulling a public weather API into an Event Hub (OSS / public-API — no paid Azure weather service). Deploy the weather Function (platform/fiab/bicep/modules/streaming/weather-function.bicep). Gov deployments must allow the public weather-API egress.',
+    fields: [
+      { key: 'location', label: 'Location', required: true, placeholder: 'Seattle, WA or 47.6,-122.3', help: 'City name or lat,long the weather is polled for.' },
+      {
+        key: 'pollMinutes', label: 'Poll interval', kind: 'select', defaultValue: '10',
+        options: [{ value: '5', label: '5m' }, { value: '10', label: '10m' }, { value: '30', label: '30m' }, { value: '60', label: '1h' }],
+        help: 'How often current conditions are pulled.',
+      },
+      { key: 'eventHubName', label: 'Target event hub', required: true, placeholder: 'weather', help: 'The Event Hub that weather observations land in.' },
+    ],
+  },
   // ---- Fabric events ----------------------------------------------------
   {
     id: 'fabric-workspace-item-events',
@@ -456,9 +567,13 @@ export const SOURCE_CONNECTORS: SourceConnector[] = [
     name: 'Sample data',
     category: 'Sample',
     sourceType: 'SampleData',
-    description: 'Built-in sample stream (Bicycles / Yellow Taxi / Stock market) — no connection required.',
+    description: 'Built-in sample stream — pick a curated dataset and Loom emits a live stream. No connection required.',
     fields: [
-      { key: 'sampleType', label: 'Sample', placeholder: 'YellowTaxi | Bicycles | StockMarket' },
+      {
+        key: 'sampleType', label: 'Sample stream', required: true, kind: 'select', defaultValue: 'YellowTaxi',
+        help: 'A curated Loom sample stream (Fabric parity). Loom generates live events matching the dataset schema.',
+        options: sampleStreamOptions(),
+      },
     ],
   },
 ];
@@ -478,6 +593,7 @@ import {
   Storage20Regular, Box20Regular, Branch20Regular, Stream20Regular,
   Briefcase20Regular, DocumentTable20Regular, Gauge20Regular,
   BeakerSettings20Regular, PlugConnected20Regular,
+  Globe20Regular, WeatherPartlyCloudyDay20Regular, ArrowRouting20Regular,
 } from '@fluentui/react-icons';
 
 export interface SourceVisual { icon: FluentIcon; color: string; }
@@ -501,6 +617,11 @@ const SOURCE_ICONS: Partial<Record<RthSourceType, FluentIcon>> = {
   AzureCosmosDBCDC:                Box20Regular,
   PostgreSQLCDC:                   Database20Regular,
   MySQLCDC:                        Database20Regular,
+  MongoDBCDC:                      Box20Regular,
+  OracleDBCDC:                     DatabasePlugConnected20Regular,
+  Http:                            Globe20Regular,
+  SolacePubSub:                    ArrowRouting20Regular,
+  RealTimeWeather:                 WeatherPartlyCloudyDay20Regular,
   AzureBlobStorageEvents:          Storage20Regular,
   AzureEventGridCustomTopic:       CloudArrowUp20Regular,
   AmazonKinesis:                   Stream20Regular,
