@@ -128,10 +128,29 @@ function assertName(name: string, what: string): string {
 // let one expression escape its statement / the `$$` block.
 const EXPR_FORBIDDEN = /(;|\$\$|--|\/\*|\*\/)/;
 
+// Positive allowlist for the whole free-text expression: the exact character
+// set a scalar SQL expression needs — identifiers, numbers, whitespace,
+// string/quoted-identifier delimiters (' " [ ] `), arithmetic/comparison
+// operators, parentheses, dotted/comma-separated argument lists, `|` (concat /
+// bitwise), and `:` (`::` casts). This is an anchored, full-string allowlist:
+// nothing outside the set can appear, so backslash escapes, `@`/`#` variables,
+// `{}` blocks, `$` and control characters are all rejected. It is the primary
+// SQL-injection barrier for the executed GROUP BY SELECT (the free-text
+// expression is the only value inlined rather than identifier-quoted/bound);
+// the EXPR_FORBIDDEN blocklist above still rejects the `--` / `/* */` / `;` /
+// `$$` multi-char breakout sequences that this class would otherwise permit.
+const EXPR_ALLOWED = /^[A-Za-z0-9_ \t\r\n.,()'"[\]`+\-*/%<>=!|:]+$/;
+
 function assertExpr(expr: string, what: string): string {
   const s = String(expr ?? '').trim();
   if (!s) throw new MetricBuildError(`${what} expression is required`);
   if (s.length > 4000) throw new MetricBuildError(`${what} expression is too long (>4000)`);
+  if (!EXPR_ALLOWED.test(s)) {
+    throw new MetricBuildError(
+      `${what} expression contains characters outside the allowed set ` +
+        `(letters, digits, _ . , ( ) ' " [ ] \` + - * / % < > = ! | : and whitespace)`,
+    );
+  }
   if (EXPR_FORBIDDEN.test(s)) {
     throw new MetricBuildError(
       `${what} expression may not contain ';', '$$', or SQL comment markers`,

@@ -70,7 +70,26 @@ describe('compileMetricViewSelect (Azure-native default)', () => {
   it('rejects an injection attempt in a measure expression', () => {
     expect(() => compileMetricViewSelect({
       source: 'orders', dimensions: [], measures: [{ name: 'x', aggregation: 'SUM', expr: 'a); DROP TABLE t; --' }],
-    })).toThrow(/';'|comment/);
+    })).toThrow(/';'|comment|allowed set/);
+  });
+
+  it('rejects expression characters outside the allowlist (backslash, @@, braces)', () => {
+    for (const expr of ['name = @@version', 'val\\bad', 'SUM({a})', 'x $ y']) {
+      expect(() => compileMetricViewSelect({
+        source: 'orders', dimensions: [], measures: [{ name: 'm', aggregation: 'CUSTOM', expr }],
+      })).toThrow(MetricBuildError);
+    }
+  });
+
+  it('accepts a real quoted/aggregate expression through the allowlist', () => {
+    const sql = compileMetricViewSelect({
+      source: 'orders',
+      dimensions: [{ name: 'order_month', expr: "DATE_TRUNC('MONTH', o_orderdate)" }],
+      measures: [{ name: 'rev_per_cust', aggregation: 'CUSTOM', expr: 'SUM(o_totalprice) / COUNT(DISTINCT o_custkey)' }],
+      filter: "o_orderstatus <> 'X'",
+    });
+    expect(sql).toContain("DATE_TRUNC('MONTH', o_orderdate)");
+    expect(sql).toContain("WHERE o_orderstatus <> 'X'");
   });
 
   it('rejects a bad measure name (would become an alias)', () => {
