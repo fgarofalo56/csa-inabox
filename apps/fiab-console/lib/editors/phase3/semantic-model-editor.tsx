@@ -30,7 +30,7 @@ import {
 import {
   Database20Regular, Play20Regular, Save20Regular, Add20Regular, Delete20Regular,
   ArrowSync20Regular, Table20Regular, DatabaseLink20Regular,
-  Sparkle16Regular, Wrench16Regular, Eye20Regular, Sparkle20Regular,
+  Sparkle16Regular, Wrench16Regular, Eye20Regular, Sparkle20Regular,
 } from '@fluentui/react-icons';
 import { PbiModelViewPanel } from '../components/pbi-model-view-panel';
 import { ModelTabsExtra } from '../components/model-tabs-extra';
@@ -45,6 +45,7 @@ import { OpenInPbiDesktopButton } from '../components/open-in-pbi-desktop-button
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
+import { DaxQueryView } from '../components/dax-query-view';
 import { PowerQueryHost } from '@/lib/components/pipeline/dataflow/power-query-host';
 import { parseSharedQueries, setQueryBody } from '@/lib/components/pipeline/dataflow/m-script';
 import { usePowerBiWorkspaces, WorkspacePicker } from './workspace-picker';
@@ -1074,7 +1075,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
   const [refreshing, setRefreshing] = useState(false);
   const [refreshErr, setRefreshErr] = useState<string | null>(null);
   const [relationships, setRelationships] = useState<Array<{ name?: string; fromTable?: string; fromColumn?: string; toTable?: string; toColumn?: string; crossFilteringBehavior?: string }>>([]);
-  const [tab, setTab] = useState<'tables' | 'relationships' | 'model' | 'modeling' | 'measures' | 'build' | 'aggregations' | 'refresh' | 'incremental' | 'config' | 'direct-lake' | 'direct-lake-query' | 'security' | 'access' | 'governance' | 'embed' | 'calcGroups' | 'fieldParams' | 'datasource' | 'copilot'>('tables');
+  const [tab, setTab] = useState<'tables' | 'relationships' | 'model' | 'modeling' | 'measures' | 'daxquery' | 'build' | 'aggregations' | 'refresh' | 'incremental' | 'config' | 'direct-lake' | 'direct-lake-query' | 'security' | 'access' | 'governance' | 'embed' | 'calcGroups' | 'fieldParams' | 'datasource' | 'copilot'>('tables');
   // --- Calculation groups + field parameters (calc-group / field-param editor)
   // Loom-native by default: saved to the item's Cosmos content + emitted in TMSL
   // at provision time. AAS / Fabric backends persist to a live model (opt-in).
@@ -2362,7 +2363,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
               </div>
             )}
           </div>
-          {(datasetId || tab === 'build' || tab === 'copilot') && (
+          {(datasetId || tab === 'build' || tab === 'copilot' || tab === 'daxquery') && (
             <>
               <div className={s.tabBar}>
                 <TabList selectedValue={tab} onTabSelect={(_: unknown, d: any) => setTab(d.value as any)}>
@@ -2371,6 +2372,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                   <Tab value="model">Model view</Tab>
                   <Tab value="modeling" icon={<Table20Regular />}>Modeling</Tab>
                   <Tab value="measures">Measures (DAX)</Tab>
+                  <Tab value="daxquery" icon={<Play20Regular />}>DAX query</Tab>
                   <Tab value="copilot" icon={<Sparkle20Regular />}>Copilot (structure)</Tab>
                   <Tab value="calcGroups">Calc groups ({calcGroups.length})</Tab>
                   <Tab value="fieldParams">Field parameters ({fieldParams.length})</Tab>
@@ -3478,6 +3480,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                     </MessageBarBody>
                   </MessageBar>
                 )}
+                {tab === 'daxquery' && <DaxQueryView id={id} tables={(detail?.tables || []).map((t) => ({ name: t.name, columns: (t.columns || []).map((c) => ({ name: c.name, dataType: c.dataType })) }))} />}
                 {tab === 'copilot' && <SemanticModelCopilotPane id={id} />}
                 {tab === 'calcGroups' && (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS}}>
