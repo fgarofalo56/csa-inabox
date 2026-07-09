@@ -646,3 +646,71 @@ spend.
 With this program folded in, the master plan grows to **34 waves** (20 feature + 14 UX) and **~314 scheduled
 items** (~133 feature + 181 UX), the UX waves running interleaved so every feature surface ships **at or above
 the Fabric baseline** per the standing operator directive.
+
+---
+
+## Addendum (2026-07-09, post-plan): Performance, scale & reliability parity (PSR-1…20)
+
+`PRP-performance-scale-parity.md` (this folder) is the **honest performance/scale/reliability pillar** —
+outcome-equivalence (the numbers users feel) where Fabric's mechanisms are proprietary, proven by a
+**repeatable benchmark harness** rather than a marketing adjective. Under `no-vaporware.md`, for this pillar
+**the measured benchmark number IS the receipt.** Code-grounded honest baseline: Synapse Livy notebook cold
+start **2-4 min** (vs Fabric starter pools ~5-10s) with the warm pool shipping **DEFAULT OFF** and
+per-replica (`spark-session-pool.ts` 4-11/29-30/45-48); semantic queries can't claim Direct Lake (F-SKU,
+`aas-client.ts:885`) so ship the result-cache "pragmatic 80%"; Cosmos **Serverless** (5,000 RU/s/partition,
+no latency SLA) chosen to dodge the 25-container cap; ACA console min2/max6 @ 50-concurrent/replica (~300
+concurrent ceiling); **no formal SLOs and no load-test artifacts** in the repo. Die-hard posture: **default-ON,
+opt-out; cost bounded by scale-to-zero / idle-stop — never a gate.** Tag legend adds source `PSR`.
+
+**Dedupe — PSR items that RIDE existing plan items (reference, do NOT rebuild):**
+- **PSR-18** blue-green console rolls → rides **BR-BLUEGREEN** (Wave 15); PSR-18 adds only the
+  canary + error-budget cutover gate + auto-rollback glue.
+- **PSR-19** control-plane DR active-passive → rides **BR-CONTROLPLANE-DR** (Wave 18); PSR-19 adds only the
+  measured RTO/RPO failover drill that replaces the DR doc's "Hours, gated on opt-ins" prose with a number.
+- **PSR-20** chaos experiments → rides **SVC-11** Chaos Studio (Wave 17); PSR-20 adds only benchmark-under-fault.
+- **PSR-3/PSR-4** warm Spark/compute pools → the **default-ON + cross-replica** companions to **FGC-10**
+  (high-concurrency Spark pooling) / **FGC-09** (NEE honest-gate + Photon opt-in). Coordinate, don't fork.
+
+**Dependency ordering (governs the slotting):** **PSR-1** (benchmark harness) is the keystone — every other
+PSR item's acceptance is a PSR-1 measured delta, so it lands first. **PSR-2** (CI perf gate) needs PSR-1's
+`perf-benchmarks` store. **PSR-14** (load tests) feeds **PSR-11** (ACA autoscale tuning). **PSR-16** (SLOs)
+consumes PSR-1 baselines; **PSR-17** (canary) feeds PSR-16 alerts; **PSR-18** gates on PSR-16+PSR-17.
+
+**Recommended slotting:**
+
+- **New Wave PSR-A — Benchmark harness** *(P0 foundation; next-UX-wave companion, before any speed work)*:
+  **PSR-1** repeatable perf suite + `/admin/performance` page + persisted trend `[PSR, P0, L]` ·
+  **PSR-2** CI perf gate + per-roll regression budget `[PSR, P0, M]`. *Operator action:* `perf-benchmarks`
+  Cosmos container (`createIfNotExists`); optional `LoomPerf_CL` Log Analytics DCR/table.
+- **New Wave PSR-B — Speed closures** *(its own wave; each acceptance = a PSR-1 delta)*:
+  **PSR-3** warm Spark pool DEFAULT-ON + cross-replica lease store `[PSR, P0, L]` · **PSR-4** Databricks
+  serverless / AML CI warm fast-path `[PSR, P1, M]` · **PSR-5** AAS warm-cache + result-cache tuning
+  (Direct-Lake outcome-equivalent) `[PSR, P1, M]` · **PSR-6** ADX result-cache + client cache headers +
+  row-cap paging `[PSR, P1, M]` · **PSR-7** dashboard tile parallelization + skeletons + SWR `[PSR, P1, S]` ·
+  **PSR-8** Copilot turn SLO + streaming-first budget + router tuning `[PSR, P2, M]` · **PSR-9** Next.js
+  route-level code-splitting / TTI budget for heavy editors `[PSR, P1, L]`. *Operator action:* `spark-warm-leases`
+  Cosmos container; Synapse pool auto-pause + AML CI idle-shutdown defaults confirmed (warm resting cost ~$0).
+- **Scale closures — interleave with Waves 15-16:**
+  **PSR-10** Cosmos RU/partition autoscale advisory + cross-partition audit `[PSR, P1, L]` · **PSR-11** ACA
+  autoscale HTTP-concurrency tuning + KEDA per-workload rules `[PSR, P1, M]` (consumes PSR-14) · **PSR-12**
+  Front Door static/immutable caching rules `[PSR, P2, S]` · **PSR-13** session-store hardening + silent-refresh
+  latency budget `[PSR, P2, S]` · **PSR-14** concurrent-user load tests (Azure Load Testing / k6) `[PSR, P1, L]`
+  (ties to SVC-11) · **PSR-15** quota preflight advisor `[PSR, P1, M]`. *Operator action:* optional Azure Load
+  Testing resource (k6-in-CI fallback where not GA in Gov); Front Door rules-engine caching rule.
+- **Reliability — interleave with Waves 15-18:**
+  **PSR-16** SLO definitions + burn-rate alerts (dogfood) `[PSR, P1, M]` · **PSR-17** synthetic probes — UAT
+  harness as continuous canary `[PSR, P1, M]` (rides PR #1549) · **PSR-18** blue-green rolls **(REF BR-BLUEGREEN,
+  W15)** `[PSR, P2, REF]` · **PSR-19** control-plane DR active-passive **(REF BR-CONTROLPLANE-DR, W18)**
+  `[PSR, P2, REF]` · **PSR-20** chaos experiments **(REF SVC-11, W17)** `[PSR, P3, REF]`. *Operator action:*
+  Azure Monitor burn-rate alert rules + action group (PSR-16); scheduled ACA Job for the PSR-17 canary; the
+  three REF items carry no new infra.
+
+**Honest non-goals (§4 of the PRP — do NOT chase mechanism-parity, ship the outcome-equivalent):** OneLake
+substrate → ADLS Gen2 + Delta; Direct Lake engine internals → AAS/Serverless + result-cache (never claim the
+mechanism); CU smoothing/bursting → admission control + KEDA + scale-to-zero; hyperscale multi-tenancy →
+per-estate measured/surfaced ceilings; Native Execution Engine → Photon-opt-in (FGC-09) + Synapse tuning. The
+perf page shows the Fabric reference line vs the measured number — the honest gap, never a fabricated claim.
+
+This raises the plan to **22 waves** (20 existing + PSR-A + PSR-B) and **~150 scheduled items** (~133 + 17 PSR,
+with 3 PSR items — PSR-18/19/20 — riding BR-BLUEGREEN / BR-CONTROLPLANE-DR / SVC-11 as reference glue, not
+net-new builds).
