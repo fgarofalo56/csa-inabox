@@ -127,9 +127,18 @@ interface ActivatorLite {
 interface RuleLite {
   id: string; name: string;
   objectName?: string; propertyName?: string;
-  condition?: { operator?: string; value?: unknown };
+  condition?: { operator?: string; value?: unknown; property?: string };
   action?: { kind?: string; config?: Record<string, unknown> };
   state?: string; lastTriggered?: string;
+  // Trigger-model depth (FGC-13).
+  ruleKind?: 'event' | 'split-event' | 'property';
+  objectKey?: string;
+  propertyConditionType?: 'becomes' | 'increases-by' | 'decreases-by' | 'exits-range' | 'no-data-for';
+  changePercent?: number;
+  rangeMin?: number;
+  rangeMax?: number;
+  noDataMinutes?: number;
+  timestampColumn?: string;
   // Azure Monitor (default) fields — MonitorRuleRecord shape.
   query?: string;
   severity?: number;
@@ -203,6 +212,17 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
   const [condProperty, setCondProperty] = useState('');
   const [condOperator, setCondOperator] = useState('GreaterThan');
   const [condValue, setCondValue] = useState('20');
+  // Trigger-model depth (FGC-13): rule kind + per-object grouping + stateful
+  // property change-detection. All dropdowns/inputs (no JSON) — honors
+  // loom_no_freeform_config.
+  const [ruleKind, setRuleKind] = useState<'event' | 'split-event' | 'property'>('event');
+  const [objectKey, setObjectKey] = useState('');
+  const [propConditionType, setPropConditionType] = useState<'becomes' | 'increases-by' | 'decreases-by' | 'exits-range' | 'no-data-for'>('becomes');
+  const [changePercent, setChangePercent] = useState('10');
+  const [rangeMin, setRangeMin] = useState('0');
+  const [rangeMax, setRangeMax] = useState('100');
+  const [noDataMinutes, setNoDataMinutes] = useState('5');
+  const [timestampColumn, setTimestampColumn] = useState('');
   const [actKind, setActKind] = useState<'TeamsMessage' | 'Email' | 'Webhook' | 'SMS' | 'LogicApp' | 'AdfPipelineRun' | 'NotebookRun' | 'PowerAutomateFlow'>('TeamsMessage');
   const [actTarget, setActTarget] = useState('');
   const [actMessage, setActMessage] = useState('Loom alert: {{eventValue}}');
@@ -389,6 +409,27 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
       windowSize: winSize,
       ...(useExistingAg && existingAgId ? { existingActionGroupId: existingAgId } : {}),
     };
+    // Trigger-model depth (FGC-13). Only sent when authoring a non-Event rule via
+    // the condition builder (a verbatim KQL query supersedes the trigger model).
+    const usingConditionBuilder = !((sourceType === 'adx' || sourceType === 'kql') && kqlQuery.trim());
+    if (usingConditionBuilder && ruleKind !== 'event') {
+      body.ruleKind = ruleKind;
+      if (objectKey.trim()) body.objectKey = objectKey.trim();
+      if (timestampColumn.trim()) body.timestampColumn = timestampColumn.trim();
+      if (ruleKind === 'property') {
+        body.propertyConditionType = propConditionType;
+        if (propConditionType === 'increases-by' || propConditionType === 'decreases-by') {
+          body.changePercent = Number(changePercent) || 0;
+        } else if (propConditionType === 'exits-range') {
+          body.rangeMin = Number(rangeMin) || 0;
+          body.rangeMax = Number(rangeMax) || 0;
+        } else if (propConditionType === 'no-data-for') {
+          body.noDataMinutes = Number(noDataMinutes) || 0;
+        }
+      }
+    } else if (usingConditionBuilder && ruleKind === 'event') {
+      body.ruleKind = 'event';
+    }
     if (sourceType === 'adx') {
       body.sourceKind = 'adx';
       if (adxDatabase.trim()) body.adxDatabase = adxDatabase.trim();
@@ -423,7 +464,7 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
       if (!j.ok) { setRuleErr(j.error || j.gate?.remediation || (editing ? 'update rule failed' : 'add rule failed')); }
       else { setRuleOpen(false); setRuleName(''); setKqlQuery(''); setEditingRuleId(''); loadRules(workspaceId, selectedId); }
     } finally { setRuleBusy(false); }
-  }, [ruleName, condProperty, condOperator, condValue, actKind, actTarget, actMessage, actCountryCode, actPhone, actLogicAppResourceId, actLogicAppCallbackUrl, sourceType, kqlQuery, sourceTable, selectedHub, adxDatabase, adxCluster, severity, evalFreq, winSize, useExistingAg, existingAgId, editingRuleId, workspaceId, selectedId, loadRules]);
+  }, [ruleName, condProperty, condOperator, condValue, actKind, actTarget, actMessage, actCountryCode, actPhone, actLogicAppResourceId, actLogicAppCallbackUrl, sourceType, kqlQuery, sourceTable, selectedHub, adxDatabase, adxCluster, severity, evalFreq, winSize, useExistingAg, existingAgId, editingRuleId, workspaceId, selectedId, loadRules, ruleKind, objectKey, propConditionType, changePercent, rangeMin, rangeMax, noDataMinutes, timestampColumn]);
 
   const triggerNow = useCallback(async (ruleId: string) => {
     if (!workspaceId || !selectedId) return;
@@ -491,6 +532,16 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
     setCondProperty(String(cond.property ?? cond.field ?? r.propertyName ?? ''));
     setCondOperator(String(cond.operator ?? 'GreaterThan'));
     setCondValue(cond.value === undefined || cond.value === null ? '' : String(cond.value));
+    // Trigger-model depth (FGC-13) — restore kind/condition so Edit re-opens the
+    // same wizard shape and the PUT recompiles the same per-object KQL.
+    setRuleKind((['event', 'split-event', 'property'].includes(String(r.ruleKind)) ? r.ruleKind : 'event') as any);
+    setObjectKey(String(r.objectKey ?? ''));
+    setPropConditionType((['becomes', 'increases-by', 'decreases-by', 'exits-range', 'no-data-for'].includes(String(r.propertyConditionType)) ? r.propertyConditionType : 'becomes') as any);
+    setChangePercent(typeof r.changePercent === 'number' ? String(r.changePercent) : '10');
+    setRangeMin(typeof r.rangeMin === 'number' ? String(r.rangeMin) : '0');
+    setRangeMax(typeof r.rangeMax === 'number' ? String(r.rangeMax) : '100');
+    setNoDataMinutes(typeof r.noDataMinutes === 'number' ? String(r.noDataMinutes) : '5');
+    setTimestampColumn(String(r.timestampColumn ?? ''));
     const act: any = r.action || {};
     const kind = String(act.kind || 'TeamsMessage');
     setActKind((['TeamsMessage', 'Email', 'Webhook', 'SMS', 'LogicApp', 'AdfPipelineRun', 'NotebookRun', 'PowerAutomateFlow'].includes(kind) ? kind : 'TeamsMessage') as any);
@@ -644,6 +695,8 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
   // edit's values; openNewRule clears edit-mode then opens the wizard fresh.
   const resetRuleForm = useCallback(() => {
     setRuleName(''); setCondProperty(''); setCondOperator('GreaterThan'); setCondValue('20');
+    setRuleKind('event'); setObjectKey(''); setPropConditionType('becomes');
+    setChangePercent('10'); setRangeMin('0'); setRangeMax('100'); setNoDataMinutes('5'); setTimestampColumn('');
     setActKind('TeamsMessage'); setActTarget(''); setActMessage('Loom alert: {{eventValue}}');
     setActCountryCode('1'); setActPhone(''); setActLogicAppResourceId(''); setActLogicAppCallbackUrl('');
     setSourceType('adx'); setKqlQuery(''); setSourceTable(''); setSelectedHub('');
@@ -859,19 +912,94 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
                           {!((sourceType === 'adx' || sourceType === 'kql') && kqlQuery.trim()) && (
                             <>
                               <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>WHEN — condition</Caption1>
-                              <div style={{ display: 'flex', gap: tokens.spacingVerticalS}}>
-                                <Field label="Property" style={{ flex: 1 }}>
-                                  <Input placeholder="e.g. latency_ms" value={condProperty} onChange={(_: unknown, d: any) => setCondProperty(d.value)} />
-                                </Field>
-                                <Field label="Operator" style={{ width: 180 }}>
-                                  <Select value={condOperator} onChange={(_: unknown, d: any) => setCondOperator(d.value)}>
-                                    {['GreaterThan', 'GreaterThanOrEqual', 'LessThan', 'LessThanOrEqual', 'Equals', 'NotEquals', 'BecomesTrue', 'ChangesTo'].map((o) => <option key={o} value={o}>{o}</option>)}
+                              {/* Trigger-model depth (FGC-13): rule kind selects
+                                  flat vs per-object vs stateful change-detection. */}
+                              <div style={{ display: 'flex', gap: tokens.spacingVerticalS, flexWrap: 'wrap' }}>
+                                <Field label="Rule kind" style={{ width: 220 }} hint="Fabric Activator parity">
+                                  <Select value={ruleKind} onChange={(_: unknown, d: any) => setRuleKind(d.value)} aria-label="Rule kind">
+                                    <option value="event">Event rule — every event</option>
+                                    <option value="split-event">Split-event rule — per object</option>
+                                    <option value="property">Property rule — per-object change</option>
                                   </Select>
                                 </Field>
-                                <Field label="Value" style={{ width: 120 }}>
-                                  <Input placeholder="20" value={condValue} onChange={(_: unknown, d: any) => setCondValue(d.value)} />
-                                </Field>
+                                {(ruleKind === 'split-event' || ruleKind === 'property') && (
+                                  <Field label="Object key (group by)" style={{ flex: 1, minWidth: 180 }} hint="e.g. device_id / asset_id">
+                                    <Input placeholder="device_id" value={objectKey} onChange={(_: unknown, d: any) => setObjectKey(d.value)} aria-label="Object key" />
+                                  </Field>
+                                )}
+                                {ruleKind === 'property' && (
+                                  <Field label="Timestamp column" style={{ width: 200 }} hint="event-time (default 'timestamp')">
+                                    <Input placeholder="timestamp" value={timestampColumn} onChange={(_: unknown, d: any) => setTimestampColumn(d.value)} aria-label="Timestamp column" />
+                                  </Field>
+                                )}
                               </div>
+
+                              {(ruleKind === 'event' || ruleKind === 'split-event') && (
+                                <div style={{ display: 'flex', gap: tokens.spacingVerticalS}}>
+                                  <Field label="Property" style={{ flex: 1 }}>
+                                    <Input placeholder="e.g. latency_ms" value={condProperty} onChange={(_: unknown, d: any) => setCondProperty(d.value)} />
+                                  </Field>
+                                  <Field label="Operator" style={{ width: 180 }}>
+                                    <Select value={condOperator} onChange={(_: unknown, d: any) => setCondOperator(d.value)}>
+                                      {['GreaterThan', 'GreaterThanOrEqual', 'LessThan', 'LessThanOrEqual', 'Equals', 'NotEquals', 'BecomesTrue', 'ChangesTo'].map((o) => <option key={o} value={o}>{o}</option>)}
+                                    </Select>
+                                  </Field>
+                                  <Field label="Value" style={{ width: 120 }}>
+                                    <Input placeholder="20" value={condValue} onChange={(_: unknown, d: any) => setCondValue(d.value)} />
+                                  </Field>
+                                </div>
+                              )}
+
+                              {ruleKind === 'property' && (
+                                <div style={{ display: 'flex', gap: tokens.spacingVerticalS, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+                                  {propConditionType !== 'no-data-for' && (
+                                    <Field label="Property" style={{ flex: 1, minWidth: 160 }}>
+                                      <Input placeholder="e.g. temperature" value={condProperty} onChange={(_: unknown, d: any) => setCondProperty(d.value)} />
+                                    </Field>
+                                  )}
+                                  <Field label="Condition" style={{ width: 200 }}>
+                                    <Select value={propConditionType} onChange={(_: unknown, d: any) => setPropConditionType(d.value)} aria-label="Property condition type">
+                                      <option value="becomes">Becomes</option>
+                                      <option value="increases-by">Increases by</option>
+                                      <option value="decreases-by">Decreases by</option>
+                                      <option value="exits-range">Exits range</option>
+                                      <option value="no-data-for">No data for</option>
+                                    </Select>
+                                  </Field>
+                                  {propConditionType === 'becomes' && (
+                                    <Field label="Target value" style={{ width: 140 }}>
+                                      <Input placeholder="true" value={condValue} onChange={(_: unknown, d: any) => setCondValue(d.value)} />
+                                    </Field>
+                                  )}
+                                  {(propConditionType === 'increases-by' || propConditionType === 'decreases-by') && (
+                                    <Field label="Percent" style={{ width: 120 }} hint="%">
+                                      <Input type="number" value={changePercent} onChange={(_: unknown, d: any) => setChangePercent(d.value)} />
+                                    </Field>
+                                  )}
+                                  {propConditionType === 'exits-range' && (
+                                    <>
+                                      <Field label="Min" style={{ width: 110 }}>
+                                        <Input type="number" value={rangeMin} onChange={(_: unknown, d: any) => setRangeMin(d.value)} />
+                                      </Field>
+                                      <Field label="Max" style={{ width: 110 }}>
+                                        <Input type="number" value={rangeMax} onChange={(_: unknown, d: any) => setRangeMax(d.value)} />
+                                      </Field>
+                                    </>
+                                  )}
+                                  {propConditionType === 'no-data-for' && (
+                                    <Field label="Minutes" style={{ width: 120 }} hint="heartbeat / absence">
+                                      <Input type="number" value={noDataMinutes} onChange={(_: unknown, d: any) => setNoDataMinutes(d.value)} />
+                                    </Field>
+                                  )}
+                                </div>
+                              )}
+                              {ruleKind === 'property' && (
+                                <MessageBar intent="info">
+                                  <MessageBarBody>
+                                    A Property rule tracks each <strong>{objectKey || 'object'}</strong> over time and fires when its {condProperty || 'property'} meets the condition — compiled to per-object KQL (<code>prev()</code> / <code>summarize arg_max</code>) that runs on Azure Data Explorer / Eventhouse. No Microsoft Fabric required.
+                                  </MessageBarBody>
+                                </MessageBar>
+                              )}
                             </>
                           )}
 
@@ -981,9 +1109,24 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
                           </div>
 
                           <Caption1 style={{ fontFamily: 'Consolas, monospace', color: tokens.colorBrandForeground1 }}>
-                            {(sourceType === 'adx' || sourceType === 'kql') && kqlQuery.trim()
-                              ? `${sourceType === 'adx' ? 'ADX' : 'LA'} KQL: ${kqlQuery.trim().slice(0, 72)}${kqlQuery.trim().length > 72 ? '…' : ''} → ${useExistingAg ? 'existing action group' : actKind} · sev${severity} · eval ${evalFreq} / win ${winSize}`
-                              : `${sourceType === 'adx' ? `${adxDatabase || '<db>'}/` : ''}${condProperty || (sourceTable || '<table>')} ${condOperator} ${condValue || '<value>'} → ${useExistingAg ? 'existing action group' : actKind} · sev${severity} · eval ${evalFreq} / win ${winSize}`}
+                            {(() => {
+                              const tail = `→ ${useExistingAg ? 'existing action group' : actKind} · sev${severity} · eval ${evalFreq} / win ${winSize}`;
+                              if ((sourceType === 'adx' || sourceType === 'kql') && kqlQuery.trim()) {
+                                return `${sourceType === 'adx' ? 'ADX' : 'LA'} KQL: ${kqlQuery.trim().slice(0, 60)}${kqlQuery.trim().length > 60 ? '…' : ''} ${tail}`;
+                              }
+                              const per = objectKey || 'object';
+                              const prop = condProperty || 'property';
+                              if (ruleKind === 'split-event') return `per ${per}: ${prop} ${condOperator} ${condValue || '<value>'} ${tail}`;
+                              if (ruleKind === 'property') {
+                                const clause = propConditionType === 'becomes' ? `${prop} becomes ${condValue || '<value>'}`
+                                  : propConditionType === 'increases-by' ? `${prop} +≥${changePercent}%`
+                                  : propConditionType === 'decreases-by' ? `${prop} −≥${changePercent}%`
+                                  : propConditionType === 'exits-range' ? `${prop} exits [${rangeMin}, ${rangeMax}]`
+                                  : `no data for ${noDataMinutes}m`;
+                                return `per ${per}: ${clause} ${tail}`;
+                              }
+                              return `${sourceType === 'adx' ? `${adxDatabase || '<db>'}/` : ''}${condProperty || (sourceTable || '<table>')} ${condOperator} ${condValue || '<value>'} ${tail}`;
+                            })()}
                           </Caption1>
                           {ruleErr && <MessageBar intent="error"><MessageBarBody>{ruleErr}</MessageBarBody></MessageBar>}
                         </div>

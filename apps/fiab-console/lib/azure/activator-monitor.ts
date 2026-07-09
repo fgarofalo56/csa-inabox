@@ -36,6 +36,16 @@ import {
   normalizeClusterUri,
   defaultDatabase as kustoDefaultDatabase,
 } from './kusto-client';
+// Trigger-model depth (FGC-13): Event / Split-Event / Property rule kinds with
+// per-object grouping + stateful change detection. The compiler is pure KQL
+// (valid on both ADX and Log Analytics), so both source paths reuse it.
+import {
+  compileTriggerModelKql,
+  coerceRuleKind,
+  type ActivatorRuleKind,
+  type PropertyConditionType,
+  type TriggerModelInput,
+} from './activator-trigger-model';
 
 // Re-export so the BFF route imports its activator surface from one module.
 export type { AlertHistoryEvent };
@@ -65,10 +75,45 @@ function kqlValue(v: any): string {
   return `"${String(v).replace(/"/g, '\\"')}"`;
 }
 
-/** Build the alert KQL. Verbatim `query` wins; else compose from the structured
- *  condition (property/operator/value). Fires when the query returns ≥1 row. */
+/** Extract the typed trigger model (FGC-13) from a rule. The kind lives at the
+ *  rule top level; the property/operator/value/change fields live either on the
+ *  rule or inside `condition` (the wizard nests them under condition). Returns
+ *  null for a plain Event rule so the legacy flat builder handles it verbatim. */
+export function triggerModelFromRule(rule: any, defaultTable: string): TriggerModelInput | null {
+  const kind: ActivatorRuleKind = coerceRuleKind(rule?.ruleKind);
+  if (kind === 'event') return null;
+  const cond = rule?.condition || {};
+  return {
+    ruleKind: kind,
+    objectKey: (rule?.objectKey ?? cond.objectKey ?? '') || '',
+    property: (cond.property ?? cond.field ?? rule?.property ?? 'value') || 'value',
+    propertyConditionType: (rule?.propertyConditionType ?? cond.propertyConditionType) as PropertyConditionType | undefined,
+    operator: cond.operator ?? rule?.operator,
+    value: cond.value ?? rule?.value,
+    changePercent: rule?.changePercent ?? cond.changePercent,
+    rangeMin: rule?.rangeMin ?? cond.rangeMin,
+    rangeMax: rule?.rangeMax ?? cond.rangeMax,
+    noDataMinutes: rule?.noDataMinutes ?? cond.noDataMinutes,
+    table: rule?.sourceTable || rule?.table || rule?.stream || rule?.eventTable || defaultTable,
+    timestampColumn: rule?.timestampColumn ?? cond.timestampColumn,
+  };
+}
+
+/** Build the alert KQL. Verbatim `query` wins; else, when a trigger-model rule
+ *  kind is set (Split-Event / Property — FGC-13), compile the per-object /
+ *  stateful KQL; else compose from the flat structured condition
+ *  (property/operator/value). Fires when the query returns ≥1 row. */
 export function buildRuleQuery(rule: any): { query: string; note?: string } {
   if (typeof rule?.query === 'string' && rule.query.trim()) return { query: rule.query.trim() };
+  const defaultTableLA = rule?.sourceTable || rule?.table || process.env.LOOM_ACTIVATOR_DEFAULT_TABLE || 'AppEvents';
+  const tm = triggerModelFromRule(rule, defaultTableLA);
+  if (tm) {
+    return {
+      query: compileTriggerModelKql(tm),
+      note: rule?.sourceTable || rule?.table ? undefined
+        : `Trigger-model rule targets table '${tm.table}' — set the rule's sourceTable to point at your data.`,
+    };
+  }
   const cond = rule?.condition || {};
   const table =
     rule?.sourceTable || rule?.table || rule?.stream || rule?.eventTable ||
@@ -105,6 +150,15 @@ export function buildRuleQuery(rule: any): { query: string; note?: string } {
  */
 export function buildAdxRuleQuery(rule: any): { query: string; note?: string } {
   if (typeof rule?.query === 'string' && rule.query.trim()) return { query: rule.query.trim() };
+  const defaultTableAdx = rule?.sourceTable || rule?.table || process.env.LOOM_ACTIVATOR_DEFAULT_TABLE || 'Events';
+  const tm = triggerModelFromRule(rule, defaultTableAdx);
+  if (tm) {
+    return {
+      query: compileTriggerModelKql(tm),
+      note: rule?.sourceTable || rule?.table ? undefined
+        : `Trigger-model rule targets Eventhouse table '${tm.table}' — set the rule's source table to point at your KQL/ADX data.`,
+    };
+  }
   const cond = rule?.condition || {};
   const table =
     rule?.sourceTable || rule?.table || rule?.stream || rule?.eventTable ||
@@ -188,6 +242,22 @@ export interface MonitorRuleInput {
   /** Optional ADX cluster URI override (a discovered Eventhouse cluster). When
    *  absent the kusto-client's LOOM_KUSTO_CLUSTER_URI default is used. */
   adxClusterUri?: string;
+  // ── Trigger-model depth (FGC-13) ──
+  /** Event | Split-Event | Property. Absent ⇒ 'event' (the flat comparison). */
+  ruleKind?: ActivatorRuleKind;
+  /** Object-key column to group by (device_id/asset_id) for Split-Event / Property rules. */
+  objectKey?: string;
+  /** Property-rule condition type (Becomes/Increases-by/Decreases-by/Exits-range/No-data-for). */
+  propertyConditionType?: PropertyConditionType;
+  /** Percent threshold for increases-by / decreases-by. */
+  changePercent?: number;
+  /** Inclusive bounds for exits-range. */
+  rangeMin?: number;
+  rangeMax?: number;
+  /** Minutes of silence for no-data-for (heartbeat/absence). */
+  noDataMinutes?: number;
+  /** Event-time column for per-object ordering + heartbeat. */
+  timestampColumn?: string;
 }
 
 export interface MonitorRuleRecord {
@@ -215,6 +285,16 @@ export interface MonitorRuleRecord {
   adxDatabase?: string;
   /** Optional ADX cluster URI override (sourceKind='adx'). */
   adxClusterUri?: string;
+  // ── Trigger-model depth (FGC-13) — persisted so Edit re-opens the wizard in
+  //    the same kind/condition and Trigger recompiles the same per-object KQL. ──
+  ruleKind?: ActivatorRuleKind;
+  objectKey?: string;
+  propertyConditionType?: PropertyConditionType;
+  changePercent?: number;
+  rangeMin?: number;
+  rangeMax?: number;
+  noDataMinutes?: number;
+  timestampColumn?: string;
   /** Whether continuous, hands-off scheduled evaluation is wired. LA rules are
    *  always true (Azure Monitor evaluates them). ADX rules are true ONLY when an
    *  ADX-scoped alert host is provisioned (LOOM_ADX_ALERT_SCOPE); otherwise false
@@ -246,6 +326,22 @@ export async function createMonitorActivatorRule(
 ): Promise<MonitorRuleRecord> {
   const sourceKind: 'log-analytics' | 'adx' = input.sourceKind === 'adx' ? 'adx' : 'log-analytics';
   const { query, note } = sourceKind === 'adx' ? buildAdxRuleQuery(input) : buildRuleQuery(input);
+  // Trigger-model fields (FGC-13) persisted onto the record so Edit re-opens the
+  // wizard in the same kind/condition and Trigger recompiles the same KQL.
+  const triggerModelFields = (() => {
+    const kind = coerceRuleKind(input.ruleKind);
+    if (kind === 'event') return {} as Partial<MonitorRuleRecord>;
+    return {
+      ruleKind: kind,
+      ...(input.objectKey ? { objectKey: input.objectKey } : {}),
+      ...(input.propertyConditionType ? { propertyConditionType: input.propertyConditionType } : {}),
+      ...(typeof input.changePercent === 'number' ? { changePercent: input.changePercent } : {}),
+      ...(typeof input.rangeMin === 'number' ? { rangeMin: input.rangeMin } : {}),
+      ...(typeof input.rangeMax === 'number' ? { rangeMax: input.rangeMax } : {}),
+      ...(typeof input.noDataMinutes === 'number' ? { noDataMinutes: input.noDataMinutes } : {}),
+      ...(input.timestampColumn ? { timestampColumn: input.timestampColumn } : {}),
+    } as Partial<MonitorRuleRecord>;
+  })();
 
   // Pick-existing flow: attach a known action group as-is. Otherwise compose a
   // new action group from the rule's action config (email / SMS / webhook /
@@ -326,6 +422,7 @@ export async function createMonitorActivatorRule(
       sourceKind: 'adx',
       ...(input.adxDatabase ? { adxDatabase: input.adxDatabase } : {}),
       ...(input.adxClusterUri ? { adxClusterUri: input.adxClusterUri } : {}),
+      ...triggerModelFields,
       scheduled,
       createdAt: new Date().toISOString(),
       note: [note, scheduleNote].filter(Boolean).join(' '),
@@ -357,6 +454,7 @@ export async function createMonitorActivatorRule(
     state: 'Active',
     backend: 'azure-monitor',
     sourceKind: 'log-analytics',
+    ...triggerModelFields,
     scheduled: true,
     createdAt: new Date().toISOString(),
     ...(note ? { note } : {}),
