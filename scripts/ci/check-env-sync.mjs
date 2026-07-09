@@ -78,6 +78,8 @@ const ALLOWLIST = new Set([
   // ---- Build / ambient (injected by the container runtime or platform, not app bicep) ----
   'LOOM_BUILD_SHA',                 // stamped at image build time
   'LOOM_BUILD_TIMESTAMP',           // stamped at image build time
+  'LOOM_APP_REVISION',              // ambient container revision fallback for the PSR-1 perf runner (CONTAINER_APP_REVISION is the real ACA-injected value; this is a manual override) — never a blocking dependency
+  'LOOM_URL',                       // ambient console base-URL fallback for the PSR-1 perf runner's page-TTI GETs (LOOM_CONSOLE_BASE_URL / the request origin take precedence); also the standard UAT/e2e base-URL convention
   'LOOM_TENANT_ID',                 // ambient Entra tenant (from MSI / token)
   'LOOM_ENTRA_TENANT_ID',           // ambient Entra tenant alias
   'LOOM_REGION',                    // ambient deployment region

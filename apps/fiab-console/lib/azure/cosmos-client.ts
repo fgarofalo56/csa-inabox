@@ -235,6 +235,14 @@ let _capacityGuardrails: Container | null = null;
 // and never grows unbounded. Feeds FGC-28's chargeback page + the FGC-25
 // per-workspace LCU/hour cap. Created lazily here AND ARM-provisioned in bicep.
 let _costAttribution: Container | null = null;
+// PSR-1 — performance-benchmark trend store. One doc per (runId, metric):
+// {runId, gitSha, rev, metric, backend, p50, p95, p99, coldMs, warmMs, ts, …}.
+// PK /runId so every per-run read + the run write-back hit a single physical
+// partition; the /admin/performance trend query is an infrequent cross-partition
+// admin read. NO defaultTtl — benchmark history is retained so trends span rolls.
+// Created lazily here (no ARM/Bicep pre-step beyond the account+database); the
+// optional LoomPerf_CL Log-Analytics export is a separate honest-gated path.
+let _perfBenchmarks: Container | null = null;
 let _ensured = false;
 
 /**
@@ -835,6 +843,8 @@ async function ensure() {
     defaultTtl: -1, // TTL enabled; each row carries its own `ttl` (default 90d)
   });
   _costAttribution = costAttr;
+  // PSR-1 — perf-benchmark trend rows. PK /runId (see declaration).
+  _perfBenchmarks = await mk('perf-benchmarks', '/runId');
   _ensured = true;
 }
 
@@ -913,6 +923,7 @@ export async function loomPatTokensContainer(): Promise<Container> { await ensur
 export async function capacityGuardrailsContainer(): Promise<Container> { await ensure(); return _capacityGuardrails!; }
 /** BR-COSTATTR — per-execution cost attribution ledger (append-only, TTL), PK /tenantId. */
 export async function costAttributionContainer(): Promise<Container> { await ensure(); return _costAttribution!; }
+export async function perfBenchmarksContainer(): Promise<Container> { await ensure(); return _perfBenchmarks!; }
 
 // Foundation admin containers (shared cloud-endpoints resolver task).
 /** Admin Workspace Catalog — one row per Loom-managed workspace, PK /tenantId. */
