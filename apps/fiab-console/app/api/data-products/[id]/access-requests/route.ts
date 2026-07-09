@@ -25,6 +25,8 @@ import type { AccessRequest } from '@/lib/types/access-request';
 import type { WorkspaceItem } from '@/lib/types/workspace';
 import crypto from 'node:crypto';
 import { apiServerError } from '@/lib/api/respond';
+import { recordListingSubscribe } from '@/lib/marketplace/listing-analytics';
+import { emitLoomEvent } from '@/lib/events/webhook-emitter';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -92,6 +94,21 @@ export async function POST(
 
     const container = await accessRequestsContainer();
     const { resource } = await container.items.create(doc);
+
+    // W18 — real subscribe counter increment on the existing subscribe path +
+    // fan a marketplace.listing.subscribed event out to the owner's webhooks
+    // (both best-effort, fire-and-forget; never block the subscribe response).
+    void recordListingSubscribe(id, s.claims.oid);
+    if (owner.ownerTenantId) {
+      emitLoomEvent({
+        type: 'marketplace.listing.subscribed',
+        tenantId: owner.ownerTenantId,
+        subject: id,
+        subjectName: owner.name,
+        actor: { oid: s.claims.oid, upn: s.claims.upn || s.claims.email },
+        data: { requestId: doc.id, purposeName, policyId, requesterUpn: doc.requesterUpn },
+      });
+    }
     return NextResponse.json({ ok: true, request: resource }, { status: 201 });
   } catch (e: any) {
     return apiServerError(e);

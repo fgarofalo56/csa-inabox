@@ -92,6 +92,7 @@ import type {
   DataProductLink, DataProductStatus,
 } from '@/lib/types/data-product';
 import { apiError } from '@/lib/api/respond';
+import { recordListingView } from '@/lib/marketplace/listing-analytics';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -419,6 +420,9 @@ export async function GET(_req: NextRequest, props: { params: Promise<{ id: stri
     if (!item) return err('Data product not found', 404, 'not_found');
     const ownerTenantId = await resolveOwnerTenantId(item.workspaceId);
     const isOwner = ownerTenantId !== null && ownerTenantId === session.claims.oid;
+    // W18 — count a real consumer view (owner self-views excluded so the
+    // publisher-analytics number reflects genuine demand). Fire-and-forget.
+    if (!isOwner) void recordListingView(id);
     const [{ dqScore, dqGate }, subscriberCount, gates] = await Promise.all([
       computeDqScore(session.claims.oid),
       countSubscribers(id),
