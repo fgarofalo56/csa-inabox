@@ -284,6 +284,25 @@ The operator's standard is unchanged: **Loom is Fabric-class AI on pure Azure + 
 
 **Priority P1 · Effort M.**
 
+**Build status (Wave 7) — ✅ built.** The Deploy dialog (`foundry-hub-editor.tsx`
+`DeployModelDialog`) now has a **deployment-type selector** sourced from the
+model card's SKUs via a new pure catalog `lib/foundry/deployment-types.ts`
+(Standard / Global Standard / Data Zone Standard / Global Provisioned / Data
+Zone Provisioned / Regional Provisioned / Global Batch / Data Zone Batch). On a
+Provisioned* choice the capacity field relabels to **PTU count** (validated ≥
+the documented floor via `validateCapacity`) and a **"Confirm pricing" checkbox**
+gates Deploy behind an hourly-billing disclosure; the same `PUT deployments`
+ARM call carries `sku.name` + `sku.capacity`. Live per-region **quota headroom**
+is surfaced next to the capacity input (`/api/foundry/quota`). In a Gov boundary
+(region-detected), non-Gov-GA types are shown but **honest-gated** (disabled +
+MessageBar). A new **Batch jobs** surface (`BatchJobsSection`) uploads a JSONL
+input (purpose=batch), creates a job, polls status, and downloads the output —
+backed by real data-plane fns in `foundry-cs-client.ts` (`uploadBatchFile`,
+`createBatchJob`, `getBatchJob`, `cancelBatchJob`, `getFileContent`) and routes
+`app/api/foundry/batch/**`; the tab honest-gates entirely in Gov (Batch not
+Gov-supported). No new bicep (same CS account). Unit-tested
+(`deployment-types.test.ts`, 10 specs).
+
 ---
 
 ## AIF-12 — Model Router (router deployment + Loom-native tier router)
@@ -323,6 +342,28 @@ The operator's standard is unchanged: **Loom is Fabric-class AI on pure Azure + 
 **Acceptance.** From a real eval run, click "Open trace" and land on the exact span tree that produced it; show an Agents rollup tab with real per-agent latency/cost aggregates.
 
 **Priority P2 · Effort M.**
+
+**Build status (Wave 7) — ✅ built.** AgentOps landed on the agent playground
+(`foundry-agents.tsx`) rather than only the eval table, so per-agent
+cost/latency/success threads through the runs an operator actually produces.
+New pure module `lib/foundry/agentops.ts` (`normalizeUsage`, `stepTimings`,
+`runLatencyMs`, `runMetrics`, `rollupAgentRuns`) derives **per-run trace
+metrics** (real token counts + per-step timings + an ESTIMATED cost via the
+rel-T85 `cost-estimate` price table / CTS usage threading) and a **per-agent
+rollup** (runs, success rate, total/avg cost, avg + p95 latency, per-model
+breakdown). The playground shows per-run metrics inline and an **AgentOps panel**
+(rollup + eval). Runs persist their `model` + `usage` on the existing
+`loom-agent-memory` thread doc (AIF-14), so `GET /api/foundry/agents/rollup`
+aggregates without new storage. **Eval hooks**: a structured prompt-set editor
+(rows, not JSON) runs each prompt through the agent (real `runAgentInspectTiered`)
+and scores the answer 1-5 with a **real AOAI judge** (`aoaiChatJson`), stored as
+a `docType:'eval'` doc (`saveEvalRun`/`listEvalRuns`) and rendered as a scored
+results table — honest-gated (501) when no agent runtime tier is configured. No
+new bicep (same App Insights + Cosmos container). Unit-tested
+(`agentops.test.ts` 10, `agent-eval.test.ts` 7). ⬜ TODO (deferred): the
+`EvaluationEditor` "Open trace" deep-link + the App Insights
+`GROUP BY agent_name` tab from the original spec (the playground Cosmos rollup
+covers the per-agent aggregate; the App-Insights-side variant is additive).
 
 ---
 
