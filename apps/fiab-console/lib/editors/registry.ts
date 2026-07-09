@@ -45,6 +45,8 @@ const reg = (loader: () => Promise<Record<string, unknown>>, name: string): Edit
 export const EDITOR_REGISTRY: Record<string, EditorComponent> = {
   // Loom Apps (Azure-native app building — Fabric Apps parity)
   'loom-app':             reg(() => import('./loom-app-editor'),         'LoomAppEditor'),
+  // Loom App Runtime (DBX-1) — Databricks-Apps-class hosted apps on ACA.
+  'loom-app-runtime':     reg(() => import('./loom-app-runtime-editor'), 'LoomAppRuntimeEditor'),
   'rayfin-app':           reg(() => import('./rayfin-app-editor'),        'RayfinAppEditor'),
   // Data Marketplace — consumer discovery (F14/F18) over the loom-data-products AI Search index
   'data-marketplace':     reg(() => import('./data-marketplace'),        'DataMarketplaceEditor'),

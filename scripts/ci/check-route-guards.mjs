@@ -143,6 +143,12 @@ const ALLOWLIST = new Map([
   // per-tenant Cosmos resource is read/written — auth = signed-in + Console-UAMI
   // RBAC, exactly like the content-safety BFF routes.
   ['apps/fiab-console/app/api/items/ai-enrich/[service]/preview/route.ts', 'stateless cognitive-services sample probe resolved by [service]; no per-tenant Cosmos data'],
+  // Loom App Runtime (DBX-1) type-level config: returns the fixed runtime-template
+  // catalog (static) + the deployment-wide Container Apps/ACR infra status. No
+  // per-tenant Cosmos resource — auth = signed-in + deployment RBAC. The per-item
+  // routes (loom-app-runtime/[id]/**) thread resolveItemAccessByOid and pass on
+  // their own owner-check.
+  ['apps/fiab-console/app/api/items/loom-app-runtime/config/route.ts', 'static runtime-template catalog + deployment-wide Loom Apps infra status; no per-tenant Cosmos data'],
 ]);
 
 // ── Specific-per-item-TYPE routes over a SHARED Azure backend ────────────────

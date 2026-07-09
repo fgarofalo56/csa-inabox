@@ -262,6 +262,14 @@ export const TENANT_SETTING_GROUPS: ToggleGroupDef[] = [
     ],
   },
   {
+    id: 'loomApps',
+    label: 'Loom App Runtime',
+    description: 'Databricks-Apps-class hosted apps on Azure Container Apps (autoscale-to-zero, Entra-gated). ON by default for any user with workspace access — no spend or approval gate. This is the tenant-wide kill switch.',
+    toggles: [
+      { id: 'apps.runtimeEnabled', label: 'Loom App Runtime enabled', help: 'Master kill switch for hosted apps. ON by default (opt-out). When OFF: new builds/deploys are blocked, the editor shows an honest banner, and running apps are stopped on their next lifecycle action. Cost is bounded structurally by autoscale-to-zero (a resting app costs ~$0), so disabling is a governance control, not a cost gate. Also honored by the LOOM_APPS_RUNTIME_ENABLED env var (set to "false" to force-disable deployment-wide).', default: true },
+    ],
+  },
+  {
     id: 'legacyAdla',
     label: 'U-SQL legacy (ADLA)',
     description: 'ADLA reached end-of-life in 2024. This category exists only to surface migration UI.',
