@@ -79,7 +79,7 @@ gate, add a downstream job in the roll pipeline after the console is confirmed l
     needs: roll-and-validate           # run only after the new revision is live
     uses: ./.github/workflows/perf-gate.yml
     with:
-      url: https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net
+      url: https://<your-console-hostname>
       override_label: ''               # set to a reason to accept a justified regression
     secrets:
       SESSION_SECRET: ${{ secrets.SESSION_SECRET }}

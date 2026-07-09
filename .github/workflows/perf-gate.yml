@@ -45,7 +45,7 @@ on:
         description: 'Public console URL to benchmark (Front Door).'
         type: string
         required: true
-        default: 'https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net'
+        default: 'https://<your-console-hostname>'
       override_label:
         description: 'Optional — accept a justified regression this roll (e.g. "deliberate-cold-start-trade"). Recorded in the receipt.'
         type: string
