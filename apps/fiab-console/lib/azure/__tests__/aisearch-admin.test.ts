@@ -11,7 +11,7 @@
  *     https://learn.microsoft.com/rest/api/searchmanagement/services/get
  */
 import { describe, it, expect } from 'vitest';
-import { shapeProps } from '../aisearch-admin';
+import { shapeProps, validateScale, ALLOWED_PARTITIONS, REPLICA_MIN, REPLICA_MAX } from '../aisearch-admin';
 
 describe('shapeProps — ARM search-service normalization', () => {
   it('shapes a PE-locked, AAD-only, standard-semantic service', () => {
@@ -69,5 +69,45 @@ describe('shapeProps — ARM search-service normalization', () => {
     expect(p.publicNetworkAccess).toBe('enabled');
     expect(p.ipRules).toEqual([]);
     expect(p.semanticSearch).toBe('standard');
+  });
+});
+
+describe('validateScale — replica/partition scale request (AIF-17)', () => {
+  it('accepts an in-range replica + partition change', () => {
+    expect(validateScale({ replicaCount: 3, partitionCount: 6 })).toEqual({ ok: true });
+    expect(validateScale({ replicaCount: REPLICA_MIN })).toEqual({ ok: true });
+    expect(validateScale({ replicaCount: REPLICA_MAX })).toEqual({ ok: true });
+    expect(validateScale({ partitionCount: 1 })).toEqual({ ok: true });
+    expect(validateScale({ partitionCount: 12 })).toEqual({ ok: true });
+  });
+
+  it('rejects an empty request (nothing to change)', () => {
+    const r = validateScale({});
+    expect(r.ok).toBe(false);
+    expect(r.error).toMatch(/replica or partition/i);
+  });
+
+  it('rejects out-of-range replica counts', () => {
+    expect(validateScale({ replicaCount: 0 }).ok).toBe(false);
+    expect(validateScale({ replicaCount: 13 }).ok).toBe(false);
+    expect(validateScale({ replicaCount: 2.5 }).ok).toBe(false);
+    expect(validateScale({ replicaCount: Number.NaN }).ok).toBe(false);
+  });
+
+  it('rejects a partition count outside the accepted set (e.g. 5, 7, 8)', () => {
+    for (const bad of [0, 5, 7, 8, 10, 24]) {
+      const r = validateScale({ partitionCount: bad });
+      expect(r.ok).toBe(false);
+      expect(r.error).toMatch(/partitionCount must be one of/);
+    }
+    // every accepted value passes
+    for (const good of ALLOWED_PARTITIONS) {
+      expect(validateScale({ partitionCount: good }).ok).toBe(true);
+    }
+  });
+
+  it('rejects when only one field is invalid even if the other is valid', () => {
+    expect(validateScale({ replicaCount: 3, partitionCount: 5 }).ok).toBe(false);
+    expect(validateScale({ replicaCount: 20, partitionCount: 6 }).ok).toBe(false);
   });
 });
