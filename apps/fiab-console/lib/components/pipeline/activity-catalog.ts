@@ -824,6 +824,27 @@ export function byCategory(c: ActivityCategory): ActivityTypeDef[] {
 }
 
 /**
+ * The categorized activity picker model — the single grouped source of truth
+ * behind Fabric's searchable, category-headered activity picker. Returns every
+ * palette group (in display order) with its label + members, optionally filtered
+ * by a predicate (e.g. the palette's search query). Empty groups are dropped so
+ * a filtered picker never renders a bare header. Used by the left palette, the
+ * guided empty-state launcher, and the picker-categorization tests, so all three
+ * stay in lock-step with ACTIVITY_CATEGORY_ORDER + ACTIVITY_CATALOG.
+ */
+export function activityPickerGroups(
+  filter?: (def: ActivityTypeDef) => boolean,
+): Array<{ id: ActivityCategory; label: string; items: ActivityTypeDef[] }> {
+  return ACTIVITY_CATEGORY_ORDER
+    .map((g) => ({
+      id: g.id,
+      label: g.label,
+      items: byCategory(g.id).filter((d) => (filter ? filter(d) : true)),
+    }))
+    .filter((g) => g.items.length > 0);
+}
+
+/**
  * Resolve an activity's Web-5.0 CANVAS category from this catalog — the single
  * data-driven mapping from a pipeline activity wire `type` (or palette key) to
  * the 5 canvas accent buckets (`move | transform | control | external |

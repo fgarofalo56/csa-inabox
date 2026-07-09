@@ -26,7 +26,7 @@
 
 import { useState, useEffect } from 'react';
 import {
-  Tab, TabList, Input, Field, Textarea, Caption1, Button, Subtitle2,
+  Tab, TabList, Input, Field, Textarea, Caption1, Button, Subtitle2, Link, Tooltip,
   Table, TableHeader, TableHeaderCell, TableBody, TableRow, TableCell,
   MessageBar, MessageBarBody, MessageBarTitle, Badge, makeStyles, tokens, Select, Switch,
   Dropdown, Option, Accordion, AccordionItem, AccordionHeader, AccordionPanel,
@@ -35,8 +35,11 @@ import {
   Add20Regular, Delete20Regular, Cursor20Regular, Settings20Regular,
   BranchCompare20Regular, Timer20Regular,
   BracesVariable20Regular, TagMultiple20Regular,
+  Open16Regular, ChevronDown16Regular, ChevronUp16Regular,
 } from '@fluentui/react-icons';
 import { findForActivity, canvasCategoryForType } from './activity-catalog';
+import { tabIssueCounts, type PipelineTabId } from './pipeline-validation';
+import { learnUrlForActivity } from './activity-learn-links';
 import { ActivityForm, hasActivityForm } from './activity-forms';
 import { SourceTab } from './copy/source-tab';
 import { SinkTab } from './copy/sink-tab';
@@ -95,6 +98,22 @@ const useStyles = makeStyles({
     paddingLeft: tokens.spacingHorizontalS, paddingRight: tokens.spacingHorizontalS,
     borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground2,
+  },
+  // Tab label wrapper so the red validation dot can superscript it (Fabric parity).
+  tabLabel: { position: 'relative', display: 'inline-flex', alignItems: 'center' },
+  // Red superscript dot on a tab whose fields have unmet required config.
+  tabDot: {
+    position: 'absolute',
+    top: '-3px', right: '-9px',
+    minWidth: '8px', height: '8px',
+    borderRadius: tokens.borderRadiusCircular,
+    backgroundColor: tokens.colorPaletteRedBackground3,
+    border: `1px solid ${tokens.colorNeutralBackground1}`,
+  },
+  // Collapse toggle sits at the right edge of the header top row.
+  collapseBtn: { flexShrink: 0, marginLeft: 'auto' },
+  learnRow: {
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXXS,
   },
   body: {
     paddingTop: tokens.spacingVerticalL, paddingBottom: tokens.spacingVerticalL,
@@ -201,6 +220,19 @@ export function PropertiesPanel({ activity, allActivities, parameters, variables
   const [tab, setTab] = useState<TabId>('general');
   const [typePropsText, setTypePropsText] = useState('');
   const [typePropsErr, setTypePropsErr] = useState<string | null>(null);
+  // Bottom-dock collapse (Fabric's dock is collapsible to reclaim canvas). Only
+  // meaningful in the dock layout; the rail layout ignores it.
+  const [collapsed, setCollapsed] = useState(false);
+
+  // Pre-run validation — per-tab counts of unmet required fields, so each tab can
+  // carry Fabric's red superscript dot BEFORE the pipeline is ever run.
+  const tabCounts = tabIssueCounts(activity);
+  const dotFor = (id: PipelineTabId) => ((tabCounts[id] || 0) > 0
+    ? <span className={s.tabDot} aria-label="has required fields to complete" />
+    : null);
+  const tabChild = (id: PipelineTabId, label: string) => (
+    <span className={s.tabLabel}>{label}{dotFor(id)}</span>
+  );
 
   // Factory datasets + linked services — backs the Source/Sink dataset pickers,
   // the Copy Mapping schema import, and the Settings staging/redirect linked-
@@ -269,8 +301,30 @@ export function PropertiesPanel({ activity, allActivities, parameters, variables
               {def && !def.runnable && (
                 <Badge appearance="outline" size="small" color="warning" title={def.remediation}>Save-only</Badge>
               )}
+              {/* Learn-more — the same contextual help link Fabric/ADF shows. */}
+              <Link
+                className={s.learnRow}
+                href={learnUrlForActivity(activity.type)}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                Learn more <Open16Regular />
+              </Link>
             </div>
           </div>
+          {layout === 'dock' && (
+            <Tooltip content={collapsed ? 'Expand properties' : 'Collapse properties'} relationship="label">
+              <Button
+                className={s.collapseBtn}
+                appearance="subtle"
+                size="small"
+                aria-label={collapsed ? 'Expand properties panel' : 'Collapse properties panel'}
+                aria-expanded={!collapsed}
+                icon={collapsed ? <ChevronUp16Regular /> : <ChevronDown16Regular />}
+                onClick={() => setCollapsed((v) => !v)}
+              />
+            </Tooltip>
+          )}
         </div>
         {def && !def.runnable && (
           <MessageBar intent="warning">
@@ -303,15 +357,17 @@ export function PropertiesPanel({ activity, allActivities, parameters, variables
         )}
       </div>
 
+      {!(layout === 'dock' && collapsed) && (
+      <>
       <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as TabId)} size="small"
         className={s.tabStrip}>
-        <Tab value="general">General</Tab>
-        {isCopyActivity && <Tab value="source">Source</Tab>}
-        {isCopyActivity && <Tab value="sink">Sink</Tab>}
-        {isCopyActivity && <Tab value="mapping">Mapping</Tab>}
-        {isCopyActivity && <Tab value="copy-settings">Settings</Tab>}
-        {!isCopyActivity && hasSourceSink && <Tab value="source-sink">Source / Sink</Tab>}
-        <Tab value="settings">{isCopyActivity ? 'Activity policy' : 'Settings'}</Tab>
+        <Tab value="general">{tabChild('general', 'General')}</Tab>
+        {isCopyActivity && <Tab value="source">{tabChild('source', 'Source')}</Tab>}
+        {isCopyActivity && <Tab value="sink">{tabChild('sink', 'Destination')}</Tab>}
+        {isCopyActivity && <Tab value="mapping">{tabChild('mapping', 'Mapping')}</Tab>}
+        {isCopyActivity && <Tab value="copy-settings">{tabChild('copy-settings', 'Settings')}</Tab>}
+        {!isCopyActivity && hasSourceSink && <Tab value="source-sink">{tabChild('source-sink', 'Source / Sink')}</Tab>}
+        <Tab value="settings">{tabChild('settings', isCopyActivity ? 'Activity policy' : 'Settings')}</Tab>
         <Tab value="parameters">Parameters</Tab>
         <Tab value="user-props">User properties</Tab>
       </TabList>
@@ -723,6 +779,8 @@ export function PropertiesPanel({ activity, allActivities, parameters, variables
           </>
         )}
       </div>
+      </>
+      )}
     </div>
   );
 }
