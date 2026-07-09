@@ -53,6 +53,7 @@ import {
   Flow24Regular, NumberSymbol20Regular, Tag20Regular, Code20Regular, CalendarClock20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { ExplainNodeDrawer, type ExplainNodeTarget } from '@/lib/components/explain-this';
 import { TileGrid } from '@/lib/components/ui/tile-grid';
 import { ManagePanel } from '@/lib/components/pipeline/manage-panel';
 import { PipelineManageHub } from '@/lib/components/pipeline/pipeline-manage-hub';
@@ -327,6 +328,9 @@ export function DataPipelineEditor({ item, id, runtimePreset, templateId }: Prop
   // Editor chrome state
   const [topTab, setTopTab] = useState<TopTabId>('pipeline');
   const [selectedActivity, setSelectedActivity] = useState<string | null>(null);
+  // "Explain this step" (W19) — the activity name whose node-scoped Explain
+  // drawer is open (null = closed). Set by the canvas node Explain action.
+  const [explainActivity, setExplainActivity] = useState<string | null>(null);
   const [snapToGrid, setSnapToGrid] = useState(true);
   const [showGrid, setShowGrid] = useState(true);
   const [outputPinned, setOutputPinned] = useState(false);
@@ -599,6 +603,21 @@ export function DataPipelineEditor({ item, id, runtimePreset, templateId }: Prop
       return def && !def.runnable;
     });
   }, [activities]);
+
+  // "Explain this step" (W19) target — resolves the focused activity's JSON plus
+  // its in-canvas neighbors (upstream = the steps it dependsOn; downstream = the
+  // steps that dependOn it) so the node-scoped Explain drawer can ground the AOAI
+  // call on the single step in the context of the DAG around it.
+  const explainNodeTarget = useMemo<ExplainNodeTarget | null>(() => {
+    if (!explainActivity) return null;
+    const focus = activities.find((a) => a.name === explainActivity);
+    if (!focus) return null;
+    const upstream = (focus.dependsOn || []).map((d) => d.activity).filter(Boolean);
+    const downstream = activities
+      .filter((a) => (a.dependsOn || []).some((d) => d.activity === focus.name))
+      .map((a) => a.name);
+    return { name: focus.name, definition: focus, upstream, downstream };
+  }, [explainActivity, activities]);
 
   // ============ Spec mutators ============
   const patchSpec = (updater: (prev: PipelineSpec) => PipelineSpec) => {
@@ -1252,6 +1271,17 @@ export function DataPipelineEditor({ item, id, runtimePreset, templateId }: Prop
       main={
         <div className={s.shell}>
           <Toaster toasterId={toastId} />
+          {/* "Explain this step" (W19) — node-scoped Explain drawer, opened by a
+              pipeline node's inline Explain action. Real AOAI over the single
+              activity + its canvas/lineage neighbors. */}
+          <ExplainNodeDrawer
+            open={!!explainActivity}
+            onOpenChange={(o) => { if (!o) setExplainActivity(null); }}
+            itemType="data-pipeline"
+            itemId={pipelineId || id}
+            family="pipeline"
+            node={explainNodeTarget}
+          />
           {runtimeSelector}
           <div className={s.topbar}>
             <Badge appearance="filled" color="brand">
@@ -1411,6 +1441,7 @@ export function DataPipelineEditor({ item, id, runtimePreset, templateId }: Prop
                             if (def) insertActivity(def);
                           }}
                           onConnect={connect}
+                          onExplainNode={setExplainActivity}
                         />
                       </div>
                     </ResizableCanvasRegion>
