@@ -263,6 +263,81 @@ export async function callAiFn(
   return chatComplete(systemPromptFor(fn, options), input, options, `AI function "${fn}"`);
 }
 
+/** One row's result in a batch AI-function run. */
+export interface AiFnBatchRow {
+  /** The 0-based index of this input in the request array. */
+  index: number;
+  input: string;
+  /** The model output for this row (empty string when `error` is set). */
+  result: string;
+  error?: string;
+}
+
+export interface AiFnBatchResult {
+  rows: AiFnBatchRow[];
+  model: string;
+  usage: AiFnUsage;
+  /** Number of rows that failed (error set). */
+  failed: number;
+}
+
+/**
+ * Run one AI function over an ARRAY of inputs with bounded concurrency — the
+ * table/DataFrame ("per-column") batch mode reused by the Data Wrangler AI tab
+ * (FGC-16) and the item-scoped ai-function BFF route. Each row is a real
+ * `callAiFn` round-trip against the SAME live AOAI deployment; a per-row failure
+ * is captured on that row (never aborts the batch). Token usage is summed across
+ * rows so the caller can emit one aggregate chargeback receipt.
+ *
+ * Concurrency is capped (default 4) to stay within AOAI rate limits and the
+ * Front Door / serverless time budget; callers should also cap the row count.
+ */
+export async function callAiFnBatch(
+  fn: AiFn,
+  inputs: string[],
+  options: AiFnOptions = {},
+  concurrency = 4,
+): Promise<AiFnBatchResult> {
+  const rows: AiFnBatchRow[] = new Array(inputs.length);
+  const usage: AiFnUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
+  let failed = 0;
+  let model = options.deployment || '';
+  const limit = Math.max(1, Math.min(concurrency, 8));
+
+  let cursor = 0;
+  async function worker(): Promise<void> {
+    for (;;) {
+      const i = cursor++;
+      if (i >= inputs.length) return;
+      const input = inputs[i] ?? '';
+      // Empty cells pass through unchanged — never a wasted AOAI call.
+      if (!input.trim()) {
+        rows[i] = { index: i, input, result: '' };
+        continue;
+      }
+      try {
+        const r = await callAiFn(fn, input, options);
+        rows[i] = { index: i, input, result: r.result };
+        if (r.model) model = r.model;
+        if (r.usage) {
+          usage.promptTokens += r.usage.promptTokens;
+          usage.completionTokens += r.usage.completionTokens;
+          usage.totalTokens += r.usage.totalTokens;
+        }
+      } catch (e: any) {
+        // A NoAoaiDeploymentError means NOTHING will succeed — rethrow so the
+        // route surfaces the honest gate instead of N identical per-row errors.
+        if (e instanceof NoAoaiDeploymentError) throw e;
+        failed += 1;
+        rows[i] = { index: i, input, result: '', error: e?.message || String(e) };
+      }
+    }
+  }
+
+  await Promise.all(Array.from({ length: Math.min(limit, inputs.length) }, () => worker()));
+  return { rows, model, usage, failed };
+}
+
 /**
  * Shared chat-completions core for every text AI function AND the ai-enrichment
  * `custom_prompt` path. Resolves the AOAI target, applies the FGC-19 model-tier

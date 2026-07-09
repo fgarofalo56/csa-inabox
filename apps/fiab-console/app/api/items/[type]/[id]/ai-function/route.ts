@@ -41,6 +41,7 @@ import {
 } from '@/lib/azure/databricks-client';
 import {
   callAiFn,
+  callAiFnBatch,
   emitAiFnUsage,
   NoAoaiDeploymentError,
   isAiFn,
@@ -228,6 +229,49 @@ export async function POST(
     );
   }
 
+  // Honor the admin-picked tenant Copilot deployment for BOTH the single and
+  // batch AOAI paths (loaded once).
+  const tenantConfig = await loadTenantCopilotConfig(session.claims.oid).catch(() => null);
+
+  // ---------- AOAI batch (per-column apply over N sampled rows) ----------
+  // The Data Wrangler "AI assist" tab and any table/DataFrame surface pass an
+  // `inputs` array to enrich a whole column in one call. Each row is a real
+  // callAiFn round-trip (bounded concurrency); a per-row failure is captured on
+  // that row and never aborts the batch. One aggregate usage receipt is emitted.
+  if (Array.isArray(body?.inputs)) {
+    const rawInputs: string[] = body.inputs
+      .slice(0, 200)
+      .map((v: unknown) => (typeof v === 'string' ? v : v == null ? '' : String(v)));
+    if (!rawInputs.length) {
+      return NextResponse.json({ ok: false, error: 'inputs array is empty.' }, { status: 400 });
+    }
+    try {
+      opts.tenantConfig = tenantConfig;
+      const batch = await callAiFnBatch(fn, rawInputs, opts);
+      await emitAiFnUsage(fn, batch.usage, batch.model, session.claims.oid);
+      return NextResponse.json({
+        ok: true,
+        engine: 'aoai',
+        mode: 'batch',
+        fn,
+        column,
+        rows: batch.rows,
+        rowCount: batch.rows.length,
+        failed: batch.failed,
+        model: batch.model,
+        usage: batch.usage,
+      });
+    } catch (e: any) {
+      if (e instanceof NoAoaiDeploymentError) {
+        return NextResponse.json(
+          { ok: false, code: 'not_configured', gated: true, engine: 'aoai', error: e.message, missing: 'LOOM_AOAI_DEPLOYMENT', hint: GATE_HINT },
+          { status: 501 },
+        );
+      }
+      return NextResponse.json({ ok: false, engine: 'aoai', error: e?.message || String(e) }, { status: 502 });
+    }
+  }
+
   // The AOAI path enriches one real text value (the column's sample cell). The
   // helper supplies it; this mirrors the plain-text /api/ai-functions route.
   const input = typeof body?.input === 'string' ? body.input.trim() : '';
@@ -242,8 +286,8 @@ export async function POST(
     // Honor the admin-picked tenant Copilot deployment (Admin → Tenant
     // settings → Copilot & Agents) so a configured Foundry chat model is used
     // even when the LOOM_AOAI_* env vars are unset. Forwarded to
-    // resolveAoaiTarget by callAiFn via opts.tenantConfig.
-    opts.tenantConfig = await loadTenantCopilotConfig(session.claims.oid).catch(() => null);
+    // resolveAoaiTarget by callAiFn via opts.tenantConfig (loaded once above).
+    opts.tenantConfig = tenantConfig;
     const { result, model, usage, vector, similarity } = await callAiFn(fn, input, opts);
     // Per-call token/cost receipt → App Insights (persona `ai-function`) so the
     // usage-chargeback + copilot-usage admin panels meter it. Awaited so the

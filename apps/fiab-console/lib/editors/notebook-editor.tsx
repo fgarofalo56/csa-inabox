@@ -2594,6 +2594,8 @@ export function NotebookEditor({ item, id }: Props) {
             onOpenChange={setWranglerOpen}
             onInsertCell={insertWranglerCell}
             dfVar="df"
+            itemType={item.slug}
+            itemId={id}
           />
 
           {/* Phase 2: Attach Lakehouse modal */}
