@@ -63,7 +63,7 @@ import {
   Eye20Regular,
   Settings20Regular,
 } from '@fluentui/react-icons';
-import { EventstreamFlowNode, type EsNodeData, type NodeRole } from './eventstream-flow-node';
+import { EventstreamFlowNode, GhostNextStepNode, type EsNodeData, type NodeRole, type EsGhostData } from './eventstream-flow-node';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import {
   compileToSaql,
@@ -391,7 +391,8 @@ export function VisualDesigner({ config, onChange, itemId }: VisualDesignerProps
 // Fabric's real Eventstream editor (source → operator → destination).
 // ============================================================
 
-const esNodeTypes: NodeTypes = { es: EventstreamFlowNode };
+const esNodeTypes: NodeTypes = { es: EventstreamFlowNode, esghost: GhostNextStepNode };
+const GHOST_ID = 'ghost';
 
 interface XY { x: number; y: number }
 const ES_NODE_W = 184;
@@ -447,9 +448,24 @@ function EventstreamCanvasInner({
     sinks.forEach((n, i) => push(`sink-${i}`,
       { label: n.name, kind: n.kind, role: 'sink' as NodeRole, subtitle: n.table || n.lakehouseId },
       selected?.type === 'sink' && selected.idx === i));
+    // Ghost next-step node — a trailing dashed placeholder that teaches the
+    // next authoring step (Fabric parity). Shown once a source exists but the
+    // stream has no destination yet; it disappears when the graph is runnable.
+    if (sources.length > 0 && sinks.length === 0) {
+      const ghostCol = transforms.length + 1;
+      const p = positionsRef.current.get(GHOST_ID) || { x: 16 + ghostCol * COL_GAP, y: 16 };
+      next.set(GHOST_ID, p);
+      const ghostData: EsGhostData = {
+        role: 'ghost',
+        label: transforms.length ? 'Add a destination' : 'Transform events or add destination',
+        onAddTransform,
+        onAddSink,
+      };
+      list.push({ id: GHOST_ID, type: 'esghost', position: p, data: ghostData as unknown as Record<string, unknown>, selectable: false, draggable: false });
+    }
     positionsRef.current = next;
     setNodes(list);
-  }, [sources, transforms, sinks, selected, setNodes]);
+  }, [sources, transforms, sinks, selected, setNodes, onAddTransform, onAddSink]);
 
   useEffect(() => { syncNodes(); }, [syncNodes]);
 
@@ -471,6 +487,15 @@ function EventstreamCanvasInner({
     } else {
       sources.forEach((_, i) => sinks.forEach((_, j) => mk(`source-${i}`, `sink-${j}`)));
     }
+    // Dashed edge from the last real node into the ghost next-step placeholder.
+    if (sources.length > 0 && sinks.length === 0) {
+      const dashed = (a: string) => out.push({
+        id: `${a}->${GHOST_ID}`, source: a, target: GHOST_ID, type: 'default',
+        style: { stroke: tokens.colorNeutralStroke2, strokeWidth: 1.5, strokeDasharray: '5 4' },
+      });
+      if (transforms.length) dashed(`transform-${transforms.length - 1}`);
+      else sources.forEach((_, i) => dashed(`source-${i}`));
+    }
     return out;
   }, [sources, transforms, sinks]);
 
@@ -480,6 +505,7 @@ function EventstreamCanvasInner({
   }, [onNodesChange]);
 
   const handleNodeClick = useCallback((_: unknown, n: Node) => {
+    if (n.id === GHOST_ID) return; // ghost handles its own menu; no inspector
     const [role, idx] = n.id.split('-');
     onSelect({ type: role as 'source' | 'transform' | 'sink', idx: Number(idx) });
   }, [onSelect]);

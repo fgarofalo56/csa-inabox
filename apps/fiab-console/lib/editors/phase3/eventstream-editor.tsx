@@ -18,17 +18,21 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react
 import {
   Subtitle2, Caption1, Badge, Button, Input, Spinner, Field, Link,
   Tab, TabList, Dropdown, Option, Tooltip,
-  MessageBar, MessageBarBody, MessageBarTitle,
+  MessageBar, MessageBarBody, MessageBarTitle, MessageBarActions,
   Dialog, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
   Select, Divider, Checkbox, tokens,
+  Menu, MenuTrigger, MenuButton, MenuPopover, MenuList, MenuItem, MenuGroup, MenuGroupHeader, MenuDivider,
 } from '@fluentui/react-components';
 import {
   Play20Regular, Pause20Regular, Save20Regular, Add20Regular, Delete20Regular, ArrowSync20Regular,
-  ArrowUp20Regular, ArrowDown20Regular,
+  ArrowUp20Regular, ArrowDown20Regular, ArrowUndo20Regular, ArrowRedo20Regular,
   MathFormula20Regular, Flowchart20Regular, Open20Regular, Form20Regular, Flash20Regular,
   Filter20Regular, Table20Regular, DataArea20Regular, Merge20Regular, Branch20Regular,
-  Notebook20Regular, DocumentBulletList20Regular,
+  Notebook20Regular, DocumentBulletList20Regular, CloudArrowUp20Regular, Code20Regular,
 } from '@fluentui/react-icons';
+import { useCanvasHistory } from '@/lib/components/canvas/use-canvas-history';
+import { DataPreviewDock } from '@/lib/components/eventstream/data-preview-dock';
+import { TRANSFORM_MENU, resolveTransformMenuItem } from '@/lib/components/eventstream/transform-menu';
 import { ItemEditorChrome } from '../item-editor-chrome';
 import { NewItemCreateGate } from '../new-item-gate';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
@@ -309,6 +313,16 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
   const [saveErr, setSaveErr] = useState<string | null>(null);
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'designer' | 'operators' | 'sql' | 'definition'>('designer');
+  // Undo/redo over the topology JSON (Wave-2 history primitive). Every genuine
+  // user mutation flows through onDesignerChange, so committing the serialized
+  // topology there gives action-level undo across the designer, operators
+  // builder, ghost node, and transform menu.
+  const history = useCanvasHistory<string>(cfgText);
+  // Draft/publish separation (Fabric parity): the topology persists to Cosmos
+  // as a DRAFT continuously; it only goes live on the Azure-native backend when
+  // the operator Publishes (Provision to Azure). `topologyDirtySincePublish`
+  // drives the "Changes go live once you publish" edit-mode banner.
+  const [topologyDirtySincePublish, setTopologyDirtySincePublish] = useState(true);
   // Publish-to-Fabric dialog state. Publishing creates/updates a REAL
   // Fabric Eventstream item via the definition REST API.
   const [publishOpen, setPublishOpen] = useState(false);
@@ -367,11 +381,24 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
     // Preserve multi-source/multi-sink if present so we don't lose data.
     if (sources.length > 1) projected.sources = sources;
     if (sinks.length > 1) projected.sinks = sinks;
-    setCfgText(JSON.stringify(projected, null, 2));
+    const text = JSON.stringify(projected, null, 2);
+    setCfgText(text);
+    history.commit(text);
     setDirty(true);
+    setTopologyDirtySincePublish(true);
     setParseErr(null);
     setSaveErr(null);
-  }, []);
+  }, [history]);
+
+  // Undo/redo apply a prior topology snapshot back into the editor state.
+  const doUndo = useCallback(() => {
+    const snap = history.undo();
+    if (snap != null) { setCfgText(snap); setDirty(true); setTopologyDirtySincePublish(true); setParseErr(null); }
+  }, [history]);
+  const doRedo = useCallback(() => {
+    const snap = history.redo();
+    if (snap != null) { setCfgText(snap); setDirty(true); setTopologyDirtySincePublish(true); setParseErr(null); }
+  }, [history]);
 
   // Merge a partial topology patch (sources/transforms/sinks) into the wire cfg
   // and push it through the same projection the designer uses, so the guided
@@ -413,13 +440,18 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
       const cfg = j.config && (j.config.source || j.config.sink || (j.config.transforms?.length ?? 0) > 0)
         ? j.config
         : DEFAULT_ES_CFG;
-      setCfgText(JSON.stringify(cfg, null, 2));
+      const text = JSON.stringify(cfg, null, 2);
+      setCfgText(text);
+      history.reset(text);
       setDirty(false);
+      // A stream with a recorded ASA job / Fabric publish has been published;
+      // otherwise treat the loaded topology as a not-yet-published draft.
+      setTopologyDirtySincePublish(!(j.asaJobName || j.fabricEventstreamId));
       setParseErr(null); setSaveErr(null); setSaveMsg(null);
     } catch (e: any) {
       setState({ ok: false, error: e?.message || String(e) });
     }
-  }, [id]);
+  }, [id, history]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -576,6 +608,7 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
         return;
       }
       setProvisionResult({ ehId: j.ehId, asaJobId: j.asaJobId, steps: j.steps, partial: j.partial, hint: j.hint });
+      if (!j.partial) setTopologyDirtySincePublish(false);
       load();
     } catch (e: any) {
       setProvisionErr(e?.message || String(e));
@@ -648,6 +681,17 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
     },
     [cfgText, onDesignerChange],
   );
+
+  // Categorized "Transform events" menu (Fabric parity): Custom code (SQL) +
+  // Predefined operations. Each entry maps to a REAL backing action via the
+  // pure resolver — operators add a typed node, SQL switches to the code-first
+  // tab, and an unbacked entry surfaces an honest note (never a fake insert).
+  const onTransformMenu = useCallback((menuId: string) => {
+    const target = resolveTransformMenuItem(menuId);
+    if (target.kind === 'sql-tab') { setActiveTab('sql'); return; }
+    if (target.kind === 'operator') { ribbonAdd('transform', { kind: target.op }); return; }
+    setSaveMsg(target.reason);
+  }, [ribbonAdd]);
 
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
@@ -742,12 +786,62 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
           </MessageBarBody>
         </MessageBar>
 
+        {/* Edit-mode (draft/publish) banner — Fabric parity. The topology saves
+            to Cosmos as a draft continuously; it only goes live on the
+            Azure-native backend (Event Hubs + Stream Analytics) when you
+            Publish. No Microsoft Fabric required. */}
+        <MessageBar intent={topologyDirtySincePublish ? 'warning' : 'success'} icon={<CloudArrowUp20Regular />}>
+          <MessageBarBody>
+            <MessageBarTitle>{topologyDirtySincePublish ? 'Editing a draft' : 'Published'}</MessageBarTitle>
+            {topologyDirtySincePublish
+              ? 'Changes go live once you publish them to Azure (Event Hubs + Stream Analytics) — no Microsoft Fabric required.'
+              : 'The live Azure-native backend matches this topology. New edits become a draft until you publish again.'}
+          </MessageBarBody>
+          <MessageBarActions>
+            <Button appearance="primary" size="small" icon={provisionBusy ? <Spinner size="tiny" /> : <CloudArrowUp20Regular />}
+              onClick={doProvision} disabled={provisionBusy || !topologyDirtySincePublish}>
+              {provisionBusy ? 'Publishing…' : 'Publish (go live)'}
+            </Button>
+          </MessageBarActions>
+        </MessageBar>
+
         <div className={s.toolbar}>
           <Badge appearance="filled" color="brand">Eventstream</Badge>
           <WorkspacePicker value={workspaceId} onChange={setWorkspaceId} {...ws} />
           {state?.runtimeStatus && <Badge appearance="outline">{state.runtimeStatus}</Badge>}
           {publishedId && <Badge appearance="filled" color="success">published</Badge>}
           {dirty && <Badge appearance="outline" color="warning">unsaved</Badge>}
+          <Tooltip content="Undo" relationship="label">
+            <Button appearance="subtle" icon={<ArrowUndo20Regular />} onClick={doUndo} disabled={!history.canUndo} aria-label="Undo" />
+          </Tooltip>
+          <Tooltip content="Redo" relationship="label">
+            <Button appearance="subtle" icon={<ArrowRedo20Regular />} onClick={doRedo} disabled={!history.canRedo} aria-label="Redo" />
+          </Tooltip>
+          <Menu positioning="below-start">
+            <MenuTrigger disableButtonEnhancement>
+              <MenuButton appearance="outline" icon={<Flowchart20Regular />} size="medium">Transform events</MenuButton>
+            </MenuTrigger>
+            <MenuPopover>
+              <MenuList>
+                {TRANSFORM_MENU.map((cat, ci) => (
+                  <MenuGroup key={cat.category}>
+                    {ci > 0 && <MenuDivider />}
+                    <MenuGroupHeader>{cat.category}</MenuGroupHeader>
+                    {cat.items.map((it) => (
+                      <MenuItem
+                        key={it.id}
+                        icon={it.id === 'sql' ? <Code20Regular /> : <Filter20Regular />}
+                        secondaryContent={it.badge}
+                        onClick={() => onTransformMenu(it.id)}
+                      >
+                        {it.label}
+                      </MenuItem>
+                    ))}
+                  </MenuGroup>
+                ))}
+              </MenuList>
+            </MenuPopover>
+          </Menu>
           <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={load}>Reload</Button>
           {publishedId && (
             <Button appearance="outline" onClick={pullFromFabric} disabled={pullBusy}>
@@ -1061,6 +1155,14 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
 
         {activeTab === 'definition' && (
           <EventstreamDefinitionView cfg={parsedVisual} />
+        )}
+
+        {/* Docked bottom data-preview panel (Fabric parity): live type-badged
+            event preview + pre-flight authoring-errors lint. Shown on the
+            authoring tabs (designer / operators); hidden on the read-only
+            definition + code-first SQL tabs which have their own result grids. */}
+        {(activeTab === 'designer' || activeTab === 'operators') && (
+          <DataPreviewDock itemId={id} topology={esTopology(parsedVisual)} />
         )}
       </div>
     } />
