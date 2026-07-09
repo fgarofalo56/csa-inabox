@@ -539,6 +539,7 @@ function EventstreamCanvasInner({
   }, [onNodesChange]);
 
   const handleNodeClick = useCallback((_: unknown, n: Node) => {
+    if (n.id === GHOST_NODE_ID) return; // ghost handles its own menu; no inspector
     const [role, idx] = n.id.split('-');
     onSelect({ type: role as 'source' | 'transform' | 'sink', idx: Number(idx) });
   }, [onSelect]);
