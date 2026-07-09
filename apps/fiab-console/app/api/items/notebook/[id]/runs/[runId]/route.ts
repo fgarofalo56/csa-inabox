@@ -66,7 +66,14 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string;
     if (!nb || nb.itemType !== 'notebook') return apiError('notebook not found', 404);
     const state = (nb.state as any) || {};
     // Per-cell run uses pendingRuns[runId] cached at dispatch; fall back to whole-notebook code.
-    const pending = state.pendingRuns?.[runId];
+    // pendingRuns is keyed by the BASE runId (spark:<pool>:<sessionId>) — a phase-2
+    // poll arrives with the statement id appended, so also look up the base key
+    // (that's where the whole-notebook per-cell queue lives).
+    const basePendingKey = runId.startsWith('spark:') ? runId.split(':').slice(0, 3).join(':') : runId;
+    const pending = state.pendingRuns?.[runId] || state.pendingRuns?.[basePendingKey];
+    // Whole-notebook "Run all" queue: one Livy statement per code cell, each with
+    // its own kind (mixed sparksql/pyspark notebooks can't run as one statement).
+    const queue: Array<{ source: string; lang: string }> = Array.isArray(pending?.queue) ? pending.queue : [];
     const code: string = pending?.source || state.code || '';
     // v3.x bug fix: previously 'sparksql' was bucketed into Scala-kind 'spark'
     // which made `show databases` hang because Livy tried to parse SQL as
@@ -119,13 +126,17 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string;
       if (stmtId === undefined) {
         const sess = await getLivySession(pool, sessionId);
         if (sess.state === 'idle') {
-          // Promote: submit the code as a statement, embed stmtId in next runId
-          const stmt = await submitLivyStatement(pool, sessionId, { code, kind: lang });
-          // Clean the pendingRuns entry now that the statement is submitted.
+          // Promote: submit the first statement, embed stmtId in next runId.
+          // Queued (whole-notebook) runs submit cell 0 with ITS kind and keep
+          // the pending entry (qIdx advanced) so phase 2 chains the rest;
+          // single-cell runs submit `code` and delete their entry as before.
+          const first = queue.length > 0 ? { code: queue[0].source, kind: queue[0].lang as typeof lang } : { code, kind: lang };
+          const stmt = await submitLivyStatement(pool, sessionId, first);
           if (pending) {
             try {
               const nextPending = { ...(state.pendingRuns || {}) };
-              delete nextPending[runId];
+              if (queue.length > 0) nextPending[basePendingKey] = { ...pending, qIdx: 1 };
+              else delete nextPending[runId];
               await items.item(nb.id, workspaceId).replace({
                 ...nb,
                 state: { ...state, pendingRuns: nextPending },
@@ -137,7 +148,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string;
             ok: true,
             status: stmt.state || 'running',
             runId: `spark:${pool}:${sessionId}:${stmt.id}`,
-            phase: 'statement-submitted',
+            phase: queue.length > 1 ? `cell 1/${queue.length} running` : 'statement-submitted',
           });
         }
         if (['error', 'dead', 'killed'].includes(sess.state)) {
@@ -190,6 +201,38 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string;
         richDisplay = buildLoomDisplay(sqlJson, sampleRows) || undefined;
       }
 
+      // Whole-notebook queue: previous cell finished OK and more cells remain —
+      // submit the next one and keep the client polling (runId promotes to the
+      // new statement id; no output until the LAST cell so ✓ means "all ran").
+      const qIdx = Number(pending?.qIdx) || 0;
+      if (out.status === 'ok' && queue.length > 0 && qIdx > 0 && qIdx < queue.length) {
+        const next = queue[qIdx];
+        const nstmt = await submitLivyStatement(pool, sessionId, { code: next.source, kind: next.lang as any });
+        try {
+          const nextPending = { ...(state.pendingRuns || {}) };
+          nextPending[basePendingKey] = { ...pending, qIdx: qIdx + 1 };
+          await items.item(nb.id, workspaceId).replace({
+            ...nb, state: { ...state, pendingRuns: nextPending }, updatedAt: new Date().toISOString(),
+          } as WorkspaceItem);
+        } catch { /* non-fatal */ }
+        return NextResponse.json({
+          ok: true,
+          status: 'running',
+          runId: `spark:${pool}:${sessionId}:${nstmt.id}`,
+          phase: `cell ${qIdx + 1}/${queue.length} running`,
+        });
+      }
+      // Terminal for a queued run (last cell ok, or any cell errored): drop the
+      // queue entry so a re-run starts fresh.
+      if (queue.length > 0 && (out.status === 'ok' || out.status === 'error')) {
+        try {
+          const nextPending = { ...(state.pendingRuns || {}) };
+          delete nextPending[basePendingKey];
+          await items.item(nb.id, workspaceId).replace({
+            ...nb, state: { ...state, pendingRuns: nextPending }, updatedAt: new Date().toISOString(),
+          } as WorkspaceItem);
+        } catch { /* non-fatal */ }
+      }
       if (out.status === 'ok' || out.status === 'error') await recordRun(items, nb, workspaceId, runId, {
         status: out.status === 'ok' ? 'Completed' : 'Failed', endTimeUtc: new Date().toISOString(),
         failureReason: out.status === 'error' ? { errorCode: out.ename, message: out.evalue } : null,
