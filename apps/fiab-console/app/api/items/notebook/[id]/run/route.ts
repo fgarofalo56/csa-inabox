@@ -112,6 +112,23 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     const code = cellSource || substituteNotebookPlaceholders(state.code || codeFromCells || '');
     if (!code.trim()) return err('notebook is empty — write code before running', 400);
 
+    // Whole-notebook "Run all": each code cell must run as its OWN Livy
+    // statement with its own kind — joining sparksql + pyspark sources into a
+    // single pyspark statement is a Python syntax error, and the legacy
+    // state.code fallback is EMPTY on bundle-installed notebooks (which made
+    // Run all a silent no-op: empty statement → vacuous success). The queue is
+    // persisted to pendingRuns below and drained sequentially by the poller.
+    const kindOfCell = (l: string | undefined): 'pyspark' | 'spark' | 'sql' | 'sparkr' => {
+      const v = (l || state.defaultLang || state.lang || 'pyspark').toLowerCase();
+      if (v === 'sparksql' || v === 'spark-sql' || v === 'sql') return 'sql';
+      if (v === 'spark' || v === 'scala') return 'spark';
+      if (v === 'sparkr' || v === 'r') return 'sparkr';
+      return 'pyspark';
+    };
+    const runQueue: Array<{ source: string; lang: string }> = cellSource ? [] : allCells
+      .filter((c) => c?.type === 'code' && typeof c.source === 'string' && c.source.trim())
+      .map((c) => ({ source: substituteNotebookPlaceholders(c.source), lang: kindOfCell(c.lang) }));
+
     // Map cell-lang to the statement-kind that Livy / Databricks expects.
     // Livy session-kind affects cold-start; statement-kind controls per-cell
     // interpretation. We always start a 'pyspark' session because it can
@@ -354,7 +371,13 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       try {
         const items = await itemsContainer();
         const pendingRuns = { ...(state.pendingRuns || {}) };
-        if (cellSource) pendingRuns[runIdStr] = { source: cellSource, lang: effectiveStmtKind, cellId, startedAt: new Date().toISOString() };
+        if (cellSource) {
+          pendingRuns[runIdStr] = { source: cellSource, lang: effectiveStmtKind, cellId, startedAt: new Date().toISOString() };
+        } else if (runQueue.length > 0) {
+          // Whole-notebook run: persist the per-cell statement queue (drained
+          // by the poller) — NOT the joined blob. qIdx = next cell to submit.
+          pendingRuns[runIdStr] = { queue: runQueue, qIdx: 0, startedAt: new Date().toISOString() };
+        }
         await items.item(nb.id, workspaceId).replace({
           ...nb,
           state: {
