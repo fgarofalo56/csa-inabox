@@ -96,6 +96,7 @@ const ALLOWLIST = new Set([
   'LOOM_MULTIUSER_ACL',             // opt-out kill switch for the multi-user ACL fallback (default on in code; rel-T11)
   'LOOM_SCHEDULER_EMAIL_WEBHOOK',   // opt-in email relay (ACS/Logic App/SMTP) for scheduler failure alerts (rel-T81); unset = alerts land in the Loom inbox + optional webhook only
   'LOOM_ITEM_VERSION_CAP',          // opt-in tuning knob for the per-item version-history retention cap (W6); unset default = 50 in code (lib/versions/item-version-store.ts)
+  'LOOM_ADT_ENDPOINT',              // opt-in Azure Digital Twins endpoint (FGC-12); default twin backend is ADX-native — deploy platform/fiab/bicep/modules/integration/adt-instance.bicep to enable
   // SVC-1/SVC-8 — AI-enrichment cognitive endpoints. Independent single-kind
   // Cognitive Services accounts provisioned by deploy-planner/cognitive-account.bicep
   // and set per-deployment via /admin/env-config; NOT emitted by admin-plane
