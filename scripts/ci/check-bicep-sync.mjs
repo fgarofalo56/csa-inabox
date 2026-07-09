@@ -44,6 +44,7 @@ const ORPHAN_ALLOWLIST = new Map([
   ['platform/fiab/bicep/modules/admin-plane/cosmos-navigator-keys-rbac.bicep', 'opt-in Cosmos navigator-keys RBAC; deployed on demand'],
   ['platform/fiab/bicep/modules/admin-plane/cost-management-rbac.bicep', 'opt-in cost-management chargeback RBAC; deployed on demand'],
   ['platform/fiab/bicep/modules/admin-plane/devcenter.bicep', 'opt-in Deployment Environments DevCenter; TODO wire into orchestrator (release-environment honest-gate documents it)'],
+  ['platform/fiab/bicep/modules/admin-plane/event-grid-webhooks.bicep', 'opt-in outbound-webhook Event Grid transport (BR-WEBHOOK); standalone entrypoint deployed out-of-band (main.bicep at 256-param ceiling), then LOOM_EVENTGRID_TOPIC_ENDPOINT/KEY set on the console app; the webhook-emitter honest-gates to direct HTTPS until both are present'],
   ['platform/fiab/bicep/modules/admin-plane/gh-runner-job.bicep', 'standalone entrypoint: scale-to-zero self-hosted GitHub runner ACA Job, deployed out-of-band (az deployment -f gh-runner-job.bicep; its doc block shows the optional in-orchestrator wiring)'],
   ['platform/fiab/bicep/modules/shared/diagnostic-settings.bicep', 'shared scope:<resource> diagnostic-settings helper template (loom-law-monitoring runbook documents it); TODO wire callers per-resource'],
   ['platform/fiab/bicep/modules/admin-plane/mcp-catalog-app.bicep', 'opt-in MCP-catalog ACA app; deployed when the MCP catalog is enabled'],
