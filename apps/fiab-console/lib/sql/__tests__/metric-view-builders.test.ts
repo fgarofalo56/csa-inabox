@@ -146,10 +146,12 @@ describe('buildMetricViewYaml + buildCreateMetricViewDdl (Databricks opt-in)', (
   });
 
   it('rejects a `$$` breakout in an expression (would end the YAML block)', () => {
+    // `$` is outside the expression allowlist, so this is now rejected up front
+    // by the allowlist guard (before the `$$`-specific blocklist would fire).
     expect(() => buildCreateMetricViewDdl({
       catalog: 'c', schema: 's', name: 'v',
       spec: { source: 'orders', dimensions: [], measures: [{ name: 'n', aggregation: 'CUSTOM', expr: 'x $$ y' }] },
-    })).toThrow(/\$\$/);
+    })).toThrow(/\$\$|allowed set/);
   });
 
   it('DROP + SHOW builders quote identifiers', () => {
