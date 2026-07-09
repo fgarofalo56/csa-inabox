@@ -17,6 +17,8 @@
 import type { Container } from '@azure/cosmos';
 import { agentMemoryContainer } from './cosmos-client';
 import { aoaiChatJson } from './aoai-chat-client';
+import { normalizeUsage, runLatencyMs, type NormalizedUsage } from '@/lib/foundry/agentops';
+import { estCostUsd } from '@/lib/copilot/cost-estimate';
 
 // Caps read per-call (not at module load) so an admin env change takes effect
 // without a restart and so they are unit-testable.
@@ -25,7 +27,7 @@ const threadCap = () => intEnv('LOOM_AGENT_THREAD_CAP', 50);
 const memoryCap = () => intEnv('LOOM_AGENT_MEMORY_CAP', 200);
 const memoryTopK = () => intEnv('LOOM_AGENT_MEMORY_TOPK', 8);
 
-/** A persisted run transcript for the resume UI. */
+/** A persisted run transcript for the resume UI + AgentOps rollup (AIF-13). */
 export interface AgentThreadRecord {
   id: string;              // `thread:<threadId>`
   agentId: string;         // PK
@@ -39,6 +41,11 @@ export interface AgentThreadRecord {
   answer: string;
   steps?: unknown[];
   createdAt: string;
+  // ── AgentOps metrics (AIF-13) — real token counts; cost is an estimate. ──
+  model?: string;
+  usage?: NormalizedUsage;
+  costUsd?: number;
+  latencyMs?: number;
 }
 
 /** A durable memory fact an agent recalls across threads. */
@@ -68,6 +75,9 @@ export interface SaveThreadInput {
   question: string;
   answer: string;
   steps?: unknown[];
+  /** AgentOps (AIF-13): the run's model + raw usage for cost/latency rollup. */
+  model?: string;
+  usage?: Record<string, unknown> | null;
 }
 
 /**
@@ -78,6 +88,11 @@ export interface SaveThreadInput {
 export async function saveThread(input: SaveThreadInput): Promise<AgentThreadRecord | null> {
   try {
     const c = await agentMemoryContainer();
+    // AgentOps metrics (AIF-13): real token counts from the run's usage; cost is
+    // an ESTIMATE (rel-T85 list price); latency is derived from the step spans.
+    const usage = normalizeUsage(input.usage);
+    const model = input.model || '';
+    const steps = Array.isArray(input.steps) ? (input.steps as { createdAt?: number; completedAt?: number }[]) : [];
     const rec: AgentThreadRecord = {
       id: `thread:${input.threadId}`,
       agentId: input.agentId,
@@ -91,6 +106,10 @@ export async function saveThread(input: SaveThreadInput): Promise<AgentThreadRec
       answer: input.answer,
       steps: input.steps,
       createdAt: nowIso(),
+      model: model || undefined,
+      usage,
+      costUsd: estCostUsd(model, usage.promptTokens, usage.completionTokens),
+      latencyMs: runLatencyMs(steps),
     };
     await c.items.upsert(rec);
     await pruneThreads(c, input.agentId, input.userOid);
@@ -285,6 +304,110 @@ async function pruneMemories(c: Container, agentId: string, userOid: string): Pr
           { name: '@a', value: agentId },
           { name: '@u', value: userOid },
           { name: '@cap', value: memoryCap() },
+        ],
+      })
+      .fetchAll();
+    for (const r of resources) {
+      await c.item(r.id, agentId).delete().catch(() => undefined);
+    }
+  } catch {
+    /* prune is best-effort */
+  }
+}
+
+// ── Eval runs (AIF-13) ──────────────────────────────────────────────────────
+//
+// A stored evaluation of an agent against a prompt-set: each prompt was run
+// through the agent, then an AOAI judge scored the answer 1-5. Shares the
+// loom-agent-memory container (PK /agentId, docType:'eval') — no new resource.
+const evalCap = () => intEnv('LOOM_AGENT_EVAL_CAP', 50);
+
+export interface AgentEvalResultRow {
+  prompt: string;
+  criteria?: string;
+  answer: string;
+  /** 1-5 (0 when the run/judge failed). */
+  score: number;
+  rationale?: string;
+  status: string;
+}
+
+export interface AgentEvalRecord {
+  id: string;              // `eval:<uuid>`
+  agentId: string;         // PK
+  docType: 'eval';
+  userOid: string;
+  name: string;
+  model?: string;
+  results: AgentEvalResultRow[];
+  /** Mean score across scored rows (0..5). */
+  avgScore: number;
+  passRate: number;        // rows with score >= passThreshold / total, 0..1
+  passThreshold: number;
+  createdAt: string;
+}
+
+export interface SaveEvalInput {
+  agentId: string;
+  userOid: string;
+  name: string;
+  model?: string;
+  results: AgentEvalResultRow[];
+  avgScore: number;
+  passRate: number;
+  passThreshold: number;
+}
+
+/** Persist a completed eval run, then prune the oldest beyond the cap. */
+export async function saveEvalRun(input: SaveEvalInput): Promise<AgentEvalRecord> {
+  const c = await agentMemoryContainer();
+  const rec: AgentEvalRecord = {
+    id: `eval:${crypto.randomUUID()}`,
+    agentId: input.agentId,
+    docType: 'eval',
+    userOid: input.userOid,
+    name: input.name,
+    model: input.model,
+    results: input.results,
+    avgScore: input.avgScore,
+    passRate: input.passRate,
+    passThreshold: input.passThreshold,
+    createdAt: nowIso(),
+  };
+  await c.items.create(rec);
+  await pruneEvals(c, input.agentId, input.userOid);
+  return rec;
+}
+
+/** List a user's stored eval runs for an agent, newest first (capped). */
+export async function listEvalRuns(agentId: string, userOid: string, limit = evalCap()): Promise<AgentEvalRecord[]> {
+  const c = await agentMemoryContainer();
+  const { resources } = await c.items
+    .query<AgentEvalRecord>({
+      query:
+        "SELECT * FROM c WHERE c.agentId = @a AND c.userOid = @u AND c.docType = 'eval' " +
+        'ORDER BY c.createdAt DESC OFFSET 0 LIMIT @n',
+      parameters: [
+        { name: '@a', value: agentId },
+        { name: '@u', value: userOid },
+        { name: '@n', value: Math.max(1, limit) },
+      ],
+    })
+    .fetchAll();
+  return resources;
+}
+
+async function pruneEvals(c: Container, agentId: string, userOid: string): Promise<void> {
+  try {
+    const { resources } = await c.items
+      .query<{ id: string }>({
+        query:
+          "SELECT c.id FROM c WHERE c.agentId = @a AND c.userOid = @u AND c.docType = 'eval' " +
+          'ORDER BY c.createdAt DESC OFFSET @cap LIMIT 1000',
+        parameters: [
+          { name: '@a', value: agentId },
+          { name: '@u', value: userOid },
+          { name: '@cap', value: evalCap() },
         ],
       })
       .fetchAll();

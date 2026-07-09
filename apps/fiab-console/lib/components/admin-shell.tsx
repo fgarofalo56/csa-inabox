@@ -16,7 +16,7 @@ import {
   PanelLeftExpand24Regular, Globe24Regular, Heart24Regular,
   Tag24Regular, TagMultiple24Regular, Sparkle24Regular, Code24Regular, DataPie24Regular,
   Wrench24Regular, ShieldLock24Regular, PlugConnected24Regular,
-  Money24Regular,
+  Money24Regular, Send24Regular,
   type FluentIcon,
 } from '@fluentui/react-icons';
 
@@ -28,6 +28,7 @@ const SECTIONS: Section[] = [
   { href: '/admin/capacity', label: 'Capacity & compute', icon: Server24Regular, description: 'Underlying Azure services Loom orchestrates: ACA, Databricks, Synapse, ADF, ADLA, AML, Cosmos, ACR.' },
   { href: '/admin/scaling', label: 'Scale by SKU', icon: GaugeRegular, description: 'Scale Fabric, Synapse, ADX, Databricks, AI Search, APIM, Cosmos, Container Apps, Foundry — real ARM PATCH from inside Loom.' },
   { href: '/admin/usage-chargeback', label: 'Usage & chargeback', icon: Money24Regular, description: 'Unified capacity + chargeback across every engine — real Azure Cost Management spend + Azure Monitor utilization, normalized to one Loom Capacity Unit (LCU) with a throttle/surge gauge. The Azure-native 1:1 of the Fabric Capacity Metrics app.' },
+  { href: '/admin/chargeback', label: 'Chargeback report', icon: Money24Regular, description: 'Attribute real Azure Cost Management spend to governance domains via the loom-domain tag — a real per-domain report with stacked bar chart, CSV export, and per-user drill-down. The Azure-native 1:1 of the Fabric Chargeback app.' },
   { href: '/admin/env-config', label: 'Runtime configuration', icon: Wrench24Regular, description: 'View/set the console deployment env vars (Cosmos, AOAI, Synapse, ADX, …) from the UI — real ARM revision + audit trail, no Azure portal. Includes a bicep reconcile snippet so changes survive the next deployment.' },
   { href: '/admin/api-management', label: 'API Management', icon: Settings24Regular, description: 'Manage APIM APIs, products, subscriptions, policies, named values, backends — full marketplace administration.' },
   { href: '/admin/domains', label: 'Domains', icon: Organization24Regular, description: 'Organize workspaces into business domains and subdomains.' },
@@ -43,6 +44,7 @@ const SECTIONS: Section[] = [
   { href: '/admin/usage', label: 'Usage metrics', icon: ChartMultiple24Regular, description: 'Feature usage & adoption report, item inventory, item details.' },
   { href: '/admin/copilot-usage', label: 'Copilot usage', icon: Sparkle24Regular, description: 'Per-persona Copilot token consumption from App Insights — real prompt + completion tokens by persona, model, day, and user (hashed). No synthetic numbers.' },
   { href: '/admin/mcp-servers', label: 'MCP Servers', icon: PlugConnected24Regular, description: 'Browse + deploy the curated catalog of gov-safe MCP servers (Azure Container Apps + Key Vault secretRef + Azure Files), manage deployed servers with live status + teardown, and connect external MCP endpoints — the single home for Model Context Protocol tools Copilot can call.' },
+  { href: '/admin/webhooks', label: 'Event subscriptions', icon: Send24Regular, description: 'Register outbound webhook endpoints that receive Loom events (item lifecycle, workspace, pipeline runs, marketplace subscribe / SLA breach, admin changes). HMAC-SHA256 signed direct HTTPS delivery by default, or Azure Event Grid when configured; per-hook delivery history + test-fire.' },
   { href: '/admin/developer/tokens', label: 'API tokens', icon: Key24Regular, description: 'Tenant-wide inventory of scoped API tokens (PAT) for non-interactive access — who created each token, its scope, last-used and expiry. Revoke any token immediately. Users create + manage their own under Settings → Developer.' },
   { href: '/admin/security?tab=dspm', label: 'DSPM for AI', icon: ShieldLock24Regular, description: 'AI data-security posture: which agents / Copilots touch sensitive-labeled data, the max sensitivity label exposed, its protection state, and real per-agent usage. The Azure-native 1:1 of Purview DSPM for AI.' },
   { href: '/admin/users', label: 'Users & licenses', icon: People24Regular, description: 'Power BI / Fabric license assignments and user inventory.' },

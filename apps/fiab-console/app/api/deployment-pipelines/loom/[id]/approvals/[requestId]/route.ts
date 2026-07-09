@@ -10,13 +10,13 @@
  *
  * Every decision emits an audit event to the LoomAudit_CL SIEM stream (BR-SIEM).
  *
- * NOTE (BR-WEBHOOK): the outbound webhook fan-out (`emitLoomEvent`) is not on
- * origin/main yet, so no webhook is emitted here — only the audit stream. When
- * BR-WEBHOOK lands, add a `void emitLoomEvent(...)` alongside each emitAuditEvent
- * below (same event names).
+ * BR-WEBHOOK: when the final approval promotes, the terminal run also fans out
+ * to any subscribed outbound webhook (`pipeline.run.completed` / `.failed`) so an
+ * approval-gated promotion emits the same run event a direct deploy does.
  */
 import { NextRequest } from 'next/server';
 import { emitAuditEvent } from '@/lib/admin/audit-stream';
+import { emitLoomEvent } from '@/lib/events/webhook-emitter';
 import { applyDecision, canPromote, summarizeApproval } from '@/lib/install/pipeline-approvals';
 import type { LoomApprovalRequest } from '@/lib/types/loom-pipeline';
 import {
@@ -124,6 +124,24 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
         next = { ...next, status: 'promoted', promotionOperationId: result.operationId, updatedAt: new Date().toISOString() };
         await saveApprovalRequest(next);
         emitAuditEvent({ ...auditBase, action: 'pipeline.promotion.promoted', detail: { requestId, operationId: result.operationId, status: result.status } });
+        // BR-WEBHOOK — the approval-gated promotion reached a terminal receipt;
+        // fan the outcome out to any subscribed outbound webhook (best-effort).
+        emitLoomEvent({
+          type: result.status === 'failed' ? 'pipeline.run.failed' : 'pipeline.run.completed',
+          tenantId: ownerTenant,
+          subject: id,
+          subjectName: pipeline.displayName,
+          actor: { oid: s.claims.oid, upn: s.claims.upn || s.claims.email },
+          data: {
+            operationId: result.operationId,
+            status: result.status,
+            sourceStageId: next.sourceStageId,
+            targetStageId: next.targetStageId,
+            deployedItemIds: result.deployedItemIds,
+            summary: result.summary,
+            requestId,
+          },
+        });
         return jok({ request: next, promotion: result });
       } catch (e) {
         next = { ...next, status: 'promotion-failed', updatedAt: new Date().toISOString() };

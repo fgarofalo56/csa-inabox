@@ -199,6 +199,15 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       sourceKind: body?.sourceKind === 'adx' ? 'adx' : (body?.sourceKind === 'log-analytics' ? 'log-analytics' : undefined),
       adxDatabase: typeof body?.adxDatabase === 'string' ? body.adxDatabase : undefined,
       adxClusterUri: typeof body?.adxClusterUri === 'string' ? body.adxClusterUri : undefined,
+      // Trigger-model depth (FGC-13).
+      ruleKind: typeof body?.ruleKind === 'string' ? body.ruleKind : undefined,
+      objectKey: typeof body?.objectKey === 'string' ? body.objectKey : undefined,
+      propertyConditionType: typeof body?.propertyConditionType === 'string' ? body.propertyConditionType : undefined,
+      changePercent: typeof body?.changePercent === 'number' ? body.changePercent : undefined,
+      rangeMin: typeof body?.rangeMin === 'number' ? body.rangeMin : undefined,
+      rangeMax: typeof body?.rangeMax === 'number' ? body.rangeMax : undefined,
+      noDataMinutes: typeof body?.noDataMinutes === 'number' ? body.noDataMinutes : undefined,
+      timestampColumn: typeof body?.timestampColumn === 'string' ? body.timestampColumn : undefined,
     });
     // Persist onto the Cosmos item so the rule list survives reload.
     const nextRules = [...rules.filter((r) => r.id !== rule.id), rule];
@@ -381,7 +390,7 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
       // else keep the rule's existing query (don't lose a verbatim KQL rule).
       query: typeof body?.query === 'string' && body.query.trim()
         ? body.query
-        : (body?.condition ? undefined : old.query),
+        : ((body?.condition || body?.ruleKind || body?.propertyConditionType) ? undefined : old.query),
       sourceTable: typeof body?.sourceTable === 'string' ? body.sourceTable : undefined,
       severity: typeof body?.severity === 'number' ? body.severity : old.severity,
       evaluationFrequency: typeof body?.evaluationFrequency === 'string' ? body.evaluationFrequency : old.evaluationFrequency,
@@ -392,6 +401,15 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
       sourceKind: body?.sourceKind === 'adx' ? 'adx' : (body?.sourceKind === 'log-analytics' ? 'log-analytics' : (old.sourceKind || undefined)),
       adxDatabase: typeof body?.adxDatabase === 'string' ? body.adxDatabase : old.adxDatabase,
       adxClusterUri: typeof body?.adxClusterUri === 'string' ? body.adxClusterUri : old.adxClusterUri,
+      // Trigger-model depth (FGC-13) — a partial edit preserves the prior kind/condition.
+      ruleKind: typeof body?.ruleKind === 'string' ? body.ruleKind : old.ruleKind,
+      objectKey: typeof body?.objectKey === 'string' ? body.objectKey : old.objectKey,
+      propertyConditionType: typeof body?.propertyConditionType === 'string' ? body.propertyConditionType : old.propertyConditionType,
+      changePercent: typeof body?.changePercent === 'number' ? body.changePercent : old.changePercent,
+      rangeMin: typeof body?.rangeMin === 'number' ? body.rangeMin : old.rangeMin,
+      rangeMax: typeof body?.rangeMax === 'number' ? body.rangeMax : old.rangeMax,
+      noDataMinutes: typeof body?.noDataMinutes === 'number' ? body.noDataMinutes : old.noDataMinutes,
+      timestampColumn: typeof body?.timestampColumn === 'string' ? body.timestampColumn : old.timestampColumn,
     });
     // Rename → drop the orphan ARM rule left behind under the old name.
     if (rec.azureRuleName !== old.azureRuleName) {

@@ -20,6 +20,7 @@ import { useAdminTabStyles } from '@/lib/components/ui/admin-tab-styles';
 import { SectionExplainer, LearnPopover } from '@/lib/components/ui/learn-popover';
 import { itemVisual } from '@/lib/components/ui/item-type-visual';
 import { ScaleManagePanel } from '@/lib/components/admin/scale-manage-panel';
+import { SurgeProtectionPanel } from '@/lib/components/admin/surge-protection-panel';
 import { MetricChart } from '@/lib/components/monitor/metric-chart';
 import { OpsCopilotPane } from '@/lib/components/admin/ops-copilot-pane';
 
@@ -678,6 +679,24 @@ export default function CapacityPage() {
             }
           >
             <ScaleManagePanel />
+          </Section>
+
+          <Section
+            title="Surge protection"
+            actions={
+              <>
+                <Caption1 className={a.muted}>
+                  Admission control — reject new jobs before a hard throttle, cap per-workspace consumption
+                </Caption1>
+                <LearnPopover
+                  title="Surge protection"
+                  content="Loom-enforced admission control, the Azure-native 1:1 of Fabric's two-level surge protection. New Spark/Databricks/KQL jobs are rejected early when a capacity is over its utilization threshold, and a per-workspace LCU/hour cap prevents one workspace starving the rest. Ships enabled with generous defaults; tune or disable it here."
+                  learnMoreHref="https://learn.microsoft.com/fabric/enterprise/surge-protection"
+                />
+              </>
+            }
+          >
+            <SurgeProtectionPanel />
           </Section>
 
           <Section

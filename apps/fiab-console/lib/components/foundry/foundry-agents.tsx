@@ -31,9 +31,10 @@ import {
 } from '@fluentui/react-components';
 import {
   Add20Regular, ArrowSync16Regular, Delete16Regular, Bot24Regular, Play16Regular,
-  History16Regular, ArrowClockwise16Regular,
+  History16Regular, ArrowClockwise16Regular, DataHistogram16Regular, Beaker16Regular,
 } from '@fluentui/react-icons';
 import { mcpToolOptions } from '@/lib/copilot/agent-tool-catalog';
+import { runMetrics, type AgentRollup } from '@/lib/foundry/agentops';
 
 const useStyles = makeStyles({
   root: { display: 'flex', flexDirection: 'column', gap: '12px', padding: '16px', minHeight: '0', flex: '1' },
@@ -52,6 +53,14 @@ const useStyles = makeStyles({
   mono: { fontFamily: 'monospace', fontSize: '12px', whiteSpace: 'pre-wrap', wordBreak: 'break-word' },
   answer: { whiteSpace: 'pre-wrap', marginTop: '6px' },
   empty: { color: tokens.colorNeutralForeground3, fontStyle: 'italic', padding: '8px' },
+  // AgentOps (AIF-13)
+  metricGrid: { display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '6px' },
+  metric: { display: 'flex', flexDirection: 'column', minWidth: '84px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: '6px', padding: '6px 10px' },
+  metricVal: { fontSize: '16px', fontWeight: 600 },
+  metricKey: { fontSize: '11px', color: tokens.colorNeutralForeground3 },
+  opsSection: { display: 'flex', flexDirection: 'column', gap: '8px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: '6px', padding: '12px', marginTop: '4px' },
+  evalRow: { display: 'grid', gridTemplateColumns: '2fr 1fr auto', gap: '6px', alignItems: 'center' },
+  table: { width: '100%', borderCollapse: 'collapse', fontSize: '12px' },
 });
 
 // Shared typed tool catalog (AIF-5). The Foundry project builder exposes the
@@ -87,6 +96,14 @@ interface ThreadSummary {
   question: string;
   answerPreview: string;
   createdAt: string;
+}
+
+/** A stored eval run (AIF-13). */
+interface AgentEvalResultRow { prompt: string; criteria?: string; answer: string; score: number; rationale?: string; status: string }
+interface AgentEvalRun {
+  id: string; name: string; model?: string; createdAt: string;
+  avgScore: number; passRate: number; passThreshold: number;
+  results: AgentEvalResultRow[];
 }
 
 interface Gate { msg: string; hint?: string }
@@ -171,6 +188,16 @@ export function FoundryAgentsPanel({ active, nonce = 0, acct = null }: { active:
   const [threads, setThreads] = useState<ThreadSummary[]>([]);
   const [threadsLoading, setThreadsLoading] = useState(false);
   const [threadReloadNonce, setThreadReloadNonce] = useState(0);
+
+  // ---- AgentOps (AIF-13): per-run model, rollup, eval ----
+  const [pgRunModel, setPgRunModel] = useState('');
+  const [rollup, setRollup] = useState<AgentRollup | null>(null);
+  const [rollupLoading, setRollupLoading] = useState(false);
+  const [evalRows, setEvalRows] = useState<{ prompt: string; criteria: string }[]>([{ prompt: '', criteria: '' }]);
+  const [evalName, setEvalName] = useState('');
+  const [evalRunning, setEvalRunning] = useState(false);
+  const [evalMsg, setEvalMsg] = useState<{ intent: 'success' | 'error' | 'warning'; text: string } | null>(null);
+  const [evalRuns, setEvalRuns] = useState<AgentEvalRun[]>([]);
 
   const accountKey = `${acct?.name || ''}|${acct?.resourceGroup || ''}`;
 
@@ -354,12 +381,14 @@ export function FoundryAgentsPanel({ active, nonce = 0, acct = null }: { active:
       // reachable (GCC-High / IL5) — it has no Foundry project to load it from.
       // The Foundry tier loads the agent by name and ignores these.
       const def = agents.find((a) => a.name === agent);
+      const runModel = def ? agentModel(def) : (selected === agent ? fModel : '');
+      setPgRunModel(runModel);
       const res = await clientFetch('/api/foundry/agents/run', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           agent, question: q,
           instructions: def ? agentInstructions(def) : (selected === agent ? fInstructions : undefined),
-          model: def ? agentModel(def) : (selected === agent ? fModel : undefined),
+          model: runModel || undefined,
         }),
       });
       const j = await readJson(res);
@@ -404,7 +433,8 @@ export function FoundryAgentsPanel({ active, nonce = 0, acct = null }: { active:
       if (!j?.ok || !j.thread) { setPgError(j?.error || 'Could not load thread'); return; }
       const t = j.thread;
       setPgQuestion(t.question || '');
-      setPgResult({ threadId: t.threadId, runId: t.runId, status: t.status, answer: t.answer, steps: t.steps || [] });
+      setPgResult({ threadId: t.threadId, runId: t.runId, status: t.status, answer: t.answer, steps: t.steps || [], usage: t.usage, model: t.model });
+      setPgRunModel(t.model || '');
       setPgTier(typeof t.tier === 'string' ? t.tier : null);
     } catch (e: any) { setPgError(e?.message || String(e)); }
   }, [pgAgent]);
@@ -417,6 +447,71 @@ export function FoundryAgentsPanel({ active, nonce = 0, acct = null }: { active:
       await loadThreads(a);
     } catch { /* best-effort */ }
   }, [pgAgent, loadThreads]);
+
+  // ---- AgentOps rollup (AIF-13): aggregate cost/latency/success over runs ----
+  const loadRollup = useCallback(async (agentName: string) => {
+    const a = agentName.trim();
+    if (!a) { setRollup(null); return; }
+    setRollupLoading(true);
+    try {
+      const res = await clientFetch(`/api/foundry/agents/rollup?agent=${encodeURIComponent(a)}`);
+      const j = await readJson(res);
+      setRollup(j?.ok && j.rollup ? j.rollup : null);
+    } catch { setRollup(null); }
+    finally { setRollupLoading(false); }
+  }, []);
+
+  // ---- AgentOps eval (AIF-13): run a prompt-set + judge; list past runs ----
+  const loadEvalRuns = useCallback(async (agentName: string) => {
+    const a = agentName.trim();
+    if (!a) { setEvalRuns([]); return; }
+    try {
+      const res = await clientFetch(`/api/foundry/agents/eval?agent=${encodeURIComponent(a)}`);
+      const j = await readJson(res);
+      setEvalRuns(j?.ok && Array.isArray(j.runs) ? j.runs : []);
+    } catch { setEvalRuns([]); }
+  }, []);
+
+  // Refresh rollup + eval history whenever the playground agent changes or a run
+  // is persisted (threadReloadNonce bumps after each playground run).
+  useEffect(() => {
+    if (active && pgAgent.trim()) { loadRollup(pgAgent); loadEvalRuns(pgAgent); }
+    else { setRollup(null); setEvalRuns([]); }
+  }, [active, pgAgent, threadReloadNonce, loadRollup, loadEvalRuns]);
+
+  const runEval = useCallback(async () => {
+    const a = pgAgent.trim();
+    if (!a || evalRunning) return;
+    const prompts = evalRows.map((r) => ({ prompt: r.prompt.trim(), criteria: r.criteria.trim() || undefined })).filter((r) => r.prompt);
+    if (!prompts.length) { setEvalMsg({ intent: 'error', text: 'Add at least one prompt to the eval set.' }); return; }
+    setEvalRunning(true); setEvalMsg(null);
+    try {
+      const def = agents.find((x) => x.name === a);
+      const res = await clientFetch('/api/foundry/agents/eval', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          agent: a, name: evalName.trim() || undefined, prompts,
+          instructions: def ? agentInstructions(def) : (selected === a ? fInstructions : undefined),
+          model: def ? agentModel(def) : (selected === a ? fModel : undefined),
+        }),
+      });
+      const j = await readJson(res);
+      if (res.status === 501 || j?.code === 'not_configured') {
+        setEvalMsg({ intent: 'warning', text: j?.hint || j?.error || 'Foundry Agent Service not configured — eval needs a runtime tier.' });
+        return;
+      }
+      if (!j.ok) { setEvalMsg({ intent: 'error', text: j.error || `HTTP ${res.status}` }); return; }
+      const avg = j.eval?.avgScore ?? j.summary?.avgScore;
+      setEvalMsg({ intent: 'success', text: `Eval "${j.eval?.name}" scored ${avg}/5 avg · ${Math.round((j.eval?.passRate ?? 0) * 100)}% pass.` });
+      loadEvalRuns(a);
+    } catch (e: any) { setEvalMsg({ intent: 'error', text: e?.message || String(e) }); }
+    finally { setEvalRunning(false); }
+  }, [pgAgent, evalRunning, evalRows, evalName, agents, selected, fInstructions, fModel, loadEvalRuns]);
+
+  const runMetricsForResult = useMemo(() => {
+    if (!pgResult) return null;
+    return runMetrics({ model: pgResult.model || pgRunModel, usage: pgResult.usage, steps: pgResult.steps });
+  }, [pgResult, pgRunModel]);
 
   const deploymentNames = useMemo(() => {
     const names = deployments.map((d) => d.name).filter(Boolean);
@@ -683,6 +778,15 @@ export function FoundryAgentsPanel({ active, nonce = 0, acct = null }: { active:
                   )}
                   {pgResult.runId && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>run {pgResult.runId}</Caption1>}
                 </div>
+                {/* Per-run trace metrics (AIF-13): real token counts; cost is an estimate. */}
+                {runMetricsForResult && (
+                  <div className={s.metricGrid}>
+                    <div className={s.metric}><span className={s.metricVal}>{runMetricsForResult.usage.totalTokens.toLocaleString()}</span><span className={s.metricKey}>tokens ({runMetricsForResult.usage.promptTokens.toLocaleString()} in / {runMetricsForResult.usage.completionTokens.toLocaleString()} out)</span></div>
+                    <div className={s.metric}><span className={s.metricVal}>${runMetricsForResult.costUsd.toFixed(4)}</span><span className={s.metricKey}>est. cost{runMetricsForResult.model ? ` · ${runMetricsForResult.model}` : ''}</span></div>
+                    <div className={s.metric}><span className={s.metricVal}>{(runMetricsForResult.latencyMs / 1000).toFixed(2)}s</span><span className={s.metricKey}>latency</span></div>
+                    <div className={s.metric}><span className={s.metricVal}>{runMetricsForResult.stepCount}</span><span className={s.metricKey}>steps</span></div>
+                  </div>
+                )}
                 {pgResult.lastError && <MessageBar intent="error" style={{ marginTop: tokens.spacingVerticalSNudge }}><MessageBarBody>{pgResult.lastError}</MessageBarBody></MessageBar>}
                 {pgResult.answer && (
                   <div style={{ marginTop: tokens.spacingVerticalS }}>
@@ -697,6 +801,9 @@ export function FoundryAgentsPanel({ active, nonce = 0, acct = null }: { active:
                     <div className={s.stepHead}>
                       <Badge appearance="outline">{st.type}</Badge>
                       <Badge appearance="filled" color={st.status === 'completed' ? 'success' : st.status === 'failed' ? 'danger' : 'informative'}>{st.status}</Badge>
+                      {st.createdAt && st.completedAt && st.completedAt >= st.createdAt && (
+                        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{(st.completedAt - st.createdAt).toFixed(0)}s</Caption1>
+                      )}
                     </div>
                     {(st.toolCalls || []).map((tc: any, j: number) => (
                       <div key={j} className={s.mono} style={{ marginTop: tokens.spacingVerticalSNudge }}>
@@ -713,6 +820,110 @@ export function FoundryAgentsPanel({ active, nonce = 0, acct = null }: { active:
           </div>
         </div>
       </div>
+
+      {/* ------- AgentOps (AIF-13): rollup + eval ------- */}
+      {pgAgent.trim() && (
+        <div className={s.opsSection}>
+          <div className={s.toolbar}>
+            <DataHistogram16Regular />
+            <Subtitle2>AgentOps · {pgAgent}</Subtitle2>
+            <Badge appearance="tint" color="brand">cost · latency · evals</Badge>
+            <div style={{ flex: 1 }} />
+            <Button size="small" appearance="subtle" icon={<ArrowClockwise16Regular />} onClick={() => { loadRollup(pgAgent); loadEvalRuns(pgAgent); }} disabled={rollupLoading}>Refresh</Button>
+          </div>
+
+          {/* Rollup — aggregate over persisted runs */}
+          <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+            Aggregated over your persisted runs for this agent. Token counts are real (live usage); $ cost is an estimate (Azure OpenAI list price).
+          </Caption1>
+          {rollupLoading ? <Spinner size="tiny" /> : !rollup || rollup.runs === 0 ? (
+            <div className={s.empty}>No runs recorded yet. Run this agent in the playground to populate the rollup.</div>
+          ) : (
+            <>
+              <div className={s.metricGrid}>
+                <div className={s.metric}><span className={s.metricVal}>{rollup.runs}</span><span className={s.metricKey}>runs</span></div>
+                <div className={s.metric}><span className={s.metricVal}>{Math.round(rollup.successRate * 100)}%</span><span className={s.metricKey}>success ({rollup.completed}/{rollup.runs})</span></div>
+                <div className={s.metric}><span className={s.metricVal}>${rollup.totalCostUsd.toFixed(4)}</span><span className={s.metricKey}>total est. cost</span></div>
+                <div className={s.metric}><span className={s.metricVal}>${rollup.avgCostUsd.toFixed(4)}</span><span className={s.metricKey}>avg / run</span></div>
+                <div className={s.metric}><span className={s.metricVal}>{rollup.totalTokens.toLocaleString()}</span><span className={s.metricKey}>total tokens</span></div>
+                <div className={s.metric}><span className={s.metricVal}>{(rollup.avgLatencyMs / 1000).toFixed(2)}s</span><span className={s.metricKey}>avg latency</span></div>
+                <div className={s.metric}><span className={s.metricVal}>{(rollup.p95LatencyMs / 1000).toFixed(2)}s</span><span className={s.metricKey}>p95 latency</span></div>
+              </div>
+              {rollup.byModel.length > 0 && (
+                <table className={s.table}>
+                  <thead><tr><th style={{ textAlign: 'left' }}>Model</th><th style={{ textAlign: 'right' }}>Runs</th><th style={{ textAlign: 'right' }}>Tokens</th><th style={{ textAlign: 'right' }}>Est. cost</th></tr></thead>
+                  <tbody>
+                    {rollup.byModel.map((m) => (
+                      <tr key={m.model}>
+                        <td>{m.model}</td>
+                        <td style={{ textAlign: 'right' }}>{m.runs}</td>
+                        <td style={{ textAlign: 'right' }}>{m.totalTokens.toLocaleString()}</td>
+                        <td style={{ textAlign: 'right' }}>${m.costUsd.toFixed(4)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </>
+          )}
+
+          {/* Eval — run a prompt-set, judge each answer 1-5 */}
+          <div className={s.toolbar} style={{ marginTop: tokens.spacingVerticalS }}>
+            <Beaker16Regular />
+            <Subtitle2>Evaluation</Subtitle2>
+            <Badge appearance="tint" color="brand">real agent runs · AOAI judge</Badge>
+          </div>
+          <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+            Run a prompt-set through this agent; an AOAI judge scores each answer 1-5 against your criteria. Results are stored per agent.
+          </Caption1>
+          <Field label="Eval name (optional)">
+            <Input value={evalName} onChange={(_, d) => setEvalName(d.value)} placeholder="Smoke suite" />
+          </Field>
+          {evalRows.map((row, i) => (
+            <div key={i} className={s.evalRow}>
+              <Input value={row.prompt} placeholder="Prompt to send the agent"
+                onChange={(_, d) => setEvalRows((prev) => prev.map((r, j) => j === i ? { ...r, prompt: d.value } : r))} />
+              <Input value={row.criteria} placeholder="Grading criteria (optional)"
+                onChange={(_, d) => setEvalRows((prev) => prev.map((r, j) => j === i ? { ...r, criteria: d.value } : r))} />
+              <Button size="small" appearance="subtle" icon={<Delete16Regular />} aria-label={`Remove eval prompt ${i + 1}`}
+                onClick={() => setEvalRows((prev) => prev.length > 1 ? prev.filter((_, j) => j !== i) : prev)} />
+            </div>
+          ))}
+          <div className={s.toolbar}>
+            <Button size="small" appearance="subtle" icon={<Add20Regular />} onClick={() => setEvalRows((prev) => prev.length < 8 ? [...prev, { prompt: '', criteria: '' }] : prev)} disabled={evalRows.length >= 8}>Add prompt</Button>
+            <Button size="small" appearance="primary" icon={<Play16Regular />} onClick={runEval} disabled={evalRunning || !pgAgent.trim()}>{evalRunning ? 'Running eval…' : 'Run eval'}</Button>
+          </div>
+          {evalMsg && <MessageBar intent={evalMsg.intent}><MessageBarBody>{evalMsg.text}</MessageBarBody></MessageBar>}
+
+          {evalRuns.length > 0 && (
+            <div>
+              <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Past eval runs ({evalRuns.length})</Caption1>
+              {evalRuns.map((er) => (
+                <div key={er.id} className={s.step}>
+                  <div className={s.stepHead}>
+                    <strong>{er.name}</strong>
+                    <Badge appearance="filled" color={er.avgScore >= er.passThreshold ? 'success' : er.avgScore >= 3 ? 'warning' : 'danger'}>{er.avgScore.toFixed(2)}/5</Badge>
+                    <Badge appearance="outline">{Math.round(er.passRate * 100)}% pass</Badge>
+                    <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{new Date(er.createdAt).toLocaleString()} · {er.results.length} prompts</Caption1>
+                  </div>
+                  <table className={s.table} style={{ marginTop: '6px' }}>
+                    <thead><tr><th style={{ textAlign: 'left' }}>Prompt</th><th style={{ textAlign: 'right' }}>Score</th><th style={{ textAlign: 'left' }}>Rationale</th></tr></thead>
+                    <tbody>
+                      {er.results.map((rr, k) => (
+                        <tr key={k}>
+                          <td>{rr.prompt}</td>
+                          <td style={{ textAlign: 'right' }}>{rr.score || '—'}</td>
+                          <td style={{ color: tokens.colorNeutralForeground3 }}>{rr.rationale || '—'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

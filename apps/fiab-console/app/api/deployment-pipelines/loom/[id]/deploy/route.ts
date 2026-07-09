@@ -24,6 +24,7 @@ import crypto from 'node:crypto';
 import { listAllOwnedItems } from '@/app/api/items/_lib/item-crud';
 import { computePipelineDiff } from '@/lib/install/pipeline-compare';
 import { emitAuditEvent } from '@/lib/admin/audit-stream';
+import { emitLoomEvent } from '@/lib/events/webhook-emitter';
 import type { LoomApprovalRequest } from '@/lib/types/loom-pipeline';
 import {
   jok, jerr, loadPipeline, resolveCaller, loadApprovalPolicy, createApprovalRequest,
@@ -127,6 +128,25 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       pipeline, srcWs, tgtWs, sourceStageId, targetStageId, targetStage,
       chosen, note,
     });
+
+    // BR-WEBHOOK — deployment-pipeline run reached a terminal receipt; fan the
+    // outcome out to any subscribed outbound webhook (best-effort, non-blocking).
+    emitLoomEvent({
+      type: result.status === 'failed' ? 'pipeline.run.failed' : 'pipeline.run.completed',
+      tenantId,
+      subject: id,
+      subjectName: pipeline.displayName,
+      actor: { oid: s.claims.oid, upn: s.claims.upn || s.claims.email },
+      data: {
+        operationId: result.operationId,
+        status: result.status,
+        sourceStageId,
+        targetStageId,
+        deployedItemIds: result.deployedItemIds,
+        summary: result.summary,
+      },
+    });
+
     return jok(result);
   } catch (e) {
     return jerr((e as Error).message || 'Deploy failed');

@@ -203,6 +203,15 @@ var loomContainers = [
   // SHA-256 hash of the secret only (never the secret). createIfNotExists in
   // cosmos-client.ts ensure() remains the hotfix fallback.
   { name: 'loom-pat-tokens',   partitionKey: '/id' }
+  // FGC-25 — Capacity surge-protection policy. One doc per tenant (id=tenantId),
+  // PK /tenantId → single-partition point-read. createIfNotExists in
+  // cosmos-client.ts ensure() remains the hotfix fallback.
+  { name: 'capacity-guardrails', partitionKey: '/tenantId' }
+  // BR-COSTATTR — per-execution cost attribution ledger. Append-only, PK
+  // /tenantId, TTL-enabled (default 90d) so the ledger self-evicts and never
+  // grows unbounded. Each row carries its own `ttl`; the container-level
+  // defaultTtl: -1 turns TTL ON without imposing a blanket expiry.
+  { name: 'cost-attribution',    partitionKey: '/tenantId', ttl: -1 }
 ]
 
 resource loomDb 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases@2024-12-01-preview' = {
@@ -220,11 +229,11 @@ resource loomDbContainers 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/co
   parent: loomDb
   name: c.name
   properties: {
-    resource: {
+    resource: union({
       id: c.name
       partitionKey: { paths: [c.partitionKey], kind: 'Hash' }
       indexingPolicy: { indexingMode: 'consistent', automatic: true }
-    }
+    }, (c.?ttl != null) ? { defaultTtl: c.?ttl } : {})
   }
 }]
 

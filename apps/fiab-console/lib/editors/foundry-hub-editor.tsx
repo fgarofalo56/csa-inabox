@@ -27,7 +27,7 @@ import { clientFetch } from '@/lib/client-fetch';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Subtitle2, Body1, Caption1, Badge, Spinner, Button, Input, Switch, Textarea, Tooltip,
+  Subtitle2, Body1, Caption1, Badge, Spinner, Button, Input, Switch, Textarea, Tooltip, Checkbox,
   Tab, TabList,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   MessageBar, MessageBarBody, MessageBarTitle,
@@ -59,6 +59,16 @@ import { AzureResourcePicker } from '@/lib/components/azure/azure-resource-picke
 import { FoundryAccountTree } from '@/lib/components/foundry/foundry-tree';
 import { FoundryAgentsPanel } from '@/lib/components/foundry/foundry-agents';
 import { LineChart, BarChart, StatTile, type LineSeries, type Bar } from '@/lib/components/foundry/foundry-charts';
+import {
+  offeredDeploymentTypes, deploymentTypeFor, validateCapacity,
+  type OfferedDeploymentType,
+} from '@/lib/foundry/deployment-types';
+
+/** Gov boundary detection from an ARM region name (client-side, best-effort). */
+function isGovLocation(loc: string | undefined | null): boolean {
+  const l = (loc || '').toLowerCase().replace(/\s+/g, '');
+  return l.startsWith('usgov') || l.startsWith('usdod') || l.startsWith('ussec') || l.startsWith('usnat');
+}
 
 const useStyles = makeStyles({
   pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minHeight: 0, flex: 1 },
@@ -536,26 +546,72 @@ function CreateConnectionDialog({
 interface CatalogModel { name: string; format?: string; version?: string; skus?: string[]; maxCapacity?: number; lifecycleStatus?: string }
 interface ModelDeployment { name: string; modelName?: string; modelVersion?: string; skuName?: string; capacity?: number; provisioningState?: string }
 
+interface QuotaUsage { name: string; unit?: string; currentValue?: number; limit?: number }
+
 function DeployModelDialog({ open, onClose, onDeployed, acct }: { open: boolean; onClose: () => void; onDeployed: () => void; acct: FoundryAccount | null }) {
-  const [catalog] = useLazyFetch<{ ok: boolean; models: CatalogModel[] }>(`/api/foundry/models-catalog`, open, 0, acct);
+  const [catalog] = useLazyFetch<{ ok: boolean; account?: { name: string; location?: string }; models: CatalogModel[] }>(`/api/foundry/models-catalog`, open, 0, acct);
+  // Live per-region quota (usages) — surfaced next to the capacity input so the
+  // operator sees remaining headroom before committing a PTU / TPM allocation.
+  const [quota] = useLazyFetch<{ ok: boolean; usages: QuotaUsage[] }>(`/api/foundry/quota`, open, 0, acct);
   const [modelName, setModelName] = useState('gpt-4o-mini');
   const [deploymentName, setDeploymentName] = useState('gpt-4o-mini');
   const [skuName, setSkuName] = useState('GlobalStandard');
   const [capacity, setCapacity] = useState('10');
+  const [confirmPricing, setConfirmPricing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ intent: 'success' | 'error' | 'warning'; text: string; hint?: string } | null>(null);
 
   const models = catalog.data?.models || [];
+  const isGov = isGovLocation(catalog.data?.account?.location || acct?.location);
+  const selectedModel = useMemo(() => models.find((m) => m.name === modelName), [models, modelName]);
+  const offered: OfferedDeploymentType[] = useMemo(
+    () => offeredDeploymentTypes(selectedModel?.skus, { isGov }),
+    [selectedModel, isGov],
+  );
+  const typeInfo = deploymentTypeFor(skuName);
+  const govGated = offered.find((o) => o.sku === skuName)?.govGated ?? (isGov && !!typeInfo && !typeInfo.govGA);
+  const capNum = Number(capacity);
+  const capValidation = validateCapacity(skuName, capNum);
+  const needsPricingConfirm = !!typeInfo?.hourlyBilled;
+  const capacityUnit = typeInfo?.capacityUnit ?? 'K-TPM';
+  const capacityLabel = capacityUnit === 'PTU' ? 'Capacity (PTU count)'
+    : capacityUnit === 'K-enqueued' ? 'Capacity (K enqueued tokens)'
+    : 'Capacity (K TPM)';
+
+  // When the selected type changes, reset the capacity to that type's default
+  // (PTU floors differ from the K-TPM default) and clear a stale pricing ack.
+  const onSelectSku = useCallback((sku: string) => {
+    setSkuName(sku);
+    const info = deploymentTypeFor(sku);
+    if (info) setCapacity(String(info.defaultCapacity));
+    setConfirmPricing(false);
+  }, []);
+
+  // Best-effort quota headroom line for the selected model + type (matches the
+  // Cognitive Services usage name, e.g. "OpenAI.GlobalStandard.gpt-4o-mini").
+  const quotaLine = useMemo(() => {
+    const usages = quota.data?.usages || [];
+    const needle = `${skuName}.${modelName}`.toLowerCase();
+    const hit = usages.find((u) => (u.name || '').toLowerCase().includes(needle))
+      || usages.find((u) => (u.name || '').toLowerCase().includes(skuName.toLowerCase()) && (u.name || '').toLowerCase().includes(modelName.toLowerCase()));
+    if (!hit) return null;
+    const used = hit.currentValue ?? 0;
+    const limit = hit.limit ?? 0;
+    return `Quota: ${used} / ${limit} ${hit.unit || ''} used${limit ? ` · ${Math.max(0, limit - used)} remaining` : ''}`;
+  }, [quota.data, skuName, modelName]);
+
+  const deployDisabled = busy || !modelName || !deploymentName || !capValidation.ok || govGated || (needsPricingConfirm && !confirmPricing);
+
   const submit = async () => {
     setBusy(true); setMsg(null);
     try {
       const r = await clientFetch('/api/foundry/model-deployments', {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ modelName, deploymentName, skuName, capacity: Number(capacity) || 10, ...acctBody(acct) }),
+        body: JSON.stringify({ modelName, deploymentName, skuName, capacity: Number(capacity) || typeInfo?.defaultCapacity || 10, ...acctBody(acct) }),
       });
       const j = await r.json();
       if (!j.ok) { setMsg({ intent: j.notDeployed ? 'warning' : 'error', text: j.error, hint: j.hint }); return; }
-      setMsg({ intent: 'success', text: `Deployment "${j.deployment.name}" → ${j.deployment.provisioningState || 'created'}` });
+      setMsg({ intent: 'success', text: `Deployment "${j.deployment.name}" (${j.deployment.skuName || skuName}) → ${j.deployment.provisioningState || 'created'}` });
       onDeployed();
     } catch (e: any) { setMsg({ intent: 'error', text: e?.message || String(e) }); }
     finally { setBusy(false); }
@@ -587,25 +643,215 @@ function DeployModelDialog({ open, onClose, onDeployed, acct }: { open: boolean;
                 )}
               </Field>
               <Field label="Deployment name"><Input value={deploymentName} onChange={(_, d) => setDeploymentName(d.value)} /></Field>
-              <Field label="SKU">
-                <Dropdown value={skuName} selectedOptions={[skuName]} onOptionSelect={(_, d) => d.optionValue && setSkuName(d.optionValue)}>
-                  <Option value="GlobalStandard">GlobalStandard</Option>
-                  <Option value="Standard">Standard</Option>
-                  <Option value="DataZoneStandard">DataZoneStandard</Option>
-                  <Option value="ProvisionedManaged">ProvisionedManaged</Option>
+              <Field label="Deployment type" hint={typeInfo?.hint}>
+                <Dropdown
+                  value={typeInfo?.label || skuName}
+                  selectedOptions={[skuName]}
+                  onOptionSelect={(_, d) => d.optionValue && onSelectSku(d.optionValue)}
+                >
+                  {offered.map((o) => (
+                    <Option key={o.sku} value={o.sku} text={o.label}>
+                      {`${o.label}${o.govGated ? ' · not Gov-GA' : ''}`}
+                    </Option>
+                  ))}
                 </Dropdown>
               </Field>
-              <Field label="Capacity (K TPM)"><Input type="number" value={capacity} onChange={(_, d) => setCapacity(d.value)} /></Field>
+              <Field label={capacityLabel} validationState={capValidation.ok ? 'none' : 'error'} validationMessage={capValidation.ok ? undefined : capValidation.error}>
+                <Input type="number" value={capacity} onChange={(_, d) => setCapacity(d.value)} />
+              </Field>
+              {quotaLine && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{quotaLine}</Caption1>}
+              {govGated && (
+                <MessageBar intent="warning">
+                  <MessageBarBody>
+                    <MessageBarTitle>Not Generally Available in Azure Government</MessageBarTitle>
+                    The <strong>{typeInfo?.label || skuName}</strong> deployment type is not GA in this Government region
+                    ({catalog.data?.account?.location || acct?.location || 'usgov'}). Choose <strong>Regional Provisioned (PTU)</strong> or
+                    <strong> Standard (Regional)</strong>, or verify availability for your Gov region. Global / Data-Zone / Batch types are
+                    Commercial-only.
+                  </MessageBarBody>
+                </MessageBar>
+              )}
+              {needsPricingConfirm && !govGated && (
+                <MessageBar intent="warning">
+                  <MessageBarBody>
+                    <MessageBarTitle>Provisioned throughput bills hourly</MessageBarTitle>
+                    A provisioned (PTU) deployment reserves capacity and starts <strong>hourly billing immediately</strong> on creation —
+                    it is charged even when idle, until you delete it. Confirm the <strong>{capNum || typeInfo?.minCapacity}-PTU</strong> allocation below.
+                    <div style={{ marginTop: tokens.spacingVerticalS }}>
+                      <Checkbox
+                        checked={confirmPricing}
+                        onChange={(_, d) => setConfirmPricing(!!d.checked)}
+                        label="I understand hourly billing starts now for this provisioned deployment."
+                      />
+                    </div>
+                  </MessageBarBody>
+                </MessageBar>
+              )}
               {msg && <MessageBar intent={msg.intent}><MessageBarBody>{msg.text}{msg.hint ? <><br /><Caption1>{msg.hint}</Caption1></> : null}</MessageBarBody></MessageBar>}
             </div>
           </DialogContent>
           <DialogActions>
             <Button onClick={onClose}>Close</Button>
-            <Button appearance="primary" disabled={busy || !modelName || !deploymentName} onClick={submit}>{busy ? 'Deploying…' : 'Deploy'}</Button>
+            <Button appearance="primary" disabled={deployDisabled} onClick={submit}>{busy ? 'Deploying…' : 'Deploy'}</Button>
           </DialogActions>
         </DialogBody>
       </DialogSurface>
     </Dialog>
+  );
+}
+
+// ---- AIF-11: Global / Data-Zone Batch jobs (async high-volume inference) ----
+
+interface BatchJobRow {
+  id: string; status?: string; inputFileId?: string; outputFileId?: string | null; errorFileId?: string | null;
+  createdAt?: number; requestCounts?: { total?: number; completed?: number; failed?: number };
+}
+
+const SAMPLE_BATCH_JSONL = `{"custom_id":"req-1","method":"POST","url":"/chat/completions","body":{"model":"REPLACE_WITH_BATCH_DEPLOYMENT","messages":[{"role":"user","content":"Say hello."}]}}`;
+
+function BatchJobsSection({ active, acct, isGov }: { active: boolean; acct: FoundryAccount | null; isGov: boolean }) {
+  const s = useStyles();
+  const [jobs, reload] = useLazyFetch<{ ok: boolean; jobs: BatchJobRow[] }>(`/api/foundry/batch`, active && !isGov, 0, acct);
+  const [fileName, setFileName] = useState('batch-input.jsonl');
+  const [jsonl, setJsonl] = useState(SAMPLE_BATCH_JSONL);
+  const [uploadedFileId, setUploadedFileId] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ intent: 'success' | 'error' | 'warning'; text: string; hint?: string } | null>(null);
+
+  const upload = async () => {
+    setBusy(true); setMsg(null);
+    try {
+      const r = await clientFetch('/api/foundry/batch', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ action: 'upload', fileName, content: jsonl, ...acctBody(acct) }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setMsg({ intent: j.notDeployed ? 'warning' : 'error', text: j.error, hint: j.hint }); return; }
+      setUploadedFileId(j.file?.id || '');
+      setMsg({ intent: 'success', text: `Uploaded "${j.file?.filename || fileName}" → file id ${j.file?.id} (${j.file?.status || 'pending'})` });
+    } catch (e: any) { setMsg({ intent: 'error', text: e?.message || String(e) }); }
+    finally { setBusy(false); }
+  };
+
+  const createJob = async () => {
+    if (!uploadedFileId) { setMsg({ intent: 'error', text: 'Upload a JSONL input file first.' }); return; }
+    setBusy(true); setMsg(null);
+    try {
+      const r = await clientFetch('/api/foundry/batch', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ inputFileId: uploadedFileId, ...acctBody(acct) }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setMsg({ intent: j.notDeployed ? 'warning' : 'error', text: j.error, hint: j.hint }); return; }
+      setMsg({ intent: 'success', text: `Batch job ${j.job?.id} created → ${j.job?.status || 'validating'}` });
+      reload();
+    } catch (e: any) { setMsg({ intent: 'error', text: e?.message || String(e) }); }
+    finally { setBusy(false); }
+  };
+
+  const refreshOne = async (id: string) => {
+    setBusy(true);
+    try {
+      await clientFetch(withAccount(`/api/foundry/batch/${encodeURIComponent(id)}`, acct));
+      reload();
+    } finally { setBusy(false); }
+  };
+
+  const cancelJob = async (id: string) => {
+    setBusy(true); setMsg(null);
+    try {
+      const r = await clientFetch(withAccount(`/api/foundry/batch/${encodeURIComponent(id)}`, acct), { method: 'DELETE' });
+      const j = await r.json();
+      if (!j.ok) setMsg({ intent: 'error', text: j.error || 'Cancel failed' });
+      else { setMsg({ intent: 'success', text: `Batch ${id} → ${j.job?.status || 'cancelling'}` }); reload(); }
+    } catch (e: any) { setMsg({ intent: 'error', text: e?.message || String(e) }); }
+    finally { setBusy(false); }
+  };
+
+  // Output/error files are JSONL and can be large — download via a cookie-
+  // authenticated anchor to the streaming GET route (no clientFetch 6s abort).
+  const downloadFile = (fileId: string) => {
+    const url = withAccount(`/api/foundry/batch?output=${encodeURIComponent(fileId)}`, acct);
+    const a = document.createElement('a');
+    a.href = url; a.download = `${fileId}.jsonl`;
+    document.body.appendChild(a); a.click(); a.remove();
+  };
+
+  if (!active) return null;
+  const rows = Array.isArray(jobs.data?.jobs) ? jobs.data!.jobs : [];
+  return (
+    <>
+      <div className={s.toolbar} style={{ marginTop: tokens.spacingVerticalL }}>
+        <Subtitle2>Batch jobs</Subtitle2>
+        <Badge appearance="tint" color="brand">Global / Data-Zone Batch · ~50% cheaper · 24h</Badge>
+        {!isGov && <Button size="small" onClick={reload}>Reload</Button>}
+      </div>
+      {isGov ? (
+        <MessageBar intent="warning">
+          <MessageBarBody>
+            <MessageBarTitle>Batch is not available in Azure Government</MessageBarTitle>
+            Global / Data-Zone Batch deployment types are Commercial-only. In this Government region, use a Standard
+            (Regional) or Regional Provisioned (PTU) deployment for synchronous inference instead.
+          </MessageBarBody>
+        </MessageBar>
+      ) : (
+        <>
+          <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+            Submit a JSONL input against a <strong>Global-Batch</strong> / <strong>Data-Zone-Batch</strong> model deployment.
+            Each line targets your batch deployment name in its <code>body.model</code>. Upload → create job → poll → download results.
+          </Caption1>
+          <div className={s.tableWrap} style={{ maxHeight: 'none', padding: tokens.spacingVerticalM }}>
+            <Field label="Input file name"><Input value={fileName} onChange={(_, d) => setFileName(d.value)} /></Field>
+            <Field label="Batch input dataset (JSONL sample)" style={{ marginTop: tokens.spacingVerticalS }}>
+              <Textarea
+                aria-label="Batch input dataset JSONL sample"
+                value={jsonl}
+                onChange={(_, d) => setJsonl(d.value)}
+                rows={4}
+                style={{ fontFamily: 'monospace', fontSize: tokens.fontSizeBase200 }}
+              />
+            </Field>
+            <div className={s.toolbar} style={{ marginTop: tokens.spacingVerticalS }}>
+              <Button appearance="primary" disabled={busy || !jsonl.trim()} onClick={upload}>{busy ? 'Working…' : 'Upload JSONL'}</Button>
+              <Button disabled={busy || !uploadedFileId} onClick={createJob}>Create batch job</Button>
+              {uploadedFileId && <Badge appearance="outline">file {uploadedFileId}</Badge>}
+            </div>
+            {msg && <MessageBar intent={msg.intent} style={{ marginTop: tokens.spacingVerticalS }}><MessageBarBody>{msg.text}{msg.hint ? <><br /><Caption1>{msg.hint}</Caption1></> : null}</MessageBarBody></MessageBar>}
+          </div>
+          {jobs.loading ? <Spinner size="small" /> : jobs.error ? <GateBar msg={jobs.error} hint={jobs.hint} notDeployed={jobs.notDeployed} /> : rows.length === 0 ? (
+            <EmptyText>No batch jobs yet. Upload a JSONL input and create one.</EmptyText>
+          ) : (
+            <div className={s.tableWrap}>
+              <Table aria-label="Batch jobs" size="small">
+                <TableHeader><TableRow>
+                  <TableHeaderCell>Job</TableHeaderCell><TableHeaderCell>Status</TableHeaderCell>
+                  <TableHeaderCell>Requests (done/total)</TableHeaderCell><TableHeaderCell>Created</TableHeaderCell>
+                  <TableHeaderCell>Actions</TableHeaderCell>
+                </TableRow></TableHeader>
+                <TableBody>
+                  {rows.map((b) => (
+                    <TableRow key={b.id}>
+                      <TableCell className={s.cell}><strong>{b.id}</strong></TableCell>
+                      <TableCell className={s.cell}>
+                        <Badge appearance="filled" color={b.status === 'completed' ? 'success' : b.status === 'failed' || b.status === 'expired' ? 'danger' : 'informative'}>{b.status || '—'}</Badge>
+                      </TableCell>
+                      <TableCell className={s.cell}>{(b.requestCounts?.completed ?? 0)} / {(b.requestCounts?.total ?? 0)}{b.requestCounts?.failed ? ` (${b.requestCounts.failed} failed)` : ''}</TableCell>
+                      <TableCell className={s.cell}>{b.createdAt ? new Date(b.createdAt * 1000).toLocaleString() : '—'}</TableCell>
+                      <TableCell className={s.cell}>
+                        <Button size="small" appearance="subtle" onClick={() => refreshOne(b.id)}>Status</Button>
+                        {b.outputFileId && <Button size="small" appearance="subtle" onClick={() => downloadFile(b.outputFileId!)}>Output</Button>}
+                        {b.errorFileId && <Button size="small" appearance="subtle" onClick={() => downloadFile(b.errorFileId!)}>Errors</Button>}
+                        {!['completed', 'failed', 'expired', 'cancelled'].includes(b.status || '') && <Button size="small" appearance="subtle" onClick={() => cancelJob(b.id)}>Cancel</Button>}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+        </>
+      )}
+    </>
   );
 }
 
@@ -714,6 +960,8 @@ function ModelsPanel({ active, nonce, acct }: { active: boolean; nonce: number; 
           </Table>
         </div>
       )}
+
+      <BatchJobsSection active={active} acct={acct} isGov={isGovLocation(dep.data?.account?.location || acct?.location)} />
 
       <Subtitle2 style={{ marginTop: tokens.spacingVerticalM }}>Registered models</Subtitle2>
       {models.loading ? <Spinner size="small" /> : models.error ? <GateBar msg={models.error} hint={models.hint} notDeployed={models.notDeployed} /> : regModels.length === 0 ? (

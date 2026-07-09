@@ -20,6 +20,7 @@
  * TumblingWindow / HoppingWindow / SlidingWindow / SessionWindow /
  * SnapshotWindow, System.Timestamp(), HAVING, JOIN ... DATEDIFF, UNION, WITH.
  */
+import { isAnalyticsReady, deltaflowSelectList } from './deltaflow-transform';
 
 // ============================================================
 // Canonical node types (shared with the visual designer, which re-exports
@@ -124,6 +125,16 @@ export interface TransformNode {
   cdcTsField?: string; // Debezium ts_ms epoch-millis field (default 'ts_ms')
   cdcSourceField?: string; // optional Debezium "source" record → __schema/__table
   cdcMetaPrefix?: string; // metadata-column prefix (default '__')
+  // DeltaFlow analytics-ready CDC transform (FGC-15): the schema-handling MODE
+  // toggle + analytics-ready extras (normalized change-type/timestamp columns,
+  // upsert key(s), auto-managed destination Delta table + schema evolution).
+  // Typed config only — no freeform JSON. See lib/azure/deltaflow-transform.ts.
+  cdcSchemaMode?: 'raw-flatten' | 'analytics-ready';
+  cdcKeyColumns?: string[];
+  cdcChangeTypeColumn?: string;
+  cdcChangeTsColumn?: string;
+  cdcDestinationTable?: string;
+  cdcSchemaEvolution?: boolean;
   // Legacy / misc (kept wire-compatible with pre-existing Cosmos state)
   columns?: string[];
   window?: string;
@@ -241,6 +252,10 @@ function havingClause(t: TransformNode): string {
  * Exported so the editor's operator-tab emitter reuses the exact same SQL.
  */
 export function cdcFlattenSelectList(t: TransformNode): string {
+  // Analytics-ready (DeltaFlow) mode delegates to the dedicated compiler, which
+  // normalizes the envelope into typed change-type + change-timestamp columns
+  // (FGC-15). Raw-flatten keeps the original __op / __changed_at projection.
+  if (isAnalyticsReady(t)) return deltaflowSelectList(t);
   const after = (t.cdcAfterField || 'after').trim() || 'after';
   const before = (t.cdcBeforeField || 'before').trim() || 'before';
   const op = (t.cdcOpField || 'op').trim() || 'op';

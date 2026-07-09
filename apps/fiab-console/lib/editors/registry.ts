@@ -45,6 +45,8 @@ const reg = (loader: () => Promise<Record<string, unknown>>, name: string): Edit
 export const EDITOR_REGISTRY: Record<string, EditorComponent> = {
   // Loom Apps (Azure-native app building — Fabric Apps parity)
   'loom-app':             reg(() => import('./loom-app-editor'),         'LoomAppEditor'),
+  // Loom App Runtime (DBX-1) — Databricks-Apps-class hosted apps on ACA.
+  'loom-app-runtime':     reg(() => import('./loom-app-runtime-editor'), 'LoomAppRuntimeEditor'),
   'rayfin-app':           reg(() => import('./rayfin-app-editor'),        'RayfinAppEditor'),
   // Data Marketplace — consumer discovery (F14/F18) over the loom-data-products AI Search index
   'data-marketplace':     reg(() => import('./data-marketplace'),        'DataMarketplaceEditor'),
@@ -111,6 +113,9 @@ export const EDITOR_REGISTRY: Record<string, EditorComponent> = {
   'variable-library':     reg(() => import('./phase4/variable-library-editor'), 'VariableLibraryEditor'),
   'ontology':             reg(() => import('./phase4/ontology-editor'),         'OntologyEditor'),
   'graph-model':          reg(() => import('./phase4/graph-model-editor'),      'GraphModelEditor'),
+  // FGC-12 — Digital Twin Builder (RTI). ADX-native twin graph by DEFAULT
+  // (entity/relationship tables + make-graph); Azure Digital Twins opt-in only.
+  'digital-twin':         reg(() => import('./digital-twin-builder-editor'),    'DigitalTwinBuilderEditor'),
   'plan':                 reg(() => import('./phase4/plan-editor'),             'PlanEditor'),
   'map':                  reg(() => import('./phase4/map-editor'),              'MapEditor'),
   'operations-agent':     reg(() => import('./phase4/operations-agent-editor'), 'OperationsAgentEditor'),
