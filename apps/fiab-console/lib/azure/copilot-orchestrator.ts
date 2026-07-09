@@ -75,6 +75,8 @@ import { registerWarehouseTools } from '../copilot/sql-tools';
 import * as databricks from './databricks-client';
 import * as apim from './apim-client';
 import * as adf from './adf-client';
+import { FACTORY_OBJECT_KINDS } from './adf-resource-ops';
+import * as pipelineTools from '../copilot/pipeline-tools';
 import * as kusto from './kusto-client';
 import * as adls from './adls-client';
 import * as powerbi from './powerbi-client';
@@ -639,6 +641,31 @@ export function buildDefaultRegistry(): LoomToolRegistry {
     description: 'List ADF pipelines.',
     parameters: obj({}),
     handler: async () => adf.listPipelines(),
+  });
+  r.register({
+    name: 'adf_delete_pipeline',
+    service: 'ADF',
+    description:
+      'Permanently delete a named Azure Data Factory pipeline. DESTRUCTIVE and irreversible. Call with confirm:false ' +
+      '(default) FIRST — it returns a confirmation prompt WITHOUT deleting; only call again with confirm:true after the ' +
+      'user explicitly confirms.',
+    parameters: obj({ name: S_STRING, confirm: { type: 'boolean' } }, ['name']),
+    handler: async ({ name, confirm }) =>
+      pipelineTools.handlePipelineDeletePipeline({ name, backend: 'adf', confirm: confirm === true }),
+  });
+  r.register({
+    name: 'adf_remove_factory_object',
+    service: 'ADF',
+    description:
+      'Permanently remove an Azure Data Factory object by type + name — dataset, linked-service, trigger, ' +
+      'integration-runtime, dataflow, cdc, or managed-private-endpoint. DESTRUCTIVE and irreversible. Call with ' +
+      'confirm:false (default) FIRST to get the confirmation prompt; only call confirm:true after the user confirms.',
+    parameters: obj(
+      { objectType: { type: 'string', enum: [...FACTORY_OBJECT_KINDS] }, name: S_STRING, confirm: { type: 'boolean' } },
+      ['objectType', 'name'],
+    ),
+    handler: async ({ objectType, name, confirm }) =>
+      pipelineTools.handlePipelineRemoveFactoryObject({ objectType, name, backend: 'adf', confirm: confirm === true }),
   });
 
   // -------- Power BI --------
