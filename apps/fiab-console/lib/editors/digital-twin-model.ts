@@ -155,9 +155,19 @@ export function safeIdent(s: string): string {
   return String(s).replace(/[^A-Za-z0-9_]/g, '_');
 }
 
+/**
+ * Escape a string for embedding inside a single-quoted KQL literal.
+ * Backslash MUST be escaped first, otherwise a literal backslash in the input
+ * would combine with the escape we add for a following quote and let the value
+ * break out of the string (incomplete-sanitization).
+ */
+export function escKqlLiteral(s: string): string {
+  return String(s).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+}
+
 /** Bracket-quote an arbitrary ADX identifier (tolerates spaces/hyphens). */
 export function bq(name: string): string {
-  return `['${String(name).replace(/'/g, "\\'")}']`;
+  return `['${escKqlLiteral(name)}']`;
 }
 
 /** Map a loose type name to a concrete Kusto scalar type. */
@@ -199,7 +209,7 @@ export function keyExpr(cols: string[]): string {
 
 /** Source ref `database('db').['table']` (db omitted → current database). */
 export function sourceRef(db: string | undefined, table: string): string {
-  return db ? `database('${db.replace(/'/g, "\\'")}').${bq(table)}` : bq(table);
+  return db ? `database('${escKqlLiteral(db)}').${bq(table)}` : bq(table);
 }
 
 /** A short, per-item, KQL-safe table-name key (isolates twins on the shared cluster). */
@@ -525,7 +535,7 @@ export function buildTwinMaterialize(model: TwinModel, key: string): TwinMateria
       const proj = [
         `src = ${keyExpr(m.originKeyColumns)}`,
         `dst = ${keyExpr(m.targetKeyColumns)}`,
-        `rel = '${r.apiName.replace(/'/g, "\\'")}'`,
+        `rel = '${escKqlLiteral(r.apiName)}'`,
       ];
       for (const p of r.properties) {
         const col = (m.columnMap && m.columnMap[p.apiName]) || p.apiName;
@@ -628,7 +638,7 @@ export function buildTwinTimeSeriesQuery(spec: TwinTimeSeriesSpec): string {
   const lines = [sourceRef(spec.sourceDatabase, spec.sourceTable)];
   lines.push(`| where ${ts} > ago(${lookback})`);
   if (spec.keyColumn && spec.keyValue != null && spec.keyValue !== '') {
-    lines.push(`| where ${bq(spec.keyColumn)} == '${String(spec.keyValue).replace(/'/g, "\\'")}'`);
+    lines.push(`| where ${bq(spec.keyColumn)} == '${escKqlLiteral(String(spec.keyValue))}'`);
   }
   const measure = agg === 'count' ? 'count()' : `${agg}(${castFn('real')}(${bq(spec.valueColumn)}))`;
   lines.push(`| summarize value = ${measure} by bin(${ts}, ${bin})`);

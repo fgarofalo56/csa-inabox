@@ -7,7 +7,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import {
-  isTwinIdent, safeIdent, keyExpr, kustoType, castFn, twinKey, entityTable, relTable,
+  isTwinIdent, safeIdent, escKqlLiteral, bq, keyExpr, kustoType, castFn, twinKey, entityTable, relTable,
   normalizeTwinModel, normalizeTwinEntity, normalizeTwinRelationship, normalizeEntityMapping,
   emptyTwinModel, starterTwinModel, validateTwinModel,
   buildTwinMaterialize, buildTwinGraphPrelude, composeTwinGraphQuery, buildTwinRelationshipCount,
@@ -213,6 +213,18 @@ describe('time-series KQL', () => {
     expect(q).toContain("| where ['ts'] > ago(7d)");
     expect(q).toContain("| where ['sensorId'] == 'S-1\\'; drop'");
     expect(q).toContain("| summarize value = avg(toreal(['reading'])) by bin(['ts'], 1h)");
+  });
+  it('escapes backslashes before quotes so a value cannot break out of the literal', () => {
+    // Backslash MUST be doubled first; otherwise `\` + our added `\'` would form
+    // an escaped-quote-then-quote and let the value escape the KQL string.
+    expect(escKqlLiteral("a\\b")).toBe("a\\\\b");
+    expect(escKqlLiteral("a\\'; drop")).toBe("a\\\\\\'; drop");
+    expect(bq("t\\'x")).toBe("['t\\\\\\'x']");
+    const q = buildTwinTimeSeriesQuery({
+      sourceTable: 'R', timestampColumn: 'ts', valueColumn: 'v', agg: 'avg', bin: '1h', lookback: '1d',
+      keyColumn: 'k', keyValue: "x\\'; drop",
+    });
+    expect(q).toContain("| where ['k'] == 'x\\\\\\'; drop'");
   });
   it('count agg ignores the value column', () => {
     const q = buildTwinTimeSeriesQuery({ sourceTable: 'R', timestampColumn: 'ts', valueColumn: 'x', agg: 'count', bin: '5m', lookback: '1d' });
