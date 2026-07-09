@@ -164,6 +164,7 @@ const ICON_BY_SLUG: Record<string, (props: { color?: string }) => ReactNode> = {
   'databricks-job':              (p) => <BranchFork20Regular style={{ color: p.color }} />,
   'databricks-cluster':          (p) => <ServerLink20Regular style={{ color: p.color }} />,
   'databricks-sql-warehouse':    (p) => <Server20Regular style={{ color: p.color }} />,
+  'databricks-pipeline':         (p) => <Flow20Regular style={{ color: p.color }} />,
   'adf-pipeline':                (p) => <Flow20Regular style={{ color: p.color }} />,
   'adf-dataset':                 (p) => <Table20Regular style={{ color: p.color }} />,
   'adf-trigger':                 (p) => <Pulse20Regular style={{ color: p.color }} />,

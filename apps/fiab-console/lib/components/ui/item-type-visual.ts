@@ -201,6 +201,7 @@ const REGISTRY: Record<string, Entry> = {
   'databricks-job':              { icon: BranchFork24Regular, family: 'databricks', label: 'Databricks Job' },
   'databricks-cluster':          { icon: ServerLink24Regular, family: 'databricks', label: 'Databricks Cluster' },
   'databricks-sql-warehouse':    { icon: Server24Regular,     family: 'databricks', label: 'Databricks SQL Warehouse' },
+  'databricks-pipeline':         { icon: Flow24Regular,       family: 'databricks', label: 'Lakeflow Pipeline (DLT)' },
   'adf-pipeline':                { icon: Flow24Regular,       family: 'data-factory', label: 'ADF Pipeline' },
   'adf-dataset':                 { icon: Table24Regular,      family: 'data-factory', label: 'ADF Dataset' },
   'adf-trigger':                 { icon: Pulse24Regular,      family: 'data-factory', label: 'ADF Trigger' },
