@@ -714,3 +714,89 @@ perf page shows the Fabric reference line vs the measured number — the honest 
 This raises the plan to **22 waves** (20 existing + PSR-A + PSR-B) and **~150 scheduled items** (~133 + 17 PSR,
 with 3 PSR items — PSR-18/19/20 — riding BR-BLUEGREEN / BR-CONTROLPLANE-DR / SVC-11 as reference glue, not
 net-new builds).
+
+---
+
+## Addendum (2026-07-09, post-plan): Loom Hyperscale custom components — the structural band (HYP-1…16, Waves H1-H3)
+
+`PRP-loom-hyperscale-custom-components.md` (this folder) designs the **three custom Loom-native services**
+that close the last *structural* (not feature) Fabric gaps — the mechanisms Fabric owns as first-party
+substrate and Loom today reproduces as per-item glue: **(1) Loom OneLake** (a unified `loom://` namespace +
+shortcut + security + catalog service over ADLS Gen2, Go/.NET on ACA), **(2) Loom Direct Lake** (a NEW
+in-memory columnar cache/scan engine — Rust + Apache Arrow + `delta-rs` + DuckDB/DataFusion — that frames +
+transcodes Delta Parquet for import-class DAX latency, the Gov-capable outcome-equivalent of VertiPaq since
+AAS is scarce/retirement-track), and **(3) Loom Capacity Broker** (a NEW stateful admission-control service —
+Rust/Go on ACA + a Redis 2,880-timepoint ledger — exposing a synchronous `/admit` choke-point implementing
+Fabric's smoothing/bursting/throttle math). Plus two supporting shared-Redis services: **warm-pool keepalive**
+and a **shared result-cache**. Each is its own deployable on the `platform/runners/script-runner` template
+(internal-ingress ACA, dedicated least-privilege UAMI, `az acr build`, honest-503 bicep-synced gate). Every
+service is grep-verified against real substrate Loom already owns (`adls-client.ts`, `shortcut-engines.ts`,
+`onelake-security-client.ts`, `cost-attribution.ts`, `capacity-guardrails.ts`, `query-cache.ts`,
+`spark-session-pool.ts`). Die-hard posture: **default-ON, opt-out** (a missing service degrades to the current
+per-item / cold path, **never** to a Fabric requirement — no default-path `onelake.dfs`/`api.powerbi.com`/
+`api.fabric` call anywhere). Tag legend adds source `HYP`.
+
+**This is an XL multi-wave epic slotted as its OWN band (Waves H1-H3) AFTER the feature waves (1-20) AND
+after the PSR foundation — the benchmark harness (PSR-A) is a HARD prerequisite.** For this band the
+`no-vaporware.md` receipt IS a PSR-1 benchmark number (sub-second warm frame, `/admit` p99 ≤ 10ms, `loom://`
+resolve p95 ≤ 25ms, smoothing golden test). **Wave H1 must not start until PSR-1 + PSR-2 are green on main.**
+
+**Relationship to the PSR addendum above (reference, do NOT fork):**
+- The PSR "honest non-goals" (Direct Lake internals → AAS/Serverless + result-cache; OneLake substrate →
+  ADLS+Delta; CU smoothing → admission control) are the *interim* outcome-equivalents. The Hyperscale band is
+  the **structural upgrade** that turns them into owned services once the harness exists — Loom Direct Lake
+  supersedes the "pragmatic 80% result-cache" with a real framed/transcoded columnar engine; Loom Capacity
+  Broker supersedes the static FGC-25 hourly cap with true multi-window smoothed-debt accounting.
+- **HYP-14** (warm-pool keepalive) **rides PSR-3** — same warm Spark pool, DEFAULT-ON + cross-replica lease
+  store. HYP-14 contributes the shared Redis lease store the Direct Lake band already needs. Do not rebuild.
+- **HYP-15** (shared result-cache) **rides PSR-5/PSR-6** — the `query-cache.ts` "back with Redis later"
+  upgrade; contributes the shared Redis substrate that also serves Loom Direct Lake's cold path. Do not rebuild.
+- One **Azure Cache for Redis Premium** instance is amortized across four consumers (Direct Lake residency,
+  Broker timepoint ledger, Spark lease store, result-cache) — one metered resource, four capabilities.
+
+**Slotting:**
+
+- **Wave H1 — Loom OneLake (unified namespace service)** *(P0/P1; after PSR-A)*:
+  **HYP-1** namespace/catalog service skeleton (`loom://` resolver + Cosmos registry + ADLS driver) `[HYP, P0, XL]` ·
+  **HYP-2** shortcut engine as a service (internal + external S3/GCS/ADLS → Synapse/Databricks/ADX pointers) `[HYP, P0, L]` ·
+  **HYP-3** OneLake-security enforcement service (recursive POSIX ACL + cross-workspace roles) `[HYP, P1, M]` ·
+  **HYP-4** 7 residual UI/BFF gaps (short-lived SAS UI, access-diagnostics explorer, shortcut caching/transforms,
+  OPDG gateway shortcuts, unified hub, shortcut event-triggers) `[HYP, P1, L]` ·
+  **HYP-16** cross-cutting platform (per-service `modules/compute/` bicep + least-privilege UAMIs + honest-503 +
+  diag-settings + env into `admin-plane/main.bicep`) `[HYP, P1, M]`. (5 items.)
+  *Operator action:* deploy `compute/loom-onelake-app.bicep` + UAMI (Storage Blob Data Contributor on DLZ lake +
+  Cosmos registry data-plane). No new managed service (ADLS Gen2 + Cosmos only).
+- **Wave H2 — Loom Direct Lake (columnar cache/scan engine)** *(P0/P1; after PSR-A, alongside H1)*:
+  **HYP-5** columnar service skeleton (Rust ACA — `delta-rs` framing + Arrow transcoding + DuckDB/DataFusion scan;
+  core path executes) `[HYP, P0, XL]` · **HYP-6** segment-residency cache + Redis cross-replica coherence
+  (cold/semiwarm/warm ladder, incremental framing on Delta-log diff) `[HYP, P0, L]` · **HYP-7** DAX-lite → Arrow/SQL
+  compiler + `LOOM_SEMANTIC_BACKEND=loom-columnar-cache` wired at `aas-client`/`tabular-eval-client` `[HYP, P1, L]` ·
+  **HYP-8** DirectQuery-class cold fallback (Synapse Serverless warm-shim) + guardrail-triggered fallback `[HYP, P1, M]`.
+  (4 items + supporting **HYP-14/HYP-15** landing here, referencing PSR-3/PSR-5/PSR-6.)
+  *Operator action:* deploy `compute/loom-directlake-app.bicep` (per-tenant `minReplicas`, NOT scale-to-zero) +
+  **Azure Cache for Redis Premium** (shared) + UAMI (Storage Blob Data Reader). Benchmark acceptance = **sub-second
+  aggregate on a warm frame** in PSR-1. **This is the Gov path** (OSS engine replaces Gov-scarce AAS/VertiPaq).
+- **Wave H3 — Loom Capacity Broker (unified compute scheduler)** *(P0/P1; after PSR-A, after H2's Redis)*:
+  **HYP-9** broker skeleton (Rust/Go ACA — synchronous `POST /admit` + Redis timepoint ledger) `[HYP, P0, XL]` ·
+  **HYP-10** smoothing/bursting math (interactive 5-64min / background 24h spread) + 4-stage throttle + self-heal;
+  extends FGC-25 `[HYP, P0, L]` · **HYP-11** choke-point wiring (Spark/Databricks/ADX/AML/Direct-Lake submit paths
+  all call `/admit`) `[HYP, P1, L]` · **HYP-12** Capacity-Metrics admin page (Health/Compute/Storage/Timepoint tabs
+  off the live ledger — closes `appendix-platform-alm.md` GAP 2) `[HYP, P1, M]` · **HYP-13** broker throttle events →
+  Event Grid custom topic → Activator (Azure Monitor) rule `[HYP, P2, S]`. (5 items.)
+  *Operator action:* deploy `compute/loom-capacity-broker-app.bicep` (`minReplicas: 2`, HA) + Event Grid custom
+  topic + UAMI (**zero data-plane roles** — it gates the caller, never proxies). Feeds FGC-28/rel-T85 chargeback +
+  `appendix-capacity-cost-governance.md`.
+
+**Honest limits (per-component §s 5.10 / 6.10 / 7.10 of the PRP — where the outcome-equivalent will NOT match
+the proprietary mechanism):** Loom OneLake is a namespace/policy layer over ADLS (no global cross-tenant DNS,
+SaaS identity → Entra/RBAC, Delta⇄Iceberg read-path/UniForm-bounded). Loom Direct Lake is not VertiPaq (no
+identical encoding/optimizer; sub-second claimed for typical star-schema warm frames, not universal parity;
+warm-cache costs money at rest, bounded by per-tenant `minReplicas` + idle eviction). Loom Capacity Broker's LCU
+is a tunable coefficient over engine-native meters (reconciled against real Cost Management $-truth, never the
+billing source), bursting is bounded by each engine's own elasticity, admission is advisory-strong at
+Loom-mediated choke-points (raw ARM/SDK bypass is not intercepted), and cross-tenant hyperscale multiplexing is
+an explicit non-goal.
+
+This raises the plan to **25 waves** (22 existing + H1 + H2 + H3) and **~166 scheduled items** (~150 + 16 HYP),
+with **HYP-14/HYP-15 riding PSR-3/PSR-5/PSR-6** as shared-Redis glue (not net-new builds) and the whole H-band
+**hard-gated behind PSR-A**.
