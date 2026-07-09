@@ -201,7 +201,7 @@ export function DataAgentConfigCopilotPanel({ id, sources, ensureSaved, onApply 
               <MessageBar intent="warning">
                 <MessageBarBody>
                   {src.type === 'semantic-model'
-                    ? 'Semantic-model (DAX) examples come from Power BI “Prep for AI” Verified Answers — Config Copilot covers warehouse, lakehouse, KQL, and AI Search sources.'
+                    ? 'Semantic-model (DAX) examples come from the model editor’s Loom-native “Prep for AI” tab (Verified Answers) — Config Copilot covers warehouse, lakehouse, KQL, and AI Search sources.'
                     : 'Ontology / graph sources are queried whole — there is no column schema to generate example queries from.'}
                 </MessageBarBody>
               </MessageBar>
