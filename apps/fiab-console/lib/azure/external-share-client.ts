@@ -38,22 +38,26 @@ import {
 } from './external-share-model';
 
 /** Whether external cross-tenant sharing is switched on for this deployment.
- *  Default OFF — a foreign B2B invite is a deliberate governance action, so the
- *  operator opts in (matches the env-sync `_ENABLED$` runtime-only pattern). */
+ *  Default ON per the standing default-ON/opt-out directive (2026-07-08): every
+ *  Loom capability ships enabled; admins opt OUT by setting
+ *  LOOM_EXTERNAL_SHARING_ENABLED=false. The real gate is the honest infra fact —
+ *  the Console UAMI's Graph User.Invite.All grant — surfaced by the invite path
+ *  itself when missing. */
 export function externalSharingEnabled(): boolean {
-  return process.env.LOOM_EXTERNAL_SHARING_ENABLED === 'true';
+  return process.env.LOOM_EXTERNAL_SHARING_ENABLED !== 'false';
 }
 
 export class ExternalSharingNotConfiguredError extends Error {
   hint: string;
   constructor() {
-    super('External data sharing is not enabled in this deployment.');
+    super('External data sharing is disabled in this deployment.');
     this.name = 'ExternalSharingNotConfiguredError';
     this.hint =
-      'Set LOOM_EXTERNAL_SHARING_ENABLED=true on the loom-console Container App ' +
-      '(or loomExternalSharingEnabled=true in the bicepparam + redeploy admin-plane), ' +
-      'and grant the Console UAMI the Microsoft Graph app permission User.Invite.All ' +
-      '(09850681-111b-4a89-9bed-3f2cae46d706) with admin consent so B2B invitations can be sent.';
+      'External sharing is on by default; an admin disabled it via ' +
+      'LOOM_EXTERNAL_SHARING_ENABLED=false on the loom-console Container App. ' +
+      'Remove the override (or set it true) to re-enable. Sending B2B invitations also ' +
+      'requires the Console UAMI to hold the Microsoft Graph app permission User.Invite.All ' +
+      '(09850681-111b-4a89-9bed-3f2cae46d706) with admin consent.';
   }
 }
 

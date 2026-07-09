@@ -594,7 +594,7 @@ is **off by default** and gated on one env flag + one Graph app-role:
 
 | Setting | Value | Why |
 |---|---|---|
-| `LOOM_EXTERNAL_SHARING_ENABLED` | `true` (opt-in; unset = feature off) | Sending a foreign B2B invite is a deliberate governance action, so the operator opts in. |
+| `LOOM_EXTERNAL_SHARING_ENABLED` | on by default (opt-OUT; set `false` to disable) | Default-ON/opt-out directive (2026-07-08): the feature ships enabled; the honest gate is the Graph `User.Invite.All` grant below, without which invites fail with a precise remediation message. |
 | Graph app-role `User.Invite.All` | `09850681-111b-4a89-9bed-3f2cae46d706` on the Console UAMI SP | Backs `POST /invitations` (invite the foreign user as a B2B guest). |
 
 **How it works (no Microsoft Fabric, no Power BI):**
@@ -638,9 +638,9 @@ Gov↔Gov) it works with the same grant.
 
 - `external-shares` Cosmos container is created lazily by the console
   (`cosmos-client.ts` `createIfNotExists`) — no extra ARM step.
-- `LOOM_EXTERNAL_SHARING_ENABLED` is a runtime opt-in flag (`_ENABLED` — default
-  off, code has a fallback); set it on the `loom-console` Container App (or
-  `az containerapp update`) to enable the feature.
+- `LOOM_EXTERNAL_SHARING_ENABLED` is a runtime opt-OUT flag — the feature is ON
+  by default; set it to `false` on the `loom-console` Container App (or via
+  `az containerapp update`) to disable external sharing tenant-wide.
 - `User.Invite.All` is a **Graph-plane** grant and intentionally cannot be
   expressed in ARM/bicep — hence the one-time app-role assignment above.
 
