@@ -52,6 +52,8 @@ import {
 import { ItemEditorChrome } from '../item-editor-chrome';
 import { OpenInPbiDesktopButton } from '../components/open-in-pbi-desktop-button';
 import { EmptyState } from '@/lib/components/empty-state';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
+import { GuidedEmptyState } from '@/lib/components/shared/guided-empty-state';
 import { DeltaMaintenanceDialog } from '../components/delta-maintenance-dialog';
 import { TierDialog, type BlobAccessTier } from '@/lib/components/onelake/tier-dialog';
 import { parseDdlColumns } from '@/lib/azure/delta-maintenance';
@@ -2473,6 +2475,14 @@ export function LakehouseEditor({ item, id }: Props) {
       }
       main={
         <>
+          {/* Teaching banner (SC-6) — Fabric's Lakehouse "Analyze your data" tip.
+              Dismiss persists per user in localStorage. */}
+          <TeachingBanner
+            surfaceKey="lakehouse-analyze"
+            title="Analyze your data"
+            message="Explore this lakehouse in a notebook, query it through the SQL analytics endpoint, or stream it into an eventhouse endpoint — all on Azure, no Fabric required."
+            learnMoreHref="https://learn.microsoft.com/azure/synapse-analytics/spark/apache-spark-delta-lake-overview"
+          />
           {/* Reference-Lakehouse read-only preview pane (F8). Appears above the
               primary tabs when a file inside a referenced lakehouse is selected.
               Write actions are rendered DISABLED with an explanatory tooltip —
@@ -2832,13 +2842,28 @@ export function LakehouseEditor({ item, id }: Props) {
                     // tables (if any) as a "what to materialize" reference only.
                     return (
                       <>
-                        <MessageBar intent="info">
-                          <MessageBarBody>
-                            No Delta tables found under <strong>/{activeContainer}/Tables/</strong>. From the
-                            Files tab, right-click a Parquet / CSV / JSON file and choose
-                            <strong> Load to Tables (Delta)</strong> to materialize one, then Refresh.
-                          </MessageBarBody>
-                        </MessageBar>
+                        {/* Guided empty state (SC-4) — Fabric's "This database is
+                            empty. Get data" launcher. Each path is a real action. */}
+                        <GuidedEmptyState
+                          variant="block"
+                          heroIcon={TableSimple20Regular}
+                          title="This lakehouse has no tables yet"
+                          intro={<>No Delta tables under <strong>/{activeContainer}/Tables/</strong>. Bring in data, then materialize it as a Delta table.</>}
+                          ariaLabel="Get data into this lakehouse"
+                          paths={[
+                            {
+                              key: 'upload', title: 'Upload data files',
+                              body: 'Go to the Files tab to upload Parquet, CSV, or JSON — then Load to Tables (Delta).',
+                              icon: ArrowUpload20Regular, onClick: () => setTab('files'),
+                            },
+                            {
+                              key: 'load', title: 'Load an existing file to Delta',
+                              body: 'Right-click a file in Files and choose Load to Tables (Delta) to materialize a table.',
+                              icon: DocumentTable20Regular, onClick: () => setTab('files'),
+                            },
+                          ]}
+                          learnMoreHref="https://learn.microsoft.com/azure/databricks/delta/"
+                        />
                         {bundleDeltaTables.length > 0 && (
                           <>
                             <Caption1 style={{ display: 'block', marginTop: tokens.spacingVerticalM }}>
