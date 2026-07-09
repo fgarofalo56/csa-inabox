@@ -55,5 +55,14 @@ describe('groupTurns — transparency metadata threading', () => {
     expect(turn.costUsd).toBeUndefined();
     expect(turn.turnLatencyMs).toBeUndefined();
     expect(turn.contextUsage).toBeUndefined();
+    expect(turn.routedTier).toBeUndefined();
+  });
+
+  it('CTS-16: threads routedTier off the final step onto the turn', () => {
+    const steps: Step[] = [
+      { kind: 'final', content: 'done', model: 'o3', routedTier: 'strong' },
+    ];
+    const [turn] = groupTurns(steps);
+    expect(turn.routedTier).toBe('strong');
   });
 });

@@ -528,7 +528,7 @@ export function CopilotPane() {
                     ...x, text: step.content, streaming: false, usage: step.usage, model: step.model, msgIndex: idx,
                     // CTS-01/02/04/05 transparency metadata off the final step.
                     provider: step.provider, promptTokens: step.promptTokens, completionTokens: step.completionTokens,
-                    turnLatencyMs: step.turnLatencyMs, costUsd: step.costUsd,
+                    turnLatencyMs: step.turnLatencyMs, costUsd: step.costUsd, routedTier: step.routedTier,
                     turnDetail: step.turnDetail,
                     citations: step.citations && step.citations.length ? [...(x.citations ?? []), ...step.citations] : x.citations,
                     contextUsage: step.contextUsage ?? x.contextUsage,
@@ -666,7 +666,7 @@ export function CopilotPane() {
           replay.push({
             who: 'copilot', text: st.content, steps: toolSteps, usage: st.usage, model: st.model, msgIndex: idx,
             provider: st.provider, promptTokens: st.promptTokens, completionTokens: st.completionTokens,
-            turnLatencyMs: st.turnLatencyMs, costUsd: st.costUsd, turnDetail: st.turnDetail,
+            turnLatencyMs: st.turnLatencyMs, costUsd: st.costUsd, routedTier: st.routedTier, turnDetail: st.turnDetail,
             citations: st.citations, contextUsage: st.contextUsage,
           });
           toolSteps = [];
@@ -873,6 +873,7 @@ export function CopilotPane() {
                   completionTokens={m.completionTokens}
                   turnLatencyMs={m.turnLatencyMs}
                   costUsd={m.costUsd}
+                  routedTier={m.routedTier}
                   turnDetail={m.turnDetail}
                   citations={m.citations}
                 />

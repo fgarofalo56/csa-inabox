@@ -20,7 +20,7 @@ import { Badge, Button, Tooltip, makeStyles, tokens } from '@fluentui/react-comp
 import {
   Bot16Regular, ArrowUp12Regular, ArrowDown12Regular,
   Money16Regular, Timer16Regular, Wrench16Regular,
-  ChevronDown12Regular, ChevronUp12Regular,
+  ChevronDown12Regular, ChevronUp12Regular, BranchFork16Regular,
 } from '@fluentui/react-icons';
 import { TurnDetailPanel } from './turn-detail-panel';
 import type { Citation, CopilotUsage, TurnDetail, TurnMeta } from './types';
@@ -59,6 +59,13 @@ function costClass(s: ReturnType<typeof useStyles>, usd?: number): string {
   if (usd < 0.1) return `${s.chip} ${s.warn}`;
   return `${s.chip} ${s.bad}`;
 }
+
+/** CTS-16 tier → short chip label + tooltip. */
+const TIER_CHIP: Record<NonNullable<TurnMeta['routedTier']>, { label: string; tip: string }> = {
+  mini: { label: 'Mini tier', tip: 'The tier router routed this lightweight turn to the cheaper Mini deployment.' },
+  standard: { label: 'Standard tier', tip: 'The tier router kept this turn on the Standard deployment.' },
+  strong: { label: 'Strong tier', tip: 'The tier router routed this reasoning-heavy turn to the Strong deployment.' },
+};
 
 function fmtLatency(ms: number): string {
   return ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(ms < 10000 ? 1 : 0)}s`;
@@ -108,6 +115,14 @@ export function MessageMetadataBar(props: MessageMetadataBarProps) {
         <Tooltip content={`${provider || 'Azure OpenAI'} · ${model}`} relationship="label">
           <Badge size="small" appearance="outline" color="brand" icon={<Bot16Regular />}>
             {model}
+          </Badge>
+        </Tooltip>
+      )}
+
+      {props.routedTier && (
+        <Tooltip content={TIER_CHIP[props.routedTier].tip} relationship="label">
+          <Badge size="small" appearance="tint" color="informative" icon={<BranchFork16Regular />}>
+            {TIER_CHIP[props.routedTier].label}
           </Badge>
         </Tooltip>
       )}
