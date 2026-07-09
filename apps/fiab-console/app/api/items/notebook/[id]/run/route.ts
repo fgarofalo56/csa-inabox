@@ -326,6 +326,20 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
           displayLoaded = true;
         } catch { /* non-fatal — display() degrades to the built-in renderer */ }
       }
+
+      // FGC-17 — inject the Semantic Link helper (LoomDataFrame / read_table /
+      // evaluate_measure / validate_relationships) as a fresh-session statement
+      // so notebook cells can read a Loom semantic model with no pip install.
+      // Idempotent in-kernel (sys._loom_semantic_link_v1). Default-ON (opt-out
+      // via LOOM_SEMANTIC_LINK=0) and Azure-native — the helper only reaches the
+      // Loom Console BFF, never Power BI / Fabric. Non-fatal.
+      if ((process.env.LOOM_SEMANTIC_LINK || '').trim() !== '0' && effectiveSessKind === 'pyspark' && freshSession && typeof sessionId === 'number') {
+        try {
+          const { submitLivyStatement } = await import('@/lib/azure/synapse-dev-client');
+          const { LOOM_SEMANTIC_LINK_PREAMBLE } = await import('@/lib/notebook/loom-semantic-link-preamble');
+          await submitLivyStatement(pool, sessionId, { code: LOOM_SEMANTIC_LINK_PREAMBLE, kind: 'pyspark' });
+        } catch { /* non-fatal — cells can `import loom_semantic_link` on the AML env instead */ }
+      }
       const runIdStr = `spark:${pool}:${sessionId}`;
 
       // BR-COSTATTR — tag this Spark submit with who/where/how-much so it feeds

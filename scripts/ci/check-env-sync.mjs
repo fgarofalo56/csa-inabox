@@ -94,6 +94,7 @@ const ALLOWLIST = new Set([
   'LOOM_INTERNAL_ALLOWED_OIDS',     // opt-in allowlist of automation oids for the token-gated internal surface (rel-T10/B3); unset default = any well-formed GUID
   'LOOM_MCP_EGRESS_ALLOW',          // opt-in SSRF egress allow-list for admin MCP test-connection (rel-T13)
   'LOOM_MULTIUSER_ACL',             // opt-out kill switch for the multi-user ACL fallback (default on in code; rel-T11)
+  'LOOM_SEMANTIC_LINK',             // opt-out kill switch for injecting the Semantic Link notebook helper preamble (default on in code; FGC-17) — Azure-native, no Fabric
   'LOOM_SCHEDULER_EMAIL_WEBHOOK',   // opt-in email relay (ACS/Logic App/SMTP) for scheduler failure alerts (rel-T81); unset = alerts land in the Loom inbox + optional webhook only
   'LOOM_ITEM_VERSION_CAP',          // opt-in tuning knob for the per-item version-history retention cap (W6); unset default = 50 in code (lib/versions/item-version-store.ts)
   'LOOM_ADT_ENDPOINT',              // opt-in Azure Digital Twins endpoint (FGC-12); default twin backend is ADX-native — deploy platform/fiab/bicep/modules/integration/adt-instance.bicep to enable

@@ -246,11 +246,19 @@ output richDisplayComputeInstanceName string = (!empty(richDisplayComputeInstanc
 // jupyter-lsp wires LSP into the JupyterLab UI on the compute instance.
 // Grounded in Learn: Microsoft.MachineLearningServices/workspaces/environments
 // + .../environments/versions (condaFile + image).
+// The curated env ALSO carries the Semantic Link helper (FGC-17):
+// lib/notebook/loom-semantic-link.py exposes LoomDataFrame / read_table /
+// evaluate_measure / validate_relationships against the Azure-native tabular
+// backend (Synapse serverless SQL / AAS) — NO Power BI / Fabric dependency. It
+// is delivered two ways: (1) injected as a notebook Livy session preamble by the
+// notebook run route (default-on; LOOM_SEMANTIC_LINK=0 opts out), and (2) shipped
+// on the AML compute-instance PYTHONPATH via this curated environment. The helper
+// reads LOOM_CONSOLE_BASE_URL + LOOM_SESSION_TOKEN from the notebook environment.
 resource loomPylspEnv 'Microsoft.MachineLearningServices/workspaces/environments@2023-04-01' = {
   parent: workspace
   name: 'loom-pylsp-env'
   properties: {
-    description: 'CSA Loom curated environment — jupyter-lsp + python-lsp-server + pyright (Pylance-grade IntelliSense) over pandas/numpy/scikit-learn.'
+    description: 'CSA Loom curated environment — jupyter-lsp + python-lsp-server + pyright (Pylance-grade IntelliSense) over pandas/numpy/scikit-learn, plus the loom_semantic_link (Semantic Link / SemPy-parity) helper.'
     tags: { 'csa-loom': 'notebook-lsp' }
   }
 }
