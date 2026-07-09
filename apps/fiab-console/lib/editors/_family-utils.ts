@@ -668,7 +668,7 @@ const DA_SOURCE_TYPE_VALUES: DaSourceType[] = [
  *
  * Grounded in Microsoft Learn (Fabric data agent "Example queries" matrix):
  *   Lakehouse ✅, Warehouse ✅, Eventhouse/KQL ✅, GQL/Graph ✅, AI Search ✅
- *   Semantic model ❌ (use Power BI "Prep for AI" Verified Answers instead)
+ *   Semantic model ❌ here (curated Loom-native in the model editor's "Prep for AI" tab: Verified Answers)
  *   Ontology ❌
  * See https://learn.microsoft.com/fabric/data-science/data-agent-example-queries
  */

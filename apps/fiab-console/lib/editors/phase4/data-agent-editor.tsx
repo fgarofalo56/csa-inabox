@@ -728,7 +728,7 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
                       </Caption1>
                     ) : src.type === 'semantic-model' ? (
                       <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
-                        Semantic models are scoped in Power BI &ldquo;Prep for AI&rdquo; Verified Answers — no table selection here.
+                        Semantic models are curated Loom-native in the model editor&rsquo;s &ldquo;Prep for AI&rdquo; tab (Verified Answers) — no table selection here.
                       </Caption1>
                     ) : src.type === 'metric-view' ? (
                       <Field label="Governed metric view" hint="catalog.schema.metric_view (Databricks) or the metric-view name — the agent grounds on its governed measures.">
@@ -759,7 +759,7 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
                     ) : (
                       <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
                         {src.type === 'semantic-model'
-                          ? 'Semantic models use Power BI “Prep for AI” Verified Answers instead of example queries.'
+                          ? 'Semantic models use the model editor’s Loom-native “Prep for AI” Verified Answers instead of example queries.'
                           : 'Example queries are not supported for this source.'}
                       </Caption1>
                     )}

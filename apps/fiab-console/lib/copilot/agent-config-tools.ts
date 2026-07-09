@@ -88,8 +88,9 @@ export async function fetchSourceSchema(src: DataAgentSource): Promise<SchemaRes
         return {
           schemaText: '',
           gate:
-            'Semantic-model (DAX) schema is managed in Power BI "Prep for AI" Verified Answers — this copilot ' +
-            'generates examples for warehouse, lakehouse, KQL, and AI Search sources.',
+            'Semantic-model (DAX) grounding is curated Loom-native in the semantic-model editor\'s "Prep for AI" tab ' +
+            '(AI schema + AI instructions + Verified Answers) — this copilot generates examples for warehouse, ' +
+            'lakehouse, KQL, and AI Search sources.',
         };
       case 'ontology':
       case 'graph':
@@ -216,7 +217,7 @@ export async function listSourceObjects(src: DataAgentSource): Promise<SourceObj
       case 'semantic-model':
         return {
           objects: [],
-          gate: 'Semantic models are scoped in Power BI "Prep for AI" Verified Answers — there is no table selection here.',
+          gate: 'Semantic models are curated Loom-native in the "Prep for AI" tab (AI schema + Verified Answers) — there is no table selection here.',
         };
       case 'ontology':
       case 'graph':
