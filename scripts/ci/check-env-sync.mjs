@@ -98,6 +98,14 @@ const ALLOWLIST = new Set([
   'LOOM_SCHEDULER_EMAIL_WEBHOOK',   // opt-in email relay (ACS/Logic App/SMTP) for scheduler failure alerts (rel-T81); unset = alerts land in the Loom inbox + optional webhook only
   'LOOM_ITEM_VERSION_CAP',          // opt-in tuning knob for the per-item version-history retention cap (W6); unset default = 50 in code (lib/versions/item-version-store.ts)
   'LOOM_ADT_ENDPOINT',              // opt-in Azure Digital Twins endpoint (FGC-12); default twin backend is ADX-native — deploy platform/fiab/bicep/modules/integration/adt-instance.bicep to enable
+  // Databricks pipeline linked-service binding — opt-in (Databricks is an
+  // alternative Azure-native compute; Synapse is the default). Used by the
+  // dev-pipeline seeder to auto-stub / bind the AzureDatabricks linked service a
+  // bundle's Databricks-notebook activities require. Unset default = honest
+  // remediation gate on those pipeline items (lib/install/provisioners/_seed-dev-pipeline.ts).
+  'LOOM_DATABRICKS_WORKSPACE_URL',        // opt-in Databricks workspace URL (alias of LOOM_DATABRICKS_HOSTNAME with scheme)
+  'LOOM_DATABRICKS_WORKSPACE_RESOURCE_ID', // opt-in Databricks workspace ARM resourceId — enables MSI auth on the auto-stubbed linked service
+  'LOOM_DATABRICKS_LINKED_SERVICE',       // opt-in name of an already-registered AzureDatabricks linked service to reuse instead of auto-stubbing
   // SVC-1/SVC-8 — AI-enrichment cognitive endpoints. Independent single-kind
   // Cognitive Services accounts provisioned by deploy-planner/cognitive-account.bicep
   // and set per-deployment via /admin/env-config; NOT emitted by admin-plane

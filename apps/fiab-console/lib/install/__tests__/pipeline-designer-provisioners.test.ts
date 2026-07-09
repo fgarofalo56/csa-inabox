@@ -40,7 +40,11 @@ const ADF_ENV = { LOOM_SUBSCRIPTION_ID: 'sub-x', LOOM_DLZ_RG: 'rg-x', LOOM_ADF_N
 const DBX_ENV = { LOOM_DATABRICKS_HOSTNAME: 'adb-1.2.azuredatabricks.net' };
 
 function clearEnv() {
-  for (const k of ['LOOM_SUBSCRIPTION_ID', 'LOOM_DLZ_RG', 'LOOM_SYNAPSE_WORKSPACE', 'LOOM_ADF_NAME', 'LOOM_DATABRICKS_HOSTNAME']) {
+  for (const k of [
+    'LOOM_SUBSCRIPTION_ID', 'LOOM_DLZ_RG', 'LOOM_SYNAPSE_WORKSPACE', 'LOOM_ADF_NAME',
+    'LOOM_DATABRICKS_HOSTNAME', 'LOOM_DATABRICKS_WORKSPACE_URL',
+    'LOOM_DATABRICKS_LINKED_SERVICE', 'LOOM_DATABRICKS_WORKSPACE_RESOURCE_ID',
+  ]) {
     delete process.env[k];
   }
 }
@@ -80,6 +84,9 @@ const DBX_CONTENT = {
 describe('synapsePipelineProvisioner', () => {
   it('upserts the pipeline, triggers a run, and reports created', async () => {
     for (const [k, v] of Object.entries(SYN_ENV)) process.env[k] = v;
+    // The content includes a DatabricksNotebook activity; Databricks bound so
+    // the auto-stubbed AzureDatabricks linked service authors (mock 200).
+    process.env.LOOM_DATABRICKS_HOSTNAME = 'adb-1.2.azuredatabricks.net';
     const { calls } = captureFetch((u, init) => {
       if (u.includes('/createRun')) return { status: 200, body: { runId: 'run-77' } };
       if (u.includes('/pipelineruns/')) return { status: 200, body: { runId: 'run-77', status: 'InProgress' } };
@@ -98,6 +105,7 @@ describe('synapsePipelineProvisioner', () => {
 
   it('surfaces 403 on author as a structured remediation gate', async () => {
     for (const [k, v] of Object.entries(SYN_ENV)) process.env[k] = v;
+    process.env.LOOM_DATABRICKS_HOSTNAME = 'adb-1.2.azuredatabricks.net';
     captureFetch(() => ({ status: 403, body: { error: { message: 'forbidden' } } }));
     const { synapsePipelineProvisioner } = await import('../provisioners/synapse-pipeline');
     const r = await synapsePipelineProvisioner(baseInput(SYNAPSE_CONTENT) as any);
@@ -118,6 +126,7 @@ describe('synapsePipelineProvisioner', () => {
 describe('adfPipelineProvisioner', () => {
   it('upserts the pipeline, triggers a run, and reports created', async () => {
     for (const [k, v] of Object.entries(ADF_ENV)) process.env[k] = v;
+    process.env.LOOM_DATABRICKS_HOSTNAME = 'adb-1.2.azuredatabricks.net';
     const { calls } = captureFetch((u, init) => {
       if (u.includes('/createRun')) return { status: 200, body: { runId: 'adf-run-9' } };
       if (u.includes('/queryPipelineRuns')) return { status: 200, body: { value: [{ runId: 'adf-run-9', status: 'InProgress' }] } };
