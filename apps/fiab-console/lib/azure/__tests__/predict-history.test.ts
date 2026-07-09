@@ -66,6 +66,14 @@ describe('matchHistoryKey', () => {
   it('returns null when nothing matches', () => {
     expect(matchHistoryKey(map, 'synapse-spark:other:1')).toBeNull();
   });
+
+  it('never returns a prototype-polluting key (remote property injection)', () => {
+    // `map['__proto__']` is truthy via inheritance — a truthiness check would
+    // have returned it. hasOwnProperty + the denylist must yield null instead.
+    expect(matchHistoryKey(map, '__proto__')).toBeNull();
+    expect(matchHistoryKey(map, 'constructor')).toBeNull();
+    expect(matchHistoryKey(map, 'prototype')).toBeNull();
+  });
 });
 
 describe('applyHistoryStatus', () => {
@@ -80,6 +88,21 @@ describe('applyHistoryStatus', () => {
     const map = upsertPredictHistory({}, entry('r1', '2026-07-08T00:00:00Z'));
     const next = applyHistoryStatus(map, 'nope', { status: 'failed' });
     expect(next).toBe(map);
+  });
+
+  it('ignores a prototype-polluting runId without corrupting the prototype', () => {
+    const map = upsertPredictHistory({}, entry('r1', '2026-07-08T00:00:00Z'));
+    const next = applyHistoryStatus(map, '__proto__', { status: 'failed' });
+    expect(next).toBe(map); // no-op
+    expect(({} as Record<string, unknown>).status).toBeUndefined(); // proto intact
+  });
+});
+
+describe('upsertPredictHistory prototype-pollution guard', () => {
+  it('drops a crafted __proto__ runId instead of writing to the prototype', () => {
+    const next = upsertPredictHistory({}, entry('__proto__', '2026-07-08T00:00:00Z'));
+    expect(Object.prototype.hasOwnProperty.call(next, '__proto__')).toBe(false);
+    expect(({} as Record<string, unknown>).backend).toBeUndefined(); // proto intact
   });
 });
 
