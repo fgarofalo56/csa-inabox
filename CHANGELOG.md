@@ -25,6 +25,27 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.60.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.59.0...csa-inabox-v0.60.0) (2026-07-09)
+
+
+### Features
+
+* **canvas:** node-kit v2 — Fabric-class node anatomy, ghost next-step, typed ports, unified chrome ([#1767](https://github.com/fgarofalo56/csa-inabox/issues/1767)) ([c08d5aa](https://github.com/fgarofalo56/csa-inabox/commit/c08d5aa8f2fa5f29ebb1eb60c063932c548eacbd))
+* **copilot:** pipeline delete/remove tools (delete pipeline, remove factory objects) ([#1759](https://github.com/fgarofalo56/csa-inabox/issues/1759)) ([5994606](https://github.com/fgarofalo56/csa-inabox/commit/5994606e8f1a6dcd2e6cbfbc1a46e81b528a2d33))
+* **databricks:** Wave 10 — Lakebase serverless Postgres OLTP (Flexible Server default) (DBX-4) ([#1756](https://github.com/fgarofalo56/csa-inabox/issues/1756)) ([4ecb96d](https://github.com/fgarofalo56/csa-inabox/commit/4ecb96dc7d3539e80843b42d694a1ea7ab6699a9))
+* **databricks:** Wave 10 — Lakeflow DLT visual editor + streaming tables/MVs (DBX-3/7) ([#1757](https://github.com/fgarofalo56/csa-inabox/issues/1757)) ([a6f6bb9](https://github.com/fgarofalo56/csa-inabox/commit/a6f6bb9185504a3bdd8037e38dbea0126801ab79))
+* **eventstream:** Fabric-UX parity — live preview dock, edit/publish, categorized transforms, ghost node ([#1765](https://github.com/fgarofalo56/csa-inabox/issues/1765)) ([8b12e48](https://github.com/fgarofalo56/csa-inabox/commit/8b12e48620b2f328420a07b8c269978fc9ea5a68))
+* **pipeline:** Fabric-UX parity — docked validating inspector, guided empty state, categorized picker, ribbon quick-inserts ([#1768](https://github.com/fgarofalo56/csa-inabox/issues/1768)) ([407b7b2](https://github.com/fgarofalo56/csa-inabox/commit/407b7b29438ae008390944e762e86f1b628d03e4))
+* **pipeline:** right-click context menus on all Factory Resources + expand-all + name tooltips ([#1760](https://github.com/fgarofalo56/csa-inabox/issues/1760)) ([ca1cda0](https://github.com/fgarofalo56/csa-inabox/commit/ca1cda08eab8bc191b7471cfe1fb76c875499610))
+
+
+### Bug Fixes
+
+* **apps:** backend-aware notebook utility API (mssparkutils/dbutils/AML) across all bundles — fixes Synapse 'dbutils not defined' ([#1762](https://github.com/fgarofalo56/csa-inabox/issues/1762)) ([580dadc](https://github.com/fgarofalo56/csa-inabox/commit/580dadc258aa951ff4c4e914c7c698949662d497))
+* **install:** RTA failing item + provisioner hardening (applies across apps) ([#1761](https://github.com/fgarofalo56/csa-inabox/issues/1761)) ([28586ab](https://github.com/fgarofalo56/csa-inabox/commit/28586abe6fd5c89215198d8a833730bfb10803e3))
+* **pipeline:** adf-pipeline routes accept data-pipeline-typed items (the real 'Bind failed' 404) ([#1766](https://github.com/fgarofalo56/csa-inabox/issues/1766)) ([63aa80f](https://github.com/fgarofalo56/csa-inabox/commit/63aa80f3cc294f48547fd53eed091d766f1639b5))
+* **pipeline:** bind + factory-resource actions target the SELECTED factory (fixes 'No pipelines found' / Bind failed) ([#1763](https://github.com/fgarofalo56/csa-inabox/issues/1763)) ([606bc51](https://github.com/fgarofalo56/csa-inabox/commit/606bc51f13e96cb1521be8b57ad182d0aa7b008a))
+
 ## [0.59.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.58.0...csa-inabox-v0.59.0) (2026-07-09)
 
 
