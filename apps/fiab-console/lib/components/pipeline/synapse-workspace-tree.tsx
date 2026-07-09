@@ -6,9 +6,16 @@
  * The Synapse equivalent of the ADF Factory Resources pane. Once the Synapse
  * pipeline editor is open, its left pane becomes this typed navigator: one
  * group per workspace artifact type with a live count and a ＋ New affordance,
- * a "Filter resources by name" box, and a top "Add new resource" menu —
- * matching the Synapse Studio Develop / Integrate / Data / Manage hubs
- * collapsed into one tree.
+ * a "Filter resources by name" box, RIGHT-CLICK context menus per node, and a
+ * top "Add new resource" menu — matching the Synapse Studio Develop / Integrate
+ * / Data / Manage hubs collapsed into one tree.
+ *
+ * The tree chrome (typed icons, filter, right-click context menus, inline row
+ * actions, lazy expand) is the shared SC-7 `<ExplorerTree>`; this file maps the
+ * workspace's REAL artifact lists into its generic node model and dispatches
+ * every action to the same real REST handlers as before. Adopting the shared
+ * component ADDS the previously-missing right-click context menus (its top gap
+ * per the UX-baseline inventory, UX-710) with no change to the backend.
  *
  * Every count comes from a real Synapse artifacts list call; every create/
  * delete hits the real Synapse dev-plane REST (api-version 2020-12-01) through
@@ -26,40 +33,29 @@
  *
  * The remaining Synapse Studio group we don't yet author (dedicated-SQL-pool
  * create/scale — listed read-only here, authored in the scaling editor) renders
- * as an honest ⚠️ gate row naming where it lives — never a fake list. No mocks.
+ * as an honest ⚠️ node naming where it lives — never a fake list. No mocks.
  *
  * The workspace is the env-pinned default (LOOM_SYNAPSE_WORKSPACE). When
  * unconfigured the routes 503 and the whole tree shows a single honest
  * infra-gate MessageBar.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactElement } from 'react';
 import {
-  Tree, TreeItem, TreeItemLayout,
-  Button, Input, Field, Caption1, Badge, Spinner, Dropdown, Option,
+  Button, Input, Field, Caption1, Dropdown, Option,
   Menu, MenuTrigger, MenuPopover, MenuList, MenuItem,
   Dialog, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
   Tooltip, MessageBar, MessageBarBody, MessageBarTitle,
-  makeStyles, tokens,
+  tokens,
 } from '@fluentui/react-components';
 import {
-  Add20Regular, ArrowSync16Regular, Delete16Regular,
+  Add20Regular, Delete16Regular,
   Flow20Regular, DocumentTable20Regular, DataUsage20Regular, Clock20Regular,
   Link20Regular, Server20Regular, Play16Regular, Stop16Regular, Open16Regular,
-  Search20Regular, Warning20Regular, Notebook20Regular, DocumentText20Regular,
+  Warning20Regular, Notebook20Regular, DocumentText20Regular,
   Database20Regular, DatabaseArrowRight20Regular, AppsListDetail20Regular,
 } from '@fluentui/react-icons';
-
-const useStyles = makeStyles({
-  root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalS, padding: tokens.spacingHorizontalS, height: '100%', minWidth: '240px' },
-  header: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, justifyContent: 'space-between' },
-  title: { fontWeight: tokens.fontWeightSemibold, fontSize: tokens.fontSizeBase300 },
-  groupLayout: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalSNudge, width: '100%' },
-  groupActions: { marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXXS },
-  leafRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, width: '100%' },
-  leafActions: { marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXXS },
-  gateRow: { padding: '4px 8px' },
-});
+import { ExplorerTree, type ExplorerNode, type ExplorerAction } from '@/lib/components/shared/explorer-tree';
 
 const PIPE_ROUTE = '/api/synapse/pipelines';
 const DS_ROUTE = '/api/synapse/datasets';
@@ -81,6 +77,39 @@ interface NamedRow { name: string; [k: string]: unknown }
 
 type CreatableGroup = 'pipeline' | 'dataset' | 'dataflow' | 'notebook' | 'sqlscript' | 'trigger' | 'kqlscript' | 'sparkjobdef';
 
+// Per-kind icon for the shared ExplorerTree (groups + leaves).
+const KIND_ICON: Record<string, ReactElement> = {
+  'group-pipelines': <Flow20Regular />, pipeline: <Flow20Regular />,
+  'group-datasets': <DocumentTable20Regular />, dataset: <DocumentTable20Regular />,
+  'group-dataflows': <DataUsage20Regular />, dataflow: <DataUsage20Regular />,
+  'group-notebooks': <Notebook20Regular />, notebook: <Notebook20Regular />,
+  'group-sqlscripts': <DocumentText20Regular />, sqlscript: <DocumentText20Regular />,
+  'group-kqlscripts': <DatabaseArrowRight20Regular />, kqlscript: <DatabaseArrowRight20Regular />,
+  'group-sparkjobdefs': <AppsListDetail20Regular />, sparkjobdef: <AppsListDetail20Regular />,
+  'group-triggers': <Clock20Regular />, trigger: <Clock20Regular />,
+  'group-linked': <Link20Regular />, linkedservice: <Link20Regular />,
+  'group-spark': <Server20Regular />, sparkpool: <Server20Regular />,
+  'group-sqlpools': <Database20Regular />, sqlpool: <Database20Regular />,
+  'group-notwired': <Warning20Regular />, notwired: <Warning20Regular />,
+};
+
+function iconForSynapseNode(node: ExplorerNode): ReactElement {
+  return KIND_ICON[node.kind] ?? <DocumentText20Regular />;
+}
+
+// Delete route per creatable/deletable leaf kind.
+const ROUTE_BY_KIND: Record<string, string> = {
+  pipeline: PIPE_ROUTE, dataset: DS_ROUTE, dataflow: DF_ROUTE, notebook: NB_ROUTE,
+  sqlscript: SQL_ROUTE, kqlscript: KQL_ROUTE, sparkjobdef: SJD_ROUTE,
+  trigger: TRG_ROUTE, linkedservice: LS_ROUTE,
+};
+// Group kind → the create dialog it opens.
+const GROUP_CREATE: Record<string, CreatableGroup> = {
+  'group-pipelines': 'pipeline', 'group-datasets': 'dataset', 'group-dataflows': 'dataflow',
+  'group-notebooks': 'notebook', 'group-sqlscripts': 'sqlscript', 'group-kqlscripts': 'kqlscript',
+  'group-sparkjobdefs': 'sparkjobdef', 'group-triggers': 'trigger',
+};
+
 export interface SynapseWorkspaceTreeProps {
   /** The currently bound pipeline name (highlighted in the tree). */
   boundPipeline: string | null;
@@ -95,14 +124,12 @@ export interface SynapseWorkspaceTreeProps {
 }
 
 /**
- * A typed, Synapse-Studio-faithful Workspace Resources navigator.
+ * A typed, Synapse-Studio-faithful Workspace Resources navigator over the shared
+ * SC-7 ExplorerTree.
  */
 export function SynapseWorkspaceTree({
   boundPipeline, onOpenPipeline, onOpenKqlScript, onOpenSparkJobDef, refreshKey = 0,
 }: SynapseWorkspaceTreeProps) {
-  const s = useStyles();
-
-  const [filter, setFilter] = useState('');
   const [gate, setGate] = useState<{ missing: string } | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -256,382 +283,204 @@ export function SynapseWorkspaceTree({
   }, [loadAll]);
 
   // ---------------------------------------------------------------
-  // Filtering
+  // ExplorerTree wiring — nodes, per-node actions, open/dispatch
   // ---------------------------------------------------------------
-  const f = filter.trim().toLowerCase();
-  const match = (n: string) => !f || n.toLowerCase().includes(f);
-  const fPipelines = useMemo(() => pipelines.filter((p) => match(p.name)), [pipelines, f]);
-  const fDatasets = useMemo(() => datasets.filter((d) => match(d.name)), [datasets, f]);
-  const fDataflows = useMemo(() => dataflows.filter((d) => match(d.name)), [dataflows, f]);
-  const fNotebooks = useMemo(() => notebooks.filter((n) => match(n.name)), [notebooks, f]);
-  const fSqlScripts = useMemo(() => sqlScripts.filter((q) => match(q.name)), [sqlScripts, f]);
-  const fKqlScripts = useMemo(() => kqlScripts.filter((q) => match(q.name)), [kqlScripts, f]);
-  const fSparkJobDefs = useMemo(() => sparkJobDefs.filter((d) => match(d.name)), [sparkJobDefs, f]);
-  const fTriggers = useMemo(() => triggers.filter((t) => match(t.name)), [triggers, f]);
-  const fLinked = useMemo(() => linkedServices.filter((l) => match(l.name)), [linkedServices, f]);
-  const fSparkPools = useMemo(() => sparkPools.filter((p) => match(p.name)), [sparkPools, f]);
-  const fSqlPools = useMemo(() => sqlPools.filter((p) => match(p.name)), [sqlPools, f]);
+  const onOpen = useCallback((node: ExplorerNode) => {
+    if (node.kind === 'pipeline') onOpenPipeline(node.label);
+    else if (node.kind === 'kqlscript') onOpenKqlScript?.(node.label);
+    else if (node.kind === 'sparkjobdef') onOpenSparkJobDef?.(node.label);
+  }, [onOpenPipeline, onOpenKqlScript, onOpenSparkJobDef]);
 
-  // ---------------------------------------------------------------
-  // Render helpers
-  // ---------------------------------------------------------------
-  const groupHeader = (
-    label: string, icon: React.ReactElement, count: number,
-    onAdd?: () => void, addTitle?: string,
-  ) => (
-    <TreeItemLayout iconBefore={icon}>
-      <span className={s.groupLayout}>
-        <span>{label} ({count})</span>
-        <span className={s.groupActions} onClick={(e) => e.stopPropagation()}>
-          {onAdd && (
-            <Tooltip content={addTitle || `New ${label.toLowerCase()}`} relationship="label">
-              <Button size="small" appearance="subtle" icon={<Add20Regular />} onClick={onAdd} disabled={busy} aria-label={addTitle || `New ${label}`} />
-            </Tooltip>
-          )}
-        </span>
-      </span>
-    </TreeItemLayout>
+  const onAction = useCallback((key: string, node: ExplorerNode) => {
+    if (key === 'new') { const g = GROUP_CREATE[node.kind]; if (g) openCreate(g); return; }
+    if (key === 'open') { onOpen(node); return; }
+    if (key === 'delete') { const r = ROUTE_BY_KIND[node.kind]; if (r) del(r, node.label); return; }
+    if (key === 'start') { triggerLifecycle(node.label, 'start'); return; }
+    if (key === 'stop') { triggerLifecycle(node.label, 'stop'); return; }
+  }, [openCreate, onOpen, del, triggerLifecycle]);
+
+  const actionsFor = useCallback((node: ExplorerNode): ExplorerAction[] => {
+    const newAction = (label: string): ExplorerAction => ({ key: 'new', label, icon: <Add20Regular />, inline: true, disabled: busy });
+    const deleteAction: ExplorerAction = { key: 'delete', label: 'Delete', icon: <Delete16Regular />, inline: true, destructive: true, disabled: busy };
+    const openAction: ExplorerAction = { key: 'open', label: 'Open', icon: <Open16Regular />, inline: true };
+    switch (node.kind) {
+      case 'group-pipelines': return [newAction('New pipeline')];
+      case 'group-datasets': return [newAction('New dataset')];
+      case 'group-dataflows': return [newAction('New data flow')];
+      case 'group-notebooks': return [newAction('New notebook')];
+      case 'group-sqlscripts': return [newAction('New SQL script')];
+      case 'group-kqlscripts': return [newAction('New KQL script')];
+      case 'group-sparkjobdefs': return [newAction('New Spark job definition')];
+      case 'group-triggers': return [newAction('New trigger')];
+      case 'pipeline': return [openAction, deleteAction];
+      case 'dataset': case 'dataflow': case 'notebook': case 'sqlscript': case 'linkedservice':
+        return [deleteAction];
+      case 'kqlscript': return [...(onOpenKqlScript ? [openAction] : []), deleteAction];
+      case 'sparkjobdef': return [...(onOpenSparkJobDef ? [openAction] : []), deleteAction];
+      case 'trigger': {
+        const started = (node.data as { runtimeState?: string } | undefined)?.runtimeState === 'Started';
+        const life: ExplorerAction = started
+          ? { key: 'stop', label: 'Stop', icon: <Stop16Regular />, inline: true, disabled: busy }
+          : { key: 'start', label: 'Start', icon: <Play16Regular />, inline: true, disabled: busy };
+        return [life, deleteAction];
+      }
+      default: return [];
+    }
+  }, [busy, onOpenKqlScript, onOpenSparkJobDef]);
+
+  const nodes = useMemo<ExplorerNode[]>(() => [
+    {
+      id: 'group-pipelines', label: 'Pipelines', kind: 'group-pipelines', meta: String(pipelines.length),
+      children: pipelines.map((p) => ({
+        id: `p-${p.name}`, label: p.name, kind: 'pipeline',
+        emphasized: boundPipeline === p.name,
+        meta: typeof p.activities === 'number' ? `${p.activities as number} act` : undefined,
+        data: p,
+      })),
+    },
+    {
+      id: 'group-datasets', label: 'Datasets', kind: 'group-datasets', meta: String(datasets.length),
+      children: datasets.map((d) => ({
+        id: `d-${d.name}`, label: d.name, kind: 'dataset',
+        meta: typeof d.type === 'string' ? (d.type as string) : undefined, data: d,
+      })),
+    },
+    {
+      id: 'group-dataflows', label: 'Data flows', kind: 'group-dataflows', meta: String(dataflows.length),
+      children: dataflows.map((d) => ({
+        id: `f-${d.name}`, label: d.name, kind: 'dataflow',
+        meta: typeof d.type === 'string' ? (d.type as string).replace('DataFlow', '') : undefined, data: d,
+      })),
+    },
+    {
+      id: 'group-notebooks', label: 'Notebooks', kind: 'group-notebooks', meta: String(notebooks.length),
+      children: notebooks.map((n) => ({
+        id: `n-${n.name}`, label: n.name, kind: 'notebook',
+        meta: typeof n.language === 'string' ? (n.language as string) : undefined, data: n,
+      })),
+    },
+    {
+      id: 'group-sqlscripts', label: 'SQL scripts', kind: 'group-sqlscripts', meta: String(sqlScripts.length),
+      children: sqlScripts.map((q) => ({
+        id: `q-${q.name}`, label: q.name, kind: 'sqlscript',
+        meta: typeof q.pool === 'string' ? (q.pool as string) : undefined, data: q,
+      })),
+    },
+    {
+      id: 'group-kqlscripts', label: 'KQL scripts', kind: 'group-kqlscripts', meta: String(kqlScripts.length),
+      children: kqlScripts.map((k) => ({
+        id: `k-${k.name}`, label: k.name, kind: 'kqlscript',
+        badge: k.pool ? { text: k.pool, appearance: 'outline' } : undefined, data: k,
+      })),
+    },
+    {
+      id: 'group-sparkjobdefs', label: 'Spark job definitions', kind: 'group-sparkjobdefs', meta: String(sparkJobDefs.length),
+      children: sparkJobDefs.map((d) => ({
+        id: `sj-${d.name}`, label: d.name, kind: 'sparkjobdef',
+        meta: d.language, badge: d.pool ? { text: d.pool, appearance: 'outline' } : undefined, data: d,
+      })),
+    },
+    {
+      id: 'group-triggers', label: 'Triggers', kind: 'group-triggers', meta: String(triggers.length),
+      children: triggers.map((t) => ({
+        id: `t-${t.name}`, label: t.name, kind: 'trigger',
+        badge: {
+          text: t.runtimeState || '—',
+          color: t.runtimeState === 'Started' ? 'success' : t.runtimeState === 'Stopped' ? 'informative' : 'warning',
+        },
+        data: t,
+      })),
+    },
+    {
+      id: 'group-linked', label: 'Linked services', kind: 'group-linked', meta: String(linkedServices.length),
+      children: linkedServices.map((l) => ({
+        id: `l-${l.name}`, label: l.name, kind: 'linkedservice',
+        meta: typeof l.type === 'string' ? (l.type as string) : undefined, data: l,
+      })),
+    },
+    {
+      id: 'group-spark', label: 'Spark pools', kind: 'group-spark', meta: String(sparkPools.length),
+      children: sparkPools.map((p) => ({
+        id: `sp-${p.name}`, label: p.name, kind: 'sparkpool',
+        meta: [p.nodeSize, p.sparkVersion ? `Spark ${p.sparkVersion}` : ''].filter(Boolean).join(' · ') || undefined,
+        badge: p.state ? { text: p.state, appearance: 'tint', color: p.state === 'Succeeded' ? 'success' : 'informative' } : undefined,
+        data: p,
+      })),
+    },
+    {
+      id: 'group-sqlpools', label: 'SQL pools', kind: 'group-sqlpools', meta: String(sqlPools.length),
+      children: sqlPools.map((p) => ({
+        id: `dp-${p.name}`, label: p.name, kind: 'sqlpool',
+        meta: p.sku, badge: p.status ? { text: p.status, appearance: 'tint', color: p.status === 'Online' ? 'success' : p.status === 'Paused' ? 'informative' : 'warning' } : undefined,
+        data: p,
+      })),
+    },
+    {
+      // Honest node — Synapse Studio exposes dedicated-SQL-pool authoring; we
+      // list pools read-only here and author them in the scaling editor.
+      id: 'group-notwired', label: 'Not yet wired', kind: 'group-notwired',
+      children: [{
+        id: 'nw-dedicated-sql', label: 'Dedicated SQL pool authoring', kind: 'notwired',
+        meta: 'authored in the Synapse scaling editor',
+        badge: { text: 'coming', appearance: 'tint', color: 'warning' },
+      }],
+    },
+  ], [pipelines, datasets, dataflows, notebooks, sqlScripts, kqlScripts, sparkJobDefs, triggers, linkedServices, sparkPools, sqlPools, boundPipeline]);
+
+  const headerMenu = (
+    <Menu>
+      <MenuTrigger disableButtonEnhancement>
+        <Tooltip content="Add new resource" relationship="label">
+          <Button size="small" appearance="primary" icon={<Add20Regular />} aria-label="Add new resource" />
+        </Tooltip>
+      </MenuTrigger>
+      <MenuPopover>
+        <MenuList>
+          <MenuItem icon={<Flow20Regular />} onClick={() => openCreate('pipeline')}>Pipeline</MenuItem>
+          <MenuItem icon={<DataUsage20Regular />} onClick={() => openCreate('dataflow')}>Data flow</MenuItem>
+          <MenuItem icon={<Notebook20Regular />} onClick={() => openCreate('notebook')}>Notebook</MenuItem>
+          <MenuItem icon={<DocumentText20Regular />} onClick={() => openCreate('sqlscript')}>SQL script</MenuItem>
+          <MenuItem icon={<DatabaseArrowRight20Regular />} onClick={() => openCreate('kqlscript')}>KQL script</MenuItem>
+          <MenuItem icon={<AppsListDetail20Regular />} onClick={() => openCreate('sparkjobdef')}>Spark job definition</MenuItem>
+          <MenuItem icon={<DocumentTable20Regular />} onClick={() => openCreate('dataset')}>Dataset</MenuItem>
+          <MenuItem icon={<Clock20Regular />} onClick={() => openCreate('trigger')}>Trigger</MenuItem>
+        </MenuList>
+      </MenuPopover>
+    </Menu>
   );
 
-  if (gate) {
-    return (
-      <div className={s.root}>
-        <div className={s.header}><span className={s.title}>Workspace Resources</span></div>
-        <MessageBar intent="warning">
-          <MessageBarBody>
-            <MessageBarTitle>Synapse workspace not configured</MessageBarTitle>
-            Set <code>{gate.missing}</code> so the Loom console can reach a real Azure Synapse
-            workspace (the artifacts data plane at <code>&lt;workspace&gt;.dev.azuresynapse.net</code>).
-            The navigator stays here; resources appear once the workspace is reachable. The Loom UAMI
-            needs the <strong>Synapse Artifact Publisher</strong> (or <strong>Synapse Administrator</strong>)
-            Synapse-RBAC role on that workspace.
-          </MessageBarBody>
-        </MessageBar>
-      </div>
-    );
-  }
+  const gateContent = gate ? (
+    <MessageBar intent="warning">
+      <MessageBarBody>
+        <MessageBarTitle>Synapse workspace not configured</MessageBarTitle>
+        Set <code>{gate.missing}</code> so the Loom console can reach a real Azure Synapse
+        workspace (the artifacts data plane at <code>&lt;workspace&gt;.dev.azuresynapse.net</code>).
+        The navigator stays here; resources appear once the workspace is reachable. The Loom UAMI
+        needs the <strong>Synapse Artifact Publisher</strong> (or <strong>Synapse Administrator</strong>)
+        Synapse-RBAC role on that workspace.
+      </MessageBarBody>
+    </MessageBar>
+  ) : undefined;
 
   return (
-    <div className={s.root}>
-      <div className={s.header}>
-        <span className={s.title}>Workspace Resources</span>
-        <span style={{ display: 'flex', gap: tokens.spacingHorizontalXXS }}>
-          <Menu>
-            <MenuTrigger disableButtonEnhancement>
-              <Tooltip content="Add new resource" relationship="label">
-                <Button size="small" appearance="primary" icon={<Add20Regular />} aria-label="Add new resource" />
-              </Tooltip>
-            </MenuTrigger>
-            <MenuPopover>
-              <MenuList>
-                <MenuItem icon={<Flow20Regular />} onClick={() => openCreate('pipeline')}>Pipeline</MenuItem>
-                <MenuItem icon={<DataUsage20Regular />} onClick={() => openCreate('dataflow')}>Data flow</MenuItem>
-                <MenuItem icon={<Notebook20Regular />} onClick={() => openCreate('notebook')}>Notebook</MenuItem>
-                <MenuItem icon={<DocumentText20Regular />} onClick={() => openCreate('sqlscript')}>SQL script</MenuItem>
-                <MenuItem icon={<DatabaseArrowRight20Regular />} onClick={() => openCreate('kqlscript')}>KQL script</MenuItem>
-                <MenuItem icon={<AppsListDetail20Regular />} onClick={() => openCreate('sparkjobdef')}>Spark job definition</MenuItem>
-                <MenuItem icon={<DocumentTable20Regular />} onClick={() => openCreate('dataset')}>Dataset</MenuItem>
-                <MenuItem icon={<Clock20Regular />} onClick={() => openCreate('trigger')}>Trigger</MenuItem>
-              </MenuList>
-            </MenuPopover>
-          </Menu>
-          <Tooltip content="Refresh" relationship="label">
-            <Button size="small" appearance="subtle" icon={<ArrowSync16Regular />} onClick={loadAll} disabled={loading} aria-label="Refresh resources" />
-          </Tooltip>
-        </span>
-      </div>
-
-      <Field>
-        <Input
-          size="small"
-          contentBefore={<Search20Regular />}
-          placeholder="Filter resources by name"
-          value={filter}
-          onChange={(_, d) => setFilter(d.value)}
-        />
-      </Field>
-
-      {loading && <div style={{ padding: tokens.spacingVerticalS }}><Spinner size="tiny" label="Loading workspace resources…" /></div>}
-      {error && (
-        <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Workspace error</MessageBarTitle>{error}</MessageBarBody></MessageBar>
-      )}
-
-      <div style={{ overflow: 'auto', flex: 1 }}>
-        <Tree aria-label="Workspace resources" defaultOpenItems={['g-pipelines']}>
-          {/* Pipelines */}
-          <TreeItem itemType="branch" value="g-pipelines">
-            {groupHeader('Pipelines', <Flow20Regular />, pipelines.length, () => openCreate('pipeline'), 'New pipeline')}
-            <Tree>
-              {fPipelines.length === 0 && <TreeItem itemType="leaf" value="p-empty"><TreeItemLayout><Caption1>{f ? 'No matches' : 'No pipelines'}</Caption1></TreeItemLayout></TreeItem>}
-              {fPipelines.map((p) => (
-                <TreeItem key={p.name} itemType="leaf" value={`p-${p.name}`}>
-                  <TreeItemLayout iconBefore={<Flow20Regular />}>
-                    <span className={s.leafRow}>
-                      <span
-                        role="button" tabIndex={0}
-                        style={{ cursor: 'pointer', fontWeight: boundPipeline === p.name ? tokens.fontWeightSemibold : undefined }}
-                        onClick={() => onOpenPipeline(p.name)}
-                        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpenPipeline(p.name); } }}
-                      >
-                        {p.name}{boundPipeline === p.name ? ' ·' : ''}
-                      </span>
-                      <span className={s.leafActions} onClick={(e) => e.stopPropagation()}>
-                        {typeof p.activities === 'number' && <Caption1>{p.activities as number} act</Caption1>}
-                        <Tooltip content="Open" relationship="label"><Button size="small" appearance="subtle" icon={<Open16Regular />} onClick={() => onOpenPipeline(p.name)} aria-label={`Open ${p.name}`} /></Tooltip>
-                        <Tooltip content="Delete" relationship="label"><Button size="small" appearance="subtle" icon={<Delete16Regular />} disabled={busy} onClick={() => del(PIPE_ROUTE, p.name)} aria-label={`Delete ${p.name}`} /></Tooltip>
-                      </span>
-                    </span>
-                  </TreeItemLayout>
-                </TreeItem>
-              ))}
-            </Tree>
-          </TreeItem>
-
-          {/* Datasets */}
-          <TreeItem itemType="branch" value="g-datasets">
-            {groupHeader('Datasets', <DocumentTable20Regular />, datasets.length, () => openCreate('dataset'), 'New dataset')}
-            <Tree>
-              {fDatasets.length === 0 && <TreeItem itemType="leaf" value="d-empty"><TreeItemLayout><Caption1>{f ? 'No matches' : 'No datasets'}</Caption1></TreeItemLayout></TreeItem>}
-              {fDatasets.map((d) => (
-                <TreeItem key={d.name} itemType="leaf" value={`d-${d.name}`}>
-                  <TreeItemLayout iconBefore={<DocumentTable20Regular />}>
-                    <span className={s.leafRow}>
-                      <span>{d.name}</span>
-                      <span className={s.leafActions} onClick={(e) => e.stopPropagation()}>
-                        {typeof d.type === 'string' && <Caption1>{d.type as string}</Caption1>}
-                        <Tooltip content="Delete" relationship="label"><Button size="small" appearance="subtle" icon={<Delete16Regular />} disabled={busy} onClick={() => del(DS_ROUTE, d.name)} aria-label={`Delete ${d.name}`} /></Tooltip>
-                      </span>
-                    </span>
-                  </TreeItemLayout>
-                </TreeItem>
-              ))}
-            </Tree>
-          </TreeItem>
-
-          {/* Data flows */}
-          <TreeItem itemType="branch" value="g-dataflows">
-            {groupHeader('Data flows', <DataUsage20Regular />, dataflows.length, () => openCreate('dataflow'), 'New data flow')}
-            <Tree>
-              {fDataflows.length === 0 && <TreeItem itemType="leaf" value="f-empty"><TreeItemLayout><Caption1>{f ? 'No matches' : 'No data flows'}</Caption1></TreeItemLayout></TreeItem>}
-              {fDataflows.map((d) => (
-                <TreeItem key={d.name} itemType="leaf" value={`f-${d.name}`}>
-                  <TreeItemLayout iconBefore={<DataUsage20Regular />}>
-                    <span className={s.leafRow}>
-                      <span>{d.name}</span>
-                      <span className={s.leafActions} onClick={(e) => e.stopPropagation()}>
-                        {typeof d.type === 'string' && <Caption1>{(d.type as string).replace('DataFlow', '')}</Caption1>}
-                        <Tooltip content="Delete" relationship="label"><Button size="small" appearance="subtle" icon={<Delete16Regular />} disabled={busy} onClick={() => del(DF_ROUTE, d.name)} aria-label={`Delete ${d.name}`} /></Tooltip>
-                      </span>
-                    </span>
-                  </TreeItemLayout>
-                </TreeItem>
-              ))}
-            </Tree>
-          </TreeItem>
-
-          {/* Notebooks */}
-          <TreeItem itemType="branch" value="g-notebooks">
-            {groupHeader('Notebooks', <Notebook20Regular />, notebooks.length, () => openCreate('notebook'), 'New notebook')}
-            <Tree>
-              {fNotebooks.length === 0 && <TreeItem itemType="leaf" value="n-empty"><TreeItemLayout><Caption1>{f ? 'No matches' : 'No notebooks'}</Caption1></TreeItemLayout></TreeItem>}
-              {fNotebooks.map((n) => (
-                <TreeItem key={n.name} itemType="leaf" value={`n-${n.name}`}>
-                  <TreeItemLayout iconBefore={<Notebook20Regular />}>
-                    <span className={s.leafRow}>
-                      <span>{n.name}</span>
-                      <span className={s.leafActions} onClick={(e) => e.stopPropagation()}>
-                        {typeof n.language === 'string' && <Caption1>{n.language as string}</Caption1>}
-                        <Tooltip content="Delete" relationship="label"><Button size="small" appearance="subtle" icon={<Delete16Regular />} disabled={busy} onClick={() => del(NB_ROUTE, n.name)} aria-label={`Delete ${n.name}`} /></Tooltip>
-                      </span>
-                    </span>
-                  </TreeItemLayout>
-                </TreeItem>
-              ))}
-            </Tree>
-          </TreeItem>
-
-          {/* SQL scripts */}
-          <TreeItem itemType="branch" value="g-sqlscripts">
-            {groupHeader('SQL scripts', <DocumentText20Regular />, sqlScripts.length, () => openCreate('sqlscript'), 'New SQL script')}
-            <Tree>
-              {fSqlScripts.length === 0 && <TreeItem itemType="leaf" value="q-empty"><TreeItemLayout><Caption1>{f ? 'No matches' : 'No SQL scripts'}</Caption1></TreeItemLayout></TreeItem>}
-              {fSqlScripts.map((q) => (
-                <TreeItem key={q.name} itemType="leaf" value={`q-${q.name}`}>
-                  <TreeItemLayout iconBefore={<DocumentText20Regular />}>
-                    <span className={s.leafRow}>
-                      <span>{q.name}</span>
-                      <span className={s.leafActions} onClick={(e) => e.stopPropagation()}>
-                        {typeof q.pool === 'string' && <Caption1>{q.pool as string}</Caption1>}
-                        <Tooltip content="Delete" relationship="label"><Button size="small" appearance="subtle" icon={<Delete16Regular />} disabled={busy} onClick={() => del(SQL_ROUTE, q.name)} aria-label={`Delete ${q.name}`} /></Tooltip>
-                      </span>
-                    </span>
-                  </TreeItemLayout>
-                </TreeItem>
-              ))}
-            </Tree>
-          </TreeItem>
-
-          {/* KQL scripts */}
-          <TreeItem itemType="branch" value="g-kqlscripts">
-            {groupHeader('KQL scripts', <DatabaseArrowRight20Regular />, kqlScripts.length, () => openCreate('kqlscript'), 'New KQL script')}
-            <Tree>
-              {fKqlScripts.length === 0 && <TreeItem itemType="leaf" value="k-empty"><TreeItemLayout><Caption1>{f ? 'No matches' : 'No KQL scripts'}</Caption1></TreeItemLayout></TreeItem>}
-              {fKqlScripts.map((k) => (
-                <TreeItem key={k.name} itemType="leaf" value={`k-${k.name}`}>
-                  <TreeItemLayout iconBefore={<DatabaseArrowRight20Regular />}>
-                    <span className={s.leafRow}>
-                      <span
-                        role="button" tabIndex={0} style={{ cursor: onOpenKqlScript ? 'pointer' : undefined }}
-                        onClick={() => onOpenKqlScript?.(k.name)}
-                        onKeyDown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && onOpenKqlScript) { e.preventDefault(); onOpenKqlScript(k.name); } }}
-                      >{k.name}</span>
-                      <span className={s.leafActions} onClick={(e) => e.stopPropagation()}>
-                        {k.pool && <Badge size="small" appearance="outline">{k.pool}</Badge>}
-                        {onOpenKqlScript && <Tooltip content="Open" relationship="label"><Button size="small" appearance="subtle" icon={<Open16Regular />} onClick={() => onOpenKqlScript(k.name)} aria-label={`Open ${k.name}`} /></Tooltip>}
-                        <Tooltip content="Delete" relationship="label"><Button size="small" appearance="subtle" icon={<Delete16Regular />} disabled={busy} onClick={() => del(KQL_ROUTE, k.name)} aria-label={`Delete ${k.name}`} /></Tooltip>
-                      </span>
-                    </span>
-                  </TreeItemLayout>
-                </TreeItem>
-              ))}
-            </Tree>
-          </TreeItem>
-
-          {/* Spark job definitions */}
-          <TreeItem itemType="branch" value="g-sparkjobdefs">
-            {groupHeader('Spark job definitions', <AppsListDetail20Regular />, sparkJobDefs.length, () => openCreate('sparkjobdef'), 'New Spark job definition')}
-            <Tree>
-              {fSparkJobDefs.length === 0 && <TreeItem itemType="leaf" value="sj-empty"><TreeItemLayout><Caption1>{f ? 'No matches' : 'No Spark job definitions'}</Caption1></TreeItemLayout></TreeItem>}
-              {fSparkJobDefs.map((d) => (
-                <TreeItem key={d.name} itemType="leaf" value={`sj-${d.name}`}>
-                  <TreeItemLayout iconBefore={<AppsListDetail20Regular />}>
-                    <span className={s.leafRow}>
-                      <span
-                        role="button" tabIndex={0} style={{ cursor: onOpenSparkJobDef ? 'pointer' : undefined }}
-                        onClick={() => onOpenSparkJobDef?.(d.name)}
-                        onKeyDown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && onOpenSparkJobDef) { e.preventDefault(); onOpenSparkJobDef(d.name); } }}
-                      >{d.name}</span>
-                      <span className={s.leafActions} onClick={(e) => e.stopPropagation()}>
-                        {d.language && <Caption1>{d.language}</Caption1>}
-                        {d.pool && <Badge size="small" appearance="outline">{d.pool}</Badge>}
-                        {onOpenSparkJobDef && <Tooltip content="Open" relationship="label"><Button size="small" appearance="subtle" icon={<Open16Regular />} onClick={() => onOpenSparkJobDef(d.name)} aria-label={`Open ${d.name}`} /></Tooltip>}
-                        <Tooltip content="Delete" relationship="label"><Button size="small" appearance="subtle" icon={<Delete16Regular />} disabled={busy} onClick={() => del(SJD_ROUTE, d.name)} aria-label={`Delete ${d.name}`} /></Tooltip>
-                      </span>
-                    </span>
-                  </TreeItemLayout>
-                </TreeItem>
-              ))}
-            </Tree>
-          </TreeItem>
-
-          {/* Triggers */}
-          <TreeItem itemType="branch" value="g-triggers">
-            {groupHeader('Triggers', <Clock20Regular />, triggers.length, () => openCreate('trigger'), 'New trigger')}
-            <Tree>
-              {fTriggers.length === 0 && <TreeItem itemType="leaf" value="t-empty"><TreeItemLayout><Caption1>{f ? 'No matches' : 'No triggers'}</Caption1></TreeItemLayout></TreeItem>}
-              {fTriggers.map((t) => (
-                <TreeItem key={t.name} itemType="leaf" value={`t-${t.name}`}>
-                  <TreeItemLayout iconBefore={<Clock20Regular />}>
-                    <span className={s.leafRow}>
-                      <span>{t.name}</span>
-                      <span className={s.leafActions} onClick={(e) => e.stopPropagation()}>
-                        <Badge size="small" appearance="filled" color={t.runtimeState === 'Started' ? 'success' : t.runtimeState === 'Stopped' ? 'informative' : 'warning'}>{t.runtimeState || '—'}</Badge>
-                        {t.runtimeState === 'Started'
-                          ? <Tooltip content="Stop" relationship="label"><Button size="small" appearance="subtle" icon={<Stop16Regular />} disabled={busy} onClick={() => triggerLifecycle(t.name, 'stop')} aria-label={`Stop ${t.name}`} /></Tooltip>
-                          : <Tooltip content="Start" relationship="label"><Button size="small" appearance="subtle" icon={<Play16Regular />} disabled={busy} onClick={() => triggerLifecycle(t.name, 'start')} aria-label={`Start ${t.name}`} /></Tooltip>}
-                        <Tooltip content="Delete" relationship="label"><Button size="small" appearance="subtle" icon={<Delete16Regular />} disabled={busy} onClick={() => del(TRG_ROUTE, t.name)} aria-label={`Delete ${t.name}`} /></Tooltip>
-                      </span>
-                    </span>
-                  </TreeItemLayout>
-                </TreeItem>
-              ))}
-            </Tree>
-          </TreeItem>
-
-          {/* Linked services */}
-          <TreeItem itemType="branch" value="g-linked">
-            {groupHeader('Linked services', <Link20Regular />, linkedServices.length, undefined)}
-            <Tree>
-              {fLinked.length === 0 && <TreeItem itemType="leaf" value="l-empty"><TreeItemLayout><Caption1>{f ? 'No matches' : 'No linked services'}</Caption1></TreeItemLayout></TreeItem>}
-              {fLinked.map((l) => (
-                <TreeItem key={l.name} itemType="leaf" value={`l-${l.name}`}>
-                  <TreeItemLayout iconBefore={<Link20Regular />}>
-                    <span className={s.leafRow}>
-                      <span>{l.name}</span>
-                      <span className={s.leafActions} onClick={(e) => e.stopPropagation()}>
-                        {typeof l.type === 'string' && <Caption1>{l.type as string}</Caption1>}
-                        <Tooltip content="Delete" relationship="label"><Button size="small" appearance="subtle" icon={<Delete16Regular />} disabled={busy} onClick={() => del(LS_ROUTE, l.name)} aria-label={`Delete ${l.name}`} /></Tooltip>
-                      </span>
-                    </span>
-                  </TreeItemLayout>
-                </TreeItem>
-              ))}
-            </Tree>
-          </TreeItem>
-
-          {/* Spark pools (read-only from ARM) */}
-          <TreeItem itemType="branch" value="g-spark">
-            {groupHeader('Spark pools', <Server20Regular />, sparkPools.length, undefined)}
-            <Tree>
-              {fSparkPools.length === 0 && <TreeItem itemType="leaf" value="sp-empty"><TreeItemLayout><Caption1>{f ? 'No matches' : 'No Spark pools'}</Caption1></TreeItemLayout></TreeItem>}
-              {fSparkPools.map((p) => (
-                <TreeItem key={p.name} itemType="leaf" value={`sp-${p.name}`}>
-                  <TreeItemLayout iconBefore={<Server20Regular />}>
-                    <span className={s.leafRow}>
-                      <span>{p.name}</span>
-                      <span className={s.leafActions}>
-                        {p.nodeSize && <Caption1>{p.nodeSize}</Caption1>}
-                        {p.sparkVersion && <Badge size="small" appearance="outline">Spark {p.sparkVersion}</Badge>}
-                        {p.state && <Badge size="small" appearance="tint" color={p.state === 'Succeeded' ? 'success' : 'informative'}>{p.state}</Badge>}
-                      </span>
-                    </span>
-                  </TreeItemLayout>
-                </TreeItem>
-              ))}
-            </Tree>
-          </TreeItem>
-
-          {/* SQL pools (read-only from ARM) */}
-          <TreeItem itemType="branch" value="g-sqlpools">
-            {groupHeader('SQL pools', <Database20Regular />, sqlPools.length, undefined)}
-            <Tree>
-              {fSqlPools.length === 0 && <TreeItem itemType="leaf" value="dp-empty"><TreeItemLayout><Caption1>{f ? 'No matches' : 'No dedicated SQL pools'}</Caption1></TreeItemLayout></TreeItem>}
-              {fSqlPools.map((p) => (
-                <TreeItem key={p.name} itemType="leaf" value={`dp-${p.name}`}>
-                  <TreeItemLayout iconBefore={<Database20Regular />}>
-                    <span className={s.leafRow}>
-                      <span>{p.name}</span>
-                      <span className={s.leafActions}>
-                        {p.sku && <Caption1>{p.sku}</Caption1>}
-                        {p.status && <Badge size="small" appearance="tint" color={p.status === 'Online' ? 'success' : p.status === 'Paused' ? 'informative' : 'warning'}>{p.status}</Badge>}
-                      </span>
-                    </span>
-                  </TreeItemLayout>
-                </TreeItem>
-              ))}
-            </Tree>
-          </TreeItem>
-
-          {/* Honest gate rows — Synapse Studio exposes these; we don't wire them yet. */}
-          <TreeItem itemType="branch" value="g-not-wired">
-            <TreeItemLayout iconBefore={<Warning20Regular />}>Not yet wired</TreeItemLayout>
-            <Tree>
-              {[
-                ['Dedicated SQL pool authoring', 'sqlPools create/scale/pause/resume — listed read-only here; authoring lives in the Synapse scaling editor (/api/admin/scaling/*).'],
-              ].map(([label, why]) => (
-                <TreeItem key={label} itemType="leaf" value={`nw-${label}`}>
-                  <Tooltip content={why} relationship="description">
-                    <TreeItemLayout iconBefore={<Warning20Regular />}>
-                      <span style={{ color: tokens.colorNeutralForeground3 }}>{label}</span>{' '}
-                      <Badge size="small" appearance="tint" color="warning">coming</Badge>
-                    </TreeItemLayout>
-                  </Tooltip>
-                </TreeItem>
-              ))}
-            </Tree>
-          </TreeItem>
-        </Tree>
-      </div>
+    <>
+      <ExplorerTree
+        nodes={nodes}
+        title="Workspace Resources"
+        iconFor={iconForSynapseNode}
+        actionsFor={actionsFor}
+        onAction={onAction}
+        onOpen={onOpen}
+        headerActions={headerMenu}
+        onRefresh={loadAll}
+        loading={loading}
+        error={error}
+        gate={gateContent}
+        ariaLabel="Workspace resources"
+        emptyLabel="No resources"
+        filterPlaceholder="Filter resources by name"
+        defaultOpenIds={['group-pipelines']}
+      />
 
       {/* Create dialog (pipeline / dataflow / notebook / sqlscript / trigger / dataset) */}
       <Dialog open={createGroup !== null} onOpenChange={(_, d) => { if (!d.open) setCreateGroup(null); }}>
@@ -723,6 +572,6 @@ export function SynapseWorkspaceTree({
           </DialogBody>
         </DialogSurface>
       </Dialog>
-    </div>
+    </>
   );
 }

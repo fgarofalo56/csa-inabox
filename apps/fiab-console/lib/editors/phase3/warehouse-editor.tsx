@@ -34,6 +34,7 @@ import { ModelViewPanel } from '../components/model-view-canvas';
 import { ItemEditorChrome } from '../item-editor-chrome';
 import { OpenInPbiDesktopButton } from '../components/open-in-pbi-desktop-button';
 import { EmptyState } from '@/lib/components/empty-state';
+import { PreviewTable } from '@/lib/components/shared/preview-table';
 import { WarehouseMonitoringTab } from '../components/warehouse-monitoring';
 import { WarehouseTimeTravelTab } from '../components/warehouse-time-travel';
 import { StatsMaintenanceDialog } from '../components/stats-maintenance-dialog';
@@ -728,17 +729,19 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
           )}
           {result?.ok && (
             <>
-              <div style={{ display: 'flex', gap: tokens.spacingVerticalM, alignItems: 'center' }}>
-                <Badge appearance="filled" color="success">{result.rowCount ?? result.rows?.length ?? 0} rows</Badge>
-                <Caption1>· {result.executionMs} ms</Caption1>
-                {result.truncated && <Badge appearance="outline" color="warning">truncated at 5,000</Badge>}
-                {(result.rows?.length ?? 0) > 0 && (
+              {/*
+               * SC-5 <PreviewTable> owns the result-set status line
+               * ("Succeeded (Xms) · Columns N · Rows N") + type-badged headers +
+               * search, so the toolbar here keeps only the Visualize toggle.
+               */}
+              {(result.rows?.length ?? 0) > 0 && (
+                <div style={{ display: 'flex', alignItems: 'center' }}>
                   <Button size="small" appearance={showViz ? 'primary' : 'outline'} icon={<DataBarVertical20Regular />}
                     onClick={() => setShowViz((v) => !v)} style={{ marginLeft: 'auto' }}>
                     {showViz ? 'Hide chart' : 'Visualize'}
                   </Button>
-                )}
-              </div>
+                </div>
+              )}
               {showViz && (result.rows?.length ?? 0) > 0 && (
                 <ResultVisualize columns={result.columns || []} rows={result.rows || []} />
               )}
@@ -749,22 +752,23 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
                   body="The T-SQL statement ran successfully but produced no rows. Adjust the predicates and run it again."
                 />
               ) : (
-                <div style={{ overflow: 'auto', maxHeight: 360, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium }}>
-                  <Table aria-label="Query results" size="small">
-                    <TableHeader><TableRow>
-                      {(result.columns || []).map((c) => <TableHeaderCell key={c}>{c}</TableHeaderCell>)}
-                    </TableRow></TableHeader>
-                    <TableBody>
-                      {(result.rows || []).map((row, i) => (
-                        <TableRow key={i}>
-                          {(result.columns || []).map((_, j) => (
-                            <TableCell key={j} style={{ fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, whiteSpace: 'nowrap' }}>{formatCell(row[j])}</TableCell>
-                          ))}
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </div>
+                <PreviewTable
+                  sources={[{
+                    id: `wh-result-${activeTabId}`,
+                    label: 'Results',
+                    data: {
+                      columns: result.columns || [],
+                      rows: result.rows || [],
+                      elapsedMs: result.executionMs,
+                      rowCount: result.rowCount ?? result.rows?.length,
+                      truncated: result.truncated,
+                    },
+                  }]}
+                  showTabs={false}
+                  maxRows={5000}
+                  maxHeight={360}
+                  ariaLabel="Query results"
+                />
               )}
             </>
           )}
