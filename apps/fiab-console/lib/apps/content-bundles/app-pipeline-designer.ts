@@ -537,7 +537,11 @@ of them and see the result in the warehouse editor.
             dependsOn: ['Transform_Silver'],
             config: {
               description:
-                'Gold build stage (dbt models dim_customer / dim_product / dim_date / fact_sales) producing the star schema and refreshing the gold.v_sales_by_segment + gold.v_top_products_by_margin views. DatabricksNotebook /medallion/gold on a wired estate; targets the @pipeline().parameters.targetWorkspace warehouse.',
+                // NB: never put @pipeline().parameters.* syntax inside prose —
+                // Synapse's commit validator textually scans description
+                // strings for parameter references and fails the PUT with
+                // "Missing parameter definition for 'targetWorkspace warehouse'".
+                'Gold build stage (dbt models dim_customer / dim_product / dim_date / fact_sales) producing the star schema and refreshing the gold.v_sales_by_segment + gold.v_top_products_by_margin views. DatabricksNotebook /medallion/gold on a wired estate; targets the warehouse named by the targetWorkspace pipeline parameter.',
               waitTimeInSeconds: 3,
             },
           },
