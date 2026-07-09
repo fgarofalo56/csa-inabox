@@ -32,6 +32,8 @@ import {
   ArrowSync20Regular, Save20Regular, Bug20Regular, Checkmark20Regular,
   Clock20Regular, Link20Regular, Add20Regular, Settings20Regular,
   PlugConnected20Regular, Database20Regular, Dismiss24Regular,
+  DocumentArrowRight20Regular, Notebook20Regular, SearchInfo20Regular,
+  Flow20Regular, ErrorCircle20Regular, DataArea20Regular,
 } from '@fluentui/react-icons';
 import { ManagePanel } from '@/lib/components/pipeline/manage-panel';
 import { PipelineManageHub } from '@/lib/components/pipeline/pipeline-manage-hub';
@@ -602,6 +604,23 @@ export function PipelineEditorCore({
     void loadRuns();
   }, [loadRuns]);
 
+  // Ribbon quick-insert (Fabric Home ribbon) — drop an activity straight from the
+  // ribbon. Switches to the Activities canvas first so the new node is visible,
+  // then inserts via the designer's imperative handle (deferred so the designer is
+  // mounted on the graph tab before the insert fires).
+  const quickInsert = useCallback((key: string) => {
+    setTab('graph');
+    setTimeout(() => designerRef.current?.insertActivityByKey(key), 120);
+  }, []);
+
+  // Client-side pre-run "Validate" — reveal the designer's authoring-errors panel
+  // (unmet required fields per activity, linked to nodes). Works for both ADF and
+  // Synapse (unlike the server Validate, which is ADF-only).
+  const checkAuthoringErrors = useCallback(() => {
+    setTab('graph');
+    setTimeout(() => designerRef.current?.showAuthoringErrors(), 120);
+  }, []);
+
   // ADF Studio toolbar — Save · Validate · Debug · Run (trigger now) · Add
   // trigger · canvas layout controls (auto-align / fit). Activities are added
   // from the left palette pane in the designer, matching ADF Studio (no
@@ -624,10 +643,26 @@ export function PipelineEditorCore({
         { label: 'Integration runtimes', icon: <Server20Regular />, onClick: () => openManageHub('integration-runtimes'), title: 'Azure auto-resolve / Self-Hosted / Azure-SSIS integration runtimes' },
       ],
     }];
+    // Quick-insert activity buttons (Fabric Home ribbon parity): drop the most
+    // common activities straight from the ribbon. Enabled once bound; each routes
+    // through the designer's insertActivityByKey handle.
+    const insertGroup: RibbonTab['groups'] = [{
+      label: 'Insert', actions: [
+        { label: 'Copy data', icon: <DocumentArrowRight20Regular />, onClick: bound ? () => quickInsert('Copy') : undefined, disabled: !bound, title: !bound ? 'Bind a pipeline first' : 'Add a Copy data activity' },
+        { label: 'Dataflow', icon: <DataArea20Regular />, onClick: bound ? () => quickInsert('DataflowGen2') : undefined, disabled: !bound, title: !bound ? 'Bind a pipeline first' : 'Add a Dataflow Gen2 activity' },
+        { label: 'Notebook', icon: <Notebook20Regular />, onClick: bound ? () => quickInsert('Notebook') : undefined, disabled: !bound, title: !bound ? 'Bind a pipeline first' : 'Add a Notebook activity' },
+        { label: 'Lookup', icon: <SearchInfo20Regular />, onClick: bound ? () => quickInsert('Lookup') : undefined, disabled: !bound, title: !bound ? 'Bind a pipeline first' : 'Add a Lookup activity' },
+        { label: 'Invoke pipeline', icon: <Flow20Regular />, onClick: bound ? () => quickInsert('ExecutePipeline') : undefined, disabled: !bound, title: !bound ? 'Bind a pipeline first' : 'Add an Invoke pipeline (Execute Pipeline) activity' },
+      ],
+    }];
     return [
       { id: 'home', label: 'Home', groups: [
         { label: 'Save', actions: [
           { label: busy ? 'Saving…' : 'Save', icon: <Save20Regular />, onClick: !busy && bound && dirty ? save : undefined, disabled: busy || !bound || !dirty, title: !bound ? 'Bind a pipeline first' : (!dirty ? 'No changes' : undefined) },
+        ] },
+        ...insertGroup,
+        { label: 'Authoring', actions: [
+          { label: 'Check errors', icon: <ErrorCircle20Regular />, onClick: bound ? checkAuthoringErrors : undefined, disabled: !bound, title: !bound ? 'Bind a pipeline first' : 'List activities with unmet required fields (pre-run)' },
         ] },
         ...validateGroup,
         ...manageGroup,
@@ -642,7 +677,7 @@ export function PipelineEditorCore({
         ] },
       ] },
     ];
-  }, [config.supportsValidate, isAdf, busy, bound, dirty, save, kick, validate, openTriggers, openManageHub]);
+  }, [config.supportsValidate, isAdf, busy, bound, dirty, save, kick, validate, openTriggers, openManageHub, quickInsert, checkAuthoringErrors]);
 
   // ------------------------------------------------------------------
   // Render
@@ -1027,6 +1062,16 @@ export function PipelineEditorCore({
                   parameters={pipelineParameters}
                   variables={pipelineVariables}
                   onActivitiesChange={(next) => setSpec((prev) => writeActivitiesToSpec(prev || '{"properties":{}}', next as any))}
+                  // Guided empty-state / gallery apply the FULL template spec
+                  // (activities + params + variables), leaving the editor dirty so
+                  // the user saves it to the bound pipeline.
+                  onApplyTemplateSpec={(genSpec) => {
+                    setSpec(JSON.stringify(genSpec, null, 2));
+                    setValidation(null);
+                    setTimeout(() => designerRef.current?.fitToScreen(), 150);
+                  }}
+                  // "Ask Copilot" focuses the docked Pipeline Copilot composer.
+                  onAskCopilot={() => { try { window.dispatchEvent(new CustomEvent('loom:pipeline-ask-copilot')); } catch { /* noop */ } }}
                 />
               )}
               {tab === 'parameters' && (

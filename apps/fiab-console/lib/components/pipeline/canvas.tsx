@@ -208,6 +208,12 @@ export interface PipelineCanvasProps {
   onAddActivities?: (clones: PipelineActivity[]) => void;
   /** Suppress mutating shortcuts while a save is in flight. */
   readOnly?: boolean;
+  /**
+   * Suppress the built-in centered empty-state overlay. The designer sets this
+   * when it renders its own richer guided empty-state launcher over the canvas,
+   * so the two don't stack.
+   */
+  hideEmptyState?: boolean;
 }
 
 // --- edge derivation: one Bezier edge per (from, condition) pair ---------
@@ -237,7 +243,7 @@ function buildEdges(activities: PipelineActivity[]): Edge[] {
 
 const PipelineCanvasInner = forwardRef<CanvasHandle, PipelineCanvasProps>(function PipelineCanvasInner(
   { activities, selectedName, onSelect, onDropPaletteKey, onConnect, onDrillInto, onDrillBack, snapToGrid = true, showGrid = true, onZoomChange,
-    onUndo, onRedo, canUndo = false, canRedo = false, onAddActivities, readOnly = false },
+    onUndo, onRedo, canUndo = false, canRedo = false, onAddActivities, readOnly = false, hideEmptyState = false },
   ref,
 ) {
   const s = useStyles();
@@ -643,7 +649,7 @@ const PipelineCanvasInner = forwardRef<CanvasHandle, PipelineCanvasProps>(functi
         />
       </ReactFlow>
 
-      {activities.length === 0 && (
+      {activities.length === 0 && !hideEmptyState && (
         <div className={s.empty}>
           <div className={s.emptyCard}>
             <EmptyState

@@ -50,6 +50,10 @@ import {
 import { ActivityPalette } from './palette';
 import { PipelineCanvas, type CanvasHandle } from './canvas';
 import { PropertiesPanel } from './properties-panel';
+import { GuidedEmptyStateLauncher } from './guided-empty-state';
+import { AuthoringErrorsPanel } from './authoring-errors-panel';
+import { TemplateGalleryFlyout } from './templates/gallery';
+import { validateLevel, countIssuesDeep } from './pipeline-validation';
 import type { ConnectorCondition } from './connector';
 import { ACTIVITY_CATALOG, findByKey, nextNameSuffix, type ActivityTypeDef } from './activity-catalog';
 import {
@@ -65,7 +69,7 @@ import { ResizableCanvasRegion } from '@/lib/components/canvas/resizable-canvas'
 import { useCanvasHistory } from '@/lib/components/canvas/use-canvas-history';
 import { registerCanvasCommands, type CanvasCommand } from '@/lib/components/canvas/canvas-command-registry';
 import type {
-  PipelineActivity, PipelineParameter, PipelineVariable,
+  PipelineActivity, PipelineParameter, PipelineVariable, PipelineSpec,
 } from './types';
 
 const useStyles = makeStyles({
@@ -176,6 +180,7 @@ const useStyles = makeStyles({
   // Canvas region — carries the Fabric-like dot-grid depth (className) and the
   // same floating-panel elevation as its siblings.
   canvasWrap: {
+    position: 'relative',
     display: 'flex', flex: 1, minHeight: 0,
     borderRadius: tokens.borderRadiusLarge,
     boxShadow: tokens.shadow4,
@@ -201,6 +206,10 @@ export interface PipelineDesignerHandle {
   fitToScreen: () => void;
   resetZoom: () => void;
   autoAlign: () => void;
+  /** Insert an activity by its catalog key at the current level (ribbon quick-insert). */
+  insertActivityByKey: (key: string) => void;
+  /** Recompute + reveal the authoring-errors panel (ribbon "Validate"). */
+  showAuthoringErrors: () => void;
 }
 
 export interface PipelineDesignerProps {
@@ -224,6 +233,16 @@ export interface PipelineDesignerProps {
   workspaceId?: string;
   /** Editor host API slug (default 'data-pipeline'). */
   apiSlug?: string;
+  /**
+   * Apply a full template / sample PipelineSpec (activities + parameters +
+   * variables). When the host wires this, the guided empty-state launcher and
+   * template gallery route through it so pipeline-level params/vars are also
+   * applied. When omitted, the designer falls back to applying just the
+   * template's activities through its own undoable path.
+   */
+  onApplyTemplateSpec?: (spec: PipelineSpec) => void;
+  /** Focus the Pipeline Copilot composer — shows the guided "Ask Copilot" card. */
+  onAskCopilot?: () => void;
 }
 
 export const PipelineDesigner = forwardRef<PipelineDesignerHandle, PipelineDesignerProps>(function PipelineDesigner({
@@ -237,9 +256,17 @@ export const PipelineDesigner = forwardRef<PipelineDesignerHandle, PipelineDesig
   itemId,
   workspaceId,
   apiSlug,
+  onApplyTemplateSpec,
+  onAskCopilot,
 }, ref) {
   const s = useStyles();
   const canvasRef = useRef<CanvasHandle>(null);
+  // Guided empty-state / gallery / authoring-errors surfaces.
+  const [galleryOpen, setGalleryOpen] = useState(false);
+  const [authoringOpen, setAuthoringOpen] = useState(false);
+  // Set when the user chose "Start with a blank canvas" — hides the guided
+  // launcher for this empty top level so the palette + drop are unobstructed.
+  const [blankStart, setBlankStart] = useState(false);
   const [internalSelected, setInternalSelected] = useState<string | null>(null);
   const selectedName = controlledSelected !== undefined ? controlledSelected : internalSelected;
   const setSelectedName = useCallback((name: string | null) => {
@@ -259,12 +286,6 @@ export const PipelineDesigner = forwardRef<PipelineDesignerHandle, PipelineDesig
   // and 'ifTrue'|'ifFalse'|'default'|{caseValue} for If/Switch.
   const [drillPath, setDrillPath] = useState<DrillPath>([]);
   const [newCaseValue, setNewCaseValue] = useState('');
-
-  useImperativeHandle(ref, () => ({
-    fitToScreen: () => canvasRef.current?.fitToScreen(),
-    resetZoom: () => canvasRef.current?.resetZoom(),
-    autoAlign: () => canvasRef.current?.autoAlign(),
-  }), []);
 
   // The activities array at the CURRENT drill level. A stale path (e.g. after a
   // container was deleted at a parent level) collapses to [].
@@ -335,6 +356,16 @@ export const PipelineDesigner = forwardRef<PipelineDesignerHandle, PipelineDesig
     [levelActivities, selectedName],
   );
 
+  // --- Pre-run authoring validation (Fabric parity) -------------------------
+  // Issues on THIS level (linked to selectable nodes) + the total across the
+  // whole tree (nested containers included) for the badge.
+  const levelValidations = useMemo(() => validateLevel(levelActivities), [levelActivities]);
+  const deepIssueCount = useMemo(() => countIssuesDeep(activities), [activities]);
+  const showAuthoringErrors = useCallback(() => {
+    setAuthoringOpen(true);
+    if (levelValidations[0]) setSelectedName(levelValidations[0].name);
+  }, [levelValidations, setSelectedName]);
+
   // Nesting-limit gate for a candidate activity type at the current level.
   const addRuleFor = useCallback(
     (type?: string) => canAddTypeAtLevel(activities, drillPath, type),
@@ -351,6 +382,40 @@ export const PipelineDesigner = forwardRef<PipelineDesignerHandle, PipelineDesig
     commitLevel([...levelActivities, a]);
     setTimeout(() => setSelectedName(newName), 0);
   }, [levelActivities, commitLevel, readOnly, setSelectedName, addRuleFor]);
+
+  // Ribbon quick-insert + guided "Copy data" path — insert by catalog key.
+  const insertActivityByKey = useCallback((key: string) => {
+    const def = findByKey(key);
+    if (def) insertActivity(def);
+  }, [insertActivity]);
+
+  // Apply a full template / sample spec. Prefer the host's spec-apply (keeps
+  // pipeline params + variables); else apply just the activities through the
+  // undoable path. Applies at the TOP level (templates seed a fresh pipeline).
+  const applyTemplateSpec = useCallback((spec: PipelineSpec) => {
+    if (readOnly) return;
+    setBlankStart(true);
+    if (onApplyTemplateSpec) { onApplyTemplateSpec(spec); return; }
+    const acts = (spec?.properties?.activities as PipelineActivity[] | undefined) || [];
+    applyActivities(acts);
+    setTimeout(() => canvasRef.current?.fitToScreen(), 80);
+  }, [readOnly, onApplyTemplateSpec, applyActivities]);
+
+  // A distinct, self-contained "sample pipeline": Lookup → ForEach(Copy) — the
+  // canonical metadata-driven copy pattern, built from real catalog activities so
+  // every node is runnable + wired (no mock).
+  const insertSamplePipeline = useCallback(() => {
+    if (readOnly) return;
+    const lookup = findByKey('Lookup')!.build('LookupTables');
+    const copy = findByKey('Copy')!.build('CopyEachTable');
+    const forEach = findByKey('ForEach')!.build('ForEachTable');
+    (forEach.typeProperties as Record<string, unknown>).items = {
+      value: "@activity('LookupTables').output.value", type: 'Expression',
+    };
+    (forEach.typeProperties as Record<string, unknown>).activities = [copy];
+    forEach.dependsOn = [{ activity: 'LookupTables', dependencyConditions: ['Succeeded'] }];
+    applyTemplateSpec({ name: 'SamplePipeline', properties: { activities: [lookup, forEach] } });
+  }, [readOnly, applyTemplateSpec]);
 
   // Append already-built clones (copy/paste + duplicate, W2). The canvas builds
   // the fresh-named, config-preserving clones (it owns positions + selection);
@@ -531,6 +596,20 @@ export const PipelineDesigner = forwardRef<PipelineDesignerHandle, PipelineDesig
     return dispose;
   }, [focused, readOnly, addRuleFor, insertActivity, doUndo, doRedo, history.canUndo, history.canRedo]);
 
+  // Imperative handle — canvas layout controls + ribbon quick-insert + Validate.
+  useImperativeHandle(ref, () => ({
+    fitToScreen: () => canvasRef.current?.fitToScreen(),
+    resetZoom: () => canvasRef.current?.resetZoom(),
+    autoAlign: () => canvasRef.current?.autoAlign(),
+    insertActivityByKey,
+    showAuthoringErrors,
+  }), [insertActivityByKey, showAuthoringErrors]);
+
+  // The guided empty-state launcher shows only on a pristine, top-level, empty
+  // canvas that the user hasn't dismissed via "blank canvas".
+  const showGuidedEmpty = !readOnly && drillPath.length === 0
+    && levelActivities.length === 0 && !blankStart;
+
   return (
     // User-resizable outer height (drag the bottom grip or use the keyboard),
     // persisted per-surface. Bounds: minPx 360 (the inherent layout floor for
@@ -708,8 +787,29 @@ export const PipelineDesigner = forwardRef<PipelineDesignerHandle, PipelineDesig
             canRedo={history.canRedo}
             onAddActivities={addActivitiesAtLevel}
             readOnly={readOnly}
+            hideEmptyState={showGuidedEmpty}
           />
+          {/* Guided empty-state launcher — Fabric's 4-path + Ask Copilot start
+              screen. Overlays the empty canvas; each card drops real activities. */}
+          {showGuidedEmpty && (
+            <GuidedEmptyStateLauncher
+              onBlank={() => setBlankStart(true)}
+              onCopyData={() => insertActivityByKey('Copy')}
+              onSample={insertSamplePipeline}
+              onTemplates={() => setGalleryOpen(true)}
+              onAskCopilot={onAskCopilot}
+            />
+          )}
         </div>
+        {/* Pre-run "Authoring errors" panel — lists unmet required fields per
+            activity (linked to nodes) BEFORE any run, with tab-dot parity. */}
+        <AuthoringErrorsPanel
+          validations={levelValidations}
+          deepCount={deepIssueCount}
+          open={authoringOpen}
+          onOpenChange={setAuthoringOpen}
+          onSelectActivity={setSelectedName}
+        />
         {/* Bottom properties dock — ADF Studio edits the selected sub-resource
             (activity) in a panel at the bottom of the canvas. */}
         <div className={s.dock}>
@@ -734,6 +834,14 @@ export const PipelineDesigner = forwardRef<PipelineDesignerHandle, PipelineDesig
           {levelActivities.length} activit{levelActivities.length === 1 ? 'y' : 'ies'} at this level · {ACTIVITY_CATALOG.length} types in palette
         </Caption1>
       </div>
+
+      {/* Template gallery — curated pipeline patterns; selecting one seeds the
+          canvas (through the host spec-apply when wired, else activities-only). */}
+      <TemplateGalleryFlyout
+        open={galleryOpen}
+        onOpenChange={setGalleryOpen}
+        onSelect={(spec) => applyTemplateSpec(spec)}
+      />
     </div>
     </ResizableCanvasRegion>
   );

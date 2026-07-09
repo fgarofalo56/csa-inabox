@@ -123,6 +123,22 @@ export function PipelineCopilotPane({ apiBase, bound, onApplySpec }: PipelineCop
   const [showPicker, setShowPicker] = useState(false);
   const sessionRef = useRef<string | null>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
+  const composerRef = useRef<HTMLTextAreaElement>(null);
+
+  // The guided empty-state launcher's "Ask Copilot" card dispatches this event
+  // so the docked Copilot composer takes focus + scrolls into view. Real focus
+  // hand-off — no dead affordance (no-vaporware.md).
+  useEffect(() => {
+    const onAsk = () => {
+      const el = composerRef.current;
+      if (!el) return;
+      el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      // rAF so focus lands after any layout the event triggers.
+      requestAnimationFrame(() => el.focus());
+    };
+    window.addEventListener('loom:pipeline-ask-copilot', onAsk);
+    return () => window.removeEventListener('loom:pipeline-ask-copilot', onAsk);
+  }, []);
 
   // Load connections once bound (for `/` completion). Soft-fail: a config gate
   // just means the picker stays empty; chat still works.
@@ -286,6 +302,7 @@ export function PipelineCopilotPane({ apiBase, bound, onApplySpec }: PipelineCop
 
       <div className={s.composer}>
         <Textarea
+          textarea={{ ref: composerRef }}
           value={draft}
           onChange={(_, d) => onDraftChange(d.value)}
           onKeyDown={(e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !busy) { e.preventDefault(); send(); } }}
