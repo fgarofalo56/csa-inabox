@@ -7,6 +7,8 @@
 import { describe, it, expect } from 'vitest';
 import {
   buildConnectionBody,
+  buildConnectionUpdateBody,
+  authTypeToMode,
   isKeyVaultSecretUri,
   isValidConnectionName,
   RawSecretRejectedError,
@@ -72,6 +74,43 @@ describe('buildConnectionBody — key-based modes never carry a raw secret', () 
   it('CustomKeys rejects a raw value in any key', () => {
     expect(() => buildConnectionBody({ name: 'ck', category: 'CustomKeys', target: 'https://x', authMode: 'CustomKeys', customKeyVaultRefs: { primary: 'raw' } }))
       .toThrow(RawSecretRejectedError);
+  });
+});
+
+describe('authTypeToMode — prefill the edit dialog from a persisted authType', () => {
+  it('maps key-based authTypes to their edit mode', () => {
+    expect(authTypeToMode('ApiKey')).toBe('ApiKey');
+    expect(authTypeToMode('CustomKeys')).toBe('CustomKeys');
+  });
+  it('falls back to AAD for AAD, unknown, or missing authTypes', () => {
+    expect(authTypeToMode('AAD')).toBe('AAD');
+    expect(authTypeToMode('SAS')).toBe('AAD');
+    expect(authTypeToMode(undefined)).toBe('AAD');
+    expect(authTypeToMode(null)).toBe('AAD');
+    expect(authTypeToMode('')).toBe('AAD');
+  });
+});
+
+describe('buildConnectionUpdateBody — edit reuses the create-or-update PUT shaping', () => {
+  it('preserves the (immutable) category while changing the target on edit', () => {
+    const body = buildConnectionUpdateBody({
+      name: 'aoai', category: 'AzureOpenAI', target: 'https://new-endpoint.openai.azure.com',
+    });
+    expect(body.properties.category).toBe('AzureOpenAI');
+    expect(body.properties.target).toBe('https://new-endpoint.openai.azure.com');
+    expect(body.properties.authType).toBe('AAD');
+  });
+  it('still rejects a raw secret on edit (KV reference only)', () => {
+    expect(() => buildConnectionUpdateBody({
+      name: 'byo', category: 'ApiKey', target: 'https://x', authMode: 'ApiKey', keyVaultSecretUri: 'sk-raw',
+    })).toThrow(RawSecretRejectedError);
+  });
+  it('carries a rotated KV reference on edit without any plaintext', () => {
+    const body = buildConnectionUpdateBody({
+      name: 'byo', category: 'ApiKey', target: 'https://x', authMode: 'ApiKey', keyVaultSecretUri: KV,
+    });
+    expect(body.properties.credentials.key).toBe(KV);
+    expect(JSON.stringify(body)).toContain('vault.azure.net/secrets');
   });
 });
 

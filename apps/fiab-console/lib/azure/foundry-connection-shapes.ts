@@ -127,3 +127,33 @@ export function buildConnectionBody(input: CreateConnectionInput): any {
 export function isValidConnectionName(name: string): boolean {
   return /^[A-Za-z0-9][A-Za-z0-9_.-]{1,62}$/.test((name || '').trim());
 }
+
+/**
+ * Map a workspace connection's persisted `authType` (returned by GET) back to
+ * the {@link ConnectionAuthMode} the edit-dialog uses to prefill its auth
+ * picker. Anything not recognised (SAS, AccountKey, etc.) falls back to `AAD`
+ * so the edit dialog always renders a valid, secret-free default.
+ */
+export function authTypeToMode(authType?: string | null): ConnectionAuthMode {
+  switch ((authType || '').trim()) {
+    case 'ApiKey':
+      return 'ApiKey';
+    case 'CustomKeys':
+      return 'CustomKeys';
+    default:
+      return 'AAD';
+  }
+}
+
+/**
+ * Editing an existing connection is the SAME create-or-update PUT as
+ * {@link buildConnectionBody} — the ARM connections REST has no distinct PATCH;
+ * a PUT replaces the connection's properties. `category` is immutable in the
+ * portal, so callers pass the existing category through unchanged. This alias
+ * exists purely to name the intent at edit call-sites (and to keep the
+ * secret-handling contract — a raw secret still throws
+ * {@link RawSecretRejectedError}).
+ */
+export function buildConnectionUpdateBody(input: CreateConnectionInput): any {
+  return buildConnectionBody(input);
+}

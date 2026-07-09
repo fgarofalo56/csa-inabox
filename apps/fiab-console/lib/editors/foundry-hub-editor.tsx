@@ -41,12 +41,13 @@ import {
   Beaker24Regular, ClipboardTaskListLtr24Regular, DataTrending24Regular, Gauge24Regular,
   Globe24Regular, ShieldKeyhole24Regular, Key24Regular, History24Regular,
   Server24Regular, Database24Regular, TaskListSquareLtr24Regular, Box24Regular,
-  Add24Regular, Delete20Regular,
+  Add24Regular, Delete20Regular, Edit20Regular,
 } from '@fluentui/react-icons';
 import {
   CONNECTION_CATEGORIES,
   isKeyVaultSecretUri,
   isValidConnectionName,
+  authTypeToMode,
   type ConnectionCategory,
   type ConnectionAuthMode,
 } from '@/lib/azure/foundry-connection-shapes';
@@ -292,6 +293,7 @@ function ConnectionsPanel({ active, nonce }: { active: boolean; nonce: number })
   // Connections live on the hub workspace, not the CS account — no account selector.
   const [st, reload] = useLazyFetch<{ ok: boolean; connections: any[] }>(`/api/foundry/connections`, active, nonce);
   const [createOpen, setCreateOpen] = useState(false);
+  const [editConn, setEditConn] = useState<any | null>(null);
   const [delTarget, setDelTarget] = useState<string | null>(null);
   const [delBusy, setDelBusy] = useState(false);
   const [banner, setBanner] = useState<{ intent: 'success' | 'error'; text: string } | null>(null);
@@ -356,6 +358,10 @@ function ConnectionsPanel({ active, nonce }: { active: boolean; nonce: number })
                   <TableCell className={s.cell}>{c.target || '—'}</TableCell>
                   <TableCell className={s.cell}>{c.isSharedToAll ? 'Yes' : 'No'}</TableCell>
                   <TableCell className={s.cell}>
+                    <Tooltip content="Edit connection" relationship="label">
+                      <Button size="small" appearance="subtle" icon={<Edit20Regular />}
+                        aria-label={`Edit ${c.name}`} onClick={() => setEditConn(c)} />
+                    </Tooltip>
                     <Tooltip content="Delete connection" relationship="label">
                       <Button size="small" appearance="subtle" icon={<Delete20Regular />}
                         aria-label={`Delete ${c.name}`} onClick={() => setDelTarget(c.name)} />
@@ -372,6 +378,13 @@ function ConnectionsPanel({ active, nonce }: { active: boolean; nonce: number })
         open={createOpen}
         onClose={() => setCreateOpen(false)}
         onCreated={(name) => { setBanner({ intent: 'success', text: `Connection "${name}" created.` }); reload(); }}
+      />
+
+      <CreateConnectionDialog
+        open={!!editConn}
+        editConn={editConn}
+        onClose={() => setEditConn(null)}
+        onCreated={(name) => { setBanner({ intent: 'success', text: `Connection "${name}" updated.` }); setEditConn(null); reload(); }}
       />
 
       <Dialog open={!!delTarget} onOpenChange={(_, d) => { if (!d.open) setDelTarget(null); }}>
@@ -399,8 +412,15 @@ function ConnectionsPanel({ active, nonce }: { active: boolean; nonce: number })
  * (validated client-side + server-side), so a raw secret never leaves the form.
  */
 function CreateConnectionDialog({
-  open, onClose, onCreated,
-}: { open: boolean; onClose: () => void; onCreated: (name: string) => void }) {
+  open, onClose, onCreated, editConn,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onCreated: (name: string) => void;
+  /** When set, the dialog is in EDIT mode: name + category are locked and prefilled. */
+  editConn?: { name?: string; category?: string; target?: string; authType?: string; isSharedToAll?: boolean } | null;
+}) {
+  const isEdit = !!editConn;
   const [name, setName] = useState('');
   const [category, setCategory] = useState<ConnectionCategory>('AzureOpenAI');
   const [target, setTarget] = useState('');
@@ -411,7 +431,22 @@ function CreateConnectionDialog({
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ intent: 'success' | 'error' | 'warning'; text: string } | null>(null);
 
-  const catRow = useMemo(() => CONNECTION_CATEGORIES.find((c) => c.value === category)!, [category]);
+  const catRow = useMemo(() => CONNECTION_CATEGORIES.find((c) => c.value === category) || CONNECTION_CATEGORIES[0], [category]);
+
+  // Prefill from the connection being edited whenever the edit target changes.
+  useEffect(() => {
+    if (!editConn) return;
+    setName(editConn.name || '');
+    const cat = CONNECTION_CATEGORIES.find((c) => c.value === editConn.category);
+    setCategory((cat?.value as ConnectionCategory) || 'AzureOpenAI');
+    setTarget(editConn.target || '');
+    setAuthMode(authTypeToMode(editConn.authType));
+    setKvUri('');
+    setCustomRows([{ key: '', uri: '' }]);
+    setShared(editConn.isSharedToAll !== false);
+    setMsg(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editConn?.name]);
 
   // Keep the auth mode valid for the selected category.
   useEffect(() => {
@@ -449,10 +484,10 @@ function CreateConnectionDialog({
     setBusy(true);
     try {
       const r = await clientFetch('/api/foundry/connections', {
-        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+        method: isEdit ? 'PATCH' : 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
       });
       const j = await r.json();
-      if (!j.ok) { setMsg({ intent: j.code === 'raw_secret_rejected' ? 'warning' : 'error', text: j.error || 'Create failed' }); return; }
+      if (!j.ok) { setMsg({ intent: j.code === 'raw_secret_rejected' ? 'warning' : 'error', text: j.error || (isEdit ? 'Update failed' : 'Create failed') }); return; }
       onCreated(j.connection?.name || name.trim());
       reset(); onClose();
     } catch (e: any) { setMsg({ intent: 'error', text: e?.message || String(e) }); }
@@ -463,15 +498,15 @@ function CreateConnectionDialog({
     <Dialog open={open} onOpenChange={(_, d) => { if (!d.open) { reset(); onClose(); } }}>
       <DialogSurface>
         <DialogBody>
-          <DialogTitle>New connection</DialogTitle>
+          <DialogTitle>{isEdit ? 'Edit connection' : 'New connection'}</DialogTitle>
           <DialogContent>
             <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
               <Field label="Name" required validationState={nameValid ? 'none' : 'error'}
                 validationMessage={nameValid ? undefined : '2–63 chars: letters, digits, _ . -'}>
-                <Input value={name} onChange={(_, d) => setName(d.value)} placeholder="my-aoai-connection" />
+                <Input value={name} disabled={isEdit} onChange={(_, d) => setName(d.value)} placeholder="my-aoai-connection" />
               </Field>
-              <Field label="Category" required>
-                <Dropdown value={catRow.label} selectedOptions={[category]}
+              <Field label="Category" required hint={isEdit ? 'Category is fixed for an existing connection.' : undefined}>
+                <Dropdown value={catRow.label} disabled={isEdit} selectedOptions={[category]}
                   onOptionSelect={(_, d) => { if (d.optionValue) setCategory(d.optionValue as ConnectionCategory); }}>
                   {CONNECTION_CATEGORIES.map((c) => (<Option key={c.value} value={c.value} text={c.label}>{c.label}</Option>))}
                 </Dropdown>
@@ -490,6 +525,14 @@ function CreateConnectionDialog({
                   ))}
                 </Dropdown>
               </Field>
+
+              {isEdit && authMode !== 'AAD' && (
+                <MessageBar intent="warning">
+                  <MessageBarBody>
+                    Existing secrets are not shown. Re-enter the Key Vault secret identifier below to keep or rotate the credential on save.
+                  </MessageBarBody>
+                </MessageBar>
+              )}
 
               {authMode === 'AAD' && (
                 <MessageBar intent="info">
@@ -534,7 +577,7 @@ function CreateConnectionDialog({
           </DialogContent>
           <DialogActions>
             <Button appearance="secondary" onClick={() => { reset(); onClose(); }} disabled={busy}>Cancel</Button>
-            <Button appearance="primary" onClick={submit} disabled={busy || !kvValid}>{busy ? 'Creating…' : 'Create connection'}</Button>
+            <Button appearance="primary" onClick={submit} disabled={busy || !kvValid}>{busy ? (isEdit ? 'Saving…' : 'Creating…') : (isEdit ? 'Save changes' : 'Create connection')}</Button>
           </DialogActions>
         </DialogBody>
       </DialogSurface>
