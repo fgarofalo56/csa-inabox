@@ -127,6 +127,7 @@ const ICON_BY_SLUG: Record<string, (props: { color?: string }) => ReactNode> = {
   // Fabric IQ
   'ontology':              (p) => <TextBulletListTree20Regular style={{ color: p.color }} />,
   'graph-model':           (p) => <Diversity20Regular style={{ color: p.color }} />,
+  'digital-twin':          (p) => <BranchFork20Regular style={{ color: p.color }} />,
   'plan':                  (p) => <ClipboardTaskListLtr20Regular style={{ color: p.color }} />,
   'map':                   (p) => <Map20Regular style={{ color: p.color }} />,
   'data-agent':            (p) => <ChatMultiple20Regular style={{ color: p.color }} />,

@@ -113,6 +113,9 @@ export const EDITOR_REGISTRY: Record<string, EditorComponent> = {
   'variable-library':     reg(() => import('./phase4/variable-library-editor'), 'VariableLibraryEditor'),
   'ontology':             reg(() => import('./phase4/ontology-editor'),         'OntologyEditor'),
   'graph-model':          reg(() => import('./phase4/graph-model-editor'),      'GraphModelEditor'),
+  // FGC-12 — Digital Twin Builder (RTI). ADX-native twin graph by DEFAULT
+  // (entity/relationship tables + make-graph); Azure Digital Twins opt-in only.
+  'digital-twin':         reg(() => import('./digital-twin-builder-editor'),    'DigitalTwinBuilderEditor'),
   'plan':                 reg(() => import('./phase4/plan-editor'),             'PlanEditor'),
   'map':                  reg(() => import('./phase4/map-editor'),              'MapEditor'),
   'operations-agent':     reg(() => import('./phase4/operations-agent-editor'), 'OperationsAgentEditor'),

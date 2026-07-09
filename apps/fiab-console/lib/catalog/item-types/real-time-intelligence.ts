@@ -241,6 +241,18 @@ export const realTimeIntelligenceItems: FabricItemType[] = [
       ],
       "docsUrl": "https://learn.microsoft.com/azure/service-bus-messaging/service-bus-messaging-overview"
     } },
+  { slug: 'digital-twin', displayName: 'Digital twin builder', restType: 'DigitalTwinBuilder', category: 'Real-Time Intelligence', preview: true,
+    description: 'Model entities + relationships, map source tables onto them, and explore the twin graph — ADX-native (Azure Digital Twins opt-in).',
+    learnContent: {
+      "overview": "A Digital Twin Builder is a low-code ontology of ENTITY types (assets / processes) and RELATIONSHIP types, each mapped onto a real source table (lakehouse Delta, Synapse warehouse, or ADX). In Loom the DEFAULT and only-required backend is the shared Azure Data Explorer cluster: entities materialize as DT_*_E_* (id + properties) tables and relationships as DT_*_R_* (src/dst) tables, and the twin graph is queried with the Kusto graph engine (make-graph / graph-match) — the same engine 'Graph in Fabric' is built on, with NO Microsoft Fabric, OneLake, or Azure Digital Twins dependency. Azure Digital Twins (DTDL) is available as a strictly opt-in alternate behind LOOM_ADT_ENDPOINT.",
+      "steps": [
+        { "title": "Model entities + relationships", "body": "On the Web-5.0 canvas, add entity types with typed properties and a key, then drag between entities to add relationships. Undo/redo is built in." },
+        { "title": "Map source tables", "body": "In Mappings, bind each entity + relationship to a real source table and pick key/timestamp/property columns from the live ADX schema browser." },
+        { "title": "Build the twin graph", "body": "Build materializes the model on ADX (.create-merge tables) and loads rows from the bound sources (.set-or-append), then verifies with a make-graph relationship count." },
+        { "title": "Explore + trend", "body": "Run graph-match / openCypher patterns to traverse the instance graph, and open Time series to chart an entity property's history over ADX." }
+      ],
+      "docsUrl": "https://learn.microsoft.com/fabric/real-time-intelligence/digital-twin-builder/overview"
+    } },
   { slug: 'event-grid-topic',            displayName: 'Event Grid topic',            restType: 'Microsoft.EventGrid/topics', category: 'Real-Time Intelligence',
     description: 'Azure Event Grid custom topic + event subscriptions — reactive event routing with CloudEvents schema. Real ARM.',
     learnContent: {

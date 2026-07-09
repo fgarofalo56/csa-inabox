@@ -51,6 +51,7 @@ const ORPHAN_ALLOWLIST = new Map([
   ['platform/fiab/bicep/modules/copilot/browser-tool.bicep', 'standalone entrypoint (AIF-18): scale-to-zero Playwright browser-automation ACA Job, deployed out-of-band (az deployment -f browser-tool.bicep) then LOOM_BROWSER_TOOL_JOB set to its resource id; the browser_automation agent tool honest-gates until wired'],
   ['platform/fiab/bicep/modules/landing-zone/databricks-scim-bootstrap.bicep', 'opt-in Databricks SCIM bootstrap; run out-of-band during DLZ setup'],
   ['platform/fiab/bicep/modules/landing-zone/workspace-identity.bicep', 'opt-in per-workspace identity module; deployed on demand by the workspace provisioner'],
+  ['platform/fiab/bicep/modules/integration/adt-instance.bicep', 'standalone entrypoint (FGC-12): STRICTLY opt-in Azure Digital Twins instance; the default Digital Twin Builder backend is ADX-native and needs none of this. Deployed out-of-band (az deployment -f adt-instance.bicep) then LOOM_ADT_ENDPOINT set to its hostName; the editor honest-gates until wired'],
 ]);
 
 const MODULE_DECL_RE = /module\s+[A-Za-z0-9_]+\s+'([^']+)'/g;
