@@ -23,6 +23,8 @@ import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredenti
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import sql from 'mssql';
 import { armBase, getSqlSuffix } from './cloud-endpoints';
+import type { RestorableWindow, RestoreStatus } from './sql-restore-model';
+import { normalizeRestoreStatus } from './sql-restore-model';
 
 function arm(): string {
   // Sovereign-cloud ARM base (cloud-endpoints honors LOOM_ARM_ENDPOINT + AZURE_CLOUD).
@@ -1008,6 +1010,218 @@ export async function enableSqlServer2025Features(
   } catch (e: any) {
     return { ok: false, note: e?.message || String(e) };
   }
+}
+
+// ============================================================
+// Point-in-time restore (ARM — Microsoft.Sql/servers/databases createMode=PointInTimeRestore)
+//
+// Per .claude/rules/no-fabric-dependency.md this is the pure Azure SQL control
+// plane — zero Microsoft Fabric dependency. A PITR ALWAYS creates a NEW
+// database (Azure SQL never restores in place); the console UAMI must hold
+// "SQL DB Contributor" (or Contributor) on the server's resource group — the
+// SAME role the scale panel documents (platform/fiab/bicep/modules/admin-plane/
+// sql-rbac.bicep), so no new role/bicep is introduced. A 403 surfaces verbatim
+// as an AzureSqlError so the editor renders an honest gate (no-vaporware.md).
+// ============================================================
+
+/** A dropped (deleted) database that can still be restored within retention. */
+export interface RestorableDroppedDatabase {
+  /** ARM id of the restorableDroppedDatabase resource. */
+  id: string;
+  /** Original database name (before the ` ,<deletionEpoch>` suffix ARM adds). */
+  databaseName: string;
+  /** ISO8601 deletion time — required as sourceDatabaseDeletionDate on restore. */
+  deletionDate?: string;
+  /** ISO8601 earliest restore time for this dropped DB. */
+  earliestRestoreDate?: string;
+  /** ISO8601 creation time of the original database. */
+  creationDate?: string;
+}
+
+/**
+ * Read the point-in-time restorable WINDOW for a live database from ARM:
+ * `properties.earliestRestoreDate` (bounded by the backup-retention period) as
+ * the lower bound and "now" (the most recent continuous log backup) as the
+ * upper bound. Returns null when ARM does not publish an earliestRestoreDate
+ * (e.g. a database created moments ago) — the caller then surfaces an honest
+ * "no restore points yet" state rather than a fake window.
+ */
+export async function getRestorableWindow(
+  serverIdOrName: string,
+  dbName: string,
+): Promise<RestorableWindow | null> {
+  const base = serverIdOrName.startsWith('/') ? serverIdOrName : await defaultServerScope(serverIdOrName);
+  const res = await armRequest<any>(
+    `${base}/databases/${encodeURIComponent(dbName)}?api-version=${SQL_API_VERSION}`,
+  );
+  const earliest: string | undefined = res?.properties?.earliestRestoreDate;
+  if (!earliest) return null;
+  return { earliestRestoreDate: earliest, latestRestoreDate: new Date().toISOString() };
+}
+
+/** List dropped databases on a server that are still within their restorable
+ *  retention window (ARM Microsoft.Sql/servers/restorableDroppedDatabases). */
+export async function listRestorableDroppedDatabases(
+  serverIdOrName: string,
+): Promise<RestorableDroppedDatabase[]> {
+  const base = serverIdOrName.startsWith('/') ? serverIdOrName : await defaultServerScope(serverIdOrName);
+  const res = await armRequest<{ value: any[] }>(
+    `${base}/restorableDroppedDatabases?api-version=${SQL_API_VERSION}`,
+  );
+  return (res.value || []).map((d) => ({
+    id: d.id,
+    // ARM names these `<db>,<deletionEpochMs>`; strip the suffix for display.
+    databaseName: d.properties?.databaseName || String(d.name || '').split(',')[0],
+    deletionDate: d.properties?.deletionDate,
+    earliestRestoreDate: d.properties?.earliestRestoreDate,
+    creationDate: d.properties?.creationDate,
+  }));
+}
+
+export interface StartRestoreSpec {
+  /** Server name or full ARM scope hosting BOTH the source and (new) target DB. */
+  server: string;
+  /** New database name to create from the backup. */
+  targetDatabase: string;
+  /** ISO8601 point in time to restore to. */
+  restorePointInTime: string;
+  /** Live source database name (createMode=PointInTimeRestore). */
+  sourceDatabase?: string;
+  /** For a DROPPED source: the restorableDroppedDatabase ARM id
+   *  (createMode=Restore). Mutually exclusive with sourceDatabase. */
+  restorableDroppedDatabaseId?: string;
+  /** Deletion date of the dropped source (required with the original db's
+   *  resource id; ignored when restorableDroppedDatabaseId is the dropped id). */
+  sourceDatabaseDeletionDate?: string;
+}
+
+export interface StartRestoreResult {
+  ok: boolean;
+  /** ARM id of the new (target) database being created. */
+  targetDatabaseId?: string;
+  /** Azure-AsyncOperation URL to poll for LRO completion (server re-fetches it). */
+  asyncOperationUrl?: string;
+  /** Normalized initial status. */
+  status?: RestoreStatus;
+  error?: string;
+  errorStatus?: number;
+}
+
+/**
+ * Kick off a point-in-time (or dropped-database) restore. This issues the ARM
+ * PUT and returns IMMEDIATELY on the 202 with the async-operation URL — it does
+ * NOT block on completion (a restore can run for many minutes; a synchronous
+ * wait would exceed the Front Door / ACA request budget). Poll
+ * getRestoreOperationStatus() for progress. The database list will show the
+ * target database in a "Restoring/Creating" state until ARM settles.
+ */
+export async function startPointInTimeRestore(spec: StartRestoreSpec): Promise<StartRestoreResult> {
+  if (!spec.server || !spec.targetDatabase || !spec.restorePointInTime) {
+    return { ok: false, error: 'server, targetDatabase and restorePointInTime are required', errorStatus: 400 };
+  }
+  if (!spec.sourceDatabase && !spec.restorableDroppedDatabaseId) {
+    return { ok: false, error: 'either sourceDatabase (live) or restorableDroppedDatabaseId (dropped) is required', errorStatus: 400 };
+  }
+  try {
+    const scope = spec.server.startsWith('/') ? spec.server : await defaultServerScope(spec.server);
+    const targetPath = `${scope}/databases/${encodeURIComponent(spec.targetDatabase)}?api-version=${SQL_API_VERSION}`;
+
+    // Resolve region from the server (a restore target inherits the server region).
+    let location: string | undefined;
+    const servers = await listServers().catch(() => [] as AzureSqlServer[]);
+    location = servers.find((sv) => sv.id === scope)?.location;
+
+    const properties: any = { restorePointInTime: spec.restorePointInTime };
+    if (spec.restorableDroppedDatabaseId) {
+      properties.createMode = 'Restore';
+      properties.sourceDatabaseId = spec.restorableDroppedDatabaseId;
+      if (spec.sourceDatabaseDeletionDate) properties.sourceDatabaseDeletionDate = spec.sourceDatabaseDeletionDate;
+    } else {
+      properties.createMode = 'PointInTimeRestore';
+      properties.sourceDatabaseId = `${scope}/databases/${encodeURIComponent(spec.sourceDatabase!)}`;
+    }
+
+    const token = await armToken();
+    const res = await fetchWithTimeout(`${arm()}${targetPath}`, {
+      method: 'PUT',
+      headers: {
+        authorization: `Bearer ${token}`,
+        'content-type': 'application/json',
+        accept: 'application/json',
+      },
+      body: JSON.stringify({ ...(location ? { location } : {}), properties }),
+      cache: 'no-store',
+    });
+    if (!res.ok && res.status !== 202 && res.status !== 201 && res.status !== 200) {
+      const errText = await res.text();
+      let errJson: any = null;
+      try { errJson = errText ? JSON.parse(errText) : null; } catch { /* text */ }
+      const msg = (errJson?.error?.message || errText || `Restore PUT failed (HTTP ${res.status})`).toString();
+      return { ok: false, error: msg, errorStatus: res.status };
+    }
+    const asyncOperationUrl = res.headers.get('azure-asyncoperation') || res.headers.get('location') || undefined;
+    return {
+      ok: true,
+      targetDatabaseId: `${scope}/databases/${spec.targetDatabase}`,
+      asyncOperationUrl: asyncOperationUrl || undefined,
+      status: 'InProgress',
+    };
+  } catch (e: any) {
+    const status = e instanceof AzureSqlError ? e.status : 502;
+    return { ok: false, error: e?.message || String(e), errorStatus: status };
+  }
+}
+
+export interface RestoreOperationStatus {
+  status: RestoreStatus;
+  /** Raw ARM status string for display (Succeeded / InProgress / Failed / …). */
+  raw?: string;
+  /** Error message when the operation failed. */
+  error?: string;
+}
+
+/**
+ * Poll a restore's Long-Running-Operation. Prefers the Azure-AsyncOperation URL
+ * (authoritative — reports Failed with an error), and falls back to reading the
+ * target database's provisioning status when no async URL is available. The URL
+ * is validated against the sovereign ARM host so a caller-supplied value can't
+ * be used for SSRF. A single fast fetch — the client drives the polling cadence.
+ */
+export async function getRestoreOperationStatus(opts: {
+  asyncOperationUrl?: string;
+  server?: string;
+  targetDatabase?: string;
+}): Promise<RestoreOperationStatus> {
+  const token = await armToken();
+  if (opts.asyncOperationUrl) {
+    // SSRF guard: only poll URLs on the configured sovereign ARM host.
+    let host = '';
+    try { host = new URL(opts.asyncOperationUrl).origin; } catch { /* invalid */ }
+    if (!host || host !== new URL(arm()).origin) {
+      throw new AzureSqlError('asyncOperationUrl is not on the ARM host', 400);
+    }
+    const res = await fetchWithTimeout(opts.asyncOperationUrl, {
+      headers: { authorization: `Bearer ${token}`, accept: 'application/json' },
+      cache: 'no-store',
+    });
+    const j: any = await res.json().catch(() => null);
+    const raw: string | undefined = j?.status;
+    const status = normalizeRestoreStatus(raw);
+    return { status, raw, error: status === 'Failed' ? (j?.error?.message || 'Restore failed') : undefined };
+  }
+  // Fallback — read the target database's status.
+  if (opts.server && opts.targetDatabase) {
+    try {
+      const db = await getDatabase(opts.server, opts.targetDatabase);
+      const raw = db.status || 'Creating';
+      return { status: normalizeRestoreStatus(raw), raw };
+    } catch (e: any) {
+      // 404 = not created yet → still in progress.
+      if (e instanceof AzureSqlError && e.status === 404) return { status: 'InProgress', raw: 'Creating' };
+      throw e;
+    }
+  }
+  return { status: 'Unknown' };
 }
 
 // ============================================================

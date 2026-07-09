@@ -193,6 +193,7 @@ const SHARED_BACKEND_ITEM_ROUTES = [
   'apps/fiab-console/app/api/items/azure-sql-database/[id]/query/cancel/route.ts',
   'apps/fiab-console/app/api/items/azure-sql-database/[id]/query/route.ts',
   'apps/fiab-console/app/api/items/azure-sql-database/[id]/replication/route.ts',
+  'apps/fiab-console/app/api/items/azure-sql-database/[id]/restore/route.ts',
   'apps/fiab-console/app/api/items/azure-sql-database/[id]/scale/route.ts',
   'apps/fiab-console/app/api/items/azure-sql-database/[id]/search-management/route.ts',
   'apps/fiab-console/app/api/items/azure-sql-database/[id]/share/route.ts',
