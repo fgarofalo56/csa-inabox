@@ -56,6 +56,7 @@ import {
 } from '@/lib/components/pipeline/types';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { safePipelineJson } from './pipeline-fetch';
+import { appendFactoryCoords } from '@/lib/components/pipeline/factory-coords';
 import { AzureResourcePicker } from '@/lib/components/azure/azure-resource-picker';
 import { LinkedServiceGallery } from '@/lib/components/pipeline/linked-service-gallery';
 import { IntegrationRuntimeManager } from '@/lib/components/pipeline/integration-runtime-manager';
@@ -254,7 +255,11 @@ export function PipelineEditorCore({
     if (isNew) { setBindingLoading(false); return; }
     setBindingLoading(true); setBindError(null);
     try {
-      const res = await fetch(`${apiBase}/bind`);
+      // The bind picker lists pipelines from the SELECTED factory (its coords are
+      // appended when a factory is picked), so the dropdown matches the Factory
+      // Resources tree instead of always showing the env-default factory. Absent
+      // selection → env default (unchanged).
+      const res = await fetch(appendFactoryCoords(`${apiBase}/bind`, factory));
       const { ok, data, error: e } = await safePipelineJson(res);
       if (!ok || !data) { setBindError(e || 'failed to load binding'); return; }
       setBound(data.bound ?? null);
@@ -262,12 +267,23 @@ export function PipelineEditorCore({
       setListError(data.listError || null);
       setPreview(data.preview ?? null);
       if (data.bound && !pickName) setPickName(data.bound);
+      // Rehydrate the SELECTED factory from the persisted binding so the tree +
+      // bind list follow the factory the item was bound against across reloads.
+      // Only when nothing is selected yet (avoids clobbering an in-progress
+      // pick, and prevents a re-list loop once `factory` is set).
+      if (isAdf && !factory && data.boundFactory && (data.boundFactory.name || data.boundFactory.subscriptionId)) {
+        const bf = data.boundFactory as { name?: string; subscriptionId?: string; resourceGroup?: string };
+        const armId = bf.subscriptionId && bf.resourceGroup && bf.name
+          ? `/subscriptions/${bf.subscriptionId}/resourceGroups/${bf.resourceGroup}/providers/Microsoft.DataFactory/factories/${bf.name}`
+          : '';
+        setFactory({ id: armId, name: bf.name || '', subscriptionId: bf.subscriptionId || '', resourceGroup: bf.resourceGroup || '' });
+      }
     } catch (e: any) {
       setBindError(e?.message || String(e));
     } finally {
       setBindingLoading(false);
     }
-  }, [apiBase, pickName, isNew]);
+  }, [apiBase, pickName, isNew, factory, isAdf]);
 
   useEffect(() => { loadBinding(); }, [loadBinding]);
 
@@ -317,7 +333,11 @@ export function PipelineEditorCore({
     if (isNew || !name.trim()) return;
     setBindBusy(true); setBindError(null);
     try {
-      const res = await fetch(`${apiBase}/bind`, {
+      // Bind / Create-&-bind against the SELECTED factory: its coords are
+      // appended so a created pipeline is provisioned in that factory and the
+      // selection is persisted onto the item (so later run/save/validate follow
+      // the same factory). Absent selection → env default (unchanged).
+      const res = await fetch(appendFactoryCoords(`${apiBase}/bind`, factory), {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ pipelineName: name.trim(), create }),
       });
@@ -333,7 +353,7 @@ export function PipelineEditorCore({
     } finally {
       setBindBusy(false);
     }
-  }, [apiBase, loadBinding, isNew]);
+  }, [apiBase, loadBinding, isNew, factory]);
 
   // Create a NEW Data Factory across any subscription/RG the operator can reach,
   // then select it (setFactory) so binding can proceed against it. Real ARM PUT
@@ -801,6 +821,7 @@ export function PipelineEditorCore({
             onOpenManage={() => setManageOpen(true)}
             onOpenCdc={(name) => setOpenCdc(name)}
             refreshKey={factoryRefreshKey}
+            factory={factory}
           />
         ) : (
           // Synapse Studio Workspace Resources navigator — typed groups with
@@ -869,14 +890,16 @@ export function PipelineEditorCore({
                         onChange={(r) => setFactory(r)}
                       />
                       {factory && (
-                        <MessageBar intent="info">
+                        <MessageBar intent="success">
                           <MessageBarBody>
                             <MessageBarTitle>Factory selected: {factory.name}</MessageBarTitle>
-                            Pipeline binding below lists pipelines from the deployment-default factory
-                            (LOOM_ADF_NAME / LOOM_DLZ_RG). If <strong>{factory.name}</strong> is a different
-                            factory, grant the Loom UAMI &quot;Data Factory Contributor&quot; on it and set
-                            LOOM_ADF_NAME / LOOM_DLZ_RG / LOOM_SUBSCRIPTION_ID to point at it, or use the
-                            MountedDataFactory editor which targets an external factory by reference.
+                            The Factory Resources tree and the pipeline binding below now target{' '}
+                            <strong>{factory.name}</strong> — the picker&apos;s subscription, resource group,
+                            and factory name are threaded through every list, Bind, and Create-&amp;-bind call,
+                            and are saved on this item so Run / Debug / Validate / Triggers follow the same
+                            factory. The Loom UAMI needs <strong>Data Factory Contributor</strong> on{' '}
+                            <strong>{factory.name}</strong>. Clear the selection to fall back to the
+                            deployment-default factory.
                           </MessageBarBody>
                         </MessageBar>
                       )}

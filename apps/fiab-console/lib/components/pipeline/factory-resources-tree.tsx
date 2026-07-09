@@ -45,6 +45,7 @@ import {
   Globe20Regular, PlugConnected20Regular, Edit16Regular,
   Code20Regular, Copy20Regular, Rename20Regular, ChevronDown20Regular, ChevronUp20Regular,
 } from '@fluentui/react-icons';
+import { appendFactoryCoords, type SelectedFactoryCoords } from './factory-coords';
 import { clientFetch } from '@/lib/client-fetch';
 import {
   rowActionsFor, groupActionsFor, canConfirmDelete,
@@ -189,15 +190,25 @@ export interface FactoryResourcesTreeProps {
   onOpenCdc?: (name: string) => void;
   /** Increment to force a refresh from the parent (e.g. after a bind/create). */
   refreshKey?: number;
+  /**
+   * The SELECTED Data Factory (from the editor's cross-sub picker). Its coords
+   * are appended to every `/api/adf/*` call so the tree lists/creates/deletes
+   * against the SAME factory the bind dropdown targets. Absent → the env-pinned
+   * deployment default (unchanged behaviour).
+   */
+  factory?: SelectedFactoryCoords | null;
 }
 
 /**
  * A typed, ADF-Studio-faithful Factory Resources navigator.
  */
 export function FactoryResourcesTree({
-  boundPipeline, onOpenPipeline, onOpenManage, onOpenCdc, refreshKey = 0,
+  boundPipeline, onOpenPipeline, onOpenManage, onOpenCdc, refreshKey = 0, factory = null,
 }: FactoryResourcesTreeProps) {
   const s = useStyles();
+  // Append the selected-factory coords to a factory-scoped route so every list/
+  // create/delete targets the SELECTED factory (or the env default when none).
+  const R = useCallback((route: string) => appendFactoryCoords(route, factory), [factory]);
 
   const [filter, setFilter] = useState('');
   const [gate, setGate] = useState<{ missing: string } | null>(null);
@@ -271,15 +282,15 @@ export function FactoryResourcesTree({
     setLoading(true); setError(null);
     try {
       const [pr, dr, fr, tr, lr, ir, cr, gpr, mper] = await Promise.all([
-        clientFetch(PIPE_ROUTE).then(readJson),
-        clientFetch(DS_ROUTE).then(readJson),
-        clientFetch(DF_ROUTE).then(readJson),
-        clientFetch(TRG_ROUTE).then(readJson),
-        clientFetch(LS_ROUTE).then(readJson),
-        clientFetch(IR_ROUTE).then(readJson),
-        clientFetch(CDC_ROUTE).then(readJson),
-        clientFetch(GP_ROUTE).then(readJson),
-        clientFetch(MPE_ROUTE).then(readJson),
+        clientFetch(R(PIPE_ROUTE)).then(readJson),
+        clientFetch(R(DS_ROUTE)).then(readJson),
+        clientFetch(R(DF_ROUTE)).then(readJson),
+        clientFetch(R(TRG_ROUTE)).then(readJson),
+        clientFetch(R(LS_ROUTE)).then(readJson),
+        clientFetch(R(IR_ROUTE)).then(readJson),
+        clientFetch(R(CDC_ROUTE)).then(readJson),
+        clientFetch(R(GP_ROUTE)).then(readJson),
+        clientFetch(R(MPE_ROUTE)).then(readJson),
       ]);
       // Any route reporting not_configured gates the whole tree (same factory).
       for (const b of [pr, dr, fr, tr, lr, ir, cr, gpr, mper]) { if (applyGate(b)) { setLoading(false); return; } }
@@ -302,7 +313,7 @@ export function FactoryResourcesTree({
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [R]);
 
   useEffect(() => { loadAll(); }, [loadAll, refreshKey]);
 
@@ -335,7 +346,7 @@ export function FactoryResourcesTree({
           },
         };
       }
-      const res = await clientFetch(route, {
+      const res = await clientFetch(R(route), {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload),
       });
       const body = await readJson(res);
@@ -351,12 +362,12 @@ export function FactoryResourcesTree({
     } finally {
       setBusy(false);
     }
-  }, [createGroup, createName, createDsType, createDsLinkedService, loadAll, onOpenPipeline]);
+  }, [createGroup, createName, createDsType, createDsLinkedService, loadAll, onOpenPipeline, R]);
 
   const triggerLifecycle = useCallback(async (name: string, action: 'start' | 'stop') => {
     setBusy(true); setError(null);
     try {
-      const res = await clientFetch(TRG_ROUTE, {
+      const res = await clientFetch(R(TRG_ROUTE), {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name, action }),
       });
       const body = await readJson(res);
@@ -365,14 +376,14 @@ export function FactoryResourcesTree({
       await loadAll();
     } catch (e: any) { setError(e?.message || String(e)); }
     finally { setBusy(false); }
-  }, [loadAll]);
+  }, [loadAll, R]);
 
   // Start / Stop a Change Data Capture (preview) resource (real ARM REST via
   // POST /api/adf/cdc { name, action }). Delete uses the generic `del` helper.
   const cdcLifecycle = useCallback(async (name: string, action: 'start' | 'stop') => {
     setBusy(true); setError(null);
     try {
-      const res = await clientFetch(CDC_ROUTE, {
+      const res = await clientFetch(R(CDC_ROUTE), {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name, action }),
       });
       const body = await readJson(res);
@@ -381,7 +392,7 @@ export function FactoryResourcesTree({
       await loadAll();
     } catch (e: any) { setError(e?.message || String(e)); }
     finally { setBusy(false); }
-  }, [loadAll]);
+  }, [loadAll, R]);
 
   // ---------------------------------------------------------------
   // Global parameters — open the editor (rows) / save the whole set (PUT)
@@ -432,7 +443,7 @@ export function FactoryResourcesTree({
       dict[name] = { type: row.type, value };
     }
     try {
-      const res = await clientFetch(GP_ROUTE, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ parameters: dict }) });
+      const res = await clientFetch(R(GP_ROUTE), { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ parameters: dict }) });
       const body = await readJson(res);
       if (applyGate(body)) { setBusy(false); return; }
       if (!body.ok) { setGpError(body.error || 'save failed'); setBusy(false); return; }
@@ -440,7 +451,7 @@ export function FactoryResourcesTree({
       await loadAll();
     } catch (e: any) { setGpError(e?.message || String(e)); }
     finally { setBusy(false); }
-  }, [gpRows, loadAll]);
+  }, [gpRows, loadAll, R]);
 
   // ---------------------------------------------------------------
   // Managed private endpoints — create the managed VNet / create a PE (real ARM)
@@ -448,14 +459,14 @@ export function FactoryResourcesTree({
   const createMvnet = useCallback(async () => {
     setBusy(true); setError(null);
     try {
-      const res = await clientFetch(MPE_ROUTE, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'create-mvnet' }) });
+      const res = await clientFetch(R(MPE_ROUTE), { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'create-mvnet' }) });
       const body = await readJson(res);
       if (applyGate(body)) { setBusy(false); return; }
       if (!body.ok) { setError(body.error || 'failed to create managed virtual network'); setBusy(false); return; }
       await loadAll();
     } catch (e: any) { setError(e?.message || String(e)); }
     finally { setBusy(false); }
-  }, [loadAll]);
+  }, [loadAll, R]);
 
   const openMpe = useCallback(() => {
     setMpeName(''); setMpeResourceId(''); setMpeGroupId('dfs'); setMpeError(null); setMpeNote(null); setMpeOpen(true);
@@ -465,7 +476,7 @@ export function FactoryResourcesTree({
     if (!mpeName.trim() || !mpeResourceId.trim() || !mpeGroupId.trim()) return;
     setBusy(true); setMpeError(null); setMpeNote(null);
     try {
-      const res = await clientFetch(MPE_ROUTE, {
+      const res = await clientFetch(R(MPE_ROUTE), {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ name: mpeName.trim(), privateLinkResourceId: mpeResourceId.trim(), groupId: mpeGroupId.trim() }),
       });
@@ -477,7 +488,7 @@ export function FactoryResourcesTree({
       await loadAll();
     } catch (e: any) { setMpeError(e?.message || String(e)); }
     finally { setBusy(false); }
-  }, [mpeName, mpeResourceId, mpeGroupId, loadAll]);
+  }, [mpeName, mpeResourceId, mpeGroupId, loadAll, R]);
 
   // ---------------------------------------------------------------
   // Right-click actions — View JSON (read-only), Delete (typed-confirm),
@@ -498,13 +509,13 @@ export function FactoryResourcesTree({
     if (!type) return;
     setJsonView({ title, text: '' }); setJsonLoading(true); setJsonError(null);
     try {
-      const res = await clientFetch(`/api/adf/resource-json?type=${encodeURIComponent(type)}&name=${encodeURIComponent(name)}`);
+      const res = await clientFetch(R(`/api/adf/resource-json?type=${encodeURIComponent(type)}&name=${encodeURIComponent(name)}`));
       const body = await readJson(res);
       if (!body.ok) { setJsonError(body.error || 'failed to load definition'); setJsonLoading(false); return; }
       setJsonView({ title, text: JSON.stringify(body.definition ?? {}, null, 2) });
     } catch (e: any) { setJsonError(e?.message || String(e)); }
     finally { setJsonLoading(false); }
-  }, []);
+  }, [R]);
 
   const openDelete = useCallback((kind: RowKind, name: string) => {
     setDeleteTarget({ kind, name }); setDeleteConfirmText(''); setDeleteError(null);
@@ -522,13 +533,13 @@ export function FactoryResourcesTree({
       if (kind === 'globalParam') {
         const next: Record<string, { type: string; value: unknown }> = { ...globalParams };
         delete next[name];
-        const res = await clientFetch(GP_ROUTE, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ parameters: next }) });
+        const res = await clientFetch(R(GP_ROUTE), { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ parameters: next }) });
         const body = await readJson(res);
         if (applyGate(body)) { setBusy(false); return; }
         if (!body.ok) { setDeleteError(body.error || 'delete failed'); setBusy(false); return; }
       } else {
         const route = KIND_ROUTE[kind];
-        const res = await clientFetch(`${route}?name=${encodeURIComponent(name)}`, { method: 'DELETE' });
+        const res = await clientFetch(R(`${route}?name=${encodeURIComponent(name)}`), { method: 'DELETE' });
         const body = await readJson(res);
         if (applyGate(body)) { setBusy(false); return; }
         if (!body.ok) { setDeleteError(body.error || 'delete failed'); setBusy(false); return; }
@@ -537,7 +548,7 @@ export function FactoryResourcesTree({
       await loadAll();
     } catch (e: any) { setDeleteError(e?.message || String(e)); }
     finally { setBusy(false); }
-  }, [deleteTarget, deleteConfirmText, globalParams, loadAll]);
+  }, [deleteTarget, deleteConfirmText, globalParams, loadAll, R]);
 
   const openCloneRename = useCallback((mode: 'clone' | 'rename', kind: RowKind, name: string) => {
     setCrState({ mode, kind, name });
@@ -558,18 +569,18 @@ export function FactoryResourcesTree({
     if (!type) { setCrError('This resource type cannot be cloned or renamed.'); return; }
     setBusy(true); setCrError(null);
     try {
-      const gres = await clientFetch(`/api/adf/resource-json?type=${encodeURIComponent(type)}&name=${encodeURIComponent(name)}`);
+      const gres = await clientFetch(R(`/api/adf/resource-json?type=${encodeURIComponent(type)}&name=${encodeURIComponent(name)}`));
       const gbody = await readJson(gres);
       if (applyGate(gbody)) { setBusy(false); return; }
       if (!gbody.ok) { setCrError(gbody.error || 'failed to load the source definition'); setBusy(false); return; }
       const properties = gbody.definition?.properties;
       if (!properties) { setCrError('The source definition has no properties to copy.'); setBusy(false); return; }
-      const cres = await clientFetch(route, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: newName, properties }) });
+      const cres = await clientFetch(R(route), { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: newName, properties }) });
       const cbody = await readJson(cres);
       if (applyGate(cbody)) { setBusy(false); return; }
       if (!cbody.ok) { setCrError(cbody.error || 'create failed'); setBusy(false); return; }
       if (mode === 'rename') {
-        const dres = await clientFetch(`${route}?name=${encodeURIComponent(name)}`, { method: 'DELETE' });
+        const dres = await clientFetch(R(`${route}?name=${encodeURIComponent(name)}`), { method: 'DELETE' });
         const dbody = await readJson(dres);
         if (!dbody.ok) {
           setCrError(`Copied to "${newName}", but deleting the original "${name}" failed: ${dbody.error || 'delete failed'}. Both now exist — delete one manually.`);
@@ -581,7 +592,7 @@ export function FactoryResourcesTree({
       if (kind === 'pipeline') onOpenPipeline(newName);
     } catch (e: any) { setCrError(e?.message || String(e)); }
     finally { setBusy(false); }
-  }, [crState, crNewName, loadAll, onOpenPipeline]);
+  }, [crState, crNewName, loadAll, onOpenPipeline, R]);
 
   // Dispatch a row's right-click action key to the right real handler.
   const onRowAction = useCallback((kind: RowKind, name: string, key: RowActionKey, opts?: { inline?: unknown }) => {

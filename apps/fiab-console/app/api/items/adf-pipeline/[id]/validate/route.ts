@@ -22,8 +22,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { validatePipelineSpec } from '@/lib/azure/pipeline-validate';
-import { resolveBinding, bindingErrorResponse } from '@/lib/azure/pipeline-binding';
+import { resolveBinding, bindingErrorResponse, bindingFactoryOverride } from '@/lib/azure/pipeline-binding';
 import { getPipeline } from '@/lib/azure/adf-client';
+import { withFactoryOverride } from '@/lib/azure/adf-factory-context';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -36,19 +37,21 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   const { id } = await ctx.params;
-  let pipelineName: string;
+  let binding: Awaited<ReturnType<typeof resolveBinding>>;
   try {
-    ({ pipelineName } = await resolveBinding(id, ACCEPTED_TYPES, session.claims.oid));
+    binding = await resolveBinding(id, ACCEPTED_TYPES, session.claims.oid);
   } catch (e) {
     const { status, body } = bindingErrorResponse(e);
     return NextResponse.json(body, { status });
   }
+  const { pipelineName } = binding;
   const body = await req.json().catch(() => ({} as any));
   try {
-    // In-flight canvas payload, or the persisted ADF pipeline definition.
+    // In-flight canvas payload, or the persisted ADF pipeline definition read
+    // from the SAME factory the item was bound against.
     let definition = body?.definition;
     if (!definition) {
-      const persisted = await getPipeline(pipelineName).catch(() => null);
+      const persisted = await withFactoryOverride(bindingFactoryOverride(binding), () => getPipeline(pipelineName)).catch(() => null);
       definition = persisted
         ? { name: persisted.name, properties: persisted.properties }
         : { properties: { activities: [] } };

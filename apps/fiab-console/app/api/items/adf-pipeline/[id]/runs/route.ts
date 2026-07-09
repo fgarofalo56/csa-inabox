@@ -18,7 +18,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { listPipelineRuns } from '@/lib/azure/adf-client';
-import { resolveBinding, UnboundPipelineError, ItemNotFoundError } from '@/lib/azure/pipeline-binding';
+import { withFactoryOverride } from '@/lib/azure/adf-factory-context';
+import { resolveBinding, UnboundPipelineError, ItemNotFoundError, bindingFactoryOverride } from '@/lib/azure/pipeline-binding';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -45,15 +46,16 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
   const before = req.nextUrl.searchParams.get('before') || undefined;
   const status = req.nextUrl.searchParams.get('status') || undefined;
 
-  let pipelineName: string;
+  let binding: Awaited<ReturnType<typeof resolveBinding>>;
   try {
-    ({ pipelineName } = await resolveBinding(id, ACCEPTED_TYPES, session.claims.oid));
+    binding = await resolveBinding(id, ACCEPTED_TYPES, session.claims.oid);
   } catch (e) {
     if (e instanceof UnboundPipelineError || e instanceof ItemNotFoundError) {
       return emptyRuns(after, before, status);
     }
     return NextResponse.json({ ok: false, error: (e as any)?.message || String(e) }, { status: 502 });
   }
+  const { pipelineName } = binding;
 
   // Convert an `after` ISO override into a windowDays figure for the client
   // helper (which builds the lastUpdatedAfter/Before envelope). Default 7d.
@@ -64,7 +66,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
   }
 
   try {
-    let runs = await listPipelineRuns(pipelineName, windowDays);
+    let runs = await withFactoryOverride(bindingFactoryOverride(binding), () => listPipelineRuns(pipelineName, windowDays));
     if (status && ALLOWED_STATUS.has(status)) {
       runs = runs.filter((r) => r.status === status);
     }

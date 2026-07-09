@@ -23,17 +23,37 @@
  */
 
 import { itemsContainer, workspacesContainer } from '@/lib/azure/cosmos-client';
+import { resolveFactoryOverride, type FactoryOverride } from '@/lib/azure/adf-factory-context';
 import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
 
 export interface PipelineBinding {
   /** The real Azure pipeline name to use for every REST call. */
   pipelineName: string;
-  /** Optional ADF factory override (defaults to env LOOM_ADF_NAME). */
+  /** Optional ADF factory NAME override (defaults to env LOOM_ADF_NAME). */
   factory?: string;
+  /** Optional ADF factory SUBSCRIPTION override — the cross-sub factory the item was bound against. */
+  factorySubscriptionId?: string;
+  /** Optional ADF factory RESOURCE GROUP override — the cross-sub factory the item was bound against. */
+  factoryResourceGroup?: string;
   /** Optional Synapse workspace override (defaults to env LOOM_SYNAPSE_WORKSPACE). */
   workspace?: string;
   /** The Cosmos item this binding came from (so callers can re-save state). */
   item: WorkspaceItem;
+}
+
+/**
+ * Build the selected-factory override for a resolved binding so a per-item ADF
+ * route can wrap its adf-client calls in `withFactoryOverride(...)` and target
+ * the SAME factory the item was bound against (persisted at bind time). Returns
+ * `undefined` when the item was bound against the env-default factory (no
+ * factory coords stored) — the calls then use the env default, unchanged.
+ */
+export function bindingFactoryOverride(binding: PipelineBinding): FactoryOverride | undefined {
+  return resolveFactoryOverride({
+    subscriptionId: binding.factorySubscriptionId,
+    resourceGroup: binding.factoryResourceGroup,
+    factoryName: binding.factory,
+  });
 }
 
 export class UnboundPipelineError extends Error {
@@ -98,12 +118,16 @@ export async function loadPipelineItem(
   return item;
 }
 
-function readBindingFromState(item: WorkspaceItem): { pipelineName?: string; factory?: string; workspace?: string } {
+function readBindingFromState(item: WorkspaceItem): {
+  pipelineName?: string; factory?: string; factorySubscriptionId?: string; factoryResourceGroup?: string; workspace?: string;
+} {
   const state = (item.state || {}) as Record<string, unknown>;
   const pipelineName = typeof state.pipelineName === 'string' ? state.pipelineName.trim() : '';
   const factory = typeof state.factory === 'string' ? state.factory.trim() : undefined;
+  const factorySubscriptionId = typeof state.factorySubscriptionId === 'string' ? state.factorySubscriptionId.trim() : undefined;
+  const factoryResourceGroup = typeof state.factoryResourceGroup === 'string' ? state.factoryResourceGroup.trim() : undefined;
   const workspace = typeof state.workspace === 'string' ? state.workspace.trim() : undefined;
-  return { pipelineName: pipelineName || undefined, factory, workspace };
+  return { pipelineName: pipelineName || undefined, factory, factorySubscriptionId, factoryResourceGroup, workspace };
 }
 
 /**
@@ -127,9 +151,9 @@ export async function resolveBinding(
   // IS found, prefer its ACTUAL persisted itemType (often 'data-pipeline').
   const primaryType = Array.isArray(itemType) ? itemType[0] : itemType;
   if (!item) throw new ItemNotFoundError(primaryType, itemId);
-  const { pipelineName, factory, workspace } = readBindingFromState(item);
+  const { pipelineName, factory, factorySubscriptionId, factoryResourceGroup, workspace } = readBindingFromState(item);
   if (!pipelineName) throw new UnboundPipelineError(item.itemType || primaryType, itemId);
-  return { pipelineName, factory, workspace, item };
+  return { pipelineName, factory, factorySubscriptionId, factoryResourceGroup, workspace, item };
 }
 
 /**
@@ -140,7 +164,13 @@ export async function persistBinding(
   itemId: string,
   itemType: string | string[],
   tenantId: string,
-  binding: { pipelineName: string; factory?: string; workspace?: string },
+  binding: {
+    pipelineName: string;
+    factory?: string;
+    factorySubscriptionId?: string;
+    factoryResourceGroup?: string;
+    workspace?: string;
+  },
 ): Promise<WorkspaceItem> {
   const item = await loadPipelineItem(itemId, itemType, tenantId);
   const primaryType = Array.isArray(itemType) ? itemType[0] : itemType;
@@ -152,7 +182,23 @@ export async function persistBinding(
     ...(item.state || {}),
     pipelineName: binding.pipelineName.trim(),
   };
-  if (binding.factory) nextState.factory = binding.factory.trim();
+  // Persist the SELECTED factory the item was bound against so per-item ops
+  // (run/save/validate/triggers) target the same factory the tree + bind
+  // dropdown listed from. A cleared (undefined) coord leaves any prior value in
+  // place; an empty-string coord (deselect) removes it so the item re-follows
+  // the env default.
+  if (binding.factory !== undefined) {
+    if (binding.factory.trim()) nextState.factory = binding.factory.trim();
+    else delete nextState.factory;
+  }
+  if (binding.factorySubscriptionId !== undefined) {
+    if (binding.factorySubscriptionId.trim()) nextState.factorySubscriptionId = binding.factorySubscriptionId.trim();
+    else delete nextState.factorySubscriptionId;
+  }
+  if (binding.factoryResourceGroup !== undefined) {
+    if (binding.factoryResourceGroup.trim()) nextState.factoryResourceGroup = binding.factoryResourceGroup.trim();
+    else delete nextState.factoryResourceGroup;
+  }
   if (binding.workspace) nextState.workspace = binding.workspace.trim();
   const next: WorkspaceItem = {
     ...item,

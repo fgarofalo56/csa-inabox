@@ -1,19 +1,21 @@
 /**
- * Data flows (ADF Mapping Data Flows) on the deployment-default Data Factory.
- * Backs the "Data flows" group in the Factory Resources navigator.
+ * Data flows (ADF Mapping Data Flows) on the SELECTED (or deployment-default)
+ * Data Factory. Backs the "Data flows" group in the Factory Resources navigator.
  *
  *   GET    /api/adf/dataflows             → { ok, dataflows: [{name, type}] }
  *   POST   /api/adf/dataflows             body { name, properties? } → upsert
  *   DELETE /api/adf/dataflows?name=NAME   → delete
  *
  * When `properties` is omitted, a minimal empty MappingDataFlow is created so
- * the operator can open it and design the transformation. Factory is the
- * env-pinned default; honest 503 gate when LOOM_SUBSCRIPTION_ID / LOOM_DLZ_RG /
- * LOOM_ADF_NAME aren't set. Real ARM REST. No mocks.
+ * the operator can open it and design the transformation. Factory: the editor
+ * appends the selected factory's coords (factorySubscriptionId /
+ * factoryResourceGroup / factoryName); absent → the env-pinned default. Honest
+ * 503 gate when neither is configured. Real ARM REST. No mocks.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { withFactoryFromRequest } from '@/lib/azure/adf-factory-context';
 import {
   adfConfigGate, listDataFlows, upsertDataFlow, deleteDataFlow,
   type AdfDataFlow,
@@ -35,54 +37,60 @@ function gate() {
   return null;
 }
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  const g = gate(); if (g) return g;
-  try {
-    const dataflows = (await listDataFlows()).map((d) => ({
-      name: d.name,
-      type: d.properties?.type || 'MappingDataFlow',
-    }));
-    return NextResponse.json({ ok: true, dataflows });
-  } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
-  }
+  return withFactoryFromRequest(req, async () => {
+    const g = gate(); if (g) return g;
+    try {
+      const dataflows = (await listDataFlows()).map((d) => ({
+        name: d.name,
+        type: d.properties?.type || 'MappingDataFlow',
+      }));
+      return NextResponse.json({ ok: true, dataflows });
+    } catch (e: any) {
+      return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
+    }
+  });
 }
 
 export async function POST(req: NextRequest) {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  const g = gate(); if (g) return g;
   const body = await req.json().catch(() => ({}));
-  const name: string = typeof body?.name === 'string' ? body.name.trim() : '';
-  if (!name) return NextResponse.json({ ok: false, error: 'name is required' }, { status: 400 });
-  if (!NAME_RE.test(name)) return NextResponse.json({ ok: false, error: 'name must be 1-260 chars: letters, digits, _' }, { status: 400 });
-  const properties = (body?.properties as AdfDataFlow['properties']) || {
-    // A minimal-but-valid empty Mapping Data Flow: no sources/sinks yet, an
-    // empty script. The operator wires sources/transforms/sinks afterwards.
-    type: 'MappingDataFlow',
-    typeProperties: { sources: [], sinks: [], transformations: [], scriptLines: [] },
-  };
-  if (typeof properties.type !== 'string') properties.type = 'MappingDataFlow';
-  try {
-    const saved = await upsertDataFlow(name, { name, properties });
-    return NextResponse.json({ ok: true, dataflow: { name: saved.name, type: saved.properties?.type } });
-  } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
-  }
+  return withFactoryFromRequest(req, async () => {
+    const g = gate(); if (g) return g;
+    const name: string = typeof body?.name === 'string' ? body.name.trim() : '';
+    if (!name) return NextResponse.json({ ok: false, error: 'name is required' }, { status: 400 });
+    if (!NAME_RE.test(name)) return NextResponse.json({ ok: false, error: 'name must be 1-260 chars: letters, digits, _' }, { status: 400 });
+    const properties = (body?.properties as AdfDataFlow['properties']) || {
+      // A minimal-but-valid empty Mapping Data Flow: no sources/sinks yet, an
+      // empty script. The operator wires sources/transforms/sinks afterwards.
+      type: 'MappingDataFlow',
+      typeProperties: { sources: [], sinks: [], transformations: [], scriptLines: [] },
+    };
+    if (typeof properties.type !== 'string') properties.type = 'MappingDataFlow';
+    try {
+      const saved = await upsertDataFlow(name, { name, properties });
+      return NextResponse.json({ ok: true, dataflow: { name: saved.name, type: saved.properties?.type } });
+    } catch (e: any) {
+      return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
+    }
+  });
 }
 
 export async function DELETE(req: NextRequest) {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  const g = gate(); if (g) return g;
-  const name = req.nextUrl.searchParams.get('name')?.trim();
-  if (!name) return NextResponse.json({ ok: false, error: 'name query param is required' }, { status: 400 });
-  try {
-    await deleteDataFlow(name);
-    return NextResponse.json({ ok: true });
-  } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
-  }
+  return withFactoryFromRequest(req, async () => {
+    const g = gate(); if (g) return g;
+    const name = req.nextUrl.searchParams.get('name')?.trim();
+    if (!name) return NextResponse.json({ ok: false, error: 'name query param is required' }, { status: 400 });
+    try {
+      await deleteDataFlow(name);
+      return NextResponse.json({ ok: true });
+    } catch (e: any) {
+      return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
+    }
+  });
 }

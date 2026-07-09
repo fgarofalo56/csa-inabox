@@ -24,6 +24,7 @@ import { armBase, armScope, armHost, adfFactoryDeepLinkId, getLogAnalyticsHost, 
 import { pathToHttpsUrl, KNOWN_CONTAINERS } from './adls-client';
 import { executeQuery, serverlessTarget } from './synapse-sql-client';
 import { discoverResourceCoordsByName } from './resource-graph-coords';
+import { currentFactoryOverride } from './adf-factory-context';
 import { escapeSqlLiteral } from '@/lib/sql/quoting';
 
 const API = '2018-06-01';
@@ -61,13 +62,39 @@ function required(k: string): string {
 // route supplies it, the factory ARM scope follows the OWNING domain's DLZ
 // subscription + resource group. Absent → the env default (single-sub
 // behaviour every existing deployment has today).
-export interface AdfArmTarget { subscriptionId?: string; resourceGroup?: string; }
+export interface AdfArmTarget { subscriptionId?: string; resourceGroup?: string; factoryName?: string; }
 function sub(t?: AdfArmTarget): string { return (t?.subscriptionId || '').trim() || process.env.LOOM_ADF_SUB || required('LOOM_SUBSCRIPTION_ID'); }
 function rg(t?: AdfArmTarget):  string { return (t?.resourceGroup || '').trim() || process.env.LOOM_ADF_RG || required('LOOM_DLZ_RG'); }
-function adfName(): string { return required('LOOM_ADF_NAME'); }
+function adfName(t?: AdfArmTarget): string { return (t?.factoryName || '').trim() || required('LOOM_ADF_NAME'); }
+
+/**
+ * The factory coordinates a call should target: the EXPLICIT `target` arg wins
+ * (multi-domain publish path), else the SELECTED-factory override active for the
+ * current request (`withFactoryOverride`, set by the `/api/adf/*` + bind
+ * routes), else `undefined` → every `sub()/rg()/adfName()` falls through to the
+ * env-pinned deployment default. A `target` with no usable coord is treated as
+ * absent so the override still applies.
+ */
+function effectiveTarget(t?: AdfArmTarget): AdfArmTarget | undefined {
+  if (t && (t.subscriptionId || t.resourceGroup || t.factoryName)) return t;
+  return currentFactoryOverride();
+}
 
 function base(t?: AdfArmTarget): string {
-  return `${ARM_BASE}/subscriptions/${sub(t)}/resourceGroups/${rg(t)}/providers/Microsoft.DataFactory/factories/${adfName()}`;
+  const eff = effectiveTarget(t);
+  return `${ARM_BASE}/subscriptions/${sub(eff)}/resourceGroups/${rg(eff)}/providers/Microsoft.DataFactory/factories/${adfName(eff)}`;
+}
+
+/**
+ * The EFFECTIVE factory coordinates {@link base} would build from — the
+ * explicit `target`, else the selected-factory override, else the env default.
+ * Exported so the bind route can persist the actually-targeted factory onto the
+ * item and so unit tests can assert selected-wins / env-fallback resolution.
+ * Throws (via `required`) only when a coord is neither supplied nor in the env.
+ */
+export function resolveFactoryCoords(t?: AdfArmTarget): { subscriptionId: string; resourceGroup: string; factoryName: string } {
+  const eff = effectiveTarget(t);
+  return { subscriptionId: sub(eff), resourceGroup: rg(eff), factoryName: adfName(eff) };
 }
 
 /**
@@ -76,7 +103,13 @@ function base(t?: AdfArmTarget): string {
  * BFF can 503 with a precise MessageBar instead of a generic 500. Returns null
  * when fully configured.
  */
-export function adfConfigGate(): { missing: string } | null {
+export function adfConfigGate(target?: AdfArmTarget): { missing: string } | null {
+  // A fully-specified SELECTED factory (its own subscription + RG + name) needs
+  // no env fallback — bind/list can target it directly even when the deployment
+  // env vars are unset. Only fall back to requiring the env default when the
+  // effective coords are still partial (no selection, or a partial one).
+  const eff = effectiveTarget(target);
+  if (eff?.subscriptionId && eff?.resourceGroup && eff?.factoryName) return null;
   for (const k of ['LOOM_SUBSCRIPTION_ID', 'LOOM_DLZ_RG', 'LOOM_ADF_NAME']) {
     if (!process.env[k]) return { missing: k };
   }
