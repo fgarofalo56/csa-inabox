@@ -774,7 +774,7 @@ function mapFile(f: any): UploadedFile {
  * (purpose=evals) and fine-tuning (purpose=fine-tune) datasets. Node 18+ ships
  * a global FormData/Blob, which the BFF runtime ('nodejs') provides.
  */
-async function uploadOpenAIFile(acct: CsAccount, fileName: string, content: string, purpose: 'evals' | 'fine-tune'): Promise<UploadedFile> {
+async function uploadOpenAIFile(acct: CsAccount, fileName: string, content: string, purpose: 'evals' | 'fine-tune' | 'batch'): Promise<UploadedFile> {
   const endpoint = await aoaiEndpoint(acct);
   const tok = await dataPlaneToken();
   const form = new FormData();
@@ -1032,6 +1032,122 @@ export async function listFineTuningEvents(jobId: string, selector?: AccountSele
   const acct = await resolveAccount(false, selector);
   const j = await readEvalsJson<{ data?: any[] }>(await ftFetch(acct, `/fine_tuning/jobs/${encodeURIComponent(jobId)}/events?limit=200`));
   return { account: acct, events: (j?.data || []).map(mapFtEvent) };
+}
+
+// ---------------- Global / Data-Zone Batch (AIF-11, data-plane) ----------------
+//
+// Async high-volume inference against a Global-Batch / Data-Zone-Batch model
+// deployment (~50% cheaper, 24h completion window). Flow:
+//   1. upload a JSONL input file (purpose=batch)      → uploadBatchFile
+//   2. POST {endpoint}/openai/batches   { input_file_id, endpoint, completion_window:'24h' }
+//   3. GET  {endpoint}/openai/batches/{id}            (poll to a terminal state)
+//   4. GET  {endpoint}/openai/v1/files/{output_file_id}/content  (download results)
+// Role: Cognitive Services OpenAI Contributor (a001fd3d). Batch is NOT available
+// in Azure Government — the UI honest-gates the tab there (isGovCloud()).
+// Ref: https://learn.microsoft.com/azure/ai-foundry/openai/how-to/batch
+const AOAI_BATCH_API = process.env.LOOM_AOAI_BATCH_API_VERSION || '2025-01-01-preview';
+
+export interface BatchJob {
+  id: string;
+  status?: string;            // validating | in_progress | finalizing | completed | failed | expired | cancelling | cancelled
+  endpoint?: string;          // e.g. /chat/completions
+  inputFileId?: string;
+  outputFileId?: string | null;
+  errorFileId?: string | null;
+  completionWindow?: string;
+  createdAt?: number;
+  expiresAt?: number;
+  requestCounts?: { total?: number; completed?: number; failed?: number };
+  errors?: unknown;
+}
+
+function mapBatchJob(b: any): BatchJob {
+  return {
+    id: b?.id,
+    status: b?.status,
+    endpoint: b?.endpoint,
+    inputFileId: b?.input_file_id,
+    outputFileId: b?.output_file_id ?? null,
+    errorFileId: b?.error_file_id ?? null,
+    completionWindow: b?.completion_window,
+    createdAt: b?.created_at,
+    expiresAt: b?.expires_at,
+    requestCounts: b?.request_counts
+      ? { total: b.request_counts.total, completed: b.request_counts.completed, failed: b.request_counts.failed }
+      : undefined,
+    errors: b?.errors ?? undefined,
+  };
+}
+
+/** Batch data-plane fetch on the classic `{endpoint}/openai/batches` surface. */
+async function batchFetch(acct: CsAccount, path: string, init: RequestInit = {}): Promise<Response> {
+  const endpoint = await aoaiEndpoint(acct);
+  const tok = await dataPlaneToken();
+  const sep = path.includes('?') ? '&' : '?';
+  const url = `${endpoint}/openai/batches${path}${sep}api-version=${AOAI_BATCH_API}`;
+  return fetchWithTimeout(url, {
+    ...init,
+    headers: { ...(init.headers || {}), authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
+  });
+}
+
+/** Upload a JSONL batch input file (purpose=batch). */
+export async function uploadBatchFile(fileName: string, jsonlContent: string, selector?: AccountSelector): Promise<{ account: CsAccount; file: UploadedFile }> {
+  const acct = await resolveAccount(false, selector);
+  return { account: acct, file: await uploadOpenAIFile(acct, fileName, jsonlContent, 'batch') };
+}
+
+export async function listBatchJobs(selector?: AccountSelector): Promise<{ account: CsAccount; jobs: BatchJob[] }> {
+  const acct = await resolveAccount(false, selector);
+  const j = await readEvalsJson<{ data?: any[] }>(await batchFetch(acct, `?limit=50`));
+  return { account: acct, jobs: (j?.data || []).map(mapBatchJob) };
+}
+
+export interface CreateBatchJobInput {
+  /** The uploaded JSONL file id (purpose=batch). */
+  inputFileId: string;
+  /** Target inference endpoint — defaults to /chat/completions. */
+  endpoint?: string;
+}
+
+export async function createBatchJob(input: CreateBatchJobInput, selector?: AccountSelector): Promise<BatchJob> {
+  const acct = await resolveAccount(false, selector);
+  const body = {
+    input_file_id: input.inputFileId,
+    endpoint: input.endpoint || '/chat/completions',
+    completion_window: '24h', // the only value the service accepts today
+  };
+  const j = await readEvalsJson<any>(await batchFetch(acct, ``, { method: 'POST', body: JSON.stringify(body) }));
+  return mapBatchJob(j);
+}
+
+export async function getBatchJob(batchId: string, selector?: AccountSelector): Promise<BatchJob> {
+  const acct = await resolveAccount(false, selector);
+  const j = await readEvalsJson<any>(await batchFetch(acct, `/${encodeURIComponent(batchId)}`));
+  return mapBatchJob(j);
+}
+
+export async function cancelBatchJob(batchId: string, selector?: AccountSelector): Promise<BatchJob> {
+  const acct = await resolveAccount(false, selector);
+  const j = await readEvalsJson<any>(await batchFetch(acct, `/${encodeURIComponent(batchId)}/cancel`, { method: 'POST' }));
+  return mapBatchJob(j);
+}
+
+/**
+ * Download the raw content of a batch output / error file (JSONL). Returns the
+ * text body — the route streams it to the browser as a download.
+ */
+export async function getFileContent(fileId: string, selector?: AccountSelector): Promise<{ account: CsAccount; content: string }> {
+  const acct = await resolveAccount(false, selector);
+  const endpoint = await aoaiEndpoint(acct);
+  const tok = await dataPlaneToken();
+  const url = `${endpoint}/openai/v1/files/${encodeURIComponent(fileId)}/content`;
+  const res = await fetchWithTimeout(url, { headers: { authorization: `Bearer ${tok}` } });
+  const text = await res.text();
+  if (!res.ok) {
+    throw new CsError(res.status, text, `Download file failed (${res.status}): ${text.slice(0, 240)}`);
+  }
+  return { account: acct, content: text };
 }
 
 // ---------------- Images + Audio playgrounds (data-plane) ----------------
