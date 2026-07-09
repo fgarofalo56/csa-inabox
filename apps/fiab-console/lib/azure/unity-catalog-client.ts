@@ -47,6 +47,13 @@ import {
   type UcPolicyParams, type UcPolicySecurableType,
   type UcCreateConnectionParams, type UcForeignCatalogParams,
 } from '@/lib/sql/uc-security-builders';
+import {
+  buildCreateMetricViewDdl, buildDropMetricViewDdl, buildShowViewsDdl,
+  compileMetricViewQuery, type CreateMetricViewParams,
+} from '@/lib/sql/metric-view-builders';
+import {
+  buildCreateTableFormatDdl, type UcTableFormatSpec,
+} from '@/lib/sql/uc-table-format-builders';
 
 // Re-export the tag-pair type so API routes can import it from this client
 // module (the canonical UC surface) rather than reaching into the SQL builders.
@@ -1415,6 +1422,68 @@ export async function dropUcPolicy(
   p: { name: string; securableType: UcPolicySecurableType; securableName: string },
 ): Promise<{ sql: string; executionMs: number }> {
   const sql = buildDropPolicy(p);
+  const r = await executeStatement(warehouseId, sql);
+  return { sql, executionMs: r.executionMs };
+}
+
+// ---- UC Metric Views (DBX-6, opt-in Databricks backend) ---------------------
+
+/** List views in a schema (metric views appear as views; the caller can DESCRIBE
+ *  to confirm the metric shape). */
+export async function listUcViews(
+  warehouseId: string,
+  catalog: string,
+  schema: string,
+): Promise<Record<string, unknown>[]> {
+  const r = await executeStatement(warehouseId, buildShowViewsDdl(catalog, schema));
+  return ucRows(r);
+}
+
+/** Build (preview) or build+execute a `CREATE [OR REPLACE] VIEW … WITH METRICS
+ *  LANGUAGE YAML AS $$…$$`. Real Databricks DDL over the Statement Execution API. */
+export async function createUcMetricView(
+  warehouseId: string,
+  params: CreateMetricViewParams,
+  preview = false,
+): Promise<{ sql: string; executionMs?: number }> {
+  const sql = buildCreateMetricViewDdl(params);
+  if (preview) return { sql };
+  const r = await executeStatement(warehouseId, sql);
+  return { sql, executionMs: r.executionMs };
+}
+
+/** Query a metric view with the required `MEASURE()` form and return real rows. */
+export async function queryUcMetricView(
+  warehouseId: string,
+  p: { catalog: string; schema: string; name: string; dimensions: string[]; measures: string[]; limit?: number },
+): Promise<{ sql: string; columns: string[]; rows: unknown[][]; rowCount: number; executionMs: number }> {
+  const sql = compileMetricViewQuery(p);
+  const r = await executeStatement(warehouseId, sql);
+  return { sql, columns: r.columns, rows: r.rows, rowCount: r.rowCount, executionMs: r.executionMs };
+}
+
+/** Drop a metric view (`DROP VIEW IF EXISTS …`). */
+export async function dropUcMetricView(
+  warehouseId: string,
+  p: { catalog: string; schema: string; name: string },
+): Promise<{ sql: string; executionMs: number }> {
+  const sql = buildDropMetricViewDdl(p.catalog, p.schema, p.name);
+  const r = await executeStatement(warehouseId, sql);
+  return { sql, executionMs: r.executionMs };
+}
+
+// ---- UC table formats (DBX-11: Managed Iceberg + UniForm) --------------------
+
+/** Create a UC managed table in a chosen table format (Delta / Delta+UniForm-
+ *  Iceberg / managed Iceberg) via real `CREATE TABLE … USING … TBLPROPERTIES`
+ *  DDL — the REST create API cannot carry these properties. */
+export async function createUcTableWithFormat(
+  warehouseId: string,
+  spec: UcTableFormatSpec,
+  preview = false,
+): Promise<{ sql: string; executionMs?: number }> {
+  const sql = buildCreateTableFormatDdl(spec);
+  if (preview) return { sql };
   const r = await executeStatement(warehouseId, sql);
   return { sql, executionMs: r.executionMs };
 }
