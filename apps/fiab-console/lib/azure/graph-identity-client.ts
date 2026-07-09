@@ -648,7 +648,7 @@ export async function findGuestByEmail(email: string): Promise<IdentityHit | nul
   const phrase = searchPhrase(email);
   if (!phrase) return null;
   const endpoint =
-    `/users?$filter=${encodeURIComponent(`mail eq '${phrase.replace(/'/g, "''")}'`)}` +
+    `/users?$filter=${encodeURIComponent(`mail eq '${escapeSqlLiteral(phrase)}'`)}` +
     `&$select=id,displayName,userPrincipalName,mail,userType&$top=1`;
   const res = await graphFetch(endpoint);
   const j = await readJson<{ value?: any[] }>(res, endpoint);
