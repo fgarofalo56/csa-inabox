@@ -22,6 +22,7 @@ import { labelRank } from '@/lib/governance/label-propagation';
 import { recordItemVersion } from '@/lib/versions/item-version-store';
 import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
 import { apiError } from '@/lib/api/respond';
+import { emitLoomEvent } from '@/lib/events/webhook-emitter';
 
 /**
  * Soft-delete (Recycle bin) metadata stamped onto an item's `state._recycled`.
@@ -342,6 +343,15 @@ export async function createOwnedItem(
   // Auto-onboard to Microsoft Purview as a catalog asset (best-effort; no-throw;
   // cheap no-op when LOOM_PURVIEW_ACCOUNT is unset).
   void autoOnboardToPurview(resource!, session.claims.oid);
+  // BR-WEBHOOK — item lifecycle event (best-effort, fire-and-forget).
+  emitLoomEvent({
+    type: 'item.created',
+    tenantId: session.claims.oid,
+    subject: resource!.id,
+    subjectName: resource!.displayName,
+    actor: { oid: session.claims.oid, upn: session.claims.upn || session.claims.email },
+    data: { itemType, workspaceId },
+  });
   return { ok: true, item: resource! };
 }
 
@@ -373,6 +383,13 @@ export async function updateOwnedItem(
   void upsertLoomDoc(docForItem(resource!, tenantId));
   void mirrorDataProduct(resource!, tenantId);
   void mirrorGovernanceDoc(resource!, tenantId);
+  emitLoomEvent({
+    type: 'item.updated',
+    tenantId,
+    subject: resource!.id,
+    subjectName: resource!.displayName,
+    data: { itemType, workspaceId: resource!.workspaceId },
+  });
   return resource!;
 }
 
@@ -396,6 +413,13 @@ export async function deleteOwnedItem(
   // item's Atlas entity so the external catalog graph reconciles too (best-
   // effort; no-throw; no-op when LOOM_PURVIEW_ACCOUNT is unset).
   void offboardFromPurview(current, tenantId);
+  emitLoomEvent({
+    type: 'item.deleted',
+    tenantId,
+    subject: current.id,
+    subjectName: current.displayName,
+    data: { itemType, workspaceId: current.workspaceId, path: 'hard-delete' },
+  });
   return true;
 }
 
@@ -489,6 +513,16 @@ export async function softDeleteOwnedItem(
   // touching this item so the Weave graph hides stale lineage while the item is
   // recycled; restoreOwnedItem un-tombstones it (best-effort; no-throw).
   void reconcileThreadEdgesOnDelete(tenantId, current.id, { mode: 'tombstone' });
+  // BR-WEBHOOK — the user "delete" action (soft-delete → Recycle bin) is the
+  // item.deleted lifecycle event subscribers care about (a later automatic
+  // purge does not re-emit).
+  emitLoomEvent({
+    type: 'item.deleted',
+    tenantId,
+    subject: current.id,
+    subjectName: current.displayName,
+    data: { itemType, workspaceId: current.workspaceId, path: 'recycle' },
+  });
   return resource!;
 }
 

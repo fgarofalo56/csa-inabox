@@ -35,6 +35,25 @@ export const loomAppsItems: FabricItemType[] = [
       "docsUrl": "https://learn.microsoft.com/fabric/fundamentals/create-apps"
     } },
 
+  // Loom app runtime (DBX-1) — Databricks-Apps-class hosted apps. Pick a
+  // runtime template (Streamlit/Dash/Gradio/Flask/Express) or point at a public
+  // git repo; Loom builds the image in the Loom ACR and deploys it as an
+  // autoscale-to-zero, Entra-gated Azure Container App with a live URL. 100%
+  // Azure-native (Container Apps + ACR) — no Databricks/Fabric dependency.
+  { slug: 'loom-app-runtime', displayName: 'Loom app runtime', restType: 'LoomAppRuntime', category: 'Loom Apps', preview: true,
+    description: 'Host a Python/Node data-and-AI app (Streamlit, Dash, Gradio, Flask, Express, or a public git repo) as an autoscale-to-zero, Entra-gated Azure Container App with a live URL. Azure-native; no Databricks or Fabric.',
+    learnContent: {
+      "overview": "The Loom App Runtime is CSA Loom's Databricks-Apps-class hosted-app service, built entirely on Azure Container Apps + the Loom Azure Container Registry — no Databricks or Fabric dependency. Pick a runtime template (Streamlit, Dash, Gradio, Flask, or Node/Express) and edit the starter code, or point at a public git repository; Loom builds your source into a container image (real ACR quick-build via the Console managed identity) and deploys it as an Azure Container App with autoscale-to-zero (a resting app costs ~$0), an Entra Easy-Auth wrapper so only your Loom tenant can reach it, and a live https URL. Bind your own Loom data-plane endpoints (Synapse, ADX, AI Search, Cosmos) as LOOM_* env vars so the app calls back into your data — the Unity-Catalog-analogue. The runtime is ON by default for any user with workspace access (no spend gate, no approval gate); admins can disable a single app or flip the tenant-wide kill switch. When the Container Apps environment / ACR isn't wired the editor still renders fully and names the exact env var + bicep module to provision.",
+      "steps": [
+        { "title": "Pick a runtime", "body": "Choose a template — Streamlit, Dash, Gradio, Flask, or Node/Express — from the dropdown (no freeform config), or switch to Git source and paste a public repository URL. The template ships real, runnable starter code you can edit in the Source tab." },
+        { "title": "Edit source", "body": "Edit the entry file (app.py / server.js) and the dependency manifest (requirements.txt / package.json) in the Monaco editor. Your edits override the starter files in the build context." },
+        { "title": "Build", "body": "Build compiles your source into an image in the Loom ACR (a real ACR quick-build run). Watch the build status; a failed build surfaces the real ACR error." },
+        { "title": "Deploy", "body": "Deploy creates/updates the Azure Container App with autoscale-to-zero and the Entra auth wrapper. Set the replica floor/ceiling and inject LOOM_* bindings to your own data plane. The receipt is the live https URL." },
+        { "title": "Operate", "body": "The Overview tab shows status, replica count, URL, and a live logs tail. Start / Stop / Delete are real ARM lifecycle actions; Stop is the per-app disable. Admins can flip the tenant-wide runtime kill switch in tenant settings." }
+      ],
+      "docsUrl": "https://learn.microsoft.com/azure/container-apps/overview"
+    } },
+
   // Data app (formerly 'Rayfin app') — backed template that scaffolds an Azure-
   // native data-app stack: Azure Functions + Cosmos DB + Static Web App. Now
   // creatable from the gallery (no longer Labs-hidden). Preview: Build-2026 shape.

@@ -20,7 +20,7 @@ import {
   Tab, TabList, Dropdown, Option, Tooltip,
   MessageBar, MessageBarBody, MessageBarTitle,
   Dialog, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
-  Select, tokens,
+  Select, Divider, Checkbox, tokens,
 } from '@fluentui/react-components';
 import {
   Play20Regular, Pause20Regular, Save20Regular, Add20Regular, Delete20Regular, ArrowSync20Regular,
@@ -96,7 +96,7 @@ const ES_OPERATOR_KINDS: Array<{ value: EsOpKind; label: string; icon: ReactNode
   { value: 'aggregate', label: 'Aggregate', icon: <MathFormula20Regular />, hint: 'Windowed aggregate (SUM/COUNT/AVG/MIN/MAX) over a tumbling/hopping window.' },
   { value: 'group-by', label: 'Group by', icon: <MathFormula20Regular />, hint: 'Group events by columns + window and aggregate each group.' },
   { value: 'expand', label: 'Expand', icon: <DataArea20Regular />, hint: 'Flatten an array column into one row per element (CROSS APPLY GetArrayElements).' },
-  { value: 'cdc-flatten', label: 'CDC flatten', icon: <Branch20Regular />, hint: 'DeltaFlow: flatten Debezium before/after/op/ts into tabular rows + __op/__changed_at metadata.' },
+  { value: 'cdc-flatten', label: 'CDC transform (DeltaFlow)', icon: <Branch20Regular />, hint: 'Flatten a Debezium change envelope. Raw mode → tabular rows + __op/__changed_at; Analytics-ready mode → normalized change-type/timestamp columns + keyed, auto-managed destination Delta table (Fabric DeltaFlow parity).' },
   { value: 'union', label: 'Union', icon: <Merge20Regular />, hint: 'Merge all upstream sources into one stream.' },
   { value: 'join', label: 'Join', icon: <Branch20Regular />, hint: 'Temporal JOIN with another source within a time bound.' },
 ];
@@ -124,7 +124,14 @@ function esDefaultOperator(kind: EsOpKind, n: number): Record<string, any> {
     case 'expand':
       return { ...base, expandField: '', expandAlias: 'element', expandOutput: '' };
     case 'cdc-flatten':
-      return { ...base, cdcColumns: [] as string[], cdcAfterField: 'after', cdcBeforeField: 'before', cdcOpField: 'op', cdcTsField: 'ts_ms', cdcSourceField: '' };
+      return {
+        ...base, cdcColumns: [] as string[], cdcAfterField: 'after', cdcBeforeField: 'before', cdcOpField: 'op', cdcTsField: 'ts_ms', cdcSourceField: '',
+        // DeltaFlow analytics-ready extras (FGC-15) — default to raw so existing
+        // behaviour is unchanged until the operator opts into analytics-ready.
+        cdcSchemaMode: 'raw-flatten', cdcKeyColumns: [] as string[],
+        cdcChangeTypeColumn: '__change_type', cdcChangeTsColumn: '__change_ts',
+        cdcDestinationTable: '', cdcSchemaEvolution: true,
+      };
     case 'union':
       return { ...base };
     case 'join':
@@ -1948,13 +1955,22 @@ function EsOperatorCard({
         </div>
       )}
 
-      {/* CDC FLATTEN (DeltaFlow) */}
-      {kind === 'cdc-flatten' && (
+      {/* CDC TRANSFORM (DeltaFlow) */}
+      {kind === 'cdc-flatten' && (() => {
+        const analyticsReady = (op.cdcSchemaMode || 'raw-flatten') === 'analytics-ready';
+        return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS }}>
           <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
             Flattens a Debezium change envelope into analytics-ready rows that mirror the source
-            table, plus change-metadata columns (__op, __changed_at). Parity with Fabric Eventstream DeltaFlow.
+            table. Parity with Fabric Eventstream DeltaFlow.
           </Caption1>
+          {/* Schema-handling mode toggle (FGC-15). */}
+          <Field label="Schema handling" style={{ maxWidth: 360 }} hint="Fabric CDC schema-handling mode">
+            <Select value={op.cdcSchemaMode || 'raw-flatten'} onChange={(_: unknown, d: any) => onChange({ cdcSchemaMode: d.value })} aria-label="CDC schema handling mode">
+              <option value="raw-flatten">Raw CDC events</option>
+              <option value="analytics-ready">Analytics-ready (DeltaFlow)</option>
+            </Select>
+          </Field>
           <Field label="Table columns to flatten" hint="Comma-separated source columns (kept from after, falling back to before for deletes)">
             <Input value={csv(op.cdcColumns)} onChange={(_: unknown, d: any) => onChange({ cdcColumns: toArr(d.value) })} placeholder="OrderID, CustomerName, OrderTotal" />
           </Field>
@@ -1975,8 +1991,43 @@ function EsOperatorCard({
           <Field label="Source record field (optional)" hint="Emits __schema / __table from the Debezium 'source' metadata">
             <Input value={op.cdcSourceField || ''} onChange={(_: unknown, d: any) => onChange({ cdcSourceField: d.value })} placeholder="source" />
           </Field>
+          {analyticsReady && (
+            <>
+              <Divider style={{ marginTop: tokens.spacingVerticalXS }} />
+              <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                Analytics-ready mode normalizes the envelope into a change-type + timestamp column and
+                writes to an auto-managed destination Delta table (schema evolves automatically). The
+                Azure-native runtime is a Stream Analytics job → ADLS Gen2 Delta (delta-rs schema merge) —
+                no OneLake or Microsoft Fabric.
+              </Caption1>
+              <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' }}>
+                <Field label="Change-type column" style={{ flex: 1, minWidth: 150 }} hint="Insert/Update/Delete/Snapshot">
+                  <Input value={op.cdcChangeTypeColumn ?? '__change_type'} onChange={(_: unknown, d: any) => onChange({ cdcChangeTypeColumn: d.value })} placeholder="__change_type" />
+                </Field>
+                <Field label="Change-timestamp column" style={{ flex: 1, minWidth: 160 }}>
+                  <Input value={op.cdcChangeTsColumn ?? '__change_ts'} onChange={(_: unknown, d: any) => onChange({ cdcChangeTsColumn: d.value })} placeholder="__change_ts" />
+                </Field>
+              </div>
+              <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+                <Field label="Key column(s)" style={{ flex: 1, minWidth: 160 }} hint="Comma-separated upsert/merge key (empty = append-only)">
+                  <Input value={csv(op.cdcKeyColumns)} onChange={(_: unknown, d: any) => onChange({ cdcKeyColumns: toArr(d.value) })} placeholder="OrderID" />
+                </Field>
+                <Field label="Destination table" style={{ flex: 1, minWidth: 160 }} hint="Auto-created / evolved Delta table">
+                  <Input value={op.cdcDestinationTable || ''} onChange={(_: unknown, d: any) => onChange({ cdcDestinationTable: d.value })} placeholder="orders_analytics" />
+                </Field>
+              </div>
+              <Field>
+                <Checkbox
+                  label="Automatic schema evolution (add new source columns to the destination)"
+                  checked={op.cdcSchemaEvolution !== false}
+                  onChange={(_: unknown, d: any) => onChange({ cdcSchemaEvolution: !!d.checked })}
+                />
+              </Field>
+            </>
+          )}
         </div>
-      )}
+        );
+      })()}
 
       {/* UNION */}
       {kind === 'union' && (

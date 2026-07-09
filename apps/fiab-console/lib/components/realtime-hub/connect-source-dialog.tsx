@@ -541,6 +541,18 @@ export function ConnectSourceDialog({
                     </div>
                   );
                 })()}
+                {/* Honest infra-gate (FGC-14 / no-vaporware): a connector that needs
+                    infrastructure this deployment may not have yet names the exact
+                    resource/env to provision — the source still connects the
+                    eventstream item, but events only flow once the infra exists. */}
+                {picked.infraNote && (
+                  <MessageBar intent="warning">
+                    <MessageBarBody>
+                      <MessageBarTitle>Requires additional Azure infrastructure</MessageBarTitle>
+                      {picked.infraNote}
+                    </MessageBarBody>
+                  </MessageBar>
+                )}
                 <Field label="Eventstream name" required>
                   <Input value={displayName} onChange={(_, d) => setDisplayName(d.value)} />
                 </Field>

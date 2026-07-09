@@ -44,12 +44,14 @@ const ORPHAN_ALLOWLIST = new Map([
   ['platform/fiab/bicep/modules/admin-plane/cosmos-navigator-keys-rbac.bicep', 'opt-in Cosmos navigator-keys RBAC; deployed on demand'],
   ['platform/fiab/bicep/modules/admin-plane/cost-management-rbac.bicep', 'opt-in cost-management chargeback RBAC; deployed on demand'],
   ['platform/fiab/bicep/modules/admin-plane/devcenter.bicep', 'opt-in Deployment Environments DevCenter; TODO wire into orchestrator (release-environment honest-gate documents it)'],
+  ['platform/fiab/bicep/modules/admin-plane/event-grid-webhooks.bicep', 'opt-in outbound-webhook Event Grid transport (BR-WEBHOOK); standalone entrypoint deployed out-of-band (main.bicep at 256-param ceiling), then LOOM_EVENTGRID_TOPIC_ENDPOINT/KEY set on the console app; the webhook-emitter honest-gates to direct HTTPS until both are present'],
   ['platform/fiab/bicep/modules/admin-plane/gh-runner-job.bicep', 'standalone entrypoint: scale-to-zero self-hosted GitHub runner ACA Job, deployed out-of-band (az deployment -f gh-runner-job.bicep; its doc block shows the optional in-orchestrator wiring)'],
   ['platform/fiab/bicep/modules/shared/diagnostic-settings.bicep', 'shared scope:<resource> diagnostic-settings helper template (loom-law-monitoring runbook documents it); TODO wire callers per-resource'],
   ['platform/fiab/bicep/modules/admin-plane/mcp-catalog-app.bicep', 'opt-in MCP-catalog ACA app; deployed when the MCP catalog is enabled'],
   ['platform/fiab/bicep/modules/copilot/browser-tool.bicep', 'standalone entrypoint (AIF-18): scale-to-zero Playwright browser-automation ACA Job, deployed out-of-band (az deployment -f browser-tool.bicep) then LOOM_BROWSER_TOOL_JOB set to its resource id; the browser_automation agent tool honest-gates until wired'],
   ['platform/fiab/bicep/modules/landing-zone/databricks-scim-bootstrap.bicep', 'opt-in Databricks SCIM bootstrap; run out-of-band during DLZ setup'],
   ['platform/fiab/bicep/modules/landing-zone/workspace-identity.bicep', 'opt-in per-workspace identity module; deployed on demand by the workspace provisioner'],
+  ['platform/fiab/bicep/modules/integration/adt-instance.bicep', 'standalone entrypoint (FGC-12): STRICTLY opt-in Azure Digital Twins instance; the default Digital Twin Builder backend is ADX-native and needs none of this. Deployed out-of-band (az deployment -f adt-instance.bicep) then LOOM_ADT_ENDPOINT set to its hostName; the editor honest-gates until wired'],
 ]);
 
 const MODULE_DECL_RE = /module\s+[A-Za-z0-9_]+\s+'([^']+)'/g;

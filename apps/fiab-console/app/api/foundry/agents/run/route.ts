@@ -93,6 +93,9 @@ export async function POST(req: NextRequest) {
         agentId: agent, userOid, threadId: inspection.threadId, runId: inspection.runId,
         status: inspection.status, tier, question, answer: inspection.answer || '',
         steps: inspection.steps,
+        // AgentOps (AIF-13): persist the run's model + usage for the rollup.
+        model: model || undefined,
+        usage: inspection.usage,
       });
       if (inspection.status === 'completed' && inspection.answer) {
         await extractAndStoreMemory({

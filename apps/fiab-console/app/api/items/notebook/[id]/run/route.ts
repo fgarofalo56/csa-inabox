@@ -12,6 +12,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { assertOwner } from '@/lib/auth/workspace-guard';
+import { enforceAdmissionControl } from '@/lib/azure/capacity-guardrails';
+import { recordCostAttribution } from '@/lib/azure/cost-attribution';
+import { tenantScopeId } from '@/lib/auth/session';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
 import { substituteNotebookPlaceholders } from '@/lib/apps/notebook-placeholders';
 import type { WorkspaceItem } from '@/lib/types/workspace';
@@ -68,6 +71,17 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   const body = await req.json().catch(() => ({}));
   const compute: string = body?.compute || '';
   if (!compute) return err('compute required', 400);
+
+  // FGC-25 — capacity surge protection. A Spark/Databricks submit is a compute
+  // job; admit-control can reject it (429) when the capacity is over its
+  // utilization threshold OR the workspace is over its LCU/hour cap. The AML-CI
+  // path is a per-user single-node job (not a shared pool), so it is exempt.
+  const surgeEngine: 'spark' | 'databricks' | null =
+    compute.startsWith('spark:') ? 'spark' : compute.startsWith('databricks:') ? 'databricks' : null;
+  if (surgeEngine) {
+    const surge = await enforceAdmissionControl(s, { engine: surgeEngine, workspaceId });
+    if (surge) return surge;
+  }
 
   try {
     const nb = await loadNotebook((await ctx.params).id, workspaceId);
@@ -314,6 +328,14 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       }
       const runIdStr = `spark:${pool}:${sessionId}`;
 
+      // BR-COSTATTR — tag this Spark submit with who/where/how-much so it feeds
+      // the chargeback per-user drill-down + the FGC-25 per-workspace LCU cap.
+      void recordCostAttribution({
+        tenantId: tenantScopeId(s), userOid: s.claims.oid, userName: s.claims.upn,
+        engine: 'spark', workspaceId, itemId: nb.id, itemType: 'notebook', resourceId: pool,
+        domainId: (nb as any).domainId || (state as any).domainId,
+      });
+
       // Persist the (possibly new) session for reuse + the per-cell pending run.
       try {
         const items = await itemsContainer();
@@ -376,6 +398,12 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
         code: dbCode,
         lang: dbLang,
         jobName: `loom-${nb.displayName.replace(/[^a-zA-Z0-9-_]/g, '_').slice(0, 40)}${cellId ? '-' + cellId.slice(0, 6) : ''}`,
+      });
+      // BR-COSTATTR — tag this Databricks submit for the chargeback drill-down.
+      void recordCostAttribution({
+        tenantId: tenantScopeId(s), userOid: s.claims.oid, userName: s.claims.upn,
+        engine: 'databricks', workspaceId, itemId: nb.id, itemType: 'notebook', resourceId: clusterId,
+        domainId: (nb as any).domainId || (state as any).domainId,
       });
       return NextResponse.json({
         ok: true,

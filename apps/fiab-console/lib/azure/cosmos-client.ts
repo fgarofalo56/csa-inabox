@@ -127,6 +127,17 @@ let _pipelineHistory: Container | null = null;
 let _scorecardConfig: Container | null = null;
 let _reportSubscriptions: Container | null = null;
 let _reportDeliveryLog: Container | null = null;
+// BR-WEBHOOK — outbound webhook / event-subscription registry. One row per
+// registered endpoint (PK /tenantId → the tenant's hook list is a single
+// physical partition). The delivery log is append-only, PK /webhookId, capped
+// at the last 100 attempts per hook. Both created lazily so a fresh environment
+// needs no extra ARM/Bicep step beyond the account+database.
+let _webhookSubscriptions: Container | null = null;
+let _webhookDeliveries: Container | null = null;
+// W18 — marketplace listing analytics. One counter row per data product
+// (PK /dataProductId) holding real view/subscribe totals incremented on the
+// existing detail-read + access-request(subscribe) paths.
+let _dataProductAnalytics: Container | null = null;
 // F16 Azure Connections — per-workspace ADLS Gen2 + Log Analytics bindings.
 // Partitioned by /workspaceId so every per-workspace connection list hits a
 // single physical partition. Distinct from the tenant-scoped 'connections'
@@ -210,6 +221,20 @@ let _agentMemory: Container | null = null;
 // createdBy/revoked. Created lazily (createIfNotExists) here AND ARM-provisioned
 // in cosmos.bicep's loomContainers — the lazy call is the hotfix fallback.
 let _loomPatTokens: Container | null = null;
+// FGC-25 — Capacity surge protection (admission control). One tenant-scoped doc
+// (id = tenantId, PK /tenantId) holding the surge-protection policy: master
+// switch, capacity-level rejection threshold %, per-engine overrides, and the
+// per-workspace LCU/hour cap. Single-partition point-read per tenant. Ships
+// default-ON (a cost-protection control, not an enablement gate). Created lazily
+// (createIfNotExists) here AND ARM-provisioned in cosmos.bicep's loomContainers.
+let _capacityGuardrails: Container | null = null;
+// BR-COSTATTR — per-execution cost attribution. Append-only, one row per job/
+// query submit (Spark / Databricks / ADX / AOAI), PK /tenantId so every
+// per-tenant chargeback drill-down (per-user / per-domain / per-workspace) hits a
+// single physical partition. TTL-enabled (default 90d) so the ledger self-evicts
+// and never grows unbounded. Feeds FGC-28's chargeback page + the FGC-25
+// per-workspace LCU/hour cap. Created lazily here AND ARM-provisioned in bicep.
+let _costAttribution: Container | null = null;
 let _ensured = false;
 
 /**
@@ -728,6 +753,14 @@ async function ensure() {
   // Logic App. No Microsoft Fabric dependency.
   _reportSubscriptions = await mk('report-subscriptions', '/reportId');
   _reportDeliveryLog = await mk('report-delivery-log', '/subscriptionId');
+  // BR-WEBHOOK — webhook registrations (PK /tenantId) + append-only delivery
+  // log (PK /webhookId, capped at 100/hook). Azure-native default: direct HTTPS
+  // POST with an HMAC-SHA256 signature; Event Grid is an opt-in alternative when
+  // LOOM_EVENTGRID_TOPIC_ENDPOINT is set. No Fabric dependency.
+  _webhookSubscriptions = await mk('webhook-subscriptions', '/tenantId');
+  _webhookDeliveries = await mk('webhook-deliveries', '/webhookId');
+  // W18 — marketplace listing analytics counters (PK /dataProductId).
+  _dataProductAnalytics = await mk('data-product-analytics', '/dataProductId');
   // F16 Azure Connections — per-workspace ADLS Gen2 (dataflow staging) +
   // Log Analytics (query-log export) bindings. PK /workspaceId so every
   // per-workspace connection list hits a single physical partition. Created
@@ -790,6 +823,18 @@ async function ensure() {
   // token id in the bearer header (the hot path); the management lists are the
   // infrequent surface and filter by tenantId/createdByOid across partitions.
   _loomPatTokens = await mk('loom-pat-tokens', '/id');
+  // FGC-25 — Capacity surge protection policy. One doc per tenant (id=tenantId),
+  // PK /tenantId → single-partition point-read per tenant.
+  _capacityGuardrails = await mk('capacity-guardrails', '/tenantId');
+  // BR-COSTATTR — per-execution cost attribution ledger. Append-only, PK
+  // /tenantId, TTL-enabled (each row carries its own `ttl`) so the ledger
+  // self-evicts. Distinct createIfNotExists (not `mk`) to set defaultTtl.
+  const { container: costAttr } = await database.containers.createIfNotExists({
+    id: 'cost-attribution',
+    partitionKey: { paths: ['/tenantId'] },
+    defaultTtl: -1, // TTL enabled; each row carries its own `ttl` (default 90d)
+  });
+  _costAttribution = costAttr;
   _ensured = true;
 }
 
@@ -832,6 +877,12 @@ export async function scorecardConfigContainer(): Promise<Container> { await ens
 export async function reportSubscriptionsContainer(): Promise<Container> { await ensure(); return _reportSubscriptions!; }
 /** Report delivery log (append-only delivery history) — PK /subscriptionId. */
 export async function reportDeliveryLogContainer(): Promise<Container> { await ensure(); return _reportDeliveryLog!; }
+/** BR-WEBHOOK — webhook registrations, PK /tenantId. */
+export async function webhookSubscriptionsContainer(): Promise<Container> { await ensure(); return _webhookSubscriptions!; }
+/** BR-WEBHOOK — append-only webhook delivery log (last 100/hook), PK /webhookId. */
+export async function webhookDeliveriesContainer(): Promise<Container> { await ensure(); return _webhookDeliveries!; }
+/** W18 — marketplace listing analytics counters, PK /dataProductId. */
+export async function dataProductAnalyticsContainer(): Promise<Container> { await ensure(); return _dataProductAnalytics!; }
 /** F16 Azure Connections — per-workspace ADLS Gen2 + Log Analytics bindings (PK /workspaceId). */
 export async function azureConnectionsContainer(): Promise<Container> { await ensure(); return _azureConnections!; }
 /** Task flows (F11) — visual step-sequence canvases, PK /workspaceId. */
@@ -858,6 +909,10 @@ export async function itemVersionsContainer(): Promise<Container> { await ensure
 export async function agentMemoryContainer(): Promise<Container> { await ensure(); return _agentMemory!; }
 /** Scoped API tokens (PAT, BR-PAT) — PK /id; stores a SHA-256 hash of the secret only. */
 export async function loomPatTokensContainer(): Promise<Container> { await ensure(); return _loomPatTokens!; }
+/** FGC-25 — Capacity surge-protection policy (one doc per tenant), PK /tenantId. */
+export async function capacityGuardrailsContainer(): Promise<Container> { await ensure(); return _capacityGuardrails!; }
+/** BR-COSTATTR — per-execution cost attribution ledger (append-only, TTL), PK /tenantId. */
+export async function costAttributionContainer(): Promise<Container> { await ensure(); return _costAttribution!; }
 
 // Foundation admin containers (shared cloud-endpoints resolver task).
 /** Admin Workspace Catalog — one row per Loom-managed workspace, PK /tenantId. */
@@ -1015,7 +1070,12 @@ const KNOWN_CONTAINER_IDS = [
   'rate-limits',
   'item-versions',
   'loom-agent-memory',
+  'report-subscriptions', 'report-delivery-log',
+  'webhook-subscriptions', 'webhook-deliveries',
+  'data-product-analytics',
   'loom-pat-tokens',
+  'capacity-guardrails',
+  'cost-attribution',
 ];
 
 /** List all Loom containers with their current throughput shape.

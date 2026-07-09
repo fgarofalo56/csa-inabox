@@ -215,11 +215,11 @@ The marquee hosted-app gap and the API-token foundation the whole developer-plat
 The P1 admin/ALM cluster — every item is release-relevant.
 
 - **FGC-20** Azure SQL Database PITR / restore points. `[FGC, P1, M]`
-- **FGC-24** Variable-library-aware deployment-pipeline promotion. `[FGC, P1, M]`
+- **FGC-24** Variable-library-aware deployment-pipeline promotion. `[FGC, P1, M]` ✅ **DONE**
 - **FGC-25** Capacity surge protection (admission control). `[FGC, P1, M]`
 - **FGC-28** Chargeback report page. `[FGC, P1, M]`
 - **FGC-30** External (cross-tenant) data sharing (Entra B2B + scoped ADLS grant). `[FGC, P1, L]`
-- **BR-APPROVAL** Approval-gated deployment-pipeline stage promotion (required reviewers). `[BREADTH, P1, S]`
+- **BR-APPROVAL** Approval-gated deployment-pipeline stage promotion (required reviewers). `[BREADTH, P1, S]` ✅ **DONE**
 - **BR-COSTATTR** Cost-per-query / per-user cost attribution depth. `[BREADTH, P1, M]`
 
 **Operator action:** Cost Management Reader for Console UAMI (FGC-25/28); scoped ADLS grant + Entra B2B guest config (FGC-30).

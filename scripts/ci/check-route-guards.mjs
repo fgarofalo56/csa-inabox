@@ -153,6 +153,12 @@ const ALLOWLIST = new Map([
   ['apps/fiab-console/app/api/external-shares/received/route.ts', 'recipient self-endpoint: returns only shares addressed to the caller\'s own email'],
   ['apps/fiab-console/app/api/external-shares/[id]/route.ts', 'GET/DELETE verify share.tenantId === tenantScopeId(session) before returning/revoking'],
   ['apps/fiab-console/app/api/external-shares/[id]/accept/route.ts', 'accept verifies caller email === share.targetEmail (only the addressed guest may accept)'],
+  // Loom App Runtime (DBX-1) type-level config: returns the fixed runtime-template
+  // catalog (static) + the deployment-wide Container Apps/ACR infra status. No
+  // per-tenant Cosmos resource — auth = signed-in + deployment RBAC. The per-item
+  // routes (loom-app-runtime/[id]/**) thread resolveItemAccessByOid and pass on
+  // their own owner-check.
+  ['apps/fiab-console/app/api/items/loom-app-runtime/config/route.ts', 'static runtime-template catalog + deployment-wide Loom Apps infra status; no per-tenant Cosmos data'],
 ]);
 
 // ── Specific-per-item-TYPE routes over a SHARED Azure backend ────────────────

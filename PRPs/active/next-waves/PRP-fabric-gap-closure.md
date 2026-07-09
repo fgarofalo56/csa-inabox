@@ -82,7 +82,7 @@ effort isn't spent re-implementing shipped features.
 | FGC-21 | Standalone DAX query view | Power BI | PARTIAL | P2 | S |
 | FGC-22 | Copilot autonomous model-health scan + apply-fix | Power BI | PARTIAL | P2 | M |
 | FGC-23 | Mirrored-database native CDC copy-job | Databases | PARTIAL | P3 | M |
-| FGC-24 | Variable-library-aware deployment-pipeline promotion | Platform/ALM | PARTIAL | P1 | M |
+| FGC-24 | Variable-library-aware deployment-pipeline promotion | Platform/ALM | DONE (Wave 8) | P1 | M |
 | FGC-25 | Capacity surge protection (admission control) | Admin | MISSING | P1 | M |
 | FGC-26 | Capacity overage toggle | Admin | MISSING | P2 | S |
 | FGC-27 | Capacity health + timepoint summary/detail | Admin | MISSING | P2 | M |

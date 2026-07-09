@@ -96,6 +96,7 @@ const ALLOWLIST = new Set([
   'LOOM_MULTIUSER_ACL',             // opt-out kill switch for the multi-user ACL fallback (default on in code; rel-T11)
   'LOOM_SCHEDULER_EMAIL_WEBHOOK',   // opt-in email relay (ACS/Logic App/SMTP) for scheduler failure alerts (rel-T81); unset = alerts land in the Loom inbox + optional webhook only
   'LOOM_ITEM_VERSION_CAP',          // opt-in tuning knob for the per-item version-history retention cap (W6); unset default = 50 in code (lib/versions/item-version-store.ts)
+  'LOOM_ADT_ENDPOINT',              // opt-in Azure Digital Twins endpoint (FGC-12); default twin backend is ADX-native — deploy platform/fiab/bicep/modules/integration/adt-instance.bicep to enable
   // SVC-1/SVC-8 — AI-enrichment cognitive endpoints. Independent single-kind
   // Cognitive Services accounts provisioned by deploy-planner/cognitive-account.bicep
   // and set per-deployment via /admin/env-config; NOT emitted by admin-plane
@@ -225,6 +226,13 @@ const ALLOWLIST = new Set([
   // LOOM_BROWSER_TOOL_ENDPOINT at a synchronous HTTP Playwright runner.
   'LOOM_BROWSER_TOOL_JOB',          // opt-in Playwright ACA-job resource id (default off — honest gate)
   'LOOM_BROWSER_TOOL_ENDPOINT',     // opt-in synchronous Playwright HTTP runner (default off — honest gate)
+  // BR-WEBHOOK — outbound webhook delivery. DIRECT HTTPS + HMAC is the zero-infra
+  // DEFAULT (default-ON); Event Grid is the opt-in ALTERNATIVE transport. The
+  // topic endpoint is unset unless the operator deploys the standalone
+  // platform/fiab/bicep/modules/admin-plane/event-grid-webhooks.bicep module
+  // (NOT wired into admin-plane/main.bicep — that file is at the 256-param
+  // ceiling). LOOM_EVENTGRID_TOPIC_KEY is a secret (matched by the _KEY pattern).
+  'LOOM_EVENTGRID_TOPIC_ENDPOINT',  // opt-in Event Grid custom-topic endpoint (default off — direct HTTPS delivery is used)
 ]);
 
 // ── Filesystem helpers (no deps) ──
