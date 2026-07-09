@@ -2,9 +2,10 @@
  * Foundry hub connections — full CRUD (AIF-9).
  *   GET    /api/foundry/connections            → list
  *   POST   /api/foundry/connections            → create (typed body)
+ *   PATCH  /api/foundry/connections            → edit (create-or-update PUT; 404-guarded)
  *   DELETE /api/foundry/connections?name=<n>   → delete
  *
- * Create/delete write against the workspace connections REST via the Console
+ * Create/edit/delete write against the workspace connections REST via the Console
  * UAMI. Secrets are never accepted raw — key-based connections must reference a
  * Key Vault secret identifier (buildConnectionBody rejects a raw secret).
  */
@@ -13,6 +14,7 @@ import { getSession } from '@/lib/auth/session';
 import { listConnections, FoundryError } from '@/lib/azure/foundry-client';
 import {
   createConnection,
+  updateConnection,
   deleteConnection,
   RawSecretRejectedError,
   type ConnectionCategory,
@@ -55,6 +57,46 @@ export async function POST(req: Request) {
   }
   try {
     const connection = await createConnection({
+      name,
+      category,
+      target,
+      authMode,
+      keyVaultSecretUri: payload?.keyVaultSecretUri,
+      customKeyVaultRefs: payload?.customKeyVaultRefs,
+      isSharedToAll: payload?.isSharedToAll,
+      metadata: payload?.metadata,
+    });
+    return NextResponse.json({ ok: true, connection });
+  } catch (e: any) {
+    if (e instanceof RawSecretRejectedError) {
+      return NextResponse.json({ ok: false, error: e.message, code: e.code }, { status: 400 });
+    }
+    const status = e instanceof FoundryError ? e.status : 502;
+    return NextResponse.json({ ok: false, error: e?.message || String(e), body: e?.body }, { status });
+  }
+}
+
+export async function PATCH(req: Request) {
+  const session = getSession();
+  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  let payload: any;
+  try {
+    payload = await req.json();
+  } catch {
+    return NextResponse.json({ ok: false, error: 'invalid JSON body' }, { status: 400 });
+  }
+  const name = String(payload?.name || '').trim();
+  const category = payload?.category as ConnectionCategory;
+  const target = String(payload?.target || '').trim();
+  const authMode = (payload?.authMode as ConnectionAuthMode) || 'AAD';
+  if (!name || !category || !target) {
+    return NextResponse.json(
+      { ok: false, error: 'name, category, and target are required' },
+      { status: 400 },
+    );
+  }
+  try {
+    const connection = await updateConnection({
       name,
       category,
       target,

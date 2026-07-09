@@ -168,6 +168,38 @@ export function parseExecutionHistory(status: any): {
   };
 }
 
+// ----------------------------------------------------------------------------
+// Resync (POST /indexers/{name}/resync, preview) — partial reindex of only the
+// selected options. Currently the sole supported option is `permissions`
+// (re-ingest ADLS Gen2 ACL / RBAC scope whose last-modified time didn't change,
+// so ordinary change-tracking misses it). After a resync call the indexer must
+// be RUN to apply it. Grounded in Learn:
+//   https://learn.microsoft.com/azure/search/search-howto-run-reset-indexers#how-to-resync-indexers-preview
+// ----------------------------------------------------------------------------
+
+/** The resync options AI Search currently supports (preview). */
+export const RESYNC_OPTIONS = ['permissions'] as const;
+export type ResyncOption = (typeof RESYNC_OPTIONS)[number];
+
+/** Human labels for the resync-options checkboxes. */
+export const RESYNC_OPTION_LABELS: Record<string, string> = {
+  permissions: 'Permissions (ADLS Gen2 ACL / RBAC scope)',
+};
+
+/**
+ * Normalize a user-selected resync-options list to the wire array: de-duplicate,
+ * trim, and drop anything outside the supported set. An empty/invalid selection
+ * falls back to `['permissions']` (the only supported option today) so the
+ * resync call is always well-formed. Kept server-free + unit-testable.
+ */
+export function normalizeResyncOptions(sel: string[] | undefined): string[] {
+  const allowed = new Set<string>(RESYNC_OPTIONS as readonly string[]);
+  const out = Array.from(
+    new Set((sel || []).map((s) => String(s).trim()).filter(Boolean)),
+  ).filter((s) => allowed.has(s));
+  return out.length ? out : ['permissions'];
+}
+
 /** Format an ISO datetime range into a short "duration" string for the history grid. */
 export function runDuration(run: Pick<IndexerRun, 'startTime' | 'endTime'>): string {
   if (!run.startTime) return '—';

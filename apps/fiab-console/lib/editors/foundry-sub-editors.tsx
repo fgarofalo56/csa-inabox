@@ -60,6 +60,7 @@ import {
   parseVectorSearchSection, indexHasVectorField,
   EMBEDDING_MODELS, defaultAzureOpenAIVectorizer,
 } from '@/lib/azure/search-field-shapes';
+import { validateVectorizerConsistency, type VectorizerIssue } from '@/lib/azure/vectorizer-consistency';
 import { PromptFlowBuilder } from '@/lib/prompt-flow/flow-builder';
 import {
   type FlowDag, parseFlowDag, serializeFlowDag, starterFlow, emptyFlow,
@@ -1524,6 +1525,14 @@ function VectorSearchDesigner({
   const algoNames = useMemo(() => algorithms.map((a) => a.name).filter(Boolean), [algorithms]);
   const vecNames = useMemo(() => vectorizers.map((v) => v.name).filter(Boolean), [vectorizers]);
 
+  // AIF-2 — pre-flight the vectorizer/field consistency (dimension mismatch +
+  // dangling refs) against the live index fields so the classic
+  // integrated-vectorization footgun surfaces here, not as an opaque PUT 400.
+  const consistencyIssues = useMemo<VectorizerIssue[]>(() => {
+    const fields = Array.isArray(idx?.fields) ? idx.fields.map(apiFieldToRow) : [];
+    return validateVectorizerConsistency({ fields, profiles, vectorizers, algorithms });
+  }, [idx, profiles, vectorizers, algorithms]);
+
   const patchAlgo = (i: number, patch: Partial<VectorAlgorithm>) => {
     setAlgorithms((as) => as.map((a, n) => (n === i ? { ...a, ...patch } : a))); setDirty(true);
   };
@@ -1717,6 +1726,22 @@ function VectorSearchDesigner({
           </TableBody>
         </Table>
       </div>
+
+      {/* AIF-2 consistency pre-flight — dimension mismatch + dangling refs. */}
+      {consistencyIssues.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, marginTop: tokens.spacingVerticalS }}>
+          {consistencyIssues.map((issue, i) => (
+            <MessageBar key={`${issue.code}-${i}`} intent={issue.level === 'error' ? 'error' : 'warning'}>
+              <MessageBarBody>
+                <MessageBarTitle>
+                  {issue.level === 'error' ? 'Vectorization issue' : 'Vectorization warning'}
+                </MessageBarTitle>
+                {' '}{issue.message}
+              </MessageBarBody>
+            </MessageBar>
+          ))}
+        </div>
+      )}
 
       <div className={s.toolbar} style={{ marginTop: tokens.spacingVerticalS }}>
         <Button appearance="primary" disabled={saving || !dirty} onClick={save}>{saving ? 'Saving…' : 'Save vector config'}</Button>

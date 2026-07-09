@@ -11,6 +11,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { denyIfNoDlzAccess } from '@/lib/auth/dlz-gate';
 import { queryServiceMetrics, SearchAdminError } from '@/lib/azure/aisearch-admin';
 import { readSearchConfig, SearchNotConfiguredError } from '@/lib/azure/aisearch-client';
 
@@ -20,6 +21,8 @@ export const dynamic = 'force-dynamic';
 export async function GET(req: NextRequest) {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  const denied = await denyIfNoDlzAccess(session, 'monitoring');
+  if (denied) return denied;
   const timespan = req.nextUrl.searchParams.get('timespan') || 'PT6H';
   const interval = req.nextUrl.searchParams.get('interval') || 'PT15M';
   try {

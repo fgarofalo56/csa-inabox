@@ -15,10 +15,12 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { denyIfNoDlzAccess } from '@/lib/auth/dlz-gate';
 import {
   getServiceProperties, listAdminKeys, listQueryKeys,
   regenerateAdminKey, createQueryKey, deleteQueryKey,
   setPublicNetworkAccess, setSemanticTier, getServiceStatistics,
+  scaleService,
   SearchAdminError,
 } from '@/lib/azure/aisearch-admin';
 import { readSearchConfig, SearchNotConfiguredError } from '@/lib/azure/aisearch-client';
@@ -42,6 +44,12 @@ function fail(e: any) {
 export async function GET() {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  // Service administration (keys / scale / networking / semantic tier) is
+  // tenant-admin / domain-admin only — the same DLZ-pane gate the sibling
+  // /api/admin/scaling/* routes use. A getSession-only gate would let any
+  // authenticated user read admin keys + rescale the shared service.
+  const denied = await denyIfNoDlzAccess(session, 'scaling');
+  if (denied) return denied;
   try {
     const cfg = readSearchConfig();
     const [service, adminKeys, queryKeys, stats] = await Promise.all([
@@ -57,6 +65,8 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  const denied = await denyIfNoDlzAccess(session, 'scaling');
+  if (denied) return denied;
   const body = await req.json().catch(() => ({}));
   const action = body?.action;
   try {
@@ -88,6 +98,13 @@ export async function POST(req: NextRequest) {
         const tier = body?.tier;
         if (!['disabled', 'free', 'standard'].includes(tier)) return NextResponse.json({ ok: false, error: "tier must be 'disabled', 'free' or 'standard'" }, { status: 400 });
         const service = await setSemanticTier(tier, cfg);
+        return NextResponse.json({ ok: true, action, service });
+      }
+      case 'scale': {
+        // Replica/partition scaling only — the SKU tier is immutable in place.
+        const replicaCount = typeof body?.replicaCount === 'number' ? body.replicaCount : undefined;
+        const partitionCount = typeof body?.partitionCount === 'number' ? body.partitionCount : undefined;
+        const service = await scaleService({ replicaCount, partitionCount }, cfg);
         return NextResponse.json({ ok: true, action, service });
       }
       default:
