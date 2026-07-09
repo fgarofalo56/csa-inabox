@@ -1,5 +1,12 @@
 # CSA Loom — Next-Waves Execution Plan (WAVES.md)
 
+> **➡️ CANONICAL SEQUENCE: [`MASTER-ROLLOUT.md`](./MASTER-ROLLOUT.md).** That document is the single
+> authoritative, dependency-correct phased plan that folds all six numbering schemes in this file
+> (numeric 1–20, fractional 6.5, U0–U13, PSR-A/B, H1–H3) into 13 ordered phases and reconciles the stale
+> running totals. **`WAVES.md` remains the detailed per-wave spec; when the two disagree on ORDER,
+> MASTER-ROLLOUT wins.** Read MASTER-ROLLOUT first for what-to-build-next; use the sections below for the
+> item-level detail.
+
 > **Date:** 2026-07-08 · **Status:** proposed
 > **Scope:** wave-by-wave build plan across all five next-wave PRPs plus the docs-drift
 > correction backlog and the highest-value net-new breadth findings.
