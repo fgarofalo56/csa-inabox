@@ -23,8 +23,8 @@ import {
   Database20Regular, Flowchart20Regular, BranchFork20Regular,
 } from '@fluentui/react-icons';
 import {
-  CanvasNode, CATEGORY_ACCENT, portStyle,
-  type CanvasNodeCategory, type CanvasVisual,
+  CanvasNode, CATEGORY_ACCENT, portStyle, standardNodeActions,
+  type CanvasNodeCategory, type CanvasNodeStatus, type CanvasVisual,
 } from '@/lib/components/canvas/canvas-node-kit';
 
 export type NodeRole = 'source' | 'transform' | 'sink';
@@ -34,6 +34,14 @@ export interface EsNodeData {
   kind: string;
   role: NodeRole;
   subtitle?: string;
+  /** Optional run/preview state → header StatusChip (default 'idle'). */
+  status?: CanvasNodeStatus;
+  /** Inline live-status detail ('Loading data…') shown under the header. */
+  statusDetail?: string;
+  /** Inline node action-bar callbacks (view-JSON / clone / delete). Optional. */
+  onViewJson?: () => void;
+  onClone?: () => void;
+  onDelete?: () => void;
   [key: string]: unknown;
 }
 
@@ -70,6 +78,12 @@ function EventstreamFlowNodeImpl({ data, selected }: NodeProps) {
   const d = data as EsNodeData;
   const visual = eventstreamVisual(d.role, d.kind);
 
+  const actionBar = standardNodeActions({
+    onViewJson: d.onViewJson,
+    onClone: d.onClone,
+    onDelete: d.onDelete,
+  });
+
   return (
     <CanvasNode
       width={NODE_WIDTH}
@@ -77,6 +91,9 @@ function EventstreamFlowNodeImpl({ data, selected }: NodeProps) {
       visual={visual}
       selected={selected}
       typeLabel={d.kind}
+      status={d.status}
+      statusDetail={d.statusDetail}
+      actionBar={actionBar.length > 0 ? actionBar : undefined}
       description={d.subtitle}
       rootProps={{
         'data-es-role': d.role,

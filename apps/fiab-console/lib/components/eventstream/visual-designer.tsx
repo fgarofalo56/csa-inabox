@@ -28,7 +28,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
 } from 'react';
 import {
-  ReactFlow, ReactFlowProvider, Background, BackgroundVariant, Controls, MiniMap, Panel,
+  ReactFlow, ReactFlowProvider, Background, BackgroundVariant, MiniMap, Panel,
   useReactFlow, useNodesState,
   type Node, type Edge, type NodeChange, type NodeTypes,
 } from '@xyflow/react';
@@ -64,6 +64,13 @@ import {
   Settings20Regular,
 } from '@fluentui/react-icons';
 import { EventstreamFlowNode, type EsNodeData, type NodeRole } from './eventstream-flow-node';
+import {
+  GhostNextStepNode, CanvasRightRail, ghostAnchorPosition, ghostEdgeId,
+  GHOST_NODE_ID, type GhostNodeData, type AnchorNode,
+} from '@/lib/components/canvas/canvas-node-kit';
+import {
+  ArrowSwap20Regular, DatabaseArrowRight20Regular,
+} from '@fluentui/react-icons';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import {
   compileToSaql,
@@ -330,6 +337,21 @@ export function VisualDesigner({ config, onChange, itemId }: VisualDesignerProps
     setSelected(null);
   }, [selected, sources, transforms, sinks, commit]);
 
+  // Delete a specific node (from its inline action bar), not just the selected.
+  const deleteAt = useCallback((type: 'source' | 'transform' | 'sink', idx: number) => {
+    if (type === 'source') {
+      const updated = sources.filter((_, i) => i !== idx);
+      commit({ sources: updated, source: updated[0] });
+    } else if (type === 'transform') {
+      const updated = transforms.filter((_, i) => i !== idx);
+      commit({ transforms: updated });
+    } else {
+      const updated = sinks.filter((_, i) => i !== idx);
+      commit({ sinks: updated, sink: updated[0] });
+    }
+    setSelected(null);
+  }, [sources, transforms, sinks, commit]);
+
   // ============================================================
   // Render
   // ============================================================
@@ -345,6 +367,7 @@ export function VisualDesigner({ config, onChange, itemId }: VisualDesignerProps
         onAddSource={addSource}
         onAddTransform={addTransform}
         onAddSink={addSink}
+        onDeleteNode={deleteAt}
       />
 
       <aside className={s.inspector} aria-label="Node properties">
@@ -391,7 +414,7 @@ export function VisualDesigner({ config, onChange, itemId }: VisualDesignerProps
 // Fabric's real Eventstream editor (source → operator → destination).
 // ============================================================
 
-const esNodeTypes: NodeTypes = { es: EventstreamFlowNode };
+const esNodeTypes: NodeTypes = { es: EventstreamFlowNode, ghost: GhostNextStepNode };
 
 interface XY { x: number; y: number }
 const ES_NODE_W = 184;
@@ -416,16 +439,19 @@ interface EventstreamCanvasProps {
   onAddSource: () => void;
   onAddTransform: () => void;
   onAddSink: () => void;
+  onDeleteNode: (type: 'source' | 'transform' | 'sink', idx: number) => void;
 }
 
 function EventstreamCanvasInner({
   sources, transforms, sinks, selected, onSelect,
-  onAddSource, onAddTransform, onAddSink,
+  onAddSource, onAddTransform, onAddSink, onDeleteNode,
 }: EventstreamCanvasProps) {
   const s = useStyles();
   const rf = useReactFlow();
   const positionsRef = useRef<Map<string, XY>>(new Map());
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
+  const [zoom, setZoom] = useState(1);
+  const [railCollapsed, setRailCollapsed] = useState(false);
 
   const total = sources.length + transforms.length + sinks.length;
 
@@ -439,17 +465,35 @@ function EventstreamCanvasInner({
       list.push({ id, type: 'es', position: p, data: data as unknown as Record<string, unknown>, selected: isSel });
     };
     sources.forEach((n, i) => push(`source-${i}`,
-      { label: n.name, kind: n.kind, role: 'source' as NodeRole, subtitle: n.namespace || n.iotHub },
+      { label: n.name, kind: n.kind, role: 'source' as NodeRole, subtitle: n.namespace || n.iotHub, onDelete: () => onDeleteNode('source', i) },
       selected?.type === 'source' && selected.idx === i));
     transforms.forEach((n, i) => push(`transform-${i}`,
-      { label: n.name, kind: n.kind, role: 'transform' as NodeRole, subtitle: n.expression ? (n.expression.length > 28 ? n.expression.slice(0, 28) + '…' : n.expression) : undefined },
+      { label: n.name, kind: n.kind, role: 'transform' as NodeRole, subtitle: n.expression ? (n.expression.length > 28 ? n.expression.slice(0, 28) + '…' : n.expression) : undefined, onDelete: () => onDeleteNode('transform', i) },
       selected?.type === 'transform' && selected.idx === i));
     sinks.forEach((n, i) => push(`sink-${i}`,
-      { label: n.name, kind: n.kind, role: 'sink' as NodeRole, subtitle: n.table || n.lakehouseId },
+      { label: n.name, kind: n.kind, role: 'sink' as NodeRole, subtitle: n.table || n.lakehouseId, onDelete: () => onDeleteNode('sink', i) },
       selected?.type === 'sink' && selected.idx === i));
+
+    // Ghost next-step node — trails the graph teaching the flow (Fabric scaffolds
+    // the next action). Menu offers the same grow actions as the palette.
+    if (list.length > 0) {
+      const anchor = ghostAnchorPosition(list as AnchorNode[], { gapX: 60, nodeWidth: ES_NODE_W });
+      if (anchor) {
+        const ghostData: GhostNodeData = {
+          label: sinks.length === 0 ? 'Add a destination' : 'Add next step',
+          hint: 'Transform events or route to a sink',
+          withTarget: true,
+          options: [
+            { key: 'transform', label: 'Transform events', icon: <ArrowSwap20Regular />, onSelect: onAddTransform },
+            { key: 'destination', label: 'Add destination', icon: <DatabaseArrowRight20Regular />, onSelect: onAddSink },
+          ],
+        };
+        list.push({ id: GHOST_NODE_ID, type: 'ghost', position: anchor, data: ghostData as unknown as Record<string, unknown>, selectable: false, draggable: false });
+      }
+    }
     positionsRef.current = next;
     setNodes(list);
-  }, [sources, transforms, sinks, selected, setNodes]);
+  }, [sources, transforms, sinks, selected, setNodes, onDeleteNode, onAddTransform, onAddSink]);
 
   useEffect(() => { syncNodes(); }, [syncNodes]);
 
@@ -470,6 +514,21 @@ function EventstreamCanvasInner({
       sinks.forEach((_, j) => mk(`transform-${transforms.length - 1}`, `sink-${j}`));
     } else {
       sources.forEach((_, i) => sinks.forEach((_, j) => mk(`source-${i}`, `sink-${j}`)));
+    }
+    // Dashed edge from the trailing real node into the ghost next-step node.
+    const trailing = sinks.length
+      ? `sink-${sinks.length - 1}`
+      : transforms.length
+        ? `transform-${transforms.length - 1}`
+        : sources.length
+          ? `source-${sources.length - 1}`
+          : null;
+    if (trailing) {
+      out.push({
+        id: ghostEdgeId(trailing), source: trailing, target: GHOST_NODE_ID, type: 'default',
+        style: { stroke: tokens.colorNeutralStroke1, strokeWidth: 1.5, strokeDasharray: '5 4', opacity: 0.7 },
+        selectable: false,
+      });
     }
     return out;
   }, [sources, transforms, sinks]);
@@ -506,10 +565,23 @@ function EventstreamCanvasInner({
           proOptions={{ hideAttribution: true }}
           nodesConnectable={false}
           deleteKeyCode={null}
+          onMove={(_, vp) => setZoom(vp.zoom)}
         >
           <Background variant={BackgroundVariant.Dots} gap={20} size={1} color={tokens.colorNeutralStroke2} />
-          <Controls showInteractive={false} />
           <MiniMap pannable zoomable style={{ backgroundColor: tokens.colorNeutralBackground1 }} />
+          <Panel position="bottom-right">
+            <CanvasRightRail
+              zoom={zoom}
+              minZoom={0.3}
+              maxZoom={2}
+              onZoomChange={(z) => rf.setViewport({ ...rf.getViewport(), zoom: z }, { duration: 120 })}
+              onZoomIn={() => rf.zoomIn({ duration: 120 })}
+              onZoomOut={() => rf.zoomOut({ duration: 120 })}
+              onFit={() => rf.fitView({ padding: 0.2, duration: 200 })}
+              collapsed={railCollapsed}
+              onToggleCollapse={() => setRailCollapsed((v) => !v)}
+            />
+          </Panel>
           <Panel position="top-left">
             <div className={s.addButtonsPanel} data-palette="eventstream" role="toolbar" aria-label="Node palette">
               <Button size="small" icon={<Add20Regular />} onClick={onAddSource} data-palette-item="source">Add source</Button>
