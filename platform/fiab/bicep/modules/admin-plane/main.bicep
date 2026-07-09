@@ -4397,7 +4397,11 @@ resource scriptRunnerAcrPull 'Microsoft.Authorization/roleAssignments@2022-04-01
 // idempotent; gated on !skipRoleGrants + the Container Apps app-deploy boundary.
 resource loomAppsAcrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (containerPlatform == 'containerApps' && deployAppsEnabled && !skipRoleGrants) {
   scope: acrForScriptRunner
-  name: guid(acrForScriptRunner.id, identity.outputs.uamiMcpPrincipalId, 'loom-apps-acrpull')
+  // The name seed must be calculable at deployment START (BCP120), so it uses a
+  // constant discriminator rather than identity.outputs.uamiMcpPrincipalId (a
+  // runtime module output). guid(acr.id, constant) is still deterministic +
+  // idempotent; the runtime principalId is fine in properties (not the name).
+  name: guid(acrForScriptRunner.id, 'uami-loom-mcp', 'loom-apps-acrpull')
   properties: {
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d')
     principalId: identity.outputs.uamiMcpPrincipalId

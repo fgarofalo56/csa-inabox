@@ -34,8 +34,14 @@ import { ItemEditorChrome } from './item-editor-chrome';
 import { NewItemCreateGate } from './new-item-gate';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { clientFetch } from '@/lib/client-fetch';
-import type { EditorProps } from './registry';
+import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
+
+// Local props (item + id) — declared here rather than imported from ./registry
+// so the editor has NO import edge back to the registry barrel. registry.ts
+// lazy-loads this module via dynamic import(); pulling a type from registry
+// would form a madge-detected cycle (guard:circular). Shape matches EditorProps.
+interface EditorProps { item: FabricItemType; id: string }
 
 const useStyles = makeStyles({
   pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minWidth: 0 },

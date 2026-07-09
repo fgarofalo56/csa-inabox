@@ -276,7 +276,10 @@ export async function buildApp(opts: BuildAppOptions): Promise<BuildAppResult> {
         400,
       );
     }
-    if (git.includes('@') || /:\/\/[^/]*:[^/]*@/.test(git)) {
+    // Any '@' means embedded credentials (user:pass@host) or an unsupported
+    // scp-style ref — reject outright. A plain includes() check covers every
+    // credential form without a backtracking regex (js/polynomial-redos).
+    if (git.includes('@')) {
       throw new LoomAppsError('Credentials in the git URL are not accepted (private-repo auth is a tracked follow-up).', 400);
     }
     source = 'git';
