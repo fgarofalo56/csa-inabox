@@ -32,6 +32,7 @@ import {
 } from '@fluentui/react-icons';
 import { useCanvasHistory } from '@/lib/components/canvas/use-canvas-history';
 import { DataPreviewDock } from '@/lib/components/eventstream/data-preview-dock';
+import { CopilotBuilderPane } from '@/lib/components/shared/copilot-builder-pane';
 import { TRANSFORM_MENU, resolveTransformMenuItem } from '@/lib/components/eventstream/transform-menu';
 import { ItemEditorChrome } from '../item-editor-chrome';
 import { NewItemCreateGate } from '../new-item-gate';
@@ -312,7 +313,7 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
   const [parseErr, setParseErr] = useState<string | null>(null);
   const [saveErr, setSaveErr] = useState<string | null>(null);
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<'designer' | 'operators' | 'sql' | 'definition'>('designer');
+  const [activeTab, setActiveTab] = useState<'designer' | 'operators' | 'sql' | 'definition' | 'copilot'>('designer');
   // Undo/redo over the topology JSON (Wave-2 history primitive). Every genuine
   // user mutation flows through onDesignerChange, so committing the serialized
   // topology there gives action-level undo across the designer, operators
@@ -1125,11 +1126,12 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
           </MessageBar>
         )}
 
-        <TabList selectedValue={activeTab} onTabSelect={(_: unknown, d: any) => setActiveTab((d.value as 'designer' | 'operators' | 'sql' | 'definition') || 'designer')}>
+        <TabList selectedValue={activeTab} onTabSelect={(_: unknown, d: any) => setActiveTab((d.value as 'designer' | 'operators' | 'sql' | 'definition' | 'copilot') || 'designer')}>
           <Tab value="designer" icon={<Flowchart20Regular />}>Visual designer</Tab>
           <Tab value="operators" icon={<Filter20Regular />}>Operators</Tab>
           <Tab value="sql" icon={<MathFormula20Regular />}>SQL operator</Tab>
           <Tab value="definition" icon={<DocumentBulletList20Regular />}>Definition</Tab>
+          <Tab value="copilot" icon={<Flash20Regular />}>Copilot</Tab>
         </TabList>
 
         {activeTab === 'designer' && (
@@ -1155,6 +1157,18 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
 
         {activeTab === 'definition' && (
           <EventstreamDefinitionView cfg={parsedVisual} />
+        )}
+
+        {activeTab === 'copilot' && (
+          <CopilotBuilderPane
+            endpoint={`/api/items/eventstream/${id}/assist`}
+            title="Copilot — build the topology in natural language"
+            intro="Describe a change to the stream (add a filter, aggregate per minute, add an ADX destination) and Copilot proposes a structured plan grounded on the live topology. Review, then Apply — a checkpoint is captured first so you can restore. Azure-native (Event Hubs + Stream Analytics); no Microsoft Fabric required."
+            fieldLabel="Ask Copilot to change the stream"
+            fieldHint="Plain English. Copilot grounds the plan on the real sources, transforms, and destinations and waits for your approval."
+            placeholder={'e.g. "Add a filter that keeps only error events, then add a Kusto destination called errors-adx."'}
+            onApplied={load}
+          />
         )}
 
         {/* Docked bottom data-preview panel (Fabric parity): live type-badged

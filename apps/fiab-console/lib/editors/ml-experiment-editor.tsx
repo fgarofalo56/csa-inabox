@@ -1,6 +1,7 @@
 'use client';
 
 import { clientFetch } from '@/lib/client-fetch';
+import { CopilotBuilderPane } from '@/lib/components/shared/copilot-builder-pane';
 /**
  * ML Experiment editor — full MLflow tracking surface over Azure Machine
  * Learning's MLflow-compatible tracking server (no Fabric / Power BI dependency).
@@ -324,7 +325,7 @@ export function MlExperimentEditor({ item, id }: { item: FabricItemType; id: str
 // ============================================================
 // Body — runs table / detail / compare
 // ============================================================
-type ViewMode = 'runs' | 'detail' | 'compare';
+type ViewMode = 'runs' | 'detail' | 'compare' | 'copilot';
 
 function MlExperimentEditorBody({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
@@ -576,7 +577,20 @@ function MlExperimentEditorBody({ item, id }: { item: FabricItemType; id: string
                 <Tab value="runs">Runs</Tab>
                 <Tab value="detail" disabled={!detailRunId}>Run detail</Tab>
                 <Tab value="compare" disabled={checked.size < 2}>Compare ({checked.size})</Tab>
+                <Tab value="copilot">Copilot</Tab>
               </TabList>
+
+              {view === 'copilot' && (
+                <CopilotBuilderPane
+                  endpoint={`/api/items/ml-experiment/${id}/assist`}
+                  title="Copilot — configure a training run in natural language"
+                  intro="Describe the modeling goal and Copilot proposes a structured Azure ML AutoML config (task, target column, primary metric, trial budget) to seed a new experiment run, grounded on the current draft. Review, then Apply — a checkpoint is captured first so you can restore. Azure-native (Azure Machine Learning); no Microsoft Fabric required."
+                  fieldLabel="Describe the training run"
+                  fieldHint="Plain English. Copilot only emits valid task/metric combinations and waits for your approval before saving."
+                  placeholder={'e.g. "Regression on the sale_price column, optimize R2, up to 25 trials."'}
+                  opNoun="change"
+                />
+              )}
 
               {/* ---------- RUNS ---------- */}
               {view === 'runs' && (

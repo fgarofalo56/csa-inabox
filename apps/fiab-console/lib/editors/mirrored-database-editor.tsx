@@ -1,6 +1,7 @@
 'use client';
 
 import { clientFetch } from '@/lib/client-fetch';
+import { CopilotBuilderPane } from '@/lib/components/shared/copilot-builder-pane';
 /**
  * MirroredDatabaseEditor — Azure-native Mirrored Database editor (no Microsoft
  * Fabric). Lists existing mirrored databases in a workspace, shows mirroring
@@ -31,7 +32,7 @@ import {
 import {
   Add20Regular, ArrowSync20Regular, Delete20Regular, Play20Regular, Pause20Regular, Database20Regular,
   PlugConnected20Regular, CheckmarkCircle16Filled, ShieldTask20Regular, DatabasePlugConnected20Regular,
-  Eye20Regular, Stop20Regular, ArrowCounterclockwise20Regular, Table20Regular, PulseSquare20Regular,
+  Eye20Regular, Stop20Regular, ArrowCounterclockwise20Regular, Table20Regular, PulseSquare20Regular, Sparkle20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { EmptyState } from '@/lib/components/empty-state';
@@ -104,7 +105,7 @@ export function MirroredDatabaseEditor({ item, id }: Props) {
   const [acting, setActing] = useState(false);
   // Top-level view: the mirroring surface, the Monitor (status/rows/last-sync)
   // tab, or the OneLake Security (F7) tab.
-  const [view, setView] = useState<'mirror' | 'monitor' | 'security'>('mirror');
+  const [view, setView] = useState<'mirror' | 'monitor' | 'security' | 'copilot'>('mirror');
   // Monitor tab — auto-refreshing per-table replication status (real backend).
   const [monitorData, setMonitorData] = useState<any | null>(null);
   const [monitorErr, setMonitorErr] = useState<string | null>(null);
@@ -362,11 +363,28 @@ export function MirroredDatabaseEditor({ item, id }: Props) {
       }
       main={
         <div className={s.pad}>
-          <TabList selectedValue={view} onTabSelect={(_, d) => setView(d.value as 'mirror' | 'monitor' | 'security')}>
+          <TabList selectedValue={view} onTabSelect={(_, d) => setView(d.value as 'mirror' | 'monitor' | 'security' | 'copilot')}>
             <Tab value="mirror" icon={<Database20Regular />}>Mirroring</Tab>
             <Tab value="monitor" icon={<Eye20Regular />}>Monitor</Tab>
             <Tab value="security" icon={<ShieldTask20Regular />}>Security</Tab>
+            <Tab value="copilot" icon={<Sparkle20Regular />}>Copilot</Tab>
           </TabList>
+          {view === 'copilot' && (
+            mirrorId ? (
+              <CopilotBuilderPane
+                endpoint={`/api/items/mirrored-database/${encodeURIComponent(mirrorId)}/assist`}
+                title="Copilot — manage the mirrored tables in natural language"
+                intro="Describe which source tables to add or stop mirroring and Copilot proposes a structured plan grounded on the mirror's real source + current table set. Review, then Apply — a checkpoint is captured first so you can restore. Azure-native (ADF CDC / Synapse Link → Bronze Delta); no Microsoft Fabric mirroring required."
+                fieldLabel="Ask Copilot to change the mirror set"
+                fieldHint="Plain English. Copilot grounds the plan on the real source + mirrored tables and waits for your approval."
+                placeholder={'e.g. "Also mirror dbo.Orders and dbo.Customers, and stop mirroring dbo.AuditLog."'}
+                opNoun="change"
+                onApplied={() => { if (workspaceId && mirrorId) void loadDetail(workspaceId, mirrorId); }}
+              />
+            ) : (
+              <MessageBar intent="warning"><MessageBarBody>Select or create a mirrored database first — the Copilot builder grounds on a specific mirror&apos;s source and table set.</MessageBarBody></MessageBar>
+            )
+          )}
           {view === 'security' && (
             <OneLakeSecurityTab itemId={id} itemType="mirrored-database" container="bronze" workspaceId={workspaceId || undefined} fabricItemId={mirrorId || undefined} />
           )}
