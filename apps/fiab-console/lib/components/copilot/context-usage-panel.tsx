@@ -12,8 +12,8 @@
  * skills, tools, memory, knowledge, conversation, remaining — each with its
  * token count. Skills drills to the active skill names; Tools to tool-name
  * chips; System prompt opens a preview modal (first ~2k chars + Copy). Footer:
- * Copy Report. (The "Dump to Memory" action ships with CTS-08 — omitted here
- * per no-vaporware rather than shown disabled.)
+ * Copy Report + (CTS-06) "Dump to memory" — folds the conversation into durable
+ * facts via POST /api/copilot/memory/flush when the host wires onDumpToMemory.
  *
  * The payload is computed server-side by the PURE buildContextUsagePayload with
  * the segment-sum invariant, so every number here is real, not estimated in the
@@ -23,12 +23,12 @@
 import { useState } from 'react';
 import {
   Badge, Button, Caption1, Dialog, DialogSurface, DialogBody, DialogTitle,
-  DialogContent, DialogActions, DialogTrigger, Tooltip, Text,
+  DialogContent, DialogActions, DialogTrigger, Tooltip, Text, Spinner,
   makeStyles, tokens, mergeClasses,
 } from '@fluentui/react-components';
 import {
   ChevronDown16Regular, ChevronUp16Regular, Copy16Regular, Checkmark16Regular,
-  DocumentText16Regular,
+  DocumentText16Regular, Memory16Regular,
 } from '@fluentui/react-icons';
 import type { ContextUsage } from './types';
 
@@ -82,12 +82,38 @@ export interface ContextUsagePanelProps {
   usage: ContextUsage;
   /** Live conversation message count shown in the collapsed header. */
   messageCount?: number;
+  /**
+   * CTS-06 — "Dump conversation to long-term memory". When provided, the footer
+   * shows a "Dump to memory" action that folds the recent conversation into
+   * durable facts (real backend: POST /api/copilot/memory/flush). Resolves with
+   * how many facts were stored; the panel surfaces a transient confirmation.
+   * Absent → the action is omitted (per no-vaporware, never a dead button).
+   */
+  onDumpToMemory?: () => Promise<{ stored: number } | void>;
 }
 
-export function ContextUsagePanel({ usage, messageCount }: ContextUsagePanelProps) {
+export function ContextUsagePanel({ usage, messageCount, onDumpToMemory }: ContextUsagePanelProps) {
   const s = useStyles();
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [dumpState, setDumpState] = useState<'idle' | 'saving' | 'done'>('idle');
+  const [dumpMsg, setDumpMsg] = useState('');
+
+  const dumpToMemory = async () => {
+    if (!onDumpToMemory || dumpState === 'saving') return;
+    setDumpState('saving');
+    setDumpMsg('');
+    try {
+      const res = await onDumpToMemory();
+      const stored = res && typeof res.stored === 'number' ? res.stored : 0;
+      setDumpMsg(stored > 0 ? `Saved ${stored} memor${stored === 1 ? 'y' : 'ies'}` : 'Nothing durable to save');
+    } catch {
+      setDumpMsg('Could not save to memory');
+    } finally {
+      setDumpState('done');
+      setTimeout(() => { setDumpState('idle'); setDumpMsg(''); }, 3000);
+    }
+  };
 
   const segs: Seg[] = [
     { key: 'system', label: 'System prompt', tokens: usage.systemPromptTokens, color: tokens.colorPaletteBlueForeground2 },
@@ -217,6 +243,23 @@ export function ContextUsagePanel({ usage, messageCount }: ContextUsagePanelProp
             >
               {copied ? 'Copied' : 'Copy report'}
             </Button>
+
+            {onDumpToMemory && (
+              <Tooltip
+                content="Extract durable facts from this conversation into long-term memory so a later session recalls them."
+                relationship="label"
+              >
+                <Button
+                  size="small"
+                  appearance="secondary"
+                  icon={dumpState === 'saving' ? <Spinner size="tiny" /> : <Memory16Regular />}
+                  disabled={dumpState === 'saving'}
+                  onClick={dumpToMemory}
+                >
+                  {dumpState === 'done' && dumpMsg ? dumpMsg : 'Dump to memory'}
+                </Button>
+              </Tooltip>
+            )}
 
             {!usage.segmentsConsistent && (
               <Tooltip content="Segment sum did not match total input tokens" relationship="label">
