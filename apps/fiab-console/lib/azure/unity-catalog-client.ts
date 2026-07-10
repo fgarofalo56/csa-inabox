@@ -35,6 +35,7 @@ import {
   ManagedIdentityCredential,
 } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
+import { isOssUc, ossUcBase, ossUcAuthToken, ossUcUnsupportedPath } from '@/lib/azure/uc-backend';
 import { executeStatement, type QueryResult, type DbxQueryParam } from './databricks-client';
 import {
   buildUcSetObjectTags, buildUcUnsetObjectTags, buildUcSetColumnTags, buildUcUnsetColumnTags,
@@ -148,6 +149,15 @@ export function listWorkspaceHostnames(): string[] {
  * throws the structured NotConfigured gate.
  */
 export async function resolveWorkspaceHostnames(): Promise<string[]> {
+  // OSS Unity Catalog is a single server, not a set of federated Databricks
+  // workspaces. Return its host once so every federation loop (listCatalogs,
+  // listSchemas, …) iterates against it exactly once and tags rows with a stable
+  // hostname. The value is only used as a display/tag key — ucFetch routes OSS
+  // calls to LOOM_UNITY_URL regardless of the `host` argument.
+  if (isOssUc()) {
+    const base = ossUcBase(); // structured gate when LOOM_UNITY_URL unset
+    return [base.replace(/^https?:\/\//, '').replace(/\/+$/, '')];
+  }
   const set = new Set<string>();
   let envError: unknown;
   try {
@@ -184,8 +194,35 @@ async function ucFetch<T = any>(
   path: string,
   init?: { method?: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE'; body?: unknown; query?: Record<string, string> },
 ): Promise<T> {
-  const token = await dbxToken();
-  let url = `https://${host}${path}`;
+  // Backend switch: Databricks Unity Catalog (Commercial default) or the
+  // self-hosted OSS Unity Catalog server (loom-unity, the Azure-Government
+  // default). Both speak the same /api/2.1/unity-catalog/* REST surface, so the
+  // only differences are the base URL + auth.
+  const oss = isOssUc();
+  const authHeaders: Record<string, string> = {};
+  let url: string;
+  if (oss) {
+    // Gate Databricks-only families honestly rather than 404-ing the OSS server.
+    const unsupported = ossUcUnsupportedPath(path);
+    if (unsupported) {
+      throw new UnityCatalogError(
+        `${unsupported} is not available on the OSS Unity Catalog backend (LOOM_UC_BACKEND=oss). ` +
+          'These are Databricks Unity Catalog features; use the Databricks backend for them, or manage ' +
+          'them on the underlying Azure services. Catalogs, schemas, tables, volumes, and functions are supported.',
+        501,
+        undefined,
+        path,
+      );
+    }
+    // ossUcBase() throws OssUcNotConfiguredError (structured gate) when unset.
+    url = `${ossUcBase()}${path}`;
+    const token = ossUcAuthToken();
+    if (token) authHeaders.authorization = `Bearer ${token}`;
+  } else {
+    const token = await dbxToken();
+    url = `https://${host}${path}`;
+    authHeaders.authorization = `Bearer ${token}`;
+  }
   if (init?.query) {
     const qs = new URLSearchParams(init.query).toString();
     if (qs) url += (url.includes('?') ? '&' : '?') + qs;
@@ -193,7 +230,7 @@ async function ucFetch<T = any>(
   const res = await fetchWithTimeout(url, {
     method: init?.method ?? 'GET',
     headers: {
-      authorization: `Bearer ${token}`,
+      ...authHeaders,
       'content-type': 'application/json',
       accept: 'application/json',
     },
