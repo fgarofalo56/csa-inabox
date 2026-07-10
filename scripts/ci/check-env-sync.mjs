@@ -100,6 +100,8 @@ const ALLOWLIST = new Set([
   'LOOM_SCHEDULER_EMAIL_WEBHOOK',   // opt-in email relay (ACS/Logic App/SMTP) for scheduler failure alerts (rel-T81); unset = alerts land in the Loom inbox + optional webhook only
   'LOOM_ITEM_VERSION_CAP',          // opt-in tuning knob for the per-item version-history retention cap (W6); unset default = 50 in code (lib/versions/item-version-store.ts)
   'LOOM_ADT_ENDPOINT',              // opt-in Azure Digital Twins endpoint (FGC-12); default twin backend is ADX-native — deploy platform/fiab/bicep/modules/integration/adt-instance.bicep to enable
+  'LOOM_SPARK_POOL_CONCURRENT',     // opt-out kill switch for the FGC-10 concurrent shared-session mode (default on in code)
+  'LOOM_SPARK_POOL_SHARED_MAX',     // opt-in tuning knob: max read-only leases sharing one warm session (PSR-3/FGC-10)
   // PSR-5/6 result cache — all opt-in: unset default = in-process LRU (no Redis,
   // no behavior change). The shared Redis is the hband-shared.bicep instance
   // deployed out-of-band (admin-plane at the 256-param ceiling).
