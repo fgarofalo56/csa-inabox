@@ -29,9 +29,9 @@
 FROM rust:1-slim-bookworm AS build
 
 # Transitive native deps: pkg-config + build-essential cover any *-sys crate that
-# needs a C toolchain; ca-certificates lets cargo fetch over TLS. delta-rs/
-# object_store use rustls (no OpenSSL), so libssl-dev is intentionally omitted to
-# keep the build lean — add it only if a future feature pulls an openssl-sys dep.
+# needs a C toolchain; ca-certificates lets cargo fetch over TLS. libssl-dev:
+# a floating transitive now pulls openssl-sys (the exact case the old comment
+# predicted) — required until Cargo.lock (#1847) pins the tree back to rustls-only.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         pkg-config \
