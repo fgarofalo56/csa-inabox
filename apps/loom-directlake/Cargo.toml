@@ -1,0 +1,56 @@
+[package]
+name = "loom-directlake"
+version = "0.1.0"
+edition = "2021"
+description = "CSA Loom Direct Lake — Azure-native columnar cache/scan service (HYP-5). Arrow + delta-rs framing + DataFusion scan; outcome-equivalent of Fabric Direct Lake with NO Fabric/Power BI dependency."
+license = "MIT"
+publish = false
+
+# The binary the ACA image runs (internal ingress, port 8080).
+[[bin]]
+name = "loom-directlake"
+path = "src/main.rs"
+
+[features]
+# `engine` (default): the fixture + local-parquet + DataFusion scan core path —
+#   fully executable in CI with NO Azure. `cargo test --no-default-features
+#   --features engine` runs the unit tests against the bundled fixture.
+# `azure`  (default): adds delta-rs (deltalake) so the abfss:// Delta path reads
+#   the Delta transaction log off ADLS Gen2 via Managed Identity. Runtime-gated
+#   on LOOM_DIRECTLAKE_STORAGE_ACCOUNT; the fixture/parquet core needs none of it.
+default = ["engine", "azure"]
+engine = []
+azure = ["dep:deltalake"]
+
+[dependencies]
+# HTTP server (internal ingress; mirrors the script-runner ACA contract shape).
+axum = "0.7"
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64 = "0.22"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Columnar engine. arrow 53 / datafusion 43 are the versions deltalake 0.24
+# re-uses, so the whole graph resolves to ONE arrow + ONE datafusion (no split).
+arrow = "53"
+parquet = "53"
+datafusion = "43"
+
+# delta-rs — reads the Delta log off ADLS the same way Direct Lake reads it off
+# OneLake. `datafusion` feature makes DeltaTable a TableProvider; `azure` pulls
+# object_store's Azure backend (Managed Identity via IMDS in-cluster). Optional
+# so the `engine`-only build (CI core-path test) stays lean.
+[dependencies.deltalake]
+version = "0.24"
+features = ["datafusion", "azure"]
+optional = true
+
+[profile.release]
+# Small, fast image — the warm-cache service is memory-sensitive, so keep the
+# binary lean and let LTO shrink it. Matches the "tiny image" goal in the PRP.
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true
