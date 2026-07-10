@@ -52,7 +52,9 @@ import {
   Info20Regular,
   DatabasePlugConnected20Regular,
   DocumentArrowDown20Regular,
+  DatabaseArrowRight20Regular,
 } from '@fluentui/react-icons';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
 
 // ── Response shapes (mirror the BFF routes) ─────────────────────────────────
 
@@ -328,6 +330,16 @@ export function SqlMigrationWizard() {
         </Text>
       </div>
 
+      {/* SC-6 teaching banner — Fabric-style guidance for the migration flow,
+          dismissible per surface (persisted). */}
+      <TeachingBanner
+        surfaceKey="warehouse-migrate"
+        icon={DatabaseArrowRight20Regular}
+        title="Bring an existing SQL schema across"
+        message="Export a .dacpac from SQL Server / Azure SQL (SSMS → Extract Data-tier Application), drop it here, and Loom assesses it against the Synapse Dedicated SQL pool — the same job SSMA and Synapse Pathway do — then imports the generated DDL."
+        learnMoreHref="https://learn.microsoft.com/azure/synapse-analytics/sql/data-warehouse-migration-guide"
+      />
+
       {/* Progress rail */}
       <div className={s.steps} role="list" aria-label="Migration steps">
         {([
@@ -583,6 +595,17 @@ export function SqlMigrationWizard() {
                   {importResp.summary.applied} applied · {importResp.summary.failed} failed · {importResp.summary.total} total
                 </MessageBarBody>
               </MessageBar>
+              {importResp.ok && (
+                <MessageBar intent="info" style={{ marginTop: tokens.spacingVerticalS }}>
+                  <MessageBarBody>
+                    <MessageBarTitle>Next step</MessageBarTitle>
+                    The schema is now in the Dedicated SQL pool. Switch to the{' '}
+                    <strong>Query</strong> tab to run T-SQL against the imported
+                    objects, or open the <strong>Model</strong> tab to review the
+                    tables and relationships.
+                  </MessageBarBody>
+                </MessageBar>
+              )}
               <div className={s.tableScroll} style={{ marginTop: tokens.spacingVerticalS }}>
                 <Table size="small" aria-label="Import results">
                   <TableHeader>
