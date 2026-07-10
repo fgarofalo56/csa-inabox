@@ -211,6 +211,11 @@ export function DataProductEditDialog({ id, open, onOpenChange, onSaved }: DataP
 
   const stepIndex = STEP_ORDER.indexOf(step);
   const customKeys = Object.keys(customAttributes);
+  // Per-step validation (§7.5): Basic requires a name — can't save or advance
+  // past an invalid step. Business/Custom have no required fields.
+  const basicInvalid = !name.trim();
+  const customEmpty = step === 'custom' && customKeys.length === 0;
+  const saveDisabled = save.kind === 'saving' || customEmpty || (step === 'basic' && basicInvalid);
 
   return (
     <Dialog open={open} onOpenChange={(_, d) => onOpenChange(d.open)}>
@@ -252,7 +257,13 @@ export function DataProductEditDialog({ id, open, onOpenChange, onSaved }: DataP
                   {/* ---------------- BASIC (F7 lives here) ---------------- */}
                   {step === 'basic' && (
                     <>
-                      <Field label="Name" required className={s.field}>
+                      <Field
+                        label="Name"
+                        required
+                        className={s.field}
+                        validationState={basicInvalid ? 'error' : 'none'}
+                        validationMessage={basicInvalid ? 'A name is required to save this step.' : undefined}
+                      >
                         <Input value={name} onChange={(_, d) => onNameChange(d.value)} placeholder="Customer 360" />
                       </Field>
                       {dupName && (
@@ -365,7 +376,7 @@ export function DataProductEditDialog({ id, open, onOpenChange, onSaved }: DataP
                       appearance="primary"
                       icon={<Save16Regular />}
                       onClick={() => saveStep(step)}
-                      disabled={save.kind === 'saving' || (step === 'custom' && customKeys.length === 0)}
+                      disabled={saveDisabled}
                     >
                       {save.kind === 'saving' ? 'Saving…' : `Save ${STEP_LABEL[step]}`}
                     </Button>
@@ -400,7 +411,7 @@ export function DataProductEditDialog({ id, open, onOpenChange, onSaved }: DataP
             </Button>
             <Button
               appearance="secondary"
-              disabled={stepIndex >= STEP_ORDER.length - 1}
+              disabled={stepIndex >= STEP_ORDER.length - 1 || (step === 'basic' && basicInvalid)}
               onClick={() => setStep(STEP_ORDER[Math.min(STEP_ORDER.length - 1, stepIndex + 1)])}
             >
               Next

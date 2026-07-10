@@ -9,12 +9,14 @@ import {
   Dropdown, Option,
   makeStyles, tokens,
 } from '@fluentui/react-components';
-import { Add24Regular, Delete20Regular, ArrowSync24Regular, CloudSync24Regular, Play24Regular } from '@fluentui/react-icons';
+import { Add24Regular, Delete20Regular, ArrowSync24Regular, CloudSync24Regular, Play24Regular, ShieldTask24Regular } from '@fluentui/react-icons';
 import { AdminShell } from '@/lib/components/admin-shell';
 import { Section, Toolbar } from '@/lib/components/ui/section';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { useAdminTabStyles } from '@/lib/components/ui/admin-tab-styles';
 import { SectionExplainer } from '@/lib/components/ui/learn-popover';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
+import { GuidedEmptyState } from '@/lib/components/shared/guided-empty-state';
 
 interface ClassificationRule {
   id: string;
@@ -233,6 +235,14 @@ export default function ClassificationsPage() {
         ],
       }}
     >
+      <TeachingBanner
+        surfaceKey='admin-classifications'
+        title='Detect and stamp sensitive data'
+        message='Author classification rules that detect sensitive-info types (PII, PHI, PCI, Confidential) and apply them to catalog items on scan. Each rule is pushed to Microsoft Purview as a custom classification rule and rolled into a scan rule set. Rules always save to the Loom catalog first, so they persist even before Purview sync.'
+        icon={ShieldTask24Regular}
+        learnMoreHref='https://learn.microsoft.com/purview/create-a-custom-classification-and-classification-rule'
+      />
+
       <Section title='About classification rules'>
         <SectionExplainer>
           Classification rules detect sensitive-info types and apply classifications (PII, PHI, PCI, Confidential, etc.) to catalog items on scan. Each rule is pushed to Microsoft Purview as a <strong>custom classification rule</strong> and rolled into a <strong>custom scan rule set</strong>, so it actually classifies data when a scan runs. Choose a <strong>match strategy</strong>:
@@ -290,7 +300,23 @@ export default function ClassificationsPage() {
         }
       >
         <Toolbar search={q} onSearch={setQ} searchPlaceholder='Search by name, classification, pattern...' />
-        {loading && !error ? <Spinner label='Loading rules...' /> : <LoomDataTable columns={columns} rows={filtered} getRowId={(r) => r.id} empty={q ? `No rules match "${q}".` : 'No classification rules defined yet. Click "Add rule" to create your first one.'} ariaLabel='Classification rules' />}
+        {loading && !error ? (
+          <Spinner label='Loading rules...' />
+        ) : (rules?.length ?? 0) === 0 && !q ? (
+          <GuidedEmptyState
+            title='Author your first classification rule'
+            intro='Classification rules detect sensitive-info types and stamp classifications onto catalog items when a scan runs.'
+            heroIcon={ShieldTask24Regular}
+            paths={[
+              { key: 'add', title: 'Add classification rule', body: 'Match by column name, data regex, or dictionary — then map to a classification.', icon: Add24Regular, onClick: () => setCreateOpen(true) },
+              { key: 'scan', title: 'Run a Purview scan', body: 'Apply built-in and custom rules to registered data sources.', icon: Play24Regular, onClick: () => setScanOpen(true) },
+            ]}
+            learnMoreHref='https://learn.microsoft.com/purview/create-a-custom-classification-and-classification-rule'
+            ariaLabel='Get started with classification rules'
+          />
+        ) : (
+          <LoomDataTable columns={columns} rows={filtered} getRowId={(r) => r.id} empty={q ? `No rules match "${q}".` : 'No classification rules defined yet. Click "Add rule" to create your first one.'} ariaLabel='Classification rules' />
+        )}
       </Section>
 
       <Section

@@ -48,6 +48,7 @@ import { KnowledgeBasesPanel } from '@/lib/components/ai-search/knowledge-bases-
 import { IndexerOpsPanel } from '@/lib/components/ai-search/indexer-ops';
 import { ScoringProfilesDesigner, AnalyzersDesigner, CorsAndCmkDesigner } from '@/lib/components/ai-search/index-designers';
 import { AiSearchServicePanel } from '@/lib/components/ai-search/ai-search-service-panel';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
 import {
   type FieldRow, type VectorQuery,
   type SemanticConfig, type VectorAlgorithm, type VectorProfile, type VectorMetric,
@@ -2164,6 +2165,13 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
     return chrome(
       <div className={s.pad}>
         <SectionHead icon={<Search20Regular />}>Azure AI Search indexes</SectionHead>
+        <TeachingBanner
+          surfaceKey="ai-search-index-editor-list"
+          icon={Search20Regular}
+          title="Design, populate and query a search index"
+          message="Use the navigator on the left to open an index or ＋ New to create indexes, indexers, data sources, skillsets, synonym maps and aliases. Then design its fields and vector profiles here, run indexers to pull in data, and test full-text, vector and semantic queries against the live Azure AI Search service."
+          learnMoreHref="https://learn.microsoft.com/azure/search/search-what-is-an-index"
+        />
         <Caption1>Pick an index from the service navigator on the left to manage its schema, run queries, and drive its indexers — or use ＋ New to create indexes, indexers, data sources, skillsets, synonym maps and aliases.</Caption1>
         {list.loading ? <TableSkeleton /> : list.error ? <ErrorBar msg={list.error} hint={list.hint} notDeployed={list.notDeployed} /> : (list.data?.indexes || []).length === 0 ? (
           <EmptyState icon={<Search20Regular />} title="No indexes on this service"
