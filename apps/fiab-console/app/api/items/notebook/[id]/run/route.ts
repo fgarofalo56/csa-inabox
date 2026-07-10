@@ -300,6 +300,10 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
           if (sparkPoolEnabled()) {
             const lease = await acquireWarmSession({
               backend: 'synapse', poolName: pool, kind: effectiveSessKind, sizingKey, sizing, userOid: s.claims?.oid,
+              // FGC-10 — a run the caller marks read-only may SHARE a warm session
+              // with other concurrent read-only runs (when concurrent mode is on).
+              // Write runs (default) always get an exclusive session.
+              readOnly: body?.readOnly === true,
             });
             if (lease && typeof lease.sessionId === 'number') {
               sessionId = lease.sessionId; sessState = 'idle';

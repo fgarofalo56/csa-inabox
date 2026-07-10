@@ -26,13 +26,22 @@
  *     today — the pool is a pure accelerator, never a hard dependency.
  *
  * ── Config (env + admin override) ────────────────────────────────────────
- *   LOOM_SPARK_POOL_ENABLED   "1"/"true" to enable (DEFAULT off → today's
- *                             cold-start behaviour is preserved out of the box).
+ *   LOOM_SPARK_POOL_ENABLED   DEFAULT ON (default-ON / opt-out posture). Set to
+ *                             "0"/"false" to disable → today's cold-start path.
+ *                             Cost is bounded by the idle TTL (warm-above-min
+ *                             sessions expire) + the Synapse pool auto-pause.
  *   LOOM_SPARK_POOL_MIN       min warm sessions to keep per pool/kind/sizing
  *                             group (default 1).
  *   LOOM_SPARK_POOL_MAX       max total sessions per group (default 3).
  *   LOOM_SPARK_POOL_IDLE_TTL  seconds a warm-above-min session may sit idle
- *                             before eviction (default 900 = 15 min).
+ *                             before eviction (default 900 = 15 min) — the cost
+ *                             bound for the default-ON posture.
+ *   LOOM_SPARK_POOL_CONCURRENT  DEFAULT ON. High-concurrency shared-session mode
+ *                             (FGC-10): read-only runs share ONE warm session
+ *                             (N leases per session). "0" forces exclusive
+ *                             one-lease-per-user.
+ *   LOOM_SPARK_POOL_SHARED_MAX  max concurrent read-only leases per shared
+ *                             session (default 4).
  * Admin can override any of these at runtime via the /api/spark/session-pool
  * POST config action (in-memory, per replica).
  *
@@ -42,10 +51,15 @@
  * per no-vaporware.md + no-fabric-dependency.md (Synapse is the default; the
  * Fabric backend is never on this path).
  *
- * Scope note: the pool is per-process (in-memory). On a multi-replica ACA app
- * each replica keeps its own warm pool — acceptable (each still warms REAL
- * sessions; the min is per replica). A shared cross-replica pool would need a
- * distributed lease store and is intentionally out of scope here.
+ * Cross-replica (PSR-3): the warm REGISTRY is lifted into a shared store
+ * (`spark-lease-store.ts`) so a session warmed on replica A can be claimed by a
+ * request routed to replica B — the Livy session id is global to the Synapse
+ * pool, not replica-local. The store is a real Cosmos `spark-warm-leases`
+ * container, activated when the shared H-band substrate is signalled by env
+ * (LOOM_SPARK_POOL_LEASE_CONTAINER or the shared-Redis markers
+ * LOOM_SPARK_POOL_REDIS / LOOM_BROKER_REDIS); otherwise it falls back honestly to
+ * the in-process per-replica registry (status `store.mode:'memory'`). Every store
+ * call is best-effort — a failure degrades to the local registry / a cold start.
  */
 
 import {
@@ -61,12 +75,25 @@ import {
   type LivyKind,
 } from '@/lib/azure/synapse-livy-client';
 import { synapseLogAnalyticsConf } from '@/lib/spark/config-presets';
+import {
+  leaseStoreMode,
+  leaseStoreStatus,
+  publishSlot,
+  removeSlot,
+  claimSlot,
+  releaseInStore,
+  mintLeaseId,
+  replicaId,
+  type LeaseRec,
+  type LeaseStoreStatus,
+  type LeaseStoreMode,
+} from '@/lib/azure/spark-lease-store';
 
 export type SparkPoolBackend = 'synapse' | 'databricks';
-type SlotState = 'warming' | 'warm' | 'leased' | 'dead';
+type SlotState = 'warming' | 'warm' | 'leased' | 'shared' | 'dead';
 
 interface PooledSlot {
-  /** Stable id for this slot — the lease handle returned to callers. */
+  /** Stable id for this slot (also the shared-store doc id). */
   leaseId: string;
   backend: SparkPoolBackend;
   /** Synapse Spark-pool name, or the Databricks clusterId. */
@@ -81,7 +108,15 @@ interface PooledSlot {
   createdAt: number;
   warmedAt?: number;
   lastActivityAt: number;
-  leasedBy?: string;
+  /**
+   * Active sub-leases against this slot. Exclusive = exactly one (readOnly:false);
+   * shared (FGC-10 concurrent mode) = up to `maxLeasesPerSession` read-only leases.
+   */
+  leases: LeaseRec[];
+  /** The group key this slot belongs to (for the shared store PK). */
+  groupKey: string;
+  /** True when this slot was CLAIMED from the shared store (another replica warmed it). */
+  fromStore?: boolean;
   /** Real Livy session-create body (Synapse) — surfaced in the run receipt. */
   request?: Record<string, unknown>;
   error?: string;
@@ -103,6 +138,10 @@ export interface PoolConfig {
   min: number;
   max: number;
   idleTtlMs: number;
+  /** FGC-10 — high-concurrency shared-session mode (read-only runs share a session). */
+  concurrent: boolean;
+  /** Max concurrent read-only leases per shared session. */
+  maxLeasesPerSession: number;
 }
 
 interface PoolStore {
@@ -130,6 +169,12 @@ const SWEEP_INTERVAL_MS = 30_000;
 function envBool(v: string | undefined): boolean {
   return v === '1' || (typeof v === 'string' && v.trim().toLowerCase() === 'true');
 }
+/** DEFAULT-ON / opt-out: true unless explicitly "0" / "false" / "off" / "no". */
+function envBoolDefaultOn(v: string | undefined): boolean {
+  if (typeof v !== 'string') return true;
+  const t = v.trim().toLowerCase();
+  return !(t === '0' || t === 'false' || t === 'off' || t === 'no');
+}
 function envInt(v: string | undefined, dflt: number): number {
   const n = Number(v);
   return Number.isFinite(n) && n >= 0 ? n : dflt;
@@ -138,10 +183,14 @@ function envInt(v: string | undefined, dflt: number): number {
 /** Effective config: env baseline overlaid with the admin runtime override. */
 export function sparkPoolConfig(): PoolConfig {
   const base: PoolConfig = {
-    enabled: envBool(process.env.LOOM_SPARK_POOL_ENABLED),
+    // DEFAULT ON (die-hard default-ON / opt-out) — disabled only by an explicit
+    // "0"/"false" or the tenant-admin kill switch (setSparkPoolConfig).
+    enabled: envBoolDefaultOn(process.env.LOOM_SPARK_POOL_ENABLED),
     min: envInt(process.env.LOOM_SPARK_POOL_MIN, 1),
     max: envInt(process.env.LOOM_SPARK_POOL_MAX, 3),
     idleTtlMs: envInt(process.env.LOOM_SPARK_POOL_IDLE_TTL, 900) * 1000,
+    concurrent: envBoolDefaultOn(process.env.LOOM_SPARK_POOL_CONCURRENT),
+    maxLeasesPerSession: Math.max(1, envInt(process.env.LOOM_SPARK_POOL_SHARED_MAX, 4)),
   };
   const o = store.override;
   const cfg: PoolConfig = {
@@ -149,9 +198,12 @@ export function sparkPoolConfig(): PoolConfig {
     min: o.min ?? base.min,
     max: o.max ?? base.max,
     idleTtlMs: o.idleTtlMs ?? base.idleTtlMs,
+    concurrent: o.concurrent ?? base.concurrent,
+    maxLeasesPerSession: o.maxLeasesPerSession ?? base.maxLeasesPerSession,
   };
   // Keep max >= min so a group can always reach its target.
   if (cfg.max < cfg.min) cfg.max = cfg.min;
+  if (cfg.maxLeasesPerSession < 1) cfg.maxLeasesPerSession = 1;
   return cfg;
 }
 
@@ -165,6 +217,9 @@ export function setSparkPoolConfig(partial: Partial<PoolConfig>): PoolConfig {
   if (typeof partial.min === 'number' && partial.min >= 0) store.override.min = Math.floor(partial.min);
   if (typeof partial.max === 'number' && partial.max >= 0) store.override.max = Math.floor(partial.max);
   if (typeof partial.idleTtlMs === 'number' && partial.idleTtlMs >= 0) store.override.idleTtlMs = Math.floor(partial.idleTtlMs);
+  if (typeof partial.concurrent === 'boolean') store.override.concurrent = partial.concurrent;
+  if (typeof partial.maxLeasesPerSession === 'number' && partial.maxLeasesPerSession >= 1)
+    store.override.maxLeasesPerSession = Math.floor(partial.maxLeasesPerSession);
   const cfg = sparkPoolConfig();
   if (cfg.enabled) ensureSweeper();
   return cfg;
@@ -247,6 +302,30 @@ function slotsForGroup(key: string): PooledSlot[] {
   );
 }
 
+/** Project a live slot into the cross-replica shared-store doc + publish it. */
+function publishWarmSlot(slot: PooledSlot): Promise<void> {
+  if (leaseStoreMode() !== 'cosmos') return Promise.resolve();
+  if (typeof slot.sessionId !== 'number') return Promise.resolve();
+  return publishSlot({
+    id: slot.leaseId,
+    groupKey: slot.groupKey,
+    backend: slot.backend,
+    poolName: slot.poolName,
+    kind: slot.kind,
+    sizingKey: slot.sizingKey,
+    sessionId: slot.sessionId,
+    state:
+      slot.state === 'warm' || slot.state === 'leased' || slot.state === 'shared'
+        ? slot.state
+        : 'warm',
+    leases: slot.leases,
+    ownerReplica: replicaId(),
+    warmedAt: slot.warmedAt ?? slot.createdAt,
+    lastActivityAt: slot.lastActivityAt,
+    request: slot.request,
+  });
+}
+
 async function pollLivyToIdle(poolName: string, sessionId: number, slot: PooledSlot): Promise<void> {
   // Cold start of a Synapse Spark pool can take 2-4 min. Poll in the
   // background; the slot stays 'warming' until Livy reports 'idle'.
@@ -291,6 +370,8 @@ async function warmOneSynapse(grp: PoolGroup): Promise<void> {
     state: 'warming',
     createdAt: Date.now(),
     lastActivityAt: Date.now(),
+    leases: [],
+    groupKey: grp.key,
   };
   store.slots.push(slot);
   store.warming++;
@@ -299,6 +380,7 @@ async function warmOneSynapse(grp: PoolGroup): Promise<void> {
     slot.sessionId = sess.id;
     slot.request = sess.request;
     await pollLivyToIdle(grp.poolName, sess.id, slot);
+    if (slot.state === 'warm') void publishWarmSlot(slot);
   } catch (e: unknown) {
     slot.state = 'dead';
     slot.error = e instanceof Error ? e.message : String(e);
@@ -321,6 +403,8 @@ async function warmOneDatabricks(grp: PoolGroup): Promise<void> {
     state: 'warming',
     createdAt: Date.now(),
     lastActivityAt: Date.now(),
+    leases: [],
+    groupKey: grp.key,
   };
   store.slots.push(slot);
   store.warming++;
@@ -335,6 +419,7 @@ async function warmOneDatabricks(grp: PoolGroup): Promise<void> {
           slot.state = 'warm';
           slot.warmedAt = Date.now();
           slot.lastActivityAt = Date.now();
+          void publishWarmSlot(slot);
         }
         return;
       }
@@ -391,6 +476,12 @@ export async function refillPool(): Promise<void> {
 /** Kill a warm Livy session on eviction (best-effort — 404 is fine). */
 function evictSlot(slot: PooledSlot): void {
   slot.state = 'dead';
+  // Remove its cross-replica lease doc so no other replica claims a dead session.
+  void removeSlot(slot.leaseId, slot.groupKey);
+  // Only the owning replica (the one that warmed the real session) tears down the
+  // backend session; a slot merely CLAIMED from the shared store must not kill a
+  // session another replica owns.
+  if (slot.fromStore) return;
   if (slot.backend === 'synapse' && typeof slot.sessionId === 'number') {
     void killLivySession(slot.poolName, slot.sessionId).catch(() => {});
   }
@@ -419,6 +510,10 @@ async function sweep(): Promise<void> {
       if (s.backend === 'synapse' && typeof s.sessionId === 'number') {
         void keepaliveLivySession(s.poolName, s.sessionId).catch(() => {});
       }
+      // Refresh the cross-replica lease doc's TTL so another replica keeps seeing
+      // this warm session as claimable (owner replicas only — claimed slots are
+      // republished by their owner).
+      if (!s.fromStore) void publishWarmSlot(s);
     }
     // Evict warm-above-min sessions idle past the TTL (oldest-idle first).
     const overMin = warm
@@ -454,8 +549,14 @@ export interface AcquireRequest {
   sizingKey: string;
   /** The exact sizing so a fresh warm session matches this run's config. */
   sizing?: LivySessionSizing;
-  /** Acting user's oid — stamped on the lease (never share across users). */
+  /** Acting user's oid — stamped on the lease (never share a WRITE session across users). */
   userOid?: string;
+  /**
+   * FGC-10 — the run is read-only (no writes / no shared mutable state), so it may
+   * SHARE a warm session with other concurrent read-only runs when concurrent mode
+   * is on. Write runs (omit / false) always get an exclusive session.
+   */
+  readOnly?: boolean;
 }
 
 export interface Lease {
@@ -465,15 +566,53 @@ export interface Lease {
   sessionId?: number;
   sizingKey: string;
   request?: Record<string, unknown>;
+  /** True when this lease SHARES its session with other concurrent read-only runs. */
+  shared?: boolean;
+  /** Which store served the lease: 'memory' (this replica) | 'cosmos' (cross-replica claim). */
+  via?: LeaseStoreMode;
+}
+
+function mkLeaseRec(oid: string | undefined, readOnly: boolean): LeaseRec {
+  return { id: mintLeaseId(), oid, readOnly, at: Date.now() };
+}
+
+function leaseFromSlot(slot: PooledSlot, leaseId: string, shared: boolean, via: LeaseStoreMode): Lease {
+  return {
+    leaseId,
+    backend: slot.backend,
+    poolName: slot.poolName,
+    sessionId: slot.sessionId,
+    sizingKey: slot.sizingKey,
+    request: slot.request,
+    shared,
+    via,
+  };
+}
+
+/** Live-check a Synapse slot; returns false (and marks it dead) if Livy reaped it. */
+async function synapseSlotLive(slot: PooledSlot): Promise<boolean> {
+  if (slot.backend !== 'synapse') return true;
+  if (typeof slot.sessionId !== 'number') { slot.state = 'dead'; return false; }
+  try {
+    const live = await getLivySession(slot.poolName, slot.sessionId);
+    if (!['idle', 'busy'].includes(live.state)) { slot.state = 'dead'; return false; }
+  } catch {
+    slot.state = 'dead';
+    return false;
+  }
+  return true;
 }
 
 /**
- * Atomically hand off ONE warm session matching (backend, pool, kind, sizing).
- * Flips it to `leased` (stamped with the caller's oid) and kicks a background
- * refill to replace it. Returns null on a miss — the caller then cold-starts,
- * so the pool is a pure accelerator, never a dependency. For Synapse a live
- * liveness check (getLivySession) guards against handing off a session Livy
- * reaped out from under the pool.
+ * Hand off a warm session matching (backend, pool, kind, sizing).
+ *
+ * Exclusive (default): flips exactly ONE warm session to `leased`, stamped with
+ * the caller — never shared across users. FGC-10 concurrent mode (`readOnly`):
+ * a read-only run may instead SHARE a warm session, taking one of up to
+ * `maxLeasesPerSession` read-only leases on it. Cross-replica (PSR-3): when the
+ * shared Cosmos store is active, the claim is an atomic ETag flip on the shared
+ * doc so a session warmed on ANY replica can be handed off here. Returns null on
+ * a miss — the caller then cold-starts (pure accelerator, never a dependency).
  */
 export async function acquireWarmSession(req: AcquireRequest): Promise<Lease | null> {
   const cfg = sparkPoolConfig();
@@ -488,6 +627,75 @@ export async function acquireWarmSession(req: AcquireRequest): Promise<Lease | n
   });
   if (!cfg.enabled) return null;
   ensureSweeper();
+  const shareable = cfg.concurrent && req.readOnly === true;
+
+  // ── Cross-replica path (shared Cosmos store) ──
+  // The store is the source of truth: an atomic ETag claim prevents two replicas
+  // (or two runs) from taking the same exclusive session. Local warm slots are
+  // published to the store, so this path also claims sessions THIS replica warmed.
+  if (leaseStoreMode() === 'cosmos') {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      let claimed;
+      try {
+        claimed = await claimSlot({ groupKey: key, shared: shareable, maxLeasesPerSession: cfg.maxLeasesPerSession, oid: req.userOid });
+      } catch {
+        claimed = null;
+      }
+      if (!claimed) break;
+      // Mirror the claim into a local slot so releaseSession + status track it.
+      let slot = store.slots.find((s) => s.leaseId === claimed!.doc.id);
+      if (!slot) {
+        slot = {
+          leaseId: claimed.doc.id,
+          backend: claimed.doc.backend,
+          poolName: claimed.doc.poolName,
+          kind: claimed.doc.kind,
+          sizingKey: claimed.doc.sizingKey,
+          sessionId: claimed.doc.sessionId,
+          state: claimed.doc.state,
+          createdAt: claimed.doc.warmedAt,
+          warmedAt: claimed.doc.warmedAt,
+          lastActivityAt: claimed.doc.lastActivityAt,
+          leases: claimed.doc.leases,
+          groupKey: key,
+          fromStore: replicaId() !== claimed.doc.ownerReplica,
+          request: claimed.doc.request,
+        };
+        store.slots.push(slot);
+      } else {
+        slot.state = claimed.doc.state;
+        slot.leases = claimed.doc.leases;
+        slot.sessionId = claimed.doc.sessionId;
+        slot.lastActivityAt = claimed.doc.lastActivityAt;
+      }
+      // Guard against handing off a session Livy already reaped.
+      if (!(await synapseSlotLive(slot))) {
+        void removeSlot(slot.leaseId, key);
+        pruneDead();
+        continue; // try the next claimable doc
+      }
+      void refillPool().catch(() => {});
+      pruneDead();
+      return leaseFromSlot(slot, claimed.leaseId, claimed.doc.state === 'shared', 'cosmos');
+    }
+    pruneDead();
+    void refillPool().catch(() => {});
+    return null;
+  }
+
+  // ── Local (in-process per-replica) path ──
+  // Concurrent read-only run: first try to SHARE an already-live shared session.
+  if (shareable) {
+    const shared = slotsForGroup(key).filter(
+      (s) => s.state === 'shared' && s.leases.length < cfg.maxLeasesPerSession,
+    );
+    for (const slot of shared) {
+      const rec = mkLeaseRec(req.userOid, true);
+      slot.leases.push(rec);
+      slot.lastActivityAt = Date.now();
+      return leaseFromSlot(slot, rec.id, true, 'memory');
+    }
+  }
 
   // Scan warm slots for this exact group. Verify Synapse liveness before
   // handing off; skip (and mark dead) any the backend has already reaped.
@@ -500,33 +708,18 @@ export async function acquireWarmSession(req: AcquireRequest): Promise<Lease | n
       s.sizingKey === req.sizingKey,
   );
   for (const slot of candidates) {
-    if (slot.backend === 'synapse') {
-      if (typeof slot.sessionId !== 'number') { slot.state = 'dead'; continue; }
-      try {
-        const live = await getLivySession(slot.poolName, slot.sessionId);
-        if (!['idle', 'busy'].includes(live.state)) { slot.state = 'dead'; continue; }
-      } catch {
-        slot.state = 'dead';
-        continue;
-      }
-    }
+    if (!(await synapseSlotLive(slot))) continue;
     // A concurrent acquire may have flipped it while we awaited the liveness
     // probe — re-check under the (single-threaded) sync flip.
     if (slot.state !== 'warm') continue;
-    slot.state = 'leased';
-    slot.leasedBy = req.userOid;
+    const rec = mkLeaseRec(req.userOid, shareable);
+    slot.leases = [rec];
+    slot.state = shareable ? 'shared' : 'leased';
     slot.lastActivityAt = Date.now();
     // Replace the drained slot in the background.
     void refillPool().catch(() => {});
     pruneDead();
-    return {
-      leaseId: slot.leaseId,
-      backend: slot.backend,
-      poolName: slot.poolName,
-      sessionId: slot.sessionId,
-      sizingKey: slot.sizingKey,
-      request: slot.request,
-    };
+    return leaseFromSlot(slot, rec.id, shareable, 'memory');
   }
 
   pruneDead();
@@ -536,24 +729,31 @@ export async function acquireWarmSession(req: AcquireRequest): Promise<Lease | n
 }
 
 /**
- * Return a leased slot. By default it goes back to `warm` (idle clock reset via
- * Livy keepalive) so it can be re-leased. `{ dead:true }` evicts it (used when
- * the notebook's session died / was recreated). Unknown leaseIds are ignored.
+ * Return a lease. Drops this sub-lease; when the LAST sub-lease is returned the
+ * session goes back to `warm` (idle clock reset via Livy keepalive) so it can be
+ * re-leased. `{ dead:true }` evicts the whole session (used when the notebook's
+ * session died / was recreated). Unknown leaseIds are ignored. The shared store
+ * is updated so a cross-replica claim releases correctly.
  */
 export function releaseSession(leaseId: string, opts?: { dead?: boolean }): void {
-  const slot = store.slots.find((s) => s.leaseId === leaseId);
+  const slot = store.slots.find((s) => s.leaseId === leaseId || s.leases.some((l) => l.id === leaseId));
   if (!slot) return;
   if (opts?.dead) {
     evictSlot(slot);
     pruneDead();
     return;
   }
-  slot.state = 'warm';
-  slot.leasedBy = undefined;
+  // Drop just this sub-lease (a shared session may keep other read-only leases).
+  slot.leases = slot.leases.filter((l) => l.id !== leaseId);
   slot.lastActivityAt = Date.now();
+  slot.state = slot.leases.length === 0 ? 'warm' : slot.leases.every((l) => l.readOnly) ? 'shared' : 'leased';
   if (slot.backend === 'synapse' && typeof slot.sessionId === 'number') {
     void keepaliveLivySession(slot.poolName, slot.sessionId).catch(() => {});
   }
+  // Reflect in the shared store: fromStore slots read-modify-write the doc; owner
+  // slots republish (no-downgrade publish preserves any concurrent claim).
+  if (slot.fromStore) void releaseInStore(slot.leaseId, slot.groupKey, leaseId, opts);
+  else void publishWarmSlot(slot);
 }
 
 // ============================================================
@@ -609,6 +809,8 @@ export interface GroupStatus {
   sizingKey: string;
   warm: number;
   leased: number;
+  /** Sessions serving one or more concurrent read-only leases (FGC-10 shared mode). */
+  shared: number;
   /** Sessions still cold-starting (warming toward idle). */
   warming: number;
   /** Target warm count (config.min). */
@@ -617,6 +819,10 @@ export interface GroupStatus {
     leaseId: string;
     state: SlotState;
     sessionId?: number;
+    /** Active sub-leases on this session (>1 only in shared mode). */
+    leaseCount: number;
+    /** True when this session was claimed from another replica's warm pool. */
+    fromStore?: boolean;
     ageSecs: number;
     idleSecs: number;
     error?: string;
@@ -627,7 +833,9 @@ export interface PoolStatus {
   enabled: boolean;
   config: PoolConfig;
   backend: SparkBackendStatus;
-  totals: { warm: number; leased: number; warming: number };
+  totals: { warm: number; leased: number; shared: number; warming: number };
+  /** Cross-replica lease store mode + honest gate info (PSR-3). */
+  store: LeaseStoreStatus;
   groups: GroupStatus[];
 }
 
@@ -638,14 +846,16 @@ export function getPoolStatus(): PoolStatus {
   pruneDead();
   const now = Date.now();
   const groups: GroupStatus[] = [];
-  const totals = { warm: 0, leased: 0, warming: 0 };
+  const totals = { warm: 0, leased: 0, shared: 0, warming: 0 };
   for (const grp of store.groups.values()) {
     const slots = slotsForGroup(grp.key);
     const warm = slots.filter((s) => s.state === 'warm').length;
     const leased = slots.filter((s) => s.state === 'leased').length;
+    const shared = slots.filter((s) => s.state === 'shared').length;
     const warming = slots.filter((s) => s.state === 'warming').length;
     totals.warm += warm;
     totals.leased += leased;
+    totals.shared += shared;
     totals.warming += warming;
     groups.push({
       key: grp.key,
@@ -655,17 +865,20 @@ export function getPoolStatus(): PoolStatus {
       sizingKey: grp.sizingKey,
       warm,
       leased,
+      shared,
       warming,
       target: cfg.min,
       sessions: slots.map((s) => ({
         leaseId: s.leaseId,
         state: s.state,
         sessionId: s.sessionId,
+        leaseCount: s.leases.length,
+        fromStore: s.fromStore || undefined,
         ageSecs: Math.floor((now - s.createdAt) / 1000),
         idleSecs: Math.floor((now - s.lastActivityAt) / 1000),
         error: s.error,
       })),
     });
   }
-  return { enabled: cfg.enabled, config: cfg, backend, totals, groups };
+  return { enabled: cfg.enabled, config: cfg, backend, totals, store: leaseStoreStatus(), groups };
 }

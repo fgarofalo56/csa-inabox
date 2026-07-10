@@ -46,6 +46,8 @@ import {
   type GhostNodeData, type AnchorNode,
 } from '@/lib/components/canvas/canvas-node-kit';
 import { DocumentArrowRight16Regular, Flowchart16Regular, Search16Regular } from '@fluentui/react-icons';
+import { useGhostSuggestion } from '@/lib/components/canvas/use-ghost-suggestion';
+import { ACTIVITY_CATALOG } from './activity-catalog';
 import { cloneSelection, type ClonableEdge } from '@/lib/components/canvas/canvas-clipboard';
 import { alignPositions, distributePositions, type AlignMode, type DistributeAxis, type AlignNode } from '@/lib/components/canvas/canvas-align';
 import { CanvasPowerToolbar } from '@/lib/components/canvas/canvas-power-toolbar';
@@ -220,6 +222,17 @@ export interface PipelineCanvasProps {
   /** Suppress mutating shortcuts while a save is in flight. */
   readOnly?: boolean;
   /**
+   * W7 — enable the AOAI-driven ghost next-step suggestion. When true the
+   * trailing ghost node asks POST /api/canvas/suggest-next for the single best
+   * next activity (grounded on the current graph) and offers it inline with
+   * Accept / Dismiss, falling back to the static palette menu when there is no
+   * suggestion (or the honest 503 gate / admin kill-switch is off). Default-off
+   * so existing consumers are unchanged; the data-pipeline editor opts in.
+   */
+  aiSuggest?: boolean;
+  /** Item type used to ground the suggestion prompt (defaults to 'data-pipeline'). */
+  itemType?: string;
+  /**
    * Suppress the built-in centered empty-state overlay. The designer sets this
    * when it renders its own richer guided empty-state launcher over the canvas,
    * so the two don't stack.
@@ -254,7 +267,8 @@ function buildEdges(activities: PipelineActivity[]): Edge[] {
 
 const PipelineCanvasInner = forwardRef<CanvasHandle, PipelineCanvasProps>(function PipelineCanvasInner(
   { activities, selectedName, onSelect, onDropPaletteKey, onConnect, onDrillInto, onDrillBack, snapToGrid = true, showGrid = true, onZoomChange,
-    onUndo, onRedo, canUndo = false, canRedo = false, onAddActivities, onExplainNode, readOnly = false, hideEmptyState = false },
+    onUndo, onRedo, canUndo = false, canRedo = false, onAddActivities, onExplainNode, readOnly = false, hideEmptyState = false,
+    aiSuggest = false, itemType = 'data-pipeline' },
   ref,
 ) {
   const s = useStyles();
@@ -275,6 +289,35 @@ const PipelineCanvasInner = forwardRef<CanvasHandle, PipelineCanvasProps>(functi
   // Fabric "updated canvas experience" — when on, container nodes render an
   // inline mini-preview of their inner activities. Toggled by N / the toolbar.
   const [showNestedPreviews, setShowNestedPreviews] = useState(false);
+
+  // W7 — AOAI ghost next-step suggestion. Ground on the current activity graph
+  // (names + types + dependsOn edges) and the full activity palette so an
+  // accepted suggestion maps straight to onDropPaletteKey. Disabled in readOnly
+  // and when the caller opts out (aiSuggest=false).
+  const suggestNodes = useMemo(
+    () => activities.map((a) => ({ id: a.name, type: a.type, label: a.description || a.name })),
+    [activities],
+  );
+  const suggestEdges = useMemo(
+    () =>
+      activities.flatMap((a) =>
+        (a.dependsOn || []).map((d) => ({ source: d.activity, target: a.name })),
+      ),
+    [activities],
+  );
+  const paletteKeys = useMemo(() => ACTIVITY_CATALOG.map((d) => d.key), []);
+  const paletteLabels = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const d of ACTIVITY_CATALOG) m.set(d.key, d.label);
+    return m;
+  }, []);
+  const { suggestion, loading: suggestLoading, dismiss: dismissSuggestion } = useGhostSuggestion({
+    enabled: aiSuggest && !readOnly,
+    itemType,
+    nodes: suggestNodes,
+    edges: suggestEdges,
+    paletteKeys,
+  });
 
   // Build the RF node list from activities, preserving any positions the user
   // dragged (positionsRef) and placing brand-new activities either at the drop
@@ -333,6 +376,22 @@ const PipelineCanvasInner = forwardRef<CanvasHandle, PipelineCanvasProps>(functi
             { key: 'Lookup', label: 'Lookup', icon: <Search16Regular />, onSelect: () => insert('Lookup') },
           ],
         };
+        // W7 — overlay the AOAI suggestion (or its thinking state) on the ghost.
+        // The suggestion card takes precedence over the static menu; Accept
+        // inserts the suggested activity via the same palette-drop path, Dismiss
+        // reverts to the menu (and suppresses re-suggesting the same graph).
+        if (aiSuggest) {
+          if (suggestion) {
+            ghostData.aiSuggestion = {
+              label: paletteLabels.get(suggestion.key) || suggestion.label,
+              reason: suggestion.reason,
+            };
+            ghostData.onAcceptSuggestion = () => insert(suggestion.key);
+            ghostData.onDismissSuggestion = dismissSuggestion;
+          } else if (suggestLoading) {
+            ghostData.suggestionLoading = true;
+          }
+        }
         activityNodes.push({
           id: GHOST_NODE_ID, type: 'ghost', position: anchor,
           data: ghostData as unknown as Record<string, unknown>,
@@ -341,7 +400,8 @@ const PipelineCanvasInner = forwardRef<CanvasHandle, PipelineCanvasProps>(functi
       }
     }
     setNodes(activityNodes);
-  }, [activities, selectedName, setNodes, onDrillInto, onExplainNode, showNestedPreviews, readOnly, onDropPaletteKey]);
+  }, [activities, selectedName, setNodes, onDrillInto, onExplainNode, showNestedPreviews, readOnly, onDropPaletteKey,
+    aiSuggest, suggestion, suggestLoading, dismissSuggestion, paletteLabels]);
 
   // Re-sync when the activity set / their deps change.
   useEffect(() => { syncNodes(); }, [syncNodes]);

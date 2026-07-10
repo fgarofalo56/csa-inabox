@@ -36,6 +36,7 @@ import { TileGrid } from '@/lib/components/ui/tile-grid';
 import { SectionExplainer, LearnPopover } from '@/lib/components/ui/learn-popover';
 import { useAdminTabStyles } from '@/lib/components/ui/admin-tab-styles';
 import { PerfMetricCard } from '@/lib/components/admin/perf-metric-card';
+import { SparkPoolCard } from '@/lib/components/admin/spark-pool-card';
 import { isPageTtiMetric } from '@/lib/perf/perf-metrics';
 import type { MetricTrend, TrendModel } from '@/lib/perf/perf-store';
 
@@ -274,6 +275,8 @@ export function PerformanceEditor() {
           </MessageBarBody>
         </MessageBar>
       )}
+
+      <SparkPoolCard />
 
       <Section
         title="Benchmark run"

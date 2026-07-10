@@ -63,6 +63,7 @@ import {
   Add24Regular, ChevronDown16Regular, ZoomIn20Regular, ZoomOut20Regular,
   FullScreenMaximize20Regular, Organization20Regular,
   ChevronDoubleRight20Regular, ChevronDoubleLeft20Regular, Lightbulb16Regular,
+  Sparkle16Filled, Checkmark16Regular, Dismiss16Regular,
 } from '@fluentui/react-icons';
 import type { JSX } from 'react';
 import { BaseEdge, getBezierPath, Handle, Position, type EdgeProps, type NodeProps } from '@xyflow/react';
@@ -636,6 +637,34 @@ const useStyles = makeStyles({
     color: tokens.colorNeutralForeground4,
     textAlign: 'center',
   },
+  // ── W7: AOAI-driven suggestion variant of the ghost card ──────────────────
+  ghostSuggest: {
+    border: `1.5px solid ${tokens.colorBrandStroke1}`,
+    background: accentTint('var(--loom-accent-blue)', 8),
+    color: tokens.colorNeutralForeground1,
+    cursor: 'default',
+    ':hover': {
+      border: `1.5px solid ${tokens.colorBrandStroke1}`,
+      color: tokens.colorNeutralForeground1,
+      background: accentTint('var(--loom-accent-blue)', 12),
+    },
+  },
+  ghostSuggestKicker: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXXS,
+    color: tokens.colorBrandForeground1,
+    fontWeight: tokens.fontWeightSemibold,
+  },
+  ghostSuggestReason: {
+    color: tokens.colorNeutralForeground3,
+    textAlign: 'center',
+  },
+  ghostSuggestActions: {
+    display: 'flex',
+    gap: tokens.spacingHorizontalXS,
+    marginTop: tokens.spacingVerticalXXS,
+  },
   // ── v2: standardized canvas right rail ────────────────────────────────────
   rail2: {
     display: 'flex',
@@ -954,6 +983,17 @@ export interface GhostNodeData {
   accent?: string;
   /** Render a left target handle so an edge can connect into the ghost. */
   withTarget?: boolean;
+  /**
+   * W7 — an AOAI-driven "next step" suggestion. When present the ghost renders
+   * the branded suggestion variant (Sparkle kicker + label + reason + Accept /
+   * Dismiss) INSTEAD of the static menu/single modes. `onAccept` inserts the
+   * suggested node; `onDismiss` hides it (and the host suppresses re-suggesting
+   * the same graph). While `suggestionLoading` the card shows a thinking state.
+   */
+  aiSuggestion?: { label: string; reason?: string };
+  onAcceptSuggestion?: () => void;
+  onDismissSuggestion?: () => void;
+  suggestionLoading?: boolean;
   [k: string]: unknown;
 }
 
@@ -972,6 +1012,62 @@ export const GhostNextStepCard: React.FC<{ data: GhostNodeData; width?: number }
       {data.hint && <Caption1 className={styles.ghostHint}>{data.hint}</Caption1>}
     </>
   );
+
+  // W7 — AOAI suggestion variant. Takes precedence over the static menu/single
+  // modes: the ghost shows the single best next step with Accept / Dismiss.
+  if (data.aiSuggestion) {
+    const sug = data.aiSuggestion;
+    return (
+      <div
+        className={mergeClasses(styles.ghost, styles.ghostSuggest, 'nodrag', 'nopan')}
+        style={{ width }}
+        data-ghost-node="ai-suggestion"
+        aria-label={`Suggested next step: ${sug.label}`}
+      >
+        <span className={styles.ghostSuggestKicker}>
+          <Sparkle16Filled aria-hidden /> Suggested next step
+        </span>
+        <Caption1 className={styles.ghostLabel}>{sug.label}</Caption1>
+        {sug.reason && <Caption1 className={styles.ghostSuggestReason}>{sug.reason}</Caption1>}
+        <div className={styles.ghostSuggestActions}>
+          <Button
+            size="small"
+            appearance="primary"
+            icon={<Checkmark16Regular />}
+            onClick={data.onAcceptSuggestion}
+            data-ghost-accept="1"
+          >
+            Add
+          </Button>
+          <Button
+            size="small"
+            appearance="subtle"
+            icon={<Dismiss16Regular />}
+            onClick={data.onDismissSuggestion}
+            data-ghost-dismiss="1"
+            aria-label="Dismiss suggestion"
+          />
+        </div>
+      </div>
+    );
+  }
+
+  // W7 — while AOAI is thinking of a next step, show a quiet loading affordance
+  // (the static menu still returns below once loading clears with no suggestion).
+  if (data.suggestionLoading) {
+    return (
+      <div
+        className={mergeClasses(styles.ghost, 'nodrag', 'nopan')}
+        style={{ width }}
+        data-ghost-node="ai-loading"
+        aria-busy="true"
+        aria-label="Finding a suggested next step"
+      >
+        <Spinner size="tiny" />
+        <Caption1 className={styles.ghostHint}>Suggesting a next step…</Caption1>
+      </div>
+    );
+  }
 
   if (data.options && data.options.length > 0) {
     return (
