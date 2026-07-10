@@ -163,10 +163,10 @@ export function makeCopilotBuilderRoute<Doc>(cfg: CopilotBuilderConfig<Doc>) {
   const store = checkpointStore(cfg);
   const gate = cfg.gate ?? DEFAULT_GATE;
 
-  async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
+  async function GET(req: NextRequest, ctx: { params: Promise<Record<string, string>> }) {
     const session = getSession();
     if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-    const { id } = await ctx.params;
+    const p = await ctx.params; const id = p.id ?? p.name; // slug-agnostic: ASA's API family uses [name]
     const action = req.nextUrl.searchParams.get('action') || 'checkpoints';
     if (action === 'checkpoints') {
       const checkpoints = await listBuilderCheckpoints(store, id, session.claims.oid);
@@ -187,10 +187,10 @@ export function makeCopilotBuilderRoute<Doc>(cfg: CopilotBuilderConfig<Doc>) {
     return NextResponse.json({ ok: false, error: `unknown action "${action}"` }, { status: 400 });
   }
 
-  async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
+  async function POST(req: NextRequest, ctx: { params: Promise<Record<string, string>> }) {
     const session = getSession();
     if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-    const { id } = await ctx.params;
+    const p = await ctx.params; const id = p.id ?? p.name; // slug-agnostic: ASA's API family uses [name]
     const tenantId = session.claims.oid;
     const body = await req.json().catch(() => ({} as any));
     const action = String(body?.action || '').trim();
