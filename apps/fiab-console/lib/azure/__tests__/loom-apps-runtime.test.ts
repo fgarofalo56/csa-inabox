@@ -13,9 +13,9 @@ import {
 } from '../loom-apps-runtime-templates';
 
 describe('template catalog', () => {
-  it('ships the five documented runtimes with unique ids + valid ports', () => {
+  it('ships the documented runtimes with unique ids + valid ports', () => {
     const ids = LOOM_APP_TEMPLATES.map((t) => t.id);
-    expect(ids).toEqual(['streamlit', 'dash', 'gradio', 'flask', 'node-express']);
+    expect(ids).toEqual(['streamlit', 'dash', 'gradio', 'flask', 'node-express', 'agent-fastapi']);
     expect(new Set(ids).size).toBe(ids.length);
     for (const t of LOOM_APP_TEMPLATES) {
       expect(t.defaultPort).toBeGreaterThan(0);
@@ -56,6 +56,12 @@ describe('generateDockerfile', () => {
     expect(generateDockerfile(getLoomAppTemplate('flask')!, 8000)).toContain('gunicorn');
     expect(generateDockerfile(getLoomAppTemplate('flask')!, 8000)).toContain('app:app');
     expect(generateDockerfile(getLoomAppTemplate('dash')!, 8050)).toContain('app:server');
+  });
+  it('emits uvicorn (ASGI) for the FastAPI agent template', () => {
+    const df = generateDockerfile(getLoomAppTemplate('agent-fastapi')!, 8000);
+    expect(df).toContain('uvicorn');
+    expect(df).toContain('app:app');
+    expect(df).toContain('--port');
   });
   it('emits a node image + npm start for express', () => {
     const df = generateDockerfile(getLoomAppTemplate('node-express')!, 3000);

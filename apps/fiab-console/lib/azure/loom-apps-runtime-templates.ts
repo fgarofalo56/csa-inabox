@@ -264,8 +264,154 @@ app.listen(port, '0.0.0.0', () => console.log('listening on ' + port));
   ],
 };
 
+// AGENT (FastAPI) — DBX-2. Bring-your-own agent harness (LangGraph / CrewAI /
+// Claude Agent SDK / OpenAI Agents SDK-style code) hosted as an autoscaled
+// endpoint, distinct from the single-purpose NL2SQL Data Agent. The starter is
+// a real FastAPI app exposing POST /invoke that runs an AOAI tool-calling loop
+// (pre-wired to the same env the Loom AOAI clients read — AZURE_OPENAI_*),
+// returning {output, steps}. Deployed exactly like the other templates (ACR
+// Task build → ACA autoscale-to-zero). It composes back into a Data Agent as an
+// `agent` source (DA_SOURCE_TYPES) so custom agents fold into Genie-style chat.
+const AGENT_FASTAPI: LoomAppTemplate = {
+  id: 'agent-fastapi',
+  label: 'Agent (FastAPI)',
+  description: 'Bring-your-own agent — FastAPI /invoke endpoint pre-wired to Azure OpenAI with a tool-calling loop. Compose it back into a Data Agent.',
+  runtime: 'python',
+  defaultPort: 8000,
+  entryFile: 'app.py',
+  manifestFile: 'requirements.txt',
+  files: [
+    {
+      path: 'app.py',
+      content: `"""
+Loom hosted agent (DBX-2) — a FastAPI /invoke endpoint pre-wired to Azure OpenAI.
+
+Deployed by the Loom App Runtime as an autoscale-to-zero Azure Container App.
+Replace \`TOOLS\` + \`run_tool()\` with your own harness (LangGraph / CrewAI /
+Claude Agent SDK / OpenAI Agents SDK) — it is just a container. The ONE contract
+Loom relies on for compose-back is: POST /invoke {"input": "..."} -> {"output": "..."}.
+"""
+import json
+import os
+from typing import Any
+
+from fastapi import FastAPI
+from pydantic import BaseModel
+
+app = FastAPI(title="Loom Agent")
+
+# --- Azure OpenAI wiring (same env the Loom AOAI clients read) ---------------
+# Managed identity (the app's UAMI) is preferred; an API key is the fallback.
+AOAI_ENDPOINT = os.environ.get("AZURE_OPENAI_ENDPOINT", "").rstrip("/")
+AOAI_DEPLOYMENT = os.environ.get("AZURE_OPENAI_DEPLOYMENT", "gpt-4o")
+AOAI_API_VERSION = os.environ.get("AZURE_OPENAI_API_VERSION", "2024-10-21")
+AOAI_API_KEY = os.environ.get("AZURE_OPENAI_API_KEY", "")
+
+
+def _aoai_client():
+    from openai import AzureOpenAI
+
+    if AOAI_API_KEY:
+        return AzureOpenAI(
+            azure_endpoint=AOAI_ENDPOINT,
+            api_key=AOAI_API_KEY,
+            api_version=AOAI_API_VERSION,
+        )
+    # Managed-identity token provider (DefaultAzureCredential resolves the ACA UAMI).
+    from azure.identity import DefaultAzureCredential, get_bearer_token_provider
+
+    token_provider = get_bearer_token_provider(
+        DefaultAzureCredential(), "https://cognitiveservices.azure.com/.default"
+    )
+    return AzureOpenAI(
+        azure_endpoint=AOAI_ENDPOINT,
+        azure_ad_token_provider=token_provider,
+        api_version=AOAI_API_VERSION,
+    )
+
+
+# --- Your tools --------------------------------------------------------------
+# Declare tools the model can call. Each maps to a branch in run_tool().
+TOOLS: list[dict[str, Any]] = [
+    {
+        "type": "function",
+        "function": {
+            "name": "echo",
+            "description": "Echo a message back (replace with a real tool).",
+            "parameters": {
+                "type": "object",
+                "properties": {"message": {"type": "string"}},
+                "required": ["message"],
+            },
+        },
+    },
+]
+
+
+def run_tool(name: str, args: dict[str, Any]) -> str:
+    if name == "echo":
+        return str(args.get("message", ""))
+    return f"Tool '{name}' is not implemented in this agent."
+
+
+class InvokeRequest(BaseModel):
+    input: str
+    system: str | None = None
+
+
+@app.get("/")
+def index() -> dict[str, Any]:
+    return {"agent": "Loom Agent", "invoke": "POST /invoke {\\"input\\": \\"...\\"}", "aoai_configured": bool(AOAI_ENDPOINT)}
+
+
+@app.get("/health")
+def health() -> dict[str, bool]:
+    return {"ok": True}
+
+
+@app.post("/invoke")
+def invoke(req: InvokeRequest) -> dict[str, Any]:
+    """Run a bounded tool-calling loop and return the final answer + steps."""
+    if not AOAI_ENDPOINT:
+        return {
+            "output": "This agent is not wired to Azure OpenAI yet — set AZURE_OPENAI_ENDPOINT "
+            "(+ AZURE_OPENAI_DEPLOYMENT) as a binding on the Loom App Runtime.",
+            "steps": [],
+        }
+    client = _aoai_client()
+    messages: list[dict[str, Any]] = [
+        {"role": "system", "content": req.system or "You are a helpful agent. Use tools when they help."},
+        {"role": "user", "content": req.input},
+    ]
+    steps: list[dict[str, Any]] = []
+    for _ in range(6):  # bound the loop
+        resp = client.chat.completions.create(
+            model=AOAI_DEPLOYMENT, messages=messages, tools=TOOLS, tool_choice="auto"
+        )
+        msg = resp.choices[0].message
+        if not msg.tool_calls:
+            return {"output": msg.content or "", "steps": steps}
+        messages.append(msg.model_dump(exclude_none=True))
+        for call in msg.tool_calls:
+            try:
+                args = json.loads(call.function.arguments or "{}")
+            except json.JSONDecodeError:
+                args = {}
+            result = run_tool(call.function.name, args)
+            steps.append({"tool": call.function.name, "args": args, "result": result})
+            messages.append({"role": "tool", "tool_call_id": call.id, "content": result})
+    return {"output": "Reached the tool-call step limit.", "steps": steps}
+`,
+    },
+    {
+      path: 'requirements.txt',
+      content: 'fastapi==0.115.5\nuvicorn[standard]==0.32.1\nopenai==1.57.0\nazure-identity==1.19.0\npydantic==2.10.3\n',
+    },
+  ],
+};
+
 export const LOOM_APP_TEMPLATES: readonly LoomAppTemplate[] = [
-  STREAMLIT, DASH, GRADIO, FLASK, NODE_EXPRESS,
+  STREAMLIT, DASH, GRADIO, FLASK, NODE_EXPRESS, AGENT_FASTAPI,
 ];
 
 export function getLoomAppTemplate(id: string): LoomAppTemplate | undefined {
@@ -294,6 +440,9 @@ export function generateDockerfile(template: LoomAppTemplate, port: number): str
       cmd = `CMD ["gunicorn", "--bind", "0.0.0.0:${p}", "app:app"]`;
     } else if (template.id === 'dash') {
       cmd = `CMD ["gunicorn", "--bind", "0.0.0.0:${p}", "app:server"]`;
+    } else if (template.id === 'agent-fastapi') {
+      // FastAPI is ASGI, not WSGI — serve with uvicorn (app:app).
+      cmd = `CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "${p}"]`;
     } else {
       // gradio + generic python: run the entry file directly.
       cmd = `CMD ["python", "${template.entryFile}"]`;

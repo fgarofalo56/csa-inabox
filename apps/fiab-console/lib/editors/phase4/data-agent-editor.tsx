@@ -181,6 +181,10 @@ const DA_SOURCE_TYPES: { value: DaSourceType; label: string; itemType: string }[
   // Not a Loom item — grounds on Microsoft Graph directly (site/drive/mail
   // scope picked on the source card). itemType '' skips the item picker.
   { value: 'microsoft-graph', label: 'Microsoft 365 (Graph)', itemType: '' },
+  // Hosted agent compose-back (DBX-2): a deployed Loom App (Agent/FastAPI
+  // template). The picker lists loom-app-runtime items; the executor POSTs the
+  // routed sub-question to the app's /invoke endpoint.
+  { value: 'agent', label: 'Hosted agent', itemType: 'loom-app-runtime' },
 ];
 // Schema-selection for graph/ontology (queried whole) + semantic-model (Power
 // BI "Prep for AI") is a caption; every other type gets the real Tree picker
@@ -289,6 +293,34 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
     if (!pickSel) return;
     const opts = available[pickerType] || [];
     const chosen = opts.find((o) => o.id === pickSel);
+    // Hosted agent (DBX-2): resolve the deployed app's live URL so the executor
+    // can call its /invoke endpoint; the URL is re-validated (SSRF) server-side.
+    if (pickerType === 'agent') {
+      const sid = `agent:${pickSel}:${Date.now()}`;
+      setState((p) => ({
+        ...p,
+        sources: [...arr<DaSource>(p.sources), {
+          id: sid,
+          type: 'agent' as DaSourceType,
+          name: chosen?.name || pickSel,
+          tables: '',
+          description: 'A hosted bring-your-own agent (Loom App). Route open-ended / multi-step questions to it.',
+          instructions: '## Hosted agent\nRoute a plain natural-language instruction to this agent; it runs its own tool-calling loop and returns an answer.\n',
+          examples: [],
+          agent: { appItemId: pickSel },
+        }],
+      }));
+      setPickSel('');
+      void (async () => {
+        try {
+          const r = await clientFetch(`/api/items/loom-app-runtime/${encodeURIComponent(pickSel)}`);
+          const j = await r.json().catch(() => ({}));
+          const url: string | undefined = j?.ok ? (j.live?.url || j.runtime?.url) : undefined;
+          if (url) updateSource(sid, { agent: { appItemId: pickSel, url } });
+        } catch { /* URL resolves on next open; executor gates honestly if absent */ }
+      })();
+      return;
+    }
     setState((p) => ({
       ...p,
       sources: [...arr<DaSource>(p.sources), {
@@ -734,6 +766,16 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
                       <Field label="Governed metric view" hint="catalog.schema.metric_view (Databricks) or the metric-view name — the agent grounds on its governed measures.">
                         <Input value={src.tables || ''} onChange={(_, d) => updateSource(src.id, { tables: d.value })} placeholder="main.sales.orders_mv" />
                       </Field>
+                    ) : src.type === 'agent' ? (
+                      src.agent?.url ? (
+                        <MessageBar intent="success"><MessageBarBody>
+                          Bound to hosted agent — routed questions are POSTed to its <code>/invoke</code> endpoint.
+                        </MessageBarBody></MessageBar>
+                      ) : (
+                        <MessageBar intent="warning"><MessageBarBody>
+                          This agent has no live URL yet. Deploy the backing Loom App (Loom App Runtime → Build → Deploy), then remove &amp; re-add this source so its <code>/invoke</code> endpoint resolves.
+                        </MessageBarBody></MessageBar>
+                      )
                     ) : (
                       <SourceSchemaTree id={id} src={src} onChange={(tables) => updateSource(src.id, { tables })} />
                     )}
