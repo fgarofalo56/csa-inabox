@@ -166,6 +166,7 @@ const LANG_OPTIONS: { value: NotebookCellLang; label: string }[] = [
   { value: 'sparkr', label: 'SparkR (R)' },
   { value: 'python', label: 'Python' },
   { value: 'tsql', label: 'T-SQL' },
+  { value: 'csharp', label: '.NET Spark (C#)' },
 ];
 
 /**
@@ -325,6 +326,7 @@ function toMonacoLang(lang: NotebookCellLang | undefined): string {
     case 'sparksql':
     case 'tsql': return 'sql';
     case 'sparkr': return 'r';
+    case 'csharp': return 'csharp';
     default: return 'python';
   }
 }

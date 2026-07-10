@@ -1,4 +1,4 @@
-export type NotebookCellLang = 'pyspark' | 'spark' | 'sparksql' | 'sparkr' | 'python' | 'tsql';
+export type NotebookCellLang = 'pyspark' | 'spark' | 'sparksql' | 'sparkr' | 'python' | 'tsql' | 'csharp';
 
 /**
  * MIME type the Loom `display()` helper (ai-display.py) emits for a DataFrame.
