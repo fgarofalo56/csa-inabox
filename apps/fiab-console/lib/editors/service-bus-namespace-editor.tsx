@@ -33,6 +33,10 @@ import { MessagingMetricsTab } from '@/lib/components/messaging/metrics-tab';
 import { ServiceBusExplorer } from '@/lib/components/messaging/service-bus-explorer';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
+import { GuidedEmptyState, type GuidedPath } from '@/lib/components/shared/guided-empty-state';
+import { DetailsPanel, type DetailsSection } from '@/lib/components/shared/details-panel';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
+import { useRegisterRibbonCommands } from '@/lib/components/shared/ribbon-commands';
 
 const useStyles = makeStyles({
   pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, flex: 1, minHeight: 0, minWidth: 0, overflowY: 'auto' },
@@ -390,8 +394,36 @@ export function ServiceBusNamespaceEditor({ item, id }: Props) {
     ]},
   ], [gate, load, openCreate]);
 
+  // SC-9 — publish ribbon actions to the shared command registry (Ctrl+Q / Alt+Q).
+  useRegisterRibbonCommands(ribbon, item.slug);
+
+  // SC-4 — guided launcher paths for the empty Queues / Topics tabs.
+  const queuePaths: GuidedPath[] = [
+    { key: 'queue', title: 'New queue', body: 'Point-to-point messaging with a single competing-consumer group.', icon: Mailbox20Regular, onClick: () => openCreate('queue') },
+  ];
+  const topicPaths: GuidedPath[] = [
+    { key: 'topic', title: 'New topic', body: 'Publish-subscribe fan-out to many filtered subscriptions.', icon: Filter20Regular, onClick: () => openCreate('topic') },
+  ];
+
+  // SC-2 — namespace facts for the DetailsPanel (Overview tab): copyable
+  // endpoint URI + stat rows read from the real ARM namespace record.
+  const overviewSections: DetailsSection[] = ns ? [{
+    key: 'namespace',
+    title: 'Namespace',
+    stats: [
+      { key: 'loc', label: 'Location', value: ns.location || '—' },
+      { key: 'sku', label: 'SKU / tier', value: `${ns.sku || '—'}${ns.tier ? ` (${ns.tier})` : ''}` },
+      { key: 'prov', label: 'Provisioning', value: ns.provisioningState || ns.status || '—' },
+      { key: 'auth', label: 'Local auth', value: ns.disableLocalAuth ? 'Disabled (Entra-only)' : 'Enabled' },
+      { key: 'tls', label: 'Minimum TLS', value: ns.minimumTlsVersion || '—' },
+      { key: 'q', label: 'Queues', value: queues.length },
+      { key: 't', label: 'Topics', value: topics.length },
+    ],
+    uris: ns.endpoint ? [{ key: 'endpoint', label: 'Namespace endpoint', value: ns.endpoint }] : undefined,
+  }] : [];
+
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon} commandSearch main={
       <>
         <div className={s.tabs}>
           <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as string)}>
@@ -405,6 +437,13 @@ export function ServiceBusNamespaceEditor({ item, id }: Props) {
           </TabList>
         </div>
         <div className={s.pad}>
+          {/* SC-6 — teaching banner: queues vs topics, per-surface dismiss. */}
+          <TeachingBanner
+            surfaceKey="service-bus-messaging"
+            title="Enterprise messaging with queues and topics"
+            message="Use a queue for point-to-point work distribution, or a topic for publish-subscribe fan-out where each subscription applies SQL/correlation filter rules. Manage entities, shared access policies, and networking here — real Azure Service Bus, no Fabric required."
+            learnMoreHref="https://learn.microsoft.com/azure/service-bus-messaging/service-bus-messaging-overview"
+          />
           <div className={s.toolbar}>
             <Badge appearance="filled" color="brand" icon={<Mailbox20Regular />}>Service Bus namespace</Badge>
             {ns?.name && <Caption1 className={s.mono}>{ns.name}{ns.location ? ` · ${ns.location}` : ''}{ns.sku ? ` · ${ns.sku}` : ''}</Caption1>}
@@ -552,7 +591,7 @@ export function ServiceBusNamespaceEditor({ item, id }: Props) {
             <>
               <div className={s.toolbar}><Button appearance="primary" icon={<Add20Regular />} onClick={() => openCreate('queue')}>New queue</Button></div>
               {queues.length === 0 ? (
-                <MessageBar intent="info"><MessageBarBody>No queues yet. Click <strong>New queue</strong> for point-to-point messaging.</MessageBarBody></MessageBar>
+                <GuidedEmptyState variant="block" heroIcon={Mailbox20Regular} title="No queues yet" intro="A queue delivers each message to a single competing consumer. Create one to start point-to-point messaging." paths={queuePaths} columns={1} learnMoreHref="https://learn.microsoft.com/azure/service-bus-messaging/service-bus-queues-topics-subscriptions" ariaLabel="Create a queue" />
               ) : (
                 <div className={s.tableWrap}>
                   <Table aria-label="Queues" size="small">
@@ -585,7 +624,7 @@ export function ServiceBusNamespaceEditor({ item, id }: Props) {
             <>
               <div className={s.toolbar}><Button appearance="primary" icon={<Add20Regular />} onClick={() => openCreate('topic')}>New topic</Button></div>
               {topics.length === 0 ? (
-                <MessageBar intent="info"><MessageBarBody>No topics yet. Click <strong>New topic</strong> for publish-subscribe fan-out.</MessageBarBody></MessageBar>
+                <GuidedEmptyState variant="block" heroIcon={Filter20Regular} title="No topics yet" intro="A topic fans a message out to every subscription whose filter matches. Create one to start publish-subscribe messaging." paths={topicPaths} columns={1} learnMoreHref="https://learn.microsoft.com/azure/service-bus-messaging/service-bus-queues-topics-subscriptions" ariaLabel="Create a topic" />
               ) : (
                 <div className={s.tableWrap}>
                   <Table aria-label="Topics" size="small">
@@ -805,15 +844,25 @@ export function ServiceBusNamespaceEditor({ item, id }: Props) {
             </>
           )}
 
-          {/* OVERVIEW */}
+          {/* OVERVIEW — SC-2 DetailsPanel: stats + copyable endpoint URI +
+              find-by-name related entities, from the real ARM namespace. */}
           {!loading && !gate && tab === 'overview' && ns && (
-            <div className={s.grid}>
-              <Caption1>Namespace</Caption1><code className={s.mono}>{ns.name}</code>
-              <Caption1>Location</Caption1><code className={s.mono}>{ns.location || '—'}</code>
-              <Caption1>SKU / tier</Caption1><code className={s.mono}>{ns.sku || '—'}{ns.tier ? ` (${ns.tier})` : ''}</code>
-              <Caption1>Endpoint</Caption1><code className={s.mono}>{ns.endpoint || '—'}</code>
-              <Caption1>Provisioning</Caption1><code className={s.mono}>{ns.provisioningState || ns.status || '—'}</code>
-              <Caption1>Local auth</Caption1><code className={s.mono}>{ns.disableLocalAuth ? 'disabled (Entra-only)' : 'enabled'}</code>
+            <div style={{ display: 'flex', minHeight: '380px', maxWidth: '460px', width: '100%' }}>
+              <DetailsPanel
+                title={ns.name || 'Namespace details'}
+                subtitle="Service Bus namespace"
+                icon={<Mailbox20Regular />}
+                width={460}
+                sections={overviewSections}
+                related={{
+                  title: 'Entities',
+                  items: [
+                    ...queues.map((q) => ({ id: `q:${q.name}`, name: q.name, kind: 'Queue', icon: <Mailbox20Regular />, onClick: () => setTab('queues') })),
+                    ...topics.map((t) => ({ id: `t:${t.name}`, name: t.name, kind: 'Topic', icon: <Filter20Regular />, onClick: () => { setTab('topics'); void loadSubs(t.name); } })),
+                  ],
+                  emptyText: 'No queues or topics yet.',
+                }}
+              />
             </div>
           )}
           {!loading && !gate && tab === 'overview' && !ns && <Body1>Namespace properties unavailable.</Body1>}

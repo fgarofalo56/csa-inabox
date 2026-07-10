@@ -47,6 +47,9 @@ import { AsaTransformInspector } from '@/lib/components/eventstream/visual-desig
 import { compileToSaql, type TransformNode, type SourceNode, type SinkNode } from '@/lib/azure/asa-query-compiler';
 import { MetricChart } from '@/lib/components/monitor/metric-chart';
 import { useSharedEditorStyles } from './shared-styles';
+import { useRegisterRibbonCommands } from '@/lib/components/shared/ribbon-commands';
+import { PreviewTable, type PreviewSource } from '@/lib/components/shared/preview-table';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
 
 // (Ribbon defined inside StreamAnalyticsJobEditor via useMemo so onClick handlers
 // can reference inline setState / save / loadList / setTab state.)
@@ -496,8 +499,30 @@ export function StreamAnalyticsJobEditor({ item, id }: { item: FabricItemType; i
     ]},
   ], [busy, selected, jobState, isRunning, setState, loadList, loadDetail, dirty, save]);
 
+  // SC-9 — publish ribbon actions to the shared command registry so the
+  // in-ribbon CommandSearch (Ctrl+Q / Alt+Q) surfaces every job action.
+  useRegisterRibbonCommands(ribbon, item.slug);
+
+  // SC-5 — the "Run test" output rows, shaped for the shared type-badged
+  // PreviewTable (column type badges + "Succeeded · Columns N · Rows N" bar).
+  const testPreviewSources: PreviewSource[] = useMemo(() => {
+    if (testResult?.mode !== 'run') return [];
+    const rows: any[] = Array.isArray(testResult.rows) ? testResult.rows : [];
+    if (rows.length === 0) return [];
+    const columns = Object.keys(rows[0]);
+    return [{
+      id: 'asa-test-output',
+      label: 'Test output',
+      data: {
+        columns,
+        rows: rows.map((r) => columns.map((c) => (typeof r[c] === 'object' ? JSON.stringify(r[c]) : r[c]))),
+        rowCount: rows.length,
+      },
+    }];
+  }, [testResult]);
+
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={ribbon}
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon} commandSearch
       leftPanel={
         <div className={s.pad}>
           <Subtitle2>ASA jobs ({jobs?.length ?? '…'})</Subtitle2>
@@ -519,6 +544,13 @@ export function StreamAnalyticsJobEditor({ item, id }: { item: FabricItemType; i
       }
       main={
         <div className={s.pad}>
+          {/* SC-6 — teaching banner (Fabric-grade guidance, per-surface dismiss). */}
+          <TeachingBanner
+            surfaceKey="stream-analytics-authoring"
+            title="Author a continuous streaming query"
+            message="Stream Analytics runs SQL-style queries over Event Hubs / IoT Hub inputs and writes to ADX, lakehouse, or Event Hub outputs. Use the Query Builder to shape a transform without hand-writing SAQL, then Test with sample data before you Start the job — powered by Azure Stream Analytics, no Fabric required."
+            learnMoreHref="https://learn.microsoft.com/azure/stream-analytics/stream-analytics-introduction"
+          />
           <div className={s.toolbar}>
             <Badge appearance="filled" color="brand">Azure Stream Analytics</Badge>
             {selected && <Badge appearance="outline">{selected}</Badge>}
@@ -758,27 +790,10 @@ export function StreamAnalyticsJobEditor({ item, id }: { item: FabricItemType; i
                       {testResult.outputUri && <><br /><Caption1 style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}>Output written to: {String(testResult.outputUri).slice(0, 120)}</Caption1></>}
                     </MessageBarBody>
                   </MessageBar>
-                  {(testResult.rows || []).length > 0 && (
-                    <div className={s.tableWrap}>
-                      <Table size="small">
-                        <TableHeader>
-                          <TableRow>
-                            {Object.keys(testResult.rows[0]).map((c) => (
-                              <TableHeaderCell key={c}>{c}</TableHeaderCell>
-                            ))}
-                          </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                          {testResult.rows.slice(0, 50).map((row: any, i: number) => (
-                            <TableRow key={i}>
-                              {Object.keys(testResult.rows[0]).map((c) => (
-                                <TableCell key={c}>{typeof row[c] === 'object' ? JSON.stringify(row[c]) : String(row[c] ?? '')}</TableCell>
-                              ))}
-                            </TableRow>
-                          ))}
-                        </TableBody>
-                      </Table>
-                    </div>
+                  {testPreviewSources.length > 0 && (
+                    // SC-5 — type-badged preview grid + "Succeeded · Columns N ·
+                    // Rows N" status bar, replacing the plain output table.
+                    <PreviewTable sources={testPreviewSources} ariaLabel="Test output rows" maxRows={50} />
                   )}
                 </>
               )}
