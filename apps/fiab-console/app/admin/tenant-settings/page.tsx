@@ -24,6 +24,8 @@ import { useAdminTabStyles } from '@/lib/components/ui/admin-tab-styles';
 import { CopilotAgentsConfig } from '@/lib/components/admin/copilot-agents-config';
 import { FeedbackForwardingConfig } from '@/lib/components/admin/feedback-forwarding-config';
 import { ToggleScopePicker } from '@/lib/components/admin/toggle-scope-picker';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
+import { LOOM_ACCENT } from '@/lib/components/shared/accent-tokens';
 import type { AppliesToConfig } from '@/lib/types/tenant-settings';
 
 interface NumericParamDef {
@@ -308,16 +310,13 @@ export default function TenantSettingsPage() {
         ],
       }}
     >
-      <div className={s.intro}>
-        <div className={s.introIcon} aria-hidden><Settings24Regular /></div>
-        <div className={s.introText}>
-          <Subtitle2>Tenant-wide feature switches</Subtitle2>
-          <Caption1 className={s.introHint}>
-            Per-area switches across Power BI, Fabric, OneLake, Real-Time, AI, Mirroring, and Git.
-            Changes persist to Cosmos with a per-toggle audit trail. Save with Ctrl+S.
-          </Caption1>
-        </div>
-      </div>
+      <TeachingBanner
+        surfaceKey="admin-tenant-settings"
+        title="Tenant-wide feature switches"
+        message="Per-area switches across Power BI, Fabric, OneLake, Real-Time, AI, Mirroring, and Git. Changes stage until you save (Ctrl+S) and persist to Cosmos with a per-toggle audit trail — you can see who changed what and when."
+        icon={Settings24Regular}
+        accent={LOOM_ACCENT.violet}
+      />
 
       <div className={s.toolbar}>
         <Input
