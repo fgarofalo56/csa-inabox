@@ -134,6 +134,15 @@ Build these **first**; almost everything later rides one of them.
 > eventstream Fabric-UX upgrades (#1768/#1765). **The GENUINELY-UNBUILT Phase-1 roots are just U0 and
 > PSR-A.** Verify each item's real state (grep the repo / `gh pr list --state merged`) before building.
 
+> **R-band notebook parity (R4, task #38) — inventory landed 2026-07-10.** The three notebook
+> flavors diverged (each editor exposes a different feature subset). Learn-grounded per-flavor
+> parity inventories with prioritized R4 build lists now live at
+> `docs/fiab/parity/notebook-synapse.md` (R4-SYN-1…12), `docs/fiab/parity/notebook-databricks.md`
+> (R4-DBX-1…10), and `docs/fiab/parity/notebook-loom.md` (R4-NB-1…8). Top cross-flavor gaps:
+> wire the shared `RichDisplay` viz builder + `VariablesPane` into the Synapse flavor; add
+> schedule-as-a-job + dbutils widgets to Databricks; add scheduling + parameters + a resources
+> pane to the regular flavor. Reliability of the regular flavor is the separate **R3** track (#37).
+
 - **U0 — shared UX component library** *(PRP-ux-baseline-program, SC-1…SC-10)* — `node-kit v2`,
   `<DetailsPanel>`, `<DockedInspector>`, `<GuidedEmptyState>`, `<PreviewTable>`, `useTeachingToast`,
   `<ExplorerTree>`, `<ItemTabStrip>`/`<ToolbarCrossLinks>`, `<CommandSearch>`, `<EntityDiagram>`.
