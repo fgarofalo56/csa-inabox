@@ -162,18 +162,28 @@ test('resolve: honest gate when no storage account configured', () => {
   assert.match(r.error, /LOOM_ONELAKE_DEFAULT_ACCOUNT/);
 });
 
+// Parse the HOSTNAME of an abfss://container@host/... or https://host/... URI so
+// host assertions are exact (CodeQL: substring checks on URLs are not sanitizers).
+function uriHost(uri) {
+  return new URL(uri.replace(/^abfss:\/\//, 'https://')).hostname;
+}
+
 test('resolve: gov dfs suffix is honoured', () => {
   const gov = { ...CFG, dfsSuffix: 'dfs.core.usgovcloudapi.net' };
   const p = parseLoomUri('loom://acme/ws/sales/t');
   const r = resolvePhysical(p, null, gov);
-  assert.ok(r.physical.abfss.includes('dfs.core.usgovcloudapi.net'));
+  assert.ok(uriHost(r.physical.abfss).endsWith('.dfs.core.usgovcloudapi.net'));
 });
 
 test('resolve: never emits a Fabric OneLake host', () => {
   const p = parseLoomUri('loom://acme/ws/sales/Tables/x');
   const r = resolvePhysical(p, null, CFG);
-  assert.ok(!r.physical.abfss.includes('onelake.dfs.fabric.microsoft.com'));
-  assert.ok(!r.physical.dfsUrl.includes('fabric.microsoft.com'));
+  const abfssHost = uriHost(r.physical.abfss);
+  const dfsHost = uriHost(r.physical.dfsUrl);
+  assert.notEqual(abfssHost, 'onelake.dfs.fabric.microsoft.com');
+  assert.ok(!abfssHost.endsWith('.fabric.microsoft.com'));
+  assert.notEqual(dfsHost, 'fabric.microsoft.com');
+  assert.ok(!dfsHost.endsWith('.fabric.microsoft.com'));
 });
 
 // ── deriveStorageConfig ─────────────────────────────────────────────────────
