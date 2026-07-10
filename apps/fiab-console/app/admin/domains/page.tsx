@@ -42,6 +42,7 @@ import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-ta
 import { DomainSettingsPane, type DomainRecord } from '@/lib/panes/domain-settings-pane';
 import { DomainImageChip } from '@/lib/components/domain-image-presets';
 import { CreateDomainDialog } from '@/lib/domains/create-domain-dialog';
+import { DomainGovernanceSync } from '@/lib/domains/domain-governance-sync';
 
 interface Domain extends DomainRecord {
   createdAt: string; createdBy: string; purviewDomainId?: string;
@@ -314,23 +315,9 @@ export default function DomainsPage() {
         </SectionExplainer>
       </Section>
 
-      {purview && !purview.configured && (
-        <MessageBar intent="warning" className={a.messageBar}>
-          <MessageBarBody>
-            <MessageBarTitle>Purview business-domain mirror not active</MessageBarTitle>
-            {purview.hint}
-          </MessageBarBody>
-        </MessageBar>
-      )}
-      {purview && purview.configured && (
-        <MessageBar intent="success" className={a.messageBar}>
-          <MessageBarBody>
-            <MessageBarTitle>Purview mirror active</MessageBarTitle>
-            {purview.domains.length} mirrored domain{purview.domains.length === 1 ? '' : 's'} in Purview.
-            New domains created here are mirrored automatically.
-          </MessageBarBody>
-        </MessageBar>
-      )}
+      <Section title="Governance sync">
+        <DomainGovernanceSync />
+      </Section>
 
       {error && (
         <MessageBar intent="error" className={a.messageBar}>
