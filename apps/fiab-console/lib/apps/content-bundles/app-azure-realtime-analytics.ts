@@ -34,7 +34,7 @@
  */
 
 import type { AppBundle } from './types';
-import { backendUtilShimCell, loomSecret } from './notebook-backend';
+import { backendUtilShimCell } from './notebook-backend';
 
 // ════════════════════════════════════════════════════════════════════════
 //  BACKEND-AWARE SQL DIALECT
@@ -212,17 +212,25 @@ const NB_BOOTSTRAP_CELLS = [
     source:
       '# Resolve the ADLS Gen2 data root the streaming + batch jobs read/write, in a\n' +
       '# way that works on Synapse Spark (default), Databricks, Fabric, or Azure ML.\n' +
-      `sp_client_id     = ${loomSecret('kv-secrets', 'sp-client-id')}\n` +
-      `sp_client_secret = ${loomSecret('kv-secrets', 'sp-client-secret')}\n` +
-      'tenant_id        = loom_get_arg("tenant_id") or spark.conf.get("spark.loom.tenantId", "")\n\n' +
       '# Customer-supplied ADLS Gen2 account + container (notebook parameter or\n' +
       '# spark.conf; illustrative setup, not a Loom-managed data load).\n' +
-      'adls_account   = loom_get_arg("adls_account") or spark.conf.get("spark.loom.adlsAccount", "")\n' +
+      'adls_account   = loom_get_arg("adls_account") or spark.conf.get("spark.loom.adlsAccount", "{{ADLS_ACCOUNT}}")\n' +
       'adls_container = "landing"\n' +
       'assert adls_account, "Set the adls_account parameter (or spark.loom.adlsAccount) to your ADLS Gen2 account."\n\n' +
-      '# SP OAuth for direct abfss reads — required on Azure ML (no mount), harmless\n' +
-      '# on the mount-capable engines.\n' +
-      'loom_configure_oauth(adls_account, sp_client_id, sp_client_secret, tenant_id)\n\n' +
+      '# AUTH: default = the WORKSPACE MANAGED IDENTITY (Synapse/Fabric linked\n' +
+      '# access, Databricks passthrough) — no secrets needed. SP OAuth is OPT-IN:\n' +
+      '# supply a real Key Vault (parameter key_vault or spark.loom.keyVault)\n' +
+      "# holding 'sp-client-id'/'sp-client-secret' and it will be used (required\n" +
+      '# on Azure ML, which has no mount surface). A placeholder vault previously\n' +
+      '# hard-coded here made this cell hang minutes on a TCP timeout.\n' +
+      'key_vault = loom_get_arg("key_vault") or spark.conf.get("spark.loom.keyVault", "")\n' +
+      'if key_vault:\n' +
+      '    sp_client_id     = loom_get_secret(key_vault, "sp-client-id")\n' +
+      '    sp_client_secret = loom_get_secret(key_vault, "sp-client-secret")\n' +
+      '    tenant_id        = loom_get_arg("tenant_id") or spark.conf.get("spark.loom.tenantId", "")\n' +
+      '    loom_configure_oauth(adls_account, sp_client_id, sp_client_secret, tenant_id)\n' +
+      'else:\n' +
+      '    print("No key_vault parameter set - using the workspace managed identity for lake access (default).")\n\n' +
       '# Mount where supported, else use the direct abfss path (AML). Either way\n' +
       '# data_root is the root the cells below load Delta tables from.\n' +
       'data_root = loom_mount_adls(adls_container, adls_account, "/mnt/data")\n' +
@@ -410,11 +418,19 @@ const NB_OPENAI_CELLS = [
     lang: 'pyspark' as const,
     source:
       'from openai import AzureOpenAI\n\n' +
-      '# Key Vault secrets via the backend-agnostic shim at the top of this notebook\n' +
-      '# (works on Synapse/Databricks/Fabric/AML — no raw dbutils).\n' +
+      '# AOAI endpoint/key: prefer notebook parameters / spark.conf; a Key Vault is\n' +
+      '# OPT-IN via the key_vault parameter (a placeholder vault previously\n' +
+      '# hard-coded here hung this cell on a TCP timeout).\n' +
+      'aoai_endpoint = loom_get_arg("aoai_endpoint") or spark.conf.get("spark.loom.aoaiEndpoint", "")\n' +
+      'aoai_key      = loom_get_arg("aoai_key") or spark.conf.get("spark.loom.aoaiKey", "")\n' +
+      'key_vault     = loom_get_arg("key_vault") or spark.conf.get("spark.loom.keyVault", "")\n' +
+      'if not aoai_endpoint and key_vault:\n' +
+      '    aoai_endpoint = loom_get_secret(key_vault, "azure-openai-endpoint")\n' +
+      '    aoai_key      = loom_get_secret(key_vault, "azure-openai-key")\n' +
+      'assert aoai_endpoint and aoai_key, "Set aoai_endpoint/aoai_key parameters (or key_vault holding azure-openai-endpoint/-key)."\n\n' +
       'client = AzureOpenAI(\n' +
-      `    azure_endpoint=${loomSecret('kv-secrets', 'azure-openai-endpoint')},\n` +
-      `    api_key=${loomSecret('kv-secrets', 'azure-openai-key')},\n` +
+      '    azure_endpoint=aoai_endpoint,\n' +
+      '    api_key=aoai_key,\n' +
       '    api_version="2024-02-15-preview",\n' +
       ')',
   },
