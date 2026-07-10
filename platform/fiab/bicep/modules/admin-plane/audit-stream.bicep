@@ -118,8 +118,17 @@ resource dcr 'Microsoft.Insights/dataCollectionRules@2023-03-11' = {
       {
         streams: [ 'Custom-LoomAudit_CL' ]
         destinations: [ 'loomAuditLaDest' ]
-        // The incoming JSON already matches the table shape — pass through.
-        transformKql: 'source'
+        // TenantId is a RESERVED Log Analytics column typed `guid` (Microsoft
+        // Learn: reserved columns incl. TenantId; a GUID column is declared as
+        // `string` in the DCR stream but the destination column is `guid`). A
+        // bare `source` pass-through emits TenantId as string, so the DCR output
+        // type (String) mismatches the table column type (Guid). Azure Government
+        // validates this strictly — a LIVE deploy into usgovvirginia (2026-07-10)
+        // failed with `Types of transform output columns do not match ... TenantId
+        // [produced:'String', output:'Guid']`. Cast it to guid so produced ==
+        // output. Cloud-neutral: the same latent mismatch exists in Commercial and
+        // this fixes it there too.
+        transformKql: 'source | extend TenantId = toguid(TenantId)'
         outputStream: 'Custom-LoomAudit_CL'
       }
     ]
