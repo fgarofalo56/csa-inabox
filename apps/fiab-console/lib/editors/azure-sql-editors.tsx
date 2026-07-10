@@ -496,7 +496,7 @@ export function AzureSqlServerEditor({ item, id }: { item: FabricItemType; id: s
   useRegisterRibbonCommands(ribbon, item.slug);
 
   return (
-    <ItemEditorChrome
+    <ItemEditorChrome splitKeyPrefix={item.slug}
       item={item} id={id} ribbon={ribbon} commandSearch
       leftPanel={
         <div className={s.treePad}>
@@ -1138,7 +1138,7 @@ export function AzureSqlDatabaseEditor({ item, id }: { item: FabricItemType; id:
   ) : undefined;
 
   return (
-    <ItemEditorChrome
+    <ItemEditorChrome splitKeyPrefix={item.slug}
       item={item} id={id} ribbon={ribbon} commandSearch
       rightPanelLabel="Details"
       rightPanel={connDetails}
@@ -1548,7 +1548,7 @@ export function SqlManagedInstanceEditor({ item, id }: { item: FabricItemType; i
   useRegisterRibbonCommands(ribbon, item.slug);
 
   return (
-    <ItemEditorChrome
+    <ItemEditorChrome splitKeyPrefix={item.slug}
       item={item} id={id}
       ribbon={ribbon} commandSearch
       leftPanel={
@@ -1775,7 +1775,7 @@ export function SqlServer2025VectorIndexEditor({ item, id }: { item: FabricItemT
   useRegisterRibbonCommands(ribbon, item.slug);
 
   return (
-    <ItemEditorChrome
+    <ItemEditorChrome splitKeyPrefix={item.slug}
       item={item} id={id}
       ribbon={ribbon} commandSearch
       leftPanel={

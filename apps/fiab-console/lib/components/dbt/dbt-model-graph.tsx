@@ -20,7 +20,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode,
 } from 'react';
 import {
-  ReactFlow, ReactFlowProvider, Background, BackgroundVariant, Controls, MiniMap, Panel, Handle, Position,
+  ReactFlow, ReactFlowProvider, Background, BackgroundVariant, MiniMap, Panel, Handle, Position,
   useReactFlow, useNodesState,
   type Node, type Edge, type NodeChange, type NodeTypes, type NodeProps,
 } from '@xyflow/react';
@@ -35,7 +35,7 @@ import {
   Add20Regular, Delete20Regular, DatabaseMultiple20Regular, Table20Regular,
 } from '@fluentui/react-icons';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
-import { CanvasNode, accentTint, portStyle, type CanvasVisual } from '@/lib/components/canvas/canvas-node-kit';
+import { CanvasNode, accentTint, portStyle, CanvasRightRail, type CanvasVisual } from '@/lib/components/canvas/canvas-node-kit';
 import type {
   DbtProjectGraph, DbtSource, DbtModel, DbtTest, DbtTarget, MedallionLayer, Materialization, DbtAdapter,
 } from '@/lib/dbt/dbt-project-model';
@@ -333,7 +333,9 @@ interface CanvasProps {
 
 function CanvasInner({ sources, models, selected, onSelect, onAddSource, onAddModel }: CanvasProps) {
   const s = useStyles();
-  useReactFlow();
+  const rf = useReactFlow();
+  const [zoom, setZoom] = useState(1);
+  const [railCollapsed, setRailCollapsed] = useState(false);
   const positionsRef = useRef<Map<string, XY>>(new Map());
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
   const total = sources.length + models.length;
@@ -403,16 +405,35 @@ function CanvasInner({ sources, models, selected, onSelect, onAddSource, onAddMo
         onNodesChange={handleNodesChange}
         onNodeClick={handleNodeClick}
         onPaneClick={() => onSelect(null)}
+        onMove={(_, vp) => setZoom(vp.zoom)}
         minZoom={0.3}
         maxZoom={2}
         fitView
-        fitViewOptions={{ padding: 0.2 }}
+        // maxZoom keeps a small 3-6 node graph filling the canvas readably on open.
+        fitViewOptions={{ padding: 0.2, maxZoom: 1.25 }}
         proOptions={{ hideAttribution: true }}
         nodesConnectable={false}
         deleteKeyCode={null}
       >
-        <Background variant={BackgroundVariant.Dots} gap={20} size={1} color={tokens.colorNeutralStroke2} />
-        <Controls showInteractive={false} />
+        <Background
+          variant={BackgroundVariant.Dots}
+          gap={18}
+          size={1.5}
+          color={accentTint('var(--loom-accent-blue)', 45)}
+        />
+        <Panel position="bottom-left">
+          <CanvasRightRail
+            zoom={zoom}
+            minZoom={0.25}
+            maxZoom={2}
+            onZoomChange={(z) => rf.setViewport({ ...rf.getViewport(), zoom: z }, { duration: 120 })}
+            onZoomIn={() => rf.zoomIn({ duration: 120 })}
+            onZoomOut={() => rf.zoomOut({ duration: 120 })}
+            onFit={() => rf.fitView({ padding: 0.2, maxZoom: 1.25, duration: 200 })}
+            collapsed={railCollapsed}
+            onToggleCollapse={() => setRailCollapsed((v) => !v)}
+          />
+        </Panel>
         <MiniMap
           pannable
           zoomable
@@ -421,7 +442,9 @@ function CanvasInner({ sources, models, selected, onSelect, onAddSource, onAddMo
             if (d?.kind === 'source') return SOURCE_ACCENT;
             return layerAccent(d?.layer);
           }}
+          nodeStrokeColor={tokens.colorNeutralStroke2}
           nodeStrokeWidth={2}
+          maskColor={accentTint(tokens.colorNeutralBackground3, 70)}
           style={{ backgroundColor: tokens.colorNeutralBackground1 }}
         />
         <Panel position="top-left">

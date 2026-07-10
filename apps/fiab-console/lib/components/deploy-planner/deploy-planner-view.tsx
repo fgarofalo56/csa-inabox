@@ -18,7 +18,7 @@ import { clientFetch } from '@/lib/client-fetch';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ReactFlow, ReactFlowProvider, Background, BackgroundVariant, Controls, MiniMap,
+  ReactFlow, ReactFlowProvider, Background, BackgroundVariant, MiniMap, Panel,
   useReactFlow, MarkerType, type Node, type Edge, type Connection, type NodeTypes,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
@@ -37,6 +37,7 @@ import {
 } from '@fluentui/react-icons';
 import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
 import { LOOM_ACCENT } from '@/lib/components/shared/accent-tokens';
+import { accentTint, CanvasRightRail } from '@/lib/components/canvas/canvas-node-kit';
 import { SubscriptionNode, DomainNode, ServiceNode, ServiceIconChip } from './deploy-plan-nodes';
 import {
   SERVICE_CATALOG, SERVICE_CATEGORY_ORDER, servicesByCategory, serviceByKey, serviceVisual,
@@ -325,6 +326,8 @@ const MIME = 'application/x-loom-service';
 function PlannerInner() {
   const s = useStyles();
   const rf = useReactFlow();
+  const [zoom, setZoom] = useState(1);
+  const [railCollapsed, setRailCollapsed] = useState(false);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [subs, setSubs] = useState<PlanSubscription[]>([]);
@@ -773,18 +776,43 @@ function PlannerInner() {
             onEdgeClick={onEdgeClick}
             onConnect={onConnect}
             onPaneClick={() => setSel(null)}
+            onMove={(_, vp) => setZoom(vp.zoom)}
             nodesConnectable
             nodesDraggable={false}
             minZoom={0.3}
             maxZoom={2}
             fitView
-            fitViewOptions={{ padding: 0.2 }}
+            // maxZoom keeps a small 3-6 node graph filling the canvas readably on open.
+            fitViewOptions={{ padding: 0.2, maxZoom: 1.25 }}
             proOptions={{ hideAttribution: true }}
             deleteKeyCode={null}
           >
-            <Background variant={BackgroundVariant.Dots} gap={20} size={1} color={tokens.colorNeutralStroke2} />
-            <Controls showInteractive={false} />
-            <MiniMap pannable zoomable style={{ backgroundColor: tokens.colorNeutralBackground1 }} />
+            <Background
+              variant={BackgroundVariant.Dots}
+              gap={18}
+              size={1.5}
+              color={accentTint('var(--loom-accent-blue)', 45)}
+            />
+            <Panel position="bottom-left">
+              <CanvasRightRail
+                zoom={zoom}
+                minZoom={0.25}
+                maxZoom={2}
+                onZoomChange={(z) => rf.setViewport({ ...rf.getViewport(), zoom: z }, { duration: 120 })}
+                onZoomIn={() => rf.zoomIn({ duration: 120 })}
+                onZoomOut={() => rf.zoomOut({ duration: 120 })}
+                onFit={() => rf.fitView({ padding: 0.2, maxZoom: 1.25, duration: 200 })}
+                collapsed={railCollapsed}
+                onToggleCollapse={() => setRailCollapsed((v) => !v)}
+              />
+            </Panel>
+            <MiniMap
+              pannable
+              zoomable
+              nodeStrokeColor={tokens.colorNeutralStroke2}
+              maskColor={accentTint(tokens.colorNeutralBackground3, 70)}
+              style={{ backgroundColor: tokens.colorNeutralBackground1 }}
+            />
           </ReactFlow>
           {subs.length === 0 && (
             <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none', color: tokens.colorNeutralForeground3 }}>

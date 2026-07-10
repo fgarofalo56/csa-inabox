@@ -1204,7 +1204,7 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
   }, [openWizard, openFnEditor, openDcWizard, openRlsEditor, openAnomaly, info?.isFollower, info?.tables]);
 
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={ribbon}
+    <ItemEditorChrome splitKeyPrefix={item.slug} item={item} id={id} ribbon={ribbon}
       leftPanel={
         id && id !== 'new'
           ? (

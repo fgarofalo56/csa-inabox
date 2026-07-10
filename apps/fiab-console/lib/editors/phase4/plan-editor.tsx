@@ -2706,7 +2706,7 @@ export function PlanEditor({ item, id }: { item: FabricItemType; id: string }) {
   ], [save, saving, dirty, add]);
 
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
+    <ItemEditorChrome splitKeyPrefix={item.slug} item={item} id={id} ribbon={ribbon} main={
       <div className={s.pad}>
         {loading && <Spinner size="small" label="Loading…" labelPosition="after" />}
         {/* SC-6 — teaching banner: what a Plan is + the Azure-native writeback flow. */}

@@ -28,7 +28,7 @@ import {
   type ReactNode, type PointerEvent as ReactPointerEvent, type KeyboardEvent as ReactKeyboardEvent,
 } from 'react';
 import {
-  ReactFlow, ReactFlowProvider, Background, BackgroundVariant, Controls, MiniMap, Panel,
+  ReactFlow, ReactFlowProvider, Background, BackgroundVariant, MiniMap, Panel,
   useReactFlow, useNodesState, useEdgesState, Handle, Position,
   type Node, type Edge, type NodeProps, type NodeTypes, type Connection,
 } from '@xyflow/react';
@@ -56,7 +56,7 @@ import {
 } from '@/lib/editors/components/delta-preview-grid-utils';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import {
-  CanvasNode, CATEGORY_ACCENT, portStyle,
+  CanvasNode, CATEGORY_ACCENT, portStyle, accentTint, CanvasRightRail,
   type CanvasVisual, type CanvasNodeCategory,
 } from '@/lib/components/canvas/canvas-node-kit';
 import {
@@ -328,6 +328,8 @@ function CanvasInner(props: VisualQueryCanvasProps) {
   const { engine, id, dialect, database, warehouseId, catalog, schema, sourceTables = [] } = props;
   const s = useStyles();
   const rf = useReactFlow();
+  const [zoom, setZoom] = useState(1);
+  const [railCollapsed, setRailCollapsed] = useState(false);
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -629,16 +631,41 @@ function CanvasInner(props: VisualQueryCanvasProps) {
             onConnect={onConnect}
             onNodeClick={handleNodeClick}
             onPaneClick={() => setSelectedId(null)}
+            onMove={(_, vp) => setZoom(vp.zoom)}
             minZoom={0.3}
             maxZoom={2}
             fitView
-            fitViewOptions={{ padding: 0.2 }}
+            // maxZoom keeps a small 3-6 node graph filling the canvas readably on open.
+            fitViewOptions={{ padding: 0.2, maxZoom: 1.25 }}
             proOptions={{ hideAttribution: true }}
             deleteKeyCode={null}
           >
-            <Background variant={BackgroundVariant.Dots} gap={20} size={1} color={tokens.colorNeutralStroke2} />
-            <Controls showInteractive={false} />
-            <MiniMap pannable zoomable style={{ backgroundColor: tokens.colorNeutralBackground1 }} />
+            <Background
+              variant={BackgroundVariant.Dots}
+              gap={18}
+              size={1.5}
+              color={accentTint('var(--loom-accent-blue)', 45)}
+            />
+            <Panel position="bottom-left">
+              <CanvasRightRail
+                zoom={zoom}
+                minZoom={0.25}
+                maxZoom={2}
+                onZoomChange={(z) => rf.setViewport({ ...rf.getViewport(), zoom: z }, { duration: 120 })}
+                onZoomIn={() => rf.zoomIn({ duration: 120 })}
+                onZoomOut={() => rf.zoomOut({ duration: 120 })}
+                onFit={() => rf.fitView({ padding: 0.2, maxZoom: 1.25, duration: 200 })}
+                collapsed={railCollapsed}
+                onToggleCollapse={() => setRailCollapsed((v) => !v)}
+              />
+            </Panel>
+            <MiniMap
+              pannable
+              zoomable
+              nodeStrokeColor={tokens.colorNeutralStroke2}
+              maskColor={accentTint(tokens.colorNeutralBackground3, 70)}
+              style={{ backgroundColor: tokens.colorNeutralBackground1 }}
+            />
             <Panel position="top-left">
               <div className={s.palette} role="toolbar" aria-label="Visual query steps">
                 <Button size="small" icon={<Add20Regular />} appearance="primary" onClick={() => { setAddTable(''); setAddSchema(schema || ''); setAddOpen(true); }} data-vq-action="add-table">Add table</Button>

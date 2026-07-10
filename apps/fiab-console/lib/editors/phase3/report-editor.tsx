@@ -705,7 +705,7 @@ function ReportLikeEditor({
   }, [workspaceId, reportId, kind, editMode, report?.datasetId]);
 
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={ribbon}
+    <ItemEditorChrome splitKeyPrefix={item.slug} item={item} id={id} ribbon={ribbon}
       leftPanel={
         <div className={s.treePad}>
           <Subtitle2 style={{ marginBottom: tokens.spacingVerticalS}}>{kind === 'paginated' ? 'Paginated reports' : 'Reports'}</Subtitle2>
@@ -1207,7 +1207,7 @@ function _LoomNativeReportViewer_legacy({ item, id }: { item: FabricItemType; id
   ], [loadDetail, pages]);
 
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={ribbon}
+    <ItemEditorChrome splitKeyPrefix={item.slug} item={item} id={id} ribbon={ribbon}
       leftPanel={
         <div className={s.treePad}>
           <Subtitle2 style={{ marginBottom: tokens.spacingVerticalS}}>Pages ({pages.length})</Subtitle2>

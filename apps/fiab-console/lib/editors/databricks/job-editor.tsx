@@ -777,7 +777,7 @@ export function DatabricksJobEditor({ item, id }: { item: FabricItemType; id: st
   useRegisterRibbonCommands(ribbonJob, item.slug);
 
   return (
-    <ItemEditorChrome
+    <ItemEditorChrome splitKeyPrefix={item.slug}
       item={item}
       id={id}
       ribbon={ribbonJob} commandSearch

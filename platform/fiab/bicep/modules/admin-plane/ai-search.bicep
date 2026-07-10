@@ -228,6 +228,20 @@ resource diag 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
 // a VNet-injected ACI can pre-create the index at deploy time; it is gated off
 // by default because the PE-locked service is unreachable from a public script.
 // ---------------------------------------------------------------------------
+
+// Sovereign-aware data-plane host + AAD token audience for AI Search. The
+// `environment()` object exposes no search suffix, so derive the cloud from the
+// storage suffix discriminator (`!= core.windows.net` ⇒ Azure US Government:
+// GCC-High / IL5 / DoD; Commercial and GCC both stay on `.windows.net`). This
+// mirrors the runtime SSOT `searchSuffix()` / `searchAadScope()` in
+// apps/fiab-console/lib/azure/cloud-endpoints.ts. Gov values per
+// https://learn.microsoft.com/azure/search/search-region-support and the
+// Azure Government developer guidance (audience `https://search.azure.us`).
+var isSovereignCloud = environment().suffixes.storage != 'core.windows.net'
+var searchDnsSuffix = isSovereignCloud ? 'search.usgovcloudapi.net' : 'search.windows.net'
+var searchTokenAudience = isSovereignCloud ? 'https://search.azure.us/' : 'https://search.azure.com/'
+var searchDataPlaneEndpoint = 'https://${search.name}.${searchDnsSuffix}'
+
 resource governanceIndexScript 'Microsoft.Resources/deploymentScripts@2023-08-01' = if (deployGovernanceIndex && !empty(scriptIdentityId)) {
   name: 'script-loom-governance-catalog-index'
   location: scriptLocation
@@ -247,12 +261,13 @@ resource governanceIndexScript 'Microsoft.Resources/deploymentScripts@2023-08-01
     retentionInterval: 'PT1H'
     timeout: 'PT10M'
     environmentVariables: [
-      { name: 'SEARCH_ENDPOINT', value: 'https://${search.name}.search.windows.net' }
+      { name: 'SEARCH_ENDPOINT', value: searchDataPlaneEndpoint }
+      { name: 'SEARCH_TOKEN_AUDIENCE', value: searchTokenAudience }
       { name: 'IDENTITY_CLIENT_ID', value: scriptIdentityClientId }
     ]
     scriptContent: '''
 $ErrorActionPreference = 'Stop'
-$tokenUri = "http://169.254.169.254/metadata/identity/oauth2/token?api-version=2018-02-01&resource=https://search.azure.com/&client_id=$env:IDENTITY_CLIENT_ID"
+$tokenUri = "http://169.254.169.254/metadata/identity/oauth2/token?api-version=2018-02-01&resource=$env:SEARCH_TOKEN_AUDIENCE&client_id=$env:IDENTITY_CLIENT_ID"
 $token = (Invoke-RestMethod -Uri $tokenUri -Headers @{ Metadata = 'true' }).access_token
 $index = @{
   name = 'loom-governance-items'
@@ -286,7 +301,7 @@ Write-Output "loom-governance-items index ensured"
 
 output searchId string = search.id
 output searchName string = search.name
-output searchEndpoint string = 'https://${search.name}.search.windows.net'
+output searchEndpoint string = searchDataPlaneEndpoint
 // System-assigned MSI principal ID — grant Storage Blob Data Contributor on the
 // debug-session storage account (done above when debugSessionStorageId is set).
 output searchPrincipalId string = search.identity.principalId

@@ -357,7 +357,7 @@ export function EventSchemaSetEditor({ item, id }: Props) {
   }, []);
 
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={ribbon} commandSearch
+    <ItemEditorChrome splitKeyPrefix={item.slug} item={item} id={id} ribbon={ribbon} commandSearch
       leftPanel={
         <ExplorerTree
           title="Schema sets"

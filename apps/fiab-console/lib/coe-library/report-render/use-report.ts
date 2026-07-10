@@ -21,6 +21,15 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ReportModel } from './pbir-parse';
 import type { SampleData } from './tmdl-sample';
 
+/**
+ * Hard client-side cap on a single render request so the viewer can never spin
+ * forever. The server render is already bounded (each live-bindings resolver
+ * has its own timeout), so this only trips when the network / Front Door hop
+ * itself stalls; it's set comfortably above the server budget so a real (if
+ * slow) render still wins and only a genuine stall surfaces the retry gate.
+ */
+const RENDER_FETCH_TIMEOUT_MS = 45_000;
+
 export type EntitySource = 'live' | 'empty' | 'error';
 export interface EntityProvenance { source: EntitySource; note?: string }
 
@@ -88,8 +97,14 @@ export function useReportModel(spec: string | FetchSpec | null): UseReportResult
     if (!s) return;
     setLoading(true);
     setError(null);
+    // Bound the request so the viewer can never spin forever: the server render
+    // is itself bounded (live-bindings resolver timeouts), but a stalled network
+    // / Front Door hop shouldn't leave the dialog on an endless spinner. On
+    // timeout we surface an honest, retryable error instead.
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), RENDER_FETCH_TIMEOUT_MS);
     try {
-      const init: RequestInit = { method: s.method || 'GET' };
+      const init: RequestInit = { method: s.method || 'GET', signal: ac.signal };
       if (s.method === 'POST') {
         init.headers = { 'content-type': 'application/json' };
         init.body = JSON.stringify(s.body ?? {});
@@ -113,9 +128,14 @@ export function useReportModel(spec: string | FetchSpec | null): UseReportResult
         liveError: j.liveError,
       });
     } catch (e: any) {
-      setError(e?.message || String(e));
+      setError(
+        e?.name === 'AbortError'
+          ? `The report took longer than ${Math.round(RENDER_FETCH_TIMEOUT_MS / 1000)}s to render and was cancelled. The Azure backend may be slow or throttled — close and reopen to retry.`
+          : e?.message || String(e),
+      );
       setData(null);
     } finally {
+      clearTimeout(timer);
       setLoading(false);
     }
   }, []);
