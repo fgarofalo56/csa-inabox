@@ -446,6 +446,14 @@ export function NotebookEditor({ item, id }: Props) {
   const patchCell = useCallback((id: string, patch: Partial<NotebookCell>) => {
     setCells(prev => prev.map(c => c.id === id ? { ...c, ...patch } : c));
   }, []);
+  // R3 #4 — resume in-flight runs on remount. `currentNbRef` tracks the loaded
+  // notebook so a resume loop stops once the user switches away; `resumedRunsRef`
+  // guards against double-resuming the same run (React strict-mode double-mount
+  // + repeated loadDetail calls). `pendingResume` bridges loadDetail → the
+  // resume effect (defined after the poll helper).
+  const currentNbRef = useRef<string | null>(null);
+  const resumedRunsRef = useRef<Set<string>>(new Set());
+  const [pendingResume, setPendingResume] = useState<Record<string, any> | null>(null);
   const [sessionStatus, setSessionStatus] = useState<'Idle' | 'Running' | 'Error'>('Idle');
   const [sessionReceipt, setSessionReceipt] = useState<Record<string, unknown> | null>(null);
 
@@ -800,6 +808,9 @@ export function NotebookEditor({ item, id }: Props) {
 
   const loadDetail = useCallback(async (wsId: string, nbId: string) => {
     setDetailErr(null); setRunMsg(null);
+    // Mark the active notebook so any resume loop from a PRIOR notebook stops
+    // patching the wrong cells once the user switches (R3 #4).
+    currentNbRef.current = nbId;
     try {
       const r = await clientFetch(`/api/items/notebook/${encodeURIComponent(nbId)}?workspaceId=${encodeURIComponent(wsId)}`);
       const j = await r.json();
@@ -828,6 +839,15 @@ export function NotebookEditor({ item, id }: Props) {
         ? normalizeSessionConfig(j.definition.sessionConfig)
         : DEFAULT_SESSION_CONFIG);
       setDirty(false);
+      // R3 #4 — hand any in-flight runs the server still tracks to the resume
+      // effect (defined after the poll helper). It re-attaches the poll loop so
+      // navigating away + back no longer strands cells blank while the statement
+      // finishes on Livy.
+      setPendingResume(
+        j.pendingRuns && typeof j.pendingRuns === 'object' && Object.keys(j.pendingRuns).length
+          ? j.pendingRuns
+          : null,
+      );
     } catch (e: any) { setDetailErr(e?.message || String(e)); }
   }, []);
 
@@ -1223,6 +1243,142 @@ export function NotebookEditor({ item, id }: Props) {
     }
     throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
   }, [notebookId, workspaceId]);
+
+  // R3 #4 — resume in-flight runs the server still tracks (state.pendingRuns).
+  // On mount / notebook-switch, for each persisted Spark run: mark its cells
+  // running (restoring any already-accumulated per-cell outputs), then re-attach
+  // the SAME poll loop a live run uses (follow the promoted runId, patch each
+  // cell's output as its statement completes). A stale entry (session recycled)
+  // resolves on the first poll: the server maps it to an honest SessionGone /
+  // terminal error and cleans the entry, and we render that on the cells.
+  const resumePendingRuns = useCallback(async (pendingRuns: Record<string, any> | null | undefined) => {
+    if (!pendingRuns || !workspaceId || !notebookId) return;
+    const nbId = notebookId;
+    for (const [baseKey, entry] of Object.entries(pendingRuns)) {
+      // Only Synapse Spark runs persist a resumable entry; skip anything already
+      // picked up (strict-mode double-mount + repeated loadDetail).
+      if (!baseKey.startsWith('spark:') || !entry || typeof entry !== 'object') continue;
+      const guardKey = `${nbId}:${baseKey}`;
+      if (resumedRunsRef.current.has(guardKey)) continue;
+      resumedRunsRef.current.add(guardKey);
+
+      const queue: Array<{ cellId?: string }> = Array.isArray(entry.queue) ? entry.queue : [];
+      const affectedIds = new Set<string>();
+      queue.forEach((q) => { if (q?.cellId) affectedIds.add(q.cellId); });
+      if (typeof entry.cellId === 'string') affectedIds.add(entry.cellId);
+      const appliedCells = new Set<string>();
+      const applyCellOutputs = (map: Record<string, any> | undefined | null) => {
+        if (!map || typeof map !== 'object') return;
+        for (const [cid, o] of Object.entries(map)) {
+          if (!o || appliedCells.has(cid)) continue;
+          appliedCells.add(cid);
+          patchCell(cid, {
+            output: {
+              status: (o as any).status === 'ok' ? 'ok' : 'error',
+              textPlain: (o as any).textPlain,
+              data: (o as any).data,
+              richDisplay: (o as any).richDisplay,
+              ename: (o as any).ename,
+              evalue: (o as any).evalue,
+              traceback: (o as any).traceback,
+              executedAtUtc: new Date().toISOString(),
+            },
+          });
+        }
+      };
+      const markRemaining = (evalue: string, ename = 'Incomplete') => {
+        affectedIds.forEach((id) => {
+          if (appliedCells.has(id)) return;
+          appliedCells.add(id);
+          patchCell(id, { output: { status: 'error', ename, evalue } });
+        });
+      };
+      // Restore already-finished cells (server-persisted cellOutputs), then spin
+      // the rest so the user immediately sees the run is still live.
+      applyCellOutputs(entry.cellOutputs);
+      affectedIds.forEach((id) => { if (!appliedCells.has(id)) patchCell(id, { output: { status: 'pending' } }); });
+
+      setRunMsg('Reconnecting to an in-flight run…');
+      setSessionStatus('Running');
+      void (async () => {
+        // Resume from the exact in-flight statement (persisted by the poll route)
+        // so we don't re-submit already-run cells; fall back to the base key
+        // (session still starting, no statement submitted yet).
+        let runId: string = typeof entry.lastRunId === 'string' ? entry.lastRunId : baseKey;
+        const start = Date.now();
+        const MAX_MS = 12 * 60 * 1000;
+        let pollInterval = 1000;
+        let endState: 'ok' | 'error' | undefined;
+        while (Date.now() - start < MAX_MS) {
+          if (currentNbRef.current !== nbId) return; // user switched notebooks — stop
+          await new Promise((res) => setTimeout(res, pollInterval));
+          let p: any;
+          try {
+            p = await pollRunStatus(runId);
+          } catch (e: any) {
+            markRemaining(`Lost contact with the resumed run: ${e?.message || e}. Re-run the cell.`, 'PollError');
+            setSessionStatus('Error'); endState = 'error'; break;
+          }
+          if (!p.ok) {
+            markRemaining(`Resumed run ended: ${p.error || 'unknown error'}`, 'PollError');
+            setSessionStatus('Error'); endState = 'error'; break;
+          }
+          if (p.runId && p.runId !== runId) runId = p.runId;
+          applyCellOutputs(p.cellOutputs);
+          const cold = p.phase === 'session-starting' || /^(starting|pending|queued)$/i.test(String(p.status || ''));
+          pollInterval = cold ? 2000 : 700;
+          if (p.output) {
+            // Single-cell resume (or a run whose final statement carries the only
+            // output) — attribute the terminal output to the sole affected cell.
+            if (!p.cellOutputs && affectedIds.size === 1) {
+              const only = [...affectedIds][0];
+              if (!appliedCells.has(only)) {
+                appliedCells.add(only);
+                patchCell(only, {
+                  output: {
+                    status: p.output.status === 'ok' ? 'ok' : 'error',
+                    textPlain: p.output.textPlain, data: p.output.data, richDisplay: p.output.richDisplay,
+                    ename: p.output.ename, evalue: p.output.evalue, traceback: p.output.traceback,
+                    executedAtUtc: new Date().toISOString(),
+                  },
+                });
+              }
+            }
+            endState = p.output.status === 'ok' ? 'ok' : 'error';
+            setSessionStatus(endState === 'ok' ? 'Idle' : 'Error');
+            if (endState === 'error') markRemaining('An earlier cell failed — this cell did not run.');
+            break;
+          }
+          if (['error', 'dead', 'killed', 'shutting_down', 'cancelled', 'cancelling', 'TERMINATED', 'INTERNAL_ERROR'].includes(p.status)) {
+            markRemaining(`Resumed run ended in state '${p.status}'.`, p.status);
+            setSessionStatus('Error'); endState = 'error'; break;
+          }
+        }
+        if (endState === undefined) {
+          const mins = Math.round(MAX_MS / 60000);
+          markRemaining(`Resumed run timed out after ${mins}m — the session may have been recycled. Re-run the cell.`, 'Timeout');
+          setSessionStatus('Error');
+        } else if (endState === 'ok') {
+          // Clear any cell still spinning (an attribution gap) with an honest empty.
+          affectedIds.forEach((id) => {
+            if (appliedCells.has(id)) return;
+            appliedCells.add(id);
+            patchCell(id, { output: { status: 'ok', textPlain: '(no output)' } });
+          });
+          setRunMsg('✓ Reconnected run completed');
+        }
+        loadJobs(workspaceId, nbId);
+      })();
+    }
+  }, [workspaceId, notebookId, patchCell, pollRunStatus, loadJobs]);
+
+  // Fire resume once loadDetail has handed over the server's pendingRuns.
+  useEffect(() => {
+    if (pendingResume && workspaceId && notebookId) {
+      void resumePendingRuns(pendingResume);
+      setPendingResume(null);
+    }
+  }, [pendingResume, workspaceId, notebookId, resumePendingRuns]);
 
   const run = useCallback(async () => {
     if (!workspaceId || !notebookId) return;

@@ -51,9 +51,15 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
       if (!state.defaultLang && state.content.defaultLang) state.defaultLang = state.content.defaultLang;
     }
     const migrated = migrateLegacyState(state);
+    // In-flight runs the client should RESUME on mount (R3 #4). The run route
+    // persists a pendingRuns entry per live Spark run; expose it (as-is — the
+    // queue is user code + text/richDisplay outputs, no secrets) so the editor
+    // can re-attach its poll loop after a reload / notebook switch.
+    const pendingRuns = (state.pendingRuns && typeof state.pendingRuns === 'object') ? state.pendingRuns : {};
     return NextResponse.json({
       ok: true,
       notebook: { id: resource.id, displayName: resource.displayName, description: resource.description },
+      pendingRuns,
       definition: {
         // Legacy flat fields kept for backward compat.
         code: state.code || '',
