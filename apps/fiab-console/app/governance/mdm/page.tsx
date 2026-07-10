@@ -27,10 +27,12 @@ import {
   MessageBar, MessageBarBody, MessageBarTitle,
   makeStyles, tokens,
 } from '@fluentui/react-components';
-import { Add24Regular, ArrowSync24Regular, Delete20Regular, Edit20Regular, Play20Regular, CheckmarkCircle20Regular } from '@fluentui/react-icons';
+import { Add24Regular, ArrowSync24Regular, Delete20Regular, Edit20Regular, Play20Regular, CheckmarkCircle20Regular, DatabasePerson24Regular } from '@fluentui/react-icons';
 import { GovernanceShell } from '@/lib/components/governance-shell';
 import { Section } from '@/lib/components/ui/section';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
+import { GuidedEmptyState } from '@/lib/components/shared/guided-empty-state';
 
 type MatchType = 'exact' | 'fuzzy';
 type Strategy = 'most-recent' | 'most-complete' | 'source-priority' | 'max' | 'min';
@@ -93,6 +95,16 @@ export default function GovernanceMdmPage() {
         Define golden-record match + survivorship models, manage reference-data code lists, run match/merge on your workspace
         Databricks SQL Warehouse, and steward the resulting golden records. Self-built on Azure — no Microsoft Fabric, no partner MDM SaaS.
       </Caption1>
+      {/* Teaching banner (SC-6) — teach the four-step MDM flow before the first model exists. */}
+      <div style={{ marginBottom: tokens.spacingVerticalL }}>
+        <TeachingBanner
+          surfaceKey="governance-mdm"
+          accent="var(--loom-accent-violet)"
+          title="How master data management builds a golden record"
+          message="Start in Models to declare which columns identify a duplicate and which value survives a merge. Run Match for scored candidate pairs, approve merges as a steward, then run merge to produce the survived golden table — real Spark SQL on your Databricks SQL Warehouse."
+          learnMoreHref="https://learn.microsoft.com/purview/mdm-overview"
+        />
+      </div>
       <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as any)} style={{ marginBottom: tokens.spacingVerticalL }}>
         <Tab value="models">Models</Tab>
         <Tab value="refdata">Reference data</Tab>
@@ -159,7 +171,27 @@ function ModelsTab({ models, loading, reload }: { models: MdmModel[]; loading: b
         <Button icon={<ArrowSync24Regular />} onClick={reload}>Refresh</Button>
         <Button appearance="primary" icon={<Add24Regular />} onClick={openNew}>New model</Button>
       </span>}>
-      <LoomDataTable<MdmModel> columns={cols} rows={models} getRowId={(x) => x.id} loading={loading} empty="No MDM models yet. Create one to define match + survivorship for an entity." />
+      {!loading && models.length === 0 ? (
+        <GuidedEmptyState
+          heroIcon={DatabasePerson24Regular}
+          title="Define your first golden-record model"
+          intro="A model tells the match-merge engine which columns identify a duplicate and which value survives. Once defined, run match and merge to produce a survived golden table."
+          ariaLabel="Get started with MDM models"
+          columns={1}
+          paths={[
+            {
+              key: 'new-model',
+              title: 'New MDM model',
+              body: 'Pick a source table, choose match attributes (exact or fuzzy), and set survivorship rules.',
+              icon: DatabasePerson24Regular,
+              onClick: openNew,
+            },
+          ]}
+          learnMoreHref="https://learn.microsoft.com/purview/mdm-overview"
+        />
+      ) : (
+        <LoomDataTable<MdmModel> columns={cols} rows={models} getRowId={(x) => x.id} loading={loading} empty="No MDM models yet. Create one to define match + survivorship for an entity." />
+      )}
 
       <Dialog open={open} onOpenChange={(_, d) => { if (!d.open) setOpen(false); }}>
         <DialogSurface style={{ maxWidth: 640 }}>
