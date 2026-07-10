@@ -221,6 +221,42 @@ export function rollupAttribution(rows: CostAttributionRow[], windowDays: number
 }
 
 /**
+ * Sum recorded LCU per workspace over the last `windowDays` — the usage signal
+ * the per-workspace chargeback ALLOCATION prefers (WS-CHGBK). Real Cosmos
+ * GROUP BY on the same ledger; returns a `{ workspaceId: lcu }` map. Empty when
+ * nothing has been attributed yet, so the allocator falls back to item-weighting
+ * (never a fabricated number). Only rows carrying a `workspaceId` are counted.
+ */
+export async function queryWorkspaceLcu(
+  tenantId: string,
+  windowDays = 30,
+): Promise<Record<string, number>> {
+  const wd = Math.max(1, Math.min(90, windowDays));
+  const since = new Date(Date.now() - wd * 24 * 3600 * 1000).toISOString();
+  const c = await costAttributionContainer();
+  const { resources } = await c.items
+    .query<{ workspaceId: string; lcu: number }>(
+      {
+        query:
+          'SELECT c.workspaceId AS workspaceId, SUM(c.lcu) AS lcu FROM c ' +
+          'WHERE c.tenantId=@t AND c.occurredAt >= @since AND IS_DEFINED(c.workspaceId) ' +
+          'GROUP BY c.workspaceId',
+        parameters: [
+          { name: '@t', value: tenantId },
+          { name: '@since', value: since },
+        ],
+      },
+      { partitionKey: tenantId },
+    )
+    .fetchAll();
+  const out: Record<string, number> = {};
+  for (const r of resources || []) {
+    if (r?.workspaceId) out[r.workspaceId] = Number(r.lcu) || 0;
+  }
+  return out;
+}
+
+/**
  * Query the ledger over the last `windowDays` (optionally scoped to one domain)
  * and return the rollups. Real Cosmos read — empty rollups when nothing has been
  * recorded yet (the honest empty state, never fabricated numbers).

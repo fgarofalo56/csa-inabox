@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
-import { uamiArmCredential } from '@/lib/azure/arm-credential';
 import { enforceCapability } from '@/lib/auth/feature-gate';
-import { armScope } from '@/lib/azure/cloud-endpoints';
+import { getArmTokenPreferUser, type ArmTokenIdentity } from '@/lib/auth/obo';
+import { swrAwait } from '@/lib/azure/cross-sub-cache';
 import {
   getTenantTopologySafe,
   HUB_COORDINATE_KEYS,
@@ -185,19 +185,13 @@ function orchestratorUrl(): string {
   return (process.env.LOOM_SETUP_ORCHESTRATOR_URL || '').trim().replace(/\/+$/, '');
 }
 
-// ── Pre-flight credential ──────────────────────────────────────────────────
-// The deploy pre-flight (permission + RP-registration check on the TARGET sub)
-// runs under the Console's own identity — the same chain existing-dlzs uses.
-// These are Reader-only reads, so the check never needs more rights than the
-// UAMI already has; it only PREDICTS whether the deploy (under the orchestrator
-// identity, which is the SAME UAMI when no separate orchestrator is wired, or
-// the operator's az credential for the copy-paste path) would be authorized.
-const preflightCredential = uamiArmCredential();
-
-async function armTokenForPreflight(): Promise<string> {
-  const t = await preflightCredential.getToken(armScope());
-  if (!t?.token) throw new Error('Failed to acquire ARM token for deploy pre-flight');
-  return t.token;
+/** The cached shape of the combined cross-sub deploy pre-flight (mirrors the
+ * async deploy-preflight route so both share the SWR cache slot). */
+interface CachedPreflight {
+  canDeploy: boolean;
+  permError?: string;
+  missingProviders: string[];
+  identity: ArmTokenIdentity;
 }
 
 export async function POST(req: NextRequest) {
@@ -344,36 +338,78 @@ export async function POST(req: NextRequest) {
   // the hard guard. It's a prediction, not the authorization itself.
   const skipPreflight = process.env.LOOM_SKIP_DEPLOY_PREFLIGHT === '1';
   if (!skipPreflight && body.subscriptionId) {
-    const perm = await checkSubscriptionDeployPermission(body.subscriptionId, armTokenForPreflight);
-    // Only BLOCK on a definitive "cannot deploy" answer. A check error (token /
-    // network / 403-on-read) is non-fatal — fall through to the deploy tiers,
-    // which surface their own honest gate.
-    if (!perm.error && !perm.canDeploy) {
-      const principalObjectId = process.env.LOOM_CONSOLE_PRINCIPAL_ID || hubTopology?.hubConsolePrincipalId;
+    // USER-PASSTHROUGH: resolve the caller's own ARM token (falling back to the
+    // Console UAMI when the user's ARM scope wasn't consented at login) so the
+    // "can this deploy proceed?" verdict reflects what the OPERATOR can deploy —
+    // not the Loom SP. The verdict is SWR-cached under the SAME key the async
+    // deploy-preflight route uses, so when the wizard already ran the pre-flight
+    // poll this is an instant cache hit (no 6s cliff on submit); a cold submit
+    // awaits the check once (bounded by the wizard's larger cross-sub budget).
+    const arm = await getArmTokenPreferUser(session).catch(() => null);
+    const identity: ArmTokenIdentity = arm?.identity ?? 'uami';
+    const targetSub = body.subscriptionId;
+    const getToken = async (): Promise<string> => {
+      if (arm?.token) return arm.token;
+      throw new Error('could not acquire an ARM token for the deploy pre-flight');
+    };
+    let pf: CachedPreflight | null = null;
+    try {
+      const { value } = await swrAwait<CachedPreflight>(
+        session.claims.oid,
+        `deploy-preflight:${targetSub}:${identity}`,
+        { ttlMs: 60_000 },
+        async () => {
+          const [perm, providers] = await Promise.all([
+            checkSubscriptionDeployPermission(targetSub, getToken),
+            checkProvidersRegistered(targetSub, getToken),
+          ]);
+          return {
+            canDeploy: perm.error ? true : perm.canDeploy,
+            permError: perm.error,
+            missingProviders: providers.missing,
+            identity,
+          };
+        },
+      );
+      pf = value;
+    } catch {
+      // Token/network failure computing the pre-flight is NON-FATAL — fall
+      // through to the deploy tiers, which surface their own honest gate.
+      pf = null;
+    }
+    // Only BLOCK on a definitive "cannot deploy" answer. A check error is
+    // non-fatal (permError set → canDeploy forced true above).
+    if (pf && !pf.permError && !pf.canDeploy) {
+      // Grant the identity that was CHECKED: the user (when passthrough resolved a
+      // user token) or the Console UAMI (the fallback).
+      const principalObjectId =
+        identity === 'user'
+          ? undefined
+          : process.env.LOOM_CONSOLE_PRINCIPAL_ID || hubTopology?.hubConsolePrincipalId;
       const grant = buildContributorGrantCommand({
-        subscriptionId: body.subscriptionId,
+        subscriptionId: targetSub,
         principalObjectId,
-        principalType: 'ServicePrincipal',
+        principalType: identity === 'user' ? 'User' : 'ServicePrincipal',
         isGov,
       });
-      const providers = await checkProvidersRegistered(body.subscriptionId, armTokenForPreflight);
       const rpLines =
-        providers.missing.length > 0
+        pf.missingProviders.length > 0
           ? '\n\nAlso register the resource providers this DLZ needs on the target subscription:\n' +
-            buildProviderRegisterCommands(providers.missing, body.subscriptionId).join('\n')
+            buildProviderRegisterCommands(pf.missingProviders, targetSub).join('\n')
           : '';
       return NextResponse.json(
         {
           ok: false,
           error: 'forbidden',
           requiredRole: 'Contributor',
-          targetSubscriptionId: body.subscriptionId,
-          missingProviders: providers.missing,
+          identity,
+          targetSubscriptionId: targetSub,
+          missingProviders: pf.missingProviders,
           remediation:
-            `The deploying identity does not have permission to deploy a Data Landing Zone into ` +
-            `subscription ${body.subscriptionId}. A subscription-scoped deployment requires the ` +
-            `Contributor role (you have at most Reader there — enough to see it, not to deploy). ` +
-            `Grant Contributor on the target subscription, then retry:\n\n${grant}${rpLines}`,
+            `${identity === 'user' ? 'You do' : 'The deploying identity does'} not have permission to ` +
+            `deploy a Data Landing Zone into subscription ${targetSub}. A subscription-scoped ` +
+            `deployment requires the Contributor role (at most Reader is present — enough to see it, ` +
+            `not to deploy). Grant Contributor on the target subscription, then retry:\n\n${grant}${rpLines}`,
         },
         { status: 403 },
       );
@@ -436,6 +472,18 @@ export async function POST(req: NextRequest) {
       const v = hubTopology[k];
       if (v !== undefined && v !== null) hubCoords[k] = v;
     }
+  }
+  // DEPLOY-TIME GRANT COMPLETENESS: the DLZ landing-zone bicep grants the Console
+  // UAMI its full role set (RG-scoped Contributor + Storage Blob Data Contributor
+  // + Event Hubs Data Owner + Cosmos/EventGrid/ADF/Synapse data-plane) at deploy
+  // time, but every one of those role modules is gated `if (!empty(consolePrincipalId))`.
+  // When the tenant-topology doc is console-env-derived (no bootstrap doc) it has
+  // no hubConsolePrincipalId, so the grants would silently no-op and leave a
+  // manual "Grant Console RBAC" step. Fall back to LOOM_CONSOLE_PRINCIPAL_ID (the
+  // loomConsolePrincipalId deploy param wired into the running Console) so the
+  // deploy-time grant applies automatically on every tier — no manual step.
+  if (topology === 'dlz-attach' && !hubCoords.hubConsolePrincipalId && process.env.LOOM_CONSOLE_PRINCIPAL_ID) {
+    hubCoords.hubConsolePrincipalId = process.env.LOOM_CONSOLE_PRINCIPAL_ID.trim();
   }
   const topologyPayload = { topology, ...(topology === 'dlz-attach' ? { targetSubscriptionId: body.targetSubscriptionId, ...hubCoords } : {}) };
 
@@ -536,6 +584,16 @@ export async function POST(req: NextRequest) {
     };
     if (topology === 'dlz-attach' && body.targetSubscriptionId) {
       dispatchInputs.target_subscription = body.targetSubscriptionId;
+      // NOTE: we deliberately do NOT forward hubConsolePrincipalId here. The
+      // deploy workflow's `hubcoords` step self-derives it from the AUTHORITATIVE
+      // source — the real hub Console UAMI in the hub subscription (topology
+      // manifest first, then a live `az identity show` fallback) — and hard-errors
+      // if the hub can't be found, so the deploy-time RBAC grants (gated on
+      // hubConsolePrincipalId in main.bicep) always get a real value on this path.
+      // A `hub_console_principal_id` input isn't declared on the workflow, and the
+      // GitHub workflow_dispatch API 422s on any undeclared input. The env-fallback
+      // above (into hubCoords) is what covers the ORCHESTRATOR + copy-paste paths,
+      // which build their hub params from hubCoords directly.
     }
     if (body.vanityDomain) dispatchInputs.vanity_domain = body.vanityDomain;
     if ((body.boundary === 'GCC-High' || body.boundary === 'IL5') && body.mode === 'multi-sub') {
@@ -624,11 +682,15 @@ export async function POST(req: NextRequest) {
   // dlz-attach: the manual command threads topology + the hub coordinates the
   // tenant-topology doc recorded (so no Azure id is free-typed). The orchestrator
   // path is strongly preferred — it fills the hub* params automatically.
+  // Source the hub params from the env-MERGED `hubCoords` (not the raw topology
+  // doc) so the copy-paste command always carries hubConsolePrincipalId — the
+  // deploy-time RBAC grants are gated on it, so an omitted value leaves a manual
+  // grant step. hubPrivateDnsZoneIds is an object, passed separately (below).
   const hubParamLines =
-    topology === 'dlz-attach' && hubTopology
-      ? HUB_COORDINATE_KEYS.filter((k) => k !== 'hubPrivateDnsZoneIds' && (hubTopology as any)[k]).map(
-          (k) => `  -p ${k}='${String((hubTopology as any)[k])}' \\`,
-        )
+    topology === 'dlz-attach'
+      ? Object.keys(hubCoords)
+          .filter((k) => k !== 'hubPrivateDnsZoneIds' && hubCoords[k])
+          .map((k) => `  -p ${k}='${String(hubCoords[k])}' \\`)
       : [];
   // Org-visuals opt-out — only emit the param when explicitly disabled (default
   // true in bicep, so the happy path stays clean). The medallion lake is always

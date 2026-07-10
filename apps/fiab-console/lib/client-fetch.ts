@@ -34,6 +34,21 @@
 export const CLIENT_FETCH_TIMEOUT_MS = 6000;
 
 /**
+ * Larger per-request ceiling for CROSS-SUBSCRIPTION reads / mutations — the
+ * Setup & "Add landing zone" wizards' ARM subscription list, Resource Graph DLZ
+ * scan, the cross-sub deploy pre-flight, and the deploy kickoff itself. These
+ * fan out across every subscription the caller can see and can legitimately take
+ * many seconds on a large tenant / a cold cross-sub, so the 6s spinner budget is
+ * wrong for them: it produced the "took longer than 6s and timed out … heavier
+ * across multiple subscriptions" failure on the very first attach. These paths
+ * are NOT spinner-gated page loads — they show their own progress (async
+ * pre-flight poll, deploy progress bar), so a generous ceiling is correct. The
+ * server-side SWR cache (lib/azure/cross-sub-cache) makes retries instant, so
+ * this ceiling is only ever hit on a genuine cold first call.
+ */
+export const CROSS_SUB_FETCH_TIMEOUT_MS = 45_000;
+
+/**
  * Thrown when `clientFetch` aborts a request because it exceeded `timeoutMs`
  * (the timeout, NOT a caller-supplied unmount signal). Its `message` is a clear,
  * human-readable "timed out" string — NOT the browser's cryptic
