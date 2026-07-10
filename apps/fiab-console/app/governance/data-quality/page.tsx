@@ -18,6 +18,7 @@ import { clientFetch } from '@/lib/client-fetch';
  */
 
 import { useCallback, useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import {
   Spinner, Button, Badge, Body1, Caption1, Subtitle2, Text,
   TabList, Tab, Field, Input, Dropdown, Option, Textarea, Switch,
@@ -25,10 +26,12 @@ import {
   MessageBar, MessageBarBody, MessageBarTitle,
   makeStyles, tokens,
 } from '@fluentui/react-components';
-import { Add24Regular, ArrowSync24Regular, Delete20Regular, Edit20Regular, Play20Regular } from '@fluentui/react-icons';
+import { Add24Regular, ArrowSync24Regular, Delete20Regular, Edit20Regular, Play20Regular, Beaker24Regular } from '@fluentui/react-icons';
 import { GovernanceShell } from '@/lib/components/governance-shell';
 import { Section } from '@/lib/components/ui/section';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
+import { GuidedEmptyState } from '@/lib/components/shared/guided-empty-state';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
 
 type CheckType = 'not-null' | 'unique' | 'range' | 'regex' | 'freshness';
 interface DqRule {
@@ -86,6 +89,14 @@ export default function GovernanceDataQualityPage() {
         Define data-quality rules, run them on your workspace engine (Kusto, Databricks SQL, or Synapse SQL), review results over time,
         and enforce always-on quality with Delta constraints + Databricks Lakehouse Monitoring. No Microsoft Fabric dependency.
       </Caption1>
+      <div style={{ marginBottom: tokens.spacingVerticalL }}>
+        <TeachingBanner
+          surfaceKey="governance-data-quality"
+          title="Author, run, then enforce"
+          message="Start on Rules to author checks, use Run to score them against Kusto, Databricks SQL, or Synapse SQL, then promote a passing rule to an always-on Delta constraint or Lakehouse Monitor on the Monitors tab."
+          learnMoreHref="https://learn.microsoft.com/purview/data-quality-overview"
+        />
+      </div>
       <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as any)} style={{ marginBottom: tokens.spacingVerticalL }}>
         <Tab value="rules">Rules</Tab>
         <Tab value="run">Run</Tab>
@@ -103,6 +114,7 @@ export default function GovernanceDataQualityPage() {
 // ----------------------------- Rules -----------------------------
 function RulesTab() {
   const s = useStyles();
+  const router = useRouter();
   const [rules, setRules] = useState<DqRule[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
@@ -173,7 +185,26 @@ function RulesTab() {
         <Button appearance="primary" icon={<Add24Regular />} onClick={() => { reset(); setOpen(true); }}>New rule</Button>
       </span>}>
       {error && <MessageBar intent="error" style={{ marginBottom: tokens.spacingVerticalM }}><MessageBarBody>{error}</MessageBarBody></MessageBar>}
-      {!rules ? <Spinner label="Loading rules…" /> : (
+      {!rules ? <Spinner label="Loading rules…" /> : rules.length === 0 && !error ? (
+        <GuidedEmptyState
+          variant="block"
+          heroIcon={Beaker24Regular}
+          title="No data-quality rules yet"
+          intro="Author a check — not-null, unique, range, regex, or freshness — then run the rule set against your engine to get a composite score with a per-rule breakdown."
+          paths={[{
+            key: 'new-rule',
+            title: 'New rule',
+            body: 'Define a not-null, unique, range, regex, or freshness check on a column or table.',
+            icon: Add24Regular,
+            onClick: () => { reset(); setOpen(true); },
+          }]}
+          askCopilot={{
+            onClick: () => router.push('/copilot'),
+            body: 'Describe the quality check you want in words and let Copilot draft the rule.',
+          }}
+          learnMoreHref="https://learn.microsoft.com/purview/data-quality-overview"
+        />
+      ) : (
         <LoomDataTable<DqRule> columns={cols} rows={rules} getRowId={(r) => r.id} empty="No rules yet. Create one to start monitoring data quality." />
       )}
       <Dialog open={open} onOpenChange={(_, d) => { if (!d.open) { setOpen(false); reset(); } }}>
