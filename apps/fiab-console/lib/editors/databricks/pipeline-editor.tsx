@@ -59,6 +59,7 @@ import {
   type DltFileFormat, type DltExpectationAction,
 } from './dlt-spec';
 import { ResizableCanvasRegion } from '@/lib/components/canvas/resizable-canvas';
+import { SplitPane } from '@/lib/components/shared/split-pane';
 
 const NODE_WIDTH = 210;
 
@@ -539,7 +540,15 @@ export function DatabricksPipelineEditor({ item, id }: { item: FabricItemType; i
             <Button size="small" icon={<Table20Regular />} onClick={() => addNode('materialized_view')}>Materialized view</Button>
             <Button size="small" icon={<CheckmarkCircle20Regular />} onClick={() => addNode('expectation')}>Expectation</Button>
           </div>
-          <div className={s.body}>
+          <SplitPane
+            direction="horizontal"
+            primary="second"
+            storageKey="databricks-pipeline.inspector"
+            defaultSize={360}
+            minSize={300}
+            maxSize={640}
+            dividerLabel="Resize inspector"
+          >
             <ResizableCanvasRegion
               storageKey="databricks-dlt-pipeline"
               defaultPx={520}
@@ -592,7 +601,7 @@ export function DatabricksPipelineEditor({ item, id }: { item: FabricItemType; i
                 ? <NodeInspector node={selectedNode} onPatch={(p) => patchNode(selectedNode.id, p)} onDelete={() => deleteNode(selectedNode.id)} />
                 : <PipelineSettings model={model} onPatch={(p) => commit({ ...model, ...p })} problems={problems} />}
             </div>
-          </div>
+          </SplitPane>
         </>
       )}
 
