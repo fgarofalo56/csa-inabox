@@ -69,7 +69,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
   const { id } = await ctx.params;
   if (!id || id === 'new') {
     return NextResponse.json({
-      ok: true, tables: [], relationships: [], hierarchies: [], tmslPreview: '',
+      ok: true, tables: [], measures: [], relationships: [], hierarchies: [], tmslPreview: '',
       xmlaAvailable: false, fabricAvailable: false,
       calculationGroups: [], fieldParameters: [], backend: backendName(),
       whatIfParameters: [], calculatedTables: [], dateTables: [],
@@ -101,6 +101,9 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
     ok: true,
     modelName: mctx.modelName,
     tables: mctx.tables,
+    // Loom-native measures (Cosmos content) flattened with home table — lets the
+    // editor's Model-view surface render measures with NO Power BI dataset bound.
+    measures: mctx.measures ?? [],
     relationships: merged,
     hierarchies: state.hierarchies,
     tmslPreview,

@@ -106,6 +106,11 @@ export interface ModelContext {
   liveDataset: boolean;
   /** read error surfaced as a notice (compute/permission), never fatal. */
   notice?: string;
+  /** Loom-native measures (Cosmos content), flattened with their home table.
+   *  Populated on the Loom-content default path so the Model-view surface can
+   *  render measures with NO Power BI dataset selected; empty on the live-PBI
+   *  path (there measures are read per-table via the dataset detail route). */
+  measures?: Array<{ name: string; expression?: string; table: string }>;
 }
 
 function pbiTablesToModel(tables: PbiTable[]): ModelTable[] {
@@ -148,7 +153,11 @@ export async function loadModelContext(id: string, workspaceId: string | null, t
         crossFilter: /both/i.test(r.crossFilteringBehavior || '') ? 'both' as CrossFilter : 'single' as CrossFilter,
         active: true, source: 'cosmos' as const, editable: false,
       }));
-    return { modelName: item?.displayName || 'Semantic model', tables, baseRels, liveDataset: false };
+    const measures = (built?.tables || []).flatMap((t: any) =>
+      (t.measures || [])
+        .filter((m: any) => m && m.name)
+        .map((m: any) => ({ name: String(m.name), expression: m.expression, table: t.name })));
+    return { modelName: item?.displayName || 'Semantic model', tables, baseRels, liveDataset: false, measures };
   }
 
   // Live Power BI / Fabric dataset (opt-in). Read tables + relationships; any
