@@ -17,8 +17,15 @@
 
 **Loom surface:**
 - UI: `apps/fiab-console/lib/editors/synapse-notebook-editor.tsx` — `SynapseNotebookEditor`
-  (workspace-notebook tree, multi-cell IPYNB editor, NotebookCellView with Monaco,
-  rich `display(df)` table / HTML / image output, Databricks-backend badge + cluster picker).
+  (workspace-notebook tree, multi-cell IPYNB editor). **The Synapse flavour now
+  renders on the SHARED cell/output stack (R4-SYN, 2026-07-10)** — `CodeCell` +
+  `MarkdownCell` for cells, `RichDisplay` for `display(df)` (interactive grid +
+  chart builder), the shared `VariablesPane` (variable explorer) and
+  `DataWranglerPanel` (visual data-prep), one-for-one with the regular/Loom and
+  Databricks flavours. The Livy session/execute run path is unchanged; only the
+  rendering stack was unified (`synapse-notebook-cell-adapter.ts` maps the
+  Synapse `EditorCell` ⇄ the shared `NotebookCell`). Databricks-backend badge +
+  cluster picker retained.
 - BFF: `apps/fiab-console/app/api/synapse/notebooks/route.ts` (list/create),
   `…/[name]/route.ts` (open/save/delete), `…/[name]/run-cell/route.ts` (legacy Livy run + poll),
   **`app/api/notebook/[id]/session/route.ts`** (F16 — Livy session create/reuse + keepalive + kill),
@@ -103,10 +110,11 @@ Legend: built ✅ · partial ⚠️ · honest-gate ⚠️ · MISSING ❌
 | D4 | Text output (text/plain) | ✅ built | `out.textPlain` from normalized Livy `data['text/plain']` |
 | D5 | Error output (ename/evalue/traceback) | ✅ built | `outputErr` block renders the traceback |
 | D6 | Run **cells above / below** | ❌ MISSING | run-cell + run-all only |
-| D7 | `display(df)` rich **table** + chart builder | ⚠️ partial | rich **table** (`application/json` df grid), HTML (`text/html`), and image (`image/png`) rendered via `normalizeLivyOutput`; interactive **chart builder** UI not yet built |
-| D8 | **Variable explorer** (PySpark vars table) | ❌ MISSING | not surfaced |
+| D7 | `display(df)` rich **table** + chart builder | ✅ built | shared **`RichDisplay`** — sortable/​paginated grid, per-column Inspect stats, CSV copy, **+ the interactive chart builder** (bar/line/scatter/heatmap, X/Y/legend/agg selectors, add/rename/duplicate/reorder) over the sampled rows. Table output (`application/json`) → `buildRichFromTable` → `LoomDisplayPayload`; HTML (`text/html`) + image (`image/png`) still render below. *Full-dataset "Aggregate over all rows" is honestly gated on the Synapse Livy path (it targets the Fabric-flavour run route) — the sample-based builder works fully.* |
+| D8 | **Variable explorer** (PySpark vars table) | ✅ built | shared **`VariablesPane`** (ribbon Tools → Variables) — sortable Name/Type/Length/Value, Python-only, `repr()` tooltip. `onInspect` submits a real `globals()` snapshot to the live Livy/Databricks session via the same session/execute path as cell runs (`__LOOM_VARS__:` line parsed) |
 | D9 | `%run <notebook>` cross-notebook reference | ❌ MISSING | per-cell REPL only |
 | D10 | mssparkutils (`%%configure`, secrets, fs) helpers | ❌ MISSING | not surfaced |
+| D11 | **Data Wrangler** (visual data-prep) | ✅ built | shared **`DataWranglerPanel`** (ribbon Tools → Data Wrangler) — operation gallery + AI-assist, live preview on the real pandas host, exports pandas/PySpark code into a cell. Fabric Data-Wrangler 1:1; honest gate on `LOOM_WRANGLER_ENDPOINT` |
 
 ### E. Honest gate / disclosure
 
@@ -117,14 +125,33 @@ Legend: built ✅ · partial ⚠️ · honest-gate ⚠️ · MISSING ❌
 
 ---
 
-## Coverage tally (post-F15 authoring update, 2026-06-06)
+## Coverage tally (post R4-SYN shared-stack unification, 2026-07-10)
 
-- **built ✅: 30**
-- **partial ⚠️: 6**
+- **built ✅: 33**
+- **partial ⚠️: 5**
 - **honest-gate ⚠️: 1**
-- **MISSING ❌: 7**
+- **MISSING ❌: 6**
 
-## Honest grade: **B+**
+## Honest grade: **A-**
+
+**R4-SYN (2026-07-10)** unified the Synapse flavour onto the shared cell/output
+stack, closing the three highest-value gaps that made it the odd flavour out:
+the **`display(df)` chart builder** (D7, shared `RichDisplay`), the **variable
+explorer** (D8, shared `VariablesPane`), and **Data Wrangler** (D11, shared
+`DataWranglerPanel`). Cells now render through the same `CodeCell` / `MarkdownCell`
+as the regular/Loom and Databricks flavours — gaining the shared in-cell Copilot
+(slash commands + propose-diff), Fix-with-Copilot, Pylance/cluster IntelliSense,
+maximize, and lock — with a thin adapter mapping the Synapse `EditorCell` ⇄ the
+shared `NotebookCell` so the Livy session/execute run path, %%magics, %%configure,
+the parameters cell, and the .NET-C# language are all preserved.
+
+Held below A by the remaining ❌: no **Studio Git/Publish shell** (A7), no
+**rename/move/clone/export** (A8) or **Properties pane** (A9), no
+**run-above/below** (D6), no **`%run`** (D9), no **mssparkutils** helpers (D10);
+and the full-dataset "Aggregate over all rows" chart action is honestly gated on
+the Synapse Livy path (the sample-based chart builder is fully functional).
+
+### Prior grade: **B+** (post-F15/F16 authoring + execution)
 
 This is now a genuine, **production-grade** Synapse-Studio notebook surface that
 combines **full authoring parity (F15)** with **real per-cell Spark execution

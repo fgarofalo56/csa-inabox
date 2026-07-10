@@ -32,20 +32,15 @@ import { clientFetch } from '@/lib/client-fetch';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Subtitle2, Body1, Caption1, Badge, Button, Spinner, Tooltip, Input, Link, Switch,
+  Subtitle2, Body1, Caption1, Badge, Button, Spinner, Input, Switch,
   Tree, TreeItem, TreeItemLayout, Dropdown, Option,
   Table, TableHeader, TableHeaderCell, TableBody, TableRow, TableCell,
-  Menu, MenuTrigger, MenuList, MenuItem, MenuPopover,
   MessageBar, MessageBarBody, MessageBarTitle, MessageBarActions,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
-  Book20Regular, Play20Regular, Add20Regular,
-  Delete16Regular, ChevronUp16Regular, ChevronDown16Regular,
-  ChevronRight16Regular, Copy16Regular, MoreHorizontal16Regular,
-  Save20Regular, Code16Regular, TextDescription16Regular,
-  Eye16Regular, Edit16Regular, TextBulletListTree20Regular,
-  Sparkle16Regular, Sparkle16Filled, Wrench16Regular, Info16Regular,
+  Book20Regular, Add20Regular,
+  Save20Regular, TextBulletListTree20Regular,
   CalendarClock20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
@@ -53,14 +48,21 @@ import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
 import { loomDocUrl } from '@/lib/learn/content';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
-import { MonacoTextarea, type MonacoLanguage } from '@/lib/components/editor/monaco-textarea';
-import { renderMarkdown } from '@/lib/notebook/render-markdown';
-import { registerInlineCompletion, type InlineCompletionContext } from '@/lib/components/editor/inline-completion';
-import { useInlineCompleteToggle } from '@/lib/components/editor/use-inline-complete-toggle';
 import { CellAdder } from '@/lib/components/notebook/cell-adder';
 import { ScheduleWizard, type ScheduleCreateParams } from '@/lib/components/notebook/schedule-wizard';
 import { EmptyState } from '@/lib/components/empty-state';
 import { useSharedEditorStyles } from './shared-styles';
+// Shared cell / output stack (R4-SYN — one-for-one with the other notebook flavours).
+import { CodeCell } from '@/lib/components/notebook/code-cell';
+import { MarkdownCell } from '@/lib/components/notebook/markdown-cell';
+import { RichDisplay } from '@/lib/components/notebook/rich-display';
+import { VariablesPane, type VarRow } from '@/lib/components/notebook/variables-pane';
+import { DataWranglerPanel } from '@/lib/components/notebook/data-wrangler-panel';
+import {
+  type EditorCell, type CellKind, type CellOutput,
+  KIND_LABEL, KIND_MAGIC, LANG_TO_KIND,
+  toSharedCell, mergeSharedChange, buildRichFromTable,
+} from './synapse-notebook-cell-adapter';
 
 /** Shaped AML schedule row returned by /api/notebook/[id]/schedule. */
 interface AmlScheduleRow {
@@ -114,6 +116,11 @@ const useLocalStyles = makeStyles({
     '& a': { color: tokens.colorBrandForegroundLink },
   },
   tag: { fontFamily: 'Consolas, monospace', color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase100 },
+  paramsChip: {
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS,
+    padding: `${tokens.spacingVerticalXXS} ${tokens.spacingHorizontalS}`,
+    marginBottom: tokens.spacingVerticalXXS,
+  },
   collapsedHint: {
     fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase200,
     color: tokens.colorNeutralForeground3, padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`,
@@ -166,44 +173,10 @@ function useStyles() {
 }
 
 // ── IPYNB ⇄ editor-cell mapping ───────────────────────────────────────────────
-// Synapse Studio notebooks support five interactive languages via %%magic.
-type CellKind = 'pyspark' | 'spark' | 'sql' | 'sparkr' | 'csharp';
-const KIND_TO_MONACO: Record<CellKind, MonacoLanguage> = {
-  pyspark: 'pyspark', spark: 'scala', sql: 'sparksql', sparkr: 'sparkr', csharp: 'csharp',
-};
-const KIND_LABEL: Record<CellKind, string> = {
-  pyspark: 'PySpark (Python)', spark: 'Spark (Scala)', sql: 'Spark SQL',
-  sparkr: 'SparkR (R)', csharp: '.NET Spark (C#)',
-};
-// The %%magic header Synapse expects at the top of a non-default-language cell.
-const KIND_MAGIC: Record<CellKind, string> = {
-  pyspark: '', spark: '%%spark', sql: '%%sql', sparkr: '%%sparkr', csharp: '%%csharp',
-};
-
-interface CellOutput {
-  status: 'ok' | 'error' | 'running';
-  text?: string;
-  html?: string;
-  tableColumns?: string[];
-  tableRows?: string[][];
-  imageBase64?: string;
-  ename?: string;
-  evalue?: string;
-  traceback?: string[];
-}
-
-interface EditorCell {
-  id: string;
-  type: 'code' | 'markdown';
-  lang: CellKind;
-  source: string;
-  output?: CellOutput;
-  running?: boolean;
-  /** papermill/ADF "parameters" cell — at most one per notebook. */
-  isParameters?: boolean;
-  /** input collapsed (Synapse jupyter.source_hidden) — header still shows. */
-  collapsed?: boolean;
-}
+// EditorCell / CellKind / CellOutput and the KIND_* maps live in the shared
+// ./synapse-notebook-cell-adapter so this editor renders on the shared CodeCell /
+// RichDisplay / MarkdownCell stack (imported at the top of the file). The IPYNB
+// (de)serialisation + magic round-trip helpers below stay here.
 
 function uid(): string {
   return (typeof crypto !== 'undefined' && crypto.randomUUID)
@@ -336,6 +309,8 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
   const [sessionConfig, setSessionConfig] = useState<Record<string, unknown> | null>(null);
   // Latest live session, for keepalive + kill-on-unmount (avoids stale closures).
   const liveSessionRef = useRef<{ compute: string; sessionId: number | string } | null>(null);
+  // Monotonic Livy execution counter — surfaced as [n] in the shared cell gutter.
+  const execCounterRef = useRef(0);
 
   // Notebook default language (new cells inherit it) + attached environment
   // (Synapse Spark configuration applied to the session).
@@ -345,6 +320,10 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
 
   // New-notebook name field.
   const [newName, setNewName] = useState('');
+
+  // Right-side tool drawers — shared with the other notebook flavours.
+  const [variablesOpen, setVariablesOpen] = useState(false);
+  const [wranglerOpen, setWranglerOpen] = useState(false);
 
   // ── Notebook scheduling (AML job schedules — recurrence only) ───────────────
   const [scheduleWizardOpen, setScheduleWizardOpen] = useState(false);
@@ -680,13 +659,16 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
   }, [backend, attachedCluster, attachedPool]);
 
   const applyOutput = useCallback((cid: string, out: any) => {
-    if (!out) { patchCell(cid, { running: false, output: { status: 'ok', text: '(no output)' } }); return; }
+    execCounterRef.current += 1;
+    const executionCount = execCounterRef.current;
+    if (!out) { patchCell(cid, { running: false, executionCount, output: { status: 'ok', text: '(no output)' } }); return; }
     if (out.status === 'error') {
-      patchCell(cid, { running: false, output: { status: 'error', ename: out.ename, evalue: out.evalue, traceback: out.traceback, text: out.evalue } });
+      patchCell(cid, { running: false, executionCount, output: { status: 'error', ename: out.ename, evalue: out.evalue, traceback: out.traceback, text: out.evalue } });
       return;
     }
     patchCell(cid, {
       running: false,
+      executionCount,
       output: {
         status: 'ok',
         text: out.textPlain || (out.textHtml || out.tableRows || out.imageBase64 ? '' : '(no output)'),
@@ -811,7 +793,127 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
     }
   }, [cells, runCell]);
 
+  // Convert a cell between code ⇄ markdown (shared CodeCell / MarkdownCell action).
+  const convertCell = useCallback((cid: string, type: 'code' | 'markdown') => {
+    patchCell(cid, { type, output: undefined, running: false, ...(type === 'markdown' ? { isParameters: false } : {}) });
+  }, [patchCell]);
+
+  // Insert a generated code cell below the active cell (Data Wrangler export-to-cell).
+  const insertWranglerCell = useCallback((source: string) => {
+    const nc: EditorCell = { id: uid(), type: 'code', lang: 'pyspark', source };
+    setCells((cs) => {
+      const i = activeCell ? cs.findIndex((c) => c.id === activeCell) : -1;
+      if (i < 0) return [...cs, nc];
+      return [...cs.slice(0, i + 1), nc, ...cs.slice(i + 1)];
+    });
+    setActiveCell(nc.id);
+    setDirty(true);
+    setWranglerOpen(false);
+    setBanner({ intent: 'info', text: 'Inserted Data Wrangler code cell — review and Run to apply on your full DataFrame.' });
+  }, [activeCell]);
+
+  // ── Variable explorer (R4-SYN-2) — inspect the live Livy/Databricks Python
+  //    session for user variables (Name / Type / Length / Value). Reuses the
+  //    warm session + the same session/execute run path as cells; Python-only,
+  //    exactly like Synapse Studio / Fabric. No mock — a real globals() snapshot. ──
+  const inspectVariables = useCallback(async (): Promise<VarRow[]> => {
+    const compute = backend === 'databricks' ? attachedCluster : attachedPool;
+    if (!compute) {
+      throw new Error(backend === 'databricks'
+        ? 'Attach a Databricks cluster before inspecting variables.'
+        : 'Attach a Spark pool before inspecting variables.');
+    }
+    const INSPECT_SOURCE = [
+      'import json as __loom_j__',
+      '__loom_v__ = []',
+      "__loom_skip__ = ('In','Out','exit','quit','get_ipython','spark','sc','sqlContext','spark_session')",
+      'for __loom_k__ in list(globals().keys()):',
+      "    if __loom_k__.startswith('_') or __loom_k__ in __loom_skip__:",
+      '        continue',
+      '    __loom_val__ = globals()[__loom_k__]',
+      "    if type(__loom_val__).__name__ in ('module','function','type','builtin_function_or_method'):",
+      '        continue',
+      '    try:',
+      "        __loom_l__ = len(__loom_val__) if hasattr(__loom_val__, '__len__') else None",
+      '    except Exception:',
+      '        __loom_l__ = None',
+      '    try:',
+      '        __loom_r__ = repr(__loom_val__)[:300]',
+      '    except Exception:',
+      "        __loom_r__ = '<unrepresentable>'",
+      "    __loom_v__.append({'n': __loom_k__, 't': type(__loom_val__).__name__, 'l': __loom_l__, 'r': __loom_r__})",
+      "print('__LOOM_VARS__:' + __loom_j__.dumps(__loom_v__))",
+      'del __loom_j__, __loom_v__, __loom_skip__',
+    ].join('\n');
+
+    // 1. Ensure a live, idle session (reuse the warm one across cells).
+    let sess = sessionId;
+    for (let attempt = 0; attempt < 90; attempt++) {
+      const sr = await clientFetch(`/api/notebook/${encodeURIComponent(id)}/session`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          pool: attachedPool, cluster: attachedCluster, kind: 'pyspark',
+          existingSessionId: backend === 'synapse' && typeof sess === 'number' ? sess : undefined,
+          existingContextId: backend === 'databricks' && typeof sess === 'string' ? sess : undefined,
+          configureOptions: backend === 'synapse' && sessionConfig ? sessionConfig : undefined,
+        }),
+      });
+      const sj = await sr.json();
+      if (!sj?.ok) throw new Error(sj?.error || 'Spark session failed to start.');
+      sess = sj.sessionId; setSessionId(sj.sessionId);
+      if (sj.state !== 'idle') {
+        setSessionState(sj.state || 'starting');
+        await new Promise((r) => setTimeout(r, 3000));
+        const gr = await clientFetch(`/api/notebook/${encodeURIComponent(id)}/session?${computeParam(sess!)}`);
+        const gj = await gr.json();
+        if (gj?.ok) { setSessionState(gj.state); sess = gj.sessionId ?? sess; }
+        if (gj?.state === 'idle') break;
+        continue;
+      }
+      break;
+    }
+    if (sess == null) throw new Error('Spark session did not become ready in time.');
+    setSessionState('busy'); liveSessionRef.current = { compute, sessionId: sess };
+
+    // 2. Submit the introspection statement.
+    const er = await clientFetch(`/api/notebook/${encodeURIComponent(id)}/execute`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ pool: attachedPool, cluster: attachedCluster, sessionId: sess, code: INSPECT_SOURCE, kind: 'pyspark' }),
+    });
+    const ej = await er.json();
+    if (!ej?.ok) {
+      if (ej?.sessionDead) { setSessionId(null); setSessionState('none'); liveSessionRef.current = null; }
+      throw new Error(ej?.error || 'Variable inspection failed to dispatch.');
+    }
+    if (ej.stmtId == null) throw new Error('The kernel did not accept the inspection statement — try again once the session is warm.');
+
+    // 3. Poll to completion + parse the __LOOM_VARS__ line.
+    let text = '';
+    for (let i = 0; i < 200; i++) {
+      await new Promise((r) => setTimeout(r, 1500));
+      const r = await clientFetch(`/api/notebook/${encodeURIComponent(id)}/execute?${computeParam(sess, ej.stmtId)}`);
+      const j = await r.json();
+      if (!j?.ok) throw new Error(j?.error || 'Polling the inspection statement failed.');
+      const st = String(j.state);
+      if (st === 'available') {
+        setSessionState('idle');
+        if (j.output?.status === 'error') throw new Error(`${j.output.ename || 'Error'}: ${j.output.evalue || 'kernel raised an error'}`);
+        text = j.output?.textPlain || '';
+        break;
+      }
+      if (st === 'error' || st === 'cancelled') { setSessionState('idle'); throw new Error(`Inspection statement ${st}.`); }
+    }
+
+    const markerIdx = text.lastIndexOf('__LOOM_VARS__:');
+    if (markerIdx < 0) return [];
+    const jsonStr = text.slice(markerIdx + '__LOOM_VARS__:'.length).split('\n')[0].trim();
+    let raw: Array<{ n: string; t: string; l: number | null; r: string }>;
+    try { raw = JSON.parse(jsonStr); } catch { throw new Error('Could not parse the kernel variable snapshot.'); }
+    return raw.map((x) => ({ name: x.n, type: x.t, len: x.l, repr: x.r }));
+  }, [backend, attachedCluster, attachedPool, sessionId, sessionConfig, id, computeParam]);
+
   const attachedCompute = backend === 'databricks' ? attachedCluster : attachedPool;
+  const cellRuntime: 'databricks' | 'synapse-spark' = backend === 'databricks' ? 'databricks' : 'synapse-spark';
 
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
@@ -831,6 +933,10 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
       ]},
       { label: 'Scheduling', actions: [
         { label: 'Schedule', onClick: openName ? () => setScheduleWizardOpen(true) : undefined, disabled: !openName, title: !openName ? 'Open a notebook first' : 'Create a recurrence schedule (Azure ML job schedule)' },
+      ]},
+      { label: 'Tools', actions: [
+        { label: 'Variables', onClick: () => setVariablesOpen(true), title: 'Variable explorer — inspect the live Python session (Name / Type / Length / Value)' },
+        { label: 'Data Wrangler', onClick: () => setWranglerOpen(true), title: 'Visual data-prep — build cleaning steps and export pandas / PySpark code into a cell' },
       ]},
     ]},
   ], [openName, attachedCompute, backend, runAll, addCell, activeCell, duplicateCell, toggleParameters, saving, save, deleteOpen, refreshList]);
@@ -1034,25 +1140,63 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
               />
               {cells.map((c, i) => (
                 <div key={c.id} id={`cell-${c.id}`}>
-                  <NotebookCellView
-                    cell={c}
-                    active={activeCell === c.id}
-                    canRun={!!attachedCompute}
-                    canUp={i > 0}
-                    canDown={i < cells.length - 1}
-                    notebookId={id}
-                    schemaContext={clientSchemaContext}
-                    priorCells={cells.slice(0, i).filter((pc) => pc.type === 'code').slice(-3).map((pc) => pc.source)}
-                    onFocus={() => setActiveCell(c.id)}
-                    onChange={(patch) => patchCell(c.id, patch)}
-                    onRun={() => runCell(c.id)}
-                    onDelete={() => deleteCell(c.id)}
-                    onUp={() => moveCell(c.id, -1)}
-                    onDown={() => moveCell(c.id, 1)}
-                    onDuplicate={() => duplicateCell(c.id)}
-                    onToggleParameters={() => toggleParameters(c.id)}
-                    onToggleCollapsed={() => patchCell(c.id, { collapsed: !c.collapsed })}
-                  />
+                  {c.type === 'markdown' ? (
+                    <MarkdownCell
+                      cell={toSharedCell(c)}
+                      active={activeCell === c.id}
+                      onFocus={() => setActiveCell(c.id)}
+                      onChange={(next) => patchCell(c.id, mergeSharedChange(c, next))}
+                      onDelete={() => deleteCell(c.id)}
+                      onMoveUp={() => moveCell(c.id, -1)}
+                      onMoveDown={() => moveCell(c.id, 1)}
+                      onDuplicate={() => duplicateCell(c.id)}
+                      onConvertToCode={() => convertCell(c.id, 'code')}
+                      canMoveUp={i > 0}
+                      canMoveDown={i < cells.length - 1}
+                    />
+                  ) : (
+                    <>
+                      {c.isParameters && (
+                        <div className={s.paramsChip}>
+                          <Badge appearance="filled" color="brand" size="small">parameters cell</Badge>
+                          <Caption1 className={s.tag}>values can be overridden when the notebook runs from a pipeline (papermill/ADF)</Caption1>
+                        </div>
+                      )}
+                      <CodeCell
+                        cell={toSharedCell(c)}
+                        active={activeCell === c.id}
+                        onFocus={() => setActiveCell(c.id)}
+                        onChange={(next) => patchCell(c.id, mergeSharedChange(c, next))}
+                        onRun={attachedCompute ? () => runCell(c.id) : undefined}
+                        onDelete={() => deleteCell(c.id)}
+                        onMoveUp={() => moveCell(c.id, -1)}
+                        onMoveDown={() => moveCell(c.id, 1)}
+                        onDuplicate={() => duplicateCell(c.id)}
+                        onConvertToMarkdown={() => convertCell(c.id, 'markdown')}
+                        canMoveUp={i > 0}
+                        canMoveDown={i < cells.length - 1}
+                        notebookId={id}
+                        runtime={cellRuntime}
+                        priorCells={cells.slice(0, i).filter((pc) => pc.type === 'code').slice(-3).map((pc) => pc.source)}
+                        schemaContext={clientSchemaContext}
+                        onInsertBelow={(newCell) => {
+                          const nc: EditorCell = {
+                            id: newCell.id || uid(),
+                            type: newCell.type === 'markdown' ? 'markdown' : 'code',
+                            lang: newCell.type === 'markdown' ? 'pyspark' : (LANG_TO_KIND[newCell.lang || 'pyspark'] || 'pyspark'),
+                            source: newCell.source,
+                          };
+                          setCells((cs) => {
+                            const idx = cs.findIndex((x) => x.id === c.id);
+                            if (idx < 0) return [...cs, nc];
+                            return [...cs.slice(0, idx + 1), nc, ...cs.slice(idx + 1)];
+                          });
+                          setActiveCell(nc.id); setDirty(true);
+                        }}
+                      />
+                      {!c.collapsed && <SynapseCellOutput out={c.output} cellId={c.id} notebookId={id} />}
+                    </>
+                  )}
                   <CellAdder
                     onAddCode={() => addCell('code', c.id, 'after')}
                     onAddMarkdown={() => addCell('markdown', c.id, 'after')}
@@ -1127,309 +1271,66 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
             busy={scheduleBusy}
             error={scheduleError}
           />
+
+          {/* Variable explorer (R4-SYN-2) — inspects the live Livy/Databricks
+              session via the same session/execute path as cell runs. Python-only. */}
+          <VariablesPane
+            open={variablesOpen}
+            onOpenChange={setVariablesOpen}
+            onInspect={inspectVariables}
+            defaultLang={defaultLang}
+          />
+
+          {/* Data Wrangler (R4-SYN-3) — visual data-prep over a real pandas host;
+              exports pandas / PySpark code into a notebook cell. */}
+          <DataWranglerPanel
+            open={wranglerOpen}
+            onOpenChange={setWranglerOpen}
+            onInsertCell={(source) => insertWranglerCell(source)}
+            dfVar="df"
+            itemType={item.slug}
+            itemId={id}
+          />
         </div>
       }
     />
   );
 }
 
-// ── Single cell view ──────────────────────────────────────────────────────────
-function NotebookCellView(props: {
-  cell: EditorCell; active: boolean; canRun: boolean; canUp: boolean; canDown: boolean;
-  notebookId: string; schemaContext?: string; priorCells?: string[];
-  onFocus: () => void; onChange: (patch: Partial<EditorCell>) => void; onRun: () => void;
-  onDelete: () => void; onUp: () => void; onDown: () => void;
-  onDuplicate: () => void; onToggleParameters: () => void; onToggleCollapsed: () => void;
-}) {
+// ── Cell output (R4-SYN-1) — success output rendered on the shared stack:
+//    a display(df) table becomes the RichDisplay grid + chart builder; html /
+//    image / text keep their existing rich rendering. Errors are rendered by
+//    the shared CodeCell (traceback + Fix with Copilot), so this skips them. ──
+function SynapseCellOutput({ out, cellId, notebookId }: { out?: CellOutput; cellId: string; notebookId: string }) {
   const s = useStyles();
-  const { cell, active } = props;
-  const [mdEditing, setMdEditing] = useState(!cell.source);
-  const [completionEnabled, toggleCompletion] = useInlineCompleteToggle();
-
-  // Live context for the ghost-text inline-completion provider.
-  const inlineCtxRef = useRef<InlineCompletionContext>({
-    enabled: completionEnabled, locked: false, lang: cell.lang,
-    priorCells: props.priorCells || [], schemaContext: props.schemaContext,
-  });
-  useEffect(() => {
-    inlineCtxRef.current = {
-      enabled: completionEnabled, locked: false, lang: cell.lang,
-      priorCells: props.priorCells || [], schemaContext: props.schemaContext,
-    };
-  }, [completionEnabled, cell.lang, props.priorCells, props.schemaContext]);
-  const inlineDisposeRef = useRef<{ dispose(): void } | null>(null);
-  const handleEditorReady = useCallback((editor: any, monaco: any) => {
-    inlineDisposeRef.current?.dispose();
-    inlineDisposeRef.current = registerInlineCompletion(editor, monaco, () => inlineCtxRef.current);
-  }, []);
-  useEffect(() => () => inlineDisposeRef.current?.dispose(), []);
-
-  // Shared move/duplicate/delete cluster used by both cell kinds.
-  const actions = (
-    <>
-      <Button size="small" appearance="subtle"
-        icon={cell.collapsed ? <ChevronRight16Regular /> : <ChevronDown16Regular />}
-        onClick={(e) => { e.stopPropagation(); props.onToggleCollapsed(); }}
-        aria-label={cell.collapsed ? 'Expand cell input' : 'Collapse cell input'}
-        title={cell.collapsed ? 'Expand input' : 'Collapse input'} />
-      <Button size="small" appearance="subtle" icon={<ChevronUp16Regular />} disabled={!props.canUp} onClick={(e) => { e.stopPropagation(); props.onUp(); }} aria-label="Move up" />
-      <Button size="small" appearance="subtle" icon={<ChevronDown16Regular />} disabled={!props.canDown} onClick={(e) => { e.stopPropagation(); props.onDown(); }} aria-label="Move down" />
-      <Menu>
-        <MenuTrigger disableButtonEnhancement>
-          <Button size="small" appearance="subtle" icon={<MoreHorizontal16Regular />} aria-label="More cell actions" onClick={(e) => e.stopPropagation()} />
-        </MenuTrigger>
-        <MenuPopover>
-          <MenuList>
-            <MenuItem icon={<Copy16Regular />} onClick={props.onDuplicate}>Duplicate cell</MenuItem>
-            {cell.type === 'code' && (
-              <MenuItem onClick={props.onToggleParameters}>
-                {cell.isParameters ? 'Unset parameters cell' : 'Toggle parameter cell'}
-              </MenuItem>
-            )}
-            <MenuItem icon={<Delete16Regular />} onClick={props.onDelete}>Delete cell</MenuItem>
-          </MenuList>
-        </MenuPopover>
-      </Menu>
-    </>
-  );
-
-  // ── Inline AI assist (F21) — generate / explain / fix per code cell ─────────
-  type AssistView = 'idle' | 'prompt' | 'loading' | 'suggestion' | 'explain-result';
-  const [assistView, setAssistView] = useState<AssistView>('idle');
-  const [assistPrompt, setAssistPrompt] = useState('');
-  const [assistResult, setAssistResult] = useState<string | null>(null);
-  const [assistError, setAssistError] = useState<string | null>(null);
-  const lastModeRef = useRef<'generate' | 'explain' | 'fix'>('generate');
-
-  const callAssist = useCallback(async (mode: 'generate' | 'explain' | 'fix') => {
-    lastModeRef.current = mode;
-    setAssistView('loading');
-    setAssistError(null);
-    const out = cell.output;
-    const errorText = out?.status === 'error'
-      ? [out.ename ? `${out.ename}: ${out.evalue || ''}` : '', ...(out.traceback || []), out.text || '']
-          .filter(Boolean).join('\n')
-      : '';
-    try {
-      const r = await clientFetch(`/api/notebook/${encodeURIComponent(props.notebookId)}/assist`, {
-        method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          mode,
-          lang: cell.lang,
-          source: cell.source,
-          prompt: mode === 'generate' ? assistPrompt : undefined,
-          errorText: mode === 'fix' ? errorText : undefined,
-          schemaContext: props.schemaContext || undefined,
-        }),
-      });
-      const j = await r.json();
-      if (!j?.ok) {
-        setAssistView('idle');
-        setAssistError(j?.code === 'no_aoai'
-          ? `Notebook Copilot not configured: ${j?.hint || 'Set LOOM_AOAI_ENDPOINT and LOOM_AOAI_DEPLOYMENT.'}`
-          : (j?.error || 'AI assist failed'));
-        return;
-      }
-      setAssistResult(j.result);
-      setAssistView(mode === 'explain' ? 'explain-result' : 'suggestion');
-    } catch (e: any) {
-      setAssistView('idle');
-      setAssistError(e?.message || String(e));
-    }
-  }, [cell, assistPrompt, props.notebookId, props.schemaContext]);
-
-  if (cell.type === 'markdown') {
-    return (
-      <div className={`${s.cell} ${active ? s.cellActive : ''}`} onClick={props.onFocus}>
-        <div className={s.cellHeader}>
-          <Caption1 className={s.tag}># md</Caption1>
-          <Button size="small" appearance="subtle" icon={mdEditing ? <Eye16Regular /> : <Edit16Regular />}
-            onClick={(e) => { e.stopPropagation(); setMdEditing((v) => !v); }}>
-            {mdEditing ? 'View' : 'Edit'}
-          </Button>
-          <div className={s.spacer} />
-          {actions}
-        </div>
-        {cell.collapsed ? (
-          <div className={s.collapsedHint} onClick={(e) => { e.stopPropagation(); props.onToggleCollapsed(); }}>
-            ⋯ markdown collapsed — click to expand
-          </div>
-        ) : mdEditing ? (
-          <MonacoTextarea value={cell.source} onChange={(v) => props.onChange({ source: v })} language="markdown" height={120} minHeight={80} autoHeight maxHeight={600} ariaLabel="Markdown source" />
-        ) : (
-          <div className={s.md} onDoubleClick={() => setMdEditing(true)}
-            // eslint-disable-next-line react/no-danger
-            dangerouslySetInnerHTML={{ __html: renderMarkdown(cell.source || '_Empty markdown cell — double-click to edit._') }} />
-        )}
-      </div>
-    );
+  if (!out) return null;
+  if (out.status === 'running') {
+    return <div className={s.output}><Spinner size="tiny" label="Running…" labelPosition="after" /></div>;
   }
-
-  const out = cell.output;
+  if (out.status === 'error') return null; // CodeCell owns the error surface.
+  const rich = buildRichFromTable(out.tableColumns, out.tableRows);
+  const hasAny = !!(out.text || rich || out.html || out.imageBase64);
   return (
-    <div className={`${s.cell} ${active ? s.cellActive : ''}`} onClick={props.onFocus}>
-      <div className={s.cellHeader}>
-        <Tooltip content="Run cell" relationship="label">
-          <Button size="small" appearance="primary" icon={cell.running ? <Spinner size="tiny" /> : <Play20Regular />}
-            disabled={cell.running || !props.canRun}
-            onClick={(e) => { e.stopPropagation(); props.onRun(); }} aria-label="Run cell" />
-        </Tooltip>
-        <Dropdown size="small" value={KIND_LABEL[cell.lang]} selectedOptions={[cell.lang]}
-          onOptionSelect={(_, d) => props.onChange({ lang: (d.optionValue as CellKind) || 'pyspark' })}
-          aria-label="Cell language" style={{ minWidth: 150 }}>
-          {(Object.keys(KIND_LABEL) as CellKind[]).map((k) => <Option key={k} value={k} text={KIND_LABEL[k]}>{KIND_LABEL[k]}</Option>)}
-        </Dropdown>
-        {cell.isParameters && (
-          <Tooltip content="Parameters cell — values can be overridden when the notebook runs from a pipeline (papermill/ADF)." relationship="label">
-            <Badge appearance="filled" color="brand" size="small">parameters</Badge>
-          </Tooltip>
-        )}
-        {/* AI affordances (F21): Ask Copilot (generate) · Explain · Fix */}
-        <Tooltip content="Generate code from a description" relationship="label">
-          <Button size="small" appearance="subtle" icon={<Sparkle16Regular />}
-            disabled={assistView === 'loading'}
-            onClick={(e) => { e.stopPropagation(); setAssistResult(null); setAssistError(null); setAssistView('prompt'); }}
-            aria-label="Ask Copilot to generate code">
-            Ask Copilot
-          </Button>
-        </Tooltip>
-        <Tooltip content="Explain this cell" relationship="label">
-          <Button size="small" appearance="subtle" icon={<Info16Regular />}
-            disabled={!cell.source.trim() || assistView === 'loading'}
-            onClick={(e) => { e.stopPropagation(); callAssist('explain'); }}
-            aria-label="Explain cell">
-            Explain
-          </Button>
-        </Tooltip>
-        <Tooltip content={completionEnabled
-          ? 'AI inline completion: on — pause typing for a gray ghost suggestion, Tab to accept'
-          : 'AI inline completion: off'} relationship="label">
-          <Button size="small" appearance={completionEnabled ? 'primary' : 'subtle'}
-            icon={completionEnabled ? <Sparkle16Filled /> : <Sparkle16Regular />}
-            onClick={(e) => { e.stopPropagation(); toggleCompletion(); }}
-            aria-label={completionEnabled ? 'Disable AI inline completion' : 'Enable AI inline completion'} />
-        </Tooltip>
-        {out?.status === 'error' && (
-          <Tooltip content="Fix the error in this cell" relationship="label">
-            <Button size="small" appearance="subtle" icon={<Wrench16Regular />}
-              disabled={assistView === 'loading'}
-              onClick={(e) => { e.stopPropagation(); callAssist('fix'); }}
-              aria-label="Fix error with AI">
-              {assistView === 'loading' && lastModeRef.current === 'fix' ? 'Fixing…' : 'Fix'}
-            </Button>
-          </Tooltip>
-        )}
-        {!props.canRun && <Caption1 className={s.tag}>attach a pool to run</Caption1>}
-        <div className={s.spacer} />
-        {actions}
-      </div>
-      {cell.collapsed ? (
-        <div className={s.collapsedHint} onClick={(e) => { e.stopPropagation(); props.onToggleCollapsed(); }}>
-          ⋯ {cell.source.split('\n')[0]?.slice(0, 80) || '(empty)'} — click to expand
-        </div>
-      ) : (
-        <MonacoTextarea value={cell.source} onChange={(v) => props.onChange({ source: v })}
-          language={KIND_TO_MONACO[cell.lang]} height={140} minHeight={80} autoHeight maxHeight={720} ariaLabel={`${cell.lang} code cell`}
-          onReady={handleEditorReady} />
-      )}
-
-      {/* Inline NL prompt for generate mode */}
-      {!cell.collapsed && assistView === 'prompt' && (
-        <div className={s.assistBar}>
-          <Input size="small"
-            placeholder="Describe what this cell should do (e.g. count rows in bronze.orders)…"
-            value={assistPrompt}
-            onChange={(_, d) => setAssistPrompt(d.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && assistPrompt.trim()) callAssist('generate');
-              if (e.key === 'Escape') setAssistView('idle');
-            }}
-            style={{ flex: 1, minWidth: 0 }} autoFocus aria-label="AI code generation prompt" />
-          <Button size="small" appearance="primary" disabled={!assistPrompt.trim()}
-            onClick={() => callAssist('generate')}>Generate</Button>
-          <Button size="small" onClick={() => { setAssistView('idle'); setAssistPrompt(''); }}>Cancel</Button>
-        </div>
-      )}
-
-      {/* Loading */}
-      {!cell.collapsed && assistView === 'loading' && (
-        <div className={s.assistBar}>
-          <Spinner size="tiny" labelPosition="after"
-            label={lastModeRef.current === 'generate' ? 'Generating…' : lastModeRef.current === 'explain' ? 'Explaining…' : 'Fixing…'} />
-        </div>
-      )}
-
-      {/* Suggestion / explanation result */}
-      {!cell.collapsed && (assistView === 'suggestion' || assistView === 'explain-result') && assistResult && (
-        <MessageBar intent={assistView === 'explain-result' ? 'info' : 'success'} style={{ margin: `${tokens.spacingVerticalXS} 0 0` }}>
-          <MessageBarBody>
-            <pre className={s.assistResult}>{assistResult}</pre>
-          </MessageBarBody>
-          <MessageBarActions>
-            {assistView === 'suggestion' && (
-              <Button size="small" appearance="primary"
-                onClick={() => { props.onChange({ source: assistResult }); setAssistView('idle'); setAssistResult(null); setAssistPrompt(''); }}>
-                Apply
-              </Button>
-            )}
-            <Button size="small" onClick={() => { setAssistView('idle'); setAssistResult(null); }}>Dismiss</Button>
-          </MessageBarActions>
-        </MessageBar>
-      )}
-
-      {/* Assist error / honest config gate */}
-      {!cell.collapsed && assistError && (
-        <MessageBar intent="error" style={{ margin: `${tokens.spacingVerticalXS} 0 0` }}>
-          <MessageBarBody>{assistError}</MessageBarBody>
-          <MessageBarActions>
-            <Button size="small" onClick={() => setAssistError(null)}>Dismiss</Button>
-          </MessageBarActions>
-        </MessageBar>
-      )}
-
-      {out && !cell.collapsed && (out.status === 'running' || out.status === 'error' || out.text) && (
-        <div className={`${s.output} ${out.status === 'error' ? s.outputErr : ''}`}>
-          {out.status === 'running' && <Spinner size="tiny" label="Running…" labelPosition="after" />}
-          {out.status === 'ok' && out.text}
-          {out.status === 'error' && (
-            <>
-              {out.ename ? `${out.ename}: ${out.evalue || ''}\n` : ''}
-              {out.traceback?.length ? out.traceback.join('\n') : (out.text || out.evalue || 'error')}
-            </>
-          )}
-        </div>
-      )}
-      {out?.status === 'ok' && out.tableRows && out.tableRows.length > 0 && (
+    <>
+      {out.text && <div className={s.output}>{out.text}</div>}
+      {rich && (
         <div className={s.richOut}>
-          <Table size="extra-small" className={s.richTable} aria-label="DataFrame output">
-            {out.tableColumns && out.tableColumns.length > 0 && (
-              <TableHeader>
-                <TableRow>
-                  {out.tableColumns.map((col, ci) => <TableHeaderCell key={ci}>{col}</TableHeaderCell>)}
-                </TableRow>
-              </TableHeader>
-            )}
-            <TableBody>
-              {out.tableRows.map((row, ri) => (
-                <TableRow key={ri}>
-                  {row.map((cellVal, ci) => <TableCell key={ci}>{cellVal}</TableCell>)}
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+          <RichDisplay payload={rich} cellId={cellId} notebookId={notebookId} workspaceId="" computeId="" />
         </div>
       )}
-      {out?.status === 'ok' && out.html && !out.tableRows && (
+      {out.html && !rich && (
         <div className={s.richOut}>
           {/* Synapse display(df) emits an HTML table here. eslint-disable-next-line react/no-danger */}
           <div className={s.richHtml} dangerouslySetInnerHTML={{ __html: out.html }} />
         </div>
       )}
-      {out?.status === 'ok' && out.imageBase64 && (
+      {out.imageBase64 && (
         <div className={s.richOut}>
           <img className={s.richImg} src={`data:image/png;base64,${out.imageBase64}`} alt="cell output" />
         </div>
       )}
-    </div>
+      {!hasAny && <div className={s.output}>(no output)</div>}
+    </>
   );
 }
+
