@@ -21,6 +21,7 @@ import { SectionExplainer, LearnPopover } from '@/lib/components/ui/learn-popove
 import { itemVisual } from '@/lib/components/ui/item-type-visual';
 import { ScaleManagePanel } from '@/lib/components/admin/scale-manage-panel';
 import { SurgeProtectionPanel } from '@/lib/components/admin/surge-protection-panel';
+import { SparkTelemetryAuditPanel } from '@/lib/components/admin/spark-telemetry-audit-panel';
 import { MetricChart } from '@/lib/components/monitor/metric-chart';
 import { OpsCopilotPane } from '@/lib/components/admin/ops-copilot-pane';
 
@@ -697,6 +698,25 @@ export default function CapacityPage() {
             }
           >
             <SurgeProtectionPanel />
+          </Section>
+
+          <Section
+            title="Spark telemetry"
+            actions={
+              <>
+                <Caption1 className={a.muted}>
+                  Every Spark engine → Loom Log Analytics; audit coverage &amp; fix drift
+                </Caption1>
+                <LearnPopover
+                  title="Universal Spark telemetry"
+                  content="Loom routes diagnostic logs + metrics from every Spark engine it runs — Synapse Spark, Databricks, and Azure ML — to the single Loom Log Analytics workspace, so the Spark-insights reports (Monitor → Spark) see performance, failures, and optimization signals across all of them. Bicep wires this at deploy; this reconciler is the runtime safety net that audits live workspaces and enables the standardized setting on any that drifted. Default-on — Apply all is one click."
+                  tips={['Covers Synapse Spark, Databricks, and Azure ML', 'Applies Azure Monitor diagnostic settings via ARM', 'Fine-grained Spark metrics come from the per-session emitter']}
+                  learnMoreHref="https://learn.microsoft.com/azure/azure-monitor/essentials/diagnostic-settings"
+                />
+              </>
+            }
+          >
+            <SparkTelemetryAuditPanel />
           </Section>
 
           <Section

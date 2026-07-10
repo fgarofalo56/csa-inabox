@@ -49,6 +49,9 @@ param mlComputeIdleTtl string = 'PT30M'
 @description('Compliance tags applied to every resource.')
 param complianceTags object
 
+@description('Central Loom Log Analytics workspace RESOURCE ID (law-csa-loom-<region>) that this AML workspace routes its diagnostic logs + metrics to — universal Spark telemetry. This is the shared hub LAW, NOT the local App-Insights `law` this module creates for the workspace itself. Empty (dlz-attach with no hub LAW coordinate) skips the diagnostic settings — honest no-op, nothing fake is created.')
+param workspaceId string = ''
+
 var suffix = uniqueString(resourceGroup().id)
 var kvName = take('kv-aml-${suffix}', 24)
 var saName = take('saamlloom${suffix}', 24)
@@ -231,6 +234,36 @@ resource amlComputeOperator 'Microsoft.Authorization/roleAssignments@2022-04-01'
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'e503ece1-11d0-4e8e-8e2c-7a6c3bf38815')
     principalId: consolePrincipalId
     principalType: 'ServicePrincipal'
+  }
+}
+
+// =====================================================================
+// Diagnostic settings → standardized Loom LAW (universal Spark telemetry)
+// =====================================================================
+// AML runs Apache Spark (managed/serverless Spark jobs) + AmlCompute clusters
+// and compute instances. Route ALL workspace resource logs + metrics to the
+// central Loom Log Analytics workspace so the Spark-insights reports and the
+// spark-telemetry reconciler see this engine's telemetry with zero extra steps.
+// `categoryGroup: allLogs` collects every supported category — including the
+// Spark/compute-relevant AmlComputeJobEvent, AmlComputeClusterEvent,
+// AmlComputeCpuGpuUtilization, and AmlRunStatusChangedEvent (surfacing in LA as
+// the AmlCompute* tables). Same setting name (`diag-loom-stdz`) as every other
+// Loom resource so DSC/audit tooling detects drift consistently.
+// Honest gate: skipped when workspaceId is empty (dlz-attach with no hub LAW
+// coordinate) — nothing fake is created. Grounded in Microsoft Learn:
+// "Supported logs for Microsoft.MachineLearningServices/workspaces" +
+// "Monitor Azure Machine Learning" (AmlComputeJobEvent / AmlComputeClusterEvent).
+resource diag 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = if (!empty(workspaceId)) {
+  scope: workspace
+  name: 'diag-loom-stdz'
+  properties: {
+    workspaceId: workspaceId
+    logs: [
+      { categoryGroup: 'allLogs', enabled: true }
+    ]
+    metrics: [
+      { category: 'AllMetrics', enabled: true }
+    ]
   }
 }
 
