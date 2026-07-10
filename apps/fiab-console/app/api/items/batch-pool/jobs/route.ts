@@ -11,6 +11,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { denyIfNoDlzAccess } from '@/lib/auth/dlz-gate';
 import { batchConfigGate, listJobs, createJob, deleteJob } from '@/lib/azure/batch-client';
 
 export const runtime = 'nodejs';
@@ -36,7 +37,8 @@ function gate() {
 }
 
 export async function GET() {
-  if (!getSession()) return unauth();
+  const s = getSession(); if (!s) return unauth();
+  { const denied = await denyIfNoDlzAccess(s, 'scaling'); if (denied) return denied; }
   const g = gate(); if (g) return g;
   try {
     return NextResponse.json({ ok: true, jobs: await listJobs() });
@@ -46,7 +48,8 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
-  if (!getSession()) return unauth();
+  const s = getSession(); if (!s) return unauth();
+  { const denied = await denyIfNoDlzAccess(s, 'scaling'); if (denied) return denied; }
   const g = gate(); if (g) return g;
   const body = await req.json().catch(() => ({}));
   const id = String(body?.id || '').trim();
@@ -65,7 +68,8 @@ export async function POST(req: NextRequest) {
 }
 
 export async function DELETE(req: NextRequest) {
-  if (!getSession()) return unauth();
+  const s = getSession(); if (!s) return unauth();
+  { const denied = await denyIfNoDlzAccess(s, 'scaling'); if (denied) return denied; }
   const g = gate(); if (g) return g;
   const id = req.nextUrl.searchParams.get('id')?.trim();
   if (!id) return NextResponse.json({ ok: false, error: 'id query param is required' }, { status: 400 });

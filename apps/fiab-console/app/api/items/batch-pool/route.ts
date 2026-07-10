@@ -11,6 +11,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { denyIfNoDlzAccess } from '@/lib/auth/dlz-gate';
 import {
   batchConfigGate,
   getBatchAccount,
@@ -43,7 +44,8 @@ function gate() {
 }
 
 export async function GET() {
-  if (!getSession()) return unauth();
+  const s = getSession(); if (!s) return unauth();
+  { const denied = await denyIfNoDlzAccess(s, 'scaling'); if (denied) return denied; }
   const g = gate(); if (g) return g;
   try {
     const [account, pools] = await Promise.all([
@@ -57,7 +59,8 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
-  if (!getSession()) return unauth();
+  const s = getSession(); if (!s) return unauth();
+  { const denied = await denyIfNoDlzAccess(s, 'scaling'); if (denied) return denied; }
   const g = gate(); if (g) return g;
   const body = await req.json().catch(() => ({}));
   const action = String(body?.action || '');
@@ -83,7 +86,8 @@ export async function POST(req: NextRequest) {
 }
 
 export async function DELETE(req: NextRequest) {
-  if (!getSession()) return unauth();
+  const s = getSession(); if (!s) return unauth();
+  { const denied = await denyIfNoDlzAccess(s, 'scaling'); if (denied) return denied; }
   const g = gate(); if (g) return g;
   const name = req.nextUrl.searchParams.get('name')?.trim();
   if (!name) return NextResponse.json({ ok: false, error: 'name query param is required' }, { status: 400 });
