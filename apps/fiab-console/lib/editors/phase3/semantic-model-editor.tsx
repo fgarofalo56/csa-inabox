@@ -1555,7 +1555,7 @@ function LoomNativeModelView({
       <div className={s.pad}>
         {err && <MessageBar intent="warning" layout="multiline"><MessageBarBody>{err}</MessageBarBody></MessageBar>}
         {sub === 'model' && (
-          <EntityDiagram source={{ kind: 'semantic-model', itemId: id }} height={560} />
+          <EntityDiagram source={{ kind: 'semantic-model', itemId: id }} height={560} resizeStorageKey="semantic-model-entity" />
         )}
         {sub === 'tables' && (
           <TileGrid minTileWidth={320}>
@@ -3293,6 +3293,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                   <EntityDiagram
                     source={{ kind: 'semantic-model', itemId: datasetId, workspaceId: workspaceId || undefined }}
                     height={600}
+                    resizeStorageKey="semantic-model-entity-tables"
                   />
                 )}
                 {tab === 'modeling' && (

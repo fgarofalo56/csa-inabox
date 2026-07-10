@@ -2590,6 +2590,7 @@ export function LakehouseEditor({ item, id }: Props) {
               <EntityDiagram
                 source={{ kind: 'lakehouse', itemId: id, containers: activeContainer || undefined }}
                 height={560}
+                resizeStorageKey="lakehouse-entity"
               />
             )}
             {tab === 'files' && (

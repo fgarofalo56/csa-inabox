@@ -10,6 +10,25 @@
  * optimization, never a correctness or availability dependency (the in-process
  * LRU + honest direct-query fallback always remain).
  *
+ * ── Fail-fast (why every call is time-bounded) ───────────────────────────────
+ * "Any error degrades silently" is only safe if a failure is FAST. A hanging
+ * TCP connect or a stalled auth handshake is not an *error* to Node until the
+ * OS socket timeout (minutes) — long enough that, in production, every route
+ * wrapped in query-result-cache blocked on a cold connect to a private-endpoint
+ * Redis until Front Door returned 504. Unsetting `LOOM_RESULT_CACHE_REDIS`
+ * recovered instantly. The fix, implemented here:
+ *   1. HARD BUDGETS — connect ≤ 2s, per-op (GET/SET/DEL) ≤ 500ms, via
+ *      `Promise.race`. Budget expiry == a tier failure → the request proceeds on
+ *      the lower tiers (in-process LRU + Cosmos + honest direct query).
+ *   2. CIRCUIT BREAKER — after 3 consecutive failures/timeouts the breaker OPENs
+ *      for 60s and Redis is skipped ENTIRELY (no per-request connect storms
+ *      against an unreachable cache); a half-open probe re-tests after the window.
+ *   3. NON-BLOCKING BACKGROUND CONNECT — the first request never awaits a cold
+ *      connect. `ensureConnected()` kicks the connect in the background and
+ *      returns null until the client is connected + authenticated; callers serve
+ *      from the lower tiers meanwhile.
+ * All budgets are env-tunable (see below).
+ *
  * ── Enablement ──────────────────────────────────────────────────────────────
  *   LOOM_RESULT_CACHE_REDIS            `<host>` or `<host>:<port>` of the shared
  *                                      Azure Cache for Redis (the hband-shared
@@ -22,13 +41,22 @@
  *   LOOM_RESULT_CACHE_REDIS_SCOPE      Entra token scope override for AAD auth
  *                                      (default `https://redis.azure.com/.default`;
  *                                      set the sovereign-cloud value in Gov).
+ *   LOOM_RESULT_CACHE_REDIS_CONNECT_TIMEOUT_MS   connect+auth budget (default 2000).
+ *   LOOM_RESULT_CACHE_REDIS_OP_TIMEOUT_MS        per-op GET/SET/DEL budget (default 500).
+ *   LOOM_RESULT_CACHE_REDIS_BREAKER_THRESHOLD    consecutive failures to OPEN (default 3).
+ *   LOOM_RESULT_CACHE_REDIS_BREAKER_RESET_MS     open duration before half-open (default 60000).
  *
- * ── Auth ────────────────────────────────────────────────────────────────────
+ * ── Auth (authMode = BOTH: Entra preferred, access-key fallback) ─────────────
  * Prefers Entra (matches the "Redis Data Contributor on the shared cache" grant
- * wired by hband-shared.bicep): acquires an AAD token for the redis scope and
- * sends `AUTH <oid> <token>` where <oid> is the principal's object id read from
- * the token's own `oid` claim. Falls back to `AUTH <password>` when a key is
- * provided. No secret is ever logged.
+ * wired by hband-shared.bicep for the Console UAMI): acquires an AAD token for
+ * the redis scope via the shared `loomServerCredential` (the custom
+ * `AcaManagedIdentityCredential` — @azure/identity's MSI path is broken on ACA)
+ * and sends `AUTH <oid> <token>` where <oid> is the principal's object id read
+ * from the token's own `oid` claim. When `LOOM_RESULT_CACHE_REDIS_PASSWORD` is
+ * set it instead sends `AUTH <password>` (access-key). The Entra token expiry is
+ * tracked and a background re-AUTH runs before it lapses (Azure disconnects a
+ * connection whose token has expired), so a long-lived connection never dies on
+ * token rollover. No secret or token is ever logged.
  *
  * NO Fabric / Power BI host — this only ever connects to the configured Azure
  * Cache for Redis host (no-fabric-dependency.md).
@@ -64,6 +92,88 @@ function tlsEnabled(): boolean {
 
 function redisScope(): string {
   return (process.env.LOOM_RESULT_CACHE_REDIS_SCOPE ?? '').trim() || 'https://redis.azure.com/.default';
+}
+
+// ── Fail-fast budgets + circuit breaker ──────────────────────────────────────
+
+/** Connect + initial-auth budget (ms). Default 2000, env-overridable. */
+function connectTimeoutMs(): number {
+  const n = Number(process.env.LOOM_RESULT_CACHE_REDIS_CONNECT_TIMEOUT_MS);
+  return Number.isFinite(n) && n > 0 ? n : 2_000;
+}
+
+/** Per-operation (GET/SET/DEL) budget (ms). Default 500, env-overridable. */
+function opTimeoutMs(): number {
+  const n = Number(process.env.LOOM_RESULT_CACHE_REDIS_OP_TIMEOUT_MS);
+  return Number.isFinite(n) && n > 0 ? n : 500;
+}
+
+/** Consecutive failures that OPEN the breaker. Default 3, env-overridable. */
+function breakerThreshold(): number {
+  const n = Number(process.env.LOOM_RESULT_CACHE_REDIS_BREAKER_THRESHOLD);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 3;
+}
+
+/** How long the breaker stays OPEN before a half-open probe (ms). Default 60000. */
+function breakerResetMs(): number {
+  const n = Number(process.env.LOOM_RESULT_CACHE_REDIS_BREAKER_RESET_MS);
+  return Number.isFinite(n) && n > 0 ? n : 60_000;
+}
+
+/** Distinct error type so a budget expiry is legible in logs / test assertions. */
+class RedisBudgetError extends Error {}
+
+/**
+ * Race a promise against a hard time budget. On expiry, run `onTimeout` (used to
+ * tear down a wedged socket) and reject with a {@link RedisBudgetError}. The
+ * timer is `unref`'d so the cache never keeps the event loop (or a test) alive.
+ */
+function withDeadline<T>(p: Promise<T>, ms: number, onTimeout?: () => void): Promise<T> {
+  let timer: ReturnType<typeof setTimeout>;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      try {
+        onTimeout?.();
+      } catch {
+        /* ignore */
+      }
+      reject(new RedisBudgetError(`redis operation exceeded ${ms}ms budget`));
+    }, ms);
+    (timer as { unref?: () => void }).unref?.();
+  });
+  return Promise.race([p, timeout]).finally(() => clearTimeout(timer));
+}
+
+// Circuit-breaker state (module scope → per-ACA-replica, like the socket). We
+// keep it here rather than in cache-counters.ts: that module's slot idiom is
+// hit/miss attribution, not connection health, so breaker state lives with the
+// connection it guards.
+let consecutiveFailures = 0;
+let breakerOpenUntil = 0; // epoch ms; 0 = closed
+
+/**
+ * True while the breaker is OPEN — skip Redis entirely (no connect, no op) so an
+ * unreachable cache never triggers a per-request connect storm. Once the reset
+ * window elapses this returns false again, letting exactly one probe (a
+ * background connect or a single op) through in the half-open state; a success
+ * closes the breaker, a failure re-opens it.
+ */
+function breakerBlocks(): boolean {
+  if (breakerOpenUntil === 0) return false; // closed
+  if (Date.now() < breakerOpenUntil) return true; // open → skip
+  return false; // reset window elapsed → half-open probe allowed
+}
+
+function recordFailure(): void {
+  consecutiveFailures++;
+  if (consecutiveFailures >= breakerThreshold()) {
+    breakerOpenUntil = Date.now() + breakerResetMs();
+  }
+}
+
+function recordSuccess(): void {
+  consecutiveFailures = 0;
+  breakerOpenUntil = 0;
 }
 
 // ── RESP2 encoding (pure — unit-tested) ──────────────────────────────────────
@@ -136,7 +246,7 @@ export function oidFromToken(token: string): string | null {
   }
 }
 
-// ── Connection (lazy singleton with an ordered reply queue) ───────────────────
+// ── Connection (lazy, NON-BLOCKING background connect + auth) ──────────────────
 
 interface PendingReply {
   resolve: (r: RespReply) => void;
@@ -144,10 +254,16 @@ interface PendingReply {
 }
 
 let socket: Socket | null = null;
-let connecting: Promise<Socket | null> | null = null;
+let ready = false; // true ONLY after connect + initial AUTH both succeed
+let connecting = false; // a background connect is in flight
+let authRefreshing = false; // a background Entra re-AUTH is in flight
+let entraTokenExpiresAt = 0; // epoch ms of the current Entra token (0 = key auth / none)
 let readBuf: Buffer = Buffer.alloc(0);
 const pending: PendingReply[] = [];
 let warned = false;
+
+/** Skew before Entra token expiry at which we proactively re-AUTH (ms). */
+const AUTH_REFRESH_SKEW_MS = 3 * 60_000;
 
 function warnOnce(msg: string, err?: unknown): void {
   if (warned) return;
@@ -159,6 +275,7 @@ function warnOnce(msg: string, err?: unknown): void {
 function teardown(err?: Error): void {
   const s = socket;
   socket = null;
+  ready = false;
   readBuf = Buffer.alloc(0);
   const e = err || new Error('redis connection closed');
   while (pending.length) pending.shift()!.reject(e);
@@ -205,11 +322,18 @@ function send(args: string[]): Promise<RespReply> {
   });
 }
 
+/**
+ * Authenticate the current socket. Sends `AUTH <password>` when an access key is
+ * configured, otherwise Entra `AUTH <oid> <token>`. Records the Entra token
+ * expiry so {@link maybeRefreshAuth} can re-AUTH before it lapses. Assumes the
+ * module `socket` is already set (openSocketAndAuth adopts it first).
+ */
 async function authenticate(): Promise<void> {
   const password = (process.env.LOOM_RESULT_CACHE_REDIS_PASSWORD ?? '').trim();
   if (password) {
     const reply = await send(['AUTH', password]);
     if (reply.type === 'error') throw new Error(`AUTH failed: ${reply.value}`);
+    entraTokenExpiresAt = 0; // access-key auth never expires
     return;
   }
   // Entra auth: AUTH <oid> <aad-token>.
@@ -219,86 +343,183 @@ async function authenticate(): Promise<void> {
   if (!oid) throw new Error('Entra token has no oid claim for Redis AUTH');
   const reply = await send(['AUTH', oid, token.token]);
   if (reply.type === 'error') throw new Error(`AUTH (Entra) failed: ${reply.value}`);
+  entraTokenExpiresAt = token.expiresOnTimestamp || 0;
 }
 
-async function connect(): Promise<Socket | null> {
-  if (socket && !socket.destroyed) return socket;
-  if (connecting) return connecting;
+/**
+ * Open the socket and run the initial AUTH. The socket is ADOPTED into the
+ * module `socket` immediately (before the connect handshake is awaited) so that
+ * a connect-budget timeout can tear it down instead of leaking a wedged socket.
+ * `ready` is NOT set here — the caller ({@link kickConnect}) sets it only after
+ * this resolves.
+ */
+async function openSocketAndAuth(): Promise<void> {
   const endpoint = parseRedisEndpoint(process.env.LOOM_RESULT_CACHE_REDIS);
-  if (!endpoint) return null;
-  connecting = (async () => {
+  if (!endpoint) throw new Error('no redis endpoint configured');
+  const { host, port } = endpoint;
+  const useTls = tlsEnabled();
+  const s: Socket = useTls
+    ? (await import('tls')).connect({ host, port, servername: host })
+    : (await import('net')).connect({ host, port });
+  socket = s; // adopt now so a connect-budget teardown can destroy it
+  s.setNoDelay(true);
+  s.on('data', onData);
+  s.on('error', (e) => teardown(e));
+  s.on('close', () => teardown());
+  await new Promise<void>((resolve, reject) => {
+    const ev = useTls ? 'secureConnect' : 'connect';
+    s.once(ev, () => resolve());
+    s.once('error', reject);
+  });
+  await authenticate();
+}
+
+/**
+ * Kick a background connect if one is warranted. Never awaited by a request:
+ * returns immediately, connecting the socket + authing off the request path.
+ * The whole connect+auth is bounded by the connect budget; a failure/timeout is
+ * counted against the breaker.
+ */
+function kickConnect(): void {
+  if (connecting) return;
+  if (socket && !socket.destroyed && ready) return;
+  if (breakerBlocks()) return;
+  connecting = true;
+  void (async () => {
     try {
-      const { host, port } = endpoint;
-      const s: Socket = tlsEnabled()
-        ? (await import('tls')).connect({ host, port, servername: host })
-        : (await import('net')).connect({ host, port });
-      s.setNoDelay(true);
-      await new Promise<void>((resolve, reject) => {
-        const ev = tlsEnabled() ? 'secureConnect' : 'connect';
-        const onErr = (e: Error) => reject(e);
-        s.once(ev, () => { s.removeListener('error', onErr); resolve(); });
-        s.once('error', onErr);
-      });
-      s.on('data', onData);
-      s.on('error', (e) => teardown(e));
-      s.on('close', () => teardown());
-      socket = s;
-      await authenticate();
-      return socket;
+      await withDeadline(openSocketAndAuth(), connectTimeoutMs(), () =>
+        teardown(new RedisBudgetError('redis connect+auth budget exceeded')),
+      );
+      ready = true;
+      recordSuccess();
     } catch (e) {
       warnOnce('connect/auth error', e);
       teardown(e as Error);
-      return null;
+      recordFailure();
     } finally {
-      connecting = null;
+      connecting = false;
     }
   })();
-  return connecting;
 }
 
-// ── Public API (all failures degrade to null / no-op) ─────────────────────────
+/**
+ * Return a READY (connected + authenticated) socket, or null. When not ready, it
+ * kicks a background connect and returns null so the caller serves from the
+ * lower cache tiers — the first request NEVER awaits a cold connect.
+ */
+function ensureConnected(): Socket | null {
+  if (socket && !socket.destroyed && ready) return socket;
+  kickConnect();
+  return null;
+}
 
-/** GET a JSON string value by key. null on miss or any failure. */
+/**
+ * Proactively refresh the Entra AUTH shortly before the token expires (Azure
+ * Cache for Redis drops a connection whose token has lapsed). Runs in the
+ * background off the request path; a failure tears down the socket (a fresh
+ * background connect + AUTH re-establishes it) and counts against the breaker.
+ */
+function maybeRefreshAuth(): void {
+  if (!ready || entraTokenExpiresAt === 0 || authRefreshing) return;
+  if (Date.now() < entraTokenExpiresAt - AUTH_REFRESH_SKEW_MS) return;
+  authRefreshing = true;
+  void (async () => {
+    try {
+      await withDeadline(authenticate(), connectTimeoutMs(), () =>
+        teardown(new RedisBudgetError('redis re-auth budget exceeded')),
+      );
+      recordSuccess();
+    } catch (e) {
+      warnOnce('Entra token refresh failed', e);
+      teardown(e as Error);
+      recordFailure();
+    } finally {
+      authRefreshing = false;
+    }
+  })();
+}
+
+// ── Public API (all failures degrade to null / no-op, all bounded) ────────────
+
+/** GET a JSON string value by key. null on miss, breaker-open, or any failure. */
 export async function redisGet(key: string): Promise<string | null> {
-  if (!redisCacheConfigured()) return null;
+  if (!redisCacheConfigured() || breakerBlocks()) return null;
+  const s = ensureConnected();
+  if (!s) return null; // background connect in flight → serve lower tiers
+  maybeRefreshAuth();
   try {
-    const s = await connect();
-    if (!s) return null;
-    const reply = await send(['GET', key]);
+    const reply = await withDeadline(send(['GET', key]), opTimeoutMs(), () =>
+      teardown(new RedisBudgetError('redis GET budget exceeded')),
+    );
+    recordSuccess();
     if (reply.type === 'bulk') return reply.value;
     return null;
   } catch (e) {
     warnOnce('GET error', e);
+    recordFailure();
     return null;
   }
 }
 
-/** SET a value with a TTL (seconds). No-op on any failure. */
+/** SET a value with a TTL (seconds). No-op on breaker-open or any failure. */
 export async function redisSet(key: string, value: string, ttlSeconds: number): Promise<void> {
-  if (!redisCacheConfigured()) return;
+  if (!redisCacheConfigured() || breakerBlocks()) return;
+  const s = ensureConnected();
+  if (!s) return;
+  maybeRefreshAuth();
   try {
-    const s = await connect();
-    if (!s) return;
     const ttl = Math.max(1, Math.floor(ttlSeconds));
-    await send(['SET', key, value, 'EX', String(ttl)]);
+    await withDeadline(send(['SET', key, value, 'EX', String(ttl)]), opTimeoutMs(), () =>
+      teardown(new RedisBudgetError('redis SET budget exceeded')),
+    );
+    recordSuccess();
   } catch (e) {
     warnOnce('SET error', e);
+    recordFailure();
   }
 }
 
-/** DEL one or more keys. No-op on any failure. */
+/** DEL one or more keys. No-op on breaker-open or any failure. */
 export async function redisDel(keys: string[]): Promise<void> {
-  if (!redisCacheConfigured() || keys.length === 0) return;
+  if (!redisCacheConfigured() || breakerBlocks() || keys.length === 0) return;
+  const s = ensureConnected();
+  if (!s) return;
+  maybeRefreshAuth();
   try {
-    const s = await connect();
-    if (!s) return;
-    await send(['DEL', ...keys]);
+    await withDeadline(send(['DEL', ...keys]), opTimeoutMs(), () =>
+      teardown(new RedisBudgetError('redis DEL budget exceeded')),
+    );
+    recordSuccess();
   } catch (e) {
     warnOnce('DEL error', e);
+    recordFailure();
   }
 }
 
 /** Close the connection (tests + graceful shutdown). */
 export function redisDisconnect(): void {
   teardown();
+}
+
+// ── Test / diagnostics hooks (not part of the runtime contract) ───────────────
+
+/** Circuit-breaker snapshot for tests + a health/diagnostics badge. */
+export function _redisBreakerState(): { open: boolean; failures: number; openUntil: number } {
+  return { open: breakerBlocks(), failures: consecutiveFailures, openUntil: breakerOpenUntil };
+}
+
+/** True when the client is connected + authenticated (ready to serve from Redis). */
+export function _redisReady(): boolean {
+  return ready && !!socket && !socket.destroyed;
+}
+
+/** Fully reset connection + breaker + warn state (unit tests only). */
+export function _redisResetForTest(): void {
+  teardown();
+  consecutiveFailures = 0;
+  breakerOpenUntil = 0;
+  connecting = false;
+  authRefreshing = false;
+  entraTokenExpiresAt = 0;
+  warned = false;
 }

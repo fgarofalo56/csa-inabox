@@ -17,7 +17,7 @@ import {
   MessageBar, MessageBarBody, MessageBarTitle, MessageBarActions,
   makeStyles, tokens,
 } from '@fluentui/react-components';
-import { ArrowDownload20Regular, Money20Regular, Organization20Regular, Person20Regular } from '@fluentui/react-icons';
+import { ArrowDownload20Regular, Money20Regular, Organization20Regular, Person20Regular, Building20Regular } from '@fluentui/react-icons';
 import { SignInRequired } from '@/lib/components/sign-in-required';
 import { Section, Toolbar } from '@/lib/components/ui/section';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
@@ -50,6 +50,23 @@ interface AttributionRollup {
   totalExecutions: number;
   windowDays: number;
 }
+
+// WS-CHGBK — per-workspace allocation.
+type AllocationBasis = 'usage' | 'items' | 'even';
+interface WorkspaceCostRow {
+  workspaceId: string; name: string; domainId: string; domainName: string;
+  cost: number; pctOfDomain: number; basis: AllocationBasis;
+}
+interface WorkspaceChargebackModel {
+  currency: string; timeframe: string; rows: WorkspaceCostRow[];
+  totalCost: number; unallocatedCost: number; usageWindowDays: number; generatedAt: string;
+}
+
+const BASIS_META: Record<AllocationBasis, { label: string; color: 'brand' | 'informative' | 'subtle' }> = {
+  usage: { label: 'usage-weighted', color: 'brand' },
+  items: { label: 'item-weighted', color: 'informative' },
+  even: { label: 'even split', color: 'subtle' },
+};
 
 const TIMEFRAMES: { key: string; label: string }[] = [
   { key: 'MonthToDate', label: 'Month to date' },
@@ -112,6 +129,29 @@ function downloadCsv(model: ChargebackModel) {
   URL.revokeObjectURL(url);
 }
 
+function downloadWorkspaceCsv(model: WorkspaceChargebackModel) {
+  const esc = (v: unknown) => {
+    const s = String(v ?? '');
+    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  const header = ['Workspace', 'Workspace id', 'Domain', 'Domain id', `Allocated cost (${model.currency})`, '% of domain', 'Basis'];
+  const lines = [header.join(',')];
+  for (const r of model.rows) {
+    lines.push([r.name, r.workspaceId, r.domainName, r.domainId, r.cost, r.pctOfDomain, BASIS_META[r.basis]?.label || r.basis].map(esc).join(','));
+  }
+  lines.push(['Total allocated', '', '', '', model.totalCost, '', ''].map(esc).join(','));
+  if (model.unallocatedCost > 0) lines.push(['Unallocated (no workspaces)', '', '', '', model.unallocatedCost, '', ''].map(esc).join(','));
+  const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `loom-chargeback-workspaces-${model.timeframe}-${new Date().toISOString().slice(0, 10)}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
 export default function ChargebackPage() {
   const styles = useStyles();
   const a = useAdminTabStyles();
@@ -128,6 +168,12 @@ export default function ChargebackPage() {
   const [drill, setDrill] = useState<{ domainId: string | null; name: string } | null>(null);
   const [rollup, setRollup] = useState<AttributionRollup | null>(null);
   const [rollupLoading, setRollupLoading] = useState(false);
+  // WS-CHGBK per-workspace allocation state.
+  const [wsModel, setWsModel] = useState<WorkspaceChargebackModel | null>(null);
+  const [wsMeta, setWsMeta] = useState<{ cachedAt?: number; stale?: boolean } | null>(null);
+  const [wsLoading, setWsLoading] = useState(true);
+  const [wsError, setWsError] = useState<string | null>(null);
+  const [wsQ, setWsQ] = useState('');
 
   const loadRollup = useCallback((domainId: string | null, name: string) => {
     setDrill({ domainId, name });
@@ -157,7 +203,21 @@ export default function ChargebackPage() {
       .finally(() => setLoading(false));
   }, []);
 
-  useEffect(() => { load(timeframe); }, [timeframe, load]);
+  const loadWs = useCallback((tf: string) => {
+    setWsLoading(true); setWsError(null);
+    clientFetch(`/api/admin/chargeback/workspaces?timeframe=${encodeURIComponent(tf)}`, { cache: 'no-store' }, 90_000)
+      .then(async (r) => (r.status === 401 ? null : r.json()))
+      .then((j: any) => {
+        if (!j) return;
+        if (j.ok) { setWsModel(j as WorkspaceChargebackModel); setWsMeta(j.meta ?? null); }
+        else if (j.gate) { setWsModel(null); /* domain gate already shown above */ }
+        else setWsError(j.error || 'Failed to load per-workspace breakdown');
+      })
+      .catch((e) => setWsError(String(e)))
+      .finally(() => setWsLoading(false));
+  }, []);
+
+  useEffect(() => { load(timeframe); loadWs(timeframe); }, [timeframe, load, loadWs]);
 
   const visibleRows = useMemo(() => {
     const rows = model?.rows || [];
@@ -192,6 +252,42 @@ export default function ChargebackPage() {
       render: (r) => <Badge appearance="tint" color="brand">{r.pctOfTotal}%</Badge>,
     },
   ], [styles, a, model]);
+
+  const wsVisibleRows = useMemo(() => {
+    const rows = wsModel?.rows || [];
+    const f = wsQ.toLowerCase().trim();
+    return f
+      ? rows.filter((r) => r.name.toLowerCase().includes(f) || r.domainName.toLowerCase().includes(f) || r.workspaceId.toLowerCase().includes(f))
+      : rows;
+  }, [wsModel, wsQ]);
+
+  const wsColumns: LoomColumn<WorkspaceCostRow>[] = useMemo(() => [
+    {
+      key: 'name', label: 'Workspace', width: 240,
+      render: (r) => (
+        <span className={styles.domainName}>
+          <Building20Regular />
+          <strong title={r.name} className={a.ellipsis}>{r.name}</strong>
+        </span>
+      ),
+    },
+    { key: 'domainName', label: 'Domain', width: 180, render: (r) => <Caption1 className={styles.muted}>{r.domainName}</Caption1> },
+    {
+      key: 'cost', label: 'Allocated cost', width: 150,
+      getValue: (r) => r.cost,
+      render: (r) => <span className={styles.costCell}>{fmtCurrency(r.cost, wsModel?.currency || 'USD')}</span>,
+    },
+    {
+      key: 'pctOfDomain', label: '% of domain', width: 120,
+      getValue: (r) => r.pctOfDomain,
+      render: (r) => <Badge appearance="tint" color="brand">{r.pctOfDomain}%</Badge>,
+    },
+    {
+      key: 'basis', label: 'Basis', width: 150,
+      getValue: (r) => r.basis,
+      render: (r) => <Badge appearance="outline" color={BASIS_META[r.basis]?.color || 'subtle'}>{BASIS_META[r.basis]?.label || r.basis}</Badge>,
+    },
+  ], [styles, a, wsModel]);
 
   return (
     <AdminShell sectionTitle="Chargeback">
@@ -338,6 +434,90 @@ export default function ChargebackPage() {
                 {model.subscriptions.length} subscription{model.subscriptions.length === 1 ? '' : 's'} ·
                 grouped by tag <code>{model.tagKey}</code> · generated {new Date(model.generatedAt).toLocaleString()}
               </Text>
+            </>
+          )}
+        </Section>
+      )}
+
+      {!unauth && !gate && (
+        <Section
+          title="Spend by workspace"
+          actions={
+            <Button
+              appearance="subtle"
+              icon={<ArrowDownload20Regular />}
+              disabled={!wsModel || wsModel.rows.length === 0}
+              onClick={() => wsModel && downloadWorkspaceCsv(wsModel)}
+            >
+              Export CSV
+            </Button>
+          }
+        >
+          <Caption1 className={styles.muted}>
+            Workspaces carry no direct Azure cost tag, so these figures are <strong>allocated</strong> from
+            each domain&apos;s real Cost Management spend — never directly metered. Each domain&apos;s dollars are
+            split across its workspaces by recorded compute usage (<em>usage-weighted</em>, last{' '}
+            {wsModel?.usageWindowDays ?? 30} days); when no usage is recorded yet, by catalog item count
+            (<em>item-weighted</em>); otherwise evenly. The per-domain totals above stay the real dollars.
+          </Caption1>
+
+          {wsLoading && <Spinner label="Allocating spend across workspaces…" />}
+
+          {!wsLoading && wsError && (
+            <MessageBar intent="error" className={a.messageBar}>
+              <MessageBarBody>
+                <MessageBarTitle>Could not load per-workspace breakdown</MessageBarTitle>
+                {wsError}
+              </MessageBarBody>
+              <MessageBarActions>
+                <Button appearance="transparent" onClick={() => loadWs(timeframe)}>Retry</Button>
+              </MessageBarActions>
+            </MessageBar>
+          )}
+
+          {!wsLoading && !wsError && wsModel && (
+            <>
+              {wsMeta?.stale && (
+                <div className={styles.chartWrap}><StaleDataBadge cachedAt={wsMeta.cachedAt} /></div>
+              )}
+              <div className={styles.stats}>
+                <div className={styles.stat}>
+                  <span className={styles.statIcon} aria-hidden><Building20Regular /></span>
+                  <div className={styles.statBody}>
+                    <div className={styles.statLabel}>Total allocated</div>
+                    <div className={styles.statValue}>{fmtCurrency(wsModel.totalCost, wsModel.currency)}</div>
+                  </div>
+                </div>
+                <div className={styles.stat}>
+                  <span className={styles.statIcon} aria-hidden><Building20Regular /></span>
+                  <div className={styles.statBody}>
+                    <div className={styles.statLabel}>Workspaces with spend</div>
+                    <div className={styles.statValue}>{wsModel.rows.length}</div>
+                  </div>
+                </div>
+                {wsModel.unallocatedCost > 0 && (
+                  <div className={styles.stat}>
+                    <span className={styles.statIcon} aria-hidden><Money20Regular /></span>
+                    <div className={styles.statBody}>
+                      <div className={styles.statLabel}>Unallocated (no workspaces)</div>
+                      <div className={styles.statValue}>{fmtCurrency(wsModel.unallocatedCost, wsModel.currency)}</div>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <Toolbar search={wsQ} onSearch={setWsQ} searchPlaceholder="Filter by workspace or domain…" />
+              <LoomDataTable
+                columns={wsColumns}
+                rows={wsVisibleRows}
+                getRowId={(r) => r.workspaceId}
+                empty={
+                  wsModel.rows.length === 0
+                    ? 'No per-workspace allocation yet — either no domain spend has accrued, or no workspaces are mapped to a domain with spend.'
+                    : 'No workspaces match the current filter.'
+                }
+                ariaLabel="Per-workspace chargeback allocation"
+              />
             </>
           )}
         </Section>
