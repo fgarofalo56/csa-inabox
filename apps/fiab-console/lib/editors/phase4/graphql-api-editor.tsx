@@ -108,6 +108,7 @@ import {
   type PlanFormulaFn, type PlanFormulaOp, type ModelIssue,
 } from '../_plan-model';
 import { arr, useItemState, SaveBar, useStyles } from './shared';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
 
 // ----- GraphQL API (Cosmos state + real APIM publish) -----
 const GQL_SAMPLE = `type Query {\n  customers(region: String, first: Int = 10): [Customer!]!\n}\ntype Customer { id: ID! name: String! orders: [Order!]! }\ntype Order { id: ID! total: Float! }`;
@@ -195,6 +196,14 @@ export function GraphqlApiEditor({ item, id }: { item: FabricItemType; id: strin
     <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
       <div className={s.pad}>
         {loading && <Spinner size="small" label="Loading…" labelPosition="after" />}
+        {/* Teaching banner (SC-6) — Fabric-grade guidance, keyed per surface with
+            a persistent dismiss and a Learn-more link (UX-407). */}
+        <TeachingBanner
+          surfaceKey="graphql-api-authoring"
+          title="Publish a GraphQL API"
+          message="Author a GraphQL schema (SDL), publish it to Azure API Management as a synthetic GraphQL API, then map each field to a backend with resolver policies. The test console runs queries against the live APIM gateway — no Fabric required."
+          learnMoreHref="https://learn.microsoft.com/azure/api-management/graphql-schema-resolve-api"
+        />
         <div className={s.secHead}><Settings20Regular className={s.secHeadIcon} /><Subtitle2>API configuration</Subtitle2></div>
         {/* v3.28 Phase 4.5: functional setState so publish-to-APIM (which calls
             setState(next) after the request) doesn't clobber concurrent typing. */}

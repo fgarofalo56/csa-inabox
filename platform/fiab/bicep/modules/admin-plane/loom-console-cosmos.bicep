@@ -93,6 +93,7 @@ var loomContainers = [
   { name: 'loom-workspaces',   partitionKey: '/tenantId' }
   { name: 'workspace-folders', partitionKey: '/workspaceId' }
   { name: 'task-flows',        partitionKey: '/workspaceId' }
+  { name: 'task-flow-runs',    partitionKey: '/workspaceId' }
   { name: 'embed-codes',       partitionKey: '/tenantId' }
   { name: 'org-visuals',       partitionKey: '/tenantId' }
   { name: 'azure-connections', partitionKey: '/tenantId' }

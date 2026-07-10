@@ -108,6 +108,8 @@ import {
   type PlanFormulaFn, type PlanFormulaOp, type ModelIssue,
 } from '../_plan-model';
 import { arr, useItemState, SaveBar, useStyles } from './shared';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
+import { GuidedEmptyState } from '@/lib/components/shared/guided-empty-state';
 
 // ----- Variable Library (Cosmos, typed key/value with value sets) -----
 // v3.27: extended to Fabric's 7 variable types — String/Integer/Number/
@@ -223,6 +225,14 @@ export function VariableLibraryEditor({ item, id }: { item: FabricItemType; id: 
         </div>
         <div className={s.pad}>
           {loading && <Spinner size="small" label="Loading…" labelPosition="after" />}
+          {/* Teaching banner (SC-6) — Fabric-grade guidance, keyed per surface with
+              a persistent dismiss and a Learn-more link (UX-409). */}
+          <TeachingBanner
+            surfaceKey="variable-library-authoring"
+            title="Parameterize once, switch per environment"
+            message="Define typed variables and give each a value per value set (default / dev / test / prod). Reference them as @{variables.NAME} in pipelines and notebooks; secret-ref variables resolve from Key Vault at runtime."
+            learnMoreHref="https://learn.microsoft.com/fabric/cicd/variable-library/variable-library-overview"
+          />
           <MessageBar intent="info">
             <MessageBarBody>
               Reference variables in pipelines / notebooks as <code>@{'{'}variables.NAME{'}'}</code>. The active value set is resolved at runtime by the executor.
@@ -239,6 +249,23 @@ export function VariableLibraryEditor({ item, id }: { item: FabricItemType; id: 
               {VL_VALUE_SETS.map((v) => <Option key={v} value={v}>{`${v}${v === (state.activeValueSet || 'default') ? ' (active)' : ''}`}</Option>)}
             </Dropdown>
           </Field>
+          {arr<VarDef>(state.variables).length === 0 ? (
+            <GuidedEmptyState
+              heroIcon={Cube20Regular}
+              title="No variables yet"
+              intro="Add a typed variable, then give it a value for each value set. Reference it as @{variables.NAME} from pipelines, notebooks, and dataflows."
+              columns={1}
+              paths={[{
+                key: 'add-variable',
+                title: 'Add your first variable',
+                body: 'Create a typed key/value entry (String, Integer, Boolean, DateTime, Guid, references, or a Key Vault secret-ref).',
+                icon: Add20Regular,
+                onClick: addRow,
+              }]}
+              learnMoreHref="https://learn.microsoft.com/fabric/cicd/variable-library/variable-library-overview"
+              ariaLabel="Variable library empty state"
+            />
+          ) : (
           <Table aria-label="Variables" size="small">
             <TableHeader><TableRow>
               <TableHeaderCell>Name</TableHeaderCell>
@@ -276,6 +303,7 @@ export function VariableLibraryEditor({ item, id }: { item: FabricItemType; id: 
               })}
             </TableBody>
           </Table>
+          )}
           <Button onClick={addRow} style={{ alignSelf: 'flex-start' }}>+ New variable</Button>
 
           {/* Resolve / dereference — the real substitution layer. */}
