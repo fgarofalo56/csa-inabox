@@ -39,6 +39,7 @@ import { EmptyState } from '@/lib/components/empty-state';
 import { OneLakeSecurityTab } from './components/onelake-security-tab';
 import { OpenMirrorConfig } from './components/open-mirror-config';
 import { MirrorSourceWizard, type MirrorTableSpec } from './components/mirror-source-wizard';
+import { DetailsPanel, type DetailsSection } from '@/lib/components/shared/details-panel';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { useSharedEditorStyles } from './shared-styles';
@@ -326,8 +327,59 @@ export function MirroredDatabaseEditor({ item, id }: Props) {
     ]},
   ], [workspaceId, mirrorId, detail, acting, testing, lifecycleBusy, del, act, lifecycle, loadDetail, loadList, loadMonitor, openNew, openEdit, testConnection, sqlPaired, router]);
 
+  // SC-2 right details rail — the mirror's REAL source connection + paired
+  // Serverless SQL analytics endpoint, with copyable URIs. Azure-native by
+  // construction: every value comes from the live /mirrored-database backend.
+  const detailsPanel = useMemo(() => {
+    if (!mirrorId) return undefined;
+    const src = (detail?.source || {}) as { sourceType?: string; server?: string; database?: string; connectionId?: string };
+    const tableCount = Array.isArray(tables) ? tables.length : undefined;
+    const sections: DetailsSection[] = [
+      {
+        key: 'source',
+        title: 'Source',
+        stats: [
+          { key: 'type', label: 'Source type', value: src.sourceType || '—' },
+          { key: 'status', label: 'Replication status', value: status || '—' },
+          ...(typeof tableCount === 'number' ? [{ key: 'tables', label: 'Mirrored tables', value: tableCount }] : []),
+        ],
+        uris: [
+          ...(src.server ? [{ key: 'server', label: 'Source server', value: src.server }] : []),
+          ...(src.database ? [{ key: 'db', label: 'Source database', value: src.database, mono: false }] : []),
+        ],
+      },
+      ...(sqlPaired ? [{
+        key: 'sql',
+        title: 'SQL analytics endpoint',
+        uris: [
+          ...(sqlPaired.endpoint ? [{ key: 'ep', label: 'Serverless SQL endpoint', value: sqlPaired.endpoint }] : []),
+          ...(sqlPaired.database ? [{ key: 'sqldb', label: 'Analytics database', value: sqlPaired.database, mono: false }] : []),
+        ],
+      }] : []),
+    ];
+    return (
+      <DetailsPanel
+        title="Mirror details"
+        subtitle={(mirrors || []).find((m) => m.id === mirrorId)?.displayName}
+        icon={<Database20Regular />}
+        sections={sections}
+        related={sqlPaired ? {
+          title: 'Related items',
+          items: [{
+            id: sqlPaired.itemId,
+            name: 'SQL analytics endpoint',
+            kind: 'Serverless SQL',
+            icon: <DatabasePlugConnected20Regular />,
+            onClick: () => router.push(`/items/synapse-serverless-sql-pool/${encodeURIComponent(sqlPaired.itemId)}${sqlPaired.database ? `?database=${encodeURIComponent(sqlPaired.database)}` : ''}`),
+          }],
+        } : undefined}
+        error={detail ? undefined : 'Select a mirrored database to see its source connection and analytics endpoint.'}
+      />
+    );
+  }, [mirrorId, detail, tables, status, sqlPaired, mirrors, router]);
+
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={ribbon}
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon} rightPanel={detailsPanel} rightPanelLabel="Details"
       leftPanel={
         <div className={s.treePad}>
           <div className={s.sectionHead} style={{ marginBottom: tokens.spacingVerticalS }}>

@@ -52,6 +52,7 @@ import { SqlObjectScriptMenu, SqlRowCountBadge } from '@/lib/components/sql-obje
 import { sqlRowCount, loadSqlScript } from './sql-explorer-helpers';
 import type { ScriptObjectType, ScriptMode } from '@/lib/azure/sql-object-scripting';
 import { downloadBlob, resultsToCsv, resultsToJson } from './components/result-export';
+import { PreviewTable } from '@/lib/components/shared/preview-table';
 import { useSharedEditorStyles } from './shared-styles';
 
 const useLocalStyles = makeStyles({
@@ -102,12 +103,6 @@ interface DmvEntry {
   total_elapsed_time_ms?: number;
   resource_class?: string;
   label?: string;
-}
-
-function formatCell(v: unknown): string {
-  if (v === null || v === undefined) return 'NULL';
-  if (typeof v === 'object') return JSON.stringify(v);
-  return String(v);
 }
 
 // ── Results export (CSV / JSON / Open-in-Excel) — serializers + blob
@@ -192,24 +187,21 @@ function ResultsPanel({
           body="The statement executed successfully against the live endpoint but matched no rows. Adjust the predicate and run again."
         />
       ) : (
-        <div className={s.tableWrap}>
-          <Table aria-label="Query results" size="small">
-            <TableHeader>
-              <TableRow>
-                {columns.map((c) => <TableHeaderCell key={c}>{c}</TableHeaderCell>)}
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {rows.map((row, i) => (
-                <TableRow key={i}>
-                  {columns.map((_, j) => (
-                    <TableCell key={j} className={s.cell}>{formatCell(row[j])}</TableCell>
-                  ))}
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </div>
+        <PreviewTable
+          ariaLabel="Query results"
+          showTabs={false}
+          sources={[{
+            id: 'results',
+            label: 'Results',
+            data: {
+              columns,
+              rows,
+              elapsedMs: result.executionMs,
+              rowCount: result.rowCount ?? rows.length,
+              truncated: result.truncated,
+            },
+          }]}
+        />
       )}
     </div>
   );

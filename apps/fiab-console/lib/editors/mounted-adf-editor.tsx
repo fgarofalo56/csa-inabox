@@ -43,6 +43,7 @@ import {
   Save20Regular, Database20Regular, FullScreenMaximize20Regular, LockClosed20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { DetailsPanel, type DetailsSection } from '@/lib/components/shared/details-panel';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { useSharedEditorStyles } from './shared-styles';
@@ -220,8 +221,46 @@ export function MountedAdfEditor({ item, id }: Props) {
     ]},
   ], [workspaceId, mountId, loadDetail]);
 
+  // SC-2 right details rail — the mounted factory's real ARM coordinates
+  // (copyable resource ID + Open-in-portal) and live object counts. Values come
+  // from the /mounted-adf backend; nothing hard-coded.
+  const detailsPanel = useMemo(() => {
+    if (!mountId || !active) return undefined;
+    const resourceId = active.subscriptionId && active.resourceGroup && active.factoryName
+      ? `/subscriptions/${active.subscriptionId}/resourceGroups/${active.resourceGroup}/providers/Microsoft.DataFactory/factories/${active.factoryName}`
+      : '';
+    const sections: DetailsSection[] = [
+      {
+        key: 'factory',
+        title: 'Data Factory',
+        stats: [
+          { key: 'name', label: 'Factory name', value: active.factoryName || '—' },
+          { key: 'rg', label: 'Resource group', value: active.resourceGroup || '—' },
+          ...(Array.isArray(pipelines) ? [{ key: 'pl', label: 'Pipelines', value: pipelines.length }] : []),
+          ...(Array.isArray(runs) ? [{ key: 'runs', label: 'Recent runs', value: runs.length }] : []),
+        ],
+        uris: [
+          ...(active.subscriptionId ? [{ key: 'sub', label: 'Subscription', value: active.subscriptionId }] : []),
+          ...(resourceId ? [{
+            key: 'rid',
+            label: 'Resource ID',
+            value: resourceId,
+            href: `https://portal.azure.com/#@/resource${resourceId}/overview`,
+          }] : []),
+        ],
+      },
+    ];
+    return (
+      <DetailsPanel
+        title="Factory details"
+        subtitle={active.displayName}
+        sections={sections}
+      />
+    );
+  }, [mountId, active, pipelines, runs]);
+
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={ribbon}
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon} rightPanel={detailsPanel} rightPanelLabel="Details"
       leftPanel={
         <div className={s.treePad}>
           <Subtitle2 style={{ marginBottom: tokens.spacingVerticalS }}>Mounted factories</Subtitle2>

@@ -34,6 +34,7 @@ import {
 import { ItemEditorChrome } from './item-editor-chrome';
 import { OneLakeSecurityTab } from './components/onelake-security-tab';
 import { EmptyState } from '@/lib/components/empty-state';
+import { DetailsPanel, type DetailsSection } from '@/lib/components/shared/details-panel';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { useSharedEditorStyles } from './shared-styles';
@@ -279,8 +280,46 @@ export function MirroredDatabricksEditor({ item, id }: Props) {
     ]},
   ], [workspaceId, mirrorId, loadList, refresh]);
 
+  // SC-2 right details rail — the mounted Unity Catalog + its paired Serverless
+  // SQL analytics endpoint, with copyable URIs. Azure-native by construction:
+  // values come from the live /mirrored-databricks backend + resolved endpoint.
+  const detailsPanel = useMemo(() => {
+    if (!mirrorId) return undefined;
+    const ep = sqlInfo?.endpoint || active?.sqlEndpoint || '';
+    const epDb = sqlInfo?.database || active?.sqlDatabase || '';
+    const views = sqlInfo?.viewCount || active?.viewCount || '';
+    const sections: DetailsSection[] = [
+      {
+        key: 'catalog',
+        title: 'Unity Catalog',
+        stats: [
+          { key: 'cat', label: 'Catalog', value: active?.catalogName || sqlInfo?.catalogName || '—' },
+          ...(views ? [{ key: 'views', label: 'Delta views', value: views }] : []),
+        ],
+        uris: active?.hostname ? [{ key: 'host', label: 'Databricks hostname', value: active.hostname }] : undefined,
+      },
+      {
+        key: 'sql',
+        title: 'SQL analytics endpoint',
+        stats: [{ key: 'prov', label: 'Provisioned', value: sqlInfo?.provisioned ? 'Yes' : 'Not yet' }],
+        uris: [
+          ...(ep ? [{ key: 'ep', label: 'Serverless SQL endpoint', value: ep }] : []),
+          ...(epDb ? [{ key: 'db', label: 'Analytics database', value: epDb, mono: false }] : []),
+        ],
+      },
+    ];
+    return (
+      <DetailsPanel
+        title="Mirror details"
+        subtitle={active?.displayName}
+        icon={<Database20Regular />}
+        sections={sections}
+      />
+    );
+  }, [mirrorId, active, sqlInfo]);
+
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={ribbon}
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon} rightPanel={detailsPanel} rightPanelLabel="Details"
       leftPanel={
         <div className={s.treePad}>
           <Subtitle2 style={{ marginBottom: tokens.spacingVerticalS }}>Mirrored Databricks</Subtitle2>
