@@ -538,3 +538,12 @@ and the no-scaffold receipt (real-backend screenshot + physical click-walk with
 LOOM_DEFAULT_FABRIC_WORKSPACE unset) for every surface. Roll and browser-verify the Phase-1 gate before
 advancing to Phase 2.
 ```
+
+## Azure Government day-one parity
+
+See `docs/fiab/gov-parity-audit.md` — per-service MAG availability (grounded in
+Microsoft Learn), endpoint-coverage audit (`cloud-endpoints.ts` SSOT is largely
+done; provision-time bicep break GOV-1 in `ai-search.bicep`), Gov substitutions
+(Databricks UC has NO Gov backend → loom-unity OSS service; Fabric/OneLake
+absent → Azure-native default; Digital Twins/AAS absent → substitutes), and the
+prioritized GOV-1..12 fix list. Tracked under the GOV-PARITY task.
