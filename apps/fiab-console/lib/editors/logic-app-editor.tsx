@@ -38,8 +38,13 @@ import {
 import { EmptyState } from '@/lib/components/empty-state';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
+import { GuidedEmptyState } from '@/lib/components/shared/guided-empty-state';
+import { useRegisterRibbonCommands } from '@/lib/components/shared/ribbon-commands';
+import { openCopilot } from '@/lib/components/copilot-pane';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
+import { Code20Regular } from '@fluentui/react-icons';
 
 const useStyles = makeStyles({
   pad: { padding: tokens.spacingHorizontalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalM, flex: 1, minHeight: 0 },
@@ -327,8 +332,10 @@ export function LogicAppEditor({ item, id }: Props) {
     ]},
   ], [workspaceId, running, runTrigger, load]);
 
+  useRegisterRibbonCommands(ribbon, 'logic-app');
+
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={ribbon}
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon} dirty={dirty} commandSearch
       main={
         <>
           <div className={s.tabs}>
@@ -339,6 +346,12 @@ export function LogicAppEditor({ item, id }: Props) {
             </TabList>
           </div>
           <div className={s.pad}>
+            <TeachingBanner
+              surfaceKey="logic-app-designer"
+              title="Automate a workflow with Logic Apps"
+              message="A Logic App runs a trigger-then-actions workflow. The Designer renders your Workflow Definition Language (WDL) top-down as a connected flow; author triggers and actions on the Code view tab, then Run trigger to execute a real run against the bound Microsoft.Logic/workflows resource."
+              learnMoreHref="https://learn.microsoft.com/azure/logic-apps/logic-apps-overview"
+            />
             <div className={s.toolbar}>
               <Badge appearance="filled" color="brand">Microsoft.Logic/workflows</Badge>
               {detail?.workflowState && <Badge appearance="outline">{detail.workflowState}</Badge>}
@@ -399,10 +412,16 @@ export function LogicAppEditor({ item, id }: Props) {
                   </MessageBar>
                 )}
                 {triggerNames.length === 0 && Object.keys(actions).length === 0 ? (
-                  <EmptyState
-                    icon={<Flash20Regular />}
-                    title="No triggers or actions yet"
-                    body="This workflow has no triggers or actions defined. The Designer is a read-only flow view — open the Code view tab to add a trigger and actions to the Workflow Definition Language definition, then Save to deploy."
+                  <GuidedEmptyState
+                    heroIcon={Flash20Regular}
+                    title="Build your first workflow"
+                    intro="A Logic App starts with a trigger, then runs one or more actions. Pick a starting point — the Designer renders your definition as a connected flow as soon as it has steps."
+                    paths={[
+                      { key: 'code', title: 'Author in Code view', body: 'Add triggers and actions to the Workflow Definition Language, then Save to deploy.', icon: Code20Regular, onClick: () => setTab('code') },
+                      { key: 'params', title: 'Declare parameters', body: 'Add typed WDL parameters and deploy-time values to reuse across environments.', icon: Options20Regular, onClick: () => setTab('parameters') },
+                    ]}
+                    askCopilot={{ onClick: () => openCopilot(), body: 'Describe the automation you want and Copilot drafts the WDL trigger and actions.' }}
+                    learnMoreHref="https://learn.microsoft.com/azure/logic-apps/logic-apps-overview"
                   />
                 ) : (
                 <div className={s.flow}>

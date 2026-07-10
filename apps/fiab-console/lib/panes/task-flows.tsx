@@ -28,23 +28,30 @@ import {
 import '@xyflow/react/dist/style.css';
 import {
   Body1, Button, Caption1, Spinner, Badge, Text, Card,
-  TabList, Tab,
+  TabList, Tab, Tooltip, Divider,
   Dialog, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
   Input, Field, Textarea, Dropdown, Option,
   DataGrid, DataGridHeader, DataGridHeaderCell, DataGridRow, DataGridBody, DataGridCell,
   createTableColumn, type TableColumnDefinition,
   MessageBar, MessageBarBody,
+  Toast, ToastTitle, ToastBody, Toaster, useToastController, useId,
+  OverlayDrawer, DrawerHeader, DrawerHeaderTitle, DrawerBody,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
   Add20Regular, Delete20Regular, Open20Regular, Save20Regular,
-  Flowchart20Regular, ArrowLeft20Regular,
+  Flowchart20Regular, ArrowLeft20Regular, Play20Regular, History20Regular,
+  Dismiss20Regular, CheckmarkCircle20Filled, ErrorCircle20Filled, SubtractCircle20Filled,
 } from '@fluentui/react-icons';
 import {
   listItems,
   listTaskFlows, createTaskFlow, getTaskFlow, saveTaskFlow, deleteTaskFlow,
+  runTaskFlow, getTaskFlowRun, listTaskFlowRuns,
   type WorkspaceItem, type TaskFlow, type TaskFlowStep, type TaskFlowEdge,
+  type TaskFlowRun,
 } from '@/lib/api/workspaces';
+import { isRunnableType } from '@/lib/taskflow/step-runner';
+import type { CanvasNodeStatus } from '@/lib/components/canvas/canvas-node-kit';
 import { findItemType } from '@/lib/catalog/fabric-item-types';
 import {
   CanvasNode, CanvasEdge, portStyle, CATEGORY_ACCENT,
@@ -88,6 +95,10 @@ interface StepNodeData extends Record<string, unknown> {
   itemId?: string | null;
   itemType?: string | null;
   note?: string;
+  /** Live run status, overlaid on the node while a flow run is active. */
+  runStatus?: CanvasNodeStatus;
+  /** Honest per-step run detail (failure reason / skip reason), shown inline. */
+  runDetail?: string;
 }
 
 /**
@@ -108,6 +119,7 @@ function TaskFlowStepNode({ data, selected }: NodeProps) {
   // accent-tinted badge for the linked item, neutral caption for the note.
   const linkedLabel = d.itemId && meta ? meta.displayName : undefined;
   const description = [linkedLabel, d.note].filter(Boolean).join(' · ') || undefined;
+  const runStatus = d.runStatus ?? 'idle';
   return (
     <CanvasNode
       width={STEP_NODE_WIDTH}
@@ -116,6 +128,8 @@ function TaskFlowStepNode({ data, selected }: NodeProps) {
       selected={selected}
       typeLabel={linkedLabel ?? 'Step'}
       description={description}
+      status={runStatus}
+      statusDetail={runStatus !== 'idle' ? d.runDetail : undefined}
     >
       {/* Caller-owned ports — handle ids/types/positions unchanged from prior. */}
       <Handle type="target" position={Position.Left} style={portStyle('in', STEP_ACCENT)} />
@@ -149,6 +163,52 @@ interface CanvasProps {
 function uid(prefix: string): string {
   return `${prefix}-${Math.random().toString(36).slice(2, 10)}`;
 }
+
+/** Map a run step's status onto the canvas-node-kit status vocabulary. */
+function toNodeStatus(status: TaskFlowRun['steps'][number]['status']): CanvasNodeStatus {
+  switch (status) {
+    case 'running': return 'running';
+    case 'succeeded': return 'succeeded';
+    case 'failed': return 'failed';
+    case 'skipped': return 'skipped';
+    default: return 'idle'; // pending — not started yet
+  }
+}
+
+/** Toast title for a terminal flow-run status. */
+function runTitle(status: TaskFlowRun['status']): string {
+  switch (status) {
+    case 'succeeded': return 'Flow run succeeded';
+    case 'partial': return 'Flow run finished with failures';
+    case 'failed': return 'Flow run failed';
+    default: return 'Flow run finished';
+  }
+}
+
+/** One-line honest summary of a finished run (counts + first failure reason). */
+function runSummary(run: TaskFlowRun): string {
+  const steps = run.steps || [];
+  const done = steps.filter((s) => s.status === 'succeeded').length;
+  const failed = steps.filter((s) => s.status === 'failed').length;
+  const skipped = steps.filter((s) => s.status === 'skipped').length;
+  const parts = [`${done} succeeded`];
+  if (failed) parts.push(`${failed} failed`);
+  if (skipped) parts.push(`${skipped} skipped`);
+  const firstFail = steps.find((s) => s.status === 'failed');
+  const reason = firstFail?.itemRuns.find((i) => i.status === 'failed')?.reason;
+  return reason ? `${parts.join(' · ')} — ${reason}` : parts.join(' · ');
+}
+
+const RUN_STATUS_META: Record<
+  TaskFlowRun['status'] | 'skipped',
+  { color: string; label: string }
+> = {
+  running: { color: tokens.colorBrandForeground1, label: 'Running' },
+  succeeded: { color: tokens.colorPaletteGreenForeground1, label: 'Succeeded' },
+  partial: { color: tokens.colorPaletteDarkOrangeForeground1, label: 'Partial' },
+  failed: { color: tokens.colorPaletteRedForeground1, label: 'Failed' },
+  skipped: { color: tokens.colorNeutralForeground3, label: 'Skipped' },
+};
 
 function flowToNodes(flow: TaskFlow): Node[] {
   return (flow.steps || []).map((st) => ({
@@ -277,8 +337,112 @@ function TaskFlowCanvasInner({ workspaceId, flow, items, onBack }: CanvasProps) 
     markDirty();
   }
 
+  // --- Run flow (F11 execution) -------------------------------------------
+  const toastId = useId('taskflow-run-toaster');
+  const { dispatchToast } = useToastController(toastId);
+  const [runId, setRunId] = useState<string | null>(null);
+  const [running, setRunning] = useState(false);
+  const [starting, setStarting] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [history, setHistory] = useState<TaskFlowRun[] | null>(null);
+
+  // Any step whose linked item can actually execute? Drives the Run button.
+  const hasRunnable = useMemo(
+    () => nodes.some((n) => isRunnableType((n.data as StepNodeData).itemType)),
+    [nodes],
+  );
+
+  // Overlay a run's per-step statuses onto the canvas nodes.
+  const applyRunStatuses = useCallback((run: TaskFlowRun) => {
+    const byStep = new Map(run.steps.map((st) => [st.stepId, st]));
+    setNodes((prev) => prev.map((n) => {
+      const st = byStep.get(n.id);
+      const d = n.data as StepNodeData;
+      const nextStatus = st ? toNodeStatus(st.status) : 'idle';
+      const failReason = st?.itemRuns.find((i) => i.status === 'failed')?.reason;
+      const skipReason = st?.status === 'skipped'
+        ? (st.itemRuns.find((i) => i.reason)?.reason || 'not runnable')
+        : undefined;
+      const detail = failReason || skipReason || undefined;
+      if (d.runStatus === nextStatus && d.runDetail === detail) return n;
+      return { ...n, data: { ...d, runStatus: nextStatus, runDetail: detail } };
+    }));
+  }, [setNodes]);
+
+  const clearRunStatuses = useCallback(() => {
+    setNodes((prev) => prev.map((n) => {
+      const d = n.data as StepNodeData;
+      if (d.runStatus === undefined && d.runDetail === undefined) return n;
+      return { ...n, data: { ...d, runStatus: undefined, runDetail: undefined } };
+    }));
+  }, [setNodes]);
+
+  const startRun = useCallback(async () => {
+    setStarting(true);
+    try {
+      // Persist any pending edits so the server executes the latest topology.
+      if (dirty) await doSave();
+      clearRunStatuses();
+      const id = await runTaskFlow(workspaceId, flow.id);
+      setRunId(id);
+      setRunning(true);
+      dispatchToast(
+        <Toast><ToastTitle>Flow run started</ToastTitle><ToastBody>Executing steps in order…</ToastBody></Toast>,
+        { intent: 'info' },
+      );
+    } catch (e: any) {
+      dispatchToast(
+        <Toast><ToastTitle>Couldn&apos;t start the run</ToastTitle><ToastBody>{e?.message || String(e)}</ToastBody></Toast>,
+        { intent: 'error' },
+      );
+    } finally {
+      setStarting(false);
+    }
+  }, [dirty, doSave, clearRunStatuses, workspaceId, flow.id, dispatchToast]);
+
+  // Poll the active run every 4s until it reaches a terminal status.
+  useEffect(() => {
+    if (!runId || !running) return;
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const run = await getTaskFlowRun(workspaceId, flow.id, runId);
+        if (cancelled) return;
+        applyRunStatuses(run);
+        if (run.status !== 'running') {
+          setRunning(false);
+          const intent = run.status === 'succeeded' ? 'success' : run.status === 'failed' ? 'error' : 'warning';
+          dispatchToast(
+            <Toast><ToastTitle>{runTitle(run.status)}</ToastTitle><ToastBody>{runSummary(run)}</ToastBody></Toast>,
+            { intent },
+          );
+        }
+      } catch { /* transient poll error — keep trying on the next tick */ }
+    };
+    void poll();
+    const timer = setInterval(() => void poll(), 4000);
+    return () => { cancelled = true; clearInterval(timer); };
+  }, [runId, running, workspaceId, flow.id, applyRunStatuses, dispatchToast]);
+
+  const openHistory = useCallback(async () => {
+    setHistoryOpen(true);
+    setHistory(null);
+    try {
+      setHistory(await listTaskFlowRuns(workspaceId, flow.id));
+    } catch {
+      setHistory([]);
+    }
+  }, [workspaceId, flow.id]);
+
+  const runDisabledReason = !hasRunnable
+    ? 'Link a pipeline, Databricks job, or notebook to a step to enable running.'
+    : running
+      ? 'A run is already in progress.'
+      : 'Run every step in order — items in a step run in parallel.';
+
   return (
     <div className={s.root}>
+      <Toaster toasterId={toastId} position="top-end" />
       <div className={s.toolbar}>
         <Button appearance="subtle" icon={<ArrowLeft20Regular />} onClick={onBack}>Flows</Button>
         <Text weight="semibold">{flow.displayName}</Text>
@@ -286,7 +450,18 @@ function TaskFlowCanvasInner({ workspaceId, flow, items, onBack }: CanvasProps) 
         <div className={s.spacer} />
         {savedAt && !dirty && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Saved {savedAt}</Caption1>}
         {dirty && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Unsaved changes…</Caption1>}
-        <Button appearance="primary" icon={<Save20Regular />} onClick={() => void doSave()} disabled={saving || !dirty}>
+        <Button appearance="subtle" icon={<History20Regular />} onClick={() => void openHistory()}>History</Button>
+        <Tooltip content={runDisabledReason} relationship="description">
+          <Button
+            appearance="primary"
+            icon={running ? <Spinner size="tiny" /> : <Play20Regular />}
+            onClick={() => void startRun()}
+            disabled={!hasRunnable || running || starting}
+          >
+            {running ? 'Running…' : starting ? 'Starting…' : 'Run flow'}
+          </Button>
+        </Tooltip>
+        <Button appearance="secondary" icon={<Save20Regular />} onClick={() => void doSave()} disabled={saving || !dirty}>
           {saving ? 'Saving…' : 'Save'}
         </Button>
       </div>
@@ -365,6 +540,72 @@ function TaskFlowCanvasInner({ workspaceId, flow, items, onBack }: CanvasProps) 
           </DialogBody>
         </DialogSurface>
       </Dialog>
+
+      {/* Run history — right-side OverlayDrawer listing the last 20 runs. */}
+      <OverlayDrawer position="end" open={historyOpen} onOpenChange={(_e, d) => setHistoryOpen(d.open)} size="medium">
+        <DrawerHeader>
+          <DrawerHeaderTitle
+            action={
+              <Button appearance="subtle" aria-label="Close" icon={<Dismiss20Regular />} onClick={() => setHistoryOpen(false)} />
+            }
+          >
+            Run history
+          </DrawerHeaderTitle>
+        </DrawerHeader>
+        <DrawerBody>
+          {history === null && <Spinner label="Loading runs…" />}
+          {history !== null && history.length === 0 && (
+            <div className={s.empty}>
+              <Body1>No runs yet. Click &quot;Run flow&quot; to execute this task flow.</Body1>
+            </div>
+          )}
+          {history !== null && history.length > 0 && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
+              {history.map((run) => {
+                const meta = RUN_STATUS_META[run.status];
+                const done = run.steps.filter((st) => st.status === 'succeeded').length;
+                const failed = run.steps.filter((st) => st.status === 'failed').length;
+                const skipped = run.steps.filter((st) => st.status === 'skipped').length;
+                return (
+                  <Card key={run.runId} style={{ padding: tokens.spacingVerticalM }}>
+                    <div className={s.nodeRow} style={{ justifyContent: 'space-between' }}>
+                      <div className={s.nodeRow}>
+                        {run.status === 'succeeded' && <CheckmarkCircle20Filled primaryFill={meta.color} />}
+                        {run.status === 'failed' && <ErrorCircle20Filled primaryFill={meta.color} />}
+                        {run.status === 'partial' && <ErrorCircle20Filled primaryFill={meta.color} />}
+                        {run.status === 'running' && <Spinner size="tiny" />}
+                        <Text weight="semibold" style={{ color: meta.color }}>{meta.label}</Text>
+                      </div>
+                      <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                        {run.startedAt ? new Date(run.startedAt).toLocaleString() : '—'}
+                      </Caption1>
+                    </div>
+                    <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                      {done} succeeded{failed ? ` · ${failed} failed` : ''}{skipped ? ` · ${skipped} skipped` : ''}
+                    </Caption1>
+                    {run.steps.some((st) => st.status === 'failed') && (
+                      <>
+                        <Divider style={{ marginTop: tokens.spacingVerticalS, marginBottom: tokens.spacingVerticalS }} />
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS }}>
+                          {run.steps.filter((st) => st.status === 'failed').map((st) => {
+                            const reason = st.itemRuns.find((i) => i.status === 'failed')?.reason;
+                            return (
+                              <div key={st.stepId} className={s.nodeRow}>
+                                <SubtractCircle20Filled primaryFill={tokens.colorPaletteRedForeground1} />
+                                <Caption1>{st.label}{reason ? ` — ${reason}` : ''}</Caption1>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </>
+                    )}
+                  </Card>
+                );
+              })}
+            </div>
+          )}
+        </DrawerBody>
+      </OverlayDrawer>
     </div>
   );
 }

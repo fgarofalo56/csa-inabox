@@ -50,6 +50,7 @@ import { DataAgentResultViz } from '../data-agent-result-viz';
 import { AgentToolsEditor } from '@/lib/copilot/agent-tool-catalog-editor';
 import { migrateLegacyTools, type AgentTool } from '@/lib/copilot/agent-tool-catalog';
 import { useItemState, SaveBar, useStyles } from './shared';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
 
 // ----- state --------------------------------------------------------------
 interface AgentState {
@@ -163,6 +164,14 @@ export function OperationsAgentEditor({ item, id }: { item: FabricItemType; id: 
         </div>
         <div className={s.pad}>
           {loading && <Spinner size="small" label="Loading…" labelPosition="after" />}
+          {/* Teaching banner (SC-6) — Fabric-grade guidance across all tabs, keyed
+              per surface with a persistent dismiss and a Learn-more link (UX-405). */}
+          <TeachingBanner
+            surfaceKey="operations-agent-overview"
+            title="Monitor real-time signals and act"
+            message="Configure an agent that grounds on your Eventhouse (Azure Data Explorer) and Ontology, watches for breaches with Azure Monitor triggers, and drafts human-approved operational actions. Deploy to the Azure AI Foundry Agent Service when you want a published runtime — no Microsoft Fabric required."
+            learnMoreHref="https://learn.microsoft.com/azure/ai-foundry/agents/overview"
+          />
 
           {/* ------------------------------ Configure ------------------------------ */}
           {tab === 'configure' && (
