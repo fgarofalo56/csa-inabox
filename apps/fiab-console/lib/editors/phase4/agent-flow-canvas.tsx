@@ -38,6 +38,7 @@ import {
   type CanvasVisual, type CanvasNodeCategory,
 } from '@/lib/components/canvas/canvas-node-kit';
 import { useCanvasHistory } from '@/lib/components/canvas/use-canvas-history';
+import { ResizableCanvasRegion } from '@/lib/components/canvas/resizable-canvas';
 import {
   AGENT_TOOL_KINDS, newAgentTool, agentToolKind, toolCanvasCategory,
   type AgentTool, type AgentToolKind,
@@ -98,7 +99,9 @@ const useStyles = makeStyles({
   toolbar: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
   body: { display: 'grid', gridTemplateColumns: 'minmax(0, 1.7fr) minmax(300px, 1fr)', gap: tokens.spacingHorizontalM, alignItems: 'stretch' },
   canvasWrap: {
-    height: '460px', minWidth: '0',
+    // Fills the user-resizable ResizableCanvasRegion (default 460px, persisted
+    // per-surface, bounded 300px–80vh). React Flow needs this definite height.
+    height: '100%', minWidth: '0',
     border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge,
     overflow: 'hidden', background: tokens.colorNeutralBackground2,
   },
@@ -278,7 +281,13 @@ function InnerCanvas(props: AgentFlowCanvasProps) {
       </div>
 
       <div className={s.body}>
-        <div className={s.canvasWrap}>
+        <ResizableCanvasRegion
+          storageKey="agent-flow-canvas"
+          defaultPx={460}
+          minPx={300}
+          ariaLabel="Resize agent workflow canvas height"
+          className={s.canvasWrap}
+        >
           <ReactFlow
             nodes={nodes}
             edges={rfEdges}
@@ -296,7 +305,7 @@ function InnerCanvas(props: AgentFlowCanvasProps) {
               <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Click a node to configure it in the inspector →</Caption1>
             </Panel>
           </ReactFlow>
-        </div>
+        </ResizableCanvasRegion>
 
         <div className={s.inspector}>
           {!sel && (
