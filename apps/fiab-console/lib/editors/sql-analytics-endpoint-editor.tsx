@@ -33,6 +33,7 @@ import {
 import {
   Play20Regular, ArrowDownload20Regular,
   Table20Regular, TextBulletListSquare20Regular, Server16Regular,
+  Code20Regular, Flowchart20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { ConnectionDetailsPanel } from './components/connection-details';
@@ -45,6 +46,14 @@ import {
 } from '@/lib/components/synapse-sql-object-explorer';
 import { downloadBlob, resultsToCsv, resultsToJson } from './components/result-export';
 import { useSharedEditorStyles } from './shared-styles';
+// UX-baseline shared components (SC-6/8/9/10): teaching banner, item-view tab
+// strip, ribbon command-search registration, and the schema entity-diagram —
+// each fed by this editor's OWN real serverless-SQL objects (no mocks).
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
+import { ItemTabStrip } from '@/lib/components/shared/item-tab-strip';
+import { useRegisterRibbonCommands } from '@/lib/components/shared/ribbon-commands';
+import { EntityDiagram } from '@/lib/components/shared/entity-diagram';
+import { classifyColumnType, type EntityGraph, type EntityTable } from '@/lib/components/shared/entity-diagram-sources';
 
 const useLocalStyles = makeStyles({
   pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minHeight: 0, flex: 1 },
@@ -176,6 +185,8 @@ export function SqlAnalyticsEndpointEditor({ item, id }: { item: FabricItemType;
   const [resultTab, setResultTab] = useState<'results' | 'messages'>('results');
   const [loading, setLoading] = useState(false);
   const [connOpen, setConnOpen] = useState(false);
+  // SC-8 — item-view toggle: T-SQL query editor ⇄ schema entity-diagram.
+  const [view, setView] = useState<'query' | 'diagram'>('query');
 
   const editorRef = useRef<any>(null);
   const monacoRef = useRef<any>(null);
@@ -352,6 +363,44 @@ export function SqlAnalyticsEndpointEditor({ item, id }: { item: FabricItemType;
     ]},
   ], [loading, run, runSelection, objectsLoading, loadObjects, newScript]);
 
+  // SC-9 — publish the ribbon actions (Run, New view/procedure/function, Grant
+  // access, Row-level security, Connection details…) to the shared command
+  // registry so the in-ribbon Ctrl+Q / Alt+Q CommandSearch can run them.
+  useRegisterRibbonCommands(ribbon, 'sql-analytics-endpoint');
+
+  // SC-10 — schema entity-diagram built from the endpoint's REAL serverless-SQL
+  // objects (/objects → views + external tables + their columns). No mock data;
+  // when the endpoint isn't configured the diagram renders an honest gate.
+  const schemaGraph: EntityGraph = useMemo(() => {
+    const colMap = objects?.columns ?? {};
+    const lookupCols = (schema: string, name: string) =>
+      colMap[`[${schema}].[${name}]`] ?? colMap[`${schema}.${name}`] ?? colMap[name] ?? [];
+    const srcTables = [
+      ...(objects?.views ?? []).map((v) => ({ schema: v.schema, name: v.name })),
+      ...(objects?.externalTables ?? []).map((t) => ({ schema: t.schema, name: t.name })),
+    ];
+    const tables: EntityTable[] = srcTables.map((t) => ({
+      id: `${t.schema}.${t.name}`,
+      name: t.name,
+      schema: t.schema,
+      columns: lookupCols(t.schema, t.name).map((c) => ({
+        name: c.name, type: c.dataType, kind: classifyColumnType(c.dataType),
+      })),
+    }));
+    if (!configured) {
+      return {
+        tables: [], relationships: [],
+        gate: 'SQL analytics endpoint not configured — set LOOM_SYNAPSE_WORKSPACE on the Console container app (Azure-native serverless; no Fabric required).',
+      };
+    }
+    return {
+      tables, relationships: [], modelName: database,
+      notice: tables.length === 0
+        ? 'No views or external tables yet — create one from the Query editor to see it here.'
+        : undefined,
+    };
+  }, [objects, configured, database]);
+
   const rows = result?.rows || [];
   const columns = result?.columns || [];
   const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
@@ -361,6 +410,7 @@ export function SqlAnalyticsEndpointEditor({ item, id }: { item: FabricItemType;
       item={item}
       id={id}
       ribbon={ribbon}
+      commandSearch
       leftPanel={
         <SynapseServerlessSqlObjectExplorer
           database={database}
@@ -374,6 +424,14 @@ export function SqlAnalyticsEndpointEditor({ item, id }: { item: FabricItemType;
       }
       main={
         <div className={s.pad}>
+          {/* SC-6 — teaching banner (Fabric's SQL-endpoint "analyze" guidance),
+              keyed per surface with a persistent dismiss. */}
+          <TeachingBanner
+            surfaceKey="sql-analytics-endpoint-analyze"
+            title="Analyze your lake with T-SQL"
+            message="Query Delta / Parquet in the lake with read-only T-SQL, publish consumption views, and browse the schema as an entity diagram — powered by Azure Synapse serverless, no Fabric or Power BI required."
+            learnMoreHref="https://learn.microsoft.com/azure/synapse-analytics/sql/on-demand-workspace-overview"
+          />
           {!configured && (
             <MessageBar intent="warning">
               <MessageBarBody>
@@ -384,6 +442,17 @@ export function SqlAnalyticsEndpointEditor({ item, id }: { item: FabricItemType;
               </MessageBarBody>
             </MessageBar>
           )}
+          {/* SC-8 — item-view tab strip: T-SQL query editor ⇄ schema diagram,
+              one-for-one with the Fabric SQL-endpoint Data/Model views. */}
+          <ItemTabStrip
+            ariaLabel="SQL analytics endpoint views"
+            selectedKey={view}
+            onSelect={(k) => setView(k as 'query' | 'diagram')}
+            tabs={[
+              { key: 'query', label: 'Query editor', icon: <Code20Regular /> },
+              { key: 'diagram', label: 'Schema diagram', icon: <Flowchart20Regular />, badge: schemaGraph.tables.length || undefined },
+            ]}
+          />
           <div className={s.toolbar}>
             <Badge appearance="filled" color="brand" icon={<Server16Regular />}>SQL analytics endpoint</Badge>
             <div className={s.connect}>
@@ -408,6 +477,8 @@ export function SqlAnalyticsEndpointEditor({ item, id }: { item: FabricItemType;
             </Button>
           </div>
 
+          {view === 'query' && (
+          <>
           <div className={s.editorWrap}>
             <MonacoTextarea
               value={sqlText}
@@ -501,6 +572,21 @@ export function SqlAnalyticsEndpointEditor({ item, id }: { item: FabricItemType;
               )
             )}
           </div>
+          </>
+          )}
+
+          {/* SC-10 — schema entity-diagram over the endpoint's REAL serverless
+              objects (views + external tables + columns). Azure-native; no
+              Fabric / Power BI dependency. */}
+          {view === 'diagram' && (
+            <EntityDiagram
+              source={{ kind: 'lakehouse', itemId: id }}
+              graph={schemaGraph}
+              defaultView="diagram"
+              height={560}
+              title={`Schema · ${database}`}
+            />
+          )}
 
           <Dialog open={connOpen} onOpenChange={(_, d) => setConnOpen(d.open)}>
             <DialogSurface style={{ maxWidth: '640px' }}>

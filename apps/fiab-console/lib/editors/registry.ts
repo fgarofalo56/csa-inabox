@@ -255,6 +255,11 @@ export const EDITOR_REGISTRY: Record<string, EditorComponent> = {
   'service-bus-namespace':       reg(() => import('./service-bus-namespace-editor'), 'ServiceBusNamespaceEditor'),
   'event-grid-topic':            reg(() => import('./event-grid-topic-editor'),    'EventGridTopicEditor'),
   'lakehouse-shortcut':          reg(() => import('./lakehouse-shortcut-editor'),  'LakehouseShortcutEditor'),
+
+  // SVC-5 — Azure Batch pool navigator (Microsoft.Batch/batchAccounts). Pools
+  // over ARM, jobs+tasks over the Batch data plane; real REST via batch-client.
+  // Honest 503 gate when LOOM_BATCH_ACCOUNT is unset. Azure-native — no Fabric.
+  'batch-pool':                  reg(() => import('./batch-pool-editor'),          'BatchPoolEditor'),
 };
 
 export function getEditor(slug: string): EditorComponent | null {

@@ -476,6 +476,16 @@ var loomServiceBusNamespace = byoExisting.?serviceBusNamespace ?? ''
 var loomAmlDefaultCompute = byoExisting.?amlDefaultCompute ?? ''
 var loomAmlComputeIdleTtl = byoExisting.?amlComputeIdleTtl ?? 'PT30M'
 
+// Azure Batch account (SVC-5) — the Batch pool/jobs/tasks navigator +
+// BatchExecute pipeline activity. Carried on byoExisting — NOT new scalar
+// params — to stay under admin-plane's 256-param ceiling. The Batch account is
+// an opt-in deploy-planner resource (batch.bicep); set batchAccount to its name
+// to wire the editor. Empty '' → the batch-pool editor honest-gates (naming
+// LOOM_BATCH_ACCOUNT). RG/SUB fall back client-side to LOOM_DLZ_RG /
+// LOOM_SUBSCRIPTION_ID. Azure-native — no Microsoft Fabric dependency.
+var loomBatchAccount = byoExisting.?batchAccount ?? ''
+var loomBatchRg      = !empty(byoExisting.?batchRg ?? '') ? byoExisting.batchRg : loomDlzRg
+
 @description('Deploy the SHARED admin-zone Purview self-hosted IR VMSS (scale-to-zero). A Purview SHIR cannot be the DLZ ADF SHIR (Microsoft constraint — separate machine), so this is its own VMSS. Honest-gated: only deploys when purviewEnabled AND purviewIrAuthKey AND purviewShirAdminPassword are all set.')
 param purviewShirEnabled bool = true
 
@@ -3146,6 +3156,13 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_COSMOS_ACCOUNT',     value: effCosmosAccount }
             { name: 'LOOM_COSMOS_ACCOUNT_RG',  value: effCosmosRg }
             { name: 'LOOM_COSMOS_ACCOUNT_SUB', value: byoCosmosSub }
+            // Azure Batch pool/jobs/tasks navigator + BatchExecute pipeline
+            // activity (SVC-5). Empty when the opt-in deploy-planner Batch
+            // account (batch.bicep) is not wired → the editor honest-gates
+            // naming LOOM_BATCH_ACCOUNT. The Console UAMI needs Contributor on
+            // the account (granted in batch.bicep). Azure-native — no Fabric.
+            { name: 'LOOM_BATCH_ACCOUNT',      value: loomBatchAccount }
+            { name: 'LOOM_BATCH_RG',           value: empty(loomBatchAccount) ? '' : loomBatchRg }
             // Item-level Share (per-Azure-SQL-database Access control / IAM).
             // The RG of the SQL server(s); the Console UAMI holds constrained
             // RBAC-Admin here (sql-database-share-rbac.bicep) so the Share dialog

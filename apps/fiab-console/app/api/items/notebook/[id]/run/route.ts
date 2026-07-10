@@ -349,8 +349,8 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       // sparkSession) keeps us from re-submitting it on every cell run. Submitted
       // BEFORE the cell statement (the poll route submits the cell), so Livy's
       // FIFO ordering guarantees display() is defined by the time the cell runs.
-      // Opt-in via LOOM_RICH_DISPLAY=1 (Azure-native, no Fabric). Non-fatal.
-      if ((process.env.LOOM_RICH_DISPLAY || '').trim() === '1' && effectiveSessKind === 'pyspark' && !displayLoaded && typeof sessionId === 'number') {
+      // DEFAULT-ON (opt-out via LOOM_RICH_DISPLAY='0'): defines display() so a bundle cell calling the Databricks/Fabric-builtin display(df) does not crash 'name display is not defined' on a raw Synapse Livy session (the Azure-native default). Idempotent + non-fatal; upgrades output to the Loom rich grid. No Fabric dependency.
+      if ((process.env.LOOM_RICH_DISPLAY || '').trim() !== '0' && effectiveSessKind === 'pyspark' && !displayLoaded && typeof sessionId === 'number') {
         try {
           const { submitLivyStatement } = await import('@/lib/azure/synapse-dev-client');
           const { AI_DISPLAY_PREAMBLE } = await import('@/lib/notebook/ai-display-preamble');

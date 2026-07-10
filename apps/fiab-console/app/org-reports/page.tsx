@@ -24,6 +24,7 @@ import {
   DocumentTable24Regular, DataHistogram24Regular, Bot24Regular, Money24Regular,
 } from '@fluentui/react-icons';
 import { PageShell } from '@/lib/components/page-shell';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
 import { OrgReportsPane } from '@/lib/coe-library/org-reports-pane';
 import { CopilotUsagePane } from '@/lib/components/admin/copilot-usage';
 import { UsageMetricsPane } from '@/app/admin/usage/page';
@@ -47,6 +48,14 @@ export default function OrgReportsHubPage(): React.ReactElement {
       title="Reports"
       subtitle="Organizational reports and analytics — CoE reports plus usage, Copilot, and chargeback dashboards, all reading your live Azure estate."
     >
+      <TeachingBanner
+        surfaceKey="org-reports-hub"
+        title="Reports without leaving for the Admin portal"
+        message={isAdmin
+          ? 'Organization reports render against your live Azure estate — no Power BI or Fabric workspace required. The Usage, Copilot, and Chargeback tabs roll up tenant-wide activity and cost; they stay admin-scoped and read real Log Analytics, Cost Management, and Azure Monitor data.'
+          : 'Organization reports render against your live Azure estate — no Power BI or Fabric workspace required. Pick a report below to explore it.'}
+        learnMoreHref="https://learn.microsoft.com/azure/azure-monitor/logs/log-analytics-overview"
+      />
       <TabList
         className={s.tabs}
         selectedValue={tab}
