@@ -31,6 +31,10 @@ import { IntegrationRuntimeManager } from '@/lib/components/pipeline/integration
 import type { PipelineEngine } from '@/lib/pipeline/integration-runtime-catalog';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
+// UX-baseline shared components (SC-6 teaching banner + SC-9 ribbon
+// command-search) — additive chrome over the real, unchanged IR manager.
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
+import { useRegisterRibbonCommands } from '@/lib/components/shared/ribbon-commands';
 
 const useStyles = makeStyles({
   pad: {
@@ -62,13 +66,26 @@ export function IntegrationRuntimeEditor({ item, id }: { item: FabricItemType; i
 
   const cur = ENGINES.find((e) => e.value === engine)!;
 
+  // SC-9 — publish the engine-switch ribbon actions to the shared command
+  // registry so the in-ribbon Ctrl+Q / Alt+Q CommandSearch can run them.
+  useRegisterRibbonCommands(ribbon, 'integration-runtime');
+
   return (
     <ItemEditorChrome
       item={item}
       id={id}
       ribbon={ribbon}
+      commandSearch
       main={
         <div className={s.pad}>
+          {/* SC-6 — teaching banner explaining the integration-runtime concept,
+              keyed per surface with a persistent dismiss. */}
+          <TeachingBanner
+            surfaceKey="integration-runtime-teach"
+            title="Move and transform data with an integration runtime"
+            message="An integration runtime is the compute that dispatches pipeline activities, moves data, and runs data flows. Azure IRs are fully managed; Self-Hosted IRs reach on-prem / VNet-private sources; Azure-SSIS lifts-and-shifts SSIS packages — all on the Azure-native Data Factory, no Fabric required."
+            learnMoreHref="https://learn.microsoft.com/azure/data-factory/concepts-integration-runtime"
+          />
           <div className={s.bar}>
             <Badge appearance="filled" color="brand" icon={<Cloud20Regular />}>Integration runtimes</Badge>
             <Field label="Engine" className={s.backend}>
