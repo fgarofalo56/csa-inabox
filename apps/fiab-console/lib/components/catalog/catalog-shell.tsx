@@ -10,6 +10,7 @@ import { ReactNode } from 'react';
 import { PageShell } from '@/lib/components/page-shell';
 import { useIsTenantAdmin } from '@/lib/components/session-context';
 import { SectionExplainer } from '@/lib/components/ui/learn-popover';
+import { CommandSearch } from '@/lib/components/shared/command-search';
 import { makeStyles, tokens, Subtitle2, Title3, Badge } from '@fluentui/react-components';
 
 // adminOnly sections live in the Admin portal (/admin/*). They are hidden for
@@ -73,6 +74,21 @@ const useStyles = makeStyles({
     gap: tokens.spacingHorizontalM,
     marginBottom: tokens.spacingVerticalL,
   },
+  sectionHeadRow: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: tokens.spacingHorizontalL,
+    flexWrap: 'wrap',
+    marginBottom: tokens.spacingVerticalL,
+  },
+  sectionTitleGroup: {
+    display: 'flex',
+    alignItems: 'baseline',
+    gap: tokens.spacingHorizontalM,
+    minWidth: 0,
+  },
+  commandSlot: { flexShrink: 0, minWidth: 0 },
 });
 
 export function CatalogShell({ sectionTitle, sectionBadge, explainer, children }: { sectionTitle?: string; sectionBadge?: string; explainer?: ReactNode; children: ReactNode }) {
@@ -99,9 +115,15 @@ export function CatalogShell({ sectionTitle, sectionBadge, explainer, children }
         </nav>
         <div className={s.body}>
           {sectionTitle && (
-            <div className={s.sectionHead}>
-              <Title3 as="h2">{sectionTitle}</Title3>
-              {sectionBadge && <Badge appearance="outline" color="brand">{sectionBadge}</Badge>}
+            <div className={s.sectionHeadRow}>
+              <div className={s.sectionTitleGroup}>
+                <Title3 as="h2">{sectionTitle}</Title3>
+                {sectionBadge && <Badge appearance="outline" color="brand">{sectionBadge}</Badge>}
+              </div>
+              {/* SC-9: Fabric-style Ctrl+Q command palette, available on every catalog tab */}
+              <div className={s.commandSlot}>
+                <CommandSearch ariaLabel="Search catalog actions" />
+              </div>
             </div>
           )}
           {explainer && (

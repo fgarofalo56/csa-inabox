@@ -30,6 +30,7 @@ import {
   MCP_DEPLOY_CATALOG as MCP_CATALOG, entryEgress, reachesExternalSaas, govMetaFor,
   type McpCatalogEntry, type McpDeployConfigField as McpConfigField, type McpEgressProfile,
 } from '@/lib/mcp/catalog';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
 import type { McpServerConfigDoc } from '@/lib/types/mcp-config';
 
 const useStyles = makeStyles({
@@ -505,6 +506,13 @@ export function McpCatalogBrowser({
 
   return (
     <div>
+      <TeachingBanner
+        surfaceKey="admin-mcp-catalog-wizard"
+        title="Deploy a tool server in a few clicks"
+        message="Pick a server from the curated library and the guided wizard provisions it as an internal Azure Container App, stores each credential in Key Vault, and registers its tools for Copilot — no manual setup. Filter by category, review the egress profile, then deploy."
+        icon={Rocket20Regular}
+        learnMoreHref="https://learn.microsoft.com/azure/container-apps/overview"
+      />
       <Body1>
         Browse the curated library of MCP servers. Deploying provisions the server as an internal
         Azure Container App, stores credentials per-field in Key Vault, and registers it for Copilot
