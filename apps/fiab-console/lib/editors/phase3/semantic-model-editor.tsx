@@ -36,6 +36,7 @@ import {
 import { PbiModelViewPanel } from '../components/pbi-model-view-panel';
 import { EntityDiagram } from '@/lib/components/shared/entity-diagram';
 import { GuidedEmptyState } from '@/lib/components/shared/guided-empty-state';
+import { TileGrid } from '@/lib/components/ui/tile-grid';
 import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
 import { loomDocUrl } from '@/lib/learn/content';
 import { ModelTabsExtra } from '../components/model-tabs-extra';
@@ -1557,7 +1558,7 @@ function LoomNativeModelView({
           <EntityDiagram source={{ kind: 'semantic-model', itemId: id }} height={560} />
         )}
         {sub === 'tables' && (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(min(320px, 100%), 1fr))', gap: tokens.spacingHorizontalM }}>
+          <TileGrid minTileWidth={320}>
             {tables.map((t) => {
               const cols = t.columns ?? [];
               const tblMeasures = measures.filter((m) => m.table === t.name);
@@ -1581,7 +1582,7 @@ function LoomNativeModelView({
                 </Card>
               );
             })}
-          </div>
+          </TileGrid>
         )}
         {sub === 'measures' && (
           measures.length === 0 ? (
@@ -1595,7 +1596,7 @@ function LoomNativeModelView({
                     <Subtitle2 style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.name}</Subtitle2>
                     <Badge appearance="tint" color="informative">{m.table}</Badge>
                   </div>
-                  <pre style={{ margin: 0, padding: tokens.spacingVerticalS, backgroundColor: tokens.colorNeutralBackground3, borderRadius: tokens.borderRadiusMedium, fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase200, whiteSpace: 'pre-wrap', overflowX: 'auto' }}>{m.expression || '—'}</pre>
+                  <pre style={{ margin: '0', padding: tokens.spacingVerticalS, backgroundColor: tokens.colorNeutralBackground3, borderRadius: tokens.borderRadiusMedium, fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase200, whiteSpace: 'pre-wrap', overflowX: 'auto' }}>{m.expression || '—'}</pre>
                 </Card>
               ))}
             </div>
