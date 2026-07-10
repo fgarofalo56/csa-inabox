@@ -40,6 +40,8 @@ import { useQuery } from '@tanstack/react-query';
 import { getItem } from '@/lib/api/workspaces';
 import type { MonitorRuleRecord } from '@/lib/azure/activator-monitor';
 import { ItemEditorChrome } from '../item-editor-chrome';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
+import { loomDocUrl } from '@/lib/learn/content';
 import { NewItemBrowseGate } from '../new-item-gate';
 import { safeModelJson } from '../model-fetch';
 import { DataAgentResultViz } from '../data-agent-result-viz';
@@ -2707,6 +2709,14 @@ export function PlanEditor({ item, id }: { item: FabricItemType; id: string }) {
     <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
       <div className={s.pad}>
         {loading && <Spinner size="small" label="Loading…" labelPosition="after" />}
+        {/* SC-6 — teaching banner: what a Plan is + the Azure-native writeback flow. */}
+        <TeachingBanner
+          surfaceKey="plan"
+          icon={Money20Regular}
+          title="Plan is a governed planning + writeback workspace"
+          message="Author line items in the Planning sheet, shape the dimensional Model, and route delivery tasks through a real Azure-native approval Logic App. On approval, plan metrics write back to a linked semantic model via XMLA — no Microsoft Fabric or Power Automate dependency. PowerTable and Intelligence add live grid editing and analytics over the same plan."
+          learnMoreHref={loomDocUrl('fiab/parity/plan')}
+        />
         <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as typeof tab)}>
           <Tab value="planning" icon={<Money20Regular />}>Planning</Tab>
           <Tab value="model" icon={<Cube20Regular />}>Model</Tab>

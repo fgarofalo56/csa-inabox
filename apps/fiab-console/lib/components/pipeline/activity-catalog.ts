@@ -38,6 +38,20 @@ function hdiCluster(): string {
 }
 
 /**
+ * Pre-fill the AzureBatch linked-service reference for the BatchExecute (Custom)
+ * activity (SVC-5). NEXT_PUBLIC_LOOM_BATCH_LINKED_SERVICE is set by the
+ * deployment and exposed client-side so the Batch activity stamps the pool's
+ * linked service automatically. When unset the reference is left blank and
+ * activity-forms.tsx surfaces an honest MessageBar gate naming
+ * LOOM_BATCH_LINKED_SERVICE (register an AzureBatch linked service pointing at
+ * the deployment Batch account). No Fabric dependency — pure ADF + Azure Batch.
+ */
+function batchLinkedService(): string {
+  return (typeof process !== 'undefined'
+    && process.env?.NEXT_PUBLIC_LOOM_BATCH_LINKED_SERVICE) || '';
+}
+
+/**
  * Palette groups — match the Fabric / ADF "Activities" sidebar exactly:
  *   - Move & transform : Copy data, Dataflow Gen2, Mapping data flow, Lookup,
  *                        Get metadata, Delete
@@ -329,6 +343,36 @@ export const ACTIVITY_CATALOG: ActivityTypeDef[] = [
       name, type: 'SqlServerStoredProcedure', dependsOn: [],
       typeProperties: { storedProcedureName: '', storedProcedureParameters: {} },
       linkedServiceName: { referenceName: '', type: 'LinkedServiceReference' },
+    }),
+  },
+
+  // ---------- Azure Batch (SVC-5) ----------
+  // ADF natively supports the `Custom` activity at api-version 2018-06-01 (the
+  // version adf-client.ts targets); it runs a command line on an Azure Batch
+  // pool referenced by a top-level AzureBatch linkedServiceName. So it saves,
+  // validates, and runs end-to-end against the deployed factory. The canonical
+  // Loom use is bulk item-1 / item-4 (Doc Intelligence / model) scoring across a
+  // file set — one Custom task per pipeline run fanned onto the pool.
+  // batchLinkedService() pre-fills the reference from
+  // NEXT_PUBLIC_LOOM_BATCH_LINKED_SERVICE; when unset activity-forms.tsx renders
+  // an honest MessageBar gate naming LOOM_BATCH_LINKED_SERVICE. No Fabric
+  // dependency — pure ADF + Azure Batch (Microsoft.Batch/batchAccounts).
+  {
+    key: 'BatchExecute', label: 'Batch',
+    description:
+      'Run a command on an Azure Batch pool (Custom activity) — bulk parallel / ' +
+      'HPC fan-out across a managed VM fleet. Azure-native, no Fabric.',
+    category: 'orchestration', type: 'Custom', namePrefix: 'BatchExecute',
+    color: '#8661c5', fg: '#fff', runnable: true,
+    build: (name) => ({
+      name, type: 'Custom', dependsOn: [],
+      linkedServiceName: { referenceName: batchLinkedService(), type: 'LinkedServiceReference' },
+      typeProperties: {
+        command: '',
+        // resourceLinkedService + folderPath omitted = no staged resource files
+        // (set when the command needs input files from a linked storage account).
+        retentionTimeInDays: 30,
+      },
     }),
   },
 

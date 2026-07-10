@@ -28,6 +28,7 @@ import {
 } from '@fluentui/react-icons';
 import { SignInRequired } from '@/lib/components/sign-in-required';
 import { Section } from '@/lib/components/ui/section';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { EmptyState } from '@/lib/components/empty-state';
 import { MetricChart } from '@/lib/components/monitor/metric-chart';
@@ -350,6 +351,13 @@ export function ChargebackPane() {
       {unauth && <SignInRequired subject="the usage & chargeback dashboard" />}
       {!unauth && (
         <>
+          <TeachingBanner
+            surfaceKey="admin-usage-chargeback"
+            title="One capacity unit across every engine"
+            message="Real Azure Cost Management spend and Azure Monitor utilization, normalized to a single Loom Capacity Unit (LCU) so you can compare Synapse, Databricks, ADX, and storage on one scale. This is the Azure-native 1:1 of the Fabric Capacity Metrics app — chart-first, with per-engine and per-workspace breakdowns."
+            icon={Money20Regular}
+            learnMoreHref="https://learn.microsoft.com/fabric/enterprise/metrics-app"
+          />
           <div className={styles.toolbar}>
             <Body1>
               Unified capacity + chargeback across every engine — real Azure Cost Management spend and Azure Monitor

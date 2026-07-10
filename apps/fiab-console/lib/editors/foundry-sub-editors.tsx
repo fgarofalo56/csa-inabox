@@ -41,6 +41,7 @@ import { EmptyState } from '@/lib/components/empty-state';
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
+import { useRegisterRibbonCommands } from '@/lib/components/shared/ribbon-commands';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { AiSearchServiceTree } from '@/lib/components/ai-search/ai-search-tree';
 import { IndexMyDataWizard } from '@/lib/components/ai-search/index-my-data-wizard';
@@ -243,7 +244,10 @@ function useApi<T>(url: string | null, deps: unknown[] = []) {
 }
 
 function Shell({ item, id, ribbon, children }: { item: FabricItemType; id: string; ribbon: RibbonTab[]; children: ReactNode }) {
-  return <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={children} />;
+  // SC-9 — register this surface's ribbon actions into the shared command
+  // registry so the in-ribbon command-search box (Ctrl+Q / Alt+Q) can run them.
+  useRegisterRibbonCommands(ribbon, item.slug);
+  return <ItemEditorChrome item={item} id={id} ribbon={ribbon} commandSearch main={children} />;
 }
 
 // =====================================================================
@@ -1983,6 +1987,7 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
         : t,
     );
   }, [isNew, reloadList, reloadDetail, idx]);
+  useRegisterRibbonCommands(ribbon, item.slug);
 
   const runSearch = async () => {
     setSearching(true); setHits(null);
@@ -2144,7 +2149,7 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
   );
   const chrome = (main: ReactNode) => (
     <>
-      <ItemEditorChrome item={item} id={id} ribbon={ribbon} leftPanel={serviceTree} main={main} />
+      <ItemEditorChrome item={item} id={id} ribbon={ribbon} commandSearch leftPanel={serviceTree} main={main} />
       <IndexMyDataWizard open={imdOpen} onOpenChange={setImdOpen} />
     </>
   );

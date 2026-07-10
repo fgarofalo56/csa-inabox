@@ -52,6 +52,7 @@ import { ItemEditorChrome } from './item-editor-chrome';
 import { EmptyState } from '@/lib/components/empty-state';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
+import { useRegisterRibbonCommands } from '@/lib/components/shared/ribbon-commands';
 import type {
   DabConfig, DabEntity, DabDatabaseType, DabSourceType, DabAction,
   DabPermission, DabRelationship, DabHostMode, DabAuthProvider, DabField,
@@ -215,9 +216,10 @@ function DabNewGate({ item }: { item: FabricItemType }) {
   const ribbon: RibbonTab[] = [{ id: 'home', label: 'Home', groups: [{ label: 'New', actions: [
     { label: busy ? 'Creating…' : 'Create Data API', onClick: canCreate ? create : undefined, disabled: !canCreate },
   ]}]}];
+  useRegisterRibbonCommands(ribbon, item.slug);
 
   return (
-    <ItemEditorChrome item={item} id="new" ribbon={ribbon} main={
+    <ItemEditorChrome item={item} id="new" ribbon={ribbon} commandSearch main={
       <div className={s.body}>
         <Subtitle2>New Data API builder</Subtitle2>
         <Body1>
@@ -340,6 +342,7 @@ function DabBuilder({ item, id }: { item: FabricItemType; id: string }) {
       ]},
     ]},
   ], [saving, dirty, save, validate, download]);
+  useRegisterRibbonCommands(ribbon, item.slug);
 
   if (loadError) {
     return (
@@ -360,7 +363,7 @@ function DabBuilder({ item, id }: { item: FabricItemType; id: string }) {
     <ItemEditorChrome
       item={item}
       id={id}
-      ribbon={ribbon}
+      ribbon={ribbon} commandSearch
       leftPanel={
         <div className={s.rail}>
           {STAGES.map((st, i) => (

@@ -40,6 +40,7 @@ import {
 } from '@fluentui/react-icons';
 import { TileGrid } from '@/lib/components/ui/tile-grid';
 import { EmptyState } from '@/lib/components/empty-state';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
 import { ShareExplorerDialog } from '@/lib/components/marketplace/share-explorer';
 import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
 import { LOOM_ACCENT } from '@/lib/components/shared/accent-tokens';
@@ -145,6 +146,13 @@ export function DataShares() {
         <Button appearance="subtle" icon={<ArrowSync20Regular />} onClick={refresh}>Refresh</Button>
         {host && <Caption1 className={s.hint}>Metastore workspace: {host}</Caption1>}
       </div>
+      <TeachingBanner
+        surfaceKey="marketplace-data-shares"
+        title="Share data without copying it"
+        message="Live, no-copy data exchange via Databricks Unity Catalog Delta Sharing. Subscribe to shares others publish (including Databricks Marketplace listings), or publish your own tables to recipients inside or outside your tenant — the recipient reads the latest data directly, no pipeline required."
+        icon={Share20Regular}
+        learnMoreHref="https://learn.microsoft.com/azure/databricks/delta-sharing/"
+      />
       <Caption1 className={s.hint}>
         Live, no-copy data exchange via Databricks Unity Catalog Delta Sharing. Subscribe to shares others publish
         (including Databricks Marketplace listings), or publish your own tables to recipients inside or outside your tenant.

@@ -31,6 +31,7 @@ import {
 } from '@fluentui/react-components';
 import { ArrowDownload20Regular, AppsAddIn24Regular, Search24Regular } from '@fluentui/react-icons';
 import { PageShell } from '@/lib/components/page-shell';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
 import { SignInRequired } from '@/lib/components/sign-in-required';
 import { EmptyState } from '@/lib/components/empty-state';
 import { Section, Toolbar } from '@/lib/components/ui/section';
@@ -315,6 +316,14 @@ export default function AppsPage() {
       subtitle="Curated CSA solutions that bundle items, dashboards, and pipelines into one click."
     >
       {unauth && <SignInRequired subject="the apps catalog" />}
+
+      <TeachingBanner
+        surfaceKey="apps-hub"
+        title="Install curated CSA apps in one click"
+        message="Each app bundles items, dashboards, and pipelines into a single guided install. Filter by bundled item type, review what each app provisions, then install — Loom wires the backends and seeds sample data for you. No Fabric capacity required; everything runs on the Azure-native path."
+        icon={AppsAddIn24Regular}
+        learnMoreHref="https://learn.microsoft.com/fabric/fundamentals/fabric-home"
+      />
 
       <Toolbar
         search={q}

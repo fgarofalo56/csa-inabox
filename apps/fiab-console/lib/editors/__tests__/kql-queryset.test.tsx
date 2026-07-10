@@ -64,4 +64,14 @@ describe('KqlQuerysetEditor', () => {
     render(<KqlQuerysetEditor item={makeItem('kql-queryset', 'KQL Queryset')} id="new" />);
     expect(calls.filter((c) => c.url.endsWith('/api/items/kql-queryset/new')).length).toBe(0);
   });
+
+  it('renders the RTI cross-links and the guided empty state for an empty queryset', () => {
+    // id "new" → no saved queries → SC-4 guided empty state + SC-8 RTI cross-links.
+    render(<KqlQuerysetEditor item={makeItem('kql-queryset', 'KQL Queryset')} id="new" />);
+    // SC-8 — toolbar cross-links to sibling Real-Time Intelligence surfaces.
+    expect(screen.getByRole('toolbar', { name: /Real-Time Intelligence surfaces/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Eventhouse/i })).toBeInTheDocument();
+    // SC-4 — guided empty state teaching the queryset flow.
+    expect(screen.getByText(/Author your first KQL query/i)).toBeInTheDocument();
+  });
 });

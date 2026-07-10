@@ -44,6 +44,7 @@ import {
 } from '@fluentui/react-icons';
 import { Section, Toolbar } from '@/lib/components/ui/section';
 import { TileGrid } from '@/lib/components/ui/tile-grid';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
 import { ResponseBodyViewer } from '@/lib/components/marketplace/response-body';
 import { ItemTile } from '@/lib/components/ui/item-tile';
 import { ViewToggle, type LoomView } from '@/lib/components/ui/view-toggle';
@@ -617,15 +618,21 @@ export function ApiMarketplace() {
         </Button>
       </div>
 
-      <MessageBar intent="info">
-        <MessageBarBody>
-          <MessageBarTitle>API marketplace</MessageBarTitle>
-          Publishes <strong>operational APIs</strong> fronted by Azure API Management — subscribe for a
-          key, then call them over HTTP (the <code>Ocp-Apim-Subscription-Key</code> header). To discover
-          governed <strong>datasets</strong> (lakehouses, warehouses, semantic models) instead, use the{' '}
-          <a href="/data-products">Data marketplace</a>.
-        </MessageBarBody>
-      </MessageBar>
+      <TeachingBanner
+        surfaceKey="marketplace-api"
+        title="Subscribe, get a key, call the API"
+        message={
+          <>
+            Operational APIs published here are fronted by Azure API Management — subscribe for a
+            key, then call them over HTTP with the <code>Ocp-Apim-Subscription-Key</code> header. Use
+            the try-it console on any API to send a live request before you wire it in. Looking for
+            governed <strong>datasets</strong> (lakehouses, warehouses, semantic models) instead? Head
+            to the <a href="/data-products">Data marketplace</a>.
+          </>
+        }
+        icon={Apps20Regular}
+        learnMoreHref="https://learn.microsoft.com/azure/api-management/api-management-key-concepts"
+      />
 
       {gate && (
         <MessageBar intent="warning">

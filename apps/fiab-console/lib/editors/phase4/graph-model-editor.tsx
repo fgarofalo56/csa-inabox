@@ -116,6 +116,7 @@ import {
   type PlanFormulaFn, type PlanFormulaOp, type ModelIssue,
 } from '../_plan-model';
 import { arr, useItemState, SaveBar, useStyles } from './shared';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
 
 // ----- Graph Model (Cosmos config + real ADX materialize) -----
 interface GraphProp { name: string; type: string; sourceColumn?: string }
@@ -571,6 +572,12 @@ export function GraphModelEditor({ item, id }: { item: FabricItemType; id: strin
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
       <div className={s.pad}>
+        <TeachingBanner
+          surfaceKey="graph-model-editor"
+          title="Model your graph"
+          message="Declare node and edge types and bind each to a real ADX table. Loom builds the graph natively over Azure Data Explorer, so you query relationships with make-graph / graph-match and openCypher — no separate graph engine required."
+          learnMoreHref="https://learn.microsoft.com/azure/data-explorer/graph-overview"
+        />
         {loading && <Spinner size="small" label="Loading…" labelPosition="after" />}
         <Caption1>Target ADX database</Caption1>
         <Input value={state.database} onChange={(_, d) => setState((p) => ({ ...p, database: d.value }))} />

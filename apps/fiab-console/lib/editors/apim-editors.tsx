@@ -49,6 +49,7 @@ import { ApimTree } from '@/lib/components/apim/apim-tree';
 import { BackendStateBar } from '@/lib/components/backend-state-bar';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
+import { useRegisterRibbonCommands } from '@/lib/components/shared/ribbon-commands';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { LinkedResourcesPanel } from './components/linked-resources';
 import { DataContractStudioTab } from './components/data-contract-designer';
@@ -706,6 +707,7 @@ export function ApimApiEditor({ item, id }: { item: FabricItemType; id: string }
       ]},
     ]},
   ], [status.kind, isNew, dirty, displayName, path, protocols, save, load, loadOps, loadSpec, spec.data, openSpecEditor, openOas, openNewOp, router, id]);
+  useRegisterRibbonCommands(ribbon, item.slug);
 
   const HTTP_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'];
 
@@ -713,7 +715,7 @@ export function ApimApiEditor({ item, id }: { item: FabricItemType; id: string }
     <ItemEditorChrome
       item={item}
       id={id}
-      ribbon={ribbon}
+      ribbon={ribbon} commandSearch
       leftPanel={
         // Full Azure API Management service navigator (parity with the ADF /
         // Synapse / Databricks resource panes): typed groups for APIs (expand →
@@ -1433,9 +1435,10 @@ export function ApimProductEditor({ item, id }: { item: FabricItemType; id: stri
       ]},
     ]},
   ], [status.kind, isNew, dirty, displayName, save, load, state, publishToggle, router, id]);
+  useRegisterRibbonCommands(ribbon, item.slug);
 
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon} commandSearch main={
       <div className={s.pad}>
         <div className={s.toolbar}>
           <Badge appearance="filled" color="brand">APIM Product</Badge>
@@ -1895,9 +1898,10 @@ export function ApimPolicyEditor({ item, id }: { item: FabricItemType; id: strin
       ]},
     ]},
   ], [status.kind, dirty, save, load, validateXml]);
+  useRegisterRibbonCommands(ribbon, item.slug);
 
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon} commandSearch main={
       <div className={s.pad}>
         <div className={s.toolbar}>
           <Badge appearance="filled" color="brand">APIM Policy</Badge>
@@ -2877,10 +2881,11 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
       ]},
     ]},
   ], [status.kind, isNew, canSave, dirty, save, state.displayName, state.apimServiceUrl, workspaceId, publishApimMirror, canPublish, isPublished, lifecycleBusy, publishBlockReason, handleSetStatus]);
+  useRegisterRibbonCommands(ribbon, item.slug);
 
   return (
     <>
-    <ItemEditorChrome item={item} id={id} ribbon={ribbon} rightPanelLabel="Properties" rightPanel={isNew ? undefined : (
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon} commandSearch rightPanelLabel="Properties" rightPanel={isNew ? undefined : (
       <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
         <SelectAttributePanel
           title="Update frequency"

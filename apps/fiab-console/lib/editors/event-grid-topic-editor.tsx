@@ -25,9 +25,12 @@ import {
 import {
   Add20Regular, ArrowSync20Regular, Delete20Regular, Flash20Regular,
   KeyReset20Regular, Dismiss16Regular,
+  Add24Regular, Flash24Regular, MailInbox24Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { MessagingMetricsTab } from '@/lib/components/messaging/metrics-tab';
+import { GuidedEmptyState } from '@/lib/components/shared/guided-empty-state';
+import { PreviewTable } from '@/lib/components/shared/preview-table';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 
@@ -61,6 +64,23 @@ const ADV_OPERATORS = [
   'StringIn', 'StringNotIn', 'StringBeginsWith', 'StringEndsWith', 'StringContains',
   'NumberIn', 'NumberGreaterThan', 'NumberLessThan', 'BoolEquals',
 ];
+
+// CloudEvents v1.0 envelope — the documented shape of every event a
+// CloudEvents-schema topic delivers. This is a reference (the spec), surfaced
+// as a type-badged schema preview so authors know what filters/handlers receive.
+const CLOUDEVENTS_ENVELOPE: { columns: string[]; rows: unknown[][] } = {
+  columns: ['Field', 'Type', 'Required', 'Example'],
+  rows: [
+    ['id', 'string', 'yes', 'A234-1234-1234'],
+    ['source', 'uri-reference', 'yes', '/orders/store-42'],
+    ['type', 'string', 'yes', 'Order.Placed'],
+    ['subject', 'string', 'no', 'orders/A234'],
+    ['time', 'timestamp', 'no', '2026-07-09T18:31:00Z'],
+    ['specversion', 'string', 'yes', '1.0'],
+    ['datacontenttype', 'string', 'no', 'application/json'],
+    ['data', 'object', 'no', '{ "total": 129.99 }'],
+  ],
+};
 
 type DestType = 'AzureFunction' | 'WebHook' | 'EventHub' | 'ServiceBusQueue' | 'ServiceBusTopic' | 'StorageQueue';
 interface AdvFilterRow { key: string; operatorType: string; values: string }
@@ -296,7 +316,18 @@ export function EventGridTopicEditor({ item, id }: Props) {
                 </Dialog>
               </div>
               {topics.length === 0 ? (
-                <MessageBar intent="info"><MessageBarBody>No custom topics yet. Click <strong>New topic</strong> to create one.</MessageBarBody></MessageBar>
+                <GuidedEmptyState
+                  variant="block"
+                  heroIcon={Flash24Regular}
+                  ariaLabel="Create your first Event Grid topic"
+                  title="Create your first custom topic"
+                  intro="A custom topic is an ingestion endpoint for your own events. Publish CloudEvents to it, then route them to handlers with event subscriptions and filters."
+                  paths={[
+                    { key: 'new', title: 'New custom topic', body: 'Created with the CloudEvents v1.0 input schema.', icon: Add24Regular, onClick: () => setCreateOpen(true) },
+                    { key: 'metrics', title: 'View delivery metrics', body: 'Track published, matched, and delivered events once a topic exists.', icon: MailInbox24Regular, onClick: () => setCreateOpen(true) },
+                  ]}
+                  learnMoreHref="https://learn.microsoft.com/azure/event-grid/custom-topics"
+                />
               ) : (
                 <div className={s.tableWrap}>
                   <Table aria-label="Event Grid topics" size="small">
@@ -353,7 +384,18 @@ export function EventGridTopicEditor({ item, id }: Props) {
                     <Button appearance="subtle" size="small" icon={<ArrowSync20Regular />} onClick={() => selected && void loadDetail(selected)}>Refresh</Button>
                   </div>
                   {detail.subscriptions.length === 0 ? (
-                    <MessageBar intent="info"><MessageBarBody>No event subscriptions on this topic yet. Click <strong>New subscription</strong> to route events to a handler (Function, webhook, Event Hubs, Service Bus, Storage Queue).</MessageBarBody></MessageBar>
+                    <GuidedEmptyState
+                      variant="block"
+                      heroIcon={MailInbox24Regular}
+                      ariaLabel="Route events with a subscription"
+                      title="Route events to a handler"
+                      intro="An event subscription tells Event Grid where matching events go. Pick a destination and add subject / event-type / advanced filters so only the events you care about are delivered."
+                      paths={[
+                        { key: 'new', title: 'New event subscription', body: 'Function, webhook, Event Hubs, Service Bus, or Storage Queue — with filters, dead-letter, and retry.', icon: Add24Regular, onClick: () => setSubOpen(true) },
+                      ]}
+                      columns={1}
+                      learnMoreHref="https://learn.microsoft.com/azure/event-grid/subscribe-through-portal"
+                    />
                   ) : (
                     <div className={s.tableWrap}>
                       <Table aria-label="Subscriptions" size="small">
@@ -371,6 +413,25 @@ export function EventGridTopicEditor({ item, id }: Props) {
                       </Table>
                     </div>
                   )}
+
+                  <div className={s.sectionHead}>
+                    <Subtitle2>Event schema</Subtitle2>
+                    <Caption1>The CloudEvents v1.0 envelope every event on this topic carries. Reference the field names below when writing subscription filters (e.g. filter on <code>subject</code> or an advanced filter over <code>data.*</code>).</Caption1>
+                  </div>
+                  <PreviewTable
+                    ariaLabel="CloudEvents v1.0 envelope schema"
+                    showSearch={false}
+                    sources={[{
+                      id: 'schema',
+                      label: 'CloudEvents v1.0 envelope',
+                      data: {
+                        columns: CLOUDEVENTS_ENVELOPE.columns,
+                        rows: CLOUDEVENTS_ENVELOPE.rows,
+                        rowCount: CLOUDEVENTS_ENVELOPE.rows.length,
+                        note: 'Reference — the standard CloudEvents v1.0 envelope. Individual events populate these fields; your payload goes in "data".',
+                      },
+                    }]}
+                  />
                 </div>
               )}
             </>

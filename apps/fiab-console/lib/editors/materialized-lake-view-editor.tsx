@@ -48,6 +48,8 @@ import { KeyValueGrid } from '@/lib/components/ui/key-value-grid';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { EmptyState } from '@/lib/components/empty-state';
 import { CopilotBuilderPane } from '@/lib/components/shared/copilot-builder-pane';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
+import { loomDocUrl } from '@/lib/learn/content';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import {
@@ -426,6 +428,14 @@ export function MaterializedLakeViewEditor({ item, id }: { item: FabricItemType;
           </TabList>
         </div>
         <div className={styles.tabBody}>
+          {/* SC-6 — teaching banner: what an MLV is + the refresh→lineage flow. */}
+          <TeachingBanner
+            surfaceKey="materialized-lake-view"
+            icon={BranchFork20Regular}
+            title="A materialized lake view is a governed, refreshable Delta table"
+            message="Author the view in Spark SQL or PySpark, add data-quality CHECK constraints, then run a full refresh — a real Synapse Spark batch that enforces the constraints and (re)writes the managed Delta table. Each refresh records cross-workspace lineage edges (source → this view → downstream views) and you can preview the materialized data via the Serverless SQL endpoint. Azure-native — no Microsoft Fabric required."
+            learnMoreHref={loomDocUrl('fiab/parity/materialized-lake-view')}
+          />
           <ErrBar error={err || loadError} />
           <GateBar gate={gate} />
           {loading && <Spinner size="small" label="Loading definition…" labelPosition="after" />}

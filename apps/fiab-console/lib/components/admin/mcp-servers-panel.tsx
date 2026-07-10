@@ -25,6 +25,7 @@ import {
 } from '@fluentui/react-components';
 import { Add20Regular, Edit20Regular, Delete20Regular, ArrowClockwise20Regular, Checkmark20Regular, Sparkle20Regular, Search20Regular, PlugDisconnected24Regular, DataPie24Regular, Open16Regular, BookGlobe24Regular, Cloud24Regular, BranchFork24Regular, PeopleTeam24Regular, Shield24Regular, Database24Regular, PlugConnected24Regular, Settings20Regular } from '@fluentui/react-icons';
 import { Section } from '@/lib/components/ui/section';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
 import { McpCatalogBrowser } from '@/lib/components/admin/mcp-catalog-wizard';
 import type { McpServerConfig, McpServerConfigDoc } from '@/lib/types/mcp-config';
 
@@ -1752,6 +1753,13 @@ export function McpServersPanel() {
 
   return (
     <Section title="External MCP Tools">
+      <TeachingBanner
+        surfaceKey="admin-mcp-servers"
+        title="Give Copilot more tools"
+        message="Register external MCP (Model Context Protocol) servers and their tools are discovered at orchestrate time and registered as Loom Copilot tools — no redeploy. Point at a hosted HTTPS endpoint or a bridged stdio server; the built-in and Microsoft-curated servers below can be enabled with one click."
+        icon={PlugConnected24Regular}
+        learnMoreHref="https://learn.microsoft.com/azure/ai-services/agents/how-to/tools/model-context-protocol"
+      />
       <Body1 className={s.hint}>
         Register external MCP (Model Context Protocol) servers so Loom Copilot can call their tools.
         Each server's tools are discovered at orchestrate time and registered as Loom tools.

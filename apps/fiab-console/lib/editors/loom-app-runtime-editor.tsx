@@ -32,6 +32,8 @@ import {
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { NewItemCreateGate } from './new-item-gate';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
+import { ToolbarCrossLinks } from '@/lib/components/shared/item-tab-strip';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { clientFetch } from '@/lib/client-fetch';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
@@ -315,6 +317,26 @@ export function LoomAppRuntimeEditor({ item, id }: EditorProps) {
 
   const main = (
     <div style={{ minWidth: 0 }}>
+      <div className={s.pad}>
+        <TeachingBanner
+          surfaceKey="loom-app-runtime-intro"
+          title="Host a data app on Azure Container Apps"
+          message="Pick a runtime template (Streamlit, Dash, Gradio, Flask, Node/Express, or an Agent/FastAPI harness) or a public git repo. Loom builds the image in the Loom ACR and deploys it as an autoscale-to-zero, Entra-gated Azure Container App with a live URL — no Databricks or Fabric. Wire bindings so the app can call back into your own Loom data plane."
+          learnMoreHref="https://learn.microsoft.com/azure/container-apps/overview"
+        />
+        <div className={s.row}>
+          <ToolbarCrossLinks
+            ariaLabel="Related app surfaces"
+            maxInline={4}
+            links={[
+              { key: 'loom-app', label: 'Loom App', href: '/items/loom-app/new' },
+              { key: 'data-agent', label: 'Data Agent', href: '/items/data-agent/new' },
+              { key: 'user-data-function', label: 'User Data Function', href: '/items/user-data-function/new' },
+              { key: 'release-environment', label: 'Release environment', href: '/items/release-environment/new' },
+            ]}
+          />
+        </div>
+      </div>
       <div className={s.tabBar}>
         <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as string)}>
           <Tab value="overview">Overview</Tab>
