@@ -17,12 +17,14 @@ import {
   MessageBar, MessageBarBody, MessageBarTitle,
   makeStyles, tokens,
 } from '@fluentui/react-components';
-import { ArrowSync24Regular, Tag24Regular, CheckmarkCircle20Regular } from '@fluentui/react-icons';
+import { ArrowSync24Regular, Tag24Regular, CheckmarkCircle20Regular, Apps24Regular, Add24Regular } from '@fluentui/react-icons';
 import { AdminShell } from '@/lib/components/admin-shell';
 import { Section, Toolbar } from '@/lib/components/ui/section';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { useAdminTabStyles } from '@/lib/components/ui/admin-tab-styles';
 import { SectionExplainer } from '@/lib/components/ui/learn-popover';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
+import { GuidedEmptyState } from '@/lib/components/shared/guided-empty-state';
 
 interface CatalogItem {
   id: string;
@@ -230,6 +232,14 @@ export default function BatchLabelingPage() {
         ],
       }}
     >
+      <TeachingBanner
+        surfaceKey="admin-batch-labeling"
+        title="Label many items in one action"
+        message="Select catalog items, pick a sensitivity label, and apply it across all of them. The Loom-native Cosmos label is always written; Microsoft Purview asset classification and Power BI MIP propagation are opt-in when configured. The results grid shows the real per-item outcome of every backend write."
+        icon={Tag24Regular}
+        learnMoreHref="https://learn.microsoft.com/purview/create-sensitivity-labels"
+      />
+
       <Section title="About batch labeling">
         <SectionExplainer>
           Select multiple catalog items, pick a sensitivity label, and apply it in one action. The Cosmos
@@ -367,17 +377,33 @@ export default function BatchLabelingPage() {
 
           <Divider className={s.pickerDivider} />
 
-          <Toolbar search={q} onSearch={setQ} searchPlaceholder="Search items by name, type, workspace..." />
-          <Caption1 className={s.selCount}>
-            {selected.size} of {items.length} selected{allSelected && filtered.length ? ' (all shown)' : ''}
-          </Caption1>
-          <LoomDataTable
-            columns={pickerColumns}
-            rows={filtered}
-            getRowId={(i) => i.id}
-            ariaLabel="Catalog items"
-            empty={q ? `No items match "${q}".` : 'No catalog items found in your workspaces.'}
-          />
+          {items.length === 0 && !q ? (
+            <GuidedEmptyState
+              title="No catalog items to label yet"
+              intro="Batch labeling applies a sensitivity label across many items at once. Create or browse items first, then come back to label them in bulk."
+              heroIcon={Tag24Regular}
+              paths={[
+                { key: 'browse', title: 'Browse the catalog', body: 'Find items across your workspaces to label.', icon: Apps24Regular, href: '/catalog' },
+                { key: 'create', title: 'Create an item', body: 'Provision a lakehouse, report, or dataset to label.', icon: Add24Regular, href: '/new' },
+              ]}
+              learnMoreHref="https://learn.microsoft.com/purview/create-sensitivity-labels"
+              ariaLabel="Get started with batch labeling"
+            />
+          ) : (
+            <>
+              <Toolbar search={q} onSearch={setQ} searchPlaceholder="Search items by name, type, workspace..." />
+              <Caption1 className={s.selCount}>
+                {selected.size} of {items.length} selected{allSelected && filtered.length ? ' (all shown)' : ''}
+              </Caption1>
+              <LoomDataTable
+                columns={pickerColumns}
+                rows={filtered}
+                getRowId={(i) => i.id}
+                ariaLabel="Catalog items"
+                empty={q ? `No items match "${q}".` : 'No catalog items found in your workspaces.'}
+              />
+            </>
+          )}
         </Section>
       )}
     </AdminShell>

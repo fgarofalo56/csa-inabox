@@ -39,6 +39,8 @@ import { useAdminTabStyles } from '@/lib/components/ui/admin-tab-styles';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { itemVisual } from '@/lib/components/ui/item-type-visual';
 import { PowerBIEmbedFrame } from '@/lib/components/embed/powerbi-embed';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
+import { LOOM_ACCENT } from '@/lib/components/shared/accent-tokens';
 
 interface Usage {
   days: number;
@@ -401,6 +403,13 @@ export function UsageMetricsPane() {
 
   return (
     <>
+      <TeachingBanner
+        surfaceKey="admin-usage"
+        title="Slice and drill through"
+        accent={LOOM_ACCENT.teal}
+        icon={DataTrending24Regular}
+        message="Use the Window buttons to change the reporting period and the Feature dropdown to focus on one capability. Click a bar in Feature adoption to drill the most-active-items table down to that feature's traffic. Inventory and edit activity are always live from Cosmos; active-user and adoption trends come from Log Analytics when it is wired."
+      />
       <Body1 className={s.intro}>
         Rolling activity, active-user telemetry, and live tenant inventory. Cosmos workspaces / items / audit-log
         plus Log Analytics request telemetry (active users, feature adoption, item traffic).

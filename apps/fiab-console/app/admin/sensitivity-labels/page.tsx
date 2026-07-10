@@ -8,12 +8,15 @@ import {
   Dialog, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
   makeStyles, tokens,
 } from '@fluentui/react-components';
-import { Add24Regular, Delete20Regular, ArrowSync24Regular } from '@fluentui/react-icons';
+import { Add24Regular, Delete20Regular, ArrowSync24Regular, ShieldTask24Regular, TagMultiple24Regular } from '@fluentui/react-icons';
 import { AdminShell } from '@/lib/components/admin-shell';
 import { Section, Toolbar } from '@/lib/components/ui/section';
 import { useAdminTabStyles } from '@/lib/components/ui/admin-tab-styles';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { SectionExplainer } from '@/lib/components/ui/learn-popover';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
+import { GuidedEmptyState } from '@/lib/components/shared/guided-empty-state';
+import { LOOM_ACCENT } from '@/lib/components/shared/accent-tokens';
 
 interface SensitivityLabel {
   id: string;
@@ -121,6 +124,13 @@ export default function SensitivityLabelsPage() {
         ],
       }}
     >
+      <TeachingBanner
+        surfaceKey="admin-sensitivity-labels"
+        title="Classify by handling level"
+        accent={LOOM_ACCENT.magenta}
+        icon={ShieldTask24Regular}
+        message="Give each label a distinct color so sensitivity is obvious at a glance across the catalog, and use the protection note to record the DLP or handling policy the label implies. Labels are applied during the next catalog scan or via the item editors — creating one here does not retro-tag existing assets."
+      />
       <Section title='About sensitivity labels'>
         <SectionExplainer>
           Sensitivity labels are Loom-native tags (distinct from Microsoft Purview Information Protection labels). Each label carries a <strong>name</strong>, a <strong>color</strong> for visual distinction, and an optional <strong>protection note</strong> describing DLP rules or handling requirements. Use these to classify assets by sensitivity level: Restricted, Confidential, Internal, Public.
@@ -139,7 +149,28 @@ export default function SensitivityLabelsPage() {
 
       <Section title='Sensitivity labels' actions={<><Button icon={<ArrowSync24Regular />} onClick={load} disabled={loading}>Refresh</Button><Button appearance='primary' icon={<Add24Regular />} onClick={() => setCreateOpen(true)}>Add label</Button></> }>
         <Toolbar search={q} onSearch={setQ} searchPlaceholder='Search by name, protection note...' />
-        {loading && !error ? <Spinner label='Loading labels...' /> : <LoomDataTable columns={columns} rows={filtered} getRowId={(l) => l.id} empty={q ? `No labels match "${q}".` : 'No sensitivity labels defined yet. Click "Add label" to create your first one.'} ariaLabel='Sensitivity labels' />}
+        {loading && !error ? (
+          <Spinner label='Loading labels...' />
+        ) : labels && labels.length === 0 && !q ? (
+          <GuidedEmptyState
+            title='No sensitivity labels yet'
+            intro='Create your first handling-level label — Restricted, Confidential, Internal, Public — then apply it to assets from the item editors.'
+            heroIcon={TagMultiple24Regular}
+            columns={1}
+            paths={[{
+              key: 'add',
+              title: 'Add a label',
+              body: 'Name it, pick a distinct color, and note the DLP / handling policy it implies.',
+              icon: Add24Regular,
+              accent: LOOM_ACCENT.magenta,
+              onClick: () => setCreateOpen(true),
+            }]}
+            learnMoreHref='https://learn.microsoft.com/purview/sensitivity-labels'
+            learnMoreLabel='About sensitivity labels'
+          />
+        ) : (
+          <LoomDataTable columns={columns} rows={filtered} getRowId={(l) => l.id} empty={q ? `No labels match "${q}".` : 'No sensitivity labels defined yet. Click "Add label" to create your first one.'} ariaLabel='Sensitivity labels' />
+        )}
       </Section>
 
       <Dialog open={createOpen} onOpenChange={(_, d) => setCreateOpen(d.open)}>
