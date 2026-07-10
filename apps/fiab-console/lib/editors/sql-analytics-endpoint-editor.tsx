@@ -585,6 +585,7 @@ export function SqlAnalyticsEndpointEditor({ item, id }: { item: FabricItemType;
               defaultView="diagram"
               height={560}
               title={`Schema · ${database}`}
+              resizeStorageKey="sql-endpoint-entity"
             />
           )}
 

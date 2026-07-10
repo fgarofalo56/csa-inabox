@@ -379,7 +379,7 @@ export function MirroredDatabaseEditor({ item, id }: Props) {
   }, [mirrorId, detail, tables, status, sqlPaired, mirrors, router]);
 
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={ribbon} rightPanel={detailsPanel} rightPanelLabel="Details"
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon} rightPanel={detailsPanel} rightPanelLabel="Details" splitKeyPrefix="mirrored-database"
       leftPanel={
         <div className={s.treePad}>
           <div className={s.sectionHead} style={{ marginBottom: tokens.spacingVerticalS }}>

@@ -303,7 +303,7 @@ function GeoMapEditorBody({ item, id }: { item: FabricItemType; id: string }) {
   return (
     <ItemEditorChrome
       item={item} id={id}
-      ribbon={ribbon}
+      ribbon={ribbon} splitKeyPrefix={item.slug}
       leftPanel={<div className={s.treePad}><Caption1>Map config — style, raster basemap, and a GeoJSON data overlay rendered live below.</Caption1></div>}
       main={
         <div className={s.pad}>
@@ -559,7 +559,7 @@ function GeoDatasetEditorBody({ item, id }: { item: FabricItemType; id: string }
   return (
     <ItemEditorChrome
       item={item} id={id}
-      ribbon={ribbon}
+      ribbon={ribbon} splitKeyPrefix={item.slug}
       leftPanel={
         <div className={s.treePad}>
           {inspectResult?.ok && Array.isArray(inspectResult.columns) && inspectResult.columns.length > 0 ? (
@@ -863,7 +863,7 @@ export function GeoQueryEditor({ item, id }: { item: FabricItemType; id: string 
   return (
     <ItemEditorChrome
       item={item} id={id}
-      ribbon={ribbon}
+      ribbon={ribbon} splitKeyPrefix={item.slug}
       leftPanel={<div className={s.treePad}>
         <Caption1>Functions:</Caption1>
         <Body1><code>geo_distance_2points</code></Body1>
@@ -1061,7 +1061,7 @@ function GeoPipelineEditorBody({ item, id }: { item: FabricItemType; id: string 
   return (
     <ItemEditorChrome
       item={item} id={id}
-      ribbon={ribbon}
+      ribbon={ribbon} splitKeyPrefix={item.slug}
       leftPanel={<div className={s.treePad}>
         <Badge appearance="tint" color="warning" size="small">Legacy</Badge>
         <Caption1>This legacy item layers geo-enrichment flags onto a pre-built ADF pipeline. At Trigger run the flags are posted as ADF pipeline parameters (<code>enrichH3</code>, <code>reverseGeocode</code>, <code>bufferMeters</code>). New geo pipelines are authored as a Data pipeline with the <strong>Geo enrichment</strong> template instead.</Caption1>
