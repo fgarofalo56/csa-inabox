@@ -26,7 +26,7 @@
 # ---- Build stage: compile the release binary -------------------------------
 # Pinned to a specific Rust toolchain tag (bookworm base) so the arrow 53 /
 # datafusion 43 / deltalake 0.24 graph resolves reproducibly. Bump deliberately.
-FROM rust:1.82-slim-bookworm AS build
+FROM rust:1.87-slim-bookworm AS build
 
 # Transitive native deps: pkg-config + build-essential cover any *-sys crate that
 # needs a C toolchain; ca-certificates lets cargo fetch over TLS. delta-rs/
