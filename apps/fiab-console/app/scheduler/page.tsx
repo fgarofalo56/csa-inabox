@@ -34,6 +34,7 @@ import { Section } from '@/lib/components/ui/section';
 import { EmptyState } from '@/lib/components/empty-state';
 import { TileGrid } from '@/lib/components/ui/tile-grid';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
 import { ScheduleDialog, type ScheduleDialogValue } from '@/lib/scheduler/schedule-dialog';
 import { describeCron, nextFireTimes, SCHEDULER_TIMEZONES } from '@/lib/scheduler/cron';
 
@@ -190,6 +191,12 @@ export default function SchedulerPage() {
       subtitle="Schedule and monitor recurring jobs across Loom — pipeline runs, Spark jobs, and ADX commands — from one place. Visual cron builder, run history, and failure alerts."
       actions={<Button appearance="primary" icon={<Add20Regular />} onClick={() => { setEditInitial(undefined); setDialogOpen(true); }}>New schedule</Button>}
     >
+      <TeachingBanner
+        surfaceKey="scheduler-hub"
+        title="One place for every recurring job"
+        message="Schedule pipeline runs, Spark jobs, and ADX commands here instead of item-by-item. Build the cadence with the visual cron wizard — no cron syntax to memorize — then watch run history and get alerted on failures. New schedule starts the wizard."
+        learnMoreHref="https://learn.microsoft.com/azure/data-factory/concepts-pipeline-execution-triggers"
+      />
       {gate && (
         <MessageBar intent="warning">
           <MessageBarBody>

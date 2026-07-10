@@ -31,6 +31,9 @@ import {
   Info16Regular, Wrench16Regular, ServerRegular, CloudRegular,
   FilterDismiss16Regular,
 } from '@fluentui/react-icons';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
+import { GuidedEmptyState } from '@/lib/components/shared/guided-empty-state';
+import { LOOM_ACCENT } from '@/lib/components/shared/accent-tokens';
 
 type Category = 'identity' | 'data-plane' | 'azure-services' | 'permissions' | 'security' | 'enrichment';
 interface EditableEnvVar {
@@ -190,6 +193,13 @@ export function EnvConfigPane() {
 
   return (
     <div>
+      <TeachingBanner
+        surfaceKey="admin-env-config"
+        title="Configure without the Azure portal"
+        accent={LOOM_ACCENT.violet}
+        icon={Settings24Regular}
+        message="Set the console's runtime environment variables here — every Save applies a real revision and persists the desired value to the Loom store. Secret-typed keys render as masked inputs and are stored as platform secrets. After a Save, copy the bicep / az-CLI reconcile snippet so the next infrastructure deploy does not revert your change."
+      />
       {/* Intro + actions */}
       <div style={card}>
         <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM, flexWrap: 'wrap' }}>
@@ -491,16 +501,20 @@ export function EnvConfigPane() {
       )}
 
       {grouped.length === 0 && !filtersActive && (
-        <div style={card}>
-          <div style={head}>
-            <Settings24Regular style={{ color: tokens.colorNeutralForeground3 }} />
-            <Subtitle2>No editable runtime variables</Subtitle2>
-          </div>
-          <Body1 style={{ color: tokens.colorNeutralForeground2 }}>
-            The deployment catalog returned no editable environment variables for this console.
-            Use Re-check to reload, or fold configuration changes directly into admin-plane/main.bicep.
-          </Body1>
-        </div>
+        <GuidedEmptyState
+          title="No editable runtime variables"
+          intro="The deployment catalog returned no editable environment variables for this console. Reload to try again, or fold configuration changes directly into admin-plane/main.bicep."
+          heroIcon={Settings24Regular}
+          columns={1}
+          paths={[{
+            key: 'recheck',
+            title: 'Re-check',
+            body: 'Reload the runtime configuration catalog from the deployment.',
+            icon: ArrowSync24Regular,
+            accent: LOOM_ACCENT.violet,
+            onClick: () => { void load(); },
+          }]}
+        />
       )}
     </div>
   );
