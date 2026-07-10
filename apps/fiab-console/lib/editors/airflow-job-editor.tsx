@@ -19,7 +19,7 @@ import { clientFetch } from '@/lib/client-fetch';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Subtitle2, Body1, Caption1, Badge, Button, Spinner, SkeletonItem, Input, Textarea, Field, Tooltip,
-  Tree, TreeItem, TreeItemLayout, Select,
+  Select,
   Tab, TabList,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   MessageBar, MessageBarBody, MessageBarTitle,
@@ -30,6 +30,7 @@ import {
   Add20Regular, ArrowSync20Regular, Save20Regular, FlowchartCircle20Regular,
   History20Regular, PlugConnected20Regular, Settings20Regular, Apps20Regular,
   Play16Regular, Pause16Regular, Play16Filled, DocumentText16Regular,
+  Open16Regular, ArrowSync16Regular,
 } from '@fluentui/react-icons';
 import { EmptyState } from '@/lib/components/empty-state';
 import { ItemEditorChrome } from './item-editor-chrome';
@@ -37,6 +38,10 @@ import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import { loomDocUrl } from '@/lib/learn/content';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { useSharedEditorStyles } from './shared-styles';
+import { ExplorerTree, type ExplorerNode, type ExplorerAction } from '@/lib/components/shared/explorer-tree';
+import { GuidedEmptyState } from '@/lib/components/shared/guided-empty-state';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
+import { useRegisterRibbonCommands } from '@/lib/components/shared/ribbon-commands';
 
 const useLocalStyles = makeStyles({
   pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, flex: 1, minHeight: 0 },
@@ -309,32 +314,62 @@ export function AirflowJobEditor({ item, id }: Props) {
     ]},
   ], [workspaceId, jobId, loadList, loadDags]);
 
+  // SC-9 — register ribbon actions so the in-ribbon command search surfaces them.
+  useRegisterRibbonCommands(ribbon, 'airflow-job');
+
+  // SC-7 — the left "Airflow jobs" list as a typed-icon ExplorerTree with a
+  // right-click context menu (Open · Refresh DAGs), replacing the plain Tree.
+  const jobNodes = useMemo<ExplorerNode[]>(
+    () => (jobs || []).map((j) => ({
+      id: j.id,
+      label: j.displayName,
+      kind: 'airflow-job',
+      emphasized: jobId === j.id,
+      meta: j.webserverUrl ? 'BYO webserver' : managedHost ? 'managed host' : 'not configured',
+    })),
+    [jobs, jobId, managedHost],
+  );
+  const jobActionsFor = useCallback((): ExplorerAction[] => [
+    { key: 'open', label: 'Open', icon: <Open16Regular />, inline: true },
+    { key: 'refresh-dags', label: 'Refresh DAGs', icon: <ArrowSync16Regular /> },
+  ], []);
+  const onJobAction = useCallback((key: string, node: ExplorerNode) => {
+    if (key === 'open') { setJobId(node.id); setTab('dags'); }
+    else if (key === 'refresh-dags') { setJobId(node.id); if (workspaceId) loadDags(workspaceId, node.id); }
+  }, [workspaceId, loadDags]);
+
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={ribbon}
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon} commandSearch
       leftPanel={
-        <div className={s.treePad}>
-          <Subtitle2 style={{ marginBottom: tokens.spacingVerticalS }}>Airflow jobs</Subtitle2>
-          {!workspaceId && <Caption1>Select a workspace.</Caption1>}
-          {workspaceId && jobs === null && <Spinner size="tiny" label="Loading…" />}
-          {jobs && jobs.length === 0 && (
-            <EmptyState
-              icon={<Apps20Regular />}
-              title="No Airflow jobs yet"
-              body="Create an Apache Airflow job to orchestrate DAGs against your webserver."
-              primaryAction={{ label: 'New job', onClick: () => setCreateOpen(true) }}
-            />
-          )}
-          <Tree aria-label="Airflow jobs">
-            {(jobs || []).map(j => (
-              <TreeItem key={j.id} itemType="leaf" value={j.id} onClick={() => setJobId(j.id)}>
-                <TreeItemLayout iconBefore={<FlowchartCircle20Regular />}>
-                  {jobId === j.id ? <strong>{j.displayName}</strong> : j.displayName}
-                  <br /><Caption1>{j.webserverUrl ? 'BYO webserver' : managedHost ? 'managed host' : 'not configured'}</Caption1>
-                </TreeItemLayout>
-              </TreeItem>
-            ))}
-          </Tree>
-        </div>
+        <ExplorerTree
+          title="Airflow jobs"
+          ariaLabel="Airflow jobs"
+          filterable
+          filterPlaceholder="Filter jobs by name"
+          nodes={jobNodes}
+          loading={Boolean(workspaceId) && jobs === null}
+          iconFor={() => <FlowchartCircle20Regular />}
+          actionsFor={jobActionsFor}
+          onAction={onJobAction}
+          onOpen={(node) => { setJobId(node.id); setTab('dags'); }}
+          onRefresh={workspaceId ? () => loadList(workspaceId) : undefined}
+          gate={!workspaceId
+            ? <Caption1>Select a workspace to list its Airflow jobs.</Caption1>
+            : (jobs && jobs.length === 0
+              ? <GuidedEmptyState
+                  variant="block"
+                  columns={1}
+                  heroIcon={Apps20Regular}
+                  title="No Airflow jobs yet"
+                  intro="Create an Apache Airflow job to orchestrate DAGs against a managed or BYO webserver."
+                  ariaLabel="Create an Airflow job"
+                  paths={[
+                    { key: 'new', title: 'New Airflow job', body: 'Point at the managed host or your own Airflow webserver.', icon: Add20Regular, onClick: () => setCreateOpen(true) },
+                  ]}
+                  learnMoreHref={loomDocUrl('fiab/v3-tenant-bootstrap')}
+                />
+              : undefined)}
+        />
       }
       main={
         <>
@@ -387,12 +422,24 @@ export function AirflowJobEditor({ item, id }: Props) {
 
             {tab === 'dags' && (
               <>
+                {/* SC-6 — teaching banner explaining the Airflow job model. */}
+                <TeachingBanner
+                  surfaceKey="airflow-job"
+                  title="Orchestrate DAGs on managed or BYO Apache Airflow"
+                  message="An Airflow job runs your DAGs against a webserver — the day-one managed host on Azure Container Apps, or your own Airflow instance (BYO). Trigger runs, pause/unpause schedules, and open per-task logs here; the DAG code itself lives in your Git source repo."
+                  learnMoreHref={loomDocUrl('fiab/v3-tenant-bootstrap')}
+                />
                 {!jobId && (
-                  <EmptyState
-                    icon={<FlowchartCircle20Regular />}
+                  <GuidedEmptyState
+                    heroIcon={FlowchartCircle20Regular}
                     title="No job selected"
-                    body="Pick an Airflow job from the left panel to list its DAGs, or create a new one."
-                    primaryAction={workspaceId ? { label: 'New job', onClick: () => setCreateOpen(true) } : undefined}
+                    intro="Pick an Airflow job from the left panel to list its DAGs, or create a new one."
+                    ariaLabel="Airflow DAGs empty state"
+                    paths={[
+                      { key: 'new', title: 'New Airflow job', body: 'Create a job and point it at a webserver.', icon: Add20Regular, onClick: workspaceId ? () => setCreateOpen(true) : undefined },
+                      { key: 'settings', title: 'Configure a webserver', body: 'Set the Airflow webserver URL + DAG source repo.', icon: Settings20Regular, onClick: () => setTab('settings') },
+                    ]}
+                    learnMoreHref={loomDocUrl('fiab/v3-tenant-bootstrap')}
                   />
                 )}
                 {jobId && !active?.webserverUrl && !managedHost && (
