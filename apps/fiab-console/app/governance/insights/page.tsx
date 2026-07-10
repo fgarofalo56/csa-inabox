@@ -15,6 +15,7 @@ import {
 } from '@fluentui/react-icons';
 import { GovernanceShell } from '@/lib/components/governance-shell';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
 import { clientFetch } from '@/lib/client-fetch';
 
 interface CoverageRow { type: string; total: number; labeled: number; classified: number; owned: number; endorsed: number }
@@ -185,6 +186,15 @@ export default function InsightsPage() {
       <Body1 className={s.intro}>
         Tenant-wide governance KPIs derived live from your Cosmos catalog + audit log.
       </Body1>
+
+      <div style={{ marginBottom: tokens.spacingVerticalL }}>
+        <TeachingBanner
+          surfaceKey="governance-insights"
+          title="Close the coverage gaps"
+          message="The compliance score rolls up sensitivity, classification, ownership, and endorsement coverage. Sort any coverage column to find the item types trailing behind, then label, assign owners, or endorse them — the score updates live on refresh."
+          learnMoreHref="https://learn.microsoft.com/purview/data-estate-insights-about"
+        />
+      </div>
 
       <Toolbar actions={<Button icon={<ArrowSync24Regular />} onClick={load} disabled={loading}>Refresh</Button>} />
 

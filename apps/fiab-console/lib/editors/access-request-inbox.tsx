@@ -165,7 +165,7 @@ export function AccessRequestInboxEditor() {
       const url = isHistory
         ? '/api/access-requests?status=completed'
         : `/api/access-requests?tier=${v}&status=open`;
-      const r = await fetch(url);
+      const r = await clientFetch(url);
       const j = await r.json();
       if (!j.ok) { setError(j.error || `HTTP ${r.status}`); setRequests([]); return; }
       let rows: AccessRequest[] = j.requests || [];

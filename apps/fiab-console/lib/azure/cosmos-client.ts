@@ -151,6 +151,13 @@ let _azureConnections: Container | null = null;
 // lazily so a fresh environment needs no extra ARM/Bicep step beyond the
 // account+database.
 let _taskFlows: Container | null = null;
+// Task-flow RUNS (F11 execution) — one row per "Run flow" invocation, PK
+// /workspaceId so a flow's run-history list + the poller's per-run point-read
+// hit a single physical partition. Records the per-step / per-item run fan-out
+// as the floating driver advances the flow. Loom-native (no Fabric dependency).
+// Created lazily so a fresh environment needs no extra ARM/Bicep step beyond the
+// account+database.
+let _taskFlowRuns: Container | null = null;
 // Spark / compute configuration (F13) — one doc per Loom workspace holding the
 // operator-desired Databricks Spark settings (Pool / Runtime / Environment /
 // Jobs). The Cosmos doc is the source of truth; the live Databricks cluster/pool
@@ -790,6 +797,8 @@ async function ensure() {
   // account+database (the Console UAMI already holds Cosmos DB Built-in Data
   // Contributor at account scope).
   _taskFlows = await mk('task-flows', '/workspaceId');
+  // Task-flow runs (F11 execution) — run-history + poll store, PK /workspaceId.
+  _taskFlowRuns = await mk('task-flow-runs', '/workspaceId');
   // Spark / compute configuration (F13) — one doc per workspace holding the
   // Databricks Spark settings (Pool / Runtime / Environment / Jobs). PK
   // /workspaceId so the Spark-settings pane hits a single physical partition.
@@ -915,6 +924,8 @@ export async function dataProductAnalyticsContainer(): Promise<Container> { awai
 export async function azureConnectionsContainer(): Promise<Container> { await ensure(); return _azureConnections!; }
 /** Task flows (F11) — visual step-sequence canvases, PK /workspaceId. */
 export async function taskFlowsContainer(): Promise<Container> { await ensure(); return _taskFlows!; }
+/** Task-flow runs (F11 execution) — run-history + poll store, PK /workspaceId. */
+export async function taskFlowRunsContainer(): Promise<Container> { await ensure(); return _taskFlowRuns!; }
 /** Spark / compute configuration (F13) — PK /workspaceId. */
 export async function workspaceSparkConfigContainer(): Promise<Container> { await ensure(); return _workspaceSparkConfig!; }
 /** F22 — embed codes (signed embed URLs) — PK /tenantId. */

@@ -108,6 +108,7 @@ import {
 } from '../_plan-model';
 import { arr, useItemState, SaveBar, useStyles } from './shared';
 import { clientFetch } from '@/lib/client-fetch';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
 
 // ----- User Data Function (Fabric UDF — code, test/invoke, connections, libraries) -----
 const UDF_SAMPLE = `import datetime\nimport fabric.functions as fn\nimport logging\n\nudf = fn.UserDataFunctions()\n\n@udf.function()\ndef compute_score(user_id: str, weight: float = 1.0) -> dict:\n    logging.info('Python UDF trigger function processed a request.')\n    return {"user": user_id, "score": weight * 42}`;
@@ -297,6 +298,14 @@ export function UserDataFunctionEditor({ item, id }: { item: FabricItemType; id:
       main={
         <div className={s.pad}>
           {loading && <Spinner size="small" label="Loading…" labelPosition="after" />}
+          {/* Teaching banner (SC-6) — Fabric-grade guidance, keyed per surface with
+              a persistent dismiss and a Learn-more link (UX-408). */}
+          <TeachingBanner
+            surfaceKey="user-data-function-authoring"
+            title="Author and test a Python function"
+            message="Write @udf.function() definitions, invoke them inline against the shared runtime, then generate call code for Azure Functions, notebooks, or OpenAPI. Point the execution endpoint at your own Azure Function App to run libraries and connections in production."
+            learnMoreHref="https://learn.microsoft.com/fabric/data-engineering/user-data-functions/user-data-functions-overview"
+          />
           <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: tokens.spacingHorizontalM }}>
             <Field label="Runtime"><Input value="python (fabric-user-data-functions)" disabled /></Field>
             <Field label="Default entrypoint"><Input value={state.entrypoint} onChange={(_, d) => setState((p) => ({ ...p, entrypoint: d.value }))} /></Field>
