@@ -1448,6 +1448,71 @@ export async function queryTraceDetail(traceId: string): Promise<{ spans: AppIns
   return { spans };
 }
 
+// ---- MLflow run -> GenAI traces join (DBX-10) ----
+//
+// MLflow 3.x GenAI traces export as OpenTelemetry spans that land in the SAME
+// App Insights resource the `tracing` (AIF-13) surface already reads. The MLflow
+// autolog / OTel bridge stamps the owning run id onto the span's
+// customDimensions. We reuse the shared trace store (getWorkspaceInfo +
+// armFetch, same `/api/query` path as queryTraceDetail) — no new resource, no
+// duplicate store — and group the run's spans into distinct traces
+// (operation_Id) so the ml-experiment editor can list them and drill into each
+// span tree via the existing queryTraceDetail(operation_Id).
+export interface RunTraceSummary {
+  /** operation_Id — pass to queryTraceDetail() for the span tree. */
+  traceId: string;
+  name?: string;
+  spanCount: number;
+  startTime?: string;
+  endTime?: string;
+  errorCount: number;
+}
+
+export async function queryTracesByRunId(runId: string, hoursOpt = 24 * 7): Promise<RunTraceSummary[]> {
+  const safeId = String(runId || '').replace(/[^A-Za-z0-9_\-.]/g, '');
+  if (!safeId) throw new FoundryError(400, null, 'A valid MLflow run_id is required.');
+  const ws = await getWorkspaceInfo();
+  const appiId = ws?.applicationInsights;
+  if (!appiId) {
+    throw new NotDeployedError('Application Insights',
+      'The Foundry hub has no applicationInsights resource bound — MLflow GenAI traces are exported there. Bind one in the hub workspace properties.');
+  }
+  const hours = Math.max(1, Math.min(24 * 30, hoursOpt || 24 * 7));
+  // Join on the run id across the keys the MLflow OTel bridge uses. The id is
+  // sanitised above, so it is safe to interpolate into the KQL string literal.
+  const query =
+    `union (dependencies | extend _k='dependency'), (requests | extend _k='request'), (customEvents | extend _k='event') ` +
+    `| where timestamp > ago(${hours}h) ` +
+    `| extend _rid = coalesce(tostring(customDimensions['mlflow.run_id']), tostring(customDimensions['mlflow.trace.run_id']), tostring(customDimensions['run_id'])) ` +
+    `| where _rid == "${safeId}" ` +
+    `| summarize spanCount=count(), startTime=min(timestamp), endTime=max(timestamp), errorCount=countif(success == false), name=take_any(name) by operation_Id ` +
+    `| order by startTime desc | take 100 ` +
+    `| project operation_Id, spanCount, startTime, endTime, errorCount, name`;
+  const path = `${appiId}/api/query`;
+  const res = await armFetch(path, { apiVersion: '2015-05-01', method: 'POST', body: JSON.stringify({ query }) });
+  if (!res.ok) {
+    const t = await res.text();
+    throw new FoundryError(res.status, t, `App Insights run-trace query failed (${res.status}): ${t.slice(0, 240)}`);
+  }
+  const j: any = await res.json();
+  const table = j?.tables?.[0];
+  if (!table) return [];
+  const cols: string[] = (table.columns || []).map((c: any) => c.name);
+  const rows: any[][] = table.rows || [];
+  return rows.map((r) => {
+    const o: any = {};
+    cols.forEach((c, i) => { o[c] = r[i]; });
+    return {
+      traceId: String(o.operation_Id ?? ''),
+      name: o.name ? String(o.name) : undefined,
+      spanCount: Number(o.spanCount) || 0,
+      startTime: o.startTime,
+      endTime: o.endTime,
+      errorCount: Number(o.errorCount) || 0,
+    } as RunTraceSummary;
+  }).filter((t) => t.traceId);
+}
+
 // ---- Observability dashboard (Application analytics) ----
 //
 // Microsoft Foundry's Monitoring → "Application analytics" surface aggregates

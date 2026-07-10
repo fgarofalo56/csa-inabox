@@ -19,7 +19,8 @@ import { searchDocuments, searchConfigGate, getIndex, semanticConfigNames } from
 import type { SearchRequest } from './search-field-shapes';
 import { isVectorFieldType } from './search-field-shapes';
 import { graphGroundingSearch, GraphSearchAccessError, type GraphGroundingScope } from './graph-search-client';
-import type { DataAgentSource } from './data-agent-client';
+import { fetchWithTimeout } from './fetch-with-timeout';
+import { resolveAgentInvokeUrl, type DataAgentSource } from './data-agent-client';
 
 export interface SourceExecution {
   executed: boolean;
@@ -220,6 +221,44 @@ export async function executeSourceQuery(source: DataAgentSource, query: string)
           }
           throw e;
         }
+      }
+      case 'agent': {
+        // Compose-back (DBX-2): route the sub-question to a hosted Loom App
+        // (Agent/FastAPI template) via its /invoke endpoint. The URL is
+        // SSRF-validated (https on an Azure Container Apps managed host) before
+        // any request is made — never an arbitrary host from persisted config.
+        const invokeUrl = resolveAgentInvokeUrl(source.agent?.url);
+        if (!invokeUrl) {
+          return { executed: false, gate: `No hosted agent is bound to source "${source.name}" — deploy an Agent app (Loom App Runtime) and re-add it. The agent must be a deployed Azure Container App.` };
+        }
+        const res = await fetchWithTimeout(invokeUrl, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', accept: 'application/json' },
+          body: JSON.stringify({ input: query }),
+          cache: 'no-store',
+        }, 60_000);
+        const text = await res.text();
+        if (!res.ok) {
+          return { executed: false, gate: `Hosted agent "${source.name}" returned HTTP ${res.status}. Check the app is deployed and its /invoke endpoint is healthy.` };
+        }
+        let output = text;
+        let steps: unknown[] = [];
+        try {
+          const j: any = JSON.parse(text);
+          if (j && typeof j === 'object') {
+            output = typeof j.output === 'string' ? j.output : JSON.stringify(j);
+            if (Array.isArray(j.steps)) steps = j.steps;
+          }
+        } catch { /* non-JSON agent → use raw text as the answer */ }
+        return {
+          executed: true,
+          columns: ['agent_answer'],
+          rows: [[output.length > 4000 ? output.slice(0, 4000) + '…' : output]],
+          rowCount: 1,
+          note: steps.length
+            ? `The hosted agent ran ${steps.length} tool step(s) to produce this answer; treat it as an authoritative sub-answer and integrate it into your response.`
+            : 'Treat the hosted agent\'s answer as an authoritative sub-answer and integrate it into your response.',
+        };
       }
       default:
         return {
