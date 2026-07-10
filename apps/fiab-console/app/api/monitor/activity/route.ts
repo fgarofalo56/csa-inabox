@@ -15,6 +15,7 @@ import {
   listActivityLog, MonitorNotConfiguredError, MonitorError,
 } from '@/lib/azure/monitor-client';
 import { FetchTimeoutError } from '@/lib/azure/fetch-with-timeout';
+import { buildScopedCacheKey, getOrComputeCached, resolveBackendTtl } from '@/lib/azure/query-result-cache';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -23,9 +24,17 @@ export async function GET(req: NextRequest) {
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   const days = Math.min(90, Math.max(1, Number(new URL(req.url).searchParams.get('days')) || 7));
+  const refresh = req.nextUrl.searchParams.get('refresh') === '1';
   try {
-    const events = await listActivityLog({ days });
-    return NextResponse.json({ ok: true, data: { events } });
+    // Paginated control-plane Activity Log crawl across every Loom RG — slow.
+    // Served stale-while-revalidate on a short 90s window (LOOM_QUERY_CACHE_TTL_MS_MONITOR).
+    const { value, meta } = await getOrComputeCached(
+      buildScopedCacheKey('monitor/activity', { days }),
+      'monitor',
+      async () => ({ events: await listActivityLog({ days }) }),
+      { ttlMs: resolveBackendTtl('monitor', 90_000), staleWhileRevalidate: true, bypass: refresh },
+    );
+    return NextResponse.json({ ok: true, data: value, meta });
   } catch (e) {
     if (e instanceof MonitorNotConfiguredError) {
       return NextResponse.json({ ok: false, gate: { missing: e.missing, message: e.message } });

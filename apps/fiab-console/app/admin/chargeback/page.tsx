@@ -14,7 +14,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AdminShell } from '@/lib/components/admin-shell';
 import {
   Body1, Caption1, Badge, Spinner, Dropdown, Option, Text, Button,
-  MessageBar, MessageBarBody, MessageBarTitle,
+  MessageBar, MessageBarBody, MessageBarTitle, MessageBarActions,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import { ArrowDownload20Regular, Money20Regular, Organization20Regular, Person20Regular } from '@fluentui/react-icons';
@@ -24,6 +24,7 @@ import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-ta
 import { useAdminTabStyles } from '@/lib/components/ui/admin-tab-styles';
 import { SectionExplainer, LearnPopover } from '@/lib/components/ui/learn-popover';
 import { LoomChart } from '@/lib/components/charts/loom-chart';
+import { StaleDataBadge } from '@/lib/components/ui/stale-data-badge';
 
 interface DomainCostRow { domainId: string; name: string; cost: number; pctOfTotal: number }
 interface ChargebackModel {
@@ -116,6 +117,7 @@ export default function ChargebackPage() {
   const a = useAdminTabStyles();
   const [timeframe, setTimeframe] = useState('MonthToDate');
   const [model, setModel] = useState<ChargebackModel | null>(null);
+  const [meta, setMeta] = useState<{ cachedAt?: number; stale?: boolean } | null>(null);
   const [gate, setGate] = useState<Gate | null>(null);
   const [taggingEnabled, setTaggingEnabled] = useState<boolean | null>(null);
   const [unauth, setUnauth] = useState(false);
@@ -147,7 +149,7 @@ export default function ChargebackPage() {
       })
       .then((j: any) => {
         if (!j) return;
-        if (j.ok) { setModel(j.data); setTaggingEnabled(!!j.taggingEnabled); }
+        if (j.ok) { setModel(j.data ?? null); setTaggingEnabled(!!j?.taggingEnabled); setMeta(j.meta ?? null); }
         else if (j.gate) setGate(j.gate);
         else setError(j.error || 'Failed to load chargeback report');
       })
@@ -235,7 +237,15 @@ export default function ChargebackPage() {
       )}
 
       {!unauth && error && (
-        <MessageBar intent="error" className={a.messageBar}><MessageBarBody>{error}</MessageBarBody></MessageBar>
+        <MessageBar intent="error" className={a.messageBar}>
+          <MessageBarBody>
+            <MessageBarTitle>Could not load chargeback report</MessageBarTitle>
+            {error}
+          </MessageBarBody>
+          <MessageBarActions>
+            <Button appearance="transparent" onClick={() => load(timeframe)}>Retry</Button>
+          </MessageBarActions>
+        </MessageBar>
       )}
 
       {!unauth && (
@@ -266,6 +276,9 @@ export default function ChargebackPage() {
 
           {!loading && model && (
             <>
+              {meta?.stale && (
+                <div className={styles.chartWrap}><StaleDataBadge cachedAt={meta.cachedAt} /></div>
+              )}
               <div className={styles.stats}>
                 <div className={styles.stat}>
                   <span className={styles.statIcon} aria-hidden><Money20Regular /></span>

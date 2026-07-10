@@ -36,6 +36,7 @@ import {
   MonitorError,
 } from '@/lib/azure/monitor-client';
 import { apiServerError } from '@/lib/api/respond';
+import { buildScopedCacheKey, getOrComputeCached, resolveBackendTtl } from '@/lib/azure/query-result-cache';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -91,6 +92,8 @@ export async function GET(req: NextRequest) {
   const user   = (p.get('user')   || '').trim();
   const itemId = (p.get('itemId') || '').trim();
   const top    = Math.min(1000, Math.max(1, Number(p.get('top') || 200)));
+  const refresh = p.get('refresh') === '1';
+  const cacheKey = buildScopedCacheKey('admin/audit-logs', { tenantId, q, type, since, until, user, itemId, top });
 
   const gates: { purview?: string; purviewInfo?: string; la?: string } = {};
 
@@ -166,6 +169,10 @@ export async function GET(req: NextRequest) {
   }
 
   try {
+    // 3-backend merge (Cosmos + Purview Data Map + Log Analytics) is expensive and
+    // re-queried on every filter change — served stale-while-revalidate on a 5-min
+    // window (LOOM_QUERY_CACHE_TTL_MS_AUDITMERGE). `?refresh=1` bypasses the read.
+    const { value, meta } = await getOrComputeCached(cacheKey, tenantId, async () => {
     const [cosmosRes, purviewRes, laRes] = await Promise.allSettled([
       fetchCosmos(),
       fetchPurview(),
@@ -224,7 +231,10 @@ export async function GET(req: NextRequest) {
 
     const kinds = Array.from(new Set(rows.map((r) => r.kind).filter(Boolean))).sort();
 
-    return NextResponse.json({ ok: true, total: rows.length, rows, kinds, gates });
+      return { total: rows.length, rows, kinds, gates };
+    }, { ttlMs: resolveBackendTtl('auditmerge', 5 * 60_000), staleWhileRevalidate: true, bypass: refresh });
+
+    return NextResponse.json({ ok: true, ...value, meta });
   } catch (e: any) {
     return apiServerError(e);
   }

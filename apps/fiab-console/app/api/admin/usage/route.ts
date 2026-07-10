@@ -35,6 +35,7 @@ import {
   type LaTopItem,
 } from '@/lib/clients/usage-client';
 import { apiServerError } from '@/lib/api/respond';
+import { buildScopedCacheKey, getOrComputeCached, resolveBackendTtl } from '@/lib/azure/query-result-cache';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -61,8 +62,13 @@ export async function GET(req: NextRequest) {
   const daysRaw = Number(url.searchParams.get('days'));
   const days = Number.isFinite(daysRaw) ? Math.min(90, Math.max(1, Math.floor(daysRaw))) : 30;
   const featureFilter = (url.searchParams.get('feature') || '').trim() || null;
+  const refresh = url.searchParams.get('refresh') === '1';
+  const cacheKey = buildScopedCacheKey('admin/usage', { tenantId, days, featureFilter: featureFilter ?? '' });
 
   try {
+    // Cosmos multi-container fan-out + Log Analytics — 5-min SWR window
+    // (LOOM_QUERY_CACHE_TTL_MS_USAGEROLLUP). `?refresh=1` bypasses the cached read.
+    const { value, meta } = await getOrComputeCached(cacheKey, tenantId, async () => {
     const wsC = await workspacesContainer();
     const itC = await itemsContainer();
     const audC = await auditLogContainer();
@@ -175,26 +181,28 @@ export async function GET(req: NextRequest) {
       topItems = topItems.filter((t) => t.auditCount > 0);
     }
 
-    return NextResponse.json({
-      ok: true,
-      days,
-      since,
-      featureFilter,
-      laConfigured,
-      laError,
-      totals: {
-        workspaces: workspaces.length,
-        items: items.length,
-        itemTypes: itemsByType.length,
-        auditEvents30d: auditCount,
-      },
-      itemsByType,
-      itemsByWorkspace,
-      activity,
-      topItems,
-      activeUsersTrend,
-      featureAdoption,
-    });
+      return {
+        days,
+        since,
+        featureFilter,
+        laConfigured,
+        laError,
+        totals: {
+          workspaces: workspaces.length,
+          items: items.length,
+          itemTypes: itemsByType.length,
+          auditEvents30d: auditCount,
+        },
+        itemsByType,
+        itemsByWorkspace,
+        activity,
+        topItems,
+        activeUsersTrend,
+        featureAdoption,
+      };
+    }, { ttlMs: resolveBackendTtl('usagerollup', 5 * 60_000), staleWhileRevalidate: true, bypass: refresh });
+
+    return NextResponse.json({ ok: true, ...value, meta });
   } catch (e: any) {
     return apiServerError(e);
   }

@@ -111,7 +111,11 @@ export interface CachedQueryResult {
 interface CacheEnvelope {
   key: string;
   modelId: string;
-  value: CachedQueryResult;
+  // `unknown` so the same tiers back both the rows-typed API
+  // (`getCachedResult`/`setCachedResult`) and the generic get-or-compute path
+  // ({@link getOrComputeCached}) used by the observability routes. The typed
+  // getters cast on the way out; nothing else stores here.
+  value: unknown;
   cachedAt: number;
   expiresAt: number;
 }
@@ -141,6 +145,22 @@ export function ttlMsForBackend(backend?: string): number {
     if (Number.isFinite(n) && n > 0) return n;
   }
   return ttlMs();
+}
+
+/**
+ * Per-backend TTL (ms) with a CALLER-SUPPLIED default: `LOOM_QUERY_CACHE_TTL_MS_<BACKEND>`
+ * overrides `defaultMs`. Unlike {@link ttlMsForBackend} (which falls back to the
+ * generic 60s knob), this keeps a route's own sensible default when no env
+ * override is set — e.g. Cost Management tolerates a 20-min TTL by default while
+ * still honouring `LOOM_QUERY_CACHE_TTL_MS_COSTMGMT` when an operator sets it.
+ */
+export function resolveBackendTtl(backend: string, defaultMs: number): number {
+  const token = backendEnvToken(backend);
+  if (token) {
+    const n = Number(process.env[`LOOM_QUERY_CACHE_TTL_MS_${token}`]);
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+  return defaultMs;
 }
 
 /** Max in-process entries before insertion-order eviction. */
@@ -216,7 +236,7 @@ function ipGet(key: string): CachedQueryResult | null {
   // Refresh recency (LRU): re-insert to move to the tail.
   store.delete(key);
   store.set(key, env);
-  return env.value;
+  return env.value as CachedQueryResult;
 }
 
 function ipSet(env: CacheEnvelope): void {
@@ -250,7 +270,7 @@ async function redisTierGet(key: string, modelId: string): Promise<CachedQueryRe
   try {
     const env = JSON.parse(raw) as CacheEnvelope;
     if (typeof env.expiresAt === 'number' && env.expiresAt <= Date.now()) return null;
-    return env.value ?? null;
+    return (env.value as CachedQueryResult) ?? null;
   } catch {
     return null;
   }
@@ -260,6 +280,23 @@ async function redisTierSet(env: CacheEnvelope): Promise<void> {
   if (!redisCacheConfigured()) return;
   const seconds = Math.ceil((env.expiresAt - Date.now()) / 1000) || 1;
   await redisSet(redisKeyFor(env.key, env.modelId), JSON.stringify(env), seconds);
+}
+
+/**
+ * Expiry-AGNOSTIC Redis read — returns the full envelope (including cachedAt /
+ * expiresAt) even when past its TTL, so the SWR path can serve a stale value
+ * while it refreshes. Redis' own EX would normally evict the key at expiry, but
+ * we keep the envelope's own expiresAt as the source of truth. Any failure → null.
+ */
+async function redisPeek(key: string, modelId: string): Promise<CacheEnvelope | null> {
+  if (!redisCacheConfigured()) return null;
+  const raw = await redisGet(redisKeyFor(key, modelId));
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as CacheEnvelope;
+  } catch {
+    return null;
+  }
 }
 
 // ── Optional distributed (Cosmos) tier ──────────────────────────────────────
@@ -342,6 +379,25 @@ async function distSet(env: CacheEnvelope): Promise<void> {
   }
 }
 
+/** Expiry-agnostic Cosmos read (returns the envelope even if past TTL). */
+async function distPeek(key: string, modelId: string): Promise<CacheEnvelope | null> {
+  const container = await getCosmosContainer();
+  if (!container) return null;
+  try {
+    const { resource } = await container.item(key, modelId).read();
+    if (!resource) return null;
+    return {
+      key,
+      modelId,
+      value: resource.value,
+      cachedAt: resource.cachedAt,
+      expiresAt: resource.expiresAt,
+    };
+  } catch {
+    return null;
+  }
+}
+
 // ── Public API ───────────────────────────────────────────────────────────────
 
 /**
@@ -387,16 +443,152 @@ export async function setCachedResult(
   if (!queryCacheEnabled()) return;
   const effectiveTtl =
     opts?.ttlMs && opts.ttlMs > 0 ? opts.ttlMs : ttlMsForBackend(opts?.backend ?? value.producedBy);
-  const env: CacheEnvelope = {
-    key,
-    modelId,
-    value,
-    cachedAt: Date.now(),
-    expiresAt: Date.now() + effectiveTtl,
-  };
+  await writeAllTiers(key, modelId, value, effectiveTtl);
+}
+
+/** Build an envelope and fan it out to every configured tier (in-process → Redis → Cosmos). */
+async function writeAllTiers(key: string, modelId: string, value: unknown, ttl: number): Promise<void> {
+  const now = Date.now();
+  const env: CacheEnvelope = { key, modelId, value, cachedAt: now, expiresAt: now + ttl };
   ipSet(env);
   await redisTierSet(env);
   await distSet(env);
+}
+
+// ── Generic get-or-compute with optional stale-while-revalidate ──────────────
+//
+// Used by the observability routes (chargeback / usage / audit / copilot-usage /
+// monitor) whose backends are slow, rate-limited, and re-queried constantly. It
+// wraps ANY async compute (not just row results) in the same three tiers, and —
+// with `staleWhileRevalidate` — serves a stale value the instant TTL lapses while
+// a single background recompute repopulates the cache, so a page never blocks on
+// a cold Cost Management / Log Analytics / ARM round-trip.
+
+/** Freshness metadata a route echoes to the client as `meta`. */
+export interface CacheMeta {
+  /** Epoch ms the served value was computed. */
+  cachedAt: number;
+  /** True when a stale value was served and a background refresh was kicked. */
+  stale: boolean;
+}
+
+/** In-flight background refreshes, keyed by cache key — the SWR stampede guard. */
+const inFlightRefresh = new Map<string, Promise<unknown>>();
+
+/**
+ * Cross-tier peek that returns the freshest available envelope REGARDLESS of
+ * expiry (so SWR can serve stale). Prefers any non-expired entry; otherwise the
+ * newest stale one. In-process fresh is the hot path and skips the shared tiers.
+ */
+async function peekAnyTier(key: string, modelId: string): Promise<CacheEnvelope | null> {
+  const now = Date.now();
+  const ip = store.get(key) ?? null;
+  if (ip && ip.expiresAt > now) return ip; // hot path — in-process still fresh
+
+  const candidates: CacheEnvelope[] = [];
+  if (ip) candidates.push(ip);
+  const rd = await redisPeek(key, modelId);
+  if (rd) candidates.push(rd);
+  const cx = await distPeek(key, modelId);
+  if (cx) candidates.push(cx);
+  if (candidates.length === 0) return null;
+
+  const fresh = candidates
+    .filter((c) => c.expiresAt > now)
+    .sort((a, b) => b.cachedAt - a.cachedAt)[0];
+  if (fresh) return fresh;
+  return candidates.sort((a, b) => b.cachedAt - a.cachedAt)[0]; // newest stale
+}
+
+/** Kick a single de-duped background recompute; swallow errors (stale already served). */
+function kickBackgroundRefresh<T>(
+  key: string,
+  modelId: string,
+  compute: () => Promise<T>,
+  ttl: number,
+): void {
+  if (inFlightRefresh.has(key)) return; // a refresh for this key is already running
+  const p = (async () => {
+    const value = await compute();
+    await writeAllTiers(key, modelId, value, ttl);
+  })()
+    .catch(() => {
+      /* best-effort — the stale value was already served; next request retries */
+    })
+    .finally(() => {
+      inFlightRefresh.delete(key);
+    });
+  inFlightRefresh.set(key, p);
+}
+
+/**
+ * Get-or-compute across all cache tiers, with an opt-in stale-while-revalidate mode.
+ *
+ *   • Fresh hit  → returns the cached value with `{ stale: false, cachedAt }`.
+ *   • Stale hit + `staleWhileRevalidate` → returns the stale value immediately with
+ *     `{ stale: true, cachedAt }` and kicks ONE background recompute (de-duped, so
+ *     a burst of concurrent requests never stampedes the backend).
+ *   • Miss (or stale without SWR) → computes inline and stores, `{ stale: false }`.
+ *
+ * `bypass: true` (wire to `?refresh=1`) skips the read but still writes the fresh
+ * result. Never caches a thrown error — an inline compute that throws propagates.
+ *
+ * @param key      stable cache key (see {@link buildScopedCacheKey})
+ * @param modelId  namespace / partition (Redis prefix + Cosmos partition key)
+ * @param compute  the real (slow) backend call
+ */
+export async function getOrComputeCached<T>(
+  key: string,
+  modelId: string,
+  compute: () => Promise<T>,
+  opts?: { ttlMs?: number; backend?: string; staleWhileRevalidate?: boolean; bypass?: boolean },
+): Promise<{ value: T; meta: CacheMeta }> {
+  const ttl = opts?.ttlMs && opts.ttlMs > 0 ? opts.ttlMs : ttlMsForBackend(opts?.backend);
+
+  // Disabled or explicit bypass → compute inline; still populate the cache when enabled.
+  if (!queryCacheEnabled() || opts?.bypass) {
+    const value = await compute();
+    if (queryCacheEnabled()) await writeAllTiers(key, modelId, value, ttl);
+    return { value, meta: { cachedAt: Date.now(), stale: false } };
+  }
+
+  const env = await peekAnyTier(key, modelId);
+  const now = Date.now();
+
+  if (env && env.expiresAt > now) {
+    recordCacheHit('result-cache');
+    ipSet(env); // promote a shared-tier hit into the in-process tier
+    return { value: env.value as T, meta: { cachedAt: env.cachedAt, stale: false } };
+  }
+
+  if (env && opts?.staleWhileRevalidate) {
+    recordCacheHit('result-cache');
+    kickBackgroundRefresh(key, modelId, compute, ttl);
+    return { value: env.value as T, meta: { cachedAt: env.cachedAt, stale: true } };
+  }
+
+  // Miss, or expired without SWR → compute inline and store.
+  recordCacheMiss('result-cache');
+  const value = await compute();
+  await writeAllTiers(key, modelId, value, ttl);
+  return { value, meta: { cachedAt: now, stale: false } };
+}
+
+/**
+ * Stable cache key for a get-or-compute scope: SHA-256 over the scope label +
+ * normalized params. Distinct from {@link buildQueryCacheKey} (rows identity);
+ * this is for arbitrary route aggregates (usage rollups, cost reports, etc.).
+ */
+export function buildScopedCacheKey(scope: string, params: Record<string, unknown> = {}): string {
+  return createHash('sha256').update(JSON.stringify({ scope, params })).digest('hex');
+}
+
+/**
+ * TEST HOOK — await all in-flight background refreshes. Not part of the runtime
+ * contract; exported so unit tests can deterministically observe SWR recompute.
+ */
+export async function _awaitBackgroundRefreshes(): Promise<void> {
+  await Promise.allSettled([...inFlightRefresh.values()]);
 }
 
 /**

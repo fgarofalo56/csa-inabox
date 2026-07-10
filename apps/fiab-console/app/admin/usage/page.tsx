@@ -41,6 +41,7 @@ import { itemVisual } from '@/lib/components/ui/item-type-visual';
 import { PowerBIEmbedFrame } from '@/lib/components/embed/powerbi-embed';
 import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
 import { LOOM_ACCENT } from '@/lib/components/shared/accent-tokens';
+import { StaleDataBadge } from '@/lib/components/ui/stale-data-badge';
 
 interface Usage {
   days: number;
@@ -287,6 +288,7 @@ export function UsageMetricsPane() {
   const s = useStyles();
   const a = useAdminTabStyles();
   const [data, setData] = useState<Usage | null>(null);
+  const [meta, setMeta] = useState<{ cachedAt?: number; stale?: boolean } | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [denied, setDenied] = useState<string | null>(null);
@@ -309,6 +311,7 @@ export function UsageMetricsPane() {
       if (r.status === 403) { setDenied(j?.reason || 'Usage metrics roll up org-wide activity and are restricted to tenant admins.'); return; }
       if (!j || !j.ok) { setError(j?.error || 'failed'); return; }
       setData(j);
+      setMeta(j?.meta ?? null);
     } catch (e: unknown) {
       // clientFetch relabels a timeout to ClientFetchTimeoutError with a clear
       // message; everything else surfaces its own message.
@@ -430,6 +433,9 @@ export function UsageMetricsPane() {
             <MessageBarTitle>Could not load usage</MessageBarTitle>
             {error}
           </MessageBarBody>
+          <MessageBarActions>
+            <Button size="small" appearance="transparent" onClick={() => load(days, featureFilter)}>Retry</Button>
+          </MessageBarActions>
         </MessageBar>
       )}
 
@@ -480,6 +486,7 @@ export function UsageMetricsPane() {
           Refresh
         </Button>
         {loading && <Spinner size="tiny" />}
+        {!loading && meta?.stale && <StaleDataBadge cachedAt={meta.cachedAt} />}
       </div>
 
       {loading && !data && !error && (

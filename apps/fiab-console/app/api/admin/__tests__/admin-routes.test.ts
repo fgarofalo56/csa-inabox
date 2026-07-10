@@ -199,6 +199,10 @@ beforeEach(() => {
   isTenantAdminMock.mockReturnValue(true);
   delete process.env.LOOM_GRAPH_USERS_ENABLED;
   delete process.env.LOOM_SUBSCRIPTION_ID;
+  // OBS-CACHE wraps audit-logs/usage in the process-global SWR result cache.
+  // Disable it so each case recomputes against its own mocks rather than reading
+  // a value a prior case cached under the same (session-scoped) key.
+  process.env.LOOM_QUERY_CACHE_DISABLED = '1';
 });
 
 afterEach(() => {
