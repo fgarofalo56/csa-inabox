@@ -36,7 +36,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # re-uses, so the whole graph resolves to ONE arrow + ONE datafusion (no split).
 arrow = "53"
 parquet = "53"
-datafusion = "43"
+datafusion = "44"
 
 # delta-rs — reads the Delta log off ADLS the same way Direct Lake reads it off
 # OneLake. `datafusion` feature makes DeltaTable a TableProvider; `azure` pulls

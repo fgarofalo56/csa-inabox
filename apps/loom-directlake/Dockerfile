@@ -37,23 +37,24 @@ RUN apt-get update \
         pkg-config \
         build-essential \
         ca-certificates \
+        libssl-dev \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
 
 # Cache the dependency graph: copy the manifest first and pre-build deps against
 # a stub main, so app-source edits don't re-download/re-compile the whole tree.
-COPY Cargo.toml ./
+COPY Cargo.toml Cargo.lock ./
 RUN mkdir -p src \
     && echo 'fn main() { println!("dep-cache stub"); }' > src/main.rs \
-    && cargo build --release || true
+    && cargo build --release --locked || true
 
 # Now the real sources + the bundled fixture.
 COPY src ./src
 COPY fixtures ./fixtures
 # Touch main.rs so the stub build above is invalidated and the real bin compiles.
 RUN touch src/main.rs \
-    && cargo build --release \
+    && cargo build --release --locked \
     && cp target/release/loom-directlake /usr/local/bin/loom-directlake
 
 # ---- Runtime stage: minimal, non-root -------------------------------------
