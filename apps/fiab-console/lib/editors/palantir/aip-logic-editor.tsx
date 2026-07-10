@@ -33,6 +33,10 @@ import {
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from '../item-editor-chrome';
 import { NewItemCreateGate } from '../new-item-gate';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
+import { GuidedEmptyState } from '@/lib/components/shared/guided-empty-state';
+import { useRegisterRibbonCommands } from '@/lib/components/shared/ribbon-commands';
+import { openCopilot } from '@/lib/components/copilot-pane';
 import { SlateAppBuilder, type SlateQueryDef, type SlateWidgetDef, type SlateVariable } from '../slate/slate-app-builder';
 import { WorkshopAppBuilder, type WorkshopWidget, type WorkshopVariable } from '../workshop/workshop-app-builder';
 import { deriveObjectProperties } from '../_palantir-codegen';
@@ -637,16 +641,20 @@ export function AipLogicEditor({ item, id }: { item: FabricItemType; id: string 
     ]},
   ], [save, saving, dirty, invoke, invokeBusy, blocks.length, deploy, deployBusy]);
 
+  useRegisterRibbonCommands(ribbon, 'aip-logic');
+
   if (id === 'new') return <NewItemCreateGate item={item} createLabel="Create Spindle logic / agent" intro="Spindle Studio — author a no-code typed AI function or agent: typed inputs → a TYPED BLOCK GRAPH (create-variable, get-object-property, use-LLM with tools, execute-function, transform, branch) → typed output, grounded on the Weave ontology and runnable against Azure OpenAI / Synapse. No Fabric required." />;
 
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon} dirty={dirty} commandSearch main={
       <div className={s.pad}>
         {loading && <Spinner size="small" label="Loading…" labelPosition="after" />}
-        <MessageBar intent="info"><MessageBarBody>
-          <MessageBarTitle>Spindle Studio (Palantir AIP Logic / AIP equivalent)</MessageBarTitle>
-          Author typed inputs and a TYPED BLOCK GRAPH (dropdowns, no freeform JSON) — each block emits a named, typed output that later blocks reference. Ground on a Weave ontology, then invoke as logic (the deterministic block engine) or as a tool-calling agent against the live Azure OpenAI deployment. Optionally publish as an Azure AI Foundry agent. No Microsoft Fabric required.
-        </MessageBarBody></MessageBar>
+        <TeachingBanner
+          surfaceKey="aip-logic-editor"
+          title="Author a typed AI function with Spindle"
+          message="Declare typed inputs, then build a TYPED BLOCK GRAPH (dropdowns, no freeform JSON) — each block emits a named, typed output later blocks reference. Ground on a Weave ontology, then invoke as deterministic logic or as a tool-calling agent against the live Azure OpenAI deployment. Optionally publish as an Azure AI Foundry agent — no Microsoft Fabric required."
+          icon={BrainCircuit20Regular}
+        />
 
         <div className={s.section}>
           <SectionHead icon={<Link20Regular />} title="Ontology grounding" hint="Bind a Weave ontology — Spindle runs against its entity types and Lakehouse/Warehouse data bindings." />
@@ -733,7 +741,16 @@ export function AipLogicEditor({ item, id }: { item: FabricItemType; id: string 
             <Button appearance="primary" icon={<Add20Regular />} onClick={() => addBlock(addBlockKind)}>Add block</Button>
           </div>
           {blocks.length === 0 ? (
-            <div className={s.empty}><Caption1>No blocks yet — add at least one (e.g. a Use-LLM block) to invoke.</Caption1></div>
+            <GuidedEmptyState
+              heroIcon={Flash20Regular}
+              title="Build your logic graph"
+              intro="Add typed blocks in order — each emits a named output later blocks reference. Start from a common block below, or add any kind from the picker above."
+              paths={[
+                { key: 'llm', title: 'Use-LLM block', body: 'One grounded Azure OpenAI turn that can call Apply-action, Ontology-function, and Execute-function tools.', icon: BrainCircuit20Regular, onClick: () => addBlock('use-llm') },
+                { key: 'prop', title: 'Get object property', body: 'Read one property off a bound ontology object with a real Synapse read.', icon: Database20Regular, onClick: () => addBlock('get-object-property') },
+              ]}
+              askCopilot={{ onClick: () => openCopilot(), body: 'Describe the function you want and Copilot suggests the block sequence.' }}
+            />
           ) : blocks.map((b, n) => (
             <div key={b.id}>
               {n > 0 && <div className={s.blockConnector}><ChevronRight20Regular style={{ transform: 'rotate(90deg)' }} /></div>}

@@ -33,6 +33,10 @@ import {
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from '../item-editor-chrome';
 import { NewItemCreateGate } from '../new-item-gate';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
+import { GuidedEmptyState } from '@/lib/components/shared/guided-empty-state';
+import { useRegisterRibbonCommands } from '@/lib/components/shared/ribbon-commands';
+import { openCopilot } from '@/lib/components/copilot-pane';
 import { SlateAppBuilder, type SlateQueryDef, type SlateWidgetDef, type SlateVariable } from '../slate/slate-app-builder';
 import { WorkshopAppBuilder, type WorkshopWidget, type WorkshopVariable } from '../workshop/workshop-app-builder';
 import { deriveObjectProperties } from '../_palantir-codegen';
@@ -417,18 +421,22 @@ export function HealthCheckEditor({ item, id }: { item: FabricItemType; id: stri
     ]},
   ], [loadRules, loadHistory, historyBusy]);
 
+  useRegisterRibbonCommands(ribbon, 'health-check');
+
   if (id === 'new') return <NewItemCreateGate item={item} createLabel="Create health check" intro="Data-freshness / SLA monitoring backed by real Azure Monitor scheduled-query alert rules. Azure-native default — no Fabric required." />;
 
   const statusBadge = (st: RuleStatus) => <Badge appearance="tint" color={st === 'Firing' ? 'danger' : st === 'Disabled' ? 'warning' : 'success'}>{st}</Badge>;
 
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon} commandSearch main={
       <div className={s.pad}>
         {loading && <Spinner size="small" label="Loading…" labelPosition="after" />}
-        <MessageBar intent="info"><MessageBarBody>
-          <MessageBarTitle>Health check (Palantir Foundry Health Checks · Azure Monitor)</MessageBarTitle>
-          Define checks (data freshness, row-count, or a custom KQL condition) over Log Analytics, run them on demand or on a schedule, watch status &amp; fired-alert history, and alert via action groups. Every check is a real Azure Monitor scheduledQueryRule — Azure-native default (Fabric Reflex is opt-in via LOOM_ACTIVATOR_BACKEND=fabric).
-        </MessageBarBody></MessageBar>
+        <TeachingBanner
+          surfaceKey="health-check-editor"
+          title="Monitor data health with Checks"
+          message="Define checks — data freshness, row-count, or a custom KQL condition — over Log Analytics, run them on demand or on a schedule, watch status and fired-alert history, and alert via action groups. Every check is a real Azure Monitor scheduledQueryRule (Azure-native default; Fabric Reflex is opt-in)."
+          learnMoreHref="https://learn.microsoft.com/azure/azure-monitor/alerts/alerts-types#log-alerts"
+        />
 
         <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as typeof tab)} className={s.tabStrip}>
           <Tab value="checks" icon={<Flash20Regular />}>Checks{rules.length ? ` (${rules.length})` : ''}</Tab>
@@ -446,7 +454,19 @@ export function HealthCheckEditor({ item, id }: { item: FabricItemType; id: stri
 
           <div className={s.section}>
             <SectionHead icon={<Database20Regular />} title="Active checks" hint="Each row is a real scheduledQueryRule. Run now, enable/disable, or delete — all hit Azure Monitor." />
-            {rules.length === 0 ? <div className={s.empty}><Caption1>No checks yet — pick a check type above to open the wizard.</Caption1></div> : (
+            {rules.length === 0 ? (
+              <GuidedEmptyState
+                heroIcon={Flash20Regular}
+                title="Create your first check"
+                intro="A check compiles to a real Azure Monitor scheduled-query rule that fires when its KQL returns rows. Pick a typed check from the library above, or start from a custom condition."
+                paths={[
+                  { key: 'custom', title: 'Custom KQL check', body: 'Write your own condition — a typed wizard with a live KQL preview and a sample run.', icon: Code20Regular, onClick: () => setWizardDef(CHECK_TYPE_LIBRARY.find((d) => d.id === 'custom') || null) },
+                  { key: 'notify', title: 'Set up notifications', body: 'Wire an Azure Monitor action group (email / SMS / webhook / Logic App) so fired checks alert on-call.', icon: Alert20Regular, onClick: () => setTab('notifications') },
+                ]}
+                askCopilot={{ onClick: () => openCopilot(), body: 'Describe what you want to watch and Copilot drafts the check condition.' }}
+                learnMoreHref="https://learn.microsoft.com/azure/azure-monitor/alerts/alerts-types#log-alerts"
+              />
+            ) : (
               <div className={s.tableWrap}>
               <Table size="small" aria-label="Checks">
                 <TableHeader><TableRow>
