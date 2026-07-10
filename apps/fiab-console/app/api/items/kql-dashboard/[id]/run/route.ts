@@ -21,7 +21,7 @@ import { getSession } from '@/lib/auth/session';
 import { enforceRateLimit } from '@/lib/azure/rate-limiter';
 import { loadKustoItem, resolveDatabase, KustoError } from '@/lib/azure/kusto-client';
 import { sanitizeModel } from '@/lib/azure/kql-dashboard-model';
-import { runTiles } from '../route';
+import { runTiles, tileCacheMaxAgeSec } from '../route';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -52,15 +52,18 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     }
 
     const timeKey = model.timeRange || 'last-24h';
-    const tiles = await runTiles(model.tiles, model.dataSources, model.parameters, timeKey, fallbackDb, model.baseQueries);
+    const cacheMaxAgeSec = tileCacheMaxAgeSec(model.autoRefreshMs);
+    const tiles = await runTiles(model.tiles, model.dataSources, model.parameters, timeKey, fallbackDb, model.baseQueries, { cacheMaxAgeSec });
 
-    return NextResponse.json({
+    const res = NextResponse.json({
       ok: true,
       tiles,
       database: fallbackDb,
       timeRange: timeKey,
       executedBy: session.claims.upn,
     });
+    res.headers.set('Cache-Control', `private, max-age=${cacheMaxAgeSec}`);
+    return res;
   } catch (e: any) {
     const status = e instanceof KustoError ? e.status : 502;
     return NextResponse.json({ ok: false, error: e?.message || String(e), body: e?.body }, { status });
