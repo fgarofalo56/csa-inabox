@@ -23,7 +23,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Tab, TabList, Button, Dropdown, Option, Input, Field, Spinner, Badge, Divider,
-  Body1, Caption1, Subtitle2, Text,
+  Body1, Caption1, Subtitle2,
   MessageBar, MessageBarBody, MessageBarTitle,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   makeStyles, tokens,
@@ -36,6 +36,12 @@ import { ItemEditorChrome } from './item-editor-chrome';
 import { NewItemCreateGate } from './new-item-gate';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { clientFetch } from '@/lib/client-fetch';
+import { openCopilot } from '@/lib/components/copilot-pane';
+import { GuidedEmptyState } from '@/lib/components/shared/guided-empty-state';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
+import { DetailsPanel } from '@/lib/components/shared/details-panel';
+import { PreviewTable } from '@/lib/components/shared/preview-table';
+import { useRegisterRibbonCommands } from '@/lib/components/shared/ribbon-commands';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 
@@ -56,6 +62,10 @@ const useStyles = makeStyles({
   grid: { overflowX: 'auto', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
   err: { overflowWrap: 'anywhere', wordBreak: 'break-word' },
   mono: { fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase200 },
+  // Overview split: server facts (left, grows) + docked DetailsPanel (right).
+  // Wraps the panel below on narrow widths so the surface never overflows.
+  detailsRow: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'stretch', flexWrap: 'wrap' },
+  detailsMain: { flex: '1 1 380px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
 });
 
 interface ServerRef { name: string; id: string; fqdn: string; resourceGroup?: string; location?: string }
@@ -153,6 +163,19 @@ export function LakebaseEditor({ item, id }: EditorProps) {
       setNotice('Saved.');
     } catch (e) { setErr(String(e instanceof Error ? e.message : e)); }
     finally { setBusy(null); }
+  }
+
+  // Returning variant used by the DetailsPanel inline-policy pencils (SC-2): it
+  // PATCHes the SAME real backend as patch() but resolves { ok, error } so the
+  // panel can show the error inline and only collapse the editor on success.
+  async function patchReturning(bodyObj: Record<string, unknown>): Promise<{ ok: boolean; error?: string }> {
+    try {
+      const res = await clientFetch(base, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(bodyObj) });
+      const j = await res.json();
+      if (!res.ok || !j.ok) return { ok: false, error: j.error || 'Update failed' };
+      await loadItem();
+      return { ok: true };
+    } catch (e) { return { ok: false, error: String(e instanceof Error ? e.message : e) }; }
   }
 
   async function doProvision() {
@@ -262,6 +285,10 @@ export function LakebaseEditor({ item, id }: EditorProps) {
     ]},
   ], [loadItem, loading, busy, cfg.server]);
 
+  // SC-9 — publish the ribbon actions to the shared command registry so the
+  // in-ribbon command search (Ctrl+Q / Alt+Q) and Ctrl+K palette can find them.
+  useRegisterRibbonCommands(ribbon, 'lakebase-postgres');
+
   if (isNew) {
     return <NewItemCreateGate item={item} createLabel="Create Lakebase database"
       intro="Create a Lakebase serverless Postgres OLTP database. The default backend is Azure Database for PostgreSQL Flexible Server — provision one with the wizard (compute, storage, HA), run SQL over the real pg wire protocol, branch via point-in-time restore, add read replicas, and enable pgvector for hybrid vector search. No Databricks or Fabric required; Databricks Lakebase is an opt-in alternate backend." />;
@@ -282,8 +309,77 @@ export function LakebaseEditor({ item, id }: EditorProps) {
     </>
   );
 
+  const workingDb = cfg.database || 'postgres';
+  const serverDetails = cfg.server ? (
+    <DetailsPanel
+      title="Server details"
+      subtitle={cfg.server.name}
+      icon={<DatabasePlugConnected20Regular />}
+      sections={[
+        {
+          key: 'overview', title: 'Overview',
+          stats: [
+            { key: 'state', label: 'State', value: live?.state || '—' },
+            { key: 'version', label: 'Version', value: `PostgreSQL ${live?.version || '—'}` },
+            { key: 'compute', label: 'Compute', value: live?.sku?.name || '—' },
+            { key: 'storage', label: 'Storage', value: live?.storageGb ? `${live.storageGb} GiB` : '—' },
+            { key: 'ha', label: 'High availability', value: live?.highAvailability || 'Disabled' },
+            { key: 'region', label: 'Region', value: live?.location || cfg.server.location || '—' },
+            { key: 'pgvector', label: 'pgvector', value: cfg.pgvectorEnabled ? 'Enabled' : 'Not enabled' },
+          ],
+        },
+        {
+          key: 'endpoints', title: 'Endpoints',
+          uris: [
+            { key: 'fqdn', label: 'Server FQDN', value: cfg.server.fqdn },
+            { key: 'conn', label: 'Connection string', value: `host=${cfg.server.fqdn} port=5432 dbname=${workingDb} sslmode=require` },
+            { key: 'psql', label: 'psql command', value: `psql "host=${cfg.server.fqdn} port=5432 dbname=${workingDb} sslmode=require"` },
+          ],
+        },
+        {
+          key: 'policies', title: 'Configuration',
+          policies: [
+            {
+              key: 'database', label: 'Working database',
+              value: workingDb, type: 'select' as const,
+              options: (databases.length ? databases : ['postgres']).map((d) => ({ value: d, label: d })),
+              hint: 'The database SQL, branches and vector search run against.',
+              onSave: (next) => patchReturning({ action: 'setDatabase', database: String(next) }),
+            },
+            {
+              key: 'backend', label: 'Backend',
+              value: backend, type: 'select' as const,
+              options: [
+                { value: 'postgres', label: 'Azure PostgreSQL Flexible Server (default)' },
+                { value: 'databricks', label: 'Databricks Lakebase (opt-in)' },
+              ],
+              hint: 'Azure PostgreSQL is the default. Databricks Lakebase is opt-in.',
+              onSave: (next) => patchReturning({ action: 'setBackend', backend: String(next) }),
+            },
+          ],
+        },
+      ]}
+      related={{
+        title: 'Databases',
+        items: (databases.length ? databases : ['postgres']).map((d) => ({
+          id: d, name: d, kind: d === workingDb ? 'Working' : 'Database',
+          icon: <DatabasePlugConnected20Regular />,
+          onClick: () => patch({ action: 'setDatabase', database: d }, 'setDatabase'),
+        })),
+        emptyText: 'No databases discovered yet.',
+      }}
+    />
+  ) : null;
+
   const overview = (
     <div className={s.pad}>
+      {/* SC-6 teaching banner — Fabric-style "what can I do here" guidance. */}
+      <TeachingBanner
+        surfaceKey="lakebase-analyze"
+        title="Serverless Postgres OLTP"
+        message="Provision an Azure Database for PostgreSQL Flexible Server, run SQL over the real pg wire protocol, branch with point-in-time restore, add read replicas, and enable pgvector for hybrid vector search — no Databricks or Fabric required."
+        learnMoreHref="https://learn.microsoft.com/azure/postgresql/flexible-server/overview"
+      />
       {banners}
       <div className={s.row}>
         <Badge appearance="tint" color={backend === 'postgres' ? 'brand' : 'informative'}>
@@ -292,46 +388,60 @@ export function LakebaseEditor({ item, id }: EditorProps) {
         {cfg.pgvectorEnabled ? <Badge appearance="tint" color="success">pgvector enabled</Badge> : null}
       </div>
       {!cfg.server ? (
-        <MessageBar intent="info"><MessageBarBody>
-          <MessageBarTitle>No server bound yet</MessageBarTitle>
-          Go to Provision to create a Flexible Server or bind an existing one.
-        </MessageBarBody></MessageBar>
+        // SC-4 guided empty state — multi-path launcher replacing the plain
+        // "no server bound" MessageBar (Fabric's guided empty designers).
+        <GuidedEmptyState
+          title="Bring your Lakebase online"
+          intro="No server is bound yet. Start from one of these paths — every one runs a real Azure action."
+          heroIcon={DatabaseArrowUp20Regular}
+          paths={[
+            { key: 'provision', title: 'Provision a new server', body: 'Create an Azure PostgreSQL Flexible Server (compute, storage, HA).', icon: DatabaseArrowUp20Regular, onClick: () => setTab('provision') },
+            { key: 'bind', title: 'Bind an existing server', body: 'Attach a Flexible Server already in your subscription.', icon: DatabasePlugConnected20Regular, onClick: () => setTab('provision') },
+          ]}
+          askCopilot={{ onClick: () => openCopilot(), body: 'Describe the workload and let Copilot size and provision the server.' }}
+          learnMoreHref="https://learn.microsoft.com/azure/postgresql/flexible-server/quickstart-create-server-portal"
+        />
       ) : (
-        <div className={s.card}>
-          <Subtitle2>{cfg.server.name}</Subtitle2>
-          <Caption1 className={s.mono}>{cfg.server.fqdn}</Caption1>
-          <div className={s.statGrid}>
-            <div className={s.stat}><span className={s.statLabel}>State</span><Body1>{live?.state || '—'}</Body1></div>
-            <div className={s.stat}><span className={s.statLabel}>Version</span><Body1>PostgreSQL {live?.version || '—'}</Body1></div>
-            <div className={s.stat}><span className={s.statLabel}>Compute</span><Body1>{live?.sku?.name || '—'}</Body1></div>
-            <div className={s.stat}><span className={s.statLabel}>Storage</span><Body1>{live?.storageGb ? `${live.storageGb} GiB` : '—'}</Body1></div>
-            <div className={s.stat}><span className={s.statLabel}>HA</span><Body1>{live?.highAvailability || 'Disabled'}</Body1></div>
-            <div className={s.stat}><span className={s.statLabel}>Region</span><Body1>{live?.location || cfg.server.location || '—'}</Body1></div>
+        <div className={s.detailsRow}>
+          <div className={s.detailsMain}>
+            <div className={s.card}>
+              <Subtitle2>{cfg.server.name}</Subtitle2>
+              <Caption1 className={s.mono}>{cfg.server.fqdn}</Caption1>
+              <div className={s.statGrid}>
+                <div className={s.stat}><span className={s.statLabel}>State</span><Body1>{live?.state || '—'}</Body1></div>
+                <div className={s.stat}><span className={s.statLabel}>Version</span><Body1>PostgreSQL {live?.version || '—'}</Body1></div>
+                <div className={s.stat}><span className={s.statLabel}>Compute</span><Body1>{live?.sku?.name || '—'}</Body1></div>
+                <div className={s.stat}><span className={s.statLabel}>Storage</span><Body1>{live?.storageGb ? `${live.storageGb} GiB` : '—'}</Body1></div>
+                <div className={s.stat}><span className={s.statLabel}>HA</span><Body1>{live?.highAvailability || 'Disabled'}</Body1></div>
+                <div className={s.stat}><span className={s.statLabel}>Region</span><Body1>{live?.location || cfg.server.location || '—'}</Body1></div>
+              </div>
+              <Divider />
+              <div className={s.row}>
+                <Field label="Working database" className={s.field}>
+                  <Dropdown value={workingDb} selectedOptions={[workingDb]}
+                    onOptionSelect={(_, d) => d.optionValue && patch({ action: 'setDatabase', database: d.optionValue }, 'setDatabase')}>
+                    {(databases.length ? databases : ['postgres']).map((d) => <Option key={d} value={d}>{d}</Option>)}
+                  </Dropdown>
+                </Field>
+                <Field label="Backend" className={s.field}>
+                  <Dropdown value={backend} selectedOptions={[backend]}
+                    onOptionSelect={(_, d) => d.optionValue && patch({ action: 'setBackend', backend: d.optionValue }, 'setBackend')}>
+                    <Option value="postgres">Azure PostgreSQL Flexible Server (default)</Option>
+                    <Option value="databricks">Databricks Lakebase (opt-in)</Option>
+                  </Dropdown>
+                </Field>
+              </div>
+            </div>
+            {queryGate ? (
+              <MessageBar intent="warning"><MessageBarBody>
+                <MessageBarTitle>In-database query not yet wired</MessageBarTitle>
+                <span className={s.err}>{queryGate.detail}</span>
+              </MessageBarBody></MessageBar>
+            ) : null}
           </div>
-          <Divider />
-          <div className={s.row}>
-            <Field label="Working database" className={s.field}>
-              <Dropdown value={cfg.database || 'postgres'} selectedOptions={[cfg.database || 'postgres']}
-                onOptionSelect={(_, d) => d.optionValue && patch({ action: 'setDatabase', database: d.optionValue }, 'setDatabase')}>
-                {(databases.length ? databases : ['postgres']).map((d) => <Option key={d} value={d}>{d}</Option>)}
-              </Dropdown>
-            </Field>
-            <Field label="Backend" className={s.field}>
-              <Dropdown value={backend} selectedOptions={[backend]}
-                onOptionSelect={(_, d) => d.optionValue && patch({ action: 'setBackend', backend: d.optionValue }, 'setBackend')}>
-                <Option value="postgres">Azure PostgreSQL Flexible Server (default)</Option>
-                <Option value="databricks">Databricks Lakebase (opt-in)</Option>
-              </Dropdown>
-            </Field>
-          </div>
+          {serverDetails}
         </div>
       )}
-      {queryGate ? (
-        <MessageBar intent="warning"><MessageBarBody>
-          <MessageBarTitle>In-database query not yet wired</MessageBarTitle>
-          <span className={s.err}>{queryGate.detail}</span>
-        </MessageBarBody></MessageBar>
-      ) : null}
     </div>
   );
 
@@ -406,7 +516,12 @@ export function LakebaseEditor({ item, id }: EditorProps) {
       <div className={s.row}>
         <Button appearance="primary" icon={busy === 'query' ? <Spinner size="tiny" /> : <Play20Regular />} disabled={!!busy || !cfg.server} onClick={runQuery}>Run</Button>
       </div>
-      {queryResult ? <ResultGrid r={queryResult} styles={s} /> : null}
+      {queryResult ? (
+        <PreviewTable
+          sources={[{ id: 'lakebase-query', label: 'Results', data: { columns: queryResult.columns, rows: queryResult.rows, elapsedMs: queryResult.executionMs, rowCount: queryResult.rowCount, note: queryResult.command } }]}
+          showTabs={false} maxRows={1000} maxHeight={360} ariaLabel="Query results"
+        />
+      ) : null}
     </div>
   );
 
@@ -483,7 +598,12 @@ export function LakebaseEditor({ item, id }: EditorProps) {
         </div>
         <Field label="Query vector (JSON array)"><Input value={vec.vector} onChange={(_, d) => setVec({ ...vec, vector: d.value })} className={s.mono} /></Field>
         <div className={s.row}><Button appearance="primary" icon={busy === 'vsearch' ? <Spinner size="tiny" /> : <Search20Regular />} disabled={!!busy || !cfg.server || !vec.table} onClick={runVectorSearch}>Search</Button></div>
-        {vectorRows ? <ResultGrid r={vectorRows} styles={s} /> : null}
+        {vectorRows ? (
+          <PreviewTable
+            sources={[{ id: 'lakebase-vector', label: 'Vector matches', data: { columns: vectorRows.columns, rows: vectorRows.rows, elapsedMs: vectorRows.executionMs, rowCount: vectorRows.rowCount, note: vectorRows.command } }]}
+            showTabs={false} maxRows={1000} maxHeight={360} ariaLabel="Vector search matches"
+          />
+        ) : null}
       </div>
     </div>
   );
@@ -510,23 +630,5 @@ export function LakebaseEditor({ item, id }: EditorProps) {
     </div>
   );
 
-  return <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={main} displayName={item.displayName} />;
-}
-
-function ResultGrid({ r, styles }: { r: QueryResult; styles: ReturnType<typeof useStyles> }) {
-  return (
-    <div>
-      <Caption1>{r.command || 'OK'} · {r.rowCount} row(s) · {r.executionMs} ms</Caption1>
-      <div className={styles.grid}>
-        <Table size="small">
-          <TableHeader><TableRow>{r.columns.map((c) => <TableHeaderCell key={c}>{c}</TableHeaderCell>)}</TableRow></TableHeader>
-          <TableBody>
-            {r.rows.slice(0, 200).map((row, i) => (
-              <TableRow key={i}>{row.map((cell, j) => <TableCell key={j}><Text className={styles.mono}>{cell === null ? 'NULL' : String(cell)}</Text></TableCell>)}</TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </div>
-    </div>
-  );
+  return <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={main} displayName={item.displayName} commandSearch />;
 }

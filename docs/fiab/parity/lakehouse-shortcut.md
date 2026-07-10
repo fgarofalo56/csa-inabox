@@ -70,3 +70,18 @@ the UAMI granted **Storage Blob Data Reader** on the target account.
 vars already emitted by `admin-plane/main.bicep` and `hub-console-dlz-env.bicep`.
 When no ADLS account is configured the Verify/Create step returns a precise message
 naming the missing `LOOM_*_URL` containers (`no-vaporware.md`).
+
+## UX-baseline lift (UX-Wave 2 · UX-201)
+
+A UX-only lift adopting shared UX-baseline components; the real backend calls
+(`load` / `verify` / `create` / `del`) are unchanged.
+
+| # | Bar item (SC) | State | Where |
+| --- | --- | --- | --- |
+| 6 | Guided multi-path empty state (SC-4) | ✅ built | `GuidedEmptyState` replaces the plain "No shortcuts yet" MessageBar; four per-source launcher cards (Internal / ADLS-Blob / Amazon S3 / Dataverse) each open the **real** New-shortcut dialog preset to that connector, plus a Learn-more link |
+| 12 | Teaching banner (SC-6) | ✅ built | `TeachingBanner surfaceKey="lakehouse-shortcut-inplace"` — "Read data where it lives — no copy", persistent dismiss + Learn-more |
+| 11 | Command search Ctrl+Q / Alt+Q (SC-9) | ✅ built | `commandSearch` on the chrome + `useRegisterRibbonCommands(ribbon, item.slug)` publishes New shortcut / Refresh |
+| 8 | Entity/relationship diagram (SC-10) | ⚠️ honest-defer | A shortcut is a storage pointer with **no relational schema** (`entity-diagram-sources` supports only `semantic-model \| lakehouse \| kql-database`); a source→shortcut topology visual is deferred rather than fabricate a schema (`no-vaporware.md`) |
+| 1 | Canvas node-kit (SC-1) | ⚠️ honest-defer | Dialog-driven navigator, not a canvas — no node graph to adopt |
+
+Test: `lib/editors/__tests__/lakehouse-shortcut.test.tsx` (banner + ribbon + guided-card render).
