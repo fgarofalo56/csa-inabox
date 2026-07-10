@@ -25,6 +25,7 @@ import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { itemsContainer, workspacesContainer } from './cosmos-client';
 import { armBase, armScope, kustoClusterUri } from './cloud-endpoints';
 import { buildCreateMaterializedViewCommand } from './kusto-mv-command';
+import { recordCacheHit, recordCacheMiss } from '@/lib/perf/cache-counters';
 
 const CLUSTER_URI = process.env.LOOM_KUSTO_CLUSTER_URI || kustoClusterUri('adx-csa-loom-shared', 'eastus2');
 const DEFAULT_DB = process.env.LOOM_KUSTO_DEFAULT_DB || 'loomdb-default';
@@ -91,6 +92,8 @@ export interface KustoQueryResult {
   rowCount: number;
   executionMs: number;
   truncated: boolean;
+  /** True when a PSR-6 server-side paging window was applied to this query. */
+  paged?: boolean;
   /**
    * The parsed `render` visualization hint, when the query ended with a
    * `| render <viz>` operator. Absent for queries / mgmt commands with no render.
@@ -314,22 +317,104 @@ function parseVisualization(tables: any[]): KustoVisualization | undefined {
   return undefined;
 }
 
+/** Row-cap for a single tile/query result (the deliberate contract, not a silent
+ *  truncation — pair with paging below). Exposed for the route's honest notice. */
+export const KQL_MAX_ROWS = MAX_ROWS;
+
+/** Server-side paging window (1-based, inclusive of `skip+1..skip+take`). */
+export interface KqlPage {
+  skip: number;
+  take: number;
+}
+
+/** Options for {@link executeQuery}. */
+export interface ExecuteQueryOptions {
+  /** Target a *different* ADX cluster than the env default (validate first). */
+  clusterUri?: string;
+  /**
+   * PSR-6 — enable the ADX server-side query-results cache for this (read-only,
+   * repeat) query by prefixing `set query_results_cache_max_age = time(<n>s)`.
+   * Only apply to cacheable dashboard/tile queries; omit for ad-hoc/one-shot
+   * runs. Grounded in Learn (query results cache).
+   */
+  resultsCacheMaxAgeSec?: number;
+  /**
+   * PSR-6 — server-side paging: append a `row_number()` window so a result that
+   * would exceed {@link KQL_MAX_ROWS} pages deterministically instead of silently
+   * truncating. The caller renders "page N" + a next-page control.
+   */
+  page?: KqlPage;
+}
+
+/**
+ * Compose the final KQL text from a base query + PSR-6 options (PURE — unit
+ * tested). Prefixes the results-cache `set` statement for cacheable queries and
+ * appends a `row_number()` paging window when `page` is given. Paging is skipped
+ * for control commands (leading `.`) and strips a trailing `| render` (paging is
+ * for tabular grids, not charts). `skip`/`take` are floored to safe non-negative
+ * integers so nothing user-supplied is interpolated raw.
+ */
+export function buildKqlWithOptions(
+  kql: string,
+  opts?: { resultsCacheMaxAgeSec?: number; page?: KqlPage },
+): { csl: string; paged: boolean } {
+  let base = (kql ?? '').trim();
+  let paged = false;
+
+  const isControlCommand = base.startsWith('.');
+  if (opts?.page && !isControlCommand) {
+    const skip = Math.max(0, Math.floor(Number(opts.page.skip) || 0));
+    const take = Math.max(1, Math.floor(Number(opts.page.take) || 0));
+    // Drop a trailing `| render <viz> …` — paging returns rows, not a chart.
+    const withoutRender = base.replace(/\|\s*render\b[^|]*$/i, '').trimEnd();
+    base =
+      `${withoutRender}\n` +
+      `| serialize __loom_rn = row_number()\n` +
+      `| where __loom_rn > ${skip} and __loom_rn <= ${skip + take}\n` +
+      `| project-away __loom_rn`;
+    paged = true;
+  }
+
+  const maxAge = opts?.resultsCacheMaxAgeSec;
+  if (maxAge && Number.isFinite(maxAge) && maxAge > 0 && !isControlCommand) {
+    const sec = Math.floor(maxAge);
+    base = `set query_results_cache_max_age = time(${sec}s);\n${base}`;
+  }
+  return { csl: base, paged };
+}
+
 /** Execute a KQL query. Returns the primary results table (Table_0).
  *  Pass `opts.clusterUri` to target a *different* ADX cluster than the
  *  env-configured default (e.g. previewing a cluster discovered in the RTI
  *  hub catalog) — it is used verbatim for both the request URL and the AAD
- *  token scope; validate it with {@link normalizeClusterUri} first. */
-export async function executeQuery(database: string, kql: string, opts?: { clusterUri?: string }): Promise<KustoQueryResult> {
+ *  token scope; validate it with {@link normalizeClusterUri} first.
+ *  `opts.resultsCacheMaxAgeSec` / `opts.page` enable the PSR-6 ADX
+ *  results-cache + server-side paging. */
+export async function executeQuery(database: string, kql: string, opts?: ExecuteQueryOptions): Promise<KustoQueryResult> {
   const started = Date.now();
-  const json = await postRest('/v1/rest/query', database || DEFAULT_DB, kql, opts?.clusterUri);
+  const { csl, paged } = buildKqlWithOptions(kql, opts);
+  const json = await postRest('/v1/rest/query', database || DEFAULT_DB, csl, opts?.clusterUri);
   const tables = json?.Tables || [];
   const primary = tables.find((t: any) => t?.TableName === 'Table_0') || tables[0];
   const visualization = parseVisualization(tables);
+  // A results-cache request counts as a hit when its round-trip is materially
+  // faster than a cold query; we can't read the ADX hit flag from v1, so we
+  // attribute cache lookups (miss on first, likely-hit on repeat) via the cache
+  // counters only when the caller opted into the results cache.
+  const usedResultsCache = !!(opts?.resultsCacheMaxAgeSec && opts.resultsCacheMaxAgeSec > 0);
   if (!primary) {
-    return { columns: [], columnTypes: [], rows: [], rowCount: 0, executionMs: Date.now() - started, truncated: false, visualization };
+    if (usedResultsCache) recordCacheMiss('adx');
+    return { columns: [], columnTypes: [], rows: [], rowCount: 0, executionMs: Date.now() - started, truncated: false, visualization, paged };
   }
   const shaped = shapeTable(primary, Date.now() - started);
-  return visualization ? { ...shaped, visualization } : shaped;
+  if (usedResultsCache) {
+    // Heuristic: a sub-100ms server round-trip on a cacheable query is a cache
+    // hit; otherwise a miss (cold materialization). Honest, best-effort telemetry.
+    if (shaped.executionMs < 100) recordCacheHit('adx');
+    else recordCacheMiss('adx');
+  }
+  const withPaged = { ...shaped, paged };
+  return visualization ? { ...withPaged, visualization } : withPaged;
 }
 
 /** Execute a Kusto control command (`.show`, `.create`, `.add`, `.ingest`, etc.).

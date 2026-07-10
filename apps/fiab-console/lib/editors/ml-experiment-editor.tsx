@@ -296,6 +296,127 @@ function ArtifactTree({ runId }: { runId: string }) {
 }
 
 // ============================================================
+// TracesTab (DBX-10) — run_id-joined GenAI traces from the SHARED App Insights
+// trace store (AIF-13). Lists the run's traces and drills into each span tree.
+// ============================================================
+interface RunTraceSummary { traceId: string; name?: string; spanCount: number; startTime?: string; endTime?: string; errorCount: number }
+interface TraceSpan { id: string; parentId?: string; name?: string; kind?: string; duration?: number; success?: boolean; genAiModel?: string; inputTokens?: number; outputTokens?: number }
+
+function TracesTab({ runId }: { runId: string }) {
+  const s = useStyles();
+  const [traces, setTraces] = useState<RunTraceSummary[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [gateHint, setGateHint] = useState<string | null>(null);
+  const [selected, setSelected] = useState<string | null>(null);
+  const [spans, setSpans] = useState<TraceSpan[]>([]);
+  const [spansLoading, setSpansLoading] = useState(false);
+
+  const loadTraces = useCallback(async () => {
+    setLoading(true); setError(null); setGateHint(null); setSelected(null); setSpans([]);
+    try {
+      const r = await clientFetch(`/api/aml/runs/${encodeURIComponent(runId)}/traces`);
+      const j = await r.json();
+      if (j.notDeployed) { setGateHint(j.hint || j.error || null); return; }
+      if (!j.ok) { setError(j.error || `HTTP ${r.status}`); return; }
+      setTraces(Array.isArray(j.traces) ? j.traces : []);
+    } catch (e: any) { setError(e?.message || String(e)); }
+    finally { setLoading(false); }
+  }, [runId]);
+  useEffect(() => { loadTraces(); }, [loadTraces]);
+
+  const openTrace = useCallback(async (traceId: string) => {
+    setSelected(traceId); setSpansLoading(true); setSpans([]);
+    try {
+      const r = await clientFetch(`/api/aml/runs/${encodeURIComponent(runId)}/traces?traceId=${encodeURIComponent(traceId)}`);
+      const j = await r.json();
+      if (j.ok) setSpans(Array.isArray(j.spans) ? j.spans : []);
+      else setError(j.error || `HTTP ${r.status}`);
+    } catch (e: any) { setError(e?.message || String(e)); }
+    finally { setSpansLoading(false); }
+  }, [runId]);
+
+  // Build parent→child depth for indentation.
+  const depthOf = useCallback((sp: TraceSpan, all: TraceSpan[], seen = new Set<string>()): number => {
+    let d = 0; let cur = sp;
+    while (cur.parentId && !seen.has(cur.id)) {
+      seen.add(cur.id);
+      const parent = all.find((x) => x.id === cur.parentId);
+      if (!parent) break;
+      d++; cur = parent;
+      if (d > 32) break;
+    }
+    return d;
+  }, []);
+
+  if (gateHint) {
+    return (
+      <MessageBar intent="warning">
+        <MessageBarBody>
+          <MessageBarTitle>GenAI tracing not configured</MessageBarTitle>
+          {gateHint} MLflow 3.x GenAI traces export to the Foundry hub&rsquo;s Application Insights (the same store the Tracing surface reads).
+        </MessageBarBody>
+      </MessageBar>
+    );
+  }
+  if (error) return <MessageBar intent="error"><MessageBarBody>{error}</MessageBarBody></MessageBar>;
+  if (loading) return <Spinner size="tiny" label="Loading traces…" labelPosition="after" />;
+  if (traces.length === 0) {
+    return (
+      <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+        No GenAI traces joined to this run. Instrument LLM/agent calls with MLflow tracing (<code>mlflow.openai.autolog()</code> / <code>@mlflow.trace</code>) inside an active run, and the spans appear here joined by <code>run_id</code>.
+      </Caption1>
+    );
+  }
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS }}>
+      <div style={{ overflowX: 'auto', maxWidth: '100%' }}>
+        <Table aria-label="Run GenAI traces" size="small">
+          <TableHeader>
+            <TableRow>
+              <TableHeaderCell>Trace</TableHeaderCell>
+              <TableHeaderCell>Spans</TableHeaderCell>
+              <TableHeaderCell>Errors</TableHeaderCell>
+              <TableHeaderCell>Started</TableHeaderCell>
+              <TableHeaderCell>Actions</TableHeaderCell>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {traces.map((t) => (
+              <TableRow key={t.traceId} appearance={selected === t.traceId ? 'brand' : undefined}>
+                <TableCell className={s.mono}>{t.name || t.traceId}</TableCell>
+                <TableCell>{t.spanCount}</TableCell>
+                <TableCell>{t.errorCount > 0 ? <Badge appearance="tint" color="danger">{t.errorCount}</Badge> : '—'}</TableCell>
+                <TableCell>{t.startTime ? new Date(t.startTime).toLocaleString() : '—'}</TableCell>
+                <TableCell><Button size="small" appearance="outline" onClick={() => openTrace(t.traceId)}>View spans</Button></TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </div>
+      {selected && (
+        <div className={s.card} style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS }}>
+          <Subtitle2 style={{ fontSize: tokens.fontSizeBase300 }}>Span tree</Subtitle2>
+          {spansLoading && <Spinner size="tiny" label="Loading spans…" labelPosition="after" />}
+          {!spansLoading && spans.length === 0 && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>No spans returned for this trace.</Caption1>}
+          {!spansLoading && spans.map((sp) => (
+            <div key={sp.id} className={s.treeRow} style={{ paddingLeft: depthOf(sp, spans) * 18, display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, flexWrap: 'wrap' }}>
+              <Badge size="small" appearance="outline" color={sp.success === false ? 'danger' : 'informative'}>{sp.kind || 'span'}</Badge>
+              <span style={{ minWidth: 0, overflowWrap: 'anywhere' }}>{sp.name || sp.id}</span>
+              {sp.genAiModel && <Badge size="small" appearance="tint" color="brand">{sp.genAiModel}</Badge>}
+              {(sp.inputTokens != null || sp.outputTokens != null) && (
+                <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{sp.inputTokens ?? 0}→{sp.outputTokens ?? 0} tok</Caption1>
+              )}
+              {sp.duration != null && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{Math.round(sp.duration)} ms</Caption1>}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ============================================================
 // Entry — /new browses the real experiment registry
 // ============================================================
 export function MlExperimentEditor({ item, id }: { item: FabricItemType; id: string }) {
@@ -358,7 +479,7 @@ function MlExperimentEditorBody({ item, id }: { item: FabricItemType; id: string
   const [detailMetric, setDetailMetric] = useState('');
   const [detailHistory, setDetailHistory] = useState<{ x: number; y: number }[]>([]);
   const [detailMetricLoading, setDetailMetricLoading] = useState(false);
-  const [detailTab, setDetailTab] = useState<'metrics' | 'params' | 'tags' | 'artifacts'>('metrics');
+  const [detailTab, setDetailTab] = useState<'metrics' | 'params' | 'tags' | 'artifacts' | 'traces'>('metrics');
 
   // compare
   const [compareMetric, setCompareMetric] = useState('');
@@ -739,6 +860,7 @@ function MlExperimentEditorBody({ item, id }: { item: FabricItemType; id: string
                     <Tab value="params">Params</Tab>
                     <Tab value="tags">Tags</Tab>
                     <Tab value="artifacts">Artifacts</Tab>
+                    <Tab value="traces">Traces</Tab>
                   </TabList>
 
                   {detailTab === 'metrics' && (
@@ -818,6 +940,8 @@ function MlExperimentEditorBody({ item, id }: { item: FabricItemType; id: string
                   })()}
 
                   {detailTab === 'artifacts' && <ArtifactTree runId={selectedRun.runId} />}
+
+                  {detailTab === 'traces' && <TracesTab runId={selectedRun.runId} />}
                 </div>
               )}
 
