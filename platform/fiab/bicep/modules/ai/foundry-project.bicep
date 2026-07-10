@@ -383,8 +383,8 @@ output accountId string = account.id
 output accountNameOut string = account.name
 @description('LOOM_AOAI_ENDPOINT — the account OpenAI inference endpoint. Suffix is sovereign-correct: openai.azure.us in Gov (GCC-High/IL5), openai.azure.com elsewhere — so LOOM_AOAI_ENDPOINT / LOOM_AZURE_OPENAI_ENDPOINT do not 401 on the cognitiveservices.azure.us token audience in Gov.')
 output aoaiEndpoint string = 'https://${account.properties.customSubDomainName}.${environment().suffixes.storage != 'core.windows.net' ? 'openai.azure.us' : 'openai.azure.com'}/'
-@description('LOOM_FOUNDRY_PROJECT_ENDPOINT — Agent Service project endpoint.')
-output projectEndpoint string = 'https://${account.properties.customSubDomainName}.services.ai.azure.com/api/projects/${project.name}'
+@description('LOOM_FOUNDRY_PROJECT_ENDPOINT — Agent Service project endpoint. Sovereign-correct: services.ai.azure.us in Gov (GCC-High/IL5), services.ai.azure.com elsewhere — https://learn.microsoft.com/azure/foundry/concepts/foundry-azure-government#endpoints')
+output projectEndpoint string = 'https://${account.properties.customSubDomainName}.${environment().suffixes.storage != 'core.windows.net' ? 'services.ai.azure.us' : 'services.ai.azure.com'}/api/projects/${project.name}'
 @description('LOOM_FOUNDRY_PROJECT_ID — stable ARM resource id of the project.')
 output projectId string = project.id
 @description('LOOM_FOUNDRY_PROJECT_NAME')
