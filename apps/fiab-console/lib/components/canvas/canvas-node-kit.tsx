@@ -66,8 +66,8 @@ import {
   Sparkle16Filled, Checkmark16Regular, Dismiss16Regular,
 } from '@fluentui/react-icons';
 import type { JSX } from 'react';
-import { BaseEdge, getBezierPath, Handle, Position, type EdgeProps, type NodeProps } from '@xyflow/react';
-import { memo } from 'react';
+import { BaseEdge, getBezierPath, Handle, Position, Panel, useReactFlow, useViewport, type EdgeProps, type NodeProps } from '@xyflow/react';
+import { memo, useState } from 'react';
 import { transformByType, type TransformDef, type TransformCategory } from '@/lib/pipeline/dataflow-transform-catalog';
 import {
   PORT_COLOR_KEY, isConditionalPort, resolvePortShape, portGeometry, ghostAnchorPosition,
@@ -1216,6 +1216,44 @@ export function CanvasRightRail({
         </Tooltip>
       )}
     </div>
+  );
+}
+
+export interface CanvasRailPanelProps {
+  /** Optional ELK/auto-layout action — button hidden when omitted. */
+  onAutoLayout?: () => void;
+  /** Panel corner. Defaults to bottom-left (clear of the bottom-right MiniMap). */
+  position?: 'bottom-left' | 'top-left' | 'bottom-right' | 'top-right';
+}
+
+/**
+ * Self-contained canvas rail: drops straight into a `<ReactFlow>` as a child and
+ * needs NO host wiring. Reads the live viewport via `useViewport()` and drives
+ * zoom/fit through `useReactFlow()`, so canvases that render `<ReactFlowProvider>`
+ * inline (no in-provider component holding zoom state) still carry the shared
+ * rail with a single line — `<CanvasRailPanel />` in place of `<Controls />`.
+ * For hosts that already track zoom + collapse state (e.g. the pipeline canvas),
+ * use `<CanvasRightRail>` directly in a host `<Panel>` instead.
+ */
+export function CanvasRailPanel({ onAutoLayout, position = 'bottom-left' }: CanvasRailPanelProps) {
+  const rf = useReactFlow();
+  const { zoom } = useViewport();
+  const [collapsed, setCollapsed] = useState(false);
+  return (
+    <Panel position={position}>
+      <CanvasRightRail
+        zoom={zoom}
+        minZoom={0.25}
+        maxZoom={2}
+        onZoomChange={(z) => rf.setViewport({ ...rf.getViewport(), zoom: z }, { duration: 120 })}
+        onZoomIn={() => rf.zoomIn({ duration: 120 })}
+        onZoomOut={() => rf.zoomOut({ duration: 120 })}
+        onFit={() => rf.fitView({ padding: 0.2, maxZoom: 1.25, duration: 200 })}
+        onAutoLayout={onAutoLayout}
+        collapsed={collapsed}
+        onToggleCollapse={() => setCollapsed((v) => !v)}
+      />
+    </Panel>
   );
 }
 

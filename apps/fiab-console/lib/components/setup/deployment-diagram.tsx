@@ -22,15 +22,16 @@
  * stands up — it is a faithful preview, not an aspirational topology.
  */
 
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import {
-  ReactFlow, ReactFlowProvider, Background, BackgroundVariant, Controls,
+  ReactFlow, ReactFlowProvider, Background, BackgroundVariant, MiniMap, Panel,
+  useReactFlow,
   type Node, type NodeProps, type NodeTypes,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { Badge, Caption1, tokens, makeStyles } from '@fluentui/react-components';
 import { itemVisual } from '@/lib/components/ui/item-type-visual';
-import { accentTint, accentGradient } from '@/lib/components/canvas/canvas-node-kit';
+import { accentTint, accentGradient, CanvasRightRail } from '@/lib/components/canvas/canvas-node-kit';
 
 export interface DiagramSpoke {
   /** subscription id the DLZ lands in */
@@ -250,7 +251,10 @@ const useStyles = makeStyles({
 
 function DiagramInner(props: SetupDiagramProps) {
   const s = useStyles();
+  const rf = useReactFlow();
   const nodes = useMemo(() => buildNodes(props), [props]);
+  const [zoom, setZoom] = useState(1);
+  const [railCollapsed, setRailCollapsed] = useState(false);
   return (
     <div className={s.canvas} data-canvas="setup-deployment-diagram">
       <ReactFlow
@@ -265,12 +269,38 @@ function DiagramInner(props: SetupDiagramProps) {
         minZoom={0.3}
         maxZoom={1.5}
         fitView
-        fitViewOptions={{ padding: 0.18 }}
+        // maxZoom keeps a small 3-6 node graph filling the canvas readably on open.
+        fitViewOptions={{ padding: 0.18, maxZoom: 1.25 }}
         proOptions={{ hideAttribution: true }}
         deleteKeyCode={null}
+        onMove={(_, vp) => setZoom(vp.zoom)}
       >
-        <Background variant={BackgroundVariant.Dots} gap={20} size={1} color={tokens.colorNeutralStroke2} />
-        <Controls showInteractive={false} />
+        <Background
+          variant={BackgroundVariant.Dots}
+          gap={18}
+          size={1.5}
+          color={accentTint('var(--loom-accent-blue)', 45)}
+        />
+        <MiniMap
+          pannable
+          zoomable
+          nodeStrokeColor={tokens.colorNeutralStroke2}
+          maskColor={accentTint(tokens.colorNeutralBackground3, 70)}
+          style={{ backgroundColor: tokens.colorNeutralBackground1 }}
+        />
+        <Panel position="bottom-left">
+          <CanvasRightRail
+            zoom={zoom}
+            minZoom={0.25}
+            maxZoom={2}
+            onZoomChange={(z) => rf.setViewport({ ...rf.getViewport(), zoom: z }, { duration: 120 })}
+            onZoomIn={() => rf.zoomIn({ duration: 120 })}
+            onZoomOut={() => rf.zoomOut({ duration: 120 })}
+            onFit={() => rf.fitView({ padding: 0.2, maxZoom: 1.25, duration: 200 })}
+            collapsed={railCollapsed}
+            onToggleCollapse={() => setRailCollapsed((v) => !v)}
+          />
+        </Panel>
       </ReactFlow>
     </div>
   );

@@ -530,7 +530,7 @@ function DiagramCanvas({
       setNodes(builtNodes);
       setEdges(builtEdges);
       // Fit after the browser paints the new nodes.
-      requestAnimationFrame(() => { try { rf.fitView({ padding: 0.2, duration: 300 }); } catch { /* not mounted */ } });
+      requestAnimationFrame(() => { try { rf.fitView({ padding: 0.2, maxZoom: 1.25, duration: 300 }); } catch { /* not mounted */ } });
     })();
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -549,11 +549,11 @@ function DiagramCanvas({
   const zoomIn = useCallback(() => { rf.zoomIn(); setZoom(rf.getZoom()); }, [rf]);
   const zoomOut = useCallback(() => { rf.zoomOut(); setZoom(rf.getZoom()); }, [rf]);
   const setZoomTo = useCallback((z: number) => { rf.zoomTo(z); setZoom(z); }, [rf]);
-  const fit = useCallback(() => { rf.fitView({ padding: 0.2, duration: 300 }); }, [rf]);
+  const fit = useCallback(() => { rf.fitView({ padding: 0.2, maxZoom: 1.25, duration: 300 }); }, [rf]);
   const autoLayout = useCallback(async () => {
     const pos = await layoutGraph(graph, collapsedRef.current);
     setNodes((ns) => ns.map((n) => ({ ...n, position: pos.get(n.id) ?? n.position })));
-    requestAnimationFrame(() => rf.fitView({ padding: 0.2, duration: 300 }));
+    requestAnimationFrame(() => rf.fitView({ padding: 0.2, maxZoom: 1.25, duration: 300 }));
   }, [graph, rf, setNodes]);
 
   return (
@@ -571,11 +571,18 @@ function DiagramCanvas({
         minZoom={0.25}
         maxZoom={2}
         fitView
+        // maxZoom keeps a small 3-6 node graph filling the canvas readably on open.
+        fitViewOptions={{ padding: 0.2, maxZoom: 1.25 }}
         proOptions={{ hideAttribution: true }}
         nodesConnectable={false}
         elementsSelectable
       >
-        <Background variant={BackgroundVariant.Dots} gap={18} size={1} />
+        <Background
+          variant={BackgroundVariant.Dots}
+          gap={18}
+          size={1.5}
+          color={accentTint('var(--loom-accent-blue)', 45)}
+        />
         <Panel position="top-right">
           <div style={{ display: 'flex', gap: tokens.spacingHorizontalXS }}>
             <Tooltip content="Zoom to 100%" relationship="label">
