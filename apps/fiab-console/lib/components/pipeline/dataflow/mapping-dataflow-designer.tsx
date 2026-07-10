@@ -63,7 +63,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
 } from 'react';
 import {
-  ReactFlow, ReactFlowProvider, Background, BackgroundVariant, Controls, MiniMap,
+  ReactFlow, ReactFlowProvider, Background, BackgroundVariant, MiniMap,
   Panel, useReactFlow, useNodesState,
   ConnectionMode, Position, Handle,
   type Node, type Edge, type Connection, type NodeChange, type NodeProps,
@@ -91,6 +91,7 @@ import {
 } from '@/lib/pipeline/dataflow-transform-catalog';
 import {
   CanvasNode, CanvasEdge, getTransformVisual, transformIcon, portStyle,
+  accentTint, CanvasRightRail,
   type CanvasNodeStatus,
 } from '@/lib/components/canvas/canvas-node-kit';
 import { DatasetPicker } from '../dataset-picker';
@@ -955,6 +956,8 @@ function DesignerInner({
   const [debugActive, setDebugActive] = useState(false);
   const [saving, setSaving] = useState(false);
   const [addMenu, setAddMenu] = useState<AddMenuState>({ open: false });
+  const [zoom, setZoom] = useState(1);
+  const [railCollapsed, setRailCollapsed] = useState(false);
 
   const positionsRef = useRef<Map<string, { x: number; y: number }>>(new Map());
   for (const t of graph.transforms) {
@@ -1148,7 +1151,7 @@ function DesignerInner({
     }
   }, [graph, name, onSave, readOnly, dispatchToast]);
 
-  const fitToScreen = useCallback(() => rf.fitView({ padding: 0.2, duration: 200 }), [rf]);
+  const fitToScreen = useCallback(() => rf.fitView({ padding: 0.2, maxZoom: 1.25, duration: 200 }), [rf]);
 
   const selected = graph.transforms.find((t) => t.name === selectedName);
 
@@ -1279,11 +1282,18 @@ function DesignerInner({
             minZoom={0.25}
             maxZoom={2}
             fitView
-            fitViewOptions={{ padding: 0.2 }}
+            // maxZoom keeps a small 3-6 node graph filling the canvas readably on open.
+            fitViewOptions={{ padding: 0.2, maxZoom: 1.25 }}
             proOptions={{ hideAttribution: true }}
             deleteKeyCode={null}
+            onMove={(_, vp) => setZoom(vp.zoom)}
           >
-            <Background variant={BackgroundVariant.Dots} gap={20} size={1} color={tokens.colorNeutralStroke2} />
+            <Background
+              variant={BackgroundVariant.Dots}
+              gap={18}
+              size={1.5}
+              color={accentTint('var(--loom-accent-blue)', 45)}
+            />
             <Panel position="top-left">
               <div style={{ display: 'flex', gap: tokens.spacingHorizontalXS, background: tokens.colorNeutralBackground1, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium, padding: tokens.spacingVerticalXXS }}>
                 <Tooltip content="Fit to screen" relationship="label">
@@ -1291,11 +1301,25 @@ function DesignerInner({
                 </Tooltip>
               </div>
             </Panel>
-            <Controls showInteractive={false} />
+            <Panel position="bottom-left">
+              <CanvasRightRail
+                zoom={zoom}
+                minZoom={0.25}
+                maxZoom={2}
+                onZoomChange={(z) => rf.setViewport({ ...rf.getViewport(), zoom: z }, { duration: 120 })}
+                onZoomIn={() => rf.zoomIn({ duration: 120 })}
+                onZoomOut={() => rf.zoomOut({ duration: 120 })}
+                onFit={() => rf.fitView({ padding: 0.2, maxZoom: 1.25, duration: 200 })}
+                collapsed={railCollapsed}
+                onToggleCollapse={() => setRailCollapsed((v) => !v)}
+              />
+            </Panel>
             <MiniMap
               pannable
               zoomable
               nodeColor={(n) => (n.selected ? tokens.colorBrandBackground : tokens.colorNeutralForeground3)}
+              nodeStrokeColor={tokens.colorNeutralStroke2}
+              maskColor={accentTint(tokens.colorNeutralBackground3, 70)}
               style={{ backgroundColor: tokens.colorNeutralBackground1 }}
             />
           </ReactFlow>

@@ -39,7 +39,7 @@ import {
   forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState,
 } from 'react';
 import {
-  ReactFlow, ReactFlowProvider, Background, BackgroundVariant, Controls, MiniMap, Panel,
+  ReactFlow, ReactFlowProvider, Background, BackgroundVariant, MiniMap, Panel,
   Handle, Position, useReactFlow, useNodesState,
   MarkerType,
   type Node, type Edge, type NodeProps, type NodeTypes,
@@ -55,7 +55,7 @@ import {
   ChartMultiple16Regular, Database16Regular, Box16Regular, BranchFork16Regular,
   Search16Regular, Dismiss16Regular,
 } from '@fluentui/react-icons';
-import { portStyle } from '@/lib/components/canvas/canvas-node-kit';
+import { portStyle, accentTint, CanvasRightRail } from '@/lib/components/canvas/canvas-node-kit';
 import { itemVisual, isKnownItemType } from '@/lib/components/ui/item-type-visual';
 
 // ---------------------------------------------------------------------------
@@ -423,6 +423,8 @@ const LineageCanvasInner = forwardRef<LineageCanvasHandle, LineageCanvasProps>(f
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [focusMode, setFocusMode] = useState(false);
   const [search, setSearch] = useState('');
+  const [zoom, setZoom] = useState(1);
+  const [railCollapsed, setRailCollapsed] = useState(false);
   const [rfNodes, setRfNodes, onNodesChange] = useNodesState<Node>([]);
 
   const positions = useMemo(() => layeredLayout(srcNodes, srcEdges), [srcNodes, srcEdges]);
@@ -507,7 +509,7 @@ const LineageCanvasInner = forwardRef<LineageCanvasHandle, LineageCanvasProps>(f
       });
   }, [srcEdges, srcNodes, activeIds, dimAny]);
 
-  const fitToScreen = useCallback(() => rf.fitView({ padding: 0.2, duration: 250 }), [rf]);
+  const fitToScreen = useCallback(() => rf.fitView({ padding: 0.2, maxZoom: 1.25, duration: 250 }), [rf]);
   const focusOn = useCallback((id: string) => {
     setSelectedId(id);
     const p = positions.get(id);
@@ -548,15 +550,22 @@ const LineageCanvasInner = forwardRef<LineageCanvasHandle, LineageCanvasProps>(f
         onNodesChange={onNodesChange}
         onNodeClick={(_, n) => setSelectedId((cur) => (cur === n.id ? null : n.id))}
         onPaneClick={() => setSelectedId(null)}
+        onMove={(_, vp) => setZoom(vp.zoom)}
         minZoom={0.2}
         maxZoom={2}
         fitView
-        fitViewOptions={{ padding: 0.2 }}
+        // maxZoom keeps a small 3-6 node graph filling the canvas readably on open.
+        fitViewOptions={{ padding: 0.2, maxZoom: 1.25 }}
         nodesDraggable
         proOptions={{ hideAttribution: true }}
         deleteKeyCode={null}
       >
-        <Background variant={BackgroundVariant.Dots} gap={20} size={1} color={tokens.colorNeutralStroke2} />
+        <Background
+          variant={BackgroundVariant.Dots}
+          gap={18}
+          size={1.5}
+          color={accentTint('var(--loom-accent-blue)', 45)}
+        />
 
         <Panel position="top-left">
           <div className={s.toolbar}>
@@ -613,11 +622,25 @@ const LineageCanvasInner = forwardRef<LineageCanvasHandle, LineageCanvasProps>(f
           </div>
         </Panel>
 
-        <Controls showInteractive={false} />
+        <Panel position="bottom-left">
+          <CanvasRightRail
+            zoom={zoom}
+            minZoom={0.25}
+            maxZoom={2}
+            onZoomChange={(z) => rf.setViewport({ ...rf.getViewport(), zoom: z }, { duration: 120 })}
+            onZoomIn={() => rf.zoomIn({ duration: 120 })}
+            onZoomOut={() => rf.zoomOut({ duration: 120 })}
+            onFit={() => rf.fitView({ padding: 0.2, maxZoom: 1.25, duration: 200 })}
+            collapsed={railCollapsed}
+            onToggleCollapse={() => setRailCollapsed((v) => !v)}
+          />
+        </Panel>
         <MiniMap
           pannable
           zoomable
           nodeColor={(n) => styleForType((n.data as LineageNodeData)?.node?.type).color}
+          nodeStrokeColor={tokens.colorNeutralStroke2}
+          maskColor={accentTint(tokens.colorNeutralBackground3, 70)}
           style={{ backgroundColor: tokens.colorNeutralBackground1 }}
         />
       </ReactFlow>

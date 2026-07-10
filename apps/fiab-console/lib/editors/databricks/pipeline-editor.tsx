@@ -24,7 +24,7 @@
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ReactFlow, ReactFlowProvider, Background, BackgroundVariant, Controls, MiniMap, Panel,
+  ReactFlow, ReactFlowProvider, Background, BackgroundVariant, MiniMap, Panel,
   Handle, Position, useNodesState, useEdgesState, addEdge,
   type Node, type Edge, type NodeProps, type Connection,
 } from '@xyflow/react';
@@ -47,7 +47,7 @@ import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import { clientFetch } from '@/lib/client-fetch';
 import { safeModelJson } from '../model-fetch';
 import {
-  CanvasNode, CATEGORY_ACCENT, portStyle,
+  CanvasNode, CATEGORY_ACCENT, portStyle, accentTint, CanvasRailPanel,
   type CanvasVisual, type CanvasNodeCategory, type CanvasNodeStatus,
 } from '@/lib/components/canvas/canvas-node-kit';
 import { useCanvasHistory } from '@/lib/components/canvas/use-canvas-history';
@@ -559,11 +559,25 @@ export function DatabricksPipelineEditor({ item, id }: { item: FabricItemType; i
                   onNodeClick={(_, n) => setSelectedId(n.id)}
                   onPaneClick={() => setSelectedId(null)}
                   fitView
+                  // maxZoom keeps a small 3-6 node graph filling the canvas readably on open.
+                  fitViewOptions={{ padding: 0.2, maxZoom: 1.25 }}
                   proOptions={{ hideAttribution: true }}
                 >
-                  <Background variant={BackgroundVariant.Dots} gap={16} size={1} />
-                  <Controls showInteractive={false} />
-                  <MiniMap pannable zoomable />
+                  <Background
+                    variant={BackgroundVariant.Dots}
+                    gap={18}
+                    size={1.5}
+                    color={accentTint('var(--loom-accent-blue)', 45)}
+                  />
+                  <CanvasRailPanel />
+                  <MiniMap
+                    pannable
+                    zoomable
+                    nodeColor={(n) => (n.data as DltNodeData)?.visual?.accent}
+                    nodeStrokeColor={tokens.colorNeutralStroke2}
+                    maskColor={accentTint(tokens.colorNeutralBackground3, 70)}
+                    style={{ backgroundColor: tokens.colorNeutralBackground1 }}
+                  />
                   {model.nodes.length === 0 && (
                     <Panel position="top-center">
                       <Caption1>Add a Source, then a Streaming table or Materialized view, and wire them together.</Caption1>
