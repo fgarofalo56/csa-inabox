@@ -47,6 +47,7 @@ import { UcSecurityPanel } from '@/lib/panes/uc-security-panel';
 import { PipelineDagView, type PipelineActivity } from '@/lib/components/pipeline/pipeline-dag-view';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
+import { useRegisterRibbonCommands } from '@/lib/components/shared/ribbon-commands';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { useSqlTabs, SqlTabBar, getRunSql } from '@/lib/components/editor/sql-editor-kit';
 import { registerSqlIntelliSense, createEmptyCache, type SqlSchemaCache } from '@/lib/components/editor/sql-intellisense';
@@ -773,12 +774,13 @@ export function DatabricksJobEditor({ item, id }: { item: FabricItemType; id: st
       ]},
     ]},
   ], [jobId, resetForNew, saving, canSaveJob, save, canDeleteJob, del, running, canRunNow, runNow, refreshRuns, addTask]);
+  useRegisterRibbonCommands(ribbonJob, item.slug);
 
   return (
     <ItemEditorChrome
       item={item}
       id={id}
-      ribbon={ribbonJob}
+      ribbon={ribbonJob} commandSearch
       leftPanel={
         // Full Databricks Workspace navigator (parity with the ADF Factory
         // Resources / Synapse Workspace Resources panes): typed groups for

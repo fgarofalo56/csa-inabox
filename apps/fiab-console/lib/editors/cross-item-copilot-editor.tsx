@@ -32,6 +32,7 @@ import {
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
+import { useRegisterRibbonCommands } from '@/lib/components/shared/ribbon-commands';
 import { SessionList } from '@/lib/components/copilot/session-list';
 import { ToolsPanel } from '@/lib/components/copilot/tools-panel';
 import { Transcript } from '@/lib/components/copilot/transcript';
@@ -852,11 +853,14 @@ const RIBBON: RibbonTab[] = [
 ];
 
 export function CrossItemCopilotEditor({ item, id }: { item: FabricItemType; id: string }) {
+  // SC-9 — publish the ribbon actions to the shared command-search registry.
+  useRegisterRibbonCommands(RIBBON, item.slug);
   return (
     <ItemEditorChrome
       item={item}
       id={id}
       ribbon={RIBBON}
+      commandSearch
       main={<CopilotConsoleView embedded />}
     />
   );
