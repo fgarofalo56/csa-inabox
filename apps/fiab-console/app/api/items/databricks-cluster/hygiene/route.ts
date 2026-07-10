@@ -16,6 +16,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { requireTenantAdmin } from '@/lib/auth/feature-gate';
 import {
   listClusters,
   terminateCluster,
@@ -30,6 +31,9 @@ export const dynamic = 'force-dynamic';
 export async function GET() {
   const session = getSession();
   if (!session) return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
+  // Cluster hygiene acts on the SHARED tenant Databricks workspace — tenant-admin only.
+  const denied = requireTenantAdmin(session);
+  if (denied) return denied;
 
   // Honest gate (no-vaporware): when the workspace URL / token env is unset,
   // return a 200 with a gate the UI renders as a warning MessageBar naming the
@@ -56,6 +60,9 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   const session = getSession();
   if (!session) return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
+  // Cluster hygiene acts on the SHARED tenant Databricks workspace — tenant-admin only.
+  const denied = requireTenantAdmin(session);
+  if (denied) return denied;
 
   const body = await req.json().catch(() => ({}));
   const action = body?.action;

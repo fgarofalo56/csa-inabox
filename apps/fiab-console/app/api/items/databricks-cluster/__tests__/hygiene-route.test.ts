@@ -24,6 +24,12 @@ vi.mock('@/lib/auth/session', () => ({
   getSession: () => (h.authed ? ({ claims: { oid: 'o' }, exp: Date.now() / 1000 + 3600 } as any) : null),
 }));
 
+vi.mock('@/lib/auth/feature-gate', () => ({
+  // Hygiene is tenant-admin-only; tests run as an authorized admin (the 401
+  // unauth path is still exercised via h.authed=false -> getSession null).
+  requireTenantAdmin: (_session: any) => null,
+}));
+
 vi.mock('@/lib/azure/databricks-client', () => ({
   databricksConfigGate: () => h.gateValue,
   listClusters: (...a: any[]) => (h.listClusters as any)(...a),
