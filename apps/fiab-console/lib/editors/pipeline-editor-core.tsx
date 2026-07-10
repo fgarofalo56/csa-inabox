@@ -81,6 +81,11 @@ const ADF_FACTORY_REGIONS = [
 const useStyles = makeStyles({
   pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minWidth: 0, maxWidth: '100%' },
   gate: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL, maxWidth: '720px', minWidth: 0 },
+  // Un-caged starter-graph region: full width (mirrors the bound-state canvas),
+  // so the installed-app graph is readable instead of squeezed into the 720px
+  // form column. The PipelineDesigner supplies its own bounded canvas height.
+  starterGraph: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, minWidth: 0, maxWidth: '100%' },
+  starterGraphHead: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
   row: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'flex-end', flexWrap: 'wrap' },
   field: { flex: 1, minWidth: '220px', display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
 });
@@ -847,31 +852,9 @@ export function PipelineEditorCore({
           {bindingLoading ? (
             <div className={s.gate}><Spinner label="Resolving pipeline binding…" /></div>
           ) : !bound ? (
+            <>
             <div className={s.gate}>
               {bindGate}
-              {preview && Array.isArray(preview?.properties?.activities) && preview.properties.activities.length > 0 && (
-                <div>
-                  <div style={{ display: 'flex', gap: tokens.spacingVerticalS, alignItems: 'center', flexWrap: 'wrap', marginBottom: tokens.spacingVerticalS }}>
-                    <Subtitle2>Starter graph from this app</Subtitle2>
-                    <Badge appearance="outline">
-                      {preview.properties.activities.length} activit{preview.properties.activities.length === 1 ? 'y' : 'ies'}
-                    </Badge>
-                    <Badge appearance="filled" color="informative">Preview · read-only</Badge>
-                  </div>
-                  <Body1 style={{ display: 'block', color: tokens.colorNeutralForeground3, marginBottom: tokens.spacingVerticalS }}>
-                    This pipeline was installed from an app with a fully built-out activity graph
-                    (every activity, dependency, and parameter shown below). Bind it to a real
-                    {` ${config.containerLabel}`} pipeline above to push this graph live and enable
-                    Save / Run / Validate / Triggers.
-                  </Body1>
-                  <PipelineDesigner
-                    activities={extractActivities(JSON.stringify(preview)) as any}
-                    parameters={paramsFromSpec(preview as PipelineSpec)}
-                    variables={varsFromSpec(preview as PipelineSpec)}
-                    onActivitiesChange={() => { /* read-only until bound */ }}
-                  />
-                </div>
-              )}
               {isAdf && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS }}>
                   <Subtitle2>Data Factory</Subtitle2>
@@ -1059,6 +1042,34 @@ export function PipelineEditorCore({
                 <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Bind failed</MessageBarTitle>{bindError}</MessageBarBody></MessageBar>
               )}
             </div>
+            {/* Starter graph from an installed app — UN-CAGED: rendered at FULL
+                width below the bind form (mirrors the bound-state canvas), so the
+                built-out activity graph is actually readable instead of squeezed
+                into the 720px form column. Read-only until bound. */}
+            {preview && Array.isArray(preview?.properties?.activities) && preview.properties.activities.length > 0 && (
+              <div className={s.starterGraph}>
+                <div className={s.starterGraphHead}>
+                  <Subtitle2>Starter graph from this app</Subtitle2>
+                  <Badge appearance="outline">
+                    {preview.properties.activities.length} activit{preview.properties.activities.length === 1 ? 'y' : 'ies'}
+                  </Badge>
+                  <Badge appearance="filled" color="informative">Preview · read-only</Badge>
+                </div>
+                <Body1 style={{ display: 'block', color: tokens.colorNeutralForeground3 }}>
+                  This pipeline was installed from an app with a fully built-out activity graph
+                  (every activity, dependency, and parameter). Bind it to a real
+                  {` ${config.containerLabel}`} pipeline above to push this graph live and enable
+                  Save / Run / Validate / Triggers.
+                </Body1>
+                <PipelineDesigner
+                  activities={extractActivities(JSON.stringify(preview)) as any}
+                  parameters={paramsFromSpec(preview as PipelineSpec)}
+                  variables={varsFromSpec(preview as PipelineSpec)}
+                  onActivitiesChange={() => { /* read-only until bound */ }}
+                />
+              </div>
+            )}
+            </>
           ) : (
             <>
               <div style={{ display: 'flex', gap: tokens.spacingVerticalS, alignItems: 'center', flexWrap: 'wrap', minWidth: 0 }}>
