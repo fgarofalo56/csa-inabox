@@ -25,12 +25,18 @@ import { useMemo, useState } from 'react';
 import {
   Badge, Caption1, Field, Dropdown, Option, makeStyles, tokens,
 } from '@fluentui/react-components';
-import { Cloud20Regular } from '@fluentui/react-icons';
+import {
+  Cloud20Regular, LinkMultiple20Regular, Flowchart20Regular, DatabaseArrowRight20Regular,
+} from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { IntegrationRuntimeManager } from '@/lib/components/pipeline/integration-runtime-manager';
 import type { PipelineEngine } from '@/lib/pipeline/integration-runtime-catalog';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
+import { ToolbarCrossLinks } from '@/lib/components/shared/item-tab-strip';
+import { useRegisterRibbonCommands } from '@/lib/components/shared/ribbon-commands';
+import { loomDocUrl } from '@/lib/learn/content';
 
 const useStyles = makeStyles({
   pad: {
@@ -62,13 +68,38 @@ export function IntegrationRuntimeEditor({ item, id }: { item: FabricItemType; i
 
   const cur = ENGINES.find((e) => e.value === engine)!;
 
+  // SC-9 — register the ribbon actions so the in-ribbon command search (Ctrl+Q /
+  // Alt+Q) can surface them.
+  useRegisterRibbonCommands(ribbon, 'integration-runtime');
+
   return (
     <ItemEditorChrome
       item={item}
       id={id}
       ribbon={ribbon}
+      commandSearch
       main={
         <div className={s.pad}>
+          {/* SC-6 — teaching banner: what an integration runtime is + where it
+              fits (dispatch compute for pipeline activities, data movement, and
+              data-flow runs). Dismissible + persisted per surface. */}
+          <TeachingBanner
+            surfaceKey="integration-runtime"
+            title="Integration runtimes are the compute that moves your data"
+            message="An integration runtime dispatches pipeline activities, copies data, and runs data flows. Azure runtimes are fully managed and serverless; a Self-Hosted runtime reaches on-premises or VNet-private sources; Azure-SSIS lifts existing SSIS packages. This is the Azure-native default — no Microsoft Fabric capacity required."
+            learnMoreHref={loomDocUrl('fiab/v3-tenant-bootstrap')}
+          />
+          {/* SC-8 — cross-links to the sibling data-integration surfaces an IR
+              powers (routing-only). */}
+          <ToolbarCrossLinks
+            ariaLabel="Related data-integration surfaces"
+            maxInline={4}
+            links={[
+              { key: 'linked-service', label: 'Linked services', icon: <LinkMultiple20Regular />, href: '/items/linked-service/new' },
+              { key: 'pipeline', label: 'Data pipeline', icon: <Flowchart20Regular />, href: '/items/data-pipeline/new' },
+              { key: 'copy-job', label: 'Copy job', icon: <DatabaseArrowRight20Regular />, href: '/items/copy-job/new' },
+            ]}
+          />
           <div className={s.bar}>
             <Badge appearance="filled" color="brand" icon={<Cloud20Regular />}>Integration runtimes</Badge>
             <Field label="Engine" className={s.backend}>
