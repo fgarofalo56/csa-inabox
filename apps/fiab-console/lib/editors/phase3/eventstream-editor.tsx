@@ -756,7 +756,7 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
   }
 
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={ribbon}
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon} splitKeyPrefix="eventstream"
       leftPanel={
         // Azure Event Hubs namespace navigator (parity wave 5): the underlying
         // Azure service that feeds Fabric Eventstream sources. Typed groups for
