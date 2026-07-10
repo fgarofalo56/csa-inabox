@@ -45,6 +45,8 @@ import type { OntologyEntityBinding } from '../_family-utils';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { useStyles, CodeBlock, useItemState, SaveStrip, SectionHead, useOntologyBinding, type ItemDoc, type OntologySummary, type OntologyClassLite, type OntologyActionLite, type OntologySurface } from './shared';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
+import { ToolbarCrossLinks } from '@/lib/components/shared/item-tab-strip';
 
 // ───────────────────────── Release environment (Apollo → Shuttle) ─────────────────────────
 type EnvType = 'dev' | 'test' | 'staging' | 'preprod' | 'prod' | 'custom';
@@ -368,10 +370,25 @@ export function ReleaseEnvironmentEditor({ item, id }: { item: FabricItemType; i
     <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
       <div className={s.pad}>
         {loading && <Spinner size="small" label="Loading…" labelPosition="after" />}
-        <MessageBar intent="info"><MessageBarBody>
-          <MessageBarTitle>Release environment (Palantir Apollo → Shuttle)</MessageBarTitle>
-          Model dev → test → prod environments, wire a promotion pipeline with approval gates, track release versions, and execute real Azure promotions — App Service slot swaps and Azure Deployment Environments.{devCenter ? ' Azure Deployment Environments is configured — name a catalog environment definition when promoting.' : ' Set LOOM_DEVCENTER_PROJECT to provision catalog-driven Azure Deployment Environments.'} No Fabric required.
-        </MessageBarBody></MessageBar>
+        <TeachingBanner
+          surfaceKey="release-environment-intro"
+          title="Model and promote releases (Palantir Apollo → Shuttle)"
+          message={<>Model dev → test → prod environments, wire a promotion pipeline with approval gates, track release versions, and execute real Azure promotions — App Service slot swaps and Azure Deployment Environments.{devCenter ? ' Azure Deployment Environments is configured — name a catalog environment definition when promoting.' : ' Set LOOM_DEVCENTER_PROJECT to provision catalog-driven Azure Deployment Environments.'} No Fabric required.</>}
+          learnMoreHref="https://learn.microsoft.com/azure/deployment-environments/overview-what-is-azure-deployment-environments"
+        />
+        <div className={s.addBar}>
+          <ToolbarCrossLinks
+            ariaLabel="Related delivery surfaces"
+            maxInline={5}
+            links={[
+              { key: 'health-check', label: 'Health check', href: '/items/health-check/new' },
+              { key: 'aip-logic', label: 'AIP Logic', href: '/items/aip-logic/new' },
+              { key: 'ontology-sdk', label: 'Ontology SDK', href: '/items/ontology-sdk/new' },
+              { key: 'ontology', label: 'Ontology', href: '/items/ontology/new' },
+              { key: 'loom-app-runtime', label: 'Loom App', href: '/items/loom-app-runtime/new' },
+            ]}
+          />
+        </div>
 
         <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as string)} className={s.tabStrip}>
           <Tab value="environments" icon={<Cloud20Regular />}>Environments</Tab>

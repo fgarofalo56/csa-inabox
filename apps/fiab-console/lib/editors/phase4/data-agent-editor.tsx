@@ -119,6 +119,8 @@ import {
   type PlanFormulaFn, type PlanFormulaOp, type ModelIssue,
 } from '../_plan-model';
 import { arr, useItemState, SaveBar, useStyles } from './shared';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
+import { ToolbarCrossLinks } from '@/lib/components/shared/item-tab-strip';
 
 // ----- Data Agent — typed five-source picker + per-source grounding +
 // real grounded test chat + publish to Foundry Agent Service + Copilot
@@ -672,6 +674,22 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
           </TabList>
         </div>
         <div className={s.pad}>
+          <TeachingBanner
+            surfaceKey="data-agent-editor"
+            title="Ground your agent in real data"
+            message="Connect up to five sources — KQL databases, lakehouses, warehouses, and semantic models — then add per-source instructions so the agent answers questions over your live Azure backends with cited, explainable results."
+            learnMoreHref="https://learn.microsoft.com/fabric/data-science/concept-data-agent"
+          />
+          <ToolbarCrossLinks
+            ariaLabel="Related real-time surfaces"
+            links={[
+              { key: 'eventhouse', label: 'Eventhouse', href: '/items/eventhouse/new' },
+              { key: 'kql', label: 'KQL database', href: '/items/kql-database/new' },
+              { key: 'dashboard', label: 'Real-Time Dashboard', href: '/items/kql-dashboard/new' },
+              { key: 'activator', label: 'Activator', href: '/items/activator/new' },
+              { key: 'notebook', label: 'Notebook', href: '/items/notebook/new' },
+            ]}
+          />
           {loading && <Spinner size="small" label="Loading…" labelPosition="after" />}
 
           {tab === 'build' && (

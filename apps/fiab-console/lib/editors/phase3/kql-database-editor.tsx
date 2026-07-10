@@ -58,6 +58,7 @@ import { AnomalyForecastDialog } from './anomaly-forecast';
 import { useStyles } from './styles';
 import { DetailsPanel } from '@/lib/components/shared/details-panel';
 import { ItemTabStrip, ToolbarCrossLinks } from '@/lib/components/shared/item-tab-strip';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
 
 // ----- KQL Database -----
 // Ribbon is built inside the editor via useMemo. Every action is wired to a
@@ -1237,6 +1238,12 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
       }
       main={
         <div className={s.pad}>
+          <TeachingBanner
+            surfaceKey="kql-database-editor"
+            title="Analyze your data"
+            message="Query with KQL, explore the entity diagram, or send tables to a Real-Time Dashboard, Notebook, or Data Agent. This database runs Azure-native on Azure Data Explorer — no Fabric capacity required."
+            learnMoreHref="https://learn.microsoft.com/azure/data-explorer/kusto/query/"
+          />
           <div className={s.toolbar}>
             <Badge appearance="filled" color="brand">KQL Database</Badge>
             <Badge appearance="outline" color={info?.ok ? 'success' : 'severe'}>

@@ -12,7 +12,7 @@
  */
 
 import { clientFetch } from '@/lib/client-fetch';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Caption1, Badge, Button, Spinner, MessageBar, MessageBarBody,
   MessageBarTitle, Menu, MenuTrigger, MenuPopover, MenuList, MenuItem,
@@ -20,11 +20,10 @@ import {
 } from '@fluentui/react-components';
 import {
   PlugConnected24Regular, Add20Regular, Delete20Regular, Key16Regular, ShieldKeyhole16Regular,
-  MoreHorizontal20Regular, CloudDatabase20Regular,
+  MoreHorizontal20Regular, CloudDatabase20Regular, LinkMultiple20Regular, Table20Regular,
 } from '@fluentui/react-icons';
 import { PageShell } from '@/lib/components/page-shell';
 import { Section } from '@/lib/components/ui/section';
-import { EmptyState } from '@/lib/components/empty-state';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { ViewToggle, type LoomView } from '@/lib/components/ui/view-toggle';
 import { ItemTile } from '@/lib/components/ui/item-tile';
@@ -33,6 +32,10 @@ import { itemVisual } from '@/lib/components/ui/item-type-visual';
 import { useConfirm } from '@/lib/components/confirm-dialog';
 import { ConnectionBuilder, type ConnectionView } from '@/lib/components/connections/connection-builder';
 import { AddExistingConnectionWizard } from '@/lib/components/connections/add-existing-wizard';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
+import { GuidedEmptyState, type GuidedPath } from '@/lib/components/shared/guided-empty-state';
+import { ToolbarCrossLinks, type CrossLink } from '@/lib/components/shared/item-tab-strip';
+import { accentForIndex, LOOM_ACCENT } from '@/lib/components/shared/accent-tokens';
 
 const LS_VIEW = 'loom.connections.viewMode.v1';
 
@@ -95,8 +98,20 @@ export default function ConnectionsPage() {
   const [conns, setConns] = useState<ConnectionView[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [builderOpen, setBuilderOpen] = useState(false);
+  const [presetType, setPresetType] = useState<string | undefined>(undefined);
   const [addExistingOpen, setAddExistingOpen] = useState(false);
   const [view, setView] = useState<LoomView>('tile');
+
+  // Open the builder, optionally locked to a connector type chosen from the
+  // guided connector gallery (Fabric "Get data" per-source parity, UX-1008 SC-4).
+  const openBuilder = useCallback((type?: string) => {
+    setPresetType(type);
+    setBuilderOpen(true);
+  }, []);
+  const closeBuilder = useCallback(() => {
+    setBuilderOpen(false);
+    setPresetType(undefined);
+  }, []);
 
   // Hydrate + persist the view choice (SSR-safe; ignore quota / private mode).
   useEffect(() => {
@@ -205,17 +220,61 @@ export default function ConnectionsPage() {
 
   const hasRows = !!conns && conns.length > 0;
 
+  // Guided connector gallery — one card per common data source, each opening the
+  // ConnectionBuilder locked to that type (Fabric "Get data" source-picker parity).
+  const galleryPaths = useMemo<GuidedPath[]>(() => {
+    const GALLERY: string[] = [
+      'azure-sql', 'storage-adls', 'databricks-sql', 'synapse-serverless',
+      'cosmos', 'postgres', 'event-hub', 'key-vault',
+    ];
+    const sourceCards: GuidedPath[] = GALLERY.map((t, i) => ({
+      key: t,
+      title: TYPE_LABEL[t] || t,
+      body: `Connect to ${TYPE_LABEL[t] || t} — credentials land in Key Vault.`,
+      icon: itemVisual(CONN_TILE_TYPE[t] ?? t).icon,
+      accent: accentForIndex(i),
+      onClick: () => openBuilder(t),
+    }));
+    return [
+      ...sourceCards,
+      {
+        key: 'add-existing',
+        title: 'Add an existing connection',
+        body: 'Import a data source already provisioned in your Azure subscription.',
+        icon: CloudDatabase20Regular,
+        accent: LOOM_ACCENT.blue,
+        onClick: () => setAddExistingOpen(true),
+      },
+    ];
+  }, [openBuilder]);
+
   return (
     <PageShell
       title="Connections"
       subtitle="Reusable, Key Vault-backed connections to your data sources — credentials entered once, reused by mirroring, ADF / Synapse linked services, and datasets."
       actions={
         <>
-          <Button appearance="primary" icon={<Add20Regular />} onClick={() => setBuilderOpen(true)}>New connection</Button>
+          <Button appearance="primary" icon={<Add20Regular />} onClick={() => openBuilder()}>New connection</Button>
           <Button appearance="secondary" icon={<CloudDatabase20Regular />} onClick={() => setAddExistingOpen(true)}>Add existing</Button>
         </>
       }
     >
+      <ToolbarCrossLinks
+        ariaLabel="Related surfaces"
+        links={[
+          { key: 'onelake', label: 'OneLake catalog', icon: <CloudDatabase20Regular />, href: '/onelake' },
+          { key: 'marketplace', label: 'Marketplace', icon: <LinkMultiple20Regular />, href: '/marketplace' },
+          { key: 'browse', label: 'Browse items', icon: <Table20Regular />, href: '/browse' },
+        ] satisfies CrossLink[]}
+      />
+      <TeachingBanner
+        surfaceKey="connections-hub"
+        title="Enter credentials once, reuse everywhere"
+        message="A connection stores how to reach a data source — the secret goes into Key Vault and only a reference is kept here. Mirroring, ADF / Synapse linked services and datasets all reuse these connections, so you never re-enter a password. Pick a source from the gallery to get started."
+        accent={LOOM_ACCENT.teal}
+        learnMoreHref="https://learn.microsoft.com/fabric/data-factory/connector-overview"
+      />
+
       {error && (
         <MessageBar intent="error">
           <MessageBarBody>
@@ -237,12 +296,13 @@ export default function ConnectionsPage() {
             <Spinner label="Loading connections…" />
           </div>
         ) : !hasRows ? (
-          <EmptyState
-            icon={<PlugConnected24Regular />}
-            title="No connections yet"
-            body="Create a Key Vault-backed connection to your data sources. Enter credentials once — only a secret reference is stored — then reuse it across mirroring, ADF / Synapse linked services, and datasets."
-            primaryAction={{ label: 'New connection', onClick: () => setBuilderOpen(true) }}
-            secondaryAction={{ label: 'Add existing', appearance: 'secondary', onClick: () => setAddExistingOpen(true) }}
+          <GuidedEmptyState
+            title="Connect a data source"
+            intro="Pick a source to open the connection builder — or add a connection someone already provisioned in Azure. Credentials are stored in Key Vault; only a reference is kept here."
+            heroIcon={PlugConnected24Regular}
+            paths={galleryPaths}
+            learnMoreHref="https://learn.microsoft.com/fabric/data-factory/connector-overview"
+            ariaLabel="Connector gallery"
           />
         ) : view === 'tile' ? (
           <TileGrid>
@@ -286,7 +346,7 @@ export default function ConnectionsPage() {
         )}
       </Section>
 
-      <ConnectionBuilder open={builderOpen} onClose={() => setBuilderOpen(false)} onCreated={() => void load()} />
+      <ConnectionBuilder open={builderOpen} lockType={presetType} onClose={closeBuilder} onCreated={() => void load()} />
       <AddExistingConnectionWizard open={addExistingOpen} onClose={() => setAddExistingOpen(false)} onImported={() => void load()} />
       {dialog}
     </PageShell>

@@ -36,6 +36,8 @@ import {
   Mail16Regular, Call16Regular, Link16Regular, Settings16Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from '../item-editor-chrome';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
+import { ToolbarCrossLinks } from '@/lib/components/shared/item-tab-strip';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { EventHubsNamespaceTree } from '@/lib/components/eventhubs/eventhubs-tree';
 import { NewItemCreateGate } from '../new-item-gate';
@@ -776,6 +778,21 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
       }
       main={
         <div className={s.pad}>
+          <TeachingBanner
+            surfaceKey="activator-editor"
+            title="Act automatically on your data"
+            message="Define a condition over an Event Hubs stream or a scheduled KQL query, then attach an action — email, Teams, a pipeline run, or a webhook — that fires the moment the condition is met. Loom runs this Azure-native on Azure Monitor scheduled-query alerts, no Fabric capacity required."
+            learnMoreHref="https://learn.microsoft.com/azure/azure-monitor/alerts/alerts-types#log-alerts"
+          />
+          <ToolbarCrossLinks
+            ariaLabel="Related real-time surfaces"
+            links={[
+              { key: 'eventstream', label: 'Eventstream', href: '/items/eventstream/new' },
+              { key: 'eventhouse', label: 'Eventhouse', href: '/items/eventhouse/new' },
+              { key: 'dashboard', label: 'Real-Time Dashboard', href: '/items/kql-dashboard/new' },
+              { key: 'agent', label: 'Data Agent', href: '/items/data-agent/new' },
+            ]}
+          />
           <div className={s.toolbar}>
             <Badge appearance="filled" color="brand">Activator (Reflex)</Badge>
             <WorkspacePicker value={workspaceId} onChange={setWorkspaceId} {...ws} />
