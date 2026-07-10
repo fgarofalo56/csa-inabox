@@ -530,21 +530,21 @@ export function NotebookEditor({ item, id }: Props) {
   // ── R4-NB-6 Outline nav ───────────────────────────────────────────────────
   const [outlineOpen, setOutlineOpen] = useState(false);
   // Per-cell wrapper refs so the outline can scroll a heading's cell into view.
-  const cellRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const cellRefs = useRef<Map<string, HTMLDivElement | null>>(new Map());
 
   // ── R4-NB-4 Real-time Spark progress ──────────────────────────────────────
   // Per-cell progress payload from the run poll (shared with R4-SYN-5's poll
   // surface). Until that server field lands, RunProgress shows an honest
   // indeterminate bar keyed to the phase + elapsed seconds below.
-  const [cellProgress, setCellProgress] = useState<Record<string, SparkRunProgress>>({});
+  const [cellProgress, setCellProgress] = useState<Map<string, SparkRunProgress>>(() => new Map());
   const [runPhase, setRunPhase] = useState<string | null>(null);
-  const cellRunStartRef = useRef<Record<string, number>>({});
+  const cellRunStartRef = useRef<Map<string, number>>(new Map());
   const [nowTs, setNowTs] = useState<number>(() => Date.now());
   const clearCellProgress = useCallback((cellId: string) => {
-    delete cellRunStartRef.current[cellId];
+    cellRunStartRef.current.delete(cellId);
     setCellProgress((prev) => {
-      if (!(cellId in prev)) return prev;
-      const next = { ...prev }; delete next[cellId]; return next;
+      if (!prev.has(cellId)) return prev;
+      const next = new Map(prev); next.delete(cellId); return next;
     });
   }, []);
 
@@ -1491,7 +1491,7 @@ export function NotebookEditor({ item, id }: Props) {
     // received output so none is left on an eternal spinner (R3 #2/#3).
     const runnableCellIds = cells.filter((c) => c.type === 'code' && c.source.trim()).map((c) => c.id);
     const runStartNow = Date.now();
-    runnableCellIds.forEach((id) => { patchCell(id, { output: { status: 'pending' } }); cellRunStartRef.current[id] = runStartNow; });
+    runnableCellIds.forEach((id) => { patchCell(id, { output: { status: 'pending' } }); cellRunStartRef.current.set(id, runStartNow); });
     const appliedCells = new Set<string>();
     const applyCellOutputs = (map: Record<string, any> | undefined | null) => {
       if (!map || typeof map !== 'object') return;
@@ -1572,7 +1572,7 @@ export function NotebookEditor({ item, id }: Props) {
         if (p.progress && typeof p.progress === 'object') {
           // Attribute run-all progress to the cell the poll says is in flight.
           const activeId = runnableCellIds.find((id) => !appliedCells.has(id));
-          if (activeId) setCellProgress((prev) => ({ ...prev, [activeId]: p.progress as SparkRunProgress }));
+          if (activeId) setCellProgress((prev) => new Map(prev).set(activeId, p.progress as SparkRunProgress));
         }
         // Patch each cell's output the moment its statement completes (R3 #2).
         applyCellOutputs(p.cellOutputs);
@@ -1628,7 +1628,7 @@ export function NotebookEditor({ item, id }: Props) {
     } finally {
       setRunning(false);
       setRunPhase(null);
-      setCellProgress({}); cellRunStartRef.current = {}; // R4-NB-4 cleanup
+      setCellProgress(new Map()); cellRunStartRef.current.clear(); // R4-NB-4 cleanup
     }
   }, [workspaceId, notebookId, computeId, cells, patchCell, sessionConfigBody, pollRunStatus, loadJobs]);
 
@@ -1748,7 +1748,7 @@ export function NotebookEditor({ item, id }: Props) {
   // ── R4-NB-6 Outline jump ────────────────────────────────────────────────────
   const jumpToCell = useCallback((cellId: string) => {
     setActiveCellId(cellId);
-    cellRefs.current[cellId]?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    cellRefs.current.get(cellId)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     setOutlineOpen(false);
   }, []);
 
@@ -2194,7 +2194,7 @@ export function NotebookEditor({ item, id }: Props) {
     if (!computeId) { setRunMsg('Pick a compute target before running.'); return; }
     cancelRef.current.delete(cell.id);
     patchCell(cell.id, { output: { status: 'pending' } });
-    cellRunStartRef.current[cell.id] = Date.now(); // R4-NB-4 elapsed timer
+    cellRunStartRef.current.set(cell.id, Date.now()); // R4-NB-4 elapsed timer
     setSessionStatus('Running');
     setRunMsg(`Running cell ${cell.id.slice(0, 6)}…`);
     const prevExec = cell.executionCount || 0;
@@ -2248,7 +2248,7 @@ export function NotebookEditor({ item, id }: Props) {
         // RunProgress bar stays honest-indeterminate off the phase + elapsed.
         setRunPhase(p.phase || p.status || null);
         if (p.progress && typeof p.progress === 'object') {
-          setCellProgress((prev) => ({ ...prev, [cell.id]: p.progress as SparkRunProgress }));
+          setCellProgress((prev) => new Map(prev).set(cell.id, p.progress as SparkRunProgress));
         }
         // Adaptive polling: speed up after session is idle
         if (p.phase === 'statement-running') pollInterval = 1000;
@@ -3390,7 +3390,7 @@ export function NotebookEditor({ item, id }: Props) {
                 {cells.map((c, idx) => (
                   <div
                     key={c.id}
-                    ref={(el) => { cellRefs.current[c.id] = el; }}
+                    ref={(el) => { cellRefs.current.set(c.id, el); }}
                     onDragOver={(e) => { if (dragIndexRef.current != null) { e.preventDefault(); setDragOverId(c.id); } }}
                     onDrop={(e) => { e.preventDefault(); onCellDrop(idx); }}
                     style={dragOverId === c.id ? { outline: `2px dashed ${tokens.colorBrandStroke1}`, outlineOffset: 2, borderRadius: tokens.borderRadiusMedium } : undefined}
@@ -3445,9 +3445,9 @@ export function NotebookEditor({ item, id }: Props) {
                     {/* R4-NB-4 — live Spark progress under a running code cell. */}
                     {c.type === 'code' && c.output?.status === 'pending' && (
                       <RunProgress
-                        progress={cellProgress[c.id]}
+                        progress={cellProgress.get(c.id)}
                         phase={runPhase || undefined}
-                        elapsedSec={cellRunStartRef.current[c.id] ? Math.floor((nowTs - cellRunStartRef.current[c.id]) / 1000) : undefined}
+                        elapsedSec={(() => { const startedAt = cellRunStartRef.current.get(c.id); return startedAt ? Math.floor((nowTs - startedAt) / 1000) : undefined; })()}
                       />
                     )}
                     {c.type === 'markdown' && (

@@ -45,6 +45,9 @@ export function parseParameterCell(source: string): ParameterDecl[] {
     if (!m) continue;
     const name = m[1];
     if (['if', 'for', 'while', 'return', 'import', 'from'].includes(name)) continue;
+    // Never treat a prototype-polluting identifier as a parameter name — it can
+    // never be a legitimate papermill parameter and must not reach a keyed map.
+    if (name === '__proto__' || name === 'constructor' || name === 'prototype') continue;
     decls.push({ name, defaultValue: m[2] });
   }
   return decls;
@@ -63,13 +66,13 @@ interface Props {
 export function ParametersDialog({ open, onClose, parameterSource, onRun, busy }: Props) {
   const s = useStyles();
   const decls = useMemo(() => parseParameterCell(parameterSource), [parameterSource]);
-  const [values, setValues] = useState<Record<string, string>>({});
+  const [values, setValues] = useState<Map<string, string>>(() => new Map());
 
   // Seed the fields with the declared defaults each time the dialog opens.
   useEffect(() => {
     if (open) {
-      const seed: Record<string, string> = {};
-      for (const d of decls) seed[d.name] = d.defaultValue;
+      const seed = new Map<string, string>();
+      for (const d of decls) seed.set(d.name, d.defaultValue);
       setValues(seed);
     }
   }, [open, decls]);
@@ -79,7 +82,7 @@ export function ParametersDialog({ open, onClose, parameterSource, onRun, busy }
     // just the overrides — unchanged params keep their in-cell default).
     const overrides: Record<string, string> = {};
     for (const d of decls) {
-      const v = values[d.name];
+      const v = values.get(d.name);
       if (v !== undefined && v !== d.defaultValue) overrides[d.name] = v;
     }
     onRun(overrides);
@@ -109,8 +112,8 @@ export function ParametersDialog({ open, onClose, parameterSource, onRun, busy }
                 {decls.map((d) => (
                   <Field key={d.name} label={d.name} hint={`default: ${d.defaultValue}`}>
                     <Input
-                      value={values[d.name] ?? ''}
-                      onChange={(_, data) => setValues((p) => ({ ...p, [d.name]: data.value }))}
+                      value={values.get(d.name) ?? ''}
+                      onChange={(_, data) => setValues((p) => new Map(p).set(d.name, data.value))}
                     />
                   </Field>
                 ))}
