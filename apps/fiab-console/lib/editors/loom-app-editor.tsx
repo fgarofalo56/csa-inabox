@@ -34,6 +34,8 @@ import {
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { NewItemCreateGate } from './new-item-gate';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
+import { useRegisterRibbonCommands } from '@/lib/components/shared/ribbon-commands';
 import { useItemState, SaveStrip, SectionHead, useStyles } from './palantir/shared';
 import { getItemTypeIcon } from '@/lib/components/item-type-icon';
 import { findItemType } from '@/lib/catalog/fabric-item-types';
@@ -239,6 +241,8 @@ export function LoomAppEditor({ item, id }: { item: FabricItemType; id: string }
     ]},
   ], [save, saving, dirty, publish, pubBusy, content.length, state.published, id]);
 
+  useRegisterRibbonCommands(ribbon, 'loom-app');
+
   if (id === 'new') {
     return <NewItemCreateGate item={item}
       createLabel="Create Loom app"
@@ -253,13 +257,15 @@ export function LoomAppEditor({ item, id }: { item: FabricItemType; id: string }
   });
 
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon} dirty={dirty} commandSearch main={
       <div className={s.pad}>
         {loading && <Spinner size="small" label="Loading…" labelPosition="after" />}
-        <MessageBar intent="info"><MessageBarBody>
-          <MessageBarTitle>Loom app — org app (Azure-native)</MessageBarTitle>
-          Bundle existing workspace items into a distributable app with navigation and audiences, then publish a consumer view. Runs on Loom&apos;s Cosmos-backed definition + item access model — no Power BI or Microsoft Fabric workspace required.
-        </MessageBarBody></MessageBar>
+        <TeachingBanner
+          surfaceKey="loom-app-builder"
+          title="Bundle workspace items into an org app"
+          message="Pick items from this workspace, group them into navigation sections, scope them to audiences, then publish a consumer app view. Azure-native: the definition and audiences persist to Cosmos and the published view reuses Loom's item routes + access model — no Power BI or Microsoft Fabric workspace required."
+          learnMoreHref="https://learn.microsoft.com/power-bi/collaborate-share/service-create-distribute-apps"
+        />
 
         {state.published ? (
           <MessageBar intent="success"><MessageBarBody>

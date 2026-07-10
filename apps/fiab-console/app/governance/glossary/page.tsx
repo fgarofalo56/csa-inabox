@@ -17,6 +17,7 @@
 
 import { clientFetch } from '@/lib/client-fetch';
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import {
   Spinner, Badge, Caption1, Body1, Input, Textarea, Button, Field,
   MessageBar, MessageBarBody, MessageBarTitle,
@@ -28,6 +29,8 @@ import { GovernanceShell } from '@/lib/components/governance-shell';
 import { Section, Toolbar } from '@/lib/components/ui/section';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { EmptyState } from '@/lib/components/empty-state';
+import { GuidedEmptyState } from '@/lib/components/shared/guided-empty-state';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
 
 interface GlossaryTerm {
   guid: string;
@@ -47,6 +50,7 @@ const useStyles = makeStyles({
 
 export default function GlossaryPage() {
   const s = useStyles();
+  const router = useRouter();
   const [terms, setTerms] = useState<GlossaryTerm[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -128,6 +132,15 @@ export default function GlossaryPage() {
         attach them to data assets from each item's Classifications panel.
       </Body1>
 
+      <div className={s.banner}>
+        <TeachingBanner
+          surfaceKey="governance-glossary"
+          title="Standardize your vocabulary"
+          message="Define a term once here, then attach it to data assets from each item's Classifications panel so the whole catalog shares one meaning. Terms persist to Microsoft Purview when an account is bound, and to the Loom store otherwise."
+          learnMoreHref="https://learn.microsoft.com/purview/concept-business-glossary"
+        />
+      </div>
+
       {gate && (
         <MessageBar intent='warning' className={s.banner}>
           <MessageBarBody className={s.bannerBody}>
@@ -150,7 +163,26 @@ export default function GlossaryPage() {
         }
       >
         <Toolbar search={q} onSearch={setQ} searchPlaceholder='Search terms…' />
-        {loading ? <Spinner label='Loading glossary terms…' /> : (
+        {loading ? <Spinner label='Loading glossary terms…' /> : (!gate && !q && filtered.length === 0) ? (
+          <GuidedEmptyState
+            variant='block'
+            heroIcon={BookOpen24Regular}
+            title='No glossary terms yet'
+            intro='Create your first business term to start standardizing vocabulary across the catalog, then attach it to data assets from their Classifications panel.'
+            paths={[{
+              key: 'add-term',
+              title: 'Add term',
+              body: 'Name a term and write its definition — e.g. Customer Lifetime Value.',
+              icon: Add24Regular,
+              onClick: () => { setActionErr(null); setOk(null); setCreateOpen(true); },
+            }]}
+            askCopilot={{
+              onClick: () => router.push('/copilot'),
+              body: 'Describe a business concept and let Copilot draft a term and definition.',
+            }}
+            learnMoreHref='https://learn.microsoft.com/purview/concept-business-glossary'
+          />
+        ) : (
           <LoomDataTable
             columns={columns}
             rows={filtered}
