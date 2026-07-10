@@ -3012,6 +3012,27 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // loom-wrangler-host Container App; the /api/notebook/wrangler BFF
             // honest-gates on this when unset (the panel still renders).
             { name: 'LOOM_WRANGLER_ENDPOINT', value: wranglerActive ? 'https://${wrangler!.outputs.fqdn}' : '' }
+            // ── Hyperscale band (HYP-16 cross-cutting platform) ──
+            // The three H-band substrate services (Loom OneLake / Loom Direct Lake
+            // / Loom Capacity Broker) are STANDALONE ACA apps deployed out-of-band
+            // via compute/loom-{onelake,directlake,capacity-broker}-app.bicep on the
+            // shared substrate from compute/hband-shared.bicep (Redis Premium +
+            // dedicated least-privilege UAMIs) — main.bicep is at the 256-param
+            // ceiling, so those modules are NOT wired here. Each URL is emitted with
+            // an empty default so a from-scratch deploy is COHERENT (env-sync guard
+            // satisfied) and defaults to OFF: unset → the console lib client
+            // honest-503 gates and SILENTLY falls back to the existing per-item
+            // library path (OneLake), the AAS/Synapse-Serverless semantic path
+            // (Direct Lake), or unthrottled job submission (Broker) — never a Fabric
+            // gate, never a regression (no-fabric-dependency.md, default-ON/opt-out).
+            // After deploying the standalone modules the operator sets the real
+            // values here via /admin/env-config (or `az containerapp update`); the
+            // per-service app module output supplies each value. LOOM_BROKER_REDIS /
+            // LOOM_DIRECTLAKE_REDIS is <hband-redis-host>:6380 from hband-shared.
+            { name: 'LOOM_ONELAKE_URL', value: '' }
+            { name: 'LOOM_DIRECTLAKE_URL', value: '' }
+            { name: 'LOOM_BROKER_URL', value: '' }
+            { name: 'LOOM_BROKER_REDIS', value: '' }
             // Governance → Data quality (run/results/monitors) and Master data
             // management (match/merge → golden records) REUSE the Databricks /
             // Synapse / Kusto bindings above (LOOM_DATABRICKS_SQL_WAREHOUSE_ID,

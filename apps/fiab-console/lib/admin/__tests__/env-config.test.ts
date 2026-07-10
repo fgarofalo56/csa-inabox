@@ -134,8 +134,11 @@ describe('admin/env-config registry', () => {
     // SIEM audit-stream wiring). Bumped to 67 by SVC-1/SVC-8 (the svc-ai-enrich
     // spec adds LOOM_DOCINTEL_ENDPOINT / LOOM_VISION_ENDPOINT /
     // LOOM_LANGUAGE_ENDPOINT / LOOM_TRANSLATOR_ENDPOINT / LOOM_CONTENT_SAFETY_ENDPOINT
-    // — the AI-enrichment pipeline-activity cognitive endpoints).
-    expect(EDITABLE_ENV.length).toBe(67);
+    // — the AI-enrichment pipeline-activity cognitive endpoints). Bumped to 71 by
+    // HYP-16 (the Hyperscale band substrate services: LOOM_ONELAKE_URL,
+    // LOOM_DIRECTLAKE_URL, LOOM_BROKER_URL, LOOM_BROKER_REDIS — the three optional
+    // default-OFF H-band service URLs + the shared Redis host).
+    expect(EDITABLE_ENV.length).toBe(71);
   });
 
   it('surfaces the wave-2 env vars as settable (previously dropped by the whitelist)', () => {
