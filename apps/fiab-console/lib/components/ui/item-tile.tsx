@@ -49,6 +49,12 @@ export interface ItemTileProps {
   /** Render the icon chip larger (default 'md'). */
   size?: 'md' | 'lg';
   /**
+   * Optional custom leading visual that replaces the tinted item-type icon chip
+   * (e.g. a workspace's uploaded image via `WorkspaceAvatar`). When provided it
+   * is rendered in the chip slot as-is; the caller sizes it to match the chip.
+   */
+  leadingVisual?: React.ReactNode;
+  /**
    * Draw a brand selection ring around the tile. Used by multi-select surfaces
    * (e.g. admin bulk operations) to mark a tile as picked. Purely visual — the
    * caller owns the selection state and renders its own checkbox (typically in
@@ -175,6 +181,7 @@ export function ItemTile({
   onClick,
   size = 'md',
   selected = false,
+  leadingVisual,
 }: ItemTileProps): React.ReactElement {
   const styles = useStyles();
   const visual = itemVisual(type);
@@ -204,19 +211,31 @@ export function ItemTile({
       }
     >
       <div className={styles.head}>
-        <span
-          className={mergeClasses(
-            styles.chip,
-            size === 'lg' ? styles.chipLg : styles.chipMd,
-          )}
-          style={{
-            backgroundColor: `${visual.color}1f`, // ~12% tint
-            color: visual.color,
-          }}
-          aria-hidden
-        >
-          <Icon style={{ width: iconPx, height: iconPx, color: visual.color }} />
-        </span>
+        {leadingVisual != null ? (
+          <span
+            className={mergeClasses(
+              styles.chip,
+              size === 'lg' ? styles.chipLg : styles.chipMd,
+            )}
+            aria-hidden
+          >
+            {leadingVisual}
+          </span>
+        ) : (
+          <span
+            className={mergeClasses(
+              styles.chip,
+              size === 'lg' ? styles.chipLg : styles.chipMd,
+            )}
+            style={{
+              backgroundColor: `${visual.color}1f`, // ~12% tint
+              color: visual.color,
+            }}
+            aria-hidden
+          >
+            <Icon style={{ width: iconPx, height: iconPx, color: visual.color }} />
+          </span>
+        )}
         <span className={styles.titleWrap}>
           <Text className={styles.title} title={title}>
             {title}

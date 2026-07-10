@@ -23,6 +23,17 @@ export interface Workspace {
   lastAccessedAt?: string;
   /** Aggregated item count. Only present on GET /api/workspaces?count=true. */
   itemCount?: number;
+  /**
+   * Custom workspace image metadata (Power BI-style avatar). Present when an
+   * image has been uploaded; the bytes are served by
+   * GET /api/workspaces/[id]/image. Absent = render the default initial glyph.
+   */
+  image?: {
+    contentType: string;
+    size: number;
+    updatedAt: string;
+    updatedBy: string;
+  };
 }
 
 export interface WorkspaceItem {

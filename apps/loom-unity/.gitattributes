@@ -1,0 +1,4 @@
+# The entrypoint runs inside a Linux (alpine) container — CRLF would break the
+# shebang and `set -eu`. Force LF for shell scripts here regardless of platform.
+*.sh text eol=lf
+loom-entrypoint.sh text eol=lf

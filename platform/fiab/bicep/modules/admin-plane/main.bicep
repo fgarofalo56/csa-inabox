@@ -2208,11 +2208,25 @@ module apim 'apim.bicep' = if (apimEnabled && empty(existingApimName)) {
 // 9b. Shared ADX cluster (admin-plane scope). DLZ databases attach here.
 // =====================================================================
 
+// ADX SKU boundary guard. The Commercial default (Dev(No SLA)_Standard_E2a_v4)
+// is backed by the E2a_v4 VM, which is NOT offered in usgovvirginia — a LIVE
+// `az deployment sub create` there (2026-07-10) failed the cluster with
+// `Standard_E2a_v4 is not supported in usgovvirginia`. When a Gov boundary
+// (GCC-High / IL5) is left on that default, substitute the LIVE-verified Gov Dev
+// SKU Dev(No SLA)_Standard_D11_v2 — the tier-preserving 1:1 swap (both Dev(No
+// SLA) / Basic tier, single node, ~$140/mo, no optimizedAutoscale), so no other
+// cluster param changes. An operator who sets adxSkuName explicitly (e.g. a
+// production Standard_E2ads_v5 in Gov) passes through unchanged. Commercial / GCC
+// never enter this branch, so their SKU is byte-identical.
+var effectiveAdxSkuName = (boundary == 'GCC-High' || boundary == 'IL5') && adxSkuName == 'Dev(No SLA)_Standard_E2a_v4'
+  ? 'Dev(No SLA)_Standard_D11_v2'
+  : adxSkuName
+
 module adxCluster 'adx-cluster.bicep' = if (adxEnabled && empty(existingAdxClusterName)) {
   name: 'adx-cluster'
   params: {
     location: location
-    skuName: adxSkuName
+    skuName: effectiveAdxSkuName
     enableOptimizedAutoscale: adxEnableOptimizedAutoscale
     autoscaleMinimum: adxAutoscaleMinimum
     autoscaleMaximum: adxAutoscaleMaximum
@@ -2469,6 +2483,9 @@ module swaPublishRbac 'swa-publish-rbac.bicep' = if (!skipRoleGrants) {
   scope: resourceGroup(effectiveSwaRg)
   params: {
     consolePrincipalId: identity.outputs.uamiConsolePrincipalId
+    // Selects Website Contributor (Commercial / GCC) vs Contributor (Gov, where
+    // Website Contributor does not resolve — see swa-publish-rbac.bicep header).
+    boundary: boundary
     skipRoleGrants: skipRoleGrants
   }
 }
