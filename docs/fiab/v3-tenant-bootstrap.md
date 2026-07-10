@@ -144,6 +144,60 @@ Until enrolled, the Policy list segment shows an honest `MessageBar`
 explaining the enrollment requirement. Alerts, violations, and
 Restrict-access are unaffected.
 
+### Prerequisite E — MSAL app-reg: delegated Power BI permissions for user-passthrough {#prereq-powerbi-delegated}
+
+**Why:** Every Power BI tie-in in Loom (report/dashboard embed, dataset &
+dataflow refresh, semantic-model authoring, workspace browse & access
+management, endorsement, deployment pipelines, the Direct Lake shim, Fabric
+Activator, `.pbids` / Open-in-Power-BI, and the Power BI Copilot) authenticates
+**on-behalf-of the signed-in user** — the user's own Power BI RBAC — NOT the
+Loom service principal/UAMI. This matches how Power BI auth works inside
+Synapse and is the **default** (`LOOM_POWERBI_USER_PASSTHROUGH`, default ON;
+set `false` to revert to the console service-principal path). For the silent
+On-Behalf-Of exchange to succeed, the Loom MSAL app registration must hold the
+**delegated** Power BI permissions, admin-consented for the tenant.
+
+Delegated permissions to add (Power BI Service → Delegated):
+
+- `Workspace.Read.All`
+- `Report.ReadWrite.All`
+- `Dataset.ReadWrite.All`
+- `Content.Create`
+
+(`Dataset.Read.All`, `MLModel.Execute.All`, `Workspace.Read.All` are also
+requested by the opt-in Power BI remote MCP; a token minted for the Power BI
+resource `.default` scope carries whichever of these the tenant has consented.)
+
+**Action:** A Global Administrator or Application Administrator runs **once**:
+
+```bash
+# Via the Azure portal:
+# Entra ID → App registrations → <loom-msal-app> → API permissions
+# → Add a permission → Power BI Service → Delegated
+# → Workspace.Read.All, Report.ReadWrite.All, Dataset.ReadWrite.All, Content.Create → Add
+# → Grant admin consent for <tenant>
+
+# Or via CLI (Power BI Service resourceAppId = 00000009-0000-0000-c000-000000000000):
+APP_OID=$(az ad app show --id $LOOM_MSAL_CLIENT_ID --query id -o tsv)
+PBI_SP=$(az ad sp list --filter "appId eq '00000009-0000-0000-c000-000000000000'" --query "[0].id" -o tsv)
+for SCOPE in Workspace.Read.All Report.ReadWrite.All Dataset.ReadWrite.All Content.Create; do
+  SID=$(az ad sp show --id $PBI_SP --query "oauth2PermissionScopes[?value=='$SCOPE'].id | [0]" -o tsv)
+  echo "  $SCOPE -> $SID"
+done
+# Add the delegated permissions to the app registration (merge with existing
+# requiredResourceAccess) in the portal, then grant admin consent:
+az rest --method POST \
+  --url "https://graph.microsoft.com/v1.0/oauth2PermissionGrants" \
+  --headers "Content-Type=application/json" \
+  --body "{\"clientId\":\"$APP_OID\",\"consentType\":\"AllPrincipals\",\"resourceId\":\"$PBI_SP\",\"scope\":\"Workspace.Read.All Report.ReadWrite.All Dataset.ReadWrite.All Content.Create\"}"
+```
+
+Until consented, a Power BI surface renders an honest `MessageBar` naming this
+exact remediation (an `AADSTS65001` consent gate); nothing silently downgrades
+to the service principal. The `.pbids` / Open-in-Power-BI hand-off and the
+`Service principals can use Power BI APIs` tenant setting (still needed for the
+service-principal fallback used by background jobs) are unchanged.
+
 ---
 
 ## Deployment topology — `deploymentMode` & DLZ-attach {#deployment-topology}
