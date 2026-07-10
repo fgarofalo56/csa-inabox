@@ -69,6 +69,7 @@ import {
   Form20Regular, TextT20Regular, Wand20Regular, DocumentAdd20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { ToolbarCrossLinks } from '@/lib/components/shared/item-tab-strip';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
@@ -469,6 +470,19 @@ export function RayfinAppEditor({ item, id }: { item: FabricItemType; id: string
           and the opt-in Rayfin SDK / CLI path.
         </MessageBarBody>
       </MessageBar>
+
+      <div className={s.row}>
+        <ToolbarCrossLinks
+          ariaLabel="Related app surfaces"
+          maxInline={4}
+          links={[
+            { key: 'loom-app-runtime', label: 'Loom App', href: '/items/loom-app-runtime/new' },
+            { key: 'semantic-model', label: 'Semantic model', href: '/items/semantic-model/new' },
+            { key: 'report', label: 'Report', href: '/items/report/new' },
+            { key: 'data-agent', label: 'Data Agent', href: '/items/data-agent/new' },
+          ]}
+        />
+      </div>
 
       <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as 'backend' | 'binding' | 'app')}>
         <Tooltip relationship="description" content="Define the entities and services your app manages.">

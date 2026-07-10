@@ -35,6 +35,7 @@ import {
 import { ItemEditorChrome } from './item-editor-chrome';
 import { useCollapsibleState, CollapsedRail } from '@/lib/components/collapsible-side-panel';
 import { GuidedEmptyState, type GuidedPath } from '@/lib/components/shared/guided-empty-state';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
 import { PowerQueryHost } from '@/lib/components/pipeline/dataflow/power-query-host';
 import { DataflowCopilotPane } from '@/lib/components/pipeline/dataflow/dataflow-copilot-pane';
 import { DestinationPicker } from '@/lib/components/pipeline/dataflow/destination-picker';
@@ -374,6 +375,12 @@ export function DataflowGen2Editor({ item, id }: Props) {
       }
       main={
         <div className={s.pad}>
+          <TeachingBanner
+            surfaceKey="dataflow-gen2-editor"
+            title="Shape data with Power Query"
+            message="Import from any connector, transform with Power Query M steps, and land the result to your lakehouse or warehouse. Loom runs this Azure-native on Azure Data Factory — no Fabric capacity required."
+            learnMoreHref="https://learn.microsoft.com/fabric/data-factory/dataflows-gen2-overview"
+          />
           <div className={s.toolbar}>
             <Badge appearance="filled" color="brand">Dataflow Gen2</Badge>
             <Badge appearance="outline" color="success">

@@ -31,6 +31,10 @@ import {
 } from '@/lib/components/pipeline/linked-service-gallery';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
+// UX-baseline shared components (SC-6 teaching banner + SC-9 ribbon
+// command-search) — additive chrome over the real, unchanged connector gallery.
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
+import { useRegisterRibbonCommands } from '@/lib/components/shared/ribbon-commands';
 
 const useStyles = makeStyles({
   pad: {
@@ -62,13 +66,26 @@ export function LinkedServiceEditor({ item, id }: { item: FabricItemType; id: st
 
   const cur = ENGINES.find((e) => e.value === engine)!;
 
+  // SC-9 — publish the backend-switch ribbon actions to the shared command
+  // registry so the in-ribbon Ctrl+Q / Alt+Q CommandSearch can run them.
+  useRegisterRibbonCommands(ribbon, 'linked-service');
+
   return (
     <ItemEditorChrome
       item={item}
       id={id}
       ribbon={ribbon}
+      commandSearch
       main={
         <div className={s.pad}>
+          {/* SC-6 — teaching banner explaining the linked-service concept,
+              keyed per surface with a persistent dismiss. */}
+          <TeachingBanner
+            surfaceKey="linked-service-teach"
+            title="Connect to your data with a linked service"
+            message="A linked service is a reusable connection — pick a connector, choose an auth method (secrets stored as secureString), and Test the connection. Pipelines, datasets, and data flows bind to it. Authored on the Azure-native Data Factory by default; no Fabric required."
+            learnMoreHref="https://learn.microsoft.com/azure/data-factory/concepts-linked-services"
+          />
           <div className={s.bar}>
             <Badge appearance="filled" color="brand" icon={<PlugConnected20Regular />}>Linked services</Badge>
             <Field label="Backend" className={s.backend}>

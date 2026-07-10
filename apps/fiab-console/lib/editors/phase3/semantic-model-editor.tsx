@@ -35,6 +35,8 @@ import {
 } from '@fluentui/react-icons';
 import { PbiModelViewPanel } from '../components/pbi-model-view-panel';
 import { EntityDiagram } from '@/lib/components/shared/entity-diagram';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
+import { loomDocUrl } from '@/lib/learn/content';
 import { ModelTabsExtra } from '../components/model-tabs-extra';
 import { PowerBiTree } from '@/lib/components/powerbi/powerbi-tree';
 import { validateRlsDax } from '@/lib/azure/aas-dax-validate';
@@ -278,6 +280,14 @@ function AasSemanticModelPanel({ item, id }: { item: FabricItemType; id: string 
               {refreshing ? 'Queuing…' : 'Refresh now'}
             </Button>
           </div>
+
+          {/* SC-6 — teaching banner: the AAS-backed tabular model + Model view. */}
+          <TeachingBanner
+            surfaceKey="semantic-model"
+            title="A Loom semantic model is a real Azure Analysis Services tabular model"
+            message="Tables, relationships, and measures live in a live AAS Standard database — the Model view renders them as the shared relationship canvas (table cards + cardinality-marked join lines), Refresh queues a real processing operation, and storage mode is a live setting. No Microsoft Fabric or Power BI workspace is required."
+            learnMoreHref={loomDocUrl('fiab/parity/semantic-model')}
+          />
 
           {loading && <Spinner size="small" label="Loading Azure Analysis Services databases…" labelPosition="after" />}
 

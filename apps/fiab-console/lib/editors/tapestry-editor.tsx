@@ -44,6 +44,8 @@ import type { RibbonTab } from '@/lib/components/ribbon';
 import { ForceDirectedGraph, extractGraph, type GraphNode } from '@/lib/components/graph/force-directed-graph';
 import { GeoJsonMap } from '@/lib/components/graph/geojson-map';
 import { KustoResultsGrid } from '@/lib/components/adx/kusto-results-grid';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
+import { loomDocUrl } from '@/lib/learn/content';
 
 const useStyles = makeStyles({
   pad: {
@@ -297,6 +299,14 @@ export function TapestryEditor({ item, id }: { item: FabricItemType; id: string 
             </TabList>
           </div>
           <div className={s.pad}>
+            {/* SC-6 — teaching banner: the three coordinated panes + cross-filter. */}
+            <TeachingBanner
+              surfaceKey="tapestry"
+              icon={Organization24Regular}
+              title="One investigation, three coordinated analysis panes"
+              message="Link, Geo, and Timeline all query the SAME materialized Node_* / Edge_* ADX tables — no second engine and no Microsoft Fabric. Clicking a node in the graph sets a shared seed that the Geo and Timeline panes inherit on their next run, so you can pivot a person to their locations and their event timeline in one motion. Every control runs a real KQL graph query."
+              learnMoreHref={loomDocUrl('fiab/parity/tapestry')}
+            />
             {tab === 'link' && (
               <>
                 <div className={s.filterBar}>
