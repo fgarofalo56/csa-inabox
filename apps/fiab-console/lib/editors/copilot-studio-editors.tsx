@@ -37,6 +37,7 @@ import {
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
+import { useRegisterRibbonCommands } from '@/lib/components/shared/ribbon-commands';
 import { KeyValueGrid } from '@/lib/components/ui/key-value-grid';
 import { CopilotTopicCanvas } from './copilot-topic-canvas';
 import { EmptyState } from '@/lib/components/empty-state';
@@ -473,12 +474,13 @@ export function CopilotStudioAgentEditor({ item, id }: { item: FabricItemType; i
       ]},
     ];
   }, [envId, form.name, busy, selectedId, dirty, startNew, save, publish, remove]);
+  useRegisterRibbonCommands(ribbon, item.slug);
 
   return (
     <ItemEditorChrome
       item={item}
       id={id}
-      ribbon={ribbon}
+      ribbon={ribbon} commandSearch
       leftPanel={
         <div className={s.treePad}>
           <Tree aria-label="Agents" defaultOpenItems={['agents']}>
@@ -736,11 +738,12 @@ export function CopilotKnowledgeEditor({ item, id }: { item: FabricItemType; id:
         title: 'Remove — use the per-row Remove button on a specific knowledge source' },
     ]}]},
   ], [agentId]);
+  useRegisterRibbonCommands(ribbon, item.slug);
   return (
     <ItemEditorChrome
       item={item}
       id={id}
-      ribbon={ribbon}
+      ribbon={ribbon} commandSearch
       main={
         <div className={s.pad}>
           <EnvironmentPicker value={envId} onChange={(v) => { setEnvId(v); setAgentId(''); }} />
@@ -945,11 +948,12 @@ export function CopilotTopicEditor({ item, id }: { item: FabricItemType; id: str
         title: 'Delete — use the per-row Delete button on a specific topic card' },
     ]}]},
   ], [agentId]);
+  useRegisterRibbonCommands(ribbon, item.slug);
   return (
     <ItemEditorChrome
       item={item}
       id={id}
-      ribbon={ribbon}
+      ribbon={ribbon} commandSearch
       main={
         <div className={s.pad}>
           <EnvironmentPicker value={envId} onChange={(v) => { setEnvId(v); setAgentId(''); }} />
@@ -1376,11 +1380,12 @@ export function CopilotActionEditor({ item, id }: { item: FabricItemType; id: st
         title: 'Remove — use the per-row Remove button on a specific bound action' },
     ]}]},
   ], [agentId]);
+  useRegisterRibbonCommands(ribbon, item.slug);
   return (
     <ItemEditorChrome
       item={item}
       id={id}
-      ribbon={ribbon}
+      ribbon={ribbon} commandSearch
       main={
         <div className={s.pad}>
           <EnvironmentPicker value={envId} onChange={(v) => { setEnvId(v); setAgentId(''); }} />
@@ -1531,11 +1536,12 @@ export function CopilotChannelEditor({ item, id }: { item: FabricItemType; id: s
         title: agentId ? undefined : 'Refresh — pick an environment + agent first' },
     ]}]},
   ], [agentId]);
+  useRegisterRibbonCommands(ribbon, item.slug);
   return (
     <ItemEditorChrome
       item={item}
       id={id}
-      ribbon={ribbon}
+      ribbon={ribbon} commandSearch
       main={
         <div className={s.pad}>
           <EnvironmentPicker value={envId} onChange={(v) => { setEnvId(v); setAgentId(''); }} />
@@ -1804,12 +1810,13 @@ export function CopilotAnalyticsEditor({ item, id }: { item: FabricItemType; id:
       { label: '90d', onClick: () => setDays(90) },
     ]}]},
   ], []);
+  useRegisterRibbonCommands(ribbon, item.slug);
 
   return (
     <ItemEditorChrome
       item={item}
       id={id}
-      ribbon={ribbon}
+      ribbon={ribbon} commandSearch
       main={
         <div className={s.pad}>
           <EnvironmentPicker value={envId} onChange={(v) => { setEnvId(v); setAgentId(''); }} />
@@ -1879,12 +1886,13 @@ export function CopilotTemplateLibraryEditor({ item, id }: { item: FabricItemTyp
         title: 'Use template — click the "Use template" button on a specific template card' },
     ]}]},
   ], [refresh]);
+  useRegisterRibbonCommands(ribbon, item.slug);
 
   return (
     <ItemEditorChrome
       item={item}
       id={id}
-      ribbon={ribbon}
+      ribbon={ribbon} commandSearch
       main={
         <div className={s.pad}>
           <div className={s.toolbar}>

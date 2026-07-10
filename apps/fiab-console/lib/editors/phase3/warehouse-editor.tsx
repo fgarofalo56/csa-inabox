@@ -35,6 +35,8 @@ import { ItemEditorChrome } from '../item-editor-chrome';
 import { OpenInPbiDesktopButton } from '../components/open-in-pbi-desktop-button';
 import { EmptyState } from '@/lib/components/empty-state';
 import { PreviewTable } from '@/lib/components/shared/preview-table';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
+import { loomDocUrl } from '@/lib/learn/content';
 import { WarehouseMonitoringTab } from '../components/warehouse-monitoring';
 import { WarehouseTimeTravelTab } from '../components/warehouse-time-travel';
 import { StatsMaintenanceDialog } from '../components/stats-maintenance-dialog';
@@ -630,6 +632,14 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
             <Tab value="time-travel" icon={<History20Regular />}>Time travel</Tab>
             <Tab value="migrate" icon={<ArrowImport20Regular />}>Migrate</Tab>
           </TabList>
+          {/* SC-6 — teaching banner: real backend + how the tabs relate. */}
+          <TeachingBanner
+            surfaceKey="warehouse"
+            icon={Database20Regular}
+            title="A Loom Warehouse is real T-SQL over a Synapse Dedicated SQL pool"
+            message="The Query tab runs live T-SQL (Copilot can draft, explain, and optimize it against a real EXPLAIN plan); the Model tab is the Loom-native model view — table cards + relationship lines + measures, with no Power BI dependency; Monitoring reads live sys.dm_pdw_exec_requests; and Time travel exposes restore points and snapshots. Azure-native — no Microsoft Fabric capacity required."
+            learnMoreHref={loomDocUrl('fiab/parity/warehouse')}
+          />
           {editorTab === 'migrate' && <SqlMigrationWizard />}
           {editorTab === 'time-travel' && (
             isNew

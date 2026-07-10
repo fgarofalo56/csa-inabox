@@ -42,6 +42,7 @@ import {
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { DetailsPanel, type DetailsSection } from '@/lib/components/shared/details-panel';
 import { NewItemCreateGate } from './new-item-gate';
 import { safeModelJson } from './model-fetch';
 import { PredictWizard } from './components/predict-wizard';
@@ -399,6 +400,41 @@ function MlModelEditorBody({ item, id }: { item: FabricItemType; id: string }) {
   const current = versions.find((v) => v.version === selected) || versions[0];
   const currentMlflow = current ? stageByVersion.get(String(current.version)) : undefined;
 
+  // SC-2 right details rail — the bound model + selected version artifact URI +
+  // live online-endpoint scoring URIs, all copyable. Values come from the real
+  // AML backend (binding + versions + endpoints); nothing hard-coded.
+  const detailsPanel = useMemo(() => {
+    if (!bound?.modelName) return undefined;
+    const sections: DetailsSection[] = [
+      {
+        key: 'model',
+        title: 'Model',
+        stats: [
+          { key: 'name', label: 'Registered model', value: bound.modelName },
+          { key: 'ws', label: 'Workspace', value: bound.workspaceName || '—' },
+          { key: 'latest', label: 'Latest version', value: model?.latestVersion ? `v${model.latestVersion}` : '—' },
+          ...(current ? [{ key: 'sel', label: 'Selected version', value: `v${current.version}` }] : []),
+          ...(current?.modelType ? [{ key: 'type', label: 'Flavor', value: current.modelType }] : []),
+        ],
+        uris: current?.modelUri ? [{ key: 'uri', label: 'Model artifact URI', value: current.modelUri }] : undefined,
+      },
+      ...(endpoints.some((ep) => ep.scoringUri) ? [{
+        key: 'endpoints',
+        title: 'Online scoring endpoints',
+        uris: endpoints
+          .filter((ep) => ep.scoringUri)
+          .map((ep) => ({ key: `ep-${ep.name}`, label: ep.name, value: ep.scoringUri as string })),
+      }] : []),
+    ];
+    return (
+      <DetailsPanel
+        title="Model details"
+        subtitle={bound.modelName}
+        sections={sections}
+      />
+    );
+  }, [bound?.modelName, bound?.workspaceName, model?.latestVersion, current, endpoints]);
+
   // ---- Unbound: full surface still renders, with a bind picker ----
   const bindPanel = (
     <div className={s.card} style={{ maxWidth: 640 }}>
@@ -458,6 +494,8 @@ function MlModelEditorBody({ item, id }: { item: FabricItemType; id: string }) {
       item={item}
       id={id}
       ribbon={ribbon}
+      rightPanel={detailsPanel}
+      rightPanelLabel="Details"
       leftPanel={
         <div style={{ padding: tokens.spacingVerticalS }}>
           <Caption1 style={{ padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`, color: tokens.colorNeutralForeground3 }}>

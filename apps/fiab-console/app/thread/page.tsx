@@ -38,7 +38,10 @@ import {
 } from '@fluentui/react-components';
 import {
   Branch24Regular, ArrowRight16Regular, Open16Regular, ZoomFit20Regular,
+  Search24Regular, Add24Regular,
 } from '@fluentui/react-icons';
+import { GuidedEmptyState } from '@/lib/components/shared/guided-empty-state';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { ViewToggle, type LoomGraphView } from '@/lib/components/ui/view-toggle';
 import { ItemTile } from '@/lib/components/ui/item-tile';
@@ -91,15 +94,6 @@ const useStyles = makeStyles({
   arrow: { color: tokens.colorNeutralForeground3, verticalAlign: 'middle' },
   toolbar: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: tokens.spacingHorizontalM, flexWrap: 'wrap' },
   tileFooter: { display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, flexWrap: 'wrap' },
-  emptyCanvas: {
-    display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-    gap: tokens.spacingVerticalM, textAlign: 'center', padding: tokens.spacingVerticalXXXL,
-    minHeight: '320px',
-    border: `1px dashed ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusXLarge,
-    backgroundColor: tokens.colorNeutralBackground2,
-  },
-  emptyGlyph: { color: tokens.colorBrandForeground1, opacity: 0.85, fontSize: '44px', width: '44px', height: '44px' },
-  emptyActions: { display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap', justifyContent: 'center' },
 });
 
 function typeColor(t: string): 'brand' | 'success' | 'warning' | 'informative' | 'subtle' {
@@ -257,6 +251,13 @@ export default function ThreadLineagePage() {
         Deleting an item automatically removes its lineage here.
       </Body1>
 
+      <TeachingBanner
+        surfaceKey="thread-lineage"
+        title="Read the flow left to right"
+        message="Each node is a Loom item; each arrow is a Weave you created — a source feeding a target. Switch to the Graph view to trace an upstream/downstream chain, or use the Tiles and List views to scan every edge. Open any item's editor and choose Weave to add a new edge."
+        learnMoreHref="https://learn.microsoft.com/purview/concept-data-lineage"
+      />
+
       {hasRows && (
         <div className={styles.kpis}>
           <Card className={styles.kpi}><span className={styles.kpiNum}>{kpis.total}</span><Caption1>Total edges</Caption1></Card>
@@ -315,23 +316,18 @@ export default function ThreadLineagePage() {
         hasEdges ? (
           <LineageCanvas ref={canvasRef} nodes={graph.nodes} edges={graph.edges} />
         ) : (
-          <div className={styles.emptyCanvas}>
-            <Branch24Regular className={styles.emptyGlyph} />
-            <Title2>No lineage yet</Title2>
-            <Body1 className={styles.intro}>
-              Your Thread graph is empty. Lineage edges appear here automatically when you use
-              {' '}<strong>Weave</strong> on an item&apos;s editor — analyze a dataset in a Notebook, add it as a
-              Data Agent source, build a Power BI model, or publish it as an API.
-            </Body1>
-            <div className={styles.emptyActions}>
-              <Button appearance="primary" icon={<Open16Regular />} onClick={() => router.push('/browse')}>
-                Browse items to Weave
-              </Button>
-              <Button appearance="secondary" onClick={() => router.push('/workload-hub')}>
-                Create a new item
-              </Button>
-            </div>
-          </div>
+          <GuidedEmptyState
+            title="No lineage yet"
+            heroIcon={Branch24Regular}
+            intro={<>Your Thread graph is empty. Lineage edges appear automatically once you <strong>Weave</strong> an item on its editor — analyze a dataset in a Notebook, add it as a Data Agent source, build a Power BI model, or publish it as an API.</>}
+            ariaLabel="No lineage yet"
+            paths={[
+              { key: 'browse', title: 'Browse items to Weave', body: 'Open a data item and choose Weave to wire it into another Loom service.', icon: Search24Regular, onClick: () => router.push('/browse') },
+              { key: 'create', title: 'Create a new item', body: 'Start from the Workload hub, then Weave the item you build.', icon: Add24Regular, onClick: () => router.push('/workload-hub') },
+            ]}
+            askCopilot={{ onClick: () => router.push('/copilot'), body: 'Ask Copilot how to connect two items and build the lineage for you.' }}
+            learnMoreHref="https://learn.microsoft.com/purview/concept-data-lineage"
+          />
         )
       ) : (
         <LoomDataTable<ThreadEdge>

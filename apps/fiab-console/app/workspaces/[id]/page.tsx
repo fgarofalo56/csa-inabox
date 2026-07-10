@@ -27,6 +27,7 @@ import {
 } from '@fluentui/react-icons';
 import Link from 'next/link';
 import { PageShell } from '@/lib/components/page-shell';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
 import { NewItemDialog } from '@/lib/components/new-item-dialog';
 import { WorkspaceSettingsDrawer } from '@/lib/components/workspace-settings-drawer';
 import { ManageAccessPane } from '@/lib/panes/manage-access-pane';
@@ -128,6 +129,21 @@ export default function WorkspaceDetailPage(props: { params: Promise<{ id: strin
             <Tab value="task-flows" icon={<Flowchart20Regular />}>Task flows</Tab>
           </TabList>
 
+          {tab === 'items' ? (
+            <TeachingBanner
+              surfaceKey="workspace-items"
+              title="Organize items into folders"
+              message="Create folders and drag items between them to structure this workspace — the same nesting you get in a Fabric workspace. Use New item to add a notebook, pipeline, or dataset; right-click a folder to rename, move, or delete it."
+              learnMoreHref="https://learn.microsoft.com/fabric/get-started/workspaces"
+            />
+          ) : (
+            <TeachingBanner
+              surfaceKey="workspace-task-flows"
+              title="Map how your work connects"
+              message="A task flow is a visual map of the steps that move data through this workspace. Drag steps onto the canvas, connect them, and attach the real items each step runs — a shared, at-a-glance view of the end-to-end process."
+              learnMoreHref="https://learn.microsoft.com/fabric/get-started/task-flow-overview"
+            />
+          )}
           {tab === 'items' && <FoldersPane workspaceId={ws.id} />}
           {tab === 'task-flows' && <TaskFlowsPane workspaceId={ws.id} />}
         </>

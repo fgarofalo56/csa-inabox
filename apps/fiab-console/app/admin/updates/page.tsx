@@ -16,6 +16,8 @@ import {
 import { Section } from '@/lib/components/ui/section';
 import { useAdminTabStyles } from '@/lib/components/ui/admin-tab-styles';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
+import { LOOM_ACCENT } from '@/lib/components/shared/accent-tokens';
 
 /**
  * Markdown styling atoms. Defined at module scope so the MarkdownNotes
@@ -344,6 +346,15 @@ export default function UpdatesPage() {
         ],
       }}
     >
+      <TeachingBanner
+        surfaceKey="admin-updates"
+        title="In-place updates, no rebuild"
+        accent={LOOM_ACCENT.blue}
+        icon={ArrowUpload24Regular}
+        message="Applying an update rolls your Container Apps straight onto the published release images — no repo clone, no CI run. Review the release notes between your version and upstream first, then apply. If the images for a release are not yet published, the update refuses with a clear message rather than breaking anything."
+        learnMoreHref="https://github.com/fgarofalo56/csa-inabox/releases"
+        learnMoreLabel="Releases on GitHub"
+      />
       <Body1 className={s.intro}>
         Loom is open source and continuously updated. This page shows your running build,
         the latest version published upstream, and any release notes between them. When an

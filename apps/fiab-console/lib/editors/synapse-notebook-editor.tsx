@@ -49,6 +49,8 @@ import {
   CalendarClock20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
+import { loomDocUrl } from '@/lib/learn/content';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea, type MonacoLanguage } from '@/lib/components/editor/monaco-textarea';
@@ -910,6 +912,13 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
       }
       main={
         <div className={s.pad}>
+          {/* SC-6 — teaching banner: real Synapse Spark Livy backend + session model. */}
+          <TeachingBanner
+            surfaceKey="synapse-notebook"
+            title="Cells run as real Spark statements over Synapse Livy"
+            message="Each Run submits to a live Synapse Spark session (a warm pool keeps startup fast); the run path publishes the notebook via the Synapse Artifact Publisher role and executes against your workspace — never a mock. The status line tracks the session state, and Copilot can draft or explain a cell inline. Azure-native — no Microsoft Fabric required."
+            learnMoreHref={loomDocUrl('fiab/parity/synapse-notebook')}
+          />
           {gate && (
             <MessageBar intent="warning">
               <MessageBarBody>
