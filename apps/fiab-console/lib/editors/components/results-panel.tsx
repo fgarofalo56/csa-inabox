@@ -30,6 +30,7 @@ import {
   DocumentTable20Regular, Info20Regular,
 } from '@fluentui/react-icons';
 import { useSharedEditorStyles } from '../shared-styles';
+import { PreviewTable } from '@/lib/components/shared/preview-table';
 
 // ── Public response shape (matches the BFF route) ──
 export interface RecordsetItem {
@@ -298,16 +299,25 @@ export function ResultsPanel({ result, loading }: { result: BatchQueryResponse |
           {!active || active.rowCount === 0 ? (
             <Caption1>Query returned no rows.{n.rowsAffected.length > 0 ? ` (${n.rowsAffected.join(', ')} rows affected)` : ''}</Caption1>
           ) : (
-            <div className={s.tableWrap}>
-              <Table aria-label="Query results" size="small">
-                <TableHeader><TableRow>{cols.map((c) => <TableHeaderCell key={c}>{c}</TableHeaderCell>)}</TableRow></TableHeader>
-                <TableBody>
-                  {filteredRows.map((row, i) => (
-                    <TableRow key={i}>{cols.map((_, j) => <TableCell key={j} className={s.cell}>{formatCell(row[j])}</TableCell>)}</TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
+            // SC-5 shared preview grid: type-badged columns + "Succeeded · Columns
+            // N · Rows N" status bar. Search stays in the panel toolbar above
+            // (authoritative external filter), so PreviewTable's own search is off.
+            <PreviewTable
+              ariaLabel="Query results"
+              showTabs={false}
+              showSearch={false}
+              sources={[{
+                id: `rs-${safeIdx}`,
+                label: `Result set ${safeIdx + 1}`,
+                data: {
+                  columns: cols,
+                  rows: filteredRows,
+                  elapsedMs: n.executionMs,
+                  rowCount: active.rowCount,
+                  truncated: active.truncated,
+                },
+              }]}
+            />
           )}
         </>
       )}

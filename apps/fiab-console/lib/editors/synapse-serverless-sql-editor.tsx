@@ -26,7 +26,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import {
   Badge, Button, Caption1, Spinner, Tooltip, Dropdown, Option, Label,
-  Tab, TabList, Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
+  Tab, TabList,
   Dialog, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
   MessageBar, MessageBarBody, MessageBarTitle,
   makeStyles, tokens,
@@ -45,6 +45,7 @@ import {
   type ObjectsResponse,
 } from '@/lib/components/synapse-sql-object-explorer';
 import { downloadBlob, resultsToCsv, resultsToJson } from './components/result-export';
+import { PreviewTable } from '@/lib/components/shared/preview-table';
 import { useSharedEditorStyles } from './shared-styles';
 
 const useLocalStyles = makeStyles({
@@ -134,12 +135,6 @@ const TSQL_KEYWORDS = [
   'FUNCTION', 'EXEC', 'OPENROWSET', 'BULK', 'FORMAT', 'EXTERNAL TABLE',
   'EXTERNAL DATA SOURCE', 'EXTERNAL FILE FORMAT', 'CETAS', 'RETURNS TABLE',
 ];
-
-function formatCell(v: unknown): string {
-  if (v === null || v === undefined) return 'NULL';
-  if (typeof v === 'object') return JSON.stringify(v);
-  return String(v);
-}
 
 export function SynapseServerlessSqlEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
@@ -495,20 +490,21 @@ export function SynapseServerlessSqlEditor({ item, id }: { item: FabricItemType;
                   {rows.length === 0 ? (
                     <Caption1>Query returned no rows.</Caption1>
                   ) : (
-                    <div className={s.tableWrap}>
-                      <Table aria-label="Query results" size="small">
-                        <TableHeader>
-                          <TableRow>{columns.map((c) => <TableHeaderCell key={c}>{c}</TableHeaderCell>)}</TableRow>
-                        </TableHeader>
-                        <TableBody>
-                          {rows.map((row, i) => (
-                            <TableRow key={i}>
-                              {columns.map((_, j) => <TableCell key={j} className={s.cell}>{formatCell(row[j])}</TableCell>)}
-                            </TableRow>
-                          ))}
-                        </TableBody>
-                      </Table>
-                    </div>
+                    <PreviewTable
+                      ariaLabel="Query results"
+                      showTabs={false}
+                      sources={[{
+                        id: 'results',
+                        label: 'Results',
+                        data: {
+                          columns,
+                          rows,
+                          elapsedMs: result.executionMs,
+                          rowCount: result.rowCount ?? rows.length,
+                          truncated: result.truncated,
+                        },
+                      }]}
+                    />
                   )}
                 </>
               )
