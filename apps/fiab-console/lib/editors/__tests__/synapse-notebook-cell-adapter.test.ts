@@ -7,6 +7,9 @@ import { describe, it, expect } from 'vitest';
 import {
   toSharedCell, mergeSharedChange, buildRichFromTable,
   KIND_TO_LANG, LANG_TO_KIND, type EditorCell,
+  parseRunReference, buildRunPreamble, clampProgress,
+  metaToComments, commentsToMeta, applyMarkdownFormat, SPARK_SNIPPETS,
+  type CellComment,
 } from '../synapse-notebook-cell-adapter';
 
 const base = (over: Partial<EditorCell> = {}): EditorCell => ({
@@ -100,5 +103,115 @@ describe('buildRichFromTable', () => {
     expect(payload!.chartRecs.length).toBeGreaterThan(0);
     // dfVarName stays unset on the Synapse Livy path (full-agg is honestly gated).
     expect(payload!.dfVarName).toBeUndefined();
+  });
+});
+
+// ── R4-SYN-4 · %run ──────────────────────────────────────────────────────────
+describe('parseRunReference', () => {
+  it('extracts the referenced notebook basename from a leading %run', () => {
+    expect(parseRunReference('%run MyHelpers')).toBe('MyHelpers');
+    expect(parseRunReference('%run  folder/Shared  ')).toBe('Shared');
+    expect(parseRunReference('%run "quoted path/Nb"')).toBe('Nb');
+    expect(parseRunReference('%run ./Local')).toBe('Local');
+    expect(parseRunReference('%run Params {"p": 1}')).toBe('Params');
+  });
+  it('is null when the first non-empty line is not %run', () => {
+    expect(parseRunReference('df = spark.range(1)')).toBeNull();
+    expect(parseRunReference('\n\n%%sql\nselect 1')).toBeNull();
+    expect(parseRunReference('')).toBeNull();
+  });
+});
+
+describe('buildRunPreamble', () => {
+  const cell = (over: Partial<EditorCell>): EditorCell => ({ id: 'x', type: 'code', lang: 'pyspark', source: '', ...over });
+  it('concatenates the referenced PySpark cells into a preamble', () => {
+    const out = buildRunPreamble([
+      cell({ source: 'def a():\n    return 1' }),
+      cell({ type: 'markdown', source: '# doc' }),
+      cell({ source: 'B = 2' }),
+    ], 'Helpers');
+    expect(out).toContain('def a():');
+    expect(out).toContain('B = 2');
+    expect(out).toContain('%run Helpers');
+  });
+  it('throws on a nested %run (non-recursive)', () => {
+    expect(() => buildRunPreamble([cell({ source: '%run Other' })], 'Helpers')).toThrow(/non-recursive/i);
+  });
+  it('throws when the referenced notebook has no PySpark code', () => {
+    expect(() => buildRunPreamble([cell({ type: 'markdown', source: '# only docs' })], 'Helpers')).toThrow(/no PySpark/i);
+    expect(() => buildRunPreamble([cell({ lang: 'sql', source: 'select 1' })], 'Helpers')).toThrow(/no PySpark/i);
+  });
+});
+
+// ── R4-SYN-5 · progress ──────────────────────────────────────────────────────
+describe('clampProgress', () => {
+  it('maps a 0..1 fraction to an integer 0..100 percentage', () => {
+    expect(clampProgress(0)).toBe(0);
+    expect(clampProgress(0.5)).toBe(50);
+    expect(clampProgress(1)).toBe(100);
+    expect(clampProgress(1.5)).toBe(100);
+    expect(clampProgress(-0.2)).toBe(0);
+    expect(clampProgress(undefined)).toBe(0);
+    expect(clampProgress(NaN)).toBe(0);
+  });
+});
+
+// ── R4-SYN-9 · comment metadata round-trip ───────────────────────────────────
+describe('comment IPYNB round-trip', () => {
+  it('reads a valid comment array and drops malformed entries', () => {
+    const parsed = metaToComments({ loomComments: [
+      { id: 'c1', author: 'You', text: 'hi', at: '2026-07-10T00:00:00Z', resolved: true },
+      { author: 'x' }, // no text → dropped
+    ] });
+    expect(parsed).toHaveLength(1);
+    expect(parsed![0]).toMatchObject({ id: 'c1', text: 'hi', resolved: true });
+  });
+  it('returns undefined for no comments', () => {
+    expect(metaToComments({})).toBeUndefined();
+    expect(metaToComments({ loomComments: [] })).toBeUndefined();
+    expect(commentsToMeta(undefined)).toBeUndefined();
+    expect(commentsToMeta([])).toBeUndefined();
+  });
+  it('serializes a non-empty comment list', () => {
+    const list: CellComment[] = [{ id: 'c', author: 'You', text: 't', at: 'now' }];
+    expect(commentsToMeta(list)).toBe(list);
+  });
+});
+
+// ── R4-SYN-11 · markdown format transforms + snippet catalog ──────────────────
+describe('applyMarkdownFormat', () => {
+  it('wraps a selection with bold / italic / inline code', () => {
+    expect(applyMarkdownFormat('hello', 0, 5, 'bold').source).toBe('**hello**');
+    expect(applyMarkdownFormat('hi', 0, 2, 'italic').source).toBe('_hi_');
+    expect(applyMarkdownFormat('x', 0, 1, 'code').source).toBe('`x`');
+  });
+  it('fences a multiline code selection', () => {
+    expect(applyMarkdownFormat('a\nb', 0, 3, 'code').source).toBe('```\na\nb\n```');
+  });
+  it('prefixes lines for headings, lists, and quotes', () => {
+    expect(applyMarkdownFormat('Title', 0, 5, 'h1').source).toBe('# Title');
+    expect(applyMarkdownFormat('Sub', 0, 3, 'h2').source).toBe('## Sub');
+    expect(applyMarkdownFormat('a\nb', 0, 3, 'ul').source).toBe('- a\n- b');
+    expect(applyMarkdownFormat('a\nb', 0, 3, 'ol').source).toBe('1. a\n2. b');
+    expect(applyMarkdownFormat('q', 0, 1, 'quote').source).toBe('> q');
+  });
+  it('builds a link with the selection as label', () => {
+    expect(applyMarkdownFormat('site', 0, 4, 'link').source).toBe('[site](https://)');
+  });
+  it('uses a placeholder when nothing is selected', () => {
+    expect(applyMarkdownFormat('', 0, 0, 'bold').source).toBe('**text**');
+  });
+});
+
+describe('SPARK_SNIPPETS', () => {
+  it('exposes a cross-language temp-view helper (B15) among the snippets', () => {
+    const tv = SPARK_SNIPPETS.find((s) => s.id === 'temp-view');
+    expect(tv).toBeDefined();
+    expect(tv!.source).toContain('createOrReplaceTempView');
+    // every snippet carries a runnable source + a valid Synapse cell language.
+    for (const s of SPARK_SNIPPETS) {
+      expect(s.source.trim().length).toBeGreaterThan(0);
+      expect(['pyspark', 'spark', 'sql', 'sparkr', 'csharp']).toContain(s.lang);
+    }
   });
 });

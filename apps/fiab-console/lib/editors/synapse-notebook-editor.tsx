@@ -30,18 +30,23 @@ import { clientFetch } from '@/lib/client-fetch';
  *   backup) ✅ · new/open/delete notebook ✅
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Subtitle2, Body1, Caption1, Badge, Button, Spinner, Input, Switch,
-  Tree, TreeItem, TreeItemLayout, Dropdown, Option,
+  Subtitle2, Body1, Caption1, Badge, Button, Spinner, Input, Switch, Textarea,
+  Tree, TreeItem, TreeItemLayout, Dropdown, Option, ProgressBar, Link,
   Table, TableHeader, TableHeaderCell, TableBody, TableRow, TableCell,
+  Popover, PopoverTrigger, PopoverSurface,
+  Dialog, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
   MessageBar, MessageBarBody, MessageBarTitle, MessageBarActions,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
   Book20Regular, Add20Regular,
   Save20Regular, TextBulletListTree20Regular,
-  CalendarClock20Regular,
+  CalendarClock20Regular, ArrowUndo20Regular, ArrowRedo20Regular,
+  Settings20Regular, ArrowUpload20Regular, ArrowDownload20Regular,
+  Code20Regular, Comment20Regular, CommentCheckmark20Regular, Open16Regular,
+  ChevronDown16Regular, ChevronRight16Regular, Keyboard20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
@@ -59,9 +64,15 @@ import { RichDisplay } from '@/lib/components/notebook/rich-display';
 import { VariablesPane, type VarRow } from '@/lib/components/notebook/variables-pane';
 import { DataWranglerPanel } from '@/lib/components/notebook/data-wrangler-panel';
 import {
-  type EditorCell, type CellKind, type CellOutput,
+  SessionConfigDialog, toConfigureOptions, normalizeSessionConfig,
+  DEFAULT_SESSION_CONFIG, type SessionConfig,
+} from '@/lib/components/notebook/session-config-dialog';
+import {
+  type EditorCell, type CellKind, type CellOutput, type CellComment,
   KIND_LABEL, KIND_MAGIC, LANG_TO_KIND,
   toSharedCell, mergeSharedChange, buildRichFromTable,
+  parseRunReference, buildRunPreamble, clampProgress,
+  metaToComments, commentsToMeta, SPARK_SNIPPETS,
 } from './synapse-notebook-cell-adapter';
 
 /** Shaped AML schedule row returned by /api/notebook/[id]/schedule. */
@@ -164,6 +175,44 @@ const useLocalStyles = makeStyles({
     ':hover': { boxShadow: tokens.shadow16 },
   },
   scheduleHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
+  // Drag-to-reorder drop indicator (R4-SYN-12).
+  cellDragOver: {
+    outline: `2px dashed ${tokens.colorBrandStroke1}`, outlineOffset: '2px',
+    borderRadius: tokens.borderRadiusMedium,
+  },
+  // Output collapse header (R4-SYN-8) — a slim bar above the cell output.
+  outputHeader: {
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS,
+    padding: `${tokens.spacingVerticalXXS} ${tokens.spacingHorizontalXS} 0`,
+  },
+  // Live Spark progress (R4-SYN-5).
+  progressWrap: {
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS,
+    padding: tokens.spacingVerticalS, borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
+    backgroundColor: tokens.colorNeutralBackground3,
+  },
+  progressRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
+  // Per-cell comment thread (R4-SYN-9).
+  commentBar: {
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS,
+    padding: `${tokens.spacingVerticalXXS} ${tokens.spacingHorizontalXS} ${tokens.spacingVerticalXS}`,
+  },
+  commentRow: {
+    display: 'flex', alignItems: 'flex-start', gap: tokens.spacingHorizontalS,
+    padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`,
+    borderRadius: tokens.borderRadiusMedium, backgroundColor: tokens.colorNeutralBackground2,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+  },
+  commentBody: { flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: '2px', overflowWrap: 'anywhere', wordBreak: 'break-word' },
+  commentResolved: { opacity: 0.6, textDecoration: 'line-through' },
+  commentComposer: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, width: '360px', maxWidth: '100%' },
+  shortcutList: { display: 'grid', gridTemplateColumns: 'auto 1fr', gap: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalM}`, alignItems: 'center' },
+  kbd: {
+    fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200,
+    padding: `1px ${tokens.spacingHorizontalXS}`, borderRadius: tokens.borderRadiusSmall,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, backgroundColor: tokens.colorNeutralBackground3,
+    color: tokens.colorNeutralForeground2, whiteSpace: 'nowrap',
+  },
 });
 
 function useStyles() {
@@ -245,6 +294,8 @@ function ipynbToCells(props: any): EditorCell[] {
       output: textOut ? { status: 'ok', text: textOut } : undefined,
       isParameters: !isMd && tags.includes('parameters'),
       collapsed: !!(c?.metadata?.jupyter?.source_hidden),
+      outputCollapsed: !!(c?.metadata?.jupyter?.outputs_hidden),
+      comments: metaToComments(c?.metadata),
     };
   });
   return out.length ? out : [{ id: uid(), type: 'code', lang: 'pyspark', source: '' }];
@@ -265,7 +316,8 @@ function cellsToIpynb(cells: EditorCell[], pool: string | null, env?: string | n
       cell_type: c.type === 'markdown' ? 'markdown' : 'code',
       metadata: {
         ...(c.type === 'code' ? { tags: c.isParameters ? ['parameters'] : [] } : {}),
-        ...(c.collapsed ? { jupyter: { source_hidden: true } } : {}),
+        ...((c.collapsed || c.outputCollapsed) ? { jupyter: { ...(c.collapsed ? { source_hidden: true } : {}), ...(c.outputCollapsed ? { outputs_hidden: true } : {}) } } : {}),
+        ...(commentsToMeta(c.comments) ? { loomComments: commentsToMeta(c.comments) } : {}),
       },
       source: (c.type === 'code' ? withMagic(c.source, c.lang) : c.source)
         .split('\n').map((l, i, a) => (i < a.length - 1 ? l + '\n' : l)),
@@ -324,6 +376,61 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
   // Right-side tool drawers — shared with the other notebook flavours.
   const [variablesOpen, setVariablesOpen] = useState(false);
   const [wranglerOpen, setWranglerOpen] = useState(false);
+
+  // ── Session-config dialog (R4-SYN-6) — the dropdown-driven twin of %%configure.
+  //    On Apply we store the mapped Livy configure options in `sessionConfig`
+  //    (the same field the %%configure magic populates) so the next session is
+  //    sized identically; no raw magic required. ─────────────────────────────
+  const [sessionCfg, setSessionCfg] = useState<SessionConfig>(DEFAULT_SESSION_CONFIG);
+  const [cfgDraft, setCfgDraft] = useState<SessionConfig>(DEFAULT_SESSION_CONFIG);
+  const [cfgDialogOpen, setCfgDialogOpen] = useState(false);
+
+  // ── Live Spark progress (R4-SYN-5) — per-cell Livy statement progress (0..100)
+  //    while running, plus the resolved Spark UI URL from the session appInfo. ──
+  const [progressByCell, setProgressByCell] = useState<Record<string, number>>({});
+  const [sparkUiUrl, setSparkUiUrl] = useState<string | null>(null);
+
+  // ── Cell-op undo/redo (R4-SYN-12) — notebook-level history of add/delete/move/
+  //    duplicate/convert. Source typing is NOT snapshotted (Monaco owns text
+  //    undo). Refs hold the stacks; histVer bumps so the ribbon disabled-state
+  //    refreshes. ─────────────────────────────────────────────────────────────
+  const cellsRef = useRef<EditorCell[]>(cells);
+  useEffect(() => { cellsRef.current = cells; }, [cells]);
+  const historyPast = useRef<EditorCell[][]>([]);
+  const historyFuture = useRef<EditorCell[][]>([]);
+  const [histVer, setHistVer] = useState(0);
+  const snapshot = useCallback((): EditorCell[] => cellsRef.current.map((c) => ({ ...c })), []);
+  const pushHistory = useCallback(() => {
+    historyPast.current.push(snapshot());
+    if (historyPast.current.length > 100) historyPast.current.shift();
+    historyFuture.current = [];
+    setHistVer((v) => v + 1);
+  }, [snapshot]);
+  const undo = useCallback(() => {
+    const prev = historyPast.current.pop();
+    if (!prev) return;
+    historyFuture.current.push(snapshot());
+    setCells(prev); setDirty(true); setHistVer((v) => v + 1);
+  }, [snapshot]);
+  const redo = useCallback(() => {
+    const next = historyFuture.current.pop();
+    if (!next) return;
+    historyPast.current.push(snapshot());
+    setCells(next); setDirty(true); setHistVer((v) => v + 1);
+  }, [snapshot]);
+
+  // ── Drag-to-reorder cells (R4-SYN-12) — HTML5 drag handle on each cell. ──────
+  const dragIndexRef = useRef<number | null>(null);
+  const [dragOverId, setDragOverId] = useState<string | null>(null);
+
+  // ── Command-mode keyboard shortcuts (R4-SYN-7). `commandMode` is entered with
+  //    Esc (from a cell) and drives the A/B/J/K/Shift+D/Enter/M/Y keymap. ───────
+  const [commandMode, setCommandMode] = useState(false);
+  const cellsContainerRef = useRef<HTMLDivElement | null>(null);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
+
+  // ── IPYNB import (R4-SYN-10) — hidden file input parsed client-side. ─────────
+  const importInputRef = useRef<HTMLInputElement | null>(null);
 
   // ── Notebook scheduling (AML job schedules — recurrence only) ───────────────
   const [scheduleWizardOpen, setScheduleWizardOpen] = useState(false);
@@ -578,6 +685,59 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
     } catch (e: any) { setBanner({ intent: 'error', text: e?.message || String(e) }); }
   }, [openName, refreshList]);
 
+  // ── IPYNB export (R4-SYN-10) — download the open notebook as a standard .ipynb.
+  //    Client-side Blob; the same shape cellsToIpynb publishes to the workspace. ─
+  const exportIpynb = useCallback(() => {
+    if (typeof window === 'undefined') return;
+    const doc = cellsToIpynb(cells, attachedPool, attachedEnv);
+    const blob = new Blob([JSON.stringify(doc, null, 1)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${(openName || 'notebook').replace(/[^\w.-]+/g, '_')}.ipynb`;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+    setBanner({ intent: 'success', text: `Exported ${a.download}.` });
+  }, [cells, attachedPool, attachedEnv, openName]);
+
+  // ── IPYNB import (R4-SYN-10) — read a standard .ipynb into the editor cells.
+  //    Parsed client-side with the same ipynbToCells the workspace-open path
+  //    uses; the imported notebook is unsaved until the user clicks Save. ───────
+  const importIpynb = useCallback(async (file: File) => {
+    try {
+      const text = await file.text();
+      const json = JSON.parse(text);
+      if (!Array.isArray(json?.cells)) {
+        setBanner({ intent: 'error', text: `${file.name} is not a valid notebook (no cells array).` });
+        return;
+      }
+      pushHistory();
+      const imported = ipynbToCells(json);
+      setCells(imported);
+      setAttachedPool(json?.bigDataPool?.referenceName ?? attachedPool);
+      setDirty(true);
+      setBanner({
+        intent: 'info',
+        text: openName
+          ? `Imported ${imported.length} cell${imported.length === 1 ? '' : 's'} from ${file.name} into "${openName}". Click Save to publish.`
+          : `Imported ${imported.length} cell${imported.length === 1 ? '' : 's'} from ${file.name}. Create or open a notebook, then Save to publish.`,
+      });
+    } catch (e: any) {
+      setBanner({ intent: 'error', text: `Import failed: ${e?.message || String(e)}` });
+    }
+  }, [openName, attachedPool, pushHistory]);
+
+  // ── Session-config dialog apply (R4-SYN-6) — map the dropdown config to Livy
+  //    configure options (== %%configure) and reset the session so the next run
+  //    starts sized. ────────────────────────────────────────────────────────
+  const applySessionConfig = useCallback(() => {
+    setSessionCfg(cfgDraft);
+    setSessionConfig(toConfigureOptions(cfgDraft) as unknown as Record<string, unknown>);
+    setSessionId(null); setSessionState('none'); liveSessionRef.current = null;
+    setCfgDialogOpen(false);
+    setBanner({ intent: 'info', text: `Session configured — ${cfgDraft.numExecutors} executor(s) · ${cfgDraft.executorMemoryGb} GB · ${cfgDraft.timeoutMinutes} min idle. The next Run starts a session with these settings.` });
+  }, [cfgDraft]);
+
   // ── Cell ops ───────────────────────────────────────────────────────────────
   const patchCell = useCallback((cid: string, patch: Partial<EditorCell>) => {
     setCells((cs) => cs.map((c) => (c.id === cid ? { ...c, ...patch } : c)));
@@ -588,6 +748,7 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
   //   'after'  → directly below `anchor` (used by the between-cell adders)
   //   'before' → directly above `anchor` (used by the top adder)
   const addCell = useCallback((type: 'code' | 'markdown', anchor?: string, pos: 'end' | 'after' | 'before' = 'end') => {
+    pushHistory();
     const nc: EditorCell = { id: uid(), type, lang: type === 'code' ? defaultLang : 'pyspark', source: type === 'markdown' ? '# New markdown cell' : '' };
     setCells((cs) => {
       if (!anchor || pos === 'end') return [...cs, nc];
@@ -597,8 +758,9 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
       return [...cs.slice(0, at), nc, ...cs.slice(at)];
     });
     setActiveCell(nc.id); setDirty(true);
-  }, [defaultLang]);
+  }, [defaultLang, pushHistory]);
   const duplicateCell = useCallback((cid: string) => {
+    pushHistory();
     setCells((cs) => {
       const i = cs.findIndex((c) => c.id === cid);
       if (i < 0) return cs;
@@ -609,20 +771,23 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
       return [...cs.slice(0, i + 1), copy, ...cs.slice(i + 1)];
     });
     setDirty(true);
-  }, []);
+  }, [pushHistory]);
   // Synapse allows exactly one parameters cell — toggling one on clears any other.
   const toggleParameters = useCallback((cid: string) => {
+    pushHistory();
     setCells((cs) => cs.map((c) => {
       if (c.id === cid) return { ...c, isParameters: !c.isParameters };
       return c.isParameters ? { ...c, isParameters: false } : c;
     }));
     setDirty(true);
-  }, []);
+  }, [pushHistory]);
   const deleteCell = useCallback((cid: string) => {
+    pushHistory();
     setCells((cs) => (cs.length <= 1 ? cs : cs.filter((c) => c.id !== cid)));
     setDirty(true);
-  }, []);
+  }, [pushHistory]);
   const moveCell = useCallback((cid: string, dir: -1 | 1) => {
+    pushHistory();
     setCells((cs) => {
       const i = cs.findIndex((c) => c.id === cid);
       const j = i + dir;
@@ -630,7 +795,56 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
       const next = [...cs]; [next[i], next[j]] = [next[j], next[i]]; return next;
     });
     setDirty(true);
+  }, [pushHistory]);
+  // Drag-to-reorder: move the dragged cell to the drop target's index (R4-SYN-12).
+  const moveCellToIndex = useCallback((from: number, to: number) => {
+    if (from === to || from < 0 || to < 0) return;
+    pushHistory();
+    setCells((cs) => {
+      if (from >= cs.length || to >= cs.length) return cs;
+      const next = [...cs];
+      const [moved] = next.splice(from, 1);
+      next.splice(to, 0, moved);
+      return next;
+    });
+    setDirty(true);
+  }, [pushHistory]);
+
+  // ── Cell comments (R4-SYN-9) — add / resolve a persisted per-cell comment. ──
+  const addComment = useCallback((cid: string, text: string) => {
+    const body = text.trim();
+    if (!body) return;
+    const comment: CellComment = {
+      id: `cm-${uid()}`, author: 'You', text: body, at: new Date().toISOString(),
+    };
+    setCells((cs) => cs.map((c) => (c.id === cid ? { ...c, comments: [...(c.comments || []), comment] } : c)));
+    setDirty(true);
   }, []);
+  const toggleCommentResolved = useCallback((cid: string, commentId: string) => {
+    setCells((cs) => cs.map((c) => (c.id === cid
+      ? { ...c, comments: (c.comments || []).map((m) => (m.id === commentId ? { ...m, resolved: !m.resolved } : m)) }
+      : c)));
+    setDirty(true);
+  }, []);
+
+  // ── Independent output collapse (R4-SYN-8). ─────────────────────────────────
+  const toggleOutputCollapsed = useCallback((cid: string) => {
+    setCells((cs) => cs.map((c) => (c.id === cid ? { ...c, outputCollapsed: !c.outputCollapsed } : c)));
+  }, []);
+
+  // ── Snippet insert (R4-SYN-11) — splice a ready-made Spark cell below active. ─
+  const insertSnippet = useCallback((snippetId: string) => {
+    const snip = SPARK_SNIPPETS.find((x) => x.id === snippetId);
+    if (!snip) return;
+    pushHistory();
+    const nc: EditorCell = { id: uid(), type: 'code', lang: snip.lang, source: snip.source };
+    setCells((cs) => {
+      const i = activeCell ? cs.findIndex((c) => c.id === activeCell) : -1;
+      if (i < 0) return [...cs, nc];
+      return [...cs.slice(0, i + 1), nc, ...cs.slice(i + 1)];
+    });
+    setActiveCell(nc.id); setDirty(true);
+  }, [activeCell, pushHistory]);
 
   // ── Outline — markdown headings (# / ## / ###) → click-to-scroll navigation,
   //    mirroring Synapse Studio's notebook Outline pane. ────────────────────────
@@ -680,22 +894,35 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
     });
   }, [patchCell]);
 
+  // Clear a cell's live-progress entry (R4-SYN-5) once the statement settles.
+  const clearProgress = useCallback((cid: string) => {
+    setProgressByCell((p) => { if (!(cid in p)) return p; const n = { ...p }; delete n[cid]; return n; });
+  }, []);
+
   const pollStatement = useCallback(async (sess: number | string, stmt: number | string, cid: string) => {
     for (let i = 0; i < 200; i++) {
       await new Promise((r) => setTimeout(r, 2000));
       const r = await clientFetch(`/api/notebook/${encodeURIComponent(id)}/execute?${computeParam(sess, stmt)}`);
       const j = await r.json();
-      if (!j?.ok) { patchCell(cid, { running: false, output: { status: 'error', text: j?.error || 'poll failed' } }); return; }
+      if (!j?.ok) { clearProgress(cid); patchCell(cid, { running: false, output: { status: 'error', text: j?.error || 'poll failed' } }); return; }
+      // R4-SYN-5 — surface the real Livy statement progress (0..1) as a live bar.
+      // Livy exposes fractional progress, not stage/task counts, so we show the
+      // honest percentage + the Spark UI drill-down (never fabricated counts).
+      if (typeof j.progress === 'number') {
+        setProgressByCell((p) => ({ ...p, [cid]: clampProgress(j.progress) }));
+      }
       const st = String(j.state);
-      if (st === 'available') { applyOutput(cid, j.output); return; }
+      if (st === 'available') { clearProgress(cid); applyOutput(cid, j.output); return; }
       if (st === 'error' || st === 'cancelled') {
+        clearProgress(cid);
         if (j.output) applyOutput(cid, j.output);
         else patchCell(cid, { running: false, output: { status: 'error', text: `statement ${st}` } });
         return;
       }
     }
+    clearProgress(cid);
     patchCell(cid, { running: false, output: { status: 'error', text: 'timed out polling statement' } });
-  }, [id, computeParam, patchCell, applyOutput]);
+  }, [id, computeParam, patchCell, applyOutput, clearProgress]);
 
   const runCell = useCallback(async (cid: string): Promise<void> => {
     const cell = cells.find((c) => c.id === cid);
@@ -724,6 +951,29 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
 
     patchCell(cid, { running: true, output: { status: 'running', text: 'Submitting…' } });
     try {
+      // R4-SYN-4 — %run reference: resolve the referenced published notebook's
+      // PySpark definitions into a preamble and run THAT in the warm session, so
+      // its functions/vars become available (Synapse %run semantics). Enforces
+      // published-only (the workspace GET) + non-recursive (buildRunPreamble).
+      let codeToRun = cell.source;
+      const runRef = parseRunReference(cell.source);
+      if (runRef) {
+        patchCell(cid, { running: true, output: { status: 'running', text: `Resolving %run ${runRef}…` } });
+        try {
+          const rr = await clientFetch(`/api/synapse/notebooks/${encodeURIComponent(runRef)}`);
+          const rj = await rr.json();
+          if (!rj?.ok) {
+            throw new Error(`Referenced notebook "${runRef}" not found — Synapse %run resolves PUBLISHED workspace notebooks only.`);
+          }
+          const refCells = ipynbToCells(rj.notebook?.properties || {});
+          codeToRun = buildRunPreamble(refCells, runRef);
+        } catch (e: any) {
+          clearProgress(cid);
+          patchCell(cid, { running: false, output: { status: 'error', text: e?.message || String(e) } });
+          return;
+        }
+      }
+
       // 1. Ensure a live, idle session (create or reuse). Poll to idle.
       let sess = sessionId;
       for (let attempt = 0; attempt < 90; attempt++) {
@@ -740,13 +990,16 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
         const sj = await sr.json();
         if (!sj?.ok) { patchCell(cid, { running: false, output: { status: 'error', text: sj?.error || 'session failed' } }); return; }
         sess = sj.sessionId; setSessionId(sj.sessionId);
+        // R4-SYN-5 — resolve the real Spark UI URL from the session app info for
+        // the running-cell drill-down link (no fabricated URL).
+        if (sj.appInfo?.sparkUiUrl) setSparkUiUrl(sj.appInfo.sparkUiUrl);
         if (sj.state !== 'idle') {
           setSessionState(sj.state || 'starting');
           // Poll the session GET until idle.
           await new Promise((r2) => setTimeout(r2, 3000));
           const gr = await clientFetch(`/api/notebook/${encodeURIComponent(id)}/session?${computeParam(sess!)}`);
           const gj = await gr.json();
-          if (gj?.ok) { setSessionState(gj.state); sess = gj.sessionId ?? sess; }
+          if (gj?.ok) { setSessionState(gj.state); sess = gj.sessionId ?? sess; if (gj.appInfo?.sparkUiUrl) setSparkUiUrl(gj.appInfo.sparkUiUrl); }
           if (gj?.state === 'idle') break;
           continue;
         }
@@ -757,10 +1010,10 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
       setSessionState('busy');
       liveSessionRef.current = { compute, sessionId: sess };
 
-      // 2. Submit the statement.
+      // 2. Submit the statement (codeToRun carries the %run preamble when set).
       const er = await clientFetch(`/api/notebook/${encodeURIComponent(id)}/execute`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ pool: attachedPool, cluster: attachedCluster, sessionId: sess, code: cell.source, kind: cell.lang }),
+        body: JSON.stringify({ pool: attachedPool, cluster: attachedCluster, sessionId: sess, code: codeToRun, kind: cell.lang }),
       });
       const ej = await er.json();
       if (!ej?.ok) {
@@ -780,9 +1033,10 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
       await pollStatement(sess, ej.stmtId, cid);
       setSessionState('idle');
     } catch (e: any) {
+      clearProgress(cid);
       patchCell(cid, { running: false, output: { status: 'error', text: e?.message || String(e) } });
     }
-  }, [cells, backend, attachedPool, attachedCluster, sessionId, sessionConfig, id, computeParam, patchCell, pollStatement]);
+  }, [cells, backend, attachedPool, attachedCluster, sessionId, sessionConfig, id, computeParam, patchCell, pollStatement, clearProgress]);
 
   const runAll = useCallback(async () => {
     for (const c of cells) {
@@ -795,11 +1049,13 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
 
   // Convert a cell between code ⇄ markdown (shared CodeCell / MarkdownCell action).
   const convertCell = useCallback((cid: string, type: 'code' | 'markdown') => {
+    pushHistory();
     patchCell(cid, { type, output: undefined, running: false, ...(type === 'markdown' ? { isParameters: false } : {}) });
-  }, [patchCell]);
+  }, [patchCell, pushHistory]);
 
   // Insert a generated code cell below the active cell (Data Wrangler export-to-cell).
   const insertWranglerCell = useCallback((source: string) => {
+    pushHistory();
     const nc: EditorCell = { id: uid(), type: 'code', lang: 'pyspark', source };
     setCells((cs) => {
       const i = activeCell ? cs.findIndex((c) => c.id === activeCell) : -1;
@@ -810,7 +1066,90 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
     setDirty(true);
     setWranglerOpen(false);
     setBanner({ intent: 'info', text: 'Inserted Data Wrangler code cell — review and Run to apply on your full DataFrame.' });
-  }, [activeCell]);
+  }, [activeCell, pushHistory]);
+
+  // ── Command-mode keyboard shortcuts (R4-SYN-7) — the Synapse Studio modal
+  //    keymap. Esc leaves the editor into command mode; A/B insert, J/K select,
+  //    Shift+D deletes, Enter edits, M/Y convert, and Ctrl/⌘+Z / Shift+Z drive
+  //    cell-op undo/redo. Refs keep the listener stable while reading live state.
+  const activeCellRef = useRef<string | null>(activeCell);
+  useEffect(() => { activeCellRef.current = activeCell; }, [activeCell]);
+  const focusCellEditor = useCallback((cid: string) => {
+    const el = document.getElementById(`cell-${cid}`);
+    const ta = el?.querySelector('.monaco-editor textarea, textarea') as HTMLTextAreaElement | null;
+    if (ta) { ta.focus(); return true; }
+    return false;
+  }, []);
+  useEffect(() => {
+    if (gate) return; // no cells surface while the workspace is gated
+    const inEditable = (el: EventTarget | null): boolean => {
+      const node = el as HTMLElement | null;
+      if (!node) return false;
+      if (node.isContentEditable) return true;
+      const tag = node.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true;
+      return !!node.closest?.('.monaco-editor');
+    };
+    const onKey = (e: KeyboardEvent) => {
+      // Cell-op undo/redo works anywhere the user isn't typing text.
+      const editing = inEditable(document.activeElement);
+      const mod = e.ctrlKey || e.metaKey;
+      if (mod && (e.key === 'z' || e.key === 'Z') && !editing) {
+        e.preventDefault();
+        if (e.shiftKey) redo(); else undo();
+        return;
+      }
+      if (mod && (e.key === 'y' || e.key === 'Y') && !editing) { e.preventDefault(); redo(); return; }
+
+      if (e.key === 'Escape') {
+        // Leave the editor into command mode (focus the cells container).
+        (document.activeElement as HTMLElement | null)?.blur?.();
+        setCommandMode(true);
+        cellsContainerRef.current?.focus?.();
+        return;
+      }
+      if (editing || !commandMode) return; // command keys only in command mode
+      const active = activeCellRef.current;
+      const list = cellsRef.current;
+      const idx = active ? list.findIndex((c) => c.id === active) : -1;
+      switch (e.key) {
+        case 'a': case 'A':
+          e.preventDefault(); addCell('code', active || undefined, 'before'); break;
+        case 'b': case 'B':
+          e.preventDefault(); addCell('code', active || undefined, 'after'); break;
+        case 'j': case 'ArrowDown': {
+          e.preventDefault();
+          const next = idx < 0 ? list[0] : list[Math.min(list.length - 1, idx + 1)];
+          if (next) { setActiveCell(next.id); document.getElementById(`cell-${next.id}`)?.scrollIntoView({ block: 'nearest' }); }
+          break;
+        }
+        case 'k': case 'ArrowUp': {
+          e.preventDefault();
+          const prev = idx < 0 ? list[0] : list[Math.max(0, idx - 1)];
+          if (prev) { setActiveCell(prev.id); document.getElementById(`cell-${prev.id}`)?.scrollIntoView({ block: 'nearest' }); }
+          break;
+        }
+        case 'D':
+          if (e.shiftKey && active) { e.preventDefault(); deleteCell(active); }
+          break;
+        case 'm': case 'M':
+          if (active) { e.preventDefault(); convertCell(active, 'markdown'); }
+          break;
+        case 'y': case 'Y':
+          if (active) { e.preventDefault(); convertCell(active, 'code'); }
+          break;
+        case 'Enter':
+          if (active) { e.preventDefault(); setCommandMode(false); focusCellEditor(active); }
+          break;
+        default: break;
+      }
+    };
+    // Typing into a cell editor leaves command mode so the badge never lingers.
+    const onFocusIn = (e: FocusEvent) => { if (inEditable(e.target)) setCommandMode(false); };
+    window.addEventListener('keydown', onKey);
+    window.addEventListener('focusin', onFocusIn);
+    return () => { window.removeEventListener('keydown', onKey); window.removeEventListener('focusin', onFocusIn); };
+  }, [gate, commandMode, addCell, deleteCell, convertCell, undo, redo, focusCellEditor]);
 
   // ── Variable explorer (R4-SYN-2) — inspect the live Livy/Databricks Python
   //    session for user variables (Name / Type / Length / Value). Reuses the
@@ -915,33 +1254,48 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
   const attachedCompute = backend === 'databricks' ? attachedCluster : attachedPool;
   const cellRuntime: 'databricks' | 'synapse-spark' = backend === 'databricks' ? 'databricks' : 'synapse-spark';
 
+  const canUndo = historyPast.current.length > 0;
+  const canRedo = historyFuture.current.length > 0;
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'Run', actions: [
         { label: 'Run all', onClick: openName && attachedCompute ? runAll : undefined, disabled: !openName || !attachedCompute, title: !attachedCompute ? (backend === 'databricks' ? 'Attach a Databricks cluster first' : 'Attach a Spark pool first') : undefined },
+      ]},
+      { label: 'Edit', actions: [
+        { label: 'Undo', icon: <ArrowUndo20Regular />, onClick: canUndo ? undo : undefined, disabled: !canUndo, title: 'Undo the last cell operation (Ctrl+Z)' },
+        { label: 'Redo', icon: <ArrowRedo20Regular />, onClick: canRedo ? redo : undefined, disabled: !canRedo, title: 'Redo the last undone cell operation (Ctrl+Shift+Z)' },
       ]},
       { label: 'Cells', actions: [
         { label: 'Add code', onClick: () => addCell('code', activeCell || undefined, 'after') },
         { label: 'Add markdown', onClick: () => addCell('markdown', activeCell || undefined, 'after') },
         { label: 'Duplicate', onClick: activeCell ? () => duplicateCell(activeCell) : undefined, disabled: !activeCell },
         { label: 'Parameters cell', onClick: activeCell ? () => toggleParameters(activeCell) : undefined, disabled: !activeCell, title: 'Mark the active code cell as the papermill/ADF parameters cell' },
+        {
+          label: 'Snippets', icon: <Code20Regular />,
+          title: 'Insert a ready-made Spark snippet below the active cell',
+          dropdownItems: SPARK_SNIPPETS.map((sn) => ({ label: sn.label, onClick: () => insertSnippet(sn.id) })),
+        },
       ]},
       { label: 'Notebook', actions: [
-        { label: saving ? 'Saving…' : 'Save', onClick: openName && !saving ? save : undefined, disabled: !openName || saving },
+        { label: saving ? 'Saving…' : 'Save', icon: <Save20Regular />, onClick: openName && !saving ? save : undefined, disabled: !openName || saving },
+        { label: 'Import', icon: <ArrowUpload20Regular />, onClick: () => importInputRef.current?.click(), title: 'Import a standard .ipynb into the editor' },
+        { label: 'Export', icon: <ArrowDownload20Regular />, onClick: exportIpynb, title: 'Download the current notebook as a standard .ipynb' },
         { label: 'Delete', onClick: openName ? deleteOpen : undefined, disabled: !openName },
         { label: 'Refresh', onClick: refreshList },
       ]},
+      { label: 'Session', actions: [
+        { label: 'Configure session', icon: <Settings20Regular />, onClick: () => { setCfgDraft(sessionCfg); setCfgDialogOpen(true); }, title: 'Size the Spark session (executors / memory / idle timeout) — the dropdown twin of %%configure' },
+      ]},
       { label: 'Scheduling', actions: [
-        { label: 'Schedule', onClick: openName ? () => setScheduleWizardOpen(true) : undefined, disabled: !openName, title: !openName ? 'Open a notebook first' : 'Create a recurrence schedule (Azure ML job schedule)' },
+        { label: 'Schedule', icon: <CalendarClock20Regular />, onClick: openName ? () => setScheduleWizardOpen(true) : undefined, disabled: !openName, title: !openName ? 'Open a notebook first' : 'Create a recurrence schedule (Azure ML job schedule)' },
       ]},
       { label: 'Tools', actions: [
         { label: 'Variables', onClick: () => setVariablesOpen(true), title: 'Variable explorer — inspect the live Python session (Name / Type / Length / Value)' },
         { label: 'Data Wrangler', onClick: () => setWranglerOpen(true), title: 'Visual data-prep — build cleaning steps and export pandas / PySpark code into a cell' },
+        { label: 'Shortcuts', icon: <Keyboard20Regular />, onClick: () => setShortcutsOpen(true), title: 'Show the command-mode keyboard shortcuts' },
       ]},
     ]},
-  ], [openName, attachedCompute, backend, runAll, addCell, activeCell, duplicateCell, toggleParameters, saving, save, deleteOpen, refreshList]);
-
-  const sparkUiNote = sessionState === 'idle' || sessionState === 'busy';
+  ], [openName, attachedCompute, backend, runAll, addCell, activeCell, duplicateCell, toggleParameters, saving, save, deleteOpen, refreshList, canUndo, canRedo, undo, redo, insertSnippet, exportIpynb, sessionCfg]);
 
   return (
     <ItemEditorChrome splitKeyPrefix={item.slug}
@@ -1047,13 +1401,29 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
             </MessageBar>
           )}
 
+          {/* Hidden file input for IPYNB import (R4-SYN-10). */}
+          <input
+            ref={importInputRef}
+            type="file"
+            accept=".ipynb,application/json"
+            style={{ display: 'none' }}
+            onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; if (f) importIpynb(f); }}
+            aria-hidden="true"
+          />
+
           {!gate && (
             <div className={s.toolbar}>
               <Badge appearance="filled" color="brand">Notebook</Badge>
               <Body1>{openName || 'no notebook open'}</Body1>
               {dirty && <Badge appearance="outline" color="warning" size="small">unsaved</Badge>}
+              {commandMode && <Badge appearance="tint" color="informative" size="small" title="Command mode — A/B insert · J/K select · Shift+D delete · Enter edits. Click a cell editor to leave.">command mode</Badge>}
               {backend === 'databricks' && <Badge appearance="tint" color="important">Backend: Databricks</Badge>}
               {sessionConfig && Object.keys(sessionConfig).length > 0 && <Badge appearance="outline" color="brand" size="small">%%configure pending</Badge>}
+              {sparkUiUrl && (sessionState === 'busy' || sessionState === 'idle') && (
+                <Link href={sparkUiUrl} target="_blank" rel="noreferrer" title="Open the Spark application UI (jobs / stages)">
+                  <Caption1><Open16Regular style={{ verticalAlign: 'middle' }} /> Spark UI</Caption1>
+                </Link>
+              )}
               <div className={s.spacer} />
               <Caption1>Language:</Caption1>
               <Dropdown
@@ -1133,13 +1503,19 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
           )}
 
           {!gate && (
-            <div className={s.cells}>
+            <div className={s.cells} ref={cellsContainerRef} tabIndex={-1}>
               <CellAdder
                 onAddCode={() => addCell('code', cells[0]?.id, 'before')}
                 onAddMarkdown={() => addCell('markdown', cells[0]?.id, 'before')}
               />
               {cells.map((c, i) => (
-                <div key={c.id} id={`cell-${c.id}`}>
+                <div
+                  key={c.id}
+                  id={`cell-${c.id}`}
+                  onDragOver={(e) => { if (dragIndexRef.current != null) { e.preventDefault(); setDragOverId(c.id); } }}
+                  onDrop={(e) => { e.preventDefault(); const from = dragIndexRef.current; if (from != null) moveCellToIndex(from, i); dragIndexRef.current = null; setDragOverId(null); }}
+                  className={dragOverId === c.id ? s.cellDragOver : undefined}
+                >
                   {c.type === 'markdown' ? (
                     <MarkdownCell
                       cell={toSharedCell(c)}
@@ -1153,6 +1529,11 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
                       onConvertToCode={() => convertCell(c.id, 'code')}
                       canMoveUp={i > 0}
                       canMoveDown={i < cells.length - 1}
+                      dragHandleProps={{
+                        draggable: true,
+                        onDragStart: () => { dragIndexRef.current = i; },
+                        onDragEnd: () => { dragIndexRef.current = null; setDragOverId(null); },
+                      }}
                     />
                   ) : (
                     <>
@@ -1175,6 +1556,11 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
                         onConvertToMarkdown={() => convertCell(c.id, 'markdown')}
                         canMoveUp={i > 0}
                         canMoveDown={i < cells.length - 1}
+                        dragHandleProps={{
+                          draggable: true,
+                          onDragStart: () => { dragIndexRef.current = i; },
+                          onDragEnd: () => { dragIndexRef.current = null; setDragOverId(null); },
+                        }}
                         notebookId={id}
                         runtime={cellRuntime}
                         priorCells={cells.slice(0, i).filter((pc) => pc.type === 'code').slice(-3).map((pc) => pc.source)}
@@ -1194,9 +1580,29 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
                           setActiveCell(nc.id); setDirty(true);
                         }}
                       />
-                      {!c.collapsed && <SynapseCellOutput out={c.output} cellId={c.id} notebookId={id} />}
+                      {/* Output header — independent output collapse (R4-SYN-8). */}
+                      {!c.collapsed && c.output && (
+                        <div className={s.outputHeader}>
+                          <Button
+                            size="small" appearance="subtle"
+                            icon={c.outputCollapsed ? <ChevronRight16Regular /> : <ChevronDown16Regular />}
+                            onClick={() => toggleOutputCollapsed(c.id)}
+                          >
+                            {c.outputCollapsed ? 'Show output' : 'Output'}
+                          </Button>
+                        </div>
+                      )}
+                      {!c.collapsed && !c.outputCollapsed && (
+                        <SynapseCellOutput out={c.output} cellId={c.id} notebookId={id} progress={progressByCell[c.id]} sparkUiUrl={sparkUiUrl} />
+                      )}
                     </>
                   )}
+                  {/* Per-cell comment thread (R4-SYN-9) — persists with the notebook. */}
+                  <CellCommentBar
+                    comments={c.comments}
+                    onAdd={(text) => addComment(c.id, text)}
+                    onToggleResolve={(cmid) => toggleCommentResolved(c.id, cmid)}
+                  />
                   <CellAdder
                     onAddCode={() => addCell('code', c.id, 'after')}
                     onAddMarkdown={() => addCell('markdown', c.id, 'after')}
@@ -1291,9 +1697,137 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
             itemType={item.slug}
             itemId={id}
           />
+
+          {/* Configure session dialog (R4-SYN-6) — dropdown twin of %%configure. */}
+          <SessionConfigDialog
+            open={cfgDialogOpen}
+            config={cfgDraft}
+            onConfigChange={setCfgDraft}
+            onApply={applySessionConfig}
+            onClose={() => setCfgDialogOpen(false)}
+          />
+
+          {/* Command-mode keyboard shortcuts reference (R4-SYN-7). */}
+          <ShortcutsDialog open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} styles={s} />
         </div>
       }
     />
+  );
+}
+
+// ── Command-mode shortcut reference (R4-SYN-7) — mirrors Synapse Studio's
+//    "Use shortcut keys" table so the modal keymap is discoverable. ──
+function ShortcutsDialog({ open, onClose, styles }: { open: boolean; onClose: () => void; styles: ReturnType<typeof useStyles> }) {
+  const rows: [string, string][] = [
+    ['Esc', 'Enter command mode (leave the cell editor)'],
+    ['Enter', 'Edit the selected cell'],
+    ['A', 'Insert a code cell above'],
+    ['B', 'Insert a code cell below'],
+    ['J / ↓', 'Select the next cell'],
+    ['K / ↑', 'Select the previous cell'],
+    ['Shift + D', 'Delete the selected cell'],
+    ['M', 'Convert the selected cell to markdown'],
+    ['Y', 'Convert the selected cell to code'],
+    ['Ctrl / ⌘ + Z', 'Undo the last cell operation'],
+    ['Ctrl / ⌘ + Shift + Z', 'Redo the last cell operation'],
+  ];
+  return (
+    <Dialog open={open} onOpenChange={(_, d) => { if (!d.open) onClose(); }}>
+      <DialogSurface>
+        <DialogBody>
+          <DialogTitle>Keyboard shortcuts (command mode)</DialogTitle>
+          <DialogContent>
+            <div className={styles.shortcutList}>
+              {rows.map(([k, desc]) => (
+                <Fragment key={k}>
+                  <span className={styles.kbd}>{k}</span>
+                  <Caption1>{desc}</Caption1>
+                </Fragment>
+              ))}
+            </div>
+          </DialogContent>
+          <DialogActions>
+            <Button appearance="primary" onClick={onClose}>Close</Button>
+          </DialogActions>
+        </DialogBody>
+      </DialogSurface>
+    </Dialog>
+  );
+}
+
+// ── Per-cell comment thread (R4-SYN-9) — self-contained composer + list. The
+//    comment persists with the notebook definition (IPYNB metadata); real-time
+//    multi-user presence (F6) is NOT provided and is honestly disclosed. ──
+function CellCommentBar({
+  comments, onAdd, onToggleResolve,
+}: {
+  comments?: CellComment[];
+  onAdd: (text: string) => void;
+  onToggleResolve: (commentId: string) => void;
+}) {
+  const s = useStyles();
+  const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useState('');
+  const count = comments?.length || 0;
+  const openCount = comments?.filter((c) => !c.resolved).length || 0;
+  const submit = () => { const t = draft.trim(); if (!t) return; onAdd(t); setDraft(''); };
+  return (
+    <div className={s.commentBar}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS }}>
+        <Popover open={open} onOpenChange={(_, d) => setOpen(d.open)} positioning="below-start" trapFocus>
+          <PopoverTrigger disableButtonEnhancement>
+            <Button
+              size="small" appearance="subtle"
+              icon={openCount > 0 ? <Comment20Regular /> : <CommentCheckmark20Regular />}
+              title="Add or view a comment on this cell (persists with the notebook)"
+            >
+              {count > 0 ? `Comments (${count})` : 'Comment'}
+            </Button>
+          </PopoverTrigger>
+          <PopoverSurface>
+            <div className={s.commentComposer}>
+              <Caption1 style={{ fontWeight: tokens.fontWeightSemibold }}>Add a comment</Caption1>
+              <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                Comments persist with the notebook. Live multi-user presence / co-authoring
+                is not available on this Azure-native backend.
+              </Caption1>
+              <Textarea
+                value={draft}
+                onChange={(_, d) => setDraft(d.value)}
+                placeholder="Leave a note on this cell…"
+                resize="vertical"
+                aria-label="Cell comment"
+              />
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: tokens.spacingHorizontalS }}>
+                <Button size="small" appearance="subtle" onClick={() => { setDraft(''); setOpen(false); }}>Cancel</Button>
+                <Button size="small" appearance="primary" disabled={!draft.trim()} onClick={() => { submit(); setOpen(false); }}>Comment</Button>
+              </div>
+            </div>
+          </PopoverSurface>
+        </Popover>
+      </div>
+      {comments && comments.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS }}>
+          {comments.map((c) => (
+            <div key={c.id} className={s.commentRow}>
+              <div className={s.commentBody}>
+                <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                  {c.author} · {new Date(c.at).toLocaleString()}
+                </Caption1>
+                <Body1 className={c.resolved ? s.commentResolved : undefined}>{c.text}</Body1>
+              </div>
+              <Button
+                size="small" appearance="subtle"
+                onClick={() => onToggleResolve(c.id)}
+                title={c.resolved ? 'Reopen comment' : 'Resolve comment'}
+              >
+                {c.resolved ? 'Reopen' : 'Resolve'}
+              </Button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -1301,11 +1835,27 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
 //    a display(df) table becomes the RichDisplay grid + chart builder; html /
 //    image / text keep their existing rich rendering. Errors are rendered by
 //    the shared CodeCell (traceback + Fix with Copilot), so this skips them. ──
-function SynapseCellOutput({ out, cellId, notebookId }: { out?: CellOutput; cellId: string; notebookId: string }) {
+function SynapseCellOutput({ out, cellId, notebookId, progress, sparkUiUrl }: { out?: CellOutput; cellId: string; notebookId: string; progress?: number; sparkUiUrl?: string | null }) {
   const s = useStyles();
   if (!out) return null;
   if (out.status === 'running') {
-    return <div className={s.output}><Spinner size="tiny" label="Running…" labelPosition="after" /></div>;
+    // R4-SYN-5 — live Spark progress: Livy exposes a fractional statement
+    // progress (0..1), not stage/task counts, so we surface the honest
+    // percentage + the Spark UI drill-down (never fabricated counts).
+    const pct = typeof progress === 'number' ? progress : undefined;
+    return (
+      <div className={s.progressWrap}>
+        <div className={s.progressRow}>
+          <Spinner size="tiny" label={pct != null ? `Running… ${pct}%` : (out.text || 'Running…')} labelPosition="after" />
+          {sparkUiUrl && (
+            <Link href={sparkUiUrl} target="_blank" rel="noreferrer" title="Open the Spark application UI (jobs / stages)">
+              <Caption1><Open16Regular style={{ verticalAlign: 'middle' }} /> Spark UI</Caption1>
+            </Link>
+          )}
+        </div>
+        <ProgressBar value={pct != null ? pct / 100 : undefined} shape="rounded" thickness="large" aria-label="Spark statement progress" />
+      </div>
+    );
   }
   if (out.status === 'error') return null; // CodeCell owns the error surface.
   const rich = buildRichFromTable(out.tableColumns, out.tableRows);

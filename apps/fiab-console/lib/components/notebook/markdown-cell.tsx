@@ -1,17 +1,20 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { Badge, Button, Caption1, makeStyles, mergeClasses, tokens } from '@fluentui/react-components';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Badge, Button, Caption1, Toolbar, ToolbarButton, ToolbarDivider, Tooltip, makeStyles, mergeClasses, tokens } from '@fluentui/react-components';
 import {
   Edit16Regular, Eye16Regular, Delete16Regular,
   ChevronUp16Regular, ChevronDown16Regular,
   LockClosed16Regular, LockClosed16Filled, Copy16Regular,
   ArrowMaximize16Regular, ArrowMinimize16Regular,
   ArrowSwap16Regular, ReOrderDotsVertical16Regular,
+  TextBold16Regular, TextItalic16Regular, TextHeader1Regular, TextHeader2Regular,
+  TextBulletList16Regular, TextNumberListLtr16Regular, TextQuote16Regular, Code16Regular, Link16Regular,
 } from '@fluentui/react-icons';
 import type { NotebookCell } from '@/lib/types/notebook-cell';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { renderMarkdown } from '@/lib/notebook/render-markdown';
+import { applyMarkdownFormat, type MarkdownFormat } from '@/lib/editors/synapse-notebook-cell-adapter';
 
 const useStyles = makeStyles({
   shell: {
@@ -123,6 +126,15 @@ const useStyles = makeStyles({
     overflow: 'auto',
   },
   tag: { fontFamily: 'Consolas, monospace', color: tokens.colorNeutralForeground3, fontSize: '11px' },
+  // WYSIWYG markdown formatting toolbar (R4-SYN-11) — sits above the editor
+  // when editing, styled like the rest of the notebook chrome.
+  fmtBar: {
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXXS,
+    padding: `${tokens.spacingVerticalXXS} ${tokens.spacingHorizontalXS}`,
+    borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
+    backgroundColor: tokens.colorNeutralBackground1,
+    minHeight: 'auto',
+  },
 });
 
 export interface MarkdownCellProps {
@@ -148,8 +160,45 @@ export function MarkdownCell({ cell, active, onFocus, onChange, onDelete, onMove
   const s = useStyles();
   const [editing, setEditing] = useState(!cell.source);
   const [maximized, setMaximized] = useState(false);
+  // Captured Monaco instance so the formatting toolbar can act on the live
+  // selection; falls back to a whole-source transform when unavailable.
+  const editorRef = useRef<any>(null);
 
   const locked = !!cell.locked;
+
+  // Apply a WYSIWYG markdown format to the current selection (R4-SYN-11). Uses
+  // the live Monaco selection when the editor is mounted; otherwise formats the
+  // full source. The pure transform lives in applyMarkdownFormat.
+  const applyFormat = useCallback((fmt: MarkdownFormat) => {
+    if (locked) return;
+    const ed = editorRef.current;
+    const model = ed?.getModel?.();
+    let selStart = cell.source.length;
+    let selEnd = cell.source.length;
+    if (ed && model) {
+      const sel = ed.getSelection?.();
+      if (sel) {
+        selStart = model.getOffsetAt({ lineNumber: sel.startLineNumber, column: sel.startColumn });
+        selEnd = model.getOffsetAt({ lineNumber: sel.endLineNumber, column: sel.endColumn });
+      }
+    }
+    const next = applyMarkdownFormat(cell.source, selStart, selEnd, fmt);
+    onChange({ ...cell, source: next.source });
+    // Restore selection on the next tick once the model re-renders.
+    if (ed && model) {
+      requestAnimationFrame(() => {
+        const m2 = ed.getModel?.();
+        if (!m2) return;
+        const startPos = m2.getPositionAt(next.selStart);
+        const endPos = m2.getPositionAt(next.selEnd);
+        ed.setSelection?.({
+          startLineNumber: startPos.lineNumber, startColumn: startPos.column,
+          endLineNumber: endPos.lineNumber, endColumn: endPos.column,
+        });
+        ed.focus?.();
+      });
+    }
+  }, [cell, locked, onChange]);
 
   // ESC dismisses the maximized state.
   useEffect(() => {
@@ -228,17 +277,54 @@ export function MarkdownCell({ cell, active, onFocus, onChange, onDelete, onMove
         <Button size="small" appearance="subtle" icon={<Delete16Regular />} onClick={(e) => { e.stopPropagation(); onDelete?.(); }} aria-label="Delete cell" />
       </div>
       {editing ? (
-        <MonacoTextarea
-          value={cell.source}
-          onChange={(next) => onChange({ ...cell, source: next })}
-          language="markdown"
-          readOnly={locked}
-          height={maximized ? 'calc(100% - 56px)' : 160}
-          minHeight={80}
-          autoHeight={!maximized}
-          ariaLabel={`Markdown cell ${cell.id}`}
-          className={mergeClasses(locked && s.editorLocked)}
-        />
+        <>
+          {!locked && (
+            <Toolbar size="small" className={s.fmtBar} aria-label="Markdown formatting">
+              <Tooltip content="Bold" relationship="label">
+                <ToolbarButton icon={<TextBold16Regular />} aria-label="Bold" onClick={(e) => { e.stopPropagation(); applyFormat('bold'); }} />
+              </Tooltip>
+              <Tooltip content="Italic" relationship="label">
+                <ToolbarButton icon={<TextItalic16Regular />} aria-label="Italic" onClick={(e) => { e.stopPropagation(); applyFormat('italic'); }} />
+              </Tooltip>
+              <ToolbarDivider />
+              <Tooltip content="Heading 1" relationship="label">
+                <ToolbarButton icon={<TextHeader1Regular />} aria-label="Heading 1" onClick={(e) => { e.stopPropagation(); applyFormat('h1'); }} />
+              </Tooltip>
+              <Tooltip content="Heading 2" relationship="label">
+                <ToolbarButton icon={<TextHeader2Regular />} aria-label="Heading 2" onClick={(e) => { e.stopPropagation(); applyFormat('h2'); }} />
+              </Tooltip>
+              <ToolbarDivider />
+              <Tooltip content="Bulleted list" relationship="label">
+                <ToolbarButton icon={<TextBulletList16Regular />} aria-label="Bulleted list" onClick={(e) => { e.stopPropagation(); applyFormat('ul'); }} />
+              </Tooltip>
+              <Tooltip content="Numbered list" relationship="label">
+                <ToolbarButton icon={<TextNumberListLtr16Regular />} aria-label="Numbered list" onClick={(e) => { e.stopPropagation(); applyFormat('ol'); }} />
+              </Tooltip>
+              <Tooltip content="Quote" relationship="label">
+                <ToolbarButton icon={<TextQuote16Regular />} aria-label="Quote" onClick={(e) => { e.stopPropagation(); applyFormat('quote'); }} />
+              </Tooltip>
+              <ToolbarDivider />
+              <Tooltip content="Code" relationship="label">
+                <ToolbarButton icon={<Code16Regular />} aria-label="Code" onClick={(e) => { e.stopPropagation(); applyFormat('code'); }} />
+              </Tooltip>
+              <Tooltip content="Link" relationship="label">
+                <ToolbarButton icon={<Link16Regular />} aria-label="Link" onClick={(e) => { e.stopPropagation(); applyFormat('link'); }} />
+              </Tooltip>
+            </Toolbar>
+          )}
+          <MonacoTextarea
+            value={cell.source}
+            onChange={(next) => onChange({ ...cell, source: next })}
+            language="markdown"
+            readOnly={locked}
+            height={maximized ? 'calc(100% - 56px)' : 160}
+            minHeight={80}
+            autoHeight={!maximized}
+            ariaLabel={`Markdown cell ${cell.id}`}
+            className={mergeClasses(locked && s.editorLocked)}
+            onReady={(editor) => { editorRef.current = editor; }}
+          />
+        </>
       ) : (
         <div
           className={mergeClasses(s.rendered, maximized && s.renderedMaximized)}
