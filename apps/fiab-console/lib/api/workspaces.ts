@@ -301,3 +301,69 @@ export async function deleteTaskFlow(workspaceId: string, id: string): Promise<v
     { method: 'DELETE' },
   );
 }
+
+// --- Task-flow execution (F11 run) ----------------------------------------
+// The persisted run-doc shape is owned by lib/taskflow/step-runner (FlowRunDoc);
+// the client re-exports the pieces it renders as a light structural type so it
+// need not import the server module's transitive graph.
+
+export interface TaskFlowRunItem {
+  itemId: string;
+  itemType: string;
+  itemLabel?: string;
+  runId: string | null;
+  status: 'pending' | 'running' | 'succeeded' | 'failed' | 'skipped';
+  reason?: string;
+  detail?: string;
+}
+export interface TaskFlowRunStep {
+  stepId: string;
+  label: string;
+  status: 'pending' | 'running' | 'succeeded' | 'failed' | 'skipped';
+  itemRuns: TaskFlowRunItem[];
+}
+export interface TaskFlowRun {
+  id: string;
+  runId: string;
+  flowId: string;
+  workspaceId: string;
+  flowName: string;
+  status: 'running' | 'succeeded' | 'failed' | 'partial';
+  steps: TaskFlowRunStep[];
+  startedAt: string;
+  finishedAt?: string;
+  startedBy?: string;
+  error?: string;
+}
+
+/** Kick off a run of the flow. Returns immediately with the new runId. */
+export async function runTaskFlow(workspaceId: string, flowId: string): Promise<string> {
+  const res = await fetchJson<{ ok: boolean; runId: string }>(
+    `/api/workspaces/${workspaceId}/task-flows/${flowId}/run`,
+    { method: 'POST' },
+  );
+  return res.runId;
+}
+
+/** Poll a single run document. */
+export async function getTaskFlowRun(
+  workspaceId: string,
+  flowId: string,
+  runId: string,
+): Promise<TaskFlowRun> {
+  const res = await fetchJson<{ ok: boolean; run: TaskFlowRun }>(
+    `/api/workspaces/${workspaceId}/task-flows/${flowId}/run?runId=${encodeURIComponent(runId)}`,
+  );
+  return res.run;
+}
+
+/** List the last 20 runs of a flow (history flyout). */
+export async function listTaskFlowRuns(
+  workspaceId: string,
+  flowId: string,
+): Promise<TaskFlowRun[]> {
+  const res = await fetchJson<{ ok: boolean; runs: TaskFlowRun[] }>(
+    `/api/workspaces/${workspaceId}/task-flows/${flowId}/run`,
+  );
+  return res.runs ?? [];
+}
