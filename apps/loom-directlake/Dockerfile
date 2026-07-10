@@ -37,6 +37,7 @@ RUN apt-get update \
         pkg-config \
         build-essential \
         ca-certificates \
+        libssl-dev \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
