@@ -1028,6 +1028,11 @@ export interface Cluster {
   creator_user_name?: string;
   start_time?: number;
   terminated_time?: number;
+  /** ms epoch of the last command run on the cluster — the freshest idle signal
+   *  for hygiene. Absent on never-used clusters. */
+  last_activity_time?: number;
+  /** ms epoch of the last (re)start. */
+  last_restarted_time?: number;
   custom_tags?: Record<string, string>;
   spark_conf?: Record<string, string>;
   data_security_mode?: string;

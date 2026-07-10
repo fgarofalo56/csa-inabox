@@ -32,6 +32,7 @@ import {
   Play16Regular, Pause16Regular, ArrowSync16Regular, Add16Regular, Delete16Regular,
 } from '@fluentui/react-icons';
 import { SPARK_PRESETS, findPreset, databricksConfFor, COMMON_SPARK_CONF_KEYS } from '@/lib/spark/config-presets';
+import { CLUSTER_TIERS, findTier } from '@/lib/databricks/cluster-presets';
 
 export type ComputeKind = 'synapse-spark' | 'databricks-cluster' | 'synapse-dedicated-sql' | 'synapse-serverless-sql';
 
@@ -170,6 +171,7 @@ function NewClusterDialog({
   const [nodeTypes, setNodeTypes] = useState<NodeTypeOption[]>([]);
   const [versions, setVersions] = useState<SparkVersionOption[]>([]);
   const [name, setName] = useState('');
+  const [tierId, setTierId] = useState('std-s');
   const [presetId, setPresetId] = useState('balanced');
   const [sparkVersion, setSparkVersion] = useState('');
   const [nodeType, setNodeType] = useState('');
@@ -207,6 +209,22 @@ function NewClusterDialog({
     });
   }, []);
 
+  // Apply a SIZE tier — node type (when the workspace offers it) + autoscale
+  // bounds + Photon + auto-terminate. Orthogonal to the work-type conf preset.
+  const applyTier = useCallback((id: string) => {
+    setTierId(id);
+    const t = findTier(id);
+    if (!t) return;
+    setMinWorkers(String(t.minWorkers));
+    setMaxWorkers(String(t.maxWorkers));
+    setPhoton(t.photon);
+    setAutoterm(String(t.autoterminationMinutes));
+    setNodeTypes((nts) => {
+      if (nts.some((n) => n.node_type_id === t.nodeTypeId)) setNodeType(t.nodeTypeId);
+      return nts;
+    });
+  }, []);
+
   useEffect(() => {
     if (!open) return;
     setLoadingOpts(true); setOptError(null);
@@ -239,6 +257,7 @@ function NewClusterDialog({
           cluster_name: name.trim(),
           spark_version: sparkVersion,
           node_type_id: nodeType,
+          tierId: tierId || undefined,
           presetId: presetId || undefined,
           spark_conf: dbxRowsToRecord(confRows),
           photon,
@@ -254,7 +273,7 @@ function NewClusterDialog({
       onOpenChange(false);
     } catch (e: any) { setCreateError(e?.message || String(e)); }
     finally { setCreating(false); }
-  }, [name, sparkVersion, nodeType, presetId, confRows, photon, spot, minWorkers, maxWorkers, autoterm, onCreated, onOpenChange]);
+  }, [name, sparkVersion, nodeType, tierId, presetId, confRows, photon, spot, minWorkers, maxWorkers, autoterm, onCreated, onOpenChange]);
 
   const activePreset = findPreset(presetId);
   const ready = name.trim() && sparkVersion && nodeType && !creating;
@@ -276,6 +295,12 @@ function NewClusterDialog({
             )}
             {!loadingOpts && !optError && (
               <div className={s.body}>
+                {/* Size tier — how big (T-shirt sizes); composes with the work-type profile below */}
+                <Field label="Size" hint="A right-sized, pre-configured cluster shape (node type, autoscale bounds, Photon, auto-terminate).">
+                  <Select value={tierId} onChange={(_, d) => applyTier(d.value)}>
+                    {CLUSTER_TIERS.map((t) => <option key={t.id} value={t.id}>{t.label} · {t.costHint}</option>)}
+                  </Select>
+                </Field>
                 {/* Best-practice preset — different cluster shapes per work type */}
                 <Field label="Configuration preset" hint={activePreset ? activePreset.whenToUse : 'Pick a best-practice cluster profile, then fine-tune below.'}>
                   <Select value={presetId} onChange={(_, d) => applyPreset(d.value)}>
