@@ -21,6 +21,10 @@ param location string
 @description('HSM isolated mode (IL5 only)')
 param hsmIsolated bool
 
+@description('Cloud boundary — controls sovereign diagnostic-category support. In Azure Government (GCC-High/IL5) the Key Vault diagnosticSettings resource rejects the separate categoryGroup:\'audit\' entry (supported: \'allLogs\' only), so Gov emits just \'allLogs\' — a superset that still includes the audit events.')
+@allowed(['Commercial', 'GCC', 'GCC-High', 'IL5'])
+param boundary string = 'Commercial'
+
 @description('Tenant ID')
 param tenantId string = subscription().tenantId
 
@@ -232,16 +236,25 @@ resource hsm 'Microsoft.KeyVault/managedHSMs@2024-11-01' = if (hsmIsolated && !e
 // Outputs
 // =====================================================================
 
+// Diagnostic log categoryGroups — boundary-aware. Commercial/GCC keep both
+// 'allLogs' and the explicit 'audit' group; Azure Government (GCC-High/IL5)
+// rejects a separate 'audit' entry on Key Vault diagnosticSettings ("CategoryGroup:
+// 'audit' is not supported, supported ones are: 'allLogs'"), so Gov emits only
+// 'allLogs', which is a superset that already carries the audit events.
+var kvDiagLogs = (boundary == 'GCC-High' || boundary == 'IL5') ? [
+  { categoryGroup: 'allLogs', enabled: true }
+] : [
+  { categoryGroup: 'allLogs', enabled: true }
+  { categoryGroup: 'audit', enabled: true }
+]
+
 // Diagnostic settings → standardized Loom LAW
 resource diag 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
   scope: keyVault
   name: 'diag-loom-stdz'
   properties: {
     workspaceId: workspaceId
-    logs: [
-      { categoryGroup: 'allLogs', enabled: true }
-      { categoryGroup: 'audit', enabled: true }
-    ]
+    logs: kvDiagLogs
     metrics: [
       { category: 'AllMetrics', enabled: true }
     ]
@@ -253,10 +266,7 @@ resource diagHsm 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = if
   name: 'diag-loom-stdz'
   properties: {
     workspaceId: workspaceId
-    logs: [
-      { categoryGroup: 'allLogs', enabled: true }
-      { categoryGroup: 'audit', enabled: true }
-    ]
+    logs: kvDiagLogs
     metrics: [
       { category: 'AllMetrics', enabled: true }
     ]

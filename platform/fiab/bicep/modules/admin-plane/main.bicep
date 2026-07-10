@@ -1620,6 +1620,9 @@ module keyvault 'keyvault.bicep' = {
   params: {
     location: location
     hsmIsolated: keyVaultHsmIsolated
+    // Sovereign diagnostic-category support: Gov drops the unsupported 'audit'
+    // categoryGroup on the KV diagnosticSettings ('allLogs' superset only).
+    boundary: boundary
     adminEntraGroupId: adminEntraGroupId
     consolePrincipalId: identity.outputs.uamiConsolePrincipalId
     // MCP app UAMI gets Key Vault Secrets User (read-only) so catalog-deployed
@@ -2101,6 +2104,17 @@ module agentFoundry '../ai/foundry-project.bicep' = if (agentFoundryEnabled) {
     // Optional dedicated ghost-text deployment. Empty => no extra deployment;
     // the Console route falls back to the chat deployment for inline completion.
     completionDeploymentName: loomAoaiCompletionDeployment
+    // Deployment SKU is boundary-aware. GlobalStandard is Commercial/GCC-only —
+    // "Global standard deployments won't be available in government clouds"
+    // (Microsoft Learn: Azure OpenAI in Azure Government). Azure Government uses
+    // regional 'Standard'; gpt-4o 2024-11-20 (chat) and text-embedding-ada-002 v2
+    // (embed) are both Standard-available in usgovvirginia + usgovarizona
+    // (Learn: azure-government model summary), so only the SKU changes here — the
+    // model + version are unchanged. Commercial/GCC keep GlobalStandard (byte-
+    // identical). Cited in docs/fiab/gov-parity-audit.md live-deltas.
+    chatModelSkuName: (boundary == 'GCC-High' || boundary == 'IL5') ? 'Standard' : 'GlobalStandard'
+    embedModelSkuName: (boundary == 'GCC-High' || boundary == 'IL5') ? 'Standard' : 'GlobalStandard'
+    completionModelSkuName: (boundary == 'GCC-High' || boundary == 'IL5') ? 'Standard' : 'GlobalStandard'
   }
 }
 
@@ -4663,6 +4677,8 @@ module vpnGateway 'vpn-gateway.bicep' = if (vpnGatewayEnabled) {
     location: location
     gatewaySubnetId: network.outputs.gatewaySubnetId
     complianceTags: complianceTags
+    // Selects the sovereign Azure VPN Client audience app ID (Gov ≠ Commercial).
+    boundary: boundary
   }
 }
 
