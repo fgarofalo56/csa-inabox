@@ -339,7 +339,7 @@ export function AirflowJobEditor({ item, id }: Props) {
   }, [workspaceId, loadDags]);
 
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={ribbon} commandSearch
+    <ItemEditorChrome splitKeyPrefix={item.slug} item={item} id={id} ribbon={ribbon} commandSearch
       leftPanel={
         <ExplorerTree
           title="Airflow jobs"

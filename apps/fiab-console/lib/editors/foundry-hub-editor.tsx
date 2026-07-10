@@ -2478,7 +2478,7 @@ export function FoundryHubEditor({ item, id }: { item: FabricItemType; id: strin
   );
 
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={ribbon} commandSearch leftPanel={leftPanel} main={
+    <ItemEditorChrome splitKeyPrefix={item.slug} item={item} id={id} ribbon={ribbon} commandSearch leftPanel={leftPanel} main={
       <>
         <AccountPickerBar acct={acct} onSelect={onSelectAccount} onHub={onHub} />
         {/* SC-8 — workspace framing: quick cross-links to the AI-workload

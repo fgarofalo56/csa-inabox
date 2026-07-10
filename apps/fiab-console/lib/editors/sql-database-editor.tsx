@@ -252,7 +252,7 @@ WHERE is_ms_shipped = 0;`,
   ], [workspaceId, dbId, fabricWsId, sqlBusy, runSql, del, loadList]);
 
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={ribbon}
+    <ItemEditorChrome splitKeyPrefix={item.slug} item={item} id={id} ribbon={ribbon}
       leftPanel={
         <div className={s.treePad}>
           <Subtitle2 style={{ marginBottom: tokens.spacingVerticalS, display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS }}>

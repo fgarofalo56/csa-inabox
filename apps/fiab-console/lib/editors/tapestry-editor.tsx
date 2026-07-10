@@ -255,7 +255,7 @@ export function TapestryEditor({ item, id }: { item: FabricItemType; id: string 
   }, [linkLoading, geoLoading, timelineLoading, runActive, runLink, runGeo, runTimeline]);
 
   return (
-    <ItemEditorChrome
+    <ItemEditorChrome splitKeyPrefix={item.slug}
       item={item} id={id}
       ribbon={ribbon}
       leftPanel={

@@ -477,7 +477,7 @@ export function CopilotStudioAgentEditor({ item, id }: { item: FabricItemType; i
   useRegisterRibbonCommands(ribbon, item.slug);
 
   return (
-    <ItemEditorChrome
+    <ItemEditorChrome splitKeyPrefix={item.slug}
       item={item}
       id={id}
       ribbon={ribbon} commandSearch

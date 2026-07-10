@@ -460,7 +460,7 @@ export function DatabricksClusterEditor({ item, id }: { item: FabricItemType; id
 
   return (
     <>
-    <ItemEditorChrome
+    <ItemEditorChrome splitKeyPrefix={item.slug}
       item={item}
       id={id}
       ribbon={ribbonCluster}

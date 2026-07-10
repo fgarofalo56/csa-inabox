@@ -431,7 +431,7 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
   ], [loading, canRun, ready, run, newSql, sqlText, openCtas, openInExcel, statsTarget, copilot.openPrompt, copilot.explain, copilot.optimize]);
 
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={ribbon}
+    <ItemEditorChrome splitKeyPrefix={item.slug} item={item} id={id} ribbon={ribbon}
       explain={{ family: 'warehouse', getDefinition: () => ({
         schemas: schema?.schemas ?? {},
         views: schema?.views ?? [],
