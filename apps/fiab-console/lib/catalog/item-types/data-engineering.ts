@@ -177,4 +177,17 @@ export const dataEngineeringItems: FabricItemType[] = [
       ],
       "docsUrl": "https://learn.microsoft.com/azure/storage/blobs/data-lake-storage-introduction"
     } },
+  { slug: 'batch-pool',                  displayName: 'Batch pool',                  restType: 'Microsoft.Batch/batchAccounts', category: 'Data Engineering',
+    description: 'Azure Batch pools + jobs + tasks — bulk parallel / HPC compute for AI fan-out across a managed VM fleet. Real ARM + Batch REST.',
+    learnContent: {
+      "overview": "A Batch pool is a managed fleet of VMs on the deployment-pinned Azure Batch account (Microsoft.Batch/batchAccounts) for large-scale parallel and HPC work — the canonical use in Loom is fanning bulk AI scoring / document-enrichment tasks across many nodes. In Loom it is an ADF-Studio-style navigator: pools (VM size, fixed or formula-driven autoscale, dedicated + low-priority/Spot nodes) are managed over the real ARM management plane, and jobs + tasks are created and listed over the Batch data plane. The BatchExecute pipeline activity fans one Custom task per pipeline run onto a pool. Azure-native — no Microsoft Fabric required.",
+      "steps": [
+        { "title": "Bind the account", "body": "The editor targets the deployment Batch account (LOOM_BATCH_ACCOUNT). If unset it shows an honest gate naming the env var + the Contributor role the Console UAMI needs; deploy it with the deploy-planner batch.bicep module." },
+        { "title": "Create a pool", "body": "Pick a VM size and either a fixed dedicated/Spot node count or a named autoscale formula preset; Loom PUTs Microsoft.Batch/batchAccounts/{acct}/pools over real ARM." },
+        { "title": "Add a job", "body": "Create a job bound to a pool — the container for a set of parallel tasks — over the Batch data plane." },
+        { "title": "Fan out tasks", "body": "Add tasks (each a command line) to a job; the pool's nodes execute them in parallel. Track state + exit codes in the tasks grid." },
+        { "title": "Drive from a pipeline", "body": "Drop a BatchExecute (Custom) activity onto a data pipeline to submit a task per run — bulk-score a file set against Document Intelligence / a model without hand-scripting Batch." }
+      ],
+      "docsUrl": "https://learn.microsoft.com/azure/batch/batch-technical-overview"
+    } },
 ];

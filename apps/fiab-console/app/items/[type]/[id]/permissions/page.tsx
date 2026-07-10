@@ -14,10 +14,16 @@ import {
   Spinner, MessageBar, MessageBarBody, MessageBarTitle, Button, Badge, Persona, Caption1,
   makeStyles, tokens,
 } from '@fluentui/react-components';
-import { AddRegular, ShieldKeyholeRegular, DeleteRegular } from '@fluentui/react-icons';
+import {
+  AddRegular, ShieldKeyholeRegular, DeleteRegular,
+  Open20Regular, PeopleTeam20Regular, ShieldTask24Regular,
+} from '@fluentui/react-icons';
 import { PageShell } from '@/lib/components/page-shell';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { ShareItemDialog, type ItemPermissionType } from '@/lib/dialogs/share-item-dialog';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
+import { ToolbarCrossLinks, type CrossLink } from '@/lib/components/shared/item-tab-strip';
+import { LOOM_ACCENT } from '@/lib/components/shared/accent-tokens';
 
 interface ItemPermissionRow {
   id: string;
@@ -140,6 +146,22 @@ export default function ItemPermissionsPage(props: Props) {
         </Button>
       }
     >
+      <ToolbarCrossLinks
+        ariaLabel="Related surfaces"
+        links={[
+          { key: 'open-item', label: 'Open item', icon: <Open20Regular />, href: `/items/${type}/${id}` },
+          { key: 'workspaces', label: 'Workspaces', icon: <PeopleTeam20Regular />, href: '/workspaces' },
+        ] satisfies CrossLink[]}
+      />
+      <TeachingBanner
+        surfaceKey="item-permissions"
+        title="Grant access the governed way"
+        message="Sharing an item grants a principal one or more permission types. A Read grant also mirrors a POSIX ACL entry plus Storage Blob Data Reader on the item's data, so access is enforced at the storage layer — not just in the UI. Revocation applies on the recipient's next token refresh (existing tokens can persist up to ~1 hour)."
+        icon={ShieldTask24Regular}
+        accent={LOOM_ACCENT.amber}
+        learnMoreHref="https://learn.microsoft.com/fabric/security/permission-model"
+      />
+
       {dlpRestricted && (
         <MessageBar intent="warning" icon={<ShieldKeyholeRegular />} style={{ marginBottom: tokens.spacingVerticalM }}>
           <MessageBarBody>

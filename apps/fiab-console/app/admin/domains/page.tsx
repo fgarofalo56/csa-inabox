@@ -30,8 +30,10 @@ import {
 import {
   Add24Regular, Delete20Regular, ArrowSync24Regular,
   MoreHorizontal20Regular, Settings20Regular, BranchFork20Regular, Folder20Regular,
-  ArrowMove20Regular, Cloud20Regular,
+  ArrowMove20Regular, Cloud20Regular, Organization24Regular, BuildingMultiple24Regular,
 } from '@fluentui/react-icons';
+import { GuidedEmptyState } from '@/lib/components/shared/guided-empty-state';
+import { LOOM_ACCENT } from '@/lib/components/shared/accent-tokens';
 import { AdminShell } from '@/lib/components/admin-shell';
 import { Section, Toolbar } from '@/lib/components/ui/section';
 import { useAdminTabStyles } from '@/lib/components/ui/admin-tab-styles';
@@ -356,6 +358,32 @@ export default function DomainsPage() {
         <Toolbar search={q} onSearch={setQ} searchPlaceholder="Search by name, id, admin…" />
         {loading && !error ? (
           <Spinner label="Loading domains…" />
+        ) : domains && domains.length === 0 && !q ? (
+          <GuidedEmptyState
+            title="Organize the estate into domains"
+            intro="Group workspaces and data products into governance-scoped business domains — Finance, Operations, Mission-Ops — each with its own admins, contributors, and delegated settings."
+            heroIcon={Organization24Regular}
+            paths={[
+              {
+                key: 'create',
+                title: 'Create a domain',
+                body: 'Name it, assign admins and contributors, and pick an image — from scratch or a Federal agency template.',
+                icon: Add24Regular,
+                accent: LOOM_ACCENT.blue,
+                onClick: () => openCreate(null),
+              },
+              {
+                key: 'learn-org',
+                title: 'Assign workspaces later',
+                body: 'Once a domain exists, tag existing workspaces to it from the domain actions menu.',
+                icon: BuildingMultiple24Regular,
+                accent: LOOM_ACCENT.teal,
+                onClick: () => openCreate(null),
+              },
+            ]}
+            learnMoreHref="https://learn.microsoft.com/purview/concept-domain"
+            learnMoreLabel="About business domains"
+          />
         ) : (
           <LoomDataTable
             columns={columns}
