@@ -67,6 +67,7 @@ import { QueryParamsBar, substituteDbx, type QueryParam } from '../components/qu
 import { ResultVisualize } from '../components/result-visualize';
 import { useStyles, formatCell, clusterStateColor, runStateColor, fmtTime, fmtDuration, detectBase } from './shared';
 import type { Cluster, WorkspaceObject, RunRow, CellResult } from './shared';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
 
 export function DatabricksNotebookEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
@@ -513,6 +514,12 @@ export function DatabricksNotebookEditor({ item, id }: { item: FabricItemType; i
       }
       main={
         <div className={s.pad}>
+          <TeachingBanner
+            surfaceKey="databricks-notebook-editor"
+            title="Run notebooks on Databricks"
+            message="Attach a cluster, mix Python, SQL, and Scala cells against Unity Catalog, then schedule the notebook as a job. Cells run on your real Databricks workspace and results stream back here."
+            learnMoreHref="https://learn.microsoft.com/azure/databricks/notebooks/"
+          />
           {/* Toolbar: notebook id + base language + cluster + run-all */}
           <div className={s.toolbar}>
             <Caption1 style={{ fontWeight: 600 }}>{selectedPath || 'New notebook (unsaved)'}</Caption1>
