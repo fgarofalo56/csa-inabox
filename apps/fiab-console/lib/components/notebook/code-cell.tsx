@@ -13,7 +13,7 @@ import {
   Stop16Filled, ArrowSwap16Regular, ReOrderDotsVertical16Regular,
   Lightbulb16Regular, Sparkle16Regular, Sparkle16Filled,
 } from '@fluentui/react-icons';
-import type { NotebookCell, NotebookCellLang } from '@/lib/types/notebook-cell';
+import type { NotebookCell, NotebookCellLang, NotebookCellOutput } from '@/lib/types/notebook-cell';
 import { LOOM_DISPLAY_MIME } from '@/lib/types/notebook-cell';
 import type { LoomDisplayPayload } from '@/lib/types/notebook-cell';
 import { parseCopilotCommand, copilotResultCell } from '@/lib/components/notebook/copilot-commands';
@@ -109,6 +109,47 @@ const useStyles = makeStyles({
   outputError: {
     color: tokens.colorPaletteRedForeground1,
   },
+  // Rich (non-text) output shapes — R3 #5. Images + sandboxed HTML render
+  // above/instead of the plain-text fallback.
+  richOutput: {
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS,
+    padding: tokens.spacingHorizontalS,
+    borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
+    backgroundColor: tokens.colorNeutralBackground2,
+    maxHeight: '480px', overflow: 'auto', maxWidth: '100%',
+  },
+  richOutputMaximized: { maxHeight: '60%' },
+  // Matplotlib / plot figures are authored on a WHITE canvas and are often
+  // transparent-background — keep a stable light backing in BOTH themes so they
+  // stay legible on dark mode (a token would flip to dark and hide the plot).
+  outputImageWrap: {
+    display: 'inline-block', alignSelf: 'flex-start',
+    backgroundColor: '#ffffff',
+    padding: tokens.spacingHorizontalS,
+    borderRadius: tokens.borderRadiusMedium,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    maxWidth: '100%',
+  },
+  outputImage: { maxWidth: '100%', height: 'auto', display: 'block' },
+  // text/html (e.g. pandas _repr_html_) rendered in a scripts-disabled sandboxed
+  // iframe (no sanitizer dep in-repo) so untrusted output HTML can never run JS
+  // or touch the parent DOM. White backing for default table styling.
+  outputHtmlFrame: {
+    width: '100%', minHeight: '80px', height: '300px', maxWidth: '100%',
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: '#ffffff',
+  },
+  outputStdout: {
+    fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200,
+    whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', wordBreak: 'break-word',
+    color: tokens.colorNeutralForeground2, margin: 0, maxWidth: '100%',
+  },
+  outputJson: {
+    fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200,
+    whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', margin: 0, maxWidth: '100%',
+  },
+  viewToggle: { alignSelf: 'flex-start' },
   badgeCount: {
     fontFamily: 'Consolas, monospace',
     color: tokens.colorNeutralForeground3,
@@ -144,6 +185,87 @@ function detectCellMagic(source: string): 'pyspark' | 'spark' | 'sql' | 'sparkr'
   if (!line) return null;
   const token = line.trim().toLowerCase().split(/\s+/)[0];
   return MAGIC_ROUTING[token] ?? null;
+}
+
+// ---- Rich cell-output rendering (R3 #5) ----------------------------------
+// Livy statement output.data is a MIME map. Render the RICHEST shape (image >
+// html > json) rather than dumping base64 / an object repr as text, and keep
+// stdout (print) alongside a figure/HTML so "print + df repr" cells show both.
+const IMAGE_MIMES: Array<[string, string]> = [
+  ['image/png', 'image/png'], ['image/jpeg', 'image/jpeg'],
+  ['image/gif', 'image/gif'], ['image/webp', 'image/webp'],
+];
+
+function toImageSrc(mime: string, val: string): string {
+  return val.startsWith('data:') ? val : `data:${mime};base64,${val}`;
+}
+function safeJson(v: unknown): string {
+  try { return JSON.stringify(v, null, 2); } catch { return String(v); }
+}
+
+/** Extract renderable parts from a cell output's MIME map. `hasRich` is true
+ *  when there is a non-plain-text shape (image / html / json) worth rendering
+ *  richly instead of the plain-text fallback. */
+export function outputRichParts(output: NotebookCellOutput) {
+  const data = (output.data && typeof output.data === 'object') ? output.data as Record<string, unknown> : {};
+  const images: Array<{ mime: string; src: string }> = [];
+  for (const [key, mime] of IMAGE_MIMES) {
+    const v = data[key];
+    if (typeof v === 'string' && v) images.push({ mime, src: toImageSrc(mime, v) });
+  }
+  const svg = typeof data['image/svg+xml'] === 'string' ? data['image/svg+xml'] as string : undefined;
+  // SVG renders through <img> (image context disables any embedded scripting),
+  // encoded inline so no base64 round-trip is needed.
+  if (svg) images.push({ mime: 'image/svg+xml', src: `data:image/svg+xml;utf8,${encodeURIComponent(svg)}` });
+  const html = typeof data['text/html'] === 'string' ? data['text/html'] as string : undefined;
+  const jsonRaw = data['application/json'];
+  const jsonVal = (jsonRaw !== undefined && jsonRaw !== null && jsonRaw !== LOOM_DISPLAY_MIME) ? jsonRaw : undefined;
+  const text = (typeof output.textPlain === 'string' && output.textPlain)
+    ? output.textPlain
+    : (typeof data['text/plain'] === 'string' ? data['text/plain'] as string : undefined);
+  const hasRich = images.length > 0 || !!html || jsonVal !== undefined;
+  return { images, html, jsonVal, text, hasRich };
+}
+
+function RichCellOutput({ output, maximized }: { output: NotebookCellOutput; maximized?: boolean }) {
+  const s = useStyles();
+  const [viewText, setViewText] = useState(false);
+  const { images, html, jsonVal, text } = outputRichParts(output);
+  const hasVisual = images.length > 0 || !!html;
+  const canToggleText = !!text && hasVisual;
+  return (
+    <div className={mergeClasses(s.richOutput, maximized && s.richOutputMaximized)}>
+      {canToggleText && (
+        <Button
+          size="small" appearance="subtle" className={s.viewToggle}
+          onClick={(e) => { e.stopPropagation(); setViewText((v) => !v); }}
+        >
+          {viewText ? 'View rich output' : 'View as text'}
+        </Button>
+      )}
+      {viewText && text ? (
+        <pre className={s.outputStdout}>{text}</pre>
+      ) : (
+        <>
+          {/* stdout above the figure/HTML so a "print + df repr" cell shows both */}
+          {text && hasVisual && <pre className={s.outputStdout}>{text}</pre>}
+          {images.map((img, i) => (
+            <span key={i} className={s.outputImageWrap}>
+              <img src={img.src} alt="Cell output" className={s.outputImage} />
+            </span>
+          ))}
+          {html && (
+            // Scripts-disabled sandboxed iframe (no in-repo HTML sanitizer): the
+            // output HTML can never run JS or reach the parent DOM.
+            <iframe title="Cell HTML output" sandbox="" className={s.outputHtmlFrame} srcDoc={html} />
+          )}
+          {jsonVal !== undefined && !hasVisual && (
+            <pre className={s.outputJson}>{safeJson(jsonVal)}</pre>
+          )}
+        </>
+      )}
+    </div>
+  );
 }
 
 export interface CodeCellProps {
@@ -686,6 +808,12 @@ export function CodeCell({ cell, active, onFocus, onChange, onRun, onStop, onDel
               <RichDisplay payload={rich} cellId={cell.id} notebookId={notebookId || ''} workspaceId={workspaceId || ''} computeId={computeId || ''} />
             </div>
           );
+        }
+        // Rich output SHAPES (R3 #5): matplotlib image/png, text/html, JSON, and
+        // "print + df repr" multi-output cells — render the richest shape instead
+        // of a base64 dump / escaped-HTML text. Errors keep the plain-text box.
+        if (cell.output.status !== 'error' && outputRichParts(cell.output).hasRich) {
+          return <RichCellOutput output={cell.output} maximized={maximized} />;
         }
         return (
           <>

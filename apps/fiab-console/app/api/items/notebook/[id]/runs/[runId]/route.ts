@@ -69,6 +69,56 @@ async function recordRun(
   } catch { /* non-fatal — history is best-effort */ }
 }
 
+/**
+ * Drop one or more keys from the notebook's pendingRuns map (R3 #4 — a resume
+ * poll that finds the Livy session gone/dead must CLEAN its stale entry so it
+ * doesn't re-resume on every reload). Best-effort, non-fatal: a write failure
+ * must never break the poll response.
+ */
+async function clearPendingRuns(
+  items: any, nb: WorkspaceItem, workspaceId: string, keys: string[],
+): Promise<void> {
+  try {
+    const state = (nb.state as any) || {};
+    const pendingRuns = state.pendingRuns;
+    if (!pendingRuns || typeof pendingRuns !== 'object') return;
+    let changed = false;
+    const next = { ...pendingRuns };
+    for (const k of keys) { if (k in next) { delete next[k]; changed = true; } }
+    if (!changed) return;
+    await items.item(nb.id, workspaceId).replace({
+      ...nb, state: { ...state, pendingRuns: next }, updatedAt: new Date().toISOString(),
+    } as WorkspaceItem);
+  } catch { /* non-fatal */ }
+}
+
+// Bounds for surfacing rich output shapes (R3 #5) without bloating the response
+// or the persisted pendingRuns.cellOutputs (Cosmos 2MB doc cap).
+const IMG_CAP = 2_000_000;   // ~2MB base64 per image; larger is dropped (a partial base64 is useless)
+const HTML_CAP = 200_000;    // truncate a runaway text/html repr
+
+/**
+ * Keep only the renderable RICH mime shapes from a Livy output.data map —
+ * image/* (bounded) + a truncated text/html — so a "Run all" cell can render a
+ * matplotlib plot / DataFrame HTML the same as a single-cell run (R3 #5). The
+ * bulky application/json is intentionally NOT kept here: the grid renders from
+ * richDisplay/textPlain, so re-shipping the raw rows per cell would bloat the
+ * response. Returns undefined when there is nothing rich to keep.
+ */
+function pickRichData(data: any): Record<string, string> | undefined {
+  if (!data || typeof data !== 'object') return undefined;
+  const kept: Record<string, string> = {};
+  for (const k of ['image/png', 'image/jpeg', 'image/gif', 'image/svg+xml', 'image/webp']) {
+    const v = data[k];
+    if (typeof v === 'string' && v.length <= IMG_CAP) kept[k] = v;
+  }
+  const html = data['text/html'];
+  if (typeof html === 'string') {
+    kept['text/html'] = html.length > HTML_CAP ? html.slice(0, HTML_CAP) + '\n<!-- …truncated -->' : html;
+  }
+  return Object.keys(kept).length ? kept : undefined;
+}
+
 export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string; runId: string }> }) {
   const s = getSession();
   if (!s) return apiError('unauthenticated', 401);
@@ -142,7 +192,28 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string;
 
       // Phase 1: session not yet idle — return state
       if (stmtId === undefined) {
-        const sess = await getLivySession(pool, sessionId);
+        let sess: { id: number; state: string; appInfo?: any };
+        try {
+          sess = await getLivySession(pool, sessionId);
+        } catch (e: any) {
+          // A resume poll (R3 #4) can land on a session Livy already reaped
+          // (idle-timeout → 404). Treat a definitive not-found as session-gone:
+          // clean the stale pendingRuns entry and return an HONEST cell error
+          // (ok:true so the editor renders it on the cell, not a transport 502
+          // the client would retry forever). A transient error (not 404)
+          // rethrows to the outer catch → 502, leaving the entry intact.
+          if (/failed 404\b/.test(String(e?.message || ''))) {
+            await clearPendingRuns(items, nb, workspaceId, [runId, basePendingKey]);
+            return NextResponse.json({
+              ok: true, status: 'dead', runId, phase: 'session-gone',
+              output: {
+                status: 'error', ename: 'SessionGone',
+                evalue: `Spark session ${sessionId} is no longer available — it was recycled or timed out. Re-run the cell.`,
+              },
+            });
+          }
+          throw e;
+        }
         if (sess.state === 'idle') {
           // Promote: submit the first statement, embed stmtId in next runId.
           // Queued (whole-notebook) runs submit cell 0 with ITS kind and keep
@@ -172,10 +243,14 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string;
             }
           }
           const stmt = await submitLivyStatement(pool, sessionId, first);
+          const promotedRunId = `spark:${pool}:${sessionId}:${stmt.id}`;
           if (pending) {
             try {
               const nextPending = { ...(state.pendingRuns || {}) };
-              if (queue.length > 0) nextPending[basePendingKey] = { ...pending, qIdx: 1 };
+              // Persist lastRunId (the in-flight statement's full runId) so a
+              // remount can RESUME polling the exact statement instead of
+              // re-submitting queue[0] (R3 #4).
+              if (queue.length > 0) nextPending[basePendingKey] = { ...pending, qIdx: 1, lastRunId: promotedRunId };
               else delete nextPending[runId];
               await items.item(nb.id, workspaceId).replace({
                 ...nb,
@@ -187,11 +262,14 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string;
           return NextResponse.json({
             ok: true,
             status: stmt.state || 'running',
-            runId: `spark:${pool}:${sessionId}:${stmt.id}`,
+            runId: promotedRunId,
             phase: queue.length > 1 ? `cell 1/${queue.length} running` : 'statement-submitted',
           });
         }
         if (['error', 'dead', 'killed', 'shutting_down'].includes(sess.state)) {
+          // Terminal session — clean the stale pendingRuns entry so a resume
+          // poll doesn't retry it forever (R3 #4).
+          await clearPendingRuns(items, nb, workspaceId, [runId, basePendingKey]);
           return NextResponse.json({ ok: false, error: `Spark session ${sessionId} entered terminal state '${sess.state}'`, status: sess.state });
         }
         return NextResponse.json({ ok: true, status: sess.state, runId, phase: 'session-starting' });
@@ -273,22 +351,42 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string;
       // statement to submit, so the in-flight statement is queue[qIdx-1]; its
       // cellId attributes the output to a cell (a multi-statement SQL cell keys
       // all its splits to the one cell, last wins — same as a single-cell run).
-      // Bounded: drop the raw `data` blob (the grid renders textPlain +
-      // richDisplay, both already sampled) and cap textPlain.
+      // Two copies: a RICH one for the client (bounded images + HTML, R3 #5) and
+      // a LEAN one persisted to Cosmos (text only — resume backs the running run).
       const qIdx = Number(pending?.qIdx) || 0;
-      const boundForCell = (o: NonNullable<typeof stmtOutput>): Record<string, unknown> => {
-        const { data: _drop, ...rest } = o as Record<string, unknown>;
+      const truncText = (rest: Record<string, unknown>) => {
         if (typeof rest.textPlain === 'string' && rest.textPlain.length > 20000) {
           rest.textPlain = rest.textPlain.slice(0, 20000) + '\n… (truncated)';
         }
+      };
+      // RICH (returned to the client): keep richDisplay + a bounded rich data map
+      // (image/* + text/html) so a "Run all" cell renders plots/HTML the same as
+      // a single-cell run (R3 #5).
+      const boundRich = (o: NonNullable<typeof stmtOutput>): Record<string, unknown> => {
+        const { data, ...rest } = o as Record<string, unknown>;
+        truncText(rest);
+        const rich = pickRichData(data);
+        if (rich) rest.data = rich;
         return rest;
       };
-      let cellOutputs: Record<string, unknown> | undefined;
+      // LEAN (persisted to pendingRuns.cellOutputs): text only, NO images — a
+      // Run-all with several plots would otherwise blow the Cosmos 2MB doc cap.
+      // The client already applied each cell's rich output live as its statement
+      // finished; the persisted copy only backs resume of the STILL-running run.
+      const boundLean = (o: NonNullable<typeof stmtOutput>): Record<string, unknown> => {
+        const { data: _drop, ...rest } = o as Record<string, unknown>;
+        truncText(rest);
+        return rest;
+      };
+      let cellOutputs: Record<string, unknown> | undefined;        // rich → client
+      let cellOutputsPersist: Record<string, unknown> | undefined; // lean → Cosmos
       if (queue.length > 0 && stmtOutput) {
         const doneCellId = queue[Math.max(0, qIdx - 1)]?.cellId;
-        const acc: Record<string, unknown> = { ...(pending?.cellOutputs || {}) };
-        if (doneCellId) acc[doneCellId] = boundForCell(stmtOutput);
-        cellOutputs = acc;
+        const accRich: Record<string, unknown> = { ...(pending?.cellOutputs || {}) };
+        const accLean: Record<string, unknown> = { ...(pending?.cellOutputs || {}) };
+        if (doneCellId) { accRich[doneCellId] = boundRich(stmtOutput); accLean[doneCellId] = boundLean(stmtOutput); }
+        cellOutputs = accRich;
+        cellOutputsPersist = accLean;
       }
 
       // Whole-notebook queue: previous cell finished OK and more cells remain —
@@ -300,7 +398,11 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string;
         const nstmt = await submitLivyStatement(pool, sessionId, { code: next.source, kind: next.lang as any });
         try {
           const nextPending = { ...(state.pendingRuns || {}) };
-          nextPending[basePendingKey] = { ...pending, qIdx: qIdx + 1, cellOutputs: cellOutputs ?? pending?.cellOutputs };
+          nextPending[basePendingKey] = {
+            ...pending, qIdx: qIdx + 1,
+            cellOutputs: cellOutputsPersist ?? pending?.cellOutputs,
+            lastRunId: `spark:${pool}:${sessionId}:${nstmt.id}`,
+          };
           await items.item(nb.id, workspaceId).replace({
             ...nb, state: { ...state, pendingRuns: nextPending }, updatedAt: new Date().toISOString(),
           } as WorkspaceItem);
