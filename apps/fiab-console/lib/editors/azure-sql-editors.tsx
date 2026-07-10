@@ -41,6 +41,9 @@ import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { FullTextSearchPanel, VectorIndexPanel } from './components/sql-search-management';
 import { useJobsStore } from '@/lib/state/jobs-store';
 import type { RibbonTab } from '@/lib/components/ribbon';
+import { useRegisterRibbonCommands } from '@/lib/components/shared/ribbon-commands';
+import { DetailsPanel } from '@/lib/components/shared/details-panel';
+import { DatabasePlugConnected20Regular } from '@fluentui/react-icons';
 import { useSharedEditorStyles } from './shared-styles';
 
 // ── Azure SQL real option sets (parity with the portal create/scale blades) ──
@@ -490,10 +493,11 @@ export function AzureSqlServerEditor({ item, id }: { item: FabricItemType; id: s
       ]},
     ]},
   ], [loading, refresh, selected, openFw, openAad]);
+  useRegisterRibbonCommands(ribbon, item.slug);
 
   return (
     <ItemEditorChrome
-      item={item} id={id} ribbon={ribbon}
+      item={item} id={id} ribbon={ribbon} commandSearch
       leftPanel={
         <div className={s.treePad}>
           <Tree aria-label="SQL servers" defaultOpenItems={['servers']}>
@@ -1096,10 +1100,48 @@ export function AzureSqlDatabaseEditor({ item, id }: { item: FabricItemType; id:
       ]},
     ]},
   ], [canRun, loading, run, toggleMirror, probe2025, newTsql, openGeo]);
+  useRegisterRibbonCommands(ribbon, item.slug);
+
+  // SC-2 — right-docked connection details, one-for-one with the Azure portal's
+  // "Connection strings" blade. Purely presentational: the FQDN + strings are
+  // derived from the selected server/db (AAD Managed-Identity auth, the exact
+  // path the Loom BFF uses — no secrets, no Fabric dependency).
+  const sqlFqdn = server ? (server.includes('.') ? server : `${server}.database.windows.net`) : '';
+  const connDetails = server && database ? (
+    <DetailsPanel
+      title="Connection details"
+      subtitle={database}
+      icon={<DatabasePlugConnected20Regular />}
+      sections={[
+        {
+          key: 'endpoint',
+          title: 'Endpoint',
+          uris: [
+            { key: 'fqdn', label: 'Server (FQDN)', value: sqlFqdn, href: `https://${sqlFqdn}` },
+            { key: 'db', label: 'Database', value: database, mono: true },
+          ],
+        },
+        {
+          key: 'strings',
+          title: 'Connection strings',
+          uris: [
+            { key: 'ado', label: 'ADO.NET (AAD Managed Identity)',
+              value: `Server=tcp:${sqlFqdn},1433;Initial Catalog=${database};Authentication=Active Directory Managed Identity;Encrypt=True;TrustServerCertificate=False;` },
+            { key: 'jdbc', label: 'JDBC',
+              value: `jdbc:sqlserver://${sqlFqdn}:1433;database=${database};authentication=ActiveDirectoryMSI;encrypt=true;trustServerCertificate=false;` },
+            { key: 'odbc', label: 'ODBC',
+              value: `Driver={ODBC Driver 18 for SQL Server};Server=tcp:${sqlFqdn},1433;Database=${database};Authentication=ActiveDirectoryMsi;Encrypt=yes;` },
+          ],
+        },
+      ]}
+    />
+  ) : undefined;
 
   return (
     <ItemEditorChrome
-      item={item} id={id} ribbon={ribbon}
+      item={item} id={id} ribbon={ribbon} commandSearch
+      rightPanelLabel="Details"
+      rightPanel={connDetails}
       leftPanel={
         <div className={s.sqlLeftPane}>
           <div className={s.formRow}>
@@ -1503,11 +1545,12 @@ export function SqlManagedInstanceEditor({ item, id }: { item: FabricItemType; i
       ]},
     ]},
   ], [loading, refresh, running, canRun, run, newTsql, selectedFqdn]);
+  useRegisterRibbonCommands(ribbon, item.slug);
 
   return (
     <ItemEditorChrome
       item={item} id={id}
-      ribbon={ribbon}
+      ribbon={ribbon} commandSearch
       leftPanel={
         selectedFqdn
           ? (
@@ -1729,11 +1772,12 @@ export function SqlServer2025VectorIndexEditor({ item, id }: { item: FabricItemT
       ]},
     ]},
   ], [canCreate, loading, runDdl, testSimilarity, server, database]);
+  useRegisterRibbonCommands(ribbon, item.slug);
 
   return (
     <ItemEditorChrome
       item={item} id={id}
-      ribbon={ribbon}
+      ribbon={ribbon} commandSearch
       leftPanel={
         <div className={s.treePad}>
           <div className={s.formRow}>
