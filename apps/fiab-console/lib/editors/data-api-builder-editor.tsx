@@ -360,7 +360,7 @@ function DabBuilder({ item, id }: { item: FabricItemType; id: string }) {
   const errorCount = issues.filter((i) => i.severity === 'error').length;
 
   return (
-    <ItemEditorChrome
+    <ItemEditorChrome splitKeyPrefix={item.slug}
       item={item}
       id={id}
       ribbon={ribbon} commandSearch

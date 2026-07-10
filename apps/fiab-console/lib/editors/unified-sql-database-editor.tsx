@@ -1469,7 +1469,7 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
   const miGate = inv?.mi.error;
 
   return (
-    <ItemEditorChrome
+    <ItemEditorChrome splitKeyPrefix={item.slug}
       item={item} id={id} ribbon={ribbon}
       leftPanel={
         <div className={s.treePad}>

@@ -42,6 +42,7 @@ import {
 import { EmptyState } from '../components/empty-state';
 import { TileGrid } from '../components/ui/tile-grid';
 import { TeachingBanner } from '../components/shared/teaching-toast';
+import { SplitPane } from '../components/shared/split-pane';
 
 // ============================================================ shared
 
@@ -453,6 +454,10 @@ export function ModelCatalogPanel({ active, nonce, acct = null }: { active: bool
 
 const useChatStyles = makeStyles({
   root: { display: 'grid', gridTemplateColumns: '280px minmax(0, 1fr) 300px', gap: 0, minHeight: 0, flex: 1, overflow: 'hidden' },
+  // Resizable variant (R1): the three panes are wired through nested SplitPanes
+  // so the Setup and Configuration rails drag-resize (persisted); the container
+  // just flexes to fill the height the grid used to.
+  rootSplit: { display: 'flex', flex: 1, minHeight: 0, overflow: 'hidden' },
   pane: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, padding: tokens.spacingVerticalL, overflow: 'auto', minHeight: 0 },
   leftPane: { borderRight: `1px solid ${tokens.colorNeutralStroke2}` },
   rightPane: { borderLeft: `1px solid ${tokens.colorNeutralStroke2}` },
@@ -672,7 +677,9 @@ print(response.choices[0].message.content)${grounding ? '\n# response.choices[0]
   const noChatModel = !deps.error && deployments.length === 0;
 
   return (
-    <div className={s.root}>
+    <div className={s.rootSplit}>
+      <SplitPane direction="horizontal" primary="first" storageKey="foundry-playground.setup"
+        defaultSize={280} minSize={220} maxSize={480} dividerLabel="Resize the Setup panel">
       {/* LEFT — Setup */}
       <div className={`${s.pane} ${s.leftPane}`}>
         <div className={s.paneTitle}><ChatMultiple24Regular /><Subtitle2>Setup</Subtitle2></div>
@@ -741,6 +748,8 @@ print(response.choices[0].message.content)${grounding ? '\n# response.choices[0]
         <Caption1>Function tools and the code interpreter attach per-deployment in the Foundry agent surface.</Caption1>
       </div>
 
+      <SplitPane direction="horizontal" primary="second" storageKey="foundry-playground.config"
+        defaultSize={300} minSize={240} maxSize={520} dividerLabel="Resize the Configuration panel">
       {/* CENTER — Chat */}
       <div className={`${s.pane} ${s.centerPane}`}>
         <div className={s.centerHead}>
@@ -851,6 +860,8 @@ print(response.choices[0].message.content)${grounding ? '\n# response.choices[0]
             onClick={() => window.open('https://ai.azure.com/resource/deployments', '_blank', 'noopener,noreferrer')}>Deploy</Button>
         </div>
       </div>
+      </SplitPane>
+      </SplitPane>
 
       <Dialog open={dsDialogOpen} onOpenChange={(_, d) => { if (!d.open) setDsDialogOpen(false); }}>
         <DialogSurface>
