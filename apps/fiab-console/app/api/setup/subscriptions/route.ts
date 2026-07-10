@@ -24,21 +24,14 @@
 import { NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { armBase } from '@/lib/azure/cloud-endpoints';
-import { uamiArmCredential } from '@/lib/azure/arm-credential';
+import { getArmTokenPreferUser } from '@/lib/auth/obo';
+import { swrAwait } from '@/lib/azure/cross-sub-cache';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 function arm(): string {
   return armBase();
-}
-
-const credential = uamiArmCredential();
-
-async function armToken(): Promise<string> {
-  const t = await credential.getToken(`${arm()}/.default`);
-  if (!t?.token) throw new Error('Failed to acquire AAD token for ARM');
-  return t.token;
 }
 
 interface ArmSubscription {
@@ -48,64 +41,77 @@ interface ArmSubscription {
   tenantId?: string;
 }
 
+/** Walk ARM's nextLink-paged subscription list under `token`. Throws on ARM error. */
+async function listSubscriptions(token: string): Promise<ArmSubscription[]> {
+  const subscriptions: ArmSubscription[] = [];
+  let url: string | undefined = `${arm()}/subscriptions?api-version=2022-12-01`;
+  while (url) {
+    const r: Response = await fetch(url, { headers: { authorization: `Bearer ${token}` }, cache: 'no-store' });
+    const ct = r.headers.get('content-type') || '';
+    if (!r.ok) {
+      const t = await r.text().catch(() => '');
+      throw new Error(`ARM ${r.status}: ${t.slice(0, 200)}`);
+    }
+    if (!ct.includes('application/json')) {
+      const t = await r.text().catch(() => '');
+      throw new Error(`ARM returned non-JSON (${ct || 'unknown'}): ${t.slice(0, 200)}`);
+    }
+    const j: any = await r.json();
+    for (const s of (j.value || []) as any[]) {
+      subscriptions.push({
+        subscriptionId: s.subscriptionId,
+        displayName: s.displayName,
+        state: s.state,
+        tenantId: s.tenantId,
+      });
+    }
+    url = j.nextLink || undefined;
+  }
+  subscriptions.sort((a, b) => (a.displayName || '').localeCompare(b.displayName || ''));
+  return subscriptions;
+}
+
 export async function GET() {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
 
+  // USER-PASSTHROUGH: list the subscriptions the SIGNED-IN USER can see (so the
+  // target-subscription picker reflects what they can actually deploy into),
+  // falling back to the shared Console UAMI when the user's ARM scope wasn't
+  // consented at login.
   let token: string;
+  let identity: 'user' | 'uami';
   try {
-    token = await armToken();
+    const arm = await getArmTokenPreferUser(session);
+    token = arm.token;
+    identity = arm.identity;
   } catch (e: any) {
     return NextResponse.json(
       {
         ok: false,
         error: `auth failed: ${e?.message ?? String(e)}`,
-        hint: 'The Console identity could not acquire an ARM token. Grant the Console UAMI (or your az-login principal) Reader on the target subscriptions.',
+        hint: 'Could not acquire an ARM token. Grant the Console UAMI (or your signed-in account) Reader on the target subscriptions.',
       },
       { status: 502 },
     );
   }
 
-  // ARM is paged via nextLink; walk every page so large tenants list fully.
-  const subscriptions: ArmSubscription[] = [];
-  let url: string | undefined = `${arm()}/subscriptions?api-version=2022-12-01`;
+  // SWR-cached per (user, identity): the cross-sub list can be slow on a large
+  // tenant, so a Refresh/retry is served from cache instantly (a cold miss awaits
+  // the real ARM walk once). Keyed by identity so a UAMI list never masks the
+  // user's own visibility.
   try {
-    while (url) {
-      const r: Response = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
-      const ct = r.headers.get('content-type') || '';
-      if (!r.ok) {
-        const t = await r.text().catch(() => '');
-        return NextResponse.json(
-          { ok: false, error: `ARM ${r.status}: ${t.slice(0, 200)}` },
-          { status: 502 },
-        );
-      }
-      if (!ct.includes('application/json')) {
-        const t = await r.text().catch(() => '');
-        return NextResponse.json(
-          { ok: false, error: `ARM returned non-JSON (${ct || 'unknown'}): ${t.slice(0, 200)}` },
-          { status: 502 },
-        );
-      }
-      const j: any = await r.json();
-      for (const s of (j.value || []) as any[]) {
-        subscriptions.push({
-          subscriptionId: s.subscriptionId,
-          displayName: s.displayName,
-          state: s.state,
-          tenantId: s.tenantId,
-        });
-      }
-      url = j.nextLink || undefined;
-    }
+    const { value: subscriptions } = await swrAwait(
+      session.claims.oid,
+      `subscriptions:${identity}`,
+      { ttlMs: 60_000 },
+      () => listSubscriptions(token),
+    );
+    return NextResponse.json({ ok: true, subscriptions, identity });
   } catch (e: any) {
     return NextResponse.json(
       { ok: false, error: `ARM request failed: ${e?.message ?? String(e)}` },
       { status: 502 },
     );
   }
-
-  subscriptions.sort((a, b) => (a.displayName || '').localeCompare(b.displayName || ''));
-
-  return NextResponse.json({ ok: true, subscriptions });
 }

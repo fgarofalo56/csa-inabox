@@ -25,12 +25,11 @@
 import { NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { armBase } from '@/lib/azure/cloud-endpoints';
-import { uamiArmCredential } from '@/lib/azure/arm-credential';
+import { getArmTokenPreferUser } from '@/lib/auth/obo';
+import { swrAwait } from '@/lib/azure/cross-sub-cache';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
-
-const credential = uamiArmCredential();
 
 interface ExistingDlz {
   subscriptionId: string;
@@ -47,28 +46,16 @@ function parseDlzRg(rg: string): { domainName: string; region: string } | null {
   return { domainName: m[1], region: m[2] };
 }
 
-export async function GET() {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-
+/**
+ * Run the Resource Graph DLZ-RG scan under `token`, PAGING via `$skipToken` so a
+ * tenant with more than one Resource Graph page (100+ matching RGs) lists fully
+ * instead of silently truncating. Throws on any Resource Graph error.
+ */
+async function scanExistingDlzs(token: string): Promise<ExistingDlz[]> {
   const arm = armBase();
-  let token: string;
-  try {
-    const t = await credential.getToken(`${arm}/.default`);
-    if (!t?.token) throw new Error('empty token');
-    token = t.token;
-  } catch (e: any) {
-    return NextResponse.json(
-      {
-        ok: false,
-        error: `auth failed: ${e?.message ?? String(e)}`,
-        hint: 'The Console identity could not acquire an ARM token. Grant the Console UAMI Reader on the subscriptions whose DLZs you want to discover.',
-      },
-      { status: 502 },
-    );
-  }
-
-  try {
+  const dlzs: ExistingDlz[] = [];
+  let skipToken: string | undefined;
+  do {
     const res = await fetch(
       `${arm}/providers/Microsoft.ResourceGraph/resources?api-version=2022-10-01`,
       {
@@ -80,21 +67,17 @@ export async function GET() {
             "| where name startswith 'rg-csa-loom-dlz-' " +
             '| project name, subscriptionId, location ' +
             '| order by name asc',
+          options: { $top: 1000, ...(skipToken ? { $skipToken: skipToken } : {}) },
         }),
         cache: 'no-store',
       },
     );
     if (!res.ok) {
       const t = await res.text().catch(() => '');
-      return NextResponse.json(
-        { ok: false, error: `Resource Graph ${res.status}: ${t.slice(0, 200)}` },
-        { status: 502 },
-      );
+      throw new Error(`Resource Graph ${res.status}: ${t.slice(0, 200)}`);
     }
     const j: any = await res.json();
-    const rows = (j?.data || []) as any[];
-    const dlzs: ExistingDlz[] = [];
-    for (const row of rows) {
+    for (const row of (j?.data || []) as any[]) {
       const parsed = parseDlzRg(row.name);
       if (!parsed) continue;
       dlzs.push({
@@ -105,7 +88,45 @@ export async function GET() {
         rg: row.name,
       });
     }
-    return NextResponse.json({ ok: true, dlzs });
+    skipToken = j?.$skipToken || undefined;
+  } while (skipToken);
+  return dlzs;
+}
+
+export async function GET() {
+  const session = getSession();
+  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+
+  // USER-PASSTHROUGH: discover DLZs the SIGNED-IN USER can see (Resource Graph
+  // honours their RBAC), falling back to the Console UAMI when the user's ARM
+  // scope wasn't consented at login.
+  let token: string;
+  let identity: 'user' | 'uami';
+  try {
+    const arm = await getArmTokenPreferUser(session);
+    token = arm.token;
+    identity = arm.identity;
+  } catch (e: any) {
+    return NextResponse.json(
+      {
+        ok: false,
+        error: `auth failed: ${e?.message ?? String(e)}`,
+        hint: 'Could not acquire an ARM token. Grant the Console UAMI (or your signed-in account) Reader on the subscriptions whose DLZs you want to discover.',
+      },
+      { status: 502 },
+    );
+  }
+
+  // SWR-cached per (user, identity): the cross-sub Resource Graph scan can be
+  // slow, so the collision-hint retries the wizard fires are served instantly.
+  try {
+    const { value: dlzs } = await swrAwait(
+      session.claims.oid,
+      `existing-dlzs:${identity}`,
+      { ttlMs: 60_000 },
+      () => scanExistingDlzs(token),
+    );
+    return NextResponse.json({ ok: true, dlzs, identity });
   } catch (e: any) {
     return NextResponse.json(
       { ok: false, error: `Resource Graph request failed: ${e?.message ?? String(e)}` },
