@@ -195,11 +195,13 @@ function GovernedScope({ focusId }: { focusId: string | null }) {
       {loading && <Spinner label="Building lineage graph…" />}
 
       {!loading && !error && canvasNodes.length === 0 && (
-        <MessageBar>
-          <MessageBarBody>
-            No items found in your workspaces yet. Create a notebook, lakehouse, or pipeline and edges will start appearing here.
-          </MessageBarBody>
-        </MessageBar>
+        <EmptyState
+          icon={<Flowchart24Regular />}
+          title="No lineage in your tenant yet"
+          body="Lineage edges appear automatically as you build items that reference each other. Create a notebook, lakehouse, or pipeline and the read/write edges start showing up on this canvas."
+          primaryAction={{ label: 'Create an item', href: '/new' }}
+          secondaryAction={{ label: 'Browse the catalog', href: '/catalog', appearance: 'secondary' }}
+        />
       )}
 
       {!loading && !error && canvasNodes.length > 0 && (
@@ -319,7 +321,11 @@ function FederatedScope() {
       </div>
       {committed
         ? <LineagePanel source={committed.source} id={committed.id} host={committed.host} workspaceId={committed.source === 'onelake' ? committed.id : undefined} />
-        : <MessageBar><MessageBarBody>Enter a Unity Catalog table, Purview entity GUID, or OneLake workspace ID and choose <strong>Resolve</strong> to overlay its cross-source lineage.</MessageBarBody></MessageBar>}
+        : <EmptyState
+            icon={<Flowchart24Regular />}
+            title="Resolve an asset to trace it across sources"
+            body="Enter a Unity Catalog table, a Microsoft Purview entity GUID, or a OneLake workspace ID above and choose Resolve to overlay its cross-source lineage on the shared canvas."
+          />}
     </>
   );
 }

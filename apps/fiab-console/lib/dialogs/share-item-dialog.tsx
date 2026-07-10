@@ -52,6 +52,23 @@ interface PermissionOption {
   dlpBlocked?: boolean;
 }
 
+/**
+ * What each permission concretely grants — surfaced as a "resulting access"
+ * preview in the review step so the operator sees the real backend effect
+ * (POSIX ACL entry / Storage RBAC role / data-plane right) BEFORE granting.
+ */
+const PERMISSION_EFFECT: Record<ItemPermissionType, string> = {
+  Read: 'Item-level read + POSIX r-x ACL and Storage Blob Data Reader on the item’s data path',
+  Edit: 'Item-level write — create, update, and delete the item definition',
+  Reshare: 'May grant this item to other principals',
+  ReadData: 'Query the item’s data through its SQL / Delta endpoint',
+  ReadAllSQL: 'Read all data through the SQL analytics endpoint',
+  ReadAllSpark: 'Read all data through OneLake / Spark (Storage Blob Data Reader)',
+  SubscribeOneLakeEvents: 'Subscribe to OneLake file and table events for this item',
+  Execute: 'Run the item — trigger the job, pipeline, or notebook',
+  Build: 'Build reports and semantic models on top of this item',
+};
+
 /** Item-type families that expose data-plane (SQL/Spark/OneLake) permissions. */
 const DATA_ITEM_TYPES = new Set([
   'lakehouse', 'warehouse', 'mirrored-database', 'kql-database', 'eventhouse',
@@ -97,6 +114,13 @@ const useStyles = makeStyles({
   permGrid: { display: 'flex', flexDirection: 'column', gap: '6px', marginTop: tokens.spacingVerticalM },
   permRow: { display: 'flex', flexDirection: 'column', gap: '0px' },
   reviewPerms: { display: 'flex', flexWrap: 'wrap', gap: '6px', marginTop: tokens.spacingVerticalS },
+  effectList: {
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS,
+    marginTop: tokens.spacingVerticalS, padding: tokens.spacingVerticalM,
+    borderRadius: tokens.borderRadiusMedium, border: `1px solid ${tokens.colorNeutralStroke2}`,
+    backgroundColor: tokens.colorNeutralBackground2,
+  },
+  effectRow: { display: 'flex', alignItems: 'baseline', gap: tokens.spacingHorizontalS, minWidth: 0 },
 });
 
 export interface ShareItemDialogProps {
@@ -295,6 +319,15 @@ export function ShareItemDialog({
                 <div className={styles.reviewPerms}>
                   {Array.from(checked).map((t) => (
                     <Badge key={t} appearance="tint" color="brand">{t}</Badge>
+                  ))}
+                </div>
+                <Caption1 style={{ marginTop: tokens.spacingVerticalM, display: 'block' }}>Resulting access</Caption1>
+                <div className={styles.effectList}>
+                  {Array.from(checked).map((t) => (
+                    <div key={t} className={styles.effectRow}>
+                      <Badge appearance="outline" color="brand" size="small">{t}</Badge>
+                      <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{PERMISSION_EFFECT[t]}</Caption1>
+                    </div>
                   ))}
                 </div>
                 {error && (

@@ -41,6 +41,8 @@ import {
 import { TileGrid } from '@/lib/components/ui/tile-grid';
 import { EmptyState } from '@/lib/components/empty-state';
 import { ShareExplorerDialog } from '@/lib/components/marketplace/share-explorer';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
+import { LOOM_ACCENT } from '@/lib/components/shared/accent-tokens';
 
 const useStyles = makeStyles({
   pad: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL, minHeight: 0, flex: 1 },
@@ -147,6 +149,14 @@ export function DataShares() {
         Live, no-copy data exchange via Databricks Unity Catalog Delta Sharing. Subscribe to shares others publish
         (including Databricks Marketplace listings), or publish your own tables to recipients inside or outside your tenant.
       </Caption1>
+
+      <TeachingBanner
+        surfaceKey="marketplace-data-shares"
+        icon={Share24Regular}
+        accent={LOOM_ACCENT.teal}
+        title="No-copy sharing with Delta Sharing"
+        message="Shares are live pointers, not copies — recipients read your current Delta tables in place, with no duplication and no egress until they query. Mount an inbound provider under Shared with me, or publish your own tables to internal or external recipients under Shared by me."
+      />
 
       <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(String(d.value))} className={s.tabs}>
         <Tab value="inbound" icon={<CloudArrowDown20Regular />}>Shared with me</Tab>
