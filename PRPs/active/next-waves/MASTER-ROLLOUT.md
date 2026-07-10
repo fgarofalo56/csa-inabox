@@ -444,6 +444,9 @@ lease store, result-cache) + UAMI (Storage Blob Data Reader) · `compute/loom-ca
 **Acceptance gate:** PSR-1 numbers — `loom://` resolve p95 ≤ 25 ms · sub-second aggregate on a warm Direct
 Lake frame · `/admit` p99 ≤ 10 ms + smoothing golden test green.
 
+**Future / post-H-band backlog (not yet scheduled):** **Bridge services band** — four custom
+control-plane services (loom-sql-gateway · loom-onesecurity · loom-gitsync · loom-pulse, 23 items BR-SQL/BR-SEC/BR-GIT/BR-PULSE) that close the Fabric *coherence* gap (one SQL front door, one policy truth, one Git spine, one event backbone), Azure-native, same standalone-service + honest-503 pattern as the H-band — see `PRPs/active/bridge-services/PRP-bridge-services.md`.
+
 ---
 
 ## Counts

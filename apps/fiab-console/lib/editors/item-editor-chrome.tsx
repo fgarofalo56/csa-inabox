@@ -17,6 +17,7 @@ import { openCopilot } from '@/lib/components/copilot-pane';
 import { Ribbon, type RibbonTab } from '@/lib/components/ribbon';
 import { ItemSidePanel } from '@/lib/components/item-side-panel';
 import { useCollapsibleState, CollapsedRail, CollapseToggle, RAIL_WIDTH } from '@/lib/components/collapsible-side-panel';
+import { SplitPane } from '@/lib/components/shared/split-pane';
 import { LineageDrawer } from '@/lib/components/onelake/lineage-drawer';
 import { VersionHistoryDrawer } from '@/lib/components/versions/version-history-drawer';
 import { ThreadMenu } from '@/lib/components/thread/thread-menu';
@@ -47,6 +48,15 @@ const useStyles = makeStyles({
     transitionDuration: tokens.durationNormal,
     transitionTimingFunction: tokens.curveEasyEase,
     '@media screen and (prefers-reduced-motion: reduce)': { transitionDuration: '0.01ms' },
+  },
+  // Split-pane body (opt-in via `splitKeyPrefix`): a flex container the nested
+  // SplitPanes fill. The panes carry their own borders/gap via the region cards.
+  bodyFlex: {
+    display: 'flex',
+    flex: 1,
+    minWidth: 0,
+    minHeight: 0,
+    gap: tokens.spacingHorizontalS,
   },
   leftPanel: {
     backgroundColor: tokens.colorNeutralBackground1,
@@ -145,9 +155,19 @@ interface Props {
    * opt in by passing `commandSearch`. Additive: omitting it changes nothing.
    */
   commandSearch?: boolean;
+  /**
+   * R1 — opt into DRAGGABLE, persisted pane splitters (ADF-Studio / Fabric
+   * parity) instead of the fixed collapsible grid. When set, the left rail ↔
+   * canvas and canvas ↔ right rail boundaries become resizable via a keyboard-
+   * accessible divider, with the sizes persisted under
+   * `loom.splitpane.<splitKeyPrefix>.resources|copilot`. The existing collapse/
+   * expand buttons keep working (they drive each SplitPane's `collapsed`).
+   * Omitting it preserves today's exact grid layout for every other editor.
+   */
+  splitKeyPrefix?: string;
 }
 
-export function ItemEditorChrome({ item, id, ribbon, leftPanel, main, rightPanel, rightPanelLabel = 'Copilot', dirty = false, displayName, explain, commandSearch }: Props) {
+export function ItemEditorChrome({ item, id, ribbon, leftPanel, main, rightPanel, rightPanelLabel = 'Copilot', dirty = false, displayName, explain, commandSearch, splitKeyPrefix }: Props) {
   const styles = useStyles();
   // Shared unsaved-changes guard — one wiring covers every editor that threads
   // a `dirty` signal. Returns the confirm dialog (or null) to render below.
@@ -225,6 +245,93 @@ export function ItemEditorChrome({ item, id, ribbon, leftPanel, main, rightPanel
       }
     : undefined;
 
+  // The three body regions, rendered identically by both the fixed-grid path
+  // (default) and the draggable SplitPane path (opt-in via `splitKeyPrefix`).
+  // Extracting them keeps the collapse/expand affordances byte-for-byte the same
+  // in either layout.
+  const leftRegion = leftPanel && (
+    leftCollapsed ? (
+      <div className={styles.collapsedRail}>
+        <Tooltip content="Expand panel" relationship="label">
+          <Button appearance="subtle" size="small" icon={<PanelLeftExpand20Regular />}
+            aria-label="Expand panel" onClick={() => setLeftCollapsed(false)} />
+        </Tooltip>
+      </div>
+    ) : (
+      <div className={styles.leftPanel}>
+        <Tooltip content="Collapse panel" relationship="label">
+          <Button className={styles.collapseToggle} appearance="subtle" size="small"
+            icon={<PanelLeftContract20Regular />} aria-label="Collapse panel"
+            onClick={() => setLeftCollapsed(true)} style={{ float: 'right', margin: tokens.spacingVerticalXXS }} />
+        </Tooltip>
+        {leftPanel}
+      </div>
+    )
+  );
+  const mainRegion = hasGrid ? <div className={styles.mainPanel}>{main}</div> : <div className={styles.singlePanel}>{main}</div>;
+  const rightRegion = rightPanel && (
+    rightCollapsed ? (
+      <CollapsedRail side="right" label={rightPanelLabel} onExpand={() => setRightCollapsed(false)} />
+    ) : (
+      <div className={styles.rightPanel}>
+        <CollapseToggle side="right" label={rightPanelLabel} onCollapse={() => setRightCollapsed(true)}
+          style={{ float: 'right', margin: tokens.spacingVerticalXXS }} />
+        {rightPanel}
+      </div>
+    )
+  );
+
+  // Collapsed-rail widths so SplitPane reserves exactly the grid's collapsed
+  // footprint (left = 32px thin rail; right = the shared 44px Copilot rail).
+  const LEFT_RAIL_PX = 32;
+  const RIGHT_RAIL_PX = parseInt(RAIL_WIDTH, 10) || 44;
+
+  // canvas ↔ right rail split (the inner boundary). `primary="second"` so the
+  // divider sizes the RIGHT (Copilot) pane from its leading edge.
+  const canvasWithRight = rightPanel ? (
+    <SplitPane
+      direction="horizontal"
+      primary="second"
+      storageKey={`${splitKeyPrefix}.copilot`}
+      defaultSize={320}
+      minSize={280}
+      collapsed={rightCollapsed}
+      collapsedSize={RIGHT_RAIL_PX}
+      dividerLabel={`Resize the ${rightPanelLabel} panel`}
+    >
+      {mainRegion}
+      {rightRegion}
+    </SplitPane>
+  ) : mainRegion;
+
+  // Full split body: left rail ↔ (canvas ↔ right rail). `primary="first"` sizes
+  // the left (resources) rail.
+  const splitBody = leftPanel ? (
+    <SplitPane
+      direction="horizontal"
+      primary="first"
+      storageKey={`${splitKeyPrefix}.resources`}
+      defaultSize={260}
+      minSize={200}
+      collapsed={leftCollapsed}
+      collapsedSize={LEFT_RAIL_PX}
+      dividerLabel="Resize the resources panel"
+    >
+      {leftRegion}
+      {canvasWithRight}
+    </SplitPane>
+  ) : canvasWithRight;
+
+  const bodyContent = (splitKeyPrefix && hasGrid) ? (
+    <div className={styles.bodyFlex}>{splitBody}</div>
+  ) : (
+    <div className={hasGrid ? styles.body : ''} style={bodyStyle}>
+      {leftRegion}
+      {mainRegion}
+      {rightRegion}
+    </div>
+  );
+
   return (
     <PageShell
       title={title}
@@ -293,39 +400,7 @@ export function ItemEditorChrome({ item, id, ribbon, leftPanel, main, rightPanel
             onGranted={() => setShareOpen(false)}
           />
         )}
-        <div className={hasGrid ? styles.body : ''} style={bodyStyle}>
-          {leftPanel && (
-            leftCollapsed ? (
-              <div className={styles.collapsedRail}>
-                <Tooltip content="Expand panel" relationship="label">
-                  <Button appearance="subtle" size="small" icon={<PanelLeftExpand20Regular />}
-                    aria-label="Expand panel" onClick={() => setLeftCollapsed(false)} />
-                </Tooltip>
-              </div>
-            ) : (
-              <div className={styles.leftPanel}>
-                <Tooltip content="Collapse panel" relationship="label">
-                  <Button className={styles.collapseToggle} appearance="subtle" size="small"
-                    icon={<PanelLeftContract20Regular />} aria-label="Collapse panel"
-                    onClick={() => setLeftCollapsed(true)} style={{ float: 'right', margin: tokens.spacingVerticalXXS }} />
-                </Tooltip>
-                {leftPanel}
-              </div>
-            )
-          )}
-          {hasGrid ? <div className={styles.mainPanel}>{main}</div> : <div className={styles.singlePanel}>{main}</div>}
-          {rightPanel && (
-            rightCollapsed ? (
-              <CollapsedRail side="right" label={rightPanelLabel} onExpand={() => setRightCollapsed(false)} />
-            ) : (
-              <div className={styles.rightPanel}>
-                <CollapseToggle side="right" label={rightPanelLabel} onCollapse={() => setRightCollapsed(true)}
-                  style={{ float: 'right', margin: tokens.spacingVerticalXXS }} />
-                {rightPanel}
-              </div>
-            )
-          )}
-        </div>
+        {bodyContent}
       </div>
     </PageShell>
   );

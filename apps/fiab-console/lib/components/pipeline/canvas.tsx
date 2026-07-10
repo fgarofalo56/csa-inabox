@@ -27,7 +27,7 @@ import {
   forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState,
 } from 'react';
 import {
-  ReactFlow, ReactFlowProvider, Background, BackgroundVariant, Controls, MiniMap, Panel,
+  ReactFlow, ReactFlowProvider, Background, BackgroundVariant, MiniMap, Panel,
   useReactFlow, useNodesState,
   ConnectionMode, MarkerType, Position,
   type Node, type Edge, type Connection, type NodeChange, type NodeTypes, type EdgeTypes,
@@ -41,7 +41,7 @@ import { elkLayout, topoFallback, shouldVirtualize, type XY } from './flow-layou
 import { CONNECTOR_COLORS, type ConnectorCondition } from './connector';
 import { isContainerType } from './drill-path';
 import {
-  getActivityVisual, accentTint,
+  getActivityVisual, accentTint, CanvasRightRail,
   GhostNextStepNode, ghostAnchorPosition, ghostEdgeId, GHOST_NODE_ID,
   type GhostNodeData, type AnchorNode,
 } from '@/lib/components/canvas/canvas-node-kit';
@@ -286,6 +286,11 @@ const PipelineCanvasInner = forwardRef<CanvasHandle, PipelineCanvasProps>(functi
   const alignChordRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // "?" shortcut cheat-sheet overlay (W20).
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  // Live viewport zoom (drives the CanvasRightRail slider + % readout) and the
+  // rail's collapsed state — the standardized bottom-left zoom/fit/auto-layout
+  // rail every Loom canvas shares (replaces React Flow's default grey Controls).
+  const [zoom, setZoom] = useState(1);
+  const [railCollapsed, setRailCollapsed] = useState(false);
   // Fabric "updated canvas experience" — when on, container nodes render an
   // inline mini-preview of their inner activities. Toggled by N / the toolbar.
   const [showNestedPreviews, setShowNestedPreviews] = useState(false);
@@ -479,7 +484,7 @@ const PipelineCanvasInner = forwardRef<CanvasHandle, PipelineCanvasProps>(functi
   }, [rf, onDropPaletteKey]);
 
   // --- imperative handle ----------------------------------------------------
-  const fitToScreen = useCallback(() => { rf.fitView({ padding: 0.2, duration: 200 }); }, [rf]);
+  const fitToScreen = useCallback(() => { rf.fitView({ padding: 0.2, maxZoom: 1.25, duration: 200 }); }, [rf]);
   const resetZoom = useCallback(() => { rf.setViewport({ x: 0, y: 0, zoom: 1 }, { duration: 200 }); }, [rf]);
   const zoomIn = useCallback(() => { rf.zoomIn({ duration: 120 }); }, [rf]);
   const zoomOut = useCallback(() => { rf.zoomOut({ duration: 120 }); }, [rf]);
@@ -488,7 +493,7 @@ const PipelineCanvasInner = forwardRef<CanvasHandle, PipelineCanvasProps>(functi
     if (laid.size) {
       positionsRef.current = laid;
       setNodes((prev) => prev.map((n) => ({ ...n, position: laid.get(n.id) || n.position })));
-      setTimeout(() => rf.fitView({ padding: 0.2, duration: 200 }), 0);
+      setTimeout(() => rf.fitView({ padding: 0.2, maxZoom: 1.25, duration: 200 }), 0);
     }
   }, [activities, rf, setNodes]);
 
@@ -668,7 +673,7 @@ const PipelineCanvasInner = forwardRef<CanvasHandle, PipelineCanvasProps>(functi
 
     if (key === 'i' || key === 'I') { e.preventDefault(); rf.zoomIn({ duration: 120 }); return; }
     if (key === 'o' || key === 'O') { e.preventDefault(); rf.zoomOut({ duration: 120 }); return; }
-    if (key === 'f' || key === 'F') { e.preventDefault(); rf.fitView({ padding: 0.2, duration: 200 }); return; }
+    if (key === 'f' || key === 'F') { e.preventDefault(); rf.fitView({ padding: 0.2, maxZoom: 1.25, duration: 200 }); return; }
     if (key === 'a' || key === 'A') { e.preventDefault(); void autoAlign(); return; }
     if (key === 'n' || key === 'N') { e.preventDefault(); setShowNestedPreviews((v) => !v); return; }
     if (key === 'Backspace') { e.preventDefault(); onDrillBack?.(); return; }
@@ -704,7 +709,7 @@ const PipelineCanvasInner = forwardRef<CanvasHandle, PipelineCanvasProps>(functi
         onNodeClick={(_, n) => onSelect(n.id)}
         onNodeDoubleClick={handleNodeDoubleClick}
         onPaneClick={() => onSelect(null)}
-        onMove={(_, vp) => onZoomChange?.(vp.zoom)}
+        onMove={(_, vp) => { setZoom(vp.zoom); onZoomChange?.(vp.zoom); }}
         connectionMode={ConnectionMode.Loose}
         snapToGrid={snapToGrid}
         snapGrid={[16, 16]}
@@ -712,7 +717,9 @@ const PipelineCanvasInner = forwardRef<CanvasHandle, PipelineCanvasProps>(functi
         minZoom={0.25}
         maxZoom={2}
         fitView
-        fitViewOptions={{ padding: 0.2 }}
+        // maxZoom keeps a small 3-6 node graph filling the canvas readably on
+        // open instead of snapping to 2x on a single node.
+        fitViewOptions={{ padding: 0.2, maxZoom: 1.25 }}
         proOptions={{ hideAttribution: true }}
         deleteKeyCode={null}
         onlyRenderVisibleElements={shouldVirtualize(activities.length)}
@@ -720,11 +727,13 @@ const PipelineCanvasInner = forwardRef<CanvasHandle, PipelineCanvasProps>(functi
         {showGrid && (
           <Background
             variant={BackgroundVariant.Dots}
-            gap={20}
-            size={1}
+            gap={18}
+            size={1.5}
             // Theme-aware accent-tinted grid dots (matches the .loom-app-grid-bg
             // product grid) — resolves light/dark via the --loom-accent-blue var.
-            color={accentTint('var(--loom-accent-blue)', 30)}
+            // Tightened gap + larger, higher-contrast dots so the canvas reads as
+            // a real design surface (Fabric-grade) rather than a flat empty pane.
+            color={accentTint('var(--loom-accent-blue)', 45)}
           />
         )}
         <Panel position="top-right">
@@ -762,7 +771,23 @@ const PipelineCanvasInner = forwardRef<CanvasHandle, PipelineCanvasProps>(functi
             </Tooltip>
           </div>
         </Panel>
-        <Controls showInteractive={false} />
+        {/* Standardized zoom/fit/auto-layout rail (bottom-left, clear of the
+            bottom-right MiniMap) — the shared CanvasRightRail every Loom canvas
+            carries, replacing React Flow's default grey Controls. */}
+        <Panel position="bottom-left">
+          <CanvasRightRail
+            zoom={zoom}
+            minZoom={0.25}
+            maxZoom={2}
+            onZoomChange={(z) => rf.setViewport({ ...rf.getViewport(), zoom: z }, { duration: 120 })}
+            onZoomIn={zoomIn}
+            onZoomOut={zoomOut}
+            onFit={fitToScreen}
+            onAutoLayout={autoAlign}
+            collapsed={railCollapsed}
+            onToggleCollapse={() => setRailCollapsed((v) => !v)}
+          />
+        </Panel>
         <MiniMap
           pannable
           zoomable
