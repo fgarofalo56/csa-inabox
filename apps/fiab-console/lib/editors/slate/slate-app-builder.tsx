@@ -41,6 +41,7 @@ import {
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { LoomChart, type LoomChartType } from '@/lib/components/charts/loom-chart';
 import { EmptyState } from '@/lib/components/empty-state';
+import { SplitPane } from '@/lib/components/shared/split-pane';
 
 // ───────────────────────── types ─────────────────────────
 
@@ -1147,6 +1148,21 @@ export function SlateAppBuilder({ id, apiBaseUrl, queries, widgets, variables, o
   const discoveredForSelected = (selected?.queryId && colsByQuery[selected.queryId]) || [];
   const columnsForWidget = (w: SlateWidgetDef | null): string[] => (w?.queryId && colsByQuery[w.queryId]) || [];
 
+  const canvasBlock = (
+    <div className={s.canvasWrap} style={{ height: canvasHeight }} onPointerDown={() => setSelectedId(null)}>
+      <div className={s.canvas} style={{ height: canvasHeight }}>
+        {normalized.length === 0 ? (
+          <div style={{ position: 'absolute', inset: 0 }}>
+            <EmptyState icon={<Apps20Regular />} title="Empty canvas" body="Add a widget from the palette above, then bind it to a query to show live data." />
+          </div>
+        ) : normalized.map((w) => (
+          <CanvasWidget key={w.id} widget={w} selected={selectedId === w.id} readOnly={false} result={results[w.id]}
+            onSelect={() => setSelectedId(w.id)} onMove={(x, y) => moveWidget(w.id, x, y)} onResize={(cw, ch) => resizeWidget(w.id, cw, ch)} onRemove={() => removeWidget(w.id)} />
+        ))}
+      </div>
+    </div>
+  );
+
   return (
     <div className={s.root}>
       <div className={s.modeBar}>
@@ -1186,25 +1202,26 @@ export function SlateAppBuilder({ id, apiBaseUrl, queries, widgets, variables, o
             <div><Subtitle2>Canvas</Subtitle2><Caption1 as="p" block className={s.hint}>Drag widget headers to move, drag the corner to resize. Click a widget to edit it — including its interactions — in the inspector.</Caption1></div>
           </div>
           <WidgetPalette onAdd={addWidget} />
-          <div className={selected ? s.designGridSel : s.designGrid}>
-            <div className={s.canvasWrap} style={{ height: canvasHeight }} onPointerDown={() => setSelectedId(null)}>
-              <div className={s.canvas} style={{ height: canvasHeight }}>
-                {normalized.length === 0 ? (
-                  <div style={{ position: 'absolute', inset: 0 }}>
-                    <EmptyState icon={<Apps20Regular />} title="Empty canvas" body="Add a widget from the palette above, then bind it to a query to show live data." />
-                  </div>
-                ) : normalized.map((w) => (
-                  <CanvasWidget key={w.id} widget={w} selected={selectedId === w.id} readOnly={false} result={results[w.id]}
-                    onSelect={() => setSelectedId(w.id)} onMove={(x, y) => moveWidget(w.id, x, y)} onResize={(cw, ch) => resizeWidget(w.id, cw, ch)} onRemove={() => removeWidget(w.id)} />
-                ))}
-              </div>
-            </div>
-            {selected && (
+          {selected ? (
+            <SplitPane
+              direction="horizontal"
+              primary="second"
+              storageKey="slate-app.inspector"
+              defaultSize={320}
+              minSize={260}
+              maxSize={520}
+              dividerLabel="Resize inspector"
+            >
+              {canvasBlock}
               <WidgetInspector widget={selected} queries={queries} discoveredColumns={discoveredForSelected}
                 onChange={(patch) => patchWidget(selected.id, patch)} onRemove={() => removeWidget(selected.id)}
                 onEditInteractions={() => setIxWidgetId(selected.id)} />
-            )}
-          </div>
+            </SplitPane>
+          ) : (
+            <div className={s.designGrid}>
+              {canvasBlock}
+            </div>
+          )}
         </div>
       ) : (
         <div className={s.section}>

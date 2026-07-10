@@ -66,7 +66,7 @@ import {
 import { EventstreamFlowNode, type EsNodeData, type NodeRole } from './eventstream-flow-node';
 import {
   GhostNextStepNode, CanvasRightRail, ghostAnchorPosition, ghostEdgeId,
-  GHOST_NODE_ID, type GhostNodeData, type AnchorNode,
+  accentTint, GHOST_NODE_ID, type GhostNodeData, type AnchorNode,
 } from '@/lib/components/canvas/canvas-node-kit';
 import {
   ArrowSwap20Regular, DatabaseArrowRight20Regular,
@@ -562,14 +562,26 @@ function EventstreamCanvasInner({
           minZoom={0.3}
           maxZoom={2}
           fitView
-          fitViewOptions={{ padding: 0.2 }}
+          // maxZoom keeps a small 3-6 node graph filling the canvas readably on open.
+          fitViewOptions={{ padding: 0.2, maxZoom: 1.25 }}
           proOptions={{ hideAttribution: true }}
           nodesConnectable={false}
           deleteKeyCode={null}
           onMove={(_, vp) => setZoom(vp.zoom)}
         >
-          <Background variant={BackgroundVariant.Dots} gap={20} size={1} color={tokens.colorNeutralStroke2} />
-          <MiniMap pannable zoomable style={{ backgroundColor: tokens.colorNeutralBackground1 }} />
+          <Background
+            variant={BackgroundVariant.Dots}
+            gap={18}
+            size={1.5}
+            color={accentTint('var(--loom-accent-blue)', 45)}
+          />
+          <MiniMap
+            pannable
+            zoomable
+            nodeStrokeColor={tokens.colorNeutralStroke2}
+            maskColor={accentTint(tokens.colorNeutralBackground3, 70)}
+            style={{ backgroundColor: tokens.colorNeutralBackground1 }}
+          />
           <Panel position="bottom-right">
             <CanvasRightRail
               zoom={zoom}
@@ -578,7 +590,7 @@ function EventstreamCanvasInner({
               onZoomChange={(z) => rf.setViewport({ ...rf.getViewport(), zoom: z }, { duration: 120 })}
               onZoomIn={() => rf.zoomIn({ duration: 120 })}
               onZoomOut={() => rf.zoomOut({ duration: 120 })}
-              onFit={() => rf.fitView({ padding: 0.2, duration: 200 })}
+              onFit={() => rf.fitView({ padding: 0.2, maxZoom: 1.25, duration: 200 })}
               collapsed={railCollapsed}
               onToggleCollapse={() => setRailCollapsed((v) => !v)}
             />

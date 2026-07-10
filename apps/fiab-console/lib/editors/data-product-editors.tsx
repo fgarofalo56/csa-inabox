@@ -182,7 +182,7 @@ export function DataProductTemplateEditor({ item, id }: { item: FabricItemType; 
   ], [refreshing, refresh, busy, canSpawn, instantiate]);
 
   return (
-    <ItemEditorChrome
+    <ItemEditorChrome splitKeyPrefix={item.slug}
       item={item} id={id}
       ribbon={ribbon}
       leftPanel={
@@ -382,7 +382,7 @@ export function DataProductInstanceEditor({ item, id }: { item: FabricItemType; 
   }, [id, loadInstance]);
 
   return (
-    <ItemEditorChrome
+    <ItemEditorChrome splitKeyPrefix={item.slug}
       item={item} id={id}
       ribbon={[{ id: 'home', label: 'Home', groups: [{ label: 'Manage', actions: [
         { label: 'Refresh', onClick: loadInstance },

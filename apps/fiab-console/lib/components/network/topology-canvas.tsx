@@ -24,7 +24,7 @@
 
 import React, { useCallback, useMemo, useState } from 'react';
 import {
-  ReactFlow, ReactFlowProvider, Background, BackgroundVariant, Controls, MiniMap, Panel,
+  ReactFlow, ReactFlowProvider, Background, BackgroundVariant, MiniMap, Panel,
   type Node, type Edge,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
@@ -41,7 +41,7 @@ import {
   Flash20Regular, Server20Regular, Stream20Regular, Cube20Regular,
   type FluentIcon,
 } from '@fluentui/react-icons';
-import { accentTint, accentGradient } from '@/lib/components/canvas/canvas-node-kit';
+import { accentTint, accentGradient, CanvasRailPanel } from '@/lib/components/canvas/canvas-node-kit';
 import { ResizableCanvasRegion } from '@/lib/components/canvas/resizable-canvas';
 import type {
   PrivateEndpointInfo, VNetInfo, SubnetInfo, NsgInfo, NsgRule, PrivateDnsZoneInfo,
@@ -818,10 +818,17 @@ export function NetworkTopologyCanvas(props: TopologyCanvasProps): React.ReactEl
           edges={edges}
           onNodeClick={onNodeClick}
           fitView
+          // maxZoom keeps a small 3-6 node graph filling the canvas readably on open.
+          fitViewOptions={{ padding: 0.2, maxZoom: 1.25 }}
           attributionPosition="bottom-left"
         >
-          <Background variant={BackgroundVariant.Lines} gap={16} size={2} />
-          <Controls showInteractive={false} />
+          <Background
+            variant={BackgroundVariant.Dots}
+            gap={18}
+            size={1.5}
+            color={accentTint('var(--loom-accent-blue)', 45)}
+          />
+          <CanvasRailPanel />
           <Panel position="top-left">
             <div className={styles.legend} aria-label="Topology legend">
               {NODE_LEGEND.map((n) => (
@@ -855,8 +862,10 @@ export function NetworkTopologyCanvas(props: TopologyCanvasProps): React.ReactEl
             position="bottom-right"
             pannable
             zoomable
+            nodeStrokeColor={tokens.colorNeutralStroke2}
+            maskColor={accentTint(tokens.colorNeutralBackground3, 70)}
             style={{
-              backgroundColor: tokens.colorNeutralBackground2,
+              backgroundColor: tokens.colorNeutralBackground1,
               border: `1px solid ${tokens.colorNeutralStroke2}`,
             }}
           />

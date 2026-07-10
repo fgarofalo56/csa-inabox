@@ -52,6 +52,24 @@ export interface CellOutput {
   ename?: string;
   evalue?: string;
   traceback?: string[];
+  /** Live Livy statement progress 0..1 while status==='running' (R4-SYN-5). */
+  progress?: number;
+}
+
+/**
+ * A per-cell comment thread entry (R4-SYN-9). Persisted with the notebook
+ * definition (IPYNB cell metadata `loomComments`) so it survives save/reopen.
+ * Real-time multi-user presence (F6) is NOT provided — that needs a presence
+ * backend and is honestly gated in the editor; these comments are a single-user
+ * annotation that round-trips through the artifact.
+ */
+export interface CellComment {
+  id: string;
+  author: string;
+  text: string;
+  /** ISO timestamp. */
+  at: string;
+  resolved?: boolean;
 }
 
 export interface EditorCell {
@@ -65,10 +83,14 @@ export interface EditorCell {
   isParameters?: boolean;
   /** input collapsed (Synapse jupyter.source_hidden) — header still shows. */
   collapsed?: boolean;
+  /** output collapsed independently of the input (R4-SYN-8, Synapse B8). */
+  outputCollapsed?: boolean;
   /** cell locked (read-only) — the shared CodeCell lock affordance. */
   locked?: boolean;
   /** Livy execution counter shown as [n] in the shared cell gutter. */
   executionCount?: number;
+  /** Persisted per-cell comment thread (R4-SYN-9). */
+  comments?: CellComment[];
 }
 
 /**
@@ -156,4 +178,160 @@ export function buildRichFromTable(
     return { name, type: seen && numeric ? 'double' : 'string' };
   });
   return buildLoomDisplay({ schema: { fields }, data: rows as unknown[][] }, 5000);
+}
+
+// ── R4-SYN-4 · %run reference notebook ───────────────────────────────────────
+/**
+ * Detect a leading Synapse `%run <path|name>` on the first non-empty line and
+ * return the referenced notebook NAME (basename, quotes/path stripped), or null.
+ * Synapse resolves `%run` against PUBLISHED workspace notebooks by name, so a
+ * `folder/Notebook` path collapses to `Notebook`. Trailing parameters
+ * (`%run nb {"p":1}` or positional args) are ignored — we run the referenced
+ * notebook's definitions into the session; parameter passing is not modelled.
+ */
+export function parseRunReference(source: string): string | null {
+  const line = source.split('\n').find((l) => l.trim() !== '');
+  if (!line) return null;
+  const m = line.trim().match(/^%run\s+(.+)$/i);
+  if (!m) return null;
+  let ref = m[1].trim();
+  // Strip a quoted target ("path" or 'path') taking only the quoted content.
+  const q = ref.match(/^["']([^"']+)["']/);
+  if (q) ref = q[1];
+  else ref = ref.split(/\s+/)[0]; // first token before any params
+  ref = ref.replace(/^\.?\//, ''); // leading ./ or /
+  const base = ref.split('/').pop() || ref;
+  return base.trim() || null;
+}
+
+/**
+ * Build the PySpark preamble that a `%run` cell submits to the warm session:
+ * the referenced (published) notebook's Python/PySpark code cells concatenated,
+ * so functions/vars it defines become available to later cells — Synapse `%run`
+ * semantics. Enforces Synapse's constraints:
+ *   - non-recursive: throws if the referenced notebook itself contains a `%run`;
+ *   - PySpark-only: only python/pyspark cells are included (a `%%sql`/`%%spark`
+ *     cell cannot be spliced into a single PySpark statement) — throws when the
+ *     referenced notebook has no runnable PySpark code.
+ */
+export function buildRunPreamble(refCells: EditorCell[], refName: string): string {
+  const parts: string[] = [];
+  for (const c of refCells) {
+    if (c.type !== 'code') continue;
+    if (parseRunReference(c.source)) {
+      throw new Error(`Nested %run is not supported — "${refName}" itself references another notebook (Synapse %run is non-recursive).`);
+    }
+    if (c.lang === 'pyspark' || c.lang === 'spark') {
+      // Include PySpark cells verbatim; a %%spark(Scala) body would not run in a
+      // PySpark statement, so restrict to python-family. spark(Scala) kept out.
+      if (c.lang === 'pyspark' && c.source.trim()) parts.push(c.source);
+    }
+  }
+  if (parts.length === 0) {
+    throw new Error(`Referenced notebook "${refName}" has no PySpark code cells to run.`);
+  }
+  return `# %run ${refName} (Synapse reference — PySpark definitions)\n${parts.join('\n\n')}`;
+}
+
+/** Clamp a Livy statement progress value to an integer percentage 0..100. */
+export function clampProgress(progress: number | undefined): number {
+  if (typeof progress !== 'number' || !Number.isFinite(progress)) return 0;
+  return Math.max(0, Math.min(100, Math.round(progress * 100)));
+}
+
+// ── R4-SYN-9 · cell comments IPYNB round-trip ────────────────────────────────
+/** Read persisted comments from an IPYNB cell's metadata (`loomComments`). */
+export function metaToComments(meta: any): CellComment[] | undefined {
+  const raw = meta?.loomComments;
+  if (!Array.isArray(raw)) return undefined;
+  const out = raw
+    .filter((c) => c && typeof c.text === 'string')
+    .map((c) => ({
+      id: String(c.id || `cm-${Math.random().toString(36).slice(2, 8)}`),
+      author: String(c.author || 'You'),
+      text: String(c.text),
+      at: String(c.at || new Date().toISOString()),
+      resolved: !!c.resolved,
+    }));
+  return out.length ? out : undefined;
+}
+/** Serialize comments for IPYNB cell metadata; undefined when there are none. */
+export function commentsToMeta(comments: CellComment[] | undefined): CellComment[] | undefined {
+  return comments && comments.length ? comments : undefined;
+}
+
+// ── R4-SYN-11 · code-snippet library (cross-language temp tables = B15) ───────
+/** A ready-to-insert Spark snippet for the notebook's snippet inserter. */
+export interface SparkSnippet { id: string; label: string; lang: CellKind; source: string; }
+export const SPARK_SNIPPETS: SparkSnippet[] = [
+  {
+    id: 'read-delta', label: 'Read a Delta table', lang: 'pyspark',
+    source: "df = spark.read.format('delta').load('abfss://<container>@<account>.dfs.core.windows.net/<path>')\ndisplay(df)",
+  },
+  {
+    id: 'write-delta', label: 'Write a Delta table', lang: 'pyspark',
+    source: "(df.write.format('delta').mode('overwrite')\n   .save('abfss://<container>@<account>.dfs.core.windows.net/<path>'))",
+  },
+  {
+    id: 'temp-view', label: 'Cross-language temp view (createOrReplaceTempView)', lang: 'pyspark',
+    source: "# Register a PySpark DataFrame so a %%sql cell can query it by name.\ndf.createOrReplaceTempView('my_view')",
+  },
+  {
+    id: 'query-temp-view', label: 'Query a temp view from Spark SQL', lang: 'sql',
+    source: 'SELECT * FROM my_view LIMIT 100',
+  },
+  {
+    id: 'read-csv', label: 'Read a CSV into a DataFrame', lang: 'pyspark',
+    source: "df = (spark.read.option('header', True).option('inferSchema', True)\n   .csv('abfss://<container>@<account>.dfs.core.windows.net/<path>.csv'))\ndisplay(df)",
+  },
+  {
+    id: 'mssparkutils-ls', label: 'List files with mssparkutils', lang: 'pyspark',
+    source: "from notebookutils import mssparkutils\nfiles = mssparkutils.fs.ls('abfss://<container>@<account>.dfs.core.windows.net/<path>')\nfor f in files:\n    print(f.name, f.size)",
+  },
+];
+
+// ── R4-SYN-11 · markdown formatting-toolbar transforms (pure) ─────────────────
+export type MarkdownFormat = 'bold' | 'italic' | 'h1' | 'h2' | 'ul' | 'ol' | 'quote' | 'code' | 'link';
+/**
+ * Apply a WYSIWYG markdown format to a selection within `source`. Returns the
+ * new source plus the selection range to restore. Pure so the toolbar logic is
+ * unit-testable without a live Monaco editor.
+ */
+export function applyMarkdownFormat(
+  source: string, selStart: number, selEnd: number, fmt: MarkdownFormat,
+): { source: string; selStart: number; selEnd: number } {
+  const sel = source.slice(selStart, selEnd);
+  const wrap = (pre: string, post = pre, placeholder = 'text') => {
+    const inner = sel || placeholder;
+    const next = source.slice(0, selStart) + pre + inner + post + source.slice(selEnd);
+    return { source: next, selStart: selStart + pre.length, selEnd: selStart + pre.length + inner.length };
+  };
+  const linePrefix = (prefix: string) => {
+    // Prefix every selected line (or the current line when nothing is selected).
+    let ls = source.lastIndexOf('\n', selStart - 1) + 1;
+    let le = source.indexOf('\n', selEnd);
+    if (le < 0) le = source.length;
+    const block = source.slice(ls, le);
+    const numbered = prefix === '1. ';
+    const next = block.split('\n').map((l, i) => `${numbered ? `${i + 1}. ` : prefix}${l}`).join('\n');
+    const out = source.slice(0, ls) + next + source.slice(le);
+    return { source: out, selStart: ls, selEnd: ls + next.length };
+  };
+  switch (fmt) {
+    case 'bold': return wrap('**');
+    case 'italic': return wrap('_');
+    case 'code': return sel.includes('\n') ? wrap('```\n', '\n```', 'code') : wrap('`', '`', 'code');
+    case 'h1': return linePrefix('# ');
+    case 'h2': return linePrefix('## ');
+    case 'ul': return linePrefix('- ');
+    case 'ol': return linePrefix('1. ');
+    case 'quote': return linePrefix('> ');
+    case 'link': {
+      const label = sel || 'text';
+      const next = source.slice(0, selStart) + `[${label}](https://)` + source.slice(selEnd);
+      const urlAt = selStart + label.length + 3;
+      return { source: next, selStart: urlAt, selEnd: urlAt + 'https://'.length };
+    }
+    default: return { source, selStart, selEnd };
+  }
 }

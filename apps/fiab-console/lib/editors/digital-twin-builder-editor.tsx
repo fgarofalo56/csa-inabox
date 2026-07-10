@@ -31,12 +31,12 @@ import {
   Cube20Regular, Pulse20Regular, BranchFork20Regular, Sparkle16Regular,
 } from '@fluentui/react-icons';
 import {
-  ReactFlow, ReactFlowProvider, Background, BackgroundVariant, Controls, MiniMap, Panel,
-  Handle, Position, useNodesState, MarkerType,
+  ReactFlow, ReactFlowProvider, Background, BackgroundVariant, MiniMap, Panel,
+  Handle, Position, useNodesState, useReactFlow, MarkerType,
   type Node as RfNode, type Edge as RfEdge, type NodeProps, type NodeTypes, type Connection,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { CanvasNode, CATEGORY_ACCENT, portStyle, type CanvasVisual } from '@/lib/components/canvas/canvas-node-kit';
+import { CanvasNode, CanvasRightRail, CATEGORY_ACCENT, accentTint, portStyle, type CanvasVisual } from '@/lib/components/canvas/canvas-node-kit';
 import { ResizableCanvasRegion } from '@/lib/components/canvas/resizable-canvas';
 import { useCanvasHistory } from '@/lib/components/canvas/use-canvas-history';
 import { ForceDirectedGraph, type GraphNode, type GraphEdge } from '@/lib/components/graph/force-directed-graph';
@@ -155,6 +155,9 @@ interface CanvasProps {
 
 function TwinCanvasInner({ entities, relationships, onMoveNode, onOpenNode, onDrawEdge }: CanvasProps) {
   const [rfNodes, setRfNodes, onNodesChange] = useNodesState<RfNode>([]);
+  const rf = useReactFlow();
+  const [zoom, setZoom] = useState(1);
+  const [railCollapsed, setRailCollapsed] = useState(false);
   const grid = useMemo(() => gridLayout(entities.map((e) => e.apiName)), [entities]);
 
   useEffect(() => {
@@ -207,20 +210,45 @@ function TwinCanvasInner({ entities, relationships, onMoveNode, onOpenNode, onDr
           minZoom={0.2}
           maxZoom={2}
           fitView
-          fitViewOptions={{ padding: 0.2 }}
+          // maxZoom keeps a small 3-6 node graph filling the canvas readably on open.
+          fitViewOptions={{ padding: 0.2, maxZoom: 1.25 }}
+          onMove={(_, vp) => setZoom(vp.zoom)}
           nodesDraggable
           nodesConnectable
           proOptions={{ hideAttribution: true }}
           deleteKeyCode={null}
         >
-          <Background variant={BackgroundVariant.Dots} gap={20} size={1} color={tokens.colorNeutralStroke2} />
+          <Background
+            variant={BackgroundVariant.Dots}
+            gap={18}
+            size={1.5}
+            color={accentTint('var(--loom-accent-blue)', 45)}
+          />
           <Panel position="top-left">
             <Caption1 style={{ backgroundColor: tokens.colorNeutralBackground1, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium, padding: `${tokens.spacingVerticalXXS} ${tokens.spacingHorizontalS}`, color: tokens.colorNeutralForeground3 }}>
               Drag to arrange · double-click an entity to edit · drag between entities to add a relationship
             </Caption1>
           </Panel>
-          <Controls showInteractive={false} />
-          <MiniMap pannable zoomable style={{ backgroundColor: tokens.colorNeutralBackground1 }} />
+          <Panel position="bottom-left">
+            <CanvasRightRail
+              zoom={zoom}
+              minZoom={0.25}
+              maxZoom={2}
+              onZoomChange={(z) => rf.setViewport({ ...rf.getViewport(), zoom: z }, { duration: 120 })}
+              onZoomIn={() => rf.zoomIn({ duration: 120 })}
+              onZoomOut={() => rf.zoomOut({ duration: 120 })}
+              onFit={() => rf.fitView({ padding: 0.2, maxZoom: 1.25, duration: 200 })}
+              collapsed={railCollapsed}
+              onToggleCollapse={() => setRailCollapsed((v) => !v)}
+            />
+          </Panel>
+          <MiniMap
+            pannable
+            zoomable
+            nodeStrokeColor={tokens.colorNeutralStroke2}
+            maskColor={accentTint(tokens.colorNeutralBackground3, 70)}
+            style={{ backgroundColor: tokens.colorNeutralBackground1 }}
+          />
         </ReactFlow>
         {entities.length === 0 && (
           <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>

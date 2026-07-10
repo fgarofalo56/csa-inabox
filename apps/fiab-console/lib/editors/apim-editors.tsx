@@ -712,7 +712,7 @@ export function ApimApiEditor({ item, id }: { item: FabricItemType; id: string }
   const HTTP_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'];
 
   return (
-    <ItemEditorChrome
+    <ItemEditorChrome splitKeyPrefix={item.slug}
       item={item}
       id={id}
       ribbon={ribbon} commandSearch
@@ -2885,7 +2885,7 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
 
   return (
     <>
-    <ItemEditorChrome item={item} id={id} ribbon={ribbon} commandSearch rightPanelLabel="Properties" rightPanel={isNew ? undefined : (
+    <ItemEditorChrome splitKeyPrefix={item.slug} item={item} id={id} ribbon={ribbon} commandSearch rightPanelLabel="Properties" rightPanel={isNew ? undefined : (
       <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
         <SelectAttributePanel
           title="Update frequency"

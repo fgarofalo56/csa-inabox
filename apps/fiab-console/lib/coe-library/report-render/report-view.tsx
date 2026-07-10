@@ -62,6 +62,37 @@ function buildSpec(fetchUrl: string | null, live: boolean, applied: Overrides): 
   return { url: `${fetchUrl}${sep}mode=live`, method: 'GET' };
 }
 
+/**
+ * Catches any error thrown while rendering the report canvas (e.g. a malformed
+ * visual model) and shows an honest MessageBar instead of a blank / broken
+ * surface — the report viewer must never dead-end on a crash (no-vaporware.md).
+ */
+class ReportRenderBoundary extends React.Component<
+  { children: React.ReactNode },
+  { error: Error | null }
+> {
+  constructor(props: { children: React.ReactNode }) {
+    super(props);
+    this.state = { error: null };
+  }
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+  render() {
+    if (this.state.error) {
+      return (
+        <MessageBar intent="error">
+          <MessageBarBody>
+            This report could not be rendered ({this.state.error.message}). Its definition may be
+            malformed — reopen it in the Report designer and re-save, or close and reopen to retry.
+          </MessageBarBody>
+        </MessageBar>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 export interface ReportViewProps {
   /** Base GET url, e.g. `/api/admin/coe-library/render?cloneId=…`. */
   fetchUrl: string | null;
@@ -192,13 +223,15 @@ export function ReportView({ fetchUrl, defaultLive = true, lockLive = false, onL
           <MessageBarBody>Live render error: {data.liveError}</MessageBarBody>
         </MessageBar>
       )}
-      <ReportCanvas
-        model={data.model}
-        sample={renderData}
-        dataSources={data.dataSources}
-        liveMode={liveMode}
-        header={header}
-      />
+      <ReportRenderBoundary>
+        <ReportCanvas
+          model={data.model}
+          sample={renderData}
+          dataSources={data.dataSources}
+          liveMode={liveMode}
+          header={header}
+        />
+      </ReportRenderBoundary>
     </>
   );
 }

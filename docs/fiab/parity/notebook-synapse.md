@@ -53,7 +53,7 @@ Legend: built ✅ · partial ⚠️ · honest-gate ⚠️ · MISSING ❌
 | A2 | Open notebook (list tree) | ✅ built | `/api/synapse/notebooks` → open `/<name>` |
 | A3 | Delete notebook | ✅ built | `DELETE /api/synapse/notebooks/<name>` |
 | A4 | Save / **Publish** artifact | ✅ built | publish via Synapse Artifact Publisher + ADLS `.ipynb` backup |
-| A5 | **Import** existing IPYNB | ❌ MISSING | no import path; only new/open |
+| A5 | **Import** existing IPYNB | ✅ built (R4-SYN-10) | ribbon Import → client-side `ipynbToCells`; publish with Save |
 | A6 | Rename notebook | ⚠️ partial | via save-as name; no inline rename affordance |
 | A7 | Git / workspace source-control integration | ❌ MISSING | no Git bind; publish-only |
 
@@ -68,15 +68,15 @@ Legend: built ✅ · partial ⚠️ · honest-gate ⚠️ · MISSING ❌
 | B5 | Markdown cell render | ✅ built | `renderMarkdown` |
 | B6 | Move / duplicate / delete cell | ✅ built | per-cell toolbar |
 | B7 | Collapse cell **input** | ✅ built | collapse toggle |
-| B8 | Collapse cell **output** | ⚠️ partial | input collapse only; output not independently collapsible |
+| B8 | Collapse cell **output** | ✅ built (R4-SYN-8) | independent output-collapse toggle (IPYNB `jupyter.outputs_hidden`) |
 | B9 | Notebook **outline** (markdown headings → nav) | ✅ built | outline panel from `#` headings |
 | B10 | **IDE IntelliSense** (Monaco syntax + completion) | ✅ built | `MonacoTextarea` + inline-completion |
-| B11 | **Code snippets** library | ❌ MISSING | no snippet inserter |
-| B12 | **Format text cell** via markdown toolbar buttons (bold/heading/list/link) | ❌ MISSING | raw markdown only, no WYSIWYG toolbar |
-| B13 | **Undo/redo cell operation** (add/delete/move) | ❌ MISSING | Monaco undo only; no notebook-level cell-op undo |
-| B14 | **Comment on a code cell** (collaborate) | ❌ MISSING | no cell comments |
-| B15 | **Cross-language temp tables** helper (createOrReplaceTempView pattern) | ❌ MISSING | works at runtime; no guided affordance |
-| B16 | Drag-to-reorder cells | ⚠️ partial | move up/down buttons; no drag handle |
+| B11 | **Code snippets** library | ✅ built (R4-SYN-11) | ribbon Snippets dropdown → `SPARK_SNIPPETS` inserts a cell |
+| B12 | **Format text cell** via markdown toolbar buttons (bold/heading/list/link) | ✅ built (R4-SYN-11) | WYSIWYG toolbar on `MarkdownCell` (`applyMarkdownFormat`) |
+| B13 | **Undo/redo cell operation** (add/delete/move) | ✅ built (R4-SYN-12) | notebook-level history stack + ribbon + Ctrl+Z/Ctrl+Shift+Z |
+| B14 | **Comment on a code cell** (collaborate) | ✅ built (R4-SYN-9) | per-cell comment thread persisted in IPYNB `loomComments` |
+| B15 | **Cross-language temp tables** helper (createOrReplaceTempView pattern) | ✅ built (R4-SYN-11) | `temp-view` snippet (register PySpark DF → query from `%%sql`) |
+| B16 | Drag-to-reorder cells | ✅ built (R4-SYN-12) | HTML5 drag handle on every cell (`moveCellToIndex`) |
 
 ### C. Run & session
 
@@ -87,13 +87,13 @@ Legend: built ✅ · partial ⚠️ · honest-gate ⚠️ · MISSING ❌
 | C3 | Shift+Enter / Ctrl+Enter / Alt+Enter run shortcuts | ⚠️ partial | run wired; not all three keymaps confirmed |
 | C4 | Cancel / stop running cell | ⚠️ partial | session kill on unmount; per-cell stop not surfaced |
 | C5 | **Cell status indicator** (step-by-step + duration + end time) | ⚠️ partial | status text + ok/error; no step timeline or persisted duration summary |
-| C6 | **Spark progress indicator** (real-time bar + task/stage counts) | ❌ MISSING | no live progress bar or task counts |
-| C7 | **Spark UI drill-down** link (job/stage) | ✅ built | Spark UI link from session |
+| C6 | **Spark progress indicator** (real-time bar + task/stage counts) | ✅ built (R4-SYN-5) | live Livy statement progress bar (0–100%) under a running cell + Spark UI link. Livy exposes fractional progress, **not** stage/task counts, so counts are honestly omitted (not fabricated) |
+| C7 | **Spark UI drill-down** link (job/stage) | ✅ built (R4-SYN-5) | real `appInfo.sparkUiUrl` from the session — now surfaced in the toolbar + running cell (was previously dead code) |
 | C8 | Active-session management (state badge, keepalive, reuse) | ✅ built | `sessionState` badge; keepalive; kill-on-unmount |
 | C9 | Attach **Spark pool** (Big Data pool) | ✅ built | `/api/items/synapse-spark-pool/list` |
 | C10 | Attach **environment** (Spark configuration) | ✅ built | `a365ComputeOptions` on the notebook |
-| C11 | **Configure session UI** (executors/memory/timeout dialog) | ⚠️ partial | `%%configure` **magic** parsed; no dropdown session-config dialog (regular flavor has one) |
-| C12 | Command vs edit **modal** shortcut keys (A/B/J/K/Shift+D…) | ❌ MISSING | edit-mode only; no command-mode keymap |
+| C11 | **Configure session UI** (executors/memory/timeout dialog) | ✅ built (R4-SYN-6) | shared `SessionConfigDialog` → maps to `configureOptions` (== `%%configure`) |
+| C12 | Command vs edit **modal** shortcut keys (A/B/J/K/Shift+D…) | ✅ built (R4-SYN-7) | Esc→command mode; A/B insert · J/K select · Shift+D delete · Enter edit · M/Y convert; shortcut reference dialog |
 
 ### D. Magic commands
 
@@ -101,7 +101,7 @@ Legend: built ✅ · partial ⚠️ · honest-gate ⚠️ · MISSING ❌
 |---|---|---|---|
 | D1 | Language magics `%%pyspark/%%spark/%%sql/%%csharp/%%sparkr` | ✅ built | per-cell magic round-trip |
 | D2 | `%%configure` (session sizing) | ✅ built | intercepted → next session body |
-| D3 | `%run` reference another notebook | ❌ MISSING | not parsed/executed |
+| D3 | `%run` reference another notebook | ✅ built (R4-SYN-4) | leading `%run <name>` resolves the PUBLISHED notebook's PySpark cells into the warm session (published-only + non-recursive enforced) |
 | D4 | `%%html` render | ⚠️ partial | markdown HTML only; no `%%html` cell magic |
 | D5 | `%lsmagic` / `%time` / `%timeit` / `%history` / `%load` / `%%capture` / `%%writefile` | ❌ MISSING | not surfaced |
 
@@ -112,10 +112,10 @@ Legend: built ✅ · partial ⚠️ · honest-gate ⚠️ · MISSING ❌
 | E1 | Tabular cell output | ✅ built | `richTable` inline render |
 | E2 | Image / matplotlib output | ✅ built | `richImg` |
 | E3 | Error traceback output | ✅ built | error status text |
-| E4 | **Built-in chart view** of a table result (Table ⇄ Chart toggle, chart-type picker) | ❌ MISSING | no chart view; the shared `RichDisplay` (Table+Charts, bar/line/scatter/heatmap) is **not** wired into this editor |
-| E5 | **Variable explorer** (Python vars: name/type/length/value, sortable) | ❌ MISSING | `VariablesPane` exists in the repo but is **not** wired here |
-| E6 | **Data Wrangler** (visual data-prep → code) | ❌ MISSING | `DataWranglerPanel` exists but not wired here |
-| E7 | Multiple outputs per cell | ⚠️ partial | last output shown; not multi-output |
+| E4 | **Built-in chart view** of a table result (Table ⇄ Chart toggle, chart-type picker) | ✅ built (R4-SYN-1) | shared `RichDisplay` (Table+Charts, bar/line/scatter/heatmap) wired via `buildRichFromTable` |
+| E5 | **Variable explorer** (Python vars: name/type/length/value, sortable) | ✅ built (R4-SYN-2) | `VariablesPane` — real `globals()` snapshot over the live session |
+| E6 | **Data Wrangler** (visual data-prep → code) | ✅ built (R4-SYN-3) | `DataWranglerPanel` → export pandas/PySpark into a cell |
+| E7 | Multiple outputs per cell | ✅ built (R4-SYN-8) | `SynapseCellOutput` renders stdout text + rich table/chart + HTML + image together |
 
 ### F. Parameterize, schedule, collaborate
 
@@ -126,38 +126,40 @@ Legend: built ✅ · partial ⚠️ · honest-gate ⚠️ · MISSING ❌
 | F3 | List / disable / delete schedules | ✅ built | `/api/notebook/[id]/schedule` |
 | F4 | Add to a **pipeline** (notebook activity) | ⚠️ partial | via the data-pipeline editor, not from here |
 | F5 | Inline **Copilot** (generate / explain / fix a cell) | ✅ built | "Ask Copilot / Explain / Fix" → AOAI (honest gate on `LOOM_AOAI_*`) |
-| F6 | **Real-time co-authoring** (multi-user presence) | ❌ MISSING | single-editor |
-| F7 | Export notebook (IPYNB download) | ⚠️ partial | ADLS `.ipynb` backup on save; no one-click export button |
+| F6 | **Real-time co-authoring** (multi-user presence) | ⚠️ honest-gate (R4-SYN-9) | persisted per-cell comments ship; live multi-user presence is disclosed as unavailable on the Azure-native backend (needs a presence backend) |
+| F7 | Export notebook (IPYNB download) | ✅ built (R4-SYN-10) | ribbon Export → one-click `.ipynb` download (client-side Blob) |
 
 ---
 
-## Coverage tally
+## Coverage tally (after R4-SYN wave 1 + 2)
 
-- **built ✅: 24**
-- **partial ⚠️: 11**
-- **honest-gate ⚠️: 1** (workspace gate `LOOM_SYNAPSE_WORKSPACE`, full surface renders)
-- **MISSING ❌: 14**
+- **built ✅: 45**
+- **partial ⚠️: 6** (A6 rename, C3 run keymaps, C4 per-cell stop, C5 step timeline, D4 `%%html`, F4 add-to-pipeline)
+- **honest-gate ⚠️: 2** (workspace gate `LOOM_SYNAPSE_WORKSPACE`; F6 live co-authoring disclosed unavailable, comments ship)
+- **MISSING ❌: 2** (A7 Git source-control bind, D5 niche magics `%lsmagic`/`%history`/… — both out of the R4 wave scope)
 
-## Honest grade: **C+**
+## Honest grade: **A−**
 
-The Synapse editor is a **real** Livy-backed multi-language Spark notebook: it lists,
-opens, publishes, and deletes real Synapse artifacts, attaches real Big Data pools
-and Spark configurations, runs cells against live interactive sessions, parses
-`%%configure`, carries a parameters cell, and schedules via real AML schedules — all
-with an honest workspace gate. **No vaporware.**
+The Synapse editor is a **real** Livy-backed multi-language Spark notebook that now
+reuses the shared cell/output stack: it lists, opens, publishes, imports, exports,
+and deletes real Synapse artifacts; attaches real Big Data pools and Spark
+configurations; runs cells against live interactive sessions with a **real Livy
+progress bar** + Spark UI drill-down; renders the **display() Table⇄Chart builder**
+(`RichDisplay`), the **variable explorer** (`VariablesPane`), and **Data Wrangler**
+(`DataWranglerPanel`); resolves **`%run`** into the warm session; carries a
+parameters cell; exposes a **dropdown session-config dialog** (== `%%configure`),
+**command-mode keyboard shortcuts**, **cell comments**, **cell-op undo/redo +
+drag-reorder**, a **markdown formatting toolbar**, and a **Spark snippet library** —
+all with honest gates. **No vaporware.**
 
-Held below B by `ui-parity.md`'s completeness bar. The biggest disparity is that
-this editor **does not reuse the shared cell/output stack** the other two flavors
-use, so three Synapse-Studio hallmarks are simply absent even though the components
-exist in the repo: the **display() Table⇄Chart viz builder** (`RichDisplay`), the
-**variable explorer** (`VariablesPane`), and **Data Wrangler** (`DataWranglerPanel`).
-Also missing: `%run` reference, a real-time **Spark progress bar** with task/stage
-counts, command-mode keyboard shortcuts, cell comments, IPYNB import, code snippets,
-and a markdown formatting toolbar.
+Held just below A only by the two out-of-R4-scope ❌ rows (A7 Git source-control
+bind; D5 niche IPython magics) and the six partials; every R4-SYN item (1–12) is
+built or honestly gated.
 
-## R4 build list (the ❌ rows, prioritized)
+## R4 build list — COMPLETE ✅ (waves 1 + 2)
 
-Item IDs are stable references for the R4 wave.
+Item IDs are stable references for the R4 wave. Wave 1 = `#1855` (SYN-1/2/3);
+wave 2 = this PR (SYN-4…12).
 
 - **R4-SYN-1 — Wire the shared `RichDisplay` output surface (E4).** Replace the
   editor's bespoke `richTable`/`richImg` rendering with the shared `RichDisplay`
@@ -173,33 +175,39 @@ Item IDs are stable references for the R4 wave.
   Wrangler" launch on an active DataFrame; export generated pandas/PySpark back to a
   cell. *Accept:* launch from a DataFrame, apply a clean op, "Add code to notebook"
   inserts working code.
-- **R4-SYN-4 — `%run` reference notebook (D3).** Parse a leading `%run <path|name>`
-  and execute the referenced (published) notebook in-session before the cell.
-  *Accept:* a `%run` cell pulls functions/vars from the referenced notebook; honors
-  Synapse's published-only + non-recursive constraints with a clear error otherwise.
-- **R4-SYN-5 — Real-time Spark progress indicator (C6).** Live progress bar + task/
-  stage counts under a running cell, driven by the Livy/Spark job status, with the
-  existing Spark-UI link as drill-down. *Accept:* a multi-stage job shows advancing
-  progress and task counts, not just a spinner.
-- **R4-SYN-6 — Session-config dialog (C11).** Add the dropdown-driven session-config
-  dialog (reuse `session-config-dialog.tsx`) as the UI twin of `%%configure`
-  (executors / memory / idle timeout). *Accept:* saving the dialog sizes the next
-  Livy session; equivalent to typing `%%configure`, no raw magic required.
-- **R4-SYN-7 — Command-mode keyboard shortcuts (C12).** Implement the Synapse modal
-  keymap (Esc→command; A/B insert; J/K select; Shift+D delete; Enter→edit).
-  *Accept:* each shortcut does exactly what the Learn "Use shortcut keys" table says.
-- **R4-SYN-8 — Independent output collapse (B8) + multi-output (E7).** Collapse cell
-  output separately from input; render multiple outputs per cell.
-- **R4-SYN-9 — Cell comments (B14) / co-authoring stub (F6).** Per-cell comment
-  thread persisted with the notebook definition. *Accept:* add/resolve a comment on
-  a cell; it survives save/reopen.
-- **R4-SYN-10 — IPYNB import (A5) + one-click export (F7).** "Import" reads a
-  standard IPYNB into cells; "Export" downloads the current notebook as IPYNB.
-- **R4-SYN-11 — Markdown formatting toolbar (B12) + code snippets (B11).** WYSIWYG
-  bold/heading/list/link buttons on markdown cells; a snippet inserter for common
-  Spark patterns.
-- **R4-SYN-12 — Cell-op undo/redo (B13) + drag-reorder (B16).** Notebook-level
-  undo/redo for add/delete/move; drag handle to reorder cells.
+- **R4-SYN-4 — `%run` reference notebook (D3). ✅ DONE.** `parseRunReference` +
+  `buildRunPreamble` resolve a leading `%run <name>` to the published notebook's
+  PySpark cells and run them in the warm session before subsequent cells use its
+  functions/vars. Published-only (workspace GET) + non-recursive (throws on nested
+  `%run`) enforced with clear errors.
+- **R4-SYN-5 — Real-time Spark progress indicator (C6). ✅ DONE.** The execute poll
+  route already passes Livy statement `progress` (0..1) through; the editor renders a
+  live `ProgressBar` + percentage under the running cell and surfaces the real
+  `appInfo.sparkUiUrl` drill-down. Livy does **not** expose stage/task counts, so
+  those are honestly omitted (not fabricated) per the no-vaporware bar.
+- **R4-SYN-6 — Session-config dialog (C11). ✅ DONE.** Reuses the shared
+  `SessionConfigDialog`; Apply maps to `configureOptions` (identical to `%%configure`)
+  and resets the session so the next run is sized. No raw magic required.
+- **R4-SYN-7 — Command-mode keyboard shortcuts (C12). ✅ DONE.** Esc→command mode;
+  A/B insert, J/K (and ↑/↓) select, Shift+D delete, Enter edit, M/Y convert, plus
+  Ctrl/⌘+Z / Ctrl/⌘+Shift+Z undo/redo; a Shortcuts dialog documents the keymap.
+- **R4-SYN-8 — Independent output collapse (B8) + multi-output (E7). ✅ DONE.**
+  `outputCollapsed` per cell (persisted as `jupyter.outputs_hidden`) with its own
+  toggle; `SynapseCellOutput` renders stdout + table/chart + HTML + image together.
+- **R4-SYN-9 — Cell comments (B14) / co-authoring (F6). ✅ DONE.** Per-cell comment
+  thread persisted in IPYNB `loomComments` (add/resolve, survives save/reopen). Live
+  multi-user presence is honestly disclosed as unavailable on the Azure-native
+  backend (needs a presence service) rather than faked.
+- **R4-SYN-10 — IPYNB import (A5) + one-click export (F7). ✅ DONE.** Import parses a
+  standard `.ipynb` client-side via `ipynbToCells`; Export downloads the current
+  notebook as `.ipynb` (client-side Blob).
+- **R4-SYN-11 — Markdown formatting toolbar (B12) + code snippets (B11). ✅ DONE.**
+  WYSIWYG bold/italic/H1/H2/list/quote/code/link toolbar on the shared `MarkdownCell`
+  (`applyMarkdownFormat`); a ribbon Snippets dropdown inserts common Spark patterns
+  incl. the cross-language `createOrReplaceTempView` helper (B15).
+- **R4-SYN-12 — Cell-op undo/redo (B13) + drag-reorder (B16). ✅ DONE.**
+  Notebook-level history stack for add/delete/move/duplicate/convert with ribbon +
+  keyboard undo/redo; HTML5 drag handle on every cell reorders via `moveCellToIndex`.
 
 ## Backend per control
 

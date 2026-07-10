@@ -2767,7 +2767,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
 
   return (
     <>
-    <ItemEditorChrome item={item} id={id} ribbon={ribbon}
+    <ItemEditorChrome splitKeyPrefix={item.slug} item={item} id={id} ribbon={ribbon}
       leftPanel={
         <PowerBiTree
           workspaceId={workspaceId}

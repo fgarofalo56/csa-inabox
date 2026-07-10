@@ -376,7 +376,7 @@ export function KqlQuerysetEditor({ item, id }: { item: FabricItemType; id: stri
   ], [loading, canRun, run, cancel, saving, canSave, saveAll, canPinAlert, openPinDialog, openAlertDialog]);
 
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={ribbon}
+    <ItemEditorChrome splitKeyPrefix={item.slug} item={item} id={id} ribbon={ribbon}
       leftPanel={
         <div className={s.treePad}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: tokens.spacingVerticalS}}>

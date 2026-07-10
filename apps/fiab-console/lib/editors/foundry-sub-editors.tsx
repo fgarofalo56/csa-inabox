@@ -2149,7 +2149,7 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
   );
   const chrome = (main: ReactNode) => (
     <>
-      <ItemEditorChrome item={item} id={id} ribbon={ribbon} commandSearch leftPanel={serviceTree} main={main} />
+      <ItemEditorChrome splitKeyPrefix={item.slug} item={item} id={id} ribbon={ribbon} commandSearch leftPanel={serviceTree} main={main} />
       <IndexMyDataWizard open={imdOpen} onOpenChange={setImdOpen} />
     </>
   );

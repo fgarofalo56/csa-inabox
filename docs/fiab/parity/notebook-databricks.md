@@ -71,7 +71,7 @@ Legend: built ✅ · partial ⚠️ · honest-gate ⚠️ · MISSING ❌
 | B4 | Default language + per-cell language | ✅ built | `baseLanguage` + `cellLangToCommandLanguage` |
 | B5 | Language magics `%python/%r/%scala/%sql` | ✅ built | `# MAGIC` round-trip in SOURCE |
 | B6 | Auxiliary magics `%md` | ✅ built | markdown cell ↔ `# MAGIC %md` |
-| B7 | Auxiliary magics `%sh` / `%fs` / `%pip` / `%run` | ❌ MISSING | not parsed/executed as Databricks magics |
+| B7 | Auxiliary magics `%sh` / `%fs` / `%pip` / `%run` | ✅ built (R4-DBX-5) | `dbx-magics.resolveDbxCommand` translates each to a real REPL call (`%sh`→subprocess, `%fs`→dbutils.fs, `%pip`→driver pip, `%run`→dbutils.notebook.run) |
 | B8 | Monaco IntelliSense / autocomplete | ✅ built | `CodeCell` Monaco + inline-completion |
 | B9 | Lock cell / copy cell / convert-to-markdown | ✅ built | `CodeCell` toolbar |
 | B10 | **Side-by-side** notebook (split view) | ❌ MISSING | single-pane |
@@ -87,9 +87,9 @@ Legend: built ✅ · partial ⚠️ · honest-gate ⚠️ · MISSING ❌
 | C3 | **Cluster attach dropdown** | ✅ built | `/api/items/databricks-cluster`; auto-selects a running cluster |
 | C4 | Start a terminated cluster from the editor | ⚠️ partial | cluster state shown; start action is in the cluster editor |
 | C5 | Per-`(cluster,language)` execution context (REPL persistence) | ✅ built | `ctxKey = clusterId:lang` |
-| C6 | Serverless / SQL-warehouse compute option | ❌ MISSING | interactive clusters only |
+| C6 | Serverless / SQL-warehouse compute option | ⚠️ partial (R4-DBX-7) | interactive clusters wired; warehouse/serverless run target is a follow-up (client `runWarehouseStatement` exists) |
 | C7 | Cancel running cell | ⚠️ partial | run state tracked; explicit cancel not surfaced |
-| C8 | **Clear state / clear outputs / clear-and-run-all** | ❌ MISSING | no clear-state menu |
+| C8 | **Clear state / clear outputs / clear-and-run-all** | ✅ built (R4-DBX-7) | Run menu → Clear outputs / Clear state (fresh REPL context) / Clear state & run all |
 | C9 | Run-status per cell (running/success/error + duration) | ✅ built | `CellResult` status |
 
 ### D. Outputs, results & visualization (shared `RichDisplay`)
@@ -102,8 +102,8 @@ Legend: built ✅ · partial ⚠️ · honest-gate ⚠️ · MISSING ❌
 | D4 | Download results (CSV / JSON) | ✅ built | `downloadResultsCsv` / `downloadResultsJson` |
 | D5 | Download to Excel | ❌ MISSING | CSV/JSON only |
 | D6 | `displayHTML()` rich HTML output | ⚠️ partial | HTML handled by `RichDisplay`; not a first-class `displayHTML` path |
-| D7 | **Data profile** (summary stats tab on a DataFrame) | ❌ MISSING | no profile tab |
-| D8 | `%sql` cell results as `_sqldf` for next cell | ❌ MISSING | no implicit `_sqldf` chaining |
+| D7 | **Data profile** (summary stats tab on a DataFrame) | ✅ built (R4-DBX-6) | Data profile tab on every table result → `dbx-data-profile` + `display-stats` |
+| D8 | `%sql` cell results as `_sqldf` for next cell | ✅ built (R4-DBX-5) | `%sql` in a Python notebook runs `_sqldf = spark.sql(...)` in the Python REPL → next cell reads `_sqldf` |
 | D9 | Multiple outputs per cell | ⚠️ partial | primary output rendered; not multi-output |
 | D10 | Resize output area | ⚠️ partial | maximize toggle; no drag-resize |
 
@@ -111,9 +111,9 @@ Legend: built ✅ · partial ⚠️ · honest-gate ⚠️ · MISSING ❌
 
 | # | Databricks capability | Loom | Where / backend |
 |---|---|---|---|
-| E1 | **Widgets** (`dbutils.widgets` text/dropdown/combobox/multiselect bar) | ❌ MISSING | no widgets bar |
-| E2 | Notebook **parameters** (re-run with params) | ❌ MISSING | no params cell/panel |
-| E3 | **Schedule as a job** (create/run/pause/view) | ❌ MISSING | helper text promises it; **no schedule UI wired** |
+| E1 | **Widgets** (`dbutils.widgets` text/dropdown/combobox/multiselect bar) | ✅ built (R4-DBX-2) | `DbxWidgetsBar` renders controls parsed by `dbx-widgets`; values set in the REPL via a preamble |
+| E2 | Notebook **parameters** (re-run with params) | ✅ built (R4-DBX-2) | widget values → interactive re-run (preamble) + job `notebook_params` |
+| E3 | **Schedule as a job** (create/run/pause/view) | ✅ built (R4-DBX-1) | `DbxScheduleDialog` → `…/schedule` route → Jobs `create`/`list`/`reset`/`run-now`/`delete` |
 | E4 | **Runs history** (jobs runs list) | ✅ built | Runs dialog → `/api/items/databricks-notebook/<id>/runs` |
 | E5 | Export a run result to HTML | ❌ MISSING | not surfaced |
 
@@ -121,41 +121,52 @@ Legend: built ✅ · partial ⚠️ · honest-gate ⚠️ · MISSING ❌
 
 | # | Databricks capability | Loom | Where / backend |
 |---|---|---|---|
-| F1 | **Version/revision history** (view/restore/delete versions) | ❌ MISSING | no version history panel |
-| F2 | **Side-by-side diff** of versions | ❌ MISSING | none |
-| F3 | **Comments** on cells | ❌ MISSING | none |
+| F1 | **Version/revision history** (view/restore/delete versions) | ✅ built (R4-DBX-3) | `DbxVersionsDialog` → `…/versions` route (Cosmos SOURCE snapshots on every save + manual) → restore into editor |
+| F2 | **Side-by-side diff** of versions | ✅ built (R4-DBX-3) | LCS `dbx-line-diff` two-color line diff in the versions dialog |
+| F3 | **Comments** on cells | ❌ MISSING | none (R4-DBX-10 long-tail) |
 | F4 | Real-time **co-authoring** | ❌ MISSING | single-editor |
-| F5 | **Variable explorer** | ❌ MISSING | `VariablesPane` exists but not wired |
-| F6 | **Assistant / Genie Code** (generate/explain/fix) | ⚠️ partial | `SqlCopilotEditor` imported; notebook-wide Copilot not wired like the regular flavor |
+| F5 | **Variable explorer** | ✅ built (R4-DBX-4) | `VariablesPane` wired; introspects the live python REPL via the command API |
+| F6 | **Assistant / Genie Code** (generate/explain/fix) | ✅ built (R4-DBX-8) | docked `CopilotChatPane` (/fix /explain /optimize) → `/api/copilot/notebook-assist` |
 | F7 | UC **lineage** panel | ✅ built | `UcLineagePanel` |
 
 ---
 
-## Coverage tally
+## Coverage tally (after R4-DBX-1..8)
 
-- **built ✅: 22**
+- **built ✅: 33**
 - **partial ⚠️: 9**
 - **honest-gate ⚠️: 1** (Databricks workspace gate `LOOM_DATABRICKS_*`)
-- **MISSING ❌: 18**
+- **MISSING ❌: 7** (A7 move/clone/rename, A8 Repos/Git, B10 side-by-side, D5 Excel,
+  E5 export-run-to-HTML, F3 comments, F4 co-authoring)
 
-## Honest grade: **C+**
+## Honest grade: **B**
 
 The Databricks flavor is a **real** notebook against a real workspace: it exports/imports
 SOURCE with correct `# COMMAND` / `# MAGIC` semantics, attaches real clusters, runs cells
-through per-language execution contexts so REPL state persists, streams results into the
-shared `RichDisplay` (table + chart viz + CSV/JSON download), lists real job runs, and
-shows UC lineage. **No vaporware.**
+through per-language execution contexts so REPL state persists, and now streams table
+results into the shared `RichDisplay` (table + chart viz + CSV/JSON download) with a
+**Data Profile** tab. **No vaporware.**
 
-Held below B by `ui-parity.md`. The Databricks-specific surfaces are the gap: **no
-widgets bar**, **no version/revision history or diff**, **no schedule-as-a-job** (despite
-the editor text promising it), **no variable explorer**, **no `%sql`→`_sqldf` chaining**,
-**no data profile**, **no `%sh/%fs/%pip/%run` magics**, **no comments/co-authoring**, and
-**no Repos/Git**. The variable explorer is especially low-cost because `VariablesPane`
-already exists in the repo.
+The R4-DBX wave closed the Databricks-specific gap: **widgets bar + parameters**
+(`dbutils.widgets` → interactive re-run + job params), **schedule-as-a-job** (real Jobs
+API — finally matching the editor's promise text), **version history + side-by-side diff +
+restore**, **variable explorer** (live REPL introspection), **`%sql`→`_sqldf` chaining**
+and **`%sh/%fs/%pip/%run` magics** with faithful REPL semantics, **data profile**, a
+**Clear state / clear-and-run-all** run menu, and a docked **notebook Copilot**.
+
+Held below A by the long-tail collaboration/workspace-management surfaces (R4-DBX-9/10):
+side-by-side split view, cell comments, real-time co-authoring, Repos/Git, Excel/HTML
+export, workspace move/clone/rename, and a warehouse/serverless run target (C6, partial).
 
 ## R4 build list (the ❌ rows, prioritized)
 
-- **R4-DBX-1 — Schedule-as-a-job (E3).** Wire a Schedule action that creates a
+> **Status (R4-DBX wave):** R4-DBX-1 … R4-DBX-8 **DONE ✅** (real backends,
+> tsc-clean, unit-tested in `lib/editors/databricks/__tests__/dbx-parity.test.ts`).
+> R4-DBX-9 / R4-DBX-10 are the remaining long-tail (side-by-side split, cell
+> comments, Excel/HTML export, Repos/Git, workspace move/clone/rename) — not yet
+> built. C6 (warehouse/serverless run target) is partial.
+
+- **R4-DBX-1 — Schedule-as-a-job (E3).** ✅ DONE. Wire a Schedule action that creates a
   Databricks **Job** (`jobs/create` with a notebook task + schedule), plus list/run/
   pause/delete. *Accept:* schedule the open notebook; the created job appears in Runs
   and fires on cadence — matching the editor's own promise text.

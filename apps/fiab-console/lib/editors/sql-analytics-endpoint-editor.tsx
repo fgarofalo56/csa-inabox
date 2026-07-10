@@ -406,7 +406,7 @@ export function SqlAnalyticsEndpointEditor({ item, id }: { item: FabricItemType;
   const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 
   return (
-    <ItemEditorChrome
+    <ItemEditorChrome splitKeyPrefix={item.slug}
       item={item}
       id={id}
       ribbon={ribbon}
