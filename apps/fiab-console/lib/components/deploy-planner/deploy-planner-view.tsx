@@ -33,8 +33,10 @@ import {
 import {
   Add20Regular, Save20Regular, ArrowDownload20Regular, Delete20Regular, Search16Regular,
   ChevronDown20Regular, ChevronRight20Regular, CheckmarkCircle20Regular, Settings20Regular,
-  Money20Regular, Open16Regular,
+  Money20Regular, Open16Regular, Board20Regular,
 } from '@fluentui/react-icons';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
+import { LOOM_ACCENT } from '@/lib/components/shared/accent-tokens';
 import { SubscriptionNode, DomainNode, ServiceNode, ServiceIconChip } from './deploy-plan-nodes';
 import {
   SERVICE_CATALOG, SERVICE_CATEGORY_ORDER, servicesByCategory, serviceByKey, serviceVisual,
@@ -601,26 +603,30 @@ function PlannerInner() {
 
   return (
     <div className={s.root}>
-      <MessageBar intent="info">
-        <MessageBarBody>
-          <MessageBarTitle>Architecture builder</MessageBarTitle>
-          Plan from a catalog of {SERVICE_COUNT} Azure service types ({TOGGLEABLE_SERVICE_COUNT} have a
-          one-button bicep toggle; <Badge size="tiny" appearance="outline" color="warning">plan</Badge> services
-          are real Azure but not auto-provisioned by main.bicep yet, so they are not written as bicep params).
-          Drop services into domains, then <strong>select a placed service to configure its SKU / tier / runtime</strong> in
-          the inspector below the canvas. A node shows{' '}
-          <CheckmarkCircle20Regular style={{ verticalAlign: 'text-bottom', color: tokens.colorPaletteGreenForeground1, width: 14, height: 14 }} aria-hidden /> once you&apos;ve
-          set a value and a hollow dot while it still uses module defaults; <strong>Validate</strong> calls out any service
-          left on defaults or with an invalid value. Drag from a service&apos;s right edge to another to record a dependency.
-          Save persists to Cosmos. To
-          deploy, use <strong>Export bicep</strong> on a subscription — choose <code>.bicepparam</code> (drives the
-          maintained main.bicep) or a standalone <code>.bicep</code> template (your dependency arrows become module{' '}
-          <code>dependsOn</code>) — then run
-          {' '}<code>az deployment sub create</code>{' '}or trigger the deploy-fiab workflow. <strong>Estimate cost</strong> prices the selected
-          subscription against the public Azure Retail Prices API (best-effort list price). Domains come from{' '}
-          <a href="/admin/domains">Admin → Domains</a>.
-        </MessageBarBody>
-      </MessageBar>
+      <TeachingBanner
+        surfaceKey="deploy-planner"
+        title="Architecture builder"
+        accent={LOOM_ACCENT.teal}
+        icon={Board20Regular}
+        message={(
+          <>
+            Plan from a catalog of {SERVICE_COUNT} Azure service types ({TOGGLEABLE_SERVICE_COUNT} have a
+            one-button bicep toggle; <Badge size="tiny" appearance="outline" color="warning">plan</Badge> services
+            are real Azure but not auto-provisioned by main.bicep yet, so they are not written as bicep params).
+            Drop services into domains, then <strong>select a placed service to configure its SKU / tier / runtime</strong> in
+            the inspector below the canvas. A node shows{' '}
+            <CheckmarkCircle20Regular style={{ verticalAlign: 'text-bottom', color: tokens.colorPaletteGreenForeground1, width: 14, height: 14 }} aria-hidden /> once you&apos;ve
+            set a value and a hollow dot while it still uses module defaults; <strong>Validate</strong> calls out any service
+            left on defaults or with an invalid value. Drag from a service&apos;s right edge to another to record a dependency.
+            Save persists to Cosmos. To deploy, use <strong>Export bicep</strong> on a subscription — choose <code>.bicepparam</code> (drives the
+            maintained main.bicep) or a standalone <code>.bicep</code> template (your dependency arrows become module{' '}
+            <code>dependsOn</code>) — then run
+            {' '}<code>az deployment sub create</code>{' '}or trigger the deploy-fiab workflow. <strong>Estimate cost</strong> prices the selected
+            subscription against the public Azure Retail Prices API (best-effort list price). Domains come from{' '}
+            <a href="/admin/domains">Admin → Domains</a>.
+          </>
+        )}
+      />
 
       <div className={s.toolbar}>
         <Button appearance="primary" icon={<Add20Regular />} onClick={addSubscription}>Add subscription</Button>
