@@ -221,7 +221,7 @@ function ImageTab({ ws, onSaved }: { ws: Workspace; onSaved: (w: Workspace) => v
     setBusy(true);
     try {
       const dataUri = await readAsDataUri(file);
-      const r = await fetch(`/api/workspaces/${encodeURIComponent(ws.id)}/image`, {
+      const r = await clientFetch(`/api/workspaces/${encodeURIComponent(ws.id)}/image`, {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ dataUri }),
       });
       const j = await r.json();
@@ -234,7 +234,7 @@ function ImageTab({ ws, onSaved }: { ws: Workspace; onSaved: (w: Workspace) => v
   const remove = async () => {
     setBusy(true); setErr(null);
     try {
-      const r = await fetch(`/api/workspaces/${encodeURIComponent(ws.id)}/image`, { method: 'DELETE' });
+      const r = await clientFetch(`/api/workspaces/${encodeURIComponent(ws.id)}/image`, { method: 'DELETE' });
       const j = await r.json();
       if (!r.ok || j?.ok === false) { setErr(j?.error || `HTTP ${r.status}`); return; }
       onSaved((j.workspace ?? { ...ws, image: undefined }) as Workspace);
