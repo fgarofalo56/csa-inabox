@@ -32,6 +32,9 @@ import {
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
+import { GuidedEmptyState, type GuidedPath } from '@/lib/components/shared/guided-empty-state';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
+import { useRegisterRibbonCommands } from '@/lib/components/shared/ribbon-commands';
 
 const useStyles = makeStyles({
   pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, flex: 1, minHeight: 0, minWidth: 0, overflowY: 'auto' },
@@ -199,6 +202,11 @@ export function LakehouseShortcutEditor({ item, id }: Props) {
     } catch (e: any) { setMsg({ intent: 'error', text: e?.message || String(e) }); }
   }, [workspaceId, load]);
 
+  /** Open the create dialog preset to a specific source (guided empty-state paths). */
+  const openCreateWith = useCallback((src: SourceType) => {
+    resetForm(); setCSource(src); setCreateOpen(true);
+  }, []);
+
   const ribbon: RibbonTab[] = [
     { id: 'home', label: 'Home', groups: [
       { label: 'Shortcut', actions: [
@@ -208,9 +216,28 @@ export function LakehouseShortcutEditor({ item, id }: Props) {
     ]},
   ];
 
+  // SC-9 — publish ribbon actions to the shared command registry (Ctrl+Q / Alt+Q).
+  useRegisterRibbonCommands(ribbon, item.slug);
+
+  // SC-4 — guided launcher cards for the empty state, one per common source;
+  // each opens the real New-shortcut dialog preset to that connector.
+  const emptyPaths: GuidedPath[] = [
+    { key: 'internal', title: 'Internal lakehouse', body: 'Point at another Loom lakehouse medallion path.', icon: Folder20Regular, onClick: () => openCreateWith('internal') },
+    { key: 'adls', title: 'ADLS Gen2 / Blob', body: 'Reference an external Azure Data Lake or Blob container.', icon: Cloud20Regular, onClick: () => openCreateWith('adls') },
+    { key: 's3', title: 'Amazon S3', body: 'Read an AWS S3 (or S3-compatible) bucket in place.', icon: Server20Regular, onClick: () => openCreateWith('s3') },
+    { key: 'dataverse', title: 'Dataverse', body: 'Read Dataverse tables via the Synapse Link export.', icon: Database20Regular, onClick: () => openCreateWith('dataverse') },
+  ];
+
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon} commandSearch main={
       <div className={s.pad}>
+        {/* SC-6 — teaching banner: shortcuts read external data in place. */}
+        <TeachingBanner
+          surfaceKey="lakehouse-shortcut-inplace"
+          title="Read data where it lives — no copy"
+          message="A shortcut is a named pointer a lakehouse reads in place: ADLS Gen2, Azure Blob, Amazon S3, Google Cloud Storage, Dataverse, or another Loom lakehouse. Verify resolves the target through the real backend without copying a single byte — Azure-native, no OneLake or Fabric required."
+          learnMoreHref="https://learn.microsoft.com/fabric/onelake/onelake-shortcuts"
+        />
         <div className={s.toolbar}>
           <Badge appearance="filled" color="brand" icon={<Link20Regular />}>Lakehouse shortcut</Badge>
           <div className={s.field}>
@@ -378,7 +405,16 @@ export function LakehouseShortcutEditor({ item, id }: Props) {
         {!workspaceId && <Caption1>Select a workspace to list its lakehouse shortcuts.</Caption1>}
         {workspaceId && shortcuts === null && <Spinner size="small" label="Loading shortcuts…" labelPosition="after" />}
         {workspaceId && shortcuts && shortcuts.length === 0 && (
-          <MessageBar intent="info"><MessageBarBody>No shortcuts yet. Click <strong>New shortcut</strong> to point at external data (ADLS, Blob, S3, GCS, Dataverse, or another lakehouse) without copying it.</MessageBarBody></MessageBar>
+          // SC-4 — guided multi-path launcher; each card opens the real dialog.
+          <GuidedEmptyState
+            variant="block"
+            heroIcon={Link20Regular}
+            title="Create your first shortcut"
+            intro="Point this lakehouse at external data it can read in place. Pick a source to start — you can Verify it resolves before you create it."
+            paths={emptyPaths}
+            learnMoreHref="https://learn.microsoft.com/fabric/onelake/onelake-shortcuts"
+            ariaLabel="Create a lakehouse shortcut"
+          />
         )}
         {workspaceId && shortcuts && shortcuts.length > 0 && (
           <div className={s.tableWrap}>
