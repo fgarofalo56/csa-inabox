@@ -134,24 +134,55 @@ const useStyles = makeStyles({
   },
 });
 
-/** Measure an element's pixel size (ResizeObserver) so SVG can draw at 1:1. */
-function useElementSize<T extends HTMLElement>(): [React.RefObject<T | null>, { width: number; height: number }] {
+/**
+ * Sub-pixel epsilon for the ResizeObserver guard. A change smaller than this is
+ * layout jitter, not a real resize, and must NOT commit new state.
+ *
+ * Why > 0.5 and not exact equality: `ResizeObserver.contentRect` is fractional
+ * (e.g. 253.4px), and flex/percentage/SVG layouts routinely wobble it by a few
+ * tenths of a pixel between notifications. The previous guard rounded to an
+ * integer *before* comparing, so a wobble that straddles a .5 boundary (253.4 ↔
+ * 253.6) flipped the committed value by a whole pixel (253 ↔ 254) on every
+ * notification — the "same-value" bail never saw equal values, re-rendered the
+ * SVG, nudged the layout, and re-fired the observer: an unbounded
+ * observe → setState → relayout → observe loop that pegged the tab's CPU.
+ */
+const SIZE_EPSILON = 0.5;
+
+/**
+ * Measure an element's pixel size (ResizeObserver) so SVG can draw at 1:1.
+ * Exported for the render-loop regression test (report-canvas.test.tsx).
+ */
+export function useElementSize<T extends HTMLElement>(): [React.RefObject<T | null>, { width: number; height: number }] {
   const ref = React.useRef<T>(null);
   const [size, setSize] = React.useState({ width: 0, height: 0 });
+  // Last raw (unrounded) geometry we committed, kept in a ref so the observer
+  // callback always compares against the real current value (never a stale
+  // closure) and only commits when the change exceeds sub-pixel jitter.
+  const lastRaw = React.useRef({ width: -1, height: -1 });
   React.useEffect(() => {
     const el = ref.current;
     if (!el) return;
+    const measure = (rawWidth: number, rawHeight: number) => {
+      const last = lastRaw.current;
+      // Epsilon-compare the RAW values before rounding: ignore layout jitter so
+      // a sub-pixel wobble can't drive a re-render → re-measure feedback loop.
+      if (Math.abs(rawWidth - last.width) <= SIZE_EPSILON && Math.abs(rawHeight - last.height) <= SIZE_EPSILON) {
+        return;
+      }
+      lastRaw.current = { width: rawWidth, height: rawHeight };
+      const width = Math.round(rawWidth);
+      const height = Math.round(rawHeight);
+      // Belt-and-suspenders: also bail if the rounded value is unchanged so an
+      // over-threshold raw wobble that rounds to the same integer still no-ops.
+      setSize((prev) => (prev.width === width && prev.height === height ? prev : { width, height }));
+    };
     const ro = new ResizeObserver((entries) => {
       const r = entries[0]?.contentRect;
-      if (!r) return;
-      const width = Math.round(r.width);
-      const height = Math.round(r.height);
-      // Bail when the measured size is unchanged so a same-value ResizeObserver
-      // notification can't trigger a re-render → re-measure feedback loop.
-      setSize((prev) => (prev.width === width && prev.height === height ? prev : { width, height }));
+      if (r) measure(r.width, r.height);
     });
     ro.observe(el);
-    setSize({ width: el.clientWidth, height: el.clientHeight });
+    measure(el.clientWidth, el.clientHeight);
     return () => ro.disconnect();
   }, []);
   return [ref, size];
