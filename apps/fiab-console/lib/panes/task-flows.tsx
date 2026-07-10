@@ -57,6 +57,7 @@ import {
   CanvasNode, CanvasEdge, portStyle, CATEGORY_ACCENT,
   type CanvasVisual,
 } from '@/lib/components/canvas/canvas-node-kit';
+import { ResizableCanvasRegion } from '@/lib/components/canvas/resizable-canvas';
 
 /**
  * Theme-aware step accent. Task-flow steps are a single visual family, so they
@@ -72,7 +73,9 @@ const useStyles = makeStyles({
   toolbar: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
   spacer: { flex: 1 },
   canvasShell: {
-    position: 'relative', height: '560px', minHeight: '400px',
+    // Fills the user-resizable ResizableCanvasRegion (default 560px, persisted
+    // per-surface, bounded 400px–80vh). React Flow needs this definite height.
+    position: 'relative', height: '100%', minHeight: 0,
     border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge,
     overflow: 'hidden', backgroundColor: tokens.colorNeutralBackground3,
   },
@@ -466,7 +469,13 @@ function TaskFlowCanvasInner({ workspaceId, flow, items, onBack }: CanvasProps) 
         </Button>
       </div>
       {error && <MessageBar intent="error"><MessageBarBody>{error}</MessageBarBody></MessageBar>}
-      <div className={s.canvasShell}>
+      <ResizableCanvasRegion
+        storageKey="task-flow"
+        defaultPx={560}
+        minPx={400}
+        ariaLabel="Resize task flow canvas height"
+        className={s.canvasShell}
+      >
         <ReactFlow
           nodes={nodes}
           edges={edges}
@@ -486,7 +495,7 @@ function TaskFlowCanvasInner({ workspaceId, flow, items, onBack }: CanvasProps) 
             <Button size="small" appearance="primary" icon={<Add20Regular />} onClick={openAddStep}>Add step</Button>
           </Panel>
         </ReactFlow>
-      </div>
+      </ResizableCanvasRegion>
       <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
         Drag steps to arrange them. Drag from a step&apos;s right edge to another step&apos;s left edge to connect them.
         Double-click a step to edit it.

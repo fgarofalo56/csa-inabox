@@ -50,6 +50,7 @@ import { clientFetch } from '@/lib/client-fetch';
 import {
   accentGradient, accentTint, CATEGORY_ACCENT, CanvasRightRail,
 } from '@/lib/components/canvas/canvas-node-kit';
+import { ResizableCanvasRegion } from '@/lib/components/canvas/resizable-canvas';
 import {
   readEntityGraph, cardinalityMarkers,
   type EntityGraph, type EntitySource, type EntityTable, type EntityColumn,
@@ -77,6 +78,15 @@ export interface EntityDiagramProps {
   fetchImpl?: EntityFetch;
   /** Canvas height. Default 560. */
   height?: number | string;
+  /**
+   * Opt into a user-draggable, persisted canvas HEIGHT (ADF/Fabric-grade resize
+   * grip). When set — and `height` is a finite number — the diagram canvas is
+   * wrapped in the shared {@link ResizableCanvasRegion}, keyed under
+   * `loom.canvasHeight.<resizeStorageKey>`, so the operator can drag or keyboard-
+   * resize the schema canvas and the choice persists per surface. `height`
+   * becomes the initial size. Omit to keep the fixed-height canvas unchanged.
+   */
+  resizeStorageKey?: string;
   /** Optional heading above the toggle. */
   title?: string;
 }
@@ -629,7 +639,7 @@ export function EntityDiagram(props: EntityDiagramProps) {
   const s = useStyles();
   const {
     source, view, defaultView = 'diagram', onViewChange, onSelectTable,
-    graph: providedGraph, fetchImpl, height = 560, title,
+    graph: providedGraph, fetchImpl, height = 560, title, resizeStorageKey,
   } = props;
 
   const [internalView, setInternalView] = useState<EntityDiagramView>(defaultView);
@@ -658,6 +668,13 @@ export function EntityDiagram(props: EntityDiagramProps) {
   }, [source.kind, source.itemId, source.workspaceId, source.containers, providedGraph]);
 
   const hasTables = !!graph && graph.tables.length > 0;
+
+  // When the canvas is wrapped in a resizable region (opt-in), the region owns
+  // the pixel height and the inner React Flow must fill it (100%) instead of
+  // re-imposing the fixed `height` — otherwise dragging the grip wouldn't move
+  // the canvas. Non-resizable hosts keep the exact fixed height as before.
+  const resizable = !!resizeStorageKey && typeof height === 'number';
+  const canvasHeight: number | string = resizable ? '100%' : height;
 
   const body = useMemo(() => {
     if (loading) {
@@ -700,10 +717,10 @@ export function EntityDiagram(props: EntityDiagramProps) {
     }
     return (
       <ReactFlowProvider>
-        <DiagramCanvas graph={graph!} onSelectTable={onSelectTable} height={height} />
+        <DiagramCanvas graph={graph!} onSelectTable={onSelectTable} height={canvasHeight} />
       </ReactFlowProvider>
     );
-  }, [loading, error, graph, hasTables, activeView, height, onSelectTable, s]);
+  }, [loading, error, graph, hasTables, activeView, canvasHeight, onSelectTable, s]);
 
   return (
     <div className={s.root}>
@@ -723,9 +740,23 @@ export function EntityDiagram(props: EntityDiagramProps) {
           <MessageBarBody>{graph.notice}</MessageBarBody>
         </MessageBar>
       )}
-      <div className={s.canvasWrap} style={{ height }}>
-        {body}
-      </div>
+      {resizable ? (
+        // Opt-in draggable/persisted canvas height (ADF/Fabric-grade). The region
+        // supplies the definite pixel height React Flow needs; canvasWrap fills it.
+        <ResizableCanvasRegion
+          storageKey={resizeStorageKey!}
+          defaultPx={height as number}
+          minPx={320}
+          ariaLabel="Resize entity diagram canvas height"
+          className={s.canvasWrap}
+        >
+          <div style={{ height: '100%', minHeight: 0 }}>{body}</div>
+        </ResizableCanvasRegion>
+      ) : (
+        <div className={s.canvasWrap} style={{ height }}>
+          {body}
+        </div>
+      )}
     </div>
   );
 }

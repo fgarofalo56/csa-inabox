@@ -58,6 +58,7 @@ import {
   type DltDatasetNode, type DltExpectationNode, type DltEdge, type DltChannel,
   type DltFileFormat, type DltExpectationAction,
 } from './dlt-spec';
+import { ResizableCanvasRegion } from '@/lib/components/canvas/resizable-canvas';
 
 const NODE_WIDTH = 210;
 
@@ -132,7 +133,9 @@ const useStyles = makeStyles({
     alignItems: 'stretch',
   },
   canvasWrap: {
-    height: '520px', minWidth: 0,
+    // Fills the user-resizable ResizableCanvasRegion (default 520px, persisted
+    // per-surface, bounded 320px–80vh). React Flow needs this definite height.
+    height: '100%', minWidth: 0,
     border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge,
     overflow: 'hidden', background: tokens.colorNeutralBackground2,
   },
@@ -537,7 +540,13 @@ export function DatabricksPipelineEditor({ item, id }: { item: FabricItemType; i
             <Button size="small" icon={<CheckmarkCircle20Regular />} onClick={() => addNode('expectation')}>Expectation</Button>
           </div>
           <div className={s.body}>
-            <div className={s.canvasWrap}>
+            <ResizableCanvasRegion
+              storageKey="databricks-dlt-pipeline"
+              defaultPx={520}
+              minPx={320}
+              ariaLabel="Resize DLT pipeline canvas height"
+              className={s.canvasWrap}
+            >
               <ReactFlowProvider>
                 <ReactFlow
                   nodes={flowNodes}
@@ -562,7 +571,7 @@ export function DatabricksPipelineEditor({ item, id }: { item: FabricItemType; i
                   )}
                 </ReactFlow>
               </ReactFlowProvider>
-            </div>
+            </ResizableCanvasRegion>
 
             <div className={s.inspector}>
               {selectedNode

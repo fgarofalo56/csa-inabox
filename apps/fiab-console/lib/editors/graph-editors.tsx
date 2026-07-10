@@ -200,7 +200,7 @@ export function CosmosGremlinGraphEditor({ item, id }: { item: FabricItemType; i
   return (
     <ItemEditorChrome
       item={item} id={id}
-      ribbon={ribbon} commandSearch
+      ribbon={ribbon} commandSearch splitKeyPrefix={item.slug}
       leftPanel={
         <div className={s.treePad}>
           <div className={s.field}><Label>Gremlin endpoint (server-bound)</Label>
@@ -320,7 +320,7 @@ export function CypherGraphEditor({ item, id }: { item: FabricItemType; id: stri
   return (
     <ItemEditorChrome
       item={item} id={id}
-      ribbon={ribbon} commandSearch
+      ribbon={ribbon} commandSearch splitKeyPrefix={item.slug}
       leftPanel={<div className={s.treePad}>
         <Caption1>Cypher → KQL bridge. Backed by ADX <code>make-graph</code> + <code>graph-match</code>.</Caption1>
         <div className={s.field} style={{ marginTop: tokens.spacingVerticalS }}>
@@ -499,7 +499,7 @@ export function GqlGraphEditor({ item, id }: { item: FabricItemType; id: string 
   return (
     <ItemEditorChrome
       item={item} id={id}
-      ribbon={ribbon} commandSearch
+      ribbon={ribbon} commandSearch splitKeyPrefix={item.slug}
       leftPanel={
         <div className={s.treePad}>
           <Caption1>ISO GQL / openCypher. Pick a language and backend below.</Caption1>
@@ -950,7 +950,7 @@ export function VectorStoreEditor({ item, id }: { item: FabricItemType; id: stri
   return (
     <ItemEditorChrome
       item={item} id={id}
-      ribbon={ribbon} commandSearch
+      ribbon={ribbon} commandSearch splitKeyPrefix={item.slug}
       leftPanel={
         <div className={s.treePad}>
           <div className={s.sectionHeader}>
