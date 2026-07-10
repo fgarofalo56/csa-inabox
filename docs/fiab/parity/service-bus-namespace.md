@@ -65,3 +65,18 @@ Wired into the DLZ orchestrator (`landing-zone/main.bicep`, section 5b) behind
 key → `LOOM_SERVICEBUS_NAMESPACE/RG/SUB`) and re-pointed cross-sub by
 `landing-zone/hub-console-dlz-env.bicep`. When `deployServiceBus=false` the name
 is blank, so the editor honest-gates instead of 502-ing (`no-vaporware.md`).
+
+## UX-baseline lift (UX-Wave 2 · UX-205)
+
+A UX-only lift adopting shared UX-baseline components; all ARM/data-plane calls
+(namespace/queues/topics/subscriptions/rules/SAS/networking) are unchanged.
+
+| # | Bar item (SC) | State | Where |
+| --- | --- | --- | --- |
+| 9 | Right details panel + copyable URI (SC-2) | ✅ built | Overview tab renders `DetailsPanel` — namespace stat rows (location, SKU/tier, provisioning, local-auth, min-TLS, queue/topic counts), a **copyable namespace endpoint URI** row, and a find-by-name **Related entities** list (queues + topics) that cross-navigates to their tabs |
+| 6 | Guided multi-path empty state (SC-4) | ✅ built | Empty Queues and Topics tabs render `GuidedEmptyState` launcher cards that open the real create dialog (`openCreate('queue' \| 'topic')`) + Learn-more |
+| 12 | Teaching banner (SC-6) | ✅ built | `TeachingBanner surfaceKey="service-bus-messaging"` — queues vs topics guidance, persistent dismiss + Learn-more |
+| 11 | Command search Ctrl+Q / Alt+Q (SC-9) | ✅ built | `commandSearch` + `useRegisterRibbonCommands(ribbon, item.slug)` publishes Refresh / New queue / New topic / every View action |
+| 13 | Typed explorer tree + context menu (SC-7) | ⚠️ honest-defer | The topic→subscription→rule drill-in is a working lazy-loaded table hierarchy; migrating it onto `ExplorerTree` is a larger rewrite deferred to the B-sweep rather than reshape the working navigator in this UX-lift |
+
+Test: `lib/editors/__tests__/service-bus-namespace.test.tsx` (banner + guided-empty + DetailsPanel copyable endpoint).
