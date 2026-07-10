@@ -1,0 +1,19 @@
+{
+  "_comment": "Golden file for the PSR-1 smoothing test. spreadCases pin the Fabric-worked-example amortisation (a 1-CU-hour = 3600 CU-second background job spreads to 1.25 LCU per timepoint across 2,880 timepoints). decideCases pin every four-stage-throttle boundary.",
+  "spreadCases": [
+    { "name": "1-CU-hour background over F2 amortises to 1.25 LCU/timepoint (Learn worked example)", "totalLcu": 3600, "class": "background", "expectedPerTimepoint": 1.25 },
+    { "name": "600 LCU interactive over 10 timepoints = 60 LCU/timepoint (exactly the F2 per-timepoint cap)", "totalLcu": 600, "class": "interactive", "expectedPerTimepoint": 60 },
+    { "name": "3600 CU-seconds interactive over 10 timepoints = 360 LCU/timepoint", "totalLcu": 3600, "class": "interactive", "expectedPerTimepoint": 360 }
+  ],
+  "decideCases": [
+    { "name": "no carry-forward → allow (interactive)", "carryForwardSeconds": 0, "class": "interactive", "expected": "allow", "expectedDelayMs": 0 },
+    { "name": "5 min burst under overage protection → allow (interactive)", "carryForwardSeconds": 300, "class": "interactive", "expected": "allow", "expectedDelayMs": 0 },
+    { "name": "just under overage-protection ceiling → allow", "carryForwardSeconds": 599, "class": "interactive", "expected": "allow", "expectedDelayMs": 0 },
+    { "name": "15 min sustained over capacity → interactive delayed 20s", "carryForwardSeconds": 900, "class": "interactive", "expected": "delay", "expectedDelayMs": 20000 },
+    { "name": "15 min sustained → background still admitted", "carryForwardSeconds": 900, "class": "background", "expected": "allow", "expectedDelayMs": 0 },
+    { "name": "65 min over capacity → interactive rejected", "carryForwardSeconds": 3900, "class": "interactive", "expected": "reject", "expectedDelayMs": 0 },
+    { "name": "65 min over capacity → background still admitted", "carryForwardSeconds": 3900, "class": "background", "expected": "allow", "expectedDelayMs": 0 },
+    { "name": "beyond 24 h of committed capacity → all rejected (background)", "carryForwardSeconds": 90000, "class": "background", "expected": "reject", "expectedDelayMs": 0 },
+    { "name": "beyond 24 h of committed capacity → all rejected (interactive)", "carryForwardSeconds": 90000, "class": "interactive", "expected": "reject", "expectedDelayMs": 0 }
+  ]
+}
