@@ -125,6 +125,8 @@ var databases = [
 //   folders           ← F10 nested folder hierarchy (PK /workspaceId)
 //   task-flows        ← F11 task-flow visual step sequences (PK /workspaceId).
 //     Loom-native (Fabric workspace "task flow" parity, no Fabric dependency).
+//   task-flow-runs    ← F11 task-flow EXECUTION run history (PK /workspaceId).
+//     Loom-native — Fabric task flows can't execute, so this exceeds Fabric.
 //   lakehouse-shortcuts (PK /lakehouseId)  ← OneLake-parity internal shortcuts
 //     registry (Azure-native, no Fabric). Internal shortcuts need no extra
 //     RBAC beyond the UAMI's existing Storage Blob Data Reader on the
@@ -171,6 +173,7 @@ var loomContainers = [
   { name: 'loom-workspaces',   partitionKey: '/tenantId' }
   { name: 'workspace-folders', partitionKey: '/workspaceId' }
   { name: 'task-flows',        partitionKey: '/workspaceId' }
+  { name: 'task-flow-runs',    partitionKey: '/workspaceId' }
   { name: 'embed-codes',       partitionKey: '/tenantId' }
   { name: 'org-visuals',       partitionKey: '/tenantId' }
   { name: 'azure-connections', partitionKey: '/tenantId' }
