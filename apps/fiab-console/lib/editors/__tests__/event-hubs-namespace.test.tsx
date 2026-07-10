@@ -53,6 +53,9 @@ describe('EventHubsNamespaceEditor — UX baseline', () => {
     fireEvent.click(overviewTab);
     // SC-2 DetailsPanel — title + copyable namespace endpoint URI.
     expect(await screen.findByText(/Namespace details/i)).toBeInTheDocument();
-    expect(screen.getByText(/servicebus\.windows\.net/i)).toBeInTheDocument();
+    // Assert the full endpoint URI exactly (anchored) rather than a loose
+    // host substring — a partial host regex on a URL is an incomplete
+    // URL-substring check (CodeQL js/incomplete-url-substring-sanitization).
+    expect(screen.getByText('https://ehns-loom.servicebus.windows.net:443/')).toBeInTheDocument();
   });
 });
