@@ -2112,6 +2112,10 @@ module dpMlWorkspace 'modules/deploy-planner/ml-workspace.bicep' = if (useSingle
     consolePrincipalId: dpConsolePrincipalId
     skipRoleGrants: skipRoleGrants
     complianceTags: complianceTags
+    // Route AML workspace diagnostics (AmlComputeJobEvent / AmlComputeClusterEvent /
+    // Spark job telemetry) to the central Loom LAW — universal Spark telemetry.
+    // Empty in dlz-attach with no hub LAW coordinate → diag skipped honestly.
+    workspaceId: effHubLawId
   }
 }
 

@@ -1,6 +1,6 @@
 'use client';
 
-import { clientFetch } from '@/lib/client-fetch';
+import { clientFetch, CROSS_SUB_FETCH_TIMEOUT_MS } from '@/lib/client-fetch';
 /**
  * Loom Setup Wizard — PRP-04 (redesigned multi-step wizard)
  *
@@ -634,7 +634,9 @@ export function SetupWizardPane() {
     setSubsLoading(true);
     setSubsError(undefined);
     try {
-      const res = await clientFetch('/api/setup/subscriptions');
+      // Cross-sub ARM list — generous budget (server SWR-caches) so a large
+      // tenant's multi-second walk doesn't hit the 6s spinner cliff.
+      const res = await clientFetch('/api/setup/subscriptions', undefined, CROSS_SUB_FETCH_TIMEOUT_MS);
       const ct = res.headers.get('content-type') || '';
       if (!ct.includes('application/json')) {
         const t = await res.text().catch(() => '');
@@ -665,7 +667,9 @@ export function SetupWizardPane() {
     setExistingLoading(true);
     setExistingError(undefined);
     try {
-      const res = await clientFetch('/api/setup/existing-dlzs');
+      // Resource Graph DLZ scan spans every visible subscription — generous
+      // cross-sub budget (SWR-cached server-side).
+      const res = await clientFetch('/api/setup/existing-dlzs', undefined, CROSS_SUB_FETCH_TIMEOUT_MS);
       const j = await res.json().catch(() => ({}));
       if (!res.ok || !j.ok) {
         setExistingError(j.error || j.hint || `Could not discover existing DLZs (HTTP ${res.status}).`);
@@ -840,7 +844,7 @@ export function SetupWizardPane() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
-      });
+      }, CROSS_SUB_FETCH_TIMEOUT_MS);
       const ct = res.headers.get('content-type') || '';
       if (!ct.includes('application/json')) {
         const t = await res.text().catch(() => '');
