@@ -22,7 +22,7 @@ import {
   Tree, TreeItem, TreeItemLayout, Select,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   MessageBar, MessageBarBody, MessageBarTitle, MessageBarActions,
-  Menu, MenuTrigger, MenuList, MenuItem, MenuPopover, Field,
+  Menu, MenuTrigger, MenuList, MenuItem, MenuPopover, Field, Switch,
   Dialog, DialogTrigger, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
   makeStyles, tokens,
 } from '@fluentui/react-components';
@@ -32,7 +32,7 @@ import {
   Copy20Regular, Info16Regular, ChevronDown20Regular, ChevronUp20Regular, Server20Regular,
   Notebook16Regular, Database16Regular, History16Regular, Database24Regular, Stop20Regular,
   FolderAdd20Regular, Folder20Filled, FolderArrowRight20Regular, ArrowSort20Regular,
-  Flash16Regular,
+  Flash16Regular, CalendarClock20Regular, CalendarClock16Regular,
 } from '@fluentui/react-icons';
 import { EmptyState } from '@/lib/components/empty-state';
 import {
@@ -62,7 +62,12 @@ import { CopilotChatPane } from '@/lib/components/notebook/copilot-chat-pane';
 import { setCopilotContext } from '@/lib/components/copilot-pane';
 import { VariablesPane, type VarRow } from '@/lib/components/notebook/variables-pane';
 import { DataWranglerPanel } from '@/lib/components/notebook/data-wrangler-panel';
-import { type NotebookCell, type NotebookCellLang, emptyCell, migrateLegacyState } from '@/lib/types/notebook-cell';
+import { type NotebookCell, type NotebookCellLang, type NotebookResourceFile, emptyCell, migrateLegacyState } from '@/lib/types/notebook-cell';
+import { ScheduleWizard, type ScheduleCreateParams } from '@/lib/components/notebook/schedule-wizard';
+import { ParametersDialog } from '@/lib/components/notebook/parameters-dialog';
+import { ResourcesPane } from '@/lib/components/notebook/resources-pane';
+import { OutlinePane } from '@/lib/components/notebook/outline-pane';
+import { RunProgress, type SparkRunProgress } from '@/lib/components/notebook/run-progress';
 import { registerBridge } from '@/lib/copilot/apply-change';
 import { runtimeFromComputeKind, starterCellFor, RUNTIME_LABEL, type ClusterRuntime } from '@/lib/components/editor/cluster-runtime';
 import { useSharedEditorStyles } from './shared-styles';
@@ -126,6 +131,17 @@ const useLocalStyles = makeStyles({
     transition: 'box-shadow 120ms ease, border-color 120ms ease',
     ':hover': { boxShadow: tokens.shadow16, border: `1px solid ${tokens.colorBrandStroke1}` },
   },
+  // Notebook schedules card (R4-NB-1) — matches the Synapse flavor's schedule card.
+  scheduleCard: {
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS,
+    padding: tokens.spacingVerticalM,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge,
+    backgroundColor: tokens.colorNeutralBackground1, boxShadow: tokens.shadow4,
+  },
+  scheduleHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
+  cardSpacer: { flex: 1 },
+  // "Parameters" chip rendered above a parameters-tagged code cell (R4-NB-2).
+  paramBadgeRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, marginBottom: tokens.spacingVerticalXXS },
 });
 
 function useStyles() {
@@ -147,6 +163,18 @@ interface AttachedSource {
   id: string;
   displayName: string;
   isDefault?: boolean;
+}
+
+/** Shaped AML schedule row returned by /api/notebook/[id]/schedule (R4-NB-1). */
+interface AmlScheduleRow {
+  name: string;
+  displayName?: string;
+  isEnabled: boolean;
+  provisioningState?: string;
+  frequency?: string;
+  interval?: number;
+  startTime?: string;
+  timeZone?: string;
 }
 
 function useWorkspaces() {
@@ -194,6 +222,24 @@ function starterCells(): NotebookCell[] {
     { ...emptyCell('markdown'), source: '# New notebook\n\nDouble-click to edit. Use **+ Code** between cells to add code cells.' },
     { ...emptyCell('code', 'pyspark'), source: STARTER_PY },
   ];
+}
+
+/** Split a cell source into ipynb `source` lines (each keeps its trailing \n). */
+function splitKeep(source: string): string[] {
+  const parts = (source || '').split('\n');
+  return parts.map((l, i) => (i < parts.length - 1 ? l + '\n' : l));
+}
+
+/** Trigger a client-side download of a JSON object as a file. */
+function downloadJson(filename: string, data: unknown): void {
+  try {
+    const blob = new Blob([JSON.stringify(data, null, 1)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } catch { /* download blocked — no-op */ }
 }
 
 function decodePy(b64: string): string {
@@ -465,6 +511,55 @@ export function NotebookEditor({ item, id }: Props) {
   // selected so a brand-new notebook still surfaces the picker.
   const [setupOpen, setSetupOpen] = useState(false);
   const autoOpenedSetupRef = useRef(false);
+
+  // ── R4-NB-1 Scheduling (AML job schedules — recurrence only) ──────────────
+  const [scheduleWizardOpen, setScheduleWizardOpen] = useState(false);
+  const [schedules, setSchedules] = useState<AmlScheduleRow[]>([]);
+  const [schedulesConfigured, setSchedulesConfigured] = useState<boolean | null>(null);
+  const [scheduleGateHint, setScheduleGateHint] = useState<string | null>(null);
+  const [scheduleBusy, setScheduleBusy] = useState(false);
+  const [scheduleError, setScheduleError] = useState<string | null>(null);
+
+  // ── R4-NB-2 Parameters (papermill) ────────────────────────────────────────
+  const [paramsDialogOpen, setParamsDialogOpen] = useState(false);
+
+  // ── R4-NB-3 Resources pane (Loom-native file bundle) ──────────────────────
+  const [resources, setResources] = useState<NotebookResourceFile[]>([]);
+  const [resourcesOpen, setResourcesOpen] = useState(false);
+
+  // ── R4-NB-6 Outline nav ───────────────────────────────────────────────────
+  const [outlineOpen, setOutlineOpen] = useState(false);
+  // Per-cell wrapper refs so the outline can scroll a heading's cell into view.
+  const cellRefs = useRef<Record<string, HTMLDivElement | null>>({});
+
+  // ── R4-NB-4 Real-time Spark progress ──────────────────────────────────────
+  // Per-cell progress payload from the run poll (shared with R4-SYN-5's poll
+  // surface). Until that server field lands, RunProgress shows an honest
+  // indeterminate bar keyed to the phase + elapsed seconds below.
+  const [cellProgress, setCellProgress] = useState<Record<string, SparkRunProgress>>({});
+  const [runPhase, setRunPhase] = useState<string | null>(null);
+  const cellRunStartRef = useRef<Record<string, number>>({});
+  const [nowTs, setNowTs] = useState<number>(() => Date.now());
+  const clearCellProgress = useCallback((cellId: string) => {
+    delete cellRunStartRef.current[cellId];
+    setCellProgress((prev) => {
+      if (!(cellId in prev)) return prev;
+      const next = { ...prev }; delete next[cellId]; return next;
+    });
+  }, []);
+
+  // ── R4-NB-8 Inline rename ──────────────────────────────────────────────────
+  const [renameOpen, setRenameOpen] = useState(false);
+  const [renameValue, setRenameValue] = useState('');
+  const [renameBusy, setRenameBusy] = useState(false);
+
+  // Tick a 1s clock only while a run is in flight, so RunProgress can show an
+  // honest elapsed-seconds counter without a permanent timer.
+  useEffect(() => {
+    if (sessionStatus !== 'Running' && !running) return;
+    const t = setInterval(() => setNowTs(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [sessionStatus, running]);
 
   // Schema hint for inline code completion (ghost text): the attached
   // lakehouse / warehouse / KQL sources. Grounds AOAI suggestions in the
@@ -834,6 +929,8 @@ export function NotebookEditor({ item, id }: Props) {
       // Library & Environment: attached AML env + custom libraries.
       setAttachedAmlEnv(j.definition?.attachedAmlEnv || null);
       setCustomLibraries(Array.isArray(j.definition?.customLibraries) ? j.definition.customLibraries : []);
+      // R4-NB-3 resource files bundled with the notebook.
+      setResources(Array.isArray(j.definition?.resources) ? j.definition.resources : []);
       // Session sizing config (Configure session dialog). Defaults when unset.
       setSessionCfg(j.definition?.sessionConfig
         ? normalizeSessionConfig(j.definition.sessionConfig)
@@ -1057,7 +1154,7 @@ export function NotebookEditor({ item, id }: Props) {
       const r = await clientFetch(`/api/items/notebook/${encodeURIComponent(notebookId)}?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ definition: { cells: cellsForSave, defaultLang, attachedSources, attachedAmlEnv, customLibraries } }),
+        body: JSON.stringify({ definition: { cells: cellsForSave, defaultLang, attachedSources, attachedAmlEnv, customLibraries, resources } }),
       });
       const j = await r.json();
       if (!j.ok) {
@@ -1071,7 +1168,7 @@ export function NotebookEditor({ item, id }: Props) {
       setDetailErr(e?.message || String(e));
       setRunMsg(`Save failed: ${e?.message || e}`);
     } finally { setSaving(false); }
-  }, [workspaceId, notebookId, cells, defaultLang, attachedSources, attachedAmlEnv, customLibraries]);
+  }, [workspaceId, notebookId, cells, defaultLang, attachedSources, attachedAmlEnv, customLibraries, resources]);
 
   // Debounced autosave (rel-T70): once the notebook is loaded and the user has
   // made an edit (dirty), persist via the EXISTING save() after ~2.5s of quiet.
@@ -1393,7 +1490,8 @@ export function NotebookEditor({ item, id }: Props) {
     // Mark each pending so the user sees per-cell progress, and track which have
     // received output so none is left on an eternal spinner (R3 #2/#3).
     const runnableCellIds = cells.filter((c) => c.type === 'code' && c.source.trim()).map((c) => c.id);
-    runnableCellIds.forEach((id) => patchCell(id, { output: { status: 'pending' } }));
+    const runStartNow = Date.now();
+    runnableCellIds.forEach((id) => { patchCell(id, { output: { status: 'pending' } }); cellRunStartRef.current[id] = runStartNow; });
     const appliedCells = new Set<string>();
     const applyCellOutputs = (map: Record<string, any> | undefined | null) => {
       if (!map || typeof map !== 'object') return;
@@ -1469,6 +1567,13 @@ export function NotebookEditor({ item, id }: Props) {
         if (p.runId && p.runId !== runId) runId = p.runId; // promotion when statement is submitted
         const phase = p.phase ? ` · ${p.phase}` : '';
         setRunMsg(`Status: ${p.status}${phase}`);
+        // R4-NB-4 — real-time Spark progress under whichever cell is still pending.
+        setRunPhase(p.phase || p.status || null);
+        if (p.progress && typeof p.progress === 'object') {
+          // Attribute run-all progress to the cell the poll says is in flight.
+          const activeId = runnableCellIds.find((id) => !appliedCells.has(id));
+          if (activeId) setCellProgress((prev) => ({ ...prev, [activeId]: p.progress as SparkRunProgress }));
+        }
         // Patch each cell's output the moment its statement completes (R3 #2).
         applyCellOutputs(p.cellOutputs);
         // Stay fast while a statement runs on a warm session; back off to 2s only
@@ -1520,8 +1625,170 @@ export function NotebookEditor({ item, id }: Props) {
         });
       }
       loadJobs(workspaceId, notebookId);
-    } finally { setRunning(false); }
+    } finally {
+      setRunning(false);
+      setRunPhase(null);
+      setCellProgress({}); cellRunStartRef.current = {}; // R4-NB-4 cleanup
+    }
   }, [workspaceId, notebookId, computeId, cells, patchCell, sessionConfigBody, pollRunStatus, loadJobs]);
+
+  // Always-fresh ref to run() so a parameterized run fires the LATEST closure
+  // after we inject the override cell + re-render (R4-NB-2).
+  const runRef = useRef(run);
+  useEffect(() => { runRef.current = run; }, [run]);
+
+  // ── R4-NB-1 Scheduling handlers (AML job schedules, recurrence only) ────────
+  const refreshSchedules = useCallback(async () => {
+    if (!notebookId) { setSchedules([]); setSchedulesConfigured(null); return; }
+    try {
+      const r = await clientFetch(`/api/notebook/${encodeURIComponent(notebookId)}/schedule`);
+      const j = await r.json();
+      if (j?.configured === false) { setSchedulesConfigured(false); setScheduleGateHint(j.hint || null); setSchedules([]); }
+      else if (j?.ok) { setSchedulesConfigured(true); setScheduleGateHint(null); setSchedules(j.schedules || []); }
+    } catch { /* leave prior state — non-fatal */ }
+  }, [notebookId]);
+  useEffect(() => { refreshSchedules(); }, [refreshSchedules]);
+
+  const createSchedule = useCallback(async (params: ScheduleCreateParams) => {
+    if (!notebookId) return;
+    setScheduleBusy(true); setScheduleError(null);
+    try {
+      const r = await clientFetch(`/api/notebook/${encodeURIComponent(notebookId)}/schedule`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(params),
+      });
+      const j = await r.json();
+      if (j?.configured === false) { setScheduleError(j?.hint || 'Notebook scheduling not configured'); return; }
+      if (!j?.ok) { setScheduleError(j?.error || 'Create failed'); return; }
+      setScheduleWizardOpen(false);
+      setRunMsg(`Schedule "${j.schedule?.displayName || j.schedule?.name}" created — every ${j.schedule?.interval} ${String(j.schedule?.frequency || '').toLowerCase()}.`);
+      await refreshSchedules();
+    } catch (e: any) { setScheduleError(e?.message || String(e)); }
+    finally { setScheduleBusy(false); }
+  }, [notebookId, refreshSchedules]);
+
+  const toggleSchedule = useCallback(async (scheduleName: string, isEnabled: boolean) => {
+    if (!notebookId) return;
+    try {
+      const r = await clientFetch(`/api/notebook/${encodeURIComponent(notebookId)}/schedule`, {
+        method: 'PATCH', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ scheduleName, isEnabled }),
+      });
+      const j = await r.json();
+      if (j?.ok) await refreshSchedules(); else setRunMsg(j?.error || j?.hint || 'Schedule update failed');
+    } catch (e: any) { setRunMsg(e?.message || String(e)); }
+  }, [notebookId, refreshSchedules]);
+
+  const deleteSchedule = useCallback(async (scheduleName: string) => {
+    if (!notebookId) return;
+    try {
+      const r = await clientFetch(`/api/notebook/${encodeURIComponent(notebookId)}/schedule?scheduleName=${encodeURIComponent(scheduleName)}`, { method: 'DELETE' });
+      const j = await r.json();
+      if (j?.ok) { setRunMsg('Schedule deleted.'); await refreshSchedules(); }
+      else setRunMsg(j?.error || j?.hint || 'Schedule delete failed');
+    } catch (e: any) { setRunMsg(e?.message || String(e)); }
+  }, [notebookId, refreshSchedules]);
+
+  // ── R4-NB-2 Parameters (papermill) ─────────────────────────────────────────
+  const parametersCell = useMemo(() => cells.find((c) => c.type === 'code' && c.parameters) || null, [cells]);
+  const markParametersCell = useCallback((cellId: string) => {
+    // Exactly ONE parameters cell — tagging a new one clears the old tag.
+    setCells((prev) => prev.map((c) => c.id === cellId
+      ? { ...c, parameters: !c.parameters }
+      : (c.parameters ? { ...c, parameters: false } : c)));
+    setDirty(true);
+  }, []);
+
+  // Inject an override cell right after the parameters cell (papermill), persist
+  // so the run route sees it, then fire the freshest run() (R4-NB-2).
+  const runWithParameters = useCallback(async (overrides: Record<string, string>) => {
+    if (!workspaceId || !notebookId) { setRunMsg('Open a notebook first.'); return; }
+    if (!computeId) { setRunMsg('Pick a compute target before running.'); return; }
+    const paramCell = cells.find((c) => c.type === 'code' && c.parameters);
+    if (!paramCell) { setRunMsg('Tag a cell as the parameters cell first.'); return; }
+    const lines = Object.entries(overrides).map(([k, v]) => `${k} = ${v}`);
+    let nextCells = cells;
+    if (lines.length > 0) {
+      const injected: NotebookCell = {
+        ...emptyCell('code', paramCell.lang || defaultLang),
+        source: `# Injected parameters (Run with parameters)\n${lines.join('\n')}\n`,
+      };
+      const idx = cells.findIndex((c) => c.id === paramCell.id);
+      nextCells = [...cells.slice(0, idx + 1), injected, ...cells.slice(idx + 1)];
+      setCells(nextCells);
+      setActiveCellId(injected.id);
+    }
+    setParamsDialogOpen(false);
+    setDirty(true);
+    try {
+      const cellsForSave = nextCells.map((c) => ({ ...c, output: undefined }));
+      await clientFetch(`/api/items/notebook/${encodeURIComponent(notebookId)}?workspaceId=${encodeURIComponent(workspaceId)}`, {
+        method: 'PUT', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ definition: { cells: cellsForSave, defaultLang, attachedSources, attachedAmlEnv, customLibraries, resources } }),
+      });
+      setDirty(false);
+    } catch (e: any) { setRunMsg(`Could not persist parameters: ${e?.message || e}`); return; }
+    setRunMsg(lines.length ? `Injected ${lines.length} parameter override${lines.length === 1 ? '' : 's'} — running…` : 'Running with declared defaults…');
+    setTimeout(() => { void runRef.current(); }, 60);
+  }, [workspaceId, notebookId, computeId, cells, defaultLang, attachedSources, attachedAmlEnv, customLibraries, resources]);
+
+  // ── R4-NB-3 Resources persist (Loom-native, with the notebook) ─────────────
+  const persistResources = useCallback(async (next: NotebookResourceFile[]) => {
+    if (!workspaceId || !notebookId) return;
+    const cellsForSave = cells.map((c) => ({ ...c, output: undefined }));
+    const r = await clientFetch(`/api/items/notebook/${encodeURIComponent(notebookId)}?workspaceId=${encodeURIComponent(workspaceId)}`, {
+      method: 'PUT', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ definition: { cells: cellsForSave, defaultLang, attachedSources, attachedAmlEnv, customLibraries, resources: next } }),
+    });
+    const j = await r.json();
+    if (!j.ok) throw new Error(j.error || 'Could not save resource files');
+    setRunMsg(`Resource files saved at ${new Date().toLocaleTimeString()}.`);
+  }, [workspaceId, notebookId, cells, defaultLang, attachedSources, attachedAmlEnv, customLibraries]);
+
+  // ── R4-NB-6 Outline jump ────────────────────────────────────────────────────
+  const jumpToCell = useCallback((cellId: string) => {
+    setActiveCellId(cellId);
+    cellRefs.current[cellId]?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    setOutlineOpen(false);
+  }, []);
+
+  // ── R4-NB-8 Export .ipynb ───────────────────────────────────────────────────
+  const exportIpynb = useCallback(() => {
+    const nb = {
+      nbformat: 4, nbformat_minor: 5,
+      metadata: {
+        kernelspec: { name: defaultLang === 'sparkr' ? 'ir' : 'python3', display_name: defaultLang === 'sparkr' ? 'R' : 'Python 3', language: defaultLang === 'sparkr' ? 'R' : 'python' },
+        language_info: { name: defaultLang === 'sparkr' ? 'R' : 'python' },
+      },
+      cells: cells.map((c) => c.type === 'markdown'
+        ? { cell_type: 'markdown', metadata: {}, source: splitKeep(c.source) }
+        : { cell_type: 'code', execution_count: c.executionCount ?? null, metadata: c.parameters ? { tags: ['parameters'] } : {}, outputs: [], source: splitKeep(c.source) }),
+    };
+    const name = (notebooks || []).find((n) => n.id === notebookId)?.displayName || 'notebook';
+    downloadJson(`${name}.ipynb`, nb);
+    setRunMsg(`Exported ${name}.ipynb (${cells.length} cell${cells.length === 1 ? '' : 's'}).`);
+  }, [cells, defaultLang, notebooks, notebookId]);
+
+  // ── R4-NB-8 Inline rename ───────────────────────────────────────────────────
+  const openRename = useCallback(() => {
+    setRenameValue((notebooks || []).find((n) => n.id === notebookId)?.displayName || '');
+    setRenameOpen(true);
+  }, [notebooks, notebookId]);
+  const submitRename = useCallback(async () => {
+    const name = renameValue.trim();
+    if (!name || !workspaceId || !notebookId) return;
+    setRenameBusy(true);
+    try {
+      const r = await clientFetch(`/api/items/notebook/${encodeURIComponent(notebookId)}?workspaceId=${encodeURIComponent(workspaceId)}`, {
+        method: 'PUT', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ displayName: name }),
+      });
+      const j = await r.json();
+      if (j.ok) { setRenameOpen(false); await loadList(workspaceId); setRunMsg(`Renamed to "${name}".`); }
+      else setRunMsg(`Rename failed: ${j.error || 'unknown'}`);
+    } catch (e: any) { setRunMsg(`Rename failed: ${e?.message || e}`); }
+    finally { setRenameBusy(false); }
+  }, [renameValue, workspaceId, notebookId, loadList]);
 
   const create = useCallback(async () => {
     if (!workspaceId || !createName.trim()) return;
@@ -1927,6 +2194,7 @@ export function NotebookEditor({ item, id }: Props) {
     if (!computeId) { setRunMsg('Pick a compute target before running.'); return; }
     cancelRef.current.delete(cell.id);
     patchCell(cell.id, { output: { status: 'pending' } });
+    cellRunStartRef.current[cell.id] = Date.now(); // R4-NB-4 elapsed timer
     setSessionStatus('Running');
     setRunMsg(`Running cell ${cell.id.slice(0, 6)}…`);
     const prevExec = cell.executionCount || 0;
@@ -1975,6 +2243,13 @@ export function NotebookEditor({ item, id }: Props) {
           ? ` · cold-start: Spark pool warming up (~60-90s on first cell)`
           : p.phase ? ` · ${p.phase}` : '';
         setRunMsg(`Cell ${cell.id.slice(0, 6)}: ${p.status}${phaseHint} · ${elapsed}s`);
+        // R4-NB-4 — surface real-time Spark progress under the cell. `p.progress`
+        // arrives once the shared poll surface (R4-SYN-5) lands; until then the
+        // RunProgress bar stays honest-indeterminate off the phase + elapsed.
+        setRunPhase(p.phase || p.status || null);
+        if (p.progress && typeof p.progress === 'object') {
+          setCellProgress((prev) => ({ ...prev, [cell.id]: p.progress as SparkRunProgress }));
+        }
         // Adaptive polling: speed up after session is idle
         if (p.phase === 'statement-running') pollInterval = 1000;
         if (p.output) {
@@ -2017,8 +2292,10 @@ export function NotebookEditor({ item, id }: Props) {
     } catch (e: any) {
       patchCell(cell.id, { output: { status: 'error', ename: 'Exception', evalue: e?.message || String(e) } });
       setSessionStatus('Error');
+    } finally {
+      clearCellProgress(cell.id); setRunPhase(null); // R4-NB-4 cleanup
     }
-  }, [workspaceId, notebookId, computeId, defaultLang, sessionConfigBody, pollRunStatus, patchCell, loadJobs, runSparkCell]);
+  }, [workspaceId, notebookId, computeId, defaultLang, sessionConfigBody, pollRunStatus, patchCell, loadJobs, runSparkCell, clearCellProgress]);
 
   /**
    * Variable explorer — submit a Python introspection snippet to the ACTIVE
@@ -2180,8 +2457,15 @@ export function NotebookEditor({ item, id }: Props) {
         { label: 'Item', actions: [
           { label: 'New notebook', onClick: workspaceId ? () => setCreateOpen(true) : undefined, disabled: !workspaceId },
           { label: importing ? 'Importing…' : 'Import notebook', onClick: workspaceId && !importing ? () => fileInputRef.current?.click() : undefined, disabled: !workspaceId || importing },
+          // R4-NB-8 — export the open notebook to a portable .ipynb, and inline rename.
+          { label: 'Export .ipynb', onClick: notebookId ? exportIpynb : undefined, disabled: !notebookId },
+          { label: 'Rename', onClick: notebookId ? openRename : undefined, disabled: !notebookId },
           { label: saving ? 'Saving…' : 'Save', onClick: canSave ? save : undefined, disabled: !canSave },
           { label: 'Delete', onClick: canDelete ? del : undefined, disabled: !canDelete },
+        ]},
+        // R4-NB-1 — recurrence scheduling (Azure ML job schedules), Fabric parity.
+        { label: 'Schedule', actions: [
+          { label: 'Schedule', onClick: notebookId ? () => setScheduleWizardOpen(true) : undefined, disabled: !notebookId },
         ]},
         { label: 'Workspace', actions: [
           { label: 'Refresh list', onClick: workspaceId ? () => loadList(workspaceId) : undefined, disabled: !workspaceId },
@@ -2203,6 +2487,9 @@ export function NotebookEditor({ item, id }: Props) {
       { id: 'view', label: 'View', groups: [
         { label: 'Panes', actions: [
           { label: 'Run history', onClick: canHistory ? () => setHistoryOpen(true) : undefined, disabled: !canHistory },
+          // R4-NB-6 outline · R4-NB-3 resources.
+          { label: 'Outline', onClick: () => setOutlineOpen(true) },
+          { label: 'Resources', onClick: () => setResourcesOpen(true) },
           { label: copilotOpen ? 'Hide Copilot' : 'Copilot', onClick: () => setCopilotOpen(v => !v) },
           { label: 'Variables', onClick: notebookId ? () => setVariablesOpen(true) : undefined, disabled: !notebookId },
           { label: 'Data Wrangler', onClick: () => setWranglerOpen(true) },
@@ -2212,6 +2499,10 @@ export function NotebookEditor({ item, id }: Props) {
         { label: 'Cell', actions: [
           { label: 'Split cell', onClick: activeCellId ? () => splitCell(activeCellId) : undefined, disabled: !activeCellId },
           { label: 'Merge with below', onClick: activeCellId ? () => mergeCellDown(activeCellId) : undefined, disabled: !activeCellId },
+          // R4-NB-2 — tag/untag the active code cell as the papermill parameters cell.
+          { label: parametersCell && activeCellId === parametersCell.id ? 'Unmark parameters cell' : 'Mark as parameters cell',
+            onClick: activeCellId && cells.find(c => c.id === activeCellId)?.type === 'code' ? () => markParametersCell(activeCellId) : undefined,
+            disabled: !activeCellId || cells.find(c => c.id === activeCellId)?.type !== 'code' },
         ]},
         { label: 'Convert', actions: [
           { label: 'To code cell', onClick: activeCellId ? () => convertCell(activeCellId, 'code') : undefined, disabled: !activeCellId },
@@ -2230,9 +2521,14 @@ export function NotebookEditor({ item, id }: Props) {
       { id: 'run', label: 'Run', groups: [
         { label: 'Execute', actions: [
           { label: 'Run all', onClick: canRun ? run : undefined, disabled: !canRun },
+          // R4-NB-2 — parameterized run (papermill). Enabled once a cell is tagged.
+          { label: 'Run with parameters', onClick: canRun && parametersCell ? () => setParamsDialogOpen(true) : undefined, disabled: !canRun || !parametersCell },
         ]},
         { label: 'Session', actions: [
           { label: 'Configure session', onClick: () => openConfigDialog() },
+        ]},
+        { label: 'Schedule', actions: [
+          { label: 'Schedule', onClick: notebookId ? () => setScheduleWizardOpen(true) : undefined, disabled: !notebookId },
         ]},
       ]},
       { id: 'help', label: 'Help', groups: [
@@ -2247,9 +2543,10 @@ export function NotebookEditor({ item, id }: Props) {
     ];
   }, [
     cells, activeCellId, notebookId, running, dirty, saving, workspaceId, computeId, importing,
-    workspaceType, copilotOpen,
+    workspaceType, copilotOpen, parametersCell,
     run, save, del, loadList, insertCell, openAttach, openConfigDialog,
     splitCell, mergeCellDown, convertCell,
+    exportIpynb, openRename, markParametersCell,
   ]);
 
   // SC-9 — publish notebook ribbon actions (Run all, Save, Insert cell, Data
@@ -3093,10 +3390,18 @@ export function NotebookEditor({ item, id }: Props) {
                 {cells.map((c, idx) => (
                   <div
                     key={c.id}
+                    ref={(el) => { cellRefs.current[c.id] = el; }}
                     onDragOver={(e) => { if (dragIndexRef.current != null) { e.preventDefault(); setDragOverId(c.id); } }}
                     onDrop={(e) => { e.preventDefault(); onCellDrop(idx); }}
                     style={dragOverId === c.id ? { outline: `2px dashed ${tokens.colorBrandStroke1}`, outlineOffset: 2, borderRadius: tokens.borderRadiusMedium } : undefined}
                   >
+                    {/* R4-NB-2 — parameters-cell chip (papermill). */}
+                    {c.type === 'code' && c.parameters && (
+                      <div className={s.paramBadgeRow}>
+                        <Badge appearance="tint" color="brand" size="small" icon={<BracesVariable20Regular />}>Parameters</Badge>
+                        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Overridable on Run with parameters</Caption1>
+                      </div>
+                    )}
                     {c.type === 'code' ? (
                       <CodeCell
                         cell={c}
@@ -3136,7 +3441,16 @@ export function NotebookEditor({ item, id }: Props) {
                           setDirty(true);
                         }}
                       />
-                    ) : (
+                    ) : null}
+                    {/* R4-NB-4 — live Spark progress under a running code cell. */}
+                    {c.type === 'code' && c.output?.status === 'pending' && (
+                      <RunProgress
+                        progress={cellProgress[c.id]}
+                        phase={runPhase || undefined}
+                        elapsedSec={cellRunStartRef.current[c.id] ? Math.floor((nowTs - cellRunStartRef.current[c.id]) / 1000) : undefined}
+                      />
+                    )}
+                    {c.type === 'markdown' && (
                       <MarkdownCell
                         cell={c}
                         active={activeCellId === c.id}
@@ -3194,6 +3508,126 @@ export function NotebookEditor({ item, id }: Props) {
               </div>
             </>
           )}
+
+          {/* ── R4-NB-1 Notebook schedules (AML job schedules) ─────────────── */}
+          {notebookId && schedulesConfigured === false && scheduleGateHint && (
+            <MessageBar intent="warning">
+              <MessageBarBody>
+                <MessageBarTitle>Notebook scheduling not configured</MessageBarTitle>
+                {scheduleGateHint} Bicep: <code>platform/fiab/bicep/modules/deploy-planner/ml-workspace.bicep</code>.
+              </MessageBarBody>
+              <MessageBarActions>
+                <Button size="small" onClick={refreshSchedules}>Re-check</Button>
+              </MessageBarActions>
+            </MessageBar>
+          )}
+          {notebookId && schedulesConfigured && (
+            <div className={s.scheduleCard}>
+              <div className={s.scheduleHead}>
+                <CalendarClock20Regular />
+                <Subtitle2>Schedules ({schedules.length})</Subtitle2>
+                <div className={s.cardSpacer} />
+                <Button size="small" appearance="subtle" icon={<ArrowSync20Regular />} onClick={refreshSchedules}>Refresh</Button>
+                <Button size="small" appearance="primary" icon={<CalendarClock16Regular />} onClick={() => setScheduleWizardOpen(true)}>New schedule</Button>
+              </div>
+              {schedules.length === 0 ? (
+                <EmptyState
+                  icon={<CalendarClock20Regular />}
+                  title="No schedules yet"
+                  body="Run this notebook on a recurrence with an Azure ML job schedule. Click New schedule to create one."
+                  primaryAction={{ label: 'Create schedule', onClick: () => setScheduleWizardOpen(true) }}
+                />
+              ) : (
+                <Table size="extra-small" aria-label="Notebook schedules">
+                  <TableHeader>
+                    <TableRow>
+                      <TableHeaderCell>Name</TableHeaderCell>
+                      <TableHeaderCell>Recurrence</TableHeaderCell>
+                      <TableHeaderCell>Start</TableHeaderCell>
+                      <TableHeaderCell>State</TableHeaderCell>
+                      <TableHeaderCell aria-label="Actions" />
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {schedules.map((sc) => (
+                      <TableRow key={sc.name}>
+                        <TableCell>{sc.displayName || sc.name}</TableCell>
+                        <TableCell>Every {sc.interval ?? 1} {String(sc.frequency || '').toLowerCase()}</TableCell>
+                        <TableCell>{sc.startTime ? new Date(sc.startTime).toLocaleString() : '—'}</TableCell>
+                        <TableCell>
+                          <Switch
+                            checked={sc.isEnabled}
+                            onChange={(_, d) => toggleSchedule(sc.name, d.checked)}
+                            aria-label={sc.isEnabled ? 'Enabled' : 'Disabled'}
+                          />
+                        </TableCell>
+                        <TableCell>
+                          <Button size="small" appearance="subtle" icon={<Delete20Regular />} aria-label={`Delete schedule ${sc.displayName || sc.name}`}
+                            onClick={() => deleteSchedule(sc.name)} />
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
+            </div>
+          )}
+
+          <ScheduleWizard
+            open={scheduleWizardOpen}
+            onClose={() => { setScheduleWizardOpen(false); setScheduleError(null); }}
+            onCreate={createSchedule}
+            busy={scheduleBusy}
+            error={scheduleError}
+          />
+
+          {/* R4-NB-2 — Run with parameters (papermill). */}
+          <ParametersDialog
+            open={paramsDialogOpen}
+            onClose={() => setParamsDialogOpen(false)}
+            parameterSource={parametersCell?.source || ''}
+            onRun={runWithParameters}
+            busy={running}
+          />
+
+          {/* R4-NB-3 — Resources pane (Loom-native file bundle). */}
+          <ResourcesPane
+            open={resourcesOpen}
+            onOpenChange={setResourcesOpen}
+            resources={resources}
+            onChange={setResources}
+            onPersist={persistResources}
+            notebookOpen={!!notebookId}
+          />
+
+          {/* R4-NB-6 — Outline navigation. */}
+          <OutlinePane
+            open={outlineOpen}
+            onOpenChange={setOutlineOpen}
+            cells={cells}
+            onJump={jumpToCell}
+          />
+
+          {/* R4-NB-8 — Inline rename. */}
+          <Dialog open={renameOpen} onOpenChange={(_e, d) => { if (!d.open) setRenameOpen(false); }}>
+            <DialogSurface>
+              <DialogBody>
+                <DialogTitle>Rename notebook</DialogTitle>
+                <DialogContent>
+                  <Field label="Name" required>
+                    <Input value={renameValue} onChange={(_e, d) => setRenameValue(d.value)} autoFocus
+                      onKeyDown={(e) => { if (e.key === 'Enter') void submitRename(); }} />
+                  </Field>
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="secondary" onClick={() => setRenameOpen(false)}>Cancel</Button>
+                  <Button appearance="primary" disabled={!renameValue.trim() || renameBusy} onClick={() => void submitRename()}>
+                    {renameBusy ? 'Renaming…' : 'Rename'}
+                  </Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
 
           {/* Configure session dialog — sliders + numeric field, no JSON. */}
           <SessionConfigDialog

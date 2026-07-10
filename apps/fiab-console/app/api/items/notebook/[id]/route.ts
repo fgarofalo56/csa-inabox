@@ -70,6 +70,8 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
         attachedSources: migrated.attachedSources || [],
         attachedAmlEnv: state.attachedAmlEnv || null,
         customLibraries: Array.isArray(state.customLibraries) ? state.customLibraries : [],
+        // Resource files (R4-NB-3) bundled with the notebook (Loom-native).
+        resources: Array.isArray(state.resources) ? state.resources : [],
         // Session sizing chosen via the editor's "Configure session" dialog
         // (UI shape: { numExecutors, executorMemoryGb, timeoutMinutes }).
         sessionConfig: (state.sessionConfig && typeof state.sessionConfig === 'object') ? state.sessionConfig : null,
@@ -112,6 +114,21 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
       };
     }
 
+    // Resource files (R4-NB-3) — persisted independently of cells so a resource
+    // save doesn't require touching the notebook body. Each file is capped at
+    // 1 MB and the whole set at 64 files to stay well under the Cosmos doc cap.
+    if (def?.resources !== undefined && Array.isArray(def.resources)) {
+      const MAX_FILE = 1_000_000;
+      stateNext.resources = (def.resources as Array<Record<string, unknown>>)
+        .filter((f) => f && typeof f.path === 'string' && typeof f.content === 'string')
+        .slice(0, 64)
+        .map((f) => ({
+          path: String(f.path).slice(0, 400),
+          content: String(f.content).slice(0, MAX_FILE),
+          updatedAt: typeof f.updatedAt === 'string' ? f.updatedAt : new Date().toISOString(),
+        }));
+    }
+
     if (def?.cells !== undefined && Array.isArray(def.cells)) {
       const cells = def.cells as NotebookCell[];
       stateNext.cells = cells;
@@ -152,6 +169,7 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
         attachedSources: respState.attachedSources || [],
         attachedAmlEnv: respState.attachedAmlEnv || null,
         customLibraries: Array.isArray(respState.customLibraries) ? respState.customLibraries : [],
+        resources: Array.isArray(respState.resources) ? respState.resources : [],
         sessionConfig: respState.sessionConfig || null,
       },
     });

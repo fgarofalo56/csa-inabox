@@ -797,7 +797,21 @@ export function CodeCell({ cell, active, onFocus, onChange, onRun, onStop, onDel
           />
         )
       )}
-      {!collapsed && cell.output && (() => {
+      {/* R4-NB-6 — collapse the OUTPUT independently of the cell input. */}
+      {!collapsed && cell.output && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, padding: `${tokens.spacingVerticalXXS} ${tokens.spacingHorizontalS}` }}>
+          <Button
+            size="small"
+            appearance="transparent"
+            icon={cell.outputCollapsed ? <ChevronRight16Regular /> : <ChevronDown16Regular />}
+            onClick={(e) => { e.stopPropagation(); onChange({ ...cell, outputCollapsed: !cell.outputCollapsed }); }}
+            aria-label={cell.outputCollapsed ? 'Show output' : 'Hide output'}
+          >
+            Output{cell.outputCollapsed ? ' (hidden)' : ''}
+          </Button>
+        </div>
+      )}
+      {!collapsed && cell.output && !cell.outputCollapsed && (() => {
         // Rich display(): prefer the structured payload; fall back to the raw
         // MIME if it slipped through in output.data. Render the interactive grid
         // + charts instead of the plain text table when present.
