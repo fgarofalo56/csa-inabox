@@ -1,0 +1,19 @@
+{
+  "name": "csa-loom-onelake",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "CSA Loom OneLake — unified-namespace / catalog service. Resolves loom://<tenant>/<workspace>/<item>/<path> to a real ADLS Gen2 abfss path + SAS-less managed-identity passthrough auth, backed by a Cosmos registry. Azure-native, no Microsoft Fabric dependency.",
+  "main": "src/server.mjs",
+  "scripts": {
+    "start": "node src/server.mjs",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@azure/cosmos": "^4.2.0",
+    "@azure/identity": "^4.5.0"
+  }
+}
