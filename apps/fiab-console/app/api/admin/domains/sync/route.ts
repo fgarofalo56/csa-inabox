@@ -16,6 +16,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { apiServerError } from '@/lib/api/respond';
 import { requireTenantAdmin } from '@/lib/auth/feature-gate';
 import { runDomainSync, saveDomainSyncStatus, loadDomainSyncStatus } from '@/lib/azure/domain-sync';
 
@@ -41,7 +42,7 @@ export async function GET() {
     const result = await runDomainSync(tenantId, s.claims.upn || s.claims.oid, { apply: false });
     return NextResponse.json({ ok: true, result, fromCache: false });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e, 'Domain sync failed');
   }
 }
 
@@ -61,6 +62,6 @@ export async function POST(req: NextRequest) {
     await saveDomainSyncStatus(tenantId, result);
     return NextResponse.json({ ok: true, result });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e, 'Domain sync failed');
   }
 }
