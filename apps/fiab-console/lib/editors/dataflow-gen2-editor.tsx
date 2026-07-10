@@ -353,7 +353,7 @@ export function DataflowGen2Editor({ item, id }: Props) {
   ], [running, canRun, run, canCreate, saving, canSave, save, canDelete, del, copilotOpen]);
 
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={ribbon}
+    <ItemEditorChrome splitKeyPrefix={item.slug} item={item} id={id} ribbon={ribbon}
       leftPanel={
         <div className={s.treePad}>
           <Subtitle2 style={{ marginBottom: tokens.spacingVerticalS, display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS }}>

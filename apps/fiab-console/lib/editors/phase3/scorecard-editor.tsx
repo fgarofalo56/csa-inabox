@@ -483,7 +483,7 @@ export function ScorecardEditor({ item, id }: { item: FabricItemType; id: string
   ], [pbiOptIn, scorecardId, workspaceId, selectedGoalId, pbiPortal, openScorecardInPbi, refreshScorecard, openCheckIn, openBinder, openHistory, configOpen]);
 
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={scRibbon}
+    <ItemEditorChrome splitKeyPrefix={item.slug} item={item} id={id} ribbon={scRibbon}
       leftPanel={
         <div className={s.treePad}>
           <Subtitle2 style={{ marginBottom: tokens.spacingVerticalS}}>Scorecards</Subtitle2>

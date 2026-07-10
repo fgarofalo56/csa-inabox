@@ -27,7 +27,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  ReactFlow, ReactFlowProvider, Background, BackgroundVariant, Controls, MiniMap, Panel,
+  ReactFlow, ReactFlowProvider, Background, BackgroundVariant, MiniMap, Panel,
   Handle, Position, useReactFlow, useNodesState,
   MarkerType,
   type Node, type Edge, type NodeProps, type NodeTypes, type Connection,
@@ -45,7 +45,7 @@ import {
   DocumentTable16Regular, Key16Regular, Add20Regular,
   MathFormula20Regular, Play16Regular, Sparkle20Regular,
 } from '@fluentui/react-icons';
-import { accentTint, accentGradient, portStyle } from '@/lib/components/canvas/canvas-node-kit';
+import { accentTint, accentGradient, portStyle, CanvasRightRail } from '@/lib/components/canvas/canvas-node-kit';
 // Shared drag-to-resize host: supplies the definite outer height React Flow
 // needs to frame fitView and persists the per-surface height to localStorage.
 // Pointer + keyboard + ARIA live in the primitive; this surface only declares
@@ -559,6 +559,8 @@ function ModelViewCanvasInner({
 }: ModelViewCanvasProps) {
   const st = useStyles();
   const rf = useReactFlow();
+  const [zoom, setZoom] = useState(1);
+  const [railCollapsed, setRailCollapsed] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [rfNodes, setRfNodes, onNodesChange] = useNodesState<Node>([]);
 
@@ -629,7 +631,7 @@ function ModelViewCanvasInner({
       });
   }, [relationships, tables, selectedId]);
 
-  const fit = useCallback(() => rf.fitView({ padding: 0.2, duration: 250 }), [rf]);
+  const fit = useCallback(() => rf.fitView({ padding: 0.2, maxZoom: 1.25, duration: 250 }), [rf]);
 
   const onConnect = useCallback((conn: Connection) => {
     if (readOnly) return;
@@ -765,16 +767,23 @@ function ModelViewCanvasInner({
         onEdgeClick={onEdgeClick}
         onNodeClick={(_, n) => setSelectedId((cur) => (cur === n.id ? null : n.id))}
         onPaneClick={() => setSelectedId(null)}
+        onMove={(_, vp) => setZoom(vp.zoom)}
         minZoom={0.2}
         maxZoom={2}
         fitView
-        fitViewOptions={{ padding: 0.2 }}
+        // maxZoom keeps a small 3-6 node graph filling the canvas readably on open.
+        fitViewOptions={{ padding: 0.2, maxZoom: 1.25 }}
         nodesDraggable
         nodesConnectable={!readOnly}
         proOptions={{ hideAttribution: true }}
         deleteKeyCode={null}
       >
-        <Background variant={BackgroundVariant.Dots} gap={20} size={1} color={tokens.colorNeutralStroke2} />
+        <Background
+          variant={BackgroundVariant.Dots}
+          gap={18}
+          size={1.5}
+          color={accentTint('var(--loom-accent-blue)', 45)}
+        />
         <Panel position="top-left">
           <div className={st.toolbar}>
             <Tooltip
@@ -809,8 +818,26 @@ function ModelViewCanvasInner({
             </Tooltip>
           </div>
         </Panel>
-        <Controls showInteractive={false} />
-        <MiniMap pannable zoomable style={{ backgroundColor: tokens.colorNeutralBackground1 }} />
+        <Panel position="bottom-left">
+          <CanvasRightRail
+            zoom={zoom}
+            minZoom={0.25}
+            maxZoom={2}
+            onZoomChange={(z) => rf.setViewport({ ...rf.getViewport(), zoom: z }, { duration: 120 })}
+            onZoomIn={() => rf.zoomIn({ duration: 120 })}
+            onZoomOut={() => rf.zoomOut({ duration: 120 })}
+            onFit={() => rf.fitView({ padding: 0.2, maxZoom: 1.25, duration: 200 })}
+            collapsed={railCollapsed}
+            onToggleCollapse={() => setRailCollapsed((v) => !v)}
+          />
+        </Panel>
+        <MiniMap
+          pannable
+          zoomable
+          nodeStrokeColor={tokens.colorNeutralStroke2}
+          maskColor={accentTint(tokens.colorNeutralBackground3, 70)}
+          style={{ backgroundColor: tokens.colorNeutralBackground1 }}
+        />
       </ReactFlow>
 
       {tables.length === 0 && (

@@ -599,7 +599,7 @@ export function PowerPlatformEnvironmentEditor({ item, id }: { item: FabricItemT
   const [navRefresh, setNavRefresh] = useState(0);
 
   return (
-    <ItemEditorChrome
+    <ItemEditorChrome splitKeyPrefix={item.slug}
       item={item}
       id={id}
       ribbon={ribbon}

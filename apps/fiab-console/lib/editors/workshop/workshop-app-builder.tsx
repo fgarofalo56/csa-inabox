@@ -48,6 +48,7 @@ import {
 } from '@fluentui/react-icons';
 import { LoomChart, type LoomChartType } from '@/lib/components/charts/loom-chart';
 import { EmptyState } from '@/lib/components/empty-state';
+import { SplitPane } from '@/lib/components/shared/split-pane';
 import type { AtelierFilter, AtelierFilterOp } from '@/lib/editors/_family-utils';
 
 // ───────────────────────── types (persisted in Cosmos item state) ─────────────────────────
@@ -1088,6 +1089,27 @@ export function WorkshopAppBuilder({ id, entityTypes, widgets, variables, onWidg
     />
   );
 
+  // Design-mode canvas block, extracted so both the SplitPane (widget selected)
+  // and the plain single-column layout (nothing selected) render the same canvas
+  // without duplicating JSX. Closes over normalized / canvasHeight / selectedId
+  // and the widget handlers, all in scope here.
+  const canvasBlock = (
+    <div className={s.canvasWrap} style={{ height: canvasHeight }} onPointerDown={() => setSelectedId(null)}>
+      <div className={s.canvas} style={{ height: canvasHeight }}>
+        {normalized.length === 0 ? (
+          <div style={{ position: 'absolute', inset: 0 }}>
+            <EmptyState icon={<Apps20Regular />} title="Empty canvas" body="Add a widget from the palette above, bind it to an ontology object type, then switch to Preview to see real data." />
+          </div>
+        ) : normalized.map((w) => (
+          <CanvasWidget key={w.id} widget={w} selected={selectedId === w.id} readOnly={false}
+            onSelect={() => setSelectedId(w.id)} onMove={(x, y) => moveWidget(w.id, x, y)} onResize={(cw, ch) => resizeWidget(w.id, cw, ch)} onRemove={() => removeWidget(w.id)}>
+            {renderWidgetBody(w)}
+          </CanvasWidget>
+        ))}
+      </div>
+    </div>
+  );
+
   return (
     <div className={s.root}>
       <div className={s.modeBar}>
@@ -1129,26 +1151,25 @@ export function WorkshopAppBuilder({ id, entityTypes, widgets, variables, onWidg
         {mode === 'design' && <WidgetPalette onAdd={addWidget} disabled={false} />}
 
         {mode === 'design' ? (
-          <div className={selected ? s.designGridSel : s.designGrid}>
-            <div className={s.canvasWrap} style={{ height: canvasHeight }} onPointerDown={() => setSelectedId(null)}>
-              <div className={s.canvas} style={{ height: canvasHeight }}>
-                {normalized.length === 0 ? (
-                  <div style={{ position: 'absolute', inset: 0 }}>
-                    <EmptyState icon={<Apps20Regular />} title="Empty canvas" body="Add a widget from the palette above, bind it to an ontology object type, then switch to Preview to see real data." />
-                  </div>
-                ) : normalized.map((w) => (
-                  <CanvasWidget key={w.id} widget={w} selected={selectedId === w.id} readOnly={false}
-                    onSelect={() => setSelectedId(w.id)} onMove={(x, y) => moveWidget(w.id, x, y)} onResize={(cw, ch) => resizeWidget(w.id, cw, ch)} onRemove={() => removeWidget(w.id)}>
-                    {renderWidgetBody(w)}
-                  </CanvasWidget>
-                ))}
-              </div>
-            </div>
-            {selected && (
+          selected ? (
+            <SplitPane
+              direction="horizontal"
+              primary="second"
+              storageKey="workshop-app.inspector"
+              defaultSize={340}
+              minSize={280}
+              maxSize={540}
+              dividerLabel="Resize inspector"
+            >
+              {canvasBlock}
               <WidgetInspector widget={selected} entityTypes={entityTypes} variables={variables} columns={colsForSelected}
                 onChange={(patch) => patchWidget(selected.id, patch)} onRemove={() => removeWidget(selected.id)} />
-            )}
-          </div>
+            </SplitPane>
+          ) : (
+            <div className={s.designGrid}>
+              {canvasBlock}
+            </div>
+          )
         ) : (
           <div className={s.canvasWrap} style={{ height: canvasHeight }}>
             <div className={s.canvas} style={{ height: canvasHeight }}>

@@ -27,7 +27,7 @@ import {
   type ReactNode, type PointerEvent as ReactPointerEvent, type KeyboardEvent as ReactKeyboardEvent,
 } from 'react';
 import {
-  ReactFlow, ReactFlowProvider, Background, BackgroundVariant, Controls, MiniMap, Panel,
+  ReactFlow, ReactFlowProvider, Background, BackgroundVariant, MiniMap, Panel,
   Handle, Position, useReactFlow, useNodesState,
   MarkerType,
   type Node, type Edge, type NodeProps, type NodeTypes,
@@ -42,7 +42,7 @@ import {
   DocumentTable16Regular, Table16Regular, MathFormula16Regular, Link16Regular,
   Play16Regular, Delete16Regular,
 } from '@fluentui/react-icons';
-import { accentGradient, accentTint, portStyle } from '@/lib/components/canvas/canvas-node-kit';
+import { accentGradient, accentTint, portStyle, CanvasRightRail } from '@/lib/components/canvas/canvas-node-kit';
 
 // ---------------------------------------------------------------------------
 // Public model — kept in sync with the schema-graph BFF route
@@ -388,6 +388,8 @@ function SchemaDiagramCanvasInner({ nodes: srcNodes, edges: srcEdges, onQueryNod
   const s = useStyles();
   const rf = useReactFlow();
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [zoom, setZoom] = useState(1);
+  const [railCollapsed, setRailCollapsed] = useState(false);
   const [rfNodes, setRfNodes, onNodesChange] = useNodesState<Node>([]);
 
   const positions = useMemo(() => columnarLayout(srcNodes), [srcNodes]);
@@ -421,7 +423,7 @@ function SchemaDiagramCanvasInner({ nodes: srcNodes, edges: srcEdges, onQueryNod
       });
   }, [srcEdges, srcNodes, selectedId]);
 
-  const fit = useCallback(() => rf.fitView({ padding: 0.2, duration: 250 }), [rf]);
+  const fit = useCallback(() => rf.fitView({ padding: 0.2, maxZoom: 1.25, duration: 250 }), [rf]);
 
   const presentKinds = useMemo(() => {
     const seen = new Set<SchemaNodeKind>();
@@ -444,15 +446,22 @@ function SchemaDiagramCanvasInner({ nodes: srcNodes, edges: srcEdges, onQueryNod
         onNodesChange={onNodesChange}
         onNodeClick={(_, n) => setSelectedId((cur) => (cur === n.id ? null : n.id))}
         onPaneClick={() => setSelectedId(null)}
+        onMove={(_, vp) => setZoom(vp.zoom)}
         minZoom={0.2}
         maxZoom={2}
         fitView
-        fitViewOptions={{ padding: 0.2 }}
+        // maxZoom keeps a small 3-6 node graph filling the canvas readably on open.
+        fitViewOptions={{ padding: 0.2, maxZoom: 1.25 }}
         nodesDraggable
         proOptions={{ hideAttribution: true }}
         deleteKeyCode={null}
       >
-        <Background variant={BackgroundVariant.Dots} gap={20} size={1} color={tokens.colorNeutralStroke2} />
+        <Background
+          variant={BackgroundVariant.Dots}
+          gap={18}
+          size={1.5}
+          color={accentTint('var(--loom-accent-blue)', 45)}
+        />
 
         <Panel position="top-right">
           <div className={s.toolbar}>
@@ -478,11 +487,25 @@ function SchemaDiagramCanvasInner({ nodes: srcNodes, edges: srcEdges, onQueryNod
           </Panel>
         )}
 
-        <Controls showInteractive={false} />
+        <Panel position="bottom-left">
+          <CanvasRightRail
+            zoom={zoom}
+            minZoom={0.25}
+            maxZoom={2}
+            onZoomChange={(z) => rf.setViewport({ ...rf.getViewport(), zoom: z }, { duration: 120 })}
+            onZoomIn={() => rf.zoomIn({ duration: 120 })}
+            onZoomOut={() => rf.zoomOut({ duration: 120 })}
+            onFit={() => rf.fitView({ padding: 0.2, maxZoom: 1.25, duration: 200 })}
+            collapsed={railCollapsed}
+            onToggleCollapse={() => setRailCollapsed((v) => !v)}
+          />
+        </Panel>
         <MiniMap
           pannable
           zoomable
           nodeColor={(n) => styleForKind((n.data as SchemaEntityNodeData)?.node?.kind || 'table').color}
+          nodeStrokeColor={tokens.colorNeutralStroke2}
+          maskColor={accentTint(tokens.colorNeutralBackground3, 70)}
           style={{ backgroundColor: tokens.colorNeutralBackground1 }}
         />
       </ReactFlow>

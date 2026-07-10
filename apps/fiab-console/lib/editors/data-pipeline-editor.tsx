@@ -1215,7 +1215,7 @@ export function DataPipelineEditor({ item, id, runtimePreset, templateId }: Prop
   }
 
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={ribbon} dirty={dirty}
+    <ItemEditorChrome splitKeyPrefix={item.slug} item={item} id={id} ribbon={ribbon} dirty={dirty}
       rightPanelLabel="Copilot"
       explain={{ family: 'pipeline', getDefinition: () => ({ properties: spec.properties }) }}
       rightPanel={

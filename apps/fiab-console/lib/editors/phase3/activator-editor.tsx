@@ -760,7 +760,7 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
 
   return (
     <>
-    <ItemEditorChrome item={item} id={id} ribbon={ribbon}
+    <ItemEditorChrome splitKeyPrefix={item.slug} item={item} id={id} ribbon={ribbon}
       leftPanel={
         <div className={s.treePad}>
           <Subtitle2 style={{ marginBottom: tokens.spacingVerticalS}}>Reflexes</Subtitle2>

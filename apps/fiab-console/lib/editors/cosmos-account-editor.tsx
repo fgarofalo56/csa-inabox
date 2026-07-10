@@ -288,7 +288,7 @@ export function CosmosAccountEditor({ item, id }: { item: FabricItemType; id: st
   useRegisterRibbonCommands(ribbon, 'cosmos-account');
 
   return (
-    <ItemEditorChrome
+    <ItemEditorChrome splitKeyPrefix={item.slug}
       item={item}
       id={id}
       ribbon={ribbon}

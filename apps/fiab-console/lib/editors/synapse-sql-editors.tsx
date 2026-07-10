@@ -394,7 +394,7 @@ export function SynapseServerlessSqlPoolEditor({ item, id }: { item: FabricItemT
   ], [loading, run, openInExcel, sqlText]);
 
   return (
-    <ItemEditorChrome
+    <ItemEditorChrome splitKeyPrefix={item.slug}
       item={item}
       id={id}
       ribbon={ribbon}
@@ -943,7 +943,7 @@ export function SynapseDedicatedSqlPoolEditor({ item, id }: { item: FabricItemTy
   ], [loading, isOnline, run, resuming, state, resume, pause, refreshState, refreshSchema, openQueryHistory, sqlText, openCtas]);
 
   return (
-    <ItemEditorChrome
+    <ItemEditorChrome splitKeyPrefix={item.slug}
       item={item}
       id={id}
       ribbon={ribbon}

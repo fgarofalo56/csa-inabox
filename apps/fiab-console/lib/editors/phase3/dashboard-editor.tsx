@@ -272,7 +272,7 @@ export function DashboardEditor({ item, id }: { item: FabricItemType; id: string
   const fsTile = loomTiles.find((t) => t.id === fullscreenTile);
 
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={dashRibbon} dirty={dirty}
+    <ItemEditorChrome splitKeyPrefix={item.slug} item={item} id={id} ribbon={dashRibbon} dirty={dirty}
       leftPanel={
         <div className={s.treePad}>
           <Subtitle2 style={{ marginBottom: tokens.spacingVerticalS}}>Power BI dashboards</Subtitle2>
