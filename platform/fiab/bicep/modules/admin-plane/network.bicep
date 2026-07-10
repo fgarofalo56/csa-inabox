@@ -105,7 +105,13 @@ var subnets = [
   {
     name: 'snet-apim'
     addressPrefix: '${prefix}.4.0/24'
-    delegations: [
+    // APIM VNet injection requires an UNDELEGATED subnet in Azure Government:
+    // "API Management service v1 deployment into a Virtual Network requires that
+    // the subnet is not delegated to any service" (live GCC-High preflight; also
+    // https://aka.ms/apimvnet). Commercial/GCC keep the existing
+    // Microsoft.Web/hostingEnvironments delegation (byte-identical); Gov emits an
+    // empty delegations array so the APIM control plane accepts the subnet.
+    delegations: (boundary == 'GCC-High' || boundary == 'IL5') ? [] : [
       {
         name: 'Microsoft.Web/hostingEnvironments'
         properties: { serviceName: 'Microsoft.Web/hostingEnvironments' }
