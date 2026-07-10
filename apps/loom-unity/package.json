@@ -1,0 +1,13 @@
+{
+  "name": "csa-loom-unity",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "CSA Loom Unity — self-hosted OSS Unity Catalog server packaged for Azure Government (where Databricks Unity Catalog is unavailable/limited). Thin config-rendering overlay on the official unitycatalog/unitycatalog image; H2-file-DB default on Azure Files, Postgres opt-in, optional ADLS credential vending. Azure-native, no Microsoft Fabric dependency.",
+  "scripts": {
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
