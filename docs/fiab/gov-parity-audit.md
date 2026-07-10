@@ -30,11 +30,17 @@ What is **not** done:
 2. **A provision-time break**: `ai-search.bicep`'s index-creation
    deploymentScript hardcodes the Commercial search suffix **and** the
    Commercial token audience — it fails in Gov.
-3. **Service-availability gaps** where MAG simply lacks a service Loom uses:
+3. **A substrate blocker**: **Azure Container Apps — the host the entire
+   product runs on — is not documented as GA in any US Gov region** (absent from
+   the Gov GA roadmap; no `azurecontainerapps.us` suffix). If unconfirmed on the
+   live Products-by-region matrix, the Gov app tier must swap to a Gov-GA host
+   (AKS or App Service Environment v3, both Gov-listed). This is GOV-3 and is
+   potentially the biggest day-one obstacle after Unity Catalog.
+4. **Service-availability gaps** where MAG simply lacks a service Loom uses:
    **Azure Digital Twins** (Digital Twin Builder editor + `adt-instance.bicep`),
    **Microsoft Fabric / OneLake** (already opt-in, correct), and **AI Foundry
    Agent Service** project endpoints.
-4. **Feature deltas inside available services**: Azure OpenAI model catalog is
+5. **Feature deltas inside available services**: Azure OpenAI model catalog is
    thinner in Gov, Microsoft Purview is classic-Data-Map-only, AI Search
    semantic ranker is absent in US Gov Texas, Power BI Gov has SKU limits.
 
@@ -191,10 +197,24 @@ Each item is docs-tracked here; implementation lands under the GOV-PARITY task
   reconcile succeed against loom-unity + ADLS ACLs; UC path stays Commercial/GCC
   opt-in. Cross-ref `PRPs/active/bridge-services/PRP-bridge-services.md`
   (loom-onesecurity policy compiler).
-- **GOV-3 (P0, substrate).** Verify Azure Container Apps GA + ingress FQDN suffix
-  in the target Gov region and wire self-referential app URLs / Front Door origin
-  to the `.us` host. **Accept:** a Gov what-if shows the Container Apps Env +
-  apps resolving; the Console reaches itself over the Gov ingress host.
+- **GOV-3 (P0, substrate — likely hard blocker).** Azure Container Apps is the
+  substrate the entire product runs on, and it is **not documented as GA in any
+  US Gov region.** It is absent from the Azure Government Product GA Roadmap
+  (which *does* list Container Instances + Container Registry as GA); no ACA
+  feature/region doc lists a Gov row (unlike App Service Environment, which
+  explicitly enumerates US Gov Arizona/Texas/Virginia + US DoD); Private Link for
+  ACA is "All public regions" (not "All Government regions" as ACR/AKS say); and
+  there is no documented `azurecontainerapps.us` Gov ingress suffix. The last
+  concrete public signal (MS Q&A #1655402, Apr 2024) said ACA was not yet
+  available in Azure US Government. **Action:** confirm on the live
+  Products-by-region matrix (`regions=usgov-virginia,usgov-arizona`) / an actual
+  Gov subscription's region picker. If ACA is not GA in the target Gov region,
+  the app tier needs a substrate swap to a **Gov-GA host** — **AKS** (GA in Gov,
+  all IL levels; bicep already has `aks-arm-client.ts` + AKS modules) or **App
+  Service Environment v3 / Web App for Containers** (GA in Gov). **Accept:** a
+  documented Products-by-region confirmation of ACA in the target region **or** a
+  chosen AKS/ASEv3 fallback path wired for the Gov app tier, with the Console
+  reaching itself over the Gov host.
 - **GOV-4 (P1).** `kusto-client.ts:150` `laProxyClusterUri()` — replace
   `AZURE_CLOUD==='AzureUSGovernment'` with `isGovCloud()` so DoD gets
   `adx.monitor.azure.us`. **Accept:** unit test asserts DoD → `.azure.us`.
