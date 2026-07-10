@@ -234,3 +234,38 @@ export type PerfCategory = 'engine' | 'surface';
 export function metricCategory(id: string): PerfCategory {
   return isPageTtiMetric(id) ? 'surface' : 'engine';
 }
+
+// ── Cache hit-rate KPI (PSR-5 / PSR-6) ───────────────────────────────────────
+// Browser-safe metadata for the result-cache hit-rate the perf page reports
+// alongside latency. This is a RATE (0..1), not a latency bar — kept separate
+// from ENGINE_METRICS (which are ms-with-a-Fabric-bar) so those stay uniform.
+// The live numbers come from `lib/perf/cache-counters.ts` (Node-side runtime).
+
+/** Stable id for the cache hit-rate KPI on the perf surface. */
+export const CACHE_HIT_RATE_METRIC_ID = 'cache-hit-rate';
+
+/**
+ * Target hit-rate for the always-on result cache. A warm report/dashboard
+ * re-issues identical aggregate queries, so a healthy cache clears this bar;
+ * below it signals TTLs too short or a freshness token rotating too often.
+ */
+export const CACHE_HIT_RATE_TARGET = 0.6;
+
+export interface CacheHitRateKpi {
+  id: string;
+  label: string;
+  /** Target rate (0..1) — the reference line on the KPI. */
+  targetRate: number;
+  learnUrl: string;
+  description: string;
+}
+
+/** Display metadata for the cache hit-rate KPI (labels/target/help). */
+export const CACHE_HIT_RATE_KPI: CacheHitRateKpi = {
+  id: CACHE_HIT_RATE_METRIC_ID,
+  label: 'Result-cache hit-rate',
+  targetRate: CACHE_HIT_RATE_TARGET,
+  learnUrl: 'https://learn.microsoft.com/azure/data-explorer/query-results-cache',
+  description:
+    'Share of report / semantic-layer / ADX tile queries served from the Loom result cache (in-process LRU → shared Redis → Cosmos) instead of a live backend round-trip. Higher is better — the outcome-equivalence lever behind sub-second repeat visuals (PSR-5/PSR-6).',
+};

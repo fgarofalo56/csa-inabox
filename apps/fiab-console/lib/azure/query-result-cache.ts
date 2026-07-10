@@ -41,12 +41,24 @@
  *   • In-process LRU (ALWAYS ON, zero infra): a bounded Map with per-entry
  *     expiry + insertion-order eviction. Per-replica; the freshness token keeps
  *     it correct across replicas even without a shared tier.
- *   • Distributed (OPTIONAL): a Cosmos container, enabled ONLY when
+ *   • Shared Redis (OPTIONAL, PSR-5): the hband-shared Azure Cache for Redis,
+ *     enabled ONLY when `LOOM_RESULT_CACHE_REDIS` is set. Preferred distributed
+ *     tier — a visual cached by one replica is a Redis read on another. ANY
+ *     failure degrades silently to the lower tiers.
+ *   • Distributed Cosmos (OPTIONAL): a Cosmos container, enabled ONLY when
  *     `LOOM_QUERY_CACHE_COSMOS_CONTAINER` is set (uses the same
  *     `LOOM_COSMOS_ENDPOINT` + Console UAMI the rest of the console uses, with a
  *     native container TTL). Shares hits across replicas. ANY Cosmos error
  *     degrades silently to the in-process tier — never a request failure
  *     (honest fallback to a direct query is always available upstream).
+ *
+ * ── Per-backend TTL ──────────────────────────────────────────────────────────
+ * A key optionally carries the answering `backend` (serverless / dedicated /
+ * accel / adx / tabular). TTL resolves per backend via
+ * `LOOM_QUERY_CACHE_TTL_MS_<BACKEND>` (e.g. a warm dedicated pool tolerates a
+ * longer TTL than a serverless on-demand endpoint), falling back to
+ * `LOOM_QUERY_CACHE_TTL_MS` and then the 60s default. The backend is folded into
+ * the cache key so two tiers never collide.
  *
  * NO Fabric / Power BI / OneLake dependency (no-fabric-dependency.md); the cache
  * stores only rows the Azure-native backends already produced (no-vaporware.md).
@@ -54,6 +66,8 @@
 
 import { createHash } from 'crypto';
 import { loomServerCredential } from '@/lib/azure/aca-managed-identity';
+import { redisCacheConfigured, redisGet, redisSet } from '@/lib/azure/redis-cache-client';
+import { recordCacheHit, recordCacheMiss } from '@/lib/perf/cache-counters';
 
 // ── Public shapes ──────────────────────────────────────────────────────────
 
@@ -72,6 +86,12 @@ export interface QueryCacheKeyParts {
    * proxy the caller derives from item state (see `deriveFreshnessToken`).
    */
   freshness?: string;
+  /**
+   * Answering backend label for per-backend TTL + key isolation
+   * (`serverless` | `dedicated` | `accel` | `adx` | `tabular`). Folded into the
+   * key so a warm-pool result never serves a serverless-cache read.
+   */
+  backend?: string;
 }
 
 /** A cached query result payload (the exact body the route returns downstream). */
@@ -102,6 +122,25 @@ interface CacheEnvelope {
 function ttlMs(): number {
   const n = Number(process.env.LOOM_QUERY_CACHE_TTL_MS);
   return Number.isFinite(n) && n > 0 ? n : 60_000;
+}
+
+/** A backend label reduced to an env-var-safe uppercase token (A-Z0-9_). */
+export function backendEnvToken(backend: string | undefined): string {
+  return (backend ?? '').toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+}
+
+/**
+ * Per-backend result TTL (ms): `LOOM_QUERY_CACHE_TTL_MS_<BACKEND>` overrides the
+ * generic `LOOM_QUERY_CACHE_TTL_MS`, which overrides the 60s default. Lets a
+ * warm dedicated pool cache longer than a serverless on-demand endpoint.
+ */
+export function ttlMsForBackend(backend?: string): number {
+  const token = backendEnvToken(backend);
+  if (token) {
+    const n = Number(process.env[`LOOM_QUERY_CACHE_TTL_MS_${token}`]);
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+  return ttlMs();
 }
 
 /** Max in-process entries before insertion-order eviction. */
@@ -136,6 +175,7 @@ export function buildQueryCacheKey(parts: QueryCacheKeyParts): string {
     p: params,
     s: parts.storageMode,
     f: parts.freshness ?? '',
+    b: parts.backend ?? '',
   });
   return createHash('sha256').update(canonical).digest('hex');
 }
@@ -188,6 +228,38 @@ function ipSet(env: CacheEnvelope): void {
     if (oldest === undefined) break;
     store.delete(oldest);
   }
+}
+
+// ── Optional shared Redis tier (PSR-5) ───────────────────────────────────────
+//
+// Enabled only when `LOOM_RESULT_CACHE_REDIS` is set. Preferred over Cosmos for
+// cross-replica coherence (a Map read on any replica). Values are the JSON
+// envelope; the native Redis TTL (EX) mirrors the per-backend TTL, so a missed
+// invalidation self-heals exactly like the in-process tier. Any failure inside
+// the client degrades to null/no-op (never a request failure).
+
+/** Namespaced Redis key: `loom:qc:<modelId>:<hash>` (readable per-model prefix). */
+function redisKeyFor(key: string, modelId: string): string {
+  return `loom:qc:${modelId}:${key}`;
+}
+
+async function redisTierGet(key: string, modelId: string): Promise<CachedQueryResult | null> {
+  if (!redisCacheConfigured()) return null;
+  const raw = await redisGet(redisKeyFor(key, modelId));
+  if (!raw) return null;
+  try {
+    const env = JSON.parse(raw) as CacheEnvelope;
+    if (typeof env.expiresAt === 'number' && env.expiresAt <= Date.now()) return null;
+    return env.value ?? null;
+  } catch {
+    return null;
+  }
+}
+
+async function redisTierSet(env: CacheEnvelope): Promise<void> {
+  if (!redisCacheConfigured()) return;
+  const seconds = Math.ceil((env.expiresAt - Date.now()) / 1000) || 1;
+  await redisSet(redisKeyFor(env.key, env.modelId), JSON.stringify(env), seconds);
 }
 
 // ── Optional distributed (Cosmos) tier ──────────────────────────────────────
@@ -284,34 +356,46 @@ export async function getCachedResult(
   const local = ipGet(key);
   if (local) {
     hits++;
+    recordCacheHit('result-cache');
     return local;
   }
-  const dist = await distGet(key, modelId);
-  if (dist) {
+  // Shared Redis tier (preferred), then Cosmos.
+  const shared = (await redisTierGet(key, modelId)) ?? (await distGet(key, modelId));
+  if (shared) {
     hits++;
+    recordCacheHit('result-cache');
     // Promote into the in-process tier for the next hit on this replica.
-    ipSet({ key, modelId, value: dist, cachedAt: Date.now(), expiresAt: Date.now() + ttlMs() });
-    return dist;
+    ipSet({ key, modelId, value: shared, cachedAt: Date.now(), expiresAt: Date.now() + ttlMs() });
+    return shared;
   }
   misses++;
+  recordCacheMiss('result-cache');
   return null;
 }
 
-/** Store a result in both tiers. No-op when caching is disabled. */
+/**
+ * Store a result in every configured tier. No-op when caching is disabled.
+ * `opts.ttlMs` (or the key's `backend`, resolved via {@link ttlMsForBackend})
+ * sets a per-backend TTL; otherwise the generic default applies.
+ */
 export async function setCachedResult(
   key: string,
   modelId: string,
   value: CachedQueryResult,
+  opts?: { ttlMs?: number; backend?: string },
 ): Promise<void> {
   if (!queryCacheEnabled()) return;
+  const effectiveTtl =
+    opts?.ttlMs && opts.ttlMs > 0 ? opts.ttlMs : ttlMsForBackend(opts?.backend ?? value.producedBy);
   const env: CacheEnvelope = {
     key,
     modelId,
     value,
     cachedAt: Date.now(),
-    expiresAt: Date.now() + ttlMs(),
+    expiresAt: Date.now() + effectiveTtl,
   };
   ipSet(env);
+  await redisTierSet(env);
   await distSet(env);
 }
 
@@ -330,17 +414,22 @@ export function invalidateModel(modelId: string): void {
 export function queryCacheStats(): {
   enabled: boolean;
   distributed: boolean;
+  redis: boolean;
   size: number;
   hits: number;
   misses: number;
+  hitRate: number;
   ttlMs: number;
 } {
+  const total = hits + misses;
   return {
     enabled: queryCacheEnabled(),
     distributed: distributedEnabled(),
+    redis: redisCacheConfigured(),
     size: store.size,
     hits,
     misses,
+    hitRate: total > 0 ? hits / total : 0,
     ttlMs: ttlMs(),
   };
 }

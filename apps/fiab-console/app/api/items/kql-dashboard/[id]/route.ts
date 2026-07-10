@@ -109,11 +109,12 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
       if (ov) p.value = p.type === 'multi' ? ov : ov[0];
     }
 
+    const cacheMaxAgeSec = tileCacheMaxAgeSec(model.autoRefreshMs);
     const rendered = run
-      ? await runTiles(model.tiles, model.dataSources, params, timeKey, fallbackDb, model.baseQueries)
+      ? await runTiles(model.tiles, model.dataSources, params, timeKey, fallbackDb, model.baseQueries, { cacheMaxAgeSec })
       : model.tiles;
 
-    return NextResponse.json({
+    const res = NextResponse.json({
       ok: true,
       displayName: item.displayName,
       database: fallbackDb,
@@ -125,6 +126,10 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
       timeRange: timeKey,
       autoRefreshMs: model.autoRefreshMs ?? 0,
     });
+    // PSR-6: let the browser/CDN reuse a rendered board for the tile refresh
+    // window (per-user; never shared across tenants). Only when tiles were run.
+    if (run) res.headers.set('Cache-Control', `private, max-age=${cacheMaxAgeSec}`);
+    return res;
   } catch (e: any) {
     const status = e instanceof KustoError ? e.status : 500;
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status });
@@ -164,6 +169,18 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
   }
 }
 
+/**
+ * Cacheable window (seconds) for a dashboard's tile queries. A tile is refreshed
+ * every `autoRefreshMs`, so serving a query-results-cache hit within that window
+ * is exactly the freshness the board already tolerates (PSR-6). Bounded to
+ * [30s, 1h]; 0/unset → 5 min (a sensible repeat-visit window). Pure — unit tested.
+ */
+export function tileCacheMaxAgeSec(autoRefreshMs?: number): number {
+  const fromRefresh = Number(autoRefreshMs);
+  const sec = Number.isFinite(fromRefresh) && fromRefresh > 0 ? Math.floor(fromRefresh / 1000) : 300;
+  return Math.min(3600, Math.max(30, sec));
+}
+
 /** Execute every tile against its resolved database with params substituted. */
 export async function runTiles(
   tiles: DashboardTile[],
@@ -172,12 +189,13 @@ export async function runTiles(
   timeKey: string,
   fallbackDb: string,
   baseQueries: BaseQuery[] = [],
+  opts?: { cacheMaxAgeSec?: number },
 ) {
   return Promise.all(tiles.map(async (t) => {
     try {
       const db = resolveTileDatabase(t, dataSources, fallbackDb);
       const kql = buildTileKql(t.kql, params, timeKey, baseQueries);
-      const result = await executeQuery(db, kql);
+      const result = await executeQuery(db, kql, { resultsCacheMaxAgeSec: opts?.cacheMaxAgeSec });
       return { ...t, result, resolvedDatabase: db };
     } catch (e: any) {
       return { ...t, error: e?.message || String(e) };
