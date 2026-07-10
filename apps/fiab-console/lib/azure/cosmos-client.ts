@@ -243,6 +243,15 @@ let _costAttribution: Container | null = null;
 // Created lazily here (no ARM/Bicep pre-step beyond the account+database); the
 // optional LoomPerf_CL Log-Analytics export is a separate honest-gated path.
 let _perfBenchmarks: Container | null = null;
+// PSR-3 — cross-replica warm Spark-session lease registry. One doc per warm/
+// leased pooled session: {id: leaseId, groupKey, backend, poolName, kind,
+// sizingKey, sessionId, state, leases[], ownerReplica, warmedAt, lastActivityAt,
+// ttl}. PK /groupKey so a replica's "claim a warm session in this group" query
+// hits a single physical partition; any replica can claim a session another
+// replica warmed (the Livy session id is global to the Synapse pool, not
+// replica-local). TTL-enabled (each doc carries its own `ttl`) so a crashed
+// replica's leases self-evict instead of pinning a session forever.
+let _sparkWarmLeases: Container | null = null;
 let _ensured = false;
 
 /**
@@ -845,6 +854,15 @@ async function ensure() {
   _costAttribution = costAttr;
   // PSR-1 — perf-benchmark trend rows. PK /runId (see declaration).
   _perfBenchmarks = await mk('perf-benchmarks', '/runId');
+  // PSR-3 — cross-replica warm-session lease registry. PK /groupKey, TTL-enabled
+  // (each lease doc carries its own `ttl` so a dead replica's leases self-evict).
+  // Distinct createIfNotExists (not `mk`) to set defaultTtl.
+  const { container: swl } = await database.containers.createIfNotExists({
+    id: 'spark-warm-leases',
+    partitionKey: { paths: ['/groupKey'] },
+    defaultTtl: -1, // TTL enabled; each lease doc carries its own `ttl`
+  });
+  _sparkWarmLeases = swl;
   _ensured = true;
 }
 
@@ -924,6 +942,7 @@ export async function capacityGuardrailsContainer(): Promise<Container> { await 
 /** BR-COSTATTR — per-execution cost attribution ledger (append-only, TTL), PK /tenantId. */
 export async function costAttributionContainer(): Promise<Container> { await ensure(); return _costAttribution!; }
 export async function perfBenchmarksContainer(): Promise<Container> { await ensure(); return _perfBenchmarks!; }
+export async function sparkWarmLeasesContainer(): Promise<Container> { await ensure(); return _sparkWarmLeases!; }
 
 // Foundation admin containers (shared cloud-endpoints resolver task).
 /** Admin Workspace Catalog — one row per Loom-managed workspace, PK /tenantId. */

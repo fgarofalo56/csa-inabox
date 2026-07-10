@@ -212,6 +212,13 @@ var loomContainers = [
   // grows unbounded. Each row carries its own `ttl`; the container-level
   // defaultTtl: -1 turns TTL ON without imposing a blanket expiry.
   { name: 'cost-attribution',    partitionKey: '/tenantId', ttl: -1 }
+  // PSR-3 — warm Spark-session cross-replica lease registry. PK /groupKey so a
+  // replica's "claim a warm session in this group" query hits one partition;
+  // TTL-enabled (each lease doc carries its own `ttl`) so a crashed replica's
+  // leases self-evict. createIfNotExists in cosmos-client.ts ensure() is the
+  // hotfix fallback. Only used when the shared substrate is signalled
+  // (LOOM_SPARK_POOL_REDIS / LOOM_SPARK_POOL_LEASE_CONTAINER); otherwise idle.
+  { name: 'spark-warm-leases',   partitionKey: '/groupKey', ttl: -1 }
 ]
 
 resource loomDb 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases@2024-12-01-preview' = {
