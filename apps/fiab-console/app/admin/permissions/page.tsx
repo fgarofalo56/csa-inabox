@@ -18,7 +18,7 @@
 import { clientFetch } from '@/lib/client-fetch';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Spinner, MessageBar, MessageBarBody, MessageBarTitle, Button, Caption1, Body1, Subtitle2, Title2,
+  Spinner, Skeleton, SkeletonItem, MessageBar, MessageBarBody, MessageBarTitle, Button, Caption1, Body1, Subtitle2, Title2,
   TabList, Tab, Dropdown, Option, Field,
   makeStyles, tokens,
 } from '@fluentui/react-components';
@@ -86,6 +86,8 @@ const useStyles = makeStyles({
   hidden: { display: 'none' },
   fieldNote: { marginTop: tokens.spacingVerticalXS },
   minW0: { minWidth: 0 },
+  skeletonTree: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, padding: tokens.spacingVerticalL },
+  skeletonDetail: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL },
   capDesc: { display: 'block', marginTop: tokens.spacingVerticalXS, overflowWrap: 'anywhere' },
   capId: {
     display: 'block', marginTop: tokens.spacingVerticalXS,
@@ -212,7 +214,28 @@ function FeaturePermissionsTab({ styles }: { styles: Styles }) {
   );
 
   if (loading) {
-    return <Section><Spinner label="Loading capability catalog…" /></Section>;
+    return (
+      <Section bare>
+        <div className={styles.layout} aria-label="Loading capability catalog">
+          <div className={styles.treePane}>
+            <div className={styles.skeletonTree}>
+              {Array.from({ length: 8 }).map((_, i) => (
+                <Skeleton key={i} aria-label=""><SkeletonItem shape="rectangle" style={{ height: '18px', width: `${60 + (i * 13) % 35}%` }} /></Skeleton>
+              ))}
+            </div>
+          </div>
+          <div className={styles.detail}>
+            <div className={styles.skeletonDetail}>
+              <Skeleton aria-label=""><SkeletonItem shape="rectangle" style={{ height: '28px', width: '240px' }} /></Skeleton>
+              <Skeleton aria-label=""><SkeletonItem shape="rectangle" style={{ height: '14px', width: '80%' }} /></Skeleton>
+              {Array.from({ length: 3 }).map((_, i) => (
+                <Skeleton key={i} aria-label=""><SkeletonItem shape="rectangle" style={{ height: '44px' }} /></Skeleton>
+              ))}
+            </div>
+          </div>
+        </div>
+      </Section>
+    );
   }
   if (error) {
     return (

@@ -34,6 +34,7 @@ import {
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { NewItemCreateGate } from './new-item-gate';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import type {
@@ -338,6 +339,13 @@ export function AiEnrichmentEditor({ item, id }: { item: FabricItemType; id: str
         </div>
 
         <div className={s.body}>
+          <TeachingBanner
+            surfaceKey="ai-enrichment-editor"
+            icon={SparkleRegular}
+            title="Enrich a column with AI"
+            message="Point at a lakehouse or warehouse column, choose an operation (summarize, classify, extract, translate, or a custom prompt), preview on real rows to see cost, then run a batch that writes a new Delta column. Azure OpenAI + Databricks SQL — no Microsoft Fabric required."
+            learnMoreHref="https://learn.microsoft.com/azure/ai-services/openai/concepts/models"
+          />
           {(err || loadError) && (
             <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Operation failed</MessageBarTitle>{err || loadError}</MessageBarBody></MessageBar>
           )}

@@ -45,6 +45,9 @@ import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { emptyProjectGraph, type DbtProjectGraph } from '@/lib/dbt/dbt-project-model';
 import type { GeneratedFile } from '@/lib/dbt/dbt-codegen';
 import { useSharedEditorStyles } from './shared-styles';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
+import { useRegisterRibbonCommands } from '@/lib/components/shared/ribbon-commands';
+import { loomDocUrl } from '@/lib/learn/content';
 
 const useLocalStyles = makeStyles({
   form: { padding: tokens.spacingVerticalXL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, maxWidth: '820px' },
@@ -332,6 +335,9 @@ export function EnvironmentEditor({ item, id }: { item: FabricItemType; id: stri
   // eslint-disable-next-line react-hooks/exhaustive-deps
   ], [busy, dirty, canSaveEnv, canApply]);
 
+  // SC-9 — register ribbon actions for the in-ribbon command search (Ctrl+Q).
+  useRegisterRibbonCommands(ribbon, 'environment');
+
   if (id === 'new') {
     return (
       <NewItemCreateGate item={item} createLabel="Create environment"
@@ -340,7 +346,7 @@ export function EnvironmentEditor({ item, id }: { item: FabricItemType; id: stri
   }
 
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon} commandSearch main={
       <>
         <div className={styles.tabBar}>
           <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as string)}>
@@ -351,6 +357,13 @@ export function EnvironmentEditor({ item, id }: { item: FabricItemType; id: stri
           </TabList>
         </div>
         <div className={styles.tabBody}>
+          {/* SC-6 — teaching banner: what a Spark environment is + how it applies. */}
+          <TeachingBanner
+            surfaceKey="spark-environment"
+            title="Package Spark dependencies once, apply to any pool"
+            message="An environment bundles PyPI requirements, Spark configuration, and custom JARs. Save it, then apply it to a Synapse Spark pool — every session on that pool picks up the libraries and configuration, so notebooks and Spark jobs run against a consistent, reproducible runtime."
+            learnMoreHref={loomDocUrl('fiab/v3-tenant-bootstrap')}
+          />
           <ErrBar error={err || loadError} />
           {applyMsg && (
             <MessageBar intent="success"><MessageBarBody>{applyMsg}</MessageBarBody></MessageBar>
@@ -669,6 +682,9 @@ export function DbtJobEditor({ item, id }: { item: FabricItemType; id: string })
   // eslint-disable-next-line react-hooks/exhaustive-deps
   ], [busy, dirty, canSaveDbt, canRunDbt, canGenerate, loadRuns]);
 
+  // SC-9 — register ribbon actions for the in-ribbon command search (Ctrl+Q).
+  useRegisterRibbonCommands(ribbon, 'dbt-job');
+
   if (id === 'new') {
     return (
       <NewItemCreateGate item={item} createLabel="Create dbt job"
@@ -677,7 +693,7 @@ export function DbtJobEditor({ item, id }: { item: FabricItemType; id: string })
   }
 
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon} commandSearch main={
       <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
         <div className={styles.tabBar}>
           <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as string)}>
@@ -688,6 +704,13 @@ export function DbtJobEditor({ item, id }: { item: FabricItemType; id: string })
           </TabList>
         </div>
         <div className={styles.tabBody}>
+          {/* SC-6 — teaching banner: what a dbt job is + how it runs. */}
+          <TeachingBanner
+            surfaceKey="dbt-job"
+            title="Build your dbt project visually, run it on Databricks"
+            message="Model the dbt DAG on the Builder tab, generate the project files (dbt_project.yml, models, tests), then run it — Loom materializes a Databricks Job with a dbt_task and streams the run log back here. Or point the Advanced tab at an existing dbt Git repo."
+            learnMoreHref={loomDocUrl('fiab/v3-tenant-bootstrap')}
+          />
           <ErrBar error={err || loadError} />
           {loading && <Spinner size="small" label="Loading dbt-job…" labelPosition="after" />}
           {saveMsg && <MessageBar intent="success"><MessageBarBody>{saveMsg}</MessageBarBody></MessageBar>}

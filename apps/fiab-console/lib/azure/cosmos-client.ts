@@ -151,6 +151,13 @@ let _azureConnections: Container | null = null;
 // lazily so a fresh environment needs no extra ARM/Bicep step beyond the
 // account+database.
 let _taskFlows: Container | null = null;
+// Task-flow RUNS (F11 execution) — one row per "Run flow" invocation, PK
+// /workspaceId so a flow's run-history list + the poller's per-run point-read
+// hit a single physical partition. Records the per-step / per-item run fan-out
+// as the floating driver advances the flow. Loom-native (no Fabric dependency).
+// Created lazily so a fresh environment needs no extra ARM/Bicep step beyond the
+// account+database.
+let _taskFlowRuns: Container | null = null;
 // Spark / compute configuration (F13) — one doc per Loom workspace holding the
 // operator-desired Databricks Spark settings (Pool / Runtime / Environment /
 // Jobs). The Cosmos doc is the source of truth; the live Databricks cluster/pool
@@ -243,6 +250,15 @@ let _costAttribution: Container | null = null;
 // Created lazily here (no ARM/Bicep pre-step beyond the account+database); the
 // optional LoomPerf_CL Log-Analytics export is a separate honest-gated path.
 let _perfBenchmarks: Container | null = null;
+// PSR-3 — cross-replica warm Spark-session lease registry. One doc per warm/
+// leased pooled session: {id: leaseId, groupKey, backend, poolName, kind,
+// sizingKey, sessionId, state, leases[], ownerReplica, warmedAt, lastActivityAt,
+// ttl}. PK /groupKey so a replica's "claim a warm session in this group" query
+// hits a single physical partition; any replica can claim a session another
+// replica warmed (the Livy session id is global to the Synapse pool, not
+// replica-local). TTL-enabled (each doc carries its own `ttl`) so a crashed
+// replica's leases self-evict instead of pinning a session forever.
+let _sparkWarmLeases: Container | null = null;
 let _ensured = false;
 
 /**
@@ -781,6 +797,8 @@ async function ensure() {
   // account+database (the Console UAMI already holds Cosmos DB Built-in Data
   // Contributor at account scope).
   _taskFlows = await mk('task-flows', '/workspaceId');
+  // Task-flow runs (F11 execution) — run-history + poll store, PK /workspaceId.
+  _taskFlowRuns = await mk('task-flow-runs', '/workspaceId');
   // Spark / compute configuration (F13) — one doc per workspace holding the
   // Databricks Spark settings (Pool / Runtime / Environment / Jobs). PK
   // /workspaceId so the Spark-settings pane hits a single physical partition.
@@ -845,6 +863,15 @@ async function ensure() {
   _costAttribution = costAttr;
   // PSR-1 — perf-benchmark trend rows. PK /runId (see declaration).
   _perfBenchmarks = await mk('perf-benchmarks', '/runId');
+  // PSR-3 — cross-replica warm-session lease registry. PK /groupKey, TTL-enabled
+  // (each lease doc carries its own `ttl` so a dead replica's leases self-evict).
+  // Distinct createIfNotExists (not `mk`) to set defaultTtl.
+  const { container: swl } = await database.containers.createIfNotExists({
+    id: 'spark-warm-leases',
+    partitionKey: { paths: ['/groupKey'] },
+    defaultTtl: -1, // TTL enabled; each lease doc carries its own `ttl`
+  });
+  _sparkWarmLeases = swl;
   _ensured = true;
 }
 
@@ -897,6 +924,8 @@ export async function dataProductAnalyticsContainer(): Promise<Container> { awai
 export async function azureConnectionsContainer(): Promise<Container> { await ensure(); return _azureConnections!; }
 /** Task flows (F11) — visual step-sequence canvases, PK /workspaceId. */
 export async function taskFlowsContainer(): Promise<Container> { await ensure(); return _taskFlows!; }
+/** Task-flow runs (F11 execution) — run-history + poll store, PK /workspaceId. */
+export async function taskFlowRunsContainer(): Promise<Container> { await ensure(); return _taskFlowRuns!; }
 /** Spark / compute configuration (F13) — PK /workspaceId. */
 export async function workspaceSparkConfigContainer(): Promise<Container> { await ensure(); return _workspaceSparkConfig!; }
 /** F22 — embed codes (signed embed URLs) — PK /tenantId. */
@@ -924,6 +953,7 @@ export async function capacityGuardrailsContainer(): Promise<Container> { await 
 /** BR-COSTATTR — per-execution cost attribution ledger (append-only, TTL), PK /tenantId. */
 export async function costAttributionContainer(): Promise<Container> { await ensure(); return _costAttribution!; }
 export async function perfBenchmarksContainer(): Promise<Container> { await ensure(); return _perfBenchmarks!; }
+export async function sparkWarmLeasesContainer(): Promise<Container> { await ensure(); return _sparkWarmLeases!; }
 
 // Foundation admin containers (shared cloud-endpoints resolver task).
 /** Admin Workspace Catalog — one row per Loom-managed workspace, PK /tenantId. */
