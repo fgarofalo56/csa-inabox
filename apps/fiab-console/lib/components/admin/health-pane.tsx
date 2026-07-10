@@ -23,7 +23,9 @@ import {
 import {
   CheckmarkCircle24Filled, Warning24Filled, ErrorCircle24Filled,
   ArrowSync24Regular, Wrench24Regular, ShieldCheckmark24Regular,
+  Stethoscope20Regular,
 } from '@fluentui/react-icons';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
 
 type AuditStatus = 'pass' | 'warn' | 'fail';
 type AuditSeverity = 'critical' | 'recommended' | 'optional';
@@ -144,6 +146,16 @@ export function HealthPane() {
 
   return (
     <div>
+      {/* Teaching banner (SC-6) — dismissible guidance on what the self-audit
+          covers and how the healer works, keyed with a persistent dismiss. */}
+      <TeachingBanner
+        surfaceKey="admin-health-self-audit"
+        icon={Stethoscope20Regular}
+        title="Self-audit your deployment"
+        message="Each check probes a real backend across identity, data plane, Azure services, permissions, and security posture, then scores pass / warn / fail. Fixable issues offer an admin-approved one-click healer; deploy-time gaps name the exact env var, role, or resource to set."
+        learnMoreHref="https://learn.microsoft.com/azure/architecture/framework/security/monitor-audit"
+      />
+
       {/* Scorecard */}
       <div style={card}>
         <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXXL, flexWrap: 'wrap' }}>
