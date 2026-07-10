@@ -21,16 +21,22 @@
 import { clientFetch } from '@/lib/client-fetch';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Spinner, Badge, Caption1, Body1, Button,
+  Skeleton, SkeletonItem, Badge, Caption1, Body1, Button,
   MessageBar, MessageBarBody, MessageBarTitle,
   Popover, PopoverTrigger, PopoverSurface,
   makeStyles, tokens, mergeClasses,
 } from '@fluentui/react-components';
-import { ArrowSync24Regular, Open16Regular, Person24Regular, ChevronDown16Regular } from '@fluentui/react-icons';
+import {
+  ArrowSync24Regular, Open16Regular, Person24Regular, ChevronDown16Regular,
+  PeopleTeam24Regular, PersonAdd24Regular,
+} from '@fluentui/react-icons';
 import { AdminShell } from '@/lib/components/admin-shell';
 import { Section, Toolbar } from '@/lib/components/ui/section';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { useAdminTabStyles } from '@/lib/components/ui/admin-tab-styles';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
+import { GuidedEmptyState } from '@/lib/components/shared/guided-empty-state';
+import { LOOM_ACCENT } from '@/lib/components/shared/accent-tokens';
 
 interface TenantSubscribedSku {
   skuId: string;
@@ -113,6 +119,8 @@ const useStyles = makeStyles({
     wordBreak: 'break-word',
   },
   selfStart: { alignSelf: 'flex-start' },
+  skeletonRows: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, paddingTop: tokens.spacingVerticalM },
+  skeletonRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalL },
 });
 
 function RoleExpansion({ user, graphEnabled, styles }: { user: UserRow; graphEnabled: boolean; styles: ReturnType<typeof useStyles> }) {
@@ -320,6 +328,14 @@ export default function UsersPage() {
         learnMoreHref: 'https://learn.microsoft.com/power-bi/enterprise/service-admin-licensing-organization',
       }}
     >
+      <TeachingBanner
+        surfaceKey="admin-users"
+        title="One tenant-wide view of who has access"
+        message="Every user with a Loom role or a Power BI / Fabric license, reconciled from Microsoft Graph and the Loom permission store. Filter by license SKU or role to spot over-provisioned or unlicensed accounts, then jump to Entra or the M365 admin center to act."
+        icon={PeopleTeam24Regular}
+        accent={LOOM_ACCENT.blue}
+        learnMoreHref="https://learn.microsoft.com/power-bi/enterprise/service-admin-licensing-organization"
+      />
       <Body1 className={s.intro}>
         Users with access to this tenant&apos;s workspaces. Derived from Cosmos workspaces + items + workspace-permissions,
         enriched with Microsoft Graph identity, license assignments, and the F5 workspace-roles store.
@@ -396,7 +412,42 @@ export default function UsersPage() {
       >
         <Toolbar search={q} onSearch={setQ} searchPlaceholder="Search by UPN, name, department, role, license…" />
         {loading && !error ? (
-          <Spinner label="Loading users…" />
+          <div className={s.skeletonRows} aria-label="Loading users">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <div key={i} className={s.skeletonRow}>
+                <Skeleton aria-label=""><SkeletonItem shape="circle" style={{ width: '32px', height: '32px' }} /></Skeleton>
+                <Skeleton aria-label="" style={{ flex: 1 }}><SkeletonItem shape="rectangle" style={{ height: '16px' }} /></Skeleton>
+                <Skeleton aria-label="" style={{ width: '120px' }}><SkeletonItem shape="rectangle" style={{ height: '16px' }} /></Skeleton>
+                <Skeleton aria-label="" style={{ width: '90px' }}><SkeletonItem shape="rectangle" style={{ height: '16px' }} /></Skeleton>
+              </div>
+            ))}
+          </div>
+        ) : !error && users !== null && users.length === 0 ? (
+          <GuidedEmptyState
+            title="No users to show yet"
+            intro="Users appear here once they own a workspace, create an item, or receive a role — and richer identity + license detail lights up with Microsoft Graph."
+            heroIcon={PeopleTeam24Regular}
+            ariaLabel="No users yet"
+            paths={[
+              {
+                key: 'graph',
+                title: 'Enable Graph enrichment',
+                body: 'Grant Directory.Read.All + User.Read.All to light up display names, departments, account status, and license SKUs.',
+                icon: PersonAdd24Regular,
+                accent: LOOM_ACCENT.blue,
+                href: '/admin/tenant-settings',
+              },
+              {
+                key: 'workspaces',
+                title: 'Create a workspace',
+                body: 'Once a user owns a workspace or creates an item, they show up here automatically with their roles.',
+                icon: PeopleTeam24Regular,
+                accent: LOOM_ACCENT.teal,
+                href: '/workspaces',
+              },
+            ]}
+            learnMoreHref="https://learn.microsoft.com/power-bi/enterprise/service-admin-licensing-organization"
+          />
         ) : (
           <LoomDataTable
             columns={columns}

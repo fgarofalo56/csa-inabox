@@ -24,6 +24,7 @@ import { Section, Toolbar } from '@/lib/components/ui/section';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { NotConfiguredBar, type NotConfiguredHint } from '@/lib/components/admin-security/not-configured-bar';
 import { SectionExplainer } from '@/lib/components/ui/learn-popover';
+import { GuidedEmptyState } from '@/lib/components/shared/guided-empty-state';
 import { CoeLibraryPane } from '@/lib/coe-library/coe-library-pane';
 import { DashboardsPane } from '@/lib/coe-library/builder/dashboards-pane';
 
@@ -296,6 +297,22 @@ export function OrgVisualsPane() {
         <Toolbar search={q} onSearch={setQ} searchPlaceholder="Search by name, file, version…" />
         {loading && !error ? (
           <Spinner label="Loading visuals…" />
+        ) : (visuals && visuals.length === 0 && !q && !gate) ? (
+          <GuidedEmptyState
+            title="No custom visuals yet"
+            heroIcon={ImageAdd20Regular}
+            intro="Bundle a custom Power BI visual as a .pbiviz and make it available to every report author across the tenant — stored Azure-natively as a Blob, no Fabric or Power BI workspace required."
+            columns={1}
+            paths={[{
+              key: 'upload',
+              title: 'Upload a .pbiviz bundle',
+              body: 'Pick a bundle, name it, and set a version — then toggle Enabled to publish it tenant-wide.',
+              icon: DocumentArrowUp20Regular,
+              onClick: () => fileRef.current?.click(),
+            }]}
+            learnMoreHref="https://learn.microsoft.com/power-bi/developer/visuals/power-bi-custom-visuals"
+            ariaLabel="No organizational visuals"
+          />
         ) : (
           <LoomDataTable
             columns={columns}

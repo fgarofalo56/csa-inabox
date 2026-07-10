@@ -36,6 +36,7 @@ import {
 } from '@fluentui/react-icons';
 import { PageShell } from '@/lib/components/page-shell';
 import { EmptyState } from '@/lib/components/empty-state';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
 import { SectionExplainer } from '@/lib/components/ui/learn-popover';
 import { ActivityFeedPane } from '@/lib/components/activity-feed-pane';
 import { PurviewGate, usePurviewStatus } from '@/lib/components/purview-gate';
@@ -367,6 +368,16 @@ export default function GovernancePage() {
           policies, data quality, master data, and insights.
         </SectionExplainer>
       </div>
+      {/* Teaching banner — Fabric-style next-step guidance (SC-6), dismissible. */}
+      <div style={{ marginBottom: tokens.spacingVerticalL }}>
+        <TeachingBanner
+          surfaceKey="governance-overview"
+          title="Start with your posture"
+          message="Governance rolls up live coverage from your tenant. Register a source and run a scan to raise coverage, then set access and protection policies to enforce it — every backend is Azure-native, so nothing depends on Microsoft Fabric."
+          learnMoreHref="https://learn.microsoft.com/purview/unified-catalog"
+        />
+      </div>
+
       {/* Purview connection status (live chip or honest gate). */}
       <PurviewGate status={purview} surface="Governance" reload={reloadStatus} />
 

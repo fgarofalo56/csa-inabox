@@ -27,6 +27,7 @@ import {
   Open16Regular, BookInformation20Regular, CloudArrowUp20Regular,
 } from '@fluentui/react-icons';
 import { EmptyState } from '@/lib/components/empty-state';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
@@ -194,6 +195,13 @@ export function DataProductTemplateEditor({ item, id }: { item: FabricItemType; 
         <div className={s.pad}>
           {!selected ? (
             <>
+            <TeachingBanner
+              surfaceKey="data-product-template-gallery"
+              icon={BoxToolbox20Regular}
+              title="Push-button data products"
+              message="Each template is a CSA-curated pattern that spawns a bundle of real Loom items — lakehouses, pipelines, semantic models — into your workspace in one click. Pick a template to inspect its components, toggle or rename any of them, then spawn. Turn on 'Deploy to live Azure backends' to provision immediately, or spawn as a scaffold and provision later."
+              learnMoreHref="/learn/data-products"
+            />
             <Input value={filter} onChange={(_, d) => setFilter(d.value)}
               placeholder="Search templates by name, category, or component…"
               contentBefore={<Search20Regular />} className={s.searchInput} />
@@ -400,6 +408,13 @@ export function DataProductInstanceEditor({ item, id }: { item: FabricItemType; 
               primaryAction={{ label: 'Browse templates', href: '/items/data-product-template/new' }} />
           ) : (
           <>
+          <TeachingBanner
+            surfaceKey="data-product-instance-ports"
+            icon={GridDots20Regular}
+            title="Components are this product's ports"
+            message="Each row is an output port of the data product — a real Loom item backing it. 'Provision all' deploys every un-provisioned component to its Azure backend; 'Check health' reads each item's freshness so consumers can trust what they subscribe to. Open any component to edit it directly."
+            learnMoreHref="/learn/data-products"
+          />
           <Subtitle2 className={s.sectionHeader}><GridDots20Regular />Components ({components.length})</Subtitle2>
           <div className={s.tableWrap}>
             <Table size="small">

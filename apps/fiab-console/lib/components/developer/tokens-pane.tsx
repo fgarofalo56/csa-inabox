@@ -32,6 +32,7 @@ import {
 import { clientFetch } from '@/lib/client-fetch';
 import { Section } from '@/lib/components/ui/section';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
+import { GuidedEmptyState } from '@/lib/components/shared/guided-empty-state';
 
 type PatScope = 'read-only' | 'read-write' | 'admin';
 
@@ -235,6 +236,39 @@ export function TokensPane({ admin = false }: { admin?: boolean }) {
       >
         {tokens_ === null ? (
           <Spinner label="Loading tokens…" />
+        ) : tokens_.length === 0 ? (
+          admin ? (
+            <GuidedEmptyState
+              title="No tokens in this tenant yet"
+              heroIcon={Key24Regular}
+              intro="Scoped API tokens created by users across your tenant appear here for oversight — you can revoke any of them immediately."
+              columns={1}
+              paths={[{
+                key: 'learn',
+                title: 'How scoped API tokens work',
+                body: 'Non-interactive clients (CI, Terraform, SCIM, scripts) authenticate with a typed-scope bearer token instead of a browser session.',
+                icon: Key24Regular,
+                href: 'https://learn.microsoft.com/entra/identity-platform/access-tokens',
+              }]}
+              ariaLabel="No tenant API tokens"
+            />
+          ) : (
+            <GuidedEmptyState
+              title="Create your first API token"
+              heroIcon={Key24Regular}
+              intro="Call the Loom API from CI, scripts, or Terraform with a scoped bearer token instead of a browser session."
+              columns={1}
+              paths={[{
+                key: 'create',
+                title: 'New token',
+                body: 'Pick a name, a typed scope, and an expiry — the secret is shown once and stored only as a one-way hash.',
+                icon: Add24Regular,
+                onClick: () => { resetCreate(); setCreateOpen(true); },
+              }]}
+              learnMoreHref="https://learn.microsoft.com/entra/identity-platform/access-tokens"
+              ariaLabel="No API tokens"
+            />
+          )
         ) : (
           <LoomDataTable
             columns={columns as unknown as LoomColumn<Record<string, unknown>>[]}
