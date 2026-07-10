@@ -127,6 +127,11 @@ const useStyles = makeStyles({
     gap: tokens.spacingVerticalS, padding: tokens.spacingVerticalXXL, color: tokens.colorNeutralForeground3,
     textAlign: 'center',
   },
+  emptyIcon: {
+    display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: '56px', height: '56px',
+    borderRadius: tokens.borderRadiusCircular, backgroundColor: tokens.colorNeutralBackground3,
+    marginBottom: tokens.spacingVerticalXS,
+  },
 });
 
 /** Measure an element's pixel size (ResizeObserver) so SVG can draw at 1:1. */
@@ -138,7 +143,12 @@ function useElementSize<T extends HTMLElement>(): [React.RefObject<T | null>, { 
     if (!el) return;
     const ro = new ResizeObserver((entries) => {
       const r = entries[0]?.contentRect;
-      if (r) setSize({ width: Math.round(r.width), height: Math.round(r.height) });
+      if (!r) return;
+      const width = Math.round(r.width);
+      const height = Math.round(r.height);
+      // Bail when the measured size is unchanged so a same-value ResizeObserver
+      // notification can't trigger a re-render → re-measure feedback loop.
+      setSize((prev) => (prev.width === width && prev.height === height ? prev : { width, height }));
     });
     ro.observe(el);
     setSize({ width: el.clientWidth, height: el.clientHeight });
@@ -433,10 +443,23 @@ export function ReportCanvas({ model, sample, dataSources, liveMode, header }: R
   React.useEffect(() => { if (pages.length && !pages.some((p) => p.name === active)) setActive(pages[0].name); }, [pages, active]);
 
   if (!pages.length) {
+    // Honest gate — not a bare glyph. Keep the surface chrome (header) and
+    // explain why there is nothing to draw + how to fix it (no-vaporware.md).
     return (
-      <div className={s.empty}>
-        <DataPie24Regular />
-        <Text>No report pages to display.</Text>
+      <div className={s.root}>
+        {header}
+        <MessageBar intent="warning">
+          <MessageBarBody>
+            This report has no pages to display. Its saved definition is empty or could not be parsed —
+            reopen it in the Report designer, add at least one page and visual, then Save and re-publish.
+            No Microsoft Fabric or Power BI workspace is required.
+          </MessageBarBody>
+        </MessageBar>
+        <div className={s.empty}>
+          <span className={s.emptyIcon} aria-hidden><DataPie24Regular /></span>
+          <Text size={400} weight="semibold">Nothing to render yet</Text>
+          <Caption1>A published report needs at least one page with a visual.</Caption1>
+        </div>
       </div>
     );
   }
