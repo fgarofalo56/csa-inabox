@@ -44,6 +44,7 @@ import {
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { NewItemCreateGate } from './new-item-gate';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 
@@ -458,6 +459,13 @@ export function AutoMlEditor({ item, id }: { item: FabricItemType; id: string })
 
         {tab === 'wizard' && (
           <>
+            <TeachingBanner
+              surfaceKey="automl-editor-wizard"
+              icon={Sparkle24Regular}
+              title="Let AutoML find the best model"
+              message="Pick a task (classification, regression, or forecasting), point at a dataset and target column, choose a compute cluster, and set the metric and trial budget. AutoML sweeps candidate models on Azure Machine Learning and ranks them — watch each run live on the Runs tab. No Microsoft Fabric required."
+              learnMoreHref="https://learn.microsoft.com/azure/machine-learning/concept-automated-ml"
+            />
             {/* Stepper — accessible progress nav: completed steps show a check,
                 the active step is brand-filled, future steps are reachable only
                 when the prior step validates. */}
