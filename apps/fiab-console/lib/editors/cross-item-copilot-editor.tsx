@@ -36,6 +36,7 @@ import { SessionList } from '@/lib/components/copilot/session-list';
 import { ToolsPanel } from '@/lib/components/copilot/tools-panel';
 import { Transcript } from '@/lib/components/copilot/transcript';
 import { ContextUsagePanel } from '@/lib/components/copilot/context-usage-panel';
+import { ConversationMcpPanel } from '@/lib/components/copilot/conversation-mcp-panel';
 import { groupTurns, type Step, type Tool, type SessionSummary, type Turn } from '@/lib/components/copilot/types';
 import {
   POWERBI_AUTHORING_SKILLS,
@@ -632,6 +633,24 @@ export function CopilotConsoleView({ embedded = false, contextSlug = 'default', 
     return undefined;
   }, [turns]);
 
+  // CTS-06: fold the visible conversation into {role,content} messages and POST
+  // to the memory-flush route, which extracts durable facts into long-term memory.
+  const dumpToMemory = useCallback(async (): Promise<{ stored: number } | void> => {
+    const messages: { role: string; content: string }[] = [];
+    for (const t of turns) {
+      if (t.user) messages.push({ role: 'user', content: t.user });
+      if (t.final) messages.push({ role: 'assistant', content: t.final });
+    }
+    if (messages.length === 0) return { stored: 0 };
+    const res = await clientFetch('/api/copilot/memory/flush', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ messages, sessionId: activeSessionId || undefined }),
+    });
+    const j = (await res.json().catch(() => ({}))) as { ok?: boolean; stored?: number };
+    return { stored: j.ok && typeof j.stored === 'number' ? j.stored : 0 };
+  }, [turns, activeSessionId]);
+
   const body = (
     <div className={s.shell}>
       {/* Left rail — sessions */}
@@ -718,9 +737,16 @@ export function CopilotConsoleView({ embedded = false, contextSlug = 'default', 
           )}
         </div>
 
+        {/* CTS-09: per-conversation MCP servers/tools live this conversation. */}
+        {hasTranscript && <ConversationMcpPanel turns={turns} />}
+
         {/* CTS-05: segmented context-window meter for the latest turn. */}
         {latestContextUsage && (
-          <ContextUsagePanel usage={latestContextUsage} messageCount={userPrompts.length} />
+          <ContextUsagePanel
+            usage={latestContextUsage}
+            messageCount={userPrompts.length}
+            onDumpToMemory={hasTranscript ? dumpToMemory : undefined}
+          />
         )}
 
         {/* Pinned composer */}

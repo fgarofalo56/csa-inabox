@@ -101,6 +101,12 @@ const ALLOWLIST = new Set([
   'LOOM_ITEM_VERSION_CAP',          // opt-in tuning knob for the per-item version-history retention cap (W6); unset default = 50 in code (lib/versions/item-version-store.ts)
   'LOOM_ADT_ENDPOINT',              // opt-in Azure Digital Twins endpoint (FGC-12); default twin backend is ADX-native — deploy platform/fiab/bicep/modules/integration/adt-instance.bicep to enable
   'LOOM_BATCH_SUB',                 // opt-in subscription override for the Azure Batch account (SVC-5); default = LOOM_SUBSCRIPTION_ID
+  'LOOM_CANVAS_AI_SUGGEST',         // opt-out kill switch for the W7 AOAI ghost-suggestion engine (default on in code)
+  'LOOM_COPILOT_MEMORY',            // opt-out kill switch for the CTS-06 dump-to-memory action (default on in code)
+  'LOOM_COPILOT_MEMORY_AGENT_ID',   // opt-in override for the memory agent identity (CTS-06); unset default in code
+  'LOOM_COPILOT_MEMORY_FLUSH_N',    // opt-in tuning knob: how many turns a memory flush extracts (CTS-06)
+  'LOOM_SPARK_POOL_CONCURRENT',     // opt-out kill switch for the FGC-10 concurrent shared-session mode (default on in code)
+  'LOOM_SPARK_POOL_SHARED_MAX',     // opt-in tuning knob: max read-only leases sharing one warm session (PSR-3/FGC-10)
   // PSR-5/6 result cache — all opt-in: unset default = in-process LRU (no Redis,
   // no behavior change). The shared Redis is the hband-shared.bicep instance
   // deployed out-of-band (admin-plane at the 256-param ceiling).

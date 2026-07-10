@@ -20,7 +20,7 @@ import { clientFetch } from '@/lib/client-fetch';
 import { useCallback, useEffect, useState } from 'react';
 import {
   TabList, Tab, type SelectTabData, type SelectTabEvent,
-  Spinner, Badge, Caption1, Body1, Button,
+  Skeleton, SkeletonItem, Badge, Caption1, Body1, Button,
   MessageBar, MessageBarBody, MessageBarTitle,
   makeStyles, tokens,
 } from '@fluentui/react-components';
@@ -269,7 +269,21 @@ function OverviewTab({ onNavigateTab }: { onNavigateTab: (t: TopTab) => void }) 
         </MessageBar>
       )}
 
-      {loading && !error && <Section><Spinner label="Composing security view…" /></Section>}
+      {loading && !error && (
+        <Section title="Posture">
+          <div className={s.statsRow} aria-label="Composing security view">
+            {Array.from({ length: 5 }).map((_, i) => (
+              <div key={i} className={s.statCard}>
+                <div className={s.statHead}>
+                  <Skeleton aria-label=""><SkeletonItem shape="rectangle" style={{ height: '32px', width: '72px' }} /></Skeleton>
+                  <Skeleton aria-label=""><SkeletonItem shape="circle" style={{ height: '22px', width: '22px' }} /></Skeleton>
+                </div>
+                <Skeleton aria-label=""><SkeletonItem shape="rectangle" style={{ height: '12px', width: '70%' }} /></Skeleton>
+              </div>
+            ))}
+          </div>
+        </Section>
+      )}
 
       {!loading && (insights || sensitivity || classifications) && (
         <>

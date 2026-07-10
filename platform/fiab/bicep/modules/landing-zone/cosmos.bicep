@@ -125,6 +125,8 @@ var databases = [
 //   folders           ← F10 nested folder hierarchy (PK /workspaceId)
 //   task-flows        ← F11 task-flow visual step sequences (PK /workspaceId).
 //     Loom-native (Fabric workspace "task flow" parity, no Fabric dependency).
+//   task-flow-runs    ← F11 task-flow EXECUTION run history (PK /workspaceId).
+//     Loom-native — Fabric task flows can't execute, so this exceeds Fabric.
 //   lakehouse-shortcuts (PK /lakehouseId)  ← OneLake-parity internal shortcuts
 //     registry (Azure-native, no Fabric). Internal shortcuts need no extra
 //     RBAC beyond the UAMI's existing Storage Blob Data Reader on the
@@ -171,6 +173,7 @@ var loomContainers = [
   { name: 'loom-workspaces',   partitionKey: '/tenantId' }
   { name: 'workspace-folders', partitionKey: '/workspaceId' }
   { name: 'task-flows',        partitionKey: '/workspaceId' }
+  { name: 'task-flow-runs',    partitionKey: '/workspaceId' }
   { name: 'embed-codes',       partitionKey: '/tenantId' }
   { name: 'org-visuals',       partitionKey: '/tenantId' }
   { name: 'azure-connections', partitionKey: '/tenantId' }
@@ -212,6 +215,13 @@ var loomContainers = [
   // grows unbounded. Each row carries its own `ttl`; the container-level
   // defaultTtl: -1 turns TTL ON without imposing a blanket expiry.
   { name: 'cost-attribution',    partitionKey: '/tenantId', ttl: -1 }
+  // PSR-3 — warm Spark-session cross-replica lease registry. PK /groupKey so a
+  // replica's "claim a warm session in this group" query hits one partition;
+  // TTL-enabled (each lease doc carries its own `ttl`) so a crashed replica's
+  // leases self-evict. createIfNotExists in cosmos-client.ts ensure() is the
+  // hotfix fallback. Only used when the shared substrate is signalled
+  // (LOOM_SPARK_POOL_REDIS / LOOM_SPARK_POOL_LEASE_CONTAINER); otherwise idle.
+  { name: 'spark-warm-leases',   partitionKey: '/groupKey', ttl: -1 }
 ]
 
 resource loomDb 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases@2024-12-01-preview' = {

@@ -31,6 +31,8 @@ import {
 } from '@fluentui/react-components';
 import {
   SettingsRegular, BookmarkRegular, HistoryRegular, CopyRegular,
+  DatabaseArrowRight20Regular, ArrowSync20Regular, ArrowRepeatAll20Regular,
+  LinkMultiple20Regular, Flowchart20Regular, Cloud20Regular,
 } from '@fluentui/react-icons';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ItemEditorChrome } from './item-editor-chrome';
@@ -39,6 +41,11 @@ import { EmptyState } from '@/lib/components/empty-state';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { CopyJobWizard, type CopyJobSpec } from '@/lib/components/pipeline/copy-job/wizard';
+import { GuidedEmptyState } from '@/lib/components/shared/guided-empty-state';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
+import { ToolbarCrossLinks } from '@/lib/components/shared/item-tab-strip';
+import { useRegisterRibbonCommands } from '@/lib/components/shared/ribbon-commands';
+import { loomDocUrl } from '@/lib/learn/content';
 
 const useStyles = makeStyles({
   tabBar: {
@@ -47,6 +54,10 @@ const useStyles = makeStyles({
     borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
   },
   body: { padding: tokens.spacingVerticalXL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, maxWidth: '920px' },
+  crossLinkRow: {
+    paddingLeft: tokens.spacingHorizontalL, paddingRight: tokens.spacingHorizontalL,
+    paddingTop: tokens.spacingVerticalS,
+  },
   toolbar: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
   specGrid: { display: 'grid', gridTemplateColumns: 'minmax(140px, 200px) minmax(0, 1fr)', rowGap: tokens.spacingVerticalXS, columnGap: tokens.spacingHorizontalL, alignItems: 'baseline' },
   label: { color: tokens.colorNeutralForeground3, minWidth: 0, overflowWrap: 'anywhere' },
@@ -249,6 +260,9 @@ export function CopyJobEditor({ item, id }: { item: FabricItemType; id: string }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   ], [busy, canRun, run, loadRuns, loadWatermark]);
 
+  // SC-9 — register ribbon actions so the in-ribbon command search surfaces them.
+  useRegisterRibbonCommands(ribbon, 'copy-job');
+
   if (id === 'new') {
     return (
       <NewItemCreateGate item={item} createLabel="Create copy job"
@@ -258,13 +272,27 @@ export function CopyJobEditor({ item, id }: { item: FabricItemType; id: string }
 
   return (
     <>
-      <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
+      <ItemEditorChrome item={item} id={id} ribbon={ribbon} commandSearch main={
         <div>
           <div className={styles.tabBar}>
             <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as 'settings' | 'runs')}>
               <Tab value="settings" icon={<SettingsRegular />}>Settings</Tab>
               <Tab value="runs" icon={<HistoryRegular />}>Runs</Tab>
             </TabList>
+          </div>
+
+          {/* SC-8 — cross-links to the sibling data-integration surfaces a Copy
+              job builds on (routing-only). */}
+          <div className={styles.crossLinkRow}>
+            <ToolbarCrossLinks
+              ariaLabel="Related data-integration surfaces"
+              maxInline={4}
+              links={[
+                { key: 'linked-service', label: 'Linked services', icon: <LinkMultiple20Regular />, href: '/items/linked-service/new' },
+                { key: 'pipeline', label: 'Data pipeline', icon: <Flowchart20Regular />, href: '/items/data-pipeline/new' },
+                { key: 'ir', label: 'Integration runtime', icon: <Cloud20Regular />, href: '/items/integration-runtime/new' },
+              ]}
+            />
           </div>
 
           <div className={styles.body}>
@@ -295,14 +323,32 @@ export function CopyJobEditor({ item, id }: { item: FabricItemType; id: string }
 
             {tab === 'settings' && (
               <>
+                {/* SC-6 — teaching banner: what a Copy job does + how it moves only
+                    the delta each run. */}
+                <TeachingBanner
+                  surfaceKey="copy-job"
+                  title="Copy jobs move data source → destination, incrementally"
+                  message="A guided wizard configures the source, destination, copy mode, update method, and column mappings, then materializes a real Azure Data Factory pipeline. Incremental mode tracks a watermark column and CDC mode reads native SQL Server change tracking — both keep a checkpoint in an Azure SQL control table so each run moves only the rows that changed."
+                  learnMoreHref={loomDocUrl('fiab/v3-tenant-bootstrap')}
+                />
+
+                {/* SC-4 — guided multi-path launcher when nothing is configured yet.
+                    Each mode card opens the same real wizard (mode is chosen inside),
+                    teaching the three copy strategies before a single field is set. */}
                 {!configured && (
-                  <MessageBar intent="info">
-                    <MessageBarBody>
-                      <MessageBarTitle>Not configured yet</MessageBarTitle>
-                      Click <strong>Configure wizard</strong> in the ribbon to set the source, destination, copy mode,
-                      update method, and column mappings.
-                    </MessageBarBody>
-                  </MessageBar>
+                  <GuidedEmptyState
+                    heroIcon={CopyRegular}
+                    title="Set up your copy job"
+                    intro="Pick how this job should move data, then the wizard walks you through source, destination, update method, and mappings."
+                    ariaLabel="Copy job setup paths"
+                    paths={[
+                      { key: 'full', title: 'Full copy', body: 'Reload the whole source into the destination on every run.', icon: DatabaseArrowRight20Regular, onClick: () => setWizardOpen(true) },
+                      { key: 'incremental', title: 'Incremental (watermark)', body: 'Track a high-water-mark column and copy only newer rows each run.', icon: ArrowSync20Regular, onClick: () => setWizardOpen(true) },
+                      { key: 'cdc', title: 'CDC (change tracking)', body: 'Read native SQL Server inserts, updates, and deletes from the change log.', icon: ArrowRepeatAll20Regular, onClick: () => setWizardOpen(true) },
+                    ]}
+                    learnMoreHref={loomDocUrl('fiab/v3-tenant-bootstrap')}
+                    learnMoreLabel="Learn about copy jobs"
+                  />
                 )}
 
                 <div className={styles.card}>

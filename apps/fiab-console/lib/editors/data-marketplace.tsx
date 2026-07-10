@@ -36,10 +36,11 @@ import {
 import {
   Search20Regular, ArrowSync20Regular, Add20Regular, Delete20Regular,
   Open20Regular, Dismiss16Regular, Database20Regular, KeyReset20Regular,
-  Box24Regular,
+  Box24Regular, Info20Regular, Copy16Regular, BuildingRetail20Regular, DocumentSearch24Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { EmptyState } from '@/lib/components/empty-state';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 
@@ -72,6 +73,20 @@ const useStyles = makeStyles({
   },
   empty: { padding: tokens.spacingHorizontalXXL, textAlign: 'center', color: tokens.colorNeutralForeground3 },
   cellWrap: { overflowWrap: 'anywhere', wordBreak: 'break-word', minWidth: 0 },
+  // Preview-before-subscribe details grid.
+  previewGrid: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, minWidth: 0 },
+  previewRow: {
+    display: 'grid', gridTemplateColumns: 'minmax(120px, 160px) 1fr', gap: tokens.spacingHorizontalM,
+    alignItems: 'start', minWidth: 0,
+  },
+  previewLabel: { color: tokens.colorNeutralForeground3 },
+  previewValue: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, flexWrap: 'wrap', minWidth: 0 },
+  uriValue: {
+    fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200,
+    overflowWrap: 'anywhere', wordBreak: 'break-word', minWidth: 0,
+    color: tokens.colorNeutralForeground2,
+  },
+  previewTags: { display: 'flex', gap: tokens.spacingHorizontalXS, flexWrap: 'wrap', minWidth: 0 },
 });
 
 const PRODUCT_TYPES = ['Lakehouse', 'Warehouse', 'Dataset', 'Semantic model', 'KQL database', 'Report', 'API', 'Notebook'];
@@ -268,6 +283,16 @@ export function DataProductsMarketplace() {
         <Tab value="access" icon={<KeyReset20Regular />}>My data access</Tab>
       </TabList>
 
+      {tab === 'discover' && !gate && (
+        <TeachingBanner
+          surfaceKey="data-marketplace-discover"
+          icon={BuildingRetail20Regular}
+          title="Discover, preview, then subscribe"
+          message="Search Published data products across your tenant and narrow with the facets on the left. Open Details on any result to preview its full contract — domain, owner, SLA, glossary terms and critical data elements — before you request access. Access is provisioned by the product's model: self-serve grants immediately where policy allows, governed routes through approval to real Azure RBAC."
+          learnMoreHref="/learn/data-products"
+        />
+      )}
+
       {gate && (tab === 'discover' || tab === 'domains') && (
         <MessageBar intent="warning">
           <MessageBarBody>
@@ -350,7 +375,16 @@ export function DataProductsMarketplace() {
             <div className={s.results}>
               {hits === null && loading && <Spinner label="Searching the live index…" />}
               {hits && hits.length === 0 && !gate && (
-                <div className={s.empty}>No published data products match. Try a broader search or clear filters.</div>
+                <EmptyState
+                  icon={<DocumentSearch24Regular />}
+                  title="No matching data products"
+                  body="No Published products match this search and filter set. Try a broader term or clear the active filters."
+                  primaryAction={
+                    (submitted || activeChips.length > 0)
+                      ? { label: 'Clear search & filters', appearance: 'secondary', onClick: () => { setQuery(''); setSubmitted(''); setSelected({}); } }
+                      : undefined
+                  }
+                />
               )}
               {(hits || []).map((h) => (
                 <Tooltip key={h.id} relationship="description"
@@ -373,6 +407,7 @@ export function DataProductsMarketplace() {
                       {(h.CDEs || []).map((c) => <Tag key={`c-${c}`} size="extra-small" appearance="outline">CDE: {c}</Tag>)}
                     </div>
                     <div className={s.cardActions}>
+                      <ProductPreviewButton hit={h} onRequest={requestAccess} styles={s} />
                       {h.url && (
                         <Button as="a" size="small" icon={<Open20Regular />} href={h.url}>Open</Button>
                       )}
@@ -399,7 +434,11 @@ export function DataProductsMarketplace() {
           <Caption1 className={s.hint}>Live product counts from the index facet aggregate.</Caption1>
           {loading && <Spinner size="tiny" />}
           {domainCards.length === 0 && !loading && (
-            <div className={s.empty}>No domains have published products yet.</div>
+            <EmptyState
+              icon={<Database20Regular />}
+              title="No domains with published products"
+              body="Once products are published against a governance domain, each domain appears here with a live product count. Publish a product from the Publish tab to get started."
+            />
           )}
           <div className={s.domainGrid}>
             {domainCards.map((d) => (
@@ -437,7 +476,12 @@ export function DataProductsMarketplace() {
           {reqErr && <MessageBar intent="error"><MessageBarBody>{reqErr}</MessageBarBody></MessageBar>}
           {requests === null && <Spinner size="tiny" />}
           {requests && requests.length === 0 && (
-            <div className={s.empty}>You have no recorded data-product access requests.</div>
+            <EmptyState
+              icon={<KeyReset20Regular />}
+              title="No access requests yet"
+              body="When you request access to a data product from Discover, it's tracked here with its permission and approval status."
+              primaryAction={{ label: 'Browse data products', appearance: 'secondary', onClick: () => setTab('discover') }}
+            />
           )}
           {requests && requests.length > 0 && (
             <Table>
@@ -492,6 +536,84 @@ export function DataMarketplaceEditor({ item, id }: { item: FabricItemType; id: 
     },
   ];
   return <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={<DataProductsMarketplace />} />;
+}
+
+/**
+ * ProductPreviewButton — preview-before-subscribe (F14/F18). Opens a details
+ * dialog that surfaces the data product's full contract from the search hit
+ * (no extra backend call — the discover response already carries it), with
+ * copyable id / open URL, then a Request-access action inline so a consumer
+ * can subscribe straight from the preview.
+ */
+function ProductPreviewButton({
+  hit, onRequest, styles,
+}: {
+  hit: Hit;
+  onRequest: (h: Hit, p: string) => Promise<any>;
+  styles: ReturnType<typeof useStyles>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [copied, setCopied] = useState<string | null>(null);
+  const copy = async (label: string, value: string) => {
+    try { await navigator.clipboard?.writeText(value); setCopied(label); setTimeout(() => setCopied(null), 1500); } catch { /* clipboard blocked */ }
+  };
+  const rows: Array<{ label: string; value: string; mono?: boolean }> = [
+    { label: 'Product id', value: hit.id, mono: true },
+    ...(hit.domainName ? [{ label: 'Governance domain', value: hit.domainName }] : []),
+    ...(hit.productType ? [{ label: 'Type', value: hit.productType }] : []),
+    ...(hit.owner ? [{ label: 'Owner', value: hit.owner }] : []),
+    ...(hit.sla ? [{ label: 'SLA', value: hit.sla }] : []),
+    { label: 'Access model', value: hit.accessModel === 'self-serve' ? 'Self-serve — immediate grant where policy allows' : hit.accessModel === 'request' ? 'Request only — owner provisions manually' : 'Governed — approval → real Azure RBAC' },
+    ...(hit.url ? [{ label: 'Open URL', value: hit.url, mono: true }] : []),
+  ];
+  return (
+    <Dialog open={open} onOpenChange={(_, d) => setOpen(d.open)}>
+      <DialogTrigger disableButtonEnhancement>
+        <Button size="small" appearance="secondary" icon={<Info20Regular />}>Details</Button>
+      </DialogTrigger>
+      <DialogSurface>
+        <DialogBody>
+          <DialogTitle>{hit.displayName}</DialogTitle>
+          <DialogContent>
+            <div className={styles.previewGrid}>
+              <Body1 className={styles.cellWrap}>{hit.description || 'No description provided for this data product.'}</Body1>
+              <Divider />
+              {rows.map((r) => (
+                <div key={r.label} className={styles.previewRow}>
+                  <Caption1 className={styles.previewLabel}>{r.label}</Caption1>
+                  <span className={styles.previewValue}>
+                    <span className={r.mono ? styles.uriValue : undefined}>{r.value}</span>
+                    <Tooltip content={copied === r.label ? 'Copied' : `Copy ${r.label.toLowerCase()}`} relationship="label">
+                      <Button size="small" appearance="subtle" icon={<Copy16Regular />} aria-label={`Copy ${r.label}`} onClick={() => copy(r.label, r.value)} />
+                    </Tooltip>
+                  </span>
+                </div>
+              ))}
+              {((hit.glossaryTerms || []).length > 0 || (hit.CDEs || []).length > 0) && (
+                <>
+                  <Divider />
+                  <div className={styles.previewRow}>
+                    <Caption1 className={styles.previewLabel}>Glossary & CDEs</Caption1>
+                    <span className={styles.previewTags}>
+                      {(hit.glossaryTerms || []).map((t) => <Tag key={`g-${t}`} size="small">{t}</Tag>)}
+                      {(hit.CDEs || []).map((c) => <Tag key={`c-${c}`} size="small" appearance="outline">CDE: {c}</Tag>)}
+                    </span>
+                  </div>
+                </>
+              )}
+            </div>
+          </DialogContent>
+          <DialogActions>
+            {hit.url && <Button as="a" appearance="secondary" icon={<Open20Regular />} href={hit.url}>Open</Button>}
+            <RequestAccessButton hit={hit} onRequest={onRequest} />
+            <DialogTrigger disableButtonEnhancement>
+              <Button appearance="subtle">Close</Button>
+            </DialogTrigger>
+          </DialogActions>
+        </DialogBody>
+      </DialogSurface>
+    </Dialog>
+  );
 }
 
 /** A small request-access control with a permission picker + confirmation. */
