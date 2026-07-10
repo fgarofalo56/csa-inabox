@@ -346,6 +346,143 @@ function fmtBytes(n: number): string {
 }
 
 // ----------------------------------------------------------------------------
+// Portfolio scan — powers the Troubleshooting + Optimization report views
+// ----------------------------------------------------------------------------
+//
+// The list view drills into ONE app on demand. The Troubleshooting and
+// Optimization reports need a cross-application view, so this scans the most
+// recent apps (bounded sample) once, reads each one's metric summary, runs the
+// same PURE recommendTuning engine, and aggregates:
+//   - failures      → apps that failed or show failure signals (failed tasks / a
+//                     critical tuning finding), for the Troubleshooting report.
+//   - optimization  → tuning recs deduplicated across the sample, each with the
+//                     count of affected apps, for the Optimization report.
+// Bounded (sample clamped 1..25) so the fan-out of per-app metric queries stays
+// small. All real LA data; a configured-but-empty workspace yields empty arrays.
+
+export interface FailureInsight {
+  appId: string;
+  name: string;
+  engine: SparkApplication['engine'];
+  pool?: string;
+  user?: string;
+  start?: string;
+  durationMs?: number;
+  /** Human-readable failure signal (why it's in the troubleshooting list). */
+  errorSignal: string;
+}
+
+export interface OptimizationInsight {
+  /** Rec id from recommendTuning (disk-spill, task-skew, gc-pressure, …). */
+  id: string;
+  severity: TuningRec['severity'];
+  title: string;
+  detail: string;
+  conf?: { key: string; value: string }[];
+  presetId?: string;
+  /** How many sampled apps triggered this recommendation. */
+  affectedApps: number;
+  /** A few example app ids that triggered it. */
+  sampleAppIds: string[];
+}
+
+export interface SparkInsightsScan {
+  scannedAt: string;
+  windowDays: number;
+  /** Apps whose metrics were actually read (the bounded sample). */
+  sampled: number;
+  /** Total recent apps seen in the window (may exceed `sampled`). */
+  totalApps: number;
+  failures: FailureInsight[];
+  optimization: OptimizationInsight[];
+  /** Wall-clock scan time (drives the reports' timing status bar). */
+  elapsedMs: number;
+}
+
+const SEVERITY_RANK: Record<TuningRec['severity'], number> = { info: 0, warning: 1, critical: 2 };
+
+/**
+ * Scan recent Spark applications and build the cross-app Troubleshooting +
+ * Optimization reports. Throws MonitorNotConfiguredError when the workspace id
+ * is unset (→ honest gate). Returns empty arrays (not an error) when configured
+ * but no Spark telemetry has arrived.
+ */
+export async function scanSparkInsights(
+  opts: { days?: number; sample?: number } = {},
+): Promise<SparkInsightsScan> {
+  if (!logAnalyticsWorkspaceId()) throw new MonitorNotConfiguredError(['LOOM_LOG_ANALYTICS_WORKSPACE_ID']);
+  const started = Date.now();
+  const days = Math.min(30, Math.max(1, opts.days ?? 7));
+  const sample = Math.min(25, Math.max(1, opts.sample ?? 12));
+
+  const apps = await listSparkApplications({ days, limit: Math.max(sample, 100) });
+  const scanned = apps.slice(0, sample);
+
+  // Read each sampled app's metric summary + recs in parallel (bounded by sample).
+  const perApp = await Promise.all(
+    scanned.map(async (app) => {
+      try {
+        const metrics = await getSparkAppMetrics(app.appId, days);
+        return { app, recs: recommendTuning(metrics), failedTasks: metrics.failedTasks };
+      } catch {
+        return { app, recs: [] as TuningRec[], failedTasks: undefined as number | undefined };
+      }
+    }),
+  );
+
+  // Failures: explicit failed status, positive failed-task count, or a critical rec.
+  const failures: FailureInsight[] = [];
+  const optById = new Map<string, OptimizationInsight>();
+
+  for (const { app, recs, failedTasks } of perApp) {
+    const statusFailed = (app.status || '').toLowerCase().includes('fail')
+      || (app.status || '').toLowerCase().includes('error');
+    const critical = recs.find((r) => r.severity === 'critical');
+    let signal = '';
+    if (statusFailed) signal = 'Application reported Failed';
+    else if (typeof failedTasks === 'number' && failedTasks > 0) signal = `${failedTasks} failed task(s)`;
+    else if (critical) signal = `Critical: ${critical.title}`;
+    if (signal) {
+      failures.push({
+        appId: app.appId, name: app.name, engine: app.engine, pool: app.pool,
+        user: app.user, start: app.start, durationMs: app.durationMs, errorSignal: signal,
+      });
+    }
+
+    // Aggregate non-"healthy" recs across the sample.
+    for (const rec of recs) {
+      if (rec.id === 'healthy') continue;
+      const prev = optById.get(rec.id);
+      if (!prev) {
+        optById.set(rec.id, {
+          id: rec.id, severity: rec.severity, title: rec.title, detail: rec.detail,
+          conf: rec.conf, presetId: rec.presetId, affectedApps: 1, sampleAppIds: [app.appId],
+        });
+      } else {
+        prev.affectedApps += 1;
+        if (prev.sampleAppIds.length < 5) prev.sampleAppIds.push(app.appId);
+        // Keep the highest severity seen for this pattern.
+        if (SEVERITY_RANK[rec.severity] > SEVERITY_RANK[prev.severity]) prev.severity = rec.severity;
+      }
+    }
+  }
+
+  const optimization = Array.from(optById.values()).sort(
+    (a, b) => SEVERITY_RANK[b.severity] - SEVERITY_RANK[a.severity] || b.affectedApps - a.affectedApps,
+  );
+
+  return {
+    scannedAt: new Date().toISOString(),
+    windowDays: days,
+    sampled: scanned.length,
+    totalApps: apps.length,
+    failures,
+    optimization,
+    elapsedMs: Date.now() - started,
+  };
+}
+
+// ----------------------------------------------------------------------------
 // Native Spark diagnostic-tool deep links (no reinvention — open the real UI)
 // ----------------------------------------------------------------------------
 
