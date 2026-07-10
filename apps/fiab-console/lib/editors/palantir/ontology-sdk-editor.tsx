@@ -13,7 +13,6 @@ import { useRouter } from 'next/navigation';
 import {
   Title2, Subtitle2, Body1, Caption1, Badge, Button, Input, Textarea, Spinner, Switch, Divider,
   Tab, TabList, Field, Dropdown, Option, Checkbox, SearchBox,
-  Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   Accordion, AccordionItem, AccordionHeader, AccordionPanel,
   Dialog, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
   MessageBar, MessageBarBody, MessageBarTitle,
@@ -45,6 +44,9 @@ import type { OntologyEntityBinding } from '../_family-utils';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { useStyles, CodeBlock, useItemState, SaveStrip, SectionHead, useOntologyBinding, type ItemDoc, type OntologySummary, type OntologyClassLite, type OntologyActionLite, type OntologySurface } from './shared';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
+import { ToolbarCrossLinks } from '@/lib/components/shared/item-tab-strip';
+import { PreviewTable } from '@/lib/components/shared/preview-table';
 
 // ───────────────────────── Ontology SDK (OSDK) ─────────────────────────
 interface OsdkState {
@@ -137,19 +139,19 @@ function OsdkTryIt({ id, objectTypes, serviceUrl, onServiceUrl }: {
       {res && !res.error && (
         <>
           {res.url && <Caption1 className={s.hint}><strong>Request:</strong> <span className={s.outPill}>{mode.toUpperCase()} {res.url}</span></Caption1>}
-          <Caption1 className={s.hint}>{res.rowCount ?? res.rows.length} row(s)</Caption1>
-          {res.rows.length === 0 ? <div className={s.empty}><Caption1>The request succeeded but returned no rows.</Caption1></div> : (
-            <div className={s.tableWrap}>
-              <Table size="small" aria-label="Try it result">
-                <TableHeader><TableRow>{res.columns.map((c) => <TableHeaderCell key={c}>{c}</TableHeaderCell>)}</TableRow></TableHeader>
-                <TableBody>
-                  {res.rows.slice(0, 50).map((row, ri) => (
-                    <TableRow key={ri}>{res.columns.map((_, ci) => <TableCell key={ci}>{row[ci] === null || row[ci] === undefined ? '' : String(row[ci])}</TableCell>)}</TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
-          )}
+          <PreviewTable
+            ariaLabel="Try it result"
+            showSearch
+            sources={[{
+              id: 'osdk-tryit',
+              label: `${mode.toUpperCase()} result`,
+              data: {
+                columns: res.columns,
+                rows: res.rows,
+                rowCount: res.rowCount ?? res.rows.length,
+              },
+            }]}
+          />
         </>
       )}
     </div>
@@ -286,10 +288,25 @@ export function OntologySdkEditor({ item, id }: { item: FabricItemType; id: stri
     <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
       <div className={s.pad}>
         {loading && <Spinner size="small" label="Loading…" labelPosition="after" />}
-        <MessageBar intent="info"><MessageBarBody>
-          <MessageBarTitle>Ontology SDK (Palantir OSDK)</MessageBarTitle>
-          Bind an Ontology, scope the SDK to the object / link / action types you need, then generate typed TypeScript + Python clients (with <strong>applyCreate / applyUpdate / applyDelete</strong> write-back methods) and a real dab-config.json. The Data API runs on Microsoft Data API Builder (Azure Container Apps) and publishes through APIM — no Fabric required.
-        </MessageBarBody></MessageBar>
+        <TeachingBanner
+          surfaceKey="ontology-sdk-intro"
+          title="Generate a typed SDK over your ontology (Palantir OSDK)"
+          message={<>Bind an Ontology, scope the SDK to the object / link / action types you need, then generate typed TypeScript + Python clients (with <strong>applyCreate / applyUpdate / applyDelete</strong> write-back methods) and a real dab-config.json. The Data API runs on Microsoft Data API Builder (Azure Container Apps) and publishes through APIM — no Fabric required.</>}
+          learnMoreHref="https://learn.microsoft.com/azure/data-api-builder/overview"
+        />
+        <div className={s.addBar}>
+          <ToolbarCrossLinks
+            ariaLabel="Related ontology surfaces"
+            maxInline={5}
+            links={[
+              { key: 'ontology', label: 'Ontology', href: '/items/ontology/new' },
+              { key: 'aip-logic', label: 'AIP Logic', href: '/items/aip-logic/new' },
+              { key: 'health-check', label: 'Health check', href: '/items/health-check/new' },
+              { key: 'release-environment', label: 'Release environment', href: '/items/release-environment/new' },
+              { key: 'graphql-api', label: 'GraphQL API', href: '/items/graphql-api/new' },
+            ]}
+          />
+        </div>
 
         <div className={s.section}>
           <SectionHead icon={<Link20Regular />} title="Bound ontology" hint="Its object / link / action types define the typed SDK surface." />
