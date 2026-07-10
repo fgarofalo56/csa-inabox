@@ -43,6 +43,13 @@ import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { aasScope, aasXmlaUrl } from './cloud-endpoints';
 import { listOwnedItems } from '@/app/api/items/_lib/item-crud';
 import { executeQuery, serverlessTarget } from './synapse-sql-client';
+import {
+  buildQueryCacheKey,
+  getCachedResult,
+  setCachedResult,
+  deriveFreshnessToken,
+} from './query-result-cache';
+import { recordCacheHit, recordCacheMiss } from '@/lib/perf/cache-counters';
 import type { WorkspaceItem } from '@/lib/types/workspace';
 import {
   TabularError,
@@ -146,36 +153,114 @@ export async function evalDax(
   tenantId: string,
   database?: string,
 ): Promise<TabularQueryResult> {
-  if (resolveBackend() === 'analysis-services') return aasEvalDax(daxQuery);
+  const backend = resolveBackend();
 
-  // loom-native: translate → Synapse serverless SQL over the backing warehouse.
-  const sql = translateDaxToSql(daxQuery);
-  if (!sql) throw unsupportedDaxError();
+  // PSR-5: consult the always-on result cache first. A report re-issues the SAME
+  // aggregate DAX constantly (page loads, cross-filter, multiple users) — each is
+  // otherwise a full serverless/XMLA round-trip. The key folds the model identity,
+  // the DAX text, the backend surface, the optional database override, and a
+  // freshness token so a refresh/rebind transparently strands stale keys. The AAS
+  // path has no observable Delta version, so its freshness is coarse (server+db)
+  // and the short default TTL bounds staleness.
+  let item: WorkspaceItem | null = null;
+  let freshness: string;
+  if (backend === 'analysis-services') {
+    freshness = `aas:${(process.env.LOOM_AAS_SERVER ?? '').trim()}:${aasDatabase()}`;
+  } else {
+    item = await getModelItem(modelId, tenantId);
+    if (!item) throw new TabularError(`Semantic model ${modelId} not found or not owned by you.`, 404, 'loom-native');
+    freshness = deriveFreshnessToken({ _ts: (item as { _ts?: number })._ts, state: (item as { state?: unknown }).state });
+  }
+  const cacheKey = buildQueryCacheKey({
+    modelId,
+    sql: daxQuery,
+    storageMode: backend,
+    backend,
+    freshness,
+    parameters: database && database.trim() ? [{ name: 'database', value: database.trim() }] : [],
+  });
 
-  const item = await getModelItem(modelId, tenantId);
-  if (!item) throw new TabularError(`Semantic model ${modelId} not found or not owned by you.`, 404, 'loom-native');
-  const db = (database && database.trim()) || modelBackingDatabase(item);
+  const cached = await getCachedResult(cacheKey, modelId);
+  if (cached) {
+    recordCacheHit('tabular');
+    return {
+      columns: cached.columns ?? (cached.rows[0] ? Object.keys(cached.rows[0]) : []),
+      rows: cached.rows,
+      backend,
+      sql: cached.sql,
+    };
+  }
+  recordCacheMiss('tabular');
 
-  let result;
-  try {
-    result = await executeQuery(serverlessTarget(db || 'master'), sql);
-  } catch (e: any) {
-    throw new TabularError(
-      `Evaluating DAX against the Synapse serverless pool failed: ${e?.message || e}. ` +
-        "Confirm the model's table maps to a real warehouse/lakehouse table and pass `database` if the table lives in a non-default Synapse database.",
-      502,
-      'loom-native',
-    );
+  let out: TabularQueryResult;
+  if (backend === 'analysis-services') {
+    out = await aasEvalDax(daxQuery);
+  } else {
+    // loom-native: translate → Synapse serverless SQL over the backing warehouse.
+    const sql = translateDaxToSql(daxQuery);
+    if (!sql) throw unsupportedDaxError();
+    const db = (database && database.trim()) || modelBackingDatabase(item!);
+
+    let result;
+    try {
+      result = await executeQuery(serverlessTarget(db || 'master'), sql);
+    } catch (e: any) {
+      throw new TabularError(
+        `Evaluating DAX against the Synapse serverless pool failed: ${e?.message || e}. ` +
+          "Confirm the model's table maps to a real warehouse/lakehouse table and pass `database` if the table lives in a non-default Synapse database.",
+        502,
+        'loom-native',
+      );
+    }
+
+    // executeQuery returns { columns: string[], rows: unknown[][] } — zip to
+    // objects so the result renders directly in LoomDataTable (T7).
+    const rows = result.rows.map((r) => {
+      const o: Record<string, unknown> = {};
+      result.columns.forEach((c, i) => { o[c] = (r as unknown[])[i]; });
+      return o;
+    });
+    out = { columns: result.columns, rows, backend: 'loom-native', sql };
   }
 
-  // executeQuery returns { columns: string[], rows: unknown[][] } — zip to
-  // objects so the result renders directly in LoomDataTable (T7).
-  const rows = result.rows.map((r) => {
-    const o: Record<string, unknown> = {};
-    result.columns.forEach((c, i) => { o[c] = (r as unknown[])[i]; });
-    return o;
-  });
-  return { columns: result.columns, rows, backend: 'loom-native', sql };
+  await setCachedResult(
+    cacheKey,
+    modelId,
+    { rows: out.rows, columns: out.columns, sql: out.sql, rowCount: out.rows.length, producedBy: backend },
+    { backend },
+  );
+  return out;
+}
+
+/**
+ * PSR-5 model-warm / prime. Runs a trivial keep-alive against the tabular
+ * backend so the first real visit avoids a cold spin-up (serverless pool wake /
+ * AAS VertiScan page-in). NO model dependency on the loom-native path — a bare
+ * `SELECT 1` wakes the serverless pool + primes the connection; the AAS path
+ * evaluates a constant row to page the model into memory. Opt-in (call from a
+ * scheduler or the editor "keep warm"); never on the request hot path.
+ */
+export async function warmSemanticModel(
+  modelId: string,
+  tenantId: string,
+  database?: string,
+): Promise<{ warmed: boolean; backend: string; ms: number; detail?: string }> {
+  const backend = resolveBackend();
+  const started = Date.now();
+  try {
+    if (backend === 'analysis-services') {
+      await xmlaPost(buildExecuteEnvelope(aasDatabase(), 'EVALUATE ROW("loom_warm", 1)'), 'Execute');
+      return { warmed: true, backend, ms: Date.now() - started };
+    }
+    const item = await getModelItem(modelId, tenantId);
+    if (!item) throw new TabularError(`Semantic model ${modelId} not found or not owned by you.`, 404, 'loom-native');
+    const db = (database && database.trim()) || modelBackingDatabase(item) || 'master';
+    await executeQuery(serverlessTarget(db), 'SELECT 1 AS loom_warm');
+    return { warmed: true, backend, ms: Date.now() - started };
+  } catch (e: any) {
+    // Warming is best-effort — report the failure honestly, never throw upstream.
+    return { warmed: false, backend, ms: Date.now() - started, detail: e?.message || String(e) };
+  }
 }
 
 // ===========================================================================
