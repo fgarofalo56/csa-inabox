@@ -22,12 +22,13 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Spinner, Caption1, Body1, Subtitle2, Button, Badge,
-  MessageBar, MessageBarBody, MessageBarTitle,
+  MessageBar, MessageBarBody, MessageBarTitle, MessageBarActions,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import { ArrowSync24Regular } from '@fluentui/react-icons';
 import { Section } from '@/lib/components/ui/section';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
+import { StaleDataBadge } from '@/lib/components/ui/stale-data-badge';
 
 interface PersonaRow {
   persona: string;
@@ -79,6 +80,7 @@ interface ApiResp {
   noEvents?: boolean;
   gate?: Gate;
   error?: string;
+  meta?: { cachedAt?: number; stale?: boolean };
 }
 
 const PERSONA_LABELS: Record<string, string> = {
@@ -335,6 +337,9 @@ export function CopilotUsagePane({ days = 30 }: { days?: number }) {
             <MessageBarTitle>Could not load Copilot usage</MessageBarTitle>
             {resp.error || 'unknown error'}
           </MessageBarBody>
+          <MessageBarActions>
+            <Button appearance="transparent" onClick={reload} disabled={loading}>Retry</Button>
+          </MessageBarActions>
         </MessageBar>
       )}
       {resp && resp.ok && resp.noEvents && <NoEventsBar />}
@@ -347,7 +352,12 @@ export function CopilotUsagePane({ days = 30 }: { days?: number }) {
         <>
           <Section
             title="Token totals"
-            actions={<Button icon={<ArrowSync24Regular />} onClick={reload} disabled={loading}>Refresh</Button>}
+            actions={
+              <>
+                {resp?.meta?.stale && <StaleDataBadge cachedAt={resp.meta.cachedAt} />}
+                <Button icon={<ArrowSync24Regular />} onClick={reload} disabled={loading}>Refresh</Button>
+              </>
+            }
             bare
           >
             <KpiCards totals={data.totals} />
@@ -420,14 +430,27 @@ export function CopilotUsagePane({ days = 30 }: { days?: number }) {
 
 /** Compact KPI strip for the Monitor → Cost tab. */
 export function CopilotUsageInline({ days = 30 }: { days?: number }) {
-  const { resp, loading } = useCopilotUsage(days);
+  const s = useStyles();
+  const { resp, loading, reload } = useCopilotUsage(days);
   const data = resp?.ok ? resp.data ?? null : null;
 
   return (
     <Section title={`Copilot token consumption (${days}d)`}>
       {resp && !resp.ok && resp.gate && <GateBar gate={resp.gate} />}
+      {resp && !resp.ok && !resp.gate && (
+        <MessageBar intent="error" className={s.gap}>
+          <MessageBarBody>
+            <MessageBarTitle>Could not load Copilot usage</MessageBarTitle>
+            {resp.error || 'unknown error'}
+          </MessageBarBody>
+          <MessageBarActions>
+            <Button appearance="transparent" onClick={reload} disabled={loading}>Retry</Button>
+          </MessageBarActions>
+        </MessageBar>
+      )}
       {resp && resp.ok && resp.noEvents && <NoEventsBar />}
       {loading && !resp && <Spinner label="Querying App Insights…" />}
+      {resp?.meta?.stale && <StaleDataBadge cachedAt={resp.meta.cachedAt} />}
       {data && <KpiCards totals={data.totals} />}
     </Section>
   );

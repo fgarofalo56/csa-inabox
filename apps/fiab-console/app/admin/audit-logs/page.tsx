@@ -14,7 +14,7 @@ import { clientFetch } from '@/lib/client-fetch';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Spinner, Badge, Caption1, Body1, Button, Dropdown, Option, Field, Input,
-  MessageBar, MessageBarBody, MessageBarTitle,
+  MessageBar, MessageBarBody, MessageBarTitle, MessageBarActions,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import { ArrowSync24Regular, ArrowDownload24Regular, History24Regular } from '@fluentui/react-icons';
@@ -23,6 +23,7 @@ import { Section, Toolbar } from '@/lib/components/ui/section';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { useAdminTabStyles } from '@/lib/components/ui/admin-tab-styles';
 import { SectionExplainer, LearnPopover } from '@/lib/components/ui/learn-popover';
+import { StaleDataBadge } from '@/lib/components/ui/stale-data-badge';
 import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
 
 type AuditSource = 'cosmos' | 'purview' | 'loganalytics';
@@ -131,6 +132,7 @@ export default function AuditLogsPage() {
   const [kinds, setKinds] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [meta, setMeta] = useState<{ cachedAt?: number; stale?: boolean } | null>(null);
   const [q, setQ] = useState('');
   const [kind, setKind] = useState('');
   const [since, setSince] = useState('');
@@ -154,6 +156,7 @@ export default function AuditLogsPage() {
       setRows(j.rows || []);
       setKinds(j.kinds || []);
       setGates(j.gates || {});
+      setMeta((j as { meta?: { cachedAt?: number; stale?: boolean } }).meta ?? null);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e));
     } finally { setLoading(false); }
@@ -277,6 +280,9 @@ export default function AuditLogsPage() {
             <MessageBarTitle>Could not load audit logs</MessageBarTitle>
             {error}
           </MessageBarBody>
+          <MessageBarActions>
+            <Button appearance="transparent" onClick={load}>Retry</Button>
+          </MessageBarActions>
         </MessageBar>
       )}
 
@@ -311,6 +317,7 @@ export default function AuditLogsPage() {
         title="Audit events"
         actions={
           <>
+            {meta?.stale && <StaleDataBadge cachedAt={meta.cachedAt} />}
             <Caption1 className={s.count}>{tableRows.length} entries</Caption1>
             <Button icon={<ArrowSync24Regular />} onClick={load} disabled={loading}>Refresh</Button>
             <Button icon={<ArrowDownload24Regular />} onClick={downloadCsv} disabled={!rows?.length}>Export CSV</Button>

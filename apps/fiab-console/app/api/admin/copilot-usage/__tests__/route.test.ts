@@ -37,6 +37,10 @@ beforeEach(() => {
   // #1602 gates behind requireTenantAdmin — authorize the test session (oid 'o')
   // as the bootstrap tenant admin (the 401 spec sets session=null and still 401s).
   process.env.LOOM_TENANT_ADMIN_OID = 'o';
+  // OBS-CACHE wraps this route in the SWR result cache (process-global). Disable
+  // it here so each case recomputes with its own queryLogs mock instead of
+  // reading a value another case just cached under the same (days=30) key.
+  process.env.LOOM_QUERY_CACHE_DISABLED = '1';
 });
 
 describe('GET /api/admin/copilot-usage', () => {
@@ -59,7 +63,9 @@ describe('GET /api/admin/copilot-usage', () => {
     queryLogsMock.mockResolvedValue(empty);
     const res = await GET(req());
     const body = await res.json();
-    expect(body).toEqual({ ok: true, data: null, noEvents: true });
+    // The route now also returns `meta` (OBS-CACHE freshness) alongside the payload.
+    expect(body).toMatchObject({ ok: true, data: null, noEvents: true });
+    expect(body.meta).toMatchObject({ stale: false });
   });
 
   it('maps a missing-table resolve error to noEvents instead of a 500', async () => {
