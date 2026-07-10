@@ -6,11 +6,18 @@ import {
   MessageBar, MessageBarBody, MessageBarTitle, MessageBarActions,
   Badge, Button, Subtitle2, Caption1, Spinner,
 } from '@fluentui/react-components';
-import { ArrowSync20Regular } from '@fluentui/react-icons';
+import { ArrowSync20Regular, Database20Regular, DataArea20Regular } from '@fluentui/react-icons';
 import { ItemEditorChrome } from '../item-editor-chrome';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import { useStyles } from './styles';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
+import { GuidedEmptyState } from '@/lib/components/shared/guided-empty-state';
+import { useRegisterRibbonCommands } from '@/lib/components/shared/ribbon-commands';
+import { openCopilot } from '@/lib/components/copilot-pane';
+
+const DATAMART_MIGRATION_LEARN =
+  'https://learn.microsoft.com/power-bi/transform-model/datamarts/datamarts-migrate-to-fabric';
 
 interface DatamartMigration {
   status?: string;
@@ -101,9 +108,24 @@ export function DatamartEditor({ item, id }: { item: FabricItemType; id: string 
 
   const liveMigration = detail?.migration?.status === 'migrated' ? detail.migration : undefined;
 
+  // SC-9 — publish the ribbon's Migrate action to the shared command registry so
+  // the in-ribbon command search / palette surfaces it with zero duplication.
+  useRegisterRibbonCommands(ribbon, 'datamart');
+
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon} commandSearch main={
       <div className={s.pad}>
+        {/* SC-6 teaching banner — explain the deprecation + the Azure-native
+            migration outcome (Synapse Serverless warehouse + Azure Analysis
+            Services semantic model, no Fabric/Power BI capacity). Dismissible. */}
+        <TeachingBanner
+          surfaceKey="datamart-migration"
+          title="Datamarts migrate to Azure-native analytics"
+          message="Power BI datamarts are deprecated. Loom migrates each one to a Synapse Serverless warehouse plus an Azure Analysis Services semantic model — no Fabric or Power BI capacity required. Nothing is created here; existing datamarts are migrated in place."
+          learnMoreHref={DATAMART_MIGRATION_LEARN}
+          learnMoreLabel="Datamart migration guidance"
+        />
+
         {/* Always-visible deprecation banner — datamart is a MIGRATION TEMPLATE, not a creatable editor.
             The "Deprecated" badge renders in every state (new / loading / existing) so the migration
             framing is unmistakable. deprecated:true keeps this item out of the New-item gallery. */}
@@ -125,16 +147,38 @@ export function DatamartEditor({ item, id }: { item: FabricItemType; id: string 
           )}
         </MessageBar>
 
-        {/* No-create gate */}
+        {/* No-create gate — a guided launcher (SC-4) instead of a bare error.
+            Datamarts cannot be created; guide the user to the two Azure-native
+            replacements with real create routes, plus an Ask-Copilot path. */}
         {isNew && (
-          <MessageBar intent="error">
-            <MessageBarBody>
-              <MessageBarTitle>No new datamarts.</MessageBarTitle>
-              Power BI datamarts are deprecated and cannot be created in Loom. Create a
-              {' '}<strong>Warehouse</strong> (Synapse) or a <strong>Semantic model</strong> (Azure Analysis Services)
-              instead, both available from the New item dialog.
-            </MessageBarBody>
-          </MessageBar>
+          <GuidedEmptyState
+            title="Datamarts are deprecated — pick a replacement"
+            intro="Power BI datamarts can no longer be created in Loom. Start with one of the Azure-native replacements below, then migrate any existing datamart's data into it."
+            heroIcon={Database20Regular}
+            paths={[
+              {
+                key: 'warehouse',
+                title: 'Create a Warehouse',
+                body: 'A Synapse Serverless SQL warehouse — the T-SQL analytics store that replaces the datamart. No Fabric capacity needed.',
+                icon: Database20Regular,
+                href: '/items/warehouse/new',
+              },
+              {
+                key: 'semantic-model',
+                title: 'Create a Semantic model',
+                body: 'An Azure Analysis Services tabular model — the reusable measures/relationships layer datamarts bundled. No Power BI capacity needed.',
+                icon: DataArea20Regular,
+                href: '/items/semantic-model/new',
+              },
+            ]}
+            askCopilot={{
+              onClick: () => openCopilot(),
+              label: 'Ask Copilot which replacement fits',
+              body: 'Describe how you used the datamart and Copilot recommends a Warehouse, a Semantic model, or both.',
+            }}
+            learnMoreHref={DATAMART_MIGRATION_LEARN}
+            learnMoreLabel="Datamart migration guidance"
+          />
         )}
 
         {/* Existing item header */}
