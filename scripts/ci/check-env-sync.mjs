@@ -178,6 +178,7 @@ const ALLOWLIST = new Set([
   'LOOM_DEVCENTER_URI',             // opt-in DevCenter uri
   'LOOM_DIRECT_LAKE_COSMOS_CONTAINER', // opt-in Direct Lake mirror
   'LOOM_DIRECT_LAKE_COSMOS_DB',     // opt-in Direct Lake mirror
+  'LOOM_DIRECTLAKE_URL',            // opt-in Loom Direct Lake columnar scan service (HYP-5); honest-503 gate when unset, semantic layer falls back to AAS/Synapse-Serverless. Deploy compute/loom-directlake-app.bicep out-of-band (admin-plane/main.bicep at the 256-param ceiling), then set on the console app
   'LOOM_DQ_SOURCE_CONNECTION_STRING', // handled by _CONNECTION_STRING pattern; kept for clarity
   'LOOM_DSPM_AI_AGENT_ITEM_TYPES',  // classifier config list (code default)
   'LOOM_DSPM_AI_WINDOW_DAYS',       // opt-in default usage-window override (code default 14)
