@@ -96,6 +96,26 @@ async function buildPayload(req: NextRequest, overrides: ReportParamOverrides): 
     const clone = await getPublishedReport(id);
     if (!clone) return apiError('report not found or not published', 404);
 
+    // `getPublishedReport` queries the shared `coe-templates` container by id and
+    // is NOT kind-scoped, so a Loom-native report/dashboard doc (kind
+    // 'loom-report' / 'loom-dashboard') can be returned here — it has no
+    // `templateId`, which previously surfaced as a misleading
+    // "unknown template: undefined" 404. Route those honestly instead: dashboards
+    // go through the synthesizer, and a Loom-native report is opened from its own
+    // designer (its ReportContent isn't a PBIR template this endpoint renders).
+    const cloneKind = (clone as { kind?: string }).kind;
+    if (cloneKind === 'loom-dashboard') {
+      try { return await buildDashboardPayload(id, overrides); }
+      catch (e: any) { return apiServerError(e); }
+    }
+    if (cloneKind === 'loom-report') {
+      return apiError(
+        'This is a Loom-native report — open it from the report item in the designer. ' +
+          'The Organization gallery renders Cloud Center of Excellence (CoE) report templates here.',
+        409,
+      );
+    }
+
     const tpl = getTemplate(clone.templateId);
     if (!tpl) return apiError(`unknown template: ${clone.templateId}`, 404);
 

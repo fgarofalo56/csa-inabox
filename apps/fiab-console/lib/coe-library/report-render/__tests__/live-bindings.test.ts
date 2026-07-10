@@ -195,6 +195,33 @@ describe('resolveLiveReport — Log Analytics + Defender + Azure Policy', () => 
     expect(live['Maturity Assessment'].rows).toHaveLength(0);
   });
 
+  it('bounds a hanging resolver: a slow/hanging backend times out to an honest ERROR gate without hanging the whole render', async () => {
+    // queryLogs never resolves → resolveAdoptionSignals would hang forever.
+    // withResolverTimeout must cap it so the render still returns, with the
+    // hung entity tagged error (timed out) and the sibling still resolved.
+    vi.useFakeTimers();
+    try {
+      (queryLogs as any).mockReturnValue(new Promise(() => {}));
+      const sample: SampleData = {
+        'Adoption Signals': sampleTable(['Service', 'Month', 'MonthlyActiveUsers', 'WorkloadsOnboarded']),
+        'Maturity Assessment': sampleTable(['Pillar', 'Capability', 'CurrentLevel', 'TargetLevel', 'Owner', 'AssessedDate']),
+      };
+      const pending = resolveLiveReport('coe-adoption-maturity', sample);
+      // Advance past the resolver timeout (default 12s) — flushes the setTimeout + microtasks.
+      await vi.advanceTimersByTimeAsync(12_500);
+      const { live, dataSources } = await pending;
+
+      expect(dataSources['Adoption Signals'].source).toBe('error');
+      expect(dataSources['Adoption Signals'].note).toMatch(/timed out/i);
+      // Still a REAL EMPTY table (schema, zero rows) — never fabricated.
+      expect(live['Adoption Signals'].rows).toHaveLength(0);
+      // The unbound sibling resolved immediately as empty (the render did NOT hang).
+      expect(dataSources['Maturity Assessment'].source).toBe('empty');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('maps Defender secure score (live) and Azure Policy compliance (live) for security-compliance-posture', async () => {
     (getDefenderSummary as any).mockResolvedValue({
       secureScore: { current: 42, max: 60, percentage: 70 },

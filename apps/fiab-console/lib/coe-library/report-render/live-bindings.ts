@@ -591,6 +591,48 @@ alertsmanagementresources
   }
 };
 
+/**
+ * Cap a single entity resolver so one slow / hanging Azure backend (Log
+ * Analytics, Cost Management, Defender, or a stalled credential token fetch)
+ * can NEVER hang the whole report render — otherwise the consumer viewer's
+ * "Open report" dialog spins forever. Only the Azure Resource Graph path is
+ * bounded by `fetchWithTimeout`; Log Analytics / Cost / Defender / token
+ * acquisition are not, so we bound every resolver here.
+ *
+ * On timeout the entity resolves to an honest gate ({source:'error', note}) —
+ * a real EMPTY table with a truthful reason, never fabricated rows. Sibling
+ * entities that resolved in time still render. Tune with
+ * `LOOM_REPORT_LIVE_TIMEOUT_MS` (default 12s).
+ */
+export const LIVE_RESOLVER_TIMEOUT_MS =
+  Number(process.env.LOOM_REPORT_LIVE_TIMEOUT_MS) || 12_000;
+
+function withResolverTimeout(
+  fn: () => Promise<EntityBindingResult>,
+  label: string,
+): Promise<EntityBindingResult> {
+  return new Promise<EntityBindingResult>((resolve) => {
+    let settled = false;
+    const finish = (r: EntityBindingResult) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(r);
+    };
+    const timer = setTimeout(() => {
+      finish({
+        source: 'error',
+        note: `${label} timed out after ${Math.round(LIVE_RESOLVER_TIMEOUT_MS / 1000)}s — the Azure backend did not respond (it may be throttled or unreachable). The rest of the report still rendered; reopen to retry.`,
+      });
+    }, LIVE_RESOLVER_TIMEOUT_MS);
+    // A resolver already returns {source:'error'} for handled failures; a raw
+    // rejection (rare) is normalised to an honest gate here too.
+    fn().then(finish, (e: any) =>
+      finish({ source: 'error', note: `Live render failed: ${e?.message || String(e)}` }),
+    );
+  });
+}
+
 /** Build an honest gate note from a client error (config / permission / upstream). */
 function gateNote(e: any, service: string, role: string): string {
   const name = e?.name || '';
@@ -760,11 +802,8 @@ export async function resolveBuilderSource(
   const src = getBuilderSource(sourceId);
   if (!src) return { source: 'error', note: `Unknown data source: ${sourceId}` };
   const params = resolveReportParams(overrides);
-  try {
-    return await src.resolver(params, ctx);
-  } catch (e: any) {
-    return { source: 'error', note: `Live render failed: ${e?.message || String(e)}` };
-  }
+  // Bounded so a slow/hanging backend can never hang the dashboard render.
+  return withResolverTimeout(() => src.resolver(params, ctx), src.label);
 }
 
 /** Resolve many builder sources at once, sharing one RenderCtx (per-render memo). */
@@ -815,11 +854,9 @@ export async function resolveLiveReport(
       if (!resolver) {
         return [entity, { source: 'empty', note: 'No live Azure data source is bound to this dataset yet; showing no rows.' }];
       }
-      try {
-        return [entity, await resolver(params, ctx)];
-      } catch (e: any) {
-        return [entity, { source: 'error', note: `Live render failed: ${e?.message || String(e)}` }];
-      }
+      // Bounded per-entity so one slow/hanging Azure backend can't hang the
+      // whole render (the "Open report" dialog would spin forever).
+      return [entity, await withResolverTimeout(() => resolver(params, ctx), entity)];
     }),
   );
 
