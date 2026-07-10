@@ -24,7 +24,7 @@ import { clientFetch } from '@/lib/client-fetch';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ReactFlow, ReactFlowProvider, Background, BackgroundVariant, Controls, MiniMap,
+  ReactFlow, ReactFlowProvider, Background, BackgroundVariant, MiniMap, Panel,
   MarkerType, useReactFlow,
   type Node, type Edge, type NodeProps,
 } from '@xyflow/react';
@@ -42,6 +42,7 @@ import {
   Add20Regular, ArrowSync20Regular, Play20Regular, Delete20Regular, BoxMultiple20Regular,
   Save20Regular, Database20Regular, FullScreenMaximize20Regular, LockClosed20Regular,
 } from '@fluentui/react-icons';
+import { accentTint, CanvasRightRail } from '@/lib/components/canvas/canvas-node-kit';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { DetailsPanel, type DetailsSection } from '@/lib/components/shared/details-panel';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
@@ -260,7 +261,7 @@ export function MountedAdfEditor({ item, id }: Props) {
   }, [mountId, active, pipelines, runs]);
 
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={ribbon} rightPanel={detailsPanel} rightPanelLabel="Details"
+    <ItemEditorChrome splitKeyPrefix={item.slug} item={item} id={id} ribbon={ribbon} rightPanel={detailsPanel} rightPanelLabel="Details"
       leftPanel={
         <div className={s.treePad}>
           <Subtitle2 style={{ marginBottom: tokens.spacingVerticalS }}>Mounted factories</Subtitle2>
@@ -809,6 +810,8 @@ function nextStreamName(streams: DfStream[], kind: StreamKind): string {
 function InnerDesigner({ name, datasets, reloadKey }: DesignerProps) {
   const s = useDesignerStyles();
   const rf = useReactFlow();
+  const [zoom, setZoom] = useState(1);
+  const [railCollapsed, setRailCollapsed] = useState(false);
   const [model, setModel] = useState<DfModel>({ streams: [] });
   const [selected, setSelected] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
@@ -980,7 +983,7 @@ function InnerDesigner({ name, datasets, reloadKey }: DesignerProps) {
           {saving ? 'Saving…' : 'Save'}
         </Button>
         <Button size="small" appearance="outline" icon={<ArrowSync20Regular />} onClick={() => load(name)}>Refresh</Button>
-        <Button size="small" appearance="subtle" icon={<FullScreenMaximize20Regular />} onClick={() => rf.fitView({ padding: 0.2 })}>Fit</Button>
+        <Button size="small" appearance="subtle" icon={<FullScreenMaximize20Regular />} onClick={() => rf.fitView({ padding: 0.2, maxZoom: 1.25 })}>Fit</Button>
         <Tooltip content="Live data preview needs an ADF data-flow debug session (createDataFlowDebugSession + executeDataFlowDebugCommand)" relationship="label">
           <Button size="small" appearance="subtle" icon={<LockClosed20Regular />} onClick={() => setPreviewGate(true)}>Data preview (needs debug cluster)</Button>
         </Tooltip>
@@ -1031,12 +1034,39 @@ function InnerDesigner({ name, datasets, reloadKey }: DesignerProps) {
             onNodeClick={(_, n) => setSelected(n.id)}
             onNodeDragStop={(_, n) => { positions.current[n.id] = n.position; }}
             onPaneClick={() => setSelected(null)}
+            onMove={(_, vp) => setZoom(vp.zoom)}
             fitView
+            // maxZoom keeps a small 3-6 node graph filling the canvas readably on open.
+            fitViewOptions={{ padding: 0.2, maxZoom: 1.25 }}
             proOptions={{ hideAttribution: true }}
           >
-            <Background variant={BackgroundVariant.Dots} gap={16} size={1} />
-            <Controls showInteractive={false} />
-            <MiniMap pannable zoomable nodeColor={(n) => KIND_COLOR[((n.data as DfNodeData)?.stream?.kind) || 'select']} />
+            <Background
+              variant={BackgroundVariant.Dots}
+              gap={18}
+              size={1.5}
+              color={accentTint('var(--loom-accent-blue)', 45)}
+            />
+            <Panel position="bottom-left">
+              <CanvasRightRail
+                zoom={zoom}
+                minZoom={0.25}
+                maxZoom={2}
+                onZoomChange={(z) => rf.setViewport({ ...rf.getViewport(), zoom: z }, { duration: 120 })}
+                onZoomIn={() => rf.zoomIn({ duration: 120 })}
+                onZoomOut={() => rf.zoomOut({ duration: 120 })}
+                onFit={() => rf.fitView({ padding: 0.2, maxZoom: 1.25, duration: 200 })}
+                collapsed={railCollapsed}
+                onToggleCollapse={() => setRailCollapsed((v) => !v)}
+              />
+            </Panel>
+            <MiniMap
+              pannable
+              zoomable
+              nodeColor={(n) => KIND_COLOR[((n.data as DfNodeData)?.stream?.kind) || 'select']}
+              nodeStrokeColor={tokens.colorNeutralStroke2}
+              maskColor={accentTint(tokens.colorNeutralBackground3, 70)}
+              style={{ backgroundColor: tokens.colorNeutralBackground1 }}
+            />
           </ReactFlow>
         </div>
 

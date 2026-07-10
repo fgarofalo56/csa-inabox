@@ -626,7 +626,7 @@ export function DatabricksNotebookEditor({ item, id }: { item: FabricItemType; i
   ], [newNotebook, savingFile, selectedPath, dirty, save, addCell, activeCellId, runningAll, canRunAll, runAll, clearOutputs, clearState, clearAndRunAll, openRuns, refreshTree, loadClusters]);
 
   return (
-    <ItemEditorChrome
+    <ItemEditorChrome splitKeyPrefix={item.slug}
       item={item}
       id={id}
       ribbon={ribbonNb}

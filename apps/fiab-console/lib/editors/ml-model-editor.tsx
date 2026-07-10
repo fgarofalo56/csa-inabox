@@ -490,7 +490,7 @@ function MlModelEditorBody({ item, id }: { item: FabricItemType; id: string }) {
   );
 
   return (
-    <ItemEditorChrome
+    <ItemEditorChrome splitKeyPrefix={item.slug}
       item={item}
       id={id}
       ribbon={ribbon}

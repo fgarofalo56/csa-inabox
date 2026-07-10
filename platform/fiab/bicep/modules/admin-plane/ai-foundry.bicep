@@ -406,7 +406,12 @@ output aoaiInferenceEndpoint string = environment().suffixes.storage != 'core.wi
 
 // Foundry Agent Service project wiring (LOOM_FOUNDRY_PROJECT_ENDPOINT / _ID).
 output projectName string = foundryProject.name
-output projectEndpoint string = 'https://${aiServices.properties.customSubDomainName}.services.ai.azure.com/api/projects/${foundryProject.name}'
+// Sovereign-aware, matching aoaiInferenceEndpoint above: GCC-High / IL5 / IL6
+// use services.ai.azure.us. Gov Foundry project host per
+// https://learn.microsoft.com/azure/foundry/concepts/foundry-azure-government#endpoints
+output projectEndpoint string = environment().suffixes.storage != 'core.windows.net'
+  ? 'https://${aiServices.properties.customSubDomainName}.services.ai.azure.us/api/projects/${foundryProject.name}'
+  : 'https://${aiServices.properties.customSubDomainName}.services.ai.azure.com/api/projects/${foundryProject.name}'
 // The CognitiveServices project type doesn't surface a bare workspace GUID in
 // bicep; the ARM resource id is the real, stable identifier the Foundry agent
 // editor surfaces for downstream connection wiring.

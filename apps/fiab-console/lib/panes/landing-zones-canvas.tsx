@@ -13,15 +13,15 @@
  * Uses @xyflow/react — the same lib the network / deploy-planner canvases use.
  */
 
-import React, { useCallback, useEffect, useMemo } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  ReactFlow, ReactFlowProvider, Background, BackgroundVariant, Controls, MiniMap, Panel,
+  ReactFlow, ReactFlowProvider, Background, BackgroundVariant, MiniMap, Panel,
   MarkerType, useReactFlow, useNodesInitialized, type Node, type Edge,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { makeStyles, tokens, Subtitle2, Body1 } from '@fluentui/react-components';
 import { Building20Regular, Box20Regular } from '@fluentui/react-icons';
-import { accentTint } from '@/lib/components/canvas/canvas-node-kit';
+import { accentTint, CanvasRightRail } from '@/lib/components/canvas/canvas-node-kit';
 import { ResizableCanvasRegion } from '@/lib/components/canvas/resizable-canvas';
 import type { LandingZone, HubCoords, DlzAttachState } from '@/lib/setup/landing-zones-model';
 
@@ -79,7 +79,8 @@ const useStyles = makeStyles({
 
 const HUB_ID = '__hub__';
 
-const FIT_VIEW_OPTIONS = { padding: 0.2, minZoom: 0.2, maxZoom: 1.5 } as const;
+// maxZoom keeps a small 3-6 node graph filling the canvas readably on open.
+const FIT_VIEW_OPTIONS = { padding: 0.2, minZoom: 0.2, maxZoom: 1.25 } as const;
 
 /**
  * Re-runs `fitView` once React Flow has measured every node's real dimensions
@@ -190,6 +191,75 @@ function layout(hub: HubCoords | null, zones: LandingZone[]): { nodes: Node[]; e
   return { nodes, edges };
 }
 
+/**
+ * The React Flow surface itself — lives INSIDE <ReactFlowProvider> so it can
+ * reuse the single `useReactFlow()` instance to drive the shared CanvasRightRail
+ * (zoom / fit), matching every other Loom canvas.
+ */
+function LandingZonesFlow({
+  nodes, edges, onNodeClick, styles,
+}: {
+  nodes: Node[];
+  edges: Edge[];
+  onNodeClick: (e: unknown, node: Node) => void;
+  styles: ReturnType<typeof useStyles>;
+}): React.ReactElement {
+  const rf = useReactFlow();
+  const [zoom, setZoom] = useState(1);
+  const [railCollapsed, setRailCollapsed] = useState(false);
+  return (
+    <ReactFlow
+      nodes={nodes}
+      edges={edges}
+      onNodeClick={onNodeClick}
+      fitView
+      fitViewOptions={FIT_VIEW_OPTIONS}
+      minZoom={0.2}
+      attributionPosition="bottom-left"
+      onMove={(_, vp) => setZoom(vp.zoom)}
+    >
+      <FitViewOnInit deps={nodes.length} />
+      <Background
+        variant={BackgroundVariant.Dots}
+        gap={18}
+        size={1.5}
+        color={accentTint('var(--loom-accent-blue)', 45)}
+      />
+      <Panel position="bottom-left">
+        <CanvasRightRail
+          zoom={zoom}
+          minZoom={0.25}
+          maxZoom={2}
+          onZoomChange={(z) => rf.setViewport({ ...rf.getViewport(), zoom: z }, { duration: 120 })}
+          onZoomIn={() => rf.zoomIn({ duration: 120 })}
+          onZoomOut={() => rf.zoomOut({ duration: 120 })}
+          onFit={() => rf.fitView({ padding: 0.2, maxZoom: 1.25, duration: 200 })}
+          collapsed={railCollapsed}
+          onToggleCollapse={() => setRailCollapsed((v) => !v)}
+        />
+      </Panel>
+      <Panel position="top-left">
+        <div className={styles.legend} aria-label="Landing zone legend">
+          {(['attached', 'detached', 'unknown'] as DlzAttachState[]).map((k) => (
+            <span key={k} className={styles.legendItem}>
+              <span className={styles.legendSwatch} style={{ backgroundColor: STATE_STYLE[k].bg, border: `2px solid ${STATE_STYLE[k].border}` }} />
+              {STATE_STYLE[k].label}
+            </span>
+          ))}
+        </div>
+      </Panel>
+      <MiniMap
+        position="bottom-right"
+        pannable
+        zoomable
+        nodeStrokeColor={tokens.colorNeutralStroke2}
+        maskColor={accentTint(tokens.colorNeutralBackground3, 70)}
+        style={{ backgroundColor: tokens.colorNeutralBackground1 }}
+      />
+    </ReactFlow>
+  );
+}
+
 function CanvasInner({
   hub, zones, onSelect,
 }: {
@@ -218,22 +288,7 @@ function CanvasInner({
   ) : (
     <div className={styles.shell}>
       <ReactFlowProvider>
-        <ReactFlow nodes={nodes} edges={edges} onNodeClick={onNodeClick} fitView fitViewOptions={FIT_VIEW_OPTIONS} minZoom={0.2} attributionPosition="bottom-left">
-          <FitViewOnInit deps={nodes.length} />
-          <Background variant={BackgroundVariant.Dots} gap={16} size={1} />
-          <Controls showInteractive={false} />
-          <Panel position="top-left">
-            <div className={styles.legend} aria-label="Landing zone legend">
-              {(['attached', 'detached', 'unknown'] as DlzAttachState[]).map((k) => (
-                <span key={k} className={styles.legendItem}>
-                  <span className={styles.legendSwatch} style={{ backgroundColor: STATE_STYLE[k].bg, border: `2px solid ${STATE_STYLE[k].border}` }} />
-                  {STATE_STYLE[k].label}
-                </span>
-              ))}
-            </div>
-          </Panel>
-          <MiniMap position="bottom-right" pannable zoomable style={{ backgroundColor: tokens.colorNeutralBackground2, border: `1px solid ${tokens.colorNeutralStroke2}` }} />
-        </ReactFlow>
+        <LandingZonesFlow nodes={nodes} edges={edges} onNodeClick={onNodeClick} styles={styles} />
       </ReactFlowProvider>
     </div>
   );

@@ -360,7 +360,7 @@ export function SynapseSparkPoolEditor({ item, id }: { item: FabricItemType; id:
   ], [busy, selected, submit, openScaleDialog, openApDialog, setAutoPause]);
 
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={ribbon}
+    <ItemEditorChrome splitKeyPrefix={item.slug} item={item} id={id} ribbon={ribbon}
       leftPanel={
         <div style={{ padding: tokens.spacingVerticalS }}>
           <Tree aria-label="Spark pools" defaultOpenItems={['pools']}>
@@ -907,7 +907,7 @@ export function AdfDatasetEditor({ item, id }: { item: FabricItemType; id: strin
   const containerLabel = containerLabelFor(locationTypeFor(selectedLsType));
 
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={ribbon}
+    <ItemEditorChrome splitKeyPrefix={item.slug} item={item} id={id} ribbon={ribbon}
       leftPanel={
         <div style={{ padding: tokens.spacingVerticalS }}>
           <Tree aria-label="ADF datasets" defaultOpenItems={['d']}>
@@ -1330,7 +1330,7 @@ export function AdfTriggerEditor({ item, id }: { item: FabricItemType; id: strin
   ], [busy, selected, runtimeState, setState, createNew, save, targetPipeline]);
 
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={ribbon}
+    <ItemEditorChrome splitKeyPrefix={item.slug} item={item} id={id} ribbon={ribbon}
       leftPanel={
         <div style={{ padding: tokens.spacingVerticalS }}>
           <Tree aria-label="ADF triggers" defaultOpenItems={['t']}>

@@ -20,8 +20,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { JSX } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  ReactFlow, ReactFlowProvider, Background, BackgroundVariant, Controls, MiniMap, Panel,
-  Handle, Position, useNodesState, useEdgesState, addEdge,
+  ReactFlow, ReactFlowProvider, Background, BackgroundVariant, MiniMap, Panel,
+  Handle, Position, useNodesState, useEdgesState, useReactFlow, addEdge,
   type Node, type Edge, type Connection, type NodeProps, type NodeTypes,
   type EdgeProps, type EdgeTypes,
 } from '@xyflow/react';
@@ -54,7 +54,7 @@ import { isRunnableType } from '@/lib/taskflow/step-runner';
 import type { CanvasNodeStatus } from '@/lib/components/canvas/canvas-node-kit';
 import { findItemType } from '@/lib/catalog/fabric-item-types';
 import {
-  CanvasNode, CanvasEdge, portStyle, CATEGORY_ACCENT,
+  CanvasNode, CanvasEdge, CanvasRightRail, portStyle, CATEGORY_ACCENT, accentTint,
   type CanvasVisual,
 } from '@/lib/components/canvas/canvas-node-kit';
 import { ResizableCanvasRegion } from '@/lib/components/canvas/resizable-canvas';
@@ -232,6 +232,9 @@ function TaskFlowCanvasInner({ workspaceId, flow, items, onBack }: CanvasProps) 
   const qc = useQueryClient();
   const [nodes, setNodes, onNodesChange] = useNodesState(flowToNodes(flow));
   const [edges, setEdges, onEdgesChange] = useEdgesState(flowToEdges(flow));
+  const rf = useReactFlow();
+  const [zoom, setZoom] = useState(1);
+  const [railCollapsed, setRailCollapsed] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const [savedAt, setSavedAt] = useState<string | null>(null);
@@ -485,12 +488,38 @@ function TaskFlowCanvasInner({ workspaceId, flow, items, onBack }: CanvasProps) 
           onEdgesChange={handleEdgesChange}
           onConnect={onConnect}
           onNodeDoubleClick={(_e, n) => openEditStep(n.id)}
+          onMove={(_, vp) => setZoom(vp.zoom)}
           fitView
+          // maxZoom keeps a small 3-6 node graph filling the canvas readably on open.
+          fitViewOptions={{ padding: 0.2, maxZoom: 1.25 }}
           proOptions={{ hideAttribution: true }}
         >
-          <Background variant={BackgroundVariant.Dots} gap={16} size={1} />
-          <Controls />
-          <MiniMap pannable zoomable />
+          <Background
+            variant={BackgroundVariant.Dots}
+            gap={18}
+            size={1.5}
+            color={accentTint('var(--loom-accent-blue)', 45)}
+          />
+          <Panel position="bottom-left">
+            <CanvasRightRail
+              zoom={zoom}
+              minZoom={0.25}
+              maxZoom={2}
+              onZoomChange={(z) => rf.setViewport({ ...rf.getViewport(), zoom: z }, { duration: 120 })}
+              onZoomIn={() => rf.zoomIn({ duration: 120 })}
+              onZoomOut={() => rf.zoomOut({ duration: 120 })}
+              onFit={() => rf.fitView({ padding: 0.2, maxZoom: 1.25, duration: 200 })}
+              collapsed={railCollapsed}
+              onToggleCollapse={() => setRailCollapsed((v) => !v)}
+            />
+          </Panel>
+          <MiniMap
+            pannable
+            zoomable
+            nodeStrokeColor={tokens.colorNeutralStroke2}
+            maskColor={accentTint(tokens.colorNeutralBackground3, 70)}
+            style={{ backgroundColor: tokens.colorNeutralBackground1 }}
+          />
           <Panel position="top-left">
             <Button size="small" appearance="primary" icon={<Add20Regular />} onClick={openAddStep}>Add step</Button>
           </Panel>

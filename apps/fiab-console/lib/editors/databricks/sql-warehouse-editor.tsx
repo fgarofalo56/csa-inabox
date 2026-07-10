@@ -930,7 +930,7 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
   useRegisterRibbonCommands(ribbon, item.slug);
 
   return (
-    <ItemEditorChrome
+    <ItemEditorChrome splitKeyPrefix={item.slug}
       item={item}
       id={id}
       ribbon={ribbon} commandSearch

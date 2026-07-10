@@ -26,7 +26,7 @@ import { clientFetch } from '@/lib/client-fetch';
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ReactFlow, ReactFlowProvider, Background, BackgroundVariant, Controls, MiniMap, Panel,
+  ReactFlow, ReactFlowProvider, Background, BackgroundVariant, MiniMap, Panel,
   MarkerType, useReactFlow, useNodesInitialized, type Node, type Edge,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
@@ -44,7 +44,7 @@ import {
   Router20Regular, ArrowRouting20Regular, Cube20Regular,
 } from '@fluentui/react-icons';
 import type { FluentIcon } from '@fluentui/react-icons';
-import { accentTint, accentGradient } from '@/lib/components/canvas/canvas-node-kit';
+import { accentTint, accentGradient, CanvasRailPanel } from '@/lib/components/canvas/canvas-node-kit';
 import type {
   TopoNode, TopoEdge, TopoNodeKind, TopologyGraph,
 } from '@/lib/azure/network-topology-graph';
@@ -456,7 +456,8 @@ const NODE_LEGEND: TopoNodeKind[] = [
   'vnet', 'subnet', 'pe', 'nsg', 'firewall', 'bastion', 'managedenv', 'appgateway', 'loadbalancer', 'privatednszone',
 ];
 
-const FIT_VIEW_OPTIONS = { padding: 0.15, minZoom: 0.1, maxZoom: 1.5 } as const;
+// maxZoom keeps a small 3-6 node graph filling the canvas readably on open.
+const FIT_VIEW_OPTIONS = { padding: 0.15, minZoom: 0.1, maxZoom: 1.25 } as const;
 
 /**
  * Re-runs `fitView` once React Flow has measured every node's real dimensions
@@ -531,8 +532,13 @@ function GraphInner({ graph }: { graph: { nodes: TopoNode[]; edges: TopoEdge[] }
         >
           <FitViewOnInit deps={nodes.length} />
           {/* FIX 3: Dots background to match every other Loom canvas (pipeline, deploy-planner, landing-zones). */}
-          <Background variant={BackgroundVariant.Dots} gap={20} size={1} color={tokens.colorNeutralStroke2} />
-          <Controls showInteractive={false} />
+          <Background
+            variant={BackgroundVariant.Dots}
+            gap={18}
+            size={1.5}
+            color={accentTint('var(--loom-accent-blue)', 45)}
+          />
+          <CanvasRailPanel />
           <Panel position="top-left">
             <div className={styles.legend} aria-label="Topology legend">
               {NODE_LEGEND.map((k) => {
@@ -558,7 +564,9 @@ function GraphInner({ graph }: { graph: { nodes: TopoNode[]; edges: TopoEdge[] }
               const k = (n.data as { topo?: TopoNode } | undefined)?.topo?.kind;
               return k ? KIND_STYLE[k].accent : tokens.colorNeutralStroke2;
             }}
-            style={{ backgroundColor: tokens.colorNeutralBackground2, border: `1px solid ${tokens.colorNeutralStroke2}` }}
+            nodeStrokeColor={tokens.colorNeutralStroke2}
+            maskColor={accentTint(tokens.colorNeutralBackground3, 70)}
+            style={{ backgroundColor: tokens.colorNeutralBackground1, border: `1px solid ${tokens.colorNeutralStroke2}` }}
           />
         </ReactFlow>
       </ReactFlowProvider>

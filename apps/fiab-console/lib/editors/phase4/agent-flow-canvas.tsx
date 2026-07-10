@@ -17,8 +17,8 @@
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ReactFlow, ReactFlowProvider, Background, BackgroundVariant, Controls, MiniMap, Panel,
-  Handle, Position, useNodesState,
+  ReactFlow, ReactFlowProvider, Background, BackgroundVariant, MiniMap, Panel,
+  Handle, Position, useNodesState, useReactFlow,
   type Node, type Edge, type NodeProps, type NodeChange,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
@@ -34,7 +34,7 @@ import {
 import type { JSX } from 'react';
 import { clientFetch } from '@/lib/client-fetch';
 import {
-  CanvasNode, CATEGORY_ACCENT, portStyle,
+  CanvasNode, CanvasRightRail, CATEGORY_ACCENT, accentTint, portStyle,
   type CanvasVisual, type CanvasNodeCategory,
 } from '@/lib/components/canvas/canvas-node-kit';
 import { useCanvasHistory } from '@/lib/components/canvas/use-canvas-history';
@@ -158,6 +158,9 @@ function InnerCanvas(props: AgentFlowCanvasProps) {
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [addKind, setAddKind] = useState<AgentToolKind>('warehouse');
+  const rf = useReactFlow();
+  const [zoom, setZoom] = useState(1);
+  const [railCollapsed, setRailCollapsed] = useState(false);
 
   // ---- derive React-Flow nodes/edges from props + layout ----
   const logical = useMemo(() => buildFlowNodes({
@@ -295,12 +298,38 @@ function InnerCanvas(props: AgentFlowCanvasProps) {
             onNodesChange={handleNodesChange}
             onNodeClick={(_, n) => setSelectedId(n.id)}
             onPaneClick={() => setSelectedId(null)}
+            onMove={(_, vp) => setZoom(vp.zoom)}
             fitView
+            // maxZoom keeps a small 3-6 node graph filling the canvas readably on open.
+            fitViewOptions={{ padding: 0.2, maxZoom: 1.25 }}
             proOptions={{ hideAttribution: true }}
           >
-            <Background variant={BackgroundVariant.Dots} gap={20} size={1} color={tokens.colorNeutralStroke2} />
-            <Controls showInteractive={false} />
-            <MiniMap pannable zoomable style={{ backgroundColor: tokens.colorNeutralBackground1 }} />
+            <Background
+              variant={BackgroundVariant.Dots}
+              gap={18}
+              size={1.5}
+              color={accentTint('var(--loom-accent-blue)', 45)}
+            />
+            <Panel position="bottom-left">
+              <CanvasRightRail
+                zoom={zoom}
+                minZoom={0.25}
+                maxZoom={2}
+                onZoomChange={(z) => rf.setViewport({ ...rf.getViewport(), zoom: z }, { duration: 120 })}
+                onZoomIn={() => rf.zoomIn({ duration: 120 })}
+                onZoomOut={() => rf.zoomOut({ duration: 120 })}
+                onFit={() => rf.fitView({ padding: 0.2, maxZoom: 1.25, duration: 200 })}
+                collapsed={railCollapsed}
+                onToggleCollapse={() => setRailCollapsed((v) => !v)}
+              />
+            </Panel>
+            <MiniMap
+              pannable
+              zoomable
+              nodeStrokeColor={tokens.colorNeutralStroke2}
+              maskColor={accentTint(tokens.colorNeutralBackground3, 70)}
+              style={{ backgroundColor: tokens.colorNeutralBackground1 }}
+            />
             <Panel position="top-left">
               <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Click a node to configure it in the inspector →</Caption1>
             </Panel>

@@ -37,7 +37,7 @@ import { clientFetch } from '@/lib/client-fetch';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode, PointerEvent as ReactPointerEvent, KeyboardEvent as ReactKeyboardEvent } from 'react';
 import {
-  ReactFlow, ReactFlowProvider, Background, BackgroundVariant, Controls, MiniMap, Panel,
+  ReactFlow, ReactFlowProvider, Background, BackgroundVariant, MiniMap, Panel,
   useReactFlow, useNodesState, useEdgesState, useNodesInitialized, Handle, Position,
   type Node, type Edge, type NodeProps, type NodeTypes, type Connection,
 } from '@xyflow/react';
@@ -63,7 +63,7 @@ import {
 } from '@fluentui/react-icons';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import {
-  CanvasNode, CATEGORY_ACCENT, portStyle,
+  CanvasNode, CATEGORY_ACCENT, portStyle, accentTint, CanvasRightRail,
   type CanvasVisual, type CanvasNodeCategory,
 } from '@/lib/components/canvas/canvas-node-kit';
 import {
@@ -317,7 +317,8 @@ function leafIds(nodes: Node[], edges: Edge[]): string[] {
 let seq = 0;
 function nextId(prefix: string) { seq += 1; return `${prefix}_${Date.now().toString(36)}_${seq}`; }
 
-const FIT_OPTS = { padding: 0.2, minZoom: 0.2, maxZoom: 1.5 } as const;
+// maxZoom keeps a small 3-6 node graph filling the canvas readably on open.
+const FIT_OPTS = { padding: 0.2, minZoom: 0.2, maxZoom: 1.25 } as const;
 
 /** Re-fit once node sizes are measured (the #1480 fitView-on-init fix). */
 function FitViewOnInit({ deps }: { deps: unknown }): null {
@@ -338,6 +339,9 @@ function FitViewOnInit({ deps }: { deps: unknown }): null {
 function CanvasInner(props: WarpTransformCanvasProps) {
   const { targets, workspaces } = props;
   const s = useStyles();
+  const rf = useReactFlow();
+  const [zoom, setZoom] = useState(1);
+  const [railCollapsed, setRailCollapsed] = useState(false);
 
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>(
     props.initialGraph ? props.initialGraph.nodes.map((n, i) => rfNodeFromVq(n, 40 + (i % 4) * 230, 40 + Math.floor(i / 4) * 130)) : [],
@@ -662,11 +666,35 @@ function CanvasInner(props: WarpTransformCanvasProps) {
               fitViewOptions={FIT_OPTS}
               proOptions={{ hideAttribution: true }}
               deleteKeyCode={null}
+              onMove={(_, vp) => setZoom(vp.zoom)}
             >
               <FitViewOnInit deps={nodes.length} />
-              <Background variant={BackgroundVariant.Dots} gap={20} size={1} color={tokens.colorNeutralStroke2} />
-              <Controls showInteractive={false} />
-              <MiniMap pannable zoomable style={{ backgroundColor: tokens.colorNeutralBackground1 }} />
+              <Background
+                variant={BackgroundVariant.Dots}
+                gap={18}
+                size={1.5}
+                color={accentTint('var(--loom-accent-blue)', 45)}
+              />
+              <Panel position="bottom-left">
+                <CanvasRightRail
+                  zoom={zoom}
+                  minZoom={0.25}
+                  maxZoom={2}
+                  onZoomChange={(z) => rf.setViewport({ ...rf.getViewport(), zoom: z }, { duration: 120 })}
+                  onZoomIn={() => rf.zoomIn({ duration: 120 })}
+                  onZoomOut={() => rf.zoomOut({ duration: 120 })}
+                  onFit={() => rf.fitView({ padding: 0.2, maxZoom: 1.25, duration: 200 })}
+                  collapsed={railCollapsed}
+                  onToggleCollapse={() => setRailCollapsed((v) => !v)}
+                />
+              </Panel>
+              <MiniMap
+                pannable
+                zoomable
+                nodeStrokeColor={tokens.colorNeutralStroke2}
+                maskColor={accentTint(tokens.colorNeutralBackground3, 70)}
+                style={{ backgroundColor: tokens.colorNeutralBackground1 }}
+              />
               <Panel position="top-left">
                 <div className={s.palette} role="toolbar" aria-label="Transform nodes">
                   <Button size="small" icon={<Add20Regular />} appearance="primary" onClick={() => { setAddTable(''); setAddSchema(''); setAddOpen(true); }} data-warp-action="add-source">Source</Button>
