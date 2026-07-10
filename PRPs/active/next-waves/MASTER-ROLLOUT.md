@@ -8,6 +8,19 @@
 
 ---
 
+## ⚠️ RECONCILIATION 2026-07-09 EVE — read `docs/fiab/prp/PRP-AUDIT-2026-07-09.md` FIRST
+
+A full per-item audit against `main` @ `835d2145` found **~40 items below are BUILT but still
+listed as forward work** (the repo raced ahead of this plan during the 07-09 rollout session):
+Phases 0, 1, and 2 are **COMPLETE and live-verified** (U0/SC-1..10, PSR-A with a real benchmark
+run, CAP-R2, the Phase-2 RAG-spine/G1/G5/W19 set), and much of Phases 3/5/6 pre-shipped
+(FGC-12..22/25/28/30, DBX-3..7/11, SVC-1/8, CTS-01/02/04/05/10, W6/W8/W11/W18/W19). The
+Hyperscale Phase-12 gate (PSR-1+PSR-2 green) is **met**; H-band skeletons (HYP-1/5/9/16) started
+2026-07-09 eve. **Before building ANY item below, check the audit doc's per-item tables** — the
+true remaining work is the audit's partial/missing lists, plus two dangling enterprise-hardening
+foundations with no phase owner (EH-P1-OBO per-user data-plane; EH-P1-MANIFEST item-type
+manifest registry — needs operator steer).
+
 ## Status — read this first (disambiguation)
 
 **Prior wave programs are SHIPPED and are NOT in scope here.** The operator's earlier, already-built

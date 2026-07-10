@@ -156,6 +156,11 @@ export const VALUE_HINT: Record<string, string> = {
   LOOM_MAPS_BACKEND: 'azure-maps',
   LOOM_AZURE_MAPS_CLIENT_ID: '<azure-maps-account-uniqueId-guid>',
   LOOM_AZURE_MAPS_KEY: '<azure-maps-shared-key (Commercial only; prefer AAD)>',
+  // ── Hyperscale band (HYP-16) — internal ACA app URLs + shared Redis host ──
+  LOOM_ONELAKE_URL: 'https://loom-onelake.<aca-env-domain>',
+  LOOM_DIRECTLAKE_URL: 'https://loom-directlake.<aca-env-domain>',
+  LOOM_BROKER_URL: 'https://loom-capacity-broker.<aca-env-domain>',
+  LOOM_BROKER_REDIS: '<hband-redis-host>.redis.cache.windows.net:6380',
 };
 
 /** Pick the concrete env vars an admin should set from a missing-list that may
@@ -589,6 +594,32 @@ export const ENV_CHECKS: EnvSpec[] = [
     remediation: 'Set LOOM_MAPS_BACKEND=azure-maps plus a credential: LOOM_AZURE_MAPS_CLIENT_ID (the Maps account uniqueId — Entra/AAD path, gov-safe, PREFERRED; grant the Console UAMI "Azure Maps Data Reader") or LOOM_AZURE_MAPS_KEY (subscription key, Commercial only). Lights up the report Map visual + the graph/Geo map canvases; the aggregated location rows render without it. No Power BI / Fabric required.',
     provisionedBy: 'modules/landing-zone/azure-maps.bicep (azureMapsEnabled → Gen2 account + "Azure Maps Data Reader" grant + mapsClientId output)',
     role: 'Azure Maps Data Reader (Console UAMI) on the Maps account',
+  },
+  // ── Hyperscale band (HYP-16) — the three optional H-band substrate services.
+  //    Each is default-OFF/opt-out: unset → the console lib client honest-503
+  //    gates and SILENTLY falls back to the existing path (no Fabric gate, no
+  //    regression). Deploy compute/hband-shared.bicep (shared Redis + UAMIs) then
+  //    the per-service compute/loom-*-app.bicep, and set these on the Console app.
+  {
+    id: 'svc-loom-onelake', category: 'data-plane', title: 'Loom OneLake — unified namespace service (Hyperscale)', severity: 'optional',
+    required: ['LOOM_ONELAKE_URL'], warnOnMiss: true,
+    remediation: 'Set LOOM_ONELAKE_URL to the internal-ingress Loom OneLake ACA app (loom://<workspace>/<item>.<type>/<path> namespace + shortcut + security + catalog resolver on ADLS Gen2 + Cosmos — no Microsoft Fabric / OneLake DNS). Deploy compute/loom-onelake-app.bicep on the shared substrate from compute/hband-shared.bicep. Unset → the lakehouse/shortcut/security editors use the existing per-item library path (adls-client / lakehouse-shortcuts / onelake-security-client) with no loss of function.',
+    provisionedBy: 'modules/compute/hband-shared.bicep (shared UAMIs + Redis) + modules/compute/loom-onelake-app.bicep (out-of-band; admin-plane at 256-param ceiling) → LOOM_ONELAKE_URL on the Console app',
+    role: 'Storage Blob Data Contributor (uami-loom-onelake) on the DLZ lake + Cosmos data-plane on the registry containers',
+  },
+  {
+    id: 'svc-loom-directlake', category: 'data-plane', title: 'Loom Direct Lake — columnar cache/scan engine (Hyperscale)', severity: 'optional',
+    required: ['LOOM_DIRECTLAKE_URL'], warnOnMiss: true,
+    remediation: 'Set LOOM_DIRECTLAKE_URL to the internal-ingress Loom Direct Lake ACA app (Arrow + delta-rs framing/transcoding + DuckDB/DataFusion scan; the OSS outcome-equivalent of Direct Lake — no VertiPaq, no Power BI). Also set LOOM_SEMANTIC_BACKEND=loom-columnar-cache to route DAX-class queries to it. Deploy compute/loom-directlake-app.bicep on compute/hband-shared.bicep. Unset → the semantic-model / report layer uses the AAS fast-path or the Synapse-Serverless cold path unchanged.',
+    provisionedBy: 'modules/compute/hband-shared.bicep (uami-loom-directlake + shared Redis) + modules/compute/loom-directlake-app.bicep (out-of-band) → LOOM_DIRECTLAKE_URL on the Console app',
+    role: 'Storage Blob Data Reader (uami-loom-directlake) on the DLZ lake; Redis Data Contributor on the shared cache (wired by hband-shared.bicep)',
+  },
+  {
+    id: 'svc-loom-capacity-broker', category: 'azure-services', title: 'Loom Capacity Broker — LCU admission control (Hyperscale)', severity: 'optional',
+    required: ['LOOM_BROKER_URL', 'LOOM_BROKER_REDIS'], warnOnMiss: true,
+    remediation: 'Set LOOM_BROKER_URL to the internal-ingress Loom Capacity Broker ACA app (synchronous POST /admit choke-point + smoothing/bursting/4-stage-throttle over an LCU timepoint ledger) and LOOM_BROKER_REDIS to <hband-redis-host>:6380 (the shared Azure Cache for Redis Premium ledger from compute/hband-shared.bicep). Deploy compute/loom-capacity-broker-app.bicep. Unset → job submission proceeds UNTHROTTLED with a MessageBar (default-ON posture — the broker constrains, it never blocks the platform if absent).',
+    provisionedBy: 'modules/compute/hband-shared.bicep (uami-loom-capacity-broker + shared Redis timepoint ledger) + modules/compute/loom-capacity-broker-app.bicep (out-of-band) → LOOM_BROKER_URL / LOOM_BROKER_REDIS on the Console app',
+    role: 'none (uami-loom-capacity-broker holds ZERO data-plane roles — it gates the caller, never proxies; Redis Data Contributor on the shared cache is wired by hband-shared.bicep)',
   },
 ];
 
