@@ -38,6 +38,9 @@ import {
   Copy20Regular, DatabaseSearch24Regular,
 } from '@fluentui/react-icons';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
+import { LOOM_ACCENT } from '@/lib/components/shared/accent-tokens';
+import { GuidedEmptyState } from '@/lib/components/shared/guided-empty-state';
 
 const useStyles = makeStyles({
   root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minHeight: 0, flex: 1 },
@@ -79,11 +82,6 @@ const useStyles = makeStyles({
   },
   cell: { fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, whiteSpace: 'nowrap' },
   treeLeaf: { display: 'flex', gap: tokens.spacingHorizontalXS, alignItems: 'center', minWidth: 0 },
-  empty: {
-    display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-    gap: tokens.spacingVerticalS, padding: tokens.spacingVerticalXXL,
-    color: tokens.colorNeutralForeground3, textAlign: 'center',
-  },
 });
 
 interface QueryData {
@@ -220,10 +218,13 @@ export function ShareExplorerPanel({ catalog, host }: { catalog: string; host: s
         </Button>
         {host && <Caption1 className={s.hint}>Workspace: {host}</Caption1>}
       </div>
-      <Caption1 className={s.hint}>
-        Browse this subscribed share&apos;s schemas and tables, preview data, or run read-only SQL — all live against the
-        Databricks SQL warehouse. No data is copied.
-      </Caption1>
+      <TeachingBanner
+        surfaceKey="marketplace-share-explorer"
+        title="Explore a subscribed share"
+        message="Browse this share's schemas and tables, preview data, or run read-only SQL — all live against the Databricks SQL warehouse. No data is copied to Loom."
+        icon={DatabaseSearch24Regular}
+        accent={LOOM_ACCENT.teal}
+      />
 
       {gate && (
         <MessageBar intent="warning">
@@ -330,13 +331,29 @@ export function ShareExplorerPanel({ catalog, host }: { catalog: string; host: s
             )}
 
             {!running && !result && !queryErr && !gate && (
-              <div className={s.empty}>
-                <DatabaseSearch24Regular />
-                <Body1>Pick a table on the left to preview it, or write a query and Run.</Body1>
-                <Caption1 className={s.hint}>
-                  Try: <code>SELECT * FROM {catalog}.&lt;schema&gt;.&lt;table&gt; LIMIT 100</code>
-                </Caption1>
-              </div>
+              <GuidedEmptyState
+                variant="block"
+                heroIcon={DatabaseSearch24Regular}
+                title="Explore this share"
+                intro="Pick a table on the left to preview it, or start from one of these."
+                ariaLabel="Share exploration starting points"
+                paths={[
+                  {
+                    key: 'schemas',
+                    title: 'List schemas',
+                    body: 'Run SHOW SCHEMAS to see everything in this share.',
+                    icon: FolderOpen20Regular,
+                    onClick: () => { const q = `SHOW SCHEMAS IN ${bt(catalog)}`; setSql(q); void runSql(q); },
+                  },
+                  {
+                    key: 'sample',
+                    title: 'Sample a table',
+                    body: 'Seed a SELECT … LIMIT 100 template, fill in the table, then Run.',
+                    icon: Table20Regular,
+                    onClick: () => setSql(`SELECT * FROM ${bt(catalog)}.\`schema\`.\`table\` LIMIT 100`),
+                  },
+                ]}
+              />
             )}
 
             {result && (

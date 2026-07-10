@@ -20,14 +20,17 @@ import {
   makeStyles, tokens, Button, Input, Field, Checkbox, Switch,
   Dialog, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
-  Badge, Spinner, MessageBar, MessageBarBody, MessageBarTitle, Text, Caption1,
+  Badge, Spinner, Skeleton, SkeletonItem, MessageBar, MessageBarBody, MessageBarTitle, Text, Caption1,
   Accordion, AccordionItem, AccordionHeader, AccordionPanel,
 } from '@fluentui/react-components';
 import {
   Add24Regular, Delete24Regular, Send24Regular, Edit24Regular, History24Regular,
+  Flow24Regular, ShieldKeyhole24Regular,
 } from '@fluentui/react-icons';
 import { clientFetch } from '@/lib/client-fetch';
 import { LOOM_EVENT_GROUPS, type LoomEventType } from '@/lib/events/event-types';
+import { GuidedEmptyState } from '@/lib/components/shared/guided-empty-state';
+import { LOOM_ACCENT } from '@/lib/components/shared/accent-tokens';
 
 interface HookView {
   id: string;
@@ -65,6 +68,8 @@ const useStyles = makeStyles({
   wizardFields: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minWidth: '520px', maxWidth: '640px' },
   delivRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM, flexWrap: 'wrap' },
   mono: { fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase200 },
+  skeletonList: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, paddingTop: tokens.spacingVerticalS },
+  skeletonRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalL },
 });
 
 const ALL_EVENT_TYPES: LoomEventType[] = LOOM_EVENT_GROUPS.flatMap((g) => g.events.map((e) => e.type));
@@ -242,9 +247,41 @@ export function WebhooksPanel() {
       </div>
 
       {loading ? (
-        <Spinner label="Loading webhooks…" />
+        <div className={styles.skeletonList} aria-label="Loading webhooks">
+          {Array.from({ length: 3 }).map((_, i) => (
+            <div key={i} className={styles.skeletonRow}>
+              <Skeleton aria-label="" style={{ flex: 1 }}><SkeletonItem shape="rectangle" style={{ height: '18px' }} /></Skeleton>
+              <Skeleton aria-label="" style={{ width: '140px' }}><SkeletonItem shape="rectangle" style={{ height: '18px' }} /></Skeleton>
+              <Skeleton aria-label="" style={{ width: '90px' }}><SkeletonItem shape="rectangle" style={{ height: '18px' }} /></Skeleton>
+            </div>
+          ))}
+        </div>
       ) : hooks.length === 0 ? (
-        <Text>No webhooks registered yet. Register one to receive Loom events (item lifecycle, workspace, pipeline runs, marketplace, and admin changes).</Text>
+        <GuidedEmptyState
+          title="No webhooks registered yet"
+          intro="Register an outbound endpoint to receive Loom events — item lifecycle, workspace changes, pipeline-run outcomes, marketplace subscribe / SLA-breach, and admin-plane mutations."
+          heroIcon={Flow24Regular}
+          ariaLabel="No webhooks registered"
+          columns={2}
+          paths={[
+            {
+              key: 'register',
+              title: 'Register a webhook',
+              body: 'Name it, point it at an HTTPS URL, and pick the event types to receive — no JSON, just grouped checkboxes.',
+              icon: Add24Regular,
+              accent: LOOM_ACCENT.blue,
+              onClick: openCreate,
+            },
+            {
+              key: 'signing',
+              title: 'Verify signatures',
+              body: 'Each delivery is signed with HMAC-SHA256 (X-Loom-Signature). Learn how to validate it on your receiver.',
+              icon: ShieldKeyhole24Regular,
+              accent: LOOM_ACCENT.teal,
+              href: 'https://learn.microsoft.com/azure/event-grid/receive-events',
+            },
+          ]}
+        />
       ) : (
         <Table aria-label="Registered webhooks" size="small">
           <TableHeader>

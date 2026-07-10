@@ -2,15 +2,19 @@
  * Warm Spark session pool — status + control BFF.
  *
  *   GET  /api/spark/session-pool
- *        → pool status: warm / leased / warming (cold-starting) counts per
- *          pool/kind/sizing group, effective config, and the resolved backend
- *          (+ honest gate when no Spark backend is configured).
+ *        → pool status: warm / leased / shared / warming counts per
+ *          pool/kind/sizing group, effective config, the resolved backend
+ *          (+ honest gate when no Spark backend is configured), and the
+ *          cross-replica lease-store mode (cosmos = shared / memory = per-replica).
  *
  *   POST /api/spark/session-pool   body: { action, ... }
  *        action:'warm'   → pre-provision (any authed user). Optional
  *                          { backend, poolName, kind } targets a specific pool;
  *                          defaults to the active backend's default Spark pool.
- *        action:'config' → set min / max / idleTtlMs / enabled (TENANT ADMIN).
+ *        action:'config' → set min / max / idleTtlMs / concurrent /
+ *                          maxLeasesPerSession / enabled (TENANT ADMIN). The pool
+ *                          is DEFAULT-ON; `{enabled:false}` is the admin kill
+ *                          switch (opt-out), `{enabled:true}` re-enables.
  *
  * Session-gated (401 unauth). Config is admin-gated (403). No mocks — status
  * reflects REAL Livy/Databricks session state; warm provisions REAL sessions.
@@ -89,6 +93,8 @@ export async function POST(req: NextRequest) {
             : typeof body?.idleTtlSecs === 'number'
             ? body.idleTtlSecs * 1000
             : undefined,
+        concurrent: typeof body?.concurrent === 'boolean' ? body.concurrent : undefined,
+        maxLeasesPerSession: typeof body?.maxLeasesPerSession === 'number' ? body.maxLeasesPerSession : undefined,
       });
       return apiOk({ config: cfg, status: getPoolStatus() });
     } catch (e) {

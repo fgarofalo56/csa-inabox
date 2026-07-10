@@ -13,6 +13,7 @@ import {
 } from '@fluentui/react-icons';
 import { Section } from '@/lib/components/ui/section';
 import { SignInRequired } from '@/lib/components/sign-in-required';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
 import { ApimServicePane } from '@/lib/components/admin/apim-service-pane';
 import { ApimApisPane } from '@/lib/components/admin/apim-apis-pane';
 import { ApimProductsPane } from '@/lib/components/admin/apim-products-pane';
@@ -162,6 +163,14 @@ export default function ApiManagementPage() {
           )}
         </div>
       </div>
+
+      <TeachingBanner
+        surfaceKey="admin-apim-overview"
+        icon={Globe24Regular}
+        title="Administer the marketplace gateway"
+        message="Define APIs and operations, bundle them into products with a subscription + approval model, manage consumer subscriptions and keys, author global / product / API policies, and store reusable secrets as named values. Every tab drives the real Azure API Management plane over ARM."
+        learnMoreHref="https://learn.microsoft.com/azure/api-management/api-management-key-concepts"
+      />
 
       <Section>
         <TabList selectedValue={activeTab} onTabSelect={(_, d) => setActiveTab(d.value as string)}>

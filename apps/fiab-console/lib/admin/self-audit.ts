@@ -161,6 +161,9 @@ export const VALUE_HINT: Record<string, string> = {
   LOOM_DIRECTLAKE_URL: 'https://loom-directlake.<aca-env-domain>',
   LOOM_BROKER_URL: 'https://loom-capacity-broker.<aca-env-domain>',
   LOOM_BROKER_REDIS: '<hband-redis-host>.redis.cache.windows.net:6380',
+  // ── Warm Spark pool cross-replica lease store (PSR-3) ──
+  LOOM_SPARK_POOL_REDIS: '<hband-redis-host>.redis.cache.windows.net:6380',
+  LOOM_SPARK_POOL_LEASE_CONTAINER: 'spark-warm-leases',
 };
 
 /** Pick the concrete env vars an admin should set from a missing-list that may
@@ -620,6 +623,13 @@ export const ENV_CHECKS: EnvSpec[] = [
     remediation: 'Set LOOM_BROKER_URL to the internal-ingress Loom Capacity Broker ACA app (synchronous POST /admit choke-point + smoothing/bursting/4-stage-throttle over an LCU timepoint ledger) and LOOM_BROKER_REDIS to <hband-redis-host>:6380 (the shared Azure Cache for Redis Premium ledger from compute/hband-shared.bicep). Deploy compute/loom-capacity-broker-app.bicep. Unset → job submission proceeds UNTHROTTLED with a MessageBar (default-ON posture — the broker constrains, it never blocks the platform if absent).',
     provisionedBy: 'modules/compute/hband-shared.bicep (uami-loom-capacity-broker + shared Redis timepoint ledger) + modules/compute/loom-capacity-broker-app.bicep (out-of-band) → LOOM_BROKER_URL / LOOM_BROKER_REDIS on the Console app',
     role: 'none (uami-loom-capacity-broker holds ZERO data-plane roles — it gates the caller, never proxies; Redis Data Contributor on the shared cache is wired by hband-shared.bicep)',
+  },
+  {
+    id: 'perf-spark-warm-pool-store', category: 'data-plane', title: 'Warm Spark pool — cross-replica lease store (PSR-3)', severity: 'optional',
+    anyOf: [['LOOM_SPARK_POOL_LEASE_CONTAINER', 'LOOM_SPARK_POOL_REDIS']], warnOnMiss: true,
+    remediation: 'The warm Spark session pool is DEFAULT-ON (instant notebook attach on a warm hit; opt out with LOOM_SPARK_POOL_ENABLED=0 or the /admin/performance kill switch). To make warm sessions SHARED across Console replicas, signal the shared H-band substrate: set LOOM_SPARK_POOL_REDIS to the shared Azure Cache for Redis host from compute/hband-shared.bicep (same value as LOOM_BROKER_REDIS), or set LOOM_SPARK_POOL_LEASE_CONTAINER to a Cosmos container name. Either turns on the cross-replica lease registry (the Cosmos spark-warm-leases container). Unset → the pool runs per-replica (still fully functional, just not shared).',
+    provisionedBy: 'modules/landing-zone/cosmos.bicep (loomContainers → spark-warm-leases) + modules/compute/hband-shared.bicep (shared Redis substrate) → LOOM_SPARK_POOL_REDIS / LOOM_SPARK_POOL_LEASE_CONTAINER on the Console app',
+    role: 'Cosmos DB Built-in Data Contributor (Console UAMI, already granted) on the loom database — the lease registry is a Cosmos container, no extra grant',
   },
 ];
 

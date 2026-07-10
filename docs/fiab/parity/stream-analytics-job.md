@@ -55,3 +55,19 @@ Catalog: `fabric-item-types.ts` slug `stream-analytics-job`, category
   `enableStreamAnalytics=true`) and env vars `LOOM_ASA_RG` (+ `LOOM_ASA_SUB`),
   plus the **Stream Analytics Contributor** role on the RG. The editor renders
   it as a Fluent MessageBar — no mock arrays (`no-vaporware.md`).
+
+## UX-baseline lift (UX-Wave 2 · UX-203)
+
+A UX-only lift adopting shared UX-baseline components; the real ARM/query/test/
+metrics calls are unchanged.
+
+| # | Bar item (SC) | State | Where |
+| --- | --- | --- | --- |
+| 5 | Type-badged preview + timing status bar (SC-5) | ✅ built | The Test "Run test" output rows render via the shared `PreviewTable` — type-badged column headers (Abc / 123 / …) + "Succeeded · Columns N · Rows N" status bar + row search — replacing the plain output table |
+| 12 | Teaching banner (SC-6) | ✅ built | `TeachingBanner surfaceKey="stream-analytics-authoring"` — continuous-query guidance, persistent dismiss + Learn-more |
+| 11 | Command search Ctrl+Q / Alt+Q (SC-9) | ✅ built | `commandSearch` + `useRegisterRibbonCommands(ribbon, item.slug)` publishes Start / Stop / Save / Query Builder / Test / topology actions |
+| 3 | Docked validation-dot inspector (SC-3) | ⚠️ partial | The Query Builder already ships a form-based `AsaTransformInspector` right rail; a full `DockedInspector` validation-dot refactor is deferred to the B-sweep |
+| 1 | Input→query→output streaming canvas (SC-1) | ⚠️ honest-defer | The editor ships a guided transform builder + Copilot; a full node-kit streaming diagram is a larger build deferred to the B-sweep rather than duplicate the working builder |
+| 14 | Per-surface Copilot (SC-1 slot) | ✅ pre-existing | `CopilotBuilderPane` on the Copilot tab (grounds SAQL on the job's real inputs/outputs) |
+
+Test: `lib/editors/__tests__/stream-analytics-job.test.tsx` (existing 5 specs still green).

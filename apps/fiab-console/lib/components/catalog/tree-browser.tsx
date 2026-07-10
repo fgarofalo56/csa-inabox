@@ -23,6 +23,7 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   Spinner, Caption1, makeStyles, tokens, MessageBar, MessageBarBody, MessageBarTitle,
   Link, Button, Tooltip,
+  Menu, MenuTrigger, MenuPopover, MenuList, MenuItem, MenuDivider,
 } from '@fluentui/react-components';
 import {
   ChevronRight16Regular, ChevronDown16Regular,
@@ -32,6 +33,7 @@ import {
   Box16Regular, DocumentData16Regular, Notebook16Regular, Flow16Regular,
   DataHistogram16Regular, BranchRequest16Regular,
   FolderOpen20Regular,
+  Open16Regular, Copy16Regular, ArrowClockwise16Regular,
 } from '@fluentui/react-icons';
 import { EmptyState } from '@/lib/components/empty-state';
 
@@ -201,6 +203,23 @@ export function TreeBrowser({ source, onSelect }: Props) {
     const next = new Set(expanded); next.add(key); setExpanded(next);
   }
 
+  // Copy helper — best-effort clipboard write for context-menu actions.
+  async function copyText(text: string) {
+    try { await navigator.clipboard?.writeText(text); } catch { /* clipboard blocked; no-op */ }
+  }
+
+  // Drop the cached children for a branch so the next expand re-fetches live.
+  async function refreshChildren(node: TreeNode, parentPath: string[]) {
+    const key = [...parentPath, node.id].join('|');
+    const nc = new Map(children); nc.delete(key); setChildren(nc);
+    const wasExpanded = expanded.has(key);
+    if (wasExpanded) {
+      const collapsed = new Set(expanded); collapsed.delete(key); setExpanded(collapsed);
+      // Re-open on the next tick so toggle() re-fetches into the cleared cache.
+      setTimeout(() => { toggle(node, parentPath); }, 0);
+    }
+  }
+
   function renderGate(node: TreeNode, depth: number, key: string) {
     const m = (node.meta || {}) as Record<string, any>;
     const title = m.title || 'Not available';
@@ -239,37 +258,72 @@ export function TreeBrowser({ source, onSelect }: Props) {
     const Icon = iconFor(node.kind, node.hasChildren);
     const typeSuffix = (node.meta?.type as string) || node.kind;
 
+    const path = [...parentPath, node.id];
     return (
       <div key={key} role="group">
-        <div
-          className={`${s.row} ${node.hasChildren ? '' : s.rowLeaf}`}
-          style={{ paddingLeft: 6 + depth * 18 }}
-          onClick={() => {
-            if (node.hasChildren) toggle(node, parentPath);
-            else if (onSelect) onSelect(node, parentPath);
-          }}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' || e.key === ' ') {
-              e.preventDefault();
-              if (node.hasChildren) toggle(node, parentPath);
-              else if (onSelect) onSelect(node, parentPath);
-            } else if (e.key === 'ArrowRight' && node.hasChildren && !isExpanded) {
-              toggle(node, parentPath);
-            } else if (e.key === 'ArrowLeft' && node.hasChildren && isExpanded) {
-              toggle(node, parentPath);
-            }
-          }}
-          role="treeitem"
-          aria-expanded={node.hasChildren ? isExpanded : undefined}
-          aria-label={`${node.label} (${typeSuffix})`}
-          tabIndex={0}
-        >
-          <span className={s.chevron}>{node.hasChildren ? <Chev /> : null}</span>
-          <span className={s.icon}><Icon /></span>
-          <span className={s.label} title={node.label}>{node.label}</span>
-          <span className={s.kindBadge}>{typeSuffix}</span>
-          {isBusy && <span className={s.spinnerSlot}><Spinner size="tiny" /></span>}
-        </div>
+        <Menu openOnContext>
+          <MenuTrigger disableButtonEnhancement>
+            <div
+              className={`${s.row} ${node.hasChildren ? '' : s.rowLeaf}`}
+              style={{ paddingLeft: 6 + depth * 18 }}
+              onClick={() => {
+                if (node.hasChildren) toggle(node, parentPath);
+                else if (onSelect) onSelect(node, parentPath);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  if (node.hasChildren) toggle(node, parentPath);
+                  else if (onSelect) onSelect(node, parentPath);
+                } else if (e.key === 'ArrowRight' && node.hasChildren && !isExpanded) {
+                  toggle(node, parentPath);
+                } else if (e.key === 'ArrowLeft' && node.hasChildren && isExpanded) {
+                  toggle(node, parentPath);
+                }
+              }}
+              role="treeitem"
+              aria-expanded={node.hasChildren ? isExpanded : undefined}
+              aria-label={`${node.label} (${typeSuffix})`}
+              tabIndex={0}
+            >
+              <span className={s.chevron}>{node.hasChildren ? <Chev /> : null}</span>
+              <span className={s.icon}><Icon /></span>
+              <span className={s.label} title={node.label}>{node.label}</span>
+              <span className={s.kindBadge}>{typeSuffix}</span>
+              {isBusy && <span className={s.spinnerSlot}><Spinner size="tiny" /></span>}
+            </div>
+          </MenuTrigger>
+          <MenuPopover>
+            <MenuList>
+              {node.hasChildren ? (
+                <MenuItem
+                  icon={isExpanded ? <ChevronDown16Regular /> : <ChevronRight16Regular />}
+                  onClick={() => toggle(node, parentPath)}
+                >
+                  {isExpanded ? 'Collapse' : 'Expand'}
+                </MenuItem>
+              ) : (
+                onSelect && (
+                  <MenuItem icon={<Open16Regular />} onClick={() => onSelect(node, parentPath)}>
+                    Open
+                  </MenuItem>
+                )
+              )}
+              {node.hasChildren && (
+                <MenuItem icon={<ArrowClockwise16Regular />} onClick={() => refreshChildren(node, parentPath)}>
+                  Refresh children
+                </MenuItem>
+              )}
+              <MenuDivider />
+              <MenuItem icon={<Copy16Regular />} onClick={() => copyText(node.label)}>
+                Copy name
+              </MenuItem>
+              <MenuItem icon={<Copy16Regular />} onClick={() => copyText(path.join(' / '))}>
+                Copy path
+              </MenuItem>
+            </MenuList>
+          </MenuPopover>
+        </Menu>
         {isExpanded && childNodes && (
           childNodes.length === 0
             ? (
