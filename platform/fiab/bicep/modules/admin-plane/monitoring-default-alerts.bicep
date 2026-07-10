@@ -100,6 +100,19 @@ resource alertConsoleAvailability 'Microsoft.Insights/scheduledQueryRules@2023-1
     description: 'CSA Loom default — fires when the Console container app emits no logs in the evaluation window (heartbeat absence => possible outage). Azure-native Activator parity; no Microsoft Fabric required.'
     severity: 1
     enabled: true
+    // The default rules query the Container Apps custom tables
+    // (ContainerAppConsoleLogs_CL / ContainerAppSystemLogs_CL), which are created
+    // by the platform only when the Console first logs — they do NOT exist in a
+    // fresh Log Analytics workspace. Azure Government validates the KQL against
+    // the workspace schema at create time, so a from-scratch deploy into
+    // usgovvirginia (2026-07-10) failed these rules ("failed to resolve table or
+    // column expression ... ContainerAppConsoleLogs_CL"). skipQueryValidation
+    // lets the rule deploy against a not-yet-existent table; it starts evaluating
+    // correctly once the table materializes. Cloud-neutral — this is a latent
+    // from-scratch failure in Commercial too (masked only when apps have already
+    // logged). Pre-creating the _CL tables was rejected as the fix because their
+    // schema/lifecycle is owned by the Container Apps diagnostic pipeline.
+    skipQueryValidation: true
     scopes: [ lawId ]
     evaluationFrequency: 'PT5M'
     windowSize: 'PT15M'
@@ -138,6 +151,9 @@ resource alertConsole5xx 'Microsoft.Insights/scheduledQueryRules@2023-12-01' = i
     description: 'CSA Loom default — fires when the Console emits server-error (5xx) log lines above threshold in the window. Azure-native Activator parity; no Microsoft Fabric required.'
     severity: 2
     enabled: true
+    // See loom-console-availability: the _CL tables don't exist in a fresh LAW,
+    // so skip create-time query validation (Gov enforces it). Cloud-neutral.
+    skipQueryValidation: true
     scopes: [ lawId ]
     evaluationFrequency: 'PT5M'
     windowSize: 'PT15M'
@@ -176,6 +192,9 @@ resource alertReplicaRestarts 'Microsoft.Insights/scheduledQueryRules@2023-12-01
     description: 'CSA Loom default — fires on Container Apps system-log replica restart / container-crash / revision provisioning-error signals for the Console (crash-loop detection). Azure-native Activator parity; no Microsoft Fabric required.'
     severity: 2
     enabled: true
+    // See loom-console-availability: the _CL tables don't exist in a fresh LAW,
+    // so skip create-time query validation (Gov enforces it). Cloud-neutral.
+    skipQueryValidation: true
     scopes: [ lawId ]
     evaluationFrequency: 'PT5M'
     windowSize: 'PT15M'
