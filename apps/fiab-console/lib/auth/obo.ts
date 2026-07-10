@@ -36,6 +36,8 @@
  */
 
 import { getMsalClient, pbiOboScopes } from '@/lib/auth/msal';
+import type { SessionPayload } from '@/lib/auth/session';
+import { armBase } from '@/lib/azure/cloud-endpoints';
 
 /** Typed OBO failure reasons the Power BI client + routes map to honest gates. */
 export type OboErrorCode =
@@ -215,4 +217,91 @@ export { pbiOboScopes };
 /** Test-only: clear the in-memory token cache between cases. */
 export function __clearOboCacheForTests(): void {
   tokenCache.clear();
+}
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * ARM (management-plane) user-passthrough — the DLZ deploy pre-flight slice.
+ * Unified here at merge time (feat/pbi-obo-passthrough + fix/dlz-attach-timeout-obo)
+ * so ONE module owns every delegated-token path. PBI section above; ARM below.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+/** Delegated ARM audience (user_impersonation) — matches the auth-callback capture. */
+export function armOboScope(): string {
+  return `${armBase()}/user_impersonation`;
+}
+
+/** Is a scope the ARM (management) audience, in either delegated or .default form? */
+function isArmScope(scope: string): boolean {
+  const base = armBase().toLowerCase().replace(/\/+$/, '');
+  return scope.toLowerCase().startsWith(base);
+}
+
+/**
+ * Resolve a per-user delegated token for `scope`, or null. See the file header
+ * for the resolution order. `session` supplies the user's `oid`; a PAT / token
+ * session (no interactive user) always yields null so the caller uses the UAMI.
+ */
+export async function getOboToken(
+  session: Pick<SessionPayload, 'claims' | 'pat'>,
+  scope: string,
+): Promise<string | null> {
+  const oid = session?.claims?.oid;
+  if (!oid || session.pat) return null; // non-interactive token → no user OBO
+
+  // 1) Login-captured ARM store (reliable across replicas).
+  if (isArmScope(scope)) {
+    try {
+      const { getUserArmToken } = await import('@/lib/azure/user-token-store');
+      const tok = await getUserArmToken(oid);
+      if (tok) return tok;
+    } catch {
+      // fall through to silent acquire
+    }
+  }
+
+  // 2) MSAL silent acquire against the user's cached account.
+  try {
+    const { getMsalClient } = await import('@/lib/auth/msal');
+    const client = getMsalClient();
+    const accounts = await client.getTokenCache().getAllAccounts();
+    // The session oid is homeAccountId.split('.')[0] (the same mapping msal.ts uses).
+    const account =
+      accounts.find((a) => (a.homeAccountId || '').split('.')[0] === oid) ??
+      accounts.find((a) => a.localAccountId === oid);
+    if (!account) return null;
+    const res = await client.acquireTokenSilent({ account, scopes: [scope] });
+    return res?.accessToken ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** Which identity ultimately produced an ARM token — for honest gate copy. */
+export type ArmTokenIdentity = 'user' | 'uami';
+
+export interface ArmTokenResult {
+  token: string;
+  identity: ArmTokenIdentity;
+}
+
+/**
+ * Acquire an ARM token, PREFERRING the signed-in user's delegated token
+ * (user-passthrough) and falling back to the shared Console UAMI. The DLZ deploy
+ * pre-flight uses this so "can this deploy proceed?" reflects the USER's rights;
+ * when the user's ARM scope wasn't consented at login it degrades to the UAMI
+ * (today's behavior) with `identity:'uami'` so the caller can say which principal
+ * it checked. Throws only if BOTH the user path returns null AND the UAMI token
+ * acquisition itself fails.
+ */
+export async function getArmTokenPreferUser(
+  session: Pick<SessionPayload, 'claims' | 'pat'>,
+): Promise<ArmTokenResult> {
+  const userTok = await getOboToken(session, armOboScope());
+  if (userTok) return { token: userTok, identity: 'user' };
+
+  const { uamiArmCredential } = await import('@/lib/azure/arm-credential');
+  const { armScope } = await import('@/lib/azure/cloud-endpoints');
+  const t = await uamiArmCredential().getToken(armScope());
+  if (!t?.token) throw new Error('Failed to acquire an ARM token (user OBO unavailable and UAMI token acquisition failed)');
+  return { token: t.token, identity: 'uami' };
 }

@@ -1,6 +1,6 @@
 'use client';
 
-import { clientFetch } from '@/lib/client-fetch';
+import { clientFetch, CROSS_SUB_FETCH_TIMEOUT_MS } from '@/lib/client-fetch';
 /**
  * Add Data Landing Zone — dlz-attach ONLY wizard (audit-t157)
  *
@@ -89,6 +89,19 @@ interface GrantState {
   outcomes?: Array<{ role: string; status: string; error?: string }>;
 }
 
+/** Client-side view of the async /api/setup/deploy-preflight verdict. */
+interface PreflightState {
+  status: 'idle' | 'checking' | 'ready' | 'error';
+  canDeploy?: boolean;
+  /** Which identity was checked — the signed-in user (passthrough) or the Console UAMI. */
+  identity?: 'user' | 'uami';
+  requiredRole?: string;
+  remediation?: string;
+  missingProviders?: string[];
+  providersHint?: string[];
+  error?: string;
+}
+
 const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const CAPACITY_OPTIONS: { sku: string; note: string; tag?: string }[] = [
@@ -106,8 +119,8 @@ const FEATURE_TOGGLES: { key: ToggleKey; label: string; desc: string; def: boole
   { key: 'adxEnabled', label: 'Azure Data Explorer (ADX)', desc: 'Real-Time eventhouse / KQL database for this DLZ.', def: true },
   { key: 'cosmosGraphVectorEnabled', label: 'Cosmos graph + vector', desc: 'Gremlin graph + vector index for lineage and semantic search.', def: true },
   { key: 'weaveOntologyEnabled', label: 'Weave ontology', desc: 'Ontology/Weave knowledge layer over the lakehouse.', def: true },
-  { key: 'databricksUnityCatalogEnabled', label: 'Databricks Unity Catalog', desc: 'Attach the regional UC metastore + default catalog.', def: false },
-  { key: 'databricksSqlWarehouseEnabled', label: 'Databricks SQL Warehouse', desc: 'Serverless SQL Warehouse for this DLZ.', def: false },
+  { key: 'databricksUnityCatalogEnabled', label: 'Databricks Unity Catalog', desc: 'Attach the regional UC metastore + default catalog.', def: true },
+  { key: 'databricksSqlWarehouseEnabled', label: 'Databricks SQL Warehouse', desc: 'Serverless SQL Warehouse for this DLZ.', def: true },
 ];
 
 type ToggleKey =
@@ -183,6 +196,13 @@ export function AddLandingZoneWizardPane() {
 
   const [existing, setExisting] = useState<ExistingDlz[]>([]);
 
+  // Async cross-sub deploy pre-flight for the CHOSEN target subscription. It runs
+  // BEFORE submit (poll-friendly, no 6s cliff) so the operator sees an honest
+  // "you can / can't deploy here" verdict — under their OWN ARM rights
+  // (user-passthrough) — and warms the same server SWR slot the deploy reads, so
+  // the subsequent Attach never re-pays the cross-sub latency.
+  const [preflight, setPreflight] = useState<PreflightState>({ status: 'idle' });
+
   const [phase, setPhase] = useState<Phase>('form');
   const [targetSubscriptionId, setTargetSubscriptionId] = useState<string>('');
   const [targetSubscriptionName, setTargetSubscriptionName] = useState<string>('');
@@ -255,7 +275,10 @@ export function AddLandingZoneWizardPane() {
     setSubsLoading(true);
     setSubsError(undefined);
     try {
-      const res = await clientFetch('/api/setup/subscriptions');
+      // Cross-sub ARM list can legitimately take many seconds on a large tenant;
+      // use the generous cross-sub budget (server SWR-caches so retries are
+      // instant) instead of the 6s spinner ceiling that caused the attach cliff.
+      const res = await clientFetch('/api/setup/subscriptions', undefined, CROSS_SUB_FETCH_TIMEOUT_MS);
       const j = await res.json().catch(() => ({}));
       if (!res.ok || !j.ok) {
         setSubsError(j.error || j.hint || `Could not list subscriptions (HTTP ${res.status}).`);
@@ -264,7 +287,11 @@ export function AddLandingZoneWizardPane() {
       }
       setSubs(j.subscriptions || []);
       if ((j.subscriptions || []).length === 0) {
-        setSubsError('No subscriptions are visible to the Console identity. Grant it Reader on the target subscription.');
+        setSubsError(
+          j.identity === 'user'
+            ? 'No subscriptions are visible to your signed-in account. Ask an owner to grant you Reader on the target subscription, then Refresh.'
+            : 'No subscriptions are visible to the Console identity. Grant it Reader on the target subscription.',
+        );
       }
     } catch (e) {
       setSubsError(e instanceof Error ? e.message : String(e));
@@ -276,7 +303,9 @@ export function AddLandingZoneWizardPane() {
 
   const loadExisting = useCallback(async () => {
     try {
-      const res = await clientFetch('/api/setup/existing-dlzs');
+      // Resource Graph DLZ scan spans every visible subscription — same generous
+      // cross-sub budget (SWR-cached server-side) as the subscription list.
+      const res = await clientFetch('/api/setup/existing-dlzs', undefined, CROSS_SUB_FETCH_TIMEOUT_MS);
       const j = await res.json().catch(() => ({}));
       if (res.ok && j.ok) setExisting(j.dlzs || []);
     } catch {
@@ -295,18 +324,83 @@ export function AddLandingZoneWizardPane() {
     }
   }, [hubExists, loadSubs, loadExisting]);
 
+  // Async pre-flight poll: whenever a valid target subscription is chosen, ask
+  // the poll-friendly deploy-preflight route whether a DLZ can be deployed there
+  // (under the operator's own ARM rights). `checking` → poll again; `ready` →
+  // show the verdict. Cancelled on unmount / subscription change so a stale
+  // subscription's verdict never lands on a newer one.
+  useEffect(() => {
+    if (!targetSubscriptionId || !GUID_RE.test(targetSubscriptionId)) {
+      setPreflight({ status: 'idle' });
+      return;
+    }
+    let cancelled = false;
+    setPreflight({ status: 'checking' });
+    (async () => {
+      // ~30s of polling (20 × 1.5s) — the cold cross-sub read resolves well
+      // inside this; each poll is served instantly once the server cache warms.
+      for (let attempt = 0; attempt < 20 && !cancelled; attempt++) {
+        try {
+          const res = await clientFetch(
+            `/api/setup/deploy-preflight?subscriptionId=${encodeURIComponent(targetSubscriptionId)}`,
+            undefined,
+            CROSS_SUB_FETCH_TIMEOUT_MS,
+          );
+          const j = await res.json().catch(() => ({}));
+          if (cancelled) return;
+          if (!res.ok || !j.ok) {
+            setPreflight({ status: 'error', error: j.error || `Pre-flight failed (HTTP ${res.status}).` });
+            return;
+          }
+          if (j.status === 'checking') {
+            await new Promise((r) => setTimeout(r, 1500));
+            continue;
+          }
+          // status === 'ready'
+          setPreflight({
+            status: 'ready',
+            canDeploy: !!j.canDeploy,
+            identity: j.identity,
+            requiredRole: j.requiredRole,
+            remediation: j.remediation,
+            missingProviders: j.missingProviders || [],
+            providersHint: j.providersHint,
+          });
+          return;
+        } catch (e) {
+          if (cancelled) return;
+          setPreflight({ status: 'error', error: e instanceof Error ? e.message : String(e) });
+          return;
+        }
+      }
+      if (!cancelled) setPreflight({ status: 'error', error: 'Pre-flight is taking longer than expected — you can still attempt the attach; it will re-check server-side.' });
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [targetSubscriptionId]);
+
   // Collision: a DLZ with this domain already exists in the chosen subscription.
   const collision = useMemo(() => {
     if (!domainName || !targetSubscriptionId) return undefined;
     return existing.find((d) => d.subscriptionId === targetSubscriptionId && d.domainName === domainName);
   }, [existing, domainName, targetSubscriptionId]);
 
+  // Block the Attach button only on a DEFINITIVE "cannot deploy" verdict. A
+  // `checking` / `error` / `idle` pre-flight is NON-blocking — the deploy route's
+  // own hard gate is the source of truth, so a slow/failed prediction never
+  // stops an operator who does have rights (matches the server's non-fatal
+  // handling). A confirmed `canDeploy:false` disables submit with the honest gate
+  // shown below.
+  const preflightBlocks = preflight.status === 'ready' && preflight.canDeploy === false;
+
   const canDeploy =
     !!targetSubscriptionId &&
     GUID_RE.test(targetSubscriptionId) &&
     !!domainName &&
     !!capacitySku &&
-    !collision;
+    !collision &&
+    !preflightBlocks;
 
   async function deploy() {
     setPhase('deploying');
@@ -328,7 +422,7 @@ export function AddLandingZoneWizardPane() {
           location: hub?.location,
           ...toggles,
         }),
-      });
+      }, CROSS_SUB_FETCH_TIMEOUT_MS);
       const ct = res.headers.get('content-type') || '';
       if (!ct.includes('application/json')) {
         const t = await res.text().catch(() => '');
@@ -628,6 +722,58 @@ export function AddLandingZoneWizardPane() {
             <MessageBar intent="warning">
               <MessageBarBody className={styles.preWrap}>{subsError}</MessageBarBody>
             </MessageBar>
+          )}
+
+          {/* Async permission pre-flight for the chosen subscription — progress,
+              not failure. Checked under the operator's OWN ARM rights
+              (user-passthrough), falling back to the Console identity. */}
+          {targetSubscriptionId && GUID_RE.test(targetSubscriptionId) && (
+            <>
+              {preflight.status === 'checking' && (
+                <div className={styles.inlineLoad}>
+                  <Spinner size="tiny" />{' '}
+                  <Caption1>Checking your deploy permission on this subscription…</Caption1>
+                </div>
+              )}
+              {preflight.status === 'ready' && preflight.canDeploy && (
+                <MessageBar intent="success">
+                  <MessageBarBody>
+                    <MessageBarTitle>Ready to deploy here</MessageBarTitle>
+                    {preflight.identity === 'user'
+                      ? 'Your signed-in account has Contributor on this subscription.'
+                      : 'The Console identity has Contributor on this subscription.'}
+                    {preflight.providersHint?.length ? (
+                      <>
+                        {' '}Some resource providers still need registering:
+                        <pre className={styles.preWrapScroll}>{preflight.providersHint.join('\n')}</pre>
+                      </>
+                    ) : null}
+                  </MessageBarBody>
+                </MessageBar>
+              )}
+              {preflight.status === 'ready' && preflight.canDeploy === false && (
+                <MessageBar intent="warning">
+                  <MessageBarBody>
+                    <MessageBarTitle>
+                      {preflight.identity === 'user'
+                        ? `You don’t have permission to deploy here (requires ${preflight.requiredRole || 'Contributor'})`
+                        : `The Console identity can’t deploy here (requires ${preflight.requiredRole || 'Contributor'})`}
+                    </MessageBarTitle>
+                    <div className={styles.preWrapTop}>
+                      {preflight.remediation ||
+                        'A subscription-scoped deployment requires the Contributor role on the target subscription.'}
+                    </div>
+                  </MessageBarBody>
+                </MessageBar>
+              )}
+              {preflight.status === 'error' && (
+                <MessageBar intent="info">
+                  <MessageBarBody className={styles.preWrap}>
+                    {preflight.error || 'Could not pre-check deploy permission; the attach will re-check server-side.'}
+                  </MessageBarBody>
+                </MessageBar>
+              )}
+            </>
           )}
 
           <Field
