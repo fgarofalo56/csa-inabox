@@ -595,7 +595,8 @@ export type DaSourceType =
   | 'ai-search'
   | 'ontology'
   | 'graph'
-  | 'microsoft-graph';
+  | 'microsoft-graph'
+  | 'agent';
 
 /** AI Search retrieval mode for a data-agent `ai-search` source. */
 export type DaAiSearchQueryKind = 'keyword' | 'semantic' | 'vector' | 'hybrid';
@@ -613,6 +614,19 @@ export interface DaAiSearchConfig {
   top?: number;
   /** When true the grounding rows are numbered [1]…[n] and the agent is told to cite them. */
   citations?: boolean;
+}
+
+/**
+ * Compose-back config for an `agent` source (DBX-2). Points a Data Agent at a
+ * hosted Loom App (Agent/FastAPI template) so a custom bring-your-own agent
+ * harness folds into the Genie-style chat as a tool source. The grounding
+ * executor POSTs the routed sub-question to the app's `/invoke` endpoint.
+ */
+export interface DaAgentConfig {
+  /** Cosmos item id of the backing loom-app-runtime item (provenance). */
+  appItemId?: string;
+  /** Live app URL of the hosted agent (its /invoke is called at run time). */
+  url?: string;
 }
 
 /** Which slice of Microsoft 365 a `microsoft-graph` source grounds on. */
@@ -648,6 +662,8 @@ export interface DaSource {
   aiSearch?: DaAiSearchConfig;
   /** Microsoft Graph grounding scope (type === 'microsoft-graph' only). */
   graph?: DaGraphScope;
+  /** Hosted-agent compose-back config (type === 'agent' only). */
+  agent?: DaAgentConfig;
 }
 
 const DA_INSTRUCTION_TEMPLATE = '## General knowledge\n\n## Table descriptions\n\n## When asked about\n';
@@ -661,6 +677,7 @@ const DA_SOURCE_TYPE_VALUES: DaSourceType[] = [
   'ontology',
   'graph',
   'microsoft-graph',
+  'agent',
 ];
 
 /**
@@ -673,7 +690,7 @@ const DA_SOURCE_TYPE_VALUES: DaSourceType[] = [
  * See https://learn.microsoft.com/fabric/data-science/data-agent-example-queries
  */
 export function daSupportsExampleQueries(type: DaSourceType): boolean {
-  return type !== 'semantic-model' && type !== 'ontology';
+  return type !== 'semantic-model' && type !== 'ontology' && type !== 'agent';
 }
 
 /**
@@ -716,6 +733,7 @@ export function guessDaSourceType(name: string): DaSourceType {
   if (/kql|kusto|eventhouse|adx/.test(n)) return 'kql';
   if (/ai\s*search|search\s*index|\bindex\b|vector/.test(n)) return 'ai-search';
   if (/ontolog/.test(n)) return 'ontology';
+  if (/\bagent\b|langgraph|crewai|harness|\/invoke/.test(n)) return 'agent';
   if (/sharepoint|onedrive|outlook|mailbox|\bm365\b|microsoft\s*365|microsoft\s*graph/.test(n)) return 'microsoft-graph';
   if (/\bgraph\b|gql|cypher|node|edge/.test(n)) return 'graph';
   if (/warehouse|\bdw\b|\bwh\b|synapse/.test(n)) return 'warehouse';
@@ -751,6 +769,7 @@ export function normalizeDaSources(raw: unknown): DaSource[] {
           // Typed per-source config objects survive normalization untouched.
           ...(x.aiSearch && typeof x.aiSearch === 'object' && !Array.isArray(x.aiSearch) ? { aiSearch: x.aiSearch } : {}),
           ...(x.graph && typeof x.graph === 'object' && !Array.isArray(x.graph) ? { graph: x.graph } : {}),
+          ...(x.agent && typeof x.agent === 'object' && !Array.isArray(x.agent) ? { agent: x.agent } : {}),
         };
       });
   }
