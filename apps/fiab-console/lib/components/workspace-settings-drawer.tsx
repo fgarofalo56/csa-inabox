@@ -70,7 +70,7 @@ const useStyles = makeStyles({
   },
 });
 
-type TabId = 'general' | 'permissions' | 'networking' | 'git' | 'onelake' | 'encryption' | 'spark' | 'sensitivity' | 'danger';
+type TabId = 'general' | 'permissions' | 'networking' | 'git' | 'onelake' | 'encryption' | 'spark' | 'powerbi' | 'sensitivity' | 'danger';
 
 // ---------------------------------------------------------------------------
 // Orphaned-resource disclosure (rel-T101)
@@ -155,6 +155,7 @@ export function WorkspaceSettingsDrawer({ workspace, open: openProp, onOpenChang
             <Tab value="onelake">OneLake</Tab>
             <Tab value="encryption">Encryption</Tab>
             <Tab value="spark">Spark compute</Tab>
+            <Tab value="powerbi">Power BI</Tab>
             <Tab value="sensitivity">Sensitivity</Tab>
             <Tab value="danger">Danger zone</Tab>
           </TabList>
@@ -166,6 +167,7 @@ export function WorkspaceSettingsDrawer({ workspace, open: openProp, onOpenChang
             {tab === 'onelake' && <OneLakeSection workspace={workspace} />}
             {tab === 'encryption' && <CmkPane workspaceId={workspace.id} />}
             {tab === 'spark' && <SparkComputePane workspaceId={workspace.id} />}
+            {tab === 'powerbi' && <PowerBiMappingSection workspace={workspace} />}
             {tab === 'sensitivity' && <WorkspaceSensitivitySection workspaceId={workspace.id} />}
             {tab === 'danger' && <DangerSection workspace={workspace} onDeleted={() => { setOpen(false); router.push('/workspaces'); }} />}
           </div>
@@ -220,6 +222,174 @@ function GeneralSection({ workspace, onSaved }: { workspace: Workspace; onSaved:
           disabled={!name.trim() || mut.isPending}>
           {mut.isPending ? 'Saving…' : 'Save'}
         </Button>
+      </div>
+    </div>
+  );
+}
+
+// ------------------------------ Power BI mapping ------------------------------
+// WS-PBIMAP — bind this Loom workspace to an EXISTING Power BI / Fabric
+// workspace so PBI integrations (report publish, embed, semantic-model refresh)
+// target the right PBI workspace under user-passthrough (OBO) auth (built
+// separately). Real REST both ways: GET/PUT /api/workspaces/[id]/powerbi-mapping.
+// When the Console UAMI can reach Power BI we offer a live workspace picker
+// (/api/powerbi/workspaces); otherwise the manual GUID field + an honest gate.
+
+const PBI_GUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+
+interface PbiWorkspaceOption { id: string; name: string }
+interface PbiMappingDoc { pbiWorkspaceId: string; pbiWorkspaceName?: string; mappedBy?: string; mappedAt?: string }
+
+function PowerBiMappingSection({ workspace }: { workspace: Workspace }) {
+  const styles = useStyles();
+  const [current, setCurrent] = useState<PbiMappingDoc | null | 'loading'>('loading');
+  const [pbiConfigured, setPbiConfigured] = useState<boolean>(false);
+  const [pbiId, setPbiId] = useState('');
+  const [pbiName, setPbiName] = useState('');
+  const [list, setList] = useState<PbiWorkspaceOption[] | null>(null);
+  const [listHint, setListHint] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const idValid = pbiId.trim() === '' || PBI_GUID_RE.test(pbiId.trim());
+
+  useEffect(() => {
+    clientFetch(`/api/workspaces/${workspace.id}/powerbi-mapping`)
+      .then((r) => r.json())
+      .then((d: any) => {
+        if (d?.ok) {
+          setCurrent(d.mapping ?? null);
+          setPbiConfigured(!!d.pbiConfigured);
+          if (d.mapping) { setPbiId(d.mapping.pbiWorkspaceId || ''); setPbiName(d.mapping.pbiWorkspaceName || ''); }
+          if (d.pbiConfigured) {
+            clientFetch('/api/powerbi/workspaces')
+              .then((r) => r.json())
+              .then((w: any) => {
+                if (w?.ok && Array.isArray(w.workspaces)) {
+                  setList(w.workspaces.map((x: any) => ({ id: x.id, name: x.name })));
+                } else {
+                  setList(null);
+                  setListHint(w?.hint || w?.error || null);
+                }
+              })
+              .catch((e) => { setList(null); setListHint(String(e?.message || e)); });
+          }
+        } else {
+          setCurrent(null);
+        }
+      })
+      .catch((e) => { setCurrent(null); setError(String(e?.message || e)); });
+  }, [workspace.id]);
+
+  const save = async (clear = false) => {
+    setSaving(true); setError(null); setSaved(false);
+    try {
+      const r = await clientFetch(`/api/workspaces/${workspace.id}/powerbi-mapping`, {
+        method: 'PUT', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(clear
+          ? { pbiWorkspaceId: '' }
+          : { pbiWorkspaceId: pbiId.trim(), pbiWorkspaceName: pbiName.trim() || undefined }),
+      });
+      const j = await r.json();
+      if (!r.ok || !j?.ok) { setError(j?.error || `HTTP ${r.status}`); return; }
+      setCurrent(j.mapping ?? null);
+      if (clear) { setPbiId(''); setPbiName(''); }
+      setSaved(true);
+      window.dispatchEvent(new CustomEvent('loom:item-saved', { detail: { label: 'Power BI mapping' } }));
+      window.setTimeout(() => setSaved(false), 2500);
+    } catch (e: any) {
+      setError(e?.message || 'Failed to save mapping');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className={styles.section}>
+      <MessageBar intent="info">
+        <MessageBarBody>
+          Bind this workspace to an existing <strong>Power BI / Fabric workspace</strong>. Power BI
+          integrations (report publish, embed, semantic-model refresh) will target the mapped workspace
+          using <strong>user-passthrough (OBO) auth</strong>, which is being wired up separately. The
+          Azure-native workspace works with no mapping — this is opt-in.
+        </MessageBarBody>
+      </MessageBar>
+
+      {current === 'loading' && <Spinner size="tiny" label="Loading mapping…" />}
+
+      {current !== 'loading' && current && (
+        <MessageBar intent="success">
+          <MessageBarBody>
+            Mapped to <strong>{current.pbiWorkspaceName || current.pbiWorkspaceId}</strong>
+            {current.pbiWorkspaceName ? <> (<code>{current.pbiWorkspaceId}</code>)</> : null}
+            {current.mappedBy ? <> · set by {current.mappedBy}</> : null}
+            {current.mappedAt ? <> · {new Date(current.mappedAt).toLocaleString()}</> : null}
+          </MessageBarBody>
+        </MessageBar>
+      )}
+
+      {pbiConfigured && Array.isArray(list) && list.length > 0 && (
+        <Field label="Power BI workspace (picker)">
+          <Dropdown
+            placeholder="Select a Power BI workspace…"
+            value={pbiName || (list.find((w) => w.id === pbiId)?.name ?? '')}
+            selectedOptions={pbiId ? [pbiId] : []}
+            onOptionSelect={(_, d) => {
+              const w = list.find((x) => x.id === d.optionValue);
+              setPbiId(d.optionValue || '');
+              setPbiName(w?.name || '');
+            }}
+          >
+            {list.map((w) => <Option key={w.id} value={w.id} text={w.name}>{w.name}</Option>)}
+          </Dropdown>
+        </Field>
+      )}
+
+      {pbiConfigured && list === null && (
+        <MessageBar intent="warning">
+          <MessageBarBody>
+            Could not list Power BI workspaces{listHint ? <> — {listHint}</> : null}. Enter the workspace
+            GUID manually below.
+          </MessageBarBody>
+        </MessageBar>
+      )}
+
+      {!pbiConfigured && (
+        <MessageBar intent="warning">
+          <MessageBarBody>
+            Power BI is not configured for this deployment, so the live workspace picker is unavailable.
+            Set <code>LOOM_UAMI_CLIENT_ID</code> (and grant the Console UAMI Power BI tenant access) to
+            enable the picker. You can still record the mapping manually below.
+          </MessageBarBody>
+        </MessageBar>
+      )}
+
+      <Field
+        label="Power BI workspace id (GUID)"
+        validationState={idValid ? 'none' : 'error'}
+        validationMessage={idValid ? undefined : 'Enter a valid workspace GUID (00000000-0000-0000-0000-000000000000).'}
+      >
+        <Input value={pbiId} onChange={(_, d) => setPbiId(d.value)}
+          placeholder="00000000-0000-0000-0000-000000000000" />
+      </Field>
+      <Field label="Display name (optional)">
+        <Input value={pbiName} onChange={(_, d) => setPbiName(d.value)} placeholder="Finance – Power BI" />
+      </Field>
+
+      {error && <MessageBar intent="error"><MessageBarBody>{error}</MessageBarBody></MessageBar>}
+      {saved && <MessageBar intent="success"><MessageBarBody>Saved.</MessageBarBody></MessageBar>}
+
+      <div className={styles.row}>
+        <Button appearance="primary" onClick={() => save(false)}
+          disabled={saving || !pbiId.trim() || !idValid}>
+          {saving ? 'Saving…' : 'Save mapping'}
+        </Button>
+        {current !== 'loading' && current && (
+          <Button appearance="subtle" onClick={() => save(true)} disabled={saving}>
+            Remove mapping
+          </Button>
+        )}
       </div>
     </div>
   );

@@ -887,8 +887,23 @@ export const SHIM_DISABLED_HINT =
   'Set LOOM_DIRECT_LAKE_SHIM_ENABLED=true to activate.';
 
 async function getShimToken(): Promise<string> {
-  const t = await credential.getToken(pbiRestScope());
-  if (!t?.token) throw new AasError(`Failed to acquire AAD token for ${pbiRestScope()}`, 401);
+  // USER-PASSTHROUGH (default): the Direct Lake shim's Power BI Premium XMLA/REST
+  // calls run as the signed-in user's own Power BI identity (Synapse-style), via
+  // the shared OBO service. Background/non-request (no_user_token) → console SP.
+  // consent_required / exchange_failed → honest gate. Kill switch:
+  // LOOM_POWERBI_USER_PASSTHROUGH=false. (The Azure-native AAS server path uses
+  // the asazure audience and is unaffected — it stays on the service identity.)
+  const scope = pbiRestScope();
+  const obo = await import('@/lib/auth/obo');
+  if (obo.userPassthroughEnabled()) {
+    const res = await obo.getUserPbiToken(scope);
+    if (res.ok) return res.token;
+    if (res.error !== 'no_user_token') {
+      throw new AasError(obo.oboRemediation(res.error), res.error === 'consent_required' ? 403 : 401);
+    }
+  }
+  const t = await credential.getToken(scope);
+  if (!t?.token) throw new AasError(`Failed to acquire AAD token for ${scope}`, 401);
   return t.token;
 }
 
@@ -1352,6 +1367,21 @@ export function xmlaScope(): string {
 }
 
 async function getAggXmlaToken(scope: string): Promise<string> {
+  // USER-PASSTHROUGH (default) for the Power BI XMLA audience (analysis.*/powerbi/api):
+  // aggregation/calc-object writes run as the signed-in user's Power BI identity
+  // (Synapse-style) via the shared OBO service. Only powerbi/api scopes pass
+  // through — a true AAS server (asazure) scope keeps the service identity. A
+  // background/non-request context (no_user_token) falls through to the SP.
+  if (/powerbi\/api/i.test(scope)) {
+    const obo = await import('@/lib/auth/obo');
+    if (obo.userPassthroughEnabled()) {
+      const res = await obo.getUserPbiToken(scope);
+      if (res.ok) return res.token;
+      if (res.error !== 'no_user_token') {
+        throw new AasError(obo.oboRemediation(res.error), res.error === 'consent_required' ? 403 : 401);
+      }
+    }
+  }
   const t = await credential.getToken(scope);
   if (!t?.token) throw new AasError(`Failed to acquire AAD token for ${scope}`, 401);
   return t.token;

@@ -74,7 +74,44 @@ export class PowerBiError extends Error {
   }
 }
 
+/**
+ * Acquire the bearer token for a Power BI / Fabric REST call.
+ *
+ * USER-PASSTHROUGH (default): authenticate as the SIGNED-IN user's own Power BI
+ * identity (their RBAC) — matching how Power BI auth works in Synapse — via the
+ * delegated OBO token service (lib/auth/obo). This is the DEFAULT for every
+ * Power BI tie-in per the operator requirement, so no route/function signature
+ * had to change: the ambient session is resolved inside the OBO service.
+ *
+ *   - user token minted  → use it (the call runs under the user's Power BI RBAC).
+ *   - `no_user_token`     → there is NO signed-in user in scope. This is a
+ *     BACKGROUND / non-request context (provisioners, thread executors, login-less
+ *     server tasks) — fall through to the console managed identity below. This is
+ *     the ONLY sanctioned service-principal path.
+ *   - `consent_required` / `exchange_failed` → a user IS present but a delegated
+ *     token can't be minted. Surface the honest gate (do NOT silently downgrade to
+ *     the SP — that would defeat passthrough and leak the SP's broader rights).
+ *
+ * The whole user path is a single-flip kill switch: LOOM_POWERBI_USER_PASSTHROUGH=false
+ * reverts to the pure service-principal behavior (byte-for-byte the pre-passthrough path).
+ */
 async function getToken(scope: string): Promise<string> {
+  const obo = await import('@/lib/auth/obo');
+  if (obo.userPassthroughEnabled()) {
+    const res = await obo.getUserPbiToken(scope);
+    if (res.ok) return res.token;
+    if (res.error !== 'no_user_token') {
+      throw new PowerBiError(
+        obo.oboRemediation(res.error),
+        res.error === 'consent_required' ? 403 : 401,
+        undefined,
+        scope,
+      );
+    }
+    // res.error === 'no_user_token' → background job; fall through to the SP.
+  }
+  // SERVICE-PRINCIPAL FALLBACK — background/non-request contexts (no signed-in
+  // user), or when user-passthrough is disabled. NOT the default for user traffic.
   const t = await credential.getToken(scope);
   if (!t?.token) throw new PowerBiError(`Failed to acquire AAD token for ${scope}`, 401);
   return t.token;

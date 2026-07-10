@@ -45,6 +45,20 @@ export class ActivatorError extends Error {
 }
 
 async function getToken(): Promise<string> {
+  // USER-PASSTHROUGH (default): call Fabric Activator (a Power BI-family tie-in on
+  // the powerbi/api audience) as the signed-in user's own identity — matching how
+  // Power BI auth works in Synapse — via the shared OBO service. Only a
+  // background/non-request context (no session → no_user_token) falls through to
+  // the console service principal. consent_required / exchange_failed surface the
+  // honest gate. Single-flip kill switch: LOOM_POWERBI_USER_PASSTHROUGH=false.
+  const obo = await import('@/lib/auth/obo');
+  if (obo.userPassthroughEnabled()) {
+    const res = await obo.getUserPbiToken(ACTIVATOR_SCOPE);
+    if (res.ok) return res.token;
+    if (res.error !== 'no_user_token') {
+      throw new ActivatorError(obo.oboRemediation(res.error), res.error === 'consent_required' ? 403 : 401);
+    }
+  }
   const t = await credential.getToken(ACTIVATOR_SCOPE);
   if (!t?.token) throw new ActivatorError('Failed to acquire AAD token for Fabric Activator', 401);
   return t.token;
