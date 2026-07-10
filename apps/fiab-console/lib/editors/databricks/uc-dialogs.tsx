@@ -2563,6 +2563,24 @@ function CleanRoomsDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
   const [assets, setAssets] = useState<any[]>([]);
   const [detailLoading, setDetailLoading] = useState(false);
 
+  // ---- Create wizard (DBX-8) ----
+  const [creating, setCreating] = useState(false);
+  const [createBusy, setCreateBusy] = useState(false);
+  const [cName, setCName] = useState('');
+  const [cComment, setCComment] = useState('');
+  const [cRegion, setCRegion] = useState('');
+  const [cCollabs, setCCollabs] = useState<{ collaborator_alias: string; global_metastore_id: string; invite_recipient_email: string }[]>([
+    { collaborator_alias: '', global_metastore_id: '', invite_recipient_email: '' },
+  ]);
+  const [ok, setOk] = useState<string | null>(null);
+
+  // ---- Tasks sub-tab (DBX-8) ----
+  const [notebooks, setNotebooks] = useState<{ name: string; etag?: string }[]>([]);
+  const [taskRuns, setTaskRuns] = useState<any[]>([]);
+  const [selNotebook, setSelNotebook] = useState<string>('');
+  const [tasksLoading, setTasksLoading] = useState(false);
+  const [taskBusy, setTaskBusy] = useState(false);
+
   const loadList = useCallback(async () => {
     setLoading(true); setErr(null); setGate(null); setDetail(null); setAssets([]); setSelected(null);
     try {
@@ -2589,11 +2607,68 @@ function CleanRoomsDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
     finally { setDetailLoading(false); }
   }, []);
 
+  const loadTasks = useCallback(async (name: string) => {
+    setTasksLoading(true); setNotebooks([]); setTaskRuns([]); setSelNotebook('');
+    try {
+      const r = await clientFetch(`/api/databricks/unity-catalog/clean-rooms?name=${encodeURIComponent(name)}&tasks=true`);
+      const j = await r.json();
+      if (j.ok) {
+        const nbs = Array.isArray(j.notebooks) ? j.notebooks : [];
+        setNotebooks(nbs);
+        setTaskRuns(Array.isArray(j.runs) ? j.runs : []);
+        if (nbs[0]?.name) setSelNotebook(nbs[0].name);
+      }
+    } catch { /* tasks are best-effort; the read surface still works */ }
+    finally { setTasksLoading(false); }
+  }, []);
+  // Load tasks whenever a room is opened.
+  useEffect(() => { if (selected) void loadTasks(selected); }, [selected, loadTasks]);
+
+  const runTask = useCallback(async () => {
+    if (!selected || !selNotebook) return;
+    setTaskBusy(true); setErr(null); setOk(null);
+    try {
+      const etag = notebooks.find((n) => n.name === selNotebook)?.etag;
+      const r = await clientFetch('/api/databricks/unity-catalog/clean-rooms', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ action: 'run-task', cleanRoomName: selected, notebookName: selNotebook, etag }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setErr(j.error || 'failed to run clean room task'); return; }
+      setOk(`Task submitted — run id ${j.run_id ?? '(pending)'}.`);
+      void loadTasks(selected);
+    } catch (e: any) { setErr(e?.message || String(e)); }
+    finally { setTaskBusy(false); }
+  }, [selected, selNotebook, notebooks, loadTasks]);
+
+  const submitCreate = useCallback(async () => {
+    if (!cName.trim()) { setErr('A clean room name is required.'); return; }
+    setCreateBusy(true); setErr(null); setOk(null);
+    try {
+      const collaborators = cCollabs
+        .map((c) => ({ collaborator_alias: c.collaborator_alias.trim(), global_metastore_id: c.global_metastore_id.trim(), invite_recipient_email: c.invite_recipient_email.trim() }))
+        .filter((c) => c.collaborator_alias);
+      const r = await clientFetch('/api/databricks/unity-catalog/clean-rooms', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ action: 'create', name: cName.trim(), comment: cComment.trim() || undefined, region: cRegion.trim() || undefined, collaborators }),
+      });
+      const j = await r.json();
+      if (j.gated) { setErr(j.error); return; }
+      if (!j.ok) { setErr(j.error || 'failed to create clean room'); return; }
+      setOk(`Clean room "${j.cleanRoom?.name || cName}" created.`);
+      setCreating(false);
+      setCName(''); setCComment(''); setCRegion('');
+      setCCollabs([{ collaborator_alias: '', global_metastore_id: '', invite_recipient_email: '' }]);
+      void loadList();
+    } catch (e: any) { setErr(e?.message || String(e)); }
+    finally { setCreateBusy(false); }
+  }, [cName, cComment, cRegion, cCollabs, loadList]);
+
   const statusColor = (st: string): 'success' | 'warning' | 'danger' | 'informative' => {
     const s = (st || '').toUpperCase();
-    if (s === 'ACTIVE') return 'success';
-    if (s.includes('FAIL') || s === 'DELETED') return 'danger';
-    if (s.includes('PROVISION') || s.includes('PENDING')) return 'warning';
+    if (s === 'ACTIVE' || s === 'SUCCESS' || s === 'TERMINATED') return 'success';
+    if (s.includes('FAIL') || s === 'DELETED' || s.includes('CANCEL')) return 'danger';
+    if (s.includes('PROVISION') || s.includes('PENDING') || s.includes('RUNNING')) return 'warning';
     return 'informative';
   };
 
@@ -2615,6 +2690,58 @@ function CleanRoomsDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
                 </MessageBarBody></MessageBar>
               )}
               {err && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Load failed</MessageBarTitle>{err}</MessageBarBody></MessageBar>}
+              {ok && <MessageBar intent="success"><MessageBarBody>{ok}</MessageBarBody></MessageBar>}
+
+              {!gate && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM }}>
+                  <div style={{ flex: 1 }} />
+                  <Button size="small" appearance="primary" icon={<Add20Regular />} onClick={() => { setCreating((v) => !v); setErr(null); setOk(null); }}>
+                    {creating ? 'Cancel new clean room' : 'New clean room'}
+                  </Button>
+                </div>
+              )}
+
+              {!gate && creating && (
+                <div style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium, padding: tokens.spacingVerticalM, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS }}>
+                  <Subtitle2 style={{ fontSize: tokens.fontSizeBase300 }}>New clean room</Subtitle2>
+                  <div style={{ display: 'flex', gap: tokens.spacingHorizontalM, flexWrap: 'wrap' }}>
+                    <Field label="Name" required style={{ minWidth: 220 }}>
+                      <Input value={cName} onChange={(_, d) => setCName(d.value)} placeholder="q1-marketing-overlap" />
+                    </Field>
+                    <Field label="Central region" hint="e.g. eastus" style={{ minWidth: 160 }}>
+                      <Input value={cRegion} onChange={(_, d) => setCRegion(d.value)} placeholder="eastus" />
+                    </Field>
+                  </div>
+                  <Field label="Comment">
+                    <Input value={cComment} onChange={(_, d) => setCComment(d.value)} placeholder="Optional description" />
+                  </Field>
+                  <Caption1 style={{ fontWeight: tokens.fontWeightSemibold }}>Collaborators (your own metastore is added automatically)</Caption1>
+                  {cCollabs.map((c, i) => (
+                    <div key={i} style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1.4fr) minmax(0,1.2fr) auto', gap: tokens.spacingHorizontalS, alignItems: 'end' }}>
+                      <Field label={i === 0 ? 'Alias' : undefined}>
+                        <Input value={c.collaborator_alias} onChange={(_, d) => setCCollabs((cs) => cs.map((x, j) => j === i ? { ...x, collaborator_alias: d.value } : x))} placeholder="partner_org" />
+                      </Field>
+                      <Field label={i === 0 ? 'Sharing identifier (global_metastore_id)' : undefined}>
+                        <Input value={c.global_metastore_id} onChange={(_, d) => setCCollabs((cs) => cs.map((x, j) => j === i ? { ...x, global_metastore_id: d.value } : x))} placeholder="azure:eastus:<uuid>" />
+                      </Field>
+                      <Field label={i === 0 ? 'Invite email' : undefined}>
+                        <Input value={c.invite_recipient_email} onChange={(_, d) => setCCollabs((cs) => cs.map((x, j) => j === i ? { ...x, invite_recipient_email: d.value } : x))} placeholder="analyst@partner.com" />
+                      </Field>
+                      <Button size="small" appearance="subtle" icon={<Delete20Regular />} aria-label="Remove collaborator" onClick={() => setCCollabs((cs) => cs.length > 1 ? cs.filter((_, j) => j !== i) : cs)} />
+                    </div>
+                  ))}
+                  <div style={{ display: 'flex', gap: tokens.spacingHorizontalS }}>
+                    <Button size="small" appearance="outline" icon={<Add20Regular />} onClick={() => setCCollabs((cs) => [...cs, { collaborator_alias: '', global_metastore_id: '', invite_recipient_email: '' }])}>Collaborator</Button>
+                    <div style={{ flex: 1 }} />
+                    <Button size="small" appearance="primary" disabled={createBusy || !cName.trim()} icon={createBusy ? <Spinner size="tiny" /> : <Save20Regular />} onClick={() => void submitCreate()}>
+                      {createBusy ? 'Creating…' : 'Create clean room'}
+                    </Button>
+                  </div>
+                  <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                    Adding a collaborator needs their <b>sharing identifier</b> (a cross-organization handshake). <code>POST /api/2.0/clean-rooms</code>.
+                  </Caption1>
+                </div>
+              )}
 
               {!gate && (
                 <div style={{ display: 'flex', gap: tokens.spacingHorizontalL, alignItems: 'flex-start' }}>
@@ -2710,6 +2837,55 @@ function CleanRoomsDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
                             </TableBody>
                           </Table>
                         </div>
+
+                        {/* ---- Tasks sub-tab (DBX-8): run a notebook task + run history ---- */}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS }}>
+                          <Subtitle2 style={{ fontSize: tokens.fontSizeBase300, flex: 1 }}>Tasks</Subtitle2>
+                          {tasksLoading && <Spinner size="tiny" />}
+                          <Button size="small" appearance="subtle" icon={<ArrowSync20Regular />} disabled={tasksLoading} onClick={() => selected && void loadTasks(selected)}>Refresh</Button>
+                        </div>
+                        <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'end', flexWrap: 'wrap' }}>
+                          <Field label="Notebook" style={{ minWidth: 240 }}>
+                            <Dropdown
+                              placeholder={notebooks.length ? 'Select a notebook' : 'No runnable notebooks'}
+                              value={selNotebook}
+                              selectedOptions={selNotebook ? [selNotebook] : []}
+                              disabled={notebooks.length === 0}
+                              onOptionSelect={(_, d) => setSelNotebook(d.optionValue || '')}
+                            >
+                              {notebooks.map((n) => <Option key={n.name} value={n.name}>{n.name}</Option>)}
+                            </Dropdown>
+                          </Field>
+                          <Button appearance="primary" size="small" icon={taskBusy ? <Spinner size="tiny" /> : <Play20Regular />} disabled={taskBusy || !selNotebook} onClick={() => void runTask()}>
+                            {taskBusy ? 'Submitting…' : 'Run task'}
+                          </Button>
+                        </div>
+                        {notebooks.length === 0 && !tasksLoading && (
+                          <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>No notebook assets to run — add a notebook to this clean room, with EXECUTE CLEAN ROOM TASK on it, then Refresh.</Caption1>
+                        )}
+                        <div style={{ overflow: 'auto', maxHeight: '200px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium }}>
+                          <Table size="small" aria-label="Clean room task runs">
+                            <TableHeader><TableRow>
+                              <TableHeaderCell>Run id</TableHeaderCell>
+                              <TableHeaderCell>Notebook</TableHeaderCell>
+                              <TableHeaderCell>Status</TableHeaderCell>
+                              <TableHeaderCell>Result</TableHeaderCell>
+                              <TableHeaderCell>Started</TableHeaderCell>
+                            </TableRow></TableHeader>
+                            <TableBody>
+                              {taskRuns.length === 0 && <TableRow><TableCell colSpan={5}><Caption1>No task runs yet.</Caption1></TableCell></TableRow>}
+                              {taskRuns.map((r, i) => (
+                                <TableRow key={r.run_id || i}>
+                                  <TableCell><span style={{ fontFamily: 'monospace', fontSize: tokens.fontSizeBase200 }}>{r.run_id != null ? String(r.run_id) : ''}</span></TableCell>
+                                  <TableCell>{String(r.notebook_name || '')}</TableCell>
+                                  <TableCell>{r.status ? <Badge appearance="outline" color={statusColor(String(r.status))}>{String(r.status)}</Badge> : ''}</TableCell>
+                                  <TableCell>{r.result_state ? <Badge appearance="tint" color={statusColor(String(r.result_state))}>{String(r.result_state)}</Badge> : ''}</TableCell>
+                                  <TableCell>{r.start_time ? <Caption1>{fmtEpoch(r.start_time)}</Caption1> : ''}</TableCell>
+                                </TableRow>
+                              ))}
+                            </TableBody>
+                          </Table>
+                        </div>
                       </div>
                     )}
                   </div>
@@ -2717,10 +2893,8 @@ function CleanRoomsDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
               )}
 
               <MessageBar intent="info"><MessageBarBody>
-                Creating a clean room (<code>POST /api/2.0/clean-rooms</code>) needs each collaborator's
-                {' '}<code>global_metastore_id</code> (a cross-organization handshake), and running workloads uses
-                {' '}<b>clean-room tasks</b> (<code>CREATE / MODIFY / EXECUTE CLEAN ROOM TASK</code> — SQL DDL run as notebook jobs on
-                clean-room-scoped compute). Both are Public-Preview flows; Loom surfaces clean rooms, collaborators &amp; assets read-only.
+                Clean-room tasks run a shared notebook on clean-room-scoped compute (<code>EXECUTE CLEAN ROOM TASK</code>). Running a task submits a
+                {' '}Lakeflow job run and returns a real run id; approvals + notebook uploads are managed in the Databricks workspace. Clean Rooms is a Public-Preview Unity Catalog feature.
               </MessageBarBody></MessageBar>
             </div>
           </DialogContent>

@@ -45,7 +45,8 @@ export type DataAgentSourceType =
   | 'ai-search'
   | 'ontology'
   | 'graph'
-  | 'microsoft-graph';
+  | 'microsoft-graph'
+  | 'agent';
 
 /** Typed AI Search retrieval options persisted on an `ai-search` source. */
 export interface DataAgentAiSearchConfig {
@@ -65,6 +66,43 @@ export interface DataAgentGraphScope {
   mailbox?: string;  // mailbox UPN
 }
 
+/** Compose-back config persisted on an `agent` source (DBX-2). */
+export interface DataAgentAgentConfig {
+  /** Cosmos item id of the backing loom-app-runtime item. */
+  appItemId?: string;
+  /** Live app URL — its `/invoke` endpoint is called to answer routed questions. */
+  url?: string;
+}
+
+// Container-Apps host suffixes an agent `/invoke` URL is allowed to target. A
+// hosted Loom App always lives on the Azure Container Apps managed domain
+// (Commercial `.azurecontainerapps.io`, Gov `.azurecontainerapps.us`), so this
+// is a tight SSRF allowlist: the grounding executor will only POST to a URL
+// whose parsed hostname ends with one of these — never an arbitrary host.
+const AGENT_INVOKE_HOST_SUFFIXES = ['.azurecontainerapps.io', '.azurecontainerapps.us'];
+
+/**
+ * Resolve + validate a hosted-agent `/invoke` URL from a stored app URL. Returns
+ * the fully-qualified invoke URL when the input is an https URL on an Azure
+ * Container Apps managed host, else null (SSRF guard — parses the hostname, does
+ * NOT substring-match). Pure + unit-tested.
+ */
+export function resolveAgentInvokeUrl(rawUrl?: string | null): string | null {
+  const raw = String(rawUrl ?? '').trim();
+  if (!raw) return null;
+  let u: URL;
+  try {
+    u = new URL(raw);
+  } catch {
+    return null;
+  }
+  if (u.protocol !== 'https:') return null;
+  const host = u.hostname.toLowerCase();
+  if (!AGENT_INVOKE_HOST_SUFFIXES.some((suf) => host.endsWith(suf))) return null;
+  // Normalise to origin + /invoke (ignore any path/query the stored URL carried).
+  return `https://${u.host}/invoke`;
+}
+
 export interface DataAgentSource {
   id: string;
   type: DataAgentSourceType;
@@ -75,6 +113,7 @@ export interface DataAgentSource {
   examples?: { question: string; query: string }[]; // few-shot pairs (lakehouse/warehouse/kql/graph/ai-search only)
   aiSearch?: DataAgentAiSearchConfig;  // ai-search retrieval options (honored by the executor)
   graph?: DataAgentGraphScope;         // microsoft-graph scope (site/drive/mail)
+  agent?: DataAgentAgentConfig;        // agent compose-back (hosted Loom App /invoke)
 }
 
 export interface DataAgentConfig {
@@ -93,6 +132,7 @@ const QUERY_LANG: Record<DataAgentSourceType, string> = {
   ontology: 'an ontology / Fabric IQ semantic query',
   graph: 'a GQL / Cypher graph traversal',
   'microsoft-graph': 'a plain full-text Microsoft Graph search phrase (no operators)',
+  agent: 'a plain natural-language instruction — the hosted agent runs its own tool-calling loop and returns an answer',
 };
 
 function composeSystemPrompt(cfg: DataAgentConfig): string {
@@ -133,6 +173,9 @@ function composeSystemPrompt(cfg: DataAgentConfig): string {
           ? `the OneDrive/SharePoint drive ${g.driveId || '(unset)'}`
           : `the SharePoint site ${g.site || '(unset)'}`;
       lines.push(`Scope: ${scopeDesc}. Emit a short plain-text search phrase as the query — the platform runs it against Microsoft Graph and returns the matching ${g.kind === 'mail' ? 'messages' : 'files'}.`);
+    }
+    if (src.type === 'agent') {
+      lines.push('This is a HOSTED AGENT (a bring-your-own agent harness). Emit a clear natural-language instruction as the query — the platform POSTs it to the agent\'s /invoke endpoint, which runs its own multi-step tool-calling loop and returns a final answer you then ground your response on.');
     }
     if (src.instructions?.trim()) {
       lines.push('Grounding instructions:');

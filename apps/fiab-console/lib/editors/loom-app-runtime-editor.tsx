@@ -294,7 +294,7 @@ export function LoomAppRuntimeEditor({ item, id }: EditorProps) {
 
   if (isNew) {
     return <NewItemCreateGate item={item} createLabel="Create Loom app"
-      intro="Create a hosted app, then pick a runtime template (Streamlit, Dash, Gradio, Flask, or Node/Express) or a public git repo. Loom builds the image in the Loom ACR and deploys it as an autoscale-to-zero, Entra-gated Azure Container App with a live URL — no Databricks or Fabric." />;
+      intro="Create a hosted app, then pick a runtime template (Streamlit, Dash, Gradio, Flask, Node/Express, or an Agent/FastAPI harness) or a public git repo. Loom builds the image in the Loom ACR and deploys it as an autoscale-to-zero, Entra-gated Azure Container App with a live URL — no Databricks or Fabric. An Agent app can be composed back into a Data Agent as a tool source." />;
   }
 
   const infraGate = infra && !infra.configured ? (

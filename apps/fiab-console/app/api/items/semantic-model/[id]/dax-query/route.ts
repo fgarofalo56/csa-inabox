@@ -20,7 +20,7 @@
 import { NextRequest } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { apiOk, apiError, apiUnauthorized, apiServerError } from '@/lib/api/respond';
-import { evalDax, resolveBackend, TabularError } from '@/lib/azure/tabular-eval-client';
+import { evalDax, warmSemanticModel, resolveBackend, TabularError } from '@/lib/azure/tabular-eval-client';
 import { looksLikeDaxQuery } from '@/lib/semantic-model/semantic-link';
 import {
   readModelState, writeModelState, normalizeMeasure, upsertMeasure,
@@ -69,6 +69,13 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     }
   }
 
+  if (op === 'warm') {
+    // PSR-5 model-warm / prime — keep the tabular backend hot so first-visit
+    // queries skip a cold spin-up. Best-effort; returns an honest {warmed} flag.
+    const result = await warmSemanticModel(id, tenantId, body?.database ? String(body.database) : undefined);
+    return apiOk({ ...result });
+  }
+
   if (op === 'save-measure') {
     const raw = { name: body?.name, expression: body?.expression, schema: body?.schema, kind: 'cosmos' };
     let measure;
@@ -94,5 +101,5 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     }
   }
 
-  return apiError(`unknown op "${op}" — expected run | save-measure`, 400, { backend: resolveBackend() });
+  return apiError(`unknown op "${op}" — expected run | warm | save-measure`, 400, { backend: resolveBackend() });
 }

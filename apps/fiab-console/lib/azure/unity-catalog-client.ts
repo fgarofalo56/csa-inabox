@@ -2309,6 +2309,22 @@ export interface UCCleanRoomAsset {
   /** ACTIVE | PENDING | PERMISSION_DENIED | … */
   status?: string;
   added_at?: number;
+  /** Freshness checksum — REQUIRED to run a NOTEBOOK_FILE asset as a task. */
+  etag?: string;
+  workspace_hostname?: string;
+}
+
+/** A historical clean-room notebook task run (DBX-8). */
+export interface UCCleanRoomTaskRun {
+  run_id?: number;
+  notebook_name?: string;
+  /** PENDING | RUNNING | TERMINATED | … (job run lifecycle). */
+  status?: string;
+  /** SUCCESS | FAILED | CANCELED | … (job run result). */
+  result_state?: string;
+  start_time?: number;
+  end_time?: number;
+  collaborator_alias?: string;
   workspace_hostname?: string;
 }
 
@@ -2365,6 +2381,113 @@ export async function listCleanRoomAssets(host: string, name: string): Promise<U
     owner_collaborator_alias: firstStr(a?.owner_collaborator_alias),
     status: firstStr(a?.status, a?.status_error?.status),
     added_at: typeof a?.added_at === 'number' ? a.added_at : undefined,
+    etag: firstStr(a?.etag, a?.notebook?.etag),
+    workspace_hostname: host,
+  }));
+}
+
+// ── Clean Rooms — CREATE + TASK CRUD/run (DBX-8) ─────────────────────────────
+// Extends the read-only surface. Grounded in Learn:
+//   Create a clean room  — POST /api/2.0/clean-rooms
+//   Run a notebook task  — a Lakeflow job run with a `clean_rooms_notebook_task`
+//                          (POST /api/2.2/jobs/runs/submit → run_id); the task
+//                          needs the clean room name + notebook name + the
+//                          asset's etag (from the assets list above).
+//   Task-run history     — GET /api/2.0/clean-rooms/{name}/runs
+// The principal needs EXECUTE CLEAN ROOM TASK on the room to run a task.
+//   https://learn.microsoft.com/azure/databricks/clean-rooms/clean-room-notebook
+
+export interface CreateCleanRoomCollaboratorInput {
+  collaborator_alias: string;
+  /** azure:<region>:<uuid> — the collaborator's sharing identifier (metastore id). */
+  global_metastore_id?: string;
+  invite_recipient_email?: string;
+}
+
+export interface CreateCleanRoomInput {
+  name: string;
+  comment?: string;
+  /** Central clean-room region (e.g. eastus). */
+  region?: string;
+  collaborators: CreateCleanRoomCollaboratorInput[];
+}
+
+/**
+ * Create a clean room. The creator's own metastore is added by Databricks as
+ * the local collaborator; `collaborators` carries the invited parties (by
+ * sharing identifier / email). Returns the created room (normalized).
+ */
+export async function createCleanRoom(host: string, input: CreateCleanRoomInput): Promise<UCCleanRoom> {
+  const collaborators = (input.collaborators || [])
+    .filter((c) => c && c.collaborator_alias)
+    .map((c) => ({
+      collaborator_alias: c.collaborator_alias,
+      ...(c.global_metastore_id ? { global_metastore_id: c.global_metastore_id } : {}),
+      ...(c.invite_recipient_email ? { invite_recipient_email: c.invite_recipient_email } : {}),
+    }));
+  const body = {
+    name: input.name,
+    ...(input.comment ? { comment: input.comment } : {}),
+    remote_detailed_info: {
+      cloud_vendor: 'azure',
+      ...(input.region ? { region: input.region } : {}),
+      collaborators,
+    },
+  };
+  const j = await ucFetch<any>(host, '/api/2.0/clean-rooms', { method: 'POST', body });
+  return normalizeCleanRoom(j, host);
+}
+
+/** List only the notebook assets of a clean room (name + etag) — runnable tasks. */
+export async function listCleanRoomNotebooks(host: string, name: string): Promise<{ name: string; etag?: string }[]> {
+  const assets = await listCleanRoomAssets(host, name);
+  return assets
+    .filter((a) => (a.asset_type || '').toUpperCase() === 'NOTEBOOK_FILE' && a.name)
+    .map((a) => ({ name: a.name as string, etag: a.etag }));
+}
+
+/**
+ * Run a clean-room notebook task: submit a one-time Lakeflow job run whose task
+ * is a `clean_rooms_notebook_task`. Returns the real job run id.
+ */
+export async function runCleanRoomTask(
+  host: string,
+  input: { cleanRoomName: string; notebookName: string; etag?: string },
+): Promise<{ run_id?: number }> {
+  const body = {
+    run_name: `clean-room-task:${input.cleanRoomName}:${input.notebookName}`,
+    tasks: [
+      {
+        task_key: 'clean_room_task',
+        clean_rooms_notebook_task: {
+          clean_room_name: input.cleanRoomName,
+          notebook_name: input.notebookName,
+          ...(input.etag ? { etag: input.etag } : {}),
+        },
+      },
+    ],
+  };
+  const j = await ucFetch<{ run_id?: number }>(host, '/api/2.2/jobs/runs/submit', { method: 'POST', body });
+  return { run_id: typeof j?.run_id === 'number' ? j.run_id : undefined };
+}
+
+/** List historical notebook task runs in a clean room (optionally by notebook). */
+export async function listCleanRoomTaskRuns(
+  host: string,
+  name: string,
+  notebookName?: string,
+): Promise<UCCleanRoomTaskRun[]> {
+  const query: Record<string, string> = { page_size: '50' };
+  if (notebookName) query.notebook_name = notebookName;
+  const j = await ucFetch<{ runs?: any[] }>(host, `/api/2.0/clean-rooms/${encodeURIComponent(name)}/runs`, { query });
+  return (j.runs || []).map((r: any) => ({
+    run_id: typeof r?.run_id === 'number' ? r.run_id : undefined,
+    notebook_name: firstStr(r?.notebook_name, r?.notebook_etag?.notebook_name),
+    status: firstStr(r?.status?.state, r?.state?.life_cycle_state, r?.status),
+    result_state: firstStr(r?.status?.result_state, r?.state?.result_state),
+    start_time: typeof r?.start_time === 'number' ? r.start_time : undefined,
+    end_time: typeof r?.end_time === 'number' ? r.end_time : undefined,
+    collaborator_alias: firstStr(r?.collaborator_alias, r?.runner_collaborator_alias),
     workspace_hostname: host,
   }));
 }
