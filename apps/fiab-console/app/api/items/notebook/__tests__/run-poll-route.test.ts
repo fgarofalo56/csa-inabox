@@ -133,7 +133,9 @@ describe('honest terminal-state mapping (R3 #3)', () => {
   });
 
   it('surfaces a shutting_down session as ok:false (phase 1)', async () => {
-    withState({});
+    withState({
+      pendingRuns: { 'spark:pool1:5': { queue: [{ source: 'x', lang: 'pyspark', cellId: 'c1' }], qIdx: 0 } },
+    });
     (getLivySession as any).mockResolvedValue({ id: 5, state: 'shutting_down' });
 
     const res = await GET(getReq(), ctxFor('spark:pool1:5'));
@@ -141,5 +143,141 @@ describe('honest terminal-state mapping (R3 #3)', () => {
 
     expect(j.ok).toBe(false);
     expect(j.status).toBe('shutting_down');
+    // R3 #4 — a terminal session cleans its stale pendingRuns entry so a resume
+    // poll doesn't retry it forever.
+    const persisted = replaceMock.mock.calls.at(-1)![0].state.pendingRuns;
+    expect(persisted['spark:pool1:5']).toBeUndefined();
+  });
+});
+
+describe('resume in-flight runs (R3 #4)', () => {
+  it('phase-1 promote persists lastRunId (so a remount resumes the exact statement)', async () => {
+    withState({
+      pendingRuns: {
+        'spark:pool1:5': {
+          queue: [
+            { source: 'print(1)', lang: 'pyspark', cellId: 'c1' },
+            { source: 'print(2)', lang: 'pyspark', cellId: 'c2' },
+          ],
+          qIdx: 0,
+          startedAt: new Date().toISOString(),
+        },
+      },
+    });
+    (getLivySession as any).mockResolvedValue({ id: 5, state: 'idle' });
+    (submitLivyStatement as any).mockResolvedValue({ id: 20, state: 'running' });
+
+    const res = await GET(getReq(), ctxFor('spark:pool1:5'));
+    const j = await res.json();
+
+    expect(j.runId).toBe('spark:pool1:5:20');
+    const persisted = replaceMock.mock.calls.at(-1)![0].state.pendingRuns['spark:pool1:5'];
+    expect(persisted.qIdx).toBe(1);
+    expect(persisted.lastRunId).toBe('spark:pool1:5:20');
+  });
+
+  it('phase-2 chain persists the next lastRunId', async () => {
+    withState({
+      pendingRuns: {
+        'spark:pool1:5': {
+          queue: [
+            { source: 'print(1)', lang: 'pyspark', cellId: 'c1' },
+            { source: 'print(2)', lang: 'pyspark', cellId: 'c2' },
+          ],
+          qIdx: 1,
+        },
+      },
+    });
+    (getLivyStatement as any).mockResolvedValue({ id: 20, state: 'available', output: { status: 'ok', data: { 'text/plain': 'a' } } });
+    (submitLivyStatement as any).mockResolvedValue({ id: 21, state: 'running' });
+
+    const res = await GET(getReq(), ctxFor('spark:pool1:5:20'));
+    const j = await res.json();
+
+    expect(j.runId).toBe('spark:pool1:5:21');
+    const persisted = replaceMock.mock.calls.at(-1)![0].state.pendingRuns['spark:pool1:5'];
+    expect(persisted.lastRunId).toBe('spark:pool1:5:21');
+  });
+
+  it('maps a session Livy already reaped (404) to an honest SessionGone error + cleans the entry', async () => {
+    withState({
+      pendingRuns: { 'spark:pool1:5': { queue: [{ source: 'x', lang: 'pyspark', cellId: 'c1' }], qIdx: 1, lastRunId: 'spark:pool1:5' } },
+    });
+    (getLivySession as any).mockRejectedValue(new Error('getLivySession(pool1/5) failed 404: session not found'));
+
+    const res = await GET(getReq(), ctxFor('spark:pool1:5'));
+    const j = await res.json();
+
+    // ok:true (renders on the cell) with an honest terminal error, not a 502.
+    expect(j.ok).toBe(true);
+    expect(j.output.status).toBe('error');
+    expect(j.output.ename).toBe('SessionGone');
+    const persisted = replaceMock.mock.calls.at(-1)![0].state.pendingRuns;
+    expect(persisted['spark:pool1:5']).toBeUndefined();
+  });
+
+  it('rethrows a NON-404 getLivySession error (transient — entry preserved)', async () => {
+    withState({
+      pendingRuns: { 'spark:pool1:5': { queue: [{ source: 'x', lang: 'pyspark', cellId: 'c1' }], qIdx: 0 } },
+    });
+    (getLivySession as any).mockRejectedValue(new Error('getLivySession(pool1/5) failed 503: gateway'));
+
+    const res = await GET(getReq(), ctxFor('spark:pool1:5'));
+    const j = await res.json();
+
+    // Outer catch → error status; the stale entry is NOT cleaned on a transient blip.
+    expect(j.ok).toBe(false);
+    expect(replaceMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('rich output shapes (R3 #5)', () => {
+  const twoCell = (qIdx: number, cellOutputs?: any) => ({
+    pendingRuns: {
+      'spark:pool1:5': {
+        queue: [
+          { source: 'plot()', lang: 'pyspark', cellId: 'c1' },
+          { source: 'print(2)', lang: 'pyspark', cellId: 'c2' },
+        ],
+        qIdx, ...(cellOutputs ? { cellOutputs } : {}),
+      },
+    },
+  });
+
+  it('passes image/png + text/html through cellOutputs to the client, but persists a LEAN copy (no image) to Cosmos', async () => {
+    withState(twoCell(1));
+    (getLivyStatement as any).mockResolvedValue({
+      id: 20, state: 'available',
+      output: { status: 'ok', data: { 'text/plain': 'fig', 'image/png': 'PNGDATA', 'text/html': '<b>hi</b>' } },
+    });
+    (submitLivyStatement as any).mockResolvedValue({ id: 21, state: 'running' });
+
+    const res = await GET(getReq(), ctxFor('spark:pool1:5:20'));
+    const j = await res.json();
+
+    // Client copy carries the rich shapes.
+    expect(j.cellOutputs.c1.data['image/png']).toBe('PNGDATA');
+    expect(j.cellOutputs.c1.data['text/html']).toBe('<b>hi</b>');
+    // Persisted copy is lean (Cosmos-safe): text kept, image dropped.
+    const persisted = replaceMock.mock.calls.at(-1)![0].state.pendingRuns['spark:pool1:5'];
+    expect(persisted.cellOutputs.c1.textPlain).toBe('fig');
+    expect(persisted.cellOutputs.c1.data).toBeUndefined();
+  });
+
+  it('drops an image payload larger than the ~2MB cap', async () => {
+    withState(twoCell(1));
+    const huge = 'A'.repeat(2_000_001);
+    (getLivyStatement as any).mockResolvedValue({
+      id: 20, state: 'available',
+      output: { status: 'ok', data: { 'text/plain': 'fig', 'image/png': huge } },
+    });
+    (submitLivyStatement as any).mockResolvedValue({ id: 21, state: 'running' });
+
+    const res = await GET(getReq(), ctxFor('spark:pool1:5:20'));
+    const j = await res.json();
+
+    // Over-cap image is not shipped; the text still is.
+    expect(j.cellOutputs.c1.data).toBeUndefined();
+    expect(j.cellOutputs.c1.textPlain).toBe('fig');
   });
 });
