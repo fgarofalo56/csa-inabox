@@ -46,6 +46,7 @@ import {
 import { ArrowSync24Regular, Open16Regular, Search16Regular } from '@fluentui/react-icons';
 import { EmptyState } from '@/lib/components/empty-state';
 import { Section } from '@/lib/components/ui/section';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { itemVisual } from '@/lib/components/ui/item-type-visual';
 import { CatalogItemActions } from '@/lib/components/catalog/catalog-item-actions';
@@ -469,6 +470,13 @@ export function FederatedSearch() {
 
   return (
     <div className={s.gutter}>
+      <TeachingBanner
+        surfaceKey="catalog-federated-search"
+        title="One search across every catalog"
+        message="Query Microsoft Purview, Databricks Unity Catalog, and OneLake in a single pass — results come back with their source, type, and owner so you can find a governed asset without knowing where it lives. Refine with the type and source facets, then open an asset to see lineage and request access."
+        icon={Search16Regular}
+        learnMoreHref="https://learn.microsoft.com/purview/unified-catalog-search"
+      />
       {/* ── Search ─────────────────────────────────────────────────── */}
       <Section title="Search">
         <div className={s.searchRow}>

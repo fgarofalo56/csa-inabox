@@ -27,8 +27,10 @@ import {
 import {
   BotSparkle24Filled, Sparkle20Regular, ArrowRight20Regular,
   Open16Regular, Wrench20Regular, History20Regular, Flash20Regular,
+  ShieldCheckmark20Regular,
 } from '@fluentui/react-icons';
 import { Section, Toolbar } from '@/lib/components/ui/section';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
 import { ItemTile } from '@/lib/components/ui/item-tile';
 import { TileGrid } from '@/lib/components/ui/tile-grid';
 import { ViewToggle, type LoomView } from '@/lib/components/ui/view-toggle';
@@ -359,6 +361,15 @@ export default function CopilotPage() {
           </div>
         </div>
       </div>
+
+      {/* CTS: transparency teaching — every run shows its tool calls + reasoning trace */}
+      <TeachingBanner
+        surfaceKey="copilot-transparency"
+        title="Every answer shows its work"
+        message="Loom Copilot runs against real backends and streams each step: the tools it picked, the arguments it passed, and the results it read. Expand any step to see the tool-call and reasoning trace — nothing is hidden behind the reply."
+        icon={ShieldCheckmark20Regular}
+        learnMoreHref="https://learn.microsoft.com/fabric/get-started/copilot-fabric-overview"
+      />
 
       {/* Honest infra-gate when AOAI isn't reachable */}
       {!statusLoading && status && !ready && (
