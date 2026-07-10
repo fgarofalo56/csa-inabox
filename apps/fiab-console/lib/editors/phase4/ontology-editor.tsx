@@ -14,7 +14,7 @@ import {
   Subtitle2, Body1, Caption1, Badge, Button, Input, Textarea, Spinner,
   Card, Tab, TabList,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
-  MessageBar, MessageBarBody, MessageBarTitle,
+  MessageBar, MessageBarBody,
   Tree, TreeItem, TreeItemLayout,
   Dialog, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
   Field, Dropdown, Option, Switch,
@@ -39,6 +39,8 @@ import { useQuery } from '@tanstack/react-query';
 import { getItem } from '@/lib/api/workspaces';
 import type { MonitorRuleRecord } from '@/lib/azure/activator-monitor';
 import { ItemEditorChrome } from '../item-editor-chrome';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
+import { loomDocUrl } from '@/lib/learn/content';
 import { NewItemBrowseGate } from '../new-item-gate';
 import { safeModelJson } from '../model-fetch';
 import { DataAgentResultViz } from '../data-agent-result-viz';
@@ -2238,12 +2240,14 @@ export function OntologyEditor({ item, id }: { item: FabricItemType; id: string 
     <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
       <div className={s.pad}>
         {loading && <Spinner size="small" label="Loading…" labelPosition="after" />}
-        <MessageBar intent="info">
-          <MessageBarBody>
-            <MessageBarTitle>Ontology runtime</MessageBarTitle>
-            <strong>Materialize as graph-model</strong> converts the parsed class hierarchy into a graph-model item (one node type per class, IS_A edge type for parent relationships) that can then be ADX-materialized to real KQL tables. Use <strong>Bind to data source</strong> (Home ribbon) to map Lakehouse / Warehouse tables onto entity types, then create <strong>Activator triggers</strong> below that fire on entity changes (real Azure Monitor alert rules — no Microsoft Fabric required).
-          </MessageBarBody>
-        </MessageBar>
+        {/* SC-6 — shared teaching banner (dismissible) explaining the ontology runtime. */}
+        <TeachingBanner
+          surfaceKey="ontology"
+          icon={BranchFork20Regular}
+          title="Model the object / link / action types, then materialize to a real graph"
+          message="Author object types in the Typed model panel; Materialize as graph-model converts the class hierarchy into a graph-model item (one node type per class, IS_A edge type for parents) that ADX-materializes to real KQL tables. Bind to data source maps Lakehouse / Warehouse tables onto entity types, and Activator triggers fire on entity changes via real Azure Monitor alert rules — no Microsoft Fabric required."
+          learnMoreHref={loomDocUrl('fiab/parity/ontology')}
+        />
 
         {/* ── Typed modeling surface (object / link / action types) ── */}
         <OntologyTypedModelPanel id={id} state={state} persistOnto={persistOnto} lakehouses={lakehouses} warehouses={warehouses} saving={saving} />
