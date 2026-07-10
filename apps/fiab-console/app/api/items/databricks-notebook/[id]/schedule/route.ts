@@ -19,6 +19,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { loadOwnedItem } from '../../../_lib/item-crud';
 import {
   databricksConfigGate,
   listJobs,
@@ -54,9 +55,13 @@ function notConfigured() {
   );
 }
 
-export async function GET(req: NextRequest) {
+export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
+  // Scheduling acts on THIS notebook item — verify the caller owns it (route-guards).
+  const { id } = await ctx.params;
+  const owned = await loadOwnedItem(id, 'databricks-notebook', session.claims.oid);
+  if (!owned) return NextResponse.json({ ok: false, error: 'not found' }, { status: 404 });
   const gate = notConfigured();
   if (gate) return gate;
   const path = (req.nextUrl.searchParams.get('path') || '').trim();
@@ -93,9 +98,13 @@ export async function GET(req: NextRequest) {
   }
 }
 
-export async function POST(req: NextRequest) {
+export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
+  // Scheduling acts on THIS notebook item — verify the caller owns it (route-guards).
+  const { id } = await ctx.params;
+  const owned = await loadOwnedItem(id, 'databricks-notebook', session.claims.oid);
+  if (!owned) return NextResponse.json({ ok: false, error: 'not found' }, { status: 404 });
   const gate = notConfigured();
   if (gate) return gate;
   const body = await req.json().catch(() => ({}));
@@ -135,9 +144,13 @@ export async function POST(req: NextRequest) {
   }
 }
 
-export async function PATCH(req: NextRequest) {
+export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
+  // Scheduling acts on THIS notebook item — verify the caller owns it (route-guards).
+  const { id } = await ctx.params;
+  const owned = await loadOwnedItem(id, 'databricks-notebook', session.claims.oid);
+  if (!owned) return NextResponse.json({ ok: false, error: 'not found' }, { status: 404 });
   const gate = notConfigured();
   if (gate) return gate;
   const body = await req.json().catch(() => ({}));
@@ -166,9 +179,13 @@ export async function PATCH(req: NextRequest) {
   }
 }
 
-export async function DELETE(req: NextRequest) {
+export async function DELETE(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
+  // Scheduling acts on THIS notebook item — verify the caller owns it (route-guards).
+  const { id } = await ctx.params;
+  const owned = await loadOwnedItem(id, 'databricks-notebook', session.claims.oid);
+  if (!owned) return NextResponse.json({ ok: false, error: 'not found' }, { status: 404 });
   const gate = notConfigured();
   if (gate) return gate;
   const jobId = Number(req.nextUrl.searchParams.get('jobId'));
