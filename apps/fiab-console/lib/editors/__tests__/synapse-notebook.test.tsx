@@ -53,4 +53,22 @@ describe('SynapseNotebookEditor (F15 authoring)', () => {
     // The Attach environment dropdown renders in the toolbar.
     expect(screen.getByLabelText(/Attach environment/i)).toBeInTheDocument();
   });
+
+  it('surfaces the R4 wave-2 ribbon actions (undo/redo, session, import/export, snippets, shortcuts)', async () => {
+    render(<SynapseNotebookEditor item={makeItem('synapse-notebook', 'Synapse notebook')} id="new" />);
+    await waitFor(() => expect(screen.getByTestId('chrome')).toBeInTheDocument(), { timeout: 5000 });
+    // R4-SYN-12 undo/redo, R4-SYN-6 session config, R4-SYN-10 import/export,
+    // R4-SYN-11 snippets, R4-SYN-7 shortcuts — all present as ribbon buttons.
+    for (const label of ['Undo', 'Redo', 'Configure session', 'Import', 'Export', 'Snippets', 'Shortcuts']) {
+      expect(screen.getByRole('button', { name: new RegExp(label, 'i') })).toBeInTheDocument();
+    }
+  });
+
+  it('mounts a hidden .ipynb import input (R4-SYN-10)', async () => {
+    const { container } = render(<SynapseNotebookEditor item={makeItem('synapse-notebook', 'Synapse notebook')} id="new" />);
+    await waitFor(() => expect(screen.getByTestId('chrome')).toBeInTheDocument(), { timeout: 5000 });
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement | null;
+    expect(input).not.toBeNull();
+    expect(input!.getAttribute('accept')).toContain('.ipynb');
+  });
 });
