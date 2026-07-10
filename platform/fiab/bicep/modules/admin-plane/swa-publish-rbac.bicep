@@ -13,26 +13,42 @@
 // differ from the admin RG and cross-RG role assignments cannot be authored
 // inline (BCP139) — same pattern as adx-mi-storage-rbac.bicep.
 //
-// Website Contributor (de139f84-1756-47ae-9be6-808fbbe706ee) is cloud-agnostic
-// (identical GUID across Commercial / GCC / GCC-High / IL5) and is the least
-// built-in role covering staticSites write + listSecrets — Contributor is NOT
-// required. 100% Azure-native (ARM staticSites); no Microsoft Fabric.
+// Website Contributor (de139f84-1756-47ae-9be6-808fbbe706ee) is the least built-in
+// role covering staticSites write + listSecrets on Commercial / GCC — Contributor
+// is NOT required there. It does NOT resolve in Azure Government, though: a LIVE
+// `az deployment sub create` into usgovvirginia (2026-07-10) failed this
+// assignment with `RoleDefinitionDoesNotExist: de139f84175647ae9be6808fbbe706ee`.
+// So on GCC-High / IL5 this module falls back to Contributor (which exists in
+// every cloud) — the narrowest built-in available in Gov that still covers the
+// staticSites write + listSecrets the publish routes need. 100% Azure-native (ARM
+// staticSites); no Microsoft Fabric.
 
 targetScope = 'resourceGroup'
 
-@description('Console UAMI principal ID — granted Website Contributor at this RG scope. Empty skips the grant (the publish routes then surface their honest 403 gate naming this role).')
+@description('Console UAMI principal ID — granted the SWA publish role at this RG scope. Empty skips the grant (the publish routes then surface their honest 403 gate naming this role).')
 param consolePrincipalId string
+
+@description('Cloud boundary — selects a role definition that exists in the target cloud. Website Contributor (used on Commercial / GCC) does not resolve in Azure Government, so GCC-High / IL5 use Contributor instead. Defaults to Commercial for backward compatibility.')
+@allowed(['Commercial', 'GCC', 'GCC-High', 'IL5'])
+param boundary string = 'Commercial'
 
 @description('When true, skip the role grant (re-deploy where RBAC already exists, or the deployer lacks User Access Administrator).')
 param skipRoleGrants bool = false
 
-// Website Contributor
+// Website Contributor — Commercial / GCC least-privilege for staticSites.
 var websiteContributorRoleId = 'de139f84-1756-47ae-9be6-808fbbe706ee'
+// Contributor — the Azure Government fallback (Website Contributor is absent there;
+// see header). Broader than Website Contributor but the narrowest built-in that
+// exists in Gov and covers Microsoft.Web/staticSites write + listSecrets.
+var contributorRoleId = 'b24988ac-6180-42a0-ab88-20f7382dd24c'
+// GCC-High / IL5 are the sovereign (Azure Government) boundaries; GCC (moderate)
+// runs in commercial Azure and keeps the Commercial role.
+var effectiveSwaRoleId = (boundary == 'GCC-High' || boundary == 'IL5') ? contributorRoleId : websiteContributorRoleId
 
 resource swaWebsiteContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(consolePrincipalId) && !skipRoleGrants) {
-  name: guid(resourceGroup().id, consolePrincipalId, websiteContributorRoleId)
+  name: guid(resourceGroup().id, consolePrincipalId, effectiveSwaRoleId)
   properties: {
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', websiteContributorRoleId)
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', effectiveSwaRoleId)
     principalId: consolePrincipalId
     principalType: 'ServicePrincipal'
   }

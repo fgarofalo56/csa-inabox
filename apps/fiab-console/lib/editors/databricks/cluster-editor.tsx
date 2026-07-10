@@ -70,6 +70,9 @@ import { QueryParamsBar, substituteDbx, type QueryParam } from '../components/qu
 import { ResultVisualize } from '../components/result-visualize';
 import { useStyles, clusterStateColor, fmtTime } from './shared';
 import type { Cluster, ClusterLibrary } from './shared';
+import { ClusterPresetPicker } from './cluster-preset-picker';
+import { ClusterHygienePanel } from './cluster-hygiene';
+import { clusterSpecFromTier, type ClusterTier, type WorkloadFlavor } from '@/lib/databricks/cluster-presets';
 
 // ============================================================
 // Databricks Cluster editor
@@ -153,6 +156,35 @@ export function DatabricksClusterEditor({ item, id }: { item: FabricItemType; id
   const [libraries, setLibraries] = useState<ClusterLibrary[]>([]);
   const [librariesErr, setLibrariesErr] = useState<string | null>(null);
   const [detailTab, setDetailTab] = useState<'config' | 'libraries' | 'init' | 'events'>('config');
+
+  // Top-level view: the create/edit form vs the workspace hygiene surface.
+  const [mainView, setMainView] = useState<'configure' | 'hygiene'>('configure');
+  // Size-preset picker state (create mode).
+  const [flavor, setFlavor] = useState<WorkloadFlavor>('interactive');
+  const [presetTierId, setPresetTierId] = useState<string | null>(null);
+
+  // Apply a size tier's shape + curated spark_conf + Loom tags to the form so
+  // the expert can fine-tune every field below (advanced override).
+  const applyTier = useCallback((tier: ClusterTier, fl: WorkloadFlavor) => {
+    setPresetTierId(tier.id);
+    setFlavor(fl);
+    const spec = clusterSpecFromTier(tier, { flavor: fl, clusterName: name.trim() || undefined });
+    setName((prev) => prev.trim() || spec.cluster_name);
+    setNodeType(spec.node_type_id);
+    if (spec.autoscale) {
+      setAutoscale(true);
+      setMinWorkers(spec.autoscale.min_workers);
+      setMaxWorkers(spec.autoscale.max_workers);
+    } else {
+      setAutoscale(false);
+      setNumWorkers(spec.num_workers ?? 0);
+    }
+    setAutoterm(spec.autotermination_minutes ?? 30);
+    setPhoton(spec.runtime_engine === 'PHOTON');
+    setSpot((spec.azure_attributes?.availability || '').startsWith('SPOT'));
+    setSparkConf(Object.entries(spec.spark_conf || {}).map(([key, value]) => ({ key, value: String(value) })));
+    setTags(Object.entries(spec.custom_tags || {}).map(([key, value]) => ({ key, value: String(value) })));
+  }, [name]);
 
   const loadClusters = useCallback(async () => {
     try {
@@ -502,12 +534,31 @@ export function DatabricksClusterEditor({ item, id }: { item: FabricItemType; id
       }
       main={
         <div className={s.pad}>
+          <div style={{ borderBottom: `1px solid ${tokens.colorNeutralStroke2}` }}>
+            <TabList selectedValue={mainView} onTabSelect={(_, d) => setMainView(d.value as 'configure' | 'hygiene')}>
+              <Tab value="configure">Configure</Tab>
+              <Tab value="hygiene">Cluster hygiene</Tab>
+            </TabList>
+          </div>
+
+          {mainView === 'hygiene' ? (
+            <ClusterHygienePanel onChanged={loadClusters} />
+          ) : (
+          <>
           <TeachingBanner
             surfaceKey="databricks-cluster-editor"
             title="Configure Databricks compute"
             message="Size a cluster with a node type, Databricks Runtime, autoscale or fixed workers, and autotermination. Save calls the real Databricks clusters API (create / edit); Start, Stop and Restart drive live state. Photon, access mode, Spark config, libraries and init scripts round-trip through the cluster spec."
             learnMoreHref="https://learn.microsoft.com/azure/databricks/compute/configure"
           />
+          {!clusterId && (
+            <ClusterPresetPicker
+              selectedTierId={presetTierId}
+              flavor={flavor}
+              onFlavorChange={setFlavor}
+              onApply={applyTier}
+            />
+          )}
           <div className={s.toolbar}>
             <Badge appearance="filled" color={clusterStateColor(state)}>{state}</Badge>
             {cluster?.state_message && <Caption1>{cluster.state_message}</Caption1>}
@@ -775,6 +826,8 @@ export function DatabricksClusterEditor({ item, id }: { item: FabricItemType; id
                 </div>
               )}
             </>
+          )}
+          </>
           )}
         </div>
       }

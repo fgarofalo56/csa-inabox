@@ -23,7 +23,8 @@ import { getSession } from '@/lib/auth/session';
 import { MonitorError } from '@/lib/azure/monitor-client';
 import {
   listSparkApplications, getSparkAppMetrics, recommendTuning,
-  sparkNativeDiagLinks, sparkTelemetryConfigured, MonitorNotConfiguredError,
+  sparkNativeDiagLinks, sparkTelemetryConfigured, scanSparkInsights,
+  MonitorNotConfiguredError,
 } from '@/lib/azure/spark-monitor';
 
 export const runtime = 'nodejs';
@@ -44,11 +45,18 @@ export async function GET(req: NextRequest) {
   const days = Math.min(30, Math.max(1, Number(sp.get('days')) || 7));
   const limit = Math.min(500, Math.max(1, Number(sp.get('limit')) || 100));
   const appId = sp.get('appId')?.trim();
+  const report = sp.get('report')?.trim();
 
   try {
     if (appId) {
       const metrics = await getSparkAppMetrics(appId, days);
       return NextResponse.json({ ok: true, appId, metrics, recommendations: recommendTuning(metrics) });
+    }
+    if (report === 'insights') {
+      // Cross-application Troubleshooting + Optimization report views.
+      const sample = Math.min(25, Math.max(1, Number(sp.get('sample')) || 12));
+      const scan = await scanSparkInsights({ days, sample });
+      return NextResponse.json({ ok: true, scan, telemetryConfigured: sparkTelemetryConfigured() });
     }
     const applications = await listSparkApplications({ days, limit });
     return NextResponse.json({

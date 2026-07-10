@@ -89,7 +89,7 @@ Gov feature delta / honest-gate · ❌ Gov-breaking or unavailable, needs work.
 | **Front Door** | **Yes — Standard/Premium/Classic all GA in Gov** (corrects the "historically limited" prior). [Learn](https://learn.microsoft.com/azure/frontdoor/front-door-overview) | `*.azurefd.net` (global) | ✅ | `front-door.bicep`. |
 | **Container Registry** | **Yes** (IL6). [Learn](https://learn.microsoft.com/azure/azure-government/documentation-government-product-roadmap) | `*.azurecr.us` | ⚠️ | **GOV-5** — confirm image push/pull uses the `.azurecr.us` login server in Gov params; `gh-runner-job.bicep` examples show `.azurecr.io` (comment only). |
 | **Monitor / Log Analytics** | **Yes.** [Learn](https://learn.microsoft.com/azure/azure-government/compare-azure-government-global-azure) | query `api.loganalytics.us`; ingestion `monitor.azure.us` | ✅ | `getLogAnalyticsHost()`, `logAnalyticsTokenScope()`, `monitorIngestionScope()`. |
-| **AI Search** | **Yes.** [Learn](https://learn.microsoft.com/azure/search/search-region-support) | `*.search.usgovcloudapi.net`; AAD audience `search.azure.us` | ✅ | Runtime handled (`searchSuffix()`, `searchAadScope()`). **GOV-1 ✅ FIXED** (`fix/gov1-sovereign-endpoints`) — `ai-search.bicep` deploymentScript now derives the data-plane host (`search.usgovcloudapi.net`) + token audience (`https://search.azure.us/`) from the `environment().suffixes.storage` sovereign discriminator, mirroring the runtime SSOT. Delta: semantic ranker/agentic retrieval absent in **US Gov Texas**. |
+| **AI Search** | **Yes.** [Learn](https://learn.microsoft.com/azure/search/search-region-support) | `*.search.usgovcloudapi.net`; AAD audience `search.azure.us` | ✅ FIXED (#1866) | Runtime handled (`searchSuffix()`, `searchAadScope()`). **GOV-1 — FIXED in PR #1866**: `ai-search.bicep` deploymentScript now derives suffix + audience from the sovereign discriminator. Delta: semantic ranker/agentic retrieval absent in **US Gov Texas**. |
 | **Azure Machine Learning** | **Yes.** [Learn](https://learn.microsoft.com/azure/machine-learning/reference-machine-learning-cloud-parity) | `*.api.ml.azure.us` | ⚠️ | `amlDataPlaneHost()`, `resolve-aml-target.ts:152`, `aml-client.ts:512/517`. Delta: newer model-catalog / prompt-flow / Foundry features lag Commercial. |
 | **Microsoft Purview** | **Partial — classic Data Map only (US Gov Virginia).** No sensitivity labeling, no Power BI scanning, no data sharing, no managed attributes, no Synapse lineage. [Learn](https://learn.microsoft.com/purview/legacy/classic-feature-availability) | `*.purview.azure.us` | ⚠️ | **GOV-7** — gate the labeling/DLP-authoring/data-sharing Purview surfaces in Gov to honest MessageBars; classic scan/register/classify works. DLP policy authoring already gated: `graphDlpPolicyApiAvailable()` returns false in Gov. |
 | **Azure Maps** | **Yes — now GA at FedRAMP-High/IL5** (corrects "not in Gov" prior). [Learn](https://learn.microsoft.com/azure/azure-maps/how-to-use-services-module#azure-government-cloud-support) | REST/SDK domain `atlas.azure.us` (`atlas.setDomain`) | ⚠️ | **GOV-8** — confirm `azure-maps.bicep` + the map component set the `atlas.azure.us` domain in Gov (Maps already env-gated via `LOOM_MAPS_BACKEND`). |
@@ -102,7 +102,7 @@ Gov feature delta / honest-gate · ❌ Gov-breaking or unavailable, needs work.
 | **Event Grid** | **Yes.** [Learn](https://learn.microsoft.com/azure/azure-government/compare-azure-government-global-azure) | `*.eventgrid.azure.us` | ✅ | `eventgrid-client.ts` (via ARM/PE). |
 | **Batch** | **Yes.** [Learn](https://learn.microsoft.com/azure/private-link/availability) | `*.batch.usgovcloudapi.net` (data-plane audience) | ✅ | `batchScope()`. |
 | **Azure Digital Twins** | **NO Gov region documented — treat as unavailable.** [Learn](https://learn.microsoft.com/azure/digital-twins/) | — | ❌ | **GOV-10** — `digital-twin-builder-editor.tsx` + `adt-instance.bicep` have no Gov backend. Honest-gate the editor in Gov and offer the ADX-graph (`make-graph`) / Cosmos-Gremlin substitute per `no-fabric-dependency` style. |
-| **AI Foundry Agent Service** | **Yes — US Gov Virginia / Arizona.** [Learn](https://learn.microsoft.com/azure/foundry/concepts/foundry-azure-government) | `projectEndpoint` = `{resource}.services.ai.azure.us/api/projects/{project}` | ✅ | **GOV-11 ✅ FIXED** (`fix/gov1-sovereign-endpoints`) — `ai-foundry.bicep:409` + `foundry-project.bicep:387` now branch to `services.ai.azure.us` in Gov via the `environment()` discriminator (matching `aoaiInferenceEndpoint`). |
+| **AI Foundry Agent Service** | **Verify — project endpoint host.** | `projectEndpoint` uses `services.ai.azure.com` (`ai-foundry.bicep:409`), no `.azure.us` branch | ✅ FIXED (#1866) | **GOV-11 — FIXED in PR #1866**: `projectEndpoint` outputs now branch to `services.ai.azure.us` in Gov (`ai-foundry.bicep`, `foundry-project.bicep`). Was: confirm the Gov Foundry project host (AOAI inference itself is already Gov-aware). |
 | **Microsoft Graph** | **Yes — national clouds.** [Learn](https://learn.microsoft.com/graph/deployments) | `graph.microsoft.us` (L4), `dod-graph.microsoft.us` (L5) | ✅ | `getGraphHost()` (3-way split incl. DoD). |
 | **Entra sign-in (MSAL)** | **Yes.** [Learn](https://learn.microsoft.com/graph/deployments) | authority `login.microsoftonline.us` | ✅ | `lib/auth/msal.ts` `authorityHost()`. |
 
@@ -149,19 +149,14 @@ truth table in-file.
   cloud. Boundary ternaries handle the rest (`main.bicep:922` gremlin,
   `:928` postgres, `:937` databricks account host, `:961` kusto, `:1204`
   effective ARM endpoint).
-- **Real bicep break (GOV-1) ✅ FIXED** (`fix/gov1-sovereign-endpoints`):
-  `modules/admin-plane/ai-search.bicep` — the `deploymentScripts` that PUTs the
-  `loom-governance-items` index now derives `searchDnsSuffix`
-  (`search.usgovcloudapi.net` in Gov) and `searchTokenAudience`
-  (`https://search.azure.us/` in Gov) from the `environment().suffixes.storage`
-  discriminator; the script reads the audience via `$env:SEARCH_TOKEN_AUDIENCE`
-  and the `searchEndpoint` output is likewise cloud-aware. No literal Commercial
-  hosts remain on the default path.
-- **Candidate (GOV-11) ✅ FIXED** (`fix/gov1-sovereign-endpoints`):
-  `modules/admin-plane/ai-foundry.bicep:409` and `modules/ai/foundry-project.bicep:387`
-  `projectEndpoint` now branch to `services.ai.azure.us` in Gov (GCC-High/IL5)
-  via the same `environment()` discriminator, matching the sibling
-  `aoaiInferenceEndpoint`. Gov host confirmed on Learn (`foundry-azure-government#endpoints`).
+- **Real bicep break (GOV-1):** `modules/admin-plane/ai-search.bicep:250,255,289`
+  — the `Microsoft.Resources/deploymentScripts` that PUTs the
+  `loom-governance-items` index hardcodes `https://${search.name}.search.windows.net`
+  and requests a token for `resource=https://search.azure.com/`. Both are
+  Commercial-only; in Gov the index creation 401s / resolves the wrong host.
+- **Candidate (GOV-11):** `modules/admin-plane/ai-foundry.bicep:409`
+  `projectEndpoint` hardcodes `services.ai.azure.com` with no `.azure.us` branch
+  (the sibling `aoaiInferenceEndpoint` output at `:405` *is* boundary-aware).
 - Inert: the many `.database.windows.net` / `asazure.windows.net` /
   `.azurecr.io` hits in bicep are `@description` help text, comments, or
   operator-supplied full-FQDN params — not live literals.
@@ -191,15 +186,11 @@ equivalent **by default** (never gate as "unavailable"):
 Each item is docs-tracked here; implementation lands under the GOV-PARITY task
 (#47) and the loom-unity build.
 
-- **GOV-1 (P0, provision break). ✅ FIXED** (`fix/gov1-sovereign-endpoints`).
-  `ai-search.bicep`'s index deploymentScript is now cloud-aware: it derives the
-  search host from the Gov suffix (`search.usgovcloudapi.net`) and requests the
-  `https://search.azure.us/` audience (passed to the script as
-  `SEARCH_TOKEN_AUDIENCE`) whenever the estate runs in Azure US Government, via
-  the `environment().suffixes.storage != 'core.windows.net'` discriminator
-  (GCC-High/IL5/DoD). The `searchEndpoint` output is cloud-aware too. **Accept:**
-  builds clean; a Gov provision resolves the sovereign host + audience. Live
-  201/204 receipt pending a Gov-sub run per the recurring teardown bar.
+- **GOV-1 (P0, provision break).** Make `ai-search.bicep`'s index deploymentScript
+  cloud-aware. **Accept:** the script derives the search host from the Gov suffix
+  (`search.usgovcloudapi.net`) and requests the `search.azure.us` audience when
+  `boundary` is GCC-High/IL5; a Gov provision creates `loom-governance-items`
+  with a real 201/204 receipt.
 - **GOV-2 (P0, substitution).** Ship **loom-unity** and route Gov's lakehouse
   governance/grants through it (no UC dependency). **Accept:** with
   `boundary=GCC-High` and no Databricks UC, catalog registration + grant
@@ -245,12 +236,9 @@ Each item is docs-tracked here; implementation lands under the GOV-PARITY task
 - **GOV-10 (P2, substitution).** Digital Twin Builder — honest-gate in Gov and
   offer the ADX/Gremlin twin-graph substitute. **Accept:** ADT editor in Gov
   shows the substitute path, not a broken ARM call.
-- **GOV-11 (P2). ✅ FIXED** (`fix/gov1-sovereign-endpoints`). AI Foundry
-  `projectEndpoint` now adds the Gov host branch — `ai-foundry.bicep:409` and
-  `foundry-project.bicep:387` resolve `services.ai.azure.us` in Gov (GCC-High/IL5)
-  via `environment().suffixes.storage`, per Learn
-  (`foundry-azure-government#endpoints`). **Accept:** builds clean; Foundry
-  project wiring in Gov resolves the sovereign host.
+- **GOV-11 (P2).** AI Foundry `projectEndpoint` — add the Gov host branch or
+  honest-gate Foundry Agent Service in Gov. **Accept:** Foundry project wiring in
+  Gov resolves a valid host or gates cleanly.
 - **GOV-12 (P3, verification).** Reconcile the `aasSuffix()` Gov value vs the
   in-file "AAS not in Gov" comments — the loom-native default already covers it,
   but the helper should not imply a reachable Gov AAS host. **Accept:** doc/test
@@ -264,3 +252,20 @@ its primary action against the Gov Azure backend or shows a documented honest
 MessageBar gate** — with zero Commercial-host calls and zero UC/Fabric hard
 dependency. That is the recurring teardown-validation bar, run in a clean Gov
 sub.
+
+## Live deploy deltas (verified in tenant)
+
+A real `az deployment sub create -f platform/fiab/bicep/main.bicep -p
+params/gcc-high.bicepparam` into **US Gov Virginia** (2026-07-10) surfaced five
+sub-deployment failures that only appear against a live Gov control plane (the
+rest of the estate deployed cleanly, and the deployment is idempotent). Each is
+fixed boundary-aware — **Commercial output is unchanged for #1, #2, #5 and
+improved-only (a latent from-scratch bug fixed in both clouds) for #3, #4.**
+
+| # | Module | Live Gov error | Fix | Commercial impact |
+|---|--------|----------------|-----|-------------------|
+| 1 | `admin-plane/network.bicep` (`diag-loom-stdz` on the hub VNet) | `Category 'VMProtectionAlerts' is not supported` | `vnetDiagLogs` var: Commercial/GCC keep `category:'VMProtectionAlerts'`; GCC-High/IL5 use `categoryGroup:'allLogs'` (the same idiom `diagFw` already uses). | Byte-identical (Gov-only branch). |
+| 2 | `admin-plane/adx-cluster.bicep` SKU (default from `admin-plane/main.bicep` `adxSkuName`) | `Standard_E2a_v4 is not supported in usgovvirginia` | `effectiveAdxSkuName` in `main.bicep`: when a Gov boundary is left on the E2a_v4 Dev default, substitute the LIVE-verified Gov Dev SKU `Dev(No SLA)_Standard_D11_v2` (tier-preserving 1:1 swap — Basic tier, 1 node). Added `Standard_E2ads_v5`/`Standard_E4ads_v5` (LIVE-verified Gov) to the module `@allowed` list for operators wanting a Gov production tier. | Byte-identical (Gov-only branch; explicit SKUs pass through). |
+| 3 | `admin-plane/audit-stream.bicep` DCR (`dcr-loom-audit-<region>`) | `Types of transform output columns do not match ... TenantId [produced:'String', output:'Guid']` | `TenantId` is a RESERVED Log Analytics column typed `guid`; the pass-through `transformKql:'source'` emitted it as string. Cast it: `source | extend TenantId = toguid(TenantId)`. | Improved-only — same latent mismatch fixed in Commercial. |
+| 4 | `admin-plane/monitoring-default-alerts.bicep` (3 `scheduledQueryRules`) | `failed to resolve table or column expression ... ContainerAppConsoleLogs_CL` | The `ContainerAppConsoleLogs_CL` / `ContainerAppSystemLogs_CL` tables are created by the Container Apps diagnostic pipeline only after the Console first logs, so a fresh LAW lacks them and Gov validates the KQL at create time. Set `skipQueryValidation:true` on all three rules (purpose-built for alerts over not-yet-existent tables; the rule evaluates correctly once the table materializes). Pre-creating the `_CL` tables was rejected — their schema/lifecycle is owned by the platform. | Improved-only — same latent from-scratch failure fixed in Commercial. |
+| 5 | `admin-plane/swa-publish-rbac.bicep` (Website Contributor role assignment) | `RoleDefinitionDoesNotExist: de139f84175647ae9be6808fbbe706ee` | Website Contributor does not resolve in Azure Government. Module is now boundary-aware: Commercial/GCC keep Website Contributor (`de139f84-1756-47ae-9be6-808fbbe706ee`), GCC-High/IL5 fall back to Contributor (`b24988ac-6180-42a0-ab88-20f7382dd24c`) — the narrowest built-in available in Gov covering `Microsoft.Web/staticSites` write + listSecrets. `boundary` threaded from `main.bicep`. | Byte-identical (Gov-only branch; same role, same assignment GUID). |
