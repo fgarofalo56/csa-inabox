@@ -21,9 +21,15 @@ import {
   MessageBar, MessageBarBody,
   makeStyles, tokens,
 } from '@fluentui/react-components';
-import { Add20Regular } from '@fluentui/react-icons';
+import {
+  Add20Regular, BuildingShop20Regular, DatabaseSearch20Regular, CompassNorthwest20Regular,
+  CubeMultiple24Regular,
+} from '@fluentui/react-icons';
 import { PageShell } from '@/lib/components/page-shell';
-import { EmptyState } from '@/lib/components/empty-state';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
+import { GuidedEmptyState, type GuidedPath } from '@/lib/components/shared/guided-empty-state';
+import { ToolbarCrossLinks, type CrossLink } from '@/lib/components/shared/item-tab-strip';
+import { LOOM_ACCENT } from '@/lib/components/shared/accent-tokens';
 import { dataProductTypeLabel, DATA_PRODUCT_TYPES } from '@/lib/catalog/data-product-enums';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { ViewToggle, type LoomView } from '@/lib/components/ui/view-toggle';
@@ -136,6 +142,22 @@ export default function DataProductsPage() {
 
   return (
     <PageShell title="Data products" subtitle="Curated, governed data products — Microsoft Purview Unified Catalog parity">
+      <ToolbarCrossLinks
+        ariaLabel="Related surfaces"
+        links={[
+          { key: 'catalog', label: 'Catalog', icon: <DatabaseSearch20Regular />, href: '/catalog' },
+          { key: 'marketplace', label: 'Marketplace', icon: <BuildingShop20Regular />, href: '/marketplace' },
+          { key: 'onelake', label: 'OneLake', icon: <CompassNorthwest20Regular />, href: '/onelake' },
+        ] satisfies CrossLink[]}
+      />
+      <TeachingBanner
+        surfaceKey="data-products-hub"
+        title="Package data as a governed product"
+        message="A data product bundles datasets, dashboards and APIs into one shareable, governed asset with an owner, a governance domain and access policies — Microsoft Purview Unified Catalog parity. Publish one to make it discoverable in the catalog and marketplace."
+        icon={CubeMultiple24Regular}
+        accent={LOOM_ACCENT.magenta}
+        learnMoreHref="https://learn.microsoft.com/purview/concept-data-products"
+      />
       <div className={s.bar}>
         {loading
           ? <Subtitle2>Data products</Subtitle2>
@@ -152,11 +174,32 @@ export default function DataProductsPage() {
       {error && <MessageBar intent="error"><MessageBarBody style={{ overflowWrap: 'anywhere', wordBreak: 'break-word', minWidth: 0 }}>{error}</MessageBarBody></MessageBar>}
 
       {!loading && rows.length === 0 && !error && (
-        <EmptyState
-          icon={<visual.icon />}
+        <GuidedEmptyState
           title="No data products yet"
-          body="Curated, governed data products bundle datasets, dashboards, and APIs into one shareable asset — Microsoft Purview Unified Catalog parity. Create your first to populate this page."
-          primaryAction={{ label: 'New data product', onClick: () => router.push('/data-products/new') }}
+          intro="Curated, governed data products bundle datasets, dashboards and APIs into one shareable asset. Start from scratch or discover assets to package."
+          heroIcon={visual.icon}
+          paths={[
+            {
+              key: 'new', title: 'Create a data product',
+              body: 'Name it, set a governance domain, and attach assets.',
+              icon: Add20Regular, accent: LOOM_ACCENT.magenta,
+              href: '/data-products/new', onClick: () => router.push('/data-products/new'),
+            },
+            {
+              key: 'catalog', title: 'Browse the catalog',
+              body: 'Find datasets and reports to bundle into a product.',
+              icon: DatabaseSearch20Regular, accent: LOOM_ACCENT.blue,
+              href: '/catalog', onClick: () => router.push('/catalog'),
+            },
+            {
+              key: 'marketplace', title: 'Explore the marketplace',
+              body: 'See how published products appear to consumers.',
+              icon: BuildingShop20Regular, accent: LOOM_ACCENT.teal,
+              href: '/marketplace', onClick: () => router.push('/marketplace'),
+            },
+          ] satisfies GuidedPath[]}
+          learnMoreHref="https://learn.microsoft.com/purview/concept-data-products"
+          ariaLabel="Get started with data products"
         />
       )}
 

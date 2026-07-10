@@ -41,6 +41,7 @@ import { ItemTile } from '@/lib/components/ui/item-tile';
 import { TileGrid } from '@/lib/components/ui/tile-grid';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { itemVisual } from '@/lib/components/ui/item-type-visual';
+import { LearnPopover } from '@/lib/components/ui/learn-popover';
 import {
   workloadGroups,
   creatableItemTypes,
@@ -398,6 +399,11 @@ export default function WorkloadHubPage() {
               <Caption1 className={s.sectionHint}>
                 Core workloads plus the accelerators enabled in this tenant
               </Caption1>
+              <LearnPopover
+                title="Workloads vs item types"
+                content="A workload is a category of related capabilities (Data Engineering, Real-Time Intelligence, Power BI). The item types inside it are the things you create and manage. Core workloads ship with every tenant; accelerators stay opt-in until an admin enables them."
+                learnMoreHref="https://learn.microsoft.com/fabric/fundamentals/workspaces"
+              />
             </span>
           }
         >
@@ -414,6 +420,11 @@ export default function WorkloadHubPage() {
               <Caption1 className={s.sectionHint}>
                 Optional CSA accelerators you can enable
               </Caption1>
+              <LearnPopover
+                title="CSA accelerators"
+                content="Compliance, Geoanalytics, Graph + Vector, and other optional accelerators ship with Loom but stay opt-in. Enable one from the full workload catalog and its item types appear under My workloads. Every accelerator runs on an Azure-native backend."
+                learnMoreHref="https://learn.microsoft.com/azure/cloud-adoption-framework/scenarios/cloud-scale-analytics/"
+              />
             </span>
           }
         >

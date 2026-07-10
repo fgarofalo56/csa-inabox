@@ -47,6 +47,10 @@ import type { RibbonTab } from '@/lib/components/ribbon';
 import { KeyValueGrid } from '@/lib/components/ui/key-value-grid';
 import { EmptyState } from '@/lib/components/empty-state';
 import { useSharedEditorStyles } from './shared-styles';
+// UX-baseline shared components (SC-6 teaching banner + SC-9 ribbon
+// command-search) — additive over the real, unchanged environment backend.
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
+import { useRegisterRibbonCommands } from '@/lib/components/shared/ribbon-commands';
 
 const useLocalStyles = makeStyles({
   tabBody: { padding: tokens.spacingVerticalXL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, maxWidth: '880px' },
@@ -72,6 +76,11 @@ const useLocalStyles = makeStyles({
     color: tokens.colorBrandForeground1,
   },
   poolField: { maxWidth: '320px' },
+  teachWrap: {
+    paddingTop: tokens.spacingVerticalL,
+    paddingLeft: tokens.spacingHorizontalL,
+    paddingRight: tokens.spacingHorizontalL,
+  },
 });
 
 function useStyles() {
@@ -388,6 +397,12 @@ export function SparkEnvironmentEditor({ item, id }: { item: FabricItemType; id:
     ]},
   ], [dirty, busy, targetPool, validateBusy, save, publish, validate]);
 
+  // SC-9 — publish the ribbon actions (Save, Publish, Validate import) to the
+  // shared command registry so the in-ribbon Ctrl+Q / Alt+Q CommandSearch can
+  // run them. Called unconditionally (before the `new` early return) so hook
+  // order is stable.
+  useRegisterRibbonCommands(ribbon, 'spark-environment');
+
   if (id === 'new') {
     return (
       <NewItemCreateGate item={item} createLabel="Create Spark environment"
@@ -398,8 +413,18 @@ export function SparkEnvironmentEditor({ item, id }: { item: FabricItemType; id:
   const num = (v: number) => (Number.isFinite(v) ? String(v) : '');
 
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon} dirty={dirty} commandSearch main={
       <>
+        {/* SC-6 — teaching banner explaining the Spark-environment concept,
+            keyed per surface with a persistent dismiss. */}
+        <div className={styles.teachWrap}>
+          <TeachingBanner
+            surfaceKey="spark-environment-teach"
+            title="Bundle your Spark runtime, libraries & config"
+            message="A Spark environment captures the runtime version, compute sizing, public libraries (pip / conda), custom libraries (.whl / .jar), and Spark properties — then Publish bakes the spec onto a Synapse Spark pool and Attach wires it onto notebooks and job definitions. Azure-native; no Fabric capacity required."
+            learnMoreHref="https://learn.microsoft.com/azure/synapse-analytics/spark/apache-spark-azure-create-spark-configuration"
+          />
+        </div>
         <div className={styles.tabBar}>
           <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as string)}>
             <Tab value="runtime">Runtime</Tab>

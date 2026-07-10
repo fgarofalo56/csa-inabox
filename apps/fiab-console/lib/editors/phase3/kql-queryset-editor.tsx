@@ -28,12 +28,17 @@ import {
   Add20Regular, Delete20Regular, Save20Regular, Play20Regular,
   DocumentTable20Regular, DatabaseLink20Regular,
   Sparkle16Regular, Info16Regular, Wrench16Regular,
+  Database20Regular, Notebook20Regular, Bot20Regular,
+  DataArea20Regular, CloudDatabase20Regular, Flash20Regular,
+  Add24Regular, PlayCircle24Regular,
 } from '@fluentui/react-icons';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { ItemEditorChrome } from '../item-editor-chrome';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { KqlResultsPanel, type KqlResult } from './kql-results';
+import { ToolbarCrossLinks } from '@/lib/components/shared/item-tab-strip';
+import { GuidedEmptyState } from '@/lib/components/shared/guided-empty-state';
 import { useStyles } from './styles';
 
 type QuerySourceType = 'adx' | 'log-analytics' | 'app-insights';
@@ -397,6 +402,48 @@ export function KqlQuerysetEditor({ item, id }: { item: FabricItemType; id: stri
       }
       main={
         <div className={s.pad}>
+          {/* SC-8 — RTI toolbar cross-links to sibling Real-Time Intelligence
+              surfaces, one-for-one with the Fabric Eventhouse/KQL item chrome.
+              Routing-only: every link targets an existing Loom route. */}
+          <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: tokens.spacingHorizontalM }}>
+            <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Real-Time Intelligence</Caption1>
+            <div style={{ marginLeft: 'auto' }}>
+              <ToolbarCrossLinks
+                ariaLabel="Real-Time Intelligence surfaces"
+                maxInline={5}
+                links={[
+                  { key: 'eventhouse', label: 'Eventhouse', icon: <Database20Regular />, href: '/items/eventhouse' },
+                  { key: 'dashboard', label: 'Real-Time Dashboard', icon: <DataArea20Regular />, href: '/items/kql-dashboard/new' },
+                  { key: 'notebook', label: 'Notebook', icon: <Notebook20Regular />, href: '/items/notebook/new' },
+                  { key: 'agent', label: 'Data Agent', icon: <Bot20Regular />, href: '/items/data-agent/new' },
+                  { key: 'ops', label: 'Operations Agent', icon: <Flash20Regular />, href: '/items/operations-agent/new' },
+                  { key: 'activator', label: 'Activator', icon: <Flash20Regular />, href: '/items/activator/new' },
+                  { key: 'onelake', label: 'OneLake', icon: <CloudDatabase20Regular />, href: '/onelake' },
+                ]}
+              />
+            </div>
+          </div>
+
+          {/* SC-4 — guided empty state when the queryset has no saved queries. */}
+          {queries.length === 0 && (
+            <GuidedEmptyState
+              variant="block"
+              heroIcon={DocumentTable20Regular}
+              ariaLabel="Author your first KQL query"
+              title="Author your first KQL query"
+              intro="A queryset holds named KQL queries you run against the shared ADX cluster (and, when bound, federated Log Analytics / Application Insights sources). Start blank, let Copilot draft it, or bind a source first."
+              paths={[
+                { key: 'new', title: 'New blank query', body: 'Add an empty query and start typing KQL in the editor below.', icon: Add24Regular, onClick: addQuery },
+                { key: 'source', title: 'Bind a data source', body: 'Query ADX, Log Analytics, or Application Insights via the cluster() proxy.', icon: DatabaseLink20Regular, onClick: () => { setDraftSrcType(draft.sourceType || 'adx'); setSrcDlgOpen(true); } },
+                { key: 'run', title: 'Run the smoke test', body: 'Add a ready-made "print" query to confirm the cluster answers.', icon: PlayCircle24Regular, onClick: addQuery },
+              ]}
+              askCopilot={{
+                onClick: () => { setAssistResult(null); setAssistError(null); setAssistView('prompt'); },
+                body: 'Describe the query in words (e.g. "count events by source in the last hour") and let Copilot write the KQL.',
+              }}
+              learnMoreHref="https://learn.microsoft.com/azure/data-explorer/kusto/query/"
+            />
+          )}
           <div className={s.toolbar}>
             <Input value={draft.title} onChange={(_: unknown, d: any) => { setDraft({ ...draft, title: d.value }); setDirty(true); }} placeholder="Query title" style={{ minWidth: 220 }} />
             <Caption1>db: <strong>{draft.database || qs?.database || qs?.defaultDatabase || 'loomdb-default'}</strong></Caption1>
