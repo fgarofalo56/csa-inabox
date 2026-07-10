@@ -28,13 +28,15 @@ import {
 } from '@fluentui/react-components';
 import {
   Add24Regular, Delete20Regular, Edit20Regular, ArrowSync24Regular,
-  ArrowUp20Regular, ArrowDown20Regular,
+  ArrowUp20Regular, ArrowDown20Regular, TagMultiple24Regular, Organization24Regular,
 } from '@fluentui/react-icons';
 import { AdminShell } from '@/lib/components/admin-shell';
 import { Section, Toolbar } from '@/lib/components/ui/section';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { useAdminTabStyles } from '@/lib/components/ui/admin-tab-styles';
 import { SectionExplainer } from '@/lib/components/ui/learn-popover';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
+import { GuidedEmptyState } from '@/lib/components/shared/guided-empty-state';
 import {
   type AttributeGroup, type AttributeDef, type AttributeFieldType,
   ATTRIBUTE_FIELD_TYPES, CHOICE_FIELD_TYPES, kebab, validateAttributes,
@@ -257,6 +259,14 @@ export default function AttributeGroupsPage() {
         ],
       }}
     >
+      <TeachingBanner
+        surfaceKey="admin-attribute-groups"
+        title="Extend items with governed metadata"
+        message="Define attribute groups — the Loom-native equivalent of Purview Unified Catalog custom metadata. Scope each group to one or more domains, add typed attributes (text, choice, date, boolean, number, rich text), and they appear on the Create wizard and item Edit dialogs. No Microsoft Purview account is required."
+        icon={TagMultiple24Regular}
+        learnMoreHref="https://learn.microsoft.com/purview/unified-catalog-managed-attributes"
+      />
+
       <Section title="About custom attributes">
         <SectionExplainer>
           Define <strong>attribute groups</strong> that attach extra, governed metadata to the items people create.
@@ -283,9 +293,23 @@ export default function AttributeGroupsPage() {
             {domains.map((d) => <Option key={d.id} value={d.id}>{d.name}</Option>)}
           </Dropdown>
         } />
-        {loading && !error
-          ? <Spinner label="Loading attribute groups…" />
-          : <LoomDataTable columns={columns} rows={filtered} getRowId={(g) => g.id} onRowClick={(g) => openEdit(g)} empty={q || domainFilter ? 'No groups match your filter.' : 'No attribute groups yet. Click "Add group" to define your first schema.'} ariaLabel="Attribute groups" />}
+        {loading && !error ? (
+          <Spinner label="Loading attribute groups…" />
+        ) : (groups?.length ?? 0) === 0 && !q && !domainFilter ? (
+          <GuidedEmptyState
+            title="Define your first attribute group"
+            intro="Attribute groups attach extra, governed metadata to the items people create — the Azure-native equivalent of Purview custom metadata."
+            heroIcon={TagMultiple24Regular}
+            paths={[
+              { key: 'add', title: 'Add attribute group', body: 'Name a group, scope it to domains, and add typed attributes.', icon: Add24Regular, onClick: () => { setNewName(''); setNewDesc(''); setNewDomains([]); setActionErr(null); setCreateOpen(true); } },
+              { key: 'domains', title: 'Set up domains first', body: 'Scope groups to governance domains for targeted metadata.', icon: Organization24Regular, href: '/admin/domains' },
+            ]}
+            learnMoreHref="https://learn.microsoft.com/purview/unified-catalog-managed-attributes"
+            ariaLabel="Get started with attribute groups"
+          />
+        ) : (
+          <LoomDataTable columns={columns} rows={filtered} getRowId={(g) => g.id} onRowClick={(g) => openEdit(g)} empty={q || domainFilter ? 'No groups match your filter.' : 'No attribute groups yet. Click "Add group" to define your first schema.'} ariaLabel="Attribute groups" />
+        )}
       </Section>
 
       {/* Create-group dialog */}
