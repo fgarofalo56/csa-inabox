@@ -20,6 +20,7 @@ import {
   Grid24Regular, Add16Regular,
 } from '@fluentui/react-icons';
 import { listWorkspaces, type Workspace } from '@/lib/api/workspaces';
+import { WorkspaceAvatar } from '@/lib/components/workspace-avatar';
 import { useUi } from '@/lib/stores/ui';
 
 const useStyles = makeStyles({
@@ -72,6 +73,10 @@ export function WorkspaceSwitcher() {
   }
 
   const activeId = activeWorkspace?.id;
+  // Resolve the active workspace's image from the full list when it has loaded,
+  // so the trigger shows the custom avatar (falls back to an initials chip).
+  const activeImage = activeId ? (all ?? []).find((w) => w.id === activeId)?.image : undefined;
+  const byId = new Map((all ?? []).map((w) => [w.id, w] as const));
   const recentIds = new Set(recentWorkspaces.map((w) => w.id));
   // "All" section excludes anything already shown under Recent to avoid dupes.
   const others = (all ?? []).filter((w) => !recentIds.has(w.id));
@@ -81,7 +86,9 @@ export function WorkspaceSwitcher() {
       <MenuTrigger disableButtonEnhancement>
         <Tooltip content="Switch workspace" relationship="label">
           <Button appearance="transparent" className={styles.trigger}
-            icon={<Building24Regular />}
+            icon={activeWorkspace
+              ? <WorkspaceAvatar workspaceId={activeWorkspace.id} name={activeWorkspace.name} image={activeImage} size={20} />
+              : <Building24Regular />}
             aria-label={`Workspace: ${activeWorkspace?.name ?? 'All workspaces'}. Switch workspace`}>
             <span className={styles.label}>{activeWorkspace?.name ?? 'All workspaces'}</span>
             <ChevronDown16Regular />
@@ -103,7 +110,9 @@ export function WorkspaceSwitcher() {
               {recentWorkspaces.map((w) => (
                 <MenuItem
                   key={w.id}
-                  icon={activeId === w.id ? <Checkmark16Regular /> : <Building24Regular />}
+                  icon={activeId === w.id
+                    ? <Checkmark16Regular />
+                    : <WorkspaceAvatar workspaceId={w.id} name={w.name} image={byId.get(w.id)?.image} size={20} />}
                   onClick={() => pick(w)}
                 >
                   {w.name}

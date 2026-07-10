@@ -35,6 +35,8 @@ import {
 import { Dismiss24Regular, Checkmark16Regular } from '@fluentui/react-icons';
 import { DomainImageGallery } from '@/lib/components/domain-image-gallery';
 import { DomainImageChip } from '@/lib/components/domain-image-presets';
+import { DomainGlyph, DOMAIN_ICON_PICKER, DOMAIN_THEME_COLORS } from '@/lib/domains/domain-icons';
+import { Checkmark12Filled } from '@fluentui/react-icons';
 import { isGovCloud } from '@/lib/azure/cloud-endpoints';
 import { AZURE_PUBLIC_REGIONS, AZURE_USGOV_REGIONS, type AzureRegion } from '@/lib/azure/azure-regions';
 
@@ -131,6 +133,27 @@ const useStyles = makeStyles({
   sectionHeadSpaced: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, marginTop: tokens.spacingVerticalM },
   labelSwatch: { display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
   swatch: { width: '12px', height: '12px', borderRadius: tokens.borderRadiusSmall, display: 'inline-block' },
+  // Fluent icon + theme-color picker (mirrors the create-domain dialog so an
+  // existing domain/subdomain edits its glyph the same way it was created).
+  iconGrid: {
+    display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(64px, 1fr))',
+    gap: tokens.spacingHorizontalS,
+  },
+  iconTile: {
+    display: 'flex', flexDirection: 'column', alignItems: 'center', gap: tokens.spacingVerticalXXS,
+    padding: tokens.spacingVerticalXS, borderRadius: tokens.borderRadiusMedium, cursor: 'pointer',
+    border: `2px solid transparent`, background: 'none',
+    ':hover': { backgroundColor: tokens.colorNeutralBackground1Hover },
+  },
+  iconTileSel: { border: `2px solid ${tokens.colorBrandStroke1}`, backgroundColor: tokens.colorBrandBackground2 },
+  iconTileLabel: { fontSize: '10px', textAlign: 'center', color: tokens.colorNeutralForeground2 },
+  colorRow: { display: 'flex', flexWrap: 'wrap', gap: tokens.spacingHorizontalS, marginTop: tokens.spacingVerticalXS },
+  colorSwatch: {
+    width: '28px', height: '28px', borderRadius: '50%', cursor: 'pointer', padding: 0,
+    border: `2px solid transparent`,
+    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+  },
+  colorSwatchSel: { border: `2px solid ${tokens.colorBrandStroke1}`, outline: `2px solid ${tokens.colorBrandBackground}` },
 });
 
 type TabKey = 'general' | 'image' | 'admins' | 'contributors' | 'default-domain' | 'delegated' | 'topology';
@@ -160,7 +183,7 @@ export function DomainSettingsPane({ domain, isTenantAdmin, onClose, onSaved }: 
         <div className={styles.body}>
           <TabList selectedValue={tab} onTabSelect={(_e, d) => setTab(d.value as TabKey)} size="small">
             <Tab value="general">General</Tab>
-            {!isSubdomain && <Tab value="image">Image</Tab>}
+            <Tab value="image">Image</Tab>
             {!isSubdomain && <Tab value="admins">Admins</Tab>}
             {!isSubdomain && <Tab value="contributors">Contributors</Tab>}
             {!isSubdomain && <Tab value="default-domain">Default domain</Tab>}
@@ -169,7 +192,7 @@ export function DomainSettingsPane({ domain, isTenantAdmin, onClose, onSaved }: 
           </TabList>
 
           {tab === 'general' && <GeneralTab domain={domain} isTenantAdmin={isTenantAdmin} onSaved={onSaved} />}
-          {tab === 'image' && !isSubdomain && <ImageTab domain={domain} onSaved={onSaved} />}
+          {tab === 'image' && <ImageTab domain={domain} onSaved={onSaved} />}
           {tab === 'admins' && !isSubdomain && <AdminsTab domain={domain} isTenantAdmin={isTenantAdmin} onSaved={onSaved} />}
           {tab === 'contributors' && !isSubdomain && <ContributorsTab domain={domain} onSaved={onSaved} />}
           {tab === 'default-domain' && !isSubdomain && <DefaultDomainTab domain={domain} onSaved={onSaved} />}
@@ -303,26 +326,92 @@ function GeneralTab({ domain, isTenantAdmin, onSaved }: { domain: DomainRecord; 
 
 function ImageTab({ domain, onSaved }: { domain: DomainRecord; onSaved: (d: DomainRecord) => void }) {
   const styles = useStyles();
+  // Two selection models coexist (per DomainImageChip precedence): a Fluent icon
+  // NAME + theme color (icon/themeColor) or a gallery imageKey. Picking a Fluent
+  // icon clears imageKey; picking from the gallery clears the Fluent icon — so the
+  // preview and the persisted glyph never fight.
+  const [icon, setIcon] = useState<string | undefined>(domain.icon);
+  const [themeColor, setThemeColor] = useState<string>(domain.themeColor || DOMAIN_THEME_COLORS[0]);
   const [imageKey, setImageKey] = useState(domain.imageKey || '');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  useEffect(() => { setImageKey(domain.imageKey || ''); }, [domain.id]);
+  useEffect(() => {
+    setIcon(domain.icon);
+    setThemeColor(domain.themeColor || DOMAIN_THEME_COLORS[0]);
+    setImageKey(domain.imageKey || '');
+  }, [domain.id]);
+
+  const pickIcon = (name: string) => { setIcon(name); setImageKey(''); };
+  const pickGallery = (key: string) => { setImageKey(key); setIcon(undefined); };
 
   const apply = async () => {
     setBusy(true); setErr(null);
-    try { onSaved(await patchDomain(domain.id, { imageKey })); }
+    try {
+      // Persist all three so whichever model the user chose wins and the other is
+      // cleared. Empty string clears a field on the PATCH route.
+      onSaved(await patchDomain(domain.id, {
+        icon: icon || '',
+        themeColor: icon ? themeColor : '',
+        imageKey,
+      }));
+    }
     catch (e: any) { setErr(e?.message || String(e)); }
     finally { setBusy(false); }
   };
 
   return (
     <div className={styles.tabPanel}>
-      <Body1>Choose an image or color to represent this domain in the catalog domain selector.</Body1>
+      <Body1>Choose an icon, image, or color to represent this domain in the catalog domain selector, the Domains list, and the workspace picker.</Body1>
       <div className={styles.previewRow}>
-        <DomainImageChip imageKey={imageKey} icon={domain.icon} themeColor={domain.themeColor} fallbackColor={domain.color} size={64} />
+        {icon
+          ? <DomainGlyph icon={icon} color={themeColor} size={64} />
+          : <DomainImageChip imageKey={imageKey} icon={undefined} themeColor={undefined} fallbackColor={domain.color} size={64} />}
         <Caption1 className={styles.note}>Current selection preview</Caption1>
       </div>
-      <DomainImageGallery value={imageKey} onChange={setImageKey} />
+
+      <Subtitle2>Icon</Subtitle2>
+      <Caption1 className={styles.note}>A themed Fluent glyph — the same picker used when a domain is created.</Caption1>
+      <div className={styles.iconGrid} role="radiogroup" aria-label="Domain icon">
+        {DOMAIN_ICON_PICKER.map((opt) => {
+          const sel = icon === opt.name;
+          return (
+            <button
+              key={opt.name}
+              type="button"
+              role="radio"
+              aria-checked={sel}
+              aria-label={opt.label}
+              className={`${styles.iconTile} ${sel ? styles.iconTileSel : ''}`}
+              onClick={() => pickIcon(opt.name)}
+            >
+              <DomainGlyph icon={opt.name} color={themeColor} size={30} />
+              <span className={styles.iconTileLabel}>{opt.label}</span>
+            </button>
+          );
+        })}
+      </div>
+      <div className={styles.colorRow} role="radiogroup" aria-label="Domain color">
+        {DOMAIN_THEME_COLORS.map((c) => {
+          const sel = icon != null && themeColor.toLowerCase() === c.toLowerCase();
+          return (
+            <button
+              key={c}
+              type="button"
+              role="radio"
+              aria-checked={sel}
+              aria-label={`Color ${c}`}
+              className={`${styles.colorSwatch} ${sel ? styles.colorSwatchSel : ''}`}
+              style={{ backgroundColor: c }}
+              onClick={() => { setThemeColor(c); if (!icon) setIcon('building'); }}
+            >
+              {sel && <Checkmark12Filled color="#fff" />}
+            </button>
+          );
+        })}
+      </div>
+
+      <Subtitle2>Or choose an image / color from the gallery</Subtitle2>
+      <DomainImageGallery value={imageKey} onChange={pickGallery} />
       <ApplyButton busy={busy} error={err} onApply={apply} />
     </div>
   );

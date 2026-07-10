@@ -17,7 +17,7 @@ import { clientFetch } from '@/lib/client-fetch';
  * the tabs require a Fabric workspace (no-fabric-dependency.md).
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Drawer, DrawerHeader, DrawerHeaderTitle, DrawerBody,
   TabList, Tab, Button, Input, Textarea, Dropdown, Option, Field, Badge,
@@ -25,15 +25,16 @@ import {
   MessageBar, MessageBarBody, MessageBarTitle,
   makeStyles, tokens,
 } from '@fluentui/react-components';
-import { Dismiss24Regular, Search16Regular, Open16Regular } from '@fluentui/react-icons';
+import { Dismiss24Regular, Search16Regular, Open16Regular, ImageAdd24Regular, Delete16Regular } from '@fluentui/react-icons';
 import { isGovCloud } from '@/lib/azure/cloud-endpoints';
+import { WorkspaceAvatar } from '@/lib/components/workspace-avatar';
 import type { Workspace, WorkspaceLicenseMode } from '@/lib/types/workspace';
 
 interface WsRef { id: string; name: string }
 interface FabricCapacityOpt { id: string; displayName: string; sku: string; region?: string; state?: string; }
 interface StorageOpt { id: string; name: string; isHns: boolean; resourceGroup?: string; }
 
-type TabKey = 'general' | 'license' | 'm365' | 'onelake';
+type TabKey = 'general' | 'image' | 'license' | 'm365' | 'onelake';
 
 const LICENSE_MODES: { value: WorkspaceLicenseMode; label: string; govHidden?: boolean }[] = [
   { value: 'Org', label: 'Organizational (Azure-native)' },
@@ -133,6 +134,7 @@ export function WorkspaceSettingsPane({ workspace, onClose, onSaved, isAdmin }: 
         <div className={styles.body}>
           <TabList selectedValue={tab} onTabSelect={(_e, d) => setTab(d.value as TabKey)} size="small">
             <Tab value="general">General</Tab>
+            <Tab value="image">Image</Tab>
             <Tab value="license">License</Tab>
             <Tab value="m365">Teams &amp; SharePoint</Tab>
             <Tab value="onelake">OneLake storage</Tab>
@@ -142,6 +144,7 @@ export function WorkspaceSettingsPane({ workspace, onClose, onSaved, isAdmin }: 
           {loadError && <MessageBar intent="error"><MessageBarBody>{loadError}</MessageBarBody></MessageBar>}
 
           {full && tab === 'general' && <GeneralTab ws={full} isAdmin={isAdmin} onSaved={handleSaved} />}
+          {full && tab === 'image' && <ImageTab ws={full} onSaved={handleSaved} />}
           {full && tab === 'license' && <LicenseTab ws={full} isAdmin={isAdmin} onSaved={handleSaved} />}
           {full && tab === 'm365' && <M365Tab ws={full} onSaved={handleSaved} />}
           {full && tab === 'onelake' && <OneLakeTab ws={full} isAdmin={isAdmin} onSaved={handleSaved} />}
@@ -178,6 +181,100 @@ function GeneralTab({ ws, isAdmin, onSaved }: { ws: Workspace; isAdmin?: boolean
         <Caption1 className={styles.note}>Contacts: {ws.contacts.join(', ')}</Caption1>
       )}
       <ApplyButton busy={busy} error={err} onApply={apply} disabled={!name.trim()} />
+    </div>
+  );
+}
+
+// ============================================================
+// Image (Power BI-style workspace avatar)
+// ============================================================
+
+const ALLOWED_IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
+const MAX_IMAGE_BYTES = 1024 * 1024;
+
+function ImageTab({ ws, onSaved }: { ws: Workspace; onSaved: (w: Workspace) => void }) {
+  const styles = useStyles();
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const hasImage = !!ws.image;
+
+  const readAsDataUri = (file: File) =>
+    new Promise<string>((resolve, reject) => {
+      const fr = new FileReader();
+      fr.onload = () => resolve(String(fr.result));
+      fr.onerror = () => reject(fr.error || new Error('Could not read file'));
+      fr.readAsDataURL(file);
+    });
+
+  const onPick = async (file: File | undefined) => {
+    if (!file) return;
+    setErr(null);
+    if (!ALLOWED_IMAGE_TYPES.includes(file.type)) {
+      setErr(`Unsupported type "${file.type || 'unknown'}". Use PNG, JPEG, GIF, or WebP (SVG is not accepted).`);
+      return;
+    }
+    if (file.size > MAX_IMAGE_BYTES) {
+      setErr(`Image is ${(file.size / 1024).toFixed(0)} KiB; the maximum is ${MAX_IMAGE_BYTES / 1024} KiB.`);
+      return;
+    }
+    setBusy(true);
+    try {
+      const dataUri = await readAsDataUri(file);
+      const r = await clientFetch(`/api/workspaces/${encodeURIComponent(ws.id)}/image`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ dataUri }),
+      });
+      const j = await r.json();
+      if (!r.ok || j?.ok === false) { setErr(j?.error || `HTTP ${r.status}`); return; }
+      onSaved((j.workspace ?? { ...ws, image: j.image }) as Workspace);
+    } catch (e: any) { setErr(e?.message || String(e)); }
+    finally { setBusy(false); if (inputRef.current) inputRef.current.value = ''; }
+  };
+
+  const remove = async () => {
+    setBusy(true); setErr(null);
+    try {
+      const r = await clientFetch(`/api/workspaces/${encodeURIComponent(ws.id)}/image`, { method: 'DELETE' });
+      const j = await r.json();
+      if (!r.ok || j?.ok === false) { setErr(j?.error || `HTTP ${r.status}`); return; }
+      onSaved((j.workspace ?? { ...ws, image: undefined }) as Workspace);
+    } catch (e: any) { setErr(e?.message || String(e)); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <div className={styles.tabPanel}>
+      <Subtitle2>Workspace image</Subtitle2>
+      <Caption1 className={styles.note}>
+        Give this workspace a custom image — the same as a Power BI workspace image. It appears in the
+        workspace header, cards, and switcher. PNG, JPEG, GIF, or WebP, up to 1 MiB.
+      </Caption1>
+      <div className={styles.applyRow}>
+        <WorkspaceAvatar workspaceId={ws.id} name={ws.name} image={ws.image} size={96} />
+        <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS }}>
+          <Button
+            appearance="primary"
+            icon={busy ? <Spinner size="tiny" /> : <ImageAdd24Regular />}
+            disabled={busy}
+            onClick={() => inputRef.current?.click()}
+          >
+            {hasImage ? 'Replace image' : 'Upload image'}
+          </Button>
+          {hasImage && (
+            <Button appearance="subtle" icon={<Delete16Regular />} disabled={busy} onClick={remove}>
+              Remove image
+            </Button>
+          )}
+        </div>
+      </div>
+      <input
+        ref={inputRef}
+        type="file"
+        accept={ALLOWED_IMAGE_TYPES.join(',')}
+        style={{ display: 'none' }}
+        onChange={(e) => onPick(e.target.files?.[0] || undefined)}
+      />
+      {err && <MessageBar intent="error"><MessageBarBody>{err}</MessageBarBody></MessageBar>}
     </div>
   );
 }
