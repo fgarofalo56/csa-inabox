@@ -38,15 +38,33 @@ interface RunRecord {
  * never break a poll. Azure-native: this is the DEFAULT history backend, no
  * Fabric required.
  */
-async function recordRun(items: any, nb: WorkspaceItem, workspaceId: string, runId: string, rec: Omit<RunRecord, 'id' | 'jobType' | 'invokeType' | 'startTimeUtc'>): Promise<void> {
+async function recordRun(
+  items: any,
+  nb: WorkspaceItem,
+  workspaceId: string,
+  runId: string,
+  rec: Omit<RunRecord, 'id' | 'jobType' | 'invokeType' | 'startTimeUtc'>,
+  // When set, drop this key from pendingRuns in the SAME write — so a finished
+  // queued "Run all" both records history AND clears its queue entry in one
+  // replace (two separate writes raced on shared state and one clobbered the
+  // other; this keeps a single source of truth).
+  clearPendingKey?: string,
+): Promise<void> {
   try {
     const state = (nb.state as any) || {};
     const history: RunRecord[] = Array.isArray(state.runHistory) ? state.runHistory : [];
     if (history.some((h) => h.id === runId)) return;
     const startedAt = state.pendingRuns?.[runId]?.startedAt || new Date(Date.now() - 1000).toISOString();
     history.push({ id: runId, jobType: 'NotebookRun', invokeType: 'Manual', startTimeUtc: startedAt, ...rec });
+    let pendingRuns = state.pendingRuns;
+    if (clearPendingKey && pendingRuns && typeof pendingRuns === 'object') {
+      pendingRuns = { ...pendingRuns };
+      delete pendingRuns[clearPendingKey];
+    }
     await items.item(nb.id, workspaceId).replace({
-      ...nb, state: { ...state, runHistory: history.slice(-50) }, updatedAt: new Date().toISOString(),
+      ...nb,
+      state: { ...state, runHistory: history.slice(-50), ...(clearPendingKey ? { pendingRuns } : {}) },
+      updatedAt: new Date().toISOString(),
     } as WorkspaceItem);
   } catch { /* non-fatal — history is best-effort */ }
 }
@@ -73,7 +91,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string;
     const pending = state.pendingRuns?.[runId] || state.pendingRuns?.[basePendingKey];
     // Whole-notebook "Run all" queue: one Livy statement per code cell, each with
     // its own kind (mixed sparksql/pyspark notebooks can't run as one statement).
-    const queue: Array<{ source: string; lang: string }> = Array.isArray(pending?.queue) ? pending.queue : [];
+    const queue: Array<{ source: string; lang: string; cellId?: string }> = Array.isArray(pending?.queue) ? pending.queue : [];
     const code: string = pending?.source || state.code || '';
     // v3.x bug fix: previously 'sparksql' was bucketed into Scala-kind 'spark'
     // which made `show databases` hang because Livy tried to parse SQL as
@@ -173,7 +191,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string;
             phase: queue.length > 1 ? `cell 1/${queue.length} running` : 'statement-submitted',
           });
         }
-        if (['error', 'dead', 'killed'].includes(sess.state)) {
+        if (['error', 'dead', 'killed', 'shutting_down'].includes(sess.state)) {
           return NextResponse.json({ ok: false, error: `Spark session ${sessionId} entered terminal state '${sess.state}'`, status: sess.state });
         }
         return NextResponse.json({ ok: true, status: sess.state, runId, phase: 'session-starting' });
@@ -223,16 +241,66 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string;
         richDisplay = buildLoomDisplay(sqlJson, sampleRows) || undefined;
       }
 
+      // Build the per-statement output ONCE (used for cell attribution + the
+      // top-level response). A cancelled/aborted statement (Livy state
+      // 'cancelled'/'cancelling' with neither an ok nor error payload) becomes an
+      // honest error output instead of a null the client would poll to the 12-min
+      // timeout and then show blank (R3 #3).
+      const stmtState = String((stmt as any).state || '').toLowerCase();
+      const isCancelled = stmtState === 'cancelled' || stmtState === 'cancelling';
+      const stmtOutput =
+        out.status === 'ok'
+          ? {
+              status: 'ok' as const,
+              data: out.data || {},
+              textPlain: sqlTable || out.data?.['text/plain'] || '(no output)',
+              rowCount: sqlJson?.data?.length ?? richDisplay?.totalCount,
+              richDisplay,
+            }
+          : out.status === 'error'
+            ? { status: 'error' as const, ename: out.ename, evalue: out.evalue, traceback: out.traceback }
+            : isCancelled
+              ? {
+                  status: 'error' as const,
+                  ename: 'Cancelled',
+                  evalue: `Spark statement ${stmtId} on session ${sessionId} was ${stmtState} before it produced output.`,
+                }
+              : null;
+      const isTerminal = stmtOutput !== null;
+
+      // Accumulate the just-finished cell's output into the queue's cellOutputs
+      // map (R3 #2 — "Run all" renders per-cell output). qIdx points at the NEXT
+      // statement to submit, so the in-flight statement is queue[qIdx-1]; its
+      // cellId attributes the output to a cell (a multi-statement SQL cell keys
+      // all its splits to the one cell, last wins — same as a single-cell run).
+      // Bounded: drop the raw `data` blob (the grid renders textPlain +
+      // richDisplay, both already sampled) and cap textPlain.
+      const qIdx = Number(pending?.qIdx) || 0;
+      const boundForCell = (o: NonNullable<typeof stmtOutput>): Record<string, unknown> => {
+        const { data: _drop, ...rest } = o as Record<string, unknown>;
+        if (typeof rest.textPlain === 'string' && rest.textPlain.length > 20000) {
+          rest.textPlain = rest.textPlain.slice(0, 20000) + '\n… (truncated)';
+        }
+        return rest;
+      };
+      let cellOutputs: Record<string, unknown> | undefined;
+      if (queue.length > 0 && stmtOutput) {
+        const doneCellId = queue[Math.max(0, qIdx - 1)]?.cellId;
+        const acc: Record<string, unknown> = { ...(pending?.cellOutputs || {}) };
+        if (doneCellId) acc[doneCellId] = boundForCell(stmtOutput);
+        cellOutputs = acc;
+      }
+
       // Whole-notebook queue: previous cell finished OK and more cells remain —
       // submit the next one and keep the client polling (runId promotes to the
-      // new statement id; no output until the LAST cell so ✓ means "all ran").
-      const qIdx = Number(pending?.qIdx) || 0;
+      // new statement id). Each poll carries the running cellOutputs tally so the
+      // editor patches each cell's output the moment its statement completes.
       if (out.status === 'ok' && queue.length > 0 && qIdx > 0 && qIdx < queue.length) {
         const next = queue[qIdx];
         const nstmt = await submitLivyStatement(pool, sessionId, { code: next.source, kind: next.lang as any });
         try {
           const nextPending = { ...(state.pendingRuns || {}) };
-          nextPending[basePendingKey] = { ...pending, qIdx: qIdx + 1 };
+          nextPending[basePendingKey] = { ...pending, qIdx: qIdx + 1, cellOutputs: cellOutputs ?? pending?.cellOutputs };
           await items.item(nb.id, workspaceId).replace({
             ...nb, state: { ...state, pendingRuns: nextPending }, updatedAt: new Date().toISOString(),
           } as WorkspaceItem);
@@ -242,40 +310,25 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string;
           status: 'running',
           runId: `spark:${pool}:${sessionId}:${nstmt.id}`,
           phase: `cell ${qIdx + 1}/${queue.length} running`,
+          cellOutputs,
         });
       }
-      // Terminal for a queued run (last cell ok, or any cell errored): drop the
-      // queue entry so a re-run starts fresh.
-      if (queue.length > 0 && (out.status === 'ok' || out.status === 'error')) {
-        try {
-          const nextPending = { ...(state.pendingRuns || {}) };
-          delete nextPending[basePendingKey];
-          await items.item(nb.id, workspaceId).replace({
-            ...nb, state: { ...state, pendingRuns: nextPending }, updatedAt: new Date().toISOString(),
-          } as WorkspaceItem);
-        } catch { /* non-fatal */ }
-      }
-      if (out.status === 'ok' || out.status === 'error') await recordRun(items, nb, workspaceId, runId, {
-        status: out.status === 'ok' ? 'Completed' : 'Failed', endTimeUtc: new Date().toISOString(),
-        failureReason: out.status === 'error' ? { errorCode: out.ename, message: out.evalue } : null,
-      });
+      // Terminal for a queued run (last cell ok, or any cell errored/cancelled):
+      // record history AND drop the queue entry in one write so a re-run starts
+      // fresh (clearPendingKey below).
+      if (isTerminal) await recordRun(items, nb, workspaceId, runId, {
+        status: stmtOutput!.status === 'ok' ? 'Completed' : 'Failed', endTimeUtc: new Date().toISOString(),
+        failureReason: stmtOutput!.status === 'error'
+          ? { errorCode: (stmtOutput as { ename?: string }).ename, message: (stmtOutput as { evalue?: string }).evalue }
+          : null,
+      }, queue.length > 0 ? basePendingKey : undefined);
       return NextResponse.json({
         ok: true,
-        status: stmt.state,
+        status: isCancelled ? 'cancelled' : stmt.state,
         runId,
         phase: 'statement-running',
-        output: out.status === 'ok' ? {
-          status: 'ok',
-          data: out.data || {},
-          textPlain: sqlTable || out.data?.['text/plain'] || '(no output)',
-          rowCount: sqlJson?.data?.length ?? richDisplay?.totalCount,
-          richDisplay,
-        } : out.status === 'error' ? {
-          status: 'error',
-          ename: out.ename,
-          evalue: out.evalue,
-          traceback: out.traceback,
-        } : null,
+        output: stmtOutput,
+        cellOutputs,
       });
     }
 

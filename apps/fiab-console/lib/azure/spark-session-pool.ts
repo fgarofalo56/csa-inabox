@@ -74,7 +74,7 @@ import {
   defaultSparkPool,
   type LivyKind,
 } from '@/lib/azure/synapse-livy-client';
-import { synapseLogAnalyticsConf } from '@/lib/spark/config-presets';
+import { defaultSynapseSizing as computeDefaultSynapseSizing } from '@/lib/spark/spark-sizing';
 import {
   leaseStoreMode,
   leaseStoreStatus,
@@ -258,16 +258,16 @@ export function sparkPoolBackendStatus(): SparkBackendStatus {
 
 /**
  * The default Synapse sizing the run route computes when a notebook run carries
- * NO custom session config. Mirrors app/api/items/notebook/[id]/run: sizing is
- * `undefined` (sizingKey '') when Log-Analytics diagnostics are off, or
- * `{ conf: <LA conf> }` when they are on. Kept 1:1 with the run route so a warm
- * session's sizingKey matches a default run and the hand-off actually hits.
+ * NO custom session config. Kept 1:1 with the run route (both call
+ * `computeEffectiveSizing` in lib/spark/spark-sizing) so a warm session's
+ * sizingKey matches a default run and the hand-off actually hits.
  */
 export function defaultSynapseSizing(): { sizing?: LivySessionSizing; sizingKey: string } {
-  const laConf = synapseLogAnalyticsConf();
-  const sizing: LivySessionSizing | undefined = Object.keys(laConf).length ? { conf: laConf } : undefined;
-  const sizingKey = sizing ? JSON.stringify(sizing) : '';
-  return { sizing, sizingKey };
+  // Delegate to the shared source of truth (lib/spark/spark-sizing) so the warm
+  // pool keys on the SAME sizing a default run computes — otherwise a pre-warmed
+  // session is never leasable (R3 #1). The default now carries the editor's
+  // default executor sizing (2 · 4g · 3600s) + the env-gated LA conf.
+  return computeDefaultSynapseSizing();
 }
 
 function groupKey(backend: SparkPoolBackend, poolName: string, kind: LivyKind, sizingKey: string): string {
