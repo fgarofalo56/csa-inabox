@@ -42,7 +42,6 @@ import { TileGrid } from '@/lib/components/ui/tile-grid';
 import { EmptyState } from '@/lib/components/empty-state';
 import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
 import { ShareExplorerDialog } from '@/lib/components/marketplace/share-explorer';
-import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
 import { LOOM_ACCENT } from '@/lib/components/shared/accent-tokens';
 
 const useStyles = makeStyles({
