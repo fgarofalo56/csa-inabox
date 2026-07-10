@@ -10,6 +10,25 @@
 export type WorkspaceLicenseMode =
   | 'Org' | 'Trial' | 'Pro' | 'Premium' | 'PremiumPerUser' | 'Embedded' | 'Delegated';
 
+/**
+ * Workspace image metadata — the small pointer kept on the workspace doc so the
+ * header, cards, and switcher know a custom image exists (and can cache-bust on
+ * change) WITHOUT bloating the workspace doc or the list query with the image
+ * bytes. The bytes themselves live in a sidecar Cosmos doc in the tenant-settings
+ * container (lib/azure/workspace-image-store) and are served by
+ * GET /api/workspaces/[id]/image. This is the Power BI "workspace image" concept
+ * — Azure-native (Cosmos), no new infra, no Fabric dependency.
+ */
+export interface WorkspaceImageMeta {
+  /** MIME type of the stored image (png/jpeg/gif/webp). */
+  contentType: string;
+  /** Raw byte size of the stored image (<= 1 MiB). */
+  size: number;
+  updatedAt: string;
+  /** UPN / oid of whoever last set the image. */
+  updatedBy: string;
+}
+
 export interface Workspace {
   id: string;
   /**
@@ -102,6 +121,13 @@ export interface Workspace {
     error?: string;
     at?: string;
   };
+  /**
+   * Custom workspace image (Power BI-style). Small metadata pointer only; the
+   * bytes live in a sidecar doc served by GET /api/workspaces/[id]/image. Absent
+   * = render the default initial/Building glyph. Set/cleared via
+   * POST/DELETE /api/workspaces/[id]/image.
+   */
+  image?: WorkspaceImageMeta;
   createdBy: string;
   createdAt: string;
   updatedAt: string;

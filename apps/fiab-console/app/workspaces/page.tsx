@@ -74,6 +74,7 @@ import { SignInRequired } from '@/lib/components/sign-in-required';
 import { Section, Toolbar } from '@/lib/components/ui/section';
 import { ViewToggle, type LoomView } from '@/lib/components/ui/view-toggle';
 import { ItemTile } from '@/lib/components/ui/item-tile';
+import { WorkspaceAvatar } from '@/lib/components/workspace-avatar';
 import { TileGrid } from '@/lib/components/ui/tile-grid';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { itemVisual } from '@/lib/components/ui/item-type-visual';
@@ -788,6 +789,7 @@ export default function WorkspacesPage() {
           key={ws.id}
           type="workspace"
           title={ws.name}
+          leadingVisual={<WorkspaceAvatar workspaceId={ws.id} name={ws.name} image={ws.image} size={40} />}
           subtitle={ws.description || 'Workspace'}
           meta={
             ws.lastAccessedAt
@@ -853,16 +855,9 @@ export default function WorkspacesPage() {
         width: 280,
         getValue: (w) => w.name,
         render: (w) => {
-          const visual = itemVisual('workspace');
           return (
             <span className={styles.nameCell}>
-              <span
-                className={styles.nameChip}
-                style={{ backgroundColor: `${visual.color}1f` }}
-                aria-hidden
-              >
-                <visual.icon style={{ width: 16, height: 16, color: visual.color }} />
-              </span>
+              <WorkspaceAvatar workspaceId={w.id} name={w.name} image={w.image} size={24} />
               {pinned.has(w.id) && (
                 <Pin16Filled style={{ color: tokens.colorBrandForeground1, flexShrink: 0 }} aria-label="Pinned" />
               )}
