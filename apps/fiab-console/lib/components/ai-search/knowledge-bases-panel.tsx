@@ -28,8 +28,13 @@ import {
 import {
   BrainCircuit20Regular, DatabaseSearch20Regular, Search20Regular,
   Add16Regular, Delete16Regular, Play16Regular, DocumentSearch20Regular,
+  Edit16Regular,
 } from '@fluentui/react-icons';
 import { clientFetch } from '@/lib/client-fetch';
+import {
+  isChatCompletionModel, composeKnowledgeBaseModels, describeKbOutputMode,
+  type AoaiModelChoice,
+} from '@/lib/azure/knowledge-base-model';
 
 const useStyles = makeStyles({
   root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, padding: tokens.spacingHorizontalL, height: '100%', overflowY: 'auto' },
@@ -53,6 +58,7 @@ type GovGate = { cloud: string; reason: string } | null;
 interface KnowledgeSourceRow { name: string; kind: string; searchIndexName?: string; description?: string }
 interface KnowledgeBaseRow { name: string; knowledgeSources: string[]; outputMode?: string; reasoningEffort?: string }
 interface IndexRow { name: string }
+interface AoaiDeploymentRow { name: string; modelName?: string }
 interface Subquery { source?: string; search?: string; count?: number; elapsedMs?: number }
 interface Citation { id?: string; docKey?: string; source?: string }
 interface RetrieveResult { answer: string; answerIsExtractive: boolean; subqueries: Subquery[]; citations: Citation[]; partial: boolean; apiVersion: string }
@@ -60,7 +66,9 @@ interface RetrieveResult { answer: string; answerIsExtractive: boolean; subqueri
 const R = {
   sources: '/api/ai-search/knowledge-sources',
   bases: '/api/ai-search/knowledge-bases',
+  base: (name: string) => `/api/ai-search/knowledge-bases/${encodeURIComponent(name)}`,
   indexes: '/api/ai-search/indexes',
+  deployments: '/api/foundry/model-deployments',
   retrieve: (name: string) => `/api/ai-search/knowledge-bases/${encodeURIComponent(name)}/retrieve`,
 };
 
@@ -82,6 +90,10 @@ export function KnowledgeBasesPanel() {
   const [sources, setSources] = useState<KnowledgeSourceRow[]>([]);
   const [bases, setBases] = useState<KnowledgeBaseRow[]>([]);
   const [indexes, setIndexes] = useState<IndexRow[]>([]);
+  // AOAI chat deployments for the query-planning / synthesis model picker.
+  const [aoaiEndpoint, setAoaiEndpoint] = useState('');
+  const [aoaiDeployments, setAoaiDeployments] = useState<AoaiDeploymentRow[]>([]);
+  const [aoaiGate, setAoaiGate] = useState<string | null>(null);
 
   // ---- create-source wizard ----
   const [sDialog, setSDialog] = useState(false);
@@ -91,11 +103,14 @@ export function KnowledgeBasesPanel() {
   const [sDesc, setSDesc] = useState('');
   const [sErr, setSErr] = useState<string | null>(null);
 
-  // ---- create-base wizard ----
+  // ---- create/edit-base wizard ----
   const [bDialog, setBDialog] = useState(false);
+  const [bEditing, setBEditing] = useState(false); // true → PUT-updating an existing base
   const [bName, setBName] = useState('');
   const [bSources, setBSources] = useState<string[]>([]);
   const [bEffort, setBEffort] = useState<'default' | 'minimal' | 'low' | 'medium'>('default');
+  const [bMode, setBMode] = useState<'extractive' | 'synthesis'>('extractive');
+  const [bModel, setBModel] = useState(''); // AOAI deployment name for query planning / synthesis
   const [bDesc, setBDesc] = useState('');
   const [bErr, setBErr] = useState<string | null>(null);
 
@@ -126,6 +141,25 @@ export function KnowledgeBasesPanel() {
       if (ks.ok) setSources(ks.knowledgeSources || []); else setError(ks.error || 'failed to list knowledge sources');
       if (kb.ok) setBases(kb.knowledgeBases || []);
       if (ix.ok) setIndexes((ix.indexes || []).map((i: any) => ({ name: i.name })));
+      // AOAI chat deployments for the synthesis / query-planning model picker.
+      // A 503/notDeployed here is NOT a hard failure — extractive retrieval works
+      // without a model; we honest-gate only the synthesis option (never block).
+      try {
+        const dep = await clientFetch(R.deployments).then(readJson);
+        if (dep?.ok) {
+          setAoaiEndpoint(dep.account?.endpoint || '');
+          setAoaiDeployments(((dep.deployments || []) as any[])
+            .filter((d) => isChatCompletionModel(d?.modelName || d?.name))
+            .map((d) => ({ name: d.name, modelName: d.modelName })));
+          setAoaiGate(null);
+        } else {
+          setAoaiDeployments([]);
+          setAoaiGate(dep?.error || 'Azure OpenAI is not configured — synthesized answers are unavailable until an AOAI account with a chat deployment is bound (LOOM_AOAI_ENDPOINT / Foundry account).');
+        }
+      } catch {
+        setAoaiDeployments([]);
+        setAoaiGate('Azure OpenAI is not configured — synthesized answers are unavailable until an AOAI account with a chat deployment is bound (LOOM_AOAI_ENDPOINT / Foundry account).');
+      }
     } catch (e: any) {
       setError(e?.message || String(e));
     } finally {
@@ -153,19 +187,65 @@ export function KnowledgeBasesPanel() {
     setBusy(false);
   };
 
-  const createBase = async () => {
+  const openNewBase = () => {
+    setBErr(null); setBEditing(false);
+    setBName(''); setBSources([]); setBEffort('default'); setBMode('extractive'); setBModel(''); setBDesc('');
+    setBDialog(true);
+  };
+
+  const openEditBase = async (name: string) => {
+    setBErr(null); setBEditing(true); setBName(name);
+    setBSources([]); setBEffort('default'); setBMode('extractive'); setBModel(''); setBDesc('');
+    setBDialog(true);
+    // Prefill from the live definition (PUT is create-or-update, so edit re-PUTs).
+    try {
+      const body = await clientFetch(R.base(name)).then(readJson);
+      const kb = body?.knowledgeBase;
+      if (body?.ok && kb) {
+        setBSources((kb.knowledgeSources || []).map((k: any) => (typeof k === 'string' ? k : k?.name)).filter(Boolean));
+        setBEffort((kb.retrievalReasoningEffort?.kind as any) || 'default');
+        const synth = (kb.outputMode?.kind || kb.outputMode) === 'answerSynthesis';
+        setBMode(synth ? 'synthesis' : 'extractive');
+        const dep = kb.models?.[0]?.azureOpenAIParameters?.deploymentId;
+        if (dep) setBModel(dep);
+        setBDesc(kb.description || '');
+      }
+    } catch { /* keep the blank prefill; the operator can re-enter */ }
+  };
+
+  // Build the AOAI model choice from the picked deployment (or null).
+  const buildModelChoice = (): AoaiModelChoice | null => {
+    if (!bModel) return null;
+    const d = aoaiDeployments.find((x) => x.name === bModel);
+    return { resourceUri: aoaiEndpoint, deploymentId: bModel, modelName: d?.modelName };
+  };
+
+  const submitBase = async () => {
     setBErr(null);
     if (!bName.trim() || bSources.length === 0) { setBErr('Name and at least one knowledge source are required.'); return; }
+    const composed = composeKnowledgeBaseModels({
+      synthesize: bMode === 'synthesis',
+      model: buildModelChoice(),
+      reasoningEffort: bEffort,
+    });
+    if (composed.error) { setBErr(composed.error); return; }
     setBusy(true);
     try {
       const res = await clientFetch(R.bases, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ name: bName.trim(), knowledgeSources: bSources, reasoningEffort: bEffort === 'default' ? undefined : bEffort, description: bDesc.trim() || undefined }),
+        body: JSON.stringify({
+          name: bName.trim(),
+          knowledgeSources: bSources,
+          reasoningEffort: bEffort === 'default' ? undefined : bEffort,
+          outputMode: composed.outputMode,
+          models: composed.models.length ? composed.models : undefined,
+          description: bDesc.trim() || undefined,
+        }),
       });
       const body = await readJson(res);
       if (!body.ok) { setBErr(body.error || `HTTP ${res.status}`); setBusy(false); return; }
-      setBDialog(false); setBName(''); setBSources([]); setBEffort('default'); setBDesc('');
+      setBDialog(false); setBName(''); setBSources([]); setBEffort('default'); setBMode('extractive'); setBModel(''); setBDesc('');
       await loadAll();
     } catch (e: any) { setBErr(e?.message || String(e)); }
     setBusy(false);
@@ -296,7 +376,7 @@ export function KnowledgeBasesPanel() {
               <div className={s.toolbar}>
                 <Body1>A knowledge base composes one or more sources and is what your Copilot / agents retrieve from.</Body1>
                 <div className={s.spacer} />
-                <Button appearance="primary" icon={<Add16Regular />} disabled={busy || sources.length === 0} onClick={() => { setBErr(null); setBDialog(true); }}>New knowledge base</Button>
+                <Button appearance="primary" icon={<Add16Regular />} disabled={busy || sources.length === 0} onClick={openNewBase}>New knowledge base</Button>
               </div>
               {sources.length === 0 && <Caption1>Create a knowledge source first — a base must reference at least one.</Caption1>}
               {bases.length === 0 ? (
@@ -314,9 +394,10 @@ export function KnowledgeBasesPanel() {
                         <TableRow key={b.name}>
                           <TableCell><Body1Strong>{b.name}</Body1Strong></TableCell>
                           <TableCell><div className={s.chips}>{b.knowledgeSources.map((n) => <Badge key={n} appearance="tint">{n}</Badge>)}</div></TableCell>
-                          <TableCell>{b.outputMode || 'extractiveData'}</TableCell>
+                          <TableCell>{describeKbOutputMode(b.outputMode, false)}</TableCell>
                           <TableCell>
                             <Button size="small" appearance="subtle" icon={<Play16Regular />} aria-label={`Test ${b.name}`} onClick={() => { setRBase(b.name); setTab('retrieve'); }} />
+                            <Button size="small" appearance="subtle" icon={<Edit16Regular />} aria-label={`Edit ${b.name}`} disabled={busy} onClick={() => openEditBase(b.name)} />
                             <Button size="small" appearance="subtle" icon={<Delete16Regular />} aria-label={`Delete ${b.name}`} disabled={busy} onClick={() => deleteBase(b.name)} />
                           </TableCell>
                         </TableRow>
@@ -423,18 +504,52 @@ export function KnowledgeBasesPanel() {
       <Dialog open={bDialog} onOpenChange={(_, d) => { if (!d.open) setBDialog(false); }}>
         <DialogSurface>
           <DialogBody>
-            <DialogTitle>New knowledge base</DialogTitle>
+            <DialogTitle>{bEditing ? `Edit knowledge base — ${bName}` : 'New knowledge base'}</DialogTitle>
             <DialogContent>
               <div className={s.formGrid}>
                 <Field label="Name" required>
-                  <Input value={bName} onChange={(_, d) => setBName(d.value)} placeholder="e.g. hr-knowledge-base" />
+                  <Input value={bName} onChange={(_, d) => setBName(d.value)} placeholder="e.g. hr-knowledge-base" disabled={bEditing} />
                 </Field>
                 <Field label="Knowledge sources" required hint="Compose one or more sources. The base queries them all and reranks across them.">
                   <Dropdown multiselect placeholder="Select sources" selectedOptions={bSources} value={bSources.join(', ')} onOptionSelect={(_, d) => setBSources(d.selectedOptions)}>
                     {sources.map((k) => <Option key={k.name} value={k.name}>{k.name}</Option>)}
                   </Dropdown>
                 </Field>
-                <Field label="Reasoning effort" hint="Higher effort spends more model reasoning on query planning. Default = service default (extractive).">
+                <Field label="Answer mode" hint="Extractive returns grounding chunks (GA, no model). Synthesized formulates one natural-language answer (requires an Azure OpenAI chat model).">
+                  <Dropdown selectedOptions={[bMode]} value={bMode === 'synthesis' ? 'Synthesized answer' : 'Extractive grounding'} onOptionSelect={(_, d) => setBMode((d.optionValue as typeof bMode) || 'extractive')}>
+                    <Option value="extractive">Extractive grounding</Option>
+                    <Option value="synthesis">Synthesized answer (LLM)</Option>
+                  </Dropdown>
+                </Field>
+                <Field
+                  label={bMode === 'synthesis' ? 'Query-planning / synthesis model' : 'Query-planning model (optional)'}
+                  required={bMode === 'synthesis'}
+                  hint={bMode === 'synthesis'
+                    ? 'The Azure OpenAI chat deployment that decomposes the query and writes the answer.'
+                    : 'Bind a chat model to enable model-based query planning at higher reasoning effort. Leave as “None” for pure extractive.'}
+                >
+                  <Dropdown
+                    placeholder={aoaiDeployments.length ? 'Select a chat deployment' : 'No Azure OpenAI chat deployments'}
+                    selectedOptions={bModel ? [bModel] : ['']}
+                    value={bModel || 'None'}
+                    disabled={aoaiDeployments.length === 0}
+                    onOptionSelect={(_, d) => setBModel(d.optionValue === '__none' ? '' : (d.optionValue || ''))}
+                  >
+                    <Option value="__none" text="None">None (extractive only)</Option>
+                    {aoaiDeployments.map((m) => (
+                      <Option key={m.name} value={m.name} text={m.name}>{m.name}{m.modelName ? ` — ${m.modelName}` : ''}</Option>
+                    ))}
+                  </Dropdown>
+                </Field>
+                {aoaiGate && bMode === 'synthesis' && (
+                  <MessageBar intent="warning">
+                    <MessageBarBody>
+                      <MessageBarTitle>Azure OpenAI required for synthesis</MessageBarTitle>
+                      {aoaiGate}
+                    </MessageBarBody>
+                  </MessageBar>
+                )}
+                <Field label="Reasoning effort" hint="Higher effort spends more model reasoning on query planning. Default = service default.">
                   <Dropdown selectedOptions={[bEffort]} value={bEffort} onOptionSelect={(_, d) => setBEffort((d.optionValue as typeof bEffort) || 'default')}>
                     <Option value="default">Service default</Option>
                     <Option value="minimal">Minimal</Option>
@@ -450,7 +565,7 @@ export function KnowledgeBasesPanel() {
             </DialogContent>
             <DialogActions>
               <Button appearance="secondary" onClick={() => setBDialog(false)} disabled={busy}>Cancel</Button>
-              <Button appearance="primary" onClick={createBase} disabled={busy || !bName.trim() || bSources.length === 0}>Create</Button>
+              <Button appearance="primary" onClick={submitBase} disabled={busy || !bName.trim() || bSources.length === 0 || (bMode === 'synthesis' && !bModel)}>{bEditing ? 'Save' : 'Create'}</Button>
             </DialogActions>
           </DialogBody>
         </DialogSurface>
