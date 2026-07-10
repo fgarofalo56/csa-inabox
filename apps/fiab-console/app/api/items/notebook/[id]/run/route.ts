@@ -130,14 +130,18 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     // `;` (Livy's sql kind is single-statement — a cell with three
     // `CREATE DATABASE …;` else fails "extra input 'CREATE'"); other kinds stay
     // whole. A single-cell SQL run splits the same way so per-cell SQL matches.
-    const runQueue: Array<{ source: string; lang: string }> = cellSource
+    // Each queue entry carries its originating cellId so the poller can attribute
+    // per-statement output back to the right cell (R3 #2 — "Run all" outputs).
+    // Single-cell runs tag every split statement with the passed cellId; a
+    // whole-notebook run tags each cell's statements with that cell's id.
+    const runQueue: Array<{ source: string; lang: string; cellId?: string }> = cellSource
       ? cellToStatements(substituteNotebookPlaceholders(cellSource), kindOfCell(cellLang) as any)
-          .map((s) => ({ source: s.source, lang: s.lang }))
+          .map((s) => ({ source: s.source, lang: s.lang, cellId: cellId || undefined }))
       : allCells
           .filter((c) => c?.type === 'code' && typeof c.source === 'string' && c.source.trim())
           .flatMap((c) =>
             cellToStatements(substituteNotebookPlaceholders(c.source), kindOfCell(c.lang) as any)
-              .map((s) => ({ source: s.source, lang: s.lang })),
+              .map((s) => ({ source: s.source, lang: s.lang, cellId: typeof c.id === 'string' ? c.id : undefined })),
           );
 
     // Map cell-lang to the statement-kind that Livy / Databricks expects.
@@ -246,16 +250,14 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       // it must NEVER be persisted to Cosmos or returned to the client in the
       // receipt. redactReceiptSecrets() masks it at both exits (below).
       const { redactReceiptSecrets } = await import('@/lib/spark/config-presets');
-      const userConf = (rawCfg && rawCfg.conf && typeof rawCfg.conf === 'object') ? rawCfg.conf as Record<string, string> : {};
-      const mergedConf: Record<string, string> = { ...laConf, ...userConf };
-      const sizing = (rawCfg || Object.keys(mergedConf).length) ? {
-        numExecutors: typeof rawCfg?.numExecutors === 'number' ? rawCfg.numExecutors : undefined,
-        executorMemory: typeof rawCfg?.executorMemory === 'string' ? rawCfg.executorMemory : undefined,
-        driverMemory: typeof rawCfg?.driverMemory === 'string' ? rawCfg.driverMemory : undefined,
-        heartbeatTimeoutInSecond: typeof rawCfg?.heartbeatTimeoutInSecond === 'number' ? rawCfg.heartbeatTimeoutInSecond : undefined,
-        conf: Object.keys(mergedConf).length ? mergedConf : undefined,
-      } : undefined;
-      const sizingKey = sizing ? JSON.stringify(sizing) : '';
+      // Effective sizing + a STABLE sizingKey from the ONE shared source of truth
+      // (lib/spark/spark-sizing). Missing fields default from DEFAULT_LIVY_SIZING,
+      // so "no config", "explicitly the default config", and the warm pool all
+      // normalize to the SAME key (R3 #1 — otherwise a pre-warmed session is never
+      // leasable and every first run cold-starts). A genuinely custom config gets
+      // its own distinct key → its own correctly-sized session.
+      const { computeEffectiveSizing } = await import('@/lib/spark/spark-sizing');
+      const { sizing, sizingKey } = computeEffectiveSizing(rawCfg, laConf);
 
       // REUSE an existing live Livy session for this pool+kind instead of
       // creating a new one per cell. A Synapse Spark pool cold-starts in

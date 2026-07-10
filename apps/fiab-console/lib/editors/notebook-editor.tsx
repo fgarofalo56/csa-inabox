@@ -421,6 +421,31 @@ export function NotebookEditor({ item, id }: Props) {
   const [cfgDraft, setCfgDraft] = useState<SessionConfig>(DEFAULT_SESSION_CONFIG);
   const [cfgDialogOpen, setCfgDialogOpen] = useState(false);
   const [cfgSaving, setCfgSaving] = useState(false);
+  // Send an explicit `sessionConfig` on a run/prewarm ONLY when the user has
+  // customized the session sizing. When it's the default, send nothing so the
+  // server applies its canonical default sizing — whose stable sizingKey matches
+  // the warm pool (R3 #1), letting a pre-warmed session be leased instead of
+  // cold-starting. A customized config is still sent verbatim → its own session.
+  const isDefaultSessionCfg = useMemo(
+    () => sessionConfigEquals(sessionCfg, DEFAULT_SESSION_CONFIG),
+    [sessionCfg],
+  );
+  const sessionConfigBody = useCallback(
+    (): Record<string, unknown> => (isDefaultSessionCfg ? {} : { sessionConfig: toConfigureOptions(sessionCfg) }),
+    [isDefaultSessionCfg, sessionCfg],
+  );
+
+  /**
+   * Patch only specific fields on a cell — used by the Run flow so output
+   * arriving after a user edit doesn't clobber the new source. Without
+   * this the stale `cell` captured at runCell-start would overwrite
+   * subsequent typing, and clicking Save would persist the OLD source.
+   * Does NOT mark the notebook dirty — output mutations are not user
+   * edits and shouldn't enable the Save button on their own.
+   */
+  const patchCell = useCallback((id: string, patch: Partial<NotebookCell>) => {
+    setCells(prev => prev.map(c => c.id === id ? { ...c, ...patch } : c));
+  }, []);
   const [sessionStatus, setSessionStatus] = useState<'Idle' | 'Running' | 'Error'>('Idle');
   const [sessionReceipt, setSessionReceipt] = useState<Record<string, unknown> | null>(null);
 
@@ -482,18 +507,22 @@ export function NotebookEditor({ item, id }: Props) {
   }, [cp.computes, computeId, computeMatchesType, workspaceType, amlDefaultCompute]);
 
   // Pre-warm session on compute selection: if a Synapse Spark compute is picked,
-  // immediately POST to /run with no code to initialize the Livy session in the background.
-  // This amortizes the 60-90s cold-start across the idle time before the user's first cell run.
+  // immediately POST to /run with no code to initialize the Livy session in the
+  // background. This amortizes the 60-90s cold-start across the idle time before
+  // the user's first cell run. It MUST send the same effective sizing the real
+  // run will (via sessionConfigBody) so the prewarmed session's sizingKey matches
+  // — otherwise the first real cell run cold-starts a SECOND session and orphans
+  // this one (R3 #1).
   const prewarmSession = useCallback(async (cId: string) => {
     if (!workspaceId || !notebookId || !cId.startsWith('spark:')) return;
     try {
       await clientFetch(`/api/items/notebook/${encodeURIComponent(notebookId)}/run?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ compute: cId, cellId: '__prewarm__' }),
+        body: JSON.stringify({ compute: cId, cellId: '__prewarm__', ...sessionConfigBody() }),
       }).catch(() => { /* silent — warmup is best-effort */ });
     } catch { /* ignore */ }
-  }, [workspaceId, notebookId]);
+  }, [workspaceId, notebookId, sessionConfigBody]);
 
   useEffect(() => {
     if (computeId && workspaceId && notebookId) {
@@ -1175,6 +1204,26 @@ export function NotebookEditor({ item, id }: Props) {
     } finally { setCfgSaving(false); }
   }, [cfgDraft, sessionCfg, workspaceId, notebookId]);
 
+  // Poll a run's status with a small backoff retry so a transient network blip
+  // mid-poll doesn't silently kill the loop and strand a cell on a spinner
+  // (R3 #3). Throws after 3 failed attempts so the caller can surface an honest
+  // error. Terminal Livy statement/session states the caller must treat as done.
+  const pollRunStatus = useCallback(async (runId: string): Promise<any> => {
+    let lastErr: unknown = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const res = await clientFetch(
+          `/api/items/notebook/${encodeURIComponent(notebookId!)}/runs/${encodeURIComponent(runId)}?workspaceId=${encodeURIComponent(workspaceId!)}`,
+        );
+        return await res.json();
+      } catch (e) {
+        lastErr = e;
+        await new Promise((r) => setTimeout(r, 400 * (attempt + 1)));
+      }
+    }
+    throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
+  }, [notebookId, workspaceId]);
+
   const run = useCallback(async () => {
     if (!workspaceId || !notebookId) return;
     if (!computeId) {
@@ -1184,23 +1233,54 @@ export function NotebookEditor({ item, id }: Props) {
     setRunning(true);
     setSessionStatus('Running');
     setRunMsg('Submitting run…');
+    // Runnable cells = the code cells the server will actually queue (non-empty).
+    // Mark each pending so the user sees per-cell progress, and track which have
+    // received output so none is left on an eternal spinner (R3 #2/#3).
+    const runnableCellIds = cells.filter((c) => c.type === 'code' && c.source.trim()).map((c) => c.id);
+    runnableCellIds.forEach((id) => patchCell(id, { output: { status: 'pending' } }));
+    const appliedCells = new Set<string>();
+    const applyCellOutputs = (map: Record<string, any> | undefined | null) => {
+      if (!map || typeof map !== 'object') return;
+      for (const [cid, o] of Object.entries(map)) {
+        if (!o || appliedCells.has(cid)) continue;
+        appliedCells.add(cid);
+        patchCell(cid, {
+          output: {
+            status: (o as any).status === 'ok' ? 'ok' : 'error',
+            textPlain: (o as any).textPlain,
+            data: (o as any).data,
+            richDisplay: (o as any).richDisplay,
+            ename: (o as any).ename,
+            evalue: (o as any).evalue,
+            traceback: (o as any).traceback,
+            executedAtUtc: new Date().toISOString(),
+          },
+        });
+      }
+    };
+    const markRemainingError = (evalue: string) => {
+      runnableCellIds.forEach((id) => {
+        if (appliedCells.has(id)) return;
+        appliedCells.add(id);
+        patchCell(id, { output: { status: 'error', ename: 'Incomplete', evalue } });
+      });
+    };
     try {
       const r = await clientFetch(`/api/items/notebook/${encodeURIComponent(notebookId)}/run?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ compute: computeId, sessionConfig: toConfigureOptions(sessionCfg) }),
+        body: JSON.stringify({ compute: computeId, ...sessionConfigBody() }),
       });
       const j = await r.json();
       if (!j.ok) {
         setRunMsg(`Run failed: ${j.error}${j.hint ? ' — ' + j.hint : ''}`);
+        markRemainingError(`Run failed to submit: ${j.error || 'unknown error'}`);
         setRunning(false);
         setSessionStatus('Error');
         return;
       }
       if (j.session) setSessionReceipt(j.session);
 
-      // Poll the run endpoint every 4s for status — Synapse cold-start can
-      // take 60-90s; Databricks 30-60s. Keep polling for up to 8 min.
       let runId: string = j.runId;
       setRunMsg(`${j.compute?.kind || 'compute'} ${j.compute?.pool || j.compute?.clusterId || j.compute?.ciName || ''} — ${j.status} (runId ${runId})${j.autoStarted ? ' · auto-started CI' : ''}`);
       const start = Date.now();
@@ -1208,46 +1288,84 @@ export function NotebookEditor({ item, id }: Props) {
       // Adaptive polling tuned to feel native: fast while a statement is actually
       // executing on a WARM session (~600ms ≈ Databricks' own refresh cadence),
       // backing off only while a COLD session/cluster is still spinning up so we
-      // don't hammer the API during a 60-90s start. The old flat 2s floor made
-      // every fast cell feel ~2s slow even on a warm cluster.
+      // don't hammer the API during a 60-90s start.
       let pollInterval = 600; // responsive first poll for warm sessions
+      let endState: 'ok' | 'error' | undefined;
       while (Date.now() - start < MAX_MS) {
         await new Promise(res => setTimeout(res, pollInterval));
-        const pollRes = await clientFetch(`/api/items/notebook/${encodeURIComponent(notebookId)}/runs/${encodeURIComponent(runId)}?workspaceId=${encodeURIComponent(workspaceId)}`);
-        const p = await pollRes.json();
-        if (!p.ok) { setRunMsg(`Poll error: ${p.error || pollRes.status}`); break; }
+        let p: any;
+        try {
+          p = await pollRunStatus(runId);
+        } catch (e: any) {
+          setRunMsg(`Poll error: ${e?.message || e}`);
+          setSessionStatus('Error');
+          markRemainingError(`Lost contact with the run while polling: ${e?.message || e}. Retry the run.`);
+          endState = 'error';
+          break;
+        }
+        if (!p.ok) {
+          setRunMsg(`Poll error: ${p.error || 'unknown'}`);
+          setSessionStatus('Error');
+          markRemainingError(`Run poll failed: ${p.error || 'unknown error'}`);
+          endState = 'error';
+          break;
+        }
         if (p.runId && p.runId !== runId) runId = p.runId; // promotion when statement is submitted
         const phase = p.phase ? ` · ${p.phase}` : '';
         setRunMsg(`Status: ${p.status}${phase}`);
+        // Patch each cell's output the moment its statement completes (R3 #2).
+        applyCellOutputs(p.cellOutputs);
         // Stay fast while a statement runs on a warm session; back off to 2s only
         // while a cold session/cluster is still starting (PENDING/starting/queued).
         const cold = p.phase === 'session-starting' || /^(starting|pending|queued)$/i.test(String(p.status || ''));
         pollInterval = cold ? 2000 : 600;
         if (p.output) {
           if (p.output.status === 'ok') {
-            // Keep the status line SHORT — the full cell output renders below
-            // each cell. Dumping textPlain/JSON here ran off-screen.
             setRunMsg('✓ Completed');
             setSessionStatus('Idle');
+            endState = 'ok';
           } else if (p.output.status === 'error') {
-            // Concise error: ename + evalue only (no full traceback blob).
             setRunMsg(`✗ Error: ${[p.output.ename, p.output.evalue].filter(Boolean).join(' ')}`);
             setSessionStatus('Error');
+            markRemainingError('An earlier cell failed — this cell did not run.');
+            endState = 'error';
           } else {
             setRunMsg('✓ Completed');
             setSessionStatus('Idle');
+            endState = 'ok';
           }
           break;
         }
-        if (['error', 'dead', 'killed', 'TERMINATED', 'INTERNAL_ERROR'].includes(p.status)) {
+        // Recognize ALL terminal Livy statement + session states (R3 #3) —
+        // cancelled / shutting_down were previously polled until the 12-min
+        // timeout, leaving cells blank.
+        if (['error', 'dead', 'killed', 'shutting_down', 'cancelled', 'cancelling', 'TERMINATED', 'INTERNAL_ERROR'].includes(p.status)) {
           setRunMsg(`Run ended: ${p.status}${p.resultState ? ` (${p.resultState})` : ''}`);
           setSessionStatus('Error');
+          markRemainingError(`Run ended in state '${p.status}'.`);
+          endState = 'error';
           break;
         }
       }
+      if (endState === undefined) {
+        // 12-min timeout with no terminal result — honest error, never a silent
+        // blank / eternal spinner (R3 #3).
+        const mins = Math.round(MAX_MS / 60000);
+        setRunMsg(`Run timed out after ${mins}m — the Spark session may be starting slowly or a statement hung.`);
+        setSessionStatus('Error');
+        markRemainingError(`Run timed out after ${mins}m — the session may be starting slowly or a statement hung. Retry or Configure session.`);
+      } else if (endState === 'ok') {
+        // All statements ran OK: clear any cell still showing a spinner (an
+        // attribution gap) with an honest empty result rather than a stuck spinner.
+        runnableCellIds.forEach((id) => {
+          if (appliedCells.has(id)) return;
+          appliedCells.add(id);
+          patchCell(id, { output: { status: 'ok', textPlain: '(no output)' } });
+        });
+      }
       loadJobs(workspaceId, notebookId);
     } finally { setRunning(false); }
-  }, [workspaceId, notebookId, computeId, sessionCfg, loadJobs]);
+  }, [workspaceId, notebookId, computeId, cells, patchCell, sessionConfigBody, pollRunStatus, loadJobs]);
 
   const create = useCallback(async () => {
     if (!workspaceId || !createName.trim()) return;
@@ -1404,18 +1522,6 @@ export function NotebookEditor({ item, id }: Props) {
     });
     setDirty(true);
   }, [activeCellId, defaultLang]);
-
-  /**
-   * Patch only specific fields on a cell — used by the Run flow so output
-   * arriving after a user edit doesn't clobber the new source. Without
-   * this the stale `cell` captured at runCell-start would overwrite
-   * subsequent typing, and clicking Save would persist the OLD source.
-   * Does NOT mark the notebook dirty — output mutations are not user
-   * edits and shouldn't enable the Save button on their own.
-   */
-  const patchCell = useCallback((id: string, patch: Partial<NotebookCell>) => {
-    setCells(prev => prev.map(c => c.id === id ? { ...c, ...patch } : c));
-  }, []);
 
   const deleteCell = useCallback((id: string) => {
     setCells(prev => prev.length <= 1 ? prev : prev.filter(c => c.id !== id));
@@ -1672,7 +1778,7 @@ export function NotebookEditor({ item, id }: Props) {
       const r = await clientFetch(`/api/items/notebook/${encodeURIComponent(notebookId)}/run?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ compute: computeId, cellId: cell.id, source: cell.source, lang: cell.lang || defaultLang, sessionConfig: toConfigureOptions(sessionCfg) }),
+        body: JSON.stringify({ compute: computeId, cellId: cell.id, source: cell.source, lang: cell.lang || defaultLang, ...sessionConfigBody() }),
       });
       const j = await r.json();
       if (!j.ok) {
@@ -1686,14 +1792,25 @@ export function NotebookEditor({ item, id }: Props) {
       const start = Date.now();
       const MAX_MS = 12 * 60 * 1000; // 12 min to allow for slow cold-starts
       let pollInterval = 2000; // 2s during session-starting, 1s during statement
+      let settled = false; // did the cell reach a terminal output/state?
       while (Date.now() - start < MAX_MS) {
         if (cancelRef.current.has(cell.id)) { cancelRef.current.delete(cell.id); return; }
         await new Promise(res => setTimeout(res, pollInterval));
-        const pollRes = await clientFetch(`/api/items/notebook/${encodeURIComponent(notebookId)}/runs/${encodeURIComponent(runId)}?workspaceId=${encodeURIComponent(workspaceId)}`);
-        const p = await pollRes.json();
-        if (!p.ok) {
-          patchCell(cell.id, { output: { status: 'error', ename: 'PollError', evalue: p.error || String(pollRes.status) } });
+        let p: any;
+        try {
+          // Backoff-retry inside pollRunStatus so a transient blip doesn't strand
+          // the cell on a spinner (R3 #3).
+          p = await pollRunStatus(runId);
+        } catch (e: any) {
+          patchCell(cell.id, { output: { status: 'error', ename: 'PollError', evalue: `Lost contact with the run: ${e?.message || e}. Retry the cell.` } });
           setSessionStatus('Error');
+          settled = true;
+          break;
+        }
+        if (!p.ok) {
+          patchCell(cell.id, { output: { status: 'error', ename: 'PollError', evalue: p.error || 'run poll failed' } });
+          setSessionStatus('Error');
+          settled = true;
           break;
         }
         if (p.runId && p.runId !== runId) runId = p.runId;
@@ -1720,20 +1837,32 @@ export function NotebookEditor({ item, id }: Props) {
           });
           setRunMsg(`Cell ${cell.id.slice(0, 6)} complete`);
           setSessionStatus(p.output.status === 'ok' ? 'Idle' : 'Error');
+          settled = true;
           break;
         }
-        if (['error', 'dead', 'killed', 'TERMINATED', 'INTERNAL_ERROR'].includes(p.status)) {
-          patchCell(cell.id, { output: { status: 'error', ename: p.status, evalue: p.resultState || '' } });
+        // Recognize ALL terminal Livy statement + session states (R3 #3) —
+        // cancelled / cancelling / shutting_down previously polled to the 12-min
+        // timeout and left the cell blank.
+        if (['error', 'dead', 'killed', 'shutting_down', 'cancelled', 'cancelling', 'TERMINATED', 'INTERNAL_ERROR', 'Failed', 'Canceled'].includes(p.status)) {
+          patchCell(cell.id, { output: { status: 'error', ename: p.status, evalue: p.resultState || `Run ended in state '${p.status}'.` } });
           setSessionStatus('Error');
+          settled = true;
           break;
         }
+      }
+      if (!settled) {
+        // 12-min timeout with no terminal result — honest error, never a silent
+        // spinner (R3 #3).
+        const mins = Math.round(MAX_MS / 60000);
+        patchCell(cell.id, { output: { status: 'error', ename: 'Timeout', evalue: `Run timed out after ${mins}m — the session may be starting slowly or the statement hung. Retry or Configure session.` } });
+        setSessionStatus('Error');
       }
       loadJobs(workspaceId, notebookId);
     } catch (e: any) {
       patchCell(cell.id, { output: { status: 'error', ename: 'Exception', evalue: e?.message || String(e) } });
       setSessionStatus('Error');
     }
-  }, [workspaceId, notebookId, computeId, defaultLang, sessionCfg, patchCell, loadJobs, runSparkCell]);
+  }, [workspaceId, notebookId, computeId, defaultLang, sessionConfigBody, pollRunStatus, patchCell, loadJobs, runSparkCell]);
 
   /**
    * Variable explorer — submit a Python introspection snippet to the ACTIVE
