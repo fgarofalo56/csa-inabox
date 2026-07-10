@@ -31,10 +31,11 @@ import {
   ShieldKeyhole20Regular, Add20Regular, ArrowSync16Regular, Edit16Regular,
   Delete16Regular, ShieldCheckmark20Regular, LockClosed16Regular,
 } from '@fluentui/react-icons';
-import { EmptyState } from '@/lib/components/empty-state';
 import { Section } from '@/lib/components/ui/section';
 import { TileGrid } from '@/lib/components/ui/tile-grid';
 import { IdentityPicker, type IdentityHit } from '@/lib/components/ui/identity-picker';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
+import { GuidedEmptyState } from '@/lib/components/shared/guided-empty-state';
 import { clientFetch } from '@/lib/client-fetch';
 
 type ProtectionMode = 'sovereign-rbac' | 'purview';
@@ -193,6 +194,16 @@ export function ProtectionPoliciesPane() {
       title="Protection policies"
       actions={<Button appearance="primary" icon={<Add20Regular />} onClick={() => { setEdit(null); setDialogOpen(true); }}>New policy</Button>}
     >
+      {/* Teaching banner (SC-6) — explain label-driven restrict-only enforcement. */}
+      <div style={{ marginBottom: tokens.spacingVerticalM }}>
+        <TeachingBanner
+          surfaceKey="governance-protection-policies"
+          accent="var(--loom-accent-blue)"
+          title="Restrict labeled data to an exact allow-list"
+          message="Every resource carrying the policy's sensitivity label is reconciled to allow ONLY the principals you list (plus the issuer). Sovereign-RBAC enforces this through real Azure RBAC and deny-by-omission — no Microsoft Fabric or Purview required. Save & reconcile shows a live receipt of grants added and revoked."
+          learnMoreHref="https://learn.microsoft.com/purview/protection-policies-data-map"
+        />
+      </div>
       {error && (
         <MessageBar intent="error" style={{ marginBottom: tokens.spacingVerticalM }}>
           <MessageBarBody>{error}</MessageBarBody>
@@ -214,11 +225,22 @@ export function ProtectionPoliciesPane() {
       {loading && <Spinner label="Loading policies…" />}
 
       {!loading && policies.length === 0 && (
-        <EmptyState
-          icon={<ShieldKeyhole20Regular />}
-          title="No protection policies"
-          body="Restrict labeled data to an exact allow-list. Sovereign-RBAC enforces Azure RBAC + DENY-by-omission — no Fabric or Purview required."
-          primaryAction={{ label: 'New policy', onClick: () => { setEdit(null); setDialogOpen(true); } }}
+        <GuidedEmptyState
+          heroIcon={ShieldKeyhole20Regular}
+          title="No protection policies yet"
+          intro="Bind a sensitivity label to an exact allow-list of principals. Sovereign-RBAC enforces it through Azure RBAC and deny-by-omission — no Fabric or Purview required."
+          ariaLabel="Get started with protection policies"
+          columns={1}
+          paths={[
+            {
+              key: 'new-policy',
+              title: 'New protection policy',
+              body: 'Pick a label, choose the principals allowed to access it, then Save & reconcile to apply real RBAC.',
+              icon: ShieldKeyhole20Regular,
+              onClick: () => { setEdit(null); setDialogOpen(true); },
+            },
+          ]}
+          learnMoreHref="https://learn.microsoft.com/purview/protection-policies-data-map"
         />
       )}
 

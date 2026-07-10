@@ -26,7 +26,8 @@ import {
   Chat20Regular, QuestionCircle20Regular, BranchFork20Regular, Flow20Regular, Code20Regular,
   ChatMultiple20Regular, BotSparkle24Regular, Flash20Regular,
 } from '@fluentui/react-icons';
-import { EmptyState } from '@/lib/components/empty-state';
+import { GuidedEmptyState } from '@/lib/components/shared/guided-empty-state';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
 import {
   CanvasNode, CATEGORY_ACCENT,
   type CanvasVisual, type CanvasNodeCategory, type NodeAction,
@@ -184,6 +185,13 @@ export function CopilotTopicCanvas({ flowYaml, triggerPhrases, onChange, ariaLab
 
   return (
     <div className={s.wrap} aria-label={ariaLabel || 'Topic canvas'}>
+      <TeachingBanner
+        surfaceKey="copilot-topic-canvas"
+        icon={BotSparkle24Regular}
+        title="Author a topic step by step"
+        message="Add trigger phrases that start this topic, then chain Message, Question, Condition and Action steps to shape the conversation. Everything you build here serializes to the AdaptiveDialog YAML stored in Dataverse — flip Code view to see or hand-edit it."
+        learnMoreHref="https://learn.microsoft.com/microsoft-copilot-studio/authoring-create-edit-topics"
+      />
       <div className={s.toolbar}>
         <Switch checked={false} label="Code view (AdaptiveDialog YAML)" onChange={() => setCodeView(true)} />
       </div>
@@ -225,10 +233,19 @@ export function CopilotTopicCanvas({ flowYaml, triggerPhrases, onChange, ariaLab
       </div>
       <div className={s.steps}>
         {steps.length === 0 && (
-          <EmptyState
-            icon={<BotSparkle24Regular />}
-            title="No steps yet"
-            body="Add a Message, Question, Condition, or Action below to build out what this topic does when triggered."
+          <GuidedEmptyState
+            title="Build out this topic"
+            intro="Pick a step to add — you can reorder, edit, or delete any step afterwards."
+            heroIcon={BotSparkle24Regular}
+            columns={2}
+            ariaLabel="Add a conversation step"
+            paths={[
+              { key: 'message', title: 'Message', body: 'Say something to the user.', icon: Chat20Regular, onClick: () => addStep('message') },
+              { key: 'question', title: 'Question', body: 'Ask a question and save the answer to a variable.', icon: QuestionCircle20Regular, onClick: () => addStep('question') },
+              { key: 'condition', title: 'Condition', body: 'Branch the conversation on a value.', icon: BranchFork20Regular, onClick: () => addStep('condition') },
+              { key: 'action', title: 'Action', body: 'Call a Power Automate flow or connector.', icon: Flow20Regular, onClick: () => addStep('action') },
+            ]}
+            learnMoreHref="https://learn.microsoft.com/microsoft-copilot-studio/authoring-create-edit-topics"
           />
         )}
         {steps.map((st, idx) => {

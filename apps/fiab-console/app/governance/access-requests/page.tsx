@@ -15,8 +15,9 @@
 
 import { PageShell } from '@/lib/components/page-shell';
 import { Section } from '@/lib/components/ui/section';
-import { Badge } from '@fluentui/react-components';
+import { Badge, tokens } from '@fluentui/react-components';
 import { SectionExplainer } from '@/lib/components/ui/learn-popover';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
 import { AccessRequestInboxEditor } from '@/lib/editors/access-request-inbox';
 
 export default function AccessRequestsPage() {
@@ -37,6 +38,14 @@ export default function AccessRequestsPage() {
         real Azure RBAC role assignment on the backing store and subscribes the requester; state is
         tracked in Cosmos, with no Microsoft Fabric dependency.
       </SectionExplainer>
+      <div style={{ marginBottom: tokens.spacingVerticalL }}>
+        <TeachingBanner
+          surfaceKey="governance-access-requests"
+          title="Approve in tier order"
+          message="Each tab is one approval tier — manager, then privacy, then approver, then access provider — and its badge counts the requests awaiting you. Approving advances a request to the next tier; the final Access provider approval provisions a real Azure RBAC grant on the backing store and subscribes the requester."
+          learnMoreHref="https://learn.microsoft.com/azure/role-based-access-control/overview"
+        />
+      </div>
       <Section
         title="Approval workflow"
         actions={<Badge appearance="tint" color="informative">live · Cosmos + Azure RBAC</Badge>}

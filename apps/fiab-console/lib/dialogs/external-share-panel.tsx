@@ -13,12 +13,12 @@
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Button, Input, Field, Badge, Spinner, Caption1, Divider, Persona,
+  Button, Input, Field, Badge, Spinner, Caption1, Divider, Persona, Tooltip,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   MessageBar, MessageBarBody, MessageBarTitle,
   makeStyles, tokens,
 } from '@fluentui/react-components';
-import { Globe20Regular, Delete16Regular, ShareRegular } from '@fluentui/react-icons';
+import { Globe20Regular, Delete16Regular, ShareRegular, Copy16Regular } from '@fluentui/react-icons';
 import { clientFetch } from '@/lib/client-fetch';
 import {
   validateExternalShare, type ExternalShareState,
@@ -120,6 +120,12 @@ export function ExternalSharePanel({ itemId, itemType, hasStoragePath }: Externa
     void load();
   }, [itemId, itemType, sharedPath, target, expiryIso, load]);
 
+  const copyInvite = useCallback((url: string) => {
+    navigator.clipboard?.writeText(url)
+      .then(() => { setError(null); setOk('Invitation link copied to clipboard.'); })
+      .catch(() => setError('Clipboard access was blocked — copy the link manually.'));
+  }, []);
+
   const revoke = useCallback(async (id: string) => {
     const r = await fetchJson(`/api/external-shares/${encodeURIComponent(id)}?sourceItemId=${encodeURIComponent(itemId)}`, { method: 'DELETE' });
     if (r?.ok) void load();
@@ -210,6 +216,11 @@ export function ExternalSharePanel({ itemId, itemType, hasStoragePath }: Externa
                     <TableCell>{r.expiry ? new Date(r.expiry).toLocaleDateString() : '—'}</TableCell>
                     <TableCell><Badge appearance="tint" color={stateColor(r.state)}>{r.state}</Badge></TableCell>
                     <TableCell>
+                      {r.state === 'pending' && r.inviteRedeemUrl && (
+                        <Tooltip content="Copy the B2B invitation redemption link to send to the guest" relationship="label">
+                          <Button size="small" appearance="subtle" icon={<Copy16Regular />} onClick={() => copyInvite(r.inviteRedeemUrl!)}>Invite link</Button>
+                        </Tooltip>
+                      )}
                       {(r.state === 'pending' || r.state === 'accepted') && (
                         <Button size="small" appearance="subtle" icon={<Delete16Regular />} onClick={() => revoke(r.id)}>Revoke</Button>
                       )}
