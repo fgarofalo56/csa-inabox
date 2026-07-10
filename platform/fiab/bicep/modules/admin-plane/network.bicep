@@ -485,16 +485,14 @@ resource networkContributorGrant 'Microsoft.Authorization/roleAssignments@2022-0
 
 // VNet diagnostic log categories. Commercial / GCC keep the explicit
 // VMProtectionAlerts category (byte-identical to prior behavior). In Azure
-// Government (GCC-High / IL5) that category is not supported — a LIVE
-// `az deployment sub create` into usgovvirginia (2026-07-10) failed the VNet
-// diagnosticSettings with `Category 'VMProtectionAlerts' is not supported` — so
-// Gov uses the categoryGroup:'allLogs' meta-group instead (the same idiom diagFw
-// uses below), which resolves to whatever VNet log categories the platform
-// supports there. Only GCC-High / IL5 switch; GCC (moderate) runs in commercial
-// Azure regions and keeps the Commercial category, mirroring the DNS-suffix
-// discriminator used elsewhere in this module.
+// Government (GCC-High / IL5) VNets support NO diagnostic log categories at
+// all — round 1 (2026-07-10, usgovvirginia) rejected `VMProtectionAlerts`
+// and round 2 rejected categoryGroup 'allLogs' with `supported ones are: ''`
+// — so Gov ships a METRICS-ONLY diagnostic setting (empty logs array). Only
+// GCC-High / IL5 switch; GCC (moderate) runs in commercial Azure regions and
+// keeps the Commercial category.
 var vnetDiagLogs = (boundary == 'GCC-High' || boundary == 'IL5')
-  ? [ { categoryGroup: 'allLogs', enabled: true } ]
+  ? []
   : [ { category: 'VMProtectionAlerts', enabled: true } ]
 
 // Diagnostic settings → standardized Loom LAW
