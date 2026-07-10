@@ -252,3 +252,20 @@ its primary action against the Gov Azure backend or shows a documented honest
 MessageBar gate** — with zero Commercial-host calls and zero UC/Fabric hard
 dependency. That is the recurring teardown-validation bar, run in a clean Gov
 sub.
+
+## Live deploy deltas (verified in tenant)
+
+A real `az deployment sub create -f platform/fiab/bicep/main.bicep -p
+params/gcc-high.bicepparam` into **US Gov Virginia** (2026-07-10) surfaced five
+sub-deployment failures that only appear against a live Gov control plane (the
+rest of the estate deployed cleanly, and the deployment is idempotent). Each is
+fixed boundary-aware — **Commercial output is unchanged for #1, #2, #5 and
+improved-only (a latent from-scratch bug fixed in both clouds) for #3, #4.**
+
+| # | Module | Live Gov error | Fix | Commercial impact |
+|---|--------|----------------|-----|-------------------|
+| 1 | `admin-plane/network.bicep` (`diag-loom-stdz` on the hub VNet) | `Category 'VMProtectionAlerts' is not supported` | `vnetDiagLogs` var: Commercial/GCC keep `category:'VMProtectionAlerts'`; GCC-High/IL5 use `categoryGroup:'allLogs'` (the same idiom `diagFw` already uses). | Byte-identical (Gov-only branch). |
+| 2 | `admin-plane/adx-cluster.bicep` SKU (default from `admin-plane/main.bicep` `adxSkuName`) | `Standard_E2a_v4 is not supported in usgovvirginia` | `effectiveAdxSkuName` in `main.bicep`: when a Gov boundary is left on the E2a_v4 Dev default, substitute the LIVE-verified Gov Dev SKU `Dev(No SLA)_Standard_D11_v2` (tier-preserving 1:1 swap — Basic tier, 1 node). Added `Standard_E2ads_v5`/`Standard_E4ads_v5` (LIVE-verified Gov) to the module `@allowed` list for operators wanting a Gov production tier. | Byte-identical (Gov-only branch; explicit SKUs pass through). |
+| 3 | `admin-plane/audit-stream.bicep` DCR (`dcr-loom-audit-<region>`) | `Types of transform output columns do not match ... TenantId [produced:'String', output:'Guid']` | `TenantId` is a RESERVED Log Analytics column typed `guid`; the pass-through `transformKql:'source'` emitted it as string. Cast it: `source | extend TenantId = toguid(TenantId)`. | Improved-only — same latent mismatch fixed in Commercial. |
+| 4 | `admin-plane/monitoring-default-alerts.bicep` (3 `scheduledQueryRules`) | `failed to resolve table or column expression ... ContainerAppConsoleLogs_CL` | The `ContainerAppConsoleLogs_CL` / `ContainerAppSystemLogs_CL` tables are created by the Container Apps diagnostic pipeline only after the Console first logs, so a fresh LAW lacks them and Gov validates the KQL at create time. Set `skipQueryValidation:true` on all three rules (purpose-built for alerts over not-yet-existent tables; the rule evaluates correctly once the table materializes). Pre-creating the `_CL` tables was rejected — their schema/lifecycle is owned by the platform. | Improved-only — same latent from-scratch failure fixed in Commercial. |
+| 5 | `admin-plane/swa-publish-rbac.bicep` (Website Contributor role assignment) | `RoleDefinitionDoesNotExist: de139f84175647ae9be6808fbbe706ee` | Website Contributor does not resolve in Azure Government. Module is now boundary-aware: Commercial/GCC keep Website Contributor (`de139f84-1756-47ae-9be6-808fbbe706ee`), GCC-High/IL5 fall back to Contributor (`b24988ac-6180-42a0-ab88-20f7382dd24c`) — the narrowest built-in available in Gov covering `Microsoft.Web/staticSites` write + listSecrets. `boundary` threaded from `main.bicep`. | Byte-identical (Gov-only branch; same role, same assignment GUID). |

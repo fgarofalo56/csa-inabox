@@ -27,7 +27,7 @@ param location string
 @description('Cluster name (admin-plane shared). ADX cluster names are GLOBALLY-unique DNS names, so the default is suffixed with a per-subscription uniqueString — this lets a new tenant/DMLZ estate coexist with an older hub (e.g. during a clean-rebuild migration) without colliding on `adx-csa-loom-shared`. The DLZ landing-zone module derives the same per-sub name in its `adminPlaneAdxClusterName` default (single-sub/tenant paths share the subscription); cross-sub consumers (dlz-attach, multi-sub fan-out) must instead receive the real deployed name via the hub output / LOOM_ADMIN_ADX_CLUSTER.')
 param clusterName string = 'adx-csa-loom-${take(uniqueString(subscription().id), 6)}'
 
-@description('SKU name')
+@description('SKU name. The E*a_v4 family is the Commercial default; the E*ads_v5 family is the LIVE-verified Azure Government (usgovvirginia) equivalent (the v4 family is not offered there). Dev(No SLA)_Standard_D11_v2 is the Gov-available Dev SKU used as the tier-preserving substitute for the Commercial Dev default on GCC-High / IL5 (see admin-plane/main.bicep effectiveAdxSkuName).')
 @allowed([
   'Dev(No SLA)_Standard_E2a_v4'
   'Dev(No SLA)_Standard_D11_v2'
@@ -35,6 +35,9 @@ param clusterName string = 'adx-csa-loom-${take(uniqueString(subscription().id),
   'Standard_E4a_v4'
   'Standard_E8a_v4'
   'Standard_E16a_v4'
+  // LIVE-verified available in usgovvirginia (Azure Government) 2026-07-10.
+  'Standard_E2ads_v5'
+  'Standard_E4ads_v5'
 ])
 param skuName string = 'Dev(No SLA)_Standard_E2a_v4'
 

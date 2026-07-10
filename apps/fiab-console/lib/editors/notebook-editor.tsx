@@ -2258,7 +2258,7 @@ export function NotebookEditor({ item, id }: Props) {
   useRegisterRibbonCommands(ribbon, 'notebook');
 
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={ribbon} dirty={dirty} commandSearch
+    <ItemEditorChrome splitKeyPrefix={item.slug} item={item} id={id} ribbon={ribbon} dirty={dirty} commandSearch
       explain={{ family: 'notebook', getDefinition: () => ({ cells, defaultLang }) }}
       leftPanel={
         <div className={s.treePad}>

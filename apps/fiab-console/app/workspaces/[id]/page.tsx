@@ -27,6 +27,7 @@ import {
 } from '@fluentui/react-icons';
 import Link from 'next/link';
 import { PageShell } from '@/lib/components/page-shell';
+import { WorkspaceAvatar } from '@/lib/components/workspace-avatar';
 import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
 import { NewItemDialog } from '@/lib/components/new-item-dialog';
 import { WorkspaceSettingsDrawer } from '@/lib/components/workspace-settings-drawer';
@@ -38,6 +39,8 @@ import { getItemTypeColor } from '@/lib/components/item-type-icon';
 
 const useStyles = makeStyles({
   back: { marginBottom: tokens.spacingVerticalM },
+  identity: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM, marginBottom: tokens.spacingVerticalM, minWidth: 0 },
+  identityText: { display: 'flex', flexDirection: 'column', minWidth: 0 },
   header: { display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: tokens.spacingHorizontalL, marginBottom: tokens.spacingVerticalS },
   // section heading: leading accent icon + title/hint stack, matching the
   // polished section-header pattern used across the Console.
@@ -99,6 +102,13 @@ export default function WorkspaceDetailPage(props: { params: Promise<{ id: strin
 
       {ws && (
         <>
+          <div className={s.identity}>
+            <WorkspaceAvatar workspaceId={ws.id} name={ws.name} image={ws.image} size={44} />
+            <div className={s.identityText}>
+              <Title3>{ws.name}</Title3>
+              {ws.description && <Caption1 className={s.hint}>{ws.description}</Caption1>}
+            </div>
+          </div>
           <div className={s.header}>
             <div className={s.heading}>
               <div className={s.headingIcon} aria-hidden>

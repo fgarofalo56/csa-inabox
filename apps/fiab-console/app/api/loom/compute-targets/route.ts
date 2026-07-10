@@ -198,6 +198,10 @@ export async function POST(req: NextRequest) {
     /** Best-practice preset id (from lib/spark/config-presets) — expands to a
      *  cluster shape (autoscale/Photon/spot/autoterm) + curated spark_conf. */
     presetId?: string;
+    /** Size tier id (from lib/databricks/cluster-presets) — recorded as the
+     *  loom-size tag for hygiene/cost allocation. Sizing itself is applied
+     *  client-side via the min/max/photon/autoterm fields. */
+    tierId?: string;
     /** Structured spark.* overrides from the builder (merged over the preset). */
     spark_conf?: Record<string, string>;
     /** Builder fields (override the preset shape when supplied). */
@@ -250,7 +254,11 @@ export async function POST(req: NextRequest) {
     node_type_id: body.node_type_id!,
     autotermination_minutes: autoterm,
     runtime_engine: photon ? 'PHOTON' : 'STANDARD',
-    custom_tags: { 'loom-managed': 'true', ...(body.presetId ? { 'loom-preset': body.presetId } : {}) },
+    custom_tags: {
+      'loom-managed': 'true',
+      ...(body.presetId ? { 'loom-preset': body.presetId } : {}),
+      ...(body.tierId ? { 'loom-size': body.tierId } : {}),
+    },
   };
   if (Object.keys(sparkConf).length) spec.spark_conf = sparkConf;
   if (useAutoscale) spec.autoscale = { min_workers: minW!, max_workers: maxW! };

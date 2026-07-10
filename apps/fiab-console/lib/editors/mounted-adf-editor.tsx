@@ -261,7 +261,7 @@ export function MountedAdfEditor({ item, id }: Props) {
   }, [mountId, active, pipelines, runs]);
 
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={ribbon} rightPanel={detailsPanel} rightPanelLabel="Details"
+    <ItemEditorChrome splitKeyPrefix={item.slug} item={item} id={id} ribbon={ribbon} rightPanel={detailsPanel} rightPanelLabel="Details"
       leftPanel={
         <div className={s.treePad}>
           <Subtitle2 style={{ marginBottom: tokens.spacingVerticalS }}>Mounted factories</Subtitle2>

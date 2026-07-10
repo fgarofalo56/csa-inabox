@@ -944,7 +944,7 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
   const sparkUiNote = sessionState === 'idle' || sessionState === 'busy';
 
   return (
-    <ItemEditorChrome
+    <ItemEditorChrome splitKeyPrefix={item.slug}
       item={item}
       id={id}
       ribbon={ribbon}

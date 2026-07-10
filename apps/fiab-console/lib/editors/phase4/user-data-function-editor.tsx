@@ -276,7 +276,7 @@ export function UserDataFunctionEditor({ item, id }: { item: FabricItemType; id:
   ], [reload, save, saving, dirty, functions.length]);
 
   return (
-    <ItemEditorChrome
+    <ItemEditorChrome splitKeyPrefix={item.slug}
       item={item}
       id={id}
       ribbon={ribbon}

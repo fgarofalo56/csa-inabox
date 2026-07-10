@@ -2261,7 +2261,7 @@ export function LakehouseEditor({ item, id }: Props) {
   // ---- render ---------------------------------------------------------
   return (
     <>
-    <ItemEditorChrome
+    <ItemEditorChrome splitKeyPrefix={item.slug}
       item={item}
       id={id}
       ribbon={ribbon}

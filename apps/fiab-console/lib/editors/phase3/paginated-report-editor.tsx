@@ -544,7 +544,7 @@ function PaginatedReportDesigner({ item, id }: { item: FabricItemType; id: strin
 
   return (
     <>
-      <ItemEditorChrome item={item} id={id} ribbon={ribbon} leftPanel={leftPanel} main={main} />
+      <ItemEditorChrome splitKeyPrefix={item.slug} item={item} id={id} ribbon={ribbon} leftPanel={leftPanel} main={main} />
       {def && (
         <>
           <DataSourceDialog

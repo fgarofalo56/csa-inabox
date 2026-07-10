@@ -522,7 +522,7 @@ export function StreamAnalyticsJobEditor({ item, id }: { item: FabricItemType; i
   }, [testResult]);
 
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={ribbon} commandSearch
+    <ItemEditorChrome splitKeyPrefix={item.slug} item={item} id={id} ribbon={ribbon} commandSearch
       leftPanel={
         <div className={s.pad}>
           <Subtitle2>ASA jobs ({jobs?.length ?? '…'})</Subtitle2>
