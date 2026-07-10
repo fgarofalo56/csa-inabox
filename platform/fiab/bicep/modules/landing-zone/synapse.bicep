@@ -195,6 +195,33 @@ resource sparkPool 'Microsoft.Synapse/workspaces/bigDataPools@2021-06-01' = if (
   }
 }
 
+// Diagnostic settings on the Spark (big data) pool -> standardized Loom LAW.
+// Universal Spark telemetry: the workspace-level diagnostic setting does NOT
+// carry Spark-application records — those live at the bigDataPools scope under
+// the `BigDataPoolAppsEnded` category (surfaces in LA as the
+// SynapseBigDataPoolApplicationsEnded table: one row per ended Apache Spark
+// application, with duration + state). This complements the fine-grained
+// session emitter (spark.synapse.logAnalytics.* -> SparkListenerEvent_CL /
+// SparkMetrics_CL, injected per Livy session by lib/spark/config-presets), so
+// the Spark-insights reports have both app-completion records and detailed
+// executor/task metrics. Same setting name as every Loom resource. Honest gate:
+// skipped when no LAW coordinate is bound. Grounded in Microsoft Learn:
+// "Azure Synapse Analytics monitoring data reference" →
+// "Supported resource logs for Microsoft.Synapse/workspaces/bigDataPools".
+resource sparkPoolDiag 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = if (deploySparkPool && !empty(workspaceId)) {
+  scope: sparkPool
+  name: 'diag-loom-stdz'
+  properties: {
+    workspaceId: workspaceId
+    logs: [
+      { category: 'BigDataPoolAppsEnded', enabled: true }
+    ]
+    metrics: [
+      { category: 'AllMetrics', enabled: true }
+    ]
+  }
+}
+
 // =====================================================================
 // Dedicated SQL pool (v2.0)
 // =====================================================================

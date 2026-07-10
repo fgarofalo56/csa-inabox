@@ -49,6 +49,44 @@ Grounded in MS Learn: Synapse [create-spark-configuration], Synapse Spark→LA
   session now emits SparkListenerEvent/SparkMetrics to law-csa-loom-centralus and the
   Monitor → Spark tab shows real data. STILL NEEDS the durable bicep (wave 1 below).
 
+## ✅ SHIPPED — universal Spark telemetry + reports (feat/spark-telemetry-law)
+Operator ask: "ALL Spark environments — Synapse, Databricks, AML, or any other —
+always configured to send all telemetry to the Loom Log Analytics workspace, with
+performance / troubleshooting / optimization reports available to users."
+
+- **Provision-time enforcement (bicep)** — every Spark-capable engine now routes
+  diagnostics to the central Loom LAW at deploy:
+  | Engine | Module | Diagnostic categories → LAW |
+  |--------|--------|------------------------------|
+  | Databricks | `landing-zone/databricks.bicep` | all 21 log categories (clusters, jobs, notebook, unityCatalog, sqlanalytics…) — already shipped |
+  | Synapse workspace | `landing-zone/synapse.bicep` | SynapseRbacOperations, GatewayApiRequests, BuiltinSqlReqsEnded, Integration*Runs, SQLSecurityAuditEvents + AllMetrics — already shipped |
+  | **Synapse Spark pool** (NEW) | `landing-zone/synapse.bicep` `sparkPoolDiag` | **BigDataPoolAppsEnded** (→ `SynapseBigDataPoolApplicationsEnded`) + AllMetrics — app-completion records at the `bigDataPools` scope |
+  | **Azure ML** (NEW) | `deploy-planner/ml-workspace.bicep` `diag` | **allLogs** (AmlComputeJobEvent / AmlComputeClusterEvent / AmlComputeCpuGpuUtilization / AmlRunStatusChangedEvent) + AllMetrics |
+  New `workspaceId` param on `ml-workspace.bicep`, wired from `main.bicep`
+  (`dpMlWorkspace` ← `effHubLawId`). All honest-gated on a bound LAW coordinate.
+- **Runtime enforcement** — Synapse sessions inject `spark.synapse.logAnalytics.*`
+  per Livy session (`config-presets.synapseLogAnalyticsConf`, already wired);
+  Databricks clusters carry `cluster_log_conf` (already wired). AML Spark telemetry
+  is workspace-level (the bicep diag above) — no per-CI payload needed.
+- **Post-deploy reconciler** — `lib/azure/spark-telemetry-audit.ts`
+  (`auditSparkTelemetry` / `applySparkTelemetry`, built on
+  `monitor-client.getDiagnosticsCoverage` + `enableDiagnostics`) enumerates the
+  estate's Synapse / Databricks / AML workspaces, reports which route to the Loom
+  LAW, and PUTs the standardized `diag-loom-stdz` setting on any that drifted.
+  Route `GET|POST /api/admin/spark-telemetry/audit` (tenant-admin); last run
+  persisted to the `maintenance-jobs` Cosmos container. Surfaced as the
+  **Capacity & compute → "Spark telemetry"** card (per-engine status + Apply-all).
+  Default-ON, no approval gate.
+- **User-facing reports** — `Monitor → Spark` (`lib/panes/spark-observability.tsx`)
+  reorganized into three report views: **Performance** (apps table → per-app metric
+  drill-down + tuning recs), **Troubleshooting** (failed apps / failure signals with
+  error class + drill-in), **Optimization** (tuning recs aggregated across recent
+  apps with affected-app counts + conf chips). Backed by `scanSparkInsights()`
+  (bounded portfolio scan, `?report=insights`) with a timing status bar. Honest gate
+  links to the Capacity → Spark-telemetry audit surface.
+- Gates green: tsc (0 new), check-no-raw-px / check-env-sync / check-bicep-sync OK,
+  29 unit/route tests (spark-monitor 12, spark-telemetry-audit 7, route 6, redaction 4).
+
 ## ⏳ NEXT WAVES (designed, ready to build)
 
 ### 1. Wire the Synapse→LA env + pool default (infra)
