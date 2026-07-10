@@ -433,6 +433,27 @@ export function searchAadScope(): string {
 export const SEARCH_AAD_SCOPE = 'https://search.azure.com/.default';
 
 // ---------------------------------------------------------------------------
+// Azure Batch (data plane — jobs / tasks over the account endpoint)
+// ---------------------------------------------------------------------------
+
+/**
+ * AAD scope (resource audience) for Azure Batch DATA-PLANE tokens (jobs, tasks,
+ * nodes over `https://{account}.{region}.batch.azure.com`). The Batch resource
+ * audience is NOT cloud-invariant: Commercial / GCC use
+ * `https://batch.core.windows.net/`; Azure US Government (GCC-High / IL5 / DoD)
+ * uses `https://batch.core.usgovcloudapi.net/`. Acquiring a Commercial-audience
+ * token against a Gov Batch account fails auth on every data-plane call, so
+ * every Batch client builds its data-plane scope from this helper. (Pool CRUD
+ * is management-plane and uses `armScope()` instead.) Grounded in Microsoft
+ * Learn "Authenticate Azure Batch services with Microsoft Entra ID".
+ */
+export function batchScope(): string {
+  return isGovCloud()
+    ? 'https://batch.core.usgovcloudapi.net/.default'
+    : 'https://batch.core.windows.net/.default';
+}
+
+// ---------------------------------------------------------------------------
 // ADX / Kusto (data plane)
 // ---------------------------------------------------------------------------
 

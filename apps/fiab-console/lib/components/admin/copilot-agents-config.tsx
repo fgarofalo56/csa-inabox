@@ -25,9 +25,10 @@ import {
   MessageBar, MessageBarBody, MessageBarTitle,
   Caption1, Body1, makeStyles, tokens,
 } from '@fluentui/react-components';
-import { Save24Regular, ArrowClockwise20Regular, Sparkle20Regular, PlugConnected20Regular, Open16Regular } from '@fluentui/react-icons';
+import { Save24Regular, ArrowClockwise20Regular, Sparkle20Regular, Sparkle24Regular, PlugConnected20Regular, Open16Regular } from '@fluentui/react-icons';
 import Link from 'next/link';
 import { Section } from '@/lib/components/ui/section';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
 import {
   RECOMMENDED_CHAT_MODELS, RECOMMENDED_EMBED_MODELS, looksLikeEmbedding,
   type TenantCopilotConfig,
@@ -265,6 +266,14 @@ export function CopilotAgentsConfig() {
   return (
     <>
     <Section title="Copilot & Agents">
+      <TeachingBanner
+        surfaceKey="admin-copilot-agents-config"
+        title="Wire Copilot to your models"
+        message="Pick the default Azure AI Foundry account and per-tier model deployments the Loom Copilot, Help agent, and workspace data agents use. Every list is a live ARM lookup; these settings override the deployment env vars. Copilot works day-one from env defaults — save to pin explicit tenant choices."
+        icon={Sparkle24Regular}
+        accent="var(--loom-accent-violet)"
+        learnMoreHref="https://learn.microsoft.com/azure/ai-foundry/what-is-azure-ai-foundry"
+      />
       <Body1 className={s.hint}>
         Pick the default Azure AI Foundry account and model deployments the Loom
         Copilot, Help agent, and workspace data agents use. These settings are

@@ -17,12 +17,13 @@ import {
   MessageBar, MessageBarBody, MessageBarTitle,
   makeStyles, tokens,
 } from '@fluentui/react-components';
-import { ArrowSync24Regular, ArrowDownload24Regular } from '@fluentui/react-icons';
+import { ArrowSync24Regular, ArrowDownload24Regular, History24Regular } from '@fluentui/react-icons';
 import { AdminShell } from '@/lib/components/admin-shell';
 import { Section, Toolbar } from '@/lib/components/ui/section';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { useAdminTabStyles } from '@/lib/components/ui/admin-tab-styles';
 import { SectionExplainer, LearnPopover } from '@/lib/components/ui/learn-popover';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
 
 type AuditSource = 'cosmos' | 'purview' | 'loganalytics';
 
@@ -224,6 +225,13 @@ export default function AuditLogsPage() {
 
   return (
     <AdminShell sectionTitle="Audit logs">
+      <TeachingBanner
+        surfaceKey="admin-audit-logs"
+        title="Your cross-platform compliance trail"
+        message="Every governance and security-relevant action lands here, merged live from three real backends — Cosmos (Loom events), Purview Data Map (governance), and Log Analytics (app operations). Filter by user, event type, and time range, then export to CSV for review or evidence."
+        icon={History24Regular}
+        learnMoreHref="https://learn.microsoft.com/purview/audit-solutions-overview"
+      />
       <Body1 className={s.intro}>
         Every tenant-settings change, item save, share grant, app install, Purview
         governance event, and platform operation lands here. Sources: Cosmos
