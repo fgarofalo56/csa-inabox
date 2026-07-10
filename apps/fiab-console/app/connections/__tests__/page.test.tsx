@@ -47,7 +47,7 @@ describe('ConnectionsPage view toggle', () => {
     installFetchMock({ '/api/connections': () => ({ ok: true, connections: [] }) });
     mount();
     await waitFor(() =>
-      expect(screen.getByText(/No connections yet/i)).toBeInTheDocument(),
+      expect(screen.getByText(/Connect a data source/i)).toBeInTheDocument(),
     );
     expect(screen.queryByRole('button', { name: 'List view' })).toBeNull();
   });
@@ -55,7 +55,7 @@ describe('ConnectionsPage view toggle', () => {
   it('always offers both "New connection" and "Add existing" entry points', async () => {
     installFetchMock({ '/api/connections': () => ({ ok: true, connections: [] }) });
     mount();
-    await waitFor(() => expect(screen.getByText(/No connections yet/i)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/Connect a data source/i)).toBeInTheDocument());
     // The empty state offers the entry points in more than one place (the page
     // header action + the EmptyState call-to-action), so assert at least one of
     // each rather than a single unique button.

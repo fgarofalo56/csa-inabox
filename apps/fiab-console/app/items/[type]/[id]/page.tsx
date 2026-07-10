@@ -20,10 +20,16 @@ import { findItemType } from '@/lib/catalog/fabric-item-types';
 import { isAppTemplate } from '@/lib/catalog/app-templates';
 import { getEditor } from '@/lib/editors/registry';
 import { ItemEditorChrome } from '@/lib/editors/item-editor-chrome';
-import { EmptyState } from '@/lib/components/empty-state';
 import { getItem, type WorkspaceItem } from '@/lib/api/workspaces';
 import { ShareItemDialog } from '@/lib/dialogs/share-item-dialog';
-import { ArrowSync16Regular, Share16Regular, People16Regular } from '@fluentui/react-icons';
+import {
+  ArrowSync16Regular, Share16Regular, People16Regular,
+  ArrowSync24Regular, Share24Regular, People24Regular, Open24Regular, Cube24Regular,
+} from '@fluentui/react-icons';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
+import { GuidedEmptyState, type GuidedPath } from '@/lib/components/shared/guided-empty-state';
+import { LOOM_ACCENT } from '@/lib/components/shared/accent-tokens';
+import { itemVisual } from '@/lib/components/ui/item-type-visual';
 import type { RibbonTab, RibbonGroup } from '@/lib/components/ribbon';
 import type { PipelineRuntime } from '@/lib/components/pipeline/types';
 
@@ -181,6 +187,41 @@ export default function ItemEditorPage(props: Props) {
     ? `${item.displayName} editor (new)`
     : `${persisted?.displayName ?? item.displayName} (${id.substring(0, 8)})`;
 
+  // Real, wired launcher paths — mirror the generic ribbon so the fallback shell
+  // is a guided surface, not a dead pane (UX-1004, SC-4). On `/new` nothing is
+  // persisted yet, so only navigation paths are offered.
+  const heroIcon = itemVisual(type).icon ?? Cube24Regular;
+  const genericPaths: GuidedPath[] = isNew
+    ? [
+        {
+          key: 'browse', title: 'Browse existing items',
+          body: 'See what already exists across your workspaces.',
+          icon: Open24Regular, accent: LOOM_ACCENT.blue,
+          href: '/browse', onClick: () => router.push('/browse'),
+        },
+      ]
+    : [
+        {
+          key: 'refresh', title: 'Refresh',
+          body: 'Reload the latest saved state for this item.',
+          icon: ArrowSync24Regular, accent: LOOM_ACCENT.blue,
+          onClick: () => { void q.refetch(); },
+        },
+        {
+          key: 'share', title: 'Share',
+          body: 'Grant a person or group access to this item.',
+          icon: Share24Regular, accent: LOOM_ACCENT.teal,
+          onClick: () => setShareOpen(true),
+        },
+        {
+          key: 'permissions', title: 'Manage permissions',
+          body: 'View and revoke who has access.',
+          icon: People24Regular, accent: LOOM_ACCENT.amber,
+          href: `/items/${type}/${id}/permissions`,
+          onClick: () => router.push(`/items/${type}/${id}/permissions`),
+        },
+      ];
+
   return (
     <>
       <ItemEditorChrome
@@ -193,11 +234,22 @@ export default function ItemEditorPage(props: Props) {
           onManagePermissions: () => router.push(`/items/${type}/${id}/permissions`),
         })}
         main={
-          <EmptyState
-            icon="◰"
-            title={headline}
-            body={`${item.displayName} (REST type: ${item.restType}) uses the generic editor shell until its focused editor ships in a follow-on phase. The ribbon's Refresh, Share, and Permissions actions are wired and behave identically across every item type.`}
-          />
+          <>
+            <TeachingBanner
+              surfaceKey="generic-item-shell"
+              title={headline}
+              message={`${item.displayName} (REST type: ${item.restType}) uses the generic editor shell until its focused editor ships. The Refresh, Share and Permissions actions below — and in the ribbon — are fully wired and behave identically across every item type.`}
+              icon={heroIcon}
+              accent={LOOM_ACCENT.violet}
+            />
+            <GuidedEmptyState
+              title={`${item.displayName} shell`}
+              intro="This item type doesn't have a focused editor yet, but every governance action still works. Pick one below."
+              heroIcon={heroIcon}
+              paths={genericPaths}
+              ariaLabel={`${item.displayName} actions`}
+            />
+          </>
         }
       />
       {!isNew && (
