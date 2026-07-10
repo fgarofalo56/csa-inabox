@@ -41,6 +41,7 @@ import {
 } from '@fluentui/react-icons';
 import { EmptyState } from '../components/empty-state';
 import { TileGrid } from '../components/ui/tile-grid';
+import { TeachingBanner } from '../components/shared/teaching-toast';
 
 // ============================================================ shared
 
@@ -954,6 +955,13 @@ export function PlaygroundsLandingPanel({ active, onOpenChat, onOpenImages, onOp
         <Subtitle1>Playgrounds</Subtitle1>
       </div>
       <Caption1>Try your deployed models before wiring them into an app. Chat, Images and Audio call the real Azure OpenAI data-plane; each gates honestly on a model of that modality being deployed.</Caption1>
+      <TeachingBanner
+        surfaceKey="foundry-playgrounds-landing"
+        icon={Rocket20Regular}
+        title="Test before you build"
+        message="Deploy a model from the catalog, then exercise it here: set a system prompt and parameters in Chat, generate from prompts in Images, or transcribe in Audio. Every panel calls the real Azure OpenAI data-plane and shows the equivalent code — no Microsoft Fabric required."
+        learnMoreHref="https://learn.microsoft.com/azure/ai-foundry/concepts/foundry-models-overview"
+      />
       <TileGrid minTileWidth={240}>
         {tiles.map((t) => (
           <Card key={t.key} className={s.tile}>

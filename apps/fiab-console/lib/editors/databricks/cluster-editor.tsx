@@ -37,6 +37,8 @@ import {
 } from '@fluentui/react-icons';
 import { ModelViewPanel } from '../components/model-view-canvas';
 import { ItemEditorChrome } from '../item-editor-chrome';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
+import { useRegisterRibbonCommands } from '@/lib/components/shared/ribbon-commands';
 import { StatsMaintenanceDialog } from '../components/stats-maintenance-dialog';
 import { WarehouseMonitoringTab } from '../components/warehouse-monitoring';
 import { ConnectionDetailsPanel } from '../components/connection-details';
@@ -454,12 +456,15 @@ export function DatabricksClusterEditor({ item, id }: { item: FabricItemType; id
     ]},
   ], [saving, clusterId, save, del, canStartCluster, canStopCluster, canRestartCluster, doState]);
 
+  useRegisterRibbonCommands(ribbonCluster, 'databricks-cluster');
+
   return (
     <>
     <ItemEditorChrome
       item={item}
       id={id}
       ribbon={ribbonCluster}
+      commandSearch
       leftPanel={
         <div className={s.treePad}>
           <div style={{ display: 'flex', gap: tokens.spacingHorizontalXS, marginBottom: tokens.spacingVerticalXS }}>
@@ -497,6 +502,12 @@ export function DatabricksClusterEditor({ item, id }: { item: FabricItemType; id
       }
       main={
         <div className={s.pad}>
+          <TeachingBanner
+            surfaceKey="databricks-cluster-editor"
+            title="Configure Databricks compute"
+            message="Size a cluster with a node type, Databricks Runtime, autoscale or fixed workers, and autotermination. Save calls the real Databricks clusters API (create / edit); Start, Stop and Restart drive live state. Photon, access mode, Spark config, libraries and init scripts round-trip through the cluster spec."
+            learnMoreHref="https://learn.microsoft.com/azure/databricks/compute/configure"
+          />
           <div className={s.toolbar}>
             <Badge appearance="filled" color={clusterStateColor(state)}>{state}</Badge>
             {cluster?.state_message && <Caption1>{cluster.state_message}</Caption1>}
