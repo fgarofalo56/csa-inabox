@@ -101,6 +101,7 @@ const ALLOWLIST = new Set([
   'LOOM_ITEM_VERSION_CAP',          // opt-in tuning knob for the per-item version-history retention cap (W6); unset default = 50 in code (lib/versions/item-version-store.ts)
   'LOOM_ADT_ENDPOINT',              // opt-in Azure Digital Twins endpoint (FGC-12); default twin backend is ADX-native — deploy platform/fiab/bicep/modules/integration/adt-instance.bicep to enable
   'LOOM_POWERBI_USER_PASSTHROUGH',  // opt-out kill switch for Power BI user-passthrough (OBO) auth (#1800 PBI slice; default ON in code — all Power BI tie-ins authenticate as the signed-in user, Synapse-style); set 'false' to revert every Power BI call to the console service principal
+  'LOOM_RESULT_CACHE_REDIS_BREAKER_THRESHOLD', // opt-in tune: consecutive Redis-tier failures before the cache circuit breaker opens (default 3 in redis-cache-client.ts)
   'LOOM_BATCH_SUB',                 // opt-in subscription override for the Azure Batch account (SVC-5); default = LOOM_SUBSCRIPTION_ID
   'LOOM_CANVAS_AI_SUGGEST',         // opt-out kill switch for the W7 AOAI ghost-suggestion engine (default on in code)
   'LOOM_COPILOT_MEMORY',            // opt-out kill switch for the CTS-06 dump-to-memory action (default on in code)
