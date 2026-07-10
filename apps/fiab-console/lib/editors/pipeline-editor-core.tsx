@@ -818,7 +818,7 @@ export function PipelineEditorCore({
   }
 
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={ribbon} commandSearch
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon} commandSearch splitKeyPrefix="pipeline"
       rightPanel={
         <PipelineCopilotPane apiBase={apiBase} bound={bound} onApplySpec={applyGeneratedSpec} />
       }
