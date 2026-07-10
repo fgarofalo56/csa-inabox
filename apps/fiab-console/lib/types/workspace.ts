@@ -74,6 +74,24 @@ export interface Workspace {
   /** Bound Power BI / Fabric group id (created lazily on first PBI-backed artifact). */
   fabricGroupId?: string;
   /**
+   * Explicit operator mapping of this Loom workspace to an EXISTING Power BI /
+   * Fabric workspace (workspace settings → Power BI tab). Distinct from the
+   * lazily-created `fabricGroupId`: this is a deliberate binding an admin sets so
+   * PBI integrations (report publish, embed, semantic-model refresh) target the
+   * right PBI workspace under user-passthrough (OBO) auth. Optional — the
+   * Azure-native workspace works with no PBI mapping (see no-fabric-dependency).
+   */
+  pbiWorkspaceMapping?: {
+    /** Power BI workspace (group) GUID. */
+    pbiWorkspaceId: string;
+    /** Display name cached for the settings UI. */
+    pbiWorkspaceName?: string;
+    /** UPN/oid of the admin who set the mapping. */
+    mappedBy: string;
+    /** ISO timestamp the mapping was set. */
+    mappedAt: string;
+  };
+  /**
    * ARM resource id of the storage account explicitly bound to this workspace
    * for OneLake lifecycle management (and shortcut resolution). When absent, the
    * global DLZ account (LOOM_SUBSCRIPTION_ID + LOOM_DLZ_RG + LOOM_*_URL) is used.
