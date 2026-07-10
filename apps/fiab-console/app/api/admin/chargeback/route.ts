@@ -23,7 +23,13 @@ import { MonitorError } from '@/lib/azure/monitor-client';
 import { getDomainChargeback } from '@/lib/azure/domain-chargeback';
 import { loadOrSeedDomains } from '@/lib/azure/domain-registry';
 import { tenantSettingsContainer } from '@/lib/azure/cosmos-client';
+import { buildScopedCacheKey, getOrComputeCached, resolveBackendTtl } from '@/lib/azure/query-result-cache';
 import type { CostTimeframe } from '@/lib/azure/cost-client';
+
+// Cost Management queries are slow (seconds) and 429-rate-limited, so the report
+// is served stale-while-revalidate: a 20-min TTL (LOOM_QUERY_CACHE_TTL_MS_COSTMGMT)
+// with a single background refresh. `?refresh=1` bypasses the cached read.
+const CHARGEBACK_TTL_MS = () => resolveBackendTtl('costmgmt', 20 * 60_000);
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -68,18 +74,28 @@ export async function GET(req: NextRequest) {
   const tfParam = (req.nextUrl.searchParams.get('timeframe') || 'MonthToDate') as CostTimeframe;
   const timeframe: CostTimeframe = TIMEFRAMES.includes(tfParam) ? tfParam : 'MonthToDate';
   const tenantId = tenantScopeId(s);
+  const refresh = req.nextUrl.searchParams.get('refresh') === '1';
+  const cacheKey = buildScopedCacheKey('admin/chargeback', { tenantId, timeframe });
 
   try {
-    // Domain display names + the tagging toggle (both best-effort, non-fatal).
-    const [domainDoc, tagging] = await Promise.all([
-      loadOrSeedDomains(tenantId, s.claims.upn || s.claims.oid).catch(() => null),
-      taggingEnabled(tenantId),
-    ]);
-    const domainNames: Record<string, string> = {};
-    for (const d of domainDoc?.items || []) domainNames[d.id] = d.name;
+    const { value, meta } = await getOrComputeCached(
+      cacheKey,
+      tenantId,
+      async () => {
+        // Domain display names + the tagging toggle (both best-effort, non-fatal).
+        const [domainDoc, tagging] = await Promise.all([
+          loadOrSeedDomains(tenantId, s.claims.upn || s.claims.oid).catch(() => null),
+          taggingEnabled(tenantId),
+        ]);
+        const domainNames: Record<string, string> = {};
+        for (const d of domainDoc?.items || []) domainNames[d.id] = d.name;
 
-    const data = await getDomainChargeback({ timeframe, domainNames });
-    return apiOk({ data, taggingEnabled: tagging });
+        const data = await getDomainChargeback({ timeframe, domainNames });
+        return { data, taggingEnabled: tagging };
+      },
+      { ttlMs: CHARGEBACK_TTL_MS(), staleWhileRevalidate: true, bypass: refresh },
+    );
+    return apiOk({ ...value, meta });
   } catch (e) {
     if (e instanceof MonitorError && (e.status === 401 || e.status === 403 || e.status === 404)) return costGate();
     const status = e instanceof MonitorError ? e.status : 500;

@@ -21,6 +21,7 @@ import { getSession } from '@/lib/auth/session';
 import { requireTenantAdmin } from '@/lib/auth/feature-gate';
 import { queryLogs, MonitorError, MonitorNotConfiguredError, type LogQueryResult } from '@/lib/azure/monitor-client';
 import { apiServerError, apiHonestError } from '@/lib/api/respond';
+import { buildScopedCacheKey, getOrComputeCached, resolveBackendTtl } from '@/lib/azure/query-result-cache';
 // rel-T85 list-price table + estimator — shared with the per-turn transparency
 // status bar (CTS-01) so the $ rate is derived in exactly one place.
 import { estCostUsd } from '@/lib/copilot/cost-estimate';
@@ -40,6 +41,8 @@ export async function GET(req: NextRequest) {
 
   const days = Math.max(1, Math.min(90, Number(req.nextUrl.searchParams.get('days') || '30') || 30));
   const timespan = `P${days}D`;
+  const refresh = req.nextUrl.searchParams.get('refresh') === '1';
+  const cacheKey = buildScopedCacheKey('admin/copilot-usage', { days });
 
   // NOTE: in workspace-based App Insights the AppEvents table is not
   // materialized in the LAW until the first customEvent of any kind is
@@ -78,6 +81,14 @@ union isfuzzy=true (AppEvents | where Name == "copilot.usage")
 `.trim();
 
   try {
+    // KQL against Log Analytics is slow + rate-limited; served stale-while-revalidate
+    // on a 10-min window (LOOM_QUERY_CACHE_TTL_MS_COPILOTUSAGE). `?refresh=1` bypasses.
+    // Only the successful data / noEvents states are cached — gates + errors propagate
+    // out of the compute (thrown) and are handled by the catch below, never cached.
+    const { value, meta } = await getOrComputeCached(
+      cacheKey,
+      'admin/copilot-usage',
+      async (): Promise<{ data: null; noEvents: true } | { data: Record<string, unknown> }> => {
     const [byPersonaR, byDayR, byUserR] = await Promise.all([
       queryLogs(kqlByPersona, timespan),
       queryLogs(kqlByDay, timespan),
@@ -85,7 +96,7 @@ union isfuzzy=true (AppEvents | where Name == "copilot.usage")
     ]);
 
     if (byPersonaR.rowCount === 0 && byDayR.rowCount === 0 && byUserR.rowCount === 0) {
-      return NextResponse.json({ ok: true, data: null, noEvents: true });
+      return { data: null, noEvents: true };
     }
 
     const byDay = byDayR.rows.map((row) => {
@@ -150,12 +161,16 @@ union isfuzzy=true (AppEvents | where Name == "copilot.usage")
 
     const models = Array.from(new Set(byDay.map((d) => d.model).filter(Boolean)));
 
-    return NextResponse.json({
-      ok: true,
-      // pricing:'list' flags that estCostUsd is a list-price estimate over real
-      // token counts (not a billed figure) — the UI labels it "estimated".
-      data: { byPersona, byDay, byUser, totals, models, days, pricing: 'list' },
-    });
+        return {
+          // pricing:'list' flags that estCostUsd is a list-price estimate over real
+          // token counts (not a billed figure) — the UI labels it "estimated".
+          data: { byPersona, byDay, byUser, totals, models, days, pricing: 'list' },
+        };
+      },
+      { ttlMs: resolveBackendTtl('copilotusage', 10 * 60_000), staleWhileRevalidate: true, bypass: refresh },
+    );
+
+    return NextResponse.json({ ok: true, ...value, meta });
   } catch (e) {
     if (e instanceof MonitorNotConfiguredError) {
       return NextResponse.json({

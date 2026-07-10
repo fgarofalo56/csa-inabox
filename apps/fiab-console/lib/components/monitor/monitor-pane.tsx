@@ -54,6 +54,7 @@ import { KqlChart, type KqlChartType } from '@/lib/components/monitor/kql-chart'
 import { Section } from '@/lib/components/ui/section';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { LoomChart } from '@/lib/components/charts/loom-chart';
+import { StaleDataBadge } from '@/lib/components/ui/stale-data-badge';
 import { EmptyState } from '@/lib/components/empty-state';
 import { CopilotUsageInline } from '@/lib/components/admin/copilot-usage';
 import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
@@ -300,20 +301,22 @@ function OverviewTab({ onUnauth }: { onUnauth: () => void }) {
   const [health, setHealth] = useState<Record<string, HealthEntry> | null>(null);
   const [gate, setGate] = useState<Gate | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [stale, setStale] = useState<{ cachedAt?: number } | null>(null);
   const [tick, setTick] = useState(0);
 
   useEffect(() => {
     let alive = true;
-    setResources(null); setHealth(null); setGate(null); setErr(null);
+    setResources(null); setHealth(null); setGate(null); setErr(null); setStale(null);
 
     // 1) Inventory — fast, first paint.
     clientFetch('/api/monitor/inventory').then(async (r) => {
       if (!alive) return;
       if (r.status === 401 || r.status === 403) { onUnauth(); setResources([]); setHealth({}); return; }
-      const j = await r.json();
-      if (j.gate) { setGate(j.gate); setResources([]); setHealth({}); return; }
-      if (!j.ok) { setErr(j.error || 'Failed to load inventory'); setResources([]); setHealth({}); return; }
-      setResources(j.data.resources ?? []);
+      const j = await r.json().catch(() => ({}));
+      if (j?.gate) { setGate(j.gate); setResources([]); setHealth({}); return; }
+      if (!j?.ok) { setErr(j?.error || 'Failed to load inventory'); setResources([]); setHealth({}); return; }
+      setResources(j.data?.resources ?? []);
+      if (j.meta?.stale) setStale(j.meta);
     }).catch((e) => { if (alive) { setErr(String(e)); setResources([]); setHealth({}); } });
 
     // 2) Resource Health — slow, parallel, best-effort. Never blocks the grid.
@@ -395,7 +398,12 @@ function OverviewTab({ onUnauth }: { onUnauth: () => void }) {
     <div>
       <Section
         title="Health overview"
-        actions={<Button appearance="primary" icon={<ArrowSync20Regular />} onClick={() => setTick((t) => t + 1)}>Refresh</Button>}
+        actions={
+          <>
+            {stale && <StaleDataBadge cachedAt={stale.cachedAt} />}
+            <Button appearance="primary" icon={<ArrowSync20Regular />} onClick={() => setTick((t) => t + 1)}>Refresh</Button>
+          </>
+        }
       >
         {gate && <GateBar gate={gate} subject="Resource inventory" />}
         {err && <MessageBar intent="error"><MessageBarBody>{err}</MessageBarBody></MessageBar>}
@@ -574,9 +582,9 @@ function MetricsTab({ onUnauth }: { onUnauth: () => void }) {
           interval: span.interval,
         }),
       });
-      const j = await r.json();
-      if (!j.ok) { setErr(j.error || 'Failed to load metrics'); setResults([]); return; }
-      setResults(j.data.results);
+      const j = await r.json().catch(() => ({}));
+      if (!j?.ok) { setErr(j?.error || 'Failed to load metrics'); setResults([]); return; }
+      setResults(j.data?.results ?? []);
     } catch (e) { setErr(String(e)); setResults([]); }
     finally { setLoadingMetrics(false); }
   }, [selectedRes, catalog, span]);
@@ -962,10 +970,10 @@ function ActivityTab({ onUnauth }: { onUnauth: () => void }) {
     actionFetch(`/api/monitor/activity?days=${days}`).then(async (r) => {
       if (!alive) return;
       if (r.status === 401 || r.status === 403) { onUnauth(); setEvents([]); return; }
-      const j = await r.json();
-      if (j.gate) { setGate(j.gate); setEvents([]); return; }
-      if (!j.ok) { setErr(j.error || 'Failed to load activity log'); setEvents([]); return; }
-      setEvents(j.data.events);
+      const j = await r.json().catch(() => ({}));
+      if (j?.gate) { setGate(j.gate); setEvents([]); return; }
+      if (!j?.ok) { setErr(j?.error || 'Failed to load activity log'); setEvents([]); return; }
+      setEvents(j.data?.events ?? []);
     }).catch((e) => { if (alive) { setErr(String(e)); setEvents([]); } });
     return () => { alive = false; };
   }, [days, tick, onUnauth]);

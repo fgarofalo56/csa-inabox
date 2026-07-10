@@ -115,6 +115,14 @@ const ALLOWLIST = new Set([
   'LOOM_RESULT_CACHE_REDIS_TLS',       // opt-in TLS toggle for the Redis tier (default on for :6380)
   'LOOM_QUERY_CACHE_TTL_MS_DEDICATED', // opt-in tuning knob: dedicated-pool result TTL override (PSR-5)
   'LOOM_QUERY_CACHE_TTL_MS_SERVERLESS',// opt-in tuning knob: serverless result TTL override (PSR-5)
+  // OBS-CACHE — per-backend result-TTL overrides for the observability routes'
+  // stale-while-revalidate cache (chargeback/usage/audit/copilot-usage/monitor).
+  // All opt-in tuning knobs: unset default = the route's own default TTL in code.
+  'LOOM_QUERY_CACHE_TTL_MS_COSTMGMT',    // opt-in: chargeback / cost-attribution TTL override (default 20m)
+  'LOOM_QUERY_CACHE_TTL_MS_USAGEROLLUP', // opt-in: usage-metrics TTL override (default 5m)
+  'LOOM_QUERY_CACHE_TTL_MS_AUDITMERGE',  // opt-in: audit-log 3-backend-merge TTL override (default 5m)
+  'LOOM_QUERY_CACHE_TTL_MS_COPILOTUSAGE',// opt-in: copilot-usage TTL override (default 10m)
+  'LOOM_QUERY_CACHE_TTL_MS_MONITOR',     // opt-in: monitor inventory/health/activity/metrics TTL override (default 90s)
   // Databricks pipeline linked-service binding — opt-in (Databricks is an
   // alternative Azure-native compute; Synapse is the default). Used by the
   // dev-pipeline seeder to auto-stub / bind the AzureDatabricks linked service a

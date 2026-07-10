@@ -15,6 +15,7 @@ import { apiOk, apiServerError, apiUnauthorized } from '@/lib/api/respond';
 import { getSession, tenantScopeId } from '@/lib/auth/session';
 import { requireTenantAdmin } from '@/lib/auth/feature-gate';
 import { queryAttributionRollup } from '@/lib/azure/cost-attribution';
+import { buildScopedCacheKey, getOrComputeCached, resolveBackendTtl } from '@/lib/azure/query-result-cache';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -27,10 +28,20 @@ export async function GET(req: NextRequest) {
 
   const days = Math.max(1, Math.min(90, Number(req.nextUrl.searchParams.get('days') || '30') || 30));
   const domainId = req.nextUrl.searchParams.get('domainId') || undefined;
+  const tenantId = tenantScopeId(s);
+  const refresh = req.nextUrl.searchParams.get('refresh') === '1';
+  const cacheKey = buildScopedCacheKey('admin/chargeback/attribution', { tenantId, days, domainId: domainId ?? '' });
 
   try {
-    const rollup = await queryAttributionRollup(tenantScopeId(s), { windowDays: days, domainId });
-    return apiOk({ rollup });
+    // Cosmos per-execution scan folded into rollups — same 20-min SWR window as
+    // the chargeback report (LOOM_QUERY_CACHE_TTL_MS_COSTMGMT).
+    const { value, meta } = await getOrComputeCached(
+      cacheKey,
+      tenantId,
+      async () => ({ rollup: await queryAttributionRollup(tenantId, { windowDays: days, domainId }) }),
+      { ttlMs: resolveBackendTtl('costmgmt', 20 * 60_000), staleWhileRevalidate: true, bypass: refresh },
+    );
+    return apiOk({ ...value, meta });
   } catch (e) {
     return apiServerError(e, 'Failed to load cost attribution');
   }
