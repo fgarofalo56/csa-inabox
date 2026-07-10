@@ -20,10 +20,14 @@ import {
 } from '@fluentui/react-components';
 import {
   Add20Regular, ArrowSync20Regular, Delete20Regular, Stream20Regular,
+  Add24Regular, Stream24Regular, DataUsage24Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { MessagingMetricsTab } from '@/lib/components/messaging/metrics-tab';
 import { EventHubsDataExplorer } from '@/lib/components/messaging/event-hubs-data-explorer';
+import { GuidedEmptyState } from '@/lib/components/shared/guided-empty-state';
+import { DetailsPanel } from '@/lib/components/shared/details-panel';
+import { PreviewTable } from '@/lib/components/shared/preview-table';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 
@@ -35,6 +39,7 @@ const useStyles = makeStyles({
   mono: { fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase200, overflowWrap: 'anywhere', wordBreak: 'break-word', minWidth: 0 },
   tableWrap: { overflow: 'auto', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
   field: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
+  detailsWrap: { display: 'flex', maxWidth: '440px', minHeight: '320px', width: '100%' },
 });
 
 interface NamespaceProps { name?: string; location?: string; sku?: string; status?: string; provisioningState?: string; minimumTlsVersion?: string; disableLocalAuth?: boolean; serviceBusEndpoint?: string }
@@ -198,7 +203,18 @@ export function EventHubsNamespaceEditor({ item, id }: Props) {
                 </Dialog>
               </div>
               {hubs.length === 0 ? (
-                <MessageBar intent="info"><MessageBarBody>No event hubs yet. Click <strong>New event hub</strong> to create the first one.</MessageBarBody></MessageBar>
+                <GuidedEmptyState
+                  variant="block"
+                  heroIcon={Stream24Regular}
+                  ariaLabel="Create your first event hub"
+                  title="Create your first event hub"
+                  intro="An event hub is a partitioned append-only log that can ingest millions of events per second. Create one to start streaming, then read from it with consumer groups."
+                  paths={[
+                    { key: 'new', title: 'New event hub', body: 'Name it, then choose partition count and message retention.', icon: Add24Regular, onClick: () => setCreateOpen(true) },
+                    { key: 'explorer', title: 'Open Data Explorer', body: 'Send test events and inspect the newest messages once a hub exists.', icon: DataUsage24Regular, onClick: () => setTab('explorer') },
+                  ]}
+                  learnMoreHref="https://learn.microsoft.com/azure/event-hubs/event-hubs-about"
+                />
               ) : (
                 <div className={s.tableWrap}>
                   <Table aria-label="Event hubs" size="small">
@@ -234,15 +250,21 @@ export function EventHubsNamespaceEditor({ item, id }: Props) {
                     <Input value={cgName} onChange={(_, d) => setCgName(d.value)} placeholder="group name" />
                     <Button appearance="outline" icon={<Add20Regular />} disabled={cgBusy || !cgName.trim()} onClick={createCg}>{cgBusy ? 'Adding…' : 'Add group'}</Button>
                   </div>
-                  {cgs === null ? <Spinner size="tiny" label="Loading…" /> : cgs.length === 0 ? <Caption1>Only the built-in $Default group exists.</Caption1> : (
-                    <div className={s.tableWrap}>
-                      <Table aria-label="Consumer groups" size="small">
-                        <TableHeader><TableRow><TableHeaderCell>Consumer group</TableHeaderCell><TableHeaderCell>Created</TableHeaderCell></TableRow></TableHeader>
-                        <TableBody>
-                          {cgs.map((c) => <TableRow key={c.name}><TableCell className={s.mono}>{c.name}</TableCell><TableCell>{c.createdAt || '—'}</TableCell></TableRow>)}
-                        </TableBody>
-                      </Table>
-                    </div>
+                  {cgs === null ? <Spinner size="tiny" label="Loading…" /> : (
+                    <PreviewTable
+                      ariaLabel="Consumer groups"
+                      showSearch={cgs.length > 4}
+                      sources={[{
+                        id: 'cgs',
+                        label: 'Consumer groups',
+                        data: {
+                          columns: ['Consumer group', 'Created'],
+                          rows: cgs.map((c) => [c.name, c.createdAt || '—']),
+                          rowCount: cgs.length,
+                          note: cgs.length === 0 ? 'Only the built-in $Default consumer group exists on this hub.' : undefined,
+                        },
+                      }]}
+                    />
                   )}
                 </div>
               )}
@@ -250,13 +272,38 @@ export function EventHubsNamespaceEditor({ item, id }: Props) {
           )}
 
           {!loading && !gate && tab === 'overview' && ns && (
-            <div className={s.grid}>
-              <Caption1>Namespace</Caption1><code className={s.mono}>{ns.name}</code>
-              <Caption1>Location</Caption1><code className={s.mono}>{ns.location || '—'}</code>
-              <Caption1>SKU</Caption1><code className={s.mono}>{ns.sku || '—'}</code>
-              <Caption1>Provisioning</Caption1><code className={s.mono}>{ns.provisioningState || ns.status || '—'}</code>
-              <Caption1>Minimum TLS</Caption1><code className={s.mono}>{ns.minimumTlsVersion || '—'}</code>
-              <Caption1>Local auth</Caption1><code className={s.mono}>{ns.disableLocalAuth ? 'disabled (Entra-only)' : 'enabled'}</code>
+            <div className={s.detailsWrap}>
+              <DetailsPanel
+                title="Namespace details"
+                subtitle={ns.name}
+                icon={<Stream20Regular />}
+                width="100%"
+                sections={[{
+                  key: 'props',
+                  title: 'Properties',
+                  stats: [
+                    { key: 'loc', label: 'Location', value: ns.location || '—' },
+                    { key: 'sku', label: 'SKU (tier)', value: ns.sku || '—' },
+                    { key: 'state', label: 'Provisioning', value: ns.provisioningState || ns.status || '—' },
+                    { key: 'tls', label: 'Minimum TLS', value: ns.minimumTlsVersion || '—' },
+                    { key: 'auth', label: 'Local auth', value: ns.disableLocalAuth ? 'Disabled (Entra-only)' : 'Enabled' },
+                    { key: 'hubs', label: 'Event hubs', value: hubs.length },
+                  ],
+                  uris: ns.serviceBusEndpoint
+                    ? [{ key: 'ep', label: 'Namespace endpoint', value: ns.serviceBusEndpoint }]
+                    : undefined,
+                }]}
+                related={{
+                  title: 'Event hubs',
+                  items: hubs.map((h) => ({
+                    id: h.name,
+                    name: h.name,
+                    kind: 'Event hub',
+                    onClick: () => { setTab('hubs'); void loadCgs(h.name); },
+                  })),
+                  emptyText: 'No event hubs yet — create one on the Event hubs tab.',
+                }}
+              />
             </div>
           )}
           {!loading && !gate && tab === 'overview' && !ns && <Body1>Namespace properties unavailable.</Body1>}
