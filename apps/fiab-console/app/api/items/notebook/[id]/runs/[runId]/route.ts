@@ -131,6 +131,28 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string;
           // the pending entry (qIdx advanced) so phase 2 chains the rest;
           // single-cell runs submit `code` and delete their entry as before.
           const first = queue.length > 0 ? { code: queue[0].source, kind: queue[0].lang as typeof lang } : { code, kind: lang };
+          // Preambles (display() + Semantic Link) — the run route cannot inject
+          // them while an async-created session is still 'starting' (Livy
+          // rejects statements pre-idle), so its try/catch leaves
+          // displayLoaded=false. Inject here at first-idle, BEFORE the first
+          // cell; Livy FIFO ordering makes them defined by the time the cell
+          // runs. Both are idempotent in-kernel; non-fatal on failure.
+          const sparkSess = (state as any).sparkSession;
+          if ((sparkSess?.kind ?? 'pyspark') === 'pyspark' && sparkSess?.displayLoaded !== true) {
+            if ((process.env.LOOM_RICH_DISPLAY || '').trim() !== '0') {
+              try {
+                const { AI_DISPLAY_PREAMBLE } = await import('@/lib/notebook/ai-display-preamble');
+                await submitLivyStatement(pool, sessionId, { code: AI_DISPLAY_PREAMBLE, kind: 'pyspark' });
+                if (sparkSess) sparkSess.displayLoaded = true;
+              } catch { /* non-fatal — display() degrades to the built-in renderer */ }
+            }
+            if ((process.env.LOOM_SEMANTIC_LINK || '').trim() !== '0') {
+              try {
+                const { LOOM_SEMANTIC_LINK_PREAMBLE } = await import('@/lib/notebook/loom-semantic-link-preamble');
+                await submitLivyStatement(pool, sessionId, { code: LOOM_SEMANTIC_LINK_PREAMBLE, kind: 'pyspark' });
+              } catch { /* non-fatal */ }
+            }
+          }
           const stmt = await submitLivyStatement(pool, sessionId, first);
           if (pending) {
             try {
