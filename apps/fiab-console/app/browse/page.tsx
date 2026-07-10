@@ -38,6 +38,12 @@ import {
 } from '@fluentui/react-components';
 import { Section, Toolbar } from '@/lib/components/ui/section';
 import { AllItemsExplorer } from '@/lib/components/browse/all-items-explorer';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
+import { GuidedEmptyState, type GuidedPath } from '@/lib/components/shared/guided-empty-state';
+import { LOOM_ACCENT } from '@/lib/components/shared/accent-tokens';
+import {
+  Folder24Regular, AppGeneric24Regular, BuildingShop24Regular, CompassNorthwest24Regular,
+} from '@fluentui/react-icons';
 import { ViewToggle, type LoomView } from '@/lib/components/ui/view-toggle';
 import { ItemTile } from '@/lib/components/ui/item-tile';
 import { TileGrid } from '@/lib/components/ui/tile-grid';
@@ -268,6 +274,14 @@ export default function BrowsePage() {
         }
       />
 
+      <TeachingBanner
+        surfaceKey="browse-hub"
+        title="Everything in your tenant, one place"
+        message="Browse spans every item across every workspace, plus what you've pinned and recently opened. Pin an item or workspace to keep it here and in the left sidebar; switch the workspaces list between tile and list views to sort by name, type or last modified."
+        icon={CompassNorthwest24Regular}
+        accent={LOOM_ACCENT.blue}
+      />
+
       {/* ── All items (everything in the tenant) ───────────────────────── */}
       <Section title="All items">
         <AllItemsExplorer />
@@ -329,11 +343,32 @@ export default function BrowsePage() {
           </div>
         )}
         {!wsLoading && (workspaces?.length ?? 0) === 0 && (
-          <MessageBar intent="info">
-            <MessageBarBody>
-              No workspaces in this tenant yet. Visit /workspaces to create one.
-            </MessageBarBody>
-          </MessageBar>
+          <GuidedEmptyState
+            title="No workspaces yet"
+            intro="Workspaces group the items your team builds. Start one, install a ready-made app, or explore the marketplace."
+            heroIcon={Folder24Regular}
+            paths={[
+              {
+                key: 'new-workspace', title: 'Create a workspace',
+                body: 'A fresh, empty workspace to build items in.',
+                icon: Folder24Regular, accent: LOOM_ACCENT.blue,
+                href: '/workspaces', onClick: () => router.push('/workspaces'),
+              },
+              {
+                key: 'install-app', title: 'Install an app',
+                body: 'Provision a bundled solution into a new workspace.',
+                icon: AppGeneric24Regular, accent: LOOM_ACCENT.violet,
+                href: '/apps', onClick: () => router.push('/apps'),
+              },
+              {
+                key: 'marketplace', title: 'Browse the marketplace',
+                body: 'Discover data products and APIs to build on.',
+                icon: BuildingShop24Regular, accent: LOOM_ACCENT.teal,
+                href: '/marketplace', onClick: () => router.push('/marketplace'),
+              },
+            ] satisfies GuidedPath[]}
+            ariaLabel="Get started"
+          />
         )}
         {!wsLoading && (workspaces?.length ?? 0) > 0 && visibleWorkspaces.length === 0 && filter && (
           <div className={styles.empty}>No workspaces match &quot;{q}&quot;.</div>

@@ -33,6 +33,7 @@ import {
 import { FullNetworkTopologyCanvas } from './full-topology-canvas';
 import { ManagedPrivateEndpointsCard } from './managed-private-endpoints';
 import { TrustedWorkspaceAccessCard } from './trusted-workspace-access';
+import { GuidedEmptyState } from '@/lib/components/shared/guided-empty-state';
 
 interface DnsRecord { fqdn: string; ips: string[]; zone: string; }
 interface PrivateEndpoint {
@@ -431,8 +432,20 @@ export function NetworkPane() {
             <Subtitle2>Private endpoints ({data.count ?? endpoints.length})</Subtitle2>
           </div>
           {endpoints.length === 0 ? (
-            <Body1>No private endpoints found in the readable subscription(s). If services are public-access
-              disabled but have no PE, they’re unreachable — provision the endpoints in the network bicep module.</Body1>
+            <GuidedEmptyState
+              title="No private endpoints discovered"
+              heroIcon={ServerMultipleRegular}
+              intro="Nothing resolved in the readable subscription(s). If a backing service has public network access disabled but no private endpoint, it is unreachable — provision the endpoints so the console and your VPN clients can reach it privately."
+              columns={1}
+              paths={[{
+                key: 'provision',
+                title: 'Provision private endpoints',
+                body: 'Deploy the network bicep module to add the private endpoints + private DNS records for each backing service.',
+                icon: PlugConnected24Regular,
+                href: 'https://learn.microsoft.com/azure/private-link/private-endpoint-overview',
+              }]}
+              ariaLabel="No private endpoints"
+            />
           ) : (
             <Table size="small" aria-label="Private endpoints">
               <TableHeader>

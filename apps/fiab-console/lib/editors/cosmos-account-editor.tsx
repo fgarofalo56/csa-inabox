@@ -61,6 +61,10 @@ import { CosmosSettingsPanel } from '@/lib/components/cosmos/cosmos-settings-pan
 import { CosmosContainerWizard } from '@/lib/components/cosmos/cosmos-container-wizard';
 import { CosmosScriptEditor } from '@/lib/components/cosmos/cosmos-script-editor';
 import { CosmosMetrics } from './components/cosmos-metrics';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
+import { useRegisterRibbonCommands } from '@/lib/components/shared/ribbon-commands';
+
+const COSMOS_EXPLORER_LEARN = 'https://learn.microsoft.com/azure/cosmos-db/data-explorer';
 
 const useStyles = makeStyles({
   workArea: { display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 },
@@ -277,11 +281,18 @@ export function CosmosAccountEditor({ item, id }: { item: FabricItemType; id: st
     ]},
   ], [refresh, openTab, openContainerWizard, openAccountTab]);
 
+  // SC-9 — publish the Data Explorer + Account-settings ribbon actions to the
+  // shared command registry so the in-ribbon command search / palette surface
+  // every studio action (New Container, New SQL Query, Graph explorer, Metrics,
+  // Replicate globally, Consistency, Backup, Networking) with zero duplication.
+  useRegisterRibbonCommands(ribbon, 'cosmos-account');
+
   return (
     <ItemEditorChrome
       item={item}
       id={id}
       ribbon={ribbon}
+      commandSearch
       leftPanel={
         <CosmosTree
           refreshKey={refreshKey + treeNewContainer}
@@ -290,6 +301,18 @@ export function CosmosAccountEditor({ item, id }: { item: FabricItemType; id: st
       }
       main={
         <div className={s.workArea}>
+          {/* SC-6 teaching banner — orient the user to the studio: the left tree
+              is the databases pane, tabs open like the portal Data Explorer, and
+              every control runs against the real ARM / Cosmos data plane.
+              Dismissible; persisted per surface. */}
+          <TeachingBanner
+            surfaceKey="cosmos-data-explorer"
+            title="This is the Cosmos DB Data Explorer"
+            message="Browse databases and containers in the left tree, then open Items to query with SQL, Graph explorer for Gremlin traversals, Metrics for RU/storage charts, or Account settings to replicate globally and manage backup and networking. Every action runs against the real control plane and data plane."
+            learnMoreHref={COSMOS_EXPLORER_LEARN}
+            learnMoreLabel="Data Explorer docs"
+          />
+
           {/* Studio closable tab strip */}
           <div className={s.tabStrip} role="tablist" aria-label="Cosmos Data Explorer tabs">
             {tabs.map((t) => (

@@ -20,11 +20,17 @@ import {
   Spinner, makeStyles, tokens, Button, Badge, Text,
   MessageBar, MessageBarBody,
 } from '@fluentui/react-components';
-import { ArrowLeft24Regular, AppGeneric24Regular, Open16Regular } from '@fluentui/react-icons';
+import {
+  ArrowLeft24Regular, AppGeneric24Regular, Open16Regular,
+  Apps24Regular, BuildingShop20Regular, Folder20Regular,
+} from '@fluentui/react-icons';
 import { PageShell } from '@/lib/components/page-shell';
 import { Section } from '@/lib/components/ui/section';
 import { itemVisual } from '@/lib/components/ui/item-type-visual';
 import { InstallAppDialog } from '@/lib/components/apps/install-app-dialog';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
+import { ToolbarCrossLinks, type CrossLink } from '@/lib/components/shared/item-tab-strip';
+import { LOOM_ACCENT } from '@/lib/components/shared/accent-tokens';
 
 interface AppItemRef { type: string; template?: string; displayName?: string; }
 interface AppDoc {
@@ -160,6 +166,21 @@ export default function AppDetailPage() {
             Install into workspace
           </Button>
         </div>}>
+      <ToolbarCrossLinks
+        ariaLabel="Related surfaces"
+        links={[
+          { key: 'apps', label: 'All apps', icon: <Apps24Regular />, href: '/apps' },
+          { key: 'marketplace', label: 'Marketplace', icon: <BuildingShop20Regular />, href: '/marketplace' },
+          { key: 'workspaces', label: 'Workspaces', icon: <Folder20Regular />, href: '/workspaces' },
+        ] satisfies CrossLink[]}
+      />
+      <TeachingBanner
+        surfaceKey={`app-detail-${app.id}`}
+        title="Install a whole solution at once"
+        message="An app bundles related items — lakehouses, pipelines, reports and more — into one package. Installing provisions every bundled item into a workspace you choose and wires them together with real Azure-native backends. Re-installing is idempotent: items that already exist by name are skipped."
+        accent={LOOM_ACCENT.blue}
+        learnMoreHref="https://learn.microsoft.com/fabric/fundamentals/fabric-apps"
+      />
       <div className={styles.meta}>
         {app.category && <Badge appearance="outline">{app.category}</Badge>}
         {app.publisher && <Badge appearance="outline" color="brand">by {app.publisher}</Badge>}

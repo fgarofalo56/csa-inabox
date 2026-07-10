@@ -24,9 +24,10 @@ import {
   Input, Button, Spinner, Dropdown, Option, Field, Switch,
   Badge, Text, Caption1, makeStyles, tokens,
 } from '@fluentui/react-components';
-import { CheckmarkCircle24Regular, DismissCircle24Regular } from '@fluentui/react-icons';
+import { CheckmarkCircle24Regular, DismissCircle24Regular, ShieldKeyhole20Regular } from '@fluentui/react-icons';
 import { Section } from '@/lib/components/ui/section';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
 import { loomDocUrl } from '@/lib/learn/content';
 
 const useStyles = makeStyles({
@@ -199,6 +200,13 @@ export function PermissionMatrix() {
 
   return (
     <div className={s.gutter}>
+      <TeachingBanner
+        surfaceKey="catalog-permission-matrix"
+        icon={ShieldKeyhole20Regular}
+        title="One role, mapped to the right privileges"
+        message="Pick a securable, a principal, and a single Loom role. Loom fans the role out to the correct back-end grants automatically — Unity Catalog privileges for Databricks securables, Fabric workspace roles for OneLake — so you never hand-write GRANT statements. Every change is a real backend call and is recorded in the session audit log below."
+        learnMoreHref={loomDocUrl('fiab/catalog/permissions')}
+      />
       {/* ── Grant a role ───────────────────────────────────────────── */}
       <Section title="Grant a role">
         <Text as="p" className={s.intro}>

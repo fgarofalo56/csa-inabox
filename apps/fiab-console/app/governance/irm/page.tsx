@@ -24,6 +24,7 @@ import { ArrowSync24Regular, Settings24Regular, ShieldError24Regular } from '@fl
 import { GovernanceShell } from '@/lib/components/governance-shell';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { Section, Toolbar } from '@/lib/components/ui/section';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
 
 type Severity = 'low' | 'medium' | 'high';
 
@@ -169,6 +170,18 @@ export default function IrmPage() {
         volume (cumulative exfiltration), off-hours / weekend access, and privileged-access anomalies. No
         Microsoft Fabric or Purview-IRM dependency.
       </Body1>
+
+      {/* Teaching banner (SC-6) — Purview IRM keeps indicators off until opted in;
+          teach the reviewer to enable signals and tune sensitivity. */}
+      <div style={{ marginBottom: tokens.spacingVerticalM }}>
+        <TeachingBanner
+          surfaceKey="governance-irm"
+          accent="var(--loom-accent-amber)"
+          title="Tune what counts as insider risk"
+          message="Like Purview IRM, indicators start off until you opt in. Open Indicators & thresholds to enable signals — unusual volume, off-hours access, privileged-access anomalies — and set the z-score, business hours, and timezone that define an anomaly for your estate."
+          learnMoreHref="https://learn.microsoft.com/purview/insider-risk-management-policies"
+        />
+      </div>
 
       <Toolbar actions={
         <>

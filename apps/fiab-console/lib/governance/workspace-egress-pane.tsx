@@ -32,9 +32,10 @@ import {
   ShieldGlobe20Regular, Add20Regular, ArrowSync16Regular, Edit16Regular,
   Delete16Regular, Delete12Regular, ShieldTask20Regular, Globe16Regular,
 } from '@fluentui/react-icons';
-import { EmptyState } from '@/lib/components/empty-state';
 import { Section } from '@/lib/components/ui/section';
 import { TileGrid } from '@/lib/components/ui/tile-grid';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
+import { GuidedEmptyState } from '@/lib/components/shared/guided-empty-state';
 import { clientFetch } from '@/lib/client-fetch';
 
 type EgressDestinationType = 'service-tag' | 'ip' | 'fqdn';
@@ -197,6 +198,16 @@ export function WorkspaceEgressPane() {
       title="Workspace egress policies"
       actions={<Button appearance="primary" icon={<Add20Regular />} onClick={() => { setEdit(null); setDialogOpen(true); }}>New policy</Button>}
     >
+      {/* Teaching banner (SC-6) — explain how allow-list destinations compile to NSG rules. */}
+      <div className={styles.mb}>
+        <TeachingBanner
+          surfaceKey="governance-workspace-egress"
+          accent="var(--loom-accent-teal)"
+          title="Control where a workspace can send data"
+          message="Pick the compute subnet's network security group and list the outbound destinations you allow — Azure service tags and IP/CIDR compile to real NSG outbound rules. Turn on default-deny to add a final Deny-to-Internet rule so only the allow-list egresses. FQDN destinations are reported as needing an Azure Firewall (NSGs can't match hostnames)."
+          learnMoreHref="https://learn.microsoft.com/azure/virtual-network/network-security-groups-overview"
+        />
+      </div>
       {error && (
         <MessageBar intent="error" className={styles.mb}>
           <MessageBarBody>{error}</MessageBarBody>
@@ -227,11 +238,22 @@ export function WorkspaceEgressPane() {
       {loading && <Spinner label="Loading egress policies…" />}
 
       {!loading && policies.length === 0 && (
-        <EmptyState
-          icon={<ShieldGlobe20Regular />}
-          title="No workspace egress policies"
-          body="Restrict a workspace's data-plane compute to an exact outbound allow-list. Destinations compile to real Azure NSG outbound rules; turn on default-deny so only the allow-list can reach the internet. No Fabric required."
-          primaryAction={{ label: 'New policy', onClick: () => { setEdit(null); setDialogOpen(true); } }}
+        <GuidedEmptyState
+          heroIcon={ShieldGlobe20Regular}
+          title="No workspace egress policies yet"
+          intro="Restrict a workspace's data-plane compute to an exact outbound allow-list. Destinations compile to real Azure NSG outbound rules; turn on default-deny so only the allow-list can reach the internet. No Fabric required."
+          ariaLabel="Get started with workspace egress policies"
+          columns={1}
+          paths={[
+            {
+              key: 'new-egress-policy',
+              title: 'New egress policy',
+              body: 'Choose the compute subnet NSG, add allowed service tags or IP ranges, and Save & reconcile to write the outbound rules.',
+              icon: ShieldGlobe20Regular,
+              onClick: () => { setEdit(null); setDialogOpen(true); },
+            },
+          ]}
+          learnMoreHref="https://learn.microsoft.com/azure/virtual-network/network-security-groups-overview"
         />
       )}
 
