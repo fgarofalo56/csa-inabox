@@ -45,6 +45,8 @@ import { useAutosave, AutosaveIndicator } from './use-autosave';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { useRegisterRibbonCommands } from '@/lib/components/shared/ribbon-commands';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
+import { loomDocUrl } from '@/lib/learn/content';
 import { CodeCell } from '@/lib/components/notebook/code-cell';
 import { MarkdownCell } from '@/lib/components/notebook/markdown-cell';
 import { CellAdder } from '@/lib/components/notebook/cell-adder';
@@ -2186,6 +2188,13 @@ export function NotebookEditor({ item, id }: Props) {
       main={
         <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
         <div className={s.pad} style={{ flex: 1, minWidth: 0 }}>
+          {/* SC-6 — teaching banner: what runs the cells + the data/compute model. */}
+          <TeachingBanner
+            surfaceKey="notebook"
+            title="Cells run on real Spark, Databricks, or Azure ML compute"
+            message="Pick a compute target in Compute & setup, then Run — each cell executes against a live Livy / Databricks / Azure ML session (never a mock). Attach data items in the left explorer to reference them by name, and Copilot can draft or explain a cell inline. AutoSave keeps your work; the status bar shows the session state and the selected cell."
+            learnMoreHref={loomDocUrl('fiab/parity/notebook')}
+          />
           {/* Slim always-visible compute bar: Run + selected-compute summary +
               the Compute & setup disclosure + Copilot. The full configuration
               (backend / workspace / compute / environment / session) collapses

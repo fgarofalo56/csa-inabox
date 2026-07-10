@@ -42,6 +42,7 @@ import { useCanvasHistory } from '@/lib/components/canvas/use-canvas-history';
 import { ForceDirectedGraph, type GraphNode, type GraphEdge } from '@/lib/components/graph/force-directed-graph';
 import { TimeSeriesChart } from '@/lib/components/adx/time-series-chart';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
 import { useItemState, SaveBar } from './phase4/shared';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
@@ -485,6 +486,12 @@ export function DigitalTwinBuilderEditor({ item, id }: { item: FabricItemType; i
 
   const main = (
     <div className={s.root}>
+      <TeachingBanner
+        surfaceKey="digital-twin-builder-editor"
+        title="Build a digital twin"
+        message="Model entities and the relationships between them, map each to your operational tables and time series, then explore the connected graph and stream live state — grounded in your real Azure data."
+        learnMoreHref="https://learn.microsoft.com/azure/digital-twins/concepts-twins-graph"
+      />
       <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as typeof tab)}>
         <Tab value="model" icon={<BranchFork20Regular />}>Model</Tab>
         <Tab value="mappings" icon={<Link16Regular />}>Mappings</Tab>

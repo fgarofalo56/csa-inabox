@@ -1,5 +1,6 @@
 import { redirect } from 'next/navigation';
 import { PageShell } from '@/lib/components/page-shell';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
 import { SetupWizardPane } from '@/lib/panes/setup-wizard';
 import { getTenantTopologySafe } from '@/lib/setup/tenant-topology';
 
@@ -27,6 +28,12 @@ export default async function SetupPage() {
   }
   return (
     <PageShell title="Setup wizard" subtitle="Loom-specific tenant bootstrap — provision capacities, register the orchestrator, and seed the first workspace.">
+      <TeachingBanner
+        surfaceKey="setup-wizard"
+        title="A guided, one-time bootstrap"
+        message="This wizard runs once to stand up the hub for your tenant — it provisions the Azure-native backends, registers the orchestrator, and seeds your first workspace. Each step validates before you continue, and nothing goes live until you finish. Once a hub exists, you'll manage its landing zones from the Setup & landing-zones page instead."
+        learnMoreHref="https://learn.microsoft.com/azure/cloud-adoption-framework/ready/landing-zone/"
+      />
       <SetupWizardPane />
     </PageShell>
   );

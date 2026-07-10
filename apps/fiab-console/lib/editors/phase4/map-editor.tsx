@@ -39,6 +39,8 @@ import { getItem } from '@/lib/api/workspaces';
 import type { MonitorRuleRecord } from '@/lib/azure/activator-monitor';
 import { ItemEditorChrome } from '../item-editor-chrome';
 import { NewItemBrowseGate } from '../new-item-gate';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
+import { ToolbarCrossLinks } from '@/lib/components/shared/item-tab-strip';
 import { safeModelJson } from '../model-fetch';
 import { DataAgentResultViz } from '../data-agent-result-viz';
 import { DataAgentConfigCopilotPanel } from '../data-agent-config-copilot';
@@ -379,6 +381,25 @@ export function MapEditor({ item, id }: { item: FabricItemType; id: string }) {
     <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
       <div className={s.pad}>
         {loading && <Spinner size="small" label="Loading…" labelPosition="after" />}
+
+        <TeachingBanner
+          surfaceKey="map-editor-intro"
+          title="Plot live data on an Azure Maps canvas"
+          message="Bind this map to a Lakehouse table, a KQL query, or an Ontology entity, then style Point / Heatmap / Cluster / Choropleth layers, draw and measure shapes, or geocode street addresses to precise lat/lon — all against real Azure backends (Synapse Serverless / ADX / Weave / Azure Maps Search). No Power BI or Fabric required."
+          learnMoreHref="https://learn.microsoft.com/azure/azure-maps/about-azure-maps"
+        />
+        <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' }}>
+          <ToolbarCrossLinks
+            ariaLabel="Related data surfaces"
+            maxInline={4}
+            links={[
+              { key: 'lakehouse', label: 'Lakehouse', href: '/items/lakehouse/new' },
+              { key: 'kql-database', label: 'KQL database', href: '/items/kql-database/new' },
+              { key: 'ontology', label: 'Ontology', href: '/items/ontology/new' },
+              { key: 'notebook', label: 'Notebook', href: '/items/notebook/new' },
+            ]}
+          />
+        </div>
 
         <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as 'data' | 'json')}>
           <Tab value="data">Data binding</Tab>

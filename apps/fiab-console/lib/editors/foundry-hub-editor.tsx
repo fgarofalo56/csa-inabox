@@ -55,6 +55,8 @@ import { EmptyState } from '@/lib/components/empty-state';
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
+import { useRegisterRibbonCommands } from '@/lib/components/shared/ribbon-commands';
+import { ToolbarCrossLinks } from '@/lib/components/shared/item-tab-strip';
 import { ModelCatalogPanel, ChatPlaygroundPanel, PlaygroundsLandingPanel, ImagesPlaygroundPanel, AudioPlaygroundPanel } from './foundry-playground';
 import { AzureResourcePicker } from '@/lib/components/azure/azure-resource-picker';
 import { FoundryAccountTree } from '@/lib/components/foundry/foundry-tree';
@@ -2459,6 +2461,7 @@ export function FoundryHubEditor({ item, id }: { item: FabricItemType; id: strin
       ]},
     ]},
   ], [portalUrl]);
+  useRegisterRibbonCommands(ribbon, item.slug);
 
   const [selectedDeployment, setSelectedDeployment] = useState<string | null>(null);
   const onOpenDeployment = useCallback((name: string) => { setSelectedDeployment(name); setTab('models'); }, []);
@@ -2475,9 +2478,26 @@ export function FoundryHubEditor({ item, id }: { item: FabricItemType; id: strin
   );
 
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={ribbon} leftPanel={leftPanel} main={
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon} commandSearch leftPanel={leftPanel} main={
       <>
         <AccountPickerBar acct={acct} onSelect={onSelectAccount} onHub={onHub} />
+        {/* SC-8 — workspace framing: quick cross-links to the AI-workload
+            siblings that live alongside a Foundry hub, mirroring Fabric's
+            per-item toolbar cross-navigation. Routing-only (existing routes). */}
+        <div style={{ display: 'flex', padding: `${tokens.spacingVerticalXXS} ${tokens.spacingHorizontalL}` }}>
+          <ToolbarCrossLinks
+            ariaLabel="AI Foundry related surfaces"
+            maxInline={5}
+            links={[
+              { key: 'copilot', label: 'Copilot', href: '/copilot' },
+              { key: 'agent', label: 'Data Agent', href: '/items/data-agent/new' },
+              { key: 'promptflow', label: 'Prompt flow', href: '/items/prompt-flow/new' },
+              { key: 'index', label: 'Search index', href: '/items/ai-search-index/new' },
+              { key: 'mlmodel', label: 'ML model', href: '/items/ml-model/new' },
+              { key: 'notebook', label: 'Notebook', href: '/items/notebook/new' },
+            ]}
+          />
+        </div>
         {crossSubHub && (
           <div style={{ padding: `${tokens.spacingVerticalXXS} ${tokens.spacingHorizontalL}` }}>
             <Badge appearance="tint" color="brand">Hub/project selected: {crossSubHub.name}</Badge>

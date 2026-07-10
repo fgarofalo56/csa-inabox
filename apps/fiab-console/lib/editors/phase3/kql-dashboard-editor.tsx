@@ -33,6 +33,8 @@ import {
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from '../item-editor-chrome';
 import { NewItemCreateGate } from '../new-item-gate';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
+import { ToolbarCrossLinks } from '@/lib/components/shared/item-tab-strip';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
@@ -929,6 +931,22 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
 
   const main = (
     <div className={s.pad}>
+      <TeachingBanner
+        surfaceKey="kql-dashboard-editor"
+        title="Build a Real-Time Dashboard"
+        message="Add tiles bound to KQL base queries, wire parameters to cross-filter every tile at once, and set an auto-refresh interval for a live operational view over your ADX-native eventhouse."
+        learnMoreHref="https://learn.microsoft.com/azure/data-explorer/azure-data-explorer-dashboards"
+      />
+      <ToolbarCrossLinks
+        ariaLabel="Related real-time surfaces"
+        links={[
+          { key: 'query', label: 'Query with code', href: '/items/kql-database/new' },
+          { key: 'eventhouse', label: 'Eventhouse', href: '/items/eventhouse/new' },
+          { key: 'eventstream', label: 'Eventstream', href: '/items/eventstream/new' },
+          { key: 'activator', label: 'Activator', href: '/items/activator/new' },
+          { key: 'agent', label: 'Data Agent', href: '/items/data-agent/new' },
+        ]}
+      />
       <div className={s.toolbar}>
         <Badge appearance="filled" color="brand">Real-Time Dashboard</Badge>
         <Caption1>db: <strong>{defaultDb}</strong> · {tiles.length} tiles · {dataSources.length} sources · {params.length} params</Caption1>

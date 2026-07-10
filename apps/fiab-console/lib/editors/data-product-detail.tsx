@@ -54,6 +54,7 @@ import { DataContractSummary } from './components/data-contract-designer';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import { findItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
+import { useRegisterRibbonCommands } from '@/lib/components/shared/ribbon-commands';
 import type {
   DataProductDoc, DataProductDetailResponse, DataProductOwner,
 } from '@/lib/types/data-product';
@@ -749,6 +750,7 @@ export function DataProductDetailEditor({ item: itemProp, id }: { item?: FabricI
       ],
     },
   ], [loading, load, product, gotoEdit]);
+  useRegisterRibbonCommands(ribbon, item.slug);
 
   const main = (() => {
     if (loading) return <Spinner label="Loading data product…" />;
@@ -1018,7 +1020,7 @@ export function DataProductDetailEditor({ item: itemProp, id }: { item?: FabricI
     return <ConsumerDataProductDetail id={id} />;
   }
 
-  return <ItemEditorChrome item={item} id={id} displayName={product?.name} ribbon={ribbon} main={main} />;
+  return <ItemEditorChrome item={item} id={id} displayName={product?.name} ribbon={ribbon} commandSearch main={main} />;
 }
 
 // ============================================================================

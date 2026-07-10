@@ -45,6 +45,7 @@ import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import type { RibbonTab } from '@/lib/components/ribbon';
+import { useRegisterRibbonCommands } from '@/lib/components/shared/ribbon-commands';
 import { ForceDirectedGraph, extractGraph } from '@/lib/components/graph/force-directed-graph';
 import { cypherToKql, TranslationError } from '@/lib/azure/cypher-kql-translator';
 import { useSharedEditorStyles } from './shared-styles';
@@ -194,11 +195,12 @@ export function CosmosGremlinGraphEditor({ item, id }: { item: FabricItemType; i
       ]},
     ]},
   ], [loading, run, showEdges, showVertices]);
+  useRegisterRibbonCommands(ribbon, item.slug);
 
   return (
     <ItemEditorChrome
       item={item} id={id}
-      ribbon={ribbon}
+      ribbon={ribbon} commandSearch
       leftPanel={
         <div className={s.treePad}>
           <div className={s.field}><Label>Gremlin endpoint (server-bound)</Label>
@@ -306,6 +308,7 @@ export function CypherGraphEditor({ item, id }: { item: FabricItemType; id: stri
       ]},
     ]},
   ], [loading, run, mode]);
+  useRegisterRibbonCommands(ribbon, item.slug);
 
   const cypherGraph = useMemo(() => {
     if (!result || !result.ok) return null;
@@ -317,7 +320,7 @@ export function CypherGraphEditor({ item, id }: { item: FabricItemType; id: stri
   return (
     <ItemEditorChrome
       item={item} id={id}
-      ribbon={ribbon}
+      ribbon={ribbon} commandSearch
       leftPanel={<div className={s.treePad}>
         <Caption1>Cypher → KQL bridge. Backed by ADX <code>make-graph</code> + <code>graph-match</code>.</Caption1>
         <div className={s.field} style={{ marginTop: tokens.spacingVerticalS }}>
@@ -491,11 +494,12 @@ export function GqlGraphEditor({ item, id }: { item: FabricItemType; id: string 
       ]},
     ]},
   ], [loading, run, backend, lang, toggleLang]);
+  useRegisterRibbonCommands(ribbon, item.slug);
 
   return (
     <ItemEditorChrome
       item={item} id={id}
-      ribbon={ribbon}
+      ribbon={ribbon} commandSearch
       leftPanel={
         <div className={s.treePad}>
           <Caption1>ISO GQL / openCypher. Pick a language and backend below.</Caption1>
@@ -936,6 +940,7 @@ export function VectorStoreEditor({ item, id }: { item: FabricItemType; id: stri
       ]},
     ]},
   ], [saving, persistSpec, creating, createIndex, loadSchema, backendLive]);
+  useRegisterRibbonCommands(ribbon, item.slug);
 
   const vectorField = useMemo(() => {
     const f = (liveIndex?.fields || []).find((x: any) => x.type?.includes('Collection(Edm.Single)'));
@@ -945,7 +950,7 @@ export function VectorStoreEditor({ item, id }: { item: FabricItemType; id: stri
   return (
     <ItemEditorChrome
       item={item} id={id}
-      ribbon={ribbon}
+      ribbon={ribbon} commandSearch
       leftPanel={
         <div className={s.treePad}>
           <div className={s.sectionHeader}>

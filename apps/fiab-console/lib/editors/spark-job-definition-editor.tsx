@@ -49,6 +49,10 @@ import type { RibbonTab } from '@/lib/components/ribbon';
 import { KeyValueGrid } from '@/lib/components/ui/key-value-grid';
 import { EmptyState } from '@/lib/components/empty-state';
 import { useSharedEditorStyles } from './shared-styles';
+// UX-baseline shared components (SC-6 teaching banner + SC-9 ribbon
+// command-search) — additive over the real, unchanged Livy batch backend.
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
+import { useRegisterRibbonCommands } from '@/lib/components/shared/ribbon-commands';
 
 const useLocalStyles = makeStyles({
   tabBody: { padding: tokens.spacingVerticalXL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, maxWidth: '900px' },
@@ -74,6 +78,11 @@ const useLocalStyles = makeStyles({
     fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase200, lineHeight: tokens.lineHeightBase200,
     backgroundColor: tokens.colorNeutralBackground3, color: tokens.colorNeutralForeground1,
     borderRadius: tokens.borderRadiusMedium, whiteSpace: 'pre-wrap', wordBreak: 'break-all',
+  },
+  teachWrap: {
+    paddingTop: tokens.spacingVerticalL,
+    paddingLeft: tokens.spacingHorizontalL,
+    paddingRight: tokens.spacingHorizontalL,
   },
 });
 
@@ -452,9 +461,15 @@ export function SparkJobDefinitionEditor({ item, id }: { item: FabricItemType; i
   // eslint-disable-next-line react-hooks/exhaustive-deps
   ], [busy, canSubmit, canSave, dirty, loadRuns, activeRun]);
 
+  // SC-9 — publish the ribbon actions (Submit, Cancel active run, Refresh runs,
+  // Save) to the shared command registry so the in-ribbon Ctrl+Q / Alt+Q
+  // CommandSearch can run them. Called unconditionally (before the `new` early
+  // return) so hook order is stable.
+  useRegisterRibbonCommands(ribbon, 'spark-job-definition');
+
   if (id === 'new') {
     return (
-      <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
+      <ItemEditorChrome item={item} id={id} ribbon={ribbon} commandSearch main={
         <div className={styles.tabBody}>
           <MessageBar intent="info">
             <MessageBarBody>Create this Spark Job Definition from the workspace catalog,
@@ -468,8 +483,18 @@ export function SparkJobDefinitionEditor({ item, id }: { item: FabricItemType; i
   const markDirty = () => setDirty(true);
 
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon} dirty={dirty} commandSearch main={
       <>
+        {/* SC-6 — teaching banner explaining the Spark Job Definition concept,
+            keyed per surface with a persistent dismiss. */}
+        <div className={styles.teachWrap}>
+          <TeachingBanner
+            surfaceKey="spark-job-definition-teach"
+            title="Submit batch Spark jobs"
+            message="A Spark Job Definition packages a main file (PySpark / Scala / R), reference files, arguments, compute sizing, and retry policy — then Submit launches it as a Synapse Livy batch and the Runs tab tracks live status with driver logs. Azure-native; no Fabric capacity required."
+            learnMoreHref="https://learn.microsoft.com/azure/synapse-analytics/spark/apache-spark-job-definitions"
+          />
+        </div>
         <div className={styles.tabBar}>
           <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as string)}>
             <Tab value="definition">Definition</Tab>

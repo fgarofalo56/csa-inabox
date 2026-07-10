@@ -48,6 +48,7 @@ import { UcSecurityPanel } from '@/lib/panes/uc-security-panel';
 import { PipelineDagView, type PipelineActivity } from '@/lib/components/pipeline/pipeline-dag-view';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
+import { useRegisterRibbonCommands } from '@/lib/components/shared/ribbon-commands';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { useSqlTabs, SqlTabBar, getRunSql } from '@/lib/components/editor/sql-editor-kit';
 import { registerSqlIntelliSense, createEmptyCache, type SqlSchemaCache } from '@/lib/components/editor/sql-intellisense';
@@ -926,12 +927,13 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
       ]},
     ]},
   ], [newSql, loading, canRun, run, starting, canStart, start, canStop, stop, refreshAll, warehouseId, openQueryHistory, openEdit, gov, sqlText, openCtas, openCloneForTable, activeCatalog, activeSchema, tables, openInExcel, statsTarget]);
+  useRegisterRibbonCommands(ribbon, item.slug);
 
   return (
     <ItemEditorChrome
       item={item}
       id={id}
-      ribbon={ribbon}
+      ribbon={ribbon} commandSearch
       leftPanel={
         <div className={s.treePad}>
           <div style={{ display: 'flex', gap: tokens.spacingHorizontalXS, marginBottom: tokens.spacingVerticalXS, flexWrap: 'wrap' }}>

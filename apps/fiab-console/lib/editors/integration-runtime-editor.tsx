@@ -33,6 +33,8 @@ import { IntegrationRuntimeManager } from '@/lib/components/pipeline/integration
 import type { PipelineEngine } from '@/lib/pipeline/integration-runtime-catalog';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
+// UX-baseline shared components (SC-6 teaching banner + SC-8 cross-links +
+// SC-9 ribbon command-search) — additive chrome over the real, unchanged IR manager.
 import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
 import { ToolbarCrossLinks } from '@/lib/components/shared/item-tab-strip';
 import { useRegisterRibbonCommands } from '@/lib/components/shared/ribbon-commands';
