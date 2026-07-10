@@ -56,6 +56,8 @@ import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-ta
 import { LoomChart } from '@/lib/components/charts/loom-chart';
 import { EmptyState } from '@/lib/components/empty-state';
 import { CopilotUsageInline } from '@/lib/components/admin/copilot-usage';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
+import { LOOM_ACCENT } from '@/lib/components/shared/accent-tokens';
 
 /**
  * Longer client ceiling for user-triggered Monitor queries / mutations — KQL log
@@ -233,6 +235,14 @@ export function MonitorPane() {
   return (
     <div>
       {unauth && <SignInRequired subject="monitoring telemetry" />}
+      <div style={{ marginBottom: tokens.spacingVerticalL }}>
+        <TeachingBanner
+          surfaceKey="monitor-hub"
+          accent={LOOM_ACCENT.blue}
+          title="One monitor hub across every backend"
+          message="Runs, Spark jobs, metrics, KQL logs, alerts, cost, and security posture correlate on a single pane — pulling from Azure Monitor, ADX, Synapse, and the Loom activity log. Start on Overview for the correlated timeline, then drill into any tab for the source telemetry."
+        />
+      </div>
       <TabList
         selectedValue={tab}
         onTabSelect={(_, d) => setTab(d.value as TabKey)}

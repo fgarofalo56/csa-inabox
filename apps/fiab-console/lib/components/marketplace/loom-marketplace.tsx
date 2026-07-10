@@ -28,6 +28,8 @@ import { ApiMarketplace } from './api-marketplace';
 import { DataShares } from './data-shares';
 import { MyAccess } from './my-access';
 import { DataProductsMarketplace } from '@/lib/editors/data-marketplace';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
+import { LOOM_ACCENT } from '@/lib/components/shared/accent-tokens';
 
 const useStyles = makeStyles({
   tabs: { borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, marginBottom: tokens.spacingVerticalL },
@@ -59,6 +61,15 @@ export function LoomMarketplace() {
 
   return (
     <div className={s.body}>
+      <div style={{ marginBottom: tokens.spacingVerticalL }}>
+        <TeachingBanner
+          surfaceKey="marketplace-hub"
+          icon={Search20Regular}
+          accent={LOOM_ACCENT.violet}
+          title="One exchange for every product kind"
+          message="Discover, subscribe to, and publish data products, APIs, and live Delta shares from a single data-mesh exchange. Start in Discover to search across all kinds at once, then request access — every grant is tracked under My access."
+        />
+      </div>
       <TabList className={s.tabs} selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as TabId)} size="large">
         <Tab value="discover" icon={<Search20Regular />}>Discover</Tab>
         <Tab value="products" icon={<Database20Regular />}>Data products</Tab>
