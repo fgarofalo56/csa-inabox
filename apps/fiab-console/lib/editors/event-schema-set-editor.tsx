@@ -20,7 +20,7 @@ import { clientFetch } from '@/lib/client-fetch';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Subtitle2, Caption1, Body1, Badge, Button, Spinner, Input, Textarea, Field, Dropdown, Option,
-  Tree, TreeItem, TreeItemLayout, Select,
+  Select,
   Tab, TabList,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   MessageBar, MessageBarBody, MessageBarTitle,
@@ -29,13 +29,17 @@ import {
 } from '@fluentui/react-components';
 import {
   Add20Regular, ArrowSync20Regular, Save20Regular, BookOpen20Regular, DocumentBulletList20Regular,
-  ShieldCheckmark20Regular, BeakerEdit20Regular,
+  ShieldCheckmark20Regular, BeakerEdit20Regular, Open16Regular, DocumentAdd16Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import { loomDocUrl } from '@/lib/learn/content';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { useSharedEditorStyles } from './shared-styles';
+import { ExplorerTree, type ExplorerNode, type ExplorerAction } from '@/lib/components/shared/explorer-tree';
+import { GuidedEmptyState } from '@/lib/components/shared/guided-empty-state';
+import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
+import { useRegisterRibbonCommands } from '@/lib/components/shared/ribbon-commands';
 
 const useLocalStyles = makeStyles({
   pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, flex: 1, minHeight: 0, minWidth: 0, overflowY: 'auto' },
@@ -328,25 +332,62 @@ export function EventSchemaSetEditor({ item, id }: Props) {
     ]},
   ], [workspaceId, setId, loadList]);
 
+  // SC-9 — register ribbon actions for the in-ribbon command search (Alt+Q).
+  useRegisterRibbonCommands(ribbon, 'event-schema-set');
+
+  // SC-7 — the left "Schema sets" list as a typed-icon ExplorerTree with a
+  // right-click context menu (Open · Register version).
+  const setNodes = useMemo<ExplorerNode[]>(
+    () => (sets || []).map((set) => ({
+      id: set.id,
+      label: set.displayName,
+      kind: 'schema-set',
+      emphasized: setId === set.id,
+      meta: `${set.subjectCount} subjects · ${set.compatibility || 'BACKWARD'}`,
+    })),
+    [sets, setId],
+  );
+  const setActionsFor = useCallback((): ExplorerAction[] => [
+    { key: 'open', label: 'Open', icon: <Open16Regular />, inline: true },
+    { key: 'register', label: 'Register version', icon: <DocumentAdd16Regular /> },
+  ], []);
+  const onSetAction = useCallback((key: string, node: ExplorerNode) => {
+    setSetId(node.id);
+    if (key === 'register') setRegOpen(true);
+  }, []);
+
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={ribbon}
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon} commandSearch
       leftPanel={
-        <div className={s.treePad}>
-          <Subtitle2 style={{ marginBottom: tokens.spacingVerticalS }}>Schema sets</Subtitle2>
-          {!workspaceId && <Caption1>Select a workspace.</Caption1>}
-          {workspaceId && sets === null && <Spinner size="tiny" label="Loading…" />}
-          {sets && sets.length === 0 && <Caption1>No schema sets yet.</Caption1>}
-          <Tree aria-label="Schema sets">
-            {(sets || []).map(set => (
-              <TreeItem key={set.id} itemType="leaf" value={set.id} onClick={() => setSetId(set.id)}>
-                <TreeItemLayout iconBefore={<BookOpen20Regular />}>
-                  {setId === set.id ? <strong>{set.displayName}</strong> : set.displayName}
-                  <br /><Caption1>{set.subjectCount} subjects · {set.compatibility || 'BACKWARD'}</Caption1>
-                </TreeItemLayout>
-              </TreeItem>
-            ))}
-          </Tree>
-        </div>
+        <ExplorerTree
+          title="Schema sets"
+          ariaLabel="Schema sets"
+          filterable
+          filterPlaceholder="Filter schema sets by name"
+          nodes={setNodes}
+          loading={Boolean(workspaceId) && sets === null}
+          iconFor={() => <BookOpen20Regular />}
+          actionsFor={setActionsFor}
+          onAction={onSetAction}
+          onOpen={(node) => setSetId(node.id)}
+          onRefresh={workspaceId ? () => loadList(workspaceId) : undefined}
+          gate={!workspaceId
+            ? <Caption1>Select a workspace to list its schema sets.</Caption1>
+            : (sets && sets.length === 0
+              ? <GuidedEmptyState
+                  variant="block"
+                  columns={1}
+                  heroIcon={BookOpen20Regular}
+                  title="No schema sets yet"
+                  intro="A schema set is a registry of Avro / JSON / Protobuf subjects with a compatibility policy that guards every new version."
+                  ariaLabel="Create a schema set"
+                  paths={[
+                    { key: 'new', title: 'New schema set', body: 'Pick a default format and start registering subjects.', icon: Add20Regular, onClick: () => setCreateOpen(true) },
+                  ]}
+                  learnMoreHref={loomDocUrl('fiab/event-schema-registry')}
+                />
+              : undefined)}
+        />
       }
       main={
         <>
@@ -477,11 +518,28 @@ export function EventSchemaSetEditor({ item, id }: Props) {
 
             {tab === 'subjects' && (
               <>
+                {/* SC-6 — teaching banner: schema-registry concept + compatibility. */}
+                {active && (
+                  <TeachingBanner
+                    surfaceKey="event-schema-set"
+                    title="Govern your event contracts with a schema registry"
+                    message="Each subject holds versioned Avro / JSON / Protobuf schemas. When you register a new version it is checked against the set's compatibility policy (BACKWARD / FORWARD / FULL) and breaking changes are rejected before they ship — enforced in-process or by Azure Event Hubs Schema Registry when configured."
+                    learnMoreHref={loomDocUrl('fiab/event-schema-registry')}
+                  />
+                )}
                 {!active && <Caption1>Select a schema set.</Caption1>}
                 {active && subjects.length === 0 && (
-                  <MessageBar intent="info">
-                    <MessageBarBody>No subjects yet. Click <strong>Register version</strong> to create the first one.</MessageBarBody>
-                  </MessageBar>
+                  <GuidedEmptyState
+                    heroIcon={DocumentBulletList20Regular}
+                    title="No subjects yet"
+                    intro="Register your first schema version to create a subject. The compatibility policy guards every version after the first."
+                    ariaLabel="Register the first schema version"
+                    paths={[
+                      { key: 'register', title: 'Register a version', body: 'Paste an Avro / JSON schema; it is compatibility-checked live as you type.', icon: Add20Regular, onClick: () => setRegOpen(true) },
+                    ]}
+                    learnMoreHref={loomDocUrl('fiab/event-schema-registry')}
+                    learnMoreLabel="Learn about schema compatibility"
+                  />
                 )}
                 {active && subjects.length > 0 && (
                   <div className={s.tableWrap}>
