@@ -33,6 +33,7 @@ import {
   listNotebookSchedules,
   createNotebookSchedule,
   setScheduleEnabled,
+  deleteNotebookSchedule,
   AmlScheduleNotConfiguredError,
   FoundryError,
   type AmlFrequency,
@@ -159,6 +160,37 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
   try {
     const schedule = await setScheduleEnabled(scheduleName, body.isEnabled);
     return NextResponse.json({ ok: true, schedule });
+  } catch (e: any) {
+    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: errStatus(e) });
+  }
+}
+
+export async function DELETE(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
+  const session = getSession();
+  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+
+  if (!isAmlScheduleConfigured()) {
+    const gate = gateBody();
+    return NextResponse.json(gate ?? { ok: false, error: 'not configured' });
+  }
+
+  const { id } = await ctx.params;
+  // rel-T19 — deleting a schedule removes a per-notebook AML resource; require
+  // write-capable access to the notebook item.
+  const nb = await loadAccessibleNotebook(id, session.claims.oid, { write: true });
+  if (!nb) return NextResponse.json({ ok: false, error: 'notebook not found' }, { status: 404 });
+
+  // scheduleName comes on the query string (DELETE has no body by convention).
+  const scheduleName = (req.nextUrl.searchParams.get('scheduleName') || '').trim();
+  if (!scheduleName) return NextResponse.json({ ok: false, error: 'scheduleName is required' }, { status: 400 });
+  // Must belong to THIS notebook — an owner of A cannot delete B's schedule.
+  if (!scheduleName.startsWith(notebookSchedulePrefix(id))) {
+    return NextResponse.json({ ok: false, error: "scheduleName does not belong to this notebook" }, { status: 403 });
+  }
+
+  try {
+    await deleteNotebookSchedule(scheduleName);
+    return NextResponse.json({ ok: true, deleted: scheduleName });
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: errStatus(e) });
   }

@@ -68,6 +68,29 @@ export interface NotebookCell {
   executionCount?: number;
   locked?: boolean;
   collapsed?: boolean;
+  /**
+   * Papermill "parameters" tag (R4-NB-2). A single cell may be tagged as the
+   * parameters cell; its `name = value` assignments become the parameter
+   * defaults a scheduled or "Run with parameters" run can override (an override
+   * cell is injected immediately after it, papermill semantics).
+   */
+  parameters?: boolean;
+  /**
+   * Collapse the cell's OUTPUT independently of its input (R4-NB-6 / Fabric B6).
+   * `collapsed` hides the whole cell; this hides only the result region.
+   */
+  outputCollapsed?: boolean;
+}
+
+/**
+ * A resource file bundled with the notebook (R4-NB-3 / Fabric "Resources" pane).
+ * Loom-native: persisted in the notebook definition (Cosmos), so it survives
+ * with the notebook and needs no Fabric/OneLake or AML file share. ≤1 MB each.
+ */
+export interface NotebookResourceFile {
+  path: string;        // Unix-like relative path, e.g. 'builtin/utils.py'
+  content: string;     // UTF-8 text, ≤ 1 MB
+  updatedAt?: string;  // ISO-8601 of the last edit
 }
 
 export interface NotebookState {

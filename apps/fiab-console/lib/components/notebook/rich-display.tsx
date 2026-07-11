@@ -30,6 +30,7 @@ import {
   ChevronDown16Regular, ArrowSortUp16Regular, ArrowSortDown16Regular,
   ArrowSort16Regular, Rename16Regular, Table16Regular, Info16Regular,
   Dismiss16Regular, ChartMultiple16Regular, Play16Regular, ArrowDownload16Regular,
+  DataHistogram16Regular,
 } from '@fluentui/react-icons';
 import type {
   LoomDisplayPayload, LoomDisplayColumn, LoomDisplayChartRec,
@@ -95,26 +96,78 @@ function toNum(v: unknown): number | null {
 
 export function RichDisplay({ payload, cellId, notebookId, workspaceId, computeId }: RichDisplayProps) {
   const s = useStyles();
-  const [tab, setTab] = useState<'table' | 'charts'>('table');
+  const [tab, setTab] = useState<'table' | 'charts' | 'profile'>('table');
   const [charts, setCharts] = useState<LoomDisplayChartRec[]>(() =>
     (payload.chartRecs || []).map((c, i) => ({ ...c, id: c.id || `rec-${i}` })));
 
   return (
     <div className={s.root}>
       <div className={s.toolbar}>
-        <TabList size="small" selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as 'table' | 'charts')}>
+        <TabList size="small" selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as 'table' | 'charts' | 'profile')}>
           <Tab value="table" icon={<Table16Regular />}>Table</Tab>
           <Tab value="charts" icon={<ChartMultiple16Regular />}>Charts</Tab>
+          {/* R4-NB-7 — column data-profile (per-column stats over the sample). */}
+          <Tab value="profile" icon={<DataHistogram16Regular />}>Profile</Tab>
         </TabList>
         <div className={s.spacer} />
         <Badge appearance="tint" color="informative" size="small">
           {payload.sampleSize.toLocaleString()} of {payload.totalCount.toLocaleString()} rows
         </Badge>
       </div>
-      {tab === 'table'
-        ? <TableView payload={payload} />
-        : <ChartsView payload={payload} charts={charts} setCharts={setCharts}
-            notebookId={notebookId} workspaceId={workspaceId} computeId={computeId} />}
+      {tab === 'table' && <TableView payload={payload} />}
+      {tab === 'charts' && (
+        <ChartsView payload={payload} charts={charts} setCharts={setCharts}
+          notebookId={notebookId} workspaceId={workspaceId} computeId={computeId} />
+      )}
+      {tab === 'profile' && <ProfileView payload={payload} />}
+    </div>
+  );
+}
+
+// ── Profile view (R4-NB-7 / Fabric D6) ────────────────────────────────────────
+// Per-column data profile computed server-side (display-stats.ts) and carried in
+// the payload: dtype, null %, distinct, min/max/mean/stddev, top values. Real
+// stats over the sampled rows — no mocks.
+function ProfileView({ payload }: { payload: LoomDisplayPayload }) {
+  const s = useStyles();
+  const sample = payload.sampleSize || payload.rows.length || 1;
+  const pctNull = (n: number) => `${((n / sample) * 100).toFixed(n === 0 ? 0 : 1)}%`;
+  return (
+    <div className={s.gridWrap}>
+      <table className={s.table}>
+        <thead>
+          <tr>
+            <th className={s.th}>Column</th>
+            <th className={s.th}>Type</th>
+            <th className={s.th}>Nulls</th>
+            <th className={s.th}>Distinct</th>
+            <th className={s.th}>Min</th>
+            <th className={s.th}>Max</th>
+            <th className={s.th}>Mean</th>
+            <th className={s.th}>Std dev</th>
+            <th className={s.th}>Top values</th>
+          </tr>
+        </thead>
+        <tbody>
+          {payload.columns.map((c: LoomDisplayColumn) => (
+            <tr key={c.name}>
+              <td className={s.td}><strong>{c.name}</strong></td>
+              <td className={mergeClasses(s.td, s.tdNull)}>{c.dtype}</td>
+              <td className={s.td}>{c.nullCount} · {pctNull(c.nullCount)}</td>
+              <td className={s.td}>{c.cardinality ?? '—'}</td>
+              <td className={s.td}>{c.min ?? '—'}</td>
+              <td className={s.td}>{c.max ?? '—'}</td>
+              <td className={s.td}>{c.mean ?? '—'}</td>
+              <td className={s.td}>{c.stddev ?? '—'}</td>
+              <td className={s.td}>
+                {c.topValues && c.topValues.length
+                  ? c.topValues.slice(0, 3).map((tv) => `${tv.value} (${tv.count})`).join(', ')
+                  : '—'}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }

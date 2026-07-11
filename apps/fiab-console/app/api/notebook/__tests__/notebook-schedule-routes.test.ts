@@ -40,6 +40,7 @@ vi.mock('@/lib/azure/foundry-client', () => {
     listNotebookSchedules: vi.fn(),
     createNotebookSchedule: vi.fn(),
     setScheduleEnabled: vi.fn(),
+    deleteNotebookSchedule: vi.fn(),
   };
 });
 
@@ -47,16 +48,19 @@ vi.mock('@/lib/azure/foundry-client', () => {
 // via loadOwnedItem (item-crud). Stub it hermetically.
 vi.mock('@/app/api/items/_lib/item-crud', () => ({ loadOwnedItem: vi.fn() }));
 
-import { GET, POST, PATCH } from '../[id]/schedule/route';
+import { GET, POST, PATCH, DELETE } from '../[id]/schedule/route';
 import { getSession } from '@/lib/auth/session';
 import { loadOwnedItem } from '@/app/api/items/_lib/item-crud';
 import {
   amlScheduleConfig, isAmlScheduleConfigured, listNotebookSchedules,
-  createNotebookSchedule, setScheduleEnabled, AmlScheduleNotConfiguredError,
+  createNotebookSchedule, setScheduleEnabled, deleteNotebookSchedule, AmlScheduleNotConfiguredError,
 } from '@/lib/azure/foundry-client';
 
 const ctx = { params: Promise.resolve({ id: 'nb1' }) };
 function jsonReq(body: any) { return { json: async () => body } as any; }
+function delReq(scheduleName?: string) {
+  return { nextUrl: { searchParams: new URLSearchParams(scheduleName ? { scheduleName } : {}) } } as any;
+}
 const NB_ITEM = { id: 'nb1', workspaceId: 'w1', itemType: 'notebook', state: {} } as any;
 
 beforeEach(() => {
@@ -190,5 +194,48 @@ describe('PATCH /api/notebook/[id]/schedule', () => {
     const res = await PATCH(jsonReq({ scheduleName: 'loom-nb-nb1-xyz', isEnabled: false }), ctx);
     expect(res.status).toBe(404);
     expect(setScheduleEnabled).not.toHaveBeenCalled();
+  });
+});
+
+describe('DELETE /api/notebook/[id]/schedule (R4-NB-1)', () => {
+  it('deletes a schedule belonging to the notebook', async () => {
+    (isAmlScheduleConfigured as any).mockReturnValue(true);
+    (deleteNotebookSchedule as any).mockResolvedValue(undefined);
+    const res = await DELETE(delReq('loom-nb-nb1-xyz'), ctx);
+    const j = await res.json();
+    expect(j.ok).toBe(true);
+    expect(j.deleted).toBe('loom-nb-nb1-xyz');
+    expect(deleteNotebookSchedule).toHaveBeenCalledWith('loom-nb-nb1-xyz');
+  });
+
+  it('400 when scheduleName missing', async () => {
+    (isAmlScheduleConfigured as any).mockReturnValue(true);
+    const res = await DELETE(delReq(), ctx);
+    expect(res.status).toBe(400);
+    expect(deleteNotebookSchedule).not.toHaveBeenCalled();
+  });
+
+  it('403 when the scheduleName belongs to another notebook (rel-T19)', async () => {
+    (isAmlScheduleConfigured as any).mockReturnValue(true);
+    const res = await DELETE(delReq('loom-nb-nb2-xyz'), ctx);
+    expect(res.status).toBe(403);
+    expect(deleteNotebookSchedule).not.toHaveBeenCalled();
+  });
+
+  it('404 when the caller cannot write the notebook (rel-T19)', async () => {
+    (isAmlScheduleConfigured as any).mockReturnValue(true);
+    (loadOwnedItem as any).mockResolvedValue(null);
+    const res = await DELETE(delReq('loom-nb-nb1-xyz'), ctx);
+    expect(res.status).toBe(404);
+    expect(deleteNotebookSchedule).not.toHaveBeenCalled();
+  });
+
+  it('returns the honest gate when not configured', async () => {
+    (isAmlScheduleConfigured as any).mockReturnValue(false);
+    (amlScheduleConfig as any).mockImplementation(() => { throw new AmlScheduleNotConfiguredError(['LOOM_AML_WORKSPACE']); });
+    const res = await DELETE(delReq('loom-nb-nb1-xyz'), ctx);
+    const j = await res.json();
+    expect(j.configured).toBe(false);
+    expect(deleteNotebookSchedule).not.toHaveBeenCalled();
   });
 });
