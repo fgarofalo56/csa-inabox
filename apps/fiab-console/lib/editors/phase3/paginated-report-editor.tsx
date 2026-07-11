@@ -26,7 +26,7 @@ import {
   Database20Regular, DocumentTable20Regular, Play20Regular,
   Save20Regular, Delete20Regular, ArrowSync20Regular,
   Table20Regular,
-  Eye20Regular, Form20Regular,
+  Eye20Regular, Form20Regular, DatabaseSearch20Regular,
 } from '@fluentui/react-icons';
 import { getItem } from '@/lib/api/workspaces';
 import { ItemEditorChrome } from '../item-editor-chrome';
@@ -46,7 +46,11 @@ import { usePowerBiWorkspaces, WorkspacePicker } from './workspace-picker';
 // Azure-native Synapse server + database and fills this data source — no
 // coordinates to type. Reused verbatim from the report designer.
 import { LoomItemSourcePicker } from '../report/loom-item-source-picker';
-import { CONNECTOR_TO_RDL } from '../report/pbi-binding';
+// WAVE 3 — the SAME rich connector gallery the report designer uses. A chosen
+// connection fills the RDL {type,server,database} from the connection's real
+// host/database (rdlFillFromReportSource); unsupported picks show an honest gate.
+import { GetDataGallery } from '../report/get-data-gallery';
+import { CONNECTOR_TO_RDL, rdlFillFromReportSource } from '../report/pbi-binding';
 import { useStyles } from './styles';
 
 export function PaginatedReportEditor({ item, id }: { item: FabricItemType; id: string }) {
@@ -692,15 +696,22 @@ function DataSourceDialog({ open, editing, onClose, onSave, onDelete }: {
   const [type, setType] = useState<RdlDataSourceType>('AzureSQL');
   const [server, setServer] = useState('');
   const [database, setDatabase] = useState('');
+  // WAVE 3 — the shared connector gallery + its honest gate for a pick that
+  // isn't a paginated data source.
+  const [galleryOpen, setGalleryOpen] = useState(false);
+  const [galleryGate, setGalleryGate] = useState<string | null>(null);
   useEffect(() => {
     if (open) {
       setName(editing?.name || '');
       setType(editing?.type || 'AzureSQL');
       setServer(editing?.server || '');
       setDatabase(editing?.database || '');
+      setGalleryGate(null);
+      setGalleryOpen(false);
     }
   }, [open, editing]);
   return (
+    <>
     <Dialog open={open} onOpenChange={(_, d) => { if (!d.open) onClose(); }}>
       <DialogSurface>
         <DialogBody>
@@ -711,6 +722,7 @@ function DataSourceDialog({ open, editing, onClose, onSave, onDelete }: {
               <LoomItemSourcePicker
                 purpose="paginated"
                 onResolved={(res) => {
+                  setGalleryGate(null);
                   if (!name.trim()) setName(res.label);
                   const t = CONNECTOR_TO_RDL[res.binding.connector];
                   if (t) setType(t);
@@ -718,6 +730,25 @@ function DataSourceDialog({ open, editing, onClose, onSave, onDelete }: {
                   setDatabase(res.binding.database || '');
                 }}
               />
+              {/* WAVE 3 — OR browse the same rich connector gallery as the report
+                  designer. A chosen connection fills type/server/database from its
+                  real coordinates; unsupported picks show an honest gate below. */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' }}>
+                <Button appearance="secondary" icon={<DatabaseSearch20Regular />} onClick={() => { setGalleryGate(null); setGalleryOpen(true); }}>
+                  Get data — browse connectors
+                </Button>
+                <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                  Bind a saved Azure SQL / Synapse / Cosmos connection — no server to type.
+                </Caption1>
+              </div>
+              {galleryGate && (
+                <MessageBar intent="warning">
+                  <MessageBarBody>
+                    <MessageBarTitle>Not a paginated data source</MessageBarTitle>
+                    {galleryGate}
+                  </MessageBarBody>
+                </MessageBar>
+              )}
               <Field label="Name" required><Input value={name} onChange={(_, d) => setName(d.value)} /></Field>
               <Field label="Type">
                 <Dropdown selectedOptions={[type]} value={type} onOptionSelect={(_, d) => setType((d.optionValue as RdlDataSourceType) || 'AzureSQL')}>
@@ -741,6 +772,31 @@ function DataSourceDialog({ open, editing, onClose, onSave, onDelete }: {
         </DialogBody>
       </DialogSurface>
     </Dialog>
+
+    {/* WAVE 3 — the shared connector gallery. A connection-backed pick fills the
+        RDL fields from the connection's real host/database; a file / ADLS /
+        unmapped connector shows an honest gate instead of fabricating coords.
+        No reportId → the gallery's upload/preview scope stays generic (this is a
+        paginated-report, not a report route). */}
+    <GetDataGallery
+      open={galleryOpen}
+      onChosen={(ds, meta) => {
+        const fill = rdlFillFromReportSource(ds, {
+          host: meta?.connection?.host,
+          database: meta?.connection?.database,
+          name: meta?.connection?.name,
+        });
+        setGalleryOpen(false);
+        if (!fill.ok) { setGalleryGate(fill.gate); return; }
+        setGalleryGate(null);
+        setType(fill.type);
+        if (fill.server) setServer(fill.server);
+        if (fill.database) setDatabase(fill.database);
+        if (!name.trim() && fill.name) setName(fill.name);
+      }}
+      onDismiss={() => setGalleryOpen(false)}
+    />
+    </>
   );
 }
 

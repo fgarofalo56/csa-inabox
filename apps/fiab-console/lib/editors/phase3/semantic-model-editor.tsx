@@ -29,7 +29,7 @@ import {
 } from '@fluentui/react-components';
 import {
   Database20Regular, Play20Regular, Save20Regular, Add20Regular, Delete20Regular,
-  ArrowSync20Regular, Table20Regular, DatabaseLink20Regular,
+  ArrowSync20Regular, Table20Regular, DatabaseLink20Regular, DatabaseSearch20Regular,
   Sparkle16Regular, Wrench16Regular, Eye20Regular, Sparkle20Regular, Stethoscope20Regular,
   MathFormula20Regular,
 } from '@fluentui/react-icons';
@@ -48,7 +48,11 @@ import { DqSourcePanel } from '@/lib/components/powerbi/dq-source-panel';
 // to its Azure-native backend and inserts a REAL Power Query M `Source =` step
 // (replacing the placeholder-<server> connector templates for the loom-item case).
 import { LoomItemSourcePicker } from '../report/loom-item-source-picker';
-import { mExprFromBinding } from '../report/pbi-binding';
+import { mExprFromBinding, mExprFromReportSource } from '../report/pbi-binding';
+// WAVE 3 — the SAME rich connector gallery the report designer uses. A chosen
+// connection / uploaded file yields a REAL Power Query M Source step (no
+// <server> / <account> placeholder); unsupported picks show an honest gate.
+import { GetDataGallery } from '../report/get-data-gallery';
 import { BulkDescribeAction } from '@/lib/components/catalog/bulk-describe-action';
 import { UpstreamSensitivityField } from '@/lib/components/governance/upstream-sensitivity-field';
 import { ItemEditorChrome } from '../item-editor-chrome';
@@ -725,20 +729,14 @@ shared IngestQuery = let
 in
     Filtered;`;
 
-// Source picker connectors. Each emits a real Power Query M `Source =`
-// expression. Connectors that reach an external system reference an ADF linked
-// service / account the operator already configured (no secrets in the UI).
+// Source picker connectors. Only the INLINE sample is a placeholder-free,
+// zero-config real source (a literal #table). Every EXTERNAL source is bound
+// through the shared GetDataGallery (real Loom Connection / uploaded file),
+// which yields a REAL Power Query M `Source =` step via `mExprFromReportSource`
+// — no `<server>` / `<account>` token to hand-edit (W3, no-vaporware.md).
 const INGEST_SOURCES: Array<{ key: string; label: string; hint: string; m: string }> = [
   { key: 'inline', label: 'Sample table (inline)', hint: 'A literal #table — runs with no connection config.',
     m: '#table({"id","name","value"}, {{1, "item_a", 100}, {2, "item_b", 200}})' },
-  { key: 'adls-csv', label: 'ADLS Gen2 — CSV', hint: 'Delimited file in your data lake.',
-    m: 'Csv.Document(AzureStorage.DataLakeContents("https://<account>.dfs.core.windows.net/landing/<path>/data.csv"), [Delimiter=",", Encoding=65001, QuoteStyle=QuoteStyle.Csv])' },
-  { key: 'adls-parquet', label: 'ADLS Gen2 — Parquet', hint: 'Parquet file/folder in your data lake.',
-    m: 'Parquet.Document(AzureStorage.DataLakeContents("https://<account>.dfs.core.windows.net/landing/<path>/data.parquet"))' },
-  { key: 'azuresql', label: 'Azure SQL Database', hint: 'A table or view over your Azure SQL server.',
-    m: 'Sql.Database("<server>.database.windows.net", "<database>"){[Schema="dbo", Item="<table>"]}[Data]' },
-  { key: 'odata', label: 'REST / OData feed', hint: 'An OData v4 endpoint.',
-    m: 'OData.Feed("https://<host>/<service>/", null, [Implementation="2.0"])' },
 ];
 
 // ── Copilot model-structure pane (audit-T82) ────────────────────────────────
@@ -2255,6 +2253,10 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
   const [getDataOpen, setGetDataOpen] = useState(false);
   const [ingestTab, setIngestTab] = useState<'source' | 'transform' | 'run'>('source');
   const [ingestMScript, setIngestMScript] = useState(INGEST_STARTER_M);
+  // WAVE 3 — the shared connector gallery + its honest gate for a pick Loom
+  // can't yet turn into a real Power Query ingest Source step.
+  const [connectorGalleryOpen, setConnectorGalleryOpen] = useState(false);
+  const [sourceGate, setSourceGate] = useState<string | null>(null);
   const [ingestContainer, setIngestContainer] = useState<'bronze' | 'silver' | 'gold'>('silver');
   const [ingestAasTable, setIngestAasTable] = useState('');
   const [ingestRunning, setIngestRunning] = useState(false);
@@ -2840,19 +2842,37 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                         <LoomItemSourcePicker
                           purpose="semantic-model"
                           onResolved={(res) => {
+                            setSourceGate(null);
                             const m = mExprFromBinding(res.binding);
                             if (m) insertSource(m);
                           }}
                         />
                         <Caption1 style={{ color: tokens.colorNeutralForeground3, marginTop: tokens.spacingVerticalM, display: 'block' }}>
-                          Or choose a connector. Loom inserts its Power Query <code>Source =</code> step — edit the connection
-                          details on the next tab. External connectors reference a server / account you already configured.
+                          Or browse the connector gallery to bind a saved connection or upload a file — Loom inserts a
+                          REAL Power Query <code>Source =</code> step from its actual coordinates (no <code>&lt;server&gt;</code> /
+                          <code>&lt;account&gt;</code> to hand-edit). The inline sample below runs with no connection at all.
                         </Caption1>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap', marginTop: tokens.spacingVerticalM}}>
+                          <Button appearance="secondary" icon={<DatabaseSearch20Regular />} onClick={() => { setSourceGate(null); setConnectorGalleryOpen(true); }}>
+                            Get data — browse connectors
+                          </Button>
+                          <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                            Azure SQL / Synapse / PostgreSQL connection, or an uploaded CSV / Parquet / JSON file.
+                          </Caption1>
+                        </div>
+                        {sourceGate && (
+                          <MessageBar intent="warning" style={{ marginTop: tokens.spacingVerticalM}}>
+                            <MessageBarBody>
+                              <MessageBarTitle>Not a Power Query ingest source yet</MessageBarTitle>
+                              {sourceGate}
+                            </MessageBarBody>
+                          </MessageBar>
+                        )}
                         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: tokens.spacingVerticalM, marginTop: tokens.spacingVerticalM}}>
                           {INGEST_SOURCES.map((src) => (
                             <div key={src.key} className={s.card} style={{ cursor: 'pointer' }} role="button" tabIndex={0}
-                              onClick={() => insertSource(src.m)}
-                              onKeyDown={(e) => { if (e.key === 'Enter') insertSource(src.m); }}>
+                              onClick={() => { setSourceGate(null); insertSource(src.m); }}
+                              onKeyDown={(e) => { if (e.key === 'Enter') { setSourceGate(null); insertSource(src.m); } }}>
                               <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingVerticalS}}>
                                 <Database20Regular />
                                 <span style={{ fontWeight: 600 }}>{src.label}</span>
@@ -2927,6 +2947,26 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                 </DialogBody>
               </DialogSurface>
             </Dialog>
+
+            {/* WAVE 3 — the shared connector gallery. A connection-backed / uploaded
+                pick yields a REAL Power Query M Source step from its actual
+                coordinates (mExprFromReportSource); a connector Loom can't turn
+                into ingest M shows an honest gate. No reportId → the gallery's
+                upload/preview scope stays generic (this is a semantic-model). */}
+            <GetDataGallery
+              open={connectorGalleryOpen}
+              onChosen={(ds, meta) => {
+                setConnectorGalleryOpen(false);
+                const res = mExprFromReportSource(ds, {
+                  host: meta?.connection?.host,
+                  database: meta?.connection?.database,
+                  name: meta?.connection?.name,
+                });
+                if (res.ok) { setSourceGate(null); insertSource(res.m); }
+                else setSourceGate(res.gate);
+              }}
+              onDismiss={() => setConnectorGalleryOpen(false)}
+            />
 
             {listErr && <MessageBar intent="error"><MessageBarBody>{listErr}</MessageBarBody></MessageBar>}
             {refreshErr && <MessageBar intent="error"><MessageBarBody>{refreshErr}</MessageBarBody></MessageBar>}
