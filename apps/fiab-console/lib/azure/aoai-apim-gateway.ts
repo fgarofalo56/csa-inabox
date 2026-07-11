@@ -33,9 +33,26 @@
  */
 
 import type { AoaiTarget } from './copilot-orchestrator';
+import { detectLoomCloud, type LoomCloud } from './cloud-endpoints';
 
 /** APIM subscription-key request header. */
 export const APIM_SUBSCRIPTION_KEY_HEADER = 'Ocp-Apim-Subscription-Key';
+
+/**
+ * Whether the APIM `llm-*` policies (llm-token-limit, llm-semantic-cache-*) are
+ * GA for the boundary — mirrors M4's bicep guard `var aoaiLlmPoliciesSupported =
+ * !isSovereign` (apim.bicep). They are ABSENT in the sovereign Azure Government
+ * boundaries (GCC-High / IL5 / DoD), so a Gov gateway can be flagged on yet not
+ * actually author the LLM policies. This lets the runtime auto-fall-back to
+ * direct-with-managed-identity in Gov even before the first APIM attempt fails —
+ * belt-and-suspenders with the transport-error fallback in the unified client.
+ *
+ * GCC runs on Commercial Azure APIM, so its policies ARE supported (true).
+ * Pure — depends only on the passed `cloud`.
+ */
+export function apimLlmPoliciesSupported(cloud: LoomCloud): boolean {
+  return cloud === 'Commercial' || cloud === 'GCC';
+}
 
 /**
  * The concrete AOAI call target after the APIM routing decision. Shares
@@ -62,6 +79,15 @@ export interface ResolveAoaiCallOpts {
    * re-resolves with `false` to force the direct-with-managed-identity fallback.
    */
   apimAvailable?: boolean;
+  /**
+   * The active sovereign boundary (defaults to {@link detectLoomCloud}). When it
+   * is a Gov boundary where the APIM `llm-*` policies are not GA
+   * ({@link apimLlmPoliciesSupported} is false), routing is forced to direct even
+   * with `LOOM_AOAI_VIA_APIM=true` — so a Gov deploy that inherited the flag
+   * still calls the model directly with managed identity (no regression).
+   * Injected explicitly in tests for determinism.
+   */
+  cloud?: LoomCloud;
 }
 
 /** True when the flag is the literal string `'true'` (case-insensitive). */
@@ -77,6 +103,8 @@ function flagOn(v: string | undefined): boolean {
  *   1. `LOOM_AOAI_VIA_APIM=true`
  *   2. `LOOM_AOAI_APIM_URL` is a non-empty gateway URL
  *   3. `opts.apimAvailable !== false` (the Gov runtime fallback switch)
+ *   4. `apimLlmPoliciesSupported(cloud)` — the boundary actually has the LLM
+ *      policies (false in GCC-High / IL5 / DoD → forced direct-with-MI)
  *
  * Otherwise returns the direct target unchanged (byte-identical to the pre-M4
  * path). When routed and `LOOM_AOAI_APIM_SUBSCRIPTION_KEY` is set, the key is
@@ -84,9 +112,10 @@ function flagOn(v: string | undefined): boolean {
  */
 export function resolveAoaiCallTarget(base: AoaiTarget, opts: ResolveAoaiCallOpts = {}): AoaiCallTarget {
   const env = opts.env ?? process.env;
+  const cloud = opts.cloud ?? detectLoomCloud();
   const via = flagOn(env.LOOM_AOAI_VIA_APIM);
   const apimUrl = String(env.LOOM_AOAI_APIM_URL ?? '').trim().replace(/\/+$/, '');
-  const available = opts.apimAvailable !== false;
+  const available = opts.apimAvailable !== false && apimLlmPoliciesSupported(cloud);
 
   if (via && apimUrl && available) {
     const key = String(env.LOOM_AOAI_APIM_SUBSCRIPTION_KEY ?? '').trim();

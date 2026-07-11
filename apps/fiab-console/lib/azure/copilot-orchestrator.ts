@@ -65,6 +65,7 @@ import {
 } from '../types/copilot-config';
 import { resolveTierForTurn, type ModelTier } from '@/lib/foundry/model-tier-router';
 import { resolveAoaiCallTarget, aoaiApimHeaders, type AoaiCallTarget } from './aoai-apim-gateway';
+import { applyAvailabilityFallback } from '@/lib/foundry/model-availability-runtime';
 import {
   executeQuery as synapseExecute,
   dedicatedTarget,
@@ -250,8 +251,24 @@ function expectedSuffixHint(): string {
  *
  * When `cfg` is supplied the result is NOT cached (config is per-tenant); the
  * module cache only memoizes the env/discovery default.
+ *
+ * Model-strategy M5: the resolved target is passed through
+ * {@link applyAvailabilityFallback}, which degrades a configured-but-undeployed
+ * model down to a supported one (the Gov-lag 404 class) using the per-cloud
+ * availability matrix + the account's live deployment list. That step is cached,
+ * synchronous, and non-fatal — it never blocks or fails a chat.
  */
 export async function resolveAoaiTarget(
+  forceOrCfg: boolean | TenantCopilotConfig | null = false,
+  maybeCfg?: TenantCopilotConfig | null,
+): Promise<AoaiTarget> {
+  return applyAvailabilityFallback(await resolveAoaiTargetRaw(forceOrCfg, maybeCfg));
+}
+
+/** The pre-M5 resolution (tenant cfg → env → Foundry discovery → floor). Kept as
+ *  a separate function so {@link resolveAoaiTarget} can layer the availability
+ *  fallback over every return path uniformly without touching the cache logic. */
+async function resolveAoaiTargetRaw(
   forceOrCfg: boolean | TenantCopilotConfig | null = false,
   maybeCfg?: TenantCopilotConfig | null,
 ): Promise<AoaiTarget> {

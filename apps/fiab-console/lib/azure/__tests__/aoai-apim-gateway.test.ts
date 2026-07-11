@@ -12,6 +12,7 @@ import { describe, it, expect } from 'vitest';
 import {
   resolveAoaiCallTarget,
   aoaiApimHeaders,
+  apimLlmPoliciesSupported,
   APIM_SUBSCRIPTION_KEY_HEADER,
 } from '../aoai-apim-gateway';
 import type { AoaiTarget } from '../copilot-orchestrator';
@@ -99,6 +100,54 @@ describe('resolveAoaiCallTarget — Gov direct-with-MI fallback', () => {
     expect(fallback.viaApim).toBe(false);
     expect(fallback.endpoint).toBe(BASE.endpoint);
     expect(fallback.subscriptionKey).toBeUndefined();
+  });
+});
+
+describe('apimLlmPoliciesSupported — M4 !isSovereign guard mirror', () => {
+  it('true for Commercial + GCC (Commercial-Azure APIM has the llm-* policies)', () => {
+    expect(apimLlmPoliciesSupported('Commercial')).toBe(true);
+    expect(apimLlmPoliciesSupported('GCC')).toBe(true);
+  });
+  it('false for the sovereign Gov boundaries (llm-* policies not GA)', () => {
+    expect(apimLlmPoliciesSupported('GCC-High')).toBe(false);
+    expect(apimLlmPoliciesSupported('DoD')).toBe(false);
+  });
+});
+
+describe('resolveAoaiCallTarget — Gov APIM LLM-policy auto-fallback', () => {
+  const env = { LOOM_AOAI_VIA_APIM: 'true', LOOM_AOAI_APIM_URL: GATEWAY };
+
+  it('Commercial cloud → routes through APIM (policies supported)', () => {
+    const t = resolveAoaiCallTarget(BASE, { env, cloud: 'Commercial' });
+    expect(t.viaApim).toBe(true);
+    expect(t.endpoint).toBe(GATEWAY);
+  });
+
+  it('GCC cloud → routes through APIM (Commercial-Azure APIM)', () => {
+    const t = resolveAoaiCallTarget(BASE, { env, cloud: 'GCC' });
+    expect(t.viaApim).toBe(true);
+  });
+
+  it('GCC-High → forced direct-with-MI even with the flag + url on', () => {
+    const t = resolveAoaiCallTarget(BASE, { env, cloud: 'GCC-High' });
+    expect(t.viaApim).toBe(false);
+    expect(t.endpoint).toBe(BASE.endpoint);
+    expect(t.subscriptionKey).toBeUndefined();
+  });
+
+  it('DoD → forced direct-with-MI', () => {
+    const t = resolveAoaiCallTarget(BASE, { env, cloud: 'DoD' });
+    expect(t.viaApim).toBe(false);
+    expect(t.endpoint).toBe(BASE.endpoint);
+  });
+
+  it('subscription key is NOT carried on the forced-direct Gov path', () => {
+    const t = resolveAoaiCallTarget(BASE, {
+      env: { ...env, LOOM_AOAI_APIM_SUBSCRIPTION_KEY: 'sub-key-123' },
+      cloud: 'DoD',
+    });
+    expect(t.viaApim).toBe(false);
+    expect(t.subscriptionKey).toBeUndefined();
   });
 });
 
