@@ -44,6 +44,11 @@ import { PowerBiTree } from '@/lib/components/powerbi/powerbi-tree';
 import { validateRlsDax } from '@/lib/azure/aas-dax-validate';
 import { ManageAccessPanel, EndorsementControl, GatewayDatasourcesPanel } from '@/lib/components/powerbi/powerbi-governance';
 import { DqSourcePanel } from '@/lib/components/powerbi/dq-source-panel';
+// WAVE 2 — "Pick a Loom item" ingest source: resolves a PBI_SOURCEABLE Loom item
+// to its Azure-native backend and inserts a REAL Power Query M `Source =` step
+// (replacing the placeholder-<server> connector templates for the loom-item case).
+import { LoomItemSourcePicker } from '../report/loom-item-source-picker';
+import { mExprFromBinding } from '../report/pbi-binding';
 import { BulkDescribeAction } from '@/lib/components/catalog/bulk-describe-action';
 import { UpstreamSensitivityField } from '@/lib/components/governance/upstream-sensitivity-field';
 import { ItemEditorChrome } from '../item-editor-chrome';
@@ -2829,8 +2834,18 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
 
                     {ingestTab === 'source' && (
                       <div style={{ marginTop: tokens.spacingVerticalM}}>
-                        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
-                          Choose a connector. Loom inserts its Power Query <code>Source =</code> step — edit the connection
+                        {/* WAVE 2 — pick a Loom item; Loom inserts a REAL M source step
+                            (no <server> placeholder). Falls through to the connector
+                            cards for file/OData sources. */}
+                        <LoomItemSourcePicker
+                          purpose="semantic-model"
+                          onResolved={(res) => {
+                            const m = mExprFromBinding(res.binding);
+                            if (m) insertSource(m);
+                          }}
+                        />
+                        <Caption1 style={{ color: tokens.colorNeutralForeground3, marginTop: tokens.spacingVerticalM, display: 'block' }}>
+                          Or choose a connector. Loom inserts its Power Query <code>Source =</code> step — edit the connection
                           details on the next tab. External connectors reference a server / account you already configured.
                         </Caption1>
                         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: tokens.spacingVerticalM, marginTop: tokens.spacingVerticalM}}>
