@@ -31,6 +31,7 @@ import {
   NoAoaiDeploymentError,
   type AoaiTarget,
 } from './copilot-orchestrator';
+import { cogScope } from './cloud-endpoints';
 import { copilotSessionsContainer } from './cosmos-client';
 import { isSafetyConfigured, shieldPrompt, moderateContent } from './foundry-client';
 import {
@@ -58,7 +59,11 @@ const credential = uamiClientId
   : new DefaultAzureCredential();
 
 async function aoaiToken(): Promise<string> {
-  const t = await credential.getToken('https://cognitiveservices.azure.com/.default');
+  // Sovereign-correct AOAI audience: cognitiveservices.azure.us in Gov
+  // (GCC-High / IL5), .com in Commercial. Hard-coding the Commercial scope
+  // 401s the Help Copilot in Azure Government — mirror the main orchestrator's
+  // cogScope() token acquisition (copilot-orchestrator.ts aoaiToken).
+  const t = await credential.getToken(cogScope());
   if (!t?.token) throw new Error('Failed to acquire AOAI token');
   return t.token;
 }

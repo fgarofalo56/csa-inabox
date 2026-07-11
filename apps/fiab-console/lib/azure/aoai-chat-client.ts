@@ -49,7 +49,7 @@ import {
 } from './copilot-orchestrator';
 import { buildAoaiBody, type AoaiChatMessage, type AoaiResponseFormat } from './aoai-model-contract';
 import type { TenantCopilotConfig } from '../types/copilot-config';
-import { resolveTierForTurn, type ModelTier, type TaskClass } from '@/lib/foundry/model-tier-router';
+import { resolveTierForTurn, DEFAULT_TASK_TIER_MAP, type ModelTier, type TaskClass } from '@/lib/foundry/model-tier-router';
 
 // Re-export so unified-client callers can `instanceof`-check the 503 gate
 // without also importing the orchestrator.
@@ -92,6 +92,31 @@ function applyTierRouting(
   return sel.routed && sel.deployment ? { ...base, deployment: sel.deployment } : base;
 }
 
+/**
+ * Model-strategy (M2) — the default `max_completion_tokens` cap for a turn,
+ * scaled by the model tier the turn rides so reasoning answers are not truncated
+ * (the AOAI `max_completion_tokens` truncation gotcha):
+ *   • mini     → 2048  (short lookups / classification / greetings)
+ *   • standard → 4096  (most chat + build requests)
+ *   • strong   → 8192  (design / debug / multi-step / long-context reasoning)
+ *
+ * The tier is derived from an explicit `tier`, else the task class' default tier
+ * mapping, else `standard`. Each cap is overridable via
+ * `LOOM_AOAI_MAX_COMPLETION_TOKENS_{MINI,STANDARD,STRONG}` (a tuning knob — no
+ * bicep wiring required). An explicit `opts.maxCompletionTokens` always wins over
+ * this default (see the call sites).
+ */
+function defaultMaxCompletionTokens(opts: { tier?: ModelTier; taskClass?: TaskClass }): number {
+  const tier: ModelTier = opts.tier ?? (opts.taskClass ? DEFAULT_TASK_TIER_MAP[opts.taskClass] : 'standard');
+  const envName =
+    tier === 'mini' ? 'LOOM_AOAI_MAX_COMPLETION_TOKENS_MINI'
+    : tier === 'strong' ? 'LOOM_AOAI_MAX_COMPLETION_TOKENS_STRONG'
+    : 'LOOM_AOAI_MAX_COMPLETION_TOKENS_STANDARD';
+  const fallback = tier === 'mini' ? 2048 : tier === 'strong' ? 8192 : 4096;
+  const override = Number(process.env[envName]);
+  return Number.isFinite(override) && override > 0 ? Math.floor(override) : fallback;
+}
+
 /** Parse an LLM JSON reply, tolerating ```json fences and surrounding prose.
  *  Byte-identical to the orchestrator's private parseJsonObject. */
 function parseJsonObject<T>(raw: string): T {
@@ -116,7 +141,9 @@ function parseJsonObject<T>(raw: string): T {
 /** Options for {@link aoaiChat} / {@link aoaiChatStream}. */
 export interface AoaiChatOptions {
   messages: readonly AoaiChatMessage[];
-  /** Token cap. Default 2048 — emitted as `max_completion_tokens`. */
+  /** Token cap — emitted as `max_completion_tokens`. When omitted the default is
+   *  tier-scaled (mini 2048 / standard 4096 / strong 8192), derived from `tier`
+   *  or `taskClass`; overridable via `LOOM_AOAI_MAX_COMPLETION_TOKENS_*`. */
   maxCompletionTokens?: number;
   /** First-attempt sampling temperature (dropped on the unsupported-param retry). */
   temperature?: number;
@@ -178,7 +205,7 @@ export interface AoaiChatRawOptions {
  */
 export async function aoaiChat(opts: AoaiChatOptions): Promise<string> {
   const { messages, temperature, responseFormat } = opts;
-  const maxCompletionTokens = opts.maxCompletionTokens ?? 2048;
+  const maxCompletionTokens = opts.maxCompletionTokens ?? defaultMaxCompletionTokens(opts);
   const target = applyTierRouting(opts.target ?? (await resolveAoaiTarget(opts.cfg ?? null)), opts);
   const url = chatUrl(target);
   const token = await aoaiToken();
@@ -221,7 +248,7 @@ export async function aoaiChat(opts: AoaiChatOptions): Promise<string> {
  */
 export async function aoaiChatJson<T = Record<string, unknown>>(opts: AoaiChatJsonOptions): Promise<T> {
   const { messages, temperature } = opts;
-  const maxCompletionTokens = opts.maxCompletionTokens ?? 2048;
+  const maxCompletionTokens = opts.maxCompletionTokens ?? defaultMaxCompletionTokens(opts);
   const responseFormat: AoaiResponseFormat = opts.responseFormat ?? 'json_object';
   const target = applyTierRouting(opts.target ?? (await resolveAoaiTarget(opts.cfg ?? null)), opts);
   const url = chatUrl(target);
@@ -417,7 +444,7 @@ export async function aoaiEmbed(opts: AoaiEmbedOptions): Promise<AoaiEmbedResult
  */
 export async function aoaiChatStream(opts: AoaiChatOptions): Promise<Response> {
   const { messages, temperature, responseFormat } = opts;
-  const maxCompletionTokens = opts.maxCompletionTokens ?? 2048;
+  const maxCompletionTokens = opts.maxCompletionTokens ?? defaultMaxCompletionTokens(opts);
   const target = opts.target ?? (await resolveAoaiTarget(opts.cfg ?? null));
   const url = chatUrl(target);
   const token = await aoaiToken();

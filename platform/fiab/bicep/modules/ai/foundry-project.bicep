@@ -9,11 +9,22 @@
 // Live mapping (sub <YOUR_SUBSCRIPTION_ID>, rg-csa-loom-admin-eastus2):
 //   account  : aifndry-loom-eastus2  (Microsoft.CognitiveServices/accounts kind=AIServices, S0, custom domain)
 //   project  : loom-agents           (accounts/projects, 2025-04-01-preview, SystemAssigned)
-//   model #1 : chat                  = gpt-4.1-mini  v2025-04-14  (GlobalStandard, cap 10)
-//   model #2 : text-embedding-ada-002= text-embedding-ada-002 v2 (Standard,       cap 10)
+//   model #1 : chat                  = gpt-4.1 v2025-04-14        (GlobalStandard) — the "standard" tier
+//   model #2 : embed                 = text-embedding-3-large v1  (GlobalStandard) — matches the aoai-chat-client default
+//   model #3 : mini                  = gpt-4.1-mini v2025-04-14   (GlobalStandard) — the "mini" tier (cheap/lightweight turns)
+//   model #4 : strong                = gpt-4.1 v2025-04-14        (GlobalStandard) — the "strong" tier (reasoning turns)
 //   grants   : Console UAMI -> Azure AI Developer
 //                              Cognitive Services User
 //                              Cognitive Services OpenAI User   (account scope)
+//
+// MODEL-STRATEGY (AIF-12 / model-strategy M2): the chat/mini/strong slots are
+// the deployment targets the Loom-native model TIER ROUTER routes to
+// (lib/foundry/model-tier-router.ts) — lightweight->mini, general->standard(chat),
+// reasoning->strong. Model NAMES + versions are PARAMETERIZED with GA-safe
+// defaults (gpt-4.1 / gpt-4.1-mini, both GA in Commercial AND Azure Government
+// Standard). Operators RAISE them to gpt-5.x / gpt-5.6 where regionally
+// available via the *ModelName / *ModelVersion params (or admin-plane boundary
+// overrides) — never hard-coded to a model that could 404.
 // =============================================================================
 
 targetScope = 'resourceGroup'
@@ -54,32 +65,32 @@ param privateDnsZoneOpenAiId string = ''
 @description('privatelink.cognitiveservices.azure.<suffix> private DNS zone id (network.outputs.privateDnsZoneIds.cognitiveservices). Empty skips that zone group.')
 param privateDnsZoneCognitiveServicesId string = ''
 
-// --- Chat model deployment -------------------------------------------------
-@description('Chat deployment name (LOOM_AOAI_CHAT_DEPLOYMENT).')
+// --- Chat model deployment (the "standard" tier the router routes general turns to) ---
+@description('Chat deployment name (LOOM_AOAI_CHAT_DEPLOYMENT / LOOM_AOAI_DEPLOYMENT). The model tier router\'s "standard" tier.')
 param chatDeploymentName string = 'chat'
 
-@description('Chat model name. Default gpt-4o — the gpt-4o-class model the Copilot / data-agent / AI-functions honest gates ask for ("Deploy a gpt-4o-class model first"). Override per boundary (e.g. a Gov-available slot) via the bicepparam openaiChatModel.')
-param chatModelName string = 'gpt-4o'
+@description('Chat model name. Default gpt-4.1 — a current GA model available in Commercial AND Azure Government Standard, and the gpt-4o-class model the Copilot / data-agent / AI-functions honest gates ask for. Operators RAISE to gpt-5.x / gpt-5.6 where regionally available (admin-plane also flips this per boundary). Never hard-code a model that could 404.')
+param chatModelName string = 'gpt-4.1'
 
-@description('Chat model version. 2024-11-20 is the current GlobalStandard gpt-4o GA version (Commercial + Azure Government). Override per boundary if the region pins a different GA version.')
-param chatModelVersion string = '2024-11-20'
+@description('Chat model version. 2025-04-14 is the current GA gpt-4.1 version (Commercial + Azure Government). Override per boundary if the region pins a different GA version, or when raising to a gpt-5.x model.')
+param chatModelVersion string = '2025-04-14'
 
-@description('Chat deployment SKU (GlobalStandard for gpt-4o).')
+@description('Chat deployment SKU (GlobalStandard in Commercial; admin-plane flips to Standard in Azure Government where GlobalStandard is unavailable).')
 param chatModelSkuName string = 'GlobalStandard'
 
-@description('Chat deployment capacity (thousands of TPM).')
+@description('Chat deployment capacity (thousands of TPM). Default 50 (50K TPM) — well above the legacy 10K so the tier router\'s standard turns have headroom. Tune per quota.')
 @minValue(1)
-param chatModelCapacity int = 10
+param chatModelCapacity int = 50
 
 // --- Embedding model deployment --------------------------------------------
-@description('Embedding deployment name (LOOM_AOAI_EMBED_DEPLOYMENT).')
-param embedDeploymentName string = 'text-embedding-ada-002'
+@description('Embedding deployment name (LOOM_AOAI_EMBED_DEPLOYMENT). Model-agnostic slot name so the underlying model can be upgraded without renaming the deployment.')
+param embedDeploymentName string = 'embed'
 
-@description('Embedding model name.')
-param embedModelName string = 'text-embedding-ada-002'
+@description('Embedding model name. Default text-embedding-3-large — a current, higher-quality (3072-dim) embedding model that matches the aoai-chat-client aoaiEmbed() default. Available in Commercial + Azure Government usgovarizona Standard. Admin-plane keeps Gov (GCC-High/IL5) on text-embedding-ada-002 v2 (universally available across Gov regions incl. usgovvirginia).')
+param embedModelName string = 'text-embedding-3-large'
 
-@description('Embedding model version.')
-param embedModelVersion string = '2'
+@description('Embedding model version. text-embedding-3-large is version 1.')
+param embedModelVersion string = '1'
 
 @description('Embedding deployment SKU. GlobalStandard (not regional Standard) so the deploy succeeds in regions where the embedding model has NO regional Standard capacity — e.g. centralus, which only offers GlobalStandard for both gpt-4o AND the embedding models. Matches chatModelSkuName. Override per boundary only if a region requires a different capacity type.')
 param embedModelSkuName string = 'GlobalStandard'
@@ -87,6 +98,44 @@ param embedModelSkuName string = 'GlobalStandard'
 @description('Embedding deployment capacity (thousands of TPM).')
 @minValue(1)
 param embedModelCapacity int = 10
+
+// --- Mini model deployment (the "mini" tier — cheap / lightweight turns) ----
+// The Loom-native model tier router routes lightweight task classes (short
+// lookups / classification / greetings) to this cheaper/faster slot.
+@description('Mini deployment name (LOOM_AOAI_MINI_DEPLOYMENT). The model tier router\'s "mini" tier.')
+param miniDeploymentName string = 'mini'
+
+@description('Mini model name. Default gpt-4.1-mini — a current GA cheap/fast model available in Commercial AND Azure Government Standard (usgovarizona + usgovvirginia). Operators RAISE to gpt-5-mini / gpt-5.x-mini where regionally available.')
+param miniModelName string = 'gpt-4.1-mini'
+
+@description('Mini model version. 2025-04-14 is the current GA gpt-4.1-mini version (Commercial + Azure Government).')
+param miniModelVersion string = '2025-04-14'
+
+@description('Mini deployment SKU (GlobalStandard in Commercial; admin-plane flips to Standard in Azure Government).')
+param miniModelSkuName string = 'GlobalStandard'
+
+@description('Mini deployment capacity (thousands of TPM). Default 50 — mini turns are cheap, so headroom is inexpensive. Tune per quota.')
+@minValue(1)
+param miniModelCapacity int = 50
+
+// --- Strong / reasoning model deployment (the "strong" tier) ----------------
+// The Loom-native model tier router routes reasoning task classes (design /
+// debug / multi-step / long-context) to this slot.
+@description('Strong/reasoning deployment name (LOOM_AOAI_STRONG_DEPLOYMENT). The model tier router\'s "strong" tier.')
+param strongDeploymentName string = 'strong'
+
+@description('Strong/reasoning model name. Default gpt-4.1 — a current GA model available in Commercial AND Azure Government Standard. Operators RAISE to a stronger reasoning model (gpt-5.x / o-series) where regionally available; the tier router falls back to the standard/chat deployment when strong is unset.')
+param strongModelName string = 'gpt-4.1'
+
+@description('Strong/reasoning model version. 2025-04-14 is the current GA gpt-4.1 version (Commercial + Azure Government).')
+param strongModelVersion string = '2025-04-14'
+
+@description('Strong/reasoning deployment SKU (GlobalStandard in Commercial; admin-plane flips to Standard in Azure Government).')
+param strongModelSkuName string = 'GlobalStandard'
+
+@description('Strong/reasoning deployment capacity (thousands of TPM). Default 50. Tune per quota.')
+@minValue(1)
+param strongModelCapacity int = 50
 
 // --- Inline-completion model deployment (optional) -------------------------
 // Ghost-text inline completion (POST /api/copilot/complete) can run on a
@@ -232,13 +281,56 @@ resource embedDeployment 'Microsoft.CognitiveServices/accounts/deployments@2025-
   }
 }
 
+// Model-strategy "mini" tier — cheap/fast slot the tier router sends lightweight
+// task classes to. Serializes after embed (CognitiveServices rejects concurrent
+// deployment writes on one account).
+resource miniDeployment 'Microsoft.CognitiveServices/accounts/deployments@2025-04-01-preview' = {
+  parent: account
+  name: miniDeploymentName
+  dependsOn: [ embedDeployment ]
+  sku: {
+    name: miniModelSkuName
+    capacity: miniModelCapacity
+  }
+  properties: {
+    model: {
+      format: 'OpenAI'
+      name: miniModelName
+      version: miniModelVersion
+    }
+    versionUpgradeOption: 'OnceNewDefaultVersionAvailable'
+    raiPolicyName: 'Microsoft.DefaultV2'
+  }
+}
+
+// Model-strategy "strong" tier — reasoning slot the tier router sends reasoning
+// task classes to. Serializes after mini.
+resource strongDeployment 'Microsoft.CognitiveServices/accounts/deployments@2025-04-01-preview' = {
+  parent: account
+  name: strongDeploymentName
+  dependsOn: [ miniDeployment ]
+  sku: {
+    name: strongModelSkuName
+    capacity: strongModelCapacity
+  }
+  properties: {
+    model: {
+      format: 'OpenAI'
+      name: strongModelName
+      version: strongModelVersion
+    }
+    versionUpgradeOption: 'OnceNewDefaultVersionAvailable'
+    raiPolicyName: 'Microsoft.DefaultV2'
+  }
+}
+
 // Optional dedicated inline-completion (ghost text) deployment. Serializes
-// after embed so the three deployments do not write the account concurrently
+// after strong so the deployments do not write the account concurrently
 // (CognitiveServices rejects concurrent deployment writes on one account).
 resource completionDeployment 'Microsoft.CognitiveServices/accounts/deployments@2025-04-01-preview' = if (!empty(completionDeploymentName)) {
   parent: account
   name: !empty(completionDeploymentName) ? completionDeploymentName : 'placeholder-unused'
-  dependsOn: [ embedDeployment ]
+  dependsOn: [ strongDeployment ]
   sku: {
     name: completionModelSkuName
     capacity: completionModelCapacity
@@ -405,6 +497,10 @@ output projectNameOut string = project.name
 output chatDeployment string = chatDeployment.name
 @description('LOOM_AOAI_EMBED_DEPLOYMENT')
 output embedDeployment string = embedDeployment.name
+@description('LOOM_AOAI_MINI_DEPLOYMENT — the model tier router\'s "mini" (cheap/lightweight) tier deployment.')
+output miniDeployment string = miniDeployment.name
+@description('LOOM_AOAI_STRONG_DEPLOYMENT — the model tier router\'s "strong" (reasoning) tier deployment.')
+output strongDeployment string = strongDeployment.name
 @description('LOOM_AOAI_COMPLETION_DEPLOYMENT — empty when no dedicated inline-completion slot is deployed; the Console route then falls back to the chat deployment for ghost text.')
 output completionDeployment string = !empty(completionDeploymentName) ? completionDeploymentName : ''
 output accountPrincipalId string = account.identity.principalId
