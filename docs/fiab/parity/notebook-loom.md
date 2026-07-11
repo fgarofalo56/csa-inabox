@@ -53,8 +53,8 @@ Legend: built ✅ · partial ⚠️ · honest-gate ⚠️ · MISSING ❌
 |---|---|---|---|
 | A1 | Create / open / delete notebook (folder tree) | ✅ built | `renderNbFolder`/`renderNbLeaf` tree; New/Refresh |
 | A2 | Save notebook | ✅ built | definition → Cosmos |
-| A3 | Import / export IPYNB | ⚠️ partial | round-trips cells; no explicit import/export button |
-| A4 | Rename / move in workspace | ⚠️ partial | new/open/delete; no inline rename |
+| A3 | Import / export IPYNB | ✅ built | Import button (`/api/items/notebook/import`) + **Export .ipynb** (R4-NB-8): builds nbformat-4 JSON (parameters cell carries the `parameters` tag) and downloads |
+| A4 | Rename / move in workspace | ✅ built | inline **Rename** dialog (R4-NB-8) → `PUT …/notebook/[id] {displayName}`; move-to-folder already present |
 | A5 | Git integration | ❌ MISSING | no Git bind |
 
 ### B. Cells & editing (shared `CodeCell`)
@@ -66,10 +66,10 @@ Legend: built ✅ · partial ⚠️ · honest-gate ⚠️ · MISSING ❌
 | B3 | Default language + per-cell language magics (`%%pyspark/%%spark/%%sql/%%sparkr`) | ✅ built | `SPARK_MAGICS` detection; `defaultLang` |
 | B4 | Markdown render + maximize | ✅ built | `renderMarkdown`; maximize toggle |
 | B5 | Lock / copy / convert-to-markdown cell | ✅ built | `CodeCell` toolbar |
-| B6 | Collapse cell input / output | ⚠️ partial | maximize/collapse present; independent output collapse not confirmed |
+| B6 | Collapse cell input / output | ✅ built | whole-cell collapse + **independent output collapse** (R4-NB-6): `CodeCell` output-toggle honoring `cell.outputCollapsed` |
 | B7 | IntelliSense + LSP (pylsp) inline completion + ghost text | ✅ built | `CodeCell` Monaco + `lspWsUrl` + schema-hint ghost text |
 | B8 | Cluster-aware completion (dbutils vs mssparkutils vs azure.ai.ml) | ✅ built | `clusterRuntime` → `cluster-intellisense` |
-| B9 | Notebook **outline** | ⚠️ partial | not confirmed in this editor (Synapse flavor has it) |
+| B9 | Notebook **outline** | ✅ built | `OutlinePane` (R4-NB-6): markdown-heading TOC, click-to-scroll via per-cell refs |
 | B10 | Command/edit modal keymap | ⚠️ partial | run keys wired; full modal keymap unconfirmed |
 
 ### C. Run, compute & session
@@ -85,7 +85,7 @@ Legend: built ✅ · partial ⚠️ · honest-gate ⚠️ · MISSING ❌
 | C7 | **Session config UI** (executors/memory/idle-timeout dialog = `%%configure`) | ✅ built | `SessionConfigDialog` → session-create body |
 | C8 | Session status indicator (Idle/Running/Error) | ✅ built | bottom-left session badge |
 | C9 | Cell status + duration | ⚠️ partial | status present; per-step timeline/duration summary partial |
-| C10 | **Spark progress bar** (real-time + task/stage counts) | ❌ MISSING | spinner only; no live progress/task counts |
+| C10 | **Spark progress bar** (real-time + task/stage counts) | ⚠️ partial | `RunProgress` (R4-NB-4) renders under a running cell: consumes the poll `progress` (percent + stage/task counts + Spark-UI link) when present, honest indeterminate bar (phase + elapsed) until the shared server progress surface (R4-SYN-5) lands on main |
 | C11 | **High-concurrency session** (share one session across notebooks) | ❌ MISSING | one session per notebook |
 | C12 | Reliability: cells complete, outputs land, no infinite spinner | ⚠️ partial | **R3 (task #37)** — slow cells / infinite spinner / missing outputs |
 
@@ -98,7 +98,7 @@ Legend: built ✅ · partial ⚠️ · honest-gate ⚠️ · MISSING ❌
 | D3 | CSV copy / download of results | ✅ built | `RichDisplay` table export |
 | D4 | Image / matplotlib output | ✅ built | `RichDisplay` image |
 | D5 | Rich HTML / `displayHTML` | ⚠️ partial | handled generically; not a first-class path |
-| D6 | Data profile / summary stats | ⚠️ partial | server profiler feeds charts; no dedicated profile tab |
+| D6 | Data profile / summary stats | ✅ built | `RichDisplay` **Profile** tab (R4-NB-7): per-column dtype / null % / distinct / min·max·mean·stddev / top-values over the sampled rows (real server profiler stats) |
 | D7 | Multiple outputs per cell | ⚠️ partial | primary output; not multi-output |
 
 ### E. Data & environment
@@ -109,7 +109,7 @@ Legend: built ✅ · partial ⚠️ · honest-gate ⚠️ · MISSING ❌
 | E2 | **Variable explorer** | ✅ built | `VariablesPane` (kernel snapshot) |
 | E3 | Attach **data sources** (lakehouses/warehouses/KQL) + abfss resolve | ✅ built | attach modal; `resolvedPaths` |
 | E4 | **Environment / libraries** (attach AML env + custom .jar/.whl) | ✅ built | `EnvironmentPanel` → `/api/aml/environments` |
-| E5 | **Resources pane** (Unix-like file folder + in-notebook file editor) | ❌ MISSING | no resources/file-editor pane |
+| E5 | **Resources pane** (Unix-like file folder + in-notebook file editor) | ✅ built | `ResourcesPane` (R4-NB-3): Loom-native file bundle (new/rename/delete + Monaco keyword-highlighted editor, ≤1 MB) persisted in the notebook definition (Cosmos) — no Fabric/OneLake/AML file share |
 | E6 | Datastore explorer | ✅ built | `datastore-explorer` |
 
 ### F. AI, collaborate, schedule
@@ -119,22 +119,22 @@ Legend: built ✅ · partial ⚠️ · honest-gate ⚠️ · MISSING ❌
 | F1 | **Copilot** (docked chat: generate/refactor/summarize/`/fix`) | ✅ built | `CopilotChatPane` (docked ~25% drawer) |
 | F2 | Copilot notebook-persona context (attached lakehouses, active lang) | ✅ built | `setCopilotContext` |
 | F3 | **History** (run/version history drawer) | ✅ built | `HistoryDrawer` |
-| F4 | **Schedule** the notebook (built-in scheduled run) | ❌ MISSING | **no schedule UI in this editor** (Synapse flavor has `ScheduleWizard`) |
-| F5 | **Parameters cell** / parameterized run | ❌ MISSING | no parameters cell/panel |
+| F4 | **Schedule** the notebook (built-in scheduled run) | ✅ built | `ScheduleWizard` (R4-NB-1) → `/api/notebook/[id]/schedule` (real AML `workspaces/schedules`); list / enable-disable / **delete** in a schedule card — same wizard as the Synapse flavor |
+| F5 | **Parameters cell** / parameterized run | ✅ built | "Mark as parameters cell" tag + **Run with parameters** (R4-NB-2): papermill semantics — override cell injected after the parameters cell, persisted, then run on the live session |
 | F6 | Add notebook to a **pipeline** activity | ⚠️ partial | via pipeline editor, not from here |
 | F7 | **Real-time co-authoring** / comments | ❌ MISSING | single-editor; no cell comments |
 | F8 | Share / permissions | ⚠️ partial | item-level share; no notebook-specific share dialog |
 
 ---
 
-## Coverage tally
+## Coverage tally (after R4-NB-1..8)
 
-- **built ✅: 27**
-- **partial ⚠️: 14**
-- **honest-gate ⚠️: (session-pool + AML gates, surfaces still render)**
-- **MISSING ❌: 8**
+- **built ✅: 35** (+8: F4 schedule, F5 parameters, E5 resources, B9 outline, B6 output-collapse, D6 profile, A3 export, A4 rename)
+- **partial ⚠️: 10** (C10 progress now renders — server progress field pending R4-SYN-5; D5 displayHTML, D7 multi-output still generic; F6/F8 pipeline/share)
+- **honest-gate ⚠️: (session-pool + AML schedule/environment gates, surfaces still render)**
+- **MISSING ❌: 3** (A5 Git bind, C11 high-concurrency session, F7 real-time co-authoring/comments)
 
-## Honest grade: **B− (functionally the richest, but reliability-capped)**
+## Honest grade: **B / B+ (feature gaps largely closed; reliability + HC/co-author remain)**
 
 By raw feature surface this is the strongest of the three flavors and the closest to
 the Fabric notebook: real Livy runs on a warm Spark pool, a real `display()` viz builder,
@@ -151,29 +151,36 @@ fix here; and (2) **feature gaps** vs Fabric: **no scheduling**, **no parameters
 real-time Spark progress bar**. The scheduling gap is notable because the sibling Synapse
 flavor already ships `ScheduleWizard` → AML schedules — it just is not wired into this editor.
 
-## R4 build list (the ❌ rows, prioritized)
+## R4 build list — status
 
-- **R4-NB-1 — Wire scheduling (F4).** Bring `ScheduleWizard` (already used by the Synapse
-  flavor) into this editor → real AML `workspaces/schedules` via `/api/notebook/[id]/schedule`,
-  plus list/disable/delete. *Accept:* schedule the open notebook; a real AML schedule is
-  created and listed; side-by-side with the Synapse flavor shows the same wizard.
-- **R4-NB-2 — Parameters cell + parameterized run (F5).** A `parameters`-tagged cell (papermill
-  semantics) whose values are injected on scheduled/pipeline runs. *Accept:* mark a cell as
-  parameters; a scheduled run overrides those values.
-- **R4-NB-3 — Resources pane + in-notebook file editor (E5).** A Unix-like resources folder
-  with a file editor (CSV/TXT/PY/SQL/YML/HTML, ≤1 MB, manual save) per Fabric. *Accept:* create/
-  edit a `.py` resource file with keyword highlighting; it persists with the notebook.
-- **R4-NB-4 — Real-time Spark progress bar (C10).** Live progress + task/stage counts under a
-  running cell, driven by Livy/Spark job status, with a Spark-UI drill link. *Accept:* a
-  multi-stage job shows advancing progress, not just a spinner. (Shared with R4-SYN-5.)
-- **R4-NB-5 — High-concurrency session (C11).** Allow attaching to a shared session across
-  notebooks (single-user boundary, matching lakehouse + Spark config). *Accept:* a second
-  notebook attaches to a running session and starts instantly; status bar shows attached count.
-- **R4-NB-6 — Notebook outline (B9) + independent output collapse (B6).** Markdown-heading
-  outline nav in this editor; collapse output separately from input.
-- **R4-NB-7 — Data profile tab (D6) + `displayHTML` first-class (D5) + multi-output (D7).**
-- **R4-NB-8 — Cell comments / co-authoring (F7), IPYNB import/export buttons (A3), inline
-  rename (A4), Git bind (A5), notebook share dialog (F8).** Collaboration + management long-tail.
+- **R4-NB-1 — Scheduling (F4). ✅ DONE.** `ScheduleWizard` wired into this editor →
+  `/api/notebook/[id]/schedule` (real AML `workspaces/schedules`), with list / enable-disable /
+  **delete** (new `deleteNotebookSchedule` in `foundry-client` + `DELETE` route handler). Same
+  wizard as the Synapse flavor; honest MessageBar gate when the AML workspace is unset.
+- **R4-NB-2 — Parameters cell + parameterized run (F5). ✅ DONE.** "Mark as parameters cell"
+  tags exactly one code cell (chip rendered above it); **Run with parameters** parses the
+  `name = value` declarations, injects an override cell after the parameters cell (papermill),
+  persists, then runs on the live session. *Note:* the AML **scheduled** job is still the shared
+  placeholder Command (not a full papermill executor) — the fully-executable parameterized path
+  is the manual "Run with parameters".
+- **R4-NB-3 — Resources pane + file editor (E5). ✅ DONE.** `ResourcesPane`: Loom-native file
+  bundle (new/rename/delete + Monaco keyword-highlighted editor, ≤1 MB) persisted in the notebook
+  definition (Cosmos) — Azure-native, no Fabric/OneLake/AML file share required.
+- **R4-NB-4 — Real-time Spark progress (C10). ⚠️ UI DONE, server hookup pending.** `RunProgress`
+  renders under a running cell and consumes the poll `progress` object (percent + stage/task
+  counts + Spark-UI link) when present; honest indeterminate bar (phase + elapsed) until the
+  shared server progress surface (**R4-SYN-5**) lands on main. No poll-route edit here — the
+  merge-time hookup is a one-line consume of the shared field.
+- **R4-NB-5 — High-concurrency session (C11). ❌ NOT DONE (honest).** No shared-session backend
+  exists yet; deferred rather than faked. Still one session per notebook.
+- **R4-NB-6 — Outline (B9) + independent output collapse (B6). ✅ DONE.** `OutlinePane`
+  (markdown-heading TOC, click-to-scroll) + per-cell `outputCollapsed` toggle in `CodeCell`.
+- **R4-NB-7 — Data profile tab (D6). ✅ DONE.** `RichDisplay` **Profile** tab (per-column real
+  stats). `displayHTML` first-class (D5) + multi-output (D7) remain generic ⚠️.
+- **R4-NB-8 — Export IPYNB (A3) + inline rename (A4). ✅ DONE.** Export builds nbformat-4 JSON
+  (parameters tag preserved) and downloads; Rename dialog → `PUT …/notebook/[id] {displayName}`.
+  Cell comments/co-authoring (F7), Git bind (A5), share dialog (F8) remain the collaboration
+  long-tail (F7/A5 still ❌).
 
 > **R3 dependency (not an R4 item, but the top priority for this flavor).** The reliability
 > defects — slow cells, infinite spinners, missing outputs — are tracked as **R3 (task #37)**.
@@ -191,7 +198,9 @@ flavor already ships `ScheduleWizard` → AML schedules — it just is not wired
 | Variables | kernel variable snapshot | Livy statement |
 | Environments | `/api/aml/environments` | AML environments REST |
 | Save | notebook definition | Cosmos |
-| Schedule (R4-NB-1) | `/api/notebook/[id]/schedule` | AML `workspaces/schedules` |
+| Schedule create/list/toggle/delete (R4-NB-1) | `/api/notebook/[id]/schedule` (GET/POST/PATCH/DELETE) | AML `workspaces/schedules` (real ARM) |
+| Resource files (R4-NB-3) | `PUT …/notebook/[id] {definition.resources}` | Cosmos item state (Loom-native) |
+| Parameterized run (R4-NB-2) | `PUT …/notebook/[id]` then `POST …/run` | Livy statement on the warm Spark pool |
 
 ## Bicep / env sync
 
