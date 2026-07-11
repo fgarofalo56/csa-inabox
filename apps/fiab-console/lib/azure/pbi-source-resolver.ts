@@ -38,6 +38,7 @@ import {
 } from '@/lib/azure/synapse-sql-client';
 import { clusterUri as kustoClusterUri, defaultDatabase as kustoDefaultDatabase } from '@/lib/azure/kusto-client';
 import type { ReportDataSource } from '@/lib/editors/report/report-data-source';
+import { bracket } from '@/lib/sql/quoting';
 
 /** The Azure-native backend family the source item sits on. */
 export type PbiConnector = 'synapse-sql' | 'adx' | 'adls' | 'azure-sql';
@@ -111,13 +112,9 @@ function str(v: unknown): string {
   return typeof v === 'string' ? v.trim() : '';
 }
 
-/** Bracket-quote a T-SQL identifier (double any `]`). */
-function brk(name: string): string {
-  return `[${String(name).replace(/]/g, ']]')}]`;
-}
 /** `[schema].[table]` (schema defaults to dbo). */
 function qualified(schema: string, table: string): string {
-  return `${brk(schema || 'dbo')}.${brk(table)}`;
+  return `${bracket(schema || 'dbo')}.${bracket(table)}`;
 }
 /** Canned, read-only preview SELECT over a catalog-derived table (no free text). */
 function previewSelect(schema: string, table: string): string {
