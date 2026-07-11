@@ -16,6 +16,7 @@ import {
   githubCloudGate,
   githubAvailable,
   githubApiBase,
+  githubListRepos,
   ADO_ZERO_OBJECT_ID,
   type WorkspaceManifest,
 } from '../git-integration-client';
@@ -181,5 +182,74 @@ describe('githubApiBase (ghe.com data-residency host)', () => {
   });
   it('falls back to api.github.com when the subdomain is unusable', () => {
     expect(githubApiBase('.ghe.com')).toBe('https://api.github.com');
+  });
+});
+
+describe('githubListRepos endpoint selection + pagination', () => {
+  const realFetch = globalThis.fetch;
+  let calls: string[] = [];
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+    calls = [];
+  });
+
+  function ghRes(body: any, opts: { status?: number; link?: string } = {}) {
+    const status = opts.status ?? 200;
+    return {
+      ok: status >= 200 && status < 300,
+      status,
+      headers: { get: (h: string) => (h.toLowerCase() === 'link' ? (opts.link ?? '') : null) },
+      json: async () => body,
+      text: async () => JSON.stringify(body),
+    } as any;
+  }
+  /** Route the stub by URL; each entry is [substring, response]. */
+  function stub(routes: Array<[string, any]>) {
+    globalThis.fetch = (async (url: string) => {
+      calls.push(url);
+      for (const [needle, res] of routes) if (url.includes(needle)) return res;
+      throw new Error(`unstubbed URL: ${url}`);
+    }) as any;
+  }
+  const repo = (fullName: string) => ({ full_name: fullName, name: fullName.split('/')[1], owner: { login: fullName.split('/')[0] }, default_branch: 'main', html_url: `https://github.com/${fullName}` });
+
+  it('owner == authenticated user → /user/repos?affiliation=owner, never /orgs (the 404 bug)', async () => {
+    stub([
+      ['/user/repos', ghRes([repo('fgarofalo56/csa-inabox')])],
+      ['/user', ghRes({ login: 'fgarofalo56' })],
+    ]);
+    const repos = await githubListRepos('fgarofalo56', 'pat');
+    expect(repos.map((r) => r.fullName)).toEqual(['fgarofalo56/csa-inabox']);
+    expect(calls.some((u) => u.includes('/orgs/'))).toBe(false);
+    expect(calls.some((u) => u.includes('/user/repos') && u.includes('affiliation=owner'))).toBe(true);
+  });
+
+  it('owner is an org → /orgs/{owner}/repos', async () => {
+    stub([
+      ['/orgs/acme/repos', ghRes([repo('acme/widgets')])],
+      ['/user', ghRes({ login: 'fgarofalo56' })],
+    ]);
+    const repos = await githubListRepos('acme', 'pat');
+    expect(repos.map((r) => r.fullName)).toEqual(['acme/widgets']);
+  });
+
+  it('owner is another user → /orgs 404 falls back to /users/{owner}/repos', async () => {
+    stub([
+      ['/orgs/octocat/repos', ghRes({ message: 'Not Found' }, { status: 404 })],
+      ['/users/octocat/repos', ghRes([repo('octocat/hello-world')])],
+      ['/user', ghRes({ login: 'fgarofalo56' })],
+    ]);
+    const repos = await githubListRepos('octocat', 'pat');
+    expect(repos.map((r) => r.fullName)).toEqual(['octocat/hello-world']);
+  });
+
+  it('blank owner paginates /user/repos across Link rel="next" (own repos not buried)', async () => {
+    const page2 = 'https://api.github.com/user/repos?page=2';
+    stub([
+      [page2, ghRes([repo('fgarofalo56/mine')])],
+      ['/user/repos', ghRes([repo('dotnet/runtime')], { link: `<${page2}>; rel="next"` })],
+    ]);
+    const repos = await githubListRepos('', 'pat');
+    expect(repos.map((r) => r.fullName)).toEqual(['dotnet/runtime', 'fgarofalo56/mine']);
   });
 });
