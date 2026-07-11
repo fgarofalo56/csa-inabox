@@ -103,6 +103,13 @@ export async function DELETE(_req: NextRequest, ctx: { params: Promise<{ id: str
   try {
     binding = await resolveBinding(id, ACCEPTED_TYPES, session.claims.oid);
   } catch (e) {
+    // Unbound draft item: there is NO live ADF pipeline to tear down, so deleting
+    // it must always succeed (issue #1859 — a scratch/draft pipeline that was
+    // never bound to a factory). Return ok so the caller can remove the Loom
+    // item; only surface the binding error for non-unbound failures.
+    if ((e as any)?.code === 'unbound') {
+      return NextResponse.json({ ok: true, unbound: true });
+    }
     const { status, body } = bindingErrorResponse(e);
     return NextResponse.json(body, { status });
   }
