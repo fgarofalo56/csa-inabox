@@ -524,6 +524,22 @@ export async function listDashboards(workspaceId: string): Promise<PbiDashboard[
   return j.value || [];
 }
 
+/**
+ * POST /groups/{ws}/dashboards — create an empty dashboard in the workspace
+ * (Dashboards - AddDashboardInGroup). Returns the new dashboard. The caller's
+ * identity must have write access to the workspace. Used by the Weave → Power
+ * BI (real-PBI) dashboard target; visuals are pinned from the bound report in
+ * the Power BI service (Power BI REST has no pin-from-dataset tile API).
+ *
+ * Docs: https://learn.microsoft.com/rest/api/power-bi/dashboards/add-dashboard-in-group
+ */
+export async function addDashboard(workspaceId: string, name: string): Promise<PbiDashboard> {
+  return call<PbiDashboard>(
+    `/groups/${encodeURIComponent(workspaceId)}/dashboards`,
+    { method: 'POST', body: { name } },
+  );
+}
+
 export async function getDashboard(workspaceId: string, dashboardId: string): Promise<PbiDashboard> {
   return call<PbiDashboard>(`/groups/${encodeURIComponent(workspaceId)}/dashboards/${encodeURIComponent(dashboardId)}`);
 }
@@ -1399,6 +1415,26 @@ export async function discoverGateways(workspaceId: string, datasetId: string): 
     const j = await call<{ value: PbiGateway[] }>(
       `/groups/${encodeURIComponent(workspaceId)}/datasets/${encodeURIComponent(datasetId)}/Default.DiscoverGateways`,
     );
+    return j.value || [];
+  } catch (e) {
+    if (e instanceof PowerBiError && (e.status === 404 || e.status === 400)) return [];
+    throw e;
+  }
+}
+
+/**
+ * GET /v1.0/myorg/gateways — list the on-premises / VNet data gateways the
+ * calling identity is an admin of (Gateways - Get Gateways). This is the
+ * tenant-level pre-check the Weave → Power BI (real-PBI) path uses to decide
+ * whether a gateway is REGISTERED at all before publishing a model over a
+ * private-endpoint source — an empty list means the one-time register-to-tenant
+ * step is still pending (honest gate). Returns [] on 404/400 (no gateways).
+ *
+ * Docs: https://learn.microsoft.com/rest/api/power-bi/gateways/get-gateways
+ */
+export async function listGateways(): Promise<PbiGateway[]> {
+  try {
+    const j = await call<{ value: PbiGateway[] }>('/gateways');
     return j.value || [];
   } catch (e) {
     if (e instanceof PowerBiError && (e.status === 404 || e.status === 400)) return [];

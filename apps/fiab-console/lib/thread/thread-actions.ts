@@ -280,6 +280,30 @@ export const THREAD_ACTIONS: ThreadAction[] = [
         hint: 'The Power BI item to create, pre-wired to this source. All open Azure-native — no Power BI workspace needed.',
       },
       {
+        // D1 — the user picks WHERE the item lands, per click. Loom-native is the
+        // zero-dependency default (Azure-native backend, no Power BI workspace).
+        // "Real Power BI Service" publishes into the operator's bound workspace
+        // (LOOM_PBI_WORKSPACE_ID + LOOM_PBI_CAPACITY_ID) authenticated as the
+        // signed-in user (OBO). When those aren't configured the route returns an
+        // honest gate naming exactly what to set (no-vaporware) — the option is
+        // always visible so the requirement is discoverable.
+        name: 'destination',
+        label: 'Where to build it',
+        kind: 'select',
+        options: [
+          { value: 'loom-native', label: 'Loom-native (Azure-native, no Power BI workspace)' },
+          { value: 'power-bi-service', label: 'Real Power BI Service (bound workspace — when configured)' },
+        ],
+        default: 'loom-native',
+        required: true,
+        hint:
+          'Loom-native builds the item over the Azure-native backend — the default, zero Power BI ' +
+          'dependency. “Real Power BI Service” publishes a real Power BI item into the bound workspace ' +
+          '(needs LOOM_PBI_WORKSPACE_ID + LOOM_PBI_CAPACITY_ID, your Power BI delegated consent, and — ' +
+          'for private-endpoint sources — a registered data gateway); if any is missing you’ll get an ' +
+          'honest message naming exactly what to set.',
+      },
+      {
         name: 'sourceShape',
         label: 'Source shape',
         kind: 'select',
