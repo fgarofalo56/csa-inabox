@@ -35,6 +35,7 @@ import {
   createLivySession, getLivySession, killLivySession, keepaliveLivySession,
   resolveNotebookBackend, type LivyKind, type LivySessionOptions,
 } from '@/lib/azure/synapse-livy-client';
+import { markSessionInUse } from '@/lib/azure/spark-session-pool';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -133,6 +134,8 @@ export async function POST(req: NextRequest) {
     if (Number.isFinite(existing) && existing > 0) {
       const s = await getLivySession(pool, existing);
       if (ALIVE.has(String(s.state)) && !TERMINAL.has(String(s.state))) {
+        // Protect this reused session from the #1796 stale-session reaper.
+        markSessionInUse(pool, existing);
         return NextResponse.json({ ok: true, sessionId: existing, state: s.state, appInfo: s.appInfo });
       }
       // dead/terminal → fall through and create a fresh session
@@ -146,6 +149,8 @@ export async function POST(req: NextRequest) {
       ...configure,
     };
     const sess = await createLivySession(pool, opts);
+    // Protect this freshly-created (pool-untracked) session from the reaper.
+    markSessionInUse(pool, sess.id);
     return NextResponse.json({ ok: true, sessionId: sess.id, state: sess.state, appInfo: sess.appInfo });
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
@@ -184,6 +189,9 @@ export async function GET(req: NextRequest) {
   try {
     // Fire-and-forget keepalive resets the idle clock; never fail the poll on it.
     await keepaliveLivySession(pool, sessionId).catch(() => {});
+    // Heartbeat: this is a live, open notebook — protect its session from the
+    // #1796 reaper (the editor polls this every ~4 min while the notebook is open).
+    markSessionInUse(pool, sessionId);
     const s = await getLivySession(pool, sessionId);
     return NextResponse.json({ ok: true, sessionId, state: s.state, appInfo: s.appInfo });
   } catch (e: any) {

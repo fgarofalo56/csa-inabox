@@ -71,6 +71,7 @@ import {
 import {
   keepaliveLivySession,
   killLivySession,
+  listLivySessions,
   defaultSparkPool,
   type LivyKind,
 } from '@/lib/azure/synapse-livy-client';
@@ -143,6 +144,14 @@ export interface PoolConfig {
   concurrent: boolean;
   /** Max concurrent read-only leases per shared session. */
   maxLeasesPerSession: number;
+  /** #1796 — reap leaked/untracked idle Livy sessions on the pool. DEFAULT ON. */
+  reapEnabled: boolean;
+  /**
+   * Grace (ms) a session must sit IDLE + untracked + un-heartbeated before the
+   * reaper kills it. Also the window a keepalive heartbeat protects an in-use
+   * (cold-started) notebook session. Default = max(idleTtl, 30 min).
+   */
+  reapGraceMs: number;
 }
 
 interface PoolStore {
@@ -155,6 +164,16 @@ interface PoolStore {
   started: boolean;
   /** True once this replica has adopted persisted warm slots from the shared store. */
   adopted: boolean;
+  /**
+   * #1796 reaper state (per replica):
+   *  - inUse: `${pool}#${sessionId}` → last-heartbeat ms (keepalive / active run).
+   *    A session heartbeated within reapGraceMs is a live notebook — never reaped.
+   *  - firstSeenUntracked: `${pool}#${sessionId}` → ms first seen idle+untracked.
+   *    A session is only killed after it has been untracked for a full grace
+   *    window, so a just-created session (not yet leased/heartbeated) is spared.
+   */
+  inUse: Map<string, number>;
+  firstSeenUntracked: Map<string, number>;
 }
 
 // Singleton on globalThis so Next.js dev hot-reload / route re-eval keeps ONE
@@ -171,6 +190,8 @@ const store: PoolStore =
     warming: 0,
     started: false,
     adopted: false,
+    inUse: new Map(),
+    firstSeenUntracked: new Map(),
   });
 
 const SWEEP_INTERVAL_MS = 30_000;
@@ -204,6 +225,15 @@ export function sparkPoolConfig(): PoolConfig {
     idleTtlMs: envInt(process.env.LOOM_SPARK_POOL_IDLE_TTL, 900) * 1000,
     concurrent: envBoolDefaultOn(process.env.LOOM_SPARK_POOL_CONCURRENT),
     maxLeasesPerSession: Math.max(1, envInt(process.env.LOOM_SPARK_POOL_SHARED_MAX, 4)),
+    // #1796 — leaked-session reaper. DEFAULT ON; opt out with LOOM_SPARK_POOL_REAP=0.
+    reapEnabled: envBoolDefaultOn(process.env.LOOM_SPARK_POOL_REAP),
+    // Grace before reaping an untracked idle session (secs). Default = max(idleTtl,
+    // 30 min) so a leaked session is cleaned but a live notebook (keepalive every
+    // ~4 min) and a just-created session are always safe.
+    reapGraceMs: Math.max(
+      envInt(process.env.LOOM_SPARK_POOL_IDLE_TTL, 900) * 1000,
+      envInt(process.env.LOOM_SPARK_POOL_REAP_GRACE, 1800) * 1000,
+    ),
   };
   const o = store.override;
   const cfg: PoolConfig = {
@@ -213,6 +243,8 @@ export function sparkPoolConfig(): PoolConfig {
     idleTtlMs: o.idleTtlMs ?? base.idleTtlMs,
     concurrent: o.concurrent ?? base.concurrent,
     maxLeasesPerSession: o.maxLeasesPerSession ?? base.maxLeasesPerSession,
+    reapEnabled: o.reapEnabled ?? base.reapEnabled,
+    reapGraceMs: o.reapGraceMs ?? base.reapGraceMs,
   };
   // Keep max >= min so a group can always reach its target.
   if (cfg.max < cfg.min) cfg.max = cfg.min;
@@ -233,6 +265,9 @@ export function setSparkPoolConfig(partial: Partial<PoolConfig>): PoolConfig {
   if (typeof partial.concurrent === 'boolean') store.override.concurrent = partial.concurrent;
   if (typeof partial.maxLeasesPerSession === 'number' && partial.maxLeasesPerSession >= 1)
     store.override.maxLeasesPerSession = Math.floor(partial.maxLeasesPerSession);
+  if (typeof partial.reapEnabled === 'boolean') store.override.reapEnabled = partial.reapEnabled;
+  if (typeof partial.reapGraceMs === 'number' && partial.reapGraceMs >= 0)
+    store.override.reapGraceMs = Math.floor(partial.reapGraceMs);
   const cfg = sparkPoolConfig();
   // Arm the pool: pre-register the default group, adopt store slots, start the
   // sweeper, and kick an immediate refill (not just the next 30s tick).
@@ -634,6 +669,123 @@ function pruneDead(): void {
   store.slots = store.slots.filter((s) => s.state !== 'dead');
 }
 
+// ============================================================
+// #1796 — leaked stale-session reaper
+// ============================================================
+
+function sessKey(poolName: string, sessionId: number): string {
+  return `${poolName}#${sessionId}`;
+}
+
+/**
+ * Mark a Livy session as ACTIVELY IN USE (heartbeat). Called by the notebook
+ * session keepalive route (every ~4 min while a notebook is open) and the run
+ * route when it reuses/creates a session — so the reaper never kills a live
+ * (possibly cold-started, pool-untracked) notebook session. Cheap in-memory
+ * stamp; the reaper treats a heartbeat within `reapGraceMs` as "in use".
+ */
+export function markSessionInUse(poolName: string, sessionId: number | string): void {
+  const id = Number(sessionId);
+  if (!poolName || !Number.isFinite(id)) return;
+  store.inUse.set(sessKey(poolName, id), Date.now());
+}
+
+/** Session ids this replica considers protected for `poolName` (never reaped). */
+function protectedSessionIds(poolName: string, storeDocSessionIds: Set<number>): Set<number> {
+  const ids = new Set<number>();
+  // Local pool slots (warm / leased / shared / warming) for this pool.
+  for (const s of store.slots) {
+    if (s.poolName === poolName && s.state !== 'dead' && typeof s.sessionId === 'number') ids.add(s.sessionId);
+  }
+  // Cross-replica store docs — a session warmed/leased on ANOTHER replica.
+  for (const id of storeDocSessionIds) ids.add(id);
+  return ids;
+}
+
+/** States that hold pool capacity and are safe to reap when leaked (idle only). */
+function isReapableState(state: string): boolean {
+  return String(state).toLowerCase() === 'idle';
+}
+
+/**
+ * Reap leaked, untracked, idle Livy sessions that starve the pool (#1796 — the
+ * loompool was jammed with ~700 leaked sessions, so a fresh cell run's session
+ * never started). On each sweep this enumerates the pool's live sessions and
+ * kills any that are ALL of: `idle`, NOT a pool slot / cross-replica lease, NOT
+ * heartbeated within `reapGraceMs` (so live notebooks are safe), AND have been
+ * observed idle+untracked for a FULL `reapGraceMs` window (so a just-created
+ * session about to be leased/heartbeated is never killed).
+ *
+ * NEVER kills: a warm / leased / shared / warming slot, a cross-replica leased
+ * session, a session younger than the grace since first seen untracked, an
+ * in-use (heartbeated) session, or a non-idle (busy / starting / …) session.
+ * Best-effort — a list/kill failure degrades to a no-op (never breaks the sweep).
+ */
+export async function reapStaleSessions(poolName: string, storeDocSessionIds: Set<number> = new Set()): Promise<number> {
+  const cfg = sparkPoolConfig();
+  if (!cfg.reapEnabled) return 0;
+  let live: Awaited<ReturnType<typeof listLivySessions>>;
+  try {
+    live = await listLivySessions(poolName);
+  } catch {
+    return 0; // honest no-op — can't enumerate, don't guess
+  }
+  const now = Date.now();
+  const protectedIds = protectedSessionIds(poolName, storeDocSessionIds);
+  const liveIds = new Set<number>();
+  let killed = 0;
+
+  for (const sess of live) {
+    if (typeof sess.id !== 'number') continue;
+    liveIds.add(sess.id);
+    const key = sessKey(poolName, sess.id);
+
+    // Guard 1 — tracked as a pool slot or a cross-replica lease → never reap.
+    if (protectedIds.has(sess.id)) { store.firstSeenUntracked.delete(key); continue; }
+    // Guard 2 — only idle sessions hold reclaimable capacity; spare busy/starting/etc.
+    if (!isReapableState(sess.state)) { store.firstSeenUntracked.delete(key); continue; }
+    // Guard 3 — heartbeated (live notebook keepalive / active run) within grace.
+    const lastUse = store.inUse.get(key);
+    if (typeof lastUse === 'number' && now - lastUse < cfg.reapGraceMs) { store.firstSeenUntracked.delete(key); continue; }
+    // Guard 4 — must have been idle+untracked for a FULL grace window. Record on
+    // first sight and defer; a session only just created (not yet leased/kept) is
+    // therefore never reaped on the first pass.
+    const firstSeen = store.firstSeenUntracked.get(key);
+    if (firstSeen === undefined) { store.firstSeenUntracked.set(key, now); continue; }
+    if (now - firstSeen < cfg.reapGraceMs) continue;
+
+    // All guards passed → leaked. Kill it (best-effort) and forget it.
+    try {
+      await killLivySession(poolName, sess.id);
+      killed++;
+    } catch {
+      /* 404 / race — fine; drop the tracker so we don't spin on it */
+    }
+    store.firstSeenUntracked.delete(key);
+    store.inUse.delete(key);
+  }
+
+  // GC trackers for sessions no longer present on the pool.
+  for (const key of store.firstSeenUntracked.keys()) {
+    const idPart = Number(key.slice(poolName.length + 1));
+    if (key.startsWith(`${poolName}#`) && !liveIds.has(idPart)) store.firstSeenUntracked.delete(key);
+  }
+  for (const key of store.inUse.keys()) {
+    const idPart = Number(key.slice(poolName.length + 1));
+    if (key.startsWith(`${poolName}#`) && !liveIds.has(idPart)) store.inUse.delete(key);
+  }
+  return killed;
+}
+
+/** The distinct Synapse Spark pools the reaper should scan (registered groups). */
+function reapablePools(): string[] {
+  const pools = new Set<string>();
+  for (const grp of store.groups.values()) {
+    if (grp.backend === 'synapse' && grp.poolName) pools.add(grp.poolName);
+  }
+  return [...pools];
+}
+
 /**
  * Periodic maintenance: prune dead slots, keepalive warm Synapse sessions
  * (reset their Livy idle clock so they survive between runs), evict warm slots
@@ -670,6 +822,24 @@ async function sweep(): Promise<void> {
     for (let i = 0; i < Math.min(evictable, overMin.length); i++) evictSlot(overMin[i]);
   }
   pruneDead();
+
+  // #1796 — reap leaked/untracked idle sessions so the pool self-cleans and
+  // never re-jams to the point of starving new sessions. Only when a real Spark
+  // backend is configured (otherwise listing would just 404). Cross-replica
+  // leases are protected via the shared store's session ids.
+  if (cfg.reapEnabled && sparkPoolBackendStatus().configured) {
+    let storeDocSessionIds = new Set<number>();
+    if (leaseStoreMode() === 'cosmos') {
+      try {
+        const docs = await listAllDocs();
+        storeDocSessionIds = new Set(docs.map((d) => d.sessionId).filter((x): x is number => typeof x === 'number'));
+      } catch { /* best-effort — local slots still protect this replica's sessions */ }
+    }
+    for (const pool of reapablePools()) {
+      await reapStaleSessions(pool, storeDocSessionIds).catch(() => 0);
+    }
+  }
+
   await refillPool();
 }
 

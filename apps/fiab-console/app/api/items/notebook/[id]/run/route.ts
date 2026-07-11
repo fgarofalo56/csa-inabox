@@ -323,6 +323,17 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
         freshSession = true;
       }
 
+      // Protect this run's session from the #1796 stale-session reaper. Covers all
+      // three paths (notebook-reuse, warm-pool lease, cold create) — a leased slot
+      // is already tracked, but a reused/cold-started session is pool-untracked, so
+      // stamping it in-use keeps the reaper from ever killing an active run.
+      if (typeof sessionId === 'number') {
+        try {
+          const { markSessionInUse } = await import('@/lib/azure/spark-session-pool');
+          markSessionInUse(pool, sessionId);
+        } catch { /* best-effort — keepalive poll will stamp it within ~4 min anyway */ }
+      }
+
       // Auto-mount attached lakehouses + display helper on any FRESH session —
       // whether cold-created just now OR leased warm from the pool (a pooled
       // session is a blank kernel, so it needs the same preamble a cold one
