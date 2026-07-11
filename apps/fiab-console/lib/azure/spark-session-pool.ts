@@ -82,6 +82,7 @@ import {
   removeSlot,
   claimSlot,
   releaseInStore,
+  listAllDocs,
   mintLeaseId,
   replicaId,
   type LeaseRec,
@@ -150,6 +151,10 @@ interface PoolStore {
   override: Partial<PoolConfig>;
   sweeper: ReturnType<typeof setInterval> | null;
   warming: number; // in-flight warm operations (concurrency guard)
+  /** True once this replica has run the default-group pre-registration + startup kick. */
+  started: boolean;
+  /** True once this replica has adopted persisted warm slots from the shared store. */
+  adopted: boolean;
 }
 
 // Singleton on globalThis so Next.js dev hot-reload / route re-eval keeps ONE
@@ -158,7 +163,15 @@ interface PoolStore {
 const g = globalThis as unknown as { __loomSparkPool?: PoolStore };
 const store: PoolStore =
   g.__loomSparkPool ??
-  (g.__loomSparkPool = { slots: [], groups: new Map(), override: {}, sweeper: null, warming: 0 });
+  (g.__loomSparkPool = {
+    slots: [],
+    groups: new Map(),
+    override: {},
+    sweeper: null,
+    warming: 0,
+    started: false,
+    adopted: false,
+  });
 
 const SWEEP_INTERVAL_MS = 30_000;
 
@@ -221,7 +234,9 @@ export function setSparkPoolConfig(partial: Partial<PoolConfig>): PoolConfig {
   if (typeof partial.maxLeasesPerSession === 'number' && partial.maxLeasesPerSession >= 1)
     store.override.maxLeasesPerSession = Math.floor(partial.maxLeasesPerSession);
   const cfg = sparkPoolConfig();
-  if (cfg.enabled) ensureSweeper();
+  // Arm the pool: pre-register the default group, adopt store slots, start the
+  // sweeper, and kick an immediate refill (not just the next 30s tick).
+  if (cfg.enabled) ensureWarmPoolStarted();
   return cfg;
 }
 
@@ -281,9 +296,136 @@ function groupKey(backend: SparkPoolBackend, poolName: string, kind: LivyKind, s
  */
 function registerGroup(g: PoolGroup): PoolGroup {
   const existing = store.groups.get(g.key);
-  if (existing) return existing;
+  if (existing) {
+    // A later registration may carry the concrete `sizing` (e.g. the default
+    // group registered at startup) that an earlier sizing-less adoption lacked —
+    // fill it in so refill warms replacement sessions with the right sizing.
+    if (!existing.sizing && g.sizing) existing.sizing = g.sizing;
+    return existing;
+  }
   store.groups.set(g.key, g);
   return g;
+}
+
+/**
+ * The canonical DEFAULT pool/kind/sizing group — the exact combination a plain
+ * notebook cell run uses (backend=active Spark backend, poolName=default Spark
+ * pool, kind=pyspark, sizing=`defaultSynapseSizing()`). Pre-registering this at
+ * startup (below) gives the sweeper a target IMMEDIATELY so the FIRST user's
+ * FIRST run is warm — instead of the old lazy path where the first run merely
+ * registered the group and cold-started (R3 root cause #1).
+ */
+function defaultBackendGroup(): PoolGroup {
+  const gate = sparkPoolBackendStatus();
+  if (gate.backend === 'databricks') {
+    const poolName = process.env.LOOM_DATABRICKS_DEFAULT_CLUSTER || '';
+    const key = groupKey('databricks', poolName, 'pyspark', '');
+    return { key, backend: 'databricks', poolName, kind: 'pyspark', sizingKey: '' };
+  }
+  const poolName = defaultSparkPool();
+  const { sizing, sizingKey } = defaultSynapseSizing();
+  const key = groupKey('synapse', poolName, 'pyspark', sizingKey);
+  return { key, backend: 'synapse', poolName, kind: 'pyspark', sizingKey, sizing };
+}
+
+/** Register the default group so the sweeper always has a warm target. */
+function registerDefaultGroup(): void {
+  const gate = sparkPoolBackendStatus();
+  // A Databricks default group needs a concrete default cluster; skip when unset
+  // (nothing to warm against) — the Synapse default (loompool) is always present.
+  if (gate.backend === 'databricks' && !process.env.LOOM_DATABRICKS_DEFAULT_CLUSTER) return;
+  registerGroup(defaultBackendGroup());
+}
+
+/**
+ * Reconstruct the LivySessionSizing for an adopted group. We only truly know the
+ * sizing for the DEFAULT group (its key matches `defaultSynapseSizing()`); for a
+ * custom-sizing group warmed by another replica we leave it undefined (the slot
+ * is still leasable — it is labelled with the group's sizingKey — and a
+ * replacement warm falls back to the Livy default, an acceptable rare edge).
+ */
+function sizingForAdoptedGroup(sizingKey: string): LivySessionSizing | undefined {
+  const d = defaultSynapseSizing();
+  return sizingKey === d.sizingKey ? d.sizing : undefined;
+}
+
+/**
+ * Survive scale-to-zero: on a FRESH replica (empty in-memory store) adopt the
+ * warm/leased/shared slots a PRIOR replica persisted to the shared Cosmos store,
+ * and register their groups so the sweeper maintains `min` for them. Without this
+ * a recycled replica boots with `store.groups` empty → warm stays 0 → the next
+ * run cold-starts even though a warm session is standing by in the store (R3 root
+ * cause #2/#3). Best-effort — a store miss simply leaves the local registry empty.
+ * Idempotent: runs at most once per replica.
+ */
+export async function adoptFromStore(): Promise<void> {
+  if (store.adopted) return;
+  if (leaseStoreMode() !== 'cosmos') { store.adopted = true; return; }
+  store.adopted = true; // set first so a concurrent boot doesn't double-adopt
+  let docs: Awaited<ReturnType<typeof listAllDocs>>;
+  try {
+    docs = await listAllDocs();
+  } catch {
+    store.adopted = false; // let a later sweep retry adoption
+    return;
+  }
+  const me = replicaId();
+  for (const doc of docs) {
+    // Register the group so refill keeps this sizing at `min`.
+    registerGroup({
+      key: doc.groupKey,
+      backend: doc.backend,
+      poolName: doc.poolName,
+      kind: doc.kind,
+      sizingKey: doc.sizingKey,
+      sizing: sizingForAdoptedGroup(doc.sizingKey),
+    });
+    // Mirror the persisted slot locally (for status + keepalive) unless already tracked.
+    if (store.slots.some((s) => s.leaseId === doc.id)) continue;
+    store.slots.push({
+      leaseId: doc.id,
+      backend: doc.backend,
+      poolName: doc.poolName,
+      kind: doc.kind,
+      sizingKey: doc.sizingKey,
+      sessionId: doc.sessionId,
+      state: doc.state === 'leased' ? 'leased' : doc.state === 'shared' ? 'shared' : 'warm',
+      createdAt: doc.warmedAt,
+      warmedAt: doc.warmedAt,
+      lastActivityAt: doc.lastActivityAt,
+      leases: doc.leases || [],
+      groupKey: doc.groupKey,
+      // Owned here only if THIS replica warmed it; otherwise it's a claimed mirror
+      // (evictSlot/publish honour fromStore → never tears down another replica's session).
+      fromStore: me !== doc.ownerReplica,
+      request: doc.request,
+    });
+  }
+}
+
+/**
+ * Start the warm pool for THIS replica: pre-register the default group, adopt any
+ * store-persisted warm slots, start the sweeper, and kick an immediate refill so
+ * warming begins NOW rather than on the first 30s sweep tick. Idempotent + cheap
+ * — called at module load and on every config-apply so a scale-to-zero recycle
+ * re-arms warming as soon as the replica handles its first request.
+ */
+export function ensureWarmPoolStarted(): void {
+  if (!sparkPoolConfig().enabled) return;
+  registerDefaultGroup();
+  ensureSweeper();
+  if (store.started) {
+    // Already armed on this replica — still make sure adoption ran (store may have
+    // become configured after boot) and top up.
+    void adoptFromStore().then(() => refillPool()).catch(() => {});
+    return;
+  }
+  store.started = true;
+  // Adopt persisted warm slots first (so refill counts them and doesn't re-warm),
+  // then top up to `min` immediately.
+  void adoptFromStore()
+    .then(() => refillPool())
+    .catch(() => {});
 }
 
 // ============================================================
@@ -501,6 +643,11 @@ async function sweep(): Promise<void> {
   const cfg = sparkPoolConfig();
   pruneDead();
   if (!cfg.enabled) return;
+  // A fresh (recycled) replica may have started the sweeper with an empty
+  // registry — adopt any store-persisted warm slots + ensure the default group
+  // is registered so warm doesn't stay 0 after a scale-to-zero recycle.
+  registerDefaultGroup();
+  await adoptFromStore();
   const now = Date.now();
   for (const grp of store.groups.values()) {
     const warm = slotsForGroup(grp.key).filter((s) => s.state === 'warm');
@@ -881,4 +1028,21 @@ export function getPoolStatus(): PoolStatus {
     });
   }
   return { enabled: cfg.enabled, config: cfg, backend, totals, store: leaseStoreStatus(), groups };
+}
+
+// ============================================================
+// Startup — arm the warm pool as soon as this replica loads the module
+// ============================================================
+
+// ACA scales the Console to zero; on the next request a FRESH replica loads this
+// module with an empty in-memory pool and no running sweeper. Arm it at module
+// load so the default group is pre-registered, store-persisted warm slots are
+// adopted, the sweeper runs, and warming starts NOW — the FIRST user's FIRST run
+// is warm instead of registering the group and cold-starting (R3). Guarded +
+// best-effort: refill no-ops when the Spark backend isn't configured (e.g. build
+// time), and any throw is swallowed so import never fails.
+try {
+  ensureWarmPoolStarted();
+} catch {
+  /* best-effort — the sweeper/config-apply path will arm it on first request */
 }

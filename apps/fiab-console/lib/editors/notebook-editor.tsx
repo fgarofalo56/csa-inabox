@@ -567,6 +567,20 @@ export function NotebookEditor({ item, id }: Props) {
   // isn't Spark — never implies capability that isn't there.
   const [warmPool, setWarmPool] = useState<{ enabled: boolean; warmForPool: boolean } | null>(null);
   const sparkPoolName = computeId.startsWith('spark:') ? computeId.slice('spark:'.length) : '';
+  // Pre-warm on notebook LOAD (R3): ACA can idle the Console to zero, so the
+  // warm pool is empty until something asks for it. Fire a best-effort warm the
+  // moment a Spark notebook opens, so a session is warming while the user writes
+  // their first cell — instead of paying the ~2 min cold start on first run. One
+  // shot per attached pool; the server no-ops when the pool is disabled or the
+  // Spark backend isn't configured (default-ON, opt-out via LOOM_SPARK_POOL).
+  useEffect(() => {
+    if (!sparkPoolName) return;
+    void clientFetch('/api/spark/session-pool', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ action: 'warm', backend: 'synapse', poolName: sparkPoolName, kind: 'pyspark' }),
+    }).catch(() => { /* best-effort — first run still cold-starts if this fails */ });
+  }, [sparkPoolName]);
   useEffect(() => {
     if (!sparkPoolName) { setWarmPool(null); return; }
     let cancelled = false;
