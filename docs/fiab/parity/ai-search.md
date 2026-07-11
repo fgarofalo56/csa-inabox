@@ -11,8 +11,14 @@
 > textarea, and `semanticConfiguration` / `vectorSearch` profiles now have
 > form-based designers calling the real index PUT. Combined with the prior
 > `ai-search-explorer.md` (B+) query-options work, the field-grid + scheduling +
-> debug flips lift the service **B → A−**. Remaining honest gaps: scoring-profile
-> /analyzer fine-tuning breadth and the Import-data wizard's skillset designer.
+> debug flips lift the service **B → A−**. The former scoring-profile / analyzer /
+> CORS / CMK JSON-only gaps (rows 11–13) are now closed by **AIF-16** — visual
+> `ScoringProfilesDesigner` / `AnalyzersDesigner` / `CorsAndCmkDesigner`
+> (`lib/components/ai-search/index-designers.tsx`, shaping
+> `lib/azure/search-index-designers.ts`), each writing the same
+> `PUT /indexes/{name}`, with authored custom-analyzer names surfaced in the
+> Schema-grid per-field analyzer picker. Remaining honest gaps: suggesters /
+> normalizers designers and the Import-data wizard's skillset designer.
 
 
 > Brutally honest 1:1 parity audit. Graded per `.claude/rules/no-vaporware.md`
@@ -174,9 +180,9 @@ MISSING ❌
 | 8 | Field grid (read-only view of attributes) | ✅ built | superseded by the editable designer above |
 | 9 | Semantic configuration **designer** | ✅ built | `SemanticConfigDesigner` — title/content/keyword field pickers → `PUT /indexes` (`foundry-sub-editors.tsx`) |
 | 10 | Vector profile / algorithm / vectorizer **designer** | ✅ built | `VectorSearchDesigner` — HNSW/exhaustiveKnn algorithm rows + profile rows (algorithm + vectorizer binding) + **Azure OpenAI vectorizer** rows (endpoint / embedding deployment / model) for integrated vectorization; honest MessageBar names the `Cognitive Services OpenAI User` grant the search identity needs — **and that grant is now provisioned day-one**: `foundry-project.bicep` grants the AI Search service's system-assigned MI `Cognitive Services OpenAI User` on the Foundry AOAI account (`searchPrincipalId`, wired from `aiSearch.outputs.searchPrincipalId` in `admin-plane/main.bicep`) so the server-side vectorizer authenticates keyless instead of 401-ing. A **consistency pre-flight** (`vectorizer-consistency.ts` `validateVectorizerConsistency`) renders error/warning MessageBars for dimension mismatches (field dims ≠ the bound vectorizer's embedding-model dims) and dangling profile/vectorizer/algorithm references before the PUT. Save → real `PUT /indexes/{name}`. `search-field-shapes.ts` `buildVectorSearchSection(..., vectorizers)` (AIF-2) |
-| 11 | Scoring-profile designer | ❌ MISSING (JSON-only) | only via raw Schema JSON; no designer, not even flagged |
-| 12 | Suggesters / analyzers / normalizers / tokenizers designers | ❌ MISSING (JSON-only) | only via raw Schema JSON |
-| 13 | CORS / encryptionKey (CMK) designer | ❌ MISSING (JSON-only) | only via raw Schema JSON |
+| 11 | Scoring-profile designer | ✅ built (AIF-16) | `ScoringProfilesDesigner` — named profile cards with per-field text-weights (searchable-string field pickers) + magnitude/freshness/distance/tag function rows (typed parameter inputs, interpolation + function-aggregation dropdowns) + a default-profile picker → `scoringProfiles[]` / `defaultScoringProfile` via `PUT /indexes/{name}`. `lib/components/ai-search/index-designers.tsx`, shaping `lib/azure/search-index-designers.ts` (`buildScoringProfiles`/`parseScoringProfiles`) |
+| 12 | Analyzers (custom analyzer builder) / tokenizers / char & token filters designer | ✅ built (AIF-16) | `AnalyzersDesigner` — custom-analyzer builder (name + tokenizer dropdown + token/char-filter checkbox chips from the fixed Lucene component lists) → `analyzers[]` via `PUT /indexes/{name}`; the authored analyzer names then appear in the Schema-grid per-field analyzer dropdown ("Custom analyzers" `OptionGroup`, via `customAnalyzerNames`), closing the loop. Built-in analyzer reference chips shown inline. `index-designers.tsx` / `search-index-designers.ts` (`buildCustomAnalyzers`/`parseCustomAnalyzers`/`customAnalyzerNames`). Suggesters / normalizers designers remain JSON-only (tracked separately). |
+| 13 | CORS / encryptionKey (CMK) designer | ✅ built (AIF-16) | `CorsAndCmkDesigner` — CORS card (enable toggle, comma-separated allowed-origins, max-age) → `corsOptions`; CMK card (Key Vault URI + key name + optional version + optional UAMI resource id, with an honest MessageBar naming the required Key Vault *Crypto Service Encryption User* grant) → `encryptionKey`, both via `PUT /indexes/{name}`. `index-designers.tsx` / `search-index-designers.ts` (`buildCorsOptions`/`buildEncryptionKey`) |
 | 14 | Edit JSON (full definition) + Save (real PUT) | ✅ built | Schema tab Monaco + `PUT /indexes/{name}` |
 | 15 | Index statistics (docs, storage, vector size) | ✅ built | Statistics tab → `GET /indexes/{n}/stats` |
 | 16 | Delete index | ✅ built | tree delete → `DELETE /indexes/{n}` |
@@ -290,7 +296,7 @@ B-grade, and the two flagship index surfaces now meet the `ui-parity.md` bar:
 Remaining gaps keep it off A: **no indexer scheduling**, no execution history,
 no field/output mappings; **semantic-config + vector-profile designers** are
 honest-gated (JSON-only); **scoring-profile / analyzer / CORS / CMK** designers
-are JSON-only; **Debug sessions, Demo app** are honest-gated or missing (the
+are now visual (AIF-16 — rows 11–13 built); **Debug sessions, Demo app** are honest-gated or missing (the
 **Import data wizard** now ships as the AIF-3 index-my-estate wizard, row 21);
 service admin (Keys, Identity, Networking, Monitoring, service
 stats) is absent from the surface (scale lives on a different page). It is NOT

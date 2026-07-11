@@ -21,7 +21,7 @@ import { clientFetch } from '@/lib/client-fetch';
 
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import {
-  Subtitle2, Body1, Caption1, Badge, Button, Input, Textarea, SkeletonItem, Field, Dropdown, Option,
+  Subtitle2, Body1, Caption1, Badge, Button, Input, Textarea, SkeletonItem, Field, Dropdown, Option, OptionGroup,
   Checkbox,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   Tab, TabList,
@@ -48,6 +48,7 @@ import { IndexMyDataWizard } from '@/lib/components/ai-search/index-my-data-wiza
 import { KnowledgeBasesPanel } from '@/lib/components/ai-search/knowledge-bases-panel';
 import { IndexerOpsPanel } from '@/lib/components/ai-search/indexer-ops';
 import { ScoringProfilesDesigner, AnalyzersDesigner, CorsAndCmkDesigner } from '@/lib/components/ai-search/index-designers';
+import { customAnalyzerNames } from '@/lib/azure/search-index-designers';
 import { AiSearchServicePanel } from '@/lib/components/ai-search/ai-search-service-panel';
 import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
 import {
@@ -1939,6 +1940,9 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
   const semanticConfigs = useMemo(() => semanticConfigNames(idx), [idx]);
   const vectorProfiles = useMemo(() => vectorProfileNames(idx), [idx]);
   const scoringProfiles = useMemo(() => scoringProfileNames(idx), [idx]);
+  // Custom analyzers authored in the AnalyzersDesigner (AIF-16) join the built-in
+  // analyzer list so a field can actually reference one from its analyzer picker.
+  const customAnalyzers = useMemo(() => customAnalyzerNames(idx), [idx]);
   const facetableFields = useMemo(() => facetableFieldNames(idx), [idx]);
   // Searchable, non-vector string fields are the only valid highlight targets.
   const highlightableFields = useMemo(
@@ -2340,6 +2344,11 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
                                   onOptionSelect={(_, d) => patchFieldRow(i, { analyzer: d.optionValue || undefined })}>
                                   <Option value="">(default)</Option>
                                   {ANALYZERS.map((a) => (<Option key={a} value={a}>{a}</Option>))}
+                                  {customAnalyzers.length > 0 && (
+                                    <OptionGroup label="Custom analyzers">
+                                      {customAnalyzers.map((a) => (<Option key={a} value={a}>{a}</Option>))}
+                                    </OptionGroup>
+                                  )}
                                 </Dropdown>
                               )}
                             </TableCell>
