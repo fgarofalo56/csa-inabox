@@ -198,6 +198,82 @@ to the service principal. The `.pbids` / Open-in-Power-BI hand-off and the
 `Service principals can use Power BI APIs` tenant setting (still needed for the
 service-principal fallback used by background jobs) are unchanged.
 
+### Prerequisite F — Weave → Power BI: data gateway + (opt-in) real Power BI Service {#prereq-weave-powerbi}
+
+**Why:** The **Weave → "Analyze in Power BI"** edge turns any Loom data item
+(lakehouse / warehouse / eventhouse / KQL database / mirrored database / dataset
+/ semantic model / data product) into a Power BI report / paginated report /
+dashboard / semantic model, **pre-wired to the source**. The **default target is
+Loom-native** and needs **none** of the prerequisites below — it binds directly
+to the Azure-native backend (Synapse serverless/dedicated, ADX) over the private
+plane, with no Fabric capacity, Power BI workspace, or gateway
+(`no-fabric-dependency.md`). The steps here are only for **(a)** letting Power BI
+reach Loom's private-endpoint sources, and **(b)** the **opt-in real Power BI
+Service** publish target.
+
+**F1 — Data gateway (shipped, default-on).** The VM-based on-premises data
+gateway is deployed automatically (`pbiDataGatewayEnabled = true`,
+`platform/fiab/bicep/modules/admin-plane/pbi-vm-data-gateway.bicep`). It installs
+unattended; the **one-time register-to-tenant** step needs a Power BI admin
+sign-in Loom cannot perform:
+
+```powershell
+# Over Bastion (VM has no public inbound), signed in as a Power BI admin:
+Connect-DataGatewayServiceAccount
+Add-DataGatewayCluster `
+  -RecoveryKey (ConvertTo-SecureString '<KV secret: pbi-gateway-recovery-key>' -AsPlainText -Force) `
+  -GatewayName '<KV secret: pbi-gateway-name>'
+# Then bind Loom data-source connections to this gateway in the Power BI service.
+```
+
+When a Fabric/Premium capacity is bound (F2), Loom auto-prefers the **managed
+VNet data gateway** instead — see [`docs/fiab/powerbi-vnet-gateway.md`](./powerbi-vnet-gateway.md)
+for both gateways, the `LOOM_PBI_GATEWAY_MODE` selector, and the corrected Gov
+availability (VNet gateway supported in GCC-High L4 / DoD L5).
+
+**F2 — Real Power BI Service path (opt-in; Weave W5, shipped).** The user picks
+the destination **per click** (operator decision D1): the Loom-native default, or
+— when configured — a **real Power BI item** published into the operator's bound
+workspace over live Power BI REST (`handlePowerBiService()` in
+`app/api/thread/analyze-in-powerbi/route.ts`, gate logic in
+`lib/thread/pbi-service-gate.ts`). To enable that destination, set on the Console
+app (`/admin/env-config` or the app's env array):
+
+| Env var | Read by | Meaning |
+| --- | --- | --- |
+| `LOOM_PBI_WORKSPACE_ID` | `readPbiServiceConfig()` (W5) | Target Power BI workspace GUID the real artifacts are created in. Unset → the real-PBI destination honest-gates (422) and every click falls through to Loom-native |
+| `LOOM_PBI_CAPACITY_ID` | `readPbiServiceConfig()` (W5) + `getPbiVmGatewayStatus()` (W4) | Fabric / Power BI Premium capacity (F/P SKU) id backing the workspace. **Also** the gateway auto-upgrade trigger (F1) |
+| `LOOM_PBI_TEMPLATE_REPORT` | `resolveTemplateReportId()` (W5) | A blank template report (id or name) in that workspace to clone from — required for the report/dashboard targets (Power BI REST has no create-report-bound-to-model authoring API). The semantic-model target needs no template |
+
+Prerequisites for that path:
+
+- **Delegated Power BI scopes + admin consent** — `Workspace.Read.All`,
+  `Report.ReadWrite.All`, `Dataset.ReadWrite.All`, `Content.Create` on the Loom
+  MSAL app registration. This is the **same consent** as
+  [Prerequisite E](#prereq-powerbi-delegated) — if E is done, this is covered.
+  Auth is **on-behalf-of the signed-in user** (their own Power BI RBAC), not the
+  Loom service principal. A `401/403` on the real-PBI path renders an honest gate
+  naming exactly this (missing consent) or workspace membership below.
+- **Workspace access** — the publishing users need **Member** or **Contributor**
+  on `LOOM_PBI_WORKSPACE_ID` (Contributor is the minimum to create/clone reports
+  and datasets; Member for endorsement/managing).
+- **Gateway registered (F1)** — a private-endpoint-only source (Synapse) must
+  route through a registered Power BI data gateway; the route's gateway gate
+  (`listGateways()` + `gatewayGate()`) blocks with the register-to-tenant
+  remediation until one is registered. ADX is public and needs no gateway.
+
+Until `LOOM_PBI_WORKSPACE_ID` + `LOOM_PBI_CAPACITY_ID` are set (and consent
+granted), the Weave edge's "Power BI Service" destination honest-gates (422) and
+every "Analyze in Power BI" click falls through to the **Loom-native** target —
+which always works with none of the above.
+
+> **Status note.** Weave W1–W5 are all shipped on `main`. F1 (the VM data
+> gateway, default-on) and the gateway auto-upgrade selector ship in W1–W4; the
+> `power-bi-service` destination branch + `LOOM_PBI_WORKSPACE_ID` /
+> `LOOM_PBI_TEMPLATE_REPORT` wiring ship in **W5** (#1911). Paginated reports have
+> no Power BI authoring REST API, so on the real-PBI path they honest-gate to the
+> Loom-native destination (which builds a real, pre-wired paginated report).
+
 ---
 
 ## Deployment topology — `deploymentMode` & DLZ-attach {#deployment-topology}
