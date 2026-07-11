@@ -323,7 +323,14 @@ var loomCiToken = guid(loomGeneratedSecretSeed, 'loom-ci-token-v1')
 // Setup Orchestrator deploys on the Container Apps boundaries (Commercial / GCC)
 // when explicitly enabled + app deploy on (it needs the image in ACR). On AKS
 // boundaries it is deployed via the cluster GitOps path instead.
-var setupOrchestratorActive = setupOrchestratorEnabled && containerPlatform == 'containerApps' && deployAppsEnabled
+// SOVEREIGN GATE: the loom-setup-orchestrator image is NOT published to the
+// GCC-High / IL5 release ACR (MANIFEST_UNKNOWN on a fresh Gov deploy), and the
+// Console env-wires LOOM_SETUP_ORCHESTRATOR_URL from this module's output, so an
+// active-but-unpullable orchestrator blocks the Console container app itself.
+// Gate it off for GCC-High / IL5 — the Setup Wizard's browser Deploy honest-gates
+// (the operator deploys via CLI / the deploy workflow); re-enable once the image
+// is pushed to the sovereign ACR.
+var setupOrchestratorActive = setupOrchestratorEnabled && containerPlatform == 'containerApps' && deployAppsEnabled && boundary != 'GCC-High' && boundary != 'IL5'
 
 // MAF tier deploys only in Gov boundaries with Container Apps + app deploy on.
 var copilotMafActive = copilotMafEnabled && (boundary == 'GCC-High' || boundary == 'IL5') && containerPlatform == 'containerApps' && deployAppsEnabled
