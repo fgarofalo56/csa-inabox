@@ -121,13 +121,24 @@ RUN set -euo pipefail; \
 # `loom-ui-verify` / Playwright specs run without a per-job `npx playwright
 # install` (the in-VNet runner's egress is firewall-restricted, so the runtime
 # CDN download fails). Adds ~600MB. Pinned to the repo's @playwright/test.
+# PLAYWRIGHT_BROWSERS_PATH puts the browsers in a shared, world-readable path —
+# installing as root without it lands them under /root/.cache where the
+# non-root `runner` user cannot see them at job time.
 USER root
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 RUN set -euo pipefail; \
-    npx --yes playwright@1.48.0 install --with-deps chromium
+    npx --yes playwright@1.48.0 install --with-deps chromium; \
+    chmod -R a+rX /ms-playwright
 # ---------------------------------------------------------------------------
 
 COPY --chown=runner:runner entrypoint.sh /home/runner/actions-runner/entrypoint.sh
-RUN chmod +x /home/runner/actions-runner/entrypoint.sh
+# Strip CRLF: a Windows checkout (core.autocrlf) can hand the build context an
+# entrypoint.sh with \r\n line endings — the container then dies at start with
+# `/usr/bin/env: 'bash\r': No such file or directory` (seen live: KEDA retry
+# loop of Failed executions). Normalizing here makes the image immune to the
+# build host's line-ending config.
+RUN sed -i 's/\r$//' /home/runner/actions-runner/entrypoint.sh; \
+    chmod +x /home/runner/actions-runner/entrypoint.sh
 
 USER runner
 ENTRYPOINT ["/home/runner/actions-runner/entrypoint.sh"]
