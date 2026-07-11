@@ -139,8 +139,8 @@ param deployAppsEnabled bool = false
 @description('Deploy AI Foundry Hub. Requires explicit storage-account strategy; default off so initial provision succeeds before operator picks Hub strategy.')
 param aiFoundryEnabled bool = false
 
-@description('Deploy Azure AI Content Safety (Microsoft.CognitiveServices/accounts kind=ContentSafety, S0) in the admin-plane RG and wire LOOM_CONTENT_SAFETY_ENDPOINT so every copilot persona routes prompts + completions through Prompt Shields + harm moderation. Available in Commercial, GCC (Commercial Azure endpoints), and GCC-High (USGovArizona / USGovVirginia). Set false at DoD (US DoD Central/East) — those regions do not offer Content Safety; the Console then surfaces an honest "not configured" warning MessageBar instead of silently passing.')
-param contentSafetyEnabled bool = false
+@description('Deploy Azure AI Content Safety (Microsoft.CognitiveServices/accounts kind=ContentSafety, S0) in the admin-plane RG and wire LOOM_CONTENT_SAFETY_ENDPOINT so every copilot persona routes prompts + completions through Prompt Shields + harm moderation. ON BY DEFAULT (opt-out, per default-on/opt-out). Available in Commercial, GCC (Commercial Azure endpoints), and GCC-High (USGovArizona / USGovVirginia). Set false at DoD (US DoD Central/East) — those regions do not offer a dedicated Content Safety account; the Console then falls back to the multi-service AIServices /contentsafety data plane (LOOM_CONTENT_SAFETY_ENDPOINT derives from the Foundry AIServices endpoint) and only honest-gates when no Foundry account is deployed either.')
+param contentSafetyEnabled bool = true
 
 @description('Deploy the dedicated AI Foundry Agent Service account (aifndry-loom-<location>) with the loom-agents project + chat/embedding model deployments. Backs LOOM_FOUNDRY_PROJECT_ENDPOINT / LOOM_AOAI_* for the Agent Service. ON BY DEFAULT (opt-out). Independent of aiFoundryEnabled.')
 param agentFoundryEnabled bool = true
@@ -2155,6 +2155,20 @@ module agentFoundry '../ai/foundry-project.bicep' = if (agentFoundryEnabled) {
   }
 }
 
+// AI-enrichment cognitive endpoint (SVC-1 / SVC-8) — DEFAULT-ON, zero new infra.
+// The AI-enrich pipeline activities (Document Intelligence / Vision / Language /
+// Translator / Content Safety) call the cognitive data planes (/documentintelligence,
+// /computervision, /language, /translator, /contentsafety) on the MULTI-SERVICE
+// Azure AI Services account via its single cognitiveservices.azure.com custom-domain
+// endpoint. The default agentFoundry account (kind=AIServices, agentFoundryEnabled=true)
+// already grants the Console UAMI "Cognitive Services User", so these activities run
+// day-one with NO dedicated single-kind accounts (avoids the 256-param ceiling +
+// extra cost). Falls back to the aiFoundry AIServices account, else empty (BYO
+// Foundry → honest infra gate). Mirrors the LOOM_FOUNDRY_ENDPOINT derivation.
+var loomAiEnrichEndpoint = agentFoundryEnabled
+  ? agentFoundry!.outputs.aiServicesEndpoint
+  : ((aiFoundryEnabled && empty(existingFoundryAccountName)) ? aiFoundry!.outputs.aiServicesEndpoint : '')
+
 // Shared Data API builder preview runtime (off by default — needs a SQL target).
 module dabRuntime 'dab-runtime.bicep' = if (dabRuntimeEnabled && !empty(dabSqlServerFqdn)) {
   name: 'dab-runtime'
@@ -3962,10 +3976,32 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_FOUNDRY_SUB', value: byoFoundrySub }
             { name: 'LOOM_FOUNDRY_NAME', value: (aiFoundryEnabled && empty(existingFoundryAccountName)) ? aiFoundry!.outputs.hubName : '' }
             // Azure AI Content Safety endpoint — copilot persona moderation
-            // pipeline (Prompt Shields + harm analyze). Empty when the Content
-            // Safety account isn't deployed (e.g. DoD), in which case the
+            // pipeline (Prompt Shields + harm analyze). Default-ON: the dedicated
+            // ContentSafety account when contentSafetyEnabled, else the multi-service
+            // AIServices /contentsafety data plane (loomAiEnrichEndpoint). Empty only
+            // when neither is deployed (BYO Foundry + Content Safety off) → the
             // Console honest-gates with a warning MessageBar (no silent pass).
-            { name: 'LOOM_CONTENT_SAFETY_ENDPOINT', value: contentSafetyEnabled ? contentSafety!.outputs.endpoint : '' }
+            { name: 'LOOM_CONTENT_SAFETY_ENDPOINT', value: contentSafetyEnabled ? contentSafety!.outputs.endpoint : loomAiEnrichEndpoint }
+            { name: 'NEXT_PUBLIC_LOOM_CONTENT_SAFETY_ENDPOINT', value: contentSafetyEnabled ? contentSafety!.outputs.endpoint : loomAiEnrichEndpoint }
+            // AI-enrichment pipeline activities (SVC-1 / SVC-8) — Document Intelligence
+            // / Vision / Language / Translator data planes on the DEFAULT multi-service
+            // AIServices account (loomAiEnrichEndpoint = the agentFoundry / aiFoundry
+            // cognitiveservices.azure.com custom-domain endpoint). Default-ON: each
+            // ships the server var (read by the clients + preview route) AND its
+            // NEXT_PUBLIC_ canvas-prefill mirror (activity-catalog.ts). Empty only when
+            // no Foundry account is deployed (BYO) → honest infra gate on the node.
+            { name: 'LOOM_DOCINTEL_ENDPOINT', value: loomAiEnrichEndpoint }
+            { name: 'NEXT_PUBLIC_LOOM_DOCINTEL_ENDPOINT', value: loomAiEnrichEndpoint }
+            { name: 'LOOM_VISION_ENDPOINT', value: loomAiEnrichEndpoint }
+            { name: 'NEXT_PUBLIC_LOOM_VISION_ENDPOINT', value: loomAiEnrichEndpoint }
+            { name: 'LOOM_LANGUAGE_ENDPOINT', value: loomAiEnrichEndpoint }
+            { name: 'NEXT_PUBLIC_LOOM_LANGUAGE_ENDPOINT', value: loomAiEnrichEndpoint }
+            { name: 'LOOM_TRANSLATOR_ENDPOINT', value: loomAiEnrichEndpoint }
+            { name: 'NEXT_PUBLIC_LOOM_TRANSLATOR_ENDPOINT', value: loomAiEnrichEndpoint }
+            // Translator on a single-region (multi-service) resource requires the
+            // region on the Ocp-Apim-Subscription-Region header alongside the AAD
+            // token (ai-translator-client.ts) — the deployment region.
+            { name: 'LOOM_TRANSLATOR_REGION', value: location }
             // Azure ML workspace for notebook Library & Environment management
             // (aml-environments-client.ts) AND MLflow experiment tracking
             // (ml-experiment "Runs & metrics" tab, mlflow-client.ts). The Foundry

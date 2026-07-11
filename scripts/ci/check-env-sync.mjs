@@ -137,16 +137,13 @@ const ALLOWLIST = new Set([
   'LOOM_DATABRICKS_WORKSPACE_URL',        // opt-in Databricks workspace URL (alias of LOOM_DATABRICKS_HOSTNAME with scheme)
   'LOOM_DATABRICKS_WORKSPACE_RESOURCE_ID', // opt-in Databricks workspace ARM resourceId — enables MSI auth on the auto-stubbed linked service
   'LOOM_DATABRICKS_LINKED_SERVICE',       // opt-in name of an already-registered AzureDatabricks linked service to reuse instead of auto-stubbing
-  // SVC-1/SVC-8 — AI-enrichment cognitive endpoints. Independent single-kind
-  // Cognitive Services accounts provisioned by deploy-planner/cognitive-account.bicep
-  // and set per-deployment via /admin/env-config; NOT emitted by admin-plane
-  // (which is at the 256-param ceiling). Unset default = honest infra gate on the
-  // AI-enrich canvas node + preview route.
-  'LOOM_DOCINTEL_ENDPOINT',         // opt-in Document Intelligence endpoint (deploy-planner cognitive account)
-  'LOOM_VISION_ENDPOINT',           // opt-in Azure AI Vision endpoint (deploy-planner cognitive account)
-  'LOOM_LANGUAGE_ENDPOINT',         // opt-in Azure AI Language endpoint (deploy-planner cognitive account)
-  'LOOM_TRANSLATOR_ENDPOINT',       // opt-in Azure AI Translator endpoint (deploy-planner cognitive account)
-  'LOOM_TRANSLATOR_REGION',         // opt-in Translator resource region (Ocp-Apim-Subscription-Region header)
+  // SVC-1/SVC-8 — AI-enrichment cognitive endpoints. NOW EMITTED default-ON by
+  // admin-plane/main.bicep (LOOM_DOCINTEL/VISION/LANGUAGE/TRANSLATOR_ENDPOINT +
+  // LOOM_TRANSLATOR_REGION), derived from the multi-service AIServices (Foundry)
+  // custom-domain endpoint the Console UAMI already has "Cognitive Services User"
+  // on — so they are no longer allowlisted (a clean deploy wires them). Dedicated
+  // single-kind accounts (deploy-planner/cognitive-account.bicep) remain an opt-in
+  // override set via /admin/env-config.
 
   // ---- Derived from an emitted var at runtime (KV name<->url, cosmos endpoint<->id, etc.) ----
   'LOOM_KEY_VAULT_NAME',            // derived from LOOM_KEY_VAULT_URL

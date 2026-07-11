@@ -396,3 +396,5 @@ output embedDeployment string = embedDeployment.name
 @description('LOOM_AOAI_COMPLETION_DEPLOYMENT — empty when no dedicated inline-completion slot is deployed; the Console route then falls back to the chat deployment for ghost text.')
 output completionDeployment string = !empty(completionDeploymentName) ? completionDeploymentName : ''
 output accountPrincipalId string = account.identity.principalId
+@description('LOOM_<SVC>_ENDPOINT for the AI-enrichment pipeline activities — the multi-service Azure AI Services custom-domain endpoint (https://<subdomain>.cognitiveservices.azure.com/). This kind=AIServices account serves the Document Intelligence / Vision / Language / Translator / Content Safety data planes (/documentintelligence, /computervision, /language, /translator, /contentsafety) under one endpoint, and the Console UAMI is granted "Cognitive Services User" above — so those activities run day-one with no dedicated single-kind accounts (no-vaporware / default-on).')
+output aiServicesEndpoint string = account.properties.endpoint
