@@ -2588,6 +2588,40 @@ module swaPublishRbac 'swa-publish-rbac.bicep' = if (!skipRoleGrants) {
 }
 
 // =====================================================================
+// 10b-2. Power BI VM-based on-premises data gateway (Weave→Power BI D2).
+//
+// DEFAULT-ON. Stands up a small Windows VM inside the hub VNet (in the
+// private-endpoint subnet) running the standard on-premises data gateway, so
+// Power BI reaches Loom's PE-locked data sources (Synapse/SQL/ADLS/ADX) over the
+// private plane with NO public route — using Pro licenses (no Premium/Fabric
+// capacity). The register-to-tenant step needs a Power BI admin sign-in and is
+// surfaced as an honest gate in the Network pane. When a Fabric/Premium capacity
+// is later bound (LOOM_PBI_CAPACITY_ID) the Console prefers the managed VNet data
+// gateway (auto-upgrade). Works in Commercial AND Gov. Deploys in the infra phase
+// (no app dependency); only needs the KV + hub network.
+// =====================================================================
+
+@description('Deploy the Power BI VM-based on-premises data gateway (Weave→Power BI D2, default gateway). Default true — a clean deploy stands it up so Power BI can reach Loom PE data sources with no public route. Set false to skip (e.g. no Power BI in scope).')
+param pbiDataGatewayEnabled bool = true
+
+module pbiVmDataGateway 'pbi-vm-data-gateway.bicep' = if (pbiDataGatewayEnabled) {
+  name: 'pbi-vm-data-gateway'
+  dependsOn: [ keyvault ]
+  params: {
+    location: location
+    boundary: boundary
+    // Placed in the hub private-endpoint subnet so the gateway resolves + reaches
+    // every privatelink.* Loom data source over the private plane.
+    subnetId: network.outputs.privateEndpointsSubnetId
+    keyVaultName: keyvault.outputs.keyVaultName
+    consolePrincipalId: identity.outputs.uamiConsolePrincipalId
+    skipRoleGrants: skipRoleGrants
+    workspaceId: monitoring.outputs.lawId
+    complianceTags: complianceTags
+  }
+}
+
+// =====================================================================
 // 11. AI defense (Defender for AI workaround in Gov)
 // =====================================================================
 
@@ -3514,6 +3548,14 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           !empty(loomPowerbiXmlaEndpoint) ? [
             { name: 'LOOM_POWERBI_XMLA_ENDPOINT', value: loomPowerbiXmlaEndpoint }
           ] : [],
+          // Power BI data-gateway mode selector (Weave→Power BI D2). 'auto' =
+          // use the VM on-prem data gateway now (default-on, Pro-only), prefer
+          // the managed VNet data gateway when a Fabric/Premium capacity is bound
+          // (LOOM_PBI_CAPACITY_ID). 'vm' / 'vnet' force a mode. Emitted default-on
+          // so the Network pane reflects the deployed VM gateway + the upgrade CTA.
+          [
+            { name: 'LOOM_PBI_GATEWAY_MODE', value: 'auto' }
+          ],
           // Power BI remote MCP server (Copilot agentic / preview) — STRICTLY
           // OPT-IN per no-fabric-dependency.md. Only emitted when an Entra app
           // (client) id is supplied; absence keeps the Azure-native

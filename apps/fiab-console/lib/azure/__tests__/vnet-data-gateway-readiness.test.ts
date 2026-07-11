@@ -11,6 +11,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   evaluateVnetGatewayReadiness, VNET_GATEWAY_DELEGATION,
+  resolveRecommendedGatewayMode,
   type VNetInfo,
 } from '@/lib/azure/network-discovery';
 
@@ -83,19 +84,41 @@ describe('evaluateVnetGatewayReadiness — no faked capability (tenant rows)', (
   });
 });
 
-describe('evaluateVnetGatewayReadiness — sovereign clouds', () => {
-  it('marks the capability unavailable in GCC-High (no Power Platform VNet endpoint)', () => {
-    const r = evaluateVnetGatewayReadiness('GCC-High', null, []);
+describe('evaluateVnetGatewayReadiness — cloud availability (MS Learn)', () => {
+  // Per Learn (VNet data gateway FAQ / overview §Limitations): supported in
+  // Commercial, GCC L4 (GCC-High: TX/VA) and L5 (DoD East). NOT supported in GCC
+  // L2 (Loom 'GCC'). This pins the corrected mapping (the Gov availability fix).
+  it('keeps the capability available in Commercial', () => {
+    expect(evaluateVnetGatewayReadiness('Commercial', null, []).capabilityAvailable).toBe(true);
+  });
+  it('marks the capability available in GCC-High (GCC L4 — TX/VA)', () => {
+    const r = evaluateVnetGatewayReadiness('GCC-High', 'Registered', []);
+    expect(r.capabilityAvailable).toBe(true);
+    // A full prereq checklist (not the single "unavailable" row) is returned.
+    expect(r.prereqs.length).toBeGreaterThan(1);
+    expect(r.prereqs.find((p) => p.id === 'rp')!.status).toBe('met');
+  });
+  it('marks the capability available in DoD (L5 — DoD East)', () => {
+    expect(evaluateVnetGatewayReadiness('DoD', null, []).capabilityAvailable).toBe(true);
+  });
+  it('marks the capability UNAVAILABLE in GCC L2 (not supported per Learn)', () => {
+    const r = evaluateVnetGatewayReadiness('GCC', null, []);
     expect(r.capabilityAvailable).toBe(false);
     expect(r.prereqs).toHaveLength(1);
     expect(r.prereqs[0].status).toBe('unavailable');
     expect(r.azureNativeDefault).toMatch(/private-endpoint/i);
   });
-  it('marks the capability unavailable in DoD', () => {
-    expect(evaluateVnetGatewayReadiness('DoD', null, []).capabilityAvailable).toBe(false);
+});
+
+describe('resolveRecommendedGatewayMode — VM default, auto-upgrade on capacity', () => {
+  it("auto → VM gateway when no Fabric/Premium capacity is bound (Pro-only default)", () => {
+    expect(resolveRecommendedGatewayMode('auto', false)).toBe('vm');
   });
-  it('keeps the capability available in Commercial and GCC', () => {
-    expect(evaluateVnetGatewayReadiness('Commercial', null, []).capabilityAvailable).toBe(true);
-    expect(evaluateVnetGatewayReadiness('GCC', null, []).capabilityAvailable).toBe(true);
+  it('auto → managed VNet gateway once a capacity is bound (the auto-upgrade)', () => {
+    expect(resolveRecommendedGatewayMode('auto', true)).toBe('vnet');
+  });
+  it('honours a forced mode regardless of capacity binding', () => {
+    expect(resolveRecommendedGatewayMode('vm', true)).toBe('vm');
+    expect(resolveRecommendedGatewayMode('vnet', false)).toBe('vnet');
   });
 });

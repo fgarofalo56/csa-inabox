@@ -683,9 +683,16 @@ export function evaluateVnetGatewayReadiness(
   rpState: string | null,
   vnets: VNetInfo[],
 ): VnetDataGatewayReadiness {
-  // Fabric / Power Platform VNet data gateways are Commercial + GCC only; the
-  // sovereign Azure Government clouds have no Power Platform VNet endpoint.
-  const capabilityAvailable = cloud === 'Commercial' || cloud === 'GCC';
+  // Fabric / Power Platform VNet data gateway cloud availability, per Microsoft
+  // Learn (VNet data gateway FAQ / overview §Limitations): supported in Azure
+  // Commercial, GCC L4 (Texas + Virginia — Loom 'GCC-High' / IL5) and L5 (DoD
+  // East — Loom 'DoD'). It is NOT supported in GCC L2 (Loom 'GCC', which runs on
+  // Commercial Azure regions but under the GCC-moderate Power Platform tenant).
+  // Prior code had this inverted (GCC available, GCC-High/DoD unavailable) — the
+  // Gov availability bug this fix corrects.
+  //   https://learn.microsoft.com/data-integration/vnet/data-gateway-faqs#does-the-virtual-network-data-gateway-support-azure-government-cloud
+  //   https://learn.microsoft.com/data-integration/vnet/overview#limitations
+  const capabilityAvailable = cloud === 'Commercial' || cloud === 'GCC-High' || cloud === 'DoD';
 
   const rpRegistered = (rpState || '').toLowerCase() === 'registered';
 
@@ -839,6 +846,121 @@ export async function getVnetDataGatewayReadiness(): Promise<VnetDataGatewayRead
   try { vnets = await listVirtualNetworks(); } catch { /* delegation list degrades to empty */ }
 
   return evaluateVnetGatewayReadiness(cloud, rpState, vnets);
+}
+
+// ============================================================
+// Power BI VM-based ON-PREMISES data gateway (Weave→Power BI D2, DEFAULT).
+//
+// Loom DOES deploy this one (admin-plane/pbi-vm-data-gateway.bicep): a small
+// Windows VM in the hub VNet running the standard on-prem data gateway, so Power
+// BI reaches Loom's PE-locked sources with no public route, using Pro licenses.
+// This surfaces the REAL status (VM present + running) — not a pure honest gate —
+// plus the auto-upgrade recommendation (prefer the managed VNet data gateway when
+// a Fabric/Premium capacity is bound) and the ONE genuinely-manual step
+// (register-to-tenant, which needs a Power BI admin sign-in Loom can't perform).
+// ============================================================
+
+const COMPUTE_VM_API = '2024-07-01';
+
+/** Naming prefix the pbi-vm-data-gateway.bicep VM uses (`vm-loom-pbigw-<loc>`). */
+const PBI_GW_VM_PREFIX = 'vm-loom-pbigw';
+
+export type PbiGatewayMode = 'auto' | 'vm' | 'vnet';
+
+export interface PbiVmGatewayStatus {
+  /** True when the Loom-deployed on-prem gateway VM is found in Azure. */
+  found: boolean;
+  vmName?: string;
+  resourceGroup?: string;
+  subscriptionId?: string;
+  provisioningState?: string;
+  /** Normalized power state: 'running' | 'stopped' | 'deallocated' | 'unknown'. */
+  powerState?: string;
+  /** True only when the VM power state is running (gateway agent can be up). */
+  running: boolean;
+  /** Selector env LOOM_PBI_GATEWAY_MODE (default 'auto'). */
+  gatewayMode: PbiGatewayMode;
+  /** True when a Fabric/Premium capacity is bound (LOOM_PBI_CAPACITY_ID set). */
+  capacityBound: boolean;
+  /** The gateway Loom recommends right now given the mode + capacity binding. */
+  recommendedMode: 'vm' | 'vnet';
+  /** Key Vault secret name holding the gateway recovery key (for the manual register step). */
+  recoveryKeySecretName: string;
+  /** The one manual step Loom cannot perform (needs a Power BI admin sign-in). */
+  registrationNote: string;
+}
+
+/** Pure resolver for the recommended gateway given the mode + capacity binding.
+ *  Unit-testable; 'auto' prefers the managed VNet gateway once a capacity binds. */
+export function resolveRecommendedGatewayMode(
+  mode: PbiGatewayMode,
+  capacityBound: boolean,
+): 'vm' | 'vnet' {
+  if (mode === 'vm') return 'vm';
+  if (mode === 'vnet') return 'vnet';
+  return capacityBound ? 'vnet' : 'vm';
+}
+
+/**
+ * Read the REAL status of the Loom-deployed Power BI on-prem data gateway VM
+ * (Reader-only ARM): find `vm-loom-pbigw-*` across the target subscription(s) and
+ * resolve its power state via instanceView. Degrades gracefully (found:false) when
+ * the VM isn't deployed or a subscription is unreadable — never throws for a
+ * missing VM; only subscription enumeration / token failure propagates.
+ */
+export async function getPbiVmGatewayStatus(): Promise<PbiVmGatewayStatus> {
+  const modeRaw = (process.env.LOOM_PBI_GATEWAY_MODE || 'auto').trim().toLowerCase();
+  const gatewayMode: PbiGatewayMode = modeRaw === 'vm' || modeRaw === 'vnet' ? modeRaw : 'auto';
+  const capacityBound = !!(process.env.LOOM_PBI_CAPACITY_ID || '').trim();
+  const recoveryKeySecretName = 'pbi-gateway-recovery-key';
+  const registrationNote =
+    'Gateway software is installed unattended by the deployment. The final ' +
+    'register-to-tenant step (Connect-DataGatewayServiceAccount, then ' +
+    'Add-DataGatewayCluster -RecoveryKey <Key Vault secret ' +
+    `${recoveryKeySecretName}> -GatewayName <name>) requires a Power BI admin ` +
+    'sign-in, which Loom cannot perform from the console — run it once over Bastion.';
+
+  const base: PbiVmGatewayStatus = {
+    found: false,
+    running: false,
+    gatewayMode,
+    capacityBound,
+    recommendedMode: resolveRecommendedGatewayMode(gatewayMode, capacityBound),
+    recoveryKeySecretName,
+    registrationNote,
+  };
+
+  const subs = await targetSubscriptionIds();
+  for (const sub of subs) {
+    let vms: any[] = [];
+    try {
+      vms = await armList<any>(`/subscriptions/${sub}/providers/Microsoft.Compute/virtualMachines?api-version=${COMPUTE_VM_API}`);
+    } catch { continue; }
+    const vm = vms.find((v) => (v?.name || '').toLowerCase().startsWith(PBI_GW_VM_PREFIX));
+    if (!vm) continue;
+
+    const rg = (vm.id || '').split('/resourceGroups/')[1]?.split('/')[0];
+    let powerState = 'unknown';
+    try {
+      const iv = await armGet<{ statuses?: { code?: string }[] }>(
+        `/subscriptions/${sub}/resourceGroups/${rg}/providers/Microsoft.Compute/virtualMachines/${vm.name}/instanceView?api-version=${COMPUTE_VM_API}`,
+      );
+      const power = (iv.statuses || []).map((s) => s.code || '').find((c) => c.startsWith('PowerState/'));
+      if (power) powerState = power.replace('PowerState/', '').toLowerCase();
+    } catch { /* instanceView unreadable — leave 'unknown' */ }
+
+    return {
+      ...base,
+      found: true,
+      vmName: vm.name,
+      resourceGroup: rg,
+      subscriptionId: sub,
+      provisioningState: vm?.properties?.provisioningState,
+      powerState,
+      running: powerState === 'running',
+    };
+  }
+  return base;
 }
 
 // ============================================================
