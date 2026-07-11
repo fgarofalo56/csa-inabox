@@ -163,27 +163,49 @@ export function useElementSize<T extends HTMLElement>(): [React.RefObject<T | nu
   React.useEffect(() => {
     const el = ref.current;
     if (!el) return;
-    const measure = (rawWidth: number, rawHeight: number) => {
+    // rAF-debounce + re-entry guard. The epsilon guard alone cannot stop a
+    // GENUINE size oscillation (e.g. a scrollbar toggling the width by ~15px
+    // each frame, or an SVG that nudges its own container): each notification
+    // is a real >epsilon change, so measure() commits, React relayouts, the
+    // observer re-fires synchronously in the same frame → the callback runs
+    // unbounded and the tab freezes. Coalescing every burst of notifications
+    // into ONE measure per animation frame breaks the synchronous re-entry and
+    // caps the worst case at 60fps (smooth) instead of a hard freeze; the
+    // `committing` flag additionally drops notifications our own commit caused.
+    let rafId = 0;
+    let committing = false;
+    let pending: { w: number; h: number } | null = null;
+    const commit = (rawWidth: number, rawHeight: number) => {
       const last = lastRaw.current;
-      // Epsilon-compare the RAW values before rounding: ignore layout jitter so
-      // a sub-pixel wobble can't drive a re-render → re-measure feedback loop.
       if (Math.abs(rawWidth - last.width) <= SIZE_EPSILON && Math.abs(rawHeight - last.height) <= SIZE_EPSILON) {
         return;
       }
       lastRaw.current = { width: rawWidth, height: rawHeight };
       const width = Math.round(rawWidth);
       const height = Math.round(rawHeight);
-      // Belt-and-suspenders: also bail if the rounded value is unchanged so an
-      // over-threshold raw wobble that rounds to the same integer still no-ops.
+      committing = true;
       setSize((prev) => (prev.width === width && prev.height === height ? prev : { width, height }));
+      // Release the guard after the current frame so notifications triggered by
+      // THIS commit's relayout are ignored, not treated as fresh input.
+      requestAnimationFrame(() => { committing = false; });
+    };
+    const measure = (rawWidth: number, rawHeight: number) => {
+      if (committing) return;
+      pending = { w: rawWidth, h: rawHeight };
+      if (rafId) return;
+      rafId = requestAnimationFrame(() => {
+        rafId = 0;
+        if (pending) commit(pending.w, pending.h);
+      });
     };
     const ro = new ResizeObserver((entries) => {
       const r = entries[0]?.contentRect;
       if (r) measure(r.width, r.height);
     });
     ro.observe(el);
-    measure(el.clientWidth, el.clientHeight);
-    return () => ro.disconnect();
+    // Initial synchronous measure (bypasses the debounce for first paint).
+    commit(el.clientWidth, el.clientHeight);
+    return () => { if (rafId) cancelAnimationFrame(rafId); ro.disconnect(); };
   }, []);
   return [ref, size];
 }
