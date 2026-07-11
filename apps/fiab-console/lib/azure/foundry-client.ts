@@ -2396,3 +2396,18 @@ export async function setScheduleEnabled(name: string, isEnabled: boolean): Prom
   const j = await readJson<any>(putRes);
   return shapeSchedule(j || { ...existing, properties: { ...mutable, isEnabled } });
 }
+
+/**
+ * DELETE .../schedules/{name} → permanently remove a notebook recurrence
+ * schedule (R4-NB-1). Idempotent: a 404 (already gone) is treated as success so
+ * a double-click or a stale list never surfaces a spurious error. Any other
+ * >=400 throws a FoundryError the route maps to an honest status.
+ */
+export async function deleteNotebookSchedule(name: string): Promise<void> {
+  const cfg = amlScheduleConfig();
+  const res = await armFetch(`${amlScheduleArmBase(cfg)}/${encodeURIComponent(name)}`,
+    { apiVersion: ML_API, method: 'DELETE' });
+  if (res.status >= 400 && res.status !== 404) {
+    throw new FoundryError(res.status, null, `Schedule delete failed (HTTP ${res.status})`);
+  }
+}

@@ -2104,16 +2104,30 @@ module agentFoundry '../ai/foundry-project.bicep' = if (agentFoundryEnabled) {
     // Optional dedicated ghost-text deployment. Empty => no extra deployment;
     // the Console route falls back to the chat deployment for inline completion.
     completionDeploymentName: loomAoaiCompletionDeployment
-    // Deployment SKU is boundary-aware. GlobalStandard is Commercial/GCC-only —
-    // "Global standard deployments won't be available in government clouds"
-    // (Microsoft Learn: Azure OpenAI in Azure Government). Azure Government uses
-    // regional 'Standard'; gpt-4o 2024-11-20 (chat) and text-embedding-ada-002 v2
-    // (embed) are both Standard-available in usgovvirginia + usgovarizona
-    // (Learn: azure-government model summary), so only the SKU changes here — the
-    // model + version are unchanged. Commercial/GCC keep GlobalStandard (byte-
-    // identical). Cited in docs/fiab/gov-parity-audit.md live-deltas.
+    // Model + SKU are boundary-aware. Sovereign Gov (GCC-High / IL5) runs on the
+    // Azure Government cloud, which offers NO GlobalStandard deployments — regional
+    // 'Standard' only ("Global standard deployments won't be available in
+    // government clouds", Microsoft Learn: "Azure OpenAI and features in Azure
+    // Government"). Gov also cannot deploy the Commercial defaults: gpt-4o
+    // 2024-11-20 is in a DEPRECATING state and rejected for new deployments, and
+    // gpt-4o-mini is not offered in usgovvirginia. In usgovvirginia + usgovarizona
+    // 'Standard' the current Gov-available slots are gpt-4.1 2025-04-14 (chat),
+    // gpt-4.1-mini 2025-04-14 (fast completion slot) and text-embedding-ada-002 v2
+    // (embed). So Gov flips chat/completion model name + version + SKU; the embed
+    // model name + version are cloud-agnostic (ada-002 v2 is available in both) so
+    // only its SKU flips. Commercial / GCC keep gpt-4o 2024-11-20 / gpt-4o-mini /
+    // GlobalStandard (byte-identical). Cited in docs/fiab/gov-parity-audit.md
+    // round-6 live-deltas.
+    chatModelName: (boundary == 'GCC-High' || boundary == 'IL5') ? 'gpt-4.1' : 'gpt-4o'
+    chatModelVersion: (boundary == 'GCC-High' || boundary == 'IL5') ? '2025-04-14' : '2024-11-20'
     chatModelSkuName: (boundary == 'GCC-High' || boundary == 'IL5') ? 'Standard' : 'GlobalStandard'
+    // Embed model name + version unchanged across clouds (ada-002 v2); SKU only.
     embedModelSkuName: (boundary == 'GCC-High' || boundary == 'IL5') ? 'Standard' : 'GlobalStandard'
+    // Completion slot only deploys when completionDeploymentName is non-empty
+    // (empty in GCC-High / IL5 by default → no-op there); values kept Gov-correct
+    // in case a boundary opts into a dedicated ghost-text slot.
+    completionModelName: (boundary == 'GCC-High' || boundary == 'IL5') ? 'gpt-4.1-mini' : 'gpt-4o-mini'
+    completionModelVersion: (boundary == 'GCC-High' || boundary == 'IL5') ? '2025-04-14' : '2024-07-18'
     completionModelSkuName: (boundary == 'GCC-High' || boundary == 'IL5') ? 'Standard' : 'GlobalStandard'
   }
 }

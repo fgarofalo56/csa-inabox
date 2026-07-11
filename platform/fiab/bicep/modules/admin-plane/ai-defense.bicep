@@ -53,6 +53,15 @@ resource playbook 'Microsoft.Logic/workflows@2019-05-01' = if (!defenderForAIEna
           defaultValue: {}
           type: 'Object'
         }
+        // Declared here so the resource-level parameters block below can supply
+        // its value; the PostToTeams action references @parameters('TeamsWebhookUrl').
+        // Without this declaration ARM rejects the workflow with InvalidTemplate
+        // ("workflow parameters 'TeamsWebhookUrl' are not valid; not declared in
+        // the definition"). Holds the Teams incoming-webhook URL (a KV reference).
+        TeamsWebhookUrl: {
+          defaultValue: ''
+          type: 'String'
+        }
       }
       triggers: {
         manual: {
