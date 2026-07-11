@@ -233,6 +233,76 @@ resource subnetNsgAttach 'Microsoft.Network/virtualNetworks/subnets@2024-05-01' 
 // stv2 infrastructure load-balancer health probe (explicit per Learn, though the
 // default AllowAzureLoadBalancerInbound rule also covers it).
 // Ref: https://aka.ms/apim-vnet-common-issues / learn.microsoft.com/azure/api-management/api-management-using-with-internal-vnet
+// Application Gateway v2 MANDATORY inbound NSG rules. An App Gateway with a V2
+// SKU (Standard_v2 / WAF_v2) CANNOT provision if its subnet NSG blocks the
+// Gateway-manager health/control traffic on TCP 65200-65535 from the
+// `GatewayManager` service tag — ARM rejects the gateway PUT with "Network
+// security group nsg-snet-appgw blocks incoming internet traffic on ports
+// 65200 - 65535 ... not permitted for Application Gateways that have V2 Sku"
+// (seen live in usgovvirginia). The generic DenyInternetInbound (priority 4000)
+// otherwise drops it because GatewayManager resolves to public IPs, so these
+// higher-priority Allow rules are required. The gateway is internet-facing
+// (public frontend IP in app-gateway.bicep), so client 80/443 from Internet is
+// also allowed above the deny. AzureLoadBalancer is the stv2 infrastructure
+// health-probe path (also covered by the default AllowAzureLoadBalancerInbound
+// rule, added explicitly for clarity). Applied unconditionally on the
+// snet-appgw NSG — a real App Gateway v2 requirement for BOTH clouds.
+// Ref: learn.microsoft.com/azure/application-gateway/configuration-infrastructure#network-security-groups
+var appgwNsgRules = [
+  {
+    name: 'AllowGatewayManagerInbound'
+    properties: {
+      priority: 200
+      access: 'Allow'
+      direction: 'Inbound'
+      protocol: 'Tcp'
+      sourceAddressPrefix: 'GatewayManager'
+      sourcePortRange: '*'
+      destinationAddressPrefix: '*'
+      destinationPortRange: '65200-65535'
+    }
+  }
+  {
+    name: 'AllowAzureLoadBalancerInboundAppGw'
+    properties: {
+      priority: 210
+      access: 'Allow'
+      direction: 'Inbound'
+      protocol: '*'
+      sourceAddressPrefix: 'AzureLoadBalancer'
+      sourcePortRange: '*'
+      destinationAddressPrefix: '*'
+      destinationPortRange: '*'
+    }
+  }
+  {
+    name: 'AllowInternetHttpsInbound'
+    properties: {
+      priority: 220
+      access: 'Allow'
+      direction: 'Inbound'
+      protocol: 'Tcp'
+      sourceAddressPrefix: 'Internet'
+      sourcePortRange: '*'
+      destinationAddressPrefix: '*'
+      destinationPortRange: '443'
+    }
+  }
+  {
+    name: 'AllowInternetHttpInbound'
+    properties: {
+      priority: 230
+      access: 'Allow'
+      direction: 'Inbound'
+      protocol: 'Tcp'
+      sourceAddressPrefix: 'Internet'
+      sourcePortRange: '*'
+      destinationAddressPrefix: '*'
+      destinationPortRange: '80'
+    }
+  }
+]
+
 var apimNsgRules = [
   {
     name: 'AllowApimManagementInbound'
@@ -294,7 +364,7 @@ resource nsgs 'Microsoft.Network/networkSecurityGroups@2024-05-01' = [for s in n
           destinationPortRange: '*'
         }
       }
-    ], s.name == 'snet-apim' ? apimNsgRules : [])
+    ], s.name == 'snet-apim' ? apimNsgRules : (s.name == 'snet-appgw' ? appgwNsgRules : []))
   }
 }]
 

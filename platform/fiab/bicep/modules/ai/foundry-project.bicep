@@ -347,6 +347,18 @@ resource accountPe 'Microsoft.Network/privateEndpoints@2023-11-01' = if (!empty(
   name: 'pe-${accountName}'
   location: location
   tags: complianceTags
+  // A CognitiveServices account can report back to ARM while still in provisioning
+  // state 'Accepted', which makes a private endpoint PUT race ahead and fail
+  // ("Call to Microsoft.CognitiveServices/accounts failed ... Account ... in state
+  // Accepted" — seen live in usgovvirginia). The model deployments below only
+  // succeed once the account has fully reached 'Succeeded', so depending on them
+  // (embedDeployment transitively depends on chatDeployment -> account)
+  // deterministically holds the PE until the account is ready.
+  dependsOn: [
+    account
+    chatDeployment
+    embedDeployment
+  ]
   properties: {
     subnet: { id: privateEndpointSubnetId }
     privateLinkServiceConnections: [

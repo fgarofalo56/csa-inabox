@@ -887,7 +887,16 @@ param appImageTags object = {
   // with modules/admin-plane/main.bicep appImageTags.
   setupOrchestrator: 'v0.1'
   maf: 'v0.1'
+  // scriptRunner (report-designer R/Python visual) + wrangler (notebook Data
+  // Wrangler host) are likewise referenced by admin-plane/main.bicep image
+  // strings. Keep every key the admin-plane module reads present here so the
+  // forwarded object never fails template evaluation.
+  scriptRunner: 'v0.1'
+  wrangler: 'v0.1'
 }
+
+@description('Whether Azure Database for PostgreSQL Flexible Server can be provisioned in the target region/subscription. Some sovereign subscriptions (e.g. usgovvirginia) are quota-restricted from provisioning Microsoft.DBforPostgreSQL/flexibleServers. When false, the Postgres-backed OSS Airflow host is skipped so the core app-tier still deploys (the airflow-job editor honest-gates until the operator requests a quota increase and redeploys). An Azure regional/quota gate, NOT a Fabric dependency. Set false via the gcc-high path for Gov.')
+param postgresQuotaAvailable bool = true
 
 // =====================================================================
 // Resource group for Admin Plane
@@ -1223,6 +1232,7 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
     loomDefaultFabricWorkspace: fabricEnabled ? loomDefaultFabricWorkspace : ''
     loomVersion: loomVersion
     appImageTags: appImageTags
+    postgresQuotaAvailable: postgresQuotaAvailable
     // Standalone AML workspace coords for the AML control-plane navigator.
     loomAmlWorkspace: loomAmlWorkspace
     loomAmlResourceGroup: loomAmlResourceGroup
