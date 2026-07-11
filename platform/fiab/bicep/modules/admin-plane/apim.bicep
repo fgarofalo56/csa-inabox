@@ -58,6 +58,35 @@ param skipRoleGrants bool = false
 @description('Seed a self-contained sample API (mocked 200) + product + active subscription so the API Marketplace Try console and curl samples work end-to-end out of the box. The mock returns 200 at the gateway with no backend dependency — proving the subscription-key flow. BYO-APIM deployments skip this module entirely, so the sample is only seeded on Loom-provisioned APIM.')
 param seedSampleApi bool = true
 
+// ───────────────────────────────────────────────────────────────────────────
+// AI-gateway (GenAI gateway for Azure OpenAI / Foundry) — OPT-IN, default OFF.
+// ───────────────────────────────────────────────────────────────────────────
+// Model-strategy M4. When enabled, APIM fronts AOAI with the GenAI-gateway
+// capabilities (learn.microsoft.com/azure/api-management/genai-gateway-capabilities):
+// a managed-identity-authenticated backend POOL (priority load-balancing +
+// circuit-breaker honoring Retry-After on 429), an llm-token-limit policy
+// (token-based rate limiting per consumer), and OPTIONAL semantic caching. The
+// Loom console routes AOAI through it ONLY when LOOM_AOAI_VIA_APIM=true +
+// LOOM_AOAI_APIM_URL are set; otherwise it calls AOAI directly (byte-identical).
+//
+// This is authored ONLY when aoaiApimGatewayEnabled AND at least one backend
+// endpoint is supplied (no-vaporware: nothing empty is deployed). It is default
+// OFF pending operator confirmation of the APIM-vs-direct direction — flipping
+// aoaiApimGatewayEnabled + wiring LOOM_AOAI_VIA_APIM turns it on with no other
+// change.
+@description('OPT-IN (default OFF): author the GenAI AI-gateway for Azure OpenAI/Foundry traffic (backend pool + llm-token-limit + circuit-breaker + optional semantic cache). Pending operator confirmation of the APIM direction; the console falls back to direct-with-managed-identity when unset.')
+param aoaiApimGatewayEnabled bool = false
+
+@description('Azure OpenAI / Foundry inference endpoint URLs (e.g. https://aifndry-loom-x.openai.azure.com) for the load-balanced GenAI backend pool. The first is the priority-1 primary; the rest are priority-2 spillover. Empty ⇒ the AI-gateway is not authored even when aoaiApimGatewayEnabled (nothing to point at). Managed-identity auth (no keys).')
+param aoaiBackendEndpoints array = []
+
+@description('Per-consumer token-per-minute ceiling enforced by the llm-token-limit policy (token-based rate limit; counts prompt+completion tokens). Ignored in sovereign boundaries where the LLM policies are not authored.')
+@minValue(1000)
+param aoaiTokensPerMinute int = 100000
+
+@description('OPT-IN (default OFF): author the llm-semantic-cache-lookup/store policies. Requires an external Redis cache configured on the APIM instance + an embeddings backend — enable only once those are provisioned. Not authored in sovereign boundaries.')
+param aoaiSemanticCacheEnabled bool = false
+
 resource apim 'Microsoft.ApiManagement/service@2024-06-01-preview' = {
   name: 'apim-csa-loom-${location}'
   location: location
@@ -342,3 +371,160 @@ output apimName string = apim.name
 output apimGatewayUrl string = apim.properties.gatewayUrl
 output apimManagedIdentityPrincipalId string = apim.identity.principalId
 output apimPrivateIp string = apim.properties.privateIPAddresses[0]
+
+// ───────────────────────────────────────────────────────────────────────────
+// AI-gateway resources (authored only when opted-in + endpoints supplied).
+// ───────────────────────────────────────────────────────────────────────────
+// Author only when the operator opts in AND at least one backend endpoint is
+// supplied — an empty pool would be vaporware.
+var aoaiGatewayActive = aoaiApimGatewayEnabled && !empty(aoaiBackendEndpoints)
+
+// LLM-specific policies (llm-token-limit, llm-semantic-cache-*) may be ABSENT in
+// sovereign Azure Government APIM. Per no-fabric-dependency/no-vaporware, don't
+// author them in a sovereign boundary — the Loom console falls back to
+// direct-with-managed-identity there (LOOM_AOAI_VIA_APIM still resolves to
+// direct at runtime when the gateway is unreachable). Backend pool +
+// circuit-breaker are backend PROPERTIES (not policies) and are authored in all
+// boundaries.
+var aoaiLlmPoliciesSupported = !isSovereign
+
+// The Cognitive Services data-plane audience the gateway's managed identity
+// authenticates to the AOAI backend with — Gov (.us) in sovereign boundaries,
+// Commercial (.com) otherwise (GCC uses the Commercial audience). Mirrors the
+// console's cogScope() so the gateway and the direct path authenticate the same.
+var aoaiCognitiveResource = isSovereign ? 'https://cognitiveservices.azure.us' : 'https://cognitiveservices.azure.com'
+
+// Per-endpoint backends, each with a circuit-breaker that trips on 429/5xx and
+// HONORS Retry-After (acceptRetryAfter) — the GenAI-gateway resiliency contract.
+resource aoaiBackends 'Microsoft.ApiManagement/service/backends@2024-06-01-preview' = [
+  for (ep, i) in aoaiBackendEndpoints: if (aoaiGatewayActive) {
+    parent: apim
+    name: 'aoai-backend-${i}'
+    properties: {
+      description: 'Loom GenAI backend ${i} — Azure OpenAI (managed-identity auth).'
+      url: '${ep}/openai'
+      protocol: 'http'
+      circuitBreaker: {
+        rules: [
+          {
+            name: 'aoai-breaker'
+            failureCondition: {
+              count: 3
+              interval: 'PT1M'
+              statusCodeRanges: [
+                { min: 429, max: 429 }
+                { min: 500, max: 599 }
+              ]
+            }
+            tripDuration: 'PT1M'
+            acceptRetryAfter: true
+          }
+        ]
+      }
+    }
+  }
+]
+
+// Load-balanced POOL over the per-endpoint backends. First endpoint = priority 1
+// (primary — e.g. a PTU backend), the rest priority 2 (Global-Standard spillover).
+resource aoaiPool 'Microsoft.ApiManagement/service/backends@2024-06-01-preview' = if (aoaiGatewayActive) {
+  parent: apim
+  name: 'aoai-pool'
+  properties: {
+    description: 'Loom GenAI load-balanced pool (priority LB + circuit-breaker).'
+    type: 'Pool'
+    pool: {
+      services: [
+        for (ep, i) in aoaiBackendEndpoints: {
+          id: resourceId('Microsoft.ApiManagement/service/backends', apim.name, 'aoai-backend-${i}')
+          priority: i == 0 ? 1 : 2
+          weight: 1
+        }
+      ]
+    }
+  }
+  dependsOn: [ aoaiBackends ]
+}
+
+// The AOAI pass-through API. Path 'openai' so the console's existing
+// `${gateway}/openai/deployments/<dep>/…` URL lands here unchanged; the API-level
+// policy re-targets the backend pool + applies the GenAI policies. MI-authenticated
+// backend + internal-VNet-only gateway ⇒ subscriptionRequired can be false (the
+// console's managed-identity bearer suffices; a subscription key is optional).
+resource aoaiApi 'Microsoft.ApiManagement/service/apis@2024-06-01-preview' = if (aoaiGatewayActive) {
+  parent: apim
+  name: 'loom-aoai'
+  properties: {
+    displayName: 'Loom Azure OpenAI Gateway'
+    description: 'GenAI gateway for Azure OpenAI / Foundry — managed-identity backend pool with token-limit, load-balancing and circuit-breaking. Loom routes AOAI here when LOOM_AOAI_VIA_APIM=true.'
+    path: 'openai'
+    protocols: [ 'https' ]
+    subscriptionRequired: false
+    serviceUrl: '${aoaiBackendEndpoints[0]}/openai'
+  }
+}
+
+// GenAI policies. authentication-managed-identity re-auths to AOAI with the APIM
+// system-assigned identity (grant it "Cognitive Services OpenAI User" on the AOAI
+// account to enable — an honest infra gate, per no-vaporware). set-backend-service
+// targets the pool. llm-token-limit + optional semantic cache are authored ONLY
+// where the LLM policies are supported (non-sovereign).
+var aoaiTokenLimitPolicy = aoaiLlmPoliciesSupported
+  ? '<llm-token-limit counter-key="@(context.Subscription?.Id ?? context.Request.IpAddress)" tokens-per-minute="${aoaiTokensPerMinute}" estimate-prompt-tokens="true" remaining-tokens-header-name="x-loom-remaining-tokens" tokens-consumed-header-name="x-loom-consumed-tokens" retry-after-header-name="Retry-After" />'
+  : ''
+var aoaiSemanticLookup = (aoaiLlmPoliciesSupported && aoaiSemanticCacheEnabled)
+  ? '<llm-semantic-cache-lookup score-threshold="0.05" embeddings-backend-id="aoai-pool" embeddings-backend-auth="system-assigned" />'
+  : ''
+var aoaiSemanticStore = (aoaiLlmPoliciesSupported && aoaiSemanticCacheEnabled)
+  ? '<llm-semantic-cache-store duration="60" />'
+  : ''
+var aoaiApiPolicyXml = '<policies><inbound><base /><authentication-managed-identity resource="${aoaiCognitiveResource}" /><set-backend-service backend-id="aoai-pool" />${aoaiTokenLimitPolicy}${aoaiSemanticLookup}</inbound><backend><forward-request /></backend><outbound><base />${aoaiSemanticStore}</outbound><on-error><base /></on-error></policies>'
+
+resource aoaiApiPolicy 'Microsoft.ApiManagement/service/apis/policies@2024-06-01-preview' = if (aoaiGatewayActive) {
+  parent: aoaiApi
+  name: 'policy'
+  properties: {
+    format: 'rawxml'
+    value: aoaiApiPolicyXml
+  }
+  dependsOn: [ aoaiPool ]
+}
+
+// The AOAI operations Loom calls (chat/completions, embeddings, completions).
+// urlTemplate is relative to the API path 'openai'; the pool backend URL
+// (`${ep}/openai`) is prefixed, yielding `${ep}/openai/deployments/<dep>/…`.
+resource aoaiChatOp 'Microsoft.ApiManagement/service/apis/operations@2024-06-01-preview' = if (aoaiGatewayActive) {
+  parent: aoaiApi
+  name: 'chat-completions'
+  properties: {
+    displayName: 'Chat completions'
+    method: 'POST'
+    urlTemplate: '/deployments/{deploymentId}/chat/completions'
+    templateParameters: [ { name: 'deploymentId', type: 'string', required: true } ]
+  }
+}
+resource aoaiEmbedOp 'Microsoft.ApiManagement/service/apis/operations@2024-06-01-preview' = if (aoaiGatewayActive) {
+  parent: aoaiApi
+  name: 'embeddings'
+  properties: {
+    displayName: 'Embeddings'
+    method: 'POST'
+    urlTemplate: '/deployments/{deploymentId}/embeddings'
+    templateParameters: [ { name: 'deploymentId', type: 'string', required: true } ]
+  }
+}
+resource aoaiCompletionsOp 'Microsoft.ApiManagement/service/apis/operations@2024-06-01-preview' = if (aoaiGatewayActive) {
+  parent: aoaiApi
+  name: 'completions'
+  properties: {
+    displayName: 'Completions'
+    method: 'POST'
+    urlTemplate: '/deployments/{deploymentId}/completions'
+    templateParameters: [ { name: 'deploymentId', type: 'string', required: true } ]
+  }
+}
+
+@description('True when the AOAI AI-gateway was authored (opted-in + endpoints supplied). When false the console uses the direct-with-managed-identity AOAI path.')
+output aoaiGatewayActive bool = aoaiGatewayActive
+@description('Gateway URL the console sets as LOOM_AOAI_APIM_URL when routing AOAI through APIM. Empty when the AI-gateway is not authored.')
+output aoaiGatewayUrl string = aoaiGatewayActive ? apim.properties.gatewayUrl : ''

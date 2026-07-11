@@ -64,6 +64,7 @@ import {
   resolveCopilotFabricWorkspace,
 } from '../types/copilot-config';
 import { resolveTierForTurn, type ModelTier } from '@/lib/foundry/model-tier-router';
+import { resolveAoaiCallTarget, aoaiApimHeaders, type AoaiCallTarget } from './aoai-apim-gateway';
 import {
   executeQuery as synapseExecute,
   dedicatedTarget,
@@ -1360,6 +1361,20 @@ function aoaiHost(endpoint: string): string {
   try { return new URL(endpoint).host; } catch { return endpoint; }
 }
 
+/**
+ * M4 — HTTP-status error from an inline AOAI attempt (body already read). Marks a
+ * real API error (400/404/5xx from the model) so the APIM→direct fallback below
+ * does NOT retry it — only a genuine transport outage ("gateway unreachable")
+ * triggers the direct-with-managed-identity fallback. Mirrors the unified
+ * client's AoaiResponseError; kept local to avoid an orchestrator↔client cycle.
+ */
+class AoaiApiError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'AoaiApiError';
+  }
+}
+
 async function callAoai(
   target: AoaiTarget,
   messages: ChatMessage[],
@@ -1385,42 +1400,62 @@ async function callAoai(
     );
     throw new Error(`AOAI auth failed (could not acquire a managed-identity token): ${e?.message || e}`);
   }
-  const base: Record<string, unknown> = { messages, tools, tool_choice: 'auto' };
+  const body: Record<string, unknown> = { messages, tools, tool_choice: 'auto' };
 
-  // First attempt sends temperature for determinism; if the model rejects it,
-  // retry once with the default sampling (no temperature). Works by default
-  // across both classic chat models and the newer reasoning models.
-  const send = async (withTemperature: boolean) =>
-    fetchWithTimeout(url, {
-      method: 'POST',
-      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-      body: JSON.stringify(withTemperature ? { ...base, temperature: 0.2 } : base),
-    }, LLM_FETCH_TIMEOUT_MS);
+  // M4 — one attempt against a resolved call target (direct AOAI by DEFAULT, or
+  // the APIM gateway when LOOM_AOAI_VIA_APIM=true + LOOM_AOAI_APIM_URL). First
+  // attempt sends temperature for determinism; if the model rejects it, retry
+  // once with the default sampling (no temperature). Works across classic chat
+  // models and the newer reasoning models.
+  const attempt = async (call: AoaiCallTarget): Promise<any> => {
+    const attemptUrl = call.viaApim
+      ? `${call.endpoint}/openai/deployments/${encodeURIComponent(call.deployment)}/chat/completions?api-version=${call.apiVersion}`
+      : url;
+    const headers = { authorization: `Bearer ${token}`, 'content-type': 'application/json', ...aoaiApimHeaders(call) };
+    const send = async (withTemperature: boolean) =>
+      fetchWithTimeout(attemptUrl, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(withTemperature ? { ...body, temperature: 0.2 } : body),
+      }, LLM_FETCH_TIMEOUT_MS);
 
-  let res: Response;
-  try {
-    res = await send(true);
-  } catch (e: any) {
-    console.error(
-      `[copilot] AOAI chat-completions fetch THREW for host=${aoaiHost(target.endpoint)} deployment=${target.deployment}: ${describeFetchError(e)}`,
-    );
-    throw new Error(
-      `AOAI chat endpoint unreachable (${aoaiHost(target.endpoint)}): ${describeFetchError(e)}`,
-    );
-  }
-  if (res.status === 400) {
-    const t = await res.text();
-    if (isUnsupportedSamplingParam(t)) {
-      res = await send(false);
-    } else {
-      throw new Error(`AOAI chat-completions failed 400: ${t.slice(0, 400)}`);
+    let res: Response;
+    try {
+      res = await send(true);
+    } catch (e: any) {
+      console.error(
+        `[copilot] AOAI chat-completions fetch THREW for host=${aoaiHost(call.endpoint)} deployment=${call.deployment}: ${describeFetchError(e)}`,
+      );
+      throw new Error(
+        `AOAI chat endpoint unreachable (${aoaiHost(call.endpoint)}): ${describeFetchError(e)}`,
+      );
     }
+    if (res.status === 400) {
+      const t = await res.text();
+      if (isUnsupportedSamplingParam(t)) {
+        res = await send(false);
+      } else {
+        throw new AoaiApiError(`AOAI chat-completions failed 400: ${t.slice(0, 400)}`);
+      }
+    }
+    if (!res.ok) {
+      const t = await res.text();
+      throw new AoaiApiError(`AOAI chat-completions failed ${res.status}: ${t.slice(0, 400)}`);
+    }
+    return res.json();
+  };
+
+  // Direct path (flag off) → single attempt, byte-identical to pre-M4. APIM path
+  // → on a transport outage (Gov gateway down / LLM policies absent) fall back to
+  // direct-with-managed-identity automatically.
+  const primary = resolveAoaiCallTarget(target);
+  if (!primary.viaApim) return attempt(primary);
+  try {
+    return await attempt(primary);
+  } catch (e) {
+    if (e instanceof AoaiApiError) throw e; // real API error — not a gateway outage
+    return attempt(resolveAoaiCallTarget(target, { apimAvailable: false }));
   }
-  if (!res.ok) {
-    const t = await res.text();
-    throw new Error(`AOAI chat-completions failed ${res.status}: ${t.slice(0, 400)}`);
-  }
-  return res.json();
 }
 
 /**
@@ -1440,31 +1475,42 @@ async function aoaiCompleteText(
     return aoaiChat({ messages, maxCompletionTokens: 2048, temperature: 0.2 });
   }
   const target = await resolveAoaiTarget();
-  const url = `${target.endpoint}/openai/deployments/${encodeURIComponent(target.deployment)}/chat/completions?api-version=${target.apiVersion}`;
   const token = await aoaiToken();
-  const send = (withTemperature: boolean) =>
-    fetchWithTimeout(url, {
-      method: 'POST',
-      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-      body: JSON.stringify(
-        // Newer AOAI models (o-series / gpt-5 / reasoning) reject `max_tokens` and
-        // require `max_completion_tokens`; it is also accepted by gpt-4o/4o-mini on
-        // current api-versions, so it is the forward-compatible cap for all deployments.
-        withTemperature ? { messages, temperature: 0.2, max_completion_tokens: 2048 } : { messages, max_completion_tokens: 2048 },
-      ),
-    }, LLM_FETCH_TIMEOUT_MS);
-  let res = await send(true);
-  if (res.status === 400) {
-    const t = await res.text();
-    if (isUnsupportedSamplingParam(t)) res = await send(false);
-    else throw new Error(`AOAI 400: ${t.slice(0, 300)}`);
+  const attempt = async (call: AoaiCallTarget): Promise<string> => {
+    const url = `${call.endpoint}/openai/deployments/${encodeURIComponent(call.deployment)}/chat/completions?api-version=${call.apiVersion}`;
+    const headers = { authorization: `Bearer ${token}`, 'content-type': 'application/json', ...aoaiApimHeaders(call) };
+    const send = (withTemperature: boolean) =>
+      fetchWithTimeout(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(
+          // Newer AOAI models (o-series / gpt-5 / reasoning) reject `max_tokens` and
+          // require `max_completion_tokens`; it is also accepted by gpt-4o/4o-mini on
+          // current api-versions, so it is the forward-compatible cap for all deployments.
+          withTemperature ? { messages, temperature: 0.2, max_completion_tokens: 2048 } : { messages, max_completion_tokens: 2048 },
+        ),
+      }, LLM_FETCH_TIMEOUT_MS);
+    let res = await send(true);
+    if (res.status === 400) {
+      const t = await res.text();
+      if (isUnsupportedSamplingParam(t)) res = await send(false);
+      else throw new AoaiApiError(`AOAI 400: ${t.slice(0, 300)}`);
+    }
+    if (!res.ok) {
+      const t = await res.text();
+      throw new AoaiApiError(`AOAI ${res.status}: ${t.slice(0, 300)}`);
+    }
+    const j = await res.json();
+    return String(j?.choices?.[0]?.message?.content ?? '');
+  };
+  const primary = resolveAoaiCallTarget(target);
+  if (!primary.viaApim) return attempt(primary);
+  try {
+    return await attempt(primary);
+  } catch (e) {
+    if (e instanceof AoaiApiError) throw e;
+    return attempt(resolveAoaiCallTarget(target, { apimAvailable: false }));
   }
-  if (!res.ok) {
-    const t = await res.text();
-    throw new Error(`AOAI ${res.status}: ${t.slice(0, 300)}`);
-  }
-  const j = await res.json();
-  return String(j?.choices?.[0]?.message?.content ?? '');
 }
 
 /**
@@ -1501,33 +1547,44 @@ export async function aoaiCompleteJson<T = Record<string, unknown>>(
     });
   }
   const target = await resolveAoaiTarget(cfg ?? null);
-  const url = `${target.endpoint}/openai/deployments/${encodeURIComponent(target.deployment)}/chat/completions?api-version=${target.apiVersion}`;
   const token = await aoaiToken();
-  const send = (withTemperature: boolean) =>
-    fetchWithTimeout(url, {
-      method: 'POST',
-      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-      body: JSON.stringify(
-        // max_completion_tokens (not max_tokens) — required by newer AOAI models,
-        // accepted by gpt-4o/4o-mini on current api-versions (forward-compatible).
-        withTemperature
-          ? { messages, temperature: 0.1, max_completion_tokens: maxTokens, response_format: { type: 'json_object' } }
-          : { messages, max_completion_tokens: maxTokens, response_format: { type: 'json_object' } },
-      ),
-    }, LLM_FETCH_TIMEOUT_MS);
-  let res = await send(true);
-  if (res.status === 400) {
-    const t = await res.text();
-    if (isUnsupportedSamplingParam(t)) res = await send(false);
-    else throw new Error(`AOAI 400: ${t.slice(0, 300)}`);
+  const attempt = async (call: AoaiCallTarget): Promise<T> => {
+    const url = `${call.endpoint}/openai/deployments/${encodeURIComponent(call.deployment)}/chat/completions?api-version=${call.apiVersion}`;
+    const headers = { authorization: `Bearer ${token}`, 'content-type': 'application/json', ...aoaiApimHeaders(call) };
+    const send = (withTemperature: boolean) =>
+      fetchWithTimeout(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(
+          // max_completion_tokens (not max_tokens) — required by newer AOAI models,
+          // accepted by gpt-4o/4o-mini on current api-versions (forward-compatible).
+          withTemperature
+            ? { messages, temperature: 0.1, max_completion_tokens: maxTokens, response_format: { type: 'json_object' } }
+            : { messages, max_completion_tokens: maxTokens, response_format: { type: 'json_object' } },
+        ),
+      }, LLM_FETCH_TIMEOUT_MS);
+    let res = await send(true);
+    if (res.status === 400) {
+      const t = await res.text();
+      if (isUnsupportedSamplingParam(t)) res = await send(false);
+      else throw new AoaiApiError(`AOAI 400: ${t.slice(0, 300)}`);
+    }
+    if (!res.ok) {
+      const t = await res.text();
+      throw new AoaiApiError(`AOAI ${res.status}: ${t.slice(0, 300)}`);
+    }
+    const j = await res.json();
+    const raw = String(j?.choices?.[0]?.message?.content ?? '').trim();
+    return parseJsonObject<T>(raw);
+  };
+  const primary = resolveAoaiCallTarget(target);
+  if (!primary.viaApim) return attempt(primary);
+  try {
+    return await attempt(primary);
+  } catch (e) {
+    if (e instanceof AoaiApiError) throw e;
+    return attempt(resolveAoaiCallTarget(target, { apimAvailable: false }));
   }
-  if (!res.ok) {
-    const t = await res.text();
-    throw new Error(`AOAI ${res.status}: ${t.slice(0, 300)}`);
-  }
-  const j = await res.json();
-  const raw = String(j?.choices?.[0]?.message?.content ?? '').trim();
-  return parseJsonObject<T>(raw);
 }
 
 /** Parse an LLM JSON reply, tolerating ```json fences and surrounding prose. */
