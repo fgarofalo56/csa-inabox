@@ -195,6 +195,19 @@ module storage 'storage.bicep' = {
 
 module databricks 'databricks.bicep' = if (loomDatabricksEnabled) {
   name: 'dlz-databricks'
+  // DLZ SPOKE subnet-writer serialization (chain: storage → databricks →
+  // synapse → cosmos → adf → eventhubs → servicebus → eventgrid →
+  // cosmosGraphVector; adf precedes eventhubs because eventhubs consumes
+  // adf.outputs). Each of these modules PUTs a private endpoint into the
+  // SHARED spoke snet-private-endpoints (and databricks additionally vnet-injects
+  // its own delegated subnets); every such write flips the spoke VNet to
+  // 'Updating', so running them in parallel makes a sibling bail with "Virtual
+  // network ... is not in the succeeded provisioning state" (same class as the
+  // Gov hub failure; also hits Commercial idempotent redeploys). Cumulative
+  // dependsOn on all prior writers gives a total order that survives any being
+  // conditionally off (dependsOn on a not-deployed module is a no-op). Ordering-
+  // only — identical resources, just sequenced.
+  dependsOn: [ storage ]
   params: {
     location: location
     domainName: domainName
@@ -272,6 +285,8 @@ module databricksUcBootstrap 'databricks-uc-bootstrap.bicep' = if (loomDatabrick
 
 module synapse 'synapse.bicep' = if (loomSynapseEnabled) {
   name: 'dlz-synapse'
+  // DLZ SPOKE subnet-writer serialization (see databricks header).
+  dependsOn: [ storage, databricks ]
   params: {
     location: location
     domainName: domainName
@@ -399,6 +414,10 @@ var provisionEventHub = loomEventHubEnabled && empty(existingEventHubNamespaceNa
 
 module eventhubs 'eventhubs.bicep' = if (provisionEventHub) {
   name: 'dlz-eventhubs'
+  // DLZ SPOKE subnet-writer serialization (see databricks header). Ordered AFTER
+  // adf because this module already consumes adf.outputs.factoryPrincipalId (the
+  // Event Hubs Data Sender grant), a pre-existing eventhubs→adf edge.
+  dependsOn: [ storage, databricks, synapse, cosmos, adf ]
   params: {
     location: location
     domainName: domainName
@@ -457,6 +476,8 @@ param deployServiceBus bool = true
 
 module servicebus 'servicebus.bicep' = if (deployServiceBus) {
   name: 'dlz-servicebus'
+  // DLZ SPOKE subnet-writer serialization (see databricks header).
+  dependsOn: [ storage, databricks, synapse, cosmos, adf, eventhubs ]
   params: {
     location: location
     domainName: domainName
@@ -485,6 +506,8 @@ param deployEventGrid bool = true
 
 module eventgrid 'eventgrid.bicep' = if (deployEventGrid) {
   name: 'dlz-eventgrid-topic'
+  // DLZ SPOKE subnet-writer serialization (see databricks header).
+  dependsOn: [ storage, databricks, synapse, cosmos, adf, eventhubs, servicebus ]
   params: {
     location: location
     consolePrincipalId: consolePrincipalId
@@ -524,6 +547,8 @@ module adx 'adx.bicep' = if (adxEnabled) {
 
 module cosmos 'cosmos.bicep' = {
   name: 'dlz-cosmos'
+  // DLZ SPOKE subnet-writer serialization (see databricks header).
+  dependsOn: [ storage, databricks, synapse ]
   params: {
     location: location
     domainName: domainName
@@ -627,6 +652,10 @@ var adfOn = adfEnabled && loomDataFactoryEnabled && !empty(consolePrincipalId)
 
 module adf 'adf.bicep' = if (adfOn) {
   name: 'dlz-adf'
+  // DLZ SPOKE subnet-writer serialization (see databricks header). Ordered BEFORE
+  // eventhubs/servicebus/eventgrid because eventhubs consumes adf.outputs (a
+  // pre-existing eventhubs→adf edge); only depends on the writers ahead of it.
+  dependsOn: [ storage, databricks, synapse, cosmos ]
   params: {
     location: location
     domainName: domainName
@@ -731,6 +760,8 @@ param cosmosGraphVectorEnabled bool = true
 
 module cosmosGraphVector 'cosmos-graph-vector.bicep' = if (cosmosGraphVectorEnabled) {
   name: 'dlz-cosmos-graph-vector'
+  // DLZ SPOKE subnet-writer serialization — tail of the chain (see databricks header).
+  dependsOn: [ storage, databricks, synapse, cosmos, adf, eventhubs, servicebus, eventgrid ]
   params: {
     location: location
     boundary: boundary

@@ -164,6 +164,11 @@ resource peDfs 'Microsoft.Network/privateEndpoints@2024-05-01' = {
   name: 'pe-${saName}-dfs'
   location: location
   tags: complianceTags
+  // Serialize after the blob PE: both land in the same PE subnet and each PE
+  // create mutates the subnet (→ VNet 'Updating'). PUT'ing them in parallel
+  // makes the second bail with "Virtual network ... is not in the succeeded
+  // provisioning state". Ordering-only; both PEs still deploy.
+  dependsOn: [ peBlob ]
   properties: {
     subnet: { id: privateEndpointSubnetId }
     privateLinkServiceConnections: [

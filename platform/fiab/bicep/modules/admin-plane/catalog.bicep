@@ -194,6 +194,11 @@ resource purviewPortalPe 'Microsoft.Network/privateEndpoints@2024-05-01' = if (p
   name: 'pe-${purviewAccountName}-portal'
   location: location
   tags: complianceTags
+  // Serialize the two Purview PEs into the shared PE subnet: creating a private
+  // endpoint mutates the subnet (→ VNet 'Updating'), so the account + portal PEs
+  // must NOT be PUT in parallel or one bails with "Virtual network ... is not in
+  // the succeeded provisioning state". Ordering-only; both PEs still deploy.
+  dependsOn: [ purviewAccountPe ]
   properties: {
     subnet: { id: privateEndpointSubnetId }
     privateLinkServiceConnections: [
