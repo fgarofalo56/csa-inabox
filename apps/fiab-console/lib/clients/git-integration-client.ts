@@ -426,24 +426,88 @@ export interface GhRepo { fullName: string; owner: string; name: string; default
 export interface GhBranch { name: string; sha: string; }
 
 /**
- * List repositories the token can write. When `ownerOrOrg` is blank we list the
- * authenticated user's repos; otherwise the org's repos. `base` selects the host
- * (github.com by default, or `api.<sub>.ghe.com` for an Enterprise Cloud tenant).
+ * Follow GitHub's `Link: rel="next"` pagination, accumulating every page. Bounded
+ * by `maxPages` so a token affiliated with a huge org can't make this unbounded.
+ * The `Link` header is read off the Response before the body is parsed.
+ */
+async function ghFetchAllPages(firstUrl: string, pat: string, what: string, maxPages = 20): Promise<any[]> {
+  const out: any[] = [];
+  let url: string | null = firstUrl;
+  for (let i = 0; i < maxPages && url; i += 1) {
+    const res = await ghFetch(url, pat);
+    const link = res.headers.get('link') || '';
+    const page = await ghJson<any[]>(res, what);
+    if (Array.isArray(page)) out.push(...page);
+    const m = link.match(/<([^>]+)>;\s*rel="next"/);
+    url = m ? m[1] : null;
+  }
+  return out;
+}
+
+const mapGhRepo = (r: any): GhRepo => ({
+  fullName: r.full_name,
+  owner: r.owner?.login,
+  name: r.name,
+  defaultBranch: r.default_branch,
+  htmlUrl: r.html_url,
+});
+
+/**
+ * List repositories the token can write.
+ *
+ *  - `ownerOrOrg` BLANK → every repo the authenticated PAT can reach (own —
+ *    including private — plus org-member and collaborator repos), PAGINATED so a
+ *    user's own repos are never buried past the first 100 alphabetically (the
+ *    classic "I only see dotnet/* " symptom when the account belongs to a large
+ *    org whose slug sorts before the user's login).
+ *  - `ownerOrOrg` == the AUTHENTICATED USER → their own repos via
+ *    `/user/repos?affiliation=owner` (includes private; a user account is NOT an
+ *    org, so `/orgs/{login}/repos` 404s — the previous bug).
+ *  - `ownerOrOrg` == some OTHER org/user → `/orgs/{owner}/repos`, falling back to
+ *    `/users/{owner}/repos` when that 404s (i.e. the owner is a user, not an org).
+ *
+ * `base` selects the host (github.com by default, or `api.<sub>.ghe.com` for an
+ * Enterprise Cloud tenant).
  */
 export async function githubListRepos(ownerOrOrg: string, pat: string, base: string = GH_BASE): Promise<GhRepo[]> {
   const owner = (ownerOrOrg || '').trim();
-  const url = owner
-    ? `${base}/orgs/${encodeURIComponent(owner)}/repos?per_page=100&sort=full_name`
-    : `${base}/user/repos?per_page=100&sort=full_name&affiliation=owner,collaborator,organization_member`;
-  const res = await ghFetch(url, pat);
-  const j = await ghJson<any[]>(res, 'list repositories');
-  return (j || []).map((r) => ({
-    fullName: r.full_name,
-    owner: r.owner?.login,
-    name: r.name,
-    defaultBranch: r.default_branch,
-    htmlUrl: r.html_url,
-  }));
+
+  if (!owner) {
+    const all = await ghFetchAllPages(
+      `${base}/user/repos?per_page=100&sort=full_name&affiliation=owner,collaborator,organization_member`,
+      pat, 'list repositories',
+    );
+    return all.map(mapGhRepo);
+  }
+
+  // Resolve the authenticated login so an owner that IS the caller uses the
+  // user-repos endpoint (org endpoint 404s for a personal account).
+  let me = '';
+  try {
+    const u = await ghJson<{ login?: string }>(await ghFetch(`${base}/user`, pat), 'get authenticated user');
+    me = (u.login || '').toLowerCase();
+  } catch { /* fall through — treat owner as an org/user below */ }
+
+  if (me && me === owner.toLowerCase()) {
+    const own = await ghFetchAllPages(
+      `${base}/user/repos?per_page=100&sort=full_name&affiliation=owner`,
+      pat, 'list repositories',
+    );
+    return own.map(mapGhRepo);
+  }
+
+  // An organization or a different user. Try the org endpoint, then fall back to
+  // the user endpoint when the owner is a personal account (org call 404s).
+  try {
+    const org = await ghFetchAllPages(`${base}/orgs/${encodeURIComponent(owner)}/repos?per_page=100&sort=full_name`, pat, 'list repositories');
+    return org.map(mapGhRepo);
+  } catch (e) {
+    if (e instanceof GitIntegrationError && e.status === 404) {
+      const usr = await ghFetchAllPages(`${base}/users/${encodeURIComponent(owner)}/repos?per_page=100&sort=full_name`, pat, 'list repositories');
+      return usr.map(mapGhRepo);
+    }
+    throw e;
+  }
 }
 
 export async function githubListBranches(owner: string, repo: string, pat: string, base: string = GH_BASE): Promise<GhBranch[]> {
