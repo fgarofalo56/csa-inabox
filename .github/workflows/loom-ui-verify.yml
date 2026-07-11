@@ -60,7 +60,11 @@ env:
 jobs:
   verify:
     name: 'Loom UI verify (unattended)'
-    runs-on: ubuntu-latest
+    # Run on the in-VNet scale-to-zero self-hosted runner (gh-aca-runner) — the
+    # SESSION_SECRET Key Vault is private-endpoint-locked, so a cloud
+    # ubuntu-latest runner cannot reach it (AzureServices bypass excludes public
+    # GH runners). The `loom-aca` label wakes the ACA-Job runner via KEDA.
+    runs-on: [self-hosted, loom-aca]
     timeout-minutes: 20
 
     steps:
