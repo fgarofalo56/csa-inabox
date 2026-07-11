@@ -546,7 +546,7 @@ function BindStep({
   onReloadConns: () => void;
   onOpenWizard: () => void;
   onBack: () => void;
-  onChosen: (ds: ReportDataSource) => void;
+  onChosen: GetDataChosen;
 }) {
   const s = useStyles();
   const G = connectorGlyph(def);
@@ -970,7 +970,7 @@ function BindStep({
           <Divider />
           <div className={s.actions}>
             <Button appearance="primary" icon={<PlugConnected20Regular />} disabled={!draft}
-              onClick={() => { if (draft) onChosen(draft); }}>
+              onClick={() => { if (draft) onChosen(draft, { connection: selectedConn }); }}>
               Use this source
             </Button>
             <Button appearance="subtle" onClick={onBack}>Cancel</Button>
@@ -997,12 +997,27 @@ function formatCell(v: unknown): string {
 // <GetDataGallery /> — the dialog wrapper + view state machine.
 // ===========================================================================
 
+/**
+ * Extra, non-secret context about the pick, handed back ALONGSIDE the
+ * `ReportDataSource`. The report designer ignores it; the paginated-report +
+ * semantic-model hosts (W3) read `connection.host` / `.database` to fill their
+ * own contracts (RDL server/db, Power Query M) with the real coordinates — the
+ * source union itself only carries the connection id, not its host.
+ */
+export interface GetDataChosenMeta {
+  /** The bound Loom Connection when the pick is connection-backed (else undefined). */
+  connection?: LoomConnectionView;
+}
+
+/** onChosen signature — the source plus optional connection meta (W3). */
+export type GetDataChosen = (ds: ReportDataSource, meta?: GetDataChosenMeta) => void;
+
 export interface GetDataGalleryProps {
   open: boolean;
   /** Report item id — scopes uploads + enables the optional live preview. */
   reportId?: string;
   /** Fires with the chosen connection / file-upload / adls-file source. */
-  onChosen: (ds: ReportDataSource) => void;
+  onChosen: GetDataChosen;
   onDismiss: () => void;
 }
 
