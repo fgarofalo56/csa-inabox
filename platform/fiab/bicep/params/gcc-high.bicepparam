@@ -143,11 +143,32 @@ param loomVersion = readEnvironmentVariable('LOOM_VERSION', 'v3.0')
 param appImageTags = {
   console: readEnvironmentVariable('LOOM_CONSOLE_TAG', 'v3.0')
   mcp: readEnvironmentVariable('LOOM_MCP_TAG', 'v0.7')
+  mcpBridge: readEnvironmentVariable('LOOM_MCP_BRIDGE_TAG', 'v0.7')
   orchestrator: readEnvironmentVariable('LOOM_ORCHESTRATOR_TAG', 'v0.7')
   activator: readEnvironmentVariable('LOOM_ACTIVATOR_TAG', 'v0.7')
   mirroring: readEnvironmentVariable('LOOM_MIRRORING_TAG', 'v0.7')
   directLake: readEnvironmentVariable('LOOM_DIRECTLAKE_TAG', 'v0.7')
+  // These keys MUST be present: admin-plane/main.bicep builds image strings from
+  // appImageTags.{setupOrchestrator,maf,scriptRunner,wrangler} even when the
+  // corresponding app is gated off. A missing key fails template evaluation
+  // ("property 'setupOrchestrator' doesn't exist") and aborts the whole nested
+  // deployment. setup-orchestrator + copilot-maf are in the sovereign release
+  // image matrix; script-runner + wrangler are NOT built for GCC-High/IL5 and are
+  // boundary-gated off in admin-plane/main.bicep, so their tag is only a
+  // placeholder that never gets pulled.
+  setupOrchestrator: readEnvironmentVariable('LOOM_SETUP_ORCHESTRATOR_TAG', 'v0.7')
+  maf: readEnvironmentVariable('LOOM_MAF_TAG', 'v0.7')
+  scriptRunner: readEnvironmentVariable('LOOM_SCRIPT_RUNNER_TAG', 'v0.7')
+  wrangler: readEnvironmentVariable('LOOM_WRANGLER_TAG', 'v0.7')
 }
+
+// Azure Database for PostgreSQL Flexible Server is quota-restricted in
+// usgovvirginia ("Subscriptions are restricted from provisioning in location
+// 'usgovvirginia'"), which blocks the OSS Airflow metadata DB. Skip the
+// Postgres-backed Airflow host so the core app-tier deploys; the airflow-job
+// editor honest-gates until the operator requests a quota increase
+// (https://aka.ms/postgres-request-quota-increase) and flips this true.
+param postgresQuotaAvailable = bool(readEnvironmentVariable('LOOM_POSTGRES_QUOTA_AVAILABLE', 'false'))
 
 // MSAL — Gov tenant client id+secret via env (don't commit)
 param loomMsalClientId = readEnvironmentVariable('LOOM_MSAL_CLIENT_ID', '')

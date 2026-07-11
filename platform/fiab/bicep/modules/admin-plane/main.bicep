@@ -347,7 +347,7 @@ var scriptRunnerEnabled = true
 // The script-runner ACA app only deploys on the Container Apps boundaries
 // (Commercial / GCC) when explicitly enabled + apps deploy (it needs the
 // loom-script-runner image in ACR). On AKS boundaries it is a no-op here.
-var scriptRunnerActive = scriptRunnerEnabled && containerPlatform == 'containerApps' && deployAppsEnabled
+var scriptRunnerActive = scriptRunnerEnabled && containerPlatform == 'containerApps' && deployAppsEnabled && boundary != 'GCC-High' && boundary != 'IL5'
 
 // ── Data Wrangler pandas host (wave-6 / rel-T83) — deploy toggle ───────────────
 // wranglerEnabled (var, default true): deploys the loom-wrangler-host ACA app
@@ -363,7 +363,7 @@ var scriptRunnerActive = scriptRunnerEnabled && containerPlatform == 'containerA
 // loom-wrangler-host image isn't in ACR yet the /api/notebook/wrangler BFF
 // honest-gates on LOOM_WRANGLER_ENDPOINT — the panel still renders.
 var wranglerEnabled = true
-var wranglerActive = wranglerEnabled && containerPlatform == 'containerApps' && deployAppsEnabled
+var wranglerActive = wranglerEnabled && containerPlatform == 'containerApps' && deployAppsEnabled && boundary != 'GCC-High' && boundary != 'IL5'
 
 // ── Day-one OSS Apache Airflow host (rel-T86) — deploy toggle ──────────────────
 // airflowHostEnabled (var, default true — same 256-param-cap rationale as
@@ -374,7 +374,7 @@ var wranglerActive = wranglerEnabled && containerPlatform == 'containerApps' && 
 // still renders + honest-gates on LOOM_AIRFLOW_ENDPOINT. A per-item BYO webserver
 // URL remains an opt-in override regardless.
 var airflowHostEnabled = true
-var airflowHostActive = airflowHostEnabled && containerPlatform == 'containerApps' && deployAppsEnabled
+var airflowHostActive = airflowHostEnabled && containerPlatform == 'containerApps' && deployAppsEnabled && postgresQuotaAvailable
 
 // Airflow admin (+ Postgres + REST Basic-auth) password. UNPREDICTABLE — derived
 // from loomGeneratedSecretSeed (newGuid()), NEVER guid(rg.id, <public-const>),
@@ -383,6 +383,9 @@ var airflowHostActive = airflowHostEnabled && containerPlatform == 'containerApp
 // AND injected to the Console as the ACA secret `loom-airflow-admin-password`.
 var airflowAdminPassword = 'Af7${uniqueString(loomGeneratedSecretSeed, 'loom-airflow-admin-v1')}!Qz'
 var airflowWebserverSecretKey = uniqueString(loomGeneratedSecretSeed, 'loom-airflow-wsk-v1')
+
+@description('Whether Azure Database for PostgreSQL Flexible Server can be provisioned in the target region/subscription. Some sovereign subscriptions (e.g. usgovvirginia) are quota-restricted from provisioning Microsoft.DBforPostgreSQL/flexibleServers ("Subscriptions are restricted from provisioning in location ..."). When false, the Postgres-backed OSS Airflow host (airflow.bicep) is SKIPPED so the core app-tier still deploys; the airflow-job editor honest-gates on LOOM_AIRFLOW_ENDPOINT until the operator requests a Postgres quota increase (https://aka.ms/postgres-request-quota-increase) and redeploys with this true. NOT a Fabric dependency — an Azure regional/quota gate.')
+param postgresQuotaAvailable bool = true
 
 @description('Loom version label shown in the UI (/admin/updates) + /api/version. Wired to LOOM_VERSION / NEXT_PUBLIC_LOOM_VERSION. NOTE (#1468): /api/version now reads the authoritative version from the image\'s package.json (release-please-synced), so this env is a fallback override only. Default tracks the release-please manifest (.release-please-manifest.json); the top-level main.bicep passes its own loomVersion. Kept in sync so a clean default deploy never shows a stale label.')
 param loomVersion string = '0.45.0'
@@ -4374,8 +4377,16 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
   }
 }
 
-// Presidio sidecars — Gov only (where Content Safety isn't available)
-module presidio 'presidio-sidecar.bicep' = if (containerPlatform == 'containerApps' && deployAppsEnabled && (boundary == 'GCC-High' || boundary == 'IL5')) {
+// Presidio sidecars — Gov only (where Content Safety isn't available).
+// The analyzer/anonymizer images come from mcr.microsoft.com/presidio/* and MUST
+// be pre-imported (az acr import) into the boundary-local ACR by the operator —
+// they are NOT built by the CSA Loom release image matrix. On a fresh sovereign
+// deploy the ACR does not have them, so the Container App PUT fails "unable to
+// pull image ... presidio/analyzer:...". Default OFF so the core app-tier deploys;
+// the Copilot PII-redaction path honest-gates until the operator imports the
+// images and flips presidioImagesImported=true (docs/fiab/v3-tenant-bootstrap.md).
+var presidioImagesImported = false
+module presidio 'presidio-sidecar.bicep' = if (presidioImagesImported && containerPlatform == 'containerApps' && deployAppsEnabled && (boundary == 'GCC-High' || boundary == 'IL5')) {
   name: 'presidio'
   params: {
     location: location
@@ -4784,7 +4795,15 @@ module frontDoor 'front-door.bicep' = if (frontDoorEnabled && containerPlatform 
     // end-to-end functional (no manual portal "Approve"; otherwise FD 504s until
     // approved). The Console UAMI holds Network Contributor on this admin-plane RG
     // (network.bicep F15), which can approve the PE connection on the CAE.
-    scriptIdentityId: identity.outputs.uamiConsoleId
+    // SOVEREIGN GATE: GCC-High / IL5 subscriptions commonly enforce an Azure Policy
+    // that DENIES shared-key storage accounts (allowSharedKeyAccess=false). ARM's
+    // AzureCLI deploymentScript auto-provisions an ephemeral staging SA with
+    // shared-key access, which that policy blocks — the script (and thus the whole
+    // front-door module) then fails ("KeyBasedAuthenticationNotPermitted"). Front
+    // Door itself does NOT depend on this script, so on Gov we pass an empty
+    // scriptIdentityId to skip it; the operator approves the one PE connection
+    // manually (ACA env -> Networking -> Private endpoint connections -> Approve).
+    scriptIdentityId: (boundary == 'GCC-High' || boundary == 'IL5') ? '' : identity.outputs.uamiConsoleId
     complianceTags: complianceTags
   }
 }
