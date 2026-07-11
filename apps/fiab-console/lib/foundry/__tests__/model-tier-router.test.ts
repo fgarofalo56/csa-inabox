@@ -1,7 +1,7 @@
 /**
  * AIF-12 — Loom-native model tier router (pure policy) + CTS-16 tier surfacing.
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
   classifyTaskClass, selectTier, tierPolicyFromConfig, resolveTierForTurn,
   DEFAULT_TIER_POLICY, DEFAULT_TASK_TIER_MAP, MODEL_TIERS, TASK_CLASSES,
@@ -140,5 +140,72 @@ describe('enum guards', () => {
   it('exposes the three tiers and task classes', () => {
     expect([...MODEL_TIERS]).toEqual(['mini', 'standard', 'strong']);
     expect([...TASK_CLASSES]).toEqual(['lightweight', 'general', 'reasoning']);
+  });
+});
+
+describe('tierPolicyFromConfig — day-one env deployment fallback (model-strategy M3)', () => {
+  const ENV_KEYS = [
+    'LOOM_AOAI_MINI_DEPLOYMENT',
+    'LOOM_AOAI_STRONG_DEPLOYMENT',
+    'LOOM_AOAI_DEPLOYMENT',
+    'LOOM_AOAI_CHAT_DEPLOYMENT',
+  ] as const;
+  let saved: Record<string, string | undefined>;
+  beforeEach(() => {
+    saved = {};
+    for (const k of ENV_KEYS) { saved[k] = process.env[k]; delete process.env[k]; }
+  });
+  afterEach(() => {
+    for (const k of ENV_KEYS) {
+      if (saved[k] === undefined) delete process.env[k];
+      else process.env[k] = saved[k];
+    }
+  });
+
+  it('populates all three tiers from env with NO tenant cfg (best-per-task active day-one)', () => {
+    process.env.LOOM_AOAI_MINI_DEPLOYMENT = 'mini';
+    process.env.LOOM_AOAI_DEPLOYMENT = 'chat';
+    process.env.LOOM_AOAI_STRONG_DEPLOYMENT = 'strong';
+    const p = tierPolicyFromConfig(null);
+    expect(p.enabled).toBe(true);
+    expect(p.tiers).toMatchObject({ mini: 'mini', standard: 'chat', strong: 'strong' });
+    expect(p.taskMap).toEqual(DEFAULT_TASK_TIER_MAP);
+  });
+
+  it('routes lightweight→mini and reasoning→strong from env deployments (no admin config)', () => {
+    process.env.LOOM_AOAI_MINI_DEPLOYMENT = 'mini';
+    process.env.LOOM_AOAI_STRONG_DEPLOYMENT = 'strong';
+    expect(resolveTierForTurn(null, { prompt: 'hi', baseDeployment: 'chat' }))
+      .toMatchObject({ tier: 'mini', deployment: 'mini', routed: true });
+    expect(resolveTierForTurn(null, { prompt: 'debug the root cause of this failure', baseDeployment: 'chat' }))
+      .toMatchObject({ tier: 'strong', deployment: 'strong', routed: true });
+  });
+
+  it('standard tier falls back to LOOM_AOAI_CHAT_DEPLOYMENT when LOOM_AOAI_DEPLOYMENT is unset', () => {
+    process.env.LOOM_AOAI_CHAT_DEPLOYMENT = 'chat-alt';
+    expect(tierPolicyFromConfig(null).tiers.standard).toBe('chat-alt');
+  });
+
+  it('tenant cfg OVERRIDES the env deployments (precedence)', () => {
+    process.env.LOOM_AOAI_MINI_DEPLOYMENT = 'env-mini';
+    process.env.LOOM_AOAI_STRONG_DEPLOYMENT = 'env-strong';
+    const p = tierPolicyFromConfig({ modelTiers: { mini: 'cfg-mini' }, copilotChatDeployment: 'cfg-chat' });
+    expect(p.tiers.mini).toBe('cfg-mini');     // tenant cfg wins
+    expect(p.tiers.strong).toBe('env-strong'); // env fills the gap cfg left
+    expect(p.tiers.standard).toBe('cfg-chat'); // cfg chat wins over env
+  });
+
+  it('missing strong env → reasoning turns fall back to standard/base (graceful, no hard fail)', () => {
+    process.env.LOOM_AOAI_MINI_DEPLOYMENT = 'mini'; // only mini wired
+    const r = resolveTierForTurn(null, { prompt: 'debug the root cause', baseDeployment: 'chat' });
+    expect(r.tier).toBe('standard');
+    expect(r.deployment).toBe('chat');
+    expect(r.routed).toBe(false);
+  });
+
+  it('no env + no cfg → pure no-op (rides the base deployment)', () => {
+    const r = resolveTierForTurn(null, { prompt: 'hi', baseDeployment: 'chat' });
+    expect(r.routed).toBe(false);
+    expect(r.deployment).toBe('chat');
   });
 });

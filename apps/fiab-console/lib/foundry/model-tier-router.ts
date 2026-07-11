@@ -6,14 +6,19 @@
  * turns ride a stronger one. It is:
  *
  *   • **Default-ON / opt-out.** `enabled` is true unless an admin explicitly
- *     disables it. When no tier deployments are configured the policy is a safe
- *     no-op — every turn rides the resolved default deployment (no surprise
- *     deployment swap, no vaporware). Routing only *changes* the deployment when
- *     an admin has actually wired a mini / strong deployment.
+ *     disables it. Tier deployments resolve DAY-ONE from the env deployments
+ *     admin-plane bicep wires (`LOOM_AOAI_MINI_DEPLOYMENT` / `LOOM_AOAI_DEPLOYMENT`
+ *     / `LOOM_AOAI_STRONG_DEPLOYMENT`), so best-per-task routing is active out of
+ *     the box (see {@link tierPolicyFromConfig}). When NO tier deployments are
+ *     configured (env unset AND no tenant cfg) the policy is a safe no-op — every
+ *     turn rides the resolved default deployment (no surprise deployment swap, no
+ *     vaporware). A missing mini/strong tier degrades gracefully to the standard
+ *     deployment rather than failing.
  *   • **Admin-configurable.** The task-class → tier mapping and the per-tier
  *     deployment names come from the tenant Copilot config
- *     (Admin → Copilot & Agents → Model tiers), with the sensible defaults
- *     below. `standard` falls back to the tenant's Copilot chat deployment.
+ *     (Admin → Copilot & Agents → Model tiers), which OVERRIDES the day-one env
+ *     defaults below. `standard` falls back to the tenant's Copilot chat
+ *     deployment, then the env chat deployment.
  *   • **Per-call override preserved.** Callers may force a tier (`overrideTier`)
  *     or pass a pre-resolved deployment/target, in which case the router is a
  *     no-op — this is how the Wave-4 model-tier selector (an explicit deployment
@@ -190,17 +195,39 @@ export interface TierPolicyConfigShape {
   copilotChatDeployment?: string;
 }
 
+/** Trim an env var to a non-empty string, else undefined (day-one tier source). */
+function envDeployment(name: string): string | undefined {
+  const v = (process.env[name] || '').trim();
+  return v || undefined;
+}
+
 /**
  * Build a {@link TierPolicy} from the tenant Copilot config, merging admin
- * choices over the defaults. `standard` falls back to the tenant chat deployment
- * so a tenant that only wires a `mini` still routes lightweight turns correctly.
+ * choices over the day-one env deployments and the defaults.
+ *
+ * Per-tier resolution precedence (first non-empty wins):
+ *   • mini     : tenant cfg `modelTiers.mini`   → `LOOM_AOAI_MINI_DEPLOYMENT`
+ *   • standard : tenant cfg `modelTiers.standard` → tenant chat deployment
+ *                → `LOOM_AOAI_DEPLOYMENT` → `LOOM_AOAI_CHAT_DEPLOYMENT`
+ *   • strong   : tenant cfg `modelTiers.strong` → `LOOM_AOAI_STRONG_DEPLOYMENT`
+ *
+ * The env fallbacks are the mini / strong deployments admin-plane bicep wires
+ * from the Foundry account (model-strategy M2/M3), so best-per-task routing is
+ * ACTIVE DAY-ONE with no admin action — a tenant that later configures Model
+ * tiers in Admin → Copilot & Agents still overrides. A missing mini/strong tier
+ * is safe: {@link selectTier} falls back desired → standard → base, so routing
+ * degrades gracefully to the standard deployment rather than hard-failing.
  */
 export function tierPolicyFromConfig(cfg: TierPolicyConfigShape | null | undefined): TierPolicy {
   const enabled = cfg?.modelTierRoutingEnabled !== false; // default ON
   const tiers: TierDeployments = {
-    mini: cfg?.modelTiers?.mini?.trim() || undefined,
-    standard: cfg?.modelTiers?.standard?.trim() || cfg?.copilotChatDeployment?.trim() || undefined,
-    strong: cfg?.modelTiers?.strong?.trim() || undefined,
+    mini: cfg?.modelTiers?.mini?.trim() || envDeployment('LOOM_AOAI_MINI_DEPLOYMENT'),
+    standard:
+      cfg?.modelTiers?.standard?.trim() ||
+      cfg?.copilotChatDeployment?.trim() ||
+      envDeployment('LOOM_AOAI_DEPLOYMENT') ||
+      envDeployment('LOOM_AOAI_CHAT_DEPLOYMENT'),
+    strong: cfg?.modelTiers?.strong?.trim() || envDeployment('LOOM_AOAI_STRONG_DEPLOYMENT'),
   };
   const taskMap: Record<TaskClass, ModelTier> = { ...DEFAULT_TASK_TIER_MAP };
   for (const tc of TASK_CLASSES) {

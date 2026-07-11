@@ -22,7 +22,7 @@ import {
   ChainedTokenCredential,
 } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
-import { armBase, armScope, amlDataPlaneHost, searchEndpointBase, searchAadScope } from './cloud-endpoints';
+import { armBase, armScope, amlDataPlaneHost, searchEndpointBase, searchAadScope, cogScope } from './cloud-endpoints';
 import { resolveAmlTarget, amlWorkspaceArmPath, AmlNotConfiguredError } from './resolve-aml-target';
 
 const ARM_SCOPE = armScope();
@@ -1033,7 +1033,10 @@ function contentSafetyEndpoint(): string {
 }
 
 async function contentSafetyToken(): Promise<string> {
-  const t = await credential.getToken('https://cognitiveservices.azure.com/.default');
+  // Sovereign-correct Cognitive Services audience (cognitiveservices.azure.us
+  // in Gov, .com in Commercial). Hard-coding the Commercial scope 401s Content
+  // Safety in Azure Government — use the shared cogScope() helper.
+  const t = await credential.getToken(cogScope());
   if (!t?.token) throw new Error('Failed to acquire token for Content Safety');
   return t.token;
 }

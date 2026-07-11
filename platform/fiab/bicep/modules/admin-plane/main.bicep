@@ -2135,17 +2135,34 @@ module agentFoundry '../ai/foundry-project.bicep' = if (agentFoundryEnabled) {
     // 2024-11-20 is in a DEPRECATING state and rejected for new deployments, and
     // gpt-4o-mini is not offered in usgovvirginia. In usgovvirginia + usgovarizona
     // 'Standard' the current Gov-available slots are gpt-4.1 2025-04-14 (chat),
-    // gpt-4.1-mini 2025-04-14 (fast completion slot) and text-embedding-ada-002 v2
-    // (embed). So Gov flips chat/completion model name + version + SKU; the embed
-    // model name + version are cloud-agnostic (ada-002 v2 is available in both) so
-    // only its SKU flips. Commercial / GCC keep gpt-4o 2024-11-20 / gpt-4o-mini /
-    // GlobalStandard (byte-identical). Cited in docs/fiab/gov-parity-audit.md
-    // round-6 live-deltas.
+    // gpt-4.1-mini 2025-04-14 (fast completion + mini tier) and, for embed,
+    // text-embedding-ada-002 v2 (universally Gov-available). So Gov flips
+    // chat/completion/embed model name + version + SKU; the mini/strong tier
+    // model names (gpt-4.1-mini / gpt-4.1) are Gov-GA so only their SKU flips.
+    // Commercial / GCC keep gpt-4o 2024-11-20 / gpt-4o-mini / GlobalStandard for
+    // chat/completion and deploy text-embedding-3-large for embed. Cited in
+    // docs/fiab/gov-parity-audit.md round-6 live-deltas.
     chatModelName: (boundary == 'GCC-High' || boundary == 'IL5') ? 'gpt-4.1' : 'gpt-4o'
     chatModelVersion: (boundary == 'GCC-High' || boundary == 'IL5') ? '2025-04-14' : '2024-11-20'
     chatModelSkuName: (boundary == 'GCC-High' || boundary == 'IL5') ? 'Standard' : 'GlobalStandard'
-    // Embed model name + version unchanged across clouds (ada-002 v2); SKU only.
+    // Embed model (model-strategy M1): Commercial / GCC deploy text-embedding-3-large
+    // v1 (3072-dim — the foundry-project default, matching the aoai-chat-client
+    // aoaiEmbed() default so the deployed model matches the code default). Azure
+    // Government (GCC-High / IL5) keeps text-embedding-ada-002 v2, which is
+    // universally available across BOTH Gov regions (text-embedding-3-large is
+    // only in usgovarizona Standard, NOT usgovvirginia — Microsoft Learn
+    // "Azure OpenAI and features in Azure Government"), so the Gov override avoids
+    // a region-dependent 404. SKU flips GlobalStandard -> Standard in Gov.
+    embedModelName: (boundary == 'GCC-High' || boundary == 'IL5') ? 'text-embedding-ada-002' : 'text-embedding-3-large'
+    embedModelVersion: (boundary == 'GCC-High' || boundary == 'IL5') ? '2' : '1'
     embedModelSkuName: (boundary == 'GCC-High' || boundary == 'IL5') ? 'Standard' : 'GlobalStandard'
+    // Model-strategy mini/strong tiers (M2): the default model names the
+    // foundry-project module pins (gpt-4.1-mini / gpt-4.1) are GA in Commercial
+    // AND Azure Government Standard (usgovarizona + usgovvirginia), so only the
+    // SKU flips GlobalStandard -> Standard in Gov. Operators raise the model
+    // name/version via foundry-project params where gpt-5.x is regionally available.
+    miniModelSkuName: (boundary == 'GCC-High' || boundary == 'IL5') ? 'Standard' : 'GlobalStandard'
+    strongModelSkuName: (boundary == 'GCC-High' || boundary == 'IL5') ? 'Standard' : 'GlobalStandard'
     // Completion slot only deploys when completionDeploymentName is non-empty
     // (empty in GCC-High / IL5 by default → no-op there); values kept Gov-correct
     // in case a boundary opts into a dedicated ghost-text slot.
@@ -4115,6 +4132,14 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // assist routes (process.env.LOOM_AOAI_AUDIENCE) to mint the bearer.
             { name: 'LOOM_AOAI_AUDIENCE',          value: environment().suffixes.storage != 'core.windows.net' ? 'https://cognitiveservices.azure.us' : 'https://cognitiveservices.azure.com' }
             { name: 'LOOM_AOAI_EMBED_DEPLOYMENT',  value: agentFoundryEnabled ? agentFoundry!.outputs.embedDeployment : byoFoundryEmbedDeployment }
+            // Model-strategy (AIF-12 / M3): the "mini" (cheap/lightweight) + "strong"
+            // (reasoning) tier deployments the Loom-native model tier router routes
+            // to DAY-ONE (lib/foundry/model-tier-router.ts reads these as the env
+            // fallback for modelTiers.{mini,strong}; tenant Copilot config still
+            // overrides). Empty on a BYO-Foundry path → the router gracefully falls
+            // back to the standard (chat) deployment for every task class.
+            { name: 'LOOM_AOAI_MINI_DEPLOYMENT',   value: agentFoundryEnabled ? agentFoundry!.outputs.miniDeployment : '' }
+            { name: 'LOOM_AOAI_STRONG_DEPLOYMENT', value: agentFoundryEnabled ? agentFoundry!.outputs.strongDeployment : '' }
             // Inline code completion (ghost text) deployment. Explicit
             // loomAoaiCompletionDeployment wins; otherwise the Foundry module's
             // output (empty unless a dedicated slot was deployed). When empty the
