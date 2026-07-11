@@ -34,6 +34,9 @@ param notificationWebhookKvRef string
 @description('Compliance tags')
 param complianceTags object
 
+@description('Wire the Sentinel automation rule that auto-runs the alert playbook on AI-rule incidents. Requires the playbook to expose a Microsoft Sentinel *Incident* trigger (azuresentinel managed connector) — the current notification playbook uses an HTTP trigger, so RunPlaybook preflight fails `Playbook resource is not using Microsoft Sentinel Incident trigger` (live usgovvirginia). Kept OFF until the incident-trigger + azuresentinel API-connection rework lands; the analytic *detection* rules and the notification playbook still deploy and work. Flip to true once the playbook is rebuilt with the Sentinel trigger.')
+param sentinelPlaybookAutomationEnabled bool = false
+
 // =====================================================================
 // Logic App playbook — enriches alerts + posts to Teams / email
 // =====================================================================
@@ -163,7 +166,7 @@ resource playbook 'Microsoft.Logic/workflows@2019-05-01' = if (!defenderForAIEna
 var promptInjectionRuleId = '${law.id}/providers/Microsoft.SecurityInsights/alertRules/csa-loom-ai-prompt-injection'
 var abuseQuotaRuleId = '${law.id}/providers/Microsoft.SecurityInsights/alertRules/csa-loom-ai-abuse-quota-spike'
 
-resource automationRule 'Microsoft.SecurityInsights/automationRules@2024-09-01' = if (!defenderForAIEnabled) {
+resource automationRule 'Microsoft.SecurityInsights/automationRules@2024-09-01' = if (!defenderForAIEnabled && sentinelPlaybookAutomationEnabled) {
   scope: law
   name: 'csa-loom-ai-automation'
   properties: {

@@ -150,12 +150,14 @@ resource globalPolicy 'Microsoft.ApiManagement/service/policies@2024-06-01-previ
 }
 
 // Diagnostic settings → standardized Loom LAW.
-// WebSocketConnectionLogs is a newer category NOT yet supported by Azure
-// Government APIM — enabling it there fails the diagnosticSettings PUT with
-// `BadRequest: Category 'WebSocketConnectionLogs' is not supported.` (seen live
-// in usgovvirginia). Drop it in sovereign boundaries; GatewayLogs +
-// DeveloperPortalAuditLogs are supported in all clouds. Commercial / GCC keep the
-// full three-category set (byte-identical).
+// Azure Government APIM does NOT support the newer log categories — enabling them
+// there fails the diagnosticSettings PUT with `BadRequest: Category '<name>' is not
+// supported.` (both seen live in usgovvirginia):
+//   - `WebSocketConnectionLogs`   (round-6/#1892)
+//   - `DeveloperPortalAuditLogs`  (round-8 — the earlier comment claiming it was
+//                                  supported in all clouds was wrong)
+// Only `GatewayLogs` is universal. Sovereign boundaries get GatewayLogs alone;
+// Commercial / GCC keep the full three-category set (byte-identical to before).
 var isSovereign = boundary == 'GCC-High' || boundary == 'IL5'
 resource diag 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
   scope: apim
@@ -165,9 +167,9 @@ resource diag 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
     logs: concat(
       [
         { category: 'GatewayLogs', enabled: true }
-        { category: 'DeveloperPortalAuditLogs', enabled: true }
       ],
       isSovereign ? [] : [
+        { category: 'DeveloperPortalAuditLogs', enabled: true }
         { category: 'WebSocketConnectionLogs', enabled: true }
       ]
     )
