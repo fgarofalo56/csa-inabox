@@ -46,17 +46,28 @@ resource vpnPip 'Microsoft.Network/publicIPAddresses@2024-05-01' = {
 }
 
 // Azure VPN Client audience app ID (the "aud" claim clients present when
-// authenticating against Entra ID). This is the manually-registered Azure VPN
-// Enterprise App ID, and it differs per national cloud — Microsoft Learn
-// "Configure P2S VPN gateway for Entra ID authentication" lists:
-//   Azure Public     : 41b23e61-6c1e-4545-b367-cd054e0ed4b4
-//   Azure Government  : 51bb15d4-3a4f-4ebf-9dca-40096fe32426
-// A Gov gateway configured with the Public GUID fails preflight
-// (VpnClientConfigurationAadTenantIsNotValid), so select per boundary. The
-// aadTenant (environment().authentication.loginEndpoint → login.microsoftonline.us
-// in Gov) and aadIssuer (sts.windows.net, cloud-agnostic per Learn) are already
-// correct across clouds. Commercial keeps the Public GUID (byte-identical).
-var azureVpnClientAppId = (boundary == 'GCC-High' || boundary == 'IL5') ? '51bb15d4-3a4f-4ebf-9dca-40096fe32426' : '41b23e61-6c1e-4545-b367-cd054e0ed4b4'
+// authenticating against Entra ID). Microsoft Learn "About Point-to-Site VPN —
+// How are P2S VPN clients authenticated?" lists two registration models:
+//   Microsoft-registered (universal, pre-consented, NO manual app registration):
+//     c632b3df-fb67-4d84-bdcf-b95ad541b5c8 — valid for Azure Public, Azure
+//     Government, Azure Germany and 21Vianet. Microsoft recommends this value;
+//     the tenant can use it with no extra registration steps.
+//   Manually-registered (requires a Cloud Application Administrator to register
+//     + consent the Azure VPN Enterprise App in the tenant BEFORE it is usable):
+//     Azure Public     : 41b23e61-6c1e-4545-b367-cd054e0ed4b4
+//     Azure Government : 51bb15d4-3a4f-4ebf-9dca-40096fe32426
+// Round-4 (#1887) used the manually-registered Gov GUID (51bb15d4…) for
+// GCC-High / IL5, but a live usgovvirginia deploy STILL failed preflight with
+// VpnClientConfigurationAadTenantIsNotValid — that app is not registered /
+// consented in the Gov Entra tenant, and the gateway rejects an audience it
+// cannot resolve. Gov therefore uses the Microsoft-registered universal audience
+// (c632b3df…): no tenant bootstrap, works day-one (no-vaporware). Commercial /
+// GCC keep their existing manually-registered Public GUID unchanged
+// (byte-identical). aadTenant (environment().authentication.loginEndpoint →
+// https://login.microsoftonline.us/<tenant> in Gov) and aadIssuer
+// (https://sts.windows.net/<tenant>/, cloud-agnostic per Learn) are already
+// correct across clouds.
+var azureVpnClientAppId = (boundary == 'GCC-High' || boundary == 'IL5') ? 'c632b3df-fb67-4d84-bdcf-b95ad541b5c8' : '41b23e61-6c1e-4545-b367-cd054e0ed4b4'
 
 resource vpnGateway 'Microsoft.Network/virtualNetworkGateways@2024-05-01' = {
   name: 'vgw-loom-${location}'
