@@ -8,6 +8,28 @@
 // The Scheduled Rules themselves are defined in monitoring.bicep
 // (gated on !defenderForAIEnabled). This module adds the Logic App
 // playbook + the automation rule that connects them.
+//
+// TRIGGER REWORK (2026-07-11): the playbook now uses a Microsoft Sentinel
+// **Incident** trigger (azuresentinel managed connector, managed-identity
+// auth) instead of the old HTTP `Request` trigger. Sentinel's RunPlaybook
+// automation action only binds to a playbook whose trigger is the Sentinel
+// Incident trigger — the HTTP trigger failed preflight with
+// `Playbook resource is not using Microsoft Sentinel Incident trigger`
+// (live usgovvirginia). With the incident trigger + a fully-declarative
+// managed-identity API connection, the automation rule is valid, so
+// `sentinelPlaybookAutomationEnabled` now defaults to true.
+//
+// Grounded in Microsoft Learn:
+//   Sentinel incident-trigger playbooks (Consumption):
+//     https://learn.microsoft.com/azure/sentinel/automation/create-playbooks
+//   Authenticate playbooks with a managed identity + azuresentinel connection:
+//     https://learn.microsoft.com/azure/sentinel/automation/authenticate-playbooks-to-sentinel
+//   ARM managed-identity API connection (parameterValueType 'Alternative'):
+//     https://learn.microsoft.com/azure/logic-apps/authenticate-with-managed-identity#arm-template-for-api-connections-and-managed-identities
+//   Automation rule RunPlaybook permission (Azure Security Insights SP needs
+//   'Microsoft Sentinel Automation Contributor' on the playbook RG — granted
+//   in csa-loom-post-deploy-bootstrap.yml):
+//     https://learn.microsoft.com/azure/sentinel/automation/run-playbooks#prerequisites
 
 targetScope = 'resourceGroup'
 
@@ -34,11 +56,49 @@ param notificationWebhookKvRef string
 @description('Compliance tags')
 param complianceTags object
 
-@description('Wire the Sentinel automation rule that auto-runs the alert playbook on AI-rule incidents. Requires the playbook to expose a Microsoft Sentinel *Incident* trigger (azuresentinel managed connector) — the current notification playbook uses an HTTP trigger, so RunPlaybook preflight fails `Playbook resource is not using Microsoft Sentinel Incident trigger` (live usgovvirginia). Kept OFF until the incident-trigger + azuresentinel API-connection rework lands; the analytic *detection* rules and the notification playbook still deploy and work. Flip to true once the playbook is rebuilt with the Sentinel trigger.')
-param sentinelPlaybookAutomationEnabled bool = false
+@description('Wire the Sentinel automation rule that auto-runs the alert playbook on AI-rule incidents. As of 2026-07-11 the playbook exposes a Microsoft Sentinel *Incident* trigger (azuresentinel managed connector, managed-identity auth), so the RunPlaybook binding is valid and this DEFAULTS to true. The only runtime prerequisite is the Azure Security Insights SP holding "Microsoft Sentinel Automation Contributor" on this RG — granted durably by csa-loom-post-deploy-bootstrap.yml. Set to false only to disable the auto-response wiring (the analytic detection rules + the notification playbook still deploy either way). Gov-only path: Commercial (defenderForAIEnabled=true) never deploys any of this.')
+param sentinelPlaybookAutomationEnabled bool = true
+
+// Built-in role: Microsoft Sentinel Responder (read incident data / operate the
+// incident trigger). Granted to the playbook's system-assigned identity on the
+// workspace so the azuresentinel managed-identity connection can read incidents.
+// https://learn.microsoft.com/azure/role-based-access-control/built-in-roles#microsoft-sentinel-responder
+var sentinelResponderRoleId = '3e150937-b8fe-4cfb-8069-0eaf05ecd056'
 
 // =====================================================================
-// Logic App playbook — enriches alerts + posts to Teams / email
+// azuresentinel API connection (managed identity — no stored creds)
+// =====================================================================
+// Fully declarative managed-identity connection: parameterValueType
+// 'Alternative' is the ARM-template form for a single-auth managed connector
+// authenticated by the consuming Logic App's managed identity (Learn ref
+// above). No portal consent / OAuth prompt is required for MI auth — the
+// workflow's $connections binding sets authentication.type =
+// ManagedServiceIdentity and the runtime uses the playbook's system-assigned
+// identity (granted Sentinel Responder below).
+// BCP187/BCP037: `kind` and `parameterValueType` are valid on managed API
+// connections (per the ARM managed-identity connection Learn ref) but are not
+// in Bicep's type model for Microsoft.Web/connections — suppress the noise.
+resource sentinelConnection 'Microsoft.Web/connections@2016-06-01' = if (!defenderForAIEnabled) {
+  name: 'azuresentinel-loom-ai-${location}'
+  location: location
+  tags: complianceTags
+  #disable-next-line BCP187
+  kind: 'V1'
+  properties: {
+    displayName: 'Microsoft Sentinel — Loom AI Alerts (managed identity)'
+    api: {
+      name: 'azuresentinel'
+      id: subscriptionResourceId('Microsoft.Web/locations/managedApis', location, 'azuresentinel')
+      type: 'Microsoft.Web/locations/managedApis'
+    }
+    // Single-auth managed-identity connection (no parameterValues / OAuth).
+    #disable-next-line BCP037
+    parameterValueType: 'Alternative'
+  }
+}
+
+// =====================================================================
+// Logic App playbook — Sentinel incident trigger → enrich + Teams post
 // =====================================================================
 
 resource playbook 'Microsoft.Logic/workflows@2019-05-01' = if (!defenderForAIEnabled) {
@@ -48,6 +108,28 @@ resource playbook 'Microsoft.Logic/workflows@2019-05-01' = if (!defenderForAIEna
   identity: { type: 'SystemAssigned' }
   properties: {
     state: 'Enabled'
+    // Wire the azuresentinel connection into the workflow's $connections
+    // parameter, authenticated by this playbook's system-assigned identity.
+    parameters: {
+      '$connections': {
+        value: {
+          azuresentinel: {
+            id: subscriptionResourceId('Microsoft.Web/locations/managedApis', location, 'azuresentinel')
+            connectionId: sentinelConnection.id
+            connectionName: sentinelConnection.name
+            connectionProperties: {
+              authentication: {
+                type: 'ManagedServiceIdentity'
+              }
+            }
+          }
+        }
+      }
+      TeamsWebhookUrl: {
+        // Resolved from Key Vault by the LA's managed identity at runtime
+        value: notificationWebhookKvRef
+      }
+    }
     definition: {
       '$schema': 'https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#'
       contentVersion: '1.0.0.0'
@@ -56,7 +138,7 @@ resource playbook 'Microsoft.Logic/workflows@2019-05-01' = if (!defenderForAIEna
           defaultValue: {}
           type: 'Object'
         }
-        // Declared here so the resource-level parameters block below can supply
+        // Declared here so the resource-level parameters block above can supply
         // its value; the PostToTeams action references @parameters('TeamsWebhookUrl').
         // Without this declaration ARM rejects the workflow with InvalidTemplate
         // ("workflow parameters 'TeamsWebhookUrl' are not valid; not declared in
@@ -67,31 +149,38 @@ resource playbook 'Microsoft.Logic/workflows@2019-05-01' = if (!defenderForAIEna
         }
       }
       triggers: {
-        manual: {
-          type: 'Request'
-          kind: 'Http'
+        // Microsoft Sentinel Incident trigger (ApiConnectionWebhook against the
+        // azuresentinel connector). This is the trigger the RunPlaybook automation
+        // action binds to. On each new AI-rule incident Sentinel POSTs the incident
+        // object (its properties + related analytic-rule ids + alerts/entities) here.
+        When_Azure_Sentinel_incident_creation_rule_was_triggered: {
+          type: 'ApiConnectionWebhook'
           inputs: {
-            schema: {
-              type: 'object'
-              properties: {
-                IncidentName: { type: 'string' }
-                Severity: { type: 'string' }
-                Description: { type: 'string' }
-                Events: { type: 'array' }
+            body: {
+              callback_url: '@{listCallbackUrl()}'
+            }
+            host: {
+              connection: {
+                name: '@parameters(\'$connections\')[\'azuresentinel\'][\'connectionId\']'
               }
             }
+            path: '/incident-creation'
           }
         }
       }
       actions: {
-        // 1. Look up alerted principals / IPs for context
+        // 1. Project the incident fields we care about for the Teams card.
+        //    Incident schema: triggerBody().object.properties.{title,severity,
+        //    description,incidentNumber,incidentUrl,relatedAnalyticRuleIds}.
         ComposeContext: {
           type: 'Compose'
           inputs: {
-            'incident': '@triggerBody()?[\'IncidentName\']'
-            'severity': '@triggerBody()?[\'Severity\']'
-            'description': '@triggerBody()?[\'Description\']'
-            'when': '@utcNow()'
+            incident: '@triggerBody()?[\'object\']?[\'properties\']?[\'title\']'
+            severity: '@triggerBody()?[\'object\']?[\'properties\']?[\'severity\']'
+            description: '@triggerBody()?[\'object\']?[\'properties\']?[\'description\']'
+            incidentNumber: '@triggerBody()?[\'object\']?[\'properties\']?[\'incidentNumber\']'
+            incidentUrl: '@triggerBody()?[\'object\']?[\'properties\']?[\'incidentUrl\']'
+            when: '@utcNow()'
           }
         }
         // 2. Post adaptive card to Teams via incoming webhook (URL in KV)
@@ -122,6 +211,7 @@ resource playbook 'Microsoft.Logic/workflows@2019-05-01' = if (!defenderForAIEna
                         facts: [
                           { title: 'Incident', value: '@{outputs(\'ComposeContext\')[\'incident\']}' }
                           { title: 'Severity', value: '@{outputs(\'ComposeContext\')[\'severity\']}' }
+                          { title: 'Number', value: '@{outputs(\'ComposeContext\')[\'incidentNumber\']}' }
                           { title: 'Time', value: '@{outputs(\'ComposeContext\')[\'when\']}' }
                         ]
                       }
@@ -129,6 +219,16 @@ resource playbook 'Microsoft.Logic/workflows@2019-05-01' = if (!defenderForAIEna
                         type: 'TextBlock'
                         wrap: true
                         text: '@{outputs(\'ComposeContext\')[\'description\']}'
+                      }
+                      {
+                        type: 'ActionSet'
+                        actions: [
+                          {
+                            type: 'Action.OpenUrl'
+                            title: 'Open incident in Microsoft Sentinel'
+                            url: '@{outputs(\'ComposeContext\')[\'incidentUrl\']}'
+                          }
+                        ]
                       }
                     ]
                   }
@@ -139,12 +239,25 @@ resource playbook 'Microsoft.Logic/workflows@2019-05-01' = if (!defenderForAIEna
         }
       }
     }
-    parameters: {
-      TeamsWebhookUrl: {
-        // Resolved from Key Vault by the LA's managed identity at runtime
-        value: notificationWebhookKvRef
-      }
-    }
+  }
+}
+
+// =====================================================================
+// RBAC — playbook identity → Microsoft Sentinel Responder on the workspace
+// =====================================================================
+// The azuresentinel managed-identity connection reads incident data via the
+// playbook's system-assigned identity; Sentinel Responder is the minimum role
+// that lets the incident trigger operate + read the incident.
+resource playbookSentinelResponder 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!defenderForAIEnabled) {
+  scope: law
+  name: guid(law.id, 'la-csa-loom-ai-alert', sentinelResponderRoleId)
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', sentinelResponderRoleId)
+    // BCP318: `playbook` is conditional; this assignment shares the same
+    // !defenderForAIEnabled gate, so the playbook exists whenever this deploys.
+    #disable-next-line BCP318
+    principalId: playbook.identity.principalId
+    principalType: 'ServicePrincipal'
   }
 }
 
