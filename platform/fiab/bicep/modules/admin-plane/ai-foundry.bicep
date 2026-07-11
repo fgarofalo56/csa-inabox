@@ -89,6 +89,22 @@ param defaultChatModelSkuName string = 'GlobalStandard'
 @minValue(1)
 param defaultChatModelCapacity int = 10
 
+// Sovereign Gov boundaries (GCC-High / IL5) run on the Azure Government cloud,
+// which does NOT offer GlobalStandard deployments, and usgovvirginia has neither
+// gpt-4o-mini nor a NON-deprecating gpt-4o slot for new deployments (Microsoft
+// Learn: "Azure OpenAI and features in Azure Government" — Standard model
+// availability). gpt-4.1 version 2025-04-14 IS Standard-available in
+// usgovvirginia + usgovarizona and is current, so the shared-hub default chat
+// model flips to it on the regional 'Standard' SKU there. GCC runs on Azure
+// Public cloud (GlobalStandard + gpt-4o-mini both available) and Commercial are
+// left on the param defaults — byte-identical. Override via params to pin a
+// different slot per boundary.
+var isSovereignGov = boundary == 'GCC-High' || boundary == 'IL5'
+var effectiveChatDeploymentName = isSovereignGov ? 'gpt-4.1' : defaultChatDeploymentName
+var effectiveChatModelName = isSovereignGov ? 'gpt-4.1' : defaultChatModelName
+var effectiveChatModelVersion = isSovereignGov ? '2025-04-14' : defaultChatModelVersion
+var effectiveChatModelSkuName = isSovereignGov ? 'Standard' : defaultChatModelSkuName
+
 // =====================================================================
 // Foundry Hub (Azure ML Workspace kind=Hub for Foundry; kind=Default
 // for classic in boundaries without Foundry support)
@@ -292,17 +308,17 @@ resource foundryProject 'Microsoft.CognitiveServices/accounts/projects@2025-04-0
 // one account; the project is created first so both don't race).
 resource defaultChatDeployment 'Microsoft.CognitiveServices/accounts/deployments@2025-04-01-preview' = if (deployDefaultChatModel) {
   parent: aiServices
-  name: defaultChatDeploymentName
+  name: effectiveChatDeploymentName
   dependsOn: [ foundryProject ]
   sku: {
-    name: defaultChatModelSkuName
+    name: effectiveChatModelSkuName
     capacity: defaultChatModelCapacity
   }
   properties: {
     model: {
       format: 'OpenAI'
-      name: defaultChatModelName
-      version: defaultChatModelVersion
+      name: effectiveChatModelName
+      version: effectiveChatModelVersion
     }
     versionUpgradeOption: 'OnceNewDefaultVersionAvailable'
     raiPolicyName: 'Microsoft.DefaultV2'
@@ -395,7 +411,7 @@ output aiServicesAccountName string = aiServices.name
 output aiServicesEndpoint string = aiServices.properties.endpoint
 // LOOM_AOAI_DEPLOYMENT when this shared-hub account is the resolved AOAI source.
 // Empty when no default model was deployed (deployDefaultChatModel=false).
-output defaultChatDeploymentName string = deployDefaultChatModel ? defaultChatDeploymentName : ''
+output defaultChatDeploymentName string = deployDefaultChatModel ? effectiveChatDeploymentName : ''
 // AOAI inference endpoint (the .openai.azure.* host the AI Functions / Copilot
 // clients call — distinct from the generic Cognitive Services endpoint above).
 // Sovereign-aware: GCC-High / IL5 / IL6 use .openai.azure.us. Wired into
