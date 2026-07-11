@@ -77,6 +77,19 @@ const NOTEBOOK_ATTACHABLE = [
  */
 const POWERBI_MODELABLE = ['warehouse', 'synapse-dedicated-sql-pool'];
 
+/**
+ * Every Loom item type that can be a Power BI SOURCE (Weave → “Analyze in Power
+ * BI”). Each resolves to an Azure-native backend (Synapse serverless / dedicated
+ * or ADX) via `lib/azure/pbi-source-resolver.ts` — no Fabric / Power BI workspace
+ * required (no-fabric-dependency.md). Mirrors `PBI_RESOLVABLE_TYPES` in the
+ * resolver; kept here so the ThreadAction's `fromTypes` stays a single source.
+ */
+export const PBI_SOURCEABLE = [
+  'lakehouse', 'warehouse', 'eventhouse', 'kql-database', 'mirrored-database',
+  'dataset', 'semantic-model', 'data-product',
+  'synapse-serverless-sql-pool', 'synapse-dedicated-sql-pool',
+];
+
 export const THREAD_ACTIONS: ThreadAction[] = [
   {
     id: 'analyze-in-notebook',
@@ -232,6 +245,80 @@ export const THREAD_ACTIONS: ThreadAction[] = [
       },
     ],
     route: '/api/thread/build-loom-report',
+    submitLabel: 'Weave',
+  },
+  {
+    // Weave → Power BI (W1 — Loom-native branch). Appears on ANY PBI-sourceable
+    // Loom item and opens the Power BI item type the user picks (report /
+    // paginated report / dashboard / semantic model), pre-wired to this item as
+    // the source via lib/azure/pbi-source-resolver.ts — Azure-native by DEFAULT
+    // (no Fabric / Power BI workspace). The user never touches a data-source,
+    // connection string, or Azure coordinate.
+    id: 'analyze-in-powerbi',
+    label: 'Analyze in Power BI',
+    description:
+      'Create a Power BI item pre-wired to this item as its data source — pick the item type (report, ' +
+      'paginated report, dashboard, or semantic model). Loom resolves the Azure-native backend (Synapse ' +
+      'serverless / dedicated, or Azure Data Explorer) automatically; no data source, connection, or ' +
+      'coordinates to enter. No Power BI / Fabric workspace required.',
+    group: 'Visualize',
+    fromTypes: PBI_SOURCEABLE,
+    icon: 'chart',
+    fields: [
+      {
+        name: 'targetType',
+        label: 'Power BI item type',
+        kind: 'select',
+        options: [
+          { value: 'report', label: 'Report (interactive)' },
+          { value: 'paginated-report', label: 'Paginated report (RDL — pixel-perfect)' },
+          { value: 'dashboard', label: 'Dashboard (tiles)' },
+          { value: 'semantic-model', label: 'Semantic model (reusable dataset)' },
+        ],
+        default: 'report',
+        required: true,
+        hint: 'The Power BI item to create, pre-wired to this source. All open Azure-native — no Power BI workspace needed.',
+      },
+      {
+        name: 'sourceShape',
+        label: 'Source shape',
+        kind: 'select',
+        options: [
+          { value: 'auto', label: 'Auto (use the source’s default table)' },
+          { value: 'table', label: 'A specific table' },
+          { value: 'query', label: 'A SQL query' },
+        ],
+        default: 'auto',
+        required: true,
+        hint:
+          'Auto uses the table Loom detected on this source. Choose “A specific table” or “A SQL query” to shape ' +
+          'the data the new Power BI item is wired to.',
+      },
+      {
+        name: 'table',
+        label: 'Table',
+        kind: 'text',
+        showWhen: { field: 'sourceShape', equals: 'table' },
+        hint: 'schema.table (or just table) to wire the Power BI item to. Overrides the detected default table.',
+      },
+      {
+        name: 'query',
+        label: 'SQL query',
+        kind: 'textarea',
+        showWhen: { field: 'sourceShape', equals: 'query' },
+        hint:
+          'A read-only SELECT against the Azure-native backend. Its result columns become the Power BI item’s ' +
+          'source. Ignored for an eventhouse / KQL source (which is wired via its default table).',
+      },
+      {
+        name: 'name',
+        label: 'Name',
+        kind: 'text',
+        required: true,
+        hint: 'A name for the new Power BI item. It opens pre-wired to this source.',
+      },
+    ],
+    route: '/api/thread/analyze-in-powerbi',
     submitLabel: 'Weave',
   },
   {
