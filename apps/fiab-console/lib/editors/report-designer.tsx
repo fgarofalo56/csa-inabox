@@ -108,6 +108,10 @@ import { formatToChartProps, type ChartAdapterContext } from '@/lib/components/c
 import { VisualChrome } from './report/visual-chrome';
 import { ReportPowerBiCopilot, type CopilotVisualSpec, type CopilotWellField } from '@/lib/components/report/report-powerbi-copilot';
 import { DataSourcePicker } from './report/data-source-picker';
+// WAVE 2 — "Pick a Loom item" source, reused in the Create report dialog so a
+// brand-new report can be sourced from any PBI_SOURCEABLE Loom item at create
+// time (not only an existing semantic model).
+import { LoomItemSourcePicker } from './report/loom-item-source-picker';
 import { FormatPane, type ReportVisualFormat, formatValue, LOOM_DATA_PALETTE } from './report/format-pane';
 // Wave-1 parity panels (extracted, self-contained): the Filters pane (3-scope
 // structured filters + Top N / relative date / lock-hide), the Analytics pane
@@ -4449,6 +4453,24 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
                     {(workspaces || []).map((w) => <Option key={w.id} value={w.id}>{w.name}</Option>)}
                   </Dropdown>
                 </Field>
+                {/* WAVE 2 — first-class Loom-item data source at create time. Pick a
+                    lakehouse / warehouse / eventhouse / … / data product and Loom
+                    resolves its Azure backend + seeds this report's source — no
+                    coordinates to type. Optional: skip to bind later from the Data
+                    source panel. The resolved seed rides through createNewReport's
+                    existing state.dataSource persist step. */}
+                <div className={styles.section}>
+                  <Subtitle2>Data source (optional)</Subtitle2>
+                  <Caption1 className={styles.muted}>
+                    Wire a Loom item as this report&apos;s source now — or set it later from the Data source panel.
+                    {isBound(dataSource) ? ` Current: ${describeSource(dataSource)}.` : ''}
+                  </Caption1>
+                  <LoomItemSourcePicker
+                    purpose="report"
+                    onResolved={(res) => { setDataSource(res.dataSource ?? null); setDirty(true); }}
+                    onCleared={() => { setDataSource(null); }}
+                  />
+                </div>
                 {createErr && (
                   <MessageBar intent="error"><MessageBarBody>
                     <MessageBarTitle>Create failed</MessageBarTitle>{createErr}

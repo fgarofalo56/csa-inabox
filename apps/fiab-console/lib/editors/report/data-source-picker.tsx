@@ -71,6 +71,13 @@ import { TransformDataDrawer } from './transform-data';
 // 32-connector catalog and returns a connection/file/ADLS-backed ReportDataSource
 // via onChosen — the picker mounts it as an overlay drawer and persists the result.
 import { GetDataGallery } from './get-data-gallery';
+// WAVE 2 — "Pick a Loom item" source. The shared control resolves ANY
+// PBI_SOURCEABLE Loom item (lakehouse / warehouse / eventhouse / … / data
+// product) to its Azure-native backend via GET /api/items/[type]/[id]/pbi-source
+// and hands back a ready-to-persist ReportDataSource seed — the user never types
+// a server / database / SQL. Reused verbatim by the report create dialog, the
+// paginated-report data-source dialog, and the semantic-model ingest source step.
+import { LoomItemSourcePicker, type LoomItemResolution } from './loom-item-source-picker';
 
 // ── data-source model (single source of truth) ───────────────────────────────
 // The discriminated union + helpers come from the SHARED CONTRACT,
@@ -110,10 +117,19 @@ import { RefreshPane } from './refresh-pane';
  *  (= the SoT's `DirectQueryTarget`); the target dropdown binds to this. */
 type DirectTarget = DirectQueryTarget;
 
+/**
+ * The picker's active-mode discriminant. It is the persisted union kind PLUS the
+ * W2 UI-only `'loom-item'` mode (which is NOT a persisted `ReportDataSource` kind
+ * — selecting a Loom item resolves to one of the real union kinds via the
+ * resolver, and THAT is what persists). Kept local so the persisted contract is
+ * untouched.
+ */
+type PickerKind = ReportDataSourceKind | 'loom-item';
+
 /** The Get Data kinds (connection-/file-backed). */
 type GetDataSource = ConnectionDataSource | FileUploadDataSource | AdlsFileDataSource;
-const GET_DATA_KINDS: ReadonlySet<ReportDataSourceKind> = new Set(['connection', 'file-upload', 'adls-file']);
-function isGetDataKind(k: ReportDataSourceKind): boolean { return GET_DATA_KINDS.has(k); }
+const GET_DATA_KINDS: ReadonlySet<string> = new Set(['connection', 'file-upload', 'adls-file']);
+function isGetDataKind(k: string): boolean { return GET_DATA_KINDS.has(k); }
 function isGetDataSource(ds: ReportDataSource | null | undefined): ds is GetDataSource {
   return !!ds && (ds.kind === 'connection' || ds.kind === 'file-upload' || ds.kind === 'adls-file');
 }
@@ -248,7 +264,12 @@ export interface DataSourcePickerProps {
 export function DataSourcePicker({ open, reportId, value, onChange, onDismiss, saving }: DataSourcePickerProps) {
   const styles = useStyles();
 
-  const [kind, setKind] = useState<ReportDataSourceKind>(value?.kind ?? 'semantic-model');
+  const [kind, setKind] = useState<PickerKind>(value?.kind ?? 'semantic-model');
+
+  // (g) WAVE 2 — "Pick a Loom item": the resolver's ready-to-persist seed for the
+  // currently-picked item (null until an item resolves to a bindable source).
+  const [loomResolved, setLoomResolved] = useState<ReportDataSource | null>(null);
+  const [loomSelectedId, setLoomSelectedId] = useState<string>('');
 
   // (a) semantic-model
   const [models, setModels] = useState<ModelItem[] | null>(null);
@@ -293,6 +314,8 @@ export function DataSourcePicker({ open, reportId, value, onChange, onDismiss, s
     setNavigatorOpen(false);
     setTransformOpen(false);
     setTableStorage({});
+    setLoomResolved(null);
+    setLoomSelectedId('');
     setPreviewCols(null); setPreviewErr(null);
   }, [open, value]);
 
@@ -342,6 +365,7 @@ export function DataSourcePicker({ open, reportId, value, onChange, onDismiss, s
 
   // ── confirm ──────────────────────────────────────────────────────────────────
   const draft: ReportDataSource | null = useMemo(() => {
+    if (kind === 'loom-item') return loomResolved && isBound(loomResolved) ? loomResolved : null;
     if (kind === 'semantic-model') return modelId ? { kind, itemId: modelId } : null;
     if (kind === 'direct-query') return sqlGuard.ok ? { kind, target, sql: sqlGuard.sql } : null;
     if (kind === 'aas') {
@@ -352,7 +376,7 @@ export function DataSourcePicker({ open, reportId, value, onChange, onDismiss, s
     // as the draft only when it is locally bound (honest completeness).
     if (isGetDataKind(kind)) return getData && isBound(getData) ? getData : null;
     return null;
-  }, [kind, modelId, sqlGuard, target, aasServer, aasDatabase, getData]);
+  }, [kind, loomResolved, modelId, sqlGuard, target, aasServer, aasDatabase, getData]);
 
   const confirm = useCallback(() => { if (draft) onChange(draft); }, [draft, onChange]);
 
@@ -365,6 +389,16 @@ export function DataSourcePicker({ open, reportId, value, onChange, onDismiss, s
     setGalleryOpen(false);
     onChange(ds);
   }, [onChange]);
+
+  // ── WAVE 2 — "Pick a Loom item": the shared picker resolves the item to its
+  // Azure-native backend and hands us a ready-to-persist seed. We hold it as the
+  // draft (Confirm persists it via the SAME onChange → parent PUT /data-source);
+  // an item that resolves but isn't report-bindable (e.g. eventhouse) carries a
+  // reportGate the shared control already renders, and leaves draft null.
+  const onLoomResolved = useCallback((res: LoomItemResolution) => {
+    setLoomSelectedId(res.itemId);
+    setLoomResolved(res.dataSource ?? null);
+  }, []);
 
   // ── WAVE 2 — bound-source signals + storage/Navigator wiring ────────────────
   // A source is "bound" for W2 once it is fully specified — the persisted `value`,
@@ -481,10 +515,30 @@ export function DataSourcePicker({ open, reportId, value, onChange, onDismiss, s
             <Badge appearance="filled" color="brand" size="small">Connectors</Badge>
           </button>
 
+          {/* PRIMARY — Pick a Loom item (W2): resolve any PBI_SOURCEABLE Loom
+              item to its Azure-native backend and seed this report — the user
+              works in Loom items, never Azure coordinates. */}
+          <button
+            type="button"
+            className={mergeClasses(styles.getDataRow, kind === 'loom-item' && styles.getDataRowActive)}
+            onClick={() => setKind('loom-item')}
+            aria-label="Pick a Loom item as the data source"
+          >
+            <span className={styles.optionIcon} aria-hidden><DatabaseSearch20Regular /></span>
+            <span className={styles.optionText}>
+              <Subtitle2>Pick a Loom item</Subtitle2>
+              <Caption1 className={styles.muted}>
+                Source from a lakehouse, warehouse, eventhouse, KQL database, mirrored database, dataset,
+                semantic model, or data product — Loom resolves its Azure backend for you.
+              </Caption1>
+            </span>
+            <Badge appearance="filled" color="brand" size="small">Loom item</Badge>
+          </button>
+
           <Caption1 className={styles.muted}>Or build from an existing Loom model, a query, or Analysis Services:</Caption1>
 
           <RadioGroup
-            value={isGetDataKind(kind) ? '' : kind}
+            value={isGetDataKind(kind) || kind === 'loom-item' ? '' : kind}
             onChange={(_e, d) => setKind(d.value as ReportDataSourceKind)}
             aria-label="Data source kind"
           >
@@ -507,6 +561,18 @@ export function DataSourcePicker({ open, reportId, value, onChange, onDismiss, s
           </RadioGroup>
 
           <Divider />
+
+          {/* (g) WAVE 2 — Pick a Loom item ──────────────────────────────────── */}
+          {kind === 'loom-item' && (
+            <div className={styles.panel}>
+              <LoomItemSourcePicker
+                purpose="report"
+                selectedItemId={loomSelectedId || undefined}
+                onResolved={onLoomResolved}
+                onCleared={() => { setLoomResolved(null); setLoomSelectedId(''); }}
+              />
+            </div>
+          )}
 
           {/* (d) Get data — connection / file-upload / adls-file ───────────── */}
           {isGetDataKind(kind) && (

@@ -42,6 +42,11 @@ import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { PowerBIEmbedFrame } from '@/lib/components/embed/powerbi-embed';
 import { type ReportLite } from './report-editor';
 import { usePowerBiWorkspaces, WorkspacePicker } from './workspace-picker';
+// WAVE 2 — "Pick a Loom item" source: resolves a PBI_SOURCEABLE Loom item to its
+// Azure-native Synapse server + database and fills this data source — no
+// coordinates to type. Reused verbatim from the report designer.
+import { LoomItemSourcePicker } from '../report/loom-item-source-picker';
+import { CONNECTOR_TO_RDL } from '../report/pbi-binding';
 import { useStyles } from './styles';
 
 export function PaginatedReportEditor({ item, id }: { item: FabricItemType; id: string }) {
@@ -702,6 +707,17 @@ function DataSourceDialog({ open, editing, onClose, onSave, onDelete }: {
           <DialogTitle>{editing ? 'Edit data source' : 'Add data source'}</DialogTitle>
           <DialogContent>
             <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM}}>
+              {/* WAVE 2 — pick a Loom item to fill the coordinates automatically. */}
+              <LoomItemSourcePicker
+                purpose="paginated"
+                onResolved={(res) => {
+                  if (!name.trim()) setName(res.label);
+                  const t = CONNECTOR_TO_RDL[res.binding.connector];
+                  if (t) setType(t);
+                  setServer(res.binding.server || '');
+                  setDatabase(res.binding.database || '');
+                }}
+              />
               <Field label="Name" required><Input value={name} onChange={(_, d) => setName(d.value)} /></Field>
               <Field label="Type">
                 <Dropdown selectedOptions={[type]} value={type} onOptionSelect={(_, d) => setType((d.optionValue as RdlDataSourceType) || 'AzureSQL')}>
