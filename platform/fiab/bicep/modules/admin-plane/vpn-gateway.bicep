@@ -69,6 +69,18 @@ resource vpnPip 'Microsoft.Network/publicIPAddresses@2024-05-01' = {
 // correct across clouds.
 var azureVpnClientAppId = (boundary == 'GCC-High' || boundary == 'IL5') ? 'c632b3df-fb67-4d84-bdcf-b95ad541b5c8' : '41b23e61-6c1e-4545-b367-cd054e0ed4b4'
 
+// Normalize the sovereign login endpoint to EXACTLY one trailing slash before
+// appending the tenant GUID. ARM's environment().authentication.loginEndpoint
+// includes a trailing slash on Azure Public (https://login.microsoftonline.com/)
+// but NOT on Azure Government (https://login.microsoftonline.us) — a live
+// usgovvirginia deploy (2026-07-11) failed preflight with
+// VpnClientConfigurationAadTenantIsNotValid ("AAD Tenant must contain a valid
+// AAD Directory ID (Guid)") because the un-slashed Gov endpoint glued straight
+// onto the GUID (…microsoftonline.us03f141f3-…), leaving no parseable Directory
+// ID. Trimming then re-appending one slash yields …/<guid> in every cloud.
+var loginEndpointRaw = environment().authentication.loginEndpoint
+var aadTenantUrl = '${loginEndpointRaw}${endsWith(loginEndpointRaw, '/') ? '' : '/'}${tenantId}'
+
 resource vpnGateway 'Microsoft.Network/virtualNetworkGateways@2024-05-01' = {
   name: 'vgw-loom-${location}'
   location: location
@@ -98,7 +110,7 @@ resource vpnGateway 'Microsoft.Network/virtualNetworkGateways@2024-05-01' = {
       }
       vpnClientProtocols: ['OpenVPN']
       vpnAuthenticationTypes: ['AAD']
-      aadTenant: '${environment().authentication.loginEndpoint}${tenantId}'
+      aadTenant: aadTenantUrl
       aadAudience: azureVpnClientAppId
       aadIssuer: 'https://sts.windows.net/${tenantId}/'
     }
