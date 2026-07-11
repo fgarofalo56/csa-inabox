@@ -69,7 +69,13 @@ param deploymentMode = 'multi-sub'   // most federal customers use multi-sub
 param topology = 'tenant'
 
 // Compute (Gov differences)
-param containerPlatform = 'aks'           // Container Apps not at IL4+
+// containerApps: Microsoft.App (Azure Container Apps) is LIVE-verified GA in the
+// USGov regions (US Gov Virginia / Arizona / Texas) this param targets — see
+// docs/fiab/gov-parity-audit.md GOV-3. The prior 'aks' selection assumed ACA was
+// unavailable in Gov; that assumption is superseded. The AKS path is left intact
+// for boundaries/regions that require it (flip this back + register the AKS
+// EnableAPIServerVnetIntegrationPreview feature to use it).
+param containerPlatform = 'containerApps' // ACA GA in USGov Virginia/Arizona/Texas (GOV-3)
 param functionsHostSku = 'EP1'            // Flex not in Gov
 param apimSku = 'Premium'                 // v2 not confirmed in Gov
 
@@ -80,17 +86,15 @@ param catalogPrimary = 'purview'          // UC managed not yet in Gov
 param agentOrchestrator = 'maf'           // Microsoft Agent Framework + AOAI direct
 param foundryPortalEnabled = false        // Foundry portal NOT at IL4
 // MAF orchestration tier (loom-copilot-maf) — the Gov AOAI-direct copilot
-// backend. It deploys as an Azure Container App. Per the Microsoft Learn Azure
-// Government services-by-audit-scope table (last updated Feb 2026), Azure
-// Container Apps is authorized only at FedRAMP High / DoD IL2 — NOT at DoD IL4.
-// GCC-High maps to IL4, so it runs on the AKS compute path (containerPlatform
-// below), where the MAF Container App cannot deploy. This flag is set FALSE
-// accordingly: the Console copilot-orchestrator uses Gov AOAI-direct, which is
-// the real, working backend. Setting it true here would advertise a tier that
-// can never activate on this compute platform (a silent no-op), so it is
-// honestly false. The flag is still threaded through main.bicep
-// (test_main_bicep_threads_copilot_maf_enabled) so the tier activates
-// automatically once an AKS-workload deployment for the apps exists.
+// backend. It deploys as an Azure Container App. Now that this boundary runs on
+// the Container Apps compute path (containerPlatform above — ACA is GA in the
+// USGov regions, GOV-3), the MAF tier CAN activate here. It is kept FALSE as the
+// conservative default: the Console copilot-orchestrator uses Gov AOAI-direct,
+// which is the real, working backend, and enabling MAF requires the
+// loom-copilot-maf image in ACR first. Flip to true (with the image pushed) to
+// stand up the dedicated MAF tier. The flag is threaded through main.bicep
+// (test_main_bicep_threads_copilot_maf_enabled); its activation gate additionally
+// requires containerPlatform==containerApps + deployAppsEnabled.
 // See docs/fiab/runbooks/il5-gcch-fullstack-verification.md (gap #2/#3).
 param copilotMafEnabled = false
 
