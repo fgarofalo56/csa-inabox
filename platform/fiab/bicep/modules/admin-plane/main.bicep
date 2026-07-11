@@ -2241,6 +2241,7 @@ module apim 'apim.bicep' = if (apimEnabled && empty(existingApimName)) {
   name: 'apim'
   params: {
     location: location
+    boundary: boundary
     sku: apimSku
     publisherEmail: 'csa-loom-ops@example.com'   // override in .bicepparam
     apimSubnetId: network.outputs.apimSubnetId
