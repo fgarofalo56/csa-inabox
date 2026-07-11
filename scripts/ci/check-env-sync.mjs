@@ -191,6 +191,11 @@ const ALLOWLIST = new Set([
   'LOOM_AOAI_VIA_APIM',             // opt-in: route AOAI through the APIM gateway (default false → direct)
   'LOOM_AOAI_APIM_URL',             // opt-in: APIM gateway URL (emitted only when the AI-gateway is authored)
   'LOOM_AOAI_APIM_SUBSCRIPTION_KEY',// opt-in APIM subscription key for the AI-gateway (secret; MI bearer works without it)
+  // Model-strategy M5 — cloud-aware best-available model resolution. Opt-OUT
+  // kill switch (default ON): the runtime degrades a configured-but-undeployed
+  // model down to a supported one (per model-availability-matrix.ts) against the
+  // account's live deployment list. Cached + non-fatal; never blocks a chat.
+  'LOOM_AOAI_AVAILABILITY_CHECK',   // opt-out: disable the M5 best-available-model fallback (default ON → configured-but-missing model degrades gracefully instead of 404ing)
   'LOOM_AZURE_SQL_DEFAULT_DB',      // sample-DB default (code default)
   'LOOM_AZURE_SQL_DEFAULT_SERVER',  // sample-DB default (code default)
   'LOOM_BI_RENDER_FUNCTION_NAME',   // derived report-render function name
