@@ -220,12 +220,54 @@ resource subnetNsgAttach 'Microsoft.Network/virtualNetworks/subnets@2024-05-01' 
   )
 }]
 
+// APIM-in-VNet mandatory inbound NSG rules. An APIM service injected into a VNet
+// (virtualNetworkType:'Internal') CANNOT provision unless its subnet NSG allows the
+// control-plane management endpoint on TCP 3443 from the `ApiManagement` service tag
+// — otherwise the service PUT fails with `ManagementApiRequestFailed: Failed to
+// connect to management endpoint <name>.management.azure-api.us:3443 ... in a Virtual
+// Network` (seen live in usgovvirginia). The generic DenyInternetInbound (priority
+// 4000) would otherwise drop this traffic because the ApiManagement service tag
+// resolves to public IPs, so these higher-priority Allow rules are required.
+// This is a real APIM-in-VNet requirement for BOTH clouds (not Gov-specific), so it
+// is applied unconditionally on the snet-apim NSG. 6390 from AzureLoadBalancer is the
+// stv2 infrastructure load-balancer health probe (explicit per Learn, though the
+// default AllowAzureLoadBalancerInbound rule also covers it).
+// Ref: https://aka.ms/apim-vnet-common-issues / learn.microsoft.com/azure/api-management/api-management-using-with-internal-vnet
+var apimNsgRules = [
+  {
+    name: 'AllowApimManagementInbound'
+    properties: {
+      priority: 200
+      access: 'Allow'
+      direction: 'Inbound'
+      protocol: 'Tcp'
+      sourceAddressPrefix: 'ApiManagement'
+      sourcePortRange: '*'
+      destinationAddressPrefix: 'VirtualNetwork'
+      destinationPortRange: '3443'
+    }
+  }
+  {
+    name: 'AllowApimLoadBalancerInbound'
+    properties: {
+      priority: 210
+      access: 'Allow'
+      direction: 'Inbound'
+      protocol: 'Tcp'
+      sourceAddressPrefix: 'AzureLoadBalancer'
+      sourcePortRange: '*'
+      destinationAddressPrefix: 'VirtualNetwork'
+      destinationPortRange: '6390'
+    }
+  }
+]
+
 resource nsgs 'Microsoft.Network/networkSecurityGroups@2024-05-01' = [for s in nsgSubnets: {
   name: 'nsg-${s.name}'
   location: location
   tags: complianceTags
   properties: {
-    securityRules: [
+    securityRules: concat([
       {
         name: 'DenyInternetInbound'
         properties: {
@@ -252,7 +294,7 @@ resource nsgs 'Microsoft.Network/networkSecurityGroups@2024-05-01' = [for s in n
           destinationPortRange: '*'
         }
       }
-    ]
+    ], s.name == 'snet-apim' ? apimNsgRules : [])
   }
 }]
 

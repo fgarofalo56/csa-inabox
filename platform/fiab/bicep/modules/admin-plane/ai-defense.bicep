@@ -149,6 +149,20 @@ resource playbook 'Microsoft.Logic/workflows@2019-05-01' = if (!defenderForAIEna
 // Sentinel automation rule — fires the playbook on AI rule incidents
 // =====================================================================
 
+// The IncidentRelatedAnalyticRuleIds condition matches the incident's
+// relatedAnalyticRuleIds, which Sentinel exposes as FULL analytic-rule RESOURCE
+// IDs — not friendly names. Supplying the bare names ('csa-loom-ai-prompt-injection')
+// makes the automationRules PUT fail preflight with
+// `BadRequest: Invalid Analytic rule id 'csa-loom-ai-prompt-injection'` (seen live
+// in usgovvirginia; this path only runs where native Defender for AI is absent, i.e.
+// !defenderForAIEnabled = Gov, so Commercial — defenderForAIEnabled=true — never
+// deploys it and is byte-identical). Build the full extension-resource IDs of the
+// two scheduled analytics rules created in monitoring.bicep on the same workspace.
+// Ref: learn.microsoft.com — "relatedAnalyticRuleIds: List of resource ids of
+// Analytic rules related to the incident".
+var promptInjectionRuleId = '${law.id}/providers/Microsoft.SecurityInsights/alertRules/csa-loom-ai-prompt-injection'
+var abuseQuotaRuleId = '${law.id}/providers/Microsoft.SecurityInsights/alertRules/csa-loom-ai-abuse-quota-spike'
+
 resource automationRule 'Microsoft.SecurityInsights/automationRules@2024-09-01' = if (!defenderForAIEnabled) {
   scope: law
   name: 'csa-loom-ai-automation'
@@ -165,7 +179,7 @@ resource automationRule 'Microsoft.SecurityInsights/automationRules@2024-09-01' 
           conditionProperties: {
             propertyName: 'IncidentRelatedAnalyticRuleIds'
             operator: 'Contains'
-            propertyValues: ['csa-loom-ai-prompt-injection', 'csa-loom-ai-abuse-quota-spike']
+            propertyValues: [promptInjectionRuleId, abuseQuotaRuleId]
           }
         }
       ]
