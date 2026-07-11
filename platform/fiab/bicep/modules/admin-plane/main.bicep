@@ -1748,6 +1748,16 @@ var sessionSecretKvBacked = (msalAppRegProvisioned || loomMsalAppRegEnabled) && 
 // DLZ cosmos.bicep: PE + disableLocalAuth + UAMI control/data-plane grants.
 module consoleCosmos 'loom-console-cosmos.bicep' = if (deployConsoleCosmos && !empty(loomCosmosAccount)) {
   name: 'loom-console-cosmos'
+  // HUB PE-writer serialization (see keyvault → consoleCosmos → registry →
+  // aiSearch → aiFoundry → agentFoundry → catalog chain). Every one of these
+  // modules PUTs a private endpoint into the SHARED hub snet-private-endpoints;
+  // a PE create mutates the subnet (→ hub VNet 'Updating'), so running them in
+  // parallel makes a sibling bail with "Virtual network in NRP is not in the
+  // succeeded provisioning state" (the repeated Gov usgovvirginia symptom).
+  // Cumulative dependsOn on all prior writers gives a total order that survives
+  // any of them being conditionally off (a dependsOn on a not-deployed module is
+  // a no-op, so no gap re-opens the race). Ordering-only — same resources.
+  dependsOn: [ keyvault ]
   params: {
     location: location
     accountName: loomCosmosAccount
@@ -1766,6 +1776,8 @@ module consoleCosmos 'loom-console-cosmos.bicep' = if (deployConsoleCosmos && !e
 
 module registry 'registry.bicep' = {
   name: 'registry'
+  // HUB PE-writer serialization chain (see consoleCosmos header).
+  dependsOn: [ keyvault, consoleCosmos ]
   params: {
     location: location
     privateEndpointSubnetId: network.outputs.privateEndpointsSubnetId
@@ -1949,6 +1961,8 @@ resource aiSearchDebugStorage 'Microsoft.Storage/storageAccounts@2024-01-01' = i
 
 module aiSearch 'ai-search.bicep' = if (aiSearchEnabled && empty(existingAiSearchService)) {
   name: 'ai-search'
+  // HUB PE-writer serialization chain (see consoleCosmos header).
+  dependsOn: [ keyvault, consoleCosmos, registry ]
   params: {
     location: location
     privateEndpointSubnetId: network.outputs.privateEndpointsSubnetId
@@ -2003,6 +2017,10 @@ resource foundryHubStorage 'Microsoft.Storage/storageAccounts@2024-01-01' = if (
 
 module aiFoundry 'ai-foundry.bicep' = if (aiFoundryEnabled && empty(existingFoundryAccountName)) {
   name: 'ai-foundry'
+  // HUB PE-writer serialization chain (see consoleCosmos header). aiFoundry
+  // already references keyvault/registry/aiSearch outputs; the explicit list
+  // keeps the total order intact when any prior writer is conditionally off.
+  dependsOn: [ keyvault, consoleCosmos, registry, aiSearch ]
   params: {
     location: location
     boundary: boundary
@@ -2076,6 +2094,11 @@ module contentSafety '../deploy-planner/cognitive-account.bicep' = if (contentSa
 
 module agentFoundry '../ai/foundry-project.bicep' = if (agentFoundryEnabled) {
   name: 'agent-foundry'
+  // HUB PE-writer serialization chain (see consoleCosmos header). On non-
+  // Commercial boundaries this module PUTs a PE into the hub PE subnet (the Gov
+  // path where the race bites); on Commercial it passes no subnet, so the
+  // dependsOn is a harmless ordering hint.
+  dependsOn: [ keyvault, consoleCosmos, registry, aiSearch, aiFoundry ]
   params: {
     location: location
     // Sovereign / private-only boundaries keep the account off the public net.
@@ -2408,6 +2431,10 @@ module workspaceMonitor 'workspace-monitor.bicep' = if (workspaceMonitorEnabled 
 
 module catalog 'catalog.bicep' = {
   name: 'catalog'
+  // HUB PE-writer serialization chain (see consoleCosmos header). catalog PUTs
+  // the two Purview PEs (account + portal) into the hub PE subnet and is the
+  // tail of the chain, so it only starts once every other hub PE writer settles.
+  dependsOn: [ keyvault, consoleCosmos, registry, aiSearch, aiFoundry, agentFoundry ]
   params: {
     location: location
     boundary: boundary

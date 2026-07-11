@@ -236,6 +236,11 @@ resource pe2 'Microsoft.Network/privateEndpoints@2024-05-01' = {
   name: 'pe-${vectorAccountName}'
   location: location
   tags: complianceTags
+  // Serialize after the Gremlin PE: both land in the same PE subnet and each PE
+  // create mutates the subnet (→ VNet 'Updating'). PUT'ing them in parallel
+  // makes one bail with "Virtual network ... is not in the succeeded
+  // provisioning state". Ordering-only; both PEs still deploy.
+  dependsOn: [ pe ]
   properties: {
     subnet: { id: privateEndpointSubnetId }
     privateLinkServiceConnections: [{

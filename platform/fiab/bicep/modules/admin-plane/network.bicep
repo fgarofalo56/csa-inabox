@@ -271,11 +271,20 @@ resource bastionPip 'Microsoft.Network/publicIPAddresses@2024-05-01' = {
   }
 }
 
+// HUB-VNET consumer serialization. Bastion, Firewall and the DNS resolver each
+// deploy INTO a hub subnet (AzureBastionSubnet / AzureFirewallSubnet /
+// snet-dns-inbound), which is a VNet-level write that flips the hub VNet to
+// 'Updating'. Running them in parallel with each other — or with the batched
+// subnetNsgAttach subnet patches above — makes one bail with "Virtual network
+// in NRP is not in the succeeded provisioning state". Chaining them
+// (subnetNsgAttach → bastion → firewall → dnsResolver → inbound) means only one
+// hub-VNet write is in flight at a time. Ordering-only; same resources.
 resource bastion 'Microsoft.Network/bastionHosts@2024-05-01' = {
   name: 'bastion-csa-loom-${location}'
   location: location
   tags: complianceTags
   sku: { name: 'Standard' }
+  dependsOn: [ subnetNsgAttach ]
   properties: {
     ipConfigurations: [
       {
@@ -350,7 +359,10 @@ resource firewall 'Microsoft.Network/azureFirewalls@2024-05-01' = if (firewallEn
   name: 'fw-csa-loom-${location}'
   location: location
   tags: complianceTags
-  dependsOn: firewallPolicyReconcile ? [] : [ firewallPolicy ]
+  // Keep the policy-then-firewall ordering (fresh deploy) AND serialize the
+  // hub-VNet write after the subnet-NSG attach + Bastion (see the bastion
+  // header) so no two hub-subnet writers run concurrently.
+  dependsOn: firewallPolicyReconcile ? [ subnetNsgAttach, bastion ] : [ firewallPolicy, subnetNsgAttach, bastion ]
   properties: {
     sku: {
       name: 'AZFW_VNet'
@@ -553,6 +565,10 @@ resource dnsResolver 'Microsoft.Network/dnsResolvers@2022-07-01' = {
   name: 'dnspr-loom-${location}'
   location: location
   tags: complianceTags
+  // Tail of the hub-VNet writer chain (see the bastion header): the resolver
+  // links to the hub VNet and its inbound endpoint writes into snet-dns-inbound,
+  // so it runs only after the subnet-NSG attach + Bastion + Firewall settle.
+  dependsOn: [ subnetNsgAttach, bastion, firewall ]
   properties: {
     virtualNetwork: { id: hubVnet.id }
   }

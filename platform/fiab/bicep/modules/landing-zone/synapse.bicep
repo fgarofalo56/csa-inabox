@@ -767,6 +767,11 @@ resource peSqlOnDemand 'Microsoft.Network/privateEndpoints@2024-03-01' = if (!em
   name: 'pe-syn-loom-${domainName}-sqlondemand'
   location: location
   tags: complianceTags
+  // Serialize the three Synapse PEs (Sql → SqlOnDemand → Dev) into the shared PE
+  // subnet: each PE create mutates the subnet (→ VNet 'Updating'), so PUT'ing
+  // them in parallel makes a sibling bail with "Virtual network ... is not in
+  // the succeeded provisioning state". Ordering-only; all three still deploy.
+  dependsOn: [ peSql ]
   properties: {
     subnet: { id: privateEndpointSubnetId }
     privateLinkServiceConnections: [
@@ -796,6 +801,8 @@ resource peDev 'Microsoft.Network/privateEndpoints@2024-03-01' = if (!empty(priv
   name: 'pe-syn-loom-${domainName}-dev'
   location: location
   tags: complianceTags
+  // Last link in the Sql → SqlOnDemand → Dev serialization chain (see peSqlOnDemand).
+  dependsOn: [ peSqlOnDemand ]
   properties: {
     subnet: { id: privateEndpointSubnetId }
     privateLinkServiceConnections: [
