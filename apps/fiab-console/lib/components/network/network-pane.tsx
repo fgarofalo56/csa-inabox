@@ -243,6 +243,135 @@ interface VpnGw {
   vpnClientProtocols?: string[]; reachableRanges?: string[];
 }
 
+// ── Power BI VM-based ON-PREM data gateway (Loom-deployed, DEFAULT) ──
+interface PbiVmGatewayStatus {
+  found: boolean; vmName?: string; resourceGroup?: string; subscriptionId?: string;
+  provisioningState?: string; powerState?: string; running: boolean;
+  gatewayMode: 'auto' | 'vm' | 'vnet'; capacityBound: boolean;
+  recommendedMode: 'vm' | 'vnet'; recoveryKeySecretName: string; registrationNote: string;
+}
+interface PbiGwApiResp { ok: boolean; status?: PbiVmGatewayStatus; error?: string; gate?: { reason?: string; remediation?: string }; }
+
+/**
+ * Power BI on-premises data gateway status card. UNLIKE the managed VNet gateway
+ * (a Fabric tenant capability Loom can't create), Loom DEPLOYS this VM gateway by
+ * default (admin-plane/pbi-vm-data-gateway.bicep) so Power BI reaches Loom's
+ * private-endpoint data sources with no public route, using Pro licenses. This
+ * card reads /api/network/pbi-gateway (Reader-only ARM) and shows the REAL VM
+ * status (deployed + running), the auto-upgrade recommendation (prefer the managed
+ * VNet gateway once a Fabric/Premium capacity is bound), and the ONE honest
+ * manual step: register-to-tenant needs a Power BI admin sign-in Loom can't do.
+ */
+function PbiVmGatewayCard() {
+  const [resp, setResp] = useState<PbiGwApiResp | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const r = await clientFetch('/api/network/pbi-gateway');
+        const j = (await r.json()) as PbiGwApiResp;
+        if (alive) setResp(j);
+      } catch (e: any) {
+        if (alive) setResp({ ok: false, error: e?.message || String(e) });
+      } finally { if (alive) setLoading(false); }
+    })();
+    return () => { alive = false; };
+  }, []);
+
+  const s = resp?.status;
+  const vmBadge = () => {
+    if (!s?.found) return <Badge appearance="tint" color="warning" icon={<Warning16Filled />}>Not deployed</Badge>;
+    if (s.running) return <Badge appearance="tint" color="success" icon={<Checkmark16Filled />}>VM running</Badge>;
+    return <Badge appearance="tint" color="warning" icon={<Warning16Filled />}>{s.powerState || 'stopped'}</Badge>;
+  };
+
+  return (
+    <div style={card}>
+      <div style={head}>
+        <PlugConnected24Regular />
+        <Subtitle2>Power BI data gateway (VM on-premises — default)</Subtitle2>
+        <Badge appearance="outline" color="brand" style={{ marginLeft: 'auto' }}>Loom-deployed</Badge>
+      </div>
+
+      <MessageBar intent="success" style={{ marginBottom: tokens.spacingVerticalM }}>
+        <MessageBarBody>
+          <MessageBarTitle>Private connectivity for Power BI — no public route.</MessageBarTitle>
+          Loom deploys a small VM in the hub VNet running the <strong>standard on-premises data gateway</strong>,
+          so Power BI reaches Loom&rsquo;s private-endpoint sources (Synapse, SQL, ADLS, ADX) over the private
+          plane. It works with <strong>Power BI Pro</strong> licenses (no Premium/Fabric capacity). When a
+          Fabric/Premium capacity is bound, Loom prefers the managed <strong>VNet data gateway</strong> below (auto-upgrade).
+        </MessageBarBody>
+      </MessageBar>
+
+      {loading && <Spinner label="Reading Power BI gateway status…" />}
+
+      {!loading && resp && !resp.ok && (
+        <MessageBar intent="warning">
+          <MessageBarBody>
+            <MessageBarTitle>Couldn&rsquo;t read the gateway VM status</MessageBarTitle>
+            {resp.gate?.remediation || resp.error}
+          </MessageBarBody>
+        </MessageBar>
+      )}
+
+      {!loading && s && (
+        <>
+          <Table size="small" aria-label="Power BI VM gateway status">
+            <TableBody>
+              <TableRow>
+                <TableCell><Body1Strong>Gateway VM</Body1Strong></TableCell>
+                <TableCell>{vmBadge()} {s.found ? <code style={{ marginLeft: tokens.spacingHorizontalS }}>{s.vmName}</code> : ''}</TableCell>
+              </TableRow>
+              <TableRow>
+                <TableCell><Body1Strong>Mode</Body1Strong></TableCell>
+                <TableCell>
+                  <Badge appearance="tint" color="brand">{s.gatewayMode}</Badge>
+                  <Caption1 style={{ marginLeft: tokens.spacingHorizontalS, color: tokens.colorNeutralForeground3 }}>
+                    Recommended now: <strong>{s.recommendedMode === 'vnet' ? 'managed VNet data gateway' : 'VM on-prem gateway'}</strong>
+                  </Caption1>
+                </TableCell>
+              </TableRow>
+              <TableRow>
+                <TableCell><Body1Strong>Fabric/Premium capacity</Body1Strong></TableCell>
+                <TableCell>
+                  {s.capacityBound
+                    ? <Badge appearance="tint" color="success" icon={<Checkmark16Filled />}>Bound — VNet gateway available</Badge>
+                    : <Badge appearance="tint" color="informative" icon={<Info16Filled />}>Not bound — VM gateway is the default</Badge>}
+                </TableCell>
+              </TableRow>
+              <TableRow>
+                <TableCell><Body1Strong>Register to tenant</Body1Strong></TableCell>
+                <TableCell>
+                  <Badge appearance="tint" color="informative" icon={<Info16Filled />}>Power BI admin action</Badge>
+                  <Caption1 block style={{ marginTop: tokens.spacingVerticalXXS, color: tokens.colorNeutralForeground3 }}>
+                    {s.registrationNote}
+                  </Caption1>
+                </TableCell>
+              </TableRow>
+            </TableBody>
+          </Table>
+
+          {s.capacityBound && s.recommendedMode === 'vnet' && (
+            <MessageBar intent="info" style={{ marginTop: tokens.spacingVerticalM }}>
+              <MessageBarBody>
+                <MessageBarTitle>Upgrade available — managed VNet data gateway</MessageBarTitle>
+                A Fabric/Premium capacity is bound, so you can move to the fully-managed VNet data gateway (no VM to
+                run). See the prerequisites and create steps in the card below.
+                {' '}
+                <Link href="https://learn.microsoft.com/data-integration/vnet/create-data-gateways" target="_blank" rel="noreferrer">
+                  Create a VNet data gateway
+                </Link>
+              </MessageBarBody>
+            </MessageBar>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 /** Point-to-site VPN access — download the client profile + setup steps so an
  *  admin can reach the private-by-default estate (private endpoints, Internal
  *  APIM, firewall'd services) from their workstation. Pairs with the hosts-file
@@ -669,7 +798,10 @@ export function NetworkPane() {
       {/* 5 · Point-to-site VPN access (download + setup + reaches the private estate) */}
       <VpnAccessCard />
 
-      {/* 6 · VNet data gateway (Fabric tenant capability) — honest gate */}
+      {/* 6 · Power BI data gateway (VM on-prem — Loom-deployed DEFAULT) — real status */}
+      <PbiVmGatewayCard />
+
+      {/* 7 · VNet data gateway (managed, Fabric tenant capability — auto-upgrade target) — honest gate */}
       <VnetGatewayCard />
 
       <Caption1>

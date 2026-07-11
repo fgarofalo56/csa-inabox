@@ -198,6 +198,7 @@ const ALLOWLIST = new Set([
   'LOOM_DATABRICKS_SUBSCRIPTIONS',  // opt-in databricks discovery scope
   'LOOM_DBT_RUNNER_AUDIENCE',       // opt-in dbt runner audience
   'LOOM_DEFAULT_POWERBI_WORKSPACE', // opt-in Power BI workspace (Fabric-family, opt-in)
+  'LOOM_PBI_CAPACITY_ID',           // opt-in Fabric/Premium capacity id (Weave→Power BI D2); unset default = the VM on-prem data gateway is used. When set, the Network pane recommends the managed VNet data gateway auto-upgrade (LOOM_PBI_GATEWAY_MODE=auto). Operator provides per D3.
   'LOOM_DELTA_SHARING_VOLUME',      // opt-in delta-sharing volume
   'LOOM_DEVCENTER_CATALOG',         // opt-in DevCenter catalog
   'LOOM_DEVCENTER_ENV_TYPE',        // opt-in DevCenter env type
