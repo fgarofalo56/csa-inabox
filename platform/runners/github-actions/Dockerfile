@@ -117,13 +117,13 @@ RUN set -euo pipefail; \
     chown -R runner:runner /home/runner/actions-runner
 
 # ---------------------------------------------------------------------------
-# OPTIONAL — Playwright layer (UAT). Uncomment to bake browsers + OS deps into
-# the runner image so `pnpm uat` / Playwright specs run without per-job
-# `npx playwright install`. Adds ~600MB; leave commented unless this runner is
-# the UAT runner. Pin the version to the repo's @playwright/test.
-# USER root
-# RUN set -euo pipefail; \
-#     npx --yes playwright@1.48.0 install --with-deps chromium
+# Playwright layer (UAT) — browsers + OS deps baked into the runner image so
+# `loom-ui-verify` / Playwright specs run without a per-job `npx playwright
+# install` (the in-VNet runner's egress is firewall-restricted, so the runtime
+# CDN download fails). Adds ~600MB. Pinned to the repo's @playwright/test.
+USER root
+RUN set -euo pipefail; \
+    npx --yes playwright@1.48.0 install --with-deps chromium
 # ---------------------------------------------------------------------------
 
 COPY --chown=runner:runner entrypoint.sh /home/runner/actions-runner/entrypoint.sh
