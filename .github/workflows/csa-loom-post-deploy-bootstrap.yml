@@ -519,6 +519,44 @@ jobs:
             bash scripts/csa-loom/grant-console-rbac.sh \
             || echo "::warning::Some Console UAMI RBAC grants failed — the deploy SP needs Owner / User Access Administrator on the subscription."
 
+      - name: Grant Microsoft Sentinel service (Automation Contributor) on the admin RG — Gov AI-defense auto-run playbook
+        # GOV-ONLY (GCC-High / IL5, where defenderForAIEnabled=false). ai-defense.bicep
+        # deploys the Sentinel automation rule whose RunPlaybook action auto-runs the
+        # AI-alert playbook (la-csa-loom-ai-alert-*) on AI-rule incidents. Sentinel runs
+        # incident-triggered playbooks under a dedicated service account — the first-party
+        # "Azure Security Insights" app (appId 98785600-1bb7-4fb9-b9fa-19afe2c8a360). That
+        # account must hold the "Microsoft Sentinel Automation Contributor" role
+        # (fixed GUID f4c81013-99ee-4d62-a7ee-b3f1f648599a) on the resource group where the
+        # playbook resides (the admin RG) for the automation rule to actually fire the
+        # playbook. This was a temp deploy-script pre-step; making it a durable, idempotent
+        # bootstrap step so a clean push-button Gov deploy grants it automatically.
+        # Ref: https://learn.microsoft.com/azure/sentinel/automation/run-playbooks#prerequisites
+        if: ${{ inputs.boundary == 'GCC-High' || inputs.boundary == 'IL5' }}
+        run: |
+          set -uo pipefail
+          SENTINEL_APP_ID="98785600-1bb7-4fb9-b9fa-19afe2c8a360"
+          SENTINEL_AUTOMATION_CONTRIBUTOR="f4c81013-99ee-4d62-a7ee-b3f1f648599a"
+          ADMIN_RG_SCOPE="/subscriptions/$ADMIN_SUB/resourceGroups/$ADMIN_RG"
+          # Resolve the Azure Security Insights SP object (principal) id in this tenant.
+          SENTINEL_SP_OID=$(az ad sp show --id "$SENTINEL_APP_ID" --query id -o tsv 2>/dev/null || true)
+          if [ -z "${SENTINEL_SP_OID:-}" ] || [ "$SENTINEL_SP_OID" = "None" ]; then
+            echo "::notice::Azure Security Insights SP not yet present in tenant — creating it (best-effort)."
+            az ad sp create --id "$SENTINEL_APP_ID" -o none 2>/dev/null || true
+            SENTINEL_SP_OID=$(az ad sp show --id "$SENTINEL_APP_ID" --query id -o tsv 2>/dev/null || true)
+          fi
+          if [ -z "${SENTINEL_SP_OID:-}" ] || [ "$SENTINEL_SP_OID" = "None" ]; then
+            echo "::warning::Could not resolve the Azure Security Insights SP (appId $SENTINEL_APP_ID) — the AI-defense automation rule won't be able to run the playbook until this is granted. Onboard Microsoft Sentinel on the workspace, then re-run. See docs/fiab/compliance/defender-ai-workaround.md."
+            exit 0
+          fi
+          echo "Granting 'Microsoft Sentinel Automation Contributor' to Azure Security Insights ($SENTINEL_SP_OID) on $ADMIN_RG_SCOPE"
+          az role assignment create \
+            --assignee-object-id "$SENTINEL_SP_OID" \
+            --assignee-principal-type ServicePrincipal \
+            --role "$SENTINEL_AUTOMATION_CONTRIBUTOR" \
+            --scope "$ADMIN_RG_SCOPE" \
+            -o table 2>&1 | grep -v "already exists" \
+            || echo "::warning::Sentinel Automation Contributor grant failed — the deploy SP needs Owner/User Access Administrator on $ADMIN_RG. The AI-defense automation rule will not fire the playbook until this is applied (idempotent — safe to re-run)."
+
       - name: Grant Console UAMI Reader at tenant-root management group (Connections cross-sub discovery)
         # The Connections "add existing" dialog discovers Azure resources
         # (subscriptions, existing services) via Azure Resource Graph. Resource
