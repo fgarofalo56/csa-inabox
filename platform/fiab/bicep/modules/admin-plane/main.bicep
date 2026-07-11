@@ -887,6 +887,18 @@ var byoFoundrySub  = !empty(byoExisting.?foundrySub ?? '') ? byoExisting.foundry
 // correct (openai.azure.us in Gov, else openai.azure.com), matching the module
 // output expression so the existing path is wired identically to the new path.
 var byoFoundryEndpoint = !empty(existingFoundryAccountName) ? 'https://${existingFoundryAccountName}.${environment().suffixes.storage != 'core.windows.net' ? 'openai.azure.us' : 'openai.azure.com'}/' : ''
+
+// Model-strategy M4 — OPT-IN APIM AI-gateway controls, folded into loomBackends
+// to stay under the ARM 256-param ceiling. Both default OFF (direct-with-MI).
+var aoaiApimGatewayEnabled = (loomBackends.?aoaiGateway ?? '') == 'apim'
+var aoaiViaApim = toLower(loomBackends.?aoaiViaApim ?? '') == 'true'
+
+// The resolved AOAI/Foundry inference endpoint (same expression the
+// LOOM_AOAI_ENDPOINT env uses), reused to build the APIM AI-gateway backend pool.
+// The pool is populated ONLY when the AI-gateway is opted in on a Loom-provisioned
+// APIM and a real endpoint exists — an empty pool is never authored (no-vaporware).
+var loomAoaiEndpointValue = agentFoundryEnabled ? agentFoundry!.outputs.aoaiEndpoint : (!empty(existingFoundryAccountName) ? byoFoundryEndpoint : ((aiFoundryEnabled && empty(existingFoundryAccountName)) ? aiFoundry!.outputs.aoaiInferenceEndpoint : ''))
+var aoaiApimBackendEndpoints = (apimEnabled && empty(existingApimName) && aoaiApimGatewayEnabled && !empty(loomAoaiEndpointValue)) ? [ loomAoaiEndpointValue ] : []
 var byoFoundryChatDeployment = string(byoExisting.?foundryChatDeployment ?? '')
 var byoFoundryEmbedDeployment = string(byoExisting.?foundryEmbedDeployment ?? '')
 // Slate-app / Workshop-app Publish → Azure Static Web Apps target RG. The
@@ -1240,6 +1252,19 @@ param loomBackends object = {
   // every downstream LOOM_WAREHOUSE_BACKEND / LOOM_PIPELINE_BACKEND env is unchanged.
   warehouse: 'synapse-dedicated'
   pipeline: 'synapse'
+  // Model-strategy M4 — OPT-IN APIM AI-gateway for AOAI/Foundry traffic. Folded
+  // here (NOT standalone params) to stay under the ARM 256-param ceiling, the
+  // same trick as powerBiMcpClientId / warehouse / pipeline. Both default OFF —
+  // the console uses the direct-with-managed-identity AOAI path (byte-identical
+  // to pre-M4). Set aoaiGateway:'apim' to AUTHOR the GenAI gateway (backend pool +
+  // llm-token-limit + circuit-breaker + optional semantic cache) on the
+  // Loom-provisioned APIM; set aoaiViaApim:'true' to ROUTE the console through it
+  // (emits LOOM_AOAI_VIA_APIM=true). Separable so the gateway can be deployed +
+  // smoke-tested before flipping live traffic. In Gov, if the LLM policies are
+  // absent, the console falls back to direct-with-MI automatically. Default OFF
+  // pending operator confirmation of the APIM-vs-direct direction.
+  aoaiGateway: ''
+  aoaiViaApim: ''
   // Power BI remote MCP server (Copilot agentic / preview) — STRICTLY OPT-IN
   // (no-fabric-dependency). Folded here (not a standalone param) to stay under
   // the ARM 256-param ceiling. Empty client id = opt-out (Azure-native authoring
@@ -2295,6 +2320,10 @@ module apim 'apim.bicep' = if (apimEnabled && empty(existingApimName)) {
     consolePrincipalId: identity.outputs.uamiConsolePrincipalId
     skipRoleGrants: skipRoleGrants
     seedSampleApi: seedSampleApi
+    // Model-strategy M4 — OPT-IN AI-gateway (default OFF). Authored only when
+    // opted in AND a real AOAI endpoint exists; else the console uses direct-with-MI.
+    aoaiApimGatewayEnabled: aoaiApimGatewayEnabled
+    aoaiBackendEndpoints: aoaiApimBackendEndpoints
   }
 }
 // =====================================================================
@@ -4192,6 +4221,15 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // back to the standard (chat) deployment for every task class.
             { name: 'LOOM_AOAI_MINI_DEPLOYMENT',   value: agentFoundryEnabled ? agentFoundry!.outputs.miniDeployment : '' }
             { name: 'LOOM_AOAI_STRONG_DEPLOYMENT', value: agentFoundryEnabled ? agentFoundry!.outputs.strongDeployment : '' }
+            // Model-strategy M4 — OPT-IN APIM AI-gateway routing (default OFF /
+            // direct). LOOM_AOAI_VIA_APIM flips the console onto the APIM gateway;
+            // LOOM_AOAI_APIM_URL is the gateway URL, emitted ONLY when the AI-gateway
+            // was actually authored (aoaiApimGatewayEnabled + Loom-provisioned APIM).
+            // When the gateway is unauthored/unreachable the console falls back to the
+            // direct-with-managed-identity path automatically (Gov). No live AI behavior
+            // change until aoaiViaApim is flipped on.
+            { name: 'LOOM_AOAI_VIA_APIM',  value: string(aoaiViaApim) }
+            { name: 'LOOM_AOAI_APIM_URL',  value: (apimEnabled && empty(existingApimName) && aoaiApimGatewayEnabled) ? apim!.outputs.aoaiGatewayUrl : '' }
             // Inline code completion (ghost text) deployment. Explicit
             // loomAoaiCompletionDeployment wins; otherwise the Foundry module's
             // output (empty unless a dedicated slot was deployed). When empty the

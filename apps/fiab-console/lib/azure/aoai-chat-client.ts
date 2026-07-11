@@ -50,6 +50,7 @@ import {
 import { buildAoaiBody, type AoaiChatMessage, type AoaiResponseFormat } from './aoai-model-contract';
 import type { TenantCopilotConfig } from '../types/copilot-config';
 import { resolveTierForTurn, DEFAULT_TASK_TIER_MAP, type ModelTier, type TaskClass } from '@/lib/foundry/model-tier-router';
+import { resolveAoaiCallTarget, aoaiApimHeaders, type AoaiCallTarget } from './aoai-apim-gateway';
 
 // Re-export so unified-client callers can `instanceof`-check the 503 gate
 // without also importing the orchestrator.
@@ -64,8 +65,49 @@ function aoaiHost(endpoint: string): string {
 }
 
 /** Build the chat-completions data-plane URL for a resolved target. */
-function chatUrl(target: AoaiTarget): string {
+function chatUrl(target: AoaiTarget | AoaiCallTarget): string {
   return `${target.endpoint}/openai/deployments/${encodeURIComponent(target.deployment)}/chat/completions?api-version=${target.apiVersion}`;
+}
+
+/**
+ * HTTP-status error from an AOAI attempt (the response body has already been
+ * read). Distinguished from a transport/connection failure so the M4 APIM→direct
+ * fallback does NOT retry a real API error (a 400/404/5xx from the model), only a
+ * genuine "gateway unreachable" outage.
+ */
+class AoaiResponseError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'AoaiResponseError';
+  }
+}
+
+/**
+ * Run one AOAI attempt against a resolved call target, with automatic
+ * APIM→direct fallback (M4). `attempt(call)` performs the full send (including
+ * the unsupported-sampling-param retry) and returns the parsed result; it throws
+ * {@link AoaiResponseError} for HTTP-status errors and lets transport failures
+ * propagate as-is.
+ *
+ * When routing via APIM and the attempt fails with a TRANSPORT error (the Gov
+ * "gateway down / LLM policies absent" case), this retries ONCE against the
+ * direct AOAI endpoint with managed identity. When the flag is off
+ * (viaApim=false) it is a single pass-through — byte-identical to the pre-M4
+ * direct path (no extra try/catch on the hot path).
+ */
+async function withApimFallback<T>(
+  base: AoaiTarget,
+  attempt: (call: AoaiCallTarget) => Promise<T>,
+): Promise<T> {
+  const primary = resolveAoaiCallTarget(base);
+  if (!primary.viaApim) return attempt(primary);
+  try {
+    return await attempt(primary);
+  } catch (e) {
+    if (e instanceof AoaiResponseError) throw e; // a real API error, not a gateway outage
+    // APIM gateway unreachable → direct-with-managed-identity fallback.
+    return attempt(resolveAoaiCallTarget(base, { apimAvailable: false }));
+  }
 }
 
 /**
@@ -207,33 +249,36 @@ export async function aoaiChat(opts: AoaiChatOptions): Promise<string> {
   const { messages, temperature, responseFormat } = opts;
   const maxCompletionTokens = opts.maxCompletionTokens ?? defaultMaxCompletionTokens(opts);
   const target = applyTierRouting(opts.target ?? (await resolveAoaiTarget(opts.cfg ?? null)), opts);
-  const url = chatUrl(target);
   const token = await aoaiToken();
-  const send = (withTemperature: boolean) =>
-    fetchWithTimeout(url, {
-      method: 'POST',
-      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-      body: JSON.stringify(
-        buildAoaiBody({
-          messages,
-          maxCompletionTokens,
-          temperature: withTemperature ? temperature : undefined,
-          responseFormat,
-        }),
-      ),
-    }, LLM_FETCH_TIMEOUT_MS);
-  let res = await send(true);
-  if (res.status === 400) {
-    const t = await res.text();
-    if (isUnsupportedSamplingParam(t)) res = await send(false);
-    else throw new Error(`AOAI 400: ${t.slice(0, 300)}`);
-  }
-  if (!res.ok) {
-    const t = await res.text();
-    throw new Error(`AOAI ${res.status}: ${t.slice(0, 300)}`);
-  }
-  const j = await res.json();
-  return String(j?.choices?.[0]?.message?.content ?? '');
+  return withApimFallback(target, async (call) => {
+    const url = chatUrl(call);
+    const headers = { authorization: `Bearer ${token}`, 'content-type': 'application/json', ...aoaiApimHeaders(call) };
+    const send = (withTemperature: boolean) =>
+      fetchWithTimeout(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(
+          buildAoaiBody({
+            messages,
+            maxCompletionTokens,
+            temperature: withTemperature ? temperature : undefined,
+            responseFormat,
+          }),
+        ),
+      }, LLM_FETCH_TIMEOUT_MS);
+    let res = await send(true);
+    if (res.status === 400) {
+      const t = await res.text();
+      if (isUnsupportedSamplingParam(t)) res = await send(false);
+      else throw new AoaiResponseError(`AOAI 400: ${t.slice(0, 300)}`);
+    }
+    if (!res.ok) {
+      const t = await res.text();
+      throw new AoaiResponseError(`AOAI ${res.status}: ${t.slice(0, 300)}`);
+    }
+    const j = await res.json();
+    return String(j?.choices?.[0]?.message?.content ?? '');
+  });
 }
 
 // ── JSON completion ──────────────────────────────────────────────────────────
@@ -251,34 +296,37 @@ export async function aoaiChatJson<T = Record<string, unknown>>(opts: AoaiChatJs
   const maxCompletionTokens = opts.maxCompletionTokens ?? defaultMaxCompletionTokens(opts);
   const responseFormat: AoaiResponseFormat = opts.responseFormat ?? 'json_object';
   const target = applyTierRouting(opts.target ?? (await resolveAoaiTarget(opts.cfg ?? null)), opts);
-  const url = chatUrl(target);
   const token = await aoaiToken();
-  const send = (withTemperature: boolean) =>
-    fetchWithTimeout(url, {
-      method: 'POST',
-      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-      body: JSON.stringify(
-        buildAoaiBody({
-          messages,
-          maxCompletionTokens,
-          temperature: withTemperature ? temperature : undefined,
-          responseFormat,
-        }),
-      ),
-    }, LLM_FETCH_TIMEOUT_MS);
-  let res = await send(true);
-  if (res.status === 400) {
-    const t = await res.text();
-    if (isUnsupportedSamplingParam(t)) res = await send(false);
-    else throw new Error(`AOAI 400: ${t.slice(0, 300)}`);
-  }
-  if (!res.ok) {
-    const t = await res.text();
-    throw new Error(`AOAI ${res.status}: ${t.slice(0, 300)}`);
-  }
-  const j = await res.json();
-  const raw = String(j?.choices?.[0]?.message?.content ?? '').trim();
-  return parseJsonObject<T>(raw);
+  return withApimFallback(target, async (call) => {
+    const url = chatUrl(call);
+    const headers = { authorization: `Bearer ${token}`, 'content-type': 'application/json', ...aoaiApimHeaders(call) };
+    const send = (withTemperature: boolean) =>
+      fetchWithTimeout(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(
+          buildAoaiBody({
+            messages,
+            maxCompletionTokens,
+            temperature: withTemperature ? temperature : undefined,
+            responseFormat,
+          }),
+        ),
+      }, LLM_FETCH_TIMEOUT_MS);
+    let res = await send(true);
+    if (res.status === 400) {
+      const t = await res.text();
+      if (isUnsupportedSamplingParam(t)) res = await send(false);
+      else throw new AoaiResponseError(`AOAI 400: ${t.slice(0, 300)}`);
+    }
+    if (!res.ok) {
+      const t = await res.text();
+      throw new AoaiResponseError(`AOAI ${res.status}: ${t.slice(0, 300)}`);
+    }
+    const j = await res.json();
+    const raw = String(j?.choices?.[0]?.message?.content ?? '').trim();
+    return parseJsonObject<T>(raw);
+  });
 }
 
 // ── Tool-loop raw completion ─────────────────────────────────────────────────
@@ -298,7 +346,6 @@ export async function aoaiChatRaw(opts: AoaiChatRawOptions): Promise<any> {
   const { messages, tools, temperature, maxCompletionTokens } = opts;
   const toolChoice = opts.toolChoice ?? 'auto';
   const target = applyTierRouting(opts.target ?? (await resolveAoaiTarget(opts.cfg ?? null)), opts);
-  const url = chatUrl(target);
   let token: string;
   try {
     token = await aoaiToken();
@@ -308,43 +355,49 @@ export async function aoaiChatRaw(opts: AoaiChatRawOptions): Promise<any> {
     );
     throw new Error(`AOAI auth failed (could not acquire a managed-identity token): ${e?.message || e}`);
   }
-  const send = (withTemperature: boolean) =>
-    fetchWithTimeout(url, {
-      method: 'POST',
-      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-      body: JSON.stringify(
-        buildAoaiBody({
-          messages,
-          tools,
-          toolChoice,
-          temperature: withTemperature ? temperature : undefined,
-          maxCompletionTokens,
-        }),
-      ),
-    }, LLM_FETCH_TIMEOUT_MS);
+  return withApimFallback(target, async (call) => {
+    const url = chatUrl(call);
+    const headers = { authorization: `Bearer ${token}`, 'content-type': 'application/json', ...aoaiApimHeaders(call) };
+    const send = (withTemperature: boolean) =>
+      fetchWithTimeout(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(
+          buildAoaiBody({
+            messages,
+            tools,
+            toolChoice,
+            temperature: withTemperature ? temperature : undefined,
+            maxCompletionTokens,
+          }),
+        ),
+      }, LLM_FETCH_TIMEOUT_MS);
 
-  let res: Response;
-  try {
-    res = await send(true);
-  } catch (e: any) {
-    console.error(
-      `[copilot] AOAI chat-completions fetch THREW for host=${aoaiHost(target.endpoint)} deployment=${target.deployment}: ${describeFetchError(e)}`,
-    );
-    throw new Error(`AOAI chat endpoint unreachable (${aoaiHost(target.endpoint)}): ${describeFetchError(e)}`);
-  }
-  if (res.status === 400) {
-    const t = await res.text();
-    if (isUnsupportedSamplingParam(t)) {
-      res = await send(false);
-    } else {
-      throw new Error(`AOAI chat-completions failed 400: ${t.slice(0, 400)}`);
+    let res: Response;
+    try {
+      res = await send(true);
+    } catch (e: any) {
+      // Transport failure — let it propagate (NOT an AoaiResponseError) so the APIM
+      // fallback can retry direct-with-MI when routing through the gateway.
+      console.error(
+        `[copilot] AOAI chat-completions fetch THREW for host=${aoaiHost(call.endpoint)} deployment=${call.deployment}: ${describeFetchError(e)}`,
+      );
+      throw new Error(`AOAI chat endpoint unreachable (${aoaiHost(call.endpoint)}): ${describeFetchError(e)}`);
     }
-  }
-  if (!res.ok) {
-    const t = await res.text();
-    throw new Error(`AOAI chat-completions failed ${res.status}: ${t.slice(0, 400)}`);
-  }
-  return res.json();
+    if (res.status === 400) {
+      const t = await res.text();
+      if (isUnsupportedSamplingParam(t)) {
+        res = await send(false);
+      } else {
+        throw new AoaiResponseError(`AOAI chat-completions failed 400: ${t.slice(0, 400)}`);
+      }
+    }
+    if (!res.ok) {
+      const t = await res.text();
+      throw new AoaiResponseError(`AOAI chat-completions failed ${res.status}: ${t.slice(0, 400)}`);
+    }
+    return res.json();
+  });
 }
 
 // ── Embeddings ───────────────────────────────────────────────────────────────
@@ -394,40 +447,42 @@ export async function aoaiEmbed(opts: AoaiEmbedOptions): Promise<AoaiEmbedResult
   const deployment = (
     opts.deployment || process.env.LOOM_AOAI_EMBED_DEPLOYMENT || 'text-embedding-3-large'
   ).trim();
-  const url = `${base.endpoint}/openai/deployments/${encodeURIComponent(deployment)}/embeddings?api-version=${base.apiVersion}`;
   const token = await aoaiToken();
-  const res = await fetchWithTimeout(
-    url,
-    {
-      method: 'POST',
-      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ input: opts.input }),
-    },
-    LLM_FETCH_TIMEOUT_MS,
-  );
-  if (res.status === 404) {
-    const t = await res.text().catch(() => '');
-    throw new Error(
-      `Azure OpenAI embeddings deployment "${deployment}" not found. Deploy a text-embedding model ` +
-        `(e.g. text-embedding-3-large) on the Foundry hub and set LOOM_AOAI_EMBED_DEPLOYMENT. ${t.slice(0, 200)}`,
+  return withApimFallback(base, async (call) => {
+    const url = `${call.endpoint}/openai/deployments/${encodeURIComponent(deployment)}/embeddings?api-version=${call.apiVersion}`;
+    const res = await fetchWithTimeout(
+      url,
+      {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json', ...aoaiApimHeaders(call) },
+        body: JSON.stringify({ input: opts.input }),
+      },
+      LLM_FETCH_TIMEOUT_MS,
     );
-  }
-  if (!res.ok) {
-    const t = await res.text().catch(() => '');
-    throw new Error(`AOAI embeddings ${res.status}: ${t.slice(0, 300)}`);
-  }
-  const j: any = await res.json();
-  const rows: any[] = Array.isArray(j?.data) ? j.data : [];
-  const vectors: number[][] = rows
-    .map((d) => (Array.isArray(d?.embedding) ? (d.embedding as number[]) : []))
-    .filter((v) => v.length > 0);
-  if (vectors.length === 0) throw new Error('AOAI embeddings returned no vectors.');
-  const u = j?.usage || {};
-  return {
-    vectors,
-    model: deployment,
-    usage: u.total_tokens != null ? { promptTokens: u.prompt_tokens ?? 0, totalTokens: u.total_tokens ?? 0 } : undefined,
-  };
+    if (res.status === 404) {
+      const t = await res.text().catch(() => '');
+      throw new AoaiResponseError(
+        `Azure OpenAI embeddings deployment "${deployment}" not found. Deploy a text-embedding model ` +
+          `(e.g. text-embedding-3-large) on the Foundry hub and set LOOM_AOAI_EMBED_DEPLOYMENT. ${t.slice(0, 200)}`,
+      );
+    }
+    if (!res.ok) {
+      const t = await res.text().catch(() => '');
+      throw new AoaiResponseError(`AOAI embeddings ${res.status}: ${t.slice(0, 300)}`);
+    }
+    const j: any = await res.json();
+    const rows: any[] = Array.isArray(j?.data) ? j.data : [];
+    const vectors: number[][] = rows
+      .map((d) => (Array.isArray(d?.embedding) ? (d.embedding as number[]) : []))
+      .filter((v) => v.length > 0);
+    if (vectors.length === 0) throw new Error('AOAI embeddings returned no vectors.');
+    const u = j?.usage || {};
+    return {
+      vectors,
+      model: deployment,
+      usage: u.total_tokens != null ? { promptTokens: u.prompt_tokens ?? 0, totalTokens: u.total_tokens ?? 0 } : undefined,
+    };
+  });
 }
 
 // ── Streaming completion (SSE passthrough) ───────────────────────────────────
@@ -446,31 +501,34 @@ export async function aoaiChatStream(opts: AoaiChatOptions): Promise<Response> {
   const { messages, temperature, responseFormat } = opts;
   const maxCompletionTokens = opts.maxCompletionTokens ?? defaultMaxCompletionTokens(opts);
   const target = opts.target ?? (await resolveAoaiTarget(opts.cfg ?? null));
-  const url = chatUrl(target);
   const token = await aoaiToken();
-  const send = (withTemperature: boolean) =>
-    fetchWithTimeout(url, {
-      method: 'POST',
-      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-      body: JSON.stringify(
-        buildAoaiBody({
-          messages,
-          maxCompletionTokens,
-          temperature: withTemperature ? temperature : undefined,
-          responseFormat,
-          stream: true,
-        }),
-      ),
-    }, LLM_FETCH_TIMEOUT_MS);
-  let res = await send(true);
-  if (res.status === 400) {
-    const t = await res.text();
-    if (isUnsupportedSamplingParam(t)) res = await send(false);
-    else throw new Error(`AOAI stream 400: ${t.slice(0, 300)}`);
-  }
-  if (!res.ok || !res.body) {
-    const t = await res.text().catch(() => '');
-    throw new Error(`AOAI stream ${res.status}: ${t.slice(0, 300)}`);
-  }
-  return res;
+  return withApimFallback(target, async (call) => {
+    const url = chatUrl(call);
+    const headers = { authorization: `Bearer ${token}`, 'content-type': 'application/json', ...aoaiApimHeaders(call) };
+    const send = (withTemperature: boolean) =>
+      fetchWithTimeout(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(
+          buildAoaiBody({
+            messages,
+            maxCompletionTokens,
+            temperature: withTemperature ? temperature : undefined,
+            responseFormat,
+            stream: true,
+          }),
+        ),
+      }, LLM_FETCH_TIMEOUT_MS);
+    let res = await send(true);
+    if (res.status === 400) {
+      const t = await res.text();
+      if (isUnsupportedSamplingParam(t)) res = await send(false);
+      else throw new AoaiResponseError(`AOAI stream 400: ${t.slice(0, 300)}`);
+    }
+    if (!res.ok || !res.body) {
+      const t = await res.text().catch(() => '');
+      throw new AoaiResponseError(`AOAI stream ${res.status}: ${t.slice(0, 300)}`);
+    }
+    return res;
+  });
 }

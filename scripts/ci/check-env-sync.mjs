@@ -184,6 +184,13 @@ const ALLOWLIST = new Set([
   'LOOM_AML_SPARK_RUNTIME',         // AML spark runtime version (code default)
   'LOOM_AML_WORKSPACE_NAME',        // derived from Foundry hub
   'LOOM_AOAI_CLIENT_V2',            // opt-in AOAI client switch
+  // Model-strategy M4 — OPT-IN APIM AI-gateway routing. Emitted by admin-plane/main.bicep
+  // (default OFF/direct), and read via an injected `env` param in aoai-apim-gateway.ts
+  // (resolveAoaiCallTarget) rather than a literal process.env.* — so the reader-scan
+  // does not see them; allowlisted explicitly to document intent. Default = direct-with-MI.
+  'LOOM_AOAI_VIA_APIM',             // opt-in: route AOAI through the APIM gateway (default false → direct)
+  'LOOM_AOAI_APIM_URL',             // opt-in: APIM gateway URL (emitted only when the AI-gateway is authored)
+  'LOOM_AOAI_APIM_SUBSCRIPTION_KEY',// opt-in APIM subscription key for the AI-gateway (secret; MI bearer works without it)
   'LOOM_AZURE_SQL_DEFAULT_DB',      // sample-DB default (code default)
   'LOOM_AZURE_SQL_DEFAULT_SERVER',  // sample-DB default (code default)
   'LOOM_BI_RENDER_FUNCTION_NAME',   // derived report-render function name
