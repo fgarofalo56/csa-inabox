@@ -141,13 +141,13 @@ param adminEntraGroupId = readEnvironmentVariable('LOOM_ADMIN_ENTRA_GROUP_ID', '
 // Loom version + image tags
 param loomVersion = readEnvironmentVariable('LOOM_VERSION', 'v3.0')
 param appImageTags = {
-  console: readEnvironmentVariable('LOOM_CONSOLE_TAG', 'v3.0')
-  mcp: readEnvironmentVariable('LOOM_MCP_TAG', 'v0.7')
-  mcpBridge: readEnvironmentVariable('LOOM_MCP_BRIDGE_TAG', 'v0.7')
-  orchestrator: readEnvironmentVariable('LOOM_ORCHESTRATOR_TAG', 'v0.7')
-  activator: readEnvironmentVariable('LOOM_ACTIVATOR_TAG', 'v0.7')
-  mirroring: readEnvironmentVariable('LOOM_MIRRORING_TAG', 'v0.7')
-  directLake: readEnvironmentVariable('LOOM_DIRECTLAKE_TAG', 'v0.7')
+  console: readEnvironmentVariable('LOOM_CONSOLE_TAG', 'v0.1')
+  mcp: readEnvironmentVariable('LOOM_MCP_TAG', 'v0.1')
+  mcpBridge: readEnvironmentVariable('LOOM_MCP_BRIDGE_TAG', 'v0.1')
+  orchestrator: readEnvironmentVariable('LOOM_ORCHESTRATOR_TAG', 'v0.1')
+  activator: readEnvironmentVariable('LOOM_ACTIVATOR_TAG', 'v0.1')
+  mirroring: readEnvironmentVariable('LOOM_MIRRORING_TAG', 'v0.1')
+  directLake: readEnvironmentVariable('LOOM_DIRECTLAKE_TAG', 'v0.1')
   // These keys MUST be present: admin-plane/main.bicep builds image strings from
   // appImageTags.{setupOrchestrator,maf,scriptRunner,wrangler} even when the
   // corresponding app is gated off. A missing key fails template evaluation
@@ -156,10 +156,10 @@ param appImageTags = {
   // image matrix; script-runner + wrangler are NOT built for GCC-High/IL5 and are
   // boundary-gated off in admin-plane/main.bicep, so their tag is only a
   // placeholder that never gets pulled.
-  setupOrchestrator: readEnvironmentVariable('LOOM_SETUP_ORCHESTRATOR_TAG', 'v0.7')
-  maf: readEnvironmentVariable('LOOM_MAF_TAG', 'v0.7')
-  scriptRunner: readEnvironmentVariable('LOOM_SCRIPT_RUNNER_TAG', 'v0.7')
-  wrangler: readEnvironmentVariable('LOOM_WRANGLER_TAG', 'v0.7')
+  setupOrchestrator: readEnvironmentVariable('LOOM_SETUP_ORCHESTRATOR_TAG', 'v0.1')
+  maf: readEnvironmentVariable('LOOM_MAF_TAG', 'v0.1')
+  scriptRunner: readEnvironmentVariable('LOOM_SCRIPT_RUNNER_TAG', 'v0.1')
+  wrangler: readEnvironmentVariable('LOOM_WRANGLER_TAG', 'v0.1')
 }
 
 // Azure Database for PostgreSQL Flexible Server is quota-restricted in
