@@ -185,6 +185,38 @@ export async function getLivySession(poolName: string, sessionId: number): Promi
 }
 
 /**
+ * Enumerate ALL interactive Livy sessions on a Spark pool (paged). Livy's list
+ * endpoint returns `{ from, total, sessions }` and caps a page's size, so we page
+ * with `from`/`size` until we've collected `total` (bounded by `hardCap` so a
+ * pathological pool can't spin us forever). Used by the warm-pool stale-session
+ * REAPER (#1796) to find leaked sessions from crashed runs/replicas that hold
+ * vcores with no active lease and starve new sessions. Real Livy REST, no mocks.
+ */
+export async function listLivySessions(
+  poolName: string,
+  opts?: { pageSize?: number; hardCap?: number },
+): Promise<LivySession[]> {
+  const size = Math.max(1, opts?.pageSize ?? 100);
+  const hardCap = Math.max(size, opts?.hardCap ?? 2000);
+  const out: LivySession[] = [];
+  let from = 0;
+  // Page until we reach `total`, run dry, or hit the hard cap.
+  for (let guard = 0; guard < Math.ceil(hardCap / size) + 1; guard++) {
+    const r = await callDev(`${livyBase(poolName)}/sessions?from=${from}&size=${size}`);
+    const page = await jsonOrThrow<{ from?: number; total?: number; sessions?: LivySession[] }>(
+      r,
+      `listLivySessions(${poolName})`,
+    );
+    const batch = Array.isArray(page.sessions) ? page.sessions : [];
+    out.push(...batch);
+    const total = typeof page.total === 'number' ? page.total : out.length;
+    from += batch.length;
+    if (batch.length === 0 || out.length >= total || out.length >= hardCap) break;
+  }
+  return out;
+}
+
+/**
  * Kill an interactive Livy session (DELETE). Returns {"msg":"deleted"} on
  * success. A 404 means the session is already gone — treat as success so the
  * editor's kill-on-unmount never throws.

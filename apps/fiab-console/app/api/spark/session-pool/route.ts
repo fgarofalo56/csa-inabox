@@ -95,6 +95,13 @@ export async function POST(req: NextRequest) {
             : undefined,
         concurrent: typeof body?.concurrent === 'boolean' ? body.concurrent : undefined,
         maxLeasesPerSession: typeof body?.maxLeasesPerSession === 'number' ? body.maxLeasesPerSession : undefined,
+        reapEnabled: typeof body?.reapEnabled === 'boolean' ? body.reapEnabled : undefined,
+        reapGraceMs:
+          typeof body?.reapGraceMs === 'number'
+            ? body.reapGraceMs
+            : typeof body?.reapGraceSecs === 'number'
+            ? body.reapGraceSecs * 1000
+            : undefined,
       });
       return apiOk({ config: cfg, status: getPoolStatus() });
     } catch (e) {
