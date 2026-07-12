@@ -304,6 +304,7 @@ const useStyles = makeStyles({
   loomHeroText: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS, minWidth: 0, flex: 1 },
   loomHeroChevron: { flexShrink: 0, color: tokens.colorBrandForeground1 },
   loomStep: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minWidth: 0 },
+  bindHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, minWidth: 0 },
 
   // opt-in (Fabric / Power BI) group — clearly demarcated
   optInBlock: {
