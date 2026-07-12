@@ -25,6 +25,19 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.63.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.62.1...csa-inabox-v0.63.0) (2026-07-12)
+
+
+### Features
+
+* **domains:** multi-library domain designer — Wave 1 (library picker) ([#1483](https://github.com/fgarofalo56/csa-inabox/issues/1483)) ([#1924](https://github.com/fgarofalo56/csa-inabox/issues/1924)) ([88f02e8](https://github.com/fgarofalo56/csa-inabox/commit/88f02e8d3e21a659939caed1158f0dcb7bd754e8))
+* **items:** EH-P1-MANIFEST — typed item-type manifest registry (closes [#1801](https://github.com/fgarofalo56/csa-inabox/issues/1801)) ([#1923](https://github.com/fgarofalo56/csa-inabox/issues/1923)) ([dd0b58c](https://github.com/fgarofalo56/csa-inabox/commit/dd0b58c175bf5917fca0fd9cd156999db102a33d))
+
+
+### Bug Fixes
+
+* **governance:** UC domain sync passes a managed-location storage_root ([#1926](https://github.com/fgarofalo56/csa-inabox/issues/1926)) ([b2d134d](https://github.com/fgarofalo56/csa-inabox/commit/b2d134d802276f073f0086f2bca4ede50606cb65))
+
 ## [0.62.1](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.62.0...csa-inabox-v0.62.1) (2026-07-12)
 
 
