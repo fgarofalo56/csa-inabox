@@ -1,0 +1,177 @@
+name: csa-loom-provision-compute
+
+# Scoped, SAFE deploy-time compute provisioning — the durable answer to the
+# operator's "compute + telemetry are not provisioned at deploy time" gap.
+# Provisions, idempotently:
+#   1. Synapse Spark → Log Analytics telemetry (KV secret + workspace-MSI KV read
+#      + best-practice + LA emitter Spark config on every pool + workspace diag).
+#      -> scripts/csa-loom/wire-spark-telemetry.sh
+#   2. Databricks instance pools (loom-pool-s/m/l) + the "Loom Standard" cluster
+#      policy (best-practice spark_conf + auto-terminate + DBFS log delivery).
+#      -> scripts/csa-loom/provision-databricks-compute.sh
+#   3. The Synapse managed PE to the default lake so Spark reads don't hang
+#      (delegates to the existing in-VNET job) — so it is NOT a manual step.
+#      -> scripts/csa-loom/run-spark-storage-fix-invnet-job.sh
+#
+# The workload-tiered Spark POOLS themselves (loometl/loombatch) + their baked
+# best-practice config are created by bicep
+# (platform/fiab/bicep/modules/landing-zone/synapse-spark-pools.bicep, default-on)
+# — this workflow layers the telemetry + Databricks compute on top.
+#
+# Like csa-loom-synapse-spark-fix.yml, this is a SAFE subset (no MSAL re-reg) —
+# dispatchable against a live deployment. The post-deploy bootstrap also calls
+# these scripts in a gated step so a fresh deploy provisions them automatically.
+
+on:
+  workflow_dispatch:
+    inputs:
+      region:
+        description: 'Azure region the deploy landed in (e.g. centralus, eastus2, usgovvirginia). Derives every RG / workspace name.'
+        type: string
+        required: true
+      admin_subscription:
+        description: 'ADMIN (hub) subscription id — holds the Console CAE, Key Vault, Log Analytics.'
+        type: string
+        required: true
+      dlz_subscription:
+        description: 'DLZ subscription id — holds Synapse + Databricks. Empty → single-sub (= admin_subscription).'
+        type: string
+        required: false
+        default: ''
+      dlz_domain:
+        description: 'DLZ domain segment for rg-csa-loom-dlz-<domain>-<region>. Defaults to "default".'
+        type: string
+        required: false
+        default: default
+      boundary:
+        description: 'Commercial | GCC | GCC-High | IL5. Selects the login + az cloud (GCC-High/IL5 = AzureUSGovernment).'
+        type: choice
+        default: Commercial
+        options: [Commercial, GCC, GCC-High, IL5]
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  REGION: ${{ inputs.region }}
+  ADMIN_SUB: ${{ inputs.admin_subscription }}
+  DLZ_SUB: ${{ inputs.dlz_subscription || inputs.admin_subscription }}
+  ADMIN_RG: rg-csa-loom-admin-${{ inputs.region }}
+  DLZ_RG: rg-csa-loom-dlz-${{ inputs.dlz_domain || 'default' }}-${{ inputs.region }}
+  SYNAPSE_WS: syn-loom-${{ inputs.dlz_domain || 'default' }}-${{ inputs.region }}
+  DBX_WS: adb-loom-default-${{ inputs.region }}
+  LOOM_DLZ_DOMAIN: ${{ inputs.dlz_domain || 'default' }}
+
+jobs:
+  provision-compute:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login (Commercial — deploy SP)
+        if: inputs.boundary == 'Commercial'
+        uses: azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_TENANT_ID }}",
+              "subscriptionId": "${{ env.ADMIN_SUB }}"
+            }
+
+      - name: Azure login (GCC — public cloud)
+        if: inputs.boundary == 'GCC'
+        uses: azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_GCC_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_GCC_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_GCC_TENANT_ID }}",
+              "subscriptionId": "${{ env.ADMIN_SUB }}"
+            }
+
+      - name: Azure login (Gov — GCC-High / IL5)
+        if: inputs.boundary == 'GCC-High' || inputs.boundary == 'IL5'
+        uses: azure/login@v2
+        with:
+          environment: AzureUSGovernment
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_GOV_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_GOV_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_GOV_TENANT_ID }}",
+              "subscriptionId": "${{ env.ADMIN_SUB }}",
+              "activeDirectoryEndpointUrl": "https://login.microsoftonline.us",
+              "resourceManagerEndpointUrl": "https://management.usgovcloudapi.net/",
+              "sqlManagementEndpointUrl": "https://management.core.usgovcloudapi.net:8443/",
+              "galleryEndpointUrl": "https://gallery.usgovcloudapi.net/",
+              "managementEndpointUrl": "https://management.core.usgovcloudapi.net/"
+            }
+
+      - name: Set Azure cloud to Gov (GCC-High / IL5)
+        if: inputs.boundary == 'GCC-High' || inputs.boundary == 'IL5'
+        run: az cloud set --name AzureUSGovernment
+
+      - name: Wire Synapse Spark → Log Analytics telemetry
+        run: |
+          set -uo pipefail
+          chmod +x scripts/csa-loom/wire-spark-telemetry.sh
+          REGION="$REGION" ADMIN_SUB="$ADMIN_SUB" DLZ_SUB="$DLZ_SUB" \
+          ADMIN_RG="$ADMIN_RG" DLZ_RG="$DLZ_RG" SYNAPSE_WS="$SYNAPSE_WS" \
+          LOOM_DLZ_DOMAIN="$LOOM_DLZ_DOMAIN" KV_TOGGLE_PUBLIC=1 \
+            bash scripts/csa-loom/wire-spark-telemetry.sh \
+            || echo "::warning::Spark telemetry wiring incomplete — see log."
+
+      - name: Enable Databricks public access (temp, so the runner can reach the workspace REST API)
+        id: dbx_open
+        run: |
+          set -uo pipefail
+          DBX_RID=$(az resource list --subscription "$DLZ_SUB" -g "$DLZ_RG" --resource-type Microsoft.Databricks/workspaces --query "[?name=='$DBX_WS'].id" -o tsv 2>/dev/null || true)
+          [ -z "$DBX_RID" ] && DBX_RID=$(az resource list --subscription "$ADMIN_SUB" -g "$ADMIN_RG" --resource-type Microsoft.Databricks/workspaces --query "[?name=='$DBX_WS'].id" -o tsv 2>/dev/null || true)
+          echo "DBX_RID=$DBX_RID" >> "$GITHUB_ENV"
+          if [ -n "$DBX_RID" ]; then
+            az resource update --ids "$DBX_RID" --api-version 2024-05-01 \
+              --set properties.publicNetworkAccess=Enabled --query "properties.publicNetworkAccess" -o tsv 2>/dev/null || true
+            sleep 30
+          else
+            echo "::notice::No Databricks workspace resolved — the Databricks step will skip."
+          fi
+
+      - name: Provision Databricks instance pools + Loom cluster policy
+        run: |
+          set -uo pipefail
+          chmod +x scripts/csa-loom/provision-databricks-compute.sh
+          REGION="$REGION" ADMIN_SUB="$ADMIN_SUB" DLZ_SUB="$DLZ_SUB" \
+          ADMIN_RG="$ADMIN_RG" DLZ_RG="$DLZ_RG" DBX_WS="$DBX_WS" \
+            bash scripts/csa-loom/provision-databricks-compute.sh \
+            || echo "::warning::Databricks compute provisioning incomplete — see log."
+
+      - name: Restore Databricks public access disabled
+        if: always()
+        run: |
+          set -uo pipefail
+          if [ -n "${DBX_RID:-}" ]; then
+            az resource update --ids "$DBX_RID" --api-version 2024-05-01 \
+              --set properties.publicNetworkAccess=Disabled --query "properties.publicNetworkAccess" -o tsv 2>/dev/null || true
+          fi
+
+      - name: Ensure Synapse managed PE to the default lake (in-VNET — Spark reads don't hang)
+        run: |
+          set -uo pipefail
+          CAE_NAME=$(az containerapp env list -g "$ADMIN_RG" --subscription "$ADMIN_SUB" \
+            --query "[?contains(name,'cae') || contains(name,'loom')].name | [0]" -o tsv 2>/dev/null || true)
+          if [ -z "${CAE_NAME:-}" ]; then
+            echo "::warning::No Container App Environment in $ADMIN_RG — cannot run the in-VNET Synapse Spark storage fix."
+            exit 0
+          fi
+          chmod +x scripts/csa-loom/run-spark-storage-fix-invnet-job.sh
+          ADMIN_RG="$ADMIN_RG" ADMIN_SUB="$ADMIN_SUB" CAE="$CAE_NAME" \
+          DLZ_SUB="$DLZ_SUB" SYNAPSE_WS="$SYNAPSE_WS" \
+          DEPLOY_SP_CLIENT_ID="${{ secrets.AZURE_CLIENT_ID }}" \
+          DEPLOY_SP_SECRET="${{ secrets.AZURE_CLIENT_SECRET }}" \
+          DEPLOY_SP_TENANT="${{ secrets.AZURE_TENANT_ID }}" \
+            bash scripts/csa-loom/run-spark-storage-fix-invnet-job.sh \
+            || echo "::warning::In-VNET Synapse Spark storage-fix job did not complete."

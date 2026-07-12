@@ -152,6 +152,9 @@ param loomDataFactoryEnabled bool = true
 @description('Provision the scaled self-hosted IR (VMSS scale-to-0) on the DLZ Data Factory. Alias/companion of selfHostedIrEnabled. Default ON. false skips the SHIR VMSS (admin-plane blanks LOOM_SHIR_VMSS_NAME).')
 param loomSelfHostedIrEnabled bool = true
 
+@description('Deploy the WORKLOAD-TIERED Synapse Spark pools (loometl = Medium ETL, loombatch = Large batch/ML) alongside the interactive loompool, each with baked best-practice Apache Spark config (AQE, skew-join, Delta optimize-write). DEFAULT-ON (loom_default_on_opt_out). false keeps only loompool. Requires loomSynapseEnabled.')
+param deploySparkWorkloadTiers bool = true
+
 // =====================================================================
 // 1. Spoke VNet (peered to Admin Plane hub)
 // =====================================================================
@@ -316,6 +319,39 @@ module synapse 'synapse.bicep' = if (loomSynapseEnabled) {
     // re-deploy after that applies them directly. Empty = scripts skip (today's
     // behaviour) so this is strictly non-breaking.
     synapseRoleAssignmentUamiId: databricksUcScriptUamiId
+  }
+}
+
+// =====================================================================
+// 4a0. Workload-tiered Synapse Spark pools (loometl / loombatch) + baked
+//      best-practice Apache Spark config + LA application emitter. DEFAULT-ON.
+//      Closes the operator's deploy-time compute-provisioning gap: the
+//      interactive loompool (synapse.bicep) is kept; this adds the missing
+//      ETL + batch/ML workload tiers with AQE/skew/Delta-optimize confs baked
+//      onto the pool so ALL Spark applications (not just console notebook
+//      sessions) get best-practice tuning + telemetry. The LA emitter's shared
+//      key stays out of bicep — wire-spark-telemetry.sh creates the KV secret +
+//      Synapse KV linked service and points the pools at it (dev-plane).
+// =====================================================================
+module synapseSparkPools 'synapse-spark-pools.bicep' = if (loomSynapseEnabled && deploySparkWorkloadTiers) {
+  name: 'dlz-synapse-spark-pools'
+  // The pools attach to the workspace synapse.bicep creates; serialize after it.
+  dependsOn: [ synapse ]
+  params: {
+    location: location
+    domainName: domainName
+    complianceTags: complianceTags
+    // Pool-level diagnostic settings (BigDataPoolAppsEnded) → the standardized
+    // Loom LAW, same as loompool. Empty (dlz-attach with no hub LAW) skips them.
+    workspaceId: adminPlaneLawId
+    // IL5 uses dedicated physical hosts; Commercial/GCC leave isolation off.
+    sparkPoolIsolatedCompute: boundary == 'IL5'
+    // Azure Government (GCC-High / IL5) LA ingestion suffix; else Commercial.
+    logAnalyticsUriSuffix: (boundary == 'GCC-High' || boundary == 'IL5') ? 'ods.opinsights.azure.us' : 'ods.opinsights.azure.com'
+    // LA GUID / KV / linked-service intentionally LEFT EMPTY here — the pools
+    // ship with the (secret-free) best-practice confs and wire-spark-telemetry.sh
+    // applies the LA emitter post-deploy (it must create the KV secret + linked
+    // service first, which is dev-plane and not expressible in cross-sub bicep).
   }
 }
 
