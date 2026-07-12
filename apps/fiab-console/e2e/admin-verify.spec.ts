@@ -82,16 +82,25 @@ test.describe('Loom admin plane — unattended smoke verify', () => {
     const target = `${BASE}/admin/health`;
     await page.goto(target, { waitUntil: 'domcontentloaded', timeout: 30_000 });
 
-    // The health page should contain a numeric score (e.g. "87 / 100" or "87%")
-    // and a section heading or list that mentions "check" or "probe".
+    // The score + checks hydrate CLIENT-SIDE after a multi-second self-audit
+    // fan-out — a one-shot innerText grab right after domcontentloaded races the
+    // skeleton/spinner and flakes (seen live: page fine, test red). Poll until
+    // the audit lands: a numeric score AND the word "check" both present.
+    await expect
+      .poll(
+        async () => {
+          const text = await page.locator('body').innerText().catch(() => '');
+          return /\d+/.test(text) && text.toLowerCase().includes('check');
+        },
+        {
+          message: 'Health page should hydrate a numeric score + "check" section',
+          timeout: 60_000,
+          intervals: [1_000, 2_000, 3_000],
+        },
+      )
+      .toBe(true);
+
     const bodyText = await page.locator('body').innerText({ timeout: 10_000 });
-
-    // Assert a numeric score is present
-    expect(bodyText, 'Health page should show a numeric score').toMatch(/\d+/);
-
-    // Assert the word "check" appears (as in "checks passed", "health checks", etc.)
-    expect(bodyText.toLowerCase(), 'Health page should mention "check"').toContain('check');
-
     console.log(`[health-page] rendered OK — excerpt: ${bodyText.slice(0, 200).replace(/\n/g, ' ')}`);
   });
 
