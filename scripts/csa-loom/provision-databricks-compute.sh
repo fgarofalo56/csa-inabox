@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# CSA Loom — provision Databricks INSTANCE POOLS + a Loom CLUSTER POLICY,
+# CSA Loom — provision Databricks INSTANCE POOLS + a Loom CLUSTER POLICY + pre-built CLUSTERS,
 # idempotently, so the Databricks-native compute matches the tiers the console
 # offers (apps/fiab-console/lib/databricks/cluster-presets.ts) and every Loom
 # cluster is right-sized, warm-startable, best-practice-tuned, and log-delivering.
@@ -157,11 +157,71 @@ if [ -n "$POLICY_ID" ] && [ "$POLICY_ID" != "null" ]; then
 else
   resp="$(dbx_api POST /api/2.0/policies/clusters/create "{\"name\":\"$POLICY_NAME\",\"definition\":$POLICY_DEF_ESCAPED}" 2>/dev/null || true)"
   if echo "$resp" | jq -e '.policy_id' >/dev/null 2>&1; then
-    echo "   ✓ cluster policy created: $POLICY_NAME ($(echo "$resp" | jq -r '.policy_id'))"
+    POLICY_ID="$(echo "$resp" | jq -r '.policy_id')"
+    echo "   ✓ cluster policy created: $POLICY_NAME ($POLICY_ID)"
   else
     echo "::warning::   cluster policy create failed — $(echo "$resp" | jq -r '.message // .error_code // "unknown"' 2>/dev/null)"
   fi
 fi
+
+# --- 2b) Pre-built all-purpose CLUSTERS per workload tier --------------------
+# Instance pools (above) only speed cluster startup — they are NOT attachable
+# compute and do NOT appear in a notebook's Attach-compute picker (which lists
+# /api/2.0/clusters/list). We ALSO create one ready-to-attach all-purpose cluster
+# per tier, each drawing from its matching pool + the Loom Standard policy, so the
+# tiers show up directly in every notebook. Clusters are terminated right after
+# creation so they cost nothing until a user attaches (they still list, in
+# TERMINATED state, and auto-start on attach — the standard Databricks model).
+pool_id() {
+  dbx_api GET /api/2.0/instance-pools/list 2>/dev/null \
+    | jq -r --arg n "$1" '.instance_pools[]? | select(.instance_pool_name==$n) | .instance_pool_id' 2>/dev/null | head -1
+}
+
+ensure_cluster() { # name  pool-name  min-workers  max-workers  photon(true|false)
+  local name="$1" poolname="$2" minw="$3" maxw="$4" photon="$5"
+  local existing
+  existing="$(dbx_api GET /api/2.0/clusters/list 2>/dev/null \
+    | jq -r --arg n "$name" '.clusters[]? | select(.cluster_name==$n) | .cluster_id' 2>/dev/null | head -1)"
+  if [ -n "$existing" ] && [ "$existing" != "null" ]; then
+    echo "   ✓ cluster exists: $name ($existing)"; return
+  fi
+  local pid; pid="$(pool_id "$poolname")"
+  if [ -z "$pid" ] || [ "$pid" = "null" ]; then
+    echo "::warning::   cluster $name — backing pool $poolname not found; skipping"; return
+  fi
+  local photon_ref="" policy_ref=""
+  [ "$photon" = "true" ] && photon_ref='"runtime_engine": "PHOTON",'
+  [ -n "$POLICY_ID" ] && [ "$POLICY_ID" != "null" ] && policy_ref="\"policy_id\": \"$POLICY_ID\","
+  local body
+  body="$(cat <<JSON
+{
+  "cluster_name": "$name",
+  "spark_version": "$SPARK_VERSION",
+  "instance_pool_id": "$pid",
+  $policy_ref
+  $photon_ref
+  "autoscale": { "min_workers": $minw, "max_workers": $maxw },
+  "autotermination_minutes": 30,
+  "data_security_mode": "USER_ISOLATION",
+  "custom_tags": { "loom-managed": "true", "loom-cluster-tier": "$name" }
+}
+JSON
+)"
+  local resp cid
+  resp="$(dbx_api POST /api/2.0/clusters/create "$body" 2>/dev/null || true)"
+  if echo "$resp" | jq -e '.cluster_id' >/dev/null 2>&1; then
+    cid="$(echo "$resp" | jq -r '.cluster_id')"
+    echo "   ✓ cluster created: $name ($cid)"
+    # Terminate immediately — it sits idle (cost 0) until a notebook attaches.
+    dbx_api POST /api/2.0/clusters/delete "{\"cluster_id\":\"$cid\"}" >/dev/null 2>&1 || true
+  else
+    echo "::warning::   cluster create failed: $name — $(echo "$resp" | jq -r '.message // .error_code // "unknown"' 2>/dev/null)"
+  fi
+}
+
+ensure_cluster "loom-cluster-s" "loom-pool-s" 1 2  false   # dev / small ETL
+ensure_cluster "loom-cluster-m" "loom-pool-m" 2 8  true    # production ETL / BI (Photon)
+ensure_cluster "loom-cluster-l" "loom-pool-l" 2 16 true    # large batch / ML (Photon)
 
 # --- 3) Workspace → Log Analytics diagnostic settings (idempotent) ----------
 # databricks.bicep already sets these (all categories); re-assert for a
@@ -180,4 +240,4 @@ if [ -n "$LAW_ID" ] && [ -n "$DBX_ID" ]; then
     || echo "   (Databricks workspace diagnostics already present via bicep — continuing)."
 fi
 
-echo "== Databricks compute provisioning complete (pools: loom-pool-s/m/l; policy: '$POLICY_NAME'). =="
+echo "== Databricks compute provisioning complete (pools: loom-pool-s/m/l; clusters: loom-cluster-s/m/l; policy: '$POLICY_NAME'). =="
