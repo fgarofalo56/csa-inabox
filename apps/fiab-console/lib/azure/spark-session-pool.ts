@@ -523,6 +523,15 @@ async function pollLivyToIdle(poolName: string, sessionId: number, slot: PooledS
         slot.state = 'warm';
         slot.warmedAt = Date.now();
         slot.lastActivityAt = Date.now();
+        // PUBLISH the now-warm slot to the shared cross-replica store. Without
+        // this the slot flips to 'warm' only in THIS replica's memory: the
+        // shared store keeps showing it 'warming', every other replica (and the
+        // external keep-warm heartbeat, which round-robins across replicas)
+        // never sees a warm session, and each hit spawns ANOTHER warming slot
+        // that also never publishes — the pool is perpetually 'warming' and the
+        // first user run always cold-starts. (Root cause of the stuck warm-pool
+        // seen 2026-07-12.)
+        void publishWarmSlot(slot).catch(() => {});
       }
       return;
     }
