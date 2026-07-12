@@ -25,6 +25,18 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.64.1](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.64.0...csa-inabox-v0.64.1) (2026-07-12)
+
+
+### Bug Fixes
+
+* P1 audit gaps — bicep env emission, no-fabric opt-in, honest degrades, Gov ADX host, dead code (OPEN-REGISTER P1) ([#1939](https://github.com/fgarofalo56/csa-inabox/issues/1939)) ([72d163d](https://github.com/fgarofalo56/csa-inabox/commit/72d163d2b014d619da05a7d72c0b8a2df2fb0308))
+
+
+### Documentation
+
+* scrub operator vanity domain from arch diagrams + release doc (docs-hygiene) ([#1940](https://github.com/fgarofalo56/csa-inabox/issues/1940)) ([9c58a5f](https://github.com/fgarofalo56/csa-inabox/commit/9c58a5f365ef7d1a10a78feb237bb12f2ff1b662))
+
 ## [0.64.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.63.0...csa-inabox-v0.64.0) (2026-07-12)
 
 
