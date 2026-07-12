@@ -143,8 +143,7 @@ POLICY_DEF="$(cat <<'JSON'
   "spark_conf.spark.databricks.delta.autoCompact.enabled": { "type": "fixed", "value": "true" },
   "autotermination_minutes": { "type": "range", "minValue": 10, "maxValue": 120, "defaultValue": 30 },
   "cluster_log_conf.type": { "type": "fixed", "value": "DBFS" },
-  "cluster_log_conf.path": { "type": "fixed", "value": "dbfs:/cluster-logs/loom" },
-  "custom_tags.loom-managed": { "type": "fixed", "value": "true" }
+  "cluster_log_conf.path": { "type": "fixed", "value": "dbfs:/cluster-logs/loom" }
 }
 JSON
 )"
@@ -200,7 +199,7 @@ ensure_cluster() { # name  pool-name  min-workers  max-workers
   "autoscale": { "min_workers": $minw, "max_workers": $maxw },
   "autotermination_minutes": 30,
   "data_security_mode": "USER_ISOLATION",
-  "custom_tags": { "loom-managed": "true", "loom-cluster-tier": "$name" }
+  "custom_tags": { "loom-cluster-tier": "$name" }
 }
 JSON
 )"
