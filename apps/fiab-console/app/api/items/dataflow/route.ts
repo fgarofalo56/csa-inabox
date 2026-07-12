@@ -3,9 +3,9 @@
  * GET  /api/items/dataflow?workspaceId=...   — list Loom dataflows
  * POST /api/items/dataflow?workspaceId=...   — create
  *
- * v3.25: Cosmos-backed. Dataflow Gen2 maps to an ADF Mapping Data Flow
- * inside the loom-managed Data Factory. Create+save+list work today;
- * Refresh dispatches to ADF Mapping Data Flow in a follow-up.
+ * Cosmos-backed. Dataflow Gen2 maps to an ADF Mapping Data Flow inside the
+ * loom-managed Data Factory. Create+save+list live here; Refresh dispatches
+ * to the ADF Mapping Data Flow via POST /api/items/dataflow/[id]/refresh.
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { apiError, apiServerError } from '@/lib/api/respond';

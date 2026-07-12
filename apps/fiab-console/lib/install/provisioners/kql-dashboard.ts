@@ -1,20 +1,26 @@
 /**
  * Phase 2 — KQL Dashboard (Real-Time Dashboard) provisioner.
  *
- * Real REST: Fabric POST /v1/workspaces/{ws}/kqlDashboards (Create Item
- * with definition). The bundle's KqlDashboardContent.tiles are compiled
- * into a real Real-Time Dashboard JSON definition (one `RealTimeDashboard.json`
- * part, Base64-encoded, payloadType InlineBase64) plus the required
- * `.platform` metadata part. Idempotency: if a dashboard with the same
- * displayName already exists in the workspace we updateDefinition instead
- * of create.
+ * Azure-native DEFAULT (no-fabric-dependency.md): the dashboard is a
+ * Loom-native surface over ADX. The bundle's KqlDashboardContent.tiles are
+ * persisted on the Cosmos item at Phase-1 install; this provisioner confirms
+ * the ADX data source — the same cluster the sibling `kql-database` item
+ * provisions against (LOOM_KUSTO_CLUSTER_URI / LOOM_KUSTO_DEFAULT_DB) — so
+ * every tile's KQL runs live via /api/items/kql-dashboard/[id]?run=1 in the
+ * Loom dashboard UI. No Microsoft Fabric workspace is required or requested
+ * on this path.
  *
- * The dashboard's data source is the ADX/Kusto cluster the sibling
- * `kql-database` item provisions against (LOOM_KUSTO_CLUSTER_URI /
- * LOOM_KUSTO_DEFAULT_DB). Each tile carries its own KQL query and a viz
- * hint mapped to the documented Real-Time Dashboard visualType enum so the
- * tile renders the same chart the bundle declares (card / line / bar /
- * table / pie).
+ * Fabric backend (OPT-IN ONLY — target.dashboardBackend === 'fabric' AND a
+ * bound workspace): compiles the tiles into a real Real-Time Dashboard JSON
+ * definition (one `RealTimeDashboard.json` part, Base64-encoded, payloadType
+ * InlineBase64, plus the required `.platform` metadata part) and creates it
+ * via Fabric POST /v1/workspaces/{ws}/kqlDashboards. Idempotency: if a
+ * dashboard with the same displayName already exists in the workspace we
+ * updateDefinition instead of create. Each tile carries its own KQL query
+ * and a viz hint mapped to the documented Real-Time Dashboard visualType
+ * enum (card / line / bar / table / pie). When the Fabric backend is
+ * selected but no workspace is bound we FALL BACK to the Azure-native path —
+ * never a "bind a Fabric workspace" gate.
  *
  * Grounded in Microsoft Learn:
  *   - KQL Dashboard definition (JSON format, RealTimeDashboard.json part):
@@ -25,11 +31,10 @@
  *   - Create Item with definition:
  *     https://learn.microsoft.com/rest/api/fabric/core/items/create-item
  *
- * Remediation gates:
- *   - target.fabricWorkspaceId missing → bind a Fabric workspace.
+ * Remediation gates (Azure-side only, per no-vaporware.md):
  *   - LOOM_KUSTO_CLUSTER_URI missing  → set it so tiles have a data source.
- *   - 401/403 from Fabric             → UAMI not a Contributor on the
- *                                        Fabric workspace; admin must add it.
+ *   - 401/403 from Fabric (opt-in path only) → UAMI not a Contributor on the
+ *     Fabric workspace; admin must add it.
  *
  * Per .claude/rules/no-vaporware.md no mock fallback — every error surfaces
  * verbatim with the exact remediation in the wizard MessageBar.

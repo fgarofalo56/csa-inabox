@@ -143,7 +143,7 @@ export const TENANT_SETTING_GROUPS: ToggleGroupDef[] = [
   {
     id: 'mirroring',
     label: 'Mirroring',
-    description: 'Continuous replication from Azure SQL / Snowflake / Cosmos into OneLake.',
+    description: 'Continuous replication from Azure SQL / Snowflake / Cosmos via ADF CDC into ADLS Gen2 Bronze Delta (OneLake mirroring is Fabric opt-in).',
     toggles: [
       { id: 'mirror.azureSql', label: 'Mirror Azure SQL', help: 'Allow users to set up Azure SQL Mirror jobs.', default: true, scopable: true, numericParam: { id: 'mirror.azureSql.retentionDays', label: 'CDC retention', unit: 'days', min: 1, max: 30, default: 7 } },
       { id: 'mirror.snowflake', label: 'Mirror Snowflake', help: 'Allow Snowflake Mirror jobs.', default: true },

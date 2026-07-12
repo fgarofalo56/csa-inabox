@@ -2334,7 +2334,9 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
 
   // Dataset (Atlas entity) registration form.
   const [dsName, setDsName] = useState('');
-  const [dsType, setDsType] = useState('fabric_lakehouse');
+  // Azure-native leads (no-fabric-dependency.md): the default asset type is
+  // an ADLS Gen2 (Delta) lakehouse path; OneLake/Fabric is the opt-in tail.
+  const [dsType, setDsType] = useState('azure_datalake_gen2_path');
   const [dsQName, setDsQName] = useState('');
   const [dsClass, setDsClass] = useState<string[]>([]);
   // Governance label taxonomy (/api/governance/classification-types) so dataset
@@ -3181,14 +3183,24 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
               <Field label="Asset name"><Input value={dsName} onChange={(_, d) => setDsName(d.value)} placeholder="silver_revenue" /></Field>
               <Field label="Type">
                 <Dropdown value={dsType} selectedOptions={[dsType]} onOptionSelect={(_, d) => d.optionValue && setDsType(d.optionValue)}>
-                  <Option value="fabric_lakehouse">OneLake / Fabric lakehouse</Option>
-                  <Option value="databricks_table">Databricks (Unity Catalog) table</Option>
+                  <Option value="azure_datalake_gen2_path">Lakehouse — ADLS Gen2 (Delta) path</Option>
                   <Option value="azure_sql_table">Azure SQL table</Option>
+                  <Option value="databricks_table">Databricks (Unity Catalog) table</Option>
                   <Option value="DataSet">Generic dataset</Option>
+                  <Option value="fabric_lakehouse">OneLake / Fabric lakehouse (opt-in)</Option>
                 </Dropdown>
               </Field>
               <Field label="Qualified name (unique asset id)" style={{ gridColumn: '1 / -1' }}>
-                <Input value={dsQName} onChange={(_, d) => setDsQName(d.value)} placeholder="https://onelake.dfs.fabric.microsoft.com/<ws>/<lh>.Lakehouse/Tables/silver_revenue" />
+                <Input
+                  value={dsQName}
+                  onChange={(_, d) => setDsQName(d.value)}
+                  placeholder={
+                    dsType === 'fabric_lakehouse' ? 'https://onelake.dfs.fabric.microsoft.com/<ws>/<lh>.Lakehouse/Tables/silver_revenue'
+                    : dsType === 'databricks_table' ? '<catalog>.<schema>.silver_revenue'
+                    : dsType === 'azure_sql_table' ? 'mssql://<server>.database.windows.net/<db>/dbo/silver_revenue'
+                    : 'abfss://gold@<account>.dfs.core.windows.net/silver_revenue'
+                  }
+                />
               </Field>
               <Field label="Classifications" hint="Pick from the tenant label taxonomy (manage in Governance → Classifications)." style={{ gridColumn: '1 / -1' }}>
                 {classTypes.length > 0 ? (
