@@ -1,0 +1,137 @@
+name: csa-loom-exercise-services
+
+# Exercise-every-service validation — the "caught by the platform, not the
+# operator" mechanism. Starts a probe run via POST /api/admin/health/exercise
+# (each probe EXERCISES a real backend data path: a live Livy session on the
+# default Spark pool, SELECT 1 over TDS, print 1 over KQL, a lake list, a
+# Cosmos query, a 1-shot AOAI completion, a dry-run domain sync, an ADF list),
+# polls for the report, and FAILS the job on any real 'fail'. Honest gates
+# (backend not configured) are warnings, never failures.
+#
+# This is what catches a faulted-Spark-pool-class failure by default: the pool
+# was configured + green on every presence check, but every session errored
+# instantly (appId=null) — the spark probe turns that into a red job.
+#
+# Auth chain (same as loom-ui-verify):
+#   1. OIDC federated credential -> azure/login@v2 (no client secret on disk)
+#   2. az keyvault secret show -> SESSION_SECRET (masked immediately)
+#   3. scripts/csa-loom/exercise-services.mjs mints a loom_session cookie and
+#      drives the tenant-admin-gated exercise route.
+#
+# Requirements (one-time, per docs/fiab/agent-unattended-access.md):
+#   - GH secrets: AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID
+#   - GH vars:    LOOM_VERIFY_URL, LOOM_AUTOMATION_OID (must be a tenant admin
+#                 — LOOM_TENANT_ADMIN_OID or in LOOM_TENANT_ADMIN_GROUP_ID),
+#                 LOOM_KV_NAME or LOOM_ADMIN_RG (for KV auto-discovery)
+
+on:
+  workflow_dispatch:
+    inputs:
+      console_url:
+        description: 'Loom console URL (leave blank to use the LOOM_VERIFY_URL var)'
+        type: string
+        default: ''
+      services:
+        description: 'Comma-separated probe filter (blank = all): spark,warehouse-sql,adx,adls,cosmos,aoai,domain-sync,adf'
+        type: string
+        default: ''
+      kv_name:
+        description: 'Key Vault name containing session-secret (overrides auto-discovery)'
+        type: string
+        default: ''
+      admin_rg:
+        description: 'Admin-plane resource group (for KV auto-discovery when LOOM_KV_NAME is unset)'
+        type: string
+        default: ''
+
+  schedule:
+    # Daily at 05:30 UTC — before the business day, so a backend that broke
+    # overnight is red before the first user opens a notebook.
+    - cron: '30 5 * * *'
+
+permissions:
+  id-token: write   # OIDC token for azure/login
+  contents: read
+
+env:
+  LOOM_URL: ${{ inputs.console_url || vars.LOOM_VERIFY_URL || 'https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net' }}
+  LOOM_AUTOMATION_OID:  ${{ vars.LOOM_AUTOMATION_OID  || '' }}
+  LOOM_AUTOMATION_UPN:  ${{ vars.LOOM_AUTOMATION_UPN  || 'loom-exercise@automation.local' }}
+  LOOM_AUTOMATION_NAME: ${{ vars.LOOM_AUTOMATION_NAME || 'Loom Exercise [automation]' }}
+  KV_SECRET_NAME: 'session-secret'
+
+jobs:
+  exercise:
+    name: 'Exercise every service (real data paths)'
+    # In-VNet scale-to-zero self-hosted runner (gh-aca-runner): the SESSION_SECRET
+    # Key Vault is private-endpoint-locked, so a public GH runner cannot reach it.
+    runs-on: [self-hosted, loom-aca]
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id:       ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id:       ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # Resolve the Key Vault, fetch SESSION_SECRET, mask it immediately.
+      - name: Resolve Key Vault + fetch SESSION_SECRET
+        env:
+          INPUT_KV:       ${{ inputs.kv_name }}
+          VAR_KV:         ${{ vars.LOOM_KV_NAME }}
+          INPUT_ADMIN_RG: ${{ inputs.admin_rg }}
+          VAR_ADMIN_RG:   ${{ vars.LOOM_ADMIN_RG }}
+        run: |
+          set -euo pipefail
+          KV="${INPUT_KV:-${VAR_KV:-}}"
+          if [[ -z "$KV" ]]; then
+            ADMIN_RG="${INPUT_ADMIN_RG:-${VAR_ADMIN_RG:-}}"
+            if [[ -z "$ADMIN_RG" ]]; then
+              echo "No admin RG provided; searching subscription for the loom Key Vault..."
+              KV=$(az keyvault list \
+                     --query "[?starts_with(name,'kv-loom') || starts_with(name,'loom-kv')].name | [0]" \
+                     -o tsv 2>/dev/null || true)
+            else
+              echo "Auto-discovering KV in resource group: $ADMIN_RG"
+              KV=$(az keyvault list -g "$ADMIN_RG" --query "[0].name" -o tsv 2>/dev/null || true)
+            fi
+          fi
+          if [[ -z "$KV" ]]; then
+            echo "::error::Could not resolve a Key Vault name. Set the LOOM_KV_NAME repo variable or pass kv_name."
+            exit 1
+          fi
+          echo "Using Key Vault: $KV"
+          SS=$(az keyvault secret show --vault-name "$KV" --name "$KV_SECRET_NAME" --query value -o tsv 2>/dev/null || true)
+          if [[ -z "$SS" ]]; then
+            SS=$(az keyvault secret show --vault-name "$KV" --name "loom-session-secret" --query value -o tsv 2>/dev/null || true)
+          fi
+          if [[ -z "$SS" ]]; then
+            echo "::error::Could not read '$KV_SECRET_NAME' (or 'loom-session-secret') from Key Vault $KV. Ensure the SP has Key Vault Secrets User."
+            exit 1
+          fi
+          echo "::add-mask::$SS"
+          echo "SESSION_SECRET=$SS" >> "$GITHUB_ENV"
+          echo "Fetched and masked SESSION_SECRET from $KV/$KV_SECRET_NAME"
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # The exercise driver is dependency-free (Node builtins only) — no
+      # pnpm install needed. It POSTs the run, polls for the report, prints
+      # per-service pass/gate/fail + evidence, and exits 1 on any real fail.
+      - name: Exercise all services (fail on any real 'fail')
+        env:
+          SESSION_SECRET:       ${{ env.SESSION_SECRET }}
+          LOOM_URL:             ${{ env.LOOM_URL }}
+          LOOM_AUTOMATION_OID:  ${{ env.LOOM_AUTOMATION_OID }}
+          LOOM_AUTOMATION_UPN:  ${{ env.LOOM_AUTOMATION_UPN }}
+          LOOM_AUTOMATION_NAME: ${{ env.LOOM_AUTOMATION_NAME }}
+          EXERCISE_SERVICES:    ${{ inputs.services }}
+        run: node scripts/csa-loom/exercise-services.mjs
