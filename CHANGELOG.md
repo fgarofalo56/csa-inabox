@@ -25,6 +25,44 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.66.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.65.0...csa-inabox-v0.66.0) (2026-07-12)
+
+
+### Features
+
+* **chargeback:** all-subs/all-resources coverage + per-workspace cost model (compute-attributed, custom usage logging) ([#1956](https://github.com/fgarofalo56/csa-inabox/issues/1956)) ([d5c9164](https://github.com/fgarofalo56/csa-inabox/commit/d5c9164c5790f98c9b058c133e4d1bfd40cab7b7))
+* **connections:** test/edit/analyze + reuse saved connections across surfaces ([#1975](https://github.com/fgarofalo56/csa-inabox/issues/1975)) ([b1cd356](https://github.com/fgarofalo56/csa-inabox/commit/b1cd3564fbb224f6a0471a88568c5e5d5508d86b))
+* **shell:** persist running notebooks/pipelines across navigation + running-workloads switcher ([#1965](https://github.com/fgarofalo56/csa-inabox/issues/1965)) ([3693462](https://github.com/fgarofalo56/csa-inabox/commit/3693462ee5b90a10c253c2482e2f201ab4a435bf))
+* **workspace:** set a workspace image/icon (PBI/Fabric-parity) rendered across the UI ([#1974](https://github.com/fgarofalo56/csa-inabox/issues/1974)) ([c49be1e](https://github.com/fgarofalo56/csa-inabox/commit/c49be1e870a17960bea5b745867cddfecf62b3a8))
+
+
+### Bug Fixes
+
+* **admin/scaling:** rebuild scale-by-SKU surface to Loom design standards (alignment/format/readability) ([#1955](https://github.com/fgarofalo56/csa-inabox/issues/1955)) ([a68f29d](https://github.com/fgarofalo56/csa-inabox/commit/a68f29d55e3ebc05df87521bea37f0344d45912f))
+* **admin/updates:** wire the Update button to a real update action ([#1968](https://github.com/fgarofalo56/csa-inabox/issues/1968)) ([143435d](https://github.com/fgarofalo56/csa-inabox/commit/143435d9586f4923157534e2ed3a9a5ee5a9db7b))
+* **admin:** all runtimes default-on/configured (73/73) + Health self-audit to 100 ([#1970](https://github.com/fgarofalo56/csa-inabox/issues/1970)) ([ea13338](https://github.com/fgarofalo56/csa-inabox/commit/ea1333887f63d1a14c720b144bedd66d14504df7))
+* **ci:** point validation/capture workflows at the live vanity URL (dead azurefd default → 404) ([#1950](https://github.com/fgarofalo56/csa-inabox/issues/1950)) ([623f1e2](https://github.com/fgarofalo56/csa-inabox/commit/623f1e27464f9f3193f398d60252cc2ec263be5b))
+* **data-engineering:** batch-pool + full family A+ audit (real backends, no stubs) ([#1973](https://github.com/fgarofalo56/csa-inabox/issues/1973)) ([7ea729c](https://github.com/fgarofalo56/csa-inabox/commit/7ea729c6e5455dd2bd835448afd98719ec3fe7e7))
+* **databases:** PostgreSQL query path presented as vaporware — honest gate names the real env var ([#1972](https://github.com/fgarofalo56/csa-inabox/issues/1972)) ([9d365dd](https://github.com/fgarofalo56/csa-inabox/commit/9d365dd7439ab97c1b3f2aa85d056c5fe831c87b))
+* **databricks:** pre-built loom-cluster-s/m/l per tier (created live) — notebook-attachable ([#1967](https://github.com/fgarofalo56/csa-inabox/issues/1967)) ([b282310](https://github.com/fgarofalo56/csa-inabox/commit/b282310a57c2673bcddaaa6f81aea57aadbb9c7c))
+* **databricks:** provision pre-built CLUSTERS per tier (were only instance pools) so they show in the notebook picker ([#1952](https://github.com/fgarofalo56/csa-inabox/issues/1952)) ([a63b00d](https://github.com/fgarofalo56/csa-inabox/commit/a63b00de19df8c0efe3410e3aad1db8f5b74d11e))
+* **docs-copilot:** restore CSA Loom context — chat no longer always "uncovered" ([#1953](https://github.com/fgarofalo56/csa-inabox/issues/1953)) ([6f5ceac](https://github.com/fgarofalo56/csa-inabox/commit/6f5ceacc0dd60d12e77b5e963f6c9425e4438d73))
+* **nav:** collapsible sections + working Pinned section ([#1959](https://github.com/fgarofalo56/csa-inabox/issues/1959)) ([76a755d](https://github.com/fgarofalo56/csa-inabox/commit/76a755d318a5e668c6b93aa584d12dca62b4ee56))
+* **observability:** null-safety + parallelized/timeout/cached queries so monitor reports load fast and never crash ([#1957](https://github.com/fgarofalo56/csa-inabox/issues/1957)) ([97cb70a](https://github.com/fgarofalo56/csa-inabox/commit/97cb70aa26d2b907324a22cffe6ffa971e195b58))
+* **org-reports:** unblock Open-analytics embed (CSP frame-src) ([#1954](https://github.com/fgarofalo56/csa-inabox/issues/1954)) ([923af37](https://github.com/fgarofalo56/csa-inabox/commit/923af37dfaa12400e12424926a7418d9d92ec9b7))
+* **paginated-report,scorecard:** E2E - real backends, no stubs, features work ([#1958](https://github.com/fgarofalo56/csa-inabox/issues/1958)) ([8309383](https://github.com/fgarofalo56/csa-inabox/commit/830938355a2345c1f68aec8fb670c053a62e8f3a))
+* **powerbi:** full Loom&lt;-&gt;PBI workspace mapping - manage/deploy/build mapped PBI items in Loom ([#1963](https://github.com/fgarofalo56/csa-inabox/issues/1963)) ([82f8e3b](https://github.com/fgarofalo56/csa-inabox/commit/82f8e3b2c045723f8791d0c790d2c2e84d1313dd))
+* **report,dashboard:** E2E — every control real-backend, no stubs/null-crashes, Loom-native + mapped-PBI ([#1960](https://github.com/fgarofalo56/csa-inabox/issues/1960)) ([4d68c65](https://github.com/fgarofalo56/csa-inabox/commit/4d68c65350d608fa69dea10c63ca1a705d603421))
+* **report/get-data:** unbreak the Get Data popup (dismiss + always-reachable Loom item source) ([#1966](https://github.com/fgarofalo56/csa-inabox/issues/1966)) ([bd732ad](https://github.com/fgarofalo56/csa-inabox/commit/bd732ad48ec4daace9137f1c9658d42334823b6c))
+* **rti:** KQL Queryset "Save to dashboard" no longer wipes the target dashboard's model ([#1971](https://github.com/fgarofalo56/csa-inabox/issues/1971)) ([a3bcf32](https://github.com/fgarofalo56/csa-inabox/commit/a3bcf32dff32f487e33f968908cfd7ceebc51f5c))
+* **semantic-model:** surface loom-directlake framing engine + refresh DirectLake parity doc ([#1962](https://github.com/fgarofalo56/csa-inabox/issues/1962)) ([d91361a](https://github.com/fgarofalo56/csa-inabox/commit/d91361a96c183d09df1f169770131ba9123b33ab))
+* **setup:** landing-zone deploy/attach day-one via user-delegated auth + correct routing/RBAC/ABAC ([#1961](https://github.com/fgarofalo56/csa-inabox/issues/1961)) ([3e2fb6c](https://github.com/fgarofalo56/csa-inabox/commit/3e2fb6c9514021e7a1e9f0ac9d39b79c34e81ed0))
+
+
+### Documentation
+
+* **site:** consolidate duplicate CSA Loom nav into one tab ([#1969](https://github.com/fgarofalo56/csa-inabox/issues/1969)) ([25bbf0e](https://github.com/fgarofalo56/csa-inabox/commit/25bbf0ed6dc29f06028a2d74ab67e53d7a03709d))
+
 ## [0.65.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.64.1...csa-inabox-v0.65.0) (2026-07-12)
 
 
