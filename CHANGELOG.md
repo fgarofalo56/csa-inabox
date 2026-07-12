@@ -25,6 +25,26 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.65.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.64.1...csa-inabox-v0.65.0) (2026-07-12)
+
+
+### Features
+
+* **copilot:** G2 AI functions — add-AI-column + batch endpoint + notebook parity (closes G2 checkboxes) ([#1946](https://github.com/fgarofalo56/csa-inabox/issues/1946)) ([0d0f500](https://github.com/fgarofalo56/csa-inabox/commit/0d0f500e5001d3c13e828d06924eb54aec0b8937))
+* **health:** exercise-every-service validation — probes real data paths, catches faulted-pool-class failures ([#1943](https://github.com/fgarofalo56/csa-inabox/issues/1943)) ([db34e83](https://github.com/fgarofalo56/csa-inabox/commit/db34e832c183c9426ff069da6cb116ace320b6a0))
+* **model:** wire linguistic-schema grounding into synonyms route + report Q&A (OPEN-REGISTER P1-8a) ([#1948](https://github.com/fgarofalo56/csa-inabox/issues/1948)) ([c0c719b](https://github.com/fgarofalo56/csa-inabox/commit/c0c719bb89d778498b80f20ffb0f1e32fdcdbfe5))
+
+
+### Bug Fixes
+
+* **report/get-data:** add missing bindHead style — unblocks next build ([#1944](https://github.com/fgarofalo56/csa-inabox/issues/1944)) ([662ddb7](https://github.com/fgarofalo56/csa-inabox/commit/662ddb77b048f693706d35105bf827e9335a4ef4))
+* **spark-pool:** synchronous warming-slot reconcile — fixes pool stuck warming (serverless CPU-throttle) ([#1947](https://github.com/fgarofalo56/csa-inabox/issues/1947)) ([8210df0](https://github.com/fgarofalo56/csa-inabox/commit/8210df0260b90f553268cb362b90af663aec4354))
+
+
+### Documentation
+
+* **fiab:** refresh full-picture architecture + diagrams (warm-pool, validation, compute tiers, get-data) ([#1949](https://github.com/fgarofalo56/csa-inabox/issues/1949)) ([51cf027](https://github.com/fgarofalo56/csa-inabox/commit/51cf027cd0586a63fce68a8f9b31c98b60584ba3))
+
 ## [0.64.1](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.64.0...csa-inabox-v0.64.1) (2026-07-12)
 
 
