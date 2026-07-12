@@ -209,6 +209,17 @@ const useStyles = makeStyles({
     transitionProperty: 'box-shadow, border-color',
     transitionDuration: tokens.durationFaster,
     ':hover': { boxShadow: tokens.shadow8, border: `1px solid ${tokens.colorNeutralStroke2}` },
+    // PBI-parity hover-reveal chrome: any header action cluster the host tags
+    // with the `ff-chrome-actions` class stays invisible until the frame is
+    // hovered or holds keyboard focus (focus-within keeps it a11y-reachable) —
+    // the quiet-canvas / toolbar-on-hover behavior of a Power BI visual.
+    '& .ff-chrome-actions': {
+      opacity: 0,
+      transitionProperty: 'opacity',
+      transitionDuration: tokens.durationFaster,
+    },
+    '&:hover .ff-chrome-actions': { opacity: 1 },
+    '&:focus-within .ff-chrome-actions': { opacity: 1 },
   },
   // Clipped content layer (header + body). Fills the frame inside its border and
   // rounds the corners; the resize handles live OUTSIDE this layer (as frame
@@ -222,6 +233,9 @@ const useStyles = makeStyles({
   frameSelected: {
     border: `1px solid ${tokens.colorBrandStroke1}`,
     boxShadow: `0 0 0 1px ${tokens.colorBrandStroke1}, ${tokens.shadow16}`,
+    // Selection pins the hover-reveal chrome open (PBI: selected visual keeps
+    // its toolbar visible while you work in it).
+    '& .ff-chrome-actions': { opacity: 1 },
   },
   frameMulti: { border: `1px solid ${tokens.colorBrandStroke2}` },
   frameHidden: { opacity: 0.4 },
