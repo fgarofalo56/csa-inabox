@@ -166,9 +166,17 @@ jobs:
 
       # -----------------------------------------------------------------------
       # 5. Install Playwright + Chromium only (lightweight)
+      #    SKIPPED when the runner image bakes the browsers (in-VNet gh-aca-runner:
+      #    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright). The runner's firewall egress
+      #    blocks the browser CDN, so a runtime download would fail anyway.
       # -----------------------------------------------------------------------
       - name: Install Playwright browsers (Chromium)
-        run: pnpm -C apps/fiab-console exec playwright install --with-deps chromium
+        run: |
+          if [ -d "/ms-playwright" ]; then
+            echo "Browsers baked into the runner image (/ms-playwright) — skipping install"
+          else
+            pnpm -C apps/fiab-console exec playwright install --with-deps chromium
+          fi
 
       # -----------------------------------------------------------------------
       # 6. Run the `verify` project
@@ -177,7 +185,10 @@ jobs:
       #    - `verify` tests run with the minted storageState
       # -----------------------------------------------------------------------
       - name: Run loom-ui-verify (--project=verify)
-        run: pnpm -C apps/fiab-console exec playwright test --project=verify
+        run: |
+          # Prefer the baked browsers when the runner image carries them.
+          if [ -d "/ms-playwright" ]; then export PLAYWRIGHT_BROWSERS_PATH=/ms-playwright; fi
+          pnpm -C apps/fiab-console exec playwright test --project=verify
         env:
           SESSION_SECRET:       ${{ env.SESSION_SECRET }}
           LOOM_URL:             ${{ env.LOOM_URL }}

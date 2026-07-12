@@ -127,7 +127,10 @@ RUN set -euo pipefail; \
 USER root
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 RUN set -euo pipefail; \
-    npx --yes playwright@1.48.0 install --with-deps chromium; \
+    # 1.60.0 = the lockfile's RESOLVED @playwright/test (package.json says ^1.48.0
+    # but pnpm-lock resolves 1.60.0). The baked chromium build revision must match
+    # the tests' playwright or it errors "Executable doesn't exist" at run time.
+    npx --yes playwright@1.60.0 install --with-deps chromium; \
     chmod -R a+rX /ms-playwright
 # ---------------------------------------------------------------------------
 
