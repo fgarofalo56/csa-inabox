@@ -14,6 +14,12 @@ import {
   buildContributorGrantCommand,
   buildProviderRegisterCommands,
 } from '@/lib/setup/deploy-preflight';
+import {
+  buildDlzDeploymentParameters,
+  resolveDlzTemplateSource,
+  submitDlzDeployment,
+  DLZ_TEMPLATE_ENV,
+} from '@/lib/setup/user-arm-deploy';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -557,6 +563,113 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  // ── Tier 2: user-delegated ARM deployment (DAY-ONE, no orchestrator/CI needed) ─
+  // Submit the REAL subscription-scoped `Microsoft.Resources/deployments` PUT
+  // straight from the BFF under the SIGNED-IN USER's delegated ARM token
+  // (getArmTokenPreferUser). Authenticating as the USER is what lets an operator
+  // deploy/attach a DLZ into ANY subscription they personally hold Contributor on
+  // — the Console UAMI only has rights on the Loom-owned subs, so it could never
+  // target a user-owned subscription. The dlz-attach params (topology + hub
+  // coordinates + feature toggles) are threaded verbatim into main.bicep, so the
+  // landing-zone bicep wires VNet peering / private DNS / RBAC / ABAC exactly as
+  // `az deployment sub create` would.
+  //
+  // Requires the published compiled template (LOOM_DLZ_TEMPLATE_URI) — ARM REST
+  // cannot compile .bicep. When it is unset this tier is SKIPPED and the honest
+  // copy-paste gate below (which names the env var) is returned. That one-time
+  // publish is the documented infra step, not a fake success (no-vaporware).
+  const templateSource = resolveDlzTemplateSource();
+  if (templateSource) {
+    const arm = await getArmTokenPreferUser(session).catch(() => null);
+    if (arm?.token) {
+      // Only forward feature toggles the caller explicitly set, so bicep defaults
+      // are preserved for anything the wizard left alone.
+      const featureToggles: Record<string, boolean> = {};
+      for (const k of [
+        'adxEnabled',
+        'cosmosGraphVectorEnabled',
+        'weaveOntologyEnabled',
+        'databricksUnityCatalogEnabled',
+        'databricksSqlWarehouseEnabled',
+      ] as const) {
+        if (typeof body[k] === 'boolean') featureToggles[k] = body[k] as boolean;
+      }
+      const parameters = buildDlzDeploymentParameters({
+        topology,
+        boundary: body.boundary!,
+        location: region,
+        capacitySku: body.capacitySku!,
+        domainName: body.domainName!,
+        deploymentMode: topology === 'tenant' ? body.mode : undefined,
+        targetSubscriptionId: body.targetSubscriptionId,
+        dlzSubscriptionIds: body.dlzSubscriptionIds,
+        dlzDomainNames: body.dlzDomainNames,
+        hubCoords: topology === 'dlz-attach' ? hubCoords : undefined,
+        featureToggles,
+      });
+      const submitted = await submitDlzDeployment({
+        subscriptionId: body.subscriptionId!,
+        region,
+        parameters,
+        templateSource,
+        getToken: async () => arm.token,
+      });
+      if (submitted.ok && submitted.deploymentId) {
+        const statusUrl =
+          `/api/setup/deploy-status?id=${encodeURIComponent(submitted.deploymentId)}` +
+          `&mode=user-arm&subscriptionId=${encodeURIComponent(body.subscriptionId!)}`;
+        return NextResponse.json(
+          {
+            ok: true,
+            deploymentMode: 'user-arm',
+            identity: arm.identity,
+            deploymentId: submitted.deploymentId,
+            provisioningState: submitted.provisioningState,
+            statusUrl,
+            subscriptionId: body.subscriptionId,
+            message:
+              arm.identity === 'user'
+                ? 'Deployment submitted to Azure Resource Manager under your account.'
+                : 'Deployment submitted to Azure Resource Manager under the Console identity.',
+          },
+          { status: 202 },
+        );
+      }
+      // 401/403 from ARM → the deploying identity lacks Contributor on the target
+      // sub: surface the precise grant instead of falling to a copy-paste gate.
+      if (submitted.status === 401 || submitted.status === 403) {
+        const grant = buildContributorGrantCommand({
+          subscriptionId: body.subscriptionId!,
+          principalObjectId:
+            arm.identity === 'user'
+              ? undefined
+              : process.env.LOOM_CONSOLE_PRINCIPAL_ID || hubTopology?.hubConsolePrincipalId,
+          principalType: arm.identity === 'user' ? 'User' : 'ServicePrincipal',
+          isGov,
+        });
+        return NextResponse.json(
+          {
+            ok: false,
+            error: 'forbidden',
+            requiredRole: 'Contributor',
+            identity: arm.identity,
+            targetSubscriptionId: body.subscriptionId,
+            remediation:
+              `${arm.identity === 'user' ? 'You do' : 'The deploying identity does'} not have permission to ` +
+              `deploy a Data Landing Zone into subscription ${body.subscriptionId}. A subscription-scoped ` +
+              `deployment requires the Contributor role. Grant it, then retry:\n\n${grant}`,
+          },
+          { status: 403 },
+        );
+      }
+      // Any other ARM error is NON-FATAL — log and fall through to the dispatch /
+      // copy-paste tiers so the operator still gets a runnable path.
+      console.error(
+        `[setup/deploy] user-delegated ARM submit failed (${submitted.status ?? 'n/a'}); falling back: ${submitted.error}`,
+      );
+    }
+  }
+
   // Map the chosen boundary to its real .bicepparam (verified to exist in
   // platform/fiab/bicep/params/). No invented file names.
   const paramFileByBoundary: Record<string, string> = {
@@ -747,7 +860,9 @@ export async function POST(req: NextRequest) {
         : 'Setup Orchestrator service is not deployed in this environment',
       remediation: {
         message:
-          'The Setup Wizard captured a complete, valid deployment config but the browser-driven Setup Orchestrator is not deployed here yet (set LOOM_SETUP_ORCHESTRATOR_URL by deploying setup-orchestrator.bicep). Copy the command below — it is pre-filled with your selected subscription(s), region, and boundary — and run it locally:',
+          'The Setup Wizard captured a complete, valid deployment config but no in-product deploy backend is wired here yet. Enable the DAY-ONE in-product deploy by publishing the compiled template (platform/fiab/bicep/main.json) to a reachable URI and setting ' +
+          DLZ_TEMPLATE_ENV +
+          ' on the Console app — the deploy then runs under your signed-in account. (Alternatively deploy the Setup Orchestrator via setup-orchestrator.bicep.) Or copy the command below — it is pre-filled with your selected subscription(s), region, and boundary — and run it locally:',
         commands,
         learnMoreUrl: '/learn?topic=setup-wizard',
         capturedConfig: body,

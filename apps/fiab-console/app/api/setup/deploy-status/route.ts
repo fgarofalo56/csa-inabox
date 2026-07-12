@@ -15,9 +15,13 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { getArmTokenPreferUser } from '@/lib/auth/obo';
+import { readDlzDeploymentStatus } from '@/lib/setup/user-arm-deploy';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+
+const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function orchestratorUrl(): string {
   return (process.env.LOOM_SETUP_ORCHESTRATOR_URL || '').trim().replace(/\/+$/, '');
@@ -27,8 +31,50 @@ export async function GET(req: NextRequest) {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
 
-  const id = (new URL(req.url).searchParams.get('id') || '').trim();
+  const url = new URL(req.url);
+  const id = (url.searchParams.get('id') || '').trim();
   if (!id) return NextResponse.json({ ok: false, error: 'missing deployment id' }, { status: 400 });
+
+  // ── mode=user-arm: poll the subscription-scoped ARM deployment the deploy route
+  // submitted under the SIGNED-IN USER's delegated token. Real ARM GET (no
+  // orchestrator needed) so the wizard's "done" step streams live progress on the
+  // day-one deploy path. ──────────────────────────────────────────────────────
+  if (url.searchParams.get('mode') === 'user-arm') {
+    const subscriptionId = (url.searchParams.get('subscriptionId') || '').trim();
+    if (!GUID_RE.test(subscriptionId)) {
+      return NextResponse.json(
+        { ok: false, error: `mode=user-arm requires a valid subscriptionId GUID: ${subscriptionId || '(missing)'}` },
+        { status: 400 },
+      );
+    }
+    const arm = await getArmTokenPreferUser(session).catch(() => null);
+    if (!arm?.token) {
+      return NextResponse.json(
+        { ok: false, error: 'Could not acquire an ARM token to read the deployment status.' },
+        { status: 502 },
+      );
+    }
+    const st = await readDlzDeploymentStatus({
+      subscriptionId,
+      deploymentName: id,
+      getToken: async () => arm.token,
+    });
+    if (!st.ok) {
+      return NextResponse.json({ ok: false, error: st.error, deploymentId: id }, { status: st.status ?? 502 });
+    }
+    const state = st.provisioningState || 'Running';
+    return NextResponse.json({
+      ok: true,
+      deploymentId: id,
+      status: state,
+      provisioningState: state,
+      progress: st.progress,
+      stage: `Azure Resource Manager: ${state}`,
+      ...(state.toLowerCase() === 'failed' || state.toLowerCase() === 'canceled'
+        ? { error: `Deployment ${state}` }
+        : {}),
+    });
+  }
 
   const orchUrl = orchestratorUrl();
   if (!orchUrl) {

@@ -444,6 +444,20 @@ export function AddLandingZoneWizardPane() {
         setPhase('done');
         return;
       }
+      // Day-one path: the deployment was submitted straight to Azure Resource
+      // Manager under the signed-in user's delegated token (identity==='user') or
+      // the Console identity. Real ARM deployment id — pollable via statusUrl.
+      if (res.status === 202 && j.ok && j.deploymentMode === 'user-arm') {
+        setDeploymentId(j.deploymentId);
+        setDeployStage(
+          j.identity === 'user'
+            ? `Submitted to Azure under your account (${j.provisioningState || 'Accepted'})`
+            : `Submitted to Azure under the Console identity (${j.provisioningState || 'Accepted'})`,
+        );
+        setDeployProgress(0.4);
+        setPhase('done');
+        return;
+      }
       if (res.status === 403 || j.error === 'forbidden') {
         const rem = typeof j.remediation === 'string' ? `\n\n${j.remediation}` : '';
         setDeployError(`You don't have permission to attach a Data Landing Zone (requires ${j.requiredRole || 'Contributor'}).${rem}`);
