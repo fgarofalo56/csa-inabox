@@ -81,8 +81,13 @@ function normalizeHost(h: string): string {
   return String(h).replace(/^https?:\/\//, '').replace(/\/$/, '');
 }
 
-/** Best-effort read of every persisted registration for a tenant. */
-async function listRegistrations(tenantId: string): Promise<MetastoreRegistration[]> {
+/**
+ * Best-effort read of every persisted registration for a tenant. Returns
+ * `null` (NOT an empty list) when the Cosmos read fails so the caller can
+ * surface an honest degraded envelope instead of silently rendering an empty
+ * registrations list during an outage (no-vaporware.md).
+ */
+async function listRegistrations(tenantId: string): Promise<MetastoreRegistration[] | null> {
   try {
     const c = await metastoreRegistrationsContainer();
     const { resources } = await c.items
@@ -93,7 +98,7 @@ async function listRegistrations(tenantId: string): Promise<MetastoreRegistratio
       .fetchAll();
     return resources;
   } catch {
-    return [];
+    return null;
   }
 }
 
@@ -142,7 +147,18 @@ export async function GET() {
   }
 
   // Persisted registrations (Cosmos) — what makes registration survive reloads.
-  result.registrations = await listRegistrations(tenantId);
+  // A Cosmos failure degrades honestly (empty list + warning) rather than
+  // silently rendering "no registrations".
+  const registrations = await listRegistrations(tenantId);
+  if (registrations === null) {
+    result.registrations = [];
+    result.degraded = true;
+    result.warning =
+      'Persisted metastore registrations could not be read (Cosmos query failed) — the registrations list may be incomplete. ' +
+      'Live Unity Catalog / HMS listings are unaffected. Retry, or check the Cosmos account / Console UAMI data-plane role if this persists.';
+  } else {
+    result.registrations = registrations;
+  }
 
   // Account metastores (for the attach picker). Soft-fail with an honest gate
   // when the account API isn't configured or the UAMI isn't an account admin.

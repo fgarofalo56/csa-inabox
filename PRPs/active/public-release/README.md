@@ -9,13 +9,19 @@
 
 ## Verdict
 
-**NOT READY.** The product a signed-in single operator uses is largely B/A-grade, but the
-public-facing edges no prior sweep exercised — the documented install path, the login flow,
-the first upgrade, a second user in a shared workspace, the CI/test gate, and the published
-docs site — each hit a wall. ~13 confirmed blockers (Wave 0–1b) plus deployment-truth
-(Wave 2) gate the tag.
+**SHIPPED — all 108 items landed (Waves 0–7 complete, 2026-07-03…07-06; release-readiness
+re-verified 2026-07-06).** The original 2026-07-02 verdict below is preserved as history.
+All 13 release blockers were closed, the G1–G11 gates greened (see the checked-off gate
+list in `docs/fiab/prp/RELEASE-READINESS-2026-07-02.md`), and the from-scratch deploy was
+proven (subscription-scope validate + what-if with 0 errors).
 
-## The 13 release blockers (Wave 0–1b)
+> Historical verdict (2026-07-02): **NOT READY.** The product a signed-in single operator
+> uses is largely B/A-grade, but the public-facing edges no prior sweep exercised — the
+> documented install path, the login flow, the first upgrade, a second user in a shared
+> workspace, the CI/test gate, and the published docs site — each hit a wall. ~13 confirmed
+> blockers (Wave 0–1b) plus deployment-truth (Wave 2) gated the tag.
+
+## The 13 release blockers (Wave 0–1b) — ALL CLOSED (2026-07-06)
 
 | Blocker | rel-T | Wave |
 |---------|-------|------|
@@ -54,16 +60,17 @@ docs site — each hit a wall. ~13 confirmed blockers (Wave 0–1b) plus deploym
 3. **Serialize ACR rolls** (parallel rolls fail); parallel agents never `git stash`; build heap 6144.
 4. **Attach a real-data E2E receipt** to every PR (endpoint + real response + screenshot/trace + bicep diff).
 
-## Grade table (2026-07-02)
+## Grade table (2026-07-02, pre-program baseline)
 
 vaporware-api A · vaporware-editors B · fabric-parity B · no-fabric-dep B · ui-consistency B ·
 security B · refactor B · usability B · ui-navigation C · access-control C · deployment C ·
 testing C · docs-help C · product-gaps C.
 
-## Effort roll-up
+## Effort roll-up (completed)
 
-S ≈ 46 · M ≈ 42 · L ≈ 15 · XL ≈ 5 (108 items). Critical path to a v1 tag = Waves 0–1b;
-Wave 2 gates Gov + teardown; Waves 3–7 raise the grade from shippable to A/A+.
+S ≈ 46 · M ≈ 42 · L ≈ 15 · XL ≈ 5 (108 items — **all landed**). Critical path to a v1 tag =
+Waves 0–1b (done); Wave 2 Gov + teardown gates cleared; Waves 3–7 landed the grade raise.
+Gov console is live at `csaloom-gov.limitlessdata.ai` (MSAL + PBI Embedded A1 + vanity URL).
 
 ## Related
 

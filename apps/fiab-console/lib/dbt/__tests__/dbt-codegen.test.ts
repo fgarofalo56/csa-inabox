@@ -100,6 +100,12 @@ describe('dbt-codegen', () => {
     expect(sql).toContain("{{ ref('stg_orders') }}");
   });
 
+  it('throws an honest error (no placeholder emission) when a model has no SQL body', () => {
+    const m = { ...fixture().models[0], sql: '' };
+    expect(() => generateModelSql(m)).toThrow(/has no SQL body/);
+    expect(() => generateModelSql(m)).toThrow(m.name);
+  });
+
   it('emits schema.yml with column tests (unique/not_null) and accepted_values', () => {
     const y = generateSchemaYml(fixture().models);
     expect(y).toContain('- name: stg_orders');

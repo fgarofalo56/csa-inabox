@@ -1,6 +1,12 @@
 # PRP — Best-LLM-per-Task, Day-One, Cloud-Aware Model Strategy + APIM AI-Gateway
 
-**Status:** Active · **Created:** 2026-07-11 · **Owner:** autonomous build program
+**Status:** SHIPPED (2026-07-12) — Waves M1–M6 landed as PRs #1903–#1914: AIF-12
+tier router wired day-one (`lib/foundry/model-tier-router.ts`), cloud-aware
+model-availability matrix (`lib/foundry/model-availability-matrix.ts`) with
+deploy-time best-available resolution + Gov APIM-policy auto-fallback (#1912),
+APIM AI-gateway opt-in, GPT-5.x support, and the embeddings / Help-Copilot-Gov
+correctness bugs fixed. Runbook: `docs/fiab/model-strategy.md`.
+**Created:** 2026-07-11 · **Owner:** autonomous build program
 **Related rules:** `no-fabric-dependency.md`, `no-vaporware.md`, `ui-parity.md`,
 `ux-baseline.md`, `web3-ui.md`, `loom_default_on_opt_out` (memory),
 `no_scaffold_claims` (memory)

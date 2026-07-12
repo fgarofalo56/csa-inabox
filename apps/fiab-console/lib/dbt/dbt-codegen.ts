@@ -182,10 +182,18 @@ export function generateModelSql(m: DbtModel): string {
   }
   const header = `{{ config(${cfg.join(', ')}) }}`;
   const body = (m.sql || '').trim();
+  if (!body) {
+    // No placeholder emission (no-vaporware.md): a body-less model would
+    // silently compile to junk SQL and materialize a fake table. Fail loud
+    // with the exact model to author instead.
+    throw new Error(
+      `dbt model '${m.name}' has no SQL body. Author its SQL in the model editor before generating or running the project.`,
+    );
+  }
   const parts = [header];
   if (m.description) parts.push(`-- ${m.description.replace(/\n/g, ' ')}`);
   parts.push('');
-  parts.push(body || `select 1 as placeholder -- TODO: author ${m.name}`);
+  parts.push(body);
   return parts.join('\n') + '\n';
 }
 

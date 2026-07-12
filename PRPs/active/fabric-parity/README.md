@@ -122,10 +122,16 @@ section. Status legend: **A** = built, real backend, day-one (regression
 baseline) · **B** = built but opt-in/gated or shallow · **C** = partial /
 parity-gap · **D** = stubbed/broken · **❌** = missing.
 
+> **Scorecard refresh 2026-07-12** — grades re-verified against `main` after the
+> public-release program (Waves 0–7, all 108 items landed), the Track-A P0 fixes,
+> and the 07-01/07-02 parity + enhancement builds. Every grade change below is
+> backed by code evidence (route / editor / bicep module named in the backend
+> column's domain appendix). Rows still C are tracked in `PHASES.md`.
+
 | Fabric workload / capability | Azure-native Loom backend (default) | Loom status | Gap → Phase |
 |---|---|---|---|
 | **OneLake** storage, shortcuts (ADLS/S3/GCS), Delta/Iceberg | ADLS Gen2 + Delta; shortcut engines | **A** | — |
-| OneLake short-lived user-delegated SAS (external access) | ADLS user-delegation SAS + Storage Blob Delegator | **D** broken | P3 |
+| OneLake short-lived user-delegated SAS (external access) | ADLS user-delegation SAS + Storage Blob Delegator | **A** (user-delegation key in `adls-client.ts`) | done |
 | OneLake access diagnostics (who-read-what) | ADLS diag → Log Analytics KQL | **❌** | P3 |
 | Shortcut caching / transformations / gateway / Iceberg-in | Synapse/Databricks/ADF copy + SHIR | **C** | P1/P3 |
 | OneLake file explorer hub + connect helpers | ADLS DFS recursive + catalog | **C** | P3 |
@@ -134,54 +140,54 @@ parity-gap · **D** = stubbed/broken · **❌** = missing.
 | Copy job (Full/Incremental/CDC) | ADF pipeline + Azure SQL watermark control table | **A** (847-row E2E) | broaden P1 |
 | Dataflow Gen2 (Fast Copy, staging, incremental) | ADF Copy/WranglingDataFlow | **C** | P1 |
 | Mapping data flow live preview/debug | ADF data-flow debug session | **C** | P1 |
-| Apache Airflow job | OSS Airflow (ACA/AKS) day-one | **D** no host | P0/P1 |
+| Apache Airflow job | OSS Airflow (ACA/AKS) day-one | **A** (`airflow.bicep` day-one host; honest quota-gate where Gov Postgres is restricted) | done |
 | Connector catalog (200+) | ADF/Synapse linkedservices ARM | **B** (72) | P1 |
 | Mirroring (SQL/Cosmos/Snowflake/PG/Databricks/MySQL/SAP) | ADF CDC / change-feed → Bronze Delta + Synapse | **C** | P1 |
 | **Lakehouse / Spark** notebooks, SJD, env, Delta maint | Synapse/Databricks Livy + ADLS Delta | **A** | — |
-| Data Wrangler (no-code transform + codegen) | pandas/PySpark transpiler on Livy | **❌** | P3/P5 |
-| API for GraphQL (auto-schema from SQL) | Data API Builder on ACA | **B** gated | P0/P3 |
+| Data Wrangler (no-code transform + codegen) | pandas/PySpark transpiler on Livy | **A** (`apps/fiab-wrangler-host` + notebook-editor Wrangler surface) | done |
+| API for GraphQL (auto-schema from SQL) | Data API Builder on ACA | **A** (`dab-runtime.bicep` day-one, `LOOM_DAB_PREVIEW_URL` wired) | done |
 | Native Execution Engine (Velox/Gluten) | Databricks Photon / Synapse Gluten conf | **❌** | P3 |
 | High-concurrency sessions + runMultiple DAG | shared Livy/Databricks session | **❌** | P3 |
 | **Warehouse** (T-SQL, schemas, queries) | Synapse dedicated/serverless + ADLS Delta | **B** | — |
-| Zero-copy CLONE TABLE (+ point-in-time) | Delta SHALLOW CLONE / CTAS fallback | **❌** | P3 |
-| FOR TIMESTAMP AS OF time travel | Delta time travel (Serverless/Spark) | **❌** | P3 |
-| Restore points + restore-in-place | Synapse ARM restore points / Delta RESTORE | **❌** | P3 |
-| COPY INTO ingestion wizard | Synapse TDS COPY INTO + UAMI credential | **❌** | P3 |
+| Zero-copy CLONE TABLE (+ point-in-time) | Delta SHALLOW CLONE / CTAS fallback | **A** (`warehouse/[id]/clone` route) | done |
+| FOR TIMESTAMP AS OF time travel | Delta time travel (Serverless/Spark) | **A** (`warehouse-time-travel.tsx` + `time-travel` route) | done |
+| Restore points + restore-in-place | Synapse ARM restore points / Delta RESTORE | **A** (`warehouse/[id]/snapshots` route) | done |
+| COPY INTO ingestion wizard | Synapse TDS COPY INTO + UAMI credential | **A** (warehouse-editor COPY INTO surface) | done |
 | RLS / CLS / DDM builders | Synapse SQL security policies | **C** | P3/P4 |
 | **Data Science** notebooks, AutoML, experiments | Synapse Spark + AML/OSS MLflow | **B** | — |
-| PREDICT batch scoring (ML model) | SynapseML MLFlowTransformer Spark job | **B** | P5 |
+| PREDICT batch scoring (ML model) | SynapseML MLFlowTransformer Spark job | **A** (`predict-wizard.tsx` in ml-model editor) | done |
 | Real-time endpoint test/lifecycle/auto-sleep | AML managed online endpoint / ACA scale-0 | **D** | P5 |
 | AI Functions (9) + Text Analytics / Translator | AOAI (chat + embeddings) + Azure AI Language/Translator (+OSS) | **B** (9/9 AI functions ✅; Text Analytics/Translator still P5) | P5 |
 | **Real-Time Intelligence** Eventhouse/KQL DB | Azure Data Explorer (ADX) | **A** | — |
-| **Activator (Reflex) runtime** | Logic App Standard → ADX Run-KQL → actions | **D** broken | **P0** |
-| RTI Hub day-one discovery + live preview | Resource Graph + ADX sink / EH Capture | **D** gated | **P0** |
+| **Activator (Reflex) runtime** | ADX-query-backed rule engine (`apps/fiab-activator-engine` `AdxRulePoller`) + Azure Monitor for LA/infra alerts | **A** (P0 fixed; rules persist + fire against Eventhouse/ADX) | done |
+| RTI Hub day-one discovery + live preview | Resource Graph + ADX sink / EH Capture | **A** (P0 fixed; day-one env + grants bicep-wired) | done |
 | Eventstream no-code canvas (7 operators) | Stream Analytics + Event Hubs | **C** | P2 |
 | Real-Time Dashboard depth | Loom-native renderer over ADX | **C** | P2 |
-| Anomaly detection / forecasting | ADX native KQL (series_decompose_*) | **❌** | P2 |
-| OneLake availability (ADX→Delta) | ADX continuous export → ADLS Delta | **❌** | P2 |
+| Anomaly detection / forecasting | ADX native KQL (series_decompose_*) | **A** (wired in kusto/activator trigger model + RTI surfaces) | done |
+| OneLake availability (ADX→Delta) | ADX continuous export → ADLS Delta | **A** (continuous export in `kusto-client.ts`) | done |
 | **Power BI** report designer + semantic model | Loom-native renderer + AAS / DAX→Synapse | **A** | — |
 | Multi-table (star-schema) visuals on default | report-model-resolver JOIN graph | **C** | P5 |
-| Day-one tabular engine (AAS / DAX→Synapse) | AAS day-one + Loom-native Gov default | **D** gated | P5 |
-| Linguistic schema / synonyms / Q&A grounding | Cosmos + AOAI + TMDL | **❌** | P5 |
+| Day-one tabular engine (AAS / DAX→Synapse) | AAS day-one + Loom-native Gov default | **A** (`aas.bicep` single-owner day-one; Direct-Lake shim + Serverless fallback shipped, see `docs/fiab/parity/direct-lake.md`) | done |
+| Linguistic schema / synonyms / Q&A grounding | Cosmos + AOAI + TMDL | **A** (`semantic-model/[id]/synonyms` route) | done |
 | Connected metrics / scorecards + alerts | DAX eval + Azure Monitor action groups | **C** | P5 |
 | Paginated report export (PDF/Excel) | render Function (needs bicep) | **C** | P5 |
 | **Databases** Fabric SQL DB / Cosmos DB HTAP | Azure SQL/Cosmos + auto-mirror → Bronze | **C** | P1 |
 | **Platform/ALM** workspaces, Git CI, deploy pipelines | Cosmos + ADO/GitHub REST + provisioners | **A** | — |
-| Workspace identity (per-ws UAMI + trusted access) | UAMI + RBAC + storage resource-instance rules | **❌** | P4/P6 |
+| Workspace identity (per-ws UAMI + trusted access) | UAMI + RBAC + storage resource-instance rules | **A** (`lib/azure/workspace-identity-client.ts`) | done |
 | Capacity Metrics app | Azure Monitor + Log Analytics + Cost | **C** | P6 |
 | Task flows (10 types, templates, multi-canvas) | Cosmos metadata | **C** | P6 |
-| Git branch-out to new workspace | ADO/GitHub ref API + Cosmos | **❌** | P6 |
+| Git branch-out to new workspace | ADO/GitHub ref API + Cosmos | **A** (`admin/workspaces/[id]/git/branch-out` route) | done |
 | **Governance** Purview Data Map / scan / classify | Classic Purview data plane (real) | **A** | — |
 | MIP labels / DLP / DSPM-AI / audit / catalog | Graph /beta + Cosmos + AI Search | **A** | — |
-| Protection policies (label → access enforce) | Loom label-protection engine (RBAC/DENY) | **D** | **P4** |
-| OneLake security roles (folder/table OLS+RLS/CLS) | ADLS ACL + Synapse RLS + ADX RLS | **D** | **P4** |
-| Item sharing / granular permission dialog | Cosmos grants + ADLS ACL + Synapse GRANT | **D** | **P4** |
-| Managed private endpoint self-service | ARM privateEndpoints on DLZ managed VNet | **❌** | **P4** |
+| Protection policies (label → access enforce) | Loom label-protection engine (RBAC/DENY) | **A** (`api/admin/protection-policies` + `lib/auth/pdp` engine) | done |
+| OneLake security roles (folder/table OLS+RLS/CLS) | ADLS ACL + Synapse RLS + ADX RLS | **A** (PDP context-loader/evaluate) | done |
+| Item sharing / granular permission dialog | Cosmos grants + ADLS ACL + Synapse GRANT | **A** (`api/items/[type]/[id]/share`) | done |
+| Managed private endpoint self-service | ARM privateEndpoints on DLZ managed VNet | **A** (07-01 parity build; ADF/Synapse managed-VNet PEs live-verified) | done |
 | Endorsement / certification | Cosmos + Graph group check | **C** | P4 |
 | Label inheritance / default / mandatory | MIP + reconciler | **C** | P4 |
 | **Developer** Fabric REST + LRO + `fab` CLI | Loom BFF REST + `loom` CLI | **A** | — |
-| User Data Functions execution | Azure Functions Flex / ACA host (day-one) | **D** no host | **P0**/P7 |
-| Unified Job Scheduler + schedule store | Cosmos schedule + provisioner | **❌** | P7 |
+| User Data Functions execution | Azure Functions Flex / ACA host (day-one) | **A** (`udf-runtime.bicep` day-one host; authored source executes) | done |
+| Unified Job Scheduler + schedule store | Cosmos schedule + provisioner | **A** (`app/api/scheduler`) | done |
 | Monitoring Hub (cross-item runs) | Livy + Log Analytics aggregation | **C** | P7 |
 | Fabric events → Event Grid webhooks | Event Grid system topic + subs | **C** | P7 |
 | Loom SDK (Python/TS) + Terraform provider | published packages ([roadmap](../../../docs/fiab/roadmap/loom-sdk-terraform.md)) | **❌ (roadmap)** | P7 |
@@ -189,6 +195,12 @@ parity-gap · **D** = stubbed/broken · **❌** = missing.
 ---
 
 ## 4. Track A — Fix the broken (from the audits)
+
+> **Update 2026-07-12:** Track A was executed — the Activator/RTI P0 cluster
+> (A1–A4) now runs on the ADX-backed `fiab-activator-engine`, UDF has a day-one
+> runtime (`udf-runtime.bicep`), DAB deploys day-one, and the Copilot 503 /
+> async-params classes were fixed in the public-release waves. The table below
+> is preserved as the historical audit record.
 
 Detailed in [`audit-rti-activator.md`](./audit-rti-activator.md),
 [`audit-data-integration.md`](./audit-data-integration.md),

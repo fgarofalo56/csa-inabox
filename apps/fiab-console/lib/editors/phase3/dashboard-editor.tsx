@@ -30,15 +30,16 @@ import {
   Tooltip,
   Dialog, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
   Label, Select, Textarea, SpinButton, InfoLabel,
-  tokens,
+  makeStyles, mergeClasses, tokens,
 } from '@fluentui/react-components';
 import {
   Pin20Regular, Sparkle20Regular, Flash20Regular, Save20Regular,
   DataBarVertical20Regular, ArrowSync20Regular, Open20Regular,
   Database20Regular, ArrowMaximize20Regular, Delete20Regular,
-  Play20Regular, Add20Regular,
+  Play20Regular, Add20Regular, Add24Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from '../item-editor-chrome';
+import { EmptyState } from '@/lib/components/empty-state';
 import { useAutosave, AutosaveIndicator } from '../use-autosave';
 import { PowerBIEmbedFrame } from '@/lib/components/embed/powerbi-embed';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
@@ -48,11 +49,89 @@ import { usePowerBiWorkspaces, WorkspacePicker } from './workspace-picker';
 import { TileVisual, type KqlResult, type TileViz } from './kql-results';
 import { useStyles } from './styles';
 
+/**
+ * Fabric-dashboard-grade tile chrome (UI-only): resting elevation that lifts on
+ * hover, a header divider, an ellipsising title, and a per-tile action toolbar
+ * that reveals on hover / keyboard focus. The `.tile-actions` cluster wraps the
+ * SAME real actions (refresh / fullscreen / remove / open) — chrome only.
+ */
+const useCanvasTileStyles = makeStyles({
+  tile: {
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusLarge,
+    backgroundColor: tokens.colorNeutralBackground1,
+    boxShadow: tokens.shadow4,
+    minHeight: '220px',
+    display: 'flex',
+    flexDirection: 'column',
+    minWidth: 0,
+    transitionProperty: 'box-shadow, border-color',
+    transitionDuration: tokens.durationNormal,
+    ':hover': { boxShadow: tokens.shadow16, border: `1px solid ${tokens.colorNeutralStroke1}` },
+    '& .tile-actions': {
+      opacity: 0,
+      transitionProperty: 'opacity',
+      transitionDuration: tokens.durationFaster,
+    },
+    ':hover .tile-actions': { opacity: 1 },
+    ':focus-within .tile-actions': { opacity: 1 },
+  },
+  tilePinned: { overflow: 'hidden', position: 'relative' },
+  tileHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
+    paddingTop: tokens.spacingVerticalS,
+    paddingBottom: tokens.spacingVerticalS,
+    paddingLeft: tokens.spacingHorizontalM,
+    paddingRight: tokens.spacingHorizontalM,
+    borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
+  },
+  tileTitle: {
+    fontWeight: tokens.fontWeightSemibold,
+    flex: 1,
+    minWidth: 0,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
+  tileActions: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXXS,
+    flexShrink: 0,
+  },
+  tileBody: { padding: tokens.spacingVerticalM, flex: 1 },
+  ghostTile: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: tokens.spacingVerticalS,
+    minHeight: '220px',
+    padding: tokens.spacingVerticalL,
+    border: `1px dashed ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusLarge,
+    backgroundColor: 'transparent',
+    color: tokens.colorNeutralForeground3,
+    cursor: 'pointer',
+    transitionProperty: 'background-color, border-color, color',
+    transitionDuration: tokens.durationFaster,
+    ':hover': {
+      border: `1px dashed ${tokens.colorBrandStroke1}`,
+      backgroundColor: tokens.colorNeutralBackground1Hover,
+      color: tokens.colorBrandForeground1,
+    },
+    ':focus-visible': { border: `1px dashed ${tokens.colorBrandStroke1}`, outlineStyle: 'none' },
+  },
+});
+
 interface DashboardLite { id: string; displayName: string; webUrl?: string; embedUrl?: string; isReadOnly?: boolean; }
 interface TileLite { id: string; title?: string; subTitle?: string; reportId?: string; datasetId?: string; embedUrl?: string; rowSpan?: number; colSpan?: number; }
 
 export function DashboardEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
+  const tc = useCanvasTileStyles();
   // The Loom canvas (Cosmos overlay + ADX/DAX tiles) is the Azure-native
   // DEFAULT. Linking/embedding live Power BI dashboards is the OPT-IN leg
   // (NEXT_PUBLIC_LOOM_BI_BACKEND=powerbi) — with it off the workspace hook is
@@ -327,23 +406,21 @@ export function DashboardEditor({ item, id }: { item: FabricItemType; id: string
                 {tiles.map((t) => {
                   const pos = layout[t.id];
                   return (
-                    <div key={t.id} style={{
-                      gridColumn: span(pos?.w ?? t.colSpan ?? 4),
-                      border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusXLarge,
-                      overflow: 'hidden', minHeight: 220, position: 'relative', background: tokens.colorNeutralBackground1,
-                    }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingVerticalS, padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`, borderBottom: `1px solid ${tokens.colorNeutralStroke2}` }}>
+                    <div key={t.id} className={mergeClasses(tc.tile, tc.tilePinned)} style={{ gridColumn: span(pos?.w ?? t.colSpan ?? 4) }}>
+                      <div className={tc.tileHeader}>
                         <Tooltip content="Pinned from a Power BI report/visual" relationship="label">
                           <Pin20Regular />
                         </Tooltip>
-                        <Caption1 style={{ fontWeight: 600, flex: 1 }}>{t.title || t.subTitle || 'Power BI tile'}</Caption1>
+                        <Caption1 className={tc.tileTitle}>{t.title || t.subTitle || 'Power BI tile'}</Caption1>
                         {t.reportId && (
-                          <Tooltip content="Drill to the source report in Power BI" relationship="label">
-                            <Button size="small" appearance="subtle" icon={<Open20Regular />} onClick={() => {
-                              if (!workspaceId || !t.reportId) return;
-                              try { window.open(`https://app.powerbi.com/groups/${encodeURIComponent(workspaceId)}/reports/${encodeURIComponent(t.reportId)}`, '_blank', 'noreferrer'); } catch { /* popup */ }
-                            }} />
-                          </Tooltip>
+                          <div className={mergeClasses(tc.tileActions, 'tile-actions')}>
+                            <Tooltip content="Drill to the source report in Power BI" relationship="label">
+                              <Button size="small" appearance="subtle" icon={<Open20Regular />} onClick={() => {
+                                if (!workspaceId || !t.reportId) return;
+                                try { window.open(`https://app.powerbi.com/groups/${encodeURIComponent(workspaceId)}/reports/${encodeURIComponent(t.reportId)}`, '_blank', 'noreferrer'); } catch { /* popup */ }
+                              }} />
+                            </Tooltip>
+                          </div>
                         )}
                       </div>
                       <PinnedPbiTile workspaceId={workspaceId} dashboardId={dashId} tile={t} />
@@ -367,11 +444,28 @@ export function DashboardEditor({ item, id }: { item: FabricItemType; id: string
                   );
                 })}
 
+                {(tiles.length + loomTiles.length) > 0 && (
+                  <button
+                    type="button"
+                    className={tc.ghostTile}
+                    style={{ gridColumn: narrow ? '1 / -1' : 'span 4' }}
+                    onClick={() => setAddDialog('streaming')}
+                    aria-label="Add tile"
+                  >
+                    <Add24Regular />
+                    <Caption1>Add tile</Caption1>
+                  </button>
+                )}
+
                 {(tiles.length + loomTiles.length) === 0 && (
                   <div style={{ gridColumn: '1 / -1' }}>
-                    <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
-                      No tiles yet. Use <strong>Add tile</strong> in the ribbon to pin a visual, add a Copilot Q&amp;A tile, or add a streaming ADX tile.
-                    </Caption1>
+                    <EmptyState
+                      icon={<DataBarVertical20Regular />}
+                      title="Build your dashboard canvas"
+                      body="Add an Azure-native streaming tile over Azure Data Explorer, a Copilot Q&A tile, or pin a Power BI visual — then arrange them in the 12-column grid and save."
+                      primaryAction={{ label: 'Add streaming tile', onClick: () => setAddDialog('streaming') }}
+                      secondaryAction={{ label: 'Add Q&A tile', onClick: () => setAddDialog('qa') }}
+                    />
                   </div>
                 )}
               </div>
@@ -478,25 +572,25 @@ function LoomTileCard({ tile, result, onRefresh, onFullscreen, onRemove }: {
   tile: LoomTile; result?: KqlResult;
   onRefresh: () => void; onFullscreen: () => void; onRemove: () => void;
 }) {
+  const tc = useCanvasTileStyles();
   const kindLabel: Record<LoomTileKind, string> = { dax: 'DAX', kusto: 'KQL', 'streaming-adx': 'Streaming' };
   const kindIcon: Record<LoomTileKind, JSX.Element> = {
     dax: <Sparkle20Regular />, kusto: <Database20Regular />, 'streaming-adx': <Flash20Regular />,
   };
   return (
-    <div style={{
-      border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusXLarge,
-      background: tokens.colorNeutralBackground1, minHeight: 220, display: 'flex', flexDirection: 'column',
-    }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingVerticalS, padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`, borderBottom: `1px solid ${tokens.colorNeutralStroke2}` }}>
+    <div className={tc.tile}>
+      <div className={tc.tileHeader}>
         {kindIcon[tile.kind]}
-        <Caption1 style={{ fontWeight: 600, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{tile.title}</Caption1>
+        <Caption1 className={tc.tileTitle}>{tile.title}</Caption1>
         <Badge appearance="tint" size="small">{kindLabel[tile.kind]}</Badge>
         {tile.kind === 'streaming-adx' && tile.autoRefreshMs ? <Badge appearance="outline" size="small">{Math.round(tile.autoRefreshMs / 1000)}s</Badge> : null}
-        <Tooltip content="Refresh" relationship="label"><Button size="small" appearance="subtle" icon={<ArrowSync20Regular />} onClick={onRefresh} /></Tooltip>
-        <Tooltip content="Fullscreen" relationship="label"><Button size="small" appearance="subtle" icon={<ArrowMaximize20Regular />} onClick={onFullscreen} /></Tooltip>
-        <Tooltip content="Remove tile" relationship="label"><Button size="small" appearance="subtle" icon={<Delete20Regular />} onClick={onRemove} /></Tooltip>
+        <div className={mergeClasses(tc.tileActions, 'tile-actions')}>
+          <Tooltip content="Refresh" relationship="label"><Button size="small" appearance="subtle" icon={<ArrowSync20Regular />} onClick={onRefresh} aria-label="Refresh tile" /></Tooltip>
+          <Tooltip content="Fullscreen" relationship="label"><Button size="small" appearance="subtle" icon={<ArrowMaximize20Regular />} onClick={onFullscreen} aria-label="Fullscreen tile" /></Tooltip>
+          <Tooltip content="Remove tile" relationship="label"><Button size="small" appearance="subtle" icon={<Delete20Regular />} onClick={onRemove} aria-label="Remove tile" /></Tooltip>
+        </div>
       </div>
-      <div style={{ padding: tokens.spacingVerticalM, flex: 1 }}>
+      <div className={tc.tileBody}>
         <LoomTileBody tile={tile} result={result} />
       </div>
     </div>

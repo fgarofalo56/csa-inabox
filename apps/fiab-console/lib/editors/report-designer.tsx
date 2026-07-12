@@ -39,7 +39,7 @@ import {
   Menu, MenuTrigger, MenuPopover, MenuList, MenuItem, MenuGroup, MenuGroupHeader, MenuDivider,
   MessageBar, MessageBarBody, MessageBarTitle, MessageBarActions,
   Dialog, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
-  Spinner, Subtitle2, Text, Title3, Tooltip,
+  Spinner, Subtitle2, Text, Tooltip,
   Tree, TreeItem, TreeItemLayout, TabList, Tab,
   Table, TableHeader, TableHeaderCell, TableBody, TableRow, TableCell,
   Slider, Checkbox,
@@ -84,8 +84,10 @@ import {
   // MoreHorizontal = the "…" visual-options overflow on the table/matrix/card path
   // (charts get theirs from LoomChart) so those export targets reach Export data.
   Shield20Regular, Ribbon20Regular, Branch20Regular, Settings20Regular, MoreHorizontal20Regular,
+  // ── ux-fabric-a W1 (pane-section collapse affordances + page-tab strip) ──────
+  ChevronDown16Regular, ChevronRight16Regular, ArrowRight20Regular, DocumentMultiple20Regular,
 } from '@fluentui/react-icons';
-import type { CSSProperties, ReactElement } from 'react';
+import type { CSSProperties, ReactElement, ReactNode } from 'react';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { ItemEditorChrome } from './item-editor-chrome';
@@ -885,21 +887,21 @@ const useStyles = makeStyles({
   toolbar: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' },
   spacer: { flex: 1 },
   // ── Visualizations gallery (PBI Visualizations pane parity) ──────────────────
-  // A tidy responsive grid of visual-type tiles. Each glyph sits in a contrast
-  // chip that is legible in BOTH light and dark (colorNeutralForeground1 on
-  // colorNeutralBackground3); hover + selected lift to the brand accent. No
-  // hard-coded colors — every value is a Loom/Fluent token (web3-ui.md).
+  // Power BI's Visualizations pane is a DENSE grid of icon-only tiles — the
+  // name lives in the hover tooltip, not under the glyph. Mirror that density:
+  // compact square tiles, glyph centered, hover lifts to the brand accent,
+  // selected fills brand. Every value is a Loom/Fluent token (web3-ui.md).
   gallery: {
     display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fill, minmax(74px, 1fr))',
-    gap: tokens.spacingHorizontalXS,
+    gridTemplateColumns: 'repeat(auto-fill, minmax(36px, 1fr))',
+    gap: tokens.spacingHorizontalXXS,
   },
   galleryBtn: {
-    display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-start',
-    gap: tokens.spacingVerticalXS, padding: tokens.spacingVerticalS, minWidth: 0,
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    padding: tokens.spacingVerticalXXS, minWidth: 0,
+    border: `1px solid ${tokens.colorTransparentStroke}`,
     borderRadius: tokens.borderRadiusMedium,
-    backgroundColor: tokens.colorNeutralBackground1,
+    backgroundColor: tokens.colorTransparentBackground,
     color: tokens.colorNeutralForeground1, cursor: 'pointer',
     transitionProperty: 'background-color, border-color, box-shadow',
     transitionDuration: tokens.durationFaster,
@@ -911,17 +913,10 @@ const useStyles = makeStyles({
   },
   galleryIcon: {
     display: 'flex', alignItems: 'center', justifyContent: 'center',
-    width: '40px', height: '40px', flexShrink: 0,
+    width: '28px', height: '28px', flexShrink: 0,
     borderRadius: tokens.borderRadiusMedium,
-    backgroundColor: tokens.colorNeutralBackground3,
     color: tokens.colorNeutralForeground1,
-    fontSize: '22px',
-  },
-  galleryLabel: {
-    textAlign: 'center', lineHeight: tokens.lineHeightBase200,
-    color: tokens.colorNeutralForeground2,
-    overflow: 'hidden', textOverflow: 'ellipsis',
-    display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical',
+    fontSize: '20px',
   },
   galleryBtnActive: {
     border: `1px solid ${tokens.colorBrandStroke1}`,
@@ -944,6 +939,15 @@ const useStyles = makeStyles({
     padding: `${tokens.spacingVerticalXXS} ${tokens.spacingHorizontalXS}`,
     borderRadius: tokens.borderRadiusMedium, backgroundColor: tokens.colorNeutralBackground1,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
+    // PBI field-pill affordances: brand accent edge, hover lift, and a
+    // hover-revealed remove ✕ (stays reachable by keyboard via focus-within).
+    borderLeft: `3px solid ${tokens.colorBrandStroke1}`,
+    transitionProperty: 'box-shadow, border-color',
+    transitionDuration: tokens.durationFaster,
+    ':hover': { boxShadow: tokens.shadow4, border: `1px solid ${tokens.colorBrandStroke2}`, borderLeft: `3px solid ${tokens.colorBrandStroke1}` },
+    '& .well-token-remove': { opacity: 0, transitionProperty: 'opacity', transitionDuration: tokens.durationFaster },
+    '&:hover .well-token-remove': { opacity: 1 },
+    '&:focus-within .well-token-remove': { opacity: 1 },
   },
   tokenName: { flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
   chip: {
@@ -1041,8 +1045,125 @@ const useStyles = makeStyles({
   },
   listRowActive: { border: `1px solid ${tokens.colorBrandStroke1}`, backgroundColor: tokens.colorBrandBackground2 },
   listRowName: { flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+  // ── ux-fabric-a W1: collapsible pane-section headers (PBI pane parity) ───────
+  // Every Build/Format pane section gets the same header anatomy the PBI panes
+  // use: chevron collapse affordance + brand section glyph + semibold label over
+  // a hairline divider. The whole header row is the toggle (aria-expanded).
+  paneSectionHead: {
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS,
+    width: '100%', minWidth: 0,
+    padding: `${tokens.spacingVerticalXXS} 0`,
+    border: 'none', backgroundColor: tokens.colorTransparentBackground,
+    cursor: 'pointer', color: tokens.colorNeutralForeground1,
+    ':hover': { color: tokens.colorBrandForeground1 },
+    ':focus-visible': { outline: `2px solid ${tokens.colorStrokeFocus2}`, outlineOffset: '1px', borderRadius: tokens.borderRadiusSmall },
+  },
+  paneSectionChevron: { display: 'inline-flex', color: tokens.colorNeutralForeground3, flexShrink: 0 },
+  paneSectionIcon: { display: 'inline-flex', color: tokens.colorBrandForeground1, flexShrink: 0 },
+  paneSectionLabel: {
+    flex: 1, minWidth: 0, textAlign: 'left', fontWeight: tokens.fontWeightSemibold,
+    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+  },
+  paneSectionBody: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
+  // ── ux-fabric-a W1: PBI page-tab strip (bottom of the canvas) ────────────────
+  // Power BI's page navigation is a compact tab strip under the sheet — small
+  // rounded-top tabs, active tab lifted + brand underline, "+" ghost tab at the
+  // end. Click selects; the Pages pane keeps the full manage menu.
+  pageTabStrip: {
+    display: 'flex', alignItems: 'stretch', gap: tokens.spacingHorizontalXXS,
+    overflowX: 'auto', flexShrink: 0,
+    paddingTop: tokens.spacingVerticalXXS,
+    borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
+  },
+  pageTab: {
+    display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXXS,
+    padding: `${tokens.spacingVerticalXXS} ${tokens.spacingHorizontalM}`,
+    maxWidth: '180px', whiteSpace: 'nowrap', cursor: 'pointer',
+    border: `1px solid ${tokens.colorTransparentStroke}`,
+    borderBottom: `2px solid ${tokens.colorTransparentStroke}`,
+    borderTopLeftRadius: tokens.borderRadiusMedium, borderTopRightRadius: tokens.borderRadiusMedium,
+    backgroundColor: tokens.colorTransparentBackground,
+    color: tokens.colorNeutralForeground2,
+    transitionProperty: 'background-color, border-color, color',
+    transitionDuration: tokens.durationFaster,
+    ':hover': { backgroundColor: tokens.colorNeutralBackground1Hover, color: tokens.colorNeutralForeground1 },
+    ':focus-visible': { outline: `2px solid ${tokens.colorStrokeFocus2}`, outlineOffset: '-2px' },
+  },
+  pageTabActive: {
+    backgroundColor: tokens.colorNeutralBackground1Selected,
+    borderBottom: `2px solid ${tokens.colorBrandStroke1}`,
+    color: tokens.colorNeutralForeground1,
+    fontWeight: tokens.fontWeightSemibold,
+  },
+  pageTabName: { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' },
+  // ── ux-fabric-a W1: guided canvas empty state (Add data → visual → fields) ───
+  guidedEmpty: {
+    display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+    gap: tokens.spacingVerticalXL, flex: 1, minHeight: '320px', textAlign: 'center',
+    padding: tokens.spacingVerticalXXL,
+    border: `1px dashed ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge,
+    backgroundColor: tokens.colorNeutralBackground1,
+  },
+  guidedSteps: {
+    display: 'flex', alignItems: 'stretch', gap: tokens.spacingHorizontalM,
+    flexWrap: 'wrap', justifyContent: 'center',
+  },
+  guidedStep: {
+    display: 'flex', flexDirection: 'column', alignItems: 'center', gap: tokens.spacingVerticalS,
+    width: '200px', padding: tokens.spacingVerticalL,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge,
+    backgroundColor: tokens.colorNeutralBackground2,
+    boxShadow: tokens.shadow2,
+    transitionProperty: 'box-shadow, border-color', transitionDuration: tokens.durationFaster,
+    ':hover': { boxShadow: tokens.shadow8, border: `1px solid ${tokens.colorBrandStroke2}` },
+  },
+  guidedStepIcon: {
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    width: '48px', height: '48px', flexShrink: 0,
+    borderRadius: tokens.borderRadiusCircular,
+    backgroundImage: `linear-gradient(135deg, ${tokens.colorBrandBackground2}, ${tokens.colorBrandBackground})`,
+    color: tokens.colorNeutralForegroundOnBrand,
+    fontSize: tokens.fontSizeBase500,
+  },
+  guidedStepNum: {
+    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+    width: '20px', height: '20px', flexShrink: 0,
+    borderRadius: tokens.borderRadiusCircular,
+    backgroundColor: tokens.colorBrandBackground,
+    color: tokens.colorNeutralForegroundOnBrand,
+    fontSize: tokens.fontSizeBase100, fontWeight: tokens.fontWeightSemibold,
+  },
+  guidedStepHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS },
+  guidedArrow: { display: 'flex', alignItems: 'center', color: tokens.colorNeutralForeground3 },
+  guidedBody: { color: tokens.colorNeutralForeground3, maxWidth: '520px' },
 });
 type Styles = ReturnType<typeof useStyles>;
+
+/**
+ * PaneSection (ux-fabric-a W1) — the PBI pane-section anatomy: a full-width
+ * header row (chevron collapse affordance + brand glyph + semibold label) over
+ * a hairline divider, collapsing its body. Pure presentation — the body is the
+ * caller's existing content, unchanged.
+ */
+function PaneSection({ styles, icon, label, defaultOpen = true, children }: {
+  styles: Styles; icon?: ReactElement; label: string; defaultOpen?: boolean; children: ReactNode;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div className={styles.section}>
+      <button type="button" className={styles.paneSectionHead} aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}>
+        <span className={styles.paneSectionChevron} aria-hidden>
+          {open ? <ChevronDown16Regular /> : <ChevronRight16Regular />}
+        </span>
+        {icon && <span className={styles.paneSectionIcon} aria-hidden>{icon}</span>}
+        <Text className={styles.paneSectionLabel}>{label}</Text>
+      </button>
+      <Divider />
+      {open && <div className={styles.paneSectionBody}>{children}</div>}
+    </div>
+  );
+}
 
 // ── visual render ─────────────────────────────────────────────────────────────
 
@@ -2049,7 +2170,7 @@ function WellEditor({
                 {AGGS.map((a) => <Option key={a} value={a}>{a}</Option>)}
               </Dropdown>
             )}
-            <Button size="small" appearance="subtle" icon={<Dismiss16Regular />}
+            <Button size="small" appearance="subtle" icon={<Dismiss16Regular />} className="well-token-remove"
               aria-label={`remove ${fieldLabel(f)}`} onClick={() => onRemove(well, f.uid)} />
           </div>
         ))}
@@ -3624,13 +3745,15 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
   // ── left: pages ──────────────────────────────────────────────────────────────
   const leftPanel = (
     <div className={styles.pane}>
-      <div className={styles.toolbar}>
+      <div className={styles.wellHead}>
+        <span className={styles.paneSectionIcon} aria-hidden><DocumentMultiple20Regular /></span>
         <Subtitle2>Pages</Subtitle2>
         <div className={styles.spacer} />
         <Tooltip content="Add page" relationship="label">
-          <Button size="small" appearance="subtle" icon={<Add20Regular />} onClick={addPage} />
+          <Button size="small" appearance="subtle" icon={<Add20Regular />} onClick={addPage} aria-label="Add page" />
         </Tooltip>
       </div>
+      <Divider />
       {pages.map((p, i) => (
         <div key={p.id} className={mergeClasses(styles.pageRow, i === activePage && styles.pageRowActive)}
           onClick={() => { setActivePage(i); setSelectedVisual(null); }}>
@@ -3754,7 +3877,7 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
     return (
       <>
         {drillable && (
-          <span data-ff-nodrag style={{ display: 'inline-flex', gap: tokens.spacingHorizontalXXS, alignItems: 'center' }}>
+          <span data-ff-nodrag className="ff-chrome-actions" style={{ display: 'inline-flex', gap: tokens.spacingHorizontalXXS, alignItems: 'center' }}>
             <Tooltip content="Drill up" relationship="label">
               <Button size="small" appearance="subtle" icon={<ArrowExit20Regular />} disabled={dstate.level <= 0}
                 aria-label="drill up" onClick={(e) => { e.stopPropagation(); drillUpVisual(v); }} />
@@ -3778,7 +3901,7 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
           ? <Text className={styles.vcardTitle} weight="semibold">{titleText}</Text>
           : <div className={styles.spacer} />}
         {drillTargets.length > 0 && (
-          <span data-ff-nodrag>
+          <span data-ff-nodrag className="ff-chrome-actions">
             <Menu>
               <MenuTrigger disableButtonEnhancement>
                 <Tooltip content="Drill through" relationship="label">
@@ -3808,7 +3931,7 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
             />
           </span>
         ) : (
-          <span data-ff-nodrag style={{ display: 'inline-flex', gap: tokens.spacingHorizontalXXS }}>
+          <span data-ff-nodrag className="ff-chrome-actions" style={{ display: 'inline-flex', gap: tokens.spacingHorizontalXXS }}>
             <Tooltip content={locked ? 'Unlock' : 'Lock'} relationship="label">
               <Button size="small" appearance="subtle" icon={locked ? <LockClosed20Regular /> : <LockOpen20Regular />}
                 onClick={(e) => { e.stopPropagation(); setVisualFlag([v.id], { locked: !locked }); }} />
@@ -3974,11 +4097,49 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
       )}
 
       {!loading && page && nodeCount === 0 && (
-        <EmptyState
-          icon={<DataBarVerticalRegular />}
-          title="Design your first visual"
-          body="Pick a visualization from the Visualizations pane on the right, then drag model fields into its wells. Every visual renders live against the bound data source. Insert text boxes, shapes, images, buttons, and navigators from the Elements gallery below it."
-        />
+        // ── ux-fabric-a W1: guided 3-step canvas empty state (PBI blank-page
+        // parity). Each step card is a real affordance: 1 opens the data-source
+        // picker, 2 + 3 focus the Build pane. Pure navigation over existing
+        // handlers — no new logic.
+        <div className={styles.guidedEmpty} role="region" aria-label="Design your first visual">
+          <Subtitle2>Design your first visual</Subtitle2>
+          <div className={styles.guidedSteps}>
+            <button type="button" className={styles.guidedStep} onClick={() => setDsOpen(true)}
+              aria-label="Step 1 — add data: bind a data source">
+              <span className={styles.guidedStepIcon} aria-hidden><Database20Regular /></span>
+              <span className={styles.guidedStepHead}>
+                <span className={styles.guidedStepNum} aria-hidden>1</span>
+                <Text weight="semibold">Add data</Text>
+              </span>
+              <Caption1 className={styles.muted}>
+                {bound ? `Bound — ${describeSource(dataSource)}` : 'Bind a semantic model, SQL query, or AAS model.'}
+              </Caption1>
+            </button>
+            <span className={styles.guidedArrow} aria-hidden><ArrowRight20Regular /></span>
+            <button type="button" className={styles.guidedStep} onClick={() => setRightTab('build')}
+              aria-label="Step 2 — pick a visual from the Visualizations gallery">
+              <span className={styles.guidedStepIcon} aria-hidden><DataBarVertical20Regular /></span>
+              <span className={styles.guidedStepHead}>
+                <span className={styles.guidedStepNum} aria-hidden>2</span>
+                <Text weight="semibold">Pick a visual</Text>
+              </span>
+              <Caption1 className={styles.muted}>Choose from 25+ chart, table, map, and AI visuals in the Build pane.</Caption1>
+            </button>
+            <span className={styles.guidedArrow} aria-hidden><ArrowRight20Regular /></span>
+            <button type="button" className={styles.guidedStep} onClick={() => setRightTab('build')}
+              aria-label="Step 3 — drag fields into the visual's wells">
+              <span className={styles.guidedStepIcon} aria-hidden><Table20Regular /></span>
+              <span className={styles.guidedStepHead}>
+                <span className={styles.guidedStepNum} aria-hidden>3</span>
+                <Text weight="semibold">Drag fields</Text>
+              </span>
+              <Caption1 className={styles.muted}>Drop model fields into the wells — every visual renders live.</Caption1>
+            </button>
+          </div>
+          <Caption1 className={styles.guidedBody}>
+            Insert text boxes, shapes, images, buttons, and navigators from the Elements gallery in the Build pane.
+          </Caption1>
+        </div>
       )}
 
       {!loading && page && nodeCount > 0 && (
@@ -4020,6 +4181,25 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
               return s;
             }}
           />
+        </div>
+      )}
+      {/* ── ux-fabric-a W1: PBI page-tab strip. Power BI navigates pages via a
+          compact tab strip under the sheet; mirror it here (click = select,
+          "+" = the existing addPage). Full page management — rename / duplicate
+          / hide / delete — stays on the Pages pane rows' menu. */}
+      {!loading && pages.length > 0 && (
+        <div className={styles.pageTabStrip} role="tablist" aria-label="Report pages">
+          {pages.map((p, i) => (
+            <button key={p.id} type="button" role="tab" aria-selected={i === activePage}
+              className={mergeClasses(styles.pageTab, i === activePage && styles.pageTabActive)}
+              onClick={() => { setActivePage(i); setSelectedVisual(null); }}>
+              {p.hidden && <EyeOff16Regular aria-hidden />}
+              <Caption1 className={styles.pageTabName}>{p.name}</Caption1>
+            </button>
+          ))}
+          <Tooltip content="New page" relationship="label">
+            <Button size="small" appearance="subtle" icon={<Add20Regular />} onClick={addPage} aria-label="New page" />
+          </Tooltip>
         </div>
       )}
       {/* Wave-8 tooltip-page HOVER RENDER: a floating card that mini-renders the
@@ -4222,7 +4402,7 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
       {rightTab === 'performance' && (<PerformanceAnalyzer perf={perf} onRefreshVisuals={() => effectiveVisuals.forEach((v) => runVisual(v, [...reportFilters, ...(page?.filters || [])]))} />)}
       {rightTab === 'build' && (
       <>
-      <Title3>Visualizations</Title3>
+      <PaneSection styles={styles} icon={<DataBarVertical20Regular />} label="Visualizations">
       <div className={styles.gallery}>
         {VISUALS.filter((vt) => vt.group !== 'ai').map((vt) => {
           // Two tiles share type 'scriptVisual' (Python / R) — distinguish them by
@@ -4244,19 +4424,16 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
                     }))
                   : addVisual(vt.type, vt.seed))}>
                 <span className={mergeClasses(styles.galleryIcon, active && styles.galleryIconActive)} aria-hidden>{vt.icon}</span>
-                <Caption1 className={styles.galleryLabel}>{vt.label}</Caption1>
               </button>
             </Tooltip>
           );
         })}
       </div>
+      </PaneSection>
 
       {/* AI visuals (real backends) — smart narrative + Q&A over Azure OpenAI;
           decomposition tree + key influencers over REAL /query SQL. */}
-      <div className={styles.wellHead}>
-        <Sparkle20Regular aria-hidden style={{ color: tokens.colorBrandForeground1 }} />
-        <Subtitle2>AI visuals</Subtitle2>
-      </div>
+      <PaneSection styles={styles} icon={<Sparkle20Regular />} label="AI visuals">
       <div className={styles.gallery}>
         {VISUALS.filter((vt) => vt.group === 'ai').map((vt) => (
           <Tooltip key={vt.type} content={selected ? `Change to ${vt.label}` : `Add a ${vt.label}`} relationship="label">
@@ -4266,24 +4443,20 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
               className={mergeClasses(styles.galleryBtn, selected?.type === vt.type && styles.galleryBtnActive)}
               onClick={() => (selected ? mutateVisual(selected.id, (v) => ({ ...v, type: vt.type })) : addVisual(vt.type))}>
               <span className={mergeClasses(styles.galleryIcon, selected?.type === vt.type && styles.galleryIconActive)} aria-hidden>{vt.icon}</span>
-              <Caption1 className={styles.galleryLabel}>{vt.label}</Caption1>
             </button>
           </Tooltip>
         ))}
       </div>
+      </PaneSection>
 
       {/* Wave-7 ELEMENTS (Power BI "Insert") — text boxes, shapes, images,
           buttons, and page / bookmark navigators. The sibling gallery renders the
           per-kind tiles; onInsert drops a real element onto the canvas (it then
           drags / resizes / aligns / persists like any node, and its data-bound
           tokens resolve through the shared /query). */}
-      <div className={styles.wellHead}>
-        <Add20Regular aria-hidden style={{ color: tokens.colorBrandForeground1 }} />
-        <Subtitle2>Elements</Subtitle2>
-      </div>
-      <ElementsGallery onInsert={addElement} />
-
-      <Divider />
+      <PaneSection styles={styles} icon={<Add20Regular />} label="Elements">
+        <ElementsGallery onInsert={addElement} />
+      </PaneSection>
 
       {!selected && !selectedElement && <Caption1 className={styles.muted}>Select a visual on the canvas, or click a visualization above to add one, then assign fields. Add a text box, shape, image, button, or navigator from the Elements gallery.</Caption1>}
 
@@ -4348,15 +4521,18 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
         </>
       )}
 
-      <Divider />
-
-      <div className={styles.toolbar}>
-        <Title3>Fields</Title3>
+      {/* Fields pane header — same PBI pane anatomy as the sections above
+          (brand glyph + semibold label + hairline divider) with the reload
+          action riding the header row. */}
+      <div className={styles.wellHead}>
+        <span className={styles.paneSectionIcon} aria-hidden><Table20Regular /></span>
+        <Subtitle2>Fields</Subtitle2>
         <div className={styles.spacer} />
         <Tooltip content="Reload model fields" relationship="label">
           <Button size="small" appearance="subtle" icon={<ArrowSync20Regular />} onClick={loadFields} />
         </Tooltip>
       </div>
+      <Divider />
       {fieldsLoading && <Spinner size="tiny" label="Reading model…" />}
       {fieldsErr && !fieldsLoading && (
         <MessageBar intent="warning"><MessageBarBody>{fieldsErr}</MessageBarBody></MessageBar>

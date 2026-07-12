@@ -16,7 +16,7 @@ import { clientFetch } from '@/lib/client-fetch';
  * registry resolves it unchanged.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactElement } from 'react';
 import {
   Subtitle2, Caption1, Badge, Button, Input, Spinner, Field,
   Card, Divider,
@@ -32,7 +32,13 @@ import {
   ArrowSync20Regular, Table20Regular, DatabaseLink20Regular, DatabaseSearch20Regular,
   Sparkle16Regular, Wrench16Regular, Eye20Regular, Sparkle20Regular, Stethoscope20Regular,
   MathFormula20Regular,
+  // Field/column type-differentiated icons — same vocabulary the shared
+  // EntityDiagram uses, so a column reads identically wherever it appears
+  // (Fabric fields-pane parity: numeric ≠ text ≠ date ≠ bool at a glance).
+  TextQuote20Regular, NumberSymbol20Regular, Clock20Regular, CheckboxChecked20Regular,
+  Globe20Regular, BracesVariable20Regular, Column20Regular, Tag20Regular, KeyMultiple20Regular,
 } from '@fluentui/react-icons';
+import { classifyColumnType, type EntityColumnKind } from '@/lib/components/shared/entity-diagram-sources';
 import { PbiModelViewPanel } from '../components/pbi-model-view-panel';
 import { EntityDiagram } from '@/lib/components/shared/entity-diagram';
 import { GuidedEmptyState } from '@/lib/components/shared/guided-empty-state';
@@ -118,6 +124,66 @@ interface RefreshLite {
   requestId?: string; refreshType?: string; startTime?: string; endTime?: string; status?: string; serviceExceptionJson?: string;
 }
 
+// ── Fabric fields-pane visual vocabulary ─────────────────────────────────────
+// A coarse column-kind → Fluent icon map (identical set to the shared
+// EntityDiagram) so numeric / text / date / bool / geo / key columns are
+// type-differentiated at a glance, matching the Power BI fields pane.
+const SM_KIND_ICON: Record<EntityColumnKind, ReactElement> = {
+  text: <TextQuote20Regular />,
+  number: <NumberSymbol20Regular />,
+  datetime: <Clock20Regular />,
+  bool: <CheckboxChecked20Regular />,
+  geo: <Globe20Regular />,
+  json: <BracesVariable20Regular />,
+  binary: <Column20Regular />,
+  guid: <Tag20Regular />,
+  key: <KeyMultiple20Regular />,
+  unknown: <Column20Regular />,
+};
+
+// Visual-fidelity styles local to the semantic-model editor: type-badged field
+// icons, hover row-highlight + hover-reveal row actions, and a consistent
+// icon + label pane header. makeStyles (Loom tokens only, theme-aware).
+const useSmVisualStyles = makeStyles({
+  // Icon slot preceding a field/column name — neutral tint, never shrinks.
+  typeIcon: {
+    display: 'inline-flex', alignItems: 'center', flexShrink: 0,
+    color: tokens.colorNeutralForeground3,
+  },
+  // Measures are the model's calculated logic — brand-tint to set them apart
+  // from plain columns, exactly like the Power BI fields pane fx glyph.
+  measureIcon: {
+    display: 'inline-flex', alignItems: 'center', flexShrink: 0,
+    color: tokens.colorBrandForeground1,
+  },
+  // Field/column name row: icon + name with consistent XS rhythm.
+  fieldName: {
+    display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXS,
+    minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+  },
+  // Grid row: hover highlight + hover/focus-reveal of the trailing action cluster.
+  gridRow: {
+    '&:hover': { backgroundColor: tokens.colorNeutralBackground1Hover },
+    '& .sm-row-actions': {
+      opacity: 0,
+      transitionProperty: 'opacity',
+      transitionDuration: tokens.durationFaster,
+    },
+    '&:hover .sm-row-actions, &:focus-within .sm-row-actions': { opacity: 1 },
+  },
+  // Consistent pane header — Fluent icon + semibold label, brand-tinted glyph.
+  paneHeader: {
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS,
+    marginBottom: tokens.spacingVerticalXS,
+    '& svg': { color: tokens.colorBrandForeground1, flexShrink: 0 },
+  },
+});
+
+/** Type-differentiated icon for a column, keyed off its backend-native data type. */
+function ColumnTypeIcon({ dataType, className }: { dataType?: string; className?: string }) {
+  return <span className={className} aria-hidden="true">{SM_KIND_ICON[classifyColumnType(dataType)]}</span>;
+}
+
 // ============================================================
 // AAS (Azure Analysis Services) — Azure-native semantic-model backend.
 // Rendered when NEXT_PUBLIC_LOOM_BI_BACKEND === 'aas' (bicep sets this when the
@@ -136,6 +202,7 @@ interface AasScheduleLite {
 
 function AasSemanticModelPanel({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
+  const sm = useSmVisualStyles();
   const AAS_DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
   const [gate, setGate] = useState<string | null>(null);
@@ -330,7 +397,7 @@ function AasSemanticModelPanel({ item, id }: { item: FabricItemType; id: string 
 
               {tab === 'storage' && (
                 <div style={{ marginTop: tokens.spacingVerticalM}}>
-                  <Subtitle2>Storage mode</Subtitle2>
+                  <div className={sm.paneHeader}><Database20Regular /><Subtitle2>Storage mode</Subtitle2></div>
                   <Caption1 style={{ color: tokens.colorNeutralForeground3, display: 'block', marginTop: tokens.spacingVerticalXS}}>
                     Sourced from <code>GET …/Microsoft.AnalysisServices/servers/{serverName || '{name}'}/databases/{dbName}</code> (api-version 2017-08-01,
                     <code> properties.model.storageMode</code>). Changing the storage mode is a model operation — use the XMLA endpoint
@@ -351,7 +418,7 @@ function AasSemanticModelPanel({ item, id }: { item: FabricItemType; id: string 
               {tab === 'refresh' && (
                 <div style={{ marginTop: tokens.spacingVerticalM, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL}}>
                   <div>
-                    <Subtitle2>Scheduled refresh</Subtitle2>
+                    <div className={sm.paneHeader}><ArrowSync20Regular /><Subtitle2>Scheduled refresh</Subtitle2></div>
                     <Caption1 style={{ color: tokens.colorNeutralForeground3, display: 'block', marginTop: tokens.spacingVerticalXS}}>
                       Stored as the <code>loom-refresh-schedule</code> tag on the AAS server resource (visible in the Azure portal).
                       A scheduler invokes the AAS async-refresh REST API at the configured times. AAS has no 30-minute-boundary
@@ -388,7 +455,7 @@ function AasSemanticModelPanel({ item, id }: { item: FabricItemType; id: string 
                   </div>
 
                   <div>
-                    <Subtitle2>Refresh history</Subtitle2>
+                    <div className={sm.paneHeader}><Clock20Regular /><Subtitle2>Refresh history</Subtitle2></div>
                     <Caption1 style={{ color: tokens.colorNeutralForeground3, display: 'block', marginTop: tokens.spacingVerticalXS}}>
                       Last 30 days from <code>GET …/models/{dbName}/refreshes</code> (AAS async-refresh REST API), newest first.
                     </Caption1>
@@ -488,6 +555,7 @@ function SemanticModelSecurityTab(props: SecurityTabProps) {
     onSetFilter, onSetTableOls, onSetColumnOls, onSetMembers, onChangeOlsTable,
     onSave, onTestUpn, onTestQuery, onRunTest,
   } = props;
+  const sm = useSmVisualStyles();
 
   const role = (roles || []).find((r) => r.name === selectedRole) || null;
   const tablePerm = (table: string): SmSecTablePerm | undefined =>
@@ -511,6 +579,7 @@ function SemanticModelSecurityTab(props: SecurityTabProps) {
       {/* Section 1 — Roles grid */}
       <div>
         <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingVerticalS}}>
+          <KeyMultiple20Regular style={{ color: tokens.colorBrandForeground1, flexShrink: 0 }} />
           <Subtitle2>Model roles</Subtitle2>
           <Button size="small" appearance="outline" icon={<ArrowSync20Regular />} onClick={onReload} disabled={busy}>{busy ? 'Loading…' : 'Reload'}</Button>
           <Button size="small" appearance="primary" icon={<Add20Regular />} onClick={onAddRole} disabled={!!gate}>Add role</Button>
@@ -576,7 +645,7 @@ function SemanticModelSecurityTab(props: SecurityTabProps) {
 
           {/* Section 2 — Row-level security (DAX filter) */}
           <div>
-            <Subtitle2>Row-level security (DAX filter)</Subtitle2>
+            <div className={sm.paneHeader}><Eye20Regular /><Subtitle2>Row-level security (DAX filter)</Subtitle2></div>
             <div className={s.tableWrap} style={{ marginTop: tokens.spacingVerticalS}}>
               <Table aria-label="Row filters" size="small">
                 <TableHeader><TableRow>
@@ -610,7 +679,7 @@ function SemanticModelSecurityTab(props: SecurityTabProps) {
 
           {/* Section 3 — Object-level security matrix */}
           <div>
-            <Subtitle2>Object-level security (table &amp; column visibility)</Subtitle2>
+            <div className={sm.paneHeader}><Column20Regular /><Subtitle2>Object-level security (table &amp; column visibility)</Subtitle2></div>
             <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
               Hide a whole table or specific columns from this role. A table set to <strong>None</strong> hides all of its columns (column rows below are disabled).
             </Caption1>
@@ -667,7 +736,7 @@ function SemanticModelSecurityTab(props: SecurityTabProps) {
 
       {/* Section 4 — Test as role (receipt) */}
       <div style={{ padding: tokens.spacingVerticalM, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium }}>
-        <Subtitle2>Test as role</Subtitle2>
+        <div className={sm.paneHeader}><Play20Regular /><Subtitle2>Test as role</Subtitle2></div>
         <MessageBar intent="info" style={{ marginTop: tokens.spacingVerticalS}}>
           <MessageBarBody>
             Runs a DAX query impersonating a role via the XMLA <code>EffectiveUserName</code> + <code>Roles</code> connection properties. The named user must exist in the tenant and hold Read access on the model. The result table is your receipt: a restricted role returns only filtered rows, and OLS-hidden columns are absent from the output.
@@ -1140,6 +1209,7 @@ function columnExposed(schema: PfaTableFlag[], table: string, column: string): b
 
 export function SemanticModelPrepForAiPane({ id, datasetId, workspaceId }: { id: string; datasetId: string; workspaceId: string }) {
   const cs = usePrepForAiStyles();
+  const sm = useSmVisualStyles();
   const [prep, setPrep] = useState<PfaState | null>(null);
   const [loadErr, setLoadErr] = useState<string | null>(null);
   const [tables, setTables] = useState<SmTable[] | null>(null);
@@ -1384,7 +1454,10 @@ export function SemanticModelPrepForAiPane({ id, datasetId, workspaceId }: { id:
                     const cExposed = tExposed && columnExposed(schemaDraft, t.name, c.name);
                     return (
                       <div key={c.name} className={cs.colRow}>
-                        <Caption1>{c.name}{c.dataType ? ` · ${c.dataType}` : ''}</Caption1>
+                        <span className={sm.fieldName}>
+                          <ColumnTypeIcon dataType={c.dataType} className={sm.typeIcon} />
+                          <Caption1>{c.name}{c.dataType ? ` · ${c.dataType}` : ''}</Caption1>
+                        </span>
                         <Switch checked={cExposed} disabled={!tExposed} label={!tExposed ? 'Table hidden' : cExposed ? 'Exposed' : 'Hidden'} onChange={(_e, d) => toggleColumn(t.name, c.name, !!d.checked)} />
                       </div>
                     );
@@ -1476,6 +1549,7 @@ function LoomNativeModelView({
   onBuild: () => void;
 }) {
   const s = useStyles();
+  const sm = useSmVisualStyles();
   const [model, setModel] = useState<{
     modelName?: string;
     tables: Array<{ name: string; columns?: Array<{ name: string; type?: string }> }>;
@@ -1576,8 +1650,11 @@ function LoomNativeModelView({
                   <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS }}>
                     {cols.length === 0 && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>No columns defined.</Caption1>}
                     {cols.map((c) => (
-                      <div key={c.name} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: tokens.spacingHorizontalS, paddingBlock: tokens.spacingVerticalXXS, borderBottom: `1px solid ${tokens.colorNeutralStroke2}` }}>
-                        <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.name}</span>
+                      <div key={c.name} className={sm.gridRow} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: tokens.spacingHorizontalS, paddingBlock: tokens.spacingVerticalXXS, borderBottom: `1px solid ${tokens.colorNeutralStroke2}` }}>
+                        <span className={sm.fieldName}>
+                          <ColumnTypeIcon dataType={c.type} className={sm.typeIcon} />
+                          {c.name}
+                        </span>
                         <Badge appearance="outline" color="subtle">{c.type || 'string'}</Badge>
                       </div>
                     ))}
@@ -1595,7 +1672,7 @@ function LoomNativeModelView({
               {measures.map((m, i) => (
                 <Card key={`${m.table}.${m.name}.${i}`} className={s.card}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, marginBottom: tokens.spacingVerticalS }}>
-                    <MathFormula20Regular />
+                    <span className={sm.measureIcon}><MathFormula20Regular /></span>
                     <Subtitle2 style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.name}</Subtitle2>
                     <Badge appearance="tint" color="informative">{m.table}</Badge>
                   </div>
@@ -1612,6 +1689,7 @@ function LoomNativeModelView({
 
 export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
+  const sm = useSmVisualStyles();
   // Azure-native default (no-fabric-dependency.md): when the AAS backend is the
   // active BI backend (bicep sets NEXT_PUBLIC_LOOM_BI_BACKEND=aas when aas.bicep
   // is deployed), render the AAS Storage-mode + Refresh surface. Power BI stays
@@ -3109,9 +3187,12 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                                 <TableRow><TableCell>—</TableCell><TableCell /><TableCell /><TableCell /><TableCell /><TableCell /><TableCell /><TableCell />{modelTables && <TableCell />}</TableRow>
                               )}
                               {cols.map((c) => (
-                                <TableRow key={c.name} aria-label={c.name}>
+                                <TableRow key={c.name} aria-label={c.name} className={sm.gridRow}>
                                   <TableCell>
-                                    {c.name}
+                                    <span className={sm.fieldName}>
+                                      <ColumnTypeIcon dataType={c.dataType} className={sm.typeIcon} />
+                                      {c.name}
+                                    </span>
                                     {c.type === 'calculated' && <Badge appearance="outline" size="small" color="brand" style={{ marginLeft: tokens.spacingHorizontalXS}}>calc</Badge>}
                                   </TableCell>
                                   <TableCell>{c.type ?? 'data'}</TableCell>
@@ -3123,10 +3204,12 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                                   <TableCell>{c.isHidden ? 'hidden' : '—'}</TableCell>
                                   {modelTables && (
                                     <TableCell>
-                                      <Button size="small" appearance="subtle" icon={<Wrench16Regular />} aria-label={`Edit ${c.name}`}
-                                        onClick={() => { setEditCol({ tableName: tbl.name, col: c }); setColPatch({}); setPatchMsg(null); }}>
-                                        Edit
-                                      </Button>
+                                      <span className="sm-row-actions">
+                                        <Button size="small" appearance="subtle" icon={<Wrench16Regular />} aria-label={`Edit ${c.name}`}
+                                          onClick={() => { setEditCol({ tableName: tbl.name, col: c }); setColPatch({}); setPatchMsg(null); }}>
+                                          Edit
+                                        </Button>
+                                      </span>
                                     </TableCell>
                                   )}
                                 </TableRow>
@@ -3234,8 +3317,8 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                           {(detail?.tables || []).map((t) => {
                             const mode = tableModes[t.name] ?? 'import';
                             return (
-                              <TableRow key={t.name}>
-                                <TableCell>{t.name}</TableCell>
+                              <TableRow key={t.name} className={sm.gridRow}>
+                                <TableCell><span className={sm.fieldName}><Table20Regular className={sm.typeIcon} />{t.name}</span></TableCell>
                                 <TableCell className={s.cell}>{(t.columns || []).map((c) => `${c.name}:${c.dataType || '?'}`).join(', ') || '—'}</TableCell>
                                 <TableCell className={s.cell}>{(t.measures || []).map((m) => m.name).join(', ') || '—'}</TableCell>
                                 <TableCell>
@@ -3320,7 +3403,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                           </TableRow></TableHeader>
                           <TableBody>
                             {relationships.map((r, i) => (
-                              <TableRow key={r.name || i}>
+                              <TableRow key={r.name || i} className={sm.gridRow}>
                                 <TableCell>{r.name || '—'}</TableCell>
                                 <TableCell className={s.cell}>{r.fromTable}[{r.fromColumn}]</TableCell>
                                 <TableCell className={s.cell}>{r.toTable}[{r.toColumn}]</TableCell>

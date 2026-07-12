@@ -7,6 +7,10 @@
 
 ## 1. Executive verdict
 
+> **Superseded 2026-07-06:** the remediation program (Waves 0–7, 108 items) landed
+> in full and every release gate below (§6 G1–G11) is green. The verdict that
+> follows is the historical 2026-07-02 audit finding, preserved unchanged.
+
 **NOT READY for public release.** CSA Loom is a genuinely deep, mostly-real product — the editor layer is nearly vaporware-free, the API layer is A-grade, Fabric parity is broad, the security fundamentals (AES-256-GCM sessions, parameterized T-SQL, secret-stripping) are sound, and the deployment machinery is unusually complete. But the audit confirmed a compact set of **release-blocking defects concentrated on the public-facing edges that no prior internal sweep exercised**: the documented install path is vaporware, an internet-reachable auth boundary rests on a predictable secret, the multi-user authorization model is silently broken, several deployment invariants are non-deterministic or Commercial-only, the entire 5,462-test suite runs in no CI job (and is currently red), and the public docs site leaks live estate identifiers plus operator PII.
 
 None of these are deep architectural rewrites. The dominant theme is **"the last mile was never walked as a stranger"**: a brand-new public org hitting the README, the quickstart, the login flow, the first upgrade, and a second user in a shared workspace all hit walls. The core product a signed-in single operator uses today is largely B/A-grade. Fixing the Wave-0 blockers plus the security/access and deployment-truth items moves this to a defensible public v1.
@@ -297,17 +301,23 @@ The audit **confirmed durable** the following, closing prior drift-list items (r
 
 A public v1 tag may be cut only when **all Wave-0 and Wave-1 items are green** and Wave-2 deployment-truth items are green or explicitly waived with a documented limitation.
 
-- [ ] **G1 (Wave 0, no-vaporware):** quickstart rewritten to the proven `az deployment sub create` + bootstrap path; deploy-button/`fiab-migrate`/Power-BI-prereq references removed or built; console + root README describe the shipped product.
-- [ ] **G2 (Wave 0, privacy):** `fiab/audit/`, `fiab/parity-gap/`, `fiab/design/`, agent-kickoff docs excluded from the published site; GUID/hostname/email redaction sweep run; CI hygiene grep for live coordinates in `docs/`.
-- [ ] **G3 (Wave 0, no-fabric-dep):** scorecard has an Azure-native/Cosmos default; bicep BI-backend default no longer `powerbi`, single env pair; semantic-model/dashboard/paginated-report call `api.powerbi.com` only on the `powerbi` opt-in branch; four `/new` copy blocks re-led with the Loom-native default.
-- [ ] **G4 (Wave 0, vaporware):** UDF Run forwards `x-udf-source-b64` (or publishes source); decorative UDF connections/library boxes replaced or honest-gated.
-- [ ] **G5 (Wave 1, security):** `LOOM_INTERNAL_TOKEN` derived from a KV-random secret; `/api/internal/*` blocked at Front Door; MCP test-connection SSRF fixed (admin gate + scheme/private-IP block); OAuth `state`+PKCE; `/api/feedback` authenticated + server-throttled; rate limiting default-on for expensive routes.
-- [ ] **G6 (Wave 1, access):** tenant-shared data partitioned by `tid` with per-resource ACLs so sharing + delegated grants resolve for a second user; `isTenantAdminTier` fails closed; CI route-guard widened to all id-taking route groups; data-product preview + notebook contents per-user scoped.
-- [ ] **G7 (Wave 1, testing):** vitest job added to `fiab-console-ci`, made a required check, 48 failures burned down; guardrails + ≥1 review required on main; `csa-loom-validate` exits non-zero on hard FAILs; pre-traffic gate (vitest + loom-uat job) before the prod roll.
-- [ ] **G8 (Wave 2, deployment-truth):** `notebook-compute-pool.bicep` wired (bicep-sync green); single AAS owner + single SKU + one `LOOM_AAS_SERVER`; Gov bootstrap path (or cloud-agnostic composite); teardown purges KV/Cognitive/APIM/AAS/Cosmos soft-deletes; Gov private-DNS zones boundary-branched.
-- [ ] **G9 (Wave 2, product-truth):** DR doc truthed to single-region + PITR + one tested Cosmos restore runbook; self-update compatibility manifest (required env/min-bicep) in the `/admin/updates` preflight; from-scratch acceptance test names the canonical `full-app-deploy-commercial.yml` path.
-- [ ] **G10 (Wave 4, a11y):** axe-core specs over the top ~20 surfaces, critical violations fixed, README claim truthed.
-- [ ] **G11 (release engineering):** one full self-update rehearsal (tag → publish-ghcr → flip public → in-product roll → verify `/api/version`); THIRD-PARTY-NOTICES generated + license gate in CI.
+> **All gates GREEN (2026-07-06):** Waves 0–7 of the public-release program landed
+> (108/108 items) and the release readiness was re-verified live — from-scratch
+> deploy proven (subscription-scope validate + what-if, 0 errors), Gov console
+> live at `csaloom-gov.<your-domain>`, and `loom-ui-verify` browser
+> verification running on the in-VNet `gh-aca-runner`. Boxes checked 2026-07-12.
+
+- [x] **G1 (Wave 0, no-vaporware):** quickstart rewritten to the proven `az deployment sub create` + bootstrap path; deploy-button/`fiab-migrate`/Power-BI-prereq references removed or built; console + root README describe the shipped product.
+- [x] **G2 (Wave 0, privacy):** `fiab/audit/`, `fiab/parity-gap/`, `fiab/design/`, agent-kickoff docs excluded from the published site; GUID/hostname/email redaction sweep run; CI hygiene grep for live coordinates in `docs/`.
+- [x] **G3 (Wave 0, no-fabric-dep):** scorecard has an Azure-native/Cosmos default; bicep BI-backend default no longer `powerbi`, single env pair; semantic-model/dashboard/paginated-report call `api.powerbi.com` only on the `powerbi` opt-in branch; four `/new` copy blocks re-led with the Loom-native default.
+- [x] **G4 (Wave 0, vaporware):** UDF Run forwards `x-udf-source-b64` (or publishes source); decorative UDF connections/library boxes replaced or honest-gated.
+- [x] **G5 (Wave 1, security):** `LOOM_INTERNAL_TOKEN` derived from a KV-random secret; `/api/internal/*` blocked at Front Door; MCP test-connection SSRF fixed (admin gate + scheme/private-IP block); OAuth `state`+PKCE; `/api/feedback` authenticated + server-throttled; rate limiting default-on for expensive routes.
+- [x] **G6 (Wave 1, access):** tenant-shared data partitioned by `tid` with per-resource ACLs so sharing + delegated grants resolve for a second user; `isTenantAdminTier` fails closed; CI route-guard widened to all id-taking route groups; data-product preview + notebook contents per-user scoped.
+- [x] **G7 (Wave 1, testing):** vitest job added to `fiab-console-ci`, made a required check, 48 failures burned down; guardrails + ≥1 review required on main; `csa-loom-validate` exits non-zero on hard FAILs; pre-traffic gate (vitest + loom-uat job) before the prod roll.
+- [x] **G8 (Wave 2, deployment-truth):** `notebook-compute-pool.bicep` wired (bicep-sync green); single AAS owner + single SKU + one `LOOM_AAS_SERVER`; Gov bootstrap path (or cloud-agnostic composite); teardown purges KV/Cognitive/APIM/AAS/Cosmos soft-deletes; Gov private-DNS zones boundary-branched.
+- [x] **G9 (Wave 2, product-truth):** DR doc truthed to single-region + PITR + one tested Cosmos restore runbook; self-update compatibility manifest (required env/min-bicep) in the `/admin/updates` preflight; from-scratch acceptance test names the canonical `full-app-deploy-commercial.yml` path.
+- [x] **G10 (Wave 4, a11y):** axe-core specs over the top ~20 surfaces, critical violations fixed, README claim truthed.
+- [x] **G11 (release engineering):** one full self-update rehearsal (tag → publish-ghcr → flip public → in-product roll → verify `/api/version`); THIRD-PARTY-NOTICES generated + license gate in CI.
 
 ---
 

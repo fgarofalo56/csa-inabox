@@ -1437,11 +1437,13 @@ nav:
       # ------------------------------------------------------------
       - Architecture & Decisions:
           - Reference Architecture: fiab/architecture.md
+          - "Full-Picture Architecture (system, identity, deployment, data flow)": fiab/architecture-full-picture.md
           - "Architecture Diagrams (topology, deploy flows, RBAC, data flow)": fiab/diagrams/README.md
           - Portal Architecture (where admins + users go): fiab/portal-architecture.md
           - Console Access Patterns: fiab/access-patterns.md
           - "UX Standards (Fabric-grade floor for every surface)": fiab/ux-standards.md
           - "Model Strategy (best-LLM-per-task, cloud-aware runbook)": fiab/model-strategy.md
+          - "Compute Tiers & Telemetry (workload-tiered Spark + Log Analytics)": fiab/compute-tiers-and-telemetry.md
           - ADRs:
               - Overview: fiab/adr/README.md
               - "fiab-0001 — Fabric feature scope": fiab/adr/0001-fabric-feature-scope.md

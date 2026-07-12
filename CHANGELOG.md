@@ -25,6 +25,39 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.64.1](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.64.0...csa-inabox-v0.64.1) (2026-07-12)
+
+
+### Bug Fixes
+
+* P1 audit gaps — bicep env emission, no-fabric opt-in, honest degrades, Gov ADX host, dead code (OPEN-REGISTER P1) ([#1939](https://github.com/fgarofalo56/csa-inabox/issues/1939)) ([72d163d](https://github.com/fgarofalo56/csa-inabox/commit/72d163d2b014d619da05a7d72c0b8a2df2fb0308))
+
+
+### Documentation
+
+* scrub operator vanity domain from arch diagrams + release doc (docs-hygiene) ([#1940](https://github.com/fgarofalo56/csa-inabox/issues/1940)) ([9c58a5f](https://github.com/fgarofalo56/csa-inabox/commit/9c58a5f365ef7d1a10a78feb237bb12f2ff1b662))
+
+## [0.64.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.63.0...csa-inabox-v0.64.0) (2026-07-12)
+
+
+### Features
+
+* **compute:** deploy-time workload-tiered Spark/Databricks pools + best-practice configs + Log Analytics telemetry + managed-PE bootstrap ([#1931](https://github.com/fgarofalo56/csa-inabox/issues/1931)) ([69fe3a7](https://github.com/fgarofalo56/csa-inabox/commit/69fe3a7d009d8727f74c174a32f32bbd8cd34616))
+* **report:** Loom items as a first-class 'Get data' source (auto-configured) ([#1927](https://github.com/fgarofalo56/csa-inabox/issues/1927)) ([2616db7](https://github.com/fgarofalo56/csa-inabox/commit/2616db784f7aedfd0c789283714be0064578e96b))
+
+
+### Bug Fixes
+
+* **spark:** external keep-warm heartbeat (notebooks cold-start slow) ([#1932](https://github.com/fgarofalo56/csa-inabox/issues/1932)) ([552b0d9](https://github.com/fgarofalo56/csa-inabox/commit/552b0d9af08bf79bf800f9440726cd5a985b01a3))
+* **spark:** publish the warmed slot to the shared store (warm-pool stuck 'warming') ([#1937](https://github.com/fgarofalo56/csa-inabox/issues/1937)) ([95f6eb1](https://github.com/fgarofalo56/csa-inabox/commit/95f6eb10c1e3a5ac7d5af4119d8b15e924c81b02))
+* **uc-grant:** CREATE_CATALOG-only on metastore + CREATE_MANAGED_STORAGE on external location ([#1930](https://github.com/fgarofalo56/csa-inabox/issues/1930)) ([614cb42](https://github.com/fgarofalo56/csa-inabox/commit/614cb42696f7f5f70442227e517ccf48daf140a6))
+
+
+### Documentation
+
+* full-picture architecture diagrams + doc-currency batch (stale parity/status/scorecard refresh) ([#1938](https://github.com/fgarofalo56/csa-inabox/issues/1938)) ([9cb8e6b](https://github.com/fgarofalo56/csa-inabox/commit/9cb8e6bd290aa3d235b39a138b6730bf42baea43))
+* **prp:** OPEN-REGISTER 2026-07-12 (full audit) + UX Fabric-A program PRP ([#1928](https://github.com/fgarofalo56/csa-inabox/issues/1928)) ([522f346](https://github.com/fgarofalo56/csa-inabox/commit/522f346efa1e8211e6b390134e2c8d9f47a45de1))
+
 ## [0.63.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.62.1...csa-inabox-v0.63.0) (2026-07-12)
 
 

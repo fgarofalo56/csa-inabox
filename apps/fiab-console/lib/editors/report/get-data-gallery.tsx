@@ -51,7 +51,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Dialog, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
-  Button, Badge, Spinner, Caption1, Subtitle2, Subtitle1, Text,
+  Button, Badge, Spinner, Caption1, Caption1Strong, Subtitle2, Subtitle1, Text,
   Field, Input, Textarea, Dropdown, Option, SearchBox, Divider,
   MessageBar, MessageBarBody, MessageBarTitle, TabList, Tab,
   Table, TableHeader, TableHeaderCell, TableBody, TableRow, TableCell,
@@ -304,6 +304,7 @@ const useStyles = makeStyles({
   loomHeroText: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS, minWidth: 0, flex: 1 },
   loomHeroChevron: { flexShrink: 0, color: tokens.colorBrandForeground1 },
   loomStep: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minWidth: 0 },
+  bindHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, minWidth: 0 },
 
   // opt-in (Fabric / Power BI) group — clearly demarcated
   optInBlock: {
@@ -313,8 +314,43 @@ const useStyles = makeStyles({
     backgroundColor: tokens.colorNeutralBackground2,
   },
 
-  // bind step
-  bindHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, minWidth: 0 },
+  // bind step — connector identity header (matches the Wave-0 gallery hero grade)
+  bindHero: {
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM, minWidth: 0,
+    padding: tokens.spacingVerticalM, paddingInline: tokens.spacingHorizontalL,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge,
+    backgroundColor: tokens.colorNeutralBackground2, boxShadow: tokens.shadow2,
+  },
+  bindBack: { flexShrink: 0 },
+  bindHeroChip: {
+    width: '44px', height: '44px', borderRadius: tokens.borderRadiusLarge, flexShrink: 0,
+    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+    backgroundImage: `linear-gradient(135deg, ${tokens.colorBrandBackground2}, ${tokens.colorBrandBackground})`,
+    color: tokens.colorNeutralForegroundOnBrand, boxShadow: tokens.shadow4,
+    fontSize: '24px',
+  },
+  bindHeroText: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS, minWidth: 0, flex: 1 },
+  bindHeroTitleRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, minWidth: 0, flexWrap: 'wrap' },
+
+  // section header — icon + strong caption + growing rule (consistent rhythm)
+  section: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, minWidth: 0 },
+  sectionHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, minWidth: 0, color: tokens.colorBrandForeground1 },
+  sectionRule: { flex: 1, minWidth: tokens.spacingHorizontalM },
+  sectionLabel: { color: tokens.colorNeutralForeground1, whiteSpace: 'nowrap' },
+
+  // resolved-config summary card
+  summaryCard: {
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, minWidth: 0,
+    padding: tokens.spacingVerticalS, paddingInline: tokens.spacingHorizontalM,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge,
+    backgroundColor: tokens.colorNeutralBackground2,
+  },
+  summaryChips: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, flexWrap: 'wrap', minWidth: 0 },
+
+  // footer — subtle actions left, primary pushed right, top divider
+  footer: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap', minWidth: 0 },
+  footerSpacer: { flex: 1, minWidth: tokens.spacingHorizontalXS },
+
   form: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minWidth: 0, maxWidth: '620px' },
   connRow: { display: 'flex', alignItems: 'flex-end', gap: tokens.spacingHorizontalS, minWidth: 0, flexWrap: 'wrap' },
   connGrow: { flex: 1, minWidth: '240px' },
@@ -583,6 +619,18 @@ function ConnectorGallery({
 type StorageMode = 'adls' | 'upload' | 'connection';
 type SqlMode = 'table' | 'query';
 
+/** A section header: brand icon + strong caption + a growing hairline rule. */
+function SectionHead({ icon, children }: { icon: React.ReactNode; children: React.ReactNode }) {
+  const s = useStyles();
+  return (
+    <div className={s.sectionHead}>
+      {icon}
+      <Caption1Strong className={s.sectionLabel}>{children}</Caption1Strong>
+      <Divider className={s.sectionRule} />
+    </div>
+  );
+}
+
 function BindStep({
   connType, def, connections, connsLoading, reportId,
   preselectConnectionId, onReloadConns, onOpenWizard, onBack, onChosen,
@@ -784,15 +832,66 @@ function BindStep({
 
   const needsConnection = isSql || isCosmos || isAdx || (isStorage && storageMode === 'connection');
   const connLabel = connType ? (REPORT_CONN_TYPE_LABEL[connType] || def.name) : def.name;
+  const forwardCompat = !!connType && !supported; // adx is supported; mysql lands here
+
+  // Resolved-config summary — a compact, glanceable view of what will be bound.
+  // Derived from the SAME `draft` + selected connection the primary action uses.
+  const summary = useMemo<{ k: string; v: string }[]>(() => {
+    if (!draft) return [];
+    const out: { k: string; v: string }[] = [];
+    if (selectedConn) {
+      out.push({ k: 'Connection', v: selectedConn.name });
+      if (selectedConn.host) out.push({ k: 'Server', v: selectedConn.host });
+      if (selectedConn.database) out.push({ k: 'Database', v: selectedConn.database });
+    }
+    if (draft.kind === 'adls-file') {
+      out.push({ k: 'Path', v: `${draft.container}/${draft.path}` });
+      out.push({ k: 'Format', v: draft.format.toUpperCase() });
+    } else if (draft.kind === 'file-upload') {
+      out.push({ k: 'File', v: draft.fileName });
+      out.push({ k: 'Format', v: draft.format.toUpperCase() });
+    } else if (draft.kind === 'connection') {
+      const ref = draft.objectRef;
+      switch (ref.mode) {
+        case 'table':
+          out.push({ k: ref.schema ? 'Table' : 'Object', v: ref.schema ? `${ref.schema}.${ref.table}` : ref.table });
+          break;
+        case 'query': out.push({ k: 'Query', v: 'Custom SELECT' }); break;
+        case 'kql': out.push({ k: 'Query', v: 'KQL' }); break;
+        case 'file':
+          out.push({ k: 'Path', v: ref.containerPath });
+          out.push({ k: 'Format', v: ref.format.toUpperCase() });
+          break;
+      }
+    }
+    return out;
+  }, [draft, selectedConn]);
 
   return (
     <div className={s.root}>
-      <div className={s.bindHead}>
-        <Button appearance="subtle" icon={<ChevronLeft20Regular />} onClick={onBack}>Back</Button>
-        <G className={s.cardIcon} />
-        <Subtitle2>Get data · {def.name}</Subtitle2>
+      {/* Connector identity header — gradient icon chip + name + what happens. */}
+      <div className={s.bindHero}>
+        <Button
+          appearance="subtle" size="small" className={s.bindBack}
+          icon={<ChevronLeft20Regular />} onClick={onBack}
+          aria-label="Back to connector gallery"
+        >
+          Back
+        </Button>
+        <span className={s.bindHeroChip} aria-hidden><G /></span>
+        <div className={s.bindHeroText}>
+          <div className={s.bindHeroTitleRow}>
+            <Subtitle2>{def.name}</Subtitle2>
+            {supported && <Badge appearance="tint" color="success" size="small">Certified</Badge>}
+            {forwardCompat && <Badge appearance="tint" color="warning" size="small">Preview</Badge>}
+          </div>
+          <Caption1 className={s.muted}>
+            {supported
+              ? `Binds this report to ${def.name} — fields load live from the Azure backend.`
+              : def.description}
+          </Caption1>
+        </div>
       </div>
-      <Caption1 className={s.muted}>{def.description}</Caption1>
 
       {!supported ? (
         <MessageBar intent="warning">
@@ -806,6 +905,7 @@ function BindStep({
           {/* Connection picker (SQL / Cosmos / storage-via-connection) ──────── */}
           {needsConnection && (
             <>
+              <SectionHead icon={<PlugConnected20Regular />}>Connection</SectionHead>
               <div className={s.connRow}>
                 <Field label={`${connLabel} connection`} required className={s.connGrow}
                   hint="A reusable, Key Vault-backed Loom Connection. Credentials are entered once in the wizard — never here.">
@@ -834,6 +934,12 @@ function BindStep({
                 </MessageBar>
               )}
             </>
+          )}
+
+          {(isSql || isCosmos || isAdx || isStorage) && (
+            <SectionHead icon={<TableSearch20Regular />}>
+              {isStorage ? 'Choose a file or path' : 'Choose what to read'}
+            </SectionHead>
           )}
 
           {/* SQL-family object picker ──────────────────────────────────────── */}
@@ -985,6 +1091,20 @@ function BindStep({
             </>
           )}
 
+          {/* Resolved-config summary — what you're about to bind, at a glance. */}
+          {summary.length > 0 && (
+            <div className={s.summaryCard}>
+              <Caption1 className={s.muted}>Ready to bind</Caption1>
+              <div className={s.summaryChips}>
+                {summary.map((c) => (
+                  <Badge key={`${c.k}:${c.v}`} appearance="tint" color="informative" title={`${c.k}: ${c.v}`}>
+                    {c.k}: {c.v}
+                  </Badge>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* Optional live preview (only when a reportId is in scope) ────────── */}
           {reportId && draft && (
             <div className={s.actions}>
@@ -1019,17 +1139,18 @@ function BindStep({
           )}
 
           <Divider />
-          <div className={s.actions}>
-            <Button appearance="primary" icon={<PlugConnected20Regular />} disabled={!draft}
-              onClick={() => { if (draft) onChosen(draft, { connection: selectedConn }); }}>
-              Use this source
-            </Button>
+          <div className={s.footer}>
             <Button appearance="subtle" onClick={onBack}>Cancel</Button>
             {needsConnection && (
               <Button appearance="subtle" icon={<ArrowClockwise20Regular />} disabled={connsLoading} onClick={onReloadConns}>
                 Refresh connections
               </Button>
             )}
+            <div className={s.footerSpacer} />
+            <Button appearance="primary" icon={<PlugConnected20Regular />} disabled={!draft}
+              onClick={() => { if (draft) onChosen(draft, { connection: selectedConn }); }}>
+              Use this source
+            </Button>
           </div>
         </div>
       )}
