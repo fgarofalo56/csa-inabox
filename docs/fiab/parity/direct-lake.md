@@ -17,6 +17,34 @@
     documented in `semantic-model.md`; the shim/warm-cache path is strictly
     opt-in per `no-fabric-dependency.md`.
 
+!!! info "There are THREE Azure-native Direct Lake mechanisms, not one (validated 2026-07-12)"
+    Earlier revisions of this doc credited only the **shim + Synapse Serverless**
+    path and understated framing. The full Azure-native Direct Lake surface is:
+
+    1. **`loom-directlake` (Rust/axum + Apache DataFusion + delta-rs)** — the
+       truest 1:1 with Fabric Direct Lake. It **reads Delta live off ADLS Gen2
+       and columnar-scans it WITHOUT any Import** (delta-rs opens the `_delta_log`,
+       DataFusion projects + scans, the result is transcoded to an Arrow IPC
+       stream). It also performs **real metadata-only framing** (a Delta-log
+       version pin, no data copy). BFF: `POST /api/directlake/scan` (columns) and
+       `POST /api/directlake/frame` (version pin + schema). Managed-Identity read
+       of the customer's own lake; NO Fabric/OneLake/Power BI host is contacted.
+       Code: `apps/loom-directlake/src/scan.rs` (`open_delta` → `deltalake::open_table_with_storage_options` → `ctx.register_table` → DataFusion scan; `execute_frame` = version-pin only).
+    2. **Synapse Serverless `OPENROWSET(FORMAT='DELTA')`** — the DirectQuery-style
+       fallback the semantic-model **Direct Lake query** tab uses when the warm
+       AAS cache is stale/unbuilt. Also a **live** read of the same Gold Delta
+       files (Serverless' Delta reader auto-discovers the latest committed version
+       from `_delta_log`), so it, too, is import-free.
+    3. **Direct-Lake-shim (C# + TOM warm AAS cache)** — keeps a Power-BI-Premium
+       VertiPaq cache fresh (5–30 s) via TOM partition refresh driven by
+       `_delta_log` Event Grid events. This one DOES materialize a cache (opt-in,
+       needs XMLA), and is the "warm" half of the query tab's fallback pair.
+
+    Mechanisms (1) and (2) satisfy "reads Delta directly without import"; (3) is
+    the opt-in warm accelerator. The **default** query path never requires Fabric,
+    Power BI, or a warm cache — Serverless (and, when deployed, `loom-directlake`)
+    serve every query live.
+
 **Source UI:**
 - Direct Lake overview — https://learn.microsoft.com/fabric/fundamentals/direct-lake-overview
 - Develop / framing — https://learn.microsoft.com/fabric/fundamentals/direct-lake-develop
@@ -56,13 +84,19 @@ Legend: ✅ built (full 1:1 + real backend) · ⚠️ honest-gate (full surface 
 | # | Capability | State | Notes |
 | --- | --- | --- | --- |
 | 1 | Create a semantic model over lakehouse/warehouse tables | ⚠️ honest-gate | The Azure-native default is the **push-dataset Build-model** path (`POST /api/items/semantic-model/build` → `createPushDataset`) — real Power BI REST, no XMLA, no Fabric. True Direct-Lake-on-OneLake creation needs a Fabric F-SKU; disclosed via MessageBar naming `LOOM_POWERBI_XMLA_ENDPOINT`. See `semantic-model.md` row 11. |
-| 2 | Framing (sub-second advance to latest Delta) | ⚠️ honest-gate | The shim performs **TOM partition refresh** (5–30 s), not VertiPaq framing. The freshness gap is disclosed in `workloads/direct-lake-parity.md` (Honest gaps). Backend is real (`TomRefreshClient.RefreshPartition`). |
+| 2 | Framing (advance the model to the latest Delta version without an Import) | ✅ built | `loom-directlake` performs **real metadata-only framing** — `execute_frame()` opens the Delta table via delta-rs and pins the current `_delta_log` version + schema with **no data copy** (`apps/loom-directlake/src/scan.rs:345`), exposed via `POST /api/directlake/frame`. This is the same operation Fabric's framing performs (pin the latest committed Delta version). The **shim** additionally offers a TOM partition/warm-cache refresh (5–30 s) for the opt-in Premium-XMLA path (`TomRefreshClient.RefreshPartition`). The residual sub-second-vs-5-30-s gap applies only to the XMLA warm-cache path and is disclosed in `workloads/direct-lake-parity.md`. |
 | 3 | Per-table storage-mode + refresh-policy picker in the editor | ✅ built (T4) | The **Direct Lake (shim)** tab in `semantic-model-editor.tsx` renders one row per model table with a `RefreshPolicyKind` picker (Partition / Full / DirectQuery-fallback / Composite) and persists via `PUT /api/items/semantic-model/[id]/direct-lake` to the Cosmos `direct-lake-config.refresh-policies` store the shim reads. Honest MessageBar discloses this is an AAS incremental-refresh shim, not a Fabric F-SKU. |
-| 4 | DirectQuery fallback for stale/cache-miss | ✅ built (T5) | `POST /api/items/semantic-model/[id]/direct-lake` serves from the warm AAS cache when fresh (TTL `LOOM_DL_CACHE_TTL_SECONDS`, default 3600) and falls through transparently to Synapse Serverless `OPENROWSET` over the Gold Delta files — reply carries `servingFrom: 'warm-cache' | 'serverless-fallback'`, surfaced in the **Direct Lake query** tab. No Fabric / Power BI dependency on the default (Serverless) path. |
+| 4 | DirectQuery fallback for stale/cache-miss | ✅ built (T5) | `POST /api/items/semantic-model/[id]/direct-lake` serves from the warm AAS cache when fresh (TTL `LOOM_DL_CACHE_TTL_SECONDS`, default 3600) and falls through transparently to Synapse Serverless `OPENROWSET` over the Gold Delta files — reply carries `servingFrom: 'warm-cache' | 'serverless-fallback'`, surfaced in the **Direct Lake query** tab. No Fabric / Power BI dependency on the default (Serverless) path. The `loom-directlake` DataFusion engine (`POST /api/directlake/scan`) is a second live-Delta reader for the same purpose. |
 | 5 | Hybrid tables / incremental + enhanced refresh editor | ✅ built (T6) | The **Incremental refresh** tab (archive range, incremental range, granularity/periods, detect-changes column, real-time DirectQuery toggle) reads/applies policies via `GET`/`PUT /api/items/semantic-model/[id]/refresh-policy` (TMSL Alter to set the policy + TMSL Refresh to apply). |
 | 6 | V-Order on Loom-written Delta | ⚠️ honest-gate | Loom-written Delta tables lack V-Order (no OSS V-Order encoder). Negligible for Import-mode models (VertiPaq reads spec-compliant Parquet); only matters if Fabric later reads them. Disclosed in `workloads/direct-lake-parity.md`. |
 
-**Status: zero ❌ (2026-07-12).** Rows 3–5 are ✅ built (T4–T6 Console wiring verified in `main`); rows 1, 2, 6 are honest-gates with a real backend behind them and the gap disclosed in-product. Per `ui-parity.md` this doc now shows every inventory row built ✅ or honest-gate ⚠️.
+**Status: zero ❌ (updated 2026-07-12).** Rows 2–5 are ✅ built; rows 1, 6 are
+honest-gates with a real backend behind them and the gap disclosed in-product.
+Row 2 (framing) was promoted from ⚠️ to ✅ after validating that
+`loom-directlake` performs real metadata-only Delta-log framing (`execute_frame`)
+— it was previously mis-scored because the doc tracked only the shim's TOM
+refresh and omitted the DataFusion engine. Per `ui-parity.md` this doc shows
+every inventory row built ✅ or honest-gate ⚠️.
 
 ---
 
@@ -70,6 +104,8 @@ Legend: ✅ built (full 1:1 + real backend) · ⚠️ honest-gate (full surface 
 
 | Control / function | Backend |
 | --- | --- |
+| Live Delta columnar scan (import-free) | `POST /api/directlake/scan` → `loom-directlake` Rust service → delta-rs `open_table_with_storage_options` + DataFusion projection/limit scan → Arrow IPC (`apps/loom-directlake/src/scan.rs` `execute_scan`/`open_delta`). Honest gate: `LOOM_DIRECTLAKE_URL` (503 names `platform/fiab/bicep/modules/compute/loom-directlake-app.bicep`). |
+| Framing (metadata-only version pin, no data copy) | `POST /api/directlake/frame` → `loom-directlake` `execute_frame` → delta-rs version pin + Arrow schema (`apps/loom-directlake/src/scan.rs:345`; service route `apps/loom-directlake/src/main.rs` `/frame`). BFF: `apps/fiab-console/app/api/directlake/frame/route.ts`. Same `LOOM_DIRECTLAKE_URL` honest gate. |
 | Direct Lake (shim) tab — per-table policy picker | `GET`/`PUT /api/items/semantic-model/[id]/direct-lake` → Cosmos `direct-lake-config.refresh-policies` (same store `SemanticModelConfigStore.cs` reads) |
 | Direct Lake query tab — DirectQuery-style query | `POST /api/items/semantic-model/[id]/direct-lake` → warm AAS cache (Power BI Premium XMLA, opt-in) else Synapse Serverless `OPENROWSET` over Gold Delta (`lib/azure/synapse-sql-client` `buildDeltaOpenRowsetSql`) |
 | Incremental refresh tab — policy read/apply | `GET`/`PUT /api/items/semantic-model/[id]/refresh-policy` → TMSL Alter (set policy) + TMSL Refresh (apply) via the AAS incremental-refresh path |
