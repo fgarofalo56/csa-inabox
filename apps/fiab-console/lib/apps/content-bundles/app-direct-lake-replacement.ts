@@ -24,18 +24,22 @@
  *   9. activator          — alert when a Shim partition-refresh fails or freshness SLA breached
  *
  * Backend per item (Phase-2 provisioners, all on real REST — see
- * lib/install/provisioners/*; wired in lib/install/provisioning-engine.ts):
- *   1. mirrored-database  → mirrored-database.ts: Fabric POST /mirroredDatabases
- *                           (Base64 mirroring.json) + startMirroring →
- *                           replicates the legacy SQL source into Bronze Delta.
- *                           Honest gate: LOOM_MIRROR_SOURCE_CONNECTION_ID
- *                           (Fabric mirroring REST needs a source connection
- *                           GUID, which can't be derived from a server FQDN).
- *   2. lakehouse          → lakehouse.ts: Fabric POST /lakehouses, then SEEDS
- *                           each deltaTable's sampleRows into a REAL Delta table
- *                           via OneLake DFS create/append/flush + Load Table API
- *                           (CSV → managed Delta). Gold/dims are non-empty at
- *                           install time, before the notebooks finish.
+ * lib/install/provisioners/*; wired in lib/install/provisioning-engine.ts).
+ * Every provisioner is Azure-native by DEFAULT per no-fabric-dependency.md;
+ * its Fabric REST twin runs ONLY on explicit opt-in (backend==='fabric' + a
+ * bound workspace):
+ *   1. mirrored-database  → mirrored-database.ts: ADF CDC / Synapse Link copy
+ *                           → ADLS Bronze Delta (default). Fabric POST
+ *                           /mirroredDatabases + startMirroring is the opt-in
+ *                           twin (whose honest gate is
+ *                           LOOM_MIRROR_SOURCE_CONNECTION_ID — the Fabric
+ *                           mirroring REST needs a source connection GUID).
+ *   2. lakehouse          → lakehouse.ts: ADLS Gen2 + Delta medallion (+
+ *                           Synapse table registration), SEEDING each
+ *                           deltaTable's sampleRows into a REAL Delta table so
+ *                           Gold/dims are non-empty at install time, before
+ *                           the notebooks finish (default). Fabric POST
+ *                           /lakehouses + OneLake DFS is the opt-in twin.
  *   3,4. databricks-notebook → databricks-notebook.ts: Databricks
  *                           workspace/import + jobs/runs/submit on a live
  *                           cluster → actually RUNS the Silver/Gold transforms
@@ -49,25 +53,33 @@
  *                           the run id while the job finishes on the cluster.
  *                           Honest gate: LOOM_DATABRICKS_HOSTNAME / a runnable
  *                           cluster / UAMI workspace access.
- *   5. eventstream        → eventstream.ts (Fabric POST /eventstreams).
- *   6. data-pipeline      → data-pipeline.ts (Fabric pipeline + on-demand run;
- *                           the on-demand run is triggered via real REST and
+ *   5. eventstream        → eventstream.ts: Azure Event Hubs (+ Stream
+ *                           Analytics processing) by default; Fabric POST
+ *                           /eventstreams is the opt-in twin.
+ *   6. data-pipeline      → data-pipeline.ts: Synapse/ADF pipeline + on-demand
+ *                           run by default (Fabric pipeline opt-in). The
+ *                           on-demand run is triggered via real REST and
  *                           reported by its live job-instance id without
  *                           blocking the request to terminal, same Front Door
- *                           budget reason as the notebooks above).
- *   7. semantic-model     → semantic-model.ts (Fabric POST /semanticModels, TMSL).
- *   8. report             → report.ts: Fabric POST /reports with a PBIR
- *                           definition bound byConnection to the semantic
- *                           model (semanticmodelid=<id>) → renders over the
- *                           seeded Gold tables.
- *   9. activator          → activator.ts (Fabric Reflex rule).
+ *                           budget reason as the notebooks above.
+ *   7. semantic-model     → semantic-model.ts: Loom-native tabular layer over
+ *                           the lakehouse/warehouse (AAS optional) by default;
+ *                           Fabric POST /semanticModels (TMSL) opt-in.
+ *   8. report             → report.ts: Loom-native report over the semantic
+ *                           layer by default; the opt-in Fabric twin POSTs
+ *                           /reports with a PBIR definition bound byConnection
+ *                           to the semantic model (semanticmodelid=<id>).
+ *                           Either way it renders over the seeded Gold tables.
+ *   9. activator          → activator.ts: Azure Monitor scheduled-query alert
+ *                           by default; Fabric Reflex rule opt-in.
  *
  * Every itemType in this bundle now has a real Phase-2 provisioner. With zero
- * customer config the install still produces a functional workspace: the
+ * customer config the install still produces a functional workspace on the
+ * Azure-native defaults (no Fabric capacity or workspace required): the
  * lakehouse seeds its sample Gold/dim rows (so the semantic model + report
  * render with data immediately), and the mirror → Bronze and notebook runs
- * surface precise honest MessageBar gates (the exact env var / role / Fabric
- * connection to provision) rather than silently skipping — per
+ * surface precise honest MessageBar gates (the exact env var / role /
+ * resource to provision) rather than silently skipping — per
  * .claude/rules/no-vaporware.md.
  *
  * Ground truth: docs/fiab/use-cases/direct-lake-replacement.md (migration

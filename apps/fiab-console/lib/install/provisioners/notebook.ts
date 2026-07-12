@@ -2,32 +2,34 @@
  * Phase 2 — Notebook provisioner.
  *
  * Imports a NotebookContent bundle (cells + defaultLang) as a real, runnable
- * notebook into whichever data engine the Loom is wired to. Three backends, in
- * priority order, each a real REST import — never a mock:
+ * notebook into whichever data engine the Loom is wired to. Azure-native is
+ * the DEFAULT (no-fabric-dependency.md); each backend is a real REST import —
+ * never a mock:
  *
- *   1. Fabric (when target.fabricWorkspaceId is bound)
- *      POST /v1/workspaces/{wsid}/notebooks (create item) then
- *      updateDefinition with the cells inline-base64 as an .ipynb part.
- *      Idempotent: an existing same-named notebook is updateDefinition'd.
- *
- *   2. Azure Synapse Analytics (when LOOM_SYNAPSE_WORKSPACE is set and no
- *      Fabric workspace is bound). PUT
- *      https://{ws}.dev.azuresynapse.net/notebooks/{name}?api-version=2020-12-01
+ *   1. Azure Synapse Analytics (DEFAULT when LOOM_SYNAPSE_WORKSPACE is set).
+ *      PUT https://{ws}.dev.azuresynapse.net/notebooks/{name}?api-version=2020-12-01
  *      with a Jupyter nbformat-4 notebook artifact (code + markdown cells).
  *      This is the same Synapse Studio notebook artifact you would author in
  *      the portal — fully runnable against a Spark Big Data pool.
  *
- *   3. Azure Databricks (when LOOM_DATABRICKS_HOSTNAME is set and neither
- *      Fabric nor Synapse is configured). POST /api/2.0/workspace/import
- *      with the cells serialized to Databricks SOURCE format
- *      (`# Databricks notebook source`, `# COMMAND ----------` cell
- *      delimiters, `# MAGIC %md` for markdown/non-default-language cells).
- *      Lands a real notebook under /Shared/loom-installs/<displayName>.
+ *   2. Azure Databricks (when LOOM_DATABRICKS_HOSTNAME is set and Synapse is
+ *      not). POST /api/2.0/workspace/import with the cells serialized to
+ *      Databricks SOURCE format (`# Databricks notebook source`,
+ *      `# COMMAND ----------` cell delimiters, `# MAGIC %md` for
+ *      markdown/non-default-language cells). Lands a real notebook under
+ *      /Shared/loom-installs/<displayName>.
  *
- * Honest infra gate (per .claude/rules/no-vaporware.md): only when NONE of
- * the three are configured do we return status:'remediation' naming the
- * exact env var / bind action required. Fabric 401/403 also gates with the
- * verbatim error + the role grant required.
+ *   3. Fabric — STRICTLY OPT-IN (LOOM_NOTEBOOK_BACKEND=fabric AND
+ *      target.fabricWorkspaceId bound; a bound workspace alone never selects
+ *      Fabric). POST /v1/workspaces/{wsid}/notebooks (create item) then
+ *      updateDefinition with the cells inline-base64 as an .ipynb part.
+ *      Idempotent: an existing same-named notebook is updateDefinition'd.
+ *
+ * Honest infra gate (per .claude/rules/no-vaporware.md): when no Azure engine
+ * is configured (and Fabric isn't opted into) we return status:'remediation'
+ * naming the exact env var to set — never a "bind a Fabric workspace" ask.
+ * Fabric 401/403 (opt-in path) also gates with the verbatim error + the role
+ * grant required.
  */
 import { createNotebook, listNotebooks, updateNotebookDefinition, FabricError, fabricHint } from '@/lib/azure/fabric-client';
 import {
@@ -219,10 +221,10 @@ function buildDatabricksSource(content: any, displayName: string): { source: str
 }
 
 /**
- * Fall back to the configured Azure-native data engine (Synapse, then
- * Databricks) when no Fabric workspace is bound. Returns a ProvisionResult
- * on success/gate, or null when neither backend is configured (caller emits
- * the combined remediation gate).
+ * Provision on the configured Azure-native data engine (Synapse, then
+ * Databricks) — the DEFAULT path per no-fabric-dependency.md. Returns a
+ * ProvisionResult on success/gate, or null when neither backend is configured
+ * (caller emits the combined remediation gate).
  */
 async function provisionAzureNative(
   input: { content: unknown; displayName: string; appId: string },
@@ -340,36 +342,32 @@ export const notebookProvisioner: Provisioner = async (input): Promise<Provision
   const steps: string[] = [];
   const ws = input.target.fabricWorkspaceId;
   // Azure-native DEFAULT (Synapse Spark → Databricks), per
-  // .claude/rules/no-fabric-dependency.md. A Fabric notebook is used ONLY when
-  // explicitly opted into (LOOM_NOTEBOOK_BACKEND=fabric + bound ws) or when it
-  // is the only configured backend (ws bound, no Synapse/Databricks). We never
-  // require a Fabric workspace.
-  const forceFabric = process.env.LOOM_NOTEBOOK_BACKEND === 'fabric';
-  const azureConfigured = !!(process.env.LOOM_SYNAPSE_WORKSPACE || process.env.LOOM_DATABRICKS_HOSTNAME);
+  // .claude/rules/no-fabric-dependency.md. The Fabric notebook backend is
+  // strictly opt-in: BOTH LOOM_NOTEBOOK_BACKEND=fabric AND a bound workspace
+  // are required. A bound workspace alone NEVER implies Fabric — without the
+  // env opt-in we take the Azure-native path, and when no Azure engine is
+  // configured we return the honest Azure-side gate (never "bind a Fabric
+  // workspace").
+  const useFabric = process.env.LOOM_NOTEBOOK_BACKEND === 'fabric' && !!ws;
 
-  if (!(forceFabric && ws) && azureConfigured) {
+  if (!useFabric) {
     const fallback = await provisionAzureNative(
       { content: input.content, displayName: input.displayName, appId: input.appId },
       steps,
     );
     if (fallback) return fallback;
-  }
-
-  if (!ws) {
     return {
       status: 'remediation',
       gate: {
         reason: 'No Azure notebook engine configured (no Synapse, no Databricks).',
         remediation:
-          'Set LOOM_SYNAPSE_WORKSPACE to import + run as a Synapse Spark notebook, OR set LOOM_DATABRICKS_HOSTNAME to import as a Databricks notebook. (Binding a Fabric workspace is an optional alternative, not required.)',
+          'Set LOOM_SYNAPSE_WORKSPACE to import + run as a Synapse Spark notebook, OR set LOOM_DATABRICKS_HOSTNAME to import as a Databricks notebook. (A Fabric notebook backend is opt-in ONLY via LOOM_NOTEBOOK_BACKEND=fabric plus a bound workspace — never required.)',
         link: 'https://learn.microsoft.com/azure/synapse-analytics/spark/apache-spark-development-using-notebooks',
       },
       steps,
     };
   }
-  steps.push(forceFabric
-    ? `Fabric workspace (opt-in via LOOM_NOTEBOOK_BACKEND=fabric): ${ws}`
-    : `No Azure notebook engine configured; using the bound Fabric workspace: ${ws}`);
+  steps.push(`Fabric workspace (opt-in via LOOM_NOTEBOOK_BACKEND=fabric): ${ws}`);
 
   const definition = buildDefinition(input.content, input.displayName);
   steps.push(`Built notebook definition with ${(input.content as any)?.cells?.length || 0} cells.`);

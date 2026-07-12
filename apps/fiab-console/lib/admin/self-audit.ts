@@ -537,14 +537,14 @@ export const ENV_CHECKS: EnvSpec[] = [
     ],
     warnOnMiss: true,
     remediation: 'Workshop and Slate apps PUBLISH to a real Azure Static Web App. Set LOOM_SWA_RESOURCE_GROUP (the resource group new SWAs deploy into; LOOM_SWA_SUBSCRIPTION_ID falls back to LOOM_SUBSCRIPTION_ID and LOOM_SWA_LOCATION defaults to eastus2) and grant the Console UAMI "Website Contributor" on that RG. The builders + in-editor Preview work without this — only one-click Publish is gated. No Microsoft Fabric required.',
-    provisionedBy: 'set via env (not yet bicep-emitted) — POST /api/items/{workshop-app,slate-app}/[id]/publish reads these; any RG in the deployment (e.g. the admin RG) works',
+    provisionedBy: 'modules/admin-plane/main.bicep apps[] env (LOOM_SWA_SUBSCRIPTION_ID / LOOM_SWA_RESOURCE_GROUP / LOOM_SWA_LOCATION — RG defaults to the admin RG, byoExisting.swaResourceGroup overrides) + swa-publish-rbac.bicep (Website Contributor grant); POST /api/items/{workshop-app,slate-app}/[id]/publish reads these',
     role: 'Website Contributor (Console UAMI) on the SWA resource group',
   },
   {
     id: 'svc-activator-adx-scope', category: 'azure-services', title: 'Activator — ADX continuous-evaluation scope', severity: 'optional',
     required: ['LOOM_ADX_ALERT_SCOPE'], warnOnMiss: true,
     remediation: 'Set LOOM_ADX_ALERT_SCOPE to the ADX cluster ARM resource id so Activator rules on Eventhouse/ADX sources get hands-off scheduled evaluation (an Azure Monitor scheduled-query rule scoped to the cluster), and grant the alert identity "Database Viewer" on the target database. Without it, ADX-sourced rules still evaluate on-demand via Trigger; Log Analytics sources evaluate continuously regardless.',
-    provisionedBy: 'modules/landing-zone (adxEnabled → the ADX cluster whose resource id this names); set the env on the Console app (not yet auto-emitted by admin-plane/main.bicep)',
+    provisionedBy: 'modules/admin-plane/adx-cluster.bicep (adxEnabled → the ADX cluster) → admin-plane/main.bicep apps[] env LOOM_ADX_ALERT_SCOPE (the cluster ARM id; a BYO cluster resolves via byoExisting) — auto-emitted on a push-button deploy',
     role: 'Database Viewer (alert identity) on the ADX database + Monitoring Contributor (Console UAMI) on LOOM_ALERT_RG',
   },
   {
@@ -572,7 +572,7 @@ export const ENV_CHECKS: EnvSpec[] = [
     id: 'svc-udf-function', category: 'builders', title: 'User data functions — Azure Functions run target', severity: 'optional',
     required: ['LOOM_UDF_FUNCTION_BASE'], warnOnMiss: true,
     remediation: 'Set LOOM_UDF_FUNCTION_BASE to the shared Loom UDF runtime (or an Azure Function App) base URL (e.g. https://my-udf.azurewebsites.net) — the Azure-native invoke backend. The invoke route forwards the item\'s authored source (x-udf-source-b64) so the shared runtime executes THIS function, not a bundled sample. A per-item state.azureFunctionUrl overrides the base URL; a Fabric backend is opt-in ONLY via LOOM_UDF_BACKEND=fabric. The editor + code authoring work without it — only Invoke is gated.',
-    provisionedBy: 'set via env (not yet bicep-emitted) — deploy an Azure Functions app; POST /api/items/user-data-function/[id]/invoke reads it',
+    provisionedBy: 'modules/admin-plane/udf-runtime.bicep (udfRuntimeEnabled, default on → the loom-udf-runtime Container App) → admin-plane/main.bicep apps[] env LOOM_UDF_FUNCTION_BASE (a BYO Functions host overrides via loomUdfFunctionBase); POST /api/items/user-data-function/[id]/invoke reads it',
     role: 'none (HTTPS endpoint); if the function requires a key, set state.functionKeySecret to the Key Vault secret name',
   },
   {

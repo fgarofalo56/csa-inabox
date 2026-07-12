@@ -318,6 +318,7 @@ export async function GET(request: Request) {
     // failures are isolated (a workspace the UAMI can't read never aborts the
     // whole catalog).
     const itC = await itemsContainer();
+    const failedWorkspaceIds: string[] = [];
     const perWorkspace = await Promise.all(
       callerWorkspaceIds.map(async (wsId) => {
         try {
@@ -333,6 +334,11 @@ export async function GET(request: Request) {
             .fetchAll();
           return resources;
         } catch {
+          // Partial failure: record the workspace so the envelope carries an
+          // honest degraded indicator instead of silently rendering a
+          // partial/empty catalog (a Cosmos outage must not look like "no
+          // items" — no-vaporware.md).
+          failedWorkspaceIds.push(wsId);
           return [] as any[];
         }
       }),
@@ -360,6 +366,15 @@ export async function GET(request: Request) {
       domains,
       searchConfigured: false,
       searchGate: cosmosSearchGate(),
+      ...(failedWorkspaceIds.length
+        ? {
+            degraded: true,
+            warning:
+              `Catalog results are partial: ${failedWorkspaceIds.length} of ${callerWorkspaceIds.length} ` +
+              `workspace read(s) failed (Cosmos query error) — workspace id(s): ${failedWorkspaceIds.join(', ')}. ` +
+              'Retry, or check the Cosmos account / Console UAMI data-plane role if this persists.',
+          }
+        : {}),
     });
   } catch (e: any) {
     return apiServerError(e);

@@ -23,7 +23,7 @@ import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { itemsContainer, workspacesContainer } from './cosmos-client';
-import { armBase, armScope, kustoClusterUri } from './cloud-endpoints';
+import { armBase, armScope, isGovCloud, kustoClusterUri } from './cloud-endpoints';
 import { buildCreateMaterializedViewCommand } from './kusto-mv-command';
 import { recordCacheHit, recordCacheMiss } from '@/lib/perf/cache-counters';
 
@@ -137,8 +137,10 @@ export function kustoConfigGate(): { missing: string } | null {
  *
  * Proxy hosts (grounded in Microsoft Learn — "Query data in Azure Monitor
  * using Azure Data Explorer", additional-syntax-examples):
- *   Commercial / GCC : adx.monitor.azure.com
- *   GCC-High / IL5   : adx.monitor.azure.us
+ *   Commercial / GCC       : adx.monitor.azure.com
+ *   GCC-High / IL5 / DoD   : adx.monitor.azure.us
+ * Cloud detection goes through cloud-endpoints.isGovCloud() so the DoD
+ * boundary (AZURE_CLOUD=AzureDOD) also resolves the .us host (GOV-4).
  *
  * Returns `null` when `LOOM_LOG_ANALYTICS_RESOURCE_ID` is not configured
  * (the operator has not deployed a Log Analytics workspace / the env var is
@@ -147,9 +149,7 @@ export function kustoConfigGate(): { missing: string } | null {
 export function laProxyClusterUri(): string | null {
   const rid = process.env.LOOM_LOG_ANALYTICS_RESOURCE_ID?.trim();
   if (!rid) return null;
-  const host = process.env.AZURE_CLOUD === 'AzureUSGovernment'
-    ? 'adx.monitor.azure.us'
-    : 'adx.monitor.azure.com';
+  const host = isGovCloud() ? 'adx.monitor.azure.us' : 'adx.monitor.azure.com';
   const path = rid.startsWith('/') ? rid : `/${rid}`;
   return `https://${host}${path}`;
 }
