@@ -41,7 +41,7 @@ interface EditableEnvVar {
   label: string; valueHint: string; secret: boolean; required: boolean; il5Restricted?: boolean;
   provisionedBy?: string; role?: string; derived?: boolean;
 }
-interface CurrentVal { set: boolean; status?: 'set' | 'derived' | 'satisfied' | 'unset'; satisfiedByAlias?: boolean; value?: string; secret: boolean }
+interface CurrentVal { set: boolean; status?: 'set' | 'derived' | 'satisfied' | 'default' | 'unset'; satisfiedByAlias?: boolean; value?: string; secret: boolean }
 interface EnvConfigGet {
   ok: boolean; error?: string;
   editable: EditableEnvVar[];
@@ -120,7 +120,7 @@ export function EnvConfigPane() {
   // either/or vars (e.g. GROUP_ID when OID is set).
   const isSatisfied = useCallback((key: string) => {
     const c = data?.current[key];
-    return !!c && (c.set || c.status === 'derived' || c.status === 'satisfied' || !!c.satisfiedByAlias);
+    return !!c && (c.set || c.status === 'derived' || c.status === 'satisfied' || c.status === 'default' || !!c.satisfiedByAlias);
   }, [data]);
 
   const coverage = useMemo(() => {
@@ -424,9 +424,11 @@ export function EnvConfigPane() {
                         ? <Badge appearance="tint" size="small" color="success" icon={<CheckmarkCircle24Filled />}>set</Badge>
                         : (cur?.status === 'satisfied' || cur?.satisfiedByAlias)
                           ? <Badge appearance="tint" size="small" color="success" icon={<CheckmarkCircle24Filled />}>satisfied (alias set)</Badge>
-                          : (e.derived
-                            ? <Badge appearance="tint" size="small" color="informative" icon={<Info16Regular />}>derived</Badge>
-                            : <Badge appearance="tint" size="small" color="warning" icon={<Warning24Filled />}>not set</Badge>)}
+                          : cur?.status === 'default'
+                            ? <Badge appearance="tint" size="small" color="success" icon={<CheckmarkCircle24Filled />}>default (built-in fallback)</Badge>
+                            : (e.derived
+                              ? <Badge appearance="tint" size="small" color="informative" icon={<Info16Regular />}>derived</Badge>
+                              : <Badge appearance="tint" size="small" color="warning" icon={<Warning24Filled />}>not set</Badge>)}
                       {modified && <Badge appearance="filled" size="small" color="brand" icon={<Edit16Filled />}>modified</Badge>}
                       {disabledIl5 && <Badge appearance="tint" size="small" color="danger">restricted in {data.cloud}</Badge>}
                     </div>

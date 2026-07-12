@@ -139,16 +139,21 @@ export async function GET() {
   // the either/or requirement is met — NOT a critical gap), or 'unset'.
   const isSet = (key: string) => ((process.env[key] || '').trim().length > 0);
   const satisfiedKeys = aliasSatisfiedKeys(isSet);
-  const current: Record<string, { set: boolean; status: 'set' | 'derived' | 'satisfied' | 'unset'; satisfiedByAlias?: boolean; value?: string; secret: boolean }> = {};
+  const current: Record<string, { set: boolean; status: 'set' | 'derived' | 'satisfied' | 'default' | 'unset'; satisfiedByAlias?: boolean; value?: string; secret: boolean }> = {};
   for (const e of EDITABLE_ENV) {
     const raw = (process.env[e.key] || '').trim();
     const set = raw.length > 0;
     const satisfiedByAlias = !set && satisfiedKeys.has(e.key);
-    const status: 'set' | 'derived' | 'satisfied' | 'unset' = set
+    // 'default' — an optional silent-fallback substrate (H-band) whose UNSET
+    // state is the fully-functional intended default. Counted as configured (the
+    // feature is ON via the built-in fallback), not a gap (loom_default_on_opt_out).
+    const status: 'set' | 'derived' | 'satisfied' | 'default' | 'unset' = set
       ? 'set'
       : satisfiedByAlias
         ? 'satisfied'
-        : (e.derived ? 'derived' : 'unset');
+        : e.optionalDefault
+          ? 'default'
+          : (e.derived ? 'derived' : 'unset');
     current[e.key] = e.secret
       ? { set, status, satisfiedByAlias: satisfiedByAlias || undefined, secret: true }
       : { set, status, satisfiedByAlias: satisfiedByAlias || undefined, value: raw, secret: false };

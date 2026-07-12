@@ -3559,11 +3559,19 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           // — warms Azure-native Synapse Livy sessions to kill notebook cold
           // start. Always emitted (defaults: disabled / 1 / 3 / 900s); tenant
           // admins can also flip these live via /api/spark/session-pool.
+          // LOOM_SPARK_POOL_LEASE_CONTAINER names the day-one Cosmos container
+          // (landing-zone/cosmos.bicep → 'spark-warm-leases') so the cross-replica
+          // warm-session lease registry is SHARED across Console replicas out of
+          // the box (PSR-3, default-on / opt-out per loom_default_on_opt_out) — a
+          // warm session created on one replica is reusable from any replica, with
+          // no Redis dependency. Unset would fall back to a per-replica pool; wiring
+          // the day-one container makes the shared registry the default posture.
           [
-            { name: 'LOOM_SPARK_POOL_ENABLED',  value: sparkSessionPool.outputs.sparkPoolEnabledEnv }
-            { name: 'LOOM_SPARK_POOL_MIN',      value: sparkSessionPool.outputs.sparkPoolMinEnv }
-            { name: 'LOOM_SPARK_POOL_MAX',      value: sparkSessionPool.outputs.sparkPoolMaxEnv }
-            { name: 'LOOM_SPARK_POOL_IDLE_TTL', value: sparkSessionPool.outputs.sparkPoolIdleTtlEnv }
+            { name: 'LOOM_SPARK_POOL_ENABLED',         value: sparkSessionPool.outputs.sparkPoolEnabledEnv }
+            { name: 'LOOM_SPARK_POOL_MIN',             value: sparkSessionPool.outputs.sparkPoolMinEnv }
+            { name: 'LOOM_SPARK_POOL_MAX',             value: sparkSessionPool.outputs.sparkPoolMaxEnv }
+            { name: 'LOOM_SPARK_POOL_IDLE_TTL',        value: sparkSessionPool.outputs.sparkPoolIdleTtlEnv }
+            { name: 'LOOM_SPARK_POOL_LEASE_CONTAINER', value: 'spark-warm-leases' }
           ],
           // Chargeback dashboard billing scope (/admin/usage-chargeback). The
           // Console UAMI holds Cost Management Reader at subscription scope

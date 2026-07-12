@@ -46,6 +46,10 @@ export interface EditableEnvVar {
   /** True when bicep AUTO-DERIVES this var from another resource (org-visuals
    * URL, LAW customerId). Rendered as a "derived" status, not a bare "not set". */
   derived?: boolean;
+  /** True when the UNSET state is the fully-functional intended default (the
+   * console silently falls back to a built-in path — an optional scale-out
+   * substrate). Counted as configured (status 'default') rather than a gap. */
+  optionalDefault?: boolean;
 }
 
 /** A value is treated as secret when its key matches any of these. */
@@ -85,6 +89,7 @@ export const EDITABLE_ENV: EditableEnvVar[] = (() => {
       provisionedBy: spec.provisionedBy,
       role: spec.role,
       derived: spec.derived || undefined,
+      optionalDefault: spec.optionalDefault || undefined,
     });
   };
   for (const spec of ENV_CHECKS) {

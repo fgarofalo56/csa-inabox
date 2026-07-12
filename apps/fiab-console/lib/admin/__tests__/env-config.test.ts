@@ -167,4 +167,18 @@ describe('admin/env-config registry', () => {
     // A normal operator-set var is NOT derived.
     expect(getEditableEnv('LOOM_COSMOS_ENDPOINT')?.derived).toBeUndefined();
   });
+
+  it('flags silent-fallback substrates optionalDefault=true (counted as configured day-one)', () => {
+    // The out-of-band Hyperscale-band substrates + the Cosmos-native Plan writeback
+    // fall back with zero loss of function when unset, so /admin/env-config counts
+    // them as configured (status 'default') → 73-of-73 on a clean deploy without
+    // faking a resource (the FEATURE is on via the built-in fallback).
+    for (const k of ['LOOM_ONELAKE_URL', 'LOOM_DIRECTLAKE_URL', 'LOOM_BROKER_URL', 'LOOM_BROKER_REDIS',
+      'LOOM_PLAN_BACKING_SQL_SERVER', 'LOOM_PLAN_BACKING_SQL_DATABASE']) {
+      expect(getEditableEnv(k)?.optionalDefault, k).toBe(true);
+    }
+    // A normal operator/day-one var is NOT an optional-default fallback.
+    expect(getEditableEnv('LOOM_COSMOS_ENDPOINT')?.optionalDefault).toBeUndefined();
+    expect(getEditableEnv('LOOM_SYNAPSE_WORKSPACE')?.optionalDefault).toBeUndefined();
+  });
 });
