@@ -148,8 +148,16 @@ param agentFoundryEnabled bool = true
 @description('Inline-completion (ghost text) AOAI deployment name for notebook/SQL code cells (LOOM_AOAI_COMPLETION_DEPLOYMENT). Empty = ghost text uses the chat deployment (LOOM_AOAI_DEPLOYMENT). Set to a dedicated gpt-4o-mini slot for lower latency without consuming chat quota. Leave empty in GCC-High / IL5 regions where the model is unavailable — the Console route falls back to the chat deployment.')
 param loomAoaiCompletionDeployment string = ''
 
-@description('OPT-IN. Vision-capable AOAI deployment name for multimodal AI columns (LOOM_AOAI_VISION_DEPLOYMENT) — the G2 "Add AI column" image/document input path (summarize/classify/extract over an image URL). Empty = text-only AI columns; the /api/ai-functions/table route honest-gates multimodal requests with the exact env var to set. Leave empty in GCC-High / IL5 regions lacking a vision model.')
-param loomAoaiVisionDeployment string = ''
+// OPT-IN. Vision-capable AOAI deployment name for multimodal AI columns
+// (LOOM_AOAI_VISION_DEPLOYMENT) — the G2 "Add AI column" image/document input
+// path (summarize/classify/extract over an image URL). Empty = text-only AI
+// columns; the /api/ai-functions/table route honest-gates multimodal requests
+// with the exact env var to set. Wired into the Console env below so the setting
+// is bicep-synced; the operator sets the real vision-deployment name on the
+// running Console app (or leaves it empty in GCC-High / IL5 regions lacking a
+// vision model). Declared as a `var` rather than a `param` because
+// admin-plane/main.bicep is at Bicep's hard 256-parameter ceiling.
+var loomAoaiVisionDeployment = ''
 
 @description('Deploy the shared Data API builder preview runtime that the DAB editor\'s live REST/GraphQL testers point at via LOOM_DAB_PREVIEW_URL.')
 param dabRuntimeEnabled bool = false
