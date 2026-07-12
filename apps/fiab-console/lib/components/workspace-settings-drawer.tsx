@@ -41,6 +41,7 @@ import { GitIntegrationPane } from '@/lib/panes/git-integration';
 import { SparkComputePane } from '@/lib/panes/spark-compute';
 import { LifecycleRulesPanel } from '@/lib/components/onelake/lifecycle-rules';
 import { CmkPane } from '@/lib/panes/cmk';
+import { PowerBiTree } from '@/lib/components/powerbi/powerbi-tree';
 
 interface Props {
   workspace: Workspace;
@@ -391,6 +392,34 @@ function PowerBiMappingSection({ workspace }: { workspace: Workspace }) {
           </Button>
         )}
       </div>
+
+      {/* Manage the mapped Power BI workspace's content in-place — the same
+          typed navigator (real Power BI REST: list / refresh / delete / open /
+          deploy pipelines) the Semantic Model editor uses, bound here to the
+          saved mapping so a user manages the mapped items right inside Loom
+          (mirrors how a bound Synapse workspace surfaces its items). */}
+      {current !== 'loading' && current && pbiConfigured && (
+        <>
+          <Divider />
+          <Subtitle2>Mapped Power BI content</Subtitle2>
+          <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+            Semantic models, reports, dashboards, dataflows and deployment pipelines in the mapped
+            workspace. Every action calls real Power BI REST.
+          </Caption1>
+          <div style={{
+            height: 360,
+            border: `${tokens.strokeWidthThin} solid ${tokens.colorNeutralStroke2}`,
+            borderRadius: tokens.borderRadiusMedium,
+            overflow: 'hidden',
+          }}>
+            <PowerBiTree
+              workspaceId={current.pbiWorkspaceId}
+              onOpenReport={(r) => { if (r.webUrl) { try { window.open(r.webUrl, '_blank', 'noreferrer'); } catch { /* popup blocked */ } } }}
+              onOpenDashboard={(d) => { if (d.webUrl) { try { window.open(d.webUrl, '_blank', 'noreferrer'); } catch { /* popup blocked */ } } }}
+            />
+          </div>
+        </>
+      )}
     </div>
   );
 }

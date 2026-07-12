@@ -59,6 +59,7 @@ import {
 } from '@/lib/coe-library/loom-report-store';
 import { reportProvisioner } from '@/lib/install/provisioners/report';
 import { readReportDataSource } from '@/lib/azure/report-model-resolver';
+import { getPbiWorkspaceMapping, pickPbiWorkspaceId } from '@/lib/azure/powerbi-workspace-mapping';
 import type { ReportContent } from '@/lib/apps/content-bundles/types';
 import type { WorkspaceItem } from '@/lib/types/workspace';
 import {
@@ -97,10 +98,37 @@ function reportContentOf(item: WorkspaceItem): ReportContent | null {
   return c && c.kind === 'report' ? (c as unknown as ReportContent) : null;
 }
 
-/** Resolve the opt-in Fabric workspace: item binding first, then platform env. */
-function resolveWorkspace(item: WorkspaceItem): string | undefined {
+/**
+ * Resolve the opt-in Power BI / Fabric workspace to publish into, mapping-aware
+ * (WS-PBIMAP). Precedence, via `pickPbiWorkspaceId`:
+ *   1. per-item binding      (`state.fabricWorkspaceId`)
+ *   2. the Loom-workspace → Power BI-workspace MAPPING for this item's workspace
+ *      (`pbiWorkspaceMapping.pbiWorkspaceId`) — so mapping a Loom workspace to a
+ *      PBI workspace in Settings makes its reports publish there by default, the
+ *      same way a bound Synapse workspace targets its items.
+ *   3. the platform default  (`LOOM_DEFAULT_FABRIC_WORKSPACE`)
+ *
+ * The mapping read is best-effort and only consulted when there is no per-item
+ * binding; a missing mapping simply falls through to the env default (Power BI
+ * stays opt-in, never a hard gate — no-fabric-dependency.md).
+ */
+async function resolveWorkspace(item: WorkspaceItem): Promise<string | undefined> {
   const state = (item.state || {}) as Record<string, unknown>;
-  return str(state.fabricWorkspaceId) || str(process.env.LOOM_DEFAULT_FABRIC_WORKSPACE);
+  const explicit = str(state.fabricWorkspaceId);
+  let mapped: string | undefined;
+  if (!explicit && item.workspaceId) {
+    try {
+      const m = await getPbiWorkspaceMapping(item.workspaceId);
+      mapped = m?.pbiWorkspaceId;
+    } catch {
+      /* mapping read is best-effort — fall through to the platform env default */
+    }
+  }
+  return pickPbiWorkspaceId({
+    explicit,
+    mapped,
+    envDefault: process.env.LOOM_DEFAULT_FABRIC_WORKSPACE,
+  });
 }
 
 // The Azure-native org-gallery snapshot store (publish / unpublish / list) is the
@@ -195,7 +223,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   // auto-selected by the opt-in BI backend; otherwise the Azure-native gallery.
   const wantPbi = requested === 'powerbi' || (requested === undefined && PBI_OPT_IN);
   if (wantPbi) {
-    const ws = resolveWorkspace(item);
+    const ws = await resolveWorkspace(item);
     if (ws) {
       try {
         return await publishToPowerBi(session, item, reportId, ws, content);
@@ -206,11 +234,12 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     // Explicit Power BI request but no workspace → honest gate (no-vaporware).
     if (requested === 'powerbi') {
       return jgate({
-        reason: 'Power BI was selected as the publish target but no Fabric workspace is bound.',
+        reason: 'Power BI was selected as the publish target but no Power BI workspace is bound.',
         remediation:
-          'Bind a Fabric workspace to this report (state.fabricWorkspaceId) or set the ' +
-          'LOOM_DEFAULT_FABRIC_WORKSPACE environment variable, then publish again. Power BI is ' +
-          'opt-in — the Azure-native Organization gallery (target:"org-gallery") needs no workspace.',
+          'Map this Loom workspace to a Power BI workspace (Workspace settings → Power BI), bind a ' +
+          'workspace to this report (state.fabricWorkspaceId), or set the LOOM_DEFAULT_FABRIC_WORKSPACE ' +
+          'environment variable, then publish again. Power BI is opt-in — the Azure-native Organization ' +
+          'gallery (target:"org-gallery") needs no workspace.',
       });
     }
     // Auto-selected Power BI but no workspace → fall through to the Azure-native
