@@ -4,21 +4,25 @@
  * CreateDomainDialog — the themed "Create new domain" experience for
  * /admin/domains. Two modes:
  *
- *   • "From the Federal agency library" — searchable, category-filtered browse
- *     of the curated Federal Civilian org tree (lib/domains/fedciv-domain-
- *     library). Pick an Enterprise (Department / independent agency) → drill
- *     into its sub-agencies → multi-select. A live preview card shows the
- *     icon-in-colored-chip + name + abbrev + mission. Selecting sub-agencies
+ *   • "From a curated library" (#1483 Wave 1, multi-library) — pick one of the
+ *     curated libraries (Federal Civilian — the #1481 original and the
+ *     default — Defense & Intelligence, State & Local Government, Commercial /
+ *     Cross-Industry from lib/domains/libraries), then browse it with search +
+ *     category filter. Pick an Enterprise (top-level org) → drill into its
+ *     sub-organizations → multi-select. A live preview card shows the
+ *     icon-in-colored-chip + name + abbrev + mission. Selecting children
  *     creates them as SUBDOMAINS of the Enterprise (parentId set), so the admin
- *     builds the real Enterprise → sub-agency tree.
+ *     builds the real Enterprise → sub-org tree. The library ONLY changes the
+ *     seed content — the create path is identical for every library.
  *
  *   • "Custom domain" — name + ID + a Fluent icon picker + a color picker +
  *     parent selector + description.
  *
  * On confirm both modes call the REAL create endpoint (POST /api/admin/domains)
  * with { id, name, description, icon, themeColor, parentId }. Multiple library
- * picks are created sequentially (Enterprise first so a child's parent exists).
- * Failures are surfaced honestly in a MessageBar; partial success is reported.
+ * picks are created sequentially (Enterprise first so a child's parent exists —
+ * ordering/expansion lives in lib/domains/libraries/seed-plan). Failures are
+ * surfaced honestly in a MessageBar; partial success is reported.
  */
 
 import { useEffect, useMemo, useState } from 'react';
@@ -33,15 +37,33 @@ import {
 import { ChevronLeft20Regular, Checkmark16Filled, Building20Regular, Library20Regular } from '@fluentui/react-icons';
 import { DomainGlyph, DOMAIN_ICON_PICKER, DOMAIN_THEME_COLORS } from '@/lib/domains/domain-icons';
 import {
-  FEDCIV_CATEGORIES, FEDCIV_LIBRARY_STATS,
-  fedCivEnterprises, fedCivChildren, fedCivNode,
-  type FedCivNode, type FedCivCategory,
-} from '@/lib/domains/fedciv-domain-library';
+  DOMAIN_LIBRARIES, DEFAULT_DOMAIN_LIBRARY_ID, getDomainLibrary,
+  libraryEnterprises, libraryChildren, libraryNode, libraryStats,
+  planLibrarySeed, toDomainSeedPayload,
+  type DomainLibraryNode,
+} from '@/lib/domains/libraries';
 
 export interface ExistingDomain { id: string; name: string; parentId?: string; }
 
 const useStyles = makeStyles({
   modeTabs: { marginBottom: tokens.spacingVerticalM },
+  libRow: { display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' },
+  libCard: {
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS,
+    paddingTop: tokens.spacingVerticalXS, paddingBottom: tokens.spacingVerticalXS,
+    paddingLeft: tokens.spacingHorizontalS, paddingRight: tokens.spacingHorizontalS,
+    textAlign: 'left', cursor: 'pointer', flexGrow: 1, flexShrink: 1, flexBasis: '160px', minWidth: 0,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge,
+    background: tokens.colorNeutralBackground1,
+    ':hover': { backgroundColor: tokens.colorNeutralBackground1Hover, border: `1px solid ${tokens.colorNeutralStroke1}` },
+  },
+  libCardSel: { border: `2px solid ${tokens.colorBrandStroke1}`, backgroundColor: tokens.colorBrandBackground2 },
+  libCardText: { display: 'flex', flexDirection: 'column', minWidth: 0 },
+  libCardName: {
+    fontWeight: tokens.fontWeightSemibold, fontSize: tokens.fontSizeBase200, lineHeight: 1.2,
+    whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+  },
+  libCardMeta: { color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase100, whiteSpace: 'nowrap' },
   body: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minHeight: '360px' },
   filterRow: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
   grid: {
@@ -120,11 +142,24 @@ export function CreateDomainDialog({
   const [err, setErr] = useState<string | null>(null);
   const [result, setResult] = useState<string | null>(null);
 
-  // Library mode state.
+  // Library mode state. `libraryId` selects which curated library is browsed;
+  // Federal Civilian is the default so the #1481 flow is unchanged.
+  const [libraryId, setLibraryId] = useState<string>(DEFAULT_DOMAIN_LIBRARY_ID);
   const [search, setSearch] = useState('');
-  const [category, setCategory] = useState<FedCivCategory | 'All'>('All');
+  const [category, setCategory] = useState<string>('All');
   const [drillInto, setDrillInto] = useState<string | null>(null); // Enterprise id
   const [picked, setPicked] = useState<Set<string>>(new Set());
+
+  const activeLibrary = useMemo(() => getDomainLibrary(libraryId), [libraryId]);
+  const activeStats = useMemo(() => libraryStats(activeLibrary), [activeLibrary]);
+
+  /** Switch curated library: browse/filter/selection state is per-library. */
+  function selectLibrary(id: string) {
+    if (id === libraryId) return;
+    setLibraryId(id);
+    setSearch(''); setCategory('All'); setDrillInto(null); setPicked(new Set());
+    setErr(null); setResult(null);
+  }
 
   // Custom mode state.
   const [cName, setCName] = useState('');
@@ -147,6 +182,7 @@ export function CreateDomainDialog({
   }, [open, initialMode, initialParentId]);
 
   function reset() {
+    setLibraryId(DEFAULT_DOMAIN_LIBRARY_ID);
     setSearch(''); setCategory('All'); setDrillInto(null); setPicked(new Set());
     setCName(''); setCId(''); setCIdDirty(false); setCDesc('');
     setCIcon('building'); setCColor(DOMAIN_THEME_COLORS[0]); setCParent('');
@@ -160,14 +196,14 @@ export function CreateDomainDialog({
 
   // Browse list: when drilled into an Enterprise show its children; otherwise
   // show Enterprises filtered by category + search.
-  const drillNode = drillInto ? fedCivNode(drillInto) : null;
-  const browse: FedCivNode[] = useMemo(() => {
+  const drillNode = drillInto ? libraryNode(activeLibrary, drillInto) : null;
+  const browse: DomainLibraryNode[] = useMemo(() => {
     const f = search.toLowerCase().trim();
-    let list: FedCivNode[];
+    let list: DomainLibraryNode[];
     if (drillInto) {
-      list = fedCivChildren(drillInto);
+      list = libraryChildren(activeLibrary, drillInto);
     } else {
-      list = fedCivEnterprises().filter((n) => category === 'All' || n.category === category);
+      list = libraryEnterprises(activeLibrary).filter((n) => category === 'All' || n.category === category);
     }
     if (!f) return list;
     return list.filter((n) =>
@@ -175,7 +211,7 @@ export function CreateDomainDialog({
       n.abbrev.toLowerCase().includes(f) ||
       n.mission.toLowerCase().includes(f),
     );
-  }, [search, category, drillInto]);
+  }, [search, category, drillInto, activeLibrary]);
 
   function togglePick(id: string) {
     setPicked((prev) => {
@@ -190,40 +226,30 @@ export function CreateDomainDialog({
     setPicked((prev) => {
       const next = new Set(prev);
       next.add(drillInto); // ensure the parent Enterprise is created too
-      for (const c of fedCivChildren(drillInto)) if (!existingIds.has(c.id)) next.add(c.id);
+      for (const c of libraryChildren(activeLibrary, drillInto)) if (!existingIds.has(c.id)) next.add(c.id);
       return next;
     });
   }
 
   // Single-node live preview: the node hovered/selected most recently, or the
   // drilled Enterprise, or the first browse item.
-  const previewNode: FedCivNode | null = useMemo(() => {
+  const previewNode: DomainLibraryNode | null = useMemo(() => {
     const lastPicked = Array.from(picked).pop();
-    if (lastPicked) return fedCivNode(lastPicked) || null;
+    if (lastPicked) return libraryNode(activeLibrary, lastPicked) || null;
     if (drillNode) return drillNode;
     return browse[0] || null;
-  }, [picked, drillNode, browse]);
+  }, [picked, drillNode, browse, activeLibrary]);
 
   /**
-   * Create the selected library nodes. Enterprises (no parent) are created
-   * first so a sub-agency's parent always exists; if a child is picked without
-   * its parent, the parent is auto-included. Already-existing domains are
-   * skipped. POST per node against the real endpoint.
+   * Create the selected library nodes. Expansion (a picked child pulls in its
+   * parent Enterprise), skipping already-existing domains, and parents-first
+   * ordering live in planLibrarySeed (lib/domains/libraries/seed-plan) — the
+   * SAME rules for every curated library. POST per node against the real
+   * endpoint.
    */
   async function createLibrary() {
-    const ids = Array.from(picked);
-    if (!ids.length) { setErr('Select at least one agency from the library.'); return; }
-    // Expand: any picked child pulls in its parent Enterprise.
-    const toCreate = new Set<string>(ids);
-    for (const id of ids) {
-      const node = fedCivNode(id);
-      if (node?.parentId) toCreate.add(node.parentId);
-    }
-    // Order: parents (Enterprises) before children, skipping ones that exist.
-    const ordered = Array.from(toCreate)
-      .map((id) => fedCivNode(id))
-      .filter((n): n is FedCivNode => !!n && !existingIds.has(n.id))
-      .sort((a, b) => (a.parentId ? 1 : 0) - (b.parentId ? 1 : 0));
+    if (!picked.size) { setErr(`Select at least one ${activeLibrary.copy.itemSingular} from the library.`); return; }
+    const ordered = planLibrarySeed(activeLibrary, picked, existingIds);
     if (!ordered.length) { setErr('Everything selected already exists as a domain.'); return; }
 
     setBusy(true); setErr(null); setResult(null);
@@ -239,11 +265,7 @@ export function CreateDomainDialog({
       try {
         const r = await clientFetch('/api/admin/domains', {
           method: 'POST', headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({
-            id: n.id, name: n.name, description: n.mission,
-            icon: n.icon, themeColor: n.color,
-            parentId: n.parentId || undefined,
-          }),
+          body: JSON.stringify(toDomainSeedPayload(n)),
         });
         const j = await r.json();
         if (!j.ok) { failures.push(`${n.abbrev}: ${j.error || `HTTP ${r.status}`}`); continue; }
@@ -260,7 +282,7 @@ export function CreateDomainDialog({
         setResult(`Created ${created} domain${created === 1 ? '' : 's'}. ${failures.length} skipped.`);
         setErr(failures.join(' · '));
       } else {
-        setResult(`Created ${created} domain${created === 1 ? '' : 's'} from the Federal agency library.`);
+        setResult(`Created ${created} domain${created === 1 ? '' : 's'} from the ${activeLibrary.label}.`);
         setTimeout(() => close(false), 900);
       }
     } else {
@@ -305,7 +327,7 @@ export function CreateDomainDialog({
               selectedValue={mode}
               onTabSelect={(_e, d) => { setMode(d.value as Mode); setErr(null); setResult(null); }}
             >
-              <Tab value="library" icon={<Library20Regular />}>From the Federal agency library</Tab>
+              <Tab value="library" icon={<Library20Regular />}>From a curated library</Tab>
               <Tab value="custom" icon={<Building20Regular />}>Custom domain</Tab>
             </TabList>
 
@@ -322,16 +344,41 @@ export function CreateDomainDialog({
 
             {mode === 'library' ? (
               <div className={s.body}>
+                {/* Library selector — which curated library seeds the tree. */}
+                <div className={s.libRow} role="radiogroup" aria-label="Curated library">
+                  {DOMAIN_LIBRARIES.map((lib) => {
+                    const sel = lib.id === activeLibrary.id;
+                    const st = libraryStats(lib);
+                    return (
+                      <button
+                        key={lib.id}
+                        type="button"
+                        role="radio"
+                        aria-checked={sel}
+                        className={`${s.libCard} ${sel ? s.libCardSel : ''}`}
+                        title={lib.description}
+                        onClick={() => selectLibrary(lib.id)}
+                      >
+                        <DomainGlyph icon={lib.icon} color={lib.color} size={28} />
+                        <span className={s.libCardText}>
+                          <span className={s.libCardName}>{lib.name}</span>
+                          <span className={s.libCardMeta}>{st.enterprises} enterprises · {st.children} sub-orgs</span>
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+
                 <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
-                  Build your organization from {FEDCIV_LIBRARY_STATS.enterprises} departments &amp; independent
-                  agencies and {FEDCIV_LIBRARY_STATS.subAgencies} sub-agencies. Pick an enterprise, then drill in
-                  to add its bureaus as subdomains.
+                  Build your organization from {activeStats.enterprises} {activeLibrary.copy.enterpriseNoun} and{' '}
+                  {activeStats.children} {activeLibrary.copy.childNoun}. Pick an enterprise, then drill in
+                  to add its {activeLibrary.copy.drillNoun} as subdomains.
                 </Caption1>
 
                 {!drillInto ? (
                   <div className={s.filterRow}>
                     <SearchBox
-                      placeholder="Search agencies…"
+                      placeholder={activeLibrary.copy.searchPlaceholder}
                       value={search}
                       onChange={(_e, d) => setSearch(d.value)}
                       style={{ flex: 1, minWidth: '220px' }}
@@ -339,11 +386,11 @@ export function CreateDomainDialog({
                     <Dropdown
                       value={category}
                       selectedOptions={[category]}
-                      onOptionSelect={(_e, d) => setCategory((d.optionValue as FedCivCategory | 'All') || 'All')}
+                      onOptionSelect={(_e, d) => setCategory(d.optionValue || 'All')}
                       style={{ minWidth: '200px' }}
                     >
                       <Option value="All">All categories</Option>
-                      {FEDCIV_CATEGORIES.map((c) => <Option key={c} value={c}>{c}</Option>)}
+                      {activeLibrary.categories.map((c) => <Option key={c} value={c}>{c}</Option>)}
                     </Dropdown>
                   </div>
                 ) : (
@@ -359,7 +406,7 @@ export function CreateDomainDialog({
                         <DomainGlyph icon={drillNode.icon} color={drillNode.color} size={24} />
                         <Subtitle2>{drillNode.name} ({drillNode.abbrev})</Subtitle2>
                         <Button size="small" appearance="primary" onClick={addAllChildren}>
-                          Add all sub-agencies
+                          Add all {activeLibrary.copy.childNoun}
                         </Button>
                       </>
                     )}
@@ -370,7 +417,8 @@ export function CreateDomainDialog({
                   {browse.map((n) => {
                     const exists = existingIds.has(n.id);
                     const sel = picked.has(n.id);
-                    const hasChildren = !n.parentId && fedCivChildren(n.id).length > 0;
+                    const childCount = n.parentId ? 0 : libraryChildren(activeLibrary, n.id).length;
+                    const hasChildren = childCount > 0;
                     return (
                       <button
                         key={n.id}
@@ -396,7 +444,7 @@ export function CreateDomainDialog({
                               onClick={(e) => { e.stopPropagation(); setDrillInto(n.id); }}
                               style={{ alignSelf: 'flex-start', cursor: 'pointer', marginTop: '2px' }}
                             >
-                              {fedCivChildren(n.id).length} sub-agencies →
+                              {childCount} {activeLibrary.copy.childNoun} →
                             </Badge>
                           )}
                         </span>
@@ -404,7 +452,9 @@ export function CreateDomainDialog({
                     );
                   })}
                   {browse.length === 0 && (
-                    <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>No agencies match your search.</Caption1>
+                    <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                      No {activeLibrary.copy.itemPlural} match your search.
+                    </Caption1>
                   )}
                 </div>
 
@@ -418,7 +468,7 @@ export function CreateDomainDialog({
                         <Badge size="small" appearance="tint">{previewNode.abbrev}</Badge>
                         {previewNode.parentId && (
                           <Badge size="small" appearance="outline">
-                            subdomain of {fedCivNode(previewNode.parentId)?.abbrev || previewNode.parentId}
+                            subdomain of {libraryNode(activeLibrary, previewNode.parentId)?.abbrev || previewNode.parentId}
                           </Badge>
                         )}
                       </span>
@@ -431,7 +481,7 @@ export function CreateDomainDialog({
                   <div className={s.selectionBar}>
                     <Caption1 style={{ fontWeight: tokens.fontWeightSemibold }}>{picked.size} selected:</Caption1>
                     {Array.from(picked).map((id) => {
-                      const n = fedCivNode(id);
+                      const n = libraryNode(activeLibrary, id);
                       if (!n) return null;
                       return (
                         <Badge key={id} appearance="tint" size="small">
