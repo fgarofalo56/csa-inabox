@@ -1,0 +1,83 @@
+name: csa-loom-spark-livy-probe
+
+# ---------------------------------------------------------------------------
+# DIAGNOSTIC: create a Synapse Spark Livy session IN-VNET (the dev API is
+# private-endpoint-locked, 403 from a public runner) with a MINIMAL config,
+# poll it to idle/dead, and dump the session state + driver log so we can see
+# the REAL reason interactive Spark sessions fail to start ("notebooks slow /
+# session recycled"). Read-only probe; it shuts the session down after.
+# ---------------------------------------------------------------------------
+
+on:
+  workflow_dispatch:
+    inputs:
+      pool:
+        description: 'Spark pool name'
+        type: string
+        default: loompool
+        required: false
+      with_la_emitter:
+        description: 'Include the Log Analytics emitter conf (to A/B whether it kills the session)'
+        type: boolean
+        default: false
+        required: false
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  DLZ_SUB: 363ef5d1-0e77-4594-a530-f51af23dbf8c
+  SYN_WS: syn-loom-default-centralus
+
+jobs:
+  livy-probe:
+    name: 'Livy session probe (in-VNET)'
+    runs-on: [self-hosted, loom-aca]
+    timeout-minutes: 20
+    steps:
+      - name: Azure login (deploy SP — Synapse Spark admin)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.DLZ_SUB }}
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+      - name: Create + poll a Livy session, dump driver log
+        env:
+          POOL: ${{ inputs.pool || 'loompool' }}
+          WITH_LA: ${{ inputs.with_la_emitter }}
+        run: |
+          set -uo pipefail
+          DEV="https://${SYN_WS}.dev.azuresynapse.net"
+          API="livyApi/versions/2019-11-01-preview/sparkPools/${POOL}/sessions"
+          TOK=$(az account get-access-token --resource https://dev.azuresynapse.net --query accessToken -o tsv | tr -d '\r')
+          echo "== list existing sessions =="
+          curl -s -H "Authorization: Bearer $TOK" "${DEV}/${API}?from=0&size=20" | python3 -c "import sys,json;d=json.load(sys.stdin);print('total',d.get('total'));[print(' ',s.get('id'),s.get('state'),(s.get('name') or '')[:40]) for s in (d.get('sessions') or [])]" || true
+
+          CONF='{}'
+          if [ "$WITH_LA" = "true" ]; then CONF='{"spark.synapse.logAnalytics.enabled":"true"}'; fi
+          echo "== create a probe session (conf=$CONF) =="
+          BODY=$(printf '{"name":"loom-livy-probe-%s","kind":"pyspark","numExecutors":2,"executorCores":4,"executorMemory":"4g","driverCores":4,"driverMemory":"4g","conf":%s}' "$RANDOM" "$CONF")
+          RESP=$(curl -s -X POST -H "Authorization: Bearer $TOK" -H "Content-Type: application/json" "${DEV}/${API}" -d "$BODY")
+          echo "$RESP" | head -c 500; echo ""
+          SID=$(echo "$RESP" | python3 -c "import sys,json;print(json.load(sys.stdin).get('id',''))" 2>/dev/null)
+          [ -z "$SID" ] && { echo "::error::session create returned no id — see body above"; exit 1; }
+          echo "== poll session $SID (up to ~14 min) =="
+          STATE=""
+          for i in $(seq 1 84); do
+            TOK=$(az account get-access-token --resource https://dev.azuresynapse.net --query accessToken -o tsv | tr -d '\r')
+            J=$(curl -s -H "Authorization: Bearer $TOK" "${DEV}/${API}/${SID}")
+            STATE=$(echo "$J" | python3 -c "import sys,json;print(json.load(sys.stdin).get('state',''))" 2>/dev/null)
+            echo "[$i] state=$STATE"
+            case "$STATE" in idle|dead|error|killed|success) break;; esac
+            sleep 10
+          done
+          echo "== FINAL state=$STATE =="
+          echo "== driver log (the real error) =="
+          curl -s -H "Authorization: Bearer $TOK" "${DEV}/${API}/${SID}/log?from=0&size=200" | python3 -c "import sys,json;d=json.load(sys.stdin);[print(l) for l in (d.get('log') or [])[-120:]]" 2>/dev/null || echo "(no log)"
+          echo "== full session object =="
+          curl -s -H "Authorization: Bearer $TOK" "${DEV}/${API}/${SID}" | python3 -m json.tool | head -60 || true
+          echo "== cleanup: delete probe session =="
+          curl -s -X DELETE -H "Authorization: Bearer $TOK" "${DEV}/${API}/${SID}" -o /dev/null -w "delete HTTP %{http_code}\n" || true
+          [ "$STATE" = "idle" ] && echo "PROBE: session reached IDLE (Spark works; the slowness is cold-start/keep-warm)" || echo "::warning::PROBE: session did NOT reach idle (state=$STATE) — the driver log above has the reason"

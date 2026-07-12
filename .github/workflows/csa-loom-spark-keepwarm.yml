@@ -1,0 +1,65 @@
+name: csa-loom-spark-keepwarm
+
+# ---------------------------------------------------------------------------
+# Keep a Synapse/Databricks Spark session PERPETUALLY WARM so notebook runs are
+# instant instead of paying the multi-minute cold start.
+#
+# The console's in-process warm-pool sweeper (`spark-session-pool.ts`) is
+# unreliable in a serverless Container App — the Node process only lives while
+# serving requests, replicas recycle, and every roll resets the pool to cold.
+# This external heartbeat pings the internal-token-gated keep-warm endpoint on a
+# schedule (the SAME pattern the scheduler tick uses), so a warm session is
+# always standing by.
+#
+# Auth: LOOM_INTERNAL_TOKEN (GitHub secret) as a Bearer token. The console is
+# reachable via Front Door; the console itself reaches Livy in-VNet.
+# ---------------------------------------------------------------------------
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'   # every 5 minutes (idle TTL is 15m; 5m keeps min=1 topped up)
+  workflow_dispatch:
+    inputs:
+      console_url:
+        description: 'Console base URL (default the Commercial vanity)'
+        type: string
+        default: 'https://csa-loom.limitlessdata.ai'
+        required: false
+
+concurrency:
+  group: spark-keepwarm-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  keepwarm:
+    name: 'Spark keep-warm heartbeat'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Ping keep-warm
+        env:
+          CONSOLE_URL: ${{ inputs.console_url || 'https://csa-loom.limitlessdata.ai' }}
+          INTERNAL_TOKEN: ${{ secrets.LOOM_INTERNAL_TOKEN }}
+        run: |
+          if [ -z "$INTERNAL_TOKEN" ]; then
+            echo "::warning::LOOM_INTERNAL_TOKEN secret not set — cannot keep the Spark pool warm. Add it to repo secrets."
+            exit 0
+          fi
+          code=$(curl -sS -o /tmp/kw.json -w '%{http_code}' -X POST \
+            -H "Authorization: Bearer $INTERNAL_TOKEN" \
+            -H 'Content-Type: application/json' \
+            --max-time 90 \
+            "${CONSOLE_URL}/api/internal/spark/keep-warm" || echo 000)
+          echo "keep-warm HTTP $code"
+          cat /tmp/kw.json 2>/dev/null | head -c 600 || true
+          echo ""
+          # A 200 (warmed/topped-up) or an honest skip is success; auth/others fail loudly.
+          case "$code" in
+            200) echo "warm pool topped up";;
+            401) echo "::error::keep-warm 401 — LOOM_INTERNAL_TOKEN mismatch between the secret and the console env"; exit 1;;
+            000) echo "::warning::console unreachable ($CONSOLE_URL) — transient; next tick retries";;
+            *)   echo "::warning::keep-warm returned $code — see body above";;
+          esac
