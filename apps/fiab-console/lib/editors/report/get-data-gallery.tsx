@@ -64,7 +64,15 @@ import {
   Storage24Regular, Folder24Regular, Database24Regular, Cloud24Regular,
   Globe24Regular, Apps24Regular, Document24Regular, DataTrending24Regular,
   WeatherSnowflake24Regular, DataUsage24Regular, DocumentTable24Regular,
+  ChevronRight20Regular, CubeTree24Regular,
 } from '@fluentui/react-icons';
+// Loom-items source (W2 shared control): resolves ANY PBI_SOURCEABLE Loom item
+// (lakehouse / warehouse / kql-database / dataset / semantic-model / data
+// product / …) to its Azure-native backend via GET /api/items/[type]/[id]/pbi-source
+// and hands back a ready-to-persist ReportDataSource — the user never types a
+// server / database / SQL. Surfacing it HERE makes Loom items a first-class
+// "Get data" source (Fabric's OneLake-data-hub analog), not just a picker kind.
+import { LoomItemSourcePicker, type LoomItemResolution } from './loom-item-source-picker';
 import { clientFetch } from '@/lib/client-fetch';
 import { CONNECTORS, connectorByType, type ConnectorDef } from '@/lib/pipeline/connector-catalog';
 import { AddExistingConnectionWizard } from '@/lib/components/connections/add-existing-wizard';
@@ -274,6 +282,29 @@ const useStyles = makeStyles({
   recentText: { display: 'flex', flexDirection: 'column', minWidth: 0 },
   recentName: { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
 
+  // Loom-items hero — the FIRST source offered (Fabric "OneLake data hub"
+  // analog): brand-accented, above Recent + the connector catalog. Clicking it
+  // opens the shared LoomItemSourcePicker, which auto-resolves the item's
+  // Azure backend to a ready ReportDataSource (no server/db/creds to type).
+  loomHero: {
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM,
+    padding: tokens.spacingVerticalM, paddingInline: tokens.spacingHorizontalL,
+    border: `1px solid ${tokens.colorBrandStroke2}`, borderRadius: tokens.borderRadiusLarge,
+    background: `linear-gradient(135deg, ${tokens.colorBrandBackground2} 0%, ${tokens.colorNeutralBackground1} 70%)`,
+    boxShadow: tokens.shadow4, cursor: 'pointer', textAlign: 'left', width: '100%', minWidth: 0,
+    transitionProperty: 'box-shadow, border-color', transitionDuration: tokens.durationFaster,
+    ':hover': { boxShadow: tokens.shadow16, border: `1px solid ${tokens.colorBrandStroke1}` },
+  },
+  loomHeroIcon: {
+    display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+    width: '44px', height: '44px', borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: tokens.colorBrandBackground, color: tokens.colorNeutralForegroundOnBrand,
+    fontSize: '24px', boxShadow: tokens.shadow4,
+  },
+  loomHeroText: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS, minWidth: 0, flex: 1 },
+  loomHeroChevron: { flexShrink: 0, color: tokens.colorBrandForeground1 },
+  loomStep: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minWidth: 0 },
+
   // opt-in (Fabric / Power BI) group — clearly demarcated
   optInBlock: {
     display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, minWidth: 0,
@@ -318,7 +349,7 @@ interface RecentPick {
 
 function ConnectorGallery({
   connections, connsLoading, connsErr, onReloadConns, onOpenWizard,
-  onPickConnector, onPickRecent,
+  onPickConnector, onPickRecent, onPickLoom,
 }: {
   connections: LoomConnectionView[] | null;
   connsLoading: boolean;
@@ -327,6 +358,7 @@ function ConnectorGallery({
   onOpenWizard: () => void;
   onPickConnector: (def: ConnectorDef) => void;
   onPickRecent: (pick: RecentPick) => void;
+  onPickLoom: () => void;
 }) {
   const s = useStyles();
   const [q, setQ] = useState('');
@@ -371,6 +403,25 @@ function ConnectorGallery({
       />
 
       <div className={s.scroll}>
+        {/* Loom items — the FIRST source offered (Fabric "OneLake data hub"
+            analog). Auto-configures the data source from the item's Azure
+            backend; the user never types coordinates. */}
+        {!q && (
+          <button type="button" className={s.loomHero} onClick={onPickLoom}
+            aria-label="Use a Loom item as the data source — auto-configured">
+            <span className={s.loomHeroIcon}><CubeTree24Regular /></span>
+            <span className={s.loomHeroText}>
+              <Subtitle2>Use a Loom item</Subtitle2>
+              <Caption1 className={s.muted}>
+                Lakehouse, warehouse, KQL database, dataset, semantic model, data product —
+                Loom auto-configures the source from the item&apos;s Azure backend. Nothing to type.
+              </Caption1>
+            </span>
+            <Badge appearance="tint" color="brand" size="small">Recommended</Badge>
+            <span className={s.loomHeroChevron}><ChevronRight20Regular /></span>
+          </button>
+        )}
+
         {/* Recent connections — jump straight to binding one you already have. */}
         {!q && recents.length > 0 && (
           <div className={s.categoryBlock}>
@@ -1023,6 +1074,7 @@ export interface GetDataGalleryProps {
 
 type View =
   | { step: 'gallery' }
+  | { step: 'loom' }
   | { step: 'bind'; connType?: ReportConnType; def: ConnectorDef; preselectConnectionId?: string };
 
 export function GetDataGallery({ open, reportId, onChosen, onDismiss }: GetDataGalleryProps) {
@@ -1078,7 +1130,28 @@ export function GetDataGallery({ open, reportId, onChosen, onDismiss }: GetDataG
             </span>
           </DialogTitle>
           <DialogContent>
-            {view.step === 'gallery' ? (
+            {view.step === 'loom' ? (
+              <div className={s.loomStep}>
+                <div className={s.bindHead}>
+                  <Button appearance="subtle" icon={<ChevronLeft20Regular />} onClick={() => setView({ step: 'gallery' })}>
+                    All sources
+                  </Button>
+                  <CubeTree24Regular />
+                  <Subtitle2>Use a Loom item</Subtitle2>
+                  <Badge appearance="tint" color="brand" size="small">auto-configured</Badge>
+                </div>
+                <Caption1 className={s.muted}>
+                  Pick any Loom item that can back a report — lakehouse, warehouse, KQL database,
+                  dataset, semantic model, data product. Loom resolves the item&apos;s Azure backend
+                  (Synapse serverless / dedicated, ADX, ADLS) into a ready data source — no server,
+                  database, or credentials to enter.
+                </Caption1>
+                <LoomItemSourcePicker
+                  purpose="report"
+                  onResolved={(r: LoomItemResolution) => { if (r.dataSource) onChosen(r.dataSource); }}
+                />
+              </div>
+            ) : view.step === 'gallery' ? (
               <ConnectorGallery
                 connections={connections}
                 connsLoading={connsLoading}
@@ -1087,6 +1160,7 @@ export function GetDataGallery({ open, reportId, onChosen, onDismiss }: GetDataG
                 onOpenWizard={() => setWizardOpen(true)}
                 onPickConnector={pickConnector}
                 onPickRecent={pickRecent}
+                onPickLoom={() => setView({ step: 'loom' })}
               />
             ) : (
               <BindStep
