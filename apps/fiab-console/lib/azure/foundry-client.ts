@@ -1544,6 +1544,75 @@ export interface ObservabilitySummary {
   tokensOverTime: { t: string; input: number; output: number }[];
   /** Per-operation latency p95 + call count (for the breakdown bar chart). */
   byOperation: { operation: string; count: number; p95Ms?: number; failed: number }[];
+  /**
+   * True when one or more of the four independent App Insights KQL queries
+   * timed out or failed — the dashboard still renders the sections that
+   * succeeded (empty arrays / zeroed totals for the degraded ones). Honest
+   * partial-result signal per .claude/rules/no-vaporware.md (no fake fill-in).
+   */
+  partial?: boolean;
+  /** Per-section failure reason, keyed by the field it feeds. */
+  sectionErrors?: Partial<Record<'totals' | 'requestsOverTime' | 'tokensOverTime' | 'byOperation', string>>;
+}
+
+/** The four independently-queried observability sections. */
+export type ObsSection = 'totals' | 'requestsOverTime' | 'tokensOverTime' | 'byOperation';
+
+/** A settled App Insights KQL result (or the reason its query failed/timed out). */
+type ObsTable = { cols: string[]; rows: any[][] };
+
+/**
+ * Pure assembler: turn the four SETTLED App Insights KQL results into an
+ * ObservabilitySummary, defaulting any failed/timed-out section to its empty
+ * shape and recording WHY in `sectionErrors`. Exported so it can be unit-tested
+ * without a live Azure round-trip. Never throws on a rejected section and never
+ * dereferences a null/absent table — a slow backend degrades to a partial
+ * dashboard instead of a crash or a full 502.
+ */
+export function assembleObservabilitySummary(
+  hours: number,
+  settled: {
+    totals: PromiseSettledResult<ObsTable>;
+    requestsOverTime: PromiseSettledResult<ObsTable>;
+    tokensOverTime: PromiseSettledResult<ObsTable>;
+    byOperation: PromiseSettledResult<ObsTable>;
+  },
+): ObservabilitySummary {
+  const num = (v: unknown): number => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
+  const numU = (v: unknown): number | undefined => { const n = Number(v); return Number.isFinite(n) ? n : undefined; };
+  const reason = (e: unknown): string => (e instanceof Error ? e.message : String(e));
+
+  const sectionErrors: NonNullable<ObservabilitySummary['sectionErrors']> = {};
+  // Return the table's rows-as-objects on success; on failure record the reason
+  // and hand back an empty table so downstream `.map` is always safe.
+  const rowsOf = (section: ObsSection, r: PromiseSettledResult<ObsTable>): Record<string, any>[] => {
+    if (r.status === 'fulfilled' && r.value) return toObjects(r.value);
+    if (r.status === 'rejected') sectionErrors[section] = reason(r.reason);
+    return [];
+  };
+
+  const totalsRow = rowsOf('totals', settled.totals)[0] || {};
+  const reqRows = rowsOf('requestsOverTime', settled.requestsOverTime);
+  const tokRows = rowsOf('tokensOverTime', settled.tokensOverTime);
+  const opRows = rowsOf('byOperation', settled.byOperation);
+
+  const partial = Object.keys(sectionErrors).length > 0;
+  return {
+    hours,
+    totals: {
+      requests: num(totalsRow.requests),
+      dependencies: num(totalsRow.dependencies),
+      failures: num(totalsRow.failures),
+      inputTokens: num(totalsRow.inputTokens),
+      outputTokens: num(totalsRow.outputTokens),
+      p50Ms: numU(totalsRow.p50Ms),
+      p95Ms: numU(totalsRow.p95Ms),
+    },
+    requestsOverTime: reqRows.map((r) => ({ t: String(r.timestamp), count: num(r.count), failed: num(r.failed) })),
+    tokensOverTime: tokRows.map((r) => ({ t: String(r.timestamp), input: num(r.input), output: num(r.output) })),
+    byOperation: opRows.map((r) => ({ operation: String(r.op ?? ''), count: num(r.count), p95Ms: numU(r.p95), failed: num(r.failed) })),
+    ...(partial ? { partial, sectionErrors } : {}),
+  };
 }
 
 async function appiQuery(appiId: string, query: string): Promise<{ cols: string[]; rows: any[][] }> {
@@ -1617,36 +1686,34 @@ export async function queryObservabilitySummary(opts: { hours?: number } = {}): 
     `| summarize count=count(), p95=percentile(duration, 95), failed=countif(success == false) by op ` +
     `| top 12 by count desc`;
 
-  const [totalsT, reqT, tokT, byOpT] = await Promise.all([
+  // Four INDEPENDENT App Insights KQL queries. Each armFetch is already bound by
+  // fetchWithTimeout (DEFAULT_SERVER_FETCH_TIMEOUT_MS), so a hung query can't
+  // block forever — but `Promise.all` used to be all-or-nothing: one slow /
+  // throttled / failed query rejected the whole call and 502'd the entire
+  // Monitoring dashboard. `allSettled` degrades each section independently so
+  // the dashboard renders what succeeded and honestly flags what didn't.
+  const [totalsR, reqR, tokR, byOpR] = await Promise.allSettled([
     appiQuery(appiId, totalsQ),
     appiQuery(appiId, reqTimeQ),
     appiQuery(appiId, tokTimeQ),
     appiQuery(appiId, byOpQ),
   ]);
 
-  const num = (v: unknown): number => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
-  const numU = (v: unknown): number | undefined => { const n = Number(v); return Number.isFinite(n) ? n : undefined; };
+  // If EVERY section failed (e.g. a 403 auth gate or App Insights fully
+  // unreachable), re-throw so the route's honest gate / error handling runs
+  // (a FoundryError keeps its 401/403/5xx status) rather than returning an
+  // empty "ok" dashboard. A partial failure still degrades gracefully below.
+  const results = [totalsR, reqR, tokR, byOpR];
+  if (results.every((r) => r.status === 'rejected')) {
+    throw (results.find((r): r is PromiseRejectedResult => r.status === 'rejected') as PromiseRejectedResult).reason;
+  }
 
-  const totalsRow = toObjects(totalsT)[0] || {};
-  const reqRows = toObjects(reqT);
-  const tokRows = toObjects(tokT);
-  const opRows = toObjects(byOpT);
-
-  return {
-    hours,
-    totals: {
-      requests: num(totalsRow.requests),
-      dependencies: num(totalsRow.dependencies),
-      failures: num(totalsRow.failures),
-      inputTokens: num(totalsRow.inputTokens),
-      outputTokens: num(totalsRow.outputTokens),
-      p50Ms: numU(totalsRow.p50Ms),
-      p95Ms: numU(totalsRow.p95Ms),
-    },
-    requestsOverTime: reqRows.map((r) => ({ t: String(r.timestamp), count: num(r.count), failed: num(r.failed) })),
-    tokensOverTime: tokRows.map((r) => ({ t: String(r.timestamp), input: num(r.input), output: num(r.output) })),
-    byOperation: opRows.map((r) => ({ operation: String(r.op ?? ''), count: num(r.count), p95Ms: numU(r.p95), failed: num(r.failed) })),
-  };
+  return assembleObservabilitySummary(hours, {
+    totals: totalsR,
+    requestsOverTime: reqR,
+    tokensOverTime: tokR,
+    byOperation: byOpR,
+  });
 }
 
 // ---------------- AI Search ----------------

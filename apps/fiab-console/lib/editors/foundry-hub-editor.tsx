@@ -1938,7 +1938,18 @@ interface ObsSummary {
   requestsOverTime: { t: string; count: number; failed: number }[];
   tokensOverTime: { t: string; input: number; output: number }[];
   byOperation: { operation: string; count: number; p95Ms?: number; failed: number }[];
+  /** Set when one or more App Insights queries timed out / failed (partial dashboard). */
+  partial?: boolean;
+  sectionErrors?: Partial<Record<'totals' | 'requestsOverTime' | 'tokensOverTime' | 'byOperation', string>>;
 }
+
+/** Human labels for the four independently-queried observability sections. */
+const OBS_SECTION_LABELS: Record<string, string> = {
+  totals: 'summary KPIs',
+  requestsOverTime: 'request volume',
+  tokensOverTime: 'token consumption',
+  byOperation: 'latency by operation',
+};
 
 function MonitoringPanel({ active, nonce }: { active: boolean; nonce: number }) {
   const s = useStyles();
@@ -1954,7 +1965,7 @@ function MonitoringPanel({ active, nonce }: { active: boolean; nonce: number }) 
   const toggleOpSort = (col: OpCol) =>
     setOpSort((prev) => (prev.col === col ? { col, dir: prev.dir === 'ascending' ? 'descending' : 'ascending' } : { col, dir: col === 'operation' ? 'ascending' : 'descending' }));
   const sortedOps = useMemo(() => {
-    const list = sum ? [...sum.byOperation] : [];
+    const list = sum ? [...(sum.byOperation ?? [])] : [];
     const { col, dir } = opSort;
     const sign = dir === 'ascending' ? 1 : -1;
     return list.sort((a, b) => {
@@ -1965,16 +1976,23 @@ function MonitoringPanel({ active, nonce }: { active: boolean; nonce: number }) 
 
   if (!active) return null;
 
+  // Null-safe over every series: a partial/slow-backend response can omit a
+  // section, so default each array to [] before mapping (no "cannot read
+  // properties of undefined" crash — the chart shows its own empty state).
   const reqSeries: LineSeries[] = sum ? [
-    { label: 'Requests', color: tokens.colorBrandForeground1, points: sum.requestsOverTime.map((r) => ({ x: new Date(r.t).getTime(), y: r.count })) },
-    { label: 'Failures', color: tokens.colorPaletteRedForeground1, points: sum.requestsOverTime.map((r) => ({ x: new Date(r.t).getTime(), y: r.failed })) },
+    { label: 'Requests', color: tokens.colorBrandForeground1, points: (sum.requestsOverTime ?? []).map((r) => ({ x: new Date(r.t).getTime(), y: r.count })) },
+    { label: 'Failures', color: tokens.colorPaletteRedForeground1, points: (sum.requestsOverTime ?? []).map((r) => ({ x: new Date(r.t).getTime(), y: r.failed })) },
   ] : [];
   const tokSeries: LineSeries[] = sum ? [
-    { label: 'Input tokens', color: tokens.colorPalettePurpleForeground2, points: sum.tokensOverTime.map((r) => ({ x: new Date(r.t).getTime(), y: r.input })) },
-    { label: 'Output tokens', color: tokens.colorPaletteGreenForeground1, points: sum.tokensOverTime.map((r) => ({ x: new Date(r.t).getTime(), y: r.output })) },
+    { label: 'Input tokens', color: tokens.colorPalettePurpleForeground2, points: (sum.tokensOverTime ?? []).map((r) => ({ x: new Date(r.t).getTime(), y: r.input })) },
+    { label: 'Output tokens', color: tokens.colorPaletteGreenForeground1, points: (sum.tokensOverTime ?? []).map((r) => ({ x: new Date(r.t).getTime(), y: r.output })) },
   ] : [];
-  const opBars: Bar[] = sum ? sum.byOperation.map((o) => ({ label: o.operation, value: Math.round(o.p95Ms || 0) })) : [];
+  const opBars: Bar[] = sum ? (sum.byOperation ?? []).map((o) => ({ label: o.operation, value: Math.round(o.p95Ms || 0) })) : [];
   const fmtNum = (n: number) => n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
+  // Which sections timed out / failed (for the honest partial-data banner).
+  const failedSections = sum?.partial && sum.sectionErrors
+    ? Object.keys(sum.sectionErrors).map((k) => OBS_SECTION_LABELS[k] || k)
+    : [];
 
   return (
     <div className={s.pad}>
@@ -1995,6 +2013,15 @@ function MonitoringPanel({ active, nonce }: { active: boolean; nonce: number }) 
         <EmptyText>No telemetry available.</EmptyText>
       ) : (
         <>
+          {failedSections.length > 0 && (
+            <MessageBar intent="warning">
+              <MessageBarBody>
+                <MessageBarTitle>Partial data</MessageBarTitle>
+                Some Application Insights queries timed out or failed ({failedSections.join(', ')}). The sections that
+                loaded are shown below — reload to retry the rest.
+              </MessageBarBody>
+            </MessageBar>
+          )}
           <div className={s.statRow}>
             <StatTile label="Requests" value={fmtNum(sum.totals.requests)} />
             <StatTile label="Dependency calls" value={fmtNum(sum.totals.dependencies)} />
@@ -2021,7 +2048,7 @@ function MonitoringPanel({ active, nonce }: { active: boolean; nonce: number }) 
             <Caption1 className={s.chartCaption}>Slowest operations by 95th-percentile duration (top 12 by call count).</Caption1>
             <BarChart bars={opBars} width={620} valueFormat={(v) => `${v} ms`} emptyText="No operations recorded in this window." />
           </div>
-          <Subtitle2 style={{ marginTop: tokens.spacingVerticalS }}>Operations ({sum.byOperation.length})</Subtitle2>
+          <Subtitle2 style={{ marginTop: tokens.spacingVerticalS }}>Operations ({(sum.byOperation ?? []).length})</Subtitle2>
           <Caption1 className={s.chartCaption}>Click a column header to sort.</Caption1>
           <div className={s.tableWrap} style={{ maxHeight: 260 }}>
             <Table size="small" aria-label="Operations" sortable>

@@ -52,6 +52,8 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
   const database = (state.databaseName as string) || defaultDatabase();
 
   const gate: Record<string, { missing: string }> = {};
+  // Per-section failure reasons (a slow/failing ADX read degrades only itself).
+  const sectionErrors: Record<'healthCharts' | 'dqScore', string> = {} as Record<'healthCharts' | 'dqScore', string>;
 
   // ---- Lineage (Purview classic Data Map) ----
   let lineage: { nodes: any[]; edges: any[]; baseEntityGuid: string } | null = null;
@@ -85,14 +87,24 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
   if (adxGate) {
     gate.adx = { missing: adxGate.missing };
   } else {
-    try {
-      const tableNames = datasets.map((d) => d.name).filter((n): n is string => !!n);
-      [healthCharts, dqScore] = await Promise.all([
-        runHealthCharts(database, tableName),
-        computeDqScore(session.claims.oid, database, tableNames),
-      ]);
-    } catch (e: any) {
-      return NextResponse.json({ ok: false, error: `ADX observability failed: ${e?.message || String(e)}` }, { status: 502 });
+    // Health charts and the DQ score are INDEPENDENT ADX reads. Settle them
+    // separately so one slow / failing KQL query degrades only its own section
+    // (honest per-section error) instead of 502-ing the whole report.
+    const tableNames = datasets.map((d) => d.name).filter((n): n is string => !!n);
+    const [healthR, dqR] = await Promise.allSettled([
+      runHealthCharts(database, tableName),
+      computeDqScore(session.claims.oid, database, tableNames),
+    ]);
+    if (healthR.status === 'fulfilled') healthCharts = healthR.value;
+    else sectionErrors.healthCharts = healthR.reason?.message || String(healthR.reason);
+    if (dqR.status === 'fulfilled') dqScore = dqR.value;
+    else sectionErrors.dqScore = dqR.reason?.message || String(dqR.reason);
+    // Only if BOTH ADX reads failed do we treat it as a hard ADX error.
+    if (healthR.status === 'rejected' && dqR.status === 'rejected') {
+      return NextResponse.json(
+        { ok: false, error: `ADX observability failed: ${healthR.reason?.message || String(healthR.reason)}` },
+        { status: 502 },
+      );
     }
   }
 
@@ -104,5 +116,6 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
     database,
     tableName: tableName || null,
     gate: Object.keys(gate).length ? gate : undefined,
+    sectionErrors: Object.keys(sectionErrors).length ? sectionErrors : undefined,
   });
 }
