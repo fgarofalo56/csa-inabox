@@ -108,3 +108,48 @@ describe('allowlistExtension (pgvector)', () => {
     expect(calls.some((c) => c.method === 'PUT')).toBe(false);
   });
 });
+
+describe('postgresQueryGate (honest gate names the real env var)', () => {
+  it('returns LOOM_POSTGRES_AAD_USER when the principal name is unset', async () => {
+    delete process.env.LOOM_POSTGRES_AAD_USER;
+    const { postgresQueryGate } = await import('../postgres-flex-client');
+    const gate = postgresQueryGate();
+    expect(gate).not.toBeNull();
+    expect(gate!.missing).toBe('LOOM_POSTGRES_AAD_USER');
+    // Must NOT reference the retired/never-real LOOM_POSTGRES_QUERY_LIVE var.
+    expect(gate!.detail).not.toMatch(/LOOM_POSTGRES_QUERY_LIVE/);
+    expect(gate!.detail).toMatch(/pgaadauth_create_principal/);
+  });
+
+  it('returns null (no gate) once LOOM_POSTGRES_AAD_USER is set — query path is live', async () => {
+    process.env.LOOM_POSTGRES_AAD_USER = 'loom-console-uami';
+    const { postgresQueryGate } = await import('../postgres-flex-client');
+    expect(postgresQueryGate()).toBeNull();
+  });
+});
+
+describe('no stale LOOM_POSTGRES_QUERY_LIVE gate (pg query is wired)', () => {
+  // Guard: the pg driver IS a dependency and executePostgresQuery runs real
+  // SQL, so no surface may tell the operator to "add the pg driver" or set the
+  // never-real LOOM_POSTGRES_QUERY_LIVE var — that would present a working
+  // feature as vaporware (no-vaporware.md honest-gate accuracy).
+  const fs = require('fs') as typeof import('fs');
+  const path = require('path') as typeof import('path');
+  const root = path.resolve(__dirname, '..', '..', '..');
+  const files = [
+    'lib/azure/postgres-flex-client.ts',
+    'lib/editors/unified-sql-database-editor.tsx',
+    'lib/catalog/item-types/databases.ts',
+  ];
+  for (const rel of files) {
+    it(`${rel} does not reference LOOM_POSTGRES_QUERY_LIVE`, () => {
+      const src = fs.readFileSync(path.join(root, rel), 'utf8');
+      expect(src).not.toMatch(/LOOM_POSTGRES_QUERY_LIVE/);
+    });
+  }
+
+  it('pg is a declared console dependency', () => {
+    const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+    expect(pkg.dependencies?.pg).toBeTruthy();
+  });
+});

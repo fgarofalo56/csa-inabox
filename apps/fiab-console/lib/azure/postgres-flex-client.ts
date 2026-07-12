@@ -11,12 +11,14 @@
  * azure-sql-client). The UAMI must hold Reader (list/get) + Contributor
  * (create) on the subscription / resource group.
  *
- * Query execution: PostgreSQL speaks the PG wire protocol, not TDS. The
- * `pg` npm driver is NOT a console dependency, so in-database SQL execution
- * is an HONEST infra-gate — the route returns a structured 501 naming the
- * `pg` driver + `LOOM_POSTGRES_QUERY_LIVE` env var the operator must wire.
- * The full UI still renders; ARM inventory, provisioning, databases, and
- * firewall are all live.
+ * Query execution: PostgreSQL speaks the PG wire protocol, not TDS. The `pg`
+ * npm driver IS a console dependency and `executePostgresQuery` runs real SQL
+ * over it, authenticating with a Microsoft Entra token (no stored password).
+ * The one HONEST infra-gate is identity registration — `postgresQueryGate()`
+ * returns a structured 503 naming `LOOM_POSTGRES_AAD_USER` (the PG Entra
+ * principal name the console UAMI was registered under via
+ * `pgaadauth_create_principal`) until it is set. The full UI still renders;
+ * ARM inventory, provisioning, databases, and firewall are all live.
  */
 
 import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
