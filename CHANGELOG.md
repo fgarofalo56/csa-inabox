@@ -25,6 +25,13 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.62.1](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.62.0...csa-inabox-v0.62.1) (2026-07-12)
+
+
+### Bug Fixes
+
+* **loom-unity:** base image tag is v0.5.0 (0.5.0 does not exist on Docker Hub) ([#1920](https://github.com/fgarofalo56/csa-inabox/issues/1920)) ([5f21669](https://github.com/fgarofalo56/csa-inabox/commit/5f21669746d267cb265c599364c5364a62220067))
+
 ## [0.62.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.61.0...csa-inabox-v0.62.0) (2026-07-12)
 
 
