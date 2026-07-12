@@ -31,6 +31,33 @@ export function isPbiWorkspaceId(v: unknown): v is string {
 }
 
 /**
+ * Mapping-aware precedence for the TARGET Power BI / Fabric workspace of an
+ * item deploy / publish. This is the single source of truth for "which PBI
+ * workspace does this item land in", mirroring how a bound Synapse workspace
+ * targets its items:
+ *
+ *   1. `explicit`   — a per-item binding (`state.fabricWorkspaceId`). Most
+ *                     specific, so it always wins.
+ *   2. `mapped`     — the Loom-workspace → Power BI-workspace mapping
+ *                     (`pbiWorkspaceMapping.pbiWorkspaceId`). When an operator
+ *                     maps a Loom workspace to a PBI workspace in Settings, every
+ *                     PBI item in that workspace deploys there by default.
+ *   3. `envDefault` — the platform default (`LOOM_DEFAULT_FABRIC_WORKSPACE`).
+ *
+ * Pure + trimmed; returns `undefined` when nothing is bound (the caller then
+ * shows the honest "no workspace bound" gate — never a hard failure, and the
+ * Azure-native default path is unaffected per no-fabric-dependency.md).
+ */
+export function pickPbiWorkspaceId(opts: {
+  explicit?: string | null;
+  mapped?: string | null;
+  envDefault?: string | null;
+}): string | undefined {
+  const pick = (v?: string | null) => (typeof v === 'string' && v.trim() ? v.trim() : undefined);
+  return pick(opts.explicit) ?? pick(opts.mapped) ?? pick(opts.envDefault);
+}
+
+/**
  * Read the Power BI workspace mapping for a Loom workspace, or `null` when
  * unmapped. Server-side ONLY — cross-partition point-read by workspace id (the
  * account-scoped Cosmos role authorizes the fan-out). Intended for the PBI-OBO
