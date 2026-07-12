@@ -27,7 +27,7 @@ item type is Azure-native (per `.claude/rules/no-fabric-dependency.md`).
 ```mermaid
 flowchart TB
     subgraph edge["Edge"]
-        FD["Azure Front Door<br/>csa-loom.limitlessdata.ai (Comm)<br/>csaloom-gov.limitlessdata.ai (Gov)"]
+        FD["Azure Front Door<br/>csa-loom.<your-domain> (Comm)<br/>csaloom-gov.<your-domain> (Gov)"]
     end
 
     subgraph console["Console — apps/fiab-console (Container App)"]
@@ -201,7 +201,7 @@ endpoints, private-DNS zones, and model availability are parameterized.
 ```mermaid
 flowchart TB
     subgraph internet["Public edge"]
-        AFD["Azure Front Door + WAF<br/>vanity: csa-loom.limitlessdata.ai<br/>Gov: csaloom-gov.limitlessdata.ai"]
+        AFD["Azure Front Door + WAF<br/>vanity: csa-loom.<your-domain><br/>Gov: csaloom-gov.<your-domain>"]
     end
 
     subgraph hub["Hub subscription — admin plane (modules/admin-plane)"]
@@ -264,7 +264,7 @@ Topology notes:
   the private plane (UI verification, Spark probes, KV reads) runs on the
   **in-VNet `gh-aca-runner`** ACA Job (KEDA scale-to-zero).
 - **Commercial and Gov are the same shape.** Gov (live at
-  `csaloom-gov.limitlessdata.ai`) swaps endpoints (`*.us`,
+  `csaloom-gov.<your-domain>`) swaps endpoints (`*.us`,
   `*.usgovcloudapi.net`), boundary-branched private-DNS zones, Gov MSAL, and
   Power BI Embedded A1 — and the deploy-time model resolution picks the best
   **supported** Gov model set with APIM-policy auto-fallback (see
