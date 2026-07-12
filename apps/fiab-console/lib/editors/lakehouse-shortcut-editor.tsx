@@ -30,6 +30,8 @@ import {
   Folder20Regular, Cloud20Regular, Server20Regular, Database20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { ConnectionPicker } from '@/lib/components/connections/connection-picker';
+import type { SavedConnection } from '@/lib/components/connections/use-connections';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { GuidedEmptyState, type GuidedPath } from '@/lib/components/shared/guided-empty-state';
@@ -105,6 +107,10 @@ export function LakehouseShortcutEditor({ item, id }: Props) {
   const [cEnvUrl, setCEnvUrl] = useState('');
   const [cExportUri, setCExportUri] = useState('');
   const [cSecret, setCSecret] = useState('');
+  // Optional: pick a saved ADLS/Storage Loom Connection to fill the account (and
+  // its container/path) from a source you already registered — enter creds once,
+  // reuse here. The shortcut still resolves on the Console MI or a pasted SAS.
+  const [cConnId, setCConnId] = useState<string | undefined>(undefined);
   const [cBusy, setCBusy] = useState(false);
   const [cErr, setCErr] = useState<string | null>(null);
   const [verifyResult, setVerifyResult] = useState<{ resolved: boolean; reason?: string; targetUri?: string; abfss?: string; entryCount?: number } | null>(null);
@@ -131,8 +137,17 @@ export function LakehouseShortcutEditor({ item, id }: Props) {
   function resetForm() {
     setCName(''); setCSource('internal'); setCContainer('bronze'); setCPath('');
     setCAccount(''); setCBucket(''); setCRegion('us-east-1'); setCEndpoint('');
-    setCEnvUrl(''); setCExportUri(''); setCSecret('');
+    setCEnvUrl(''); setCExportUri(''); setCSecret(''); setCConnId(undefined);
     setVerifyResult(null); setCErr(null);
+  }
+
+  /** Prefill account (+ container/path) from a picked saved ADLS connection. */
+  function onPickAdlsConnection(conn: SavedConnection | null) {
+    setCConnId(conn?.id);
+    if (!conn) return;
+    const acct = (conn.host || '').replace(/^https?:\/\//i, '').replace(/\/+$/, '').split('.')[0];
+    if (acct) { setCAccount(acct); setVerifyResult(null); }
+    if (conn.database) setCContainer(conn.database);
   }
 
   /** Body shared by verify + create (sans displayName/action). */
@@ -304,8 +319,16 @@ export function LakehouseShortcutEditor({ item, id }: Props) {
 
                   {(cSource === 'adls' || cSource === 'blob') && (
                     <>
+                      <ConnectionPicker
+                        label="Saved connection (optional)"
+                        hint="Pick a saved ADLS / Storage connection to fill the account below — enter credentials once, reuse them here."
+                        types={['storage-adls']}
+                        value={cConnId}
+                        onSelect={onPickAdlsConnection}
+                        createDefaultType="storage-adls"
+                      />
                       <Field label="Storage account" required hint="Bare account name, e.g. contosolake.">
-                        <Input value={cAccount} onChange={(_, d) => { setCAccount(d.value); setVerifyResult(null); }} placeholder="contosolake" />
+                        <Input value={cAccount} onChange={(_, d) => { setCAccount(d.value); setCConnId(undefined); setVerifyResult(null); }} placeholder="contosolake" />
                       </Field>
                       <Field label="Container / filesystem" required>
                         <Input value={cContainer} onChange={(_, d) => { setCContainer(d.value); setVerifyResult(null); }} placeholder="curated" />
