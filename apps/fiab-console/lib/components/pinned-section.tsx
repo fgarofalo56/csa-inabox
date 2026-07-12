@@ -1,30 +1,28 @@
 'use client';
 
-import { clientFetch } from '@/lib/client-fetch';
 /**
- * PinnedSection — renders user's pinned items (workspaces, items, pages).
- * Reads /api/user-prefs?key=pinnedItems (Cosmos user-prefs container) on
- * mount; listens for `loom:pin-changed` to re-fetch after a pin/unpin
- * action elsewhere in the UI. Each pinned entry is a real link backed by
- * the same href the user navigates to normally.
+ * PinnedSection — renders the user's pinned items in the left nav.
  *
- * Pin/unpin lives on workspace + item context menus (later chunks call
- * window.dispatchEvent(new CustomEvent('loom:pin-toggle', { detail: {...} }))
- * which this component handles too — keeping pin state in one place).
+ * Pin state is owned by the shared `pin-store` (single source of truth, real
+ * Cosmos-backed persistence via /api/user-prefs?key=pinnedItems). This section
+ * reads that store, so it stays in sync the moment a user pins/unpins anywhere
+ * else in the product (item tiles, the Browse all-items table). Each entry is a
+ * real link to the same href the user navigates to normally, with an inline
+ * unpin control.
+ *
+ * The section header is collapsible + keyboard-accessible, matching the other
+ * left-nav groups (nav-collapse), and its open/closed state persists per user.
  */
 
-import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { makeStyles, tokens, Button, Tooltip } from '@fluentui/react-components';
-import { Pin16Regular, PinOff16Regular, Star16Filled } from '@fluentui/react-icons';
+import { PinOff16Regular, Star16Filled } from '@fluentui/react-icons';
+import { usePins, pinItem, type PinnedItem } from './pin-store';
+import { useNavCollapse, CollapseChevron } from './nav-collapse';
 
-export interface PinnedItem {
-  id: string;          // unique key (e.g. workspace id, item id, route path)
-  label: string;
-  href: string;
-  type?: string;       // optional: 'workspace' | 'item' | 'page'
-}
+export type { PinnedItem };
+export { pinItem };
 
 const useStyles = makeStyles({
   root: {
@@ -38,7 +36,17 @@ const useStyles = makeStyles({
     padding: '8px 16px 4px',
     fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.06em',
     color: tokens.colorNeutralForeground3, fontWeight: 600,
+    // Rendered as a <button> so the whole section collapses on click / keyboard.
+    background: 'none', border: 'none', width: '100%', cursor: 'pointer',
+    borderRadius: tokens.borderRadiusMedium,
+    ':hover': { backgroundColor: tokens.colorNeutralBackground2Hover },
+    ':focus-visible': {
+      outline: `2px solid ${tokens.colorStrokeFocus2}`,
+      outlineOffset: '-2px',
+    },
   },
+  chevron: { display: 'inline-flex', color: tokens.colorNeutralForeground3, flexShrink: 0 },
+  headerLabel: { display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalSNudge },
   item: {
     display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS,
     padding: '6px 16px', fontSize: '13px',
@@ -60,93 +68,57 @@ const useStyles = makeStyles({
   },
 });
 
+const COLLAPSE_KEY = 'Pinned';
+
 export function PinnedSection() {
   const styles = useStyles();
   const pathname = usePathname() || '/';
-  const [items, setItems] = useState<PinnedItem[] | null>(null);
+  const { pins, loading, unpin } = usePins();
+  const { collapsed: isCollapsed, toggle } = useNavCollapse();
 
-  const load = useCallback(() => {
-    clientFetch('/api/user-prefs?key=pinnedItems').then(r => r.json()).then(d => {
-      const arr = Array.isArray(d?.value) ? d.value : [];
-      setItems(arr);
-    }).catch(() => setItems([]));
-  }, []);
-
-  useEffect(() => { load(); }, [load]);
-
-  // External pin/unpin requests.
-  useEffect(() => {
-    const onChanged = () => load();
-    const onToggle = (e: Event) => {
-      const detail = (e as CustomEvent).detail as PinnedItem | undefined;
-      if (!detail?.id || !detail?.href || !detail?.label) return;
-      setItems(prev => {
-        const cur = prev ?? [];
-        const exists = cur.some(p => p.id === detail.id);
-        const next = exists
-          ? cur.filter(p => p.id !== detail.id)
-          : [...cur, { id: detail.id, label: detail.label, href: detail.href, type: detail.type }];
-        clientFetch('/api/user-prefs', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ key: 'pinnedItems', value: next }),
-        }).catch(() => {});
-        return next;
-      });
-    };
-    window.addEventListener('loom:pin-changed', onChanged);
-    window.addEventListener('loom:pin-toggle', onToggle);
-    return () => {
-      window.removeEventListener('loom:pin-changed', onChanged);
-      window.removeEventListener('loom:pin-toggle', onToggle);
-    };
-  }, [load]);
-
-  const unpin = (id: string) => {
-    setItems(prev => {
-      const next = (prev ?? []).filter(p => p.id !== id);
-      clientFetch('/api/user-prefs', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ key: 'pinnedItems', value: next }),
-      }).catch(() => {});
-      return next;
-    });
-  };
-
-  if (items === null) return null; // no flash on initial load
+  if (loading) return null; // no flash on initial load
+  const items = pins ?? [];
+  const collapsed = isCollapsed(COLLAPSE_KEY);
 
   return (
     <div className={styles.root}>
-      <div className={styles.header}>
-        <Star16Filled style={{ color: 'var(--loom-accent-gold)' }} />
-        Pinned
+      <button
+        type="button"
+        className={styles.header}
+        aria-expanded={!collapsed}
+        aria-controls="nav-pinned-region"
+        onClick={() => toggle(COLLAPSE_KEY)}
+      >
+        <span className={styles.chevron} aria-hidden>
+          <CollapseChevron open={!collapsed} />
+        </span>
+        <span className={styles.headerLabel}>
+          <Star16Filled style={{ color: 'var(--loom-accent-gold)' }} />
+          Pinned
+        </span>
+      </button>
+      <div id="nav-pinned-region" role="group" hidden={collapsed}>
+        {items.length === 0 ? (
+          <div className={styles.empty}>Pin a workspace or item to see it here.</div>
+        ) : (
+          items.map((p) => {
+            const active = p.href === pathname;
+            return (
+              <div key={p.id} className={`${styles.item} ${active ? styles.active : ''}`}>
+                <Link href={p.href} className={styles.label} title={p.label}
+                      style={{ color: 'inherit', textDecoration: 'none' }}>
+                  {p.label}
+                </Link>
+                <Tooltip content="Unpin" relationship="label">
+                  <Button appearance="transparent" size="small" className={styles.unpin}
+                    icon={<PinOff16Regular />} onClick={() => unpin(p.id)}
+                    aria-label={`Unpin ${p.label}`} />
+                </Tooltip>
+              </div>
+            );
+          })
+        )}
       </div>
-      {items.length === 0 ? (
-        <div className={styles.empty}>Pin a workspace or item to see it here.</div>
-      ) : (
-        items.map(p => {
-          const active = p.href === pathname;
-          return (
-            <div key={p.id} className={`${styles.item} ${active ? styles.active : ''}`}>
-              <Link href={p.href} className={styles.label} title={p.label}
-                    style={{ color: 'inherit', textDecoration: 'none' }}>
-                {p.label}
-              </Link>
-              <Tooltip content="Unpin" relationship="label">
-                <Button appearance="transparent" size="small" className={styles.unpin}
-                  icon={<PinOff16Regular />} onClick={() => unpin(p.id)}
-                  aria-label={`Unpin ${p.label}`} />
-              </Tooltip>
-            </div>
-          );
-        })
-      )}
     </div>
   );
-}
-
-/** Helpers for callers that want to pin without writing the fetch. */
-export function pinItem(item: PinnedItem) {
-  window.dispatchEvent(new CustomEvent('loom:pin-toggle', { detail: item }));
 }
