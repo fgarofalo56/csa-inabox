@@ -502,3 +502,34 @@ export const AUTOSCALE_PRESETS: Array<{ value: string; label: string; formula: s
 export function autoScaleFormulaFor(presetKey: string): string {
   return AUTOSCALE_PRESETS.find((p) => p.value === presetKey)?.formula || '';
 }
+
+// ---------------------------------------------------------------------------
+// Editor gate classification (pure — unit-tested)
+// ---------------------------------------------------------------------------
+
+export interface BatchGateInfo {
+  /** `forbidden` = 403 DLZ-admin authorization; `not_configured` = 503 missing account. */
+  kind: 'forbidden' | 'not_configured';
+  /** Human-readable message to render in the MessageBar. */
+  error: string;
+  hint?: string;
+  missing?: string;
+  bicep?: string;
+}
+
+/**
+ * Classify a non-ok /api/items/batch-pool response into a typed gate so the
+ * editor renders a 403 (DLZ-admin authorization) DISTINCTLY from a 503 missing
+ * account. Previously the editor mapped every `!ok` to "Azure Batch account not
+ * configured", so a non-admin user saw a misleading config message instead of
+ * "admins only". Pure — no I/O — so it is unit-tested.
+ */
+export function classifyBatchGate(status: number, body: any): BatchGateInfo {
+  const kind: 'forbidden' | 'not_configured' =
+    status === 403 || body?.error === 'forbidden' ? 'forbidden' : 'not_configured';
+  const error =
+    kind === 'forbidden'
+      ? String(body?.reason || 'You do not have access to this pane.')
+      : String(body?.error || 'not available');
+  return { kind, error, hint: body?.hint, missing: body?.missing, bicep: body?.bicep };
+}

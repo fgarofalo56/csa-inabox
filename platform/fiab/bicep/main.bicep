@@ -570,8 +570,8 @@ param vmEnabled bool = false
 @secure()
 param vmAdminSshPublicKey string = ''
 
-@description('Deploy an Azure Batch account (BatchService mode) + backing auto-storage (managed-identity auth).')
-param batchEnabled bool = false
+@description('Deploy an Azure Batch account (BatchService mode) + backing auto-storage (managed-identity auth). Day-one default ON (opt-out per loom_default_on_opt_out): a Batch account + its auto-storage are FREE at rest — only pools (VM fleets) incur spend, and pools are created on-demand from the Batch pool editor. Deploying the account day-one wires LOOM_BATCH_ACCOUNT so the Data Engineering "Batch pool" item works out of the box instead of honest-gating. Set false to opt out entirely.')
+param batchEnabled bool = true
 
 @description('Deploy a Consumption Logic App (empty editable workflow). Day-one default ON so the logic-app provisioner + approval/report-subscription delivery surfaces resolve without a setup gate; set false to opt out.')
 param logicAppsEnabled bool = true
@@ -1076,6 +1076,20 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
       // byoExisting (not scalar params) to stay under admin-plane's 256-param ceiling.
       amlDefaultCompute: (useSingleDlz && mlWorkspaceEnabled) ? take('ci-loom-${uniqueString(singleDlzRg.id)}', 24) : ''
       amlComputeIdleTtl: mlComputeIdleTtl
+      // Azure Batch account (SVC-5) — feed the DEPLOYED dpBatch account name +
+      // its RG into the Console env so LOOM_BATCH_ACCOUNT resolves and the
+      // Data Engineering "Batch pool" item lights up day-one. Previously unset,
+      // so the item honest-gated forever even when the account was deployed
+      // (the deployed name was never wired to the Console). The name is DERIVED
+      // deterministically the SAME way batch.bicep computes it
+      // (take('batchloom${uniqueString(rg.id)}', 24) at singleDlzRg scope) rather
+      // than read from dpBatch.outputs — the module depends on adminPlane's
+      // console principal, so an output reference would form a dependency cycle
+      // (mirrors amlWorkspaceName's deterministic derivation below). Empty in
+      // tenant/multi-sub (no local DLZ) or when Batch is opted out → the editor
+      // honest-gates naming LOOM_BATCH_ACCOUNT. Azure-native — no Fabric.
+      batchAccount: (useSingleDlz && batchEnabled) ? take('batchloom${uniqueString(singleDlzRg.id)}', 24) : ''
+      batchRg: (useSingleDlz && batchEnabled) ? singleDlzRg.name : ''
       // Slate-app / Workshop-app Publish → Azure Static Web Apps target RG
       // (LOOM_SWA_RESOURCE_GROUP; empty → the admin RG) + the BYO
       // user-data-function Functions host (LOOM_UDF_FUNCTION_BASE; empty →
