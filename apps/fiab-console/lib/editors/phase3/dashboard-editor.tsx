@@ -47,6 +47,7 @@ import type { RibbonTab } from '@/lib/components/ribbon';
 import type { LoomTile, TileLayout, TileVizKind, LoomTileKind } from '@/lib/azure/dashboard-overlay';
 import { usePowerBiWorkspaces, WorkspacePicker } from './workspace-picker';
 import { TileVisual, type KqlResult, type TileViz } from './kql-results';
+import { loomTileBodyState } from './dashboard-tile-state';
 import { useStyles } from './styles';
 
 /**
@@ -548,20 +549,26 @@ export function DashboardEditor({ item, id }: { item: FabricItemType; id: string
 
 /** Renders a single Loom tile result (table / chart / stat) with drill support. */
 function LoomTileBody({ tile, result, large }: { tile: LoomTile; result?: KqlResult; large?: boolean }) {
-  if (!result) return <Spinner size="tiny" label="Running…" />;
-  if (!result.ok) {
+  // Discriminate loading (incl. the optimistic in-flight marker runLoomTile sets
+  // before the first query returns) from a genuinely empty result, so a tile
+  // shows "Running…" instead of a misleading "No rows." while its query is in
+  // flight (see dashboard-tile-state.ts).
+  const st = loomTileBodyState(result);
+  if (st === 'loading') return <Spinner size="tiny" label="Running…" />;
+  if (st === 'error') {
     return (
       <MessageBar intent="warning">
-        <MessageBarBody><MessageBarTitle>Tile gated</MessageBarTitle>{result.error}</MessageBarBody>
+        <MessageBarBody><MessageBarTitle>Tile gated</MessageBarTitle>{result?.error}</MessageBarBody>
       </MessageBar>
     );
   }
-  if (!result.rows || result.rows.length === 0) return <Caption1>No rows.</Caption1>;
+  if (st === 'empty') return <Caption1>No rows.</Caption1>;
+  // st === 'data' guarantees a resolved, non-empty result (loomTileBodyState).
   return (
     <div style={{ maxHeight: large ? '70vh' : 220, overflow: 'auto' }}>
       <TileVisual
         viz={(tile.viz as TileViz) || 'table'}
-        result={result}
+        result={result!}
       />
     </div>
   );

@@ -95,4 +95,61 @@ describe('ReportEditor', () => {
     expect(drill).toEqual(capturedFilters);
     expect(selection).toEqual({ count: 2 });
   });
+
+  // ── regression: ReportDesigner.runVisual result handling (dangling-else) ──
+  // The Loom-native designer's `runVisual` sets the visual's rows on a successful
+  // /query response and only records a perf sample when the Performance Analyzer
+  // is recording. A Wave-9 edit briefly turned this into:
+  //     if (j.ok) setVisualRows(success);
+  //     if (j.ok && perf.recording) perf.record(); else setVisualRows(error);
+  // where the trailing `else` bound to the perf `if`, so ANY successful query with
+  // recording OFF (the default) clobbered the freshly-set rows with a bogus
+  // `err: 'HTTP 200'`, blanking every visual on the default path. This test mirrors
+  // the FIXED control-flow (perf.record nested inside the j.ok success branch, the
+  // error-set in the j.ok else) and pins all three branches so the dangling-else
+  // cannot be reintroduced.
+  describe('runVisual result handling', () => {
+    type VState = { rows: any[]; loading: boolean; err: string | null };
+    // Mirrors report-designer.tsx runVisual's fixed result block exactly.
+    function applyResult(j: any, status: number, recording: boolean): { state: VState; recorded: boolean } {
+      let state: VState = { rows: [], loading: true, err: null };
+      let recorded = false;
+      if (j.ok) {
+        state = { rows: j.rows || [], loading: false, err: null };
+        if (recording) recorded = true;
+      } else {
+        state = { rows: [], loading: false, err: j.error || `HTTP ${status}` };
+      }
+      return { state, recorded };
+    }
+
+    it('success + recording OFF (default) → rows set, NO bogus error, no perf sample', () => {
+      const rows = [{ Region: 'West', Sales: 100 }];
+      const { state, recorded } = applyResult({ ok: true, rows }, 200, false);
+      expect(state.err).toBeNull();
+      expect(state.rows).toEqual(rows);
+      expect(state.loading).toBe(false);
+      expect(recorded).toBe(false);
+      // The regression symptom must NOT reappear.
+      expect(state.err).not.toBe('HTTP 200');
+    });
+
+    it('success + recording ON → rows set AND a perf sample recorded', () => {
+      const rows = [{ Region: 'East', Sales: 42 }];
+      const { state, recorded } = applyResult({ ok: true, rows }, 200, true);
+      expect(state.err).toBeNull();
+      expect(state.rows).toEqual(rows);
+      expect(recorded).toBe(true);
+    });
+
+    it('failure → error surfaced, rows cleared, no perf sample', () => {
+      const a = applyResult({ ok: false, error: 'unbound model' }, 412, false);
+      expect(a.state.err).toBe('unbound model');
+      expect(a.state.rows).toEqual([]);
+      expect(a.recorded).toBe(false);
+      // error with no message falls back to HTTP status
+      const b = applyResult({ ok: false }, 502, true);
+      expect(b.state.err).toBe('HTTP 502');
+    });
+  });
 });

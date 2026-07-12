@@ -2662,11 +2662,20 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
         }),
       });
       const j = await r.json();
-      if (j.ok) setVisualRows((p) => ({ ...p, [v.id]: { rows: j.rows || [], loading: false, err: null } }));
-      // Wave-9 Performance analyzer: capture the REAL server elapsed (result.executionMs
-      // surfaced as j.elapsedMs by the /query route) + browser round-trip when recording.
-      if (j.ok && perf.recording) perf.record(v.id, { title: v.title, serverMs: j.elapsedMs, rowCount: j.rowCount ?? (j.rows || []).length, clientMs: performance.now() - __t0, sql: j.sql || j.daxQuery });
-      else setVisualRows((p) => ({ ...p, [v.id]: { rows: [], loading: false, err: j.error || `HTTP ${r.status}` } }));
+      if (j.ok) {
+        setVisualRows((p) => ({ ...p, [v.id]: { rows: j.rows || [], loading: false, err: null } }));
+        // Wave-9 Performance analyzer: capture the REAL server elapsed (result.executionMs
+        // surfaced as j.elapsedMs by the /query route) + browser round-trip when recording.
+        // NOTE: this MUST stay nested inside the `j.ok` success branch. When it was a
+        // separate `if (j.ok && perf.recording) … else …` statement, the dangling `else`
+        // paired with THIS if — so any successful query with recording OFF (the default)
+        // clobbered the freshly-set rows with a bogus `err: 'HTTP 200'`, blanking every
+        // visual on the Loom-native default path. Keep the error-set in the `else` of the
+        // `j.ok` check only.
+        if (perf.recording) perf.record(v.id, { title: v.title, serverMs: j.elapsedMs, rowCount: j.rowCount ?? (j.rows || []).length, clientMs: performance.now() - __t0, sql: j.sql || j.daxQuery });
+      } else {
+        setVisualRows((p) => ({ ...p, [v.id]: { rows: [], loading: false, err: j.error || `HTTP ${r.status}` } }));
+      }
     } catch (e: any) {
       setVisualRows((p) => ({ ...p, [v.id]: { rows: [], loading: false, err: e?.message || String(e) } }));
     }
