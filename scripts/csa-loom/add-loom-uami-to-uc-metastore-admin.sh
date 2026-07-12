@@ -90,24 +90,56 @@ if [[ -z "$META_ID" ]]; then
 fi
 echo ">>> Metastore id = $META_ID"
 
-# 3. Resolve the metastore admins group name (defaults to `account admins`
-#    on the metastore). We patch the metastore's `delta_sharing_recipient_token_lifetime_in_seconds`
-#    no — the canonical add is `PATCH /metastores/{id}` with `owner` OR add
-#    the SP to a UC group that is the metastore admin.
-#
-# Easiest robust path: ensure the SP is a member of the workspace's
-# "admins" group AND set the metastore's `owner` to a group the SP belongs
-# to. The least invasive option supported by every cloud is to grant the
-# SP USE_CATALOG + USE_SCHEMA on the metastore (workspace-level "metastore
-# admin equivalent") via a PATCH to /permissions/metastore.
-echo ">>> Granting USE_CATALOG + CREATE_CATALOG on metastore to SCIM principal"
+# 3. Grant CREATE_CATALOG on the metastore.
+#    ONLY metastore-level privileges may be granted on the METASTORE entity.
+#    USE_CATALOG / USE_SCHEMA / BROWSE apply to CATALOGS, not the metastore, and
+#    including them makes the whole PATCH fail (verified live 2026-07-12:
+#    "Privilege USE CATALOG is not applicable to this entity … METASTORE").
+echo ">>> Granting CREATE_CATALOG on metastore to SCIM principal"
 curl -sS -X PATCH \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   "https://${WORKSPACE_HOSTNAME}/api/2.1/unity-catalog/permissions/metastore/${META_ID}" \
-  -d "{\"changes\":[{\"principal\":\"${UAMI_APP_ID}\",\"add\":[\"USE_CATALOG\",\"CREATE_CATALOG\",\"USE_SCHEMA\",\"BROWSE\"]}]}" \
+  -d "{\"changes\":[{\"principal\":\"${UAMI_APP_ID}\",\"add\":[\"CREATE_CATALOG\"]}]}" \
   | jq .
 
+# 4. Grant CREATE_MANAGED_STORAGE on the metastore's external location(s).
+#    A metastore with `storage_root = null` (accounts with account-level Default
+#    Storage) rejects a bare CREATE CATALOG; Loom then creates catalogs WITH a
+#    MANAGED LOCATION under a UC external location (LOOM_DATABRICKS_UC_STORAGE_ROOT
+#    on the console = that location's abfss:// base). Creating a managed catalog
+#    there requires CREATE_MANAGED_STORAGE on the external location, else the sync
+#    503s "User does not have CREATE MANAGED STORAGE on External Location"
+#    (verified live 2026-07-12). Grant it on every external location so the
+#    domain→UC sync can create catalogs regardless of which one backs the root.
+echo ">>> Granting CREATE_MANAGED_STORAGE on external location(s) to SCIM principal"
+EXT_LOCS="$(curl -s -H "Authorization: Bearer $TOKEN" \
+  "https://${WORKSPACE_HOSTNAME}/api/2.1/unity-catalog/external-locations" \
+  | jq -r '.external_locations[]?.name')"
+if [[ -z "$EXT_LOCS" ]]; then
+  echo "    (no UC external locations found — if the metastore has a storage_root this is fine;"
+  echo "     otherwise create an external location + storage credential first, then re-run.)"
+else
+  for LOC in $EXT_LOCS; do
+    echo "    external location: $LOC"
+    curl -sS -X PATCH \
+      -H "Authorization: Bearer $TOKEN" \
+      -H "Content-Type: application/json" \
+      "https://${WORKSPACE_HOSTNAME}/api/2.1/unity-catalog/permissions/external-location/${LOC}" \
+      -d "{\"changes\":[{\"principal\":\"${UAMI_APP_ID}\",\"add\":[\"CREATE_MANAGED_STORAGE\"]}]}" \
+      | jq -r '.privilege_assignments[]? | select(.principal=="'"${UAMI_APP_ID}"'") | "      -> " + (.privileges|join(", "))'
+  done
+fi
+
 echo ""
-echo "DONE. The Loom UAMI can now enumerate this workspace's UC metastore."
-echo "Verify: LOOM_DATABRICKS_HOSTNAMES on the console must include '$WORKSPACE_HOSTNAME'."
+echo "DONE. The Loom console UAMI can now CREATE CATALOG (with a managed location"
+echo "under an external location) on this workspace's UC metastore — the"
+echo "domain→Unity-Catalog governance sync can create catalogs + schemas."
+echo "NOTE: schemas for SUBDOMAINS are created under their parent catalog; since"
+echo "Loom creates the parent catalog as this UAMI, the UAMI owns it and can add"
+echo "child schemas. If a catalog pre-exists under a DIFFERENT owner, the sync's"
+echo "createUcSchema 403s — drop/re-own it, or grant this SP USE_CATALOG+CREATE"
+echo "SCHEMA on that catalog."
+echo "Verify: LOOM_DATABRICKS_HOSTNAMES on the console must include '$WORKSPACE_HOSTNAME',"
+echo "and set LOOM_DATABRICKS_UC_STORAGE_ROOT to an external location's abfss:// base"
+echo "when the metastore has no default storage_root."
