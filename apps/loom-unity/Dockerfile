@@ -21,7 +21,7 @@
 # Azure-native only — no Microsoft Fabric / Power BI dependency. This IS the
 # Azure-native Unity Catalog backend (.claude/rules/no-fabric-dependency.md).
 
-FROM unitycatalog/unitycatalog:0.5.0
+FROM unitycatalog/unitycatalog:v0.5.0
 
 # Root only for the overlay; the upstream image already runs as the non-root
 # `unitycatalog` service account (restored via USER below).
@@ -52,4 +52,4 @@ LABEL org.opencontainers.image.title="Loom Unity (OSS Unity Catalog for Azure Go
 LABEL org.opencontainers.image.source="https://github.com/fgarofalo56/csa-inabox"
 LABEL csa.loom.component="loom-unity"
 LABEL csa.loom.version="0.1.0"
-LABEL csa.loom.upstream="unitycatalog/unitycatalog:0.5.0"
+LABEL csa.loom.upstream="unitycatalog/unitycatalog:v0.5.0"
