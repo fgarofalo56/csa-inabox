@@ -211,6 +211,12 @@ export interface ChargebackModel {
   forecast: number;
   trendPct: number | null;
   perService: CostRow[];
+  /**
+   * Spend grouped + totaled by ARM RESOURCE TYPE (Synapse, ADX, ADLS,
+   * Databricks, Cosmos, Container Apps, Event Hubs, APIM, …) across every Loom
+   * subscription — the "all Loom resource types" rollup, real Cost Management.
+   */
+  perResourceType: CostRow[];
   compute: CostRow[];
   storage: CostRow[];
   perWorkspace: WorkspaceChargeback[];
@@ -454,6 +460,7 @@ export async function getChargebackModel(opts: ChargebackOptions = {}): Promise<
 
   const total = cost.monthToDate;
   const perService = withPct(cost.byService, total);
+  const perResourceType = withPct(cost.byResourceType, total);
   const { compute, storage } = classify(perService);
 
   // Chargeback allocation: resource-group is the Loom workspace boundary. LCU is
@@ -477,6 +484,7 @@ export async function getChargebackModel(opts: ChargebackOptions = {}): Promise<
     forecast: round(cost.forecast),
     trendPct: cost.trendPct,
     perService,
+    perResourceType,
     compute,
     storage,
     perWorkspace,

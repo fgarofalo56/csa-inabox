@@ -48,7 +48,7 @@ interface NormalizedCapacity {
 }
 interface ChargebackModel {
   currency: string; timeframe: string; windowHours: number; totalCost: number; forecast: number;
-  trendPct: number | null; perService: CostRow[]; compute: CostRow[]; storage: CostRow[];
+  trendPct: number | null; perService: CostRow[]; perResourceType: CostRow[]; compute: CostRow[]; storage: CostRow[];
   perWorkspace: WorkspaceChargeback[]; timeSeries: { date: string; cost: number }[];
   normalizedCU: NormalizedCapacity; scope: string; subscriptions: string[];
   subscriptionErrors: { subscription: string; error: string }[]; generatedAt: string;
@@ -189,6 +189,15 @@ function KpiCards({ m }: { m: ChargebackModel }) {
 
 const costColumns = (ccy: string): LoomColumn<CostRow>[] => [
   { key: 'key', label: 'Service', width: 320 },
+  { key: 'cost', label: `Cost (${ccy})`, getValue: (r) => r.cost, render: (r) => money(r.cost, ccy), width: 160 },
+  { key: 'pctOfTotal', label: '% of total', getValue: (r) => r.pctOfTotal, render: (r) => `${r.pctOfTotal}%`, width: 120 },
+];
+
+// ARM types come back verbose + lower-cased (e.g. `microsoft.synapse/workspaces`);
+// show the readable `synapse/workspaces` tail without the provider prefix.
+const typeLabel = (k: string) => k.replace(/^microsoft\./i, '');
+const resourceTypeColumns = (ccy: string): LoomColumn<CostRow>[] => [
+  { key: 'key', label: 'Resource type', width: 320, getValue: (r) => typeLabel(r.key), render: (r) => <strong>{typeLabel(r.key)}</strong> },
   { key: 'cost', label: `Cost (${ccy})`, getValue: (r) => r.cost, render: (r) => money(r.cost, ccy), width: 160 },
   { key: 'pctOfTotal', label: '% of total', getValue: (r) => r.pctOfTotal, render: (r) => `${r.pctOfTotal}%`, width: 120 },
 ];
@@ -440,6 +449,19 @@ export function ChargebackPane() {
                       columns={costColumns(ccy)} rows={model.perService} getRowId={(r) => r.key}
                       ariaLabel="Cost by service"
                       empty={<EmptyState title="No spend in window" body="No Azure Cost Management line items for the Loom resource groups in this timeframe." />}
+                    />
+                  </Section>
+
+                  <Section title="Cost by resource type">
+                    <Caption1 className={styles.derivation}>
+                      Every Loom-managed Azure resource type — Synapse, Data Explorer, ADLS/Storage, Databricks, Cosmos,
+                      Container Apps, Event Hubs, API Management and the rest — grouped + totaled across every Loom
+                      subscription from the real Cost Management <code>ResourceType</code> dimension.
+                    </Caption1>
+                    <LoomDataTable<CostRow>
+                      columns={resourceTypeColumns(ccy)} rows={model.perResourceType} getRowId={(r) => r.key}
+                      ariaLabel="Cost by resource type"
+                      empty={<EmptyState title="No spend in window" body="Cost Management returned no per-resource-type line items for the Loom resource groups in this timeframe." />}
                     />
                   </Section>
                 </div>
