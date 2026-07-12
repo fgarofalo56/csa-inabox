@@ -1,7 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import {
   normalizeScanBody,
+  normalizeFrameBody,
   buildScanUrl,
+  buildFrameUrl,
+  buildServiceUrl,
   MAX_SCAN_LIMIT,
 } from '../scan-request';
 
@@ -59,5 +62,48 @@ describe('directlake/scan-request normalization (HYP-5)', () => {
     expect(buildScanUrl('loom-directlake.internal')).toBe('https://loom-directlake.internal/scan');
     expect(buildScanUrl('https://loom-directlake.internal/')).toBe('https://loom-directlake.internal/scan');
     expect(buildScanUrl('http://localhost:8080')).toBe('http://localhost:8080/scan');
+  });
+});
+
+describe('directlake/frame-request normalization (framing = metadata-only version pin)', () => {
+  it('requires a non-empty path, with the same message as scan', () => {
+    for (const body of [null, {}, { path: '' }, { path: '   ' }, { path: 42 }]) {
+      const r = normalizeFrameBody(body as any);
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.error).toMatch(/path.*required/i);
+    }
+  });
+
+  it('accepts fixture / file / abfss sources and trims the path (no projection/limit)', () => {
+    for (const p of [
+      'fixture://sales',
+      'file:///app/fixtures/sales.parquet',
+      'abfss://c@acct.dfs.core.windows.net/sales',
+    ]) {
+      const r = normalizeFrameBody({ path: `  ${p}  ` });
+      expect(r.ok).toBe(true);
+      if (r.ok) {
+        expect(r.value.path).toBe(p);
+        // Framing carries ONLY a path — no projection/limit keys leak through.
+        expect(Object.keys(r.value)).toEqual(['path']);
+      }
+    }
+  });
+
+  it('ignores extra fields (projection/limit) that only apply to a scan', () => {
+    const r = normalizeFrameBody({ path: 'fixture://sales', projection: ['region'], limit: 5 } as any);
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.value).toEqual({ path: 'fixture://sales' });
+  });
+
+  it('builds the /frame URL, adding https:// when scheme-less and trimming a trailing slash', () => {
+    expect(buildFrameUrl('loom-directlake.internal')).toBe('https://loom-directlake.internal/frame');
+    expect(buildFrameUrl('https://loom-directlake.internal/')).toBe('https://loom-directlake.internal/frame');
+    expect(buildFrameUrl('http://localhost:8080')).toBe('http://localhost:8080/frame');
+  });
+
+  it('buildServiceUrl derives scan + frame from the shared builder', () => {
+    expect(buildServiceUrl('loom-directlake.internal', 'scan')).toBe('https://loom-directlake.internal/scan');
+    expect(buildServiceUrl('loom-directlake.internal', 'frame')).toBe('https://loom-directlake.internal/frame');
   });
 });
