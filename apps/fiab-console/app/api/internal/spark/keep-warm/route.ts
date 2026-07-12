@@ -34,6 +34,7 @@ import {
   sparkPoolBackendStatus,
   ensureWarmPoolStarted,
   adoptFromStore,
+  reconcileWarmingSlots,
   warmPool,
   sparkPoolConfig,
   getPoolStatus,
@@ -62,12 +63,19 @@ async function keepWarm() {
   //     store, then (c) top the DEFAULT group back up to `min`.
   ensureWarmPoolStarted();
   await adoptFromStore().catch(() => {});
+  // (b.5) SYNCHRONOUSLY reconcile any 'warming' slot against live backend state
+  // and promote idle→warm INSIDE this request. In serverless ACA the background
+  // pollLivyToIdle loop is CPU-throttled between requests and never advances, so
+  // without this the pool sits at warming:1 / warm:0 forever and the first run
+  // still cold-starts. Doing one real liveness check per tick makes progress.
+  const reconciled = await reconcileWarmingSlots().catch(() => ({ promoted: 0, died: 0, stillWarming: 0 }));
   await warmPool().catch(() => {});
   const cfg = sparkPoolConfig();
   const status = getPoolStatus();
   return apiOk({
     keptWarm: true,
     min: cfg.min,
+    reconciled,
     totals: status?.totals ?? null,
     replicaId: status?.store?.replicaId,
   });

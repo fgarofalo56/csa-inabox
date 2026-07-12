@@ -81,6 +81,7 @@ import {
   getPoolStatus,
   refillPool,
   adoptFromStore,
+  reconcileWarmingSlots,
   reapStaleSessions,
   markSessionInUse,
   defaultSynapseSizing,
@@ -165,6 +166,45 @@ describe('R3 #1 — an immediate refill is kicked (not deferred to the 30s sweep
     await vi.waitFor(() => expect(createLivySessionAsync).toHaveBeenCalled());
     expect(createLivySessionAsync).toHaveBeenCalledWith('loompool', 'pyspark', expect.any(String), expect.anything());
     await vi.waitFor(() => expect(getPoolStatus().totals.warm).toBe(1));
+  });
+});
+
+describe('#12 — reconcileWarmingSlots promotes a frozen warming slot (serverless CPU-throttle fix)', () => {
+  it('promotes a warming slot whose Livy session is now idle to warm (and publishes)', async () => {
+    // Simulate the live bug: a warming slot exists but the background poll never
+    // advanced (ACA CPU-throttled between requests), so it is frozen at 'warming'
+    // even though its Livy session reached idle. Seed the store directly.
+    synapseConfigGate.mockReturnValue(undefined);
+    setSparkPoolConfig({ min: 1 });
+    const s = poolStore()!;
+    s.slots.length = 0;
+    s.groups.clear();
+    s.slots.push({
+      leaseId: 'lease-stuck', backend: 'synapse', poolName: 'loompool', kind: 'pyspark',
+      sizingKey: defaultSynapseSizing().sizingKey, sessionId: 4141, state: 'warming',
+      createdAt: Date.now(), lastActivityAt: Date.now(), leases: [], groupKey: 'x',
+    });
+    getLivySession.mockResolvedValueOnce({ state: 'idle' });
+    const r = await reconcileWarmingSlots();
+    expect(r.promoted).toBe(1);
+    expect(s.slots.find((x: any) => x.leaseId === 'lease-stuck').state).toBe('warm');
+  });
+
+  it('demotes a warming slot whose session died to dead (does not leak warming)', async () => {
+    synapseConfigGate.mockReturnValue(undefined);
+    setSparkPoolConfig({ min: 1 });
+    const s = poolStore()!;
+    s.slots.length = 0;
+    s.groups.clear();
+    s.slots.push({
+      leaseId: 'lease-dead', backend: 'synapse', poolName: 'loompool', kind: 'pyspark',
+      sizingKey: defaultSynapseSizing().sizingKey, sessionId: 9999, state: 'warming',
+      createdAt: Date.now(), lastActivityAt: Date.now(), leases: [], groupKey: 'x',
+    });
+    getLivySession.mockResolvedValueOnce({ state: 'error' });
+    const r = await reconcileWarmingSlots();
+    expect(r.died).toBe(1);
+    expect(s.slots.find((x: any) => x.leaseId === 'lease-dead').state).toBe('dead');
   });
 });
 
