@@ -5,6 +5,7 @@ import {
   buildJobBody,
   buildTaskBody,
   autoScaleFormulaFor,
+  classifyBatchGate,
   AUTOSCALE_PRESETS,
   VM_SIZE_PRESETS,
 } from '../batch-client';
@@ -87,5 +88,36 @@ describe('autoscale presets', () => {
   });
   it('ships a non-empty VM size catalog', () => {
     expect(VM_SIZE_PRESETS.length).toBeGreaterThan(3);
+  });
+});
+
+describe('classifyBatchGate', () => {
+  it('maps a 503 not_configured body to the config gate with missing var + bicep', () => {
+    const g = classifyBatchGate(503, {
+      ok: false, code: 'not_configured', error: 'Azure Batch account not configured: set LOOM_BATCH_ACCOUNT.',
+      missing: 'LOOM_BATCH_ACCOUNT', bicep: 'platform/fiab/bicep/modules/deploy-planner/batch.bicep',
+      hint: 'Set LOOM_BATCH_ACCOUNT (+ LOOM_BATCH_SUB/RG) and grant the Console UAMI Contributor.',
+    });
+    expect(g.kind).toBe('not_configured');
+    expect(g.missing).toBe('LOOM_BATCH_ACCOUNT');
+    expect(g.bicep).toContain('batch.bicep');
+    expect(g.error).toContain('not configured');
+  });
+  it('maps a 403 forbidden to the authorization gate carrying the reason', () => {
+    const g = classifyBatchGate(403, { ok: false, error: 'forbidden', reason: 'tenant admins and domain admins only.' });
+    expect(g.kind).toBe('forbidden');
+    expect(g.error).toContain('admins only');
+    expect(g.missing).toBeUndefined();
+  });
+  it('treats a bare error:"forbidden" as forbidden even without a 403 status', () => {
+    expect(classifyBatchGate(200, { error: 'forbidden' }).kind).toBe('forbidden');
+  });
+  it('falls back to safe defaults when the body is empty', () => {
+    const g = classifyBatchGate(500, {});
+    expect(g.kind).toBe('not_configured');
+    expect(g.error).toBe('not available');
+  });
+  it('forbidden without a reason uses a generic access message', () => {
+    expect(classifyBatchGate(403, { error: 'forbidden' }).error).toContain('do not have access');
   });
 });

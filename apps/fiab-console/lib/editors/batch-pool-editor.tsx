@@ -22,7 +22,7 @@ import {
   Add20Regular, ArrowSync20Regular, Delete20Regular, Server20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
-import { VM_SIZE_PRESETS, AUTOSCALE_PRESETS, autoScaleFormulaFor } from '@/lib/azure/batch-client';
+import { VM_SIZE_PRESETS, AUTOSCALE_PRESETS, autoScaleFormulaFor, classifyBatchGate } from '@/lib/azure/batch-client';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 
@@ -48,7 +48,7 @@ export function BatchPoolEditor({ item, id }: Props) {
   const s = useStyles();
   const [tab, setTab] = useState('pools');
   const [loading, setLoading] = useState(true);
-  const [gate, setGate] = useState<{ error: string; hint?: string; missing?: string } | null>(null);
+  const [gate, setGate] = useState<{ error: string; hint?: string; missing?: string; bicep?: string; kind: 'not_configured' | 'forbidden' } | null>(null);
   const [account, setAccount] = useState<AccountProps | null>(null);
   const [pools, setPools] = useState<PoolEntity[]>([]);
   const [msg, setMsg] = useState<{ intent: 'success' | 'error'; text: string } | null>(null);
@@ -81,10 +81,16 @@ export function BatchPoolEditor({ item, id }: Props) {
     try {
       const r = await clientFetch('/api/items/batch-pool');
       const j = await r.json();
-      if (!j.ok) { setGate({ error: j.error || 'not available', hint: j.hint, missing: j.missing }); setAccount(null); setPools([]); return; }
+      if (!j.ok) {
+        // A 403 (DLZ-admin authorization) is a DIFFERENT gate than a missing
+        // account (503 not_configured) — render them distinctly so a non-admin
+        // sees "admins only", not a misleading "not configured".
+        setGate(classifyBatchGate(r.status, j));
+        setAccount(null); setPools([]); return;
+      }
       setAccount(j.account || null);
       setPools(Array.isArray(j.pools) ? j.pools : []);
-    } catch (e: any) { setGate({ error: e?.message || String(e) }); }
+    } catch (e: any) { setGate({ error: e?.message || String(e), kind: 'not_configured' }); }
     finally { setLoading(false); }
   }, []);
 
@@ -231,11 +237,22 @@ export function BatchPoolEditor({ item, id }: Props) {
 
           {loading && <Spinner size="small" label="Loading Batch account…" labelPosition="after" />}
 
-          {gate && (
-            <MessageBar intent="warning">
+          {gate && gate.kind === 'forbidden' && (
+            <MessageBar intent="error" layout="multiline">
+              <MessageBarBody>
+                <MessageBarTitle>Access required</MessageBarTitle>
+                {gate.error}
+              </MessageBarBody>
+            </MessageBar>
+          )}
+
+          {gate && gate.kind === 'not_configured' && (
+            <MessageBar intent="warning" layout="multiline">
               <MessageBarBody>
                 <MessageBarTitle>Azure Batch account not configured</MessageBarTitle>
                 {gate.error}{gate.hint ? ` ${gate.hint}` : ''}
+                {gate.missing ? <> Set <code className={s.mono}>{gate.missing}</code>.</> : null}
+                {gate.bicep ? <> Deploy it with <code className={s.mono}>{gate.bicep}</code> (opt-in per <code className={s.mono}>batchEnabled</code>).</> : null}
               </MessageBarBody>
             </MessageBar>
           )}
