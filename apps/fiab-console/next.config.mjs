@@ -71,6 +71,19 @@ const nextConfig = {
               "img-src 'self' data: https:",
               "font-src 'self' data: https://atlas.microsoft.com",
               "connect-src 'self' https://login.microsoftonline.com https://login.microsoftonline.us https://*.azure.com https://*.azure.us https://atlas.microsoft.com",
+              // The optional "Open analytics" embed on /admin/usage + /org-reports
+              // (and the report / dashboard / semantic-model editors) render an
+              // embedded iframe ONLY when the admin opts into a backend via
+              // LOOM_USAGE_REPORT_KIND / a Power BI report item. Without frame-src
+              // the browser falls back to default-src 'self' and blocks the frame
+              // ("This content is blocked."). Allow exactly the sovereign-aware
+              // embed hosts — nothing is framed on the default path:
+              //   - Power BI Embedded (opt-in, Fabric-family): app.powerbi.com
+              //     (Commercial/GCC), app.powerbigov.us (GCC-High/IL5),
+              //     app.mil.powerbigov.us (DoD). See getPbiEmbedHostname().
+              //   - Azure Managed Grafana (Gov usage analytics backend): the
+              //     per-instance host under *.grafana.azure.com / *.grafana.azure.us.
+              "frame-src 'self' https://app.powerbi.com https://app.powerbigov.us https://app.mil.powerbigov.us https://*.grafana.azure.com https://*.grafana.azure.us",
               "frame-ancestors 'none'",
             ].join('; '),
           },
