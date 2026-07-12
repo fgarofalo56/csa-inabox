@@ -631,6 +631,66 @@ async function warmOne(grp: PoolGroup): Promise<void> {
   return warmOneSynapse(grp);
 }
 
+/**
+ * SYNCHRONOUS reconcile of every 'warming' slot against its live backend state,
+ * promoting idle→warm (and publishing) or terminal→dead — all within the calling
+ * request.
+ *
+ * WHY this is needed on top of the background `pollLivyToIdle`: a warm session is
+ * created fire-and-forget (`warmOne` → `pollLivyToIdle`) with a `setTimeout(3000)`
+ * poll loop. In a serverless Container App the Node process is CPU-throttled to
+ * ~zero BETWEEN requests, so that background loop does NOT advance once the
+ * creating request returns — the slot is frozen at 'warming' forever and every
+ * keep-warm tick reports `warming:1 / warm:0` (exactly the stuck pool seen live
+ * 2026-07-12: same replica, two ticks 5 min apart, still warming). The external
+ * keep-warm heartbeat gives us a live request on a cadence; doing ONE real
+ * liveness check per warming slot inside that request makes forward progress
+ * every tick regardless of between-request throttling. A Synapse session reaches
+ * idle in ~2-3 min, so the slot promotes within a tick or two of creation.
+ *
+ * Best-effort + bounded: one backend call per warming slot, errors leave the slot
+ * warming for the next tick to retry rather than throwing.
+ */
+export async function reconcileWarmingSlots(): Promise<{ promoted: number; died: number; stillWarming: number }> {
+  const warming = store.slots.filter((s) => s.state === 'warming');
+  let promoted = 0;
+  let died = 0;
+  let stillWarming = 0;
+  await Promise.all(
+    warming.map(async (slot) => {
+      try {
+        if (slot.backend === 'databricks') {
+          if (!slot.poolName) { stillWarming++; return; }
+          const { getCluster } = await import('@/lib/azure/databricks-client');
+          const c = await getCluster(slot.poolName);
+          const st = (c.state || '').toUpperCase();
+          if (st === 'RUNNING') {
+            slot.state = 'warm'; slot.warmedAt = Date.now(); slot.lastActivityAt = Date.now();
+            await publishWarmSlot(slot).catch(() => {}); promoted++;
+          } else if (['TERMINATED', 'ERROR', 'UNKNOWN'].includes(st)) {
+            slot.state = 'dead'; slot.error = `cluster '${st}' on reconcile`; died++;
+          } else { stillWarming++; }
+          return;
+        }
+        // Synapse Livy session.
+        if (typeof slot.sessionId !== 'number') { stillWarming++; return; }
+        const live = await getLivySession(slot.poolName, slot.sessionId);
+        if (live.state === 'idle') {
+          slot.state = 'warm'; slot.warmedAt = Date.now(); slot.lastActivityAt = Date.now();
+          await publishWarmSlot(slot).catch(() => {}); promoted++;
+        } else if (['error', 'dead', 'killed', 'shutting_down'].includes(live.state)) {
+          slot.state = 'dead'; slot.error = `session '${live.state}' on reconcile`; died++;
+        } else { stillWarming++; }
+      } catch {
+        // A single failed liveness check shouldn't kill the slot — the backend may
+        // be briefly unreachable; leave it warming for the next tick to retry.
+        stillWarming++;
+      }
+    }),
+  );
+  return { promoted, died, stillWarming };
+}
+
 // ============================================================
 // Refill + sweep
 // ============================================================
@@ -809,6 +869,11 @@ async function sweep(): Promise<void> {
   // is registered so warm doesn't stay 0 after a scale-to-zero recycle.
   registerDefaultGroup();
   await adoptFromStore();
+  // Promote any 'warming' slot whose backend session already reached idle — the
+  // fire-and-forget pollLivyToIdle loop stalls between requests under serverless
+  // CPU throttling, so reconcile it here on any live request too (not only the
+  // external keep-warm tick).
+  await reconcileWarmingSlots().catch(() => {});
   const now = Date.now();
   for (const grp of store.groups.values()) {
     const warm = slotsForGroup(grp.key).filter((s) => s.state === 'warm');
