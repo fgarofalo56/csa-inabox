@@ -99,6 +99,11 @@ eggs/
 *.egg-info/
 *.egg
 MANIFEST
+# The Python `MANIFEST` rule above is case-insensitive on Windows/macOS and
+# swallowed the console's item-type manifest registry directory — re-include
+# it (EH-P1-MANIFEST, #1801).
+!apps/fiab-console/lib/items/manifest/
+!apps/fiab-console/lib/items/manifest/**
 pip-log.txt
 pip-delete-this-directory.txt
 *.whl

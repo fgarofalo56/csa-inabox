@@ -12,6 +12,8 @@
  * BFF route. The menu groups actions by `group`.
  */
 
+import { pbiSourceableTypes } from '@/lib/items/manifest/registry';
+
 export type ThreadGroup = 'Explore' | 'Analyze with AI' | 'Publish' | 'Visualize' | 'Promote';
 
 export interface ThreadField {
@@ -81,14 +83,15 @@ const POWERBI_MODELABLE = ['warehouse', 'synapse-dedicated-sql-pool'];
  * Every Loom item type that can be a Power BI SOURCE (Weave → “Analyze in Power
  * BI”). Each resolves to an Azure-native backend (Synapse serverless / dedicated
  * or ADX) via `lib/azure/pbi-source-resolver.ts` — no Fabric / Power BI workspace
- * required (no-fabric-dependency.md). Mirrors `PBI_RESOLVABLE_TYPES` in the
- * resolver; kept here so the ThreadAction's `fromTypes` stays a single source.
+ * required (no-fabric-dependency.md).
+ *
+ * EH-P1-MANIFEST (#1801): now READ from the item-type manifest registry —
+ * `capabilities.pbiSourceable` in lib/items/manifest — instead of a hard-coded
+ * list here. Same members, same order (the manifest suite asserts equality with
+ * the prior list AND with `PBI_RESOLVABLE_TYPES` in the resolver, so this swap
+ * is provably behavior-preserving).
  */
-export const PBI_SOURCEABLE = [
-  'lakehouse', 'warehouse', 'eventhouse', 'kql-database', 'mirrored-database',
-  'dataset', 'semantic-model', 'data-product',
-  'synapse-serverless-sql-pool', 'synapse-dedicated-sql-pool',
-];
+export const PBI_SOURCEABLE = pbiSourceableTypes();
 
 export const THREAD_ACTIONS: ThreadAction[] = [
   {
