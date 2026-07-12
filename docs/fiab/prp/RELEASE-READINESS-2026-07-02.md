@@ -304,7 +304,7 @@ A public v1 tag may be cut only when **all Wave-0 and Wave-1 items are green** a
 > **All gates GREEN (2026-07-06):** Waves 0–7 of the public-release program landed
 > (108/108 items) and the release readiness was re-verified live — from-scratch
 > deploy proven (subscription-scope validate + what-if, 0 errors), Gov console
-> live at `csaloom-gov.limitlessdata.ai`, and `loom-ui-verify` browser
+> live at `csaloom-gov.<your-domain>`, and `loom-ui-verify` browser
 > verification running on the in-VNet `gh-aca-runner`. Boxes checked 2026-07-12.
 
 - [x] **G1 (Wave 0, no-vaporware):** quickstart rewritten to the proven `az deployment sub create` + bootstrap path; deploy-button/`fiab-migrate`/Power-BI-prereq references removed or built; console + root README describe the shipped product.
