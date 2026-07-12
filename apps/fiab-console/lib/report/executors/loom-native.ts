@@ -12,7 +12,7 @@
 
 import { NextResponse } from 'next/server';
 import { type DaxVisual } from '@/lib/azure/aas-client';
-import { executeQuery } from '@/lib/azure/synapse-sql-client';
+import { executeQuery, executeQueryAsUser } from '@/lib/azure/synapse-sql-client';
 import { type ResolvedReportModel } from '@/lib/azure/report-model-resolver';
 import {
   buildSqlFromVisual,
@@ -26,6 +26,21 @@ import type { WorkspaceItem } from '@/lib/types/workspace';
 import { toSqlSource } from '../query-projection';
 import { foldTransformOntoSource } from '../transform-fold';
 
+/**
+ * EH-P1-OBO (#1800): when the report's data-access mode is 'user', the route
+ * resolves the caller's delegated SQL token (user-pool-registry) and passes it
+ * here; the compiled visual query then runs via `executeQueryAsUser` under the
+ * USER's own Azure identity. The acceleration orchestrator (Databricks accel +
+ * shared result cache) is BYPASSED on the user path: both tiers execute/serve
+ * as the shared service identity, so routing a user-identity read through them
+ * would either leak the UAMI's broader rights or serve one user's cached rows
+ * to another. Absent (the default) ⇒ byte-identical service-path behavior.
+ */
+export interface UserExecutionContext {
+  token: string;
+  oid: string;
+}
+
 /** Run the Loom-native (Synapse) report path for one visual. */
 export async function executeLoomNativeQueryPath(
   item: WorkspaceItem,
@@ -33,6 +48,7 @@ export async function executeLoomNativeQueryPath(
   visual: (DaxVisual & Record<string, unknown>) | undefined,
   filters: ReportFilterInput[] | undefined,
   compileOpts: VisualCompileOptions | undefined,
+  user?: UserExecutionContext,
 ): Promise<NextResponse> {
   if (!visual) {
     return NextResponse.json(
@@ -156,6 +172,30 @@ export async function executeLoomNativeQueryPath(
     // pool for a live (DirectQuery / Dual-live) relation. Single-source reports
     // set no override and keep the resolver-pinned target, byte-for-byte.
     const runTarget = projected.target ?? resolved.sqlSource.target;
+
+    // ── USER-IDENTITY PATH (EH-P1-OBO #1800) ─────────────────────────────────
+    // Data-access mode 'user': run the REAL compiled Synapse query under the
+    // caller's delegated token, bypassing the accel/cache tiers (see
+    // UserExecutionContext). Same request/response contract as the service path.
+    if (user) {
+      const result = await executeQueryAsUser(
+        runTarget,
+        compiled.sql,
+        user.token,
+        user.oid,
+        30_000,
+        compiled.parameters,
+      );
+      return NextResponse.json({
+        ok: true,
+        rows: result.rows,
+        sql: compiled.sql,
+        elapsedMs: result.executionMs,
+        rowCount: result.rowCount,
+        accelerated: 'serverless',
+        accessMode: 'user',
+      });
+    }
 
     // ── QUERY ACCELERATION (Direct Lake) — accel → cache → Serverless ────────
     // The result cache is ALWAYS on (in-process + optional Cosmos): a repeat of

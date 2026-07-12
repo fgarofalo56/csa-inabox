@@ -9,8 +9,9 @@
  *   query route uses the caller's cached delegated SQL token).
  *
  * The chosen mode is persisted to Cosmos at `item.state.accessMode` (reusing the
- * existing item PATCH state pattern — no schema migration). Only valid for the
- * SQL endpoint item types; only workspace admins/contributors may change it.
+ * existing item PATCH state pattern — no schema migration). Valid for the SQL
+ * endpoint item types plus report + kql-database (EH-P1-OBO, #1800); only
+ * workspace admins/contributors may change it.
  *
  * Real backend: Cosmos read (cross-partition) + tenant-ownership check + role
  * resolution + Cosmos replace. No mocks.
@@ -19,7 +20,11 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { itemsContainer, workspacesContainer } from '@/lib/azure/cosmos-client';
 import { resolveWorkspaceRole, canEditWorkspaceConfig } from '@/lib/auth/workspace-role';
-import { isSqlAccessModeItemType, normalizeAccessMode } from '@/lib/azure/sql-access-mode';
+import {
+  isUserAccessModeItemType,
+  USER_ACCESS_MODE_ITEM_TYPES,
+  normalizeAccessMode,
+} from '@/lib/azure/sql-access-mode';
 import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
 import { apiError } from '@/lib/api/respond';
 
@@ -60,9 +65,11 @@ export async function PATCH(req: NextRequest, props: { params: Promise<{ type: s
   const session = getSession();
   if (!session) return err('Unauthorized', 401, 'unauthorized');
 
-  if (!isSqlAccessModeItemType(params.type)) {
+  // EH-P1-OBO (#1800): the SQL endpoints (F10) plus report + kql-database —
+  // the item types whose read routes honor the per-user data-access mode.
+  if (!isUserAccessModeItemType(params.type)) {
     return err(
-      'Data-access mode is only supported on SQL analytics endpoints (synapse-dedicated-sql-pool, synapse-serverless-sql-pool).',
+      `Data-access mode is only supported on: ${USER_ACCESS_MODE_ITEM_TYPES.join(', ')}.`,
       400,
       'unsupported_item_type',
     );

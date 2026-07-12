@@ -12,8 +12,10 @@ import { enforceAdmissionControl } from '@/lib/azure/capacity-guardrails';
 import { recordCostAttribution } from '@/lib/azure/cost-attribution';
 import { tenantScopeId } from '@/lib/auth/session';
 import {
-  executeQuery, executeMgmtCommand, loadKustoItem, resolveDatabase, KustoError,
+  executeQuery, executeMgmtCommand, loadKustoItem, resolveDatabase, clusterUri, KustoError,
 } from '@/lib/azure/kusto-client';
+import { normalizeAccessMode } from '@/lib/azure/sql-access-mode';
+import { resolveUserRead } from '@/lib/azure/user-pool-registry';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -62,9 +64,28 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       if (surge) return surge;
     }
 
+    // EH-P1-OBO (#1800) — per-user data-access mode. Default 'service' is
+    // byte-identical to before. When this KQL database was explicitly switched
+    // to "user's identity" (state.accessMode === 'user'), resolve the caller's
+    // delegated ADX token (per-cluster audience) via user-pool-registry and run
+    // the query AS THE USER; a missing delegated token is an honest 403 gate —
+    // never a silent downgrade to the service UAMI.
+    let userToken: string | undefined;
+    const accessMode = normalizeAccessMode((item?.state as Record<string, unknown> | undefined)?.accessMode);
+    if (accessMode === 'user') {
+      const resolution = await resolveUserRead('user', 'kusto', {
+        oid: session.claims.oid,
+        clusterUri: clusterUri(),
+      });
+      if (resolution.mode === 'gate') {
+        return NextResponse.json(resolution.body, { status: resolution.status });
+      }
+      if (resolution.mode === 'user') userToken = resolution.token;
+    }
+
     const result = isMgmt
-      ? await executeMgmtCommand(database, kql)
-      : await executeQuery(database, kql);
+      ? await executeMgmtCommand(database, kql, { userToken })
+      : await executeQuery(database, kql, { userToken });
     // BR-COSTATTR — tag each ADX query for the chargeback per-user drill-down.
     if (!isMgmt) {
       void recordCostAttribution({
@@ -77,6 +98,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       ok: true,
       database,
       mode: isMgmt ? 'mgmt' : 'query',
+      accessMode,
       ...result,
       executedBy: session.claims.upn,
     });

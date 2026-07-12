@@ -76,9 +76,14 @@ import {
   loadContentBackedItem,
 } from '../../../_lib/pbi-content-fallback';
 import type { WorkspaceItem } from '@/lib/types/workspace';
+import { normalizeAccessMode } from '@/lib/azure/sql-access-mode';
+import { resolveUserRead } from '@/lib/azure/user-pool-registry';
 import { executePowerBiQueryPath } from '@/lib/report/executors/powerbi';
 import { executeAasQueryPath } from '@/lib/report/executors/aas';
-import { executeLoomNativeQueryPath } from '@/lib/report/executors/loom-native';
+import {
+  executeLoomNativeQueryPath,
+  type UserExecutionContext,
+} from '@/lib/report/executors/loom-native';
 import { executeConnectionQueryPath } from '@/lib/report/executors/connection';
 
 export const runtime = 'nodejs';
@@ -170,10 +175,47 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   }
 
   // ------------------------------------------------------------------
+  // EH-P1-OBO (#1800) — per-user data-access mode. Default 'service' is
+  // byte-identical to before. When this report was explicitly switched to
+  // "user's identity" (item.state.accessMode === 'user'):
+  //   • loom-native → resolve the caller's delegated Synapse SQL token via
+  //     user-pool-registry and execute the visual query AS THE USER;
+  //   • no delegated token → honest 403 gate naming the missing consent
+  //     (NEVER a silent downgrade to the service UAMI);
+  //   • connection / AAS backends → honest gate (user-identity execution is
+  //     not implemented for those executors yet — tracked follow-up).
+  // ------------------------------------------------------------------
+  const accessMode = normalizeAccessMode((item.state as Record<string, unknown> | undefined)?.accessMode);
+  let userExec: UserExecutionContext | undefined;
+  if (accessMode === 'user') {
+    if (resolved.backend !== 'loom-native') {
+      return NextResponse.json(
+        {
+          ok: false,
+          code: 'USER_MODE_UNSUPPORTED_BACKEND',
+          error:
+            "This report's data-access mode is \"user's identity\", which currently supports the " +
+            'Loom-native (Synapse) data source only. Switch the report back to the service ' +
+            'identity (PATCH /access-mode { accessMode: "service" }) or bind it to a Loom-native ' +
+            'Synapse source to run visuals as your own identity.',
+        },
+        { status: 403 },
+      );
+    }
+    const resolution = await resolveUserRead('user', 'sql', { oid: session.claims.oid });
+    if (resolution.mode === 'gate') {
+      return NextResponse.json(resolution.body, { status: resolution.status });
+    }
+    if (resolution.mode === 'user') {
+      userExec = { token: resolution.token, oid: session.claims.oid };
+    }
+  }
+
+  // ------------------------------------------------------------------
   // Path 3 — Loom-native SQL over Synapse (Azure-native DEFAULT)
   // ------------------------------------------------------------------
   if (resolved.backend === 'loom-native') {
-    return executeLoomNativeQueryPath(item, resolved, body.visual, filters, compileOpts);
+    return executeLoomNativeQueryPath(item, resolved, body.visual, filters, compileOpts, userExec);
   }
 
   // ------------------------------------------------------------------
