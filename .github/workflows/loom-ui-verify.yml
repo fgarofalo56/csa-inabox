@@ -47,7 +47,7 @@ permissions:
 
 env:
   # --- resolve console URL: workflow input → repo var → hardcoded default ---
-  LOOM_URL: ${{ inputs.console_url || vars.LOOM_VERIFY_URL || 'https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net' }}
+  LOOM_URL: ${{ inputs.console_url || vars.LOOM_VERIFY_URL || 'https://csa-loom.limitlessdata.ai' }}
   # --- automation identity (baked into the minted session cookie) -----------
   LOOM_AUTOMATION_OID:  ${{ vars.LOOM_AUTOMATION_OID  || '' }}
   LOOM_AUTOMATION_UPN:  ${{ vars.LOOM_AUTOMATION_UPN  || 'loom-verify@automation.local' }}

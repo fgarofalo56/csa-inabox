@@ -15,7 +15,7 @@ on:
       loom_url:
         description: 'Console URL to probe (default = old single-sub Front Door)'
         type: string
-        default: https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net
+        default: https://csa-loom.limitlessdata.ai
       sub:
         description: 'Subscription holding the admin plane / loom-console (default = old single-sub). For the migrated estate use the DMLZ sub <YOUR_DMLZ_SUBSCRIPTION_ID>.'
         type: string
