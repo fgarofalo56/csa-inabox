@@ -35,6 +35,13 @@
  *     The pane renders the spec inline via the shared queryAdHoc (POST …/query) and
  *     offers "Turn into a standard visual" (the same onApplyVisual path the Copilot
  *     uses) — a cross-table spec surfaces /query's honest code:'multi-table' 400.
+ *     ADDITIVELY enriched (OPEN-REGISTER P1-8a) with the bound semantic model's
+ *     persisted linguistic schema (`lib/azure/linguistic-schema.ts` —
+ *     `state.model.synonyms` → `buildLinguisticSchema`) when the report's data
+ *     source resolves to a Loom `semantic-model` item that has author-defined
+ *     synonyms. Best-effort, additive grounding only — never a gate: when the
+ *     bound model has no synonyms (or the lookup fails) the prompt is
+ *     byte-identical to the pre-wiring behavior.
  *
  * runtime nodejs, force-dynamic. Auth via getSession (401) THEN an ownership gate
  * on the path `id` (loadContentBackedItem / loadModelItem, tenant-scoped) — a
@@ -62,6 +69,8 @@ import {
   DESIGNER_VISUAL_TYPES,
   type DesignerVisualSpec,
 } from '@/lib/copilot/report-designer-tools';
+import { fromLegacyState } from '@/lib/editors/report/report-data-source';
+import { readSynonyms, buildLinguisticSchema, type LinguisticSchema } from '@/lib/azure/linguistic-schema';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -97,6 +106,27 @@ function serializeFields(fields: FieldsCtx | undefined): string {
     return `- ${t.name}: columns [${cols}]${meas ? ` · measures [${meas}]` : ''}`;
   });
   return `BOUND MODEL FIELDS (reference ONLY these — table.column for columns, the measure name for measures):\n${lines.join('\n')}`;
+}
+
+/**
+ * Render the bound model's persisted linguistic schema (author-defined synonyms
+ * from the Synonyms editor, `lib/azure/linguistic-schema.ts`) as a compact,
+ * ADDITIVE grounding block — business-language terms mapped to their real
+ * column/measure reference, ranked by author-set match weight. Returns '' when
+ * the model has no synonyms so callers can skip appending anything (byte-
+ * identical prompt when there is nothing to add).
+ */
+function serializeLinguisticSchema(schema: LinguisticSchema): string {
+  const terms = Object.keys(schema.termIndex).slice(0, 200);
+  if (terms.length === 0) return '';
+  const lines = terms.map((term) => {
+    const candidates = schema.termIndex[term].slice(0, 3).map((c) => c.reference).join(' or ');
+    return `- "${term}" → ${candidates}`;
+  });
+  return (
+    'BUSINESS TERM SYNONYMS (author-defined in the Synonyms editor — prefer the referenced field when the ' +
+    'question uses one of these terms):\n' + lines.join('\n')
+  );
 }
 
 /** Lowercased lookup sets for "field actually exists in the model" validation. */
@@ -256,6 +286,27 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     );
   }
 
+  // ADDITIVE grounding (OPEN-REGISTER P1-8a): when the report's data source
+  // resolves to a bound Loom `semantic-model` item, pull its persisted
+  // linguistic schema (author-defined synonyms) and append a business-term
+  // grounding block. Best-effort only — any failure (unbound source, item not
+  // found, direct-query with no scaffolded model yet) degrades to '' so the
+  // prompt is byte-identical to the pre-wiring behavior; this never blocks Q&A.
+  let linguisticBlock = '';
+  try {
+    const ds = fromLegacyState((owned.state || {}) as Record<string, unknown>);
+    const modelItemId =
+      ds?.kind === 'semantic-model' ? ds.itemId
+      : ds?.kind === 'direct-query' ? ds.modelItemId
+      : undefined;
+    if (modelItemId) {
+      const { synonyms } = await readSynonyms(modelItemId, 'semantic-model', session.claims.oid);
+      if (synonyms.length > 0) {
+        linguisticBlock = serializeLinguisticSchema(buildLinguisticSchema(synonyms));
+      }
+    }
+  } catch { /* best-effort enrichment only — never blocks Q&A */ }
+
   let raw: { type?: unknown; title?: unknown; wells?: unknown };
   try {
     raw = await aoaiCompleteJson<{ type?: unknown; title?: unknown; wells?: unknown }>(
@@ -276,7 +327,8 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
             'chart (bar/column/line/area/pie/donut/scatter) needs a category AND values; a card needs ' +
             'values; a table/matrix needs values (its columns); a slicer needs one category. Prefer the ' +
             'fewest fields that answer the question. Keep all fields in a SINGLE table when possible.\n\n' +
-            serializeFields(body.fields),
+            serializeFields(body.fields) +
+            (linguisticBlock ? '\n\n' + linguisticBlock : ''),
         },
         { role: 'user', content: question },
       ],
