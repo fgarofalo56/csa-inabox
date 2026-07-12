@@ -38,6 +38,7 @@ import { ObjectExplorer, toggleObjectExplorer } from './object-explorer';
 import { TabStrip } from './tab-strip';
 import { SavedStatus } from './saved-status';
 import { NotificationsButton } from './notifications-button';
+import { RunningWorkloadsButton } from './running-workloads-button';
 import { GlobalJobToaster } from './global-job-toaster';
 import { OnboardingTour, openTour } from './onboarding/onboarding-tour';
 import { SessionProvider, type ShellSession } from './session-context';
@@ -201,6 +202,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             <Button appearance="transparent" className={styles.iconBtn} icon={<CopilotIcon />}
               onClick={openCopilot} aria-label="Open Loom Copilot" data-tour="copilot" />
           </Tooltip>
+          <RunningWorkloadsButton />
           <NotificationsButton />
           <Tooltip content="Send feedback" relationship="label">
             <Button appearance="transparent" className={styles.iconBtn} icon={<ChatHelp24Regular />}
