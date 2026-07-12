@@ -37,6 +37,7 @@ import {
 import { CopilotIcon } from './icons/copilot-icon';
 import { NAV_SECTIONS, type NavItem } from '@/lib/nav/nav-items';
 import { useIsTenantAdmin } from './session-context';
+import { useNavCollapse, CollapseChevron } from './nav-collapse';
 
 // Fabric-parity left nav: top-level surfaces only, like the real Fabric portal.
 // Item types are reached from inside a workspace via the "+ New" item dialog.
@@ -128,6 +129,27 @@ const useStyles = makeStyles({
     letterSpacing: '0.06em',
     color: tokens.colorNeutralForeground3,
   },
+  // The header rendered as a real <button> so a whole section collapses on
+  // click / Enter / Space (keyboard-accessible). Resets native chrome and adds
+  // a subtle hover + a leading chevron; matches the caption styling above.
+  sectionHeaderBtn: {
+    background: 'none',
+    border: 'none',
+    width: '100%',
+    cursor: 'pointer',
+    gap: tokens.spacingHorizontalXS,
+    borderRadius: tokens.borderRadiusMedium,
+    ':hover': { backgroundColor: tokens.colorNeutralBackground2Hover },
+    ':focus-visible': {
+      outline: `2px solid ${tokens.colorStrokeFocus2}`,
+      outlineOffset: '-2px',
+    },
+  },
+  sectionHeaderChevron: {
+    display: 'inline-flex',
+    color: tokens.colorNeutralForeground3,
+    flexShrink: 0,
+  },
   // Adds a hairline above a group to separate sections; also the visual
   // separator used in the collapsed (icon-only) rail where headers are hidden.
   sectionDivider: {
@@ -148,6 +170,8 @@ export function LeftNav({ collapsed = false }: { collapsed?: boolean }) {
   // (Admin portal, Setup & landing zones) for non-admins so they never
   // land in a per-page 403. Fail-closed — hidden until positively confirmed.
   const isTenantAdmin = useIsTenantAdmin();
+  // Per-user persisted expand/collapse for each labeled rail section (rel-T45).
+  const { collapsed: isCollapsed, toggle: toggleSection } = useNavCollapse();
 
   // Render a single destination row (Link) or the "+ Create" action (button).
   const renderItem = (item: NavItem) => {
@@ -201,12 +225,31 @@ export function LeftNav({ collapsed = false }: { collapsed?: boolean }) {
         // and no top divider. Every later section gets a hairline divider; when
         // expanded it also gets its uppercase caption header.
         const separated = sectionIndex > 0;
+        // Section collapse only applies in the expanded rail (icon-only rail
+        // hides headers, so there's nothing to click to re-expand).
+        const collapsible = separated && !collapsed && !!section.label;
+        const key = section.label ?? 'primary';
+        const sectionCollapsed = collapsible && isCollapsed(key);
+        const regionId = `nav-section-${sectionIndex}`;
         return (
-          <div key={section.label ?? 'primary'} className={separated ? styles.sectionDivider : undefined}>
-            {separated && !collapsed && section.label && (
-              <div className={styles.sectionHeader}>{section.label}</div>
+          <div key={key} className={separated ? styles.sectionDivider : undefined}>
+            {collapsible && (
+              <button
+                type="button"
+                className={`${styles.sectionHeader} ${styles.sectionHeaderBtn}`}
+                aria-expanded={!sectionCollapsed}
+                aria-controls={regionId}
+                onClick={() => toggleSection(key)}
+              >
+                <span className={styles.sectionHeaderChevron} aria-hidden>
+                  <CollapseChevron open={!sectionCollapsed} />
+                </span>
+                {section.label}
+              </button>
             )}
-            {visible.map(renderItem)}
+            <div id={collapsible ? regionId : undefined} role={collapsible ? 'group' : undefined} hidden={sectionCollapsed}>
+              {visible.map(renderItem)}
+            </div>
           </div>
         );
       })}

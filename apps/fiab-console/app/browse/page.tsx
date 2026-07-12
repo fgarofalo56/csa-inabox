@@ -49,13 +49,8 @@ import { ItemTile } from '@/lib/components/ui/item-tile';
 import { TileGrid } from '@/lib/components/ui/tile-grid';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { itemVisual } from '@/lib/components/ui/item-type-visual';
+import { usePins, type PinnedItem } from '@/lib/components/pin-store';
 
-interface Pin {
-  id: string;
-  label: string;
-  href: string;
-  type?: string;
-}
 interface WorkspaceLite {
   id: string;
   name: string;
@@ -128,7 +123,9 @@ export default function BrowsePage() {
   const styles = useStyles();
   const router = useRouter();
 
-  const [pins, setPins] = useState<Pin[] | null>(null);
+  // Pinned items come from the shared pin-store (real Cosmos persistence) so
+  // this list updates live the moment a user pins/unpins anywhere on the page.
+  const { pins } = usePins();
   const [workspaces, setWorkspaces] = useState<WorkspaceLite[] | null>(null);
   const [q, setQ] = useState('');
   const [view, setView] = useState<LoomView>('tile');
@@ -152,12 +149,6 @@ export default function BrowsePage() {
   }, [view]);
 
   useEffect(() => {
-    clientFetch('/api/user-prefs?key=pinnedItems')
-      .then((r) => r.json())
-      .then((d) => {
-        setPins(Array.isArray(d?.value) ? d.value : []);
-      })
-      .catch(() => setPins([]));
     clientFetch('/api/workspaces')
       .then((r) => r.json())
       .then((d) => {
@@ -193,7 +184,7 @@ export default function BrowsePage() {
 
   // Group pins by type so users find them when the list grows past a few.
   const groupedPins = useMemo(() => {
-    const groups = new Map<string, Pin[]>();
+    const groups = new Map<string, PinnedItem[]>();
     for (const p of visiblePins) {
       const key = (p.type || 'other').toLowerCase();
       if (!groups.has(key)) groups.set(key, []);
@@ -316,6 +307,7 @@ export default function BrowsePage() {
                   title={p.label}
                   subtitle={itemVisual(p.type ?? 'workspace').label}
                   onClick={() => router.push(p.href)}
+                  pinTarget={{ id: p.id, label: p.label, href: p.href, type: p.type }}
                 />
               ))}
             </TileGrid>
@@ -390,6 +382,7 @@ export default function BrowsePage() {
                         : undefined
                   }
                   onClick={() => router.push(`/workspaces/${w.id}`)}
+                  pinTarget={{ id: `workspace:${w.id}`, label: w.name, href: `/workspaces/${w.id}`, type: 'workspace' }}
                 />
               ))}
             </TileGrid>

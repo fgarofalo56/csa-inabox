@@ -20,6 +20,8 @@
 import * as React from 'react';
 import { Text, Badge, makeStyles, tokens, mergeClasses } from '@fluentui/react-components';
 import { itemVisual } from './item-type-visual';
+import { PinButton } from '../pin-button';
+import type { PinnedItem } from '../pin-store';
 
 export interface ItemTileProps {
   /** Item-type slug — drives icon + color. */
@@ -61,6 +63,13 @@ export interface ItemTileProps {
    * the `overflowMenu` slot, whose clicks are already isolated from `onClick`).
    */
   selected?: boolean;
+  /**
+   * When set, renders a pin/unpin toggle in the tile's top-right. The toggle is
+   * backed by the shared pin-store (real Cosmos persistence) and stays in sync
+   * with the left-nav Pinned section. Its click is isolated from the tile's own
+   * `onClick`, so pinning never also opens the item.
+   */
+  pinTarget?: PinnedItem;
 }
 
 /** Tier a sensitivity-label name onto a Fluent Badge colour. */
@@ -182,6 +191,7 @@ export function ItemTile({
   size = 'md',
   selected = false,
   leadingVisual,
+  pinTarget,
 }: ItemTileProps): React.ReactElement {
   const styles = useStyles();
   const visual = itemVisual(type);
@@ -258,9 +268,19 @@ export function ItemTile({
             </Badge>
           )}
         </span>
-        {(badge != null || overflowMenu != null) && (
+        {(badge != null || overflowMenu != null || pinTarget != null) && (
           <span className={styles.headTrailing}>
             {badge != null && <span className={styles.badge}>{badge}</span>}
+            {pinTarget != null && (
+              <span
+                className={styles.overflow}
+                onClick={(e) => e.stopPropagation()}
+                onKeyDown={(e) => e.stopPropagation()}
+                role="presentation"
+              >
+                <PinButton pin={pinTarget} />
+              </span>
+            )}
             {overflowMenu != null && (
               <span
                 className={styles.overflow}

@@ -19,6 +19,7 @@ import {
 import { FABRIC_ITEM_TYPES } from '@/lib/catalog/fabric-item-types';
 import { itemVisual } from '@/lib/components/ui/item-type-visual';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
+import { PinButton } from '@/lib/components/pin-button';
 
 interface Item {
   id: string; itemType: string; workspaceId: string;
@@ -133,6 +134,19 @@ export function AllItemsExplorer() {
       key: 'modifiedMs', label: 'Modified', sortable: true, width: 150,
       getValue: (r) => r.modifiedMs,
       render: (r) => <Caption1>{r.updatedAt ? new Date(r.updatedAt).toLocaleDateString() : '—'}</Caption1>,
+    },
+    {
+      key: 'pin', label: '', sortable: false, width: 44,
+      render: (r) => (
+        <PinButton
+          pin={{
+            id: `item:${r.itemType}:${r.id}`,
+            label: r.displayName || r.typeLabel,
+            href: `/items/${r.itemType}/${r.id}`,
+            type: r.itemType,
+          }}
+        />
+      ),
     },
   ];
 
