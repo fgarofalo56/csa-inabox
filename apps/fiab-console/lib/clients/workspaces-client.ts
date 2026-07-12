@@ -27,7 +27,7 @@ import {
   itemsContainer,
   workspaceRolesContainer,
 } from '@/lib/azure/cosmos-client';
-import type { Workspace } from '@/lib/types/workspace';
+import type { Workspace, WorkspaceImageMeta } from '@/lib/types/workspace';
 
 /** Explicit lifecycle enum (no free-form string — per loom-no-freeform-config). */
 export type WorkspaceState = 'Active' | 'Provisioning' | 'Suspended' | 'Deleted';
@@ -59,6 +59,8 @@ export interface WorkspaceAdminRecord {
   lastActivity: string;
   /** Resolved owner set: creator + every Admin-role principal on the workspace. */
   owners: string[];
+  /** Power BI-style workspace image pointer (drives the admin-list row avatar). */
+  image?: WorkspaceImageMeta;
 }
 
 interface RawWorkspaceDoc {
@@ -73,6 +75,7 @@ interface RawWorkspaceDoc {
   domain?: string;
   storageAccountId?: string;
   state?: string;
+  image?: WorkspaceImageMeta;
 }
 
 /**
@@ -182,6 +185,7 @@ export async function listAllWorkspacesAdmin(): Promise<AdminWorkspacesResult> {
       itemCount: counts.get(w.id) ?? 0,
       lastActivity: lastActivity.get(w.id) ?? w.updatedAt ?? w.createdAt ?? '',
       owners: Array.from(owners),
+      ...(w.image ? { image: w.image } : {}),
     };
   });
 

@@ -42,6 +42,7 @@ import { SparkComputePane } from '@/lib/panes/spark-compute';
 import { LifecycleRulesPanel } from '@/lib/components/onelake/lifecycle-rules';
 import { CmkPane } from '@/lib/panes/cmk';
 import { PowerBiTree } from '@/lib/components/powerbi/powerbi-tree';
+import { WorkspaceImageEditor } from '@/lib/components/workspace-image-editor';
 
 interface Props {
   workspace: Workspace;
@@ -71,7 +72,7 @@ const useStyles = makeStyles({
   },
 });
 
-type TabId = 'general' | 'permissions' | 'networking' | 'git' | 'onelake' | 'encryption' | 'spark' | 'powerbi' | 'sensitivity' | 'danger';
+type TabId = 'general' | 'image' | 'permissions' | 'networking' | 'git' | 'onelake' | 'encryption' | 'spark' | 'powerbi' | 'sensitivity' | 'danger';
 
 // ---------------------------------------------------------------------------
 // Orphaned-resource disclosure (rel-T101)
@@ -150,6 +151,7 @@ export function WorkspaceSettingsDrawer({ workspace, open: openProp, onOpenChang
         <DrawerBody>
           <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as TabId)} vertical>
             <Tab value="general">General</Tab>
+            <Tab value="image">Image</Tab>
             <Tab value="permissions">Permissions</Tab>
             <Tab value="networking">Networking</Tab>
             <Tab value="git">Git integration</Tab>
@@ -162,6 +164,7 @@ export function WorkspaceSettingsDrawer({ workspace, open: openProp, onOpenChang
           </TabList>
           <div style={{ marginTop: tokens.spacingVerticalL }}>
             {tab === 'general' && <GeneralSection workspace={workspace} onSaved={() => qc.invalidateQueries({ queryKey: ['workspace', workspace.id] })} />}
+            {tab === 'image' && <ImageSection workspace={workspace} onSaved={() => { qc.invalidateQueries({ queryKey: ['workspace', workspace.id] }); qc.invalidateQueries({ queryKey: ['workspaces'] }); }} />}
             {tab === 'permissions' && <ManageAccessPane workspaceId={workspace.id} embeddedMode />}
             {tab === 'networking' && <NetworkingPane workspaceId={workspace.id} />}
             {tab === 'git' && <GitIntegrationPane workspaceId={workspace.id} embeddedMode />}
@@ -224,6 +227,27 @@ function GeneralSection({ workspace, onSaved }: { workspace: Workspace; onSaved:
           {mut.isPending ? 'Saving…' : 'Save'}
         </Button>
       </div>
+    </div>
+  );
+}
+
+// ------------------------------ Workspace image ------------------------------
+// Power BI / Fabric workspace-image parity. Delegates to the shared
+// WorkspaceImageEditor (upload a file OR pick a preset), the same control the
+// admin settings pane renders. On save we notify the item-saved bus + let the
+// parent invalidate the workspace query so the header avatar refreshes.
+
+function ImageSection({ workspace, onSaved }: { workspace: Workspace; onSaved: () => void }) {
+  const styles = useStyles();
+  return (
+    <div className={styles.section}>
+      <WorkspaceImageEditor
+        workspace={workspace}
+        onSaved={() => {
+          onSaved();
+          window.dispatchEvent(new CustomEvent('loom:item-saved', { detail: { label: 'workspace image' } }));
+        }}
+      />
     </div>
   );
 }

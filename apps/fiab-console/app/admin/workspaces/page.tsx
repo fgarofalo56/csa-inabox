@@ -13,7 +13,7 @@ import {
   MessageBar, MessageBarBody, MessageBarTitle,
   makeStyles, tokens, mergeClasses,
 } from '@fluentui/react-components';
-import { ArrowSync24Regular, Open16Regular, Folder24Regular, Add24Regular, Settings20Regular } from '@fluentui/react-icons';
+import { ArrowSync24Regular, Open16Regular, Add24Regular, Settings20Regular } from '@fluentui/react-icons';
 import { AdminShell } from '@/lib/components/admin-shell';
 import { Section, Toolbar } from '@/lib/components/ui/section';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
@@ -21,6 +21,7 @@ import { useAdminTabStyles } from '@/lib/components/ui/admin-tab-styles';
 import { WorkspaceCreateWizard } from '@/lib/wizards/workspace-create';
 import { WorkspaceSettingsPane } from '@/lib/panes/workspace-settings';
 import { AzureConnectionsPane } from '@/lib/panes/azure-connections';
+import { WorkspaceAvatar } from '@/lib/components/workspace-avatar';
 
 interface Workspace {
   id: string; name: string; description?: string;
@@ -28,16 +29,13 @@ interface Workspace {
   capacity?: string; domain?: string;
   itemCount: number; lastActivity?: string;
   state?: string;
+  /** Power BI-style workspace image pointer (drives the row avatar). */
+  image?: { updatedAt?: string } | null;
 }
 
 const useStyles = makeStyles({
   intro: { color: tokens.colorNeutralForeground3, marginBottom: tokens.spacingVerticalL },
   nameCell: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, minWidth: 0 },
-  icon: {
-    flexShrink: 0, width: '32px', height: '32px', borderRadius: tokens.borderRadiusMedium,
-    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-    backgroundColor: tokens.colorPaletteBlueBackground2, color: tokens.colorPaletteBlueForeground2,
-  },
   nameText: { display: 'flex', flexDirection: 'column', minWidth: 0 },
   openLink: { display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, fontSize: tokens.fontSizeBase200 },
   errorText: { overflowWrap: 'anywhere', wordBreak: 'break-word' },
@@ -122,7 +120,7 @@ export default function AdminWorkspacesPage() {
       key: 'name', label: 'Name', width: 280, getValue: (w) => w.name,
       render: (w) => (
         <span className={s.nameCell}>
-          <span className={s.icon} aria-hidden><Folder24Regular className={a.iconSm} /></span>
+          <WorkspaceAvatar workspaceId={w.id} name={w.name} image={w.image} size={32} />
           <span className={s.nameText}>
             <strong title={w.name} className={a.ellipsis}>{w.name}</strong>
             {w.description && (
@@ -268,7 +266,7 @@ export default function AdminWorkspacesPage() {
             ...w,
             name: updated.name, description: updated.description,
             capacity: updated.capacity, domain: updated.domain,
-            updatedAt: updated.updatedAt,
+            image: updated.image, updatedAt: updated.updatedAt,
           } : w));
         }}
       />
