@@ -380,6 +380,86 @@ export async function updateContainerAppImage(name: string, image: string): Prom
   return { name, fromImage, toImage: image, provisioningState };
 }
 
+/**
+ * Return the image ref the app's matching container currently runs
+ * (e.g. `myacr.azurecr.io/loom-console:0.64.1`), or null when the app has no
+ * containers / no image. Throws AcaArmError(404) when the app is not deployed
+ * on this boundary — callers use that to skip apps that don't exist here.
+ *
+ * The in-product updater reads this so it can roll each app to the SAME
+ * registry it already pulls from (the deployment's private ACR) at a new tag,
+ * instead of a public-ghcr image that a locked-down tenant never published.
+ */
+export async function getContainerAppImage(name: string): Promise<string | null> {
+  const raw = await getContainerAppRaw(name);
+  const containers = raw?.properties?.template?.containers;
+  if (!Array.isArray(containers) || containers.length === 0) return null;
+  const c = containers.find((x: any) => x?.name === name) || containers[0];
+  const img = c?.image;
+  return typeof img === 'string' && img.trim() ? img.trim() : null;
+}
+
+/**
+ * HEAD-equivalent existence probe for a manifest in an Azure Container Registry,
+ * authenticated with the Console UAMI via the standard ACR AAD token exchange
+ * (the same flow `az acr login --expose-token` uses):
+ *   1. Acquire an ARM-audience AAD access token (the credential already used for
+ *      every ARM call — the UAMI holds AcrPull on the deployment's ACR).
+ *   2. POST it to `https://<registry>/oauth2/exchange` → an ACR refresh token.
+ *   3. POST that to `https://<registry>/oauth2/token?scope=repository:<repo>:pull`
+ *      → a short-lived ACR access token scoped to a pull.
+ *   4. GET `/v2/<repo>/manifests/<tag>` with that token — 200 means the tag
+ *      exists. Returns the final HTTP status (or the failing step's status) so
+ *      the updater's pre-flight can report an honest, accurate gate. Never
+ *      throws — a transport failure resolves to 0 (treated as "missing").
+ *
+ * Real ACR REST only (no mocks). Private-registry equivalent of the ghcr
+ * anonymous-token probe in the update BFF.
+ */
+export async function acrManifestExists(registry: string, repo: string, tag: string): Promise<number> {
+  try {
+    const aad = await credential.getToken(ARM_SCOPE);
+    if (!aad?.token) return 401;
+    const tenant = process.env.LOOM_TENANT_ID || process.env.AZURE_TENANT_ID || '';
+    const exch = await fetchWithTimeout(`https://${registry}/oauth2/exchange`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'access_token',
+        service: registry,
+        ...(tenant ? { tenant } : {}),
+        access_token: aad.token,
+      }).toString(),
+    });
+    if (!exch.ok) return exch.status;
+    const refreshToken = (await exch.json().catch(() => ({})) as any)?.refresh_token;
+    if (!refreshToken) return 401;
+    const tok = await fetchWithTimeout(`https://${registry}/oauth2/token`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'refresh_token',
+        service: registry,
+        scope: `repository:${repo}:pull`,
+        refresh_token: refreshToken,
+      }).toString(),
+    });
+    if (!tok.ok) return tok.status;
+    const accessToken = (await tok.json().catch(() => ({})) as any)?.access_token;
+    if (!accessToken) return 401;
+    const accept =
+      'application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, ' +
+      'application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json';
+    const r = await fetchWithTimeout(`https://${registry}/v2/${repo}/manifests/${tag}`, {
+      method: 'GET',
+      headers: { Accept: accept, Authorization: `Bearer ${accessToken}` },
+    });
+    return r.status;
+  } catch {
+    return 0;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // MCP deploy + Azure Files mount (persistence)
 // ---------------------------------------------------------------------------

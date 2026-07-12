@@ -159,8 +159,20 @@ export type PreflightResult = PreflightGate | PreflightOk;
 export interface UpdateDeps {
   /** Fetch upstream releases (most-recent first). */
   listReleases: () => Promise<GhRelease[]>;
-  /** HEAD a ghcr manifest. Resolves to the HTTP status (200 = exists). */
+  /** HEAD a container manifest (ghcr OR the app's own registry). Resolves to the HTTP status (200 = exists). */
   headImage: (ref: string) => Promise<number>;
+  /**
+   * Resolve the target image ref for an app at the new version — PREFERRING the
+   * registry the app already pulls from (the deployment's private ACR) at the
+   * new tag, so the in-place roll needs no public-ghcr dependency and reuses the
+   * identity-based pull the app already has. Return:
+   *   - a ref string  → probe + roll to it,
+   *   - 'skip'        → the app is not deployed on this boundary (exclude it),
+   *   - null          → could not resolve; fall back to the public ghcr ref.
+   * Optional: when absent, pre-flight uses the public ghcr ref for every app
+   * (the original clone-and-deploy behavior — back-compat for existing callers).
+   */
+  resolveImage?: (app: LoomApp, imageVersion: string) => Promise<string | 'skip' | null>;
   /** True when ARM is configured (returns the missing env list otherwise). */
   armConfig: () => { configured: boolean; missing: string[] };
   /** The currently-running version (bare or tagged). */
@@ -257,10 +269,22 @@ export async function preflight(deps: UpdateDeps, owner = DEFAULT_GHCR_OWNER): P
     }
   }
 
-  // (c) HEAD every app's target image — refuse if any are missing.
+  // (c) Resolve + HEAD every deployed app's target image — refuse if any are
+  // missing. Each app's target PREFERS its own current registry (the private
+  // ACR the deployment already pulls from) at the new tag; a public ghcr ref is
+  // the fallback only when the current registry can't be resolved (the
+  // clone-and-deploy channel). Apps that resolve to 'skip' are not deployed on
+  // this boundary and are excluded from both the probe set and the roll plan.
   const probes: ImageProbe[] = [];
+  const plan: PreflightOk['plan'] = [];
   for (const app of LOOM_APPS) {
-    const ref = imageRef(app, owner, imageVersion);
+    let resolved: string | 'skip' | null = null;
+    if (deps.resolveImage) {
+      try { resolved = await deps.resolveImage(app, imageVersion); }
+      catch { resolved = null; }
+    }
+    if (resolved === 'skip') continue; // not deployed on this boundary
+    const ref = resolved || imageRef(app, owner, imageVersion);
     let status = 0;
     try {
       status = await deps.headImage(ref);
@@ -268,6 +292,7 @@ export async function preflight(deps: UpdateDeps, owner = DEFAULT_GHCR_OWNER): P
       status = 0;
     }
     probes.push({ app: app.acaName, ref, exists: status === 200, status });
+    plan.push({ app: app.image, acaName: app.acaName, toImage: ref });
   }
   const missingImages = probes.filter((p) => !p.exists);
   if (missingImages.length > 0) {
@@ -275,10 +300,11 @@ export async function preflight(deps: UpdateDeps, owner = DEFAULT_GHCR_OWNER): P
       ok: false,
       reason: 'images-not-published',
       message:
-        `Target release ${target.tag_name} images are not all published to ${GHCR_REGISTRY}/${owner} yet ` +
-        `(${missingImages.length}/${LOOM_APPS.length} missing). ` +
-        'The release CI (.github/workflows/publish-ghcr-images.yml) must finish publishing the public images ' +
-        'before this update can roll. Re-check shortly.',
+        `Target release ${target.tag_name} images are not all available yet ` +
+        `(${missingImages.length}/${probes.length} missing — the exact refs are listed below). ` +
+        'The updater rolls each app to the registry it already pulls from: build/push the release images ' +
+        'to your deployment\'s registry (private ACR: run the release image build workflow into it; ' +
+        `public ghcr: publish + make the ${GHCR_REGISTRY}/${owner} packages public), then re-check.`,
       missingImages,
     };
   }
@@ -289,11 +315,7 @@ export async function preflight(deps: UpdateDeps, owner = DEFAULT_GHCR_OWNER): P
     target,
     imageVersion,
     owner,
-    plan: LOOM_APPS.map((app) => ({
-      app: app.image,
-      acaName: app.acaName,
-      toImage: imageRef(app, owner, imageVersion),
-    })),
+    plan,
     probes,
   };
 }

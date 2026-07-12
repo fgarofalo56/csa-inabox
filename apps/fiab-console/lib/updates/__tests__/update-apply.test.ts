@@ -157,6 +157,70 @@ describe('preflight gates', () => {
   });
 });
 
+describe('registry-aware image resolution (the real "button never worked" fix)', () => {
+  it('rolls each app to its OWN registry (private ACR) at the new tag, not public ghcr', async () => {
+    // The bug: the updater hard-probed ghcr.io/<owner>/loom-* images that a
+    // locked-down tenant never published, so pre-flight always gated. With
+    // resolveImage returning the app's current ACR registry + new tag, the plan
+    // targets the registry the app already pulls from — no ghcr dependency.
+    const probed: string[] = [];
+    const pre = await preflight(baseDeps({
+      resolveImage: async (app, imageVersion) => `myacr.azurecr.io/${app.image}:${imageVersion}`,
+      headImage: async (ref) => { probed.push(ref); return 200; },
+    }));
+    expect(pre.ok).toBe(true);
+    if (!pre.ok) throw new Error('expected ok');
+    expect(pre.plan.every((p) => p.toImage.startsWith('myacr.azurecr.io/'))).toBe(true);
+    expect(pre.plan.every((p) => p.toImage.endsWith(':0.43.1'))).toBe(true);
+    // NOTHING was probed against public ghcr.
+    expect(probed.every((r) => r.startsWith('myacr.azurecr.io/'))).toBe(true);
+    expect(probed.some((r) => r.startsWith('ghcr.io/'))).toBe(false);
+  });
+
+  it("falls back to the public ghcr ref when resolveImage returns null", async () => {
+    const pre = await preflight(baseDeps({
+      resolveImage: async () => null, // cannot resolve the current registry
+    }));
+    expect(pre.ok).toBe(true);
+    if (!pre.ok) throw new Error('expected ok');
+    expect(pre.plan.every((p) => p.toImage.startsWith('ghcr.io/'))).toBe(true);
+  });
+
+  it("excludes apps that resolve to 'skip' (not deployed on this boundary) from probe + plan", async () => {
+    const pre = await preflight(baseDeps({
+      resolveImage: async (app, imageVersion) =>
+        app.acaName === 'loom-copilot-maf' ? 'skip' : `myacr.azurecr.io/${app.image}:${imageVersion}`,
+    }));
+    expect(pre.ok).toBe(true);
+    if (!pre.ok) throw new Error('expected ok');
+    expect(pre.plan.length).toBe(LOOM_APPS.length - 1);
+    expect(pre.plan.some((p) => p.acaName === 'loom-copilot-maf')).toBe(false);
+    expect(pre.probes.some((p) => p.app === 'loom-copilot-maf')).toBe(false);
+  });
+
+  it('gates images-not-published against the ACTUAL resolved ref when the ACR tag is missing', async () => {
+    const pre = await preflight(baseDeps({
+      resolveImage: async (app, imageVersion) => `myacr.azurecr.io/${app.image}:${imageVersion}`,
+      headImage: async (ref) => (ref.includes('loom-console') ? 404 : 200),
+    }));
+    expect(pre.ok).toBe(false);
+    if (pre.ok) throw new Error('expected gate');
+    expect(pre.reason).toBe('images-not-published');
+    expect(pre.missingImages?.[0].ref).toBe('myacr.azurecr.io/loom-console:0.43.1');
+    // The gate message no longer misdiagnoses this as "CI still publishing".
+    expect(pre.message).not.toMatch(/publish-ghcr-images\.yml/);
+  });
+
+  it('a resolveImage that throws degrades to the ghcr fallback (never crashes pre-flight)', async () => {
+    const pre = await preflight(baseDeps({
+      resolveImage: async () => { throw new Error('ARM GET blew up'); },
+    }));
+    expect(pre.ok).toBe(true);
+    if (!pre.ok) throw new Error('expected ok');
+    expect(pre.plan.every((p) => p.toImage.startsWith('ghcr.io/'))).toBe(true);
+  });
+});
+
 describe('applyRoll', () => {
   const plan: PreflightOk['plan'] = [
     { app: 'loom-mcp', acaName: 'loom-mcp', toImage: 'ghcr.io/x/loom-mcp:0.43.1' },

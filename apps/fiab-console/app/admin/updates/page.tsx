@@ -338,7 +338,7 @@ export default function UpdatesPage() {
       sectionTitle="Updates & version sync"
       learn={{
         title: 'Updates & version sync',
-        content: 'Loom is open source and continuously updated. This page shows your running build, the latest version published upstream on GitHub, and the release notes in between. When an update is available you can apply it in place — Loom rolls your Container Apps onto the new release public images directly, with no repo clone or CI run required.',
+        content: 'Loom is open source and continuously updated. This page shows your running build, the latest version published upstream on GitHub, and the release notes in between. When an update is available you can apply it in place — Loom rolls your Container Apps onto the new release images in the registry your deployment already pulls from (your private ACR, or public ghcr for a clone-and-deploy install), with no repo clone or CI run required.',
         tips: [
           'Re-check pulls the latest upstream tag from GitHub; an honest note shows if GitHub is unreachable.',
           'Applying an update rolls your Container Apps to the published images — no rebuild needed.',
@@ -359,7 +359,8 @@ export default function UpdatesPage() {
         Loom is open source and continuously updated. This page shows your running build,
         the latest version published upstream, and any release notes between them. When an
         update is available you can apply it in place — Loom rolls your Container Apps to the
-        new release&apos;s public images directly, with no repo clone or CI run required.
+        new release&apos;s images in the registry they already pull from, with no repo clone or
+        CI run required.
       </Body1>
       {loading ? (
         <Section><Spinner size="small" label="Checking for updates…" labelPosition="after" /></Section>
@@ -404,8 +405,9 @@ export default function UpdatesPage() {
                       <DialogBody>
                         <DialogTitle>Update Loom to {info.upstream.tag}?</DialogTitle>
                         <DialogContent>
-                          This rolls your Loom Container Apps to the public <code>{info.upstream.tag}</code> release
-                          images and briefly restarts them. The console itself is rolled last, so you may see a short
+                          This rolls your Loom Container Apps to the <code>{info.upstream.tag}</code> release
+                          images in the registry they already pull from, and briefly restarts them. The console
+                          itself is rolled last, so you may see a short
                           reconnect at the end. No data is deleted; only the application images change.
                           <ul className={s.dialogList}>
                             <li>Each app is updated one at a time, with live status below.</li>
