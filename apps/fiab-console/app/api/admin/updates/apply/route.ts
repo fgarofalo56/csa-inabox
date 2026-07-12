@@ -23,6 +23,8 @@ import { emitAuditEvent } from '@/lib/admin/audit-stream';
 import {
   updateContainerAppImage,
   getContainerApp,
+  getContainerAppImage,
+  acrManifestExists,
   AcaArmError,
 } from '@/lib/azure/container-apps-arm-client';
 import {
@@ -63,7 +65,7 @@ async function listReleases(): Promise<GhRelease[]> {
  * WWW-Authenticate challenge; we fetch an anonymous pull token from the realm
  * and retry. A 200 means the manifest exists. Returns the final HTTP status.
  */
-async function headImage(ref: string): Promise<number> {
+async function headGhcrImage(ref: string): Promise<number> {
   // ref = ghcr.io/<owner>/<image>:<tag>
   const withoutHost = ref.replace(`${GHCR_REGISTRY}/`, '');
   const lastColon = withoutHost.lastIndexOf(':');
@@ -108,6 +110,53 @@ async function headImage(ref: string): Promise<number> {
   return res.status;
 }
 
+/**
+ * Registry-aware manifest existence probe. The updater rolls each app to the
+ * registry it already pulls from, so a ref may be a private ACR image
+ * (`<name>.azurecr.io/<repo>:<tag>`) or a public ghcr image. Dispatch to the
+ * correct auth path: ACR → UAMI AAD token exchange (acrManifestExists); ghcr /
+ * anything else → the anonymous pull-token HEAD above. Returns the HTTP status.
+ */
+async function headImage(ref: string): Promise<number> {
+  const host = ref.split('/')[0];
+  if (host.endsWith('.azurecr.io')) {
+    const withoutHost = ref.slice(host.length + 1);
+    const lastColon = withoutHost.lastIndexOf(':');
+    const repo = lastColon > 0 ? withoutHost.slice(0, lastColon) : withoutHost;
+    const tag = lastColon > 0 ? withoutHost.slice(lastColon + 1) : 'latest';
+    return acrManifestExists(host, repo, tag);
+  }
+  return headGhcrImage(ref);
+}
+
+/**
+ * Resolve an app's target image ref, preferring the registry it already runs
+ * from (the deployment's private ACR) at the new version tag so the in-place
+ * roll needs no public-ghcr dependency. Resolution order:
+ *   1. LOOM_UPDATE_IMAGE_REGISTRY override → `<registry>/<image>:<version>`.
+ *   2. The app's CURRENT image, with the tag swapped to the new version.
+ *   3. 'skip' when the app is not deployed on this boundary (ARM 404).
+ *   4. null → let pre-flight fall back to the public ghcr ref.
+ */
+async function resolveTargetImage(
+  app: { acaName: string; image: string },
+  imageVersion: string,
+): Promise<string | 'skip' | null> {
+  const override = (process.env.LOOM_UPDATE_IMAGE_REGISTRY || '').trim().replace(/\/+$/, '');
+  if (override) return `${override}/${app.image}:${imageVersion}`;
+  try {
+    const current = await getContainerAppImage(app.acaName);
+    if (!current) return null; // deployed but no image → ghcr fallback
+    const lastColon = current.lastIndexOf(':');
+    const lastSlash = current.lastIndexOf('/');
+    const base = lastColon > lastSlash ? current.slice(0, lastColon) : current;
+    return `${base}:${imageVersion}`;
+  } catch (e) {
+    if (e instanceof AcaArmError && e.status === 404) return 'skip'; // not deployed here
+    return null; // any other error → ghcr fallback (still an honest probe)
+  }
+}
+
 function armConfig(): { configured: boolean; missing: string[] } {
   const missing: string[] = [];
   if (!process.env.LOOM_SUBSCRIPTION_ID) missing.push('LOOM_SUBSCRIPTION_ID');
@@ -119,6 +168,7 @@ function deps(): UpdateDeps {
   return {
     listReleases,
     headImage,
+    resolveImage: resolveTargetImage,
     armConfig,
     currentVersion: CURRENT_VERSION,
     // Compat manifest inputs (rel-T41): compare the release's newly-required env
