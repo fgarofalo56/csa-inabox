@@ -117,17 +117,31 @@ RUN set -euo pipefail; \
     chown -R runner:runner /home/runner/actions-runner
 
 # ---------------------------------------------------------------------------
-# OPTIONAL — Playwright layer (UAT). Uncomment to bake browsers + OS deps into
-# the runner image so `pnpm uat` / Playwright specs run without per-job
-# `npx playwright install`. Adds ~600MB; leave commented unless this runner is
-# the UAT runner. Pin the version to the repo's @playwright/test.
-# USER root
-# RUN set -euo pipefail; \
-#     npx --yes playwright@1.48.0 install --with-deps chromium
+# Playwright layer (UAT) — browsers + OS deps baked into the runner image so
+# `loom-ui-verify` / Playwright specs run without a per-job `npx playwright
+# install` (the in-VNet runner's egress is firewall-restricted, so the runtime
+# CDN download fails). Adds ~600MB. Pinned to the repo's @playwright/test.
+# PLAYWRIGHT_BROWSERS_PATH puts the browsers in a shared, world-readable path —
+# installing as root without it lands them under /root/.cache where the
+# non-root `runner` user cannot see them at job time.
+USER root
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+RUN set -euo pipefail; \
+    # 1.60.0 = the lockfile's RESOLVED @playwright/test (package.json says ^1.48.0
+    # but pnpm-lock resolves 1.60.0). The baked chromium build revision must match
+    # the tests' playwright or it errors "Executable doesn't exist" at run time.
+    npx --yes playwright@1.60.0 install --with-deps chromium; \
+    chmod -R a+rX /ms-playwright
 # ---------------------------------------------------------------------------
 
 COPY --chown=runner:runner entrypoint.sh /home/runner/actions-runner/entrypoint.sh
-RUN chmod +x /home/runner/actions-runner/entrypoint.sh
+# Strip CRLF: a Windows checkout (core.autocrlf) can hand the build context an
+# entrypoint.sh with \r\n line endings — the container then dies at start with
+# `/usr/bin/env: 'bash\r': No such file or directory` (seen live: KEDA retry
+# loop of Failed executions). Normalizing here makes the image immune to the
+# build host's line-ending config.
+RUN sed -i 's/\r$//' /home/runner/actions-runner/entrypoint.sh; \
+    chmod +x /home/runner/actions-runner/entrypoint.sh
 
 USER runner
 ENTRYPOINT ["/home/runner/actions-runner/entrypoint.sh"]
