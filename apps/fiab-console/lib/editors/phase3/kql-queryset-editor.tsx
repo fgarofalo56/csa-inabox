@@ -37,6 +37,7 @@ import type { RibbonTab } from '@/lib/components/ribbon';
 import { ItemEditorChrome } from '../item-editor-chrome';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { KqlResultsPanel, type KqlResult } from './kql-results';
+import { mergePinnedTile } from './kql-pin-model';
 import { ToolbarCrossLinks } from '@/lib/components/shared/item-tab-strip';
 import { GuidedEmptyState } from '@/lib/components/shared/guided-empty-state';
 import { useStyles } from './styles';
@@ -267,13 +268,22 @@ export function KqlQuerysetEditor({ item, id }: { item: FabricItemType; id: stri
     if (!draft.kql.trim()) { setPinErr('Query is empty'); return; }
     setPinBusy(true); setPinErr(null);
     try {
-      // Read current tiles + append; PUT the new array.
+      // Read the target dashboard's FULL model, append our tile, PUT it back.
+      // The kql-dashboard PUT rebuilds the whole persisted model from the body
+      // (sanitizeModel), so we must round-trip dataSources / parameters /
+      // baseQueries / settings — sending just { tiles } would WIPE them
+      // (destructive). See mergePinnedTile for the full rationale.
       const cur = await clientFetch(`/api/items/kql-dashboard/${pinDashboardId}`).then((r) => r.json());
-      const tiles = Array.isArray(cur?.tiles) ? cur.tiles : [];
-      tiles.push({ title: pinTitle || draft.title || 'Pinned tile', kql: draft.kql, viz: 'table', database: draft.database });
+      if (cur && cur.ok === false) { setPinErr(cur.error || 'Could not read the target dashboard.'); return; }
+      const body = mergePinnedTile(cur, {
+        title: pinTitle || draft.title || 'Pinned tile',
+        kql: draft.kql,
+        viz: 'table',
+        database: draft.database,
+      });
       const r = await clientFetch(`/api/items/kql-dashboard/${pinDashboardId}`, {
         method: 'PUT', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ tiles }),
+        body: JSON.stringify(body),
       });
       const j = await r.json();
       if (!j.ok) { setPinErr(j.error || 'pin failed'); return; }
