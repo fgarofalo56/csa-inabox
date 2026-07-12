@@ -6,11 +6,12 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { apiError } from '@/lib/api/respond';
-import { getSession } from '@/lib/auth/session';
+import { getSession, tenantScopeId } from '@/lib/auth/session';
 import { assertOwner } from '@/lib/auth/workspace-guard';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
 import { runPipeline } from '@/lib/azure/adf-client';
 import { prewarmShirForPipeline } from '@/lib/azure/shir-autoscale';
+import { recordCostAttribution } from '@/lib/azure/cost-attribution';
 import type { WorkspaceItem } from '@/lib/types/workspace';
 
 export const runtime = 'nodejs';
@@ -49,6 +50,17 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     }
     const shir = await prewarmShirForPipeline(adfName);
     const runRes = await runPipeline(adfName, body?.parameters || {});
+
+    // BR-COSTATTR — tag this pipeline run with who/where so it feeds the
+    // per-workspace chargeback model's usage-weighted allocation (the same
+    // ledger the notebook/KQL run paths write to). Best-effort — never throws,
+    // must not fail the run.
+    void recordCostAttribution({
+      tenantId: tenantScopeId(s), userOid: s.claims.oid, userName: s.claims.upn,
+      engine: 'pipeline', workspaceId, itemId: resource.id, itemType: 'data-pipeline',
+      resourceId: adfName, domainId: (resource as any).domainId || (resource.state as any)?.domainId,
+    });
+
     return NextResponse.json({
       ok: true,
       runId: runRes.runId,

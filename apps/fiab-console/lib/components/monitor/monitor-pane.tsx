@@ -1452,6 +1452,7 @@ interface CostSummary {
   byResourceGroup: CostBreakdownRow[];
   bySubscription: CostBreakdownRow[];
   byResource: CostBreakdownRow[];
+  byResourceType: CostBreakdownRow[];
   byLocation: CostBreakdownRow[];
   byTag: CostBreakdownRow[];
   tagKey: string;
@@ -1475,7 +1476,7 @@ const COST_TIMEFRAMES: { value: string; label: string }[] = [
 const shortSub = (s: string) => (s.length > 12 ? `${s.slice(0, 8)}…${s.slice(-4)}` : s);
 
 /** Dimensions the unified "Cost breakdown" table can group + sort + filter by. */
-type GroupDim = 'service' | 'resourceGroup' | 'subscription' | 'resource' | 'location' | 'tag';
+type GroupDim = 'service' | 'resourceGroup' | 'subscription' | 'resource' | 'resourceType' | 'location' | 'tag';
 
 function CostTab({ onUnauth }: { onUnauth: () => void }) {
   const styles = useStyles();
@@ -1525,6 +1526,10 @@ function CostTab({ onUnauth }: { onUnauth: () => void }) {
   // Friendly subscription name (falls back to the id) + a short-id caption.
   const subName = useCallback((id: string) => data?.subscriptionNames?.[id] || shortSub(id), [data]);
   const svcLabel = (k: string) => k.replace(/^Microsoft\.?/, '');
+  // ARM resource types come back verbose + lower-cased
+  // (e.g. `microsoft.synapse/workspaces`); show the readable
+  // `synapse/workspaces` tail without the `microsoft.` provider prefix.
+  const typeLabel = (k: string) => k.replace(/^microsoft\./i, '');
 
   const kpis = useMemo(() => {
     if (!data) return [];
@@ -1556,6 +1561,7 @@ function CostTab({ onUnauth }: { onUnauth: () => void }) {
     { value: 'resourceGroup' as const, label: 'Resource group', rows: data?.byResourceGroup ?? [] },
     { value: 'subscription' as const, label: 'Subscription', rows: data?.bySubscription ?? [] },
     { value: 'resource' as const, label: 'Resource', rows: data?.byResource ?? [] },
+    { value: 'resourceType' as const, label: 'Resource type', rows: data?.byResourceType ?? [] },
     { value: 'location' as const, label: 'Region', rows: data?.byLocation ?? [] },
     { value: 'tag' as const, label: `Tag · ${data?.tagKey || 'Environment'}`, rows: data?.byTag ?? [] },
   ]), [data]);
@@ -1587,8 +1593,8 @@ function CostTab({ onUnauth }: { onUnauth: () => void }) {
         }
       : {
           key: 'key', label: activeGroup.label, width: 360, filterType: 'text',
-          getValue: (r) => (groupDim === 'service' ? svcLabel(r.key) : r.key),
-          render: (r) => <strong>{groupDim === 'service' ? svcLabel(r.key) : r.key}</strong>,
+          getValue: (r) => (groupDim === 'service' ? svcLabel(r.key) : groupDim === 'resourceType' ? typeLabel(r.key) : r.key),
+          render: (r) => <strong>{groupDim === 'service' ? svcLabel(r.key) : groupDim === 'resourceType' ? typeLabel(r.key) : r.key}</strong>,
         };
     return [
       nameCol,
@@ -1622,7 +1628,7 @@ function CostTab({ onUnauth }: { onUnauth: () => void }) {
           <MessageBarBody>
             Azure spend across <strong>every CSA Loom subscription</strong> ({data ? data.subscriptions.length : '…'}) and
             resource group (Microsoft.CostManagement query REST), with breakdowns by subscription, service, resource group,
-            top resource, and region — plus a run-rate forecast and Consumption budgets.
+            top resource, resource type, and region — plus a run-rate forecast and Consumption budgets.
           </MessageBarBody>
         </MessageBar>
         {gate && <GateBar gate={gate} subject="Cost" />}

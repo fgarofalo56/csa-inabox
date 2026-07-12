@@ -173,6 +173,17 @@ export interface CostSummary {
   byResourceGroup: CostBreakdownRow[];
   bySubscription: CostBreakdownRow[];
   byResource: CostBreakdownRow[];
+  /**
+   * Spend grouped by the ARM RESOURCE TYPE dimension (e.g.
+   * `microsoft.synapse/workspaces`, `microsoft.kusto/clusters`,
+   * `microsoft.storage/storageaccounts`, `microsoft.databricks/workspaces`,
+   * `microsoft.documentdb/databaseaccounts`, `microsoft.app/containerapps`,
+   * `microsoft.eventhub/namespaces`, `microsoft.apimanagement/service`). Real
+   * Cost Management `ResourceType` grouping across EVERY Loom subscription, so the
+   * chargeback report enumerates + totals every Loom-managed resource type — not
+   * just the engines that emit an Azure Monitor CU signal.
+   */
+  byResourceType: CostBreakdownRow[];
   byLocation: CostBreakdownRow[];
   /** Spend grouped by the values of the cost-allocation tag (see COST_TAG_KEY). */
   byTag: CostBreakdownRow[];
@@ -194,6 +205,29 @@ const inLoom = (rg: string, loomRgs: Set<string>) => !loomRgs.size || loomRgs.ha
 const addTo = (m: Map<string, number>, k: string, v: number) => m.set(k, (m.get(k) || 0) + v);
 const sortDesc = (m: Map<string, number>): CostBreakdownRow[] =>
   Array.from(m.entries()).map(([key, cost]) => ({ key: key || 'unknown', cost })).sort((a, b) => b.cost - a.cost);
+
+/**
+ * Pure fold (unit-tested): collapse a Cost Management
+ * ResourceGroupName × `<dim>` response into descending `{ key, cost }` rows,
+ * filtered to the Loom resource groups and summed per dimension value. Used for
+ * the per-resource-TYPE rollup (dim = `ResourceType`) so the report covers every
+ * Loom-managed resource type. Robust to a missing dimension column (folds all
+ * matching spend under `unknown`) and to an absent RG column (no RG filter).
+ */
+export function foldByDimension(resp: any, dimName: string, loomRgs: Set<string>): CostBreakdownRow[] {
+  const cols = resp?.properties?.columns || [];
+  const rows: any[][] = resp?.properties?.rows || [];
+  const iCost = colIndex(cols, 'Cost');
+  const iRg = colIndex(cols, 'ResourceGroupName');
+  const iDim = colIndex(cols, dimName);
+  const m = new Map<string, number>();
+  for (const r of rows) {
+    if (iRg >= 0 && !inLoom(String(r[iRg] ?? ''), loomRgs)) continue;
+    const key = iDim >= 0 ? String(r[iDim] ?? '').trim() : '';
+    addTo(m, key || 'unknown', Number(r[iCost]) || 0);
+  }
+  return sortDesc(m);
+}
 
 /** Sum the actual cost for a timeframe in one sub, filtered to Loom RGs. */
 async function periodTotal(sub: string, timeframe: CostTimeframe, loomRgs: Set<string>): Promise<number> {
@@ -315,6 +349,7 @@ export async function getLoomCostSummary(opts: CostOptions = {}): Promise<CostSu
   const byRg = new Map<string, number>();
   const bySub = new Map<string, number>();
   const byResource = new Map<string, number>();
+  const byResourceType = new Map<string, number>();
   const byLocation = new Map<string, number>();
   const byTagMap = new Map<string, number>();
   const dailyMap = new Map<string, number>();
@@ -336,7 +371,7 @@ export async function getLoomCostSummary(opts: CostOptions = {}): Promise<CostSu
     // independent groupings of the same period, so the wall-clock cost is the
     // slowest single query — not the sum — which keeps the aggregate under the
     // gateway timeout (the sequential version reliably 504'd on multi-grouping).
-    const [groupedR, dailyR, resR, locR, prevR, budgetsR, tagR] = await Promise.allSettled([
+    const [groupedR, dailyR, resR, locR, prevR, budgetsR, tagR, typeR] = await Promise.allSettled([
       // 1) RG × Service (totals, byRg, bySvc, bySub) — the only REQUIRED query.
       costQuery(sub, {
         type: 'ActualCost', timeframe,
@@ -400,6 +435,21 @@ export async function getLoomCostSummary(opts: CostOptions = {}): Promise<CostSu
           ],
         },
       }),
+      // 8) By ARM RESOURCE TYPE (best-effort). Groups RG × ResourceType so the
+      //    report enumerates + totals EVERY Loom-managed resource type (Synapse,
+      //    ADX, ADLS, Databricks, Cosmos, Container Apps, Event Hubs, APIM, …),
+      //    not only the engines with an Azure Monitor CU signal.
+      costQuery(sub, {
+        type: 'ActualCost', timeframe,
+        dataset: {
+          granularity: 'None',
+          aggregation: { totalCost: { name: 'Cost', function: 'Sum' } },
+          grouping: [
+            { type: 'Dimension', name: 'ResourceGroupName' },
+            { type: 'Dimension', name: 'ResourceType' },
+          ],
+        },
+      }),
     ]);
 
     // The grouped query is the gate: if it failed (e.g. no Cost Management
@@ -455,6 +505,14 @@ export async function getLoomCostSummary(opts: CostOptions = {}): Promise<CostSu
       for (const row of lRows) {
         if (!inLoom(String(row[lRg] ?? ''), loomRgs)) continue;
         addTo(byLocation, String(row[lLoc] ?? 'global') || 'global', Number(row[lCost]) || 0);
+      }
+    }
+
+    // By ARM resource type — pure fold, filtered to Loom RGs, accumulated across
+    // subs (one Loom-managed type may exist in both the admin + DLZ subs).
+    if (typeR.status === 'fulfilled') {
+      for (const row of foldByDimension(typeR.value, 'ResourceType', loomRgs)) {
+        addTo(byResourceType, row.key, row.cost);
       }
     }
 
@@ -523,6 +581,7 @@ export async function getLoomCostSummary(opts: CostOptions = {}): Promise<CostSu
     byResourceGroup: sortDesc(byRg),
     bySubscription: sortDesc(bySub),
     byResource: sortDesc(byResource).slice(0, 25),
+    byResourceType: sortDesc(byResourceType),
     byLocation: sortDesc(byLocation),
     byTag,
     tagKey: COST_TAG_KEY,
