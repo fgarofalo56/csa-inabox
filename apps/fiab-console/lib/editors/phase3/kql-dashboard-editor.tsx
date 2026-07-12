@@ -23,16 +23,17 @@ import {
   MessageBar, MessageBarBody, MessageBarTitle, MessageBarActions,
   Dialog, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
   Label, Select, Textarea, Switch,
-  mergeClasses, tokens,
+  makeStyles, mergeClasses, tokens,
 } from '@fluentui/react-components';
 import {
   Database20Regular, Play20Regular, Save20Regular,
-  Add20Regular, Delete20Regular, ArrowSync20Regular,
+  Add20Regular, Add24Regular, Delete20Regular, ArrowSync20Regular,
   MathFormula20Regular, Sparkle20Regular, ArrowDownload20Regular, Copy20Regular,
   Alert20Regular, Open20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from '../item-editor-chrome';
 import { NewItemCreateGate } from '../new-item-gate';
+import { EmptyState } from '@/lib/components/empty-state';
 import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
 import { ToolbarCrossLinks } from '@/lib/components/shared/item-tab-strip';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
@@ -49,6 +50,77 @@ import {
 } from './kql-results';
 import { AnomalyForecastDialog } from './anomaly-forecast';
 import { useStyles } from './styles';
+
+/**
+ * Fabric Real-Time-Dashboard-grade tile chrome (UI-only): resting elevation
+ * that lifts on hover, a header divider, a title that ellipsises, a per-tile
+ * action toolbar that reveals on hover / keyboard focus (and stays pinned while
+ * the tile is being edited), and a themed ghost "add tile". No handlers change
+ * — the `.tile-actions` cluster is the same real actions, just chrome.
+ */
+const useTileChrome = makeStyles({
+  tile: {
+    boxShadow: tokens.shadow4,
+    transitionProperty: 'box-shadow, border-color',
+    transitionDuration: tokens.durationNormal,
+    ':hover': { boxShadow: tokens.shadow16, border: `1px solid ${tokens.colorNeutralStroke1}` },
+    '& .tile-actions': {
+      opacity: 0,
+      transitionProperty: 'opacity',
+      transitionDuration: tokens.durationFaster,
+    },
+    ':hover .tile-actions': { opacity: 1 },
+    ':focus-within .tile-actions': { opacity: 1 },
+  },
+  tileSelected: {
+    border: `1px solid ${tokens.colorBrandStroke1}`,
+    boxShadow: tokens.shadow16,
+    '& .tile-actions': { opacity: 1 },
+  },
+  tileHeader: {
+    display: 'flex',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: tokens.spacingHorizontalS,
+    paddingBottom: tokens.spacingVerticalS,
+    borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
+  },
+  tileMeta: { minWidth: 0, flex: 1 },
+  tileTitle: {
+    fontSize: tokens.fontSizeBase300,
+    fontWeight: tokens.fontWeightSemibold,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
+  tileActions: {
+    display: 'flex',
+    gap: tokens.spacingHorizontalXXS,
+    flexShrink: 0,
+  },
+  ghostTile: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: tokens.spacingVerticalS,
+    minHeight: '120px',
+    padding: tokens.spacingVerticalL,
+    border: `1px dashed ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusLarge,
+    backgroundColor: 'transparent',
+    color: tokens.colorNeutralForeground3,
+    cursor: 'pointer',
+    transitionProperty: 'background-color, border-color, color',
+    transitionDuration: tokens.durationFaster,
+    ':hover': {
+      border: `1px dashed ${tokens.colorBrandStroke1}`,
+      backgroundColor: tokens.colorNeutralBackground1Hover,
+      color: tokens.colorBrandForeground1,
+    },
+    ':focus-visible': { border: `1px dashed ${tokens.colorBrandStroke1}`, outlineStyle: 'none' },
+  },
+});
 
 // ----- KQL Dashboard (Fabric Real-Time Dashboard parity) -----
 // A real dashboard builder: tile grid (add/remove/resize) where each tile has
@@ -361,6 +433,7 @@ export function BaseQueriesPanel({
 
 export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
+  const tc = useTileChrome();
   const [state, setState] = useState<DashboardState | null>(null);
   const [tiles, setTiles] = useState<DashTile[]>([]);
   const [dataSources, setDataSources] = useState<DashDataSource[]>([]);
@@ -1084,13 +1157,13 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
           const rowSpan = Math.max(1, Math.min(8, t.h || 2));
           const dsName = t.dataSourceId ? (dataSources.find((d) => d.id === t.dataSourceId)?.name || t.dataSourceId) : (t.database || defaultDb);
           return (
-            <div key={i} className={s.card} style={{ gridColumn: `span ${span}`, gridRow: `span ${rowSpan}`, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                <div>
+            <div key={i} className={mergeClasses(s.card, tc.tile, tileFlyoutIdx === i ? tc.tileSelected : undefined)} style={{ gridColumn: `span ${span}`, gridRow: `span ${rowSpan}`, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+              <div className={tc.tileHeader}>
+                <div className={tc.tileMeta}>
                   <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{t.viz.toUpperCase()} · {dsName}</Caption1>
-                  <div style={{ fontSize: tokens.fontSizeBase300, fontWeight: 600 }}>{t.title}</div>
+                  <div className={tc.tileTitle}>{t.title}</div>
                 </div>
-                <div style={{ display: 'flex', gap: tokens.spacingVerticalXXS}}>
+                <div className={mergeClasses(tc.tileActions, 'tile-actions')}>
                   <Button size="small" appearance="subtle" icon={<Play20Regular />} onClick={() => runTile(i)} aria-label="Run tile" title="Run this tile" />
                   <Button
                     size="small" appearance="subtle" icon={<Alert20Regular />}
@@ -1141,7 +1214,29 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
             </div>
           );
         })}
-        {tiles.length === 0 && <Caption1 style={{ gridColumn: 'span 12' }}>No tiles yet. Click <strong>Add tile</strong> to start building.</Caption1>}
+        {tiles.length > 0 && (
+          <button
+            type="button"
+            className={tc.ghostTile}
+            style={{ gridColumn: 'span 4', gridRow: 'span 2' }}
+            onClick={addTile}
+            aria-label="Add tile"
+          >
+            <Add24Regular />
+            <Caption1>Add tile</Caption1>
+          </button>
+        )}
+        {tiles.length === 0 && (
+          <div style={{ gridColumn: 'span 12' }}>
+            <EmptyState
+              icon={<Database20Regular />}
+              title="Build a Real-Time Dashboard"
+              body="Add tiles bound to KQL queries over your ADX-native eventhouse. Wire parameters to cross-filter every tile at once, then set an auto-refresh interval for a live operational view."
+              primaryAction={{ label: 'Add tile', onClick: addTile }}
+              secondaryAction={{ label: 'Add tile with Copilot', onClick: () => { setAiErr(null); setAiNote(null); setAiOpen(true); } }}
+            />
+          </div>
+        )}
       </div>
 
       {/* Tile edit flyout — Fabric "tile editing window": one Dialog edits the
