@@ -54,7 +54,7 @@ permissions:
   contents: read
 
 env:
-  LOOM_URL: ${{ inputs.console_url || vars.LOOM_VERIFY_URL || 'https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net' }}
+  LOOM_URL: ${{ inputs.console_url || vars.LOOM_VERIFY_URL || 'https://csa-loom.limitlessdata.ai' }}
   LOOM_AUTOMATION_OID:  ${{ vars.LOOM_AUTOMATION_OID  || '' }}
   LOOM_AUTOMATION_UPN:  ${{ vars.LOOM_AUTOMATION_UPN  || 'loom-exercise@automation.local' }}
   LOOM_AUTOMATION_NAME: ${{ vars.LOOM_AUTOMATION_NAME || 'Loom Exercise [automation]' }}

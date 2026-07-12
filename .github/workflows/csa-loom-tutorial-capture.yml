@@ -14,7 +14,7 @@ on:
       loom_url:
         description: 'Console URL to drive (default = Front Door)'
         type: string
-        default: https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net
+        default: https://csa-loom.limitlessdata.ai
       sub:
         description: 'Subscription id hosting the console (for reading the session secret). Pass the target deployment sub.'
         type: string

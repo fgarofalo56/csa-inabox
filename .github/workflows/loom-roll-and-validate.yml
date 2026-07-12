@@ -42,7 +42,7 @@ on:
       url:
         description: 'Public URL to probe'
         type: string
-        default: 'https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net'
+        default: 'https://csa-loom.limitlessdata.ai'
       skip_uat:
         description: 'EMERGENCY VALVE — skip the test gates (vitest confirmation + in-VNet UAT). The roll ships WITHOUT test verification; live-URL validation + auto-rollback remain.'
         type: boolean
@@ -105,7 +105,7 @@ jobs:
             EXPECTED="${{ inputs.expected_sha }}"
           fi
           URL="${{ inputs.url }}"
-          [[ -z "$URL" ]] && URL='https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net'
+          [[ -z "$URL" ]] && URL='https://csa-loom.limitlessdata.ai'
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "expected=$EXPECTED" >> "$GITHUB_OUTPUT"
           echo "url=$URL" >> "$GITHUB_OUTPUT"
