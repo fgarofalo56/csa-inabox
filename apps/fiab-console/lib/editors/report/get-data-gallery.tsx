@@ -441,22 +441,24 @@ function ConnectorGallery({
       <div className={s.scroll}>
         {/* Loom items — the FIRST source offered (Fabric "OneLake data hub"
             analog). Auto-configures the data source from the item's Azure
-            backend; the user never types coordinates. */}
-        {!q && (
-          <button type="button" className={s.loomHero} onClick={onPickLoom}
-            aria-label="Use a Loom item as the data source — auto-configured">
-            <span className={s.loomHeroIcon}><CubeTree24Regular /></span>
-            <span className={s.loomHeroText}>
-              <Subtitle2>Use a Loom item</Subtitle2>
-              <Caption1 className={s.muted}>
-                Lakehouse, warehouse, KQL database, dataset, semantic model, data product —
-                Loom auto-configures the source from the item&apos;s Azure backend. Nothing to type.
-              </Caption1>
-            </span>
-            <Badge appearance="tint" color="brand" size="small">Recommended</Badge>
-            <span className={s.loomHeroChevron}><ChevronRight20Regular /></span>
-          </button>
-        )}
+            backend; the user never types coordinates. Shown ALWAYS (even while
+            the connector search box has text): it is the recommended, first-class
+            way to select an existing Loom source, and it is NOT part of the
+            connector catalog the search filters — hiding it on search stranded
+            the user with "no option to select existing Loom sources". */}
+        <button type="button" className={s.loomHero} onClick={onPickLoom}
+          aria-label="Use a Loom item as the data source — auto-configured">
+          <span className={s.loomHeroIcon}><CubeTree24Regular /></span>
+          <span className={s.loomHeroText}>
+            <Subtitle2>Use a Loom item</Subtitle2>
+            <Caption1 className={s.muted}>
+              Lakehouse, warehouse, KQL database, dataset, semantic model, data product —
+              Loom auto-configures the source from the item&apos;s Azure backend. Nothing to type.
+            </Caption1>
+          </span>
+          <Badge appearance="tint" color="brand" size="small">Recommended</Badge>
+          <span className={s.loomHeroChevron}><ChevronRight20Regular /></span>
+        </button>
 
         {/* Recent connections — jump straight to binding one you already have. */}
         {!q && recents.length > 0 && (
@@ -1239,6 +1241,7 @@ export function GetDataGallery({ open, reportId, onChosen, onDismiss }: GetDataG
   }, []);
 
   return (
+    <>
     <Dialog open={open} onOpenChange={(_, d) => { if (!d.open) onDismiss(); }}>
       <DialogSurface className={s.surface}>
         <DialogBody>
@@ -1303,15 +1306,22 @@ export function GetDataGallery({ open, reportId, onChosen, onDismiss }: GetDataG
           </DialogActions>
         </DialogBody>
       </DialogSurface>
-
-      {/* Reuse the existing credential wizard — NO new credential code here.
-          On import we refetch so the new connection appears in the dropdown. */}
-      <AddExistingConnectionWizard
-        open={wizardOpen}
-        onClose={() => setWizardOpen(false)}
-        onImported={() => void loadConnections()}
-      />
     </Dialog>
+
+    {/* Reuse the existing credential wizard — NO new credential code here.
+        On import we refetch so the new connection appears in the dropdown.
+        Rendered as a SIBLING of the Get-data Dialog (never a child of it): a
+        nested modal Dialog inside another Dialog's subtree registers a second
+        Tabster focus-trap modalizer under the same DialogContext, which can
+        fight the outer dialog's trap and swallow its Escape / backdrop / Close
+        so the popup can't be dismissed. As a sibling each modal owns its own
+        modalizer and the outer dialog always dismisses cleanly. */}
+    <AddExistingConnectionWizard
+      open={wizardOpen}
+      onClose={() => setWizardOpen(false)}
+      onImported={() => void loadConnections()}
+    />
+    </>
   );
 }
 
