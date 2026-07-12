@@ -7,11 +7,14 @@ the medallion data flow with the Weave edge graph on top.
 
 Every box below is grounded in the actual code or bicep in this repo (paths in
 the [component index](#component-index) at the bottom). Verified against `main`
-2026-07-12. For focused views see
+2026-07-12 (includes the warm-pool synchronous-reconcile fix, PR #1947; the
+G2 AI-functions-at-scale batch surface, PR #1946; and the linguistic-schema
+grounding wiring, PR #1948). For focused views see
 [Architecture Diagrams](diagrams/README.md),
 [Reference Architecture](architecture.md),
-[Model Strategy](model-strategy.md), and
-[Compute Tiers & Telemetry](compute-tiers-and-telemetry.md).
+[Model Strategy](model-strategy.md),
+[Compute Tiers & Telemetry](compute-tiers-and-telemetry.md), and
+[Service exercise — validate every backend](operations/service-exercise.md).
 
 ---
 
@@ -224,11 +227,13 @@ flowchart TB
         DINT["ADF + SHIR · Event Hubs ·<br/>Stream Analytics · Event Grid"]
     end
 
-    subgraph ops["Deploy + verify path (two-phase)"]
+    subgraph ops["Deploy + verify + continuous-validation path"]
         BICEP["1 · az deployment sub create<br/>main.bicep (deployAppsEnabled=false)"]
         BUILD["2 · full-app-deploy workflow<br/>az acr build + roll Container Apps"]
         BOOT["3 · post-deploy bootstrap<br/>MSAL app reg + data-plane grants"]
         VERIFY["loom-ui-verify (in-VNet browser<br/>verification on gh-aca-runner)"]
+        EXER["csa-loom-exercise-services<br/>(daily 05:30 UTC, gh-aca-runner)<br/>real data-path probes: spark ·<br/>warehouse-sql · adx · adls · cosmos ·<br/>aoai · domain-sync · adf"]
+        KEEPWARM["csa-loom-spark-keepwarm<br/>(5-min, public GH runner)<br/>POST /api/internal/spark/keep-warm"]
     end
 
     AFD --> ACAE
@@ -243,9 +248,13 @@ flowchart TB
     APPS --> DINT
     VPN -.-> VNET
     RUN --- VNET
+    RUN -.->|"hosts"| VERIFY
+    RUN -.->|"hosts"| EXER
     BICEP --> BUILD --> BOOT --> VERIFY
+    VERIFY --> EXER
     BUILD --> ACR
     ACR --> APPS
+    KEEPWARM -.->|"HTTPS + internal token<br/>over Front Door"| AFD
 
     classDef edgeC fill:#5C2D91,stroke:#fff,color:#fff,stroke-width:2px
     classDef hubC fill:#0078D4,stroke:#fff,color:#fff,stroke-width:2px
@@ -254,7 +263,7 @@ flowchart TB
     class AFD edgeC
     class VNET,ACAE,APPS,ACR,KV,RUN,VPN,AIH hubC
     class DVNET,LAKE,DSYN,DDBX,DADX,DINT dlzC
-    class BICEP,BUILD,BOOT,VERIFY opsC
+    class BICEP,BUILD,BOOT,VERIFY,EXER,KEEPWARM opsC
 ```
 
 Topology notes:
@@ -271,11 +280,45 @@ Topology notes:
   [Model Strategy](model-strategy.md)).
 - **Compute tiers are deploy-time** (#1931): three workload-tiered Synapse Spark
   pools (`loompool` interactive, `loometl` pipeline ETL, `loombatch` heavy
-  batch), Databricks instance pools + a Loom cluster policy, and Spark →
-  Log Analytics telemetry — details in
-  [Compute Tiers & Telemetry](compute-tiers-and-telemetry.md). The keep-warm
-  heartbeat (`/api/internal/spark/keep-warm`, 5-min cron) keeps `loompool`
-  first-run-warm, with a faulted-pool recreate runbook probed in-VNet.
+  batch), Databricks instance pools (`loom-pool-s/m/l`) + a Loom cluster policy,
+  baked best-practice Spark config (AQE, Kryo, Delta optimize-write/auto-compact)
+  on every pool, and Spark → Log Analytics telemetry (`SparkLoggingEvent_CL` /
+  `SparkMetrics_CL` / `SynapseBigDataPoolApplicationsEnded`) — details in
+  [Compute Tiers & Telemetry](compute-tiers-and-telemetry.md).
+- **The warm Spark session pool** (`lib/azure/spark-session-pool.ts`) keeps N
+  idle Livy (or a warmed Databricks cluster) on standby per pool/kind/sizing
+  group, so a notebook run gets an instant hand-off instead of the 2–4 min
+  Synapse cold start — the same experience Fabric's starter pools give, built on
+  the Azure-native default. Two external heartbeats compensate for serverless
+  Container Apps recycling the pool to cold on every scale-to-zero / roll:
+  `csa-loom-spark-keepwarm` (every 5 min, public runner, hits Front Door) tops
+  the pool back up to `min`, and each tick now also calls the **synchronous
+  `reconcileWarmingSlots()`** promotion (#1947) — a real Livy/Databricks
+  liveness check run *inside* the request that promotes any `warming` slot
+  whose backend session already reached `idle`/`RUNNING`. This closes the
+  root cause of the "notebooks are stuck slow" reports: the pool's background
+  `pollLivyToIdle` poll loop is fire-and-forget with a `setTimeout`, and a
+  serverless replica is CPU-throttled to near-zero *between* requests, so that
+  loop never advanced — the slot froze at `warming` forever and every tick kept
+  reporting `warming:1 / warm:0`. A leaked-session reaper (#1796) separately
+  self-cleans idle, untracked Livy sessions that would otherwise jam the pool
+  (the *other* historical root cause — ~700 leaked sessions starving `loompool`).
+  See [Compute Tiers & Telemetry](compute-tiers-and-telemetry.md) for the
+  provisioning side and `apps/fiab-console/lib/azure/spark-session-pool.ts` for
+  the pool engine itself.
+- **Exercise-every-service validation** goes one level deeper than config-presence
+  health checks: `lib/admin/service-probes.ts` runs a REAL, self-cleaning
+  operation against each backend's actual data path (create-a-Livy-session +
+  `spark.range(1).count()` + delete, `SELECT 1` over TDS, `print 1` KQL, a lake
+  container list, a Cosmos query, a one-shot AOAI completion, a dry-run
+  Purview/Unity-Catalog domain sync, an ADF pipeline list) and reports
+  `pass` / honest-`gate` / `fail`. This is what catches a *configured-but-broken*
+  backend — the motivating case was a faulted Synapse pool that was green on
+  every presence check but errored every Livy session instantly. Exposed at
+  `/admin/health` (tenant-admin, `POST`/`GET /api/admin/health/exercise`) and run
+  daily by `csa-loom-exercise-services.yml` on the in-VNet `gh-aca-runner`,
+  failing the job on any real `fail` (gates are warnings, never failures). Full
+  writeup: [Service exercise — validate every backend](operations/service-exercise.md).
 
 ---
 
@@ -356,9 +399,26 @@ Data-flow notes:
   zero Power BI dependency) or the real Power BI service when a workspace +
   capacity is bound — reached through the default-on **VM data gateway** that
   auto-upgrades to a VNet data gateway when a capacity is bound.
-- **Report "Get data"** offers a "Use a Loom item" hero source (#1927) that
-  auto-configures the connection per item type, so users pick Loom items, not
-  Azure plumbing.
+- **Report "Get data"** (`lib/editors/report/get-data-gallery.tsx`, #1927) is a
+  Power-BI-style gallery: a "Use a Loom item" hero card is offered FIRST
+  (resolves any PBI-sourceable item — lakehouse, warehouse, KQL database,
+  dataset, semantic model, data product — straight to its Azure backend, no
+  server/database typed), then the same 32-connector catalog the ADF/Synapse
+  "New linked service" gallery uses, then Recent connections. OneLake/Fabric
+  shortcuts and Power BI semantic models render in a clearly-demarcated,
+  dashed **opt-in** group at the bottom — never required, never on the default
+  path.
+- **AI functions at scale** — the grid "Add AI column" action
+  (`lib/editors/components/add-ai-column-dialog.tsx`, wired into the Delta
+  preview grid and the Dataflow Gen2 AI step) and its batch endpoint
+  `POST /api/ai-functions/table` (`lib/azure/ai-functions-client.ts`) apply one
+  AI function — summarize, classify, translate, extract (incl. a multi-field
+  structured-schema mode), fix-grammar, generate, embed, or similarity — across
+  every row of up to 500 rows in one request, with a model-tier override
+  (mini/standard/strong via the AIF-12 router) and a multimodal image/document
+  input path honest-gated on `LOOM_AOAI_VISION_DEPLOYMENT`. Every call rides the
+  same live AOAI deployment the cross-item Copilot resolves — no Fabric/Power BI
+  dependency, no mock rows.
 - **Governance rides the same graph:** domains (multi-library designer, #1924 —
   Federal Civilian, Defense & Intel, State & Local, Commercial libraries in
   `lib/domains/libraries/`) sync to **Unity Catalog catalogs with
@@ -377,7 +437,11 @@ Data-flow notes:
 | Session / MSAL / OBO / internal token | `apps/fiab-console/lib/auth/{session,msal,obo,internal-token}.ts` |
 | PDP engine (protection policies, security roles) | `apps/fiab-console/lib/auth/pdp/` |
 | Weave edges | `apps/fiab-console/lib/thread/thread-actions.ts` + `app/api/thread/*` |
-| Spark keep-warm heartbeat | `apps/fiab-console/app/api/internal/spark/keep-warm` |
+| Warm Spark session pool | `apps/fiab-console/lib/azure/spark-session-pool.ts` (`reconcileWarmingSlots`, `acquireWarmSession`) |
+| Spark keep-warm heartbeat | `apps/fiab-console/app/api/internal/spark/keep-warm` + `.github/workflows/csa-loom-spark-keepwarm.yml` |
+| Exercise-every-service probes | `apps/fiab-console/lib/admin/service-probes.ts` + `app/api/admin/health/exercise` + `.github/workflows/csa-loom-exercise-services.yml` |
+| AI functions at scale ("Add AI column") | `apps/fiab-console/lib/editors/components/add-ai-column-dialog.tsx` + `app/api/ai-functions/table/route.ts` + `lib/azure/ai-functions-client.ts` |
+| Report "Get data" gallery | `apps/fiab-console/lib/editors/report/get-data-gallery.tsx` |
 | Activator engine | `apps/fiab-activator-engine` (`AdxRulePoller.cs`) |
 | Mirroring engine | `apps/fiab-mirroring-engine` |
 | Direct Lake shim / cache-scan service | `apps/fiab-direct-lake-shim` · `apps/loom-directlake` |
@@ -399,4 +463,5 @@ Data-flow notes:
 - [Architecture Diagrams](diagrams/README.md) — topology, deploy flows, RBAC
 - [Model Strategy](model-strategy.md) — AIF-12 tiers, per-cloud model matrix
 - [Compute Tiers & Telemetry](compute-tiers-and-telemetry.md) — pool tiers, Log Analytics
+- [Service exercise — validate every backend](operations/service-exercise.md) — real data-path probes, daily CI gate
 - [Parity Matrix](parity-matrix.md) · [UX Standards](ux-standards.md)
