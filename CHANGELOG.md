@@ -25,6 +25,49 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.62.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.61.0...csa-inabox-v0.62.0) (2026-07-12)
+
+
+### Features
+
+* **ai-search:** AIF-16 loop-closure — custom analyzers selectable per field + parity doc + tests ([#1789](https://github.com/fgarofalo56/csa-inabox/issues/1789)) ([89b3aeb](https://github.com/fgarofalo56/csa-inabox/commit/89b3aeb322d0de14c3d00b54ab261969cca8c62f))
+* **model-strategy:** M1-M3 — fix embed/Gov-scope bugs, add mini/strong tiers, activate tier router day-one ([#1906](https://github.com/fgarofalo56/csa-inabox/issues/1906)) ([d2bb849](https://github.com/fgarofalo56/csa-inabox/commit/d2bb84905ddaf7669134f5023f4d981fc51554af))
+* **model-strategy:** M4 — OPT-IN APIM AI-gateway for AOAI (default direct, Gov MI fallback) ([#1909](https://github.com/fgarofalo56/csa-inabox/issues/1909)) ([b842de5](https://github.com/fgarofalo56/csa-inabox/commit/b842de58d73511efd7e4a9e22e61f02ec9d88c42))
+* **model-strategy:** M5 — cloud-aware best-available model resolution + Gov APIM-policy auto-fallback ([#1912](https://github.com/fgarofalo56/csa-inabox/issues/1912)) ([90bd7c8](https://github.com/fgarofalo56/csa-inabox/commit/90bd7c8390b81fb9d7d8723befdbd5b328fea3c9))
+* **weave-pbi:** W1 — analyze-in-powerbi resolver + Weave edge + Loom-native seeds ([#1902](https://github.com/fgarofalo56/csa-inabox/issues/1902)) ([a2bd75b](https://github.com/fgarofalo56/csa-inabox/commit/a2bd75bb32718d19164b35c14d3494a5ac791437))
+* **weave-pbi:** W2 — new-report Loom-item source picker (fixes Copilot source-wiring gap) ([#1904](https://github.com/fgarofalo56/csa-inabox/issues/1904)) ([85691b5](https://github.com/fgarofalo56/csa-inabox/commit/85691b5436a18b3af0068486c044c3c57ef62c79))
+* **weave-pbi:** W3 — unify Power BI add-source wizards on GetDataGallery + honest gates ([#1907](https://github.com/fgarofalo56/csa-inabox/issues/1907)) ([132c991](https://github.com/fgarofalo56/csa-inabox/commit/132c991520a4fb59b75aecb8f142bae8e88212a6))
+* **weave-pbi:** W4 — VM on-prem data gateway default-ON + Gov VNet-gateway fix + real status (D2) ([#1908](https://github.com/fgarofalo56/csa-inabox/issues/1908)) ([0a04325](https://github.com/fgarofalo56/csa-inabox/commit/0a04325f6313044949f6bb196b6cf8e5199b08b4))
+* **weave-pbi:** W5 — real Power BI Service destination for analyze-in-powerbi (D1) ([#1911](https://github.com/fgarofalo56/csa-inabox/issues/1911)) ([dbc9c86](https://github.com/fgarofalo56/csa-inabox/commit/dbc9c86169142434e49f6a2392887407e1fa5d84))
+
+
+### Bug Fixes
+
+* **adf-pipeline:** allow deleting an unbound/draft pipeline ([#1859](https://github.com/fgarofalo56/csa-inabox/issues/1859)) ([#1916](https://github.com/fgarofalo56/csa-inabox/issues/1916)) ([f5853c9](https://github.com/fgarofalo56/csa-inabox/commit/f5853c95f2b069ba7643d3effe0d547ee540f575))
+* **gov-sentinel:** incident-trigger playbook + durable Sentinel SP grant so AI-defense auto-run works day-one ([#1915](https://github.com/fgarofalo56/csa-inabox/issues/1915)) ([c5508fe](https://github.com/fgarofalo56/csa-inabox/commit/c5508fe0b0b25c5e8fef9e11bd353ef21d1a8f7c))
+* **gov:** align gcc-high image-tag defaults to v0.1 (match build + root main.bicep) ([#1910](https://github.com/fgarofalo56/csa-inabox/issues/1910)) ([283caa7](https://github.com/fgarofalo56/csa-inabox/commit/283caa79209938baf8544b1b33b19f6d137fcbaf))
+* **gov:** app-tier deltas — AppGW v2 NSG mgmt ports + gate quota-restricted Postgres ([#1905](https://github.com/fgarofalo56/csa-inabox/issues/1905)) ([259445b](https://github.com/fgarofalo56/csa-inabox/commit/259445be825aa0bd72630310083883f4a1d7f607))
+* **gov:** default-on AI-enrichment endpoints + confirm SIEM DCR default-on (GATE A/B) ([#1898](https://github.com/fgarofalo56/csa-inabox/issues/1898)) ([817682d](https://github.com/fgarofalo56/csa-inabox/commit/817682dc3c3811924ce8db2d6c84e0a2b76ce42a))
+* **gov:** rounds 9+11 — APIM diag category + gate Sentinel playbook automation ([#1901](https://github.com/fgarofalo56/csa-inabox/issues/1901)) ([dbf7039](https://github.com/fgarofalo56/csa-inabox/commit/dbf70390c863245dee1accfcab5d227475e6c935))
+
+
+### Documentation
+
+* **model-strategy:** M6 — model-strategy runbook ([#1914](https://github.com/fgarofalo56/csa-inabox/issues/1914)) ([3d32982](https://github.com/fgarofalo56/csa-inabox/commit/3d32982c6f1f97558c77d4c177c519952ad324ea))
+* **prp:** best-LLM-per-task + APIM AI-gateway model strategy PRP ([#1903](https://github.com/fgarofalo56/csa-inabox/issues/1903)) ([f1b4729](https://github.com/fgarofalo56/csa-inabox/commit/f1b4729128662b2ce60c6d658aacdcc6dc96aa3c))
+* **weave-pbi:** W6 — parity doc + gateway rewrite + tenant-bootstrap prereqs ([#1913](https://github.com/fgarofalo56/csa-inabox/issues/1913)) ([bf402a6](https://github.com/fgarofalo56/csa-inabox/commit/bf402a63ce856aa3c04ae3132cec586044c56993))
+
+
+### Tests
+
+* **loom-ui-verify:** poll for the health score instead of one-shot grab ([#1919](https://github.com/fgarofalo56/csa-inabox/issues/1919)) ([b801942](https://github.com/fgarofalo56/csa-inabox/commit/b8019420233deb98304409fbca14f93fda194863))
+
+
+### Continuous Integration
+
+* **loom-ui-verify:** run on in-VNet gh-aca-runner (loom-aca) — KV is PE-locked ([#1917](https://github.com/fgarofalo56/csa-inabox/issues/1917)) ([1ae6cc5](https://github.com/fgarofalo56/csa-inabox/commit/1ae6cc547b3a49cef9bba723b47a51dae07c2d6a))
+* **runner:** bake Playwright into gh-actions runner image (in-VNet UAT) ([#1918](https://github.com/fgarofalo56/csa-inabox/issues/1918)) ([fc481e6](https://github.com/fgarofalo56/csa-inabox/commit/fc481e6ed0128c5372556818867f98fe0783e2b5))
+
 ## [0.61.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.60.0...csa-inabox-v0.61.0) (2026-07-11)
 
 
