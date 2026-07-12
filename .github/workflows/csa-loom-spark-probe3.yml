@@ -1,0 +1,74 @@
+name: csa-loom-spark-probe3
+
+# In-VNET Livy probe (clean version, single-line python to keep the run: block
+# scalar valid). Lists sessions, CLEANS leaked/error ones, then A/B tests a
+# standard vs minimal session to distinguish exhausted Spark vCore quota from a
+# clogged pool. Read-only diagnostic; deletes the probe sessions after.
+
+on:
+  workflow_dispatch:
+    inputs:
+      pool:
+        description: 'Spark pool name'
+        type: string
+        default: loompool
+        required: false
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  DLZ_SUB: 363ef5d1-0e77-4594-a530-f51af23dbf8c
+  SYN_WS: syn-loom-default-centralus
+
+jobs:
+  probe:
+    name: 'Livy probe3 (in-VNET)'
+    runs-on: [self-hosted, loom-aca]
+    timeout-minutes: 20
+    steps:
+      - name: Azure login (deploy SP — Synapse Spark admin)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ env.DLZ_SUB }}
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+      - name: Clean + A/B probe
+        env:
+          POOL: ${{ inputs.pool || 'loompool' }}
+        run: |
+          set -uo pipefail
+          DEV="https://${SYN_WS}.dev.azuresynapse.net"
+          API="livyApi/versions/2019-11-01-preview/sparkPools/${POOL}/sessions"
+          tok() { az account get-access-token --resource https://dev.azuresynapse.net --query accessToken -o tsv | tr -d '\r'; }
+          T=$(tok)
+          echo "== sessions by state =="
+          curl -s -H "Authorization: Bearer $T" "${DEV}/${API}?from=0&size=100" > /tmp/sess.json
+          python3 -c "import json,collections;d=json.load(open('/tmp/sess.json'));ss=d.get('sessions') or [];print('total',d.get('total'),'inlist',len(ss),'states',dict(collections.Counter(s.get('state') for s in ss)))"
+          echo "== clean leaked/error/dead/not_started sessions =="
+          IDS=$(python3 -c "import json;d=json.load(open('/tmp/sess.json'));print(' '.join(str(s['id']) for s in (d.get('sessions') or []) if s.get('state') in ('error','dead','killed','not_started','shutting_down')))")
+          N=0; for id in $IDS; do curl -s -X DELETE -H "Authorization: Bearer $(tok)" "${DEV}/${API}/${id}" -o /dev/null && N=$((N+1)); done
+          echo "  deleted $N stale sessions"; sleep 8
+          T=$(tok); curl -s -H "Authorization: Bearer $T" "${DEV}/${API}?from=0&size=100" > /tmp/sess2.json
+          python3 -c "import json,collections;d=json.load(open('/tmp/sess2.json'));ss=d.get('sessions') or [];print('after clean states',dict(collections.Counter(s.get('state') for s in ss)))"
+          probe_session() {
+            local label="$1"; local body="$2"; local st="" sid=""
+            local resp; resp=$(curl -s -X POST -H "Authorization: Bearer $(tok)" -H 'Content-Type: application/json' "${DEV}/${API}" -d "$body")
+            sid=$(printf '%s' "$resp" | python3 -c "import sys,json;print(json.load(sys.stdin).get('id',''))" 2>/dev/null || echo "")
+            echo "  [$label] create resp: $(printf '%s' "$resp" | head -c 220)"
+            [ -z "$sid" ] && { echo "  [$label] NO SESSION ID"; return; }
+            for i in $(seq 1 60); do
+              st=$(curl -s -H "Authorization: Bearer $(tok)" "${DEV}/${API}/${sid}" | python3 -c "import sys,json;print(json.load(sys.stdin).get('state',''))" 2>/dev/null || echo "")
+              echo "  [$label $i] state=$st"; case "$st" in idle|dead|error|killed) break;; esac; sleep 10
+            done
+            echo "  [$label] FINAL=$st"
+            if [ "$st" != "idle" ]; then echo "  [$label] driver log:"; curl -s -H "Authorization: Bearer $(tok)" "${DEV}/${API}/${sid}/log?from=0&size=200" | python3 -c "import sys,json;print(chr(10).join((json.load(sys.stdin).get('log') or [])[-60:]))" 2>/dev/null || echo "  (no log)"; fi
+            curl -s -X DELETE -H "Authorization: Bearer $(tok)" "${DEV}/${API}/${sid}" -o /dev/null || true
+            echo "RESULT ${label}=${st}"
+          }
+          echo "== MINIMAL session (1 exec / 1 core / 1g) =="
+          probe_session minimal '{"name":"loom-min","kind":"pyspark","numExecutors":1,"executorCores":1,"executorMemory":"1g","driverCores":1,"driverMemory":"1g"}'
+          echo "== STANDARD session (2 exec / 4 core / 4g) =="
+          probe_session standard '{"name":"loom-std","kind":"pyspark","numExecutors":2,"executorCores":4,"executorMemory":"4g","driverCores":4,"driverMemory":"4g"}'
