@@ -21,6 +21,7 @@ import {
 import {
   PlugConnected24Regular, Add20Regular, Delete20Regular, Key16Regular, ShieldKeyhole16Regular,
   MoreHorizontal20Regular, CloudDatabase20Regular, LinkMultiple20Regular, Table20Regular,
+  Edit20Regular, DatabaseSearch20Regular, PlugConnectedCheckmark20Regular,
 } from '@fluentui/react-icons';
 import { PageShell } from '@/lib/components/page-shell';
 import { Section } from '@/lib/components/ui/section';
@@ -31,7 +32,9 @@ import { TileGrid } from '@/lib/components/ui/tile-grid';
 import { itemVisual } from '@/lib/components/ui/item-type-visual';
 import { useConfirm } from '@/lib/components/confirm-dialog';
 import { ConnectionBuilder, type ConnectionView } from '@/lib/components/connections/connection-builder';
+import { AnalyzeConnectionDialog } from '@/lib/components/connections/analyze-connection-dialog';
 import { AddExistingConnectionWizard } from '@/lib/components/connections/add-existing-wizard';
+import type { ConnectionType } from '@/lib/azure/connections-store';
 import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
 import { GuidedEmptyState, type GuidedPath } from '@/lib/components/shared/guided-empty-state';
 import { ToolbarCrossLinks, type CrossLink } from '@/lib/components/shared/item-tab-strip';
@@ -101,6 +104,12 @@ export default function ConnectionsPage() {
   const [presetType, setPresetType] = useState<string | undefined>(undefined);
   const [addExistingOpen, setAddExistingOpen] = useState(false);
   const [view, setView] = useState<LoomView>('tile');
+  // Edit + Analyze (browse/preview) dialogs for a saved connection.
+  const [editConn, setEditConn] = useState<ConnectionView | null>(null);
+  const [analyzeConn, setAnalyzeConn] = useState<ConnectionView | null>(null);
+  // Inline "Test connection" state — a real reachability probe per saved connection.
+  const [testingId, setTestingId] = useState<string | null>(null);
+  const [testResult, setTestResult] = useState<{ id: string; name: string; ok: boolean; detail: string } | null>(null);
 
   // Open the builder, optionally locked to a connector type chosen from the
   // guided connector gallery (Fabric "Get data" per-source parity, UX-1008 SC-4).
@@ -186,6 +195,47 @@ export default function ConnectionsPage() {
     });
   }, [confirm, load, s]);
 
+  // Real reachability probe for a SAVED connection (POST /api/connections/[id]/test).
+  // Result is surfaced inline via a MessageBar — never a silent no-op.
+  const testConn = useCallback(async (c: ConnectionView) => {
+    setTestingId(c.id);
+    setTestResult(null);
+    try {
+      const r = await clientFetch(`/api/connections/${encodeURIComponent(c.id)}/test`, { method: 'POST' });
+      const j = await r.json().catch(() => ({} as any));
+      if (!r.ok || j?.ok === false) {
+        const hint = j?.hint ? ` — ${j.hint}` : '';
+        setTestResult({ id: c.id, name: c.name, ok: false, detail: `${j?.error || `HTTP ${r.status}`}${hint}` });
+      } else {
+        setTestResult({ id: c.id, name: c.name, ok: true, detail: j?.detail || 'Connection reachable.' });
+      }
+    } catch (e: any) {
+      setTestResult({ id: c.id, name: c.name, ok: false, detail: e?.message || String(e) });
+    } finally {
+      setTestingId(null);
+    }
+  }, []);
+
+  // Connection types with a browsable, tabular schema (the Analyze dialog reads
+  // these). ADLS/Storage + non-tabular types (Event Hubs / Service Bus / Key
+  // Vault) have no SQL-style tree, so "Analyze data" isn't offered for them.
+  const analyzable = useCallback(
+    (t: string) => ['azure-sql', 'synapse-dedicated', 'synapse-serverless', 'generic-sql', 'databricks-sql', 'postgres', 'cosmos', 'adx'].includes(t),
+    [],
+  );
+
+  // Shared per-connection action menu — reused by the list row and the tile.
+  const connActions = useCallback((c: ConnectionView) => (
+    <MenuList>
+      <MenuItem icon={<PlugConnectedCheckmark20Regular />} onClick={() => void testConn(c)}>Test connection</MenuItem>
+      <MenuItem icon={<Edit20Regular />} onClick={() => setEditConn(c)}>Edit</MenuItem>
+      {analyzable(c.type) && (
+        <MenuItem icon={<DatabaseSearch20Regular />} onClick={() => setAnalyzeConn(c)}>Analyze data</MenuItem>
+      )}
+      <MenuItem icon={<Delete20Regular />} onClick={() => remove(c)}>Delete</MenuItem>
+    </MenuList>
+  ), [analyzable, testConn, remove]);
+
   const columns: LoomColumn<ConnectionView>[] = [
     { key: 'name', label: 'Name', sortable: true, filterable: true, getValue: (c) => c.name, render: (c) => <strong>{c.name}</strong> },
     {
@@ -213,8 +263,24 @@ export default function ConnectionsPage() {
     { key: 'host', label: 'Host', sortable: true, filterable: true, getValue: (c) => c.host || '—', render: (c) => <code className={s.hostCode}>{c.host || '—'}</code> },
     { key: 'database', label: 'Database', sortable: true, filterable: true, getValue: (c) => c.database || '—', render: (c) => c.database || '—' },
     {
-      key: 'actions', label: '', sortable: false, filterable: false, width: 90,
-      render: (c) => <Button size="small" appearance="subtle" icon={<Delete20Regular />} onClick={() => remove(c)} aria-label={`Delete ${c.name}`} />,
+      key: 'actions', label: '', sortable: false, filterable: false, width: 120,
+      render: (c) => (
+        <span className={s.authLine}>
+          <Button
+            size="small" appearance="subtle"
+            icon={testingId === c.id ? <Spinner size="tiny" /> : <PlugConnectedCheckmark20Regular />}
+            disabled={testingId === c.id}
+            onClick={() => void testConn(c)}
+            aria-label={`Test ${c.name}`}
+          />
+          <Menu>
+            <MenuTrigger disableButtonEnhancement>
+              <Button size="small" appearance="subtle" icon={<MoreHorizontal20Regular />} aria-label={`Actions for ${c.name}`} />
+            </MenuTrigger>
+            <MenuPopover>{connActions(c)}</MenuPopover>
+          </Menu>
+        </span>
+      ),
     },
   ];
 
@@ -284,6 +350,22 @@ export default function ConnectionsPage() {
         </MessageBar>
       )}
 
+      {testResult && (
+        <MessageBar
+          intent={testResult.ok ? 'success' : 'error'}
+          layout="multiline"
+          politeness="assertive"
+        >
+          <MessageBarBody>
+            <MessageBarTitle>
+              {testResult.ok ? 'Connection reachable' : 'Connection test failed'} — {testResult.name}
+            </MessageBarTitle>
+            {testResult.detail}
+          </MessageBarBody>
+          <Button size="small" appearance="transparent" onClick={() => setTestResult(null)}>Dismiss</Button>
+        </MessageBar>
+      )}
+
       <Section
         title="Data source connections"
         actions={
@@ -319,11 +401,7 @@ export default function ConnectionsPage() {
                     <MenuTrigger disableButtonEnhancement>
                       <Button size="small" appearance="subtle" icon={<MoreHorizontal20Regular />} aria-label={`Actions for ${c.name}`} />
                     </MenuTrigger>
-                    <MenuPopover>
-                      <MenuList>
-                        <MenuItem icon={<Delete20Regular />} onClick={() => remove(c)}>Delete</MenuItem>
-                      </MenuList>
-                    </MenuPopover>
+                    <MenuPopover>{connActions(c)}</MenuPopover>
                   </Menu>
                 }
                 footer={
@@ -347,7 +425,22 @@ export default function ConnectionsPage() {
       </Section>
 
       <ConnectionBuilder open={builderOpen} lockType={presetType} onClose={closeBuilder} onCreated={() => void load()} />
+      <ConnectionBuilder
+        open={!!editConn}
+        editConnection={editConn ?? undefined}
+        onClose={() => setEditConn(null)}
+        onSaved={() => { setEditConn(null); void load(); }}
+      />
       <AddExistingConnectionWizard open={addExistingOpen} onClose={() => setAddExistingOpen(false)} onImported={() => void load()} />
+      {analyzeConn && (
+        <AnalyzeConnectionDialog
+          open={!!analyzeConn}
+          connectionId={analyzeConn.id}
+          connectionName={analyzeConn.name}
+          connType={analyzeConn.type as ConnectionType}
+          onDismiss={() => setAnalyzeConn(null)}
+        />
+      )}
       {dialog}
     </PageShell>
   );
