@@ -13,19 +13,21 @@
  * TMSL `linguisticMetadata` ONLY when the model is OPT-IN provisioned to a tabular
  * engine (aas-tmsl, not this module).
  *
- * GROUNDING PROJECTION — HONEST WIRING STATE (`.claude/rules/no-vaporware.md`):
- * `buildLinguisticSchema` is a PURE projection that turns the persisted synonyms
- * into a grounding-ready `LinguisticSchema` (entity list + term→candidate index)
- * for a Loom-native Q&A / Copilot grounding path. It is NOT yet wired into a
- * caller: the report Q&A AI visual (`/api/items/report/[id]/ai-visual`) currently
- * grounds on the bound model's field list (`body.fields`), NOT on
- * `state.model.synonyms`, and the synonyms BFF route
- * (`app/api/items/semantic-model/[id]/synonyms/route.ts`) inlines its own
- * normalizer rather than importing this module. Wiring this projection into that
- * route (and the report Copilot's grounding block) — or having the synonyms route
- * reuse `validateSynonyms` — is the remaining step. Until then this header
- * describes the projection this module OFFERS, not one a route already consumes;
- * it does not claim synonyms currently back Q&A.
+ * GROUNDING PROJECTION — WIRED (`.claude/rules/no-vaporware.md`, OPEN-REGISTER
+ * P1-8a): `buildLinguisticSchema` is a PURE projection that turns the persisted
+ * synonyms into a grounding-ready `LinguisticSchema` (entity list + term→
+ * candidate index). It is consumed by TWO callers:
+ *   - the synonyms BFF route (`app/api/items/semantic-model/[id]/synonyms/
+ *     route.ts`) imports `validateSynonyms` / `readSynonyms` / `writeSynonyms`
+ *     directly — it no longer inlines its own normalizer or Cosmos calls.
+ *   - the report Q&A AI visual (`/api/items/report/[id]/ai-visual`) resolves the
+ *     report's bound `semantic-model` item (via its `state.dataSource`), reads
+ *     its synonyms with `readSynonyms`, and — ONLY when the model has ≥1
+ *     synonym entry — additively appends `buildLinguisticSchema`'s projection to
+ *     the Q&A grounding prompt as a "BUSINESS TERM SYNONYMS" block, alongside the
+ *     existing bound-model field list (`body.fields`). Best-effort: an unbound /
+ *     unresolvable data source or a lookup failure degrades to no enrichment
+ *     (byte-identical to the pre-wiring prompt), never a gate.
  *
  * NO-VAPORWARE (`.claude/rules/no-vaporware.md`): real Cosmos reads/writes via
  * the shared `loadOwnedItem` / `updateOwnedItem` item-crud helpers — no mocks,
