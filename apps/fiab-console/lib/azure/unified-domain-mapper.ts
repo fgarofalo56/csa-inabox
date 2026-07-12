@@ -117,6 +117,25 @@ function unityConfigured(): boolean {
   return databricksConfigGate() === null;
 }
 
+/**
+ * Managed-storage root for UC catalogs Loom creates.
+ *
+ * A UC metastore created without a default `storage_root` (Databricks accounts
+ * with account-level "Default Storage" enabled) rejects a bare
+ * `CREATE CATALOG <name>` with INVALID_STATE: "Metastore storage root URL does
+ * not exist … provide a storage location". The create then never reaches the
+ * already-exists (409) branch. Passing an explicit `storage_root` under an
+ * existing UC external location fixes it — set
+ * `LOOM_DATABRICKS_UC_STORAGE_ROOT` to that external location's abfss:// base
+ * (e.g. abfss://unity-catalog-storage@<acct>.dfs.core.windows.net/<workspaceId>).
+ * Unset → we send no storage_root (metastores that DO have a default root work
+ * as before).
+ */
+function ucCatalogStorageRoot(catalog: string): string | undefined {
+  const base = (process.env.LOOM_DATABRICKS_UC_STORAGE_ROOT || '').trim().replace(/\/+$/, '');
+  return base ? `${base}/${catalog}` : undefined;
+}
+
 // ---------------------------------------------------------------------------
 // Purview mirror (best-effort)
 // ---------------------------------------------------------------------------
@@ -165,7 +184,7 @@ async function unityUpsert(spec: UnifiedDomainSpec, op: 'create' | 'update'): Pr
         await createUcSchema({ name: schema as string, catalog_name: catalog, comment: spec.description });
         return { ok: true, catalog, schema, detail: `Mirrored to UC schema '${catalog}.${schema}'.` };
       }
-      await createUcCatalog({ name: catalog, comment: spec.description });
+      await createUcCatalog({ name: catalog, comment: spec.description, storage_root: ucCatalogStorageRoot(catalog) });
       return { ok: true, catalog, detail: `Mirrored to UC catalog '${catalog}'.` };
     }
     // Update: the UC identifier is derived from the immutable id, so a display-
@@ -181,6 +200,19 @@ async function unityUpsert(spec: UnifiedDomainSpec, op: 'create' | 'update'): Pr
     // A pre-existing securable (already mirrored) is success, not a hard error.
     if (/already exists|409|RESOURCE_ALREADY_EXISTS/i.test(msg)) {
       return { ok: true, catalog, schema, detail: `UC ${isSub ? 'schema' : 'catalog'} already present.` };
+    }
+    // Metastore has no default storage_root and no LOOM_DATABRICKS_UC_STORAGE_ROOT
+    // was set — surface the exact one-time remediation instead of a raw 400.
+    if (/storage root URL does not exist|Metastore storage root/i.test(msg)) {
+      return {
+        ok: false,
+        catalog,
+        schema,
+        error:
+          'UC metastore has no default storage root. Set LOOM_DATABRICKS_UC_STORAGE_ROOT ' +
+          "to an existing UC external location's abfss:// base (see the workspace's " +
+          'Unity Catalog external locations) so Loom creates catalogs with a MANAGED LOCATION.',
+      };
     }
     return { ok: false, catalog, schema, error: msg };
   }
