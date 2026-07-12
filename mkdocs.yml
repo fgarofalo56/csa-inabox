@@ -1785,6 +1785,7 @@ nav:
               - Support Boundaries (v1): fiab/operations/support-boundaries.md
               - Capacity Management: fiab/operations/capacity-management.md
               - Monitoring & Observability: fiab/operations/monitoring.md
+              - Service exercise — validate every backend: fiab/operations/service-exercise.md
               - SIEM audit stream (LoomAudit_CL + Sentinel): fiab/operations/siem-audit-stream.md
               - Cost Management: fiab/operations/cost.md
               - Persistence, Chargeback, and Multi-DLZ: fiab/operations/persistence-chargeback-multidlz.md
