@@ -383,7 +383,7 @@ export default function DomainsPage() {
         )}
       </Section>
 
-      {/* Create new domain (Federal agency library + custom) / New subdomain */}
+      {/* Create new domain (curated libraries + custom) / New subdomain */}
       <CreateDomainDialog
         open={createOpen}
         onOpenChange={setCreateOpen}
