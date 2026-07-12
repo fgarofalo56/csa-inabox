@@ -36,11 +36,12 @@ export const databasesItems: FabricItemType[] = [
   { slug: 'postgres-flexible-server', displayName: 'PostgreSQL Flexible Server', restType: 'PostgresFlexibleServer', category: 'Databases', searchOnly: true,
     description: 'Azure Database for PostgreSQL Flexible Server — list/provision via ARM, databases + firewall, schema browser, catalog registration.',
     learnContent: {
-      "overview": "Azure Database for PostgreSQL Flexible Server (Microsoft.DBforPostgreSQL/flexibleServers) is a fully-managed PostgreSQL service. In CSA Loom you list existing servers across the subscription, provision new ones via ARM PUT, manage databases + firewall rules, browse schema, and register the server as a OneLake/Purview catalog asset. In-database query execution is an honest infra-gate until the pg driver + LOOM_POSTGRES_QUERY_LIVE are wired.",
+      "overview": "Azure Database for PostgreSQL Flexible Server (Microsoft.DBforPostgreSQL/flexibleServers) is a fully-managed PostgreSQL service. In CSA Loom you list existing servers across the subscription, provision new ones via ARM PUT, manage databases + firewall rules, browse schema, and register the server as a OneLake/Purview catalog asset. In-database query execution is fully wired: SQL runs over the real pg wire protocol authenticated with a Microsoft Entra token (no stored password). The only honest one-time setup is registering the console identity as a PostgreSQL Entra principal (pgaadauth_create_principal) and setting LOOM_POSTGRES_AAD_USER; until then the Query tab returns a precise 503 naming that step, never fabricated rows.",
       "steps": [
         { "title": "List servers", "body": "Inventory PostgreSQL flexible servers across the subscription via ARM." },
         { "title": "Provision", "body": "Create a new flexible server (SKU, tier, version, admin) via ARM PUT." },
         { "title": "Manage firewall", "body": "Review and upsert Microsoft.DBforPostgreSQL/flexibleServers/firewallRules." },
+        { "title": "Query", "body": "Run SQL over the real pg wire protocol with an Entra token. Register the console UAMI once via pgaadauth_create_principal and set LOOM_POSTGRES_AAD_USER; the INFORMATION_SCHEMA browser lists objects over the same live path." },
         { "title": "Register in the catalog", "body": "Surface the server as a Purview/OneLake catalog asset." }
       ],
       "docsUrl": "https://learn.microsoft.com/azure/postgresql/flexible-server/overview"

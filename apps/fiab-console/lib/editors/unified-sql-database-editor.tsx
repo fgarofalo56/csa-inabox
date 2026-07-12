@@ -1806,7 +1806,7 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
                 <MessageBar intent="warning"><MessageBarBody><MessageBarTitle>MI query requires a private endpoint in the MI subnet</MessageBarTitle>SQL MI has no public TDS gateway. Provision <code>Microsoft.Network/privateEndpoints</code> to the instance and grant the console UAMI <code>db_datareader</code>, then the same TDS path the Azure SQL editor uses applies. The route returns an honest 501 until then.</MessageBarBody></MessageBar>
               )}
               {family === 'postgres' && (
-                <MessageBar intent="warning"><MessageBarBody><MessageBarTitle>PostgreSQL query path is gated</MessageBarTitle>Add the <code>pg</code> driver to apps/fiab-console and set <code>LOOM_POSTGRES_QUERY_LIVE=true</code> (with the console UAMI created as a PG AAD principal via <code>pgaadauth_create_principal</code>). ARM inventory, provisioning, databases, and firewall are fully live now.</MessageBarBody></MessageBar>
+                <MessageBar intent="info"><MessageBarBody><MessageBarTitle>PostgreSQL query runs over the real <code>pg</code> wire protocol</MessageBarTitle>Run executes SQL against the flexible server over the <code>pg</code> wire protocol with a Microsoft Entra token — no stored password. One-time setup: register the console identity as a PostgreSQL Entra principal (<code>SELECT * FROM pgaadauth_create_principal('&lt;console-uami-name&gt;', false, false);</code>) and set <code>LOOM_POSTGRES_AAD_USER</code> to that name. Until then Run returns an honest 503 naming the exact step — never fabricated rows. ARM inventory, provisioning, databases, and firewall are live regardless.</MessageBarBody></MessageBar>
               )}
               <div className={s.queryRow}>
                 <div className={s.queryMain}>
@@ -1965,8 +1965,8 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
                 </>
               ) : family === 'postgres' ? (
                 <MessageBar intent="warning"><MessageBarBody>
-                  <MessageBarTitle>PostgreSQL object navigator is gated</MessageBarTitle>
-                  The sys.* navigator is T-SQL-specific. The PostgreSQL catalog browser (information_schema / pg_catalog over the <code>pg</code> wire protocol) lights up once the <code>pg</code> driver is added and <code>LOOM_POSTGRES_QUERY_LIVE=true</code>. Use the INFORMATION_SCHEMA query below in the meantime.
+                  <MessageBarTitle>PostgreSQL uses the INFORMATION_SCHEMA browser below</MessageBarTitle>
+                  The sys.* tree navigator is T-SQL-specific. For PostgreSQL, the <strong>INFORMATION_SCHEMA.TABLES</strong> grid below lists objects live over the real <code>pg</code> wire protocol (set <code>LOOM_POSTGRES_AAD_USER</code> — see the Query tab). A dedicated pg_catalog tree navigator is a pending visual; querying <code>information_schema</code> / <code>pg_catalog</code> works today.
                 </MessageBarBody></MessageBar>
               ) : (
                 <MessageBar intent="warning"><MessageBarBody>
