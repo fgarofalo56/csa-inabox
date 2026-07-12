@@ -1,6 +1,12 @@
 # PRP — Weave → Power BI Source Integration, Gateways, and Wizard Fixes
 
-**Status:** Active · **Created:** 2026-07-11 · **Owner:** autonomous build program
+**Status:** SHIPPED (2026-07-12) — Waves W1–W6 landed as PRs #1902–#1913, plus
+"Get data → Use a Loom item" (#1927): every PBI-sourceable item carries the
+"Analyze in Power BI" Weave edge (`analyze-in-powerbi` thread action + route),
+with Loom-native and real-PBI-service destinations, VM data gateway default-on
+(auto-upgrade to VNet gateway when a capacity is bound), and the W2 Loom-item
+source picker in the report Get Data gallery.
+**Created:** 2026-07-11 · **Owner:** autonomous build program
 **Related rules:** `no-fabric-dependency.md`, `no-vaporware.md`, `ui-parity.md`,
 `ux-baseline.md`, `web3-ui.md`, `loom_default_on_opt_out` (memory), `no_scaffold_claims` (memory)
 **Memory:** `csa_loom_weave_powerbi_prp.md`
