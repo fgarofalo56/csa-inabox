@@ -3,9 +3,17 @@
 import { Dropdown, Option, Label, makeStyles, tokens } from '@fluentui/react-components';
 
 const useStyles = makeStyles({
-  row: { display: 'flex', flexDirection: 'column', gap: '4px' },
-  label: { fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.06em',
-    color: tokens.colorNeutralForeground3, fontWeight: 600 },
+  row: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, minWidth: 0 },
+  label: {
+    fontSize: tokens.fontSizeBase100,
+    textTransform: 'uppercase',
+    letterSpacing: '0.06em',
+    color: tokens.colorNeutralForeground3,
+    fontWeight: tokens.fontWeightSemibold,
+  },
+  // Fill the table cell (numeric/picker cells share one grid column) but keep a
+  // sane floor so the SKU labels are never clipped.
+  dropdown: { minWidth: '180px', width: '100%' },
 });
 
 export interface ScaleOption {
@@ -33,7 +41,7 @@ export function ScalePicker({
         selectedOptions={[value]}
         disabled={disabled}
         onOptionSelect={(_, data) => data.optionValue && onChange(data.optionValue)}
-        style={{ minWidth: 220 }}
+        className={styles.dropdown}
       >
         {options.map(o => (
           <Option key={o.value} value={o.value} text={o.label}>

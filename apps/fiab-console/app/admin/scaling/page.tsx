@@ -48,11 +48,17 @@ const useStyles = makeStyles({
   explainer: { marginBottom: tokens.spacingVerticalL },
   explainerList: { marginTop: tokens.spacingVerticalS, marginBottom: 0, paddingLeft: tokens.spacingHorizontalXL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
   grid: {
-    display: 'grid',
-    // min(420px, 100%) lets the track shrink below 420px on narrow viewports
-    // instead of forcing a 420px column (and horizontal page overflow).
-    gridTemplateColumns: 'repeat(auto-fill, minmax(min(420px, 100%), 1fr))',
-    gap: tokens.spacingHorizontalL,
+    // Every card holds a full-width scale table (resource · target · cost ·
+    // apply). A multi-column card grid squeezed those tables below their
+    // natural width, forcing an in-card horizontal scrollbar and cramped,
+    // misaligned columns. A single capped column gives each table the room it
+    // needs; the cap keeps trailing whitespace modest on ultrawide displays.
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalL,
+    width: '100%',
+    minWidth: 0,
+    maxWidth: '1180px',
   },
   // numeric input widths (replaces inline style={{ width: N }})
   inlineNumber: { width: '100px' },
@@ -253,7 +259,7 @@ export default function ScalingPage() {
 
   const capacityColumns: LoomColumn<any>[] = [
     {
-      key: 'displayName', label: 'Capacity', width: 180,
+      key: 'displayName', label: 'Capacity', width: 240,
       render: (cap) => (
         <div className={styles.resourceCell}>
           <Caption1><strong>{cap.displayName}</strong></Caption1>
@@ -262,7 +268,7 @@ export default function ScalingPage() {
       ),
     },
     {
-      key: 'target', label: 'Target SKU', width: 240, sortable: false, filterable: false,
+      key: 'target', label: 'Target SKU', width: 320, sortable: false, filterable: false,
       render: (cap) => {
         const isPbi = (cap.sku || '').toUpperCase().startsWith('P');
         const opts = isPbi ? POWERBI_SKUS : FABRIC_SKUS;
@@ -274,11 +280,11 @@ export default function ScalingPage() {
       },
     },
     {
-      key: 'estimate', label: 'Estimated cost', width: 230, sortable: false, filterable: false,
+      key: 'estimate', label: 'Estimated cost', width: 280, sortable: false, filterable: false,
       render: (cap) => <CostPreview family="fabric-capacity" currentSku={cap.sku} targetSku={capacitySel[cap.id] ?? cap.sku} />,
     },
     {
-      key: 'apply', label: '', width: 150, sortable: false, filterable: false,
+      key: 'apply', label: 'Action', width: 180, sortable: false, filterable: false,
       render: (cap) => {
         const pending = capacitySel[cap.id] ?? cap.sku;
         const st = capacityState[cap.id] || {};
@@ -305,7 +311,7 @@ export default function ScalingPage() {
 
   const dwuColumns: LoomColumn<any>[] = [
     {
-      key: 'name', label: 'Pool', width: 180,
+      key: 'name', label: 'Pool', width: 240,
       render: (pool) => (
         <div className={styles.resourceCell}>
           <Caption1><strong>{pool.name}</strong></Caption1>
@@ -314,7 +320,7 @@ export default function ScalingPage() {
       ),
     },
     {
-      key: 'target', label: 'Target DWU', width: 240, sortable: false, filterable: false,
+      key: 'target', label: 'Target DWU', width: 320, sortable: false, filterable: false,
       render: (pool) => {
         const pending = dwuSel[pool.name] ?? pool.sku?.name;
         return (
@@ -324,11 +330,11 @@ export default function ScalingPage() {
       },
     },
     {
-      key: 'estimate', label: 'Estimated cost', width: 230, sortable: false, filterable: false,
+      key: 'estimate', label: 'Estimated cost', width: 280, sortable: false, filterable: false,
       render: (pool) => <CostPreview family="synapse-dwu" currentSku={pool.sku?.name} targetSku={dwuSel[pool.name] ?? pool.sku?.name} />,
     },
     {
-      key: 'apply', label: '', width: 150, sortable: false, filterable: false,
+      key: 'apply', label: 'Action', width: 180, sortable: false, filterable: false,
       render: (pool) => {
         const pending = dwuSel[pool.name] ?? pool.sku?.name;
         const st = dwuState[pool.name] || {};
@@ -355,7 +361,7 @@ export default function ScalingPage() {
 
   const whColumns: LoomColumn<any>[] = [
     {
-      key: 'name', label: 'Warehouse', width: 180,
+      key: 'name', label: 'Warehouse', width: 240,
       render: (w) => (
         <div className={styles.resourceCell}>
           <Caption1><strong>{w.name}</strong></Caption1>
@@ -364,7 +370,7 @@ export default function ScalingPage() {
       ),
     },
     {
-      key: 'target', label: 'cluster_size', width: 240, sortable: false, filterable: false,
+      key: 'target', label: 'cluster_size', width: 320, sortable: false, filterable: false,
       render: (w) => {
         const pending = whSel[w.id] ?? w.cluster_size;
         return (
@@ -374,11 +380,11 @@ export default function ScalingPage() {
       },
     },
     {
-      key: 'estimate', label: 'Estimated cost', width: 230, sortable: false, filterable: false,
+      key: 'estimate', label: 'Estimated cost', width: 280, sortable: false, filterable: false,
       render: (w) => <CostPreview family="databricks-warehouse" currentSku={w.cluster_size} targetSku={whSel[w.id] ?? w.cluster_size} />,
     },
     {
-      key: 'apply', label: '', width: 150, sortable: false, filterable: false,
+      key: 'apply', label: 'Action', width: 180, sortable: false, filterable: false,
       render: (w) => {
         const pending = whSel[w.id] ?? w.cluster_size;
         const st = whState[w.id] || {};
@@ -403,7 +409,7 @@ export default function ScalingPage() {
 
   const clusterColumns: LoomColumn<any>[] = [
     {
-      key: 'cluster_name', label: 'Cluster', width: 180,
+      key: 'cluster_name', label: 'Cluster', width: 240,
       render: (c) => (
         <div className={styles.resourceCell}>
           <Caption1><strong>{c.cluster_name}</strong></Caption1>
@@ -412,7 +418,7 @@ export default function ScalingPage() {
       ),
     },
     {
-      key: 'config', label: 'Node type & workers', width: 380, sortable: false, filterable: false,
+      key: 'config', label: 'Node type & workers', width: 640, sortable: false, filterable: false,
       render: (c) => {
         const pendingNode = clusterSel[c.cluster_id]?.node_type_id ?? c.node_type_id;
         const pendingWorkers = clusterSel[c.cluster_id]?.num_workers ?? c.num_workers ?? 1;
@@ -437,7 +443,7 @@ export default function ScalingPage() {
       },
     },
     {
-      key: 'apply', label: '', width: 150, sortable: false, filterable: false,
+      key: 'apply', label: 'Action', width: 180, sortable: false, filterable: false,
       render: (c) => {
         const pendingNode = clusterSel[c.cluster_id]?.node_type_id ?? c.node_type_id;
         const pendingWorkers = clusterSel[c.cluster_id]?.num_workers ?? c.num_workers ?? 1;
@@ -465,7 +471,7 @@ export default function ScalingPage() {
 
   const cosmosColumns: LoomColumn<any>[] = [
     {
-      key: 'id', label: 'Container', width: 200,
+      key: 'id', label: 'Container', width: 260,
       render: (cn) => (
         <div className={styles.resourceCell}>
           <Caption1><strong>{cn.id}</strong></Caption1>
@@ -474,7 +480,7 @@ export default function ScalingPage() {
       ),
     },
     {
-      key: 'throughput', label: 'Throughput', width: 300, sortable: false, filterable: false,
+      key: 'throughput', label: 'Throughput', width: 640, sortable: false, filterable: false,
       render: (cn) => {
         if (cn.mode === 'serverless') {
           return <Caption1 className={styles.italicNote}>Serverless account — no RU/s dial (billed per request).</Caption1>;
@@ -497,7 +503,7 @@ export default function ScalingPage() {
       },
     },
     {
-      key: 'apply', label: '', width: 150, sortable: false, filterable: false,
+      key: 'apply', label: 'Action', width: 180, sortable: false, filterable: false,
       render: (cn) => {
         if (cn.mode === 'serverless') return <Caption1 className={styles.subtle}>—</Caption1>;
         const sel = cosmosSel[cn.id] || {};
@@ -523,7 +529,7 @@ export default function ScalingPage() {
 
   const acaColumns: LoomColumn<any>[] = [
     {
-      key: 'name', label: 'App', width: 180,
+      key: 'name', label: 'App', width: 240,
       render: (a) => (
         <div className={styles.resourceCell}>
           <Caption1><strong>{a.name}</strong></Caption1>
@@ -532,7 +538,7 @@ export default function ScalingPage() {
       ),
     },
     {
-      key: 'config', label: 'Profile & replicas', width: 360, sortable: false, filterable: false,
+      key: 'config', label: 'Profile & replicas', width: 640, sortable: false, filterable: false,
       render: (a) => {
         const sel = acaSel[a.name] || {};
         const pendingProfile = sel.workloadProfileName ?? a.workloadProfileName ?? 'Consumption';
@@ -557,7 +563,7 @@ export default function ScalingPage() {
       },
     },
     {
-      key: 'apply', label: '', width: 150, sortable: false, filterable: false,
+      key: 'apply', label: 'Action', width: 180, sortable: false, filterable: false,
       render: (a) => {
         const sel = acaSel[a.name] || {};
         const st = acaState[a.name] || {};
@@ -587,7 +593,7 @@ export default function ScalingPage() {
 
   const foundryColumns: LoomColumn<any>[] = [
     {
-      key: 'name', label: 'Compute', width: 200,
+      key: 'name', label: 'Compute', width: 260,
       render: (c) => (
         <div className={styles.resourceCell}>
           <Caption1><strong>{c.name}</strong></Caption1>
@@ -596,7 +602,7 @@ export default function ScalingPage() {
       ),
     },
     {
-      key: 'config', label: 'vmSize & nodes', width: 420, sortable: false, filterable: false,
+      key: 'config', label: 'vmSize & nodes', width: 640, sortable: false, filterable: false,
       render: (c) => {
         if (c.computeType !== 'AmlCompute') {
           return (
@@ -628,7 +634,7 @@ export default function ScalingPage() {
       },
     },
     {
-      key: 'apply', label: '', width: 150, sortable: false, filterable: false,
+      key: 'apply', label: 'Action', width: 180, sortable: false, filterable: false,
       render: (c) => {
         if (c.computeType !== 'AmlCompute') return <Caption1 className={styles.subtle}>—</Caption1>;
         const sel = foundrySel[c.name] || {};
