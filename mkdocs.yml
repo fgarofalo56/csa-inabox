@@ -210,14 +210,16 @@ nav:
   - Home: index.md
 
   # ============================================================
-  # 0. CSA LOOM — what the product is (Copilot grounding foundation)
+  # 0. CSA LOOM top-level tab lives further down the nav (single
+  # canonical section, backed by docs/fiab/). The small docs/loom/
+  # section that used to duplicate this tab was folded in below:
+  # loom/index.md and loom/architecture.md were dropped from the nav
+  # (superseded by fiab/what-is-csa-loom.md and
+  # fiab/architecture-full-picture.md — files kept, not deleted);
+  # loom/fabric-to-azure-mapping.md and loom/item-catalog.md moved
+  # into "CSA Loom > Overview"; loom/loom-apps.md moved into
+  # "CSA Loom > Workloads". See docs/loom/ for the source files.
   # ============================================================
-  - CSA Loom:
-      - What is CSA Loom: loom/index.md
-      - Architecture: loom/architecture.md
-      - Fabric to Azure-native mapping: loom/fabric-to-azure-mapping.md
-      - Loom Apps: loom/loom-apps.md
-      - Item catalog: loom/item-catalog.md
 
   # ============================================================
   # 1. GET STARTED — first 30 minutes for any new visitor
@@ -1431,6 +1433,8 @@ nav:
           - What is CSA Loom: fiab/what-is-csa-loom.md
           - Whitepaper: fiab/whitepaper.md
           - Parity Matrix: fiab/parity-matrix.md
+          - "Fabric → Azure-native mapping (headline table)": loom/fabric-to-azure-mapping.md
+          - "Item catalog (all 118 items by workload)": loom/item-catalog.md
 
       # ------------------------------------------------------------
       # 2. Architecture & Decisions
@@ -1513,6 +1517,7 @@ nav:
           - Direct Lake parity: fiab/workloads/direct-lake-parity.md
           - Copilot in CSA Loom: fiab/workloads/copilot-parity.md
           - Fabric IQ family (v2 preview): fiab/workloads/fabric-iq-family.md
+          - "Loom Apps (org apps & data apps)": loom/loom-apps.md
 
       # ------------------------------------------------------------
       # 5. Editors — Fabric-item parity per editor type
