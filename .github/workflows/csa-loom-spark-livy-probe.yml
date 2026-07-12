@@ -52,8 +52,38 @@ jobs:
           DEV="https://${SYN_WS}.dev.azuresynapse.net"
           API="livyApi/versions/2019-11-01-preview/sparkPools/${POOL}/sessions"
           TOK=$(az account get-access-token --resource https://dev.azuresynapse.net --query accessToken -o tsv | tr -d '\r')
-          echo "== list existing sessions =="
-          curl -s -H "Authorization: Bearer $TOK" "${DEV}/${API}?from=0&size=20" | python3 -c "import sys,json;d=json.load(sys.stdin);print('total',d.get('total'));[print(' ',s.get('id'),s.get('state'),(s.get('name') or '')[:40]) for s in (d.get('sessions') or [])]" || true
+          echo "== list existing sessions (count by state) =="
+          curl -s -H "Authorization: Bearer $TOK" "${DEV}/${API}?from=0&size=100" | python3 -c "
+import sys,json;from collections import Counter
+d=json.load(sys.stdin);ss=d.get('sessions') or []
+print('total reported:', d.get('total'), '| in list:', len(ss), '| by state:', dict(Counter(s.get('state') for s in ss)))
+" || true
+
+          echo "== CLEAN leaked/error/dead sessions (free the pool) =="
+          IDS=$(curl -s -H "Authorization: Bearer $TOK" "${DEV}/${API}?from=0&size=100" | python3 -c "import sys,json;ss=json.load(sys.stdin).get('sessions') or [];print(' '.join(str(s['id']) for s in ss if s.get('state') in ('error','dead','killed','not_started','shutting_down')))" 2>/dev/null)
+          N=0
+          for id in $IDS; do
+            TOK=$(az account get-access-token --resource https://dev.azuresynapse.net --query accessToken -o tsv | tr -d '\r')
+            curl -s -X DELETE -H "Authorization: Bearer $TOK" "${DEV}/${API}/${id}" -o /dev/null && N=$((N+1))
+          done
+          echo "  deleted $N stale sessions"
+          sleep 10
+          TOK=$(az account get-access-token --resource https://dev.azuresynapse.net --query accessToken -o tsv | tr -d '\r')
+          curl -s -H "Authorization: Bearer $TOK" "${DEV}/${API}?from=0&size=100" | python3 -c "import sys,json;from collections import Counter;ss=json.load(sys.stdin).get('sessions') or [];print('  after clean — by state:', dict(Counter(s.get('state') for s in ss)))" || true
+
+          echo "== MINIMAL session (1 exec / 1 core / 512m driver) — is it a quota issue? =="
+          MINRESP=$(curl -s -X POST -H "Authorization: Bearer $TOK" -H "Content-Type: application/json" "${DEV}/${API}" -d '{"name":"loom-min-probe","kind":"pyspark","numExecutors":1,"executorCores":1,"executorMemory":"1g","driverCores":1,"driverMemory":"1g"}')
+          MID=$(echo "$MINRESP" | python3 -c "import sys,json;print(json.load(sys.stdin).get('id',''))" 2>/dev/null)
+          echo "  minimal session id=$MID resp=$(echo "$MINRESP" | head -c 200)"
+          MSTATE=""
+          for i in $(seq 1 60); do
+            TOK=$(az account get-access-token --resource https://dev.azuresynapse.net --query accessToken -o tsv | tr -d '\r')
+            MSTATE=$(curl -s -H "Authorization: Bearer $TOK" "${DEV}/${API}/${MID}" | python3 -c "import sys,json;print(json.load(sys.stdin).get('state',''))" 2>/dev/null)
+            echo "  [min $i] state=$MSTATE"; case "$MSTATE" in idle|dead|error|killed) break;; esac; sleep 10
+          done
+          echo "  MINIMAL FINAL=$MSTATE"
+          [ "$MSTATE" = "idle" ] && echo "MINIMAL WORKS → the standard sizing exceeds available Spark vCore quota (raise quota / lower pool max)." || echo "::warning::MINIMAL also failed ($MSTATE) → pool cannot launch ANY app (Spark vCore quota exhausted/zero, or pool fault)."
+          curl -s -X DELETE -H "Authorization: Bearer $TOK" "${DEV}/${API}/${MID}" -o /dev/null || true
 
           CONF='{}'
           if [ "$WITH_LA" = "true" ]; then CONF='{"spark.synapse.logAnalytics.enabled":"true"}'; fi
