@@ -103,6 +103,8 @@ export interface ObservabilityData {
   database?: string;
   tableName?: string | null;
   gate?: { adx?: { missing: string }; purview?: { missing: string } };
+  /** Per-section failure reasons when an independent ADX read timed out/failed. */
+  sectionErrors?: { healthCharts?: string; dqScore?: string };
   error?: string;
 }
 
@@ -393,6 +395,16 @@ export function ObservabilityTabContent({ id, obs, loading, err, refresh }: {
         {obs?.database && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>ADX database <code>{obs.database}</code>{obs.tableName ? <> · table <code>{obs.tableName}</code></> : ''}</Caption1>}
       </div>
       {err && !adxGate && !purviewGate && <MessageBar intent="error"><MessageBarBody>{err}</MessageBarBody></MessageBar>}
+      {obs?.sectionErrors && (obs.sectionErrors.healthCharts || obs.sectionErrors.dqScore) && (
+        <MessageBar intent="warning">
+          <MessageBarBody>
+            <MessageBarTitle>Partial data</MessageBarTitle>
+            Some Azure Data Explorer queries timed out or failed
+            ({[obs.sectionErrors.healthCharts && 'health charts', obs.sectionErrors.dqScore && 'data-quality score'].filter(Boolean).join(', ')}).
+            The rest is shown below — refresh to retry.
+          </MessageBarBody>
+        </MessageBar>
+      )}
       {loading && !obs && <Spinner size="tiny" label="Loading observability…" />}
 
       {/* ---- Health-action cards ---- */}
