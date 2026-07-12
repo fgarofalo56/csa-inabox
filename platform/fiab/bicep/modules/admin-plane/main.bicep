@@ -2755,6 +2755,18 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // until the orchestrator Container App is deployed (setupOrchestratorActive);
             // then the deploy BFF falls back to GitHub dispatch / copy-paste az.
             { name: 'LOOM_SETUP_ORCHESTRATOR_URL', value: setupOrchestratorActive ? setupOrchestrator!.outputs.url : '' }
+            // DAY-ONE in-product DLZ deploy/attach: the deploy BFF submits a real
+            // subscription-scoped `Microsoft.Resources/deployments` PUT under the
+            // SIGNED-IN USER's delegated ARM token so an operator can deploy/attach
+            // into ANY subscription they hold Contributor on. ARM REST needs a
+            // COMPILED template (there is no bicep compiler in the console image),
+            // so the CI app-deploy workflow publishes platform/fiab/bicep/main.json
+            // to a reachable URI and sets this env (blob SAS → LOOM_DLZ_TEMPLATE_QUERY_STRING).
+            // Empty here = the deploy falls back to the honest copy-paste `az` gate,
+            // which names this env var. (256-param cap: seeded as a literal, set by
+            // CI/operator via `az containerapp update --set-env-vars`.)
+            { name: 'LOOM_DLZ_TEMPLATE_URI', value: '' }
+            { name: 'LOOM_DLZ_TEMPLATE_QUERY_STRING', value: '' }
             // MCP catalog deploy (admin → Copilot & Agents → External MCP Tools →
             // Browse library). The deploy/status/teardown BFF routes
             // (app/api/admin/mcp-servers/deploy + .../deployed/{status,teardown})
