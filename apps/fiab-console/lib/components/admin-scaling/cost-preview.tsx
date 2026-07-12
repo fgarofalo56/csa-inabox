@@ -48,14 +48,18 @@ const PRICE_USD_PER_MONTH: Record<string, Record<string, number>> = {
 
 const useStyles = makeStyles({
   box: {
-    padding: '8px 10px',
-    borderRadius: '4px',
+    padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`,
+    borderRadius: tokens.borderRadiusMedium,
     backgroundColor: tokens.colorNeutralBackground2,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     display: 'flex',
     flexDirection: 'column',
-    gap: '2px',
+    gap: tokens.spacingVerticalXXS,
   },
+  caption: { color: tokens.colorNeutralForeground3 },
+  captionItalic: { color: tokens.colorNeutralForeground3, fontStyle: 'italic' },
+  deltaUp: { marginLeft: tokens.spacingHorizontalSNudge, color: tokens.colorPaletteRedForeground1 },
+  deltaDown: { marginLeft: tokens.spacingHorizontalSNudge, color: tokens.colorPaletteGreenForeground1 },
 });
 
 export function CostPreview({
@@ -75,7 +79,7 @@ export function CostPreview({
   const delta = current !== undefined && target !== undefined ? (target - current) * mult : undefined;
   return (
     <div className={styles.box}>
-      <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+      <Caption1 className={styles.caption}>
         Estimated monthly cost (East US 2, list price, USD)
       </Caption1>
       <Caption1>
@@ -84,14 +88,14 @@ export function CostPreview({
           <>
             {' '}→ <strong>${(target * mult).toLocaleString()}</strong>
             {delta !== undefined && (
-              <span style={{ marginLeft: tokens.spacingHorizontalSNudge, color: delta > 0 ? tokens.colorPaletteRedForeground1 : tokens.colorPaletteGreenForeground1 }}>
+              <span className={delta > 0 ? styles.deltaUp : styles.deltaDown}>
                 ({delta > 0 ? '+' : ''}${delta.toLocaleString()}/mo)
               </span>
             )}
           </>
         )}
       </Caption1>
-      <Caption1 style={{ color: tokens.colorNeutralForeground3, fontStyle: 'italic' }}>
+      <Caption1 className={styles.captionItalic}>
         Excludes reserved-instance discounts, regional differential, and SLA surcharges.
       </Caption1>
     </div>
