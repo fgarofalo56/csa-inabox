@@ -118,6 +118,16 @@ export interface AiFnOptions {
    * retries once without it (same fallback shape as the temperature retry).
    */
   reasoningEffort?: 'minimal' | 'low' | 'medium' | 'high';
+  /**
+   * G2 multimodal — treat `input` as an image/document reference (an https URL
+   * or a `data:` URI) and send it as an AOAI vision `image_url` content part
+   * instead of a plain text user message. Requires a vision-capable `deployment`
+   * (the BFF resolves `LOOM_AOAI_VISION_DEPLOYMENT` and honest-gates when unset).
+   * Only meaningful for the extract / classify / summarize chat functions.
+   */
+  visionInput?: boolean;
+  /** Vision fidelity hint forwarded to AOAI (`low` | `high` | `auto`). */
+  imageDetail?: 'low' | 'high' | 'auto';
 }
 
 export interface AiFnUsage {
@@ -298,6 +308,41 @@ export async function callAiFnBatch(
   options: AiFnOptions = {},
   concurrency = 4,
 ): Promise<AiFnBatchResult> {
+  return runBatch(inputs, options, concurrency, (input) => callAiFn(fn, input, options));
+}
+
+/**
+ * Batch a user-authored custom prompt over an ARRAY of inputs — the schema-
+ * builder AI-column path (G2 #6). Each row runs the SAME custom system prompt
+ * (e.g. a multi-field extraction contract built from the schema) via
+ * `callCustomPrompt`, with the same bounded concurrency + honest partial-failure
+ * as `callAiFnBatch`. The per-row `result` is the raw model text (typically a
+ * JSON object the caller parses into the schema's columns).
+ */
+export async function callCustomPromptBatch(
+  systemPrompt: string,
+  inputs: string[],
+  options: AiFnOptions = {},
+  concurrency = 4,
+): Promise<AiFnBatchResult> {
+  const prompt = (systemPrompt || '').trim();
+  if (!prompt) throw new Error('callCustomPromptBatch requires a non-empty prompt.');
+  return runBatch(inputs, options, concurrency, (input) => callCustomPrompt(prompt, input, options));
+}
+
+/**
+ * Shared bounded-concurrency mapper for the batch AI paths. `perRow` runs one
+ * real AOAI round-trip; empty cells pass through unchanged (never a wasted
+ * call); a `NoAoaiDeploymentError` from any row aborts the whole batch (nothing
+ * would succeed) so the route surfaces one honest gate; any other per-row error
+ * is captured on that row and never aborts the batch. Token usage is summed.
+ */
+async function runBatch(
+  inputs: string[],
+  options: AiFnOptions,
+  concurrency: number,
+  perRow: (input: string) => Promise<AiFnResult>,
+): Promise<AiFnBatchResult> {
   const rows: AiFnBatchRow[] = new Array(inputs.length);
   const usage: AiFnUsage = { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
   let failed = 0;
@@ -310,13 +355,12 @@ export async function callAiFnBatch(
       const i = cursor++;
       if (i >= inputs.length) return;
       const input = inputs[i] ?? '';
-      // Empty cells pass through unchanged — never a wasted AOAI call.
       if (!input.trim()) {
         rows[i] = { index: i, input, result: '' };
         continue;
       }
       try {
-        const r = await callAiFn(fn, input, options);
+        const r = await perRow(input);
         rows[i] = { index: i, input, result: r.result };
         if (r.model) model = r.model;
         if (r.usage) {
@@ -325,8 +369,6 @@ export async function callAiFnBatch(
           usage.totalTokens += r.usage.totalTokens;
         }
       } catch (e: any) {
-        // A NoAoaiDeploymentError means NOTHING will succeed — rethrow so the
-        // route surfaces the honest gate instead of N identical per-row errors.
         if (e instanceof NoAoaiDeploymentError) throw e;
         failed += 1;
         rows[i] = { index: i, input, result: '', error: e?.message || String(e) };
@@ -357,9 +399,15 @@ async function chatComplete(
   const deployment = (options.deployment && options.deployment.trim()) || target.deployment;
   const url = `${target.endpoint}/openai/deployments/${encodeURIComponent(deployment)}/chat/completions?api-version=${target.apiVersion}`;
 
+  // G2 multimodal: when visionInput is set, `input` is an image/document ref
+  // (https URL or data: URI) sent as an AOAI vision content part. Otherwise the
+  // classic plain-text user message.
+  const userContent: string | Array<Record<string, unknown>> = options.visionInput
+    ? [{ type: 'image_url', image_url: { url: input, detail: options.imageDetail || 'auto' } }]
+    : input;
   const messages = [
     { role: 'system' as const, content: systemPrompt },
-    { role: 'user' as const, content: input },
+    { role: 'user' as const, content: userContent },
   ];
   const reasoningEffort = options.reasoningEffort;
 

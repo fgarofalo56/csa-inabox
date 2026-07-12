@@ -38,6 +38,7 @@ import { GuidedEmptyState, type GuidedPath } from '@/lib/components/shared/guide
 import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
 import { PowerQueryHost } from '@/lib/components/pipeline/dataflow/power-query-host';
 import { DataflowCopilotPane } from '@/lib/components/pipeline/dataflow/dataflow-copilot-pane';
+import { DataflowAiStepDialog } from '@/lib/components/pipeline/dataflow/dataflow-ai-step';
 import { DestinationPicker } from '@/lib/components/pipeline/dataflow/destination-picker';
 import { parseSharedQueries, type DataflowSink } from '@/lib/components/pipeline/dataflow/m-script';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
@@ -220,6 +221,7 @@ export function DataflowGen2Editor({ item, id }: Props) {
   const [runHint, setRunHint] = useState<string | null>(null);
   const [runOk, setRunOk] = useState<boolean | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
+  const [aiStepOpen, setAiStepOpen] = useState(false);
   const [createName, setCreateName] = useState('');
   const [createBusy, setCreateBusy] = useState(false);
   const [createErr, setCreateErr] = useState<string | null>(null);
@@ -418,7 +420,19 @@ export function DataflowGen2Editor({ item, id }: Props) {
             <Button appearance="primary" icon={<Play20Regular />} disabled={!canRun} onClick={run}>{running ? 'Running…' : 'Save & Run'}</Button>
             <Button appearance="subtle" icon={<Delete20Regular />} disabled={!dataflowId} onClick={del}>Delete</Button>
             <Button appearance={copilotOpen ? 'primary' : 'outline'} icon={<Sparkle20Regular />} onClick={() => setCopilotOpen((v) => !v)}>{copilotOpen ? 'Copilot on' : 'Copilot'}</Button>
+            <Button appearance="outline" icon={<Sparkle20Regular />} disabled={!dataflowId || !isM} onClick={() => setAiStepOpen(true)}>AI column</Button>
           </div>
+
+          {aiStepOpen && (
+            <DataflowAiStepDialog
+              open={aiStepOpen}
+              onOpenChange={setAiStepOpen}
+              columns={[]}
+              queryName={activeQuery || queryNames[0] || 'Query1'}
+              mScript={defText}
+              onApply={(nextM) => { setDefText(nextM); setDirty(true); }}
+            />
+          )}
 
           {config && !config.adfConfigured && (
             <MessageBar intent="warning">

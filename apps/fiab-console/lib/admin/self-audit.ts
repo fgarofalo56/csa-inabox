@@ -103,6 +103,7 @@ export const VALUE_HINT: Record<string, string> = {
   LOOM_POSTURE_FUNCTION_URL: 'https://func-loom-posture-refresh-<hash>.azurewebsites.net',
   LOOM_AOAI_ENDPOINT: 'https://<aoai-or-foundry>.openai.azure.com/',
   LOOM_AOAI_DEPLOYMENT: 'gpt-4o-mini',
+  LOOM_AOAI_VISION_DEPLOYMENT: '<opt-in gpt-4o vision deployment for multimodal AI columns>',
   LOOM_LOG_ANALYTICS_RESOURCE_ID: '/subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.OperationalInsights/workspaces/<law>',
   LOOM_ALERT_RG: env('LOOM_ADMIN_RG') || '<alert-resource-group (defaults to the admin RG)>',
   LOOM_ADF_FACTORY: '<data-factory-name>',

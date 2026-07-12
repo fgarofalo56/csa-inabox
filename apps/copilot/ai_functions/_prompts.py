@@ -39,4 +39,15 @@ def build_system_prompt(
     if fn == "translate":
         lang = (target_lang or "English").strip()
         return f"Translate the following text to {lang}. Return only the translation, no quotes and no commentary."
+    if fn == "fix_grammar":
+        return (
+            "Correct the spelling, grammar, and punctuation of the following text. "
+            "Preserve the original meaning and tone. Return only the corrected text — "
+            "no quotes, no commentary, and no explanation of the changes."
+        )
+    if fn == "generate_response":
+        return (
+            "You are a helpful assistant. Generate a clear, professional response to the "
+            "following message or prompt. Return only the response text, with no preamble."
+        )
     raise ValueError(f"Unknown AI function: {fn!r}")
