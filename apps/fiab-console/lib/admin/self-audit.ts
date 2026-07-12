@@ -223,13 +223,37 @@ export interface EnvSpec {
    * env-config surface renders these with a third "derived" status, not a bare
    * "not set", because the operator normally never sets them by hand. */
   derived?: boolean;
+  /** True when the UNSET state is the fully-functional, intended day-one default:
+   * the console silently falls back to a built-in path with zero loss of function
+   * (an optional scale-out substrate, not a configuration gap). Per
+   * loom_default_on_opt_out the FEATURE is ON by default via that fallback, so an
+   * unset var here is NOT a health defect — the check passes with an honest
+   * "fallback active" detail and the optional upgrade step, and the env-config
+   * surface counts it as configured (status 'default'). Reserved for genuine
+   * silent-fallback substrates (the Hyperscale-band OneLake/Direct Lake/Broker
+   * apps deployed out-of-band), never for a service the default deploy provisions. */
+  optionalDefault?: boolean;
 }
 
-function evalEnv(spec: EnvSpec): CheckResult {
+export function evalEnv(spec: EnvSpec): CheckResult {
   const missing: string[] = [];
   for (const k of spec.required || []) if (!has(k)) missing.push(k);
   for (const group of spec.anyOf || []) if (!group.some(has)) missing.push(group.join(' | '));
   const ok = missing.length === 0;
+  // Optional silent-fallback substrate (H-band): an unset var is the intended,
+  // fully-functional day-one default — the console falls back to a built-in path
+  // with no loss of function (loom_default_on_opt_out: the feature is ON via the
+  // fallback). Report pass with an honest "fallback active" detail + the optional
+  // scale-out step, so a correct default posture never drags the health score.
+  if (!ok && spec.optionalDefault) {
+    return {
+      id: spec.id, category: spec.category, title: spec.title, severity: spec.severity,
+      status: 'pass',
+      detail: `Built-in fallback active (fully functional) — the ${missing.join(', ')} scale-out substrate is optional and deployed out-of-band.`,
+      remediation: spec.remediation,
+      docs: spec.docs,
+    };
+  }
   const failStatus: AuditStatus = spec.warnOnMiss || spec.severity !== 'critical' ? 'warn' : 'fail';
   const fix = ok ? null : envVarFix(varsToSet(missing));
   return {
@@ -557,7 +581,7 @@ export const ENV_CHECKS: EnvSpec[] = [
   },
   {
     id: 'svc-plan-writeback', category: 'builders', title: 'Plan (preview) — Azure SQL writeback store', severity: 'optional',
-    required: ['LOOM_PLAN_BACKING_SQL_SERVER', 'LOOM_PLAN_BACKING_SQL_DATABASE'], warnOnMiss: true,
+    required: ['LOOM_PLAN_BACKING_SQL_SERVER', 'LOOM_PLAN_BACKING_SQL_DATABASE'], warnOnMiss: true, optionalDefault: true,
     remediation: 'Planning cells always persist Loom-native (Cosmos). To ALSO mirror them into a governed Azure SQL store (the Azure-native equivalent of Fabric\'s auto-provisioned Plan SQL database), deploy modules/shared/plan-backing-sql.bicep (or point at an existing DB) and set LOOM_PLAN_BACKING_SQL_SERVER + LOOM_PLAN_BACKING_SQL_DATABASE. Grant the Console UAMI db_ddladmin + db_datawriter on that database (AAD token auth — no SQL password). No Microsoft Fabric required.',
     provisionedBy: 'modules/shared/plan-backing-sql.bicep → admin-plane/main.bicep params loomPlanBackingSqlServer / loomPlanBackingSqlDatabase (apps[] env ~2579)',
     role: 'db_ddladmin + db_datawriter (Console UAMI AAD login) on the writeback database',
@@ -606,21 +630,21 @@ export const ENV_CHECKS: EnvSpec[] = [
   //    the per-service compute/loom-*-app.bicep, and set these on the Console app.
   {
     id: 'svc-loom-onelake', category: 'data-plane', title: 'Loom OneLake — unified namespace service (Hyperscale)', severity: 'optional',
-    required: ['LOOM_ONELAKE_URL'], warnOnMiss: true,
+    required: ['LOOM_ONELAKE_URL'], warnOnMiss: true, optionalDefault: true,
     remediation: 'Set LOOM_ONELAKE_URL to the internal-ingress Loom OneLake ACA app (loom://<workspace>/<item>.<type>/<path> namespace + shortcut + security + catalog resolver on ADLS Gen2 + Cosmos — no Microsoft Fabric / OneLake DNS). Deploy compute/loom-onelake-app.bicep on the shared substrate from compute/hband-shared.bicep. Unset → the lakehouse/shortcut/security editors use the existing per-item library path (adls-client / lakehouse-shortcuts / onelake-security-client) with no loss of function.',
     provisionedBy: 'modules/compute/hband-shared.bicep (shared UAMIs + Redis) + modules/compute/loom-onelake-app.bicep (out-of-band; admin-plane at 256-param ceiling) → LOOM_ONELAKE_URL on the Console app',
     role: 'Storage Blob Data Contributor (uami-loom-onelake) on the DLZ lake + Cosmos data-plane on the registry containers',
   },
   {
     id: 'svc-loom-directlake', category: 'data-plane', title: 'Loom Direct Lake — columnar cache/scan engine (Hyperscale)', severity: 'optional',
-    required: ['LOOM_DIRECTLAKE_URL'], warnOnMiss: true,
+    required: ['LOOM_DIRECTLAKE_URL'], warnOnMiss: true, optionalDefault: true,
     remediation: 'Set LOOM_DIRECTLAKE_URL to the internal-ingress Loom Direct Lake ACA app (Arrow + delta-rs framing/transcoding + DuckDB/DataFusion scan; the OSS outcome-equivalent of Direct Lake — no VertiPaq, no Power BI). Also set LOOM_SEMANTIC_BACKEND=loom-columnar-cache to route DAX-class queries to it. Deploy compute/loom-directlake-app.bicep on compute/hband-shared.bicep. Unset → the semantic-model / report layer uses the AAS fast-path or the Synapse-Serverless cold path unchanged.',
     provisionedBy: 'modules/compute/hband-shared.bicep (uami-loom-directlake + shared Redis) + modules/compute/loom-directlake-app.bicep (out-of-band) → LOOM_DIRECTLAKE_URL on the Console app',
     role: 'Storage Blob Data Reader (uami-loom-directlake) on the DLZ lake; Redis Data Contributor on the shared cache (wired by hband-shared.bicep)',
   },
   {
     id: 'svc-loom-capacity-broker', category: 'azure-services', title: 'Loom Capacity Broker — LCU admission control (Hyperscale)', severity: 'optional',
-    required: ['LOOM_BROKER_URL', 'LOOM_BROKER_REDIS'], warnOnMiss: true,
+    required: ['LOOM_BROKER_URL', 'LOOM_BROKER_REDIS'], warnOnMiss: true, optionalDefault: true,
     remediation: 'Set LOOM_BROKER_URL to the internal-ingress Loom Capacity Broker ACA app (synchronous POST /admit choke-point + smoothing/bursting/4-stage-throttle over an LCU timepoint ledger) and LOOM_BROKER_REDIS to <hband-redis-host>:6380 (the shared Azure Cache for Redis Premium ledger from compute/hband-shared.bicep). Deploy compute/loom-capacity-broker-app.bicep. Unset → job submission proceeds UNTHROTTLED with a MessageBar (default-ON posture — the broker constrains, it never blocks the platform if absent).',
     provisionedBy: 'modules/compute/hband-shared.bicep (uami-loom-capacity-broker + shared Redis timepoint ledger) + modules/compute/loom-capacity-broker-app.bicep (out-of-band) → LOOM_BROKER_URL / LOOM_BROKER_REDIS on the Console app',
     role: 'none (uami-loom-capacity-broker holds ZERO data-plane roles — it gates the caller, never proxies; Redis Data Contributor on the shared cache is wired by hband-shared.bicep)',

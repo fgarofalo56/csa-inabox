@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { ENV_CHECKS, VALUE_HINT } from '../self-audit';
+import { describe, it, expect, afterEach } from 'vitest';
+import { ENV_CHECKS, VALUE_HINT, evalEnv, type EnvSpec } from '../self-audit';
 
 /**
  * Self-audit engine — structural + day-one-coverage tests.
@@ -48,6 +48,60 @@ describe('self-audit ENV_CHECKS — day-one surface coverage', () => {
     for (const k of ['LOOM_DATABRICKS_HOSTNAME', 'LOOM_PURVIEW_UC_ENDPOINT', 'LOOM_DLP_ENABLED', 'LOOM_ACA_ENV_ID', 'LOOM_BUILTIN_MCP_URL']) {
       expect(VALUE_HINT[k], `VALUE_HINT[${k}]`).toBeTruthy();
     }
+  });
+
+  // ── optionalDefault: silent-fallback substrates score as configured day-one ──
+  // The three Hyperscale-band substrate apps (OneLake / Direct Lake / Broker) are
+  // deployed out-of-band and, when unset, the console falls back to a built-in
+  // path with ZERO loss of function (loom_default_on_opt_out — the FEATURE is on
+  // via the fallback). The Plan SQL writeback is likewise Cosmos-native by default
+  // (the SQL mirror is a BYO opt-in). Each is flagged optionalDefault so an unset
+  // var is NOT a health gap: evalEnv returns 'pass' (not 'warn'), keeping a clean
+  // deploy at score 100 / 73-of-73 configured without faking any resource.
+  it('flags the out-of-band silent-fallback substrates optionalDefault=true', () => {
+    for (const id of ['svc-loom-onelake', 'svc-loom-directlake', 'svc-loom-capacity-broker', 'svc-plan-writeback']) {
+      expect(byId.get(id)!.optionalDefault, id).toBe(true);
+    }
+    // A normal service (Synapse) is NOT optionalDefault — its resource IS
+    // provisioned day-one and must be wired, not treated as an optional fallback.
+    expect(byId.get('svc-synapse')!.optionalDefault).toBeUndefined();
+  });
+});
+
+describe('self-audit evalEnv — optionalDefault passes when unset', () => {
+  const HBAND_VARS = ['LOOM_ONELAKE_URL', 'LOOM_DIRECTLAKE_URL', 'LOOM_BROKER_URL', 'LOOM_BROKER_REDIS'];
+  const saved: Record<string, string | undefined> = {};
+  afterEach(() => {
+    for (const [k, v] of Object.entries(saved)) {
+      if (v === undefined) delete process.env[k]; else process.env[k] = v;
+    }
+  });
+  const clear = (...ks: string[]) => { for (const k of ks) { saved[k] = process.env[k]; delete process.env[k]; } };
+
+  it('reports pass (not warn) for an unset optionalDefault substrate', () => {
+    clear(...HBAND_VARS);
+    const spec = ENV_CHECKS.find((c) => c.id === 'svc-loom-capacity-broker')!;
+    const r = evalEnv(spec);
+    expect(r.status).toBe('pass');
+    expect(r.detail).toMatch(/fallback active/i);
+    // The optional upgrade step is still surfaced (honest, not hidden).
+    expect(r.remediation).toBeTruthy();
+  });
+
+  it('a normal optional service still WARNS when unset (no over-broad pass)', () => {
+    clear('LOOM_SYNAPSE_WORKSPACE', 'LOOM_DATABRICKS_HOSTNAME');
+    const spec = ENV_CHECKS.find((c) => c.id === 'svc-synapse')!;
+    const r = evalEnv(spec);
+    expect(r.status).toBe('warn');
+  });
+
+  it('optionalDefault still reports set when the substrate IS configured', () => {
+    saved.LOOM_ONELAKE_URL = process.env.LOOM_ONELAKE_URL;
+    process.env.LOOM_ONELAKE_URL = 'https://loom-onelake.example.internal';
+    const spec: EnvSpec = ENV_CHECKS.find((c) => c.id === 'svc-loom-onelake')!;
+    const r = evalEnv(spec);
+    expect(r.status).toBe('pass');
+    expect(r.detail).toBe('Configured.');
   });
 });
 
