@@ -741,6 +741,23 @@ jobs:
             bash scripts/csa-loom/run-spark-storage-fix-invnet-job.sh \
             || echo "::warning::In-VNET Synapse Spark storage-fix job did not complete — Spark notebooks may hang reading the lake. Check the CAE Log Analytics (ContainerName_s=='sparkfix')."
 
+      - name: Wire Synapse Spark → Log Analytics telemetry (best-practice + LA emitter config on every pool)
+        # Deploy-time compute-telemetry gap: the Spark pools carry no LA emitter,
+        # so Spark applications outside the console notebook path emit NO telemetry
+        # to Log Analytics. This bakes the LA emitter (secret via KV, workspace-MSI
+        # read) + best-practice AQE/Delta confs onto EVERY Loom Spark pool
+        # (loompool + the loometl/loombatch tiers) and re-asserts the workspace
+        # diagnostic settings. Idempotent; DEFAULT-ON (skip via LOOM_SKIP_COMPUTE_PROVISION=true).
+        if: ${{ vars.LOOM_SKIP_COMPUTE_PROVISION != 'true' }}
+        run: |
+          set -uo pipefail
+          chmod +x scripts/csa-loom/wire-spark-telemetry.sh
+          REGION="$REGION" ADMIN_SUB="$ADMIN_SUB" DLZ_SUB="$DLZ_SUB" \
+          ADMIN_RG="$ADMIN_RG" DLZ_RG="$DLZ_RG" SYNAPSE_WS="$SYNAPSE_WS" \
+          LOOM_DLZ_DOMAIN="${{ inputs.dlz_domain || 'single' }}" KV_TOGGLE_PUBLIC=1 \
+            bash scripts/csa-loom/wire-spark-telemetry.sh \
+            || echo "::warning::Spark→LA telemetry wiring incomplete — Spark job/pipeline runs may not emit to Log Analytics. See docs/fiab/compute-tiers-and-telemetry.md."
+
       - name: Enable Synapse public access (temp — OPT-IN ONLY, default OFF)
         # DEFAULT OFF (no public network access — the in-VNET grant above replaces it).
         # The sqlcmd CREATE LOGIN/USER steps below need to reach the SQL data-plane
@@ -968,6 +985,29 @@ jobs:
             cat /tmp/scim_patch.json
             echo
           fi
+
+      - name: Provision Databricks instance pools + Loom cluster policy
+        # Deploy-time compute-provisioning gap: the Databricks workspace has 0
+        # instance pools + no Loom cluster policy, so clusters cold-start and
+        # nothing enforces the best-practice spark_conf / auto-terminate / log
+        # delivery the console presets bake in. Creates loom-pool-s/m/l (node
+        # types from lib/databricks/cluster-presets.ts) + the "Loom Standard"
+        # policy. Runs HERE because Databricks public access is open (the SCIM
+        # steps above enable it and the "Restore Databricks public access
+        # disabled" step below re-locks it). Idempotent; DEFAULT-ON
+        # (skip via LOOM_SKIP_COMPUTE_PROVISION=true).
+        if: ${{ vars.LOOM_SKIP_COMPUTE_PROVISION != 'true' }}
+        run: |
+          set -uo pipefail
+          if [ -z "${DBX_HOST:-}" ]; then
+            echo "::notice::No Databricks workspace resolved (DBX_HOST empty) — skipping Databricks compute provisioning."
+            exit 0
+          fi
+          chmod +x scripts/csa-loom/provision-databricks-compute.sh
+          REGION="$REGION" ADMIN_SUB="$ADMIN_SUB" DLZ_SUB="$DLZ_SUB" \
+          ADMIN_RG="$ADMIN_RG" DLZ_RG="$DLZ_RG" DBX_WS="$DBX_WS" DBX_HOST="$DBX_HOST" \
+            bash scripts/csa-loom/provision-databricks-compute.sh \
+            || echo "::warning::Databricks compute provisioning incomplete — instance pools / cluster policy may be missing. See docs/fiab/compute-tiers-and-telemetry.md."
 
       - name: Grant Databricks Delta Sharing metastore privileges (UAMI)
         # Day-one fix so the Marketplace "Data shares" flow works END-TO-END
