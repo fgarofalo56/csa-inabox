@@ -1,11 +1,38 @@
 # CSA Loom v2 — PRP backlog
 
+> **SUPERSEDED (2026-07-12).** This backlog predates the `PRPs/active/*` program
+> structure and never became the delivery vehicle — the v2 scope was delivered
+> (or re-planned) through the active programs instead. Kept for historical
+> traceability. See the mapping table below for where each stub landed; new
+> work is planned in `PRPs/active/` (see `PRPs/active/OPEN-REGISTER-2026-07-12.md`).
+
+## Where the v2 scope actually landed (mapping note)
+
+| v2 stub | Landed as / tracked in |
+|---|---|
+| PRP-26 Data Marketplace + catalog | Shipped — unified `/marketplace` (API + Data, PR #1578) + catalog consolidation |
+| PRP-27 OneLake-equivalent unified namespace | Shipped — `apps/loom-onelake` sibling service + OneLake parity workload (`docs/fiab/workloads/onelake-parity.md`) |
+| PRP-28 APIM API builder for data sharing | Shipped — `publish-as-api` Weave edge + APIM (`apim.bicep`); AI-gateway via model-strategy M5/M6 |
+| PRP-29 Function App management Console pane | Shipped — service-navigator program (typed resource navigators on real REST) |
+| PRP-30 AI/ML API management Console pane | Shipped — Foundry hub editor + AIF-12 model tier router + APIM AI-gateway (`PRPs/active/model-strategy/PRP.md`) |
+| PRP-31 Developer portal + dev tools | Shipped — Learning Hub `/learn` + `apps/loom-cli` |
+| PRP-32 Metadata-driven data source onboarding | Shipped — mirrored-database CDC + Copy Job + connector catalog + Get-data Loom-item source (#1927) |
+| PRP-33 Domain management | Shipped — multi-library domain designer (#1924: Federal Civilian, Defense & Intel, State & Local, Commercial) + domain→Unity Catalog governance sync (#1926/#1930) |
+| PRP-34 dbt builder + integration | Shipped — `apps/fiab-dbt-runner` + dbt Job editor (`docs/fiab/workloads/dbt-job.md`) |
+| PRP-35 Complete shortcut builder | Shipped — lakehouse shortcut engines (ADLS/S3/GCS/SharePoint routes) |
+| PRP-36 Data virtualization builder + manager | Shipped — Synapse Serverless `OPENROWSET` surfaces (warehouse/lakehouse/Direct-Lake fallback) |
+| PRP-37 Complete observability (DMLZ + DLZ rollup) | Shipped — Spark→Log Analytics telemetry + compute tiers (#1931, `docs/fiab/compute-tiers-and-telemetry.md`) + chargeback |
+| PRP-38 Power BI report suite (mgmt + ops) | Shipped — Loom-native report designer + Weave→Power BI W1–W6 (#1902–#1913, `PRPs/active/weave-powerbi/PRP.md`) |
+| PRP-39 Loom Copilot in every Console pane | Shipped — per-surface Copilot standard (`docs/fiab/ux-standards.md`) + AIF-12 tier routing day-one |
+
+---
+
 Stub PRPs for the v2 scope captured in
 [v2-scope-expansion.md](../../docs/fiab/v2-scope-expansion.md).
-Each gets a full PRP file before any code begins, matching the v1
+Each was to get a full PRP file before any code began, matching the v1
 PRP format (Context / Goal / Acceptance criteria / PRD ref / Risks).
 
-**Status: BACKLOG.** No code work until:
+**Original status: BACKLOG.** No code work until:
 1. v1 completes end-to-end (apps deployed + UAT'd)
 2. Build 2026 freshness rescan (auto Jun 8)
 3. v2 walkthrough analogous to 2026-05-22 v1 walkthrough

@@ -399,6 +399,9 @@ doc shows zero ❌, and its verification receipt is attached.**
 - `.claude/rules/web3-ui.md` — Web-3.0 look, tokens, shared primitives.
 - `.claude/rules/no-fabric-dependency.md` — Azure-native default; no Fabric gate.
 - `no-freeform-config` (memory) — dropdowns/wizards/canvas, never JSON textareas.
+- `PRPs/active/ux-fabric-a/PRP.md` — the **Fabric-A program**: the waved execution
+  plan that drives every Loom surface to this baseline (per-surface grades,
+  wave sequencing, verification receipts).
 
 *Baseline evidence: live Fabric capture 2026-07-09 (`casino-fabric-poc`,
 workspace 7899f58d). Canonical node implementation:
