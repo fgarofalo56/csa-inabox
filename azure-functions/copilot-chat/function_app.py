@@ -250,6 +250,44 @@ _OFFTOPIC_REFUSAL_RE = re.compile(
     r"(?i)i can only help with (?:csa[- ]in[- ]a[- ]box|csa[- ]inabox|the cs[as][- ]in[- ]a[- ]box)",
 )
 
+# ── "Uncovered" (docs-gap) heuristic ──────────────────────────────────────
+
+# Below this many LOCAL (in-repo docs) grounding hits, the local corpus is
+# considered "thin" for the purposes of the uncovered/docs-gap signal.
+_THIN_LOCAL_GROUNDING_THRESHOLD = 2
+
+
+def _is_uncovered(topic_class: str, local_grounding_count: int) -> bool:
+    """Return whether this reply should be flagged as a docs-content gap.
+
+    Fires only for on-topic questions where the LOCAL in-repo docs corpus
+    returned thin grounding (fewer than ``_THIN_LOCAL_GROUNDING_THRESHOLD``
+    hits).
+
+    Bug history (fixed 2026-07-12): this used to also fire whenever
+    ``ms_learn_used`` was true — i.e. whenever the Microsoft Learn MCP
+    fallback supplied any grounding at all. That was a valid proxy for
+    "the local docs didn't have it" back when MS Learn was queried ONLY
+    when local grounding was thin (< 2 hits). PR #269 (2026-05-21) changed
+    the retrieval behavior to ALWAYS query MS Learn when the feature flag
+    is on — a legitimate fix for cases where thin *local* grounding was
+    actually low-quality noise — but left the ``uncovered`` flag coupled
+    to ``ms_learn_used``. Since MS Learn is enabled in production
+    (``COPILOT_MS_LEARN_ENABLED=true`` is set on every deploy — see
+    DEPLOYMENT.md) and returns a hit for almost any Azure/data-platform
+    question, ``ms_learn_used`` became true for nearly every on-topic
+    reply, so ``is_uncovered`` — and therefore the widget's "docs don't
+    cover this" prompt (``appendUncoveredPrompt`` in
+    ``docs/javascripts/copilot-chat.js``) — fired on almost every question
+    regardless of topic or answer quality. This function restores the
+    original semantics: judge coverage from the LOCAL corpus alone,
+    independent of whether/how MS Learn was used to supplement the answer.
+    """
+    return (
+        topic_class != "off_topic"
+        and local_grounding_count < _THIN_LOCAL_GROUNDING_THRESHOLD
+    )
+
 
 def _extract_topic_class(reply: str) -> tuple[str, str]:
     """Return ``(topic_class, reply_with_sentinel_stripped)``.
@@ -970,17 +1008,14 @@ def chat(req: func.HttpRequest) -> func.HttpResponse:
 
         latency_ms = int((time.time() - started) * 1000)
 
-        # Uncovered = "this is a docs gap we should fix". Fires for
-        # on-topic questions where the local corpus was thin enough
-        # that we had to supplement with MS Learn (or had no local
-        # hits at all). When MS Learn was used, the in-repo corpus
-        # didn't have the answer — that's the content-gap signal,
-        # even if a stale lexical match landed in the grounding list.
-        local_count = len([g for g in grounding_docs if g.get("external") != "true"])
-        is_uncovered = (
-            topic_class != "off_topic"
-            and (local_count == 0 or ms_learn_used)
-        )
+        # Uncovered = "this is a docs gap we should fix". See
+        # ``_is_uncovered`` docstring for the bug history: this must be
+        # judged from ``local_grounding_count`` (captured BEFORE
+        # grounding_docs was extended with MS Learn hits), NOT from
+        # ``ms_learn_used`` — MS Learn is now queried on every on-topic
+        # request when the flag is enabled, so its use no longer signals
+        # a local content gap.
+        is_uncovered = _is_uncovered(topic_class, local_grounding_count)
 
         # ── Telemetry + persistence (best-effort, never blocks the response) ─
         if not _opt_out(req):
