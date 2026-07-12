@@ -218,9 +218,12 @@ async function getToken(clusterUri?: string): Promise<string> {
   return t.token;
 }
 
-async function postRest(path: '/v1/rest/query' | '/v1/rest/mgmt', db: string, csl: string, clusterUri?: string): Promise<any> {
+async function postRest(path: '/v1/rest/query' | '/v1/rest/mgmt', db: string, csl: string, clusterUri?: string, userToken?: string): Promise<any> {
   const base = clusterUri || CLUSTER_URI;
-  const token = await getToken(base);
+  // EH-P1-OBO (#1800): when the caller resolved a per-user delegated token
+  // (data-access mode 'user'), the request runs AS THE USER — their own ADX
+  // RBAC. Otherwise the shared service credential, byte-identical to before.
+  const token = userToken || (await getToken(base));
   const url = `${base}${path}`;
   const res = await fetchWithTimeout(url, {
     method: 'POST',
@@ -344,6 +347,13 @@ export interface ExecuteQueryOptions {
    * truncating. The caller renders "page N" + a next-page control.
    */
   page?: KqlPage;
+  /**
+   * EH-P1-OBO (#1800) — a per-user delegated ADX token (data-access mode
+   * 'user'): the query executes under the SIGNED-IN USER's own ADX RBAC
+   * instead of the shared service credential. Resolve it via
+   * user-pool-registry / kusto-user-token-store; never fabricate one.
+   */
+  userToken?: string;
 }
 
 /**
@@ -393,7 +403,7 @@ export function buildKqlWithOptions(
 export async function executeQuery(database: string, kql: string, opts?: ExecuteQueryOptions): Promise<KustoQueryResult> {
   const started = Date.now();
   const { csl, paged } = buildKqlWithOptions(kql, opts);
-  const json = await postRest('/v1/rest/query', database || DEFAULT_DB, csl, opts?.clusterUri);
+  const json = await postRest('/v1/rest/query', database || DEFAULT_DB, csl, opts?.clusterUri, opts?.userToken);
   const tables = json?.Tables || [];
   const primary = tables.find((t: any) => t?.TableName === 'Table_0') || tables[0];
   const visualization = parseVisualization(tables);
@@ -421,9 +431,9 @@ export async function executeQuery(database: string, kql: string, opts?: Execute
  *  An optional `clusterUri` targets a *discovered* ADX cluster (RTI hub catalog)
  *  instead of the env-configured default; validate it with
  *  {@link normalizeClusterUri} first. */
-export async function executeMgmtCommand(database: string, command: string, opts?: { clusterUri?: string }): Promise<KustoQueryResult> {
+export async function executeMgmtCommand(database: string, command: string, opts?: { clusterUri?: string; userToken?: string }): Promise<KustoQueryResult> {
   const started = Date.now();
-  const json = await postRest('/v1/rest/mgmt', database || DEFAULT_DB, command, opts?.clusterUri);
+  const json = await postRest('/v1/rest/mgmt', database || DEFAULT_DB, command, opts?.clusterUri, opts?.userToken);
   const primary = (json?.Tables || [])[0];
   if (!primary) {
     return { columns: [], columnTypes: [], rows: [], rowCount: 0, executionMs: Date.now() - started, truncated: false };

@@ -28,6 +28,23 @@ export function isSqlAccessModeItemType(t: string): boolean {
   return (SQL_ACCESS_MODE_ITEM_TYPES as readonly string[]).includes(t);
 }
 
+/**
+ * EH-P1-OBO (#1800): item types whose data-plane READS honor the per-user
+ * data-access mode. Superset of the SQL endpoints (F10): reports execute their
+ * Loom-native visuals over Synapse SQL as the user; KQL databases query ADX as
+ * the user. Default stays 'service' everywhere — an item only enters the user
+ * path after an explicit PATCH /access-mode.
+ */
+export const USER_ACCESS_MODE_ITEM_TYPES = [
+  ...SQL_ACCESS_MODE_ITEM_TYPES,
+  'report',
+  'kql-database',
+] as const;
+
+export function isUserAccessModeItemType(t: string): boolean {
+  return (USER_ACCESS_MODE_ITEM_TYPES as readonly string[]).includes(t);
+}
+
 export function normalizeAccessMode(v: unknown): SqlAccessMode {
   return v === 'user' ? 'user' : 'service';
 }

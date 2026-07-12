@@ -26,8 +26,8 @@ describe('F10 SQL data-access mode — real wiring', () => {
     expect(src).toMatch(/resolveWorkspaceRole/);
     expect(src).toMatch(/itemsContainer/);
     expect(src).toMatch(/\.replace<WorkspaceItem>/);
-    // Only the two SQL endpoint item types are accepted.
-    expect(src).toMatch(/isSqlAccessModeItemType/);
+    // The SQL endpoint item types plus report + kql-database (EH-P1-OBO #1800).
+    expect(src).toMatch(/isUserAccessModeItemType/);
   });
 
   it('shared resolver defaults to the always-works service identity', () => {
