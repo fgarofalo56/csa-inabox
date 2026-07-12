@@ -20,7 +20,7 @@
  * the parent so this stays a pure presentational grid. No mock data.
  */
 
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   DataGrid, DataGridHeader, DataGridRow, DataGridHeaderCell, DataGridCell, DataGridBody,
   TableColumnDefinition, TableRowId, TableColumnSizingOptions,
@@ -33,10 +33,12 @@ import {
   Copy20Regular, ArrowDownload20Regular, Filter20Regular,
   ChevronDown20Regular, ChevronUp20Regular,
   TableSimple20Regular, DocumentTable20Regular, DataHistogram20Regular,
+  Sparkle20Regular,
 } from '@fluentui/react-icons';
 import {
   formatCell, isNullish, columnIsNumeric, toCsv, fmtNum, rowMatchesFilter,
 } from './delta-preview-grid-utils';
+import { AddAiColumnDialog, type ProducedAiColumn } from './add-ai-column-dialog';
 
 export interface ColStat {
   count: number;
@@ -59,6 +61,9 @@ export interface DeltaPreviewGridProps {
   statsError?: string | null;
   mode: 'file' | 'table';
   onModeChange?: (m: 'file' | 'table') => void;
+  /** G2 — show the "Add AI column" action (Fabric parity). Default true. Set
+   *  false for surfaces where enriching the preview makes no sense. */
+  enableAiColumn?: boolean;
 }
 
 interface GridRow {
@@ -111,13 +116,32 @@ const useStyles = makeStyles({
 
 export function DeltaPreviewGrid(props: DeltaPreviewGridProps) {
   const s = useStyles();
-  const { columns, rows, rowCount, executionMs, truncated, columnStats, statsLoading, statsError, mode, onModeChange } = props;
+  const { columns: baseColumns, rows: baseRows, rowCount, executionMs, truncated, columnStats, statsLoading, statsError, mode, onModeChange, enableAiColumn = true } = props;
 
   const [filterText, setFilterText] = useState('');
   const [selectedRows, setSelectedRows] = useState<Set<TableRowId>>(new Set());
   const [statsOpen, setStatsOpen] = useState(true);
   const [cellDialog, setCellDialog] = useState<{ col: string; value: unknown } | null>(null);
+  // G2 — AI columns appended over the loaded preview via /api/ai-functions/table.
+  const [aiColumns, setAiColumns] = useState<ProducedAiColumn[]>([]);
+  const [aiDialogOpen, setAiDialogOpen] = useState(false);
   const arrowNav = useArrowNavigationGroup({ axis: 'grid' });
+
+  // Reset appended AI columns whenever the underlying preview changes (new file
+  // / table / query) so a stale AI column can never misalign with fresh rows.
+  useEffect(() => { setAiColumns([]); }, [baseColumns, baseRows]);
+
+  // Effective grid = base columns/rows + any AI columns the user materialized.
+  const columns = useMemo(
+    () => (aiColumns.length ? [...baseColumns, ...aiColumns.map((c) => c.name)] : baseColumns),
+    [baseColumns, aiColumns],
+  );
+  const rows = useMemo(
+    () => (aiColumns.length
+      ? baseRows.map((cells, idx) => [...cells, ...aiColumns.map((c) => c.values[idx] ?? '')])
+      : baseRows),
+    [baseRows, aiColumns],
+  );
 
   // Which columns are numeric (drives sort compare + histogram styling).
   const numericCols = useMemo(() => {
@@ -265,6 +289,19 @@ export function DeltaPreviewGrid(props: DeltaPreviewGridProps) {
             Download
           </Button>
         </Tooltip>
+        {enableAiColumn && (
+          <Tooltip content="Add a column computed by an Azure OpenAI function over these rows" relationship="label">
+            <Button
+              appearance="primary"
+              size="small"
+              icon={<Sparkle20Regular />}
+              disabled={baseColumns.length === 0 || baseRows.length === 0}
+              onClick={() => setAiDialogOpen(true)}
+            >
+              Add AI column
+            </Button>
+          </Tooltip>
+        )}
       </div>
 
       <div className={s.gridWrap} {...arrowNav} onKeyDown={onKeyDown} tabIndex={0}>
@@ -377,6 +414,16 @@ export function DeltaPreviewGrid(props: DeltaPreviewGridProps) {
           </DialogBody>
         </DialogSurface>
       </Dialog>
+
+      {enableAiColumn && aiDialogOpen && (
+        <AddAiColumnDialog
+          open={aiDialogOpen}
+          onOpenChange={setAiDialogOpen}
+          columns={columns}
+          rows={rows}
+          onApply={(produced) => setAiColumns((prev) => [...prev, ...produced])}
+        />
+      )}
     </div>
   );
 }

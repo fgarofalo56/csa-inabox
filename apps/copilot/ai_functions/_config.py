@@ -23,6 +23,11 @@ import os
 # an equally valid override via LOOM_AOAI_DEPLOYMENT.
 _DEFAULT_DEPLOYMENT = "gpt-4o"
 
+# Default embeddings deployment for the embed / similarity functions. The AI
+# Foundry hub wires LOOM_AOAI_EMBED_DEPLOYMENT day-one (model-strategy); this is
+# only the fallback when the pool does not pin one.
+_DEFAULT_EMBED_DEPLOYMENT = "text-embedding-3-large"
+
 # Commercial / GCC token audience. GCC-High / IL5 set the .us audience via the
 # LOOM_AOAI_AUDIENCE env (wired in main.bicep) — this is only the fallback.
 _DEFAULT_AUDIENCE = "https://cognitiveservices.azure.com"
@@ -59,6 +64,15 @@ def get_deployment() -> str:
         os.environ.get("LOOM_AOAI_DEPLOYMENT")
         or _spark_conf_get("spark.loom.aoai.deployment")
         or _DEFAULT_DEPLOYMENT
+    )
+
+
+def get_embed_deployment() -> str:
+    """Embeddings deployment name for embed / similarity (default text-embedding-3-large)."""
+    return (
+        os.environ.get("LOOM_AOAI_EMBED_DEPLOYMENT")
+        or _spark_conf_get("spark.loom.aoai.embed_deployment")
+        or _DEFAULT_EMBED_DEPLOYMENT
     )
 
 

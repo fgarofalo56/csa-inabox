@@ -12,9 +12,10 @@ no Microsoft Fabric, no Power BI, no OneLake dependency::
     sdf = sdf.withColumn("summary",            # pyspark Column -> Column
                          ai.summarize(col("description")))
 
-Five functions mirror the Console SQL-editor AI Functions surface and Fabric's
+Nine functions mirror the Console SQL-editor AI Functions surface and Fabric's
 AI functions DataFrame APIs: ``summarize``, ``classify``, ``sentiment``,
-``extract``, ``translate``. Configuration is read from the Spark pool
+``extract``, ``translate``, ``fix_grammar``, ``generate_response`` (chat) plus
+``embed`` and ``similarity`` (Azure OpenAI embeddings). Configuration is read from the Spark pool
 environment (``LOOM_AOAI_ENDPOINT`` / ``LOOM_AOAI_DEPLOYMENT`` /
 ``LOOM_AOAI_AUDIENCE``) or per-session Spark conf; auth uses the pool's managed
 identity (or ``LOOM_AOAI_KEY``). See ``README.md`` and the demo notebook at
@@ -31,9 +32,19 @@ from ._errors import (
     AoaiBridgeRateLimitError,
 )
 from ._gate import check_reachable
-from .functions import classify, extract, sentiment, summarize, translate
+from .functions import (
+    classify,
+    embed,
+    extract,
+    fix_grammar,
+    generate_response,
+    sentiment,
+    similarity,
+    summarize,
+    translate,
+)
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 __all__ = [
     "AoaiBridgeAuthError",
@@ -43,8 +54,12 @@ __all__ = [
     "AoaiBridgeRateLimitError",
     "check_reachable",
     "classify",
+    "embed",
     "extract",
+    "fix_grammar",
+    "generate_response",
     "sentiment",
+    "similarity",
     "summarize",
     "translate",
 ]

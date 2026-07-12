@@ -51,7 +51,9 @@
  */
 export interface AoaiChatMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';
-  content: string | null;
+  /** Plain text, or a multimodal content-part array (AOAI vision `image_url` /
+   *  `text` parts) — passed through verbatim by the builder. */
+  content: string | null | Array<Record<string, unknown>>;
   tool_calls?: Array<{ id: string; type: 'function'; function: { name: string; arguments: string } }>;
   tool_call_id?: string;
   name?: string;

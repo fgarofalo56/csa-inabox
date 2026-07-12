@@ -148,6 +148,9 @@ param agentFoundryEnabled bool = true
 @description('Inline-completion (ghost text) AOAI deployment name for notebook/SQL code cells (LOOM_AOAI_COMPLETION_DEPLOYMENT). Empty = ghost text uses the chat deployment (LOOM_AOAI_DEPLOYMENT). Set to a dedicated gpt-4o-mini slot for lower latency without consuming chat quota. Leave empty in GCC-High / IL5 regions where the model is unavailable — the Console route falls back to the chat deployment.')
 param loomAoaiCompletionDeployment string = ''
 
+@description('OPT-IN. Vision-capable AOAI deployment name for multimodal AI columns (LOOM_AOAI_VISION_DEPLOYMENT) — the G2 "Add AI column" image/document input path (summarize/classify/extract over an image URL). Empty = text-only AI columns; the /api/ai-functions/table route honest-gates multimodal requests with the exact env var to set. Leave empty in GCC-High / IL5 regions lacking a vision model.')
+param loomAoaiVisionDeployment string = ''
+
 @description('Deploy the shared Data API builder preview runtime that the DAB editor\'s live REST/GraphQL testers point at via LOOM_DAB_PREVIEW_URL.')
 param dabRuntimeEnabled bool = false
 
@@ -4213,6 +4216,10 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // assist routes (process.env.LOOM_AOAI_AUDIENCE) to mint the bearer.
             { name: 'LOOM_AOAI_AUDIENCE',          value: environment().suffixes.storage != 'core.windows.net' ? 'https://cognitiveservices.azure.us' : 'https://cognitiveservices.azure.com' }
             { name: 'LOOM_AOAI_EMBED_DEPLOYMENT',  value: agentFoundryEnabled ? agentFoundry!.outputs.embedDeployment : byoFoundryEmbedDeployment }
+            // OPT-IN multimodal AI columns (G2). Empty unless the operator sets a
+            // vision-capable deployment; the table AI-functions route honest-gates
+            // image/document inputs with the exact env var when unset.
+            { name: 'LOOM_AOAI_VISION_DEPLOYMENT', value: loomAoaiVisionDeployment }
             // Model-strategy (AIF-12 / M3): the "mini" (cheap/lightweight) + "strong"
             // (reasoning) tier deployments the Loom-native model tier router routes
             // to DAY-ONE (lib/foundry/model-tier-router.ts reads these as the env
