@@ -211,6 +211,40 @@ def test_topic_class_invalid_value_falls_back_to_on_topic() -> None:
     assert cls == "on_topic"
 
 
+# ── "Uncovered" (docs-gap) heuristic ─────────────────────────────────────
+#
+# Regression coverage for the 2026-07-12 fix: `is_uncovered` used to be
+# `topic_class != "off_topic" and (local_count == 0 or ms_learn_used)`.
+# Because MS Learn is queried on EVERY on-topic request once
+# COPILOT_MS_LEARN_ENABLED=true (the production setting — see
+# DEPLOYMENT.md), `ms_learn_used` was true for almost every reply, which
+# made `is_uncovered` — and therefore the widget's "docs don't cover this"
+# prompt — fire on nearly every question regardless of local coverage or
+# answer quality. `_is_uncovered` must judge coverage purely from the
+# LOCAL grounding count.
+
+
+def test_uncovered_false_when_local_grounding_is_rich() -> None:
+    """Rich local grounding (>= threshold hits) is never 'uncovered',
+    even though MS Learn is always queried supplementally in prod —
+    this is the exact scenario that regressed in PR #269."""
+    assert function_app._is_uncovered("on_topic", local_grounding_count=2) is False
+    assert function_app._is_uncovered("on_topic", local_grounding_count=5) is False
+
+
+def test_uncovered_true_when_local_grounding_is_thin() -> None:
+    assert function_app._is_uncovered("on_topic", local_grounding_count=0) is True
+    assert function_app._is_uncovered("on_topic", local_grounding_count=1) is True
+
+
+def test_uncovered_false_for_off_topic_regardless_of_grounding() -> None:
+    assert function_app._is_uncovered("off_topic", local_grounding_count=0) is False
+
+
+def test_uncovered_true_for_ambiguous_thin_grounding() -> None:
+    assert function_app._is_uncovered("ambiguous", local_grounding_count=0) is True
+
+
 # ── Health endpoint ──────────────────────────────────────────────────────
 
 
