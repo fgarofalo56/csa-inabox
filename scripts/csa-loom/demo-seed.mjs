@@ -82,32 +82,66 @@ async function installApp(appId, wsId) {
 }
 
 // ── The demo layout ──────────────────────────────────────────────────────────
+// A clean, hand-curated flagship workspace that tells the medallion → Direct Lake
+// → report + real-time + AI/governance story end to end.
 const SHOWCASE_ITEMS = [
-  ['lakehouse', 'Sales Lakehouse'],
-  ['notebook', 'Revenue Analysis Notebook'],
-  ['data-pipeline', 'Bronze→Silver→Gold Pipeline'],
+  ['lakehouse', 'Sales Lakehouse (Medallion)'],
+  ['notebook', 'Medallion — Bronze→Silver→Gold Notebook'],
+  ['data-pipeline', 'Medallion Orchestration Pipeline'],
   ['warehouse', 'Finance Warehouse'],
-  ['semantic-model', 'Sales Semantic Model'],
-  ['report', 'Executive Sales Report'],
+  ['semantic-model', 'Sales Semantic Model (Direct Lake)'],
+  ['report', 'Executive Sales Report (Loom-native)'],
+  ['paginated-report', 'Invoice Paginated Report'],
+  ['scorecard', 'Revenue KPI Scorecard'],
   ['eventstream', 'Orders Eventstream'],
+  ['eventhouse', 'Telemetry Eventhouse'],
   ['kql-database', 'Telemetry KQL DB'],
   ['kql-dashboard', 'Real-Time Ops Dashboard'],
+  ['activator', 'Anomaly Activator'],
   ['ml-model', 'Churn Prediction Model'],
+  ['ml-experiment', 'Churn Training Experiment'],
   ['data-agent', 'Sales Data Agent'],
+  ['data-product', 'Sales-360 Data Product'],
+  ['graphql-api', 'Sales GraphQL API'],
+  ['data-api-builder', 'Orders REST API'],
+  ['logic-app', 'New-Order Alert Logic App'],
+  ['copilot-studio-agent', 'Sales Copilot Agent'],
+  ['ontology', 'Enterprise Ontology'],
 ];
-const SHOWCASE_APPS = ['app-data-governance', 'app-real-time-dashboards', 'app-ml-pipeline', 'app-finops-cost'];
+// Compound use-case apps — each is a one-click install that provisions + seeds a
+// whole working vertical. Installed into its OWN workspace for a clean per-app demo.
+// Covers: medallion (supercharge-*), Direct Lake, real-time, ML/RAG/agents,
+// governance/steward, data mesh, FinOps.
+const SHOWCASE_APPS = [
+  ['app-supercharge-bronze', 'Demo — Medallion Bronze'],
+  ['app-supercharge-silver', 'Demo — Medallion Silver'],
+  ['app-supercharge-gold', 'Demo — Medallion Gold'],
+  ['app-direct-lake-replacement', 'Demo — Direct Lake'],
+  ['app-lakehouse-inspector', 'Demo — Lakehouse Inspector'],
+  ['app-real-time-dashboards', 'Demo — Real-Time Dashboards'],
+  ['app-iot-realtime', 'Demo — IoT Real-Time'],
+  ['app-ml-pipeline', 'Demo — ML Pipeline'],
+  ['app-rag-builder', 'Demo — RAG Builder'],
+  ['app-sovereign-ai-agents', 'Demo — Sovereign AI Agents'],
+  ['app-data-governance', 'Demo — Data Governance'],
+  ['app-data-steward', 'Demo — Data Steward'],
+  ['app-federal-data-mesh', 'Demo — Federal Data Mesh'],
+  ['app-finops-cost', 'Demo — FinOps'],
+];
 
 async function main() {
   console.log(`== CSA Loom demo seed → ${BASE} (owner oid ${OID.slice(0,8)}…) ==`);
-  // 1) A clean, hand-curated showcase workspace
+  // 1) Flagship curated workspace — the end-to-end story
   const demoWs = await ensureWorkspace('CSA Loom Demo');
   if (demoWs) {
     for (const [type, label] of SHOWCASE_ITEMS) await createItem(demoWs, type, label);
   }
-  // 2) Install compound use-case apps (each seeds its own workspace of items)
-  const appsWs = await ensureWorkspace('CSA Loom Demo — Apps');
-  if (appsWs) {
-    for (const app of SHOWCASE_APPS) await installApp(app, appsWs);
+  // 2) One workspace PER app so each vertical is clean + navigable. Kick installs
+  //    off (async provisioning continues on the backend); don't block the whole
+  //    seed waiting for every provision.
+  for (const [app, wsName] of SHOWCASE_APPS) {
+    const ws = await ensureWorkspace(wsName);
+    if (ws) await installApp(app, ws);
   }
   // 3) Summary
   const all = await listWorkspaces();
