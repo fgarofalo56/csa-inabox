@@ -29,9 +29,17 @@
  * Pure transport — cloud-invariant, no Fabric/Azure host knowledge here.
  */
 
-/** Default client-side per-request timeout (ms). Matches the 6s budget used by
- * app/admin/api-management/page.tsx so every spinner-gated page fails fast. */
-export const CLIENT_FETCH_TIMEOUT_MS = 6000;
+/** Default client-side per-request timeout (ms). Raised from the original 6s to
+ * 20s: the 6s budget was too aggressive for admin surfaces whose BFF routes hit
+ * Azure ARM / Resource Graph / Cost Management / a large Cosmos aggregation, which
+ * legitimately take >6s on a real multi-sub tenant. That produced a rash of
+ * spurious "took longer than 6s and timed out … heavier across multiple
+ * subscriptions" errors across the admin portal (realtime-hub streams,
+ * private-endpoints, etc.) — often mislabeled by the surface. 20s covers those
+ * real queries while still failing a genuinely-hung request promptly. Fast API
+ * calls (<1s) are unaffected. Heavy cross-sub reads opt into
+ * CROSS_SUB_FETCH_TIMEOUT_MS (45s) below. */
+export const CLIENT_FETCH_TIMEOUT_MS = 20_000;
 
 /**
  * Larger per-request ceiling for CROSS-SUBSCRIPTION reads / mutations — the
