@@ -64,6 +64,8 @@ interface EventstreamState {
   displayName?: string;
   config?: StreamCfg;
   asaJobName?: string | null;
+  /** ARM resource id of the live transport Event Hub (Azure-native backend). */
+  ehId?: string | null;
   error?: string;
 }
 
@@ -434,7 +436,7 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
     if (!id || id === 'new') return;
     try {
       const r = await clientFetch(`/api/items/eventstream/${id}`);
-      const j = (await r.json()) as EventstreamState & { fabricEventstreamId?: string | null };
+      const j = (await r.json()) as EventstreamState & { fabricEventstreamId?: string | null; ehId?: string | null };
       setState(j);
       if (j.fabricEventstreamId) setPublishedId(j.fabricEventstreamId);
       if (j.asaJobName) setAsaJobName(j.asaJobName);
@@ -445,9 +447,11 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
       setCfgText(text);
       history.reset(text);
       setDirty(false);
-      // A stream with a recorded ASA job / Fabric publish has been published;
-      // otherwise treat the loaded topology as a not-yet-published draft.
-      setTopologyDirtySincePublish(!(j.asaJobName || j.fabricEventstreamId));
+      // A stream with a live Azure Event Hub (ehId) / recorded ASA job / Fabric
+      // publish has been provisioned; otherwise treat the loaded topology as a
+      // not-yet-provisioned draft. ehId is the Azure-native DEFAULT signal so a
+      // bundle-installed eventstream opens 'live', not 'draft'.
+      setTopologyDirtySincePublish(!(j.ehId || j.asaJobName || j.fabricEventstreamId));
       setParseErr(null); setSaveErr(null); setSaveMsg(null);
     } catch (e: any) {
       setState({ ok: false, error: e?.message || String(e) });

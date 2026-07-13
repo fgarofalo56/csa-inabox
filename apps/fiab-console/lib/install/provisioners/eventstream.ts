@@ -17,14 +17,14 @@
 import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { FabricError, fabricHint } from '@/lib/azure/fabric-client';
+import { EventHubsArmError } from '@/lib/azure/eventhubs-client';
 import {
-  eventhubsConfigGate,
-  listEventHubs,
-  createEventHub,
-  listConsumerGroups,
-  createConsumerGroup,
-  EventHubsArmError,
-} from '@/lib/azure/eventhubs-client';
+  standUpEventstreamAzure,
+  bundleContentToTopology,
+  EventstreamConfigGateError,
+} from '@/lib/azure/eventstream-standup';
+import { itemsContainer } from '@/lib/azure/cosmos-client';
+import type { WorkspaceItem } from '@/lib/types/workspace';
 import type { Provisioner, ProvisionResult } from './types';
 import { resolveInfraResidual } from './types';
 import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
@@ -41,84 +41,86 @@ async function token(): Promise<string> {
   return t.token;
 }
 
-/** Event Hub entity names: alnum, -, ., _, /; ≤ 256. Keep it portable. */
-function safeHubName(displayName: string): string {
-  const cleaned = displayName.toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 200);
-  return cleaned || 'loom-eventstream';
-}
-
-/** Derive the consumer-group name for a destination/consumer entry. */
-function consumerName(entry: any, i: number): string {
-  const raw = entry?.name || entry?.id || entry?.type || `dest${i}`;
-  return String(raw).toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 50) || `dest${i}`;
-}
-
-// ── Azure-native DEFAULT: Azure Event Hubs ──────────────────────────────────
-async function provisionEventHubs(input: any, steps: string[]): Promise<ProvisionResult> {
-  const gate = eventhubsConfigGate();
-  if (gate) {
-    return {
-      status: 'remediation',
-      gate: {
-        reason: 'Azure Event Hubs namespace is not configured for this deployment.',
-        remediation: `Set ${gate.missing} (and LOOM_EVENTHUB_SUB / LOOM_EVENTHUB_RG, or LOOM_SUBSCRIPTION_ID / LOOM_DLZ_RG) so the eventstream can create its Event Hub. No Microsoft Fabric required.`,
-        link: 'https://learn.microsoft.com/azure/event-hubs/event-hubs-create',
-      },
-      steps,
-    };
-  }
-
-  const content = input.content as any;
-  const hubName = safeHubName(input.displayName);
-  const destinations: any[] = Array.isArray(content?.destinations) ? content.destinations : [];
-  const transforms: any[] = Array.isArray(content?.transforms) ? content.transforms : [];
-
+/**
+ * Persist the Azure-native backend refs onto the Cosmos item's state so the
+ * editor's GET reports runtimeStatus:'live' (Event Hub / ASA job) instead of
+ * 'draft'. Best-effort — a persistence failure is logged into steps[] and never
+ * throws, so it cannot sink the install (mirrors the activator provisioner's
+ * state.rules write-back). Without this, a bundle-installed eventstream lands
+ * with an empty topology-state and the editor opens on a "draft, Provision to
+ * Azure" banner even though the Event Hub is live.
+ */
+async function persistBackendRefs(
+  input: any,
+  refs: { ehId: string; transportHub: string; asaJobId: string | null; asaJobName: string | null; provisionedAt: string },
+  steps: string[],
+): Promise<void> {
   try {
-    // Idempotent create: skip if the hub already exists.
-    let existed = false;
-    try {
-      const hubs = await listEventHubs();
-      existed = hubs.some((h) => (h.name || '').toLowerCase() === hubName.toLowerCase());
-    } catch { /* list may fail on RBAC; create will surface it */ }
-
-    if (!existed) {
-      await createEventHub({ name: hubName, partitionCount: 4, messageRetentionInDays: 1 });
-      steps.push(`Created Event Hub '${hubName}' (4 partitions, 1-day retention).`);
-    } else {
-      steps.push(`Event Hub '${hubName}' already exists; reusing.`);
+    const items = await itemsContainer();
+    const { resource: cur } = await items.item(input.cosmosItemId, input.workspaceId).read<WorkspaceItem>();
+    if (!cur) {
+      steps.push('Stood up the Event Hub but the eventstream item was not found to persist backend refs (editor will re-provision on open).');
+      return;
     }
+    const next: WorkspaceItem = {
+      ...cur,
+      state: {
+        ...(cur.state || {}),
+        ehId: refs.ehId,
+        transportHub: refs.transportHub,
+        asaJobId: refs.asaJobId,
+        asaJobName: refs.asaJobName,
+        provisionedAt: refs.provisionedAt,
+      },
+      updatedAt: new Date().toISOString(),
+    };
+    await items.item(cur.id, cur.workspaceId).replace(next);
+    steps.push('Persisted Event Hub / Stream Analytics refs to the item so the editor opens live (not draft).');
+  } catch (e: any) {
+    steps.push(`Stood up the Event Hub but failed to persist backend refs (editor will re-provision on open): ${e?.message || String(e)}`);
+  }
+}
 
-    // One consumer group per destination so each downstream consumer reads the
-    // stream independently (the Event Hubs analogue of eventstream destinations).
-    let existingCgs = new Set<string>();
-    try {
-      const cgs = await listConsumerGroups(hubName);
-      existingCgs = new Set(cgs.map((c) => (c.name || '').toLowerCase()));
-    } catch { /* fine */ }
-    let cgCount = 0;
-    for (let i = 0; i < destinations.length; i++) {
-      const cg = consumerName(destinations[i], i);
-      if (cg === '$default' || existingCgs.has(cg)) continue;
-      try {
-        await createConsumerGroup(hubName, cg, `Loom eventstream destination from ${input.appId}`);
-        cgCount += 1;
-        steps.push(`Created consumer group '${cg}'.`);
-      } catch (e: any) {
-        steps.push(`Could not create consumer group '${cg}': ${e?.message || e}`);
-      }
-    }
+// ── Azure-native DEFAULT: Azure Event Hubs (+ Stream Analytics for transforms) ─
+// Delegates to the SHARED standUpEventstreamAzure() — the SAME code path the
+// editor's "Provision to Azure" button calls — so an installed eventstream
+// stands up the identical live backend a hand-provisioned one does.
+async function provisionEventHubs(input: any, steps: string[]): Promise<ProvisionResult> {
+  const topology = bundleContentToTopology(input.content);
+  try {
+    const result = await standUpEventstreamAzure(input.displayName, input.cosmosItemId, topology, steps);
 
-    if (transforms.length > 0) {
-      steps.push(`${transforms.length} transform(s) declared — wire an Azure Stream Analytics job (LOOM_ASA_*) to process '${hubName}' into the destinations. The Event Hub stream + consumer groups are live now.`);
-    }
+    // Write the backend refs back onto the item so the editor opens 'live'.
+    await persistBackendRefs(input, result, steps);
+
+    if (result.partial && result.hint) steps.push(result.hint);
+    if (result.kustoHint) steps.push(result.kustoHint);
 
     return {
       status: 'created',
-      resourceId: hubName,
-      secondaryIds: { backend: 'eventhubs', eventHub: hubName, consumerGroups: String(cgCount) },
+      resourceId: result.transportHub,
+      secondaryIds: {
+        backend: 'eventhubs',
+        eventHub: result.transportHub,
+        ehId: result.ehId,
+        ...(result.asaJobName ? { asaJobName: result.asaJobName } : {}),
+        ...(result.asaJobId ? { asaJobId: result.asaJobId } : {}),
+        provisionedAt: result.provisionedAt,
+      },
       steps,
     };
   } catch (e: any) {
+    if (e instanceof EventstreamConfigGateError) {
+      return {
+        status: 'remediation',
+        gate: {
+          reason: 'Azure Event Hubs namespace is not configured for this deployment.',
+          remediation: `Set ${e.missing} (and LOOM_EVENTHUB_SUB / LOOM_EVENTHUB_RG, or LOOM_SUBSCRIPTION_ID / LOOM_DLZ_RG) so the eventstream can create its Event Hub. No Microsoft Fabric required.`,
+          link: 'https://learn.microsoft.com/azure/event-hubs/event-hubs-create',
+        },
+        steps,
+      };
+    }
     if (e instanceof EventHubsArmError && (e.status === 401 || e.status === 403)) {
       return {
         status: 'remediation',
