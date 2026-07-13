@@ -1,6 +1,7 @@
 'use client';
 
 import { clientFetch } from '@/lib/client-fetch';
+import { useBiBackend } from '@/lib/components/platform-config';
 /**
  * ReportEditor — extracted from phase3-editors.tsx (byte-for-byte move).
  *
@@ -1264,9 +1265,13 @@ function _LoomNativeReportViewer_legacy({ item, id }: { item: FabricItemType; id
 
 export function ReportEditor({ item, id }: { item: FabricItemType; id: string }) {
   // no-fabric-dependency.md: Loom-native AAS renderer is the DEFAULT. Power BI
-  // embed is opt-in only via NEXT_PUBLIC_LOOM_BI_BACKEND=powerbi.
-  const biBackend = (process.env.NEXT_PUBLIC_LOOM_BI_BACKEND || '').toLowerCase();
-  if (biBackend === 'powerbi') {
+  // embed is opt-in only via the RUNTIME admin setting (Admin → Runtime config →
+  // Power BI backend), read live by useBiBackend() — NOT a build-baked
+  // NEXT_PUBLIC_* var, so an admin flip needs no rebuild. Fail-closed: while the
+  // runtime config loads, powerBiEnabled is false so the Azure-native renderer
+  // shows first and the embed path appears only once PBI is confirmed opted-in.
+  const { powerBiEnabled } = useBiBackend();
+  if (powerBiEnabled) {
     return <ReportLikeEditor item={item} id={id} kind="report" listPath="/api/items/report" detailPathBase="/api/items/report" />;
   }
   return <LoomNativeReportEditor item={item} id={id} />;

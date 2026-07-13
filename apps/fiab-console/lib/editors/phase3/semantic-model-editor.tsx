@@ -72,6 +72,7 @@ import { MetricViewBuilder } from '../components/metric-view-builder';
 import { PowerQueryHost } from '@/lib/components/pipeline/dataflow/power-query-host';
 import { parseSharedQueries, setQueryBody } from '@/lib/components/pipeline/dataflow/m-script';
 import { usePowerBiWorkspaces, WorkspacePicker } from './workspace-picker';
+import { useBiBackend } from '@/lib/components/platform-config';
 import { useStyles } from './styles';
 
 interface DatasetLite {
@@ -1697,11 +1698,13 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
   if (process.env.NEXT_PUBLIC_LOOM_BI_BACKEND === 'aas') {
     return <AasSemanticModelPanel item={item} id={id} />;
   }
-  // Power BI group listing is the OPT-IN leg (rel-T04/B12): with the default
-  // ('' — Loom-native tabular metadata) the hook is disabled so the default
-  // render makes ZERO Power BI network calls; powerBiConfigured stays false
-  // and the editor keeps its Loom-native surface.
-  const pbiOptIn = (process.env.NEXT_PUBLIC_LOOM_BI_BACKEND || '').toLowerCase() === 'powerbi';
+  // Power BI group listing is the OPT-IN leg (rel-T04/B12), enabled via the
+  // RUNTIME admin setting (Admin → Runtime config → Power BI backend) read live
+  // by useBiBackend() — NOT a build-baked NEXT_PUBLIC_* var. With the default
+  // (Loom-native tabular metadata) the hook is disabled so the default render
+  // makes ZERO Power BI network calls; powerBiConfigured stays false and the
+  // editor keeps its Loom-native surface.
+  const { powerBiEnabled: pbiOptIn } = useBiBackend();
   const ws = usePowerBiWorkspaces(pbiOptIn);
   const [workspaceId, setWorkspaceId] = useState('');
   const [datasets, setDatasets] = useState<DatasetLite[] | null>(null);

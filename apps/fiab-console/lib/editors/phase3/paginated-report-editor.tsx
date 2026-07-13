@@ -42,6 +42,7 @@ import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { PowerBIEmbedFrame } from '@/lib/components/embed/powerbi-embed';
 import { type ReportLite } from './report-editor';
 import { usePowerBiWorkspaces, WorkspacePicker } from './workspace-picker';
+import { useBiBackend } from '@/lib/components/platform-config';
 // WAVE 2 — "Pick a Loom item" source: resolves a PBI_SOURCEABLE Loom item to its
 // Azure-native Synapse server + database and fills this data source — no
 // coordinates to type. Reused verbatim from the report designer.
@@ -108,11 +109,12 @@ function PaginatedReportDesigner({ item, id }: { item: FabricItemType; id: strin
   // The Azure-native designer + export above are the DEFAULT and work with no
   // Power BI / Fabric (no-fabric-dependency.md). The "Live preview (Power BI)"
   // tab — embedding a published paginated (RDL) report in place via
-  // IPaginatedReportLoadConfiguration — is the OPT-IN leg, enabled with
-  // NEXT_PUBLIC_LOOM_BI_BACKEND=powerbi + a registered Console identity. With
-  // the opt-in off the hook is disabled so the default render makes ZERO
-  // Power BI network calls (rel-T04/B12).
-  const pbiOptIn = (process.env.NEXT_PUBLIC_LOOM_BI_BACKEND || '').toLowerCase() === 'powerbi';
+  // IPaginatedReportLoadConfiguration — is the OPT-IN leg, enabled via the
+  // RUNTIME admin setting (Admin → Runtime config → Power BI backend) read live
+  // by useBiBackend() + a registered Console identity. With the opt-in off the
+  // hook is disabled so the default render makes ZERO Power BI network calls
+  // (rel-T04/B12).
+  const { powerBiEnabled: pbiOptIn } = useBiBackend();
   const pbiWs = usePowerBiWorkspaces(pbiOptIn);
   const powerBiConfigured = pbiOptIn && !!(pbiWs.workspaces && pbiWs.workspaces.length > 0 && !pbiWs.error);
   const [designView, setDesignView] = useState<'designer' | 'preview'>('designer');
@@ -431,7 +433,7 @@ function PaginatedReportDesigner({ item, id }: { item: FabricItemType; id: strin
       <TabList selectedValue={designView} onTabSelect={(_, d) => setDesignView(d.value as 'designer' | 'preview')} style={{ marginBottom: tokens.spacingVerticalS}}>
         <Tab value="designer" icon={<Table20Regular />}>Designer</Tab>
         <Tab value="preview" icon={<Eye20Regular />} disabled={!powerBiConfigured}
-          title={powerBiConfigured ? 'Embed a published Power BI paginated report in place' : (pbiOptIn ? 'Power BI embed is opt-in; the Console identity is not registered in any Power BI workspace' : 'Power BI embed is opt-in — set NEXT_PUBLIC_LOOM_BI_BACKEND=powerbi to enable; the Loom-native Designer + Export need no Power BI')}>
+          title={powerBiConfigured ? 'Embed a published Power BI paginated report in place' : (pbiOptIn ? 'Power BI embed is opt-in; the Console identity is not registered in any Power BI workspace' : 'Power BI embed is opt-in — enable the Power BI backend in Admin → Runtime configuration; the Loom-native Designer + Export need no Power BI')}>
           Live preview (Power BI)
         </Tab>
       </TabList>

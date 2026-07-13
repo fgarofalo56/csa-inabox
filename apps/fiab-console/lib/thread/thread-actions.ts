@@ -355,8 +355,9 @@ export const THREAD_ACTIONS: ThreadAction[] = [
     description:
       'Opt-in Power BI path: publish a warehouse table to Power BI as a real semantic model — ' +
       'columns are read from the catalog and a sample of real rows is pushed so the model is ' +
-      'queryable immediately, then build the report in Power BI. Requires a Power BI workspace ' +
-      '(NEXT_PUBLIC_LOOM_BI_BACKEND=powerbi; the Console identity must be a Member/Contributor). ' +
+      'queryable immediately, then build the report in Power BI. Requires the Power BI backend ' +
+      'enabled in Admin → Runtime configuration and a Power BI workspace (the Console identity ' +
+      'must be a Member/Contributor). ' +
       'For the Azure-native default that needs no Power BI workspace, use “Build a report” instead. ' +
       'No connection strings to type.',
     group: 'Visualize',

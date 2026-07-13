@@ -33,7 +33,7 @@ export const powerBiItems: FabricItemType[] = [
         },
         {
           "title": "Optional: sync to Power BI",
-          "body": "With the Power BI backend opted in (NEXT_PUBLIC_LOOM_BI_BACKEND=powerbi), push the model to a Power BI workspace and refresh it via live Power BI REST."
+          "body": "With the Power BI backend enabled in Admin → Runtime configuration, push the model to a Power BI workspace and refresh it via live Power BI REST."
         }
       ],
       "docsUrl": "https://learn.microsoft.com/power-bi/transform-model/datasets/dataset-modes-understand"

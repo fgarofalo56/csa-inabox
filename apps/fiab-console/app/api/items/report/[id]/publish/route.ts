@@ -68,15 +68,14 @@ import {
   loadContentBackedItem,
 } from '../../../_lib/pbi-content-fallback';
 import { apiError } from '@/lib/api/respond';
+import { resolveBiBackendMode } from '@/lib/admin/platform-settings';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-/** Power BI is opt-in only — read both the public + server BI-backend toggles. */
-const BI_BACKEND = (process.env.NEXT_PUBLIC_LOOM_BI_BACKEND || process.env.LOOM_BI_BACKEND || '')
-  .trim()
-  .toLowerCase();
-const PBI_OPT_IN = BI_BACKEND === 'powerbi';
+// Power BI is opt-in only. The default target is resolved PER REQUEST via
+// resolveBiBackendMode (runtime admin setting > env LOOM_BI_BACKEND > default)
+// so the in-console toggle is honored without a rebuild — NOT a module const.
 
 function jerr(error: string, status: number) {
   return apiError(error, status);
@@ -221,7 +220,8 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
 
   // Decide the target. Power BI is reached only when explicitly requested, or
   // auto-selected by the opt-in BI backend; otherwise the Azure-native gallery.
-  const wantPbi = requested === 'powerbi' || (requested === undefined && PBI_OPT_IN);
+  const pbiOptIn = (await resolveBiBackendMode()) === 'powerbi';
+  const wantPbi = requested === 'powerbi' || (requested === undefined && pbiOptIn);
   if (wantPbi) {
     const ws = await resolveWorkspace(item);
     if (ws) {

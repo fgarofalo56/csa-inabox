@@ -34,7 +34,7 @@ import {
   AasError,
   type AasScheduleWrite,
 } from '@/lib/azure/aas-server-client';
-import { usingAas } from '../../_lib/bi-backend';
+import { usingAasAsync } from '../../_lib/bi-backend';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -50,7 +50,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   const id = (await ctx.params).id;
 
-  if (usingAas()) {
+  if (await usingAasAsync()) {
     const gate = aasServerConfigGate();
     if (gate) {
       return NextResponse.json({ ok: false, error: `Azure Analysis Services not configured: ${gate.missing}`, gate }, { status: 503 });
@@ -83,7 +83,7 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
   const body = (await req.json().catch(() => ({}))) as Record<string, unknown>;
 
   // ── AAS path ──────────────────────────────────────────────────────────
-  if (usingAas()) {
+  if (await usingAasAsync()) {
     const gate = aasServerConfigGate();
     if (gate) {
       return NextResponse.json({ ok: false, error: `Azure Analysis Services not configured: ${gate.missing}`, gate }, { status: 503 });
