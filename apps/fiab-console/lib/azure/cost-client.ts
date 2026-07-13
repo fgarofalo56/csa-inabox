@@ -142,6 +142,25 @@ export function loomSubscriptions(): string[] {
   return loomSubscriptionScope();
 }
 
+/**
+ * The cost-sweep subscription scope INCLUDING day-2-attached brownfield services
+ * (§2.4.3). Unions the env-derived scope (`loomSubscriptions()`) with the
+ * distinct subscriptions carried by the attached-services registry — read-time,
+ * so an attached resource's spend rolls into Chargeback the moment it is
+ * registered, with no new `LOOM_COST_SUBSCRIPTIONS` env and no cost-record schema
+ * change. Best-effort: a registry read failure falls back to the env scope.
+ */
+export async function loomCostSubscriptions(): Promise<string[]> {
+  const envSubs = loomSubscriptions();
+  try {
+    const { attachedRegistrySubscriptionIds } = await import('./attached-services-store');
+    const regSubs = await attachedRegistrySubscriptionIds();
+    return Array.from(new Set([...envSubs, ...regSubs]));
+  } catch {
+    return envSubs;
+  }
+}
+
 export type CostTimeframe = 'MonthToDate' | 'BillingMonthToDate' | 'TheLastMonth' | 'Last7Days' | 'Last30Days';
 const PREV_TIMEFRAME: Record<CostTimeframe, CostTimeframe | null> = {
   MonthToDate: 'TheLastMonth',
@@ -425,7 +444,7 @@ export async function getLoomCostSummary(opts: CostOptions = {}): Promise<CostSu
   const cfg = readMonitorConfig(); // throws MonitorNotConfiguredError if unset
   const loomRgs = new Set(cfg.resourceGroups.map((r) => r.toLowerCase()));
   const timeframe = opts.timeframe || 'MonthToDate';
-  const subs = loomSubscriptions();
+  const subs = await loomCostSubscriptions();
   if (subs.length === 0) subs.push(cfg.subscriptionId);
 
   const bySvc = new Map<string, number>();

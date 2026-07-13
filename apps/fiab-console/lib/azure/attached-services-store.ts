@@ -82,6 +82,39 @@ export interface AttachedServiceValidation {
   remediation?: string;
 }
 
+/**
+ * Per-step outcome of the Phase-2 auto-integration hooks (§2.4). Each of the
+ * four "becomes part of Loom" steps records its own status + honest detail here,
+ * so the LZ detail drawer can render four badges and surface the exact grant
+ * command when a step is a pending-grants honest gate (no-vaporware.md).
+ */
+export type IntegrationStepStatus =
+  | 'granted' // RBAC: role assignment created / already present
+  | 'registered' // Purview: scan source registered
+  | 'wired' // Telemetry: diagnostic-settings routed to the hub LAW
+  | 'included' // Chargeback: the sub is in the cost sweep
+  | 'pending-grants' // an honest gate — the UAMI lacks rights; grantScript names the fix
+  | 'not-configured' // the platform capability isn't wired (e.g. LOOM_PURVIEW_ACCOUNT unset)
+  | 'skipped' // not applicable for this kind
+  | 'error'; // an unexpected failure (never fails the attach)
+
+export interface IntegrationStepResult {
+  status: IntegrationStepStatus;
+  /** Human detail for the badge tooltip / MessageBar. */
+  detail?: string;
+  /** Exact az CLI command to remediate a pending-grants step (RBAC / telemetry). */
+  grantScript?: string;
+  checkedAt: string;
+}
+
+/** The four auto-integration steps recorded on a service doc. */
+export interface AttachedServiceIntegration {
+  rbac?: IntegrationStepResult;
+  purview?: IntegrationStepResult;
+  telemetry?: IntegrationStepResult;
+  chargeback?: IntegrationStepResult;
+}
+
 export interface AttachedService {
   id: string; // uuid
   tenantId: string; // partition key (tenantScopeId — claims.tid ?? oid)
@@ -103,6 +136,8 @@ export interface AttachedService {
   purviewSourceName?: string;
   telemetryWired?: boolean;
   chargebackIncluded?: boolean;
+  /** Per-step auto-integration results (Phase 2) — drives the LZ drawer badges. */
+  integration?: AttachedServiceIntegration;
   /** Optional data-plane secret (KV secret name) for kinds that need one. */
   secretRef?: string;
   status: 'attached' | 'pending-grants';
@@ -395,6 +430,76 @@ export async function resolveAttachedService(
   }
   resolveCache.set(key, { value, expires: Date.now() + RESOLVE_CACHE_TTL_MS });
   return value;
+}
+
+/**
+ * Persist the Phase-2 auto-integration results onto a service doc (§2.4). Merges
+ * the per-step `integration` block, flips the derived boolean toggles
+ * (`governanceRegistered` / `telemetryWired` / `chargebackIncluded`), stores the
+ * `purviewSourceName`, and promotes `status` from 'pending-grants' → 'attached'
+ * when the RBAC grant went through (granted/already-present). Best-effort — a
+ * persist blip must never fail the attach, so callers ignore a thrown error.
+ */
+export async function applyIntegrationResults(
+  tenantId: string,
+  id: string,
+  integration: AttachedServiceIntegration,
+): Promise<AttachedService | null> {
+  const c = await attachedServicesContainer();
+  const existing = await loadAttachedService(tenantId, id);
+  if (!existing) return null;
+
+  const merged: AttachedService = {
+    ...existing,
+    integration: { ...(existing.integration || {}), ...integration },
+    updatedAt: new Date().toISOString(),
+  };
+  if (integration.purview) {
+    merged.governanceRegistered = integration.purview.status === 'registered';
+    // The scan source name is carried in the detail — set only when registered.
+    if (integration.purview.status === 'registered' && integration.purview.detail) {
+      const m = /source '([^']+)'/.exec(integration.purview.detail);
+      if (m) merged.purviewSourceName = m[1];
+    }
+  }
+  if (integration.telemetry) merged.telemetryWired = integration.telemetry.status === 'wired';
+  if (integration.chargeback) merged.chargebackIncluded = integration.chargeback.status === 'included';
+  // RBAC granted (or already present) → the service is fully attached.
+  if (integration.rbac && (integration.rbac.status === 'granted')) {
+    merged.status = 'attached';
+  }
+
+  const { resource } = await c.items.upsert(merged);
+  invalidateResolveCache(tenantId);
+  return (resource as unknown as AttachedService) ?? merged;
+}
+
+/**
+ * Distinct subscription ids that carry at least one attached service, across
+ * ALL tenants (a cross-partition read). The cost/chargeback sweep unions these
+ * with the env-derived subscription scope so a day-2-attached resource's spend
+ * is swept read-time — no new `LOOM_COST_SUBSCRIPTIONS` env, no cost-code schema
+ * change (§2.4.3). Best-effort: returns [] on any read failure so cost never
+ * hard-fails on the registry.
+ */
+export async function attachedRegistrySubscriptionIds(): Promise<string[]> {
+  try {
+    const c = await attachedServicesContainer();
+    const { resources } = await c.items
+      .query<{ subscriptionId?: string }>({
+        query: 'SELECT DISTINCT c.subscriptionId FROM c WHERE IS_DEFINED(c.subscriptionId)',
+        parameters: [],
+      })
+      .fetchAll();
+    const out = new Set<string>();
+    for (const r of resources || []) {
+      const s = (r?.subscriptionId || '').trim();
+      if (s) out.add(s);
+    }
+    return Array.from(out);
+  } catch {
+    return [];
+  }
 }
 
 /** Result of the day-0 BYO → registry seed reconcile. */

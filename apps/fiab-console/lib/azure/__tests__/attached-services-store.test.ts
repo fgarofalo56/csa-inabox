@@ -187,4 +187,64 @@ describe('attached-services-store', () => {
     expect(r2.seeded).toBe(0);
     expect(r2.skippedExisting).toBeGreaterThanOrEqual(1);
   });
+
+  // ---- Phase 2: auto-integration persistence + chargeback sub union --------
+
+  it('applyIntegrationResults merges steps, flips toggles, and promotes status on RBAC grant', async () => {
+    const { createAttachedService, applyIntegrationResults } = await import('../attached-services-store');
+    const view = await createAttachedService(SESSION, {
+      landingZoneId: 'hub', kind: 'storage-adls', displayName: 'acct',
+      armResourceId: '/subscriptions/s/resourceGroups/r/providers/Microsoft.Storage/storageAccounts/acct',
+      subscriptionId: 's', resourceGroup: 'r', status: 'pending-grants',
+    });
+    const now = new Date().toISOString();
+    const merged = await applyIntegrationResults('tenant-1', view.id, {
+      rbac: { status: 'granted', detail: 'ok', checkedAt: now },
+      purview: { status: 'registered', detail: "Registered as Purview scan source 'loom-attach-acct' (AdlsGen2).", checkedAt: now },
+      telemetry: { status: 'wired', checkedAt: now },
+      chargeback: { status: 'included', checkedAt: now },
+    });
+    expect(merged?.status).toBe('attached'); // promoted from pending-grants
+    expect(merged?.governanceRegistered).toBe(true);
+    expect(merged?.purviewSourceName).toBe('loom-attach-acct');
+    expect(merged?.telemetryWired).toBe(true);
+    expect(merged?.chargebackIncluded).toBe(true);
+    expect(merged?.integration?.rbac?.status).toBe('granted');
+  });
+
+  it('applyIntegrationResults keeps pending-grants status when RBAC is not granted', async () => {
+    const { createAttachedService, applyIntegrationResults } = await import('../attached-services-store');
+    const view = await createAttachedService(SESSION, {
+      landingZoneId: 'hub', kind: 'adx', displayName: 'adx1',
+      armResourceId: '/subscriptions/s/resourceGroups/r/providers/Microsoft.Kusto/clusters/adx1',
+      subscriptionId: 's', resourceGroup: 'r', status: 'pending-grants',
+    });
+    const now = new Date().toISOString();
+    const merged = await applyIntegrationResults('tenant-1', view.id, {
+      rbac: { status: 'pending-grants', grantScript: 'az role assignment create ...', checkedAt: now },
+    });
+    expect(merged?.status).toBe('pending-grants');
+    expect(merged?.integration?.rbac?.grantScript).toContain('az role assignment create');
+  });
+
+  it('attachedRegistrySubscriptionIds returns distinct subs (no ORDER BY) across the registry', async () => {
+    const { createAttachedService, attachedRegistrySubscriptionIds } = await import('../attached-services-store');
+    await createAttachedService(SESSION, {
+      landingZoneId: 'hub', kind: 'storage-adls', displayName: 'a',
+      armResourceId: '/subscriptions/sub-A/resourceGroups/r/providers/Microsoft.Storage/storageAccounts/a',
+      subscriptionId: 'sub-A', resourceGroup: 'r',
+    });
+    await createAttachedService(SESSION, {
+      landingZoneId: 'hub', kind: 'adx', displayName: 'b',
+      armResourceId: '/subscriptions/sub-B/resourceGroups/r/providers/Microsoft.Kusto/clusters/b',
+      subscriptionId: 'sub-B', resourceGroup: 'r',
+    });
+    await createAttachedService(SESSION, {
+      landingZoneId: 'hub', kind: 'cosmos', displayName: 'c',
+      armResourceId: '/subscriptions/sub-A/resourceGroups/r/providers/Microsoft.DocumentDB/databaseAccounts/c',
+      subscriptionId: 'sub-A', resourceGroup: 'r',
+    });
+    const subs = await attachedRegistrySubscriptionIds();
+    expect([...subs].sort()).toEqual(['sub-A', 'sub-B']); // distinct
+  });
 });

@@ -436,12 +436,62 @@ untouched.
   (many concurrent KQL tile queries) costs a Cosmos read at most once per
   tenant/kind/LZ per minute — the empty-registry common case never re-queries.
 
-**Honest gaps (deferred to Phase 2/3 per the plan):**
-- RBAC is *reported* (exact role + scope), not yet auto-granted — Phase 2's
-  `role-grant-client`. Attach records `status:'pending-grants'`.
-- Governance / telemetry / chargeback auto-integration hooks are Phase 2
-  (`chargebackIncluded` defaults true since attribution keys on `resourceId`).
+**Honest gaps (deferred to Phase 3 per the plan):**
 - Private-endpoint remediation is flagged at preflight but not auto-created —
   Phase 3.
 - Registry-first resolution is wired at the ADX guard + the Synapse/ADX async
   client variants; broad adoption across every navigator caller is Phase 3.
+
+---
+
+## Phase 2 — implemented (2026-07-13)
+
+Phase 2 (auto-integration — "attach → becomes part of Loom") is built. On a
+successful attach the route now fires four best-effort, individually-recorded
+hooks, each honest-gated per `no-vaporware.md`; a hook failure never fails the
+attach (the registry doc already exists).
+
+**Shipped:**
+- `lib/azure/role-grant-client.ts` — ARM `PUT roleAssignments/{guid}` of the
+  navigator role (GUID map from `attached-service-kinds.ts`, verbatim from
+  `grant-navigator-rbac.sh`) for the Console UAMI at the resource scope. The
+  assignment name is a **deterministic** v5-shaped hash of scope+role+principal
+  so re-attach is idempotent; `RoleAssignmentExists` (409) is treated as success;
+  `AuthorizationFailed` (403) keeps `status:'pending-grants'` and emits the exact
+  `az role assignment create` command (honest gate). Principal resolved via
+  `resolveUamiPrincipalId` (`LOOM_UAMI_PRINCIPAL_ID` → MI-token `oid`).
+- `lib/azure/attach-integration.ts` — the orchestrator `runAttachIntegration`
+  running all four steps: **RBAC** (above); **Purview** scan-source registration
+  (reuses `purview-source-map` + `registerDataSource` for the scannable kinds —
+  ADLS/SQL/Synapse/Cosmos; ADX/Databricks honest-skip to Catalog; `not-configured`
+  when `LOOM_PURVIEW_ACCOUNT` unset); **Telemetry** diagnostic-settings PUT
+  (`loom-attached`, allLogs+AllMetrics → `LOOM_LOG_ANALYTICS_RESOURCE_ID`;
+  403 → pending-grants naming Monitoring Contributor; `not-configured` when no
+  hub LAW); **Chargeback** inclusion.
+- `attached-services-store.ts` — the `integration: {rbac, purview, telemetry,
+  chargeback}` block on the doc, `applyIntegrationResults` (merges steps, flips
+  the boolean toggles, stores `purviewSourceName`, promotes
+  `pending-grants → attached` on an RBAC grant), and
+  `attachedRegistrySubscriptionIds()` (distinct registry subs).
+- Chargeback sweep union — `cost-client.loomCostSubscriptions()` unions the
+  env-derived subscription scope with the registry subs read-time (no new
+  `LOOM_COST_SUBSCRIPTIONS` env, no cost-record schema change); wired into
+  `getLoomCostSummary` + `getDomainChargeback`. Each attached sub's spend rolls
+  into Chargeback the moment it is registered.
+- `POST /api/landing-zones/[id]/attach` — fires the hook per registered service,
+  persists the results, and surfaces any pending RBAC/telemetry `grantScript` in
+  `manualActions`. `AttachedServicesSection` renders four integration badges per
+  service (RBAC / Governance / Telemetry / Chargeback, colour-coded, tooltipped)
+  + a `ready` / `pending grants` status badge, and an honest warning MessageBar
+  with the copy-pasteable grant command when a step is gated.
+- Vitest — `role-grant-client.test.ts` (deterministic GUID stability/shape,
+  granted / 409-as-success / 403-pending / no-principal / skipped branches),
+  `attach-integration.test.ts` (per-step status recording incl. honest gates),
+  and `attached-services-store.test.ts` additions (integration merge +
+  status-promotion, distinct registry subs, no ORDER BY). 34 tests green.
+
+**Honest gaps (deferred to Phase 3 per the plan):**
+- Private-endpoint remediation is flagged at preflight but not auto-created.
+- Auto-creating `origin:'existing'` Connections for data-source kinds (§2.4.5)
+  is not yet wired.
+- Registry-first backend resolution broadened across every navigator caller.
