@@ -1934,6 +1934,33 @@ export const REMOTE_BUILTIN_MCP_CATALOG: RemoteBuiltinMcpEntry[] = [
     configured: () => enabledUnlessFalse('LOOM_MS_LEARN_MCP_ENABLED'),
   },
   {
+    // Microsoft Release Communications (MRC) MCP server — the SECOND day-one,
+    // no-auth default-on entry alongside Microsoft Learn. Microsoft-hosted,
+    // publicly available, NO authentication / license / consent, Streamable HTTP
+    // (learn.microsoft.com/microsoft-365/admin/manage/mrc-mcp): search + retrieve
+    // the latest Microsoft 365 Roadmap + Azure Updates release information in
+    // natural language. Because auth is 'none' and it ships a real GA endpoint,
+    // effectiveRemoteState resolves it CONFIGURED with zero admin action — it is
+    // enabled + callable by default with NO gate (operator directive: default-ON
+    // opt-out). Azure-native / Microsoft-native only; no Fabric dependency.
+    id: 'ms-release-comms',
+    name: 'Microsoft Release Communications',
+    category: 'Reference',
+    desc: 'Search + retrieve the latest Microsoft 365 Roadmap and Azure Updates feature-release information in natural language (roadmap items, GA/preview timelines, change notifications) via the Microsoft-hosted Release Communications MCP server. Microsoft-hosted, GA, NO authentication — live day-one with zero config.',
+    endpoint: resolveRemoteEndpoint('LOOM_MS_RELEASE_COMMS_MCP_ENDPOINT', 'https://www.microsoft.com/releasecommunications/mcp'),
+    endpointEnv: 'LOOM_MS_RELEASE_COMMS_MCP_ENDPOINT',
+    defaultEndpoint: 'https://www.microsoft.com/releasecommunications/mcp',
+    transport: 'http',
+    auth: 'none',
+    enableEnv: 'LOOM_MS_RELEASE_COMMS_MCP_ENABLED',
+    defaultOn: true,
+    preview: false,
+    optIn: false,
+    attribution: 'learn.microsoft.com/microsoft-365/admin/manage/mrc-mcp',
+    gate: 'On by default (no auth, no config). Set LOOM_MS_RELEASE_COMMS_MCP_ENABLED=false to disable, or LOOM_MS_RELEASE_COMMS_MCP_ENDPOINT to override the endpoint.',
+    configured: () => enabledUnlessFalse('LOOM_MS_RELEASE_COMMS_MCP_ENABLED'),
+  },
+  {
     id: 'azure-arm',
     name: 'Azure Resources (ARM)',
     category: 'Azure',

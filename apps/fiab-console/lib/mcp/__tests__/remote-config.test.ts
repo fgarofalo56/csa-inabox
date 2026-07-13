@@ -23,6 +23,8 @@ import { effectiveRemoteState, msRemoteMcp } from '../catalog';
 const TOUCHED = [
   'LOOM_MSAL_CLIENT_ID',
   'LOOM_MS_LEARN_MCP_ENABLED',
+  'LOOM_MS_RELEASE_COMMS_MCP_ENABLED',
+  'LOOM_MS_RELEASE_COMMS_MCP_ENDPOINT',
   'LOOM_FOUNDRY_MCP_ENABLED',
   'LOOM_FOUNDRY_MCP_ENDPOINT',
   'LOOM_M365_MCP_ENABLED',
@@ -106,6 +108,30 @@ describe('effectiveRemoteState — default-ON posture (opt-out, honestly gated)'
     expect(s.configured).toBe(true);
     expect(s.envForced).toBe(true);
     // A deployment env force-on cannot be disabled by an admin override.
+    const disabled = effectiveRemoteState(e, { enabled: false });
+    expect(disabled.configured).toBe(true);
+    expect(disabled.envForced).toBe(true);
+  });
+
+  it('Microsoft Release Communications is CONFIGURED day-one with NO gate (default-on, no auth, real GA endpoint)', () => {
+    // The second no-auth default-on server: enabled + callable by default with
+    // zero admin action, zero secret, zero consent — no OBO client set.
+    const e = entry('ms-release-comms');
+    expect(e.defaultOn).toBe(true);
+    expect(e.auth).toBe('none');
+    const s = effectiveRemoteState(e, undefined);
+    expect(s.enabled).toBe(true);
+    expect(s.configured).toBe(true); // live day-one — NO gate
+    expect(s.endpoint).toBe('https://www.microsoft.com/releasecommunications/mcp');
+    expect(s.missing).toEqual([]);
+    expect(s.envForced).toBe(true);
+  });
+
+  it('Microsoft Release Communications stays on-by-default under an admin override (no-auth force-on)', () => {
+    // Like Microsoft Learn, a no-auth default-on server with a real GA endpoint
+    // is env-forced on; an admin `enabled:false` override does not silently drop
+    // the day-one no-config server (its deployment-wide opt-out is the enable env).
+    const e = entry('ms-release-comms');
     const disabled = effectiveRemoteState(e, { enabled: false });
     expect(disabled.configured).toBe(true);
     expect(disabled.envForced).toBe(true);
