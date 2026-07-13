@@ -73,6 +73,7 @@ const DEFAULTS: Record<string, RateLimits> = {
   export: { ratePerSec: 1, burst: 8 },       // export / download
   feedback: { ratePerSec: 0.2, burst: 5 },   // authed bug / feature reports
   'feedback-anon': { ratePerSec: 0.05, burst: 5 }, // anonymous auto-error reports
+  'access-request': { ratePerSec: 0.02, burst: 3 }, // anonymous sign-in-boundary onboarding requests
 };
 
 /** Tier-2 durable fixed-window budgets (Cosmos). windowSec + max requests per
@@ -91,6 +92,7 @@ const DURABLE_DEFAULTS: Record<string, DurableLimit> = {
   export: { windowSec: 60, max: 60 },
   feedback: { windowSec: 3600, max: 30 },         // authed: 30 reports / hr / user
   'feedback-anon': { windowSec: 3600, max: 5 },   // anonymous: 5 auto-errors / hr / IP
+  'access-request': { windowSec: 3600, max: 8 },  // anonymous: 8 onboarding requests / hr / IP (and / email)
 };
 
 const MAX_BUCKETS = 5000;

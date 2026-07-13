@@ -42,6 +42,7 @@ import { RunningWorkloadsButton } from './running-workloads-button';
 import { GlobalJobToaster } from './global-job-toaster';
 import { OnboardingTour, openTour } from './onboarding/onboarding-tour';
 import { SessionProvider, type ShellSession } from './session-context';
+import { RequestAccessButton } from './access/request-access-button';
 
 interface MeResponse {
   authenticated: boolean;
@@ -249,7 +250,10 @@ export function AppShell({ children }: { children: ReactNode }) {
               </MenuPopover>
             </Menu>
           ) : (
-            <Button appearance="primary" as="a" href="/auth/sign-in" aria-label="Sign in">Sign in</Button>
+            <>
+              <RequestAccessButton appearance="secondary" size="medium" />
+              <Button appearance="primary" as="a" href="/auth/sign-in" aria-label="Sign in">Sign in</Button>
+            </>
           )}
         </div>
       </header>
