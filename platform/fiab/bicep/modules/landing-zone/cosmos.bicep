@@ -42,7 +42,11 @@ param defaultConsistency string = 'Session'
 // Serverless capacity mode, which mandates a single (non-zone-redundant) write
 // region, so the option no longer applies. No caller passed it.
 
-var accountName = take('cosmos-loom-${domainName}-${uniqueString(resourceGroup().id)}', 44)
+// dlz-attach may pass an EMPTY domainName — a bare interpolation would emit
+// 'cosmos-loom--<hash>' and Cosmos rejects consecutive hyphens in account
+// names ("The character '-' at index N is not allowed"). Collapse the segment.
+var domainSegment = empty(domainName) ? '' : '${domainName}-'
+var accountName = take('cosmos-loom-${domainSegment}${uniqueString(resourceGroup().id)}', 44)
 
 resource account 'Microsoft.DocumentDB/databaseAccounts@2024-12-01-preview' = {
   name: accountName
