@@ -54,6 +54,7 @@ interface ChargebackModel {
   subscriptionErrors: { subscription: string; error: string }[]; generatedAt: string;
 }
 interface Gate { missing: string[]; message: string; scope?: string }
+interface CacheMeta { cachedAt: number; stale: boolean }
 
 type TabId = 'overview' | 'compute' | 'storage' | 'workspace' | 'timepoint';
 
@@ -333,17 +334,20 @@ export function ChargebackPane() {
   const [gate, setGate] = useState<Gate | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [model, setModel] = useState<ChargebackModel | null>(null);
+  const [meta, setMeta] = useState<CacheMeta | null>(null);
 
-  const load = useCallback(async (tf: string) => {
+  const load = useCallback(async (tf: string, refresh = false) => {
     setLoading(true); setError(null); setGate(null);
     try {
-      const res = await clientFetch(`/api/admin/capacity/chargeback?timeframe=${encodeURIComponent(tf)}`, { cache: 'no-store' }, CHARGEBACK_FETCH_TIMEOUT_MS);
+      const qs = `timeframe=${encodeURIComponent(tf)}${refresh ? '&refresh=1' : ''}`;
+      const res = await clientFetch(`/api/admin/capacity/chargeback?${qs}`, { cache: 'no-store' }, CHARGEBACK_FETCH_TIMEOUT_MS);
       if (res.status === 401) { setUnauth(true); setLoading(false); return; }
       const j = await res.json().catch(() => null);
       if (res.status === 403) { setError(j?.reason || j?.error || 'Tenant-admin access required.'); setLoading(false); return; }
       if (j?.ok === false && j?.gate) { setGate(j.gate as Gate); setLoading(false); return; }
       if (j?.ok === false) { setError(j?.error || 'Failed to load chargeback data.'); setLoading(false); return; }
       setModel(j.data as ChargebackModel);
+      setMeta((j.meta as CacheMeta) ?? null);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -382,10 +386,18 @@ export function ChargebackPane() {
             >
               {TIMEFRAMES.map((t) => <Option key={t.value} value={t.value}>{t.label}</Option>)}
             </Dropdown>
-            <Button icon={<ArrowClockwise16Regular />} appearance="secondary" onClick={() => void load(timeframe)} disabled={loading}>
+            <Button icon={<ArrowClockwise16Regular />} appearance="secondary" onClick={() => void load(timeframe, true)} disabled={loading}>
               Refresh
             </Button>
           </div>
+
+          {model && meta && (
+            <Caption1 style={{ display: 'block', marginTop: `-${tokens.spacingVerticalS}`, marginBottom: tokens.spacingVerticalM, color: tokens.colorNeutralForeground3 }}>
+              {meta.stale
+                ? <>Showing cached figures from {new Date(meta.cachedAt).toLocaleTimeString()} · refreshing in the background…</>
+                : <>As of {new Date(meta.cachedAt).toLocaleTimeString()} · cached ~10&nbsp;min · Refresh re-pulls live spend</>}
+            </Caption1>
+          )}
 
           {error && (
             <MessageBar intent="error" className={styles.toolbar}>

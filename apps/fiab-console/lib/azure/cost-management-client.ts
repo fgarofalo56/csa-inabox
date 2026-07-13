@@ -442,21 +442,21 @@ export async function getChargebackModel(opts: ChargebackOptions = {}): Promise<
   const timeframe: CostTimeframe = opts.timeframe || 'MonthToDate';
   const win = TIMEFRAME_WINDOW[timeframe];
 
-  // 1) Real Cost Management summary (throws when unconfigured / no access).
-  const cost: CostSummary = await getLoomCostSummary({ timeframe });
-
-  // 2) Real Azure Monitor normalized-CU (best-effort; never fails the model —
-  //    Monitor gaps degrade to honest zeros, cost remains authoritative).
-  let normalizedCU: NormalizedCapacity;
-  try {
-    normalizedCU = await computeNormalizedCU(win);
-  } catch {
-    normalizedCU = {
-      totalLcu: 0, capacityLcu: 1, capacitySource: 'derived', utilizationPct: 0,
-      throttled: false, throttleEvents: 0, surge: 'none', engines: [], windowHours: win.hours,
-      derivation: 'Azure Monitor metrics unavailable in this window; LCU rollup skipped.',
-    };
-  }
+  // Cost Management (1) and Azure Monitor normalized-CU (2) are INDEPENDENT — run
+  // them in parallel so first-load latency is the slower of the two, not the sum.
+  //   1) Real Cost Management summary — throws when unconfigured / no access
+  //      (that propagates so the route renders the honest gate).
+  //   2) Real Azure Monitor normalized-CU — best-effort; Monitor gaps degrade to
+  //      honest zeros, cost remains authoritative, so it NEVER fails the model.
+  const CU_FALLBACK: NormalizedCapacity = {
+    totalLcu: 0, capacityLcu: 1, capacitySource: 'derived', utilizationPct: 0,
+    throttled: false, throttleEvents: 0, surge: 'none', engines: [], windowHours: win.hours,
+    derivation: 'Azure Monitor metrics unavailable in this window; LCU rollup skipped.',
+  };
+  const [cost, normalizedCU]: [CostSummary, NormalizedCapacity] = await Promise.all([
+    getLoomCostSummary({ timeframe }),
+    computeNormalizedCU(win).catch(() => CU_FALLBACK),
+  ]);
 
   const total = cost.monthToDate;
   const perService = withPct(cost.byService, total);
