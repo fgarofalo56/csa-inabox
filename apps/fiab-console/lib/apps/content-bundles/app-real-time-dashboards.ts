@@ -337,6 +337,88 @@ const bundle: AppBundle = {
     'https://learn.microsoft.com/kusto/management/alter-merge-table-retention-policy-command',
   ],
   items: [
+    // ─── Orders snapshot lakehouse (cold path, seeded for report binding) ──
+    // Placed FIRST so it provisions + seeds its CSVs before the report binds.
+    // The live path is Eventstream → Eventhouse (hot ADX); this lakehouse is a
+    // periodic Delta SNAPSHOT of that orders feed so the Power BI report can be
+    // bound to real values on install. The install-time binder
+    // (lib/install/report-binding.ts) rewrites the Real-Time Orders Report into a
+    // direct-query over these seeded tables, so its revenue-by-time / revenue-by-
+    // region visuals render immediately instead of the "choose a data source"
+    // gate. Table + column names deliberately match the Real-Time Orders Semantic
+    // Model (orders / dim_region, orders[amount]) so the binder resolves its
+    // Total Revenue measure + region axis to physical columns. Azure-native ADLS
+    // Gen2 + Delta — no Fabric/OneLake dependency (no-fabric-dependency.md).
+    {
+      itemType: 'lakehouse',
+      displayName: 'Orders Snapshot Lakehouse',
+      description:
+        'ADLS Gen2 + Delta snapshot of the streaming orders feed, seeded so the ' +
+        'Real-Time Orders report renders real revenue-by-region / revenue-over-' +
+        'time values on install. This is the cold-path snapshot for report ' +
+        'binding; the live sub-second path is the Eventstream → Eventhouse.',
+      learnDoc: 'real-time-dashboards/lakehouse',
+      content: {
+        kind: 'lakehouse',
+        folders: [
+          { path: 'orders/orders/', description: 'Periodic Delta snapshot of the streaming Orders feed.' },
+          { path: 'orders/dim_region/', description: 'Region catalog dimension (display name, currency, SLA).' },
+        ],
+        deltaTables: [
+          {
+            // Matches the semantic model's `orders` table: `amount` is the base
+            // column its Total Revenue measure sums; `region` joins to dim_region;
+            // `event_time` is the report's revenue-trend axis.
+            name: 'orders',
+            ddl:
+              'CREATE TABLE orders.orders (\n' +
+              '    event_time  DATETIME2      NOT NULL,\n' +
+              '    order_id    VARCHAR(64)    NOT NULL,\n' +
+              '    region      VARCHAR(40)    NOT NULL,\n' +
+              '    channel     VARCHAR(40)    NOT NULL,\n' +
+              '    amount      DECIMAL(18,2)  NOT NULL,\n' +
+              '    latency_ms  BIGINT         NOT NULL,\n' +
+              '    status      VARCHAR(20)    NOT NULL\n' +
+              ') USING DELTA;',
+            sampleRows: [
+              ['2026-06-01T14:00:00', 'ord-100001', 'us-east', 'web', 42.5, 180, 'completed'],
+              ['2026-06-01T14:05:00', 'ord-100002', 'us-west', 'mobile', 220.0, 240, 'completed'],
+              ['2026-06-01T14:10:00', 'ord-100003', 'eu-west', 'web', 18.99, 310, 'completed'],
+              ['2026-06-01T14:15:00', 'ord-100004', 'us-east', 'partner', 0.0, 2100, 'failed'],
+              ['2026-06-01T14:20:00', 'ord-100005', 'apac', 'mobile', 305.75, 195, 'completed'],
+              ['2026-06-01T14:25:00', 'ord-100006', 'us-west', 'web', 77.4, 220, 'completed'],
+              ['2026-06-01T14:30:00', 'ord-100007', 'eu-west', 'partner', 0.0, 1800, 'failed'],
+              ['2026-06-01T14:35:00', 'ord-100008', 'apac', 'web', 133.1, 260, 'completed'],
+              ['2026-06-01T14:40:00', 'ord-100009', 'us-east', 'mobile', 64.25, 205, 'completed'],
+              ['2026-06-01T14:45:00', 'ord-100010', 'us-west', 'partner', 512.0, 300, 'completed'],
+              ['2026-06-01T14:50:00', 'ord-100011', 'eu-west', 'mobile', 88.6, 275, 'completed'],
+              ['2026-06-01T14:55:00', 'ord-100012', 'apac', 'web', 27.3, 240, 'completed'],
+              ['2026-06-01T15:00:00', 'ord-100013', 'us-east', 'web', 149.99, 210, 'completed'],
+              ['2026-06-01T15:05:00', 'ord-100014', 'us-west', 'mobile', 0.0, 1600, 'failed'],
+            ],
+          },
+          {
+            // Matches the semantic model's `dim_region`; joins to orders on
+            // `region`. `region_name` is the report's Revenue-by-Region axis.
+            name: 'dim_region',
+            ddl:
+              'CREATE TABLE orders.dim_region (\n' +
+              '    region       VARCHAR(40)  NOT NULL,\n' +
+              '    region_name  VARCHAR(80)  NOT NULL,\n' +
+              '    currency     VARCHAR(8)   NOT NULL,\n' +
+              '    sla_p95_ms   BIGINT       NOT NULL\n' +
+              ') USING DELTA;',
+            sampleRows: [
+              ['us-east', 'US East (Virginia)', 'USD', 500],
+              ['us-west', 'US West (Oregon)', 'USD', 500],
+              ['eu-west', 'EU West (Ireland)', 'EUR', 700],
+              ['apac', 'Asia Pacific (Tokyo)', 'JPY', 800],
+            ],
+          },
+        ],
+      },
+    },
+
     // ─── Eventstream: live source → Eventhouse + cold Lakehouse ───────────
     {
       itemType: 'eventstream',

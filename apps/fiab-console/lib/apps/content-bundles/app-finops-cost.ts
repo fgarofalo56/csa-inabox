@@ -21,6 +21,98 @@ const bundle: AppBundle = {
     'docs/best-practices/cloud-cost-management.md',
   ],
   items: [
+    // Seeded cost lakehouse — placed FIRST so it provisions (and seeds its CSVs)
+    // before the report is bound. The install-time report binder
+    // (lib/install/report-binding.ts) turns the FinOps Monthly Executive Report
+    // into a direct-query over THESE seeded tables, so its Total Spend / by-
+    // service / by-owner visuals render REAL values on first open instead of the
+    // "choose a data source" gate. Table + column names deliberately norm-match
+    // the FinOps Cost Semantic Model below (BillingFact / DimService, BilledCost /
+    // AmortizedCost / ServiceFamily / …) — that alignment is what lets the binder
+    // resolve the model's measures (Total Spend = SUM(BillingFact[BilledCost]))
+    // and the report's dim axes to physical columns. Denormalized owner / cost-
+    // center / month columns ride on BillingFact so the by-owner + trend visuals
+    // resolve without seeding every dimension. Azure-native ADLS Gen2 + Delta,
+    // no Fabric/OneLake dependency (no-fabric-dependency.md).
+    {
+      itemType: 'lakehouse',
+      displayName: 'FinOps Cost Lakehouse',
+      description:
+        'ADLS Gen2 + Delta lakehouse seeded with a denormalized Cost Management ' +
+        'export (BillingFact) and a service dimension (DimService). Feeds the ' +
+        'FinOps Monthly Executive Report so its spend, by-service, and by-owner ' +
+        'visuals render real values immediately, before any live Cost Management ' +
+        'export lands.',
+      learnDoc: 'best-practices/cloud-cost-management',
+      content: {
+        kind: 'lakehouse',
+        folders: [
+          { path: 'billing/BillingFact/', description: 'Denormalized daily Cost Management billing fact (Delta).' },
+          { path: 'billing/DimService/', description: 'Azure service dimension (family + tier) for allocation.' },
+        ],
+        deltaTables: [
+          {
+            // Denormalized so the untouched report's by-owner (DimTag) / by-month
+            // (DimDate) / by-subscription visuals resolve without seeding those
+            // dims: Owner/CostCenter/SubscriptionName/Month/MonthName/Year ride on
+            // the fact. BilledCost/AmortizedCost are the base columns the model's
+            // Total Spend / Amortized Spend measures aggregate. ServiceKey joins to
+            // DimService (relationship BillingFact.ServiceKey → DimService.ServiceKey).
+            name: 'BillingFact',
+            ddl:
+              'CREATE TABLE billing.BillingFact (\n' +
+              '    BillingEventKey   BIGINT         NOT NULL,\n' +
+              '    ResourceId        VARCHAR(200)   NOT NULL,\n' +
+              '    ServiceKey        BIGINT         NOT NULL,\n' +
+              '    SubscriptionName  VARCHAR(100)   NOT NULL,\n' +
+              '    MeterCategory     VARCHAR(80)    NOT NULL,\n' +
+              '    UsageQuantity     DECIMAL(18,4)  NOT NULL,\n' +
+              '    BilledCost        DECIMAL(18,2)  NOT NULL,\n' +
+              '    AmortizedCost     DECIMAL(18,2)  NOT NULL,\n' +
+              '    Owner             VARCHAR(100)   NOT NULL,\n' +
+              '    CostCenter        VARCHAR(60)    NOT NULL,\n' +
+              '    Month             INT            NOT NULL,\n' +
+              '    MonthName         VARCHAR(20)    NOT NULL,\n' +
+              '    Year              INT            NOT NULL\n' +
+              ') USING DELTA;',
+            sampleRows: [
+              [1, 'aks-prod-eastus', 1, 'Production-Platform', 'Compute Hours', 730, 4200.0, 3980.0, 'Priya Nair', 'CC-1001', 4, 'April', 2026],
+              [2, 'sqldb-orders-prod', 2, 'Production-Platform', 'vCore Hours', 744, 3120.5, 3120.5, 'Marcus Reed', 'CC-1001', 4, 'April', 2026],
+              [3, 'stblobanalytics01', 3, 'Analytics-Shared', 'GB-Month', 18500, 640.75, 640.75, 'Dana Kim', 'CC-2100', 4, 'April', 2026],
+              [4, 'aoai-copilot-eastus', 4, 'AI-Innovation', '1K Tokens', 42000, 5100.0, 4590.0, 'Sam Ortiz', 'CC-3300', 4, 'April', 2026],
+              [5, 'aks-prod-eastus', 1, 'Production-Platform', 'Compute Hours', 744, 4380.0, 4120.0, 'Priya Nair', 'CC-1001', 5, 'May', 2026],
+              [6, 'sqldb-orders-prod', 2, 'Production-Platform', 'vCore Hours', 744, 3260.0, 3260.0, 'Marcus Reed', 'CC-1001', 5, 'May', 2026],
+              [7, 'vm-batch-scoring', 5, 'DataScience-Sandbox', 'Compute Hours', 512, 1180.25, 980.0, 'Dana Kim', 'CC-2100', 5, 'May', 2026],
+              [8, 'aoai-copilot-eastus', 4, 'AI-Innovation', '1K Tokens', 58000, 6900.0, 6210.0, 'Sam Ortiz', 'CC-3300', 5, 'May', 2026],
+              [9, 'aks-prod-eastus', 1, 'Production-Platform', 'Compute Hours', 720, 4510.0, 4230.0, 'Priya Nair', 'CC-1001', 6, 'June', 2026],
+              [10, 'stblobanalytics01', 3, 'Analytics-Shared', 'GB-Month', 21200, 720.4, 720.4, 'Dana Kim', 'CC-2100', 6, 'June', 2026],
+              [11, 'aoai-copilot-eastus', 4, 'AI-Innovation', '1K Tokens', 74000, 8450.0, 7600.0, 'Sam Ortiz', 'CC-3300', 6, 'June', 2026],
+              [12, 'vm-batch-scoring', 5, 'DataScience-Sandbox', 'Compute Hours', 640, 1425.0, 1180.0, 'Marcus Reed', 'CC-4200', 6, 'June', 2026],
+            ],
+          },
+          {
+            // Joins to BillingFact on ServiceKey. ServiceName + ServiceFamily are
+            // the report's by-service axes (treemap group/subgroup, Top-Services
+            // table); ServiceTier is the allocation criticality band.
+            name: 'DimService',
+            ddl:
+              'CREATE TABLE billing.DimService (\n' +
+              '    ServiceKey     BIGINT        NOT NULL,\n' +
+              '    ServiceName    VARCHAR(120)  NOT NULL,\n' +
+              '    ServiceFamily  VARCHAR(80)   NOT NULL,\n' +
+              '    ServiceTier    VARCHAR(40)   NOT NULL\n' +
+              ') USING DELTA;',
+            sampleRows: [
+              [1, 'Azure Kubernetes Service', 'Compute', 'Mission-Critical'],
+              [2, 'Azure SQL Database', 'Databases', 'Business-Critical'],
+              [3, 'Storage Accounts', 'Storage', 'Standard'],
+              [4, 'Azure OpenAI', 'AI + Machine Learning', 'Premium'],
+              [5, 'Virtual Machines', 'Compute', 'Standard'],
+            ],
+          },
+        ],
+      },
+    },
     {
       itemType: 'semantic-model',
       displayName: 'FinOps Cost Semantic Model',
