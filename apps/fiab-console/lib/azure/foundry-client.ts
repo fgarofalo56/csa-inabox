@@ -24,6 +24,7 @@ import {
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { armBase, armScope, amlDataPlaneHost, searchEndpointBase, searchAadScope, cogScope } from './cloud-endpoints';
 import { resolveAmlTarget, amlWorkspaceArmPath, AmlNotConfiguredError } from './resolve-aml-target';
+import { firstEnvEndpoint, AI_SERVICES_FALLBACK_ENVS } from './cognitive-common';
 
 const ARM_SCOPE = armScope();
 const ML_API = '2024-10-01';
@@ -1027,9 +1028,17 @@ export class NotDeployedError extends Error {
 
 function contentSafetyEndpoint(): string {
   const ep = process.env.LOOM_CONTENT_SAFETY_ENDPOINT;
-  if (!ep) throw new NotDeployedError('Azure AI Content Safety',
-    'Set LOOM_CONTENT_SAFETY_ENDPOINT to a deployed Content Safety resource (e.g. https://<name>.cognitiveservices.azure.com).');
-  return ep.replace(/\/$/, '');
+  if (ep && ep.trim()) return ep.trim().replace(/\/$/, '');
+  // Default-ON / opt-out (loom_default_on_opt_out): when no dedicated Content
+  // Safety account is wired, fall back to the shared multi-service Azure AI
+  // Services (Foundry) account — an AIServices-kind account serves the
+  // /contentsafety data plane on the same cognitiveservices.* host (the same
+  // endpoint bicep sets LOOM_CONTENT_SAFETY_ENDPOINT to when contentSafetyEnabled
+  // is false — `loomAiEnrichEndpoint`). So moderation stays fully functional.
+  const shared = firstEnvEndpoint(AI_SERVICES_FALLBACK_ENVS);
+  if (shared) return shared;
+  throw new NotDeployedError('Azure AI Content Safety',
+    'Set LOOM_CONTENT_SAFETY_ENDPOINT to a deployed Content Safety resource (e.g. https://<name>.cognitiveservices.azure.com), or deploy the shared Azure AI Services account (LOOM_AOAI_ENDPOINT / LOOM_FOUNDRY_ENDPOINT) it falls back to.');
 }
 
 async function contentSafetyToken(): Promise<string> {
