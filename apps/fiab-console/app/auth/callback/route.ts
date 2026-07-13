@@ -16,6 +16,7 @@ import {
   clearAuthFlowCookieHeader,
   safeEqual,
 } from '@/lib/auth/authflow';
+import { returningUserCookieHeader } from '@/lib/auth/returning-user';
 import { saveUserToken } from '@/lib/azure/user-token-store';
 import { saveUserSqlToken } from '@/lib/azure/sql-user-token-store';
 import { savePbiUserToken } from '@/lib/azure/pbi-user-token-store';
@@ -388,8 +389,12 @@ export async function GET(req: NextRequest) {
     // consent failure surfaces as that server's honest admin gate, never blocks
     // login, and never reaches a Fabric/Power BI host on the default path.
     await captureUserMsRemoteMcpTokens(client, account, claims.oid);
-    // Success: issue the session cookie AND clear the now-consumed authflow cookie.
-    return htmlRedirect('/', cookieValue, clearAuthflow);
+    // Success: issue the session cookie, clear the now-consumed authflow cookie,
+    // AND stamp the durable, identity-free `loom_seen` hint so a LATER session
+    // lapse reauth keeps this returning user on the seamless SSO path (rather
+    // than the /welcome landing surface reserved for never-authenticated
+    // visitors). Carries no identity — just "has signed in before".
+    return htmlRedirect('/', cookieValue, [...clearAuthflow, returningUserCookieHeader()]);
   } catch (e) {
     // Error hygiene (rel-T12): keep the raw AAD/exchange detail on the SERVER only.
     // Do NOT reflect it into the browser URL — a generic `exchange_failed` code is

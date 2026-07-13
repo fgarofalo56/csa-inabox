@@ -29,6 +29,8 @@
  * Pure transport — cloud-invariant, no Fabric/Azure host knowledge here.
  */
 
+import { reauthDestination, WELCOME_PATH } from '@/lib/auth/returning-user';
+
 /** Default client-side per-request timeout (ms). Raised from the original 6s to
  * 20s: the 6s budget was too aggressive for admin surfaces whose BFF routes hit
  * Azure ARM / Resource Graph / Cost Management / a large Cosmos aggregation, which
@@ -223,16 +225,34 @@ async function isSessionExpiry401(res: Response): Promise<boolean> {
 
 let _reauthInFlight = false;
 /**
- * TOP-LEVEL navigation to the BFF sign-in initiator (which 302s to AAD). NOT an
- * iframe: SPA silent-iframe refresh is blocked by 3rd-party-cookie / refresh-
- * token-in-the-browser limits (MSAL guidance). Guarded so concurrent 401s from a
- * page's parallel fetches don't stack multiple navigations.
+ * TOP-LEVEL navigation on an unauthenticated session-expiry 401. WHERE we send
+ * the browser depends on whether this is a returning user (`reauthDestination`,
+ * keyed on the identity-free `loom_seen` hint cookie):
+ *
+ *   - RETURNING user (hint present) → the BFF sign-in initiator `/auth/sign-in`,
+ *     which 302s straight to AAD — seamless SSO, no extra click. NOT an iframe:
+ *     SPA silent-iframe refresh is blocked by 3rd-party-cookie / refresh-token-
+ *     in-the-browser limits (MSAL guidance).
+ *   - FIRST-TIME / never-authenticated user (hint absent) → the `/welcome`
+ *     landing surface, which shows BOTH "Sign in" and "Request access" and does
+ *     NOT auto-forward to AAD. Without this, a first-time visitor was bounced to
+ *     Entra before the Request-access affordance ever rendered.
+ *
+ * Guarded two ways: `_reauthInFlight` so concurrent 401s from a page's parallel
+ * fetches don't stack multiple navigations; and a same-surface check so a 401
+ * fired FROM the /welcome landing (e.g. its own shell /api/me probe) never
+ * re-navigates to /welcome and loops — on the landing surface the reauth is a
+ * no-op and the page just renders its Sign-in / Request-access choice.
  */
 function triggerTopLevelReauth(): void {
   if (typeof window === 'undefined') return;
   if (_reauthInFlight) return;
+  const dest = reauthDestination(document.cookie);
+  // Already on the pre-auth landing surface → do nothing (break the redirect
+  // loop; the page renders Sign in + Request access in place).
+  if (window.location.pathname === WELCOME_PATH) return;
   _reauthInFlight = true;
-  window.location.assign('/auth/sign-in');
+  window.location.assign(dest);
 }
 
 async function rawFetch(
