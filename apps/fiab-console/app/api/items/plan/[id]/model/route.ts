@@ -1,7 +1,7 @@
 /**
- * Plan cube-model validation route (Fabric IQ Plan parity — Model/cube tab).
+ * Plan cube-model validation route (Loom IQ Plan parity — Model/cube tab).
  *
- * Azure-native parity of Microsoft Fabric IQ Plan's multidimensional model: a
+ * Azure-native parity of Microsoft Loom IQ Plan's multidimensional model: a
  * cube of dimensions (member hierarchies) + reusable measures, plus the guided
  * user formulas that compute over it. This route VALIDATES that model over the
  * plan's Cosmos state — member-parent integrity, hierarchy cycles, duplicate

@@ -1,7 +1,7 @@
 /**
- * Fabric IQ / Microsoft IQ — unified intelligence surface for external agents.
+ * Loom IQ / Microsoft IQ — unified intelligence surface for external agents.
  *
- * "Fabric IQ" (Build 2026 #1+#6) packages an organization's ONTOLOGY (the
+ * "Loom IQ" (Build 2026 #1+#6) packages an organization's ONTOLOGY (the
  * conceptual entity model), its SEMANTIC layer (curated tables + measures +
  * relationships), and its LIVE operational SIGNALS (real-time telemetry) into a
  * single queryable knowledge surface that external agents — Microsoft Agent 365,

@@ -3,7 +3,7 @@
 import { clientFetch } from '@/lib/client-fetch';
 /**
  * Slate app builder — the real, live dashboard/app builder surface for the
- * Fabric IQ `slate-app` item (Palantir Foundry Slate parity). Replaces the old
+ * Loom IQ `slate-app` item (Palantir Foundry Slate parity). Replaces the old
  * flat "title + kind + REST path" widget list with:
  *
  *   • a multi-type QUERY ENGINE + Queries panel (rest-dab / KQL / SQL) with

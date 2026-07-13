@@ -37,7 +37,7 @@ import {
   // Data science / ML
   Bot24Regular, Sparkle24Regular, BrainCircuit24Regular, BeakerEdit24Regular,
   Beaker24Regular,
-  // Fabric IQ / agents
+  // Loom IQ / agents
   ChatMultiple24Regular, Map24Regular, TextBulletListTree24Regular,
   ClipboardTaskListLtr24Regular, BotSparkle24Regular,
   // Power BI
@@ -169,7 +169,7 @@ const REGISTRY: Record<string, Entry> = {
   'ml-experiment':      { icon: BeakerEdit24Regular,    family: 'science', label: 'ML Experiment' },
   'automl':             { icon: Sparkle24Regular,       family: 'science', label: 'AutoML' },
 
-  // ── Fabric IQ ────────────────────────────────────────────────────
+  // ── Loom IQ ────────────────────────────────────────────────────
   'ontology':           { icon: TextBulletListTree24Regular, family: 'fabric-iq', label: 'Ontology' },
   'graph-model':        { icon: Diversity24Regular,           family: 'fabric-iq', label: 'Graph Model' },
   'plan':               { icon: ClipboardTaskListLtr24Regular, family: 'fabric-iq', label: 'Plan' },

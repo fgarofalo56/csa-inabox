@@ -287,7 +287,7 @@ export const FAMILY_KIND: Readonly<Record<WorkloadCategory, FamilyKind>> = {
   'Databases': 'fabric-parity',
   'Real-Time Intelligence': 'fabric-parity',
   'Data Science': 'fabric-parity',
-  'Fabric IQ': 'fabric-parity',
+  'Loom IQ': 'fabric-parity',
   'Power BI': 'fabric-parity',
   'APIs and functions': 'fabric-parity',
   'Loom Apps': 'fabric-parity',

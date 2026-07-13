@@ -5,7 +5,7 @@
  * variance) is unit-testable without React or Azure.
  *
  * Loom's Plan is the Azure-native parity of Microsoft Fabric's **Plan (preview)**
- * EPM/CPM item (Fabric IQ): budgets, forecasts, scenario modeling, variance.
+ * EPM/CPM item (Loom IQ): budgets, forecasts, scenario modeling, variance.
  * Fabric auto-provisions a Fabric SQL database for plan metadata + writeback;
  * the Loom default persists planning cells to Cosmos and (opt-in) writes back to
  * an Azure SQL database — NO Microsoft Fabric dependency
@@ -510,7 +510,7 @@ export function defaultPlanningSheet(): PlanningSheet {
 // EPM core — multidimensional Model (cube), member hierarchies, roll-ups,
 // guided Formula AST + evaluator, and model validation.
 //
-// Azure-native parity of Microsoft Fabric IQ Plan's cube / hierarchies / user
+// Azure-native parity of Microsoft Loom IQ Plan's cube / hierarchies / user
 // formulas (Anaplan-style connected planning). Pure + side-effect-free so the
 // roll-up math, formula evaluation, and validation are vitest-covered without
 // React or Azure. Persisted in Cosmos plan.state.model; NO Microsoft Fabric.
@@ -968,7 +968,7 @@ export function defaultPlanModel(): PlanModel {
 // ===================================================================
 // Spreading / allocation, breakback, and driver-based topological recompute.
 //
-// The defining "connected planning" depth (Anaplan / Fabric IQ Plan): a total
+// The defining "connected planning" depth (Anaplan / Loom IQ Plan): a total
 // entered at one level distributes DOWN to child cells (spreading), an edit to a
 // roll-up parent pushes the delta back to its children (breakback), and rows
 // flagged as DRIVERS feed formula rows that recompute in dependency
@@ -1128,7 +1128,7 @@ export function recomputeRowTotals(sheet: PlanningSheet, scenarioId: string): Re
 // ===================================================================
 // Versions / snapshots — immutable point-in-time copies of the plan.
 //
-// Fabric IQ Plan keeps versioned plan data (budget v1, re-forecast, board
+// Loom IQ Plan keeps versioned plan data (budget v1, re-forecast, board
 // submission…); Loom's Azure-native parity persists snapshots INSIDE the plan
 // item's Cosmos state (state.snapshots[]) via the ordinary item PATCH — no
 // Microsoft Fabric dependency (.claude/rules/no-fabric-dependency.md).

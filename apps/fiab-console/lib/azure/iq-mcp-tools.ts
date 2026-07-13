@@ -1,7 +1,7 @@
 /**
  * IQ MCP tool catalog + dispatcher.
  *
- * Defines the MCP `tools/list` payload for the unified Fabric IQ surface and the
+ * Defines the MCP `tools/list` payload for the unified Loom IQ surface and the
  * `tools/call` dispatcher that maps each tool to its real Azure-native backend
  * (see iq-mcp.ts). This is the SERVER side of MCP — the inverse of mcp-client.ts
  * (which is the CLIENT that calls EXTERNAL MCP servers). External agents
@@ -54,7 +54,7 @@ export const IQ_MCP_TOOLS: IqMcpTool[] = [
   {
     name: 'iq_overview',
     description:
-      'Discover the full Fabric IQ surface for the organization in one call: every ontology (conceptual entity model), every semantic model (curated tables + measures), and whether the live-signals (Azure Data Explorer) layer is available. Call this first to orient.',
+      'Discover the full Loom IQ surface for the organization in one call: every ontology (conceptual entity model), every semantic model (curated tables + measures), and whether the live-signals (Azure Data Explorer) layer is available. Call this first to orient.',
     inputSchema: { type: 'object', properties: {} },
   },
   {

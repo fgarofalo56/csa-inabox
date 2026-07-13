@@ -1,6 +1,6 @@
 /**
  * Ontology structured model — the typed object/link/action-type schema that the
- * Fabric IQ `ontology` editor (Palantir Foundry Ontology equivalent) persists to
+ * Loom IQ `ontology` editor (Palantir Foundry Ontology equivalent) persists to
  * Cosmos (`state.objectTypes[] / state.linkTypes[] / state.actionTypes[]`).
  *
  * This replaces the old freeform DSL textarea (`state.source`) as the source of

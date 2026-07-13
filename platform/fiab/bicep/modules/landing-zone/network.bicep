@@ -113,11 +113,90 @@ resource nsgDbx 'Microsoft.Network/networkSecurityGroups@2024-05-01' = {
     // outbound rules — without them, vnet-injected workspaces fail
     // with ConflictWithNetworkIntentPolicy on the worker subnets.
     // Source: https://learn.microsoft.com/azure/databricks/security/network/secure-cluster/dbcc/network
+    //
+    // IDEMPOTENCY (brownfield/redeploy): once the Databricks workspace exists,
+    // its Network Intent Policy injects `Microsoft.Databricks-workspaces_UseOnly_*`
+    // rules into the LIVE NSG and re-prioritizes the template's own rules. An
+    // incremental re-deploy that PUTs an NSG missing those rules fails with
+    // "NSG ... conflicts with Network Intent Policy". So the template carries
+    // the full converged rule set (UseOnly rules at 100-104, ours at 105-107 /
+    // inbound 101) exactly as the platform materializes it — valid on fresh
+    // deploys, idempotent on re-deploys.
     securityRules: [
+      {
+        name: 'Microsoft.Databricks-workspaces_UseOnly_databricks-worker-to-databricks-sql'
+        properties: {
+          priority: 100
+          access: 'Allow'
+          direction: 'Outbound'
+          protocol: 'Tcp'
+          sourceAddressPrefix: 'VirtualNetwork'
+          sourcePortRange: '*'
+          destinationAddressPrefix: 'AzureDatabricksMySQL'
+          destinationPortRange: '3306'
+          description: 'Required for workers communication with the Databricks-managed MySQL metastore. Matches the Databricks Network Intent Policy.'
+        }
+      }
+      {
+        name: 'Microsoft.Databricks-workspaces_UseOnly_databricks-worker-to-worker-outbound'
+        properties: {
+          priority: 101
+          access: 'Allow'
+          direction: 'Outbound'
+          protocol: '*'
+          sourceAddressPrefix: 'VirtualNetwork'
+          sourcePortRange: '*'
+          destinationAddressPrefix: 'VirtualNetwork'
+          destinationPortRange: '*'
+          description: 'Required for worker nodes communication within a cluster. Matches the Databricks Network Intent Policy.'
+        }
+      }
+      {
+        name: 'Microsoft.Databricks-workspaces_UseOnly_databricks-worker-to-sql'
+        properties: {
+          priority: 102
+          access: 'Allow'
+          direction: 'Outbound'
+          protocol: 'Tcp'
+          sourceAddressPrefix: 'VirtualNetwork'
+          sourcePortRange: '*'
+          destinationAddressPrefix: 'Sql'
+          destinationPortRange: '3306'
+          description: 'Required for workers communication with Azure SQL services. Matches the Databricks Network Intent Policy.'
+        }
+      }
+      {
+        name: 'Microsoft.Databricks-workspaces_UseOnly_databricks-worker-to-storage'
+        properties: {
+          priority: 103
+          access: 'Allow'
+          direction: 'Outbound'
+          protocol: 'Tcp'
+          sourceAddressPrefix: 'VirtualNetwork'
+          sourcePortRange: '*'
+          destinationAddressPrefix: 'Storage'
+          destinationPortRange: '443'
+          description: 'Required for workers communication with Azure Storage services. Matches the Databricks Network Intent Policy.'
+        }
+      }
+      {
+        name: 'Microsoft.Databricks-workspaces_UseOnly_databricks-worker-to-eventhub'
+        properties: {
+          priority: 104
+          access: 'Allow'
+          direction: 'Outbound'
+          protocol: 'Tcp'
+          sourceAddressPrefix: 'VirtualNetwork'
+          sourcePortRange: '*'
+          destinationAddressPrefix: 'EventHub'
+          destinationPortRange: '9093'
+          description: 'Required for workers communication with Azure Event Hubs. Matches the Databricks Network Intent Policy.'
+        }
+      }
       {
         name: 'databricks-worker-to-sql'
         properties: {
-          priority: 100
+          priority: 105
           access: 'Allow'
           direction: 'Outbound'
           protocol: 'Tcp'
@@ -130,7 +209,7 @@ resource nsgDbx 'Microsoft.Network/networkSecurityGroups@2024-05-01' = {
       {
         name: 'databricks-worker-to-storage'
         properties: {
-          priority: 101
+          priority: 106
           access: 'Allow'
           direction: 'Outbound'
           protocol: 'Tcp'
@@ -143,7 +222,7 @@ resource nsgDbx 'Microsoft.Network/networkSecurityGroups@2024-05-01' = {
       {
         name: 'databricks-worker-to-eventhub'
         properties: {
-          priority: 102
+          priority: 107
           access: 'Allow'
           direction: 'Outbound'
           protocol: 'Tcp'
@@ -153,11 +232,25 @@ resource nsgDbx 'Microsoft.Network/networkSecurityGroups@2024-05-01' = {
           destinationPortRange: '9093'
         }
       }
+      {
+        name: 'Microsoft.Databricks-workspaces_UseOnly_databricks-worker-to-worker-inbound'
+        properties: {
+          priority: 100
+          access: 'Allow'
+          direction: 'Inbound'
+          protocol: '*'
+          sourceAddressPrefix: 'VirtualNetwork'
+          sourcePortRange: '*'
+          destinationAddressPrefix: 'VirtualNetwork'
+          destinationPortRange: '*'
+          description: 'Required for worker nodes communication within a cluster. Matches the Databricks Network Intent Policy.'
+        }
+      }
       // Required intra-worker SSH (host→worker) per ADB docs
       {
         name: 'databricks-workers-inbound'
         properties: {
-          priority: 100
+          priority: 101
           access: 'Allow'
           direction: 'Inbound'
           protocol: 'Tcp'
