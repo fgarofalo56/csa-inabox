@@ -55,7 +55,9 @@ param vectorDimensions int = 1536
 // 1. Cosmos Gremlin account (kind=GlobalDocumentDB + EnableGremlin)
 // =====================================================================
 
-var gremlinAccountName = take('cosmos-loom-gremlin-${domainName}-${uniqueString(resourceGroup().id)}', 44)
+// Empty domainName (dlz-attach) must not emit consecutive hyphens — Cosmos rejects them.
+var cosmosDomainSegment = empty(domainName) ? '' : '${domainName}-'
+var gremlinAccountName = take('cosmos-loom-gremlin-${cosmosDomainSegment}${uniqueString(resourceGroup().id)}', 44)
 
 resource gremlinAccount 'Microsoft.DocumentDB/databaseAccounts@2024-12-01-preview' = {
   name: gremlinAccountName
@@ -148,7 +150,7 @@ resource peDnsGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@202
 // container's resource definition.
 //
 
-var vectorAccountName = take('cosmos-loom-vec-${domainName}-${uniqueString(resourceGroup().id)}', 44)
+var vectorAccountName = take('cosmos-loom-vec-${cosmosDomainSegment}${uniqueString(resourceGroup().id)}', 44)
 
 resource vectorAccount 'Microsoft.DocumentDB/databaseAccounts@2024-12-01-preview' = {
   name: vectorAccountName
