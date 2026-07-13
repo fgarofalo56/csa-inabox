@@ -31,6 +31,38 @@ import { scanKeyToKind } from './attached-service-kinds';
 
 export type { AttachedServiceKind } from './attached-service-kinds';
 
+// ---------------------------------------------------------------------------
+// Registry resolution cache (hot path). `resolveAttachedService` is called by
+// the backend resolver on EVERY navigator request (e.g. the ADX guard), and a
+// KQL dashboard fires many concurrent tile queries — so an uncached Cosmos read
+// per call would burn a round-trip + RUs each time. This is a dependency-free
+// module-level TTL cache (Map + timestamps) that caches BOTH hits AND nulls
+// (null caching is what matters: the common case today is an empty registry, so
+// every resolve would otherwise re-query for nothing). Writes (attach / detach /
+// upsert) invalidate the mutated tenant's entries so a fresh attach is visible
+// immediately. Key: `${tenantId}:${kind}:${landingZoneId ?? ''}`.
+// ---------------------------------------------------------------------------
+const RESOLVE_CACHE_TTL_MS = 60_000;
+interface ResolveCacheEntry { value: AttachedService | null; expires: number }
+const resolveCache = new Map<string, ResolveCacheEntry>();
+
+function resolveCacheKey(tenantId: string, kind: AttachedServiceKind, landingZoneId?: string): string {
+  return `${tenantId}:${kind}:${landingZoneId ?? ''}`;
+}
+
+/** Invalidate every cached resolution for a tenant (called on any write). */
+function invalidateResolveCache(tenantId: string): void {
+  const prefix = `${tenantId}:`;
+  for (const key of resolveCache.keys()) {
+    if (key.startsWith(prefix)) resolveCache.delete(key);
+  }
+}
+
+/** Test/ops hook: clear the whole resolution cache. */
+export function clearAttachedServiceCache(): void {
+  resolveCache.clear();
+}
+
 /** Live reachability posture captured at attach + refreshable on demand. */
 export type Reachability = 'reachable' | 'private-endpoint-needed' | 'blocked' | 'unknown';
 export type RbacState = 'granted' | 'pending' | 'manual-gate';
@@ -207,6 +239,7 @@ export async function createAttachedService(
       updatedAt: now,
     };
     const { resource } = await c.items.upsert(merged);
+    invalidateResolveCache(tenantId); // a re-attach may change what resolves
     return toView((resource as unknown as AttachedService) ?? merged);
   }
 
@@ -232,6 +265,7 @@ export async function createAttachedService(
     updatedAt: now,
   };
   const { resource } = await c.items.create(doc);
+  invalidateResolveCache(tenantId); // a new attach must be resolvable immediately
   return toView((resource as unknown as AttachedService) ?? doc);
 }
 
@@ -293,6 +327,7 @@ export async function detachService(session: SessionPayload, id: string): Promis
   const dependents = await findAttachedServiceDependents(id);
   if (dependents.length > 0) throw new AttachedServiceInUseError(dependents);
 
+  invalidateResolveCache(tenantId); // the detached service must stop resolving
   const c = await attachedServicesContainer();
   try {
     const { resource } = await c.item(id, tenantId).read<AttachedService>();
@@ -323,6 +358,11 @@ export async function resolveAttachedService(
   kind: AttachedServiceKind,
   landingZoneId?: string,
 ): Promise<AttachedService | null> {
+  // Hot path — serve from the TTL cache (hits AND nulls) when fresh.
+  const key = resolveCacheKey(tenantId, kind, landingZoneId);
+  const cached = resolveCache.get(key);
+  if (cached && cached.expires > Date.now()) return cached.value;
+
   const c = await attachedServicesContainer();
   const { resources } = await c.items
     .query<AttachedService>({
@@ -334,13 +374,17 @@ export async function resolveAttachedService(
     })
     .fetchAll();
   const rows = resources || [];
-  if (rows.length === 0) return null;
-  if (landingZoneId) {
-    const inLz = rows.find((r) => r.landingZoneId === landingZoneId);
-    if (inLz) return inLz;
+  let value: AttachedService | null;
+  if (rows.length === 0) {
+    value = null;
+  } else if (landingZoneId && rows.find((r) => r.landingZoneId === landingZoneId)) {
+    value = rows.find((r) => r.landingZoneId === landingZoneId)!;
+  } else {
+    // Prefer a hub-scoped attach, else the first (stable) match.
+    value = rows.find((r) => r.landingZoneId === 'hub') ?? rows[0];
   }
-  // Prefer a hub-scoped attach, else the first (stable) match.
-  return rows.find((r) => r.landingZoneId === 'hub') ?? rows[0];
+  resolveCache.set(key, { value, expires: Date.now() + RESOLVE_CACHE_TTL_MS });
+  return value;
 }
 
 /** Result of the day-0 BYO → registry seed reconcile. */

@@ -12,6 +12,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 // ---- In-memory Cosmos fake -------------------------------------------------
 let attached: any[] = [];
 let items: any[] = []; // workspace items (for the dependents guard)
+let attachedQueryCount = 0; // counts fetchAll() calls against the registry container
 
 function matchQuery(store: any[], spec: any): any[] {
   const p: Record<string, any> = {};
@@ -36,7 +37,7 @@ function fakeContainer(store: any[]) {
         if (i >= 0) store[i] = { ...doc }; else store.push({ ...doc });
         return { resource: { ...doc } };
       },
-      query: (spec: any) => ({ fetchAll: async () => ({ resources: matchQuery(store, spec) }) }),
+      query: (spec: any) => ({ fetchAll: async () => { if (store === attached) attachedQueryCount++; return { resources: matchQuery(store, spec) }; } }),
     },
     item: (id: string, pk: string) => ({
       read: async () => ({ resource: store.find((d) => d.id === id && d.tenantId === pk) }),
@@ -54,7 +55,12 @@ const SESSION: any = { claims: { oid: 'user-oid', tid: 'tenant-1', upn: 'admin@c
 
 describe('attached-services-store', () => {
   const ORIG_ENV = { ...process.env };
-  beforeEach(() => { attached = []; items = []; });
+  beforeEach(async () => {
+    attached = []; items = []; attachedQueryCount = 0;
+    // The resolution cache is module-level; clear it so cases don't bleed.
+    const { clearAttachedServiceCache } = await import('../attached-services-store');
+    clearAttachedServiceCache();
+  });
   afterEach(() => { process.env = { ...ORIG_ENV }; vi.restoreAllMocks(); });
 
   it('creates a service and returns a no-secret view partitioned by tenant', async () => {
@@ -108,6 +114,44 @@ describe('attached-services-store', () => {
     const fallback = await resolveAttachedService('tenant-1', 'synapse', 'sub/other');
     expect(fallback?.displayName).toBe('hub-ws'); // hub-scoped fallback
     expect(await resolveAttachedService('tenant-1', 'adx')).toBeNull();
+  });
+
+  it('caches the resolution — a second call does not re-query Cosmos', async () => {
+    const { createAttachedService, resolveAttachedService } = await import('../attached-services-store');
+    await createAttachedService(SESSION, { landingZoneId: 'hub', kind: 'synapse', displayName: 'ws', armResourceId: '/s/ws', subscriptionId: 's', resourceGroup: 'r' });
+    attachedQueryCount = 0; // reset after the create's own reads
+    const a = await resolveAttachedService('tenant-1', 'synapse', 'hub');
+    expect(attachedQueryCount).toBe(1);
+    const b = await resolveAttachedService('tenant-1', 'synapse', 'hub');
+    expect(attachedQueryCount).toBe(1); // served from cache — no second query
+    expect(a?.displayName).toBe('ws');
+    expect(b?.displayName).toBe('ws');
+  });
+
+  it('caches NULL results — an empty registry does not re-query per call', async () => {
+    const { resolveAttachedService } = await import('../attached-services-store');
+    attachedQueryCount = 0;
+    expect(await resolveAttachedService('tenant-1', 'adx')).toBeNull();
+    expect(await resolveAttachedService('tenant-1', 'adx')).toBeNull();
+    expect(attachedQueryCount).toBe(1); // the null was cached
+  });
+
+  it('invalidates the tenant cache on attach so a new service resolves immediately', async () => {
+    const { createAttachedService, resolveAttachedService } = await import('../attached-services-store');
+    // Prime a null into the cache.
+    expect(await resolveAttachedService('tenant-1', 'synapse', 'hub')).toBeNull();
+    // Attaching must invalidate that cached null.
+    await createAttachedService(SESSION, { landingZoneId: 'hub', kind: 'synapse', displayName: 'ws', armResourceId: '/s/ws', subscriptionId: 's', resourceGroup: 'r' });
+    const resolved = await resolveAttachedService('tenant-1', 'synapse', 'hub');
+    expect(resolved?.displayName).toBe('ws'); // fresh, not the stale null
+  });
+
+  it('invalidates the tenant cache on detach so the service stops resolving', async () => {
+    const { createAttachedService, detachService, resolveAttachedService } = await import('../attached-services-store');
+    const v = await createAttachedService(SESSION, { landingZoneId: 'hub', kind: 'synapse', displayName: 'ws', armResourceId: '/s/ws', subscriptionId: 's', resourceGroup: 'r' });
+    expect((await resolveAttachedService('tenant-1', 'synapse', 'hub'))?.displayName).toBe('ws'); // cache it
+    await detachService(SESSION, v.id);
+    expect(await resolveAttachedService('tenant-1', 'synapse', 'hub')).toBeNull(); // cache invalidated
   });
 
   it('detach removes the binding when no item depends on it', async () => {

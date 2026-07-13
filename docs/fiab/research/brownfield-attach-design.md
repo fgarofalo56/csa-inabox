@@ -430,7 +430,11 @@ untouched.
   `serverlessTargetResolved` / `dedicatedTargetResolved` (synapse-sql-client) +
   `resolvedClusterUri` (kusto-client). The ADX navigator's shared guard
   (`app/api/adx/_shared.ts`) now resolves the cluster registry-first (env
-  fallback), consumed by `/api/adx/overview`.
+  fallback), consumed by `/api/adx/overview`. `resolveAttachedService` is fronted
+  by a dependency-free module-level **TTL cache** (60s, caches hits AND nulls,
+  invalidated on attach/detach/upsert) so the per-request ADX-guard resolution
+  (many concurrent KQL tile queries) costs a Cosmos read at most once per
+  tenant/kind/LZ per minute — the empty-registry common case never re-queries.
 
 **Honest gaps (deferred to Phase 2/3 per the plan):**
 - RBAC is *reported* (exact role + scope), not yet auto-granted — Phase 2's
