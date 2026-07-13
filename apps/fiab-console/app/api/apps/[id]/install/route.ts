@@ -49,6 +49,13 @@ import { resolveBundleItem, getBundle } from '@/lib/apps/content-bundles';
 import { substituteCellsPlaceholders } from '@/lib/apps/notebook-placeholders';
 import { appWantsSuperchargeSeed, runSuperchargeSeed } from '@/lib/apps/supercharge-seed';
 import { runProvisioning, type ProvisionReport } from '@/lib/install/provisioning-engine';
+import { pathToHttpsUrl } from '@/lib/azure/adls-client';
+import {
+  buildReportBinding,
+  parseDdlTypedColumns,
+  type SeedTable,
+  type ModelInfo,
+} from '@/lib/install/report-binding';
 import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
@@ -374,6 +381,17 @@ async function runInstallJob(
       };
     }
 
+    // ── Auto-bind installed reports so they RENDER real values on open ──────
+    // A bundle report is authored at the semantic-model level (DAX measures +
+    // qualified dim columns) and the executor can't join across model tables.
+    // If the app installed a lakehouse with SEEDED tables, bind each report to a
+    // single denormalized direct-query over those seeded CSVs and rewrite its
+    // visuals to single-table `Query` wells (see lib/install/report-binding.ts).
+    // Best-effort: a binding failure never fails the install.
+    try {
+      await bindInstalledReports(items, workspaceId, installed, provision);
+    } catch { /* best-effort — reports without a seeded sibling stay unbound */ }
+
     // ── Sample-data seed (Supercharge medallion apps) ───────────────────────
     // Land the Bronze SOURCE parquet under Files/output/* + pre-create the
     // lh_bronze/lh_silver/lh_gold Spark databases so the installed notebooks
@@ -416,6 +434,139 @@ async function runInstallJob(
     // Worker itself threw before/around the loop — surface a failed job rather
     // than a job stuck on 'running' forever.
     await persist({ status: 'failed', phase: 'done', percentComplete: 100, error: e?.message || String(e) });
+  }
+}
+
+/** Sanitize a bundle folder/table path segment to a safe ADLS relative path —
+ *  mirrors the lakehouse provisioner's `safeRelPath` so the reconstructed seed
+ *  CSV path matches what was actually written. */
+function safeRelPath(p: string): string {
+  return String(p)
+    .replace(/\\/g, '/')
+    .split('/')
+    .map((seg) => seg.trim())
+    .filter((seg) => seg && seg !== '.' && seg !== '..')
+    .join('/');
+}
+
+/** Extract the ModelInfo the report binder needs from a semantic-model item's
+ *  bundle content (tables/measures + dotted relationships → typed edges). */
+function extractModel(content: unknown): ModelInfo | null {
+  const c = content as any;
+  if (!c || c.kind !== 'semantic-model') return null;
+  const tables = Array.isArray(c.tables)
+    ? c.tables.map((t: any) => ({ name: String(t?.name || ''), columns: (t?.columns || []).map((col: any) => String(col?.name || '')) }))
+    : [];
+  const measures = Array.isArray(c.measures)
+    ? c.measures.map((m: any) => ({ name: String(m?.name || ''), expression: String(m?.expression || ''), table: m?.table ? String(m.table) : undefined }))
+    : [];
+  const relationships = Array.isArray(c.relationships)
+    ? c.relationships
+        .map((r: any) => {
+          const [fromTable, fromColumn] = String(r?.from || '').split('.');
+          const [toTable, toColumn] = String(r?.to || '').split('.');
+          return { fromTable, fromColumn, toTable, toColumn };
+        })
+        .filter((r: any) => r.fromTable && r.fromColumn && r.toTable && r.toColumn)
+    : [];
+  return { tables, measures, relationships };
+}
+
+/**
+ * Post-provision: bind each installed `report` to a direct-query over its
+ * sibling lakehouse's seeded tables so it renders REAL aggregated values on
+ * open, and rewrite its visuals into the designer's `config.wells` shape. Reads
+ * the lakehouse's seeded-table set + container/root from its provisioning
+ * result, its Delta-table DDL from the bundle content (for typed columns), and
+ * the sibling semantic model for measures + join keys. Skips a report that is
+ * already bound (re-install safe) or that has no seeded sibling lakehouse.
+ * Best-effort throughout — never throws (the caller fences it too).
+ */
+async function bindInstalledReports(
+  items: Awaited<ReturnType<typeof itemsContainer>>,
+  workspaceId: string,
+  installed: InstalledItem[],
+  provision: ProvisionReport,
+): Promise<void> {
+  const reports = installed.filter((it) => it.itemType === 'report' && it.id);
+  if (!reports.length) return;
+
+  // Sibling semantic model (measures + relationship keys). Optional.
+  const smItem = installed.find((it) => it.itemType === 'semantic-model' && it.content);
+  const model = smItem ? extractModel(smItem.content) : null;
+
+  // Find a sibling lakehouse that actually SEEDED tables at install.
+  const secById = new Map<string, Record<string, string>>();
+  for (const step of provision.steps) {
+    if (step.cosmosItemId) secById.set(step.cosmosItemId, (step.result.secondaryIds || {}) as Record<string, string>);
+  }
+  let seeds: SeedTable[] | null = null;
+  let csvPathByName: Map<string, string> | null = null;
+  let container: string | null = null;
+  for (const lh of installed.filter((it) => it.itemType === 'lakehouse' && it.id)) {
+    const sec = secById.get(lh.id!) || {};
+    if (!sec.container || !sec.rootPath) continue;
+    const seededNames = new Set(
+      String(sec.seededTables || '')
+        .split(',')
+        .map((x) => x.trim())
+        .filter(Boolean),
+    );
+    if (!seededNames.size) continue;
+    const content = lh.content as any;
+    const schemasEnabled = content?.schemasEnabled === true;
+    const deltaTables: Array<{ name: string; ddl?: string; schema?: string; sampleRows?: any[][] }> = Array.isArray(content?.deltaTables)
+      ? content.deltaTables
+      : [];
+    const s: SeedTable[] = [];
+    const paths = new Map<string, string>();
+    for (const t of deltaTables) {
+      const name = safeRelPath(t?.name || '');
+      if (!name) continue;
+      const isSeeded = seededNames.has(name);
+      s.push({
+        name,
+        columns: parseDdlTypedColumns(t?.ddl || ''),
+        seeded: isSeeded,
+        rowCount: Array.isArray(t?.sampleRows) ? t.sampleRows.length : undefined,
+      });
+      if (isSeeded) {
+        const schema = schemasEnabled ? (String(t?.schema || 'dbo').replace(/[^A-Za-z0-9_]/g, '') || 'dbo') : '';
+        const dir = schema ? `${sec.rootPath}/Tables/${schema}/${name}` : `${sec.rootPath}/Tables/${name}`;
+        paths.set(name, `${dir}/${name}.csv`);
+      }
+    }
+    if (!s.some((x) => x.seeded)) continue;
+    seeds = s;
+    csvPathByName = paths;
+    container = sec.container;
+    break;
+  }
+  if (!seeds || !csvPathByName || !container) return; // no seeded lakehouse → leave reports unbound
+
+  const cont = container;
+  const paths = csvPathByName;
+  // Only ever called for seeded tables (the binder joins seeded tables only), so
+  // the map always resolves; the guard keeps it total.
+  const httpsUrlFor = (physical: string): string => pathToHttpsUrl(cont, paths.get(physical) || physical);
+
+  for (const rep of reports) {
+    try {
+      const { resource } = await items.item(rep.id!, workspaceId).read<any>();
+      if (!resource) continue;
+      // Re-install safe: don't clobber a report a user (or a prior install) bound.
+      if ((resource.state as any)?.dataSource) continue;
+      const reportContent = (resource.state as any)?.content || rep.content;
+      if (!reportContent || reportContent.kind !== 'report') continue;
+      const binding = buildReportBinding({ report: reportContent, model, seeds, httpsUrlFor });
+      if (!binding) continue;
+      const nextState = {
+        ...(resource.state || {}),
+        content: binding.content,
+        dataSource: binding.dataSource,
+      };
+      await items.item(rep.id!, workspaceId).replace({ ...resource, state: nextState, updatedAt: new Date().toISOString() });
+    } catch { /* best-effort per report */ }
   }
 }
 
