@@ -24,10 +24,15 @@
  * ChainedTokenCredential. This matches how
  * foundry-client.ts authenticates `*.api.azureml.ms` calls.
  *
- * Honest infra-gate: when the workspace/region cannot be resolved from env,
- * `mlflowConfig()` throws `MlflowNotConfiguredError` carrying the exact env
- * vars to set. Routes surface that as a Fluent MessageBar; the editor surface
- * still renders fully.
+ * Default-on backend resolution: the tracking backend is auto-resolved so the
+ * experiment registry is reachable by default (loom_default_on_opt_out). AML
+ * MLflow is preferred; when the AML workspace does not answer the tracking API
+ * (e.g. an AI Foundry *account* that is not a Microsoft.MachineLearningServices
+ * workspace → 404 "Workspace not found") Loom falls back to the Databricks-
+ * hosted MLflow server (LOOM_DATABRICKS_HOSTNAME, wired day-one) which serves
+ * the identical REST contract. Only when NO backend is configured at all does
+ * `MlflowNotConfiguredError` fire — surfaced as a Fluent MessageBar naming the
+ * one-time env/role to set; the editor surface still renders fully.
  */
 import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import {
@@ -39,6 +44,15 @@ import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { armScope, amlDataPlaneHost } from './cloud-endpoints';
 
 const ARM_SCOPE = armScope();
+
+/**
+ * Azure Databricks AAD resource id — the tracking backend Loom falls back to
+ * when an AML MLflow workspace is not reachable. Databricks hosts a fully
+ * MLflow-compatible tracking + registry server at
+ *   https://<LOOM_DATABRICKS_HOSTNAME>/api/2.0/mlflow/...
+ * (identical REST contract to AML). Same resource id used by databricks-client.
+ */
+const DBX_SCOPE = '2ff814a6-3304-4ab8-85cb-cd0e6f879c1d/.default';
 
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
 const credential: ChainedTokenCredential | DefaultAzureCredential = uamiClientId
@@ -72,11 +86,13 @@ export class MlflowNotConfiguredError extends Error {
         `LOOM_SUBSCRIPTION_ID and the tracking URI is constructed automatically.`;
     } else {
       this.hint =
-        `Set ${missing.join(' + ')} to a deployed Azure Machine Learning workspace, ` +
-        `then grant the Console UAMI the AzureML Data Scientist role on it. ` +
-        `LOOM_AML_WORKSPACE / LOOM_AML_REGION fall back to LOOM_FOUNDRY_NAME / ` +
-        `LOOM_FOUNDRY_REGION when those are set. Alternatively set ` +
-        `LOOM_MLFLOW_TRACKING_URI directly (required in IL5 / GCC-High).`;
+        `No MLflow tracking backend is reachable. Either set ${missing.join(' + ')} ` +
+        `to a deployed Azure Machine Learning workspace (then grant the Console ` +
+        `UAMI the AzureML Data Scientist role on it) — LOOM_AML_WORKSPACE / ` +
+        `LOOM_AML_REGION fall back to LOOM_FOUNDRY_NAME / LOOM_FOUNDRY_REGION — ` +
+        `or set LOOM_DATABRICKS_HOSTNAME to a Databricks workspace (its hosted ` +
+        `MLflow server is used automatically as a fallback). In IL5 / GCC-High ` +
+        `set LOOM_MLFLOW_TRACKING_URI directly.`;
     }
   }
 }
@@ -184,20 +200,134 @@ export function mlflowConfig(workspaceOverride?: string): MlflowConfig {
   return { region: region!, subscriptionId: subscriptionId!, resourceGroup, workspace: workspace!, base };
 }
 
-/** True when MLflow can be reached (env is set). Lets callers branch without try/catch. */
+// ---------------- Tracking-backend resolution (AML → Databricks) ----------------
+//
+// Loom must have a REACHABLE MLflow tracking + registry backend by DEFAULT
+// (loom_default_on_opt_out): experiments cannot hard-gate on a real Fabric /
+// AML workspace. Two Azure-native backends can serve the identical MLflow REST
+// 2.0 contract, so we resolve whichever is actually live:
+//
+//   1. AML MLflow (preferred) — when LOOM_AML_WORKSPACE / LOOM_FOUNDRY_NAME +
+//      region + subscription resolve AND the workspace answers the tracking API.
+//      An AI Foundry *account* (Microsoft.CognitiveServices) is NOT a
+//      Microsoft.MachineLearningServices workspace and returns 404
+//      "Workspace not found" here — that is the exact failure this resolver
+//      heals by falling through instead of surfacing a dead "Registry not
+//      reachable" gate.
+//   2. Databricks-hosted MLflow — when LOOM_DATABRICKS_HOSTNAME is set (wired
+//      day-one for the DLZ Databricks workspace). Same REST surface, AAD auth
+//      against the Azure Databricks resource id.
+//
+// The winning backend is probed once (experiments/search max_results=1) and
+// cached for a few minutes so we don't re-probe on every call. An explicit
+// `workspace` override (model-registry stage ops targeting a bound AML
+// workspace) always targets AML directly and bypasses the probe/cache.
+
+interface MlflowBackend {
+  kind: 'aml' | 'databricks';
+  /** URL root; every call is `${root}/api/2.0/mlflow${apiPath}`. */
+  root: string;
+  /** Human-readable label for diagnostics. */
+  label: string;
+  authHeader(): Promise<string>;
+}
+
+async function amlAuthHeader(): Promise<string> {
+  const token = await credential.getToken(ARM_SCOPE);
+  if (!token?.token) throw new Error('Failed to acquire token for AML MLflow tracking');
+  return `Bearer ${token.token}`;
+}
+
+async function dbxAuthHeader(): Promise<string> {
+  const token = await credential.getToken(DBX_SCOPE);
+  if (!token?.token) throw new Error('Failed to acquire token for Databricks MLflow tracking');
+  return `Bearer ${token.token}`;
+}
+
+/** AML tracking backend for a (possibly overridden) workspace. Throws MlflowNotConfiguredError when env is missing. */
+function amlBackend(workspaceOverride?: string): MlflowBackend {
+  const cfg = mlflowConfig(workspaceOverride);
+  return { kind: 'aml', root: cfg.base, label: `AML workspace ${cfg.workspace}`, authHeader: amlAuthHeader };
+}
+
+/** Databricks tracking backend when LOOM_DATABRICKS_HOSTNAME is set, else null. */
+function databricksBackend(): MlflowBackend | null {
+  const h = process.env.LOOM_DATABRICKS_HOSTNAME?.trim();
+  if (!h) return null;
+  const host = h.replace(/^https?:\/\//, '').replace(/\/+$/, '');
+  return { kind: 'databricks', root: `https://${host}`, label: `Databricks ${host}`, authHeader: dbxAuthHeader };
+}
+
+/**
+ * Ordered list of candidate MLflow backends (AML preferred, then Databricks).
+ * Pure (no network) — used by isMlflowConfigured() and the resolver/tests.
+ */
+export function mlflowBackendCandidates(): MlflowBackend[] {
+  const list: MlflowBackend[] = [];
+  try { list.push(amlBackend()); } catch { /* AML env not configured — skip */ }
+  const dbx = databricksBackend();
+  if (dbx) list.push(dbx);
+  return list;
+}
+
+/** True when at least one MLflow tracking backend (AML or Databricks) is configured. */
 export function isMlflowConfigured(): boolean {
+  return mlflowBackendCandidates().length > 0;
+}
+
+let cachedBackend: { backend: MlflowBackend; at: number } | null = null;
+const BACKEND_TTL_MS = 5 * 60_000;
+
+/** Reset the resolved-backend cache (tests / after an env change). */
+export function _resetMlflowBackendCache(): void {
+  cachedBackend = null;
+}
+
+/** Probe a backend's tracking API. 200 → live; 401/403/404/5xx → try the next candidate. */
+async function probeBackend(b: MlflowBackend): Promise<boolean> {
   try {
-    mlflowConfig();
-    return true;
+    const res = await fetchWithTimeout(`${b.root}/api/2.0/mlflow/experiments/search`, {
+      method: 'POST',
+      headers: { authorization: await b.authHeader(), 'content-type': 'application/json' },
+      body: JSON.stringify({ max_results: 1 }),
+    });
+    return res.ok;
   } catch {
     return false;
   }
 }
 
-async function authHeader(): Promise<string> {
-  const token = await credential.getToken(ARM_SCOPE);
-  if (!token?.token) throw new Error('Failed to acquire token for AML MLflow tracking');
-  return `Bearer ${token.token}`;
+/**
+ * Resolve the live MLflow backend. Probes candidates in preference order the
+ * first time (or after the cache TTL) and caches the winner. When NO backend is
+ * configured at all, throws MlflowNotConfiguredError (the only honest gate).
+ */
+async function getActiveMlflowBackend(): Promise<MlflowBackend> {
+  const now = Date.now();
+  if (cachedBackend && now - cachedBackend.at < BACKEND_TTL_MS) return cachedBackend.backend;
+
+  const candidates = mlflowBackendCandidates();
+  if (candidates.length === 0) {
+    // Reuse mlflowConfig()'s precise missing-var accounting for the gate.
+    mlflowConfig();
+    throw new MlflowNotConfiguredError(['LOOM_AML_WORKSPACE']); // unreachable — above throws first
+  }
+  // Single candidate: use it directly (no extra probe call).
+  if (candidates.length === 1) {
+    cachedBackend = { backend: candidates[0], at: now };
+    return candidates[0];
+  }
+  // Multiple candidates: probe in preference order; first live wins.
+  for (const c of candidates) {
+    if (await probeBackend(c)) {
+      cachedBackend = { backend: c, at: now };
+      return c;
+    }
+  }
+  // None answered (transient / permissions). Fall back to the first so its real
+  // error surfaces to the caller instead of masking it.
+  cachedBackend = { backend: candidates[0], at: now };
+  return candidates[0];
 }
 
 async function mlflowFetch(
@@ -205,8 +335,11 @@ async function mlflowFetch(
   init: RequestInit & { query?: Record<string, string | string[]>; workspace?: string } = {},
 ): Promise<Response> {
   const { query, workspace, ...rest } = init;
-  const cfg = mlflowConfig(workspace);
-  let url = `${cfg.base}/api/2.0/mlflow${apiPath}`;
+  // An explicit workspace override targets a specific bound AML workspace
+  // (model-registry stage ops) — resolve AML directly. Otherwise auto-resolve
+  // the live backend (AML preferred, Databricks fallback).
+  const backend = workspace ? amlBackend(workspace) : await getActiveMlflowBackend();
+  let url = `${backend.root}/api/2.0/mlflow${apiPath}`;
   if (query) {
     const sp = new URLSearchParams();
     for (const [k, v] of Object.entries(query)) {
@@ -220,7 +353,7 @@ async function mlflowFetch(
     ...rest,
     headers: {
       ...(rest.headers || {}),
-      authorization: await authHeader(),
+      authorization: await backend.authHeader(),
       'content-type': 'application/json',
     },
   });
