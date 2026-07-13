@@ -87,8 +87,16 @@ resource ns 'Microsoft.ServiceBus/namespaces@2022-10-01-preview' = {
 // =====================================================================
 // Private endpoint (namespace data + management plane)
 // =====================================================================
+// Private Link is a PREMIUM-only Service Bus feature — deploying a PE against
+// a Standard/Basic namespace fails the whole module with
+// PrivateEndpointInvalidSku ("Private endpoint connections are only supported
+// on Premium Service Bus namespaces"). Gate the PE (and its DNS zone group)
+// on the SKU; non-Premium namespaces are reached via the public endpoint with
+// AAD auth, which is the honest supported posture for Standard.
 
-resource pe 'Microsoft.Network/privateEndpoints@2024-03-01' = {
+var sbPrivateLinkSupported = skuName == 'Premium'
+
+resource pe 'Microsoft.Network/privateEndpoints@2024-03-01' = if (sbPrivateLinkSupported) {
   name: 'pe-${ns.name}'
   location: location
   tags: complianceTags
@@ -106,7 +114,7 @@ resource pe 'Microsoft.Network/privateEndpoints@2024-03-01' = {
   }
 }
 
-resource peDnsGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2024-03-01' = if (!empty(privateDnsZoneServicebusId)) {
+resource peDnsGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2024-03-01' = if (sbPrivateLinkSupported && !empty(privateDnsZoneServicebusId)) {
   parent: pe
   name: 'default'
   properties: {
