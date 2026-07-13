@@ -105,6 +105,23 @@ export function clusterUri(): string {
   return CLUSTER_URI;
 }
 
+/**
+ * Registry-first cluster URI (brownfield §2.5). When an existing ADX cluster is
+ * attached to the caller's tenant / landing zone (Landing-Zone Service
+ * Registry), its coordinates supply the URI; otherwise falls back to the
+ * env-bound {@link clusterUri}. Additive + safe — with an empty registry it is
+ * identical to clusterUri(). `tenantId` is the registry PK (session
+ * `claims.tid ?? oid`).
+ */
+export async function resolvedClusterUri(tenantId: string, landingZoneId?: string): Promise<string> {
+  try {
+    const { resolveAdxClusterUri } = await import('./attached-target-resolver');
+    const uri = await resolveAdxClusterUri(tenantId, landingZoneId);
+    if (uri) return uri;
+  } catch { /* fall back to env */ }
+  return CLUSTER_URI;
+}
+
 export function defaultDatabase(): string {
   return DEFAULT_DB;
 }
@@ -794,8 +811,8 @@ function shapeContinuousExportRows(r: KustoQueryResult): KustoContinuousExport[]
 }
 
 /** `.show continuous-exports` — every continuous export job in the database. */
-export async function listContinuousExports(db: string): Promise<KustoContinuousExport[]> {
-  const r = await executeMgmtCommand(db, '.show continuous-exports');
+export async function listContinuousExports(db: string, opts?: { clusterUri?: string }): Promise<KustoContinuousExport[]> {
+  const r = await executeMgmtCommand(db, '.show continuous-exports', opts);
   return shapeContinuousExportRows(r);
 }
 
@@ -1574,8 +1591,8 @@ export async function alterTableRlsPolicy(
 }
 
 /** `.show database <db> schema as json` — flat read-only schema object. */
-export async function getDatabaseSchemaJson(db: string): Promise<unknown> {
-  const r = await executeMgmtCommand(db, `.show database ${qName(db)} schema as json`);
+export async function getDatabaseSchemaJson(db: string, opts?: { clusterUri?: string }): Promise<unknown> {
+  const r = await executeMgmtCommand(db, `.show database ${qName(db)} schema as json`, opts);
   if (!r.rows.length) return null;
   const schemaIdx = r.columns.findIndex((c) => /schema/i.test(c));
   const raw = r.rows[0][schemaIdx >= 0 ? schemaIdx : r.columns.length - 1];

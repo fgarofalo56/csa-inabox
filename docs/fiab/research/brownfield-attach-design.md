@@ -391,3 +391,53 @@ Unify day-0 BYO with the day-2 registry so there is one model:
    `CONNECTABLE_ARM_TYPES`; adding them widens the ARG query. Confirm no
    performance concern on large tenants (the route already bounds paging + wall
    clock).
+
+---
+
+## Phase 1 — implemented (2026-07-13)
+
+Phase 1 (registry + attach wizard + backend selection) is built. Decisions taken
+against the open questions: PK = tenant (`claims.tid ?? oid`, open-Q #5);
+hub-scoped services use `landingZoneId='hub'` (open-Q #2); detach removes only the
+Loom binding, never the Azure resource (open-Q #3); day-0 seed is the idempotent
+first-read reconcile (open-Q #4). Discovery is a dedicated route (not an extended
+`/connectables`, open-Q #6) to keep the working Connections import path
+untouched.
+
+**Shipped:**
+- `lib/azure/attached-services-store.ts` — the `attached-services` Cosmos
+  container (PK `/tenantId`; added to `cosmos.bicep loomContainers` +
+  `cosmos-client.ts ensure()`), CRUD, idempotent-per-resource upsert, referential-
+  integrity detach guard (`AttachedServiceInUseError`), and the day-0 BYO seed
+  reconcile (`reconcileDay0Byo` from `EXISTING_*`).
+- `lib/azure/attached-service-kinds.ts` — closed kind enum, ARM-type↔kind map
+  (incl. AOAI vs Maps Cognitive disambiguation), the navigator role-GUID map
+  (verbatim from `grant-navigator-rbac.sh`), and the `scan-services` key bridge.
+- `lib/azure/attached-discovery.ts` + `GET /api/landing-zones/discover` — ARG
+  discovery over the full attachable kind set (user token → UAMI fallback →
+  honest gate).
+- `lib/azure/attach-preflight.ts` + `POST /api/landing-zones/[id]/attach/preflight`
+  — real reachability + network posture (from the ARM properties bag) + the exact
+  navigator role the UAMI needs.
+- `POST /api/landing-zones/[id]/attach`, `GET /api/landing-zones/[id]/services`,
+  `DELETE /api/landing-zones/[id]/services/[serviceId]` — register (with receipt),
+  list (+ day-0 seed on read), detach (409-guarded). All gated to the new
+  `admin.attach-service` capability + PDP.
+- Admin UI — `AttachedServicesSection` (per-DLZ in the overview detail drawer +
+  a hub-scoped card) + the 4-step `AttachServiceWizard` (discover → pick →
+  validate → register), Fluent v9 + Loom tokens, `EmptyState`, honest MessageBars.
+- Backend resolver — `lib/azure/attached-target-resolver.ts` +
+  `serverlessTargetResolved` / `dedicatedTargetResolved` (synapse-sql-client) +
+  `resolvedClusterUri` (kusto-client). The ADX navigator's shared guard
+  (`app/api/adx/_shared.ts`) now resolves the cluster registry-first (env
+  fallback), consumed by `/api/adx/overview`.
+
+**Honest gaps (deferred to Phase 2/3 per the plan):**
+- RBAC is *reported* (exact role + scope), not yet auto-granted — Phase 2's
+  `role-grant-client`. Attach records `status:'pending-grants'`.
+- Governance / telemetry / chargeback auto-integration hooks are Phase 2
+  (`chargebackIncluded` defaults true since attribution keys on `resourceId`).
+- Private-endpoint remediation is flagged at preflight but not auto-created —
+  Phase 3.
+- Registry-first resolution is wired at the ADX guard + the Synapse/ADX async
+  client variants; broad adoption across every navigator caller is Phase 3.
