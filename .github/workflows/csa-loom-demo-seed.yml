@@ -1,0 +1,84 @@
+name: csa-loom-demo-seed
+
+# Populate the LIVE Loom console with a persistent, navigable DEMO environment
+# owned by the tenant admin (LOOM_TENANT_ADMIN_OID) so the operator can walk a
+# full capabilities demo: a "CSA Loom Demo" workspace of representative items +
+# a "CSA Loom Demo — Apps" workspace with compound use-case apps installed.
+# Mints a session from the live session-secret (same mechanism as the tutorial
+# capture / loom-ui-verify), sets UAT_OID to the admin oid so the operator owns
+# everything, and runs scripts/csa-loom/demo-seed.mjs. Persistent (no cleanup).
+
+on:
+  workflow_dispatch:
+    inputs:
+      loom_url:
+        description: 'Console URL to seed'
+        type: string
+        default: https://csa-loom.limitlessdata.ai
+      sub:
+        description: 'Subscription id hosting the console (for reading the session secret)'
+        type: string
+        default: e093f4fd-5047-4ee4-968d-a56942c665f3
+      admin_rg:
+        description: 'Admin-plane resource group of the console'
+        type: string
+        default: rg-csa-loom-admin-centralus
+      admin_oid:
+        description: 'Tenant admin oid to own the demo content (LOOM_TENANT_ADMIN_OID)'
+        type: string
+        default: 866a2e12-0fee-4c99-923c-7cdfd61e08cd
+      admin_name:
+        description: 'Display name for the demo owner'
+        type: string
+        default: CSA Loom Admin
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  seed:
+    name: Seed demo environment
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Azure login (limitlessdata_deploy SP)
+        uses: azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
+              "subscriptionId": "${{ inputs.sub }}",
+              "tenantId": "${{ secrets.AZURE_TENANT_ID }}"
+            }
+      - name: Resolve session secret + seed demo
+        env:
+          LOOM_URL: ${{ inputs.loom_url }}
+          ADMIN_RG: ${{ inputs.admin_rg }}
+          UAT_OID: ${{ inputs.admin_oid }}
+          UAT_NAME: ${{ inputs.admin_name }}
+        run: |
+          set -uo pipefail
+          SNAME=$(az containerapp secret list -g "$ADMIN_RG" -n loom-console \
+                  --query "[?contains(name,'session') || contains(name,'SESSION')].name | [0]" -o tsv 2>/dev/null || true)
+          SS=""
+          if [[ -n "$SNAME" ]]; then
+            SS=$(az containerapp secret show -g "$ADMIN_RG" -n loom-console --secret-name "$SNAME" --query value -o tsv 2>/dev/null || true)
+          fi
+          if [[ -z "$SS" ]]; then
+            KV=$(az keyvault list -g "$ADMIN_RG" --query "[0].name" -o tsv 2>/dev/null || true)
+            if [[ -n "$KV" ]]; then
+              for KVS in loom-session-secret session-secret; do
+                SS=$(az keyvault secret show --vault-name "$KV" --name "$KVS" --query value -o tsv 2>/dev/null || true)
+                [[ -n "$SS" ]] && break
+              done
+            fi
+          fi
+          if [[ -z "$SS" ]]; then echo "::error::Could not read session secret"; exit 1; fi
+          echo "::add-mask::$SS"
+          SESSION_SECRET="$SS" node scripts/csa-loom/demo-seed.mjs
