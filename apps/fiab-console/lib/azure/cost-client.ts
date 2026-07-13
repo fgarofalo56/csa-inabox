@@ -67,6 +67,72 @@ const COST_QUERY_TIMEOUT_MS: number = (() => {
 })();
 
 /**
+ * Overall wall-clock BUDGET for a single chargeback/cost report across every
+ * subscription and grouping. The report is served inside a Container Apps route
+ * (`maxDuration` 90–120s) and the client aborts at 80s, so the aggregation must
+ * finish (or degrade to a partial result) well before then. Every per-query
+ * retry loop shares this deadline: once it lapses a still-throttled subscription
+ * surfaces as an honest per-scope timeout in `subscriptionErrors` instead of
+ * hanging the WHOLE report until the gateway/client kills it. Override with
+ * `LOOM_COST_REPORT_BUDGET_MS`.
+ */
+const COST_REPORT_BUDGET_MS: number = (() => {
+  const n = Number(process.env.LOOM_COST_REPORT_BUDGET_MS);
+  return Number.isFinite(n) && n > 0 ? n : 70_000;
+})();
+
+/**
+ * Max concurrent Microsoft.CostManagement/query round-trips IN FLIGHT at once,
+ * across every subscription AND every grouping. The query endpoint is QPU
+ * rate-limited; the report fires 8 groupings per sub, so firing them all at once
+ * (8 × N-subs simultaneous POSTs) reliably self-inflicts HTTP 429 throttling,
+ * which then drives the retry/backoff loop for tens of seconds per query and
+ * blows past the report budget. Funnelling every cost query through a small
+ * FIFO limiter keeps us UNDER the QPU ceiling — cooperating with the API instead
+ * of fighting it — which is the single biggest win for report latency. Override
+ * with `LOOM_COST_QUERY_CONCURRENCY` (default 4).
+ */
+const COST_QUERY_CONCURRENCY: number = (() => {
+  const n = Number(process.env.LOOM_COST_QUERY_CONCURRENCY);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 4;
+})();
+
+/**
+ * Tiny dependency-free FIFO concurrency limiter. `schedule(fn)` runs `fn` when a
+ * slot is free (at most `max` concurrently) and resolves/rejects with its
+ * result. Exported for unit testing the max-in-flight invariant.
+ */
+export function createConcurrencyLimiter(max: number): <T>(fn: () => Promise<T>) => Promise<T> {
+  const limit = Math.max(1, Math.floor(max) || 1);
+  let active = 0;
+  const queue: (() => void)[] = [];
+  const pump = () => {
+    while (active < limit && queue.length > 0) {
+      const run = queue.shift()!;
+      active += 1;
+      run();
+    }
+  };
+  return function schedule<T>(fn: () => Promise<T>): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      queue.push(() => {
+        Promise.resolve()
+          .then(fn)
+          .then(resolve, reject)
+          .finally(() => {
+            active -= 1;
+            pump();
+          });
+      });
+      pump();
+    });
+  };
+}
+
+/** Process-wide limiter shared by every cost query (all subs, all groupings). */
+const costQueryLimiter = createConcurrencyLimiter(COST_QUERY_CONCURRENCY);
+
+/**
  * Distinct set of subscriptions the Loom deployment spans (admin + DLZ + BYO).
  * Delegates to the shared scope resolver so the DLZ sub
  * (LOOM_DLZ_SUBSCRIPTION_ID) is always included — the live multi-sub bug was
@@ -97,19 +163,33 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  * It returns a Retry-After header; we honor it (capped) with a few attempts +
  * jittered exponential backoff so the Cost tab loads instead of erroring.
  */
-async function costQuery(subscriptionId: string, body: unknown): Promise<any> {
+async function costQuery(subscriptionId: string, body: unknown, deadline?: number): Promise<any> {
+  // Funnel EVERY cost query through the shared limiter so we never exceed the
+  // Cost Management QPU ceiling (the root cause of the self-inflicted 429 storm).
+  return costQueryLimiter(() => costQueryInner(subscriptionId, body, deadline));
+}
+
+async function costQueryInner(subscriptionId: string, body: unknown, deadline?: number): Promise<any> {
   const t = await credential.getToken(ARM_SCOPE);
   if (!t?.token) throw new MonitorError('Failed to acquire ARM token for Cost Management', 401);
   const url = `${ARM}/subscriptions/${subscriptionId}/providers/Microsoft.CostManagement/query?api-version=${COST_API}`;
   const maxAttempts = 5;
   let lastErr: MonitorError | null = null;
+  // Per-fetch ceiling, clamped to the remaining report budget so a single query
+  // can never over-run the whole report's deadline.
+  const perFetchTimeout = (): number => {
+    if (deadline == null) return COST_QUERY_TIMEOUT_MS;
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) throw new MonitorError('Cost query exceeded the report time budget', 504);
+    return Math.max(1_000, Math.min(COST_QUERY_TIMEOUT_MS, remaining));
+  };
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     const res = await fetchWithTimeout(url, {
       method: 'POST',
       headers: { authorization: `Bearer ${t.token}`, 'content-type': 'application/json', accept: 'application/json' },
       body: JSON.stringify(body),
       cache: 'no-store',
-    }, COST_QUERY_TIMEOUT_MS);
+    }, perFetchTimeout());
     const text = await res.text();
     let json: any = null;
     try { json = text ? JSON.parse(text) : null; } catch { /* leave */ }
@@ -121,6 +201,9 @@ async function costQuery(subscriptionId: string, body: unknown): Promise<any> {
       const backoff = Math.min((Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : 0) || 2000 * 2 ** (attempt - 1), 30_000);
       const wait = Math.round(backoff / 2 + Math.random() * (backoff / 2));
       lastErr = new MonitorError(msg, res.status, json || text);
+      // Don't sleep past the report deadline — surface the throttle as a per-scope
+      // timeout so the rest of the report still returns (honest partial result).
+      if (deadline != null && Date.now() + wait >= deadline) throw lastErr;
       await sleep(wait);
       continue;
     }
@@ -230,7 +313,7 @@ export function foldByDimension(resp: any, dimName: string, loomRgs: Set<string>
 }
 
 /** Sum the actual cost for a timeframe in one sub, filtered to Loom RGs. */
-async function periodTotal(sub: string, timeframe: CostTimeframe, loomRgs: Set<string>): Promise<number> {
+async function periodTotal(sub: string, timeframe: CostTimeframe, loomRgs: Set<string>, deadline?: number): Promise<number> {
   const q = await costQuery(sub, {
     type: 'ActualCost', timeframe,
     dataset: {
@@ -238,7 +321,7 @@ async function periodTotal(sub: string, timeframe: CostTimeframe, loomRgs: Set<s
       aggregation: { totalCost: { name: 'Cost', function: 'Sum' } },
       grouping: [{ type: 'Dimension', name: 'ResourceGroupName' }],
     },
-  });
+  }, deadline);
   const cols = q?.properties?.columns || [];
   const rows: any[][] = q?.properties?.rows || [];
   const iCost = colIndex(cols, 'Cost');
@@ -360,6 +443,11 @@ export async function getLoomCostSummary(opts: CostOptions = {}): Promise<CostSu
   let currency = 'USD';
   const prevTf = PREV_TIMEFRAME[timeframe];
 
+  // Shared wall-clock deadline for every query below. A subscription still being
+  // throttled when this lapses is recorded as a per-scope timeout (not fatal) so
+  // the report returns whatever the other subscriptions produced.
+  const deadline = Date.now() + COST_REPORT_BUDGET_MS;
+
   // Resolve friendly subscription names concurrently with the cost queries —
   // best-effort, never blocks the summary (falls back to the id).
   const namesPromise = resolveSubscriptionNames(subs);
@@ -383,7 +471,7 @@ export async function getLoomCostSummary(opts: CostOptions = {}): Promise<CostSu
             { type: 'Dimension', name: 'ServiceName' },
           ],
         },
-      }),
+      }, deadline),
       // 2) Daily series (run-rate forecast).
       costQuery(sub, {
         type: 'ActualCost', timeframe,
@@ -392,7 +480,7 @@ export async function getLoomCostSummary(opts: CostOptions = {}): Promise<CostSu
           aggregation: { totalCost: { name: 'Cost', function: 'Sum' } },
           grouping: [{ type: 'Dimension', name: 'ResourceGroupName' }],
         },
-      }),
+      }, deadline),
       // 3) Top resources (best-effort; separate dim).
       costQuery(sub, {
         type: 'ActualCost', timeframe,
@@ -404,7 +492,7 @@ export async function getLoomCostSummary(opts: CostOptions = {}): Promise<CostSu
             { type: 'Dimension', name: 'ResourceId' },
           ],
         },
-      }),
+      }, deadline),
       // 4) By location (best-effort).
       costQuery(sub, {
         type: 'ActualCost', timeframe,
@@ -416,9 +504,9 @@ export async function getLoomCostSummary(opts: CostOptions = {}): Promise<CostSu
             { type: 'Dimension', name: 'ResourceLocation' },
           ],
         },
-      }),
+      }, deadline),
       // 5) Previous period total (for trend).
-      prevTf ? periodTotal(sub, prevTf, loomRgs) : Promise.resolve(null),
+      prevTf ? periodTotal(sub, prevTf, loomRgs, deadline) : Promise.resolve(null),
       // 6) Budgets.
       listBudgets(sub),
       // 7) By cost-allocation TAG value (best-effort). Groups RG × TagKey so we
@@ -434,7 +522,7 @@ export async function getLoomCostSummary(opts: CostOptions = {}): Promise<CostSu
             { type: 'TagKey', name: COST_TAG_KEY },
           ],
         },
-      }),
+      }, deadline),
       // 8) By ARM RESOURCE TYPE (best-effort). Groups RG × ResourceType so the
       //    report enumerates + totals EVERY Loom-managed resource type (Synapse,
       //    ADX, ADLS, Databricks, Cosmos, Container Apps, Event Hubs, APIM, …),
@@ -449,7 +537,7 @@ export async function getLoomCostSummary(opts: CostOptions = {}): Promise<CostSu
             { type: 'Dimension', name: 'ResourceType' },
           ],
         },
-      }),
+      }, deadline),
     ]);
 
     // The grouped query is the gate: if it failed (e.g. no Cost Management

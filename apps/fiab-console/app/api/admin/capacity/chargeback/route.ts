@@ -24,7 +24,7 @@
  * box, then lights up once granted.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { getSession, tenantScopeId } from '@/lib/auth/session';
 import { requireTenantAdmin } from '@/lib/auth/feature-gate';
 import {
   getChargebackModel,
@@ -34,12 +34,21 @@ import {
   type ChargebackOptions,
 } from '@/lib/azure/cost-management-client';
 import type { CostTimeframe } from '@/lib/azure/cost-client';
+import { buildScopedCacheKey, getOrComputeCached, resolveBackendTtl } from '@/lib/azure/query-result-cache';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 // Cost Management is QPU-throttled; allow the backoff retries + Monitor fan-out
 // to land inside the gateway window.
 export const maxDuration = 90;
+
+// The Cost Management rollup is slow (multi-sub aggregation) and changes slowly,
+// so it is served stale-while-revalidate from the shared query-result cache: a
+// 10-min TTL (override with LOOM_QUERY_CACHE_TTL_MS_COSTMGMT) means re-opening the
+// dashboard — or a second admin viewing it — is an instant in-process read, and a
+// lapsed TTL serves the last model immediately while ONE background refresh runs.
+// `?refresh=1` (wired to the page's Refresh button) bypasses the cached read.
+const CHARGEBACK_TTL_MS = () => resolveBackendTtl('costmgmt', 10 * 60_000);
 
 const TIMEFRAMES: CostTimeframe[] = ['MonthToDate', 'BillingMonthToDate', 'TheLastMonth', 'Last7Days', 'Last30Days'];
 
@@ -66,16 +75,27 @@ export async function GET(req: NextRequest) {
   const s = getSession();
   const gate = requireTenantAdmin(s);
   if (gate) return gate;
+  // requireTenantAdmin returned null ⇒ s is a valid tenant-admin session.
+  const session = s!;
 
   const tfParam = (req.nextUrl.searchParams.get('timeframe') || 'MonthToDate') as CostTimeframe;
   const timeframe: CostTimeframe = TIMEFRAMES.includes(tfParam) ? tfParam : 'MonthToDate';
   const opts: ChargebackOptions = { timeframe };
+  const tenantId = tenantScopeId(session);
+  const refresh = req.nextUrl.searchParams.get('refresh') === '1';
+  const cacheKey = buildScopedCacheKey('admin/capacity/chargeback', { tenantId, timeframe });
 
   try {
-    const data = await getChargebackModel(opts);
-    return NextResponse.json({ ok: true, data });
+    const { value, meta } = await getOrComputeCached(
+      cacheKey,
+      tenantId,
+      () => getChargebackModel(opts),
+      { ttlMs: CHARGEBACK_TTL_MS(), staleWhileRevalidate: true, bypass: refresh },
+    );
+    return NextResponse.json({ ok: true, data: value, meta });
   } catch (e) {
     // Billing scope / subscription unset, or no access / no offer → honest gate.
+    // (A thrown error is never cached, so the gate self-clears once access lands.)
     if (e instanceof MonitorNotConfiguredError) return costGate();
     if (e instanceof MonitorError && (e.status === 401 || e.status === 403 || e.status === 404)) return costGate();
     const status = e instanceof MonitorError ? e.status : 500;
