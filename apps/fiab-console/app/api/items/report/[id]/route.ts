@@ -23,13 +23,16 @@ import {
   reportPagesFromContent,
 } from '../../_lib/pbi-content-fallback';
 import { loadModelItem } from '@/lib/azure/model-binding';
+import { resolveBiBackendMode } from '@/lib/admin/platform-settings';
 import type { WorkspaceItem } from '@/lib/types/workspace';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-const BI_BACKEND = (process.env.LOOM_BI_BACKEND || '').trim().toLowerCase();
-const isPbiBackend = BI_BACKEND === 'powerbi';
+// Backend is resolved PER REQUEST (see resolveBiBackendMode) so the in-console
+// runtime toggle is honored: runtime admin setting > env LOOM_BI_BACKEND >
+// default 'loom-native'. NOT a module-level const (that would freeze the value
+// at import and ignore an admin flip).
 
 /** Read the AAS binding from item state, falling back to platform env defaults. */
 function aasBindingOf(item: WorkspaceItem): { aasServer: string | null; aasDatabase: string | null } {
@@ -73,7 +76,8 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
     return NextResponse.json({ ok: false, error: 'report template not found' }, { status: 404 });
   }
 
-  // Power BI opt-in path.
+  // Power BI opt-in path — resolved per request so the runtime toggle is live.
+  const isPbiBackend = (await resolveBiBackendMode()) === 'powerbi';
   if (isPbiBackend) {
     if (!workspaceId || workspaceId === '_loom') {
       return NextResponse.json({ ok: false, error: 'workspaceId required for powerbi backend' }, { status: 400 });

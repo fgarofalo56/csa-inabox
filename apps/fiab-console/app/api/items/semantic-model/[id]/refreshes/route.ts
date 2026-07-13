@@ -23,7 +23,7 @@ import {
   type EnhancedRefreshBody,
 } from '@/lib/azure/powerbi-client';
 import { getRefreshes as aasGetRefreshes, aasServerConfigGate, AasError } from '@/lib/azure/aas-server-client';
-import { usingAas } from '../../_lib/bi-backend';
+import { usingAasAsync } from '../../_lib/bi-backend';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -33,7 +33,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   const id = (await ctx.params).id;
 
-  if (!usingAas()) {
+  if (!(await usingAasAsync())) {
     const workspaceId = req.nextUrl.searchParams.get('workspaceId');
     if (!workspaceId) return NextResponse.json({ ok: false, error: 'workspaceId required' }, { status: 400 });
     const top = Math.min(100, parseInt(req.nextUrl.searchParams.get('top') || '25', 10) || 25);

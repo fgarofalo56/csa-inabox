@@ -1,6 +1,7 @@
 'use client';
 
 import { clientFetch } from '@/lib/client-fetch';
+import { useBiBackend } from '@/lib/components/platform-config';
 /**
  * ReportDesigner — the Loom-native interactive REPORT DESIGNER.
  *
@@ -2347,7 +2348,10 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
   const restoringRef = useRef(false);
   const [, setHistTick] = useState(0); // forces ribbon enable/disable refresh
 
-  const pbiPublishEnabled = (process.env.NEXT_PUBLIC_LOOM_BI_BACKEND || '').toLowerCase() === 'powerbi';
+  // Power BI is opt-in via the RUNTIME admin setting (Admin → Runtime config →
+  // Power BI backend), read live via useBiBackend() — NOT a build-baked
+  // NEXT_PUBLIC_* var, so an admin can flip it with no rebuild.
+  const { powerBiEnabled: pbiPublishEnabled } = useBiBackend();
   const bound = isBound(dataSource);
 
   // ── load definition ────────────────────────────────────────────────────────
@@ -4689,7 +4693,7 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
                   <RadioGroup value={publishTarget} onChange={(_e, d) => setPublishTarget(d.value as 'org' | 'powerbi')}>
                     <Radio value="org" label="Organization gallery (Azure-native, default)" />
                     <Radio value="powerbi" disabled={!pbiPublishEnabled}
-                      label={pbiPublishEnabled ? 'Power BI workspace (opt-in)' : 'Power BI workspace — set NEXT_PUBLIC_LOOM_BI_BACKEND=powerbi to enable'} />
+                      label={pbiPublishEnabled ? 'Power BI workspace (opt-in)' : 'Power BI workspace — enable the Power BI backend in Admin → Runtime configuration'} />
                   </RadioGroup>
                 </Field>
                 {publishMsg && (

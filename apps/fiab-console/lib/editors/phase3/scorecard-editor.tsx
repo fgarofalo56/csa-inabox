@@ -38,6 +38,7 @@ import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { usePowerBiWorkspaces, WorkspacePicker } from './workspace-picker';
+import { useBiBackend } from '@/lib/components/platform-config';
 import { useStyles } from './styles';
 
 interface ScorecardLite { id: string; displayName: string; description?: string; }
@@ -211,9 +212,11 @@ export function ScorecardEditor({ item, id }: { item: FabricItemType; id: string
   const s = useStyles();
   // Azure-native DEFAULT (rel-T03/B11): the Loom Cosmos goal store needs no
   // Power BI workspace. The picker + live Power BI scorecard sync are the
-  // opt-in Fabric-family leg (NEXT_PUBLIC_LOOM_BI_BACKEND=powerbi). When the
-  // opt-in is off the hook is disabled — zero Power BI network calls.
-  const pbiOptIn = (process.env.NEXT_PUBLIC_LOOM_BI_BACKEND || '').toLowerCase() === 'powerbi';
+  // opt-in Fabric-family leg, enabled via the RUNTIME admin setting (Admin →
+  // Runtime config → Power BI backend) read live by useBiBackend() — NOT a
+  // build-baked NEXT_PUBLIC_* var. When the opt-in is off the hook is disabled —
+  // zero Power BI network calls.
+  const { powerBiEnabled: pbiOptIn } = useBiBackend();
   const ws = usePowerBiWorkspaces(pbiOptIn);
   const [workspaceId, setWorkspaceId] = useState('');
   const [scorecards, setScorecards] = useState<ScorecardLite[] | null>(null);
@@ -470,7 +473,7 @@ export function ScorecardEditor({ item, id }: { item: FabricItemType; id: string
       ]}] : []),
       { label: 'Goal', actions: [
         { label: 'Check in', icon: <Add20Regular />, onClick: selectedGoalId ? () => openCheckIn(selectedGoalId) : undefined, disabled: !selectedGoalId, title: !selectedGoalId ? 'select a goal first' : 'record a goal value + status + note' },
-        { label: 'Bind metric', icon: <DatabaseLink20Regular />, onClick: selectedGoalId && workspaceId ? () => openBinder(selectedGoalId) : undefined, disabled: !selectedGoalId || !workspaceId, title: !workspaceId ? 'connected metrics pull live DAX values from a Power BI / AAS semantic model — enable the Power BI backend (NEXT_PUBLIC_LOOM_BI_BACKEND=powerbi) and select a workspace' : (!selectedGoalId ? 'select a goal first' : 'connect a DAX measure as this goal’s live value source') },
+        { label: 'Bind metric', icon: <DatabaseLink20Regular />, onClick: selectedGoalId && workspaceId ? () => openBinder(selectedGoalId) : undefined, disabled: !selectedGoalId || !workspaceId, title: !workspaceId ? 'connected metrics pull live DAX values from a Power BI / AAS semantic model — enable the Power BI backend in Admin → Runtime configuration and select a workspace' : (!selectedGoalId ? 'select a goal first' : 'connect a DAX measure as this goal’s live value source') },
         { label: 'History', icon: <List20Regular />, onClick: selectedGoalId ? () => openHistory(selectedGoalId) : undefined, disabled: !selectedGoalId, title: !selectedGoalId ? 'select a goal first' : 'view this goal’s check-in history' },
       ]},
       { label: 'Metadata', actions: [
@@ -522,8 +525,8 @@ export function ScorecardEditor({ item, id }: { item: FabricItemType; id: string
                 bind to a live <strong>DAX measure</strong> (pulled via <em>executeQueries</em>), and
                 <strong> Open in Power BI</strong> opens the Fabric scorecard canvas.</>
               ) : (
-                <> Optional: set <code>NEXT_PUBLIC_LOOM_BI_BACKEND=powerbi</code> to also sync with live Power BI
-                scorecards and bind goals to DAX measures.</>
+                <> Optional: enable the <strong>Power BI backend</strong> in <em>Admin → Runtime configuration</em> to
+                also sync with live Power BI scorecards and bind goals to DAX measures.</>
               )}
             </MessageBarBody>
           </MessageBar>
@@ -596,7 +599,7 @@ export function ScorecardEditor({ item, id }: { item: FabricItemType; id: string
                                   <Tooltip relationship="label" content="Record a goal value, target, status, and note — updates history">
                                     <Button size="small" appearance="subtle" icon={<Add20Regular />} onClick={(e) => { e.stopPropagation(); openCheckIn(g.id!); }}>Check in</Button>
                                   </Tooltip>
-                                  <Tooltip relationship="label" content={workspaceId ? "Connect this goal's value to a live DAX measure from a Power BI/AAS semantic model" : 'connected metrics need the Power BI backend opt-in (NEXT_PUBLIC_LOOM_BI_BACKEND=powerbi) + a workspace'}>
+                                  <Tooltip relationship="label" content={workspaceId ? "Connect this goal's value to a live DAX measure from a Power BI/AAS semantic model" : 'connected metrics need the Power BI backend opt-in (Admin → Runtime configuration) + a workspace'}>
                                     <Button size="small" appearance="subtle" icon={<DatabaseLink20Regular />} disabled={!workspaceId} onClick={(e) => { e.stopPropagation(); openBinder(g.id!); }}>Bind</Button>
                                   </Tooltip>
                                   <Tooltip relationship="label" content="View all past check-ins for this goal">

@@ -1,6 +1,7 @@
 'use client';
 
 import { clientFetch } from '@/lib/client-fetch';
+import { useBiBackend } from '@/lib/components/platform-config';
 /**
  * DashboardEditor — extracted from phase3-editors.tsx (byte-for-byte move).
  *
@@ -134,11 +135,12 @@ export function DashboardEditor({ item, id }: { item: FabricItemType; id: string
   const s = useStyles();
   const tc = useCanvasTileStyles();
   // The Loom canvas (Cosmos overlay + ADX/DAX tiles) is the Azure-native
-  // DEFAULT. Linking/embedding live Power BI dashboards is the OPT-IN leg
-  // (NEXT_PUBLIC_LOOM_BI_BACKEND=powerbi) — with it off the workspace hook is
-  // disabled so the default render makes ZERO Power BI network calls
-  // (rel-T04/B12).
-  const pbiOptIn = (process.env.NEXT_PUBLIC_LOOM_BI_BACKEND || '').toLowerCase() === 'powerbi';
+  // DEFAULT. Linking/embedding live Power BI dashboards is the OPT-IN leg,
+  // enabled via the RUNTIME admin setting (Admin → Runtime config → Power BI
+  // backend) read live by useBiBackend() — NOT a build-baked NEXT_PUBLIC_* var.
+  // With it off the workspace hook is disabled so the default render makes ZERO
+  // Power BI network calls (rel-T04/B12).
+  const { powerBiEnabled: pbiOptIn } = useBiBackend();
   const ws = usePowerBiWorkspaces(pbiOptIn);
   const [workspaceId, setWorkspaceId] = useState('');
   const [dashboards, setDashboards] = useState<DashboardLite[] | null>(null);
