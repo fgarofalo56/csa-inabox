@@ -107,6 +107,32 @@ export function LakehouseEditor({ item, id }: Props) {
   const bundleDeltaTables = lhContent?.deltaTables ?? [];
   const bundleShortcuts = lhContent?.shortcuts ?? [];
   const hasBundle = bundleFolders.length > 0 || bundleDeltaTables.length > 0 || bundleShortcuts.length > 0;
+
+  // App-install seeded tables. The install provisioner materializes each bundle
+  // Delta table as a REAL seed CSV under a NESTED path
+  // (`<rootPath>/Tables/<name>/<name>.csv`) and records the set on
+  // `state.provisioning.secondaryIds` (container / rootPath / seededTables). The
+  // live-catalog scan only walks `<container>/Tables/` at the ROOT, so it never
+  // finds these nested app-seeded tables and the lakehouse looks empty. Surface
+  // the item's OWN seeded tables (honest: name + CSV path + seeded row count)
+  // when the live scan comes back empty — no mocks, real files the seed wrote.
+  const seededTableInfo = useMemo(() => {
+    const prov = (itemQ.data?.state as any)?.provisioning;
+    const sec = (prov?.secondaryIds || {}) as Record<string, string>;
+    const container = typeof sec.container === 'string' ? sec.container : null;
+    const rootPath = typeof sec.rootPath === 'string' ? sec.rootPath : null;
+    const seeded = String(sec.seededTables || '').split(',').map((x) => x.trim()).filter(Boolean);
+    if (!container || !rootPath || !seeded.length) return null;
+    const schemasEnabled = lhContent?.schemasEnabled === true;
+    return seeded.map((name) => {
+      const def = bundleDeltaTables.find((t) => t.name === name || leafName(t.name) === name);
+      const schema = schemasEnabled ? String(def?.schema || 'dbo') : '';
+      const csvPath = schema
+        ? `${rootPath}/Tables/${schema}/${name}/${name}.csv`
+        : `${rootPath}/Tables/${name}/${name}.csv`;
+      return { name, container, csvPath, rowCount: def?.sampleRows?.length ?? null };
+    });
+  }, [itemQ.data, bundleDeltaTables, lhContent]);
   const [containers, setContainers] = useState<ContainerInfo[] | null>(null);
   const [containerError, setContainerError] = useState<string | null>(null);
   const [activeContainer, setActiveContainer] = useState<string | null>(null);
@@ -2879,6 +2905,52 @@ export function LakehouseEditor({ item, id }: Props) {
                     // tables (if any) as a "what to materialize" reference only.
                     return (
                       <>
+                        {/* App-install seeded tables — REAL seed CSVs the install
+                            provisioner wrote under a nested lakehouse path the
+                            root `/Tables/` scan doesn't reach. Honest: name +
+                            seeded row count + the CSV path. */}
+                        {seededTableInfo && seededTableInfo.length > 0 && (
+                          <>
+                            <MessageBar intent="success">
+                              <MessageBarBody>
+                                <MessageBarTitle>App-seeded tables</MessageBarTitle>
+                                This lakehouse was seeded by the installed app. These tables live under{' '}
+                                <code>/{activeContainer}/{seededTableInfo[0].csvPath.replace(/\/Tables\/.*$/, '')}/Tables/</code> as
+                                CSV seed data; run the Gold/Silver notebook to materialize them as managed Delta.
+                              </MessageBarBody>
+                            </MessageBar>
+                            <div className={s.tableWrap}>
+                              <Table aria-label="App-seeded tables" size="small">
+                                <TableHeader>
+                                  <TableRow>
+                                    <TableHeaderCell>Table</TableHeaderCell>
+                                    <TableHeaderCell>Seeded rows</TableHeaderCell>
+                                    <TableHeaderCell>CSV path</TableHeaderCell>
+                                    <TableHeaderCell></TableHeaderCell>
+                                  </TableRow>
+                                </TableHeader>
+                                <TableBody>
+                                  {seededTableInfo.map((t) => (
+                                    <TableRow key={t.name}>
+                                      <TableCell><strong>{t.name}</strong></TableCell>
+                                      <TableCell className={s.cell}>{t.rowCount ?? '—'}</TableCell>
+                                      <TableCell><code style={{ fontSize: tokens.fontSizeBase100, overflowWrap: 'anywhere' }}>{t.container}/{t.csvPath}</code></TableCell>
+                                      <TableCell>
+                                        <Button appearance="subtle" size="small" icon={<Play20Regular />}
+                                          onClick={() => {
+                                            setSqlText(`-- Read the app-seeded CSV for ${t.name}\nSELECT TOP 100 *\nFROM OPENROWSET(BULK 'https://__account__.dfs.core.windows.net/${t.container}/${t.csvPath}', FORMAT='CSV', PARSER_VERSION='2.0', HEADER_ROW=TRUE) AS r;`);
+                                            setTab('sql');
+                                          }}>
+                                          Query CSV
+                                        </Button>
+                                      </TableCell>
+                                    </TableRow>
+                                  ))}
+                                </TableBody>
+                              </Table>
+                            </div>
+                          </>
+                        )}
                         {/* Guided empty state (SC-4) — Fabric's "This database is
                             empty. Get data" launcher. Each path is a real action. */}
                         <GuidedEmptyState
