@@ -151,18 +151,28 @@ export async function listAttachedServices(
   const query = landingZoneId
     ? {
         query:
-          'SELECT * FROM c WHERE c.tenantId = @t AND c.landingZoneId = @lz ORDER BY c.kind, c.displayName',
+          'SELECT * FROM c WHERE c.tenantId = @t AND c.landingZoneId = @lz',
         parameters: [
           { name: '@t', value: tenantId },
           { name: '@lz', value: landingZoneId },
         ],
       }
     : {
-        query: 'SELECT * FROM c WHERE c.tenantId = @t ORDER BY c.kind, c.displayName',
+        query: 'SELECT * FROM c WHERE c.tenantId = @t',
         parameters: [{ name: '@t', value: tenantId }],
       };
   const { resources } = await c.items.query<AttachedService>(query).fetchAll();
-  return (resources || []).map(toView);
+  // Sort in JS: a Cosmos `ORDER BY c.kind, c.displayName` needs a composite
+  // index the container doesn't define — the query 502s live ("The order by
+  // query does not have a corresponding composite index"). Result sets here
+  // are small (one landing zone's services), so client-side sort is free.
+  return (resources || [])
+    .sort(
+      (a, b) =>
+        (a.kind || '').localeCompare(b.kind || '') ||
+        (a.displayName || '').localeCompare(b.displayName || ''),
+    )
+    .map(toView);
 }
 
 /** Internal: server-side load of the full record (incl. secretRef). */
