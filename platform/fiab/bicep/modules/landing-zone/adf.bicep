@@ -63,6 +63,11 @@ param deployGeoEnrichPipeline bool = true
 // resource ID. A single grant covers MSI-auth copy pipelines AND Dataflow Gen2
 // sinks (same role, same principal, same account) — avoids a duplicate
 // role-assignment collision on the storage account scope.
+// dlz-attach may pass an EMPTY domainName; a bare '-${domainName}-' interpolation
+// emits consecutive hyphens, which strict validators (Event Hubs / Service Bus
+// namespaces, etc.) reject as InvalidName. Collapse the segment when empty.
+var nameInfix = empty(domainName) ? '' : '${domainName}-'
+
 var sblobAccountName = !empty(adlsAccountName) ? adlsAccountName : (!empty(storageAccountId) ? last(split(storageAccountId, '/')) : '')
 
 // =====================================================================
@@ -70,7 +75,7 @@ var sblobAccountName = !empty(adlsAccountName) ? adlsAccountName : (!empty(stora
 // =====================================================================
 
 resource adf 'Microsoft.DataFactory/factories@2018-06-01' = {
-  name: 'adf-loom-${domainName}-${location}'
+  name: 'adf-loom-${nameInfix}${location}'
   location: location
   tags: complianceTags
   identity: { type: 'SystemAssigned' }
