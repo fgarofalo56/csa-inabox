@@ -22,7 +22,7 @@ import {
   Add20Regular, ArrowSync20Regular, Delete20Regular, Server20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
-import { VM_SIZE_PRESETS, AUTOSCALE_PRESETS, autoScaleFormulaFor, classifyBatchGate } from '@/lib/azure/batch-client';
+import { VM_SIZE_PRESETS, AUTOSCALE_PRESETS, autoScaleFormulaFor, classifyBatchGate } from '@/lib/azure/batch-presets';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 
