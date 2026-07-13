@@ -41,6 +41,26 @@ function rulesFromContent(content: any): any[] {
   return [];
 }
 
+/**
+ * Pick the Azure Monitor alert SCOPE this deployment can actually author rules
+ * against — the real day-one blocker (a bundle rule's phantom custom metric is
+ * NOT: buildRuleQuery composes a column_ifexists query and upsertScheduledQueryRule
+ * defaults skipQueryValidation, so a rule over a non-existent table/column still
+ * CREATEs 200 and simply returns 0 rows). A scheduledQueryRule needs a scope:
+ *   - LOOM_LOG_ANALYTICS_RESOURCE_ID → a log alert over the hub Log Analytics
+ *     workspace (the general DEFAULT), or
+ *   - LOOM_ADX_ALERT_SCOPE → an Eventhouse/ADX-scoped rule (RTI streams).
+ * Prefer Log Analytics; fall back to ADX. When NEITHER is set the rule genuinely
+ * cannot be scoped — return an honest gate naming both (per no-vaporware.md),
+ * instead of letting each rule fail into a misleading "No alert rules could be
+ * created". No Microsoft Fabric is involved on either path.
+ */
+function pickAlertScope(): { sourceKind: 'log-analytics' | 'adx' } | { missing: string[] } {
+  if (process.env.LOOM_LOG_ANALYTICS_RESOURCE_ID?.trim()) return { sourceKind: 'log-analytics' };
+  if (process.env.LOOM_ADX_ALERT_SCOPE?.trim()) return { sourceKind: 'adx' };
+  return { missing: ['LOOM_LOG_ANALYTICS_RESOURCE_ID', 'LOOM_ADX_ALERT_SCOPE'] };
+}
+
 // ── Azure Monitor backend (DEFAULT) ────────────────────────────────────────
 async function provisionAzureMonitor(input: any, steps: string[]): Promise<ProvisionResult> {
   const content = input.content as any;
@@ -48,6 +68,25 @@ async function provisionAzureMonitor(input: any, steps: string[]): Promise<Provi
   if (rules.length === 0) {
     return { status: 'created', secondaryIds: { backend: 'azure-monitor' }, steps: [...steps, 'No rules in bundle; activator item created (Azure Monitor backend, no alert rules to author).'] };
   }
+
+  // Resolve the alert scope ONCE up front. When neither a Log Analytics
+  // workspace nor an ADX cluster scope is configured, no scheduledQueryRule can
+  // be created — surface that as an honest gate naming the exact env vars rather
+  // than a per-rule failure that reads as "No alert rules could be created".
+  const scope = pickAlertScope();
+  if ('missing' in scope) {
+    return {
+      status: 'remediation',
+      gate: {
+        reason: 'No Azure Monitor alert scope is configured for this deployment.',
+        remediation: `Set ${scope.missing[0]} (Log Analytics workspace ARM resource id — the default log-alert scope) or ${scope.missing[1]} (ADX cluster ARM id — for Eventhouse/RTI rules) so the Activator can scope its scheduled-query rules. (No Microsoft Fabric required.)`,
+        link: 'https://learn.microsoft.com/azure/azure-monitor/alerts/alerts-create-log-alert-rule',
+      },
+      steps,
+    };
+  }
+  const sourceKind = scope.sourceKind;
+  steps.push(`Authoring alert rules against the ${sourceKind === 'adx' ? 'Eventhouse/ADX cluster (LOOM_ADX_ALERT_SCOPE)' : 'Log Analytics workspace (LOOM_LOG_ANALYTICS_RESOURCE_ID)'} scope.`);
 
   // Author each bundle rule via the CANONICAL Azure Monitor runtime helper so
   // the persisted record == exactly what the editor / pane / rules route read
@@ -81,6 +120,11 @@ async function provisionAzureMonitor(input: any, steps: string[]): Promise<Provi
         name: r.name,
         condition: cond,
         action: r.action,
+        // Scope the rule against whichever alert host this deployment actually
+        // has (Log Analytics preferred, else the ADX cluster) so it CREATEs 200
+        // day-one — a bundle rule's phantom custom metric no longer sinks the
+        // install (the query is column_ifexists + skipQueryValidation).
+        sourceKind,
         query: typeof r.query === 'string' ? r.query : undefined,
         sourceTable: typeof r.sourceTable === 'string' ? r.sourceTable : undefined,
         severity: typeof r.severity === 'number' ? r.severity : undefined,

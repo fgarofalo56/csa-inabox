@@ -132,13 +132,25 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
       transforms: Array.isArray(item.state?.transforms) ? item.state!.transforms : [],
     };
     const published = typeof item.state?.fabricEventstreamId === 'string';
+    // Azure-native DEFAULT path: an installed / hand-provisioned eventstream
+    // records its live Event Hub (state.ehId) — so it is LIVE, not a draft,
+    // regardless of any Fabric publish (per no-fabric-dependency.md).
+    const ehId = typeof item.state?.ehId === 'string' ? item.state.ehId : null;
+    const azureLive = !!ehId;
+    const runtimeStatus = published ? 'published' : azureLive ? 'live' : 'draft';
+    const runtimeNote = published
+      ? 'Topology published to a Fabric Eventstream item. Activate nodes in the Fabric portal to start streaming.'
+      : azureLive
+        ? 'Live — provisioned to Azure Event Hubs (transport)' +
+          (item.state?.asaJobName ? ' + Stream Analytics (transform).' : '. Add transforms and re-provision to wire a Stream Analytics job.')
+        : 'Draft — design the topology and Provision to Azure (Event Hub + Stream Analytics) to stand up the live stream. Publishing to Fabric is an opt-in alternative.';
     return NextResponse.json({
       ok: true,
       displayName: item.displayName,
-      runtimeStatus: published ? 'published' : 'draft',
-      runtimeNote: published
-        ? 'Topology published to a Fabric Eventstream item. Activate nodes in the Fabric portal to start streaming.'
-        : 'Draft — design the topology and Provision to Azure (Event Hub + Stream Analytics) to stand up the live stream. Publishing to Fabric is an opt-in alternative.',
+      runtimeStatus,
+      runtimeNote,
+      ehId,
+      provisionedAt: item.state?.provisionedAt ?? null,
       fabricEventstreamId: item.state?.fabricEventstreamId ?? null,
       fabricWorkspaceId: item.state?.fabricWorkspaceId ?? null,
       lastPublishedAt: item.state?.lastPublishedAt ?? null,
