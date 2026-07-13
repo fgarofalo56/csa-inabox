@@ -27,6 +27,7 @@ import { LoomChart, type ChartReferenceLine } from '@/lib/components/charts/loom
 import { LearnPopover } from '@/lib/components/ui/learn-popover';
 import { metricDef, type PerfMetricDef } from '@/lib/perf/perf-metrics';
 import type { MetricTrend, TrendPoint } from '@/lib/perf/perf-store';
+import type { MetricConfig } from '@/lib/perf/perf-config';
 
 const useStyles = makeStyles({
   card: {
@@ -96,9 +97,16 @@ export interface PerfMetricCardProps {
   trend: MetricTrend;
   /** Override the resolved def (tests). */
   def?: PerfMetricDef;
+  /**
+   * Live SERVER-side backend-config status for this metric (from the GET route).
+   * When present it decides the gate — so a configured backend never shows a
+   * stale "…is not set" message from an older gated run. When absent the card
+   * falls back to the persisted `latest.gated` flag (backward compatible).
+   */
+  config?: MetricConfig;
 }
 
-export function PerfMetricCard({ trend, def }: PerfMetricCardProps) {
+export function PerfMetricCard({ trend, def, config }: PerfMetricCardProps) {
   const styles = useStyles();
   const resolved = def ?? metricDef(trend.metric);
   const label = resolved?.label ?? trend.metric;
@@ -135,7 +143,19 @@ export function PerfMetricCard({ trend, def }: PerfMetricCardProps) {
     [fabricBarMs, fabricBarLabel],
   );
 
-  const latestGated = !latest || latest.gated;
+  // SERVER truth wins: if the route resolved a live config for this metric, use
+  // its `configured` flag to decide the gate. Only fall back to the persisted
+  // last-run `gated` flag when no live config was supplied (tests / older API).
+  const serverConfigured = config ? config.configured : !latest?.gated;
+  const hasRealNumbers = !!latest && !latest.gated && latest.p50 !== null;
+  // A gate (backend not configured) shows ONLY when the server says it is not
+  // configured right now — never merely because the last run predated the env.
+  const showBackendGate = !serverConfigured;
+  // Configured-but-unmeasured: backend is live now but no real run recorded yet
+  // (or the recorded run predated the env). Prompt a run — do NOT claim "not set".
+  const showRunPrompt = serverConfigured && !hasRealNumbers;
+  const gateEnv = config?.gateEnv ?? latest?.gateEnv;
+  const gateMessage = config?.gateMessage;
   const p95 = latest?.p95 ?? null;
   const overBar = p95 !== null && fabricBarMs > 0 && p95 > fabricBarMs;
 
@@ -155,21 +175,31 @@ export function PerfMetricCard({ trend, def }: PerfMetricCardProps) {
           </Text>
           <Caption1 className={styles.muted}>{resolved?.backend ?? trend.backend}</Caption1>
         </div>
-        {!latestGated && (
+        {hasRealNumbers && (
           <Badge appearance="tint" color={overBar ? 'danger' : 'success'}>
             {overBar ? 'over bar' : 'at/under bar'}
           </Badge>
         )}
       </div>
 
-      {latestGated ? (
+      {showBackendGate ? (
         <MessageBar intent="warning">
           <MessageBarBody>
             <MessageBarTitle>Backend not configured</MessageBarTitle>
-            {latest?.gateEnv
-              ? `This benchmark is not running because ${latest.gateEnv} is not set in this deployment. `
+            {gateEnv
+              ? `This benchmark is not running because ${gateEnv} is not set in this deployment. `
               : 'This benchmark has not run against a configured backend yet. '}
+            {gateMessage ? `${gateMessage} ` : ''}
             Once configured, "Run benchmark now" will record a real p50/p95 here.
+          </MessageBarBody>
+        </MessageBar>
+      ) : showRunPrompt ? (
+        <MessageBar intent="info">
+          <MessageBarBody>
+            <MessageBarTitle>Backend configured — not yet measured</MessageBarTitle>
+            {resolved?.costlyOptIn
+              ? 'This benchmark is opt-in (billed compute). Re-run with "Include Spark" to record a real p50/p95 here.'
+              : 'Click "Run benchmark now" to record a real p50/p95 against this configured backend.'}
           </MessageBarBody>
         </MessageBar>
       ) : (

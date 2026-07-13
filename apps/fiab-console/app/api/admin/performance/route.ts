@@ -15,6 +15,7 @@ import { getSession } from '@/lib/auth/session';
 import { requireTenantAdmin } from '@/lib/auth/feature-gate';
 import { CosmosNotConfiguredError } from '@/lib/azure/cosmos-client';
 import { loadTrend } from '@/lib/perf/perf-store';
+import { resolveMetricConfigMap } from '@/lib/perf/perf-config';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -30,6 +31,10 @@ export async function GET(req: NextRequest) {
 
   try {
     const data = await loadTrend(maxRuns);
+    // Attach the LIVE server-side backend-config map so each card decides its
+    // gate from current deployment env — not the last run's persisted flag.
+    // This stops a configured backend from showing a stale "…is not set" gate.
+    data.config = resolveMetricConfigMap(data.metrics.map((m) => m.metric));
     return apiOk({ data });
   } catch (e) {
     if (e instanceof CosmosNotConfiguredError) {
