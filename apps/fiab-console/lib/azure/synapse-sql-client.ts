@@ -94,6 +94,47 @@ export function serverlessEndpoint(): string {
   return `${required('LOOM_SYNAPSE_WORKSPACE')}-ondemand.${getSynapseSqlSuffix()}`;
 }
 
+/**
+ * Registry-first Serverless target (brownfield §2.5). When an existing Synapse
+ * workspace is attached to the caller's tenant / landing zone (Landing-Zone
+ * Service Registry), its name supplies the coordinates; otherwise this falls
+ * back to the env-bound {@link serverlessTarget}. Additive + safe — with an
+ * empty registry it is identical to serverlessTarget(). `tenantId` is the
+ * registry PK (session `claims.tid ?? oid`).
+ */
+export async function serverlessTargetResolved(
+  tenantId: string,
+  opts?: { database?: string; landingZoneId?: string },
+): Promise<SynapseTarget> {
+  const database = opts?.database ?? 'master';
+  try {
+    const { resolveSynapseWorkspaceName } = await import('./attached-target-resolver');
+    const ws = await resolveSynapseWorkspaceName(tenantId, opts?.landingZoneId);
+    if (ws) {
+      const suffix = getSynapseSqlSuffix();
+      return { server: `${ws}-ondemand.${suffix}`, database, cacheKey: `serverless:${ws}:${database}` };
+    }
+  } catch { /* fall back to env */ }
+  return serverlessTarget(database);
+}
+
+/** Registry-first Dedicated target (brownfield §2.5). See {@link serverlessTargetResolved}. */
+export async function dedicatedTargetResolved(
+  tenantId: string,
+  opts?: { landingZoneId?: string },
+): Promise<SynapseTarget> {
+  try {
+    const { resolveSynapseWorkspaceName } = await import('./attached-target-resolver');
+    const ws = await resolveSynapseWorkspaceName(tenantId, opts?.landingZoneId);
+    if (ws) {
+      const pool = required('LOOM_SYNAPSE_DEDICATED_POOL');
+      const suffix = getSynapseSqlSuffix();
+      return { server: `${ws}.${suffix}`, database: pool, cacheKey: `dedicated:${ws}:${pool}` };
+    }
+  } catch { /* fall back to env */ }
+  return dedicatedTarget();
+}
+
 function required(key: string): string {
   const v = process.env[key];
   if (!v) throw new Error(`Missing env var: ${key}`);

@@ -226,6 +226,13 @@ var loomContainers = [
   // hotfix fallback. Only used when the shared substrate is signalled
   // (LOOM_SPARK_POOL_REDIS / LOOM_SPARK_POOL_LEASE_CONTAINER); otherwise idle.
   { name: 'spark-warm-leases',   partitionKey: '/groupKey', ttl: -1 }
+  // Brownfield Landing-Zone Service Registry (Phase 1). One doc per attached
+  // existing Azure service (Synapse / ADX / ADLS / …) bound to a landing zone
+  // (or the hub), PK /tenantId so the per-tenant "what belongs to Loom" list +
+  // every per-LZ services read hit a single physical partition. The convergence
+  // point for BOTH day-0 BYO (EXISTING_* seed) and the day-2 attach wizard.
+  // createIfNotExists in cosmos-client.ts ensure() remains the hotfix fallback.
+  { name: 'attached-services',   partitionKey: '/tenantId' }
 ]
 
 resource loomDb 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases@2024-12-01-preview' = {

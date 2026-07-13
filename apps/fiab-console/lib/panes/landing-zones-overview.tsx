@@ -38,6 +38,7 @@ import {
   GaugeRegular, Add16Regular, Wrench16Regular, Building24Regular,
 } from '@fluentui/react-icons';
 import { LandingZonesCanvas } from './landing-zones-canvas';
+import { AttachedServicesSection } from '@/lib/components/landing-zones/attached-services-section';
 import type { LandingZone, HubCoords, DlzAttachState } from '@/lib/setup/landing-zones-model';
 
 interface Overview {
@@ -251,6 +252,13 @@ export function LandingZonesOverviewPane({ onAttach }: { onAttach?: () => void }
         )}
       </div>
 
+      {/* Hub-scoped attached services (admin-plane brownfield services attach to
+          the hub, not a DLZ — §2.1 / open-question #2). Day-0 BYO reused
+          services also surface here via the seed reconcile. */}
+      <div className={styles.card}>
+        <AttachedServicesSection landingZoneId="hub" landingZoneLabel="Hub (admin plane)" />
+      </div>
+
       {/* Detail / repair drawer */}
       <OverlayDrawer position="end" open={selected != null} onOpenChange={(_, d) => { if (!d.open) { setSelected(null); setGrant(null); } }} size="medium">
         <DrawerHeader>
@@ -270,6 +278,11 @@ export function LandingZonesOverviewPane({ onAttach }: { onAttach?: () => void }
                 <Button as="a" href="/admin/scaling" size="small" icon={<GaugeRegular />}>Scale this DLZ’s compute</Button>
                 {onAttach && <Button size="small" icon={<Add16Regular />} onClick={() => { setSelected(null); onAttach(); }}>Deploy more resources</Button>}
               </div>
+
+              {/* Attach + manage EXISTING brownfield services for this DLZ. */}
+              <Divider style={{ margin: '12px 0' }} />
+              <AttachedServicesSection landingZoneId={selected.id} landingZoneLabel={selected.domainName} />
+              <Divider style={{ margin: '12px 0' }} />
               {selected.attachState === 'detached' && (
                 <MessageBar intent="warning">
                   <MessageBarBody>

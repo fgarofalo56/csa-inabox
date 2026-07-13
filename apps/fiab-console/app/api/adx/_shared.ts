@@ -16,7 +16,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import {
-  kustoConfigGate, loadKustoItem, resolveDatabase, defaultDatabase, KustoError,
+  kustoConfigGate, loadKustoItem, resolveDatabase, defaultDatabase, resolvedClusterUri, KustoError,
 } from '@/lib/azure/kusto-client';
 
 export interface AdxRouteContext {
@@ -26,6 +26,13 @@ export interface AdxRouteContext {
   oid: string;
   /** The bound kql-database item id, if any. */
   itemId: string | null;
+  /**
+   * Registry-first ADX cluster URI (brownfield §2.5): an attached existing ADX
+   * cluster's URI when one is bound to the tenant, else the env-pinned default.
+   * Routes pass this into kusto calls via `opts.clusterUri` so the navigator
+   * targets the attached cluster.
+   */
+  clusterUri: string;
 }
 
 /** Result of {@link guardAdxRequest}: either a ready context or a NextResponse to return. */
@@ -71,7 +78,13 @@ export async function guardAdxRequest(req: NextRequest): Promise<AdxGuardResult>
     }
   }
 
-  return { ctx: { database, oid: session.claims.oid, itemId } };
+  // Registry-first cluster resolution (brownfield §2.5) — an attached existing
+  // ADX cluster wins over the env default; resolvedClusterUri falls back to the
+  // env-bound cluster (and swallows any registry blip) so the navigator never
+  // breaks. Tenant PK = claims.tid ?? oid.
+  const clusterUri = await resolvedClusterUri(session.claims.tid || session.claims.oid);
+
+  return { ctx: { database, oid: session.claims.oid, itemId, clusterUri } };
 }
 
 /** Map a thrown error to the right status code + JSON envelope. */

@@ -259,6 +259,15 @@ let _perfBenchmarks: Container | null = null;
 // replica-local). TTL-enabled (each doc carries its own `ttl`) so a crashed
 // replica's leases self-evict instead of pinning a session forever.
 let _sparkWarmLeases: Container | null = null;
+// Brownfield Landing-Zone Service Registry (Phase 1). One doc per attached
+// existing Azure service (Synapse / ADX / ADLS / …) bound to a landing zone (or
+// the hub). PK /tenantId so the per-tenant "what belongs to Loom" enumeration +
+// every per-LZ services read hit a single physical partition. The convergence
+// point both day-0 BYO (EXISTING_* seed) and the day-2 attach wizard write into,
+// and every consumer (navigators, governance, chargeback) reads. Created lazily
+// (createIfNotExists) here AND ARM-provisioned in cosmos.bicep's loomContainers —
+// the lazy call is the hotfix fallback.
+let _attachedServices: Container | null = null;
 // Sign-in-boundary onboarding requests (front-door "Request access"). One doc
 // per unauthenticated submission, PK /tenantId (the deployment tenant bucket)
 // so the admin queue reads a single physical partition. Distinct from the two
@@ -878,6 +887,11 @@ async function ensure() {
     defaultTtl: -1, // TTL enabled; each lease doc carries its own `ttl`
   });
   _sparkWarmLeases = swl;
+  // Brownfield Landing-Zone Service Registry (Phase 1) — PK /tenantId so the
+  // per-tenant registry enumeration + every per-LZ services read hit a single
+  // physical partition. ARM-provisioned in cosmos.bicep's loomContainers; this
+  // createIfNotExists is the hotfix fallback.
+  _attachedServices = await mk('attached-services', '/tenantId');
   // Sign-in-boundary onboarding requests — PK /tenantId (deployment bucket).
   // Created lazily so a fresh environment needs no extra ARM/Bicep step.
   _signinAccessRequests = await mk('signin-access-requests', '/tenantId');
@@ -889,6 +903,8 @@ export async function workspaceAgentConfigContainer(): Promise<Container> { awai
 export async function mcpServersContainer(): Promise<Container> { await ensure(); return _mcpServers!; }
 export async function threadEdgesContainer(): Promise<Container> { await ensure(); return _threadEdges!; }
 export async function connectionsContainer(): Promise<Container> { await ensure(); return _connections!; }
+/** Brownfield Landing-Zone Service Registry (Phase 1) — PK /tenantId. */
+export async function attachedServicesContainer(): Promise<Container> { await ensure(); return _attachedServices!; }
 export async function maintenanceJobsContainer(): Promise<Container> { await ensure(); return _maintenanceJobs!; }
 export async function dataproductJobsContainer(): Promise<Container> { await ensure(); return _dataproductJobs!; }
 export async function appInstallJobsContainer(): Promise<Container> { await ensure(); return _appInstallJobs!; }

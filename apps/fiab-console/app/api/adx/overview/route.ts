@@ -24,9 +24,12 @@ export async function GET(req: NextRequest) {
   try {
     // These are best-effort: a freshly-created DB may have neither. Don't fail
     // the whole overview if continuous-exports isn't permitted for the caller.
+    // Pass the registry-first cluster URI (brownfield §2.5) so an attached
+    // existing ADX cluster is targeted; falls back to the env cluster otherwise.
+    const clusterOpts = { clusterUri: g.ctx.clusterUri };
     const [schema, continuousExports] = await Promise.all([
-      getDatabaseSchemaJson(g.ctx.database).catch(() => null),
-      listContinuousExports(g.ctx.database).catch(() => []),
+      getDatabaseSchemaJson(g.ctx.database, clusterOpts).catch(() => null),
+      listContinuousExports(g.ctx.database, clusterOpts).catch(() => []),
     ]);
     return NextResponse.json({ ok: true, database: g.ctx.database, schema, continuousExports });
   } catch (e: any) {
