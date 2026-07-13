@@ -53,6 +53,10 @@ const useStyles = makeStyles({
     padding: tokens.spacingVerticalM,
     borderRadius: tokens.borderRadiusXLarge,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
+    // This is a <button>: its UA-default text color is `buttontext` (black),
+    // which is unreadable on the dark surface. Pin a themed foreground so the
+    // tile name is readable in DARK theme (web3-ui.md).
+    color: tokens.colorNeutralForeground1,
     backgroundColor: tokens.colorNeutralBackground1,
     boxShadow: tokens.shadow2, cursor: 'pointer', textAlign: 'left',
     transitionDuration: tokens.durationFaster,
@@ -69,7 +73,7 @@ const useStyles = makeStyles({
     display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
     borderRadius: tokens.borderRadiusLarge,
   },
-  name: { fontWeight: tokens.fontWeightSemibold, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+  name: { fontWeight: tokens.fontWeightSemibold, color: tokens.colorNeutralForeground1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
   desc: {
     color: tokens.colorNeutralForeground3, fontSize: '12px',
     display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical',

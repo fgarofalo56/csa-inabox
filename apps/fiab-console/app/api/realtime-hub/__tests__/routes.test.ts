@@ -162,6 +162,23 @@ describe('GET /api/realtime-hub/streams', () => {
     // non-stream item types are excluded
     expect(j.streams.find((s: any) => s.name === 'ignored')).toBeFalsy();
   });
+
+  it('default-path failure is a generic server error — NEVER a Fabric authorization gate (no-fabric-dependency.md)', async () => {
+    (getSession as any).mockReturnValue(AUTH);
+    // Simulate a slow / failing Cosmos aggregation on the Azure-native default.
+    (listAllOwnedItems as any).mockRejectedValue(new Error('cosmos read failed'));
+    (listOwnedWorkspaces as any).mockResolvedValue([]);
+    const res = await STREAMS();
+    expect(res.status).toBe(500);
+    const j = await res.json();
+    // The default backend never talks to Fabric, so an error must not claim a
+    // Fabric authorization / "Service principals can use Fabric APIs" gate.
+    const blob = JSON.stringify(j).toLowerCase();
+    expect(blob).not.toContain('fabric');
+    expect(blob).not.toContain('service principals');
+    // And the default path never reaches the Fabric client.
+    expect(listFabricWorkspaces).not.toHaveBeenCalled();
+  });
 });
 
 // ---------------- connect-source (Azure-native default) ----------------

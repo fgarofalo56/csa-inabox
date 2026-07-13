@@ -1,6 +1,6 @@
 'use client';
 
-import { clientFetch } from '@/lib/client-fetch';
+import { clientFetch, CROSS_SUB_FETCH_TIMEOUT_MS } from '@/lib/client-fetch';
 /**
  * RealTimeHubView — Fabric Real-Time Hub parity surface.
  *
@@ -35,6 +35,7 @@ import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import {
   Spinner, Badge, Button, Link as FluentLink, MessageBar, MessageBarBody, MessageBarTitle,
+  MessageBarActions,
   Menu, MenuTrigger, MenuPopover, MenuList, MenuItem,
   Caption1, Input, makeStyles, tokens,
 } from '@fluentui/react-components';
@@ -79,6 +80,9 @@ const useStyles = makeStyles({
     display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM,
     padding: tokens.spacingVerticalM, borderRadius: tokens.borderRadiusXLarge,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
+    // Explicit themed foreground so no descendant text falls back to the UA
+    // default (black) and stays readable in DARK theme (web3-ui.md).
+    color: tokens.colorNeutralForeground1,
     backgroundColor: tokens.colorNeutralBackground1, boxShadow: tokens.shadow2,
     transitionProperty: 'box-shadow, transform',
     transitionDuration: tokens.durationNormal,
@@ -116,7 +120,13 @@ const useStyles = makeStyles({
     display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
     borderRadius: tokens.borderRadiusMedium,
   },
-  dataName: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: tokens.fontWeightSemibold },
+  dataName: {
+    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+    fontWeight: tokens.fontWeightSemibold,
+    // Themed foreground (never UA-default black) so the stream name is readable
+    // in DARK theme regardless of the surrounding cell (web3-ui.md).
+    color: tokens.colorNeutralForeground1,
+  },
   loadingWrap: {
     display: 'flex', alignItems: 'center', justifyContent: 'center',
     padding: tokens.spacingVerticalXXXL,
@@ -191,11 +201,19 @@ export function RealTimeHubView() {
 
   function load() {
     setData(null); setLoadErr(null);
-    clientFetch('/api/realtime-hub/streams').then(async (r) => {
+    // The Azure-native default backend aggregates the caller's Loom items +
+    // workspaces from Cosmos (a full-container read + per-workspace access
+    // resolution). On a large tenant that can legitimately exceed the 6s
+    // default clientFetch ceiling, which previously surfaced the misleading
+    // "took longer than 6s and timed out … heavier across multiple
+    // subscriptions" error. Give this catalog read a generous budget so it
+    // completes on a cold Cosmos call instead of failing fast. (This surface
+    // is not a bare spinner-gated hop — it shows a skeleton table meanwhile.)
+    clientFetch('/api/realtime-hub/streams', undefined, CROSS_SUB_FETCH_TIMEOUT_MS).then(async (r) => {
       if (r.status === 401 || r.status === 403) {
         const j = await r.json().catch(() => ({}));
         if (r.status === 401 && !j?.hint) { setUnauth(true); setData({ ok: false, streams: [] }); return; }
-        setLoadErr({ error: j.error || 'Not authorized for Fabric.', hint: j.hint });
+        setLoadErr({ error: j.error || 'Could not load data streams.', hint: j.hint });
         setData({ ok: false, streams: [] });
         return;
       }
@@ -391,17 +409,24 @@ export function RealTimeHubView() {
         </MessageBarBody>
       </MessageBar>
 
+      {/* Backend-agnostic error surface. The DEFAULT backend is Azure-native
+          (Loom eventstream + KQL items from Cosmos) — it NEVER calls Fabric and
+          NEVER requires Fabric authorization, so this must NOT claim "Not
+          authorized for Fabric" (no-fabric-dependency.md). We show the honest
+          server error + any server-supplied hint (the Fabric OPT-IN backend,
+          LOOM_EVENTSTREAM_BACKEND=fabric, still returns its own Fabric
+          remediation as `hint`, which renders here when that path is active)
+          and a Retry — the hub UI still renders below regardless. */}
       {loadErr && (
         <MessageBar intent="error" className={styles.msgBar}>
           <MessageBarBody>
-            <MessageBarTitle>Not authorized for Fabric</MessageBarTitle>
+            <MessageBarTitle>Couldn&apos;t load data streams</MessageBarTitle>
             {loadErr.error}
             {loadErr.hint ? <><br />{loadErr.hint}</> : null}
-            <br />
-            Requirement: a Fabric admin must enable <b>“Service principals can use Fabric APIs”</b> and add the Console
-            UAMI (<code>LOOM_UAMI_CLIENT_ID</code>) as Member/Contributor on the workspaces. The hub UI still renders so
-            you can connect sources once authorized.
           </MessageBarBody>
+          <MessageBarActions>
+            <Button appearance="transparent" size="small" icon={<ArrowSync20Regular />} onClick={load}>Retry</Button>
+          </MessageBarActions>
         </MessageBar>
       )}
 
