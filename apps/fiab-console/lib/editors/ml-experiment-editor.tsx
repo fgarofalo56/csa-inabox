@@ -431,7 +431,7 @@ export function MlExperimentEditor({ item, id }: { item: FabricItemType; id: str
         studioUrl="https://ml.azure.com/experiments"
         studioLabel="Open Azure ML Studio"
         intro="MLflow experiments group runs logged from notebooks, jobs, or any MLflow client against the Azure Machine Learning tracking server. Select an experiment and Open it to browse its runs, metric step charts, params, tags, artifacts, and compare runs side by side."
-        gateHint="No experiments found — log a run with mlflow.start_run() against this workspace. If this errors, set LOOM_MLFLOW_TRACKING_URI (required in IL5 / GCC-High) or LOOM_AML_WORKSPACE + LOOM_AML_REGION + LOOM_SUBSCRIPTION_ID, then grant the Console UAMI the AzureML Data Scientist role."
+        gateHint="No experiments logged yet — log a run with mlflow.start_run() against the Azure ML or Databricks tracking server and it will appear here. The tracking backend is resolved automatically (Azure ML MLflow preferred, Databricks-hosted MLflow as fallback); no configuration is required when either is deployed."
         mapEntity={(e: MlflowExperimentLite) => ({
           id: e.name,
           name: e.name,
