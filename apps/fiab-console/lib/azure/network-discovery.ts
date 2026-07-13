@@ -155,6 +155,62 @@ async function targetSubscriptionIds(): Promise<string[]> {
   return subs.map((s) => s.subscriptionId).filter(Boolean);
 }
 
+/**
+ * Per-subscription work-item budget (ms). A single slow / inaccessible / paging-
+ * heavy subscription must NOT be able to serialize or stall the whole cross-sub
+ * fan-out (the failure behind the 6s "Couldn't read private endpoints" timeout).
+ * Sits on TOP of the per-request `fetchWithTimeout` ceiling — that bounds one HTTP
+ * round-trip; this bounds a sub's whole (possibly multi-page) scan. Overridable
+ * with `LOOM_NETWORK_PER_SUB_TIMEOUT_MS`.
+ */
+const PER_SUB_TIMEOUT_MS: number = (() => {
+  const n = Number(process.env.LOOM_NETWORK_PER_SUB_TIMEOUT_MS);
+  return Number.isFinite(n) && n > 0 ? n : 12_000;
+})();
+
+/** A subscription whose per-sub scan failed or timed out — collected so the BFF
+ *  can surface an honest "partial results" note instead of a whole-query error. */
+export interface FailedSub { subscriptionId: string; reason: string }
+
+/** Reject if `p` doesn't settle within `ms` (per-sub backstop). A late settle of
+ *  the underlying promise is harmless — its handler is already attached, so no
+ *  unhandled rejection. */
+function withDeadline<T>(p: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error(`subscription scan exceeded ${ms}ms`)), ms);
+    p.then(
+      (v) => { clearTimeout(t); resolve(v); },
+      (e) => { clearTimeout(t); reject(e); },
+    );
+  });
+}
+
+/**
+ * Run `fn` for EVERY subscription IN PARALLEL (was a sequential `for…of`), each
+ * bounded by {@link PER_SUB_TIMEOUT_MS}. A per-sub failure/timeout is recorded in
+ * `failed` (never thrown) so one bad subscription degrades to a PARTIAL result
+ * instead of blanking or hanging the whole query. Results are flattened in
+ * subscription order. This is the core fix for the multi-sub 6s cliff: N slow
+ * subs now cost ~max(one sub) instead of sum(all subs).
+ */
+async function perSub<T>(
+  subs: string[],
+  fn: (sub: string) => Promise<T[]>,
+  failed?: FailedSub[],
+): Promise<T[]> {
+  const settled = await Promise.all(
+    subs.map(async (sub) => {
+      try {
+        return await withDeadline(fn(sub), PER_SUB_TIMEOUT_MS);
+      } catch (e) {
+        failed?.push({ subscriptionId: sub, reason: e instanceof Error ? e.message : String(e) });
+        return [] as T[];
+      }
+    }),
+  );
+  return settled.flat();
+}
+
 /** Derive the `privatelink.*` zone for a public FQDN by prefixing `privatelink.`
  * after the leading resource-name label (the documented mapping for most
  * services: `<name>.sql.azuresynapse.net` → `privatelink.sql.azuresynapse.net`). */
@@ -216,23 +272,89 @@ async function nicPrivateIps(nicId: string): Promise<string[]> {
 }
 
 /**
+ * FAST PATH — every private endpoint across ALL readable subscriptions in a
+ * SINGLE Azure Resource Graph query (one round-trip) instead of a per-sub ARM
+ * list fan-out. ARG returns the full `properties` bag for each PE, so `shape()`
+ * maps an ARG row 1:1 (customDnsConfigs, privateLinkServiceConnections, subnet,
+ * networkInterfaces are all present). This is the same ARG-first pattern the
+ * /api/azure/connectables route uses. Throws {@link NetworkDiscoveryError} on a
+ * non-OK ARG response so the caller can fall back to the parallel per-sub list.
+ *
+ * ARG spans every subscription the token can read by default; only when a single
+ * subscription is pinned (LOOM_SUBSCRIPTION_ID) do we scope it explicitly.
+ */
+async function listPrivateEndpointsViaArg(subs: string[]): Promise<PrivateEndpointInfo[]> {
+  const query = [
+    'resources',
+    "| where type =~ 'microsoft.network/privateEndpoints'",
+    '| project id, name, location, resourceGroup, subscriptionId, properties',
+  ].join('\n');
+  const out: PrivateEndpointInfo[] = [];
+  let skipToken: string | undefined;
+  let guard = 0;
+  do {
+    guard += 1;
+    const options: Record<string, unknown> = { resultFormat: 'objectArray', $top: 1000 };
+    if (subs.length === 1) options.subscriptions = subs;
+    if (skipToken) options.$skipToken = skipToken;
+    const token = await armToken();
+    const res = await fetchWithTimeout(
+      `${armBase()}/providers/Microsoft.ResourceGraph/resources?api-version=${RESOURCE_GRAPH_API}`,
+      {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${token}`,
+          accept: 'application/json',
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ query, options }),
+        cache: 'no-store',
+      },
+    );
+    const text = await res.text();
+    let json: any = null;
+    try { json = text ? JSON.parse(text) : null; } catch { json = null; }
+    if (!res.ok) {
+      const msg = json?.error?.message || json?.message || `ARG private-endpoint query failed ${res.status}`;
+      throw new NetworkDiscoveryError(msg, res.status, json);
+    }
+    const data: any[] = Array.isArray(json?.data) ? json.data : [];
+    for (const row of data) out.push(shape(row, row?.subscriptionId || ''));
+    skipToken = (json?.$skipToken as string) || undefined;
+  } while (skipToken && guard < 20);
+  return out;
+}
+
+/**
  * Every private endpoint the Console identity can read across the target
- * subscription(s). Per-subscription failures are swallowed so one inaccessible
- * sub doesn't blank the list. Throws {@link NetworkDiscoveryError} only when the
- * initial subscription enumeration / token acquisition fails — the BFF turns
+ * subscription(s). Prefers a SINGLE Resource Graph query (fast); on any ARG
+ * failure (no RP, correlationId error) or an empty result, falls back to a
+ * PARALLEL per-subscription ARM list. Per-subscription failures on the fallback
+ * are recorded in `failed` (an honest "partial results" note) rather than
+ * blanking or hanging the list. Throws {@link NetworkDiscoveryError} only when
+ * the initial subscription enumeration / token acquisition fails — the BFF turns
  * that into an honest MessageBar gate naming the Reader role to grant.
  */
-export async function listPrivateEndpoints(): Promise<PrivateEndpointInfo[]> {
+export async function listPrivateEndpoints(failed?: FailedSub[]): Promise<PrivateEndpointInfo[]> {
   const subs = await targetSubscriptionIds();
-  const all: PrivateEndpointInfo[] = [];
-  for (const sub of subs) {
-    let raws: any[] = [];
-    try {
-      raws = await armList<any>(
-        `/subscriptions/${sub}/providers/Microsoft.Network/privateEndpoints?api-version=${PE_API}`,
-      );
-    } catch { continue; }
-    for (const r of raws) all.push(shape(r, sub));
+  let all: PrivateEndpointInfo[] = [];
+  try {
+    all = await listPrivateEndpointsViaArg(subs);
+  } catch {
+    all = [];
+  }
+  if (all.length === 0) {
+    // ARG unreadable or genuinely empty → parallel per-sub ARM list (each bounded).
+    all = await perSub(
+      subs,
+      async (sub) => {
+        const raws = await armList<any>(
+          `/subscriptions/${sub}/providers/Microsoft.Network/privateEndpoints?api-version=${PE_API}`,
+        );
+        return raws.map((r) => shape(r, sub));
+      },
+      failed,
+    );
   }
   // Second pass: for any endpoint whose DNS records have no echoed IP, resolve the
   // NIC private IP and fill it in — so EVERY endpoint contributes a hosts entry.
@@ -414,14 +536,11 @@ export interface VNetInfo {
  * private-only service (Databricks UI, Synapse Studio, storage dfs/blob, KQL,
  * Key Vault, …) — which is what the PE-only scan was missing.
  */
-export async function listPrivateDnsZones(): Promise<PrivateDnsZoneInfo[]> {
+export async function listPrivateDnsZones(failed?: FailedSub[]): Promise<PrivateDnsZoneInfo[]> {
   const subs = await targetSubscriptionIds();
-  const out: PrivateDnsZoneInfo[] = [];
-  for (const sub of subs) {
-    let zones: any[] = [];
-    try {
-      zones = await armList<any>(`/subscriptions/${sub}/providers/Microsoft.Network/privateDnsZones?api-version=${PRIVATE_DNS_API}`);
-    } catch { continue; }
+  const out = await perSub<PrivateDnsZoneInfo>(subs, async (sub) => {
+    const zones = await armList<any>(`/subscriptions/${sub}/providers/Microsoft.Network/privateDnsZones?api-version=${PRIVATE_DNS_API}`);
+    const acc: PrivateDnsZoneInfo[] = [];
     for (const z of zones) {
       const name: string = z?.name || '';
       if (!/privatelink/i.test(name)) continue;
@@ -438,23 +557,20 @@ export async function listPrivateDnsZones(): Promise<PrivateDnsZoneInfo[]> {
           return { fqdn, ips, zone: name };
         }).filter((r: PrivateDnsRecord) => r.ips.length > 0);
       } catch { /* zone records unreadable — skip, keep the zone listed */ }
-      out.push({ name, subscriptionId: sub, resourceGroup: rg, records });
+      acc.push({ name, subscriptionId: sub, resourceGroup: rg, records });
     }
-  }
+    return acc;
+  }, failed);
   out.sort((a, b) => a.name.localeCompare(b.name));
   return out;
 }
 
 /** Every virtual network + its subnets (address space, delegations, PE count). */
-export async function listVirtualNetworks(): Promise<VNetInfo[]> {
+export async function listVirtualNetworks(failed?: FailedSub[]): Promise<VNetInfo[]> {
   const subs = await targetSubscriptionIds();
-  const out: VNetInfo[] = [];
-  for (const sub of subs) {
-    let vnets: any[] = [];
-    try {
-      vnets = await armList<any>(`/subscriptions/${sub}/providers/Microsoft.Network/virtualNetworks?api-version=${VNET_API}`);
-    } catch { continue; }
-    for (const v of vnets) {
+  const out = await perSub<VNetInfo>(subs, async (sub) => {
+    const vnets = await armList<any>(`/subscriptions/${sub}/providers/Microsoft.Network/virtualNetworks?api-version=${VNET_API}`);
+    return vnets.map((v: any) => {
       const rg = /\/resourceGroups\/([^/]+)\//i.exec(v?.id || '')?.[1];
       const subnets: SubnetInfo[] = (v?.properties?.subnets || []).map((s: any) => ({
         id: s?.id,
@@ -464,12 +580,12 @@ export async function listVirtualNetworks(): Promise<VNetInfo[]> {
         delegations: (s?.properties?.delegations || []).map((d: any) => d?.properties?.serviceName).filter(Boolean),
         nsgId: s?.properties?.networkSecurityGroup?.id,
       }));
-      out.push({
+      return {
         id: v?.id || '', name: v?.name || '', subscriptionId: sub, resourceGroup: rg,
         addressPrefixes: v?.properties?.addressSpace?.addressPrefixes || [], subnets,
-      });
-    }
-  }
+      };
+    });
+  }, failed);
   out.sort((a, b) => a.name.localeCompare(b.name));
   return out;
 }
@@ -570,18 +686,14 @@ export function shapeNsg(raw: any, subscriptionId: string): NsgInfo {
  * subscription(s). Per-subscription failures are swallowed so one inaccessible
  * sub doesn't blank the list — the topology degrades gracefully.
  */
-export async function listNetworkSecurityGroups(): Promise<NsgInfo[]> {
+export async function listNetworkSecurityGroups(failed?: FailedSub[]): Promise<NsgInfo[]> {
   const subs = await targetSubscriptionIds();
-  const out: NsgInfo[] = [];
-  for (const sub of subs) {
-    let raws: any[] = [];
-    try {
-      raws = await armList<any>(
-        `/subscriptions/${sub}/providers/Microsoft.Network/networkSecurityGroups?api-version=${NSG_API}`,
-      );
-    } catch { continue; }
-    for (const r of raws) out.push(shapeNsg(r, sub));
-  }
+  const out = await perSub<NsgInfo>(subs, async (sub) => {
+    const raws = await armList<any>(
+      `/subscriptions/${sub}/providers/Microsoft.Network/networkSecurityGroups?api-version=${NSG_API}`,
+    );
+    return raws.map((r) => shapeNsg(r, sub));
+  }, failed);
   out.sort((a, b) => a.name.localeCompare(b.name));
   return out;
 }

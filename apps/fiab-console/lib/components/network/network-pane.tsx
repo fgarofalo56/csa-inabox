@@ -1,6 +1,6 @@
 'use client';
 
-import { clientFetch } from '@/lib/client-fetch';
+import { clientFetch, CROSS_SUB_FETCH_TIMEOUT_MS } from '@/lib/client-fetch';
 /**
  * Network & Private DNS pane — the developer-facing view of CSA Loom's
  * private-endpoint topology. Reads live from ARM (/api/network/private-endpoints)
@@ -59,6 +59,8 @@ interface ApiResp {
   ok: boolean; count?: number; endpoints?: PrivateEndpoint[]; zones?: string[];
   hostsBlock?: string; error?: string; hint?: string;
   vnets?: VNetLite[]; nsgs?: NsgLite[]; dnsZones?: { name: string; records: DnsRecord[] }[];
+  /** Honest partial-results note when some subscriptions timed out / were unreadable. */
+  partial?: string;
 }
 
 const card: React.CSSProperties = {
@@ -490,7 +492,13 @@ export function NetworkPane() {
     let alive = true;
     (async () => {
       try {
-        const r = await clientFetch('/api/network/private-endpoints');
+        // Cross-subscription private-endpoint discovery legitimately takes longer
+        // than the default 6s client budget on a multi-sub tenant (it fans out
+        // Resource Graph / ARM across every readable subscription), so give it the
+        // generous cross-sub ceiling instead — the fix for the "Couldn't read
+        // private endpoints … took longer than 6s" timeout. The route parallelizes
+        // + caches the work, so this ceiling is only ever approached on a cold scan.
+        const r = await clientFetch('/api/network/private-endpoints', undefined, CROSS_SUB_FETCH_TIMEOUT_MS);
         const j = (await r.json()) as ApiResp;
         if (alive) setData(j);
       } catch (e: any) {
@@ -549,6 +557,17 @@ export function NetworkPane() {
           <MessageBarBody>
             <MessageBarTitle>Couldn’t read private endpoints</MessageBarTitle>
             {data.error}{data.hint ? ` — ${data.hint}` : ''}
+          </MessageBarBody>
+        </MessageBar>
+      )}
+
+      {/* Honest partial-results note: some subscriptions timed out / were
+          unreadable, but the ones that responded are shown below. */}
+      {!loading && data?.ok && data.partial && (
+        <MessageBar intent="info" style={{ marginBottom: tokens.spacingVerticalL }}>
+          <MessageBarBody>
+            <MessageBarTitle>Partial results</MessageBarTitle>
+            {data.partial}
           </MessageBarBody>
         </MessageBar>
       )}
