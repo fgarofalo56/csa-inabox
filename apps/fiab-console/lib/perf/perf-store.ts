@@ -13,6 +13,7 @@
  */
 import { perfBenchmarksContainer } from '@/lib/azure/cosmos-client';
 import type { PerfBackend } from '@/lib/perf/perf-metrics';
+import type { MetricConfig } from '@/lib/perf/perf-config';
 
 /** One persisted metric result within a run. `id = ${runId}:${metric}`. */
 export interface PerfBenchmarkDoc {
@@ -143,6 +144,13 @@ export interface TrendModel {
   /** Distinct runs seen (newest first) for the run picker + count. */
   runs: { runId: string; gitSha: string; rev: string; ts: string }[];
   generatedAt: string;
+  /**
+   * Live SERVER-side backend-config status per metric id, resolved from the real
+   * deployment env at request time (not the last run's persisted gate flag). The
+   * card uses this to decide its gate so a configured backend never shows a stale
+   * "…is not set" message after the env var was added. Attached by the GET route.
+   */
+  config?: Record<string, MetricConfig>;
 }
 
 /**

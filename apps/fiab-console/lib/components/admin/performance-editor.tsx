@@ -367,7 +367,7 @@ export function PerformanceEditor() {
         <Section title="Engines">
           <TileGrid minTileWidth={360} className={styles.grid}>
             {engineMetrics.map((m) => (
-              <PerfMetricCard key={m.metric} trend={m} />
+              <PerfMetricCard key={m.metric} trend={m} config={model?.config?.[m.metric]} />
             ))}
           </TileGrid>
         </Section>
@@ -377,7 +377,7 @@ export function PerformanceEditor() {
         <Section title="Page TTI — top surfaces">
           <TileGrid minTileWidth={360} className={styles.grid}>
             {surfaceMetrics.map((m) => (
-              <PerfMetricCard key={m.metric} trend={m} />
+              <PerfMetricCard key={m.metric} trend={m} config={model?.config?.[m.metric]} />
             ))}
           </TileGrid>
         </Section>

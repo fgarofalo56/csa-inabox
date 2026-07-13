@@ -55,6 +55,54 @@ describe('PerfMetricCard', () => {
     expect(screen.getByText('Backend not configured')).toBeInTheDocument();
   });
 
+  it('live config CONFIGURED overrides a stale gated run — no false "not set"', () => {
+    // The live production bug: last run recorded gated=true (env was unset then),
+    // but LOOM_SYNAPSE_WORKSPACE IS set now. The card must NOT claim it is unset.
+    const staleGated = point({ p50: null, p95: null, p99: null, coldMs: null, warmMs: null, gated: true, gateEnv: 'LOOM_SYNAPSE_WORKSPACE' });
+    const trend: MetricTrend = {
+      metric: 'warehouse-query-serverless',
+      backend: 'synapse-serverless',
+      points: [staleGated],
+      latest: staleGated,
+    };
+    wrap(<PerfMetricCard trend={trend} config={{ configured: true }} />);
+    expect(screen.queryByText('Backend not configured')).not.toBeInTheDocument();
+    expect(screen.queryByText(/is not set in this deployment/)).not.toBeInTheDocument();
+    // Instead it prompts a run against the now-configured backend.
+    expect(screen.getByText('Backend configured — not yet measured')).toBeInTheDocument();
+  });
+
+  it('live config NOT configured still shows the honest gate', () => {
+    const gated = point({ p50: null, p95: null, p99: null, coldMs: null, warmMs: null, gated: true });
+    const trend: MetricTrend = {
+      metric: 'warehouse-query-serverless',
+      backend: 'synapse-serverless',
+      points: [gated],
+      latest: gated,
+    };
+    wrap(
+      <PerfMetricCard
+        trend={trend}
+        config={{ configured: false, gateEnv: 'LOOM_SYNAPSE_WORKSPACE', gateMessage: 'Set it.' }}
+      />,
+    );
+    expect(screen.getByText('Backend not configured')).toBeInTheDocument();
+    expect(screen.getByText(/LOOM_SYNAPSE_WORKSPACE is not set/)).toBeInTheDocument();
+  });
+
+  it('configured with real numbers renders stats (not a prompt)', () => {
+    const good = point({ p50: 120 });
+    const trend: MetricTrend = {
+      metric: 'warehouse-query-serverless',
+      backend: 'synapse-serverless',
+      points: [good],
+      latest: good,
+    };
+    wrap(<PerfMetricCard trend={trend} config={{ configured: true }} />);
+    expect(screen.queryByText('Backend configured — not yet measured')).not.toBeInTheDocument();
+    expect(screen.getByText('120 ms')).toBeInTheDocument();
+  });
+
   it('flags a p95 over the Fabric bar', () => {
     const over = point({ p50: 6000, p95: 9000, p99: 12000 });
     const trend: MetricTrend = {
