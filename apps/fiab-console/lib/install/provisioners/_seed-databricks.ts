@@ -27,11 +27,12 @@ import {
   importNotebook,
   runNotebook,
   getJobRun,
-  listClusters,
-  isAllPurposeCluster,
   type JobRun,
-  type Cluster,
 } from '@/lib/azure/databricks-client';
+import {
+  ensureRunnableCluster,
+  type ClusterResolution as SharedClusterResolution,
+} from '@/lib/azure/databricks-default-cluster';
 
 // ── Notebook source conversion ──────────────────────────────────────────────
 
@@ -71,58 +72,22 @@ export function buildDatabricksSource(content: any): string {
 
 // ── Cluster resolution ──────────────────────────────────────────────────────
 
-export interface ClusterResolution {
-  clusterId?: string;
-  /** Set when no runnable cluster exists; carries the precise remediation. */
-  gate?: { reason: string; remediation: string };
-}
+export type ClusterResolution = SharedClusterResolution;
 
 /**
- * Resolve a cluster to run the notebook on. Preference order:
- *   1. LOOM_DATABRICKS_CLUSTER_ID (explicit, fastest)
- *   2. The first RUNNING all-purpose cluster the UAMI can see.
- *   3. The first non-terminated cluster (it will be auto-started by the run).
- * Returns an honest gate when the workspace exposes no usable cluster.
+ * Resolve a cluster to run the notebook on. Delegates to the shared
+ * `ensureRunnableCluster` (lib/azure/databricks-default-cluster) so the install
+ * path is self-healing: it reuses a RUNNING/startable all-purpose cluster and,
+ * when the workspace has NONE (Databricks auto-terminates + eventually removes
+ * idle clusters), AUTO-CREATES a stable `loom-notebook-default` cluster instead
+ * of gating. A gate now only surfaces when Databricks genuinely can't be used
+ * (workspace not configured, or the UAMI lacks list/create RBAC).
+ *
+ * autoStart is left false here: the install path submits via jobs/runs/submit,
+ * which auto-starts the supplied existing_cluster_id — no separate start needed.
  */
 export async function resolveRunCluster(): Promise<ClusterResolution> {
-  const explicit = process.env.LOOM_DATABRICKS_CLUSTER_ID;
-  if (explicit) return { clusterId: explicit };
-
-  let clusters: Cluster[] = [];
-  try {
-    clusters = await listClusters();
-  } catch (e: any) {
-    return {
-      gate: {
-        reason: `Could not list Databricks clusters: ${e?.message || String(e)}`,
-        remediation:
-          'Grant the Console UAMI workspace access on the Databricks workspace, or set ' +
-          'LOOM_DATABRICKS_CLUSTER_ID to a specific cluster id the UAMI can run.',
-      },
-    };
-  }
-  // ONLY all-purpose (interactive) clusters are accepted by runs/submit
-  // existing_cluster_id. clusters/list also returns recently-run JOB clusters,
-  // and picking a RUNNING job cluster here was the root cause of
-  // "INVALID_PARAMETER_VALUE … is not an all-purpose cluster" (ml-pipeline,
-  // healthcare-popmgt, direct-lake-replacement). Filter them out.
-  const allPurpose = clusters.filter(isAllPurposeCluster);
-  const running = allPurpose.find((c) => c.state === 'RUNNING');
-  if (running) return { clusterId: running.cluster_id };
-  const startable = allPurpose.find(
-    (c) => c.state && !['TERMINATED', 'TERMINATING', 'ERROR'].includes(c.state),
-  ) || allPurpose.find((c) => c.state === 'TERMINATED');
-  if (startable) return { clusterId: startable.cluster_id };
-
-  return {
-    gate: {
-      reason: 'No Databricks cluster is available to run the notebook.',
-      remediation:
-        'Create an all-purpose cluster in the Databricks workspace (or set ' +
-        'LOOM_DATABRICKS_CLUSTER_ID), then re-run install so the Silver/Gold ' +
-        'notebooks execute and produce the live Delta data.',
-    },
-  };
+  return ensureRunnableCluster();
 }
 
 // ── Notebook import + run + poll ────────────────────────────────────────────

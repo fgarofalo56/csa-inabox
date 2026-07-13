@@ -1057,7 +1057,16 @@ export function isAllPurposeCluster(c: Cluster): boolean {
 export interface ClusterSpec {
   cluster_name: string;
   spark_version: string;
-  node_type_id: string;
+  /** Worker/driver VM size. REQUIRED for a standalone cluster; OMIT when
+   *  `instance_pool_id` is set — an instance-pool-backed cluster inherits its
+   *  node type from the pool and Databricks rejects a cluster that sets both. */
+  node_type_id?: string;
+  /** Attach to an instance pool for fast (pre-warmed) start. When set, do NOT
+   *  set `node_type_id` (pool provides it) and avoid custom_tags that collide
+   *  with the pool's inherited default tags. */
+  instance_pool_id?: string;
+  /** Separate pool for the driver node (optional; defaults to instance_pool_id). */
+  driver_instance_pool_id?: string;
   num_workers?: number;
   autoscale?: { min_workers: number; max_workers: number };
   autotermination_minutes?: number;
