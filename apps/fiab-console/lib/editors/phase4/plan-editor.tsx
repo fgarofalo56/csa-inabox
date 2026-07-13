@@ -377,7 +377,7 @@ function PlanApprovalPanel({
 // ===================================================================
 // audit-T64 — Plan (preview) EPM/CPM surface
 //
-// Azure-native parity of Microsoft Fabric's **Plan (preview)** Fabric IQ item:
+// Azure-native parity of Microsoft Fabric's **Plan (preview)** Loom IQ item:
 // budgets, forecasts, scenario modeling, variance — over a bound semantic model
 // (for actuals) and an opt-in Azure SQL backing store (for governed writeback).
 // NO Microsoft Fabric dependency: planning cells persist to Cosmos by default
@@ -1741,7 +1741,7 @@ function PlanInfoBridgePanel({
 // ===================================================================
 // EPM core UI — guided Formula builder + Model (cube) tab.
 //
-// Parity with Microsoft Fabric IQ Plan's user formulas + multidimensional cube
+// Parity with Microsoft Loom IQ Plan's user formulas + multidimensional cube
 // (Anaplan-style). The Formula builder is fully GUIDED (function palette + row
 // picker + operator buttons + number field) — there is NO freeform expression
 // box (.claude/rules loom_no_freeform_config). The Model tab defines dimensions

@@ -1,15 +1,15 @@
 import type { FabricItemType } from './types';
 
 /**
- * Fabric IQ — item-type catalog slice.
+ * Loom IQ — item-type catalog slice.
  *
  * Split out of lib/catalog/fabric-item-types.ts (barrel-preserving refactor):
  * the item literals are VERBATIM; grouping is by the item's `category` field.
  * Recomposed into FABRIC_ITEM_TYPES (in category-appearance order) by the barrel.
  */
 export const fabricIqItems: FabricItemType[] = [
-  // Fabric IQ (preview)
-  { slug: 'ontology', displayName: 'Ontology', restType: 'Ontology', category: 'Fabric IQ', preview: true,
+  // Loom IQ (preview)
+  { slug: 'ontology', displayName: 'Ontology', restType: 'Ontology', category: 'Loom IQ', preview: true,
     description: 'Define business entities, relationships, and condition-action rules.',
     learnContent: {
       "overview": "An Ontology defines business object types, link types, actions, and interfaces over your data (preview). In Loom it is a typed modeling surface — structured forms, no freeform JSON — whose instances live in a real graph backend, and whose object types can be backed by a Lakehouse / Warehouse datasource with per-property column mapping.",
@@ -33,7 +33,7 @@ export const fabricIqItems: FabricItemType[] = [
       ],
       "docsUrl": "https://learn.microsoft.com/fabric/fundamentals/fabric-iq"
     } },
-  { slug: 'graph-model', displayName: 'Graph model', restType: 'GraphModel', category: 'Fabric IQ', preview: true,
+  { slug: 'graph-model', displayName: 'Graph model', restType: 'GraphModel', category: 'Loom IQ', preview: true,
     description: 'Native graph storage + GQL queries for connected data.',
     learnContent: {
       "overview": "A Graph model is the schema definition for a property graph — node labels, edge types, allowed properties, indexes (preview). In Loom you author it on an interactive schema canvas and query it with GQL/openCypher translated to the ADX graph engine (make-graph / graph-match) — Cosmos Gremlin and GQL backends are also supported. No Microsoft Fabric required.",
@@ -57,10 +57,10 @@ export const fabricIqItems: FabricItemType[] = [
       ],
       "docsUrl": "https://learn.microsoft.com/fabric/fundamentals/fabric-iq"
     } },
-  { slug: 'plan', displayName: 'Plan', restType: 'Plan', category: 'Fabric IQ', preview: true,
+  { slug: 'plan', displayName: 'Plan', restType: 'Plan', category: 'Loom IQ', preview: true,
     description: 'Collaborative planning sheets with writeback and approvals.',
     learnContent: {
-      "overview": "A Plan (preview) is the Fabric IQ EPM/CPM item: build budgets and forecasts across periods, branch what-if scenarios, and compare plan vs actuals. In Loom it is Azure-native — planning cells persist to Cosmos and write back to an Azure SQL database; actuals come from a bound semantic model. No Microsoft Fabric capacity required.",
+      "overview": "A Plan (preview) is the Loom IQ EPM/CPM item: build budgets and forecasts across periods, branch what-if scenarios, and compare plan vs actuals. In Loom it is Azure-native — planning cells persist to Cosmos and write back to an Azure SQL database; actuals come from a bound semantic model. No Microsoft Fabric capacity required.",
       "steps": [
         {
           "title": "Add line items and periods",
@@ -93,7 +93,7 @@ export const fabricIqItems: FabricItemType[] = [
       ],
       "docsUrl": "https://learn.microsoft.com/fabric/iq/plan/overview"
     } },
-  { slug: 'map', displayName: 'Map', restType: 'Map', category: 'Fabric IQ', preview: true,
+  { slug: 'map', displayName: 'Map', restType: 'Map', category: 'Loom IQ', preview: true,
     description: 'Geospatial visualization layered over Lakehouse, KQL, and Ontology data.',
     learnContent: {
       "overview": "A Map is a geospatial visualization layered over Lakehouse, KQL, and Ontology data. In Loom the map binds to a live Azure-native source — a Synapse Serverless table (Lakehouse), an Azure Data Explorer KQL query, or a Weave Ontology entity — and renders point, heatmap, cluster, and choropleth layers over the returned geo rows. No Power BI / Fabric required; the vector overlay renders offline and an optional Azure Maps raster basemap layers behind it.",
@@ -125,7 +125,7 @@ export const fabricIqItems: FabricItemType[] = [
       ],
       "docsUrl": "https://learn.microsoft.com/fabric/fundamentals/fabric-iq"
     } },
-  { slug: 'data-agent', displayName: 'Data agent', restType: 'DataAgent', category: 'Fabric IQ',
+  { slug: 'data-agent', displayName: 'Data agent', restType: 'DataAgent', category: 'Loom IQ',
     description: 'Conversational Q&A grounded in your data sources and semantic model.',
     learnContent: {
       "overview": "A Data agent is conversational Q&A grounded in your data sources — warehouse, lakehouse, KQL, AI Search, graph, and semantic models. In Loom the Build tab binds up to 5 sources, each scoped with a real schema tree; Test chat, Evaluate, Publish, Consume, and Monitoring round out the lifecycle. Azure-native — no Microsoft Fabric required.",
@@ -153,7 +153,7 @@ export const fabricIqItems: FabricItemType[] = [
       ],
       "docsUrl": "https://learn.microsoft.com/fabric/fundamentals/fabric-iq"
     } },
-  { slug: 'operations-agent', displayName: 'Operations agent', restType: 'OperationsAgent', category: 'Fabric IQ', preview: true, hiddenFromGallery: true,
+  { slug: 'operations-agent', displayName: 'Operations agent', restType: 'OperationsAgent', category: 'Loom IQ', preview: true, hiddenFromGallery: true,
     description: 'Monitor real-time data and recommend actions via Activator + Power Automate.',
     learnContent: {
       "overview": "An Operations agent is an AI agent that watches your real-time operational data and proposes actions (preview). In Loom it is Azure-native: the agent's instructions, model, and tools are configured in the editor, it grounds on a bound Eventhouse (Azure Data Explorer) and Ontology, runs live test questions with tool traces, evaluates time / data-change triggers as real Azure Monitor rules, and drafts human-in-the-loop remediation proposals. Deploy to Foundry optionally publishes the agent to the Azure AI Foundry Agent Service — no Microsoft Fabric required.",
@@ -207,7 +207,7 @@ export const fabricIqItems: FabricItemType[] = [
       ],
       "docsUrl": "https://learn.microsoft.com/azure/static-web-apps/overview"
     } },
-  { slug: 'ontology-sdk', displayName: 'Ontology SDK', restType: 'OntologySdk', category: 'Fabric IQ', preview: true,
+  { slug: 'ontology-sdk', displayName: 'Ontology SDK', restType: 'OntologySdk', category: 'Loom IQ', preview: true,
     description: 'Typed TypeScript / Python SDK + REST Data API generated over an Ontology’s object, link, and action types.',
     learnContent: {
       "overview": "Palantir's OSDK (Ontology SDK) generates a typed client over ontology objects, links, and actions. The CSA Loom equivalent points Microsoft Data API Builder (DAB) at an ontology's bound data source and generates a typed TS/Python client from the ontology's parsed entity types. Azure-native: DAB runs on Azure Container Apps and the REST/GraphQL endpoint publishes through APIM — no Fabric workspace required.",
@@ -220,7 +220,7 @@ export const fabricIqItems: FabricItemType[] = [
       ],
       "docsUrl": "https://learn.microsoft.com/azure/data-api-builder/overview"
     } },
-  { slug: 'release-environment', displayName: 'Release environment', restType: 'ReleaseEnvironment', category: 'Fabric IQ', preview: true,
+  { slug: 'release-environment', displayName: 'Release environment', restType: 'ReleaseEnvironment', category: 'Loom IQ', preview: true,
     description: 'Promotion / release orchestration across workspaces — Azure Deployment Environments + ARM deployment history.',
     learnContent: {
       "overview": "Palantir Apollo orchestrates promotion of artifacts across environments. The CSA Loom equivalent (Shuttle) models dev → test → prod stages over Loom workspaces, surfaces real Azure Resource Manager deployment history, and — when a DevCenter project is configured — provisions catalog-driven Azure Deployment Environments. Azure-native: it builds on the existing deployment-pipelines ARM + git backend; no Fabric required.",
@@ -232,7 +232,7 @@ export const fabricIqItems: FabricItemType[] = [
       ],
       "docsUrl": "https://learn.microsoft.com/azure/deployment-environments/overview-what-is-azure-deployment-environments"
     } },
-  { slug: 'health-check', displayName: 'Health check', restType: 'HealthCheck', category: 'Fabric IQ', preview: true,
+  { slug: 'health-check', displayName: 'Health check', restType: 'HealthCheck', category: 'Loom IQ', preview: true,
     description: 'Data-freshness / SLA monitoring with real Azure Monitor scheduled-query alert rules.',
     learnContent: {
       "overview": "Palantir Foundry Health Checks watch pipelines and datasets for freshness and SLA breaches. The CSA Loom equivalent creates real Azure Monitor scheduled-query alert rules (scheduledQueryRules) over Log Analytics that fire when an item's data goes stale or a row-count / freshness threshold is crossed. Azure-native default (Fabric Reflex is opt-in via LOOM_ACTIVATOR_BACKEND=fabric) — no Fabric required.",
@@ -245,7 +245,7 @@ export const fabricIqItems: FabricItemType[] = [
       ],
       "docsUrl": "https://learn.microsoft.com/azure/azure-monitor/alerts/alerts-types#log-alerts"
     } },
-  { slug: 'aip-logic', displayName: 'Spindle (AIP Logic & agents)', restType: 'AipLogic', category: 'Fabric IQ', preview: true,
+  { slug: 'aip-logic', displayName: 'Spindle (AIP Logic & agents)', restType: 'AipLogic', category: 'Loom IQ', preview: true,
     description: 'Spindle Studio — author typed AI logic AND tool-calling agents over the Weave ontology: typed input → ordered steps → typed output, grounded on the ontology, runnable on Azure OpenAI / Foundry.',
     learnContent: {
       "overview": "Palantir AIP Logic builds no-code typed LLM functions; Palantir AIP runs agents + logic over the ontology. The CSA Loom equivalent — Spindle Studio — covers both. Author the typed input schema and ordered steps with dropdowns (no freeform JSON), bind a Weave ontology so the function grounds on its entity types and Lakehouse/Warehouse data bindings, then invoke it as typed logic (one grounded turn) or as a multi-step tool-calling agent. The agent runtime reuses the production copilot orchestrator with the full Loom data-tool registry; the logic runtime writes real T-SQL/Spark-SQL that runs read-only on Synapse and cites real rows. You can also publish the logic as a real Azure AI Foundry Agent Service agent and inspect its run steps. Azure-native default — no Fabric required; honest gates name the AOAI env var (no model deployed) and the Foundry env vars (Agent Service unconfigured, e.g. in Azure Government).",

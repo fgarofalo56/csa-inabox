@@ -2,7 +2,7 @@
 
 import { clientFetch } from '@/lib/client-fetch';
 /**
- * Map editor (Fabric IQ Map — dataset binding + layers over Lakehouse/KQL/Ontology).
+ * Map editor (Loom IQ Map — dataset binding + layers over Lakehouse/KQL/Ontology).
  *
  * Extracted verbatim from phase4-editors.tsx (behavior-preserving split —
  * zero logic change). Only the sibling-import paths were re-rooted one level
@@ -111,7 +111,7 @@ import {
 } from '../_plan-model';
 import { arr, useItemState, SaveBar, useStyles } from './shared';
 
-// ----- Map (Fabric IQ Map — dataset binding + layers over Lakehouse/KQL/Ontology) -----
+// ----- Map (Loom IQ Map — dataset binding + layers over Lakehouse/KQL/Ontology) -----
 const GEO_SAMPLE = `{\n  "type": "FeatureCollection",\n  "features": [\n    { "type": "Feature", "properties": { "name": "Seattle" }, "geometry": { "type": "Point", "coordinates": [-122.33, 47.61] } }\n  ]\n}`;
 
 /** Persisted data-source binding for the map (audit H7). */

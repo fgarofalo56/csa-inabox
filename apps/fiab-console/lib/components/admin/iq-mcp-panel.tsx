@@ -2,15 +2,15 @@
 
 import { clientFetch } from '@/lib/client-fetch';
 /**
- * IqMcpPanel — admin "Fabric IQ — published MCP surface" discovery card.
+ * IqMcpPanel — admin "Loom IQ — published MCP surface" discovery card.
  *
  * Mounted in the Copilot & Agents section of /admin/tenant-settings, directly
  * below McpServersPanel. The two are complements:
  *   • McpServersPanel = the CONSUME side — external MCP servers Loom Copilot calls.
- *   • IqMcpPanel      = the PUBLISH side — Loom's own unified Fabric IQ surface
+ *   • IqMcpPanel      = the PUBLISH side — Loom's own unified Loom IQ surface
  *     (ontology + semantic + live signals) exposed as ONE MCP endpoint that
  *     external agents (Microsoft Agent 365, Azure AI Foundry, Copilot Studio)
- *     ground on. This is Build-2026 #1 (Fabric IQ) + #6 (IQ-to-agents-via-MCP).
+ *     ground on. This is Build-2026 #1 (Loom IQ) + #6 (IQ-to-agents-via-MCP).
  *
  * This is a READ-ONLY discovery card (honors loom-no-freeform-config): it shows
  * the live endpoint URL (copy), the discovered tool catalog (live `tools/list`
@@ -130,7 +130,7 @@ export function IqMcpPanel() {
   const registrationSnippet = useMemo(
     () =>
       [
-        '# Register the CSA Loom Fabric IQ surface as an MCP tool source',
+        '# Register the CSA Loom Loom IQ surface as an MCP tool source',
         '# (Azure AI Foundry agent / Microsoft Agent 365 connector).',
         `# Transport: HTTP JSON-RPC 2.0  •  Protocol: ${doc?.protocolVersion || '2024-11-05'}`,
         '',
@@ -154,14 +154,14 @@ export function IqMcpPanel() {
 
   if (loading) {
     return (
-      <Section title="Fabric IQ — published MCP surface">
+      <Section title="Loom IQ — published MCP surface">
         <Spinner label="Loading IQ discovery document…" />
       </Section>
     );
   }
 
   return (
-    <Section title="Fabric IQ — published MCP surface">
+    <Section title="Loom IQ — published MCP surface">
       <Body1 className={s.hint}>
         Loom packages this tenant&apos;s <strong>ontology</strong>, <strong>semantic models</strong>, and{' '}
         <strong>live signals</strong> (Azure Data Explorer) into one Model Context Protocol endpoint that

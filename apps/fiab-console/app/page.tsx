@@ -116,7 +116,7 @@ const QUICK_LINKS: Quick[] = [
 
 const WORKLOADS = [
   'Data Engineering', 'Data Factory', 'Real-Time Intelligence', 'Data Warehouse',
-  'Databases', 'Data Science', 'Power BI', 'Fabric IQ', 'APIs & functions',
+  'Databases', 'Data Science', 'Power BI', 'Loom IQ', 'APIs & functions',
   'Synapse Analytics', 'Azure Databricks', 'Azure Data Factory',
 ];
 

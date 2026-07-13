@@ -150,7 +150,7 @@ export const EDITOR_DOC_SLUGS: ReadonlySet<string> = new Set([
   'sql-server-2025-vector-index', 'synapse-dedicated-sql-pool', 'synapse-pipeline',
   'synapse-serverless-sql-pool', 'synapse-spark-pool', 'tracing', 'user-data-function',
   'variable-library', 'vector-store', 'warehouse',
-  // Fabric IQ (Palantir Foundry parity) — authored wave 9
+  // Loom IQ (Palantir Foundry parity) — authored wave 9
   'workshop-app', 'slate-app', 'ontology-sdk', 'aip-logic', 'release-environment',
   'health-check',
   // Real-Time Intelligence / messaging + lakehouse — authored wave 9
@@ -172,7 +172,7 @@ export const EDITOR_DOC_SLUGS: ReadonlySet<string> = new Set([
  * screenshot, so emitting a thumbnail URL for a doc-only slug would render a
  * broken-image icon in the Learning Hub. Derived from the on-disk image
  * manifest; add a slug here only when its `editor-<slug>-1.png` exists. The
- * wave-9 Fabric IQ / RTI additions and the audit-#2 backlog-drain slugs are
+ * wave-9 Loom IQ / RTI additions and the audit-#2 backlog-drain slugs are
  * intentionally ABSENT (docs authored, screenshots not yet captured) so their
  * cards fall back to the generated placeholder tile.
  */

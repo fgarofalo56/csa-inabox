@@ -1,7 +1,7 @@
 /**
  * Vitest — IQ MCP tool catalog + dispatcher (lib/azure/iq-mcp-tools.ts).
  *
- * Exercises the SERVER side of the unified Fabric IQ MCP surface without Cosmos
+ * Exercises the SERVER side of the unified Loom IQ MCP surface without Cosmos
  * or ADX: the backend module (iq-mcp.ts) is mocked so we assert the catalog
  * shape, argument validation, tenant pass-through, and error mapping the route
  * relies on.

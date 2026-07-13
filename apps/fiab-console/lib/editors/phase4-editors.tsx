@@ -4,7 +4,7 @@
  * phase4-editors.tsx — BARREL.
  *
  * The former ~6800-line implementation (Data Science / APIs-Functions /
- * Fabric IQ editors) was decomposed into ./phase4/* — one file per exported
+ * Loom IQ editors) was decomposed into ./phase4/* — one file per exported
  * editor plus a shared-helpers module (arr / useStyles / useItemState /
  * SaveBar / ItemDoc). This module now re-exports every public editor so
  * registry.ts and every existing importer keep working unchanged.

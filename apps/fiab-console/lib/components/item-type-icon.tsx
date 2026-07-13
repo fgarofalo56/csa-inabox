@@ -26,7 +26,7 @@ import {
   Pulse20Regular, BoardSplit20Regular, Filter20Regular,
   // Data science / ML
   Bot20Regular, Sparkle20Regular, BrainCircuit20Regular,
-  // Fabric IQ / agents
+  // Loom IQ / agents
   ChatMultiple20Regular, Map20Regular, TextBulletListTree20Regular, ClipboardTaskListLtr20Regular,
   // Power BI
   ChartMultiple20Regular, DataPie20Regular, Layer20Regular, DataTreemap20Regular,
@@ -63,7 +63,7 @@ export const CATEGORY_COLORS: Record<string, string> = {
   'Databases':              '#1a7f4e', // green
   'Real-Time Intelligence': '#c2410c', // orange
   'Data Science':           '#7c3aed', // purple
-  'Fabric IQ':              '#4b1d8f', // deep purple
+  'Loom IQ':              '#4b1d8f', // deep purple
   'Power BI':               '#ad6800', // amber
   'APIs and functions':     '#0d7377', // teal
   'Synapse Analytics':      '#1a1342', // navy
@@ -124,7 +124,7 @@ const ICON_BY_SLUG: Record<string, (props: { color?: string }) => ReactNode> = {
   'ml-experiment':         (p) => <BeakerEdit20Regular style={{ color: p.color }} />,
   'automl':                (p) => <Sparkle20Regular style={{ color: p.color }} />,
 
-  // Fabric IQ
+  // Loom IQ
   'ontology':              (p) => <TextBulletListTree20Regular style={{ color: p.color }} />,
   'graph-model':           (p) => <Diversity20Regular style={{ color: p.color }} />,
   'digital-twin':          (p) => <BranchFork20Regular style={{ color: p.color }} />,

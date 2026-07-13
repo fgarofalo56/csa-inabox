@@ -100,10 +100,10 @@ export const WORKLOAD_GROUPS: readonly WorkloadGroupDef[] = [
   },
   {
     key: 'fabric-iq',
-    name: 'Fabric IQ',
+    name: 'Loom IQ',
     description: 'Ontologies, plans, graphs, maps, and data/operations agents — the semantic + agentic layer over your estate.',
     tier: 'core',
-    categories: ['Fabric IQ'],
+    categories: ['Loom IQ'],
   },
   {
     key: 'power-bi',

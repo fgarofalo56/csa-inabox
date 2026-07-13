@@ -1,5 +1,5 @@
 /**
- * Fabric IQ / Microsoft IQ — unified MCP tool surface (Build 2026 #1+#6).
+ * Loom IQ / Microsoft IQ — unified MCP tool surface (Build 2026 #1+#6).
  *
  * A single Model Context Protocol (MCP) JSON-RPC endpoint that packages the
  * organization's ONTOLOGY + SEMANTIC layer + LIVE SIGNALS into one tool surface
@@ -137,11 +137,11 @@ async function handleOne(body: any, tenantId: string): Promise<any> {
           capabilities: { tools: { listChanged: false } },
           serverInfo: {
             name: 'csa-loom-iq',
-            title: 'CSA Loom — Fabric IQ',
+            title: 'CSA Loom — Loom IQ',
             version: '1.0.0',
           },
           instructions:
-            'Unified Fabric IQ surface: ontology (conceptual model), semantic models (curated tables + measures), and live signals (Azure Data Explorer). Call iq_overview first to discover what is available, then drill in with iq_get_ontology / iq_get_semantic_model, search with iq_search, and query real-time telemetry with iq_query_signals.',
+            'Unified Loom IQ surface: ontology (conceptual model), semantic models (curated tables + measures), and live signals (Azure Data Explorer). Call iq_overview first to discover what is available, then drill in with iq_get_ontology / iq_get_semantic_model, search with iq_search, and query real-time telemetry with iq_query_signals.',
         },
       };
 

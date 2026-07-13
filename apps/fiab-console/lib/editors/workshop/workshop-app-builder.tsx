@@ -3,7 +3,7 @@
 import { clientFetch } from '@/lib/client-fetch';
 /**
  * Workshop app builder — the real, live low-code app builder surface for the
- * Fabric IQ `workshop-app` item (Palantir Foundry **Workshop** parity). Replaces
+ * Loom IQ `workshop-app` item (Palantir Foundry **Workshop** parity). Replaces
  * the old single scrolling config form (bind ontology → toggle object views →
  * add CRUD actions → run a dialog) with an actual app builder:
  *

@@ -129,7 +129,7 @@ const QUERY_LANG: Record<DataAgentSourceType, string> = {
   'semantic-model': 'DAX',
   'metric-view': 'SQL over the governed metric view (GROUP BY governed dimensions, select the governed measure expressions)',
   'ai-search': 'an Azure AI Search query',
-  ontology: 'an ontology / Fabric IQ semantic query',
+  ontology: 'an ontology / Loom IQ semantic query',
   graph: 'a GQL / Cypher graph traversal',
   'microsoft-graph': 'a plain full-text Microsoft Graph search phrase (no operators)',
   agent: 'a plain natural-language instruction — the hosted agent runs its own tool-calling loop and returns an answer',

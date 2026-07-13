@@ -95,7 +95,7 @@ export const WORKLOAD_CATEGORIES: readonly WorkloadCategory[] = [
   'Databases',
   'Real-Time Intelligence',
   'Data Science',
-  'Fabric IQ',
+  'Loom IQ',
   'Power BI',
   'APIs and functions',
   'Synapse Analytics',
