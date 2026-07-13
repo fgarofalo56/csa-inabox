@@ -146,11 +146,30 @@ Top-right **⚙ Settings → Admin**:
 - **Fabric parity + more:** Direct Lake, mirroring, OneLake catalog, semantic models —
   plus Azure-native items and a Palantir-style ontology layer.
 
+---
+
+## The Gov twin — apples-to-apples (2–3 min)
+
+The **same product, same code, same demo** runs in **Azure Government**:
+`https://loom-console-dcmt6cqoezlgs-agg6h9e5cjamh5h2.z01.azurefd.us`
+
+- **Same 15 demo workspaces** (CSA Loom Demo + the `Demo — …` verticals), seeded
+  the same way, backed by a **real Gov data landing zone** deployed today:
+  Synapse (+ 3 Spark pools + dedicated SQL pool), medallion lake (ADLS Gen2
+  bronze/silver/gold), Databricks, Event Hubs, Service Bus, Cosmos, Event Grid —
+  all behind private endpoints in a Gov VNet.
+- **Governance reuses the tenant's existing Purview** (`dmlz-dev-purview001`) —
+  the brownfield story in action.
+- **Say:** "This is the sovereignty close: identical experience, identical code,
+  Commercial and GCC-High, deployed with the same one-button path — and no
+  Microsoft Fabric dependency in either cloud."
+
 ## Honest notes (if asked "what's not done")
 - A few app verticals expose **honest infra-gates** where a specific one-time Azure grant
   is still needed (e.g. Databricks mirror source connection) — these name the exact env
   var / role rather than failing silently. The **lakehouse seed + report render** path
   needs none of that and shows real values out of the box.
-- The **Gov data-plane** demo environment is being stood up in parallel (dlz-attach into
-  the Gov landing zone); the Gov *console* is already live.
+- Gov: data-plane role grants were deferred at deploy (`skipRoleGrants`) — some Gov
+  data-plane calls need a one-time admin grant pass; the structure/navigation demo is
+  unaffected.
 - UX polish is an ongoing sweep to meet/exceed the Fabric visual bar on every surface.
