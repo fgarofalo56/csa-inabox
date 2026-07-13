@@ -1673,6 +1673,13 @@ module dlzAttach 'modules/landing-zone/main.bicep' = if (topology == 'dlz-attach
     storageSkuName: storageSkuName
     cosmosGraphVectorEnabled: cosmosGraphVectorEnabled
     weaveOntologyEnabled: weaveOntologyEnabled
+    // AAS opt-out honored on the attached DLZ. Azure Analysis Services is NOT
+    // available in every sovereign region (e.g. usgovvirginia — only usgovtexas/
+    // usgovarizona), so the DLZ AAS must respect the top-level aasEnabled flag
+    // (false in gcc-high.bicepparam) or the whole dlz-attach deploy fails with
+    // LocationNotAvailableForResourceType. The Loom-native / Synapse-Serverless
+    // semantic-model path applies when AAS is off (no-fabric-dependency.md).
+    deployAas: aasEnabled
     // RTI opt-out flags. dlz-attach: the attached DLZ provisions its own Event
     // Hubs namespace + Stream Analytics starter job (ADX DB is created at runtime
     // — see adxEnabled:false above), so only the enable flags forward.
