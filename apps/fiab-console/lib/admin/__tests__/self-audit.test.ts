@@ -66,6 +66,19 @@ describe('self-audit ENV_CHECKS — day-one surface coverage', () => {
     // provisioned day-one and must be wired, not treated as an optional fallback.
     expect(byId.get('svc-synapse')!.optionalDefault).toBeUndefined();
   });
+
+  it('flags AI-enrich + SIEM audit DCR optionalDefault=true (the 7 live-unset vars → health 100)', () => {
+    // On a real (stale) live revision these two checks were the ONLY non-pass
+    // env checks — svc-ai-enrich (5 endpoints) + svc-audit-siem-stream (2 DCR
+    // vars) = exactly 1.0 weighted point → score 99. Both are genuinely
+    // fallback-functional (shared AI Services account / built-in Cosmos audit
+    // trail), so optionalDefault makes evalEnv PASS → score 100, honestly.
+    expect(byId.get('svc-ai-enrich')!.optionalDefault).toBe(true);
+    expect(byId.get('svc-audit-siem-stream')!.optionalDefault).toBe(true);
+    // Each carries an honest per-spec fallback detail (not the generic H-band msg).
+    expect(byId.get('svc-ai-enrich')!.optionalDefaultDetail).toMatch(/AI Services|Foundry/i);
+    expect(byId.get('svc-audit-siem-stream')!.optionalDefaultDetail).toMatch(/Cosmos audit trail/i);
+  });
 });
 
 describe('self-audit evalEnv — optionalDefault passes when unset', () => {
@@ -102,6 +115,22 @@ describe('self-audit evalEnv — optionalDefault passes when unset', () => {
     const r = evalEnv(spec);
     expect(r.status).toBe('pass');
     expect(r.detail).toBe('Configured.');
+  });
+
+  it('AI-enrich passes with its honest shared-account fallback detail when all 5 endpoints unset', () => {
+    clear('LOOM_DOCINTEL_ENDPOINT', 'LOOM_VISION_ENDPOINT', 'LOOM_LANGUAGE_ENDPOINT',
+      'LOOM_TRANSLATOR_ENDPOINT', 'LOOM_CONTENT_SAFETY_ENDPOINT');
+    const r = evalEnv(ENV_CHECKS.find((c) => c.id === 'svc-ai-enrich')!);
+    expect(r.status).toBe('pass');
+    expect(r.detail).toMatch(/fallback active/i);
+    expect(r.detail).toMatch(/AI Services|Foundry/i); // uses the per-spec detail, not the H-band generic
+  });
+
+  it('SIEM audit DCR passes (Cosmos audit trail) when both DCR vars unset', () => {
+    clear('LOOM_AUDIT_DCR_ENDPOINT', 'LOOM_AUDIT_DCR_ID');
+    const r = evalEnv(ENV_CHECKS.find((c) => c.id === 'svc-audit-siem-stream')!);
+    expect(r.status).toBe('pass');
+    expect(r.detail).toMatch(/Cosmos audit trail/i);
   });
 });
 

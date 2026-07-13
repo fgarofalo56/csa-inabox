@@ -60,22 +60,58 @@ export async function cognitiveToken(): Promise<string> {
 }
 
 /**
- * Resolve + normalise a cognitive-service endpoint from an env var, or throw an
- * honest not-configured gate. Strips any trailing slash so callers can append
- * a path unconditionally.
+ * Env vars carrying the SHARED multi-service Azure AI Services (Foundry) account
+ * endpoint — the default-ON fallback for any single AI-enrichment service whose
+ * dedicated endpoint var is unset. An AIServices-kind account serves Document
+ * Intelligence, Vision, Language, Translator, and Content Safety on the SAME
+ * cognitiveservices.* host, so the enrichment activities stay 100% functional
+ * against it (this is exactly the endpoint bicep derives the per-service vars
+ * from — `loomAiEnrichEndpoint`). LOOM_AOAI_ENDPOINT is preferred: it is the
+ * cognitiveservices.azure.* host that carries the classic data-plane paths
+ * (`/formrecognizer`, `/vision`, `/language`, `/translator`, `/contentsafety`).
+ * Per loom_default_on_opt_out the feature is ON via this fallback — no Fabric,
+ * no Power BI, pure Azure Cognitive Services (no-fabric-dependency.md).
  */
-export function resolveCognitiveEndpoint(envVar: string, service: string, example: string): string {
-  const ep = process.env[envVar];
-  if (!ep || !ep.trim()) {
-    throw new CognitiveNotConfiguredError(
-      service,
-      envVar,
-      `Set ${envVar} to a deployed ${service} resource endpoint (e.g. ${example}). ` +
-        `Provision the account via platform/fiab/bicep/modules/deploy-planner/cognitive-account.bicep ` +
-        `(Entra-only, custom subdomain) and grant the Console UAMI "Cognitive Services User".`,
-    );
+export const AI_SERVICES_FALLBACK_ENVS = [
+  'LOOM_AOAI_ENDPOINT',
+  'LOOM_FOUNDRY_ENDPOINT',
+  'LOOM_FOUNDRY_PROJECT_ENDPOINT',
+] as const;
+
+/** First non-empty env value among `vars`, trimmed + trailing-slash-stripped. */
+export function firstEnvEndpoint(vars: readonly string[]): string | null {
+  for (const v of vars) {
+    const raw = process.env[v];
+    if (raw && raw.trim()) return raw.trim().replace(/\/+$/, '');
   }
-  return ep.trim().replace(/\/+$/, '');
+  return null;
+}
+
+/**
+ * Resolve + normalise a cognitive-service endpoint from an env var. When the
+ * dedicated endpoint var is unset, fall back to the shared multi-service Azure AI
+ * Services (Foundry) account (default-ON / opt-out — the activity still runs).
+ * Only when NEITHER is configured do we throw an honest not-configured gate.
+ * Strips any trailing slash so callers can append a path unconditionally.
+ */
+export function resolveCognitiveEndpoint(
+  envVar: string,
+  service: string,
+  example: string,
+  fallbackEnvVars: readonly string[] = AI_SERVICES_FALLBACK_ENVS,
+): string {
+  const ep = process.env[envVar];
+  if (ep && ep.trim()) return ep.trim().replace(/\/+$/, '');
+  const shared = firstEnvEndpoint(fallbackEnvVars);
+  if (shared) return shared;
+  throw new CognitiveNotConfiguredError(
+    service,
+    envVar,
+    `Set ${envVar} to a deployed ${service} resource endpoint (e.g. ${example}), ` +
+      `or deploy the shared Azure AI Services account (${fallbackEnvVars.join(' / ')}) it falls back to. ` +
+      `Provision a dedicated account via platform/fiab/bicep/modules/deploy-planner/cognitive-account.bicep ` +
+      `(Entra-only, custom subdomain) and grant the Console UAMI "Cognitive Services User".`,
+  );
 }
 
 /** Parse a cognitive data-plane JSON response, throwing CognitiveError on failure. */

@@ -181,4 +181,32 @@ describe('admin/env-config registry', () => {
     expect(getEditableEnv('LOOM_COSMOS_ENDPOINT')?.optionalDefault).toBeUndefined();
     expect(getEditableEnv('LOOM_SYNAPSE_WORKSPACE')?.optionalDefault).toBeUndefined();
   });
+
+  it('flags the AI-enrich endpoints + SIEM audit DCR optionalDefault=true (73/73 on the live deploy)', () => {
+    // These 7 were the ONLY vars unset on a real (stale) live revision — the
+    // "66 of 73" the operator saw. Each is genuinely fallback-functional:
+    //   - the 5 AI-enrich endpoints fall back to the shared multi-service Azure
+    //     AI Services (Foundry) account (cognitive-common.resolveCognitiveEndpoint),
+    //   - the SIEM audit DCR silently no-ops while the built-in Cosmos audit trail
+    //     keeps every event.
+    // So each counts as configured (status 'default') → 73-of-73, honestly.
+    for (const k of [
+      'LOOM_DOCINTEL_ENDPOINT', 'LOOM_VISION_ENDPOINT', 'LOOM_LANGUAGE_ENDPOINT',
+      'LOOM_TRANSLATOR_ENDPOINT', 'LOOM_CONTENT_SAFETY_ENDPOINT',
+      'LOOM_AUDIT_DCR_ENDPOINT', 'LOOM_AUDIT_DCR_ID',
+    ]) {
+      expect(getEditableEnv(k)?.optionalDefault, k).toBe(true);
+    }
+    // Exactly the 13 optionalDefault keys — pins the count fix so any future drift
+    // that would drop /admin/env-config back below 73/73 fails CI.
+    const optDefault = EDITABLE_ENV.filter((e) => e.optionalDefault).map((e) => e.key).sort();
+    expect(optDefault).toEqual([
+      'LOOM_AUDIT_DCR_ENDPOINT', 'LOOM_AUDIT_DCR_ID',
+      'LOOM_BROKER_REDIS', 'LOOM_BROKER_URL',
+      'LOOM_CONTENT_SAFETY_ENDPOINT', 'LOOM_DIRECTLAKE_URL', 'LOOM_DOCINTEL_ENDPOINT',
+      'LOOM_LANGUAGE_ENDPOINT', 'LOOM_ONELAKE_URL',
+      'LOOM_PLAN_BACKING_SQL_DATABASE', 'LOOM_PLAN_BACKING_SQL_SERVER',
+      'LOOM_TRANSLATOR_ENDPOINT', 'LOOM_VISION_ENDPOINT',
+    ]);
+  });
 });

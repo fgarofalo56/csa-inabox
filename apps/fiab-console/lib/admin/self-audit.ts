@@ -230,9 +230,19 @@ export interface EnvSpec {
    * unset var here is NOT a health defect — the check passes with an honest
    * "fallback active" detail and the optional upgrade step, and the env-config
    * surface counts it as configured (status 'default'). Reserved for genuine
-   * silent-fallback substrates (the Hyperscale-band OneLake/Direct Lake/Broker
-   * apps deployed out-of-band), never for a service the default deploy provisions. */
+   * silent-fallback substrates where an unset var loses ZERO function:
+   *   - the Hyperscale-band OneLake/Direct Lake/Broker apps deployed out-of-band,
+   *   - the AI-enrichment per-service endpoints — unset falls back to the shared
+   *     multi-service Azure AI Services (Foundry) account (svc-ai-enrich), and
+   *   - the SIEM audit-stream DCR — unset silently no-ops while the built-in
+   *     Cosmos audit trail keeps every event (svc-audit-siem-stream).
+   * NEVER use it for a service whose absence actually disables a feature. */
   optionalDefault?: boolean;
+  /** Honest per-spec detail for the optionalDefault 'pass' state — names the exact
+   * built-in fallback that keeps the feature 100% functional while the var is unset
+   * (e.g. "falls back to the shared Azure AI Services account", "Cosmos audit trail
+   * keeps every event"). Falls back to a generic H-band substrate message. */
+  optionalDefaultDetail?: string;
 }
 
 export function evalEnv(spec: EnvSpec): CheckResult {
@@ -249,7 +259,9 @@ export function evalEnv(spec: EnvSpec): CheckResult {
     return {
       id: spec.id, category: spec.category, title: spec.title, severity: spec.severity,
       status: 'pass',
-      detail: `Built-in fallback active (fully functional) — the ${missing.join(', ')} scale-out substrate is optional and deployed out-of-band.`,
+      detail: spec.optionalDefaultDetail
+        ? `Built-in fallback active (fully functional) — ${spec.optionalDefaultDetail}`
+        : `Built-in fallback active (fully functional) — the ${missing.join(', ')} scale-out substrate is optional and deployed out-of-band.`,
       remediation: spec.remediation,
       docs: spec.docs,
     };
@@ -394,9 +406,20 @@ export const ENV_CHECKS: EnvSpec[] = [
       'LOOM_TRANSLATOR_ENDPOINT', 'LOOM_CONTENT_SAFETY_ENDPOINT',
     ],
     warnOnMiss: true,
-    remediation: 'Set LOOM_DOCINTEL_ENDPOINT / LOOM_VISION_ENDPOINT / LOOM_LANGUAGE_ENDPOINT / LOOM_TRANSLATOR_ENDPOINT / LOOM_CONTENT_SAFETY_ENDPOINT to the deployed cognitive account endpoints so the AI-enrich pipeline activities (Document Intelligence / Vision / Language / Translator / Content Safety) run. Each is an independent account — set only the ones you use.',
-    provisionedBy: 'platform/fiab/bicep/modules/deploy-planner/cognitive-account.bicep (single-kind FormRecognizer / ComputerVision / TextAnalytics / TextTranslation / ContentSafety accounts, Entra-only) wired by main.bicep dp* modules; grant the Console UAMI + ADF factory MI "Cognitive Services User".',
-    role: 'Cognitive Services User (Console UAMI + ADF factory managed identity) on each account',
+    // Default-ON / opt-out (loom_default_on_opt_out): each AI-enrich data-plane
+    // client falls back to the SHARED multi-service Azure AI Services (Foundry)
+    // account — an AIServices-kind account serves Document Intelligence, Vision,
+    // Language, Translator, and Content Safety on the same cognitiveservices.*
+    // host (this is the very endpoint bicep derives these per-service vars from,
+    // `loomAiEnrichEndpoint`). So an UNSET per-service endpoint loses ZERO
+    // function — the activities run against the shared account. The dedicated
+    // single-kind accounts below are the optional scale-out. Marked
+    // optionalDefault so a correct default posture is a pass, not a gap.
+    optionalDefault: true,
+    optionalDefaultDetail: 'the AI-enrichment activities (Document Intelligence / Vision / Language / Translator / Content Safety) run against the shared multi-service Azure AI Services (Foundry) account (LOOM_AOAI_ENDPOINT / LOOM_FOUNDRY_ENDPOINT). Set the per-service endpoints only to route to dedicated single-kind accounts.',
+    remediation: 'AI-enrichment works out of the box against the shared Azure AI Services account (the same account that powers Copilot). To route a service to its OWN dedicated single-kind account, set LOOM_DOCINTEL_ENDPOINT / LOOM_VISION_ENDPOINT / LOOM_LANGUAGE_ENDPOINT / LOOM_TRANSLATOR_ENDPOINT / LOOM_CONTENT_SAFETY_ENDPOINT — each is independent, set only the ones you want to split out.',
+    provisionedBy: 'platform/fiab/bicep/modules/admin-plane/main.bicep (all five derived from the agentFoundry / aiFoundry AIServices account = loomAiEnrichEndpoint, apps[] env ~4113-4129) — a fresh deploy fills them automatically; optional dedicated accounts via modules/deploy-planner/cognitive-account.bicep. Grant the Console UAMI + ADF factory MI "Cognitive Services User".',
+    role: 'Cognitive Services User (Console UAMI + ADF factory managed identity) on the shared AI Services account (or each dedicated account)',
   },
   {
     id: 'svc-monitor-alerts', category: 'azure-services', title: 'Azure Monitor (Activator alerts)', severity: 'optional',
@@ -610,6 +633,14 @@ export const ENV_CHECKS: EnvSpec[] = [
   {
     id: 'svc-audit-siem-stream', category: 'security', title: 'SIEM audit stream — LoomAudit_CL DCR (BR-SIEM)', severity: 'optional',
     required: ['LOOM_AUDIT_DCR_ENDPOINT', 'LOOM_AUDIT_DCR_ID'], warnOnMiss: true,
+    // Default-ON / opt-out (loom_default_on_opt_out): audit logging is fully ON
+    // via the built-in Cosmos audit trail (/admin/audit-logs) regardless of these
+    // vars — emitAuditEvent() silently no-ops when the DCR is unset, losing ZERO
+    // audit records. The DCR only ADDS an optional external mirror (streaming to
+    // the LoomAudit_CL table for Microsoft Sentinel / any SIEM). So an unset DCR
+    // is the fully-functional intended default, not a gap. Marked optionalDefault.
+    optionalDefault: true,
+    optionalDefaultDetail: 'every admin-plane mutation is recorded in the built-in Cosmos audit trail (/admin/audit-logs). Setting LOOM_AUDIT_DCR_ENDPOINT + LOOM_AUDIT_DCR_ID additionally MIRRORS each event to the LoomAudit_CL table for Microsoft Sentinel / any SIEM.',
     remediation: 'Set LOOM_AUDIT_DCR_ENDPOINT (the DCE logs-ingestion endpoint) + LOOM_AUDIT_DCR_ID (the DCR immutable id) so every admin-plane mutation streams to the LoomAudit_CL custom table via the Azure Monitor Logs Ingestion API, where Microsoft Sentinel / any SIEM can alert continuously (docs/fiab/operations/siem-audit-stream.md). The push-button deploy wires both from modules/admin-plane/audit-stream.bicep. Without them the emitter silently no-ops — the Cosmos audit trail on /admin/audit-logs is unaffected. The Console UAMI needs "Monitoring Metrics Publisher" on the DCR (granted by the module).',
     provisionedBy: 'modules/admin-plane/audit-stream.bicep (DCE + DCR + LoomAudit_CL table) → admin-plane/main.bicep apps[] env LOOM_AUDIT_DCR_ENDPOINT / LOOM_AUDIT_DCR_ID',
     role: 'Monitoring Metrics Publisher (Console UAMI) on the audit DCR',
