@@ -74,24 +74,24 @@ top-to-bottom as the *architecture of the pattern*:
 - **Sales Analytics (Premium Import)** — the **semantic model**: measures/DAX
   (`Total Sales`, `Margin %`, `Sales YoY %`), relationships, and **Direct Lake**
   storage mode (reads the Gold Delta live — Fabric-parity, no Fabric).
-- **Sales Analytics Report** — the **report designer** (bound to the semantic model
-  above — no "choose a data source" gate). Show the pages + visual palette + the field
-  list from the model. To render a live chart, drag a field/measure onto a visual (or
-  use **Get data → Use a Loom item** to show a report can bind straight to a Loom
-  lakehouse/model — no Power BI workspace). For the *integrated* Power BI story, the
-  **Weave → Build Power BI model** action publishes the same model to a real Power BI
-  workspace.
+- **Sales Analytics Report** — the **report designer**, and it **renders real values
+  right now**: an *Executive Overview* page with cards **Total Revenue ($4,290.28),
+  Total Margin ($1,873.42), Units Sold (25)**, a **Revenue by Month** column chart, a
+  **Margin by Month** donut, and a **Monthly Detail** table (8 rows) — all computed live
+  over the seeded medallion Gold data (Azure-native, no Power BI/Fabric workspace). Show
+  **Get data → Use a Loom item** to bind a report straight to a Loom lakehouse. For the
+  *integrated* Power BI story, **Weave → Build Power BI model** publishes to a real
+  Power BI workspace.
 - **Gold Commit → Shim Eventstream** + **Direct-Lake-Shim Refresh Pipeline** +
   **Shim Freshness Watchdog** — the real-time refresh arc: every Gold commit fires an
   Event Grid event → the pipeline runs a partition refresh → the Activator alerts on
   an SLA breach. *"Direct-Lake-like 5–30 s freshness on Azure-native services."*
 
-> **Pre-demo check (5 min, do this once before showing):** open the Direct Lake
-> **report** and confirm at least one visual renders — if the visuals show "no fields
-> yet", drag `Total Sales` (and a category like `DimProduct[category]`) onto them so
-> they render live during the demo. The **live-values surfaces that always show data**
-> without any setup are **Governance, FinOps/Chargeback, Marketplace, and Admin health**
-> (sections 5, 6, 8) — lead the "it's real" beats there.
+> Every **`Demo — …`** workspace's report renders the same real-data pattern (Total
+> Revenue/Margin/Units + Revenue by Month) over live seeded medallion data — open any
+> of them and the visuals show values immediately. The **Governance, FinOps/Chargeback,
+> Marketplace, and Admin health** surfaces (sections 5, 6, 8) are the other always-live
+> "it's real" beats.
 
 ### 4. Real-Time Intelligence (2 min)
 Open **Demo — Real-Time Dashboards**, then left nav → **Real-Time Intelligence → Streams**.
@@ -138,10 +138,10 @@ Top-right **⚙ Settings → Admin**:
 - **Both clouds, day-one:** the same product runs in Commercial and Azure Government (GCC-High).
 - **Real compute, warm:** multi-size Synapse Spark pools + Databricks clusters, pre-warmed
   so notebooks are instant.
-- **Bound + seeded:** the demo workspaces are provisioned with real Azure backends and
-  the lakehouses are seeded with real rows. Governance, FinOps, Marketplace and Admin
-  surfaces show live values directly; the analytics chain (lakehouse → model → report)
-  is fully wired and bound (do the one-time report pre-check in §3).
+- **Bound + seeded + rendering:** the demo workspaces are provisioned with real Azure
+  backends, the lakehouses are seeded with real rows, and every report **renders those
+  rows live** (Total Revenue/Margin/Units + Revenue by Month). Governance, FinOps,
+  Marketplace and Admin also show live values — click anything and it shows data, not a gate.
 - **Weave:** turn any Loom item into a Power BI model / API / lineage graph with one click.
 - **Fabric parity + more:** Direct Lake, mirroring, OneLake catalog, semantic models —
   plus Azure-native items and a Palantir-style ontology layer.
