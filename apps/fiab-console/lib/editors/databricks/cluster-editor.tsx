@@ -170,7 +170,7 @@ export function DatabricksClusterEditor({ item, id }: { item: FabricItemType; id
     setFlavor(fl);
     const spec = clusterSpecFromTier(tier, { flavor: fl, clusterName: name.trim() || undefined });
     setName((prev) => prev.trim() || spec.cluster_name);
-    setNodeType(spec.node_type_id);
+    setNodeType(spec.node_type_id ?? '');
     if (spec.autoscale) {
       setAutoscale(true);
       setMinWorkers(spec.autoscale.min_workers);

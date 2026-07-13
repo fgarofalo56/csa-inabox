@@ -15,7 +15,7 @@ import {
   Tree, TreeItem, TreeItemLayout,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   Dialog, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
-  MessageBar, MessageBarBody, MessageBarTitle,
+  MessageBar, MessageBarBody, MessageBarTitle, MessageBarActions,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
@@ -107,6 +107,11 @@ export function DatabricksNotebookEditor({ item, id }: { item: FabricItemType; i
   const [clusters, setClusters] = useState<Cluster[]>([]);
   const [clusterId, setClusterId] = useState<string>('');
   const [clustersError, setClustersError] = useState<string | null>(null);
+  const [clustersLoaded, setClustersLoaded] = useState(false);
+  // Auto-provisioning a runnable cluster (loom-notebook-default) so a freshly
+  // installed / opened notebook can run without manual cluster setup.
+  const [ensuringCluster, setEnsuringCluster] = useState(false);
+  const autoEnsuredRef = useRef(false);
   // One execution context per (cluster, command-language) so REPL state
   // persists across cells of the same language. Keyed `${clusterId}:${lang}`.
   const contextsRef = useRef<Record<string, string>>({});
@@ -161,14 +166,59 @@ export function DatabricksNotebookEditor({ item, id }: { item: FabricItemType; i
       });
     } catch (e: any) {
       setClustersError(e?.message || String(e));
+    } finally {
+      setClustersLoaded(true);
     }
   }, []);
+
+  // Resolve — or auto-create + start — a runnable cluster so the notebook can
+  // execute without the user hand-building compute. Shares the server-side
+  // ensureRunnableCluster with the install path; a fresh cluster comes back
+  // PENDING (~2–5 min to RUNNING), which we surface honestly.
+  const ensureCluster = useCallback(async (): Promise<string | null> => {
+    setEnsuringCluster(true);
+    setClustersError(null);
+    try {
+      const r = await clientFetch(`/api/items/databricks-notebook/${id}/ensure-cluster`, { method: 'POST' });
+      const j = await r.json();
+      if (!j.ok) {
+        setClustersError([j.error, j.remediation].filter(Boolean).join(' — ') || `HTTP ${r.status}`);
+        return null;
+      }
+      await loadClusters();
+      if (j.clusterId) setClusterId(j.clusterId);
+      if (j.state !== 'RUNNING') {
+        setFileMessage(
+          j.created
+            ? `Creating default compute (loom-notebook-default). It takes ~2–5 min to reach RUNNING — Run works once it's up.`
+            : `Starting compute (${j.state || 'PENDING'}). Run works once the cluster reaches RUNNING.`,
+        );
+      }
+      return j.clusterId || null;
+    } catch (e: any) {
+      setClustersError(e?.message || String(e));
+      return null;
+    } finally {
+      setEnsuringCluster(false);
+    }
+  }, [id, loadClusters]);
 
   useEffect(() => {
     void loadDir(rootPath);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rootPath]);
   useEffect(() => { void loadClusters(); }, [loadClusters]);
+
+  // A workspace with no all-purpose cluster is the reported broken state
+  // ("No Databricks cluster is available to run the notebook"). Auto-provision
+  // a default cluster ONCE when we confirm the list loaded empty, so the
+  // notebook is runnable day-one. If clusters already exist we never create one.
+  useEffect(() => {
+    if (clustersLoaded && !clustersError && clusters.length === 0 && !autoEnsuredRef.current && !ensuringCluster) {
+      autoEnsuredRef.current = true;
+      void ensureCluster();
+    }
+  }, [clustersLoaded, clustersError, clusters.length, ensuringCluster, ensureCluster]);
 
   // ---- Hydrate from the installed item's bundle cells ----
   // A bundle-installed databricks-notebook has its NotebookContent cells
@@ -396,7 +446,20 @@ export function DatabricksNotebookEditor({ item, id }: { item: FabricItemType; i
   const runCell = useCallback(async (cell: NotebookCell): Promise<void> => {
     if (cell.type === 'markdown') return; // markdown renders client-side
     if (!clusterId) {
-      setCellResults((r) => ({ ...r, [cell.id]: { status: 'error', error: 'No cluster selected. Pick a cluster above.' } }));
+      // No cluster attached — auto-provision + start one so the user doesn't have
+      // to hand-build compute. A fresh cluster is PENDING (~2–5 min); the Command
+      // Execution API needs RUNNING, so guide the user to Run again once it's up.
+      setCellResults((r) => ({ ...r, [cell.id]: { status: 'running' } }));
+      const ensured = await ensureCluster();
+      setCellResults((r) => ({
+        ...r,
+        [cell.id]: {
+          status: 'error',
+          error: ensured
+            ? 'Compute is starting (loom-notebook-default). This takes ~2–5 min — click Run again once the cluster shows RUNNING.'
+            : 'No runnable Databricks cluster is available. See the message above the cells.',
+        },
+      }));
       return;
     }
     // Resolve Databricks magics (%sql/%sh/%fs/%pip/%run/%python…) → a concrete
@@ -433,7 +496,7 @@ export function DatabricksNotebookEditor({ item, id }: { item: FabricItemType; i
     } catch (e: any) {
       setCellResults((r) => ({ ...r, [cell.id]: { status: 'error', error: e?.message || String(e) } }));
     }
-  }, [id, clusterId, baseLanguage, ensureWidgets, postCommand]);
+  }, [id, clusterId, baseLanguage, ensureWidgets, postCommand, ensureCluster]);
 
   const runAll = useCallback(async () => {
     setRunningAll(true);
@@ -740,21 +803,41 @@ export function DatabricksNotebookEditor({ item, id }: { item: FabricItemType; i
             </MessageBar>
           )}
           {!clustersError && clusters.length === 0 && (
-            <MessageBar intent="warning">
+            <MessageBar intent={ensuringCluster ? 'info' : 'warning'}>
               <MessageBarBody>
-                <MessageBarTitle>No clusters in this workspace</MessageBarTitle>
-                Create a cluster in the Databricks Cluster editor (or the Databricks portal: Compute → Create compute).
-                Cells need an attached cluster to execute via the Command Execution API.
+                <MessageBarTitle>
+                  {ensuringCluster ? 'Provisioning default compute…' : 'No clusters in this workspace'}
+                </MessageBarTitle>
+                {ensuringCluster
+                  ? 'Creating loom-notebook-default so this notebook can run. It reaches RUNNING in ~2–5 min.'
+                  : 'Notebooks need an attached cluster to execute. Create the Loom default compute to run right away — it auto-terminates after 30 min idle.'}
               </MessageBarBody>
+              {!ensuringCluster && (
+                <MessageBarActions>
+                  <Button size="small" appearance="primary" onClick={() => void ensureCluster()}>
+                    Create default cluster
+                  </Button>
+                </MessageBarActions>
+              )}
             </MessageBar>
           )}
           {!clustersError && clusters.length > 0 && !clusterRunning && (
             <MessageBar intent="warning">
               <MessageBarBody>
                 <MessageBarTitle>Cluster is {selectedCluster?.state?.toLowerCase() || 'not running'}</MessageBarTitle>
-                Start <strong>{selectedCluster?.cluster_name || clusterId}</strong> in the Databricks Cluster editor
-                (Start), then return here. Cells run against a RUNNING cluster; submitting now will start one on demand and may take 2–5 min.
+                Cells run against a RUNNING cluster. Start <strong>{selectedCluster?.cluster_name || clusterId}</strong> now
+                — it takes ~2–5 min to come up.
               </MessageBarBody>
+              <MessageBarActions>
+                <Button
+                  size="small"
+                  appearance="primary"
+                  disabled={ensuringCluster}
+                  onClick={() => void ensureCluster()}
+                >
+                  {ensuringCluster ? 'Starting…' : 'Start compute'}
+                </Button>
+              </MessageBarActions>
             </MessageBar>
           )}
           {fileError && (
