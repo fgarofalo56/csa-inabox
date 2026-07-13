@@ -11,6 +11,8 @@ the [component index](#component-index) at the bottom). Verified against `main`
 G2 AI-functions-at-scale batch surface, PR #1946; and the linguistic-schema
 grounding wiring, PR #1948). For focused views see
 [Architecture Diagrams](diagrams/README.md),
+[Complete Diagram Set](architecture-diagrams.md) (item provisioning, governance
+mesh, Weave → Power BI, compute topology, notebook execution, realtime/streaming),
 [Reference Architecture](architecture.md),
 [Model Strategy](model-strategy.md),
 [Compute Tiers & Telemetry](compute-tiers-and-telemetry.md), and
@@ -460,6 +462,7 @@ Data-flow notes:
 ## Related
 
 - [Reference Architecture](architecture.md) — the narrative version
+- [Complete Diagram Set](architecture-diagrams.md) — item provisioning, governance mesh, Weave → Power BI, compute topology, notebook execution, realtime/streaming
 - [Architecture Diagrams](diagrams/README.md) — topology, deploy flows, RBAC
 - [Model Strategy](model-strategy.md) — AIF-12 tiers, per-cloud model matrix
 - [Compute Tiers & Telemetry](compute-tiers-and-telemetry.md) — pool tiers, Log Analytics

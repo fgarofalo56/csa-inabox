@@ -9,6 +9,10 @@ extension).
 
 These diagrams are referenced from the [Reference architecture](../architecture.md)
 and taught in [Tutorial 09 — Tenant topology](../tutorials/09-tenant-topology.md).
+For system-internal flows (item provisioning, the governance/lineage mesh,
+Weave → Power BI, compute topology, notebook execution, realtime/streaming) see
+the [Complete Diagram Set](../architecture-diagrams.md) and
+[Full-Picture Architecture](../architecture-full-picture.md).
 The topology shape (one DMLZ hub + N DLZ spokes + one Console) is **identical
 across every cloud boundary** — only the per-node service substitution changes
 (see the [per-boundary dispatch matrix](../architecture.md#per-boundary-dispatch-matrix)).

@@ -1443,6 +1443,7 @@ nav:
           - Reference Architecture: fiab/architecture.md
           - "Full-Picture Architecture (system, identity, deployment, data flow)": fiab/architecture-full-picture.md
           - "Architecture Diagrams (topology, deploy flows, RBAC, data flow)": fiab/diagrams/README.md
+          - "Complete Diagram Set (provisioning, governance mesh, weave-PBI, compute, notebook, streaming)": fiab/architecture-diagrams.md
           - Portal Architecture (where admins + users go): fiab/portal-architecture.md
           - Console Access Patterns: fiab/access-patterns.md
           - "UX Standards (Fabric-grade floor for every surface)": fiab/ux-standards.md
