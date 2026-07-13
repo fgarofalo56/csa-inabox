@@ -59,8 +59,13 @@ param complianceTags object
 // Service Bus namespace
 // =====================================================================
 
+// dlz-attach may pass an EMPTY domainName; a bare '-${domainName}-' interpolation
+// emits consecutive hyphens, which strict validators (Event Hubs / Service Bus
+// namespaces, etc.) reject as InvalidName. Collapse the segment when empty.
+var nameInfix = empty(domainName) ? '' : '${domainName}-'
+
 resource ns 'Microsoft.ServiceBus/namespaces@2022-10-01-preview' = {
-  name: 'sbns-loom-${domainName}-${location}'
+  name: 'sbns-loom-${nameInfix}${location}'
   location: location
   tags: complianceTags
   sku: {

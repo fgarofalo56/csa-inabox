@@ -69,8 +69,13 @@ param adxClusterName string = ''
 // Kusto/ADX outputs (matches the deploy-planner ASA module).
 // =====================================================================
 
+// dlz-attach may pass an EMPTY domainName; a bare '-${domainName}-' interpolation
+// emits consecutive hyphens, which strict validators (Event Hubs / Service Bus
+// namespaces, etc.) reject as InvalidName. Collapse the segment when empty.
+var nameInfix = empty(domainName) ? '' : '${domainName}-'
+
 resource asaJob 'Microsoft.StreamAnalytics/streamingjobs@2021-10-01-preview' = {
-  name: 'asa-loom-${domainName}-${location}'
+  name: 'asa-loom-${nameInfix}${location}'
   location: location
   tags: complianceTags
   identity: { type: 'SystemAssigned' }
