@@ -268,6 +268,12 @@ let _sparkWarmLeases: Container | null = null;
 // (createIfNotExists) here AND ARM-provisioned in cosmos.bicep's loomContainers —
 // the lazy call is the hotfix fallback.
 let _attachedServices: Container | null = null;
+// Sign-in-boundary onboarding requests (front-door "Request access"). One doc
+// per unauthenticated submission, PK /tenantId (the deployment tenant bucket)
+// so the admin queue reads a single physical partition. Distinct from the two
+// data-plane access-request containers (marketplace PK /dataProductId, F16
+// workflow PK /tenantId+kind). See lib/types/signin-access-request.ts.
+let _signinAccessRequests: Container | null = null;
 let _ensured = false;
 
 /**
@@ -886,6 +892,9 @@ async function ensure() {
   // physical partition. ARM-provisioned in cosmos.bicep's loomContainers; this
   // createIfNotExists is the hotfix fallback.
   _attachedServices = await mk('attached-services', '/tenantId');
+  // Sign-in-boundary onboarding requests — PK /tenantId (deployment bucket).
+  // Created lazily so a fresh environment needs no extra ARM/Bicep step.
+  _signinAccessRequests = await mk('signin-access-requests', '/tenantId');
   _ensured = true;
 }
 
@@ -913,6 +922,9 @@ export async function labelAssignmentsContainer(): Promise<Container> { await en
 // F16 — access-request approval workflow container (PK /tenantId). Distinct
 // from the marketplace accessRequestsContainer() below (PK /dataProductId).
 export async function accessRequestWorkflowContainer(): Promise<Container> { await ensure(); return _accessRequestWorkflow!; }
+// Sign-in-boundary onboarding queue container (PK /tenantId). Distinct from both
+// access-request systems above — this is the front-door "Request access" queue.
+export async function signinAccessRequestsContainer(): Promise<Container> { await ensure(); return _signinAccessRequests!; }
 /** Saved SQL queries (My Queries / Shared Queries) — PK /itemId. */
 export async function savedQueriesContainer(): Promise<Container> { await ensure(); return _savedQueries!; }
 export async function pbiDashboardOverlaysContainer(): Promise<Container> { await ensure(); return _pbiDashboardOverlays!; }

@@ -85,8 +85,13 @@ param geoDrSecondaryNamespaceId string = ''
 @description('Geo-DR alias name. Only used when geoDrSecondaryNamespaceId is set.')
 param geoDrAliasName string = ''
 
+// dlz-attach may pass an EMPTY domainName; a bare '-${domainName}-' interpolation
+// emits consecutive hyphens, which strict validators (Event Hubs / Service Bus
+// namespaces, etc.) reject as InvalidName. Collapse the segment when empty.
+var nameInfix = empty(domainName) ? '' : '${domainName}-'
+
 resource ns 'Microsoft.EventHub/namespaces@2024-05-01-preview' = {
-  name: 'evhns-loom-${domainName}-${location}'
+  name: 'evhns-loom-${nameInfix}${location}'
   location: location
   tags: complianceTags
   sku: {

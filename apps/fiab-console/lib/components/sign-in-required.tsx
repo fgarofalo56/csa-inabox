@@ -7,6 +7,7 @@
  * BFF route.
  */
 import { Button, makeStyles, tokens, MessageBar, MessageBarBody, MessageBarTitle } from '@fluentui/react-components';
+import { RequestAccessButton } from '@/lib/components/access/request-access-button';
 
 const useStyles = makeStyles({
   wrap: { marginTop: tokens.spacingVerticalS, marginBottom: tokens.spacingVerticalM },
@@ -28,6 +29,10 @@ export function SignInRequired({ subject }: { subject?: string }) {
             <Button appearance="primary" size="small" as="a" href="/auth/sign-in">
               Sign in
             </Button>
+            <span>
+              Don&apos;t have access yet?
+            </span>
+            <RequestAccessButton appearance="secondary" size="small" />
           </div>
         </MessageBarBody>
       </MessageBar>

@@ -16,7 +16,7 @@ import {
   PanelLeftExpand24Regular, Globe24Regular, Heart24Regular,
   Tag24Regular, TagMultiple24Regular, Sparkle24Regular, Code24Regular, DataPie24Regular,
   Wrench24Regular, ShieldLock24Regular, PlugConnected24Regular,
-  Money24Regular, Send24Regular,
+  Money24Regular, Send24Regular, PersonAdd24Regular,
   type FluentIcon,
 } from '@fluentui/react-icons';
 
@@ -48,6 +48,7 @@ const SECTIONS: Section[] = [
   { href: '/admin/webhooks', label: 'Event subscriptions', icon: Send24Regular, description: 'Register outbound webhook endpoints that receive Loom events (item lifecycle, workspace, pipeline runs, marketplace subscribe / SLA breach, admin changes). HMAC-SHA256 signed direct HTTPS delivery by default, or Azure Event Grid when configured; per-hook delivery history + test-fire.' },
   { href: '/admin/developer/tokens', label: 'API tokens', icon: Key24Regular, description: 'Tenant-wide inventory of scoped API tokens (PAT) for non-interactive access — who created each token, its scope, last-used and expiry. Revoke any token immediately. Users create + manage their own under Settings → Developer.' },
   { href: '/admin/security?tab=dspm', label: 'DSPM for AI', icon: ShieldLock24Regular, description: 'AI data-security posture: which agents / Copilots touch sensitive-labeled data, the max sensitivity label exposed, its protection state, and real per-agent usage. The Azure-native 1:1 of Purview DSPM for AI.' },
+  { href: '/admin/access-requests', label: 'Access requests', icon: PersonAdd24Regular, description: 'Onboarding queue for people who don’t yet have access. Approve a sign-in-boundary “Request access” submission to see the exact Entra step to set them up, or deny it with a recorded reason.' },
   { href: '/admin/users', label: 'Users & licenses', icon: People24Regular, description: 'Power BI / Fabric license assignments and user inventory.' },
   { href: '/admin/workspaces', label: 'Workspaces', icon: Building24Regular, description: 'Tenant-wide inventory: every workspace, owner, capacity, state.' },
   { href: '/admin/network', label: 'Network & DNS', icon: Globe24Regular, description: 'Private endpoints, copy/paste hosts-file override, and enterprise DNS guidance for reaching the private-by-default Azure services.' },
