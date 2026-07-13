@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { isTenantAdmin } from '@/lib/auth/feature-gate';
 import { itemsContainer, workspacesContainer } from '@/lib/azure/cosmos-client';
 import { upsertLoomDoc, deleteLoomDoc, docForWorkspace } from '@/lib/azure/loom-search';
 import { cleanupWorkspaceMetadata, type CleanupItem } from '@/lib/azure/lineage-gc';
@@ -25,7 +26,13 @@ async function loadWorkspaceAccess(id: string): Promise<{ access: WorkspaceAcces
   const session = getSession();
   if (!session) return { access: null, session };
   const claims = session.claims as { oid: string; tid?: string; groups?: string[] };
-  const access = await resolveWorkspaceAccessByOid(claims.oid, id, { groups: claims.groups, callerTid: claims.tid });
+  // ADMIN-OPEN: a tenant admin can open any workspace in the tenant (the
+  // /admin/workspaces inventory lists them all), bypassing the member-only ACL.
+  const access = await resolveWorkspaceAccessByOid(claims.oid, id, {
+    groups: claims.groups,
+    callerTid: claims.tid,
+    tenantAdmin: isTenantAdmin(session),
+  });
   return { access, session };
 }
 

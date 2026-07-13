@@ -65,8 +65,12 @@ export interface WorkspaceAccess {
   workspace: Workspace;
   /** How the caller is authorized. */
   role: AccessRole;
-  /** 'owner' = direct ownership; 'acl' = shared via a workspace-roles grant. */
-  via: 'owner' | 'acl';
+  /**
+   * 'owner' = direct ownership; 'acl' = shared via a workspace-roles grant;
+   * 'admin' = tenant admin opening a workspace they neither own nor are a
+   * member of (the admin-open bypass — see `opts.tenantAdmin`).
+   */
+  via: 'owner' | 'acl' | 'admin';
   /** True when `role` may write (Owner/Admin/Member). */
   canWrite: boolean;
 }
@@ -91,11 +95,21 @@ export async function readWorkspaceById(workspaceId: string): Promise<Workspace 
  * `opts.groups` short-circuits the per-group Graph membership checks when the
  * caller's transitive group set is already known (from the session claims).
  * `opts.callerTid` enables the tid-boundary check (step 4).
+ *
+ * `opts.tenantAdmin` is the ADMIN-OPEN bypass: a tenant admin (per
+ * `isTenantAdmin`) must be able to open EVERY workspace in the tenant — the
+ * /admin/workspaces inventory lists them all, so the open path must not 404 on
+ * a workspace the admin neither owns nor is a member of. When set, and the
+ * caller is neither owner nor ACL-member, the admin still resolves at role
+ * `Admin` (via `'admin'`). Callers compute the flag with `isTenantAdmin(session)`
+ * so this module stays free of session/feature-gate imports. The owner and ACL
+ * fast-paths still run FIRST, so a non-admin caller is unaffected and an admin
+ * who happens to own/member a workspace keeps their real role.
  */
 export async function resolveWorkspaceAccessByOid(
   oid: string,
   workspaceId: string,
-  opts: { groups?: string[]; callerTid?: string } = {},
+  opts: { groups?: string[]; callerTid?: string; tenantAdmin?: boolean } = {},
 ): Promise<WorkspaceAccess | null> {
   const ws = await workspacesContainer();
 
@@ -121,9 +135,18 @@ export async function resolveWorkspaceAccessByOid(
 
   // 5) ACL — highest workspace role via direct + (nested) group membership.
   const role = await resolveEffectiveRole(oid, workspaceId, { userGroupIds: opts.groups });
-  if (!role) return null;
+  if (role) return { workspace: wsDoc, role, via: 'acl', canWrite: WRITE_ROLES.has(role) };
 
-  return { workspace: wsDoc, role, via: 'acl', canWrite: WRITE_ROLES.has(role) };
+  // 6) ADMIN-OPEN bypass — no ownership, no ACL role, but the caller is a tenant
+  // admin: grant access so an admin can open every workspace in the tenant. The
+  // tid boundary above already scoped this to the admin's own tenant. Placed
+  // AFTER the ACL lookup so an admin who is also an explicit member keeps that
+  // (possibly higher-fidelity) role; only a pure non-member admin lands here.
+  if (opts.tenantAdmin) {
+    return { workspace: wsDoc, role: 'Admin', via: 'admin', canWrite: true };
+  }
+
+  return null;
 }
 
 /**

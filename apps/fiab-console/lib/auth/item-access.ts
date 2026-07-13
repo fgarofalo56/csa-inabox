@@ -44,6 +44,7 @@ import {
   type AccessRole,
 } from '@/lib/auth/workspace-access';
 import type { SessionPayload } from '@/lib/auth/session';
+import { isTenantAdmin } from '@/lib/auth/feature-gate';
 import type { WorkspaceItem } from '@/lib/types/workspace';
 // Type-only import — erased at compile time, so this does NOT pull the
 // item-permissions-client's @azure/identity / ADLS runtime graph into the guard.
@@ -143,10 +144,14 @@ export async function resolveItemAccessByOid(
   if (!item) return null;
   const { oid, tid, groups } = session.claims;
 
-  // 1) Workspace access (owner → workspace-roles ACL → tid boundary).
+  // 1) Workspace access (owner → workspace-roles ACL → tid boundary → admin-open).
+  // ADMIN-OPEN: a tenant admin can open every item in the tenant's workspaces,
+  // mirroring the workspace-open bypass so admins aren't 404'd on items inside a
+  // workspace they neither own nor are a member of.
   const wsAccess = await resolveWorkspaceAccessByOid(oid, item.workspaceId, {
     groups,
     callerTid: tid,
+    tenantAdmin: isTenantAdmin(session),
   });
   if (wsAccess) {
     return {
