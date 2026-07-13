@@ -170,6 +170,56 @@ describe('submitDlzDeployment (LIVE, stubbed fetch)', () => {
     expect(res.error).toContain('AuthorizationFailed');
   });
 
+  it('returns pending 202 (never blocks) when the ARM PUT validation runs past the deadline', async () => {
+    // A PUT that never resolves within the deadline models ARM's long
+    // template-validation phase for the full main.json — the request that used
+    // to hang here (→ Front Door 504) must now early-return with a pollable id.
+    let resolveFetch: (v: any) => void = () => {};
+    const fetchImpl = vi.fn(
+      () => new Promise((r) => { resolveFetch = r; }),
+    ) as unknown as typeof fetch;
+    const started = Date.now();
+    const res = await submitDlzDeployment({
+      subscriptionId: SUB,
+      region: 'eastus2',
+      parameters: {},
+      templateSource: { templateLink: { uri: 'https://x/main.json' } },
+      getToken: async () => 't',
+      deploymentName: 'loom-dlz-slow',
+      fetchImpl,
+      earlyReturnMs: 25,
+    });
+    expect(Date.now() - started).toBeLessThan(2000); // did NOT block on the PUT
+    expect(res.ok).toBe(true);
+    expect(res.pending).toBe(true);
+    expect(res.status).toBe(202);
+    expect(res.deploymentId).toBe('loom-dlz-slow');
+    expect(res.provisioningState).toBe('Submitting');
+    // Settle the backgrounded PUT so no promise lingers past the test.
+    resolveFetch({ ok: true, status: 201, text: async () => JSON.stringify({ properties: { provisioningState: 'Accepted' } }) });
+    await new Promise((r) => setTimeout(r, 0));
+  });
+
+  it('still returns synchronously (preserving the 403 gate) when ARM answers fast', async () => {
+    const fetchImpl = vi.fn(async () => ({
+      ok: false,
+      status: 403,
+      text: async () => JSON.stringify({ error: { message: 'AuthorizationFailed' } }),
+    })) as unknown as typeof fetch;
+    const res = await submitDlzDeployment({
+      subscriptionId: SUB,
+      region: 'eastus2',
+      parameters: {},
+      templateSource: { templateLink: { uri: 'https://x/main.json' } },
+      getToken: async () => 't',
+      fetchImpl,
+      earlyReturnMs: 5000,
+    });
+    expect(res.pending).toBeUndefined();
+    expect(res.ok).toBe(false);
+    expect(res.status).toBe(403);
+  });
+
   it('rejects an invalid subscription id without calling ARM', async () => {
     const fetchImpl = vi.fn() as unknown as typeof fetch;
     const res = await submitDlzDeployment({

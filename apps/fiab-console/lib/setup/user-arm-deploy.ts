@@ -157,6 +157,14 @@ export interface SubmitDeploymentResult {
   /** HTTP status of the ARM PUT (for the route's 401/403 honest-gate branch). */
   status?: number;
   error?: string;
+  /**
+   * true when the early-return deadline elapsed before ARM answered the PUT and
+   * the request was BACKGROUNDED — the deployment id is already known (it is the
+   * pre-computed deployment name), so the route returns 202 immediately while the
+   * ARM PUT finishes server-side. Poll `/api/setup/deploy-status?mode=user-arm`
+   * for the live state.
+   */
+  pending?: boolean;
 }
 
 /**
@@ -165,10 +173,27 @@ export interface SubmitDeploymentResult {
  *   PUT {arm}/subscriptions/{sub}/providers/Microsoft.Resources/deployments/{name}
  *   { location, properties: { mode: 'Incremental', templateLink, parameters } }
  *
- * ARM accepts the deployment and runs it asynchronously, returning
- * `provisioningState: 'Accepted'`; poll `/api/setup/deploy-status?mode=user-arm`
- * for progress. `getToken` is injected so the route passes the user's delegated
- * ARM token (and tests pass a stub — no live subscription needed).
+ * ARM's deployment API is an async long-running operation — it ultimately returns
+ * `201 { provisioningState: 'Accepted' }` and runs the deploy in the background.
+ * BUT ARM only returns that 201 AFTER it synchronously ingests + preflight-
+ * validates the whole template graph. For the full CSA Loom `main.json` fetched
+ * via `templateLink` (hub + DLZ + every nested module) that validation phase can
+ * run for MINUTES — long past Azure Front Door's origin-response timeout — so an
+ * `await`ed PUT would hang the HTTP request until Front Door serves an HTML 504.
+ *
+ * Because the deployment NAME (== the poll id) is computed BEFORE the PUT, the
+ * handler never needs the PUT's response to hand the client a pollable id. So we
+ * race the PUT against a short `earlyReturnMs` deadline:
+ *   • Fast case (ARM answers within the deadline — a 201, or a fast 4xx auth
+ *     error): return synchronously, preserving the precise 401/403 grant gate.
+ *   • Slow case (deadline wins): BACKGROUND the PUT and return `{ pending:true,
+ *     deploymentId: name, provisioningState:'Submitting' }` immediately, so the
+ *     HTTP request NEVER blocks past the deadline (→ no Front Door 504). The PUT
+ *     is bounded by a safety `AbortController` (`maxPutMs`) so a stuck socket can
+ *     never leak, yet is long enough that ARM's validation completes server-side.
+ *
+ * `getToken` / `fetchImpl` are injected so the route passes the user's delegated
+ * ARM token (and tests pass stubs — no live subscription needed).
  */
 export async function submitDlzDeployment(opts: {
   subscriptionId: string;
@@ -178,6 +203,10 @@ export async function submitDlzDeployment(opts: {
   getToken: () => Promise<string>;
   deploymentName?: string;
   fetchImpl?: typeof fetch;
+  /** Deadline (ms) after which a still-pending PUT is backgrounded + 202'd. Default 8000. */
+  earlyReturnMs?: number;
+  /** Safety abort (ms) bounding the (possibly backgrounded) PUT socket. Default 300000. */
+  maxPutMs?: number;
 }): Promise<SubmitDeploymentResult> {
   const { subscriptionId, region, parameters, templateSource } = opts;
   if (!GUID_RE.test(subscriptionId)) {
@@ -202,36 +231,82 @@ export async function submitDlzDeployment(opts: {
       parameters,
     },
   };
-  try {
-    const res = await doFetch(url, {
-      method: 'PUT',
-      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-      body: JSON.stringify(requestBody),
-      cache: 'no-store',
-    });
-    const text = await res.text().catch(() => '');
-    let json: any = null;
+
+  // Bound the PUT socket so a stuck/never-answering ARM call can't leak forever,
+  // but keep it long (default 5 min) so ARM's synchronous validation still
+  // completes in the background after we early-return.
+  const controller = new AbortController();
+  const abortTimer: any = setTimeout(() => controller.abort(), opts.maxPutMs ?? 300_000);
+  if (typeof abortTimer?.unref === 'function') abortTimer.unref();
+
+  const putPromise: Promise<SubmitDeploymentResult> = (async () => {
     try {
-      json = text ? JSON.parse(text) : null;
-    } catch {
-      /* leave as text */
+      const res = await doFetch(url, {
+        method: 'PUT',
+        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify(requestBody),
+        cache: 'no-store',
+        signal: controller.signal,
+      });
+      const text = await res.text().catch(() => '');
+      let json: any = null;
+      try {
+        json = text ? JSON.parse(text) : null;
+      } catch {
+        /* leave as text */
+      }
+      if (!res.ok) {
+        const msg = (json?.error?.message || text || `ARM deployment PUT failed (${res.status})`).toString();
+        return { ok: false, status: res.status, error: msg.slice(0, 400), deploymentName: name, deploymentId: name };
+      }
+      const props = json?.properties || {};
+      return {
+        ok: true,
+        deploymentName: name,
+        deploymentId: name,
+        provisioningState: props.provisioningState || 'Accepted',
+        correlationId: props.correlationId,
+        status: res.status,
+      };
+    } catch (e: any) {
+      return {
+        ok: false,
+        error: `ARM deployment request failed: ${e?.message ?? String(e)}`,
+        deploymentName: name,
+        deploymentId: name,
+      };
+    } finally {
+      clearTimeout(abortTimer);
     }
-    if (!res.ok) {
-      const msg = (json?.error?.message || text || `ARM deployment PUT failed (${res.status})`).toString();
-      return { ok: false, status: res.status, error: msg.slice(0, 400) };
-    }
-    const props = json?.properties || {};
-    return {
-      ok: true,
-      deploymentName: name,
-      deploymentId: name,
-      provisioningState: props.provisioningState || 'Accepted',
-      correlationId: props.correlationId,
-      status: res.status,
-    };
-  } catch (e: any) {
-    return { ok: false, error: `ARM deployment request failed: ${e?.message ?? String(e)}` };
-  }
+  })();
+
+  // Race the PUT against the early-return deadline.
+  let earlyTimer: any;
+  const deadline = new Promise<'timeout'>((resolve) => {
+    earlyTimer = setTimeout(() => resolve('timeout'), opts.earlyReturnMs ?? 8000);
+    if (typeof earlyTimer?.unref === 'function') earlyTimer.unref();
+  });
+  const winner = await Promise.race([putPromise, deadline]);
+  clearTimeout(earlyTimer);
+  if (winner !== 'timeout') return winner;
+
+  // Deadline won — ARM is still validating the template. Background the PUT (log
+  // its eventual outcome; a rejection is swallowed here so it never becomes an
+  // unhandled rejection) and hand the client the already-known deployment id.
+  void putPromise.then(
+    (r) => {
+      if (!r.ok) console.error(`[user-arm-deploy] backgrounded ARM PUT for ${name} failed: ${r.error}`);
+    },
+    (e) => console.error(`[user-arm-deploy] backgrounded ARM PUT for ${name} threw:`, e),
+  );
+  return {
+    ok: true,
+    pending: true,
+    deploymentName: name,
+    deploymentId: name,
+    provisioningState: 'Submitting',
+    status: 202,
+  };
 }
 
 /**

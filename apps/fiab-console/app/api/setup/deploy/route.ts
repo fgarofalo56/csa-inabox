@@ -23,6 +23,12 @@ import {
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+// The submit path must return fast (202 + a pollable deploymentId) and NEVER
+// block on the multi-minute ARM deployment itself — every tier below either
+// kicks off an async ARM/orchestrator/CI job or returns an honest gate. This
+// bound is a backstop; in practice the handler answers in a couple seconds so
+// Azure Front Door's origin-response timeout can never turn a submit into a 504.
+export const maxDuration = 60;
 
 /**
  * POST /api/setup/deploy — Setup Wizard "Deploy" step.
@@ -625,6 +631,10 @@ export async function POST(req: NextRequest) {
             identity: arm.identity,
             deploymentId: submitted.deploymentId,
             provisioningState: submitted.provisioningState,
+            // true when ARM's template-validation phase ran past the submit
+            // deadline and the PUT was backgrounded — the deployment id is valid
+            // and pollable; the status route reports Accepted until ARM registers it.
+            pending: submitted.pending ?? false,
             statusUrl,
             subscriptionId: body.subscriptionId,
             message:

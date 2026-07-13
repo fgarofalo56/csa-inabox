@@ -60,6 +60,21 @@ export async function GET(req: NextRequest) {
       getToken: async () => arm.token,
     });
     if (!st.ok) {
+      // The deploy route now returns 202 the instant the ARM PUT is submitted
+      // (it backgrounds ARM's long template-validation phase — see
+      // user-arm-deploy.ts). During that brief window ARM has not yet REGISTERED
+      // the deployment, so a status GET 404s. That is "still submitting", not a
+      // failure — report Accepted so the wizard keeps polling instead of erroring.
+      if (st.status === 404) {
+        return NextResponse.json({
+          ok: true,
+          deploymentId: id,
+          status: 'Accepted',
+          provisioningState: 'Accepted',
+          progress: 0.15,
+          stage: 'Azure Resource Manager: submitting deployment…',
+        });
+      }
       return NextResponse.json({ ok: false, error: st.error, deploymentId: id }, { status: st.status ?? 502 });
     }
     const state = st.provisioningState || 'Running';
