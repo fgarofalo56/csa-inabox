@@ -4,6 +4,7 @@ import { itemsContainer } from '@/lib/azure/cosmos-client';
 import { upsertLoomDoc, docForItem } from '@/lib/azure/loom-search';
 import { findItemType } from '@/lib/catalog/fabric-item-types';
 import { resolveWorkspaceAccessByOid } from '@/lib/auth/workspace-access';
+import { isTenantAdmin } from '@/lib/auth/feature-gate';
 import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
 import { apiError, apiServerError } from '@/lib/api/respond';
 
@@ -57,7 +58,12 @@ function shapeForList(it: WorkspaceItem) {
  */
 async function loadWorkspace(id: string, session: SessionPayload, opts: { write?: boolean } = {}): Promise<Workspace | null> {
   const claims = session.claims as { oid: string; tid?: string; groups?: string[] };
-  const access = await resolveWorkspaceAccessByOid(claims.oid, id, { groups: claims.groups, callerTid: claims.tid });
+  // ADMIN-OPEN: a tenant admin sees the items of every workspace in the tenant.
+  const access = await resolveWorkspaceAccessByOid(claims.oid, id, {
+    groups: claims.groups,
+    callerTid: claims.tid,
+    tenantAdmin: isTenantAdmin(session),
+  });
   if (!access) return null;
   if (opts.write && !access.canWrite) return null;
   return access.workspace;

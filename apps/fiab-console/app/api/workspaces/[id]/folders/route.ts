@@ -5,8 +5,10 @@
  * DELETE /api/workspaces/[id]/folders?id=...   → delete folder (children reparent to root)
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { getSession, type SessionPayload } from '@/lib/auth/session';
 import { foldersContainer, itemsContainer, workspacesContainer } from '@/lib/azure/cosmos-client';
+import { isTenantAdmin } from '@/lib/auth/feature-gate';
+import { readWorkspaceById } from '@/lib/auth/workspace-access';
 import type { WorkspaceItem } from '@/lib/types/workspace';
 import crypto from 'node:crypto';
 import { apiServerError } from '@/lib/api/respond';
@@ -14,22 +16,33 @@ import { apiServerError } from '@/lib/api/respond';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-async function assertOwnedWorkspace(id: string, tenantId: string) {
+/**
+ * True when the caller may manage this workspace's folders: the owner (partition
+ * point-read) OR — ADMIN-OPEN — a tenant admin for any workspace in the tenant,
+ * so an admin opening a workspace from /admin/workspaces sees its folders too
+ * rather than a 404 (the Items tab renders both the item list and this folder
+ * tree).
+ */
+async function assertWorkspaceAccess(id: string, session: SessionPayload): Promise<boolean> {
+  const oid = session.claims.oid;
   const ws = await workspacesContainer();
   try {
-    const { resource } = await ws.item(id, tenantId).read<any>();
-    return resource && resource.tenantId === tenantId;
+    const { resource } = await ws.item(id, oid).read<any>();
+    if (resource && resource.tenantId === oid) return true;
   } catch (e: any) {
-    if (e?.code === 404) return false;
-    throw e;
+    if (e?.code !== 404) throw e;
   }
+  if (isTenantAdmin(session)) {
+    return !!(await readWorkspaceById(id));
+  }
+  return false;
 }
 
 export async function GET(_req: NextRequest, props: { params: Promise<{ id: string }> }) {
   const params = await props.params;
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  if (!(await assertOwnedWorkspace(params.id, s.claims.oid)))
+  if (!(await assertWorkspaceAccess(params.id, s)))
     return NextResponse.json({ ok: false, error: 'workspace not found' }, { status: 404 });
   const c = await foldersContainer();
   const { resources } = await c.items
@@ -45,7 +58,7 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
   const params = await props.params;
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  if (!(await assertOwnedWorkspace(params.id, s.claims.oid)))
+  if (!(await assertWorkspaceAccess(params.id, s)))
     return NextResponse.json({ ok: false, error: 'workspace not found' }, { status: 404 });
   const body = await req.json().catch(() => ({}));
   if (!body?.name) return NextResponse.json({ ok: false, error: 'name required' }, { status: 400 });
@@ -66,7 +79,7 @@ export async function PATCH(req: NextRequest, props: { params: Promise<{ id: str
   const params = await props.params;
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  if (!(await assertOwnedWorkspace(params.id, s.claims.oid)))
+  if (!(await assertWorkspaceAccess(params.id, s)))
     return NextResponse.json({ ok: false, error: 'workspace not found' }, { status: 404 });
   const body = await req.json().catch(() => ({}));
   if (!body?.id || typeof body.id !== 'string')
@@ -90,7 +103,7 @@ export async function DELETE(req: NextRequest, props: { params: Promise<{ id: st
   const params = await props.params;
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  if (!(await assertOwnedWorkspace(params.id, s.claims.oid)))
+  if (!(await assertWorkspaceAccess(params.id, s)))
     return NextResponse.json({ ok: false, error: 'workspace not found' }, { status: 404 });
   const id = new URL(req.url).searchParams.get('id');
   if (!id) return NextResponse.json({ ok: false, error: 'id required' }, { status: 400 });
