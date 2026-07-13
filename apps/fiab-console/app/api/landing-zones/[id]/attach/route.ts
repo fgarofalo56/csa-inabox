@@ -31,7 +31,14 @@ import {
   kindLabel,
   type AttachedServiceKind,
 } from '@/lib/azure/attached-service-kinds';
-import { createAttachedService } from '@/lib/azure/attached-services-store';
+import {
+  createAttachedService,
+  applyIntegrationResults,
+  attachedTenantId,
+  type AttachedServiceIntegration,
+} from '@/lib/azure/attached-services-store';
+import { runAttachIntegration } from '@/lib/azure/attach-integration';
+import { resolveUamiPrincipalId } from '@/lib/clients/azure-connections-client';
 import { decodeLandingZoneId } from '@/lib/azure/landing-zone-id';
 import { emitAuditEvent } from '@/lib/admin/audit-stream';
 
@@ -106,9 +113,15 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
   const registered: Array<{
     id: string; kind: AttachedServiceKind; displayName: string; armResourceId: string;
     reachability?: string; rbacState?: string; networkPosture?: string;
+    integration?: AttachedServiceIntegration;
   }> = [];
   const manualActions: Array<{ armResourceId: string; action: string }> = [];
   const errors: Array<{ armResourceId: string; error: string }> = [];
+
+  // Resolve the Console UAMI principal once — every attach in this batch grants
+  // to the same identity (Phase-2 auto-RBAC). Best-effort: null → honest gate.
+  const registryTenantId = attachedTenantId(session!);
+  const principalId = await resolveUamiPrincipalId().catch(() => null);
 
   for (const svc of requested) {
     const armResourceId = (svc.armResourceId || '').trim();
@@ -140,6 +153,23 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         // pending-grants until Phase 2 confirms the RBAC assignment is live.
         status: 'pending-grants',
       });
+      // Phase-2 auto-integration: RBAC grant + Purview + telemetry + chargeback.
+      // Each step is best-effort and individually recorded on the service doc; a
+      // hook failure never fails the attach (the registry doc already exists).
+      let integration: AttachedServiceIntegration | undefined;
+      try {
+        integration = await runAttachIntegration({
+          armResourceId,
+          kind,
+          displayName,
+          subscriptionId,
+          resourceGroup,
+          location: row?.properties?.location,
+          principalId,
+        });
+        await applyIntegrationResults(registryTenantId, view.id, integration).catch(() => null);
+      } catch { /* integration is best-effort — never fail the attach */ }
+
       registered.push({
         id: view.id,
         kind,
@@ -148,12 +178,24 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
         reachability: preflight.reachability,
         rbacState: preflight.rbacState,
         networkPosture: preflight.networkPosture,
+        integration,
       });
-      // Every attach needs the navigator RBAC granted (Phase 2 auto-grant).
-      manualActions.push({
-        armResourceId,
-        action: `Grant the Console UAMI the "${preflight.rbacRoleName}" role at ${preflight.rbacScope}.`,
-      });
+      // Surface the RBAC step's honest gate (grant command) as a manual action
+      // only when auto-grant did not go through.
+      if (integration?.rbac?.status === 'granted') {
+        // Auto-granted — no manual RBAC action needed.
+      } else if (integration?.rbac?.grantScript) {
+        manualActions.push({ armResourceId, action: integration.rbac.grantScript });
+      } else {
+        manualActions.push({
+          armResourceId,
+          action: `Grant the Console UAMI the "${preflight.rbacRoleName}" role at ${preflight.rbacScope}.`,
+        });
+      }
+      // A pending telemetry grant is also an honest manual action.
+      if (integration?.telemetry?.status === 'pending-grants' && integration.telemetry.grantScript) {
+        manualActions.push({ armResourceId, action: integration.telemetry.grantScript });
+      }
       if (preflight.networkPosture === 'private-endpoint') {
         manualActions.push({
           armResourceId,
@@ -187,9 +229,11 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       attached: registered.length,
       failed: errors.length,
       note:
-        'Services are registered in Loom. Each still needs its navigator RBAC granted (Phase 2 ' +
-        'auto-grant) before data-plane calls succeed; private-endpoint-locked resources also need a ' +
-        'hub PE path (Phase 3). Governance / telemetry / chargeback auto-integration lands in Phase 2.',
+        'Services are registered in Loom and auto-integrated: the Console UAMI navigator RBAC was ' +
+        'granted (or an honest grant command is listed under manualActions), the resource was registered ' +
+        'as a Purview scan source where supported, diagnostic settings route its logs to the hub Log ' +
+        'Analytics workspace, and its subscription is in the chargeback sweep. Private-endpoint-locked ' +
+        'resources still need a hub PE path (Phase 3).',
     },
   });
 }

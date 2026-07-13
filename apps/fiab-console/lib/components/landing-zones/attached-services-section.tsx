@@ -11,15 +11,16 @@ import { clientFetch } from '@/lib/client-fetch';
  * Real data (GET /api/landing-zones/[id]/services); Fluent v9 + Loom tokens,
  * EmptyState for the empty pane, honest badges for each service's live posture.
  */
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactElement } from 'react';
 import {
   makeStyles, tokens,
-  Subtitle2, Body1, Caption1, Badge, Button, Spinner,
+  Subtitle2, Body1, Caption1, Badge, Button, Spinner, Tooltip,
   MessageBar, MessageBarBody, MessageBarTitle,
 } from '@fluentui/react-components';
 import {
   Add16Regular, ArrowClockwise20Regular, Delete16Regular,
   PlugConnected24Regular, CheckmarkCircle16Filled, Warning16Regular,
+  ShieldKeyhole16Regular, Database16Regular, DataUsage16Regular, MoneyHand16Regular,
 } from '@fluentui/react-icons';
 import { EmptyState } from '@/lib/components/empty-state';
 import { itemVisual } from '@/lib/components/ui/item-type-visual';
@@ -31,6 +32,22 @@ function encodeLzIdForPath(id: string): string {
   if (!id.includes('/')) return id;
   const b64 = btoa(unescape(encodeURIComponent(id)));
   return b64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+type IntegrationStepStatus =
+  | 'granted' | 'registered' | 'wired' | 'included'
+  | 'pending-grants' | 'not-configured' | 'skipped' | 'error';
+interface IntegrationStepResult {
+  status: IntegrationStepStatus;
+  detail?: string;
+  grantScript?: string;
+  checkedAt?: string;
+}
+interface AttachedServiceIntegration {
+  rbac?: IntegrationStepResult;
+  purview?: IntegrationStepResult;
+  telemetry?: IntegrationStepResult;
+  chargeback?: IntegrationStepResult;
 }
 
 interface AttachedServiceView {
@@ -50,18 +67,34 @@ interface AttachedServiceView {
     rbacRoleName?: string;
     remediation?: string;
   };
+  integration?: AttachedServiceIntegration;
 }
 
 const useStyles = makeStyles({
   root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
   head: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: tokens.spacingHorizontalM, flexWrap: 'wrap' },
   list: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS },
-  row: {
-    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM,
+  card: {
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS,
     padding: tokens.spacingVerticalS, paddingLeft: tokens.spacingHorizontalM, paddingRight: tokens.spacingHorizontalM,
     borderRadius: tokens.borderRadiusMedium,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground1,
+  },
+  row: {
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM,
+  },
+  integrationRow: {
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, flexWrap: 'wrap',
+    paddingTop: tokens.spacingVerticalXXS,
+  },
+  gateBar: { marginTop: tokens.spacingVerticalXS },
+  code: {
+    fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase200,
+    backgroundColor: tokens.colorNeutralBackground3,
+    padding: `${tokens.spacingVerticalXXS} ${tokens.spacingHorizontalXS}`,
+    borderRadius: tokens.borderRadiusSmall, wordBreak: 'break-all',
+    display: 'inline-block',
   },
   rowIcon: { flexShrink: 0, display: 'inline-flex', fontSize: '20px' },
   rowText: { display: 'flex', flexDirection: 'column', minWidth: 0, flex: 1 },
@@ -77,6 +110,29 @@ function reachBadge(v: AttachedServiceView['validation']) {
   if (r === 'private-endpoint-needed') return <Badge appearance="tint" color="warning" size="small" icon={<Warning16Regular />}>PE needed</Badge>;
   if (r === 'blocked') return <Badge appearance="tint" color="danger" size="small">Blocked</Badge>;
   return <Badge appearance="tint" color="informative" size="small">Unknown</Badge>;
+}
+
+/** Colour for an auto-integration step status (green = done, amber = gate). */
+function stepColor(status?: IntegrationStepStatus): 'success' | 'warning' | 'danger' | 'informative' {
+  if (status === 'granted' || status === 'registered' || status === 'wired' || status === 'included') return 'success';
+  if (status === 'pending-grants') return 'warning';
+  if (status === 'error') return 'danger';
+  return 'informative'; // not-configured / skipped / undefined
+}
+
+const STEP_LABEL: Record<string, string> = { granted: 'granted', registered: 'registered', wired: 'wired', included: 'in sweep', 'pending-grants': 'action needed', 'not-configured': 'not configured', skipped: 'n/a', error: 'error' };
+
+/** One auto-integration badge (RBAC / Governance / Telemetry / Chargeback). */
+function IntegrationBadge({ label, icon, step }: { label: string; icon: ReactElement; step?: IntegrationStepResult }) {
+  const status = step?.status;
+  const tip = step?.detail || `${label}: ${status ? (STEP_LABEL[status] || status) : 'not run'}`;
+  return (
+    <Tooltip content={tip} relationship="description" withArrow>
+      <Badge appearance="tint" color={stepColor(status)} size="small" icon={icon}>
+        {label}: {status ? (STEP_LABEL[status] || status) : '—'}
+      </Badge>
+    </Tooltip>
+  );
 }
 
 export function AttachedServicesSection({
@@ -162,34 +218,59 @@ export function AttachedServicesSection({
             const def = getKindDef(svc.kind);
             const visual = itemVisual(def?.tileSlug || svc.kind);
             const Icon = visual.icon;
+            const integ = svc.integration;
+            // Honest gates: any step that emitted a grant command to run by hand.
+            const gates = [integ?.rbac, integ?.telemetry]
+              .filter((st): st is IntegrationStepResult => !!st && st.status === 'pending-grants' && !!st.grantScript);
             return (
-              <div key={svc.id} className={s.row}>
-                <span className={s.rowIcon} style={{ color: visual.color }}><Icon /></span>
-                <span className={s.rowText}>
-                  <span className={s.rowName} title={svc.displayName}>{svc.displayName}</span>
-                  <Caption1 className={s.rowSub} title={svc.armResourceId}>
-                    {kindLabel(svc.kind)}{svc.resourceGroup ? ` · ${svc.resourceGroup}` : ''}
-                  </Caption1>
-                </span>
-                <span className={s.badges}>
-                  <Badge appearance="outline" size="small" color={svc.origin === 'day0-byo' ? 'brand' : 'informative'}>
-                    {svc.origin === 'day0-byo' ? 'day-0 BYO' : 'attached'}
-                  </Badge>
-                  {reachBadge(svc.validation)}
-                  {svc.validation?.rbacState && (
-                    <Badge appearance="outline" size="small" color={svc.validation.rbacState === 'granted' ? 'success' : 'warning'}
-                      title={svc.validation.rbacRoleName ? `Needs role: ${svc.validation.rbacRoleName}` : undefined}>
-                      RBAC: {svc.validation.rbacState}
+              <div key={svc.id} className={s.card}>
+                <div className={s.row}>
+                  <span className={s.rowIcon} style={{ color: visual.color }}><Icon /></span>
+                  <span className={s.rowText}>
+                    <span className={s.rowName} title={svc.displayName}>{svc.displayName}</span>
+                    <Caption1 className={s.rowSub} title={svc.armResourceId}>
+                      {kindLabel(svc.kind)}{svc.resourceGroup ? ` · ${svc.resourceGroup}` : ''}
+                    </Caption1>
+                  </span>
+                  <span className={s.badges}>
+                    <Badge appearance="outline" size="small" color={svc.origin === 'day0-byo' ? 'brand' : 'informative'}>
+                      {svc.origin === 'day0-byo' ? 'day-0 BYO' : 'attached'}
                     </Badge>
-                  )}
-                  <Button
-                    appearance="subtle" size="small" icon={detaching === svc.id ? <Spinner size="tiny" /> : <Delete16Regular />}
-                    disabled={detaching === svc.id}
-                    onClick={() => void detach(svc)}
-                  >
-                    Detach
-                  </Button>
-                </span>
+                    <Badge appearance="outline" size="small" color={svc.status === 'attached' ? 'success' : 'warning'}>
+                      {svc.status === 'attached' ? 'ready' : 'pending grants'}
+                    </Badge>
+                    {reachBadge(svc.validation)}
+                    <Button
+                      appearance="subtle" size="small" icon={detaching === svc.id ? <Spinner size="tiny" /> : <Delete16Regular />}
+                      disabled={detaching === svc.id}
+                      onClick={() => void detach(svc)}
+                    >
+                      Detach
+                    </Button>
+                  </span>
+                </div>
+
+                {/* Phase-2 auto-integration status — RBAC / Governance / Telemetry / Chargeback. */}
+                <div className={s.integrationRow}>
+                  <IntegrationBadge label="RBAC" icon={<ShieldKeyhole16Regular />} step={integ?.rbac} />
+                  <IntegrationBadge label="Governance" icon={<Database16Regular />} step={integ?.purview} />
+                  <IntegrationBadge label="Telemetry" icon={<DataUsage16Regular />} step={integ?.telemetry} />
+                  <IntegrationBadge label="Chargeback" icon={<MoneyHand16Regular />} step={integ?.chargeback} />
+                </div>
+
+                {gates.length > 0 && (
+                  <MessageBar intent="warning" className={s.gateBar} layout="multiline">
+                    <MessageBarBody>
+                      <MessageBarTitle>Grant needed to finish integrating</MessageBarTitle>
+                      {gates.map((g, i) => (
+                        <div key={i} style={{ marginTop: i ? tokens.spacingVerticalXS : 0 }}>
+                          <div>{g.detail}</div>
+                          <code className={s.code}>{g.grantScript}</code>
+                        </div>
+                      ))}
+                    </MessageBarBody>
+                  </MessageBar>
+                )}
               </div>
             );
           })}

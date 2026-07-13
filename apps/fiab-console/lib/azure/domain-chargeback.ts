@@ -21,7 +21,7 @@ import {
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { MonitorError } from '@/lib/azure/monitor-client';
 import { armBase, armScope } from '@/lib/azure/cloud-endpoints';
-import { loomSubscriptions, type CostTimeframe } from '@/lib/azure/cost-client';
+import { loomCostSubscriptions, type CostTimeframe } from '@/lib/azure/cost-client';
 import { DOMAIN_TAG_KEY } from '@/lib/azure/domain-registry';
 
 const ARM = armBase();
@@ -172,7 +172,7 @@ export async function getDomainChargeback(opts: {
   domainNames?: Record<string, string>;
 } = {}): Promise<DomainChargebackModel> {
   const timeframe: CostTimeframe = opts.timeframe || 'MonthToDate';
-  const subs = loomSubscriptions();
+  const subs = await loomCostSubscriptions();
   if (subs.length === 0) throw new MonitorError('No Loom subscriptions configured for Cost Management', 404);
 
   const raw: TagCostRow[] = [];
