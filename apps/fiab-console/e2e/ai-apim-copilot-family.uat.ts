@@ -43,7 +43,7 @@ const FAMILY: FamilyEditor[] = [
   { type: 'apim-api',                  ribbonGroup: 'API',       primary: ['Save', 'Create'] },
   { type: 'apim-product',              ribbonGroup: 'Product',   primary: ['Save', 'Create'] },
   { type: 'apim-policy',               ribbonGroup: 'Edit',      primary: ['Save'] },
-  { type: 'data-product',              ribbonGroup: 'Product',   primary: ['Save'] },
+  { type: 'data-product',              ribbonGroup: 'Actions',   primary: ['Edit', 'Refresh', 'Create', 'Save'] },
   // AI Foundry
   { type: 'ai-foundry-hub',            ribbonGroup: 'Hub',       primary: ['Reload'] },
   { type: 'ai-foundry-project',        ribbonGroup: 'Item',      primary: ['Reload'] },

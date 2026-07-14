@@ -393,6 +393,17 @@ export interface AppInstallJob {
   /** Catastrophic worker error (the install loop itself threw) — distinct from
    *  per-item provision failures captured inside `provision`. */
   error?: string;
+  /** Demo-environment deploy: per-app sub-installs (only set when
+   *  appId==='demo-environment'). Each entry is one showcase app installed into
+   *  its own `Demo —` workspace; installJobId points at its own app-install job. */
+  subJobs?: Array<{
+    appId: string;
+    wsLabel: string;
+    workspaceId?: string;
+    installJobId?: string;
+    status: 'pending' | 'installing' | 'done' | 'error';
+    error?: string;
+  }>;
   createdAt: string;
   updatedAt: string;
   createdBy?: string;
