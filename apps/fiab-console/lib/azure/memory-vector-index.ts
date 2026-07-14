@@ -21,6 +21,7 @@ import {
 } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { embedText } from '@/lib/azure/embeddings-client';
+import { escapeSqlLiteral } from '@/lib/sql/quoting';
 import { embeddingModelDimensions } from '@/lib/azure/vectorizer-consistency';
 import type { MemoryRecord } from '@/lib/copilot/memory-types';
 
@@ -162,7 +163,9 @@ export async function searchMemoryVector(
     const vector = await embedText(query);
     if (!vector.length) return null;
     const tok = await searchToken();
-    const filter = scopeKeys.map((k) => `scopeKey eq '${k.replace(/'/g, "''")}'`).join(' or ');
+    // OData string literals use the same ''-doubling as SQL — centralised helper
+    // (guardrails sql-quoting arm).
+    const filter = scopeKeys.map((k) => `scopeKey eq '${escapeSqlLiteral(k)}'`).join(' or ');
     const body = {
       count: false,
       select: 'id,scopeKey',
