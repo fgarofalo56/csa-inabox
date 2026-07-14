@@ -72,7 +72,7 @@ import { MetricViewBuilder } from '../components/metric-view-builder';
 import { PowerQueryHost } from '@/lib/components/pipeline/dataflow/power-query-host';
 import { parseSharedQueries, setQueryBody } from '@/lib/components/pipeline/dataflow/m-script';
 import { usePowerBiWorkspaces, WorkspacePicker } from './workspace-picker';
-import { useBiBackend } from '@/lib/components/platform-config';
+import { useBiBackend, useSemanticBackend } from '@/lib/components/platform-config';
 import { useStyles } from './styles';
 
 interface DatasetLite {
@@ -1688,16 +1688,26 @@ function LoomNativeModelView({
   );
 }
 
+/**
+ * Dispatch on the RUNTIME semantic-model backend (LOOM_SEMANTIC_BACKEND, served
+ * by /api/config/ui via useSemanticBackend) — NOT a build-baked NEXT_PUBLIC_* var.
+ * When AAS is the active backend, render the AAS Storage-mode + Refresh surface;
+ * otherwise the Loom-native / Power BI-opt-in editor below. Fail-closed to the
+ * Loom-native editor while the config resolves (no-fabric-dependency.md). This
+ * thin wrapper has its single hook before the conditional return, so the inner
+ * editor's many hooks stay unconditional (Rules of Hooks).
+ */
 export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: string }) {
-  const s = useStyles();
-  const sm = useSmVisualStyles();
-  // Azure-native default (no-fabric-dependency.md): when the AAS backend is the
-  // active BI backend (bicep sets NEXT_PUBLIC_LOOM_BI_BACKEND=aas when aas.bicep
-  // is deployed), render the AAS Storage-mode + Refresh surface. Power BI stays
-  // behind NEXT_PUBLIC_LOOM_BI_BACKEND=powerbi (opt-in).
-  if (process.env.NEXT_PUBLIC_LOOM_BI_BACKEND === 'aas') {
+  const { semanticBackend } = useSemanticBackend();
+  if (semanticBackend === 'analysis-services') {
     return <AasSemanticModelPanel item={item} id={id} />;
   }
+  return <SemanticModelEditorInner item={item} id={id} />;
+}
+
+function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: string }) {
+  const s = useStyles();
+  const sm = useSmVisualStyles();
   // Power BI group listing is the OPT-IN leg (rel-T04/B12), enabled via the
   // RUNTIME admin setting (Admin → Runtime config → Power BI backend) read live
   // by useBiBackend() — NOT a build-baked NEXT_PUBLIC_* var. With the default

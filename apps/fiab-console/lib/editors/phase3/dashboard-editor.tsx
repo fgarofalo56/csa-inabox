@@ -1,7 +1,7 @@
 'use client';
 
 import { clientFetch } from '@/lib/client-fetch';
-import { useBiBackend } from '@/lib/components/platform-config';
+import { useBiBackend, useSemanticBackend } from '@/lib/components/platform-config';
 /**
  * DashboardEditor — extracted from phase3-editors.tsx (byte-for-byte move).
  *
@@ -722,8 +722,10 @@ function QaTileDialog({ dashboardItemId, workspaceId, onClose, onAdd }: {
   const [viz, setViz] = useState<TileVizKind>('table');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const semanticBackend = (typeof process !== 'undefined' && (process.env.NEXT_PUBLIC_LOOM_SEMANTIC_BACKEND || '')) || '';
-  const aasMode = semanticBackend.toLowerCase() === 'analysis-services';
+  // Runtime semantic backend (LOOM_SEMANTIC_BACKEND via /api/config/ui) — NOT a
+  // build-baked NEXT_PUBLIC_* var. AAS mode drives XMLA (no PBI dataset id).
+  const { semanticBackend } = useSemanticBackend();
+  const aasMode = semanticBackend === 'analysis-services';
 
   useEffect(() => {
     if (aasMode || !workspaceId) return;
