@@ -40,7 +40,7 @@ import {
   type UnifiedMirrorResult,
   type UnityLinkStatus,
 } from '@/lib/azure/unified-domain-mapper';
-import { validateDomainMove } from '@/lib/azure/domain-hierarchy';
+import { validateDomainMove, domainDepth, rootAncestorId, MAX_DOMAIN_DEPTH } from '@/lib/azure/domain-hierarchy';
 import {
   type DomainItem,
   type DomainsDoc,
@@ -91,11 +91,16 @@ async function workspaceCounts(tenantId: string): Promise<Record<string, number>
   }
 }
 
-/** Is a given Loom domain mirrored into the Unity Catalog metastore? */
-function unityLinkedFor(d: DomainItem, unity: UnityLinkStatus): boolean {
+/**
+ * Is a given Loom domain mirrored into the Unity Catalog metastore? Deep trees
+ * flatten onto UC as ROOT ancestor → catalog, every descendant → a schema under
+ * it, so a subdomain at any depth is looked up under its root ancestor's
+ * catalog (not its immediate parent's).
+ */
+function unityLinkedFor(d: DomainItem, unity: UnityLinkStatus, allItems: DomainItem[]): boolean {
   if (!unity.configured) return false;
   if (d.parentId) {
-    const cat = unityName(d.parentId);
+    const cat = unityName(rootAncestorId(allItems, d.id));
     return (unity.schemasByCatalog[cat] || []).includes(unityName(d.id));
   }
   return unity.catalogs.includes(unityName(d.id));
@@ -112,7 +117,7 @@ export async function GET() {
     // it only fans out schema-list calls for domain-derived catalogs instead of
     // every catalog in the metastore (avoids a per-load N+1 against Databricks).
     const domainCatalogs = Array.from(
-      new Set(doc.items.map((d) => (d.parentId ? unityName(d.parentId) : unityName(d.id)))),
+      new Set(doc.items.map((d) => unityName(rootAncestorId(doc.items, d.id)))),
     );
     // NOTE: the Purview business-domain mirror status is DELIBERATELY NOT fetched
     // here. The Purview Data Map data-plane probe can answer 403 slowly behind a
@@ -138,7 +143,9 @@ export async function GET() {
       // purviewLinked is resolved client-side from the lazy purview-status call
       // (see /api/admin/domains/purview-status) so this list never blocks on the
       // Purview Data Map probe.
-      unityLinked: unityLinkedFor(d, unity),
+      unityLinked: unityLinkedFor(d, unity, doc.items),
+      // Depth in the hierarchy (root = 1) so the UI can indent/badge deep nodes.
+      depth: domainDepth(doc.items, d.id),
       callerTier: tiers[i] as DomainTier,
     }));
     return NextResponse.json({
@@ -194,18 +201,21 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: false, error: `domain '${id}' already exists` }, { status: 409 });
     }
     const parentId = body?.parentId ? String(body.parentId).trim() : undefined;
-    // A subdomain must reference an existing parent (Fabric parity). Reject a
-    // dangling parentId rather than silently creating an orphan, and forbid
-    // nesting under a subdomain (domains are at most two levels: domain →
-    // subdomain — matches UC catalog→schema and Fabric "subdomains only").
+    // A subdomain must reference an existing parent. Reject a dangling parentId
+    // rather than silently creating an orphan. Deep nesting is allowed (#1483
+    // Wave 2 — department → agency → sub-agency → office → program …), bounded
+    // only by MAX_DOMAIN_DEPTH so the tree — and the mirror recursion — stays
+    // finite. Purview nests to any depth; UC flattens deeper levels into schemas
+    // under the root ancestor's catalog (see the mirror call below).
     if (parentId) {
       const parent = doc.items.find((d) => d.id === parentId);
       if (!parent) {
         return NextResponse.json({ ok: false, error: `parent domain '${parentId}' not found` }, { status: 400 });
       }
-      if (parent.parentId) {
+      const childDepth = domainDepth(doc.items, parentId) + 1;
+      if (childDepth > MAX_DOMAIN_DEPTH) {
         return NextResponse.json(
-          { ok: false, error: 'A subdomain cannot itself contain subdomains — domains are at most two levels (domain → subdomain).' },
+          { ok: false, error: `Nesting under '${parentId}' would exceed the ${MAX_DOMAIN_DEPTH}-level depth limit. Choose a shallower parent.` },
           { status: 400 },
         );
       }
@@ -268,8 +278,11 @@ export async function POST(req: NextRequest) {
     }
     // Unified write-through to Purview + Unity Catalog (best-effort; neither
     // blocks the Cosmos write — both are independently optional, no Fabric dep).
+    // ucCatalogId = the new domain's root ancestor (itself when root) so a deep
+    // subdomain lands as a schema under the right root catalog on UC.
+    const ucCatalogId = parentId ? rootAncestorId(doc.items, parentId) : id;
     const mirror = await mirrorDomainUpsert(
-      { id, name, description: newItem.description, parentId }, 'create',
+      { id, name, description: newItem.description, parentId, ucCatalogId }, 'create',
     );
     applyMirrorIds(newItem, mirror);
     doc.items.push(newItem);
@@ -421,7 +434,11 @@ export async function PATCH(req: NextRequest) {
     // Unified mirror: a MOVE reparents the Purview collection (UC has no move →
     // honest note); any other edit re-asserts name/description on both back-ends.
     let mirror: UnifiedMirrorResult | undefined;
-    const spec = { id: domain.id, name: domain.name, description: domain.description, parentId: domain.parentId };
+    // ucCatalogId = the domain's root ancestor after this write (doc.items now
+    // reflects the new parentId), so a deep subdomain re-asserts under the right
+    // UC catalog on both update and move.
+    const ucCatalogId = rootAncestorId(doc.items, domain.id);
+    const spec = { id: domain.id, name: domain.name, description: domain.description, parentId: domain.parentId, ucCatalogId };
     if (moved) {
       mirror = await mirrorDomainMove({ ...spec, parentId: undefined }, newParentId);
     } else if (body?.name !== undefined || body?.description !== undefined) {

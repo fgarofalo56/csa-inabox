@@ -43,6 +43,10 @@ import { DomainSettingsPane, type DomainRecord } from '@/lib/panes/domain-settin
 import { DomainImageChip } from '@/lib/components/domain-image-presets';
 import { CreateDomainDialog } from '@/lib/domains/create-domain-dialog';
 import { DomainGovernanceSync } from '@/lib/domains/domain-governance-sync';
+import { DomainDesignerCanvas } from '@/lib/domains/domain-designer-canvas';
+import { DomainMeshPanel } from '@/lib/domains/domain-mesh-panel';
+import { TabList, Tab } from '@fluentui/react-components';
+import { AppsList24Regular, Flowchart24Regular } from '@fluentui/react-icons';
 
 interface Domain extends DomainRecord {
   createdAt: string; createdBy: string; purviewDomainId?: string;
@@ -83,6 +87,8 @@ export default function DomainsPage() {
   const [error, setError] = useState<string | null>(null);
   const [q, setQ] = useState('');
   const [actionErr, setActionErr] = useState<string | null>(null);
+  // List (data table) vs Designer (drag-to-reparent tree/graph canvas — #1483 Wave 3).
+  const [view, setView] = useState<'list' | 'designer'>('list');
 
   // Create dialog state. The themed CreateDomainDialog handles both the
   // library/custom create flow and (with a pre-selected parent) "New subdomain".
@@ -177,6 +183,23 @@ export default function DomainsPage() {
     finally { setMoving(false); }
   }
 
+  // Reparent used by the designer canvas (drag-to-reparent + undo/redo). Real
+  // PATCH; the server enforces cycle + depth and mirrors the move to Purview/UC.
+  const reparentDomain = useCallback(async (id: string, newParentId: string | null): Promise<{ ok: boolean; error?: string }> => {
+    try {
+      const r = await clientFetch(`/api/admin/domains?id=${encodeURIComponent(id)}`, {
+        method: 'PATCH', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ parentId: newParentId }),
+      });
+      const j = await r.json();
+      if (!j.ok) return { ok: false, error: j.error || `HTTP ${r.status}` };
+      await load();
+      return { ok: true };
+    } catch (e: any) {
+      return { ok: false, error: e?.message || String(e) };
+    }
+  }, [load]);
+
   const purviewNames = useMemo(() => new Set(
     purview && purview.configured ? purview.domains.map((d) => (d.name || '').toLowerCase()) : [],
   ), [purview]);
@@ -186,6 +209,24 @@ export default function DomainsPage() {
     for (const d of domains || []) m[d.id] = d.name;
     return m;
   }, [domains]);
+
+  // Descendant ids of the domain being moved — invalid reparent targets (a
+  // domain can't be nested under its own subtree). Powers the Move dropdown so
+  // it only offers legal parents (the server still enforces cycle + depth).
+  const moveDescendants = useMemo(() => {
+    const out = new Set<string>();
+    if (!moveFor) return out;
+    const childrenOf = new Map<string, string[]>();
+    for (const d of domains || []) if (d.parentId) {
+      const arr = childrenOf.get(d.parentId) || []; arr.push(d.id); childrenOf.set(d.parentId, arr);
+    }
+    const stack = [moveFor.id];
+    while (stack.length) {
+      const cur = stack.pop() as string;
+      for (const k of childrenOf.get(cur) || []) if (!out.has(k)) { out.add(k); stack.push(k); }
+    }
+    return out;
+  }, [moveFor, domains]);
 
   const filtered = useMemo(() => {
     const f = q.toLowerCase().trim();
@@ -319,6 +360,17 @@ export default function DomainsPage() {
         <DomainGovernanceSync />
       </Section>
 
+      <Section title="Federated data-mesh">
+        <SectionExplainer>
+          Domains are the backbone of the federated mesh: creating or nesting a domain propagates across the
+          governance fabric. This is the <strong>read</strong> face — each domain&apos;s rolled-up footprint across the
+          <em> unified catalog</em> (workspaces + data items in its subtree), <em>Microsoft Purview</em> (Data Map
+          collection), <em>Unity Catalog</em> (catalog / schema), and its <em>landing-zone</em> binding. Use
+          <strong> Governance sync</strong> above to reconcile domains outward.
+        </SectionExplainer>
+        <DomainMeshPanel />
+      </Section>
+
       {error && (
         <MessageBar intent="error" className={a.messageBar}>
           <MessageBarBody>
@@ -337,11 +389,41 @@ export default function DomainsPage() {
         title="Domains"
         actions={
           <>
+            <TabList
+              selectedValue={view}
+              onTabSelect={(_e, d) => setView(d.value as 'list' | 'designer')}
+              size="small"
+            >
+              <Tab value="list" icon={<AppsList24Regular />}>List</Tab>
+              <Tab value="designer" icon={<Flowchart24Regular />}>Designer</Tab>
+            </TabList>
             <Button icon={<ArrowSync24Regular />} onClick={load} disabled={loading}>Refresh</Button>
             <Button appearance="primary" icon={<Add24Regular />} onClick={() => openCreate(null)}>Create new domain</Button>
           </>
         }
       >
+        {view === 'designer' ? (
+          loading && !error ? (
+            <Spinner label="Loading domains…" />
+          ) : (
+            <DomainDesignerCanvas
+              domains={(domains || []).map((d) => ({
+                id: d.id, name: d.name, parentId: d.parentId, icon: d.icon,
+                themeColor: d.themeColor, color: d.color, workspaceCount: d.workspaceCount,
+                status: d.status, depth: (d as Domain & { depth?: number }).depth,
+              }))}
+              canEditTree={isTenantAdmin}
+              onReparent={reparentDomain}
+              onAddChild={(parentId) => openCreate(parentId)}
+              onAddRoot={() => openCreate(null)}
+              onRename={(d) => setSelected((domains || []).find((x) => x.id === d.id) || null)}
+              onDelete={(d) => remove(d.id)}
+              onAssign={(d) => setAssignFor((domains || []).find((x) => x.id === d.id) || null)}
+              onOpenSettings={(d) => setSelected((domains || []).find((x) => x.id === d.id) || null)}
+            />
+          )
+        ) : (
+          <>
         <Toolbar search={q} onSearch={setQ} searchPlaceholder="Search by name, id, admin…" />
         {loading && !error ? (
           <Spinner label="Loading domains…" />
@@ -380,6 +462,8 @@ export default function DomainsPage() {
             empty={q ? `No domains match "${q}".` : 'No domains defined yet. Click “Create new domain” to create your first one.'}
             ariaLabel="Domains"
           />
+        )}
+          </>
         )}
       </Section>
 
@@ -436,13 +520,14 @@ export default function DomainsPage() {
                   >
                     <Option value="">Root (no parent)</Option>
                     {(domains || [])
-                      .filter((p) => !p.parentId && p.id !== moveFor?.id)
-                      .map((p) => <Option key={p.id} value={p.id}>{p.name}</Option>)}
+                      .filter((p) => p.id !== moveFor?.id && !moveDescendants.has(p.id))
+                      .map((p) => <Option key={p.id} value={p.id} text={p.name}>{p.name}</Option>)}
                   </Dropdown>
                 </div>
                 <Caption1 className={a.muted}>
-                  Domains are at most two levels (domain → subdomain). Moving reparents the mirrored Purview
-                  collection; Unity Catalog has no move operation, so its catalog/schema mapping is unchanged.
+                  Domains nest to any depth (department → agency → sub-agency → program). Moving reparents the
+                  mirrored Purview collection; Unity Catalog has no move operation, so its catalog/schema mapping
+                  is unchanged. Tip: use the Designer view to drag domains into place.
                 </Caption1>
               </div>
             </DialogContent>

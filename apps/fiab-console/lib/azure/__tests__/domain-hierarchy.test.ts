@@ -3,7 +3,9 @@
  * move endpoints (admin tenant-settings store + governance Cosmos store).
  */
 import { describe, it, expect, afterEach } from 'vitest';
-import { validateDomainMove, isDomainTenantAdmin } from '../domain-hierarchy';
+import {
+  validateDomainMove, isDomainTenantAdmin, domainDepth, rootAncestorId, MAX_DOMAIN_DEPTH,
+} from '../domain-hierarchy';
 
 describe('validateDomainMove', () => {
   // root → child, plus an unrelated root
@@ -35,17 +37,60 @@ describe('validateDomainMove', () => {
     expect(err!.message).toMatch(/own subdomain/i);
   });
 
-  it('rejects nesting under a subdomain (two-level cap)', () => {
-    const err = validateDomainMove(tree, 'other', 'child');
-    expect(err).toMatchObject({ status: 400 });
-    expect(err!.message).toMatch(/two levels|subdomain/i);
+  it('ALLOWS nesting under a subdomain (arbitrary depth — #1483 Wave 2)', () => {
+    // 'other' → under 'child' creates a level-3 node; that is now valid.
+    expect(validateDomainMove(tree, 'other', 'child')).toBeNull();
   });
 
-  it('rejects moving a domain that itself has subdomains', () => {
-    // root has subdomain `child`; moving root under `other` would push child to L3.
-    const err = validateDomainMove(tree, 'root', 'other');
+  it('ALLOWS moving a domain that itself has subdomains (its subtree travels with it)', () => {
+    // root has subdomain `child`; moving root under `other` is fine — child just
+    // lands at level 3.
+    expect(validateDomainMove(tree, 'root', 'other')).toBeNull();
+  });
+
+  it('rejects a move that would exceed the max depth', () => {
+    // A straight chain a→b→c→…: moving the deepest under the last leaf would push
+    // past MAX_DOMAIN_DEPTH. Build a chain exactly at the cap, plus a spare root.
+    const chain = Array.from({ length: MAX_DOMAIN_DEPTH }, (_, i) => ({
+      id: `n${i}`, parentId: i === 0 ? undefined : `n${i - 1}`,
+    }));
+    // n0..n{MAX-1} is a chain of depth MAX. A spare root 'spare' with one child.
+    const withSpare = [...chain, { id: 'spare' }, { id: 'spare-kid', parentId: 'spare' }];
+    // Moving 'spare' (height 2) under the deepest chain node (depth MAX) → MAX+1.
+    const err = validateDomainMove(withSpare, 'spare', `n${MAX_DOMAIN_DEPTH - 1}`);
     expect(err).toMatchObject({ status: 400 });
-    expect(err!.message).toMatch(/subdomains out first/i);
+    expect(err!.message).toMatch(/levels deep/i);
+  });
+});
+
+describe('domainDepth + rootAncestorId', () => {
+  const deep = [
+    { id: 'dept' },
+    { id: 'agency', parentId: 'dept' },
+    { id: 'subagency', parentId: 'agency' },
+    { id: 'office', parentId: 'subagency' },
+    { id: 'lone' },
+  ];
+
+  it('computes depth (root = 1) down an arbitrary chain', () => {
+    expect(domainDepth(deep, 'dept')).toBe(1);
+    expect(domainDepth(deep, 'agency')).toBe(2);
+    expect(domainDepth(deep, 'subagency')).toBe(3);
+    expect(domainDepth(deep, 'office')).toBe(4);
+    expect(domainDepth(deep, 'lone')).toBe(1);
+  });
+
+  it('resolves the root ancestor for a deep node (and itself for a root)', () => {
+    expect(rootAncestorId(deep, 'office')).toBe('dept');
+    expect(rootAncestorId(deep, 'agency')).toBe('dept');
+    expect(rootAncestorId(deep, 'dept')).toBe('dept');
+    expect(rootAncestorId(deep, 'lone')).toBe('lone');
+  });
+
+  it('is cycle-safe on a corrupt chain', () => {
+    const cyclic = [{ id: 'a', parentId: 'b' }, { id: 'b', parentId: 'a' }];
+    expect(() => domainDepth(cyclic, 'a')).not.toThrow();
+    expect(() => rootAncestorId(cyclic, 'a')).not.toThrow();
   });
 });
 

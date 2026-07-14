@@ -147,7 +147,10 @@ export function CreateDomainDialog({
   const [libraryId, setLibraryId] = useState<string>(DEFAULT_DOMAIN_LIBRARY_ID);
   const [search, setSearch] = useState('');
   const [category, setCategory] = useState<string>('All');
-  const [drillInto, setDrillInto] = useState<string | null>(null); // Enterprise id
+  // Breadcrumb stack of drilled node ids (arbitrary depth, #1483 Wave 2). Empty
+  // = top-level enterprises; last element = the node currently drilled into.
+  const [drillPath, setDrillPath] = useState<string[]>([]);
+  const drillInto = drillPath.length ? drillPath[drillPath.length - 1] : null;
   const [picked, setPicked] = useState<Set<string>>(new Set());
 
   const activeLibrary = useMemo(() => getDomainLibrary(libraryId), [libraryId]);
@@ -157,7 +160,7 @@ export function CreateDomainDialog({
   function selectLibrary(id: string) {
     if (id === libraryId) return;
     setLibraryId(id);
-    setSearch(''); setCategory('All'); setDrillInto(null); setPicked(new Set());
+    setSearch(''); setCategory('All'); setDrillPath([]); setPicked(new Set());
     setErr(null); setResult(null);
   }
 
@@ -183,7 +186,7 @@ export function CreateDomainDialog({
 
   function reset() {
     setLibraryId(DEFAULT_DOMAIN_LIBRARY_ID);
-    setSearch(''); setCategory('All'); setDrillInto(null); setPicked(new Set());
+    setSearch(''); setCategory('All'); setDrillPath([]); setPicked(new Set());
     setCName(''); setCId(''); setCIdDirty(false); setCDesc('');
     setCIcon('building'); setCColor(DOMAIN_THEME_COLORS[0]); setCParent('');
     setErr(null); setResult(null);
@@ -395,20 +398,47 @@ export function CreateDomainDialog({
                   </div>
                 ) : (
                   <div className={s.drillHead}>
+                    {/* Breadcrumb — navigate up one level at a time (arbitrary
+                        depth). Each crumb jumps back to that ancestor. */}
                     <Button
                       size="small" appearance="subtle" icon={<ChevronLeft20Regular />}
-                      onClick={() => { setDrillInto(null); setSearch(''); }}
+                      onClick={() => { setDrillPath((p) => p.slice(0, -1)); setSearch(''); }}
                     >
-                      All enterprises
+                      Back
                     </Button>
+                    <Button
+                      size="small" appearance="subtle"
+                      onClick={() => { setDrillPath([]); setSearch(''); }}
+                    >
+                      All {activeLibrary.copy.itemPlural}
+                    </Button>
+                    {drillPath.map((pid, i) => {
+                      const pn = libraryNode(activeLibrary, pid);
+                      if (!pn) return null;
+                      const last = i === drillPath.length - 1;
+                      return (
+                        <span key={pid} className={s.abbrevRow}>
+                          <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>/</Caption1>
+                          {last ? (
+                            <>
+                              <DomainGlyph icon={pn.icon} color={pn.color} size={24} />
+                              <Subtitle2>{pn.name} ({pn.abbrev})</Subtitle2>
+                            </>
+                          ) : (
+                            <Button
+                              size="small" appearance="subtle"
+                              onClick={() => { setDrillPath((p) => p.slice(0, i + 1)); setSearch(''); }}
+                            >
+                              {pn.abbrev}
+                            </Button>
+                          )}
+                        </span>
+                      );
+                    })}
                     {drillNode && (
-                      <>
-                        <DomainGlyph icon={drillNode.icon} color={drillNode.color} size={24} />
-                        <Subtitle2>{drillNode.name} ({drillNode.abbrev})</Subtitle2>
-                        <Button size="small" appearance="primary" onClick={addAllChildren}>
-                          Add all {activeLibrary.copy.childNoun}
-                        </Button>
-                      </>
+                      <Button size="small" appearance="primary" onClick={addAllChildren}>
+                        Add all {libraryChildren(activeLibrary, drillNode.id).length} {activeLibrary.copy.childNoun}
+                      </Button>
                     )}
                   </div>
                 )}
@@ -417,7 +447,7 @@ export function CreateDomainDialog({
                   {browse.map((n) => {
                     const exists = existingIds.has(n.id);
                     const sel = picked.has(n.id);
-                    const childCount = n.parentId ? 0 : libraryChildren(activeLibrary, n.id).length;
+                    const childCount = libraryChildren(activeLibrary, n.id).length;
                     const hasChildren = childCount > 0;
                     return (
                       <button
@@ -427,7 +457,7 @@ export function CreateDomainDialog({
                         disabled={exists}
                         style={exists ? { opacity: 0.55, cursor: 'not-allowed' } : undefined}
                         onClick={() => togglePick(n.id)}
-                        onDoubleClick={() => { if (hasChildren) setDrillInto(n.id); }}
+                        onDoubleClick={() => { if (hasChildren) setDrillPath((p) => [...p, n.id]); }}
                         title={exists ? 'Already a domain' : n.mission}
                       >
                         <DomainGlyph icon={n.icon} color={n.color} size={34} />
@@ -441,7 +471,7 @@ export function CreateDomainDialog({
                           {hasChildren && (
                             <Badge
                               size="small" appearance="tint" color="informative"
-                              onClick={(e) => { e.stopPropagation(); setDrillInto(n.id); }}
+                              onClick={(e) => { e.stopPropagation(); setDrillPath((p) => [...p, n.id]); }}
                               style={{ alignSelf: 'flex-start', cursor: 'pointer', marginTop: '2px' }}
                             >
                               {childCount} {activeLibrary.copy.childNoun} →

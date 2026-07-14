@@ -6,14 +6,31 @@
  *   • PATCH /api/governance/domains/[id]     (governance-domains Cosmos store, `parentDomainId`)
  *       → via cosmosDomainStore.moveDomain in domains-client.ts
  *
- * Loom domains form an at-most-two-level tree (domain → subdomain), matching
- * Fabric "subdomains only", Purview collection→child-collection, and Unity
- * Catalog catalog→schema. A move that violates the tree would corrupt the
- * unified mapper's root-vs-subdomain (catalog-vs-schema) determination, which
- * keys off `parentId` presence — so both paths MUST reject the same cases.
+ * Loom domains form a DEEP, ARBITRARY-DEPTH tree (department → agency →
+ * sub-agency → office → program …) — issue #1483 Wave 2. This models real org
+ * structure (e.g. USDA → REE mission area → ARS/ERS/NIFA/NASS) rather than the
+ * old two-level (domain → subdomain) cap. Cosmos stays AUTHORITATIVE; the tree
+ * is bounded only by MAX_DOMAIN_DEPTH (cycle-safe) so a runaway/corrupt chain
+ * can't blow the mirrors up.
+ *
+ * The unified mapper reconciles this deep tree onto governance back-ends that
+ * nest differently: Purview collections nest to ANY depth (1:1), while Unity
+ * Catalog is physically two-level (catalog → schema). So the mapper maps a
+ * domain's ROOT ANCESTOR → UC catalog and EVERY descendant → a schema under
+ * that catalog (see `rootAncestorId`), flattening depth honestly for UC while
+ * preserving it in Cosmos + Purview. Both paths MUST agree on the tree rules,
+ * so both call these shared validators.
  *
  * Pure functions only (no Cosmos / Azure imports) so either store can call them.
  */
+
+/**
+ * Maximum domain nesting depth (root = depth 1). Deep enough for the richest
+ * real taxonomies (department → mission-area → agency → office → program →
+ * branch → team → workstream ≈ 8) while still bounding the tree so a corrupt
+ * `parentId` chain can never make the mirrors recurse without end.
+ */
+export const MAX_DOMAIN_DEPTH = 8;
 
 /** Minimal node shape for hierarchy validation (works for either store). */
 export interface DomainHierarchyNode {
@@ -29,14 +46,66 @@ export interface DomainMoveError {
 }
 
 /**
+ * Depth of a domain in the tree (root = 1). Walks the ancestor chain with a
+ * `seen` guard so a pre-existing cycle can't loop; a broken chain stops at the
+ * first missing/duplicate ancestor.
+ */
+export function domainDepth(domains: DomainHierarchyNode[], id: string): number {
+  const byId = new Map(domains.map((d) => [d.id, d]));
+  const seen = new Set<string>();
+  let depth = 1;
+  let cur = byId.get(id);
+  while (cur?.parentId && !seen.has(cur.parentId)) {
+    seen.add(cur.parentId);
+    cur = byId.get(cur.parentId);
+    if (!cur) break;
+    depth += 1;
+  }
+  return depth;
+}
+
+/**
+ * The id of the top-level (root) ancestor of a domain — the domain itself when
+ * it is already a root. This is the domain whose id backs the UC catalog for
+ * the whole subtree (the mapper flattens deeper levels into schemas under it).
+ * Cycle- and orphan-safe.
+ */
+export function rootAncestorId(domains: DomainHierarchyNode[], id: string): string {
+  const byId = new Map(domains.map((d) => [d.id, d]));
+  const seen = new Set<string>();
+  let cur = byId.get(id);
+  if (!cur) return id;
+  while (cur.parentId && !seen.has(cur.parentId)) {
+    seen.add(cur.parentId);
+    const parent = byId.get(cur.parentId);
+    if (!parent) break;
+    cur = parent;
+  }
+  return cur.id;
+}
+
+/** Height of the subtree rooted at `id` (a leaf = 1). Cycle-guarded. */
+function subtreeHeight(childrenOf: Map<string, string[]>, id: string, seen = new Set<string>()): number {
+  if (seen.has(id)) return 1;
+  seen.add(id);
+  const kids = childrenOf.get(id) || [];
+  if (kids.length === 0) return 1;
+  let max = 0;
+  for (const k of kids) max = Math.max(max, subtreeHeight(childrenOf, k, seen));
+  return 1 + max;
+}
+
+/**
  * Validate a domain reparent ("move"). Returns a {status,message} to reject, or
  * `null` when the move is allowed. Rejects, in order of specificity:
  *   1. self-parent — a domain cannot be its own parent (400)
  *   2. missing target — the new parent does not exist (400)
  *   3. cycle — the target is the domain itself or one of its descendants (400)
- *   4. two-level cap (a): nesting under a domain that is already a subdomain (400)
- *   5. two-level cap (b): moving a domain that itself has subdomains (400)
- * Moving to root (`newParentId` undefined/empty) is always allowed.
+ *   4. depth cap — the move would push the deepest leaf of the moved subtree
+ *      past MAX_DOMAIN_DEPTH (400)
+ * Moving to root (`newParentId` undefined/empty) is always allowed. Unlike the
+ * old two-level model, a domain that itself has subdomains CAN be moved — its
+ * whole subtree travels with it (arbitrary depth, #1483 Wave 2).
  */
 export function validateDomainMove(
   domains: DomainHierarchyNode[],
@@ -56,8 +125,8 @@ export function validateDomainMove(
   }
 
   // Cycle: walking up the ancestor chain from the target must never reach `id`
-  // (e.g. moving root A under its child B yields A.parent=B, B.parent=A). The
-  // `seen` set bounds the walk against any pre-existing corruption.
+  // (moving a domain under one of its own descendants). The `seen` set bounds
+  // the walk against any pre-existing corruption.
   const seen = new Set<string>();
   let cur: DomainHierarchyNode | undefined = target;
   while (cur) {
@@ -69,20 +138,24 @@ export function validateDomainMove(
     cur = byId.get(cur.parentId);
   }
 
-  // Two-level cap (a): the target is itself a subdomain → would create level 3.
-  if (target.parentId) {
-    return {
-      status: 400,
-      message: 'Cannot nest under a subdomain — domains are at most two levels (domain → subdomain).',
-    };
+  // Depth cap: the moved node lands at depth(target)+1, and its own subtree adds
+  // (height-1) more levels below it. Reject if the deepest leaf would exceed the
+  // bound. Keeps the tree — and therefore the Purview/UC mirror recursion —
+  // finite without capping it at two levels.
+  const childrenOf = new Map<string, string[]>();
+  for (const d of domains) {
+    if (d.parentId) {
+      const arr = childrenOf.get(d.parentId) || [];
+      arr.push(d.id);
+      childrenOf.set(d.parentId, arr);
+    }
   }
-
-  // Two-level cap (b): the domain being moved already has subdomains → moving it
-  // under another domain would push those subdomains to level 3.
-  if (domains.some((d) => d.parentId === id)) {
+  const landingDepth = domainDepth(domains, newParentId) + 1;
+  const movedHeight = subtreeHeight(childrenOf, id);
+  if (landingDepth + movedHeight - 1 > MAX_DOMAIN_DEPTH) {
     return {
       status: 400,
-      message: 'Move this domain’s subdomains out first — a subdomain can’t have its own subdomains.',
+      message: `That move would nest domains more than ${MAX_DOMAIN_DEPTH} levels deep. Flatten the subtree or choose a shallower parent.`,
     };
   }
 
