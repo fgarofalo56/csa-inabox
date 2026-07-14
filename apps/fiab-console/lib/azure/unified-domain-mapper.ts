@@ -59,6 +59,17 @@ export interface UnifiedDomainSpec {
   description?: string;
   /** Loom parent domain id when this is a subdomain (else root). */
   parentId?: string;
+  /**
+   * The id of this domain's ROOT ANCESTOR (the top-level domain of its subtree)
+   * — used only for the Unity Catalog mirror, which is physically two-level
+   * (catalog → schema). Deep trees (#1483 Wave 2) flatten onto UC as ROOT →
+   * catalog and EVERY descendant → a schema under that catalog, so a level-3+
+   * domain must know its root's id to land in the right catalog. When omitted,
+   * the mapper falls back to `parentId` (the old two-level behavior — a
+   * subdomain's immediate parent IS its root), so every pre-#1483 caller is
+   * byte-for-byte unchanged. Purview nests to any depth and ignores this.
+   */
+  ucCatalogId?: string;
 }
 
 export interface MirrorOutcome {
@@ -176,7 +187,10 @@ async function unityUpsert(spec: UnifiedDomainSpec, op: 'create' | 'update'): Pr
     return { ok: true, skipped: true, detail: 'Databricks Unity Catalog not configured (LOOM_DATABRICKS_HOSTNAME unset).' };
   }
   const isSub = !!spec.parentId;
-  const catalog = isSub ? unityName(spec.parentId as string) : unityName(spec.id);
+  // Deep trees flatten onto UC's two-level namespace: the ROOT ancestor is the
+  // catalog, every descendant is a schema under it. `ucCatalogId` carries the
+  // root id; absent, fall back to the immediate parent (old two-level behavior).
+  const catalog = isSub ? unityName(spec.ucCatalogId || (spec.parentId as string)) : unityName(spec.id);
   const schema = isSub ? unityName(spec.id) : undefined;
   try {
     if (op === 'create') {
@@ -269,7 +283,7 @@ export async function mirrorDomainDelete(spec: UnifiedDomainSpec): Promise<Unifi
   if (!unityConfigured()) {
     unity = { ok: true, skipped: true, detail: 'Databricks Unity Catalog not configured.' };
   } else if (isSub) {
-    const catalog = unityName(spec.parentId as string);
+    const catalog = unityName(spec.ucCatalogId || (spec.parentId as string));
     const schema = unityName(spec.id);
     unity = await deleteUcSchema(`${catalog}.${schema}`).then(
       () => ({ ok: true, catalog, schema, detail: `Deleted UC schema '${catalog}.${schema}'.` }),

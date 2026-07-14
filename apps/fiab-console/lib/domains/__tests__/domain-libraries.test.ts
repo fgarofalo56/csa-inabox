@@ -63,7 +63,10 @@ describe('domain-library registry (#1483 Wave 1)', () => {
         const ids = lib.nodes.map((n) => n.id);
         expect(new Set(ids).size, 'node ids unique within library').toBe(ids.length);
 
-        const enterpriseIds = new Set(enterprises.map((n) => n.id));
+        // Arbitrary depth (#1483 Wave 2): a parentId must resolve to SOME node
+        // in the same library (not necessarily a top-level enterprise), and the
+        // ancestor chain of every node must be acyclic and terminate at a root.
+        const byId = new Map(lib.nodes.map((n) => [n.id, n]));
         for (const n of lib.nodes) {
           expect(n.id, `id "${n.id}"`).toMatch(ID_RE);
           expect(n.name.length).toBeGreaterThan(0);
@@ -73,8 +76,17 @@ describe('domain-library registry (#1483 Wave 1)', () => {
           expect(DOMAIN_ICONS[n.icon], `icon "${n.icon}" of ${n.id}`).toBeDefined();
           expect(lib.categories, `category "${n.category}" of ${n.id}`).toContain(n.category);
           if (n.parentId) {
-            expect(enterpriseIds.has(n.parentId), `parent "${n.parentId}" of ${n.id} is an enterprise`).toBe(true);
+            expect(byId.has(n.parentId), `parent "${n.parentId}" of ${n.id} resolves`).toBe(true);
           }
+          // Walk to a root; a `seen` guard proves the chain is acyclic + rooted.
+          const seen = new Set<string>([n.id]);
+          let cur = n;
+          while (cur.parentId) {
+            expect(seen.has(cur.parentId), `no cycle above ${n.id}`).toBe(false);
+            seen.add(cur.parentId);
+            cur = byId.get(cur.parentId)!;
+          }
+          expect(cur.parentId, `chain of ${n.id} terminates at a root`).toBeUndefined();
         }
 
         // Every enterprise with children is reachable via libraryChildren.
@@ -150,6 +162,29 @@ describe('seed-plan (selection → create-domain wiring)', () => {
     const plan = planLibrarySeed(DEFENSE_INTEL_LIBRARY, ['nsa', 'dia'], none);
     expect(plan[0].id).toBe('intel-community');
     expect(plan.map((n) => n.id).slice(1).sort()).toEqual(['dia', 'nsa']);
+  });
+
+  it('expands the FULL ancestor chain of a deep pick, ordered shallowest-first (#1483 Wave 2)', () => {
+    // Pick a genuine level-3+ node in the Federal Civilian library (ARS lives
+    // under the REE mission area under USDA). The plan must include every
+    // ancestor, roots first.
+    const ars = libraryNode(FEDERAL_CIVILIAN_LIBRARY, 'ars');
+    expect(ars?.parentId).toBe('usda-ree'); // sanity: it really is deep
+    const plan = planLibrarySeed(FEDERAL_CIVILIAN_LIBRARY, ['ars'], none);
+    expect(plan.map((n) => n.id)).toEqual(['usda', 'usda-ree', 'ars']);
+    // Each node's parent appears before it (topological by depth).
+    const order = new Map(plan.map((n, i) => [n.id, i]));
+    for (const n of plan) {
+      if (n.parentId && order.has(n.parentId)) {
+        expect(order.get(n.parentId)!).toBeLessThan(order.get(n.id)!);
+      }
+    }
+  });
+
+  it('skips already-existing ancestors when expanding a deep pick', () => {
+    // USDA already exists → only the missing ancestors + the pick are planned.
+    const plan = planLibrarySeed(FEDERAL_CIVILIAN_LIBRARY, ['ars'], new Set(['usda']));
+    expect(plan.map((n) => n.id)).toEqual(['usda-ree', 'ars']);
   });
 
   it('toDomainSeedPayload maps a node to the exact POST /api/admin/domains body', () => {

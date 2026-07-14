@@ -27,26 +27,47 @@ export interface DomainSeedPayload {
   parentId?: string;
 }
 
+/** Depth of a node in the library tree (root = 1), cycle-guarded. */
+function nodeDepth(lib: DomainLibrary, id: string): number {
+  const seen = new Set<string>();
+  let depth = 1;
+  let cur = libraryNode(lib, id);
+  while (cur?.parentId && !seen.has(cur.parentId)) {
+    seen.add(cur.parentId);
+    cur = libraryNode(lib, cur.parentId);
+    if (!cur) break;
+    depth += 1;
+  }
+  return depth;
+}
+
 /**
- * Plan which library nodes to create for a picked selection: expand parents,
- * drop already-existing ids, and order parents-first (stable within each
- * group, following pick/expansion order).
+ * Plan which library nodes to create for a picked selection: expand the FULL
+ * ancestor chain of each pick (a deep node cannot be created without every
+ * ancestor above it — #1483 Wave 2 arbitrary depth), drop already-existing ids,
+ * and order shallowest-first so each POST's parentId always references an
+ * already-created (or pre-existing) domain.
  */
 export function planLibrarySeed(
   lib: DomainLibrary,
   pickedIds: Iterable<string>,
   existingIds: ReadonlySet<string>,
 ): DomainLibraryNode[] {
-  const ids = Array.from(pickedIds);
-  const toCreate = new Set<string>(ids);
-  for (const id of ids) {
-    const node = libraryNode(lib, id);
-    if (node?.parentId) toCreate.add(node.parentId);
+  const toCreate = new Set<string>();
+  for (const id of pickedIds) {
+    // Walk up from the pick, adding every ancestor (cycle-guarded).
+    const seen = new Set<string>();
+    let cur = libraryNode(lib, id);
+    while (cur && !seen.has(cur.id)) {
+      seen.add(cur.id);
+      toCreate.add(cur.id);
+      cur = cur.parentId ? libraryNode(lib, cur.parentId) : undefined;
+    }
   }
   return Array.from(toCreate)
     .map((id) => libraryNode(lib, id))
     .filter((n): n is DomainLibraryNode => !!n && !existingIds.has(n.id))
-    .sort((a, b) => (a.parentId ? 1 : 0) - (b.parentId ? 1 : 0));
+    .sort((a, b) => nodeDepth(lib, a.id) - nodeDepth(lib, b.id));
 }
 
 /** Map a library node to the real create-domain request body. */

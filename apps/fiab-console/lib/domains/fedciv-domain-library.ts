@@ -129,12 +129,23 @@ export const FEDCIV_DOMAIN_LIBRARY: FedCivNode[] = [
   { id: 'nca', name: 'National Cemetery Administration', abbrev: 'NCA', icon: 'star', color: '#2a4a78', category: 'Sub-agencies & Bureaus', mission: 'Honor veterans with final resting places and lasting tributes.', parentId: 'va' },
 
   // ── USDA sub-agencies ───────────────────────────────────────────────────────
+  // USDA groups its component agencies under mission areas (a real 3rd level:
+  // Department → mission area → agency), e.g. REE (Research, Education &
+  // Economics) over ARS/ERS/NIFA/NASS, FPAC over FSA/NRCS/RMA — #1483 Wave 2.
   { id: 'forest-service', name: 'Forest Service', abbrev: 'USFS', icon: 'tree', color: '#5fa024', category: 'Sub-agencies & Bureaus', mission: 'Sustain the health and productivity of the nation’s forests.', parentId: 'usda' },
   { id: 'fns', name: 'Food & Nutrition Service', abbrev: 'FNS', icon: 'heart', color: '#5fa024', category: 'Sub-agencies & Bureaus', mission: 'Increase food security and reduce hunger.', parentId: 'usda' },
   { id: 'fsis', name: 'Food Safety & Inspection Service', abbrev: 'FSIS', icon: 'shield-task', color: '#5fa024', category: 'Sub-agencies & Bureaus', mission: 'Ensure the nation’s meat, poultry, and eggs are safe.', parentId: 'usda' },
-  { id: 'nrcs', name: 'Natural Resources Conservation Service', abbrev: 'NRCS', icon: 'leaf', color: '#5fa024', category: 'Sub-agencies & Bureaus', mission: 'Help people conserve and sustain natural resources on private lands.', parentId: 'usda' },
-  { id: 'fsa-usda', name: 'Farm Service Agency', abbrev: 'FSA', icon: 'plant', color: '#5fa024', category: 'Sub-agencies & Bureaus', mission: 'Support farmers through programs, loans, and disaster aid.', parentId: 'usda' },
-  { id: 'ars', name: 'Agricultural Research Service', abbrev: 'ARS', icon: 'beaker', color: '#5fa024', category: 'Sub-agencies & Bureaus', mission: 'Find solutions to agricultural problems through research.', parentId: 'usda' },
+  // Farm Production & Conservation (FPAC) mission area → its agencies.
+  { id: 'usda-fpac', name: 'Farm Production & Conservation', abbrev: 'FPAC', icon: 'plant', color: '#5fa024', category: 'Sub-agencies & Bureaus', mission: 'Serve farmers, ranchers, and landowners through USDA’s customer-facing agencies.', parentId: 'usda' },
+  { id: 'nrcs', name: 'Natural Resources Conservation Service', abbrev: 'NRCS', icon: 'leaf', color: '#6fb03a', category: 'Sub-agencies & Bureaus', mission: 'Help people conserve and sustain natural resources on private lands.', parentId: 'usda-fpac' },
+  { id: 'fsa-usda', name: 'Farm Service Agency', abbrev: 'FSA', icon: 'plant', color: '#6fb03a', category: 'Sub-agencies & Bureaus', mission: 'Support farmers through programs, loans, and disaster aid.', parentId: 'usda-fpac' },
+  { id: 'rma-usda', name: 'Risk Management Agency', abbrev: 'RMA', icon: 'shield', color: '#6fb03a', category: 'Sub-agencies & Bureaus', mission: 'Provide the federal crop-insurance program to protect producers.', parentId: 'usda-fpac' },
+  // Research, Education & Economics (REE) mission area → its science agencies.
+  { id: 'usda-ree', name: 'Research, Education & Economics', abbrev: 'REE', icon: 'beaker', color: '#5fa024', category: 'Sub-agencies & Bureaus', mission: 'Lead USDA’s science, research, and economic-analysis agencies.', parentId: 'usda' },
+  { id: 'ars', name: 'Agricultural Research Service', abbrev: 'ARS', icon: 'beaker', color: '#6fb03a', category: 'Sub-agencies & Bureaus', mission: 'Find solutions to agricultural problems through research.', parentId: 'usda-ree' },
+  { id: 'ers', name: 'Economic Research Service', abbrev: 'ERS', icon: 'data-trending', color: '#6fb03a', category: 'Sub-agencies & Bureaus', mission: 'Inform public and private decisions with economic research on food and agriculture.', parentId: 'usda-ree' },
+  { id: 'nifa', name: 'National Institute of Food & Agriculture', abbrev: 'NIFA', icon: 'graduation', color: '#6fb03a', category: 'Sub-agencies & Bureaus', mission: 'Invest in agricultural research, education, and extension.', parentId: 'usda-ree' },
+  { id: 'nass', name: 'National Agricultural Statistics Service', abbrev: 'NASS', icon: 'data-histogram', color: '#6fb03a', category: 'Sub-agencies & Bureaus', mission: 'Provide timely, accurate statistics on U.S. agriculture.', parentId: 'usda-ree' },
 
   // ── Commerce sub-agencies ───────────────────────────────────────────────────
   { id: 'census', name: 'U.S. Census Bureau', abbrev: 'CENSUS', icon: 'data-histogram', color: '#1390ad', category: 'Sub-agencies & Bureaus', mission: 'Serve as the leading source of data about the nation’s people and economy.', parentId: 'commerce' },

@@ -30,6 +30,7 @@
  */
 import { tenantSettingsContainer } from '@/lib/azure/cosmos-client';
 import { loadOrSeedDomains, type DomainItem } from '@/lib/azure/domain-registry';
+import { rootAncestorId } from '@/lib/azure/domain-hierarchy';
 import {
   mirrorDomainUpsert,
   unityName,
@@ -227,9 +228,26 @@ async function probeUnity(catalogAllow: string[]): Promise<UnityState> {
 // Reconcile
 // ---------------------------------------------------------------------------
 
-/** Roots first, then subdomains — so a parent collection/catalog exists first. */
+/**
+ * Shallowest first (roots, then their children, then grandchildren …) so a
+ * parent collection/catalog always exists before its child is upserted. Deep
+ * trees (#1483 Wave 2) need a true depth sort, not just root-vs-subdomain.
+ */
 function orderRootsFirst(items: DomainItem[]): DomainItem[] {
-  return [...items].sort((a, b) => (a.parentId ? 1 : 0) - (b.parentId ? 1 : 0));
+  const byId = new Map(items.map((d) => [d.id, d]));
+  const depth = (d: DomainItem): number => {
+    const seen = new Set<string>();
+    let n = 1;
+    let cur: DomainItem | undefined = d;
+    while (cur?.parentId && !seen.has(cur.parentId)) {
+      seen.add(cur.parentId);
+      cur = byId.get(cur.parentId);
+      if (!cur) break;
+      n += 1;
+    }
+    return n;
+  };
+  return [...items].sort((a, b) => depth(a) - depth(b));
 }
 
 function emptySummary(configured: boolean, gated: boolean | undefined, hint?: string): TargetSummary {
@@ -250,10 +268,10 @@ export async function runDomainSync(
   const items = doc.items;
   const ordered = orderRootsFirst(items);
 
-  // Catalogs the tenant's domains map to (root → its own; subdomain → parent's),
-  // so the UC schema probe only fans out over relevant catalogs.
+  // Catalogs the tenant's domains map to (every domain → its ROOT ancestor's
+  // catalog), so the UC schema probe only fans out over relevant catalogs.
   const catalogAllow = Array.from(
-    new Set(items.map((d) => (d.parentId ? unityName(d.parentId) : unityName(d.id)))),
+    new Set(items.map((d) => unityName(rootAncestorId(items, d.id)))),
   );
 
   const [pv, uc] = await Promise.all([probePurview(), probeUnity(catalogAllow)]);
@@ -268,13 +286,16 @@ export async function runDomainSync(
   const claimedCatalogs = new Set<string>();
 
   for (const d of ordered) {
-    const spec: UnifiedDomainSpec = { id: d.id, name: d.name, description: d.description, parentId: d.parentId };
     const isSub = !!d.parentId;
+    // Root ancestor id backs the UC catalog for this domain's whole subtree
+    // (deep trees flatten onto UC as root → catalog, descendants → schemas).
+    const ucCatalogId = rootAncestorId(items, d.id);
+    const spec: UnifiedDomainSpec = { id: d.id, name: d.name, description: d.description, parentId: d.parentId, ucCatalogId };
 
     // Expected remote identifiers (derived deterministically from the id).
     const collName = domainCollectionName(d.id).toLowerCase();
     claimedCollections.add(collName);
-    const catalog = (isSub ? unityName(d.parentId as string) : unityName(d.id)).toLowerCase();
+    const catalog = (isSub ? unityName(ucCatalogId) : unityName(d.id)).toLowerCase();
     const schema = isSub ? unityName(d.id).toLowerCase() : undefined;
     claimedCatalogs.add(catalog);
     if (schema) claimedSchemas.add(`${catalog}.${schema}`);

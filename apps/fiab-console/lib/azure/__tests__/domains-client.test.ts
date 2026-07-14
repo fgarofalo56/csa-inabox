@@ -388,26 +388,25 @@ describe('domains-client — DomainStore adapters (F4)', () => {
     expect(domainDocs.get('a').parentDomainId).toBeUndefined();
   });
 
-  it('cosmosDomainStore.moveDomain rejects nesting under a subdomain (two-level cap)', async () => {
+  it('cosmosDomainStore.moveDomain ALLOWS nesting under a subdomain (arbitrary depth — #1483 Wave 2)', async () => {
     const mod = await import('../domains-client');
     const store = mod.cosmosDomainStore;
     await store.createDomain('tenant-1', { id: 'root', name: 'Root' }, 'alice@contoso.com');
     await store.createDomain('tenant-1', { id: 'child', name: 'Child', parentDomainId: 'root' }, 'alice@contoso.com');
     await store.createDomain('tenant-1', { id: 'other', name: 'Other' }, 'alice@contoso.com');
-    await expect(
-      store.moveDomain('tenant-1', 'other', 'child', 'bob@contoso.com'),
-    ).rejects.toMatchObject({ status: 400 });
+    // 'other' under 'child' → a level-3 domain. Allowed now (was a two-level cap).
+    const moved = await store.moveDomain('tenant-1', 'other', 'child', 'bob@contoso.com');
+    expect(moved.parentDomainId).toBe('child');
   });
 
-  it('cosmosDomainStore.moveDomain rejects moving a domain that itself has subdomains', async () => {
+  it('cosmosDomainStore.moveDomain ALLOWS moving a domain that itself has subdomains (subtree travels)', async () => {
     const mod = await import('../domains-client');
     const store = mod.cosmosDomainStore;
     await store.createDomain('tenant-1', { id: 'parent', name: 'Parent' }, 'alice@contoso.com');
     await store.createDomain('tenant-1', { id: 'kid', name: 'Kid', parentDomainId: 'parent' }, 'alice@contoso.com');
     await store.createDomain('tenant-1', { id: 'target', name: 'Target' }, 'alice@contoso.com');
-    await expect(
-      store.moveDomain('tenant-1', 'parent', 'target', 'bob@contoso.com'),
-    ).rejects.toMatchObject({ status: 400 });
+    const moved = await store.moveDomain('tenant-1', 'parent', 'target', 'bob@contoso.com');
+    expect(moved.parentDomainId).toBe('target');
   });
 
   it('fabricAdminDomainStore.moveDomain honestly 501s (no Fabric move endpoint)', async () => {

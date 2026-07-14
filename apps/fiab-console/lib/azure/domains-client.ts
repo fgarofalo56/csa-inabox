@@ -38,7 +38,7 @@ import {
   mirrorDomainDelete,
   type UnifiedMirrorResult,
 } from './unified-domain-mapper';
-import { validateDomainMove } from './domain-hierarchy';
+import { validateDomainMove, rootAncestorId } from './domain-hierarchy';
 import {
   ChainedTokenCredential,
   DefaultAzureCredential,
@@ -233,8 +233,15 @@ export const cosmosDomainStore: DomainStore = {
     // unconfigured the domain still persists (no Fabric/Purview hard dependency).
     // This is the reconciliation: the governance store now writes through to BOTH
     // governance back-ends, matching /api/admin/domains, instead of Purview only.
+    // ucCatalogId = the new domain's root ancestor (deep trees flatten onto UC).
+    const allForCreate = doc.parentDomainId ? await this.listDomains(tenantId) : [];
     const mirror = await mirrorDomainUpsert(
-      { id: doc.id, name: doc.name, description: doc.description, parentId: doc.parentDomainId },
+      {
+        id: doc.id, name: doc.name, description: doc.description, parentId: doc.parentDomainId,
+        ucCatalogId: doc.parentDomainId
+          ? rootAncestorId(allForCreate.map((d) => ({ id: d.id, parentId: d.parentDomainId })), doc.parentDomainId)
+          : doc.id,
+      },
       'create',
     );
     applyMirror(doc, mirror);
@@ -259,8 +266,14 @@ export const cosmosDomainStore: DomainStore = {
     // Re-assert name/description on BOTH back-ends (idempotent Purview collection
     // PUT + UC catalog/schema PATCH comment). The UC identifier is keyed off the
     // immutable domain id, so a rename never drifts the catalog/schema name.
+    const allForUpdate = updated.parentDomainId ? await this.listDomains(tenantId) : [];
     const mirror = await mirrorDomainUpsert(
-      { id: updated.id, name: updated.name, description: updated.description, parentId: updated.parentDomainId },
+      {
+        id: updated.id, name: updated.name, description: updated.description, parentId: updated.parentDomainId,
+        ucCatalogId: updated.parentDomainId
+          ? rootAncestorId(allForUpdate.map((d) => ({ id: d.id, parentId: d.parentDomainId })), updated.id)
+          : updated.id,
+      },
       'update',
     );
     applyMirror(updated, mirror);
@@ -296,17 +309,14 @@ export const cosmosDomainStore: DomainStore = {
       err.status = 404;
       throw err;
     }
-    // Enforce the SAME two-level hierarchy invariants as PATCH /api/admin/domains
-    // (self-parent, missing target, cycle, two-level cap). Load the tenant's
-    // domains so the target + descendant chain can be checked — without this the
-    // governance move path could corrupt the tree and break the unified mapper's
-    // root-vs-subdomain (catalog-vs-schema) determination.
+    // Enforce the SAME arbitrary-depth hierarchy invariants as PATCH
+    // /api/admin/domains (self-parent, missing target, cycle, depth cap). Load
+    // the tenant's domains so the target + descendant chain can be checked —
+    // without this the governance move path could corrupt the tree and break the
+    // unified mapper's root-ancestor (catalog) determination.
     const all = await this.listDomains(tenantId);
-    const moveErr = validateDomainMove(
-      all.map((d) => ({ id: d.id, parentId: d.parentDomainId })),
-      id,
-      newParentId,
-    );
+    const hier = all.map((d) => ({ id: d.id, parentId: d.parentDomainId }));
+    const moveErr = validateDomainMove(hier, id, newParentId);
     if (moveErr) {
       const err: any = new Error(moveErr.message);
       err.status = moveErr.status;
@@ -324,7 +334,12 @@ export const cosmosDomainStore: DomainStore = {
     // that honestly via moveSupported:false rather than faking it. Never blocks
     // the Cosmos write — both mirrors are optional, no Fabric dependency.
     const mirror = await mirrorDomainMove(
-      { id: moved.id, name: moved.name, description: moved.description, parentId: undefined },
+      {
+        id: moved.id, name: moved.name, description: moved.description, parentId: undefined,
+        // After the move the node's root ancestor is the new parent's root (or
+        // the node itself when moved to root) — so UC re-asserts under it.
+        ucCatalogId: newParentId ? rootAncestorId(hier, newParentId) : moved.id,
+      },
       newParentId,
     );
     applyMirror(moved, mirror);

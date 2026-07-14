@@ -183,13 +183,15 @@ describe('/api/admin/domains — Cosmos persistence + Purview collection mirror 
     expect(create[1].parentId).toBe('finance2');
   });
 
-  it('POST subdomain under a subdomain is rejected (max two levels)', async () => {
+  it('POST allows deep nesting (level 3+ — #1483 Wave 2 arbitrary depth)', async () => {
     const { POST } = await import('../route');
     await POST(makeReq('POST', '', { id: 'root-d', name: 'Root D' }));
     await POST(makeReq('POST', '', { id: 'mid-d', name: 'Mid D', parentId: 'root-d' }));
     const res = await POST(makeReq('POST', '', { id: 'leaf-d', name: 'Leaf D', parentId: 'mid-d' }));
-    expect(res.status).toBe(400);
-    expect((await res.json()).error).toMatch(/two levels/i);
+    expect(res.status).toBe(200);
+    const j = await res.json();
+    expect(j.ok).toBe(true);
+    expect(j.domain.parentId).toBe('mid-d');
   });
 
   it('PATCH name/description persists to Cosmos and mirrors the edit to the collection', async () => {
@@ -225,14 +227,19 @@ describe('/api/admin/domains — Cosmos persistence + Purview collection mirror 
     expect(j.mirror.unity.moveSupported).toBe(false);
   });
 
-  it('PATCH MOVE rejects nesting under a subdomain (cycle/depth guard)', async () => {
+  it('PATCH MOVE ALLOWS nesting under a subdomain (deep tree), rejects a cycle', async () => {
     const { POST, PATCH } = await import('../route');
     await POST(makeReq('POST', '', { id: 'rt', name: 'Root' }));
     await POST(makeReq('POST', '', { id: 'child', name: 'Child', parentId: 'rt' }));
     await POST(makeReq('POST', '', { id: 'other', name: 'Other' }));
-    const res = await PATCH(makeReq('PATCH', '?id=other', { parentId: 'child' }));
-    expect(res.status).toBe(400);
-    expect((await res.json()).error).toMatch(/subdomain|two levels/i);
+    // 'other' under 'child' → a level-3 node. Allowed now.
+    const ok = await PATCH(makeReq('PATCH', '?id=other', { parentId: 'child' }));
+    expect(ok.status).toBe(200);
+    expect((await ok.json()).domain.parentId).toBe('child');
+    // But moving 'rt' under its own descendant 'other' is a cycle → rejected.
+    const bad = await PATCH(makeReq('PATCH', '?id=rt', { parentId: 'other' }));
+    expect(bad.status).toBe(400);
+    expect((await bad.json()).error).toMatch(/own subdomain|cycle/i);
   });
 
   it('PATCH MOVE rejects a domain as its own parent', async () => {
