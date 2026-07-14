@@ -53,12 +53,21 @@ EOF
     # DEFAULT — H2 file DB on the mounted (persistent) volume. DB_CLOSE_DELAY=-1
     # keeps the in-JVM DB alive across connection close; the .mv.db file is what
     # persists on Azure Files.
+    #
+    # CONTRACT: mirror the upstream image's own hibernate.properties exactly
+    # except the file path. The image's SEEDED h2db.mv.db was created with an
+    # EMPTY username (upstream renders no username/password lines) — injecting
+    # `username=sa` here made H2 throw JdbcSQLInvalidAuthorizationSpecException
+    # ("Wrong user name or password") on first boot, crash-looping the Gov
+    # Container App (found live 2026-07-14, reproduced in local Docker).
+    # `hbm2ddl.auto=update` also matches upstream so a fresh (unseeded) dir gets
+    # its schema created.
     cat <<EOF
 hibernate.connection.driver_class=org.h2.Driver
 hibernate.connection.url=jdbc:h2:file:${DB_DIR}/h2db;DB_CLOSE_DELAY=-1
-hibernate.connection.username=sa
-hibernate.connection.password=
+hibernate.hbm2ddl.auto=update
 hibernate.show_sql=false
+hibernate.archive.autodetection=class
 EOF
   fi
 }
