@@ -27,17 +27,24 @@ on:
 permissions:
   contents: read
 
+# Targets are sourced from repo variables (Settings → Variables) so a redeploy in
+# a different region/sub doesn't require a code change; the defaults are the LIVE
+# deployment (DLZ sub, centralus) so the scheduled job works out of the box on
+# this repo. A fork/unconfigured repo is handled by the "configured?" guard step
+# below (placeholder/empty SUB or missing Azure creds → clean skip, never red-X).
 env:
-  SUB: 00000000-0000-0000-0000-000000000000
-  DLZ_RG: rg-csa-loom-dlz-default-eastus2
-  ADF: adf-loom-default-eastus2
-  VMSS: vmss-loom-shir-default
+  SUB: ${{ vars.LOOM_SHIR_SUB || '363ef5d1-0e77-4594-a530-f51af23dbf8c' }}
+  DLZ_RG: ${{ vars.LOOM_SHIR_DLZ_RG || 'rg-csa-loom-dlz-default-centralus' }}
+  ADF: ${{ vars.LOOM_SHIR_ADF || 'adf-loom-default-centralus' }}
+  VMSS: ${{ vars.LOOM_SHIR_VMSS || 'vmss-loom-shir-default' }}
   # Shared admin-zone Purview SHIR (separate VMSS in the admin RG — a Purview
   # SHIR can't share a machine with the ADF SHIR). Scaled down when no Purview
-  # scan run is active. Leave PURVIEW_ACCOUNT empty to skip this arm entirely.
-  ADMIN_RG: rg-csa-loom-admin-eastus2
-  PURVIEW_VMSS: vmss-loom-pvw-shir-default
-  PURVIEW_ACCOUNT: ''
+  # scan run is active. PURVIEW_ACCOUNT is empty by default (no Purview SHIR VMSS
+  # is deployed in the live estate), which skips this arm entirely; set the
+  # LOOM_SHIR_PURVIEW_ACCOUNT repo variable to enable it.
+  ADMIN_RG: ${{ vars.LOOM_SHIR_ADMIN_RG || 'rg-csa-loom-admin-centralus' }}
+  PURVIEW_VMSS: ${{ vars.LOOM_SHIR_PURVIEW_VMSS || 'vmss-loom-pvw-shir-default' }}
+  PURVIEW_ACCOUNT: ${{ vars.LOOM_SHIR_PURVIEW_ACCOUNT || '' }}
 
 concurrency:
   group: shir-idle-stop
@@ -48,7 +55,24 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      - name: Configured? (skip cleanly on placeholder SUB or a fork without creds)
+        id: guard
+        env:
+          AZ_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+        run: |
+          set -u
+          if [ -z "$SUB" ] || [ "$SUB" = "00000000-0000-0000-0000-000000000000" ]; then
+            echo "::notice::SHIR idle-stop not configured — SUB is empty/placeholder. Skipping."
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          elif [ -z "$AZ_CLIENT_ID" ]; then
+            echo "::notice::SHIR idle-stop has no Azure credentials (fork or unconfigured secrets). Skipping."
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Azure login (limitlessdata_deploy SP)
+        if: ${{ steps.guard.outputs.run == 'true' }}
         uses: azure/login@v2
         with:
           creds: |
@@ -60,6 +84,7 @@ jobs:
             }
 
       - name: Scale SHIR VMSS to zero when idle
+        if: ${{ steps.guard.outputs.run == 'true' }}
         env:
           IDLE_MIN: ${{ github.event.inputs.idle_minutes || '30' }}
         run: |
@@ -103,7 +128,7 @@ jobs:
           echo "::notice::SHIR VMSS '$VMSS' scaled to 0 (idle ${IDLE_MIN}m+)."
 
       - name: Scale Purview SHIR VMSS to zero when no scan is running
-        if: ${{ env.PURVIEW_ACCOUNT != '' }}
+        if: ${{ steps.guard.outputs.run == 'true' && env.PURVIEW_ACCOUNT != '' }}
         run: |
           set -uo pipefail
           az account set --subscription "$SUB"
