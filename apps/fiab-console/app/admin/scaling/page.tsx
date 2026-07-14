@@ -916,7 +916,13 @@ export default function ScalingPage() {
           icon={<DatabaseSearch24Regular />}
           accent={tokens.colorPalettePeachForeground2}
           loading={!cosmosData}
-          gateMessage={cosmosData && !cosmosData.ok ? { title: 'Cosmos not configured', body: `${cosmosData.error}${cosmosData.hint ? ' — ' + cosmosData.hint : ''}` } : undefined}
+          gateMessage={
+            cosmosData && !cosmosData.ok
+              ? { title: 'Cosmos not configured', body: `${cosmosData.error}${cosmosData.hint ? ' — ' + cosmosData.hint : ''}` }
+              : cosmosData && cosmosData.ok && !(cosmosData.containers && cosmosData.containers.length)
+              ? { title: 'No Cosmos DB containers to scale', body: 'No throughput-provisioned Cosmos DB containers were found in this deployment. Containers created with shared (database-level) or serverless throughput are not individually scalable here; provision a container with dedicated throughput to manage its RU/s from this card.' }
+              : undefined
+          }
           utilization={utilData?.['microsoft.documentdb/databaseaccounts']}
           utilizationLoading={utilLoading}
           controls={

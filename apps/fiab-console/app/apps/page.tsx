@@ -40,6 +40,7 @@ import { ItemTile } from '@/lib/components/ui/item-tile';
 import { TileGrid } from '@/lib/components/ui/tile-grid';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { itemVisual } from '@/lib/components/ui/item-type-visual';
+import { DeployDemoBanner } from '@/lib/components/apps/deploy-demo-banner';
 
 interface AppItemRef { type: string; template?: string; displayName?: string; }
 interface AppDoc {
@@ -316,6 +317,8 @@ export default function AppsPage() {
       subtitle="Curated CSA solutions that bundle items, dashboards, and pipelines into one click."
     >
       {unauth && <SignInRequired subject="the apps catalog" />}
+
+      {!unauth && <DeployDemoBanner />}
 
       <TeachingBanner
         surfaceKey="apps-hub"
