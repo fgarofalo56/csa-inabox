@@ -302,6 +302,24 @@ let _copilotSkillStates: Container | null = null;
 // ARM-provisioned in cosmos.bicep's loomContainers — the lazy call is the
 // hotfix fallback. Azure-native — no Fabric dependency.
 let _copilotSkillUsage: Container | null = null;
+// CTS-08 — long-term Copilot memory brain. Cosmos is the system of record; an
+// Azure AI Search vector index (`copilot-memory-vec`) is the ANN mirror (dual-
+// write, graceful degrade to a Cosmos keyword/tag scan when Search is absent).
+// One doc per durable memory, PK /scopeKey (`user:{oid}` or `workspace:{id}`) so
+// every layered recall + admin browse hits a single physical partition and
+// cross-scope leakage is structurally impossible. NO TTL — memories are durable
+// until the per-scope cap or an explicit purge evicts them. The four sidecars
+// share the same PK so a scope's audit/log/consolidation reads stay single-
+// partition: `-flush-log` (append-only receipt per CTS-06 flush), `-write-audit`
+// (every CTS-12 guard verdict, pass or fail), `-contradictions` (CTS-13 conflict
+// queue), and `copilot-topic-pages` (CTS-13 promoted topics). All created lazily
+// (createIfNotExists) here AND ARM-provisioned in cosmos.bicep's loomContainers —
+// the lazy call is the hotfix fallback.
+let _copilotMemory: Container | null = null;
+let _copilotMemoryFlushLog: Container | null = null;
+let _copilotMemoryWriteAudit: Container | null = null;
+let _copilotMemoryContradictions: Container | null = null;
+let _copilotTopicPages: Container | null = null;
 let _ensured = false;
 
 /**
@@ -955,6 +973,17 @@ async function ensure() {
     defaultTtl: 7776000, // 90 days = 90 * 24 * 3600 — usage telemetry self-evicts
   });
   _copilotSkillUsage = skillUsage;
+  // CTS-08 — long-term Copilot memory brain + its four sidecars. All PK
+  // /scopeKey (`user:{oid}` / `workspace:{id}`) so a scope's recall/browse/audit
+  // is single-partition and cross-scope leakage is structurally impossible. NO
+  // TTL — durable until the per-scope cap or an explicit purge evicts. ARM-
+  // provisioned in cosmos.bicep's loomContainers; these createIfNotExists calls
+  // are the hotfix fallback.
+  _copilotMemory = await mk('copilot-memory', '/scopeKey');
+  _copilotMemoryFlushLog = await mk('copilot-memory-flush-log', '/scopeKey');
+  _copilotMemoryWriteAudit = await mk('copilot-memory-write-audit', '/scopeKey');
+  _copilotMemoryContradictions = await mk('copilot-memory-contradictions', '/scopeKey');
+  _copilotTopicPages = await mk('copilot-topic-pages', '/scopeKey');
   _ensured = true;
 }
 
@@ -987,6 +1016,16 @@ export async function accessRequestWorkflowContainer(): Promise<Container> { awa
 // Sign-in-boundary onboarding queue container (PK /tenantId). Distinct from both
 // access-request systems above — this is the front-door "Request access" queue.
 export async function signinAccessRequestsContainer(): Promise<Container> { await ensure(); return _signinAccessRequests!; }
+/** CTS-08 — long-term Copilot memory (system of record), PK /scopeKey. */
+export async function copilotMemoryContainer(): Promise<Container> { await ensure(); return _copilotMemory!; }
+/** CTS-06 — append-only receipt log, one row per dump-to-memory flush, PK /scopeKey. */
+export async function copilotMemoryFlushLogContainer(): Promise<Container> { await ensure(); return _copilotMemoryFlushLog!; }
+/** CTS-12 — every memory-write guard verdict (pass or fail), PK /scopeKey. */
+export async function copilotMemoryWriteAuditContainer(): Promise<Container> { await ensure(); return _copilotMemoryWriteAudit!; }
+/** CTS-13 — flagged contradictory memories queued for review, PK /scopeKey. */
+export async function copilotMemoryContradictionsContainer(): Promise<Container> { await ensure(); return _copilotMemoryContradictions!; }
+/** CTS-13 — promoted recurring-topic pages, PK /scopeKey. */
+export async function copilotTopicPagesContainer(): Promise<Container> { await ensure(); return _copilotTopicPages!; }
 /** Saved SQL queries (My Queries / Shared Queries) — PK /itemId. */
 export async function savedQueriesContainer(): Promise<Container> { await ensure(); return _savedQueries!; }
 export async function pbiDashboardOverlaysContainer(): Promise<Container> { await ensure(); return _pbiDashboardOverlays!; }
@@ -1217,6 +1256,11 @@ const KNOWN_CONTAINER_IDS = [
   'landing-zones',
   'copilot-skills', 'copilot-skill-states',
   'copilot-skill-usage',
+  'copilot-memory',
+  'copilot-memory-flush-log',
+  'copilot-memory-write-audit',
+  'copilot-memory-contradictions',
+  'copilot-topic-pages',
 ];
 
 /** List all Loom containers with their current throughput shape.

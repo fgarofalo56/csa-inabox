@@ -112,6 +112,14 @@ const ALLOWLIST = new Set([
   'LOOM_COPILOT_MEMORY',            // opt-out kill switch for the CTS-06 dump-to-memory action (default on in code)
   'LOOM_COPILOT_MEMORY_AGENT_ID',   // opt-in override for the memory agent identity (CTS-06); unset default in code
   'LOOM_COPILOT_MEMORY_FLUSH_N',    // opt-in tuning knob: how many turns a memory flush extracts (CTS-06)
+  'LOOM_COPILOT_MEMORY_CAP',        // opt-in tuning knob: per-scope memory cap before oldest-eviction (CTS-08)
+  'LOOM_COPILOT_MEMORY_VEC_INDEX',  // opt-in override for the AI Search vector-mirror index name (CTS-08; default 'copilot-memory-vec' in code)
+  'LOOM_COPILOT_MEMORY_L0_LIMIT',   // opt-in tuning knob: L0 identity/preference recall count (CTS-08)
+  'LOOM_COPILOT_MEMORY_L1_LIMIT',   // opt-in tuning knob: L1 high-confidence fact recall count (CTS-08)
+  'LOOM_COPILOT_MEMORY_L2_TOPK',    // opt-in tuning knob: L2 vector-relevant recall top-K (CTS-08)
+  'LOOM_COPILOT_MEMORY_CONSOLIDATE_SCAN', // opt-in tuning knob: per-scope scan depth for the CTS-13 nightly pass
+  'LOOM_COPILOT_MEMORY_DEDUPE_SIM', // opt-in tuning knob: Jaccard similarity threshold for CTS-13 near-duplicate merge
+  'LOOM_COPILOT_MEMORY_TOPIC_MIN',  // opt-in tuning knob: min tag recurrence to promote a CTS-13 topic page
   'LOOM_SPARK_POOL_CONCURRENT',     // opt-out kill switch for the FGC-10 concurrent shared-session mode (default on in code)
   'LOOM_SPARK_POOL_SHARED_MAX',     // opt-in tuning knob: max read-only leases sharing one warm session (PSR-3/FGC-10)
   // PSR-5/6 result cache — all opt-in: unset default = in-process LRU (no Redis,

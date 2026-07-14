@@ -204,6 +204,18 @@ var loomContainers = [
   // until the per-agent retention cap (LOOM_AGENT_THREAD_CAP) evicts the oldest.
   // createIfNotExists in cosmos-client.ts ensure() remains the hotfix fallback.
   { name: 'loom-agent-memory', partitionKey: '/agentId' }
+  // CTS-08 — long-term Copilot memory brain + its four sidecars. All PK /scopeKey
+  // (`user:{oid}` / `workspace:{id}`) so a scope's recall/browse/audit is single-
+  // partition and cross-scope leakage is structurally impossible. NO TTL — durable
+  // until the per-scope cap (LOOM_COPILOT_MEMORY_CAP) or an explicit purge evicts.
+  // Azure AI Search index `copilot-memory-vec` is the ANN mirror (provisioned by
+  // the same bootstrap as loom-docs; honest-gates to a Cosmos keyword scan when
+  // absent). createIfNotExists in cosmos-client.ts ensure() is the hotfix fallback.
+  { name: 'copilot-memory',                 partitionKey: '/scopeKey' }
+  { name: 'copilot-memory-flush-log',       partitionKey: '/scopeKey' }
+  { name: 'copilot-memory-write-audit',     partitionKey: '/scopeKey' }
+  { name: 'copilot-memory-contradictions',  partitionKey: '/scopeKey' }
+  { name: 'copilot-topic-pages',            partitionKey: '/scopeKey' }
   // Scoped API tokens (PAT, BR-PAT). One doc per token, PK /id so resolvePat()
   // — the hot path on every non-interactive API request — is a single-partition
   // point-read by the token id in the Authorization: Bearer header. Stores a

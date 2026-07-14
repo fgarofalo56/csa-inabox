@@ -127,6 +127,9 @@ import { estCostUsd } from '@/lib/copilot/cost-estimate';
 import { buildContextUsagePayload, estimateTokens } from '@/lib/copilot/context-usage';
 // CTS-03: per-turn phase timer for the admin deep-trace Timeline tab.
 import { PhaseTimer, type PhaseTiming } from '@/lib/copilot/phase-timer';
+// CTS-08: layered long-term memory recall injected into the prompt (default-ON,
+// user-scoped; degrades to a Cosmos keyword scan when the vector mirror is absent).
+import { getLayeredContext, memoriesToCitations } from '@/lib/azure/memory-recall';
 // Tool-provenance → grounding citation mapper (CTS-04). Pure; maps a tool
 // result's known provenance shapes into the Citation[] the transcript renders.
 import { extractCitationsFromToolResult, mergeCitations } from '@/lib/copilot/tool-citations';
@@ -2171,6 +2174,24 @@ export async function* orchestrate(opts: OrchestrateOptions): AsyncIterable<Orch
   if (msSkillBlocks) {
     messages.push({ role: 'system', content: msSkillBlocks });
   }
+  // ── CTS-08: long-term memory recall ────────────────────────────────────────
+  // Recall durable user/workspace memories relevant to this prompt and inject
+  // them as an ADDITIONAL system message (alongside persona/skill blocks). Fails
+  // OPEN — an empty recall (disabled, cold brain, or a store hiccup) adds nothing
+  // and never blocks the turn. The recalled set sizes the CTS-05 memory segment
+  // and surfaces as CTS-04 memory citations on the final step.
+  const recallWorkspaceId =
+    (opts.contextPayload && typeof (opts.contextPayload as any).workspaceId === 'string'
+      ? (opts.contextPayload as any).workspaceId
+      : opts.personaContext && typeof (opts.personaContext as any).workspaceId === 'string'
+        ? (opts.personaContext as any).workspaceId
+        : undefined) as string | undefined;
+  const memoryRecall = await getLayeredContext(userOid, recallWorkspaceId, prompt).catch(() => ({
+    block: '', memories: [] as any[], tokens: 0, backend: 'none' as const,
+  }));
+  if (memoryRecall.block) {
+    messages.push({ role: 'system', content: memoryRecall.block });
+  }
   messages.push({ role: 'user', content: prompt });
 
   await persistStep(sessionId, userOid, { kind: 'thought', content: `User prompt: ${prompt}` }, prompt);
@@ -2255,8 +2276,11 @@ export async function* orchestrate(opts: OrchestrateOptions): AsyncIterable<Orch
   // badge can render the full tool table with "via <server>" attribution.
   const turnTools: TurnToolDetail[] = [];
   // CTS-04: accumulate grounding citations mapped from tool provenance (docs RAG
-  // hits, agentic knowledge-base retrieval, schema reads) across the turn.
-  let turnCitations: Citation[] = [];
+  // hits, agentic knowledge-base retrieval, schema reads) across the turn. Seeded
+  // with the CTS-08 recalled memories so the answer attributes what it grounded on.
+  let turnCitations: Citation[] = memoryRecall.memories.length
+    ? (memoriesToCitations(memoryRecall.memories) as Citation[])
+    : [];
 
   // ── CTS-05: context-window meter ──────────────────────────────────────────
   // Tokenize each prompt contributor at message-build time (before the AOAI
@@ -2277,7 +2301,7 @@ export async function* orchestrate(opts: OrchestrateOptions): AsyncIterable<Orch
       : 0,
     skills: { count: skillNames.length, tokens: estimateTokens(msSkillBlocks), names: skillNames },
     tools: { count: toolNames.length, tokens: estimateTokens(JSON.stringify(tools)), names: toolNames },
-    memoryTokens: 0,
+    memoryTokens: memoryRecall.tokens,
     knowledgeTokens: 0,
     conversation: { messages: 1, tokens: estimateTokens(prompt) },
     systemPromptPreview: systemMessagesText,

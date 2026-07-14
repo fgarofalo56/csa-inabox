@@ -23,6 +23,7 @@ import { EmptyState } from '@/lib/components/empty-state';
 import { useAdminTabStyles } from '@/lib/components/ui/admin-tab-styles';
 import { CopilotAgentsConfig } from '@/lib/components/admin/copilot-agents-config';
 import { CopilotDebugPanel } from '@/lib/components/admin/copilot-debug-panel';
+import { CopilotMemoryPanel } from '@/lib/components/admin/copilot-memory-panel';
 import { FeedbackForwardingConfig } from '@/lib/components/admin/feedback-forwarding-config';
 import { ToggleScopePicker } from '@/lib/components/admin/toggle-scope-picker';
 import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
@@ -387,6 +388,10 @@ export default function TenantSettingsPage() {
       {/* CTS-03 — Copilot deep-trace debug panel (Tier 3, tenant-admin gated in the
           BFF): per-turn phase timings, tool roll-up, grounding, routing, raw JSON. */}
       <CopilotDebugPanel />
+
+      {/* CTS-08 — long-term Copilot memory brain (browse / search / delete / purge
+          per scope + the CTS-12 write-audit trail). Tenant-admin gated in the BFF. */}
+      <CopilotMemoryPanel />
 
       {/* Deployment-wide auto-error forwarding switch (rel-T79). */}
       <FeedbackForwardingConfig />
