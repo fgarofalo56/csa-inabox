@@ -54,6 +54,16 @@ export interface DemoSubJob {
 
 const DEMO_APP_ID = 'demo-environment';
 
+/**
+ * Same-origin base for server-side self-calls. Defaults to the LOCAL container
+ * port (127.0.0.1:PORT) — a hairpin to the PUBLIC Front Door URL from inside the
+ * container does NOT work (egress/routing), so we call the app on localhost.
+ * Overridable via LOOM_SELF_BASE_URL. Cookie-based auth is unaffected by the host.
+ */
+export function selfBaseUrl(): string {
+  return (process.env.LOOM_SELF_BASE_URL || `http://127.0.0.1:${process.env.PORT || 3000}`).replace(/\/$/, '');
+}
+
 async function jobDoc(jobId: string, tenantId: string): Promise<AppInstallJob | null> {
   const jobs = await appInstallJobsContainer();
   try {
@@ -118,7 +128,7 @@ export async function runDemoDeploy(opts: {
   origin: string;
 }): Promise<void> {
   const { jobId, tenantId, cookie } = opts;
-  const base = (process.env.LOOM_SELF_BASE_URL || opts.origin || '').replace(/\/$/, '');
+  const base = selfBaseUrl();
   const H = { cookie, 'content-type': 'application/json' };
   const sub: DemoSubJob[] = SHOWCASE_APPS.map(([appId, wsLabel]) => ({ appId, wsLabel, status: 'pending' }));
 
