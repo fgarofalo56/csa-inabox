@@ -28,6 +28,7 @@ import { armBase, armScope } from '@/lib/azure/cloud-endpoints';
 import { composePreflight, type PreflightResult } from '@/lib/azure/attach-preflight';
 import { isAttachedServiceKind, armTypeToKind, type AttachedServiceKind } from '@/lib/azure/attached-service-kinds';
 import { decodeLandingZoneId } from '@/lib/azure/landing-zone-id';
+import { escapeSqlLiteral } from '@/lib/sql/quoting';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -49,7 +50,7 @@ interface ArgIdRow {
 
 /** ARG query fetching properties for a specific set of resource ids. */
 function buildIdQuery(ids: string[]): string {
-  const list = ids.map((i) => `'${i.replace(/'/g, "''")}'`).join(',');
+  const list = ids.map((i) => `'${escapeSqlLiteral(i)}'`).join(',');
   return `resources | where id in~ (${list}) | project id, type, kind, properties`;
 }
 

@@ -41,6 +41,7 @@ import { runAttachIntegration } from '@/lib/azure/attach-integration';
 import { resolveUamiPrincipalId } from '@/lib/clients/azure-connections-client';
 import { decodeLandingZoneId } from '@/lib/azure/landing-zone-id';
 import { emitAuditEvent } from '@/lib/admin/audit-stream';
+import { escapeSqlLiteral } from '@/lib/sql/quoting';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -52,7 +53,7 @@ const ARG_URL = `${armBase()}/providers/Microsoft.ResourceGraph/resources?api-ve
 interface ArgIdRow { id: string; type: string; kind?: string; properties?: any; name?: string }
 
 function buildIdQuery(ids: string[]): string {
-  const list = ids.map((i) => `'${i.replace(/'/g, "''")}'`).join(',');
+  const list = ids.map((i) => `'${escapeSqlLiteral(i)}'`).join(',');
   return `resources | where id in~ (${list}) | project id, name, type, kind, properties`;
 }
 
