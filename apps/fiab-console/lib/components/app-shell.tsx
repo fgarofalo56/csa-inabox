@@ -28,6 +28,7 @@ import { CommandPalette } from './command-palette';
 import { CopilotPane, openCopilot } from './copilot-pane';
 import { CopilotIcon } from './icons/copilot-icon';
 import { LoomLogo } from './loom-logo';
+import { CloudBadge } from './cloud-badge';
 import { ThemeToggle } from './theme-toggle';
 import { TopbarSearch } from './topbar-search';
 import { FeedbackWidget, openFeedback } from './feedback-widget';
@@ -189,6 +190,8 @@ export function AppShell({ children }: { children: ReactNode }) {
             {!navCollapsed && <span className={styles.wordmark}>CSA Loom</span>}
           </Link>
         </Tooltip>
+        {/* Cloud-boundary assurance — always visible, even with the nav collapsed. */}
+        <CloudBadge />
         <AppLauncher />
         <WorkspaceSwitcher />
         <Tooltip content="Object explorer — browse items across every workspace" relationship="label">
