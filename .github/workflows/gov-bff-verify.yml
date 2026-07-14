@@ -67,6 +67,17 @@ jobs:
           echo "::add-mask::$SS"
           echo "SS=$SS" >> "$GITHUB_ENV"
 
+      - name: loom-unity diagnostics (replica state + recent logs)
+        run: |
+          set -euo pipefail
+          echo "--- revisions ---"
+          az containerapp revision list -n loom-unity -g "$RG" \
+            --query "[?properties.active].{name:name,health:properties.healthState,running:properties.runningState,replicas:properties.replicas}" -o table || true
+          echo "--- replicas ---"
+          az containerapp replica list -n loom-unity -g "$RG" -o table 2>/dev/null || true
+          echo "--- recent logs (last 60 lines) ---"
+          az containerapp logs show -n loom-unity -g "$RG" --tail 60 --format text 2>/dev/null | tail -60 || true
+
       - name: Probe BFF routes with a minted session
         env:
           OID: ${{ vars.LOOM_AUTOMATION_OID }}
