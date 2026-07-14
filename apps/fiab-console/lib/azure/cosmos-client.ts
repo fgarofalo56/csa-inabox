@@ -282,6 +282,17 @@ let _landingZones: Container | null = null;
 // data-plane access-request containers (marketplace PK /dataProductId, F16
 // workflow PK /tenantId+kind). See lib/types/signin-access-request.ts.
 let _signinAccessRequests: Container | null = null;
+// CTS-07 — Copilot skills registry. `copilot-skills` holds one doc per skill,
+// PK /scope where scope is 'builtin' (the seeded MS + Power BI descriptors,
+// is_builtin:true) or 'tenant:<tid>' (tenant-authored custom skills) so the
+// per-scope enumeration hits a single physical partition. `copilot-skill-states`
+// holds the per-user toggle overrides + the tenant-default overlay, PK /userKey
+// where userKey is 'user:<oid>' (one doc per user, a { skillId:boolean } map) or
+// 'tenant:<tid>' (the tenant-admin default overlay). Both created lazily
+// (createIfNotExists) here AND ARM-provisioned in cosmos.bicep's loomContainers —
+// the lazy call is the hotfix fallback. Azure-native (no Fabric dependency).
+let _copilotSkills: Container | null = null;
+let _copilotSkillStates: Container | null = null;
 let _ensured = false;
 
 /**
@@ -918,6 +929,13 @@ async function ensure() {
   // Sign-in-boundary onboarding requests — PK /tenantId (deployment bucket).
   // Created lazily so a fresh environment needs no extra ARM/Bicep step.
   _signinAccessRequests = await mk('signin-access-requests', '/tenantId');
+  // CTS-07 — Copilot skills registry (custom skills + seeded built-ins), PK
+  // /scope ('builtin' | 'tenant:<tid>'), and the per-user toggle overrides +
+  // tenant-default overlay, PK /userKey ('user:<oid>' | 'tenant:<tid>'). Both
+  // ARM-provisioned in cosmos.bicep's loomContainers; these createIfNotExists
+  // calls are the hotfix fallback. Azure-native — no Fabric dependency.
+  _copilotSkills = await mk('copilot-skills', '/scope');
+  _copilotSkillStates = await mk('copilot-skill-states', '/userKey');
   _ensured = true;
 }
 
@@ -1007,6 +1025,10 @@ export async function capacityGuardrailsContainer(): Promise<Container> { await 
 export async function costAttributionContainer(): Promise<Container> { await ensure(); return _costAttribution!; }
 export async function perfBenchmarksContainer(): Promise<Container> { await ensure(); return _perfBenchmarks!; }
 export async function sparkWarmLeasesContainer(): Promise<Container> { await ensure(); return _sparkWarmLeases!; }
+/** CTS-07 — Copilot skills registry (custom skills + seeded built-ins), PK /scope. */
+export async function copilotSkillsContainer(): Promise<Container> { await ensure(); return _copilotSkills!; }
+/** CTS-07 — per-user skill toggle overrides + tenant-default overlay, PK /userKey. */
+export async function copilotSkillStatesContainer(): Promise<Container> { await ensure(); return _copilotSkillStates!; }
 
 // Foundation admin containers (shared cloud-endpoints resolver task).
 /** Admin Workspace Catalog — one row per Loom-managed workspace, PK /tenantId. */
@@ -1172,6 +1194,7 @@ const KNOWN_CONTAINER_IDS = [
   'cost-attribution',
   'attached-services',
   'landing-zones',
+  'copilot-skills', 'copilot-skill-states',
 ];
 
 /** List all Loom containers with their current throughput shape.

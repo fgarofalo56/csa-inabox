@@ -118,6 +118,7 @@ import { POWERBI_REMOTE_MCP_GATE_TEXT } from '@/lib/copilot/powerbi-skills';
 // is opt-in and emits an honest catalog gate until connected (no-fabric-dependency,
 // no-vaporware).
 import { msSkillSystemBlocksForPane, msMcpPrefix, msSkillsForPane } from '@/lib/copilot/ms-skills';
+import { renderSkillInjectionForUser } from '@/lib/azure/skill-store';
 // rel-T85 list-price estimator (CTS-01) — pure, shared with the admin usage
 // dashboard so the per-turn $ figure uses one source of truth.
 import { estCostUsd } from '@/lib/copilot/cost-estimate';
@@ -1278,6 +1279,11 @@ export interface OrchestrateOptions {
   prompt: string;
   sessionId: string;
   userOid: string;
+  /** Caller's Entra tenant id (session.claims.tid). Optional — when supplied it
+   *  lets the CTS-07 skill registry surface TENANT custom skills + the tenant
+   *  default overlay in the skill injection; when absent the per-user overrides
+   *  (keyed by userOid) + built-ins still resolve, so behavior is unchanged. */
+  tenantId?: string | null;
   maxIterations?: number;
   /** Tenant admin-selected Copilot config (account + chat deployment). When
    *  supplied it takes priority over env / discovery. */
@@ -2111,9 +2117,33 @@ export async function* orchestrate(opts: OrchestrateOptions): AsyncIterable<Orch
   // capability. Pure guidance — the tool loop below is unchanged. Reuses the same
   // skill plumbing as the Power BI skills (no parallel system); empty string when
   // no MS skill applies to this pane, so nothing extra is injected.
-  const msSkillBlocks = msSkillSystemBlocksForPane(opts.contextSlug, {
-    connectedPrefixes: msConnectedMcpPrefixes(reg),
-  });
+  const connectedPrefixes = msConnectedMcpPrefixes(reg);
+  // Baseline (hard-coded) MS skill blocks + names — the byte-for-byte previous
+  // behavior, and the FAIL-OPEN fallback if the CTS-07 skill store is unreachable.
+  let msSkillBlocks = msSkillSystemBlocksForPane(opts.contextSlug, { connectedPrefixes });
+  // Names of the skills reflected in the CTS-05 meter — starts from the baseline
+  // pane set and is REPLACED by the resolved (post-toggle) set when the store
+  // answers, so the meter tracks what was actually injected.
+  let resolvedSkillNames = msSkillsForPane(opts.contextSlug).map((sk) => sk.name);
+  // CTS-07: consult the Cosmos-backed skill registry so per-user toggles (and any
+  // tenant custom skills) shape the injection. Best-effort: on any store error
+  // renderSkillInjectionForUser returns null and we keep the hard-coded baseline
+  // above. With no user state + no custom skills the resolved block equals the
+  // baseline, so the default-ON behavior is preserved.
+  try {
+    const resolved = await renderSkillInjectionForUser(
+      userOid,
+      opts.tenantId ?? undefined,
+      opts.contextSlug,
+      { connectedPrefixes },
+    );
+    if (resolved) {
+      msSkillBlocks = resolved.block;
+      resolvedSkillNames = resolved.names;
+    }
+  } catch {
+    /* fail-open — keep the hard-coded baseline injection */
+  }
   if (msSkillBlocks) {
     messages.push({ role: 'system', content: msSkillBlocks });
   }
@@ -2209,7 +2239,9 @@ export async function* orchestrate(opts: OrchestrateOptions): AsyncIterable<Orch
   // call) and emit ONE `context_usage` step so the segmented meter renders with
   // real per-segment counts. memory/knowledge are 0 until CTS-08 / RAG
   // pre-injection land — first-class segments now so the meter needs no reshape.
-  const skillNames = msSkillsForPane(opts.contextSlug).map((sk) => sk.name);
+  // CTS-07: reflect the RESOLVED (post-toggle) skill set — computed above with
+  // the skill store — so the meter's "skills" segment matches what was injected.
+  const skillNames = resolvedSkillNames;
   const toolNames = (tools as Array<{ function?: { name?: string } }>).map((t) => t?.function?.name || '').filter(Boolean);
   const systemMessagesText = messages.filter((m) => m.role === 'system').map((m) => m.content || '').join('\n\n');
   const contextUsage = buildContextUsagePayload({

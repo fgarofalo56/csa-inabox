@@ -135,7 +135,7 @@ export async function POST(req: NextRequest) {
       send('session', { sessionId });
       try {
         for await (const step of routeCopilot({
-          prompt, sessionId, userOid, tenantConfig, persona, personaContext,
+          prompt, sessionId, userOid, tenantId: session.claims.tid, tenantConfig, persona, personaContext,
           contextSlug, contextPayload,
           autoRoute, forceAgent, helpContext: body.helpContext,
         })) {
