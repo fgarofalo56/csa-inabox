@@ -1,5 +1,11 @@
 # CSA Loom — Public-Release Readiness PRP (Master)
 
+> **Status: SHIPPED (re-verified 2026-07-06).** All 108 items (Waves 0–7) landed; the 13
+> release blockers are closed and gates **G1–G11 are green** (see the checked list in
+> `docs/fiab/prp/RELEASE-READINESS-2026-07-02.md` §6). The from-scratch deploy was proven
+> (subscription-scope validate + what-if, 0 errors) and releases are being cut (Commercial
+> `0.68.0`; Gov console live). The goal statement below is preserved as the original charter.
+>
 > **Goal:** Take CSA Loom from "deep but last-mile-broken" to a **defensible public v1**
 > that satisfies every operator mandate — no-vaporware, ui-parity, web3-ui, no-fabric-dependency,
 > and the BLOCKING memory rules — with a **real Azure-native backend behind every control**,

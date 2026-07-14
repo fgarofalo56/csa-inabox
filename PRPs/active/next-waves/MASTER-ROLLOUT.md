@@ -8,6 +8,18 @@
 
 ---
 
+## ✅ RE-BASELINE 2026-07-14 — live open-work tracker is now `PRPs/active/OPEN-REGISTER-2026-07-12.md`
+
+A 2026-07-14 verification pass re-confirmed the 2026-07-09 reconciliation below: the ~40 items
+this phased plan lists as forward work that were **already BUILT** remain shipped on `main`, and
+more has landed since (through release `0.68.0` / PRs up to #2028). **This document stays the
+canonical dependency-ordered *sequence*, but it is no longer the source of truth for what is still
+open.** For current open work, read **`PRPs/active/OPEN-REGISTER-2026-07-12.md`** (the deduped
+single register); its P1 code-gap items 1-8 were all verified **CLOSED** on 2026-07-14. When
+grading any item below as "to build," check OPEN-REGISTER and `gh pr list --state merged` first —
+the phase callouts here already flag large blocks as shipped, and the true remaining scope is
+OPEN-REGISTER's P2/P3 programs.
+
 ## ⚠️ RECONCILIATION 2026-07-09 EVE — read `docs/fiab/prp/PRP-AUDIT-2026-07-09.md` FIRST
 
 A full per-item audit against `main` @ `835d2145` found **~40 items below are BUILT but still

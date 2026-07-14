@@ -1,6 +1,17 @@
 # PRP — CSA Loom day-one deploy readiness: push-button, 100% working, scan-and-choose
 
-**Created 2026-06-15. Driver: operator. Status: active program.**
+**Created 2026-06-15. Driver: operator. Status: largely DELIVERED (re-verified 2026-07-14).**
+
+> **Completion ledger (2026-07-14).** The live-session fixes (items 1-5) were codified
+> with the GH refs noted inline. The honest-gated day-one items (6-9) were provisioned
+> and wired ON by default: a clean deploy now reaches **env-config 73/73 + Health
+> self-audit 100** (PRs **#1970**, **#1980**), and the previously build-var-gated backends
+> became in-console runtime toggles — Azure Maps (**#2014**), AAS semantic (**#2015**),
+> Power BI (**#2012**). The scan-and-choose CLI (`scripts/csa-loom/scan-and-deploy.sh`)
+> and the `/setup` Setup Wizard both shipped. Any residual gates are misconfig (empty env
+> var) rather than missing infra — see the "Gate = misconfig not missing infra" pattern.
+> The acceptance run below (clean-sub `scan-and-deploy.sh --defaults` + quarterly teardown,
+> Commercial AND Gov) remains an operator prereq per `OPEN-REGISTER-2026-07-12.md` §P0.
 
 ## Vision (verbatim intent)
 A **single push-button deploy** produces a CSA Loom where **everything works on first login** — no missing configs, no unconfigured services, no manual troubleshooting. Where a backend choice exists, the deploy **scans every subscription first**, shows what already exists, and **asks the user**: use an existing service, provision a new one, or disable it — **with a recommendation**. Default posture is **everything ON (opt-out)** — the user disables what they don't want; nothing is left unconfigured by default. Customers must never have to figure out missing configs, options, or settings.
