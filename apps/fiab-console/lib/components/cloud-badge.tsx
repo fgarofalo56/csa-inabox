@@ -14,6 +14,7 @@
 
 import * as React from 'react';
 import { Badge, Tooltip, makeStyles, tokens } from '@fluentui/react-components';
+import { clientFetch } from '@/lib/client-fetch';
 
 const useStyles = makeStyles({
   badge: {
@@ -56,7 +57,7 @@ export function CloudBadge(): React.ReactElement | null {
 
   React.useEffect(() => {
     let cancelled = false;
-    fetch('/api/cloud')
+    clientFetch('/api/cloud')
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
         if (cancelled || !d?.cloud || !(d.cloud in BADGE_STYLE)) return;
