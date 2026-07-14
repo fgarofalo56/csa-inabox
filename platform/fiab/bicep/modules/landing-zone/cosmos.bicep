@@ -233,6 +233,14 @@ var loomContainers = [
   // point for BOTH day-0 BYO (EXISTING_* seed) and the day-2 attach wizard.
   // createIfNotExists in cosmos-client.ts ensure() remains the hotfix fallback.
   { name: 'attached-services',   partitionKey: '/tenantId' }
+  // Logical Landing-Zone registry (dlz-brownfield Phase A). One doc per
+  // lightweight landing zone — a grouping target the attach wizard points
+  // attached-services rows at — PK /tenantId so the per-tenant LZ list hits a
+  // single physical partition. Distinct from the HEAVY greenfield DLZ (a full
+  // ARM deploy discovered via Resource Graph): this store persists a LOGICAL
+  // zone with zero Azure provisioning. createIfNotExists in cosmos-client.ts
+  // ensure() remains the hotfix fallback.
+  { name: 'landing-zones',       partitionKey: '/tenantId' }
 ]
 
 resource loomDb 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases@2024-12-01-preview' = {

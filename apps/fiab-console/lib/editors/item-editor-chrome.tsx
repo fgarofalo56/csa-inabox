@@ -356,7 +356,7 @@ export function ItemEditorChrome({ item, id, ribbon, leftPanel, main, rightPanel
             <ExplainThisButton itemType={item.slug} itemId={id} family={explain.family} getDefinition={explain.getDefinition} />
           )}
           {/* Loom Thread — weave this item into upstream/downstream Loom services. */}
-          <ThreadMenu type={item.slug} id={id} name={title} />
+          <ThreadMenu type={item.slug} id={id} name={title} workspaceId={workspace?.id} />
           {/* OneLake item-to-item lineage drawer (upstream/downstream graph). */}
           {!isNew && <LineageDrawer type={item.slug} id={id} displayName={item.displayName} />}
           {/* Version-history timeline + visual diff + restore (Wave-2 W6) —

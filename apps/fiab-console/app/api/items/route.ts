@@ -44,8 +44,12 @@ export async function GET(req: NextRequest) {
       { status: 400 },
     );
   }
+  // Optional workspace scope: when the picker passes `workspaceId`, list ONLY
+  // that workspace's items (authorized once, partition-scoped) so a picker in
+  // Workspace A never shows a sibling workspace's items.
+  const workspaceId = req.nextUrl.searchParams.get('workspaceId')?.trim() || undefined;
   try {
-    const items = await listOwnedItems(type, session.claims.oid);
+    const items = await listOwnedItems(type, session.claims.oid, { workspaceId, session });
     return NextResponse.json({ ok: true, items });
   } catch (e: any) {
     return NextResponse.json(

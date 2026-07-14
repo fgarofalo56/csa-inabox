@@ -561,6 +561,7 @@ function PaginatedReportDesigner({ item, id }: { item: FabricItemType; id: strin
           <DataSourceDialog
             open={dsDialog.open}
             editing={dsDialog.editing}
+            workspaceId={workspaceId}
             onClose={() => setDsDialog({ open: false })}
             onSave={(ds) => {
               patch((x) => {
@@ -690,8 +691,8 @@ function TablixDesignSurface({ tablix, dataset, onChange, onDelete }: {
 }
 
 // --- Data source dialog ---
-function DataSourceDialog({ open, editing, onClose, onSave, onDelete }: {
-  open: boolean; editing?: RdlDataSource;
+function DataSourceDialog({ open, editing, workspaceId, onClose, onSave, onDelete }: {
+  open: boolean; editing?: RdlDataSource; workspaceId?: string;
   onClose: () => void; onSave: (ds: RdlDataSource) => void; onDelete?: (id: string) => void;
 }) {
   const [name, setName] = useState('');
@@ -723,6 +724,7 @@ function DataSourceDialog({ open, editing, onClose, onSave, onDelete }: {
               {/* WAVE 2 — pick a Loom item to fill the coordinates automatically. */}
               <LoomItemSourcePicker
                 purpose="paginated"
+                workspaceId={workspaceId}
                 onResolved={(res) => {
                   setGalleryGate(null);
                   if (!name.trim()) setName(res.label);
@@ -782,6 +784,7 @@ function DataSourceDialog({ open, editing, onClose, onSave, onDelete }: {
         paginated-report, not a report route). */}
     <GetDataGallery
       open={galleryOpen}
+      workspaceId={workspaceId}
       onChosen={(ds, meta) => {
         const fill = rdlFillFromReportSource(ds, {
           host: meta?.connection?.host,

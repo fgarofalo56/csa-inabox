@@ -252,6 +252,8 @@ export interface DataSourcePickerProps {
   open: boolean;
   /** Report item id (used only to scope the parent PUT — passed through to onChange). */
   reportId?: string;
+  /** Report's workspace — SCOPES the semantic-model + Loom-item source pickers to it. */
+  workspaceId?: string;
   /** Currently-persisted data source, if any (pre-selects the form). */
   value?: ReportDataSource | null;
   /** Parent persists the chosen source (PUT /api/items/report/[id]/data-source). */
@@ -261,7 +263,7 @@ export interface DataSourcePickerProps {
   saving?: boolean;
 }
 
-export function DataSourcePicker({ open, reportId, value, onChange, onDismiss, saving }: DataSourcePickerProps) {
+export function DataSourcePicker({ open, reportId, workspaceId, value, onChange, onDismiss, saving }: DataSourcePickerProps) {
   const styles = useStyles();
 
   const [kind, setKind] = useState<PickerKind>(value?.kind ?? 'semantic-model');
@@ -323,7 +325,8 @@ export function DataSourcePicker({ open, reportId, value, onChange, onDismiss, s
   const loadModels = useCallback(async () => {
     setModelsLoading(true); setModelsErr(null);
     try {
-      const r = await clientFetch('/api/items/by-type?types=semantic-model');
+      const wsParam = workspaceId ? `&workspaceId=${encodeURIComponent(workspaceId)}` : '';
+      const r = await clientFetch(`/api/items/by-type?types=semantic-model${wsParam}`);
       const j = await r.json();
       if (!j.ok) { setModels([]); setModelsErr(j.error || `HTTP ${r.status}`); return; }
       const items: ModelItem[] = (j.items || []).map((it: any) => ({
@@ -334,7 +337,7 @@ export function DataSourcePicker({ open, reportId, value, onChange, onDismiss, s
       if (modelId && !items.some((m) => m.id === modelId)) setModelId('');
     } catch (e: any) { setModels([]); setModelsErr(e?.message || String(e)); }
     finally { setModelsLoading(false); }
-  }, [modelId]);
+  }, [modelId, workspaceId]);
 
   useEffect(() => { if (open) loadModels(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [open]);
 
@@ -567,6 +570,7 @@ export function DataSourcePicker({ open, reportId, value, onChange, onDismiss, s
             <div className={styles.panel}>
               <LoomItemSourcePicker
                 purpose="report"
+                workspaceId={workspaceId}
                 selectedItemId={loomSelectedId || undefined}
                 onResolved={onLoomResolved}
                 onCleared={() => { setLoomResolved(null); setLoomSelectedId(''); }}
@@ -860,6 +864,7 @@ export function DataSourcePicker({ open, reportId, value, onChange, onDismiss, s
       <GetDataGallery
         open={galleryOpen}
         reportId={reportId}
+        workspaceId={workspaceId}
         onChosen={onGalleryChosen}
         onDismiss={() => setGalleryOpen(false)}
       />

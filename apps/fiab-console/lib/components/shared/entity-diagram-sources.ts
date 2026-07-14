@@ -196,10 +196,16 @@ function normalizeCardinality(c: unknown): EntityCardinality {
  * unconfigured the tables still render with a `notice`.
  */
 export async function readLakehouseGraph(source: EntitySource, doFetch: EntityFetch): Promise<EntityGraph> {
-  const containersQs = source.containers ? `?containers=${encodeURIComponent(source.containers)}` : '';
+  // Scope the scan to THIS lakehouse item (+ its workspace) so the diagram only
+  // ever shows the opened lakehouse's own tables — never a sibling lakehouse's
+  // or another workspace's. Both are required by the scoped tables route.
+  if (!source.itemId || !source.workspaceId) {
+    return { tables: [], relationships: [], gate: 'Lakehouse table scan needs the lakehouse id and its workspace.' };
+  }
+  const tablesQs = `?lakehouseId=${encodeURIComponent(source.itemId)}&workspaceId=${encodeURIComponent(source.workspaceId)}`;
   let res: Response;
   try {
-    res = await doFetch(`/api/lakehouse/tables${containersQs}`);
+    res = await doFetch(`/api/lakehouse/tables${tablesQs}`);
   } catch (e: any) {
     return { tables: [], relationships: [], gate: `Could not reach the lakehouse catalog: ${e?.message || String(e)}` };
   }

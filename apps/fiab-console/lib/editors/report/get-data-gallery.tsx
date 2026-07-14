@@ -1190,6 +1190,8 @@ export interface GetDataGalleryProps {
   open: boolean;
   /** Report item id — scopes uploads + enables the optional live preview. */
   reportId?: string;
+  /** Report's workspace — SCOPES the "Pick a Loom item" source list to it. */
+  workspaceId?: string;
   /** Fires with the chosen connection / file-upload / adls-file source. */
   onChosen: GetDataChosen;
   onDismiss: () => void;
@@ -1200,7 +1202,7 @@ type View =
   | { step: 'loom' }
   | { step: 'bind'; connType?: ReportConnType; def: ConnectorDef; preselectConnectionId?: string };
 
-export function GetDataGallery({ open, reportId, onChosen, onDismiss }: GetDataGalleryProps) {
+export function GetDataGallery({ open, reportId, workspaceId, onChosen, onDismiss }: GetDataGalleryProps) {
   const s = useStyles();
   const [view, setView] = useState<View>({ step: 'gallery' });
   const [wizardOpen, setWizardOpen] = useState(false);
@@ -1272,6 +1274,7 @@ export function GetDataGallery({ open, reportId, onChosen, onDismiss }: GetDataG
                 </Caption1>
                 <LoomItemSourcePicker
                   purpose="report"
+                  workspaceId={workspaceId}
                   onResolved={(r: LoomItemResolution) => { if (r.dataSource) onChosen(r.dataSource); }}
                 />
               </div>

@@ -53,7 +53,7 @@ function ThreadFieldControl({
   field: ThreadField;
   value: string | boolean | undefined;
   onChange: (v: string | boolean) => void;
-  from: { id: string; type: string; name: string };
+  from: { id: string; type: string; name: string; workspaceId?: string };
 }) {
   const [opts, setOpts] = useState<{ value: string; label: string }[] | null>(null);
   const [loadErr, setLoadErr] = useState<string | null>(null);
@@ -63,7 +63,10 @@ function ThreadFieldControl({
     async function load() {
       try {
         if (field.kind === 'loom-item' && field.itemTypes?.length) {
-          const r = await clientFetch(`/api/items/by-type?types=${encodeURIComponent(field.itemTypes.join(','))}`);
+          // Scope the source picker to the current item's workspace so it never
+          // lists a sibling workspace's items.
+          const wsParam = from.workspaceId ? `&workspaceId=${encodeURIComponent(from.workspaceId)}` : '';
+          const r = await clientFetch(`/api/items/by-type?types=${encodeURIComponent(field.itemTypes.join(','))}${wsParam}`);
           const j = await r.json();
           const items: LoomItemOpt[] = (j.items || []).map((it: any) => ({ id: it.id, name: it.displayName || it.id }));
           const base = items.map((it) => ({ value: it.id, label: it.name }));
@@ -97,7 +100,7 @@ function ThreadFieldControl({
     }
     void load();
     return () => { cancelled = true; };
-  }, [field, from.id, from.type]);
+  }, [field, from.id, from.type, from.workspaceId]);
 
   if (field.kind === 'toggle') {
     return (
@@ -154,7 +157,7 @@ function ThreadWizard({
   action, from, onClose,
 }: {
   action: ThreadAction;
-  from: { id: string; type: string; name: string };
+  from: { id: string; type: string; name: string; workspaceId?: string };
   onClose: () => void;
 }) {
   const styles = useStyles();
@@ -229,14 +232,14 @@ function ThreadWizard({
   );
 }
 
-export function ThreadMenu({ type, id, name }: { type: string; id: string; name?: string }) {
+export function ThreadMenu({ type, id, name, workspaceId }: { type: string; id: string; name?: string; workspaceId?: string }) {
   const styles = useStyles();
   const groups = groupedActionsFor(type);
   const [active, setActive] = useState<ThreadAction | null>(null);
 
   if (groups.length === 0) return null; // no Thread edges for this type yet — show nothing (no dead button)
 
-  const from = { id, type, name: name || id };
+  const from = { id, type, name: name || id, workspaceId };
 
   return (
     <>

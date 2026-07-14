@@ -4,6 +4,7 @@ import { isTenantAdmin } from '@/lib/auth/feature-gate';
 import { itemsContainer, workspacesContainer } from '@/lib/azure/cosmos-client';
 import { upsertLoomDoc, deleteLoomDoc, docForWorkspace } from '@/lib/azure/loom-search';
 import { cleanupWorkspaceMetadata, type CleanupItem } from '@/lib/azure/lineage-gc';
+import { teardownWorkspaceBackends, type TeardownItem, type TeardownOutcome } from '@/lib/azure/resource-teardown';
 import { resolveWorkspaceAccessByOid, type WorkspaceAccess } from '@/lib/auth/workspace-access';
 import type { Workspace } from '@/lib/types/workspace';
 import { apiError } from '@/lib/api/respond';
@@ -92,10 +93,14 @@ export async function PATCH(req: NextRequest, props: { params: Promise<{ id: str
   }
 }
 
-export async function DELETE(_req: NextRequest, props: { params: Promise<{ id: string }> }) {
+export async function DELETE(req: NextRequest, props: { params: Promise<{ id: string }> }) {
   const params = await props.params;
   const { access, session } = await loadWorkspaceAccess(params.id);
   if (!session) return err('Unauthorized', 401, 'unauthorized');
+  // Cascade = also DELETE the underlying Azure data/services each item
+  // provisioned (the user explicitly chose "Delete everything"). Default (no
+  // flag) is catalog-only — Azure resources are retained.
+  const cascade = req.nextUrl.searchParams.get('cascade') === 'true';
   try {
     if (!access) return err('Workspace not found', 404, 'not_found');
     // Deleting a whole workspace stays OWNER/Admin-scoped — a Member can
@@ -104,16 +109,26 @@ export async function DELETE(_req: NextRequest, props: { params: Promise<{ id: s
       return err('Only the workspace owner or an Admin can delete a workspace.', 403, 'owner_or_admin_required');
     }
     const ws = access.workspace;
-    // Cascade delete items first. Select the fields lineage GC needs (itemType
-    // + state.purviewSourceName) alongside id/workspaceId so the metadata plane
-    // can be reconciled per item.
+    // Cascade delete items first. Select the fields lineage GC + backend teardown
+    // need (itemType + displayName + full state) alongside id/workspaceId so both
+    // the metadata plane can be reconciled AND, on cascade, each item's real
+    // Azure backend can be resolved from state.provisioning before the docs go.
     const items = await itemsContainer();
     const { resources: children } = await items.items
-      .query<CleanupItem>({
-        query: 'SELECT c.id, c.workspaceId, c.itemType, c.state FROM c WHERE c.workspaceId = @w',
+      .query<CleanupItem & { displayName?: string }>({
+        query: 'SELECT c.id, c.workspaceId, c.itemType, c.displayName, c.state FROM c WHERE c.workspaceId = @w',
         parameters: [{ name: '@w', value: ws.id }],
       }, { partitionKey: ws.id })
       .fetchAll();
+
+    // On cascade, tear down each item's Azure backend BEFORE the Cosmos item
+    // docs are deleted (teardown reads state.provisioning for the backend refs).
+    // Best-effort + serial — never throws, so it can't block the delete.
+    let teardown: TeardownOutcome[] | undefined;
+    if (cascade) {
+      teardown = await teardownWorkspaceBackends(children as TeardownItem[], ws.tenantId);
+    }
+
     for (const child of children) {
       await items.item(child.id, ws.id).delete().catch(() => {});
       void deleteLoomDoc(`it:${child.id}`);
@@ -127,7 +142,7 @@ export async function DELETE(_req: NextRequest, props: { params: Promise<{ id: s
     const wsContainer = await workspacesContainer();
     await wsContainer.item(ws.id, ws.tenantId).delete();
     void deleteLoomDoc(`ws:${ws.id}`);
-    return NextResponse.json({ ok: true });
+    return NextResponse.json({ ok: true, ...(teardown ? { teardown } : {}) });
   } catch (e: any) {
     return err(e?.message || 'Failed to delete workspace', 500, 'cosmos_error');
   }

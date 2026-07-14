@@ -83,9 +83,11 @@ export interface AgentToolsEditorProps {
   disabled?: boolean;
   /** Compact single-tool inspector mode (canvas) hides the intro caption. */
   compact?: boolean;
+  /** Host agent's workspace — SCOPES the bound-item pickers to it. */
+  workspaceId?: string;
 }
 
-export function AgentToolsEditor({ tools, onChange, disabled, compact }: AgentToolsEditorProps) {
+export function AgentToolsEditor({ tools, onChange, disabled, compact, workspaceId }: AgentToolsEditorProps) {
   const s = useStyles();
   const [addKind, setAddKind] = useState<AgentToolKind>('warehouse');
 
@@ -94,9 +96,11 @@ export function AgentToolsEditor({ tools, onChange, disabled, compact }: AgentTo
   const [loadingType, setLoadingType] = useState<string | null>(null);
   const loadItems = useCallback(async (itemType: string) => {
     if (itemOpts[itemType]) return;
+    // Scope the bound-item picker to the host agent's workspace once known.
+    if (!workspaceId) return;
     setLoadingType(itemType);
     try {
-      const r = await clientFetch(`/api/items/by-type?types=${encodeURIComponent(itemType)}`);
+      const r = await clientFetch(`/api/items/by-type?types=${encodeURIComponent(itemType)}&workspaceId=${encodeURIComponent(workspaceId)}`);
       const j = await r.json();
       const items = (j.items || []).map((it: any) => ({ id: it.id, name: it.displayName || it.id }));
       setItemOpts((prev) => ({ ...prev, [itemType]: items }));
@@ -105,7 +109,7 @@ export function AgentToolsEditor({ tools, onChange, disabled, compact }: AgentTo
     } finally {
       setLoadingType(null);
     }
-  }, [itemOpts]);
+  }, [itemOpts, workspaceId]);
 
   // Ensure options are loaded for every bound-item tool already present.
   useEffect(() => {

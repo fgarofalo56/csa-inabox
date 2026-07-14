@@ -268,6 +268,14 @@ let _sparkWarmLeases: Container | null = null;
 // (createIfNotExists) here AND ARM-provisioned in cosmos.bicep's loomContainers —
 // the lazy call is the hotfix fallback.
 let _attachedServices: Container | null = null;
+// Logical Landing-Zone registry (dlz-brownfield Phase A). One doc per lightweight
+// landing zone (a grouping target the attach wizard points `attached-services`
+// rows at), PK /tenantId so the per-tenant LZ list is a single physical
+// partition. Distinct from the HEAVY greenfield DLZ (a full ARM deploy discovered
+// via Resource Graph): this store persists a LOGICAL zone with zero Azure
+// provisioning. Created lazily (createIfNotExists) here AND ARM-provisioned in
+// cosmos.bicep's loomContainers — the lazy call is the hotfix fallback.
+let _landingZones: Container | null = null;
 // Sign-in-boundary onboarding requests (front-door "Request access"). One doc
 // per unauthenticated submission, PK /tenantId (the deployment tenant bucket)
 // so the admin queue reads a single physical partition. Distinct from the two
@@ -903,6 +911,10 @@ async function ensure() {
   // physical partition. ARM-provisioned in cosmos.bicep's loomContainers; this
   // createIfNotExists is the hotfix fallback.
   _attachedServices = await mk('attached-services', '/tenantId');
+  // Logical Landing-Zone registry (dlz-brownfield Phase A) — PK /tenantId so the
+  // per-tenant LZ list hits a single physical partition. ARM-provisioned in
+  // cosmos.bicep's loomContainers; this createIfNotExists is the hotfix fallback.
+  _landingZones = await mk('landing-zones', '/tenantId');
   // Sign-in-boundary onboarding requests — PK /tenantId (deployment bucket).
   // Created lazily so a fresh environment needs no extra ARM/Bicep step.
   _signinAccessRequests = await mk('signin-access-requests', '/tenantId');
@@ -916,6 +928,8 @@ export async function threadEdgesContainer(): Promise<Container> { await ensure(
 export async function connectionsContainer(): Promise<Container> { await ensure(); return _connections!; }
 /** Brownfield Landing-Zone Service Registry (Phase 1) — PK /tenantId. */
 export async function attachedServicesContainer(): Promise<Container> { await ensure(); return _attachedServices!; }
+/** Logical Landing-Zone registry (dlz-brownfield Phase A) — PK /tenantId. */
+export async function landingZonesContainer(): Promise<Container> { await ensure(); return _landingZones!; }
 export async function maintenanceJobsContainer(): Promise<Container> { await ensure(); return _maintenanceJobs!; }
 export async function dataproductJobsContainer(): Promise<Container> { await ensure(); return _dataproductJobs!; }
 export async function appInstallJobsContainer(): Promise<Container> { await ensure(); return _appInstallJobs!; }
@@ -1156,6 +1170,8 @@ const KNOWN_CONTAINER_IDS = [
   'loom-pat-tokens',
   'capacity-guardrails',
   'cost-attribution',
+  'attached-services',
+  'landing-zones',
 ];
 
 /** List all Loom containers with their current throughput shape.

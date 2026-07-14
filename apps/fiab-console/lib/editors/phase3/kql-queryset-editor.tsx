@@ -106,6 +106,10 @@ export function KqlQuerysetEditor({ item, id }: { item: FabricItemType; id: stri
   const [assistError, setAssistError] = useState<string | null>(null);
   const lastModeRef = useRef<'generate' | 'explain' | 'fix'>('generate');
 
+  // This queryset's parent workspace — SCOPES the "Pin to dashboard" and "Set
+  // alert" pickers so they list only this workspace's dashboards / activators.
+  const [workspaceId, setWorkspaceId] = useState('');
+
   const load = useCallback(async () => {
     // Pre-save gate: /items/kql-queryset/new fires this before any record exists.
     if (!id || id === 'new') return;
@@ -113,6 +117,7 @@ export function KqlQuerysetEditor({ item, id }: { item: FabricItemType; id: stri
       const r = await clientFetch(`/api/items/kql-queryset/${id}`);
       const j = (await r.json()) as QuerysetState;
       setQs(j);
+      setWorkspaceId((j as any).workspaceId || '');
       const arr = j.queries || [];
       setQueries(arr);
       if (arr.length) { setSelectedIdx(0); setDraft(arr[0]); }
@@ -252,7 +257,7 @@ export function KqlQuerysetEditor({ item, id }: { item: FabricItemType; id: stri
     setPinErr(null);
     setPinTitle(draft.title || 'Pinned from queryset');
     try {
-      const r = await clientFetch('/api/items?type=kql-dashboard');
+      const r = await clientFetch(`/api/items?type=kql-dashboard${workspaceId ? `&workspaceId=${encodeURIComponent(workspaceId)}` : ''}`);
       const j = await r.json();
       const arr: Array<{ id: string; displayName?: string; name?: string }> = j?.items || j?.value || [];
       const dashboards = arr.map((d) => ({ id: d.id, name: d.displayName || d.name || d.id }));
@@ -261,7 +266,7 @@ export function KqlQuerysetEditor({ item, id }: { item: FabricItemType; id: stri
     } catch (e: any) {
       setPinErr(e?.message || String(e));
     }
-  }, [draft.title]);
+  }, [draft.title, workspaceId]);
 
   const submitPin = useCallback(async () => {
     if (!pinDashboardId) { setPinErr('Choose a dashboard'); return; }
@@ -301,7 +306,7 @@ export function KqlQuerysetEditor({ item, id }: { item: FabricItemType; id: stri
     setAlertErr(null);
     setAlertName(`alert-${(draft.title || 'queryset').toLowerCase().replace(/[^a-z0-9-]/g, '-')}`);
     try {
-      const r = await clientFetch('/api/items?type=activator');
+      const r = await clientFetch(`/api/items?type=activator${workspaceId ? `&workspaceId=${encodeURIComponent(workspaceId)}` : ''}`);
       const j = await r.json();
       const arr: Array<{ id: string; displayName?: string; name?: string }> = j?.items || j?.value || [];
       const acts = arr.map((d) => ({ id: d.id, name: d.displayName || d.name || d.id }));
@@ -310,7 +315,7 @@ export function KqlQuerysetEditor({ item, id }: { item: FabricItemType; id: stri
     } catch (e: any) {
       setAlertErr(e?.message || String(e));
     }
-  }, [draft.title]);
+  }, [draft.title, workspaceId]);
 
   const submitAlert = useCallback(async () => {
     if (!alertActivatorId) { setAlertErr('Choose an Activator'); return; }

@@ -34,6 +34,7 @@ import {
   ATTACHED_KIND_DEFS, getKindDef, kindLabel, type AttachedServiceKind,
 } from '@/lib/azure/attached-service-kinds';
 import type { AttachedServiceCandidate } from '@/lib/azure/attached-discovery';
+import { CreateLandingZoneStep } from '@/lib/components/landing-zones/create-landing-zone-step';
 
 /** Client-safe base64url encode of a `${sub}/${rg}` landing-zone id for the path. */
 function encodeLzIdForPath(id: string): string {
@@ -117,8 +118,14 @@ export function AttachServiceWizard({
 }: {
   open: boolean;
   onClose: () => void;
-  /** `${sub}/${rg}` of a DLZ, or 'hub' for admin-plane services. */
-  landingZoneId: string;
+  /**
+   * `${sub}/${rg}` of a DLZ, a logical LZ slug, or 'hub' for admin-plane
+   * services. When OMITTED, the wizard opens on a step-0 landing-zone SELECTOR
+   * (pick hub / a DLZ / a logical LZ, or create a new logical LZ) before the
+   * discover→multi-select→attach flow — this is the top-level "Attach existing
+   * services" entry point that isn't scoped to a specific DLZ drawer.
+   */
+  landingZoneId?: string;
   landingZoneLabel?: string;
   onAttached?: () => void;
 }) {
@@ -136,7 +143,46 @@ export function AttachServiceWizard({
   const [attaching, setAttaching] = useState(false);
   const [receipt, setReceipt] = useState<AttachReceipt | null>(null);
 
-  const encodedLz = useMemo(() => encodeLzIdForPath(landingZoneId), [landingZoneId]);
+  // ── Step-0 landing-zone selector (only when no fixed landingZoneId prop) ──────
+  // The wizard can be opened un-scoped (top-level "Attach existing services"); the
+  // operator then picks the target LZ — hub, any discovered DLZ, any logical LZ —
+  // or creates a new logical LZ inline, all before discovery runs.
+  const [pickedLzId, setPickedLzId] = useState('');
+  const [pickedLzLabel, setPickedLzLabel] = useState('');
+  const [creatingNew, setCreatingNew] = useState(false);
+  const [lzOptions, setLzOptions] = useState<Array<{ id: string; label: string }>>([]);
+  const [lzLoading, setLzLoading] = useState(false);
+
+  // The LZ the attach flow operates on: the fixed prop, else the step-0 pick.
+  const activeLzId = landingZoneId ?? (pickedLzId || '');
+  const activeLzLabel = landingZoneLabel ?? (pickedLzLabel || '');
+  // When un-scoped and no LZ chosen yet, we're on the selector step (not discovery).
+  const onSelectorStep = !landingZoneId && !activeLzId;
+
+  const encodedLz = useMemo(() => encodeLzIdForPath(activeLzId || 'hub'), [activeLzId]);
+
+  // Load the LZ choices (hub + DLZs + logical LZs) for the step-0 dropdown.
+  const loadLzOptions = useCallback(async () => {
+    setLzLoading(true);
+    try {
+      const res = await clientFetch('/api/setup/landing-zones');
+      const j = await res.json().catch(() => ({}));
+      const opts: Array<{ id: string; label: string }> = [{ id: 'hub', label: 'Hub (admin plane)' }];
+      if (res.ok && j.ok && Array.isArray(j.landingZones)) {
+        for (const z of j.landingZones) {
+          opts.push({
+            id: z.id,
+            label: `${z.domainName || z.id}${z.logical ? ' (logical)' : ''}${z.region ? ` · ${z.region}` : ''}`,
+          });
+        }
+      }
+      setLzOptions(opts);
+    } catch {
+      setLzOptions([{ id: 'hub', label: 'Hub (admin plane)' }]);
+    } finally {
+      setLzLoading(false);
+    }
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true); setGate(null); setError(null); setVerdicts({}); setReceipt(null);
@@ -161,8 +207,24 @@ export function AttachServiceWizard({
   }, []);
 
   useEffect(() => {
-    if (open) { setSelected(new Set()); setVerdicts({}); setReceipt(null); void load(); }
-  }, [open, load]);
+    if (!open) return;
+    setSelected(new Set()); setVerdicts({}); setReceipt(null);
+    if (landingZoneId) {
+      // Fixed-scope open (from a DLZ drawer / hub card) — go straight to discovery.
+      void load();
+    } else {
+      // Un-scoped open — reset the step-0 selector and load the LZ choices.
+      setPickedLzId(''); setPickedLzLabel(''); setCreatingNew(false);
+      void loadLzOptions();
+    }
+  }, [open, landingZoneId, load, loadLzOptions]);
+
+  // Once an un-scoped wizard has a chosen LZ (picked or freshly created), run
+  // discovery against it.
+  useEffect(() => {
+    if (open && !landingZoneId && activeLzId && !creatingNew) void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, landingZoneId, activeLzId, creatingNew]);
 
   const kindsPresent = useMemo(() => {
     const set = new Set(candidates.map((c) => c.kind));
@@ -256,11 +318,52 @@ export function AttachServiceWizard({
         <DialogBody>
           <DialogTitle>
             <span className={s.statusRow}>
-              <PlugConnected24Regular /> Attach existing service
-              {landingZoneLabel && <Badge appearance="outline" size="small">{landingZoneLabel}</Badge>}
+              <PlugConnected24Regular /> Attach existing service{onSelectorStep ? 's' : ''}
+              {activeLzLabel && !onSelectorStep && <Badge appearance="outline" size="small">{activeLzLabel}</Badge>}
             </span>
           </DialogTitle>
           <DialogContent>
+            {/* ── Step 0: landing-zone selector (un-scoped open only) ─────────── */}
+            {onSelectorStep && !creatingNew && (
+              <div className={s.body}>
+                <Body1 className={s.meta}>
+                  Choose the landing zone to attach existing Azure services to — the hub, any Data
+                  Landing Zone, or a lightweight logical landing zone — or create a new logical
+                  landing zone to group them under.
+                </Body1>
+                <Dropdown
+                  placeholder={lzLoading ? 'Loading landing zones…' : 'Select a landing zone'}
+                  disabled={lzLoading}
+                  onOptionSelect={(_, d) => {
+                    const id = d.optionValue || '';
+                    if (id === '__new__') { setCreatingNew(true); return; }
+                    setPickedLzId(id);
+                    setPickedLzLabel(lzOptions.find((o) => o.id === id)?.label || id);
+                  }}
+                >
+                  {lzOptions.map((o) => (
+                    <Option key={o.id} value={o.id} text={o.label}>{o.label}</Option>
+                  ))}
+                  <Option value="__new__" text="＋ New landing zone">＋ New landing zone</Option>
+                </Dropdown>
+                {lzLoading && <Spinner size="tiny" label="Loading landing zones…" />}
+              </div>
+            )}
+
+            {/* ── Step 0b: create a new logical landing zone inline ───────────── */}
+            {onSelectorStep && creatingNew && (
+              <CreateLandingZoneStep
+                onBack={() => setCreatingNew(false)}
+                onCreated={(id, name) => {
+                  setCreatingNew(false);
+                  setPickedLzId(id);
+                  setPickedLzLabel(name);
+                }}
+              />
+            )}
+
+            {/* ── Discover → multi-select → validate → register ──────────────── */}
+            {!onSelectorStep && (
             <div className={s.body}>
               <Body1 className={s.meta}>
                 Bind an existing Azure service you already own to this landing zone so it becomes part
@@ -399,10 +502,20 @@ export function AttachServiceWizard({
                 </MessageBar>
               )}
             </div>
+            )}
           </DialogContent>
           <DialogActions>
             <Button appearance="secondary" onClick={onClose}>{receipt ? 'Done' : 'Cancel'}</Button>
-            {!receipt && (
+            {/* Un-scoped wizard: let the operator switch the target LZ back at the selector. */}
+            {!landingZoneId && activeLzId && !onSelectorStep && !receipt && (
+              <Button
+                appearance="subtle"
+                onClick={() => { setPickedLzId(''); setPickedLzLabel(''); setCreatingNew(false); setCandidates([]); setSelected(new Set()); setVerdicts({}); void loadLzOptions(); }}
+              >
+                Change landing zone
+              </Button>
+            )}
+            {!onSelectorStep && !receipt && (
               <Button
                 appearance="outline"
                 icon={validating ? <Spinner size="tiny" /> : <ShieldCheckmark20Regular />}
@@ -412,7 +525,7 @@ export function AttachServiceWizard({
                 {validating ? 'Validating…' : `Validate ${selected.size || ''}`}
               </Button>
             )}
-            {!receipt && (
+            {!onSelectorStep && !receipt && (
               <Button
                 appearance="primary"
                 icon={attaching ? <Spinner size="tiny" /> : <Add20Regular />}

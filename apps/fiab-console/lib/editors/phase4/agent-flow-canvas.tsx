@@ -131,6 +131,8 @@ interface RunMsg { role: 'user' | 'assistant'; content: string; error?: boolean;
 
 export interface AgentFlowCanvasProps {
   id: string;
+  /** Host agent's workspace — SCOPES the node-inspector sub-agent / tool pickers. */
+  workspaceId?: string;
   agentName: string;
   sources: { id: string; name: string; type: string }[];
   tools: AgentTool[];
@@ -144,7 +146,7 @@ export interface AgentFlowCanvasProps {
 interface FlowSnapshot { tools: AgentTool[]; subAgents: SubAgentRef[]; layout: LayoutMap }
 
 function InnerCanvas(props: AgentFlowCanvasProps) {
-  const { id, agentName, sources, tools, subAgents, layout, onPatch, dirty, save } = props;
+  const { id, workspaceId, agentName, sources, tools, subAgents, layout, onPatch, dirty, save } = props;
   const s = useStyles();
 
   // Undo/redo over the canvas snapshot (tools + sub-agents + layout). Re-seeded
@@ -352,7 +354,7 @@ function InnerCanvas(props: AgentFlowCanvasProps) {
               <Button appearance="primary" onClick={addTool}>Add tool node</Button>
               <div role="separator" style={{ height: 1, background: tokens.colorNeutralStroke2, margin: `${tokens.spacingVerticalS} 0` }} />
               <Subtitle2>Connected sub-agents</Subtitle2>
-              <ConnectedAgentsEditor subAgents={subAgents} selfId={id} onChange={patchSubAgents} compact />
+              <ConnectedAgentsEditor subAgents={subAgents} selfId={id} workspaceId={workspaceId} onChange={patchSubAgents} compact />
             </>
           )}
 
@@ -383,7 +385,7 @@ function InnerCanvas(props: AgentFlowCanvasProps) {
                 <div style={{ flex: 1 }} />
                 <Button size="small" appearance="subtle" icon={<Dismiss16Regular />} onClick={removeSelected}>Remove</Button>
               </div>
-              <AgentToolsEditor tools={[selTool]} onChange={(next) => patchTools(tools.map((t) => (t.id === selTool.id ? next[0] : t)))} compact />
+              <AgentToolsEditor tools={[selTool]} onChange={(next) => patchTools(tools.map((t) => (t.id === selTool.id ? next[0] : t)))} workspaceId={workspaceId} compact />
             </>
           )}
 
@@ -394,7 +396,7 @@ function InnerCanvas(props: AgentFlowCanvasProps) {
                 <div style={{ flex: 1 }} />
                 <Button size="small" appearance="subtle" icon={<Dismiss16Regular />} onClick={removeSelected}>Remove</Button>
               </div>
-              <ConnectedAgentsEditor subAgents={subAgents.filter((r) => r.id === sel.refId)} selfId={id} onChange={(next) => patchSubAgents(subAgents.map((r) => (r.id === sel.refId ? (next[0] || r) : r)))} compact />
+              <ConnectedAgentsEditor subAgents={subAgents.filter((r) => r.id === sel.refId)} selfId={id} workspaceId={workspaceId} onChange={(next) => patchSubAgents(subAgents.map((r) => (r.id === sel.refId ? (next[0] || r) : r)))} compact />
             </>
           )}
         </div>

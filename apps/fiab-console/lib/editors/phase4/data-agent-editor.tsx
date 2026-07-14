@@ -207,7 +207,7 @@ interface DaChatMsg { role: 'user' | 'assistant'; content: string; query?: strin
 
 export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
-  const { state, setState, loading, saving, error, savedAt, save, reload, dirty, lastSaveError } = useItemState<DataAgentState>('data-agent', id, {
+  const { state, setState, loading, saving, error, savedAt, save, reload, dirty, lastSaveError, workspaceId } = useItemState<DataAgentState>('data-agent', id, {
     instructions: 'Route financial / aggregated metrics to the semantic model; raw exploration to the lakehouse / warehouse; log analysis to the KQL database.',
     sources: [],
     description: '',
@@ -231,14 +231,15 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
     if (!cfg.itemType) { setAvailable((prev) => ({ ...prev, [t]: [] })); return; }
     setPickerLoading(true);
     try {
-      const r = await clientFetch(`/api/items/by-type?types=${encodeURIComponent(cfg.itemType)}`);
+      const wsParam = workspaceId ? `&workspaceId=${encodeURIComponent(workspaceId)}` : '';
+      const r = await clientFetch(`/api/items/by-type?types=${encodeURIComponent(cfg.itemType)}${wsParam}`);
       const j = await r.json();
       const items = (j.items || []).map((it: any) => ({ id: it.id, name: it.displayName || it.id }));
       setAvailable((prev) => ({ ...prev, [t]: items }));
     } catch { /* leave empty; user can still pick another type */ }
     finally { setPickerLoading(false); }
-  }, []);
-  useEffect(() => { if (!available[pickerType]) loadAvailable(pickerType); }, [pickerType, available, loadAvailable]);
+  }, [workspaceId]);
+  useEffect(() => { if (workspaceId && !available[pickerType]) loadAvailable(pickerType); }, [pickerType, available, loadAvailable, workspaceId]);
 
   // DBX-5 delta: "Open in Databricks Genie" deep link — resolved ONLY when a
   // Databricks workspace host is bound (Loom's own Data Agent stays the default;
@@ -840,6 +841,7 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
                 <ConnectedAgentsEditor
                   subAgents={subAgents}
                   selfId={id}
+                  workspaceId={workspaceId}
                   onChange={(next) => setState((p) => ({ ...p, subAgents: next }))}
                 />
               </div>
@@ -858,6 +860,7 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
           {tab === 'design' && (
             <AgentFlowCanvas
               id={id}
+              workspaceId={workspaceId}
               agentName={state.alias || item.displayName || 'Orchestrator'}
               sources={sources.map((x) => ({ id: x.id, name: x.name, type: x.type }))}
               tools={migrateLegacyTools(state.tools)}

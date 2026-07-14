@@ -27,14 +27,14 @@ import {
   MessageBar, MessageBarBody, Spinner, Divider, Subtitle2, Caption1, Text,
   Dialog, DialogTrigger, DialogSurface, DialogBody, DialogTitle,
   DialogContent, DialogActions,
-  Badge, Checkbox,
+  Badge, Checkbox, RadioGroup, Radio,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
   Settings24Regular, Dismiss24Regular, Delete24Regular,
   Copy16Regular,
 } from '@fluentui/react-icons';
-import { updateWorkspace, deleteWorkspace, listItems, type Workspace, type WorkspaceItem } from '@/lib/api/workspaces';
+import { updateWorkspace, deleteWorkspace, listItems, type Workspace, type WorkspaceItem, type TeardownOutcome } from '@/lib/api/workspaces';
 import { ManageAccessPane } from '@/lib/panes/manage-access-pane';
 import { NetworkingPane } from '@/lib/panes/networking';
 import { GitIntegrationPane } from '@/lib/panes/git-integration';
@@ -448,17 +448,27 @@ function PowerBiMappingSection({ workspace }: { workspace: Workspace }) {
   );
 }
 
+/** Flatten teardown receipts into per-status counts for a summary line. */
+function summarizeTeardown(outcomes: TeardownOutcome[]): { deleted: number; not_found: number; skipped: number; error: number } {
+  const acc = { deleted: 0, not_found: 0, skipped: 0, error: 0 };
+  for (const o of outcomes) for (const r of o.resources) acc[r.result] += 1;
+  return acc;
+}
+
 function DangerSection({ workspace, onDeleted }: { workspace: Workspace; onDeleted: () => void }) {
   const styles = useStyles();
   const [confirmName, setConfirmName] = useState('');
   const [copied, setCopied] = useState(false);
+  // "keep" = catalog-only (default, safe). "delete" = cascade — also destroy the
+  // underlying Azure data/services each item provisioned (irreversible).
+  const [dataChoice, setDataChoice] = useState<'keep' | 'delete'>('keep');
+  const [teardown, setTeardown] = useState<TeardownOutcome[] | null>(null);
 
-  // Deleting a workspace removes only the Loom catalog records (the workspace +
-  // its item entries). Any Azure resources those items PROVISIONED (ADLS
-  // containers, Synapse SQL pools, ADX databases, Event Hubs, etc.) are NOT
-  // deleted by this action — they remain in the subscription. We load the item
-  // list so the confirm can name what will be left behind (the orphaned-resource
-  // receipt) instead of silently overstating the delete's reach.
+  // Deleting a workspace removes the Loom catalog records (the workspace + its
+  // item entries). By DEFAULT any Azure resources those items PROVISIONED (ADLS
+  // containers, Synapse SQL pools, ADX databases, Event Hubs, etc.) are RETAINED.
+  // We load the item list so the confirm can name exactly what would be destroyed
+  // if the user chooses "Delete everything" (the cascade), instead of guessing.
   const itemsQ = useQuery<WorkspaceItem[]>({
     queryKey: ['items', workspace.id, 'danger'],
     queryFn: () => listItems(workspace.id),
@@ -468,10 +478,20 @@ function DangerSection({ workspace, onDeleted }: { workspace: Workspace; onDelet
     () => items.map((it) => ({ item: it, hint: backingResourceHint(it) })),
     [items],
   );
+  const cascade = dataChoice === 'delete';
 
   const mut = useMutation({
-    mutationFn: () => deleteWorkspace(workspace.id),
-    onSuccess: onDeleted,
+    mutationFn: () => deleteWorkspace(workspace.id, { cascade }),
+    onSuccess: (res) => {
+      // On a cascade, surface the per-resource teardown receipt in-place (the
+      // user asked to destroy real Azure resources — show them what happened)
+      // before leaving the drawer. Keep-mode navigates away immediately.
+      if (cascade && res?.teardown && res.teardown.length > 0) {
+        setTeardown(res.teardown);
+      } else {
+        onDeleted();
+      }
+    },
   });
 
   const copyReceipt = () => {
@@ -479,6 +499,52 @@ function DangerSection({ workspace, onDeleted }: { workspace: Workspace; onDelet
     setCopied(true);
     window.setTimeout(() => setCopied(false), 2500);
   };
+
+  // Post-cascade receipt view — the delete succeeded; show what was torn down.
+  if (teardown) {
+    const sum = summarizeTeardown(teardown);
+    const rows = teardown.flatMap((o) =>
+      o.resources.map((r) => ({ key: `${o.itemId}:${r.kind}:${r.ref}`, item: o.displayName, ...r })),
+    );
+    return (
+      <div className={styles.section}>
+        <MessageBar intent={sum.error > 0 ? 'warning' : 'success'}>
+          <MessageBarBody>
+            Workspace deleted. Azure teardown: <strong>{sum.deleted} deleted</strong>
+            {sum.not_found > 0 ? `, ${sum.not_found} already gone` : ''}
+            {sum.skipped > 0 ? `, ${sum.skipped} retained` : ''}
+            {sum.error > 0 ? `, ${sum.error} failed` : ''}. Failed or retained resources may still
+            exist in your subscription — review below.
+          </MessageBarBody>
+        </MessageBar>
+        <div style={{ maxHeight: 260, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS }}>
+          {rows.map((r) => (
+            <div key={r.key} className={styles.row} style={{ justifyContent: 'space-between' }}>
+              <Text size={200} style={{ minWidth: 0, overflowWrap: 'anywhere' }}>
+                {r.item} <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>({r.kind}: {r.ref})</Caption1>
+                {r.error ? <Caption1 style={{ color: tokens.colorNeutralForeground3 }}> — {r.error}</Caption1> : null}
+              </Text>
+              <Badge
+                appearance="tint"
+                size="small"
+                color={
+                  r.result === 'deleted' ? 'success'
+                    : r.result === 'error' ? 'danger'
+                      : r.result === 'skipped' ? 'warning'
+                        : 'informative'
+                }
+              >
+                {r.result === 'not_found' ? 'already gone' : r.result}
+              </Badge>
+            </div>
+          ))}
+        </div>
+        <div className={styles.row}>
+          <Button appearance="primary" onClick={onDeleted}>Done</Button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className={styles.section}>
@@ -490,14 +556,36 @@ function DangerSection({ workspace, onDeleted }: { workspace: Workspace; onDelet
         </MessageBarBody>
       </MessageBar>
 
-      <MessageBar intent="info">
-        <MessageBarBody style={{ overflowWrap: 'anywhere', wordBreak: 'break-word', minWidth: 0 }}>
-          <strong>Provisioned Azure resources are NOT deleted.</strong> Any storage containers,
-          Synapse SQL pools, ADX databases, Event Hubs, and other Azure resources these items created
-          remain in your subscription and continue to incur cost. Remove them separately in the Azure
-          portal to avoid orphaned resources.
-        </MessageBarBody>
-      </MessageBar>
+      <Subtitle2>Underlying Azure data &amp; services</Subtitle2>
+      <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+        Choose what happens to the Azure resources this workspace&apos;s items provisioned.
+      </Caption1>
+      <RadioGroup value={dataChoice} onChange={(_, d) => setDataChoice(d.value as 'keep' | 'delete')}>
+        <Radio value="keep" label="Keep underlying data & services (de-catalog only)" />
+        <Radio value="delete" label="Delete everything — also destroy the Azure resources (irreversible)" />
+      </RadioGroup>
+
+      {dataChoice === 'keep' ? (
+        <MessageBar intent="info">
+          <MessageBarBody style={{ overflowWrap: 'anywhere', wordBreak: 'break-word', minWidth: 0 }}>
+            <strong>Provisioned Azure resources are NOT deleted.</strong> Any storage containers,
+            Synapse SQL pools, ADX databases, Event Hubs, and other Azure resources these items created
+            remain in your subscription and continue to incur cost. Remove them separately in the Azure
+            portal to avoid orphaned resources.
+          </MessageBarBody>
+        </MessageBar>
+      ) : (
+        <MessageBar intent="error">
+          <MessageBarBody style={{ overflowWrap: 'anywhere', wordBreak: 'break-word', minWidth: 0 }}>
+            <strong>This will permanently DELETE the Azure resources below.</strong> ADLS lakehouse
+            trees, Synapse pipelines / dedicated pools, ADX databases, Event Hubs + Stream Analytics
+            jobs, Azure Monitor alert rules, Databricks jobs/clusters/notebooks/models, and more will
+            be torn down. Data is unrecoverable. Fabric / Power BI-backed items (opt-in) are left in
+            their own workspace. Each resource is removed best-effort — you&apos;ll get a per-resource
+            receipt.
+          </MessageBarBody>
+        </MessageBar>
+      )}
 
       {itemsQ.isLoading && <Spinner size="tiny" label="Loading items…" />}
       {itemsQ.error && (
@@ -507,16 +595,22 @@ function DangerSection({ workspace, onDeleted }: { workspace: Workspace; onDelet
       )}
       {!itemsQ.isLoading && items.length > 0 && (
         <div className={styles.section}>
-          <Subtitle2>{items.length} item{items.length === 1 ? '' : 's'} will be de-cataloged</Subtitle2>
+          <Subtitle2>
+            {items.length} item{items.length === 1 ? '' : 's'} will be {cascade ? 'destroyed' : 'de-cataloged'}
+          </Subtitle2>
           <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
-            Items marked with a resource reference provisioned Azure backing that will be retained.
+            {cascade
+              ? 'Items with a resource reference will have their Azure backing deleted.'
+              : 'Items marked with a resource reference provisioned Azure backing that will be retained.'}
           </Caption1>
           <div style={{ maxHeight: 180, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS }}>
             {backed.slice(0, 100).map(({ item, hint }) => (
               <div key={item.id} className={styles.row} style={{ justifyContent: 'space-between' }}>
                 <Text size={200}>{item.displayName} <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>({item.itemType})</Caption1></Text>
                 {hint ? (
-                  <Badge appearance="tint" color="warning" size="small">retained: {hint}</Badge>
+                  <Badge appearance="tint" color={cascade ? 'danger' : 'warning'} size="small">
+                    {cascade ? 'delete' : 'retained'}: {hint}
+                  </Badge>
                 ) : (
                   <Badge appearance="outline" color="subtle" size="small">catalog entry</Badge>
                 )}
@@ -542,23 +636,33 @@ function DangerSection({ workspace, onDeleted }: { workspace: Workspace; onDelet
         <DialogTrigger disableButtonEnhancement>
           <Button appearance="primary" icon={<Delete24Regular />}
             disabled={confirmName !== workspace.name || mut.isPending}>
-            Delete workspace
+            {cascade ? 'Delete workspace & Azure resources' : 'Delete workspace'}
           </Button>
         </DialogTrigger>
         <DialogSurface>
           <DialogBody>
             <DialogTitle>Delete {workspace.name}?</DialogTitle>
             <DialogContent>
-              Removes the workspace and its {items.length} item{items.length === 1 ? '' : 's'} from the
-              Loom catalog. Provisioned Azure resources are retained (see the list above) and are not
-              deleted. This can&apos;t be undone.
+              {cascade ? (
+                <>
+                  Removes the workspace and its {items.length} item{items.length === 1 ? '' : 's'} from
+                  the Loom catalog AND permanently deletes their provisioned Azure resources (see the
+                  list above). Data is unrecoverable. This can&apos;t be undone.
+                </>
+              ) : (
+                <>
+                  Removes the workspace and its {items.length} item{items.length === 1 ? '' : 's'} from
+                  the Loom catalog. Provisioned Azure resources are retained (see the list above) and
+                  are not deleted. This can&apos;t be undone.
+                </>
+              )}
             </DialogContent>
             <DialogActions>
               <DialogTrigger disableButtonEnhancement>
                 <Button appearance="secondary">Cancel</Button>
               </DialogTrigger>
               <Button appearance="primary" onClick={() => mut.mutate()} disabled={mut.isPending}>
-                {mut.isPending ? 'Deleting…' : 'Delete'}
+                {mut.isPending ? (cascade ? 'Deleting…' : 'Deleting…') : 'Delete'}
               </Button>
             </DialogActions>
           </DialogBody>

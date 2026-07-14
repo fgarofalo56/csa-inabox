@@ -268,6 +268,23 @@ export async function stopJob(name: string): Promise<void> {
   }
 }
 
+/**
+ * Delete a streaming job (ARM DELETE on the streamingjob resource). Idempotent:
+ * a 404 (job already gone) is swallowed. Delete is asynchronous (202 + Location)
+ * — the immediate return means the delete was accepted; ARM tears the job down
+ * server-side. Used by the workspace-delete cascade to remove the Event Hubs /
+ * eventstream Stream Analytics transform job when a workspace is torn down.
+ */
+export async function deleteStreamingJob(name: string): Promise<void> {
+  if (!name) throw new Error('deleteStreamingJob: name is required');
+  const cfg = readAsaConfig();
+  const url = `${rgBase(cfg)}/${encodeURIComponent(name)}?api-version=${API}`;
+  const r = await call(url, { method: 'DELETE' });
+  if (r.ok || r.status === 202 || r.status === 204 || r.status === 404) return;
+  const text = await r.text().catch(() => '');
+  throw new Error(`ASA deleteStreamingJob(${name}) failed ${r.status}: ${text.slice(0, 600)}`);
+}
+
 // ---------------------------------------------------------------------------
 // Inputs (Microsoft.StreamAnalytics/streamingjobs/{job}/inputs/{name})
 // ---------------------------------------------------------------------------

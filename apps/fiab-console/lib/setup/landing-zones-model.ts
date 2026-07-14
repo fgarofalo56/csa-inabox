@@ -65,6 +65,27 @@ export interface LandingZone {
   /** true when the DLZ is in a different subscription than the hub. */
   crossSubscription: boolean;
   attachState: DlzAttachState;
+  /**
+   * true when this row is a LOGICAL landing zone from the landing-zones store
+   * (a lightweight brownfield-attach target) rather than a Resource-Graph-
+   * discovered Loom-convention DLZ resource group. Logical zones can carry
+   * attached brownfield services without a greenfield DLZ deploy.
+   */
+  logical?: boolean;
+}
+
+/**
+ * A logical landing zone (from the `landing-zones` store) projected into the
+ * overview. The overview unions these with the Resource-Graph DLZ RGs so a
+ * brownfield LZ — created just to hang attached services on — still appears.
+ */
+export interface LogicalLandingZoneRow {
+  id: string; // the store's stable slug id (NOT a `${sub}/${rg}` DLZ id)
+  name: string;
+  region?: string;
+  subscriptionId?: string;
+  /** Primary resource group (first of the store doc's resourceGroups[]), if any. */
+  rg?: string;
 }
 
 /** The full overview payload. */
@@ -74,11 +95,21 @@ export interface LandingZonesOverview {
   landingZones: LandingZone[];
 }
 
-/** Parse `rg-csa-loom-dlz-<domain>-<region>` → { domainName, region }. */
+/** Parse `rg-csa-loom-dlz-<domain>-<region>` → { domainName, region }.
+ *
+ * Relaxed (dlz-brownfield): the strict form captures a trailing `-<region>`
+ * token, but a logical / brownfield landing zone's resource group may NOT follow
+ * the `-<region>` suffix convention (an operator can attach existing services to
+ * an RG named anything). So when the strict `<domain>-<region>` split fails we
+ * fall back to the prefix-only form — any `rg-csa-loom-dlz-<rest>` still yields a
+ * domain (region empty, filled from the row's `location` by the caller) instead
+ * of being dropped. This keeps a logical LZ from vanishing off the overview. */
 export function parseDlzRgName(rg: string): { domainName: string; region: string } | null {
-  const m = /^rg-csa-loom-dlz-(.+)-([a-z0-9]+)$/i.exec(rg);
-  if (!m) return null;
-  return { domainName: m[1], region: m[2] };
+  const strict = /^rg-csa-loom-dlz-(.+)-([a-z0-9]+)$/i.exec(rg);
+  if (strict) return { domainName: strict[1], region: strict[2] };
+  const loose = /^rg-csa-loom-dlz-(.+)$/i.exec(rg);
+  if (loose) return { domainName: loose[1], region: '' };
+  return null;
 }
 
 /** Options carrying the permission signals the route probed from live ARM. */
@@ -122,6 +153,7 @@ export function buildLandingZonesOverview(
   hubExists: boolean,
   dlzRgRows: DlzRgRow[],
   perms?: Set<string> | AttachStateInputs,
+  logicalZones?: LogicalLandingZoneRow[],
 ): LandingZonesOverview {
   const inputs: AttachStateInputs =
     perms instanceof Set ? { writableSubs: perms } : perms ?? {};
@@ -129,6 +161,7 @@ export function buildLandingZonesOverview(
   const probed = !!writableSubs || !!writableRgs || !!unknownRgs;
   const hubSub = hub?.hubSubscriptionId;
   const landingZones: LandingZone[] = [];
+  const seen = new Set<string>();
   for (const row of dlzRgRows) {
     const parsed = parseDlzRgName(row.name);
     if (!parsed) continue;
@@ -150,14 +183,41 @@ export function buildLandingZonesOverview(
             ? 'unknown'
             : 'detached';
     }
+    const id = `${row.subscriptionId}/${row.name}`;
+    seen.add(id.toLowerCase());
     landingZones.push({
-      id: `${row.subscriptionId}/${row.name}`,
+      id,
       domainName: parsed.domainName,
       region: parsed.region || row.location || '',
       subscriptionId: row.subscriptionId,
       rg: row.name,
       crossSubscription,
       attachState,
+    });
+  }
+  // UNION the logical landing zones from the store (brownfield attach targets).
+  // A logical LZ that also happens to have a discovered Loom-convention DLZ RG
+  // (same `${sub}/${rg}` id) is already listed above — skip the duplicate. A
+  // logical LZ is always 'attached' from the overview's perspective: it exists
+  // as a durable registry doc the Console owns, not an RG whose RBAC is probed.
+  for (const lz of logicalZones ?? []) {
+    if (!lz?.id) continue;
+    // Prefer the concrete `${sub}/${rg}` key when the store recorded one so a
+    // logical LZ that mirrors a real DLZ RG dedupes against the row above.
+    const concreteKey =
+      lz.subscriptionId && lz.rg ? `${lz.subscriptionId}/${lz.rg}` : lz.id;
+    if (seen.has(concreteKey.toLowerCase()) || seen.has(lz.id.toLowerCase())) continue;
+    seen.add(concreteKey.toLowerCase());
+    seen.add(lz.id.toLowerCase());
+    landingZones.push({
+      id: lz.id,
+      domainName: lz.name || lz.id,
+      region: lz.region || '',
+      subscriptionId: lz.subscriptionId || hubSub || '',
+      rg: lz.rg || '',
+      crossSubscription: !!hubSub && !!lz.subscriptionId && lz.subscriptionId !== hubSub,
+      attachState: 'attached',
+      logical: true,
     });
   }
   // Stable order: hub-sub DLZs first, then by domain.

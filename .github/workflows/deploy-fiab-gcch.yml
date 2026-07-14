@@ -213,6 +213,39 @@ jobs:
           echo "dlz_sub=${CSA_LOOM_TARGET_SUBSCRIPTION:-$ADMIN_SUB}" >> "$GITHUB_OUTPUT"
           echo "region=$AZURE_LOCATION" >> "$GITHUB_OUTPUT"
 
+      # dlz-brownfield (Gov): publish the compiled main.json + wire
+      # LOOM_DLZ_TEMPLATE_URI / LOOM_SETUP_TEMPLATE_URI so the day-one in-product
+      # "Add landing zone" deploy works on GCC-High too (see the Commercial
+      # publish-dlz-template job for the rationale). Sovereign endpoints are
+      # resolved from the account (primaryEndpoints.blob). Idempotent + best-effort.
+      - name: Publish DLZ template + wire deploy env (Gov)
+        if: (github.event_name == 'schedule' || inputs.run_mode == 'full') && inputs.keep_resources
+        run: |
+          set -e
+          RG="rg-csa-loom-admin-${AZURE_LOCATION}"
+          CONTAINER=arm-templates
+          az bicep build -f platform/fiab/bicep/main.bicep --outfile main.json
+          SA=$(az storage account list -g "$RG" --query "[?starts_with(name,'stloom')||starts_with(name,'saloom')||starts_with(name,'stcsaloom')].name | [0]" -o tsv 2>/dev/null || echo "")
+          if [[ -z "$SA" ]]; then SA=$(az storage account list -g "$RG" --query "[0].name" -o tsv 2>/dev/null || echo ""); fi
+          if [[ -z "$SA" ]]; then echo "::warning::No storage account in $RG — day-one Gov deploy stays gated."; exit 0; fi
+          BLOB_BASE=$(az storage account show -g "$RG" -n "$SA" --query "primaryEndpoints.blob" -o tsv)
+          BLOB_URL="${BLOB_BASE}${CONTAINER}/main.json"
+          KEY=$(az storage account keys list -g "$RG" -n "$SA" --query "[0].value" -o tsv 2>/dev/null || echo "")
+          az storage container create --account-name "$SA" --name "$CONTAINER" ${KEY:+--account-key "$KEY"} -o none 2>/dev/null || true
+          az storage blob upload --account-name "$SA" --container-name "$CONTAINER" --name main.json --file main.json ${KEY:+--account-key "$KEY"} --overwrite -o none || { echo "::warning::main.json upload failed — day-one Gov deploy stays gated."; exit 0; }
+          EXPIRY=$(date -u -d '+3 years' '+%Y-%m-%dT%H:%MZ' 2>/dev/null || date -u -v+3y '+%Y-%m-%dT%H:%MZ')
+          SAS=""
+          if [[ -n "$KEY" ]]; then SAS=$(az storage blob generate-sas --account-name "$SA" --account-key "$KEY" --container-name "$CONTAINER" --name main.json --permissions r --expiry "$EXPIRY" -o tsv 2>/dev/null || echo ""); fi
+          CONSOLE_VARS="LOOM_DLZ_TEMPLATE_URI=$BLOB_URL LOOM_SETUP_TEMPLATE_URI=$BLOB_URL"
+          if [[ -n "$SAS" ]]; then CONSOLE_VARS="$CONSOLE_VARS LOOM_DLZ_TEMPLATE_QUERY_STRING=?$SAS"; fi
+          az containerapp update -g "$RG" -n loom-console --set-env-vars $CONSOLE_VARS -o none || echo "::warning::could not set loom-console template env"
+          if az containerapp show -g "$RG" -n loom-setup-orchestrator -o none 2>/dev/null; then
+            ORCH_VARS="LOOM_SETUP_TEMPLATE_URI=$BLOB_URL"
+            if [[ -n "$SAS" ]]; then ORCH_VARS="$ORCH_VARS LOOM_DLZ_TEMPLATE_QUERY_STRING=?$SAS"; fi
+            az containerapp update -g "$RG" -n loom-setup-orchestrator --set-env-vars $ORCH_VARS -o none || echo "::warning::could not set loom-setup-orchestrator template env"
+          fi
+          echo "::notice::Gov: published main.json → $BLOB_URL and wired day-one Add-landing-zone deploy env."
+
       - name: Smoke test (Gov-specific)
         if: github.event_name == 'schedule' || inputs.run_mode == 'full'
         run: bash .github/scripts/fiab-smoke-test.sh

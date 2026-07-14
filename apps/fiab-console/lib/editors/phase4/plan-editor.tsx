@@ -1577,9 +1577,10 @@ function PlanIntelligencePanel({
  * honest XMLA-gated extension. No Microsoft Fabric dependency.
  */
 function PlanInfoBridgePanel({
-  id, state, setState, save, saving,
+  id, workspaceId, state, setState, save, saving,
 }: {
   id: string;
+  workspaceId: string;
   state: PlanState;
   setState: (updater: (prev: PlanState) => PlanState) => void;
   save: (next?: PlanState) => Promise<boolean>;
@@ -1597,15 +1598,18 @@ function PlanInfoBridgePanel({
   const [sources, setSources] = useState<Record<string, { id: string; name: string }[]>>({});
   const [msg, setMsg] = useState<{ intent: 'success' | 'error' | 'warning'; text: string } | null>(null);
   const loadSources = useCallback(async () => {
+    // Scope the source pickers to this plan's workspace (wait for it to load).
+    if (!workspaceId) return;
+    const wsParam = `&workspaceId=${encodeURIComponent(workspaceId)}`;
     for (const type of ['warehouse', 'lakehouse', 'semantic-model']) {
       try {
-        const r = await clientFetch(`/api/items/by-type?types=${encodeURIComponent(type)}`);
+        const r = await clientFetch(`/api/items/by-type?types=${encodeURIComponent(type)}${wsParam}`);
         const j = await r.json().catch(() => ({}));
         const items = (j.items || []).map((it: any) => ({ id: it.id, name: it.displayName || it.id }));
         setSources((prev) => ({ ...prev, [type]: items }));
       } catch { /* honest empty picker */ }
     }
-  }, []);
+  }, [workspaceId]);
   useEffect(() => { void loadSources(); }, [loadSources]);
 
   const mappingFor = (liId: string) => mappings.find((m) => m.lineItemId === liId);
@@ -2652,7 +2656,7 @@ function PlanVersionsPanel({
 
 export function PlanEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
-  const { state, setState, loading, saving, error, savedAt, save, dirty } = useItemState<PlanState>('plan', id, {
+  const { state, setState, loading, saving, error, savedAt, save, dirty, workspaceId } = useItemState<PlanState>('plan', id, {
     tasks: [{ title: 'Define semantic model', owner: '', due: '', status: 'todo' }],
   });
   const [tab, setTab] = useState<'planning' | 'model' | 'tasks' | 'powertable' | 'intelligence' | 'infobridge' | 'versions'>('planning');
@@ -2822,7 +2826,7 @@ export function PlanEditor({ item, id }: { item: FabricItemType; id: string }) {
           />
         )}
         {tab === 'infobridge' && (
-          <PlanInfoBridgePanel id={id} state={state} setState={setState} save={save} saving={saving} />
+          <PlanInfoBridgePanel id={id} workspaceId={workspaceId} state={state} setState={setState} save={save} saving={saving} />
         )}
         {tab === 'versions' && (
           <PlanVersionsPanel state={state} setState={setState} save={save} saving={saving} />

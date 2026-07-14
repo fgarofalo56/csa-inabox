@@ -84,6 +84,15 @@ class DeployRequest(BaseModel):
     weave_ontology_enabled: bool = Field(default=True, alias="weaveOntologyEnabled")
     databricks_unity_catalog_enabled: bool = Field(default=False, alias="databricksUnityCatalogEnabled")
     databricks_sql_warehouse_enabled: bool = Field(default=False, alias="databricksSqlWarehouseEnabled")
+    # Domain-registration metadata (audit-t158). The Console "Add landing zone"
+    # wizard now collects these and forwards them so register_domain_binding binds
+    # the new DLZ to its Entra admin/member groups + cost center under
+    # /admin/domains. Declared here (extra="ignore" would otherwise drop them, and
+    # orchestrator.py reads them via _get(req, "admin_group_id") …).
+    admin_group_id: str | None = Field(default=None, alias="adminGroupId")
+    member_group_id: str | None = Field(default=None, alias="memberGroupId")
+    cost_center: str | None = Field(default=None, alias="costCenter")
+    dlz_rg: str | None = Field(default=None, alias="dlzRg")
 
 
 class DeployResponse(BaseModel):

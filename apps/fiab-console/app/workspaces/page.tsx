@@ -49,6 +49,8 @@ import {
   MenuList,
   MenuPopover,
   MenuTrigger,
+  Radio,
+  RadioGroup,
   Select,
   Spinner,
   Text,
@@ -579,6 +581,9 @@ export default function WorkspacesPage() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [bulkResult, setBulkResult] = useState<BulkDeleteResult | null>(null);
+  // Bulk delete data choice: "keep" = de-catalog only (default, safe), "delete"
+  // = cascade — also destroy the underlying Azure resources (irreversible).
+  const [bulkDataChoice, setBulkDataChoice] = useState<'keep' | 'delete'>('keep');
 
   const toggleSelect = useCallback((id: string) => {
     setSelected(prev => {
@@ -688,7 +693,7 @@ export default function WorkspacesPage() {
   }, [data]);
 
   const bulkMut = useMutation({
-    mutationFn: (ids: string[]) => bulkDeleteWorkspaces(ids),
+    mutationFn: (ids: string[]) => bulkDeleteWorkspaces(ids, { cascade: bulkDataChoice === 'delete' }),
     onSuccess: result => {
       setBulkResult(result);
       setConfirmOpen(false);
@@ -1153,6 +1158,18 @@ export default function WorkspacesPage() {
                 .map(f => `${nameById.get(f.id) ?? f.id} (${f.error})`)
                 .join(', ')}.</>
             )}
+            {bulkResult.teardown && (() => {
+              const acc = { deleted: 0, not_found: 0, skipped: 0, error: 0 };
+              for (const list of Object.values(bulkResult.teardown)) {
+                for (const o of list) for (const r of o.resources) acc[r.result] += 1;
+              }
+              return (
+                <> Azure teardown: {acc.deleted} deleted
+                  {acc.not_found > 0 ? `, ${acc.not_found} already gone` : ''}
+                  {acc.skipped > 0 ? `, ${acc.skipped} retained` : ''}
+                  {acc.error > 0 ? `, ${acc.error} failed` : ''}.</>
+              );
+            })()}
           </MessageBarBody>
         </MessageBar>
       )}
@@ -1168,14 +1185,35 @@ export default function WorkspacesPage() {
                   This permanently removes the selected workspaces and every item inside them
                   (lakehouses, notebooks, reports, etc.) from the Loom catalog. This cannot be undone.
                 </Body1>
-                <MessageBar intent="info">
-                  <MessageBarBody style={{ overflowWrap: 'anywhere', wordBreak: 'break-word', minWidth: 0 }}>
-                    <strong>Provisioned Azure resources are not deleted.</strong> Storage containers,
-                    Synapse SQL pools, ADX databases, Event Hubs, and other Azure resources these
-                    items created remain in your subscription and keep incurring cost — remove them
-                    separately in the Azure portal to avoid orphaned resources.
-                  </MessageBarBody>
-                </MessageBar>
+                <Text weight="semibold">Underlying Azure data &amp; services</Text>
+                <RadioGroup
+                  value={bulkDataChoice}
+                  onChange={(_, d) => setBulkDataChoice(d.value as 'keep' | 'delete')}
+                >
+                  <Radio value="keep" label="Keep underlying data & services (de-catalog only)" />
+                  <Radio value="delete" label="Delete everything — also destroy the Azure resources (irreversible)" />
+                </RadioGroup>
+                {bulkDataChoice === 'keep' ? (
+                  <MessageBar intent="info">
+                    <MessageBarBody style={{ overflowWrap: 'anywhere', wordBreak: 'break-word', minWidth: 0 }}>
+                      <strong>Provisioned Azure resources are not deleted.</strong> Storage containers,
+                      Synapse SQL pools, ADX databases, Event Hubs, and other Azure resources these
+                      items created remain in your subscription and keep incurring cost — remove them
+                      separately in the Azure portal to avoid orphaned resources.
+                    </MessageBarBody>
+                  </MessageBar>
+                ) : (
+                  <MessageBar intent="error">
+                    <MessageBarBody style={{ overflowWrap: 'anywhere', wordBreak: 'break-word', minWidth: 0 }}>
+                      <strong>This permanently DELETES the underlying Azure resources</strong> — ADLS
+                      lakehouse trees, Synapse pipelines / dedicated pools, ADX databases, Event Hubs +
+                      Stream Analytics jobs, Azure Monitor alert rules, Databricks
+                      jobs/clusters/notebooks/models, and more — for every selected workspace. Data is
+                      unrecoverable. Fabric / Power BI-backed items (opt-in) are left in their own
+                      workspace. Teardown is best-effort, per resource.
+                    </MessageBarBody>
+                  </MessageBar>
+                )}
                 <div className={styles.confirmScroll}>
                   <ul className={styles.confirmList}>
                     {Array.from(selected).slice(0, 50).map(id => (

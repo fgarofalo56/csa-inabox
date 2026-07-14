@@ -77,6 +77,16 @@ interface SetupConfig {
   targetSubscriptionId?: string;
   location?: string;
   vanityDomain?: string;
+  /**
+   * Domain-registration metadata (audit-t158). The orchestrator's
+   * register_domain_binding reads these off the deploy request so the new DLZ
+   * shows up under /admin/domains bound to its Entra admin/member groups + cost
+   * center. `adminGroupId` also threads into main.bicep's adminEntraGroupId param
+   * so the Synapse/ADX data-plane admin grants target the operator's group.
+   */
+  adminGroupId?: string;
+  memberGroupId?: string;
+  costCenter?: string;
   /** dlz-attach: named feature toggles forwarded to main.bicep (no free-form). */
   adxEnabled?: boolean;
   cosmosGraphVectorEnabled?: boolean;
@@ -499,6 +509,119 @@ export async function POST(req: NextRequest) {
   }
   const topologyPayload = { topology, ...(topology === 'dlz-attach' ? { targetSubscriptionId: body.targetSubscriptionId, ...hubCoords } : {}) };
 
+  // ── Tier 2 (DAY-ONE user-delegated ARM) — PREFERRED when the compiled template
+  //    is published (LOOM_DLZ_TEMPLATE_URI set). Submit the REAL subscription-
+  //    scoped `Microsoft.Resources/deployments` PUT straight from the BFF under
+  //    the SIGNED-IN USER's delegated ARM token (getArmTokenPreferUser). Because
+  //    it authenticates as the user, an operator can attach a DLZ into ANY
+  //    subscription they hold Contributor on. This runs ABOVE the orchestrator so
+  //    a published template closes the false-"submitted" gap: the orchestrator's
+  //    202 is fire-and-forget (its background ARM deploy can fail after the 202),
+  //    whereas this returns a REAL, pollable ARM deploymentId the wizard streams
+  //    to a terminal state. ARM REST needs the COMPILED main.json; when the env is
+  //    unset this tier is skipped and Tier 1 / dispatch / the honest copy-paste
+  //    gate handle it (no-vaporware — the publish is the documented infra step).
+  const templateSource = resolveDlzTemplateSource();
+  const tryUserArmDeploy = async (): Promise<NextResponse | null> => {
+    if (!templateSource) return null;
+    const arm = await getArmTokenPreferUser(session).catch(() => null);
+    if (!arm?.token) return null;
+    // Only forward feature toggles the caller explicitly set, so bicep defaults
+    // are preserved for anything the wizard left alone.
+    const featureToggles: Record<string, boolean> = {};
+    for (const k of [
+      'adxEnabled',
+      'cosmosGraphVectorEnabled',
+      'weaveOntologyEnabled',
+      'databricksUnityCatalogEnabled',
+      'databricksSqlWarehouseEnabled',
+    ] as const) {
+      if (typeof body[k] === 'boolean') featureToggles[k] = body[k] as boolean;
+    }
+    const parameters = buildDlzDeploymentParameters({
+      topology,
+      boundary: body.boundary!,
+      location: region,
+      capacitySku: body.capacitySku!,
+      domainName: body.domainName!,
+      deploymentMode: topology === 'tenant' ? body.mode : undefined,
+      targetSubscriptionId: body.targetSubscriptionId,
+      dlzSubscriptionIds: body.dlzSubscriptionIds,
+      dlzDomainNames: body.dlzDomainNames,
+      hubCoords: topology === 'dlz-attach' ? hubCoords : undefined,
+      featureToggles,
+      // audit-t158: thread the operator's Entra admin group into the real
+      // adminEntraGroupId param so the Synapse/ADX data-plane admin grants target
+      // it, and carry the cost center onto the deployment tags.
+      adminEntraGroupId: body.adminGroupId,
+      costCenter: body.costCenter,
+    });
+    const submitted = await submitDlzDeployment({
+      subscriptionId: body.subscriptionId!,
+      region,
+      parameters,
+      templateSource,
+      getToken: async () => arm.token,
+    });
+    if (submitted.ok && submitted.deploymentId) {
+      const statusUrl =
+        `/api/setup/deploy-status?id=${encodeURIComponent(submitted.deploymentId)}` +
+        `&mode=user-arm&subscriptionId=${encodeURIComponent(body.subscriptionId!)}`;
+      return NextResponse.json(
+        {
+          ok: true,
+          deploymentMode: 'user-arm',
+          identity: arm.identity,
+          deploymentId: submitted.deploymentId,
+          provisioningState: submitted.provisioningState,
+          pending: submitted.pending ?? false,
+          statusUrl,
+          subscriptionId: body.subscriptionId,
+          message:
+            arm.identity === 'user'
+              ? 'Deployment submitted to Azure Resource Manager under your account.'
+              : 'Deployment submitted to Azure Resource Manager under the Console identity.',
+        },
+        { status: 202 },
+      );
+    }
+    // 401/403 from ARM → the deploying identity lacks Contributor on the target
+    // sub: surface the precise grant (terminal) instead of falling to a copy-paste gate.
+    if (submitted.status === 401 || submitted.status === 403) {
+      const grant = buildContributorGrantCommand({
+        subscriptionId: body.subscriptionId!,
+        principalObjectId:
+          arm.identity === 'user'
+            ? undefined
+            : process.env.LOOM_CONSOLE_PRINCIPAL_ID || hubTopology?.hubConsolePrincipalId,
+        principalType: arm.identity === 'user' ? 'User' : 'ServicePrincipal',
+        isGov,
+      });
+      return NextResponse.json(
+        {
+          ok: false,
+          error: 'forbidden',
+          requiredRole: 'Contributor',
+          identity: arm.identity,
+          targetSubscriptionId: body.subscriptionId,
+          remediation:
+            `${arm.identity === 'user' ? 'You do' : 'The deploying identity does'} not have permission to ` +
+            `deploy a Data Landing Zone into subscription ${body.subscriptionId}. A subscription-scoped ` +
+            `deployment requires the Contributor role. Grant it, then retry:\n\n${grant}`,
+        },
+        { status: 403 },
+      );
+    }
+    // Any other ARM error is NON-FATAL — log and fall through (null) to the
+    // orchestrator / dispatch / copy-paste tiers so the operator still gets a path.
+    console.error(
+      `[setup/deploy] user-delegated ARM submit failed (${submitted.status ?? 'n/a'}); falling back: ${submitted.error}`,
+    );
+    return null;
+  };
+  const userArmResponse = await tryUserArmDeploy();
+  if (userArmResponse) return userArmResponse;
+
   // ── Tier 1: the deployed Setup Orchestrator runs the real deployment ───────
   // When LOOM_SETUP_ORCHESTRATOR_URL is wired (the orchestrator Container App is
   // deployed by setup-orchestrator.bicep), POST the captured config to it. The
@@ -569,116 +692,11 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // ── Tier 2: user-delegated ARM deployment (DAY-ONE, no orchestrator/CI needed) ─
-  // Submit the REAL subscription-scoped `Microsoft.Resources/deployments` PUT
-  // straight from the BFF under the SIGNED-IN USER's delegated ARM token
-  // (getArmTokenPreferUser). Authenticating as the USER is what lets an operator
-  // deploy/attach a DLZ into ANY subscription they personally hold Contributor on
-  // — the Console UAMI only has rights on the Loom-owned subs, so it could never
-  // target a user-owned subscription. The dlz-attach params (topology + hub
-  // coordinates + feature toggles) are threaded verbatim into main.bicep, so the
-  // landing-zone bicep wires VNet peering / private DNS / RBAC / ABAC exactly as
-  // `az deployment sub create` would.
-  //
-  // Requires the published compiled template (LOOM_DLZ_TEMPLATE_URI) — ARM REST
-  // cannot compile .bicep. When it is unset this tier is SKIPPED and the honest
-  // copy-paste gate below (which names the env var) is returned. That one-time
-  // publish is the documented infra step, not a fake success (no-vaporware).
-  const templateSource = resolveDlzTemplateSource();
-  if (templateSource) {
-    const arm = await getArmTokenPreferUser(session).catch(() => null);
-    if (arm?.token) {
-      // Only forward feature toggles the caller explicitly set, so bicep defaults
-      // are preserved for anything the wizard left alone.
-      const featureToggles: Record<string, boolean> = {};
-      for (const k of [
-        'adxEnabled',
-        'cosmosGraphVectorEnabled',
-        'weaveOntologyEnabled',
-        'databricksUnityCatalogEnabled',
-        'databricksSqlWarehouseEnabled',
-      ] as const) {
-        if (typeof body[k] === 'boolean') featureToggles[k] = body[k] as boolean;
-      }
-      const parameters = buildDlzDeploymentParameters({
-        topology,
-        boundary: body.boundary!,
-        location: region,
-        capacitySku: body.capacitySku!,
-        domainName: body.domainName!,
-        deploymentMode: topology === 'tenant' ? body.mode : undefined,
-        targetSubscriptionId: body.targetSubscriptionId,
-        dlzSubscriptionIds: body.dlzSubscriptionIds,
-        dlzDomainNames: body.dlzDomainNames,
-        hubCoords: topology === 'dlz-attach' ? hubCoords : undefined,
-        featureToggles,
-      });
-      const submitted = await submitDlzDeployment({
-        subscriptionId: body.subscriptionId!,
-        region,
-        parameters,
-        templateSource,
-        getToken: async () => arm.token,
-      });
-      if (submitted.ok && submitted.deploymentId) {
-        const statusUrl =
-          `/api/setup/deploy-status?id=${encodeURIComponent(submitted.deploymentId)}` +
-          `&mode=user-arm&subscriptionId=${encodeURIComponent(body.subscriptionId!)}`;
-        return NextResponse.json(
-          {
-            ok: true,
-            deploymentMode: 'user-arm',
-            identity: arm.identity,
-            deploymentId: submitted.deploymentId,
-            provisioningState: submitted.provisioningState,
-            // true when ARM's template-validation phase ran past the submit
-            // deadline and the PUT was backgrounded — the deployment id is valid
-            // and pollable; the status route reports Accepted until ARM registers it.
-            pending: submitted.pending ?? false,
-            statusUrl,
-            subscriptionId: body.subscriptionId,
-            message:
-              arm.identity === 'user'
-                ? 'Deployment submitted to Azure Resource Manager under your account.'
-                : 'Deployment submitted to Azure Resource Manager under the Console identity.',
-          },
-          { status: 202 },
-        );
-      }
-      // 401/403 from ARM → the deploying identity lacks Contributor on the target
-      // sub: surface the precise grant instead of falling to a copy-paste gate.
-      if (submitted.status === 401 || submitted.status === 403) {
-        const grant = buildContributorGrantCommand({
-          subscriptionId: body.subscriptionId!,
-          principalObjectId:
-            arm.identity === 'user'
-              ? undefined
-              : process.env.LOOM_CONSOLE_PRINCIPAL_ID || hubTopology?.hubConsolePrincipalId,
-          principalType: arm.identity === 'user' ? 'User' : 'ServicePrincipal',
-          isGov,
-        });
-        return NextResponse.json(
-          {
-            ok: false,
-            error: 'forbidden',
-            requiredRole: 'Contributor',
-            identity: arm.identity,
-            targetSubscriptionId: body.subscriptionId,
-            remediation:
-              `${arm.identity === 'user' ? 'You do' : 'The deploying identity does'} not have permission to ` +
-              `deploy a Data Landing Zone into subscription ${body.subscriptionId}. A subscription-scoped ` +
-              `deployment requires the Contributor role. Grant it, then retry:\n\n${grant}`,
-          },
-          { status: 403 },
-        );
-      }
-      // Any other ARM error is NON-FATAL — log and fall through to the dispatch /
-      // copy-paste tiers so the operator still gets a runnable path.
-      console.error(
-        `[setup/deploy] user-delegated ARM submit failed (${submitted.status ?? 'n/a'}); falling back: ${submitted.error}`,
-      );
-    }
-  }
+  // ── Tier 2 (user-delegated ARM, day-one) runs ABOVE Tier 1 when the compiled
+  //    template is published — see the `tryUserArmDeploy` call before Tier 1. It
+  //    is placed there (not here) so a published template PREFERS the pollable
+  //    synchronous user-ARM PUT over the orchestrator's fire-and-forget 202,
+  //    closing the false-"submitted" gap (the wizard polls its statusUrl).
 
   // Map the chosen boundary to its real .bicepparam (verified to exist in
   // platform/fiab/bicep/params/). No invented file names.

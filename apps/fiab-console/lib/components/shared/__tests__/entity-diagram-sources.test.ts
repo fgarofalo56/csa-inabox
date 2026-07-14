@@ -143,7 +143,7 @@ describe('readLakehouseGraph', () => {
         rows: [['gold', 'sales', 'id', 'int', 1], ['gold', 'sales', 'amt', 'decimal', 2]],
       });
     });
-    const g = await readLakehouseGraph({ kind: 'lakehouse', itemId: 'lh1' }, fetchImpl);
+    const g = await readLakehouseGraph({ kind: 'lakehouse', itemId: 'lh1', workspaceId: 'ws-1' }, fetchImpl);
     expect(g.tables).toHaveLength(1);
     expect(g.tables[0]).toMatchObject({ id: 'gold.sales', name: 'sales', schema: 'gold', rowCount: 100 });
     expect(g.tables[0].columns.map((c) => c.name)).toEqual(['id', 'amt']);
@@ -153,7 +153,7 @@ describe('readLakehouseGraph', () => {
 
   it('returns the storage gate when no lakehouse storage is configured', async () => {
     const fetchImpl: EntityFetch = vi.fn(async () => jsonResponse({ ok: true, tables: [], gate: 'No lakehouse storage configured — set LOOM_{BRONZE,SILVER,GOLD,LANDING}_URL' }));
-    const g = await readLakehouseGraph({ kind: 'lakehouse', itemId: 'lh1' }, fetchImpl);
+    const g = await readLakehouseGraph({ kind: 'lakehouse', itemId: 'lh1', workspaceId: 'ws-1' }, fetchImpl);
     expect(g.gate).toContain('No lakehouse storage configured');
     expect(g.tables).toEqual([]);
   });
@@ -165,7 +165,7 @@ describe('readLakehouseGraph', () => {
       }
       return jsonResponse({ ok: false, error: 'Synapse not provisioned' }, 503);
     });
-    const g = await readLakehouseGraph({ kind: 'lakehouse', itemId: 'lh1' }, fetchImpl);
+    const g = await readLakehouseGraph({ kind: 'lakehouse', itemId: 'lh1', workspaceId: 'ws-1' }, fetchImpl);
     expect(g.gate).toBeUndefined();
     expect(g.tables).toHaveLength(1);
     expect(g.notice).toContain('Column details unavailable');

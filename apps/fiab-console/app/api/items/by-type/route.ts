@@ -1,19 +1,40 @@
 /**
  * Cross-type item lister for top-level surfaces like /activator,
- * /realtime-hub, /semantic-model, /onelake, etc.
+ * /realtime-hub, /semantic-model, /onelake, etc., AND the editor source pickers.
  *
- * GET /api/items/by-type?type=lakehouse&type=eventstream → flat list
- *   of every item of those types owned by caller's tenant.
+ * GET /api/items/by-type?type=lakehouse&type=eventstream&workspaceId=<ws>
+ *   → flat list of every item of those types the caller can see, SCOPED to one
+ *     workspace when `workspaceId` is supplied.
  *
- * Tenant scoping: an item is "owned" when its parent workspace's
- * tenantId matches session.claims.oid.
+ * TWO scopes, one endpoint:
+ *
+ *  1. WORKSPACE-SCOPED (the editor-picker path — pass `workspaceId`). The picker
+ *     opened inside Workspace A must list ONLY Workspace A's items — a lakehouse
+ *     / warehouse / database that lives in Workspace B must NEVER appear (that
+ *     cross-workspace leak is the bug this route closes; Fabric scopes every
+ *     picker to the current workspace + the caller's access). We authorize the
+ *     caller against that one workspace via `authorizeWorkspaceList` (owner →
+ *     workspace-roles ACL → tid boundary → admin-open), 404 when they have no
+ *     access, then run a partition-keyed query filtered to `c.workspaceId`.
+ *
+ *  2. TENANT/BROWSE (no `workspaceId` — the intentional global explorer at
+ *     /browse and admin callers). Cross-partition scan, then per-workspace ACL
+ *     filter (same resolver, so an ACL-shared or admin-visible workspace's items
+ *     are included — consistent with the scoped path, no longer owner-only).
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
-import { itemsContainer, workspacesContainer } from '@/lib/azure/cosmos-client';
+import { itemsContainer } from '@/lib/azure/cosmos-client';
+import { authorizeWorkspaceList } from '@/lib/auth/workspace-list-access';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+
+/** Projection shared by both scopes (ItemDetails reads c.state; cards read the
+ *  two governance leaves Cosmos returns as top-level fields). */
+const SELECT_COLS =
+  'c.id, c.itemType, c.workspaceId, c.displayName, c.description, c.state, c.createdBy, c.createdAt, c.updatedAt, c.state.endorsement, c.state.sensitivityLabel';
+const NOT_RECYCLED = '(NOT IS_DEFINED(c.state._recycled) OR c.state._recycled = null)';
 
 export async function GET(req: NextRequest) {
   const s = getSession();
@@ -26,44 +47,63 @@ export async function GET(req: NextRequest) {
   // identical keys, returning 403 at the edge.
   const fromRepeated = sp.getAll('type');
   const fromCsv = (sp.get('types') || '').split(',');
-  const types = [...fromRepeated, ...fromCsv].map(t => t.trim()).filter(Boolean);
+  const types = [...fromRepeated, ...fromCsv].map((t) => t.trim()).filter(Boolean);
   if (types.length === 0) {
     return NextResponse.json({ ok: false, error: 'at least one ?type= or ?types= required' }, { status: 400 });
   }
+  const workspaceId = (sp.get('workspaceId') || '').trim();
+
   const items = await itemsContainer();
-  // Cross-partition query; types is small, expanded to OR.
   const orClauses = types.map((_, i) => `c.itemType = @t${i}`).join(' OR ');
   const params = types.map((t, i) => ({ name: `@t${i}`, value: t }));
-  // Project the full c.state blob (ItemDetails still reads it) plus the two
-  // governance leaves the catalog cards render directly — Cosmos returns
-  // c.state.endorsement / c.state.sensitivityLabel as top-level fields.
+
+  // ── (1) WORKSPACE-SCOPED — the picker path. Authorize once, then a single
+  //    partition-keyed query returns ONLY this workspace's items. No per-item
+  //    ownership loop (the WHERE + partitionKey do the scoping).
+  if (workspaceId) {
+    const access = await authorizeWorkspaceList(s, workspaceId);
+    if (!access) {
+      return NextResponse.json({ ok: false, error: 'workspace not found' }, { status: 404 });
+    }
+    const { resources } = await items.items
+      .query(
+        {
+          query: `SELECT ${SELECT_COLS} FROM c WHERE (${orClauses}) AND c.workspaceId = @w AND ${NOT_RECYCLED}`,
+          parameters: [...params, { name: '@w', value: workspaceId }],
+        },
+        { partitionKey: workspaceId },
+      )
+      .fetchAll();
+    const domain = (access.workspace as any)?.domain ?? undefined;
+    const out = (resources as any[]).map((it) => ({ ...it, workspaceDomain: domain }));
+    out.sort((a, b) => (b.updatedAt || b.createdAt).localeCompare(a.updatedAt || a.createdAt));
+    return NextResponse.json({ ok: true, items: out });
+  }
+
+  // ── (2) TENANT/BROWSE — no workspaceId (the /browse global explorer + admin
+  //    callers). Cross-partition query; types is small, expanded to OR.
   const { resources: candidates } = await items.items
     .query({
-      query: `SELECT c.id, c.itemType, c.workspaceId, c.displayName, c.description, c.state, c.createdBy, c.createdAt, c.updatedAt, c.state.endorsement, c.state.sensitivityLabel FROM c WHERE (${orClauses}) AND (NOT IS_DEFINED(c.state._recycled) OR c.state._recycled = null)`,
+      query: `SELECT ${SELECT_COLS} FROM c WHERE (${orClauses}) AND ${NOT_RECYCLED}`,
       parameters: params,
     })
     .fetchAll();
 
   if (candidates.length === 0) return NextResponse.json({ ok: true, items: [] });
 
-  // Tenant-filter by workspace ownership (cached). Capture each owning
-  // workspace's domain id so the card can show a domain badge (resolved to a
-  // display name client-side via /api/governance/domains).
-  const ws = await workspacesContainer();
-  const cache = new Map<string, boolean>();
-  const wsDomainId = new Map<string, string | undefined>();
+  // Per-workspace ACL filter (owner → workspace-roles ACL → admin-open), cached
+  // per workspace. Capture each visible workspace's domain id so the card can
+  // show a domain badge (resolved to a display name client-side).
+  const cache = new Map<string, { visible: boolean; domain?: string }>();
   const owned: any[] = [];
   for (const it of candidates as any[]) {
-    let isOwned = cache.get(it.workspaceId);
-    if (isOwned === undefined) {
-      try {
-        const { resource } = await ws.item(it.workspaceId, s.claims.oid).read<any>();
-        isOwned = !!resource && resource.tenantId === s.claims.oid;
-        wsDomainId.set(it.workspaceId, resource?.domain ?? undefined);
-      } catch { isOwned = false; }
-      cache.set(it.workspaceId, isOwned);
+    let entry = cache.get(it.workspaceId);
+    if (entry === undefined) {
+      const access = await authorizeWorkspaceList(s, it.workspaceId);
+      entry = { visible: !!access, domain: (access?.workspace as any)?.domain ?? undefined };
+      cache.set(it.workspaceId, entry);
     }
-    if (isOwned) owned.push({ ...it, workspaceDomain: wsDomainId.get(it.workspaceId) });
+    if (entry.visible) owned.push({ ...it, workspaceDomain: entry.domain });
   }
   owned.sort((a, b) => (b.updatedAt || b.createdAt).localeCompare(a.updatedAt || a.createdAt));
   return NextResponse.json({ ok: true, items: owned });

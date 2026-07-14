@@ -2932,6 +2932,7 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
                             cards for file/OData sources. */}
                         <LoomItemSourcePicker
                           purpose="semantic-model"
+                          workspaceId={workspaceId}
                           onResolved={(res) => {
                             setSourceGate(null);
                             const m = mExprFromBinding(res.binding);
