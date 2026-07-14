@@ -79,4 +79,4 @@ A persistent Copilot side-panel in `apps/fiab-console/` that:
 - v1 PRP-05 (Self-hosted Azure MCP) provides the tool execution layer
 - v2 PRP-31 (developer portal) adds API playground tools the Copilot
   can also drive
-- v1 audit: [PRP Delivery Audit](../../docs/fiab/prp-audit.md)
+- v1 audit: [PRP Delivery Audit](../../../docs/fiab/archive/prp-audit.md)

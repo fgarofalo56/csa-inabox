@@ -11,8 +11,9 @@ correctness bugs fixed. Runbook: `docs/fiab/model-strategy.md`.
 `ux-baseline.md`, `web3-ui.md`, `loom_default_on_opt_out` (memory),
 `no_scaffold_claims` (memory)
 **Memory:** `csa_loom_model_strategy_prp.md` (to be written on first wave land)
-**Scope:** planning only — this PRP contains **no code and no bicep changes**. All
-"Design" and "Waves" sections describe work to be done in later PRs.
+**Scope (historical):** originally planning-only. **As of 2026-07-12 the Design/Waves
+below are DELIVERED** (Waves M1–M6, PRs #1903–#1914) — the sections are retained as the
+as-built specification, not forward work.
 
 ---
 

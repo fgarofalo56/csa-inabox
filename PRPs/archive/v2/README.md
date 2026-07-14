@@ -1,5 +1,8 @@
 # CSA Loom v2 — PRP backlog
 
+> **ARCHIVED 2026-07-14** — moved from `PRPs/v2/` to `PRPs/archive/v2/`. The mapping
+> below records where each v2 stub actually landed.
+>
 > **SUPERSEDED (2026-07-12).** This backlog predates the `PRPs/active/*` program
 > structure and never became the delivery vehicle — the v2 scope was delivered
 > (or re-planned) through the active programs instead. Kept for historical
@@ -28,7 +31,7 @@
 ---
 
 Stub PRPs for the v2 scope captured in
-[v2-scope-expansion.md](../../docs/fiab/v2-scope-expansion.md).
+[v2-scope-expansion.md](../../../docs/fiab/archive/v2-scope-expansion.md).
 Each was to get a full PRP file before any code began, matching the v1
 PRP format (Context / Goal / Acceptance criteria / PRD ref / Risks).
 
@@ -91,6 +94,6 @@ phasing.
 
 ## Related
 
-- [v2 scope expansion doc](../../docs/fiab/v2-scope-expansion.md)
-- [v1 PRP audit](../../docs/fiab/prp-audit.md)
+- [v2 scope expansion doc](../../../docs/fiab/archive/v2-scope-expansion.md)
+- [v1 PRP audit](../../../docs/fiab/archive/prp-audit.md)
 - v1 PRPs: see `PRP-00-README.md` through `PRP-25-*`

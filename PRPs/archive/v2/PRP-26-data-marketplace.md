@@ -63,4 +63,4 @@ to Fabric OneLake Catalog, scoped across all DLZs in the deployment.
   this PRP builds on
 - PRP-33 (domain mgmt) provides the domain taxonomy this marketplace
   filters by
-- v1 audit: [PRP Delivery Audit](../../docs/fiab/prp-audit.md)
+- v1 audit: [PRP Delivery Audit](../../../docs/fiab/archive/prp-audit.md)
