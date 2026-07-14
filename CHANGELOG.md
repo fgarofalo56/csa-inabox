@@ -25,6 +25,58 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.67.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.66.0...csa-inabox-v0.67.0) (2026-07-14)
+
+
+### Features
+
+* **access:** sign-in-boundary Request Access → admin onboarding queue ([#1999](https://github.com/fgarofalo56/csa-inabox/issues/1999)) ([25ed6f2](https://github.com/fgarofalo56/csa-inabox/commit/25ed6f251349629c5a5e71700730ddead6677ec8))
+* **admin:** Power BI backend is an in-console runtime toggle (no NEXT_PUBLIC build var) ([#2012](https://github.com/fgarofalo56/csa-inabox/issues/2012)) ([51ce45f](https://github.com/fgarofalo56/csa-inabox/commit/51ce45f594cf534352644562c7d4737534332cba))
+* **brand:** rename customer-facing 'Fabric IQ' family to 'Loom IQ' + idempotent Databricks NSG ([#1994](https://github.com/fgarofalo56/csa-inabox/issues/1994)) ([6e9d364](https://github.com/fgarofalo56/csa-inabox/commit/6e9d364b3e8f84a59a1cc121b259eea7b4340309))
+* **brownfield:** landing-zone service registry + attach-existing-service wizard (Phase 1) ([#2003](https://github.com/fgarofalo56/csa-inabox/issues/2003)) ([c90848e](https://github.com/fgarofalo56/csa-inabox/commit/c90848e0ed3a514c5874107749e2068fd0e9f6e2))
+* **brownfield:** Phase 2 — auto-RBAC + Purview + chargeback + telemetry on attach ([#2007](https://github.com/fgarofalo56/csa-inabox/issues/2007)) ([bccf351](https://github.com/fgarofalo56/csa-inabox/commit/bccf3516c6ddd11de1f8b0085874caf4e43ff46a))
+* **demo:** comprehensive art-of-the-possible seed (14 apps + flagship items) + walkthrough ([#1990](https://github.com/fgarofalo56/csa-inabox/issues/1990)) ([78b9eec](https://github.com/fgarofalo56/csa-inabox/commit/78b9eec5e4727093e8a2df6b235f719730ed8438))
+* **demo:** persistent demo-seed — populate live console with admin-owned demo workspace + apps + items ([#1989](https://github.com/fgarofalo56/csa-inabox/issues/1989)) ([b641cfd](https://github.com/fgarofalo56/csa-inabox/commit/b641cfd74c09a478005f9a93ceb613d7f606d524))
+* **maps:** Azure Maps is an in-console runtime config (no NEXT_PUBLIC build var) ([#2014](https://github.com/fgarofalo56/csa-inabox/issues/2014)) ([a25f441](https://github.com/fgarofalo56/csa-inabox/commit/a25f441c8239c9886df7e5762c0736d6b5677df7))
+* **semantic:** AAS semantic backend is a runtime config, not a NEXT_PUBLIC build var ([#2015](https://github.com/fgarofalo56/csa-inabox/issues/2015)) ([7d98a4e](https://github.com/fgarofalo56/csa-inabox/commit/7d98a4ed59f54d59c810b75c3ec12a35a7b17993))
+
+
+### Bug Fixes
+
+* **activator:** normalize schedule/window shorthand ('5m') to ISO-8601 so bundle rules author real Azure Monitor alerts ([#2013](https://github.com/fgarofalo56/csa-inabox/issues/2013)) ([2dcab15](https://github.com/fgarofalo56/csa-inabox/commit/2dcab15be64e3db726a65031caa769adcac18c2c))
+* **admin/benchmark:** stop false "LOOM_SYNAPSE_WORKSPACE not set" — read server config, not a stale run flag ([#1982](https://github.com/fgarofalo56/csa-inabox/issues/1982)) ([bef4694](https://github.com/fgarofalo56/csa-inabox/commit/bef46942d08360d027d1c1e11644b92945add4df))
+* **admin/mcp:** all MCP servers enabled+configured by default, gates removed (opt-out) ([#1984](https://github.com/fgarofalo56/csa-inabox/issues/1984)) ([c0aa69f](https://github.com/fgarofalo56/csa-inabox/commit/c0aa69fbe6cc8f61a37175ab799ef35703a6c2d1))
+* **admin/network:** private-endpoints query no longer 6s-times-out (Resource Graph + parallel + cache + higher budget) ([#1983](https://github.com/fgarofalo56/csa-inabox/issues/1983)) ([8ec6863](https://github.com/fgarofalo56/csa-inabox/commit/8ec68630d0d7e66185454d067d6bc4d5330c03d8))
+* **admin/workspaces:** tenant admin can open every workspace (bypass member-only guard) ([#1981](https://github.com/fgarofalo56/csa-inabox/issues/1981)) ([7a30a08](https://github.com/fgarofalo56/csa-inabox/commit/7a30a08a022a6cd8fa08f626eaf6169ed3cade56))
+* **admin:** env-config 73/73 + self-audit 100 on a clean deploy (reclassify fallback-functional runtimes as configured) ([#1980](https://github.com/fgarofalo56/csa-inabox/issues/1980)) ([6a22d9a](https://github.com/fgarofalo56/csa-inabox/commit/6a22d9aba406c9afc6a6e2614f812524ef849a11))
+* **auth:** unauthenticated users land on a Sign-in/Request-access surface, not auto-Entra ([#2009](https://github.com/fgarofalo56/csa-inabox/issues/2009)) ([c2cf13f](https://github.com/fgarofalo56/csa-inabox/commit/c2cf13f733013be43e96b4ff453ef9c8a06abef0))
+* **batch-pool:** stop crash — extract client-safe presets out of credential-instantiating batch-client ([#1976](https://github.com/fgarofalo56/csa-inabox/issues/1976)) ([bb927cb](https://github.com/fgarofalo56/csa-inabox/commit/bb927cb1b554134fb1e2e27b7ff442ba09bbe9de))
+* **brownfield:** list query drops Cosmos ORDER BY (needs composite index) ([#2005](https://github.com/fgarofalo56/csa-inabox/issues/2005)) ([2743cd4](https://github.com/fgarofalo56/csa-inabox/commit/2743cd4fe23ec18411d97a77e5315ca3627c3a87))
+* **bundles:** seed lakehouses in finops + real-time-dashboards so reports auto-render ([#2006](https://github.com/fgarofalo56/csa-inabox/issues/2006)) ([f188711](https://github.com/fgarofalo56/csa-inabox/commit/f188711a5fdde2c237abc41ada43d971b81f01a9))
+* **chargeback:** parallel+cached+timeout cost queries, no whole-report hang, gate clears when access granted ([#1978](https://github.com/fgarofalo56/csa-inabox/issues/1978)) ([663863a](https://github.com/fgarofalo56/csa-inabox/commit/663863ac6f110529700862d4e37ccbe1bc65db90))
+* **client-fetch:** raise default request timeout 6s -&gt; 20s (kills spurious admin timeouts) ([#1987](https://github.com/fgarofalo56/csa-inabox/issues/1987)) ([ffffa3b](https://github.com/fgarofalo56/csa-inabox/commit/ffffa3b2792256cf752bd5164e3af3e63dbfd045))
+* **dlz:** Cosmos account names tolerate empty domainName (dlz-attach) ([#1995](https://github.com/fgarofalo56/csa-inabox/issues/1995)) ([3c1f92a](https://github.com/fgarofalo56/csa-inabox/commit/3c1f92a043df51ae337b96efdf91d222347f1f04))
+* **dlz:** Event Hubs/Service Bus/ASA/ADF names tolerate empty domainName ([#2000](https://github.com/fgarofalo56/csa-inabox/issues/2000)) ([3c44875](https://github.com/fgarofalo56/csa-inabox/commit/3c4487522c4456ad563459cb0c98f17ef45b1ba7))
+* **dlz:** Service Bus private endpoint only on Premium SKU ([#2001](https://github.com/fgarofalo56/csa-inabox/issues/2001)) ([3e5b3ef](https://github.com/fgarofalo56/csa-inabox/commit/3e5b3ef917da89f5ed6037a7d46d267bcfc564d7))
+* **gov-deploy:** dlz-attach honors aasEnabled (AAS not in usgovvirginia) ([#1993](https://github.com/fgarofalo56/csa-inabox/issues/1993)) ([3be40f0](https://github.com/fgarofalo56/csa-inabox/commit/3be40f092fe283e8e9c89110f1b501dde6d1771f))
+* **install:** app-provisioned analytics render values (report bind + wells + lakehouse tables) ([#2002](https://github.com/fgarofalo56/csa-inabox/issues/2002)) ([54953a0](https://github.com/fgarofalo56/csa-inabox/commit/54953a0319fdb98e7b5f334ba5ebb9affef7414d))
+* **install:** eventstream + activator fully stand up their Azure backend on install (no draft/gate) ([#2011](https://github.com/fgarofalo56/csa-inabox/issues/2011)) ([541ed38](https://github.com/fgarofalo56/csa-inabox/commit/541ed386f6bd3c3451f5f4b06608743e68488bfe))
+* **ml-experiment:** MLflow registry reachable by default (auto-resolve AML/Databricks tracking, fix 404 workspace-not-found) ([#1985](https://github.com/fgarofalo56/csa-inabox/issues/1985)) ([e3a3e00](https://github.com/fgarofalo56/csa-inabox/commit/e3a3e00bdf28c6c795167b0ab3f77e9d88f23f59))
+* **notebooks:** auto-provision a runnable Databricks cluster so app-installed + opened notebooks execute ([#2010](https://github.com/fgarofalo56/csa-inabox/issues/2010)) ([13367f2](https://github.com/fgarofalo56/csa-inabox/commit/13367f26181cc491447c84310d45f31f510929b4))
+* **realtime-hub:** streams tab Azure-native by default (no Fabric gate), 6s-&gt;budget timeout, dark-theme-readable ([#1986](https://github.com/fgarofalo56/csa-inabox/issues/1986)) ([3d01985](https://github.com/fgarofalo56/csa-inabox/commit/3d01985c7d273b9a8b2e5522bbab638a9c76f2af))
+* **setup:** landing-zone attach no longer 504s — async submit + poll (never block the request on ARM deploy) ([#1979](https://github.com/fgarofalo56/csa-inabox/issues/1979)) ([048ad89](https://github.com/fgarofalo56/csa-inabox/commit/048ad89bb9c7ba54f20cb755457ada46602f3db6))
+
+
+### Documentation
+
+* brownfield-attach design (relocated from gitignored design/) ([#1997](https://github.com/fgarofalo56/csa-inabox/issues/1997)) ([ba96c2c](https://github.com/fgarofalo56/csa-inabox/commit/ba96c2c30b580f506d02ec3f8151b8e7fb7f3dd4))
+* **demo:** add the Gov twin section — apples-to-apples walkthrough ([#2004](https://github.com/fgarofalo56/csa-inabox/issues/2004)) ([f9eb1cb](https://github.com/fgarofalo56/csa-inabox/commit/f9eb1cb88eb92b2389f224263ff3cd8b28587ad6))
+* **demo:** honest Commercial demo walkthrough ([#1991](https://github.com/fgarofalo56/csa-inabox/issues/1991)) ([6333f93](https://github.com/fgarofalo56/csa-inabox/commit/6333f93b91a6bbc3c3610222e1531b9ce1b07fe8))
+* **demo:** reports now render real values (revenue/margin/units by month) ([#1992](https://github.com/fgarofalo56/csa-inabox/issues/1992)) ([0ed1520](https://github.com/fgarofalo56/csa-inabox/commit/0ed15209b12a8621cb2b9c5ccc674201a583839e))
+* **fiab:** complete CSA Loom architecture diagram set ([#1988](https://github.com/fgarofalo56/csa-inabox/issues/1988)) ([75fb71f](https://github.com/fgarofalo56/csa-inabox/commit/75fb71f81320df5608b74aee06123a3bb49e88b9))
+* **gov:** committed dlz-attach data-plane grant runbook ([#2008](https://github.com/fgarofalo56/csa-inabox/issues/2008)) ([9672e7c](https://github.com/fgarofalo56/csa-inabox/commit/9672e7c0dc384272a25ca289cd0e3ccb0405b6c3))
+* Loom vs Palantir Foundry gap analysis + brownfield attach design ([#1996](https://github.com/fgarofalo56/csa-inabox/issues/1996)) ([d068e82](https://github.com/fgarofalo56/csa-inabox/commit/d068e8289d6e01cc87baf84be1a96b66d86ef3a8))
+
 ## [0.66.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.65.0...csa-inabox-v0.66.0) (2026-07-12)
 
 
