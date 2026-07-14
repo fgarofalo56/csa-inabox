@@ -51,6 +51,8 @@ import { AgentToolsEditor } from '@/lib/copilot/agent-tool-catalog-editor';
 import { migrateLegacyTools, type AgentTool } from '@/lib/copilot/agent-tool-catalog';
 import { useItemState, SaveBar, useStyles } from './shared';
 import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
+import { MonitorActionBuilder } from '@/lib/components/monitor/monitor-action-builder';
+import { DEFAULT_MONITOR_ACTION, monitorActionToBody, type MonitorActionState } from '@/lib/components/monitor/monitor-action-model';
 
 // ----- state --------------------------------------------------------------
 interface AgentState {
@@ -146,7 +148,7 @@ export function OperationsAgentEditor({ item, id }: { item: FabricItemType; id: 
         { label: 'Test / Run', onClick: () => setTab('run') },
         { label: 'Triggers', onClick: () => setTab('triggers') },
         { label: 'Proposals', onClick: () => setTab('proposals') },
-        { label: deploying ? 'Deploying…' : 'Deploy to Foundry', onClick: onDeploy, disabled: deploying || saving },
+        { label: deploying ? 'Deploying…' : 'Deploy to Foundry (optional)', onClick: onDeploy, disabled: deploying || saving, title: 'Optional: publish the agent definition to the Azure AI Foundry Agent Service. The Azure-native default (Azure Monitor triggers + grounded runs) needs no Foundry.' },
       ]},
     ]},
   ], [save, saving, dirty, onDeploy, deploying]);
@@ -182,7 +184,7 @@ export function OperationsAgentEditor({ item, id }: { item: FabricItemType; id: 
               <MessageBar intent="info">
                 <MessageBarBody>
                   <MessageBarTitle>Azure-native operations agent</MessageBarTitle>
-                  This agent&rsquo;s instructions, model, and tools are saved to your workspace. It runs against your bound <strong>Eventhouse</strong> (Azure Data Explorer) and Ontology — no Microsoft Fabric required. <strong>Deploy to Foundry</strong> optionally publishes the agent definition to the Azure AI Foundry Agent Service.
+                  This agent&rsquo;s instructions, model, and tools are saved to your workspace. It grounds on your bound <strong>Eventhouse</strong> (Azure Data Explorer) and Ontology, and <strong>acts</strong> through <strong>Triggers</strong> — real Azure Monitor scheduled-query rules with a rule → condition → action group (email / Teams / webhook / SMS / Logic App). This is the default; no Microsoft Fabric required. <strong>Deploy to Foundry</strong> is optional — it publishes the agent definition to the Azure AI Foundry Agent Service for a hosted runtime.
                 </MessageBarBody>
               </MessageBar>
               {deployedAgentId && (
@@ -267,8 +269,9 @@ export function OperationsAgentEditor({ item, id }: { item: FabricItemType; id: 
               <SaveBar
                 saving={saving} savedAt={savedAt} error={error} dirty={dirty} onSave={() => save()}
                 extraRight={
-                  <Button appearance="primary" icon={<Flash20Regular />} onClick={onDeploy} disabled={deploying || saving}>
-                    {deploying ? 'Deploying…' : 'Deploy to Foundry'}
+                  <Button appearance="secondary" icon={<Flash20Regular />} onClick={onDeploy} disabled={deploying || saving}
+                    title="Optional runtime — the Azure-native default (Azure Monitor triggers + grounded runs) needs no Foundry.">
+                    {deploying ? 'Deploying…' : 'Deploy to Foundry (optional)'}
                   </Button>
                 }
               />
@@ -467,6 +470,9 @@ interface OpsRule {
   id: string; name: string; query?: string; azureRuleName?: string; severity?: number;
   evaluationFrequency?: string; windowSize?: string; state?: string; sourceKind?: string;
   scheduled?: boolean; note?: string;
+  action?: { kind?: string; config?: Record<string, unknown> };
+  actionGroupId?: string;
+  actionGroupReceivers?: { emails: number; sms: number; webhooks: number; logicApps: number };
 }
 const SEVERITY_OPTS = [
   { value: 0, label: '0 — Critical' }, { value: 1, label: '1 — Error' }, { value: 2, label: '2 — Warning' },
@@ -493,6 +499,9 @@ function TriggersPane({ id, chatStyles: s }: { id: string; chatStyles: StyleBag 
   const [severity, setSeverity] = useState(2);
   const [evalFreq, setEvalFreq] = useState('PT5M');
   const [winSize, setWinSize] = useState('PT5M');
+  // THEN — action (rule/condition/action builder). Composed into the POST body
+  // as a real Azure Monitor action group (email / Teams / webhook / SMS / Logic App).
+  const [action, setAction] = useState<MonitorActionState>(DEFAULT_MONITOR_ACTION);
   const [creating, setCreating] = useState(false);
   const [createErr, setCreateErr] = useState<string | null>(null);
 
@@ -519,17 +528,22 @@ function TriggersPane({ id, chatStyles: s }: { id: string; chatStyles: StyleBag 
     if (query.trim()) body.query = query.trim();
     if (sourceTable.trim()) body.sourceTable = sourceTable.trim();
     if (sourceKind === 'adx' && adxDatabase.trim()) body.adxDatabase = adxDatabase.trim();
+    // THEN — attach the composed action group (or a pick-existing id). An
+    // unconfigured action degrades to {} so the rule is created without a group.
+    const actionBody = monitorActionToBody(action);
+    if (actionBody.action) body.action = actionBody.action;
+    if (actionBody.existingActionGroupId) body.existingActionGroupId = actionBody.existingActionGroupId;
     try {
       const r = await clientFetch(`/api/items/operations-agent/${encodeURIComponent(id)}/rules`, {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
       });
       const j = await r.json().catch(() => ({}));
       if (!j?.ok) { if (j?.gate) setGate(j.gate); setCreateErr(j?.error || j?.gate?.remediation || `HTTP ${r.status}`); return; }
-      setRuleName(''); setQuery(''); setSourceTable('');
+      setRuleName(''); setQuery(''); setSourceTable(''); setAction(DEFAULT_MONITOR_ACTION);
       await loadRules();
     } catch (e: any) { setCreateErr(e?.message || String(e)); }
     finally { setCreating(false); }
-  }, [ruleName, query, sourceTable, sourceKind, adxDatabase, severity, evalFreq, winSize, id, loadRules]);
+  }, [ruleName, query, sourceTable, sourceKind, adxDatabase, severity, evalFreq, winSize, action, id, loadRules]);
 
   const triggerNow = useCallback(async (ruleId: string) => {
     setTriggering(ruleId); setTriggerResult(null); setListErr(null); setGate(null);
@@ -618,6 +632,11 @@ function TriggersPane({ id, chatStyles: s }: { id: string; chatStyles: StyleBag 
               <Input value={adxDatabase} onChange={(_, d) => setAdxDatabase(d.value)} placeholder="loomdb-default" />
             </Field>
           )}
+        </div>
+        {/* THEN — action. What fires when the rule's condition is met: a real
+            Azure Monitor action group (email / Teams / webhook / SMS / Logic App). */}
+        <MonitorActionBuilder value={action} onChange={setAction} />
+        <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center' }}>
           <Button appearance="primary" icon={<Add20Regular />} onClick={createRule} disabled={creating || !ruleName.trim()}>
             {creating ? 'Creating…' : 'Create trigger'}
           </Button>
@@ -642,6 +661,11 @@ function TriggersPane({ id, chatStyles: s }: { id: string; chatStyles: StyleBag 
             <Badge appearance="outline">{r.sourceKind === 'adx' ? 'ADX' : 'Log Analytics'}</Badge>
             {typeof r.severity === 'number' && <Badge appearance="outline">sev {r.severity}</Badge>}
             <Badge appearance="outline">{r.evaluationFrequency} / {r.windowSize}</Badge>
+            {r.action?.kind
+              ? <Badge appearance="tint" color="brand">action: {r.action.kind}</Badge>
+              : r.actionGroupId
+                ? <Badge appearance="tint" color="brand">action group</Badge>
+                : <Badge appearance="outline" color="warning">no action</Badge>}
             <div style={{ flex: 1 }} />
             <Button size="small" appearance="subtle" icon={<Play20Regular />} onClick={() => triggerNow(r.id)} disabled={triggering === r.id}>
               {triggering === r.id ? 'Running…' : 'Trigger now'}

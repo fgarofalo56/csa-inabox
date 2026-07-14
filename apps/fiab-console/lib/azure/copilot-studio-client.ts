@@ -1089,6 +1089,21 @@ export async function publishToChannel(
 /** The Dataverse channel type for the combined Teams + Microsoft 365 Copilot channel. */
 const M365_CHANNEL_TYPE = 'msteams';
 
+/**
+ * End-user authentication mode for the agent's Microsoft 365 Copilot channel —
+ * the Copilot Studio Security → Authentication options:
+ *   - 'none'   : No authentication (anyone in the tenant can chat).
+ *   - 'entra'  : Authenticate with Microsoft (Entra ID single sign-on).
+ *   - 'manual' : Authenticate manually (a configured OAuth identity provider).
+ */
+export type M365AuthMode = 'none' | 'entra' | 'manual';
+export const M365_AUTH_MODES: M365AuthMode[] = ['none', 'entra', 'manual'];
+
+/** Coerce an untrusted value to a valid {@link M365AuthMode} (defaults to 'none'). */
+export function coerceM365AuthMode(v: unknown): M365AuthMode {
+  return v === 'entra' || v === 'manual' ? v : 'none';
+}
+
 /** Resolve the Power Platform environment to publish into, by id or the default env var. */
 export function resolvePublishEnvId(envId?: string): string | null {
   const v = (envId || process.env.LOOM_COPILOT_STUDIO_ENVIRONMENT_ID || '').trim();
@@ -1159,6 +1174,16 @@ export interface M365PublishResult {
   channelId: string;
   channelEnabled: boolean;
   m365CopilotEnabled: boolean;
+  // ── Agentic-publish depth (G6) — echoed back so the receipt records exactly
+  //    what was written to the M365 Copilot channel configuration. ──
+  /** Model-facing routing description written into the channel configuration. */
+  descriptionForModel?: string;
+  /** Whether the agent's responses are delivered to the user as-is (no rephrase). */
+  deliverAsIs: boolean;
+  /** Whether the agent is exposed as a connected agent for other agents to invoke. */
+  connectedAgent: boolean;
+  /** The end-user authentication mode set on the M365 Copilot channel. */
+  authMode: M365AuthMode;
   /** Deep link into the M365 Copilot / Teams app once an admin approves the agent. */
   shareUrl?: string;
   /**
@@ -1180,6 +1205,21 @@ export interface M365PublishInput {
   knowledge?: KnowledgeSourcePayload[];
   /** Whether to flip "Make agent available in Microsoft 365 Copilot" (default true). */
   availableInM365Copilot?: boolean;
+  // ── Agentic-publish depth (G6) — the M365 Copilot Agent-Store settings. These
+  //    are part of the Teams + Microsoft 365 Copilot CHANNEL configuration the
+  //    maker portal writes (Copilot Studio → Channels / connected-agent panel),
+  //    so they are persisted to the real msdyn_configuration Memo column rather
+  //    than to invented top-level agent columns. ──
+  /** Orchestrator-facing description the M365 Copilot model reads to decide when
+   *  to route to this agent (distinct from the human-facing `description`). */
+  descriptionForModel?: string;
+  /** Deliver this agent's responses to the user as-is — the M365 orchestrator does
+   *  NOT rephrase/summarize (Copilot Studio "respond directly to users"). */
+  deliverAsIs?: boolean;
+  /** Expose this agent as a CONNECTED agent other M365 Copilot agents can invoke. */
+  connectedAgent?: boolean;
+  /** End-user authentication mode for the M365 Copilot channel (default 'none'). */
+  authMode?: M365AuthMode;
 }
 
 /**
@@ -1195,6 +1235,12 @@ export interface M365PublishInput {
 export async function publishToM365Copilot(envId: string, input: M365PublishInput): Promise<M365PublishResult> {
   const host = await envHost(envId);
   const availableInM365Copilot = input.availableInM365Copilot !== false;
+  // Agentic-publish depth (G6). Normalize the Agent-Store settings once so the
+  // channel-config write and the returned receipt agree exactly.
+  const deliverAsIs = input.deliverAsIs === true;
+  const connectedAgent = input.connectedAgent === true;
+  const authMode = coerceM365AuthMode(input.authMode);
+  const descriptionForModel = (input.descriptionForModel || '').trim().slice(0, 5000) || undefined;
 
   // 1. upsert the agent
   const agent = await upsertAgentByName(envId, {
@@ -1227,6 +1273,15 @@ export async function publishToM365Copilot(envId: string, input: M365PublishInpu
     enableMicrosoft365Copilot: availableInM365Copilot,
     // "make agent available in Microsoft 365 Copilot" toggle from the portal panel.
     makeAvailableInMicrosoft365Copilot: availableInM365Copilot,
+    // Agentic-publish depth (G6): connected-agent routing, deliver-as-is, the
+    // end-user auth mode, and the model-facing routing description are all part
+    // of the M365 Copilot channel configuration the maker portal writes. Persist
+    // them on the same real msdyn_configuration Memo column so they round-trip
+    // with the channel (no invented top-level agent columns → no 422).
+    deliverAsIs,
+    connectedAgent,
+    authMode,
+    ...(descriptionForModel ? { descriptionForModel } : {}),
   };
   let channel: CopilotChannel;
   if (existingChannel) {
@@ -1249,6 +1304,10 @@ export async function publishToM365Copilot(envId: string, input: M365PublishInpu
     channelId: channel.id,
     channelEnabled: channel.enabled,
     m365CopilotEnabled: availableInM365Copilot,
+    descriptionForModel,
+    deliverAsIs,
+    connectedAgent,
+    authMode,
     shareUrl: channel.embedUrl,
     // Real, navigable follow-up links: the Copilot Studio Channels tab (maker
     // completes availability + grabs the Teams share link post-approval) and the
