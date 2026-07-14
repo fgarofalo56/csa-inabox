@@ -102,6 +102,15 @@ COPY --from=builder --chown=nextjs:nodejs /app/samples ./samples
 # loom-docs-index.ts reads <cwd>/copilot-corpus to build the loom-docs index.
 COPY --from=builder --chown=nextjs:nodejs /app/copilot-corpus ./copilot-corpus
 
+# Bundled compiled ARM template for the user-delegated DLZ deploy. The ~3.4MB
+# compiled platform/fiab/bicep/main.json (committed under deploy-templates/) lets
+# the Setup Wizard submit the subscription-scoped deployment with the template
+# INLINE (properties.template) — no storage account, no templateLink, no SAS,
+# which is what Gov ARM requires. It's not part of Next's traced standalone
+# output, so copy it explicitly next to server.js; lib/setup/user-arm-deploy.ts
+# reads <cwd>/deploy-templates/main.json.
+COPY --from=builder --chown=nextjs:nodejs /app/deploy-templates ./deploy-templates
+
 # Overwrite any source-tree marker with one stamped at build time.
 # Validator probes /build-marker.txt and grep's for sha=<expected>.
 RUN echo "loom-build-marker sha=${LOOM_BUILD_SHA} stamp=${LOOM_BUILD_TIMESTAMP} token=LOOM_LIVE_BUILD" > /app/public/build-marker.txt && \

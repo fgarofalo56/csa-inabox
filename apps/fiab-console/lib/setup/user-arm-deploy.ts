@@ -24,18 +24,31 @@
  * create` would (no-vaporware: this is the same template, same params).
  *
  * Template source: ARM REST needs a COMPILED template, not the `.bicep` source
- * (there is no bicep compiler in the console image). The compiled
- * `platform/fiab/bicep/main.json` is published to a reachable URI and named via
- * {@link DLZ_TEMPLATE_ENV} (`LOOM_DLZ_TEMPLATE_URI`, optional SAS in
- * `LOOM_DLZ_TEMPLATE_QUERY_STRING`). When it is unset, {@link resolveDlzTemplateSource}
- * returns null and the deploy route skips this tier and falls through to its
- * honest gate (which names the env var) — this is the documented one-time infra
- * step, not a fake success.
+ * (there is no bicep compiler in the console image). Two sources are supported,
+ * INLINE-first:
+ *   • INLINE (preferred, durable, cloud-agnostic): the compiled
+ *     `platform/fiab/bicep/main.json` is BUNDLED in the image under
+ *     `deploy-templates/main.json` (~3.4 MB, under ARM's 4 MB inline limit) and
+ *     submitted in the request body as `properties.template`. No storage
+ *     account, no `templateLink`, no SAS — which is what Gov ARM requires (it
+ *     cannot fetch a SAS'd Gov blob, and user-delegation SAS expires in ~7 days).
+ *     See {@link resolveDlzTemplateInline}.
+ *   • LINK (fallback): the same compiled template published to a reachable URI
+ *     and named via {@link DLZ_TEMPLATE_ENV} (`LOOM_DLZ_TEMPLATE_URI`, optional
+ *     SAS in `LOOM_DLZ_TEMPLATE_QUERY_STRING`), submitted as `properties.templateLink`.
+ *     See {@link resolveDlzTemplateSource}.
+ * {@link resolveDlzTemplate} combines the two — inline first, then the link —
+ * and returns null only when NEITHER is available (→ the deploy route falls
+ * through to its honest gate). Because the compiled template is bundled, inline
+ * is effectively always available.
  *
  * The pure helpers ({@link buildDlzDeploymentParameters},
- * {@link resolveDlzTemplateSource}) are exported separately from the ARM I/O so
- * they can be unit-tested without a live subscription.
+ * {@link resolveDlzTemplateSource}, {@link resolveDlzTemplateInline},
+ * {@link resolveDlzTemplate}) are exported separately from the ARM I/O so they
+ * can be unit-tested without a live subscription.
  */
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { armBase } from '@/lib/azure/cloud-endpoints';
 
 /** Subscription-scoped deployments REST api-version (matches arm-deployments-client). */
@@ -148,16 +161,85 @@ export interface DlzTemplateSource {
   templateLink: { uri: string; queryString?: string };
 }
 
+/** A resolved INLINE ARM template — the compiled main.json parsed to an object. */
+export interface DlzTemplateInline {
+  template: unknown;
+}
+
+/** Either an inline compiled template or a templateLink reference. */
+export type DlzTemplateResolved = DlzTemplateInline | DlzTemplateSource;
+
+/** Type guard: a resolved template source is the INLINE variant. */
+export function isInlineTemplate(t: DlzTemplateResolved): t is DlzTemplateInline {
+  return (t as DlzTemplateInline).template !== undefined;
+}
+
 /**
- * PURE (env-read): resolve the published compiled-template source, or null when
- * {@link DLZ_TEMPLATE_ENV} is not configured (→ the route falls through to its
- * honest copy-paste gate).
+ * PURE (env-read): resolve the published compiled-template LINK source, or null
+ * when {@link DLZ_TEMPLATE_ENV} is not configured. This is the FALLBACK behind
+ * the bundled inline template (see {@link resolveDlzTemplateInline}) — a Gov ARM
+ * cannot fetch a SAS'd Gov blob, so inline is preferred.
  */
 export function resolveDlzTemplateSource(): DlzTemplateSource | null {
   const uri = (process.env[DLZ_TEMPLATE_ENV] || '').trim();
   if (!uri) return null;
   const queryString = (process.env.LOOM_DLZ_TEMPLATE_QUERY_STRING || '').trim();
   return { templateLink: queryString ? { uri, queryString } : { uri } };
+}
+
+/**
+ * Module-level cache for the parsed inline template so the ~3.4 MB main.json is
+ * read + JSON.parse'd only once per process. `undefined` = not yet attempted;
+ * `null` = attempted and the file is not present in this image.
+ */
+let inlineTemplateCache: DlzTemplateInline | null | undefined;
+
+/** Reset the inline-template cache (test-only). */
+export function __resetInlineTemplateCache(): void {
+  inlineTemplateCache = undefined;
+}
+
+/**
+ * FS-read (cached): resolve the BUNDLED compiled ARM template
+ * (`deploy-templates/main.json`, committed + COPY'd into the image next to
+ * server.js) as an inline template object for `properties.template`, or null
+ * when the file isn't present. Read + parsed ONCE (module-level cache). Tries
+ * `<cwd>/deploy-templates/main.json` first (the standalone runtime cwd), then a
+ * path relative to this module's directory as a fallback.
+ */
+export function resolveDlzTemplateInline(): DlzTemplateInline | null {
+  if (inlineTemplateCache !== undefined) return inlineTemplateCache;
+  const candidates: string[] = [path.join(process.cwd(), 'deploy-templates', 'main.json')];
+  // __dirname is defined in CJS (Next standalone output + vitest) but not ESM —
+  // guard so the fallback is only added when available.
+  if (typeof __dirname !== 'undefined') {
+    // lib/setup → ../../deploy-templates (repo/app root next to server.js).
+    candidates.push(path.join(__dirname, '..', '..', 'deploy-templates', 'main.json'));
+  }
+  for (const file of candidates) {
+    try {
+      const raw = readFileSync(file, 'utf8');
+      inlineTemplateCache = { template: JSON.parse(raw) };
+      return inlineTemplateCache;
+    } catch {
+      // Not at this path — try the next candidate.
+    }
+  }
+  inlineTemplateCache = null;
+  return inlineTemplateCache;
+}
+
+/**
+ * Resolve the template SOURCE for the DLZ deploy, PREFERRING the bundled inline
+ * template (durable + cloud-agnostic — no storage/SAS) and falling back to the
+ * published templateLink (`LOOM_DLZ_TEMPLATE_URI`). Returns null only when
+ * NEITHER is available (→ the route's honest gate). Since the compiled template
+ * is bundled in the image, inline is effectively always available.
+ */
+export function resolveDlzTemplate(): DlzTemplateResolved | null {
+  const inline = resolveDlzTemplateInline();
+  if (inline) return inline;
+  return resolveDlzTemplateSource();
 }
 
 /** Outcome of the live subscription-scoped deployment PUT. */
@@ -212,7 +294,7 @@ export async function submitDlzDeployment(opts: {
   subscriptionId: string;
   region: string;
   parameters: ArmParameters;
-  templateSource: DlzTemplateSource;
+  templateSource: DlzTemplateResolved;
   getToken: () => Promise<string>;
   deploymentName?: string;
   fetchImpl?: typeof fetch;
@@ -240,7 +322,12 @@ export async function submitDlzDeployment(opts: {
     location: region,
     properties: {
       mode: 'Incremental',
-      templateLink: templateSource.templateLink,
+      // INLINE-first: submit the bundled compiled template in the request body
+      // (properties.template) when resolved inline; otherwise reference it via
+      // properties.templateLink. Everything else (mode/parameters/race) is identical.
+      ...(isInlineTemplate(templateSource)
+        ? { template: templateSource.template }
+        : { templateLink: templateSource.templateLink }),
       parameters,
     },
   };

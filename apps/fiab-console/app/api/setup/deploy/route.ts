@@ -16,7 +16,7 @@ import {
 } from '@/lib/setup/deploy-preflight';
 import {
   buildDlzDeploymentParameters,
-  resolveDlzTemplateSource,
+  resolveDlzTemplate,
   submitDlzDeployment,
   DLZ_TEMPLATE_ENV,
 } from '@/lib/setup/user-arm-deploy';
@@ -509,19 +509,20 @@ export async function POST(req: NextRequest) {
   }
   const topologyPayload = { topology, ...(topology === 'dlz-attach' ? { targetSubscriptionId: body.targetSubscriptionId, ...hubCoords } : {}) };
 
-  // ── Tier 2 (DAY-ONE user-delegated ARM) — PREFERRED when the compiled template
-  //    is published (LOOM_DLZ_TEMPLATE_URI set). Submit the REAL subscription-
-  //    scoped `Microsoft.Resources/deployments` PUT straight from the BFF under
-  //    the SIGNED-IN USER's delegated ARM token (getArmTokenPreferUser). Because
-  //    it authenticates as the user, an operator can attach a DLZ into ANY
-  //    subscription they hold Contributor on. This runs ABOVE the orchestrator so
-  //    a published template closes the false-"submitted" gap: the orchestrator's
-  //    202 is fire-and-forget (its background ARM deploy can fail after the 202),
-  //    whereas this returns a REAL, pollable ARM deploymentId the wizard streams
-  //    to a terminal state. ARM REST needs the COMPILED main.json; when the env is
-  //    unset this tier is skipped and Tier 1 / dispatch / the honest copy-paste
-  //    gate handle it (no-vaporware — the publish is the documented infra step).
-  const templateSource = resolveDlzTemplateSource();
+  // ── Tier 2 (DAY-ONE user-delegated ARM) — PREFERRED, and now ALWAYS available.
+  //    Submit the REAL subscription-scoped `Microsoft.Resources/deployments` PUT
+  //    straight from the BFF under the SIGNED-IN USER's delegated ARM token
+  //    (getArmTokenPreferUser). Because it authenticates as the user, an operator
+  //    can attach a DLZ into ANY subscription they hold Contributor on. This runs
+  //    ABOVE the orchestrator so it closes the false-"submitted" gap: the
+  //    orchestrator's 202 is fire-and-forget, whereas this returns a REAL,
+  //    pollable ARM deploymentId the wizard streams to a terminal state. ARM REST
+  //    needs the COMPILED main.json — resolveDlzTemplate() returns it INLINE from
+  //    the bundled deploy-templates/main.json (durable, cloud-agnostic — no
+  //    storage/SAS, which is what Gov ARM requires) and falls back to the
+  //    published templateLink (LOOM_DLZ_TEMPLATE_URI). It is null only if NEITHER
+  //    is available — which shouldn't happen since the template is bundled.
+  const templateSource = resolveDlzTemplate();
   const tryUserArmDeploy = async (): Promise<NextResponse | null> => {
     if (!templateSource) return null;
     const arm = await getArmTokenPreferUser(session).catch(() => null);
