@@ -353,6 +353,59 @@ export async function listAllDocs(): Promise<WarmLeaseDoc[]> {
   }
 }
 
+// ============================================================
+// Shared pool-config doc — cross-replica admin override propagation
+// ============================================================
+//
+// setSparkPoolConfig() used to be per-replica in-memory only: the admin kill
+// switch (enabled:false) applied on whichever replica served the POST while
+// every other replica kept warming (observed live 2026-07-14 during the
+// loompool queue-jam incident). The override now also persists here as a
+// single well-known doc; every replica's sweep() merges it in each tick, so a
+// config change propagates console-wide within one sweep interval (~30s).
+
+const CONFIG_DOC_ID = 'pool-config';
+const CONFIG_GROUP_KEY = '#config';
+
+export interface PoolConfigDoc {
+  id: string;
+  groupKey: string;
+  /** Partial<PoolConfig> from spark-session-pool (kept as unknown here to avoid a cycle). */
+  override: Record<string, unknown>;
+  updatedAt: number;
+  updatedBy: string;
+}
+
+/** Persist the admin runtime override (best-effort; no TTL — config is durable). */
+export async function writePoolConfigDoc(override: Record<string, unknown>): Promise<void> {
+  if (leaseStoreMode() !== 'cosmos') return;
+  try {
+    const c = await container();
+    const body: PoolConfigDoc = {
+      id: CONFIG_DOC_ID,
+      groupKey: CONFIG_GROUP_KEY,
+      override,
+      updatedAt: Date.now(),
+      updatedBy: replicaId(),
+    };
+    await c.items.upsert(body);
+  } catch {
+    /* best-effort — this replica still applies the override locally */
+  }
+}
+
+/** Read the shared admin override (null when absent / store unavailable). */
+export async function readPoolConfigDoc(): Promise<PoolConfigDoc | null> {
+  if (leaseStoreMode() !== 'cosmos') return null;
+  try {
+    const c = await container();
+    const { resource } = await c.item(CONFIG_DOC_ID, CONFIG_GROUP_KEY).read<PoolConfigDoc>();
+    return resource || null;
+  } catch {
+    return null;
+  }
+}
+
 let _leaseSeq = 0;
 export function mintLeaseId(): string {
   _leaseSeq = (_leaseSeq + 1) % 1_000_000;

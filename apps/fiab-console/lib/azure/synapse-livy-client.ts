@@ -112,6 +112,14 @@ export interface LivySessionOptions {
   conf?: Record<string, string>;
 }
 
+/** Synapse Livy's per-session error detail (detailed=true), e.g. the
+ * MAX_QUEUED_JOBS_PER_COMPUTE_EXCEEDED queue-jam rejection. */
+export interface LivySessionErrorInfo {
+  message?: string;
+  errorCode?: string;
+  source?: string;
+}
+
 export interface LivySession {
   id: number;
   state: string;
@@ -119,6 +127,15 @@ export interface LivySession {
   appId?: string | null;
   appInfo?: { sparkUiUrl?: string; driverLogUrl?: string } | null;
   log?: string[];
+  errorInfo?: LivySessionErrorInfo[] | null;
+}
+
+/** Human-readable summary of a terminal session's errorInfo ('' when none). */
+export function livyErrorDetail(sess: Pick<LivySession, 'errorInfo'>): string {
+  return (sess.errorInfo || [])
+    .map((e) => e?.message || e?.errorCode || '')
+    .filter(Boolean)
+    .join('; ');
 }
 
 export interface LivyStatementOutput {
@@ -180,7 +197,10 @@ export async function createLivySession(
 }
 
 export async function getLivySession(poolName: string, sessionId: number): Promise<LivySession> {
-  const r = await callDev(`${livyBase(poolName)}/sessions/${sessionId}`);
+  // detailed=true adds `errorInfo` so a terminal session's REAL failure reason
+  // (e.g. the MAX_QUEUED_JOBS_PER_COMPUTE_EXCEEDED queue-jam rejection) reaches
+  // the editor instead of an opaque "entered terminal state 'error'".
+  const r = await callDev(`${livyBase(poolName)}/sessions/${sessionId}?detailed=true`);
   return jsonOrThrow<LivySession>(r, `getLivySession(${poolName}/${sessionId})`);
 }
 
