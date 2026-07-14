@@ -230,7 +230,7 @@ export async function writeSynonyms(
   return !!updated;
 }
 
-// ── Grounding projection (Q&A / Copilot) — produced here, not yet consumed ────
+// ── Grounding projection (Q&A / Copilot) — consumed by the report ai-visual route ─
 
 /** One resolved object in the projected linguistic schema. */
 export interface LinguisticEntity {
@@ -256,10 +256,10 @@ export interface LinguisticTermCandidate {
 
 /**
  * The JSON grounding shape `buildLinguisticSchema` produces for a Loom-native Q&A
- * / Copilot grounding path (see the header's wiring note — produced here, not yet
- * consumed by a route). Carries both a flat `entities` list (for a compact
- * grounding block) and a lower-cased `termIndex` (term → weight-ranked candidate
- * objects) for fast NL resolution.
+ * / Copilot grounding path (see the header's wiring note — the report ai-visual
+ * route serializes this into a "BUSINESS TERM SYNONYMS" grounding block). Carries
+ * both a flat `entities` list (for a compact grounding block) and a lower-cased
+ * `termIndex` (term → weight-ranked candidate objects) for fast NL resolution.
  */
 export interface LinguisticSchema {
   version: '1.0';
@@ -281,10 +281,11 @@ function referenceFor(objectType: SynObjectType, table: string | undefined, obje
 /**
  * Project a validated `SynonymEntry[]` into a grounding-ready `LinguisticSchema`
  * for a Loom-native Q&A / Copilot grounding path — a flat entity list plus a
- * term → ranked-candidate index. (Available for that path but not yet wired into
- * a caller; see the header's honest wiring note.) Pure: deterministic for a given
- * input, no I/O. Input that is not yet validated is tolerated (re-validated
- * defensively) so callers can hand it the raw persisted blob.
+ * term → ranked-candidate index. Consumed by the report ai-visual route (it
+ * serializes the projection into the Q&A grounding prompt when the bound
+ * semantic-model has ≥1 synonym). Pure: deterministic for a given input, no I/O.
+ * Input that is not yet validated is tolerated (re-validated defensively) so
+ * callers can hand it the raw persisted blob.
  */
 export function buildLinguisticSchema(entries: SynonymEntry[] | unknown): LinguisticSchema {
   const clean = Array.isArray(entries) && entries.every(isSynonymEntryish)

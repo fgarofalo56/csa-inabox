@@ -97,7 +97,11 @@ async function listRegistrations(tenantId: string): Promise<MetastoreRegistratio
       })
       .fetchAll();
     return resources;
-  } catch {
+  } catch (e: any) {
+    // Log the underlying Cosmos error so an outage is diagnosable in the
+    // Console logs (not swallowed); the caller turns the null into an honest
+    // degraded envelope instead of a silent empty registrations list.
+    console.warn(`[catalog/metastores] registration read failed for tenant ${tenantId}: ${e?.message || e}`);
     return null;
   }
 }

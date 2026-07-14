@@ -333,11 +333,13 @@ export async function GET(request: Request) {
             )
             .fetchAll();
           return resources;
-        } catch {
-          // Partial failure: record the workspace so the envelope carries an
-          // honest degraded indicator instead of silently rendering a
-          // partial/empty catalog (a Cosmos outage must not look like "no
-          // items" — no-vaporware.md).
+        } catch (e: any) {
+          // Partial failure: log the underlying Cosmos error (so an outage is
+          // diagnosable in the Console logs, not swallowed) and record the
+          // workspace so the envelope carries an honest degraded indicator
+          // instead of silently rendering a partial/empty catalog (a Cosmos
+          // outage must not look like "no items" — no-vaporware.md).
+          console.warn(`[onelake/catalog] workspace ${wsId} item read failed: ${e?.message || e}`);
           failedWorkspaceIds.push(wsId);
           return [] as any[];
         }

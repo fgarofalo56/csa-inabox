@@ -14,28 +14,22 @@
  * `CALCULATETABLE` here drives the KQL `where` predicates — one Filters model,
  * three engines.
  *
- * ── STATUS: staged Wave-2 module (unused-but-real is intentional + disclosed) ──
+ * ── STATUS: WIRED into the live Get-Data pipeline (OPEN-REGISTER P1-8b) ──
  * This compiler is COMPLETE and unit-TESTED — `__tests__/wells-to-kql.test.ts`
  * regression-guards every emitted shape (table / slicer / card / grouped chart /
  * make-series / Top-N), the shared Filters-pane model, and the injection-safety
- * contract — but is NOT YET WIRED into the live Get-Data pipeline.
- * `report-model-resolver.ts → buildConnectionExecutor()` switches on the loaded
- * `LoomConnection.type`, and `adx` (like `mysql`) has no bindable LoomConnection
- * in Wave 1 — it is documented there as "honest-gate / forward-compat", so an ADX
- * report source falls to the resolver's default honest gate rather than executing
- * here. That is deliberate, not a stub: there is no mock data and no dead UI card
- * (no-vaporware) — only this pure string synthesizer, kept honest by the colocated
- * spec above, waiting on an upstream credential surface. ACTIVATION is a single
- * additive `case 'adx':` in `buildConnectionExecutor` once an `adx` ConnectionType
- * is bindable: build a {@link KqlSource} from the connection's table + introspected
- * columns, call {@link buildKqlFromVisual}, and run the `.kql` through
- * `kusto-client.executeQuery(db, kql, { clusterUri: conn.host })` behind
- * `kustoConfigGate()`. No change to THIS module is required to light it up — its
- * SHARED-CONTRACT exports ({@link KqlSource}, {@link CompiledKql},
- * {@link buildKqlFromVisual}) are stable, and the spec is its acceptance gate.
- * That activation is TRACKED as a real Get-Data Wave-1 follow-up (the resolver's
- * `adx` case + a bindable ADX ConnectionType) — not left indefinitely staged.
- * Until then it is staged, not shipped.
+ * contract — AND it is now consumed by the resolver. `report-model-resolver.ts →
+ * buildConnectionExecutor()` has a real `case 'adx':` that builds `makeAdxExecutor`,
+ * whose `runVisual` resolves the source columns via `<table> | getschema`, calls
+ * {@link buildKqlFromVisual} with the typed {@link KqlSource}, and runs the emitted
+ * `.kql` through `kusto-client.executeQuery(db, kql, { clusterUri })` behind
+ * `kustoConfigGate()` — REAL rows off a real ADX cluster (no mock, no dead card).
+ * The `adx` ConnectionType is bindable in Get-Data, so an ADX report source now
+ * executes here rather than honest-gating. A raw-KQL source runs verbatim; a
+ * table source drives this wells→KQL compiler. The SHARED-CONTRACT exports
+ * ({@link KqlSource}, {@link CompiledKql}, {@link buildKqlFromVisual}) are the
+ * stable surface the resolver depends on, and the colocated spec is its
+ * acceptance gate.
  *
  * Pure + credential-free (mirrors wells-to-sql / aas-dax): no Azure SDK, no
  * network — only deterministic string synthesis — so the compiler is unit-testable
@@ -468,11 +462,10 @@ function uniqueStrings(values: string[]): string[] {
  * `where` (the HAVING analogue). Every identifier is whitelisted via `src`; every
  * literal is KQL-escaped (dates wrapped in `todatetime`). No Fabric/AAS.
  *
- * @remarks STAGED WAVE-2: real + unit-testable, but not yet wired into the live
- * Get-Data pipeline — `report-model-resolver.ts → buildConnectionExecutor()` has
- * no `adx` case yet (no bindable `adx` LoomConnection in Wave 1), so an ADX source
- * honest-gates instead of calling this. See the module header for the single
- * additive `case 'adx':` that lights it up via `kusto-client.executeQuery`.
+ * @remarks WIRED: `report-model-resolver.ts → buildConnectionExecutor()`'s
+ * `case 'adx':` builds `makeAdxExecutor`, whose `runVisual` calls this with the
+ * table's `getschema`-resolved {@link KqlSource} and runs the emitted `.kql`
+ * through `kusto-client.executeQuery` against a real ADX cluster.
  */
 export function buildKqlFromVisual(
   visual: DaxVisual,
