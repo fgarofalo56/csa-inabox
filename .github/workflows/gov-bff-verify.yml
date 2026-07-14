@@ -97,8 +97,20 @@ jobs:
           LAW=$(az monitor log-analytics workspace list -g "$RG" --query "[0].customerId" -o tsv 2>/dev/null | tr -d '\r')
           if [ -z "$LAW" ]; then LAW=$(az monitor log-analytics workspace list --query "[?contains(name,'loom')] | [0].customerId" -o tsv 2>/dev/null | tr -d '\r'); fi
           echo "LAW=$LAW"
+          az extension add -n log-analytics -y 2>/dev/null || true
           if [ -n "$LAW" ]; then
-            az monitor log-analytics query -w "$LAW" --analytics-query "ContainerAppConsoleLogs_CL | where ContainerAppName_s == 'loom-unity' | where TimeGenerated > ago(45m) | order by TimeGenerated asc | project Log_s | take 120" -o json 2>/dev/null | python3 -c "import json,sys;[print(r.get('Log_s','')) for r in json.load(sys.stdin)]" | tail -80 || true
+            for TBL in ContainerAppConsoleLogs_CL ContainerAppConsoleLogs; do
+              echo "--- table $TBL ---"
+              az monitor log-analytics query -w "$LAW" --analytics-query "$TBL | where ContainerAppName_s == 'loom-unity' or ContainerName_s == 'loom-unity' | where TimeGenerated > ago(45m) | order by TimeGenerated asc | project Log_s | take 120" -o json 2>&1 | python3 -c "
+          import json,sys
+          raw=sys.stdin.read()
+          try:
+              rows=json.loads(raw)
+              for r in rows: print(r.get('Log_s',''))
+          except Exception:
+              print(raw[:400])
+          " | tail -80 || true
+            done
           fi
 
       - name: Probe BFF routes with a minted session
