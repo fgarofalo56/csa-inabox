@@ -1,0 +1,95 @@
+name: gov-bff-verify
+
+# Minted-session BFF verification of the Gov console's governance backends —
+# the non-interactive analog of the browser walk (the Gov MSAL sign-in needs a
+# human; this proves the same BFF routes the browser calls return REAL data).
+#
+#   • /api/catalog/metastores   → Unity Catalog path (OSS loom-unity in Gov)
+#   • /api/governance/catalog   → Purview-backed governance catalog
+#   • /api/admin/domains/purview-status → Purview wiring status (admin-gated)
+#
+# Mints the same encrypted loom_session cookie the browser carries (session
+# crypto + SESSION_SECRET from the console app's own secret store), so every
+# probe exercises the full session → BFF → Azure backend path. Fails when a
+# route reports a config gate for a backend this repo has wired (UC/Purview).
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+env:
+  RG: rg-csa-loom-admin-usgovvirginia
+  APP: loom-console
+  BASE: https://loom-console-dcmt6cqoezlgs-agg6h9e5cjamh5h2.z01.azurefd.us
+
+jobs:
+  verify:
+    name: Minted-session BFF probes (Gov)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Azure login (Gov sub) — deploy SP
+        uses: Azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_GOV_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_GOV_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_GOV_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}",
+              "activeDirectoryEndpointUrl": "https://login.microsoftonline.us",
+              "resourceManagerEndpointUrl": "https://management.usgovcloudapi.net/",
+              "sqlManagementEndpointUrl": "https://management.core.usgovcloudapi.net:8443/",
+              "galleryEndpointUrl": "https://gallery.usgovcloudapi.net/",
+              "managementEndpointUrl": "https://management.core.usgovcloudapi.net/"
+            }
+          environment: AzureUSGovernment
+
+      - name: Set Azure cloud to Gov
+        run: az cloud set --name AzureUSGovernment
+
+      - name: Fetch SESSION_SECRET (never printed)
+        run: |
+          set -euo pipefail
+          SS=$(az containerapp secret show -n "$APP" -g "$RG" --secret-name session-secret --query value -o tsv | tr -d '\r')
+          [ -n "$SS" ] || { echo "::error::session-secret unreadable"; exit 1; }
+          echo "::add-mask::$SS"
+          echo "SS=$SS" >> "$GITHUB_ENV"
+
+      - name: Probe BFF routes with a minted session
+        env:
+          OID: ${{ vars.LOOM_AUTOMATION_OID }}
+        run: |
+          set -euo pipefail
+          node - <<'EOF'
+          const crypto = require('node:crypto');
+          const S = process.env.SS, B = process.env.BASE, O = process.env.OID;
+          const K = Buffer.from(crypto.hkdfSync('sha256', Buffer.from(S, 'utf-8'), Buffer.alloc(32), Buffer.from('loom-session-v1'), 32));
+          const p = { claims: { oid: O, name: 'gov-bff-verify', email: 'verify@automation.inv', upn: 'gov-bff-verify@automation' }, exp: Math.floor(Date.now() / 1000) + 3600 };
+          const iv = crypto.randomBytes(12), c = crypto.createCipheriv('aes-256-gcm', K, iv);
+          const e = Buffer.concat([c.update(Buffer.from(JSON.stringify(p))), c.final()]);
+          const cookie = 'loom_session=' + Buffer.concat([iv, c.getAuthTag(), e]).toString('base64url');
+          const probes = [
+            ['/api/catalog/metastores', 'unity-catalog (OSS loom-unity)'],
+            ['/api/governance/catalog', 'purview governance catalog'],
+            ['/api/admin/domains/purview-status', 'purview wiring status'],
+          ];
+          (async () => {
+            let bad = 0;
+            for (const [path, label] of probes) {
+              try {
+                const r = await fetch(B + path, { headers: { cookie } });
+                const t = await r.text();
+                const head = t.slice(0, 260).replace(/\n/g, ' ');
+                console.log(`\n=== ${label} — GET ${path} -> ${r.status}\n${head}`);
+                const gated = /"gate"\s*:\s*(true|\{)|not configured|Set LOOM_(UNITY_URL|PURVIEW_ACCOUNT)/i.test(t);
+                if (r.status >= 500) { console.log(`::error::${label}: HTTP ${r.status}`); bad++; }
+                else if (gated) { console.log(`::error::${label}: still gated — ${head}`); bad++; }
+                else if (r.status === 401) { console.log(`::error::${label}: 401 — minted session rejected`); bad++; }
+                else console.log(`::notice::${label}: OK (${r.status})`);
+              } catch (x) { console.log(`::error::${label}: ${x.message}`); bad++; }
+            }
+            process.exit(bad ? 1 : 0);
+          })();
+          EOF
