@@ -4,6 +4,7 @@ import { makeStyles, tokens } from '@fluentui/react-components';
 import { AdminShell } from '@/lib/components/admin-shell';
 import { EnvConfigPane } from '@/lib/components/admin/env-config-pane';
 import { PowerBiBackendCard } from '@/lib/components/admin/power-bi-backend-card';
+import { AzureMapsCard } from '@/lib/components/admin/azure-maps-card';
 import { SectionExplainer, LearnPopover } from '@/lib/components/ui/learn-popover';
 
 const useStyles = makeStyles({
@@ -43,6 +44,7 @@ export default function AdminEnvConfigPage() {
         </SectionExplainer>
       </div>
       <PowerBiBackendCard />
+      <AzureMapsCard />
       <EnvConfigPane />
     </AdminShell>
   );

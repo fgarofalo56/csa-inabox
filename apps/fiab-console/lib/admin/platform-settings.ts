@@ -47,8 +47,33 @@ export interface PlatformSettingsDoc {
    * through to the LOOM_BI_BACKEND env var and then the 'loom-native' default.
    */
   biBackend?: BiBackendMode;
+  /**
+   * Admin-set Azure Maps account name (the account's public uniqueId / name used
+   * to prefill the geo editors and as the x-ms-client-id for the browser SDK).
+   * When unset, resolution falls through to LOOM_AZURE_MAPS_ACCOUNT /
+   * LOOM_AZURE_MAPS_CLIENT_ID. NOT a secret — the account id is public by design
+   * (the browser SDK sends it as x-ms-client-id); the credential stays server-side.
+   */
+  mapsAccount?: string;
   updatedAt?: string;
   updatedBy?: string;
+}
+
+/**
+ * Effective Azure Maps account label: runtime admin setting > server env
+ * (LOOM_AZURE_MAPS_ACCOUNT, else the AAD account uniqueId LOOM_AZURE_MAPS_CLIENT_ID).
+ * Non-sensitive — safe to serve to the client (it's the public x-ms-client-id).
+ * Best-effort: a Cosmos failure falls back to env. Empty string when nothing set.
+ */
+export async function resolveMapsAccount(): Promise<string> {
+  try {
+    const doc = await readPlatformSettings();
+    const v = (doc?.mapsAccount || '').trim();
+    if (v) return v;
+  } catch {
+    /* fall through to env */
+  }
+  return (process.env.LOOM_AZURE_MAPS_ACCOUNT || process.env.LOOM_AZURE_MAPS_CLIENT_ID || '').trim();
 }
 
 /**
@@ -156,6 +181,31 @@ export async function writeBiBackendMode(mode: BiBackendMode, who: string): Prom
     id: PLATFORM_ID,
     tenantId: PLATFORM_ID,
     biBackend: mode,
+    updatedAt: now,
+    updatedBy: who,
+  };
+  const { resource } = await c.items.upsert(doc);
+  return (resource as unknown as PlatformSettingsDoc) ?? doc;
+}
+
+/**
+ * Persist the admin-set Azure Maps account label to the singleton platform doc.
+ * Pass '' to clear (fall back to env). Callers MUST enforce the admin gate first.
+ */
+export async function writeMapsAccount(account: string, who: string): Promise<PlatformSettingsDoc> {
+  const c = await envConfigContainer();
+  const now = new Date().toISOString();
+  let existing: PlatformSettingsDoc | null = null;
+  try {
+    existing = await readPlatformSettings();
+  } catch {
+    existing = null;
+  }
+  const doc: PlatformSettingsDoc = {
+    ...(existing ?? {}),
+    id: PLATFORM_ID,
+    tenantId: PLATFORM_ID,
+    mapsAccount: account.trim() || undefined,
     updatedAt: now,
     updatedBy: who,
   };

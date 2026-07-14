@@ -27,12 +27,22 @@ export type BiBackendMode = 'loom-native' | 'powerbi';
 export interface PlatformConfig {
   biBackend: BiBackendMode;
   powerBiEnabled: boolean;
+  /** Azure Maps configured server-side (credential present) — the runtime
+   *  replacement for the client-baked NEXT_PUBLIC_LOOM_AZURE_MAPS_KEY. When true,
+   *  geo surfaces render the live basemap via the /api/maps/static proxy (no
+   *  credential in the client). */
+  mapsEnabled: boolean;
+  /** Non-secret Azure Maps account label/uniqueId — prefills the geo editors
+   *  (was NEXT_PUBLIC_LOOM_AZURE_MAPS_ACCOUNT). Empty when unset. */
+  mapsAccount: string;
 }
 
 /** Azure-native default — used while loading and on any fetch error. */
 export const DEFAULT_PLATFORM_CONFIG: PlatformConfig = {
   biBackend: 'loom-native',
   powerBiEnabled: false,
+  mapsEnabled: false,
+  mapsAccount: '',
 };
 
 let _cache: PlatformConfig | null = null;
@@ -41,7 +51,12 @@ let _inflight: Promise<PlatformConfig> | null = null;
 function coerce(d: unknown): PlatformConfig {
   const o = (d ?? {}) as Record<string, unknown>;
   const biBackend: BiBackendMode = o.biBackend === 'powerbi' ? 'powerbi' : 'loom-native';
-  return { biBackend, powerBiEnabled: biBackend === 'powerbi' };
+  return {
+    biBackend,
+    powerBiEnabled: biBackend === 'powerbi',
+    mapsEnabled: o.mapsEnabled === true,
+    mapsAccount: typeof o.mapsAccount === 'string' ? o.mapsAccount : '',
+  };
 }
 
 /** Shared, memoized fetch of GET /api/config/ui. Never rejects. */
@@ -103,4 +118,46 @@ export interface UseBiBackend {
 export function useBiBackend(): UseBiBackend {
   const { config, loading } = usePlatformConfig();
   return { biBackend: config.biBackend, powerBiEnabled: config.powerBiEnabled, loading };
+}
+
+export interface UseMapsConfig {
+  /** True once the runtime config CONFIRMS an Azure Maps credential is configured
+   *  server-side. Fail-closed: false while loading, so the vector overlay renders
+   *  first and the raster basemap appears only when Maps is really available. */
+  mapsEnabled: boolean;
+  /** Non-secret account label/uniqueId for prefilling the geo editors. */
+  mapsAccount: string;
+  loading: boolean;
+}
+
+/**
+ * The runtime Azure Maps status. Replaces every client-baked
+ * NEXT_PUBLIC_LOOM_AZURE_MAPS_KEY / _ACCOUNT read. Geo/tapestry/map editors use
+ * `mapsEnabled` to decide whether to layer the live raster basemap (fetched via
+ * the credential-free {@link mapsStaticUrl} proxy) and `mapsAccount` to prefill
+ * the account field.
+ */
+export function useMapsConfig(): UseMapsConfig {
+  const { config, loading } = usePlatformConfig();
+  return { mapsEnabled: config.mapsEnabled, mapsAccount: config.mapsAccount, loading };
+}
+
+/**
+ * Build a credential-free URL to the server-side static-raster proxy
+ * (/api/maps/static). The browser `<img src>` never carries a key/token — the
+ * proxy resolves the credential server-side. Callers pass the bbox center/zoom
+ * and size; only include this when {@link useMapsConfig}().mapsEnabled is true.
+ */
+export function mapsStaticUrl(opts: {
+  style?: string; zoom: number; lon: number; lat: number; width?: number; height?: number;
+}): string {
+  const p = new URLSearchParams({
+    style: opts.style || 'main',
+    zoom: String(Math.round(opts.zoom)),
+    lon: String(opts.lon),
+    lat: String(opts.lat),
+    width: String(Math.round(opts.width ?? 640)),
+    height: String(Math.round(opts.height ?? 360)),
+  });
+  return `/api/maps/static?${p.toString()}`;
 }

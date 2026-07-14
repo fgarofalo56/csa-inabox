@@ -320,7 +320,8 @@ export interface MapMeasure {
 export interface AzureMapsCanvasProps {
   /** BFF token route, e.g. `/api/items/map/<id>/map-token`. */
   tokenUrl: string;
-  /** Client-side subscription key fallback (NEXT_PUBLIC_LOOM_AZURE_MAPS_KEY). */
+  /** Deprecated client-side subscription-key fallback. Prefer the server-brokered
+   *  `tokenUrl` route (handles both AAD + key server-side); leave unset. */
   fallbackSubscriptionKey?: string;
   /** Parsed GeoJSON (FeatureCollection / Feature / Geometry). */
   geojson: unknown;
@@ -761,8 +762,8 @@ export function AzureMapsCanvas(props: AzureMapsCanvasProps): ReactElement {
               <MessageBarTitle>Interactive Azure Maps not configured</MessageBarTitle>
               The live map uses an Azure-native <strong>Azure Maps</strong> account. Set{' '}
               <code>{token.kind === 'gate' ? token.envVar : MAPS_ENV}=azure-maps</code> with{' '}
-              <code>LOOM_AZURE_MAPS_CLIENT_ID</code> (Entra, preferred) or <code>LOOM_AZURE_MAPS_KEY</code>{' '}
-              (or a client-side <code>NEXT_PUBLIC_LOOM_AZURE_MAPS_KEY</code>) and deploy{' '}
+              <code>LOOM_AZURE_MAPS_CLIENT_ID</code> (Entra, preferred) or <code>LOOM_AZURE_MAPS_KEY</code>,
+              then enable Azure Maps in the Loom admin console (Platform settings → Azure Maps), and deploy{' '}
               <code>{token.kind === 'gate' ? token.bicep : MAPS_BICEP}</code>. No Power BI / Fabric required.
               {token.kind === 'gate' && token.error ? ` (${token.error})` : ''} The bound features render on the
               offline vector overlay below.
