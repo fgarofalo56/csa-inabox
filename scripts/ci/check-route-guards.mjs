@@ -164,6 +164,11 @@ const ALLOWLIST = new Map([
   // env config (LOOM_SYNAPSE_*) — same shared-backend class as the allowlisted
   // /api/warehouse navigator; no per-tenant Cosmos resource read by id.
   ['apps/fiab-console/app/api/semantic-model/metric-view/route.ts', 'compile + read-only run against the shared Synapse Dedicated pool resolved by env config; no per-tenant Cosmos read'],
+  // Azure Maps static-raster PROXY: resolves the SHARED deployment Azure Maps
+  // credential (AAD token / key) server-side and streams a clamped basemap PNG.
+  // The rendered basemap is NOT item-scoped and no credential reaches the client
+  // — auth = signed-in; there is no per-tenant resource to owner-check.
+  ['apps/fiab-console/app/api/maps/static/route.ts', 'server-side Azure Maps static-basemap proxy over the shared deployment Maps account; params clamped, no credential to the client, no per-tenant Cosmos read'],
 ]);
 
 // ── Specific-per-item-TYPE routes over a SHARED Azure backend ────────────────

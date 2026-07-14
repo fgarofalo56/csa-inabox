@@ -98,10 +98,17 @@ function scan() {
 }
 
 // __BASELINE_START__  (regenerate with --update-baseline)
-// Empty: the rel-T61 codemod converted every non-streaming literal-URL client
-// /api fetch, so there is NO backlog to grandfather — the guard starts fully
-// clean and any NEW bare client /api fetch fails CI.
-const BASELINE = {};
+// Two INTENTIONAL pre-auth bare fetches (#2009), NOT convertible to clientFetch:
+// the /welcome landing probe (`/api/me`) and the Request-access POST
+// (`/api/access-requests/public`) both run BEFORE the visitor has a session, so
+// routing them through clientFetch would (wrongly) invoke its session-refresh +
+// top-level reauth navigation on an unauthenticated 401. Both call sites document
+// this inline. These are a sanctioned carve-out alongside streaming; every OTHER
+// new bare client /api fetch still fails CI (the ratchet holds at these counts).
+const BASELINE = {
+  'apps/fiab-console/lib/components/access/request-access-button.tsx': 1,
+  'apps/fiab-console/app/welcome/page.tsx': 1,
+};
 // __BASELINE_END__
 
 function main() {

@@ -50,6 +50,7 @@ import { deleteNotebook as synapseDeleteNotebook } from '@/lib/azure/synapse-art
 import { deleteIndex } from '@/lib/azure/search-index-client';
 import { deletePromptFlow } from '@/lib/azure/foundry-client';
 import { executeQuery as synapseExec, serverlessTarget } from '@/lib/azure/synapse-sql-client';
+import { escapeSqlLiteral } from '@/lib/sql/quoting';
 
 // ---------------------------------------------------------------------------
 // Public shapes
@@ -229,7 +230,7 @@ export async function teardownItemBackend(
         for (const v of views.split(',').map((x) => x.trim()).filter(Boolean)) {
           push(
             await attempt('synapse-view', `${db}.${v}`, () =>
-              synapseExec(target, `IF OBJECT_ID('${v.replace(/'/g, "''")}','V') IS NOT NULL DROP VIEW ${v};`),
+              synapseExec(target, `IF OBJECT_ID('${escapeSqlLiteral(v)}','V') IS NOT NULL DROP VIEW ${v};`),
             ),
           );
         }

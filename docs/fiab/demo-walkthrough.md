@@ -1,6 +1,6 @@
 # CSA Loom — Live Demo Walkthrough (Commercial)
 
-**Environment:** `https://csa-loom.limitlessdata.ai` — sign in with your admin account.
+**Environment:** `https://<your-console-hostname>` — sign in with your admin account.
 
 **What's pre-seeded for you (all owned by your admin identity, so you can open everything):**
 a set of **`Demo — …` workspaces**, each installed from a one-click use-case app

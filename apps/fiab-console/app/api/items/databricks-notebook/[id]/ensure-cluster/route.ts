@@ -14,15 +14,23 @@
  */
 import { NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { loadOwnedItem } from '../../../_lib/item-crud';
 import { databricksConfigGate, getCluster } from '@/lib/azure/databricks-client';
 import { ensureRunnableCluster } from '@/lib/azure/databricks-default-cluster';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function POST() {
+export async function POST(_req: Request, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
+
+  // Ensuring a runnable cluster is done in the context of THIS notebook item —
+  // verify the caller owns it before provisioning shared Databricks compute
+  // (route-guards: no getSession()-only item mutation).
+  const { id } = await ctx.params;
+  const owned = await loadOwnedItem(id, 'databricks-notebook', session.claims.oid);
+  if (!owned) return NextResponse.json({ ok: false, error: 'not found' }, { status: 404 });
 
   const cfg = databricksConfigGate();
   if (cfg) {

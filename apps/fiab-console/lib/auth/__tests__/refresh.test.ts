@@ -225,9 +225,13 @@ describe('clientFetch — sliding-session 401 recovery', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it('refresh says reauth → TOP-LEVEL redirect to /auth/sign-in, original 401 surfaced', async () => {
+  it('refresh says reauth (RETURNING user) → TOP-LEVEL redirect to /auth/sign-in, original 401 surfaced', async () => {
     const assign = vi.fn();
-    vi.stubGlobal('window', { location: { assign } });
+    vi.stubGlobal('window', { location: { assign, pathname: '/some-page' } });
+    // #2009: the reauth destination is keyed on the identity-free `loom_seen`
+    // hint cookie read from document.cookie — a browser that has signed in
+    // before keeps the seamless SSO bounce to /auth/sign-in.
+    vi.stubGlobal('document', { cookie: 'loom_seen=1' });
     const fetchMock = vi.fn(async (input: string | URL) => {
       const url = String(input);
       // Session lapsed AND the MSAL refresh token is gone → refresh 401 reauth.
@@ -242,6 +246,30 @@ describe('clientFetch — sliding-session 401 recovery', () => {
     // TOP-LEVEL navigation (never an iframe) to the BFF sign-in initiator.
     expect(assign).toHaveBeenCalledWith('/auth/sign-in');
     // original (401) + one refresh attempt (401) — NO retry of the original.
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('refresh says reauth (FIRST-TIME user, no hint) → TOP-LEVEL redirect to /welcome', async () => {
+    // The module-level `_reauthInFlight` guard (reset on every real page reload)
+    // was tripped by the returning-user test above; re-import a fresh client-fetch
+    // module so this test sees the clean pre-navigation state, mirroring reload.
+    vi.resetModules();
+    const { clientFetch: freshClientFetch } = await import('@/lib/client-fetch');
+    const assign = vi.fn();
+    vi.stubGlobal('window', { location: { assign, pathname: '/some-page' } });
+    // No `loom_seen` hint → never-authenticated visitor goes to the /welcome
+    // landing surface (Sign in + Request access), NOT straight to Entra (#2009).
+    vi.stubGlobal('document', { cookie: '' });
+    const fetchMock = vi.fn(async (input: string | URL) => {
+      const url = String(input);
+      if (url.includes('/api/auth/refresh')) return jsonResponse(401, { reauth: true });
+      return jsonResponse(401, { error: 'unauthenticated' });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const res = await freshClientFetch('/api/data');
+    expect(res.status).toBe(401);
+    expect(assign).toHaveBeenCalledWith('/welcome');
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
