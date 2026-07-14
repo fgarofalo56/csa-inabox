@@ -25,6 +25,19 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.68.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.67.0...csa-inabox-v0.68.0) (2026-07-14)
+
+
+### Features
+
+* **demo:** one-click self-serve 'Deploy Demo Environment' + fix 2 UAT functional gaps ([#2016](https://github.com/fgarofalo56/csa-inabox/issues/2016)) ([4ba3436](https://github.com/fgarofalo56/csa-inabox/commit/4ba34361fe6e5fd2191b97abd85b43cfffa967f8))
+
+
+### Bug Fixes
+
+* **demo:** self-fetch localhost:PORT not the public FD origin (hairpin fails in-container) ([#2018](https://github.com/fgarofalo56/csa-inabox/issues/2018)) ([b0edf4f](https://github.com/fgarofalo56/csa-inabox/commit/b0edf4f1ab93c4a63562ed9404643a7c6b10e833))
+* **demo:** space + retry sub-installs so the 14-app deploy doesn't trip the provision rate-limiter ([#2019](https://github.com/fgarofalo56/csa-inabox/issues/2019)) ([882f59a](https://github.com/fgarofalo56/csa-inabox/commit/882f59a69e82ff3fe1a7385c0573ab82733209ea))
+
 ## [0.67.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.66.0...csa-inabox-v0.67.0) (2026-07-14)
 
 
