@@ -48,6 +48,11 @@ regexes = [
     # (APP_PY_B64 -> secretRef 'app-py-b64', etc.) — a reference to a secret BY
     # NAME, never a secret value. Trips the generic-api-key entropy heuristic.
     '''(app-py|fabric-funcs|default-src)-b64''',
+
+    # localStorage KEY NAME for left-nav collapse state (NAV_COLLAPSE_LS_KEY in
+    # apps/fiab-console/lib/components/nav-collapse.tsx). A client-side storage
+    # key string, never a credential; trips the generic-api-key entropy heuristic.
+    '''loom\.nav\.sections\.collapsed\.v1''',
 ]
 
 paths = [

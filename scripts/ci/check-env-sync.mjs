@@ -287,6 +287,10 @@ const ALLOWLIST = new Set([
   // (NOT wired into admin-plane/main.bicep — that file is at the 256-param
   // ceiling). LOOM_EVENTGRID_TOPIC_KEY is a secret (matched by the _KEY pattern).
   'LOOM_EVENTGRID_TOPIC_ENDPOINT',  // opt-in Event Grid custom-topic endpoint (default off — direct HTTPS delivery is used)
+  'LOOM_ACCESS_REQUEST_WEBHOOK',    // opt-in best-effort Teams/Logic App incoming webhook pinged on a new sign-in access request (lib/access/signin-access-request.ts); unset = silent no-op, the /admin/access-requests queue is the source of truth
+  'LOOM_ONBOARDING_ENTRA_GROUP_NAME', // opt-in display override for the onboarding group named in the approve-request instruction (app/api/admin/access-requests/[id]/route.ts); unset = falls back to LOOM_TENANT_ADMIN_GROUP_ID — cosmetic, never a gate
+  'LOOM_SELF_BASE_URL',             // derived/ambient override for the server-side same-origin self-call base in demo-deploy (lib/apps/demo-deploy.ts); unset default = http://127.0.0.1:$PORT (the container hairpin), never a deployed literal
+  'LOOM_UPDATE_IMAGE_REGISTRY',     // opt-in registry override for the in-place update-apply image resolution (app/api/admin/updates/apply/route.ts); unset default = swap the tag on the app's CURRENT image (its own private ACR), no public-ghcr dependency
 ]);
 
 // ── Filesystem helpers (no deps) ──

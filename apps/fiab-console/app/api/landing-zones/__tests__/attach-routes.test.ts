@@ -35,7 +35,21 @@ vi.mock('@/lib/azure/attached-services-store', () => ({
   detachService: (...a: any[]) => detachMock(...a),
   listAttachedServices: async () => [],
   reconcileDay0Byo: async () => ({ seeded: 0, kinds: [], skippedExisting: 0 }),
+  // Phase-2 (#2007): the attach route resolves the registry tenant and persists
+  // best-effort integration results. Both mirror the real store's contract.
+  attachedTenantId: (s: any) => s?.claims?.tid ?? s?.claims?.oid,
+  applyIntegrationResults: async () => {},
   AttachedServiceInUseError: InUse,
+}));
+
+// Phase-2 auto-integration (#2007) — mocked so the attach happy path is hermetic.
+// The UAMI principal resolves; runAttachIntegration returns no RBAC verdict so the
+// route falls through to the honest "grant Contributor" manual action the spec pins.
+vi.mock('@/lib/clients/azure-connections-client', () => ({
+  resolveUamiPrincipalId: async () => 'uami-principal-id',
+}));
+vi.mock('@/lib/azure/attach-integration', () => ({
+  runAttachIntegration: async () => ({}),
 }));
 
 const ADX_ID = '/subscriptions/s/resourceGroups/r/providers/Microsoft.Kusto/clusters/c1';

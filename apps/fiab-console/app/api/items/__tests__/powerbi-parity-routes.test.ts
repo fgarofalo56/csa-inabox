@@ -13,6 +13,14 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 vi.mock('@/lib/auth/session', () => ({ getSession: vi.fn() }));
+// #2012: the semantic-model BI routes default to the Azure-native AAS backend and
+// honest-gate (503) when LOOM_AAS_SERVER_NAME is unset. These specs pin the opt-in
+// Power BI path, so select it explicitly via the runtime backend resolver (the
+// AAS path is covered separately). Without this the routes 503 before validation.
+vi.mock('@/lib/admin/platform-settings', async () => {
+  const actual: any = await vi.importActual('@/lib/admin/platform-settings');
+  return { ...actual, resolveBiBackendMode: async () => 'powerbi' };
+});
 vi.mock('@/lib/azure/powerbi-client', async () => {
   const actual: any = await vi.importActual('@/lib/azure/powerbi-client');
   return {
