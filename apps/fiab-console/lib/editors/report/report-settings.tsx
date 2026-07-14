@@ -66,6 +66,7 @@ import {
   ArrowDownload20Regular,
   Dismiss24Regular, Info16Regular,
 } from '@fluentui/react-icons';
+import { SqlAccessModeSection } from '@/lib/panes/sql-access-mode-section';
 
 // ── persisted shape ──────────────────────────────────────────────────────────
 //
@@ -162,6 +163,14 @@ export interface ReportSettingsDialogProps {
    * `reportSettings.setSettings` directly; changes are saved on the host's Save.
    */
   onChange: Dispatch<SetStateAction<PersistedReportSettings>>;
+  /**
+   * The report item id. When present, the dialog renders the "Data access mode"
+   * control (EH-P1-OBO #1800): run this report's Loom-native (Synapse) visual
+   * queries as the Loom service identity (default) or under the signed-in user's
+   * own Azure identity. It persists via its OWN route (PATCH …/access-mode), so
+   * it is independent of the host Save above.
+   */
+  reportId?: string;
 }
 
 /**
@@ -173,7 +182,7 @@ export interface ReportSettingsDialogProps {
  * (no-vaporware.md); Fluent v9 + Loom tokens (web3-ui.md).
  */
 export function ReportSettingsDialog({
-  open, onClose, settings, onChange,
+  open, onClose, settings, onChange, reportId,
 }: ReportSettingsDialogProps): ReactElement {
   const s = useStyles();
   const sx = settings || {};
@@ -284,6 +293,20 @@ export function ReportSettingsDialog({
                 'Show the per-visual “Export data” menu (CSV / Excel). Off hides it.',
                 sx.allowExport !== false,
                 (next) => patch({ allowExport: next }),
+              )}
+
+              {/* Data access mode (EH-P1-OBO #1800) — run this report's
+                  Loom-native (Synapse) visual queries as the service identity
+                  (default) or under the signed-in user's own Azure identity.
+                  Self-contained: persists via its own PATCH …/access-mode route,
+                  independent of the host Save. Only shown when the host passes a
+                  reportId. */}
+              {reportId && (
+                <>
+                  <Divider />
+                  <Caption1 className={s.groupLabel}>Data access</Caption1>
+                  <SqlAccessModeSection itemId={reportId} itemType="report" />
+                </>
               )}
 
               <Divider />

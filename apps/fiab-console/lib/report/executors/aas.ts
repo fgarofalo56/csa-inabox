@@ -18,13 +18,23 @@ import {
 } from '@/lib/azure/aas-client';
 import { wrapDaxWithFilters, type ReportFilterInput } from '@/lib/azure/wells-to-sql';
 import { type ResolvedReportModel } from '@/lib/azure/report-model-resolver';
+import { type UserExecutionContext } from './loom-native';
 
-/** Run the Azure Analysis Services XMLA path. */
+/**
+ * Run the Azure Analysis Services XMLA path.
+ *
+ * EH-P1-OBO (#1800): when `user` is supplied (the report's data-access mode is
+ * 'user' and the caller resolved the signed-in user's delegated AAS token via
+ * user-pool-registry), the DAX query runs under the USER's own Azure identity —
+ * XMLA accepts an AAD user bearer token; the user must have at least Read on the
+ * AAS tabular model. Absent (the default) ⇒ the service identity, unchanged.
+ */
 export async function executeAasQueryPath(
   resolved: Extract<ResolvedReportModel, { backend: 'aas' }>,
   rawQuery: string,
   visual: (DaxVisual & Record<string, unknown>) | undefined,
   filters: ReportFilterInput[] | undefined,
+  user?: UserExecutionContext,
 ): Promise<NextResponse> {
   let daxQuery = rawQuery;
   if (!daxQuery && visual) {
@@ -46,6 +56,7 @@ export async function executeAasQueryPath(
       resolved.binding.serverName,
       resolved.binding.database,
       daxQuery,
+      user?.token,
     );
     const rows = flattenAasRows(result);
     return NextResponse.json({ ok: true, rows, daxQuery });

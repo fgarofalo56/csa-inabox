@@ -177,32 +177,22 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   // ------------------------------------------------------------------
   // EH-P1-OBO (#1800) — per-user data-access mode. Default 'service' is
   // byte-identical to before. When this report was explicitly switched to
-  // "user's identity" (item.state.accessMode === 'user'):
-  //   • loom-native → resolve the caller's delegated Synapse SQL token via
-  //     user-pool-registry and execute the visual query AS THE USER;
-  //   • no delegated token → honest 403 gate naming the missing consent
-  //     (NEVER a silent downgrade to the service UAMI);
-  //   • connection / AAS backends → honest gate (user-identity execution is
-  //     not implemented for those executors yet — tracked follow-up).
+  // "user's identity" (item.state.accessMode === 'user'), resolve the caller's
+  // delegated token for the resolved backend's audience via user-pool-registry
+  // and execute the visual query AS THE USER:
+  //   • loom-native / connection → the Azure-SQL delegated token ('sql' kind);
+  //     the connection executor further honest-gates connTypes / transforms that
+  //     can't run under a delegated identity (only entra-mi Synapse can).
+  //   • aas → the Azure Analysis Services delegated token ('aas' kind); the XMLA
+  //     query runs under the user's identity.
+  //   • no delegated token → honest 403 gate naming the missing consent (NEVER a
+  //     silent downgrade to the service UAMI).
   // ------------------------------------------------------------------
   const accessMode = normalizeAccessMode((item.state as Record<string, unknown> | undefined)?.accessMode);
   let userExec: UserExecutionContext | undefined;
   if (accessMode === 'user') {
-    if (resolved.backend !== 'loom-native') {
-      return NextResponse.json(
-        {
-          ok: false,
-          code: 'USER_MODE_UNSUPPORTED_BACKEND',
-          error:
-            "This report's data-access mode is \"user's identity\", which currently supports the " +
-            'Loom-native (Synapse) data source only. Switch the report back to the service ' +
-            'identity (PATCH /access-mode { accessMode: "service" }) or bind it to a Loom-native ' +
-            'Synapse source to run visuals as your own identity.',
-        },
-        { status: 403 },
-      );
-    }
-    const resolution = await resolveUserRead('user', 'sql', { oid: session.claims.oid });
+    const kind = resolved.backend === 'aas' ? 'aas' : 'sql';
+    const resolution = await resolveUserRead('user', kind, { oid: session.claims.oid });
     if (resolution.mode === 'gate') {
       return NextResponse.json(resolution.body, { status: resolution.status });
     }
@@ -222,11 +212,11 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   // Path 4 — Get Data (a connection / file-backed report source, Azure-native).
   // ------------------------------------------------------------------
   if (resolved.backend === 'connection') {
-    return executeConnectionQueryPath(item, resolved, body.visual, filters);
+    return executeConnectionQueryPath(item, resolved, body.visual, filters, userExec);
   }
 
   // ------------------------------------------------------------------
   // Path 2 — Azure Analysis Services (advanced / back-compat)
   // ------------------------------------------------------------------
-  return executeAasQueryPath(resolved, rawQuery, body.visual, filters);
+  return executeAasQueryPath(resolved, rawQuery, body.visual, filters, userExec);
 }

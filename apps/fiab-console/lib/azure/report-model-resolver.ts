@@ -46,6 +46,7 @@ import {
   dedicatedTarget,
   serverlessTarget,
   executeQuery,
+  executeQueryAsUser,
   buildDeltaOpenRowsetSql,
   type SynapseTarget,
   type SynapseQueryParam,
@@ -454,14 +455,42 @@ export interface ConnectionPreviewResult {
   truncated: boolean;
 }
 
+/**
+ * EH-P1-OBO (#1800): the signed-in user's delegated data-plane token + oid,
+ * passed to `runVisual` when the report's data-access mode is 'user'. Defined
+ * inline (not imported from lib/report/executors) to avoid a resolver↔executor
+ * import cycle; structurally identical to executors' `UserExecutionContext`.
+ */
+export interface ConnectionUserContext {
+  token: string;
+  oid: string;
+}
+
 export interface ConnectionExecutor {
   connType: ReportConnType;
+  /**
+   * Whether this executor can run its data query under the signed-in user's own
+   * Azure identity (EH-P1-OBO). True ONLY for the entra-mi Synapse SQL-family
+   * connTypes, whose delegated Azure-SQL token + `executeQueryAsUser` path is the
+   * same proven OBO seam the Loom-native report path uses. Credentialed
+   * (connection-string / sql-password) SQL, Azure SQL (different client, no OBO
+   * variant), Postgres / Databricks / Cosmos / ADX / file sources authenticate
+   * with a fixed secret or a non-delegatable audience, so they leave this falsy
+   * and the route honest-gates user mode for them (no silent service-identity
+   * downgrade).
+   */
+  supportsUserIdentity?: boolean;
   /** Real schema → Fields pane (IDENTICAL FieldTable[] shape as today). */
   introspectFields(): Promise<FieldTable[]>;
-  /** Compile wells+filters → run → object rows + emitted query text. */
+  /**
+   * Compile wells+filters → run → object rows + emitted query text. When `user`
+   * is supplied AND `supportsUserIdentity` is true, the data query runs under the
+   * user's delegated identity; otherwise the service identity is used (unchanged).
+   */
   runVisual(
     visual: DaxVisual,
     filters: ReportFilterInput[] | undefined,
+    user?: ConnectionUserContext,
   ): Promise<ConnectionVisualResult>;
   /** Navigator preview: real SELECT/take TOP N (or list-objects). */
   preview(limit: number): Promise<ConnectionPreviewResult>;
@@ -1115,6 +1144,19 @@ interface SqlExecutorWiring {
   connType: ReportConnType;
   dialect: ReportSqlDialect;
   run: SqlRunner;
+  /**
+   * EH-P1-OBO (#1800): the delegated-identity runner, set ONLY for entra-mi
+   * Synapse connTypes. When present, `runVisual` uses it (instead of `run`) for
+   * the DATA query when the route passes a user context — the user's own Azure
+   * identity executes the read (`executeQueryAsUser`), so RLS / audit reflect
+   * them. Introspection still uses the service `run` (schema reads don't need the
+   * user's grants). Absent ⇒ the executor reports `supportsUserIdentity: false`.
+   */
+  runAsUser?: (
+    sql: string,
+    user: ConnectionUserContext,
+    params?: SynapseQueryParam[],
+  ) => Promise<{ columns: string[]; rows: Record<string, unknown>[] }>;
   objectRef: ReportObjectRef;
   /** Display name for the single Fields-pane table. */
   tableName: string;
@@ -1133,7 +1175,7 @@ interface SqlExecutorWiring {
 }
 
 function makeSqlExecutor(w: SqlExecutorWiring): ConnectionExecutor {
-  const { connType, dialect, run, objectRef, tableName, canParam } = w;
+  const { connType, dialect, run, runAsUser, objectRef, tableName, canParam } = w;
 
   async function introspectColumns(): Promise<Array<{ name: string; dataType?: string }>> {
     if (objectRef.mode === 'table') {
@@ -1160,11 +1202,12 @@ function makeSqlExecutor(w: SqlExecutorWiring): ConnectionExecutor {
 
   return {
     connType,
+    supportsUserIdentity: !!runAsUser,
     async introspectFields(): Promise<FieldTable[]> {
       const cols = await introspectColumns();
       return fieldTableFromColumns(tableName, cols);
     },
-    async runVisual(visual, filters): Promise<ConnectionVisualResult> {
+    async runVisual(visual, filters, user): Promise<ConnectionVisualResult> {
       const cols = await introspectColumns();
       const whitelist: SqlSourceColumn[] = cols.map((c) => ({
         table: tableName,
@@ -1181,7 +1224,13 @@ function makeSqlExecutor(w: SqlExecutorWiring): ConnectionExecutor {
       if (!compiled) {
         throw new Error('This visual has no fields to query yet — drop a field into a well.');
       }
-      const res = await run(compiled.sql, canParam ? compiled.parameters : undefined);
+      const params = canParam ? compiled.parameters : undefined;
+      // EH-P1-OBO: when the route passes a user context and this executor is
+      // OBO-capable (entra-mi Synapse), run the DATA query under the user's own
+      // delegated identity; otherwise the service identity (unchanged).
+      const res = user && runAsUser
+        ? await runAsUser(compiled.sql, user, params)
+        : await run(compiled.sql, params);
       return { rows: res.rows, query: compiled.sql, lang: 'sql' };
     },
     async preview(limit): Promise<ConnectionPreviewResult> {
@@ -1733,10 +1782,25 @@ export async function buildConnectionExecutor(
         }
         const run = await synapseConnRunner(conn);
         const tableName = ref.mode === 'table' ? ref.table : 'Query';
+        // EH-P1-OBO (#1800): entra-mi Synapse speaks TDS with the Azure-SQL
+        // audience — the same delegated token the user-pool-registry `sql` kind
+        // mints — so a user-identity read runs via `executeQueryAsUser` against
+        // the SAME target. Only the entra-mi auth path is delegatable (the
+        // connection-string / sql-password runners hold a fixed credential).
+        const userTarget: SynapseTarget | null =
+          conn.authMethod === 'entra-mi'
+            ? { server: conn.host || '', database: conn.database || 'master', cacheKey: `conn:synapse:${conn.id}` }
+            : null;
+        const runAsUser = userTarget
+          ? async (sql: string, user: ConnectionUserContext, params?: SynapseQueryParam[]) => {
+              const r = await executeQueryAsUser(userTarget, sql, user.token, user.oid, 60_000, params);
+              return { columns: r.columns, rows: rowsToRecords(r.columns, r.rows) };
+            }
+          : undefined;
         return {
           backend: 'connection',
           connType: conn.type,
-          executor: makeSqlExecutor({ connType: conn.type, dialect: 'synapse', run, objectRef: ref, tableName, canParam: conn.authMethod === 'entra-mi' }),
+          executor: makeSqlExecutor({ connType: conn.type, dialect: 'synapse', run, runAsUser, objectRef: ref, tableName, canParam: conn.authMethod === 'entra-mi' }),
           source,
         };
       }

@@ -31,6 +31,7 @@ import {
   PROVISIONABLE_ITEM_TYPES,
   WEAVE_SOURCEABLE_ITEM_TYPES,
 } from './item-manifest';
+import type { ItemTypeCapabilities } from './item-manifest';
 import type { ItemManifest } from './item-manifest';
 
 function toManifest(t: FabricItemType): ItemManifest {
@@ -104,10 +105,53 @@ export function listItemManifests(): ItemManifest[] {
  * hard-coded list.
  */
 export function pbiSourceableTypes(): string[] {
-  return PBI_SOURCEABLE_ITEM_TYPES.filter((s) => {
+  return typesWithCapability(PBI_SOURCEABLE_ITEM_TYPES, 'pbiSourceable');
+}
+
+/**
+ * The item-type slugs whose manifest declares `capabilities[flag]`, in the
+ * declaration order of `order`. This is the single primitive every
+ * capability-gate consumer reads (thread-actions' NOTEBOOK_ATTACHABLE /
+ * DATA_AGENT_SOURCEABLE / POWERBI_MODELABLE / PBI_SOURCEABLE), so the manifest
+ * is the one source of truth and the consumer never keeps a parallel list.
+ * `order` supplies the canonical ordering (the manifest map is catalog-order,
+ * which differs); every ordered slug must resolve to a manifest with the flag
+ * set — the manifest consistency check guarantees each ordering list only
+ * references real catalog slugs, so the filter is behavior-preserving.
+ */
+function typesWithCapability(
+  order: readonly string[],
+  flag: keyof ItemTypeCapabilities,
+): string[] {
+  return order.filter((s) => {
     const m = getItemManifest(s);
-    return !!m && m.capabilities.pbiSourceable;
+    return !!m && m.capabilities[flag];
   });
+}
+
+/**
+ * Item-type slugs whose manifest declares `capabilities.notebookAttachable` —
+ * the canonical `fromTypes` for the Weave "Analyze in a Notebook" edge.
+ */
+export function notebookAttachableTypes(): string[] {
+  return typesWithCapability(NOTEBOOK_ATTACHABLE_ITEM_TYPES, 'notebookAttachable');
+}
+
+/**
+ * Item-type slugs whose manifest declares `capabilities.dataAgentSourceable` —
+ * the canonical `fromTypes` for the Weave "Add as a Data Agent source" edge.
+ */
+export function dataAgentSourceableTypes(): string[] {
+  return typesWithCapability(DATA_AGENT_SOURCEABLE_ITEM_TYPES, 'dataAgentSourceable');
+}
+
+/**
+ * Item-type slugs whose manifest declares `capabilities.powerBiModelable` —
+ * the canonical `fromTypes` for the opt-in Weave "Build a Power BI model" and
+ * "Publish as an API" edges.
+ */
+export function powerBiModelableTypes(): string[] {
+  return typesWithCapability(POWERBI_MODELABLE_ITEM_TYPES, 'powerBiModelable');
 }
 
 export interface ManifestConsistencyReport {

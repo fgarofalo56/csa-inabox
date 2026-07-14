@@ -2,18 +2,21 @@
 
 import { clientFetch } from '@/lib/client-fetch';
 /**
- * SQL endpoint data-access mode section (F10).
+ * Data-access mode section (F10 / EH-P1-OBO #1800).
  *
- * Renders the "Data access mode" control for a SQL analytics endpoint
- * (synapse-dedicated-sql-pool / synapse-serverless-sql-pool):
- *   - Delegated (service identity)  — queries run as the Loom console service
- *     principal/UAMI. Always works; no per-user SQL provisioning.
- *   - User's identity               — queries run as the signed-in user's own
- *     Azure identity (so RLS / SUSER_NAME() / SQL audit reflect the real user).
+ * Renders the "Data access mode" control for an item whose data-plane READS can
+ * run under the signed-in user's own Azure identity (on-behalf-of) instead of
+ * the Loom service identity — the SQL analytics endpoints
+ * (synapse-dedicated-sql-pool / synapse-serverless-sql-pool) plus `report`
+ * (Loom-native Synapse visuals) and `kql-database` (ADX queries):
+ *   - Delegated (service identity)  — reads run as the Loom console service
+ *     principal/UAMI. Always works; no per-user provisioning.
+ *   - User's identity               — reads run as the signed-in user's own
+ *     Azure identity (so RLS / SUSER_NAME() / audit reflect the real user).
  *
  * Switching TO user's identity shows a one-time confirmation dialog explaining
- * the consequence and the prerequisite (the user must be provisioned in the SQL
- * endpoint). The selection is persisted via PATCH .../access-mode (Cosmos) and
+ * the consequence and the prerequisite (the user must be provisioned in the
+ * backend). The selection is persisted via PATCH .../access-mode (Cosmos) and
  * re-read on mount, so it survives reload. Real network calls only — no mock
  * state; on failure the radio snaps back and a MessageBar shows the error.
  */
@@ -27,9 +30,69 @@ import {
 
 export type SqlAccessMode = 'service' | 'user';
 
+/** Item types whose editor exposes this control (⊆ USER_ACCESS_MODE_ITEM_TYPES). */
+export type AccessModeItemType =
+  | 'synapse-dedicated-sql-pool'
+  | 'synapse-serverless-sql-pool'
+  | 'report'
+  | 'kql-database';
+
 interface Props {
   itemId: string;
-  itemType: 'synapse-dedicated-sql-pool' | 'synapse-serverless-sql-pool';
+  itemType: AccessModeItemType;
+}
+
+/** Per-item-type copy so the same control reads correctly on each surface. */
+function copyFor(itemType: AccessModeItemType): {
+  noun: string;
+  description: string;
+  userHint: string;
+  dialogPrereq: string;
+} {
+  switch (itemType) {
+    case 'report':
+      return {
+        noun: 'report',
+        description:
+          'Controls which Azure identity executes this report’s visual queries against its ' +
+          'Loom-native (Synapse) data source.',
+        userHint:
+          'Visual queries run as your own signed-in Azure identity, so row-level security and the ' +
+          'SQL audit log reflect you. Your account must be provisioned in the report’s Synapse source. ' +
+          'Applies to the Loom-native (Synapse) and delegatable Synapse-connection sources; other ' +
+          'sources return an honest message.',
+        dialogPrereq:
+          'Your Azure account must be a contained database user (dedicated pool) or hold the required ' +
+          'Storage access (serverless OPENROWSET) on this report’s Synapse source. If your SQL token ' +
+          'has expired, sign out and sign back in.',
+      };
+    case 'kql-database':
+      return {
+        noun: 'KQL database',
+        description:
+          'Controls which Azure identity executes queries against this KQL database (Azure Data Explorer).',
+        userHint:
+          'Queries run as your own signed-in Azure identity, so ADX row-level security and audit ' +
+          'reflect you. Your account must hold a database principal (Viewer or higher) on the target ' +
+          'ADX database.',
+        dialogPrereq:
+          'Your Azure account must be a database principal (Viewer or higher) on this ADX database, and ' +
+          'the Loom app registration must have the Azure Data Explorer delegated permission with admin ' +
+          'consent. If your token has expired, sign out and sign back in.',
+      };
+    default:
+      return {
+        noun: 'SQL endpoint',
+        description: 'Controls which Azure identity executes queries against this SQL endpoint.',
+        userHint:
+          'Queries run as your own signed-in Azure identity, so row-level security, SUSER_NAME() and the ' +
+          'SQL audit log reflect you. Your account must be provisioned in the SQL endpoint.',
+        dialogPrereq:
+          'Your Azure account must be a contained database user (Dedicated pool) or hold the required ' +
+          'Storage access (Serverless OPENROWSET) on this workspace. If your SQL token has expired, sign ' +
+          'out and sign back in.',
+      };
+  }
 }
 
 const useStyles = makeStyles({
@@ -50,6 +113,7 @@ const useStyles = makeStyles({
 
 export function SqlAccessModeSection({ itemId, itemType }: Props) {
   const s = useStyles();
+  const copy = copyFor(itemType);
   const [mode, setMode] = useState<SqlAccessMode>('service');
   const [upn, setUpn] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
@@ -116,20 +180,15 @@ export function SqlAccessModeSection({ itemId, itemType }: Props) {
   return (
     <div className={s.section}>
       <Body1Strong>Data access mode</Body1Strong>
-      <Body1 className={s.desc}>
-        Controls which Azure identity executes queries against this SQL endpoint.
-      </Body1>
+      <Body1 className={s.desc}>{copy.description}</Body1>
       <RadioGroup className={s.radioGroup} value={mode} onChange={onRadioChange} disabled={saving}>
         <Radio value="service" label="Delegated (service identity)" />
         <Caption1 className={s.hint}>
           Queries run as the Loom console service identity (managed identity). The console identity must have
-          access to the SQL endpoint. This is the default and always works.
+          access to the {copy.noun}. This is the default and always works.
         </Caption1>
         <Radio value="user" label="User's identity" />
-        <Caption1 className={s.hint}>
-          Queries run as your own signed-in Azure identity, so row-level security, SUSER_NAME() and the SQL audit
-          log reflect you. Your account must be provisioned in the SQL endpoint.
-        </Caption1>
+        <Caption1 className={s.hint}>{copy.userHint}</Caption1>
       </RadioGroup>
 
       {saving && <Spinner size="tiny" label="Saving…" labelPosition="after" />}
@@ -158,10 +217,8 @@ export function SqlAccessModeSection({ itemId, itemType }: Props) {
                   <strong>{upn ?? 'your signed-in account'}</strong> instead of the Loom service identity.
                 </Body1>
                 <Body1 className={s.desc}>
-                  Your Azure account must be a contained database user (Dedicated pool) or hold the required
-                  Storage access (Serverless OPENROWSET) on this workspace. If your SQL token has expired, sign
-                  out and sign back in. This is a one-time choice — it persists and applies to all future queries
-                  from this endpoint until you switch back.
+                  {copy.dialogPrereq} This is a one-time choice — it persists and applies to all future queries
+                  from this {copy.noun} until you switch back.
                 </Body1>
               </div>
             </DialogContent>

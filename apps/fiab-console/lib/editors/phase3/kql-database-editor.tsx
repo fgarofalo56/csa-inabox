@@ -27,9 +27,10 @@ import {
   MessageBar, MessageBarBody, MessageBarTitle, MessageBarActions,
   Tooltip,
   Dialog, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
-  Select, Textarea, Switch,
+  Select, Textarea, Switch, Divider,
   tokens,
 } from '@fluentui/react-components';
+import { SqlAccessModeSection } from '@/lib/panes/sql-access-mode-section';
 import {
   DocumentTable20Regular, Play20Regular,
   Add20Regular, Delete20Regular, ArrowSync20Regular,
@@ -2267,6 +2268,16 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
                     database={info?.database}
                     tables={(info?.tables ?? []).map((t) => t.name)}
                   />
+                  {/* Data access mode (EH-P1-OBO #1800) — run KQL queries as the
+                      Loom service identity (default) or under the signed-in
+                      user's own ADX identity. Persists via its own PATCH
+                      …/access-mode route; the query route honors it. */}
+                  <div style={{ marginTop: tokens.spacingVerticalL }}>
+                    <Divider />
+                    <div style={{ marginTop: tokens.spacingVerticalL }}>
+                      <SqlAccessModeSection itemId={id} itemType="kql-database" />
+                    </div>
+                  </div>
                 </DialogContent>
                 <DialogActions>
                   <Button appearance="secondary" onClick={() => setRbacOpen(false)}>Close</Button>

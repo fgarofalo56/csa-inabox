@@ -37,6 +37,10 @@ describe('EH-P1-OBO per-user data-plane path — real wiring', () => {
     expect(src).toMatch(/NO_USER_STORAGE_TOKEN/);
     expect(src).toMatch(/NO_USER_KUSTO_TOKEN/);
     expect(src).toMatch(/NO_USER_SQL_TOKEN/);
+    // EH-P1-OBO 2nd half: the Azure Analysis Services pool (store-less — minted
+    // fresh via MSAL each request) + its honest gate.
+    expect(src).toMatch(/NO_USER_AAS_TOKEN/);
+    expect(src).toMatch(/LOOM_AAS_SCOPE/);
   });
 
   it('the new token stores mirror the sibling stores (encrypted, best-effort)', () => {
@@ -53,15 +57,18 @@ describe('EH-P1-OBO per-user data-plane path — real wiring', () => {
     }
   });
 
-  it('report /query branches on state.accessMode via the registry (honest gate, no downgrade)', () => {
+  it('report /query branches on state.accessMode via the registry and threads userExec to ALL backends', () => {
     const src = read('app/api/items/report/[id]/query/route.ts');
     expect(src).toMatch(/normalizeAccessMode/);
     expect(src).toMatch(/resolveUserRead/);
-    // Gate paths: missing token (registry body) + unsupported backend.
+    // Honest gate on a missing delegated token (registry body) — no downgrade.
     expect(src).toMatch(/resolution\.mode === 'gate'/);
-    expect(src).toMatch(/USER_MODE_UNSUPPORTED_BACKEND/);
-    // The user context reaches the real executor.
+    // Per-backend audience: AAS uses the 'aas' pool, everything else the 'sql' pool.
+    expect(src).toMatch(/resolved\.backend === 'aas' \? 'aas' : 'sql'/);
+    // The user context reaches EVERY real executor (2nd half: connection + AAS too).
     expect(src).toMatch(/executeLoomNativeQueryPath\(item, resolved, body\.visual, filters, compileOpts, userExec\)/);
+    expect(src).toMatch(/executeConnectionQueryPath\(item, resolved, body\.visual, filters, userExec\)/);
+    expect(src).toMatch(/executeAasQueryPath\(resolved, rawQuery, body\.visual, filters, userExec\)/);
   });
 
   it('loom-native executor runs the user path via executeQueryAsUser, bypassing shared cache/accel', () => {
@@ -72,6 +79,34 @@ describe('EH-P1-OBO per-user data-plane path — real wiring', () => {
     const userBlock = src.slice(src.indexOf('if (user) {'), src.indexOf('QUERY ACCELERATION'));
     expect(userBlock).toContain('executeQueryAsUser');
     expect(userBlock).not.toContain('runAcceleratedQuery');
+  });
+
+  it('AAS executor runs the user path with the delegated AAS token (no mock)', () => {
+    const src = read('lib/report/executors/aas.ts');
+    expect(src).toMatch(/UserExecutionContext/);
+    // The user's delegated AAS token is passed straight into the real XMLA call.
+    expect(src).toMatch(/user\?\.token/);
+    expect(src).toMatch(/executeAasQuery\(/);
+    const client = read('lib/azure/aas-client.ts');
+    // executeAasQuery honors the user token over the service credential.
+    expect(client).toMatch(/userToken \|\| \(await getAasToken\(\)\)/);
+  });
+
+  it('connection executor runs entra-mi Synapse as the user and honest-gates the rest', () => {
+    const exec = read('lib/report/executors/connection.ts');
+    expect(exec).toMatch(/UserExecutionContext/);
+    // Unsupported connType / transform → honest structured gate, never a silent
+    // service-identity read.
+    expect(exec).toMatch(/supportsUserIdentity/);
+    expect(exec).toMatch(/USER_MODE_UNSUPPORTED_CONNECTION/);
+    expect(exec).toMatch(/USER_MODE_TRANSFORM_UNSUPPORTED/);
+    // Supported path runs the real visual query under the user context.
+    expect(exec).toMatch(/runVisual\(visual, filters, user\)/);
+    // The resolver marks only entra-mi Synapse delegatable and wires the real
+    // executeQueryAsUser OBO seam.
+    const resolver = read('lib/azure/report-model-resolver.ts');
+    expect(resolver).toMatch(/supportsUserIdentity: !!runAsUser/);
+    expect(resolver).toMatch(/executeQueryAsUser\(userTarget, sql, user\.token, user\.oid/);
   });
 
   it('kql-database /query branches on state.accessMode and threads the user token to ADX', () => {

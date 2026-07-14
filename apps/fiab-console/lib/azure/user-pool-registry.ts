@@ -30,7 +30,7 @@
 import type { SqlAccessMode } from './sql-access-mode';
 
 /** Data-plane resource kinds with a per-user delegated-token pool. */
-export type UserDataPlaneKind = 'sql' | 'storage' | 'kusto' | 'arm' | 'powerbi';
+export type UserDataPlaneKind = 'sql' | 'storage' | 'kusto' | 'arm' | 'powerbi' | 'aas';
 
 /** Context for a per-user token resolution. `clusterUri` is kusto-only. */
 export interface UserTokenContext {
@@ -46,6 +46,7 @@ export const USER_TOKEN_GATE_CODE: Record<UserDataPlaneKind, string> = {
   kusto: 'NO_USER_KUSTO_TOKEN',
   arm: 'NO_USER_ARM_TOKEN',
   powerbi: 'NO_USER_PBI_TOKEN',
+  aas: 'NO_USER_AAS_TOKEN',
 };
 
 /**
@@ -84,6 +85,14 @@ export function userTokenRemediation(kind: UserDataPlaneKind): string {
         'you. Sign out and sign back in, then retry. If it still fails, your admin must grant ' +
         'admin consent for the Azure Service Management delegated permission (user_impersonation) ' +
         'on the Loom app registration.'
+      );
+    case 'aas':
+      return (
+        "User's identity mode is on, but no valid Azure Analysis Services token is available for " +
+        'you. Sign out and sign back in, then retry. If it still fails, your admin must add the ' +
+        'Azure Analysis Services delegated permission (user_impersonation on ' +
+        'https://*.asazure.windows.net) to the Loom app registration and grant admin consent — and ' +
+        'your account needs at least Read access on the target AAS tabular model.'
       );
     case 'powerbi':
     default:
@@ -130,6 +139,12 @@ async function scopeFor(kind: UserDataPlaneKind, ctx: UserTokenContext): Promise
       const { getPbiScope } = await import('./cloud-endpoints');
       return getPbiScope();
     }
+    case 'aas':
+      // Azure Analysis Services XMLA audience. Reuses the same env the AAS write
+      // path uses (LOOM_AAS_SCOPE) so no new env var is introduced; `.default`
+      // lets MSAL silent-acquire mint the delegated token from the statically
+      // consented AAS permission.
+      return process.env.LOOM_AAS_SCOPE || 'https://*.asazure.windows.net/.default';
     default:
       return null;
   }
@@ -150,6 +165,11 @@ async function readCached(kind: UserDataPlaneKind, ctx: UserTokenContext): Promi
       return (await import('./user-token-store')).getUserArmToken(ctx.oid);
     case 'powerbi':
       return (await import('./pbi-user-token-store')).getPbiUserToken(ctx.oid);
+    case 'aas':
+      // Store-less pool: AAS delegated tokens are minted fresh via MSAL
+      // silent-acquire each request (no per-user AAS token cache store). Returns
+      // null here so getUserDataPlaneToken proceeds to silentAcquire.
+      return null;
     default:
       return null;
   }
