@@ -52,7 +52,17 @@ jobs:
       - name: Fetch SESSION_SECRET (never printed)
         run: |
           set -euo pipefail
-          SS=$(az containerapp secret show -n "$APP" -g "$RG" --secret-name session-secret --query value -o tsv | tr -d '\r')
+          # `az containerapp secret show` returns the RAW value for inline secrets
+          # but the KV URI for keyvaultref-backed secrets — resolve those via KV
+          # (the 401s on the first run were the cookie minted with the URI string).
+          J=$(az containerapp secret show -n "$APP" -g "$RG" --secret-name session-secret -o json)
+          SS=$(echo "$J" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('value') or '')")
+          KVURL=$(echo "$J" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('keyVaultUrl') or '')")
+          if [ -z "$SS" ] && [ -n "$KVURL" ]; then
+            echo "session-secret is a keyvaultref — resolving via Key Vault"
+            SS=$(az keyvault secret show --id "$KVURL" --query value -o tsv | tr -d '\r')
+          fi
+          case "$SS" in https://*) KVURL="$SS"; echo "value IS a KV URI — resolving"; SS=$(az keyvault secret show --id "$KVURL" --query value -o tsv | tr -d '\r');; esac
           [ -n "$SS" ] || { echo "::error::session-secret unreadable"; exit 1; }
           echo "::add-mask::$SS"
           echo "SS=$SS" >> "$GITHUB_ENV"
