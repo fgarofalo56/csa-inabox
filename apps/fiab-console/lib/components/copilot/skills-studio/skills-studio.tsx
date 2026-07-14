@@ -32,6 +32,7 @@ import {
 import {
   Add20Regular, Edit20Regular, Delete20Regular, Copy20Regular,
   Sparkle24Regular, Wrench20Regular, Search20Regular, BrainCircuit24Regular,
+  Lightbulb24Regular, Checkmark20Regular, Dismiss20Regular,
 } from '@fluentui/react-icons';
 import { EmptyState } from '@/lib/components/empty-state';
 
@@ -61,6 +62,21 @@ interface SkillFormState {
   toolNames: string;  // comma-separated
   mcpToolPrefix: string;
   category: string;
+}
+
+// A learner-drafted SUGGESTED skill (mirrors /api/copilot/skills/suggested).
+interface SuggestedSkill {
+  id: string;
+  name: string;
+  whenToUse: string;
+  guidance: string;
+  toolNames: string[];
+  panes: string[];
+  mcpToolPrefix?: string;
+  category?: string;
+  tags?: string[];
+  proposedFrom?: { keywords: string[]; sampleCount: number; pane?: string };
+  proposedAt?: string;
 }
 
 const EMPTY_FORM: SkillFormState = {
@@ -128,6 +144,25 @@ const useStyles = makeStyles({
   loadingRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, padding: tokens.spacingVerticalL },
   form: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL, marginTop: tokens.spacingVerticalM },
   formGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: tokens.spacingHorizontalL },
+  // Suggested section
+  section: {
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM,
+    padding: tokens.spacingHorizontalL, borderRadius: tokens.borderRadiusLarge,
+    border: `${tokens.strokeWidthThin} solid ${tokens.colorNeutralStroke2}`,
+    backgroundColor: tokens.colorNeutralBackground2,
+  },
+  sectionHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM, flexWrap: 'wrap' },
+  sectionIcon: {
+    flexShrink: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+    width: '40px', height: '40px', borderRadius: tokens.borderRadiusLarge,
+    color: tokens.colorNeutralForegroundOnBrand,
+    backgroundImage: `linear-gradient(135deg, ${tokens.colorBrandBackground2}, ${tokens.colorBrandBackground})`,
+  },
+  sectionText: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS, flex: 1, minWidth: '240px' },
+  cardGuidance: {
+    color: tokens.colorNeutralForeground3,
+    display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden',
+  },
 });
 
 // Category → header/card icon (web3-ui: every card carries a section icon).
@@ -137,12 +172,15 @@ function iconForSkill(skill: Skill) {
 }
 
 function SkillFormDialog({
-  open, onOpenChange, initial, editingId, onSaved,
+  open, onOpenChange, initial, editingId, suggestedId, onSaved,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   initial: SkillFormState;
   editingId: string | null;
+  /** When set, the dialog PUBLISHES a learner suggestion (promote with edits)
+   *  instead of creating/editing a custom skill. */
+  suggestedId?: string | null;
   onSaved: () => void;
 }) {
   const s = useStyles();
@@ -167,11 +205,18 @@ function SkillFormDialog({
       category: form.category.trim() || 'Custom',
     };
     try {
-      const url = editingId ? `/api/copilot/skills/${encodeURIComponent(editingId)}` : '/api/copilot/skills';
+      // Promote a suggestion (POST with edits) vs create (POST) vs edit (PUT).
+      const url = suggestedId
+        ? `/api/copilot/skills/suggested/${encodeURIComponent(suggestedId)}`
+        : editingId
+          ? `/api/copilot/skills/${encodeURIComponent(editingId)}`
+          : '/api/copilot/skills';
+      const method = suggestedId ? 'POST' : editingId ? 'PUT' : 'POST';
+      const body = suggestedId ? { action: 'promote', edits: payload } : payload;
       const r = await clientFetch(url, {
-        method: editingId ? 'PUT' : 'POST',
+        method,
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(payload),
+        body: JSON.stringify(body),
       });
       const j = await r.json();
       if (!j.ok) { setError(j.error || `HTTP ${r.status}`); return; }
@@ -180,13 +225,13 @@ function SkillFormDialog({
     } catch (e: any) {
       setError(e?.message || String(e));
     } finally { setSaving(false); }
-  }, [form, editingId, onOpenChange, onSaved]);
+  }, [form, editingId, suggestedId, onOpenChange, onSaved]);
 
   return (
     <Dialog open={open} onOpenChange={(_, d) => onOpenChange(d.open)}>
       <DialogSurface>
         <DialogBody>
-          <DialogTitle>{editingId ? 'Edit skill' : 'New skill'}</DialogTitle>
+          <DialogTitle>{suggestedId ? 'Review & publish suggestion' : editingId ? 'Edit skill' : 'New skill'}</DialogTitle>
           <DialogContent>
             <div className={s.form}>
               <Field label="Name" required hint="Display name for this skill.">
@@ -248,7 +293,7 @@ function SkillFormDialog({
               onClick={() => void save()}
               disabled={saving || !form.name.trim() || !form.guidance.trim() || !form.panes.trim()}
             >
-              {saving ? 'Saving…' : editingId ? 'Save changes' : 'Create skill'}
+              {saving ? 'Saving…' : suggestedId ? 'Publish skill' : editingId ? 'Save changes' : 'Create skill'}
             </Button>
           </DialogActions>
         </DialogBody>
@@ -268,7 +313,13 @@ export function SkillsStudio() {
   // Builder dialog
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [reviewingId, setReviewingId] = useState<string | null>(null); // CTS-11 promote flow
   const [formInitial, setFormInitial] = useState<SkillFormState>(EMPTY_FORM);
+  // CTS-11 — learner-suggested skills (admin-only review queue). `isAdmin` is
+  // derived from whether the suggested route answered (a 403 => hide the section).
+  const [suggested, setSuggested] = useState<SuggestedSkill[]>([]);
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [suggestBusyId, setSuggestBusyId] = useState<string | null>(null);
   // Sandbox
   const [sandboxPane, setSandboxPane] = useState('');
   const [sandboxActive, setSandboxActive] = useState<string[] | null>(null);
@@ -286,7 +337,54 @@ export function SkillsStudio() {
     } finally { setLoading(false); }
   }, []);
 
-  useEffect(() => { void load(); }, [load]);
+  // CTS-11 — load the admin-only suggestion queue. A 403 (non-admin) simply
+  // leaves isAdmin=false so the whole section is hidden; any other error hides it
+  // too (best-effort — it never blocks the catalog).
+  const loadSuggested = useCallback(async () => {
+    try {
+      const r = await clientFetch('/api/copilot/skills/suggested');
+      if (r.status === 403 || r.status === 401) { setIsAdmin(false); setSuggested([]); return; }
+      const j = await r.json();
+      if (!j.ok) { setIsAdmin(false); setSuggested([]); return; }
+      setIsAdmin(true);
+      setSuggested(Array.isArray(j.suggested) ? j.suggested : []);
+    } catch {
+      setIsAdmin(false); setSuggested([]);
+    }
+  }, []);
+
+  useEffect(() => { void load(); void loadSuggested(); }, [load, loadSuggested]);
+
+  const dismissSuggestion = useCallback(async (sug: SuggestedSkill) => {
+    setSuggestBusyId(sug.id); setRowError(null);
+    try {
+      const r = await clientFetch(`/api/copilot/skills/suggested/${encodeURIComponent(sug.id)}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ action: 'dismiss' }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setRowError(j.error || `HTTP ${r.status}`); return; }
+      await loadSuggested();
+    } catch (e: any) {
+      setRowError(e?.message || String(e));
+    } finally { setSuggestBusyId(null); }
+  }, [loadSuggested]);
+
+  const reviewSuggestion = useCallback((sug: SuggestedSkill) => {
+    setEditingId(null);
+    setReviewingId(sug.id);
+    setFormInitial({
+      name: sug.name,
+      whenToUse: sug.whenToUse,
+      guidance: sug.guidance,
+      panes: (sug.panes || []).join(', '),
+      toolNames: (sug.toolNames || []).join(', '),
+      mcpToolPrefix: sug.mcpToolPrefix || '',
+      category: 'Custom',
+    });
+    setDialogOpen(true);
+  }, []);
 
   const toggle = useCallback(async (skill: Skill, enabled: boolean) => {
     setBusyId(skill.id); setRowError(null);
@@ -329,9 +427,10 @@ export function SkillsStudio() {
     } finally { setBusyId(null); }
   }, [load]);
 
-  const openNew = () => { setEditingId(null); setFormInitial(EMPTY_FORM); setDialogOpen(true); };
+  const openNew = () => { setEditingId(null); setReviewingId(null); setFormInitial(EMPTY_FORM); setDialogOpen(true); };
   const openEdit = (skill: Skill) => {
     setEditingId(skill.id);
+    setReviewingId(null);
     setFormInitial({
       name: skill.name,
       whenToUse: skill.whenToUse,
@@ -416,6 +515,86 @@ export function SkillsStudio() {
           )
         )}
       </div>
+
+      {/* CTS-11 — learner-suggested skills (admin-only review queue) */}
+      {isAdmin && (
+        <div className={s.section}>
+          <div className={s.sectionHead}>
+            <span className={s.sectionIcon} aria-hidden><Lightbulb24Regular /></span>
+            <div className={s.sectionText}>
+              <Subtitle2>Suggested by usage</Subtitle2>
+              <Caption1 className={s.hint}>
+                Draft skills the learner proposed from recurring Copilot usage. Nothing is active until
+                you review and publish it — edit before publishing, or dismiss.
+              </Caption1>
+            </div>
+          </div>
+          {suggested.length === 0 ? (
+            <EmptyState
+              icon={<Lightbulb24Regular />}
+              title="No suggestions yet"
+              body="As people use Copilot, the learner spots recurring patterns no skill covers and drafts candidates here for your review."
+            />
+          ) : (
+            <div className={s.grid}>
+              {suggested.map((sug) => (
+                <div key={sug.id} className={s.card}>
+                  <div className={s.cardHead}>
+                    <span className={s.cardIcon}><Lightbulb24Regular /></span>
+                    <div className={s.cardTitleCol}>
+                      <div className={s.cardTitleRow}>
+                        <Text weight="semibold" className={s.cardName}>{sug.name}</Text>
+                        <Badge appearance="tint" color="warning" size="small">Suggested</Badge>
+                      </div>
+                      {sug.whenToUse && <Caption1 className={s.hint}>{sug.whenToUse}</Caption1>}
+                    </div>
+                  </div>
+
+                  <Body1 className={s.cardGuidance}>{sug.guidance}</Body1>
+
+                  <div className={s.badgeRow}>
+                    {(sug.panes || []).map((p) => (
+                      <Badge key={p} appearance="outline" color="subtle" size="small">{p}</Badge>
+                    ))}
+                    {sug.proposedFrom && (
+                      <Badge appearance="tint" color="informative" size="small">
+                        {sug.proposedFrom.sampleCount} sample{sug.proposedFrom.sampleCount === 1 ? '' : 's'}
+                      </Badge>
+                    )}
+                  </div>
+                  {sug.proposedFrom?.keywords && sug.proposedFrom.keywords.length > 0 && (
+                    <Caption1 className={s.hint}>
+                      Keywords: {sug.proposedFrom.keywords.join(', ')}
+                    </Caption1>
+                  )}
+
+                  <div className={s.cardFoot}>
+                    <div className={s.footSpacer} />
+                    <Button
+                      size="small"
+                      icon={<Dismiss20Regular />}
+                      appearance="subtle"
+                      onClick={() => void dismissSuggestion(sug)}
+                      disabled={suggestBusyId === sug.id}
+                    >
+                      Dismiss
+                    </Button>
+                    <Button
+                      size="small"
+                      appearance="primary"
+                      icon={<Checkmark20Regular />}
+                      onClick={() => reviewSuggestion(sug)}
+                      disabled={suggestBusyId === sug.id}
+                    >
+                      Review &amp; publish
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Toolbar */}
       <div className={s.toolbar}>
@@ -531,10 +710,11 @@ export function SkillsStudio() {
 
       <SkillFormDialog
         open={dialogOpen}
-        onOpenChange={setDialogOpen}
+        onOpenChange={(o) => { setDialogOpen(o); if (!o) setReviewingId(null); }}
         initial={formInitial}
         editingId={editingId}
-        onSaved={load}
+        suggestedId={reviewingId}
+        onSaved={() => { void load(); if (reviewingId) void loadSuggested(); }}
       />
     </div>
   );

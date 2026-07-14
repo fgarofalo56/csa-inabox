@@ -250,6 +250,14 @@ var loomContainers = [
   // ensure() remains the hotfix fallback. Azure-native — no Fabric dependency.
   { name: 'copilot-skills',        partitionKey: '/scope' }
   { name: 'copilot-skill-states',  partitionKey: '/userKey' }
+  // CTS-11 — Copilot skill USAGE telemetry. One lightweight, redacted row per
+  // Copilot turn (prompt sample + active-skill names + pane), PK /tenantId so the
+  // per-tenant learner scan hits a single physical partition. TTL-enabled with a
+  // 90-day container defaultTtl (7776000s) so the rolling telemetry window
+  // self-evicts. The skill self-evolution learner reads it to draft SUGGESTED
+  // skills (admin-reviewed, never auto-published). createIfNotExists in
+  // cosmos-client.ts ensure() remains the hotfix fallback. Azure-native.
+  { name: 'copilot-skill-usage',   partitionKey: '/tenantId', ttl: 7776000 }
 ]
 
 resource loomDb 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases@2024-12-01-preview' = {

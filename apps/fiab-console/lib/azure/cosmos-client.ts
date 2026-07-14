@@ -293,6 +293,15 @@ let _signinAccessRequests: Container | null = null;
 // the lazy call is the hotfix fallback. Azure-native (no Fabric dependency).
 let _copilotSkills: Container | null = null;
 let _copilotSkillStates: Container | null = null;
+// CTS-11 — Copilot skill USAGE telemetry. One lightweight row per Copilot turn
+// (redacted prompt sample + the active-skill names + pane), PK /tenantId so the
+// per-tenant learner scan (listRecentUsage) hits a single physical partition.
+// TTL-enabled with a container defaultTtl of 90 days (7776000s) so the ledger
+// self-evicts and never grows unbounded — usage telemetry is a rolling window,
+// not a permanent record. Created lazily (createIfNotExists) here AND
+// ARM-provisioned in cosmos.bicep's loomContainers — the lazy call is the
+// hotfix fallback. Azure-native — no Fabric dependency.
+let _copilotSkillUsage: Container | null = null;
 let _ensured = false;
 
 /**
@@ -936,6 +945,16 @@ async function ensure() {
   // calls are the hotfix fallback. Azure-native — no Fabric dependency.
   _copilotSkills = await mk('copilot-skills', '/scope');
   _copilotSkillStates = await mk('copilot-skill-states', '/userKey');
+  // CTS-11 — Copilot skill usage telemetry. PK /tenantId; TTL-enabled with a
+  // 90-day container defaultTtl so rows self-evict. Distinct createIfNotExists
+  // (not `mk`) because it must set defaultTtl. ARM-provisioned in cosmos.bicep's
+  // loomContainers; this createIfNotExists is the hotfix fallback.
+  const { container: skillUsage } = await database.containers.createIfNotExists({
+    id: 'copilot-skill-usage',
+    partitionKey: { paths: ['/tenantId'] },
+    defaultTtl: 7776000, // 90 days = 90 * 24 * 3600 — usage telemetry self-evicts
+  });
+  _copilotSkillUsage = skillUsage;
   _ensured = true;
 }
 
@@ -1029,6 +1048,8 @@ export async function sparkWarmLeasesContainer(): Promise<Container> { await ens
 export async function copilotSkillsContainer(): Promise<Container> { await ensure(); return _copilotSkills!; }
 /** CTS-07 — per-user skill toggle overrides + tenant-default overlay, PK /userKey. */
 export async function copilotSkillStatesContainer(): Promise<Container> { await ensure(); return _copilotSkillStates!; }
+/** CTS-11 — Copilot skill usage telemetry (redacted per-turn rows, TTL 90d), PK /tenantId. */
+export async function copilotSkillUsageContainer(): Promise<Container> { await ensure(); return _copilotSkillUsage!; }
 
 // Foundation admin containers (shared cloud-endpoints resolver task).
 /** Admin Workspace Catalog — one row per Loom-managed workspace, PK /tenantId. */
@@ -1195,6 +1216,7 @@ const KNOWN_CONTAINER_IDS = [
   'attached-services',
   'landing-zones',
   'copilot-skills', 'copilot-skill-states',
+  'copilot-skill-usage',
 ];
 
 /** List all Loom containers with their current throughput shape.
