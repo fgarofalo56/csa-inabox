@@ -91,6 +91,15 @@ jobs:
           az containerapp show -n loom-unity -g "$RG" --query "properties.template.{volumes:volumes,mounts:containers[0].volumeMounts,image:containers[0].image}" -o json || true
           echo "--- system log stream (kind system) ---"
           az containerapp logs show -n loom-unity -g "$RG" --type system --tail 40 --format text 2>/dev/null | tail -40 || true
+          echo "--- current image on the app ---"
+          az containerapp show -n loom-unity -g "$RG" --query properties.template.containers[0].image -o tsv || true
+          echo "--- crash stack from Log Analytics (last 45 min) ---"
+          LAW=$(az monitor log-analytics workspace list -g "$RG" --query "[0].customerId" -o tsv 2>/dev/null | tr -d '\r')
+          if [ -z "$LAW" ]; then LAW=$(az monitor log-analytics workspace list --query "[?contains(name,'loom')] | [0].customerId" -o tsv 2>/dev/null | tr -d '\r'); fi
+          echo "LAW=$LAW"
+          if [ -n "$LAW" ]; then
+            az monitor log-analytics query -w "$LAW" --analytics-query "ContainerAppConsoleLogs_CL | where ContainerAppName_s == 'loom-unity' | where TimeGenerated > ago(45m) | order by TimeGenerated asc | project Log_s | take 120" -o json 2>/dev/null | python3 -c "import json,sys;[print(r.get('Log_s','')) for r in json.load(sys.stdin)]" | tail -80 || true
+          fi
 
       - name: Probe BFF routes with a minted session
         env:
