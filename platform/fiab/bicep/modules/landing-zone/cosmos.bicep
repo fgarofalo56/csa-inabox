@@ -241,6 +241,15 @@ var loomContainers = [
   // zone with zero Azure provisioning. createIfNotExists in cosmos-client.ts
   // ensure() remains the hotfix fallback.
   { name: 'landing-zones',       partitionKey: '/tenantId' }
+  // CTS-07 — Copilot skills registry. `copilot-skills` holds one doc per skill,
+  // PK /scope ('builtin' for the seeded MS + Power BI descriptors, or
+  // 'tenant:<tid>' for tenant-authored custom skills) so each per-scope
+  // enumeration hits a single physical partition. `copilot-skill-states` holds
+  // the per-user toggle overrides + the tenant-default overlay, PK /userKey
+  // ('user:<oid>' | 'tenant:<tid>'). createIfNotExists in cosmos-client.ts
+  // ensure() remains the hotfix fallback. Azure-native — no Fabric dependency.
+  { name: 'copilot-skills',        partitionKey: '/scope' }
+  { name: 'copilot-skill-states',  partitionKey: '/userKey' }
 ]
 
 resource loomDb 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases@2024-12-01-preview' = {
