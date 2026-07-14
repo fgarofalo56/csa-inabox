@@ -54,6 +54,8 @@ export interface DemoSubJob {
 
 const DEMO_APP_ID = 'demo-environment';
 
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
 /**
  * Same-origin base for server-side self-calls. Defaults to the LOCAL container
  * port (127.0.0.1:PORT) — a hairpin to the PUBLIC Front Door URL from inside the
@@ -166,19 +168,30 @@ export async function runDemoDeploy(opts: {
       }
       if (!wsId) { entry.status = 'error'; entry.error = 'workspace create failed'; done++; await flush(done); continue; }
       entry.workspaceId = wsId;
-      // 2) install the app into it (full provision — deploy:true default).
-      const ir = await fetch(`${base}/api/apps/${encodeURIComponent(entry.appId)}/install`, {
-        method: 'POST', headers: H, body: JSON.stringify({ workspaceId: wsId }),
-      });
-      const ij = await ir.json().catch(() => ({}));
+      // 2) install the app into it (full provision — deploy:true default). The
+      // provision rate-limiter is a token bucket (ratePerSec 1, burst 3), so 14
+      // rapid installs would trip it — retry a rate-limited install with backoff.
+      let ij: any = {};
+      for (let attempt = 0; attempt < 4; attempt++) {
+        const ir = await fetch(`${base}/api/apps/${encodeURIComponent(entry.appId)}/install`, {
+          method: 'POST', headers: H, body: JSON.stringify({ workspaceId: wsId }),
+        });
+        ij = await ir.json().catch(() => ({}));
+        const limited = ir.status === 429 || /rate.?limit/i.test(String(ij?.error || ij?.code || ''));
+        if (ij?.jobId || !limited) break;
+        await sleep(2500 * (attempt + 1)); // 2.5s, 5s, 7.5s backoff
+      }
       if (ij?.jobId) { entry.installJobId = ij.jobId; entry.status = 'done'; }
-      else { entry.status = 'error'; entry.error = ij?.error || `install HTTP ${ir.status}`; }
+      else { entry.status = 'error'; entry.error = ij?.error || 'install failed'; }
     } catch (e: any) {
       entry.status = 'error';
       entry.error = (e?.message || String(e)).slice(0, 200);
     }
     done++;
     await flush(done);
+    // Space installs under the provision refill rate (1/sec) so the next one
+    // doesn't trip the limiter after the burst budget is spent.
+    if (i < sub.length - 1) await sleep(1500);
   }
 
   const anyErr = sub.some((s) => s.status === 'error');
