@@ -77,6 +77,20 @@ jobs:
           az containerapp replica list -n loom-unity -g "$RG" -o table 2>/dev/null || true
           echo "--- recent logs (last 60 lines) ---"
           az containerapp logs show -n loom-unity -g "$RG" --tail 60 --format text 2>/dev/null | tail -60 || true
+          echo "--- ActivationFailed root cause: revision detail ---"
+          REV=$(az containerapp revision list -n loom-unity -g "$RG" --query "[?properties.active] | [0].name" -o tsv | tr -d '\r')
+          az containerapp revision show -n loom-unity -g "$RG" --revision "$REV" \
+            --query "properties.{running:runningState,health:healthState,provisioning:provisioningState,error:provisioningError,lastActive:lastActiveTime}" -o json || true
+          echo "--- replica container states ---"
+          az containerapp replica list -n loom-unity -g "$RG" --revision "$REV" \
+            --query "[].{name:name,state:properties.runningState,containers:properties.containers[].{n:name,started:started,ready:ready,restarts:restartCount,state:runningState,reason:runningStateDetails}}" -o json 2>/dev/null || true
+          echo "--- CAE storages (Azure Files mounts) ---"
+          CAE_NAME=$(az containerapp show -n loom-unity -g "$RG" --query properties.environmentId -o tsv | tr -d '\r' | awk -F/ '{print $NF}')
+          az containerapp env storage list -n "$CAE_NAME" -g "$RG" -o table 2>/dev/null || true
+          echo "--- app volume config ---"
+          az containerapp show -n loom-unity -g "$RG" --query "properties.template.{volumes:volumes,mounts:containers[0].volumeMounts,image:containers[0].image}" -o json || true
+          echo "--- system log stream (kind system) ---"
+          az containerapp logs show -n loom-unity -g "$RG" --type system --tail 40 --format text 2>/dev/null | tail -40 || true
 
       - name: Probe BFF routes with a minted session
         env:
