@@ -123,6 +123,8 @@ import { msSkillSystemBlocksForPane, msMcpPrefix, msSkillsForPane } from '@/lib/
 import { estCostUsd } from '@/lib/copilot/cost-estimate';
 // Pure segmented context-window builder + token estimator (CTS-05).
 import { buildContextUsagePayload, estimateTokens } from '@/lib/copilot/context-usage';
+// CTS-03: per-turn phase timer for the admin deep-trace Timeline tab.
+import { PhaseTimer, type PhaseTiming } from '@/lib/copilot/phase-timer';
 // Tool-provenance → grounding citation mapper (CTS-04). Pure; maps a tool
 // result's known provenance shapes into the Citation[] the transcript renders.
 import { extractCitationsFromToolResult, mergeCitations } from '@/lib/copilot/tool-citations';
@@ -1255,6 +1257,9 @@ export type OrchestratorStep =
       citations?: Citation[];
       // CTS-05 context-window breakdown (also emitted standalone below).
       contextUsage?: ContextUsage;
+      // CTS-03 per-turn phase timings (classify / prompt-build / llm / tools) for
+      // the admin deep-trace panel's Timeline tab. Best-effort; omitted on error.
+      phaseTimings?: PhaseTiming[];
     }
   | { kind: 'error'; error: string; code?: string }
   // CTS-05: emitted once per turn at message-build time, before the AOAI loop.
@@ -1964,6 +1969,9 @@ export async function* orchestrate(opts: OrchestrateOptions): AsyncIterable<Orch
   // CTS-01: turn wall-clock — measured from the first line of orchestration to
   // the `final` step so the status bar reports real end-to-end latency.
   const turnStart = Date.now();
+  // CTS-03: accumulate per-phase ms (classify → prompt-build → llm → tools) for
+  // the admin deep-trace Timeline tab. Best-effort; never affects the stream.
+  const phaseTimer = new PhaseTimer();
   // Copilot surface tag for per-persona usage metering (string, defaults to
   // `cross-item`). Distinct from the resolved CopilotPersonaDef below.
   const personaTag = opts.persona || 'cross-item';
@@ -2084,6 +2092,10 @@ export async function* orchestrate(opts: OrchestrateOptions): AsyncIterable<Orch
     // MCP-shim tools registered above — identical to the legacy behaviour.
     tools = reg.toAoaiToolsByName(panePersona.toolCatalog);
   }
+
+  // CTS-03: classify phase ends here — target/tier/persona/registry/tool-set are
+  // resolved; prompt assembly begins next.
+  phaseTimer.lap('classify');
 
   // System-prompt precedence: explicit overrides win; then the CopilotPersonaDef
   // (activator/etc.); then the per-pane persona composed from the context payload
@@ -2229,10 +2241,14 @@ export async function* orchestrate(opts: OrchestrateOptions): AsyncIterable<Orch
   const contextUsageStep: OrchestratorStep = { kind: 'context_usage', usage: contextUsage };
   await persistStep(sessionId, userOid, contextUsageStep);
   yield contextUsageStep;
+  // CTS-03: prompt-build phase ends here — messages + tool schema + meter are
+  // assembled; the AOAI/tool loop begins next.
+  phaseTimer.lap('prompt-build');
   // ──────────────────────────────────────────────────────────────────────────
 
   for (let i = 0; i < maxIter; i++) {
     let resp: any;
+    const _llmStart = Date.now();
     try {
       resp = await callAoai(target, messages, tools);
     } catch (e: any) {
@@ -2241,6 +2257,7 @@ export async function* orchestrate(opts: OrchestrateOptions): AsyncIterable<Orch
       yield step;
       return;
     }
+    phaseTimer.add('llm', Date.now() - _llmStart); // CTS-03: AOAI round-trip span
     const u = resp?.usage || {};
     usage.aoaiCalls += 1;
     usage.promptTokens += u.prompt_tokens ?? 0;
@@ -2302,6 +2319,8 @@ export async function* orchestrate(opts: OrchestrateOptions): AsyncIterable<Orch
         // CTS-05: mirror the context-window breakdown onto the final step so a
         // replayed session restores the meter without a separate lookup.
         contextUsage,
+        // CTS-03: per-phase ms for the admin deep-trace Timeline tab.
+        phaseTimings: phaseTimer.timings(),
       };
       await persistStep(sessionId, userOid, finalStep);
       yield finalStep;
@@ -2363,6 +2382,8 @@ export async function* orchestrate(opts: OrchestrateOptions): AsyncIterable<Orch
             result: publicResult,
           };
           turnTools.push({ name: tc.function.name, serverName: tool.serverName, durationMs: okDurationMs, ok: true });
+          phaseTimer.add('tools', okDurationMs); // CTS-03: tool-execution span
+
           // CTS-04: map any grounding provenance the tool returned into citations.
           turnCitations = mergeCitations(turnCitations, extractCitationsFromToolResult(tc.function.name, publicResult));
           messages.push({
@@ -2417,6 +2438,7 @@ export async function* orchestrate(opts: OrchestrateOptions): AsyncIterable<Orch
         ok: false,
         error: resultStep.kind === 'tool_result' ? resultStep.error : undefined,
       });
+      phaseTimer.add('tools', resultStep.kind === 'tool_result' ? resultStep.durationMs : 0); // CTS-03
       await persistStep(sessionId, userOid, resultStep);
       yield resultStep;
     }
