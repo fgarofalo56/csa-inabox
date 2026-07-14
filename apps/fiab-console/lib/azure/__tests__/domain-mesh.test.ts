@@ -99,6 +99,15 @@ describe('getDomainMesh (federated read)', () => {
     expect(office.depth).toBe(3);
   });
 
+  it('lineage is traceable when a source is configured AND the domain has assets', async () => {
+    const mesh = await getDomainMesh('t', 'me');
+    // Both sources on → lineage active, listing both.
+    expect(mesh.surfaces.lineage.configured).toBe(true);
+    expect(mesh.surfaces.lineage.sources).toEqual(['Purview Data Map', 'Unity Catalog']);
+    const dept = mesh.rows.find((r) => r.id === 'dept')!;
+    expect(dept.lineage.present).toBe(true); // dept has rolled-up assets
+  });
+
   it('honest-gates every surface when the back-end is unconfigured', async () => {
     unityConfigured = false;
     purviewConfigured = false;
@@ -107,9 +116,13 @@ describe('getDomainMesh (federated read)', () => {
     expect(mesh.surfaces.unity.hint).toMatch(/LOOM_DATABRICKS_HOSTNAME/);
     expect(mesh.surfaces.purview.configured).toBe(false);
     expect(mesh.surfaces.purview.hint).toMatch(/LOOM_PURVIEW_ACCOUNT/);
+    // No lineage source configured → lineage honest-gated too.
+    expect(mesh.surfaces.lineage.configured).toBe(false);
+    expect(mesh.surfaces.lineage.sources).toEqual([]);
     const dept = mesh.rows.find((r) => r.id === 'dept')!;
     expect(dept.unity.present).toBe(false);
     expect(dept.purview.present).toBe(false);
+    expect(dept.lineage.present).toBe(false);
     // Catalog still works (Cosmos), so the rollup is unaffected by the gates.
     expect(dept.rolledWorkspaces).toBe(2);
   });

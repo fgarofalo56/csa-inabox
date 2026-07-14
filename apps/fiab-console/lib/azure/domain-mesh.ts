@@ -15,6 +15,12 @@
  *                     (configured / honest-gate).
  *   • Unity Catalog — the UC catalog (root) / schema (descendant) the domain
  *                     mirrors to, and whether it is present in the metastore.
+ *   • Lineage       — whether the domain's assets can be traced end-to-end: a
+ *                     lineage source (Purview Data Map and/or Unity Catalog) is
+ *                     configured AND the domain has catalog assets to trace.
+ *                     Lineage graphs are computed per-asset (unified-lineage);
+ *                     this reports the domain-scoped CAPABILITY, honestly, not a
+ *                     fabricated edge count.
  *   • Landing zone  — the bound DLZ subscription(s) + status from the registry.
  *
  * Every surface is honest-gated (no-vaporware.md): an unconfigured back-end
@@ -58,6 +64,8 @@ export interface DomainMeshRow {
   rolledItems: number;
   purview: MeshSurface;
   unity: MeshSurface;
+  /** Domain-scoped lineage capability (a source is configured + assets exist). */
+  lineage: MeshSurface;
   /** DLZ binding status from the registry. */
   landingZone: { status: string; subscriptions: number };
 }
@@ -70,6 +78,7 @@ export interface DomainMeshResult {
     catalog: { configured: boolean; workspaces: number; items: number; hint?: string };
     purview: { configured: boolean; hint?: string };
     unity: { configured: boolean; hint?: string };
+    lineage: { configured: boolean; sources: string[]; hint?: string };
   };
   rows: DomainMeshRow[];
 }
@@ -178,6 +187,16 @@ export async function getDomainMesh(tenantId: string, who: string): Promise<Doma
     : 'Purview mirror inactive — set LOOM_PURVIEW_ACCOUNT and deploy with purviewEnabled=true to mirror domains as Data Map collections.';
   const unityHint = unity.configured ? undefined : unity.hint;
 
+  // Lineage is derived from the SAME sources (Purview Data Map + Unity Catalog).
+  // A domain's lineage is traceable when at least one source is configured.
+  const lineageSources: string[] = [];
+  if (purviewConfigured) lineageSources.push('Purview Data Map');
+  if (unity.configured) lineageSources.push('Unity Catalog');
+  const lineageConfigured = lineageSources.length > 0;
+  const lineageHint = lineageConfigured
+    ? undefined
+    : 'No lineage source configured — set LOOM_PURVIEW_ACCOUNT (Data Map lineage) and/or LOOM_DATABRICKS_HOSTNAME (Unity Catalog lineage) to trace a domain’s assets end-to-end.';
+
   // Direct-domain workspace counts + items per domain (before rollup).
   const directWsByDomain = new Map<string, number>();
   const directItemsByDomain = new Map<string, number>();
@@ -230,6 +249,17 @@ export async function getDomainMesh(tenantId: string, who: string): Promise<Doma
             : 'Not yet mirrored — run Governance sync to create the UC catalog/schema.'
           : unityHint,
       },
+      lineage: {
+        configured: lineageConfigured,
+        // Traceable when a source is configured AND the domain has assets to trace.
+        present: lineageConfigured && rolledItems > 0,
+        target: lineageConfigured ? lineageSources.join(' + ') : undefined,
+        hint: !lineageConfigured
+          ? lineageHint
+          : rolledItems === 0
+            ? 'No catalog assets in this domain yet — lineage appears once workspaces/items are assigned.'
+            : undefined,
+      },
       landingZone: { status: d.status || 'registered', subscriptions: d.subscriptionIds?.length || 0 },
     };
   });
@@ -246,6 +276,7 @@ export async function getDomainMesh(tenantId: string, who: string): Promise<Doma
       },
       purview: { configured: purviewConfigured, hint: purviewHint },
       unity: { configured: unity.configured, hint: unityHint },
+      lineage: { configured: lineageConfigured, sources: lineageSources, hint: lineageHint },
     },
     rows,
   };

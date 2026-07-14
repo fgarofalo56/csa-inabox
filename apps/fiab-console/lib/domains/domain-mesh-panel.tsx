@@ -23,14 +23,14 @@ import {
 } from '@fluentui/react-components';
 import {
   ArrowSync20Regular, CheckmarkCircle16Filled, Warning16Filled,
-  DatabaseLink20Regular, CloudDatabase20Regular, Cloud20Regular, Apps20Regular,
+  DatabaseLink20Regular, CloudDatabase20Regular, Apps20Regular, Flowchart20Regular,
 } from '@fluentui/react-icons';
 
 interface MeshSurface { configured: boolean; present: boolean; target?: string; hint?: string; }
 interface MeshRow {
   id: string; name: string; parentId?: string; depth: number;
   directWorkspaces: number; rolledWorkspaces: number; rolledItems: number;
-  purview: MeshSurface; unity: MeshSurface;
+  purview: MeshSurface; unity: MeshSurface; lineage: MeshSurface;
   landingZone: { status: string; subscriptions: number };
 }
 interface MeshResult {
@@ -39,6 +39,7 @@ interface MeshResult {
     catalog: { configured: boolean; workspaces: number; items: number; hint?: string };
     purview: { configured: boolean; hint?: string };
     unity: { configured: boolean; hint?: string };
+    lineage: { configured: boolean; sources: string[]; hint?: string };
   };
   rows: MeshRow[];
 }
@@ -60,13 +61,13 @@ const useStyles = makeStyles({
   },
   head: {
     display: 'grid',
-    gridTemplateColumns: 'minmax(0, 2fr) minmax(0, 1.2fr) minmax(0, 1.4fr) minmax(0, 1.4fr) minmax(0, 1.2fr)',
+    gridTemplateColumns: 'minmax(0, 2fr) minmax(0, 1.2fr) minmax(0, 1.3fr) minmax(0, 1.4fr) minmax(0, 1.2fr) minmax(0, 1.1fr)',
     gap: tokens.spacingHorizontalS, padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`,
     fontWeight: tokens.fontWeightSemibold, backgroundColor: tokens.colorNeutralBackground2, fontSize: tokens.fontSizeBase200,
   },
   row: {
     display: 'grid',
-    gridTemplateColumns: 'minmax(0, 2fr) minmax(0, 1.2fr) minmax(0, 1.4fr) minmax(0, 1.4fr) minmax(0, 1.2fr)',
+    gridTemplateColumns: 'minmax(0, 2fr) minmax(0, 1.2fr) minmax(0, 1.3fr) minmax(0, 1.4fr) minmax(0, 1.2fr) minmax(0, 1.1fr)',
     gap: tokens.spacingHorizontalS, padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`, alignItems: 'center',
     borderTop: `1px solid ${tokens.colorNeutralStroke3}`, fontSize: tokens.fontSizeBase200,
   },
@@ -164,6 +165,19 @@ export function DomainMeshPanel() {
                 ? <Caption1 className={s.ran}>Root domains → catalogs, descendants → schemas.</Caption1>
                 : <Caption1 className={s.ran}>{mesh.surfaces.unity.hint}</Caption1>}
             </Card>
+
+            <Card className={s.tile}>
+              <div className={s.tileHead}>
+                <Flowchart20Regular className={s.tileIcon} />
+                <Subtitle2>Lineage</Subtitle2>
+                <Badge color={mesh.surfaces.lineage.configured ? 'success' : 'subtle'} appearance="tint">
+                  {mesh.surfaces.lineage.configured ? 'Active' : 'Inactive'}
+                </Badge>
+              </div>
+              {mesh.surfaces.lineage.configured
+                ? <Caption1 className={s.ran}>Assets traced via {mesh.surfaces.lineage.sources.join(' + ')}.</Caption1>
+                : <Caption1 className={s.ran}>{mesh.surfaces.lineage.hint}</Caption1>}
+            </Card>
           </div>
 
           {/* Honest gates for any unconfigured mesh surface. */}
@@ -185,6 +199,7 @@ export function DomainMeshPanel() {
               <span role="columnheader">Catalog</span>
               <span role="columnheader">Purview</span>
               <span role="columnheader">Unity Catalog</span>
+              <span role="columnheader">Lineage</span>
               <span role="columnheader">Landing zone</span>
             </div>
             {mesh.rows.map((r) => (
@@ -209,6 +224,7 @@ export function DomainMeshPanel() {
                     <div className={s.mono}>{r.unity.target}</div>
                   )}
                 </span>
+                <span role="cell"><SurfaceBadge surface={r.lineage} presentLabel="Traceable" /></span>
                 <span role="cell">
                   <Badge
                     appearance="tint"
