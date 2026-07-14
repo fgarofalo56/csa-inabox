@@ -24,6 +24,8 @@ import {
   resolveBiBackendWithSource,
   writeBiBackendMode,
   isBiBackendMode,
+  resolveMapsAccount,
+  writeMapsAccount,
 } from '@/lib/admin/platform-settings';
 
 export const runtime = 'nodejs';
@@ -36,12 +38,17 @@ export async function GET() {
   if (denied) return denied;
   try {
     const bi = await resolveBiBackendWithSource();
+    const mapsAccount = await resolveMapsAccount();
     return NextResponse.json({
       ok: true,
       biBackend: bi,
       // The env value (if any) is surfaced so the pane can explain that a
       // deploy-time LOOM_BI_BACKEND is being OVERRIDDEN by the runtime setting.
       envFallback: bi.envValue ?? null,
+      // Azure Maps account (runtime > env). Non-secret — the credential stays
+      // server-side; this is just the public account label used to prefill editors.
+      mapsAccount,
+      mapsEnvFallback: (process.env.LOOM_AZURE_MAPS_ACCOUNT || process.env.LOOM_AZURE_MAPS_CLIENT_ID || '').trim() || null,
     });
   } catch (e: any) {
     return apiServerError(e);
@@ -60,14 +67,43 @@ export async function PUT(req: NextRequest) {
   if (blocked) return blocked;
 
   const body = await req.json().catch(() => ({}));
-  const next = body?.biBackend;
-  if (!isBiBackendMode(next)) {
+  const hasBi = body?.biBackend !== undefined;
+  const hasMaps = typeof body?.mapsAccount === 'string';
+  if (!hasBi && !hasMaps) {
+    return apiError("provide 'biBackend' ('loom-native'|'powerbi') and/or 'mapsAccount' (string)", 400);
+  }
+  if (hasBi && !isBiBackendMode(body.biBackend)) {
     return apiError("biBackend must be 'loom-native' or 'powerbi'", 400);
   }
 
   try {
-    const before = await resolveBiBackendWithSource();
     const who = s.claims.upn || s.claims.email || tenantId;
+
+    // ── Azure Maps account (runtime override of LOOM_AZURE_MAPS_ACCOUNT) ──
+    if (hasMaps) {
+      const beforeMaps = await resolveMapsAccount();
+      await writeMapsAccount(body.mapsAccount, who);
+      emitAuditEvent({
+        actorOid: s.claims.oid,
+        actorUpn: who,
+        action: 'platform-settings.update',
+        targetType: 'platform-settings',
+        targetId: 'platform-settings',
+        tenantId: s.claims.tid || tenantId,
+        detail: { key: 'mapsAccount', from: beforeMaps, to: body.mapsAccount },
+      });
+    }
+
+    if (!hasBi) {
+      return NextResponse.json({
+        ok: true,
+        biBackend: await resolveBiBackendWithSource(),
+        mapsAccount: await resolveMapsAccount(),
+      });
+    }
+
+    const next = body.biBackend;
+    const before = await resolveBiBackendWithSource();
     const doc = await writeBiBackendMode(next, who);
 
     // Audit — record the backend flip (governance-relevant: it enables/disables
@@ -100,6 +136,7 @@ export async function PUT(req: NextRequest) {
     return NextResponse.json({
       ok: true,
       biBackend: await resolveBiBackendWithSource(),
+      mapsAccount: await resolveMapsAccount(),
       changed: before.mode !== next,
     });
   } catch (e: any) {

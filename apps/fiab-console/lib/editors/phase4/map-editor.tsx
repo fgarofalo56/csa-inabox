@@ -209,9 +209,9 @@ export function MapEditor({ item, id }: { item: FabricItemType; id: string }) {
     bbox = computeGeoBbox(j);
   } catch (e: any) { parseErr = e?.message || String(e); }
 
-  // Client-side subscription-key fallback: when the BFF token route gates but a
-  // public key is present, the interactive canvas still lights up the basemap.
-  const mapsKey = process.env.NEXT_PUBLIC_LOOM_AZURE_MAPS_KEY || undefined;
+  // Basemap auth is brokered entirely server-side by the …/map-token BFF route
+  // (AAD token preferred, subscription-key fallback) — no client-baked
+  // NEXT_PUBLIC key, so the credential never reaches the browser.
 
   // ── Interactive Azure Maps canvas config (persisted in item state) ───────────
   const basemap = state.basemap || DEFAULT_BASEMAP;
@@ -660,7 +660,6 @@ export function MapEditor({ item, id }: { item: FabricItemType; id: string }) {
             <div ref={mapWrapRef} style={{ width: '100%', backgroundColor: tokens.colorNeutralBackground1 }}>
               <AzureMapsCanvas
                 tokenUrl={`/api/items/map/${encodeURIComponent(id)}/map-token`}
-                fallbackSubscriptionKey={mapsKey}
                 geojson={parsedGeo}
                 layers={layers}
                 style={basemap}

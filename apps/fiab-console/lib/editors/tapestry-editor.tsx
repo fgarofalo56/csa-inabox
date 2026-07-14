@@ -43,6 +43,8 @@ import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { ForceDirectedGraph, extractGraph, type GraphNode } from '@/lib/components/graph/force-directed-graph';
 import { GeoJsonMap } from '@/lib/components/graph/geojson-map';
+import { useMapsConfig, mapsStaticUrl } from '@/lib/components/platform-config';
+import { computeGeoBbox, bboxToZoom } from '@/lib/editors/_family-utils';
 import { KustoResultsGrid } from '@/lib/components/adx/kusto-results-grid';
 import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
 import { loomDocUrl } from '@/lib/learn/content';
@@ -133,9 +135,10 @@ export function TapestryEditor({ item, id }: { item: FabricItemType; id: string 
   const [timelineResult, setTimelineResult] = useState<any>(null);
   const [timelineLoading, setTimelineLoading] = useState(false);
 
-  // Optional live Azure Maps raster basemap (client key). When unset the vector
-  // overlay still renders (GCC-High / IL5 fallback).
-  const mapsKey = process.env.NEXT_PUBLIC_LOOM_AZURE_MAPS_KEY;
+  // Optional live Azure Maps raster basemap via the credential-free proxy. Read
+  // at runtime from the Loom admin config (no build-baked NEXT_PUBLIC_* var).
+  // When unset the vector overlay still renders (GCC-High / IL5 fallback).
+  const { mapsEnabled } = useMapsConfig();
 
   const dbBody = useMemo(() => (database.trim() ? { database: database.trim() } : {}), [database]);
 
@@ -385,13 +388,13 @@ export function TapestryEditor({ item, id }: { item: FabricItemType; id: string 
                   </Button>
                   {geoResult?.ok && <Badge appearance="tint" color="brand">{geoResult.count ?? 0} located</Badge>}
                 </div>
-                {!mapsKey && (
+                {!mapsEnabled && (
                   <MessageBar intent="info">
                     <MessageBarBody>
                       <MessageBarTitle>Vector overlay renders without Azure Maps</MessageBarTitle>
                       The located entities render as a live SVG map below regardless of basemap. To layer an Azure Maps raster
-                      basemap behind it (Commercial / GCC only), provision <code>Microsoft.Maps/accounts</code> and set
-                      <code>NEXT_PUBLIC_LOOM_AZURE_MAPS_KEY</code> on the Console Container App.
+                      basemap behind it (Commercial / GCC only), provision <code>Microsoft.Maps/accounts</code> and configure
+                      Azure Maps in the Loom admin console (Platform settings → Azure Maps) — no rebuild required.
                     </MessageBarBody>
                   </MessageBar>
                 )}
@@ -405,7 +408,17 @@ export function TapestryEditor({ item, id }: { item: FabricItemType; id: string 
                         {geoResult?.count ?? 0} located node{geoResult?.count === 1 ? '' : 's'}
                       </Badge>
                     </div>
-                    <GeoJsonMap geojson={geoFc} rasterUrl={null} />
+                    <GeoJsonMap geojson={geoFc} rasterUrl={(() => {
+                      if (!mapsEnabled || !geoFc) return null;
+                      const bbox = computeGeoBbox(geoFc);
+                      if (!bbox) return null;
+                      return mapsStaticUrl({
+                        zoom: bboxToZoom(bbox),
+                        lon: (bbox.minLon + bbox.maxLon) / 2,
+                        lat: (bbox.minLat + bbox.maxLat) / 2,
+                        width: 640, height: 360,
+                      });
+                    })()} />
                   </>
                 )}
                 {geoResult?.ok && (geoResult.count ?? 0) === 0 && (

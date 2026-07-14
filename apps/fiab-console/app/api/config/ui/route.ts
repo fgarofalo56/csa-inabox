@@ -15,7 +15,8 @@
  *   runtime admin setting > server env LOOM_BI_BACKEND > default 'loom-native'.
  */
 import { NextResponse } from 'next/server';
-import { resolveBiBackendMode } from '@/lib/admin/platform-settings';
+import { resolveBiBackendMode, resolveMapsAccount } from '@/lib/admin/platform-settings';
+import { isMapsConfigured } from '@/lib/azure/maps-client';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -29,9 +30,25 @@ export async function GET() {
   } catch {
     biBackend = 'loom-native';
   }
+  // Azure Maps runtime status — replaces the client-baked NEXT_PUBLIC_LOOM_AZURE_MAPS_*
+  // build vars. `mapsEnabled` = a server-side credential is configured (checked
+  // WITHOUT minting a token — the token stays in the /api/maps/* broker routes);
+  // `mapsAccount` = the non-secret account label/uniqueId used to prefill the geo
+  // editors. Neither is sensitive. Best-effort — never 500s the editors.
+  let mapsEnabled = false;
+  let mapsAccount = '';
+  try {
+    mapsEnabled = isMapsConfigured();
+    mapsAccount = await resolveMapsAccount();
+  } catch {
+    mapsEnabled = false;
+    mapsAccount = '';
+  }
   return NextResponse.json({
     ok: true,
     biBackend,
     powerBiEnabled: biBackend === 'powerbi',
+    mapsEnabled,
+    mapsAccount,
   });
 }

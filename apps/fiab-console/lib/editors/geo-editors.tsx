@@ -36,6 +36,7 @@ import { ResizableCanvasRegion } from '@/lib/components/canvas/resizable-canvas'
 import { Map20Regular, Folder20Regular, Play20Regular, Flow20Regular, Save20Regular, Open16Regular } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { NewItemCreateGate } from './new-item-gate';
+import { useMapsConfig, mapsStaticUrl } from '@/lib/components/platform-config';
 import { DataPipelineEditor } from './data-pipeline-editor';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
@@ -254,11 +255,12 @@ export function GeoMapEditor({ item, id }: { item: FabricItemType; id: string })
 
 function GeoMapEditorBody({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
-  // Deployed Azure Maps account, surfaced from bicep as
-  // NEXT_PUBLIC_LOOM_AZURE_MAPS_ACCOUNT (Next.js inlines NEXT_PUBLIC_* at build
-  // time). Prefills the account field so the editor uses the *deployed*
-  // account rather than a free-text placeholder.
-  const configuredMapsAccount = process.env.NEXT_PUBLIC_LOOM_AZURE_MAPS_ACCOUNT || '';
+  // Runtime Azure Maps status (replaces the build-baked NEXT_PUBLIC_LOOM_AZURE_MAPS_*
+  // vars). `mapsEnabled` = a credential is configured server-side; `mapsAccount`
+  // prefills the account field. Read live from GET /api/config/ui — settable from
+  // the Loom admin console, no rebuild. The raster basemap is fetched through the
+  // credential-free /api/maps/static proxy, so no key ever reaches the browser.
+  const { mapsEnabled, mapsAccount: configuredMapsAccount } = useMapsConfig();
   const { state, setState, loading, saving, savedAt, error, dirty, save } = useGeoItemState<GeoMapState>('geo-map', id, {
     account: configuredMapsAccount, style: 'main', tileLayerUrl: '', overlayGeoJson: GEO_MAP_SAMPLE_OVERLAY,
   });
@@ -273,15 +275,14 @@ function GeoMapEditorBody({ item, id }: { item: FabricItemType; id: string }) {
     } catch (e: any) { return { parsed: null, parseErr: e?.message || String(e), featureCount: 0 }; }
   }, [state.overlayGeoJson]);
 
-  // Optional Azure Maps static raster basemap (client key). When unset the
-  // vector overlay still renders on a neutral canvas.
-  const mapsKey = process.env.NEXT_PUBLIC_LOOM_AZURE_MAPS_KEY;
+  // Optional Azure Maps static raster basemap via the credential-free proxy.
+  // When Maps isn't configured the vector overlay still renders on a neutral canvas.
   const bbox = parsed ? computeGeoBbox(parsed) : null;
   const zoom = bboxToZoom(bbox);
   const centerLon = bbox ? (bbox.minLon + bbox.maxLon) / 2 : -77.0;
   const centerLat = bbox ? (bbox.minLat + bbox.maxLat) / 2 : 38.9;
-  const rasterUrl = mapsKey
-    ? `https://atlas.microsoft.com/map/static?api-version=2024-04-01&style=${encodeURIComponent(state.style || 'main')}&zoom=${zoom}&center=${centerLon},${centerLat}&width=640&height=360&subscription-key=${mapsKey}`
+  const rasterUrl = mapsEnabled
+    ? mapsStaticUrl({ style: state.style || 'main', zoom, lon: centerLon, lat: centerLat, width: 640, height: 360 })
     : null;
 
   const validate = useCallback(() => {
@@ -308,20 +309,20 @@ function GeoMapEditorBody({ item, id }: { item: FabricItemType; id: string }) {
       main={
         <div className={s.pad}>
           {loading && <Spinner size="small" label="Loading…" labelPosition="after" />}
-          {!mapsKey && (
+          {!mapsEnabled && (
             <MessageBar intent="info">
               <MessageBarBody>
                 <MessageBarTitle>Vector overlay renders without Azure Maps</MessageBarTitle>
                 The data overlay renders as a live SVG map below regardless of basemap. To layer an Azure Maps raster
-                basemap behind it, provision <code>Microsoft.Maps/accounts</code> and set
-                <code>NEXT_PUBLIC_LOOM_AZURE_MAPS_KEY</code> on the Console Container App.
+                basemap behind it, provision <code>Microsoft.Maps/accounts</code> and configure Azure Maps in the Loom
+                admin console (Platform settings → Azure Maps) — no rebuild required.
               </MessageBarBody>
             </MessageBar>
           )}
           <div className={s.field}><Label>Azure Maps account name</Label>
             <Input value={state.account} onChange={(_: unknown, d: any) => setState((p) => ({ ...p, account: d.value }))} placeholder={configuredMapsAccount || 'maps-csa-loom'} />
             {configuredMapsAccount && (
-              <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Deployed account <code>{configuredMapsAccount}</code> is bound from <code>NEXT_PUBLIC_LOOM_AZURE_MAPS_ACCOUNT</code>. Override above to point at a different Maps account.</Caption1>
+              <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Deployed account <code>{configuredMapsAccount}</code> is resolved at runtime from the Loom admin console (Platform settings → Azure Maps). Override above to point at a different Maps account.</Caption1>
             )}
           </div>
           <div className={s.field}><Label>Style</Label>
@@ -1004,9 +1005,9 @@ function GeoPipelineEditorBody({ item, id }: { item: FabricItemType; id: string 
     router.push('/items/geo-pipeline/new');
   }, [router]);
   // Azure Maps gate — reverse-geocode requires Azure Maps, which is not
-  // provisioned in GCC-High / IL5 (bicep never sets the key there). Same gate
-  // pattern as the GeoMap raster basemap.
-  const mapsKey = process.env.NEXT_PUBLIC_LOOM_AZURE_MAPS_KEY;
+  // provisioned in GCC-High / IL5 (bicep never sets the credential there). Read
+  // live from the Loom admin runtime config (no build-baked NEXT_PUBLIC_* var).
+  const { mapsEnabled } = useMapsConfig();
   const [triggering, setTriggering] = useState(false);
   const [triggerMsg, setTriggerMsg] = useState<{ intent: 'success' | 'error' | 'warning'; text: string } | null>(null);
   // Last successful run receipt — drives the enrichment run-status grid so the
@@ -1129,20 +1130,20 @@ function GeoPipelineEditorBody({ item, id }: { item: FabricItemType; id: string 
                 label={<span>Add H3 cell id at resolution 7 (<code>enrichH3: Bool</code>)</span>}
               />
               <Checkbox
-                checked={state.reverseGeocode && !!mapsKey}
-                disabled={!mapsKey}
+                checked={state.reverseGeocode && mapsEnabled}
+                disabled={!mapsEnabled}
                 onChange={(_, d) => setState((p) => ({ ...p, reverseGeocode: !!d.checked }))}
                 label={<span>Reverse-geocode (<code>reverseGeocode: Bool</code>)</span>}
               />
             </div>
           </div>
-          {!mapsKey && (
+          {!mapsEnabled && (
             <MessageBar intent="warning">
               <MessageBarBody>
                 <MessageBarTitle>Reverse-geocode requires Azure Maps</MessageBarTitle>
-                Azure Maps is not provisioned in this deployment (and is unavailable in GCC-High / IL5). Set
-                <code>NEXT_PUBLIC_LOOM_AZURE_MAPS_KEY</code> on the Console Container App after provisioning
-                <code>Microsoft.Maps/accounts</code> to enable this flag. H3 and buffer enrichments work without it.
+                Azure Maps is not provisioned in this deployment (and is unavailable in GCC-High / IL5). Provision
+                <code>Microsoft.Maps/accounts</code> and configure Azure Maps in the Loom admin console (Platform
+                settings → Azure Maps) to enable this flag. H3 and buffer enrichments work without it.
               </MessageBarBody>
             </MessageBar>
           )}
@@ -1192,7 +1193,7 @@ function GeoPipelineEditorBody({ item, id }: { item: FabricItemType; id: string 
                   {(['enrichH3', 'reverseGeocode', 'bufferMeters'] as const).map((k) => {
                     const passed = lastRun.parametersUsed.includes(k);
                     const value = k === 'enrichH3' ? String(state.enrichH3)
-                      : k === 'reverseGeocode' ? String(state.reverseGeocode && !!mapsKey)
+                      : k === 'reverseGeocode' ? String(state.reverseGeocode && mapsEnabled)
                       : String(state.bufferMeters);
                     return (
                       <tr key={k}>

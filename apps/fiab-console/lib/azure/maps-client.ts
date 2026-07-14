@@ -84,6 +84,20 @@ export type MapsBackend =
  * naming the role/env to fix, so the route returns a clean 412 gate rather than
  * a 500. No Fabric / Power BI host is ever contacted.
  */
+/**
+ * Lightweight, non-minting check of whether Azure Maps is configured for this
+ * deployment: LOOM_MAPS_BACKEND=azure-maps AND a credential is present
+ * (LOOM_AZURE_MAPS_CLIENT_ID for AAD or LOOM_AZURE_MAPS_KEY for the key path).
+ * Used by the public /api/config/ui endpoint to tell client surfaces whether to
+ * offer the live basemap WITHOUT minting a token (that stays in the broker
+ * routes). Returns false without ever contacting atlas.microsoft.com.
+ */
+export function isMapsConfigured(): boolean {
+  const backend = (process.env.LOOM_MAPS_BACKEND || '').trim().toLowerCase();
+  if (backend !== 'azure-maps') return false;
+  return !!(process.env.LOOM_AZURE_MAPS_CLIENT_ID?.trim() || process.env.LOOM_AZURE_MAPS_KEY?.trim());
+}
+
 export async function resolveMapsBackend(): Promise<MapsBackend> {
   const backend = (process.env.LOOM_MAPS_BACKEND || '').trim().toLowerCase();
 
