@@ -94,6 +94,24 @@ export interface ItemTypeCapabilities {
   notebookAttachable: boolean;
   /** Can ground a Loom Data Agent (DATA_AGENT_SOURCEABLE / DA_SOURCE_TYPES). */
   dataAgentSourceable: boolean;
+  /**
+   * The Weave "Analyze with DAX" edge can source this type — a Loom-native
+   * semantic model whose tabular layer executes DAX via `evalDax`
+   * (DAX_ANALYZABLE_ITEM_TYPES). No Power BI / Fabric on the default path.
+   */
+  daxAnalyzable: boolean;
+  /**
+   * The Weave "Materialize to KQL (ADX)" edge can source this type — its Delta
+   * tables are bound to Azure Data Explorer external tables
+   * (LAKEHOUSE_KQL_MATERIALIZABLE_ITEM_TYPES).
+   */
+  lakehouseKqlMaterializable: boolean;
+  /**
+   * The Weave "Promote (medallion)" edge can source this type — a bronze/silver
+   * Delta table promoted to the next layer via a real Spark notebook
+   * (MEDALLION_PROMOTABLE_ITEM_TYPES).
+   */
+  medallionPromotable: boolean;
 }
 
 /** The manifest — one per Loom item type, derived from the catalog + the capability lists below. */
@@ -230,6 +248,40 @@ export const DATA_AGENT_SOURCEABLE_ITEM_TYPES: readonly string[] = [
 export const POWERBI_MODELABLE_ITEM_TYPES: readonly string[] = [
   'warehouse',
   'synapse-dedicated-sql-pool',
+];
+
+/**
+ * CANONICAL source for the Weave "Analyze with DAX" edge `fromTypes`.
+ * thread-actions.ts reads this via `daxAnalyzableTypes()`. A Loom-native
+ * semantic model executes DAX through `evalDax` (Synapse serverless SQL by
+ * default; AAS XMLA when opted in) — no Power BI / Fabric REST on the default
+ * path (no-fabric-dependency.md). A warehouse-backed model IS a semantic-model
+ * item, so this single slug covers the "or warehouse-backed model" case.
+ */
+export const DAX_ANALYZABLE_ITEM_TYPES: readonly string[] = [
+  'semantic-model',
+];
+
+/**
+ * CANONICAL source for the Weave "Materialize to KQL (ADX)" edge `fromTypes`.
+ * thread-actions.ts reads this via `lakehouseKqlMaterializableTypes()`. A
+ * lakehouse's ADLS Delta tables are bound to Azure Data Explorer external
+ * tables (`.create-or-alter external table … kind=delta`) — the Azure-native
+ * "lakehouse → KQL" bridge, no Fabric RTI Eventhouse required.
+ */
+export const LAKEHOUSE_KQL_MATERIALIZABLE_ITEM_TYPES: readonly string[] = [
+  'lakehouse',
+];
+
+/**
+ * CANONICAL source for the Weave "Promote (medallion)" edge `fromTypes`.
+ * thread-actions.ts reads this via `medallionPromotableTypes()`. A bronze /
+ * silver Delta table in a lakehouse is promoted to the next layer by a real
+ * Synapse Spark notebook (read Delta → transform → write next-layer Delta +
+ * register) — the medallion spine, Azure-native (no Fabric).
+ */
+export const MEDALLION_PROMOTABLE_ITEM_TYPES: readonly string[] = [
+  'lakehouse',
 ];
 
 /**

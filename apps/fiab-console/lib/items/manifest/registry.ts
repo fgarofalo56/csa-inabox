@@ -24,7 +24,10 @@ import { ITEM_PAIRING_RULES } from '@/lib/items/registry';
 import {
   AZURE_BACKENDS,
   DATA_AGENT_SOURCEABLE_ITEM_TYPES,
+  DAX_ANALYZABLE_ITEM_TYPES,
   FAMILY_KIND,
+  LAKEHOUSE_KQL_MATERIALIZABLE_ITEM_TYPES,
+  MEDALLION_PROMOTABLE_ITEM_TYPES,
   NOTEBOOK_ATTACHABLE_ITEM_TYPES,
   PBI_SOURCEABLE_ITEM_TYPES,
   POWERBI_MODELABLE_ITEM_TYPES,
@@ -70,6 +73,9 @@ function toManifest(t: FabricItemType): ItemManifest {
       powerBiModelable: POWERBI_MODELABLE_ITEM_TYPES.includes(t.slug),
       notebookAttachable: NOTEBOOK_ATTACHABLE_ITEM_TYPES.includes(t.slug),
       dataAgentSourceable: DATA_AGENT_SOURCEABLE_ITEM_TYPES.includes(t.slug),
+      daxAnalyzable: DAX_ANALYZABLE_ITEM_TYPES.includes(t.slug),
+      lakehouseKqlMaterializable: LAKEHOUSE_KQL_MATERIALIZABLE_ITEM_TYPES.includes(t.slug),
+      medallionPromotable: MEDALLION_PROMOTABLE_ITEM_TYPES.includes(t.slug),
     },
   };
 }
@@ -154,6 +160,30 @@ export function powerBiModelableTypes(): string[] {
   return typesWithCapability(POWERBI_MODELABLE_ITEM_TYPES, 'powerBiModelable');
 }
 
+/**
+ * Item-type slugs whose manifest declares `capabilities.daxAnalyzable` — the
+ * canonical `fromTypes` for the Weave "Analyze with DAX" edge.
+ */
+export function daxAnalyzableTypes(): string[] {
+  return typesWithCapability(DAX_ANALYZABLE_ITEM_TYPES, 'daxAnalyzable');
+}
+
+/**
+ * Item-type slugs whose manifest declares `capabilities.lakehouseKqlMaterializable`
+ * — the canonical `fromTypes` for the Weave "Materialize to KQL (ADX)" edge.
+ */
+export function lakehouseKqlMaterializableTypes(): string[] {
+  return typesWithCapability(LAKEHOUSE_KQL_MATERIALIZABLE_ITEM_TYPES, 'lakehouseKqlMaterializable');
+}
+
+/**
+ * Item-type slugs whose manifest declares `capabilities.medallionPromotable` —
+ * the canonical `fromTypes` for the Weave "Promote (medallion)" edge.
+ */
+export function medallionPromotableTypes(): string[] {
+  return typesWithCapability(MEDALLION_PROMOTABLE_ITEM_TYPES, 'medallionPromotable');
+}
+
 export interface ManifestConsistencyReport {
   ok: boolean;
   problems: string[];
@@ -203,6 +233,9 @@ export function checkManifestConsistency(): ManifestConsistencyReport {
     ['NOTEBOOK_ATTACHABLE_ITEM_TYPES', NOTEBOOK_ATTACHABLE_ITEM_TYPES],
     ['DATA_AGENT_SOURCEABLE_ITEM_TYPES', DATA_AGENT_SOURCEABLE_ITEM_TYPES],
     ['POWERBI_MODELABLE_ITEM_TYPES', POWERBI_MODELABLE_ITEM_TYPES],
+    ['DAX_ANALYZABLE_ITEM_TYPES', DAX_ANALYZABLE_ITEM_TYPES],
+    ['LAKEHOUSE_KQL_MATERIALIZABLE_ITEM_TYPES', LAKEHOUSE_KQL_MATERIALIZABLE_ITEM_TYPES],
+    ['MEDALLION_PROMOTABLE_ITEM_TYPES', MEDALLION_PROMOTABLE_ITEM_TYPES],
     ['WEAVE_SOURCEABLE_ITEM_TYPES', WEAVE_SOURCEABLE_ITEM_TYPES],
   ];
   for (const [name, list] of lists) {
@@ -245,6 +278,15 @@ export function checkManifestConsistency(): ManifestConsistencyReport {
     }
     if (cap.pbiSourceable && !cap.weaveSourceable) {
       problems.push(`manifest '${m.type}' pbiSourceable but not weaveSourceable`);
+    }
+    if (cap.daxAnalyzable && !cap.weaveSourceable) {
+      problems.push(`manifest '${m.type}' daxAnalyzable but not weaveSourceable`);
+    }
+    if (cap.lakehouseKqlMaterializable && !cap.weaveSourceable) {
+      problems.push(`manifest '${m.type}' lakehouseKqlMaterializable but not weaveSourceable`);
+    }
+    if (cap.medallionPromotable && !cap.weaveSourceable) {
+      problems.push(`manifest '${m.type}' medallionPromotable but not weaveSourceable`);
     }
   }
 
