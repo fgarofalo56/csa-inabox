@@ -1617,20 +1617,27 @@ nav:
           # change that commits the published captures (publish-tutorials.mjs output):
           #   - Visual Tutorials (per item / app / feature): fiab/tutorials/items/index.md
           - Editor Tutorials (per-item):
+              - "Datamart (migration)": fiab/tutorials/editor-datamart.md
+              - "Spindle (AIP Logic & agents)": fiab/tutorials/editor-aip-logic.md
               - Activator: fiab/tutorials/editor-activator.md
               - ADF Dataset: fiab/tutorials/editor-adf-dataset.md
               - ADF Pipeline: fiab/tutorials/editor-adf-pipeline.md
               - ADF Trigger: fiab/tutorials/editor-adf-trigger.md
               - AI Builder Model: fiab/tutorials/editor-ai-builder-model.md
+              - AI Enrichment: fiab/tutorials/editor-ai-enrichment.md
               - AI Foundry Hub: fiab/tutorials/editor-ai-foundry-hub.md
               - AI Foundry Project: fiab/tutorials/editor-ai-foundry-project.md
               - AI Search Index: fiab/tutorials/editor-ai-search-index.md
+              - Apache Airflow Job: fiab/tutorials/editor-airflow-job.md
               - APIM API: fiab/tutorials/editor-apim-api.md
               - APIM Policy: fiab/tutorials/editor-apim-policy.md
               - APIM Product: fiab/tutorials/editor-apim-product.md
+              - AutoML: fiab/tutorials/editor-automl.md
+              - Azure Cosmos DB Account: fiab/tutorials/editor-azure-cosmos-account.md
               - Azure SQL Database: fiab/tutorials/editor-azure-sql-database.md
               - Azure SQL Managed Instance: fiab/tutorials/editor-azure-sql-managed-instance.md
               - Azure SQL Server: fiab/tutorials/editor-azure-sql-server.md
+              - Batch Pool: fiab/tutorials/editor-batch-pool.md
               - Compute: fiab/tutorials/editor-compute.md
               - Content Safety: fiab/tutorials/editor-content-safety.md
               - Copilot Studio Action: fiab/tutorials/editor-copilot-studio-action.md
@@ -1646,6 +1653,8 @@ nav:
               - Cypher Graph: fiab/tutorials/editor-cypher-graph.md
               - Dashboard: fiab/tutorials/editor-dashboard.md
               - Data Agent: fiab/tutorials/editor-data-agent.md
+              - Data API Builder: fiab/tutorials/editor-data-api-builder.md
+              - Data Marketplace: fiab/tutorials/editor-data-marketplace.md
               - Data Pipeline: fiab/tutorials/editor-data-pipeline.md
               - Data Product: fiab/tutorials/editor-data-product.md
               - Data Product Instance: fiab/tutorials/editor-data-product-instance.md
@@ -1653,13 +1662,18 @@ nav:
               - Databricks Cluster: fiab/tutorials/editor-databricks-cluster.md
               - Databricks Job: fiab/tutorials/editor-databricks-job.md
               - Databricks Notebook: fiab/tutorials/editor-databricks-notebook.md
+              - Databricks Pipeline: fiab/tutorials/editor-databricks-pipeline.md
               - Databricks SQL Warehouse: fiab/tutorials/editor-databricks-sql-warehouse.md
               - Dataflow: fiab/tutorials/editor-dataflow.md
               - Dataset: fiab/tutorials/editor-dataset.md
               - Dataverse Table: fiab/tutorials/editor-dataverse-table.md
               - dbt Job: fiab/tutorials/editor-dbt-job.md
+              - Digital Twin: fiab/tutorials/editor-digital-twin.md
               - Environment: fiab/tutorials/editor-environment.md
               - Evaluation: fiab/tutorials/editor-evaluation.md
+              - Event Grid Topic: fiab/tutorials/editor-event-grid-topic.md
+              - Event Hubs Namespace: fiab/tutorials/editor-event-hubs-namespace.md
+              - Event Schema Set: fiab/tutorials/editor-event-schema-set.md
               - Eventhouse: fiab/tutorials/editor-eventhouse.md
               - Eventstream: fiab/tutorials/editor-eventstream.md
               - Geo Dataset: fiab/tutorials/editor-geo-dataset.md
@@ -1669,70 +1683,63 @@ nav:
               - GQL Graph: fiab/tutorials/editor-gql-graph.md
               - Graph Model: fiab/tutorials/editor-graph-model.md
               - GraphQL API: fiab/tutorials/editor-graphql-api.md
+              - Health Check: fiab/tutorials/editor-health-check.md
+              - Integration Runtime: fiab/tutorials/editor-integration-runtime.md
               - KQL Dashboard: fiab/tutorials/editor-kql-dashboard.md
               - KQL Database: fiab/tutorials/editor-kql-database.md
               - KQL Queryset: fiab/tutorials/editor-kql-queryset.md
+              - Lakebase Postgres: fiab/tutorials/editor-lakebase-postgres.md
               - Lakehouse: fiab/tutorials/editor-lakehouse.md
+              - Lakehouse Shortcut: fiab/tutorials/editor-lakehouse-shortcut.md
+              - Linked Service: fiab/tutorials/editor-linked-service.md
+              - Logic App: fiab/tutorials/editor-logic-app.md
+              - Loom App: fiab/tutorials/editor-loom-app.md
+              - Loom App Runtime: fiab/tutorials/editor-loom-app-runtime.md
               - Map: fiab/tutorials/editor-map.md
+              - Mapping Data Flow: fiab/tutorials/editor-mapping-dataflow.md
+              - Materialized Lake View: fiab/tutorials/editor-materialized-lake-view.md
               - Mirrored Database: fiab/tutorials/editor-mirrored-database.md
+              - Mirrored Databricks Catalog: fiab/tutorials/editor-mirrored-databricks.md
               - ML Experiment: fiab/tutorials/editor-ml-experiment.md
               - ML Model: fiab/tutorials/editor-ml-model.md
+              - Mounted Data Factory: fiab/tutorials/editor-mounted-adf.md
               - Notebook: fiab/tutorials/editor-notebook.md
               - Ontology: fiab/tutorials/editor-ontology.md
+              - Ontology SDK: fiab/tutorials/editor-ontology-sdk.md
               - Operations Agent: fiab/tutorials/editor-operations-agent.md
               - Paginated Report: fiab/tutorials/editor-paginated-report.md
               - Plan: fiab/tutorials/editor-plan.md
+              - PostgreSQL Flexible Server: fiab/tutorials/editor-postgres-flexible-server.md
               - Power App: fiab/tutorials/editor-power-app.md
               - Power Automate Flow: fiab/tutorials/editor-power-automate-flow.md
               - Power Page: fiab/tutorials/editor-power-page.md
               - Power Platform Environment: fiab/tutorials/editor-powerplatform-environment.md
               - Prompt Flow: fiab/tutorials/editor-prompt-flow.md
+              - Rayfin App: fiab/tutorials/editor-rayfin-app.md
+              - Release Environment: fiab/tutorials/editor-release-environment.md
               - Report: fiab/tutorials/editor-report.md
               - Scorecard: fiab/tutorials/editor-scorecard.md
               - Semantic Model: fiab/tutorials/editor-semantic-model.md
+              - Service Bus Namespace: fiab/tutorials/editor-service-bus-namespace.md
+              - Slate App: fiab/tutorials/editor-slate-app.md
+              - Spark Environment: fiab/tutorials/editor-spark-environment.md
               - Spark Job Definition: fiab/tutorials/editor-spark-job-definition.md
+              - SQL Analytics Endpoint: fiab/tutorials/editor-sql-analytics-endpoint.md
+              - SQL Database: fiab/tutorials/editor-sql-database.md
               - SQL Server 2025 Vector Index: fiab/tutorials/editor-sql-server-2025-vector-index.md
+              - Stream Analytics Job: fiab/tutorials/editor-stream-analytics-job.md
               - Synapse Dedicated SQL Pool: fiab/tutorials/editor-synapse-dedicated-sql-pool.md
+              - Synapse Notebook: fiab/tutorials/editor-synapse-notebook.md
               - Synapse Pipeline: fiab/tutorials/editor-synapse-pipeline.md
               - Synapse Serverless SQL Pool: fiab/tutorials/editor-synapse-serverless-sql-pool.md
               - Synapse Spark Pool: fiab/tutorials/editor-synapse-spark-pool.md
+              - Tapestry: fiab/tutorials/editor-tapestry.md
               - Tracing: fiab/tutorials/editor-tracing.md
               - User Data Function: fiab/tutorials/editor-user-data-function.md
               - Variable Library: fiab/tutorials/editor-variable-library.md
               - Vector Store: fiab/tutorials/editor-vector-store.md
               - Warehouse: fiab/tutorials/editor-warehouse.md
-              - Event Grid Topic: fiab/tutorials/editor-event-grid-topic.md
-              - Event Hubs Namespace: fiab/tutorials/editor-event-hubs-namespace.md
-              - Health Check: fiab/tutorials/editor-health-check.md
-              - Lakehouse Shortcut: fiab/tutorials/editor-lakehouse-shortcut.md
-              - Ontology SDK: fiab/tutorials/editor-ontology-sdk.md
-              - Release Environment: fiab/tutorials/editor-release-environment.md
-              - Service Bus Namespace: fiab/tutorials/editor-service-bus-namespace.md
-              - Slate App: fiab/tutorials/editor-slate-app.md
-              - "Spindle (AIP Logic & agents)": fiab/tutorials/editor-aip-logic.md
               - Workshop App: fiab/tutorials/editor-workshop-app.md
-              - Apache Airflow Job: fiab/tutorials/editor-airflow-job.md
-              - AutoML: fiab/tutorials/editor-automl.md
-              - Azure Cosmos DB Account: fiab/tutorials/editor-azure-cosmos-account.md
-              - Data API Builder: fiab/tutorials/editor-data-api-builder.md
-              - Data Marketplace: fiab/tutorials/editor-data-marketplace.md
-              - "Datamart (migration)": fiab/tutorials/editor-datamart.md
-              - Event Schema Set: fiab/tutorials/editor-event-schema-set.md
-              - Integration Runtime: fiab/tutorials/editor-integration-runtime.md
-              - Linked Service: fiab/tutorials/editor-linked-service.md
-              - Logic App: fiab/tutorials/editor-logic-app.md
-              - Mapping Data Flow: fiab/tutorials/editor-mapping-dataflow.md
-              - Materialized Lake View: fiab/tutorials/editor-materialized-lake-view.md
-              - Mirrored Databricks Catalog: fiab/tutorials/editor-mirrored-databricks.md
-              - Mounted Data Factory: fiab/tutorials/editor-mounted-adf.md
-              - PostgreSQL Flexible Server: fiab/tutorials/editor-postgres-flexible-server.md
-              - Rayfin App: fiab/tutorials/editor-rayfin-app.md
-              - Spark Environment: fiab/tutorials/editor-spark-environment.md
-              - SQL Analytics Endpoint: fiab/tutorials/editor-sql-analytics-endpoint.md
-              - SQL Database: fiab/tutorials/editor-sql-database.md
-              - Stream Analytics Job: fiab/tutorials/editor-stream-analytics-job.md
-              - Synapse Notebook: fiab/tutorials/editor-synapse-notebook.md
-              - Tapestry: fiab/tutorials/editor-tapestry.md
               - Workspace Monitoring: fiab/tutorials/editor-workspace-monitor.md
       # ------------------------------------------------------------
       # 6. Custom Applications & Services
