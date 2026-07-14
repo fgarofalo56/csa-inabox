@@ -16,7 +16,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { enforceRateLimit } from '@/lib/azure/rate-limiter';
 import { apiServerError } from '@/lib/api/respond';
-import { createDemoJob, runDemoDeploy, SHOWCASE_APPS } from '@/lib/apps/demo-deploy';
+import { createDemoJob, runDemoDeploy, selfBaseUrl, SHOWCASE_APPS } from '@/lib/apps/demo-deploy';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -48,7 +48,7 @@ export async function GET(req: NextRequest) {
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   // Best-effort "is a demo already deployed?" — look for any Demo — workspace.
   try {
-    const r = await fetch(`${req.nextUrl.origin}/api/workspaces`, { headers: { cookie: req.headers.get('cookie') || '' } });
+    const r = await fetch(`${selfBaseUrl()}/api/workspaces`, { headers: { cookie: req.headers.get('cookie') || '' } });
     const j = await r.json().catch(() => ({}));
     const list = Array.isArray(j) ? j : (j.workspaces || j.items || []);
     const demoWs = list.filter((w: any) => /^Demo — /.test(w.name || w.displayName || ''));
