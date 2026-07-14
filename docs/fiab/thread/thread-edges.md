@@ -76,12 +76,75 @@ Secure by default: the "Require authentication" toggle sets the entity
 permission role to `authenticated` (vs `anonymous`). The host auth provider
 (EntraId + jwt) is configured in the editor before deploy.
 
+## Analyze with DAX — detail
+
+From a Loom-native `semantic-model` item (including a warehouse-backed model),
+generate + execute a DAX query without typing DAX:
+
+1. **Table picker** — `/api/thread/model-tables` lists the model's tables (read
+   from `state.content.tables`, owner-scoped). **Query kind** is a dropdown
+   (preview rows / top 100 / row count).
+2. **Execute** — `POST /api/thread/analyze-with-dax`: synthesizes a DAX
+   `EVALUATE` from the picks (`daxQueryTemplate`) and runs it through **the same
+   executor the model's DAX query view + the report designer use** —
+   `evalDax` (Synapse serverless SQL by default via DAX→SQL translate; AAS XMLA
+   only when opted in). Returns the real result rows as a receipt and deep-links
+   the model's DAX query view.
+3. **Lineage** — a `thread-edges` row `semantic-model → dax-query` records the
+   analysis (the pseudo-endpoint deep-links back to the DAX view — an ad-hoc DAX
+   read has no second Loom item, so this avoids a self-loop while keeping the
+   graph truthful).
+
+**no-fabric-dependency note:** the DEFAULT tabular backend is Synapse serverless
+SQL. No `api.powerbi.com` / `api.fabric.microsoft.com` is called; a `TabularError`
+(e.g. unsupported DAX pattern, missing backing table) surfaces verbatim.
+
+## Materialize to KQL (ADX) — detail
+
+From a `lakehouse`, bind one of its ADLS Delta tables to an Azure Data Explorer
+external table so it's queryable with KQL — the Azure-native "lakehouse → KQL"
+bridge (no Fabric RTI Eventhouse):
+
+1. **Table picker** — `/api/thread/lakehouse-delta-tables` scans the lakehouse's
+   own `Tables/` root (`scanLakehouseTables` + `_delta_log` read) and lists the
+   Delta tables. **KQL database** is a `loom-item` picker (`kql-database` /
+   `eventhouse`); **query acceleration** is a toggle.
+2. **Execute** — `POST /api/thread/materialize-to-kql`: resolves the lakehouse's
+   abfss root (`resolveLakehouseAbfss`), builds the Delta table's abfss folder,
+   and runs the real ADX mgmt command `createExternalDeltaTable`
+   (`.create-or-alter external table … kind=delta`, storage auth via the
+   cluster's system-assigned MI). When acceleration is on it also runs
+   `setQueryAccelerationPolicy` (best-effort; a failure is reported but the
+   external table still works).
+3. **Lineage** — a `thread-edges` row `lakehouse → kql-database`.
+
+**Honest gates:** `LOOM_KUSTO_CLUSTER_URI` unset → 503 naming it; a `KustoError`
+401/403 names the exact grant (Console UAMI `AllDatabasesAdmin`; cluster MI
+`Storage Blob Data Reader` on the ADLS account).
+
+## Promote (medallion) — detail
+
+From a `lakehouse`, promote a bronze/silver Delta table to the next layer — the
+medallion spine:
+
+1. **Pickers** — Delta table (`/api/thread/lakehouse-delta-tables`), target
+   layer (silver/gold), transform (clean + de-dup / aggregate), and a target
+   lakehouse (`loom-item`, `+ Create new`).
+2. **Execute** — `POST /api/thread/promote-medallion`: resolves the source +
+   target abfss Delta paths and scaffolds a **real Synapse Spark notebook**
+   (read source Delta → apply the transform → write the promoted Delta table to
+   the target lakehouse's `Tables/`) with both lakehouses attached, exactly like
+   the shipped "Analyze in a Notebook" / "Explore mirrored data" edges. The
+   promotion runs on real Synapse Spark (Livy) when the user hits **Run** (the
+   proven `%%pyspark` path).
+3. **Lineage** — `thread-edges` rows `lakehouse → lakehouse` (the promotion) and
+   `lakehouse → notebook` (the scaffolder).
+
+**no-vaporware note:** the notebook + generated PySpark are 100% real; the
+promotion executes on the notebook's real Spark backend at Run. No mock.
+
 ### Deferred (next Thread PRs)
 
 - lakehouse / KQL / azure-sql-database → Power BI model + API (needs the
-  per-backend schema adapter — lands with the columns adapter in PR4).
-- Report build from the model + embedded report in Loom (PR5 deepening).
-- data-agent **semantic-model (DAX)** execution via `executeQueries` (PR5
-  deepening — unblocks grounding on a Power BI model's measures).
-- query → UDF REST endpoint (PR3 remainder); medallion promotion + mesh
-  viewer (PR4).
+  per-backend schema adapter — lands with the columns adapter).
+- query → UDF REST endpoint (PR3 remainder); React-Flow node-link mesh viewer.

@@ -1,12 +1,11 @@
 /**
  * wells-to-kql — unit spec for the staged ADX-engine wells→KQL compiler.
  *
- * WHY THIS EXISTS: `buildKqlFromVisual` is a COMPLETE, real KQL synthesizer that
- * is intentionally not yet wired into the live Get-Data pipeline (no bindable
- * `adx` LoomConnection in Wave 1 — `report-model-resolver.ts` honest-gates the
- * ADX path; see the module header). Without a consumer it would read as dead
- * code. This spec is that consumer: it exercises every visual shape (table /
- * slicer / card / grouped chart / time-series make-series / Top-N) plus the
+ * WHY THIS EXISTS: `buildKqlFromVisual` is a COMPLETE, real KQL synthesizer wired
+ * into the live Get-Data pipeline via `report-model-resolver.ts`'s `case 'adx':`
+ * → `makeAdxExecutor.runVisual`. This spec exercises every visual shape (table /
+ * slicer / card / grouped chart / time-series make-series / Top-N), the external
+ * -table `sourceExpr` head (`external_table("…")`, W1 forward-compat), plus the
  * shared Filters-pane model (scalar / in / between / contains / relativeDate)
  * and the injection-safety contract (identifier whitelisting + literal
  * escaping), so the compiler's SHARED-CONTRACT output is regression-guarded NOW
@@ -34,6 +33,39 @@ const SRC: KqlSource = {
 };
 
 const v = (type: string, wells: NonNullable<DaxVisual['wells']>): DaxVisual => ({ type, wells });
+
+describe('buildKqlFromVisual — external-table sourceExpr head (W1 ADX connector)', () => {
+  // An ADX EXTERNAL table (e.g. a Delta table bound by the Weave "Materialize to
+  // KQL" edge) is read via `external_table("…")` — the compiler must use that as
+  // the pipeline head verbatim instead of the bracket-quoted table identifier,
+  // while still whitelisting columns + compiling the wells.
+  const EXT: KqlSource = { ...SRC, sourceExpr: 'external_table("Orders")' };
+
+  it('table visual → external_table(...) head + real projection', () => {
+    const out = buildKqlFromVisual(
+      v('table', { category: [{ column: 'Region' }], values: [{ column: 'Amount', aggregation: 'Sum' }] }),
+      undefined,
+      EXT,
+    );
+    expect(out!.kql).toBe('external_table("Orders")\n| project Region, Amount\n| top 1000 by Region asc');
+  });
+
+  it('grouped summarize → external_table(...) head, columns still whitelisted', () => {
+    const out = buildKqlFromVisual(
+      v('barChart', { category: [{ column: 'Region' }], values: [{ column: 'Amount', aggregation: 'Sum' }] }),
+      undefined,
+      EXT,
+    );
+    expect(out!.kql).toContain('external_table("Orders")');
+    expect(out!.kql).toContain('summarize');
+    expect(out!.kql).toContain('by Region');
+  });
+
+  it('a managed table (no sourceExpr) still uses the bracket-quoted identifier', () => {
+    const out = buildKqlFromVisual(v('slicer', { category: [{ column: 'Region' }] }), undefined, SRC);
+    expect(out!.kql.startsWith('Sales\n')).toBe(true);
+  });
+});
 
 describe('buildKqlFromVisual — query shapes', () => {
   it('table visual → project + capped deterministic ordering', () => {

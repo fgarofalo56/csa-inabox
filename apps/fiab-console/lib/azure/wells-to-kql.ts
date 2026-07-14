@@ -73,8 +73,22 @@ export interface KqlSourceColumn {
 export interface KqlSource {
   /** The source table the pipeline reads from (`<table> | …`). */
   table: string;
+  /**
+   * Optional pre-formed KQL tabular source expression used as the pipeline head
+   * VERBATIM instead of `kqlIdent(table)` — e.g. `external_table("orders")` for
+   * an ADX external table (the Weave "Materialize to KQL" edge binds a lakehouse
+   * Delta table this way). The caller is responsible for its escaping; `table`
+   * still names the source for labels + column whitelisting.
+   */
+  sourceExpr?: string;
   /** Whitelist of selectable columns (the only legal identifiers). */
   columns: KqlSourceColumn[];
+}
+
+/** The KQL tabular-source head for a source: a verbatim `sourceExpr`, else the
+ *  bracket-quoted table identifier. Single place both the compiler + probes use. */
+export function kqlSourceHead(src: KqlSource): string {
+  return src.sourceExpr && src.sourceExpr.trim() ? src.sourceExpr.trim() : kqlIdent(src.table);
 }
 
 // ── Compiled output ────────────────────────────────────────────────────────────
@@ -425,9 +439,9 @@ function topNRankExpr(
 
 // ── Pipeline assembly ──────────────────────────────────────────────────────────
 
-/** Join the source table + pipe operators into a single KQL statement. */
-function pipeline(table: string, segments: string[]): string {
-  const head = kqlIdent(table);
+/** Join the source head (already-formed KQL tabular expression) + pipe operators
+ *  into a single KQL statement. */
+function pipeline(head: string, segments: string[]): string {
   return segments.length ? `${head}\n| ${segments.join('\n| ')}` : head;
 }
 
@@ -477,6 +491,9 @@ export function buildKqlFromVisual(
   const values = wells.values || [];
   const legend = wells.legend || [];
   const type = (visual.type || '').toLowerCase();
+  // Source head: an external-table `external_table("…")` expression when the
+  // caller supplied `sourceExpr`, else the bracket-quoted table identifier.
+  const head = kqlSourceHead(src);
 
   // ── table → raw projection (no aggregation, no grouping) ────────────────────
   if (type === 'table') {
@@ -492,7 +509,7 @@ export function buildKqlFromVisual(
     segs.push(`project ${cols.map(kqlIdent).join(', ')}`);
     // Deterministic, capped projection (ADX `top … by` keeps the first N ordered).
     segs.push(`top ${ROW_CAP} by ${kqlIdent(cols[0])} asc`);
-    return { kql: pipeline(src.table, segs) };
+    return { kql: pipeline(head, segs) };
   }
 
   // ── slicer → distinct category values ───────────────────────────────────────
@@ -506,7 +523,7 @@ export function buildKqlFromVisual(
     if (where.length) segs.push(`where ${where.join(' and ')}`);
     segs.push(`distinct ${g.map((c) => c.ref).join(', ')}`);
     segs.push(`take ${ROW_CAP}`);
-    return { kql: pipeline(src.table, segs) };
+    return { kql: pipeline(head, segs) };
   }
 
   // ── card / chart / matrix → aggregate (optionally grouped) ──────────────────
@@ -535,7 +552,7 @@ export function buildKqlFromVisual(
     if (where.length) segs.push(`where ${where.join(' and ')}`);
     segs.push(`distinct ${group.map((c) => c.ref).join(', ')}`);
     segs.push(`take ${ROW_CAP}`);
-    return { kql: pipeline(src.table, segs) };
+    return { kql: pipeline(head, segs) };
   }
 
   // ── time series → make-series over a binned datetime axis ───────────────────
@@ -559,7 +576,7 @@ export function buildKqlFromVisual(
       let ms = `make-series ${seriesAggs.join(', ')} on ${colRef(catDefs[0].name)} step 1d`;
       if (byCols.length) ms += ` by ${byCols.map((c) => c.ref).join(', ')}`;
       segs.push(ms);
-      return { kql: pipeline(src.table, segs) };
+      return { kql: pipeline(head, segs) };
     }
   }
 
@@ -588,5 +605,5 @@ export function buildKqlFromVisual(
     segs.push(`top ${n} by ${topNRankExpr(src, topN, aggs)} ${dir}`);
   }
 
-  return { kql: pipeline(src.table, segs) };
+  return { kql: pipeline(head, segs) };
 }

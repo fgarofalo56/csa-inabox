@@ -14,6 +14,9 @@
 
 import {
   dataAgentSourceableTypes,
+  daxAnalyzableTypes,
+  lakehouseKqlMaterializableTypes,
+  medallionPromotableTypes,
   notebookAttachableTypes,
   pbiSourceableTypes,
   powerBiModelableTypes,
@@ -102,6 +105,20 @@ const POWERBI_MODELABLE = powerBiModelableTypes();
  * is provably behavior-preserving).
  */
 export const PBI_SOURCEABLE = pbiSourceableTypes();
+
+/**
+ * Item types the Weave "Analyze with DAX" edge can source (manifest
+ * `daxAnalyzable`) — a Loom-native semantic model whose tabular layer runs DAX
+ * via `evalDax`. A warehouse-backed model IS a semantic-model item, so this
+ * single slug covers the "or warehouse-backed model" case.
+ */
+const DAX_ANALYZABLE = daxAnalyzableTypes();
+
+/** Item types the Weave "Materialize to KQL (ADX)" edge can source (manifest `lakehouseKqlMaterializable`). */
+const LAKEHOUSE_KQL_MATERIALIZABLE = lakehouseKqlMaterializableTypes();
+
+/** Item types the Weave "Promote (medallion)" edge can source (manifest `medallionPromotable`). */
+const MEDALLION_PROMOTABLE = medallionPromotableTypes();
 
 export const THREAD_ACTIONS: ThreadAction[] = [
   {
@@ -501,9 +518,165 @@ export const THREAD_ACTIONS: ThreadAction[] = [
     route: '/api/thread/mirror-to-lakehouse',
     submitLabel: 'Weave',
   },
+  {
+    // Analyze with DAX — from a Loom-native semantic model (incl. a
+    // warehouse-backed model), generate a structured DAX EVALUATE over one of
+    // the model's tables, execute it against the Azure-native tabular layer
+    // (Synapse serverless SQL by default; AAS XMLA when opted in — no Power BI /
+    // Fabric on the default path per no-fabric-dependency.md) and open the
+    // model's DAX query view pre-loaded with the generated query + a real
+    // execution receipt. Fields are dropdowns (table + query kind) — the DAX
+    // itself is synthesized server-side (never freeform, no-freeform-config.md).
+    id: 'analyze-with-dax',
+    label: 'Analyze with DAX',
+    description:
+      'Generate and run a DAX query over one of this semantic model’s tables — pick a table and a ' +
+      'query kind and Loom synthesizes a real EVALUATE, executes it against the Azure-native tabular ' +
+      'layer (Synapse serverless SQL by default), and opens the model’s DAX query view pre-loaded with ' +
+      'the query and its real result rows. No Power BI / Fabric workspace required.',
+    group: 'Analyze with AI',
+    fromTypes: DAX_ANALYZABLE,
+    icon: 'chart',
+    fields: [
+      {
+        name: 'table',
+        label: 'Table',
+        kind: 'select',
+        optionsRoute: '/api/thread/model-tables?fromId={fromId}',
+        required: true,
+        hint: 'The model table to analyze. Loom builds the DAX EVALUATE over it.',
+      },
+      {
+        name: 'queryKind',
+        label: 'Query',
+        kind: 'select',
+        options: [
+          { value: 'table-preview', label: 'Preview rows (TOPN 100)' },
+          { value: 'top-n', label: 'Top 100 rows' },
+          { value: 'row-count', label: 'Row count' },
+        ],
+        default: 'table-preview',
+        required: true,
+        hint: 'What to compute. Loom synthesizes the DAX — you never type it.',
+      },
+    ],
+    route: '/api/thread/analyze-with-dax',
+    submitLabel: 'Weave',
+  },
+  {
+    // Materialize to KQL (ADX) — from a lakehouse, bind one of its ADLS Delta
+    // tables to an Azure Data Explorer external table
+    // (`.create-or-alter external table … kind=delta`) in a target Loom
+    // kql-database / eventhouse, optionally turning on the query-acceleration
+    // policy so the Delta data is queryable via KQL within seconds. The
+    // Azure-native "lakehouse → KQL" bridge — no Fabric RTI Eventhouse required
+    // (no-fabric-dependency.md). Real ADX mgmt command; honest gate naming
+    // LOOM_KUSTO_CLUSTER_URI when ADX isn't configured.
+    id: 'materialize-to-kql',
+    label: 'Materialize to KQL (ADX)',
+    description:
+      'Expose one of this lakehouse’s Delta tables to Azure Data Explorer as an external table so you ' +
+      'can query it with KQL — pick the table and a target KQL database, and Loom binds the Delta path ' +
+      '(`kind=delta`) and (optionally) enables query acceleration for sub-second reads. Azure-native — ' +
+      'no Fabric Eventhouse required.',
+    group: 'Explore',
+    fromTypes: LAKEHOUSE_KQL_MATERIALIZABLE,
+    icon: 'kql',
+    fields: [
+      {
+        name: 'table',
+        label: 'Delta table',
+        kind: 'select',
+        optionsRoute: '/api/thread/lakehouse-delta-tables?fromId={fromId}',
+        required: true,
+        hint: 'The lakehouse Delta table to bind as an ADX external table.',
+      },
+      {
+        name: 'kqlDatabaseId',
+        label: 'KQL database',
+        kind: 'loom-item',
+        itemTypes: ['kql-database', 'eventhouse'],
+        required: true,
+        hint: 'The Azure Data Explorer database (Loom kql-database / eventhouse) to create the external table in.',
+      },
+      {
+        name: 'accelerate',
+        label: 'Enable query acceleration',
+        kind: 'toggle',
+        default: true,
+        hint: 'Cache recent Delta data in ADX for sub-second KQL queries. Turn off to query the Delta files directly.',
+      },
+    ],
+    route: '/api/thread/materialize-to-kql',
+    submitLabel: 'Weave',
+  },
+  {
+    // Promote (medallion) — from a lakehouse, promote one of its bronze/silver
+    // Delta tables to the next layer. Loom scaffolds a real Synapse Spark
+    // notebook (read the source Delta table → clean/dedup or aggregate → write
+    // the next-layer Delta table + register it) with both lakehouses attached,
+    // records the promotion lineage edge, and deep-links the notebook. The
+    // promotion runs on real Synapse Spark (Livy) when you hit Run — the
+    // medallion spine, Azure-native (no Fabric, no-vaporware.md).
+    id: 'promote-medallion',
+    label: 'Promote to next layer',
+    description:
+      'Promote one of this lakehouse’s Delta tables up the medallion (bronze→silver→gold). Loom ' +
+      'scaffolds a real Spark notebook that reads the source table, applies the chosen transform ' +
+      '(clean + dedup, or aggregate), and writes the promoted table to the target lakehouse — then ' +
+      'deep-links it so you Run it on Azure-native Synapse Spark. No Fabric required.',
+    group: 'Promote',
+    fromTypes: MEDALLION_PROMOTABLE,
+    icon: 'notebook',
+    fields: [
+      {
+        name: 'table',
+        label: 'Source Delta table',
+        kind: 'select',
+        optionsRoute: '/api/thread/lakehouse-delta-tables?fromId={fromId}',
+        required: true,
+        hint: 'The bronze / silver Delta table to promote.',
+      },
+      {
+        name: 'targetLayer',
+        label: 'Promote to layer',
+        kind: 'select',
+        options: [
+          { value: 'silver', label: 'Silver (cleaned / conformed)' },
+          { value: 'gold', label: 'Gold (aggregated / serving)' },
+        ],
+        default: 'silver',
+        required: true,
+        hint: 'The medallion layer to promote into. Silver defaults to clean+dedup; gold to aggregate.',
+      },
+      {
+        name: 'transform',
+        label: 'Transform',
+        kind: 'select',
+        options: [
+          { value: 'clean-dedup', label: 'Clean + de-duplicate' },
+          { value: 'aggregate', label: 'Aggregate (group + summarize)' },
+        ],
+        default: 'clean-dedup',
+        required: true,
+        hint: 'The promotion transform the scaffolded notebook applies to the source table.',
+      },
+      {
+        name: 'targetLakehouseId',
+        label: 'Target lakehouse',
+        kind: 'loom-item',
+        itemTypes: ['lakehouse'],
+        allowCreate: true,
+        createLabel: '+ Create a new lakehouse',
+        required: true,
+        hint: 'The lakehouse to write the promoted table into (can be the same lakehouse).',
+      },
+    ],
+    route: '/api/thread/promote-medallion',
+    submitLabel: 'Weave',
+  },
   // More edges land per the Thread PRP (docs/fiab/thread/PRP-loom-thread.md):
-  // PR2 notebook/lakehouse → SQL warehouse · PR3 table/query → API ·
-  // PR4 medallion promotion + mesh viewer · PR5 gold → Power BI model/report.
+  // PR3 remainder Delta/Databricks-SQL → API · query → UDF REST.
   // Only WIRED edges are listed here so no menu item is ever a dead end.
 ];
 

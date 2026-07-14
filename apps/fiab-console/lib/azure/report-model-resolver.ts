@@ -168,8 +168,9 @@ export interface AasDataSource {
 
 /** Loom `ConnectionType` + forward-compat report keys (kept a plain string in
  *  the persisted union for resilience; validated against this set on read).
- *  `adx`/`mysql` are honest-gate / forward-compat — there is no bindable
- *  LoomConnection for them in Wave 1. */
+ *  `adx` is fully wired as an interactive report source — managed AND external
+ *  (`external_table(...)`) Kusto tables, browse → preview → wells→KQL. `mysql`
+ *  remains an honest-gate forward-compat key (no bindable LoomConnection yet). */
 export type ReportConnType =
   | 'azure-sql' | 'synapse-dedicated' | 'synapse-serverless' | 'generic-sql'
   | 'databricks-sql' | 'postgres' | 'cosmos' | 'storage-adls'
@@ -182,7 +183,12 @@ export const REPORT_CONN_TYPES: readonly ReportConnType[] = [
 
 /** What to read inside a bound connection (discriminated by `mode`). */
 export type ReportObjectRef =
-  | { mode: 'table'; schema?: string; table: string }        // SQL-family (schema+table); Cosmos (table=collection); ADX (table)
+  // SQL-family (schema+table); Cosmos (table=collection); ADX (table). `external`
+  // marks an ADX EXTERNAL table (e.g. a Delta table bound by the Weave
+  // "Materialize to KQL" edge) — it is read via `external_table("<name>")`
+  // instead of a bare table reference, but still supports the full field-wells
+  // compiler (W1 ADX interactive-report connector).
+  | { mode: 'table'; schema?: string; table: string; external?: boolean }
   | { mode: 'query'; sql: string }                           // SQL-family custom SELECT (sql-guard'd)
   | { mode: 'file'; containerPath: string; format: string }  // storage-adls connection: delta|parquet|csv|json
   | { mode: 'kql'; kql: string };                            // ADX raw KQL (advanced)
@@ -255,7 +261,12 @@ function parseObjectRef(value: unknown): ReportObjectRef {
     case 'table':
     default: {
       const schema = str(v.schema);
-      return { mode: 'table', table: str(v.table) || '', ...(schema ? { schema } : {}) };
+      return {
+        mode: 'table',
+        table: str(v.table) || '',
+        ...(schema ? { schema } : {}),
+        ...(v.external === true ? { external: true } : {}),
+      };
     }
   }
 }
@@ -1386,9 +1397,20 @@ function makeCosmosExecutor(db: string, ref: ReportObjectRef): ConnectionExecuto
 // LOOM_KUSTO_CLUSTER_URI). All three methods return REAL rows — no mock.
 function makeAdxExecutor(db: string, ref: ReportObjectRef, clusterUri?: string): ConnectionExecutor {
   const table = ref.mode === 'table' ? ref.table : '';
+  const isExternal = ref.mode === 'table' && ref.external === true;
   const rawKql = ref.mode === 'kql' ? ref.kql : null;
   const opts = clusterUri ? { clusterUri } : undefined;
   let cachedCols: KqlSourceColumn[] | null = null;
+
+  // The KQL tabular-source head for a table ref: an EXTERNAL table (e.g. a Delta
+  // table bound by the Weave "Materialize to KQL" edge) is read via
+  // `external_table("<name>")`; a regular table via its bracket-quoted name. The
+  // same head drives getschema, preview, and the wells→KQL compiler so the
+  // external table is a first-class interactive report source (W1 forward-compat).
+  const sourceExpr = table && isExternal
+    ? `external_table("${table.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}")`
+    : undefined;
+  const tableHead = sourceExpr || (table ? kqlIdent(table) : '');
 
   // Resolve the source columns (typed) once — drives the Fields pane + the
   // wells→KQL compiler. Table: `<t> | getschema`. Raw KQL: a zero-row probe
@@ -1396,7 +1418,7 @@ function makeAdxExecutor(db: string, ref: ReportObjectRef, clusterUri?: string):
   async function loadColumns(): Promise<KqlSourceColumn[]> {
     if (cachedCols) return cachedCols;
     if (table) {
-      const r = await kustoExecuteQuery(db, `${kqlIdent(table)} | getschema | project ColumnName, ColumnType`, opts);
+      const r = await kustoExecuteQuery(db, `${tableHead} | getschema | project ColumnName, ColumnType`, opts);
       const nameIdx = r.columns.indexOf('ColumnName');
       const typeIdx = r.columns.indexOf('ColumnType');
       cachedCols = r.rows
@@ -1433,9 +1455,9 @@ function makeAdxExecutor(db: string, ref: ReportObjectRef, clusterUri?: string):
         return { rows: rowsToRecords(r.columns, r.rows), query: rawKql, lang: 'kql' };
       }
       const cols = await loadColumns();
-      const compiled = buildKqlFromVisual(visual, filters, { table, columns: cols });
+      const compiled = buildKqlFromVisual(visual, filters, { table, columns: cols, sourceExpr });
       // No usable wells yet → honest empty (a zero-row probe), same as the SQL path.
-      const kql = compiled ? compiled.kql : `${kqlIdent(table)} | take 0`;
+      const kql = compiled ? compiled.kql : `${tableHead} | take 0`;
       const r = await kustoExecuteQuery(db, kql, opts);
       return { rows: rowsToRecords(r.columns, r.rows), query: kql, lang: 'kql' };
     },
@@ -1448,7 +1470,7 @@ function makeAdxExecutor(db: string, ref: ReportObjectRef, clusterUri?: string):
         const rows = rowsToRecords(r.columns, r.rows);
         return { columns: r.columns, rows: rows.slice(0, n), truncated: rows.length > n || r.truncated };
       }
-      const q = `${kqlIdent(table)} | take ${n}`;
+      const q = `${tableHead} | take ${n}`;
       const r = await kustoExecuteQuery(db, q, opts);
       return { columns: r.columns, rows: rowsToRecords(r.columns, r.rows), truncated: r.rowCount >= n };
     },

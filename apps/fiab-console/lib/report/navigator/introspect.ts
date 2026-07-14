@@ -41,6 +41,7 @@ import {
 import { scanLakehouseTables, type CatalogTable } from '@/lib/azure/synapse-catalog-client';
 import {
   listTables as listKustoTables,
+  listExternalTables as listKustoExternalTables,
   kustoConfigGate,
   defaultDatabase as kustoDefaultDatabase,
 } from '@/lib/azure/kusto-client';
@@ -540,14 +541,33 @@ export async function introspectAdx(
   if (level === 'catalog') {
     return [{ name: db, kind: 'catalog', hasChildren: true, selectable: false }];
   }
-  const tables = await listKustoTables(db);
-  return tables.map((t) => ({
+  // Regular Kusto tables PLUS external tables (e.g. the Delta external tables the
+  // Weave "Materialize to KQL" edge binds over a lakehouse). External tables are
+  // read via `external_table("<name>")` — flagged on the objectRef so the ADX
+  // executor + wells→KQL compiler build the right source head. Best-effort on the
+  // external list (an ADX cluster with none, or lacking the show grant, still
+  // returns the regular tables).
+  const [tables, externalTables] = await Promise.all([
+    listKustoTables(db),
+    listKustoExternalTables(db).catch(() => [] as Awaited<ReturnType<typeof listKustoExternalTables>>),
+  ]);
+  const regular = tables.map((t) => ({
     name: t.name,
     kind: 'table' as const,
     hasChildren: false,
     selectable: true,
     objectRef: { mode: 'table', table: t.name } as ReportObjectRef,
   }));
+  const external = externalTables.map((t) => ({
+    name: t.name,
+    kind: 'table' as const,
+    // Distinguish external (Delta / storage-backed) tables from managed ones.
+    fullName: `${t.name} (external)`,
+    hasChildren: false,
+    selectable: true,
+    objectRef: { mode: 'table', table: t.name, external: true } as ReportObjectRef,
+  }));
+  return [...regular, ...external];
 }
 
 /**
