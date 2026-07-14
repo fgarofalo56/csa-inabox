@@ -268,9 +268,19 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string;
         }
         if (['error', 'dead', 'killed', 'shutting_down'].includes(sess.state)) {
           // Terminal session — clean the stale pendingRuns entry so a resume
-          // poll doesn't retry it forever (R3 #4).
+          // poll doesn't retry it forever (R3 #4). Surface Livy's REAL failure
+          // reason (errorInfo, e.g. the MAX_QUEUED_JOBS queue-jam rejection)
+          // instead of an opaque terminal-state message.
           await clearPendingRuns(items, nb, workspaceId, [runId, basePendingKey]);
-          return NextResponse.json({ ok: false, error: `Spark session ${sessionId} entered terminal state '${sess.state}'`, status: sess.state });
+          const detail = ((sess as { errorInfo?: Array<{ message?: string; errorCode?: string }> | null }).errorInfo || [])
+            .map((e) => e?.message || e?.errorCode || '')
+            .filter(Boolean)
+            .join('; ');
+          return NextResponse.json({
+            ok: false,
+            error: `Spark session ${sessionId} entered terminal state '${sess.state}'${detail ? ` — ${detail}` : ''}`,
+            status: sess.state,
+          });
         }
         return NextResponse.json({ ok: true, status: sess.state, runId, phase: 'session-starting' });
       }

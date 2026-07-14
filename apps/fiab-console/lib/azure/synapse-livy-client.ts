@@ -112,13 +112,32 @@ export interface LivySessionOptions {
   conf?: Record<string, string>;
 }
 
+/** Synapse Livy's per-session error detail (detailed=true), e.g. the
+ * MAX_QUEUED_JOBS_PER_COMPUTE_EXCEEDED queue-jam rejection. */
+export interface LivySessionErrorInfo {
+  message?: string;
+  errorCode?: string;
+  source?: string;
+}
+
 export interface LivySession {
   id: number;
   state: string;
   kind?: string;
+  /** Session name (present when the list/get call passes detailed=true). */
+  name?: string | null;
   appId?: string | null;
   appInfo?: { sparkUiUrl?: string; driverLogUrl?: string } | null;
   log?: string[];
+  errorInfo?: LivySessionErrorInfo[] | null;
+}
+
+/** Human-readable summary of a terminal session's errorInfo ('' when none). */
+export function livyErrorDetail(sess: Pick<LivySession, 'errorInfo'>): string {
+  return (sess.errorInfo || [])
+    .map((e) => e?.message || e?.errorCode || '')
+    .filter(Boolean)
+    .join('; ');
 }
 
 export interface LivyStatementOutput {
@@ -180,7 +199,10 @@ export async function createLivySession(
 }
 
 export async function getLivySession(poolName: string, sessionId: number): Promise<LivySession> {
-  const r = await callDev(`${livyBase(poolName)}/sessions/${sessionId}`);
+  // detailed=true adds `errorInfo` so a terminal session's REAL failure reason
+  // (e.g. the MAX_QUEUED_JOBS_PER_COMPUTE_EXCEEDED queue-jam rejection) reaches
+  // the editor instead of an opaque "entered terminal state 'error'".
+  const r = await callDev(`${livyBase(poolName)}/sessions/${sessionId}?detailed=true`);
   return jsonOrThrow<LivySession>(r, `getLivySession(${poolName}/${sessionId})`);
 }
 
@@ -202,7 +224,9 @@ export async function listLivySessions(
   let from = 0;
   // Page until we reach `total`, run dry, or hit the hard cap.
   for (let guard = 0; guard < Math.ceil(hardCap / size) + 1; guard++) {
-    const r = await callDev(`${livyBase(poolName)}/sessions?from=${from}&size=${size}`);
+    // detailed=true adds `name` (and errorInfo) — the reaper's busy-zombie rule
+    // matches pool-owned sessions by their loom-warmpool-* name.
+    const r = await callDev(`${livyBase(poolName)}/sessions?from=${from}&size=${size}&detailed=true`);
     const page = await jsonOrThrow<{ from?: number; total?: number; sessions?: LivySession[] }>(
       r,
       `listLivySessions(${poolName})`,

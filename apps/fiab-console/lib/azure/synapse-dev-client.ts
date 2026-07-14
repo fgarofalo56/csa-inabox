@@ -891,15 +891,18 @@ export async function submitLivyBatch(args: {
   //    while the session is in 'starting'/'busy'/'shutting_down' states.
   //    First cold start of a Spark pool can take 60-90s.
   let sessState = sess.state;
+  let sessErrDetail = '';
   for (let i = 0; i < 60; i++) {
     if (sessState === 'idle') break;
     if (sessState === 'error' || sessState === 'dead' || sessState === 'killed') {
-      throw new Error(`Spark session ${sess.id} entered terminal state '${sessState}' before becoming ready`);
+      throw new Error(
+        `Spark session ${sess.id} entered terminal state '${sessState}' before becoming ready${sessErrDetail ? ` — ${sessErrDetail}` : ''}`,
+      );
     }
     await new Promise(r => setTimeout(r, 3000));
-    const polled = await callDev(`/livyApi/versions/${LIVY_API}/sparkPools/${poolName}/sessions/${sess.id}`);
-    const j = await jsonOrThrow<{ state: string }>(polled, `pollLivySession(${poolName}/${sess.id})`);
-    sessState = j.state;
+    const polled = await getLivySession(poolName, sess.id);
+    sessState = polled.state;
+    sessErrDetail = (polled.errorInfo || []).map((e) => e?.message || e?.errorCode || '').filter(Boolean).join('; ');
   }
   if (sessState !== 'idle') {
     throw new Error(`Spark session ${sess.id} not ready after 3 min — current state '${sessState}'. Pool may be undersized or auto-paused.`);
@@ -996,8 +999,14 @@ export async function createLivySessionAsync(
   return { ...sess, request };
 }
 
-export async function getLivySession(poolName: string, sessionId: number): Promise<{ id: number; state: string; appInfo?: any }> {
-  const r = await callDev(`/livyApi/versions/${LIVY_API}/sparkPools/${poolName}/sessions/${sessionId}`);
+export async function getLivySession(
+  poolName: string,
+  sessionId: number,
+): Promise<{ id: number; state: string; appInfo?: any; errorInfo?: Array<{ message?: string; errorCode?: string; source?: string }> | null }> {
+  // detailed=true adds `errorInfo` — the REAL reason a session died (e.g. the
+  // MAX_QUEUED_JOBS_PER_COMPUTE_EXCEEDED queue-jam rejection), surfaced to the
+  // notebook editor instead of an opaque "entered terminal state 'error'".
+  const r = await callDev(`/livyApi/versions/${LIVY_API}/sparkPools/${poolName}/sessions/${sessionId}?detailed=true`);
   return jsonOrThrow(r, `getLivySession(${poolName}/${sessionId})`);
 }
 
@@ -1024,12 +1033,17 @@ export async function runSparkSqlAndWait(poolName: string, sql: string): Promise
   // 1) Create + poll session to idle.
   const sess = await createLivySessionAsync(poolName, 'sql', `loom-schema-ddl-${Date.now()}`);
   let sessState = sess.state;
+  let sessErrDetail = '';
   for (let i = 0; i < 60 && sessState !== 'idle'; i++) {
     if (sessState === 'error' || sessState === 'dead' || sessState === 'killed') {
-      throw new Error(`Spark session ${sess.id} entered terminal state '${sessState}' before becoming ready`);
+      throw new Error(
+        `Spark session ${sess.id} entered terminal state '${sessState}' before becoming ready${sessErrDetail ? ` — ${sessErrDetail}` : ''}`,
+      );
     }
     await new Promise((res) => setTimeout(res, 3000));
-    sessState = (await getLivySession(poolName, sess.id)).state;
+    const polled = await getLivySession(poolName, sess.id);
+    sessState = polled.state;
+    sessErrDetail = (polled.errorInfo || []).map((e) => e?.message || e?.errorCode || '').filter(Boolean).join('; ');
   }
   if (sessState !== 'idle') {
     throw new Error(`Spark session ${sess.id} not ready after 3 min — current state '${sessState}'. Pool may be undersized or auto-paused.`);

@@ -142,7 +142,15 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
         });
       }
       if (['error', 'dead', 'killed'].includes(sess.state)) {
-        return NextResponse.json({ ok: false, error: `Spark session ${sessionId} entered terminal state '${sess.state}'`, status: sess.state });
+        const detail = ((sess as { errorInfo?: Array<{ message?: string; errorCode?: string }> | null }).errorInfo || [])
+          .map((e) => e?.message || e?.errorCode || '')
+          .filter(Boolean)
+          .join('; ');
+        return NextResponse.json({
+          ok: false,
+          error: `Spark session ${sessionId} entered terminal state '${sess.state}'${detail ? ` — ${detail}` : ''}`,
+          status: sess.state,
+        });
       }
       return NextResponse.json({ ok: true, status: sess.state, runId, phase: 'session-starting' });
     }

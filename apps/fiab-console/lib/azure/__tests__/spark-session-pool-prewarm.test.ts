@@ -72,6 +72,9 @@ vi.mock('@/lib/azure/spark-lease-store', () => ({
   listAllDocs: h.listAllDocs,
   mintLeaseId: () => `lease-${Math.random().toString(36).slice(2, 8)}`,
   replicaId: () => 'replicaB',
+  // Cross-replica admin-override config doc (2026-07-14 self-heal) — no-op here.
+  readPoolConfigDoc: async () => null,
+  writePoolConfigDoc: async () => {},
 }));
 
 const { createLivySessionAsync, getLivySession, synapseConfigGate, killLivySession, listAllDocs, publishSlot } = h;

@@ -75,6 +75,14 @@ import {
   defaultSparkPool,
   type LivyKind,
 } from '@/lib/azure/synapse-livy-client';
+
+/** Summarize a session's Livy errorInfo (detailed=true) — '' when none. */
+function livyErrorDetail(sess: { errorInfo?: Array<{ message?: string; errorCode?: string }> | null }): string {
+  return (sess.errorInfo || [])
+    .map((e) => e?.message || e?.errorCode || '')
+    .filter(Boolean)
+    .join('; ');
+}
 import { defaultSynapseSizing as computeDefaultSynapseSizing } from '@/lib/spark/spark-sizing';
 import {
   leaseStoreMode,
@@ -85,6 +93,8 @@ import {
   releaseInStore,
   listAllDocs,
   mintLeaseId,
+  readPoolConfigDoc,
+  writePoolConfigDoc,
   replicaId,
   type LeaseRec,
   type LeaseStoreStatus,
@@ -133,6 +143,18 @@ interface PoolGroup {
   sizingKey: string;
   /** The exact sizing to warm with (so warm sessions match runs). */
   sizing?: LivySessionSizing;
+  /**
+   * Warm-failure circuit breaker (2026-07-14 loompool queue-jam incident):
+   * consecutive warm failures back the group off exponentially instead of
+   * re-warming every 30s sweep tick forever — the old behaviour submitted a new
+   * Livy session every tick against a jammed pool, feeding the very queue jam
+   * (MAX_QUEUED_JOBS_PER_COMPUTE_EXCEEDED) that made the warms fail.
+   */
+  consecFails?: number;
+  /** Epoch ms until which refill skips this group (0/undefined = not backing off). */
+  backoffUntil?: number;
+  /** Last warm-failure reason (surfaced in GET /api/spark/session-pool). */
+  lastFailure?: string;
 }
 
 export interface PoolConfig {
@@ -158,6 +180,8 @@ interface PoolStore {
   slots: PooledSlot[];
   groups: Map<string, PoolGroup>;
   override: Partial<PoolConfig>;
+  /** Epoch ms of the last override apply (local or adopted from the shared config doc). */
+  overrideUpdatedAt?: number;
   sweeper: ReturnType<typeof setInterval> | null;
   warming: number; // in-flight warm operations (concurrency guard)
   /** True once this replica has run the default-group pre-registration + startup kick. */
@@ -256,7 +280,14 @@ export function sparkPoolEnabled(): boolean {
   return sparkPoolConfig().enabled;
 }
 
-/** Admin runtime override (per replica, in-memory). Returns the new config. */
+/**
+ * Admin runtime override. Applies to THIS replica immediately and persists to
+ * the shared lease store's config doc so every other replica converges on the
+ * next sweep tick (~30s) — the old in-memory-only override left the admin kill
+ * switch active on a single replica while its siblings kept warming (observed
+ * live during the 2026-07-14 loompool queue-jam incident). Returns the new
+ * effective config.
+ */
 export function setSparkPoolConfig(partial: Partial<PoolConfig>): PoolConfig {
   if (typeof partial.enabled === 'boolean') store.override.enabled = partial.enabled;
   if (typeof partial.min === 'number' && partial.min >= 0) store.override.min = Math.floor(partial.min);
@@ -269,10 +300,31 @@ export function setSparkPoolConfig(partial: Partial<PoolConfig>): PoolConfig {
   if (typeof partial.reapGraceMs === 'number' && partial.reapGraceMs >= 0)
     store.override.reapGraceMs = Math.floor(partial.reapGraceMs);
   const cfg = sparkPoolConfig();
+  // Persist the override cross-replica (best-effort; local apply is already done).
+  store.overrideUpdatedAt = Date.now();
+  void writePoolConfigDoc({ ...store.override, __updatedAt: store.overrideUpdatedAt }).catch(() => {});
   // Arm the pool: pre-register the default group, adopt store slots, start the
   // sweeper, and kick an immediate refill (not just the next 30s tick).
   if (cfg.enabled) ensureWarmPoolStarted();
   return cfg;
+}
+
+/**
+ * Merge the shared config doc into this replica's override (newer-wins). Called
+ * from sweep() so an admin change lands console-wide within one tick.
+ */
+async function syncConfigFromStore(): Promise<void> {
+  try {
+    const doc = await readPoolConfigDoc();
+    if (!doc || typeof doc.updatedAt !== 'number') return;
+    if (doc.updatedAt <= (store.overrideUpdatedAt ?? 0)) return;
+    const { __updatedAt, ...override } = (doc.override ?? {}) as Record<string, unknown>;
+    void __updatedAt;
+    store.override = override as Partial<PoolConfig>;
+    store.overrideUpdatedAt = doc.updatedAt;
+  } catch {
+    /* best-effort */
+  }
 }
 
 // ============================================================
@@ -467,6 +519,56 @@ export function ensureWarmPoolStarted(): void {
 // Warm one session (REAL backend calls)
 // ============================================================
 
+/** Detects the Synapse job-service queue-jam rejection in a failure reason. */
+function isQueueJamError(reason: string): boolean {
+  return /MAX_QUEUED_JOBS|number of queued jobs|cannot exceed \[?\d+\]?/i.test(reason);
+}
+
+/**
+ * Record a warm failure for the slot's group and arm the circuit breaker.
+ * Queue-jam rejections back off hard immediately (15 min, doubling to 60 min);
+ * other failures back off from the 2nd consecutive failure (5 min, doubling).
+ */
+function noteWarmFailure(groupKey: string, reason: string): void {
+  const grp = store.groups.get(groupKey);
+  if (!grp) return;
+  grp.consecFails = (grp.consecFails ?? 0) + 1;
+  grp.lastFailure = reason.slice(0, 300);
+  const jam = isQueueJamError(reason);
+  if (jam || grp.consecFails >= 2) {
+    const baseMs = jam ? 15 * 60_000 : 5 * 60_000;
+    const doublings = Math.max(0, grp.consecFails - (jam ? 1 : 2));
+    grp.backoffUntil = Date.now() + Math.min(baseMs * 2 ** Math.min(doublings, 4), 60 * 60_000);
+  }
+}
+
+/** Reset the group's circuit breaker after a successful warm. */
+function noteWarmSuccess(groupKey: string): void {
+  const grp = store.groups.get(groupKey);
+  if (!grp) return;
+  grp.consecFails = 0;
+  grp.backoffUntil = 0;
+  grp.lastFailure = undefined;
+}
+
+/**
+ * Mark a warming slot dead AND tear down its backend Livy session + lease doc.
+ * The teardown is the load-bearing half: a failed/stuck warm attempt used to
+ * leave its Livy job QUEUED on the pool forever (pollLivyToIdle only flipped
+ * the local slot state) — 153 such zombies filled loompool's 200-job queue on
+ * 2026-07-14 and every new session was hard-rejected. Best-effort kill; 404 =
+ * already gone = fine.
+ */
+function markWarmingDead(slot: PooledSlot, reason: string): void {
+  slot.state = 'dead';
+  slot.error = reason;
+  noteWarmFailure(slot.groupKey, reason);
+  if (slot.backend === 'synapse' && typeof slot.sessionId === 'number' && !slot.fromStore) {
+    void killLivySession(slot.poolName, slot.sessionId).catch(() => {});
+  }
+  void removeSlot(slot.leaseId, slot.groupKey);
+}
+
 function rndId(): string {
   return `lease-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
@@ -508,12 +610,13 @@ async function pollLivyToIdle(poolName: string, sessionId: number, slot: PooledS
   // background; the slot stays 'warming' until Livy reports 'idle'.
   for (let i = 0; i < 90; i++) {
     let state = 'starting';
+    let errDetail = '';
     try {
       const live = await getLivySession(poolName, sessionId);
       state = live.state;
+      errDetail = livyErrorDetail(live);
     } catch {
-      slot.state = 'dead';
-      slot.error = 'session unreachable while warming';
+      markWarmingDead(slot, 'session unreachable while warming');
       return;
     }
     if (state === 'idle') {
@@ -532,18 +635,20 @@ async function pollLivyToIdle(poolName: string, sessionId: number, slot: PooledS
         // first user run always cold-starts. (Root cause of the stuck warm-pool
         // seen 2026-07-12.)
         void publishWarmSlot(slot).catch(() => {});
+        noteWarmSuccess(slot.groupKey);
       }
       return;
     }
     if (['error', 'dead', 'killed', 'shutting_down'].includes(state)) {
-      slot.state = 'dead';
-      slot.error = `session entered terminal state '${state}' while warming`;
+      markWarmingDead(
+        slot,
+        `session entered terminal state '${state}' while warming${errDetail ? ` — ${errDetail}` : ''}`,
+      );
       return;
     }
     await new Promise((r) => setTimeout(r, 3000));
   }
-  slot.state = 'dead';
-  slot.error = 'session did not reach idle within warm timeout';
+  markWarmingDead(slot, 'session did not reach idle within warm timeout');
 }
 
 async function warmOneSynapse(grp: PoolGroup): Promise<void> {
@@ -568,8 +673,9 @@ async function warmOneSynapse(grp: PoolGroup): Promise<void> {
     await pollLivyToIdle(grp.poolName, sess.id, slot);
     if (slot.state === 'warm') void publishWarmSlot(slot);
   } catch (e: unknown) {
-    slot.state = 'dead';
-    slot.error = e instanceof Error ? e.message : String(e);
+    // Create/poll threw — mark dead AND tear down any session that did get
+    // created, so the failed attempt can't leave a queued zombie on the pool.
+    markWarmingDead(slot, e instanceof Error ? e.message : String(e));
   } finally {
     store.warming--;
   }
@@ -612,15 +718,18 @@ async function warmOneDatabricks(grp: PoolGroup): Promise<void> {
       if (['TERMINATED', 'ERROR', 'UNKNOWN'].includes(st)) {
         slot.state = 'dead';
         slot.error = `cluster entered '${st}' while warming`;
+        noteWarmFailure(slot.groupKey, slot.error);
         return;
       }
       await new Promise((r) => setTimeout(r, 3000));
     }
     slot.state = 'dead';
     slot.error = 'cluster did not reach RUNNING within warm timeout';
+    noteWarmFailure(slot.groupKey, slot.error);
   } catch (e: unknown) {
     slot.state = 'dead';
     slot.error = e instanceof Error ? e.message : String(e);
+    noteWarmFailure(slot.groupKey, slot.error);
   } finally {
     store.warming--;
   }
@@ -667,8 +776,10 @@ export async function reconcileWarmingSlots(): Promise<{ promoted: number; died:
           if (st === 'RUNNING') {
             slot.state = 'warm'; slot.warmedAt = Date.now(); slot.lastActivityAt = Date.now();
             await publishWarmSlot(slot).catch(() => {}); promoted++;
+            noteWarmSuccess(slot.groupKey);
           } else if (['TERMINATED', 'ERROR', 'UNKNOWN'].includes(st)) {
             slot.state = 'dead'; slot.error = `cluster '${st}' on reconcile`; died++;
+            noteWarmFailure(slot.groupKey, slot.error);
           } else { stillWarming++; }
           return;
         }
@@ -678,8 +789,11 @@ export async function reconcileWarmingSlots(): Promise<{ promoted: number; died:
         if (live.state === 'idle') {
           slot.state = 'warm'; slot.warmedAt = Date.now(); slot.lastActivityAt = Date.now();
           await publishWarmSlot(slot).catch(() => {}); promoted++;
+          noteWarmSuccess(slot.groupKey);
         } else if (['error', 'dead', 'killed', 'shutting_down'].includes(live.state)) {
-          slot.state = 'dead'; slot.error = `session '${live.state}' on reconcile`; died++;
+          const detail = livyErrorDetail(live);
+          markWarmingDead(slot, `session '${live.state}' on reconcile${detail ? ` — ${detail}` : ''}`);
+          died++;
         } else { stillWarming++; }
       } catch {
         // A single failed liveness check shouldn't kill the slot — the backend may
@@ -707,7 +821,12 @@ export async function refillPool(): Promise<void> {
   const gate = sparkPoolBackendStatus();
   if (!gate.configured) return; // honest — nothing to warm against
   const tasks: Promise<void>[] = [];
+  const now = Date.now();
   for (const grp of store.groups.values()) {
+    // Circuit breaker: a group whose warms keep failing (or that hit the
+    // Synapse queue-jam rejection) sits out until its backoff expires instead
+    // of feeding the jam with a fresh session every sweep tick.
+    if (typeof grp.backoffUntil === 'number' && grp.backoffUntil > now) continue;
     const slots = slotsForGroup(grp.key);
     const active = slots.filter((s) => s.state === 'warming' || s.state === 'warm').length;
     const warmingOrWarm = active;
@@ -771,9 +890,38 @@ function protectedSessionIds(poolName: string, storeDocSessionIds: Set<number>):
   return ids;
 }
 
-/** States that hold pool capacity and are safe to reap when leaked (idle only). */
+/**
+ * States that hold pool capacity and are safe to reap when leaked.
+ *   • idle — holds executors/vcores (#1796: ~700 leaked idle sessions).
+ *   • not_started / starting / recovering — holds a JOB-QUEUE slot. The
+ *     2026-07-14 loompool jam was 153 untracked queued sessions filling the
+ *     pool's 200-job queue cap, hard-rejecting every new session. A genuinely
+ *     cold-starting user session is protected by the same heartbeat +
+ *     full-grace-window guards (grace ≥ 30 min ≫ any real cold start).
+ * `busy` (an actively-running cell) is never reaped by the NORMAL grace — but
+ * see the busy-zombie rule in reapStaleSessions: a POOL-OWNED (loom-warmpool-*)
+ * session stuck `busy` + untracked for the extended grace is a wedged keepalive
+ * (2026-07-14: one held 80 cores on loombatch for 2 days, starving the whole
+ * workspace's vCore quota so no other pool could start a session).
+ */
 function isReapableState(state: string): boolean {
-  return String(state).toLowerCase() === 'idle';
+  const s = String(state).toLowerCase();
+  return s === 'idle' || s === 'not_started' || s === 'starting' || s === 'recovering';
+}
+
+/**
+ * Extended grace for reaping a POOL-OWNED `busy` zombie: 4× the normal grace,
+ * floor 2 h. A warm-pool session only ever runs sub-second keepalive
+ * statements, so `busy` + untracked + un-heartbeated this long is a wedged
+ * Spark context, never a real workload.
+ */
+function busyZombieGraceMs(cfg: PoolConfig): number {
+  return Math.max(cfg.reapGraceMs * 4, 2 * 60 * 60_000);
+}
+
+/** Pool-owned session name prefix — only these are eligible for the busy-zombie rule. */
+function isPoolOwnedName(name: string | null | undefined): boolean {
+  return typeof name === 'string' && name.startsWith('loom-warmpool-');
 }
 
 /**
@@ -811,17 +959,27 @@ export async function reapStaleSessions(poolName: string, storeDocSessionIds: Se
 
     // Guard 1 — tracked as a pool slot or a cross-replica lease → never reap.
     if (protectedIds.has(sess.id)) { store.firstSeenUntracked.delete(key); continue; }
-    // Guard 2 — only idle sessions hold reclaimable capacity; spare busy/starting/etc.
-    if (!isReapableState(sess.state)) { store.firstSeenUntracked.delete(key); continue; }
+    // Guard 2 — reapable-state sessions hold reclaimable capacity. A `busy`
+    // session is spared UNLESS it is pool-owned (loom-warmpool-*): those only
+    // run sub-second keepalives, so a long-busy one is a wedged context holding
+    // executors (the 2026-07-14 loombatch 80-core / 2-day zombie). It uses the
+    // EXTENDED grace below instead of the normal one.
+    const busyZombieCandidate =
+      String(sess.state).toLowerCase() === 'busy' && isPoolOwnedName(sess.name);
+    if (!isReapableState(sess.state) && !busyZombieCandidate) {
+      store.firstSeenUntracked.delete(key);
+      continue;
+    }
+    const graceMs = busyZombieCandidate ? busyZombieGraceMs(cfg) : cfg.reapGraceMs;
     // Guard 3 — heartbeated (live notebook keepalive / active run) within grace.
     const lastUse = store.inUse.get(key);
-    if (typeof lastUse === 'number' && now - lastUse < cfg.reapGraceMs) { store.firstSeenUntracked.delete(key); continue; }
-    // Guard 4 — must have been idle+untracked for a FULL grace window. Record on
+    if (typeof lastUse === 'number' && now - lastUse < graceMs) { store.firstSeenUntracked.delete(key); continue; }
+    // Guard 4 — must have been untracked for a FULL grace window. Record on
     // first sight and defer; a session only just created (not yet leased/kept) is
     // therefore never reaped on the first pass.
     const firstSeen = store.firstSeenUntracked.get(key);
     if (firstSeen === undefined) { store.firstSeenUntracked.set(key, now); continue; }
-    if (now - firstSeen < cfg.reapGraceMs) continue;
+    if (now - firstSeen < graceMs) continue;
 
     // All guards passed → leaked. Kill it (best-effort) and forget it.
     try {
@@ -861,6 +1019,9 @@ function reapablePools(): string[] {
  * that have sat idle past the TTL beyond `min`, then refill to `min`.
  */
 async function sweep(): Promise<void> {
+  // Converge on the shared admin override FIRST so a kill switch / config change
+  // set via any replica applies here this tick.
+  await syncConfigFromStore();
   const cfg = sparkPoolConfig();
   pruneDead();
   if (!cfg.enabled) return;
@@ -1206,6 +1367,12 @@ export interface GroupStatus {
   warming: number;
   /** Target warm count (config.min). */
   target: number;
+  /** Circuit breaker — consecutive warm failures for this group (0 = healthy). */
+  consecFails?: number;
+  /** Epoch ms until which refill skips this group (absent = not backing off). */
+  backoffUntil?: number;
+  /** Last warm-failure reason (why the breaker armed). */
+  lastFailure?: string;
   sessions: Array<{
     leaseId: string;
     state: SlotState;
@@ -1259,6 +1426,9 @@ export function getPoolStatus(): PoolStatus {
       shared,
       warming,
       target: cfg.min,
+      consecFails: grp.consecFails || undefined,
+      backoffUntil: grp.backoffUntil && grp.backoffUntil > now ? grp.backoffUntil : undefined,
+      lastFailure: grp.lastFailure,
       sessions: slots.map((s) => ({
         leaseId: s.leaseId,
         state: s.state,
