@@ -56,6 +56,30 @@ export function safeRuleName(displayName: string, suffix: string): string {
   return `${base}-${suffix}`.slice(0, 90);
 }
 
+/**
+ * Normalize a schedule/window duration to the ISO-8601 form Azure Monitor
+ * scheduledQueryRules require (PT5M / PT1H / P1D). The Loom editor already emits
+ * ISO strings, but content-bundle rules carry human shorthand ('5m', '1h',
+ * '15m', '1d') — passing those straight to ARM fails with "The string '5m' is
+ * not a valid TimeSpan value." and sinks the whole activator install. This
+ * coerces the common shorthands (and bare numbers ⇒ minutes) so both callers
+ * produce a valid duration; anything already ISO-8601 (starts with P) passes
+ * through uppercased. Falls back to the provided default when unparseable.
+ */
+export function toIsoDuration(v: string | undefined, fallback: string): string {
+  const s = (v || '').trim();
+  if (!s) return fallback;
+  if (/^p/i.test(s)) return s.toUpperCase(); // already ISO-8601 (PT5M, P1D, …)
+  const m = s.match(/^(\d+)\s*(s|sec|secs|second|seconds|m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days)?$/i);
+  if (!m) return fallback;
+  const n = m[1];
+  const unit = (m[2] || 'm').toLowerCase();
+  if (/^s/.test(unit)) return `PT${n}S`;
+  if (/^h/.test(unit)) return `PT${n}H`;
+  if (/^d/.test(unit)) return `P${n}D`;
+  return `PT${n}M`; // minutes (default)
+}
+
 function kqlOperator(op?: string): string {
   switch ((op || '').toLowerCase()) {
     case 'gt': case 'greaterthan': case '>': return '>';
@@ -373,8 +397,10 @@ export async function createMonitorActivatorRule(
   const ruleSuffix = (input.name || 'rule').replace(/[^A-Za-z0-9_-]+/g, '-').slice(0, 16) || 'rule';
   const azureRuleName = safeRuleName(activatorDisplayName, ruleSuffix);
   const severity = typeof input.severity === 'number' ? input.severity : 3;
-  const evaluationFrequency = input.evaluationFrequency || 'PT5M';
-  const windowSize = input.windowSize || 'PT5M';
+  // Normalize to ISO-8601 — bundle rules carry shorthand ('5m'/'1h') that ARM
+  // rejects as an invalid TimeSpan; the editor already emits ISO (passes through).
+  const evaluationFrequency = toIsoDuration(input.evaluationFrequency, 'PT5M');
+  const windowSize = toIsoDuration(input.windowSize, 'PT5M');
 
   // ── Eventhouse / ADX (Real-Time Intelligence) source ──
   if (sourceKind === 'adx') {
