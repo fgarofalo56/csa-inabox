@@ -11,6 +11,9 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 import {
   buildDlzDeploymentParameters,
   resolveDlzTemplateSource,
+  resolveDlzTemplateInline,
+  resolveDlzTemplate,
+  __resetInlineTemplateCache,
   submitDlzDeployment,
   readDlzDeploymentStatus,
   progressForState,
@@ -22,6 +25,7 @@ const SUB = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
 afterEach(() => {
   delete process.env[DLZ_TEMPLATE_ENV];
   delete process.env.LOOM_DLZ_TEMPLATE_QUERY_STRING;
+  __resetInlineTemplateCache();
   vi.restoreAllMocks();
 });
 
@@ -118,6 +122,38 @@ describe('resolveDlzTemplateSource', () => {
   });
 });
 
+describe('resolveDlzTemplateInline / resolveDlzTemplate (bundled compiled template)', () => {
+  it('reads the bundled deploy-templates/main.json as an inline template object', () => {
+    // The compiled platform/fiab/bicep/main.json is committed under
+    // apps/fiab-console/deploy-templates/ and resolved via cwd or the __dirname
+    // fallback (lib/setup → ../../deploy-templates), so this passes regardless of
+    // the test runner's cwd.
+    const inline = resolveDlzTemplateInline();
+    expect(inline).not.toBeNull();
+    expect(typeof inline!.template).toBe('object');
+    const tmpl = inline!.template as any;
+    // Compiled subscription-scoped ARM template: standard $schema + resources.
+    expect(tmpl.$schema).toContain('schema.management.azure.com');
+    expect(tmpl.$schema).toContain('DeploymentTemplate.json');
+    expect(Array.isArray(tmpl.resources) || typeof tmpl.resources === 'object').toBe(true);
+  });
+
+  it('caches the parse (same object identity on repeat reads)', () => {
+    const a = resolveDlzTemplateInline();
+    const b = resolveDlzTemplateInline();
+    expect(a).toBe(b);
+  });
+
+  it('resolveDlzTemplate PREFERS the bundled inline template over the env templateLink', () => {
+    // Even with the link env set, inline wins (durable, cloud-agnostic — no SAS).
+    process.env[DLZ_TEMPLATE_ENV] = 'https://store.blob.core.windows.net/tpl/main.json';
+    const resolved = resolveDlzTemplate();
+    expect(resolved).not.toBeNull();
+    expect((resolved as any).template).toBeDefined();
+    expect((resolved as any).templateLink).toBeUndefined();
+  });
+});
+
 describe('submitDlzDeployment (LIVE, stubbed fetch)', () => {
   it('PUTs a subscription-scoped deployment and returns the accepted state', async () => {
     const calls: { url: string; init: any }[] = [];
@@ -149,6 +185,34 @@ describe('submitDlzDeployment (LIVE, stubbed fetch)', () => {
     expect(body.properties.mode).toBe('Incremental');
     expect(body.properties.templateLink.uri).toBe('https://x/main.json');
     expect(calls[0].init.headers.authorization).toBe('Bearer user-token');
+  });
+
+  it('submits the template INLINE (properties.template, no templateLink) for an inline source', async () => {
+    const calls: { url: string; init: any }[] = [];
+    const fetchImpl = vi.fn(async (url: string, init: any) => {
+      calls.push({ url, init });
+      return {
+        ok: true,
+        status: 201,
+        text: async () => JSON.stringify({ properties: { provisioningState: 'Accepted' } }),
+      } as any;
+    });
+    const inlineTemplate = { $schema: 'https://schema.management.azure.com/x', resources: [] };
+    const res = await submitDlzDeployment({
+      subscriptionId: SUB,
+      region: 'eastus2',
+      parameters: { topology: { value: 'tenant' } },
+      templateSource: { template: inlineTemplate },
+      getToken: async () => 'user-token',
+      deploymentName: 'loom-dlz-inline',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    expect(res.ok).toBe(true);
+    const body = JSON.parse(calls[0].init.body);
+    expect(body.properties.mode).toBe('Incremental');
+    // Inline: the compiled template rides in properties.template, NOT templateLink.
+    expect(body.properties.template).toEqual(inlineTemplate);
+    expect(body.properties.templateLink).toBeUndefined();
   });
 
   it('surfaces a 403 with status so the route can render the grant gate', async () => {
