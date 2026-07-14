@@ -26,6 +26,7 @@ import {
   listEnvironments,
   resolvePublishEnvId,
   publishToM365Copilot,
+  coerceM365AuthMode,
   CopilotStudioError,
   type PpEnvironment,
   type KnowledgeSourcePayload,
@@ -129,7 +130,15 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
     defaultEnvId,
     envError,
     alreadyPublished: m365
-      ? { envId: m365.envId, agentName: m365.agentName, publishedAt: m365.publishedAt, m365CopilotEnabled: m365.m365CopilotEnabled }
+      ? {
+          envId: m365.envId, agentName: m365.agentName, publishedAt: m365.publishedAt,
+          m365CopilotEnabled: m365.m365CopilotEnabled,
+          // Agentic-publish depth (G6) — rehydrate the Agent-Store settings.
+          descriptionForModel: m365.descriptionForModel,
+          deliverAsIs: m365.deliverAsIs,
+          connectedAgent: m365.connectedAgent,
+          authMode: m365.authMode,
+        }
       : null,
   });
 }
@@ -178,6 +187,19 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   const foundryAgentId = state.foundryAgentId ? String(state.foundryAgentId) : undefined;
   const availableInM365Copilot = body?.availableInM365Copilot !== false;
 
+  // Agentic-publish depth (G6) — the M365 Copilot Agent-Store settings. Explicit
+  // body wins, else fall back to any persisted receipt so re-publishing keeps
+  // the last choices. authMode is validated to the enum; the free-text
+  // description-for-model is length-capped by the client.
+  const prevM365 = (state.m365Copilot as any) || {};
+  const descriptionForModel =
+    typeof body?.descriptionForModel === 'string' ? body.descriptionForModel
+    : typeof prevM365.descriptionForModel === 'string' ? prevM365.descriptionForModel
+    : undefined;
+  const deliverAsIs = body?.deliverAsIs !== undefined ? body.deliverAsIs === true : prevM365.deliverAsIs === true;
+  const connectedAgent = body?.connectedAgent !== undefined ? body.connectedAgent === true : prevM365.connectedAgent === true;
+  const authMode = coerceM365AuthMode(body?.authMode !== undefined ? body.authMode : prevM365.authMode);
+
   // Knowledge references: attach a Loom data-agent deep link so admins reviewing
   // the agent in the M365 admin center can see the source of truth. AI Search
   // sources are also surfaced as web/url knowledge so the agent grounds on them.
@@ -201,6 +223,10 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       modelDeployment: model,
       knowledge,
       availableInM365Copilot,
+      descriptionForModel,
+      deliverAsIs,
+      connectedAgent,
+      authMode,
     });
 
     const now = new Date().toISOString();
@@ -213,6 +239,12 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
         agentState: result.agentState,
         channelId: result.channelId,
         m365CopilotEnabled: result.m365CopilotEnabled,
+        // Agentic-publish depth (G6) — record exactly what was written to the
+        // channel so the editor rehydrates the Agent-Store settings on reopen.
+        descriptionForModel: result.descriptionForModel,
+        deliverAsIs: result.deliverAsIs,
+        connectedAgent: result.connectedAgent,
+        authMode: result.authMode,
         publishedAt: now,
       },
     };

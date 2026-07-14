@@ -116,6 +116,56 @@ describe('publishToM365Copilot', () => {
     expect(channelPost!.body.msdyn_type).toBe('msteams');
   });
 
+  it('writes the agentic-publish depth settings (G6) into the channel configuration + receipt', async () => {
+    global.fetch = makeFetch(recorded) as any;
+    const mod = await import('../copilot-studio-client');
+    const res = await mod.publishToM365Copilot(ENV_ID, {
+      name: 'My Agent', instructions: 'inst', availableInM365Copilot: true,
+      descriptionForModel: 'Route governed-data questions here.',
+      deliverAsIs: true,
+      connectedAgent: true,
+      authMode: 'entra',
+    });
+    // Receipt echoes exactly what was applied.
+    expect(res.deliverAsIs).toBe(true);
+    expect(res.connectedAgent).toBe(true);
+    expect(res.authMode).toBe('entra');
+    expect(res.descriptionForModel).toBe('Route governed-data questions here.');
+    // The real Dataverse channel-config write carries them.
+    const channelPost = recorded.find((r) => r.method === 'POST' && r.url.includes('/msdyn_botchannels'));
+    const cfg = JSON.parse(channelPost!.body.msdyn_configuration);
+    expect(cfg.deliverAsIs).toBe(true);
+    expect(cfg.connectedAgent).toBe(true);
+    expect(cfg.authMode).toBe('entra');
+    expect(cfg.descriptionForModel).toBe('Route governed-data questions here.');
+  });
+
+  it('defaults the agentic-publish settings + coerces an invalid authMode to none', async () => {
+    global.fetch = makeFetch(recorded) as any;
+    const mod = await import('../copilot-studio-client');
+    const res = await mod.publishToM365Copilot(ENV_ID, {
+      name: 'My Agent', instructions: 'inst', authMode: 'bogus' as any,
+    });
+    expect(res.deliverAsIs).toBe(false);
+    expect(res.connectedAgent).toBe(false);
+    expect(res.authMode).toBe('none');
+    expect(res.descriptionForModel).toBeUndefined();
+    const channelPost = recorded.find((r) => r.method === 'POST' && r.url.includes('/msdyn_botchannels'));
+    const cfg = JSON.parse(channelPost!.body.msdyn_configuration);
+    expect(cfg.authMode).toBe('none');
+    expect('descriptionForModel' in cfg).toBe(false);
+  });
+
+  it('coerceM365AuthMode maps unknown values to none', async () => {
+    const mod = await import('../copilot-studio-client');
+    expect(mod.coerceM365AuthMode('entra')).toBe('entra');
+    expect(mod.coerceM365AuthMode('manual')).toBe('manual');
+    expect(mod.coerceM365AuthMode('none')).toBe('none');
+    expect(mod.coerceM365AuthMode('')).toBe('none');
+    expect(mod.coerceM365AuthMode(undefined)).toBe('none');
+    expect(mod.coerceM365AuthMode(42)).toBe('none');
+  });
+
   it('is idempotent — updates the existing agent + patches the existing channel', async () => {
     global.fetch = makeFetch(recorded, { existingAgent: true, existingChannel: true }) as any;
     const mod = await import('../copilot-studio-client');

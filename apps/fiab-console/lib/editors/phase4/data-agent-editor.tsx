@@ -464,6 +464,11 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
   const [m365Available, setM365Available] = useState(true);
   const [m365Publishing, setM365Publishing] = useState(false);
   const [m365Result, setM365Result] = useState<any>(null);
+  // Agentic-publish depth (G6) — the Microsoft 365 Copilot Agent-Store settings.
+  const [m365DescForModel, setM365DescForModel] = useState('');
+  const [m365DeliverAsIs, setM365DeliverAsIs] = useState(false);
+  const [m365ConnectedAgent, setM365ConnectedAgent] = useState(false);
+  const [m365AuthMode, setM365AuthMode] = useState<'none' | 'entra' | 'manual'>('none');
   const loadM365Envs = useCallback(async () => {
     if (id === 'new') return;
     try {
@@ -476,6 +481,15 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
         // Prefer the persisted env, then the configured default, then the first.
         const persisted = state.m365Copilot?.envId;
         setM365EnvId((cur) => cur || persisted || j.defaultEnvId || envs[0]?.id || '');
+        // Rehydrate the Agent-Store settings from the last publish receipt.
+        const ap = j.alreadyPublished;
+        if (ap) {
+          if (typeof ap.descriptionForModel === 'string') setM365DescForModel(ap.descriptionForModel);
+          if (typeof ap.deliverAsIs === 'boolean') setM365DeliverAsIs(ap.deliverAsIs);
+          if (typeof ap.connectedAgent === 'boolean') setM365ConnectedAgent(ap.connectedAgent);
+          if (ap.authMode === 'none' || ap.authMode === 'entra' || ap.authMode === 'manual') setM365AuthMode(ap.authMode);
+          if (typeof ap.m365CopilotEnabled === 'boolean') setM365Available(ap.m365CopilotEnabled);
+        }
       } else {
         setM365EnvError(j?.error || `HTTP ${r.status}`);
       }
@@ -492,7 +506,14 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
       }
       const r = await fetch(`/api/items/data-agent/${encodeURIComponent(id)}/m365-copilot`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ envId: m365EnvId || undefined, description: state.description, availableInM365Copilot: m365Available }),
+        body: JSON.stringify({
+          envId: m365EnvId || undefined, description: state.description, availableInM365Copilot: m365Available,
+          // Agentic-publish depth (G6).
+          descriptionForModel: m365DescForModel.trim() || undefined,
+          deliverAsIs: m365DeliverAsIs,
+          connectedAgent: m365ConnectedAgent,
+          authMode: m365AuthMode,
+        }),
       });
       const j = await r.json().catch(() => ({ ok: false, error: `HTTP ${r.status}` }));
       if (!r.ok && j && j.ok === undefined) j.ok = false;
@@ -500,7 +521,7 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
       if (j.ok) await reload();
     } catch (e: any) { setM365Result({ ok: false, error: e?.message || String(e) }); }
     finally { setM365Publishing(false); }
-  }, [id, m365EnvId, m365Available, dirty, save, reload, lastSaveError, state.description]);
+  }, [id, m365EnvId, m365Available, m365DescForModel, m365DeliverAsIs, m365ConnectedAgent, m365AuthMode, dirty, save, reload, lastSaveError, state.description]);
 
   // ---- delete this agent (owner-scoped via the item DELETE route) ----
   const [deleting, setDeleting] = useState(false);
@@ -1105,6 +1126,54 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
                     label="Make agent available in Microsoft 365 Copilot (uncheck for Teams only)"
                     style={{ marginTop: tokens.spacingVerticalXS }}
                   />
+
+                  {/* Agentic-publish depth (G6) — the M365 Copilot Agent-Store
+                      settings written to the Teams + M365 Copilot channel. */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, marginTop: tokens.spacingVerticalL }}>
+                    <Subtitle2>Agent Store options</Subtitle2>
+                    <Badge appearance="tint" color="brand">Microsoft 365 Copilot</Badge>
+                  </div>
+                  <Field
+                    label="Description for the model"
+                    hint="What the M365 Copilot orchestrator reads to decide when to route to this agent (distinct from the human-facing description). Leave blank to use the agent description."
+                    style={{ marginTop: tokens.spacingVerticalS, maxWidth: 720 }}
+                  >
+                    <Textarea
+                      value={m365DescForModel}
+                      onChange={(_, d) => setM365DescForModel(d.value)}
+                      resize="vertical"
+                      rows={2}
+                      placeholder="e.g. Use this agent for questions about governed sales, inventory, and finance data in the Contoso lakehouse."
+                    />
+                  </Field>
+                  <Switch
+                    checked={m365ConnectedAgent}
+                    onChange={(_, d) => setM365ConnectedAgent(d.checked)}
+                    label="Expose as a connected agent (other Microsoft 365 Copilot agents can invoke this one)"
+                    style={{ marginTop: tokens.spacingVerticalXS }}
+                  />
+                  <Switch
+                    checked={m365DeliverAsIs}
+                    onChange={(_, d) => setM365DeliverAsIs(d.checked)}
+                    label="Deliver responses as-is (the orchestrator returns this agent's answer directly, without rephrasing)"
+                    style={{ marginTop: tokens.spacingVerticalXS }}
+                  />
+                  <Field label="End-user authentication" style={{ marginTop: tokens.spacingVerticalS, maxWidth: 480 }}>
+                    <Dropdown
+                      value={
+                        m365AuthMode === 'entra' ? 'Authenticate with Microsoft (Entra ID)'
+                        : m365AuthMode === 'manual' ? 'Authenticate manually'
+                        : 'No authentication'
+                      }
+                      selectedOptions={[m365AuthMode]}
+                      onOptionSelect={(_, d) => { if (d.optionValue === 'none' || d.optionValue === 'entra' || d.optionValue === 'manual') setM365AuthMode(d.optionValue); }}
+                    >
+                      <Option value="none">No authentication</Option>
+                      <Option value="entra">Authenticate with Microsoft (Entra ID)</Option>
+                      <Option value="manual">Authenticate manually</Option>
+                    </Dropdown>
+                  </Field>
+
                   <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM, marginTop: tokens.spacingVerticalM, flexWrap: 'wrap' }}>
                     <Button
                       appearance="primary"
@@ -1145,6 +1214,14 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
                       <div style={{ marginTop: tokens.spacingVerticalXS }}>
                         Copilot Studio agent <strong>{m365Result.agentName}</strong> ({m365Result.agentState || 'published'}) is now on the
                         Teams + Microsoft 365 Copilot channel{m365Result.m365CopilotEnabled ? ' with M365 Copilot enabled' : ' (Teams only)'}.
+                        <div style={{ display: 'flex', gap: tokens.spacingHorizontalXS, flexWrap: 'wrap', marginTop: tokens.spacingVerticalXS }}>
+                          {m365Result.connectedAgent && <Badge appearance="tint" color="brand" size="small">connected agent</Badge>}
+                          {m365Result.deliverAsIs && <Badge appearance="tint" color="brand" size="small">responses delivered as-is</Badge>}
+                          <Badge appearance="tint" color="informative" size="small">
+                            auth: {m365Result.authMode === 'entra' ? 'Entra ID' : m365Result.authMode === 'manual' ? 'manual' : 'none'}
+                          </Badge>
+                          {m365Result.descriptionForModel && <Badge appearance="tint" color="success" size="small">model description set</Badge>}
+                        </div>
                         {(m365Result.copilotStudioUrl || m365Result.adminCenterUrl || m365Result.shareUrl) && (
                           <div style={{ display: 'flex', gap: tokens.spacingHorizontalM, flexWrap: 'wrap', marginTop: tokens.spacingVerticalSNudge }}>
                             {m365Result.copilotStudioUrl && (
