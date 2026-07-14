@@ -44,11 +44,26 @@ export async function GET() {
     mapsEnabled = false;
     mapsAccount = '';
   }
+  // Semantic-model backend — the RUNTIME value of the server-side
+  // LOOM_SEMANTIC_BACKEND env (loom-native default / analysis-services (AAS) /
+  // fabric). Replaces the client-baked NEXT_PUBLIC_LOOM_BI_BACKEND==='aas' /
+  // NEXT_PUBLIC_LOOM_SEMANTIC_BACKEND reads so the Semantic model + Dashboard
+  // editors pick the AAS surface at runtime (no rebuild). Non-sensitive: it's a
+  // backend selector, not a credential. 'aas' is normalized to 'analysis-services'.
+  let semanticBackend: 'loom-native' | 'analysis-services' | 'fabric' = 'loom-native';
+  try {
+    const raw = (process.env.LOOM_SEMANTIC_BACKEND || '').trim().toLowerCase();
+    if (raw === 'analysis-services' || raw === 'aas') semanticBackend = 'analysis-services';
+    else if (raw === 'fabric') semanticBackend = 'fabric';
+  } catch {
+    semanticBackend = 'loom-native';
+  }
   return NextResponse.json({
     ok: true,
     biBackend,
     powerBiEnabled: biBackend === 'powerbi',
     mapsEnabled,
     mapsAccount,
+    semanticBackend,
   });
 }

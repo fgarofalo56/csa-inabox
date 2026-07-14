@@ -23,6 +23,7 @@ import { useEffect, useState } from 'react';
 import { clientFetch } from '@/lib/client-fetch';
 
 export type BiBackendMode = 'loom-native' | 'powerbi';
+export type SemanticBackendMode = 'loom-native' | 'analysis-services' | 'fabric';
 
 export interface PlatformConfig {
   biBackend: BiBackendMode;
@@ -35,6 +36,10 @@ export interface PlatformConfig {
   /** Non-secret Azure Maps account label/uniqueId — prefills the geo editors
    *  (was NEXT_PUBLIC_LOOM_AZURE_MAPS_ACCOUNT). Empty when unset. */
   mapsAccount: string;
+  /** Effective semantic-model backend (runtime value of LOOM_SEMANTIC_BACKEND) —
+   *  replaces the client-baked NEXT_PUBLIC_LOOM_BI_BACKEND==='aas' /
+   *  NEXT_PUBLIC_LOOM_SEMANTIC_BACKEND reads. */
+  semanticBackend: SemanticBackendMode;
 }
 
 /** Azure-native default — used while loading and on any fetch error. */
@@ -43,6 +48,7 @@ export const DEFAULT_PLATFORM_CONFIG: PlatformConfig = {
   powerBiEnabled: false,
   mapsEnabled: false,
   mapsAccount: '',
+  semanticBackend: 'loom-native',
 };
 
 let _cache: PlatformConfig | null = null;
@@ -51,11 +57,16 @@ let _inflight: Promise<PlatformConfig> | null = null;
 function coerce(d: unknown): PlatformConfig {
   const o = (d ?? {}) as Record<string, unknown>;
   const biBackend: BiBackendMode = o.biBackend === 'powerbi' ? 'powerbi' : 'loom-native';
+  const semanticBackend: SemanticBackendMode =
+    o.semanticBackend === 'analysis-services' ? 'analysis-services'
+    : o.semanticBackend === 'fabric' ? 'fabric'
+    : 'loom-native';
   return {
     biBackend,
     powerBiEnabled: biBackend === 'powerbi',
     mapsEnabled: o.mapsEnabled === true,
     mapsAccount: typeof o.mapsAccount === 'string' ? o.mapsAccount : '',
+    semanticBackend,
   };
 }
 
@@ -140,6 +151,25 @@ export interface UseMapsConfig {
 export function useMapsConfig(): UseMapsConfig {
   const { config, loading } = usePlatformConfig();
   return { mapsEnabled: config.mapsEnabled, mapsAccount: config.mapsAccount, loading };
+}
+
+export interface UseSemanticBackend {
+  semanticBackend: SemanticBackendMode;
+  /** True until the runtime config resolves. Callers gate the AAS surface on the
+   *  resolved value; while loading they render the loom-native default (fail-closed). */
+  loading: boolean;
+}
+
+/**
+ * The runtime semantic-model backend selection (LOOM_SEMANTIC_BACKEND). Replaces
+ * every client-baked NEXT_PUBLIC_LOOM_BI_BACKEND==='aas' /
+ * NEXT_PUBLIC_LOOM_SEMANTIC_BACKEND read — the Semantic model + Dashboard editors
+ * pick the AAS surface at runtime with NO rebuild. Fail-closed to loom-native
+ * while loading, so the Azure-native default renders first.
+ */
+export function useSemanticBackend(): UseSemanticBackend {
+  const { config, loading } = usePlatformConfig();
+  return { semanticBackend: config.semanticBackend, loading };
 }
 
 /**
