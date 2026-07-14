@@ -110,9 +110,19 @@ jobs:
                image="$ACR_LOGIN/loom-unity:$SHA" \
                complianceTags='{"env":"gov","boundary":"usgovvirginia"}' \
             -o none
+          # Gov posture: H2 on the Azure Files SMB mount crash-loops (uid/CIFS
+          # semantics). Until Postgres (LOOM_UNITY_DB_URL) is wired — gated on Gov
+          # Postgres quota — run H2 in a local ephemeral dir so UC is FUNCTIONAL
+          # now. Catalog metadata is not persisted across restarts (documented).
+          az containerapp update -n "$UNITY_APP" -g "$RG" --set-env-vars "LOOM_UNITY_DB_LOCAL=1" -o none
           FQDN=$(az containerapp show -n "$UNITY_APP" -g "$RG" --query properties.configuration.ingress.fqdn -o tsv | tr -d '\r')
           echo "UNITY_FQDN=$FQDN" >> "$GITHUB_ENV"
-          echo "::notice::loom-unity internal FQDN: $FQDN"
+          echo "::notice::loom-unity internal FQDN: $FQDN (H2 local-ephemeral; wire LOOM_UNITY_DB_URL=postgres for durable metadata)"
+          # Wait for the new revision to go healthy before the console reads it.
+          for i in $(seq 1 20); do
+            H=$(az containerapp revision show -n "$UNITY_APP" -g "$RG" --revision "$(az containerapp show -n "$UNITY_APP" -g "$RG" --query properties.latestRevisionName -o tsv | tr -d '\r')" --query properties.healthState -o tsv 2>/dev/null | tr -d '\r')
+            echo "loom-unity health=$H"; [ "$H" = "Healthy" ] && break; sleep 15
+          done
 
       - name: Discover the Gov Purview account
         if: ${{ inputs.skip_purview != 'true' }}
