@@ -77,6 +77,9 @@ interface SkillStateDoc {
 
 const BUILTIN_SCOPE = 'builtin';
 const tenantScope = (tenantId: string) => `tenant:${tenantId}`;
+/** CTS-11 — the partition scope SUGGESTED (learner-drafted, admin-review) skills
+ *  live under, distinct from the published tenant custom scope. */
+const suggestedScope = (tenantId: string) => `suggested:${tenantId}`;
 const userKeyFor = (userOid: string) => `user:${userOid}`;
 const tenantKeyFor = (tenantId: string) => `tenant:${tenantId}`;
 
@@ -491,6 +494,172 @@ export async function setTenantSkillDefault(
   const doc: SkillStateDoc = { id: key, userKey: key, kind: 'tenant', states, updatedAt: new Date().toISOString() };
   await c.items.upsert(doc);
   return states;
+}
+
+// ---------------------------------------------------------------------------
+// CTS-11 — SUGGESTED skills (learner-drafted, admin-reviewed)
+// ---------------------------------------------------------------------------
+
+/** Provenance for a learner-drafted suggestion — what usage pattern produced it. */
+export interface SkillProvenance {
+  /** The recurring keywords the gap surfaced. */
+  keywords: string[];
+  /** How many prompts fed the gap. */
+  sampleCount: number;
+  /** The pane the gap was found on. */
+  pane?: string;
+  /** A few representative (already-redacted) prompts. */
+  samplePrompts?: string[];
+}
+
+/** A learner-drafted candidate skill (form-shaped, never raw JSON config). */
+export interface SuggestedSkillDraft {
+  name: string;
+  whenToUse: string;
+  guidance: string;
+  panes: string[];
+  toolNames?: string[];
+  category?: string;
+  tags?: string[];
+}
+
+/** The persisted SUGGESTED-skill doc (scope `suggested:<tid>`). */
+interface SuggestedSkillDoc extends SkillDoc {
+  status: 'suggested';
+  proposedFrom?: SkillProvenance;
+  proposedAt?: string;
+}
+
+/** A suggestion decorated for the admin review queue (descriptor + provenance). */
+export interface SuggestedSkill extends SkillDescriptor {
+  status: 'suggested';
+  proposedFrom?: SkillProvenance;
+  proposedAt?: string;
+}
+
+/**
+ * Persist ONE learner-drafted candidate as a SUGGESTED skill under
+ * `suggested:<tid>`. Nothing here is injected into any turn — a suggestion is
+ * inert until an admin PROMOTES it (see {@link promoteSuggestedSkill}). The draft
+ * is normalized through the SAME form validator as a custom skill so a malformed
+ * draft is rejected before it reaches the review queue.
+ */
+export async function createSuggestedSkill(
+  tenantId: string,
+  draft: SuggestedSkillDraft,
+  provenance?: SkillProvenance,
+): Promise<SuggestedSkill> {
+  const input = normalizeInput(draft);
+  const now = new Date().toISOString();
+  const scope = suggestedScope(tenantId);
+  const doc: SuggestedSkillDoc = {
+    id: randomUUID(),
+    scope,
+    is_builtin: false,
+    isBuiltin: false,
+    enabled: true,
+    status: 'suggested',
+    name: input.name,
+    whenToUse: input.whenToUse,
+    guidance: input.guidance,
+    toolNames: input.toolNames ?? [],
+    panes: input.panes,
+    mcpToolPrefix: input.mcpToolPrefix,
+    category: input.category ?? 'Suggested',
+    tags: input.tags ?? [],
+    createdAt: now,
+    updatedAt: now,
+    proposedFrom: provenance,
+    proposedAt: now,
+  };
+  const c = await copilotSkillsContainer();
+  await c.items.create(doc);
+  return suggestedDocToView(doc);
+}
+
+function suggestedDocToView(doc: SuggestedSkillDoc): SuggestedSkill {
+  return {
+    ...docToDescriptor(doc),
+    status: 'suggested',
+    proposedFrom: doc.proposedFrom,
+    proposedAt: doc.proposedAt,
+  };
+}
+
+/** List the tenant's pending SUGGESTED skills (the admin review queue). */
+export async function listSuggestedSkills(tenantId: string): Promise<SuggestedSkill[]> {
+  const scope = suggestedScope(tenantId);
+  const c = await copilotSkillsContainer();
+  const { resources } = await c.items
+    .query<SuggestedSkillDoc>(
+      { query: 'SELECT * FROM c WHERE c.scope = @s', parameters: [{ name: '@s', value: scope }] },
+      { partitionKey: scope },
+    )
+    .fetchAll();
+  return resources
+    .map(suggestedDocToView)
+    .sort((a, b) => (b.proposedAt ?? '').localeCompare(a.proposedAt ?? ''));
+}
+
+/** Read one suggested doc (or undefined). */
+async function readSuggested(tenantId: string, id: string): Promise<SuggestedSkillDoc | undefined> {
+  const scope = suggestedScope(tenantId);
+  const c = await copilotSkillsContainer();
+  try {
+    const { resource } = await c.item(id, scope).read<SuggestedSkillDoc>();
+    return resource ?? undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * PROMOTE a suggested skill to a published TENANT CUSTOM skill (scope
+ * `tenant:<tid>`), clearing the suggested status, then delete the suggestion.
+ * An admin may pass `edits` (form fields) to publish an EDITED version — the
+ * edits are applied over the draft before it is created. Returns the new custom
+ * skill descriptor.
+ */
+export async function promoteSuggestedSkill(
+  tenantId: string,
+  id: string,
+  actorOid: string,
+  edits?: Partial<CustomSkillInput>,
+): Promise<SkillDescriptor> {
+  const doc = await readSuggested(tenantId, id);
+  if (!doc) throw new SkillStoreError('Suggested skill not found', 404, 'not_found');
+  // Apply admin edits over the drafted fields, then publish through the SAME
+  // create path a hand-authored custom skill uses (full validation).
+  const merged: Partial<CustomSkillInput> = {
+    name: edits?.name ?? doc.name,
+    whenToUse: edits?.whenToUse ?? doc.whenToUse,
+    guidance: edits?.guidance ?? doc.guidance,
+    panes: edits?.panes ?? doc.panes,
+    toolNames: edits?.toolNames ?? doc.toolNames,
+    mcpToolPrefix: edits?.mcpToolPrefix ?? doc.mcpToolPrefix,
+    category: edits?.category ?? (doc.category === 'Suggested' ? 'Custom' : doc.category),
+    tags: edits?.tags ?? doc.tags,
+  };
+  const created = await createCustomSkill(tenantId, actorOid, merged);
+  // Remove the suggestion now that it's published (best-effort — a lingering
+  // suggestion doc is harmless but we clean it up so the queue reflects reality).
+  const scope = suggestedScope(tenantId);
+  const c = await copilotSkillsContainer();
+  try {
+    await c.item(id, scope).delete();
+  } catch {
+    /* already gone / concurrent dismiss — fine */
+  }
+  return created;
+}
+
+/** DISMISS a suggested skill — delete it from the review queue. Idempotent. */
+export async function dismissSuggestedSkill(tenantId: string, id: string): Promise<void> {
+  const doc = await readSuggested(tenantId, id);
+  if (!doc) throw new SkillStoreError('Suggested skill not found', 404, 'not_found');
+  const scope = suggestedScope(tenantId);
+  const c = await copilotSkillsContainer();
+  await c.item(id, scope).delete();
 }
 
 // ---------------------------------------------------------------------------

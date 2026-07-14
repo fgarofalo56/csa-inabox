@@ -1,0 +1,76 @@
+name: csa-loom-skill-learner
+
+# ---------------------------------------------------------------------------
+# CTS-11 — Copilot skill self-evolution learner (scheduled trigger).
+#
+# Weekly, ping the internal-token-gated learner endpoint. Each hit scans recent
+# Copilot USAGE telemetry per tenant, finds recurring usage gaps no existing
+# skill covers, and drafts SUGGESTED skills a tenant admin then reviews in the
+# Skills Studio. NOTHING is auto-published — a suggestion is inert until an admin
+# promotes it. This is the SAME external-heartbeat pattern as the Spark keep-warm
+# and scheduler-tick jobs.
+#
+# Auth: LOOM_INTERNAL_TOKEN (GitHub secret) as a Bearer token. The console is
+# reachable via Front Door; the console itself reaches Cosmos + AOAI in-VNet.
+# When the token secret is absent the job is a loud no-op (never a hard failure).
+# ---------------------------------------------------------------------------
+
+on:
+  schedule:
+    - cron: '17 6 * * 1'   # 06:17 UTC every Monday
+  workflow_dispatch:
+    inputs:
+      console_url:
+        description: 'Console base URL (default the Commercial vanity)'
+        type: string
+        default: 'https://csa-loom.limitlessdata.ai'
+        required: false
+      tenant_id:
+        description: 'Optional: scan only this tenant id (blank = every tenant with recent usage)'
+        type: string
+        default: ''
+        required: false
+
+concurrency:
+  group: skill-learner-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  learn:
+    name: 'Skill self-evolution learner'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Run learner
+        env:
+          CONSOLE_URL: ${{ inputs.console_url || 'https://csa-loom.limitlessdata.ai' }}
+          TENANT_ID: ${{ inputs.tenant_id }}
+          INTERNAL_TOKEN: ${{ secrets.LOOM_INTERNAL_TOKEN }}
+        run: |
+          if [ -z "$INTERNAL_TOKEN" ]; then
+            echo "::warning::LOOM_INTERNAL_TOKEN secret not set — cannot run the skill learner. Add it to repo secrets."
+            exit 0
+          fi
+          if [ -n "$TENANT_ID" ]; then
+            body="{\"tenantId\":\"$TENANT_ID\"}"
+          else
+            body='{}'
+          fi
+          code=$(curl -sS -o /tmp/learn.json -w '%{http_code}' -X POST \
+            -H "Authorization: Bearer $INTERNAL_TOKEN" \
+            -H 'Content-Type: application/json' \
+            --max-time 600 \
+            --data "$body" \
+            "${CONSOLE_URL}/api/internal/copilot/skills/learn" || echo 000)
+          echo "skill-learner HTTP $code"
+          cat /tmp/learn.json 2>/dev/null | head -c 1200 || true
+          echo ""
+          case "$code" in
+            200) echo "learner run complete (see report above; suggestions await admin review)";;
+            401) echo "::error::learn 401 — LOOM_INTERNAL_TOKEN mismatch between the secret and the console env"; exit 1;;
+            000) echo "::warning::console unreachable ($CONSOLE_URL) — transient; next run retries";;
+            *)   echo "::warning::learn returned $code — see body above";;
+          esac

@@ -119,6 +119,7 @@ import { POWERBI_REMOTE_MCP_GATE_TEXT } from '@/lib/copilot/powerbi-skills';
 // no-vaporware).
 import { msSkillSystemBlocksForPane, msMcpPrefix, msSkillsForPane } from '@/lib/copilot/ms-skills';
 import { renderSkillInjectionForUser } from '@/lib/azure/skill-store';
+import { recordSkillUsage } from '@/lib/azure/skill-usage';
 // rel-T85 list-price estimator (CTS-01) — pure, shared with the admin usage
 // dashboard so the per-turn $ figure uses one source of truth.
 import { estCostUsd } from '@/lib/copilot/cost-estimate';
@@ -2156,6 +2157,17 @@ export async function* orchestrate(opts: OrchestrateOptions): AsyncIterable<Orch
   } catch {
     /* fail-open — keep the hard-coded baseline injection */
   }
+  // CTS-11: fire-and-forget usage telemetry for the skill self-evolution learner.
+  // NEVER awaited and internally best-effort (recordSkillUsage swallows all
+  // errors) so it cannot affect or slow this turn. Records the redacted prompt +
+  // the skills that were actually resolved as active for this pane/user.
+  void recordSkillUsage({
+    tenantId: opts.tenantId ?? undefined,
+    userOid,
+    pane: opts.contextSlug,
+    prompt,
+    activeSkillNames: resolvedSkillNames,
+  });
   if (msSkillBlocks) {
     messages.push({ role: 'system', content: msSkillBlocks });
   }

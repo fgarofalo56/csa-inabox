@@ -291,6 +291,7 @@ const ALLOWLIST = new Set([
   'LOOM_ONBOARDING_ENTRA_GROUP_NAME', // opt-in display override for the onboarding group named in the approve-request instruction (app/api/admin/access-requests/[id]/route.ts); unset = falls back to LOOM_TENANT_ADMIN_GROUP_ID — cosmetic, never a gate
   'LOOM_SELF_BASE_URL',             // derived/ambient override for the server-side same-origin self-call base in demo-deploy (lib/apps/demo-deploy.ts); unset default = http://127.0.0.1:$PORT (the container hairpin), never a deployed literal
   'LOOM_UPDATE_IMAGE_REGISTRY',     // opt-in registry override for the in-place update-apply image resolution (app/api/admin/updates/apply/route.ts); unset default = swap the tag on the app's CURRENT image (its own private ACR), no public-ghcr dependency
+  'LOOM_SKILL_LEARNER_MIN_SAMPLES', // CTS-11 opt-in tuning knob: min recurring prompts on a pane before the skill self-evolution learner proposes a SUGGESTED skill (default 5 in lib/azure/skill-learner.ts); admin-reviewed, never auto-published. (LOOM_SKILL_LEARNER_ENABLED matched by /_ENABLED$/, LOOM_SKILL_LEARNER_MAX_* by /_MAX_.../)
 ]);
 
 // ── Filesystem helpers (no deps) ──
