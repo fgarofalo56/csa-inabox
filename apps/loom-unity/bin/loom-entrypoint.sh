@@ -62,9 +62,14 @@ EOF
     # Container App (found live 2026-07-14, reproduced in local Docker).
     # `hbm2ddl.auto=update` also matches upstream so a fresh (unseeded) dir gets
     # its schema created.
+    # FILE_LOCK=FS is refused outright on CIFS; FILE_LOCK=NO skips H2's lock-file
+    # protocol entirely — safe here because loom-unity is the ONLY writer
+    # (minReplicas=1, single container, internal ingress) and Azure Files (SMB)
+    # can't honor H2's default file-lock semantics (the second Gov first-boot
+    # crash after the credentials fix).
     cat <<EOF
 hibernate.connection.driver_class=org.h2.Driver
-hibernate.connection.url=jdbc:h2:file:${DB_DIR}/h2db;DB_CLOSE_DELAY=-1
+hibernate.connection.url=jdbc:h2:file:${DB_DIR}/h2db;DB_CLOSE_DELAY=-1;FILE_LOCK=NO
 hibernate.hbm2ddl.auto=update
 hibernate.show_sql=false
 hibernate.archive.autodetection=class
