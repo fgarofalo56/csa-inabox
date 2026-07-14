@@ -4744,7 +4744,7 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
       <SensitivityLabelDialog open={sensitivityOpen} onClose={() => setSensitivityOpen(false)} reportId={id} appliedName={sensitivityLabelName} onApplied={(n) => setSensitivityLabelName(n)} />
       <EndorsementDialog open={endorsementOpen} onClose={() => setEndorsementOpen(false)} reportId={id} value={endorsement} onChange={(e) => setEndorsement(e)} />
       <DeployToPipelineDialog open={pipelineOpen} onClose={() => setPipelineOpen(false)} reportId={id} />
-      <ReportSettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} settings={reportSettings.settings} onChange={reportSettings.setSettings} />
+      <ReportSettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} settings={reportSettings.settings} onChange={reportSettings.setSettings} reportId={id} />
       {exportVisual && <VisualExportDataDialog reportId={id} visual={exportVisual as unknown as ExportVisualShape} filters={[...reportFilters, ...(page?.filters || [])]} dataSource={dataSource} onClose={() => setExportVisual(null)} />}
     </>
   );

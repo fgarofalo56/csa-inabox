@@ -18,6 +18,7 @@ import { fromLegacyState, hasTransform } from '@/lib/editors/report/report-data-
 import { foldAppliedStepsToSql, parseSharedQueries } from '@/lib/components/pipeline/dataflow/m-script';
 import type { WorkspaceItem } from '@/lib/types/workspace';
 import { TRANSFORM_DIALECT, connectionBaseSelect, tryConnectionCacheRead } from '../transform-fold';
+import { type UserExecutionContext } from './loom-native';
 
 /** Run the Get-Data (connection) report path for one visual. */
 export async function executeConnectionQueryPath(
@@ -25,6 +26,7 @@ export async function executeConnectionQueryPath(
   resolved: Extract<ResolvedReportModel, { backend: 'connection' }>,
   visual: (DaxVisual & Record<string, unknown>) | undefined,
   filters: ReportFilterInput[] | undefined,
+  user?: UserExecutionContext,
 ): Promise<NextResponse> {
   if (!visual) {
     return NextResponse.json(
@@ -37,6 +39,65 @@ export async function executeConnectionQueryPath(
       },
       { status: 400 },
     );
+  }
+
+  // ── USER-IDENTITY PATH (EH-P1-OBO #1800) ───────────────────────────────────
+  // The report's data-access mode is 'user' and the route resolved the caller's
+  // delegated token. OBO is only sound for connTypes the executor marks
+  // delegatable (entra-mi Synapse — same Azure-SQL token + executeQueryAsUser as
+  // the Loom-native path). For everything else, honest-gate: NEVER silently run
+  // as the service identity (that would leak the UAMI's broader rights and defeat
+  // the mode).
+  if (user) {
+    if (!resolved.executor.supportsUserIdentity) {
+      return NextResponse.json(
+        {
+          ok: false,
+          code: 'USER_MODE_UNSUPPORTED_CONNECTION',
+          error:
+            `This report's data-access mode is "user's identity", but its Get Data ` +
+            `"${resolved.connType}" source can't run under your own identity. User-identity ` +
+            `execution is supported for Entra-authenticated Synapse connections (and the ` +
+            `Loom-native Synapse source); credential-based SQL, Azure SQL, Postgres, Databricks, ` +
+            `Cosmos, ADX and file sources authenticate with a fixed service credential. Switch ` +
+            `the report back to the service identity, or bind it to an Entra-MI Synapse / ` +
+            `Loom-native source to run visuals as yourself.`,
+        },
+        { status: 403 },
+      );
+    }
+    // A Power Query transform is served from a service-identity Delta cache
+    // (serverless OPENROWSET over the report /refresh output). We must not read
+    // that under user mode — honest-gate rather than silently mixing identities.
+    const connSourceU = fromLegacyState((item.state || {}) as Record<string, unknown>);
+    if (hasTransform(connSourceU)) {
+      return NextResponse.json(
+        {
+          ok: false,
+          code: 'USER_MODE_TRANSFORM_UNSUPPORTED',
+          error:
+            "This report has a Power Query transform, which is materialized and read as the Loom " +
+            "service identity. Running under your own identity is only supported for a direct " +
+            "(untransformed) Entra-MI Synapse source. Remove the transform, or switch the report " +
+            "back to the service identity.",
+        },
+        { status: 403 },
+      );
+    }
+    try {
+      const { rows, query, lang } = await resolved.executor.runVisual(visual, filters, user);
+      return NextResponse.json({
+        ok: true,
+        rows,
+        accessMode: 'user',
+        ...(lang === 'kql' ? { kql: query } : { sql: query }),
+      });
+    } catch (e: any) {
+      return NextResponse.json(
+        { ok: false, error: e?.message || String(e), status: 502 },
+        { status: 502 },
+      );
+    }
   }
   // ── WAVE-4: a Power Query transform layered on a Get-Data connection source ──
   // The resolver-owned LIVE executor can't accept a folded FROM, so a connection

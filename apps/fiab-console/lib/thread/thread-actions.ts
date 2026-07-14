@@ -12,7 +12,12 @@
  * BFF route. The menu groups actions by `group`.
  */
 
-import { pbiSourceableTypes } from '@/lib/items/manifest/registry';
+import {
+  dataAgentSourceableTypes,
+  notebookAttachableTypes,
+  pbiSourceableTypes,
+  powerBiModelableTypes,
+} from '@/lib/items/manifest/registry';
 
 export type ThreadGroup = 'Explore' | 'Analyze with AI' | 'Publish' | 'Visualize' | 'Promote';
 
@@ -60,24 +65,29 @@ export interface ThreadAction {
   submitLabel?: string;
 }
 
-/** Item types that can ground a data agent (mirrors DA_SOURCE_TYPES). */
-const DATA_AGENT_SOURCEABLE = [
-  'warehouse', 'lakehouse', 'kql-database', 'semantic-model', 'ai-search-index',
-  'synapse-dedicated-sql-pool', 'synapse-serverless-sql-pool', 'azure-sql-database',
-];
+/**
+ * EH-P1-MANIFEST (#1801): these three capability gates are now READ from the
+ * item-type manifest registry — `capabilities.dataAgentSourceable` /
+ * `notebookAttachable` / `powerBiModelable` in lib/items/manifest — instead of
+ * hard-coded slug lists here. The manifest is the single source of truth; the
+ * consumer keeps no parallel list. Same members, same order (the manifest suite
+ * asserts each equals the prior hard-coded list, so the swap is provably
+ * behavior-preserving).
+ */
 
-/** Item types that can be attached to a notebook session for exploration. */
-const NOTEBOOK_ATTACHABLE = [
-  'lakehouse', 'warehouse', 'kql-database',
-  'synapse-dedicated-sql-pool', 'synapse-serverless-sql-pool', 'azure-sql-database',
-];
+/** Item types that can ground a data agent (manifest `dataAgentSourceable`). */
+const DATA_AGENT_SOURCEABLE = dataAgentSourceableTypes();
+
+/** Item types that can be attached to a notebook session (manifest `notebookAttachable`). */
+const NOTEBOOK_ATTACHABLE = notebookAttachableTypes();
 
 /**
  * Warehouse sources whose Azure-native backend (Synapse dedicated SQL) can be
- * read table-by-table to build a Power BI push model. Lakehouse/KQL/Azure-SQL
- * are deferred until their schema adapter lands (only WIRED edges ship).
+ * read table-by-table to build a Power BI push model / publish as an API
+ * (manifest `powerBiModelable`). Lakehouse/KQL/Azure-SQL are deferred until
+ * their schema adapter lands (only WIRED edges ship).
  */
-const POWERBI_MODELABLE = ['warehouse', 'synapse-dedicated-sql-pool'];
+const POWERBI_MODELABLE = powerBiModelableTypes();
 
 /**
  * Every Loom item type that can be a Power BI SOURCE (Weave → “Analyze in Power

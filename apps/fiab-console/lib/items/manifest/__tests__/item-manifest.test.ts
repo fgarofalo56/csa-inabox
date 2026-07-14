@@ -24,9 +24,12 @@ import {
 } from '../item-manifest';
 import {
   checkManifestConsistency,
+  dataAgentSourceableTypes,
   getItemManifest,
   listItemManifests,
+  notebookAttachableTypes,
   pbiSourceableTypes,
+  powerBiModelableTypes,
 } from '../registry';
 import { THREAD_ACTIONS, actionsFor, PBI_SOURCEABLE } from '@/lib/thread/thread-actions';
 
@@ -49,6 +52,22 @@ const PRIOR_HARDCODED_PBI_SOURCEABLE = [
   'dataset', 'semantic-model', 'data-product',
   'synapse-serverless-sql-pool', 'synapse-dedicated-sql-pool',
 ];
+
+/**
+ * The exact capability lists as hard-coded in thread-actions.ts BEFORE #1801
+ * (DATA_AGENT_SOURCEABLE / NOTEBOOK_ATTACHABLE / POWERBI_MODELABLE). The
+ * consumers now READ these from the manifest registry; these frozen copies let
+ * us prove the swap is behavior-preserving (members AND order).
+ */
+const PRIOR_HARDCODED_DATA_AGENT_SOURCEABLE = [
+  'warehouse', 'lakehouse', 'kql-database', 'semantic-model', 'ai-search-index',
+  'synapse-dedicated-sql-pool', 'synapse-serverless-sql-pool', 'azure-sql-database',
+];
+const PRIOR_HARDCODED_NOTEBOOK_ATTACHABLE = [
+  'lakehouse', 'warehouse', 'kql-database',
+  'synapse-dedicated-sql-pool', 'synapse-serverless-sql-pool', 'azure-sql-database',
+];
+const PRIOR_HARDCODED_POWERBI_MODELABLE = ['warehouse', 'synapse-dedicated-sql-pool'];
 
 describe('item-type manifest registry — completeness', () => {
   it('resolves a manifest for every catalog item type (no orphans either way)', () => {
@@ -130,14 +149,22 @@ describe('item-type manifest registry — cross-registry drift guards', () => {
     expect(new Set(WEAVE_SOURCEABLE_ITEM_TYPES)).toEqual(liveUnion);
   });
 
-  it('notebookAttachable / dataAgentSourceable / powerBiModelable mirror the live edges', () => {
-    const fromTypesOf = (id: string): string[] => {
-      const a = THREAD_ACTIONS.find((x) => x.id === id)!;
-      return a.fromTypes === '*' ? [] : a.fromTypes;
-    };
-    expect([...NOTEBOOK_ATTACHABLE_ITEM_TYPES]).toEqual(fromTypesOf('analyze-in-notebook'));
-    expect([...DATA_AGENT_SOURCEABLE_ITEM_TYPES]).toEqual(fromTypesOf('add-data-agent-source'));
-    expect([...POWERBI_MODELABLE_ITEM_TYPES]).toEqual(fromTypesOf('build-powerbi-model'));
+  it('the notebook / data-agent / power-bi-model helpers faithfully surface the manifest lists', () => {
+    // The registry helper is the single primitive the edges read. It returns
+    // exactly the source list (order-preserving) filtered to slugs whose
+    // manifest sets the flag — and every member's manifest flag is set.
+    expect(notebookAttachableTypes()).toEqual([...NOTEBOOK_ATTACHABLE_ITEM_TYPES]);
+    expect(dataAgentSourceableTypes()).toEqual([...DATA_AGENT_SOURCEABLE_ITEM_TYPES]);
+    expect(powerBiModelableTypes()).toEqual([...POWERBI_MODELABLE_ITEM_TYPES]);
+    for (const s of notebookAttachableTypes()) {
+      expect(getItemManifest(s)?.capabilities.notebookAttachable, `notebookAttachable('${s}')`).toBe(true);
+    }
+    for (const s of dataAgentSourceableTypes()) {
+      expect(getItemManifest(s)?.capabilities.dataAgentSourceable, `dataAgentSourceable('${s}')`).toBe(true);
+    }
+    for (const s of powerBiModelableTypes()) {
+      expect(getItemManifest(s)?.capabilities.powerBiModelable, `powerBiModelable('${s}')`).toBe(true);
+    }
   });
 
   it(
@@ -172,5 +199,25 @@ describe('wired consumer — thread-actions PBI_SOURCEABLE equivalence proof', (
       expect(offered, `analyze-in-powerbi offered on '${m.type}'`).toBe(prior);
       expect(m.capabilities.pbiSourceable, `pbiSourceable('${m.type}')`).toBe(prior);
     }
+  });
+
+  it('the notebook / data-agent / power-bi-model edges READ the manifest (identical to the prior hard-coded lists)', () => {
+    // The live edge `fromTypes` are now the manifest-derived helper output, and
+    // that output is identical (members AND order) to the lists thread-actions
+    // used to hard-code — so the consumer reads the manifest with zero behavior
+    // change.
+    const fromTypesOf = (id: string): string[] => {
+      const a = THREAD_ACTIONS.find((x) => x.id === id)!;
+      return a.fromTypes === '*' ? [] : a.fromTypes;
+    };
+    expect(fromTypesOf('analyze-in-notebook')).toEqual(PRIOR_HARDCODED_NOTEBOOK_ATTACHABLE);
+    expect(fromTypesOf('add-data-agent-source')).toEqual(PRIOR_HARDCODED_DATA_AGENT_SOURCEABLE);
+    expect(fromTypesOf('build-powerbi-model')).toEqual(PRIOR_HARDCODED_POWERBI_MODELABLE);
+    // …and the edges are the SAME reference the helpers return (read-through).
+    expect(fromTypesOf('analyze-in-notebook')).toEqual(notebookAttachableTypes());
+    expect(fromTypesOf('add-data-agent-source')).toEqual(dataAgentSourceableTypes());
+    expect(fromTypesOf('build-powerbi-model')).toEqual(powerBiModelableTypes());
+    // publish-as-api shares the powerBiModelable gate.
+    expect(fromTypesOf('publish-as-api')).toEqual(powerBiModelableTypes());
   });
 });

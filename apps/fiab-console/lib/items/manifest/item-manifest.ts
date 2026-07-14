@@ -190,7 +190,11 @@ export const PBI_SOURCEABLE_ITEM_TYPES: readonly string[] = [
   'synapse-dedicated-sql-pool',
 ];
 
-/** MIRRORS thread-actions NOTEBOOK_ATTACHABLE (test-enforced). */
+/**
+ * CANONICAL source for the Weave "Analyze in a Notebook" edge `fromTypes`.
+ * thread-actions.ts reads this via `notebookAttachableTypes()` — it no longer
+ * keeps its own copy. Order is the edge's canonical order (test-enforced).
+ */
 export const NOTEBOOK_ATTACHABLE_ITEM_TYPES: readonly string[] = [
   'lakehouse',
   'warehouse',
@@ -200,7 +204,13 @@ export const NOTEBOOK_ATTACHABLE_ITEM_TYPES: readonly string[] = [
   'azure-sql-database',
 ];
 
-/** MIRRORS thread-actions DATA_AGENT_SOURCEABLE (test-enforced). */
+/**
+ * CANONICAL source for the Weave "Add as a Data Agent source" edge `fromTypes`.
+ * thread-actions.ts reads this via `dataAgentSourceableTypes()`. (The
+ * data-agent editor's DA_SOURCE_TYPES is a distinct UI dropdown that is a
+ * SUPERSET — it also offers non-item sources like metric-view / ontology /
+ * Microsoft Graph — so it is intentionally not derived from this list.)
+ */
 export const DATA_AGENT_SOURCEABLE_ITEM_TYPES: readonly string[] = [
   'warehouse',
   'lakehouse',
@@ -212,7 +222,11 @@ export const DATA_AGENT_SOURCEABLE_ITEM_TYPES: readonly string[] = [
   'azure-sql-database',
 ];
 
-/** MIRRORS thread-actions POWERBI_MODELABLE (test-enforced). */
+/**
+ * CANONICAL source for the opt-in Weave "Build a Power BI model" / "Publish as
+ * an API" edge `fromTypes`. thread-actions.ts reads this via
+ * `powerBiModelableTypes()` (test-enforced).
+ */
 export const POWERBI_MODELABLE_ITEM_TYPES: readonly string[] = [
   'warehouse',
   'synapse-dedicated-sql-pool',

@@ -92,4 +92,25 @@ describe('F10 SQL data-access mode — real wiring', () => {
     expect(src).toMatch(/itemType="synapse-dedicated-sql-pool"/);
     expect(src).toMatch(/itemType="synapse-serverless-sql-pool"/);
   });
+
+  it('the section accepts the widened item-type set (report + kql-database)', () => {
+    const src = read('lib/panes/sql-access-mode-section.tsx');
+    // Props widened from the two SQL pools to include report + kql-database, with
+    // per-type copy so the same control reads correctly on each surface.
+    expect(src).toMatch(/AccessModeItemType/);
+    expect(src).toMatch(/'report'/);
+    expect(src).toMatch(/'kql-database'/);
+  });
+
+  it('the report + kql-database editors mount the data-access-mode section (EH-P1-OBO 2nd half)', () => {
+    const settings = read('lib/editors/report/report-settings.tsx');
+    expect(settings).toMatch(/SqlAccessModeSection/);
+    expect(settings).toMatch(/itemType="report"/);
+    // The report designer passes the report id into the settings dialog.
+    const designer = read('lib/editors/report-designer.tsx');
+    expect(designer).toMatch(/reportId=\{id\}/);
+    const kql = read('lib/editors/phase3/kql-database-editor.tsx');
+    expect(kql).toMatch(/SqlAccessModeSection/);
+    expect(kql).toMatch(/itemType="kql-database"/);
+  });
 });

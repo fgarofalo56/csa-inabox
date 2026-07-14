@@ -827,8 +827,17 @@ export async function executeAasQuery(
   serverName: string,
   database: string,
   daxQuery: string,
+  /**
+   * EH-P1-OBO (#1800): when the report's data-access mode is 'user', the caller
+   * resolves the signed-in user's delegated Azure Analysis Services token
+   * (user-pool-registry, `aas` kind) and passes it here so the DAX query runs
+   * under the USER's own Azure identity (XMLA accepts an AAD user bearer token —
+   * the user must be a member/reader on the AAS model). Absent (the default) ⇒
+   * the service identity is used, byte-identical to before.
+   */
+  userToken?: string,
 ): Promise<AasQueryResult> {
-  const token = await getAasToken();
+  const token = userToken || (await getAasToken());
   const url = `${aasModelUrl(region, serverName, database)}/query`;
   const res = await fetchWithTimeout(url, {
     method: 'POST',
