@@ -2332,6 +2332,9 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
   const [createErr, setCreateErr] = useState<string | null>(null);
   const [createName, setCreateName] = useState('');
   const [createWsId, setCreateWsId] = useState('');
+  // This report's own workspace (from the loaded item) — SCOPES the data-source
+  // pickers so a report in Workspace A never lists a sibling workspace's sources.
+  const [reportWorkspaceId, setReportWorkspaceId] = useState('');
   const [workspaces, setWorkspaces] = useState<{ id: string; name: string }[] | null>(null);
   const [wsErr, setWsErr] = useState<string | null>(null);
   const [visualRows, setVisualRows] = useState<Record<string, VisualState>>({});
@@ -2374,6 +2377,7 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
       const r = await clientFetch(`/api/items/report/${encodeURIComponent(id)}`);
       const j = await r.json();
       if (!j.ok) { setLoadErr(j.error || `HTTP ${r.status}`); return; }
+      if (j.workspaceId && j.workspaceId !== '_loom') setReportWorkspaceId(j.workspaceId);
       setReportName(j.report?.name || '');
 
       // Resolve the data source: an explicit state.dataSource (read via the v2
@@ -4598,6 +4602,7 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
       <DataSourcePicker
         open={dsOpen}
         reportId={id}
+        workspaceId={reportWorkspaceId}
         value={dataSource}
         onChange={applyDataSource}
         onDismiss={() => setDsOpen(false)}
@@ -4656,6 +4661,7 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
                   </Caption1>
                   <LoomItemSourcePicker
                     purpose="report"
+                    workspaceId={createWsId}
                     onResolved={(res) => { setDataSource(res.dataSource ?? null); setDirty(true); }}
                     onCleared={() => { setDataSource(null); }}
                   />

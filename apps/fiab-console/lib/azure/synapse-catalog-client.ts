@@ -59,12 +59,26 @@ export interface CatalogTable {
 export interface ScanOptions {
   /** Containers to scan; defaults to every container with a LOOM_*_URL set. */
   containers?: string[];
+  /**
+   * When set, scan ONLY `<rootPrefix>/Tables/` inside the (single) requested
+   * container — i.e. ONE lakehouse's own ADLS root — instead of every
+   * container's top-level `Tables/`. This is what scopes the lakehouse table
+   * browser to the lakehouse item the caller opened, so a scan for lakehouse X
+   * can never enumerate lakehouse Y's tables (or the whole storage account).
+   * `resolveLakehouseAbfss` supplies the exact container + root.
+   */
+  rootPrefix?: string;
   /** Run a Serverless COUNT(*) per Delta table. Default false (slow / cold-start). */
   rowCounts?: boolean;
   /** Per-table COUNT(*) timeout. Default 30s. */
   rowCountTimeoutMs?: number;
   /** Max directory entries walked per table (size aggregation cap). Default 5000. */
   maxEntriesPerTable?: number;
+}
+
+/** Normalize a root prefix: strip leading/trailing slashes; '' when absent. */
+function cleanPrefix(p?: string): string {
+  return String(p ?? '').replace(/^\/+|\/+$/g, '');
 }
 
 function leaf(path: string): string {
@@ -183,16 +197,20 @@ export async function scanLakehouseTables(opts: ScanOptions = {}): Promise<Catal
   const rowCounts = !!opts.rowCounts;
   const rowCountTimeoutMs = opts.rowCountTimeoutMs ?? 30_000;
   const maxEntries = opts.maxEntriesPerTable ?? 5_000;
+  // Scope the scan to ONE lakehouse's root when supplied — `<root>/Tables`
+  // rather than the container's top-level `Tables`.
+  const prefix = cleanPrefix(opts.rootPrefix);
+  const tablesDir = prefix ? `${prefix}/Tables` : 'Tables';
 
   const out: CatalogTable[] = [];
 
   for (const container of containers) {
-    // Top-level directory listing under Tables/. If Tables/ doesn't exist yet
+    // Top-level directory listing under <root>/Tables/. If it doesn't exist yet
     // (first-provision 404) or the identity lacks read, skip this container.
     let dirs: { name: string }[] = [];
     try {
       const fs = getServiceClientFor(getAccountName()).getFileSystemClient(container);
-      const iter = fs.listPaths({ path: 'Tables', recursive: false });
+      const iter = fs.listPaths({ path: tablesDir, recursive: false });
       for await (const p of iter) {
         if (p.isDirectory) dirs.push({ name: p.name ?? '' });
       }
@@ -203,7 +221,7 @@ export async function scanLakehouseTables(opts: ScanOptions = {}): Promise<Catal
     for (const d of dirs) {
       const name = leaf(d.name);
       if (!name || name === '_delta_log') continue;
-      const tablePath = `Tables/${name}`;
+      const tablePath = `${tablesDir}/${name}`;
       let probe: TableProbe;
       try {
         probe = await probeTable(container, tablePath, maxEntries);

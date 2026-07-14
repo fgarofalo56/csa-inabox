@@ -167,7 +167,7 @@ interface ItemLite { id: string; displayName: string }
 
 export function MapEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
-  const { state, setState, loading, saving, error, savedAt, save, dirty } = useItemState<MapState>('map', id, {
+  const { state, setState, loading, saving, error, savedAt, save, dirty, workspaceId } = useItemState<MapState>('map', id, {
     geojson: GEO_SAMPLE, binding: { source: '' }, layers: DEFAULT_LAYERS,
   });
   const [validateMsg, setValidateMsg] = useState<{ intent: 'success' | 'error'; text: string } | null>(null);
@@ -188,15 +188,18 @@ export function MapEditor({ item, id }: { item: FabricItemType; id: string }) {
     setState((p) => ({ ...p, binding: { ...(p.binding || { source: '' }), ...patch } }));
   }, [setState]);
 
-  // Lazy-load pickers when the relevant source is chosen.
+  // Lazy-load pickers when the relevant source is chosen. Scoped to this map's
+  // workspace so the KQL / ontology pickers never list a sibling workspace's.
   useEffect(() => {
+    if (!workspaceId) return;
+    const wsParam = `&workspaceId=${encodeURIComponent(workspaceId)}`;
     if (binding.source === 'kql' && kqlItems === null) {
-      clientFetch('/api/items?type=kql-database').then((r) => r.json()).then((j) => setKqlItems((j?.items || []).map((it: any) => ({ id: it.id, displayName: it.displayName })))).catch(() => setKqlItems([]));
+      clientFetch(`/api/items?type=kql-database${wsParam}`).then((r) => r.json()).then((j) => setKqlItems((j?.items || []).map((it: any) => ({ id: it.id, displayName: it.displayName })))).catch(() => setKqlItems([]));
     }
     if (binding.source === 'ontology' && ontologyItems === null) {
-      clientFetch('/api/items?type=ontology').then((r) => r.json()).then((j) => setOntologyItems((j?.items || []).map((it: any) => ({ id: it.id, displayName: it.displayName })))).catch(() => setOntologyItems([]));
+      clientFetch(`/api/items?type=ontology${wsParam}`).then((r) => r.json()).then((j) => setOntologyItems((j?.items || []).map((it: any) => ({ id: it.id, displayName: it.displayName })))).catch(() => setOntologyItems([]));
     }
-  }, [binding.source, kqlItems, ontologyItems]);
+  }, [binding.source, kqlItems, ontologyItems, workspaceId]);
 
   let parseErr: string | null = null;
   let featureCount = 0;

@@ -395,11 +395,14 @@ export function LakehouseEditor({ item, id }: Props) {
   const [liveTablesGate, setLiveTablesGate] = useState<string | null>(null);
 
   const loadLiveTables = useCallback(async () => {
-    if (!activeContainer) return;
+    const workspaceId = itemQ.data?.workspaceId;
+    // Scoped scan: the tables come from THIS lakehouse item's own ADLS root, so
+    // the browser can never surface another lakehouse's / workspace's tables.
+    if (!id || id === 'new' || !workspaceId) return;
     setLiveTablesLoading(true); setLiveTablesError(null); setLiveTablesGate(null);
     try {
       const r = await clientFetch(
-        `/api/lakehouse/tables?containers=${encodeURIComponent(activeContainer)}&rowCounts=true`,
+        `/api/lakehouse/tables?lakehouseId=${encodeURIComponent(id)}&workspaceId=${encodeURIComponent(workspaceId)}&rowCounts=true`,
       );
       const j = await parseJsonOrError<{ ok: boolean; tables?: LiveCatalogTable[]; gate?: string; error?: string }>(r, 'List tables');
       if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
@@ -407,12 +410,12 @@ export function LakehouseEditor({ item, id }: Props) {
       setLiveTablesGate(j.gate || null);
     } catch (e: any) { setLiveTablesError(e?.message || String(e)); }
     finally { setLiveTablesLoading(false); }
-  }, [activeContainer]);
+  }, [id, itemQ.data?.workspaceId]);
 
   useEffect(() => {
     if (tab === 'tables' && activeContainer) loadLiveTables();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, activeContainer]);
+  }, [tab, activeContainer, id, itemQ.data?.workspaceId]);
 
   // ---- Fabric-style context menu (right-click on tree / table nodes) ----
   // Anchored at the cursor via a virtual positioning target, mirroring the
@@ -2614,7 +2617,7 @@ export function LakehouseEditor({ item, id }: Props) {
                 (ADLS Gen2 + Synapse Serverless); no Fabric/OneLake dependency. */}
             {tab === 'entity' && (
               <EntityDiagram
-                source={{ kind: 'lakehouse', itemId: id, containers: activeContainer || undefined }}
+                source={{ kind: 'lakehouse', itemId: id, workspaceId: itemQ.data?.workspaceId, containers: activeContainer || undefined }}
                 height={560}
                 resizeStorageKey="lakehouse-entity"
               />

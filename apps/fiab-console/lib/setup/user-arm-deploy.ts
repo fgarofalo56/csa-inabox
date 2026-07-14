@@ -64,6 +64,10 @@ export interface DlzDeployInputs {
   hubCoords?: Record<string, unknown>;
   /** Named main.bicep feature flags (adxEnabled, cosmosGraphVectorEnabled, …). */
   featureToggles?: Record<string, boolean>;
+  /** Entra admin group → main.bicep `adminEntraGroupId` (Synapse/ADX admin grants). */
+  adminEntraGroupId?: string;
+  /** Chargeback cost center → main.bicep `costCenter` (resource tags). */
+  costCenter?: string;
 }
 
 /**
@@ -126,6 +130,15 @@ export function buildDlzDeploymentParameters(inp: DlzDeployInputs): ArmParameter
 
   for (const [k, v] of Object.entries(inp.featureToggles ?? {})) {
     if (typeof v === 'boolean') p[k] = { value: v };
+  }
+  // audit-t158: bind the operator's Entra admin group + cost center when supplied
+  // so the DLZ's Synapse/ADX admin grants + resource tags use them (only emitted
+  // when set, so bicep defaults are preserved otherwise).
+  if (inp.adminEntraGroupId && inp.adminEntraGroupId.trim()) {
+    p.adminEntraGroupId = { value: inp.adminEntraGroupId.trim() };
+  }
+  if (inp.costCenter && inp.costCenter.trim()) {
+    p.costCenter = { value: inp.costCenter.trim() };
   }
   return p;
 }

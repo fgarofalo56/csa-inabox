@@ -82,7 +82,7 @@ interface ItemOption { id: string; name: string }
 export function OperationsAgentEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   const isNew = !id || id === 'new';
-  const { state, setState, loading, saving, error, savedAt, save, reload, dirty } = useItemState<AgentState>('operations-agent', id, {
+  const { state, setState, loading, saving, error, savedAt, save, reload, dirty, workspaceId } = useItemState<AgentState>('operations-agent', id, {
     systemPrompt: 'You monitor real-time operational signals and trigger actions when thresholds are breached.',
     model: 'gpt-4o', tools: [], eventhouse: '', ontology: '',
   });
@@ -105,15 +105,18 @@ export function OperationsAgentEditor({ item, id }: { item: FabricItemType; id: 
   const [ehOpts, setEhOpts] = useState<ItemOption[]>([]);
   const [ontoOpts, setOntoOpts] = useState<ItemOption[]>([]);
   useEffect(() => {
+    // Scope the binding pickers to this agent's workspace (wait for it to load).
+    if (!workspaceId) return;
+    const wsParam = `&workspaceId=${encodeURIComponent(workspaceId)}`;
     const load = (type: string, set: (o: ItemOption[]) => void) => {
-      clientFetch(`/api/items/by-type?types=${encodeURIComponent(type)}`)
+      clientFetch(`/api/items/by-type?types=${encodeURIComponent(type)}${wsParam}`)
         .then((r) => r.json())
         .then((j) => set((j.items || []).map((it: any) => ({ id: it.id, name: it.displayName || it.id }))))
         .catch(() => { /* leave empty; user can still type below */ });
     };
     load('eventhouse', setEhOpts);
     load('ontology', setOntoOpts);
-  }, []);
+  }, [workspaceId]);
 
   // ---- deploy to Foundry ----
   const [deploying, setDeploying] = useState(false);
@@ -208,7 +211,7 @@ export function OperationsAgentEditor({ item, id }: { item: FabricItemType; id: 
                     <Subtitle2>Tools</Subtitle2>
                     <Badge appearance="tint" color="brand">typed catalog</Badge>
                   </div>
-                  <AgentToolsEditor tools={toolsArr} onChange={(next) => setState((p) => ({ ...p, tools: next }))} />
+                  <AgentToolsEditor tools={toolsArr} onChange={(next) => setState((p) => ({ ...p, tools: next }))} workspaceId={workspaceId} />
                 </div>
               </div>
 

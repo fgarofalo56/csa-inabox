@@ -52,10 +52,14 @@ import {
   Send24Regular,
   ArrowClockwise20Regular,
   CheckmarkCircle48Filled,
+  ErrorCircle48Filled,
   Building24Regular,
   Rocket24Regular,
+  PlugConnected24Regular,
 } from '@fluentui/react-icons';
 import { CapacityEquivalencePanel } from '@/lib/components/setup/capacity-equivalence-panel';
+import { EntraGroupPicker } from '@/lib/components/admin/entra-group-picker';
+import { AttachServiceWizard } from '@/lib/components/landing-zones/attach-service-wizard';
 
 interface AzureSubscription {
   subscriptionId: string;
@@ -179,6 +183,7 @@ const useStyles = makeStyles({
   preWrapTop: { whiteSpace: 'pre-wrap', marginTop: tokens.spacingVerticalXS, overflowWrap: 'anywhere', wordBreak: 'break-word' },
   preWrapScroll: { whiteSpace: 'pre-wrap', marginTop: tokens.spacingVerticalXS, overflowWrap: 'anywhere', wordBreak: 'break-word', maxHeight: '240px', overflow: 'auto', maxWidth: '100%' },
   successIcon: { color: tokens.colorPaletteGreenForeground1 },
+  errorIcon: { color: tokens.colorPaletteRedForeground1 },
 });
 
 export function AddLandingZoneWizardPane() {
@@ -218,6 +223,25 @@ export function AddLandingZoneWizardPane() {
   const [deploymentId, setDeploymentId] = useState<string | undefined>();
   const [workflowFile, setWorkflowFile] = useState<string | undefined>();
 
+  // Domain-registration metadata the orchestrator's register_domain_binding
+  // consumes (audit-t158) but the UI never collected — now captured here and
+  // threaded into the deploy POST body (adminGroupId / memberGroupId / costCenter).
+  const [adminGroupId, setAdminGroupId] = useState('');
+  const [memberGroupId, setMemberGroupId] = useState('');
+  const [costCenter, setCostCenter] = useState('');
+
+  // Live background-status polling of the submitted deploy (fixes the false
+  // "Attach submitted" success): the orchestrator / user-ARM 202 returns a
+  // pollable statusUrl; we poll it and surface the REAL terminal state so a
+  // background ARM failure shows as an error, not a green "submitted".
+  const [statusUrl, setStatusUrl] = useState<string | undefined>();
+  type DeployStatus = 'submitting' | 'running' | 'succeeded' | 'failed' | 'queued';
+  const [deployStatus, setDeployStatus] = useState<DeployStatus>('submitting');
+
+  // "Attach existing services to this landing zone" — chains the brownfield
+  // attach wizard, pre-scoped to the freshly-attached DLZ, from the done screen.
+  const [attachOpen, setAttachOpen] = useState(false);
+
   // RBAC auto-grant — fired after a successful attach so the Console UAMI gets
   // the least-privilege role set (Contributor + minimal data-plane) scoped to
   // the NEW DLZ's resource group, in its own subscription. The grant runs once
@@ -229,6 +253,13 @@ export function AddLandingZoneWizardPane() {
   const dlzResourceGroup = useMemo(
     () => (domainName && hub?.location ? `rg-csa-loom-dlz-${domainName}-${hub.location}` : ''),
     [domainName, hub?.location],
+  );
+
+  // The landing-zone id the just-attached DLZ registers under — `${sub}/${rg}` —
+  // used to pre-scope the "Attach existing services" wizard from the done screen.
+  const newLzId = useMemo(
+    () => (targetSubscriptionId && dlzResourceGroup ? `${targetSubscriptionId}/${dlzResourceGroup}` : ''),
+    [targetSubscriptionId, dlzResourceGroup],
   );
 
   const grantRbac = useCallback(async () => {
@@ -406,6 +437,8 @@ export function AddLandingZoneWizardPane() {
     setPhase('deploying');
     setDeployError(undefined);
     setDeployProgress(0);
+    setStatusUrl(undefined);
+    setDeployStatus('submitting');
     setDeployStage('Submitting attach request…');
     try {
       const res = await clientFetch('/api/setup/deploy', {
@@ -420,6 +453,13 @@ export function AddLandingZoneWizardPane() {
           // we forward what we know so the diagram/preview match.
           boundary: hub?.boundary,
           location: hub?.location,
+          // Domain-registration metadata (audit-t158): the orchestrator's
+          // register_domain_binding reads these off the deploy request so the new
+          // DLZ shows up under /admin/domains bound to its Entra groups + cost
+          // center — no manual step. Only sent when the operator supplied them.
+          ...(adminGroupId ? { adminGroupId } : {}),
+          ...(memberGroupId ? { memberGroupId } : {}),
+          ...(costCenter ? { costCenter } : {}),
           ...toggles,
         }),
       }, CROSS_SUB_FETCH_TIMEOUT_MS);
@@ -432,6 +472,8 @@ export function AddLandingZoneWizardPane() {
       const j = await res.json().catch(() => ({}));
       if (res.status === 202 && j.ok && j.deploymentMode === 'orchestrator') {
         setDeploymentId(j.deploymentId);
+        setStatusUrl(j.statusUrl || `/api/setup/deploy-status?id=${encodeURIComponent(j.deploymentId)}`);
+        setDeployStatus('running');
         setDeployStage(`Running on the Setup Orchestrator (deployment ${j.deploymentId})`);
         setDeployProgress(0.5);
         setPhase('done');
@@ -439,6 +481,7 @@ export function AddLandingZoneWizardPane() {
       }
       if (res.status === 202 && j.ok && j.deploymentMode === 'github-workflow-dispatch') {
         setWorkflowFile(j.workflowFile);
+        setDeployStatus('queued');
         setDeployStage(`Queued on GitHub Actions (${j.workflowFile})`);
         setDeployProgress(0.3);
         setPhase('done');
@@ -449,6 +492,11 @@ export function AddLandingZoneWizardPane() {
       // the Console identity. Real ARM deployment id — pollable via statusUrl.
       if (res.status === 202 && j.ok && j.deploymentMode === 'user-arm') {
         setDeploymentId(j.deploymentId);
+        setStatusUrl(
+          j.statusUrl ||
+            `/api/setup/deploy-status?id=${encodeURIComponent(j.deploymentId)}&mode=user-arm&subscriptionId=${encodeURIComponent(targetSubscriptionId)}`,
+        );
+        setDeployStatus('running');
         setDeployStage(
           j.identity === 'user'
             ? `Submitted to Azure under your account (${j.provisioningState || 'Accepted'})`
@@ -470,6 +518,7 @@ export function AddLandingZoneWizardPane() {
         return;
       }
       setDeploymentId(j.deploymentId);
+      setDeployStatus('queued');
       setDeployStage('Submitted');
       setDeployProgress(1);
       setPhase('done');
@@ -477,6 +526,46 @@ export function AddLandingZoneWizardPane() {
       setDeployError(e instanceof Error ? e.message : String(e));
     }
   }
+
+  // Poll the submitted deployment's REAL status (orchestrator / user-ARM) so a
+  // background ARM failure surfaces as an error instead of a false "submitted".
+  // Runs only while a pollable statusUrl exists and the deploy isn't terminal;
+  // cancels on unmount / status change (matches the setup-wizard's poll pattern).
+  useEffect(() => {
+    if (phase !== 'done' || !statusUrl) return;
+    if (deployStatus === 'succeeded' || deployStatus === 'failed') return;
+    let cancelled = false;
+    async function poll() {
+      try {
+        const res = await clientFetch(statusUrl!);
+        const j = await res.json().catch(() => ({}));
+        if (cancelled) return;
+        if (!res.ok || !j.ok) {
+          // A transient status read failure is non-fatal — keep polling.
+          return;
+        }
+        const state = String(j.status || j.provisioningState || '').toLowerCase();
+        if (typeof j.progress === 'number') setDeployProgress(j.progress);
+        if (j.stage) setDeployStage(j.stage);
+        if (state === 'succeeded') {
+          setDeployStatus('succeeded');
+          setDeployProgress(1);
+          setDeployStage('Attach complete');
+        } else if (state === 'failed' || state === 'canceled' || state === 'cancelled') {
+          setDeployStatus('failed');
+          setDeployError(j.error || `The deployment finished in state "${j.status || state}".`);
+        }
+      } catch {
+        /* transient — next tick retries */
+      }
+    }
+    void poll();
+    const id = setInterval(poll, 6000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [phase, statusUrl, deployStatus]);
 
   // ── Loading / no-hub / hub-error states ───────────────────────────────────
   if (hubLoading) {
@@ -535,17 +624,52 @@ export function AddLandingZoneWizardPane() {
 
   // ── Done state ─────────────────────────────────────────────────────────────
   if (phase === 'done') {
+    const failed = deployStatus === 'failed';
+    const succeeded = deployStatus === 'succeeded';
+    const title = failed
+      ? 'Attach failed'
+      : succeeded
+        ? 'Attach complete'
+        : deployStatus === 'queued'
+          ? 'Attach submitted'
+          : 'Attaching…';
     return (
       <div className={styles.root}>
         <div className={styles.panel}>
           <div className={styles.doneCenter}>
-            <CheckmarkCircle48Filled className={styles.successIcon} aria-hidden />
-            <Title2>Attach submitted</Title2>
+            {failed ? (
+              <ErrorCircle48Filled className={styles.errorIcon} aria-hidden />
+            ) : (
+              <CheckmarkCircle48Filled className={styles.successIcon} aria-hidden />
+            )}
+            <Title2>{title}</Title2>
             <Body1>
-              "{domainName}" is being attached to the hub.
+              {failed
+                ? <>The attach of "{domainName}" did not complete.</>
+                : succeeded
+                  ? <>"{domainName}" is attached to the hub.</>
+                  : <>"{domainName}" is being attached to the hub.</>}
               {deploymentId && <> Deployment ID: <code>{deploymentId}</code></>}
               {workflowFile && <> Workflow: <code>{workflowFile}</code></>}
             </Body1>
+            {/* Live background status — the real terminal state from polling the
+                orchestrator / user-ARM deployment (fixes the false "submitted"). */}
+            {!failed && (deployStatus === 'running' || deployStatus === 'submitting') && (
+              <div className={styles.inlineLoad}>
+                <Spinner size="tiny" /><Body1>{deployStage || 'Deployment running…'}</Body1>
+              </div>
+            )}
+            {!failed && (deployStatus === 'running' || deployStatus === 'submitting') && (
+              <ProgressBar value={deployProgress} thickness="large" />
+            )}
+            {failed && deployError && (
+              <MessageBar intent="error">
+                <MessageBarBody>
+                  <MessageBarTitle>Deployment error</MessageBarTitle>
+                  <div className={styles.preWrapTop}>{deployError}</div>
+                </MessageBarBody>
+              </MessageBar>
+            )}
             {/* RBAC auto-grant — set the Console UAMI's least-privilege roles on
                 the new DLZ's resource group so it can manage/deploy into it. The
                 DLZ RG materializes during the attach; this grant can be run as
@@ -598,6 +722,31 @@ export function AddLandingZoneWizardPane() {
                 )}
               </MessageBarBody>
             </MessageBar>
+
+            {/* Chain the brownfield-attach flow, pre-scoped to the NEW DLZ, so an
+                operator can immediately multi-select existing services into it. */}
+            {!failed && (
+              <MessageBar intent="info">
+                <MessageBarBody>
+                  <MessageBarTitle>Attach existing services to this landing zone</MessageBarTitle>
+                  Bring existing Azure services you already own into this landing zone — discover them,
+                  multi-select, validate, and attach (Loom borrows the resource; it never creates or
+                  deletes it).
+                  <div style={{ marginTop: tokens.spacingVerticalM }}>
+                    <Button
+                      appearance="primary"
+                      size="small"
+                      icon={<PlugConnected24Regular />}
+                      disabled={!newLzId}
+                      onClick={() => setAttachOpen(true)}
+                    >
+                      Attach existing services
+                    </Button>
+                  </div>
+                </MessageBarBody>
+              </MessageBar>
+            )}
+
             <MessageBar intent="info">
               <MessageBarBody>
                 <MessageBarTitle>Next steps</MessageBarTitle>
@@ -606,23 +755,40 @@ export function AddLandingZoneWizardPane() {
                 <Link href="/learn?topic=setup-wizard"> Learn more</Link>
               </MessageBarBody>
             </MessageBar>
-            <Button
-              appearance="primary"
-              icon={<Rocket24Regular />}
-              onClick={() => {
-                setPhase('form');
-                setDomainName('');
-                setTargetSubscriptionId('');
-                setTargetSubscriptionName('');
-                setDeploymentId(undefined);
-                setWorkflowFile(undefined);
-                setGrant(null);
-              }}
-            >
-              Attach another
-            </Button>
+            <div className={styles.footer} style={{ alignSelf: 'stretch' }}>
+              {failed && (
+                <Button appearance="secondary" onClick={() => { setPhase('form'); setDeployError(undefined); setDeployStatus('submitting'); }}>
+                  Back to form
+                </Button>
+              )}
+              <Button
+                appearance="primary"
+                icon={<Rocket24Regular />}
+                onClick={() => {
+                  setPhase('form');
+                  setDomainName('');
+                  setTargetSubscriptionId('');
+                  setTargetSubscriptionName('');
+                  setDeploymentId(undefined);
+                  setWorkflowFile(undefined);
+                  setStatusUrl(undefined);
+                  setDeployStatus('submitting');
+                  setDeployError(undefined);
+                  setGrant(null);
+                }}
+              >
+                Attach another
+              </Button>
+            </div>
           </div>
         </div>
+        {/* Pre-scoped brownfield attach wizard for the just-attached DLZ. */}
+        <AttachServiceWizard
+          open={attachOpen}
+          onClose={() => setAttachOpen(false)}
+          landingZoneId={newLzId}
+          landingZoneLabel={domainName}
+        />
       </div>
     );
   }
@@ -827,6 +993,30 @@ export function AddLandingZoneWizardPane() {
                 </Option>
               ))}
             </Dropdown>
+          </Field>
+
+          {/* Domain-registration metadata (audit-t158) — threaded into the deploy
+              so the orchestrator's register_domain_binding binds the new DLZ to
+              its Entra groups + cost center under /admin/domains automatically.
+              Optional: leave blank to register the domain without them. */}
+          <EntraGroupPicker
+            label="Domain admins group (Entra)"
+            value={adminGroupId}
+            onChange={setAdminGroupId}
+            hint="Entra security group granted admin over the new landing zone's data plane."
+          />
+          <EntraGroupPicker
+            label="Domain members group (Entra)"
+            value={memberGroupId}
+            onChange={setMemberGroupId}
+            hint="Entra security group granted member (read/contribute) access."
+          />
+          <Field label="Cost center" hint="Chargeback code recorded on the domain (optional). e.g. CC-1042">
+            <Input
+              value={costCenter}
+              onChange={(_, d) => setCostCenter(d.value)}
+              placeholder="e.g. CC-1042"
+            />
           </Field>
         </div>
 

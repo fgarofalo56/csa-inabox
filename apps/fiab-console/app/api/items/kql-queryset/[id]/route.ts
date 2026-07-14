@@ -73,6 +73,7 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
     return NextResponse.json({
       ok: true,
       displayName: item.displayName,
+      workspaceId: item.workspaceId,
       database: resolveDatabase(item),
       defaultDatabase: defaultDatabase(),
       queries,

@@ -404,7 +404,7 @@ function useStyles() {
   return useMemo(() => ({ ...shared, ...local }), [shared, local]);
 }
 
-interface ItemDoc { id: string; displayName: string; state?: Record<string, unknown>; updatedAt?: string }
+interface ItemDoc { id: string; displayName: string; workspaceId?: string; state?: Record<string, unknown>; updatedAt?: string }
 
 function useItemState<T extends Record<string, unknown>>(slug: string, id: string, fallback: T) {
   const [loading, setLoading] = useState(true);
@@ -415,6 +415,10 @@ function useItemState<T extends Record<string, unknown>>(slug: string, id: strin
   // than a generic "Save failed" (React state is stale in the same tick).
   const saveErrorRef = useRef<string | null>(null);
   const [savedAt, setSavedAt] = useState<string | null>(null);
+  // The item's parent workspace id — used to SCOPE editor pickers (source
+  // dropdowns) to this item's workspace so they never list a sibling
+  // workspace's items. Empty until the item loads (or for a /new item).
+  const [workspaceId, setWorkspaceId] = useState<string>('');
   const [state, setStateRaw] = useState<T>(fallback);
   // Phase 4.5 — dirty flag: any external setState call (typing, button click,
   // patch/etc.) flips this true. load() / save() reset it false. SaveBar +
@@ -442,6 +446,7 @@ function useItemState<T extends Record<string, unknown>>(slug: string, id: strin
       const j = await r.json();
       if (!r.ok) { setError(j?.error || `HTTP ${r.status}`); return; }
       const doc = j as ItemDoc;
+      if (doc.workspaceId) setWorkspaceId(doc.workspaceId);
       if (doc.state && typeof doc.state === 'object') {
         suppressDirty.current = true;
         setStateRaw({ ...fallback, ...(doc.state as T) });
@@ -506,7 +511,7 @@ function useItemState<T extends Record<string, unknown>>(slug: string, id: strin
     return () => window.removeEventListener('keydown', onKey);
   }, [dirty, saving, save]);
 
-  return { state, setState, loading, saving, error, savedAt, save, reload: load, dirty, lastSaveError };
+  return { state, setState, loading, saving, error, savedAt, save, reload: load, dirty, lastSaveError, workspaceId };
 }
 
 function SaveBar({ saving, savedAt, error, onSave, extraRight, dirty }: {

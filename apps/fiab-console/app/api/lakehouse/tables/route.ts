@@ -1,27 +1,36 @@
 /**
- * GET /api/lakehouse/tables?containers=bronze,silver&rowCounts=true
+ * GET /api/lakehouse/tables?lakehouseId=<id>&workspaceId=<ws>&rowCounts=true
  *
- * Returns the REAL Delta (and ad-hoc Parquet) tables discovered under each
- * lakehouse container's `Tables/` directory — Azure-native, via an ADLS Gen2
- * directory scan + `_delta_log` transaction-log read (synapse-catalog-client).
- * NO Fabric / OneLake dependency; the Console UAMI's Storage Blob Data Reader
- * grant on the container is all that's required.
+ * Returns the REAL Delta (and ad-hoc Parquet) tables discovered under ONE
+ * lakehouse item's own ADLS Gen2 root `Tables/` directory — Azure-native, via an
+ * ADLS Gen2 directory scan + `_delta_log` transaction-log read
+ * (synapse-catalog-client). NO Fabric / OneLake dependency; the Console UAMI's
+ * Storage Blob Data Reader grant on the container is all that's required.
+ *
+ * SCOPING (the leak this closes): the scan is bounded to the caller's OWN
+ * lakehouse item. The route (a) authorizes the caller against the lakehouse via
+ * the workspace ACL / item-grant resolver, and (b) resolves that lakehouse's
+ * exact ADLS root (container + rootPath) and scans ONLY `<root>/Tables/`. It no
+ * longer enumerates every medallion container's root — so a lakehouse in one
+ * workspace can never surface another lakehouse's (or another workspace's)
+ * tables.
  *
  * Query params:
- *   - containers : comma list (bronze|silver|gold|landing). Defaults to all
- *                  containers that have a LOOM_*_URL configured.
- *   - rowCounts  : 'true' to run a Synapse Serverless OPENROWSET COUNT(*) per
- *                  Delta table (slower, cold-start). Row counts are null — never
- *                  a fabricated 0 — when Serverless is offline.
+ *   - lakehouseId : REQUIRED — the lakehouse item to browse.
+ *   - workspaceId : REQUIRED — the lakehouse's workspace (partition key).
+ *   - rowCounts   : 'true' to run a Synapse Serverless OPENROWSET COUNT(*) per
+ *                   Delta table (slower, cold-start). Row counts are null — never
+ *                   a fabricated 0 — when Serverless is offline.
  *
- * Honest-empty: when no storage is configured, returns
+ * Honest-empty: when the lakehouse resolves to no configured storage, returns
  * { ok: true, tables: [], gate: '...' } (200, not 500). When storage exists but
  * has no tables yet, returns { ok: true, tables: [] }. No mock data ever.
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
-import { KNOWN_CONTAINERS } from '@/lib/azure/adls-client';
 import { scanLakehouseTables } from '@/lib/azure/synapse-catalog-client';
+import { resolveItemAccessByOid } from '@/lib/auth/item-access';
+import { resolveLakehouseAbfss } from '@/lib/azure/lakehouse-abfss';
 import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
@@ -31,29 +40,42 @@ export async function GET(req: NextRequest) {
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
 
-  const rawContainers = req.nextUrl.searchParams.get('containers');
-  const containers = rawContainers
-    ? rawContainers
-        .split(',')
-        .map((c) => c.trim().toLowerCase())
-        .filter((c) => (KNOWN_CONTAINERS as readonly string[]).includes(c))
-    : undefined;
+  const lakehouseId = req.nextUrl.searchParams.get('lakehouseId')?.trim() || '';
+  const workspaceId = req.nextUrl.searchParams.get('workspaceId')?.trim() || '';
   const rowCounts = req.nextUrl.searchParams.get('rowCounts') === 'true';
+  if (!lakehouseId || !workspaceId) {
+    return NextResponse.json(
+      { ok: false, error: 'lakehouseId and workspaceId query params are required' },
+      { status: 400 },
+    );
+  }
 
-  // Honest infra-gate: no lakehouse storage configured → empty, not a crash.
-  const anyStorage = (KNOWN_CONTAINERS as readonly string[]).some(
-    (c) => !!process.env[`LOOM_${c.toUpperCase()}_URL`],
-  );
-  if (!anyStorage) {
+  // Authorize the caller against THIS lakehouse item (workspace ACL → item
+  // grant). 404 (not 403) so we never leak the existence of a lakehouse the
+  // caller can't see.
+  const access = await resolveItemAccessByOid(s, lakehouseId, 'lakehouse');
+  if (!access) {
+    return NextResponse.json({ ok: false, error: 'lakehouse not found' }, { status: 404 });
+  }
+
+  // Resolve the lakehouse's REAL ADLS root (container + rootPath). Use the
+  // item's own authoritative workspaceId (not the query param) for the read.
+  const root = await resolveLakehouseAbfss(lakehouseId, access.item.workspaceId);
+  if (!root) {
     return NextResponse.json({
       ok: true,
       tables: [],
-      gate: 'No lakehouse storage configured — set LOOM_{BRONZE,SILVER,GOLD,LANDING}_URL (deployed by the DLZ Bicep) and grant the Console UAMI Storage Blob Data Reader on the container.',
+      gate:
+        'No lakehouse storage configured — set LOOM_{BRONZE,SILVER,GOLD,LANDING}_URL (deployed by the DLZ Bicep) and grant the Console UAMI Storage Blob Data Reader on the container.',
     });
   }
 
   try {
-    const tables = await scanLakehouseTables({ containers, rowCounts });
+    const tables = await scanLakehouseTables({
+      containers: [root.container],
+      rootPrefix: root.root,
+      rowCounts,
+    });
     return NextResponse.json({ ok: true, tables, scannedAt: new Date().toISOString() });
   } catch (e: any) {
     return apiServerError(e);

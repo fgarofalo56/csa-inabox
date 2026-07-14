@@ -119,12 +119,17 @@ export interface LoomItemSourcePickerProps {
   onCleared?: () => void;
   /** Restrict the item list; defaults to the PBI_SOURCEABLE set. */
   types?: string[];
+  /**
+   * Host item's workspace — SCOPES the sourceable-item list to it so a report in
+   * Workspace A never lists a lakehouse / warehouse / model from Workspace B.
+   */
+  workspaceId?: string;
   /** How the host uses the result — tunes the copy only. */
   purpose?: 'report' | 'paginated' | 'semantic-model';
 }
 
 export function LoomItemSourcePicker({
-  selectedItemId, onResolved, onCleared, types, purpose = 'report',
+  selectedItemId, onResolved, onCleared, types, workspaceId, purpose = 'report',
 }: LoomItemSourcePickerProps) {
   const styles = useStyles();
   const typeCsv = useMemo(() => (types && types.length ? types : PBI_SOURCEABLE).join(','), [types]);
@@ -141,7 +146,8 @@ export function LoomItemSourcePicker({
   const loadItems = useCallback(async () => {
     setListLoading(true); setListErr(null);
     try {
-      const r = await clientFetch(`/api/items/by-type?types=${encodeURIComponent(typeCsv)}`);
+      const wsParam = workspaceId ? `&workspaceId=${encodeURIComponent(workspaceId)}` : '';
+      const r = await clientFetch(`/api/items/by-type?types=${encodeURIComponent(typeCsv)}${wsParam}`);
       const j = await r.json().catch(() => ({}));
       if (!j?.ok) { setItems([]); setListErr(j?.error || `HTTP ${r.status}`); return; }
       const list: ByTypeItem[] = (j.items || []).map((it: any) => ({
@@ -155,7 +161,7 @@ export function LoomItemSourcePicker({
       setItems(list);
     } catch (e: any) { setItems([]); setListErr(e?.message || String(e)); }
     finally { setListLoading(false); }
-  }, [typeCsv]);
+  }, [typeCsv, workspaceId]);
 
   useEffect(() => { loadItems(); }, [loadItems]);
 

@@ -55,20 +55,25 @@ export interface ConnectedAgentsEditorProps {
   onChange: (next: SubAgentRef[]) => void;
   /** The orchestrator's own item id — excluded from the picker (no self-reference). */
   selfId: string;
+  /** The orchestrator's workspace — SCOPES the sub-agent picker to it. */
+  workspaceId?: string;
   disabled?: boolean;
   compact?: boolean;
 }
 
-export function ConnectedAgentsEditor({ subAgents, onChange, selfId, disabled, compact }: ConnectedAgentsEditorProps) {
+export function ConnectedAgentsEditor({ subAgents, onChange, selfId, workspaceId, disabled, compact }: ConnectedAgentsEditorProps) {
   const s = useStyles();
   const [opts, setOpts] = useState<AgentOption[]>([]);
   const [loading, setLoading] = useState(false);
   const [pickId, setPickId] = useState('');
 
   const load = useCallback(async () => {
+    // Scope to the orchestrator's workspace once known so the sub-agent picker
+    // never lists agents from a sibling workspace.
+    if (!workspaceId) { setOpts([]); return; }
     setLoading(true);
     try {
-      const r = await clientFetch(`/api/items/by-type?types=${encodeURIComponent(SUB_AGENT_ITEM_TYPES.join(','))}`);
+      const r = await clientFetch(`/api/items/by-type?types=${encodeURIComponent(SUB_AGENT_ITEM_TYPES.join(','))}&workspaceId=${encodeURIComponent(workspaceId)}`);
       const j = await r.json();
       const items: AgentOption[] = (j.items || [])
         .map((it: any) => ({
@@ -83,7 +88,7 @@ export function ConnectedAgentsEditor({ subAgents, onChange, selfId, disabled, c
     } finally {
       setLoading(false);
     }
-  }, [selfId]);
+  }, [selfId, workspaceId]);
   useEffect(() => { load(); }, [load]);
 
   const patch = (id: string, p: Partial<SubAgentRef>) =>

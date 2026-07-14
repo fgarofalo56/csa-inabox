@@ -32,7 +32,9 @@ import {
   rgKey,
   type DlzRgRow,
   type HubCoords,
+  type LogicalLandingZoneRow,
 } from '@/lib/setup/landing-zones-model';
+import { listLandingZones } from '@/lib/azure/landing-zones-store';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -174,10 +176,31 @@ export async function GET() {
     }),
   );
 
-  const overview = buildLandingZonesOverview(hub, topo.exists, dlzRows, {
-    writableSubs,
-    writableRgs,
-    unknownRgs,
-  });
+  // ── Logical landing zones (the `landing-zones` store) ─────────────────────
+  // Brownfield-attach targets that have NO greenfield DLZ resource group — union
+  // them in so a logical LZ (created just to hang attached services on) appears
+  // on the overview alongside the Resource-Graph DLZs. Best-effort: a store read
+  // failure never fails the overview (the DLZ list is the primary source).
+  let logicalZones: LogicalLandingZoneRow[] = [];
+  try {
+    const docs = await listLandingZones(session);
+    logicalZones = docs.map((z) => ({
+      id: z.id,
+      name: z.name,
+      region: z.region,
+      subscriptionId: z.subscriptionId,
+      rg: (z.resourceGroups && z.resourceGroups[0]) || undefined,
+    }));
+  } catch {
+    /* logical-LZ union is best-effort */
+  }
+
+  const overview = buildLandingZonesOverview(
+    hub,
+    topo.exists,
+    dlzRows,
+    { writableSubs, writableRgs, unknownRgs },
+    logicalZones,
+  );
   return NextResponse.json({ ok: true, ...overview });
 }

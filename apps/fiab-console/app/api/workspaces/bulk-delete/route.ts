@@ -40,6 +40,7 @@ import { itemsContainer, workspacesContainer } from '@/lib/azure/cosmos-client';
 import { loadWorkspaceAdmin } from '@/lib/clients/workspaces-client';
 import { deleteLoomDoc } from '@/lib/azure/loom-search';
 import { cleanupWorkspaceMetadata, type CleanupItem } from '@/lib/azure/lineage-gc';
+import { teardownWorkspaceBackends, type TeardownItem, type TeardownOutcome } from '@/lib/azure/resource-teardown';
 import type { Workspace } from '@/lib/types/workspace';
 import { apiError } from '@/lib/api/respond';
 
@@ -65,20 +66,29 @@ async function loadWorkspace(id: string, tenantId: string): Promise<Workspace | 
   }
 }
 
-/** Same cascade delete as DELETE /api/workspaces/[id]: items first, then the workspace. */
-async function deleteOne(ws: Workspace): Promise<void> {
+/** Same cascade delete as DELETE /api/workspaces/[id]: items first, then the
+ * workspace. When `cascade` is set, ALSO tear down each item's underlying Azure
+ * backend (best-effort, serial) BEFORE the item docs are deleted, returning the
+ * per-item teardown receipts so the caller can surface them. */
+async function deleteOne(ws: Workspace, cascade: boolean): Promise<TeardownOutcome[] | undefined> {
   const items = await itemsContainer();
   const { resources: children } = await items.items
-    .query<CleanupItem>(
+    .query<CleanupItem & { displayName?: string }>(
       {
-        // Select the fields lineage GC needs (itemType + state.purviewSourceName)
-        // alongside id/workspaceId so the metadata plane can be reconciled.
-        query: 'SELECT c.id, c.workspaceId, c.itemType, c.state FROM c WHERE c.workspaceId = @w',
+        // Select the fields lineage GC + backend teardown need (itemType +
+        // displayName + full state) alongside id/workspaceId.
+        query: 'SELECT c.id, c.workspaceId, c.itemType, c.displayName, c.state FROM c WHERE c.workspaceId = @w',
         parameters: [{ name: '@w', value: ws.id }],
       },
       { partitionKey: ws.id },
     )
     .fetchAll();
+
+  let teardown: TeardownOutcome[] | undefined;
+  if (cascade) {
+    teardown = await teardownWorkspaceBackends(children as TeardownItem[], ws.tenantId);
+  }
+
   for (const child of children) {
     await items.item(child.id, ws.id).delete().catch(() => {});
     void deleteLoomDoc(`it:${child.id}`);
@@ -91,6 +101,7 @@ async function deleteOne(ws: Workspace): Promise<void> {
   const wsContainer = await workspacesContainer();
   await wsContainer.item(ws.id, ws.tenantId).delete();
   void deleteLoomDoc(`ws:${ws.id}`);
+  return teardown;
 }
 
 export async function GET() {
@@ -121,6 +132,9 @@ export async function POST(req: NextRequest) {
   }
   const rawIds = body?.ids;
   if (!Array.isArray(rawIds)) return err('Body must be { ids: string[] }', 400, 'bad_request');
+  // Opt-in cascade: also DELETE each item's underlying Azure backend. Default
+  // (absent / false) is catalog-only — Azure resources are retained.
+  const cascade = body?.cascade === true;
 
   // De-dupe + validate ids; drop empties.
   const ids = Array.from(
@@ -134,6 +148,8 @@ export async function POST(req: NextRequest) {
   const tenantId = session.claims.oid;
   const deleted: string[] = [];
   const failed: Array<{ id: string; error: string }> = [];
+  // Per-workspace teardown receipts (only populated when cascade is set).
+  const teardown: Record<string, TeardownOutcome[]> = {};
 
   for (const id of ids) {
     try {
@@ -150,12 +166,18 @@ export async function POST(req: NextRequest) {
         failed.push({ id, error: 'forbidden' });
         continue;
       }
-      await deleteOne(ws);
+      const receipts = await deleteOne(ws, cascade);
+      if (receipts) teardown[id] = receipts;
       deleted.push(id);
     } catch (e: any) {
       failed.push({ id, error: e?.message || 'delete_failed' });
     }
   }
 
-  return NextResponse.json({ ok: failed.length === 0 && deleted.length > 0, deleted, failed });
+  return NextResponse.json({
+    ok: failed.length === 0 && deleted.length > 0,
+    deleted,
+    failed,
+    ...(cascade ? { teardown } : {}),
+  });
 }

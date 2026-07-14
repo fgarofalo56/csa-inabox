@@ -8,6 +8,7 @@
 
 import type { SessionPayload } from '@/lib/auth/session';
 import { resolveWorkspaceAccessByOid } from '@/lib/auth/workspace-access';
+import { authorizeWorkspaceList } from '@/lib/auth/workspace-list-access';
 import { itemsContainer, workspacesContainer, tenantSettingsContainer } from '@/lib/azure/cosmos-client';
 import { upsertLoomDoc, deleteLoomDoc, docForItem } from '@/lib/azure/loom-search';
 import {
@@ -232,9 +233,42 @@ export async function loadOwnedItem(
  * workspace shared with them via an ACL role (rel-T11). Listing is read-only, so
  * ANY non-null role makes an item visible (no write gate). The owner fast-path
  * inside the access resolver keeps this identical for the single-operator case.
+ *
+ * `opts.workspaceId` SCOPES the list to ONE workspace (the editor-picker path):
+ * a picker opened in Workspace A must list only Workspace A's items — never a
+ * sibling workspace's. We authorize that one workspace once (preferring the full
+ * session resolver — ACL + admin-open — when `opts.session` is supplied) then run
+ * a partition-keyed query, so no cross-workspace item can leak into the result.
  */
-export async function listOwnedItems(itemType: string, tenantId: string): Promise<WorkspaceItem[]> {
+export async function listOwnedItems(
+  itemType: string,
+  tenantId: string,
+  opts: { workspaceId?: string; session?: SessionPayload } = {},
+): Promise<WorkspaceItem[]> {
   const items = await itemsContainer();
+
+  // Workspace-scoped path: authorize the ONE workspace, then a partition-keyed
+  // query returns only its items (the cross-workspace-leak fix).
+  if (opts.workspaceId) {
+    const access = opts.session
+      ? await authorizeWorkspaceList(opts.session, opts.workspaceId)
+      : await resolveWorkspaceAccessByOid(tenantId, opts.workspaceId);
+    if (!access) return [];
+    const { resources } = await items.items
+      .query<WorkspaceItem>(
+        {
+          query: `SELECT * FROM c WHERE c.itemType = @t AND c.workspaceId = @w AND ${NOT_RECYCLED}`,
+          parameters: [
+            { name: '@t', value: itemType },
+            { name: '@w', value: opts.workspaceId },
+          ],
+        },
+        { partitionKey: opts.workspaceId },
+      )
+      .fetchAll();
+    return resources;
+  }
+
   const { resources } = await items.items
     .query<WorkspaceItem>({
       query: `SELECT * FROM c WHERE c.itemType = @t AND ${NOT_RECYCLED}`,

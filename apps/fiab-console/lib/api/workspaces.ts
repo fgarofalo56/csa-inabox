@@ -111,23 +111,59 @@ export async function updateWorkspace(id: string, patch: Partial<Pick<Workspace,
   });
 }
 
-export async function deleteWorkspace(id: string): Promise<void> {
-  await fetchJson<{ ok: boolean }>(`/api/workspaces/${id}`, { method: 'DELETE' });
+// --- Workspace-delete cascade (Azure backend teardown) --------------------
+
+export type TeardownResourceStatus = 'deleted' | 'not_found' | 'skipped' | 'error';
+
+export interface TeardownResourceResult {
+  kind: string;
+  ref: string;
+  result: TeardownResourceStatus;
+  error?: string;
+}
+
+export interface TeardownOutcome {
+  itemId: string;
+  itemType: string;
+  displayName: string;
+  resources: TeardownResourceResult[];
+}
+
+/**
+ * Delete a workspace. By default this is catalog-only — the underlying Azure
+ * resources are retained. Pass `{ cascade: true }` to ALSO delete each item's
+ * provisioned Azure backend; the returned `teardown` receipt lists the outcome
+ * per resource.
+ */
+export async function deleteWorkspace(
+  id: string,
+  opts?: { cascade?: boolean },
+): Promise<{ ok: boolean; teardown?: TeardownOutcome[] }> {
+  const qs = opts?.cascade ? '?cascade=true' : '';
+  return fetchJson<{ ok: boolean; teardown?: TeardownOutcome[] }>(`/api/workspaces/${id}${qs}`, {
+    method: 'DELETE',
+  });
 }
 
 export interface BulkDeleteResult {
   ok: boolean;
   deleted: string[];
   failed: Array<{ id: string; error: string }>;
+  /** Per-workspace-id teardown receipts (only present when cascade was set). */
+  teardown?: Record<string, TeardownOutcome[]>;
 }
 
 /** Multi-delete. The server authorizes per workspace: tenant admins delete
  * anything; every caller can delete the workspaces they OWN. Non-owned ids come
- * back as per-id `forbidden`/`not_found` failures. */
-export async function bulkDeleteWorkspaces(ids: string[]): Promise<BulkDeleteResult> {
+ * back as per-id `forbidden`/`not_found` failures. Pass `{ cascade: true }` to
+ * also delete each item's provisioned Azure backend. */
+export async function bulkDeleteWorkspaces(
+  ids: string[],
+  opts?: { cascade?: boolean },
+): Promise<BulkDeleteResult> {
   return fetchJson<BulkDeleteResult>('/api/workspaces/bulk-delete', {
     method: 'POST',
-    body: JSON.stringify({ ids }),
+    body: JSON.stringify({ ids, cascade: opts?.cascade === true }),
   });
 }
 

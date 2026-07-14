@@ -331,6 +331,77 @@ jobs:
           RG_NAME: ${{ needs.resolve.outputs.rg }}
           BOUNDARY: Commercial
 
+  # dlz-brownfield: publish the COMPILED main.json to the admin storage account
+  # and wire LOOM_DLZ_TEMPLATE_URI / LOOM_SETUP_TEMPLATE_URI on the running apps.
+  # This is what makes the DAY-ONE in-product "Add landing zone" deploy work: ARM
+  # REST needs a compiled template (it can't compile .bicep), and the Console's
+  # user-ARM tier only runs when LOOM_DLZ_TEMPLATE_URI is set — otherwise it falls
+  # to the honest copy-paste gate. Wiring it here (not just a live patch) means a
+  # FRESH from-scratch deploy stands the day-one path up. Idempotent + best-effort:
+  # every step is guarded so it never fails the app roll (no-vaporware).
+  publish-dlz-template:
+    name: Publish DLZ template + wire deploy env
+    needs: [resolve, redeploy-with-apps]
+    if: ${{ always() && inputs.enable_apps_after && needs.redeploy-with-apps.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Azure login
+        uses: Azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_TENANT_ID }}",
+              "subscriptionId": "${{ inputs.subscription || secrets.AZURE_SUBSCRIPTION_ID }}"
+            }
+      - name: Setup Bicep
+        run: az bicep install
+      - name: Compile + publish main.json, wire LOOM_DLZ_TEMPLATE_URI / LOOM_SETUP_TEMPLATE_URI
+        run: |
+          set -e
+          RG='${{ needs.resolve.outputs.rg }}'
+          CONTAINER=arm-templates
+          # 1) Compile the full template ARM REST will fetch via templateLink.
+          az bicep build -f platform/fiab/bicep/main.bicep --outfile main.json
+          # 2) Discover the admin storage account (deployment artifacts). Prefer a
+          #    Loom-named account; fall back to the first account in the RG.
+          SA=$(az storage account list -g "$RG" --query "[?starts_with(name,'stloom')||starts_with(name,'saloom')||starts_with(name,'stcsaloom')].name | [0]" -o tsv 2>/dev/null || echo "")
+          if [[ -z "$SA" ]]; then SA=$(az storage account list -g "$RG" --query "[0].name" -o tsv 2>/dev/null || echo ""); fi
+          if [[ -z "$SA" ]]; then
+            echo "::warning::No storage account in $RG — cannot publish main.json; the day-one deploy stays on the honest copy-paste gate."; exit 0
+          fi
+          # Sovereign-safe blob base (handles Gov endpoints automatically).
+          BLOB_BASE=$(az storage account show -g "$RG" -n "$SA" --query "primaryEndpoints.blob" -o tsv)
+          BLOB_URL="${BLOB_BASE}${CONTAINER}/main.json"
+          # 3) Upload (AAD auth; the deploy SP holds Storage Blob Data Contributor
+          #    or the account key path below covers it).
+          az storage container create --account-name "$SA" --name "$CONTAINER" --auth-mode login -o none 2>/dev/null || true
+          if ! az storage blob upload --account-name "$SA" --container-name "$CONTAINER" --name main.json --file main.json --auth-mode login --overwrite -o none 2>/dev/null; then
+            KEY=$(az storage account keys list -g "$RG" -n "$SA" --query "[0].value" -o tsv 2>/dev/null || echo "")
+            az storage container create --account-name "$SA" --name "$CONTAINER" --account-key "$KEY" -o none 2>/dev/null || true
+            az storage blob upload --account-name "$SA" --container-name "$CONTAINER" --name main.json --file main.json --account-key "$KEY" --overwrite -o none || { echo "::warning::main.json upload failed — day-one deploy stays gated."; exit 0; }
+          fi
+          # 4) Read SAS so ARM's templateLink can fetch a PRIVATE blob (long-lived).
+          EXPIRY=$(date -u -d '+3 years' '+%Y-%m-%dT%H:%MZ' 2>/dev/null || date -u -v+3y '+%Y-%m-%dT%H:%MZ')
+          KEY=${KEY:-$(az storage account keys list -g "$RG" -n "$SA" --query "[0].value" -o tsv 2>/dev/null || echo "")}
+          SAS=""
+          if [[ -n "$KEY" ]]; then
+            SAS=$(az storage blob generate-sas --account-name "$SA" --account-key "$KEY" --container-name "$CONTAINER" --name main.json --permissions r --expiry "$EXPIRY" -o tsv 2>/dev/null || echo "")
+          fi
+          # 5) Wire the apps (idempotent). LOOM_DLZ_TEMPLATE_URI on the Console
+          #    (day-one user-ARM tier) + LOOM_SETUP_TEMPLATE_URI on the orchestrator.
+          CONSOLE_VARS="LOOM_DLZ_TEMPLATE_URI=$BLOB_URL LOOM_SETUP_TEMPLATE_URI=$BLOB_URL"
+          if [[ -n "$SAS" ]]; then CONSOLE_VARS="$CONSOLE_VARS LOOM_DLZ_TEMPLATE_QUERY_STRING=?$SAS"; fi
+          az containerapp update -g "$RG" -n loom-console --set-env-vars $CONSOLE_VARS -o none || echo "::warning::could not set loom-console template env"
+          if az containerapp show -g "$RG" -n loom-setup-orchestrator -o none 2>/dev/null; then
+            ORCH_VARS="LOOM_SETUP_TEMPLATE_URI=$BLOB_URL"
+            if [[ -n "$SAS" ]]; then ORCH_VARS="$ORCH_VARS LOOM_DLZ_TEMPLATE_QUERY_STRING=?$SAS"; fi
+            az containerapp update -g "$RG" -n loom-setup-orchestrator --set-env-vars $ORCH_VARS -o none || echo "::warning::could not set loom-setup-orchestrator template env"
+          fi
+          echo "::notice::Published main.json → $BLOB_URL and wired LOOM_DLZ_TEMPLATE_URI / LOOM_SETUP_TEMPLATE_URI (day-one Add-landing-zone deploy enabled)."
+
   # rel-T34: chain the post-deploy bootstrap after the apps are LIVE. This is the
   # true Commercial from-scratch completion — infra deploy (apps off) → this
   # workflow builds images + brings the Container Apps up → bootstrap wires

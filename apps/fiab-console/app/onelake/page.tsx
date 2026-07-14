@@ -470,7 +470,7 @@ const useStyles = makeStyles({
 });
 
 // ── right-pane: Tables tab (lakehouse Delta schema) ───────────────────────
-function TablesTab({ itemId }: { itemId: string }) {
+function TablesTab({ itemId, workspaceId }: { itemId: string; workspaceId: string }) {
   const styles = useStyles();
   const [tables, setTables] = useState<DeltaTable[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -479,12 +479,14 @@ function TablesTab({ itemId }: { itemId: string }) {
     let cancelled = false;
     setTables(null);
     setError(null);
-    clientFetch(`/api/lakehouse/tables?id=${encodeURIComponent(itemId)}`)
+    // Scoped to THIS lakehouse item + its workspace so the Tables tab only ever
+    // lists the opened lakehouse's own Delta tables.
+    clientFetch(`/api/lakehouse/tables?lakehouseId=${encodeURIComponent(itemId)}&workspaceId=${encodeURIComponent(workspaceId)}`)
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
       .then((d) => { if (!cancelled) setTables(Array.isArray(d) ? d : d?.tables ?? []); })
       .catch((e) => { if (!cancelled) setError(e?.message ?? 'Failed to load tables'); });
     return () => { cancelled = true; };
-  }, [itemId]);
+  }, [itemId, workspaceId]);
 
   if (error) {
     return (
@@ -868,7 +870,7 @@ function ItemDetails({
         </>
       )}
 
-      {tab === 'tables' && hasTables && <TablesTab itemId={item.id} />}
+      {tab === 'tables' && hasTables && <TablesTab itemId={item.id} workspaceId={item.workspaceId} />}
       {tab === 'security' && hasTables && <OneLakeSecurityTab lakehouseId={item.id} />}
     </aside>
   );
