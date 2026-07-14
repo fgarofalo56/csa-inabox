@@ -1,0 +1,87 @@
+name: gov-console-roll
+
+# Targeted Gov console image build + roll using the Gov deploy SP (the same
+# creds deploy-fiab-gcch.yml uses). Replaces the local `temp/gov-roll.sh` when a
+# local interactive Gov az session isn't available. Builds apps/fiab-console at
+# the dispatched ref on the Gov ACR (server-side az acr build) and rolls the
+# loom-console Container App to it, then health-gates. Non-interactive.
+on:
+  workflow_dispatch:
+    inputs:
+      lastgood:
+        description: 'Fallback image tag to roll back to if the new rev is unhealthy'
+        required: false
+        default: '26e7f3db'
+
+permissions:
+  contents: read
+
+env:
+  RG: rg-csa-loom-admin-usgovvirginia
+  ACR: acrloomdcmt6cqoezlgs
+  ACR_LOGIN: acrloomdcmt6cqoezlgs.azurecr.us
+  APP: loom-console
+
+jobs:
+  roll:
+    name: Build + roll Gov console
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login (Gov sub) — deploy SP
+        uses: Azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_GOV_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_GOV_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_GOV_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}",
+              "activeDirectoryEndpointUrl": "https://login.microsoftonline.us",
+              "resourceManagerEndpointUrl": "https://management.usgovcloudapi.net/",
+              "sqlManagementEndpointUrl": "https://management.core.usgovcloudapi.net:8443/",
+              "galleryEndpointUrl": "https://gallery.usgovcloudapi.net/",
+              "managementEndpointUrl": "https://management.core.usgovcloudapi.net/"
+            }
+          environment: AzureUSGovernment
+
+      - name: Set Azure cloud to Gov
+        run: az cloud set --name AzureUSGovernment
+
+      - name: Build + push console image on the Gov ACR
+        run: |
+          set -euo pipefail
+          SHA=$(git rev-parse --short=8 HEAD)
+          echo "SHA=$SHA" >> "$GITHUB_ENV"
+          echo "::notice::Building loom-console:$SHA on $ACR"
+          az acr update -n "$ACR" --public-network-enabled true --default-action Allow -o none
+          for i in $(seq 1 12); do az acr login -n "$ACR" >/dev/null 2>&1 && break; sleep 15; done
+          STAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          az acr build --registry "$ACR" --no-logs \
+            --image "loom-console:$SHA" --image "loom-console:latest" \
+            --file apps/fiab-console/Dockerfile \
+            --build-arg "LOOM_BUILD_SHA=$SHA" --build-arg "LOOM_BUILD_TIMESTAMP=$STAMP" \
+            apps/fiab-console
+          az acr update -n "$ACR" --default-action Deny --public-network-enabled false -o none
+
+      - name: Roll loom-console + health-gate
+        run: |
+          set -euo pipefail
+          IMG="$ACR_LOGIN/loom-console:$SHA"
+          az containerapp update -n "$APP" -g "$RG" --image "$IMG" -o none
+          NEWREV=$(az containerapp revision list -n "$APP" -g "$RG" \
+            --query "[?properties.template.containers[0].image=='$IMG'].name | [0]" -o tsv | tr -d '\r')
+          echo "::notice::New revision $NEWREV"
+          H=""
+          for i in $(seq 1 24); do
+            H=$(az containerapp revision show -n "$APP" -g "$RG" --revision "$NEWREV" \
+              --query properties.healthState -o tsv 2>/dev/null | tr -d '\r')
+            echo "$(date -u +%H:%M:%S) $NEWREV=$H"
+            case "$H" in
+              Healthy) echo "::notice::GOV-CONSOLE-ROLL $SHA HEALTHY"; exit 0 ;;
+              Unhealthy) echo "::error::Unhealthy — rolling back to ${{ inputs.lastgood }}"; az containerapp update -n "$APP" -g "$RG" --image "$ACR_LOGIN/loom-console:${{ inputs.lastgood }}" -o none; exit 1 ;;
+            esac
+            sleep 30
+          done
+          echo "::error::Did not reach Healthy"; exit 1
