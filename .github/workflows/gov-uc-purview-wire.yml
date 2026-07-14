@@ -76,7 +76,7 @@ jobs:
           set -euo pipefail
           CAE_ID=$(az containerapp show -n "$APP" -g "$RG" --query properties.environmentId -o tsv | tr -d '\r')
           UAMI_ID=$(az containerapp show -n "$APP" -g "$RG" --query 'identity.userAssignedIdentities | keys(@) | [0]' -o tsv | tr -d '\r')
-          LOCATION=$(az containerapp show -n "$APP" -g "$RG" --query location -o tsv | tr -d '\r' | tr '[:upper:] ' '[:lower:]' | tr -d ' ')
+          LOCATION=$(az containerapp show -n "$APP" -g "$RG" --query location -o tsv | tr -d '\r' | tr '[:upper:]' '[:lower:]' | tr -d ' ')
           echo "CAE_ID=$CAE_ID" >> "$GITHUB_ENV"
           echo "UAMI_ID=$UAMI_ID" >> "$GITHUB_ENV"
           echo "LOCATION=$LOCATION" >> "$GITHUB_ENV"
