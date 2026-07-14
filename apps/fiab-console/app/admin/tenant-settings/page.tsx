@@ -22,6 +22,7 @@ import { Section } from '@/lib/components/ui/section';
 import { EmptyState } from '@/lib/components/empty-state';
 import { useAdminTabStyles } from '@/lib/components/ui/admin-tab-styles';
 import { CopilotAgentsConfig } from '@/lib/components/admin/copilot-agents-config';
+import { CopilotDebugPanel } from '@/lib/components/admin/copilot-debug-panel';
 import { FeedbackForwardingConfig } from '@/lib/components/admin/feedback-forwarding-config';
 import { ToggleScopePicker } from '@/lib/components/admin/toggle-scope-picker';
 import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
@@ -382,6 +383,10 @@ export default function TenantSettingsPage() {
 
       {/* Tenant-wide Copilot & Agents config (Foundry account + model deployments). */}
       <CopilotAgentsConfig />
+
+      {/* CTS-03 — Copilot deep-trace debug panel (Tier 3, tenant-admin gated in the
+          BFF): per-turn phase timings, tool roll-up, grounding, routing, raw JSON. */}
+      <CopilotDebugPanel />
 
       {/* Deployment-wide auto-error forwarding switch (rel-T79). */}
       <FeedbackForwardingConfig />
