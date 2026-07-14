@@ -113,6 +113,27 @@ jobs:
             done
           fi
 
+      - name: Front Door WAF — recent blocks (operator browser 'request is blocked')
+        run: |
+          set -euo pipefail
+          az extension add -n log-analytics -y 2>/dev/null || true
+          LAW=$(az monitor log-analytics workspace list -g "$RG" --query "[0].customerId" -o tsv 2>/dev/null | tr -d '\r')
+          echo "LAW=$LAW"
+          if [ -n "$LAW" ]; then
+            az monitor log-analytics query -w "$LAW" --analytics-query "AzureDiagnostics | where Category == 'FrontDoorWebApplicationFirewallLog' | where TimeGenerated > ago(2h) | where action_s in ('Block','block') | project TimeGenerated, ruleName_s, action_s, requestUri_s, details_matches_s, details_msg_s | order by TimeGenerated desc | take 20" -o json 2>&1 | python3 -c "
+          import json,sys
+          raw=sys.stdin.read()
+          try:
+              rows=json.loads(raw)
+              if not rows: print('no WAF blocks in the window')
+              for r in rows: print(r.get('TimeGenerated','')[:19], r.get('ruleName_s',''), (r.get('details_msg_s') or '')[:120], '|', (r.get('details_matches_s') or '')[:160])
+          except Exception:
+              print('WAF query failed:', raw[:400])
+          " || true
+            echo '--- also try the resource-specific table ---'
+            az monitor log-analytics query -w "$LAW" --analytics-query "union isfuzzy=true AGWFirewallLogs, FrontDoorWebApplicationFirewallLog | where TimeGenerated > ago(2h) | take 10" -o json 2>&1 | head -c 400 || true
+          fi
+
       - name: Probe BFF routes with a minted session
         env:
           OID: ${{ vars.LOOM_AUTOMATION_OID }}
