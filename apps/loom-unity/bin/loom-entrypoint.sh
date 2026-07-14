@@ -31,6 +31,44 @@ DB_DIR="${LOOM_UNITY_DB_DIR:-${UC_HOME}/etc/db}"
 DB_SEED_DIR="${UC_HOME}/etc/db.seed"
 
 # ---------------------------------------------------------------------------
+# H2-on-Azure-Files (SMB/CIFS) resilience.
+#
+# The default persistence is an H2 file DB on a mounted Azure Files share so the
+# catalog survives restarts. But H2's file DB is fragile on CIFS: the non-root
+# `unitycatalog` service account may not own the SMB-mounted dir (uid/gid mount
+# defaults), and H2's file-channel/lock operations do not have reliable CIFS
+# semantics — so the JVM crash-loops on first boot even though the exact same
+# image runs cleanly on a local/EmptyDir volume (observed live on the Gov
+# deployment 2026-07-14, non-reproducible in local Docker).
+#
+# Resolution: write-test the DB dir. If it is not writable by this user (the SMB
+# permission case), fall back to a LOCAL ephemeral dir so UC is FUNCTIONAL
+# immediately — with a loud, honest warning that catalog metadata is not
+# persisted across restarts on this deployment until a durable backend
+# (LOOM_UNITY_DB_URL=jdbc:postgresql://… — Postgres) is wired. Set
+# LOOM_UNITY_DB_LOCAL=1 to force the local dir unconditionally (the sanctioned
+# Gov posture while Postgres quota is pending). Postgres (LOOM_UNITY_DB_URL) is
+# unaffected — it owns its own storage and never touches this dir.
+LOCAL_DB_DIR="${LOOM_UNITY_LOCAL_DB_DIR:-/tmp/loom-unity-db}"
+resolve_db_dir() {
+  # Postgres backend: DB_DIR is irrelevant.
+  [ -n "${LOOM_UNITY_DB_URL:-}" ] && return 0
+  if [ "${LOOM_UNITY_DB_LOCAL:-}" = "1" ]; then
+    echo "[loom-unity] LOOM_UNITY_DB_LOCAL=1 — using local ephemeral H2 dir ${LOCAL_DB_DIR} (catalog NOT persisted across restarts; wire LOOM_UNITY_DB_URL=jdbc:postgresql://… for durable storage)"
+    DB_DIR="${LOCAL_DB_DIR}"
+    return 0
+  fi
+  mkdir -p "${DB_DIR}" 2>/dev/null || true
+  if mkdir -p "${DB_DIR}" 2>/dev/null && touch "${DB_DIR}/.loom-write-test" 2>/dev/null; then
+    rm -f "${DB_DIR}/.loom-write-test" 2>/dev/null || true
+    return 0
+  fi
+  echo "[loom-unity] WARNING: DB dir ${DB_DIR} is not writable by $(id -un) (Azure Files SMB permission/semantics) — falling back to local ephemeral dir ${LOCAL_DB_DIR}. Catalog metadata will NOT persist across restarts; wire LOOM_UNITY_DB_URL=jdbc:postgresql://… (Postgres) for durable storage. See docs/fiab/unity-gov.md."
+  DB_DIR="${LOCAL_DB_DIR}"
+  mkdir -p "${DB_DIR}"
+}
+
+# ---------------------------------------------------------------------------
 # hibernate.properties — persistence backend
 # ---------------------------------------------------------------------------
 render_hibernate() {
@@ -138,7 +176,10 @@ if [ "${LOOM_UNITY_DRYRUN:-}" = "1" ]; then
   exit 0
 fi
 
-echo "[loom-unity] rendering config (db=${LOOM_UNITY_DB_URL:+postgres}${LOOM_UNITY_DB_URL:-h2-file} auth=${LOOM_UNITY_AUTH:-disable} adls-vending=${LOOM_UNITY_ADLS_ACCOUNT:+on}${LOOM_UNITY_ADLS_ACCOUNT:-off})"
+# Resolve a writable DB dir BEFORE rendering hibernate.properties (which bakes
+# the path into the JDBC URL) — this is what makes the H2/SMB fallback take.
+resolve_db_dir
+echo "[loom-unity] rendering config (db=${LOOM_UNITY_DB_URL:+postgres}${LOOM_UNITY_DB_URL:-h2-file} dir=${DB_DIR} auth=${LOOM_UNITY_AUTH:-disable} adls-vending=${LOOM_UNITY_ADLS_ACCOUNT:+on}${LOOM_UNITY_ADLS_ACCOUNT:-off})"
 seed_db_if_empty
 write_config
 
