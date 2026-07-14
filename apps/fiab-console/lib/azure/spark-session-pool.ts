@@ -898,11 +898,30 @@ function protectedSessionIds(poolName: string, storeDocSessionIds: Set<number>):
  *     pool's 200-job queue cap, hard-rejecting every new session. A genuinely
  *     cold-starting user session is protected by the same heartbeat +
  *     full-grace-window guards (grace ≥ 30 min ≫ any real cold start).
- * `busy` (an actively-running cell) is never reaped.
+ * `busy` (an actively-running cell) is never reaped by the NORMAL grace — but
+ * see the busy-zombie rule in reapStaleSessions: a POOL-OWNED (loom-warmpool-*)
+ * session stuck `busy` + untracked for the extended grace is a wedged keepalive
+ * (2026-07-14: one held 80 cores on loombatch for 2 days, starving the whole
+ * workspace's vCore quota so no other pool could start a session).
  */
 function isReapableState(state: string): boolean {
   const s = String(state).toLowerCase();
   return s === 'idle' || s === 'not_started' || s === 'starting' || s === 'recovering';
+}
+
+/**
+ * Extended grace for reaping a POOL-OWNED `busy` zombie: 4× the normal grace,
+ * floor 2 h. A warm-pool session only ever runs sub-second keepalive
+ * statements, so `busy` + untracked + un-heartbeated this long is a wedged
+ * Spark context, never a real workload.
+ */
+function busyZombieGraceMs(cfg: PoolConfig): number {
+  return Math.max(cfg.reapGraceMs * 4, 2 * 60 * 60_000);
+}
+
+/** Pool-owned session name prefix — only these are eligible for the busy-zombie rule. */
+function isPoolOwnedName(name: string | null | undefined): boolean {
+  return typeof name === 'string' && name.startsWith('loom-warmpool-');
 }
 
 /**
@@ -940,17 +959,27 @@ export async function reapStaleSessions(poolName: string, storeDocSessionIds: Se
 
     // Guard 1 — tracked as a pool slot or a cross-replica lease → never reap.
     if (protectedIds.has(sess.id)) { store.firstSeenUntracked.delete(key); continue; }
-    // Guard 2 — only idle sessions hold reclaimable capacity; spare busy/starting/etc.
-    if (!isReapableState(sess.state)) { store.firstSeenUntracked.delete(key); continue; }
+    // Guard 2 — reapable-state sessions hold reclaimable capacity. A `busy`
+    // session is spared UNLESS it is pool-owned (loom-warmpool-*): those only
+    // run sub-second keepalives, so a long-busy one is a wedged context holding
+    // executors (the 2026-07-14 loombatch 80-core / 2-day zombie). It uses the
+    // EXTENDED grace below instead of the normal one.
+    const busyZombieCandidate =
+      String(sess.state).toLowerCase() === 'busy' && isPoolOwnedName(sess.name);
+    if (!isReapableState(sess.state) && !busyZombieCandidate) {
+      store.firstSeenUntracked.delete(key);
+      continue;
+    }
+    const graceMs = busyZombieCandidate ? busyZombieGraceMs(cfg) : cfg.reapGraceMs;
     // Guard 3 — heartbeated (live notebook keepalive / active run) within grace.
     const lastUse = store.inUse.get(key);
-    if (typeof lastUse === 'number' && now - lastUse < cfg.reapGraceMs) { store.firstSeenUntracked.delete(key); continue; }
-    // Guard 4 — must have been idle+untracked for a FULL grace window. Record on
+    if (typeof lastUse === 'number' && now - lastUse < graceMs) { store.firstSeenUntracked.delete(key); continue; }
+    // Guard 4 — must have been untracked for a FULL grace window. Record on
     // first sight and defer; a session only just created (not yet leased/kept) is
     // therefore never reaped on the first pass.
     const firstSeen = store.firstSeenUntracked.get(key);
     if (firstSeen === undefined) { store.firstSeenUntracked.set(key, now); continue; }
-    if (now - firstSeen < cfg.reapGraceMs) continue;
+    if (now - firstSeen < graceMs) continue;
 
     // All guards passed → leaked. Kill it (best-effort) and forget it.
     try {

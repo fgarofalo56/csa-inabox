@@ -124,6 +124,8 @@ export interface LivySession {
   id: number;
   state: string;
   kind?: string;
+  /** Session name (present when the list/get call passes detailed=true). */
+  name?: string | null;
   appId?: string | null;
   appInfo?: { sparkUiUrl?: string; driverLogUrl?: string } | null;
   log?: string[];
@@ -222,7 +224,9 @@ export async function listLivySessions(
   let from = 0;
   // Page until we reach `total`, run dry, or hit the hard cap.
   for (let guard = 0; guard < Math.ceil(hardCap / size) + 1; guard++) {
-    const r = await callDev(`${livyBase(poolName)}/sessions?from=${from}&size=${size}`);
+    // detailed=true adds `name` (and errorInfo) — the reaper's busy-zombie rule
+    // matches pool-owned sessions by their loom-warmpool-* name.
+    const r = await callDev(`${livyBase(poolName)}/sessions?from=${from}&size=${size}&detailed=true`);
     const page = await jsonOrThrow<{ from?: number; total?: number; sessions?: LivySession[] }>(
       r,
       `listLivySessions(${poolName})`,
