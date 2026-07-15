@@ -18,6 +18,10 @@
  * blocked rather than silently clobbered.
  */
 
+/** A rich owner record resolved by the people-picker (DP-17). Legacy records may
+ *  still carry plain email strings, so the wire type accepts either. */
+export interface EditOwnerRef { id?: string; upn?: string; displayName?: string; label?: string }
+
 /** The editable projection of a marketplace data product. */
 export interface DataProductDoc {
   id: string;
@@ -29,11 +33,15 @@ export interface DataProductDoc {
   type?: string;
   /** Subset of DATA_PRODUCT_AUDIENCES (steps.ts). */
   audience?: string[];
-  owners?: string[];
+  /** DP-17: rich `{id,upn,displayName}` owner records (people-picker). A legacy
+   *  record may still surface plain email strings, so the type accepts both. */
+  owners?: Array<string | EditOwnerRef>;
   /** F7 — endorsed-by-governance flag, drives the Endorsed badge. */
   endorsed: boolean;
   useCase?: string;
-  customAttributes?: Record<string, string | number | boolean | null>;
+  /** Typed custom-attribute values (DP-17). Multiple-choice attributes bind a
+   *  `string[]`; other field types bind a scalar. */
+  customAttributes?: Record<string, string | string[] | number | boolean | null>;
   status: 'Draft' | 'Published' | 'Expired';
   createdAt: string;
   updatedAt: string;

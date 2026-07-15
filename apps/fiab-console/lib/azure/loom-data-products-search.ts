@@ -33,6 +33,7 @@ import {
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import type { WorkspaceItem } from '@/lib/types/workspace';
 import { escapeSqlLiteral } from '@/lib/sql/quoting';
+import { resolveLifecycleState, toPublishStatus } from '@/lib/dataproducts/lifecycle';
 
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
 const credential = uamiClientId
@@ -411,7 +412,11 @@ export function docForDataProduct(
     }
     return undefined;
   };
-  const ps = String(state.publishStatus || 'Draft') as PublishStatus;
+  // DP-1: consumer visibility derives from the ONE canonical lifecycle, so a
+  // ribbon/wizard Publish (which may have written a different legacy field on an
+  // older record) still indexes as Published — not just a marketplace-tab
+  // publishStatus write.
+  const ps: PublishStatus = toPublishStatus(resolveLifecycleState(state));
   const domain = state.domain ? String(state.domain) : undefined;
   return {
     // AI Search document keys may only contain letters, digits, _, -, =.

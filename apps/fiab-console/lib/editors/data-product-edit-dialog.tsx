@@ -40,12 +40,19 @@ import {
   DATA_PRODUCT_TYPES, DATA_PRODUCT_AUDIENCES, pickStepFields, type EditStep,
 } from '@/lib/dataproducts/steps';
 import type { DataProductDoc } from '@/lib/dataproducts/edit-model';
+import { OwnerPeoplePicker, type OwnerRef } from '@/lib/dataproducts/owner-picker';
+import { AttributeInput, type AttributeGroup, type AttributeValue } from '@/lib/dataproducts/attribute-input';
 
 const useStyles = makeStyles({
   body: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minWidth: '540px' },
   steps: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', marginBottom: tokens.spacingVerticalXS },
   row: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'flex-end', flexWrap: 'wrap' },
   field: { flex: 1, minWidth: '200px' },
+  attrGroup: {
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM,
+    padding: tokens.spacingHorizontalM, borderRadius: tokens.borderRadiusLarge,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+  },
   endorseRow: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
   hint: { color: tokens.colorNeutralForeground3, minWidth: 0 },
   // Long, dynamic strings (user-typed names, raw error text) must wrap rather
@@ -88,11 +95,11 @@ export function DataProductEditDialog({ id, open, onOpenChange, onSaved }: DataP
   const [description, setDescription] = useState('');
   const [type, setType] = useState('');
   const [audience, setAudience] = useState<string[]>([]);
-  const [owners, setOwners] = useState('');
+  const [owners, setOwners] = useState<OwnerRef[]>([]);
   const [endorsed, setEndorsed] = useState(false);
   const [governanceDomainId, setGovernanceDomainId] = useState('');
   const [useCase, setUseCase] = useState('');
-  const [customAttributes, setCustomAttributes] = useState<Record<string, string | number | boolean | null>>({});
+  const [customAttributes, setCustomAttributes] = useState<Record<string, AttributeValue | number | null>>({});
 
   // Non-blocking duplicate-name warning (debounced).
   const [dupName, setDupName] = useState<string | null>(null);
@@ -100,6 +107,11 @@ export function DataProductEditDialog({ id, open, onOpenChange, onSaved }: DataP
 
   // Governance-domain picker source.
   const [domains, setDomains] = useState<Array<{ id: string; name: string }>>([]);
+
+  // DP-17 — typed custom-attribute schema (same source as the create wizard's
+  // step 3), so the Custom step renders the control matching each fieldType.
+  const [attrGroups, setAttrGroups] = useState<AttributeGroup[]>([]);
+  const [attrGroupsNote, setAttrGroupsNote] = useState<string | undefined>();
 
   const [save, setSave] = useState<SaveState>({ kind: 'idle' });
 
@@ -124,7 +136,13 @@ export function DataProductEditDialog({ id, open, onOpenChange, onSaved }: DataP
         setDescription(d.description || '');
         setType(d.type || '');
         setAudience(Array.isArray(d.audience) ? d.audience : []);
-        setOwners((d.owners || []).join(', '));
+        // DP-17: bind the rich owner records the people-picker expects (a legacy
+        // record may still surface a plain email string).
+        setOwners((d.owners || []).map((o) =>
+          typeof o === 'string'
+            ? { id: o, upn: o, displayName: o }
+            : { id: o.id || o.upn || o.displayName || '', upn: o.upn || '', displayName: o.displayName || o.upn || o.id || '' },
+        ).filter((o) => o.id));
         setEndorsed(!!d.endorsed);
         setGovernanceDomainId(d.governanceDomainId || '');
         setUseCase(d.useCase || '');
@@ -154,6 +172,30 @@ export function DataProductEditDialog({ id, open, onOpenChange, onSaved }: DataP
     return () => { cancelled = true; };
   }, [open]);
 
+  // ---- typed custom-attribute schema (DP-17) -------------------------------
+  // Load the attribute-group schema for the product's governance domain (the
+  // same /api/attribute-groups source the create wizard uses) so the Custom
+  // step renders Dropdown/DatePicker/Switch/number controls per fieldType.
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const url = governanceDomainId
+          ? `/api/attribute-groups?domainId=${encodeURIComponent(governanceDomainId)}`
+          : '/api/attribute-groups';
+        const r = await clientFetch(url);
+        const j = await r.json();
+        if (cancelled) return;
+        if (j?.ok) { setAttrGroups(j.groups || []); setAttrGroupsNote(j.note); }
+        else { setAttrGroups([]); setAttrGroupsNote(j?.error); }
+      } catch (e: any) {
+        if (!cancelled) { setAttrGroups([]); setAttrGroupsNote(e?.message || String(e)); }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [open, governanceDomainId]);
+
   // ---- debounced, non-blocking duplicate-name check ------------------------
   const onNameChange = useCallback((value: string) => {
     setName(value);
@@ -182,7 +224,9 @@ export function DataProductEditDialog({ id, open, onOpenChange, onSaved }: DataP
       description,
       type: type || undefined,
       audience,
-      owners: owners.split(',').map((o) => o.trim()).filter(Boolean),
+      // DP-17: send the rich `{id,upn,displayName}` records the people-picker
+      // resolved — no comma-parsing of a free-text string.
+      owners,
       endorsed,
       governanceDomainId: governanceDomainId || undefined,
       useCase,
@@ -210,12 +254,19 @@ export function DataProductEditDialog({ id, open, onOpenChange, onSaved }: DataP
   }, [name, description, type, audience, owners, endorsed, governanceDomainId, useCase, customAttributes, etag, id, onSaved]);
 
   const stepIndex = STEP_ORDER.indexOf(step);
-  const customKeys = Object.keys(customAttributes);
+  // DP-17 — the typed attribute schema for the domain, plus any legacy
+  // customAttributes keys the schema doesn't cover (rendered as text so no
+  // stored value is lost).
+  const allAttrDefs = attrGroups.flatMap((g) => g.attributes);
+  const coveredKeys = new Set(allAttrDefs.flatMap((a) => [a.id, a.name]));
+  const orphanKeys = Object.keys(customAttributes).filter((k) => !coveredKeys.has(k));
+  const hasAnyCustom = allAttrDefs.length > 0 || orphanKeys.length > 0;
   // Per-step validation (§7.5): Basic requires a name — can't save or advance
   // past an invalid step. Business/Custom have no required fields.
   const basicInvalid = !name.trim();
-  const customEmpty = step === 'custom' && customKeys.length === 0;
+  const customEmpty = step === 'custom' && !hasAnyCustom;
   const saveDisabled = save.kind === 'saving' || customEmpty || (step === 'basic' && basicInvalid);
+  const setAttr = (key: string, v: AttributeValue) => setCustomAttributes((prev) => ({ ...prev, [key]: v }));
 
   return (
     <Dialog open={open} onOpenChange={(_, d) => onOpenChange(d.open)}>
@@ -302,9 +353,11 @@ export function DataProductEditDialog({ id, open, onOpenChange, onSaved }: DataP
                           </Dropdown>
                         </Field>
                       </div>
-                      <Field label="Owners (comma-separated emails)">
-                        <Input value={owners} onChange={(_, d) => setOwners(d.value)} placeholder="owner@contoso.com, lead@contoso.com" />
-                      </Field>
+                      <OwnerPeoplePicker
+                        owners={owners}
+                        onChange={setOwners}
+                        hint="Search your directory (Microsoft Graph) and add owners."
+                      />
                       <div className={s.endorseRow}>
                         <Checkbox
                           checked={endorsed}
@@ -340,27 +393,44 @@ export function DataProductEditDialog({ id, open, onOpenChange, onSaved }: DataP
                     </>
                   )}
 
-                  {/* ---------------- CUSTOM ATTRIBUTES (honest gate) ---------------- */}
+                  {/* ---------------- CUSTOM ATTRIBUTES (typed, DP-17) ---------------- */}
                   {step === 'custom' && (
-                    customKeys.length === 0 ? (
+                    !hasAnyCustom ? (
                       <MessageBar intent="info">
                         <MessageBarBody>
                           <MessageBarTitle>No custom attribute groups defined</MessageBarTitle>
-                          No attribute groups are configured for this governance domain yet. Define
-                          required/optional attributes in <strong>Admin › Attribute Groups</strong>; they then
-                          appear here as a typed form. (Attribute-group admin is tracked as Data Marketplace T15.)
+                          {attrGroupsNote || (
+                            <>No attribute groups are configured for this governance domain yet. Define
+                            required/optional attributes in <strong>Admin › Attribute Groups</strong>; they then
+                            appear here as a typed form (Dropdown, date, switch, number) per field type.</>
+                          )}
                         </MessageBarBody>
                       </MessageBar>
                     ) : (
                       <>
                         <Body1Strong>Custom attributes</Body1Strong>
-                        {customKeys.map((k) => (
-                          <Field key={k} label={k} className={s.field}>
-                            <Input
-                              value={String(customAttributes[k] ?? '')}
-                              onChange={(_, d) => setCustomAttributes((prev) => ({ ...prev, [k]: d.value }))}
-                            />
-                          </Field>
+                        {attrGroups.map((g) => (
+                          <div key={g.id} className={s.attrGroup}>
+                            <Caption1>{g.name}</Caption1>
+                            {g.attributes.map((a) => {
+                              const raw = customAttributes[a.id] ?? customAttributes[a.name];
+                              const value: AttributeValue | undefined =
+                                raw === null ? undefined : (raw as AttributeValue | undefined);
+                              return (
+                                <AttributeInput key={a.id} attr={a} value={value} onChange={(v) => setAttr(a.id, v)} />
+                              );
+                            })}
+                          </div>
+                        ))}
+                        {/* Legacy values not covered by the current schema — kept editable so
+                            saving never drops a stored attribute. */}
+                        {orphanKeys.map((k) => (
+                          <AttributeInput
+                            key={k}
+                            attr={{ id: k, name: k, fieldType: 'Text' }}
+                            value={(customAttributes[k] === null ? undefined : customAttributes[k]) as AttributeValue | undefined}
+                            onChange={(v) => setAttr(k, v)}
+                          />
                         ))}
                       </>
                     )
@@ -370,7 +440,7 @@ export function DataProductEditDialog({ id, open, onOpenChange, onSaved }: DataP
                   <div className={s.saveBar}>
                     <Caption1 className={s.hint}>
                       Saving the <strong>{STEP_LABEL[step]}</strong> step PATCHes only its fields
-                      ({(step === 'custom' && customKeys.length === 0) ? 'no editable fields' : 'leaving the other steps untouched'}).
+                      ({(step === 'custom' && !hasAnyCustom) ? 'no editable fields' : 'leaving the other steps untouched'}).
                     </Caption1>
                     <Button
                       appearance="primary"

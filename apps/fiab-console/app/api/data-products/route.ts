@@ -51,6 +51,7 @@ import {
   isValidDataProductType,
 } from '@/lib/catalog/data-product-enums';
 import { sanitizeContract } from '@/lib/dataproducts/contract';
+import { resolveLifecycleState, setLifecycleState } from '@/lib/dataproducts/lifecycle';
 import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
@@ -253,8 +254,11 @@ export async function POST(req: NextRequest) {
     if (!workspaceId || !displayName) {
       return NextResponse.json({ ok: false, error: 'workspaceId and displayName are required' }, { status: 400 });
     }
-    const state = normalizeMarketplaceState(body.state);
+    let state = normalizeMarketplaceState(body.state);
     if (!state.owner) state.owner = session.claims.upn || session.claims.email || session.claims.oid;
+    // DP-1: stamp the ONE canonical lifecycleState (derived from the marketplace
+    // publishStatus) + mirror the legacy trio so every read surface agrees.
+    state = setLifecycleState(state, resolveLifecycleState(state));
     try {
       const res = await createOwnedItem(session, ITEM_TYPE, {
         workspaceId,
@@ -331,8 +335,11 @@ export async function POST(req: NextRequest) {
     displayName, description, type, audience, governanceDomainId, useCase, endorsed, owners,
   });
 
-  const state: Record<string, unknown> = {
-    status: 'DRAFT',
+  // DP-1: a freshly-created product is a canonical 'draft'. setLifecycleState
+  // stamps `lifecycleState` AND mirrors the legacy trio (status/lifecycleStatus/
+  // publishStatus) so the details badge, the ribbon, and marketplace search all
+  // read one truth from creation onward.
+  const state: Record<string, unknown> = setLifecycleState({
     type,
     audience,
     governanceDomainId: governanceDomainId || null,
@@ -345,7 +352,7 @@ export async function POST(req: NextRequest) {
     purviewRegistered: purview.registered,
     ...(purview.dataProductId ? { purviewDataProductId: purview.dataProductId } : {}),
     ...(purview.hint ? { purviewHint: purview.hint } : {}),
-  };
+  }, 'draft');
 
   const created = await createOwnedItem(session, ITEM_TYPE, {
     workspaceId,

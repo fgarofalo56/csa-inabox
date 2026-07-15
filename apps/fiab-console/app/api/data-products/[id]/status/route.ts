@@ -42,6 +42,8 @@ import {
   PurviewError,
 } from '@/lib/azure/purview-client';
 import { loadOwnedItem, updateOwnedItem, jerr } from '@/app/api/items/_lib/item-crud';
+import { upsertDataProductDoc, docForDataProduct } from '@/lib/azure/loom-data-products-search';
+import { setLifecycleState, type LifecycleState } from '@/lib/dataproducts/lifecycle';
 import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
@@ -50,6 +52,13 @@ export const dynamic = 'force-dynamic';
 const ITEM_TYPE = 'data-product';
 const VALID = ['PUBLISHED', 'DRAFT', 'EXPIRED'] as const;
 type LifecycleStatus = (typeof VALID)[number];
+
+/** F6 ribbon UPPERCASE status → the ONE canonical lifecycle state (DP-1). */
+const CANONICAL: Record<LifecycleStatus, LifecycleState> = {
+  PUBLISHED: 'published',
+  DRAFT: 'draft',
+  EXPIRED: 'deprecated',
+};
 
 interface PreconditionFailure {
   reason: 'no_assets' | 'no_active_policy' | 'domain_not_published';
@@ -165,16 +174,26 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       }
     }
 
-    // Authoritative write: persist the lifecycle status on the Cosmos item.
+    // Authoritative write: persist the ONE canonical lifecycle on the Cosmos
+    // item. DP-1 — setLifecycleState writes `lifecycleState` AND mirrors the
+    // legacy trio (lifecycleStatus/status/publishStatus) so this ribbon Publish
+    // is ALSO reflected on the details badge and in marketplace search, closing
+    // the "Publish here doesn't publish there" defect.
     const lifecycleStatusAt = new Date().toISOString();
-    const updated = await updateOwnedItem(id, ITEM_TYPE, session.claims.oid, {
-      state: { ...state, lifecycleStatus: status, lifecycleStatusAt },
-    });
+    const nextState = setLifecycleState(state, CANONICAL[status], lifecycleStatusAt);
+    const updated = await updateOwnedItem(id, ITEM_TYPE, session.claims.oid, { state: nextState });
     if (!updated) return jerr('Cosmos write to record lifecycleStatus failed', 500);
+
+    // Re-project the consumer-discovery index off the mirrored publishStatus so a
+    // ribbon Publish makes the product discoverable (and Unpublish/Expire removes
+    // it from consumer search). AWAITED so it completes within the request;
+    // best-effort — the index is derived and never fails the lifecycle write.
+    try { await upsertDataProductDoc(docForDataProduct(updated, session.claims.oid)); } catch { /* index is derived */ }
 
     return NextResponse.json({
       ok: true,
       lifecycleStatus: status,
+      lifecycleState: CANONICAL[status],
       lifecycleStatusAt,
       purviewSync,
       purviewSyncNote,

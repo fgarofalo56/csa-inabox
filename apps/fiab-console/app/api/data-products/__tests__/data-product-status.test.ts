@@ -192,4 +192,39 @@ describe('POST /api/data-products/[id]/status', () => {
     expect(res.status).toBe(500);
     expect((await res.json()).ok).toBe(false);
   });
+
+  // ── DP-1: publish-here-is-publish-there — the ONE canonical lifecycle ──────
+  it('a ribbon Publish mirrors the WHOLE legacy trio so the details badge + marketplace search agree', async () => {
+    (getSession as any).mockReturnValue({ claims: { oid: 'u' } });
+    const loaded = item({ domain: DOMAIN, datasets: [{ name: 'sales' }], status: 'Draft', publishStatus: 'Draft' });
+    (loadOwnedItem as any).mockResolvedValue(loaded);
+    stubPolicies([{ kind: 'Access', scope: 'data-product:dp-1', enabled: true }]);
+    (updateOwnedItem as any).mockImplementation(async (_i: string, _t: string, _o: string, patch: any) => ({ ...loaded, state: patch.state }));
+    const res = await POST(req({ status: 'PUBLISHED' }), ctx('dp-1'));
+    expect(res.status).toBe(200);
+    const j = await res.json();
+    expect(j.lifecycleState).toBe('published');
+    const persisted = (updateOwnedItem as any).mock.calls[0][3].state;
+    // The canonical field is stamped …
+    expect(persisted.lifecycleState).toBe('published');
+    // … AND all three legacy fields move together (previously only
+    // lifecycleStatus changed → the details badge stayed "Draft" forever and the
+    // product never entered marketplace search).
+    expect(persisted.lifecycleStatus).toBe('PUBLISHED');
+    expect(persisted.status).toBe('Published');
+    expect(persisted.publishStatus).toBe('Published');
+  });
+
+  it('an Expire maps to canonical deprecated across the trio', async () => {
+    (getSession as any).mockReturnValue({ claims: { oid: 'u' } });
+    const loaded = item({ status: 'Published', publishStatus: 'Published', lifecycleStatus: 'PUBLISHED' });
+    (loadOwnedItem as any).mockResolvedValue(loaded);
+    (updateOwnedItem as any).mockImplementation(async (_i: string, _t: string, _o: string, patch: any) => ({ ...loaded, state: patch.state }));
+    const res = await POST(req({ status: 'EXPIRED' }), ctx('dp-1'));
+    expect(res.status).toBe(200);
+    const persisted = (updateOwnedItem as any).mock.calls[0][3].state;
+    expect(persisted.lifecycleState).toBe('deprecated');
+    expect(persisted.publishStatus).toBe('Deprecated'); // removed from consumer search
+    expect(persisted.status).toBe('Expired');
+  });
 });

@@ -9,9 +9,9 @@ import type { FabricItemType } from './types';
  */
 export const csaDataProductsItems: FabricItemType[] = [
   { slug: 'data-product',                displayName: 'Data product',                restType: 'DataProduct',               category: 'CSA Data Products',
-    description: 'Data-mesh-aligned package: dataset + semantic contract + APIM API + access policy + owner. Listed in the marketplace.',
+    description: 'The governed, contract-bound unit consumers discover and subscribe to: dataset + semantic contract + access policy + owner. The one data-product creation path.',
     learnContent: {
-      "overview": "A Data product is a data-mesh-aligned package — dataset plus semantic contract, an APIM API, an access policy, and an owner — listed in the marketplace. In Loom the Publish-to-APIM button POSTs a real product as an idempotent upsert.",
+      "overview": "A Data product is the governed, contract-bound unit consumers discover and subscribe to in the marketplace — a dataset plus its semantic contract, an access policy, and an owner. This is the ONE creation path: a template is a starting shape that stamps out a data product, and an instance is the deployed infra bundle a template produced; neither is the governed mesh entity that a Data product is. In Loom the Publish control POSTs a real product as an idempotent upsert.",
       "steps": [
         {
           "title": "Define the contract",
@@ -57,10 +57,10 @@ export const csaDataProductsItems: FabricItemType[] = [
       ],
       "docsUrl": "https://learn.microsoft.com/purview/concept-data-products"
     } },
-  { slug: 'data-product-template',       displayName: 'Data product template',       restType: 'DataProductTemplate',       category: 'CSA Data Products',
-    description: 'CSA-curated push-button template: medallion lakehouse, IoT analytics, federated mesh, RAG agent, geospatial.',
+  { slug: 'data-product-template',       displayName: 'Data product template',       restType: 'DataProductTemplate',       category: 'CSA Data Products', hiddenFromGallery: true,
+    description: 'A starting shape that stamps out a Data product plus its backing infra (medallion lakehouse, IoT analytics, federated mesh, RAG agent, geospatial). Browse it from "Start from a template", not as a separate item.',
     learnContent: {
-      "overview": "A Data product template is a CSA-curated push-button bundle — medallion lakehouse, IoT analytics, federated mesh, RAG agent, geospatial. In Loom Instantiate POSTs to /api/items/data-product-template/[slug]/instantiate to spawn the underlying items.",
+      "overview": "A Data product template is a CSA-curated starting shape — medallion lakehouse, IoT analytics, federated mesh, RAG agent, geospatial — that stamps out a governed Data product plus its backing infra. It is NOT a persisted item you create on its own: browse the template gallery, then Instantiate to spawn the underlying items and their parent Data product. To govern the result, open the Data product it produced. In Loom Instantiate POSTs to /api/items/data-product-template/[slug]/instantiate.",
       "steps": [
         {
           "title": "Browse the gallery",
@@ -81,10 +81,10 @@ export const csaDataProductsItems: FabricItemType[] = [
       ],
       "docsUrl": "https://learn.microsoft.com/purview/concept-data-products"
     } },
-  { slug: 'data-product-instance',       displayName: 'Data product instance',       restType: 'DataProductInstance',       category: 'CSA Data Products',
-    description: 'Instantiated data product in a workspace — composed of underlying items (pipelines, lakehouses, indexes).',
+  { slug: 'data-product-instance',       displayName: 'Data product instance',       restType: 'DataProductInstance',       category: 'CSA Data Products', hiddenFromGallery: true,
+    description: 'The deployed infra bundle a template produced (pipelines, lakehouses, indexes). Born only from a template Instantiate — open its parent Data product to govern it.',
     learnContent: {
-      "overview": "A Data product instance is an instantiated data product in a workspace — composed of underlying items (pipelines, lakehouses, indexes). In Loom it shows the spawned components and a status table; health is best-effort from child items' updatedAt.",
+      "overview": "A Data product instance is the deployed infra bundle a template produced — the underlying items (pipelines, lakehouses, indexes) wired together in a workspace. It is never created directly: it is born only from a Data product template's Instantiate action, and it links back to the governed Data product you open to govern it. In Loom it shows the spawned components and a status table; health is best-effort from child items' updatedAt.",
       "steps": [
         {
           "title": "Review components",
