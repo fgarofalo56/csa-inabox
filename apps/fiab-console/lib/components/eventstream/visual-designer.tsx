@@ -464,6 +464,11 @@ function EventstreamCanvasInner({
   // W7 — ambient inline Copilot ghost node. Serialize the current graph and let
   // AOAI suggest the next node; Accept materializes it via the same add actions.
   const suggest = useCanvasSuggestion('eventstream', itemId);
+  // Destructure the stable pieces — `suggest` itself is a fresh object every
+  // render, so depending on it in the callbacks below (which feed syncNodes'
+  // deps) would recreate them each render and drive the syncNodes effect into an
+  // infinite setNodes loop ("Maximum update depth exceeded").
+  const { request: suggestRequest, clear: suggestClear, suggestion: suggestValue } = suggest;
   const topology = useMemo<CanvasTopology>(() => {
     const nodesT = [
       ...sources.map((n, i) => ({ id: `source-${i}`, type: `source:${n.kind}`, label: n.name, role: 'source' })),
@@ -482,12 +487,12 @@ function EventstreamCanvasInner({
     };
   }, [sources, transforms, sinks]);
 
-  const requestSuggestion = useCallback(() => { suggest.request(topology); }, [suggest, topology]);
+  const requestSuggestion = useCallback(() => { suggestRequest(topology); }, [suggestRequest, topology]);
   const acceptSuggestion = useCallback(() => {
-    if (suggest.suggestion?.nodeType === 'transform') onAddTransform();
-    else if (suggest.suggestion?.nodeType === 'destination') onAddSink();
-    suggest.clear();
-  }, [suggest, onAddTransform, onAddSink]);
+    if (suggestValue?.nodeType === 'transform') onAddTransform();
+    else if (suggestValue?.nodeType === 'destination') onAddSink();
+    suggestClear();
+  }, [suggestValue, suggestClear, onAddTransform, onAddSink]);
 
   const syncNodes = useCallback(() => {
     const fallback = esLayout(sources.length, transforms.length, sinks.length);

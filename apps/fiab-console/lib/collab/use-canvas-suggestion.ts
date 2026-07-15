@@ -14,7 +14,7 @@
  * MessageBar naming LOOM_AOAI_ENDPOINT rather than silently failing.
  */
 
-import { useCallback, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { clientFetch } from '@/lib/client-fetch';
 import type { CanvasSuggestion, CanvasTopology } from './canvas-suggest';
 
@@ -74,5 +74,13 @@ export function useCanvasSuggestion(
 
   const clear = useCallback(() => { setSuggestion(null); setError(null); }, []);
 
-  return { suggestion, loading, error, gate, request, clear };
+  // Stable reference — the returned object changes identity ONLY when a member
+  // actually changes. Without this the fresh-object-per-render would churn any
+  // caller that puts this in a useCallback/useEffect dep array (e.g. a canvas
+  // that rebuilds its React Flow nodes from the suggestion state), producing a
+  // "Maximum update depth exceeded" render loop.
+  return useMemo(
+    () => ({ suggestion, loading, error, gate, request, clear }),
+    [suggestion, loading, error, gate, request, clear],
+  );
 }
