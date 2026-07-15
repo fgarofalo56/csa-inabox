@@ -616,6 +616,38 @@ export async function PATCH(req: NextRequest, props: { params: Promise<{ id: str
     patched.push('CDEs');
   }
 
+  // ---- DP-3 guided-wizard fields (template provenance + access model + ports)
+  if ('templateSlug' in body) {
+    statePatch.templateSlug = body.templateSlug ? String(body.templateSlug) : undefined;
+    patched.push('templateSlug');
+  }
+  // accessModel drives the subscribe flow (governed | self-serve | request);
+  // a structured dropdown value, never freeform.
+  if ('accessModel' in body) {
+    const AM = ['governed', 'self-serve', 'request'];
+    const am = body.accessModel ? String(body.accessModel) : undefined;
+    if (am !== undefined && !AM.includes(am)) return err(`accessModel must be one of ${AM.join(', ')}`, 400, 'bad_access_model');
+    statePatch.accessModel = am;
+    patched.push('accessModel');
+  }
+  // Declared output/input ports (DP-8 formalizes; DP-3 persists the structured
+  // declaration). Each { name, direction: 'input'|'output'|'management', kind? }.
+  if ('ports' in body) {
+    if (body.ports !== null && !Array.isArray(body.ports)) return err('ports must be an array or null', 400, 'bad_ports');
+    const DIR = ['input', 'output', 'management'];
+    const ports = Array.isArray(body.ports)
+      ? body.ports
+          .filter((p: any) => p && typeof p === 'object' && typeof p.name === 'string' && p.name.trim())
+          .map((p: any) => ({
+            name: String(p.name).trim(),
+            direction: DIR.includes(String(p.direction)) ? String(p.direction) : 'output',
+            kind: p.kind ? String(p.kind) : undefined,
+          }))
+      : undefined;
+    statePatch.ports = ports;
+    patched.push('ports');
+  }
+
   // ---- F4 edit-dialog fields (Basic / Business / Custom) -------------------
   if ('name' in body) {
     if (typeof body.name !== 'string' || !body.name.trim()) {
