@@ -251,7 +251,7 @@ export function DataPreviewDock({ itemId, topology, pristine }: DataPreviewDockP
     if (setupState) return; // unconfigured/nonexistent source: guided state, no fetch
     setBusy(true); setErr(null); setGate(null); setNote(null);
     try {
-      const r = await clientFetch(`/api/items/eventstream/${itemId}/events?nodeIdx=${sourceIdx}&maxEvents=50`);
+      const r = await clientFetch(`/api/items/eventstream/${itemId}/events?nodeIdx=${sourceIdx}&maxEvents=50&sinceMs=${rangeMs}`);
       const j = await r.json();
       if (j.ok) {
         setEvents(Array.isArray(j.events) ? j.events : []);

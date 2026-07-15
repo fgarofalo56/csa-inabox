@@ -148,9 +148,17 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
     if (!r.ok) return NextResponse.json({ ok: false, code: r.code, error: r.error }, { status: r.status });
     try {
       const hub = r.hub;
+      // Peek within the requested enqueued-time window across ALL partitions.
+      // A tail-open (fromLatest) single-partition receiver only ever saw events
+      // that arrived on one partition DURING the ~3s listen window — real,
+      // already-enqueued events never rendered.
+      const sinceMs = Math.min(
+        24 * 3600 * 1000,
+        Math.max(60_000, Number(req.nextUrl.searchParams.get('sinceMs') ?? '3600000') || 3_600_000),
+      );
       const result = await peekEvents(hub, {
         maxEvents,
-        fromLatest: true,
+        sinceMs,
         consumerGroup: r.node.consumerGroup || '$Default',
       });
       return NextResponse.json({ ok: true, events: result.events, source: 'eventhub' });
