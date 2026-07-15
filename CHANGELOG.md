@@ -25,6 +25,75 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.69.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.68.0...csa-inabox-v0.69.0) (2026-07-15)
+
+
+### Features
+
+* **canvas:** W4 canvas comments/sticky-notes + W7 ambient Copilot ghost-node engine + W5 presence ([#2062](https://github.com/fgarofalo56/csa-inabox/issues/2062)) ([0a45cd0](https://github.com/fgarofalo56/csa-inabox/commit/0a45cd0d31ec5044e013ad366ac2dc7297f02158))
+* **copilot:** CTS Memory & Brain — long-term memory + write guard + dump-to-memory + nightly consolidation ([#2035](https://github.com/fgarofalo56/csa-inabox/issues/2035)) ([1b6d714](https://github.com/fgarofalo56/csa-inabox/commit/1b6d7144432c68301c76799990b53bc3e78508c1))
+* **copilot:** CTS-03 admin deep-trace panel — per-turn phase timings + tabbed debug view ([#2038](https://github.com/fgarofalo56/csa-inabox/issues/2038)) ([4e9246c](https://github.com/fgarofalo56/csa-inabox/commit/4e9246c900a7f9449f43702574a54badab364bfd))
+* **copilot:** CTS-07 skills library — Cosmos registry + per-user toggle + Skills Studio ([#2041](https://github.com/fgarofalo56/csa-inabox/issues/2041)) ([8d455cb](https://github.com/fgarofalo56/csa-inabox/commit/8d455cb26007b47e020f268d7a815f23b2d45cbf))
+* **copilot:** CTS-11 skills self-evolution — usage telemetry → learner → admin-reviewed suggestions ([#2047](https://github.com/fgarofalo56/csa-inabox/issues/2047)) ([d8ef6a1](https://github.com/fgarofalo56/csa-inabox/commit/d8ef6a1867714fef774747aa65eed75c310dcc57))
+* **copilot:** G3 Azure Monitor ops-agent re-arch + G6 agentic-publish depth (+G4 verify) ([#2044](https://github.com/fgarofalo56/csa-inabox/issues/2044)) ([1bf3f35](https://github.com/fgarofalo56/csa-inabox/commit/1bf3f35f279ada63b4745149d01882a4071e00b0))
+* **data-product:** DP-1 unified model+lifecycle, DP-2 taxonomy flags, DP-17 structured config (people-picker/dropdown/kv) ([#2051](https://github.com/fgarofalo56/csa-inabox/issues/2051)) ([400e19e](https://github.com/fgarofalo56/csa-inabox/commit/400e19e5551c37c559a4991e4b274ffaa3a5888a))
+* **data-product:** DP-10 subscription approval + zero-touch fulfillment ([#2066](https://github.com/fgarofalo56/csa-inabox/issues/2066)) ([f2f316a](https://github.com/fgarofalo56/csa-inabox/commit/f2f316ab9ede7039756163e6ef93d4d72501f1a4))
+* **data-product:** DP-3 guided 7-step creation wizard (draft-on-step-1, skip-with-defaults, review+publish) ([#2058](https://github.com/fgarofalo56/csa-inabox/issues/2058)) ([be8d18f](https://github.com/fgarofalo56/csa-inabox/commit/be8d18f736307374a8169600c9be52a95aac11d1))
+* **data-product:** DP-5 certification pipeline — gated draft→validated→certified state machine ([#2054](https://github.com/fgarofalo56/csa-inabox/issues/2054)) ([6564ab2](https://github.com/fgarofalo56/csa-inabox/commit/6564ab243b011e642d878f4332b21de9bbffb56c))
+* **data-product:** DP-8 ports model + DP-9 versioning & deprecation ([#2063](https://github.com/fgarofalo56/csa-inabox/issues/2063)) ([90aed4d](https://github.com/fgarofalo56/csa-inabox/commit/90aed4d96771ca2f115f2f1eb2adbebb6425b93f))
+* **dbx:** DBX-14 Unity Catalog Online Tables (feature-store serving) ([#2061](https://github.com/fgarofalo56/csa-inabox/issues/2061)) ([6a413b8](https://github.com/fgarofalo56/csa-inabox/commit/6a413b8221d00256a7125b3493f3b97df65106fb))
+* **dbx:** DBX-9 publish a Data Agent as an MCP server ([#2065](https://github.com/fgarofalo56/csa-inabox/issues/2065)) ([de651b7](https://github.com/fgarofalo56/csa-inabox/commit/de651b78532028ce040d764cc2181f0965f65a9d))
+* **deploy:** BR-BLUEGREEN — blue-green console rolls (supersedes in-place image PATCH) ([#2064](https://github.com/fgarofalo56/csa-inabox/issues/2064)) ([e0d3ec7](https://github.com/fgarofalo56/csa-inabox/commit/e0d3ec73ab60033c56c94c803e43910bd099ac96))
+* **devplat:** @csa-loom/sdk — typed TypeScript client for the Loom API ([#2057](https://github.com/fgarofalo56/csa-inabox/issues/2057)) ([35a673c](https://github.com/fgarofalo56/csa-inabox/commit/35a673c5e084d458b4f8aefba6f8c1344aadf5b5))
+* **devplat:** BR-OPENAPI spec+viewer, BR-SCIM 2.0 provisioning, BR-TERRAFORM module ([#2055](https://github.com/fgarofalo56/csa-inabox/issues/2055)) ([aa79570](https://github.com/fgarofalo56/csa-inabox/commit/aa79570879d2e413df786e27aa10ae2e187bafa0))
+* **domains:** Waves 2-4 — deep taxonomy, tree/graph designer, federated mesh ([#1483](https://github.com/fgarofalo56/csa-inabox/issues/1483)) ([#2042](https://github.com/fgarofalo56/csa-inabox/issues/2042)) ([66cef86](https://github.com/fgarofalo56/csa-inabox/commit/66cef86f1a7da97bb71410e6487128f3800bb732))
+* **gov:** gov-bff-verify — minted-session BFF probes for UC + Purview on the Gov console ([#2031](https://github.com/fgarofalo56/csa-inabox/issues/2031)) ([12b11c8](https://github.com/fgarofalo56/csa-inabox/commit/12b11c8e98d9af4396e7f12ad1e23c87325f6fb9))
+* **gov:** gov-uc-purview-wire workflow — deploy OSS Unity Catalog + wire existing Purview into the Gov console ([#2028](https://github.com/fgarofalo56/csa-inabox/issues/2028)) ([8b40f3d](https://github.com/fgarofalo56/csa-inabox/commit/8b40f3d9de9fe968e18a97e1e28c35cc87a0cdc3))
+* **items:** W9 agent-flow + W10 data-contract+publish-gate + W12 synthetic-data item types ([#2056](https://github.com/fgarofalo56/csa-inabox/issues/2056)) ([76ccd13](https://github.com/fgarofalo56/csa-inabox/commit/76ccd13b23cf6a4adc929d1b0706360a792a2174))
+* **p2:** manifest-driven capability reads + SqlAccessModeSection in report/kql editors + OBO user-mode for connection/AAS executors ([#2036](https://github.com/fgarofalo56/csa-inabox/issues/2036)) ([e648555](https://github.com/fgarofalo56/csa-inabox/commit/e648555b272eff80b5bd67c3180524eb7008f2a2))
+* **perf:** PSR-6 ADX result-cache + cache-headers + row-cap paging; PSR-5 AAS warm/prime + Cosmos-tier default-on + hit-rate telemetry ([#2052](https://github.com/fgarofalo56/csa-inabox/issues/2052)) ([9697612](https://github.com/fgarofalo56/csa-inabox/commit/96976125760eaa878242d788a53734d53e1f29c1))
+* **perf:** PSR-7 dashboard tile fan-out + skeletons + SWR; PSR-8 Copilot turn-latency SLO + tier-router SLO protection; PSR-9 editor code-split skeleton + per-surface TTI budget gating ([#2059](https://github.com/fgarofalo56/csa-inabox/issues/2059)) ([5accee4](https://github.com/fgarofalo56/csa-inabox/commit/5accee43580800bac6e42fd09bd7e78772ca4b00))
+* **shell:** cloud-boundary assurance badge in the header ([#2045](https://github.com/fgarofalo56/csa-inabox/issues/2045)) ([75b0919](https://github.com/fgarofalo56/csa-inabox/commit/75b0919c5d263964710dbfef911da860a4aee271))
+* **thread:** DAX + lakehouse→KQL + medallion-promotion Weave edges ([#2046](https://github.com/fgarofalo56/csa-inabox/issues/2046)) ([edcfaa4](https://github.com/fgarofalo56/csa-inabox/commit/edcfaa43a3c63e19828a45fe75365fc3e1661a7f))
+
+
+### Bug Fixes
+
+* **ci:** green main — gitleaks allowlist, env-sync vars, repair 3 vitest files ([#2027](https://github.com/fgarofalo56/csa-inabox/issues/2027)) ([943bbcb](https://github.com/fgarofalo56/csa-inabox/commit/943bbcb3e9d52d70495bfc1e942d492889c9f254))
+* **gov:** gov-bff-verify — resolve keyvaultref session-secret via Key Vault ([#2032](https://github.com/fgarofalo56/csa-inabox/issues/2032)) ([74c7ec5](https://github.com/fgarofalo56/csa-inabox/commit/74c7ec59de10330e5b28a1db63161d93d77f26c7))
+* **gov:** gov-uc-purview-wire — correct tr usage in location normalization ([#2030](https://github.com/fgarofalo56/csa-inabox/issues/2030)) ([478acd1](https://github.com/fgarofalo56/csa-inabox/commit/478acd13492f5e185c5f4e3a7a00f66a59bb05a5))
+* **gov:** WAF exclusion for the loom_session cookie — unblocks the signed-in browser ([#2053](https://github.com/fgarofalo56/csa-inabox/issues/2053)) ([a68b65f](https://github.com/fgarofalo56/csa-inabox/commit/a68b65f3179f61d2095cce717e2215d3e926435a))
+* **loom-unity:** dbEphemeral EmptyDir volume — the Azure Files MOUNT (not the app) blocks Gov container start ([#2050](https://github.com/fgarofalo56/csa-inabox/issues/2050)) ([3afa25c](https://github.com/fgarofalo56/csa-inabox/commit/3afa25cc32da7af683b1d074f3cc8b9011a208e5))
+* **loom-unity:** FILE_LOCK=NO for the H2 DB on Azure Files (SMB) + robust LA crash-stack diag ([#2040](https://github.com/fgarofalo56/csa-inabox/issues/2040)) ([3c86921](https://github.com/fgarofalo56/csa-inabox/commit/3c869212a503a7cd5cfeaf6ae1d0442f73fb9bed))
+* **loom-unity:** H2 credentials mismatch crash-looped the OSS Unity Catalog server on first boot ([#2037](https://github.com/fgarofalo56/csa-inabox/issues/2037)) ([7b3a474](https://github.com/fgarofalo56/csa-inabox/commit/7b3a4743ed99fe05c27c32dd088e7735546e95eb))
+* **loom-unity:** SMB write-test fallback to local ephemeral H2 dir + LOOM_UNITY_DB_LOCAL; wire sets it in Gov ([#2048](https://github.com/fgarofalo56/csa-inabox/issues/2048)) ([4d93812](https://github.com/fgarofalo56/csa-inabox/commit/4d938128a1cfea66efd30b3ee903479fde7f0d9f))
+* **p1:** close all 8 OPEN-REGISTER P1 gaps ([#2025](https://github.com/fgarofalo56/csa-inabox/issues/2025)) ([a234446](https://github.com/fgarofalo56/csa-inabox/commit/a23444622cb385ccc77e0f847f506e52bdd0cffa))
+* **setup:** submit DLZ deploy template INLINE from a bundled main.json (no storage/SAS) ([#2022](https://github.com/fgarofalo56/csa-inabox/issues/2022)) ([427ee2c](https://github.com/fgarofalo56/csa-inabox/commit/427ee2c95aaf294b273009c84e5132515ac772cb))
+* **spark:** warm-pool self-heal — kill zombie warms, circuit breaker, queued-session reaper, cross-replica config, real Livy errors ([#2026](https://github.com/fgarofalo56/csa-inabox/issues/2026)) ([f181906](https://github.com/fgarofalo56/csa-inabox/commit/f181906a04b33e7b03910b20dc827c09f85c1499))
+* workspace data-plane isolation + delete cascade + new-LZ deploy + brownfield attach-to-LZ ([#2020](https://github.com/fgarofalo56/csa-inabox/issues/2020)) ([26e7f3d](https://github.com/fgarofalo56/csa-inabox/commit/26e7f3dbca0d9a28345f27c65d33dc853be727a5))
+
+
+### Documentation
+
+* **admin:** docs-sweep Batch 1 — 12 admin console Learn docs + LearnPopover hooks ([#2067](https://github.com/fgarofalo56/csa-inabox/issues/2067)) ([8734668](https://github.com/fgarofalo56/csa-inabox/commit/873466843988b35200591d33aea6867af5c6fc76))
+* **admin:** docs-sweep Batch 2 — remaining 15 admin console Learn docs (31/31 complete) ([#2068](https://github.com/fgarofalo56/csa-inabox/issues/2068)) ([fa4fc20](https://github.com/fgarofalo56/csa-inabox/commit/fa4fc20f165e36c35dacc84a40ba21f8f319ad19))
+* **p4:** re-baseline planning docs to shipped reality (OPEN-REGISTER, MASTER-ROLLOUT, scorecards) ([#2029](https://github.com/fgarofalo56/csa-inabox/issues/2029)) ([bf7dcd1](https://github.com/fgarofalo56/csa-inabox/commit/bf7dcd1212f332ab71002a68fc91d5dda2044a4d))
+* **tutorials:** add 7 new editor tutorials + 37 captured screenshots; regenerate index + nav ([#2024](https://github.com/fgarofalo56/csa-inabox/issues/2024)) ([8f1f6a9](https://github.com/fgarofalo56/csa-inabox/commit/8f1f6a97a97212db53ed13f58e04552093a07810))
+
+
+### Continuous Integration
+
+* gov-console-roll — build+roll the Gov console via the Gov deploy SP (non-interactive) ([#2023](https://github.com/fgarofalo56/csa-inabox/issues/2023)) ([928b4f0](https://github.com/fgarofalo56/csa-inabox/commit/928b4f0c87ec53a3c430f5b89ee09ad9f5347923))
+
+
+### Miscellaneous
+
+* **gov:** gov-bff-verify — add loom-unity diagnostics step (revisions/replicas/logs) ([#2033](https://github.com/fgarofalo56/csa-inabox/issues/2033)) ([51ff91d](https://github.com/fgarofalo56/csa-inabox/commit/51ff91da4d6b201ec10d85dac41ca3298ff3bb6a))
+* **gov:** gov-bff-verify — crash-stack from Gov Log Analytics + current image tag ([#2039](https://github.com/fgarofalo56/csa-inabox/issues/2039)) ([c5b280d](https://github.com/fgarofalo56/csa-inabox/commit/c5b280dc438089f6b4a67672376a5cd60166ac23))
+* **gov:** gov-bff-verify — deep ActivationFailed diagnostics (revision error, replica container states, CAE storages, system logs) ([#2034](https://github.com/fgarofalo56/csa-inabox/issues/2034)) ([ffb0d60](https://github.com/fgarofalo56/csa-inabox/commit/ffb0d60ea4cd5b5710b2a826df523750bd910bee))
+* **gov:** gov-bff-verify — dump running loom-unity revision env+image + robust container-log query ([#2049](https://github.com/fgarofalo56/csa-inabox/issues/2049)) ([23d7971](https://github.com/fgarofalo56/csa-inabox/commit/23d7971c4f91e2532f3acc24f178e743aa24e526))
+* **gov:** gov-bff-verify — Front Door WAF block-log diagnostics (operator browser blocked) ([#2043](https://github.com/fgarofalo56/csa-inabox/issues/2043)) ([6265f82](https://github.com/fgarofalo56/csa-inabox/commit/6265f82d371d8e5184a4ab2e53d82cd66f8b48a9))
+
 ## [0.68.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.67.0...csa-inabox-v0.68.0) (2026-07-14)
 
 
