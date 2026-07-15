@@ -23,6 +23,11 @@
  * the same ACA-revision / AKS-rolling-update + Cosmos + audit machinery as
  * PUT /api/admin/env-config). No second write path (no-vaporware.md).
  */
+// IMPORTANT: import from the PURE declarative layer (env-checks), NOT
+// self-audit — this module is consumed by client components (HonestGate,
+// /admin/gates) and self-audit's probe section lazy-imports the Azure clients
+// + copilot orchestrator, which reach next/headers and must never enter a
+// client bundle.
 import {
   ENV_CHECKS,
   VALUE_HINT,
@@ -31,7 +36,7 @@ import {
   type AuditSeverity,
   type CheckResult,
   type EnvSpec,
-} from '@/lib/admin/self-audit';
+} from '@/lib/admin/env-checks';
 
 export type FixitKind = 'env-picker' | 'resource-picker' | 'role-grant' | 'wizard';
 

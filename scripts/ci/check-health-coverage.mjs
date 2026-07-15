@@ -41,6 +41,12 @@ const MAP_PATH = path.join(APP, 'lib', 'admin', 'health-coverage-map.json');
 const AZURE_DIR = path.join(APP, 'lib', 'azure');
 const ITEM_TYPES_DIR = path.join(APP, 'lib', 'catalog', 'item-types');
 const SELF_AUDIT = path.join(APP, 'lib', 'admin', 'self-audit.ts');
+// The declarative ENV_CHECKS layer was split out of self-audit.ts into a pure,
+// client-safe module (lib/admin/env-checks.ts) so the gate registry /
+// HonestGate can import it without dragging the probes' lazy Azure/copilot
+// imports (and next/headers) into a client bundle. The check-id universe spans
+// all three files.
+const ENV_CHECKS_FILE = path.join(APP, 'lib', 'admin', 'env-checks.ts');
 const HEALTH_PROBES = path.join(APP, 'lib', 'admin', 'health-probes.ts');
 const GATES_REGISTRY = path.join(APP, 'lib', 'gates', 'registry.ts');
 const GATE_BRIDGE = path.join(APP, 'lib', 'admin', 'gate-registry.ts');
@@ -68,7 +74,11 @@ function extractCheckIds(file) {
   for (const m of src.matchAll(/probeHttpService\(\s*\n?\s*'([a-z0-9][a-z0-9-]*)'/g)) ids.add(m[1]);
   return ids;
 }
-const checkIds = new Set([...extractCheckIds(SELF_AUDIT), ...extractCheckIds(HEALTH_PROBES)]);
+const checkIds = new Set([
+  ...extractCheckIds(SELF_AUDIT),
+  ...extractCheckIds(ENV_CHECKS_FILE),
+  ...extractCheckIds(HEALTH_PROBES),
+]);
 
 // ── 1 + 4a. clients ↔ map ────────────────────────────────────────────────────
 const clientFiles = fs.readdirSync(AZURE_DIR)
