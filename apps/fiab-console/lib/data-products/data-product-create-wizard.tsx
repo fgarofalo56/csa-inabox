@@ -24,21 +24,22 @@
  * (no-fabric-dependency.md): the draft still lands in Loom.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { shorthands,
-  Badge, Body1, Button, Caption1, Checkbox, Divider, Dropdown, Field, Input, Option,
-  Persona, Spinner, Subtitle2, Text, Textarea,
+  Badge, Button, Caption1, Checkbox, Divider, Dropdown, Field, Input, Option,
+  Spinner, Subtitle2, Text, Textarea,
   MessageBar, MessageBarBody, MessageBarTitle,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
-  ArrowLeft20Regular, ArrowRight20Regular, CheckmarkCircle20Filled, Dismiss16Regular,
-  PersonAdd20Regular, Save20Regular,
+  ArrowLeft20Regular, ArrowRight20Regular, CheckmarkCircle20Filled, Save20Regular,
 } from '@fluentui/react-icons';
 import { PageShell } from '@/lib/components/page-shell';
 import { DataContractDesigner } from '@/lib/editors/components/data-contract-designer';
 import { EMPTY_CONTRACT, contractStats, type DataContract } from '@/lib/dataproducts/contract';
+import { OwnerPeoplePicker, type OwnerRef } from '@/lib/dataproducts/owner-picker';
+import { AttributeInput, type AttributeGroup } from '@/lib/dataproducts/attribute-input';
 import {
   DATA_PRODUCT_TYPES, DATA_PRODUCT_AUDIENCES, DATA_PRODUCT_DESCRIPTION_MAX,
 } from '@/lib/catalog/data-product-enums';
@@ -67,34 +68,13 @@ const useStyles = makeStyles({
   stepNumActive: { backgroundColor: tokens.colorBrandBackground, color: tokens.colorNeutralForegroundOnBrand },
   page: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL, maxWidth: FORM_MAX },
   counter: { alignSelf: 'flex-end' },
-  ownerRow: {
-    display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: tokens.spacingHorizontalS,
-    padding: `${tokens.spacingVerticalSNudge} ${tokens.spacingHorizontalS}`, borderRadius: tokens.borderRadiusMedium,
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-  },
-  ownerResults: {
-    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium, maxHeight: '220px', overflow: 'auto',
-  },
-  ownerResult: {
-    display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: tokens.spacingHorizontalS,
-    padding: `${tokens.spacingVerticalSNudge} ${tokens.spacingHorizontalM}`, cursor: 'pointer',
-    ':hover': { backgroundColor: tokens.colorNeutralBackground1Hover },
-  },
-  chips: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
   footer: { display: 'flex', gap: tokens.spacingHorizontalS, justifyContent: 'space-between', marginTop: tokens.spacingVerticalM, maxWidth: FORM_MAX },
   attrGroup: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, padding: tokens.spacingHorizontalM, borderRadius: tokens.borderRadiusLarge, border: `1px solid ${tokens.colorNeutralStroke2}` },
 });
 
 type Step = 1 | 2 | 3 | 4;
 
-interface Owner { id: string; upn: string; displayName: string }
 interface DomainOption { id: string; name: string; description?: string }
-interface PrincipalResult { id: string; upn?: string; displayName?: string; mail?: string }
-
-type AttributeFieldType =
-  | 'Text' | 'Single choice' | 'Multiple choice' | 'Date' | 'Boolean' | 'Integer' | 'Double' | 'Rich text';
-interface AttributeDef { id: string; name: string; description?: string; fieldType: AttributeFieldType; required?: boolean; choices?: string[] }
-interface AttributeGroup { id: string; name: string; description?: string; attributes: AttributeDef[] }
 interface WorkspaceLite { id: string; name: string }
 
 export function DataProductCreateWizard() {
@@ -108,7 +88,7 @@ export function DataProductCreateWizard() {
   const [description, setDescription] = useState('');
   const [type, setType] = useState('');
   const [audience, setAudience] = useState<string[]>([]);
-  const [owners, setOwners] = useState<Owner[]>([]);
+  const [owners, setOwners] = useState<OwnerRef[]>([]);
 
   // Page 2 — Business
   const [governanceDomainId, setGovernanceDomainId] = useState('');
@@ -136,13 +116,6 @@ export function DataProductCreateWizard() {
   const [groups, setGroups] = useState<AttributeGroup[]>([]);
   const [groupsLoading, setGroupsLoading] = useState(false);
   const [groupsNote, setGroupsNote] = useState<string | undefined>();
-
-  // Owner search
-  const [ownerQuery, setOwnerQuery] = useState('');
-  const [ownerResults, setOwnerResults] = useState<PrincipalResult[]>([]);
-  const [ownerSearching, setOwnerSearching] = useState(false);
-  const [ownerError, setOwnerError] = useState<string | undefined>();
-  const ownerDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | undefined>();
@@ -195,30 +168,6 @@ export function DataProductCreateWizard() {
       } finally { setGroupsLoading(false); }
     })();
   }, [governanceDomainId]);
-
-  // ── Owner search (debounced, real Microsoft Graph) ───────────────────────
-  const runOwnerSearch = useCallback((q: string) => {
-    setOwnerQuery(q);
-    if (ownerDebounce.current) clearTimeout(ownerDebounce.current);
-    if (!q.trim()) { setOwnerResults([]); setOwnerError(undefined); return; }
-    ownerDebounce.current = setTimeout(async () => {
-      setOwnerSearching(true); setOwnerError(undefined);
-      try {
-        const r = await fetch(`/api/admin/permissions/principals?kind=user&q=${encodeURIComponent(q.trim())}`);
-        const j = await r.json();
-        if (j.ok) setOwnerResults(j.results || []);
-        else { setOwnerResults([]); setOwnerError(j.remediation || j.error || `Search failed (HTTP ${r.status}).`); }
-      } catch (e: any) {
-        setOwnerResults([]); setOwnerError(e?.message || String(e));
-      } finally { setOwnerSearching(false); }
-    }, 300);
-  }, []);
-
-  const addOwner = useCallback((p: PrincipalResult) => {
-    setOwners((cur) => cur.some((o) => o.id === p.id) ? cur : [...cur, { id: p.id, upn: p.upn || p.mail || '', displayName: p.displayName || p.upn || p.id }]);
-    setOwnerQuery(''); setOwnerResults([]);
-  }, []);
-  const removeOwner = useCallback((id: string) => setOwners((cur) => cur.filter((o) => o.id !== id)), []);
 
   const overLimit = description.length > DATA_PRODUCT_DESCRIPTION_MAX;
   const page1Valid = !!displayName.trim() && !!type && !overLimit && owners.length > 0;
@@ -358,40 +307,12 @@ export function DataProductCreateWizard() {
             </Dropdown>
           </Field>
 
-          <Field label="Owners" required hint="Search your directory (Microsoft Graph) and add at least one owner.">
-            <Input
-              value={ownerQuery}
-              onChange={(_, d) => runOwnerSearch(d.value)}
-              placeholder="Search by name or UPN…"
-              contentBefore={<PersonAdd20Regular />}
-              contentAfter={ownerSearching ? <Spinner size="tiny" /> : undefined}
-            />
-          </Field>
-          {ownerError && (
-            <MessageBar intent="warning">
-              <MessageBarBody><MessageBarTitle>Directory search unavailable</MessageBarTitle>{ownerError}</MessageBarBody>
-            </MessageBar>
-          )}
-          {ownerResults.length > 0 && (
-            <div className={s.ownerResults}>
-              {ownerResults.map((p) => (
-                <div key={p.id} className={s.ownerResult} onClick={() => addOwner(p)} role="button" tabIndex={0}>
-                  <Persona name={p.displayName || p.upn || p.id} secondaryText={p.upn || p.mail} avatar={{ color: 'colorful' }} />
-                  <Button size="small" appearance="subtle" icon={<PersonAdd20Regular />} aria-label={`Add ${p.displayName}`}>Add</Button>
-                </div>
-              ))}
-            </div>
-          )}
-          {owners.length > 0 && (
-            <div className={s.chips}>
-              {owners.map((o) => (
-                <div key={o.id} className={s.ownerRow}>
-                  <Persona name={o.displayName} secondaryText={o.upn} avatar={{ color: 'colorful' }} />
-                  <Button size="small" appearance="subtle" icon={<Dismiss16Regular />} aria-label={`Remove ${o.displayName}`} onClick={() => removeOwner(o.id)} />
-                </div>
-              ))}
-            </div>
-          )}
+          <OwnerPeoplePicker
+            owners={owners}
+            onChange={setOwners}
+            required
+            hint="Search your directory (Microsoft Graph) and add at least one owner."
+          />
 
           {workspaces.length > 1 && (
             <Field label="Loom workspace" hint="Where this draft data product is stored in Loom.">
@@ -531,74 +452,4 @@ export function DataProductCreateWizard() {
       </div>
     </PageShell>
   );
-}
-
-/** Render a single custom attribute by its Purview field type. */
-function AttributeInput({ attr, value, onChange }: {
-  attr: AttributeDef;
-  value: string | string[] | boolean | undefined;
-  onChange: (v: string | string[] | boolean) => void;
-}) {
-  const common = { label: attr.name, required: attr.required, hint: attr.description } as const;
-  switch (attr.fieldType) {
-    case 'Boolean':
-      return (
-        <Field {...common}>
-          <Checkbox checked={value === true} onChange={(_, d) => onChange(!!d.checked)} label="Yes" />
-        </Field>
-      );
-    case 'Date':
-      return (
-        <Field {...common}>
-          <Input type="date" value={typeof value === 'string' ? value : ''} onChange={(_, d) => onChange(d.value)} />
-        </Field>
-      );
-    case 'Integer':
-    case 'Double':
-      return (
-        <Field {...common}>
-          <Input type="number" value={typeof value === 'string' ? value : ''} onChange={(_, d) => onChange(d.value)} />
-        </Field>
-      );
-    case 'Rich text':
-      return (
-        <Field {...common}>
-          <Textarea value={typeof value === 'string' ? value : ''} onChange={(_, d) => onChange(d.value)} resize="vertical" />
-        </Field>
-      );
-    case 'Single choice':
-      return (
-        <Field {...common}>
-          <Dropdown
-            placeholder="Select a value"
-            selectedOptions={typeof value === 'string' && value ? [value] : []}
-            value={typeof value === 'string' ? value : ''}
-            onOptionSelect={(_, d) => onChange(d.optionValue || '')}
-          >
-            {(attr.choices || []).map((c) => (<Option key={c} value={c}>{c}</Option>))}
-          </Dropdown>
-        </Field>
-      );
-    case 'Multiple choice':
-      return (
-        <Field {...common}>
-          <Dropdown
-            multiselect
-            placeholder="Select values"
-            selectedOptions={Array.isArray(value) ? value : []}
-            value={Array.isArray(value) ? value.join(', ') : ''}
-            onOptionSelect={(_, d) => onChange(d.selectedOptions)}
-          >
-            {(attr.choices || []).map((c) => (<Option key={c} value={c}>{c}</Option>))}
-          </Dropdown>
-        </Field>
-      );
-    case 'Text':
-    default:
-      return (
-        <Field {...common}>
-          <Input value={typeof value === 'string' ? value : ''} onChange={(_, d) => onChange(d.value)} />
-        </Field>
-      );
-  }
 }

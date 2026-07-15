@@ -89,8 +89,11 @@ import { sanitizeContract } from '@/lib/dataproducts/contract';
 import type { DataProductDoc as EditDoc } from '@/lib/dataproducts/edit-model';
 import type {
   DataProductDoc, DataProductOwner, DataProductCustomAttribute,
-  DataProductLink, DataProductStatus,
+  DataProductLink, DataProductAsset,
 } from '@/lib/types/data-product';
+import {
+  resolveLifecycleState, setLifecycleState, toStatus, type LifecycleState,
+} from '@/lib/dataproducts/lifecycle';
 import { apiError } from '@/lib/api/respond';
 import { recordListingView } from '@/lib/marketplace/listing-analytics';
 
@@ -128,17 +131,30 @@ function asArray(v: unknown): string[] {
 }
 
 /**
- * Map incoming owner strings (the dialog edits owners as comma-separated text)
- * back onto stored owner records — reusing an existing rich record when the
- * string matches its upn/displayName/id, so unchanged owners keep their fidelity
- * (including any contact label) and only genuinely new owners become
- * { upn, displayName }.
+ * Merge incoming owners onto stored owner records. DP-17: the edit dialog now
+ * sends the people-picker's rich `{ id, upn, displayName }` records; legacy
+ * callers may still send plain strings. A rich record is kept verbatim (so a
+ * resolved UPN + display name persist without comma parsing); a bare string is
+ * matched against an existing rich record (preserving its contact label) or
+ * becomes `{ upn, displayName }`.
  */
-function mergeOwners(incoming: string[], existing: unknown): OwnerRecord[] {
+function mergeOwners(incoming: Array<string | OwnerRecord>, existing: unknown): OwnerRecord[] {
   const existArr: OwnerRecord[] = Array.isArray(existing) ? (existing as OwnerRecord[]) : [];
-  return incoming.map((s) => {
+  return incoming.map((o) => {
+    if (o && typeof o === 'object') {
+      // Rich record from the people-picker — reuse an existing record's label
+      // when the same principal is already an owner.
+      const key = o.id || o.upn || o.displayName;
+      const match = existArr.find(
+        (e) => e && typeof e === 'object' && key !== undefined &&
+          (e.id === key || e.upn === key || e.displayName === key),
+      );
+      const label = (match && typeof match === 'object' ? match.label : undefined) ?? o.label;
+      return { ...(label ? { label } : {}), id: o.id, upn: o.upn, displayName: o.displayName };
+    }
+    const s = String(o);
     const match = existArr.find(
-      (o) => o && typeof o === 'object' && (o.upn === s || o.displayName === s || o.id === s),
+      (e) => e && typeof e === 'object' && (e.upn === s || e.displayName === s || e.id === s),
     );
     return match ?? { upn: s, displayName: s };
   });
@@ -160,10 +176,23 @@ function applyOwnerLabels(existing: unknown, labels: Record<string, string>): Ow
   });
 }
 
-/** Project a WorkspaceItem to the editable EditDoc the edit dialog reads. */
+/** Project a WorkspaceItem to the editable EditDoc the edit dialog reads.
+ *  DP-17: owners are returned as the rich `{id,upn,displayName}` shape the
+ *  people-picker binds (falling back to the singular `state.owner` for legacy
+ *  records). DP-1: `status` is the ONE canonical lifecycle resolved from
+ *  whichever legacy field carries it, so the dialog never shows a stale badge. */
 function toDoc(item: WithEtag): EditDoc {
   const st = (item.state ?? {}) as Record<string, unknown>;
-  const owners = Array.isArray(st.owners) ? (st.owners as OwnerRecord[]) : [];
+  const ownerRecords: OwnerRecord[] = Array.isArray(st.owners) ? (st.owners as OwnerRecord[]) : [];
+  const richOwners = ownerRecords.map((o) =>
+    typeof o === 'string'
+      ? { id: o, upn: o, displayName: o }
+      : { id: o.id, upn: o.upn, displayName: o.displayName, label: o.label },
+  );
+  if (richOwners.length === 0 && typeof st.owner === 'string' && st.owner.trim()) {
+    const s = st.owner.trim();
+    richOwners.push({ id: s, upn: s, displayName: s });
+  }
   return {
     id: item.id,
     governanceDomainId: (st.governanceDomainId as string) ?? '',
@@ -171,11 +200,11 @@ function toDoc(item: WithEtag): EditDoc {
     description: item.description ?? '',
     type: st.type as string | undefined,
     audience: Array.isArray(st.audience) ? (st.audience as string[]) : [],
-    owners: owners.map(ownerToString).filter(Boolean),
+    owners: richOwners,
     endorsed: !!st.endorsed,
     useCase: (st.useCase as string) ?? '',
     customAttributes: (st.customAttributes as EditDoc['customAttributes']) ?? {},
-    status: (st.status as EditDoc['status']) ?? 'Draft',
+    status: toStatus(resolveLifecycleState(st)),
     createdAt: item.createdAt,
     updatedAt: item.updatedAt,
     createdBy: item.createdBy,
@@ -227,9 +256,33 @@ function toLinks(raw: unknown): DataProductLink[] | undefined {
     .map((l: any) => ({ label: String(l.label ?? l.url), url: String(l.url), assetId: l.assetId }));
 }
 
+/**
+ * Fold a bundle-installed product's `state.content` (DataProductContent —
+ * datasets/glossary/owner/endorsement per content-bundles/types.ts) into the
+ * details projection so an app-installed data product renders its owner + data
+ * assets on the Details page instead of an empty shell (DP-1 projection parity).
+ * The record's own top-level fields always win; content only fills gaps.
+ */
+function contentFold(st: Record<string, unknown>): { owner?: string; dataAssets?: DataProductAsset[]; endorsed?: boolean } {
+  const content = st.content as any;
+  if (!content || content.kind !== 'data-product') return {};
+  const owner = content.owner
+    ? (content.owner.email ? `${content.owner.name} <${content.owner.email}>` : (content.owner.name || undefined))
+    : undefined;
+  const dataAssets: DataProductAsset[] | undefined = Array.isArray(content.datasets)
+    ? content.datasets.map((d: any) => ({ guid: String(d.id || d.name), name: String(d.name), typeName: 'fabric_data_product' }))
+    : undefined;
+  const endorsed = content.endorsement ? content.endorsement === 'certified' : undefined;
+  return { owner, dataAssets, endorsed };
+}
+
 /** Project a WorkspaceItem to the owner details (F3) DataProductDoc. */
 function itemToProduct(item: WithEtag, tenantId: string | null): DataProductDoc {
   const st = (item.state ?? {}) as Record<string, unknown>;
+  const folded = contentFold(st);
+  const existingAssets = Array.isArray(st.dataAssets)
+    ? (st.dataAssets as DataProductAsset[])
+    : undefined;
   return {
     id: item.id,
     tenantId: tenantId ?? '',
@@ -240,13 +293,16 @@ function itemToProduct(item: WithEtag, tenantId: string | null): DataProductDoc 
     useCase: (st.useCase as string) ?? undefined,
     type: st.type as string | undefined,
     audience: Array.isArray(st.audience) ? (st.audience as string[]) : undefined,
-    status: ((st.status as DataProductStatus) ?? 'Draft'),
-    endorsed: !!st.endorsed,
+    // DP-1: ONE canonical lifecycle → the details badge no longer stays "Draft"
+    // after a ribbon/marketplace Publish that wrote a different legacy field.
+    status: toStatus(resolveLifecycleState(st)),
+    endorsed: st.endorsed !== undefined ? !!st.endorsed : (folded.endorsed ?? false),
     updateFrequency: st.updateFrequency as string | undefined,
-    owners: toProductOwners(st.owners, st.owner),
+    owners: toProductOwners(st.owners, st.owner ?? folded.owner),
     customAttributes: toCustomAttributes(st.customAttributes),
     termsOfUse: toLinks(st.termsOfUse),
     documentation: toLinks(st.documentation),
+    dataAssets: existingAssets && existingAssets.length ? existingAssets : folded.dataAssets,
     contract: (st.contract && typeof st.contract === 'object' && !Array.isArray(st.contract))
       ? (st.contract as DataProductDoc['contract'])
       : undefined,
@@ -524,9 +580,15 @@ export async function PATCH(req: NextRequest, props: { params: Promise<{ id: str
   }
 
   // ---- Marketplace editor fields (data-marketplace.tsx) --------------------
+  // DP-1: a publishStatus change is a LIFECYCLE change — route it through the
+  // one canonical mutator (applied after the merge) so the canonical
+  // `lifecycleState` and the whole legacy trio move together (publish-here is
+  // publish-there), rather than writing publishStatus in isolation.
+  let nextLifecycle: LifecycleState | undefined;
   if ('publishStatus' in body) {
     const ps = String(body.publishStatus) as PublishStatus;
-    statePatch.publishStatus = PUBLISH_STATUSES.includes(ps) ? ps : 'Draft';
+    const valid: PublishStatus = PUBLISH_STATUSES.includes(ps) ? ps : 'Draft';
+    nextLifecycle = valid === 'Published' ? 'published' : valid === 'Deprecated' ? 'deprecated' : 'draft';
     patched.push('publishStatus');
   }
   if ('domain' in body) {
@@ -613,9 +675,13 @@ export async function PATCH(req: NextRequest, props: { params: Promise<{ id: str
     patched.push('customAttributes');
   }
   // owners handled after the item loads (needs the existing records to merge).
+  // DP-17: the people-picker sends rich `{id?,upn?,displayName?}` records; a
+  // legacy caller may send plain strings. Accept either.
   const ownersProvided = 'owners' in body;
-  if (ownersProvided && (!Array.isArray(body.owners) || body.owners.some((o: unknown) => typeof o !== 'string'))) {
-    return err('owners must be an array of strings', 400, 'bad_owners');
+  const ownerShapeOk = (o: unknown): boolean =>
+    typeof o === 'string' || (!!o && typeof o === 'object' && !Array.isArray(o));
+  if (ownersProvided && (!Array.isArray(body.owners) || body.owners.some((o: unknown) => !ownerShapeOk(o)))) {
+    return err('owners must be an array of strings or { id?, upn?, displayName? } records', 400, 'bad_owners');
   }
   // F3 owner details page — per-owner contact labels.
   const ownerLabelsProvided = 'ownerLabels' in body;
@@ -640,18 +706,30 @@ export async function PATCH(req: NextRequest, props: { params: Promise<{ id: str
     const item = await loadOwnedItem(id, session.claims.oid);
     if (!item) return err('Data product not found', 404, 'not_found');
 
-    const mergedState: Record<string, unknown> = { ...(item.state ?? {}) };
+    let mergedState: Record<string, unknown> = { ...(item.state ?? {}) };
     for (const [k, v] of Object.entries(statePatch)) {
       if (v === undefined) delete mergedState[k];
       else mergedState[k] = v;
     }
     if (ownersProvided) {
-      mergedState.owners = mergeOwners(body.owners as string[], mergedState.owners);
+      const merged = mergeOwners(body.owners as Array<string | OwnerRecord>, mergedState.owners);
+      mergedState.owners = merged;
+      // DP-17: reconcile the singular `state.owner` (marketplace metadata + the
+      // AI-Search owner facet) into owners[0] so both surfaces stay in sync
+      // instead of drifting between a picker array and a free-text string.
+      mergedState.owner = merged.length ? ownerToString(merged[0]) : undefined;
+      if (mergedState.owner === undefined) delete mergedState.owner;
       patched.push('owners');
     }
     if (ownerLabelsProvided) {
       mergedState.owners = applyOwnerLabels(mergedState.owners, body.ownerLabels as Record<string, string>);
       patched.push('ownerLabels');
+    }
+    // DP-1: a publishStatus change routes through the ONE canonical mutator so
+    // lifecycleState + the legacy trio (lifecycleStatus/status/publishStatus)
+    // all move together — the re-projection below then makes the index match.
+    if (nextLifecycle) {
+      mergedState = setLifecycleState(mergedState, nextLifecycle);
     }
     // Changing the governance domain invalidates any cached domain name.
     if ('governanceDomainId' in statePatch && mergedState.governanceDomainName) {

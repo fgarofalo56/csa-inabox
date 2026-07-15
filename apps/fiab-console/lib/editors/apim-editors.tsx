@@ -45,6 +45,7 @@ import {
   SelectAttributePanel, LinkListAttributePanel, type AttrReceipt,
 } from './components/inline-attribute-panel';
 import { UPDATE_FREQUENCIES, type ExternalLink } from '@/lib/dataproducts/attributes';
+import { OwnerPeoplePicker, type OwnerRef } from '@/lib/dataproducts/owner-picker';
 import { ApimTree } from '@/lib/components/apim/apim-tree';
 import { BackendStateBar } from '@/lib/components/backend-state-bar';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
@@ -2007,7 +2008,11 @@ interface DataProductState {
   displayName: string;
   description: string;
   domain: string;
+  /** Legacy single free-text owner (retired in DP-17 into `owners[]`; kept as a
+   *  mirror of owners[0] for back-compat + the marketplace/AI-Search facet). */
   owner: string;
+  /** DP-17 — rich owner records bound by the shared people-picker. */
+  owners?: OwnerRef[];
   certified: boolean;
   /**
    * F7 — marketplace "Endorsed by governance" flag, distinct from the
@@ -2116,7 +2121,27 @@ function projectDataProductContent(state: Record<string, unknown>): Partial<Data
   if (out.certified === undefined && content.endorsement) {
     out.certified = content.endorsement === 'certified';
   }
+  // DP-17: bind the people-picker off the rich owners[] when present; otherwise
+  // seed it from the singular legacy owner string so the picker shows it.
+  if ((!out.owners || out.owners.length === 0)) {
+    const rich = Array.isArray((state as any).owners) ? (state as any).owners as any[] : [];
+    if (rich.length) {
+      out.owners = rich.map((o) => typeof o === 'string'
+        ? { id: o, upn: o, displayName: o }
+        : { id: o.id || o.upn || o.displayName || '', upn: o.upn || '', displayName: o.displayName || o.upn || o.id || '' });
+    } else if (out.owner) {
+      out.owners = [parseOwnerString(out.owner)];
+    }
+  }
   return out;
+}
+
+/** Parse a legacy "Name <email>" (or bare email/name) owner string into a rich
+ *  owner record so it renders as a people-picker chip. */
+function parseOwnerString(s: string): OwnerRef {
+  const m = s.match(/^\s*(.+?)\s*<([^>]+)>\s*$/);
+  if (m) return { id: m[2], upn: m[2], displayName: m[1] };
+  return { id: s, upn: s, displayName: s };
 }
 
 // Hint payload returned with HTTP 501 from /register-purview when the
@@ -3127,7 +3152,19 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
                   <Input value={state.domain} onChange={(_, d) => patchState({ domain: d.value })} placeholder="0a1b2c3d-4e5f-6789-abcd-ef0123456789" />
                 )}
               </Field>
-              <Field label="Owner (email)"><Input value={state.owner} onChange={(_, d) => patchState({ owner: d.value })} placeholder="owner@contoso.com" /></Field>
+              <div style={{ gridColumn: '1 / -1' }}>
+                <OwnerPeoplePicker
+                  owners={state.owners || []}
+                  onChange={(next) => patchState({
+                    owners: next,
+                    // Mirror owners[0] into the singular `owner` for back-compat
+                    // + the marketplace / AI-Search owner facet (DP-17).
+                    owner: next.length ? (next[0].upn || next[0].displayName || '') : '',
+                  })}
+                  label="Owners"
+                  hint="Search your directory (Microsoft Graph) and add owners."
+                />
+              </div>
               <Field label="SLA"><Input value={state.sla} onChange={(_, d) => patchState({ sla: d.value })} placeholder="99.9% · P95 < 200 ms" /></Field>
               <Field label="Description" style={{ gridColumn: '1 / -1' }}>
                 <Textarea value={state.description} onChange={(_, d) => patchState({ description: d.value })} rows={3} />
