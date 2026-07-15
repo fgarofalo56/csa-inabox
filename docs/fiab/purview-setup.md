@@ -114,6 +114,45 @@ point `LOOM_PURVIEW_ACCOUNT` at it. (Adopting the `-api` host + `/datagovernance
 client surface would be a follow-up; the classic Data Map path remains the
 supported default.)
 
+## Scan-plane register/trigger contract (live-proven 2026-07-15) {#purview-scan-plane-contract}
+
+Requirements of `PUT /scan/datasources/{name}` + scan triggers that the classic
+scan plane enforces but barely documents — each proven by an in-VNet probe
+against `purview-csa-loom-eastus2` and encoded in `purview-client.ts`:
+
+1. **`properties.collection` is required.** A register without it answers
+   `404 ResourceNotFound` (the "resource" is the unspecified collection).
+   `registerDataSource()` / `upsertScan()` default it to the account **root
+   collection** when the caller doesn't pick one.
+2. **Azure kinds need `properties.resourceId`.** An endpoint without a
+   resourceId answers `403 OperationNotAllowed: "…requires a valid resourceId
+   when an endpoint is specified."` (Synapse variant: "…resourceId or
+   subscriptionId"). `purview-source-map.ts` derives the ARM id from the
+   non-secret coordinates (`derivePurviewArmResourceId`).
+3. **Scan-run ids must be GUIDs, and `scanLevel` must be passed.** A non-GUID
+   run id (or a missing `scanLevel`) makes the plane answer
+   `500 InternalServerError: "Unknown error"`. `triggerScanRun()` uses
+   `randomUUID()` + `scanLevel=Full` → `202 Accepted { scanResultId }`.
+4. **Duplicate targets answer `409 DataSource_Duplicate`** ("A data source
+   already exists for this target: …") — sources are keyed by target endpoint,
+   not by name. "Auto-add all sources" treats this as *already registered*
+   (partial success), never a failure.
+5. **Payload-level 403s are not role gates.** `handleSecurityError` only renders
+   the Data-Map-role remediation for genuine auth failures; `OperationNotAllowed`
+   / `InvalidField` / `Scan_*` codes propagate verbatim.
+
+For the scan to actually **complete**, two runtime prerequisites apply (a scan
+triggers fine without them and then fails with an honest error in the run
+record):
+
+- the Purview account's system-assigned MI needs data-plane read on each target
+  (e.g. **Storage Blob Data Reader** on a scanned storage account);
+- on a **PE-only account** (`publicNetworkAccess: Disabled`, the Loom default)
+  the default AutoResolve Azure IR cannot run — the run fails with
+  `(1100) Scan failed due to private endpoint settings on your account`. Create
+  the **managed-VNet IR** (next section) and pin scans to it via
+  `connectedVia`, or deploy ingestion private endpoints.
+
 ## Scanning private-endpoint-locked sources — managed-VNet Integration Runtime {#purview-managed-vnet-ir}
 
 To scan a source that is **locked behind Private Link** (no public network

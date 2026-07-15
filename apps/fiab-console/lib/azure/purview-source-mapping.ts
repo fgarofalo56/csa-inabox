@@ -84,7 +84,9 @@ export const PURVIEW_SOURCE_KIND_SPECS: PurviewKindSpec[] = [
     endpointExample: 'contoso.database.windows.net',
     endpointProperty: 'serverEndpoint',
     scanRulesetName: 'AzureSqlDatabase',
-    scanKind: 'AzureSqlDatabaseManagedIdentity',
+    // Scanning-plane scan-kind enum value (NOT "…ManagedIdentity", which is not
+    // an enum member): https://learn.microsoft.com/rest/api/purview/scanningdataplane/scans
+    scanKind: 'AzureSqlDatabaseMsi',
   },
   {
     kind: 'AzureSynapseWorkspace',
@@ -131,6 +133,42 @@ export const PURVIEW_SOURCE_KIND_SPECS: PurviewKindSpec[] = [
 /** Lookup a spec by Purview kind (undefined for an unknown/legacy kind). */
 export const PURVIEW_KIND_SPEC: Record<string, PurviewKindSpec | undefined> =
   Object.fromEntries(PURVIEW_SOURCE_KIND_SPECS.map((s) => [s.kind, s]));
+
+/**
+ * ARM provider path per Purview source kind — used to derive the
+ * `properties.resourceId` the scan plane REQUIRES for Azure sources.
+ *
+ * PROVEN against the live classic account (2026-07-15 in-VNet probe): a PUT
+ * /scan/datasources/{name} whose properties carry an endpoint but no
+ * `resourceId` answers 403 `OperationNotAllowed: "Azure data source
+ * registration requires a valid resourceId when an endpoint is specified."`
+ * (Synapse variant: "…requires a valid resourceId or subscriptionId.")
+ */
+const ARM_PROVIDER_BY_KIND: Record<string, string | undefined> = {
+  AdlsGen2: 'Microsoft.Storage/storageAccounts',
+  AzureStorage: 'Microsoft.Storage/storageAccounts',
+  AzureSqlDatabase: 'Microsoft.Sql/servers',
+  AzureSynapseWorkspace: 'Microsoft.Synapse/workspaces',
+  AzureDataExplorer: 'Microsoft.Kusto/clusters',
+  AzureCosmosDb: 'Microsoft.DocumentDB/databaseAccounts',
+  AzurePostgreSql: 'Microsoft.DBforPostgreSQL/flexibleServers',
+};
+
+/**
+ * Derive the full ARM resource id for a Purview source registration from its
+ * non-secret coordinates. Returns undefined when any coordinate is missing —
+ * callers then register without it and surface Purview's honest
+ * `OperationNotAllowed` message (never a fabricated id).
+ */
+export function derivePurviewArmResourceId(
+  kind: string,
+  coords: { subscriptionId?: string; resourceGroup?: string; resourceName?: string },
+): string | undefined {
+  const provider = ARM_PROVIDER_BY_KIND[kind];
+  const { subscriptionId, resourceGroup, resourceName } = coords || {};
+  if (!provider || !subscriptionId || !resourceGroup || !resourceName) return undefined;
+  return `/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/${provider}/${resourceName}`;
+}
 
 /**
  * Sanitize a resource name into a Purview data-source referenceName: letters,

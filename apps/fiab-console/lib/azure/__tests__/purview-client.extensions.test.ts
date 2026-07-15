@@ -73,7 +73,11 @@ describe('purview-client (classic Data Map)', () => {
     const ds = await mod.registerDataSource({
       name: 'lake-new',
       kind: 'AzureDataLakeStorageGen2',
-      properties: { endpoint: 'https://lake-new.dfs.core.windows.net' },
+      // Explicit collection → no root-collection default lookup (single call).
+      properties: {
+        endpoint: 'https://lake-new.dfs.core.windows.net',
+        collection: { referenceName: 'finance', type: 'CollectionReference' },
+      },
     });
     expect(ds).toMatchObject({ name: 'lake-new', kind: 'AzureDataLakeStorageGen2' });
     const [url, init] = fetchMock.mock.calls[0];
