@@ -27,6 +27,7 @@ import {
   resolvePublishEnvId,
   publishToM365Copilot,
   coerceM365AuthMode,
+  coerceM365IdentityMode,
   CopilotStudioError,
   type PpEnvironment,
   type KnowledgeSourcePayload,
@@ -56,11 +57,23 @@ function composeCopilotInstructions(
   instructions: string,
   sources: DataAgentSource[],
   foundryAgentId?: string,
+  opts?: { descriptionForModel?: string; deliverAsIs?: boolean },
 ): string {
   const lines: string[] = [];
   lines.push('You are a CSA Loom data agent surfaced inside Microsoft 365 Copilot.');
   lines.push('Answer questions grounded ONLY in the governed data sources attached to this agent.');
   lines.push('');
+  // Agentic-publish depth (G6, item #2) — the model-facing "when to use me"
+  // description. Woven into the real msdyn_instructions the agent runs on (and
+  // therefore into the msdyn_copilots upsert payload) so the M365 Copilot
+  // orchestrator actually reads it when deciding whether to route here — not
+  // just stored as inert channel metadata.
+  const descForModel = (opts?.descriptionForModel || '').trim();
+  if (descForModel) {
+    lines.push('## When to route to this agent (Microsoft 365 Copilot orchestrator)');
+    lines.push(descForModel);
+    lines.push('');
+  }
   if (instructions.trim()) {
     lines.push('## Agent instructions');
     lines.push(instructions.trim());
@@ -80,6 +93,21 @@ function composeCopilotInstructions(
       `This agent is backed by the published Loom / Azure AI Foundry agent "${foundryAgentId}". ` +
         'Route data questions to that agent and present its grounded answers.',
     );
+    lines.push('');
+  }
+  // Agentic-publish depth (G6, item #3) — deliver-as-is directive. When the
+  // operator enables it, the composed instructions tell the orchestrator to
+  // return this agent's answer verbatim rather than re-synthesizing it. This is
+  // a real behavior change written into msdyn_instructions, not just a stored
+  // flag (Copilot Studio "respond directly to users" semantics).
+  if (opts?.deliverAsIs) {
+    lines.push('## Response delivery');
+    lines.push(
+      'Deliver this agent\'s answer to the user exactly as produced. Do NOT rephrase, ' +
+        'summarize, merge, or re-synthesize the response — return it verbatim, preserving ' +
+        'any tables, citations, and formatting.',
+    );
+    lines.push('');
   }
   return lines.join('\n').slice(0, 15000);
 }
@@ -138,6 +166,7 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
           deliverAsIs: m365.deliverAsIs,
           connectedAgent: m365.connectedAgent,
           authMode: m365.authMode,
+          identityMode: m365.identityMode,
         }
       : null,
   });
@@ -199,6 +228,14 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   const deliverAsIs = body?.deliverAsIs !== undefined ? body.deliverAsIs === true : prevM365.deliverAsIs === true;
   const connectedAgent = body?.connectedAgent !== undefined ? body.connectedAgent === true : prevM365.connectedAgent === true;
   const authMode = coerceM365AuthMode(body?.authMode !== undefined ? body.authMode : prevM365.authMode);
+  // Agentic-publish depth (G6, item #6) — downstream service-identity delegation.
+  // 'user' = call downstream Foundry/Azure resources on-behalf-of the invoking
+  // M365 user (OBO); 'agent-author' = call under the agent author's own service
+  // identity. This is a distinct axis from the channel end-user `authMode`
+  // (none/entra/manual), so it is persisted under its own `identityMode` key.
+  const identityMode = coerceM365IdentityMode(
+    body?.identityMode !== undefined ? body.identityMode : prevM365.identityMode,
+  );
 
   // Knowledge references: attach a Loom data-agent deep link so admins reviewing
   // the agent in the M365 admin center can see the source of truth. AI Search
@@ -213,7 +250,10 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     });
   }
 
-  const csInstructions = composeCopilotInstructions(instructions, sources, foundryAgentId);
+  const csInstructions = composeCopilotInstructions(instructions, sources, foundryAgentId, {
+    descriptionForModel,
+    deliverAsIs,
+  });
 
   try {
     const result = await publishToM365Copilot(envId, {
@@ -227,6 +267,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       deliverAsIs,
       connectedAgent,
       authMode,
+      identityMode,
     });
 
     const now = new Date().toISOString();
@@ -245,6 +286,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
         deliverAsIs: result.deliverAsIs,
         connectedAgent: result.connectedAgent,
         authMode: result.authMode,
+        identityMode: result.identityMode,
         publishedAt: now,
       },
     };
