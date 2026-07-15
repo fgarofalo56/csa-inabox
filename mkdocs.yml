@@ -1830,7 +1830,12 @@ nav:
               - Loom LAW Monitoring + Alert Pack: fiab/runbooks/loom-law-monitoring.md
               - Secrets Bootstrap (per boundary): fiab/runbooks/secrets-bootstrap.md
           - Developer:
+              - REST API (OpenAPI): fiab/developer/api.md
               - Scoped API tokens (PAT): fiab/developer/api-tokens.md
+              - loom CLI: fiab/developer/cli.md
+              - Terraform: fiab/developer/terraform.md
+              - SCIM 2.0 provisioning: fiab/developer/scim.md
+              - SDKs: fiab/developer/sdk.md
 
       # ------------------------------------------------------------
       # 9. Governance & Compliance

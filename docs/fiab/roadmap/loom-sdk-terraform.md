@@ -8,15 +8,20 @@
 > Per `.claude/rules/no-vaporware.md`, this is disclosed as roadmap, not
 > presented as a working feature.
 >
-> **Update — the TypeScript SDK shipped.** `@csa-loom/sdk`
+> **Update — the developer platform shipped.** Four working pieces this roadmap
+> builds on are now live: an **OpenAPI 3.1 spec** (`GET /api/openapi.json`) + an
+> in-app explorer (`/developer/api`); **SCIM 2.0 provisioning**
+> (`/api/scim/v2/{Users,Groups}`); a **real, `terraform`-consumable module** at
+> [`tools/terraform`](https://github.com/fgarofalo56/csa-inabox/tree/main/tools/terraform)
+> built on the community `Mastercard/restapi` provider (creates a Loom workspace +
+> item via the API today); and the **`@csa-loom/sdk`** TypeScript client
 > ([`apps/loom-sdk`](https://github.com/fgarofalo56/csa-inabox/tree/main/apps/loom-sdk))
-> is now a real, published-shape package: a typed `LoomClient` over the Loom REST
-> API (workspaces / items / catalog / thread / tokens), cookie **or** scoped-token
-> auth, built + unit-tested, released by `publish-loom-sdk.yml`. The **Python
-> SDK** (`csa-loom`) and the dedicated Go **Terraform provider** remain the
-> roadmap items below — until then, generate a Python client from the OpenAPI
-> spec (`openapi-generator-cli -i <host>/api/openapi.json -g python`) and use the
-> shipped `restapi`-backed Terraform module (`tools/terraform`).
+> — a typed `LoomClient` (workspaces / items / catalog / thread / tokens), cookie
+> **or** scoped-token auth, built + unit-tested, released by `publish-loom-sdk.yml`.
+> The **Python SDK** (`csa-loom`) and the dedicated **Go `terraform-provider-loom`**
+> remain the roadmap items below — until then, generate a Python client from the
+> OpenAPI spec (`openapi-generator-cli -i <host>/api/openapi.json -g python`) and
+> use the shipped `restapi`-backed Terraform module.
 
 Fabric ships a Python SDK-style surface (via the Fabric REST API + the
 `fabric-cli`) and a community Terraform provider (`microsoft/fabric`). To reach

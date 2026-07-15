@@ -1,0 +1,7 @@
+# Copy to terraform.tfvars and fill in, OR pass via -var / TF_VAR_*.
+# NEVER commit a real token.
+
+loom_api_url   = "https://csa-loom.limitlessdata.ai"
+# loom_token   = "loom_pat_xxxxxxxxxxxxxxxxxxxxxxxx_yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy"
+workspace_name = "tf-provisioned-workspace"
+lakehouse_name = "tf-lakehouse"
