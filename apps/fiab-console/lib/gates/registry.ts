@@ -707,6 +707,38 @@ export const GATE_META: Record<string, GateMeta> = {
     loaders: { LOOM_DATABRICKS_HOSTNAME: L.databricks },
     legacyCodes: ['lakebase_not_configured'],
   },
+  // ── health-coverage convergence (#2093) — the audit-added backend specs ──
+  'svc-powerplatform': {
+    surfaces: [{ path: '/items/power-app', label: 'Power Platform control plane (power-* items)' }],
+    fixit: { kind: 'role-grant', grantNote: 'A Power Platform admin must register the Console UAMI as a management app (New-PowerAppManagementApp; scripts/csa-loom/grant-powerplatform-sp.ps1) — a one-time tenant action, not an env write.' },
+  },
+  'svc-stream-analytics': {
+    surfaces: [{ path: '/items/eventstream', label: 'Eventstream processing (ASA jobs)' }],
+    fixit: { kind: 'env-picker' },
+  },
+  'svc-azure-sql': {
+    surfaces: [
+      { path: '/items/sql-database', label: 'SQL database items' },
+      { path: '/items/mirrored-database', label: 'Mirroring source ops' },
+    ],
+    fixit: { kind: 'resource-picker' },
+    loaders: { LOOM_AZURE_SQL_DEFAULT_SERVER: L.sqlServer },
+    legacyCodes: ['sql_default_server_not_configured'],
+  },
+  'svc-postgres': {
+    surfaces: [{ path: '/items/lakebase-postgres', label: 'Lakebase / pgvector Postgres host' }],
+    fixit: { kind: 'resource-picker' },
+    loaders: { LOOM_POSTGRES_HOST: L.pgFqdn },
+  },
+  'svc-eventgrid': {
+    surfaces: [{ path: '/admin/webhooks', label: 'Business-event topics' }],
+    fixit: { kind: 'env-picker' },
+  },
+  'svc-redis-result-cache': {
+    surfaces: [{ path: '/items/kql-database', label: 'Query result cache (scale-out)' }],
+    fixit: { kind: 'env-picker' },
+    autoResolveNote: 'Unset → the built-in per-replica in-memory result cache serves everything with zero loss of function.',
+  },
 };
 
 // ── registry composition ─────────────────────────────────────────────────────

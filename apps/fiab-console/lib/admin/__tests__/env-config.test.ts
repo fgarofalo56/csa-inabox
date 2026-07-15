@@ -139,15 +139,19 @@ describe('admin/env-config registry', () => {
     // LOOM_DIRECTLAKE_URL, LOOM_BROKER_URL, LOOM_BROKER_REDIS — the three optional
     // default-OFF H-band service URLs + the shared Redis host). Bumped to 73 by
     // PSR-3 (LOOM_SPARK_POOL_LEASE_CONTAINER + LOOM_SPARK_POOL_REDIS — the warm
-    // Spark pool's cross-replica lease-store substrate signals). Bumped to 125
-    // by the wave-3 G2 gate-registry expansion: 40 formerly-bespoke
-    // *_not_configured gates promoted into ENV_CHECKS (AAS, AML, APIM, MIP/DLP,
-    // Key Vault, Event Grid, Service Bus, IoT Hub, Digital Twins, Airflow,
-    // Batch, Postgres family, dbt, SHIR, Dataverse, medallion layers, …) so
-    // every gate is editable on /admin/env-config and resolvable from
+    // Spark pool's cross-replica lease-store substrate signals). Bumped to 139
+    // by the CONVERGED wave-3 expansions: the health-coverage audit
+    // (docs/fiab/health-coverage-audit.md: svc-aas, svc-aml, svc-apim,
+    // svc-powerplatform, svc-keyvault, svc-servicebus, svc-stream-analytics,
+    // svc-azure-sql, svc-postgres, svc-eventgrid, svc-batch,
+    // svc-redis-result-cache) UNIONED with the G2 gate-registry promotion of
+    // every remaining bespoke *_not_configured gate (MIP/DLP, Event Grid
+    // topics/webhooks, IoT Hub, Digital Twins, Airflow, Postgres family, dbt,
+    // SHIR, Dataverse, medallion layers, Cosmos control-plane, embeddings, …)
+    // so every gate is editable on /admin/env-config and resolvable from
     // /admin/gates + the Fix-it wizard (docs/fiab/gate-registry.md), plus
     // LOOM_AOAI_DEPLOYMENT joining the svc-aoai anyOf groups.
-    expect(EDITABLE_ENV.length).toBe(125);
+    expect(EDITABLE_ENV.length).toBe(134);
   });
 
   it('surfaces the wave-2 env vars as settable (previously dropped by the whitelist)', () => {
@@ -205,10 +209,11 @@ describe('admin/env-config registry', () => {
       expect(getEditableEnv(k)?.optionalDefault, k).toBe(true);
     }
     // Exactly the optionalDefault keys — pins the set so any future drift that
-    // would drop /admin/env-config below full coverage fails CI. Wave-3 (G2)
-    // adds the Event Grid webhook transport pair (svc-webhooks-eventgrid):
-    // direct HMAC-signed HTTPS delivery is the fully-functional default, Event
-    // Grid is an optional alternative transport.
+    // would drop /admin/env-config below full coverage fails CI. Wave-3 adds
+    // the Event Grid webhook transport pair (svc-webhooks-eventgrid: direct
+    // HMAC-signed HTTPS delivery is the fully-functional default) and
+    // LOOM_RESULT_CACHE_REDIS (the query result cache falls back to the
+    // per-replica in-memory cache with zero loss of function).
     const optDefault = EDITABLE_ENV.filter((e) => e.optionalDefault).map((e) => e.key).sort();
     expect(optDefault).toEqual([
       'LOOM_AUDIT_DCR_ENDPOINT', 'LOOM_AUDIT_DCR_ID',
@@ -217,6 +222,7 @@ describe('admin/env-config registry', () => {
       'LOOM_EVENTGRID_TOPIC_ENDPOINT', 'LOOM_EVENTGRID_TOPIC_KEY',
       'LOOM_LANGUAGE_ENDPOINT', 'LOOM_ONELAKE_URL',
       'LOOM_PLAN_BACKING_SQL_DATABASE', 'LOOM_PLAN_BACKING_SQL_SERVER',
+      'LOOM_RESULT_CACHE_REDIS',
       'LOOM_TRANSLATOR_ENDPOINT', 'LOOM_VISION_ENDPOINT',
     ]);
   });

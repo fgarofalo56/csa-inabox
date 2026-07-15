@@ -29,7 +29,8 @@ export type AuditCategory =
   | 'enrichment'
   | 'builders'
   | 'catalog-governance'
-  | 'ai-copilot';
+  | 'ai-copilot'
+  | 'workloads';
 
 export interface CheckResult {
   id: string;
@@ -215,6 +216,21 @@ export const VALUE_HINT: Record<string, string> = {
   // ── Warm Spark pool cross-replica lease store (PSR-3) ──
   LOOM_SPARK_POOL_REDIS: '<hband-redis-host>.redis.cache.windows.net:6380',
   LOOM_SPARK_POOL_LEASE_CONTAINER: 'spark-warm-leases',
+  // ── wave-3 coverage: backends the earlier checks missed entirely (see
+  //    docs/fiab/health-coverage-audit.md — semantic/AAS, AML, APIM, Power
+  //    Platform, Key Vault, Service Bus, Stream Analytics, Azure SQL, Postgres,
+  //    Event Grid, Batch, result-cache Redis) ──
+  LOOM_AAS_SERVER_NAME: '<analysis-services-server-name>',
+  LOOM_AML_RESOURCE_GROUP: '<aml-resource-group>',
+  LOOM_KEY_VAULT_NAME: '<vault-name>',
+  LOOM_SERVICEBUS_RG: '<servicebus-resource-group (defaults to the DLZ RG)>',
+  LOOM_ASA_RG: '<stream-analytics-resource-group (defaults to the DLZ RG)>',
+  LOOM_AZURE_SQL_DEFAULT_SERVER: '<sql-logical-server>.database.windows.net',
+  LOOM_POSTGRES_HOST: '<postgres-flexible-server>.postgres.database.azure.com',
+  LOOM_EVENTGRID_BUSINESS_TOPIC: '<eventgrid-custom-topic-name>',
+  LOOM_EVENTGRID_RG: '<eventgrid-resource-group (defaults to the DLZ RG)>',
+  LOOM_RESULT_CACHE_REDIS: '<redis-host>.redis.cache.windows.net:6380',
+  LOOM_PAGINATED_RENDER_URL: 'https://<paginated-report-renderer-function>.azurewebsites.net',
 };
 
 /** Pick the concrete env vars an admin should set from a missing-list that may
@@ -224,8 +240,9 @@ function varsToSet(missing: string[]): string[] {
 }
 
 /** Build portal steps + a pre-filled PowerShell snippet that sets the given env
- * vars on the Console container app (the most common Loom fix). */
-function envVarFix(vars: string[]): { portalSteps: string[]; fixScript: string } {
+ * vars on the Console container app (the most common Loom fix). Exported for
+ * the extended probes (lib/admin/health-probes.ts — injected, no cycle). */
+export function envVarFix(vars: string[]): { portalSteps: string[]; fixScript: string } {
   const setArgs = vars.map((v) => `"${v}=${VALUE_HINT[v] || `<set-${v}>`}"`).join(' ');
   const portalSteps = [
     `Azure portal → Container Apps → open "${CTX.app}" (resource group "${CTX.adminRg}").`,
@@ -742,27 +759,6 @@ export const ENV_CHECKS: EnvSpec[] = [
   //    wizard. All optional/warnOnMiss — a fresh minimal deploy is all-gates,
   //    zero-fails. Canonical producers: the per-client *ConfigGate() helpers. ──
   {
-    id: 'svc-aas', category: 'azure-services', title: 'Analysis Services (semantic-model fast path)', severity: 'optional',
-    anyOf: [['LOOM_AAS_SERVER', 'LOOM_AAS_XMLA_ENDPOINT', 'LOOM_POWERBI_XMLA_ENDPOINT']], warnOnMiss: true,
-    remediation: 'Set LOOM_AAS_SERVER (asazure://… server) or LOOM_AAS_XMLA_ENDPOINT so semantic models ride the AAS in-memory fast path (aasConfigGate / xmlaConfigGate). The Loom-native tabular layer over Synapse serverless works without it. Not available in Gov clouds (AAS_NOT_IN_GOV); LOOM_POWERBI_XMLA_ENDPOINT is the Power BI opt-in alternative only.',
-    provisionedBy: 'modules/admin-plane/analysis-services.bicep (aasEnabled) → apps[] env LOOM_AAS_SERVER',
-    role: 'Analysis Services Administrator (Console UAMI) on the server',
-  },
-  {
-    id: 'svc-aml', category: 'azure-services', title: 'Azure Machine Learning (AutoML / ML models)', severity: 'optional',
-    required: ['LOOM_AML_WORKSPACE'], anyOf: [['LOOM_AML_REGION', 'LOOM_LOCATION']], warnOnMiss: true,
-    remediation: 'Set LOOM_AML_WORKSPACE (+ LOOM_AML_REGION) to enable AutoML runs, ML model train/deploy, and datastore browsing (amlConfigGate / automlConfigGate).',
-    provisionedBy: 'modules/deploy-planner/ml-workspace.bicep → apps[] env LOOM_AML_WORKSPACE / LOOM_AML_REGION',
-    role: 'AzureML Data Scientist (Console UAMI) on the workspace',
-  },
-  {
-    id: 'svc-apim', category: 'azure-services', title: 'API Management (marketplace / publish-as-API)', severity: 'optional',
-    required: ['LOOM_APIM_NAME'], anyOf: [['LOOM_APIM_RG', 'LOOM_ADMIN_RG']], warnOnMiss: true,
-    remediation: 'Set LOOM_APIM_NAME (+ LOOM_APIM_RG) so the API marketplace, /admin/api-management, and data-product publish-as-API drive a real APIM service (apimConfigGate).',
-    provisionedBy: 'modules/admin-plane/apim.bicep (apimEnabled) → apps[] env LOOM_APIM_NAME / LOOM_APIM_RG',
-    role: 'API Management Service Contributor (Console UAMI) on the service',
-  },
-  {
     id: 'svc-mip', category: 'security', title: 'Microsoft Information Protection (sensitivity labels)', severity: 'optional',
     required: ['LOOM_MIP_ENABLED'], warnOnMiss: true,
     remediation: 'Set LOOM_MIP_ENABLED=true and grant the Console UAMI Graph InformationProtectionPolicy.Read.All so label pickers read the tenant\'s real MIP labels (mip_not_configured). Loom-native labels work without it.',
@@ -819,13 +815,6 @@ export const ENV_CHECKS: EnvSpec[] = [
     role: 'none (connection-string auth)',
   },
   {
-    id: 'svc-keyvault', category: 'security', title: 'Key Vault (secrets / shortcut credentials / CMK)', severity: 'optional',
-    anyOf: [['LOOM_KEY_VAULT_URI', 'LOOM_SHORTCUT_KEYVAULT']], warnOnMiss: true,
-    remediation: 'Set LOOM_KEY_VAULT_URI (and/or LOOM_SHORTCUT_KEYVAULT for shortcut credentials) so secret-backed features — shortcut auth, eventstream TLS certs, CMK — resolve real Key Vault secrets (kv_not_configured / cmk_not_configured).',
-    provisionedBy: 'modules/admin-plane/main.bicep (Key Vault) → apps[] env LOOM_KEY_VAULT_URI',
-    role: 'Key Vault Secrets User (Console UAMI) on the vault',
-  },
-  {
     id: 'svc-eventgrid-topics', category: 'azure-services', title: 'Event Grid topics (real-time intelligence)', severity: 'optional',
     anyOf: [['LOOM_EVENTGRID_SUB', 'LOOM_SUBSCRIPTION_ID']], warnOnMiss: true,
     remediation: 'Set LOOM_EVENTGRID_SUB (falls back to LOOM_SUBSCRIPTION_ID) so the event-grid-topic editor can manage topics via ARM (eventgrid_not_configured).',
@@ -839,13 +828,6 @@ export const ENV_CHECKS: EnvSpec[] = [
     remediation: 'Webhook delivery works day-one via signed direct HTTPS. To route deliveries through Azure Event Grid instead, set LOOM_EVENTGRID_TOPIC_ENDPOINT + LOOM_EVENTGRID_TOPIC_KEY (custom topic + access key).',
     provisionedBy: 'modules/admin-plane/eventgrid-webhooks.bicep (custom topic) → apps[] env',
     role: 'none (topic key auth)',
-  },
-  {
-    id: 'svc-servicebus', category: 'azure-services', title: 'Service Bus (service-bus-namespace items)', severity: 'optional',
-    required: ['LOOM_SERVICEBUS_NAMESPACE'], warnOnMiss: true,
-    remediation: 'Set LOOM_SERVICEBUS_NAMESPACE (+ optional _SUB/_RG overrides) to enable the Service Bus namespace editor (servicebus_not_configured).',
-    provisionedBy: 'modules/landing-zone (Service Bus namespace) → apps[] env',
-    role: 'Azure Service Bus Data Owner (Console UAMI) on the namespace',
   },
   {
     id: 'svc-iothub', category: 'azure-services', title: 'IoT Hub (iot-hub items)', severity: 'optional',
@@ -867,13 +849,6 @@ export const ENV_CHECKS: EnvSpec[] = [
     remediation: 'Set LOOM_AIRFLOW_ENDPOINT to the Airflow web endpoint so the airflow-job editor drives real DAG runs (airflow.bicep deploys it).',
     provisionedBy: 'modules/deploy-planner/airflow.bicep → apps[] env LOOM_AIRFLOW_ENDPOINT',
     role: 'Airflow API access (Console UAMI / basic auth via Key Vault)',
-  },
-  {
-    id: 'svc-batch', category: 'azure-services', title: 'Azure Batch (batch-pool items)', severity: 'optional',
-    required: ['LOOM_BATCH_ACCOUNT'], warnOnMiss: true,
-    remediation: 'Set LOOM_BATCH_ACCOUNT (+ optional _SUB/_RG) so the batch-pool editor manages real Batch pools (batch_not_configured).',
-    provisionedBy: 'modules/deploy-planner/batch-account.bicep → apps[] env LOOM_BATCH_ACCOUNT',
-    role: 'Azure Batch Contributor (Console UAMI) on the account',
   },
   {
     id: 'svc-copyjob-control', category: 'builders', title: 'Copy job — watermark control store (Azure SQL)', severity: 'optional',
@@ -1022,6 +997,94 @@ export const ENV_CHECKS: EnvSpec[] = [
     provisionedBy: 'modules/landing-zone (Databricks workspace) → apps[] env',
     role: 'Databricks workspace access (Console UAMI)',
   },
+  // ── wave-3 coverage: backends with NO check at all until the coverage audit
+  //    (docs/fiab/health-coverage-audit.md). Each is an honest env gate; the
+  //    matching live probe (lib/admin/health-probes.ts) exercises the real call. ──
+  {
+    id: 'svc-aas', category: 'azure-services', title: 'Analysis Services (semantic-model fast path)', severity: 'optional',
+    anyOf: [['LOOM_AAS_SERVER', 'LOOM_AAS_SERVER_NAME', 'LOOM_AAS_XMLA_ENDPOINT', 'LOOM_POWERBI_XMLA_ENDPOINT']], warnOnMiss: true,
+    remediation: 'Set LOOM_AAS_SERVER (asazure://… URI) or LOOM_AAS_SERVER_NAME so semantic models / reports use the AAS tabular fast path. Without it the Loom-native tabular layer falls back to Synapse Serverless (slower cold queries, still functional). No Power BI / Fabric required.',
+    provisionedBy: 'modules/admin-plane/aas.bicep (aasEnabled → the loom-aas server) → apps[] env LOOM_AAS_SERVER',
+    role: 'Analysis Services Admin (Console UAMI) on the server (wired by the module)',
+  },
+  {
+    id: 'svc-aml', category: 'azure-services', title: 'Azure Machine Learning (ML models / AutoML / experiments)', severity: 'optional',
+    anyOf: [['LOOM_AML_WORKSPACE', 'LOOM_FOUNDRY_NAME']], warnOnMiss: true,
+    remediation: 'Set LOOM_AML_WORKSPACE (+ LOOM_AML_RESOURCE_GROUP; falls back to the AI Foundry hub via LOOM_FOUNDRY_NAME/LOOM_FOUNDRY_RG) so ml-model / ml-experiment / AutoML items have a workspace. The Data Science item family is gated on this.',
+    provisionedBy: 'modules/admin-plane (aiFoundryEnabled → hub workspace) or a dedicated AML workspace → apps[] env (resolve-aml-target.ts)',
+    role: 'AzureML Data Scientist + Contributor (Console UAMI) on the workspace',
+  },
+  {
+    id: 'svc-apim', category: 'builders', title: 'API Management (publish-as-API / API marketplace)', severity: 'optional',
+    anyOf: [['LOOM_APIM_NAME', 'LOOM_APIM_RG', 'LOOM_SUBSCRIPTION_ID']], warnOnMiss: true,
+    remediation: 'Set LOOM_SUBSCRIPTION_ID (LOOM_APIM_NAME / LOOM_APIM_RG default to the deployment names) so publish-as-API and the API marketplace can target the APIM service. The probe verifies the service actually resolves.',
+    provisionedBy: 'modules/admin-plane (apimEnabled → APIM service) → apps[] env LOOM_APIM_NAME / LOOM_APIM_RG',
+    role: 'API Management Service Contributor (Console UAMI) on the service',
+  },
+  {
+    id: 'svc-powerplatform', category: 'azure-services', title: 'Power Platform control plane (power-* items / Copilot Studio)', severity: 'optional',
+    required: ['LOOM_UAMI_CLIENT_ID'], warnOnMiss: true,
+    remediation: 'The Power Platform BAP API authenticates as the Console UAMI (LOOM_UAMI_CLIENT_ID) — a Power Platform admin must also register it as a management app (New-PowerAppManagementApp; scripts/csa-loom/grant-powerplatform-sp.ps1). The live probe surfaces the known SP-not-allowed 403 with the exact one-time fix.',
+    provisionedBy: 'modules/admin-plane/main.bicep (uami-console → apps[] env) + operator-run PP management-app registration',
+    role: 'Power Platform management application (tenant admin registration) + Environment Admin where environments are managed',
+  },
+  {
+    id: 'svc-keyvault', category: 'security', title: 'Key Vault (connection / shortcut / MCP secrets)', severity: 'recommended',
+    anyOf: [['LOOM_KEY_VAULT_URI', 'LOOM_KEY_VAULT_URL', 'LOOM_KEY_VAULT_NAME', 'LOOM_SHORTCUT_KEYVAULT']], warnOnMiss: true,
+    remediation: 'Set LOOM_KEY_VAULT_URI (or LOOM_KEY_VAULT_NAME) so shortcut external-source credentials, Git PATs, and MCP server secrets have a secret store. Grant the Console UAMI "Key Vault Secrets Officer" on the vault.',
+    provisionedBy: 'modules/admin-plane/main.bicep (Key Vault + RBAC grant → apps[] env LOOM_KEY_VAULT_URI, auto-derived)',
+    role: 'Key Vault Secrets Officer (Console UAMI) on the vault',
+  },
+  {
+    id: 'svc-servicebus', category: 'azure-services', title: 'Service Bus (queues / topics — business events)', severity: 'optional',
+    required: ['LOOM_SERVICEBUS_NAMESPACE'], warnOnMiss: true,
+    remediation: 'Set LOOM_SERVICEBUS_NAMESPACE (+ LOOM_SERVICEBUS_RG) to enable Service Bus queue/topic business-event routing. Event Grid / Event Hubs paths work without it.',
+    provisionedBy: 'modules/landing-zone (Service Bus namespace) → apps[] env LOOM_SERVICEBUS_NAMESPACE',
+    role: 'Azure Service Bus Data Owner (Console UAMI) on the namespace',
+  },
+  {
+    id: 'svc-stream-analytics', category: 'azure-services', title: 'Stream Analytics (eventstream processing jobs)', severity: 'optional',
+    anyOf: [['LOOM_ASA_RG', 'LOOM_DLZ_RG']], warnOnMiss: true,
+    remediation: 'Set LOOM_ASA_RG (falls back to LOOM_DLZ_RG) so eventstream processing deploys real Stream Analytics jobs. Grant the Console UAMI Contributor on that RG.',
+    provisionedBy: 'modules/landing-zone (DLZ RG) → apps[] env; ASA jobs are created on demand by the eventstream provisioner',
+    role: 'Contributor (Console UAMI) on the Stream Analytics resource group',
+  },
+  {
+    id: 'svc-azure-sql', category: 'azure-services', title: 'Azure SQL (SQL database items / mirroring source ops)', severity: 'optional',
+    anyOf: [['LOOM_AZURE_SQL_DEFAULT_SERVER', 'LOOM_SUBSCRIPTION_ID']], warnOnMiss: true,
+    remediation: 'Azure SQL item creates provision via ARM under LOOM_SUBSCRIPTION_ID; set LOOM_AZURE_SQL_DEFAULT_SERVER to bind existing-database flows to a default logical server. The Console UAMI needs an AAD login on target servers for data-plane ops (mirroring change-feed DDL).',
+    provisionedBy: 'modules/deploy-planner/azure-sql.bicep (on-demand) → per-item state; default server via apps[] env',
+    role: 'SQL Server Contributor (ARM) + AAD login with db_owner on managed databases (Console UAMI)',
+  },
+  {
+    id: 'svc-postgres', category: 'azure-services', title: 'PostgreSQL Flexible Server (Lakebase / pgvector)', severity: 'optional',
+    anyOf: [['LOOM_POSTGRES_HOST', 'LOOM_PGVECTOR_HOST']], warnOnMiss: true,
+    remediation: 'Set LOOM_POSTGRES_HOST (Lakebase Postgres) and/or LOOM_PGVECTOR_HOST (vector store) with LOOM_POSTGRES_AAD_USER so lakebase-postgres items and the pgvector backend connect. AAD token auth — no password.',
+    provisionedBy: 'modules/landing-zone/postgres-flex.bicep (postgresEnabled) → apps[] env LOOM_POSTGRES_HOST / LOOM_POSTGRES_AAD_USER',
+    role: 'AAD administrator-created role for the Console UAMI on the server (azure_ad_user)',
+  },
+  {
+    id: 'svc-eventgrid', category: 'azure-services', title: 'Event Grid (business-events topics / shims)', severity: 'optional',
+    anyOf: [['LOOM_EVENTGRID_BUSINESS_TOPIC', 'LOOM_EVENTGRID_RG', 'LOOM_DLZ_RG']], warnOnMiss: true,
+    remediation: 'Set LOOM_EVENTGRID_BUSINESS_TOPIC (custom topic for business events; RG falls back to LOOM_DLZ_RG). Grant the Console UAMI "EventGrid Contributor" on the RG and "EventGrid Data Sender" on the topic.',
+    provisionedBy: 'modules/landing-zone (Event Grid custom topic) → apps[] env LOOM_EVENTGRID_BUSINESS_TOPIC',
+    role: 'EventGrid Contributor (RG) + EventGrid Data Sender (topic) — Console UAMI',
+  },
+  {
+    id: 'svc-batch', category: 'azure-services', title: 'Azure Batch (batch-pool compute items)', severity: 'optional',
+    required: ['LOOM_BATCH_ACCOUNT'], warnOnMiss: true,
+    remediation: 'Set LOOM_BATCH_ACCOUNT (+ LOOM_BATCH_RG) so batch-pool items manage real Azure Batch pools. Grant the Console UAMI Contributor on the Batch account.',
+    provisionedBy: 'modules/landing-zone (batchEnabled → Batch account) → apps[] env LOOM_BATCH_ACCOUNT',
+    role: 'Contributor (Console UAMI) on the Batch account',
+  },
+  {
+    id: 'svc-redis-result-cache', category: 'data-plane', title: 'Result-cache Redis (ADX / query result cache)', severity: 'optional',
+    required: ['LOOM_RESULT_CACHE_REDIS'], warnOnMiss: true, optionalDefault: true,
+    optionalDefaultDetail: 'query result caching runs on the built-in in-memory per-replica cache with zero loss of function. Set LOOM_RESULT_CACHE_REDIS (the shared Azure Cache for Redis host) only to make the cache shared across Console replicas.',
+    remediation: 'Set LOOM_RESULT_CACHE_REDIS to <redis-host>:6380 (the shared H-band Azure Cache for Redis) to upgrade the per-replica in-memory result cache to a shared cross-replica cache. Optional scale-out — the in-memory default is fully functional.',
+    provisionedBy: 'modules/compute/hband-shared.bicep (shared Redis) → LOOM_RESULT_CACHE_REDIS on the Console app',
+    role: 'Redis access key from Key Vault (LOOM_RESULT_CACHE_REDIS_PASSWORD secretRef) or AAD data-plane per module wiring',
+  },
   {
     id: 'perf-spark-warm-pool-store', category: 'data-plane', title: 'Warm Spark pool — cross-replica lease store (PSR-3)', severity: 'optional',
     anyOf: [['LOOM_SPARK_POOL_LEASE_CONTAINER', 'LOOM_SPARK_POOL_REDIS']], warnOnMiss: true,
@@ -1039,7 +1102,8 @@ async function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
   ]);
 }
 
-async function probeCosmos(): Promise<CheckResult> {
+/** Exported for the healer integration test (fail → heal → re-probe green). */
+export async function probeCosmos(): Promise<CheckResult> {
   const base = { id: 'probe-cosmos', category: 'data-plane' as const, title: 'Cosmos reachable + containers present', severity: 'critical' as const };
   if (!anyHas('LOOM_COSMOS_ENDPOINT', 'COSMOS_ENDPOINT')) {
     return { ...base, status: 'fail', detail: 'Cosmos endpoint not configured.', remediation: 'Set LOOM_COSMOS_ENDPOINT first.', redeploy: true };
@@ -1213,6 +1277,7 @@ async function probeGovernanceSearchIndex(): Promise<CheckResult> {
       remediation: denied
         ? 'Grant the Console UAMI "Search Index Data Contributor" + "Search Service Contributor" on the AI Search service so it can create/read the loom-governance-items index. Or run scripts/csa-loom/ensure-search-index.sh.'
         : 'Verify LOOM_AI_SEARCH_SERVICE + network access to the search service, then re-run. scripts/csa-loom/ensure-search-index.sh provisions the index.',
+      fixId: denied ? undefined : 'ensure-search-index',
       redeploy: denied,
       portalSteps: denied
         ? [
@@ -1445,7 +1510,11 @@ export interface AuditReport {
 /** Run the full self-audit. `now` is passed in so the engine stays pure. */
 export async function runSelfAudit(now: string): Promise<AuditReport> {
   const results: CheckResult[] = ENV_CHECKS.map(evalEnv);
-  const [cosmos, aoai, purviewMap, searchGov, databricks, deltaSharing, dlpRoles, posture] = await Promise.all([
+  // Extended probes (wave-3 coverage: ADLS/Synapse/ADX/Event Hubs/ADF/ARM/LA/
+  // Graph/Power Platform/Service Bus/APIM/KV + the Loom runtime substrates) run
+  // in the same parallel wave. Helpers are injected — no module cycle.
+  const { runExtraProbes } = await import('./health-probes');
+  const [cosmos, aoai, purviewMap, searchGov, databricks, deltaSharing, dlpRoles, posture, extra] = await Promise.all([
     probeCosmos(),
     probeAoai(),
     probePurviewDataMap(),
@@ -1454,8 +1523,15 @@ export async function runSelfAudit(now: string): Promise<AuditReport> {
     probeDeltaSharing(),
     probeDlpGraphRoles(),
     probePostureFunction(),
+    runExtraProbes({ ctx: CTX, envVarFix }),
   ]);
-  results.push(cosmos, aoai, purviewMap, searchGov, databricks, deltaSharing, dlpRoles, posture, ...securityChecks());
+  results.push(cosmos, aoai, purviewMap, searchGov, databricks, deltaSharing, dlpRoles, posture, ...extra, ...securityChecks());
+
+  // STRUCTURAL coverage (auto-expanding): one aggregated check per workload
+  // family in the item-type catalog + one per registered external gate. A new
+  // family with no mapping turns RED here and fails the CI coverage guard.
+  const { familyCoverageChecks, gateRegistryChecks } = await import('./health-coverage');
+  results.push(...(await familyCoverageChecks(results)), ...(await gateRegistryChecks()));
 
   // Augment specific findings whose fix needs more than (or wasn't given) the
   // generic env-var recipe — RBAC/Graph grants, and the security env-checks.
@@ -1510,6 +1586,10 @@ export interface FixOutcome { ok: boolean; detail: string; dryRun?: boolean; }
 const FIX_PLAN: Record<string, string> = {
   'ensure-cosmos':
     'Would call createIfNotExists for the Loom Cosmos database and every Loom container (feature-permissions, workspaces, items, …). Idempotent: existing containers are left untouched; only missing ones are created.',
+  'ensure-search-index':
+    'Would call ensureGovernanceCatalogIndex(): create the loom-governance-items index on the configured AI Search service if absent (idempotent — an existing index is left untouched).',
+  'ensure-spark-lease-container':
+    'Would call createIfNotExists for the spark-warm-leases Cosmos container (the cross-replica warm Spark pool lease registry). Idempotent.',
 };
 
 /**
@@ -1536,6 +1616,26 @@ export async function applyFix(fixId: string, opts: { dryRun?: boolean } = {}): 
         return { ok: true, detail: 'Cosmos database + all Loom containers ensured (createIfNotExists).' };
       } catch (e: any) {
         return { ok: false, detail: `Could not ensure Cosmos containers: ${e?.message || String(e)}` };
+      }
+    }
+    case 'ensure-search-index': {
+      try {
+        const { ensureGovernanceCatalogIndex } = await import('@/lib/azure/governance-catalog-index');
+        const r = await ensureGovernanceCatalogIndex();
+        return r.ok
+          ? { ok: true, detail: r.created ? 'loom-governance-items index created on the AI Search service.' : 'loom-governance-items index already present (no change needed).' }
+          : { ok: false, detail: `Could not ensure the governance index: ${r.error || 'unknown error'}. If this is a 401/403, grant the Console UAMI "Search Index Data Contributor" + "Search Service Contributor" first (not runtime-fixable).` };
+      } catch (e: any) {
+        return { ok: false, detail: `Could not ensure the governance index: ${e?.message || String(e)}` };
+      }
+    }
+    case 'ensure-spark-lease-container': {
+      try {
+        const m = await import('@/lib/azure/cosmos-client');
+        await m.sparkWarmLeasesContainer(); // ensure() → createIfNotExists
+        return { ok: true, detail: 'spark-warm-leases Cosmos container ensured (createIfNotExists).' };
+      } catch (e: any) {
+        return { ok: false, detail: `Could not ensure the spark-warm-leases container: ${e?.message || String(e)}` };
       }
     }
     default:
