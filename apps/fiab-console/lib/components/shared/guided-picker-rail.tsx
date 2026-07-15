@@ -96,22 +96,31 @@ const useStyles = makeStyles({
     gridTemplateColumns: '208px minmax(0, 1fr)',
     gap: tokens.spacingHorizontalL,
     minWidth: 0,
-    minHeight: 0,
-    '@media (max-width: 640px)': { gridTemplateColumns: '1fr' },
+    // BOUNDED, STABLE height — matches the proven-stable two-pane baseline
+    // (`minHeight:480px`). Without a definite height the card grid grows
+    // unbounded inside the modal; that unbounded growth interacting with the
+    // Fluent Dialog's scroll-lock / resize observers was the on-open freeze.
+    // A fixed min + a viewport cap keeps the surface height stable so the rail
+    // and grid scroll INTERNALLY (below) instead of expanding the dialog.
+    minHeight: '480px',
+    maxHeight: '68vh',
+    '@media (max-width: 640px)': { gridTemplateColumns: '1fr', maxHeight: 'none' },
   },
   layoutNoRail: { gridTemplateColumns: 'minmax(0, 1fr)' },
 
-  // Left rail — categorized, selectable, active-state.
+  // Left rail — categorized, selectable, active-state. Scrolls internally so a
+  // long category list never grows the dialog (height is owned by `.layout`).
   rail: {
     display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS,
     borderRight: `1px solid ${tokens.colorNeutralStroke2}`,
     paddingRight: tokens.spacingHorizontalS,
-    minWidth: 0,
+    minWidth: 0, minHeight: 0, overflowY: 'auto',
     '@media (max-width: 640px)': {
       borderRight: 'none',
       flexDirection: 'row', flexWrap: 'wrap',
       borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
       paddingRight: 0, paddingBottom: tokens.spacingVerticalS,
+      overflowY: 'visible',
     },
   },
   railItem: {
@@ -140,8 +149,21 @@ const useStyles = makeStyles({
   },
   railCount: { flexShrink: 0 },
 
-  // Right column — search slot + hero(es) + card grid.
+  // Right column — a search slot pinned on top + a scrolling content area.
   right: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minWidth: 0, minHeight: 0 },
+  // Scrolls internally (hero + card grid). Bounded by `.layout` height so the
+  // card grid never grows the dialog unbounded — the on-open freeze regression.
+  scrollArea: {
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM,
+    minWidth: 0, minHeight: 0, flex: '1 1 auto',
+    overflowY: 'auto', overflowX: 'hidden',
+    // Hard cap so the grid ALWAYS scrolls internally rather than growing the
+    // dialog — matches the proven get-data gallery scroll region and holds even
+    // when the parent imposes no definite height (e.g. hideRail mode).
+    maxHeight: '62vh',
+    paddingRight: tokens.spacingHorizontalXS,
+    '@media (max-width: 640px)': { maxHeight: 'none', overflowY: 'visible' },
+  },
 
   // Featured hero (Recommended source) — brand-accented, full width.
   hero: {
@@ -236,6 +258,7 @@ export function GuidedPickerRail({
     <div className={s.right}>
       {search}
 
+      <div className={s.scrollArea}>
       {/* Featured heroes — Recommended sources (Fabric OneLake-data-hub analog). */}
       {(featured ?? []).map((f) => (
         <button key={f.key} type="button" className={s.hero} onClick={f.onPick}
@@ -258,13 +281,11 @@ export function GuidedPickerRail({
         <div
           className={s.grid}
           style={{ gridTemplateColumns: `repeat(auto-fill, minmax(${minCardWidth}px, 1fr))` }}
-          role="list"
         >
           {items.map((it) => (
             <button
               key={it.key}
               type="button"
-              role="listitem"
               className={s.card}
               onClick={it.onPick}
               data-guided-card={it.key}
@@ -281,6 +302,7 @@ export function GuidedPickerRail({
           ))}
         </div>
       )}
+      </div>
     </div>
   );
 
