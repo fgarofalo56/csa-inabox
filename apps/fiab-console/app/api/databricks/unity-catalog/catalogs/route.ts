@@ -23,6 +23,12 @@ import { getSession } from '@/lib/auth/session';
 import {
   databricksConfigGate, listUcCatalogs, createUcCatalog, deleteUcCatalog, patchUcCatalog,
 } from '@/lib/azure/databricks-client';
+import { isOssUc } from '@/lib/azure/uc-backend';
+import {
+  primaryWorkspaceHost,
+  listCatalogs as listCatalogsUc, createCatalog as createCatalogUc,
+  updateCatalog as updateCatalogUc, deleteCatalog as deleteCatalogUc,
+} from '@/lib/azure/unity-catalog-client';
 
 const CATALOG_TYPES = new Set(['MANAGED_CATALOG', 'FOREIGN_CATALOG', 'DELTASHARING_CATALOG']);
 
@@ -41,6 +47,10 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 function gate() {
+  // OSS Unity Catalog backend (loom-unity — the Azure-Government default) has
+  // no Databricks dependency; the UC client routes to LOOM_UNITY_URL and
+  // throws its own structured gate when that is unset.
+  if (isOssUc()) return null;
   const g = databricksConfigGate();
   if (g) {
     return NextResponse.json(
@@ -56,10 +66,12 @@ export async function GET() {
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   const g = gate(); if (g) return g;
   try {
-    const catalogs = await listUcCatalogs();
-    return NextResponse.json({ ok: true, catalogs });
+    const catalogs = isOssUc()
+      ? await listCatalogsUc(await primaryWorkspaceHost())
+      : await listUcCatalogs();
+    return NextResponse.json({ ok: true, backend: isOssUc() ? 'oss' : 'databricks', catalogs });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
+    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: e?.status || 502 });
   }
 }
 
@@ -81,7 +93,21 @@ export async function POST(req: NextRequest) {
   if (catalogType === 'DELTASHARING_CATALOG' && (!String(body?.provider_name || '').trim() || !String(body?.share_name || '').trim())) {
     return NextResponse.json({ ok: false, error: 'provider_name and share_name are required for a Delta-Sharing catalog' }, { status: 400 });
   }
+  if (isOssUc() && catalogType && catalogType !== 'MANAGED_CATALOG') {
+    return NextResponse.json({
+      ok: false,
+      error: 'Foreign and Delta-Sharing catalogs are Databricks Unity Catalog features. The OSS Unity Catalog backend supports standard (managed) catalogs; use Linked Services / Loom Marketplace for federation and sharing.',
+    }, { status: 501 });
+  }
   try {
+    if (isOssUc()) {
+      const catalog = await createCatalogUc(await primaryWorkspaceHost(), {
+        name,
+        comment: body?.comment ? String(body.comment) : undefined,
+        storage_root: body?.storage_root ? String(body.storage_root) : undefined,
+      });
+      return NextResponse.json({ ok: true, catalog });
+    }
     const catalog = await createUcCatalog({
       name,
       comment: body?.comment ? String(body.comment) : undefined,
@@ -117,7 +143,9 @@ export async function PATCH(req: NextRequest) {
     return NextResponse.json({ ok: false, error: 'provide owner, comment, and/or new_name to update' }, { status: 400 });
   }
   try {
-    const catalog = await patchUcCatalog(name, { owner, comment, new_name: newName });
+    const catalog = isOssUc()
+      ? await updateCatalogUc(await primaryWorkspaceHost(), name, { owner, comment, new_name: newName })
+      : await patchUcCatalog(name, { owner, comment, new_name: newName });
     return NextResponse.json({ ok: true, catalog });
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: e?.status || 502 });
@@ -132,7 +160,8 @@ export async function DELETE(req: NextRequest) {
   const force = req.nextUrl.searchParams.get('force') === 'true';
   if (!name) return NextResponse.json({ ok: false, error: 'name is required' }, { status: 400 });
   try {
-    await deleteUcCatalog(name, force);
+    if (isOssUc()) await deleteCatalogUc(await primaryWorkspaceHost(), name, force);
+    else await deleteUcCatalog(name, force);
     return NextResponse.json({ ok: true });
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: e?.status || 502 });

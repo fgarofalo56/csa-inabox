@@ -21,6 +21,7 @@ const SECTIONS: { href: string; label: string; desc: string; adminOnly?: boolean
   { href: '/catalog/browse',      label: 'Browse',      desc: 'Tree view: source → workspace → schema/domain → asset.' },
   { href: '/admin/domains',       label: 'Domains',     desc: 'Business-domain CRUD; assign UC catalogs and OneLake workspaces (Admin portal).', adminOnly: true },
   { href: '/catalog/permissions', label: 'Permissions', desc: 'Loom roles that fan out to Purview RBAC, UC GRANTs, and Fabric roles.' },
+  { href: '/catalog/unity',       label: 'Unity Catalog', desc: 'Full Unity Catalog: objects, grants, storage, sharing — Databricks (Commercial) or OSS (Gov).' },
   { href: '/catalog/metastores',  label: 'Metastores',  desc: 'Registered Databricks metastores, Purview accounts, OneLake regions.' },
   { href: '/catalog/lineage',     label: 'Lineage', desc: 'Federated lineage graph rolling up Purview + UC + Fabric edges.' },
 ];
