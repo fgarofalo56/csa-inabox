@@ -528,7 +528,7 @@ export const KQL_VIZ_CHOICES: { value: TileViz; label: string }[] = [
   { value: 'map', label: 'Map' },
 ];
 
-export function KqlResultsPanel({ result, loading, itemId, itemType, onLoadMore, loadingMore }: {
+export function KqlResultsPanel({ result, loading, itemId, itemType, onLoadMore, loadingMore, onCreateTile }: {
   result: KqlResult | null;
   loading: boolean;
   itemId?: string;
@@ -537,6 +537,10 @@ export function KqlResultsPanel({ result, loading, itemId, itemType, onLoadMore,
   onLoadMore?: () => void;
   /** PSR-6 — a load-more fetch is in flight. */
   loadingMore?: boolean;
+  /** 5.2 — query-result context action: pin this query as a Real-Time
+   *  Dashboard tile (opens the conversion wizard). Rendered only for a
+   *  successful tabular result when the host editor wires it. */
+  onCreateTile?: () => void;
 }) {
   const s = useStyles();
   // F19 — sensitivity-label export protection. When this panel belongs to a
@@ -625,6 +629,13 @@ export function KqlResultsPanel({ result, loading, itemId, itemType, onLoadMore,
                 {v.label}
               </Button>
             ))}
+            {onCreateTile && result.mode !== 'mgmt' && (
+              <Button size="small" appearance="outline" icon={<DataBarVertical20Regular />}
+                onClick={onCreateTile}
+                title="Pin this query as a Real-Time Dashboard tile (validated against ADX)">
+                Create dashboard tile
+              </Button>
+            )}
           </div>
         )}
       </div>
