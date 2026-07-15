@@ -133,6 +133,21 @@ resource wafPolicy 'Microsoft.Network/FrontDoorWebApplicationFirewallPolicies@20
       ]
     }
     managedRules: {
+      // Exclude Loom's OWN encrypted session cookie from DRS inspection. The
+      // `loom_session` value is an AES-256-GCM base64url blob; to the OWASP
+      // SQLI/RCE rules that opaque ciphertext looks like an attack payload, so
+      // an AUTHENTICATED browser (which always sends it) gets 403'd at Front Door
+      // ("The request is blocked") while an anonymous curl (no cookie) passes —
+      // exactly the signed-in-only block seen on the Gov console 2026-07-14.
+      // Scoped to just this cookie NAME (RequestCookieNames), so every other
+      // request part is still fully inspected. Applies to Commercial + Gov.
+      exclusions: [
+        {
+          matchVariable: 'RequestCookieNames'
+          selectorMatchOperator: 'StartsWith'
+          selector: 'loom_session'
+        }
+      ]
       managedRuleSets: [
         {
           ruleSetType: 'Microsoft_DefaultRuleSet'

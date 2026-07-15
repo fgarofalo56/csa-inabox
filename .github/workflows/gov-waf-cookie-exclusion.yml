@@ -1,0 +1,106 @@
+name: gov-waf-cookie-exclusion
+
+# Apply the loom_session cookie exclusion to the LIVE Gov Front Door WAF policy +
+# enable FD WAF diagnostic logging to the Gov Log Analytics workspace.
+#
+# WHY: the console's own encrypted `loom_session` cookie (AES-256-GCM base64url)
+# reads as an attack payload to the Front Door DefaultRuleSet 2.1 SQLI/RCE rules,
+# so an AUTHENTICATED browser (always sends the cookie) is 403'd at the edge
+# ("The request is blocked") while anonymous curl passes — the signed-in-only
+# block on the Gov console (2026-07-14). The bicep fix (front-door.bicep
+# managedRules.exclusions) makes this durable on redeploy; this workflow applies
+# it to the already-deployed Gov WAF policy without a full FD redeploy, and turns
+# on WAF diagnostics so any future block is visible in LA.
+#
+# Scoped to the cookie NAME only (RequestCookieNames StartsWith loom_session) —
+# every other request part stays fully inspected. Non-interactive; Gov deploy SP.
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+env:
+  RG: rg-csa-loom-admin-usgovvirginia
+
+jobs:
+  apply:
+    name: WAF cookie exclusion + diagnostics (Gov)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Azure login (Gov sub) — deploy SP
+        uses: Azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_GOV_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_GOV_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_GOV_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}",
+              "activeDirectoryEndpointUrl": "https://login.microsoftonline.us",
+              "resourceManagerEndpointUrl": "https://management.usgovcloudapi.net/",
+              "sqlManagementEndpointUrl": "https://management.core.usgovcloudapi.net:8443/",
+              "galleryEndpointUrl": "https://gallery.usgovcloudapi.net/",
+              "managementEndpointUrl": "https://management.core.usgovcloudapi.net/"
+            }
+          environment: AzureUSGovernment
+
+      - name: Set Azure cloud to Gov
+        run: az cloud set --name AzureUSGovernment
+
+      - name: Discover the Gov FD WAF policy + LA workspace
+        run: |
+          set -euo pipefail
+          WAF=$(az resource list --resource-type Microsoft.Network/frontdoorWebApplicationFirewallPolicies --query '[0].name' -o tsv | tr -d '\r')
+          [ -n "$WAF" ] || { echo "::error::no Front Door WAF policy found in the Gov sub"; exit 1; }
+          echo "WAF=$WAF" >> "$GITHUB_ENV"
+          echo "::notice::Gov FD WAF policy: $WAF"
+          LAW_ID=$(az monitor log-analytics workspace list -g "$RG" --query '[0].id' -o tsv | tr -d '\r')
+          echo "LAW_ID=$LAW_ID" >> "$GITHUB_ENV"
+
+      - name: Apply the loom_session cookie exclusion (ARM patch)
+        run: |
+          set -euo pipefail
+          SUB="${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}"
+          POLICY_ID="/subscriptions/$SUB/resourceGroups/$RG/providers/Microsoft.Network/FrontDoorWebApplicationFirewallPolicies/$WAF"
+          # Read the current policy, inject the managedRuleSets[DRS].exclusions
+          # (idempotent — skip if already present), PUT it back.
+          az rest --method get --url "${POLICY_ID}?api-version=2024-02-01" -o json > policy.json
+          python3 - <<'EOF'
+          import json
+          p = json.load(open('policy.json'))
+          props = p.setdefault('properties', {})
+          mr = props.setdefault('managedRules', {})
+          excl = {
+            "matchVariable": "RequestCookieNames",
+            "selectorMatchOperator": "StartsWith",
+            "selector": "loom_session",
+          }
+          # Front Door WAF supports exclusions at the managedRuleSet level.
+          changed = False
+          for rs in mr.get('managedRuleSets', []):
+            if rs.get('ruleSetType') == 'Microsoft_DefaultRuleSet':
+              ex = rs.setdefault('exclusions', [])
+              if not any(e.get('selector') == 'loom_session' and e.get('matchVariable') == 'RequestCookieNames' for e in ex):
+                ex.append(excl); changed = True
+          # keep only writable top-level props for the PUT
+          body = {"location": p.get("location", "global"), "sku": p.get("sku"), "properties": props, "tags": p.get("tags", {})}
+          json.dump(body, open('put.json', 'w'))
+          print("changed" if changed else "already-present")
+          EOF
+          az rest --method put --url "${POLICY_ID}?api-version=2024-02-01" --body @put.json -o none
+          echo "::notice::loom_session cookie exclusion applied to $WAF"
+
+      - name: Enable FD WAF diagnostic logging to Gov LA
+        run: |
+          set -euo pipefail
+          SUB="${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}"
+          POLICY_ID="/subscriptions/$SUB/resourceGroups/$RG/providers/Microsoft.Network/FrontDoorWebApplicationFirewallPolicies/$WAF"
+          if [ -n "${LAW_ID:-}" ]; then
+            az monitor diagnostic-settings create --name loom-waf-diag --resource "$POLICY_ID" \
+              --workspace "$LAW_ID" \
+              --logs '[{"category":"FrontdoorWebApplicationFirewallLog","enabled":true}]' -o none 2>&1 | tail -2 || \
+              echo "::warning::diagnostic-settings create failed (may already exist or category name differs); WAF exclusion is still applied"
+          fi
+          echo "::notice::Done. Operator: hard-refresh the Gov console (clear the old blocked request) — the signed-in 'request is blocked' should be gone. If it persists, FrontdoorWebApplicationFirewallLog now flows to Gov LA for the exact matched rule."
