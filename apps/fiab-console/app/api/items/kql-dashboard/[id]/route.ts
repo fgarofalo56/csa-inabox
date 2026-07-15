@@ -199,7 +199,9 @@ export async function runTiles(
       const db = resolveTileDatabase(t, dataSources, fallbackDb);
       const kql = buildTileKql(t.kql, params, timeKey, baseQueries);
       const result = await executeQuery(db, kql, { resultsCacheMaxAgeSec: opts?.cacheMaxAgeSec });
-      return { ...t, result, resolvedDatabase: db };
+      // The editors' KqlResult contract carries ok:true (same wrap the KQL
+      // Database /query route applies) — without it the tile never renders.
+      return { ...t, result: { ok: true, ...result }, resolvedDatabase: db };
     } catch (e: any) {
       return { ...t, error: e?.message || String(e) };
     }
