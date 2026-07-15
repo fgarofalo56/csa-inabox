@@ -35,7 +35,7 @@ import {
   ArrowClockwise20Regular, DocumentAdd20Regular,
 } from '@fluentui/react-icons';
 import { clientFetch } from '@/lib/client-fetch';
-import type { ColStat } from './delta-preview-grid';
+import type { ColStat } from './delta-preview-grid-utils';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 export interface PreviewSource {

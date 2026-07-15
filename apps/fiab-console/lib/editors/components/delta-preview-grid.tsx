@@ -38,19 +38,14 @@ import {
 } from '@fluentui/react-icons';
 import {
   formatCell, isNullish, columnIsNumeric, toCsv, fmtNum, rowMatchesFilter,
+  type ColStat,
 } from './delta-preview-grid-utils';
 import { AddAiColumnDialog, type ProducedAiColumn } from './add-ai-column-dialog';
 import { DataWranglerAiPanel, type PreviewSource } from './data-wrangler-ai-panel';
 
-export interface ColStat {
-  count: number;
-  mean?: number | null;
-  stddev?: number | null;
-  min?: string | null;
-  max?: string | null;
-  nullCount?: number;
-  histogram?: number[] | null;
-}
+// Re-exported for existing consumers that import `ColStat` from this module
+// (e.g. lakehouse-editor-shell). The type now lives in the leaf utils module.
+export type { ColStat };
 
 export interface DeltaPreviewGridProps {
   columns: string[];
