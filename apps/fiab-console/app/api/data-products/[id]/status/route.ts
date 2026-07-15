@@ -45,6 +45,7 @@ import { loadOwnedItem, updateOwnedItem, jerr } from '@/app/api/items/_lib/item-
 import { upsertDataProductDoc, docForDataProduct } from '@/lib/azure/loom-data-products-search';
 import { setLifecycleState, type LifecycleState } from '@/lib/dataproducts/lifecycle';
 import { diffContracts, parseSemver } from '@/lib/dataproducts/versioning';
+import { evaluateContractGate, resolveContractTable } from '@/lib/dataproducts/contract-gate';
 import type { DataContract } from '@/lib/dataproducts/contract';
 import { apiServerError } from '@/lib/api/respond';
 
@@ -63,9 +64,31 @@ const CANONICAL: Record<LifecycleStatus, LifecycleState> = {
 };
 
 interface PreconditionFailure {
-  reason: 'no_assets' | 'no_active_policy' | 'domain_not_published';
+  reason: 'no_assets' | 'no_active_policy' | 'domain_not_published' | 'contract_validation_failed';
   message: string;
   field: string;
+}
+
+/**
+ * Resolve the data product's EFFECTIVE data contract for the publish gate: a
+ * bound standalone `data-contract` item (state.dataContractId) takes precedence,
+ * else the inline state.contract. Owner-scoped; a missing/unreadable bound
+ * contract falls back to the inline one (never throws).
+ */
+async function resolveEffectiveContract(
+  state: Record<string, unknown>,
+  tenantId: string,
+): Promise<DataContract | undefined> {
+  const boundId = typeof state.dataContractId === 'string' ? state.dataContractId.trim() : '';
+  if (boundId) {
+    try {
+      const item = await loadOwnedItem(boundId, 'data-contract', tenantId, { allowReadRoles: true });
+      const c = (item?.state as Record<string, unknown> | undefined)?.contract;
+      if (c && typeof c === 'object') return c as DataContract;
+    } catch { /* fall through to inline */ }
+  }
+  const inline = state.contract;
+  return inline && typeof inline === 'object' ? (inline as DataContract) : undefined;
 }
 
 /** Read the tenant governance-policies doc (read-only — no seed write). */
@@ -136,6 +159,16 @@ async function checkPublishPreconditions(
         'Cannot publish: the governance domain field is empty. Set a published governance domain on the Overview tab before publishing.',
       field: 'state.domain',
     };
+  }
+
+  // 4. BR-CONTRACT-GATE (W10) — if a bound/inline data contract carries
+  //    error-severity quality expectations, they must pass against the bound
+  //    ADX table. Only a REAL measured failure blocks (missing infra never does).
+  const contract = await resolveEffectiveContract(state, tenantId);
+  const { database, tableName } = resolveContractTable(state);
+  const gate = await evaluateContractGate({ contract, database, tableName });
+  if (gate.blocked && gate.block) {
+    return { reason: 'contract_validation_failed', message: gate.block.message, field: 'contract' };
   }
 
   return null;
