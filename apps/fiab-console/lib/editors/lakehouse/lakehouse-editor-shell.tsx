@@ -3690,6 +3690,7 @@ export function LakehouseEditor({ item, id }: Props) {
                   language="tsql"
                   height={240}
                   minHeight={180}
+                  sizingKey="lakehouse.openrowset-sql"
                   ariaLabel="OPENROWSET T-SQL editor"
                 />
                 {sqlLoading && <Spinner size="small" label="Executing…" labelPosition="after" />}

@@ -724,6 +724,7 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
             language="tsql"
             height={260}
             minHeight={200}
+            sizingKey="warehouse.sql"
             ariaLabel="Warehouse T-SQL editor"
             onReady={handleEditorReady}
           />

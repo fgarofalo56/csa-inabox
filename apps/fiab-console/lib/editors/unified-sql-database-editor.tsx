@@ -1814,7 +1814,7 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
                     // PostgreSQL: the sys.*-fed IntelliSense + T-SQL templates are
                     // T-SQL-specific, so the PG path keeps the plain Monaco surface
                     // until a pg-catalog provider lands. Run still posts the script.
-                    <MonacoTextarea value={sqlText} onChange={setSqlText} language={dialect} height={240} minHeight={200} ariaLabel="SQL editor" />
+                    <MonacoTextarea value={sqlText} onChange={setSqlText} language={dialect} height={240} minHeight={200} sizingKey="unified-sql-database.pg-query" ariaLabel="SQL editor" />
                   ) : (
                     <TsqlMonaco
                       value={sqlText}
@@ -1824,6 +1824,7 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
                       database={database}
                       itemId={id}
                       height={240}
+                      sizingKey="unified-sql-database.query"
                       readOnly={family === 'managed-instance'}
                       busy={qLoading}
                       onReady={family === 'azure-sql' ? handleEditorReady : undefined}
