@@ -130,6 +130,11 @@ const ALLOWLIST = new Set([
   'LOOM_QUERY_CACHE_TTL_MS_AUDITMERGE',  // opt-in: audit-log 3-backend-merge TTL override (default 5m)
   'LOOM_QUERY_CACHE_TTL_MS_COPILOTUSAGE',// opt-in: copilot-usage TTL override (default 10m)
   'LOOM_QUERY_CACHE_TTL_MS_MONITOR',     // opt-in: monitor inventory/health/activity/metrics TTL override (default 90s)
+  // PSR-8 Copilot turn-latency SLO — opt-in tuning knobs; unset defaults match the
+  // perf-budgets ceilings so the CI gate and the runtime SLO never disagree.
+  'LOOM_COPILOT_SLO_FIRST_TOKEN_MS', // opt-in: streaming first-token p95 budget override (default 5000)
+  'LOOM_COPILOT_SLO_FULL_TURN_MS',   // opt-in: full-turn p95 budget override (default 30000)
+  'LOOM_COPILOT_SLO_OBJECTIVE',      // opt-in: SLO attainment objective 0..1 override (default 0.95)
   // Databricks pipeline linked-service binding — opt-in (Databricks is an
   // alternative Azure-native compute; Synapse is the default). Used by the
   // dev-pipeline seeder to auto-stub / bind the AzureDatabricks linked service a

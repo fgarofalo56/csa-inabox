@@ -13,6 +13,8 @@
     "copilot-first-token": { "p95CeilingMs": 5000, "maxRegressionPct": 25 },
     "copilot-full-turn": { "p95CeilingMs": 30000, "maxRegressionPct": 25 },
     "page-tti": { "p95CeilingMs": 4000, "maxRegressionPct": 20, "fabricBarMs": 4000 },
+    "page-tti:copilot": { "p95CeilingMs": 5000, "maxRegressionPct": 20, "fabricBarMs": 4000 },
+    "page-tti:governance": { "p95CeilingMs": 5000, "maxRegressionPct": 20, "fabricBarMs": 4000 },
     "silent-refresh": { "p95CeilingMs": 800, "maxRegressionPct": 25 },
     "lake-read": { "p95CeilingMs": 3000, "maxRegressionPct": 25 },
     "lake-write": { "p95CeilingMs": 6000, "maxRegressionPct": 25 }

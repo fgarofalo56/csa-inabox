@@ -9,9 +9,10 @@
  */
 
 import dynamic from 'next/dynamic';
-import type { ComponentType } from 'react';
+import { createElement, type ComponentType } from 'react';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { PipelineRuntime } from '@/lib/components/pipeline/types';
+import { EditorLoadingSkeleton } from './editor-loading-skeleton';
 
 export interface EditorProps {
   item: FabricItemType;
@@ -39,8 +40,14 @@ type EditorComponent = ComponentType<EditorProps>;
 // `name`. Typing it as a generic record (rather than requiring EVERY export be
 // an EditorComponent) lets editor modules also export helpers/types alongside
 // their component without tripping the map type.
+// PSR-9 — route-level code-split (ssr:false) PLUS a shared loading skeleton so a
+// heavy editor's JS chunk downloads behind a designed placeholder instead of a
+// blank pane (perceived-TTI win). The skeleton fills the ribbon + rail + body.
 const reg = (loader: () => Promise<Record<string, unknown>>, name: string): EditorComponent =>
-  dynamic(() => loader().then((m) => ({ default: m[name] as EditorComponent })), { ssr: false });
+  dynamic(() => loader().then((m) => ({ default: m[name] as EditorComponent })), {
+    ssr: false,
+    loading: () => createElement(EditorLoadingSkeleton),
+  });
 
 export const EDITOR_REGISTRY: Record<string, EditorComponent> = {
   // Loom Apps (Azure-native app building — Fabric Apps parity)
