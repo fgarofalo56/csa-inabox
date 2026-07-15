@@ -267,7 +267,9 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     let validated = false;
     let validationError: string | undefined;
     try {
-      result = await executeQuery(resolvedDatabase, runnableKql);
+      // Wrap with ok:true — the editor's KqlResult contract (tiles gate their
+      // render on result.ok, same wrap the KQL Database /query route applies).
+      result = { ok: true, ...(await executeQuery(resolvedDatabase, runnableKql)) };
       validated = true;
     } catch (e: any) {
       validationError = e?.message || String(e);

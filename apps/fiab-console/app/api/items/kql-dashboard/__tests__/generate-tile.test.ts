@@ -109,7 +109,7 @@ describe('POST /api/items/kql-dashboard/[id]/generate-tile', () => {
     expect(j.validated).toBe(true);
     expect(j.tile.viz).toBe('column');
     expect(j.tile.title).toBe('Events per service');
-    expect(j.tile.result).toEqual(RESULT);
+    expect(j.tile.result).toEqual({ ok: true, ...RESULT });
     // The schema summary the model saw must include the real table+columns.
     const sysAndUser = (aoaiCompleteJson as any).mock.calls[0][0];
     expect(JSON.stringify(sysAndUser)).toContain('Events(Timestamp:datetime, Service:string)');
