@@ -3,11 +3,17 @@
 import { clientFetch } from '@/lib/client-fetch';
 /**
  * AllItemsExplorer — the "everything in Loom" view for /browse. Lists every
- * workspace item across the tenant (real data: /api/items/by-type over all known
- * item types) with KPI chips, category/type/workspace filter dropdowns, a
- * group-by toggle, and a color-coded sortable table (itemVisual icon + brand
- * color + type badge). Answers "Browse = everything; Workspaces = the workspace
+ * workspace item across the tenant (real data: /api/items/by-type?types=all)
+ * with KPI chips, domain/category/type/workspace filter dropdowns, a group-by
+ * toggle, and a color-coded sortable table (itemVisual icon + brand color +
+ * type badge). Answers "Browse = everything; Workspaces = the workspace
  * inventory."
+ *
+ * Loads PROGRESSIVELY: the by-type route pages the tenant-wide scan via a
+ * continuation token, and each page is appended to the table (with a live
+ * "Scanning…" progress line) instead of all-or-nothing. Fetch failures surface
+ * as an honest error — never silently rendered as zero counts (the old
+ * `.catch(() => ({}))` swallowed every failure into "0 items").
  */
 
 import { useEffect, useMemo, useState } from 'react';
@@ -15,7 +21,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
   makeStyles, tokens, Badge, Dropdown, Option, Field, Spinner, Body1, Caption1,
-  Subtitle2, Divider,
+  Subtitle2, MessageBar, MessageBarBody,
 } from '@fluentui/react-components';
 import {
   Open16Regular, OpenFolder16Regular, Copy16Regular, Link16Regular,
@@ -31,12 +37,19 @@ import { PinButton } from '@/lib/components/pin-button';
 interface Item {
   id: string; itemType: string; workspaceId: string;
   displayName?: string; description?: string; updatedAt?: string;
+  /** Governance-domain id of the item's workspace (attached by the BFF). */
+  workspaceDomain?: string;
 }
 interface WorkspaceLite { id: string; name?: string; displayName?: string }
-interface Row extends Item { typeLabel: string; category: string; workspaceName: string; modifiedMs: number }
+interface DomainLite { id: string; name: string }
+interface Row extends Item { typeLabel: string; category: string; workspaceName: string; domainLabel: string; modifiedMs: number }
 
 const META = new Map(FABRIC_ITEM_TYPES.map((t) => [t.slug, t]));
-const ALL_TYPES = FABRIC_ITEM_TYPES.map((t) => t.slug);
+/** Items-per-page for the progressive tenant scan. */
+const PAGE_SIZE = 500;
+/** Hard ceiling on pages so a runaway continuation can never loop forever. */
+const MAX_PAGES = 40;
+const NO_DOMAIN = '(No domain)';
 
 const useStyles = makeStyles({
   root: { display: 'flex', flexDirection: 'column', gap: '12px', minWidth: 0 },
@@ -67,9 +80,12 @@ export function AllItemsExplorer() {
   const s = useStyles();
   const router = useRouter();
   const [items, setItems] = useState<Item[] | null>(null);
+  const [scanning, setScanning] = useState(true);
   const [wsMap, setWsMap] = useState<Map<string, string>>(new Map());
+  const [domainMap, setDomainMap] = useState<Map<string, string>>(new Map());
   const [error, setError] = useState<string | null>(null);
 
+  const [domain, setDomain] = useState('All');
   const [category, setCategory] = useState('All');
   const [type, setType] = useState('All');
   const [workspace, setWorkspace] = useState('All');
@@ -77,19 +93,55 @@ export function AllItemsExplorer() {
 
   useEffect(() => {
     let alive = true;
+
+    // Workspace names + governance domains load alongside the item scan; a
+    // failure of either enrichment never blanks the item list (names fall back
+    // to raw ids), but is NOT swallowed into fake zeros either.
     (async () => {
       try {
-        const qs = ALL_TYPES.map((t) => `type=${encodeURIComponent(t)}`).join('&');
-        const [ir, wr] = await Promise.all([
-          clientFetch(`/api/items/by-type?${qs}`).then((r) => r.json()).catch(() => ({})),
-          clientFetch('/api/workspaces').then((r) => r.json()).catch(() => ({})),
-        ]);
+        const wr = await clientFetch('/api/workspaces').then((r) => r.json());
         if (!alive) return;
-        setItems(Array.isArray(ir?.items) ? ir.items : (ir?.value || []));
         const wl: WorkspaceLite[] = Array.isArray(wr) ? wr : (wr?.workspaces || []);
         setWsMap(new Map(wl.map((w) => [w.id, w.name || w.displayName || w.id])));
-      } catch (e: any) { if (alive) setError(e?.message || String(e)); }
+      } catch { /* names fall back to workspace ids */ }
     })();
+    (async () => {
+      try {
+        const dr = await clientFetch('/api/governance/domains').then((r) => r.json());
+        if (!alive) return;
+        const dl: DomainLite[] = Array.isArray(dr?.domains) ? dr.domains : [];
+        setDomainMap(new Map(dl.map((d) => [d.id, d.name || d.id])));
+      } catch { /* domain labels fall back to domain ids */ }
+    })();
+
+    // Progressive tenant-wide item scan: page the by-type route by continuation
+    // token, appending each page so counts/rows build up live.
+    (async () => {
+      try {
+        let continuation: string | undefined;
+        let loaded: Item[] = [];
+        for (let page = 0; page < MAX_PAGES; page++) {
+          const r = await clientFetch(`/api/items/by-type?types=all&pageSize=${PAGE_SIZE}`, {
+            headers: continuation ? { 'x-loom-continuation': continuation } : undefined,
+          });
+          const j = await r.json().catch(() => null);
+          if (!r.ok || j?.ok !== true || !Array.isArray(j.items)) {
+            throw new Error(j?.error || `item scan failed (HTTP ${r.status})`);
+          }
+          if (!alive) return;
+          loaded = [...loaded, ...j.items];
+          setItems(loaded);
+          continuation = typeof j.continuation === 'string' && j.continuation ? j.continuation : undefined;
+          if (!continuation) break;
+        }
+        if (alive) setScanning(false);
+      } catch (e: any) {
+        if (!alive) return;
+        setError(e?.message || String(e));
+        setScanning(false);
+      }
+    })();
+
     return () => { alive = false; };
   }, []);
 
@@ -98,18 +150,21 @@ export function AllItemsExplorer() {
     typeLabel: META.get(it.itemType)?.displayName || it.itemType,
     category: META.get(it.itemType)?.category || 'Other',
     workspaceName: wsMap.get(it.workspaceId) || it.workspaceId,
+    domainLabel: it.workspaceDomain ? (domainMap.get(it.workspaceDomain) || it.workspaceDomain) : NO_DOMAIN,
     modifiedMs: it.updatedAt ? Date.parse(it.updatedAt) : 0,
-  })), [items, wsMap]);
+  })), [items, wsMap, domainMap]);
 
+  const domains = useMemo(() => ['All', ...Array.from(new Set(rows.map((r) => r.domainLabel))).sort()], [rows]);
   const categories = useMemo(() => ['All', ...Array.from(new Set(rows.map((r) => r.category))).sort()], [rows]);
   const types = useMemo(() => ['All', ...Array.from(new Set(rows.map((r) => r.typeLabel))).sort()], [rows]);
   const workspaces = useMemo(() => ['All', ...Array.from(new Set(rows.map((r) => r.workspaceName))).sort()], [rows]);
 
   const filtered = useMemo(() => rows.filter((r) =>
+    (domain === 'All' || r.domainLabel === domain) &&
     (category === 'All' || r.category === category) &&
     (type === 'All' || r.typeLabel === type) &&
     (workspace === 'All' || r.workspaceName === workspace),
-  ), [rows, category, type, workspace]);
+  ), [rows, domain, category, type, workspace]);
 
   const grouped = useMemo(() => {
     if (groupBy === 'none') return [{ key: '', rows: filtered }];
@@ -135,6 +190,7 @@ export function AllItemsExplorer() {
     { key: 'typeLabel', label: 'Type', sortable: true, filterable: true, width: 200, render: (r) => <TypeBadge type={r.itemType} /> },
     { key: 'category', label: 'Category', sortable: true, filterable: true, width: 170, render: (r) => <Caption1>{r.category}</Caption1> },
     { key: 'workspaceName', label: 'Workspace', sortable: true, filterable: true, width: 200, render: (r) => <Caption1>{r.workspaceName}</Caption1> },
+    { key: 'domainLabel', label: 'Domain', sortable: true, filterable: true, width: 160, render: (r) => <Caption1>{r.domainLabel}</Caption1> },
     {
       key: 'modifiedMs', label: 'Modified', sortable: true, width: 150,
       getValue: (r) => r.modifiedMs,
@@ -179,7 +235,16 @@ export function AllItemsExplorer() {
     },
   ];
 
-  if (error) return <Body1>Could not load items: {error}</Body1>;
+  if (error) {
+    return (
+      <MessageBar intent="error" layout="multiline">
+        <MessageBarBody>
+          Could not load the tenant item inventory: {error}. Retry by refreshing the page; if it
+          persists, check the console&apos;s Cosmos DB connectivity (items container).
+        </MessageBarBody>
+      </MessageBar>
+    );
+  }
   if (!items) return <Spinner label="Loading every item in your tenant…" />;
 
   return (
@@ -189,9 +254,15 @@ export function AllItemsExplorer() {
         <div className={s.kpi}><span className={s.kpiNum}>{new Set(rows.map((r) => r.itemType)).size}</span><Caption1>Types</Caption1></div>
         <div className={s.kpi}><span className={s.kpiNum}>{new Set(rows.map((r) => r.category)).size}</span><Caption1>Categories</Caption1></div>
         <div className={s.kpi}><span className={s.kpiNum}>{new Set(rows.map((r) => r.workspaceId)).size}</span><Caption1>Workspaces</Caption1></div>
+        {scanning && (
+          <div className={s.kpi} role="status">
+            <Spinner size="tiny" label={`Scanning tenant… ${rows.length} items so far`} />
+          </div>
+        )}
       </div>
 
       <div className={s.filters}>
+        <Field label="Domain"><Dropdown value={domain} selectedOptions={[domain]} onOptionSelect={(_, d) => setDomain(d.optionValue || 'All')}>{domains.map((c) => <Option key={c} value={c}>{c}</Option>)}</Dropdown></Field>
         <Field label="Category"><Dropdown value={category} selectedOptions={[category]} onOptionSelect={(_, d) => setCategory(d.optionValue || 'All')}>{categories.map((c) => <Option key={c} value={c}>{c}</Option>)}</Dropdown></Field>
         <Field label="Type"><Dropdown value={type} selectedOptions={[type]} onOptionSelect={(_, d) => setType(d.optionValue || 'All')}>{types.map((c) => <Option key={c} value={c}>{c}</Option>)}</Dropdown></Field>
         <Field label="Workspace"><Dropdown value={workspace} selectedOptions={[workspace]} onOptionSelect={(_, d) => setWorkspace(d.optionValue || 'All')}>{workspaces.map((c) => <Option key={c} value={c}>{c}</Option>)}</Dropdown></Field>
@@ -199,7 +270,7 @@ export function AllItemsExplorer() {
       </div>
 
       {filtered.length === 0 ? (
-        <Body1>No items match these filters.</Body1>
+        <Body1>{scanning ? 'Scanning your tenant for items…' : 'No items match these filters.'}</Body1>
       ) : grouped.map((g) => (
         <div key={g.key || 'all'}>
           {g.key && (

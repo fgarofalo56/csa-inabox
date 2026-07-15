@@ -52,7 +52,11 @@ import { getSession } from '@/lib/auth/session';
 
 const sess = { claims: { oid: 'user-1', tid: 'tenant-1', groups: [] } };
 function req(qs: string) {
-  return { url: `http://x/api/items/by-type?${qs}` } as any;
+  // Faithful NextRequest surface: the route also reads the continuation header.
+  return {
+    url: `http://x/api/items/by-type?${qs}`,
+    headers: { get: () => null },
+  } as any;
 }
 
 beforeEach(() => {
