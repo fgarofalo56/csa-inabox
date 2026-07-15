@@ -63,6 +63,7 @@ import {
   type WorkloadCategory,
 } from '@/lib/catalog/fabric-item-types';
 import { isAppTemplate } from '@/lib/catalog/app-templates';
+import { BrandedItemIcon } from '@/lib/components/ui/branded-item-icon';
 
 /**
  * WAVE C — unified create-step contract. These mirror the optional
@@ -650,6 +651,7 @@ export function NewItemDialog({ defaultCategory, workspaceId, open: openProp, on
                       onClick={() => onPick(i)}
                     >
                       <div className={styles.cardHeader}>
+                        <BrandedItemIcon type={i.slug} size="md" />
                         <Subtitle2>{i.displayName}</Subtitle2>
                       </div>
                       <Body1>{i.description}</Body1>

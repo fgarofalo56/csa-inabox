@@ -18,6 +18,7 @@ import {
 } from '@fluentui/react-components';
 import { FABRIC_ITEM_TYPES } from '@/lib/catalog/fabric-item-types';
 import { itemVisual } from '@/lib/components/ui/item-type-visual';
+import { BrandedItemIcon } from '@/lib/components/ui/branded-item-icon';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { PinButton } from '@/lib/components/pin-button';
 
@@ -117,15 +118,12 @@ export function AllItemsExplorer() {
     {
       key: 'displayName', label: 'Name', sortable: true, filterable: true, width: 280,
       getValue: (r) => r.displayName || '(unnamed)',
-      render: (r) => {
-        const v = itemVisual(r.itemType); const Icon = v.icon;
-        return (
-          <Link href={`/items/${r.itemType}/${r.id}`} className={s.nameCell} style={{ textDecoration: 'none', color: 'inherit' }}>
-            <span className={s.nameIcon} style={{ color: v.color }}><Icon /></span>
-            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.displayName || '(unnamed)'}</span>
-          </Link>
-        );
-      },
+      render: (r) => (
+        <Link href={`/items/${r.itemType}/${r.id}`} className={s.nameCell} style={{ textDecoration: 'none', color: 'inherit' }}>
+          <BrandedItemIcon type={r.itemType} size="sm" />
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.displayName || '(unnamed)'}</span>
+        </Link>
+      ),
     },
     { key: 'typeLabel', label: 'Type', sortable: true, filterable: true, width: 200, render: (r) => <TypeBadge type={r.itemType} /> },
     { key: 'category', label: 'Category', sortable: true, filterable: true, width: 170, render: (r) => <Caption1>{r.category}</Caption1> },
