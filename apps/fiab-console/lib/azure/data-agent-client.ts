@@ -110,7 +110,7 @@ export interface DataAgentSource {
   tables?: string;       // comma-separated selected tables / views / functions / model name (schema selection)
   description?: string;  // routing description — helps the agent decide if this source answers a question
   instructions?: string; // per-source grounding (## General knowledge / ## Table descriptions / ## When asked about)
-  examples?: { question: string; query: string }[]; // few-shot pairs (lakehouse/warehouse/kql/graph/ai-search only)
+  examples?: { question: string; query: string }[]; // few-shot pairs for every source type; a semantic-model source's pairs are its curated Verified Answers (NL→DAX), merged in by enrichSemanticModelSources (Prep for AI, G5)
   aiSearch?: DataAgentAiSearchConfig;  // ai-search retrieval options (honored by the executor)
   graph?: DataAgentGraphScope;         // microsoft-graph scope (site/drive/mail)
   agent?: DataAgentAgentConfig;        // agent compose-back (hosted Loom App /invoke)
@@ -294,7 +294,7 @@ function parseAnswer(content: string, sources: DataAgentSource[]): DataAgentAnsw
  * Throws NoAoaiDeploymentError when no model is deployed (editor surfaces a
  * MessageBar with the Foundry-hub "deploy gpt-4o-mini" remediation).
  */
-export async function chatGrounded(cfg: DataAgentConfig, history: ChatTurn[], question: string): Promise<DataAgentAnswer> {
+export async function chatGrounded(cfg: DataAgentConfig, history: ChatTurn[], question: string, ctx?: { tenantId?: string }): Promise<DataAgentAnswer> {
   const target = await resolveAoaiTarget();
   const token = await aoaiToken();
   const url = `${target.endpoint}/openai/deployments/${encodeURIComponent(target.deployment)}/chat/completions?api-version=${target.apiVersion}`;
@@ -343,7 +343,7 @@ export async function chatGrounded(cfg: DataAgentConfig, history: ChatTurn[], qu
       const src = cfg.sources.find((s) => s.name && tool.source && s.name.toLowerCase() === tool.source.toLowerCase())
         || (tool.type ? { id: tool.source, type: tool.type as DataAgentSource['type'], name: tool.source } : undefined);
       if (!src) { tool.executed = false; tool.gate = 'Source not found on this agent.'; continue; }
-      const exec: SourceExecution = await executeSourceQuery(src, tool.query);
+      const exec: SourceExecution = await executeSourceQuery(src, tool.query, ctx);
       tool.executed = exec.executed;
       tool.rowCount = exec.rowCount;
       tool.columns = exec.columns;

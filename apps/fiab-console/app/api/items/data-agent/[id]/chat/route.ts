@@ -122,8 +122,8 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     // synthesis pass); otherwise run the single grounded turn as before.
     const subAgents = await resolveSubAgents(itemState, session.claims.oid);
     const answer = subAgents.length > 0
-      ? await orchestrate(cfg, subAgents, history, question)
-      : await chatGrounded(cfg, history, question);
+      ? await orchestrate(cfg, subAgents, history, question, { tenantId: session.claims.oid })
+      : await chatGrounded(cfg, history, question, { tenantId: session.claims.oid });
 
     // Fire-and-forget DSPM-for-AI usage receipt: stamp the copilot.usage event
     // with the agent id + the sensitivity labels of the data this agent touched

@@ -93,7 +93,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     const cfg = stateToConfig(state);
     cfg.sources = await enrichSemanticModelSources(cfg.sources, oid);
     try {
-      const answer = await chatGrounded(cfg, history as ChatTurn[], question);
+      const answer = await chatGrounded(cfg, history as ChatTurn[], question, { tenantId: oid });
       return answer.answer || '(the agent returned no answer)';
     } catch (e: any) {
       if (e instanceof NoAoaiDeploymentError) {

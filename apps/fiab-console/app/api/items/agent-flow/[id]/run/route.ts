@@ -114,8 +114,8 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     const subAgents = await resolveSubAgents(state, session.claims.oid);
     const delegated = subAgents.length > 0;
     const answer = delegated
-      ? await orchestrate(cfg, subAgents, history, question)
-      : await chatGrounded(cfg, history, question);
+      ? await orchestrate(cfg, subAgents, history, question, { tenantId: session.claims.oid })
+      : await chatGrounded(cfg, history, question, { tenantId: session.claims.oid });
 
     const run: AgentFlowRun = {
       id: crypto.randomUUID(), startedAt, finishedAt: new Date().toISOString(),

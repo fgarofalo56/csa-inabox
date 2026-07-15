@@ -50,17 +50,18 @@ export async function orchestrate(
   subAgents: SubAgentRuntime[],
   history: ChatTurn[],
   question: string,
+  ctx?: { tenantId?: string },
 ): Promise<DataAgentAnswer> {
   const active = subAgents.slice(0, MAX_SUB_AGENTS);
   if (active.length === 0) {
-    return chatGrounded(orchestrator, history, question);
+    return chatGrounded(orchestrator, history, question, ctx);
   }
 
   // 1) Run each runnable sub-agent's real grounded chat in parallel.
   const runnable = active.filter((sa) => !sa.gate);
   const gated = active.filter((sa) => sa.gate);
   const settled = await Promise.allSettled(
-    runnable.map((sa) => chatGrounded(sa.config, [], question)),
+    runnable.map((sa) => chatGrounded(sa.config, [], question, ctx)),
   );
 
   const delegateTools: DataAgentTool[] = [];
@@ -86,7 +87,7 @@ export async function orchestrate(
   //    sources, given the sub-agents' findings. When no finding came back, fall
   //    through to a plain orchestrator run so the turn still answers.
   if (findings.length === 0) {
-    const plain = await chatGrounded(orchestrator, history, question);
+    const plain = await chatGrounded(orchestrator, history, question, ctx);
     return { ...plain, tools: [...(plain.tools || []), ...delegateTools] };
   }
 
@@ -102,7 +103,7 @@ export async function orchestrate(
     ...orchestrator,
     instructions: synthInstructions,
   };
-  const synth = await chatGrounded(synthCfg, history, question);
+  const synth = await chatGrounded(synthCfg, history, question, ctx);
   return {
     ...synth,
     tools: [...(synth.tools || []), ...delegateTools],
