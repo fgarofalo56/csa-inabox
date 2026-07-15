@@ -223,7 +223,21 @@ jobs:
           echo "== zone records after fix =="
           az network private-dns record-set a list -z privatelink.purview.azure.us -g "$RG" --query "[].{name:name, ips:aRecords[].ipv4Address}" -o json
           az network private-dns record-set a list -z privatelink.purviewstudio.azure.us -g "$RG" --query "[].{name:name, ips:aRecords[].ipv4Address}" -o json
-          echo "::notice::PEs + zone groups in place — DNS inside the CAE VNet now resolves to the PE IPs (allow ~1-2 min for the zone to propagate to the VNet resolver)."
+          # Data-plane rejects PENDING connections with 403
+          # AccountProtectedByPrivateEndpoint (seen live post-fix, run
+          # 29458474089) — approve any pending connection on the account.
+          echo "== approve pending PE connections on the account =="
+          CONNS=$(az rest --method get --url "https://management.usgovcloudapi.net$PVW_ID/privateEndpointConnections?api-version=$PURVIEW_ARM_API" --query "value[?properties.privateLinkServiceConnectionState.status=='Pending'].{id:id,name:name}" -o json)
+          echo "$CONNS" | jq -r '.[].name' | while read -r CN; do
+            [ -z "$CN" ] && continue
+            az rest --method put \
+              --url "https://management.usgovcloudapi.net$PVW_ID/privateEndpointConnections/$CN?api-version=$PURVIEW_ARM_API" \
+              --body '{"properties":{"privateLinkServiceConnectionState":{"status":"Approved","description":"Approved by gov-purview-verify fix_dns (console access path)"}}}' \
+              --headers "Content-Type=application/json" -o none
+            echo "approved $CN"
+          done
+          az rest --method get --url "https://management.usgovcloudapi.net$PVW_ID/privateEndpointConnections?api-version=$PURVIEW_ARM_API" --query "value[].{name:name, status:properties.privateLinkServiceConnectionState.status}" -o table
+          echo "::notice::PEs + zone groups in place and connections approved — DNS inside the CAE VNet resolves to the PE IPs (allow ~1-2 min for propagation)."
 
       - name: DNS-infra diagnosis — privatelink zones, VNet links, PEs for the account (ARM reads)
         run: |
