@@ -50,9 +50,10 @@ import { NextRequest } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { apiError, apiOk, apiUnauthorized } from '@/lib/api/respond';
 import {
-  loadKustoItem, saveItemState, resolveDatabase,
+  loadKustoItem, loadKustoItemUnscoped, saveItemState, resolveDatabase,
   executeQuery, kustoConfigGate, KustoError,
 } from '@/lib/azure/kusto-client';
+import { authorizeWorkspace } from '@/lib/auth/workspace-guard';
 import { resolveTimeFrom } from '@/lib/azure/kql-dashboard-model';
 import {
   checkTileKql, geometryForSize, isValidTileViz,
@@ -110,7 +111,17 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const src = await loadKustoItem(String(from.id), String(from.type), oid);
+    // Owner-scoped fast path, then workspace-visibility fallback: app-installed
+    // and shared items live in workspaces the caller can ACCESS without OWNING
+    // (tenant admin / ACL member). Reading the source query needs read access
+    // only.
+    let src = await loadKustoItem(String(from.id), String(from.type), oid);
+    if (!src) {
+      const any = await loadKustoItemUnscoped(String(from.id), String(from.type));
+      if (any && !(await authorizeWorkspace(session, any.workspaceId, { allowReadRoles: true }))) {
+        src = any;
+      }
+    }
     if (!src) return apiError('The source item was not found in your tenant.', 404);
     const fromName = String(from.name || src.displayName || from.type);
     const database = resolveDatabase(src);
@@ -174,7 +185,15 @@ export async function POST(req: NextRequest) {
     }
 
     // ── target: EXISTING dashboard in the caller's tenant ────────────────────
-    const dash = await loadKustoItem(dashboardId, 'kql-dashboard', oid);
+    // Appending a tile MUTATES the dashboard — the fallback requires WRITE
+    // access on its workspace (owner / tenant admin / write-capable member).
+    let dash = await loadKustoItem(dashboardId, 'kql-dashboard', oid);
+    if (!dash) {
+      const any = await loadKustoItemUnscoped(dashboardId, 'kql-dashboard');
+      if (any && !(await authorizeWorkspace(session, any.workspaceId))) {
+        dash = any;
+      }
+    }
     if (!dash) return apiError('The target dashboard was not found in your tenant.', 404);
 
     const model = withAppendedTile(effectiveDashboardModel(dash.state), tile, database);

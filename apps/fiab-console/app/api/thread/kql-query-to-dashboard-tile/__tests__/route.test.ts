@@ -12,6 +12,8 @@ const getSessionMock = vi.fn(() => ({ claims: { oid: 'oid-1' } } as any));
 vi.mock('@/lib/auth/session', () => ({ getSession: () => getSessionMock() }));
 
 const loadKustoItemMock = vi.fn();
+const loadKustoItemUnscopedMock = vi.fn(async () => null);
+const authorizeWorkspaceMock = vi.fn(async () => null); // null = authorized
 const saveItemStateMock = vi.fn(async (item: any, patch: any) => ({ ...item, state: { ...(item.state || {}), ...patch } }));
 const resolveDatabaseMock = vi.fn(() => 'TelemetryDB');
 const executeQueryMock = vi.fn();
@@ -23,6 +25,7 @@ vi.mock('@/lib/azure/kusto-client', () => {
   }
   return {
     loadKustoItem: (...a: any[]) => loadKustoItemMock(...a),
+    loadKustoItemUnscoped: (...a: any[]) => loadKustoItemUnscopedMock(...a),
     saveItemState: (...a: any[]) => saveItemStateMock(...a),
     resolveDatabase: (...a: any[]) => resolveDatabaseMock(...a),
     executeQuery: (...a: any[]) => executeQueryMock(...a),
@@ -30,6 +33,9 @@ vi.mock('@/lib/azure/kusto-client', () => {
     KustoError,
   };
 });
+vi.mock('@/lib/auth/workspace-guard', () => ({
+  authorizeWorkspace: (...a: any[]) => authorizeWorkspaceMock(...a),
+}));
 
 const createOwnedItemMock = vi.fn();
 vi.mock('@/app/api/items/_lib/item-crud', () => ({
@@ -194,6 +200,29 @@ describe('kql-query-to-dashboard-tile route', () => {
     const res = await POST(post({ from: FROM, values: { ...VALUES, dashboardId: 'dash-missing' } }));
     expect(res.status).toBe(404);
     expect(saveItemStateMock).not.toHaveBeenCalled();
+  });
+
+  it('falls back to workspace-visible items when not owner-scoped (app-installed/shared)', async () => {
+    // Owner-scoped load misses BOTH items; the unscoped load finds them and
+    // authorizeWorkspace admits the caller (tenant admin / ACL member).
+    loadKustoItemMock.mockImplementation(async () => null);
+    loadKustoItemUnscopedMock.mockImplementation(async (id: string, type: string) => {
+      if (id === 'kdb-1' && type === 'kql-database') return SRC_ITEM;
+      if (id === 'dash-shared' && type === 'kql-dashboard') {
+        return {
+          id: 'dash-shared', itemType: 'kql-dashboard', displayName: 'Shared dash', workspaceId: 'ws-shared',
+          state: { tiles: [] },
+        };
+      }
+      return null;
+    });
+    const res = await POST(post({ from: FROM, values: { ...VALUES, dashboardId: 'dash-shared' } }));
+    const j = await res.json();
+    expect(j.ok).toBe(true);
+    // Source read admits read roles; dashboard mutation requires write auth.
+    expect(authorizeWorkspaceMock).toHaveBeenCalledWith(expect.anything(), 'ws-1', { allowReadRoles: true });
+    expect(authorizeWorkspaceMock).toHaveBeenCalledWith(expect.anything(), 'ws-shared');
+    expect(saveItemStateMock).toHaveBeenCalled();
   });
 
   it('materializes a bundle dashboard\'s content tiles before appending (never shadows starters)', async () => {

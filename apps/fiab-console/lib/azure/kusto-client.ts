@@ -2021,6 +2021,26 @@ export async function loadKustoItem(itemId: string, itemType: string, tenantId: 
 }
 
 /** Save state onto a Cosmos item; merges shallow into existing state. */
+/**
+ * Load an item by id+type WITHOUT the workspace-owner check. Callers MUST
+ * authorize the returned item's workspaceId themselves (authorizeWorkspace —
+ * owner OR tenant admin OR ACL member); this exists so workspace-shared and
+ * app-installed items are usable by members, not only the owning principal.
+ */
+export async function loadKustoItemUnscoped(itemId: string, itemType: string): Promise<KustoItem | null> {
+  const items = await itemsContainer();
+  const { resources } = await items.items
+    .query<KustoItem>({
+      query: 'SELECT * FROM c WHERE c.id = @id AND c.itemType = @t',
+      parameters: [
+        { name: '@id', value: itemId },
+        { name: '@t', value: itemType },
+      ],
+    })
+    .fetchAll();
+  return resources[0] ?? null;
+}
+
 export async function saveItemState(item: KustoItem, patch: Record<string, any>): Promise<KustoItem> {
   const items = await itemsContainer();
   const { resource } = await items.item(item.id, item.workspaceId).read<KustoItem & Record<string, any>>();
