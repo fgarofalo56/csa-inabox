@@ -115,6 +115,7 @@ jobs:
             echo "PVW=$PVW"
             echo "BASE=$BASE"
             echo "PNA=$PNA"
+            echo "PVW_ID=$(echo "$ACCT" | jq -r '.id')"
           } >> "$GITHUB_ENV"
 
       - name: Probe the catalog endpoint with a Gov data-plane token (deploy SP)
@@ -200,6 +201,32 @@ jobs:
           to execute it as the deploy SP (the SP must be a Collection Admin on the
           account root — one-time grant in the Purview portal if the PUT 403s).
           EOF
+
+      - name: Bootstrap — add the deploy SP as ROOT Collection Admin via ARM (idempotent)
+        if: ${{ inputs.apply_grants == 'true' }}
+        run: |
+          set -euo pipefail
+          # The metadata-policy grant below requires the CALLER to already be a
+          # Collection Admin (data plane 401s otherwise — seen live 2026-07-15:
+          # {"error":{"code":"Unauthorized","message":"Not authorized to access account"}}).
+          # ARM provides the bootstrap: POST accounts/{name}/addRootCollectionAdmin
+          # needs only ARM rights (Owner/Contributor) that the deploy SP holds.
+          # The SP's own objectId comes from the oid claim of its ARM token — no
+          # Graph read permission needed. Re-adding an existing admin is a no-op.
+          TOKEN=$(az account get-access-token --resource https://management.usgovcloudapi.net/ --query accessToken -o tsv | tr -d '\r')
+          PAYLOAD=$(echo "$TOKEN" | cut -d. -f2 | tr '_-' '/+')
+          PAD=$(( (4 - ${#PAYLOAD} % 4) % 4 )); PAYLOAD="$PAYLOAD$(printf '=%.0s' $(seq 1 $PAD) 2>/dev/null || true)"
+          SP_OID=$(echo "$PAYLOAD" | base64 -d 2>/dev/null | jq -r '.oid')
+          if [ -z "$SP_OID" ] || [ "$SP_OID" = "null" ]; then
+            echo "::error::could not decode the deploy SP objectId from its ARM token"; exit 1
+          fi
+          echo "== addRootCollectionAdmin: SP oid $SP_OID on $PVW_ID =="
+          az rest --method post \
+            --url "https://management.usgovcloudapi.net$PVW_ID/addRootCollectionAdmin?api-version=$PURVIEW_ARM_API" \
+            --body "{\"objectId\": \"$SP_OID\"}" \
+            --headers "Content-Type=application/json"
+          echo "::notice::deploy SP added as root Collection Admin (metadata-policy propagation can take ~30-60s)"
+          sleep 45
 
       - name: APPLY the grants idempotently (grant-purview-datamap-role.sh)
         if: ${{ inputs.apply_grants == 'true' }}
