@@ -163,8 +163,12 @@ jobs:
           # privatelink.purview.azure.us zone mis-link is visible at a glance.
           HOST=$(echo "$BASE" | sed -E 's#^https://##')
           SCRIPT="const ep=process.env.IDENTITY_ENDPOINT,h=process.env.IDENTITY_HEADER,cid='$UAMI_CLIENT';(async()=>{try{const dns=require('dns').promises;try{const a=await dns.lookup('$HOST',{all:true});console.log('PVW DNS','$HOST','->',a.map(x=>x.address).join(','));}catch(de){console.log('PVW DNS-FAIL','$HOST',de.code||de.message);}const t=await fetch(ep+'?api-version=2019-08-01&resource='+encodeURIComponent('https://purview.azure.net')+(cid?'&client_id='+cid:''),{headers:{'X-IDENTITY-HEADER':h}});const tj=await t.json();if(!tj.access_token){console.log('PVW TOKEN-FAIL',t.status,JSON.stringify(tj).slice(0,200));return;}const r=await fetch('$BASE/datamap/api/atlas/v2/types/typedefs/headers?api-version=$DATAMAP_API',{headers:{authorization:'Bearer '+tj.access_token}});const b=await r.text();console.log('PVW',r.status,b.slice(0,300));}catch(e){console.log('PVW ERR',e.message,e.cause?String(e.cause):'');}})()"
-          OUT=$(az containerapp exec -n "$APP" -g "$RG" --replica "$REP" --container "$APP" \
-            --command "node -e \"$SCRIPT\"" 2>&1 | tr -d '\r' || true)
+          # az containerapp exec REQUIRES a TTY; on a headless runner it dies
+          # with "(25, 'Inappropriate ioctl for device')" — fake one via script(1).
+          # The JS goes over as base64 so no quote level (bash -> sh -c -> node)
+          # can mangle it.
+          B64=$(printf '%s' "$SCRIPT" | base64 -w0)
+          OUT=$(script -qec "az containerapp exec -n $APP -g $RG --replica $REP --container $APP --command 'node -e \"eval(Buffer.from(\\\"$B64\\\",\\\"base64\\\").toString())\"'" /dev/null 2>&1 | tr -d '\r' || true)
           echo "== raw exec output =="
           echo "$OUT"
           if echo "$OUT" | grep -q "PVW 200"; then
