@@ -25,6 +25,22 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.70.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.69.0...csa-inabox-v0.70.0) (2026-07-15)
+
+
+### Features
+
+* **data-agent:** G5 — run semantic-model Verified-Answer DAX live (Azure-native, no Power BI) ([#2069](https://github.com/fgarofalo56/csa-inabox/issues/2069)) ([32a146e](https://github.com/fgarofalo56/csa-inabox/commit/32a146e2069a5c27a950f716222a0cfb7a8b7d7b))
+* **data-agent:** G6 M365 Copilot publish depth — make deliver-as-is + model description functional, add OBO/agent-author identity selector ([#2070](https://github.com/fgarofalo56/csa-inabox/issues/2070)) ([bd9b9b9](https://github.com/fgarofalo56/csa-inabox/commit/bd9b9b97397db4bc4268cb59cbbccf34f749b89e))
+* **lakehouse:** Data Wrangler AI tab on the Lakehouse Preview grid (G4) ([#2072](https://github.com/fgarofalo56/csa-inabox/issues/2072)) ([be536c7](https://github.com/fgarofalo56/csa-inabox/commit/be536c7e0c54801a7940062b2501b0094b2f5075))
+* **ops-agent:** G3 — rule canvas + Copilot persona + Monitor-primary deploy + evaluator + bicep ([#2074](https://github.com/fgarofalo56/csa-inabox/issues/2074)) ([c1c79c4](https://github.com/fgarofalo56/csa-inabox/commit/c1c79c46e9ba5090bdc9388e790d9416f03a01eb))
+* **ux-w1:** branded, color-accented item-type icons across create + browse ([#2071](https://github.com/fgarofalo56/csa-inabox/issues/2071)) ([176c8ec](https://github.com/fgarofalo56/csa-inabox/commit/176c8ec36d30baf0cc0669a1cee5691579af04d9))
+
+
+### Documentation
+
+* **copilot:** mark G1-G6 verification checklist complete ([#2075](https://github.com/fgarofalo56/csa-inabox/issues/2075)) ([d463f94](https://github.com/fgarofalo56/csa-inabox/commit/d463f94b585bd0ef7f2ea910af5b580687fc1377))
+
 ## [0.69.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.68.0...csa-inabox-v0.69.0) (2026-07-15)
 
 
