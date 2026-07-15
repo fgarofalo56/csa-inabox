@@ -3,7 +3,23 @@
  * of the 'use client' component so they can be unit-tested in a node env
  * (no Fluent / React imports). Covers CSV serialization, numeric-column
  * detection, and cell formatting used by sort/copy/filter.
+ *
+ * Also the canonical home of the `ColStat` shape (real Spark-computed column
+ * statistics) — kept in this leaf module, imported by BOTH the grid and the
+ * Data Wrangler AI panel, so neither has to import the other for the type
+ * (breaks the grid↔panel import cycle the circular-dependency guard flags).
  */
+
+/** Real Spark-computed column statistics (from /api/lakehouse/table-stats). */
+export interface ColStat {
+  count: number;
+  mean?: number | null;
+  stddev?: number | null;
+  min?: string | null;
+  max?: string | null;
+  nullCount?: number;
+  histogram?: number[] | null;
+}
 
 export function formatCell(v: unknown): string {
   if (v === null || v === undefined) return 'NULL';

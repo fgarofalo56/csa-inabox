@@ -1,5 +1,10 @@
 # data-wrangler-ai — parity with Microsoft Fabric Data Wrangler (AI-assisted prep)
 
+> This doc covers the **notebook** Data Wrangler AI panel (pandas-host). The
+> second entry point — the **"AI" tab on the Lakehouse Preview grid** (Synapse
+> Spark / Livy prep over ADLS) — is documented in
+> `docs/fiab/parity/lakehouse-preview-ai.md`.
+
 Source UI:
 - **Fabric Data Wrangler → AI-powered capabilities** — inside the notebook Data
   Wrangler, an AI panel that (a) surfaces suggested cleaning operations from the
