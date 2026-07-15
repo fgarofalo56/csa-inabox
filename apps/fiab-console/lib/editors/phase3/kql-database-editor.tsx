@@ -1391,6 +1391,7 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
             language="kql"
             height={240}
             minHeight={180}
+            sizingKey="kql-database.query"
             ariaLabel="KQL query editor"
           />
           {/* NL prompt input — generate mode */}
@@ -1786,6 +1787,7 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
                           onChange={setWizQuery}
                           language="kql"
                           height={180}
+                          sizingKey="kql-database.mv-wizard"
                           ariaLabel="Materialized view KQL query"
                         />
                         <Switch
@@ -2084,6 +2086,7 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
                         language="kql"
                         height={220}
                         minHeight={140}
+                        sizingKey="kql-database.function-body"
                         ariaLabel="Function body KQL editor"
                       />
                     </Field>

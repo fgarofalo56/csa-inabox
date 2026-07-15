@@ -1399,6 +1399,7 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
             dialectLabel="Spark SQL"
             height={260}
             minHeight={200}
+            sizingKey="databricks-sql-warehouse.query"
             ariaLabel="Databricks SQL editor"
             onReady={handleEditorReady}
             resultError={result && !result.ok ? result.error || null : null}

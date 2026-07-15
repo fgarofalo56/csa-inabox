@@ -228,7 +228,7 @@ export function CosmosGremlinGraphEditor({ item, id }: { item: FabricItemType; i
               When the response contains vertices + edges the force-directed view renders below the raw JSON.
             </MessageBarBody>
           </MessageBar>
-          <MonacoTextarea value={query} onChange={setQuery} language="javascript" height={200} minHeight={160} ariaLabel="Gremlin query" />
+          <MonacoTextarea value={query} onChange={setQuery} language="javascript" height={200} minHeight={160} sizingKey="graph.gremlin-query" ariaLabel="Gremlin query" />
           <div style={{ display: 'flex', gap: tokens.spacingHorizontalS }}>
             <Button appearance="primary" icon={<Play20Regular />} disabled={loading} onClick={run}>Run</Button>
             <Button appearance="secondary" disabled={loading} onClick={showVertices}>Quick: Vertices</Button>
@@ -338,7 +338,7 @@ export function CypherGraphEditor({ item, id }: { item: FabricItemType; id: stri
               <code>{sourceTable}</code>. Switch <em>Mode</em> in the ribbon to write raw KQL.
             </MessageBarBody>
           </MessageBar>
-          <MonacoTextarea value={query} onChange={setQuery} language={mode === 'cypher' ? 'sql' : 'kql'} height={180} minHeight={140} ariaLabel="Cypher / KQL editor" />
+          <MonacoTextarea value={query} onChange={setQuery} language={mode === 'cypher' ? 'sql' : 'kql'} height={180} minHeight={140} sizingKey="graph.cypher-kql-query" ariaLabel="Cypher / KQL editor" />
           {translateErr && (
             <MessageBar intent="error">
               <MessageBarBody>
@@ -581,7 +581,7 @@ export function GqlGraphEditor({ item, id }: { item: FabricItemType; id: string 
               </MessageBarBody>
             </MessageBar>
           )}
-          <MonacoTextarea value={query} onChange={setQuery} language="sql" height={200} minHeight={160} ariaLabel={lang === 'cypher' ? 'openCypher editor' : 'GQL editor'} />
+          <MonacoTextarea value={query} onChange={setQuery} language="sql" height={200} minHeight={160} sizingKey="graph.gql-query" ariaLabel={lang === 'cypher' ? 'openCypher editor' : 'GQL editor'} />
           {translateErr && (
             <MessageBar intent="error">
               <MessageBarBody>
@@ -1133,7 +1133,7 @@ export function VectorStoreEditor({ item, id }: { item: FabricItemType; id: stri
                     Azure AI Search's "Add documents" import. Document content is free-form
                     per-index data, so it has no fixed typed form; the index SCHEMA itself is
                     authored through the typed Fields grid on the Index tab. */}
-                <MonacoTextarea value={docsText} onChange={setDocsText} language="json" height={220} minHeight={160} ariaLabel="Documents JSON" />
+                <MonacoTextarea value={docsText} onChange={setDocsText} language="json" height={220} minHeight={160} sizingKey="graph.docs-json" ariaLabel="Documents JSON" />
                 <div className={s.toolbar}>
                   <Button appearance="primary" icon={uploading ? <Spinner size="tiny" /> : <Add20Regular />} onClick={uploadDocs} disabled={uploading}>{uploading ? 'Uploading…' : 'Upload documents'}</Button>
                 </div>

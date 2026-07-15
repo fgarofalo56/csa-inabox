@@ -369,6 +369,7 @@ WHERE is_ms_shipped = 0;`,
                       itemId={dbId}
                       workspaceId={workspaceId}
                       height={240}
+                      sizingKey="sql-database.query"
                       busy={sqlBusy}
                     />
                     {sqlBusy && <Spinner size="small" label="Executing…" labelPosition="after" />}

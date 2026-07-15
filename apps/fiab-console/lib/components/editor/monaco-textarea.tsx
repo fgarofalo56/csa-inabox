@@ -28,6 +28,7 @@ import dynamic from 'next/dynamic';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { tokens } from '@fluentui/react-components';
 import type { OnMount, OnChange } from '@monaco-editor/react';
+import { ResizableCanvasRegion } from '@/lib/components/canvas/resizable-canvas';
 
 // Self-host the Monaco AMD loader from /monaco/vs (copied at build time by
 // scripts/copy-monaco-assets.mjs). The default @monaco-editor/react config
@@ -100,6 +101,17 @@ export interface MonacoTextareaProps {
   autoHeight?: boolean;
   /** Upper bound for autoHeight before the editor scrolls. Default 720px. */
   maxHeight?: number;
+  /**
+   * G3 (platform UX standard): make the editor height USER-adjustable. When
+   * set (and `autoHeight` is off) the editor is wrapped in the shared
+   * {@link ResizableCanvasRegion} — a bottom drag grip (pointer + Arrow-key
+   * resize, `role="separator"`) whose chosen height persists per surface
+   * under `loom.canvasHeight.monaco.<sizingKey>`. `height` becomes the
+   * initial height (numeric only; string heights fall back to 240) and
+   * `minHeight` the floor. Ignored while `autoHeight` is on — content-driven
+   * sizing already fits the script without a fixed cage.
+   */
+  sizingKey?: string;
   className?: string;
   ariaLabel?: string;
   /** Show minimap. Default off for narrow cells. */
@@ -324,6 +336,7 @@ export function MonacoTextarea({
   minHeight,
   autoHeight = false,
   maxHeight = 720,
+  sizingKey,
   className,
   ariaLabel,
   minimap = false,
@@ -374,15 +387,20 @@ export function MonacoTextarea({
     onChange(v ?? '');
   }, [onChange]);
 
-  return (
+  // G3: `sizingKey` (without autoHeight) swaps the fixed height for the shared
+  // user-resizable region — the editor box fills the region and the region owns
+  // the height (drag grip + keyboard + persistence).
+  const resizable = !!sizingKey && !autoHeight;
+
+  const editorBox = (
     <div
       className={className}
       role="textbox"
       aria-label={ariaLabel}
       aria-readonly={readOnly}
       style={{
-        height: autoHeight ? (autoH ?? minHeight ?? 120) : height,
-        minHeight,
+        height: resizable ? '100%' : autoHeight ? (autoH ?? minHeight ?? 120) : height,
+        minHeight: resizable ? undefined : minHeight,
         border: `1px solid ${tokens.colorNeutralStroke2}`,
         borderRadius: 4,
         overflow: 'hidden',
@@ -420,6 +438,21 @@ export function MonacoTextarea({
       />
     </div>
   );
+
+  if (resizable) {
+    return (
+      <ResizableCanvasRegion
+        storageKey={`monaco.${sizingKey}`}
+        defaultPx={typeof height === 'number' ? height : 240}
+        minPx={minHeight ?? 120}
+        ariaLabel={`Resize ${ariaLabel ?? 'code editor'}. Use Arrow Up and Arrow Down keys.`}
+      >
+        {editorBox}
+      </ResizableCanvasRegion>
+    );
+  }
+
+  return editorBox;
 }
 
 export default MonacoTextarea;
