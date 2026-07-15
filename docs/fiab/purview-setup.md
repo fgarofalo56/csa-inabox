@@ -76,6 +76,47 @@ This is the default and fully supported path.
    GET  /datamap/api/atlas/v2/glossary                 → 200
    ```
 
+### Azure Government (GCC-High / IL5 / DoD) specifics
+
+The classic Purview **data-plane host suffix differs per cloud** (Microsoft
+Learn, self-hosted IR networking table + Gov private-DNS zones):
+
+| Cloud | Data-plane host | Token audience |
+|---|---|---|
+| Commercial / GCC | `{account}.purview.azure.com` | `https://purview.azure.net` |
+| Azure Government | `{account}.purview.azure.us` | `https://purview.azure.net` |
+| China | `{account}.purview.azure.cn` | `https://purview.azure.net` |
+
+The token **audience is cloud-invariant** (`https://purview.azure.net` per
+Learn `purview/data-gov-api-rest-data-plane`) — only the host changes.
+
+How the Console resolves the endpoint (`lib/azure/purview-endpoints.ts`):
+
+1. `LOOM_PURVIEW_ENDPOINT` — explicit data-plane base URL, wins outright
+   (escape hatch for custom DNS / clouds we don't enumerate).
+2. **ARM-derived** — the account's REAL `properties.endpoints.catalog` origin,
+   read from the `Microsoft.Purview/accounts` resource (discovered by name via
+   Azure Resource Graph across every readable subscription), cached per
+   process. Authoritative in every cloud.
+3. **Cloud-aware convention fallback** — `{account}.purview.azure.us` when
+   `LOOM_CLOUD`/`AZURE_CLOUD` indicate Azure Government, `.com` otherwise.
+
+The `/api/governance/purview/status` probe (and its gate MessageBar) reports
+the **exact endpoint it tried** and whether the ARM lookup succeeded — a gate
+that names `*.purview.azure.com` in a Gov deployment means the console image
+predates this fix, or `LOOM_CLOUD` is unset AND the ARM lookup failed.
+
+**Gov verification + grant workflow:** run
+`.github/workflows/gov-purview-verify.yml` (workflow_dispatch, Gov deploy SP).
+It lists the sub's Purview accounts with their true ARM endpoints, probes the
+catalog endpoint with a deploy-SP token AND with the console UAMI token from
+inside the loom-console container (in-VNet — required for PE-protected
+accounts), prints the exact root-collection metadata-policy REST calls, and
+with `apply_grants=true` applies Data Reader + Data Curator + Data Source
+Administrator to the console UAMI idempotently via
+`scripts/csa-loom/grant-purview-datamap-role.sh` (which is itself Gov-aware
+via `PURVIEW_CLOUD=AzureUSGovernment`).
+
 ## Scenario (b) — Purview not provisioned (honest gate)
 
 If `LOOM_PURVIEW_ACCOUNT` is unset, or the named account does not resolve as a

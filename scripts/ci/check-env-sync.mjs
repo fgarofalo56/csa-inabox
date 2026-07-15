@@ -264,6 +264,7 @@ const ALLOWLIST = new Set([
   'LOOM_POSTGRES_HOST',             // opt-in postgres host
   'LOOM_PURVIEW_AUTOSCAN',          // opt-in Purview auto-register flag
   'LOOM_PURVIEW_DEFAULT_DOMAIN_NAME', // Purview domain default (code default)
+  'LOOM_PURVIEW_ENDPOINT',          // optional operator override: explicit Purview data-plane base URL (default: ARM-derived endpoints → cloud-aware convention host; purview-endpoints.ts)
   'LOOM_PURVIEW_GOVERNANCE_DOMAIN_ID', // derived Purview governance domain
   'LOOM_PURVIEW_MANAGED_VNET',      // opt-in Purview managed VNet flag
   'LOOM_PURVIEW_MANAGED_VNET_IR',   // opt-in Purview managed VNet IR

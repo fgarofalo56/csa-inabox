@@ -133,7 +133,11 @@ export const VALUE_HINT: Record<string, string> = {
   LOOM_AUDIT_DCR_ID: 'dcr-<32-hex-immutable-id>',
   // ── new surfaces / data-plane day-one config (this expansion) ──
   LOOM_DATABRICKS_HOSTNAME: 'adb-<workspace-id>.<n>.azuredatabricks.net',
-  LOOM_PURVIEW_UC_ENDPOINT: 'https://<purview-account>.purview.azure.com',
+  LOOM_PURVIEW_UC_ENDPOINT: 'https://<purview-account>.purview.azure.com (.purview.azure.us in Gov)',
+  // Optional operator override for the classic Data Map data-plane base URL.
+  // Default (unset): ARM-derived properties.endpoints → cloud-aware convention
+  // host (purview-endpoints.ts). Set only for custom DNS / unenumerated clouds.
+  LOOM_PURVIEW_ENDPOINT: 'https://<purview-account>.purview.azure.com (.purview.azure.us in Gov)',
   LOOM_DLP_ENABLED: 'true',
   // MCP catalog deploy backend (Container Apps env the deploy route mounts into).
   LOOM_ACA_ENV_ID: '/subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.App/managedEnvironments/<aca-env>',

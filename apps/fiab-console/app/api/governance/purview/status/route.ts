@@ -38,6 +38,12 @@ export async function GET() {
     reason: probe.reason,
     message: probe.message,
     hint: probe.hint,
+    // The data-plane base URL that was actually probed (cloud-correct:
+    // *.purview.azure.us in Azure Government) + how it was derived
+    // ('arm' = ARM properties.endpoints, 'env' = LOOM_PURVIEW_ENDPOINT,
+    // 'convention' = cloud-aware {account}.purview.azure.{us|com} fallback).
+    endpoint: probe.endpoint,
+    endpointSource: probe.endpointSource,
     purviewPortal: PURVIEW_PORTAL,
   });
 }
