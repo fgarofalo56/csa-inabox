@@ -76,7 +76,9 @@ import {
 import {
   upsertDataProductDoc, deleteDataProductDoc, docForDataProduct,
 } from '@/lib/azure/loom-data-products-search';
-import { deleteOwnedItem } from '../../items/_lib/item-crud';
+import { deleteOwnedItem, loadOwnedItem as loadOwnedItemByType } from '../../items/_lib/item-crud';
+import { evaluateContractGate, resolveContractTable } from '@/lib/dataproducts/contract-gate';
+import type { DataContract } from '@/lib/dataproducts/contract';
 import {
   deleteDataProductBestEffort,
   PurviewUnifiedCatalogGateError,
@@ -762,6 +764,31 @@ export async function PATCH(req: NextRequest, props: { params: Promise<{ id: str
     // Changing the governance domain invalidates any cached domain name.
     if ('governanceDomainId' in statePatch && mergedState.governanceDomainName) {
       delete mergedState.governanceDomainName;
+    }
+
+    // BR-CONTRACT-GATE (W10) — the marketplace "publish" transition
+    // (publishStatus → Published) is guarded by the bound/inline data contract.
+    // A REAL error-severity contract-quality failure against the bound ADX table
+    // blocks the publish with a MessageBar-style 422; missing infra never blocks.
+    if (statePatch.publishStatus === 'Published') {
+      let contract: DataContract | undefined =
+        mergedState.contract && typeof mergedState.contract === 'object' ? (mergedState.contract as DataContract) : undefined;
+      const boundId = typeof mergedState.dataContractId === 'string' ? mergedState.dataContractId.trim() : '';
+      if (boundId) {
+        try {
+          const bound = await loadOwnedItemByType(boundId, 'data-contract', session.claims.oid, { allowReadRoles: true });
+          const c = (bound?.state as Record<string, unknown> | undefined)?.contract;
+          if (c && typeof c === 'object') contract = c as DataContract;
+        } catch { /* fall back to inline contract */ }
+      }
+      const { database, tableName } = resolveContractTable(mergedState);
+      const gate = await evaluateContractGate({ contract, database, tableName });
+      if (gate.blocked && gate.block) {
+        return NextResponse.json(
+          { ok: false, error: gate.block.message, preconditionFailed: { reason: gate.block.reason, message: gate.block.message, field: gate.block.field } },
+          { status: 422 },
+        );
+      }
     }
 
     const next: WorkspaceItem = {

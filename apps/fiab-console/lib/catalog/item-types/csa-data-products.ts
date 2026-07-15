@@ -105,4 +105,33 @@ export const csaDataProductsItems: FabricItemType[] = [
       ],
       "docsUrl": "https://learn.microsoft.com/purview/concept-data-products"
     } },
+  // W10 — Data contract as a standalone, reusable item type: an output-port
+  // schema + quantified SLAs + data-quality expectations, authored in a typed
+  // designer (no free-typed JSON). Bind it to a data product to enforce
+  // BR-CONTRACT-GATE at publish time. Azure-native (ADX quality checks), no
+  // Fabric dependency.
+  { slug: 'data-contract', displayName: 'Data contract', restType: 'DataContract', category: 'CSA Data Products',
+    description: 'A formal, machine-checkable agreement a data product makes to consumers: output-port schema (typed columns + PII classification), quantified SLAs (freshness / availability / latency / retention), and data-quality expectations. Bind it to a data product to block publish when validation fails. Azure-native — no Fabric dependency.',
+    learnContent: {
+      "overview": "A Data contract is the formal, machine-checkable agreement a data product publishes to its consumers — the data-mesh / ODCS 'data contract' concept as a first-class Loom item. It captures an output-port SCHEMA (typed columns with semantics and PII classification), quantified SERVICE-LEVEL OBJECTIVES (freshness, availability, latency, completeness, retention, support response), and a set of data-quality EXPECTATIONS (not-null / unique / primary-key / accepted-values / range / regex / freshness / row-count) the product commits to. Everything is authored in a typed designer — never free-typed JSON. Bind a contract to a data product and its error-severity expectations are ENFORCED at publish time (BR-CONTRACT-GATE): if they fail against the bound Azure Data Explorer table, the publish is blocked. Azure-native — no Microsoft Fabric / Power BI dependency.",
+      "steps": [
+        {
+          "title": "Define the output schema",
+          "body": "List the columns the product guarantees — name, type, description, PII/PHI classification, nullability, and keys."
+        },
+        {
+          "title": "Set the SLAs",
+          "body": "Pick the freshness cadence, availability target, latency, completeness, retention, and support-response commitments."
+        },
+        {
+          "title": "Add quality expectations",
+          "body": "Add checks the product enforces (a not-null key, an accepted-values set, a range, a freshness window …), each bound to a column or the whole table, at error or warning severity."
+        },
+        {
+          "title": "Validate + bind + enforce",
+          "body": "Bind an ADX table and run the expectations to see the live pass/fail. Bind the contract to a data product; its error-severity expectations then block that product's publish if they fail (BR-CONTRACT-GATE)."
+        }
+      ],
+      "docsUrl": "https://learn.microsoft.com/purview/concept-data-products"
+    } },
 ];

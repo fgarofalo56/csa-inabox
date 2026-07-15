@@ -141,12 +141,20 @@ export interface AgentFlowCanvasProps {
   onPatch: (patch: { tools?: AgentTool[]; subAgents?: SubAgentRef[]; layout?: LayoutMap }) => void;
   dirty: boolean;
   save: () => Promise<boolean>;
+  /**
+   * BFF endpoint the test-run pane POSTs `{ question }` to (expects
+   * `{ answer, hint?, tools? }`). Defaults to the data-agent grounded chat route
+   * so the data-agent editor is unchanged; the standalone `agent-flow` item type
+   * (W9) passes `/api/items/agent-flow/[id]/run` to run the FlowDag through its
+   * own owner-scoped route. Same Azure-native grounded runtime either way.
+   */
+  runEndpoint?: string;
 }
 
 interface FlowSnapshot { tools: AgentTool[]; subAgents: SubAgentRef[]; layout: LayoutMap }
 
 function InnerCanvas(props: AgentFlowCanvasProps) {
-  const { id, workspaceId, agentName, sources, tools, subAgents, layout, onPatch, dirty, save } = props;
+  const { id, workspaceId, agentName, sources, tools, subAgents, layout, onPatch, dirty, save, runEndpoint } = props;
   const s = useStyles();
 
   // Undo/redo over the canvas snapshot (tools + sub-agents + layout). Re-seeded
@@ -258,7 +266,8 @@ function InnerCanvas(props: AgentFlowCanvasProps) {
     setQuestion(''); setRunning(true);
     let asst: RunMsg;
     try {
-      const r = await clientFetch(`/api/items/data-agent/${encodeURIComponent(id)}/chat`, {
+      const endpoint = runEndpoint || `/api/items/data-agent/${encodeURIComponent(id)}/chat`;
+      const r = await clientFetch(endpoint, {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ question: q }),
       });
       const res = await safeModelJson<{ answer?: string; hint?: string; tools?: RunTool[] }>(r);
@@ -269,7 +278,7 @@ function InnerCanvas(props: AgentFlowCanvasProps) {
       asst = { role: 'assistant', content: e?.message || String(e), error: true };
     } finally { setRunning(false); }
     setChat((c) => [...c, asst]);
-  }, [question, running, dirty, save, id]);
+  }, [question, running, dirty, save, id, runEndpoint]);
 
   // ---- inspector ----
   const sel = selectedId ? parseNodeId(selectedId) : null;
