@@ -100,6 +100,7 @@ const ALLOWLIST = new Set([
   'LOOM_SCHEDULER_EMAIL_WEBHOOK',   // opt-in email relay (ACS/Logic App/SMTP) for scheduler failure alerts (rel-T81); unset = alerts land in the Loom inbox + optional webhook only
   'LOOM_DATABRICKS_UC_STORAGE_ROOT', // opt-in managed-location base (abfss://…) for domain→UC-catalog sync when the metastore has no default storage_root; unset = send no storage_root (metastores with a default root work as-is)
   'LOOM_ITEM_VERSION_CAP',          // opt-in tuning knob for the per-item version-history retention cap (W6); unset default = 50 in code (lib/versions/item-version-store.ts)
+  'LOOM_CANVAS_COMMENT_CAP',        // opt-in tuning knob for the per-(item,canvas) comment/sticky retention cap (W4); unset default = 300 in code (lib/collab/canvas-comment-model.ts)
   'LOOM_ADT_ENDPOINT',
   'LOOM_SPARK_POOL_REAP',            // opt-out kill switch for the stale-Livy-session reaper (#1796; default ON — pool self-cleans leaked sessions)
   'LOOM_SPARK_POOL_REAP_GRACE',      // opt-in tune: grace seconds before an untracked Livy session is reaped (default 600)              // opt-in Azure Digital Twins endpoint (FGC-12); default twin backend is ADX-native — deploy platform/fiab/bicep/modules/integration/adt-instance.bicep to enable

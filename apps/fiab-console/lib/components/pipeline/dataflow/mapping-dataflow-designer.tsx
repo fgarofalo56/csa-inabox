@@ -94,6 +94,7 @@ import {
   accentTint, CanvasRightRail,
   type CanvasNodeStatus,
 } from '@/lib/components/canvas/canvas-node-kit';
+import { CanvasCollabLayer } from '@/lib/components/canvas/canvas-collab-layer';
 import { DatasetPicker } from '../dataset-picker';
 import { ExpressionField } from '../expression-field';
 import type { AdfDataset, AdfDataFlow } from '@/lib/azure/adf-client';
@@ -929,6 +930,10 @@ export interface MappingDataFlowDesignerProps {
   /** Notify the host of graph changes (e.g. to mark the editor dirty). */
   onChange?: (graph: MappingDataFlowGraph) => void;
   readOnly?: boolean;
+  /** Owning Loom item id — enables the shared collaboration layer (comments/presence). */
+  itemId?: string;
+  /** Owning item-type slug for the collab routes (defaults to 'mapping-dataflow'). */
+  itemType?: string;
 }
 
 /** Next free stream name for a transform type (source1, derive2, join1, …). */
@@ -943,6 +948,7 @@ function nextName(type: string, existing: Set<string>): string {
 function DesignerInner({
   name, initial, datasets = [], datasetGate, debugClusterAvailable = false,
   onStartDebugSession, onSave, onChange, readOnly = false,
+  itemId, itemType = 'mapping-dataflow',
 }: MappingDataFlowDesignerProps) {
   const s = useStyles();
   const rf = useReactFlow();
@@ -1322,6 +1328,9 @@ function DesignerInner({
               maskColor={accentTint(tokens.colorNeutralBackground3, 70)}
               style={{ backgroundColor: tokens.colorNeutralBackground1 }}
             />
+            {/* W4 + W5 — shared collaboration overlay (comments + presence).
+                No-ops without an itemId; no host node-state changes. */}
+            <CanvasCollabLayer itemType={itemType} itemId={itemId} canvasKey="mapping-dataflow" />
           </ReactFlow>
 
           {graph.transforms.length === 0 && (

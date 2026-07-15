@@ -37,6 +37,7 @@ import {
   CanvasNode, CanvasRightRail, CATEGORY_ACCENT, accentTint, portStyle,
   type CanvasVisual, type CanvasNodeCategory,
 } from '@/lib/components/canvas/canvas-node-kit';
+import { CanvasCollabLayer } from '@/lib/components/canvas/canvas-collab-layer';
 import { useCanvasHistory } from '@/lib/components/canvas/use-canvas-history';
 import { ResizableCanvasRegion } from '@/lib/components/canvas/resizable-canvas';
 import {
@@ -344,6 +345,9 @@ function InnerCanvas(props: AgentFlowCanvasProps) {
             <Panel position="top-left">
               <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Click a node to configure it in the inspector →</Caption1>
             </Panel>
+            {/* W4 + W5 — shared collaboration overlay (comments + presence). The
+                data-agent item id keys the item-scoped collab routes. */}
+            <CanvasCollabLayer itemType="data-agent" itemId={id} canvasKey="agent-flow" />
           </ReactFlow>
         </ResizableCanvasRegion>
 

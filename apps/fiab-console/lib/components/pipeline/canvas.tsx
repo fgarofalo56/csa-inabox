@@ -47,6 +47,7 @@ import {
 } from '@/lib/components/canvas/canvas-node-kit';
 import { DocumentArrowRight16Regular, Flowchart16Regular, Search16Regular } from '@fluentui/react-icons';
 import { useGhostSuggestion } from '@/lib/components/canvas/use-ghost-suggestion';
+import { CanvasCollabLayer } from '@/lib/components/canvas/canvas-collab-layer';
 import { ACTIVITY_CATALOG } from './activity-catalog';
 import { cloneSelection, type ClonableEdge } from '@/lib/components/canvas/canvas-clipboard';
 import { alignPositions, distributePositions, type AlignMode, type DistributeAxis, type AlignNode } from '@/lib/components/canvas/canvas-align';
@@ -232,6 +233,8 @@ export interface PipelineCanvasProps {
   aiSuggest?: boolean;
   /** Item type used to ground the suggestion prompt (defaults to 'data-pipeline'). */
   itemType?: string;
+  /** Owning item id — enables the shared collaboration layer (comments/presence). */
+  itemId?: string;
   /**
    * Suppress the built-in centered empty-state overlay. The designer sets this
    * when it renders its own richer guided empty-state launcher over the canvas,
@@ -268,7 +271,7 @@ function buildEdges(activities: PipelineActivity[]): Edge[] {
 const PipelineCanvasInner = forwardRef<CanvasHandle, PipelineCanvasProps>(function PipelineCanvasInner(
   { activities, selectedName, onSelect, onDropPaletteKey, onConnect, onDrillInto, onDrillBack, snapToGrid = true, showGrid = true, onZoomChange,
     onUndo, onRedo, canUndo = false, canRedo = false, onAddActivities, onExplainNode, readOnly = false, hideEmptyState = false,
-    aiSuggest = false, itemType = 'data-pipeline' },
+    aiSuggest = false, itemType = 'data-pipeline', itemId },
   ref,
 ) {
   const s = useStyles();
@@ -803,6 +806,9 @@ const PipelineCanvasInner = forwardRef<CanvasHandle, PipelineCanvasProps>(functi
           maskColor={accentTint(tokens.colorNeutralBackground3, 70)}
           style={{ backgroundColor: tokens.colorNeutralBackground1 }}
         />
+        {/* W4 + W5 — shared collaboration overlay (comments + presence). No-ops
+            without an itemId; no host node-state changes. */}
+        <CanvasCollabLayer itemType={itemType} itemId={itemId} canvasKey="pipeline" />
       </ReactFlow>
 
       {activities.length === 0 && !hideEmptyState && (

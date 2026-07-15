@@ -1,11 +1,17 @@
 /**
  * GET    /api/items/[type]/[id]/comments — list comments
  * POST   /api/items/[type]/[id]/comments — add comment {body, mentions?, parentId?}
+ * PATCH  /api/items/[type]/[id]/comments — edit body / resolve {commentId, body?, resolved?}
  * DELETE /api/items/[type]/[id]/comments?commentId=... — delete own comment
+ *
+ * BR-COMMENTS: the list/post/delete + mentions→notify + `parentId` threading
+ * already shipped; PATCH adds the missing EDIT (author-only) + RESOLVE (open to
+ * any item-accessor) so a review thread can be edited and closed.
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { commentsContainer, itemsContainer, workspacesContainer, notificationsContainer } from '@/lib/azure/cosmos-client';
+import { normalizeItemCommentPatch, authorizeItemCommentPatch } from '@/lib/collab/item-comment-model';
 import crypto from 'node:crypto';
 
 export const runtime = 'nodejs';
@@ -93,6 +99,47 @@ export async function POST(req: NextRequest, props: { params: Promise<{ type: st
   }
 
   return NextResponse.json({ ok: true, comment: resource }, { status: 201 });
+}
+
+export async function PATCH(req: NextRequest, props: { params: Promise<{ type: string; id: string }> }) {
+  const params = await props.params;
+  const s = getSession();
+  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  if (!(await assertOwnedItem(params.id, params.type, s.claims.oid)))
+    return NextResponse.json({ ok: false, error: 'not found' }, { status: 404 });
+
+  const body = await req.json().catch(() => ({}));
+  const commentId = typeof body?.commentId === 'string' ? body.commentId : '';
+  if (!commentId) return NextResponse.json({ ok: false, error: 'commentId required' }, { status: 400 });
+
+  const fields = normalizeItemCommentPatch(body);
+  if (!fields) return NextResponse.json({ ok: false, error: 'nothing to update (body cannot be blank)' }, { status: 422 });
+
+  const c = await commentsContainer();
+  let existing: any;
+  try {
+    const read = await c.item(commentId, params.id).read<any>();
+    existing = read.resource;
+  } catch (e: any) {
+    if (e?.code === 404) return NextResponse.json({ ok: false, error: 'comment not found' }, { status: 404 });
+    throw e;
+  }
+  if (!existing || existing.itemId !== params.id)
+    return NextResponse.json({ ok: false, error: 'comment not found' }, { status: 404 });
+
+  const allowed = authorizeItemCommentPatch(fields, existing.userId, s.claims.oid);
+  if (!allowed) return NextResponse.json({ ok: false, error: 'only the author can edit this comment' }, { status: 403 });
+
+  const updated = {
+    ...existing,
+    ...(allowed.body !== undefined ? { body: allowed.body, edited: true } : {}),
+    ...(allowed.resolved !== undefined
+      ? { resolved: allowed.resolved, resolvedBy: allowed.resolved ? s.claims.oid : null, resolvedAt: allowed.resolved ? new Date().toISOString() : null }
+      : {}),
+    updatedAt: new Date().toISOString(),
+  };
+  const { resource } = await c.item(commentId, params.id).replace(updated);
+  return NextResponse.json({ ok: true, comment: resource ?? updated });
 }
 
 export async function DELETE(req: NextRequest, props: { params: Promise<{ type: string; id: string }> }) {

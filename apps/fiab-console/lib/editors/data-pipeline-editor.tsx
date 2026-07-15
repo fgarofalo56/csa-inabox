@@ -1444,6 +1444,7 @@ export function DataPipelineEditor({ item, id, runtimePreset, templateId }: Prop
                           onExplainNode={setExplainActivity}
                           aiSuggest
                           itemType="data-pipeline"
+                          itemId={pipelineId || undefined}
                         />
                       </div>
                     </ResizableCanvasRegion>
