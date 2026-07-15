@@ -21,6 +21,22 @@ import { isVectorFieldType } from './search-field-shapes';
 import { graphGroundingSearch, GraphSearchAccessError, type GraphGroundingScope } from './graph-search-client';
 import { fetchWithTimeout } from './fetch-with-timeout';
 import { resolveAgentInvokeUrl, type DataAgentSource } from './data-agent-client';
+import { evalDax, TabularError } from './tabular-eval-client';
+
+/** Owner/runtime context threaded from the grounded-chat caller (session oid).
+ * Required to run a `semantic-model` DAX query, since the Azure-native tabular
+ * eval path (Synapse serverless / opt-in AAS XMLA) resolves the model
+ * owner-scoped. Absent ⇒ the semantic-model query is shown but honestly gated. */
+export interface SourceExecContext {
+  tenantId?: string;
+}
+
+/** Extract the semantic-model item id from a data-agent source id
+ * (`semantic-model:<modelId>:<ts>`); falls back to the raw id. Pure. */
+function semanticModelIdFromSource(source: DataAgentSource): string {
+  const m = /^semantic-model:([^:]+):/.exec(String(source.id || ''));
+  return m ? m[1] : String(source.id || '');
+}
 
 export interface SourceExecution {
   executed: boolean;
@@ -82,7 +98,7 @@ function capKql(kql: string): string {
  * backend. Returns rows+count, or an honest gate. Never throws for an
  * unreachable backend — the gate carries the reason.
  */
-export async function executeSourceQuery(source: DataAgentSource, query: string): Promise<SourceExecution> {
+export async function executeSourceQuery(source: DataAgentSource, query: string, ctx?: SourceExecContext): Promise<SourceExecution> {
   if (!query || !query.trim()) return { executed: false, gate: 'No query was produced for this source.' };
 
   try {
@@ -120,14 +136,45 @@ export async function executeSourceQuery(source: DataAgentSource, query: string)
         const res = await kustoExecute(db, capKql(query));
         return { executed: true, columns: res.columns, rows: res.rows.slice(0, MAX_ROWS), rowCount: res.rowCount, truncated: res.truncated };
       }
-      case 'semantic-model':
-        return {
-          executed: false,
-          gate:
-            'Semantic-model (DAX) execution needs an XMLA endpoint (Azure Analysis Services / Power BI XMLA). ' +
-            'Not wired in this deployment — the query is shown but not executed. Route metric questions to a ' +
-            'warehouse/lakehouse source to ground on real rows.',
-        };
+      case 'semantic-model': {
+        // Azure-native DAX execution (no Power BI / Fabric): the Loom-native
+        // default translates the EVALUATE query to SQL over the backing Synapse
+        // serverless warehouse; the opt-in alternative
+        // (LOOM_SEMANTIC_BACKEND=analysis-services) runs it over the AAS XMLA
+        // endpoint. Both are owner-scoped (evalDax resolves the model via the
+        // caller's oid), so we need the tenant context threaded from
+        // chatGrounded. Absent ⇒ honest gate. Every failure surfaces evalDax's
+        // TabularError message (which itself names the exact env var / backend).
+        const tenantId = ctx?.tenantId;
+        if (!tenantId) {
+          return {
+            executed: false,
+            gate:
+              'Semantic-model (DAX) live execution needs the signed-in owner context, which this run did not ' +
+              'provide. Use the model editor’s "Prep for AI" tab to author + Run-to-verify Verified Answers, ' +
+              'or route this question through the data-agent chat where the owner context is available.',
+          };
+        }
+        const modelId = semanticModelIdFromSource(source);
+        try {
+          const res = await evalDax(modelId, query, tenantId);
+          const columns = res.columns;
+          const rows = res.rows.map((r) => columns.map((c) => (r as Record<string, unknown>)[c] ?? null));
+          return {
+            executed: true,
+            columns,
+            rows: rows.slice(0, MAX_ROWS),
+            rowCount: res.rows.length,
+            truncated: res.rows.length > MAX_ROWS,
+            note: `DAX evaluated on the ${res.backend} tabular backend (Azure-native, no Power BI/Fabric).`,
+          };
+        } catch (e: unknown) {
+          if (e instanceof TabularError) {
+            return { executed: false, gate: `Semantic-model DAX not executed (${e.backend}): ${e.message}` };
+          }
+          return { executed: false, gate: `Semantic-model DAX not executed: ${(e as Error)?.message || String(e)}` };
+        }
+      }
       case 'ai-search': {
         const gate = searchConfigGate();
         if (gate) return { executed: false, gate: `AI Search not configured: set ${gate.missing}.` };
