@@ -59,6 +59,16 @@ import {
   PersonChat24Regular,
   // Connectables (Add-existing import)
   LockClosed24Regular,
+  // Wave UX-Fabric-A — branded coverage for the previously-unmapped item types
+  // (these fell back to the generic Document glyph before). Each verified to
+  // exist in @fluentui/react-icons@2.0.328.
+  Molecule24Regular, ShieldError24Regular, Grid24Regular, ArrowRouting24Regular,
+  DocumentCheckmark24Regular, BuildingShop24Regular, DataUsage24Regular,
+  CheckmarkCircle24Regular, CubeMultiple24Regular, Router24Regular, DataArea24Regular,
+  HeartPulse24Regular, Toolbox24Regular, ArrowRepeatAll24Regular, DataFunnel24Regular,
+  AppsAddIn24Regular, Rocket24Regular, AppGeneric24Regular, WindowApps24Regular,
+  TableLightning24Regular, Organization24Regular, AppTitle24Regular,
+  ClipboardPulse24Regular, Run24Regular, DatabaseSearch24Regular,
   // Fallback
   Document24Regular,
 } from '@fluentui/react-icons';
@@ -82,6 +92,7 @@ export type ItemFamily =
   | 'geo'
   | 'graph'
   | 'data-product'
+  | 'apps'
   | 'neutral';
 
 /**
@@ -106,6 +117,7 @@ export const FAMILY_COLOR: Record<ItemFamily, string> = {
   'geo':            '#0d7377', // teal
   'graph':          '#5e4dc0', // violet
   'data-product':   '#3d2e80', // deep violet
+  'apps':           '#0b6a8f', // ocean blue (Loom Apps)
   'neutral':        '#6b7280', // grey fallback
 };
 
@@ -138,6 +150,11 @@ const REGISTRY: Record<string, Entry> = {
   'notebook':             { icon: Notebook24Regular,  family: 'data-eng', label: 'Notebook' },
   'spark-job-definition': { icon: CodeBlock24Regular, family: 'data-eng', label: 'Spark Job Definition' },
   'environment':          { icon: Box24Regular,       family: 'data-eng', label: 'Environment' },
+  'spark-environment':    { icon: AppsAddIn24Regular,  family: 'data-eng', label: 'Spark Environment' },
+  'lakehouse-shortcut':   { icon: Link24Regular,       family: 'data-eng', label: 'Lakehouse Shortcut' },
+  'batch-pool':           { icon: Grid24Regular,       family: 'data-eng', label: 'Batch Pool' },
+  'synthetic-data':       { icon: TableLightning24Regular, family: 'data-eng', label: 'Synthetic Data' },
+  'data-quality':         { icon: CheckmarkCircle24Regular, family: 'data-eng', label: 'Data-Quality Check' },
 
   // ── Data Factory ──────────────────────────────────────────────────
   'data-pipeline':      { icon: Flow24Regular,         family: 'data-factory', label: 'Data Pipeline' },
@@ -148,10 +165,18 @@ const REGISTRY: Record<string, Entry> = {
   'mounted-adf':        { icon: Link24Regular,         family: 'data-factory', label: 'Mounted ADF' },
   'dbt-job':            { icon: BranchFork24Regular,   family: 'data-factory', label: 'dbt Job' },
   'airflow-job':        { icon: BranchFork24Regular,   family: 'data-factory', label: 'Airflow Job' },
+  'linked-service':     { icon: Link24Regular,          family: 'data-factory', label: 'Linked Service' },
+  'integration-runtime':{ icon: Toolbox24Regular,       family: 'data-factory', label: 'Integration Runtime' },
+  'logic-app':          { icon: ArrowRepeatAll24Regular, family: 'data-factory', label: 'Logic App' },
+  'mapping-dataflow':   { icon: DataFunnel24Regular,     family: 'data-factory', label: 'Mapping Data Flow' },
 
   // ── Data Warehouse / Databases ───────────────────────────────────
   'warehouse':          { icon: Server24Regular,       family: 'warehouse', label: 'Warehouse' },
+  'sql-analytics-endpoint': { icon: DatabaseSearch24Regular, family: 'warehouse', label: 'SQL Analytics Endpoint' },
+  'datamart':           { icon: DataUsage24Regular,    family: 'warehouse', label: 'Datamart' },
   'sql-database':       { icon: DatabaseLink24Regular, family: 'database',  label: 'SQL Database' },
+  'lakebase-postgres':      { icon: Database24Regular, family: 'database', label: 'Lakebase (Postgres)' },
+  'postgres-flexible-server': { icon: ServerLink24Regular, family: 'database', label: 'PostgreSQL Flexible Server' },
 
   // ── Real-Time Intelligence ───────────────────────────────────────
   'eventhouse':         { icon: DataLine24Regular,      family: 'rti', label: 'Eventhouse' },
@@ -163,6 +188,11 @@ const REGISTRY: Record<string, Entry> = {
   'activator':          { icon: Pulse24Regular,         family: 'rti', label: 'Activator' },
   'eventhub':           { icon: Pulse24Regular,         family: 'rti', label: 'Event Hub' },
   'azure-eventhub':     { icon: Pulse24Regular,         family: 'rti', label: 'Azure Event Hub' },
+  'digital-twin':       { icon: CubeMultiple24Regular,  family: 'rti', label: 'Digital Twin Builder' },
+  'event-grid-topic':   { icon: Router24Regular,        family: 'rti', label: 'Event Grid Topic' },
+  'event-hubs-namespace': { icon: DataArea24Regular,    family: 'rti', label: 'Event Hubs Namespace' },
+  'service-bus-namespace': { icon: Channel24Regular,    family: 'rti', label: 'Service Bus Namespace' },
+  'workspace-monitor':  { icon: ClipboardPulse24Regular, family: 'rti', label: 'Workspace Monitoring' },
 
   // ── Data Science / ML ────────────────────────────────────────────
   'ml-model':           { icon: BrainCircuit24Regular,  family: 'science', label: 'ML Model' },
@@ -176,6 +206,11 @@ const REGISTRY: Record<string, Entry> = {
   'map':                { icon: Map24Regular,                 family: 'fabric-iq', label: 'Map' },
   'data-agent':         { icon: ChatMultiple24Regular,        family: 'fabric-iq', label: 'Data Agent' },
   'operations-agent':   { icon: Bot24Regular,                 family: 'fabric-iq', label: 'Operations Agent' },
+  'aip-logic':          { icon: Molecule24Regular,            family: 'fabric-iq', label: 'Spindle (AIP Logic)' },
+  'ontology-sdk':       { icon: Code24Regular,                family: 'fabric-iq', label: 'Ontology SDK' },
+  'health-check':       { icon: HeartPulse24Regular,          family: 'fabric-iq', label: 'Health Check' },
+  'release-environment':{ icon: Rocket24Regular,              family: 'fabric-iq', label: 'Release Environment' },
+  'agent-flow':         { icon: BotSparkle24Regular,          family: 'fabric-iq', label: 'Agent Flow' },
 
   // ── Power BI ─────────────────────────────────────────────────────
   'semantic-model':     { icon: Layer24Regular,            family: 'powerbi', label: 'Semantic Model' },
@@ -191,6 +226,7 @@ const REGISTRY: Record<string, Entry> = {
   'apim-api':           { icon: PlugConnected24Regular, family: 'api', label: 'API Management API' },
   'apim-product':       { icon: DataPie24Regular,       family: 'api', label: 'APIM Product' },
   'apim-policy':        { icon: ShieldCheckmark24Regular, family: 'api', label: 'APIM Policy' },
+  'data-api-builder':   { icon: ArrowRouting24Regular,  family: 'api', label: 'Data API' },
 
   // ── Synapse / Databricks / ADF ───────────────────────────────────
   'synapse-dedicated-sql-pool':  { icon: Server24Regular,     family: 'synapse', label: 'Synapse Dedicated SQL Pool' },
@@ -202,6 +238,7 @@ const REGISTRY: Record<string, Entry> = {
   'databricks-cluster':          { icon: ServerLink24Regular, family: 'databricks', label: 'Databricks Cluster' },
   'databricks-sql-warehouse':    { icon: Server24Regular,     family: 'databricks', label: 'Databricks SQL Warehouse' },
   'databricks-pipeline':         { icon: Flow24Regular,       family: 'databricks', label: 'Lakeflow Pipeline (DLT)' },
+  'synapse-notebook':            { icon: Notebook24Regular,   family: 'synapse', label: 'Synapse Notebook' },
   'adf-pipeline':                { icon: Flow24Regular,       family: 'data-factory', label: 'ADF Pipeline' },
   'adf-dataset':                 { icon: Table24Regular,      family: 'data-factory', label: 'ADF Dataset' },
   'adf-trigger':                 { icon: Pulse24Regular,      family: 'data-factory', label: 'ADF Trigger' },
@@ -217,6 +254,8 @@ const REGISTRY: Record<string, Entry> = {
   'ai-search-index':      { icon: Search24Regular,         family: 'foundry', label: 'AI Search Index' },
   'compute':              { icon: ServerLink24Regular,     family: 'foundry', label: 'Compute' },
   'dataset':              { icon: Table24Regular,          family: 'foundry', label: 'Dataset' },
+  'ai-enrichment':        { icon: Sparkle24Regular,        family: 'foundry', label: 'AI Enrichment' },
+  'ai-red-team':          { icon: ShieldError24Regular,    family: 'foundry', label: 'AI Red-Team Scan' },
 
   // ── Copilot Studio ───────────────────────────────────────────────
   'copilot-studio-agent':     { icon: BotSparkle24Regular,         family: 'copilot', label: 'Copilot Studio Agent' },
@@ -259,11 +298,21 @@ const REGISTRY: Record<string, Entry> = {
   'cypher-graph':  { icon: Branch24Regular,         family: 'graph', label: 'Cypher Graph' },
   'gql-graph':     { icon: VirtualNetwork24Regular, family: 'graph', label: 'GQL Graph' },
   'vector-store':  { icon: Cube24Regular,           family: 'graph', label: 'Vector Store' },
+  'tapestry':      { icon: Organization24Regular,   family: 'graph', label: 'Tapestry (Investigative Graph)' },
 
   // ── CSA data products ────────────────────────────────────────────
   'data-product':           { icon: Cube24Regular, family: 'data-product', label: 'Data Product' },
   'data-product-template':  { icon: Cube24Regular, family: 'data-product', label: 'Data Product Template' },
   'data-product-instance':  { icon: Cube24Regular, family: 'data-product', label: 'Data Product Instance' },
+  'data-contract':          { icon: DocumentCheckmark24Regular, family: 'data-product', label: 'Data Contract' },
+  'data-marketplace':       { icon: BuildingShop24Regular,      family: 'data-product', label: 'Data Marketplace' },
+
+  // ── Loom Apps (Azure-native app runtimes) ────────────────────────
+  'loom-app':          { icon: AppFolder24Regular,  family: 'apps', label: 'Loom App' },
+  'loom-app-runtime':  { icon: Run24Regular,        family: 'apps', label: 'Loom App Runtime' },
+  'rayfin-app':        { icon: AppGeneric24Regular, family: 'apps', label: 'Data App' },
+  'slate-app':         { icon: WindowApps24Regular, family: 'apps', label: 'Slate App' },
+  'workshop-app':      { icon: AppTitle24Regular,   family: 'apps', label: 'Workshop App' },
 
   // ── Catalog metastores / accounts ────────────────────────────────
   'unity-catalog':     { icon: DatabaseLink24Regular,   family: 'databricks', label: 'Unity Catalog' },

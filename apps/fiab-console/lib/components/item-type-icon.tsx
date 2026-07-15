@@ -50,6 +50,7 @@ import {
   // Fallbacks
   Document20Regular,
 } from '@fluentui/react-icons';
+import { itemVisual, isKnownItemType } from '@/lib/components/ui/item-type-visual';
 
 /**
  * Category-level color tokens. These are static hex strings rather than
@@ -229,6 +230,13 @@ export function getItemTypeIcon(slug: string, category?: string): ReactNode {
   const color = (category && CATEGORY_COLORS[category]) || NEUTRAL_COLOR;
   const factory = ICON_BY_SLUG[slug];
   if (factory) return factory({ color });
+  // Single-source fallback: defer to the completed `itemVisual` registry so a
+  // catalog type not (yet) in this tree-specific 20px map still renders its
+  // BRANDED glyph here (workspace tree, app views) — not the generic Document.
+  if (isKnownItemType(slug)) {
+    const Branded = itemVisual(slug).icon;
+    return <Branded style={{ color, width: 20, height: 20 }} />;
+  }
   return <Document20Regular style={{ color }} />;
 }
 
