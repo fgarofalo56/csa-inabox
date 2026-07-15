@@ -139,8 +139,18 @@ describe('admin/env-config registry', () => {
     // LOOM_DIRECTLAKE_URL, LOOM_BROKER_URL, LOOM_BROKER_REDIS — the three optional
     // default-OFF H-band service URLs + the shared Redis host). Bumped to 73 by
     // PSR-3 (LOOM_SPARK_POOL_LEASE_CONTAINER + LOOM_SPARK_POOL_REDIS — the warm
-    // Spark pool's cross-replica lease-store substrate signals).
-    expect(EDITABLE_ENV.length).toBe(73);
+    // Spark pool's cross-replica lease-store substrate signals). Bumped to 90 by
+    // the wave-3 health-coverage expansion (docs/fiab/health-coverage-audit.md):
+    // svc-aas (LOOM_AAS_SERVER / LOOM_AAS_SERVER_NAME), svc-aml
+    // (LOOM_AML_WORKSPACE / LOOM_FOUNDRY_NAME), svc-apim (LOOM_APIM_NAME),
+    // svc-keyvault (LOOM_KEY_VAULT_URI / _URL / _NAME), svc-servicebus
+    // (LOOM_SERVICEBUS_NAMESPACE), svc-stream-analytics (LOOM_ASA_RG),
+    // svc-azure-sql (LOOM_AZURE_SQL_DEFAULT_SERVER), svc-postgres
+    // (LOOM_POSTGRES_HOST / LOOM_PGVECTOR_HOST), svc-eventgrid
+    // (LOOM_EVENTGRID_BUSINESS_TOPIC / LOOM_EVENTGRID_RG), svc-batch
+    // (LOOM_BATCH_ACCOUNT), svc-redis-result-cache (LOOM_RESULT_CACHE_REDIS) —
+    // previously-unmonitored backends now settable from /admin/env-config.
+    expect(EDITABLE_ENV.length).toBe(90);
   });
 
   it('surfaces the wave-2 env vars as settable (previously dropped by the whitelist)', () => {
@@ -197,8 +207,10 @@ describe('admin/env-config registry', () => {
     ]) {
       expect(getEditableEnv(k)?.optionalDefault, k).toBe(true);
     }
-    // Exactly the 13 optionalDefault keys — pins the count fix so any future drift
-    // that would drop /admin/env-config back below 73/73 fails CI.
+    // Exactly the optionalDefault keys — pins the count fix so any future drift
+    // that would drop /admin/env-config below full-configured fails CI.
+    // LOOM_RESULT_CACHE_REDIS joined in wave-3: the query result cache falls
+    // back to the per-replica in-memory cache with zero loss of function.
     const optDefault = EDITABLE_ENV.filter((e) => e.optionalDefault).map((e) => e.key).sort();
     expect(optDefault).toEqual([
       'LOOM_AUDIT_DCR_ENDPOINT', 'LOOM_AUDIT_DCR_ID',
@@ -206,6 +218,7 @@ describe('admin/env-config registry', () => {
       'LOOM_CONTENT_SAFETY_ENDPOINT', 'LOOM_DIRECTLAKE_URL', 'LOOM_DOCINTEL_ENDPOINT',
       'LOOM_LANGUAGE_ENDPOINT', 'LOOM_ONELAKE_URL',
       'LOOM_PLAN_BACKING_SQL_DATABASE', 'LOOM_PLAN_BACKING_SQL_SERVER',
+      'LOOM_RESULT_CACHE_REDIS',
       'LOOM_TRANSLATOR_ENDPOINT', 'LOOM_VISION_ENDPOINT',
     ]);
   });
