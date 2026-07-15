@@ -25,6 +25,7 @@ import {
   useCallback, useEffect, useMemo, useRef, useState,
   type ReactNode,
   type PointerEvent as ReactPointerEvent,
+  type MouseEvent as ReactMouseEvent,
   type KeyboardEvent as ReactKeyboardEvent,
 } from 'react';
 import {
@@ -49,6 +50,8 @@ import {
   MessageBar,
   MessageBarBody,
   MessageBarTitle,
+  MenuList,
+  MenuItem,
   tokens,
   makeStyles,
   mergeClasses,
@@ -371,6 +374,7 @@ export function VisualDesigner({ config, onChange, itemId }: VisualDesignerProps
         onAddTransform={addTransform}
         onAddSink={addSink}
         onDeleteNode={deleteAt}
+        onDeleteSelected={deleteSelected}
         itemId={itemId}
       />
 
@@ -444,20 +448,32 @@ interface EventstreamCanvasProps {
   onAddTransform: () => void;
   onAddSink: () => void;
   onDeleteNode: (type: 'source' | 'transform' | 'sink', idx: number) => void;
+  /** Delete the currently-selected node (palette toolbar Delete action). */
+  onDeleteSelected: () => void;
   /** Owning item id — enables the collab layer (comments/presence) + AI ghost. */
   itemId?: string;
 }
 
+/** Parse a canvas node id ("source-0" / "transform-2" / "sink-1") into its role + index. */
+function parseEsNodeId(id: string): { type: 'source' | 'transform' | 'sink'; idx: number } | null {
+  const m = /^(source|transform|sink)-(\d+)$/.exec(id);
+  if (!m) return null;
+  return { type: m[1] as 'source' | 'transform' | 'sink', idx: Number(m[2]) };
+}
+
 function EventstreamCanvasInner({
   sources, transforms, sinks, selected, onSelect,
-  onAddSource, onAddTransform, onAddSink, onDeleteNode, itemId,
+  onAddSource, onAddTransform, onAddSink, onDeleteNode, onDeleteSelected, itemId,
 }: EventstreamCanvasProps) {
   const s = useStyles();
   const rf = useReactFlow();
   const positionsRef = useRef<Map<string, XY>>(new Map());
+  const wrapperRef = useRef<HTMLDivElement | null>(null);
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
   const [zoom, setZoom] = useState(1);
   const [railCollapsed, setRailCollapsed] = useState(false);
+  // Right-click node context menu ({x,y} relative to the canvas wrapper).
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; id: string } | null>(null);
 
   const total = sources.length + transforms.length + sinks.length;
 
@@ -587,10 +603,46 @@ function EventstreamCanvasInner({
   }, [onNodesChange]);
 
   const handleNodeClick = useCallback((_: unknown, n: Node) => {
+    setCtxMenu(null);
     if (n.id === GHOST_NODE_ID) return; // ghost handles its own menu; no inspector
-    const [role, idx] = n.id.split('-');
-    onSelect({ type: role as 'source' | 'transform' | 'sink', idx: Number(idx) });
+    const parsed = parseEsNodeId(n.id);
+    if (parsed) onSelect(parsed);
   }, [onSelect]);
+
+  // Right-click "Delete" (Fabric parity) — a floating node context menu.
+  const handleNodeContextMenu = useCallback((e: ReactMouseEvent, n: Node) => {
+    e.preventDefault();
+    if (n.id === GHOST_NODE_ID) return;
+    const bounds = wrapperRef.current?.getBoundingClientRect();
+    setCtxMenu({
+      x: e.clientX - (bounds?.left ?? 0),
+      y: e.clientY - (bounds?.top ?? 0),
+      id: n.id,
+    });
+    const parsed = parseEsNodeId(n.id);
+    if (parsed) onSelect(parsed);
+  }, [onSelect]);
+
+  // Keyboard Delete / Backspace removes the selected node. Attached to the
+  // canvas wrapper (React Flow's own deleteKeyCode stays disabled so the model
+  // commit below is the single delete path). Typing inside inputs is ignored.
+  const handleCanvasKeyDown = useCallback((e: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (e.key === 'Escape') { setCtxMenu(null); return; }
+    if (e.key !== 'Delete' && e.key !== 'Backspace') return;
+    const t = e.target as HTMLElement | null;
+    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+    if (!selected) return;
+    e.preventDefault();
+    setCtxMenu(null);
+    onDeleteSelected();
+  }, [selected, onDeleteSelected]);
+
+  const ctxDelete = useCallback(() => {
+    if (!ctxMenu) return;
+    const parsed = parseEsNodeId(ctxMenu.id);
+    setCtxMenu(null);
+    if (parsed) onDeleteNode(parsed.type, parsed.idx);
+  }, [ctxMenu, onDeleteNode]);
 
   return (
     <ResizableCanvasRegion
@@ -599,14 +651,23 @@ function EventstreamCanvasInner({
       minPx={320}
       ariaLabel="Resize eventstream canvas height"
     >
-      <div className={s.canvas} data-canvas="eventstream" aria-label="Eventstream canvas">
+      <div
+        ref={wrapperRef}
+        className={s.canvas}
+        data-canvas="eventstream"
+        aria-label="Eventstream canvas"
+        tabIndex={0}
+        onKeyDown={handleCanvasKeyDown}
+        style={{ outline: 'none' }}
+      >
         <ReactFlow
           nodes={nodes}
           edges={edges}
           nodeTypes={esNodeTypes}
           onNodesChange={handleNodesChange}
           onNodeClick={handleNodeClick}
-          onPaneClick={() => onSelect(null)}
+          onNodeContextMenu={handleNodeContextMenu}
+          onPaneClick={() => { setCtxMenu(null); onSelect(null); }}
           minZoom={0.3}
           maxZoom={2}
           fitView
@@ -615,7 +676,7 @@ function EventstreamCanvasInner({
           proOptions={{ hideAttribution: true }}
           nodesConnectable={false}
           deleteKeyCode={null}
-          onMove={(_, vp) => setZoom(vp.zoom)}
+          onMove={(_, vp) => { setZoom(vp.zoom); setCtxMenu(null); }}
         >
           <Background
             variant={BackgroundVariant.Dots}
@@ -648,6 +709,17 @@ function EventstreamCanvasInner({
               <Button size="small" icon={<Add20Regular />} onClick={onAddSource} data-palette-item="source">Add source</Button>
               <Button size="small" icon={<Add20Regular />} onClick={onAddTransform} data-palette-item="transform">Add transform</Button>
               <Button size="small" icon={<Add20Regular />} onClick={onAddSink} data-palette-item="destination">Add destination</Button>
+              <Button
+                size="small"
+                icon={<Delete20Regular />}
+                onClick={() => { setCtxMenu(null); onDeleteSelected(); }}
+                disabled={!selected}
+                data-palette-item="delete"
+                aria-label="Delete selected node"
+                title={selected ? 'Delete the selected node (Del)' : 'Select a node to delete it'}
+              >
+                Delete
+              </Button>
               {itemId && total > 0 && (
                 <Button
                   size="small"
@@ -677,6 +749,42 @@ function EventstreamCanvasInner({
               state changes. */}
           <CanvasCollabLayer itemType="eventstream" itemId={itemId} canvasKey="eventstream" />
         </ReactFlow>
+        {/* Floating node context menu (right-click): Configure + Delete. */}
+        {ctxMenu && (
+          <div
+            role="menu"
+            aria-label="Node actions"
+            data-testid="es-node-context-menu"
+            style={{
+              position: 'absolute',
+              left: ctxMenu.x,
+              top: ctxMenu.y,
+              zIndex: 20,
+              backgroundColor: tokens.colorNeutralBackground1,
+              border: `1px solid ${tokens.colorNeutralStroke2}`,
+              borderRadius: tokens.borderRadiusMedium,
+              boxShadow: tokens.shadow16,
+              padding: tokens.spacingVerticalXXS,
+              minWidth: '160px',
+            }}
+          >
+            <MenuList>
+              <MenuItem
+                icon={<Settings20Regular />}
+                onClick={() => {
+                  const parsed = parseEsNodeId(ctxMenu.id);
+                  setCtxMenu(null);
+                  if (parsed) onSelect(parsed);
+                }}
+              >
+                Configure
+              </MenuItem>
+              <MenuItem icon={<Delete20Regular />} onClick={ctxDelete} data-testid="es-ctx-delete">
+                Delete
+              </MenuItem>
+            </MenuList>
+          </div>
+        )}
         {total === 0 && (
           <div className={s.emptyHint}>
             <Caption1>Click “Add source”, then “Add transform” / “Add destination” to build the stream.</Caption1>
@@ -837,9 +945,30 @@ function SourceInspector({
     }
   }, [itemId, nodeIdx]);
 
+  // Starter guidance — a freshly-seeded source has no hub yet. Show a neutral
+  // next-step hint (NOT a red error) so the first click on the node teaches the
+  // workflow instead of scolding (deferred-validation UX).
+  const needsSetup =
+    (value.kind === 'eventhub' && !(value.eventHubName || '').trim()) ||
+    (value.kind === 'iothub' && !(value.iotHub || '').trim()) ||
+    (value.kind === 'kafka' && !(value.topic || '').trim()) ||
+    (value.kind === 'custom-app' && !(value.eventHubName || '').trim()) ||
+    (value.kind === 'cdc-mirror' && !((value.cdcServerHost || '').trim() && (value.cdcDatabase || '').trim() && (value.cdcTable || '').trim())) ||
+    (value.kind === 'mirror-cdf' && !(value.mirrorItemId || '').trim());
+
   return (
     <>
       <Label weight="semibold">Source</Label>
+      {needsSetup && !endpoint && (
+        <MessageBar intent="info" layout="multiline" data-testid="source-setup-hint">
+          <MessageBarBody>
+            <MessageBarTitle>Set up this source</MessageBarTitle>
+            Pick a kind, fill in the required connection fields below (for Event Hubs: the hub name —
+            you can copy one from the Event Hubs tree on the left), then click <strong>Provision endpoint</strong> to
+            resolve the real ingest endpoint.
+          </MessageBarBody>
+        </MessageBar>
+      )}
       <Field label="Name">
         <Input value={value.name} onChange={(_: unknown, d: any) => onChange({ name: d.value })} />
       </Field>
@@ -1584,9 +1713,20 @@ function SinkInspector({
   onChange: (p: Partial<SinkNode>) => void;
   onDelete: () => void;
 }) {
+  const needsSetup = value.kind === 'kusto' && !(value.table || '').trim();
   return (
     <>
       <Label weight="semibold">Destination</Label>
+      {needsSetup && (
+        <MessageBar intent="info" layout="multiline" data-testid="sink-setup-hint">
+          <MessageBarBody>
+            <MessageBarTitle>Set up this destination</MessageBarTitle>
+            Next step: enter the KQL Database <strong>table</strong> this stream lands events into
+            (the table must exist and match the query output columns). Leave the cluster URL blank to
+            use the deployment default.
+          </MessageBarBody>
+        </MessageBar>
+      )}
       <Field label="Name">
         <Input value={value.name} onChange={(_: unknown, d: any) => onChange({ name: d.value })} />
       </Field>

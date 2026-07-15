@@ -424,6 +424,13 @@ export function EventHubsNamespaceTree({ refreshKey = 0, onSelectEventHub }: Eve
   const [busy, setBusy] = useState(false);
 
   const [hubs, setHubs] = useState<HubRow[]>([]);
+  // Least-privilege scope (defect fix): by default the route returns only the
+  // hubs referenced by eventstreams in the CALLER's accessible workspaces.
+  // Tenant admins get a "Show all hubs" toggle for the full namespace listing.
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [showAllHubs, setShowAllHubs] = useState(false);
+  const [hubsScoped, setHubsScoped] = useState(true);
+  const [totalInNamespace, setTotalInNamespace] = useState<number | null>(null);
   const [schemaGroups, setSchemaGroups] = useState<SgRow[]>([]);
   const [authRules, setAuthRules] = useState<AuthRow[]>([]);
   const [network, setNetwork] = useState<NetSummary | null>(null);
@@ -460,7 +467,7 @@ export function EventHubsNamespaceTree({ refreshKey = 0, onSelectEventHub }: Eve
     setLoading(true); setError(null);
     try {
       const [hr, sr, ar, nr, gr, pr] = await Promise.all([
-        fetch(HUBS_ROUTE).then(readJson),
+        fetch(showAllHubs ? `${HUBS_ROUTE}?scope=all` : HUBS_ROUTE).then(readJson),
         fetch(SG_ROUTE).then(readJson),
         fetch(AUTH_ROUTE).then(readJson),
         fetch(NET_ROUTE).then(readJson),
@@ -469,7 +476,12 @@ export function EventHubsNamespaceTree({ refreshKey = 0, onSelectEventHub }: Eve
       ]);
       for (const b of [hr, sr, ar, nr, gr, pr]) { if (applyGate(b)) { setLoading(false); return; } }
       setGate(null);
-      if (hr.ok) setHubs(hr.hubs || []); else setError(hr.error || 'failed to list event hubs');
+      if (hr.ok) {
+        setHubs(hr.hubs || []);
+        setIsAdmin(!!hr.isAdmin);
+        setHubsScoped(hr.scoped !== false);
+        setTotalInNamespace(typeof hr.totalInNamespace === 'number' ? hr.totalInNamespace : null);
+      } else setError(hr.error || 'failed to list event hubs');
       if (sr.ok) setSchemaGroups(sr.schemaGroups || []);
       if (ar.ok) setAuthRules(ar.rules || []);
       if (nr.ok) setNetwork(nr.network || null);
@@ -487,7 +499,7 @@ export function EventHubsNamespaceTree({ refreshKey = 0, onSelectEventHub }: Eve
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [showAllHubs]);
 
   useEffect(() => { loadAll(); }, [loadAll, refreshKey]);
 
@@ -649,6 +661,22 @@ export function EventHubsNamespaceTree({ refreshKey = 0, onSelectEventHub }: Eve
           onChange={(_, d) => setFilter(d.value)}
         />
       </Field>
+
+      {/* Least-privilege scope: default listing shows only hubs your workspaces'
+          eventstreams use. Tenant admins can flip to the full namespace. */}
+      {isAdmin && (
+        <Switch
+          label={<Caption1>Show all hubs in namespace{hubsScoped && totalInNamespace !== null ? ` (${totalInNamespace})` : ''}</Caption1>}
+          checked={showAllHubs}
+          onChange={(_, d) => setShowAllHubs(!!d.checked)}
+          aria-label="Show all hubs in namespace (admin)"
+        />
+      )}
+      {!isAdmin && hubsScoped && (
+        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+          Showing the hubs used by eventstreams in your workspaces.
+        </Caption1>
+      )}
 
       {loading && <div style={{ padding: tokens.spacingVerticalS }}><Spinner size="tiny" label="Loading namespace…" /></div>}
       {error && (
