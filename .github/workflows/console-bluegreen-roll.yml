@@ -1,0 +1,255 @@
+name: console-bluegreen-roll
+
+# BR-BLUEGREEN — zero-downtime blue-green roll of the loom-console Container App.
+#
+# Supersedes the in-place `az containerapp update --image` roll (single-revision
+# PATCH, where a bad image = instant outage until a manual rollback). Instead:
+#   1. ensure the app is in MULTIPLE-revision mode (idempotent),
+#   2. build the image server-side on the ACR (same pattern as gov-console-roll),
+#   3. deploy it as a NEW ("green") revision at 0% traffic,
+#   4. health-gate green: revision healthState == Healthy AND a probe to
+#      /api/version on green's OWN revision FQDN reports the new build SHA,
+#   5. shift traffic blue=0 green=100 ONLY after green is healthy,
+#   6. auto-roll-back on any gate failure — traffic never left blue, and the
+#      failed green revision is deactivated.
+# Non-interactive + idempotent. Commercial + Gov (AzureUSGovernment) via the
+# `cloud` input, matching gov-console-roll's SP pattern.
+#
+# Runbook: docs/fiab/deployment/bluegreen-rolls.md
+on:
+  workflow_dispatch:
+    inputs:
+      cloud:
+        description: 'Target cloud'
+        type: choice
+        options: [commercial, gov]
+        default: commercial
+        required: true
+      resource_group:
+        description: 'Admin-plane RG (blank = cloud default: Commercial rg-csa-loom-admin, Gov rg-csa-loom-admin-usgovvirginia)'
+        required: false
+        default: ''
+      app:
+        description: 'Container App name'
+        required: false
+        default: 'loom-console'
+      health_retries:
+        description: 'Health-gate polls (30s each) before declaring green unhealthy'
+        required: false
+        default: '24'
+
+permissions:
+  contents: read
+
+jobs:
+  bluegreen:
+    name: Blue-green roll (${{ inputs.cloud }})
+    runs-on: ubuntu-latest
+    env:
+      APP: ${{ inputs.app }}
+      HEALTH_RETRIES: ${{ inputs.health_retries }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # ── Auth: Commercial vs Gov SP (mirrors full-app-deploy / gov-console-roll) ──
+      - name: Azure login (Commercial)
+        if: ${{ inputs.cloud == 'commercial' }}
+        uses: Azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+            }
+
+      - name: Azure login (Gov)
+        if: ${{ inputs.cloud == 'gov' }}
+        uses: Azure/login@v2
+        with:
+          environment: AzureUSGovernment
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_GOV_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_GOV_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_GOV_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}",
+              "activeDirectoryEndpointUrl": "https://login.microsoftonline.us",
+              "resourceManagerEndpointUrl": "https://management.usgovcloudapi.net/",
+              "sqlManagementEndpointUrl": "https://management.core.usgovcloudapi.net:8443/",
+              "galleryEndpointUrl": "https://gallery.usgovcloudapi.net/",
+              "managementEndpointUrl": "https://management.core.usgovcloudapi.net/"
+            }
+
+      - name: Set Azure cloud (Gov)
+        if: ${{ inputs.cloud == 'gov' }}
+        run: az cloud set --name AzureUSGovernment
+
+      # ── Resolve RG + ACR for the chosen cloud ─────────────────────────────────
+      - name: Resolve RG + ACR
+        id: resolve
+        run: |
+          set -euo pipefail
+          RG="${{ inputs.resource_group }}"
+          # The admin RG is region-suffixed (rg-csa-loom-admin-<region>, e.g.
+          # -usgovvirginia). Resolve it by prefix so we don't hardcode the region.
+          if [[ -z "$RG" ]]; then
+            RG=$(az group list --query "[?starts_with(name, 'rg-csa-loom-admin')] | [0].name" -o tsv | tr -d '\r')
+          fi
+          if [[ -z "$RG" ]] || ! az group show -n "$RG" -o none 2>/dev/null; then
+            echo "::error::Admin RG not found (looked for rg-csa-loom-admin*) — pass resource_group."; exit 1
+          fi
+          ACR=$(az acr list --resource-group "$RG" --query "[?starts_with(name, 'acrloom')]|[0].name" -o tsv | tr -d '\r')
+          if [[ -z "$ACR" ]]; then echo "::error::No acrloom* ACR in $RG."; exit 1; fi
+          LOGIN=$(az acr show -n "$ACR" --query loginServer -o tsv | tr -d '\r')
+          echo "rg=$RG"       >> "$GITHUB_OUTPUT"
+          echo "acr=$ACR"     >> "$GITHUB_OUTPUT"
+          echo "login=$LOGIN" >> "$GITHUB_OUTPUT"
+          echo "::notice::RG=$RG ACR=$ACR login=$LOGIN app=$APP"
+
+      # ── Ensure MULTIPLE-revision mode (idempotent; enables blue-green) ────────
+      - name: Ensure multiple-revision mode
+        run: |
+          set -euo pipefail
+          RG="${{ steps.resolve.outputs.rg }}"
+          MODE=$(az containerapp show -n "$APP" -g "$RG" --query properties.configuration.activeRevisionsMode -o tsv | tr -d '\r')
+          echo "::notice::current activeRevisionsMode=$MODE"
+          if [[ "${MODE,,}" != "multiple" ]]; then
+            echo "::notice::switching $APP to multiple-revision mode"
+            az containerapp revision set-mode -n "$APP" -g "$RG" --mode multiple -o none
+          fi
+
+      # ── Capture the current production (BLUE) revision — the rollback target ──
+      - name: Capture blue (current production) revision
+        id: blue
+        run: |
+          set -euo pipefail
+          RG="${{ steps.resolve.outputs.rg }}"
+          # The blue revision is the one currently taking >0% ingress traffic.
+          BLUE=$(az containerapp ingress traffic show -n "$APP" -g "$RG" \
+            --query "sort_by([?weight>\`0\`], &weight)[-1].revisionName" -o tsv 2>/dev/null | tr -d '\r' || true)
+          if [[ -z "$BLUE" || "$BLUE" == "None" ]]; then
+            # Fresh app (latestRevision:true, unnamed) — fall back to the newest active revision.
+            BLUE=$(az containerapp revision list -n "$APP" -g "$RG" \
+              --query "sort_by([?properties.active], &properties.createdTime)[-1].name" -o tsv | tr -d '\r')
+          fi
+          echo "blue=$BLUE" >> "$GITHUB_OUTPUT"
+          echo "::notice::BLUE (rollback target) = $BLUE"
+
+      # ── Build the green image on the ACR (server-side; open→build→re-lock) ────
+      - name: Build + push green image
+        id: build
+        run: |
+          set -euo pipefail
+          ACR="${{ steps.resolve.outputs.acr }}"
+          SHA=$(git rev-parse --short=8 HEAD)
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "::notice::Building loom-console:$SHA on $ACR"
+          az acr update -n "$ACR" --public-network-enabled true --default-action Allow -o none
+          for i in $(seq 1 12); do az acr login -n "$ACR" >/dev/null 2>&1 && break; sleep 15; done
+          STAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          az acr build --registry "$ACR" --no-logs \
+            --image "loom-console:$SHA" --image "loom-console:latest" \
+            --file apps/fiab-console/Dockerfile \
+            --build-arg "LOOM_BUILD_SHA=$SHA" --build-arg "LOOM_BUILD_TIMESTAMP=$STAMP" \
+            apps/fiab-console
+          az acr update -n "$ACR" --default-action Deny --public-network-enabled false -o none
+
+      # ── Deploy green as a NEW revision at 0% traffic ──────────────────────────
+      - name: Deploy green revision (0% traffic)
+        id: green
+        run: |
+          set -euo pipefail
+          RG="${{ steps.resolve.outputs.rg }}"
+          IMG="${{ steps.resolve.outputs.login }}/loom-console:${{ steps.build.outputs.sha }}"
+          # A revision suffix must be DNS-safe + unique; the SHA plus the run number
+          # keeps re-rolls of the same SHA from colliding with an existing revision.
+          SUFFIX="g${{ steps.build.outputs.sha }}-${{ github.run_number }}"
+          echo "::notice::Deploying green image=$IMG suffix=$SUFFIX"
+          # In multiple-revision mode a new revision is created with 0% traffic —
+          # existing weights are preserved, so production stays on blue.
+          az containerapp update -n "$APP" -g "$RG" --image "$IMG" --revision-suffix "$SUFFIX" -o none
+          GREEN=$(az containerapp revision list -n "$APP" -g "$RG" \
+            --query "[?ends_with(name, '$SUFFIX')].name | [0]" -o tsv | tr -d '\r')
+          if [[ -z "$GREEN" || "$GREEN" == "None" ]]; then echo "::error::Could not resolve the green revision."; exit 1; fi
+          echo "green=$GREEN" >> "$GITHUB_OUTPUT"
+          echo "::notice::GREEN = $GREEN"
+
+      # ── Health-gate green: healthState Healthy + /api/version reports new SHA ──
+      - name: Health-gate green revision
+        id: gate
+        run: |
+          set -euo pipefail
+          RG="${{ steps.resolve.outputs.rg }}"
+          GREEN="${{ steps.green.outputs.green }}"
+          SHA="${{ steps.build.outputs.sha }}"
+          FQDN=$(az containerapp revision show -n "$APP" -g "$RG" --revision "$GREEN" \
+            --query properties.fqdn -o tsv 2>/dev/null | tr -d '\r' || true)
+          echo "::notice::green FQDN=${FQDN:-<none>}"
+          HEALTHY=0
+          for i in $(seq 1 "$HEALTH_RETRIES"); do
+            H=$(az containerapp revision show -n "$APP" -g "$RG" --revision "$GREEN" \
+              --query properties.healthState -o tsv 2>/dev/null | tr -d '\r' || true)
+            RUN=$(az containerapp revision show -n "$APP" -g "$RG" --revision "$GREEN" \
+              --query properties.runningState -o tsv 2>/dev/null | tr -d '\r' || true)
+            echo "$(date -u +%H:%M:%S) green healthState=$H runningState=$RUN"
+            if [[ "$H" == "Unhealthy" ]]; then echo "::warning::green Unhealthy"; break; fi
+            if [[ "$H" == "Healthy" ]]; then HEALTHY=1; break; fi
+            sleep 30
+          done
+          if [[ "$HEALTHY" != "1" ]]; then echo "gate=fail" >> "$GITHUB_OUTPUT"; echo "::error::green never reached Healthy"; exit 0; fi
+
+          # Secondary gate — probe /api/version on green's OWN FQDN and confirm the
+          # NEW build SHA is actually serving (proves the image, not just liveness).
+          # If the FQDN is unreachable from the runner (internal ingress), fall back
+          # to healthState with a loud notice; a REACHABLE-but-wrong SHA hard-fails.
+          if [[ -n "$FQDN" ]]; then
+            PROBE_OK=0
+            for i in $(seq 1 10); do
+              BODY=$(curl -fsS --max-time 10 "https://$FQDN/api/version" 2>/dev/null || true)
+              if [[ -n "$BODY" ]]; then
+                SERVED=$(echo "$BODY" | python3 -c "import sys,json; print((json.load(sys.stdin).get('build') or {}).get('sha',''))" 2>/dev/null | tr -d '\r' || true)
+                echo "green /api/version build.sha=$SERVED (want $SHA)"
+                if [[ "$SERVED" == "$SHA" ]]; then PROBE_OK=1; break; fi
+                if [[ -n "$SERVED" && "$SERVED" != "$SHA" ]]; then echo "gate=fail" >> "$GITHUB_OUTPUT"; echo "::error::green serves SHA '$SERVED', expected '$SHA'"; exit 0; fi
+              fi
+              sleep 15
+            done
+            if [[ "$PROBE_OK" != "1" ]]; then
+              echo "::notice::green FQDN not directly reachable (likely internal ingress) — gating on healthState only."
+            fi
+          fi
+          echo "gate=pass" >> "$GITHUB_OUTPUT"
+          echo "::notice::green PASSED the health gate"
+
+      # ── Switch traffic blue=0 green=100 (only when the gate passed) ───────────
+      - name: Shift traffic to green
+        if: ${{ steps.gate.outputs.gate == 'pass' }}
+        run: |
+          set -euo pipefail
+          RG="${{ steps.resolve.outputs.rg }}"
+          GREEN="${{ steps.green.outputs.green }}"
+          BLUE="${{ steps.blue.outputs.blue }}"
+          if [[ -n "$BLUE" && "$BLUE" != "$GREEN" && "$BLUE" != "None" ]]; then
+            az containerapp ingress traffic set -n "$APP" -g "$RG" --revision-weight "$BLUE=0" "$GREEN=100" -o none
+          else
+            az containerapp ingress traffic set -n "$APP" -g "$RG" --revision-weight "$GREEN=100" -o none
+          fi
+          echo "::notice::BR-BLUEGREEN ${{ steps.build.outputs.sha }} LIVE — 100% traffic on $GREEN; $BLUE retained at 0% for instant rollback."
+
+      # ── Auto-rollback: green failed the gate → deactivate it; blue never moved ─
+      - name: Auto-rollback (green failed the gate)
+        if: ${{ steps.gate.outputs.gate != 'pass' }}
+        run: |
+          set -euo pipefail
+          RG="${{ steps.resolve.outputs.rg }}"
+          GREEN="${{ steps.green.outputs.green }}"
+          BLUE="${{ steps.blue.outputs.blue }}"
+          echo "::error::green ($GREEN) failed the health gate — traffic never left blue ($BLUE). Deactivating green."
+          az containerapp revision deactivate -n "$APP" -g "$RG" --revision "$GREEN" -o none 2>/dev/null || true
+          # Belt-and-braces: re-pin 100% to blue in case anything shifted.
+          if [[ -n "$BLUE" && "$BLUE" != "None" ]]; then
+            az containerapp ingress traffic set -n "$APP" -g "$RG" --revision-weight "$BLUE=100" -o none 2>/dev/null || true
+          fi
+          exit 1

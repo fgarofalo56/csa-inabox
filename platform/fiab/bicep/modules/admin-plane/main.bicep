@@ -2722,6 +2722,12 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
         external: true
         healthPath: '/api/health'
         tier: 'console'
+        // BR-BLUEGREEN — the Console runs in MULTIPLE-revision mode so
+        // console-bluegreen-roll.yml can land a new image at 0% traffic,
+        // health-gate it, then shift 0->100 with the prior revision as an
+        // instant rollback. Only the Console opts in; every other app stays
+        // Single. See docs/fiab/deployment/bluegreen-rolls.md.
+        multiRevision: true
         minReplicas: 2
         maxReplicas: 6
         // Console-runtime telemetry opt-out (loomConsoleTelemetryEnabled, default
