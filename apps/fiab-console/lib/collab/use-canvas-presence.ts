@@ -14,7 +14,7 @@
  * On unmount it best-effort DELETEs the beacon so the peer disappears promptly.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { clientFetch } from '@/lib/client-fetch';
 import type { PresenceCursor, PresencePeer } from './canvas-presence-model';
 
@@ -84,5 +84,6 @@ export function useCanvasPresence(
     };
   }, [itemType, itemId, canvasKey, enabled]);
 
-  return { peers, reportCursor };
+  // Stable reference (see use-canvas-suggestion for the render-loop rationale).
+  return useMemo(() => ({ peers, reportCursor }), [peers, reportCursor]);
 }

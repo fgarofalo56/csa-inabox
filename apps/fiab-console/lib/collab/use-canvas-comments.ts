@@ -12,7 +12,7 @@
  * on the server response.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { clientFetch } from '@/lib/client-fetch';
 import type { CanvasCommentColor, CanvasCommentKind, CanvasCommentView } from './canvas-comment-model';
 
@@ -101,5 +101,9 @@ export function useCanvasComments(
     if (!r.ok || !j?.ok) { setError(j?.error || `HTTP ${r.status}`); setComments(prevList); }
   }, [itemType, itemId, comments]);
 
-  return { comments, loading, error, refresh, add, edit, remove };
+  // Stable reference (see use-canvas-suggestion for the render-loop rationale).
+  return useMemo(
+    () => ({ comments, loading, error, refresh, add, edit, remove }),
+    [comments, loading, error, refresh, add, edit, remove],
+  );
 }
