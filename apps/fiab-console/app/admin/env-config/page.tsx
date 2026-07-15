@@ -22,7 +22,20 @@ const useStyles = makeStyles({
 export default function AdminEnvConfigPage() {
   const s = useStyles();
   return (
-    <AdminShell sectionTitle="Runtime configuration">
+    <AdminShell
+      sectionTitle="Runtime configuration"
+      learn={{
+        title: 'Runtime configuration',
+        content:
+          'View and set the console deployment env vars (Cosmos, AOAI, Synapse, ADX, …) from the UI — a real ARM revision + audit trail, no Azure portal. Secret-typed keys are stored as ACA secrets, never in plaintext.',
+        tips: [
+          'Apply rolls a new loom-console Container App revision (durable)',
+          'Emits a bicep reconcile snippet so the change survives the next deploy',
+          'Needs Contributor on the loom-console Container App',
+        ],
+        learnMoreHref: 'https://learn.microsoft.com/azure/container-apps/environment-variables',
+      }}
+    >
       <div className={s.explainer}>
         <SectionExplainer>
           These are the deployment environment variables that turn Loom features on and point them at your Azure services — set them here instead of the Azure portal&apos;s Container Apps → Environment variables blade. Each key is grouped by what it drives:

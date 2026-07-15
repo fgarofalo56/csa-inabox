@@ -12,7 +12,20 @@ const useStyles = makeStyles({
 export default function AdminWebhooksPage() {
   const s = useStyles();
   return (
-    <AdminShell sectionTitle="Event subscriptions & webhooks">
+    <AdminShell
+      sectionTitle="Event subscriptions & webhooks"
+      learn={{
+        title: 'Event subscriptions',
+        content:
+          'Register outbound webhook endpoints that receive Loom events (item lifecycle, workspace, pipeline runs, marketplace subscribe / SLA breach, admin changes). HMAC-SHA256-signed direct HTTPS by default, or Azure Event Grid when configured.',
+        tips: [
+          'Verify the X-Loom-Signature HMAC on your receiver',
+          'Test-fire before relying on an endpoint; per-hook delivery history (last 100)',
+          'Event Grid transport is opt-in via LOOM_EVENTGRID_TOPIC_ENDPOINT',
+        ],
+        learnMoreHref: 'https://learn.microsoft.com/azure/event-grid/overview',
+      }}
+    >
       <div className={s.explainer}>
         <SectionExplainer>
           Register outbound webhook endpoints that receive CSA Loom events — item lifecycle (create/update/delete),

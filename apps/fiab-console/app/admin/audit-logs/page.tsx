@@ -227,7 +227,20 @@ export default function AuditLogsPage() {
   }
 
   return (
-    <AdminShell sectionTitle="Audit logs">
+    <AdminShell
+      sectionTitle="Audit logs"
+      learn={{
+        title: 'Audit logs',
+        content:
+          'Microsoft 365 unified audit-log activity for Loom and Fabric operations — who did what, when, and to which asset — reviewable from inside the console. Loom admin actions are also recorded in the Cosmos audit-log tier.',
+        tips: [
+          'Filter by date range, actor, operation and workspace',
+          'Needs View-Only Audit Logs (or Audit Logs) role + tenant auditing enabled',
+          'An honest gate shows the exact admin action when auditing is off',
+        ],
+        learnMoreHref: 'https://learn.microsoft.com/purview/audit-solutions-overview',
+      }}
+    >
       <TeachingBanner
         surfaceKey="admin-audit-logs"
         title="Your cross-platform compliance trail"

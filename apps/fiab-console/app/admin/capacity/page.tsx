@@ -572,7 +572,20 @@ export default function CapacityPage() {
   ], [styles, a, costTotals, onCost]);
 
   return (
-    <AdminShell sectionTitle="Capacity & compute">
+    <AdminShell
+      sectionTitle="Capacity & compute"
+      learn={{
+        title: 'Capacity & compute',
+        content:
+          'Live utilization, cost and admission-control guardrails for every Azure service Loom orchestrates (ACA, Databricks, Synapse, ADF, Cosmos, AML). Every number is a real Azure read; unprovisioned services show an honest gate.',
+        tips: [
+          'Utilization = Azure Monitor; Cost = Azure Cost Management',
+          'Guardrails = FGC-25 surge protection (default-on, per-workspace LCU/hour cap)',
+          'Needs Monitoring Reader + Cost Management Reader on the Console UAMI',
+        ],
+        learnMoreHref: 'https://learn.microsoft.com/azure/azure-monitor/overview',
+      }}
+    >
       <Body1 className={styles.intro}>
         Underlying Azure services Loom orchestrates. Live inventory from Azure
         Resource Manager, month-to-date cost from Cost Management, and 24h

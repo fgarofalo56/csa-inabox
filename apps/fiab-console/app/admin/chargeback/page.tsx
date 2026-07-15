@@ -290,7 +290,20 @@ export default function ChargebackPage() {
   ], [styles, a, wsModel]);
 
   return (
-    <AdminShell sectionTitle="Chargeback">
+    <AdminShell
+      sectionTitle="Chargeback"
+      learn={{
+        title: 'Chargeback report',
+        content:
+          'Attributes real Azure Cost Management spend to governance domains via the loom-domain tag — the Azure-native 1:1 of the Fabric Chargeback app. Stacked bar chart, CSV export, and per-user drill-down.',
+        tips: [
+          'Spend joins to domains through the loom-domain resource tag',
+          'Per-execution costs come from the cost-attribution ledger (TTL 90d)',
+          'Needs Cost Management Reader on the billing scope',
+        ],
+        learnMoreHref: 'https://learn.microsoft.com/azure/cost-management-billing/costs/overview-cost-management',
+      }}
+    >
       <Body1 className={styles.intro}>
         Attribute real Azure spend to your governance domains. Spend is grouped by the
         <code> loom-domain</code> tag that Loom stamps on each domain&apos;s Data Landing Zone resources,
