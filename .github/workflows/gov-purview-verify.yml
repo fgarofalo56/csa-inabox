@@ -167,8 +167,12 @@ jobs:
           # with "(25, 'Inappropriate ioctl for device')" — fake one via script(1).
           # The JS goes over as base64 so no quote level (bash -> sh -c -> node)
           # can mangle it.
+          # ACA's exec argv-splitter passes \" through literally and its quote
+          # handling is undocumented — so use a command with NO quotes at all:
+          # the eval wrapper is space-free/quote-free JS and the payload rides
+          # as a bare base64 argv token (argv[1] under node -e).
           B64=$(printf '%s' "$SCRIPT" | base64 -w0)
-          OUT=$(script -qec "az containerapp exec -n $APP -g $RG --replica $REP --container $APP --command 'node -e \"eval(Buffer.from(\\\"$B64\\\",\\\"base64\\\").toString())\"'" /dev/null 2>&1 | tr -d '\r' || true)
+          OUT=$(script -qec "az containerapp exec -n $APP -g $RG --replica $REP --container $APP --command \"node -e eval(atob(process.argv[1])) $B64\"" /dev/null 2>&1 | tr -d '\r' || true)
           echo "== raw exec output =="
           echo "$OUT"
           if echo "$OUT" | grep -q "PVW 200"; then
