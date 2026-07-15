@@ -38,6 +38,7 @@ import { useAdminTabStyles } from '@/lib/components/ui/admin-tab-styles';
 import { PerfMetricCard } from '@/lib/components/admin/perf-metric-card';
 import { SparkPoolCard } from '@/lib/components/admin/spark-pool-card';
 import { CopilotSloCard } from '@/lib/components/admin/copilot-slo-card';
+import { CacheHitRateCard } from '@/lib/components/admin/cache-hit-rate-card';
 import { isPageTtiMetric } from '@/lib/perf/perf-metrics';
 import type { MetricTrend, TrendModel } from '@/lib/perf/perf-store';
 
@@ -280,6 +281,7 @@ export function PerformanceEditor() {
       <SparkPoolCard />
 
       <CopilotSloCard />
+      <CacheHitRateCard />
 
       <Section
         title="Benchmark run"

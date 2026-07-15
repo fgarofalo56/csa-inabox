@@ -192,6 +192,13 @@ export async function evalDax(
   }
   recordCacheMiss('tabular');
 
+  // PSR-5 warm-on-first-access — the FIRST cold query against a model in this
+  // process primes the tabular backend (serverless pool wake / AAS page-in) so
+  // subsequent + concurrent queries skip the cold spin-up. Fire-and-forget, so
+  // it NEVER adds latency to this hot path, and once-per-model-per-process so a
+  // busy report doesn't re-warm on every miss.
+  primeOnFirstAccess(modelId, tenantId, database);
+
   let out: TabularQueryResult;
   if (backend === 'analysis-services') {
     out = await aasEvalDax(daxQuery);
@@ -233,12 +240,43 @@ export async function evalDax(
 }
 
 /**
+ * Models this process has already kicked a warm for (PSR-5 warm-on-first-access
+ * guard) — module scope, so it resets with the ACA replica exactly like the
+ * in-process cache tier.
+ */
+const warmedModels = new Set<string>();
+
+/** TEST HOOK — clear the warm-once guard so tests can re-observe first-access warming. */
+export function _resetWarmGuard(): void {
+  warmedModels.clear();
+}
+
+/**
+ * PSR-5 warm-on-first-access. The first cache MISS for a model in this process
+ * kicks a background {@link warmSemanticModel} (once per model) so the pool is
+ * hot for the next/concurrent visits. Fire-and-forget — never awaited on the
+ * request hot path, never throws. Returns true when it kicked a warm.
+ */
+export function primeOnFirstAccess(modelId: string, tenantId: string, database?: string): boolean {
+  const key = `${tenantId}::${modelId}::${database ?? ''}`;
+  if (warmedModels.has(key)) return false;
+  warmedModels.add(key);
+  void warmSemanticModel(modelId, tenantId, database).catch(() => {
+    // Best-effort prime — a failure just means the next visit is cold; allow a
+    // future retry by forgetting the guard.
+    warmedModels.delete(key);
+  });
+  return true;
+}
+
+/**
  * PSR-5 model-warm / prime. Runs a trivial keep-alive against the tabular
  * backend so the first real visit avoids a cold spin-up (serverless pool wake /
  * AAS VertiScan page-in). NO model dependency on the loom-native path — a bare
  * `SELECT 1` wakes the serverless pool + primes the connection; the AAS path
- * evaluates a constant row to page the model into memory. Opt-in (call from a
- * scheduler or the editor "keep warm"); never on the request hot path.
+ * evaluates a constant row to page the model into memory. Called on first
+ * access (see {@link primeOnFirstAccess}) and from the editor "keep warm" /
+ * scheduler; never awaited on the request hot path.
  */
 export async function warmSemanticModel(
   modelId: string,

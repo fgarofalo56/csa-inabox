@@ -8,9 +8,10 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { enforceRateLimit } from '@/lib/azure/rate-limiter';
 import {
-  executeQuery, executeMgmtCommand, loadKustoItem, resolveDatabase, KustoError,
-  laConfigGate,
+  executeQueryCached, executeMgmtCommand, loadKustoItem, resolveDatabase, KustoError,
+  laConfigGate, parseKqlPage, KQL_MAX_ROWS, type KqlPage,
 } from '@/lib/azure/kusto-client';
+import { jsonWithQueryCache } from '@/lib/api/query-cache-headers';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -60,16 +61,31 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     if (kql.length > 65_536) return NextResponse.json({ ok: false, error: 'kql too large (>64KB)' }, { status: 413 });
 
     const isMgmt = kql.startsWith('.');
+    // PSR-6 — real row-cap paging (over-fetch take+1 → hasMore/nextPage).
+    const page: KqlPage | undefined = isMgmt ? undefined : parseKqlPage((body as { page?: unknown })?.page);
     const result = isMgmt
       ? await executeMgmtCommand(database, kql)
-      : await executeQuery(database, kql);
-    return NextResponse.json({
+      // PSR-6 — Loom-tier result cache (in-proc → Redis → Cosmos), default-ON.
+      : await executeQueryCached(database, kql, { page });
+
+    // Uniform "load more": an unpaged query truncated at the cap surfaces a
+    // first paged window so the grid can continue past KQL_MAX_ROWS.
+    let hasMore = (result as { hasMore?: boolean }).hasMore ?? false;
+    let nextPage = (result as { nextPage?: KqlPage }).nextPage;
+    if (!isMgmt && !page && result.truncated) {
+      hasMore = true;
+      nextPage = { skip: result.rows.length, take: KQL_MAX_ROWS };
+    }
+
+    return jsonWithQueryCache({
       ok: true,
       database,
       mode: isMgmt ? 'mgmt' : 'query',
       ...result,
+      hasMore,
+      ...(nextPage ? { nextPage } : {}),
       executedBy: session.claims.upn,
-    });
+    }, { ifNoneMatch: req.headers.get('if-none-match'), maxAgeSec: isMgmt ? 0 : 60 });
   } catch (e: any) {
     const status = e instanceof KustoError ? e.status : 502;
     return NextResponse.json({ ok: false, error: e?.message || String(e), body: e?.body }, { status });

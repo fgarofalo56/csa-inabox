@@ -65,6 +65,10 @@ export function KqlQuerysetEditor({ item, id }: { item: FabricItemType; id: stri
   const [draft, setDraft] = useState<SavedQuery>(SAMPLE_QS);
   const [result, setResult] = useState<KqlResult | null>(null);
   const [loading, setLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  // PSR-6 — remember the exact payload that produced the current result so
+  // "Load more" fetches the NEXT page of the SAME query (not the live draft).
+  const lastRunPayloadRef = useRef<{ kql: string; database?: string; sourceType: string } | null>(null);
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [saveErr, setSaveErr] = useState<string | null>(null);
@@ -225,6 +229,7 @@ export function KqlQuerysetEditor({ item, id }: { item: FabricItemType; id: stri
     // Pin the kql/database we're sending at click-time so any subsequent
     // edits the user makes mid-run cannot influence what was executed.
     const payload = { kql: draft.kql, database: draft.database, sourceType: draft.sourceType || 'adx' };
+    lastRunPayloadRef.current = payload;
     const ctrl = new AbortController();
     abortRef.current = ctrl;
     try {
@@ -246,6 +251,42 @@ export function KqlQuerysetEditor({ item, id }: { item: FabricItemType; id: stri
       abortRef.current = null;
     }
   }, [id, draft]);
+
+  // PSR-6 — fetch the next page and APPEND its rows to the current result. Reuses
+  // the exact query that produced the current rows (lastRunPayloadRef) so a
+  // mid-scroll draft edit can't change what's being paged.
+  const loadMore = useCallback(async () => {
+    const base = lastRunPayloadRef.current;
+    if (!base || !result?.nextPage) return;
+    setLoadingMore(true);
+    try {
+      const r = await clientFetch(`/api/items/kql-queryset/${id}/run`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ ...base, page: result.nextPage }),
+      });
+      const next = (await r.json()) as KqlResult;
+      if (!next.ok) { setResult(next); return; }
+      setResult((prev) => {
+        if (!prev) return next;
+        const merged = [...(prev.rows || []), ...(next.rows || [])];
+        return {
+          ...prev,
+          rows: merged,
+          rowCount: merged.length,
+          hasMore: next.hasMore,
+          nextPage: next.nextPage,
+          truncated: false,
+          executionMs: next.executionMs,
+        };
+      });
+    } catch (e: any) {
+      // Keep the already-loaded rows; surface the paging failure inline.
+      setResult((prev) => (prev ? { ...prev, hasMore: false } : prev));
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [id, result]);
 
   const cancel = useCallback(() => {
     abortRef.current?.abort();
@@ -562,7 +603,7 @@ export function KqlQuerysetEditor({ item, id }: { item: FabricItemType; id: stri
               </MessageBarActions>
             </MessageBar>
           )}
-          <KqlResultsPanel result={result} loading={loading} itemId={id} itemType="kql-queryset" />
+          <KqlResultsPanel result={result} loading={loading} itemId={id} itemType="kql-queryset" onLoadMore={loadMore} loadingMore={loadingMore} />
 
           <Dialog open={pinDlgOpen} onOpenChange={(_: unknown, d: any) => setPinDlgOpen(d.open)}>
             <DialogSurface>

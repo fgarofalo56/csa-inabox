@@ -67,7 +67,7 @@
 import { createHash } from 'crypto';
 import { loomServerCredential } from '@/lib/azure/aca-managed-identity';
 import { redisCacheConfigured, redisGet, redisSet } from '@/lib/azure/redis-cache-client';
-import { recordCacheHit, recordCacheMiss } from '@/lib/perf/cache-counters';
+import { recordCacheHit, recordCacheMiss, type CacheCounterBackend } from '@/lib/perf/cache-counters';
 
 // ── Public shapes ──────────────────────────────────────────────────────────
 
@@ -311,8 +311,28 @@ let cosmosContainer: any | null = null;
 let cosmosInitTried = false;
 let cosmosWarned = false;
 
+/** Canonical Cosmos container id for the distributed result-cache tier. */
+export const DEFAULT_QUERY_CACHE_COSMOS_CONTAINER = 'query-result-cache';
+
+/**
+ * The Cosmos container id backing the distributed cache tier, or null when the
+ * tier is off. PSR-5 die-hard default-ON: when a Cosmos endpoint is configured
+ * (every real deployment), the distributed tier is ON using the canonical
+ * container — no extra env needed. It's created lazily via createIfNotExists,
+ * so no ARM step is required. An operator opts OUT with
+ * `LOOM_QUERY_CACHE_COSMOS_DISABLED=1`, or overrides the container name with
+ * `LOOM_QUERY_CACHE_COSMOS_CONTAINER`. Off entirely with no Cosmos endpoint
+ * (local dev) so tests + the in-process tier still work with zero infra.
+ */
+export function distributedContainerId(): string | null {
+  if (process.env.LOOM_QUERY_CACHE_COSMOS_DISABLED === '1') return null;
+  if (!process.env.LOOM_COSMOS_ENDPOINT) return null;
+  const explicit = process.env.LOOM_QUERY_CACHE_COSMOS_CONTAINER?.trim();
+  return explicit || DEFAULT_QUERY_CACHE_COSMOS_CONTAINER;
+}
+
 function distributedEnabled(): boolean {
-  return !!process.env.LOOM_QUERY_CACHE_COSMOS_CONTAINER && !!process.env.LOOM_COSMOS_ENDPOINT;
+  return distributedContainerId() !== null;
 }
 
 async function getCosmosContainer(): Promise<any | null> {
@@ -329,7 +349,7 @@ async function getCosmosContainer(): Promise<any | null> {
     const dbId = process.env.LOOM_COSMOS_DATABASE || 'loom';
     const { database } = await client.databases.createIfNotExists({ id: dbId });
     const { container } = await database.containers.createIfNotExists({
-      id: process.env.LOOM_QUERY_CACHE_COSMOS_CONTAINER!,
+      id: distributedContainerId()!,
       partitionKey: { paths: ['/modelId'] },
       // Native per-item TTL; individual docs also carry `ttl` (seconds).
       defaultTtl: Math.ceil((ttlMs() / 1000) * 4),
@@ -470,6 +490,8 @@ export interface CacheMeta {
   cachedAt: number;
   /** True when a stale value was served and a background refresh was kicked. */
   stale: boolean;
+  /** True when the value was served from a cache tier (fresh OR stale) — not computed inline. */
+  hit: boolean;
 }
 
 /** In-flight background refreshes, keyed by cache key — the SWR stampede guard. */
@@ -541,37 +563,49 @@ export async function getOrComputeCached<T>(
   key: string,
   modelId: string,
   compute: () => Promise<T>,
-  opts?: { ttlMs?: number; backend?: string; staleWhileRevalidate?: boolean; bypass?: boolean },
+  opts?: {
+    ttlMs?: number;
+    backend?: string;
+    staleWhileRevalidate?: boolean;
+    bypass?: boolean;
+    /**
+     * Which cache-counter backend hits/misses are attributed to (perf surface
+     * hit-rate). Defaults to `result-cache`; the ADX query path passes `adx` so
+     * its Loom-tier hits land on the ADX hit-rate.
+     */
+    counterBackend?: CacheCounterBackend;
+  },
 ): Promise<{ value: T; meta: CacheMeta }> {
   const ttl = opts?.ttlMs && opts.ttlMs > 0 ? opts.ttlMs : ttlMsForBackend(opts?.backend);
+  const counter: CacheCounterBackend = opts?.counterBackend ?? 'result-cache';
 
   // Disabled or explicit bypass → compute inline; still populate the cache when enabled.
   if (!queryCacheEnabled() || opts?.bypass) {
     const value = await compute();
     if (queryCacheEnabled()) await writeAllTiers(key, modelId, value, ttl);
-    return { value, meta: { cachedAt: Date.now(), stale: false } };
+    return { value, meta: { cachedAt: Date.now(), stale: false, hit: false } };
   }
 
   const env = await peekAnyTier(key, modelId);
   const now = Date.now();
 
   if (env && env.expiresAt > now) {
-    recordCacheHit('result-cache');
+    recordCacheHit(counter);
     ipSet(env); // promote a shared-tier hit into the in-process tier
-    return { value: env.value as T, meta: { cachedAt: env.cachedAt, stale: false } };
+    return { value: env.value as T, meta: { cachedAt: env.cachedAt, stale: false, hit: true } };
   }
 
   if (env && opts?.staleWhileRevalidate) {
-    recordCacheHit('result-cache');
+    recordCacheHit(counter);
     kickBackgroundRefresh(key, modelId, compute, ttl);
-    return { value: env.value as T, meta: { cachedAt: env.cachedAt, stale: true } };
+    return { value: env.value as T, meta: { cachedAt: env.cachedAt, stale: true, hit: true } };
   }
 
   // Miss, or expired without SWR → compute inline and store.
-  recordCacheMiss('result-cache');
+  recordCacheMiss(counter);
   const value = await compute();
   await writeAllTiers(key, modelId, value, ttl);
-  return { value, meta: { cachedAt: now, stale: false } };
+  return { value, meta: { cachedAt: now, stale: false, hit: false } };
 }
 
 /**

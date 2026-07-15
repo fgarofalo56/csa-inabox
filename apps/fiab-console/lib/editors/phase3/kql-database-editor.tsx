@@ -165,6 +165,10 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
   const [kql, setKql] = useState(SAMPLE_KQL_DB);
   const [result, setResult] = useState<KqlResult | null>(null);
   const [loading, setLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  // PSR-6 — the exact KQL that produced the current result, so "Load more" pages
+  // the same query rather than the live editor buffer.
+  const lastRunKqlRef = useRef<string | null>(null);
   // ── KQL Copilot (NL2KQL / explain / fix) ──────────────────────────────
   // Persona-backed inline assist — POSTs to /api/items/kql-database/<id>/assist,
   // which grounds generation in the live ADX schema (KQL_COPILOT_PERSONA) and
@@ -369,6 +373,7 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
   const run = useCallback(async () => {
     setLoading(true);
     setResult(null);
+    lastRunKqlRef.current = kql;
     try {
       const r = await clientFetch(`/api/items/kql-database/${id}/query`, {
         method: 'POST',
@@ -382,6 +387,31 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
       setLoading(false);
     }
   }, [id, kql]);
+
+  // PSR-6 — load + append the next page of rows for the query that produced the
+  // current result (not the live editor buffer).
+  const loadMore = useCallback(async () => {
+    if (!result?.nextPage || lastRunKqlRef.current == null) return;
+    setLoadingMore(true);
+    try {
+      const r = await clientFetch(`/api/items/kql-database/${id}/query`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ kql: lastRunKqlRef.current, page: result.nextPage }),
+      });
+      const next = (await r.json()) as KqlResult;
+      if (!next.ok) { setResult(next); return; }
+      setResult((prev) => {
+        if (!prev) return next;
+        const merged = [...(prev.rows || []), ...(next.rows || [])];
+        return { ...prev, rows: merged, rowCount: merged.length, hasMore: next.hasMore, nextPage: next.nextPage, truncated: false, executionMs: next.executionMs };
+      });
+    } catch {
+      setResult((prev) => (prev ? { ...prev, hasMore: false } : prev));
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [id, result]);
 
   // KQL Copilot edge — generate (NL2KQL) / explain (Markdown) / fix.
   const callAssist = useCallback(async (mode: 'generate' | 'explain' | 'fix') => {
@@ -1420,7 +1450,7 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
               </MessageBarActions>
             </MessageBar>
           )}
-          <KqlResultsPanel result={result} loading={loading} itemId={id} itemType="kql-database" />
+          <KqlResultsPanel result={result} loading={loading} itemId={id} itemType="kql-database" onLoadMore={loadMore} loadingMore={loadingMore} />
 
           {/* Starter schema + queries from the app-install template. Surfaced
               when the live ADX object isn't provisioned yet so a bundle-
