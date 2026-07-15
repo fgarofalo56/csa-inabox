@@ -17,6 +17,11 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { getArmTokenPreferUser } from '@/lib/auth/obo';
 import { readDlzDeploymentStatus } from '@/lib/setup/user-arm-deploy';
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
+
+/** Ceiling on the orchestrator status proxy hop — a wedged orchestrator app
+ * must yield a JSON 502 the wizard's poll tolerates, never an edge HTML 504. */
+const ORCH_STATUS_TIMEOUT_MS = 10_000;
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -107,7 +112,11 @@ export async function GET(req: NextRequest) {
     const headers: Record<string, string> = { accept: 'application/json' };
     const internalToken = (process.env.LOOM_INTERNAL_TOKEN || '').trim();
     if (internalToken) headers.authorization = `Bearer ${internalToken}`;
-    const res = await fetch(`${orchUrl}/api/setup/${encodeURIComponent(id)}`, { headers, cache: 'no-store' });
+    const res = await fetchWithTimeout(
+      `${orchUrl}/api/setup/${encodeURIComponent(id)}`,
+      { headers, cache: 'no-store' },
+      ORCH_STATUS_TIMEOUT_MS,
+    );
     const j: any = await res.json().catch(() => ({}));
     if (!res.ok) {
       return NextResponse.json(
