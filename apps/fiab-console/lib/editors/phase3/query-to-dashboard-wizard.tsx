@@ -340,7 +340,7 @@ export function QueryToDashboardWizard({ open, onClose, itemId, itemName, worksp
                       </Caption1>
                       <pre
                         style={{
-                          margin: 0,
+                          margin: tokens.spacingVerticalNone,
                           padding: tokens.spacingVerticalS,
                           border: `1px solid ${tokens.colorNeutralStroke2}`,
                           borderRadius: tokens.borderRadiusMedium,
