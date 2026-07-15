@@ -1104,6 +1104,25 @@ export function coerceM365AuthMode(v: unknown): M365AuthMode {
   return v === 'entra' || v === 'manual' ? v : 'none';
 }
 
+/**
+ * Downstream service-identity delegation mode for an agent's runtime calls —
+ * a DISTINCT axis from the channel end-user {@link M365AuthMode}:
+ *   - 'user'         : call downstream Foundry/Azure resources on-behalf-of the
+ *                      invoking Microsoft 365 user (OBO token exchange), so data
+ *                      access is evaluated under the caller's identity/RBAC.
+ *   - 'agent-author' : call under the agent author's own service identity
+ *                      (the Loom UAMI / app registration), independent of caller.
+ * This maps to Copilot Studio's "Authenticate → connections run as" choice and
+ * governs how the connected agent reaches Loom's downstream data plane.
+ */
+export type M365IdentityMode = 'user' | 'agent-author';
+export const M365_IDENTITY_MODES: M365IdentityMode[] = ['user', 'agent-author'];
+
+/** Coerce an untrusted value to a valid {@link M365IdentityMode} (defaults to 'agent-author'). */
+export function coerceM365IdentityMode(v: unknown): M365IdentityMode {
+  return v === 'user' ? 'user' : 'agent-author';
+}
+
 /** Resolve the Power Platform environment to publish into, by id or the default env var. */
 export function resolvePublishEnvId(envId?: string): string | null {
   const v = (envId || process.env.LOOM_COPILOT_STUDIO_ENVIRONMENT_ID || '').trim();
@@ -1184,6 +1203,8 @@ export interface M365PublishResult {
   connectedAgent: boolean;
   /** The end-user authentication mode set on the M365 Copilot channel. */
   authMode: M365AuthMode;
+  /** Downstream service-identity delegation mode (OBO 'user' vs 'agent-author'). */
+  identityMode: M365IdentityMode;
   /** Deep link into the M365 Copilot / Teams app once an admin approves the agent. */
   shareUrl?: string;
   /**
@@ -1220,6 +1241,10 @@ export interface M365PublishInput {
   connectedAgent?: boolean;
   /** End-user authentication mode for the M365 Copilot channel (default 'none'). */
   authMode?: M365AuthMode;
+  /** Downstream service-identity delegation mode (OBO 'user' vs 'agent-author';
+   *  default 'agent-author'). Governs whose identity the connected agent uses
+   *  to reach Loom's downstream data plane at runtime. */
+  identityMode?: M365IdentityMode;
 }
 
 /**
@@ -1240,6 +1265,7 @@ export async function publishToM365Copilot(envId: string, input: M365PublishInpu
   const deliverAsIs = input.deliverAsIs === true;
   const connectedAgent = input.connectedAgent === true;
   const authMode = coerceM365AuthMode(input.authMode);
+  const identityMode = coerceM365IdentityMode(input.identityMode);
   const descriptionForModel = (input.descriptionForModel || '').trim().slice(0, 5000) || undefined;
 
   // 1. upsert the agent
@@ -1281,6 +1307,10 @@ export async function publishToM365Copilot(envId: string, input: M365PublishInpu
     deliverAsIs,
     connectedAgent,
     authMode,
+    // Downstream service-identity delegation (G6 item #6). Written into the same
+    // real channel-config Memo so the maker portal / runtime can honor OBO vs
+    // agent-author when the connected agent reaches Loom's data plane.
+    identityMode,
     ...(descriptionForModel ? { descriptionForModel } : {}),
   };
   let channel: CopilotChannel;
@@ -1308,6 +1338,7 @@ export async function publishToM365Copilot(envId: string, input: M365PublishInpu
     deliverAsIs,
     connectedAgent,
     authMode,
+    identityMode,
     shareUrl: channel.embedUrl,
     // Real, navigable follow-up links: the Copilot Studio Channels tab (maker
     // completes availability + grabs the Teams share link post-approval) and the

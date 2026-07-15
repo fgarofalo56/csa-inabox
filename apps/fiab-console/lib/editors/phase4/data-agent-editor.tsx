@@ -164,7 +164,13 @@ interface DataAgentState {
   foundryAgentId?: string; foundryProjectId?: string; publishedAt?: string;
   lastDeployedAt?: string;
   /** Receipt of the last publish to Microsoft 365 Copilot (Copilot Studio). */
-  m365Copilot?: { envId: string; agentId: string; agentName: string; agentState?: string; channelId?: string; m365CopilotEnabled?: boolean; publishedAt: string };
+  m365Copilot?: {
+    envId: string; agentId: string; agentName: string; agentState?: string; channelId?: string;
+    m365CopilotEnabled?: boolean; publishedAt: string;
+    // Agentic-publish depth (G6).
+    descriptionForModel?: string; deliverAsIs?: boolean; connectedAgent?: boolean;
+    authMode?: 'none' | 'entra' | 'manual'; identityMode?: 'user' | 'agent-author';
+  };
   [k: string]: unknown;
 }
 
@@ -499,6 +505,9 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
   const [m365DeliverAsIs, setM365DeliverAsIs] = useState(false);
   const [m365ConnectedAgent, setM365ConnectedAgent] = useState(false);
   const [m365AuthMode, setM365AuthMode] = useState<'none' | 'entra' | 'manual'>('none');
+  // Downstream service-identity delegation (OBO 'user' vs 'agent-author') — a
+  // distinct axis from the channel end-user auth above.
+  const [m365IdentityMode, setM365IdentityMode] = useState<'user' | 'agent-author'>('agent-author');
   const loadM365Envs = useCallback(async () => {
     if (id === 'new') return;
     try {
@@ -518,6 +527,7 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
           if (typeof ap.deliverAsIs === 'boolean') setM365DeliverAsIs(ap.deliverAsIs);
           if (typeof ap.connectedAgent === 'boolean') setM365ConnectedAgent(ap.connectedAgent);
           if (ap.authMode === 'none' || ap.authMode === 'entra' || ap.authMode === 'manual') setM365AuthMode(ap.authMode);
+          if (ap.identityMode === 'user' || ap.identityMode === 'agent-author') setM365IdentityMode(ap.identityMode);
           if (typeof ap.m365CopilotEnabled === 'boolean') setM365Available(ap.m365CopilotEnabled);
         }
       } else {
@@ -543,6 +553,7 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
           deliverAsIs: m365DeliverAsIs,
           connectedAgent: m365ConnectedAgent,
           authMode: m365AuthMode,
+          identityMode: m365IdentityMode,
         }),
       });
       const j = await r.json().catch(() => ({ ok: false, error: `HTTP ${r.status}` }));
@@ -551,7 +562,7 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
       if (j.ok) await reload();
     } catch (e: any) { setM365Result({ ok: false, error: e?.message || String(e) }); }
     finally { setM365Publishing(false); }
-  }, [id, m365EnvId, m365Available, m365DescForModel, m365DeliverAsIs, m365ConnectedAgent, m365AuthMode, dirty, save, reload, lastSaveError, state.description]);
+  }, [id, m365EnvId, m365Available, m365DescForModel, m365DeliverAsIs, m365ConnectedAgent, m365AuthMode, m365IdentityMode, dirty, save, reload, lastSaveError, state.description]);
 
   // ---- delete this agent (owner-scoped via the item DELETE route) ----
   const [deleting, setDeleting] = useState(false);
@@ -1196,7 +1207,7 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
                   <Switch
                     checked={m365Available}
                     onChange={(_, d) => setM365Available(d.checked)}
-                    label="Make agent available in Microsoft 365 Copilot (uncheck for Teams only)"
+                    label="List in the Microsoft 365 Copilot Agent Store (uncheck to publish to Teams only)"
                     style={{ marginTop: tokens.spacingVerticalXS }}
                   />
 
@@ -1246,6 +1257,20 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
                       <Option value="manual">Authenticate manually</Option>
                     </Dropdown>
                   </Field>
+                  <Field
+                    label="Downstream data access runs as"
+                    hint="Whose identity the agent uses to reach Loom's governed data at runtime: the invoking user (on-behalf-of / OBO — data access honors the caller's own RBAC) or the agent author's service identity."
+                    style={{ marginTop: tokens.spacingVerticalS, maxWidth: 480 }}
+                  >
+                    <Dropdown
+                      value={m365IdentityMode === 'user' ? 'Invoking user (on-behalf-of)' : "Agent author's service identity"}
+                      selectedOptions={[m365IdentityMode]}
+                      onOptionSelect={(_, d) => { if (d.optionValue === 'user' || d.optionValue === 'agent-author') setM365IdentityMode(d.optionValue); }}
+                    >
+                      <Option value="user">Invoking user (on-behalf-of)</Option>
+                      <Option value="agent-author">Agent author&apos;s service identity</Option>
+                    </Dropdown>
+                  </Field>
 
                   <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM, marginTop: tokens.spacingVerticalM, flexWrap: 'wrap' }}>
                     <Button
@@ -1292,6 +1317,9 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
                           {m365Result.deliverAsIs && <Badge appearance="tint" color="brand" size="small">responses delivered as-is</Badge>}
                           <Badge appearance="tint" color="informative" size="small">
                             auth: {m365Result.authMode === 'entra' ? 'Entra ID' : m365Result.authMode === 'manual' ? 'manual' : 'none'}
+                          </Badge>
+                          <Badge appearance="tint" color="informative" size="small">
+                            runs as: {m365Result.identityMode === 'user' ? 'invoking user (OBO)' : 'agent author'}
                           </Badge>
                           {m365Result.descriptionForModel && <Badge appearance="tint" color="success" size="small">model description set</Badge>}
                         </div>
