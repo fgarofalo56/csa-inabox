@@ -13,19 +13,35 @@
  *   • token-only tint helpers (`accentTint` / `accentGradient` / `portStyle`) —
  *     the kit owns ALL `color-mix(...)` strings; consumers pass only the accent
  *     var through `CanvasVisual`;
- *   • the shared node chrome (`CanvasNode` + `StatusChip`) — rail + gradient
- *     header (icon chip, title, status chip) + body + framed-container variant;
+ *   • the shared node chrome (`CanvasNode` + `StatusChip`) — the v4 COMPACT
+ *     anatomy (see below) + body slots + framed-container variant;
  *   • the shared Bezier edge base (`CanvasEdge`).
  *
- * NO raw px (except the fixed 11px handle geometry React Flow needs) and NO raw
+ * ── v4 COMPACT node anatomy (modelled on ADF / Fabric pipeline nodes) ────────
+ *
+ *   ┌┃──────────────────────────┐   ┃ 3px accent bar (category colour)
+ *   ┃ ▢  Node name         ●    │   ▢ 24px tinted icon chip (branded glyph)
+ *   ┃    Type · summary         │   ● status dot, top-right (tooltip = label)
+ *   └┃──────────────────────────┘
+ *
+ *   • `CANVAS_NODE_WIDTH` (180px, from canvas-anatomy) is the shared default
+ *     width — height is content-driven, typically two text rows.
+ *   • Row 1: tinted icon chip + single-line truncated name (tooltip on hover)
+ *     + a small status dot (idle renders nothing; running keeps a SUBTLE pulse
+ *     ring behind the chip).
+ *   • Row 2: Caption1 subtitle — `typeLabel`, joined with `description` when
+ *     present ("Event Hub · telemetry-in"), truncated.
+ *   • The inline action bar floats ABOVE the card and reveals only on
+ *     hover / focus / selection; typed port labels likewise reveal on
+ *     hover / selection — quiet by default, informative on approach.
+ *   • Selection = brand/accent outline + a soft accent glow; hover elevates
+ *     shadow4 → shadow8. No full-width gradient band, no persistent badges.
+ *
+ * NO raw px (except the fixed 11px handle geometry React Flow needs, the 24px
+ * icon-chip footprint, and the shared `CANVAS_NODE_WIDTH` constant) and NO raw
  * hex — every colour/space/radius/shadow is a Fluent v9 `tokens.*` value or a
  * `--loom-accent-*` var combined via `color-mix`. All motion is gated behind
  * `prefers-reduced-motion: reduce` in the `makeStyles` rules below.
- *
- * Out-classes ADF Studio / Fabric / Power BI canvases: per-type glyph,
- * per-category accent + gradient header, elevation-on-hover, accent
- * selected-ring, typed animated edges, and framed containers with branch chips
- * — all theme-aware.
  *
  * This file has NO default export.
  */
@@ -71,7 +87,7 @@ import { memo, useState } from 'react';
 import { transformByType, type TransformDef, type TransformCategory } from '@/lib/pipeline/dataflow-transform-catalog';
 import {
   PORT_COLOR_KEY, isConditionalPort, resolvePortShape, portGeometry, ghostAnchorPosition,
-  ghostEdgeId, GHOST_NODE_ID, operatorCategory, portLabelAnchorEdge,
+  ghostEdgeId, GHOST_NODE_ID, operatorCategory, portLabelAnchorEdge, CANVAS_NODE_WIDTH,
   type PortKind, type PortShape, type PortColorKey,
   type AnchorNode, type GhostAnchorOpts, type PortSide,
 } from './canvas-anatomy';
@@ -503,7 +519,9 @@ export const CanvasEdge: React.FC<EdgeProps & { stroke: string; flowing?: boolea
 // =============================================================================
 
 const useStyles = makeStyles({
-  // Outer card.
+  // Outer card (v4 compact). Quiet at rest: shadow4, hairline border, no band.
+  // Hover: shadow4 → shadow8 + a 1px lift. NOTE: no `overflow: hidden` — the
+  // floating action bar sits ABOVE the card and the port handles protrude.
   root: {
     position: 'relative',
     display: 'flex',
@@ -521,11 +539,11 @@ const useStyles = makeStyles({
     boxShadow: tokens.shadow4,
     cursor: 'pointer',
     userSelect: 'none',
-    transitionProperty: 'box-shadow, transform',
+    transitionProperty: 'box-shadow, transform, border-color',
     transitionDuration: tokens.durationNormal,
     transitionTimingFunction: tokens.curveEasyEase,
     ':hover': {
-      boxShadow: tokens.shadow16,
+      boxShadow: tokens.shadow8,
       transform: 'translateY(-1px)',
     },
     // Inline node action bar reveals on node hover (Fabric shows it on
@@ -545,19 +563,31 @@ const useStyles = makeStyles({
       opacity: 1,
       pointerEvents: 'auto',
     },
+    // Typed port labels are quiet by default and reveal on hover/focus (and
+    // while selected — see `.selected`), cutting resting visual noise.
+    '& [data-port-label]': {
+      opacity: 0,
+      transitionProperty: 'opacity',
+      transitionDuration: tokens.durationFast,
+      transitionTimingFunction: tokens.curveEasyEase,
+    },
+    '&:hover [data-port-label]': { opacity: 1 },
+    '&:focus-within [data-port-label]': { opacity: 1 },
     '@media (prefers-reduced-motion: reduce)': {
       transitionDuration: '0.01ms',
       ':hover': { transform: 'none' },
       '& .loom-node-actionbar': { transitionDuration: '0.01ms' },
+      '& [data-port-label]': { transitionDuration: '0.01ms' },
     },
   },
   selected: {
     border: `1px solid ${tokens.colorBrandStroke1}`,
-    // Pin the action bar visible while selected.
+    // Pin the action bar + port labels visible while selected.
     '& .loom-node-actionbar': {
       opacity: 1,
       pointerEvents: 'auto',
     },
+    '& [data-port-label]': { opacity: 1 },
   },
   error: {
     border: `1px solid ${tokens.colorPaletteRedBorder2}`,
@@ -568,54 +598,59 @@ const useStyles = makeStyles({
     borderRadius: tokens.borderRadiusXLarge,
     background: accentTint(CATEGORY_ACCENT.iteration, 5),
   },
-  // Accent rail down the left edge.
-  rail: {
+  // v4: slim accent bar hugging the left edge — the category colour anchor
+  // (replaces the old 6px rail + full-width gradient header band).
+  accentBar: {
     position: 'absolute',
     left: 0,
-    top: 0,
-    bottom: 0,
-    width: '6px',
-    // Hug the card's rounded left corners now that root is overflow:visible, so
-    // the accent rail can't show a square poke past the card radius.
-    borderTopLeftRadius: tokens.borderRadiusLarge,
-    borderBottomLeftRadius: tokens.borderRadiusLarge,
+    // v4 slim inset bar (3px, vertically inset, pill-rounded on the right).
+    // Inset from the card edges, so it never pokes past the rounded corners
+    // even with root overflow:visible.
+    top: tokens.spacingVerticalS,
+    bottom: tokens.spacingVerticalS,
+    width: tokens.strokeWidthThicker,
+    borderTopRightRadius: tokens.borderRadiusCircular,
+    borderBottomRightRadius: tokens.borderRadiusCircular,
     zIndex: 1,
+    pointerEvents: 'none',
   },
-  // Header strip (gradient).
-  header: {
+  // v4 main row: icon chip + stacked name/subtitle + status dot.
+  main: {
     display: 'flex',
     alignItems: 'center',
     gap: tokens.spacingHorizontalS,
-    paddingTop: tokens.spacingVerticalS,
-    paddingBottom: tokens.spacingVerticalS,
-    paddingLeft: tokens.spacingHorizontalM,
+    paddingTop: tokens.spacingVerticalSNudge,
+    paddingBottom: tokens.spacingVerticalSNudge,
+    paddingLeft: tokens.spacingHorizontalMNudge,
     paddingRight: tokens.spacingHorizontalS,
-    borderTopLeftRadius: tokens.borderRadiusMedium,
-    borderTopRightRadius: tokens.borderRadiusMedium,
+    minWidth: 0,
   },
   // Wrapper so the running-status pulse ring can sit BEHIND the icon chip
-  // without shifting layout (same 28px footprint as the chip).
+  // without shifting layout (same 24px footprint as the chip).
   iconChipWrap: {
     position: 'relative',
     flexShrink: 0,
-    width: '28px',
-    height: '28px',
+    width: '24px',
+    height: '24px',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
   },
   iconChip: {
     flexShrink: 0,
-    width: '28px',
-    height: '28px',
+    width: '24px',
+    height: '24px',
     borderRadius: tokens.borderRadiusMedium,
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
     zIndex: 1,
+    // The 20px Fluent glyphs sit tight in the 24px chip; keep them optically
+    // centered without clipping.
+    '& svg': { flexShrink: 0 },
   },
   // ── v3: run-status pulse ring (only mounted while status='running') ────────
-  // A subtle expanding brand ring behind the icon chip that reads as "this node
+  // A SUBTLE expanding brand ring behind the icon chip that reads as "this node
   // is actively running". Motion tokens only (durationUltraSlow / curveEasyEase);
   // under prefers-reduced-motion the ring holds a single quiet static outline —
   // NO animation — so the running state is still conveyed without motion.
@@ -626,13 +661,13 @@ const useStyles = makeStyles({
     right: '-3px',
     bottom: '-3px',
     borderRadius: tokens.borderRadiusLarge,
-    border: `2px solid ${tokens.colorBrandStroke1}`,
+    border: `${tokens.strokeWidthThick} solid ${tokens.colorBrandStroke1}`,
     pointerEvents: 'none',
     zIndex: 0,
     animationName: {
-      '0%': { transform: 'scale(0.82)', opacity: 0.55 },
-      '70%': { transform: 'scale(1.28)', opacity: 0 },
-      '100%': { transform: 'scale(1.28)', opacity: 0 },
+      '0%': { transform: 'scale(0.86)', opacity: 0.4 },
+      '70%': { transform: 'scale(1.22)', opacity: 0 },
+      '100%': { transform: 'scale(1.22)', opacity: 0 },
     },
     animationDuration: tokens.durationUltraSlow,
     animationIterationCount: 'infinite',
@@ -640,13 +675,14 @@ const useStyles = makeStyles({
     '@media (prefers-reduced-motion: reduce)': {
       animationName: 'none',
       transform: 'none',
-      opacity: 0.4,
+      opacity: 0.35,
     },
   },
   // ── v3: typed port label ('rows' / 'events' / 'model') ─────────────────────
   // Small token-driven caption anchored just INSIDE the node edge at the port,
-  // on a neutral chip so it stays readable over the gradient and never overlaps
-  // the bezier edge. Truncates instead of pushing node width.
+  // on a neutral chip so it stays readable and never overlaps the bezier edge.
+  // Truncates instead of pushing node width. Revealed on hover/selection only
+  // (gated by the `root`/`selected` descendant rules above).
   portLabel: {
     position: 'absolute',
     transform: 'translateY(-50%)',
@@ -665,50 +701,64 @@ const useStyles = makeStyles({
     textOverflow: 'ellipsis',
     zIndex: 3,
   },
-  title: {
+  // v4 text column: name over Caption1 subtitle, both single-line truncated.
+  textCol: {
     flex: 1,
     minWidth: 0,
+    display: 'flex',
+    flexDirection: 'column',
+  },
+  title: {
+    minWidth: 0,
     fontSize: tokens.fontSizeBase300,
+    lineHeight: tokens.lineHeightBase300,
     fontWeight: tokens.fontWeightSemibold,
     color: tokens.colorNeutralForeground1,
     whiteSpace: 'nowrap',
     overflow: 'hidden',
     textOverflow: 'ellipsis',
   },
+  subtitle: {
+    minWidth: 0,
+    color: tokens.colorNeutralForeground3,
+    whiteSpace: 'nowrap',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+  },
+  // v4 status indicator (top-right): a small dot (tooltip = state label);
+  // running renders a tiny Spinner in the same slot.
+  statusIndicator: {
+    flexShrink: 0,
+    alignSelf: 'flex-start',
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: tokens.spacingVerticalXXS,
+  },
   headerAction: {
     flexShrink: 0,
     display: 'inline-flex',
     alignItems: 'center',
-  },
-  // Body region (description + badges).
-  body: {
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalXS,
-    paddingTop: tokens.spacingVerticalXS,
-    paddingBottom: tokens.spacingVerticalS,
-    paddingLeft: tokens.spacingHorizontalM,
-    paddingRight: tokens.spacingHorizontalS,
-  },
-  description: {
-    color: tokens.colorNeutralForeground3,
   },
   badges: {
     display: 'flex',
     gap: tokens.spacingHorizontalXS,
     alignItems: 'center',
     flexWrap: 'wrap',
+    paddingLeft: tokens.spacingHorizontalMNudge,
+    paddingRight: tokens.spacingHorizontalS,
+    paddingBottom: tokens.spacingVerticalSNudge,
   },
   branchChips: {
     display: 'flex',
     gap: tokens.spacingHorizontalXS,
     alignItems: 'center',
     flexWrap: 'wrap',
-    paddingLeft: tokens.spacingHorizontalM,
+    paddingLeft: tokens.spacingHorizontalMNudge,
     paddingRight: tokens.spacingHorizontalS,
     paddingBottom: tokens.spacingVerticalXS,
   },
-  // StatusChip dot + label.
+  // StatusChip dot + label (the exported back-compat chip).
   statusChip: {
     flexShrink: 0,
     display: 'inline-flex',
@@ -724,10 +774,13 @@ const useStyles = makeStyles({
     flexShrink: 0,
   },
   // ── v2: inline node action bar (delete / view-JSON / clone / open) ─────────
+  // v4: floats ABOVE the card (Fabric-style toolbar) so it never covers the
+  // node content; revealed on hover/focus, pinned while selected.
   actionBar: {
     position: 'absolute',
-    top: tokens.spacingVerticalXS,
-    right: tokens.spacingHorizontalXS,
+    bottom: '100%',
+    right: 0,
+    marginBottom: tokens.spacingVerticalXXS,
     zIndex: 4,
     display: 'flex',
     alignItems: 'center',
@@ -746,9 +799,9 @@ const useStyles = makeStyles({
     display: 'flex',
     alignItems: 'center',
     gap: tokens.spacingHorizontalXS,
-    paddingLeft: tokens.spacingHorizontalM,
+    paddingLeft: tokens.spacingHorizontalMNudge,
     paddingRight: tokens.spacingHorizontalS,
-    paddingBottom: tokens.spacingVerticalXS,
+    paddingBottom: tokens.spacingVerticalSNudge,
     color: tokens.colorBrandForeground1,
     fontSize: tokens.fontSizeBase200,
   },
@@ -929,14 +982,20 @@ export interface NodeAction {
 }
 
 export interface CanvasNodeProps {
-  width: number;                       // 200 pipeline, 210 data-flow
+  /** Node width in px. Defaults to the shared compact `CANVAS_NODE_WIDTH` (180). */
+  width?: number;
   title: string;
   visual: CanvasVisual;                // from getActivityVisual / getTransformVisual
   selected?: boolean;
   status?: CanvasNodeStatus;           // default 'idle'
-  /** idle-state type label shown in the header chip (e.g. 'Copy data', 'Derived column'). */
+  /** Type label rendered as the second-line subtitle (e.g. 'Copy data', 'Derived column'). */
   typeLabel: string;
   error?: boolean;
+  /**
+   * One-line config summary, joined onto the subtitle after the type label
+   * ("Event Hub · telemetry-in"). Truncated; the full text lives in the
+   * subtitle's hover tooltip.
+   */
   description?: string;
   /**
    * Inline live-status detail shown as a row under the header (e.g.
@@ -965,27 +1024,35 @@ export interface CanvasNodeProps {
 }
 
 /**
- * The shared node card. Renders rail + gradient header (icon chip, title,
- * status chip, optional header action) + body (description + badges). The
- * `framed` variant draws the amber dashed container chrome + branch chips.
- * Ports / container mini-preview are passed through `children` (the caller owns
- * the React Flow <Handle>s + their ids).
+ * The shared node card — v4 COMPACT anatomy. A slim accent bar + one main row
+ * (24px tinted icon chip, single-line truncated name with hover tooltip, small
+ * top-right status dot) over a Caption1 subtitle line (`typeLabel`, joined with
+ * `description` when present). The action bar floats above the card and shows
+ * on hover / focus / selection only. The `framed` variant draws the amber
+ * dashed container chrome + branch chips. Ports / container mini-preview are
+ * passed through `children` (the caller owns the React Flow <Handle>s + ids).
  */
 export const CanvasNode: React.FC<CanvasNodeProps> = ({
-  width, title, visual, selected, status = 'idle', typeLabel, error,
+  width = CANVAS_NODE_WIDTH, title, visual, selected, status = 'idle', typeLabel, error,
   description, statusDetail, actionBar, badges, headerAction, children,
   framed, branchChips, rootProps,
 }) => {
   const styles = useStyles();
   const { accent } = visual;
 
+  // Selection = accent outline + a soft accent glow; error = red outline.
   const ring = error
     ? `0 0 0 2px ${tokens.colorPaletteRedBackground3}`
     : selected
-      ? `0 0 0 2px ${accent}`
+      ? `0 0 0 2px ${accent}, 0 0 ${tokens.spacingHorizontalMNudge} ${accentTint(accent, 45)}`
       : undefined;
 
   const { style: rootStyle, className: rootClassName, ...restRootProps } = rootProps ?? {};
+
+  // Second line: "type · one-line summary" (both truncated as one line).
+  const subtitle = description
+    ? (typeLabel ? `${typeLabel} · ${description}` : description)
+    : typeLabel;
 
   return (
     <div
@@ -1003,10 +1070,11 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
         ...rootStyle,
       }}
     >
-      {/* Accent rail anchoring the category colour. */}
-      <span className={styles.rail} style={{ background: accent }} aria-hidden="true" />
+      {/* Slim accent bar anchoring the category colour (framed containers
+          already carry the accent in their dashed border). */}
+      {!framed && <span className={styles.accentBar} style={{ background: accent }} aria-hidden="true" />}
 
-      {/* Inline node action bar — revealed on hover/focus, pinned on select.
+      {/* Floating node action bar — revealed on hover/focus, pinned on select.
           `nodrag`/`nopan` keep clicks off the React Flow drag+pan handlers. */}
       {actionBar && actionBar.length > 0 && (
         <div
@@ -1032,8 +1100,8 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
         </div>
       )}
 
-      {/* Header strip with category gradient. */}
-      <div className={styles.header} style={{ background: accentGradient(accent), marginLeft: '6px' }}>
+      {/* Main row: icon chip + name/subtitle column + status dot. */}
+      <div className={styles.main}>
         <span className={styles.iconChipWrap} aria-hidden="true">
           {/* Run-status pulse ring — animates only while running (reduced-motion
               downgrades to a quiet static outline). */}
@@ -1045,14 +1113,33 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
             {visual.icon}
           </span>
         </span>
-        <span className={styles.title} title={title}>{title}</span>
-        <StatusChip status={status} idleLabel={typeLabel} accent={accent} />
+        <span className={styles.textCol}>
+          <Tooltip content={title} relationship="inaccessible" positioning="above">
+            <span className={styles.title}>{title}</span>
+          </Tooltip>
+          {subtitle && (
+            <Caption1 className={styles.subtitle} title={subtitle}>{subtitle}</Caption1>
+          )}
+        </span>
+        {status !== 'idle' && (
+          <Tooltip content={STATUS_LABEL[status]} relationship="label">
+            <span
+              className={styles.statusIndicator}
+              aria-label={`Status ${STATUS_LABEL[status]}`}
+              data-node-status={status}
+            >
+              {status === 'running'
+                ? <Spinner size="extra-tiny" />
+                : <span className={styles.statusDot} style={{ background: STATUS_COLOR[status] }} aria-hidden="true" />}
+            </span>
+          </Tooltip>
+        )}
         {headerAction && <span className={styles.headerAction}>{headerAction}</span>}
       </div>
 
       {/* Branch chips for framed If/Switch containers. */}
       {framed && branchChips && branchChips.length > 0 && (
-        <div className={styles.branchChips} style={{ marginLeft: '6px' }}>
+        <div className={styles.branchChips}>
           {branchChips.map((b) => (
             <Badge
               key={b.label}
@@ -1071,19 +1158,15 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
 
       {/* Inline live-status detail row (Fabric's in-node 'Loading data…'). */}
       {statusDetail && (
-        <div className={styles.statusDetail} style={{ marginLeft: '6px' }} aria-live="polite">
+        <div className={styles.statusDetail} aria-live="polite">
           {status === 'running' && <Spinner size="extra-tiny" />}
           <span>{statusDetail}</span>
         </div>
       )}
 
-      {/* Body — description + meta badges (only rendered when present). */}
-      {(description || badges) && (
-        <div className={styles.body} style={{ marginLeft: '6px' }}>
-          {description && <Caption1 className={styles.description}>{description}</Caption1>}
-          {badges && <div className={styles.badges}>{badges}</div>}
-        </div>
-      )}
+      {/* Meta badges (Preview / Save-only / Activities(n)) — keep at most one
+          on-node; richer state belongs in the tooltip + inspector panel. */}
+      {badges && <div className={styles.badges}>{badges}</div>}
 
       {/* Caller-owned ports + container mini-preview. */}
       {children}
@@ -1232,7 +1315,7 @@ export interface GhostNodeData {
   [k: string]: unknown;
 }
 
-const GHOST_WIDTH = 190;
+const GHOST_WIDTH = CANVAS_NODE_WIDTH;
 
 /** Presentational ghost card (no React Flow dependency — unit/story friendly). */
 export const GhostNextStepCard: React.FC<{ data: GhostNodeData; width?: number }> = ({ data, width = GHOST_WIDTH }) => {
@@ -1496,6 +1579,6 @@ export function CanvasRailPanel({ onAutoLayout, position = 'bottom-left' }: Canv
 export {
   ghostAnchorPosition, ghostEdgeId, GHOST_NODE_ID,
   resolvePortShape, portGeometry, isConditionalPort, PORT_COLOR_KEY,
-  operatorCategory, portLabelAnchorEdge,
+  operatorCategory, portLabelAnchorEdge, CANVAS_NODE_WIDTH,
 };
 export type { PortKind, PortShape, PortColorKey, AnchorNode, GhostAnchorOpts, PortSide };

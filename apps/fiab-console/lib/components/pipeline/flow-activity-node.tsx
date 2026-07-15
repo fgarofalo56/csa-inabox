@@ -40,6 +40,7 @@ import { CONNECTOR_COLORS, type ConnectorCondition } from './connector';
 import { isContainerType, totalInnerCount, branchesOf, miniPreviewSections } from './drill-path';
 import {
   CanvasNode,
+  CANVAS_NODE_WIDTH,
   getActivityVisual,
   portStyle,
   standardNodeActions,
@@ -48,7 +49,8 @@ import {
 } from '@/lib/components/canvas/canvas-node-kit';
 import type { PipelineActivity } from './types';
 
-export const FLOW_NODE_W = 200;
+/** Pipeline node width — the shared kit compact width (layout math keys off this). */
+export const FLOW_NODE_W = CANVAS_NODE_WIDTH;
 
 const OUTPUT_CONDITIONS: ConnectorCondition[] = ['Succeeded', 'Failed', 'Completed', 'Skipped'];
 const COND_LABEL: Record<ConnectorCondition, string> = {
@@ -223,6 +225,9 @@ function FlowActivityNodeImpl({ data, selected }: NodeProps) {
             marginTop: tokens.spacingVerticalXS,
             borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
             paddingTop: tokens.spacingVerticalXS,
+            paddingLeft: tokens.spacingHorizontalMNudge,
+            paddingRight: tokens.spacingHorizontalS,
+            paddingBottom: tokens.spacingVerticalSNudge,
             display: 'flex',
             flexDirection: 'column',
             gap: tokens.spacingVerticalXS,
