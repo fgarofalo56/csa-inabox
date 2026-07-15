@@ -12,6 +12,8 @@ import {
   ghostAnchorPosition,
   ghostEdgeId,
   GHOST_NODE_ID,
+  operatorCategory,
+  portLabelAnchorEdge,
   type AnchorNode,
 } from '../canvas-anatomy';
 
@@ -88,6 +90,34 @@ describe('ghostAnchorPosition', () => {
     ];
     // both right edges = 300; tie → larger y (120) wins
     expect(ghostAnchorPosition(nodes)).toEqual({ x: 380, y: 120 });
+  });
+});
+
+describe('operatorCategory (v3 branded operator glyphs)', () => {
+  it('maps sources/reads to move, verbs to transform, sinks/filters to control', () => {
+    expect(operatorCategory('source')).toBe('move');
+    expect(operatorCategory('lookup')).toBe('move');
+    expect(operatorCategory('derive')).toBe('transform');
+    expect(operatorCategory('join')).toBe('transform');
+    expect(operatorCategory('filter')).toBe('control');
+    expect(operatorCategory('sink')).toBe('control');
+    expect(operatorCategory('foreach')).toBe('iteration');
+    expect(operatorCategory('webhook')).toBe('external');
+  });
+  it('is case-insensitive and falls back to transform for unknown roles', () => {
+    expect(operatorCategory('SOURCE')).toBe('move');
+    expect(operatorCategory('  Filter ')).toBe('control');
+    expect(operatorCategory('mystery-op')).toBe('transform');
+    expect(operatorCategory(undefined)).toBe('transform');
+  });
+});
+
+describe('portLabelAnchorEdge (v3 typed port labels)', () => {
+  it('anchors right-edge ports to the right, everything else to the left', () => {
+    expect(portLabelAnchorEdge('right')).toBe('right');
+    expect(portLabelAnchorEdge('left')).toBe('left');
+    expect(portLabelAnchorEdge('top')).toBe('left');
+    expect(portLabelAnchorEdge('bottom')).toBe('left');
   });
 });
 
