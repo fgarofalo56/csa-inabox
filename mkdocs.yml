@@ -1789,18 +1789,33 @@ nav:
           - Feature Permissions (Fabric-style RBAC): fiab/admin/feature-rbac.md
           - Scale by SKU: fiab/admin/scaling.md
           - Admin console pages:
+              - Health & self-audit: fiab/admin/health.md
               - Capacity & compute: fiab/admin/capacity.md
               - Performance & benchmarks: fiab/admin/performance.md
               - Usage & chargeback: fiab/admin/usage-chargeback.md
               - Chargeback report: fiab/admin/chargeback.md
+              - Tenant settings: fiab/admin/tenant-settings.md
               - Runtime configuration (env-config): fiab/admin/env-config.md
+              - Workspaces: fiab/admin/workspaces.md
+              - Users & licenses: fiab/admin/users.md
+              - Access requests: fiab/admin/access-requests.md
               - Domains: fiab/admin/domains.md
+              - Custom attributes: fiab/admin/attribute-groups.md
               - Classifications: fiab/admin/classifications.md
               - Sensitivity labels: fiab/admin/sensitivity-labels.md
+              - Batch labeling: fiab/admin/batch-labeling.md
+              - Landing zones: fiab/admin/landing-zones.md
+              - Deployment planner: fiab/admin/deploy-planner.md
+              - Updates & version sync: fiab/admin/updates.md
               - API Management: fiab/admin/api-management.md
               - MCP Servers: fiab/admin/mcp-servers.md
               - Event subscriptions (webhooks): fiab/admin/webhooks.md
+              - Embed codes: fiab/admin/embed-codes.md
+              - Organizational visuals: fiab/admin/org-visuals.md
+              - Copilot usage: fiab/admin/copilot-usage.md
+              - Usage metrics: fiab/admin/usage.md
               - Audit logs: fiab/admin/audit-logs.md
+              - API tokens (developer): fiab/admin/developer-tokens.md
 
       # ------------------------------------------------------------
       # 8. Operations & Runbooks

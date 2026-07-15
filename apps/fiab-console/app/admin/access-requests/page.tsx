@@ -12,7 +12,20 @@ const useStyles = makeStyles({
 export default function AdminAccessRequestsPage() {
   const s = useStyles();
   return (
-    <AdminShell sectionTitle="Access requests">
+    <AdminShell
+      sectionTitle="Access requests"
+      learn={{
+        title: 'Access requests',
+        content:
+          "Onboarding queue for people who don't yet have access. Approving a sign-in-boundary “Request access” submission surfaces the exact Entra step to set the person up; denying records a reason. Approval never silently mints access.",
+        tips: [
+          'Distinct from marketplace subscribe + the F16 asset-access workflow',
+          'Backed by the signin-access-requests container (PK /tenantId)',
+          'Tenant-admin only',
+        ],
+        learnMoreHref: 'https://learn.microsoft.com/entra/external-id/b2b-quickstart-add-guest-users-portal',
+      }}
+    >
       <div className={s.explainer}>
         <SectionExplainer>
           The onboarding queue for people who don&apos;t yet have access to CSA Loom. When someone
