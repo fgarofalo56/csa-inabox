@@ -101,7 +101,20 @@ export default function PermissionsPage() {
   const [tab, setTab] = useState<PermTab>('features');
 
   return (
-    <AdminShell sectionTitle="Permissions">
+    <AdminShell
+      sectionTitle="Permissions"
+      learn={{
+        title: 'Feature permissions',
+        content:
+          'Fabric-style RBAC — grant Reader / Contributor / Admin on every editor type, admin page and workload to Entra users and groups. Grants are tenant-partitioned so every per-request lookup hits a single physical partition.',
+        tips: [
+          'Principals can be Entra users OR groups',
+          'Backed by the feature-permissions container (PK /tenantId)',
+          'See the Feature Permissions doc for the full capability matrix',
+        ],
+        learnMoreHref: 'https://learn.microsoft.com/fabric/governance/microsoft-fabric-admin',
+      }}
+    >
       <div className={styles.explainer}>
         <SectionExplainer>
           Loom uses two access layers: <strong>feature permissions</strong> (what a user can do in the console) and <strong>workspace / domain access</strong> (which data a user can reach). Both are enforced by a policy decision point (PDP) on every request; tenant admins always have full access.
