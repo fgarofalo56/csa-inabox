@@ -493,6 +493,10 @@ export function MappingDataFlowEditor({ item, id }: EditorProps) {
             // Mirror the live graph so the editor can offer a per-transformation
             // preview selector (the designer doesn't expose its node selection).
             onChange={setGraph}
+            // Shared collaboration overlay (comments/presence) — keyed to the
+            // saved mapping-dataflow item; no-ops for a brand-new unsaved flow.
+            itemType="mapping-dataflow"
+            itemId={isNew ? undefined : id}
           />
 
           {/* Per-transformation data preview (ui-parity.md: ADF Studio previews
