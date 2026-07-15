@@ -22,7 +22,7 @@ import { clientFetch } from '@/lib/client-fetch';
 
 import { useState, useMemo, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import {
+import { shorthands,
   Dialog,
   DialogTrigger,
   DialogSurface,
@@ -33,6 +33,7 @@ import {
   Button,
   Input,
   Field,
+  Badge,
   MessageBar,
   MessageBarBody,
   RadioGroup,
@@ -42,6 +43,7 @@ import {
   Option,
   makeStyles,
   tokens,
+  Subtitle2,
   Body1,
   Caption1,
 } from '@fluentui/react-components';
@@ -61,12 +63,7 @@ import {
   type WorkloadCategory,
 } from '@/lib/catalog/fabric-item-types';
 import { isAppTemplate } from '@/lib/catalog/app-templates';
-import {
-  GuidedPickerRail,
-  type GuidedPickerItem,
-  type GuidedPickerCategory,
-  type GuidedPickerBadge,
-} from '@/lib/components/shared/guided-picker-rail';
+import { BrandedItemIcon } from '@/lib/components/ui/branded-item-icon';
 
 /**
  * WAVE C — unified create-step contract. These mirror the optional
@@ -131,8 +128,31 @@ function defaultChoiceValue(choices?: CreateConfigChoice[]): string {
 
 const useStyles = makeStyles({
   surface: { maxWidth: '960px', width: '90vw' },
-  // The browse view is the shared GuidedPickerRail (W3). Only the search-slot
-  // row (search box + Labs switch) is styled here; the rail owns rail/card/grid.
+  layout: { display: 'grid', gridTemplateColumns: '200px 1fr', gap: '16px', minHeight: '480px' },
+  catList: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '2px',
+    borderRight: `1px solid ${tokens.colorNeutralStroke2}`,
+    paddingRight: '8px',
+  },
+  catItem: {
+    textAlign: 'left',
+    padding: '8px 12px',
+    borderRadius: '4px',
+    background: 'transparent',
+    border: 'none',
+    cursor: 'pointer',
+    color: tokens.colorNeutralForeground1,
+    fontSize: '14px',
+    ':hover': { backgroundColor: tokens.colorNeutralBackground2Hover },
+  },
+  catItemActive: {
+    backgroundColor: tokens.colorBrandBackground2,
+    color: tokens.colorBrandForeground1,
+    fontWeight: '600',
+  },
+  rightCol: { display: 'flex', flexDirection: 'column', gap: '12px', minHeight: 0 },
   searchRow: {
     display: 'flex',
     alignItems: 'center',
@@ -141,6 +161,29 @@ const useStyles = makeStyles({
     flexWrap: 'wrap',
   },
   search: { flex: 1, minWidth: '200px' },
+  grid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))',
+    gap: '12px',
+    overflowY: 'auto',
+    paddingRight: '4px',
+  },
+  card: {
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: '6px',
+    padding: '12px',
+    cursor: 'pointer',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '6px',
+    backgroundColor: tokens.colorNeutralBackground1,
+    ':hover': {
+      ...shorthands.borderColor(tokens.colorBrandStroke1),
+      boxShadow: tokens.shadow4,
+    },
+  },
+  cardHeader: { display: 'flex', alignItems: 'center', gap: '6px' },
+  badges: { display: 'flex', gap: '4px', marginTop: '4px' },
   // WAVE C — configure step (Name + per-axis RadioGroup). Loom tokens only.
   configPane: {
     display: 'flex',
@@ -287,49 +330,6 @@ export function NewItemDialog({ defaultCategory, workspaceId, open: openProp, on
       return i.category === category && !isSearchOnly(i);
     });
   }, [category, query, showLabs]);
-
-  // Per-category card counts for the guided rail (browse mode). Reflects the
-  // same visibility rules the gallery applies, minus the active-category filter.
-  const categoryCounts = useMemo(() => {
-    const counts: Record<string, number> = {};
-    for (const i of FABRIC_ITEM_TYPES) {
-      if (i.deprecated || i.coreSurface || i.hiddenFromGallery) continue;
-      if (isLabs(i) && !showLabs) continue;
-      if (isSearchOnly(i)) continue;
-      counts[i.category] = (counts[i.category] ?? 0) + 1;
-    }
-    return counts;
-  }, [showLabs]);
-
-  // Left-rail categories (Fabric workload rail) with live counts.
-  const railCategories: GuidedPickerCategory[] = useMemo(
-    () => WORKLOAD_CATEGORIES.map((c) => ({ key: c, label: c, count: categoryCounts[c] ?? 0 })),
-    [categoryCounts],
-  );
-
-  // Map the filtered catalog entries → guided picker cards (branded W1 icon +
-  // badges + category footer). Each card runs the real onPick.
-  const pickerItems: GuidedPickerItem[] = useMemo(
-    () => items.map((i): GuidedPickerItem => {
-      const badges: GuidedPickerBadge[] = [];
-      if (i.preview) badges.push({ label: 'Preview', color: 'warning', appearance: 'outline' });
-      if (isLabs(i)) badges.push({ label: 'Labs', color: 'brand', appearance: 'tint' });
-      if (i.deprecated) badges.push({ label: 'Deprecated', color: 'danger', appearance: 'outline' });
-      if (i.noRestApi) badges.push({ label: 'UI only', color: 'informative', appearance: 'outline' });
-      return {
-        key: i.slug,
-        title: i.displayName,
-        description: i.description,
-        iconType: i.slug,
-        footer: i.category,
-        badges,
-        onPick: () => onPick(i),
-      };
-    }),
-    // onPick is stable enough for this dialog's lifetime; items drives the memo.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [items],
-  );
 
   function reset() {
     setPicked(null); setDisplayName(''); setError(null); setCreating(false);
@@ -612,12 +612,22 @@ export function NewItemDialog({ defaultCategory, workspaceId, open: openProp, on
                 )}
               </div>
             ) : (
-            <GuidedPickerRail
-              categories={railCategories}
-              activeCategory={query ? '' : category}
-              onCategoryChange={(c) => { setCategory(c as WorkloadCategory); setQuery(''); }}
-              items={pickerItems}
-              search={
+            <div className={styles.layout}>
+              <div className={styles.catList} role="tablist" aria-label="Workload category">
+                {WORKLOAD_CATEGORIES.map((c) => (
+                  <button
+                    key={c}
+                    type="button"
+                    role="tab"
+                    aria-selected={category === c}
+                    className={`${styles.catItem} ${category === c && !query ? styles.catItemActive : ''}`}
+                    onClick={() => { setCategory(c); setQuery(''); }}
+                  >
+                    {c}
+                  </button>
+                ))}
+              </div>
+              <div className={styles.rightCol}>
                 <div className={styles.searchRow}>
                   <Input
                     className={styles.search}
@@ -632,11 +642,34 @@ export function NewItemDialog({ defaultCategory, workspaceId, open: openProp, on
                     onChange={(_, d) => setShowLabs(d.checked)}
                   />
                 </div>
-              }
-              emptyTitle="No matching item types"
-              emptyBody="Try a different category or search term."
-              railAriaLabel="Workload category"
-            />
+                <div className={styles.grid}>
+                  {items.map((i) => (
+                    <button
+                      key={i.slug}
+                      type="button"
+                      className={styles.card}
+                      onClick={() => onPick(i)}
+                    >
+                      <div className={styles.cardHeader}>
+                        <BrandedItemIcon type={i.slug} size="md" />
+                        <Subtitle2>{i.displayName}</Subtitle2>
+                      </div>
+                      <Body1>{i.description}</Body1>
+                      <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{i.category}</Caption1>
+                      <div className={styles.badges}>
+                        {i.preview && <Badge appearance="outline" color="warning">Preview</Badge>}
+                        {isLabs(i) && <Badge appearance="tint" color="brand">Labs</Badge>}
+                        {i.deprecated && <Badge appearance="outline" color="danger">Deprecated</Badge>}
+                        {i.noRestApi && <Badge appearance="outline" color="informative">UI only</Badge>}
+                      </div>
+                    </button>
+                  ))}
+                  {items.length === 0 && (
+                    <Body1>No matching item types.</Body1>
+                  )}
+                </div>
+              </div>
+            </div>
             )}
           </DialogContent>
           <DialogActions>
