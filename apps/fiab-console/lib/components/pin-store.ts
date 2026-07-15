@@ -42,13 +42,35 @@ function emit(): void {
   for (const l of listeners) l();
 }
 
+/**
+ * Persist the pin list and VERIFY the write. The old implementation was
+ * fire-and-forget with a swallowing catch, so a failed POST (expired session,
+ * transient 5xx, Cosmos throttle) silently left the optimistic UI showing a pin
+ * that never saved — on the next load the pin was gone ("pinning is broken").
+ * Now: writes are serialized (rapid toggles can't land out of order), the
+ * response envelope is checked, and on ANY failure we re-sync from the server
+ * so the UI always reflects persisted truth.
+ */
+let persistChain: Promise<void> = Promise.resolve();
+
 function persist(next: PinnedItem[]): void {
-  clientFetch('/api/user-prefs', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ key: PREF_KEY, value: next }),
-  }).catch(() => {
-    /* best-effort; optimistic UI already reflects the change */
+  persistChain = persistChain.then(async () => {
+    // Only persist the LATEST state — a queued stale snapshot must not
+    // overwrite a newer toggle that already saved.
+    if (pins !== next) return;
+    try {
+      const res = await clientFetch('/api/user-prefs', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ key: PREF_KEY, value: next }),
+      });
+      const body = await res.json().catch(() => null);
+      if (!res.ok || body?.ok !== true) throw new Error(`persist failed (HTTP ${res.status})`);
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn('[pin-store] pin persistence failed — re-syncing from server', e);
+      loadPins(true);
+    }
   });
 }
 
@@ -101,9 +123,16 @@ function loadPins(force = false): void {
   if (loadStarted && !force) return;
   loadStarted = true;
   clientFetch(`/api/user-prefs?key=${PREF_KEY}`)
-    .then((r) => r.json())
-    .then((d) => {
-      pins = Array.isArray(d?.value) ? d.value : [];
+    .then(async (r) => ({ ok: r.ok, body: await r.json().catch(() => null) }))
+    .then(({ ok, body }) => {
+      if (ok && body?.ok === true) {
+        // Server truth: a stored array, or null when the user has never pinned.
+        pins = Array.isArray(body.value) ? body.value : [];
+      } else {
+        // Failed read — keep whatever we already have rather than wiping the
+        // UI with a false empty; first load falls back to [] so the page renders.
+        pins = pins ?? [];
+      }
       emit();
     })
     .catch(() => {

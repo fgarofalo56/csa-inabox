@@ -52,6 +52,12 @@ export interface PurviewStatus {
   };
   /** Purview portal deep-link for the system-of-record fallback. */
   purviewPortal?: string;
+  /** The data-plane base URL that was actually probed (cloud-correct:
+   *  *.purview.azure.us in Azure Government). */
+  endpoint?: string;
+  /** How the endpoint was derived: ARM properties.endpoints ('arm'),
+   *  LOOM_PURVIEW_ENDPOINT ('env') or the cloud-aware convention host. */
+  endpointSource?: 'env' | 'arm' | 'convention';
 }
 
 const PURVIEW_PORTAL = 'https://purview.microsoft.com/';

@@ -34,7 +34,18 @@ import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 const INDEXABLE_SOURCE_SLUGS = new Set<string>(['lakehouse', 'warehouse', 'kql-database']);
 
 const useStyles = makeStyles({
-  meta: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center' },
+  // Header badge/action row — MUST wrap and shrink (flexWrap + minWidth:0) so
+  // the tags/badges never overlap the title/subtitle on narrow widths
+  // (web3-ui.md: responsive + bounded; no overlapping content at any width).
+  meta: {
+    display: 'flex',
+    gap: tokens.spacingHorizontalS,
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    minWidth: 0,
+    rowGap: tokens.spacingVerticalXXS,
+    justifyContent: 'flex-end',
+  },
   // Fill the window: the editor body grows to the viewport instead of a fixed
   // 70vh / 400px, so the canvas gets the room ADF/Fabric give it.
   layout: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, height: 'calc(100vh - 112px)', minHeight: '520px' },

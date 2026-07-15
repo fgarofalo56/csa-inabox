@@ -25,7 +25,12 @@ import {
   getUcTable, createUcTable, createUcTableFromFile, deleteUcTable, patchUcTable,
   type UcColumnSpec,
 } from '@/lib/azure/databricks-client';
-import { createUcTableWithFormat } from '@/lib/azure/unity-catalog-client';
+import {
+  createUcTableWithFormat,
+  primaryWorkspaceHost, getTable as getTableUc, listTables as listTablesUc,
+  listVolumes as listVolumesUc, listFunctionsUc, createTableUc, deleteTableUc,
+} from '@/lib/azure/unity-catalog-client';
+import { isOssUc } from '@/lib/azure/uc-backend';
 import {
   TableFormatBuildError, UC_TABLE_FORMATS,
   type UcTableFormat, type UcTableFormatColumn,
@@ -35,6 +40,9 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 function gate() {
+  // OSS Unity Catalog backend (loom-unity — the Azure-Government default) has
+  // no Databricks dependency; the UC client routes to LOOM_UNITY_URL.
+  if (isOssUc()) return null;
   const g = databricksConfigGate();
   if (g) {
     return NextResponse.json(
@@ -55,7 +63,9 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ ok: false, error: 'full_name must be catalog.schema.table' }, { status: 400 });
     }
     try {
-      const table = await getUcTable(fullName);
+      const table = isOssUc()
+        ? await getTableUc(await primaryWorkspaceHost(), fullName)
+        : await getUcTable(fullName);
       return NextResponse.json({ ok: true, table });
     } catch (e: any) {
       return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: e?.status || 502 });
@@ -67,15 +77,24 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ ok: false, error: 'catalog and schema are required' }, { status: 400 });
   }
   try {
+    if (isOssUc()) {
+      const host = await primaryWorkspaceHost();
+      const tables = await listTablesUc(host, catalog, schema);
+      const [volumes, functions] = await Promise.all([
+        listVolumesUc(host, catalog, schema).catch(() => []),
+        listFunctionsUc(host, catalog, schema).catch(() => []),
+      ]);
+      return NextResponse.json({ ok: true, backend: 'oss', tables, volumes, functions });
+    }
     // Tables always; volumes + functions best-effort (some workspaces gate them).
     const tables = await listUcTables(catalog, schema);
     const [volumes, functions] = await Promise.all([
       listUcVolumes(catalog, schema).catch(() => []),
       listUcFunctions(catalog, schema).catch(() => []),
     ]);
-    return NextResponse.json({ ok: true, tables, volumes, functions });
+    return NextResponse.json({ ok: true, backend: 'databricks', tables, volumes, functions });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
+    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: e?.status || 502 });
   }
 }
 
@@ -92,6 +111,12 @@ export async function POST(req: NextRequest) {
   // ---- Create table FROM a file (Catalog Explorer "Create table from file") ----
   // Upload the file to a UC Volume, then CREATE TABLE … AS read_files(…) with
   // schema inference on a SQL Warehouse. Real Databricks REST — no mock.
+  if ((body?.mode === 'from_file' || body?.mode === 'ddl') && isOssUc()) {
+    return NextResponse.json({
+      ok: false,
+      error: 'Create-from-file and Iceberg/UniForm DDL formats run on a Databricks SQL Warehouse. On the OSS Unity Catalog backend, create the table via REST (columns + format) or write data through a Loom lakehouse/notebook flow — the table registers in Unity Catalog automatically.',
+    }, { status: 501 });
+  }
   if (body?.mode === 'from_file') {
     const volume = String(body?.volume || '').trim();
     const file_name = String(body?.file_name || '').trim();
@@ -183,6 +208,17 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: false, error: 'every column needs a name' }, { status: 400 });
   }
   try {
+    if (isOssUc()) {
+      const table = await createTableUc(await primaryWorkspaceHost(), {
+        name, catalog_name, schema_name,
+        table_type: body?.table_type === 'EXTERNAL' ? 'EXTERNAL' : 'MANAGED',
+        data_source_format: body?.data_source_format ? String(body.data_source_format) : 'DELTA',
+        storage_location: body?.storage_location ? String(body.storage_location) : undefined,
+        comment: body?.comment ? String(body.comment) : undefined,
+        columns,
+      });
+      return NextResponse.json({ ok: true, table });
+    }
     const table = await createUcTable({
       name, catalog_name, schema_name, columns,
       table_type: body?.table_type === 'EXTERNAL' ? 'EXTERNAL' : 'MANAGED',
@@ -211,6 +247,14 @@ export async function PATCH(req: NextRequest) {
   if (owner === undefined && comment === undefined) {
     return NextResponse.json({ ok: false, error: 'provide owner and/or comment to update' }, { status: 400 });
   }
+  if (isOssUc()) {
+    // The OSS Unity Catalog REST surface has no PATCH /tables (spec: tables are
+    // POST/GET/DELETE only). Honest capability note rather than an upstream 404.
+    return NextResponse.json({
+      ok: false,
+      error: 'Table owner/comment updates are a Databricks Unity Catalog feature — the OSS Unity Catalog server does not implement PATCH /tables. Recreate the table with the new comment, or manage ownership through grants.',
+    }, { status: 501 });
+  }
   try {
     const table = await patchUcTable(fullName, { owner, comment });
     return NextResponse.json({ ok: true, table });
@@ -228,7 +272,8 @@ export async function DELETE(req: NextRequest) {
     return NextResponse.json({ ok: false, error: 'full_name (catalog.schema.table) is required' }, { status: 400 });
   }
   try {
-    await deleteUcTable(fullName);
+    if (isOssUc()) await deleteTableUc(await primaryWorkspaceHost(), fullName);
+    else await deleteUcTable(fullName);
     return NextResponse.json({ ok: true });
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: e?.status || 502 });

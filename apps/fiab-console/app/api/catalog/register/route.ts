@@ -38,6 +38,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { purviewPortalAssetLink } from '@/lib/azure/purview-endpoints';
 import {
   registerAtlasEntity, PurviewNotConfiguredError, PurviewError,
 } from '@/lib/azure/purview-client';
@@ -196,8 +197,9 @@ export async function POST(req: NextRequest) {
     // — recover it from there so a repeat write still returns the real guid and
     // honours the "200 + guid" contract the azure-database path mirrors.
     const guid = upsert.primaryGuid || extractMutatedGuid(upsert.mutatedEntities);
+    // Cloud-aware account host (.purview.azure.us in Azure Government).
     const purviewDeepLink = guid && process.env.LOOM_PURVIEW_ACCOUNT
-      ? `https://${process.env.LOOM_PURVIEW_ACCOUNT}.purview.azure.com/main.html#/asset/${encodeURIComponent(guid)}`
+      ? purviewPortalAssetLink(process.env.LOOM_PURVIEW_ACCOUNT, guid)
       : null;
 
     // Honest no-vaporware signal: a 200 with NO guid is not the same as a real

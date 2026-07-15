@@ -124,6 +124,21 @@ export type GateReason =
   | 'arm-not-configured'
   | 'requires-infra-redeploy';
 
+/**
+ * Build-pipeline availability, attached by the BFF route to an
+ * 'images-not-published' gate so the surface is never a dead end: when a
+ * GitHub token is configured the POST offers (and runs) the real image
+ * build+roll workflow instead; when it isn't, the UI renders the exact
+ * env var to set as a Fix-it affordance.
+ */
+export interface GatePipelineInfo {
+  available: boolean;
+  workflow: string;
+  monitorUrl: string;
+  /** Set when available=false: the env var(s) that would enable the pipeline. */
+  missingEnv?: string[];
+}
+
 export interface PreflightGate {
   ok: false;
   reason: GateReason;
@@ -132,6 +147,13 @@ export interface PreflightGate {
   missingImages?: ImageProbe[];
   /** For 'arm-not-configured': the env vars to set. */
   missingEnv?: string[];
+  /** For 'images-not-published': can the build+roll pipeline supply them? */
+  pipeline?: GatePipelineInfo;
+  /** For 'images-not-published': the resolved target release (so the caller
+   *  can dispatch the build pipeline at exactly this release). */
+  target?: GhRelease;
+  /** For 'images-not-published': the bare image version of `target`. */
+  imageVersion?: string;
   /**
    * For 'requires-infra-redeploy': the newly-required env vars the running
    * deployment is missing (each with why + the exact bicep remediation).
@@ -306,6 +328,8 @@ export async function preflight(deps: UpdateDeps, owner = DEFAULT_GHCR_OWNER): P
         'to your deployment\'s registry (private ACR: run the release image build workflow into it; ' +
         `public ghcr: publish + make the ${GHCR_REGISTRY}/${owner} packages public), then re-check.`,
       missingImages,
+      target,
+      imageVersion,
     };
   }
 

@@ -93,7 +93,11 @@ import { Section, Toolbar } from '@/lib/components/ui/section';
 import { ViewToggle, type LoomView } from '@/lib/components/ui/view-toggle';
 import { ItemTile } from '@/lib/components/ui/item-tile';
 import { TileGrid } from '@/lib/components/ui/tile-grid';
-import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
+import {
+  LoomDataTable, type LoomColumn, type LoomRowAction, type LoomRowMenuItem,
+} from '@/lib/components/ui/loom-data-table';
+import { BrandedItemIcon } from '@/lib/components/ui/branded-item-icon';
+import { TileRailSkeleton } from '@/lib/components/recent-items';
 import { itemVisual } from '@/lib/components/ui/item-type-visual';
 import { OneLakeSecurityTab } from '@/lib/panes/onelake-security-tab';
 import { SecureView } from '@/lib/components/onelake/secure-view';
@@ -1017,18 +1021,12 @@ export default function OneLakeCatalogPage() {
         key: 'displayName',
         label: 'Name',
         width: 260,
-        render: (r) => {
-          const v = itemVisual(r.itemType);
-          const Icon = v.icon;
-          return (
-            <span className={styles.nameCell}>
-              <span className={styles.nameIcon} style={{ backgroundColor: `${v.color}1f`, color: v.color }} aria-hidden>
-                <Icon className={styles.nameIconGlyph} style={{ color: v.color }} />
-              </span>
-              <span className={styles.nameText} title={r.displayName}>{r.displayName}</span>
-            </span>
-          );
-        },
+        render: (r) => (
+          <span className={styles.nameCell}>
+            <BrandedItemIcon type={r.itemType} size="sm" />
+            <span className={styles.nameText} title={r.displayName}>{r.displayName}</span>
+          </span>
+        ),
       },
       { key: 'type', label: 'Type', width: 180, getValue: (r) => typeLabel(r.itemType), render: (r) => typeLabel(r.itemType) },
       { key: 'owner', label: 'Owner', width: 200, getValue: (r) => r.createdBy || '', render: (r) => r.createdBy || '—' },
@@ -1045,8 +1043,25 @@ export default function OneLakeCatalogPage() {
         ),
       },
     ],
-    [styles.nameCell, styles.nameIcon, styles.nameText, wsName],
+    [styles.nameCell, styles.nameText, wsName],
   );
+
+  // Fabric dense-list parity: hover-only inline actions + right-click context
+  // menu on every list row — the same real actions as the tile kebab menu.
+  const listRowActions = (it: OwnedItem): LoomRowAction<OwnedItem>[] => [
+    { key: 'open', label: 'Open', icon: <Open16Regular />, onClick: (r) => router.push(`/items/${r.itemType}/${r.id}`) },
+    { key: 'properties', label: 'Properties', icon: <Info16Regular />, onClick: (r) => setPropsItem(r) },
+  ];
+  const listRowMenu = (it: OwnedItem): LoomRowMenuItem<OwnedItem>[] => {
+    const workspaceName = wsName.get(it.workspaceId) ?? it.workspaceId;
+    return [
+      { key: 'open', label: 'Open', icon: <Open16Regular />, onClick: (r) => router.push(`/items/${r.itemType}/${r.id}`) },
+      { key: 'copy-path', label: 'Copy OneLake path', icon: <Copy16Regular />, onClick: (r) => { void copyOnelakeForm(r, workspaceName, 'abfs'); } },
+      { key: 'dfs-url', label: 'Get URL (DFS)', icon: <Link16Regular />, onClick: (r) => { void copyOnelakeForm(r, workspaceName, 'dfs'); } },
+      { key: 'lineage', label: 'View lineage', icon: <BranchFork16Regular />, onClick: (r) => router.push(`/governance/lineage?focusId=${encodeURIComponent(r.id)}`) },
+      { key: 'properties', label: 'Properties', icon: <Info16Regular />, divider: true, onClick: (r) => setPropsItem(r) },
+    ];
+  };
 
   const subtitle =
     'Find, explore, and open the data items your tenant exposes — lakehouses, warehouses, databases, mirrored and KQL stores — without losing your place.';
@@ -1252,7 +1267,9 @@ export default function OneLakeCatalogPage() {
         <div className={styles.itemsCol}>
           {activeSection === 'recycle' && <RecycleView workspaceNames={wsName} />}
 
-          {activeSection === 'explore' && items === null && <Spinner label="Loading catalog…" />}
+          {activeSection === 'explore' && items === null && (
+            <TileRailSkeleton count={6} label="Loading catalog" />
+          )}
 
           {activeSection === 'explore' && items !== null && visible.length === 0 && (
             (items ?? []).length === 0 ? (
@@ -1316,6 +1333,9 @@ export default function OneLakeCatalogPage() {
                     columns={columns}
                     rows={g.items}
                     getRowId={(r) => r.id}
+                    density="compact"
+                    rowActions={listRowActions}
+                    rowMenu={listRowMenu}
                     onRowClick={(r) => setSelected(r)}
                     ariaLabel={`Items in ${g.name}`}
                     empty="No items in this workspace."

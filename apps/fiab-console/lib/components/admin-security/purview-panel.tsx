@@ -47,6 +47,10 @@ import {
   PURVIEW_SOURCE_KIND_SPECS, PURVIEW_KIND_SPEC, toPurviewSourceName,
   type DiscoveredPurviewSource,
 } from '@/lib/azure/purview-source-mapping';
+import {
+  classifyBulkRegisterResponse, summarizeBulkRegister,
+  type BulkRegisterStatus,
+} from '@/lib/azure/purview-bulk-register';
 
 const useStyles = makeStyles({
   subTabs: { marginBottom: tokens.spacingVerticalM },
@@ -856,7 +860,7 @@ function RegisterSourceWizard({ onRegistered }: { onRegistered: () => void }) {
 // Auto-add ALL discovered sources (bulk register with live progress)
 // -----------------------------------------------------------------
 
-interface BulkResult { name: string; label: string; slug?: string; status: 'ok' | 'error'; error?: string }
+interface BulkResult { name: string; label: string; slug?: string; status: BulkRegisterStatus; error?: string }
 
 function AutoAddAllDialog({ onDone }: { onDone: () => void }) {
   const s = useStyles();
@@ -887,14 +891,18 @@ function AutoAddAllDialog({ onDone }: { onDone: () => void }) {
         const r = await clientFetch('/api/admin/security/purview/sources', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
+          // The BFF (registerDataSource) defaults the collection to the account
+          // ROOT collection — the scan plane 404s a register with no collection.
           body: JSON.stringify({ name: src.suggestedName, kind: src.kind, properties: src.properties }),
         });
-        if (r.ok) {
-          res = { name: src.suggestedName, label: src.label, slug: src.tileSlug, status: 'ok' };
-        } else {
-          const j = await r.json().catch(() => ({}));
-          res = { name: src.suggestedName, label: src.label, slug: src.tileSlug, status: 'error', error: j?.error || `HTTP ${r.status}` };
-        }
+        const j = await r.json().catch(() => ({}));
+        const outcome = classifyBulkRegisterResponse(r.status, j);
+        res = {
+          name: src.suggestedName, label: src.label, slug: src.tileSlug,
+          status: outcome.status,
+          ...(outcome.status === 'error' ? { error: outcome.detail } : {}),
+          ...(outcome.status === 'exists' ? { error: outcome.detail } : {}),
+        };
       } catch (e: any) {
         res = { name: src.suggestedName, label: src.label, slug: src.tileSlug, status: 'error', error: e?.message || String(e) };
       }
@@ -906,8 +914,10 @@ function AutoAddAllDialog({ onDone }: { onDone: () => void }) {
     onDone();
   };
 
-  const okCount = results.filter((r) => r.status === 'ok').length;
-  const errCount = results.filter((r) => r.status === 'error').length;
+  const summary = summarizeBulkRegister(results);
+  const okCount = summary.ok;
+  const existsCount = summary.exists;
+  const errCount = summary.errors;
 
   return (
     <Dialog open={open} onOpenChange={(_: unknown, d: any) => { if (!running) setOpen(d.open); }}>
@@ -942,15 +952,17 @@ function AutoAddAllDialog({ onDone }: { onDone: () => void }) {
                 <>
                   <ProgressBar value={sources.length ? done / sources.length : 0} />
                   <Caption1 block>
-                    {done} of {sources.length} · {okCount} registered{errCount ? ` · ${errCount} failed` : ''}
+                    {done} of {sources.length} · {okCount} registered
+                    {existsCount ? ` · ${existsCount} already registered` : ''}
+                    {errCount ? ` · ${errCount} failed` : ''}
                   </Caption1>
                   <Divider />
                   <div className={s.bulkList}>
                     {results.map((r) => (
                       <div key={r.name} className={s.bulkRow}>
-                        {r.status === 'ok'
-                          ? <CheckmarkCircle20Regular className={s.okIcon} />
-                          : <Warning20Regular className={s.errIcon} />}
+                        {r.status === 'error'
+                          ? <Warning20Regular className={s.errIcon} />
+                          : <CheckmarkCircle20Regular className={s.okIcon} />}
                         <SourceKindIcon slug={r.slug} />
                         <strong>{r.name}</strong>
                         <span className={s.muted}>{r.error ? `— ${r.error}` : r.label}</span>

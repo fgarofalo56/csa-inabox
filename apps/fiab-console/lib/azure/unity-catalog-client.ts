@@ -35,7 +35,7 @@ import {
   ManagedIdentityCredential,
 } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
-import { isOssUc, ossUcBase, ossUcAuthToken, ossUcUnsupportedPath } from '@/lib/azure/uc-backend';
+import { isOssUc, ossUcBase, ossUcAuthToken, ossUcUnsupportedPath, ossUcRewritePath } from '@/lib/azure/uc-backend';
 import { executeStatement, type QueryResult, type DbxQueryParam } from './databricks-client';
 import {
   buildUcSetObjectTags, buildUcUnsetObjectTags, buildUcSetColumnTags, buildUcUnsetColumnTags,
@@ -207,15 +207,18 @@ async function ucFetch<T = any>(
     if (unsupported) {
       throw new UnityCatalogError(
         `${unsupported} is not available on the OSS Unity Catalog backend (LOOM_UC_BACKEND=oss). ` +
-          'These are Databricks Unity Catalog features; use the Databricks backend for them, or manage ' +
-          'them on the underlying Azure services. Catalogs, schemas, tables, volumes, and functions are supported.',
+          'These are Databricks Unity Catalog features; use the Databricks backend for them, or the ' +
+          'Loom-native equivalent (see /api/catalog/unity/capabilities). Catalogs, schemas, tables, ' +
+          'volumes, functions, models, grants, external locations, and storage credentials are supported.',
         501,
         undefined,
         path,
       );
     }
     // ossUcBase() throws OssUcNotConfiguredError (structured gate) when unset.
-    url = `${ossUcBase()}${path}`;
+    // The path rewrite maps the one Databricks↔OSS naming split
+    // (storage-credentials → credentials) so callers stay backend-agnostic.
+    url = `${ossUcBase()}${ossUcRewritePath(path)}`;
     const token = ossUcAuthToken();
     if (token) authHeaders.authorization = `Bearer ${token}`;
   } else {
@@ -330,6 +333,7 @@ export type UCSecurableType =
   | 'TABLE'
   | 'VOLUME'
   | 'FUNCTION'
+  | 'REGISTERED_MODEL'
   | 'EXTERNAL_LOCATION'
   | 'STORAGE_CREDENTIAL';
 
@@ -338,6 +342,22 @@ export type UCSecurableType =
 // ============================================================
 
 export async function listMetastoresFromWorkspace(host: string): Promise<UCMetastore[]> {
+  // OSS Unity Catalog is a single-metastore server with no /metastores list —
+  // it exposes GET /api/2.1/unity-catalog/metastore_summary instead. Map the
+  // summary into the same one-element federation shape so every caller
+  // (metastores page, federation loops) works unchanged on both backends.
+  if (isOssUc()) {
+    const s = await ucFetch<any>(host, '/api/2.1/unity-catalog/metastore_summary');
+    return [{
+      metastore_id: s?.metastore_id || s?.id || 'oss-unity-catalog',
+      name: s?.name || 'OSS Unity Catalog (loom-unity)',
+      region: s?.region,
+      storage_root: s?.storage_root,
+      owner: s?.owner,
+      created_at: s?.created_at,
+      workspace_hostname: host,
+    }];
+  }
   // /api/2.1/unity-catalog/metastores returns the metastore assigned to
   // the calling workspace (one or zero). The federation is intentional —
   // a workspace can only see its own metastore.
@@ -474,13 +494,182 @@ export async function deleteVolume(host: string, fullName: string): Promise<void
   await ucFetch(host, `/api/2.1/unity-catalog/volumes/${encodeURIComponent(fullName)}`, { method: 'DELETE' });
 }
 
+/** PATCH a catalog (owner / comment / new_name) — supported by both backends. */
+export async function updateCatalog(
+  host: string,
+  name: string,
+  body: { owner?: string; comment?: string; new_name?: string; properties?: Record<string, string> },
+): Promise<UCCatalog> {
+  const j = await ucFetch<UCCatalog>(host, `/api/2.1/unity-catalog/catalogs/${encodeURIComponent(name)}`, {
+    method: 'PATCH', body,
+  });
+  return { ...j, workspace_hostname: host };
+}
+
+/** PATCH a schema (owner / comment / new_name) — supported by both backends. */
+export async function updateSchema(
+  host: string,
+  fullName: string,
+  body: { owner?: string; comment?: string; new_name?: string; properties?: Record<string, string> },
+): Promise<UCSchema> {
+  const j = await ucFetch<UCSchema>(host, `/api/2.1/unity-catalog/schemas/${encodeURIComponent(fullName)}`, {
+    method: 'PATCH', body,
+  });
+  return { ...j, workspace_hostname: host };
+}
+
+/** PATCH a volume (owner / comment / new_name) — supported by both backends. */
+export async function updateVolume(
+  host: string,
+  fullName: string,
+  body: { owner?: string; comment?: string; new_name?: string },
+): Promise<UCVolume> {
+  const j = await ucFetch<UCVolume>(host, `/api/2.1/unity-catalog/volumes/${encodeURIComponent(fullName)}`, {
+    method: 'PATCH', body,
+  });
+  return { ...j, workspace_hostname: host };
+}
+
+/** DELETE a table — supported by both backends (backend-aware ucFetch). */
+export async function deleteTableUc(host: string, fullName: string): Promise<void> {
+  await ucFetch(host, `/api/2.1/unity-catalog/tables/${encodeURIComponent(fullName)}`, { method: 'DELETE' });
+}
+
+/** POST /tables — register an EXTERNAL (or, on Databricks, MANAGED) table via
+ *  REST. This is the OSS-parity create path; rich DDL formats stay on the
+ *  Databricks SQL-warehouse path ({@link createUcTableWithFormat}). */
+export async function createTableUc(
+  host: string,
+  body: {
+    name: string;
+    catalog_name: string;
+    schema_name: string;
+    table_type: 'EXTERNAL' | 'MANAGED';
+    data_source_format: string;
+    storage_location?: string;
+    comment?: string;
+    columns?: Array<{ name: string; type_name: string; type_text?: string; comment?: string; nullable?: boolean; position?: number }>;
+  },
+): Promise<UCTable> {
+  // OSS UC requires type_text/type_json per column; synthesize the minimal
+  // shapes from type_name so callers can pass the simple form.
+  const columns = (body.columns || []).map((c, i) => ({
+    name: c.name,
+    type_name: c.type_name.toUpperCase(),
+    type_text: c.type_text || c.type_name.toLowerCase(),
+    type_json: JSON.stringify({ name: c.name, type: c.type_text || c.type_name.toLowerCase(), nullable: c.nullable !== false }),
+    position: c.position ?? i,
+    nullable: c.nullable !== false,
+    comment: c.comment,
+  }));
+  const j = await ucFetch<UCTable>(host, '/api/2.1/unity-catalog/tables', {
+    method: 'POST',
+    body: { ...body, columns },
+  });
+  return { ...j, workspace_hostname: host };
+}
+
+// ============================================================
+// Functions (UDFs) — full CRUD, both backends
+// ============================================================
+
+export interface UCFunction {
+  name: string;
+  catalog_name: string;
+  schema_name: string;
+  full_name?: string;
+  comment?: string;
+  owner?: string;
+  external_language?: string;
+  routine_body?: string;
+  routine_definition?: string;
+  data_type?: string;
+  full_data_type?: string;
+  created_at?: number;
+  updated_at?: number;
+  workspace_hostname?: string;
+}
+
+export async function listFunctionsUc(host: string, catalogName: string, schemaName: string): Promise<UCFunction[]> {
+  const j = await ucFetch<{ functions?: UCFunction[] }>(host, '/api/2.1/unity-catalog/functions', {
+    query: { catalog_name: catalogName, schema_name: schemaName },
+  });
+  return (j.functions || []).map((f) => ({ ...f, workspace_hostname: host }));
+}
+
+export async function getFunctionUc(host: string, fullName: string): Promise<UCFunction> {
+  const j = await ucFetch<UCFunction>(host, `/api/2.1/unity-catalog/functions/${encodeURIComponent(fullName)}`);
+  return { ...j, workspace_hostname: host };
+}
+
+export async function deleteFunctionUc(host: string, fullName: string, force = false): Promise<void> {
+  await ucFetch(host, `/api/2.1/unity-catalog/functions/${encodeURIComponent(fullName)}`, {
+    method: 'DELETE',
+    query: force ? { force: 'true' } : undefined,
+  });
+}
+
+// ============================================================
+// Temporary credential vending — both backends
+// ============================================================
+//
+// POST /api/2.1/unity-catalog/temporary-{table,volume,path}-credentials —
+// short-lived, scoped storage credentials for direct data access. On the OSS
+// backend this is the loom-unity credential-vending service (requires the
+// LOOM_UNITY_ADLS_* SP — otherwise the server 501s and the BFF surfaces the
+// honest gate). On Databricks it is the metastore vending endpoint.
+
+export interface UCTemporaryCredential {
+  expiration_time?: number;
+  url?: string;
+  azure_user_delegation_sas?: { sas_token?: string };
+  aws_temp_credentials?: Record<string, string>;
+  [k: string]: unknown;
+}
+
+export async function vendTableCredentials(
+  host: string,
+  tableId: string,
+  operation: 'READ' | 'READ_WRITE',
+): Promise<UCTemporaryCredential> {
+  return ucFetch<UCTemporaryCredential>(host, '/api/2.1/unity-catalog/temporary-table-credentials', {
+    method: 'POST', body: { table_id: tableId, operation },
+  });
+}
+
+export async function vendVolumeCredentials(
+  host: string,
+  volumeId: string,
+  operation: 'READ_VOLUME' | 'WRITE_VOLUME',
+): Promise<UCTemporaryCredential> {
+  return ucFetch<UCTemporaryCredential>(host, '/api/2.1/unity-catalog/temporary-volume-credentials', {
+    method: 'POST', body: { volume_id: volumeId, operation },
+  });
+}
+
+export async function vendPathCredentials(
+  host: string,
+  url: string,
+  operation: 'PATH_READ' | 'PATH_READ_WRITE' | 'PATH_CREATE_TABLE',
+): Promise<UCTemporaryCredential> {
+  return ucFetch<UCTemporaryCredential>(host, '/api/2.1/unity-catalog/temporary-path-credentials', {
+    method: 'POST', body: { url, operation },
+  });
+}
+
 // ============================================================
 // Permissions — REST + SQL
 // ============================================================
 
-/** Path segment for REST permission API: `catalogs/<name>`, `schemas/<full>`,
- *  `tables/<full>`, `volumes/<full>`, etc. */
+/** Path segment for REST permission API: `catalog/<name>`, `schema/<full>`,
+ *  `table/<full>`, `volume/<full>`, etc. Backend-aware where the two servers
+ *  name the securable differently: Databricks governs registered models through
+ *  the FUNCTION securable (models share the function namespace) while OSS UC
+ *  has a first-class `registered_model` securable; Databricks says
+ *  `storage_credential` where OSS says `credential` (handled by
+ *  {@link ossUcRewritePath}, kept here too for clarity). */
 function permissionPath(secType: UCSecurableType, securableName: string): string {
+  const oss = isOssUc();
   const map: Record<UCSecurableType, string> = {
     METASTORE: 'metastore',
     CATALOG: 'catalog',
@@ -488,8 +677,9 @@ function permissionPath(secType: UCSecurableType, securableName: string): string
     TABLE: 'table',
     VOLUME: 'volume',
     FUNCTION: 'function',
+    REGISTERED_MODEL: oss ? 'registered_model' : 'function',
     EXTERNAL_LOCATION: 'external_location',
-    STORAGE_CREDENTIAL: 'storage_credential',
+    STORAGE_CREDENTIAL: oss ? 'credential' : 'storage_credential',
   };
   return `/api/2.1/unity-catalog/permissions/${map[secType]}/${encodeURIComponent(securableName)}`;
 }
@@ -500,6 +690,18 @@ export async function listPermissions(
   securableName: string,
 ): Promise<UCPermissions> {
   return ucFetch<UCPermissions>(host, permissionPath(secType, securableName));
+}
+
+/** GET /effective-permissions/{securable}/{name} — direct + inherited grants.
+ *  Databricks-only (ucFetch gates it 501 on the OSS backend; callers fall back
+ *  to {@link listPermissions}, which OSS UC fully supports). */
+export async function listEffectivePermissions(
+  host: string,
+  secType: UCSecurableType,
+  securableName: string,
+): Promise<UCPermissions> {
+  const path = permissionPath(secType, securableName).replace('/permissions/', '/effective-permissions/');
+  return ucFetch<UCPermissions>(host, path);
 }
 
 /** REST permission patch — for simple `GRANT priv TO principal` and
@@ -1623,15 +1825,22 @@ export async function deleteExternalLocation(host: string, name: string, force =
 // ---- Storage credentials ---------------------------------------------
 
 export async function listStorageCredentials(host: string): Promise<UCStorageCredential[]> {
-  const j = await ucFetch<{ storage_credentials?: UCStorageCredential[] }>(host, '/api/2.1/unity-catalog/storage-credentials');
-  return (j.storage_credentials || []).map((c) => ({ ...c, workspace_hostname: host }));
+  // Databricks lists them under `storage_credentials`; the OSS server (whose
+  // path is rewritten to /credentials) returns `credentials`.
+  const j = await ucFetch<{ storage_credentials?: UCStorageCredential[]; credentials?: UCStorageCredential[] }>(
+    host, '/api/2.1/unity-catalog/storage-credentials');
+  return (j.storage_credentials || j.credentials || []).map((c) => ({ ...c, workspace_hostname: host }));
 }
 
 export async function createStorageCredential(
   host: string,
   body: { name: string; comment?: string; read_only?: boolean; skip_validation?: boolean; azure_managed_identity: UCAzureManagedIdentity },
 ): Promise<UCStorageCredential> {
-  const j = await ucFetch<UCStorageCredential>(host, '/api/2.1/unity-catalog/storage-credentials', { method: 'POST', body });
+  // The OSS server's CreateCredentialRequest additionally requires the
+  // credential purpose (STORAGE vs SERVICE); Databricks storage-credentials are
+  // implicitly STORAGE-purposed.
+  const payload = isOssUc() ? { ...body, purpose: 'STORAGE' } : body;
+  const j = await ucFetch<UCStorageCredential>(host, '/api/2.1/unity-catalog/storage-credentials', { method: 'POST', body: payload });
   return { ...j, workspace_hostname: host };
 }
 

@@ -33,6 +33,7 @@ import {
 import { ModelViewPanel } from '../components/model-view-canvas';
 import { ItemEditorChrome } from '../item-editor-chrome';
 import { OpenInPbiDesktopButton } from '../components/open-in-pbi-desktop-button';
+import { OpenInLoomReportBuilderButton } from '../components/open-in-loom-report-builder-button';
 import { EmptyState } from '@/lib/components/empty-state';
 import { PreviewTable } from '@/lib/components/shared/preview-table';
 import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
@@ -669,6 +670,7 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
             <Badge appearance="outline">{schema?.sku || 'DW—'}</Badge>
             <Button appearance="outline" onClick={loadSchema}>Refresh</Button>
             <OpenInPbiDesktopButton type="warehouse" id={id} name={schema?.warehouse} />
+            <OpenInLoomReportBuilderButton type="warehouse" id={id} name={schema?.warehouse} />
             <Dropdown
               aria-label="Database"
               placeholder={schema?.warehouse || 'database'}
@@ -724,6 +726,7 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
             language="tsql"
             height={260}
             minHeight={200}
+            sizingKey="warehouse.sql"
             ariaLabel="Warehouse T-SQL editor"
             onReady={handleEditorReady}
           />

@@ -1,0 +1,218 @@
+name: gov-purview-verify
+
+# Gov-side Purview verification + (optional) UAMI Data Map role grant.
+#
+# WHY (operator incident 2026-07-14): the live Gov console governance gate said
+#   "The account name 'dmlz-dev-purview001' did not resolve as a classic Purview
+#    Data Map host (dmlz-dev-purview001.purview.azure.com): fetch failed"
+# — the gate hard-coded the Commercial `.purview.azure.com` suffix while Azure
+# Government's classic Purview data plane is `{account}.purview.azure.us`
+# (fixed console-side in fix/gov-purview-endpoint: ARM-derived endpoints +
+# cloud-aware fallback). This workflow answers, FROM INSIDE the Gov boundary:
+#
+#   1. Is dmlz-dev-purview001 (or any account) a CLASSIC Microsoft.Purview
+#      account, and what are its TRUE data-plane endpoints
+#      (ARM properties.endpoints.{catalog,scan,guardian})?
+#   2. Does the catalog endpoint answer a Data Map probe with a Gov token
+#      (deploy-SP-scoped, resource https://purview.azure.net — the data-plane
+#      audience is https://purview.azure.net in ALL clouds per Microsoft Learn
+#      purview/data-gov-api-rest-data-plane; only the HOST changes per cloud)?
+#   3. Same probe with the CONSOLE UAMI's token, from inside the loom-console
+#      container (the identity + egress path the product actually uses).
+#   4. What EXACT metadata-policy REST calls grant the console UAMI
+#      Data Reader + Data Curator + Data Source Administrator on the root
+#      collection — and (opt-in) APPLY them idempotently via the existing
+#      scripts/csa-loom/grant-purview-datamap-role.sh.
+#
+# Non-interactive: same Gov deploy SP + endpoints as gov-console-roll /
+# gov-uc-purview-wire. Read-only unless apply_grants=true.
+on:
+  workflow_dispatch:
+    inputs:
+      purview_account:
+        description: 'Purview account name (empty = discover the first Microsoft.Purview/accounts in the sub)'
+        required: false
+        default: ''
+      apply_grants:
+        description: 'true = APPLY the root-collection Data Map role grants to the console UAMI (idempotent). false = print the exact REST calls only.'
+        required: false
+        default: 'false'
+
+permissions:
+  contents: read
+
+env:
+  RG: rg-csa-loom-admin-usgovvirginia
+  APP: loom-console
+  PURVIEW_ARM_API: 2021-12-01
+  DATAMAP_API: 2023-09-01
+  POLICY_API: 2021-07-01
+
+jobs:
+  verify:
+    name: Verify Gov Purview account + endpoints + UAMI data-plane access
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login (Gov sub) — deploy SP
+        uses: Azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_GOV_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_GOV_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_GOV_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}",
+              "activeDirectoryEndpointUrl": "https://login.microsoftonline.us",
+              "resourceManagerEndpointUrl": "https://management.usgovcloudapi.net/",
+              "sqlManagementEndpointUrl": "https://management.core.usgovcloudapi.net:8443/",
+              "galleryEndpointUrl": "https://gallery.usgovcloudapi.net/",
+              "managementEndpointUrl": "https://management.core.usgovcloudapi.net/"
+            }
+          environment: AzureUSGovernment
+
+      - name: Set Azure cloud to Gov
+        run: az cloud set --name AzureUSGovernment
+
+      - name: verify_purview — list Microsoft.Purview/accounts + TRUE endpoints (ARM)
+        id: accounts
+        run: |
+          set -euo pipefail
+          SUB="${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}"
+          echo "== Microsoft.Purview/accounts in sub $SUB =="
+          LIST=$(az rest --method get \
+            --url "https://management.usgovcloudapi.net/subscriptions/$SUB/providers/Microsoft.Purview/accounts?api-version=$PURVIEW_ARM_API")
+          COUNT=$(echo "$LIST" | jq '.value | length')
+          echo "$LIST" | jq -r '.value[] | {name, id, location, type, sku: .sku.name, provisioningState: .properties.provisioningState, publicNetworkAccess: .properties.publicNetworkAccess, endpoints: .properties.endpoints}'
+          if [ "$COUNT" = "0" ]; then
+            echo "::error::No Microsoft.Purview/accounts in the Gov subscription — the console gate is honest; deploy a classic Purview account (platform/fiab/bicep/modules/admin-plane/catalog.bicep) or point LOOM_PURVIEW_ACCOUNT at the sub that has one."
+            exit 1
+          fi
+          PVW="${{ inputs.purview_account }}"
+          if [ -z "$PVW" ]; then PVW=$(echo "$LIST" | jq -r '.value[0].name'); fi
+          ACCT=$(echo "$LIST" | jq -c --arg n "$PVW" '.value[] | select(.name == $n)')
+          if [ -z "$ACCT" ]; then
+            echo "::error::Account '$PVW' not found in this subscription (see the list above)."
+            exit 1
+          fi
+          CATALOG=$(echo "$ACCT" | jq -r '.properties.endpoints.catalog // empty')
+          SCAN=$(echo "$ACCT" | jq -r '.properties.endpoints.scan // empty')
+          STATE=$(echo "$ACCT" | jq -r '.properties.provisioningState // "unknown"')
+          PNA=$(echo "$ACCT" | jq -r '.properties.publicNetworkAccess // "unknown"')
+          if [ -z "$CATALOG" ]; then
+            echo "::error::Account '$PVW' has NO properties.endpoints.catalog — it is not answering as a classic Data Map account (provisioningState=$STATE)."
+            exit 1
+          fi
+          BASE=$(echo "$CATALOG" | sed -E 's#^(https://[^/]+).*#\1#')
+          echo "::notice::account=$PVW state=$STATE publicNetworkAccess=$PNA catalog=$CATALOG scan=$SCAN base=$BASE"
+          case "$BASE" in
+            *.purview.azure.us) echo "::notice::endpoint suffix is the expected Gov '.purview.azure.us' — the console's cloud-aware fallback matches ARM." ;;
+            *) echo "::warning::endpoint suffix is NOT .purview.azure.us — the ARM-derived endpoint path in purview-endpoints.ts is REQUIRED for this account (convention would be wrong)." ;;
+          esac
+          {
+            echo "PVW=$PVW"
+            echo "BASE=$BASE"
+            echo "PNA=$PNA"
+          } >> "$GITHUB_ENV"
+
+      - name: Probe the catalog endpoint with a Gov data-plane token (deploy SP)
+        run: |
+          set -euo pipefail
+          # Data-plane audience: https://purview.azure.net (per Microsoft Learn
+          # purview/data-gov-api-rest-data-plane this is the documented resource;
+          # Learn documents NO Gov-specific audience — verify below: a 401 with a
+          # WWW-Authenticate resource hint would indicate a different audience).
+          TOKEN=$(az account get-access-token --resource https://purview.azure.net --query accessToken -o tsv | tr -d '\r')
+          URL="$BASE/datamap/api/atlas/v2/types/typedefs/headers?api-version=$DATAMAP_API"
+          echo "== GET $URL =="
+          HTTP=$(curl -sS -o /tmp/probe.json -w '%{http_code}' -H "Authorization: Bearer $TOKEN" "$URL" || echo "000")
+          echo "HTTP $HTTP"
+          head -c 300 /tmp/probe.json || true; echo
+          case "$HTTP" in
+            200) echo "::notice::catalog endpoint LIVE with the purview.azure.net audience — host + audience are correct; any console failure is identity/egress." ;;
+            401|403) echo "::warning::endpoint reachable but $HTTP for the deploy SP — expected when the SP holds no Data Map role; the UAMI grant step below is what matters. WWW-Authenticate follows:"; curl -sSI -H "Authorization: Bearer invalid" "$URL" | grep -i www-authenticate || true ;;
+            000) echo "::warning::endpoint unreachable from the public runner (publicNetworkAccess=$PNA — a PE-protected account is only reachable in-VNet; the in-container probe below is authoritative)." ;;
+            *) echo "::warning::unexpected HTTP $HTTP — inspect the body above." ;;
+          esac
+
+      - name: Discover the console UAMI (clientId + principalId)
+        run: |
+          set -euo pipefail
+          UAMI_ID=$(az containerapp show -n "$APP" -g "$RG" --query 'identity.userAssignedIdentities | keys(@) | [0]' -o tsv | tr -d '\r')
+          UAMI_PRINCIPAL=$(az identity show --ids "$UAMI_ID" --query principalId -o tsv | tr -d '\r')
+          UAMI_CLIENT=$(az identity show --ids "$UAMI_ID" --query clientId -o tsv | tr -d '\r')
+          echo "::notice::console UAMI id=$UAMI_ID principalId=$UAMI_PRINCIPAL clientId=$UAMI_CLIENT"
+          {
+            echo "UAMI_PRINCIPAL=$UAMI_PRINCIPAL"
+            echo "UAMI_CLIENT=$UAMI_CLIENT"
+          } >> "$GITHUB_ENV"
+
+      - name: Probe the catalog endpoint with the CONSOLE UAMI token (in-container)
+        run: |
+          set -euo pipefail
+          # The authoritative reproduction of what the console does: same
+          # identity (UAMI via the ACA MSI endpoint), same egress (in-VNet, so a
+          # PE-protected account is reachable), same host + audience.
+          REP=$(az containerapp replica list -n "$APP" -g "$RG" --query '[0].name' -o tsv | tr -d '\r')
+          if [ -z "$REP" ]; then echo "::warning::no console replica running — skipping the in-container probe"; exit 0; fi
+          SCRIPT="const ep=process.env.IDENTITY_ENDPOINT,h=process.env.IDENTITY_HEADER,cid='$UAMI_CLIENT';(async()=>{try{const t=await fetch(ep+'?api-version=2019-08-01&resource='+encodeURIComponent('https://purview.azure.net')+(cid?'&client_id='+cid:''),{headers:{'X-IDENTITY-HEADER':h}});const tj=await t.json();if(!tj.access_token){console.log('PVW TOKEN-FAIL',t.status,JSON.stringify(tj).slice(0,200));return;}const r=await fetch('$BASE/datamap/api/atlas/v2/types/typedefs/headers?api-version=$DATAMAP_API',{headers:{authorization:'Bearer '+tj.access_token}});const b=await r.text();console.log('PVW',r.status,b.slice(0,300));}catch(e){console.log('PVW ERR',e.message);}})()"
+          OUT=$(az containerapp exec -n "$APP" -g "$RG" --replica "$REP" --container "$APP" \
+            --command "node -e \"$SCRIPT\"" 2>/dev/null || true)
+          echo "$OUT"
+          if echo "$OUT" | grep -q "PVW 200"; then
+            echo "::notice::UAMI probe LIVE — the console gate should now be green (roll the console onto the fix/gov-purview-endpoint image if it still reports .com)."
+          elif echo "$OUT" | grep -qE "PVW 40[13]"; then
+            echo "::warning::host + audience OK but the UAMI lacks a Data Map role — run this workflow with apply_grants=true (or the printed REST calls below)."
+          else
+            echo "::warning::UAMI probe did not return 200 — see output above (token failure = MSI/env issue; ERR fetch failed = DNS/egress from the CAE VNet)."
+          fi
+
+      - name: Print the EXACT metadata-policy REST grant calls (root collection)
+        run: |
+          set -euo pipefail
+          cat <<EOF
+          == Grant the console UAMI ($UAMI_PRINCIPAL) Data Map roles on the root collection ==
+          Classic Data Map roles are NOT ARM RBAC — they live in the account's collection
+          metadata policy (Learn: purview/legacy/tutorial-metadata-policy-collections-apis).
+
+          1) TOKEN=\$(az account get-access-token --resource https://purview.azure.net --query accessToken -o tsv)
+
+          2) GET the root-collection policy (root collectionName == account name):
+             curl -H "Authorization: Bearer \$TOKEN" \\
+               "$BASE/policystore/metadataPolicies?collectionName=$PVW&api-version=$POLICY_API"
+
+          3) In .values[0].properties.attributeRules, append "$UAMI_PRINCIPAL" to the
+             attributeValueIncludedIn list of the principal.microsoft.id condition inside
+             EACH of these rules (id prefixes):
+               purviewmetadatarole_builtin_data-reader:
+               purviewmetadatarole_builtin_data-curator:
+               purviewmetadatarole_builtin_data-source-administrator:
+
+          4) PUT the whole policy back:
+             curl -X PUT -H "Authorization: Bearer \$TOKEN" -H "Content-Type: application/json" \\
+               -d @updated-policy.json \\
+               "$BASE/policystore/metadataPolicies/{policyId}?api-version=$POLICY_API"
+
+          scripts/csa-loom/grant-purview-datamap-role.sh automates 1-4 idempotently
+          (jq-merges the oid, single PUT). Re-run this workflow with apply_grants=true
+          to execute it as the deploy SP (the SP must be a Collection Admin on the
+          account root — one-time grant in the Purview portal if the PUT 403s).
+          EOF
+
+      - name: APPLY the grants idempotently (grant-purview-datamap-role.sh)
+        if: ${{ inputs.apply_grants == 'true' }}
+        run: |
+          set -euo pipefail
+          # PE-protected accounts: the script can temporarily toggle
+          # publicNetworkAccess (and always restores it via trap).
+          TOGGLE=0
+          [ "$PNA" != "Enabled" ] && TOGGLE=1
+          PURVIEW_ACCOUNT="$PVW" \
+          CONSOLE_UAMI_PRINCIPAL="$UAMI_PRINCIPAL" \
+          PURVIEW_CLOUD=AzureUSGovernment \
+          PURVIEW_TOGGLE_PUBLIC="$TOGGLE" \
+          ROLES="data-reader data-curator data-source-administrator" \
+            bash scripts/csa-loom/grant-purview-datamap-role.sh
+          echo "::notice::Grants applied. Re-run WITHOUT apply_grants to re-probe, then check the Gov console Governance page — the gate should be green."

@@ -34,6 +34,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { normalizePurviewAccountName, purviewBaseSync } from '@/lib/azure/purview-endpoints';
 import {
   listAllMetastores, listMetastoresFromWorkspace, listWorkspaceHostnames, listCatalogs,
   UnityCatalogNotConfiguredError, UnityCatalogError,
@@ -210,8 +211,9 @@ export async function GET() {
   // Purview — surface the configured account env var if present.
   const account = process.env.LOOM_PURVIEW_ACCOUNT;
   if (account) {
-    const shortName = account.replace(/^https?:\/\//, '').replace(/-api\.purview\.azure\.com.*$/, '').replace(/\.purview\.azure\.com.*$/, '');
-    result.purview = { account: shortName, endpoint: `https://${shortName}.purview.azure.com`, configured: true };
+    const shortName = normalizePurviewAccountName(account);
+    // Cloud-aware endpoint (ARM-cache -> convention; .purview.azure.us in Gov).
+    result.purview = { account: shortName, endpoint: purviewBaseSync(shortName), configured: true };
   } else {
     result.purview = null;
     result.purviewError = 'LOOM_PURVIEW_ACCOUNT not configured';

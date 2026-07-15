@@ -25,6 +25,7 @@ import { NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { tenantSettingsContainer } from '@/lib/azure/cosmos-client';
 import { uamiArmCredential } from '@/lib/azure/arm-credential';
+import { purviewBaseSync } from '@/lib/azure/purview-endpoints';
 import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
@@ -40,7 +41,8 @@ function resolveUcEndpoint(): string | undefined {
   const explicit = process.env.LOOM_PURVIEW_UC_ENDPOINT;
   if (explicit) return explicit.replace(/\/+$/, '');
   const account = process.env.LOOM_PURVIEW_ACCOUNT;
-  if (account) return `https://${account}.purview.azure.com`;
+  // CLOUD-AWARE (ARM-cache → convention): .purview.azure.us in Azure Government.
+  if (account) return purviewBaseSync(account);
   return undefined;
 }
 

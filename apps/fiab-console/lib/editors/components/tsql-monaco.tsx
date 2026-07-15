@@ -209,6 +209,8 @@ export interface TsqlMonacoProps {
   /** Loom workspace id — forwarded to `/api/sqldb/*?workspaceId=`. */
   workspaceId?: string;
   height?: number | string;
+  /** G3: user-adjustable editor height — forwarded to the inner MonacoTextarea. */
+  sizingKey?: string;
   readOnly?: boolean;
   /** Show the New-query template split button (default true). */
   showNewQuery?: boolean;
@@ -224,7 +226,7 @@ export interface TsqlMonacoProps {
 export function TsqlMonaco({
   value, onChange, onRun,
   server = '', database = '', itemId = '', workspaceId = '',
-  height = 240, readOnly = false, showNewQuery = true, busy = false,
+  height = 240, sizingKey, readOnly = false, showNewQuery = true, busy = false,
   onReady: onReadyExternal,
 }: TsqlMonacoProps) {
   const s = useStyles();
@@ -419,6 +421,7 @@ export function TsqlMonaco({
         onChange={onChange}
         language="tsql"
         height={height}
+        sizingKey={sizingKey}
         readOnly={readOnly}
         ariaLabel="T-SQL editor"
         onReady={onReady}

@@ -51,6 +51,7 @@ import {
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from '../item-editor-chrome';
 import { OpenInPbiDesktopButton } from '../components/open-in-pbi-desktop-button';
+import { OpenInLoomReportBuilderButton } from '../components/open-in-loom-report-builder-button';
 import { EmptyState } from '@/lib/components/empty-state';
 import { CopilotBuilderPane } from '@/lib/components/shared/copilot-builder-pane';
 import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
@@ -3674,6 +3675,7 @@ export function LakehouseEditor({ item, id }: Props) {
                 <div className={s.toolbar}>
                   <Body1>OPENROWSET via Synapse Serverless</Body1>
                   <OpenInPbiDesktopButton type="lakehouse" id={id} name={item?.displayName} />
+                  <OpenInLoomReportBuilderButton type="lakehouse" id={id} name={item?.displayName} />
                   <Button
                     appearance="primary"
                     icon={<Play20Regular />}
@@ -3690,6 +3692,7 @@ export function LakehouseEditor({ item, id }: Props) {
                   language="tsql"
                   height={240}
                   minHeight={180}
+                  sizingKey="lakehouse.openrowset-sql"
                   ariaLabel="OPENROWSET T-SQL editor"
                 />
                 {sqlLoading && <Spinner size="small" label="Executing…" labelPosition="after" />}

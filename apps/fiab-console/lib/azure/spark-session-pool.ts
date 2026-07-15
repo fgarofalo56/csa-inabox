@@ -100,6 +100,9 @@ import {
   type LeaseStoreStatus,
   type LeaseStoreMode,
 } from '@/lib/azure/spark-lease-store';
+import { recordPoolAcquire } from '@/lib/perf/pool-counters';
+import { recordUsageEvent, flushUsageEvents } from '@/lib/perf/usage-store';
+import { learnedTargetMin, refreshLearningCache } from '@/lib/perf/learning-cache';
 
 export type SparkPoolBackend = 'synapse' | 'databricks';
 type SlotState = 'warming' | 'warm' | 'leased' | 'shared' | 'dead';
@@ -831,7 +834,11 @@ export async function refillPool(): Promise<void> {
     const active = slots.filter((s) => s.state === 'warming' || s.state === 'warm').length;
     const warmingOrWarm = active;
     const total = slots.filter((s) => s.state !== 'dead').length;
-    const need = Math.min(cfg.min - warmingOrWarm, cfg.max - total);
+    // PERF-4.4 — the learned schedule modulates the warm target: boost ahead of
+    // predicted-busy windows, 0 in confidently-dead hours, manual overrides win.
+    // With learning off / no data this is exactly cfg.min (today's behaviour).
+    const targetMin = learnedTargetMin(grp.key, cfg.min, cfg.max);
+    const need = Math.min(targetMin - warmingOrWarm, cfg.max - total);
     for (let i = 0; i < need; i++) tasks.push(warmOne(grp));
   }
   // Don't await sequentially-blocking; kick them and let the caller move on.
@@ -1022,6 +1029,17 @@ async function sweep(): Promise<void> {
   // Converge on the shared admin override FIRST so a kill switch / config change
   // set via any replica applies here this tick.
   await syncConfigFromStore();
+  // PERF-4.4 — flush buffered usage events (throttled) + refresh the learned-
+  // schedule snapshot so refill/evict below see the current prediction. Both
+  // best-effort telemetry; a failure never breaks the sweep.
+  await flushUsageEvents().catch(() => 0);
+  await refreshLearningCache().catch(() => {});
+  // PERF-4.2 — the auto-adjust engine piggybacks the sweep heartbeat (throttled
+  // to 5 min internally). Dynamic import: auto-tune statically imports this
+  // module, so a static edge here would be a cycle.
+  void import('@/lib/perf/auto-tune')
+    .then((m) => m.autoTuneTick())
+    .catch(() => {});
   const cfg = sparkPoolConfig();
   pruneDead();
   if (!cfg.enabled) return;
@@ -1049,11 +1067,15 @@ async function sweep(): Promise<void> {
       // republished by their owner).
       if (!s.fromStore) void publishWarmSlot(s);
     }
-    // Evict warm-above-min sessions idle past the TTL (oldest-idle first).
+    // Evict warm-above-target sessions idle past the TTL (oldest-idle first).
+    // PERF-4.4 — the learned schedule sets the floor: in a confidently-dead
+    // hour the target is 0, so the pool drains fully and SLEEPS (cost saver);
+    // in busy windows the boosted target keeps more sessions alive.
+    const targetMin = learnedTargetMin(grp.key, cfg.min, cfg.max);
     const overMin = warm
       .filter((s) => now - s.lastActivityAt > cfg.idleTtlMs)
       .sort((a, b) => a.lastActivityAt - b.lastActivityAt);
-    const evictable = Math.max(0, warm.length - cfg.min);
+    const evictable = Math.max(0, warm.length - targetMin);
     for (let i = 0; i < Math.min(evictable, overMin.length); i++) evictSlot(overMin[i]);
   }
   pruneDead();
@@ -1109,6 +1131,13 @@ export interface AcquireRequest {
    * is on. Write runs (omit / false) always get an exclusive session.
    */
   readOnly?: boolean;
+  /**
+   * PERF-4.4 — the workspace this session demand came from. Feeds the
+   * usage-learning histograms (per-workspace hour-of-week demand) so the
+   * pre-warm schedule can be learned + per-workspace opted out. Optional —
+   * demand without a workspace still counts toward the global histogram.
+   */
+  workspaceId?: string;
 }
 
 export interface Lease {
@@ -1167,6 +1196,18 @@ async function synapseSlotLive(slot: PooledSlot): Promise<boolean> {
  * a miss — the caller then cold-starts (pure accelerator, never a dependency).
  */
 export async function acquireWarmSession(req: AcquireRequest): Promise<Lease | null> {
+  const t0 = Date.now();
+  const key0 = groupKey(req.backend, req.poolName, req.kind, req.sizingKey);
+  // PERF-4.4 — every acquire attempt is REAL session demand (hit or miss):
+  // feed the usage-learning histogram (in-process buffer; flushed by sweep).
+  try { recordUsageEvent(key0, req.workspaceId); } catch { /* telemetry only */ }
+  const lease = await acquireWarmSessionInner(req);
+  // PERF-4.1 — hit/miss counters drive the cold-start-rate recommendation.
+  try { recordPoolAcquire(!!lease, Date.now() - t0); } catch { /* telemetry only */ }
+  return lease;
+}
+
+async function acquireWarmSessionInner(req: AcquireRequest): Promise<Lease | null> {
   const cfg = sparkPoolConfig();
   const key = groupKey(req.backend, req.poolName, req.kind, req.sizingKey);
   registerGroup({
@@ -1425,7 +1466,9 @@ export function getPoolStatus(): PoolStatus {
       leased,
       shared,
       warming,
-      target: cfg.min,
+      // PERF-4.4 — the LIVE effective target (admin min modulated by the
+      // learned schedule), so the status surface shows what refill maintains.
+      target: learnedTargetMin(grp.key, cfg.min, cfg.max),
       consecFails: grp.consecFails || undefined,
       backoffUntil: grp.backoffUntil && grp.backoffUntil > now ? grp.backoffUntil : undefined,
       lastFailure: grp.lastFailure,

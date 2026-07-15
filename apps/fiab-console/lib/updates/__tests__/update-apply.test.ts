@@ -55,6 +55,11 @@ describe('version helpers', () => {
     expect(compareVersions('v0.43.2', 'csa-inabox-v0.43.1')).toBe(1);
   });
 
+  it('treats a sha-fingerprint current build as older than a real release (never refuses as up-to-date)', () => {
+    expect(compareVersions('build-d07f330d094b', 'csa-inabox-v0.43.1')).toBe(-1);
+    expect(compareVersions('dev', 'csa-inabox-v0.43.1')).toBe(-1);
+  });
+
   it('builds the public image ref', () => {
     expect(imageRef(LOOM_APPS[0], 'fgarofalo56', '0.43.1'))
       .toBe('ghcr.io/fgarofalo56/loom-mcp:0.43.1');
@@ -209,6 +214,10 @@ describe('registry-aware image resolution (the real "button never worked" fix)',
     expect(pre.missingImages?.[0].ref).toBe('myacr.azurecr.io/loom-console:0.43.1');
     // The gate message no longer misdiagnoses this as "CI still publishing".
     expect(pre.message).not.toMatch(/publish-ghcr-images\.yml/);
+    // The gate carries the resolved target so the route can dispatch the
+    // build+roll pipeline at EXACTLY this release instead of dead-ending.
+    expect(pre.target?.tag_name).toBe('csa-inabox-v0.43.1');
+    expect(pre.imageVersion).toBe('0.43.1');
   });
 
   it('a resolveImage that throws degrades to the ghcr fallback (never crashes pre-flight)', async () => {

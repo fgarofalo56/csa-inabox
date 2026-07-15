@@ -24,6 +24,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { databricksConfigGate } from '@/lib/azure/databricks-client';
 import { isGovCloud, cloudBoundaryLabel } from '@/lib/azure/cloud-endpoints';
+import { isOssUc } from '@/lib/azure/uc-backend';
 import {
   primaryWorkspaceHost,
   listStorageCredentials, createStorageCredential, updateStorageCredential, deleteStorageCredential,
@@ -35,6 +36,10 @@ export const dynamic = 'force-dynamic';
 interface Gate { gated: true; error: string }
 
 function resolveGate(): Gate | null {
+  // The OSS Unity Catalog backend (loom-unity — the Azure-Government default)
+  // fully supports credentials (its name for storage credentials) — the client
+  // rewrites the path and routes to LOOM_UNITY_URL. No Databricks/Gov gate.
+  if (isOssUc()) return null;
   const cfg = databricksConfigGate();
   if (cfg) {
     return { gated: true, error: `Databricks is not configured in this deployment. Set ${cfg.missing} on the Console (landing-zone bicep deploys the Databricks workspace).` };
@@ -43,8 +48,8 @@ function resolveGate(): Gate | null {
     return {
       gated: true,
       error:
-        `Unity Catalog storage credentials are not available at the ${cloudBoundaryLabel()} boundary. ` +
-        `They require a Commercial or GCC Databricks account (Microsoft Entra-connected Unity Catalog metastore).`,
+        `Databricks Unity Catalog storage credentials are not available at the ${cloudBoundaryLabel()} boundary. ` +
+        `Deploy the OSS Unity Catalog backend (loom-unity) and set LOOM_UC_BACKEND=oss — it supports the same credentials surface.`,
     };
   }
   return null;

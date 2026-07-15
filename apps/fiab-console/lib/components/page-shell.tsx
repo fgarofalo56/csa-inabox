@@ -58,8 +58,13 @@ const useStyles = makeStyles({
     display: 'flex',
     alignItems: 'center',
     gap: 'var(--loom-space-2)',
-    flexShrink: 0,
+    // Wrap + shrink instead of overflowing: a long badge/action row (item
+    // editors render many) must never overlap the title/subtitle (web3-ui.md).
+    flexWrap: 'wrap',
+    flexShrink: 1,
+    minWidth: 0,
     marginLeft: 'auto',
+    justifyContent: 'flex-end',
   },
   body: { flex: 1, minHeight: 0, minWidth: 0, maxWidth: '100%' },
 });

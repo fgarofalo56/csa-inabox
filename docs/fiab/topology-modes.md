@@ -180,3 +180,54 @@ az deployment sub create --subscription <sub> -l eastus2 \
 > The wizard first-run = `tenant` (+ optional first DLZ) and subsequent
 > "Add landing zone" runs = `dlz-attach` only (no second console from the UI) is
 > implemented in audit-t157.
+
+## Who can deploy / attach a landing zone from the Console (identity + grants)
+
+`POST /api/setup/deploy` (the Setup Wizard "Deploy" and the /admin "Add landing
+zone" Attach) tries these tiers **in order**, each under a different identity —
+so "authorized" means different grants depending on which tier serves the deploy:
+
+| Tier | Identity that submits the ARM deployment | Required grant on the **target** subscription |
+|------|------------------------------------------|-----------------------------------------------|
+| 1. User-delegated ARM (day-one default) | The **signed-in operator** (delegated ARM token; falls back to the Console UAMI when the ARM scope wasn't consented at login) | **Contributor** (or Owner) for the operator — or for the Console UAMI on the fallback |
+| 2. Setup Orchestrator (`LOOM_SETUP_ORCHESTRATOR_URL`) | The **orchestrator identity** (= Console UAMI, granted by `setup-orchestrator-rbac.bicep`) | **Contributor** per target subscription |
+| 3. GitHub workflow dispatch (`LOOM_GITHUB_ACTIONS_TOKEN`) | The **deploy service principal** used by the workflow's `AZURE_*` secrets | **Contributor** (deploy SP is usually Owner-ish on Loom-owned subs) |
+| 4. Copy-paste `az` gate (503) | Whoever runs the command | **Contributor** |
+
+Additionally, every tier needs the caller to pass the Console's
+`admin.deploy-dlz` feature-permission (tenant admins bypass; others must be
+delegated at `/admin/permissions`), and the target subscription must have the
+DLZ resource providers registered (`Microsoft.Storage`, `Microsoft.Kusto`,
+`Microsoft.DocumentDB`, `Microsoft.KeyVault`, `Microsoft.ManagedIdentity`,
+`Microsoft.Network`).
+
+The wizard runs an **in-flow pre-flight** on the chosen subscription (async
+`/api/setup/deploy-preflight`, user-passthrough) and blocks submit only on a
+definitive "cannot deploy", showing the exact grant:
+
+```bash
+az role assignment create \
+  --assignee-object-id <operator-or-console-uami-object-id> \
+  --assignee-principal-type User|ServicePrincipal \
+  --role Contributor \
+  --scope /subscriptions/<target-subscription-id>
+```
+
+### Anti-504 submit contract (Front Door)
+
+The Console sits behind Azure Front Door, whose origin-response timeout turns
+any BFF await longer than ~60s into an **HTML 504** the wizard cannot parse
+("Deploy service returned non-JSON"). The deploy submit route therefore bounds
+**every** hop and always answers structured JSON:
+
+| Budget (env override) | Default | Bounds |
+|---|---|---|
+| `LOOM_DEPLOY_TOKEN_BUDGET_MS` | 10s | OBO / UAMI ARM-token acquisition |
+| `LOOM_DEPLOY_PREFLIGHT_BUDGET_MS` | 15s | cold cross-sub permission + RP pre-flight (prediction only — skipped on timeout) |
+| `LOOM_PREFLIGHT_FETCH_TIMEOUT_MS` | 20s | each pre-flight ARM round-trip |
+| `LOOM_ORCH_SUBMIT_TIMEOUT_MS` | 15s | Setup Orchestrator submit POST (falls through when the orchestrator app is wedged/unreachable) |
+| `LOOM_GH_DISPATCH_TIMEOUT_MS` | 15s | GitHub workflow dispatch |
+| `LOOM_DEPLOY_SUBMIT_BUDGET_MS` | 40s | **total** route backstop → honest JSON 504 (never the edge's HTML page) |
+
+The ARM submit itself was already bounded (8s early-return race + background
+PUT, pollable via `/api/setup/deploy-status?mode=user-arm`).

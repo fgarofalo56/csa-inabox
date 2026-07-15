@@ -25,6 +25,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { purviewPortalAssetLink } from '@/lib/azure/purview-endpoints';
 import {
   createOneLakeShortcut, listOneLakeShortcuts, deleteOneLakeShortcut,
   FabricError,
@@ -85,7 +86,8 @@ export async function POST(req: NextRequest) {
         });
         purviewGuid = upsert.primaryGuid;
         if (purviewGuid && process.env.LOOM_PURVIEW_ACCOUNT) {
-          purviewDeepLink = `https://${process.env.LOOM_PURVIEW_ACCOUNT}.purview.azure.com/main.html#/asset/${encodeURIComponent(purviewGuid)}`;
+          // Cloud-aware account host (.purview.azure.us in Azure Government).
+          purviewDeepLink = purviewPortalAssetLink(process.env.LOOM_PURVIEW_ACCOUNT, purviewGuid);
         }
       } catch (e: any) {
         // Don't fail the shortcut if Purview registration fails — surface as a

@@ -180,9 +180,38 @@ export interface DataPreviewDockProps {
   itemId?: string;
   /** The live topology (sources / transforms / sinks) for the errors tab + source picker. */
   topology: EsTopology;
+  /**
+   * Deferred-validation flag: TRUE while the stream is brand-new and untouched
+   * (never edited / saved / provisioned). Pristine mode shows a guided setup
+   * checklist instead of red authoring errors, and no danger badge — new items
+   * open clean (validation turns on at first edit or save attempt).
+   */
+  pristine?: boolean;
 }
 
-export function DataPreviewDock({ itemId, topology }: DataPreviewDockProps) {
+/**
+ * True when a source node cannot possibly be previewed yet: it has no
+ * provisioned ingest endpoint AND its required connection config is blank.
+ * Preview must NOT run against such a node — it gets a friendly
+ * "configure a source" empty state instead of a failed fetch.
+ */
+export function sourceNeedsSetup(n: any): boolean {
+  if (!n || typeof n !== 'object') return true;
+  const kind = String(n.kind || 'eventhub');
+  if (kind === 'sample') return false;
+  if (n.provisionedEndpoint?.entityPath) return false;
+  switch (kind) {
+    case 'eventhub':
+    case 'custom-app': return !(n.eventHubName || '').trim();
+    case 'iothub': return !(n.iotHub || '').trim();
+    case 'kafka': return !(n.topic || '').trim();
+    case 'cdc-mirror': return !((n.cdcServerHost || '').trim() && (n.cdcDatabase || '').trim() && (n.cdcTable || '').trim());
+    case 'mirror-cdf': return !(n.mirrorItemId || '').trim();
+    default: return false;
+  }
+}
+
+export function DataPreviewDock({ itemId, topology, pristine }: DataPreviewDockProps) {
   const s = useStyles();
   const [tab, setTab] = useState<'preview' | 'errors'>('preview');
 
@@ -205,8 +234,21 @@ export function DataPreviewDock({ itemId, topology }: DataPreviewDockProps) {
   const authoring = useMemo(() => collectAuthoringErrors(topology), [topology]);
   const counts = useMemo(() => authoringErrorCounts(authoring), [authoring]);
 
+  // Preview readiness of the SELECTED source. 'none' = no source node exists;
+  // 'setup' = the node exists but is unconfigured (no endpoint + blank config).
+  // In both cases the preview NEVER fetches — it renders a friendly guided
+  // empty state instead of a "source node not found" failure.
+  const selectedSource = sources[sourceIdx];
+  const setupState: 'none' | 'setup' | null =
+    sources.length === 0 ? 'none' : sourceNeedsSetup(selectedSource) ? 'setup' : null;
+
+  // Server-confirmed "configure a source first" state (route returned
+  // source_not_found / source_unconfigured).
+  const [serverSetup, setServerSetup] = useState(false);
+
   const refresh = useCallback(async () => {
     if (!itemId || itemId === 'new') { setGate('Save the eventstream first — live preview needs a persisted item.'); return; }
+    if (setupState) return; // unconfigured/nonexistent source: guided state, no fetch
     setBusy(true); setErr(null); setGate(null); setNote(null);
     try {
       const r = await clientFetch(`/api/items/eventstream/${itemId}/events?nodeIdx=${sourceIdx}&maxEvents=50`);
@@ -217,6 +259,18 @@ export function DataPreviewDock({ itemId, topology }: DataPreviewDockProps) {
       } else if (j.code === 'receive_unavailable') {
         setEvents(null);
         setGate(j.hint || j.error || 'Live receive is not enabled in this deployment.');
+      } else if (
+        j.code === 'source_not_found' || j.code === 'source_unconfigured' ||
+        /source node not found|no provisioned ingest endpoint/i.test(String(j.error || ''))
+      ) {
+        // Defensive server-side mapping: an out-of-sync topology (e.g. the node
+        // was just deleted, or the saved state predates the node) is a
+        // configure-a-source situation, not a preview failure.
+        setEvents(null);
+        setErr(null);
+        setNote(null);
+        setGate(null);
+        setServerSetup(true);
       } else {
         setEvents(null);
         setErr(j.error || 'preview failed');
@@ -227,16 +281,19 @@ export function DataPreviewDock({ itemId, topology }: DataPreviewDockProps) {
     } finally {
       setBusy(false);
     }
-  }, [itemId, sourceIdx]);
+  }, [itemId, sourceIdx, setupState]);
 
-  // Auto-load once when the preview tab is first shown for a saved item.
+  useEffect(() => { setServerSetup(false); }, [itemId, sourceIdx, sources.length]);
+
+  // Auto-load once when the preview tab is first shown for a saved item with a
+  // previewable source (never against an unconfigured/nonexistent node).
   useEffect(() => {
-    if (tab !== 'preview' || !itemId || itemId === 'new') return;
+    if (tab !== 'preview' || !itemId || itemId === 'new' || setupState) return;
     const key = `${itemId}:${sourceIdx}`;
     if (loadedFor.current === key) return;
     loadedFor.current = key;
     void refresh();
-  }, [tab, itemId, sourceIdx, refresh]);
+  }, [tab, itemId, sourceIdx, refresh, setupState]);
 
   const shape = useMemo(
     () => shapeEventPreview(events || [], { typeOverrides: overrides }),
@@ -258,13 +315,15 @@ export function DataPreviewDock({ itemId, topology }: DataPreviewDockProps) {
         <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as 'preview' | 'errors')} size="small">
           <Tab value="preview">Data preview</Tab>
           <Tab value="errors">
-            Authoring errors
-            {counts.errors > 0 && <Badge appearance="filled" color="danger" size="small" style={{ marginLeft: tokens.spacingHorizontalXS }}>{counts.errors}</Badge>}
-            {counts.errors === 0 && counts.warnings > 0 && <Badge appearance="filled" color="warning" size="small" style={{ marginLeft: tokens.spacingHorizontalXS }}>{counts.warnings}</Badge>}
+            {pristine ? 'Set up' : 'Authoring errors'}
+            {/* Deferred validation: no red/yellow badge while the stream is
+                pristine — new items open clean (guided setup instead). */}
+            {!pristine && counts.errors > 0 && <Badge appearance="filled" color="danger" size="small" style={{ marginLeft: tokens.spacingHorizontalXS }}>{counts.errors}</Badge>}
+            {!pristine && counts.errors === 0 && counts.warnings > 0 && <Badge appearance="filled" color="warning" size="small" style={{ marginLeft: tokens.spacingHorizontalXS }}>{counts.warnings}</Badge>}
           </Tab>
         </TabList>
         {tab === 'preview' && (
-          <Button size="small" appearance="subtle" icon={busy ? <Spinner size="tiny" /> : <ArrowSync16Regular />} onClick={refresh} disabled={busy || !itemId || itemId === 'new'}>
+          <Button size="small" appearance="subtle" icon={busy ? <Spinner size="tiny" /> : <ArrowSync16Regular />} onClick={refresh} disabled={busy || !itemId || itemId === 'new' || !!setupState}>
             {busy ? 'Refreshing…' : 'Refresh'}
           </Button>
         )}
@@ -305,7 +364,16 @@ export function DataPreviewDock({ itemId, topology }: DataPreviewDockProps) {
           </div>
 
           <div className={s.body}>
-            {gate && (
+            {/* Friendly guided state — the preview NEVER runs against an
+                unconfigured / nonexistent source (no "source node not found"). */}
+            {(setupState || serverSetup) && (
+              <div className={s.empty} data-testid="preview-setup-state">
+                {setupState === 'none'
+                  ? 'No source yet — click "Add source" on the canvas to start the stream, then configure and provision it to preview live events.'
+                  : 'Configure a source to preview — select the source node on the canvas, fill in its connection (e.g. the Event Hub name), then click "Provision endpoint". Live events appear here once the source is ready.'}
+              </div>
+            )}
+            {!setupState && !serverSetup && gate && (
               <MessageBar intent="warning">
                 <MessageBarBody>
                   <MessageBarTitle>Live preview not enabled</MessageBarTitle>
@@ -313,23 +381,23 @@ export function DataPreviewDock({ itemId, topology }: DataPreviewDockProps) {
                 </MessageBarBody>
               </MessageBar>
             )}
-            {err && !gate && (
+            {!setupState && !serverSetup && err && !gate && (
               <MessageBar intent="error">
                 <MessageBarBody><MessageBarTitle>Preview failed</MessageBarTitle>{err}</MessageBarBody>
               </MessageBar>
             )}
-            {note && !gate && !err && (
+            {!setupState && !serverSetup && note && !gate && !err && (
               <Caption1 className={s.fieldLabel} style={{ display: 'block', padding: `${tokens.spacingVerticalXS} 0` }}>{note}</Caption1>
             )}
 
-            {!gate && !err && events !== null && shape.columns.length === 0 && (
+            {!setupState && !serverSetup && !gate && !err && events !== null && shape.columns.length === 0 && (
               <div className={s.empty}>No events on this source yet. Send a test event, then Refresh.</div>
             )}
-            {!gate && !err && events === null && !busy && (
+            {!setupState && !serverSetup && !gate && !err && events === null && !busy && (
               <div className={s.empty}>Click Refresh to peek the newest live events from this source.</div>
             )}
 
-            {!gate && !err && shape.columns.length > 0 && (
+            {!setupState && !serverSetup && !gate && !err && shape.columns.length > 0 && (
               <table className={s.table} aria-label="Live event preview">
                 <thead>
                   <tr>
@@ -349,7 +417,7 @@ export function DataPreviewDock({ itemId, topology }: DataPreviewDockProps) {
                 </tbody>
               </table>
             )}
-            {!gate && !err && shape.columns.length > 0 && visibleRows.length === 0 && (
+            {!setupState && !serverSetup && !gate && !err && shape.columns.length > 0 && visibleRows.length === 0 && (
               <div className={s.empty}>No rows match the current search / time range.</div>
             )}
           </div>
@@ -357,12 +425,29 @@ export function DataPreviewDock({ itemId, topology }: DataPreviewDockProps) {
       )}
 
       {tab === 'errors' && (
-        <div className={s.errorList}>
+        <div className={s.errorList} data-testid={pristine ? 'authoring-guided-setup' : 'authoring-errors'}>
           {authoring.length === 0 ? (
             <div className={s.errorRow}>
               <CheckmarkCircle16Filled style={{ color: tokens.colorPaletteGreenForeground1, flexShrink: 0 }} />
               <Caption1>No authoring errors — the topology is publish-ready.</Caption1>
             </div>
+          ) : pristine ? (
+            <>
+              {/* Guided setup (deferred validation): the same findings rendered
+                  as neutral next steps — no red banners on a brand-new stream. */}
+              <div className={s.errorRow}>
+                <Info16Regular style={{ color: tokens.colorBrandForeground1, flexShrink: 0 }} />
+                <Caption1>
+                  New stream — finish these steps to go live. Validation turns on once you edit or save.
+                </Caption1>
+              </div>
+              {authoring.map((e, i) => (
+                <div key={e.id} className={s.errorRow}>
+                  <Caption1 style={{ color: tokens.colorNeutralForeground3, flexShrink: 0 }}>{i + 1}.</Caption1>
+                  <Caption1>{e.message}</Caption1>
+                </div>
+              ))}
+            </>
           ) : (
             authoring.map((e) => <AuthoringRow key={e.id} err={e} className={s.errorRow} />)
           )}

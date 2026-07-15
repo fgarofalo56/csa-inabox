@@ -68,6 +68,7 @@ import { createHash } from 'crypto';
 import { loomServerCredential } from '@/lib/azure/aca-managed-identity';
 import { redisCacheConfigured, redisGet, redisSet } from '@/lib/azure/redis-cache-client';
 import { recordCacheHit, recordCacheMiss, type CacheCounterBackend } from '@/lib/perf/cache-counters';
+import { getTunablesCached } from '@/lib/perf/usage-store';
 
 // ── Public shapes ──────────────────────────────────────────────────────────
 
@@ -122,8 +123,25 @@ interface CacheEnvelope {
 
 // ── Config ───────────────────────────────────────────────────────────────────
 
+/**
+ * PERF-4.1/4.2 — the ADMIN RUNTIME OVERRIDE (perf-tunables Cosmos doc, cached
+ * in-process by usage-store). Lets the Performance page's cache recommendations
+ * REALLY apply (enable / TTL / max entries) without an env roll. Precedence:
+ * per-backend env var > runtime override > generic env var > default.
+ * Best-effort: an import/store failure degrades to env-only behaviour.
+ */
+function runtimeCacheOverride(): { enabled?: boolean; ttlMs?: number; maxEntries?: number } {
+  try {
+    return getTunablesCached().cacheOverride ?? {};
+  } catch {
+    return {};
+  }
+}
+
 /** Result TTL (ms). Short by default so a missed invalidation self-heals fast. */
 function ttlMs(): number {
+  const o = runtimeCacheOverride();
+  if (typeof o.ttlMs === 'number' && o.ttlMs > 0) return o.ttlMs;
   const n = Number(process.env.LOOM_QUERY_CACHE_TTL_MS);
   return Number.isFinite(n) && n > 0 ? n : 60_000;
 }
@@ -165,12 +183,20 @@ export function resolveBackendTtl(backend: string, defaultMs: number): number {
 
 /** Max in-process entries before insertion-order eviction. */
 function maxEntries(): number {
+  const o = runtimeCacheOverride();
+  if (typeof o.maxEntries === 'number' && o.maxEntries > 0) return Math.floor(o.maxEntries);
   const n = Number(process.env.LOOM_QUERY_CACHE_MAX);
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : 500;
 }
 
-/** Master off-switch (the cache is on by default — it needs no infra). */
+/**
+ * Master off-switch (the cache is on by default — it needs no infra). The admin
+ * runtime override (Performance page) wins over the env kill switch so the
+ * "Enable cache" recommendation's Apply really applies.
+ */
 export function queryCacheEnabled(): boolean {
+  const o = runtimeCacheOverride();
+  if (typeof o.enabled === 'boolean') return o.enabled;
   return process.env.LOOM_QUERY_CACHE_DISABLED !== '1';
 }
 
@@ -646,8 +672,12 @@ export function queryCacheStats(): {
   misses: number;
   hitRate: number;
   ttlMs: number;
+  maxEntries: number;
+  /** True when the admin runtime override (perf tunables) is shaping config. */
+  overrideActive: boolean;
 } {
   const total = hits + misses;
+  const o = runtimeCacheOverride();
   return {
     enabled: queryCacheEnabled(),
     distributed: distributedEnabled(),
@@ -657,5 +687,7 @@ export function queryCacheStats(): {
     misses,
     hitRate: total > 0 ? hits / total : 0,
     ttlMs: ttlMs(),
+    maxEntries: maxEntries(),
+    overrideActive: typeof o.enabled === 'boolean' || typeof o.ttlMs === 'number' || typeof o.maxEntries === 'number',
   };
 }

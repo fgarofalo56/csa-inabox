@@ -44,6 +44,7 @@ import {
   listOwnedWorkspaces,
 } from '@/app/api/items/_lib/item-crud';
 import { uamiArmCredential } from '@/lib/azure/arm-credential';
+import { purviewBaseSync } from '@/lib/azure/purview-endpoints';
 import { PUBLISH_STATUSES, type PublishStatus, upsertDataProductDoc, docForDataProduct } from '@/lib/azure/loom-data-products-search';
 import {
   DATA_PRODUCT_DESCRIPTION_MAX,
@@ -69,7 +70,8 @@ function resolveUcEndpoint(): string | undefined {
   const explicit = process.env.LOOM_PURVIEW_UC_ENDPOINT;
   if (explicit) return explicit.replace(/\/+$/, '');
   const account = process.env.LOOM_PURVIEW_ACCOUNT;
-  if (account) return `https://${account}.purview.azure.com`;
+  // CLOUD-AWARE (ARM-cache → convention): .purview.azure.us in Azure Government.
+  if (account) return purviewBaseSync(account);
   return undefined;
 }
 

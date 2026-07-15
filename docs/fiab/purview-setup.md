@@ -76,6 +76,47 @@ This is the default and fully supported path.
    GET  /datamap/api/atlas/v2/glossary                 → 200
    ```
 
+### Azure Government (GCC-High / IL5 / DoD) specifics
+
+The classic Purview **data-plane host suffix differs per cloud** (Microsoft
+Learn, self-hosted IR networking table + Gov private-DNS zones):
+
+| Cloud | Data-plane host | Token audience |
+|---|---|---|
+| Commercial / GCC | `{account}.purview.azure.com` | `https://purview.azure.net` |
+| Azure Government | `{account}.purview.azure.us` | `https://purview.azure.net` |
+| China | `{account}.purview.azure.cn` | `https://purview.azure.net` |
+
+The token **audience is cloud-invariant** (`https://purview.azure.net` per
+Learn `purview/data-gov-api-rest-data-plane`) — only the host changes.
+
+How the Console resolves the endpoint (`lib/azure/purview-endpoints.ts`):
+
+1. `LOOM_PURVIEW_ENDPOINT` — explicit data-plane base URL, wins outright
+   (escape hatch for custom DNS / clouds we don't enumerate).
+2. **ARM-derived** — the account's REAL `properties.endpoints.catalog` origin,
+   read from the `Microsoft.Purview/accounts` resource (discovered by name via
+   Azure Resource Graph across every readable subscription), cached per
+   process. Authoritative in every cloud.
+3. **Cloud-aware convention fallback** — `{account}.purview.azure.us` when
+   `LOOM_CLOUD`/`AZURE_CLOUD` indicate Azure Government, `.com` otherwise.
+
+The `/api/governance/purview/status` probe (and its gate MessageBar) reports
+the **exact endpoint it tried** and whether the ARM lookup succeeded — a gate
+that names `*.purview.azure.com` in a Gov deployment means the console image
+predates this fix, or `LOOM_CLOUD` is unset AND the ARM lookup failed.
+
+**Gov verification + grant workflow:** run
+`.github/workflows/gov-purview-verify.yml` (workflow_dispatch, Gov deploy SP).
+It lists the sub's Purview accounts with their true ARM endpoints, probes the
+catalog endpoint with a deploy-SP token AND with the console UAMI token from
+inside the loom-console container (in-VNet — required for PE-protected
+accounts), prints the exact root-collection metadata-policy REST calls, and
+with `apply_grants=true` applies Data Reader + Data Curator + Data Source
+Administrator to the console UAMI idempotently via
+`scripts/csa-loom/grant-purview-datamap-role.sh` (which is itself Gov-aware
+via `PURVIEW_CLOUD=AzureUSGovernment`).
+
 ## Scenario (b) — Purview not provisioned (honest gate)
 
 If `LOOM_PURVIEW_ACCOUNT` is unset, or the named account does not resolve as a
@@ -113,6 +154,45 @@ To enable the unified catalog, onboard an account in the new experience and
 point `LOOM_PURVIEW_ACCOUNT` at it. (Adopting the `-api` host + `/datagovernance`
 client surface would be a follow-up; the classic Data Map path remains the
 supported default.)
+
+## Scan-plane register/trigger contract (live-proven 2026-07-15) {#purview-scan-plane-contract}
+
+Requirements of `PUT /scan/datasources/{name}` + scan triggers that the classic
+scan plane enforces but barely documents — each proven by an in-VNet probe
+against `purview-csa-loom-eastus2` and encoded in `purview-client.ts`:
+
+1. **`properties.collection` is required.** A register without it answers
+   `404 ResourceNotFound` (the "resource" is the unspecified collection).
+   `registerDataSource()` / `upsertScan()` default it to the account **root
+   collection** when the caller doesn't pick one.
+2. **Azure kinds need `properties.resourceId`.** An endpoint without a
+   resourceId answers `403 OperationNotAllowed: "…requires a valid resourceId
+   when an endpoint is specified."` (Synapse variant: "…resourceId or
+   subscriptionId"). `purview-source-map.ts` derives the ARM id from the
+   non-secret coordinates (`derivePurviewArmResourceId`).
+3. **Scan-run ids must be GUIDs, and `scanLevel` must be passed.** A non-GUID
+   run id (or a missing `scanLevel`) makes the plane answer
+   `500 InternalServerError: "Unknown error"`. `triggerScanRun()` uses
+   `randomUUID()` + `scanLevel=Full` → `202 Accepted { scanResultId }`.
+4. **Duplicate targets answer `409 DataSource_Duplicate`** ("A data source
+   already exists for this target: …") — sources are keyed by target endpoint,
+   not by name. "Auto-add all sources" treats this as *already registered*
+   (partial success), never a failure.
+5. **Payload-level 403s are not role gates.** `handleSecurityError` only renders
+   the Data-Map-role remediation for genuine auth failures; `OperationNotAllowed`
+   / `InvalidField` / `Scan_*` codes propagate verbatim.
+
+For the scan to actually **complete**, two runtime prerequisites apply (a scan
+triggers fine without them and then fails with an honest error in the run
+record):
+
+- the Purview account's system-assigned MI needs data-plane read on each target
+  (e.g. **Storage Blob Data Reader** on a scanned storage account);
+- on a **PE-only account** (`publicNetworkAccess: Disabled`, the Loom default)
+  the default AutoResolve Azure IR cannot run — the run fails with
+  `(1100) Scan failed due to private endpoint settings on your account`. Create
+  the **managed-VNet IR** (next section) and pin scans to it via
+  `connectedVia`, or deploy ingestion private endpoints.
 
 ## Scanning private-endpoint-locked sources — managed-VNet Integration Runtime {#purview-managed-vnet-ir}
 

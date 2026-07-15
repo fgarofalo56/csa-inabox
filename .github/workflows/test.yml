@@ -98,6 +98,16 @@ jobs:
           # mypy step always finds the expected module layout. See
           # https://github.com/python/mypy/issues/19275.
           pip install -U 'pathspec>=0.12.1'
+          # starlette 1.x removed the deprecated `on_startup` kwarg that
+          # fastapi<0.116 (pinned to 0.115.6 by platform/runners/script-runner/
+          # requirements.txt, installed into this SAME env) still passes to
+          # Router — a later transitive upgrade (mcp → sse-starlette 3.x)
+          # silently drags starlette to 1.x and breaks EVERY FastAPI()
+          # construction ("Router.__init__() got an unexpected keyword argument
+          # 'on_startup'", portal tests). Force the fastapi-0.115-compatible
+          # starlette LAST, same pattern as the pathspec pin above.
+          # TODO: remove with the fastapi 0.139+/starlette 1.x lifespan migration.
+          pip install -U 'starlette>=0.40,<0.42'
 
       - name: Lint with ruff
         if: steps.relevant.outputs.run == 'true'

@@ -160,6 +160,28 @@ export async function pausePool(): Promise<void> {
   }
 }
 
+/**
+ * PERF-4.1 — scale the dedicated pool to a new DWU SKU (e.g. 'DW200c') via a
+ * REAL ARM PATCH on the sqlPool's `sku.name`. Dedicated pools have no native
+ * autoscale; this is the Loom-driven scale the Performance recommendations
+ * apply (bounded by the admin DWU ladder). ARM returns 200/202; the pool goes
+ * through 'Scaling' (running queries reconnect after the scale completes).
+ */
+export async function scalePool(skuName: string): Promise<{ state: PoolState; sku: string }> {
+  if (!/^DW\d+c?$/i.test(skuName)) throw new Error(`invalid DWU sku '${skuName}'`);
+  // Ensure coords are resolved (probes + caches via fetchPool) before acting.
+  if (!resolvedCoords) { await fetchPool().catch(() => null); }
+  const url = poolUrlFor(resolvedCoords || configuredCoords());
+  const res = await armFetch(url, {
+    method: 'PATCH',
+    body: JSON.stringify({ sku: { name: skuName } }),
+  });
+  if (!res.ok && res.status !== 202) {
+    throw new Error(`ARM scale failed ${res.status}: ${await res.text()}`);
+  }
+  return { state: 'Scaling', sku: skuName };
+}
+
 /** Poll until pool is Online or fails. ~2 min wall time at the upper bound. */
 export async function waitForOnline(maxMs = 180_000, intervalMs = 5_000): Promise<PoolState> {
   const deadline = Date.now() + maxMs;

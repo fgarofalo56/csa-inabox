@@ -37,6 +37,7 @@
 import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
+import { purviewBaseSync } from '@/lib/azure/purview-endpoints';
 import type { Provisioner, ProvisionResult } from './types';
 import { resolveInfraResidual } from './types';
 
@@ -65,8 +66,9 @@ function resolveEndpoint(): string | undefined {
   if (explicit) return explicit.replace(/\/+$/, '');
   const account = process.env.LOOM_PURVIEW_ACCOUNT;
   if (account) {
-    // Per-account data-plane host: https://{account}.purview.azure.com
-    return `https://${account}.purview.azure.com`;
+    // Per-account data-plane host, CLOUD-AWARE (ARM-cache → convention):
+    // https://{account}.purview.azure.com (.us in Azure Government).
+    return purviewBaseSync(account);
   }
   return undefined;
 }

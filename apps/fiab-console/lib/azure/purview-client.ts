@@ -31,7 +31,9 @@
  * Token scope: https://purview.azure.net/.default  (the Data Map data-plane
  * audience; confirmed on the Discovery Query reference page's OAuth2 scope).
  *
- * Host: https://{account}.purview.azure.com   (NOT -api).
+ * Host: ARM-derived `properties.endpoints.catalog` origin when resolvable,
+ * else the CLOUD-AWARE convention host `https://{account}.purview.azure.com`
+ * (`.purview.azure.us` in Azure Government) — NOT -api. See purview-endpoints.ts.
  *
  * Auth: ChainedTokenCredential — UAMI first (LOOM_UAMI_CLIENT_ID), then
  * DefaultAzureCredential for local `az login` dev.
@@ -64,7 +66,11 @@ import {
   ChainedTokenCredential,
 } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
-import { isGovCloud } from './cloud-endpoints';
+import {
+  normalizePurviewAccountName,
+  purviewBaseSync,
+  resolvePurviewEndpoints,
+} from './purview-endpoints';
 
 const PURVIEW_SCOPE = 'https://purview.azure.net/.default';
 
@@ -199,22 +205,22 @@ function purviewAccount(): string {
   if (!raw) throw new PurviewNotConfiguredError(notConfiguredHint('LOOM_PURVIEW_ACCOUNT'));
   // Accept either a bare account name or a full URL (tolerate copy/paste of the
   // classic OR the -api host) and normalize down to the short account name.
-  // Handles both the Commercial (.purview.azure.com) and US Gov (.purview.azure.us)
-  // hosts so a Gov account name copy/pasted as a URL still resolves cleanly.
-  return raw
-    .replace(/^https?:\/\//, '')
-    .replace(/-api\.purview\.azure\.(com|us).*$/, '')
-    .replace(/\.purview\.azure\.(com|us).*$/, '')
-    .replace(/\/+$/, '');
+  // Handles the Commercial (.purview.azure.com), US Gov (.purview.azure.us)
+  // and China (.purview.azure.cn) hosts so a pasted URL still resolves cleanly.
+  return normalizePurviewAccountName(raw);
 }
 
 /**
- * Classic Data Map base host — `{account}.purview.azure.{com|us}` (NOT -api).
- * The TLD follows the cloud: `.us` in the US Government clouds (where the
- * Purview data plane is `*.purview.azure.us`), `.com` everywhere else.
+ * Classic Data Map base URL (NOT -api). Resolution order (purview-endpoints):
+ *   1. LOOM_PURVIEW_ENDPOINT (explicit override),
+ *   2. the ARM-derived `properties.endpoints.catalog` origin when
+ *      `resolvePurviewEndpoints()` has warmed the per-process cache (the
+ *      status probe does this on every gate check),
+ *   3. cloud-aware convention — `{account}.purview.azure.{us|com}` (`.us` in
+ *      the US Government clouds, `.com` everywhere else).
  */
 function purviewBase(): string {
-  return `https://${purviewAccount()}.purview.azure.${isGovCloud() ? 'us' : 'com'}`;
+  return purviewBaseSync(purviewAccount());
 }
 
 /** True when LOOM_PURVIEW_ACCOUNT is set (does NOT prove reachability). */
@@ -234,6 +240,11 @@ export interface PurviewProbeResult {
   reason: 'live' | 'not_configured' | 'role_missing' | 'upstream_error';
   message?: string;
   hint?: PurviewNotConfiguredHint;
+  /** The data-plane base URL that was actually probed (cloud-correct). */
+  endpoint?: string;
+  /** Where the probed endpoint came from: ARM properties.endpoints ('arm'),
+   *  LOOM_PURVIEW_ENDPOINT ('env'), or the cloud-aware convention host. */
+  endpointSource?: 'env' | 'arm' | 'convention';
 }
 
 /**
@@ -264,15 +275,31 @@ export async function probePurview(): Promise<PurviewProbeResult> {
     };
   }
   const account = purviewAccount();
+  // Resolve the REAL data-plane endpoint from ARM (properties.endpoints —
+  // authoritative in every cloud); falls back to the CLOUD-AWARE convention
+  // host with `armError` explaining why the ARM read failed. Also warms the
+  // per-process cache purviewBaseSync() serves data-plane calls from.
+  const resolved = await resolvePurviewEndpoints(account);
+  const endpointDetail =
+    resolved.source === 'arm'
+      ? 'endpoint resolved from the ARM resource (properties.endpoints.catalog)'
+      : resolved.source === 'env'
+        ? 'endpoint set explicitly via LOOM_PURVIEW_ENDPOINT'
+        : `cloud-convention endpoint; ARM lookup FAILED (${resolved.armError || 'unknown error'})`;
+  const withEndpoint = <T extends PurviewProbeResult>(r: T): T => ({
+    ...r,
+    endpoint: resolved.base,
+    endpointSource: resolved.source,
+  });
   try {
     const token = await credential.getToken(PURVIEW_SCOPE);
     if (!token?.token) {
-      return { configured: true, account, reason: 'upstream_error', message: 'Failed to acquire a Purview data-plane token.' };
+      return withEndpoint({ configured: true, account, reason: 'upstream_error', message: 'Failed to acquire a Purview data-plane token.' });
     }
-    const url = `${purviewBase()}/datamap/api/atlas/v2/types/typedefs/headers?api-version=${DATAMAP_API_VERSION}`;
+    const url = `${resolved.base}/datamap/api/atlas/v2/types/typedefs/headers?api-version=${DATAMAP_API_VERSION}`;
     const res = await fetchWithTimeout(url, { headers: { authorization: `Bearer ${token.token}` } });
     if (res.status === 200) {
-      return { configured: true, account, reason: 'live' };
+      return withEndpoint({ configured: true, account, reason: 'live' });
     }
     if (res.status === 401 || res.status === 403) {
       const hint = notConfiguredHint('LOOM_PURVIEW_ACCOUNT');
@@ -281,9 +308,9 @@ export async function probePurview(): Promise<PurviewProbeResult> {
         'data-plane role on this account. Grant Data Curator (read/write) or Data Reader ' +
         '(read-only) on the root collection via scripts/csa-loom/grant-purview-datamap-role.sh, ' +
         'then retry.';
-      return { configured: true, account, reason: 'role_missing', message: `Purview answered ${res.status} (UAMI lacks a Data Map role).`, hint };
+      return withEndpoint({ configured: true, account, reason: 'role_missing', message: `Purview answered ${res.status} (UAMI lacks a Data Map role).`, hint });
     }
-    return { configured: true, account, reason: 'upstream_error', message: `Purview answered ${res.status}.` };
+    return withEndpoint({ configured: true, account, reason: 'upstream_error', message: `Purview answered ${res.status}.` });
   } catch (e: any) {
     // fetch throws on DNS / connection failures.
     const msg = e?.message || String(e);
@@ -291,13 +318,14 @@ export async function probePurview(): Promise<PurviewProbeResult> {
     if (networkish) {
       const hint = notConfiguredHint('LOOM_PURVIEW_ACCOUNT');
       hint.followUp =
-        `The account name "${account}" did not resolve as a classic Purview Data Map host ` +
-        `(${account}.purview.azure.com): ${msg}. Set LOOM_PURVIEW_ACCOUNT to a provisioned ` +
-        'classic Purview account (Microsoft.Purview/accounts) in this cloud, then restart the Console. ' +
+        `The account "${account}" did not answer as a classic Purview Data Map host at ` +
+        `${resolved.base} (${endpointDetail}): ${msg}. Set LOOM_PURVIEW_ACCOUNT to a provisioned ` +
+        'classic Purview account (Microsoft.Purview/accounts) in this cloud — or set ' +
+        'LOOM_PURVIEW_ENDPOINT to the exact data-plane base URL — then restart the Console. ' +
         'See docs/fiab/purview-setup.md.';
-      return { configured: true, account, reason: 'not_configured', message: msg, hint };
+      return withEndpoint({ configured: true, account, reason: 'not_configured', message: msg, hint });
     }
-    return { configured: true, account, reason: 'upstream_error', message: msg };
+    return withEndpoint({ configured: true, account, reason: 'upstream_error', message: msg });
   }
 }
 
@@ -337,18 +365,30 @@ async function purviewFetch(
 
 async function readJson<T>(res: Response): Promise<T | null> {
   if (res.status === 404) return null;
+  return readJsonStrict<T>(res);
+}
+
+/**
+ * Like readJson but 404 is a REAL error (thrown with the upstream body), not a
+ * null. Write paths (register / upsert scan / trigger run) MUST use this: the
+ * scan plane answers 404 `ResourceNotFound` for e.g. a missing/unknown
+ * collection on register, and swallowing it as null used to surface the
+ * misleading "Purview returned empty body" instead of the actual error.
+ */
+async function readJsonStrict<T>(res: Response): Promise<T> {
   const text = await res.text();
   let parsed: unknown = undefined;
   if (text) {
     try { parsed = JSON.parse(text); } catch { parsed = text; }
   }
   if (!res.ok) {
+    const code = (parsed as any)?.error?.code;
     const msg =
       (parsed as any)?.error?.message ||
       (parsed as any)?.errorMessage ||
       (parsed as any)?.message ||
-      (typeof parsed === 'string' ? parsed : `Purview ${res.status}`);
-    throw new PurviewError(res.status, parsed, msg);
+      (typeof parsed === 'string' && parsed ? parsed : `Purview ${res.status}`);
+    throw new PurviewError(res.status, parsed, code ? `${code}: ${msg}` : msg);
   }
   return (parsed as T) ?? ({} as T);
 }
@@ -1383,7 +1423,20 @@ export async function listDataSources(): Promise<PurviewDataSource[]> {
   }));
 }
 
-/** PUT /scan/datasources/{name} — register/update a data source. */
+/**
+ * PUT /scan/datasources/{name} — register/update a data source.
+ *
+ * Two hard requirements of the scan plane, PROVEN against the live classic
+ * account (2026-07-15 in-VNet probe):
+ *   1. `properties.collection` is REQUIRED — a register without it answers
+ *      404 `ResourceNotFound` (the "resource" is the unspecified collection).
+ *      When the caller omits it, we default to the account ROOT collection.
+ *   2. Azure kinds carrying an endpoint need `properties.resourceId` (or
+ *      `subscriptionId` for Synapse) — otherwise the plane answers 403
+ *      `OperationNotAllowed: "…requires a valid resourceId…"`. Callers map
+ *      that via purview-source-map / discover; the error now propagates
+ *      verbatim instead of being swallowed.
+ */
 export async function registerDataSource(payload: {
   name: string;
   kind: string;
@@ -1392,13 +1445,21 @@ export async function registerDataSource(payload: {
   purviewAccount();
   if (!payload?.name) throw new PurviewError(400, null, 'name is required');
   if (!payload?.kind) throw new PurviewError(400, null, 'kind is required');
+  const properties: Record<string, unknown> = { ...(payload.properties || {}) };
+  if (!properties.collection) {
+    // Best-effort root-collection default. If collections can't be read the
+    // register proceeds without it and the real Purview error propagates.
+    try {
+      const root = await rootCollectionName();
+      if (root) properties.collection = { referenceName: root, type: 'CollectionReference' };
+    } catch { /* propagate the register error instead */ }
+  }
   const res = await purviewFetch(`/scan/datasources/${encodeURIComponent(payload.name)}`, {
     method: 'PUT',
     apiVersion: SCAN_API_VERSION,
-    body: JSON.stringify({ kind: payload.kind, properties: payload.properties }),
+    body: JSON.stringify({ kind: payload.kind, properties }),
   });
-  const raw = await readJson<any>(res);
-  if (!raw) throw new PurviewError(500, null, 'Purview returned empty body on registerDataSource');
+  const raw = await readJsonStrict<any>(res);
   return {
     id: raw?.id || raw?.name,
     name: raw?.name,
@@ -1568,22 +1629,36 @@ export async function defineDatabricksUnityCatalogScan(
     `/scan/datasources/${encodeURIComponent(sourceName)}/scans/${encodeURIComponent(scanName)}`,
     { method: 'PUT', apiVersion: SCAN_API_VERSION, body: JSON.stringify({ kind, properties }) },
   );
-  const raw = await readJson<any>(res);
-  if (!raw) throw new PurviewError(500, null, 'Purview returned empty body on defineDatabricksUnityCatalogScan');
+  const raw = await readJsonStrict<any>(res);
   return { id: raw?.id || raw?.name || scanName, name: raw?.name || scanName, kind: raw?.kind, schedule: raw?.properties?.schedule, raw };
 }
 
-/** PUT /scan/datasources/{name}/scans/{scan}/runs/{runId} — trigger a scan run. */
-export async function triggerScanRun(sourceName: string, scanName: string): Promise<{ runId?: string; raw: unknown }> {
+/**
+ * PUT /scan/datasources/{name}/scans/{scan}/runs/{runId} — trigger a scan run.
+ *
+ * PROVEN against the live classic account (2026-07-15 in-VNet probe):
+ *   - the runId MUST be a GUID — a non-GUID id makes Purview answer 500
+ *     `InternalServerError: "Unknown error"` (the literal "unknown error" the
+ *     console used to surface). The honest validation only shows on :cancel
+ *     ("Scan run id … is not a valid guid").
+ *   - `scanLevel=Full` must be passed explicitly — without it the same account
+ *     answered 500 "Internal server error"; with it the trigger is
+ *     202 Accepted `{ scanResultId, status:'Accepted' }`.
+ */
+export async function triggerScanRun(
+  sourceName: string,
+  scanName: string,
+  scanLevel: 'Full' | 'Incremental' = 'Full',
+): Promise<{ runId?: string; raw: unknown }> {
   purviewAccount();
   if (!sourceName || !scanName) throw new PurviewError(400, null, 'sourceName + scanName required');
-  const runId = `loom-${Date.now()}`;
+  const runId = randomUUID();
   const res = await purviewFetch(
     `/scan/datasources/${encodeURIComponent(sourceName)}/scans/${encodeURIComponent(scanName)}/runs/${runId}`,
-    { method: 'PUT', apiVersion: SCAN_API_VERSION },
+    { method: 'PUT', apiVersion: SCAN_API_VERSION, query: { scanLevel } },
   );
-  const raw = await readJson<any>(res);
-  return { runId: raw?.runId || runId, raw };
+  const raw = await readJsonStrict<any>(res);
+  return { runId: raw?.scanResultId || raw?.runId || runId, raw };
 }
 
 /**
@@ -2135,19 +2210,24 @@ export async function upsertScan(payload: {
   if (!payload?.scanName) throw new PurviewError(400, null, 'scanName is required');
   if (!payload?.kind) throw new PurviewError(400, null, 'kind is required');
   if (!payload?.scanRulesetName) throw new PurviewError(400, null, 'scanRulesetName is required');
+  // Same collection rule as registerDataSource: default the scan's landing
+  // collection to the account root when the caller doesn't pick one.
+  let collectionRef = payload.collectionRef;
+  if (!collectionRef) {
+    try { collectionRef = await rootCollectionName(); } catch { /* let Purview answer */ }
+  }
   const properties: Record<string, unknown> = {
     scanRulesetName: payload.scanRulesetName,
     scanRulesetType: payload.scanRulesetType || 'System',
-    ...(payload.collectionRef
-      ? { collection: { referenceName: payload.collectionRef, type: 'CollectionReference' } }
+    ...(collectionRef
+      ? { collection: { referenceName: collectionRef, type: 'CollectionReference' } }
       : {}),
   };
   const res = await purviewFetch(
     `/scan/datasources/${encodeURIComponent(payload.sourceName)}/scans/${encodeURIComponent(payload.scanName)}`,
     { method: 'PUT', apiVersion: SCAN_API_VERSION, body: JSON.stringify({ kind: payload.kind, properties }) },
   );
-  const raw = await readJson<any>(res);
-  if (!raw) throw new PurviewError(500, null, 'Purview returned empty body on upsertScan');
+  const raw = await readJsonStrict<any>(res);
   return {
     id: raw?.id || raw?.name || payload.scanName,
     name: raw?.name || payload.scanName,

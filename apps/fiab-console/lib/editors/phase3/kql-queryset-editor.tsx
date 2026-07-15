@@ -550,6 +550,7 @@ export function KqlQuerysetEditor({ item, id }: { item: FabricItemType; id: stri
             language="kql"
             height={240}
             minHeight={180}
+            sizingKey="kql-queryset.query"
             ariaLabel="KQL query"
           />
           {/* NL prompt input — generate mode */}
