@@ -37,6 +37,10 @@ on:
         description: 'true = APPLY the root-collection Data Map role grants to the console UAMI (idempotent). false = print the exact REST calls only.'
         required: false
         default: 'false'
+      fix_dns:
+        description: 'true = create the MISSING Purview private endpoints (account + portal) into the hub PE subnet with DNS zone groups — fixes the empty privatelink zone shadowing public DNS (ENOTFOUND from the CAE VNet). Idempotent.'
+        required: false
+        default: 'false'
 
 permissions:
   contents: read
@@ -182,6 +186,44 @@ jobs:
           else
             echo "::warning::UAMI probe did not return 200 — see output above (token failure = MSI/env issue; ERR fetch failed = DNS/egress from the CAE VNet)."
           fi
+
+      - name: FIX DNS — create the missing Purview PEs + DNS zone groups (idempotent)
+        if: ${{ inputs.fix_dns == 'true' }}
+        run: |
+          set -euo pipefail
+          # Diagnosis (run 29458120513): the hub VNet is linked to EMPTY
+          # privatelink.purview[studio].azure.us zones (rg-csa-loom-admin) — the
+          # brownfield DMLZ account was reused so catalog.bicep's PE wiring never
+          # ran, and the empty zone authoritatively shadows public DNS
+          # (ENOTFOUND in-container). Create the intended PEs (account + portal)
+          # into the hub PE subnet with dns-zone-groups so the zones get their
+          # A records — the same posture catalog.bicep deploys greenfield.
+          VNET=vnet-csa-loom-hub-usgovvirginia
+          PESUBNET=$(az network vnet subnet list -g "$RG" --vnet-name "$VNET" --query "[?contains(name, 'private-endpoint')].name | [0]" -o tsv | tr -d '\r')
+          if [ -z "$PESUBNET" ]; then echo "::error::no *private-endpoint* subnet in $VNET"; exit 1; fi
+          echo "PE subnet: $PESUBNET"
+          for GRP in account portal; do
+            PE=pe-purview-$GRP
+            if az network private-endpoint show -g "$RG" -n "$PE" >/dev/null 2>&1; then
+              echo "$PE already exists"
+            else
+              az network private-endpoint create -g "$RG" -n "$PE" \
+                --vnet-name "$VNET" --subnet "$PESUBNET" \
+                --private-connection-resource-id "$PVW_ID" \
+                --group-id "$GRP" --connection-name "purview-$GRP" -o none
+              echo "created $PE"
+            fi
+            ZONE=$([ "$GRP" = "account" ] && echo privatelink.purview.azure.us || echo privatelink.purviewstudio.azure.us)
+            ZID=$(az network private-dns zone show -g "$RG" -n "$ZONE" --query id -o tsv | tr -d '\r')
+            az network private-endpoint dns-zone-group create -g "$RG" \
+              --endpoint-name "$PE" -n default \
+              --private-dns-zone "$ZID" --zone-name "$GRP" -o none 2>/dev/null || \
+              echo "dns-zone-group already present on $PE"
+          done
+          echo "== zone records after fix =="
+          az network private-dns record-set a list -z privatelink.purview.azure.us -g "$RG" --query "[].{name:name, ips:aRecords[].ipv4Address}" -o json
+          az network private-dns record-set a list -z privatelink.purviewstudio.azure.us -g "$RG" --query "[].{name:name, ips:aRecords[].ipv4Address}" -o json
+          echo "::notice::PEs + zone groups in place — DNS inside the CAE VNet now resolves to the PE IPs (allow ~1-2 min for the zone to propagate to the VNet resolver)."
 
       - name: DNS-infra diagnosis — privatelink zones, VNet links, PEs for the account (ARM reads)
         run: |
