@@ -115,6 +115,8 @@ export const EDITOR_REGISTRY: Record<string, EditorComponent> = {
   'automl':               reg(() => import('./automl-editor'),            'AutoMlEditor'),
   // AIF-7 — batch LLM augmentation over a table column (Fabric AI-functions item).
   'ai-enrichment':        reg(() => import('./ai-enrichment-editor'),     'AiEnrichmentEditor'),
+  // AIF-15 — AI red-team scan: defensive safety probe of a model deployment.
+  'ai-red-team':          reg(() => import('./ai-red-team-editor'),       'AiRedTeamEditor'),
   'graphql-api':          reg(() => import('./phase4/graphql-api-editor'),      'GraphqlApiEditor'),
   'user-data-function':   reg(() => import('./phase4/user-data-function-editor'), 'UserDataFunctionEditor'),
   'variable-library':     reg(() => import('./phase4/variable-library-editor'), 'VariableLibraryEditor'),
@@ -278,6 +280,9 @@ export const EDITOR_REGISTRY: Record<string, EditorComponent> = {
   // W12 — Synthetic data generator: per-column faker-style strategies → real
   // Delta table via Databricks SQL. Azure-native, no Fabric dependency.
   'synthetic-data':              reg(() => import('./synthetic-data-editor'),      'SyntheticDataEditor'),
+  // W11 — Data-quality check: workspace-scoped run over the shared DQ engine
+  // (ADX / Databricks / Synapse) → composite scorecard + breakdown + history.
+  'data-quality':                reg(() => import('./data-quality-editor'),        'DataQualityEditor'),
 };
 
 export function getEditor(slug: string): EditorComponent | null {

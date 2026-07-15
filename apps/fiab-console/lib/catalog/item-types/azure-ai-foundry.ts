@@ -252,4 +252,18 @@ export const azureAiFoundryItems: FabricItemType[] = [
       ],
       "docsUrl": "https://learn.microsoft.com/fabric/data-science/ai-functions/overview"
     } },
+  // AIF-15 — AI Red Teaming: a defensive safety scan of a model deployment
+  // (Azure-native analog of the Microsoft AI Red Teaming Agent / PyRIT).
+  { slug: 'ai-red-team', displayName: 'AI red-team scan', restType: 'AiRedTeam', category: 'Azure AI Foundry', noRestApi: true, preview: true,
+    description: 'Probe a model deployment\'s safety guardrails: send curated adversarial prompts across harm categories, classify each response (refused / partial / unsafe) with an AOAI judge + optional Content Safety scoring, and report the refusal rate + attack-success rate. Azure-native — no Fabric dependency.',
+    learnContent: {
+      "overview": "An AI red-team scan is a DEFENSIVE safety evaluation of a model deployment — the Azure-native analog of the Microsoft AI Red Teaming Agent (PyRIT). You pick a target deployment and the harm categories to probe (violence, self-harm, hate, sexual, illicit drugs, dangerous weapons, malware, privacy, jailbreak, prompt-injection), and Loom sends curated adversarial probe prompts — the kind of requests a well-guarded model should REFUSE — to the live deployment. Each response is classified refused / partial / unsafe by an Azure OpenAI judge (with a keyword refusal heuristic as a fallback) and, optionally, scored by Azure AI Content Safety for per-category harm severity. The scan reports the deployment's refusal rate (higher is better) and attack-success rate (lower is better) plus a per-probe breakdown, so a team can find and harden any gap in its content filters. It is 100% Azure-native — no Microsoft Fabric capacity is required; when no model deployment is configured the item shows an honest gate.",
+      "steps": [
+        { "title": "Pick a target deployment", "body": "Choose the Azure OpenAI / AI Foundry account and model deployment to test." },
+        { "title": "Choose harm categories", "body": "Select which categories to probe — each contributes a set of curated adversarial probes the model should refuse." },
+        { "title": "Run the scan", "body": "Loom sends each probe to the live deployment, classifies the response (refused / partial / unsafe), and optionally scores it with Content Safety." },
+        { "title": "Read the report", "body": "Review the refusal rate, the attack-success rate, and the per-probe verdicts to find and harden any guardrail gap. Each scan is kept in the history." }
+      ],
+      "docsUrl": "https://learn.microsoft.com/azure/ai-foundry/concepts/ai-red-teaming-agent"
+    } },
 ];
