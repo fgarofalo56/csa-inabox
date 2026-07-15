@@ -162,7 +162,12 @@ export function MyAccess() {
                   <TableCell>{r.summary || r.productId}</TableCell>
                   <TableCell>{new Date(r.requestedAt).toLocaleString()}</TableCell>
                   <TableCell><Badge appearance="outline">{r.permission}</Badge></TableCell>
-                  <TableCell><Badge appearance="tint" color="warning">{r.status}</Badge></TableCell>
+                  <TableCell>
+                    {/* DP-10 — a completed request is zero-touch PROVISIONED. */}
+                    {r.status === 'completed'
+                      ? <Badge appearance="tint" color="success">Provisioned</Badge>
+                      : <Badge appearance="tint" color={r.status === 'approved' ? 'brand' : r.status === 'rejected' ? 'danger' : 'warning'}>{r.status}</Badge>}
+                  </TableCell>
                 </TableRow>
               ))}
             </TableBody>

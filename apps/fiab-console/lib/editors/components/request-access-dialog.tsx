@@ -6,6 +6,7 @@ import {
   Dialog, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
   Button, Field, Dropdown, Option, Textarea, MessageBar, MessageBarTitle,
   MessageBarBody, Spinner, Skeleton, SkeletonItem, Badge, Caption1, Subtitle2,
+  Checkbox,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
@@ -107,6 +108,9 @@ export function RequestAccessDialog({
   const [selectedPolicyId, setSelectedPolicyId] = useState('');
   const [selectedPurposeName, setSelectedPurposeName] = useState('');
   const [justification, setJustification] = useState('');
+  // DP-10 — attestations the requester accepts (no-copy is required to submit).
+  const [noCopy, setNoCopy] = useState(false);
+  const [termsOfUse, setTermsOfUse] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [receipt, setReceipt] = useState<AccessRequest | null>(null);
@@ -133,6 +137,8 @@ export function RequestAccessDialog({
       setSelectedPolicyId('');
       setSelectedPurposeName('');
       setJustification('');
+      setNoCopy(false);
+      setTermsOfUse(false);
       setError(null);
       setReceipt(null);
       loadPolicies();
@@ -147,7 +153,11 @@ export function RequestAccessDialog({
       const r = await clientFetch(`/api/data-products/${dataProductId}/access-requests`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ policyId: selectedPolicyId, purposeName: selectedPurposeName, justification }),
+        body: JSON.stringify({
+          policyId: selectedPolicyId, purposeName: selectedPurposeName, justification,
+          usagePurpose: selectedPurposeName,
+          attestations: { noCopy, termsOfUse },
+        }),
       });
       const j = await r.json();
       if (!j.ok) { setError(j.error || `HTTP ${r.status}`); return; }
@@ -158,7 +168,7 @@ export function RequestAccessDialog({
     } finally {
       setBusy(false);
     }
-  }, [dataProductId, selectedPolicyId, selectedPurposeName, justification, onSuccess]);
+  }, [dataProductId, selectedPolicyId, selectedPurposeName, justification, noCopy, termsOfUse, onSuccess]);
 
   const noPolicies = !loadingPolicies && policies.length === 0;
 
@@ -243,6 +253,18 @@ export function RequestAccessDialog({
                         resize="vertical"
                       />
                     </Field>
+                    <Field label="Attestations" className={styles.field}>
+                      <Checkbox
+                        checked={noCopy}
+                        onChange={(_, d) => setNoCopy(d.checked === true)}
+                        label="I will not copy or extract this data outside the granted scope (no-copy)."
+                      />
+                      <Checkbox
+                        checked={termsOfUse}
+                        onChange={(_, d) => setTermsOfUse(d.checked === true)}
+                        label="I accept this data product's terms of use."
+                      />
+                    </Field>
                   </>
                 )}
                 {error && (
@@ -261,7 +283,7 @@ export function RequestAccessDialog({
                 <Button
                   appearance="primary"
                   icon={busy ? <Spinner size="tiny" /> : <KeyRegular />}
-                  disabled={busy || noPolicies || !selectedPolicyId}
+                  disabled={busy || noPolicies || !selectedPolicyId || !noCopy}
                   onClick={handleSubmit}
                 >
                   {busy ? 'Submitting…' : 'Send request'}
