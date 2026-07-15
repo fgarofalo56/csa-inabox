@@ -68,8 +68,11 @@ import {
   GhostNextStepNode, CanvasRightRail, ghostAnchorPosition, ghostEdgeId,
   accentTint, GHOST_NODE_ID, type GhostNodeData, type AnchorNode,
 } from '@/lib/components/canvas/canvas-node-kit';
+import { CanvasCollabLayer } from '@/lib/components/canvas/canvas-collab-layer';
+import { useCanvasSuggestion } from '@/lib/collab/use-canvas-suggestion';
+import type { CanvasTopology } from '@/lib/collab/canvas-suggest';
 import {
-  ArrowSwap20Regular, DatabaseArrowRight20Regular,
+  ArrowSwap20Regular, DatabaseArrowRight20Regular, Sparkle20Regular,
 } from '@fluentui/react-icons';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import {
@@ -368,6 +371,7 @@ export function VisualDesigner({ config, onChange, itemId }: VisualDesignerProps
         onAddTransform={addTransform}
         onAddSink={addSink}
         onDeleteNode={deleteAt}
+        itemId={itemId}
       />
 
       <aside className={s.inspector} aria-label="Node properties">
@@ -440,11 +444,13 @@ interface EventstreamCanvasProps {
   onAddTransform: () => void;
   onAddSink: () => void;
   onDeleteNode: (type: 'source' | 'transform' | 'sink', idx: number) => void;
+  /** Owning item id — enables the collab layer (comments/presence) + AI ghost. */
+  itemId?: string;
 }
 
 function EventstreamCanvasInner({
   sources, transforms, sinks, selected, onSelect,
-  onAddSource, onAddTransform, onAddSink, onDeleteNode,
+  onAddSource, onAddTransform, onAddSink, onDeleteNode, itemId,
 }: EventstreamCanvasProps) {
   const s = useStyles();
   const rf = useReactFlow();
@@ -454,6 +460,34 @@ function EventstreamCanvasInner({
   const [railCollapsed, setRailCollapsed] = useState(false);
 
   const total = sources.length + transforms.length + sinks.length;
+
+  // W7 — ambient inline Copilot ghost node. Serialize the current graph and let
+  // AOAI suggest the next node; Accept materializes it via the same add actions.
+  const suggest = useCanvasSuggestion('eventstream', itemId);
+  const topology = useMemo<CanvasTopology>(() => {
+    const nodesT = [
+      ...sources.map((n, i) => ({ id: `source-${i}`, type: `source:${n.kind}`, label: n.name, role: 'source' })),
+      ...transforms.map((n, i) => ({ id: `transform-${i}`, type: `transform:${n.kind}`, label: n.name, role: 'transform' })),
+      ...sinks.map((n, i) => ({ id: `sink-${i}`, type: `sink:${n.kind}`, label: n.name, role: 'sink' })),
+    ];
+    return {
+      itemType: 'eventstream',
+      canvasKind: 'a real-time eventstream (sources → transforms → destinations)',
+      nodes: nodesT,
+      edges: [],
+      catalog: [
+        { type: 'transform', title: 'Transform events', description: 'filter / aggregate / join / manage-fields on the stream', category: 'transform' },
+        { type: 'destination', title: 'Add destination', description: 'route the stream to a sink (Kusto / lakehouse / …)', category: 'external' },
+      ],
+    };
+  }, [sources, transforms, sinks]);
+
+  const requestSuggestion = useCallback(() => { suggest.request(topology); }, [suggest, topology]);
+  const acceptSuggestion = useCallback(() => {
+    if (suggest.suggestion?.nodeType === 'transform') onAddTransform();
+    else if (suggest.suggestion?.nodeType === 'destination') onAddSink();
+    suggest.clear();
+  }, [suggest, onAddTransform, onAddSink]);
 
   const syncNodes = useCallback(() => {
     const fallback = esLayout(sources.length, transforms.length, sinks.length);
@@ -487,13 +521,22 @@ function EventstreamCanvasInner({
             { key: 'transform', label: 'Transform events', icon: <ArrowSwap20Regular />, onSelect: onAddTransform },
             { key: 'destination', label: 'Add destination', icon: <DatabaseArrowRight20Regular />, onSelect: onAddSink },
           ],
+          // W7 — when AOAI has a suggestion (or is thinking), the ghost renders
+          // the branded suggestion variant instead of the static menu.
+          suggestionLoading: suggest.loading,
+          aiSuggestion: suggest.suggestion
+            ? { label: suggest.suggestion.label, reason: suggest.suggestion.reason }
+            : undefined,
+          onAcceptSuggestion: acceptSuggestion,
+          onDismissSuggestion: suggest.clear,
         };
         list.push({ id: GHOST_NODE_ID, type: 'ghost', position: anchor, data: ghostData as unknown as Record<string, unknown>, selectable: false, draggable: false });
       }
     }
     positionsRef.current = next;
     setNodes(list);
-  }, [sources, transforms, sinks, selected, setNodes, onDeleteNode, onAddTransform, onAddSink]);
+  }, [sources, transforms, sinks, selected, setNodes, onDeleteNode, onAddTransform, onAddSink,
+      suggest.loading, suggest.suggestion, suggest.clear, acceptSuggestion]);
 
   useEffect(() => { syncNodes(); }, [syncNodes]);
 
@@ -600,8 +643,34 @@ function EventstreamCanvasInner({
               <Button size="small" icon={<Add20Regular />} onClick={onAddSource} data-palette-item="source">Add source</Button>
               <Button size="small" icon={<Add20Regular />} onClick={onAddTransform} data-palette-item="transform">Add transform</Button>
               <Button size="small" icon={<Add20Regular />} onClick={onAddSink} data-palette-item="destination">Add destination</Button>
+              {itemId && total > 0 && (
+                <Button
+                  size="small"
+                  appearance="subtle"
+                  icon={<Sparkle20Regular />}
+                  onClick={requestSuggestion}
+                  disabled={suggest.loading}
+                  data-palette-item="suggest-next"
+                >
+                  Suggest next step
+                </Button>
+              )}
             </div>
           </Panel>
+          {suggest.gate && (
+            <Panel position="bottom-center">
+              <MessageBar intent="warning" layout="multiline">
+                <MessageBarBody>
+                  <MessageBarTitle>Copilot suggestions need Azure OpenAI</MessageBarTitle>
+                  {suggest.gate}
+                </MessageBarBody>
+              </MessageBar>
+            </Panel>
+          )}
+          {/* W4 + W5 — shared collaboration overlay (comments/sticky-notes +
+              presence avatars + live cursor beacons). One line; no host node
+              state changes. */}
+          <CanvasCollabLayer itemType="eventstream" itemId={itemId} canvasKey="eventstream" />
         </ReactFlow>
         {total === 0 && (
           <div className={s.emptyHint}>

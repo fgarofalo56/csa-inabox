@@ -770,6 +770,7 @@ export const PipelineDesigner = forwardRef<PipelineDesignerHandle, PipelineDesig
             activities={levelActivities}
             selectedName={selectedName || undefined}
             onSelect={setSelectedName}
+            itemId={itemId}
             snapToGrid={snapToGrid}
             showGrid={showGrid}
             onDrillInto={drillInto}

@@ -276,6 +276,21 @@ var loomContainers = [
   // skills (admin-reviewed, never auto-published). createIfNotExists in
   // cosmos-client.ts ensure() remains the hotfix fallback. Azure-native.
   { name: 'copilot-skill-usage',   partitionKey: '/tenantId', ttl: 7776000 }
+  // W4 — canvas comments / sticky notes. One row per comment, PK /itemId so
+  // every per-item canvas-comments read + the per-canvas retention-cap prune
+  // hits a single physical partition (a per-item sidecar like item-versions, so
+  // comment docs never pollute the untyped item-list queries). NO TTL — comments
+  // are durable until the author deletes or the cap evicts the oldest.
+  // createIfNotExists in cosmos-client.ts ensure() remains the hotfix fallback.
+  { name: 'canvas-comments',       partitionKey: '/itemId' }
+  // W5 — real-time co-authoring presence beacons. One deterministic row per
+  // (item, canvas, oid) UPSERTed on heartbeat, PK /itemId so every per-item
+  // presence read is a single-partition query. TTL-enabled (each beacon carries
+  // its own `ttl` seconds; container-level defaultTtl: -1 turns TTL ON without a
+  // blanket expiry) so a peer that closed the tab / crashed self-evicts without
+  // an explicit "leave". createIfNotExists in cosmos-client.ts ensure() remains
+  // the hotfix fallback.
+  { name: 'canvas-presence',       partitionKey: '/itemId', ttl: -1 }
 ]
 
 resource loomDb 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases@2024-12-01-preview' = {

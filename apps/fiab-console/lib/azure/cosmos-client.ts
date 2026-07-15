@@ -328,6 +328,18 @@ let _copilotMemoryFlushLog: Container | null = null;
 let _copilotMemoryWriteAudit: Container | null = null;
 let _copilotMemoryContradictions: Container | null = null;
 let _copilotTopicPages: Container | null = null;
+// W4 — canvas comments / sticky notes. One row per comment, PK /itemId so every
+// per-item canvas-comments read + retention-cap prune hits a single physical
+// partition (a per-item sidecar like item-versions / saved-queries, so comment
+// docs never pollute the untyped `items` queries). NO defaultTtl — comments are
+// durable until the author deletes them or the per-canvas cap evicts the oldest.
+let _canvasComments: Container | null = null;
+// W5 — real-time co-authoring presence beacons. One deterministic row per
+// (item, canvas, oid) UPSERTed on heartbeat, PK /itemId so every per-item
+// presence read is a single-partition query. TTL-enabled (each beacon carries
+// its own `ttl` seconds) so a peer that closed the tab / crashed self-evicts
+// without an explicit "leave" — the heartbeat is the only write path.
+let _canvasPresence: Container | null = null;
 let _ensured = false;
 
 /**
@@ -995,6 +1007,21 @@ async function ensure() {
   _copilotMemoryWriteAudit = await mk('copilot-memory-write-audit', '/scopeKey');
   _copilotMemoryContradictions = await mk('copilot-memory-contradictions', '/scopeKey');
   _copilotTopicPages = await mk('copilot-topic-pages', '/scopeKey');
+  // W4 — canvas comments / sticky notes. PK /itemId (per-item sidecar). No TTL —
+  // durable until the author deletes or the per-canvas cap evicts the oldest.
+  // ARM-provisioned in cosmos.bicep's loomContainers; this createIfNotExists is
+  // the hotfix fallback.
+  _canvasComments = await mk('canvas-comments', '/itemId');
+  // W5 — canvas presence beacons. PK /itemId, TTL-enabled (each beacon carries
+  // its own `ttl` so a departed/crashed peer self-evicts). Distinct
+  // createIfNotExists (not `mk`) to set defaultTtl. ARM-provisioned in
+  // cosmos.bicep's loomContainers; this createIfNotExists is the hotfix fallback.
+  const { container: canvasPresence } = await database.containers.createIfNotExists({
+    id: 'canvas-presence',
+    partitionKey: { paths: ['/itemId'] },
+    defaultTtl: -1, // TTL enabled; each beacon doc carries its own `ttl` seconds
+  });
+  _canvasPresence = canvasPresence;
   _ensured = true;
 }
 
@@ -1104,6 +1131,10 @@ export async function copilotSkillsContainer(): Promise<Container> { await ensur
 export async function copilotSkillStatesContainer(): Promise<Container> { await ensure(); return _copilotSkillStates!; }
 /** CTS-11 — Copilot skill usage telemetry (redacted per-turn rows, TTL 90d), PK /tenantId. */
 export async function copilotSkillUsageContainer(): Promise<Container> { await ensure(); return _copilotSkillUsage!; }
+/** W4 — canvas comments / sticky notes (per-item sidecar), PK /itemId. */
+export async function canvasCommentsContainer(): Promise<Container> { await ensure(); return _canvasComments!; }
+/** W5 — canvas presence beacons (TTL-enabled, per-item), PK /itemId. */
+export async function canvasPresenceContainer(): Promise<Container> { await ensure(); return _canvasPresence!; }
 
 // Foundation admin containers (shared cloud-endpoints resolver task).
 /** Admin Workspace Catalog — one row per Loom-managed workspace, PK /tenantId. */
@@ -1277,6 +1308,7 @@ const KNOWN_CONTAINER_IDS = [
   'copilot-memory-write-audit',
   'copilot-memory-contradictions',
   'copilot-topic-pages',
+  'canvas-comments', 'canvas-presence',
 ];
 
 /** List all Loom containers with their current throughput shape.
