@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Badge, Button, Caption1, Toolbar, ToolbarButton, ToolbarDivider, Tooltip, makeStyles, mergeClasses, tokens } from '@fluentui/react-components';
+import { Badge, Button, Toolbar, ToolbarButton, ToolbarDivider, Tooltip, makeStyles, mergeClasses, tokens } from '@fluentui/react-components';
 import {
   Edit16Regular, Eye16Regular, Delete16Regular,
   ChevronUp16Regular, ChevronDown16Regular,
@@ -21,10 +21,21 @@ const useStyles = makeStyles({
     display: 'flex',
     flexDirection: 'column',
     border: `1px solid ${tokens.colorNeutralStroke2}`,
+    // Fabric cell anatomy — teal left accent rail marks markdown cells
+    // (distinct from the brand-blue code-cell rail).
+    borderLeft: `3px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusMedium,
     backgroundColor: tokens.colorNeutralBackground1,
+    // Secondary actions reveal on hover / keyboard focus (Fabric hover toolbar).
+    '& .nb-cell-actions': { opacity: 0, transitionProperty: 'opacity', transitionDuration: tokens.durationFaster },
+    ':hover .nb-cell-actions': { opacity: 1 },
+    ':focus-within .nb-cell-actions': { opacity: 1 },
   },
-  shellActive: { border: `1px solid ${tokens.colorBrandStroke1}` },
+  shellActive: {
+    border: `1px solid ${tokens.colorBrandStroke1}`,
+    borderLeft: `3px solid ${tokens.colorPaletteTealForeground2}`,
+    '& .nb-cell-actions': { opacity: 1 },
+  },
   shellMaximized: {
     position: 'fixed',
     top: '64px',
@@ -126,6 +137,7 @@ const useStyles = makeStyles({
     overflow: 'auto',
   },
   tag: { fontFamily: 'Consolas, monospace', color: tokens.colorNeutralForeground3, fontSize: '11px' },
+  hoverActions: { display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXXS },
   // WYSIWYG markdown formatting toolbar (R4-SYN-11) — sits above the editor
   // when editing, styled like the rest of the notebook chrome.
   fmtBar: {
@@ -234,7 +246,16 @@ export function MarkdownCell({ cell, active, onFocus, onChange, onDelete, onMove
             <ReOrderDotsVertical16Regular />
           </span>
         )}
-        <Caption1 className={s.tag}># md</Caption1>
+        {/* Cell-type badge — teal Markdown chip (Fabric cell-type parity). */}
+        <Badge
+          appearance="tint"
+          size="small"
+          icon={<TextHeader1Regular />}
+          style={{ color: tokens.colorPaletteTealForeground2, flexShrink: 0 }}
+          title="Markdown cell"
+        >
+          Markdown
+        </Badge>
         <Button
           size="small"
           appearance="subtle"
@@ -246,35 +267,39 @@ export function MarkdownCell({ cell, active, onFocus, onChange, onDelete, onMove
         </Button>
         {locked && <Badge appearance="outline" color="warning" size="small">locked</Badge>}
         <div className={s.spacer} />
-        <Button
-          size="small"
-          appearance="subtle"
-          icon={<ArrowSwap16Regular />}
-          disabled={!onConvertToCode}
-          onClick={(e) => { e.stopPropagation(); onConvertToCode?.(); }}
-          aria-label="Convert to code cell"
-          title="Convert to code cell"
-        />
-        <Button
-          size="small"
-          appearance={locked ? 'primary' : 'subtle'}
-          icon={locked ? <LockClosed16Filled /> : <LockClosed16Regular />}
-          onClick={(e) => { e.stopPropagation(); toggleLock(); }}
-          aria-label={locked ? 'Unlock cell' : 'Lock cell'}
-          title={locked ? 'Unlock cell' : 'Lock cell'}
-        />
-        <Button size="small" appearance="subtle" icon={<Copy16Regular />} disabled={!onDuplicate} onClick={(e) => { e.stopPropagation(); onDuplicate?.(); }} aria-label="Duplicate cell" title="Duplicate cell" />
-        <Button
-          size="small"
-          appearance="subtle"
-          icon={maximized ? <ArrowMinimize16Regular /> : <ArrowMaximize16Regular />}
-          onClick={(e) => { e.stopPropagation(); setMaximized(m => !m); }}
-          aria-label={maximized ? 'Restore cell' : 'Maximize cell'}
-          title={maximized ? 'Restore cell (Esc)' : 'Maximize cell'}
-        />
-        <Button size="small" appearance="subtle" icon={<ChevronUp16Regular />} disabled={!canMoveUp} onClick={(e) => { e.stopPropagation(); onMoveUp?.(); }} aria-label="Move cell up" />
-        <Button size="small" appearance="subtle" icon={<ChevronDown16Regular />} disabled={!canMoveDown} onClick={(e) => { e.stopPropagation(); onMoveDown?.(); }} aria-label="Move cell down" />
-        <Button size="small" appearance="subtle" icon={<Delete16Regular />} onClick={(e) => { e.stopPropagation(); onDelete?.(); }} aria-label="Delete cell" />
+        {/* Secondary actions — hover-only (revealed via `.nb-cell-actions` on
+            shell hover / focus-within / active), Fabric hover-toolbar density. */}
+        <span className={mergeClasses(s.hoverActions, 'nb-cell-actions')}>
+          <Button
+            size="small"
+            appearance="subtle"
+            icon={<ArrowSwap16Regular />}
+            disabled={!onConvertToCode}
+            onClick={(e) => { e.stopPropagation(); onConvertToCode?.(); }}
+            aria-label="Convert to code cell"
+            title="Convert to code cell"
+          />
+          <Button
+            size="small"
+            appearance={locked ? 'primary' : 'subtle'}
+            icon={locked ? <LockClosed16Filled /> : <LockClosed16Regular />}
+            onClick={(e) => { e.stopPropagation(); toggleLock(); }}
+            aria-label={locked ? 'Unlock cell' : 'Lock cell'}
+            title={locked ? 'Unlock cell' : 'Lock cell'}
+          />
+          <Button size="small" appearance="subtle" icon={<Copy16Regular />} disabled={!onDuplicate} onClick={(e) => { e.stopPropagation(); onDuplicate?.(); }} aria-label="Duplicate cell" title="Duplicate cell" />
+          <Button
+            size="small"
+            appearance="subtle"
+            icon={maximized ? <ArrowMinimize16Regular /> : <ArrowMaximize16Regular />}
+            onClick={(e) => { e.stopPropagation(); setMaximized(m => !m); }}
+            aria-label={maximized ? 'Restore cell' : 'Maximize cell'}
+            title={maximized ? 'Restore cell (Esc)' : 'Maximize cell'}
+          />
+          <Button size="small" appearance="subtle" icon={<ChevronUp16Regular />} disabled={!canMoveUp} onClick={(e) => { e.stopPropagation(); onMoveUp?.(); }} aria-label="Move cell up" title="Move cell up" />
+          <Button size="small" appearance="subtle" icon={<ChevronDown16Regular />} disabled={!canMoveDown} onClick={(e) => { e.stopPropagation(); onMoveDown?.(); }} aria-label="Move cell down" title="Move cell down" />
+          <Button size="small" appearance="subtle" icon={<Delete16Regular />} onClick={(e) => { e.stopPropagation(); onDelete?.(); }} aria-label="Delete cell" title="Delete cell" />
+        </span>
       </div>
       {editing ? (
         <>

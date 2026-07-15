@@ -19,7 +19,7 @@ import { useConfirm } from '@/lib/components/confirm-dialog';
  * zero logic change). Shared types/helpers/useStyles live in ./shared.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
 import { getItem, type WorkspaceItem } from '@/lib/api/workspaces';
@@ -34,12 +34,13 @@ import {
   Dialog, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
   Input, Field, Switch, Dropdown, Option, Textarea, Checkbox, Tooltip,
   Toaster, Toast, ToastTitle, useToastController, useId, Link,
+  Breadcrumb, BreadcrumbItem, BreadcrumbButton, BreadcrumbDivider,
   tokens,
 } from '@fluentui/react-components';
 import {
   ArrowSync20Regular, ArrowUpload20Regular, Database20Regular, Delete20Regular,
   DocumentTable20Regular, Eye20Regular, Folder20Regular, FolderAdd20Regular, Play20Regular,
-  BookOpen20Regular, TableSimple20Regular,
+  BookOpen20Regular, TableSimple20Regular, TableSimple20Filled,
   ArrowDownload20Regular, Info20Regular, LinkMultiple20Regular,
   Add20Regular, CloudLink20Regular, CheckmarkCircle20Filled, ErrorCircle20Filled, Clock20Regular,
   FolderArrowUp20Regular, ShieldTask20Regular,
@@ -48,6 +49,7 @@ import {
   CloudArrowUp20Regular,
   Copy20Regular,
   Sparkle20Regular,
+  MoreHorizontal20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from '../item-editor-chrome';
 import { OpenInPbiDesktopButton } from '../components/open-in-pbi-desktop-button';
@@ -75,6 +77,7 @@ import { useJobsStore } from '@/lib/state/jobs-store';
 import { DeltaPreviewGrid, type ColStat } from '../components/delta-preview-grid';
 import {
   useStyles, formatBytes, leafName, collectEntries, formatCell, parseJsonOrError,
+  FileGlyph,
 } from './shared';
 import type {
   ContainerInfo, PathEntry, ReferenceLakehouse, RefSelection, PreviewResponse,
@@ -2031,6 +2034,15 @@ export function LakehouseEditor({ item, id }: Props) {
     return openPrefixes[cacheKey(activeContainer, currentPrefix)] ?? null;
   }, [openPrefixes, activeContainer, currentPrefix, cacheKey]);
 
+  // Breadcrumb navigation — jump to any ancestor folder (or the container
+  // root) of the current path. Reuses the same activePath/loadPaths flow the
+  // tree uses, so the listing cache + selection stay consistent.
+  const goToPrefix = useCallback((prefix: string) => {
+    if (!activeContainer) return;
+    setActivePath(prefix ? { name: prefix, isDirectory: true, size: 0 } : null);
+    loadPaths(activeContainer, prefix);
+  }, [activeContainer, loadPaths]);
+
   // ---- tree renderer --------------------------------------------------
   function renderTreeChildren(container: string, prefix: string): React.ReactElement {
     const state = openPrefixes[cacheKey(container, prefix)];
@@ -2073,7 +2085,7 @@ export function LakehouseEditor({ item, id }: Props) {
             onClick={() => selectFile(entry)}
             onContextMenu={(e) => openContextMenu(e, entry)}
           >
-            <TreeItemLayout iconBefore={<Folder20Regular />}>{leafName(entry.name)}</TreeItemLayout>
+            <TreeItemLayout iconBefore={<FileGlyph name={entry.name} isDirectory />}>{leafName(entry.name)}</TreeItemLayout>
             <Tree>{renderTreeChildren(container, entry.name)}</Tree>
           </TreeItem>
         ) : (
@@ -2084,7 +2096,7 @@ export function LakehouseEditor({ item, id }: Props) {
             onClick={() => selectFile(entry)}
             onContextMenu={(e) => openContextMenu(e, entry)}
           >
-            <TreeItemLayout iconBefore={<DocumentTable20Regular />}>{leafName(entry.name)}</TreeItemLayout>
+            <TreeItemLayout iconBefore={<FileGlyph name={entry.name} isDirectory={false} />}>{leafName(entry.name)}</TreeItemLayout>
           </TreeItem>
         ))}
       </>
@@ -2128,13 +2140,13 @@ export function LakehouseEditor({ item, id }: Props) {
         {state.map((entry) => entry.isDirectory ? (
           <TreeItem key={`ref-${ref.id}-${entry.name}`} itemType="branch" value={`ref-${ref.id}-${entry.name}`}
             onClick={() => selectRefFile(ref, container, entry)}>
-            <TreeItemLayout iconBefore={<Folder20Regular />}>{leafName(entry.name)}</TreeItemLayout>
+            <TreeItemLayout iconBefore={<FileGlyph name={entry.name} isDirectory />}>{leafName(entry.name)}</TreeItemLayout>
             <Tree>{renderRefTreeChildren(ref, container, entry.name)}</Tree>
           </TreeItem>
         ) : (
           <TreeItem key={`ref-${ref.id}-${entry.name}`} itemType="leaf" value={`ref-${ref.id}-${entry.name}`}
             onClick={() => selectRefFile(ref, container, entry)}>
-            <TreeItemLayout iconBefore={<DocumentTable20Regular />}>{leafName(entry.name)}</TreeItemLayout>
+            <TreeItemLayout iconBefore={<FileGlyph name={entry.name} isDirectory={false} />}>{leafName(entry.name)}</TreeItemLayout>
           </TreeItem>
         ))}
       </>
@@ -2375,7 +2387,11 @@ export function LakehouseEditor({ item, id }: Props) {
                             title={`${t.format} · ${t.status}${typeof t.latestVersion === 'number' ? ` · v${t.latestVersion}` : ''}`}
                             onClick={() => setTab('tables')}>
                             <TreeItemLayout
-                              iconBefore={t.format === 'delta' ? <DocumentTable20Regular /> : <Folder20Regular />}
+                              iconBefore={
+                                t.format === 'delta'
+                                  ? <TableSimple20Filled style={{ color: tokens.colorPaletteBlueForeground2, flexShrink: 0 }} />
+                                  : <Folder20Regular style={{ color: tokens.colorPaletteMarigoldForeground2, flexShrink: 0 }} />
+                              }
                               aside={
                                 t.status === 'broken'
                                   ? <Badge appearance="tint" color="danger" size="small">broken</Badge>
@@ -2384,6 +2400,30 @@ export function LakehouseEditor({ item, id }: Props) {
                                   : t.format !== 'delta'
                                   ? <Badge appearance="outline" size="small">{t.format}</Badge>
                                   : null
+                              }
+                              actions={
+                                <Menu>
+                                  <MenuTrigger disableButtonEnhancement>
+                                    <Button appearance="subtle" size="small" icon={<MoreHorizontal20Regular />}
+                                      aria-label={`Actions for table ${t.name}`}
+                                      onClick={(e) => e.stopPropagation()} />
+                                  </MenuTrigger>
+                                  <MenuPopover>
+                                    <MenuList>
+                                      <MenuItem icon={<TableSimple20Regular />} onClick={() => setTab('tables')}>
+                                        Open in Tables tab
+                                      </MenuItem>
+                                      <MenuItem icon={<Copy20Regular />} onClick={() => { void navigator.clipboard?.writeText(t.adlsPath); }}>
+                                        Copy path
+                                      </MenuItem>
+                                      {typeof t.latestVersion === 'number' && (
+                                        <MenuItem icon={<History20Regular />} onClick={() => openTableHistory(t.adlsPath)}>
+                                          Table history…
+                                        </MenuItem>
+                                      )}
+                                    </MenuList>
+                                  </MenuPopover>
+                                </Menu>
                               }
                             >
                               {t.name}
@@ -2637,8 +2677,35 @@ export function LakehouseEditor({ item, id }: Props) {
                   {uploading ? `Uploading ${runningUploads.length} file${runningUploads.length === 1 ? '' : 's'} to ${lakehouseName} lakehouse, please wait…` : ''}
                 </div>
                 <div className={s.toolbar}>
-                  <Badge appearance="filled" color="brand">{activeContainer || 'no container'}</Badge>
-                  <Caption1>path: <strong>/{currentPrefix || ''}</strong></Caption1>
+                  {/* Breadcrumb path bar — container root + one clickable segment
+                      per folder (Fabric OneLake-explorer parity). Every crumb is
+                      a real navigation: it re-lists that prefix via loadPaths. */}
+                  <Breadcrumb aria-label="Lakehouse path" size="small" className={s.breadcrumbBar}>
+                    <BreadcrumbItem>
+                      <BreadcrumbButton
+                        icon={<Database20Regular />}
+                        onClick={() => goToPrefix('')}
+                        current={!currentPrefix}
+                        disabled={!activeContainer}
+                      >
+                        {activeContainer || 'no container'}
+                      </BreadcrumbButton>
+                    </BreadcrumbItem>
+                    {currentPrefix.split('/').filter(Boolean).map((seg, i, segs) => {
+                      const prefixUpTo = segs.slice(0, i + 1).join('/');
+                      const isLast = i === segs.length - 1;
+                      return (
+                        <Fragment key={prefixUpTo}>
+                          <BreadcrumbDivider />
+                          <BreadcrumbItem>
+                            <BreadcrumbButton onClick={() => goToPrefix(prefixUpTo)} current={isLast}>
+                              {seg}
+                            </BreadcrumbButton>
+                          </BreadcrumbItem>
+                        </Fragment>
+                      );
+                    })}
+                  </Breadcrumb>
                   <Button appearance="primary" icon={<ArrowUpload20Regular />} disabled={!activeContainer} onClick={onUploadClick}>
                     {uploading ? `Uploading (${runningUploads.length})…` : 'Upload file'}
                   </Button>
@@ -2797,7 +2864,10 @@ export function LakehouseEditor({ item, id }: Props) {
                             onContextMenu={(e) => openContextMenu(e, entry)}
                           >
                             <TableCell>
-                              {entry.isDirectory ? <Folder20Regular /> : <DocumentTable20Regular />} {leafName(entry.name)}
+                              <span className={s.nameCell}>
+                                <FileGlyph name={entry.name} isDirectory={entry.isDirectory} />
+                                <span className={s.nameLabel} title={leafName(entry.name)}>{leafName(entry.name)}</span>
+                              </span>
                             </TableCell>
                             <TableCell className={s.cell}>
                               {!entry.isDirectory && (() => {
@@ -2810,9 +2880,14 @@ export function LakehouseEditor({ item, id }: Props) {
                             <TableCell className={s.cell}>{entry.isDirectory ? '—' : formatBytes(entry.size)}</TableCell>
                             <TableCell className={s.cell}>{entry.lastModified?.replace('T', ' ').replace(/\..*/, '') ?? '—'}</TableCell>
                             <TableCell>
+                              {/* Secondary actions reveal on row hover/focus
+                                  (Fabric hover-row-action parity; class styled
+                                  in shared.tsx rowHover). */}
                               <Menu>
                                 <MenuTrigger disableButtonEnhancement>
-                                  <Button appearance="subtle" size="small">…</Button>
+                                  <Button className="lh-row-actions" appearance="subtle" size="small"
+                                    icon={<MoreHorizontal20Regular />}
+                                    aria-label={`Actions for ${leafName(entry.name)}`} />
                                 </MenuTrigger>
                                 <MenuPopover>
                                   <MenuList>
@@ -3164,7 +3239,9 @@ export function LakehouseEditor({ item, id }: Props) {
                                 {schemaTables.map((t) => (
                                   <TableRow key={t.adlsPath}>
                                     <TableCell>
-                                      {t.format === 'delta' ? <DocumentTable20Regular /> : <Folder20Regular />}{' '}
+                                      {t.format === 'delta'
+                                        ? <TableSimple20Filled style={{ color: tokens.colorPaletteBlueForeground2, verticalAlign: 'text-bottom' }} />
+                                        : <Folder20Regular style={{ color: tokens.colorPaletteMarigoldForeground2, verticalAlign: 'text-bottom' }} />}{' '}
                                       <strong>{t.name}</strong>
                                     </TableCell>
                                     <TableCell>

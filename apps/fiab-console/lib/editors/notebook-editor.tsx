@@ -540,6 +540,13 @@ export function NotebookEditor({ item, id }: Props) {
   const [runPhase, setRunPhase] = useState<string | null>(null);
   const cellRunStartRef = useRef<Map<string, number>>(new Map());
   const [nowTs, setNowTs] = useState<number>(() => Date.now());
+  // Real per-cell run duration for the cell chrome ("✓ 2.4 s"), measured from
+  // the run dispatch. Undefined when no start was recorded (e.g. a resumed run
+  // after remount) — the chrome simply omits the duration; never fabricated.
+  const cellDurationMs = useCallback((cellId: string): number | undefined => {
+    const t0 = cellRunStartRef.current.get(cellId);
+    return typeof t0 === 'number' ? Math.max(0, Date.now() - t0) : undefined;
+  }, []);
   const clearCellProgress = useCallback((cellId: string) => {
     cellRunStartRef.current.delete(cellId);
     setCellProgress((prev) => {
@@ -1522,6 +1529,7 @@ export function NotebookEditor({ item, id }: Props) {
             evalue: (o as any).evalue,
             traceback: (o as any).traceback,
             executedAtUtc: new Date().toISOString(),
+            durationMs: cellDurationMs(cid),
           },
         });
       }
@@ -1635,7 +1643,7 @@ export function NotebookEditor({ item, id }: Props) {
         runnableCellIds.forEach((id) => {
           if (appliedCells.has(id)) return;
           appliedCells.add(id);
-          patchCell(id, { output: { status: 'ok', textPlain: '(no output)' } });
+          patchCell(id, { output: { status: 'ok', textPlain: '(no output)', durationMs: cellDurationMs(id) } });
         });
       }
       loadJobs(workspaceId, notebookId);
@@ -1644,7 +1652,7 @@ export function NotebookEditor({ item, id }: Props) {
       setRunPhase(null);
       setCellProgress(new Map()); cellRunStartRef.current.clear(); // R4-NB-4 cleanup
     }
-  }, [workspaceId, notebookId, computeId, cells, patchCell, sessionConfigBody, pollRunStatus, loadJobs]);
+  }, [workspaceId, notebookId, computeId, cells, patchCell, sessionConfigBody, pollRunStatus, loadJobs, cellDurationMs]);
 
   // Always-fresh ref to run() so a parameterized run fires the LATEST closure
   // after we inject the override cell + re-render (R4-NB-2).
@@ -2148,6 +2156,7 @@ export function NotebookEditor({ item, id }: Props) {
               evalue: p.output.evalue,
               traceback: p.output.traceback,
               executedAtUtc: new Date().toISOString(),
+              durationMs: Date.now() - start,
             },
           });
           setRunMsg(`%%pyspark cell ${cell.id.slice(0, 6)} complete (${p.backend || 'spark'})`);
@@ -2278,6 +2287,7 @@ export function NotebookEditor({ item, id }: Props) {
               evalue: p.output.evalue,
               traceback: p.output.traceback,
               executedAtUtc: new Date().toISOString(),
+              durationMs: cellDurationMs(cell.id),
             },
           });
           setRunMsg(`Cell ${cell.id.slice(0, 6)} complete`);
@@ -2309,7 +2319,7 @@ export function NotebookEditor({ item, id }: Props) {
     } finally {
       clearCellProgress(cell.id); setRunPhase(null); // R4-NB-4 cleanup
     }
-  }, [workspaceId, notebookId, computeId, defaultLang, sessionConfigBody, pollRunStatus, patchCell, loadJobs, runSparkCell, clearCellProgress]);
+  }, [workspaceId, notebookId, computeId, defaultLang, sessionConfigBody, pollRunStatus, patchCell, loadJobs, runSparkCell, clearCellProgress, cellDurationMs]);
 
   /**
    * Variable explorer — submit a Python introspection snippet to the ACTIVE
@@ -3652,19 +3662,30 @@ export function NotebookEditor({ item, id }: Props) {
             onClose={() => setCfgDialogOpen(false)}
           />
 
-          {/* Bottom-left session status badge (Idle / Running / Error). */}
-          <Badge
-            className={s.statusBadge}
-            appearance="filled"
-            color={sessionStatus === 'Running' ? 'warning' : sessionStatus === 'Error' ? 'danger' : 'success'}
-            title={
-              sessionReceipt && typeof sessionReceipt.numExecutors === 'number'
-                ? `Spark session ${sessionReceipt.id ?? ''} · ${sessionReceipt.numExecutors} executors · ${sessionReceipt.executorMemory ?? ''}`
-                : `Session ${sessionStatus.toLowerCase()}`
-            }
-          >
-            {sessionStatus}{sessionReceipt && typeof sessionReceipt.numExecutors === 'number' ? ` · ${sessionReceipt.numExecutors} exec` : ''}
-          </Badge>
+          {/* Bottom-left kernel/session status pill — live state color, Fabric
+              kernel-indicator parity: Idle (green) / Starting (amber, session
+              cold-start) / Busy (brand, statement executing) / Error (red).
+              The Starting state is derived from the real Livy poll phase. */}
+          {(() => {
+            const starting = sessionStatus === 'Running' && runPhase === 'session-starting';
+            const label = starting ? 'Starting' : sessionStatus === 'Running' ? 'Busy' : sessionStatus;
+            const color = starting ? 'warning' : sessionStatus === 'Running' ? 'brand' : sessionStatus === 'Error' ? 'danger' : 'success';
+            return (
+              <Badge
+                className={s.statusBadge}
+                appearance="filled"
+                color={color}
+                icon={sessionStatus === 'Running' ? <Spinner size="extra-tiny" appearance="inverted" /> : undefined}
+                title={
+                  sessionReceipt && typeof sessionReceipt.numExecutors === 'number'
+                    ? `Spark session ${sessionReceipt.id ?? ''} · ${sessionReceipt.numExecutors} executors · ${sessionReceipt.executorMemory ?? ''}`
+                    : starting ? 'Spark session is starting (cold start)' : `Session ${label.toLowerCase()}`
+                }
+              >
+                {label}{sessionReceipt && typeof sessionReceipt.numExecutors === 'number' ? ` · ${sessionReceipt.numExecutors} exec` : ''}
+              </Badge>
+            );
+          })()}
         </div>
         <CopilotChatPane
           open={copilotOpen}
