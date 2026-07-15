@@ -33,6 +33,7 @@ import { clientFetch, CROSS_SUB_FETCH_TIMEOUT_MS } from '@/lib/client-fetch';
 import * as React from 'react';
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import {
   Spinner, Badge, Button, Link as FluentLink, MessageBar, MessageBarBody, MessageBarTitle,
   MessageBarActions,
@@ -42,13 +43,16 @@ import {
 import {
   Search20Regular, MoreHorizontal20Regular, Eye20Regular,
   PlugConnected20Regular, Flow20Regular, ArrowSync20Regular,
-  Delete20Regular,
+  Delete20Regular, Open16Regular, Eye16Regular, PlugConnected16Regular, Delete16Regular,
   Pulse24Regular, Flash24Regular, PlugConnected24Regular, Flow24Regular,
-  DataTrending32Regular,
+  DataTrending32Regular, DataUsage24Regular,
 } from '@fluentui/react-icons';
 import { SignInRequired } from '@/lib/components/sign-in-required';
 import { Section } from '@/lib/components/ui/section';
-import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
+import { GuidedEmptyState } from '@/lib/components/shared/guided-empty-state';
+import {
+  LoomDataTable, type LoomColumn, type LoomRowAction, type LoomRowMenuItem,
+} from '@/lib/components/ui/loom-data-table';
 import { itemVisual } from '@/lib/components/ui/item-type-visual';
 import { ViewToggle, type LoomView } from '@/lib/components/ui/view-toggle';
 import { ItemTile } from '@/lib/components/ui/item-tile';
@@ -181,6 +185,7 @@ function Stat({
 
 export function RealTimeHubView() {
   const styles = useStyles();
+  const router = useRouter();
   const [data, setData] = useState<StreamsResponse | null>(null);
   const [loomWorkspaces, setLoomWorkspaces] = useState<Array<{ id: string; name: string }>>([]);
   const [unauth, setUnauth] = useState(false);
@@ -360,10 +365,43 @@ export function RealTimeHubView() {
     },
     { key: 'sourceItem', label: 'Source item', sortable: true, filterable: true, width: 200 },
     { key: 'workspace', label: 'Workspace', sortable: true, filterable: true, width: 200 },
+  ];
+
+  // Fabric dense-list parity: secondary actions are hover-only (a trailing
+  // inline toolbar) + a right-click context menu — same real actions as the
+  // tile kebab, no permanently-visible Actions column.
+  const listRowActions = (s: DataStreamRow): LoomRowAction<DataStreamRow>[] => [
     {
-      key: 'actions', label: 'Actions', sortable: false, filterable: false, width: 90,
-      render: (s) => rowMenu(s),
+      key: 'preview', label: 'Preview data', icon: <Eye16Regular />,
+      onClick: (r) => setPreviewTarget({ title: r.name, db: r.dataType === 'table' ? r.name : '', table: '' }),
     },
+    ...(s.dataType === 'stream' ? [{
+      key: 'endpoints', label: 'Endpoints', icon: <PlugConnected16Regular />,
+      onClick: (r: DataStreamRow) => setEndpointsTarget({ name: r.name, workspaceId: r.workspaceId, id: r.id }),
+    }] : []),
+    {
+      key: 'open', label: `Open ${s.dataType === 'stream' ? 'eventstream' : 'KQL database'}`, icon: <Open16Regular />,
+      onClick: (r) => router.push(`/items/${r.dataType === 'stream' ? 'eventstream' : 'kql-database'}/${r.id}`),
+    },
+  ];
+  const listRowMenu = (s: DataStreamRow): LoomRowMenuItem<DataStreamRow>[] => [
+    {
+      key: 'preview', label: 'Preview data', icon: <Eye16Regular />,
+      onClick: (r) => setPreviewTarget({ title: r.name, db: r.dataType === 'table' ? r.name : '', table: '' }),
+    },
+    ...(s.dataType === 'stream' ? [{
+      key: 'endpoints', label: 'Endpoints', icon: <PlugConnected16Regular />,
+      onClick: (r: DataStreamRow) => setEndpointsTarget({ name: r.name, workspaceId: r.workspaceId, id: r.id }),
+    }] : []),
+    {
+      key: 'open', label: `Open ${s.dataType === 'stream' ? 'eventstream' : 'KQL database'}`, icon: <Open16Regular />,
+      onClick: (r) => router.push(`/items/${r.dataType === 'stream' ? 'eventstream' : 'kql-database'}/${r.id}`),
+    },
+    ...(s.dataType === 'stream' ? [{
+      key: 'delete', label: deleting === s.id ? 'Deleting…' : 'Delete eventstream',
+      icon: <Delete16Regular />, divider: true, disabled: deleting === s.id,
+      onClick: (r: DataStreamRow) => { void deleteStream(r); },
+    }] : []),
   ];
 
   return (
@@ -495,14 +533,29 @@ export function RealTimeHubView() {
             <Spinner label="Loading data streams…" />
           </div>
         ) : streams.length === 0 ? (
-          <div className={styles.emptyState} role="status">
-            <DataTrending32Regular className={styles.emptyIcon} aria-hidden />
-            <span>
-              No data streams visible yet.<br />
-              Use <b>Connect a source</b> above to connect a Microsoft source and create your first eventstream — it is
-              created as a real CSA Loom Eventstream item and will then appear here.
-            </span>
-          </div>
+          <GuidedEmptyState
+            title="Bring your first stream in"
+            intro="No data streams visible yet. Connect a source to create a real CSA Loom Eventstream item — it lands in this catalog the moment it exists."
+            heroIcon={DataTrending32Regular}
+            paths={[
+              {
+                key: 'connect',
+                title: 'Connect a source',
+                body: 'Pick from Microsoft, Azure, database CDC, and external streaming connectors.',
+                icon: PlugConnected24Regular,
+                onClick: () => openConnect(null),
+              },
+              {
+                key: 'discover',
+                title: 'Discover raw sources',
+                body: 'Scan every subscription for Event Hubs, IoT Hubs, and ADX clusters you can stream from.',
+                icon: DataUsage24Regular,
+                href: '/realtime-hub?tab=sources',
+              },
+            ]}
+            learnMoreHref="https://learn.microsoft.com/fabric/real-time-hub/get-started-real-time-hub"
+            ariaLabel="Get started with data streams"
+          />
         ) : view === 'tile' ? (
           filtered.length === 0 ? (
             <div className={styles.emptyState} role="status">
@@ -534,6 +587,9 @@ export function RealTimeHubView() {
             columns={columns}
             rows={filtered}
             getRowId={(s) => `${s.dataType}-${s.workspaceId}-${s.id}`}
+            density="compact"
+            rowActions={listRowActions}
+            rowMenu={listRowMenu}
             empty="No streams match the current search."
           />
         )}

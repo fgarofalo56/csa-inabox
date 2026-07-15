@@ -38,7 +38,9 @@ import {
   FolderAdd20Regular, Folder20Filled,
   FolderArrowRight20Regular, Delete20Regular, Open20Regular,
   Search16Regular, TextBulletListTree20Regular, AppsListDetail20Regular,
-  DismissCircle16Regular,
+  DismissCircle16Regular, Open16Regular, Rename16Regular, Delete16Regular,
+  FolderArrowRight16Regular, Folder24Regular, AddCircle24Regular,
+  HatGraduation24Regular,
 } from '@fluentui/react-icons';
 import { useRouter } from 'next/navigation';
 import {
@@ -49,7 +51,12 @@ import {
 } from '@/lib/api/workspaces';
 import { findItemType } from '@/lib/catalog/fabric-item-types';
 import { getItemTypeIcon } from '@/lib/components/item-type-icon';
-import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
+import {
+  LoomDataTable, type LoomColumn, type LoomRowAction, type LoomRowMenuItem,
+} from '@/lib/components/ui/loom-data-table';
+import { BrandedItemIcon } from '@/lib/components/ui/branded-item-icon';
+import { GuidedEmptyState } from '@/lib/components/shared/guided-empty-state';
+import { NewItemDialog } from '@/lib/components/new-item-dialog';
 import { endorsementBadge } from '@/lib/editors/endorsement-control';
 import { ImpactAnalysisPanel } from '@/lib/components/catalog/impact-analysis-panel';
 
@@ -585,15 +592,12 @@ export function FoldersPane({ workspaceId }: FoldersPaneProps): React.JSX.Elemen
     {
       key: 'displayName', label: 'Name', sortable: true, filterable: true, width: 260,
       getValue: (i) => i.displayName,
-      render: (i) => {
-        const meta = findItemType(i.itemType);
-        return (
-          <span className={s.itemRow}>
-            {getItemTypeIcon(i.itemType, meta?.category)}
-            <Text weight="semibold">{i.displayName}</Text>
-          </span>
-        );
-      },
+      render: (i) => (
+        <span className={s.itemRow}>
+          <BrandedItemIcon type={i.itemType} size="sm" />
+          <Text weight="semibold">{i.displayName}</Text>
+        </span>
+      ),
     },
     {
       key: 'itemType', label: 'Type', sortable: true, filterable: true, filterType: 'select', width: 150,
@@ -624,6 +628,27 @@ export function FoldersPane({ workspaceId }: FoldersPaneProps): React.JSX.Elemen
     },
   ], [s.itemRow, s.muted]);
 
+  // Fabric list-density parity: hover-only inline row actions + a right-click
+  // context menu on every list row (same real actions as the tree view).
+  const listRowActions = useCallback((): LoomRowAction<GovWorkspaceItem>[] => [
+    { key: 'open', label: 'Open', icon: <Open16Regular />, onClick: (r) => router.push(`/items/${r.itemType}/${r.id}`) },
+    { key: 'rename', label: 'Rename', icon: <Rename16Regular />, onClick: (r) => openRenameItem(r) },
+    { key: 'move', label: 'Move to folder…', icon: <FolderArrowRight16Regular />, onClick: (r) => setMoveItem(r) },
+    { key: 'delete', label: 'Delete', icon: <Delete16Regular />, onClick: (r) => { setImpactReady(false); setConfirmItemDelete(r); } },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  ], [router]);
+  const listRowMenu = useCallback((): LoomRowMenuItem<GovWorkspaceItem>[] => [
+    { key: 'open', label: 'Open', icon: <Open16Regular />, onClick: (r) => router.push(`/items/${r.itemType}/${r.id}`) },
+    { key: 'move', label: 'Move to folder…', icon: <FolderArrowRight16Regular />, onClick: (r) => setMoveItem(r) },
+    { key: 'rename', label: 'Rename', icon: <Rename16Regular />, onClick: (r) => openRenameItem(r) },
+    { key: 'delete', label: 'Delete', icon: <Delete16Regular />, divider: true, onClick: (r) => { setImpactReady(false); setConfirmItemDelete(r); } },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  ], [router]);
+
+  // Guided empty state: a controlled instance of the REAL create gallery,
+  // scoped to this workspace, launched from the "Create an item" path.
+  const [createOpen, setCreateOpen] = useState(false);
+
   const totalItems = items.length;
   const rootDropActive = dropTarget === 'root';
   const loading = itemsQ.isLoading || foldersQ.isLoading;
@@ -645,12 +670,44 @@ export function FoldersPane({ workspaceId }: FoldersPaneProps): React.JSX.Elemen
       )}
 
       {!loading && totalItems === 0 && folders.length === 0 && (
-        <div className={s.empty}>
-          <Body1>No items in this workspace yet. Add an item, or create a folder to organize.</Body1>
-          <div style={{ marginTop: tokens.spacingVerticalM }}>
-            <Button icon={<FolderAdd20Regular />} onClick={() => openCreateFolder(null)} disabled={busy}>New folder</Button>
-          </div>
-        </div>
+        <>
+          <GuidedEmptyState
+            title="Build out this workspace"
+            intro="Items live inside workspaces — create your first notebook, lakehouse, or pipeline, organize with folders, or learn by installing a working example."
+            heroIcon={Folder24Regular}
+            paths={[
+              {
+                key: 'new-item',
+                title: 'Create an item',
+                body: 'Open the full create gallery — notebooks, lakehouses, pipelines, and more land in this workspace.',
+                icon: AddCircle24Regular,
+                onClick: () => setCreateOpen(true),
+              },
+              {
+                key: 'new-folder',
+                title: 'New folder',
+                body: 'Structure the workspace up front — items drag between folders any time.',
+                icon: FolderAdd20Regular,
+                onClick: () => openCreateFolder(null),
+              },
+              {
+                key: 'learn',
+                title: 'Learning Hub',
+                body: 'Install a complete use-case example with seeded sample data and a walkthrough.',
+                icon: HatGraduation24Regular,
+                href: '/learn',
+              },
+            ]}
+            learnMoreHref="https://learn.microsoft.com/fabric/get-started/workspaces"
+            ariaLabel="Get started with this workspace"
+          />
+          <NewItemDialog
+            hideTrigger
+            workspaceId={workspaceId}
+            open={createOpen}
+            onOpenChange={setCreateOpen}
+          />
+        </>
       )}
 
       {(totalItems > 0 || folders.length > 0) && (
@@ -756,7 +813,11 @@ export function FoldersPane({ workspaceId }: FoldersPaneProps): React.JSX.Elemen
               columns={listColumns}
               rows={filteredItems}
               getRowId={(i) => i.id}
+              density="compact"
+              rowActions={listRowActions}
+              rowMenu={listRowMenu}
               loading={loading}
+              skeleton
               onRowClick={(i) => router.push(`/items/${i.itemType}/${i.id}`)}
               ariaLabel="Workspace items list"
               empty="No items match the current filters."
