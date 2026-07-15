@@ -140,6 +140,47 @@ describe('POST /api/items/kql-dashboard/[id]/generate-tile', () => {
     expect(res.status).toBe(422);
   });
 
+  // ── SUGGEST mode (operator review 5.2 — the query→dashboard-tile wizard's
+  //    "Help me choose"): body.kql is an EXISTING query; the model only picks
+  //    title + viz, and the provided KQL is preserved verbatim. ──
+  it('SUGGEST mode preserves the provided KQL verbatim and returns the suggested title/viz', async () => {
+    (getSession as any).mockReturnValue({ claims: { oid: 'o' } });
+    const myKql = 'Events | summarize count() by bin(Timestamp, 1h)';
+    (aoaiCompleteJson as any).mockResolvedValue({ title: 'Events per hour', kql: 'SOMETHING ELSE | count', viz: 'timechart' });
+    const res = await POST(jsonReq({ prompt: 'suggest title and visual', kql: myKql }), ctx);
+    expect(res.status).toBe(200);
+    const j = await res.json();
+    expect(j.ok).toBe(true);
+    // The caller's query wins — the model cannot rewrite it.
+    expect(j.tile.kql).toBe(myKql);
+    expect(j.tile.viz).toBe('timechart');
+    expect(j.tile.title).toBe('Events per hour');
+    // The suggest system prompt + the query itself were sent to the model.
+    const messages = (aoaiCompleteJson as any).mock.calls[0][0];
+    expect(messages[0].content).toContain('DO NOT modify');
+    expect(messages[1].content).toContain(myKql);
+  });
+
+  it('SUGGEST mode also resolves when [id] is the SOURCE kql-database (wizard pre-target)', async () => {
+    (getSession as any).mockReturnValue({ claims: { oid: 'o' } });
+    (loadKustoItem as any).mockImplementation(async (_id: string, type: string) =>
+      type === 'kql-database'
+        ? { id: 'dash-1', workspaceId: 'w', itemType: 'kql-database', displayName: 'DB', state: {} }
+        : null);
+    (aoaiCompleteJson as any).mockResolvedValue({ title: 'T', kql: 'x', viz: 'table' });
+    const res = await POST(jsonReq({ prompt: 'suggest', kql: 'Events | take 5' }), ctx);
+    expect(res.status).toBe(200);
+    const j = await res.json();
+    expect(j.ok).toBe(true);
+    expect(j.tile.kql).toBe('Events | take 5');
+  });
+
+  it('SUGGEST mode rejects a management command as the provided query (400)', async () => {
+    (getSession as any).mockReturnValue({ claims: { oid: 'o' } });
+    const res = await POST(jsonReq({ prompt: 'suggest', kql: '.show tables' }), ctx);
+    expect(res.status).toBe(400);
+  });
+
   it('falls back to a bare table list when schema JSON is empty', async () => {
     (getSession as any).mockReturnValue({ claims: { oid: 'o' } });
     (getDatabaseSchemaJson as any).mockResolvedValue(null);

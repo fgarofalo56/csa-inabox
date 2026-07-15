@@ -63,6 +63,7 @@ import { BulkDescribeAction } from '@/lib/components/catalog/bulk-describe-actio
 import { UpstreamSensitivityField } from '@/lib/components/governance/upstream-sensitivity-field';
 import { ItemEditorChrome } from '../item-editor-chrome';
 import { OpenInPbiDesktopButton } from '../components/open-in-pbi-desktop-button';
+import { OpenInLoomReportBuilderButton } from '../components/open-in-loom-report-builder-button';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
@@ -2883,6 +2884,7 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
               <Badge appearance="filled" color="brand">Semantic model</Badge>
               <Button appearance="outline" icon={<DatabaseLink20Regular />} onClick={() => { setGetDataOpen(true); setIngestTab('source'); }} title="Power Query (M) → Delta in ADLS → semantic layer (Azure-native, no Fabric required)">Get data</Button>
               <OpenInPbiDesktopButton type="semantic-model" id={id} name={detail?.dataset?.name} mode="directQuery" />
+              <OpenInLoomReportBuilderButton type="semantic-model" id={id} name={detail?.dataset?.name} />
               {powerBiConfigured && (
                 <>
                   <WorkspacePicker value={workspaceId} onChange={setWorkspaceId} {...ws} />
