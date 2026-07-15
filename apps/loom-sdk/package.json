@@ -1,0 +1,51 @@
+{
+  "name": "@csa-loom/sdk",
+  "version": "0.1.0",
+  "description": "Typed TypeScript client for the CSA Loom REST API — workspaces, items, catalog, and lineage. Cookie-session or scoped API-token (PAT) auth. Azure-native; no Microsoft Fabric tenant required.",
+  "keywords": [
+    "csa-loom",
+    "loom",
+    "fabric",
+    "azure",
+    "sdk",
+    "client",
+    "rest",
+    "data-platform"
+  ],
+  "license": "MIT",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "prepublishOnly": "npm run build",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "devDependencies": {
+    "@types/node": "^20.16.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Limitless-Data-LLC/csa-inabox.git",
+    "directory": "apps/loom-sdk"
+  }
+}
