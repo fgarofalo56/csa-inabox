@@ -11,8 +11,11 @@
  */
 
 import { NextResponse } from 'next/server';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import {
+  readBuildMarker,
+  resolveCurrentVersion,
+  compareSemver,
+} from '@/lib/updates/current-version';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -24,108 +27,15 @@ const UPSTREAM_REPO  = process.env.LOOM_FEEDBACK_REPO_NAME  || 'csa-inabox';
 interface Release { tag_name: string; name: string; published_at: string; html_url: string; body: string; prerelease: boolean; }
 
 /**
- * Resolve the REAL running version, in priority order, so "Currently running"
- * reflects the deployed build rather than a stale hand-set env:
- *
- *  1. package.json `version` (#1468) — the AUTHORITATIVE source. It is baked
- *     into the image at build time (Next standalone copies package.json next to
- *     server.js) and release-please keeps it in lockstep with the released
- *     semver via `extra-files` in .release-please-config.json. Because it
- *     travels WITH the image, it cannot drift the way the LOOM_VERSION env can:
- *     the bicep `loomVersion` param defaults to a hand-set value (historically
- *     '0.42.0') that a clean default deploy never updates, which is exactly why
- *     /api/version used to report a stale "current". package.json wins.
- *  2. LOOM_VERSION — env override, honored only when package.json carries no
- *     parseable semver (e.g. a local `pnpm dev` run from a checkout whose
- *     package.json was hand-edited). A release/build pipeline may still set it
- *     to pin an exact tag.
- *  3. The Docker build marker at public/build-marker.txt — stamped by the
- *     Dockerfile with the build SHA (`sha=<git-sha>`). Used as a build
- *     fingerprint (proves which image is serving). Surfaced as `build` in the
- *     response and used as the version only when nothing else resolves.
- *  4. NEXT_PUBLIC_LOOM_VERSION, then 'dev'.
+ * Version + build resolution and semver comparison live in
+ * lib/updates/current-version.ts — SHARED with the apply route's pre-flight so
+ * the "Update available" badge and the apply's already-up-to-date refusal can
+ * never disagree (they previously resolved "current" from different sources:
+ * package.json here vs the LOOM_VERSION env there). Resolution order + the
+ * full rationale (#1468) are documented in that module.
  */
-function readPackageVersion(): string | undefined {
-  // In the Next standalone runtime cwd is the standalone root, which holds a
-  // copied package.json; from a source checkout cwd is the app dir. Both work.
-  for (const p of [
-    join(process.cwd(), 'package.json'),
-    join(process.cwd(), 'apps', 'fiab-console', 'package.json'),
-  ]) {
-    try {
-      const v = JSON.parse(readFileSync(p, 'utf-8'))?.version;
-      // Only accept a real semver core; ignore '0.1.0-scaffold'-style or absent.
-      if (typeof v === 'string' && /^\d+\.\d+(\.\d+)?/.test(v.trim())) return v.trim();
-    } catch { /* try next path */ }
-  }
-  return undefined;
-}
-
-function readBuildMarker(): { sha?: string; stamp?: string } {
-  for (const p of [
-    join(process.cwd(), 'public', 'build-marker.txt'),
-    join(process.cwd(), 'build-marker.txt'),
-  ]) {
-    try {
-      const txt = readFileSync(p, 'utf-8');
-      const sha = txt.match(/sha=([^\s]+)/)?.[1];
-      const stamp = txt.match(/stamp=([^\s]+)/)?.[1];
-      if (sha && sha !== 'unknown') return { sha, stamp };
-    } catch { /* try next path */ }
-  }
-  // Env-stamped fallback (Dockerfile sets ENV LOOM_BUILD_SHA too).
-  const sha = process.env.LOOM_BUILD_SHA;
-  if (sha && sha !== 'unknown') return { sha, stamp: process.env.LOOM_BUILD_TIMESTAMP };
-  return {};
-}
-
 const BUILD = readBuildMarker();
-const LOCAL_VERSION =
-  readPackageVersion() ||
-  process.env.LOOM_VERSION ||
-  process.env.NEXT_PUBLIC_LOOM_VERSION ||
-  (BUILD.sha ? `build-${BUILD.sha.slice(0, 12)}` : 'dev');
-
-/**
- * Parse the major.minor.patch core out of a version/tag string into a numeric
- * triple. Tolerates ANY prefix before the version core, including a repo-scoped
- * release tag such as `csa-inabox-v0.44.0` or a bare `v0.43.1` — the GitHub
- * release tags for this repo carry the `csa-inabox-v` prefix, while
- * LOOM_VERSION is a bare semver (`0.42.0`). A previous anchored `^(\d+)…`
- * regex returned null for the prefixed upstream tag, so compareSemver treated
- * the real upstream release as "not comparable" and reported a false
- * "Up to date" badge. Now we scan for the first `X.Y[.Z]` token anywhere in
- * the string. Returns null only when no numeric core exists at all (e.g. a
- * `build-<sha>` fingerprint), so callers can distinguish "older" from
- * "not a comparable version".
- */
-function parseSemverCore(s: string): [number, number, number] | null {
-  // Find the first version-looking token: <major>.<minor>[.<patch>], optionally
-  // preceded by a `v`/`V`. The leading boundary (start-or-non-digit) prevents
-  // matching a digit that is part of a longer number.
-  const m = s.trim().match(/(?:^|[^0-9])v?(\d+)\.(\d+)(?:\.(\d+))?/i);
-  if (!m) return null;
-  return [Number(m[1]) || 0, Number(m[2]) || 0, Number(m[3]) || 0];
-}
-
-/**
- * Semver compare on the major.minor.patch core. Returns -1 if a<b, 1 if a>b,
- * 0 if equal. When the LOCAL version has no parseable semver core (a dev /
- * build-SHA build) but the upstream tag does, treat local as OLDER (-1) so an
- * update is offered rather than a false "Up to date". The previous string→
- * Number split produced NaN for such builds and silently returned 0.
- */
-function compareSemver(a: string, b: string): number {
-  const na = parseSemverCore(a);
-  const nb = parseSemverCore(b);
-  if (!na && !nb) return 0;
-  if (!na) return -1; // local not comparable, upstream is a real release → older
-  if (!nb) return 1;
-  for (let i = 0; i < 3; i += 1) {
-    if (na[i] !== nb[i]) return na[i] < nb[i] ? -1 : 1;
-  }
-  return 0;
-}
+const LOCAL_VERSION = resolveCurrentVersion(BUILD);
 
 export async function GET() {
   const headers: Record<string, string> = { Accept: 'application/vnd.github+json' };
