@@ -34,7 +34,7 @@ import {
 import type { JSX } from 'react';
 import { clientFetch } from '@/lib/client-fetch';
 import {
-  CanvasNode, CanvasRightRail, CATEGORY_ACCENT, accentTint, portStyle,
+  CanvasNode, CanvasRightRail, CANVAS_NODE_WIDTH, CATEGORY_ACCENT, accentTint, portStyle,
   type CanvasVisual, type CanvasNodeCategory,
 } from '@/lib/components/canvas/canvas-node-kit';
 import { CanvasCollabLayer } from '@/lib/components/canvas/canvas-collab-layer';
@@ -53,7 +53,7 @@ import {
   buildFlowNodes, buildFlowEdges, nodePosition, parseNodeId, type LayoutMap,
 } from './agent-flow-layout';
 
-const NODE_WIDTH = 210;
+const NODE_WIDTH = CANVAS_NODE_WIDTH;
 
 // ---- node visual ---------------------------------------------------------
 interface AgentNodeData {

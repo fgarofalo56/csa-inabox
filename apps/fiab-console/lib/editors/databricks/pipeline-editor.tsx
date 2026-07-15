@@ -47,7 +47,7 @@ import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import { clientFetch } from '@/lib/client-fetch';
 import { safeModelJson } from '../model-fetch';
 import {
-  CanvasNode, CATEGORY_ACCENT, portStyle, accentTint, CanvasRailPanel,
+  CanvasNode, CANVAS_NODE_WIDTH, CATEGORY_ACCENT, portStyle, accentTint, CanvasRailPanel,
   type CanvasVisual, type CanvasNodeCategory, type CanvasNodeStatus,
 } from '@/lib/components/canvas/canvas-node-kit';
 import { useCanvasHistory } from '@/lib/components/canvas/use-canvas-history';
@@ -61,7 +61,7 @@ import {
 import { ResizableCanvasRegion } from '@/lib/components/canvas/resizable-canvas';
 import { SplitPane } from '@/lib/components/shared/split-pane';
 
-const NODE_WIDTH = 210;
+const NODE_WIDTH = CANVAS_NODE_WIDTH;
 
 // ---------------------------------------------------------------------------
 // Node visuals

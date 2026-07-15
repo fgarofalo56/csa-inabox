@@ -36,7 +36,7 @@ import {
   type Node as RfNode, type Edge as RfEdge, type NodeProps, type NodeTypes, type Connection,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import { CanvasNode, CanvasRightRail, CATEGORY_ACCENT, accentTint, portStyle, type CanvasVisual } from '@/lib/components/canvas/canvas-node-kit';
+import { CanvasNode, CanvasRightRail, CANVAS_NODE_WIDTH, CATEGORY_ACCENT, accentTint, portStyle, type CanvasVisual } from '@/lib/components/canvas/canvas-node-kit';
 import { ResizableCanvasRegion } from '@/lib/components/canvas/resizable-canvas';
 import { useCanvasHistory } from '@/lib/components/canvas/use-canvas-history';
 import { ForceDirectedGraph, type GraphNode, type GraphEdge } from '@/lib/components/graph/force-directed-graph';
@@ -122,7 +122,7 @@ function TwinEntityNode({ data, selected }: NodeProps) {
   const visual: CanvasVisual = { icon: <Cube20Regular />, category: 'move', accent: d.accent };
   return (
     <CanvasNode
-      width={200}
+      width={CANVAS_NODE_WIDTH}
       title={d.name || '(unnamed)'}
       visual={visual}
       selected={selected}

@@ -35,7 +35,7 @@ import {
   Add20Regular, Delete20Regular, DatabaseMultiple20Regular, Table20Regular,
 } from '@fluentui/react-icons';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
-import { CanvasNode, accentTint, portStyle, CanvasRightRail, type CanvasVisual } from '@/lib/components/canvas/canvas-node-kit';
+import { CanvasNode, CANVAS_NODE_WIDTH, accentTint, portStyle, CanvasRightRail, type CanvasVisual } from '@/lib/components/canvas/canvas-node-kit';
 import type {
   DbtProjectGraph, DbtSource, DbtModel, DbtTest, DbtTarget, MedallionLayer, Materialization, DbtAdapter,
 } from '@/lib/dbt/dbt-project-model';
@@ -127,7 +127,7 @@ interface DbtNodeData {
 
 /** Node width contract — fits inside the COL_GAP column stride, matches the
  * pipeline canvas node footprint so dbt nodes read as the same family. */
-const DBT_NODE_W = 200;
+const DBT_NODE_W = CANVAS_NODE_WIDTH;
 
 /** Resolve the theme-aware accent for a medallion model layer (amber/teal/gold)
  * or the neutral stroke when a layer is somehow absent. */

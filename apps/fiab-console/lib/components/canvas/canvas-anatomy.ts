@@ -17,6 +17,18 @@
  * values — this file never emits a colour string.
  */
 
+// ── Node geometry tokens ─────────────────────────────────────────────────────
+
+/**
+ * The DEFAULT compact node width (px) — the ONE sanctioned raw-px width
+ * constant for kit nodes (v4 "compact" anatomy, modelled on ADF / Fabric
+ * pipeline node sizing). Every canvas that renders `CanvasNode` should derive
+ * its width (and any layout math — ELK sizing, ghost anchors, drop offsets)
+ * from this constant instead of a per-canvas magic number, so all canvases
+ * stay in lock-step when the standard changes.
+ */
+export const CANVAS_NODE_WIDTH = 180;
+
 // ── Typed ports ──────────────────────────────────────────────────────────────
 
 /** Conditional output-port kinds a host may expose on a node's right edge. */
@@ -108,7 +120,7 @@ export function ghostAnchorPosition(
 ): { x: number; y: number } | null {
   if (nodes.length === 0) return null;
   const gapX = opts.gapX ?? 80;
-  const nodeWidth = opts.nodeWidth ?? 200;
+  const nodeWidth = opts.nodeWidth ?? CANVAS_NODE_WIDTH;
 
   let best: AnchorNode | null = null;
   let bestRight = -Infinity;

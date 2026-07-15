@@ -54,7 +54,7 @@ import { isRunnableType } from '@/lib/taskflow/step-runner';
 import type { CanvasNodeStatus } from '@/lib/components/canvas/canvas-node-kit';
 import { findItemType } from '@/lib/catalog/fabric-item-types';
 import {
-  CanvasNode, CanvasEdge, CanvasRightRail, portStyle, CATEGORY_ACCENT, accentTint,
+  CanvasNode, CanvasEdge, CanvasRightRail, CANVAS_NODE_WIDTH, portStyle, CATEGORY_ACCENT, accentTint,
   type CanvasVisual,
 } from '@/lib/components/canvas/canvas-node-kit';
 import { ResizableCanvasRegion } from '@/lib/components/canvas/resizable-canvas';
@@ -89,7 +89,7 @@ const useStyles = makeStyles({
 });
 
 /** Width contract for a task-flow step card (kept identical to prior min/max). */
-const STEP_NODE_WIDTH = 210;
+const STEP_NODE_WIDTH = CANVAS_NODE_WIDTH;
 
 // --- Custom node ----------------------------------------------------------
 

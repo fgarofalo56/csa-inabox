@@ -18,7 +18,7 @@
 import { memo } from 'react';
 import { Position, type NodeProps } from '@xyflow/react';
 import {
-  CanvasNode, CanvasPort, getOperatorVisual, standardNodeActions,
+  CanvasNode, CanvasPort, CANVAS_NODE_WIDTH, getOperatorVisual, standardNodeActions,
   type CanvasNodeStatus, type CanvasVisual,
 } from '@/lib/components/canvas/canvas-node-kit';
 
@@ -40,8 +40,8 @@ export interface EsNodeData {
   [key: string]: unknown;
 }
 
-/** Node width (matches the kit's pipeline/data-flow sizing contract). */
-const NODE_WIDTH = 200;
+/** Node width (matches the kit's shared compact sizing contract). */
+const NODE_WIDTH = CANVAS_NODE_WIDTH;
 
 /**
  * Map an eventstream node to a generic operator role, then resolve its branded
