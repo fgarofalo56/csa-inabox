@@ -37,6 +37,10 @@ on:
         description: 'true = APPLY the root-collection Data Map role grants to the console UAMI (idempotent). false = print the exact REST calls only.'
         required: false
         default: 'false'
+      fix_dns:
+        description: 'true = create the MISSING Purview private endpoints (account + portal) into the hub PE subnet with DNS zone groups — fixes the empty privatelink zone shadowing public DNS (ENOTFOUND from the CAE VNet). Idempotent.'
+        required: false
+        default: 'false'
 
 permissions:
   contents: read
@@ -158,9 +162,22 @@ jobs:
           # PE-protected account is reachable), same host + audience.
           REP=$(az containerapp replica list -n "$APP" -g "$RG" --query '[0].name' -o tsv | tr -d '\r')
           if [ -z "$REP" ]; then echo "::warning::no console replica running — skipping the in-container probe"; exit 0; fi
-          SCRIPT="const ep=process.env.IDENTITY_ENDPOINT,h=process.env.IDENTITY_HEADER,cid='$UAMI_CLIENT';(async()=>{try{const t=await fetch(ep+'?api-version=2019-08-01&resource='+encodeURIComponent('https://purview.azure.net')+(cid?'&client_id='+cid:''),{headers:{'X-IDENTITY-HEADER':h}});const tj=await t.json();if(!tj.access_token){console.log('PVW TOKEN-FAIL',t.status,JSON.stringify(tj).slice(0,200));return;}const r=await fetch('$BASE/datamap/api/atlas/v2/types/typedefs/headers?api-version=$DATAMAP_API',{headers:{authorization:'Bearer '+tj.access_token}});const b=await r.text();console.log('PVW',r.status,b.slice(0,300));}catch(e){console.log('PVW ERR',e.message);}})()"
-          OUT=$(az containerapp exec -n "$APP" -g "$RG" --replica "$REP" --container "$APP" \
-            --command "node -e \"$SCRIPT\"" 2>/dev/null || true)
+          # DNS first: the live gate reports 'fetch failed' (undici = DNS/TCP/TLS,
+          # never HTTP) — print what the host resolves to INSIDE the CAE VNet so a
+          # privatelink.purview.azure.us zone mis-link is visible at a glance.
+          HOST=$(echo "$BASE" | sed -E 's#^https://##')
+          SCRIPT="const ep=process.env.IDENTITY_ENDPOINT,h=process.env.IDENTITY_HEADER,cid='$UAMI_CLIENT';(async()=>{try{const dns=require('dns').promises;try{const a=await dns.lookup('$HOST',{all:true});console.log('PVW DNS','$HOST','->',a.map(x=>x.address).join(','));}catch(de){console.log('PVW DNS-FAIL','$HOST',de.code||de.message);}const t=await fetch(ep+'?api-version=2019-08-01&resource='+encodeURIComponent('https://purview.azure.net')+(cid?'&client_id='+cid:''),{headers:{'X-IDENTITY-HEADER':h}});const tj=await t.json();if(!tj.access_token){console.log('PVW TOKEN-FAIL',t.status,JSON.stringify(tj).slice(0,200));return;}const r=await fetch('$BASE/datamap/api/atlas/v2/types/typedefs/headers?api-version=$DATAMAP_API',{headers:{authorization:'Bearer '+tj.access_token}});const b=await r.text();console.log('PVW',r.status,b.slice(0,300));}catch(e){console.log('PVW ERR',e.message,e.cause?String(e.cause):'');}})()"
+          # az containerapp exec REQUIRES a TTY; on a headless runner it dies
+          # with "(25, 'Inappropriate ioctl for device')" — fake one via script(1).
+          # The JS goes over as base64 so no quote level (bash -> sh -c -> node)
+          # can mangle it.
+          # ACA's exec argv-splitter passes \" through literally and its quote
+          # handling is undocumented — so use a command with NO quotes at all:
+          # the eval wrapper is space-free/quote-free JS and the payload rides
+          # as a bare base64 argv token (argv[1] under node -e).
+          B64=$(printf '%s' "$SCRIPT" | base64 -w0)
+          OUT=$(script -qec "az containerapp exec -n $APP -g $RG --replica $REP --container $APP --command \"node -e eval(atob(process.argv[1])) $B64\"" /dev/null 2>&1 | tr -d '\r' || true)
+          echo "== raw exec output =="
           echo "$OUT"
           if echo "$OUT" | grep -q "PVW 200"; then
             echo "::notice::UAMI probe LIVE — the console gate should now be green (roll the console onto the fix/gov-purview-endpoint image if it still reports .com)."
@@ -169,6 +186,67 @@ jobs:
           else
             echo "::warning::UAMI probe did not return 200 — see output above (token failure = MSI/env issue; ERR fetch failed = DNS/egress from the CAE VNet)."
           fi
+
+      - name: FIX DNS — create the missing Purview PEs + DNS zone groups (idempotent)
+        if: ${{ inputs.fix_dns == 'true' }}
+        run: |
+          set -euo pipefail
+          # Diagnosis (run 29458120513): the hub VNet is linked to EMPTY
+          # privatelink.purview[studio].azure.us zones (rg-csa-loom-admin) — the
+          # brownfield DMLZ account was reused so catalog.bicep's PE wiring never
+          # ran, and the empty zone authoritatively shadows public DNS
+          # (ENOTFOUND in-container). Create the intended PEs (account + portal)
+          # into the hub PE subnet with dns-zone-groups so the zones get their
+          # A records — the same posture catalog.bicep deploys greenfield.
+          VNET=vnet-csa-loom-hub-usgovvirginia
+          PESUBNET=$(az network vnet subnet list -g "$RG" --vnet-name "$VNET" --query "[?contains(name, 'private-endpoint')].name | [0]" -o tsv | tr -d '\r')
+          if [ -z "$PESUBNET" ]; then echo "::error::no *private-endpoint* subnet in $VNET"; exit 1; fi
+          echo "PE subnet: $PESUBNET"
+          for GRP in account portal; do
+            PE=pe-purview-$GRP
+            if az network private-endpoint show -g "$RG" -n "$PE" >/dev/null 2>&1; then
+              echo "$PE already exists"
+            else
+              az network private-endpoint create -g "$RG" -n "$PE" \
+                --vnet-name "$VNET" --subnet "$PESUBNET" \
+                --private-connection-resource-id "$PVW_ID" \
+                --group-id "$GRP" --connection-name "purview-$GRP" -o none
+              echo "created $PE"
+            fi
+            ZONE=$([ "$GRP" = "account" ] && echo privatelink.purview.azure.us || echo privatelink.purviewstudio.azure.us)
+            ZID=$(az network private-dns zone show -g "$RG" -n "$ZONE" --query id -o tsv | tr -d '\r')
+            az network private-endpoint dns-zone-group create -g "$RG" \
+              --endpoint-name "$PE" -n default \
+              --private-dns-zone "$ZID" --zone-name "$GRP" -o none 2>/dev/null || \
+              echo "dns-zone-group already present on $PE"
+          done
+          echo "== zone records after fix =="
+          az network private-dns record-set a list -z privatelink.purview.azure.us -g "$RG" --query "[].{name:name, ips:aRecords[].ipv4Address}" -o json
+          az network private-dns record-set a list -z privatelink.purviewstudio.azure.us -g "$RG" --query "[].{name:name, ips:aRecords[].ipv4Address}" -o json
+          echo "::notice::PEs + zone groups in place — DNS inside the CAE VNet now resolves to the PE IPs (allow ~1-2 min for the zone to propagate to the VNet resolver)."
+
+      - name: DNS-infra diagnosis — privatelink zones, VNet links, PEs for the account (ARM reads)
+        run: |
+          set -euo pipefail
+          # In-container probe showed ENOTFOUND for $BASE — the CAE VNet resolves
+          # through a privatelink zone that lacks this account's record. Map the
+          # actual state so the fix (add record / approve PE / unlink zone) is exact.
+          SUB="${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}"
+          echo "== A) Private DNS zones (purview) across the sub =="
+          az network private-dns zone list --query "[?contains(name, 'purview')].{name:name, rg:resourceGroup, records:numberOfRecordSets, links:numberOfVirtualNetworkLinks}" -o table 2>/dev/null || true
+          echo "== B) Records + VNet links per purview zone =="
+          for row in $(az network private-dns zone list --query "[?contains(name, 'purview')].[name,resourceGroup]" -o tsv 2>/dev/null | tr '\t' '|'); do
+            Z="${row%%|*}"; ZRG="${row##*|}"
+            echo "-- zone $Z (rg $ZRG): links --"
+            az network private-dns link vnet list -z "$Z" -g "$ZRG" --query "[].{link:name, vnet:virtualNetwork.id, state:virtualNetworkLinkState}" -o table 2>/dev/null || true
+            echo "-- zone $Z: A records --"
+            az network private-dns record-set a list -z "$Z" -g "$ZRG" --query "[].{name:name, ips:aRecords[].ipv4Address}" -o json 2>/dev/null || true
+          done
+          echo "== C) Private endpoints bound to the Purview account =="
+          az rest --method get --url "https://management.usgovcloudapi.net$PVW_ID?api-version=$PURVIEW_ARM_API" --query "properties.privateEndpointConnections[].{pe:privateEndpoint.id, status:privateLinkServiceConnectionState.status}" -o json 2>/dev/null || true
+          echo "== D) The CAE VNet (for link comparison) =="
+          CAE_ENV=$(az containerapp show -n "$APP" -g "$RG" --query 'properties.environmentId' -o tsv | tr -d '\r')
+          az rest --method get --url "https://management.usgovcloudapi.net$CAE_ENV?api-version=2024-03-01" --query "properties.vnetConfiguration.infrastructureSubnetId" -o tsv 2>/dev/null || true
 
       - name: Print the EXACT metadata-policy REST grant calls (root collection)
         run: |
