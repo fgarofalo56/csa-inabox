@@ -136,6 +136,8 @@ interface UcWriteDialogsProps {
   createTableOpen: boolean; setCreateTableOpen: (v: boolean) => void;
   grantsOpen: boolean; setGrantsOpen: (v: boolean) => void;
   createVolumeOpen: boolean; setCreateVolumeOpen: (v: boolean) => void;
+  /** DBX-14 — create a UC Online Table (feature serving) from a source table. */
+  onlineTableOpen: boolean; setOnlineTableOpen: (v: boolean) => void;
   dropOpen: boolean; setDropOpen: (v: boolean) => void;
   /** When set as the grant dialog opens, pre-selects this securable type + full
    *  name (e.g. FUNCTION + a registered-model full name) instead of the tree
@@ -193,6 +195,7 @@ function UnityCatalogWriteDialogs(props: UcWriteDialogsProps) {
     createTableOpen, setCreateTableOpen,
     grantsOpen, setGrantsOpen,
     createVolumeOpen, setCreateVolumeOpen,
+    onlineTableOpen, setOnlineTableOpen,
     dropOpen, setDropOpen,
     grantSeed,
   } = props;
@@ -1107,7 +1110,150 @@ function UnityCatalogWriteDialogs(props: UcWriteDialogsProps) {
           </DialogBody>
         </DialogSurface>
       </Dialog>
+
+      {/* DBX-14 — Create UC Online Table (feature serving) */}
+      <OnlineTableDialog
+        open={onlineTableOpen}
+        setOpen={setOnlineTableOpen}
+        activeCatalog={activeCatalog}
+        activeSchema={activeSchema}
+        tables={tables}
+        onChanged={onChanged}
+      />
     </>
+  );
+}
+
+/**
+ * DBX-14 — Create a Unity Catalog Online Table that serves a feature table for
+ * low-latency lookup. Posts to /api/databricks/unity-catalog/online-tables
+ * (real POST /api/2.0/online-tables). No freeform config — the source is picked
+ * from the current schema's tables, keys are chip inputs, and the sync mode is a
+ * dropdown. Honest-gate messages from the BFF surface verbatim.
+ */
+function OnlineTableDialog({
+  open, setOpen, activeCatalog, activeSchema, tables, onChanged,
+}: {
+  open: boolean;
+  setOpen: (v: boolean) => void;
+  activeCatalog: string | null;
+  activeSchema: string | null;
+  tables: string[];
+  onChanged: () => void;
+}) {
+  const [sourceTable, setSourceTable] = useState('');
+  const [targetName, setTargetName] = useState('');
+  const [pkCsv, setPkCsv] = useState('');
+  const [timeseriesKey, setTimeseriesKey] = useState('');
+  const [runMode, setRunMode] = useState<'triggered' | 'continuous'>('triggered');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [ok, setOk] = useState<string | null>(null);
+
+  // Seed the source + a sensible target name from the current tree context.
+  useEffect(() => {
+    if (!open) return;
+    setErr(null); setOk(null);
+    if (activeCatalog && activeSchema && tables.length > 0) {
+      const src = `${activeCatalog}.${activeSchema}.${tables[0]}`;
+      setSourceTable(src);
+      setTargetName(`${activeCatalog}.${activeSchema}.${tables[0]}_online`);
+    }
+  }, [open, activeCatalog, activeSchema, tables]);
+
+  const create = useCallback(async () => {
+    setErr(null); setOk(null);
+    const primaryKeyColumns = pkCsv.split(',').map((c) => c.trim()).filter(Boolean);
+    if (!sourceTable.trim()) { setErr('Pick a source table.'); return; }
+    if (!targetName.trim()) { setErr('An online table name is required.'); return; }
+    if (primaryKeyColumns.length === 0) { setErr('At least one primary-key column is required.'); return; }
+    setBusy(true);
+    try {
+      const r = await clientFetch('/api/databricks/unity-catalog/online-tables', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: targetName.trim(),
+          sourceTableFullName: sourceTable.trim(),
+          primaryKeyColumns,
+          timeseriesKey: timeseriesKey.trim() || undefined,
+          runMode,
+        }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setErr(j.error || 'Failed to create online table.'); return; }
+      setOk(`Online table "${j.onlineTable?.name || targetName}" is provisioning.`);
+      onChanged();
+    } catch (e: any) {
+      setErr(e?.message || String(e));
+    } finally {
+      setBusy(false);
+    }
+  }, [sourceTable, targetName, pkCsv, timeseriesKey, runMode, onChanged]);
+
+  return (
+    <Dialog open={open} onOpenChange={(_, d) => setOpen(d.open)}>
+      <DialogSurface style={{ maxWidth: 560 }}>
+        <DialogBody>
+          <DialogTitle>Create online table</DialogTitle>
+          <DialogContent>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
+              <Caption1>
+                Serve a Unity Catalog feature table for low-latency, high-QPS lookup. The source
+                table must have a primary key. Sync runs on the Databricks online store.
+              </Caption1>
+              <Field label="Source table (catalog.schema.table)" required>
+                {tables.length > 0 && activeCatalog && activeSchema ? (
+                  <Dropdown
+                    value={sourceTable}
+                    selectedOptions={[sourceTable]}
+                    onOptionSelect={(_, d) => {
+                      const v = d.optionValue || '';
+                      setSourceTable(v);
+                      setTargetName(v ? `${v}_online` : '');
+                    }}
+                  >
+                    {tables.map((t) => {
+                      const full = `${activeCatalog}.${activeSchema}.${t}`;
+                      return <Option key={full} value={full}>{full}</Option>;
+                    })}
+                  </Dropdown>
+                ) : (
+                  <Input value={sourceTable} onChange={(_, d) => setSourceTable(d.value)} placeholder="main.features.customer" />
+                )}
+              </Field>
+              <Field label="Online table name (catalog.schema.table)" required>
+                <Input value={targetName} onChange={(_, d) => setTargetName(d.value)} placeholder="main.features.customer_online" />
+              </Field>
+              <Field label="Primary key column(s)" required hint="Comma-separated. Must match the source table's primary key.">
+                <Input value={pkCsv} onChange={(_, d) => setPkCsv(d.value)} placeholder="customer_id" />
+              </Field>
+              <Field label="Timeseries key (optional)" hint="For point-in-time dedup — keeps the latest row per key.">
+                <Input value={timeseriesKey} onChange={(_, d) => setTimeseriesKey(d.value)} placeholder="event_ts" />
+              </Field>
+              <Field label="Sync mode">
+                <Dropdown
+                  value={runMode === 'continuous' ? 'Continuous (near real-time)' : 'Triggered (manual / scheduled)'}
+                  selectedOptions={[runMode]}
+                  onOptionSelect={(_, d) => setRunMode(d.optionValue === 'continuous' ? 'continuous' : 'triggered')}
+                >
+                  <Option value="triggered">Triggered (manual / scheduled)</Option>
+                  <Option value="continuous">Continuous (near real-time)</Option>
+                </Dropdown>
+              </Field>
+              {err && <MessageBar intent="error"><MessageBarBody>{err}</MessageBarBody></MessageBar>}
+              {ok && <MessageBar intent="success"><MessageBarBody>{ok}</MessageBarBody></MessageBar>}
+            </div>
+          </DialogContent>
+          <DialogActions>
+            <Button appearance="secondary" onClick={() => setOpen(false)} disabled={busy}>Close</Button>
+            <Button appearance="primary" onClick={create} disabled={busy}>
+              {busy ? <Spinner size="tiny" /> : 'Create online table'}
+            </Button>
+          </DialogActions>
+        </DialogBody>
+      </DialogSurface>
+    </Dialog>
   );
 }
 
