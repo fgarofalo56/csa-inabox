@@ -26,20 +26,25 @@ export const dynamic = 'force-dynamic';
 import { NextRequest } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { resolveAoaiTarget, NoAoaiDeploymentError } from '@/lib/azure/copilot-orchestrator';
-import { extractAndStoreMemory } from '@/lib/azure/agent-memory-client';
+import { flushConversationToMemory } from '@/lib/azure/memory-flush';
 import { loadTenantCopilotConfig } from '@/lib/azure/copilot-config-store';
 import { apiOk, apiError, apiUnauthorized, apiServerError } from '@/lib/api/respond';
 import {
   splitConversation,
   isCopilotMemoryEnabled,
-  copilotMemoryAgentId,
   flushWindow,
 } from '@/lib/copilot/memory-flush';
+import type { MemoryActor } from '@/lib/copilot/memory-types';
 
 interface FlushBody {
   messages?: unknown;
   /** Optional session id for provenance on each stored fact. */
   sessionId?: unknown;
+  /** Optional workspace id — when present, facts are written to WORKSPACE scope
+   *  (shared) instead of the caller's private USER scope. */
+  workspaceId?: unknown;
+  /** When true with a workspaceId, write to the shared workspace scope. */
+  shareToWorkspace?: unknown;
 }
 
 export async function POST(req: NextRequest) {
@@ -81,14 +86,22 @@ export async function POST(req: NextRequest) {
 
   try {
     const sessionId = typeof body.sessionId === 'string' ? body.sessionId.slice(0, 200) : undefined;
-    const stored = await extractAndStoreMemory({
-      agentId: copilotMemoryAgentId(),
+    const workspaceId = typeof body.workspaceId === 'string' ? body.workspaceId.slice(0, 200) : undefined;
+    // WORKSPACE (shared) scope only when explicitly requested AND a workspace is
+    // supplied — the guard derives the scopeKey from this actor, never the client.
+    const shareToWorkspace = body.shareToWorkspace === true && !!workspaceId;
+    const actor: MemoryActor = {
       userOid,
+      tenantId: session.claims.tid,
+      workspaceId: shareToWorkspace ? workspaceId : undefined,
+    };
+    const result = await flushConversationToMemory({
+      actor,
       question: folded.question,
       answer: folded.answer,
-      sourceThreadId: sessionId,
+      sessionId,
     });
-    return apiOk({ stored: stored.length, facts: stored.map((m) => m.fact) });
+    return apiOk({ stored: result.stored, rejected: result.rejected, facts: result.facts });
   } catch (e) {
     return apiServerError(e, 'could not save conversation to memory', 'memory_flush_failed');
   }
