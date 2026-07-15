@@ -16,15 +16,10 @@
  */
 
 import { memo } from 'react';
-import { Handle, Position, type NodeProps } from '@xyflow/react';
-import type { JSX } from 'react';
+import { Position, type NodeProps } from '@xyflow/react';
 import {
-  CloudArrowUp20Regular, Filter20Regular, DatabaseArrowRight20Regular,
-  Database20Regular, Flowchart20Regular, BranchFork20Regular,
-} from '@fluentui/react-icons';
-import {
-  CanvasNode, CATEGORY_ACCENT, portStyle, standardNodeActions,
-  type CanvasNodeCategory, type CanvasNodeStatus, type CanvasVisual,
+  CanvasNode, CanvasPort, getOperatorVisual, standardNodeActions,
+  type CanvasNodeStatus, type CanvasVisual,
 } from '@/lib/components/canvas/canvas-node-kit';
 
 export type NodeRole = 'source' | 'transform' | 'sink';
@@ -49,29 +44,23 @@ export interface EsNodeData {
 const NODE_WIDTH = 200;
 
 /**
- * Role → one of the kit's 5 canvas categories, driving the theme-aware accent
- * (CATEGORY_ACCENT) + gradient header + rail. Sources move data in, sinks are
- * the controlled endpoints, transforms reshape.
+ * Map an eventstream node to a generic operator role, then resolve its branded
+ * glyph + category accent through the shared kit (`getOperatorVisual`). A
+ * source moves events in, a sink is the controlled endpoint, and a transform is
+ * refined by its `kind` (filter → control, join/union → join) so each operator
+ * still gets a DISTINCT glyph — now from the one kit map instead of a local one.
  */
-const ROLE_CATEGORY: Record<NodeRole, CanvasNodeCategory> = {
-  source: 'move',        // --loom-accent-blue
-  transform: 'transform', // --loom-accent-violet
-  sink: 'control',       // --loom-accent-teal
-};
-
-function roleIcon(role: NodeRole, kind: string): JSX.Element {
-  if (role === 'source') return <CloudArrowUp20Regular />;
-  if (role === 'sink') return kind === 'kusto' ? <Database20Regular /> : <DatabaseArrowRight20Regular />;
-  // transform
-  if (kind === 'filter') return <Filter20Regular />;
-  if (kind === 'join' || kind === 'union') return <BranchFork20Regular />;
-  return <Flowchart20Regular />;
+function operatorRole(role: NodeRole, kind: string): string {
+  if (role === 'source') return 'source';
+  if (role === 'sink') return 'sink';
+  if (kind === 'filter') return 'filter';
+  if (kind === 'join' || kind === 'union') return 'join';
+  return 'transform';
 }
 
 /** Resolve the kit visual (glyph + category + accent var) for an eventstream node. */
 function eventstreamVisual(role: NodeRole, kind: string): CanvasVisual {
-  const category = ROLE_CATEGORY[role];
-  return { icon: roleIcon(role, kind), category, accent: CATEGORY_ACCENT[category] };
+  return getOperatorVisual(operatorRole(role, kind));
 }
 
 function EventstreamFlowNodeImpl({ data, selected }: NodeProps) {
@@ -102,20 +91,10 @@ function EventstreamFlowNodeImpl({ data, selected }: NodeProps) {
       }}
     >
       {d.role !== 'source' && (
-        <Handle
-          id="in"
-          type="target"
-          position={Position.Left}
-          style={{ ...portStyle('in', visual.accent), left: -6 }}
-        />
+        <CanvasPort id="in" type="target" position={Position.Left} accent={visual.accent} label="events" />
       )}
       {d.role !== 'sink' && (
-        <Handle
-          id="out"
-          type="source"
-          position={Position.Right}
-          style={{ ...portStyle('out', visual.accent), right: -6 }}
-        />
+        <CanvasPort id="out" type="source" position={Position.Right} accent={visual.accent} label="events" />
       )}
     </CanvasNode>
   );

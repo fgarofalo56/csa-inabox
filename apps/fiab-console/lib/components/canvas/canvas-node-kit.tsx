@@ -48,7 +48,7 @@ import {
   DataUsage20Regular, Flash20Regular, Server20Regular, Stream20Regular,
   DocumentJava20Regular, LocalLanguage20Regular, BrainCircuit20Regular,
   Beaker20Regular, LayerDiagonal20Regular, DataFunnel20Regular,
-  BracesVariable20Regular,
+  BracesVariable20Regular, CloudArrowUp20Regular, DatabaseArrowRight20Regular,
   // Transform-catalog glyphs (identical set to mapping-dataflow-designer TRANSFORM_ICONS)
   DatabaseArrowDown20Regular, DatabaseArrowUp20Regular, Column20Regular,
   CalculatorMultiple20Regular, MathSymbols20Regular, Table20Regular,
@@ -71,10 +71,11 @@ import { memo, useState } from 'react';
 import { transformByType, type TransformDef, type TransformCategory } from '@/lib/pipeline/dataflow-transform-catalog';
 import {
   PORT_COLOR_KEY, isConditionalPort, resolvePortShape, portGeometry, ghostAnchorPosition,
-  ghostEdgeId, GHOST_NODE_ID,
+  ghostEdgeId, GHOST_NODE_ID, operatorCategory, portLabelAnchorEdge,
   type PortKind, type PortShape, type PortColorKey,
-  type AnchorNode, type GhostAnchorOpts,
+  type AnchorNode, type GhostAnchorOpts, type PortSide,
 } from './canvas-anatomy';
+import { itemTypeIcon } from '@/lib/catalog/item-type-icon';
 
 // =============================================================================
 // A. Visual-mapping types + exports
@@ -300,6 +301,95 @@ export function getTransformVisual(type?: string): CanvasVisual {
   return { icon: transformIcon(def), category, accent: CATEGORY_ACCENT[category] };
 }
 
+// ── v3: BRANDED item-type node glyph (reuses the W1 icon source-of-truth) ─────
+//
+// Canvases whose nodes ARE catalog item types (deploy-planner, domain designer,
+// lineage, model-view, task-flows) get the SAME branded glyph + family accent
+// the tiles/list-rows use — resolved through `itemTypeIcon()` (lib/catalog),
+// which is the single source of truth over the `itemVisual()` registry. This
+// keeps a node's glyph + colour in lock-step with its catalog identity instead
+// of a per-canvas one-off. Unknown keys fall back to the registry's neutral
+// Document glyph, so this is always safe to call.
+
+/**
+ * Resolve a BRANDED CanvasVisual for a catalog item-type identifier — a route
+ * `slug`, a Fabric/ARM `restType`, or a `WorkloadCategory`. The glyph + accent
+ * come from the W1 icon SoT (`itemTypeIcon`); the accent is the family brand
+ * colour (a hex that reads identically light + dark and drives the header
+ * gradient / rail / selection ring via the kit's token-only tint helpers).
+ *
+ * `category` only nominally groups the node (the kit reads `accent`/`icon`, not
+ * `category`, for item-branded nodes); callers may override it when a node maps
+ * cleanly onto one of the five canvas categories.
+ */
+export function getItemVisual(
+  key: string | null | undefined,
+  category: CanvasNodeCategory = 'transform',
+): CanvasVisual {
+  const { icon: Icon, accent } = itemTypeIcon(key);
+  return { icon: <Icon />, category, accent };
+}
+
+// ── v3: generic OPERATOR node glyph (source / transform / sink / filter / …) ──
+//
+// Canvases whose nodes are NOT catalog item types (eventstream, mapping data
+// flow, agent/task flows) use generic operator roles. Each distinct role gets a
+// DISTINCT Fluent glyph + a category accent (via `operatorCategory` in
+// canvas-anatomy, unit-tested there). Unknown roles fall back to a Flowchart
+// glyph in the `transform` category.
+
+const OPERATOR_ICONS: Record<string, JSX.Element> = {
+  // move (sources / ingest / reads)
+  source: <CloudArrowUp20Regular />,
+  input: <CloudArrowUp20Regular />,
+  ingest: <ArrowFlowUpRight20Regular />,
+  copy: <DocumentArrowRight20Regular />,
+  read: <DatabaseArrowDown20Regular />,
+  lookup: <SearchInfo20Regular />,
+  // transform (verbs)
+  transform: <Flowchart20Regular />,
+  derive: <CalculatorMultiple20Regular />,
+  select: <Column20Regular />,
+  aggregate: <MathSymbols20Regular />,
+  join: <ArrowJoin20Regular />,
+  union: <Merge20Regular />,
+  pivot: <Table20Regular />,
+  unpivot: <TableSwitch20Regular />,
+  window: <PanelLeftHeader20Regular />,
+  rank: <NumberSymbol20Regular />,
+  sort: <ArrowSortDown20Regular />,
+  // control (filter / branch / sinks)
+  filter: <Filter20Regular />,
+  conditionalsplit: <BranchFork20Regular />,
+  route: <Branch20Regular />,
+  branch: <BranchFork20Regular />,
+  gate: <CheckmarkCircle20Regular />,
+  sink: <DatabaseArrowUp20Regular />,
+  destination: <DatabaseArrowRight20Regular />,
+  output: <DatabaseArrowRight20Regular />,
+  write: <DatabaseArrowUp20Regular />,
+  // external
+  external: <PlugConnected20Regular />,
+  webhook: <Globe20Regular />,
+  notify: <Mail20Regular />,
+  // iteration
+  foreach: <ArrowRepeatAll20Regular />,
+  loop: <ArrowRepeatAll20Regular />,
+  until: <ArrowSync20Regular />,
+};
+
+/**
+ * Resolve the CanvasVisual (glyph + category + accent) for a generic operator
+ * role (case-insensitive). Distinct glyph per role; the category (and thus the
+ * accent) comes from `operatorCategory`. Unknown roles → Flowchart / transform.
+ */
+export function getOperatorVisual(role: string | undefined): CanvasVisual {
+  const key = (role ?? '').toLowerCase().trim();
+  const category = operatorCategory(key);
+  const icon = OPERATOR_ICONS[key] ?? <Flowchart20Regular />;
+  return { icon, category, accent: CATEGORY_ACCENT[category] };
+}
+
 // ── Token-only tint helpers (the kit owns ALL color-mix strings) ─────────────
 
 /** `color-mix` of the accent toward transparent at `pct`% (theme-aware tint). */
@@ -494,6 +584,17 @@ const useStyles = makeStyles({
     borderTopLeftRadius: tokens.borderRadiusMedium,
     borderTopRightRadius: tokens.borderRadiusMedium,
   },
+  // Wrapper so the running-status pulse ring can sit BEHIND the icon chip
+  // without shifting layout (same 28px footprint as the chip).
+  iconChipWrap: {
+    position: 'relative',
+    flexShrink: 0,
+    width: '28px',
+    height: '28px',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   iconChip: {
     flexShrink: 0,
     width: '28px',
@@ -502,6 +603,58 @@ const useStyles = makeStyles({
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
+    zIndex: 1,
+  },
+  // ── v3: run-status pulse ring (only mounted while status='running') ────────
+  // A subtle expanding brand ring behind the icon chip that reads as "this node
+  // is actively running". Motion tokens only (durationUltraSlow / curveEasyEase);
+  // under prefers-reduced-motion the ring holds a single quiet static outline —
+  // NO animation — so the running state is still conveyed without motion.
+  pulseRing: {
+    position: 'absolute',
+    top: '-3px',
+    left: '-3px',
+    right: '-3px',
+    bottom: '-3px',
+    borderRadius: tokens.borderRadiusLarge,
+    border: `2px solid ${tokens.colorBrandStroke1}`,
+    pointerEvents: 'none',
+    zIndex: 0,
+    animationName: {
+      '0%': { transform: 'scale(0.82)', opacity: 0.55 },
+      '70%': { transform: 'scale(1.28)', opacity: 0 },
+      '100%': { transform: 'scale(1.28)', opacity: 0 },
+    },
+    animationDuration: tokens.durationUltraSlow,
+    animationIterationCount: 'infinite',
+    animationTimingFunction: tokens.curveEasyEase,
+    '@media (prefers-reduced-motion: reduce)': {
+      animationName: 'none',
+      transform: 'none',
+      opacity: 0.4,
+    },
+  },
+  // ── v3: typed port label ('rows' / 'events' / 'model') ─────────────────────
+  // Small token-driven caption anchored just INSIDE the node edge at the port,
+  // on a neutral chip so it stays readable over the gradient and never overlaps
+  // the bezier edge. Truncates instead of pushing node width.
+  portLabel: {
+    position: 'absolute',
+    transform: 'translateY(-50%)',
+    fontSize: tokens.fontSizeBase100,
+    lineHeight: tokens.lineHeightBase100,
+    fontWeight: tokens.fontWeightMedium,
+    color: tokens.colorNeutralForeground3,
+    background: tokens.colorNeutralBackground1,
+    paddingLeft: tokens.spacingHorizontalXXS,
+    paddingRight: tokens.spacingHorizontalXXS,
+    borderRadius: tokens.borderRadiusSmall,
+    pointerEvents: 'none',
+    whiteSpace: 'nowrap',
+    maxWidth: '76px',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    zIndex: 3,
   },
   title: {
     flex: 1,
@@ -872,12 +1025,16 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
 
       {/* Header strip with category gradient. */}
       <div className={styles.header} style={{ background: accentGradient(accent), marginLeft: '6px' }}>
-        <span
-          className={styles.iconChip}
-          style={{ background: accentTint(accent, 14), color: accent }}
-          aria-hidden="true"
-        >
-          {visual.icon}
+        <span className={styles.iconChipWrap} aria-hidden="true">
+          {/* Run-status pulse ring — animates only while running (reduced-motion
+              downgrades to a quiet static outline). */}
+          {status === 'running' && <span className={styles.pulseRing} />}
+          <span
+            className={styles.iconChip}
+            style={{ background: accentTint(accent, 14), color: accent }}
+          >
+            {visual.icon}
+          </span>
         </span>
         <span className={styles.title} title={title}>{title}</span>
         <StatusChip status={status} idleLabel={typeLabel} accent={accent} />
@@ -922,6 +1079,75 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
       {/* Caller-owned ports + container mini-preview. */}
       {children}
     </div>
+  );
+};
+
+// ── v3: typed port handle + optional label ───────────────────────────────────
+
+export interface CanvasPortProps {
+  /** Handle id (host-owned; keep stable — selectors/edges depend on it). */
+  id: string;
+  type: 'source' | 'target';
+  position: Position;
+  /** Accent CSS var/hex for the handle border (from the node's visual). */
+  accent: string;
+  /**
+   * Port condition — 'in'|'out' or a typed condition ('success'|'fail'|'skip'|
+   * 'complete'). Defaults to 'in' for targets, 'out' for sources (back-compat
+   * with the raw `<Handle style={portStyle(...)}>` pattern).
+   */
+  cond?: string;
+  opts?: PortStyleOpts;
+  /**
+   * Optional typed port label (e.g. 'rows', 'events', 'model'). Rendered as a
+   * small token-driven caption just inside the node edge at the port — Fabric
+   * shows typed ports; omit for an unlabeled handle (identical to before).
+   */
+  label?: string;
+  /** Handle inset from the node edge in px (React Flow hit-tests the DOM box). */
+  offset?: number;
+  /** Vertical anchor for a left/right port (default centered). */
+  top?: string | number;
+}
+
+/**
+ * A single typed port: a React Flow `<Handle>` styled via `portStyle` PLUS an
+ * optional typed label. Opt-in — hosts that declare port types adopt this in
+ * place of a bare `<Handle style={portStyle(...)}>`; the handle geometry/ids are
+ * unchanged so existing edges + selectors keep working. Token-driven and
+ * positioned inside the node edge so the label never overlaps the bezier.
+ */
+export const CanvasPort: React.FC<CanvasPortProps> = ({
+  id, type, position, accent, cond, opts, label, offset = 6, top = '50%',
+}) => {
+  const styles = useStyles();
+  const condition = cond ?? (type === 'target' ? 'in' : 'out');
+  const side: PortSide =
+    position === Position.Right ? 'right'
+      : position === Position.Left ? 'left'
+        : position === Position.Top ? 'top' : 'bottom';
+
+  const handleStyle: React.CSSProperties = { ...portStyle(condition, accent, opts) };
+  if (side === 'left') { handleStyle.left = -offset; handleStyle.top = top; }
+  else if (side === 'right') { handleStyle.right = -offset; handleStyle.top = top; }
+  else if (side === 'top') { handleStyle.top = -offset; }
+  else { handleStyle.bottom = -offset; }
+
+  const edge = portLabelAnchorEdge(side);
+
+  return (
+    <>
+      <Handle id={id} type={type} position={position} style={handleStyle} />
+      {label && (
+        <span
+          className={styles.portLabel}
+          style={{ [edge]: tokens.spacingHorizontalS, top }}
+          data-port-label={id}
+        >
+          {label}
+        </span>
+      )}
+    </>
   );
 };
 
@@ -1261,5 +1487,6 @@ export function CanvasRailPanel({ onAutoLayout, position = 'bottom-left' }: Canv
 export {
   ghostAnchorPosition, ghostEdgeId, GHOST_NODE_ID,
   resolvePortShape, portGeometry, isConditionalPort, PORT_COLOR_KEY,
+  operatorCategory, portLabelAnchorEdge,
 };
-export type { PortKind, PortShape, PortColorKey, AnchorNode, GhostAnchorOpts };
+export type { PortKind, PortShape, PortColorKey, AnchorNode, GhostAnchorOpts, PortSide };

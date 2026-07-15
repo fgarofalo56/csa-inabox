@@ -130,3 +130,76 @@ export function ghostEdgeId(sourceId: string): string {
 
 /** Deterministic id for the ghost placeholder node itself. */
 export const GHOST_NODE_ID = '__ghost_next_step__';
+
+// ── v3: operator-node category resolution (pure) ─────────────────────────────
+//
+// The five canvas categories, kept here (Fluent-free) so the operator→category
+// decision is unit-testable without React. The kit (.tsx) owns the accent + the
+// glyph per category; this module only decides the CATEGORY a generic operator
+// role falls into. Its string literals are identical to the kit's exported
+// `CanvasNodeCategory`, so the two are structurally interchangeable.
+
+export type CanvasNodeCategoryName =
+  | 'move' | 'transform' | 'control' | 'external' | 'iteration';
+
+/**
+ * Generic operator roles used by canvases whose nodes are NOT catalog item types
+ * (eventstream source/transform/sink, mapping-data-flow verbs, agent/task nodes).
+ * A source moves data in, a sink is the controlled endpoint, verbs reshape, and
+ * branching/routing is control-flow. Unknown roles fall through to `transform`.
+ */
+export const OPERATOR_CATEGORY: Record<string, CanvasNodeCategoryName> = {
+  source: 'move',
+  input: 'move',
+  ingest: 'move',
+  copy: 'move',
+  lookup: 'move',
+  read: 'move',
+  transform: 'transform',
+  derive: 'transform',
+  select: 'transform',
+  aggregate: 'transform',
+  join: 'transform',
+  union: 'transform',
+  pivot: 'transform',
+  unpivot: 'transform',
+  window: 'transform',
+  rank: 'transform',
+  sort: 'transform',
+  filter: 'control',
+  conditionalsplit: 'control',
+  route: 'control',
+  branch: 'control',
+  gate: 'control',
+  sink: 'control',
+  destination: 'control',
+  output: 'control',
+  write: 'control',
+  external: 'external',
+  webhook: 'external',
+  notify: 'external',
+  foreach: 'iteration',
+  loop: 'iteration',
+  until: 'iteration',
+};
+
+/** Resolve the canvas category for a generic operator role (case-insensitive). */
+export function operatorCategory(role: string | undefined): CanvasNodeCategoryName {
+  return (role && OPERATOR_CATEGORY[role.toLowerCase().trim()]) || 'transform';
+}
+
+// ── v3: typed port labels (pure placement) ───────────────────────────────────
+
+/** Which node edge a port sits on. */
+export type PortSide = 'left' | 'right' | 'top' | 'bottom';
+
+/**
+ * A typed port label (e.g. "rows", "events", "model") sits just INSIDE the node
+ * on the same edge as its handle so it never overlaps the incoming/outgoing
+ * bezier edge (Fabric renders typed labels inside the node body). Returns the
+ * edge the label anchors to; hosts feed this into the kit's token-driven style.
+ */
+export function portLabelAnchorEdge(side: PortSide): 'left' | 'right' {
+  // Vertical ports (top/bottom) still read best flush to the left inner edge.
+  return side === 'right' ? 'right' : 'left';
+}
