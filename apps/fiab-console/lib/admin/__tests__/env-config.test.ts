@@ -139,8 +139,15 @@ describe('admin/env-config registry', () => {
     // LOOM_DIRECTLAKE_URL, LOOM_BROKER_URL, LOOM_BROKER_REDIS — the three optional
     // default-OFF H-band service URLs + the shared Redis host). Bumped to 73 by
     // PSR-3 (LOOM_SPARK_POOL_LEASE_CONTAINER + LOOM_SPARK_POOL_REDIS — the warm
-    // Spark pool's cross-replica lease-store substrate signals).
-    expect(EDITABLE_ENV.length).toBe(73);
+    // Spark pool's cross-replica lease-store substrate signals). Bumped to 125
+    // by the wave-3 G2 gate-registry expansion: 40 formerly-bespoke
+    // *_not_configured gates promoted into ENV_CHECKS (AAS, AML, APIM, MIP/DLP,
+    // Key Vault, Event Grid, Service Bus, IoT Hub, Digital Twins, Airflow,
+    // Batch, Postgres family, dbt, SHIR, Dataverse, medallion layers, …) so
+    // every gate is editable on /admin/env-config and resolvable from
+    // /admin/gates + the Fix-it wizard (docs/fiab/gate-registry.md), plus
+    // LOOM_AOAI_DEPLOYMENT joining the svc-aoai anyOf groups.
+    expect(EDITABLE_ENV.length).toBe(125);
   });
 
   it('surfaces the wave-2 env vars as settable (previously dropped by the whitelist)', () => {
@@ -197,13 +204,17 @@ describe('admin/env-config registry', () => {
     ]) {
       expect(getEditableEnv(k)?.optionalDefault, k).toBe(true);
     }
-    // Exactly the 13 optionalDefault keys — pins the count fix so any future drift
-    // that would drop /admin/env-config back below 73/73 fails CI.
+    // Exactly the optionalDefault keys — pins the set so any future drift that
+    // would drop /admin/env-config below full coverage fails CI. Wave-3 (G2)
+    // adds the Event Grid webhook transport pair (svc-webhooks-eventgrid):
+    // direct HMAC-signed HTTPS delivery is the fully-functional default, Event
+    // Grid is an optional alternative transport.
     const optDefault = EDITABLE_ENV.filter((e) => e.optionalDefault).map((e) => e.key).sort();
     expect(optDefault).toEqual([
       'LOOM_AUDIT_DCR_ENDPOINT', 'LOOM_AUDIT_DCR_ID',
       'LOOM_BROKER_REDIS', 'LOOM_BROKER_URL',
       'LOOM_CONTENT_SAFETY_ENDPOINT', 'LOOM_DIRECTLAKE_URL', 'LOOM_DOCINTEL_ENDPOINT',
+      'LOOM_EVENTGRID_TOPIC_ENDPOINT', 'LOOM_EVENTGRID_TOPIC_KEY',
       'LOOM_LANGUAGE_ENDPOINT', 'LOOM_ONELAKE_URL',
       'LOOM_PLAN_BACKING_SQL_DATABASE', 'LOOM_PLAN_BACKING_SQL_SERVER',
       'LOOM_TRANSLATOR_ENDPOINT', 'LOOM_VISION_ENDPOINT',

@@ -1,5 +1,7 @@
 'use client';
 
+import { HonestGate } from '@/lib/components/shared/honest-gate';
+
 import { clientFetch } from '@/lib/client-fetch';
 /**
  * AiEnrichmentEditor — the `ai-enrichment` item (AIF-7).
@@ -350,12 +352,12 @@ export function AiEnrichmentEditor({ item, id }: { item: FabricItemType; id: str
             <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Operation failed</MessageBarTitle>{err || loadError}</MessageBarBody></MessageBar>
           )}
           {gate?.gated && (
-            <MessageBar intent="warning">
-              <MessageBarBody>
-                <MessageBarTitle>No enrichment backend configured</MessageBarTitle>
-                {gate.hint || 'Provision a Databricks SQL Warehouse or set Azure OpenAI (LOOM_AOAI_ENDPOINT + LOOM_AOAI_DEPLOYMENT).'}
-              </MessageBarBody>
-            </MessageBar>
+            <HonestGate
+              gateId="svc-aoai"
+              surface="AI enrichment"
+              missing={['LOOM_AOAI_ENDPOINT', 'LOOM_AOAI_DEPLOYMENT']}
+              detail={gate.hint || 'Provision a Databricks SQL Warehouse or set Azure OpenAI (LOOM_AOAI_ENDPOINT + LOOM_AOAI_DEPLOYMENT).'}
+            />
           )}
 
           {tab === 'configure' && (

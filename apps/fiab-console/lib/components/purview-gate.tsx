@@ -28,7 +28,9 @@ import {
   MessageBar, MessageBarBody, MessageBarTitle, MessageBarActions,
   Button, Caption1, Spinner, Badge, makeStyles, tokens,
 } from '@fluentui/react-components';
-import { Open16Regular, ArrowSync16Regular, ShieldCheckmark20Regular } from '@fluentui/react-icons';
+import { Open16Regular, ArrowSync16Regular, ShieldCheckmark20Regular, Wrench16Regular } from '@fluentui/react-icons';
+import { GateFixitDialog } from '@/lib/components/shared/honest-gate';
+import { getGate } from '@/lib/gates/registry';
 
 /** Shape returned by GET /api/governance/purview/status. */
 export interface PurviewStatus {
@@ -133,6 +135,10 @@ export function PurviewGate({
   reload?: () => void;
 }) {
   const s = useStyles();
+  // G2: the Purview gate rides the central gate registry's Fix-it wizard —
+  // live ARM discovery of Purview accounts + the shared env-config apply path.
+  const [fixOpen, setFixOpen] = useState(false);
+  const registryGate = getGate('purview');
 
   if (status.reason === 'loading') {
     return (
@@ -217,6 +223,19 @@ export function PurviewGate({
       </MessageBarBody>
 
       <MessageBarActions>
+        {registryGate && status.reason === 'not_configured' && (
+          <>
+            <Button size="small" appearance="primary" icon={<Wrench16Regular />} onClick={() => setFixOpen(true)}>
+              Fix it
+            </Button>
+            <GateFixitDialog
+              gate={registryGate}
+              open={fixOpen}
+              onClose={() => setFixOpen(false)}
+              onResolved={reload}
+            />
+          </>
+        )}
         <Button as="a" size="small" icon={<Open16Regular />} href={BOOTSTRAP_DOC} target="_blank" rel="noreferrer">
           Setup guide
         </Button>
