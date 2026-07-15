@@ -456,6 +456,36 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
     finally { setPublishing(false); }
   }, [id, save, reload, dirty, lastSaveError, state.description, state.alias]);
 
+  // ---- publish as MCP server (DBX-9) ----
+  const [mcpBusy, setMcpBusy] = useState(false);
+  const [mcpResult, setMcpResult] = useState<any>(null);
+  const publishMcp = useCallback(async () => {
+    setMcpBusy(true); setMcpResult(null);
+    try {
+      if (dirty) {
+        const saved = await save();
+        if (!saved) { setMcpResult({ ok: false, error: `Couldn't save before publishing: ${lastSaveError() || 'unknown save error'}` }); return; }
+      }
+      const r = await clientFetch(`/api/items/data-agent/${encodeURIComponent(id)}/publish-mcp`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+      });
+      const j = await r.json().catch(() => ({ ok: false, error: `HTTP ${r.status}` }));
+      setMcpResult(j);
+      if (j.ok) await reload();
+    } catch (e: any) { setMcpResult({ ok: false, error: e?.message || String(e) }); }
+    finally { setMcpBusy(false); }
+  }, [id, save, reload, dirty, lastSaveError]);
+  const unpublishMcp = useCallback(async () => {
+    setMcpBusy(true); setMcpResult(null);
+    try {
+      const r = await clientFetch(`/api/items/data-agent/${encodeURIComponent(id)}/publish-mcp`, { method: 'DELETE' });
+      const j = await r.json().catch(() => ({ ok: false, error: `HTTP ${r.status}` }));
+      setMcpResult(j.ok ? { ok: true, unpublished: true } : j);
+      if (j.ok) await reload();
+    } catch (e: any) { setMcpResult({ ok: false, error: e?.message || String(e) }); }
+    finally { setMcpBusy(false); }
+  }, [id, reload]);
+
   // ---- publish to Microsoft 365 Copilot (Copilot Studio) ----
   const [m365Envs, setM365Envs] = useState<{ id: string; displayName: string }[]>([]);
   const [m365EnvId, setM365EnvId] = useState('');
@@ -1079,6 +1109,49 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
                     )}
                     {publishResult.error && <div>{publishResult.error}</div>}
                     {publishResult.hint && <div style={{ marginTop: tokens.spacingVerticalXS }}><em>Hint:</em> {publishResult.hint}</div>}
+                  </MessageBarBody>
+                </MessageBar>
+              )}
+
+              {/* ---- Publish as MCP server (DBX-9) ---- */}
+              <div role="separator" aria-orientation="horizontal" style={{ height: 1, background: tokens.colorNeutralStroke2, margin: `${tokens.spacingVerticalXL} 0` }} />
+              <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS }}>
+                <Subtitle2>Expose as MCP server</Subtitle2>
+                <Badge appearance="tint" color="brand">Model Context Protocol</Badge>
+                {state.mcpPublished === true && <Badge appearance="filled" color="success">published</Badge>}
+              </div>
+              <Caption1 style={{ display: 'block', marginTop: tokens.spacingVerticalXXS, maxWidth: 720, color: tokens.colorNeutralForeground2 }}>
+                Publishes this data agent as an MCP server exposing one tool, <code>ask_&lt;agent&gt;</code>, that answers
+                grounded questions. Any MCP client (Claude Desktop, Agent 365, Foundry, or Loom&apos;s own Copilot) can call
+                it with a Loom API token. Real backend — the tool runs the agent&apos;s grounded chat.
+              </Caption1>
+              <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, marginTop: tokens.spacingVerticalS }}>
+                <Button appearance="primary" onClick={publishMcp} disabled={mcpBusy || saving || sources.length === 0}>
+                  {mcpBusy ? 'Working…' : state.mcpPublished === true ? 'Re-publish as MCP' : 'Publish as MCP'}
+                </Button>
+                {state.mcpPublished === true && (
+                  <Button appearance="secondary" onClick={unpublishMcp} disabled={mcpBusy}>Unpublish</Button>
+                )}
+              </div>
+              {mcpResult && (
+                <MessageBar intent={mcpResult.ok ? 'success' : 'error'} style={{ marginTop: tokens.spacingVerticalS }}>
+                  <MessageBarBody>
+                    <MessageBarTitle>
+                      {mcpResult.ok ? (mcpResult.unpublished ? 'Unpublished' : 'Published as MCP') : 'Publish failed'}
+                    </MessageBarTitle>
+                    {mcpResult.ok && !mcpResult.unpublished && (
+                      <div style={{ marginTop: tokens.spacingVerticalXS }}>
+                        Tool <strong>{mcpResult.toolName}</strong> is live at:
+                        <div style={{ fontFamily: 'monospace', fontSize: tokens.fontSizeBase200, marginTop: tokens.spacingVerticalXS, wordBreak: 'break-all' }}>
+                          {mcpResult.endpoint}
+                        </div>
+                        <Caption1 style={{ marginTop: tokens.spacingVerticalSNudge, display: 'block' }}>
+                          Add to an MCP client with an <code>Authorization: Bearer loom_pat_…</code> token
+                          (create one under Settings → Developer → API tokens).
+                        </Caption1>
+                      </div>
+                    )}
+                    {mcpResult.error && <div>{mcpResult.error}</div>}
                   </MessageBarBody>
                 </MessageBar>
               )}
