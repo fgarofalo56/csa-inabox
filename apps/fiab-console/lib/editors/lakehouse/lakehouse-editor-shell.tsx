@@ -3647,6 +3647,11 @@ export function LakehouseEditor({ item, id }: Props) {
                           columnStats={columnStats}
                           statsLoading={statsLoading}
                           statsError={statsError}
+                          previewSource={activeContainer ? {
+                            container: activeContainer,
+                            path: activePath.name,
+                            pool: settings.defaultSparkPool || undefined,
+                          } : null}
                           mode={previewMode}
                           onModeChange={(m) => {
                             // Fabric's File/Table preview toggle switches the

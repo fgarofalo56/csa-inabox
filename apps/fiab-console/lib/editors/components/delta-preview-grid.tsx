@@ -27,18 +27,20 @@ import {
   createTableColumn, useArrowNavigationGroup,
   Input, Button, Badge, Caption1, Spinner, Subtitle2, Text, Tooltip,
   Dialog, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
+  TabList, Tab,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
   Copy20Regular, ArrowDownload20Regular, Filter20Regular,
   ChevronDown20Regular, ChevronUp20Regular,
   TableSimple20Regular, DocumentTable20Regular, DataHistogram20Regular,
-  Sparkle20Regular,
+  Sparkle20Regular, Grid20Regular,
 } from '@fluentui/react-icons';
 import {
   formatCell, isNullish, columnIsNumeric, toCsv, fmtNum, rowMatchesFilter,
 } from './delta-preview-grid-utils';
 import { AddAiColumnDialog, type ProducedAiColumn } from './add-ai-column-dialog';
+import { DataWranglerAiPanel, type PreviewSource } from './data-wrangler-ai-panel';
 
 export interface ColStat {
   count: number;
@@ -64,6 +66,17 @@ export interface DeltaPreviewGridProps {
   /** G2 — show the "Add AI column" action (Fabric parity). Default true. Set
    *  false for surfaces where enriching the preview makes no sense. */
   enableAiColumn?: boolean;
+  /** G4 — show the Data Wrangler "AI" tab (cleaning suggestions + NL-to-code +
+   *  live transform preview). Default true; forced off in the nested result
+   *  grid the AI panel renders (no infinite nesting). */
+  enableAiTab?: boolean;
+  /** G4 — the ADLS source of this preview, so the AI tab can run a candidate
+   *  transform against a Livy-sampled DataFrame before apply. When absent the AI
+   *  tab still renders but the live-preview action is disabled with a reason. */
+  previewSource?: PreviewSource | null;
+  /** G4 — insert generated/suggested code into a bound notebook cell. When
+   *  absent the AI tab falls back to copy-to-clipboard. */
+  onInsertToNotebook?: (code: string, lang: string) => void;
 }
 
 interface GridRow {
@@ -116,12 +129,14 @@ const useStyles = makeStyles({
 
 export function DeltaPreviewGrid(props: DeltaPreviewGridProps) {
   const s = useStyles();
-  const { columns: baseColumns, rows: baseRows, rowCount, executionMs, truncated, columnStats, statsLoading, statsError, mode, onModeChange, enableAiColumn = true } = props;
+  const { columns: baseColumns, rows: baseRows, rowCount, executionMs, truncated, columnStats, statsLoading, statsError, mode, onModeChange, enableAiColumn = true, enableAiTab = true, previewSource, onInsertToNotebook } = props;
 
   const [filterText, setFilterText] = useState('');
   const [selectedRows, setSelectedRows] = useState<Set<TableRowId>>(new Set());
   const [statsOpen, setStatsOpen] = useState(true);
   const [cellDialog, setCellDialog] = useState<{ col: string; value: unknown } | null>(null);
+  // G4 — Data view vs. AI (Data Wrangler) tab.
+  const [tab, setTab] = useState<'data' | 'ai'>('data');
   // G2 — AI columns appended over the loaded preview via /api/ai-functions/table.
   const [aiColumns, setAiColumns] = useState<ProducedAiColumn[]>([]);
   const [aiDialogOpen, setAiDialogOpen] = useState(false);
@@ -149,6 +164,12 @@ export function DeltaPreviewGrid(props: DeltaPreviewGridProps) {
     columns.forEach((_, i) => { if (columnIsNumeric(rows, i)) set.add(i); });
     return set;
   }, [columns, rows]);
+
+  // Numeric column NAMES — fed to the Data Wrangler AI profile (G4).
+  const numericColNames = useMemo(
+    () => columns.filter((_, i) => numericCols.has(i)),
+    [columns, numericCols],
+  );
 
   // Client-side filter — match across any cell, case-insensitive. No re-fetch.
   const filteredRows = useMemo<GridRow[]>(() => {
@@ -245,6 +266,35 @@ export function DeltaPreviewGrid(props: DeltaPreviewGridProps) {
 
   return (
     <div className={s.root}>
+      {enableAiTab && (
+        <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as 'data' | 'ai')} size="small">
+          <Tab value="data" icon={<Grid20Regular />}>Data</Tab>
+          <Tab value="ai" icon={<Sparkle20Regular />}>AI</Tab>
+        </TabList>
+      )}
+
+      {tab === 'ai' && enableAiTab ? (
+        <DataWranglerAiPanel
+          columns={columns}
+          rows={rows}
+          columnStats={columnStats}
+          numericColNames={numericColNames}
+          previewSource={previewSource}
+          onInsertToNotebook={onInsertToNotebook}
+          renderResultGrid={(cols, resultRows, ms) => (
+            <DeltaPreviewGrid
+              columns={cols}
+              rows={resultRows}
+              rowCount={resultRows.length}
+              executionMs={ms}
+              mode="table"
+              enableAiColumn={false}
+              enableAiTab={false}
+            />
+          )}
+        />
+      ) : (
+      <>
       <div className={s.toolbar}>
         <Button
           appearance={mode === 'file' ? 'primary' : 'outline'}
@@ -393,6 +443,8 @@ export function DeltaPreviewGrid(props: DeltaPreviewGridProps) {
           </>
         )}
       </div>
+      </>
+      )}
 
       <Dialog open={!!cellDialog} onOpenChange={(_, d) => { if (!d.open) setCellDialog(null); }}>
         <DialogSurface>
