@@ -228,6 +228,14 @@ let _agentMemory: Container | null = null;
 // createdBy/revoked. Created lazily (createIfNotExists) here AND ARM-provisioned
 // in cosmos.bicep's loomContainers — the lazy call is the hotfix fallback.
 let _loomPatTokens: Container | null = null;
+// BR-SCIM — SCIM 2.0 provisioning stores. `loom-scim-users` + `loom-scim-groups`
+// hold the IdP-provisioned identities/groups (PK /id so every get/put/patch/
+// delete is a single-partition point-read by the SCIM resource id; list is an
+// infrequent cross-partition query filtered by tenantId). Created lazily
+// (createIfNotExists) here AND ARM-provisioned in the cosmos bicep loomContainers
+// — the lazy call is the hotfix fallback. Azure-native, no Fabric dependency.
+let _scimUsers: Container | null = null;
+let _scimGroups: Container | null = null;
 // FGC-25 — Capacity surge protection (admission control). One tenant-scoped doc
 // (id = tenantId, PK /tenantId) holding the surge-protection policy: master
 // switch, capacity-level rejection threshold %, per-engine overrides, and the
@@ -921,6 +929,9 @@ async function ensure() {
   // token id in the bearer header (the hot path); the management lists are the
   // infrequent surface and filter by tenantId/createdByOid across partitions.
   _loomPatTokens = await mk('loom-pat-tokens', '/id');
+  // BR-SCIM — SCIM provisioning stores (PK /id). See declaration above.
+  _scimUsers = await mk('loom-scim-users', '/id');
+  _scimGroups = await mk('loom-scim-groups', '/id');
   // FGC-25 — Capacity surge protection policy. One doc per tenant (id=tenantId),
   // PK /tenantId → single-partition point-read per tenant.
   _capacityGuardrails = await mk('capacity-guardrails', '/tenantId');
@@ -1077,6 +1088,10 @@ export async function itemVersionsContainer(): Promise<Container> { await ensure
 export async function agentMemoryContainer(): Promise<Container> { await ensure(); return _agentMemory!; }
 /** Scoped API tokens (PAT, BR-PAT) — PK /id; stores a SHA-256 hash of the secret only. */
 export async function loomPatTokensContainer(): Promise<Container> { await ensure(); return _loomPatTokens!; }
+/** BR-SCIM — SCIM 2.0 provisioned users (PK /id). */
+export async function scimUsersContainer(): Promise<Container> { await ensure(); return _scimUsers!; }
+/** BR-SCIM — SCIM 2.0 provisioned groups (PK /id). */
+export async function scimGroupsContainer(): Promise<Container> { await ensure(); return _scimGroups!; }
 /** FGC-25 — Capacity surge-protection policy (one doc per tenant), PK /tenantId. */
 export async function capacityGuardrailsContainer(): Promise<Container> { await ensure(); return _capacityGuardrails!; }
 /** BR-COSTATTR — per-execution cost attribution ledger (append-only, TTL), PK /tenantId. */
@@ -1250,6 +1265,7 @@ const KNOWN_CONTAINER_IDS = [
   'webhook-subscriptions', 'webhook-deliveries',
   'data-product-analytics',
   'loom-pat-tokens',
+  'loom-scim-users', 'loom-scim-groups',
   'capacity-guardrails',
   'cost-attribution',
   'attached-services',

@@ -72,6 +72,7 @@ export const NAV_SECTIONS: NavSection[] = [
       { href: '/experience/warp/home', label: 'Orchestration (Warp)' },
       { href: '/deployment-pipelines', label: 'Deployment' },
       { href: '/workload-hub', label: 'Workload hub' },
+      { href: '/developer', label: 'Developer' },
     ],
   },
   {

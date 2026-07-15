@@ -222,6 +222,12 @@ var loomContainers = [
   // SHA-256 hash of the secret only (never the secret). createIfNotExists in
   // cosmos-client.ts ensure() remains the hotfix fallback.
   { name: 'loom-pat-tokens',   partitionKey: '/id' }
+  // BR-SCIM — SCIM 2.0 provisioned users + groups (PK /id). IdP (Entra) pushes
+  // identities here via /api/scim/v2; every get/put/patch/delete is a
+  // single-partition point-read by the SCIM resource id. createIfNotExists in
+  // cosmos-client.ts ensure() is the hotfix fallback.
+  { name: 'loom-scim-users',   partitionKey: '/id' }
+  { name: 'loom-scim-groups',  partitionKey: '/id' }
   // FGC-25 — Capacity surge-protection policy. One doc per tenant (id=tenantId),
   // PK /tenantId → single-partition point-read. createIfNotExists in
   // cosmos-client.ts ensure() remains the hotfix fallback.
