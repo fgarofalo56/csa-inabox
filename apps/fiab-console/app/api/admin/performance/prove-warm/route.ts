@@ -89,8 +89,10 @@ export async function POST() {
           totals: status.totals,
           lastFailure: lastFailure ?? null,
           message:
-            'No warm session was available — a notebook run right now would COLD-START (~2-4 min on Synapse). ' +
-            'The acquire attempt kicked a background warm-up; re-run the probe once a session shows warm.',
+            'No EXCLUSIVE warm session was available — a notebook run right now would COLD-START (~2-4 min on Synapse). ' +
+            'Note: a session the pool card shows as warm may be the SHARED read-only session (FGC-10), which an ' +
+            'exclusive (write) run cannot claim — the card and this probe count different things. ' +
+            'The acquire attempt kicked a background warm-up; re-run the probe once an exclusive session shows warm.',
         },
       });
     }

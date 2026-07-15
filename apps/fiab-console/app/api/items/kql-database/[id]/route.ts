@@ -5,6 +5,7 @@
 
 import { NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { recordItemOpen } from '@/lib/items/record-open';
 import {
   clusterUri, defaultDatabase, getDatabaseDetails, listTables,
   listFunctions, listMaterializedViews,
@@ -21,6 +22,10 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
   try {
     const item = await loadKustoItem((await ctx.params).id, 'kql-database', session.claims.oid);
     const database = resolveDatabase(item);
+    if (item) {
+      // Feed "Recent": type-specific base routes bypass the generic GET's write.
+      await recordItemOpen({ oid: session.claims.oid, upn: session.claims.upn }, { id: item.id, itemType: 'kql-database', workspaceId: item.workspaceId });
+    }
     const [details, tables, functions, materializedViews] = await Promise.all([
       getDatabaseDetails(database).catch(() => null),
       listTables(database).catch(() => []),

@@ -4,57 +4,13 @@ import { getSession } from '@/lib/auth/session';
 import { auditLogContainer, itemsContainer, workspacesContainer } from '@/lib/azure/cosmos-client';
 import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
 import { apiError } from '@/lib/api/respond';
+import { recordItemOpen } from '@/lib/items/record-open';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 function err(error: string, status: number, code?: string) {
   return apiError(error, status, code === undefined ? undefined : { code });
-}
-
-/**
- * Record an `open` event into the Cosmos `audit-log` container — the write half
- * of /api/items/recent (which joins audit events by `c.userId` back onto items).
- * Before this, NOTHING in the product recorded item opens, so "Recent" was
- * permanently empty. Throttled in-process per (user, item) so an editor that
- * re-fetches its item doc doesn't spam the log; best-effort (never blocks or
- * fails the GET).
- */
-const OPEN_THROTTLE_MS = 5 * 60 * 1000;
-const lastOpenWrite = new Map<string, number>();
-
-async function recordItemOpen(
-  s: NonNullable<ReturnType<typeof getSession>>,
-  item: WorkspaceItem,
-  itemType: string,
-): Promise<void> {
-  const throttleKey = `${s.claims.oid}:${item.id}`;
-  const now = Date.now();
-  const last = lastOpenWrite.get(throttleKey);
-  if (last && now - last < OPEN_THROTTLE_MS) return;
-  lastOpenWrite.set(throttleKey, now);
-  // Cap the throttle map so a long-lived replica never grows unbounded.
-  if (lastOpenWrite.size > 5000) {
-    for (const [k, t] of lastOpenWrite) if (now - t > OPEN_THROTTLE_MS) lastOpenWrite.delete(k);
-  }
-  try {
-    const audit = await auditLogContainer();
-    await audit.items.create({
-      id: crypto.randomUUID(),
-      itemId: item.id,
-      itemType,
-      workspaceId: item.workspaceId,
-      userId: s.claims.oid,
-      upn: s.claims.upn,
-      action: 'open',
-      summary: '',
-      diff: null,
-      at: new Date().toISOString(),
-    });
-  } catch {
-    // best-effort — an audit hiccup must never break the item read
-    lastOpenWrite.delete(throttleKey);
-  }
 }
 
 /** Find an item by id (cross-partition) + verify the caller's tenant owns its workspace. */
@@ -94,7 +50,10 @@ export async function GET(
     const item = await loadItem(params.id, params.type, session.claims.oid);
     if (!item) return err('Item not found', 404, 'not_found');
     // Feed "Recent": record the open (throttled, best-effort — never blocks).
-    await recordItemOpen(session, item, params.type);
+    await recordItemOpen(
+      { oid: session.claims.oid, upn: session.claims.upn },
+      { id: item.id, itemType: params.type, workspaceId: item.workspaceId },
+    );
     return NextResponse.json(item);
   } catch (e: any) {
     return err(e?.message || 'Failed to fetch item', 500, 'cosmos_error');
