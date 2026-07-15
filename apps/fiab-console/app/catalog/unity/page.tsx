@@ -386,7 +386,14 @@ function ExplorePane({ oss, onGrant }: { oss: boolean; onGrant: (securable: stri
               placeholder={catalogs.length ? 'Select a catalog…' : 'No catalogs'}
               value={catalog}
               selectedOptions={catalog ? [catalog] : []}
-              onOptionSelect={(_, d) => setCatalog(d.optionValue || '')}
+              onOptionSelect={(_, d) => {
+                // Reset the schema IN THE SAME batch as the catalog switch —
+                // resetting it in the [catalog] effect leaves one render where
+                // the objects effect sees (newCatalog, oldSchema) and fires a
+                // listUcTables 404 (seen live: samples.default after finance).
+                setCatalog(d.optionValue || '');
+                setSchema('');
+              }}
             >
               {catalogs.map((c) => (
                 <Option key={c.name} value={c.name} text={c.name}>
