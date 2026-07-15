@@ -127,9 +127,14 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       adxDatabase: typeof body?.adxDatabase === 'string' ? body.adxDatabase : undefined,
       adxClusterUri: typeof body?.adxClusterUri === 'string' ? body.adxClusterUri : undefined,
     });
-    const nextRules = [...rules.filter((r) => r.id !== rule.id), rule];
+    // Operations-agent approval channel (G3): persist whether a fired trigger
+    // must route through a human approval (Teams adaptive-card via the bound
+    // Logic App) before the autonomous action runs. The ops-agent evaluator
+    // Function reads this flag; the sibling activator item ignores it.
+    const ruleWithApproval: MonitorRuleRecord = { ...rule, requireApproval: !!body?.requireApproval };
+    const nextRules = [...rules.filter((r) => r.id !== rule.id), ruleWithApproval];
     await saveRules(item, nextRules);
-    return NextResponse.json({ ok: true, rule, backend: 'azure-monitor' });
+    return NextResponse.json({ ok: true, rule: ruleWithApproval, backend: 'azure-monitor' });
   } catch (e: any) {
     return kustoGate(e) || monitorGate(e, monitorGateBodies) || NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }

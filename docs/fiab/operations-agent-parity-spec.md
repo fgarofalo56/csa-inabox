@@ -53,9 +53,45 @@ Three CU meters surface in the Fabric Capacity Metrics app and (in Fabric UI) as
 - **Operations agent compute** — background rule evaluation
 - **Operations agent autonomous reasoning** — LLM cycles when a condition fires
 
-## What Loom has
+## Status — BUILT (2026-07-15, `feat/g3-operations-agent`)
 
-The current `OperationsAgentEditor` (`apps/fiab-console/lib/editors/phase4-editors.tsx`, lines 865–898) is an honest config-only stub:
+The Operations Agent is no longer a config-only stub. The editor
+(`apps/fiab-console/lib/editors/phase4/operations-agent-editor.tsx`) is a full
+rule canvas over the real Azure-native backend, with a Copilot NL authoring path,
+an Azure-Monitor-primary deploy route, a timer-trigger evaluator Function, and
+bicep (default + air-gapped-Gov fallback). Highlights:
+
+- **Rule canvas (Triggers tab)** — typed Eventhouse/ADX + Ontology source
+  pickers; a structured **WHEN** condition-builder (property/operator/value)
+  reusing the Activator condition shape, or verbatim KQL; the **THEN**
+  action-kind picker (Email / Teams / Webhook / SMS / Logic App via
+  `MonitorActionBuilder`); and an **approval-channel toggle** (autonomous vs
+  human-approved). Each trigger is a real `Microsoft.Insights/scheduledQueryRule`
+  + action group, created via `lib/azure/activator-monitor.ts` (the SAME backend
+  the Activator uses) — no Microsoft Fabric.
+- **Copilot** — the `operations-agent` persona (`lib/azure/copilot-personas.ts`)
+  authors the KQL trigger from natural language, reusing the real
+  `activator_author_rule` / `activator_suggest_threshold` / `activator_create_rule`
+  ARM tools ("Author trigger with Copilot").
+- **Deploy** — `/api/items/operations-agent/[id]/deploy` makes **Azure Monitor
+  the primary** deploy target (re-upserts every trigger's scheduledQueryRule +
+  action group) and publishes the **Foundry Agent Service reasoning companion**
+  only when configured (optional, non-fatal).
+- **Evaluator** — `azure-functions/ops-agent-evaluator` (5-min timer): reads
+  agents from Cosmos, evaluates ADX triggers, reasons with AOAI, dispatches the
+  approval Logic App (Teams card) or the autonomous action.
+- **Bicep** — `platform/fiab/bicep/modules/admin-plane/monitor-ops-agent.bicep`
+  (evaluator Function App + Teams approval Logic App + Teams API connection +
+  Monitoring Reader / Database Viewer role assignments) and the OSS/air-gapped-Gov
+  fallback `monitor-ops-agent-aca.bicep` (Container Apps Job + KEDA cron).
+- **Grade: A** — real backend on every control; honest gates for the out-of-band
+  Graph `Chat.ReadWrite` app-role and the `LOOM_ADX_ALERT_SCOPE` continuous-eval
+  requirement. Test & Run and Proposals panes remain (grounded ADX+AOAI runs;
+  human-in-the-loop ARM/Cosmos writes).
+
+### Prior state (historical)
+
+The original `OperationsAgentEditor` was an honest config-only stub:
 
 - A single `MessageBar intent="warning"` titled **"v2.1: configuration only — runtime deferred"** explaining the AI Foundry agents data-plane isn't wired
 - Free-text **System prompt** textarea (no separate goals/instructions split)

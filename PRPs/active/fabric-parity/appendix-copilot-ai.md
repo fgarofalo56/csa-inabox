@@ -230,7 +230,35 @@ Today `ai-functions` is 5 single-text ops. Fabric's value is **batch over tables
   AOAI; "Add AI column" writes a real Delta column; Dataflow AI step materializes;
   all with Fabric unset.
 
-### G3 — Operations Agent (autonomous monitor → act) (P2)
+### G3 — Operations Agent (autonomous monitor → act) (P2) — **BUILT (2026-07-15)**
+
+> **Status: BUILT.** The `operations-agent` item is now a full rule-canvas over the
+> real Azure-native backend. Shipped in `feat/g3-operations-agent`:
+> - **Rule canvas** (`lib/editors/phase4/operations-agent-editor.tsx`, Triggers tab):
+>   typed Eventhouse/ADX + Ontology source pickers, a structured **WHEN
+>   condition-builder** (property/operator/value) reusing the Activator shape, the
+>   **THEN action-kind picker** (Email/Teams/Webhook/SMS/Logic App via
+>   `MonitorActionBuilder`), and an **approval-channel toggle** (autonomous vs
+>   human-approved) — each trigger is a real `Microsoft.Insights/scheduledQueryRule`
+>   + action group via `activator-monitor.ts`.
+> - **Copilot persona** `operations-agent` (`lib/azure/copilot-personas.ts`) authors
+>   the KQL trigger from NL, reusing the real `activator_author_rule` /
+>   `activator_suggest_threshold` / `activator_create_rule` ARM tools.
+> - **Deploy route** (`/api/items/operations-agent/[id]/deploy`) makes **Azure
+>   Monitor the PRIMARY** target (re-upserts every trigger's scheduledQueryRule +
+>   action group) and keeps the **Foundry Agent Service as an optional reasoning
+>   companion**, not the sole target.
+> - **Evaluator Function** `azure-functions/ops-agent-evaluator` (timer trigger):
+>   reads agents from Cosmos, evaluates ADX triggers, reasons with AOAI, dispatches
+>   the approval Logic App (Teams card) or the autonomous action.
+> - **Bicep** `platform/fiab/bicep/modules/admin-plane/monitor-ops-agent.bicep`
+>   (evaluator Function App + Teams approval Logic App + Teams connection + role
+>   assignments) and the **OSS/air-gapped-Gov fallback** `monitor-ops-agent-aca.bicep`
+>   (Container Apps Job + KEDA cron). Both `az bicep build`-clean + allowlisted.
+> - **Tests** `lib/editors/__tests__/operations-agent.test.tsx` (rule creation,
+>   condition/action config, approval toggle, persona) + `evaluator-core.test.ts`.
+> Remaining: Graph `Chat.ReadWrite` app-role grant is out-of-band (documented);
+> continuous ADX-scoped scheduled eval needs `LOOM_ADX_ALERT_SCOPE` (honest gate).
 
 Fabric's Operations Agent watches live streams + ontology, then acts via Activator /
 Power Automate. Loom has Activator + ops-tools but no autonomous agent item.

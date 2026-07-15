@@ -326,6 +326,12 @@ export interface MonitorRuleRecord {
    *  ADX-scoped alert host is provisioned (LOOM_ADX_ALERT_SCOPE); otherwise false
    *  and the rule evaluates on-demand via Trigger/Preview (see `note`). */
   scheduled?: boolean;
+  /** Operations-agent approval channel (G3). When true the ops-agent evaluator
+   *  Function routes a fired trigger through a human approval (Teams
+   *  adaptive-card via the bound Logic App) BEFORE any autonomous action runs;
+   *  when false/absent the action fires directly (autonomous). Persisted on the
+   *  rule so the evaluator + the Triggers UI agree on the mode. */
+  requireApproval?: boolean;
   createdAt: string;
   /** Last enable/disable timestamp, when the rule has been toggled. */
   updatedAt?: string;
