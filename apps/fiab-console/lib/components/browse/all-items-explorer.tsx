@@ -12,14 +12,20 @@ import { clientFetch } from '@/lib/client-fetch';
 
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import {
   makeStyles, tokens, Badge, Dropdown, Option, Field, Spinner, Body1, Caption1,
   Subtitle2, Divider,
 } from '@fluentui/react-components';
+import {
+  Open16Regular, OpenFolder16Regular, Copy16Regular, Link16Regular,
+} from '@fluentui/react-icons';
 import { FABRIC_ITEM_TYPES } from '@/lib/catalog/fabric-item-types';
 import { itemVisual } from '@/lib/components/ui/item-type-visual';
 import { BrandedItemIcon } from '@/lib/components/ui/branded-item-icon';
-import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
+import {
+  LoomDataTable, type LoomColumn, type LoomRowAction, type LoomRowMenuItem,
+} from '@/lib/components/ui/loom-data-table';
 import { PinButton } from '@/lib/components/pin-button';
 
 interface Item {
@@ -59,6 +65,7 @@ function TypeBadge({ type }: { type: string }) {
 
 export function AllItemsExplorer() {
   const s = useStyles();
+  const router = useRouter();
   const [items, setItems] = useState<Item[] | null>(null);
   const [wsMap, setWsMap] = useState<Map<string, string>>(new Map());
   const [error, setError] = useState<string | null>(null);
@@ -148,6 +155,30 @@ export function AllItemsExplorer() {
     },
   ];
 
+  const hrefFor = (r: Row) => `/items/${r.itemType}/${r.id}`;
+
+  // Fabric-style inline hover actions — appear on row hover/focus.
+  const rowActions = (): LoomRowAction<Row>[] => [
+    { key: 'open', label: 'Open', icon: <Open16Regular />, onClick: (row) => router.push(hrefFor(row)) },
+  ];
+
+  // Fabric-style right-click context menu — real actions only.
+  const rowMenu = (): LoomRowMenuItem<Row>[] => [
+    { key: 'open', label: 'Open', icon: <Open16Regular />, onClick: (row) => router.push(hrefFor(row)) },
+    {
+      key: 'open-new', label: 'Open in new tab', icon: <OpenFolder16Regular />,
+      onClick: (row) => window.open(hrefFor(row), '_blank', 'noopener,noreferrer'),
+    },
+    {
+      key: 'copy-link', label: 'Copy link', icon: <Link16Regular />, divider: true,
+      onClick: (row) => { void navigator.clipboard?.writeText(new URL(hrefFor(row), window.location.origin).href); },
+    },
+    {
+      key: 'copy-id', label: 'Copy item ID', icon: <Copy16Regular />,
+      onClick: (row) => { void navigator.clipboard?.writeText(row.id); },
+    },
+  ];
+
   if (error) return <Body1>Could not load items: {error}</Body1>;
   if (!items) return <Spinner label="Loading every item in your tenant…" />;
 
@@ -178,7 +209,15 @@ export function AllItemsExplorer() {
               <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{g.rows.length}</Caption1>
             </div>
           )}
-          <LoomDataTable columns={columns} rows={g.rows} getRowId={(r) => r.id} ariaLabel="All items" />
+          <LoomDataTable
+            columns={columns}
+            rows={g.rows}
+            getRowId={(r) => r.id}
+            ariaLabel="All items"
+            density="compact"
+            rowActions={rowActions}
+            rowMenu={rowMenu}
+          />
         </div>
       ))}
     </div>
