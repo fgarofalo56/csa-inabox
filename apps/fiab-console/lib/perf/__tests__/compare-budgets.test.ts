@@ -5,6 +5,7 @@ import {
   median,
   rowKey,
   renderMarkdownTable,
+  resolveMetricBudget,
   type PerfRow,
   type PerfBudgets,
 } from '../compare-budgets';
@@ -17,8 +18,45 @@ const BUDGETS: PerfBudgets = {
     'spark-attach-warm': { p95CeilingMs: 15000, maxRegressionPct: 20, fabricBarMs: 10000 },
     'adx-query': { p95CeilingMs: 2000, maxRegressionPct: 20, fabricBarMs: 2000 },
     'page-tti': { p95CeilingMs: 4000, maxRegressionPct: 20 },
+    'page-tti:copilot': { p95CeilingMs: 5000, maxRegressionPct: 20 },
   },
 };
+
+describe('PSR-9 resolveMetricBudget — page-TTI fallback', () => {
+  it('prefers an exact per-surface override', () => {
+    expect(resolveMetricBudget(BUDGETS, 'page-tti:copilot')?.p95CeilingMs).toBe(5000);
+  });
+  it('falls a per-surface page-TTI metric back to the generic page-tti budget', () => {
+    expect(resolveMetricBudget(BUDGETS, 'page-tti:home')?.p95CeilingMs).toBe(4000);
+    expect(resolveMetricBudget(BUDGETS, 'page-tti:governance')?.p95CeilingMs).toBe(4000);
+  });
+  it('non-TTI metrics use exact match only (no fallback)', () => {
+    expect(resolveMetricBudget(BUDGETS, 'adx-query')?.p95CeilingMs).toBe(2000);
+    expect(resolveMetricBudget(BUDGETS, 'unbudgeted-metric')).toBeUndefined();
+  });
+});
+
+describe('PSR-9 evaluateBudgets — per-surface page-TTI is now gated', () => {
+  it('gates a page-tti:<slug> row against the generic page-tti ceiling', () => {
+    const res = evaluateBudgets({
+      latest: [row('page-tti:home', 'http', 6000)], // over the 4000 generic ceiling
+      baseline: [],
+      budgets: BUDGETS,
+    });
+    expect(res.breached).toBe(true);
+    expect(res.evaluations[0].ceilingBreach).toBe(true);
+    expect(res.evaluations[0].ceilingMs).toBe(4000);
+  });
+  it('honours a per-surface override ceiling', () => {
+    const res = evaluateBudgets({
+      latest: [row('page-tti:copilot', 'http', 4500)], // under the 5000 override, over generic 4000
+      baseline: [],
+      budgets: BUDGETS,
+    });
+    expect(res.breached).toBe(false);
+    expect(res.evaluations[0].ceilingMs).toBe(5000);
+  });
+});
 
 function row(metric: string, backend: string, p95: number, overrides: Partial<PerfRow> = {}): PerfRow {
   return {

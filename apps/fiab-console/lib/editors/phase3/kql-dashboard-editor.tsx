@@ -23,6 +23,7 @@ import {
   MessageBar, MessageBarBody, MessageBarTitle, MessageBarActions,
   Dialog, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
   Label, Select, Textarea, Switch,
+  Skeleton, SkeletonItem,
   makeStyles, mergeClasses, tokens,
 } from '@fluentui/react-components';
 import {
@@ -49,7 +50,12 @@ import {
   type KqlResult, type TileViz,
 } from './kql-results';
 import { AnomalyForecastDialog } from './anomaly-forecast';
+import { mapWithConcurrency } from '@/lib/util/concurrency';
 import { useStyles } from './styles';
+
+/** PSR-7 — max tiles queried in parallel during a full-board refresh. Bounded so
+ *  a large board fans out fast without tripping the ADX query rate-limiter. */
+const DASHBOARD_TILE_CONCURRENCY = 4;
 
 /**
  * Fabric Real-Time-Dashboard-grade tile chrome (UI-only): resting elevation
@@ -143,6 +149,8 @@ interface DashTile {
   drillthrough?: { column: string; paramName: string };
   result?: KqlResult;
   error?: string;
+  /** PSR-7 — this tile's query is in flight (drives the per-tile skeleton/SWR). */
+  loading?: boolean;
 }
 
 interface DashDataSource { id: string; name: string; database: string; clusterUri?: string; }
@@ -506,7 +514,7 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
 
   // Build the live model the /run + /param-values + PUT routes consume.
   const buildModel = useCallback(() => ({
-    tiles: tiles.map(({ result, error, ...t }) => t),
+    tiles: tiles.map(({ result, error, loading, ...t }) => t),
     dataSources,
     parameters: params,
     baseQueries,
@@ -546,26 +554,43 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
     }
   }, [id, timeRange, params]);
 
-  // Run the CURRENT (possibly unsaved) builder model live via POST /run.
+  // PSR-7 — run ALL tiles by FANNING OUT one query per tile (bounded
+  // concurrency) instead of one blocking whole-board POST. Fast tiles render the
+  // instant they resolve (progressive render); each tile owns its skeleton +
+  // spinner. SWR: a tile's PRIOR result stays on screen while it re-queries, so
+  // an auto-refresh never flashes the whole board back to skeletons.
   const runAll = useCallback(async () => {
-    if (tiles.length === 0) return;
+    const n = tiles.length;
+    if (n === 0) return;
     runInFlightRef.current = true;
     setRunning(true); setSaveErr(null);
+    // Snapshot the model + tile identity at click-time so mid-run edits can't
+    // change what each index runs. buildModel() strips transient result/loading.
+    const model = buildModel();
+    // Mark every tile loading up front (keeps prior result → SWR, no flash).
+    setTiles((prev) => prev.map((t) => ({ ...t, loading: true, error: undefined })));
     try {
-      const r = await clientFetch(`/api/items/kql-dashboard/${id}/run`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(buildModel()),
+      await mapWithConcurrency(model.tiles, DASHBOARD_TILE_CONCURRENCY, async (tile, i) => {
+        try {
+          const r = await clientFetch(`/api/items/kql-dashboard/${id}/run`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ ...model, tiles: [tile] }),
+          });
+          const ct = r.headers.get('content-type') || '';
+          const j = ct.includes('application/json') ? await r.json() : { ok: false, error: `HTTP ${r.status}` };
+          if (!j.ok) {
+            setTiles((prev) => prev.map((t, idx) => idx === i ? { ...t, loading: false, error: j.error || `run failed (HTTP ${r.status})` } : t));
+            return;
+          }
+          // Progressive: commit THIS tile's result as soon as it lands.
+          setTiles((prev) => prev.map((t, idx) => idx === i
+            ? { ...t, loading: false, result: j.tiles?.[0]?.result, error: j.tiles?.[0]?.error }
+            : t));
+        } catch (e: any) {
+          setTiles((prev) => prev.map((t, idx) => idx === i ? { ...t, loading: false, error: e?.message || String(e) } : t));
+        }
       });
-      const ct = r.headers.get('content-type') || '';
-      const j = ct.includes('application/json') ? await r.json() : { ok: false, error: `HTTP ${r.status}` };
-      if (!j.ok) { setSaveErr(j.error || `run failed (HTTP ${r.status})`); return; }
-      // Merge results back onto tiles by index (order preserved by /run).
-      setTiles((prev) => prev.map((t, i) => ({
-        ...t,
-        result: j.tiles?.[i]?.result,
-        error: j.tiles?.[i]?.error,
-      })));
       setLastRefreshedAt(Date.now());
     } catch (e: any) {
       setSaveErr(e?.message || String(e));
@@ -710,7 +735,9 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
   const runTile = useCallback(async (idx: number) => {
     const t = tiles[idx];
     if (!t) return;
-    updateTile(idx, { error: undefined });
+    // PSR-7 — SWR: keep the prior result on screen while re-querying (loading
+    // flag drives the tile spinner/skeleton, never a whole-board block).
+    updateTile(idx, { error: undefined, loading: true });
     try {
       const r = await clientFetch(`/api/items/kql-dashboard/${id}/run`, {
         method: 'POST',
@@ -719,10 +746,10 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
       });
       const ct = r.headers.get('content-type') || '';
       const j = ct.includes('application/json') ? await r.json() : { ok: false, error: `HTTP ${r.status}` };
-      if (!j.ok) { updateTile(idx, { error: j.error || `run failed (HTTP ${r.status})`, result: undefined }); return; }
-      updateTile(idx, { result: j.tiles?.[0]?.result, error: j.tiles?.[0]?.error });
+      if (!j.ok) { updateTile(idx, { error: j.error || `run failed (HTTP ${r.status})`, result: undefined, loading: false }); return; }
+      updateTile(idx, { result: j.tiles?.[0]?.result, error: j.tiles?.[0]?.error, loading: false });
     } catch (e: any) {
-      updateTile(idx, { error: e?.message || String(e) });
+      updateTile(idx, { error: e?.message || String(e), loading: false });
     }
   }, [id, tiles, buildModel, updateTile]);
 
@@ -1187,7 +1214,24 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
                 </div>
               </div>
 
+              {/* PSR-7 — per-tile SWR spinner: a small "refreshing" chip when a
+                  tile is re-querying but its prior result is still on screen. */}
+              {t.loading && t.result?.ok && (
+                <Caption1 style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, marginTop: tokens.spacingVerticalXS, color: tokens.colorNeutralForeground3 }}>
+                  <Spinner size="extra-tiny" /> Refreshing…
+                </Caption1>
+              )}
               {t.error && <MessageBar intent="error" style={{ marginTop: tokens.spacingVerticalS}}><MessageBarBody>{t.error}</MessageBarBody></MessageBar>}
+              {/* PSR-7 — first-load skeleton: only when loading AND there is no
+                  prior result to keep on screen (SWR keeps the old one instead). */}
+              {t.loading && !t.result && !t.error && (
+                <div style={{ marginTop: tokens.spacingVerticalS, flex: 1, minHeight: 0 }}>
+                  <Skeleton aria-label="Loading tile" animation="pulse">
+                    <SkeletonItem style={{ height: 24, borderRadius: tokens.borderRadiusSmall, marginBottom: tokens.spacingVerticalS }} />
+                    <SkeletonItem style={{ height: 96, borderRadius: tokens.borderRadiusMedium }} />
+                  </Skeleton>
+                </div>
+              )}
               {t.result && t.result.ok && (
                 <div style={{ marginTop: tokens.spacingVerticalS, flex: 1, minHeight: 0 }}>
                   <TileVisual
@@ -1210,7 +1254,7 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
                   </span>
                 </div>
               )}
-              {!t.result && !t.error && <Caption1 style={{ marginTop: tokens.spacingVerticalS, color: tokens.colorNeutralForeground3 }}>Run the tile to see results.</Caption1>}
+              {!t.result && !t.error && !t.loading && <Caption1 style={{ marginTop: tokens.spacingVerticalS, color: tokens.colorNeutralForeground3 }}>Run the tile to see results.</Caption1>}
             </div>
           );
         })}

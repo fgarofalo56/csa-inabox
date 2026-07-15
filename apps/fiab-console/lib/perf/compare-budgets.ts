@@ -110,6 +110,28 @@ export function rowKey(metric: string, backend: string): string {
   return `${metric}|${backend}`;
 }
 
+/** Prefix of the dynamic per-surface page-TTI metric ids (`page-tti:<slug>`). */
+export const PAGE_TTI_PREFIX = 'page-tti:';
+
+/**
+ * PSR-9 — resolve the budget that gates a metric, with a page-TTI fallback.
+ *
+ * The perf runner emits one `page-tti:<slug>` metric PER top surface (home,
+ * catalog, copilot, …), but `perf-budgets.json` carries a single generic
+ * `page-tti` ceiling. Without a fallback the exact-id lookup misses every
+ * per-surface row and NONE of the surfaces are gated. This resolves, in order:
+ *   1. an exact `page-tti:<slug>` entry (a per-surface override), else
+ *   2. the generic `page-tti` entry (the shared TTI budget), else
+ *   3. the metric's own exact entry (all non-TTI metrics), else undefined.
+ * Pure — unit tested.
+ */
+export function resolveMetricBudget(budgets: PerfBudgets, metric: string): MetricBudget | undefined {
+  const exact = budgets.metrics[metric];
+  if (exact) return exact;
+  if (metric.startsWith(PAGE_TTI_PREFIX)) return budgets.metrics['page-tti'];
+  return undefined;
+}
+
 /** Median of a numeric array. Returns null for an empty array. */
 export function median(values: number[]): number | null {
   const nums = values.filter((v) => typeof v === 'number' && Number.isFinite(v)).sort((a, b) => a - b);
@@ -157,7 +179,7 @@ export function evaluateBudgets(input: EvaluationInput): EvaluationResult {
   const evaluations: MetricEvaluation[] = [];
 
   for (const row of latest) {
-    const budget = budgets.metrics[row.metric];
+    const budget = resolveMetricBudget(budgets, row.metric);
     if (!budget) continue; // unbudgeted metric — surfaced by PSR-1, not gated here
     const maxReg = typeof budget.maxRegressionPct === 'number' ? budget.maxRegressionPct : budgets.defaults.maxRegressionPct;
     const k = rowKey(row.metric, row.backend);

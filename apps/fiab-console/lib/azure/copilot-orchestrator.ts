@@ -64,6 +64,7 @@ import {
   resolveCopilotFabricWorkspace,
 } from '../types/copilot-config';
 import { resolveTierForTurn, type ModelTier } from '@/lib/foundry/model-tier-router';
+import { recordCopilotTurn, recentFullTurnBurn } from '@/lib/perf/copilot-latency-tracker';
 import { resolveAoaiCallTarget, aoaiApimHeaders, type AoaiCallTarget } from './aoai-apim-gateway';
 import { applyAvailabilityFallback } from '@/lib/foundry/model-availability-runtime';
 import {
@@ -2041,6 +2042,9 @@ export async function* orchestrate(opts: OrchestrateOptions): AsyncIterable<Orch
       prompt,
       hasTools: !opts.registryOverride && !opts.registry,
       baseDeployment: target.deployment,
+      // PSR-8 — feed the live full-turn SLO burn so a breaching latency SLO
+      // shaves a tier off a non-reasoning turn to answer faster.
+      latencyBurn: recentFullTurnBurn(),
     });
     if (sel.routed && sel.deployment) {
       target = { ...target, deployment: sel.deployment };
@@ -2365,6 +2369,11 @@ export async function* orchestrate(opts: OrchestrateOptions): AsyncIterable<Orch
           return;
         }
       }
+      const turnLatencyMs = Date.now() - turnStart;
+      // PSR-8 — feed the completed full-turn latency into the rolling SLO window
+      // so the tier router's latency-pressure protection + the perf SLO badge
+      // read a live burn. Best-effort; never affects the turn result.
+      try { recordCopilotTurn(turnLatencyMs); } catch { /* telemetry only */ }
       const finalStep: OrchestratorStep = {
         kind: 'final',
         content: msg.content || '',
@@ -2375,7 +2384,7 @@ export async function* orchestrate(opts: OrchestrateOptions): AsyncIterable<Orch
         provider: 'Azure OpenAI',
         promptTokens: usage.promptTokens,
         completionTokens: usage.completionTokens,
-        turnLatencyMs: Date.now() - turnStart,
+        turnLatencyMs,
         costUsd: estCostUsd(target.deployment, usage.promptTokens, usage.completionTokens),
         // CTS-16: the AIF-12 tier the router chose (omitted when no active swap).
         ...(routedTier ? { routedTier } : {}),

@@ -137,6 +137,17 @@ export interface TierSelection {
   deployment?: string;
   /** True only when routing actively swapped the deployment away from the base. */
   routed: boolean;
+  /** PSR-8 — true when a latency-SLO breach shaved a tier off this turn. */
+  sloProtected?: boolean;
+}
+
+/**
+ * PSR-8 — shave ONE cost/quality tier off `from` to protect a breaching latency
+ * SLO: strong → standard → mini. Pure. `reasoning`-class turns are never
+ * downshifted (the caller guards that); this is the tier arithmetic only.
+ */
+export function downshiftTier(from: ModelTier): ModelTier {
+  return from === 'strong' ? 'standard' : from === 'standard' ? 'mini' : 'mini';
 }
 
 export interface TierSelectInput {
@@ -150,6 +161,15 @@ export interface TierSelectInput {
   overrideTier?: ModelTier;
   /** The resolved default deployment this turn would otherwise use. */
   baseDeployment?: string;
+  /**
+   * PSR-8 — Copilot turn-latency SLO pressure (0..1+). The recent full-turn SLO
+   * BURN (see copilot-slo.evaluateSlo): < 1 healthy, > 1 breaching. When the SLO
+   * is breaching (burn > 1) the router shaves ONE tier off a `general` turn
+   * (standard → mini) to protect the latency SLO — a deterministic, honest
+   * downshift. It NEVER downshifts a `reasoning` turn (quality-critical) or an
+   * explicit `overrideTier`. Absent/≤1 → no effect (byte-identical to before).
+   */
+  latencyBurn?: number;
 }
 
 /**
@@ -166,7 +186,18 @@ export function selectTier(policy: TierPolicy, input: TierSelectInput): TierSele
     return { tier: 'standard', taskClass, deployment: base, routed: false };
   }
 
-  const desired: ModelTier = input.overrideTier ?? policy.taskMap[taskClass] ?? 'standard';
+  let desired: ModelTier = input.overrideTier ?? policy.taskMap[taskClass] ?? 'standard';
+
+  // PSR-8 latency-SLO protection: when the full-turn SLO is BREACHING (burn > 1)
+  // shave one tier off a NON-reasoning, NON-overridden turn so it answers faster.
+  // Reasoning turns and explicit overrides are never sacrificed for latency.
+  const sloProtected =
+    !input.overrideTier &&
+    taskClass !== 'reasoning' &&
+    typeof input.latencyBurn === 'number' &&
+    input.latencyBurn > 1 &&
+    desired !== 'mini';
+  if (sloProtected) desired = downshiftTier(desired);
 
   // Resolve the deployment for the desired tier, falling back desired → standard → base.
   let tier: ModelTier = desired;
@@ -178,7 +209,7 @@ export function selectTier(policy: TierPolicy, input: TierSelectInput): TierSele
   if (!deployment) deployment = base; // standard tier defaults to the resolved base
 
   const routed = !!deployment && !!base && deployment !== base;
-  return { tier, taskClass, deployment: deployment || base, routed };
+  return { tier, taskClass, deployment: deployment || base, routed, ...(sloProtected ? { sloProtected: true } : {}) };
 }
 
 // ── Config adapter (structural — no TenantCopilotConfig import → no cycle) ────

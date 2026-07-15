@@ -4,6 +4,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
   classifyTaskClass, selectTier, tierPolicyFromConfig, resolveTierForTurn,
+  downshiftTier,
   DEFAULT_TIER_POLICY, DEFAULT_TASK_TIER_MAP, MODEL_TIERS, TASK_CLASSES,
   type TierPolicy,
 } from '../model-tier-router';
@@ -207,5 +208,45 @@ describe('tierPolicyFromConfig — day-one env deployment fallback (model-strate
     const r = resolveTierForTurn(null, { prompt: 'hi', baseDeployment: 'chat' });
     expect(r.routed).toBe(false);
     expect(r.deployment).toBe('chat');
+  });
+});
+
+describe('PSR-8 latency-SLO tier protection', () => {
+  const policy: TierPolicy = {
+    enabled: true,
+    tiers: { mini: 'gpt-mini', standard: 'gpt', strong: 'gpt-strong' },
+    taskMap: { ...DEFAULT_TASK_TIER_MAP },
+  };
+
+  it('downshiftTier shaves one tier: strong→standard→mini→mini', () => {
+    expect(downshiftTier('strong')).toBe('standard');
+    expect(downshiftTier('standard')).toBe('mini');
+    expect(downshiftTier('mini')).toBe('mini');
+  });
+
+  it('breaching SLO (burn > 1) downshifts a GENERAL turn standard→mini', () => {
+    const sel = selectTier(policy, { taskClass: 'general', baseDeployment: 'gpt', latencyBurn: 4 });
+    expect(sel.tier).toBe('mini');
+    expect(sel.deployment).toBe('gpt-mini');
+    expect(sel.sloProtected).toBe(true);
+  });
+
+  it('NEVER downshifts a REASONING turn, even under heavy breach', () => {
+    const sel = selectTier(policy, { taskClass: 'reasoning', baseDeployment: 'gpt', latencyBurn: 10 });
+    expect(sel.tier).toBe('strong');
+    expect(sel.sloProtected).toBeUndefined();
+  });
+
+  it('NEVER overrides an explicit overrideTier', () => {
+    const sel = selectTier(policy, { taskClass: 'general', overrideTier: 'strong', baseDeployment: 'gpt', latencyBurn: 9 });
+    expect(sel.tier).toBe('strong');
+    expect(sel.sloProtected).toBeUndefined();
+  });
+
+  it('healthy SLO (burn <= 1) leaves routing byte-identical', () => {
+    const withBurn = selectTier(policy, { taskClass: 'general', baseDeployment: 'gpt', latencyBurn: 0.5 });
+    const without = selectTier(policy, { taskClass: 'general', baseDeployment: 'gpt' });
+    expect(withBurn.tier).toBe(without.tier);
+    expect(withBurn.sloProtected).toBeUndefined();
   });
 });
