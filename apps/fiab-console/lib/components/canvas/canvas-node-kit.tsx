@@ -679,18 +679,22 @@ const useStyles = makeStyles({
     },
   },
   // ── v3: typed port label ('rows' / 'events' / 'model') ─────────────────────
-  // Small token-driven caption anchored just INSIDE the node edge at the port,
-  // on a neutral chip so it stays readable and never overlaps the bezier edge.
+  // v4: a small tag STRADDLING the card's bottom edge on the port's side —
+  // clear of the icon chip / title in the compact anatomy and clear of the
+  // bezier edge (which meets the port at the card's vertical center). Token-
+  // driven chip with a hairline border so it reads over any canvas background.
   // Truncates instead of pushing node width. Revealed on hover/selection only
   // (gated by the `root`/`selected` descendant rules above).
   portLabel: {
     position: 'absolute',
-    transform: 'translateY(-50%)',
+    bottom: 0,
+    transform: 'translateY(50%)',
     fontSize: tokens.fontSizeBase100,
     lineHeight: tokens.lineHeightBase100,
     fontWeight: tokens.fontWeightMedium,
     color: tokens.colorNeutralForeground3,
     background: tokens.colorNeutralBackground1,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
     paddingLeft: tokens.spacingHorizontalXXS,
     paddingRight: tokens.spacingHorizontalXXS,
     borderRadius: tokens.borderRadiusSmall,
@@ -1206,8 +1210,9 @@ export interface CanvasPortProps {
  * A single typed port: a React Flow `<Handle>` styled via `portStyle` PLUS an
  * optional typed label. Opt-in — hosts that declare port types adopt this in
  * place of a bare `<Handle style={portStyle(...)}>`; the handle geometry/ids are
- * unchanged so existing edges + selectors keep working. Token-driven and
- * positioned inside the node edge so the label never overlaps the bezier.
+ * unchanged so existing edges + selectors keep working. The label renders as a
+ * small tag straddling the card's bottom corner on the port's side (clear of
+ * the compact header row and the bezier edge), hover/selection-revealed.
  */
 export const CanvasPort: React.FC<CanvasPortProps> = ({
   id, type, position, accent, cond, opts, label, offset = 6, top = '50%',
@@ -1233,7 +1238,7 @@ export const CanvasPort: React.FC<CanvasPortProps> = ({
       {label && (
         <span
           className={styles.portLabel}
-          style={{ [edge]: tokens.spacingHorizontalS, top }}
+          style={{ [edge]: tokens.spacingHorizontalS }}
           data-port-label={id}
         >
           {label}
