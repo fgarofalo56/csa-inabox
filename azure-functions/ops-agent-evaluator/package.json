@@ -1,0 +1,21 @@
+{
+  "name": "ops-agent-evaluator",
+  "version": "1.0.0",
+  "description": "CSA Loom Operations Agent evaluator — timer-triggered Azure Function (G3). On a cron it reads operations-agent items from Cosmos, evaluates each trigger's KQL against the bound Eventhouse (ADX), reasons over a fired condition with Azure OpenAI, and dispatches the approval Logic App (Teams adaptive card) or the autonomous action. Azure-native, no Microsoft Fabric / Power Automate dependency.",
+  "main": "dist/src/functions/*.js",
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "start": "func start"
+  },
+  "dependencies": {
+    "@azure/functions": "^4.5.0",
+    "@azure/identity": "^4.5.0",
+    "@azure/cosmos": "^4.2.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0",
+    "@types/node": "^20.0.0"
+  }
+}

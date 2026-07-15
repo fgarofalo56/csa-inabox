@@ -31,7 +31,7 @@ import { clientFetch } from '@/lib/client-fetch';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Subtitle2, Body1, Caption1, Badge, Button, Input, Textarea, Spinner,
-  Card, Tab, TabList,
+  Card, Tab, TabList, Switch,
   MessageBar, MessageBarBody, MessageBarTitle,
   Field, Dropdown, Option,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
@@ -53,6 +53,8 @@ import { useItemState, SaveBar, useStyles } from './shared';
 import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
 import { MonitorActionBuilder } from '@/lib/components/monitor/monitor-action-builder';
 import { DEFAULT_MONITOR_ACTION, monitorActionToBody, type MonitorActionState } from '@/lib/components/monitor/monitor-action-model';
+import { openCopilotWithPersona } from '@/lib/components/copilot-pane';
+import { OPERATIONS_AGENT_PERSONA_ID } from '@/lib/azure/copilot-personas';
 
 // ----- state --------------------------------------------------------------
 interface AgentState {
@@ -66,7 +68,9 @@ interface AgentState {
 }
 
 interface DeployResponse {
-  ok: boolean; deferred?: boolean; agentId?: string; projectId?: string;
+  ok: boolean; deferred?: boolean; target?: string;
+  monitor?: { rulesDeployed: number; ruleIds?: string[]; note?: string; errors?: { rule: string; error: string }[] };
+  reasoning?: { deployed: boolean; agentId?: string; projectId?: string; skipped?: boolean; hint?: string; error?: string };
   lastDeployedAt?: string; error?: string; hint?: string;
 }
 
@@ -140,6 +144,25 @@ export function OperationsAgentEditor({ item, id }: { item: FabricItemType; id: 
   const deployedAgentId = state.foundryAgentId;
   const deployedAt = state.lastDeployedAt;
 
+  // ---- author a trigger with Copilot (G3 persona) ----
+  // Opens the cross-item Copilot pane scoped to the 'operations-agent' persona,
+  // which reuses the REAL Azure Monitor scheduled-query-alert tools
+  // (activator_author_rule / activator_suggest_threshold / activator_create_rule)
+  // to turn a plain-English "monitor when…" request into a live scheduledQueryRule
+  // after the user approves. No new backend — same ARM path as the Triggers tab.
+  const openOpsCopilot = useCallback(() => {
+    setTab('triggers');
+    openCopilotWithPersona({
+      persona: OPERATIONS_AGENT_PERSONA_ID,
+      personaContext: {
+        itemId: id,
+        workspaceId,
+        eventhouseItemId: state.eventhouse || undefined,
+        ontologyItemId: state.ontology || undefined,
+      },
+    });
+  }, [id, workspaceId, state.eventhouse, state.ontology]);
+
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'Agent', actions: [
@@ -148,10 +171,13 @@ export function OperationsAgentEditor({ item, id }: { item: FabricItemType; id: 
         { label: 'Test / Run', onClick: () => setTab('run') },
         { label: 'Triggers', onClick: () => setTab('triggers') },
         { label: 'Proposals', onClick: () => setTab('proposals') },
-        { label: deploying ? 'Deploying…' : 'Deploy to Foundry (optional)', onClick: onDeploy, disabled: deploying || saving, title: 'Optional: publish the agent definition to the Azure AI Foundry Agent Service. The Azure-native default (Azure Monitor triggers + grounded runs) needs no Foundry.' },
+        { label: deploying ? 'Deploying…' : 'Deploy triggers (Azure Monitor)', onClick: onDeploy, disabled: deploying || saving, title: 'Deploy this agent’s triggers to Azure Monitor (real scheduledQueryRules + action groups) as the Azure-native default, and — when configured — publish the reasoning companion to the Azure AI Foundry Agent Service. No Microsoft Fabric required.' },
+      ]},
+      { label: 'Copilot', actions: [
+        { label: 'Author trigger with Copilot', onClick: isNew ? undefined : openOpsCopilot, disabled: isNew, title: isNew ? 'Save the agent first' : 'Describe a condition in plain English — Copilot drafts the KQL, suggests a threshold from real history, and creates the Azure Monitor trigger after you approve.' },
       ]},
     ]},
-  ], [save, saving, dirty, onDeploy, deploying]);
+  ], [save, saving, dirty, onDeploy, deploying, isNew, openOpsCopilot]);
 
   const ehValue = ehOpts.find((o) => o.id === state.eventhouse)?.name || (state.eventhouse || '');
   const ontoValue = ontoOpts.find((o) => o.id === state.ontology)?.name || (state.ontology || '');
@@ -184,7 +210,7 @@ export function OperationsAgentEditor({ item, id }: { item: FabricItemType; id: 
               <MessageBar intent="info">
                 <MessageBarBody>
                   <MessageBarTitle>Azure-native operations agent</MessageBarTitle>
-                  This agent&rsquo;s instructions, model, and tools are saved to your workspace. It grounds on your bound <strong>Eventhouse</strong> (Azure Data Explorer) and Ontology, and <strong>acts</strong> through <strong>Triggers</strong> — real Azure Monitor scheduled-query rules with a rule → condition → action group (email / Teams / webhook / SMS / Logic App). This is the default; no Microsoft Fabric required. <strong>Deploy to Foundry</strong> is optional — it publishes the agent definition to the Azure AI Foundry Agent Service for a hosted runtime.
+                  This agent&rsquo;s instructions, model, and tools are saved to your workspace. It grounds on your bound <strong>Eventhouse</strong> (Azure Data Explorer) and Ontology, and <strong>acts</strong> through <strong>Triggers</strong> — real Azure Monitor scheduled-query rules with a rule → condition → action group (email / Teams / webhook / SMS / Logic App). <strong>Deploy triggers</strong> (Azure Monitor) is the primary, Azure-native deploy path — no Microsoft Fabric required. When the Azure AI Foundry Agent Service is configured, deploy also publishes a reasoning companion that interprets a fired event and recommends an action.
                 </MessageBarBody>
               </MessageBar>
               {deployedAgentId && (
@@ -253,12 +279,28 @@ export function OperationsAgentEditor({ item, id }: { item: FabricItemType; id: 
                 <MessageBar intent={deployResult.ok ? 'success' : deployResult.deferred ? 'warning' : 'error'}>
                   <MessageBarBody>
                     <MessageBarTitle>
-                      {deployResult.ok ? 'Deployed to Foundry'
-                        : deployResult.deferred ? 'Deploy deferred — Foundry not configured'
+                      {deployResult.ok ? 'Deployed to Azure Monitor'
+                        : deployResult.deferred ? 'Deploy deferred — Azure Monitor not configured'
                         : 'Deploy failed'}
                     </MessageBarTitle>
-                    {deployResult.ok && deployResult.agentId && (
-                      <>Agent <code>{deployResult.agentId}</code> upserted in project <code>{deployResult.projectId}</code>. The Foundry Agent Service is now the source of truth for runtime behavior.</>
+                    {deployResult.ok && deployResult.monitor && (
+                      <div>
+                        {deployResult.monitor.rulesDeployed > 0
+                          ? <>Deployed <strong>{deployResult.monitor.rulesDeployed}</strong> trigger{deployResult.monitor.rulesDeployed === 1 ? '' : 's'} as real Azure Monitor scheduled-query rules{deployResult.monitor.ruleIds?.length ? <> (<code>{deployResult.monitor.ruleIds.join(', ')}</code>)</> : null}.</>
+                          : (deployResult.monitor.note || 'No triggers to deploy yet.')}
+                        {deployResult.reasoning && (
+                          <div style={{ marginTop: tokens.spacingVerticalXS }}>
+                            {deployResult.reasoning.deployed
+                              ? <>Reasoning companion published to Azure AI Foundry: <code>{deployResult.reasoning.agentId}</code>.</>
+                              : deployResult.reasoning.error
+                                ? <>Reasoning companion not published: {deployResult.reasoning.error}</>
+                                : <><em>Reasoning companion skipped (optional):</em> {deployResult.reasoning.hint}</>}
+                          </div>
+                        )}
+                        {deployResult.monitor.errors?.length ? (
+                          <div style={{ marginTop: tokens.spacingVerticalXS }}>Some triggers failed: {deployResult.monitor.errors.map((e) => `${e.rule} — ${e.error}`).join('; ')}</div>
+                        ) : null}
+                      </div>
                     )}
                     {deployResult.error && <div>{deployResult.error}</div>}
                     {deployResult.hint && <div style={{ marginTop: tokens.spacingVerticalXS }}><em>Hint:</em> {deployResult.hint}</div>}
@@ -270,8 +312,8 @@ export function OperationsAgentEditor({ item, id }: { item: FabricItemType; id: 
                 saving={saving} savedAt={savedAt} error={error} dirty={dirty} onSave={() => save()}
                 extraRight={
                   <Button appearance="secondary" icon={<Flash20Regular />} onClick={onDeploy} disabled={deploying || saving}
-                    title="Optional runtime — the Azure-native default (Azure Monitor triggers + grounded runs) needs no Foundry.">
-                    {deploying ? 'Deploying…' : 'Deploy to Foundry (optional)'}
+                    title="Deploy this agent’s triggers to Azure Monitor (real scheduledQueryRules + action groups). Publishes the reasoning companion to Azure AI Foundry when configured. No Microsoft Fabric required.">
+                    {deploying ? 'Deploying…' : 'Deploy triggers (Azure Monitor)'}
                   </Button>
                 }
               />
@@ -469,11 +511,22 @@ function RunPane({ id, deployedAgentId, boundEventhouse, dirty, save, chatStyles
 interface OpsRule {
   id: string; name: string; query?: string; azureRuleName?: string; severity?: number;
   evaluationFrequency?: string; windowSize?: string; state?: string; sourceKind?: string;
-  scheduled?: boolean; note?: string;
+  scheduled?: boolean; note?: string; requireApproval?: boolean;
+  condition?: { property?: string; operator?: string; value?: unknown };
   action?: { kind?: string; config?: Record<string, unknown> };
   actionGroupId?: string;
   actionGroupReceivers?: { emails: number; sms: number; webhooks: number; logicApps: number };
 }
+/** WHEN — structured condition operators (composed to KQL server-side). */
+const COND_OPERATORS = [
+  { value: 'GreaterThan', label: '>' },
+  { value: 'GreaterThanOrEqual', label: '>=' },
+  { value: 'LessThan', label: '<' },
+  { value: 'LessThanOrEqual', label: '<=' },
+  { value: 'Equal', label: '==' },
+  { value: 'NotEqual', label: '!=' },
+  { value: 'Contains', label: 'contains' },
+];
 const SEVERITY_OPTS = [
   { value: 0, label: '0 — Critical' }, { value: 1, label: '1 — Error' }, { value: 2, label: '2 — Warning' },
   { value: 3, label: '3 — Informational' }, { value: 4, label: '4 — Verbose' },
@@ -499,6 +552,18 @@ function TriggersPane({ id, chatStyles: s }: { id: string; chatStyles: StyleBag 
   const [severity, setSeverity] = useState(2);
   const [evalFreq, setEvalFreq] = useState('PT5M');
   const [winSize, setWinSize] = useState('PT5M');
+  // WHEN — condition. Either a verbatim KQL query (advanced) or a structured
+  // property/operator/value builder (reused from the Activator condition-builder
+  // shape) that the backend composes into KQL against the source table. A
+  // non-empty KQL query wins; otherwise the structured condition is sent.
+  const [condMode, setCondMode] = useState<'builder' | 'kql'>('builder');
+  const [condProperty, setCondProperty] = useState('');
+  const [condOperator, setCondOperator] = useState('GreaterThan');
+  const [condValue, setCondValue] = useState('');
+  // Approval channel (G3) — when on, a fired trigger routes through a human
+  // approval (Teams adaptive-card via the bound Logic App) before the autonomous
+  // action runs. Persisted on the rule; read by the ops-agent evaluator Function.
+  const [requireApproval, setRequireApproval] = useState(false);
   // THEN — action (rule/condition/action builder). Composed into the POST body
   // as a real Azure Monitor action group (email / Teams / webhook / SMS / Logic App).
   const [action, setAction] = useState<MonitorActionState>(DEFAULT_MONITOR_ACTION);
@@ -524,10 +589,18 @@ function TriggersPane({ id, chatStyles: s }: { id: string; chatStyles: StyleBag 
   const createRule = useCallback(async () => {
     if (!ruleName.trim()) return;
     setCreating(true); setCreateErr(null); setGate(null);
-    const body: Record<string, unknown> = { name: ruleName.trim(), severity, evaluationFrequency: evalFreq, windowSize: winSize, sourceKind };
+    const body: Record<string, unknown> = { name: ruleName.trim(), severity, evaluationFrequency: evalFreq, windowSize: winSize, sourceKind, requireApproval };
     if (query.trim()) body.query = query.trim();
     if (sourceTable.trim()) body.sourceTable = sourceTable.trim();
     if (sourceKind === 'adx' && adxDatabase.trim()) body.adxDatabase = adxDatabase.trim();
+    // WHEN — structured condition (property/operator/value). Only sent when the
+    // builder is active AND no verbatim KQL was supplied (a KQL query wins). The
+    // backend (activator-monitor.buildRuleQuery / buildAdxRuleQuery) composes it
+    // into real KQL against the source table.
+    if (condMode === 'builder' && !query.trim() && condProperty.trim()) {
+      const numeric = /^-?\d+(\.\d+)?$/.test(condValue.trim());
+      body.condition = { property: condProperty.trim(), operator: condOperator, value: numeric ? Number(condValue) : condValue };
+    }
     // THEN — attach the composed action group (or a pick-existing id). An
     // unconfigured action degrades to {} so the rule is created without a group.
     const actionBody = monitorActionToBody(action);
@@ -539,11 +612,11 @@ function TriggersPane({ id, chatStyles: s }: { id: string; chatStyles: StyleBag 
       });
       const j = await r.json().catch(() => ({}));
       if (!j?.ok) { if (j?.gate) setGate(j.gate); setCreateErr(j?.error || j?.gate?.remediation || `HTTP ${r.status}`); return; }
-      setRuleName(''); setQuery(''); setSourceTable(''); setAction(DEFAULT_MONITOR_ACTION);
+      setRuleName(''); setQuery(''); setSourceTable(''); setCondProperty(''); setCondValue(''); setRequireApproval(false); setAction(DEFAULT_MONITOR_ACTION);
       await loadRules();
     } catch (e: any) { setCreateErr(e?.message || String(e)); }
     finally { setCreating(false); }
-  }, [ruleName, query, sourceTable, sourceKind, adxDatabase, severity, evalFreq, winSize, action, id, loadRules]);
+  }, [ruleName, query, sourceTable, sourceKind, adxDatabase, severity, evalFreq, winSize, action, condMode, condProperty, condOperator, condValue, requireApproval, id, loadRules]);
 
   const triggerNow = useCallback(async (ruleId: string) => {
     setTriggering(ruleId); setTriggerResult(null); setListErr(null); setGate(null);
@@ -620,9 +693,38 @@ function TriggersPane({ id, chatStyles: s }: { id: string; chatStyles: StyleBag 
             </Dropdown>
           </Field>
         </div>
-        <Field label="Alert KQL" hint="The trigger fires when this query returns one or more rows. Leave blank to alert on any new row in the source table below.">
-          <Textarea value={query} rows={3} onChange={(_, d) => setQuery(d.value)} placeholder={'Metrics\n| where cpu_pct > 90\n| where Timestamp > ago(15m)'} />
-        </Field>
+        {/* WHEN — condition. A structured property/operator/value builder (the
+            same shape the Activator condition-builder emits) OR verbatim KQL. */}
+        <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', marginTop: tokens.spacingVerticalXS }}>
+          <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>WHEN — condition</Caption1>
+          <TabList size="small" selectedValue={condMode} onTabSelect={(_, d) => setCondMode(d.value as 'builder' | 'kql')}>
+            <Tab value="builder">Builder</Tab>
+            <Tab value="kql">KQL</Tab>
+          </TabList>
+        </div>
+        {condMode === 'builder' ? (
+          <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+            <Field label="Property (column)" hint="The column the condition targets." style={{ minWidth: 200 }}>
+              <Input value={condProperty} onChange={(_, d) => setCondProperty(d.value)} placeholder="cpu_pct" />
+            </Field>
+            <Field label="Operator" style={{ minWidth: 130 }}>
+              <Dropdown value={COND_OPERATORS.find((o) => o.value === condOperator)?.label} selectedOptions={[condOperator]}
+                onOptionSelect={(_, d) => d.optionValue && setCondOperator(d.optionValue)}>
+                {COND_OPERATORS.map((o) => <Option key={o.value} value={o.value}>{o.label}</Option>)}
+              </Dropdown>
+            </Field>
+            <Field label="Value" style={{ minWidth: 140 }}>
+              <Input value={condValue} onChange={(_, d) => setCondValue(d.value)} placeholder="90" />
+            </Field>
+            <Caption1 style={{ color: tokens.colorNeutralForeground3, paddingBottom: tokens.spacingVerticalXS }}>
+              Composed to KQL against the source table below. Fires when a matching row exists.
+            </Caption1>
+          </div>
+        ) : (
+          <Field label="Alert KQL" hint="The trigger fires when this query returns one or more rows. Leave blank to alert on any new row in the source table below.">
+            <Textarea value={query} rows={3} onChange={(_, d) => setQuery(d.value)} placeholder={'Metrics\n| where cpu_pct > 90\n| where Timestamp > ago(15m)'} />
+          </Field>
+        )}
         <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap', alignItems: 'flex-end' }}>
           <Field label="Source table (optional)" hint="Used to compose the query when Alert KQL is blank." style={{ minWidth: 220 }}>
             <Input value={sourceTable} onChange={(_, d) => setSourceTable(d.value)} placeholder="Metrics" />
@@ -636,9 +738,27 @@ function TriggersPane({ id, chatStyles: s }: { id: string; chatStyles: StyleBag 
         {/* THEN — action. What fires when the rule's condition is met: a real
             Azure Monitor action group (email / Teams / webhook / SMS / Logic App). */}
         <MonitorActionBuilder value={action} onChange={setAction} />
+        {/* Approval channel (G3) — autonomous vs human-approved. */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS, marginTop: tokens.spacingVerticalXS }}>
+          <Switch
+            checked={requireApproval}
+            onChange={(_, d) => setRequireApproval(!!d.checked)}
+            label={requireApproval
+              ? 'Require human approval before the action fires (Teams adaptive-card via the bound Logic App)'
+              : 'Autonomous — the action fires directly when the condition is met'}
+          />
+          <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+            {requireApproval
+              ? 'A fired trigger is reasoned over by Azure OpenAI, then routed to a human approver in Microsoft Teams before any downstream action runs.'
+              : 'Turn this on to add a human-in-the-loop approval step before the agent acts autonomously.'}
+          </Caption1>
+        </div>
         <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center' }}>
           <Button appearance="primary" icon={<Add20Regular />} onClick={createRule} disabled={creating || !ruleName.trim()}>
             {creating ? 'Creating…' : 'Create trigger'}
+          </Button>
+          <Button appearance="secondary" icon={<Sparkle20Regular />} onClick={() => openCopilotWithPersona({ persona: OPERATIONS_AGENT_PERSONA_ID, personaContext: { itemId: id } })}>
+            Author with Copilot
           </Button>
         </div>
         {createErr && !gate && <Caption1 style={{ color: tokens.colorPaletteRedForeground1 }}>{createErr}</Caption1>}
@@ -666,6 +786,9 @@ function TriggersPane({ id, chatStyles: s }: { id: string; chatStyles: StyleBag 
               : r.actionGroupId
                 ? <Badge appearance="tint" color="brand">action group</Badge>
                 : <Badge appearance="outline" color="warning">no action</Badge>}
+            <Badge appearance="tint" color={r.requireApproval ? 'warning' : 'success'} icon={r.requireApproval ? <ShieldCheckmark20Regular /> : <Flash20Regular />}>
+              {r.requireApproval ? 'approval required' : 'autonomous'}
+            </Badge>
             <div style={{ flex: 1 }} />
             <Button size="small" appearance="subtle" icon={<Play20Regular />} onClick={() => triggerNow(r.id)} disabled={triggering === r.id}>
               {triggering === r.id ? 'Running…' : 'Trigger now'}
