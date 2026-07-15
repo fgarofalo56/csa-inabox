@@ -356,38 +356,41 @@ function scoreColor(score: number): 'success' | 'warning' | 'error' {
   return 'error';
 }
 
-export function ContractQualityRunPanel({ id, reloadKey = 0, dirty = false }: { id: string; reloadKey?: number; dirty?: boolean }) {
+export function ContractQualityRunPanel({ id, reloadKey = 0, dirty = false, endpoint }: { id: string; reloadKey?: number; dirty?: boolean; endpoint?: string }) {
   const s = useStyles();
   const [meta, setMeta] = useState<ContractQualityResponse | null>(null);
   const [run, setRun] = useState<ContractQualityResponse['run'] | null>(null);
   const [running, setRunning] = useState(false);
   const [loadingMeta, setLoadingMeta] = useState(id !== 'new');
   const [err, setErr] = useState<string | null>(null);
+  // Default endpoint is the data-product contract-quality route; the standalone
+  // `data-contract` item (W10) passes /api/items/data-contract/[id]/quality.
+  const qEndpoint = endpoint || `/api/data-products/${encodeURIComponent(id)}/contract-quality`;
 
   const loadMeta = useCallback(async () => {
     if (id === 'new') { setLoadingMeta(false); return; }
     setLoadingMeta(true); setErr(null); setRun(null);
     try {
-      const r = await clientFetch(`/api/data-products/${encodeURIComponent(id)}/contract-quality`);
+      const r = await clientFetch(qEndpoint);
       const j = (await r.json()) as ContractQualityResponse;
       if (j.ok) setMeta(j); else setErr(j.error || `HTTP ${r.status}`);
     } catch (e: any) { setErr(e?.message || String(e)); }
     finally { setLoadingMeta(false); }
-  }, [id, reloadKey]);
+  }, [id, reloadKey, qEndpoint]);
 
   useEffect(() => { void loadMeta(); }, [loadMeta]);
 
   const doRun = useCallback(async () => {
     setRunning(true); setErr(null);
     try {
-      const r = await clientFetch(`/api/data-products/${encodeURIComponent(id)}/contract-quality`, { method: 'POST' });
+      const r = await clientFetch(qEndpoint, { method: 'POST' });
       const j = (await r.json()) as ContractQualityResponse;
       if (!j.ok) { setErr(j.error || `HTTP ${r.status}`); return; }
       setMeta(j);
       setRun(j.run ?? null);
     } catch (e: any) { setErr(e?.message || String(e)); }
     finally { setRunning(false); }
-  }, [id]);
+  }, [qEndpoint]);
 
   if (id === 'new') return null;
 

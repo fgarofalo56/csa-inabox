@@ -190,4 +190,30 @@ export const dataEngineeringItems: FabricItemType[] = [
       ],
       "docsUrl": "https://learn.microsoft.com/azure/batch/batch-technical-overview"
     } },
+  // W12 — Synthetic data generator (Loom-native; no Fabric REST equivalent).
+  { slug: 'synthetic-data', displayName: 'Synthetic data', restType: 'SyntheticData', category: 'Data Engineering', noRestApi: true,
+    description: 'Generate realistic synthetic rows from a per-column strategy (faker-style names / dates / categoricals / numeric distributions) and write them to a real Delta table. Seed columns from a data contract; PII columns are synthesized (never real). Azure-native (Databricks SQL) — no Fabric dependency.',
+    learnContent: {
+      "overview": "A Synthetic data generator produces realistic, non-sensitive rows for testing, demos, and ML — never a copy of real data. You seed the columns from a data contract's schema (or define them by hand), pick a per-column generation strategy (sequence, UUID, integer/decimal/normal distributions, dates, categoricals, and faker-style names / emails / phones / addresses / companies), set a row count and a reproducible seed, preview real generated rows, then GENERATE the full table — written to a real Delta table via Databricks SQL (CSV → staged Unity Catalog volume → CREATE TABLE with schema inference). It is 100% Azure-native — no Microsoft Fabric capacity is required. Every value is synthesized from scratch, so no real PII is ever emitted; a source column classified PII/PHI/PCI is mapped to a synthetic strategy (a fake name / email / phone) or a redacted mask.",
+      "steps": [
+        { "title": "Pick a source schema", "body": "Seed the columns from a data contract in your workspace (its typed columns + PII classification drive the inferred strategies), or add columns by hand." },
+        { "title": "Choose per-column strategies", "body": "For each column pick a generation strategy — sequence / UUID / integer / decimal / normal distribution / date / timestamp / categorical / constant, or a synthetic name / email / phone / company / city / address — and its options (ranges, values, distribution, null rate)." },
+        { "title": "Preview real rows", "body": "Set a row count and a seed, then Preview generates the first rows exactly as the full run will (deterministic for the seed) — no backend needed." },
+        { "title": "Generate to Delta", "body": "Pick a Databricks SQL warehouse, catalog, schema, staging volume, and a new table name, then Generate. The rows are written to a real managed Delta table; each run is recorded in the history." }
+      ],
+      "docsUrl": "https://learn.microsoft.com/azure/databricks/sql/language-manual/functions/read_files"
+    } },
+  // W11 — Data-quality check (Loom-native; wraps the shared DQ rule engine).
+  { slug: 'data-quality', displayName: 'Data-quality check', restType: 'DataQualityRuleSet', category: 'Data Engineering', noRestApi: true,
+    description: 'A workspace-scoped data-quality run: pin a backend (Azure Data Explorer / Databricks / Synapse) and a target, run your data-quality rules (not-null / unique / range / regex / freshness) against the live table, and see a composite scorecard + per-rule breakdown + history. Azure-native — no Fabric dependency.',
+    learnContent: {
+      "overview": "A Data-quality check is a first-class, workspace-scoped run configuration over Loom's shared Data Quality Rule Engine. You pin a backend (Azure Data Explorer by default, or Databricks SQL / Synapse SQL) and a target, then run your organization's enabled data-quality rules — not-null, unique, in-range, matches-a-pattern, and freshness — against the live table using real queries on that backend. The pass rate of every rule feeds a composite data-quality score, shown as a scorecard with the per-rule breakdown, and every run is kept in the item's history. The rules themselves are authored and managed centrally in Governance → Data quality. It is 100% Azure-native — no Microsoft Fabric capacity is required; when the chosen backend isn't configured the item shows an honest gate naming the exact env var to set.",
+      "steps": [
+        { "title": "Author rules once", "body": "Define your data-quality rules (not-null / unique / range / regex / freshness, each scoped to a table or column with a pass threshold) in Governance → Data quality." },
+        { "title": "Pin a backend + target", "body": "Choose Azure Data Explorer, Databricks SQL, or Synapse SQL, and the database / warehouse / catalog / schema to run against. Optionally filter to specific tables." },
+        { "title": "Run the checks", "body": "Run executes every matching enabled rule against the live backend and computes the composite score — real queries, no fabricated numbers." },
+        { "title": "Read the scorecard + history", "body": "See the score, the passing/failing rule counts, and the per-rule measured pass %. Each run is recorded in the history so you can track quality over time." }
+      ],
+      "docsUrl": "https://learn.microsoft.com/azure/data-explorer/"
+    } },
 ];

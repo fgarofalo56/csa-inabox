@@ -115,6 +115,8 @@ export const EDITOR_REGISTRY: Record<string, EditorComponent> = {
   'automl':               reg(() => import('./automl-editor'),            'AutoMlEditor'),
   // AIF-7 — batch LLM augmentation over a table column (Fabric AI-functions item).
   'ai-enrichment':        reg(() => import('./ai-enrichment-editor'),     'AiEnrichmentEditor'),
+  // AIF-15 — AI red-team scan: defensive safety probe of a model deployment.
+  'ai-red-team':          reg(() => import('./ai-red-team-editor'),       'AiRedTeamEditor'),
   'graphql-api':          reg(() => import('./phase4/graphql-api-editor'),      'GraphqlApiEditor'),
   'user-data-function':   reg(() => import('./phase4/user-data-function-editor'), 'UserDataFunctionEditor'),
   'variable-library':     reg(() => import('./phase4/variable-library-editor'), 'VariableLibraryEditor'),
@@ -127,6 +129,10 @@ export const EDITOR_REGISTRY: Record<string, EditorComponent> = {
   'map':                  reg(() => import('./phase4/map-editor'),              'MapEditor'),
   'operations-agent':     reg(() => import('./phase4/operations-agent-editor'), 'OperationsAgentEditor'),
   'data-agent':           reg(() => import('./phase4/data-agent-editor'),       'DataAgentEditor'),
+  // W9 — standalone Agent flow: the AIF-6 canvas as a first-class item type;
+  // FlowDag of grounded data tools + MCP/OpenAPI tools + connected sub-agents,
+  // run through its own owner-scoped route. Azure-native (no Fabric/Foundry).
+  'agent-flow':           reg(() => import('./phase4/agent-flow-editor'),        'AgentFlowEditor'),
 
   // v1.5 — Native Azure-service editors (Synapse, Databricks, ADF, U-SQL)
   // v2.0 — Synapse Dedicated + Serverless are real-REST wired (TDS over PE + AAD MI)
@@ -154,6 +160,9 @@ export const EDITOR_REGISTRY: Record<string, EditorComponent> = {
   // data-product → read-first owner details page (F3). The full working owner
   // editor (DataProductEditor) is reached from there via ?view=edit.
   'data-product':                reg(() => import('./data-product-detail'),    'DataProductDetailEditor'),
+  // W10 — standalone Data contract: schema + SLAs + quality expectations in a
+  // typed designer; bind to a data product to enforce BR-CONTRACT-GATE at publish.
+  'data-contract':               reg(() => import('./data-contract-editor'),   'DataContractEditor'),
 
   // v2.x — Azure AI Foundry hub (Microsoft.MachineLearningServices/workspaces kind=Hub)
   'ai-foundry-hub':              reg(() => import('./foundry-hub-editor'),     'FoundryHubEditor'),
@@ -267,6 +276,13 @@ export const EDITOR_REGISTRY: Record<string, EditorComponent> = {
   // over ARM, jobs+tasks over the Batch data plane; real REST via batch-client.
   // Honest 503 gate when LOOM_BATCH_ACCOUNT is unset. Azure-native — no Fabric.
   'batch-pool':                  reg(() => import('./batch-pool-editor'),          'BatchPoolEditor'),
+
+  // W12 — Synthetic data generator: per-column faker-style strategies → real
+  // Delta table via Databricks SQL. Azure-native, no Fabric dependency.
+  'synthetic-data':              reg(() => import('./synthetic-data-editor'),      'SyntheticDataEditor'),
+  // W11 — Data-quality check: workspace-scoped run over the shared DQ engine
+  // (ADX / Databricks / Synapse) → composite scorecard + breakdown + history.
+  'data-quality':                reg(() => import('./data-quality-editor'),        'DataQualityEditor'),
 };
 
 export function getEditor(slug: string): EditorComponent | null {
