@@ -13,6 +13,8 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { isTenantAdmin } from '@/lib/auth/feature-gate';
+import { listCallerScopedHubNames } from '@/lib/azure/eventstream-hub-scope';
 import {
   eventhubsConfigGate, listEventHubs, createEventHub, deleteEventHub,
 } from '@/lib/azure/eventhubs-client';
@@ -31,13 +33,32 @@ function gate() {
   return null;
 }
 
-export async function GET() {
+/**
+ * GET — least-privilege by DEFAULT: returns only the hubs referenced by
+ * eventstream items in workspaces the caller can access (owned + shared).
+ * Tenant admins may pass ?scope=all for the full namespace listing (the tree's
+ * admin-only "Show all hubs" toggle). Non-admin ?scope=all is ignored.
+ */
+export async function GET(req: NextRequest) {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   const g = gate(); if (g) return g;
+  const admin = isTenantAdmin(session);
+  const showAll = admin && req.nextUrl.searchParams.get('scope') === 'all';
   try {
     const hubs = await listEventHubs();
-    return NextResponse.json({ ok: true, hubs });
+    if (showAll) {
+      return NextResponse.json({ ok: true, hubs, scoped: false, isAdmin: admin });
+    }
+    const allowed = await listCallerScopedHubNames(session.claims.oid, session.claims.tid);
+    const scopedHubs = hubs.filter((h: any) => typeof h?.name === 'string' && allowed.has(h.name.toLowerCase()));
+    return NextResponse.json({
+      ok: true,
+      hubs: scopedHubs,
+      scoped: true,
+      isAdmin: admin,
+      totalInNamespace: hubs.length,
+    });
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }
@@ -66,6 +87,17 @@ export async function DELETE(req: NextRequest) {
   const g = gate(); if (g) return g;
   const name = req.nextUrl.searchParams.get('name')?.trim();
   if (!name) return NextResponse.json({ ok: false, error: 'name query param is required' }, { status: 400 });
+  // Least-privilege: non-admins may only delete hubs their accessible
+  // workspaces' eventstreams reference (the only hubs the tree shows them).
+  if (!isTenantAdmin(session)) {
+    const allowed = await listCallerScopedHubNames(session.claims.oid, session.claims.tid);
+    if (!allowed.has(name.toLowerCase())) {
+      return NextResponse.json(
+        { ok: false, error: 'forbidden — this event hub is not referenced by any eventstream in your workspaces' },
+        { status: 403 },
+      );
+    }
+  }
   try {
     await deleteEventHub(name);
     return NextResponse.json({ ok: true });

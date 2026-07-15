@@ -55,8 +55,74 @@ export interface PlatformSettingsDoc {
    * (the browser SDK sends it as x-ms-client-id); the credential stays server-side.
    */
   mapsAccount?: string;
+  /**
+   * Admin-set Spark structured-streaming binding for eventstream notebook
+   * sinks. When unset, resolution falls through to LOOM_SYNAPSE_WORKSPACE /
+   * LOOM_DATABRICKS_WORKSPACE_URL (the deploy-time defaults).
+   */
+  sparkBinding?: SparkStreamingBinding;
   updatedAt?: string;
   updatedBy?: string;
+}
+
+/** The Spark runtime an eventstream notebook sink routes to. */
+export interface SparkStreamingBinding {
+  kind: 'synapse' | 'databricks';
+  /** Synapse workspace NAME (kind: 'synapse'). */
+  synapseWorkspace?: string;
+  /** Databricks workspace URL, e.g. https://adb-123.11.azuredatabricks.net (kind: 'databricks'). */
+  databricksUrl?: string;
+}
+
+/**
+ * Effective Spark structured-streaming binding for eventstream notebook sinks:
+ * runtime admin setting > env (LOOM_SYNAPSE_WORKSPACE, then
+ * LOOM_DATABRICKS_WORKSPACE_URL) > null (genuinely unbound). Auto-detecting the
+ * deployment's existing workspace binding here is what removes the day-one
+ * "Requires a Spark structured-streaming binding" gate.
+ */
+export async function resolveSparkStreamingBinding(): Promise<
+  (SparkStreamingBinding & { source: 'runtime' | 'env' }) | null
+> {
+  try {
+    const doc = await readPlatformSettings();
+    const b = doc?.sparkBinding;
+    if (b && (b.kind === 'synapse' ? (b.synapseWorkspace || '').trim() : (b.databricksUrl || '').trim())) {
+      return { ...b, source: 'runtime' };
+    }
+  } catch {
+    /* fall through to env */
+  }
+  const synapse = (process.env.LOOM_SYNAPSE_WORKSPACE || '').trim();
+  if (synapse) return { kind: 'synapse', synapseWorkspace: synapse, source: 'env' };
+  const databricks = (process.env.LOOM_DATABRICKS_WORKSPACE_URL || '').trim();
+  if (databricks) return { kind: 'databricks', databricksUrl: databricks, source: 'env' };
+  return null;
+}
+
+/**
+ * Persist the admin-selected Spark streaming binding to the singleton platform
+ * doc. Callers MUST enforce the admin gate first (pure store helper).
+ */
+export async function writeSparkStreamingBinding(binding: SparkStreamingBinding, who: string): Promise<PlatformSettingsDoc> {
+  const c = await envConfigContainer();
+  const now = new Date().toISOString();
+  let existing: PlatformSettingsDoc | null = null;
+  try {
+    existing = await readPlatformSettings();
+  } catch {
+    existing = null;
+  }
+  const doc: PlatformSettingsDoc = {
+    ...(existing ?? {}),
+    id: PLATFORM_ID,
+    tenantId: PLATFORM_ID,
+    sparkBinding: binding,
+    updatedAt: now,
+    updatedBy: who,
+  };
+  const { resource } = await c.items.upsert(doc);
+  return (resource as unknown as PlatformSettingsDoc) ?? doc;
 }
 
 /**
