@@ -1788,6 +1788,19 @@ nav:
               - "How to: Create OneLake shortcut": fiab/catalog/how-to-shortcut.md
           - Feature Permissions (Fabric-style RBAC): fiab/admin/feature-rbac.md
           - Scale by SKU: fiab/admin/scaling.md
+          - Admin console pages:
+              - Capacity & compute: fiab/admin/capacity.md
+              - Performance & benchmarks: fiab/admin/performance.md
+              - Usage & chargeback: fiab/admin/usage-chargeback.md
+              - Chargeback report: fiab/admin/chargeback.md
+              - Runtime configuration (env-config): fiab/admin/env-config.md
+              - Domains: fiab/admin/domains.md
+              - Classifications: fiab/admin/classifications.md
+              - Sensitivity labels: fiab/admin/sensitivity-labels.md
+              - API Management: fiab/admin/api-management.md
+              - MCP Servers: fiab/admin/mcp-servers.md
+              - Event subscriptions (webhooks): fiab/admin/webhooks.md
+              - Audit logs: fiab/admin/audit-logs.md
 
       # ------------------------------------------------------------
       # 8. Operations & Runbooks
