@@ -31,7 +31,9 @@
  * Token scope: https://purview.azure.net/.default  (the Data Map data-plane
  * audience; confirmed on the Discovery Query reference page's OAuth2 scope).
  *
- * Host: https://{account}.purview.azure.com   (NOT -api).
+ * Host: ARM-derived `properties.endpoints.catalog` origin when resolvable,
+ * else the CLOUD-AWARE convention host `https://{account}.purview.azure.com`
+ * (`.purview.azure.us` in Azure Government) — NOT -api. See purview-endpoints.ts.
  *
  * Auth: ChainedTokenCredential — UAMI first (LOOM_UAMI_CLIENT_ID), then
  * DefaultAzureCredential for local `az login` dev.
@@ -64,7 +66,11 @@ import {
   ChainedTokenCredential,
 } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
-import { isGovCloud } from './cloud-endpoints';
+import {
+  normalizePurviewAccountName,
+  purviewBaseSync,
+  resolvePurviewEndpoints,
+} from './purview-endpoints';
 
 const PURVIEW_SCOPE = 'https://purview.azure.net/.default';
 
@@ -199,22 +205,22 @@ function purviewAccount(): string {
   if (!raw) throw new PurviewNotConfiguredError(notConfiguredHint('LOOM_PURVIEW_ACCOUNT'));
   // Accept either a bare account name or a full URL (tolerate copy/paste of the
   // classic OR the -api host) and normalize down to the short account name.
-  // Handles both the Commercial (.purview.azure.com) and US Gov (.purview.azure.us)
-  // hosts so a Gov account name copy/pasted as a URL still resolves cleanly.
-  return raw
-    .replace(/^https?:\/\//, '')
-    .replace(/-api\.purview\.azure\.(com|us).*$/, '')
-    .replace(/\.purview\.azure\.(com|us).*$/, '')
-    .replace(/\/+$/, '');
+  // Handles the Commercial (.purview.azure.com), US Gov (.purview.azure.us)
+  // and China (.purview.azure.cn) hosts so a pasted URL still resolves cleanly.
+  return normalizePurviewAccountName(raw);
 }
 
 /**
- * Classic Data Map base host — `{account}.purview.azure.{com|us}` (NOT -api).
- * The TLD follows the cloud: `.us` in the US Government clouds (where the
- * Purview data plane is `*.purview.azure.us`), `.com` everywhere else.
+ * Classic Data Map base URL (NOT -api). Resolution order (purview-endpoints):
+ *   1. LOOM_PURVIEW_ENDPOINT (explicit override),
+ *   2. the ARM-derived `properties.endpoints.catalog` origin when
+ *      `resolvePurviewEndpoints()` has warmed the per-process cache (the
+ *      status probe does this on every gate check),
+ *   3. cloud-aware convention — `{account}.purview.azure.{us|com}` (`.us` in
+ *      the US Government clouds, `.com` everywhere else).
  */
 function purviewBase(): string {
-  return `https://${purviewAccount()}.purview.azure.${isGovCloud() ? 'us' : 'com'}`;
+  return purviewBaseSync(purviewAccount());
 }
 
 /** True when LOOM_PURVIEW_ACCOUNT is set (does NOT prove reachability). */
@@ -234,6 +240,11 @@ export interface PurviewProbeResult {
   reason: 'live' | 'not_configured' | 'role_missing' | 'upstream_error';
   message?: string;
   hint?: PurviewNotConfiguredHint;
+  /** The data-plane base URL that was actually probed (cloud-correct). */
+  endpoint?: string;
+  /** Where the probed endpoint came from: ARM properties.endpoints ('arm'),
+   *  LOOM_PURVIEW_ENDPOINT ('env'), or the cloud-aware convention host. */
+  endpointSource?: 'env' | 'arm' | 'convention';
 }
 
 /**
@@ -264,15 +275,31 @@ export async function probePurview(): Promise<PurviewProbeResult> {
     };
   }
   const account = purviewAccount();
+  // Resolve the REAL data-plane endpoint from ARM (properties.endpoints —
+  // authoritative in every cloud); falls back to the CLOUD-AWARE convention
+  // host with `armError` explaining why the ARM read failed. Also warms the
+  // per-process cache purviewBaseSync() serves data-plane calls from.
+  const resolved = await resolvePurviewEndpoints(account);
+  const endpointDetail =
+    resolved.source === 'arm'
+      ? 'endpoint resolved from the ARM resource (properties.endpoints.catalog)'
+      : resolved.source === 'env'
+        ? 'endpoint set explicitly via LOOM_PURVIEW_ENDPOINT'
+        : `cloud-convention endpoint; ARM lookup FAILED (${resolved.armError || 'unknown error'})`;
+  const withEndpoint = <T extends PurviewProbeResult>(r: T): T => ({
+    ...r,
+    endpoint: resolved.base,
+    endpointSource: resolved.source,
+  });
   try {
     const token = await credential.getToken(PURVIEW_SCOPE);
     if (!token?.token) {
-      return { configured: true, account, reason: 'upstream_error', message: 'Failed to acquire a Purview data-plane token.' };
+      return withEndpoint({ configured: true, account, reason: 'upstream_error', message: 'Failed to acquire a Purview data-plane token.' });
     }
-    const url = `${purviewBase()}/datamap/api/atlas/v2/types/typedefs/headers?api-version=${DATAMAP_API_VERSION}`;
+    const url = `${resolved.base}/datamap/api/atlas/v2/types/typedefs/headers?api-version=${DATAMAP_API_VERSION}`;
     const res = await fetchWithTimeout(url, { headers: { authorization: `Bearer ${token.token}` } });
     if (res.status === 200) {
-      return { configured: true, account, reason: 'live' };
+      return withEndpoint({ configured: true, account, reason: 'live' });
     }
     if (res.status === 401 || res.status === 403) {
       const hint = notConfiguredHint('LOOM_PURVIEW_ACCOUNT');
@@ -281,9 +308,9 @@ export async function probePurview(): Promise<PurviewProbeResult> {
         'data-plane role on this account. Grant Data Curator (read/write) or Data Reader ' +
         '(read-only) on the root collection via scripts/csa-loom/grant-purview-datamap-role.sh, ' +
         'then retry.';
-      return { configured: true, account, reason: 'role_missing', message: `Purview answered ${res.status} (UAMI lacks a Data Map role).`, hint };
+      return withEndpoint({ configured: true, account, reason: 'role_missing', message: `Purview answered ${res.status} (UAMI lacks a Data Map role).`, hint });
     }
-    return { configured: true, account, reason: 'upstream_error', message: `Purview answered ${res.status}.` };
+    return withEndpoint({ configured: true, account, reason: 'upstream_error', message: `Purview answered ${res.status}.` });
   } catch (e: any) {
     // fetch throws on DNS / connection failures.
     const msg = e?.message || String(e);
@@ -291,13 +318,14 @@ export async function probePurview(): Promise<PurviewProbeResult> {
     if (networkish) {
       const hint = notConfiguredHint('LOOM_PURVIEW_ACCOUNT');
       hint.followUp =
-        `The account name "${account}" did not resolve as a classic Purview Data Map host ` +
-        `(${account}.purview.azure.com): ${msg}. Set LOOM_PURVIEW_ACCOUNT to a provisioned ` +
-        'classic Purview account (Microsoft.Purview/accounts) in this cloud, then restart the Console. ' +
+        `The account "${account}" did not answer as a classic Purview Data Map host at ` +
+        `${resolved.base} (${endpointDetail}): ${msg}. Set LOOM_PURVIEW_ACCOUNT to a provisioned ` +
+        'classic Purview account (Microsoft.Purview/accounts) in this cloud — or set ' +
+        'LOOM_PURVIEW_ENDPOINT to the exact data-plane base URL — then restart the Console. ' +
         'See docs/fiab/purview-setup.md.';
-      return { configured: true, account, reason: 'not_configured', message: msg, hint };
+      return withEndpoint({ configured: true, account, reason: 'not_configured', message: msg, hint });
     }
-    return { configured: true, account, reason: 'upstream_error', message: msg };
+    return withEndpoint({ configured: true, account, reason: 'upstream_error', message: msg });
   }
 }
 
