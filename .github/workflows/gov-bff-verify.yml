@@ -91,8 +91,14 @@ jobs:
           az containerapp show -n loom-unity -g "$RG" --query "properties.template.{volumes:volumes,mounts:containers[0].volumeMounts,image:containers[0].image}" -o json || true
           echo "--- system log stream (kind system) ---"
           az containerapp logs show -n loom-unity -g "$RG" --type system --tail 40 --format text 2>/dev/null | tail -40 || true
-          echo "--- current image on the app ---"
-          az containerapp show -n loom-unity -g "$RG" --query properties.template.containers[0].image -o tsv || true
+          echo "--- current image + env on the RUNNING revision ---"
+          LR=$(az containerapp show -n loom-unity -g "$RG" --query properties.latestRevisionName -o tsv | tr -d '\r')
+          az containerapp revision show -n loom-unity -g "$RG" --revision "$LR" \
+            --query "properties.template.containers[0].{image:image, env:env}" -o json || true
+          echo "--- direct container-log query (robust, --only-show-errors) ---"
+          if [ -n "${LAW:-}" ]; then
+            az monitor log-analytics query --only-show-errors -w "$LAW" --analytics-query "ContainerAppConsoleLogs_CL | where ContainerName_s == 'loom-unity' | where TimeGenerated > ago(30m) | order by TimeGenerated desc | take 60 | project Log_s" -o tsv 2>&1 | head -70 || true
+          fi
           echo "--- crash stack from Log Analytics (last 45 min) ---"
           LAW=$(az monitor log-analytics workspace list -g "$RG" --query "[0].customerId" -o tsv 2>/dev/null | tr -d '\r')
           if [ -z "$LAW" ]; then LAW=$(az monitor log-analytics workspace list --query "[?contains(name,'loom')] | [0].customerId" -o tsv 2>/dev/null | tr -d '\r'); fi
