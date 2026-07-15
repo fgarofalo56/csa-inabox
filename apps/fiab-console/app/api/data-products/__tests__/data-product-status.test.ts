@@ -215,6 +215,47 @@ describe('POST /api/data-products/[id]/status', () => {
     expect(persisted.publishStatus).toBe('Published');
   });
 
+  // ── DP-3: the guided wizard's publish paths satisfy the preconditions ──────
+  it('publishes with dataAssets (not datasets) attached — either asset surface counts', async () => {
+    (getSession as any).mockReturnValue({ claims: { oid: 'u' } });
+    const loaded = item({ domain: DOMAIN, dataAssets: [{ guid: 'a1' }], accessPolicy: { allowedPurposes: [{ name: 'analytics' }] } });
+    (loadOwnedItem as any).mockResolvedValue(loaded);
+    stubPolicies([]); // no tenant governance policy
+    (updateOwnedItem as any).mockImplementation(async (_i: string, _t: string, _o: string, patch: any) => ({ ...loaded, state: patch.state }));
+    const res = await POST(req({ status: 'PUBLISHED' }), ctx('dp-1'));
+    expect(res.status).toBe(200);
+    expect((await res.json()).lifecycleState).toBe('published');
+  });
+
+  it("publishes when the product's own accessPolicy is configured (no tenant policy)", async () => {
+    (getSession as any).mockReturnValue({ claims: { oid: 'u' } });
+    const loaded = item({ domain: DOMAIN, datasets: [{ name: 's' }], accessPolicy: { approvers: [{ id: 'r' }] } });
+    (loadOwnedItem as any).mockResolvedValue(loaded);
+    stubPolicies([]);
+    (updateOwnedItem as any).mockImplementation(async (_i: string, _t: string, _o: string, patch: any) => ({ ...loaded, state: patch.state }));
+    const res = await POST(req({ status: 'PUBLISHED' }), ctx('dp-1'));
+    expect(res.status).toBe(200);
+  });
+
+  it('a self-serve product needs no access policy to publish', async () => {
+    (getSession as any).mockReturnValue({ claims: { oid: 'u' } });
+    const loaded = item({ domain: DOMAIN, dataAssets: [{ guid: 'a1' }], accessModel: 'self-serve' });
+    (loadOwnedItem as any).mockResolvedValue(loaded);
+    stubPolicies([]);
+    (updateOwnedItem as any).mockImplementation(async (_i: string, _t: string, _o: string, patch: any) => ({ ...loaded, state: patch.state }));
+    const res = await POST(req({ status: 'PUBLISHED' }), ctx('dp-1'));
+    expect(res.status).toBe(200);
+  });
+
+  it('still blocks publish with an asset but NO policy and not self-serve', async () => {
+    (getSession as any).mockReturnValue({ claims: { oid: 'u' } });
+    (loadOwnedItem as any).mockResolvedValue(item({ domain: DOMAIN, dataAssets: [{ guid: 'a1' }] }));
+    stubPolicies([]);
+    const res = await POST(req({ status: 'PUBLISHED' }), ctx('dp-1'));
+    expect(res.status).toBe(422);
+    expect((await res.json()).preconditionFailed.reason).toBe('no_active_policy');
+  });
+
   it('an Expire maps to canonical deprecated across the trio', async () => {
     (getSession as any).mockReturnValue({ claims: { oid: 'u' } });
     const loaded = item({ status: 'Published', publishStatus: 'Published', lifecycleStatus: 'PUBLISHED' });

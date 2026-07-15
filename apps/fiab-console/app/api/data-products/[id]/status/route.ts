@@ -87,22 +87,35 @@ async function checkPublishPreconditions(
   state: Record<string, unknown>,
   tenantId: string,
 ): Promise<PreconditionFailure | null> {
-  // 1. >= 1 data asset attached.
+  // 1. >= 1 data asset attached — count EITHER the Datasets-tab `datasets` OR the
+  //    Data-Map `dataAssets` (DP-3: the guided wizard attaches via dataAssets),
+  //    so "at least one asset" is satisfied by either attachment surface.
   const datasets = Array.isArray(state.datasets) ? (state.datasets as unknown[]) : [];
-  if (datasets.length < 1) {
+  const dataAssets = Array.isArray(state.dataAssets) ? (state.dataAssets as unknown[]) : [];
+  if (datasets.length + dataAssets.length < 1) {
     return {
       reason: 'no_assets',
       message:
-        'Cannot publish: attach at least one data asset on the Datasets tab before publishing.',
+        'Cannot publish: attach at least one data asset (Datasets or Data assets tab) before publishing.',
       field: 'state.datasets',
     };
   }
 
-  // 2. an active Access policy scoped to this data product.
+  // 2. an active Access policy — EITHER a tenant governance Access policy scoped
+  //    to this product, OR the product's own `state.accessPolicy` (DP-3: the
+  //    guided wizard / the access-policy route configure the latter). A product
+  //    explicitly marked self-serve also satisfies this (no approval needed).
   const policies = await readPolicies(tenantId);
-  const hasActivePolicy = policies.some(
+  const hasTenantPolicy = policies.some(
     (p: any) => p?.kind === 'Access' && p?.scope === `data-product:${id}` && p?.enabled !== false,
   );
+  const ap = state.accessPolicy as { allowedPurposes?: unknown[]; approvers?: unknown[] } | undefined;
+  const hasProductPolicy = !!ap && (
+    (Array.isArray(ap.allowedPurposes) && ap.allowedPurposes.length > 0) ||
+    (Array.isArray(ap.approvers) && ap.approvers.length > 0)
+  );
+  const isSelfServe = state.accessModel === 'self-serve';
+  const hasActivePolicy = hasTenantPolicy || hasProductPolicy || isSelfServe;
   if (!hasActivePolicy) {
     return {
       reason: 'no_active_policy',

@@ -1,5 +1,5 @@
 'use client';;
-import { use, useState } from "react";
+import { use, useEffect, useState } from "react";
 
 /**
  * Per-item-type editor route. Dispatches to a rich editor from the
@@ -72,6 +72,13 @@ export default function ItemEditorPage(props: Props) {
   const params = use(props.params);
   const { type, id } = params;
   const router = useRouter();
+  // DP-3 — the guided 7-step wizard is the canonical create entry for a data
+  // product; retire the inline single-page create here by redirecting a NEW
+  // data-product to it. Editing an existing data product still opens this editor.
+  const redirectToWizard = type === 'data-product' && id === 'new';
+  useEffect(() => {
+    if (redirectToWizard) router.replace('/data-products/new');
+  }, [redirectToWizard, router]);
   // Generic-fallback Share dialog (rel-T104) — the generic ribbon's Share action
   // opens this fully-wired ShareItemDialog for the persisted item.
   const [shareOpen, setShareOpen] = useState(false);
