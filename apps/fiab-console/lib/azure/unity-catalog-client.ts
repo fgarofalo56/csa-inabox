@@ -2528,3 +2528,109 @@ export async function listCleanRoomTaskRuns(
     workspace_hostname: host,
   }));
 }
+
+// ============================================================
+// Online Tables (Feature Store serving) — DBX-14
+// ------------------------------------------------------------
+// An online table gives lower-latency, higher-QPS access to a Unity Catalog
+// Delta table (typically a FEATURE TABLE — a UC table with a primary key), for
+// real-time feature lookup. Real Databricks REST: /api/2.0/online-tables
+// (create/get/delete by three-part name).
+// Learn: https://learn.microsoft.com/azure/databricks/dev-tools/cli/reference/online-tables-commands
+// ============================================================
+
+/** An online table as returned by /api/2.0/online-tables. */
+export interface UCOnlineTable {
+  name: string;
+  spec?: {
+    source_table_full_name?: string;
+    primary_key_columns?: string[];
+    timeseries_key?: string;
+    perform_full_copy?: boolean;
+    run_triggered?: Record<string, unknown>;
+    run_continuously?: Record<string, unknown>;
+  };
+  status?: {
+    detailed_state?: string;
+    message?: string;
+  };
+  table_serving_url?: string;
+  unity_catalog_provisioning_state?: string;
+  workspace_hostname?: string;
+}
+
+export type OnlineTableRunMode = 'triggered' | 'continuous';
+
+export interface OnlineTableSpecInput {
+  /** Three-part name (catalog.schema.table) for the online table to create. */
+  name: string;
+  /** Three-part name of the source Delta/feature table. */
+  sourceTableFullName: string;
+  /** One or more primary-key columns (the feature-table key). */
+  primaryKeyColumns: string[];
+  /** Optional timeseries key for point-in-time dedup. */
+  timeseriesKey?: string;
+  /** Sync mode: one-time+manual (`triggered`) or near-real-time (`continuous`). */
+  runMode: OnlineTableRunMode;
+  /** Optional full copy on first sync. */
+  performFullCopy?: boolean;
+}
+
+/** A three-part Unity Catalog name: `catalog.schema.object`, each a valid identifier. */
+export function isThreePartName(s: string): boolean {
+  if (typeof s !== 'string') return false;
+  const parts = s.split('.');
+  if (parts.length !== 3) return false;
+  return parts.every((p) => /^[A-Za-z0-9_]+$/.test(p.trim()) && p.trim().length > 0);
+}
+
+/**
+ * Build (and validate) the /api/2.0/online-tables request body from typed input.
+ * Pure — no I/O — so it is unit-tested without a Databricks workspace. Throws
+ * {@link UnityCatalogError} (400) on invalid input.
+ */
+export function buildOnlineTableSpec(input: OnlineTableSpecInput): { name: string; spec: Record<string, unknown> } {
+  const name = (input.name || '').trim();
+  const source = (input.sourceTableFullName || '').trim();
+  if (!isThreePartName(name)) {
+    throw new UnityCatalogError(`Online table name must be a three-part name (catalog.schema.table): got "${input.name}".`, 400);
+  }
+  if (!isThreePartName(source)) {
+    throw new UnityCatalogError(`Source table must be a three-part name (catalog.schema.table): got "${input.sourceTableFullName}".`, 400);
+  }
+  const pks = (input.primaryKeyColumns || []).map((c) => (c || '').trim()).filter(Boolean);
+  if (pks.length === 0) {
+    throw new UnityCatalogError('At least one primary-key column is required to build an online table.', 400);
+  }
+  if (input.runMode !== 'triggered' && input.runMode !== 'continuous') {
+    throw new UnityCatalogError('runMode must be "triggered" or "continuous".', 400);
+  }
+  const spec: Record<string, unknown> = {
+    source_table_full_name: source,
+    primary_key_columns: pks,
+    ...(input.timeseriesKey && input.timeseriesKey.trim() ? { timeseries_key: input.timeseriesKey.trim() } : {}),
+    ...(input.performFullCopy ? { perform_full_copy: true } : {}),
+    ...(input.runMode === 'continuous' ? { run_continuously: {} } : { run_triggered: {} }),
+  };
+  return { name, spec };
+}
+
+/** Create an online table (real POST /api/2.0/online-tables). */
+export async function createOnlineTable(host: string, input: OnlineTableSpecInput): Promise<UCOnlineTable> {
+  const body = buildOnlineTableSpec(input);
+  const j = await ucFetch<UCOnlineTable>(host, '/api/2.0/online-tables', { method: 'POST', body });
+  return { ...j, workspace_hostname: host };
+}
+
+/** Get an online table's status by three-part name. */
+export async function getOnlineTable(host: string, name: string): Promise<UCOnlineTable> {
+  if (!isThreePartName(name)) throw new UnityCatalogError(`Invalid online table name "${name}".`, 400);
+  const j = await ucFetch<UCOnlineTable>(host, `/api/2.0/online-tables/${encodeURIComponent(name)}`);
+  return { ...j, workspace_hostname: host };
+}
+
+/** Delete an online table by three-part name (destroys the served copy). */
+export async function deleteOnlineTable(host: string, name: string): Promise<void> {
+  if (!isThreePartName(name)) throw new UnityCatalogError(`Invalid online table name "${name}".`, 400);
+  await ucFetch<unknown>(host, `/api/2.0/online-tables/${encodeURIComponent(name)}`, { method: 'DELETE' });
+}

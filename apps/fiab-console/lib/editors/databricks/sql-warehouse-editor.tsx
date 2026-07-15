@@ -89,6 +89,7 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
   const [ucCreateTableOpen, setUcCreateTableOpen] = useState(false);
   const [ucGrantsOpen, setUcGrantsOpen] = useState(false);
   const [ucCreateVolumeOpen, setUcCreateVolumeOpen] = useState(false);
+  const [ucOnlineTableOpen, setUcOnlineTableOpen] = useState(false); // DBX-14
   const [ucDropOpen, setUcDropOpen] = useState(false);
   // Query-result alerts (Databricks SQL Alerts on Comm/GCC; Azure Monitor on Gov).
   const [alertsOpen, setAlertsOpen] = useState(false);
@@ -899,6 +900,7 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
         { label: 'Create schema', onClick: () => setUcCreateSchemaOpen(true), title: 'Create a UC schema under a catalog' },
         { label: 'Create table', onClick: () => setUcCreateTableOpen(true), title: 'Create a managed/external UC table' },
         { label: 'Create volume', onClick: () => setUcCreateVolumeOpen(true), title: 'Create a managed/external UC volume (api 2.1)' },
+        { label: 'Create online table', onClick: () => setUcOnlineTableOpen(true), title: 'Serve a UC feature table for low-latency lookup (Online Table, api 2.0)' },
         { label: 'Drop object', onClick: () => setUcDropOpen(true), title: 'Drop a UC catalog / schema / table / volume (DELETE api 2.1)' },
         { label: 'Clone table', onClick: canRun ? () => openCloneForTable(
             activeCatalog && activeSchema && tables.length > 0
@@ -1898,6 +1900,7 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
             createCatalogOpen={ucCreateCatalogOpen} setCreateCatalogOpen={setUcCreateCatalogOpen}
             createSchemaOpen={ucCreateSchemaOpen} setCreateSchemaOpen={setUcCreateSchemaOpen}
             createTableOpen={ucCreateTableOpen} setCreateTableOpen={setUcCreateTableOpen}
+            onlineTableOpen={ucOnlineTableOpen} setOnlineTableOpen={setUcOnlineTableOpen}
             grantsOpen={ucGrantsOpen} setGrantsOpen={setUcGrantsOpen}
             grantSeed={ucGrantSeed}
           />
