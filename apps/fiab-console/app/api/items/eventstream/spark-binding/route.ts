@@ -21,6 +21,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+import { apiServerError } from '@/lib/api/respond';
 import { getSession } from '@/lib/auth/session';
 import { isTenantAdmin } from '@/lib/auth/feature-gate';
 import {
@@ -88,8 +89,8 @@ export async function GET(req: NextRequest) {
         databricksWorkspaces: databricks.map((w) => ({ name: w.name, url: `https://${w.workspaceUrl}` })),
       },
     });
-  } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+  } catch (e: unknown) {
+    return apiServerError(e, 'failed to resolve the Spark streaming binding', 'spark_binding_resolve_failed');
   }
 }
 
@@ -118,7 +119,7 @@ export async function PUT(req: NextRequest) {
   try {
     await writeSparkStreamingBinding(binding, session.claims.oid);
     return NextResponse.json({ ok: true, binding: { ...binding, source: 'runtime' } });
-  } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+  } catch (e: unknown) {
+    return apiServerError(e, 'failed to save the Spark streaming binding', 'spark_binding_save_failed');
   }
 }
