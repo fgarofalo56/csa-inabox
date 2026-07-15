@@ -83,7 +83,15 @@ describe('EventstreamEditor — SQL operator tab', () => {
 
   it('Compile POSTs action=compile and renders the receipt', async () => {
     await openSqlTab();
-    const compile = screen.getAllByRole('button', { name: /^compile$/i })[0];
+    // Compile is disabled while the GET /sql-operator hydration is in flight
+    // (`disabled={compiling || loading}`) — wait for the ENABLED button before
+    // clicking, exactly as the Apply-sinks test does. Clicking the disabled
+    // button dispatches nothing, which raced on slow CI runners.
+    const compile = await waitFor(() => {
+      const b = screen.getAllByRole('button', { name: /^compile$/i }).filter((x) => !(x as HTMLButtonElement).disabled);
+      expect(b.length).toBeGreaterThan(0);
+      return b[0];
+    });
     fireEvent.click(compile);
     await waitFor(() => {
       expect(calls.some((c) => c.url.includes('/sql-operator') && c.init?.method === 'POST' && String(c.init?.body).includes('"compile"'))).toBe(true);
@@ -116,7 +124,12 @@ describe('EventstreamEditor — SQL operator tab', () => {
       return target as HTMLSelectElement;
     });
     fireEvent.change(select, { target: { value: 'hot-path' } });
-    const test = screen.getAllByRole('button', { name: /test output/i })[0];
+    // Same hydration race as Compile — wait for the enabled Test button.
+    const test = await waitFor(() => {
+      const b = screen.getAllByRole('button', { name: /test output/i }).filter((x) => !(x as HTMLButtonElement).disabled);
+      expect(b.length).toBeGreaterThan(0);
+      return b[0];
+    });
     fireEvent.click(test);
     await waitFor(() => {
       expect(calls.some((c) => c.url.includes('/sql-operator') && c.init?.method === 'POST' && String(c.init?.body).includes('"test"'))).toBe(true);
