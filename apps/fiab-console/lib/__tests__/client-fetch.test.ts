@@ -8,7 +8,7 @@
  * unmount) re-throws unchanged.
  */
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { clientFetch, ClientFetchTimeoutError } from '../client-fetch';
+import { clientFetch, describeNonJsonResponse, ClientFetchTimeoutError } from '../client-fetch';
 
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
@@ -59,5 +59,31 @@ describe('clientFetch', () => {
     vi.stubGlobal('fetch', async () => new Response('{"ok":true}', { status: 200 }));
     const r = await clientFetch('/api/fast', undefined, 1000);
     expect(r.status).toBe(200);
+  });
+});
+
+describe('describeNonJsonResponse (gateway HTML → honest message)', () => {
+  it('maps 504 to a gateway-timeout message naming the status — never the HTML body', () => {
+    const msg = describeNonJsonResponse(504, 'The deploy service');
+    expect(msg).toMatch(/HTTP 504/);
+    expect(msg).toMatch(/gateway timed out/i);
+    expect(msg).toMatch(/^The deploy service/);
+    expect(msg).not.toMatch(/DOCTYPE|<html/i);
+  });
+
+  it('maps 502 to an unreachable-through-the-gateway message', () => {
+    const msg = describeNonJsonResponse(502);
+    expect(msg).toMatch(/HTTP 502/);
+    expect(msg).toMatch(/unreachable/i);
+  });
+
+  it('maps 503 to a temporarily-unavailable message', () => {
+    expect(describeNonJsonResponse(503)).toMatch(/HTTP 503/);
+  });
+
+  it('falls back to a generic non-JSON message with the status for anything else', () => {
+    const msg = describeNonJsonResponse(500, 'The subscriptions service');
+    expect(msg).toMatch(/HTTP 500/);
+    expect(msg).toMatch(/non-JSON/i);
   });
 });

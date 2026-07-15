@@ -110,3 +110,28 @@ export async function fetchWithTimeout(
     clearTimeout(timer);
   }
 }
+
+/**
+ * Bound ANY promise with a hard deadline — the non-fetch sibling of
+ * {@link fetchWithTimeout} for awaits that aren't a single HTTP round-trip
+ * (token acquisition, a cached cross-sub pre-flight, a Cosmos read). Rejects
+ * with a {@link FetchTimeoutError} labeled `label` when the deadline elapses
+ * first; the underlying promise keeps running (callers that background work
+ * must attach their own `.catch` to it).
+ *
+ * Exists because a BFF route that `await`s an unbounded promise past the
+ * deployment edge's origin-response timeout makes Front Door serve an HTML 504
+ * the client can't parse — every await on a request path must be bounded.
+ */
+export async function withDeadline<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new FetchTimeoutError(label, timeoutMs)), timeoutMs);
+    (timer as any)?.unref?.();
+  });
+  try {
+    return await Promise.race([promise, deadline]);
+  } finally {
+    clearTimeout(timer);
+  }
+}

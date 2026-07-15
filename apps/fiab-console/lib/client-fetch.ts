@@ -79,6 +79,37 @@ export class ClientFetchTimeoutError extends Error {
   }
 }
 
+/**
+ * Honest copy for a NON-JSON response from a first-party /api route. Behind the
+ * deployment edge (Azure Front Door → Container Apps ingress) a route that
+ * stalls past the origin-response timeout — or an edge/ingress failure — answers
+ * with an HTML error page (`<!DOCTYPE html …>`), which callers must NEVER dump
+ * into a MessageBar. Map the status to a clear gateway-timeout / unreachable
+ * message instead; the raw body is deliberately not included.
+ */
+export function describeNonJsonResponse(status: number, service = 'The service'): string {
+  if (status === 504) {
+    return (
+      `${service} did not answer before the gateway timed out (HTTP 504). ` +
+      'The request may still be completing in the background — wait a moment, refresh, and check ' +
+      'before retrying. If this keeps happening, check the Console app health/logs.'
+    );
+  }
+  if (status === 502) {
+    return (
+      `${service} is unreachable through the gateway (HTTP 502 bad gateway). ` +
+      'Retry; if it persists, confirm the Console app is running and healthy.'
+    );
+  }
+  if (status === 503) {
+    return `${service} is temporarily unavailable (HTTP 503). Retry in a moment.`;
+  }
+  return (
+    `${service} returned an unexpected non-JSON response (HTTP ${status}). ` +
+    'Retry; if it persists, check the Console logs.'
+  );
+}
+
 export async function clientFetch(
   input: string | URL,
   init?: RequestInit,

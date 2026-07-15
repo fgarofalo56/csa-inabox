@@ -20,6 +20,7 @@ import {
   submitDlzDeployment,
   DLZ_TEMPLATE_ENV,
 } from '@/lib/setup/user-arm-deploy';
+import { fetchWithTimeout, withDeadline } from '@/lib/azure/fetch-with-timeout';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -198,6 +199,29 @@ const ALLOWED_TOPOLOGIES = new Set(['single-sub', 'tenant', 'dlz-attach']);
 
 const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+/** Env-overridable ms budget, falling back to `def` when unset/invalid. */
+function envBudgetMs(name: string, def: number): number {
+  const n = Number(process.env[name]);
+  return Number.isFinite(n) && n > 0 ? n : def;
+}
+
+// ── Per-step deadlines (the anti-504 contract) ───────────────────────────────
+// The live failure this pins down: "Deploy service returned non-JSON (HTTP 504).
+// <!DOCTYPE html …>". The console sits behind Azure Front Door, whose origin-
+// response timeout turns ANY origin await longer than ~60s into an HTML 504 the
+// wizard can't parse. The ARM submit tier was already bounded (8s early-return
+// race), but the pre-flight ARM reads, the OBO/UAMI token acquisition, the Setup
+// Orchestrator fallback POST, and the GitHub dispatch were all UNBOUNDED — a
+// wedged orchestrator Container App (wired by default on Commercial via
+// LOOM_SETUP_ORCHESTRATOR_URL) hung the request for minutes. Every await on this
+// route now carries a deadline, and TOTAL_SUBMIT_BUDGET_MS is the JSON backstop:
+// the route ALWAYS answers structured JSON before the edge can 504.
+const TOKEN_BUDGET_MS = envBudgetMs('LOOM_DEPLOY_TOKEN_BUDGET_MS', 10_000);
+const PREFLIGHT_BUDGET_MS = envBudgetMs('LOOM_DEPLOY_PREFLIGHT_BUDGET_MS', 15_000);
+const ORCH_SUBMIT_TIMEOUT_MS = envBudgetMs('LOOM_ORCH_SUBMIT_TIMEOUT_MS', 15_000);
+const GH_DISPATCH_TIMEOUT_MS = envBudgetMs('LOOM_GH_DISPATCH_TIMEOUT_MS', 15_000);
+const TOTAL_SUBMIT_BUDGET_MS = envBudgetMs('LOOM_DEPLOY_SUBMIT_BUDGET_MS', 40_000);
+
 function shouldDispatchWorkflow(): boolean {
   return !!process.env.LOOM_GITHUB_ACTIONS_TOKEN;
 }
@@ -216,7 +240,56 @@ interface CachedPreflight {
   identity: ArmTokenIdentity;
 }
 
+/**
+ * JSON backstop: the route must NEVER let the deployment edge answer for it.
+ * Races the real handler against TOTAL_SUBMIT_BUDGET_MS (default 40s — under
+ * the wizard's 45s client abort AND Front Door's ~60s origin timeout). If the
+ * budget elapses, the client gets an honest, parseable JSON 504 instead of the
+ * edge's HTML error page; the handler keeps running in the background (its
+ * submission — if it got that far — is discoverable via the target
+ * subscription's deployments).
+ */
 export async function POST(req: NextRequest) {
+  const work = handleDeploy(req).catch((e: any) => {
+    // A thrown handler would otherwise become a Next 500 HTML page — keep the
+    // contract: this route ALWAYS answers structured JSON.
+    console.error('[setup/deploy] handler threw:', e);
+    return NextResponse.json(
+      { ok: false, error: `Deploy submit failed: ${e?.message ?? String(e)}` },
+      { status: 500 },
+    );
+  });
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const backstop = new Promise<NextResponse>((resolve) => {
+    timer = setTimeout(
+      () =>
+        resolve(
+          NextResponse.json(
+            {
+              ok: false,
+              error: 'deploy-submit-timeout',
+              remediation:
+                `The deploy submit did not finish within ${Math.round(TOTAL_SUBMIT_BUDGET_MS / 1000)}s. ` +
+                'It may still be completing in the background — wait a minute, then check the target ' +
+                "subscription's deployments (az deployment sub list --subscription <target-sub> " +
+                "--query \"[?starts_with(name,'loom-dlz-')]\") or the landing-zones list before retrying, " +
+                'so you do not submit a duplicate attach.',
+            },
+            { status: 504 },
+          ),
+        ),
+      TOTAL_SUBMIT_BUDGET_MS,
+    );
+    (timer as any)?.unref?.();
+  });
+  try {
+    return await Promise.race([work, backstop]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function handleDeploy(req: NextRequest): Promise<NextResponse> {
   const session = getSession();
   if (!session) {
     return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
@@ -367,7 +440,11 @@ export async function POST(req: NextRequest) {
     // deploy-preflight route uses, so when the wizard already ran the pre-flight
     // poll this is an instant cache hit (no 6s cliff on submit); a cold submit
     // awaits the check once (bounded by the wizard's larger cross-sub budget).
-    const arm = await getArmTokenPreferUser(session).catch(() => null);
+    // BOUNDED: token acquisition (Cosmos token-store + MSAL silent + UAMI MSI)
+    // and the cold cross-sub pre-flight each carry a deadline — a wedged AAD /
+    // ARM hop degrades to "skip the prediction" instead of hanging the submit
+    // past the edge timeout. The deploy tiers below remain the hard guard.
+    const arm = await withDeadline(getArmTokenPreferUser(session), TOKEN_BUDGET_MS, 'deploy-preflight ARM token').catch(() => null);
     const identity: ArmTokenIdentity = arm?.identity ?? 'uami';
     const targetSub = body.subscriptionId;
     const getToken = async (): Promise<string> => {
@@ -376,27 +453,33 @@ export async function POST(req: NextRequest) {
     };
     let pf: CachedPreflight | null = null;
     try {
-      const { value } = await swrAwait<CachedPreflight>(
-        session.claims.oid,
-        `deploy-preflight:${targetSub}:${identity}`,
-        { ttlMs: 60_000 },
-        async () => {
-          const [perm, providers] = await Promise.all([
-            checkSubscriptionDeployPermission(targetSub, getToken),
-            checkProvidersRegistered(targetSub, getToken),
-          ]);
-          return {
-            canDeploy: perm.error ? true : perm.canDeploy,
-            permError: perm.error,
-            missingProviders: providers.missing,
-            identity,
-          };
-        },
+      const { value } = await withDeadline(
+        swrAwait<CachedPreflight>(
+          session.claims.oid,
+          `deploy-preflight:${targetSub}:${identity}`,
+          { ttlMs: 60_000 },
+          async () => {
+            const [perm, providers] = await Promise.all([
+              checkSubscriptionDeployPermission(targetSub, getToken),
+              checkProvidersRegistered(targetSub, getToken),
+            ]);
+            return {
+              canDeploy: perm.error ? true : perm.canDeploy,
+              permError: perm.error,
+              missingProviders: providers.missing,
+              identity,
+            };
+          },
+        ),
+        PREFLIGHT_BUDGET_MS,
+        'deploy pre-flight',
       );
       pf = value;
     } catch {
-      // Token/network failure computing the pre-flight is NON-FATAL — fall
-      // through to the deploy tiers, which surface their own honest gate.
+      // Token/network failure (or the deadline) computing the pre-flight is
+      // NON-FATAL — fall through to the deploy tiers, which surface their own
+      // honest gate. The SWR revalidate keeps running, so the wizard's async
+      // pre-flight poll (and any retry) gets the warmed verdict.
       pf = null;
     }
     // Only BLOCK on a definitive "cannot deploy" answer. A check error is
@@ -525,7 +608,10 @@ export async function POST(req: NextRequest) {
   const templateSource = resolveDlzTemplate();
   const tryUserArmDeploy = async (): Promise<NextResponse | null> => {
     if (!templateSource) return null;
-    const arm = await getArmTokenPreferUser(session).catch(() => null);
+    // BOUNDED: same token deadline as the pre-flight (warm MSAL/UAMI caches make
+    // this instant in practice) — a hung acquisition falls through to the next
+    // tier instead of stalling the submit into an edge 504.
+    const arm = await withDeadline(getArmTokenPreferUser(session), TOKEN_BUDGET_MS, 'user-ARM deploy token').catch(() => null);
     if (!arm?.token) return null;
     // Only forward feature toggles the caller explicitly set, so bicep defaults
     // are preserved for anything the wizard left alone.
@@ -641,11 +727,22 @@ export async function POST(req: NextRequest) {
       if (session.claims?.oid) headers['x-loom-caller-oid'] = session.claims.oid;
       // The orchestrator FastAPI serves POST /api/setup/deploy (see
       // apps/fiab-setup-orchestrator/src/loom_setup_orchestrator/main.py).
-      const orchRes = await fetch(`${orchUrl}/api/setup/deploy`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({ ...body, ...topologyPayload, region }),
-      });
+      // BOUNDED (the live-504 root cause): LOOM_SETUP_ORCHESTRATOR_URL is wired
+      // by default on Commercial (setupOrchestratorEnabled=true in
+      // admin-plane/main.bicep), so when the orchestrator Container App is
+      // scaled-to-zero-wedged / unreachable, an unbounded fetch here hung the
+      // submit for minutes and Front Door served the HTML 504 the wizard showed
+      // as "Deploy service returned non-JSON". The deadline turns that into a
+      // fast fall-through to the GitHub-dispatch / copy-paste tiers.
+      const orchRes = await fetchWithTimeout(
+        `${orchUrl}/api/setup/deploy`,
+        {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ ...body, ...topologyPayload, region }),
+        },
+        ORCH_SUBMIT_TIMEOUT_MS,
+      );
       const oj: any = await orchRes.json().catch(() => ({}));
       // The orchestrator's DeployResponse is snake_case (deployment_id / stream_url).
       const deploymentId = oj.deployment_id || oj.deploymentId || oj.id;
@@ -749,15 +846,21 @@ export async function POST(req: NextRequest) {
       const repoName = process.env.LOOM_GITHUB_REPO_NAME || 'csa-inabox';
       const token = process.env.LOOM_GITHUB_ACTIONS_TOKEN!;
       const dispatchUrl = `https://api.github.com/repos/${repoOwner}/${repoName}/actions/workflows/${workflowFile}/dispatches`;
-      const dispatchRes = await fetch(dispatchUrl, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          Accept: 'application/vnd.github+json',
-          'X-GitHub-Api-Version': '2022-11-28',
+      // BOUNDED: a slow/unreachable GitHub API falls through to the copy-paste
+      // gate instead of hanging the submit past the edge timeout.
+      const dispatchRes = await fetchWithTimeout(
+        dispatchUrl,
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            Accept: 'application/vnd.github+json',
+            'X-GitHub-Api-Version': '2022-11-28',
+          },
+          body: JSON.stringify({ ref: 'main', inputs: dispatchInputs }),
         },
-        body: JSON.stringify({ ref: 'main', inputs: dispatchInputs }),
-      });
+        GH_DISPATCH_TIMEOUT_MS,
+      );
       if (dispatchRes.ok) {
         return NextResponse.json(
           {
