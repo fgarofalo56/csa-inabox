@@ -8,6 +8,7 @@
 
 import type { SessionPayload } from '@/lib/auth/session';
 import { resolveWorkspaceAccessByOid } from '@/lib/auth/workspace-access';
+import { authorizeWorkspace } from '@/lib/auth/workspace-guard';
 import { authorizeWorkspaceList } from '@/lib/auth/workspace-list-access';
 import { itemsContainer, workspacesContainer, tenantSettingsContainer } from '@/lib/azure/cosmos-client';
 import { upsertLoomDoc, deleteLoomDoc, docForItem } from '@/lib/azure/loom-search';
@@ -347,6 +348,24 @@ export async function createOwnedItem(
     if (e?.code !== 404) throw e;
   }
   if (!workspace || workspace.tenantId !== session.claims.oid) {
+    // Not the workspace OWNER — fall back to the shared-access model: tenant
+    // admins and write-capable ACL members create items in workspaces they can
+    // access without owning (app-installed and shared workspaces). The
+    // workspace doc is partition-keyed by its owner's oid, so resolve it
+    // cross-partition, then authorize with the same guard the workspace
+    // sub-routes use (write-capable roles only — creation is a mutation).
+    const { resources } = await ws.items
+      .query<Workspace>({
+        query: 'SELECT * FROM c WHERE c.id = @id',
+        parameters: [{ name: '@id', value: workspaceId }],
+      })
+      .fetchAll();
+    const anyWs = resources[0];
+    if (anyWs && !(await authorizeWorkspace(session, workspaceId))) {
+      workspace = anyWs;
+    }
+  }
+  if (!workspace) {
     return { ok: false, status: 404, error: 'workspace not found' };
   }
   const now = new Date().toISOString();
