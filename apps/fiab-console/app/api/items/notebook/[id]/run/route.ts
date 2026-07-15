@@ -306,6 +306,9 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
               // with other concurrent read-only runs (when concurrent mode is on).
               // Write runs (default) always get an exclusive session.
               readOnly: body?.readOnly === true,
+              // PERF-4.4 — attribute this session demand to the workspace so the
+              // usage-learning schedule is per-workspace tunable.
+              workspaceId,
             });
             if (lease && typeof lease.sessionId === 'number') {
               sessionId = lease.sessionId; sessState = 'idle';
