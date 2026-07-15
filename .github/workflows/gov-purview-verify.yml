@@ -221,10 +221,28 @@ jobs:
             echo "::error::could not decode the deploy SP objectId from its ARM token"; exit 1
           fi
           echo "== addRootCollectionAdmin: SP oid $SP_OID on $PVW_ID =="
-          az rest --method post \
+          set +e
+          OUT=$(az rest --method post \
             --url "https://management.usgovcloudapi.net$PVW_ID/addRootCollectionAdmin?api-version=$PURVIEW_ARM_API" \
             --body "{\"objectId\": \"$SP_OID\"}" \
-            --headers "Content-Type=application/json"
+            --headers "Content-Type=application/json" 2>&1)
+          RC=$?
+          set -e
+          if [ $RC -ne 0 ]; then
+            echo "$OUT"
+            if echo "$OUT" | grep -q "RoleAssignmentWriter"; then
+              # Seen live 2026-07-15: addRootCollectionAdmin requires
+              # Microsoft.Authorization/roleAssignments/write (Owner / User
+              # Access Administrator) on the account's RG — Contributor is NOT
+              # enough. This is a ONE-TIME human unblock; print the exact fix.
+              cat <<EOF
+          ::error::The deploy SP holds Contributor but addRootCollectionAdmin needs roleAssignments/write (Owner or User Access Administrator) on the Purview account's resource group. ONE-TIME operator fix (either):
+            (a) Purview Gov portal (https://purview.azure.us) -> account $PVW -> Data Map -> Collections -> root -> Role assignments -> add BOTH the deploy SP (oid $SP_OID) AND the console UAMI ($UAMI_PRINCIPAL) as Collection admins; then re-run this workflow with apply_grants=true, or
+            (b) az role assignment create --assignee $SP_OID --role "User Access Administrator" --scope $PVW_ID  (as a Gov Owner), then re-run with apply_grants=true.
+          EOF
+            fi
+            exit $RC
+          fi
           echo "::notice::deploy SP added as root Collection Admin (metadata-policy propagation can take ~30-60s)"
           sleep 45
 
