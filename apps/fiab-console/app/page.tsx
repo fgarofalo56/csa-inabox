@@ -1,5 +1,6 @@
 'use client';
 
+import { useEffect, useState } from 'react';
 import { shorthands,
   Subtitle1, Body1, Title2, Title3, Caption1,
   makeStyles, tokens,
@@ -9,14 +10,17 @@ import {
   Sparkle24Filled, Bot24Filled, Apps24Filled, ServerLink24Filled,
   HatGraduation24Filled,
   Rocket20Filled, History20Filled, AppsAddIn20Filled,
+  AddCircle20Filled, Star20Filled,
 } from '@fluentui/react-icons';
 import Link from 'next/link';
+import { clientFetch } from '@/lib/client-fetch';
 import { PageShell } from '@/lib/components/page-shell';
 import { TileGrid } from '@/lib/components/ui/tile-grid';
 import { NewItemDialog } from '@/lib/components/new-item-dialog';
 import { LoomLogo } from '@/lib/components/loom-logo';
 import { RecentItems } from '@/lib/components/recent-items';
 import { RecommendedApps } from '@/lib/components/recommended-apps';
+import { QuickCreateRail, FavoritesRail } from '@/lib/components/home/home-rails';
 
 const useStyles = makeStyles({
   hero: {
@@ -40,6 +44,13 @@ const useStyles = makeStyles({
     pointerEvents: 'none',
   },
   heroCopy: { flex: 1, minWidth: 0, position: 'relative' },
+  heroGreeting: {
+    color: 'rgba(255,255,255,0.85)',
+    display: 'block',
+    marginBottom: tokens.spacingVerticalXS,
+    fontWeight: tokens.fontWeightSemibold,
+    letterSpacing: '0.02em',
+  },
   heroTitle: { color: 'white', fontWeight: 700, letterSpacing: '-0.01em' },
   heroSub: { color: 'rgba(255,255,255,0.92)', fontSize: tokens.fontSizeBase400, lineHeight: 1.6, maxWidth: '720px', marginTop: tokens.spacingVerticalM },
   heroChips: { display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap', marginTop: tokens.spacingVerticalXL },
@@ -120,14 +131,34 @@ const WORKLOADS = [
   'Synapse Analytics', 'Azure Databricks', 'Azure Data Factory',
 ];
 
+/** Time-of-day greeting (Fabric Home parity). Name comes from the REAL session
+ * claims (/api/me); when unavailable the greeting renders without a name. */
+function useGreeting(): string {
+  const [name, setName] = useState<string | null>(null);
+  useEffect(() => {
+    clientFetch('/api/me')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        const n = d?.user?.name as string | undefined;
+        setName(n ? n.split(/[\s,]+/)[0] : null);
+      })
+      .catch(() => setName(null));
+  }, []);
+  const h = new Date().getHours();
+  const part = h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening';
+  return name ? `${part}, ${name}` : part;
+}
+
 export default function HomePage() {
   const s = useStyles();
+  const greeting = useGreeting();
   return (
     <PageShell title="Home" subtitle="Welcome to CSA Loom — the unified Azure analytics fabric." actions={<NewItemDialog />}>
       <section className={s.hero}>
         <div className={s.heroPattern} aria-hidden />
         <div style={{ position: 'relative' }}><LoomLogo variant="icon" size={96} /></div>
         <div className={s.heroCopy}>
+          <Caption1 className={s.heroGreeting}>{greeting}</Caption1>
           <Title2 as="h2" className={s.heroTitle}>The Microsoft Fabric experience, on top of Azure-native services.</Title2>
           <Body1 className={s.heroSub}>
             <b>CSA Loom</b> — <b>Cloud Scale Analytics Loom</b> — delivers the Microsoft Fabric experience
@@ -163,6 +194,17 @@ export default function HomePage() {
 
       <div className={s.sectionTitle}>
         <span className={s.sectionHeading}>
+          <span className={s.sectionIcon} aria-hidden><AddCircle20Filled /></span>
+          <Title3 as="h2">Quick create</Title3>
+        </span>
+        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+          Jump straight into the create gallery for a workload
+        </Caption1>
+      </div>
+      <QuickCreateRail />
+
+      <div className={s.sectionTitle}>
+        <span className={s.sectionHeading}>
           <span className={s.sectionIcon} aria-hidden><History20Filled /></span>
           <Title3 as="h2">Recent</Title3>
         </span>
@@ -171,6 +213,17 @@ export default function HomePage() {
         </Caption1>
       </div>
       <RecentItems />
+
+      <div className={s.sectionTitle}>
+        <span className={s.sectionHeading}>
+          <span className={s.sectionIcon} aria-hidden><Star20Filled /></span>
+          <Title3 as="h2">Favorites</Title3>
+        </span>
+        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+          Pinned items — in sync with the left-nav Pinned section
+        </Caption1>
+      </div>
+      <FavoritesRail />
 
       <div className={s.sectionTitle}>
         <span className={s.sectionHeading}>

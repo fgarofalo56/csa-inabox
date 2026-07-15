@@ -19,8 +19,11 @@ import {
   Title3, Caption1, Body1, Button, Spinner,
   TabList, Tab,
   MessageBar, MessageBarBody,
+  AvatarGroup, AvatarGroupItem, AvatarGroupPopover, partitionAvatarGroupItems,
+  Tooltip,
   makeStyles, tokens,
 } from '@fluentui/react-components';
+import { clientFetch } from '@/lib/client-fetch';
 import {
   ArrowLeft24Regular, Folder20Regular, Flowchart20Regular,
   Folder24Regular, Flowchart24Regular,
@@ -39,7 +42,8 @@ import { getItemTypeColor } from '@/lib/components/item-type-icon';
 
 const useStyles = makeStyles({
   back: { marginBottom: tokens.spacingVerticalM },
-  identity: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM, marginBottom: tokens.spacingVerticalM, minWidth: 0 },
+  identity: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM, marginBottom: tokens.spacingVerticalM, minWidth: 0, flexWrap: 'wrap' },
+  identitySpacer: { flex: 1 },
   identityText: { display: 'flex', flexDirection: 'column', minWidth: 0 },
   header: { display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: tokens.spacingHorizontalL, marginBottom: tokens.spacingVerticalS },
   // section heading: leading accent icon + title/hint stack, matching the
@@ -63,6 +67,51 @@ const useStyles = makeStyles({
   meta: { fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground3, overflowWrap: 'anywhere', wordBreak: 'break-word', minWidth: 0 },
   tabs: { marginBottom: tokens.spacingVerticalM },
 });
+
+/** One workspace member row from GET /api/workspaces/[id]/permissions. */
+interface MemberRow { upn: string; name?: string; role: string; implicit?: boolean }
+
+/**
+ * WorkspaceMembers — the Fabric workspace-header member avatars. Reads the
+ * REAL permissions store (Cosmos via the permissions BFF route); the route is
+ * owner-scoped, so for non-owners (404/401) the strip simply doesn't render —
+ * an honest absence, not a mock.
+ */
+function WorkspaceMembers({ workspaceId }: { workspaceId: string }) {
+  const q = useQuery<MemberRow[]>({
+    queryKey: ['workspace-members', workspaceId],
+    queryFn: async () => {
+      const r = await clientFetch(`/api/workspaces/${encodeURIComponent(workspaceId)}/permissions`);
+      if (!r.ok) return [];
+      const j = await r.json().catch(() => ({}));
+      return j?.ok && Array.isArray(j.permissions) ? j.permissions : [];
+    },
+  });
+  const members = q.data ?? [];
+  if (members.length === 0) return null;
+
+  const names = members.map((m) => m.name || m.upn).filter(Boolean);
+  const { inlineItems, overflowItems } = partitionAvatarGroupItems({ items: names, maxInlineItems: 5 });
+  return (
+    <Tooltip
+      content={`${members.length} member${members.length === 1 ? '' : 's'} — manage via Manage access`}
+      relationship="description"
+    >
+      <AvatarGroup size={28} aria-label={`Workspace members (${members.length})`}>
+        {inlineItems.map((name, i) => (
+          <AvatarGroupItem key={`${name}-${i}`} name={name} />
+        ))}
+        {overflowItems && (
+          <AvatarGroupPopover>
+            {overflowItems.map((name, i) => (
+              <AvatarGroupItem key={`${name}-${i}`} name={name} />
+            ))}
+          </AvatarGroupPopover>
+        )}
+      </AvatarGroup>
+    </Tooltip>
+  );
+}
 
 export default function WorkspaceDetailPage(props: { params: Promise<{ id: string }> }) {
   const params = use(props.params);
@@ -108,6 +157,8 @@ export default function WorkspaceDetailPage(props: { params: Promise<{ id: strin
               <Title3>{ws.name}</Title3>
               {ws.description && <Caption1 className={s.hint}>{ws.description}</Caption1>}
             </div>
+            <div className={s.identitySpacer} />
+            <WorkspaceMembers workspaceId={ws.id} />
           </div>
           <div className={s.header}>
             <div className={s.heading}>
