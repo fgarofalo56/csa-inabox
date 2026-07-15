@@ -22,13 +22,14 @@ import {
   Tree, TreeItem, TreeItemLayout,
   MessageBar, MessageBarBody, MessageBarTitle,
   Dialog, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
+  Menu, MenuTrigger, MenuPopover, MenuList, MenuItem,
   tokens,
 } from '@fluentui/react-components';
 import {
   Database20Regular, DocumentTable20Regular, Play20Regular, Folder20Regular,
   Stop20Regular, MathFormula20Regular, Flowchart20Regular,
   DataBarVertical20Regular, ArrowImport20Regular, Eye20Regular, Form20Regular,
-  History20Regular,
+  History20Regular, MoreHorizontal20Regular, Copy20Regular,
 } from '@fluentui/react-icons';
 import { ModelViewPanel } from '../components/model-view-canvas';
 import { ItemEditorChrome } from '../item-editor-chrome';
@@ -101,6 +102,19 @@ function formatCell(v: unknown): string {
   if (typeof v === 'object') return JSON.stringify(v);
   return String(v);
 }
+
+// Object-explorer branded glyph tints (Fabric warehouse-explorer parity): each
+// SQL object type reads at a glance — database/schema green, tables blue,
+// views teal, stored procedures berry, functions marigold. Palette tokens are
+// theme-aware (light + dark correct); never raw hex.
+const OBJ_TINT = {
+  database: { color: tokens.colorPaletteGreenForeground2, flexShrink: 0 } as const,
+  schema:   { color: tokens.colorPaletteMarigoldForeground2, flexShrink: 0 } as const,
+  table:    { color: tokens.colorPaletteBlueForeground2, flexShrink: 0 } as const,
+  view:     { color: tokens.colorPaletteTealForeground2, flexShrink: 0 } as const,
+  proc:     { color: tokens.colorPaletteBerryForeground2, flexShrink: 0 } as const,
+  func:     { color: tokens.colorPaletteMarigoldForeground2, flexShrink: 0 } as const,
+};
 
 export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
@@ -497,7 +511,7 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
               </TreeItem>
             )}
             <TreeItem itemType="branch" value="schemas">
-              <TreeItemLayout iconBefore={<Database20Regular />}>
+              <TreeItemLayout iconBefore={<Database20Regular style={OBJ_TINT.database} />}>
                 Schemas ({schemaEntries.length})
               </TreeItemLayout>
               <Tree>
@@ -513,7 +527,7 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
                 )}
                 {schemaEntries.map(([schemaName, tables]) => (
                   <TreeItem key={schemaName} itemType="branch" value={`s-${schemaName}`}>
-                    <TreeItemLayout iconBefore={<Folder20Regular />}>{schemaName} ({tables.length})</TreeItemLayout>
+                    <TreeItemLayout iconBefore={<Folder20Regular style={OBJ_TINT.schema} />}>{schemaName} ({tables.length})</TreeItemLayout>
                     <Tree>
                       {tables.map((t) => (
                         <TreeItem
@@ -523,13 +537,37 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
                           onClick={() => { setStatsTarget({ schema: schemaName, table: t.table }); setSqlText(`SELECT TOP 100 * FROM [${schemaName}].[${t.table}];`); void cacheColumns(schemaName, t.table); }}
                         >
                           <TreeItemLayout
-                            iconBefore={<DocumentTable20Regular />}
+                            iconBefore={<DocumentTable20Regular style={OBJ_TINT.table} />}
                             // Drag onto the visual-query canvas to add a source.
                             draggable
                             onDragStart={(e: React.DragEvent) => {
                               e.dataTransfer.setData('application/loom-vq-table', JSON.stringify({ schema: schemaName, table: t.table }));
                               e.dataTransfer.effectAllowed = 'copy';
                             }}
+                            // Hover context menu — every action is wired to a real
+                            // path (query buffer / stats dialog / clipboard).
+                            actions={
+                              <Menu>
+                                <MenuTrigger disableButtonEnhancement>
+                                  <Button appearance="subtle" size="small" icon={<MoreHorizontal20Regular />}
+                                    aria-label={`Actions for table ${schemaName}.${t.table}`}
+                                    onClick={(e) => e.stopPropagation()} />
+                                </MenuTrigger>
+                                <MenuPopover>
+                                  <MenuList>
+                                    <MenuItem icon={<Play20Regular />} onClick={() => { setStatsTarget({ schema: schemaName, table: t.table }); setSqlText(`SELECT TOP 100 * FROM [${schemaName}].[${t.table}];`); void cacheColumns(schemaName, t.table); }}>
+                                      Select TOP 100
+                                    </MenuItem>
+                                    <MenuItem icon={<DataBarVertical20Regular />} onClick={() => { setStatsTarget({ schema: schemaName, table: t.table }); setStatsOpen(true); }}>
+                                      Manage statistics…
+                                    </MenuItem>
+                                    <MenuItem icon={<Copy20Regular />} onClick={() => { void navigator.clipboard?.writeText(`[${schemaName}].[${t.table}]`); }}>
+                                      Copy table name
+                                    </MenuItem>
+                                  </MenuList>
+                                </MenuPopover>
+                              </Menu>
+                            }
                           >
                             {t.table} <Caption1>· {t.rows.toLocaleString()} rows</Caption1>
                           </TreeItemLayout>
@@ -543,7 +581,7 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
 
             {/* Views */}
             <TreeItem itemType="branch" value="views">
-              <TreeItemLayout iconBefore={<Eye20Regular />}>Views ({whViews.length})</TreeItemLayout>
+              <TreeItemLayout iconBefore={<Eye20Regular style={OBJ_TINT.view} />}>Views ({whViews.length})</TreeItemLayout>
               <Tree>
                 {!ready && (
                   <TreeItem itemType="leaf" value="v-not-ready"><TreeItemLayout>{schema?.message || 'Warehouse compute offline'}</TreeItemLayout></TreeItem>
@@ -554,7 +592,7 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
                 {whViews.map((v) => (
                   <TreeItem key={`v-${v.schema}.${v.name}`} itemType="leaf" value={`v-${v.schema}.${v.name}`}
                     onClick={() => setSqlText(`SELECT TOP 100 * FROM [${v.schema}].[${v.name}];`)}>
-                    <TreeItemLayout iconBefore={<Eye20Regular />}
+                    <TreeItemLayout iconBefore={<Eye20Regular style={OBJ_TINT.view} />}
                       actions={<SqlObjectScriptMenu name={`${v.schema}.${v.name}`}
                         onScriptCreate={() => loadScript('view', v.schema, v.name, 'create')}
                         onScriptAlter={() => loadScript('view', v.schema, v.name, 'alter')}
@@ -569,7 +607,7 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
 
             {/* Stored procedures */}
             <TreeItem itemType="branch" value="procs">
-              <TreeItemLayout iconBefore={<Form20Regular />}>Stored procedures ({whProcedures.length})</TreeItemLayout>
+              <TreeItemLayout iconBefore={<Form20Regular style={OBJ_TINT.proc} />}>Stored procedures ({whProcedures.length})</TreeItemLayout>
               <Tree>
                 {!ready && (
                   <TreeItem itemType="leaf" value="p-not-ready"><TreeItemLayout>{schema?.message || 'Warehouse compute offline'}</TreeItemLayout></TreeItem>
@@ -580,7 +618,7 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
                 {whProcedures.map((p) => (
                   <TreeItem key={`p-${p.schema}.${p.name}`} itemType="leaf" value={`p-${p.schema}.${p.name}`}
                     onClick={() => setSqlText(`EXEC [${p.schema}].[${p.name}];`)}>
-                    <TreeItemLayout iconBefore={<Form20Regular />}
+                    <TreeItemLayout iconBefore={<Form20Regular style={OBJ_TINT.proc} />}
                       actions={<SqlObjectScriptMenu name={`${p.schema}.${p.name}`}
                         onScriptCreate={() => loadScript('procedure', p.schema, p.name, 'create')}
                         onScriptAlter={() => loadScript('procedure', p.schema, p.name, 'alter')}
@@ -594,7 +632,7 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
 
             {/* Functions */}
             <TreeItem itemType="branch" value="funcs">
-              <TreeItemLayout iconBefore={<MathFormula20Regular />}>Functions ({whFunctions.length})</TreeItemLayout>
+              <TreeItemLayout iconBefore={<MathFormula20Regular style={OBJ_TINT.func} />}>Functions ({whFunctions.length})</TreeItemLayout>
               <Tree>
                 {!ready && (
                   <TreeItem itemType="leaf" value="f-not-ready"><TreeItemLayout>{schema?.message || 'Warehouse compute offline'}</TreeItemLayout></TreeItem>
@@ -609,7 +647,7 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
                         ? `SELECT [${f.schema}].[${f.name}]();`
                         : `SELECT TOP 100 * FROM [${f.schema}].[${f.name}]();`,
                     )}>
-                    <TreeItemLayout iconBefore={<MathFormula20Regular />}
+                    <TreeItemLayout iconBefore={<MathFormula20Regular style={OBJ_TINT.func} />}
                       actions={<SqlObjectScriptMenu name={`${f.schema}.${f.name}`}
                         onScriptCreate={() => loadScript('function', f.schema, f.name, 'create')}
                         onScriptAlter={() => loadScript('function', f.schema, f.name, 'alter')}
