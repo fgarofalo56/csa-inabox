@@ -183,6 +183,29 @@ jobs:
             echo "::warning::UAMI probe did not return 200 — see output above (token failure = MSI/env issue; ERR fetch failed = DNS/egress from the CAE VNet)."
           fi
 
+      - name: DNS-infra diagnosis — privatelink zones, VNet links, PEs for the account (ARM reads)
+        run: |
+          set -euo pipefail
+          # In-container probe showed ENOTFOUND for $BASE — the CAE VNet resolves
+          # through a privatelink zone that lacks this account's record. Map the
+          # actual state so the fix (add record / approve PE / unlink zone) is exact.
+          SUB="${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}"
+          echo "== A) Private DNS zones (purview) across the sub =="
+          az network private-dns zone list --query "[?contains(name, 'purview')].{name:name, rg:resourceGroup, records:numberOfRecordSets, links:numberOfVirtualNetworkLinks}" -o table 2>/dev/null || true
+          echo "== B) Records + VNet links per purview zone =="
+          for row in $(az network private-dns zone list --query "[?contains(name, 'purview')].[name,resourceGroup]" -o tsv 2>/dev/null | tr '\t' '|'); do
+            Z="${row%%|*}"; ZRG="${row##*|}"
+            echo "-- zone $Z (rg $ZRG): links --"
+            az network private-dns link vnet list -z "$Z" -g "$ZRG" --query "[].{link:name, vnet:virtualNetwork.id, state:virtualNetworkLinkState}" -o table 2>/dev/null || true
+            echo "-- zone $Z: A records --"
+            az network private-dns record-set a list -z "$Z" -g "$ZRG" --query "[].{name:name, ips:aRecords[].ipv4Address}" -o json 2>/dev/null || true
+          done
+          echo "== C) Private endpoints bound to the Purview account =="
+          az rest --method get --url "https://management.usgovcloudapi.net$PVW_ID?api-version=$PURVIEW_ARM_API" --query "properties.privateEndpointConnections[].{pe:privateEndpoint.id, status:privateLinkServiceConnectionState.status}" -o json 2>/dev/null || true
+          echo "== D) The CAE VNet (for link comparison) =="
+          CAE_ENV=$(az containerapp show -n "$APP" -g "$RG" --query 'properties.environmentId' -o tsv | tr -d '\r')
+          az rest --method get --url "https://management.usgovcloudapi.net$CAE_ENV?api-version=2024-03-01" --query "properties.vnetConfiguration.infrastructureSubnetId" -o tsv 2>/dev/null || true
+
       - name: Print the EXACT metadata-policy REST grant calls (root collection)
         run: |
           set -euo pipefail
