@@ -47,11 +47,20 @@ import {
   Dropdown,
   Option,
   Text,
+  Button,
+  Tooltip,
+  Menu,
+  MenuTrigger,
+  MenuPopover,
+  MenuList,
+  MenuItem,
+  MenuDivider,
   makeStyles,
   tokens,
   mergeClasses,
   type TableColumnDefinition,
   type TableColumnSizingOptions,
+  type PositioningVirtualElement,
 } from '@fluentui/react-components';
 import {
   DismissCircle24Regular,
@@ -91,11 +100,54 @@ export interface LoomColumn<T> {
   minWidth?: number;
 }
 
+/**
+ * A hover row-action — a small icon button that appears in a trailing toolbar
+ * on row hover / focus (Fabric's dense-list inline actions). Real action only.
+ */
+export interface LoomRowAction<T> {
+  key: string;
+  /** Accessible label + tooltip. */
+  label: string;
+  icon: React.ReactElement;
+  onClick: (row: T) => void;
+  /** Button appearance. Default 'subtle'. */
+  appearance?: 'subtle' | 'transparent' | 'secondary';
+}
+
+/**
+ * A right-click context-menu entry for a row (Fabric's row context menu).
+ * Set `divider` to render a separator BEFORE the item.
+ */
+export interface LoomRowMenuItem<T> {
+  key: string;
+  label: string;
+  icon?: React.ReactElement;
+  onClick: (row: T) => void;
+  disabled?: boolean;
+  /** Render a MenuDivider before this item. */
+  divider?: boolean;
+}
+
 export interface LoomDataTableProps<T> {
   columns: LoomColumn<T>[];
   rows: T[];
   /** Stable id per row. */
   getRowId: (row: T) => string;
+  /**
+   * Row density. 'comfortable' (default) keeps the generous padding; 'compact'
+   * tightens rows to Fabric list density (branded-icon rows stay readable).
+   */
+  density?: 'comfortable' | 'compact';
+  /**
+   * Per-row hover actions. When set, a trailing actions column is appended; its
+   * toolbar is invisible until the row is hovered or keyboard-focused.
+   */
+  rowActions?: (row: T) => LoomRowAction<T>[];
+  /**
+   * Per-row right-click context menu. When set, right-clicking a row opens a
+   * Fluent menu at the cursor with these entries (each runs a real action).
+   */
+  rowMenu?: (row: T) => LoomRowMenuItem<T>[];
   /** Show the loading Spinner instead of rows. */
   loading?: boolean;
   /** Message (or node) shown when there are zero rows. */
@@ -147,6 +199,24 @@ const useStyles = makeStyles({
       overflow: 'hidden',
     },
     '& [role="gridcell"] > *': { minWidth: 0, maxWidth: '100%' },
+    // Reveal the trailing row-action toolbar on row hover / keyboard focus.
+    '& [role="row"]:hover [data-loom-row-actions]': { opacity: 1 },
+    '& [role="row"]:focus-within [data-loom-row-actions]': { opacity: 1 },
+  },
+  // Compact density — Fabric list rows. Tighter vertical padding; the branded
+  // icon + name still read cleanly. Merged AFTER `grid` so it wins the padding.
+  compactGrid: {
+    '& [role="gridcell"], & [role="columnheader"]': {
+      paddingTop: tokens.spacingVerticalXXS,
+      paddingBottom: tokens.spacingVerticalXXS,
+    },
+  },
+  // Trailing hover-action toolbar (right-aligned, hidden until row hover/focus).
+  rowActions: {
+    display: 'flex', alignItems: 'center', justifyContent: 'flex-end',
+    gap: tokens.spacingHorizontalXXS, width: '100%',
+    opacity: 0,
+    transitionProperty: 'opacity', transitionDuration: tokens.durationFaster,
   },
   headerRow: {
     position: 'sticky',
@@ -386,6 +456,9 @@ export function LoomDataTable<T>(props: LoomDataTableProps<T>): React.ReactEleme
     columns,
     rows,
     getRowId,
+    density = 'comfortable',
+    rowActions,
+    rowMenu,
     loading = false,
     empty = 'No items to show.',
     onRowClick,
@@ -394,6 +467,18 @@ export function LoomDataTable<T>(props: LoomDataTableProps<T>): React.ReactEleme
     skeleton = false,
   } = props;
   const styles = useStyles();
+
+  // Right-click context menu — a single Fluent Menu positioned at the cursor via
+  // a virtual element. State carries the target row + cursor coordinates.
+  const [ctxMenu, setCtxMenu] = React.useState<{ row: T; x: number; y: number } | null>(null);
+  const ctxTarget = React.useMemo<PositioningVirtualElement | undefined>(() => {
+    if (!ctxMenu) return undefined;
+    const { x, y } = ctxMenu;
+    return {
+      getBoundingClientRect: () =>
+        ({ x, y, left: x, top: y, right: x, bottom: y, width: 0, height: 0, toJSON: () => ({}) }) as DOMRect,
+    };
+  }, [ctxMenu]);
 
   // per-column filter value, keyed by column.key
   const [filters, setFilters] = React.useState<Record<string, ColFilter>>({});
@@ -476,33 +561,59 @@ export function LoomDataTable<T>(props: LoomDataTableProps<T>): React.ReactEleme
   const sortSnapRef = React.useRef<SortSnap>(sortSnap);
   sortSnapRef.current = sortSnap;
 
-  const fluentColumns: TableColumnDefinition<T>[] = React.useMemo(
-    () =>
-      columns.map((col) => {
-        const isSortable = sortableKeys.has(col.key);
-        return createTableColumn<T>({
-          columnId: col.key,
-          compare: (a, b) => {
-            const av = defaultGetValue(col, a);
-            const bv = defaultGetValue(col, b);
-            if (typeof av === 'number' && typeof bv === 'number') return av - bv;
-            return String(av).localeCompare(String(bv));
-          },
-          renderHeaderCell: () => (
-            <SortableHeaderCell
-              label={col.label}
-              isSortable={isSortable}
-              colKey={col.key}
-              sortSnapRef={sortSnapRef}
-            />
+  // Stable columnId for the auto-appended hover-actions column.
+  const ACTIONS_COL = '__loom_row_actions__';
+
+  const fluentColumns: TableColumnDefinition<T>[] = React.useMemo(() => {
+    const cols = columns.map((col) => {
+      const isSortable = sortableKeys.has(col.key);
+      return createTableColumn<T>({
+        columnId: col.key,
+        compare: (a, b) => {
+          const av = defaultGetValue(col, a);
+          const bv = defaultGetValue(col, b);
+          if (typeof av === 'number' && typeof bv === 'number') return av - bv;
+          return String(av).localeCompare(String(bv));
+        },
+        renderHeaderCell: () => (
+          <SortableHeaderCell
+            label={col.label}
+            isSortable={isSortable}
+            colKey={col.key}
+            sortSnapRef={sortSnapRef}
+          />
+        ),
+        renderCell: (row) =>
+          col.render ? col.render(row) : String(defaultGetValue(col, row)),
+      });
+    });
+    // Trailing hover-action toolbar column (Fabric inline row actions).
+    if (rowActions) {
+      cols.push(
+        createTableColumn<T>({
+          columnId: ACTIONS_COL,
+          renderHeaderCell: () => <></>,
+          renderCell: (row) => (
+            <div className={styles.rowActions} data-loom-row-actions>
+              {rowActions(row).map((a) => (
+                <Tooltip key={a.key} content={a.label} relationship="label">
+                  <Button
+                    size="small"
+                    appearance={a.appearance ?? 'subtle'}
+                    icon={a.icon}
+                    aria-label={a.label}
+                    onClick={(e) => { e.stopPropagation(); a.onClick(row); }}
+                  />
+                </Tooltip>
+              ))}
+            </div>
           ),
-          renderCell: (row) =>
-            col.render ? col.render(row) : String(defaultGetValue(col, row)),
-        });
-      }),
+        }),
+      );
+    }
+    return cols;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [columns, sortableKeys],
-  );
+  }, [columns, sortableKeys, rowActions, styles.rowActions]);
 
   // resizable column sizing options from declared widths
   const columnSizingOptions: TableColumnSizingOptions = React.useMemo(() => {
@@ -514,8 +625,15 @@ export function LoomDataTable<T>(props: LoomDataTableProps<T>): React.ReactEleme
         defaultWidth: col.width ?? 200,
       };
     }
+    if (rowActions) {
+      // Width scales with the max number of actions (~32px per icon button + pad).
+      const maxActions = rows.reduce((m, r) => Math.max(m, rowActions(r).length), 1);
+      const w = Math.min(220, 44 + maxActions * 34);
+      out[ACTIONS_COL] = { minWidth: w, idealWidth: w, defaultWidth: w };
+    }
     return out;
-  }, [columns]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [columns, rowActions, rows]);
 
   if (loading) {
     // Opt-in skeleton: stable placeholder rows matching the column layout so
@@ -647,7 +765,7 @@ export function LoomDataTable<T>(props: LoomDataTableProps<T>): React.ReactEleme
         columnSizingOptions={columnSizingOptions}
         focusMode="cell"
         aria-label={ariaLabel ?? 'Data table'}
-        className={styles.grid}
+        className={mergeClasses(styles.grid, density === 'compact' && styles.compactGrid)}
         onSortChange={(_e, newSort) => {
           setSortSnap({
             sortColumn: newSort.sortColumn != null ? String(newSort.sortColumn) : undefined,
@@ -693,6 +811,14 @@ export function LoomDataTable<T>(props: LoomDataTableProps<T>): React.ReactEleme
                 onRowClick ? styles.clickableRow : undefined,
               )}
               onClick={onRowClick ? () => onRowClick(item) : undefined}
+              onContextMenu={
+                rowMenu
+                  ? (e: React.MouseEvent) => {
+                      e.preventDefault();
+                      setCtxMenu({ row: item, x: e.clientX, y: e.clientY });
+                    }
+                  : undefined
+              }
               onKeyDown={
                 onRowClick
                   ? (e: React.KeyboardEvent) => {
@@ -711,6 +837,35 @@ export function LoomDataTable<T>(props: LoomDataTableProps<T>): React.ReactEleme
           )}
         </DataGridBody>
       </DataGrid>
+
+      {/* Right-click context menu — one Fluent Menu positioned at the cursor. */}
+      {rowMenu && (
+        <Menu
+          open={!!ctxMenu}
+          onOpenChange={(_e, d) => { if (!d.open) setCtxMenu(null); }}
+          positioning={{ target: ctxTarget }}
+        >
+          <MenuTrigger disableButtonEnhancement>
+            <span style={{ display: 'none' }} aria-hidden />
+          </MenuTrigger>
+          <MenuPopover>
+            <MenuList>
+              {ctxMenu && rowMenu(ctxMenu.row).map((mi) => (
+                <React.Fragment key={mi.key}>
+                  {mi.divider && <MenuDivider />}
+                  <MenuItem
+                    icon={mi.icon}
+                    disabled={mi.disabled}
+                    onClick={() => { const r = ctxMenu.row; setCtxMenu(null); mi.onClick(r); }}
+                  >
+                    {mi.label}
+                  </MenuItem>
+                </React.Fragment>
+              ))}
+            </MenuList>
+          </MenuPopover>
+        </Menu>
+      )}
 
       {filteredRows.length === 0 && (
         <div className={styles.stateBox}>
