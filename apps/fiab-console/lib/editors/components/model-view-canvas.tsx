@@ -44,6 +44,9 @@ import {
   FullScreenMaximize20Regular, Organization20Regular,
   DocumentTable16Regular, Key16Regular, Add20Regular,
   MathFormula20Regular, Play16Regular, Sparkle20Regular,
+  // ux-fabric-a W1 — per-column data-type glyphs on the table card rows
+  // (Fabric Model-view parity: 123 numeric / calendar date / abc text / bool).
+  NumberSymbol16Regular, CalendarLtr16Regular, TextT16Regular, CheckboxChecked16Regular,
 } from '@fluentui/react-icons';
 import { accentTint, accentGradient, portStyle, CanvasRightRail } from '@/lib/components/canvas/canvas-node-kit';
 // Shared drag-to-resize host: supplies the definite outer height React Flow
@@ -241,6 +244,14 @@ const nodeStyles = makeStyles({
     color: tokens.colorNeutralForeground4,
     flexShrink: 0,
   },
+  // ux-fabric-a W1 — column data-type glyph (leads non-key rows; keys keep the
+  // amber key glyph). Neutral tint so names stay the dominant read.
+  typeGlyph: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    flexShrink: 0,
+    color: tokens.colorNeutralForeground4,
+  },
   more: {
     color: tokens.colorNeutralForeground4,
     paddingTop: tokens.spacingVerticalXXS,
@@ -258,6 +269,15 @@ const nodeStyles = makeStyles({
     marginLeft: '6px',
   },
 });
+
+/** Data-type glyph for a column row (ux-fabric-a W1 — Fabric Model-view parity). */
+function columnTypeGlyph(type?: string) {
+  const t = (type || '').toLowerCase();
+  if (/(int|long|double|decimal|number|numeric|float|money|real|bigint|serial|bit)/.test(t)) return <NumberSymbol16Regular fontSize={12} />;
+  if (/(date|time|timestamp)/.test(t)) return <CalendarLtr16Regular fontSize={12} />;
+  if (/(bool)/.test(t)) return <CheckboxChecked16Regular fontSize={12} />;
+  return <TextT16Regular fontSize={12} />;
+}
 
 function TableCardNodeImpl({ data, selected }: NodeProps) {
   const styles = nodeStyles();
@@ -301,7 +321,9 @@ function TableCardNodeImpl({ data, selected }: NodeProps) {
               style={{ ...portStyle('in', TABLE_ACCENT), left: -6 }}
             />
             <span className={styles.colName}>
-              {c.isPk && <span className={styles.keyGlyph}><Key16Regular fontSize={12} /></span>}
+              {c.isPk
+                ? <span className={styles.keyGlyph}><Key16Regular fontSize={12} /></span>
+                : <span className={styles.typeGlyph} aria-hidden>{columnTypeGlyph(c.type)}</span>}
               <span style={{
                 color: tokens.colorNeutralForeground1,
                 fontWeight: c.isPk ? tokens.fontWeightSemibold : tokens.fontWeightRegular,
@@ -617,7 +639,13 @@ function ModelViewCanvasInner({
           // Flow string edge label. Acceptable per the kit rules as a textual
           // cardinality marker alongside the `1`/`*` ends.
           label: `${ends.from} — ${ends.to}${r.crossFilter === 'both' ? ' ⇄' : ''}`,
-          labelStyle: { fontSize: tokens.fontSizeBase100, fill: tokens.colorNeutralForeground2 },
+          labelStyle: { fontSize: tokens.fontSizeBase100, fill: highlight ? tokens.colorBrandForeground1 : tokens.colorNeutralForeground2, fontWeight: 600 },
+          // ux-fabric-a W1 — readable relationship labels: a rounded, hairline-
+          // stroked chip behind the 1/* cardinality text so it never dissolves
+          // into the dotted canvas background (Fabric Model-view parity).
+          labelBgStyle: { fill: tokens.colorNeutralBackground1, fillOpacity: 0.95, stroke: highlight ? tokens.colorBrandStroke1 : tokens.colorNeutralStroke2 },
+          labelBgPadding: [6, 3] as [number, number],
+          labelBgBorderRadius: 6,
           animated: false,
           style: {
             stroke: color,

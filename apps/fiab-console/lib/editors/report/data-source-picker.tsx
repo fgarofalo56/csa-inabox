@@ -53,6 +53,10 @@ import {
   Server20Regular, ArrowSync16Regular, Checkmark16Regular, TableSearch20Regular,
   DatabaseSearch20Regular, DatabasePlugConnected20Regular, CloudArrowUp20Regular,
   TableSettings20Regular,
+  // ux-fabric-a W1 — hero-grade primary cards (the #1927 Get-data gallery
+  // pattern carried through the bind step): distinct glyph per card + a
+  // forward chevron affordance.
+  CubeTree20Regular, ChevronRight20Regular,
 } from '@fluentui/react-icons';
 import { EmptyState } from '@/lib/components/empty-state';
 import { readOnlySelect } from '@/lib/thread/sql-guard';
@@ -172,24 +176,41 @@ const useStyles = makeStyles({
     boxShadow: tokens.shadow16,
     backgroundColor: tokens.colorBrandBackground2,
   },
-  // PRIMARY "Get data" entry — a brand-accented card-button above the kind list.
+  // PRIMARY "Get data" entry — hero-grade (the #1927 gallery pattern carried
+  // through the bind step): brand gradient wash + gradient icon chip +
+  // Recommended badge + forward chevron.
   getDataRow: {
     display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM,
     padding: tokens.spacingVerticalM,
     border: `${tokens.strokeWidthThin} solid ${tokens.colorBrandStroke2}`,
     borderRadius: tokens.borderRadiusLarge,
-    backgroundColor: tokens.colorBrandBackground2,
+    backgroundImage: `linear-gradient(135deg, ${tokens.colorBrandBackground2} 0%, ${tokens.colorNeutralBackground1} 70%)`,
     boxShadow: tokens.shadow4,
     transitionProperty: 'box-shadow, border-color',
     transitionDuration: tokens.durationFaster,
     cursor: 'pointer',
-    width: '100%', textAlign: 'left',
-    ':hover': { boxShadow: tokens.shadow16 },
+    width: '100%', textAlign: 'left', minWidth: 0,
+    ':hover': { boxShadow: tokens.shadow16, border: `${tokens.strokeWidthThin} solid ${tokens.colorBrandStroke1}` },
   },
   getDataRowActive: {
     border: `${tokens.strokeWidthThick} solid ${tokens.colorBrandStroke1}`,
     boxShadow: tokens.shadow16,
   },
+  // Hero icon chip — brand gradient fill, on-brand glyph (bindHero parity).
+  heroIcon: {
+    flexShrink: 0,
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    width: tokens.spacingHorizontalXXXL, height: tokens.spacingHorizontalXXXL,
+    borderRadius: tokens.borderRadiusMedium,
+    backgroundImage: `linear-gradient(135deg, ${tokens.colorBrandBackground2}, ${tokens.colorBrandBackground})`,
+    color: tokens.colorNeutralForegroundOnBrand,
+    boxShadow: tokens.shadow4,
+  },
+  heroBadges: {
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS,
+    flexShrink: 0, flexWrap: 'wrap', minWidth: 0, justifyContent: 'flex-end',
+  },
+  heroChevron: { flexShrink: 0, color: tokens.colorBrandForeground1, display: 'inline-flex' },
   optionIcon: {
     flexShrink: 0,
     color: tokens.colorBrandForeground1,
@@ -240,10 +261,10 @@ const useStyles = makeStyles({
   },
 });
 
-const KIND_META: { kind: ReportDataSourceKind; label: string; hint: string; icon: ReactElement }[] = [
-  { kind: 'semantic-model', label: 'Semantic model', hint: 'Recommended · reusable, governed, Azure-native', icon: <Database20Regular /> },
+const KIND_META: { kind: ReportDataSourceKind; label: string; hint: string; icon: ReactElement; badge?: { label: string; color: 'brand' | 'informative' | 'subtle' } }[] = [
+  { kind: 'semantic-model', label: 'Semantic model', hint: 'Reusable, governed, Azure-native — reports share one model', icon: <Database20Regular />, badge: { label: 'Recommended', color: 'brand' } },
   { kind: 'direct-query', label: 'Direct query', hint: 'Build a model from a SELECT over a warehouse / lakehouse', icon: <DocumentTable20Regular /> },
-  { kind: 'aas', label: 'Advanced · Azure Analysis Services', hint: 'Bind an existing XMLA tabular model', icon: <Server20Regular /> },
+  { kind: 'aas', label: 'Azure Analysis Services', hint: 'Bind an existing XMLA tabular model', icon: <Server20Regular />, badge: { label: 'Advanced', color: 'subtle' } },
 ];
 
 // ── component ─────────────────────────────────────────────────────────────────
@@ -507,15 +528,18 @@ export function DataSourcePicker({ open, reportId, workspaceId, value, onChange,
             onClick={() => setGalleryOpen(true)}
             aria-label="Get data — browse the connector gallery"
           >
-            <span className={styles.optionIcon} aria-hidden><DatabaseSearch20Regular /></span>
+            <span className={styles.heroIcon} aria-hidden><DatabaseSearch20Regular /></span>
             <span className={styles.optionText}>
               <Subtitle2>Get data</Subtitle2>
               <Caption1 className={styles.muted}>
                 Browse the connector gallery — bind a reusable connection, upload a file, or read an ADLS path.
-                Real Azure backend, no Fabric required.
+                Loom auto-configures the source; real Azure backend, no Fabric required.
               </Caption1>
             </span>
-            <Badge appearance="filled" color="brand" size="small">Connectors</Badge>
+            <span className={styles.heroBadges}>
+              <Badge appearance="filled" color="brand" size="small">Connectors</Badge>
+            </span>
+            <span className={styles.heroChevron} aria-hidden><ChevronRight20Regular /></span>
           </button>
 
           {/* PRIMARY — Pick a Loom item (W2): resolve any PBI_SOURCEABLE Loom
@@ -527,7 +551,7 @@ export function DataSourcePicker({ open, reportId, workspaceId, value, onChange,
             onClick={() => setKind('loom-item')}
             aria-label="Pick a Loom item as the data source"
           >
-            <span className={styles.optionIcon} aria-hidden><DatabaseSearch20Regular /></span>
+            <span className={styles.heroIcon} aria-hidden><CubeTree20Regular /></span>
             <span className={styles.optionText}>
               <Subtitle2>Pick a Loom item</Subtitle2>
               <Caption1 className={styles.muted}>
@@ -535,7 +559,10 @@ export function DataSourcePicker({ open, reportId, workspaceId, value, onChange,
                 semantic model, or data product — Loom resolves its Azure backend for you.
               </Caption1>
             </span>
-            <Badge appearance="filled" color="brand" size="small">Loom item</Badge>
+            <span className={styles.heroBadges}>
+              <Badge appearance="filled" color="brand" size="small">Recommended</Badge>
+            </span>
+            <span className={styles.heroChevron} aria-hidden><ChevronRight20Regular /></span>
           </button>
 
           <Caption1 className={styles.muted}>Or build from an existing Loom model, a query, or Analysis Services:</Caption1>
@@ -554,7 +581,10 @@ export function DataSourcePicker({ open, reportId, workspaceId, value, onChange,
                 >
                   <span className={styles.optionIcon} aria-hidden>{k.icon}</span>
                   <span className={styles.optionText}>
-                    <Subtitle2>{k.label}</Subtitle2>
+                    <span style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, minWidth: 0, flexWrap: 'wrap' }}>
+                      <Subtitle2 style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{k.label}</Subtitle2>
+                      {k.badge && <Badge appearance="tint" color={k.badge.color} size="small">{k.badge.label}</Badge>}
+                    </span>
                     <Caption1 className={styles.muted}>{k.hint}</Caption1>
                   </span>
                   <Radio id={`ds-kind-${k.kind}`} value={k.kind} aria-label={k.label} />
@@ -806,7 +836,7 @@ export function DataSourcePicker({ open, reportId, workspaceId, value, onChange,
                 onClick={() => setTransformOpen(true)}
                 aria-label="Transform data with Power Query"
               >
-                <span className={styles.optionIcon} aria-hidden><TableSettings20Regular /></span>
+                <span className={styles.heroIcon} aria-hidden><TableSettings20Regular /></span>
                 <span className={styles.optionText}>
                   <Subtitle2>Transform data</Subtitle2>
                   <Caption1 className={styles.muted}>
@@ -814,9 +844,12 @@ export function DataSourcePicker({ open, reportId, workspaceId, value, onChange,
                     Real M, folded to SQL (DirectQuery) or materialized to Delta (Import). No Power BI / Fabric.
                   </Caption1>
                 </span>
-                {hasTransform(boundForW2) && (
-                  <Badge appearance="filled" color="brand" size="small">Transformed</Badge>
-                )}
+                <span className={styles.heroBadges}>
+                  {hasTransform(boundForW2) && (
+                    <Badge appearance="filled" color="brand" size="small">Transformed</Badge>
+                  )}
+                </span>
+                <span className={styles.heroChevron} aria-hidden><ChevronRight20Regular /></span>
               </button>
               <Caption1 className={styles.muted}>
                 Storage &amp; refresh — set each model table to run live (DirectQuery) or as a materialized Delta cache

@@ -48,7 +48,7 @@ import {
 } from '@fluentui/react-components';
 import {
   Add20Regular, Delete20Regular, Save20Regular, ArrowSync20Regular, Edit20Regular,
-  DataBarVerticalRegular, Table20Regular, NumberSymbol20Regular,
+  DataBarVerticalRegular, Table20Regular,
   Filter20Regular, Dismiss16Regular, Sparkle20Regular,
   Database20Regular, CloudArrowUp20Regular, ColorRegular,
   Copy20Regular, Options20Regular, DataTrending20Regular, Eye16Regular, EyeOff16Regular,
@@ -87,6 +87,11 @@ import {
   Shield20Regular, Ribbon20Regular, Branch20Regular, Settings20Regular, MoreHorizontal20Regular,
   // ── ux-fabric-a W1 (pane-section collapse affordances + page-tab strip) ──────
   ChevronDown16Regular, ChevronRight16Regular, ArrowRight20Regular, DocumentMultiple20Regular,
+  // ── ux-fabric-a W1 (field-well pills: type badges + drag grip) ───────────────
+  // PBI field pills lead with a data-type glyph (Σ measure / 123 numeric /
+  // calendar date / abc text / checkbox bool) and a grip affordance; mirror both.
+  ReOrderDotsVertical16Regular, CalendarLtr16Regular, TextT16Regular,
+  NumberSymbol16Regular, MathFormula16Regular, CheckboxChecked16Regular,
 } from '@fluentui/react-icons';
 import type { CSSProperties, ReactElement, ReactNode } from 'react';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
@@ -445,31 +450,51 @@ interface VisualState { rows: Array<Record<string, unknown>>; loading: boolean; 
 
 // ── Visual catalogue (gallery) ───────────────────────────────────────────────
 
-const VISUALS: { type: VisualType; label: string; icon: ReactElement; group?: 'ai'; seed?: { language: 'python' | 'r' } }[] = [
-  { type: 'table',        label: 'Table',          icon: <Table20Regular /> },
-  { type: 'matrix',       label: 'Matrix',         icon: <Grid20Regular /> },
-  { type: 'card',         label: 'Card',           icon: <TextNumberFormat20Regular /> },
-  { type: 'multiRowCard', label: 'Multi-row card', icon: <TextBulletListSquare20Regular /> },
-  { type: 'kpi',          label: 'KPI',            icon: <DataTrending20Regular /> },
-  { type: 'gauge',        label: 'Gauge',          icon: <Gauge20Regular /> },
-  { type: 'column',       label: 'Column chart',   icon: <DataBarVertical20Regular /> },
-  { type: 'bar',          label: 'Bar chart',      icon: <DataBarHorizontal20Regular /> },
-  { type: 'line',         label: 'Line chart',     icon: <DataLine20Regular /> },
-  { type: 'area',         label: 'Area chart',     icon: <DataArea20Regular /> },
-  { type: 'combo',        label: 'Line + column',  icon: <ChartMultiple20Regular /> },
-  { type: 'ribbon',       label: 'Ribbon chart',   icon: <RibbonStar20Regular /> },
-  { type: 'waterfall',    label: 'Waterfall',      icon: <DataWaterfall20Regular /> },
-  { type: 'funnel',       label: 'Funnel',         icon: <DataFunnel20Regular /> },
-  { type: 'pie',          label: 'Pie chart',      icon: <DataPie20Regular /> },
-  { type: 'donut',        label: 'Donut chart',    icon: <DataUsage20Regular /> },
-  { type: 'treemap',      label: 'Treemap',        icon: <DataTreemap20Regular /> },
-  { type: 'scatter',      label: 'Scatter',        icon: <DataScatter20Regular /> },
-  { type: 'map',          label: 'Map',            icon: <Map20Regular /> },
-  { type: 'slicer',       label: 'Slicer',         icon: <Filter20Regular /> },
+/**
+ * ux-fabric-a W1 — categorized gallery. Fabric's "Build a visual" gallery groups
+ * visual tiles by family under compact labelled headers, each family carrying a
+ * branded accent so the glyphs read at a glance (bar family = blue, line = teal,
+ * proportion = amber, …). Accents are the theme-aware `--loom-accent-*` vars
+ * (light+dark pairs in globals.css) — the same branded palette the canvas node
+ * kit uses — so the pane stays token-only (web3-ui.md).
+ */
+type GalleryCat = 'bars' | 'lines' | 'proportion' | 'points' | 'tables' | 'cards' | 'filters' | 'script';
+const GALLERY_CATS: { key: GalleryCat; label: string; accent: string }[] = [
+  { key: 'bars',       label: 'Bar & column',   accent: 'var(--loom-accent-blue)' },
+  { key: 'lines',      label: 'Line & area',    accent: 'var(--loom-accent-teal)' },
+  { key: 'proportion', label: 'Proportion',     accent: 'var(--loom-accent-amber)' },
+  { key: 'points',     label: 'Scatter & maps', accent: 'var(--loom-accent-violet)' },
+  { key: 'tables',     label: 'Tables',         accent: 'var(--loom-accent-cyan)' },
+  { key: 'cards',      label: 'Cards & KPIs',   accent: 'var(--loom-accent-emerald)' },
+  { key: 'filters',    label: 'Slicers',        accent: 'var(--loom-accent-indigo2)' },
+  { key: 'script',     label: 'Script visuals', accent: 'var(--loom-accent-magenta)' },
+];
+
+const VISUALS: { type: VisualType; label: string; icon: ReactElement; group?: 'ai'; cat?: GalleryCat; seed?: { language: 'python' | 'r' } }[] = [
+  { type: 'table',        label: 'Table',          icon: <Table20Regular />,             cat: 'tables' },
+  { type: 'matrix',       label: 'Matrix',         icon: <Grid20Regular />,              cat: 'tables' },
+  { type: 'card',         label: 'Card',           icon: <TextNumberFormat20Regular />,  cat: 'cards' },
+  { type: 'multiRowCard', label: 'Multi-row card', icon: <TextBulletListSquare20Regular />, cat: 'cards' },
+  { type: 'kpi',          label: 'KPI',            icon: <DataTrending20Regular />,      cat: 'cards' },
+  { type: 'gauge',        label: 'Gauge',          icon: <Gauge20Regular />,             cat: 'cards' },
+  { type: 'column',       label: 'Column chart',   icon: <DataBarVertical20Regular />,   cat: 'bars' },
+  { type: 'bar',          label: 'Bar chart',      icon: <DataBarHorizontal20Regular />, cat: 'bars' },
+  { type: 'waterfall',    label: 'Waterfall',      icon: <DataWaterfall20Regular />,     cat: 'bars' },
+  { type: 'funnel',       label: 'Funnel',         icon: <DataFunnel20Regular />,        cat: 'bars' },
+  { type: 'line',         label: 'Line chart',     icon: <DataLine20Regular />,          cat: 'lines' },
+  { type: 'area',         label: 'Area chart',     icon: <DataArea20Regular />,          cat: 'lines' },
+  { type: 'combo',        label: 'Line + column',  icon: <ChartMultiple20Regular />,     cat: 'lines' },
+  { type: 'ribbon',       label: 'Ribbon chart',   icon: <RibbonStar20Regular />,        cat: 'lines' },
+  { type: 'pie',          label: 'Pie chart',      icon: <DataPie20Regular />,           cat: 'proportion' },
+  { type: 'donut',        label: 'Donut chart',    icon: <DataUsage20Regular />,         cat: 'proportion' },
+  { type: 'treemap',      label: 'Treemap',        icon: <DataTreemap20Regular />,       cat: 'proportion' },
+  { type: 'scatter',      label: 'Scatter',        icon: <DataScatter20Regular />,       cat: 'points' },
+  { type: 'map',          label: 'Map',            icon: <Map20Regular />,               cat: 'points' },
+  { type: 'slicer',       label: 'Slicer',         icon: <Filter20Regular />,            cat: 'filters' },
   // ── wave-4 R/Python script visuals (PBI ships separate Python + R tiles; both
   //    produce type 'scriptVisual', distinguished by the `seed` language) ────────
-  { type: 'scriptVisual', label: 'Python visual',  icon: <Code20Regular />,          seed: { language: 'python' } },
-  { type: 'scriptVisual', label: 'R visual',       icon: <BracesVariable20Regular />, seed: { language: 'r' } },
+  { type: 'scriptVisual', label: 'Python visual',  icon: <Code20Regular />,          seed: { language: 'python' }, cat: 'script' },
+  { type: 'scriptVisual', label: 'R visual',       icon: <BracesVariable20Regular />, seed: { language: 'r' },     cat: 'script' },
   // ── AI visuals (real backends) ───────────────────────────────────────────────
   { type: 'smartNarrative',    label: 'Smart narrative',    icon: <Sparkle20Regular />,       group: 'ai' },
   { type: 'qna',               label: 'Q&A',                icon: <Question20Regular />,      group: 'ai' },
@@ -709,6 +734,31 @@ function fieldLabel(f: WellField): string {
   return `${agg}${f.column}`;
 }
 
+/**
+ * ux-fabric-a W1 — data-type glyph for a model column (PBI Fields-pane parity:
+ * 123 numeric / calendar date / checkbox bool / abc text). Measures use the
+ * brand-tinted fx glyph via {@link wellFieldGlyph}.
+ */
+function dataTypeGlyph(dataType?: string): ReactElement {
+  const t = (dataType || '').toLowerCase();
+  if (/int|double|decimal|number|numeric|float|money|real|currency/.test(t)) return <NumberSymbol16Regular />;
+  if (/date|time/.test(t)) return <CalendarLtr16Regular />;
+  if (/bool|bit/.test(t)) return <CheckboxChecked16Regular />;
+  return <TextT16Regular />;
+}
+
+/** Column dataType lookup for a well field (the well pill's type badge). */
+function wellFieldDataType(tables: FieldTable[], f: WellField): string | undefined {
+  if (f.measure || !f.column) return undefined;
+  const t = tables.find((x) => x.name === f.table);
+  return t?.columns.find((c) => c.name === f.column)?.dataType;
+}
+
+/** The leading glyph of a well pill — measure ⇒ fx (brand), column ⇒ its type. */
+function wellFieldGlyph(tables: FieldTable[], f: WellField): ReactElement {
+  return f.measure ? <MathFormula16Regular /> : dataTypeGlyph(wellFieldDataType(tables, f));
+}
+
 /** Parse a stored single-`field` ('Table'[Col] / [Measure]) for back-compat. */
 function parseFieldRef(field?: string): WellField | null {
   if (!field) return null;
@@ -897,6 +947,21 @@ const useStyles = makeStyles({
     gridTemplateColumns: 'repeat(auto-fill, minmax(36px, 1fr))',
     gap: tokens.spacingHorizontalXXS,
   },
+  // ux-fabric-a W1 — categorized gallery: a compact labelled family header
+  // (accent dot + caption) over each dense icon grid, mirroring Fabric's
+  // grouped "Build a visual" gallery. Accent dots pick up --loom-accent-*.
+  galleryCat: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS },
+  galleryCatHead: {
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS,
+    minWidth: 0, marginTop: tokens.spacingVerticalXXS,
+  },
+  galleryCatDot: {
+    width: '6px', height: '6px', borderRadius: tokens.borderRadiusCircular, flexShrink: 0,
+  },
+  galleryCatLabel: {
+    color: tokens.colorNeutralForeground3, fontWeight: tokens.fontWeightSemibold,
+    minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+  },
   galleryBtn: {
     display: 'flex', alignItems: 'center', justifyContent: 'center',
     padding: tokens.spacingVerticalXXS, minWidth: 0,
@@ -951,6 +1016,16 @@ const useStyles = makeStyles({
     '&:focus-within .well-token-remove': { opacity: 1 },
   },
   tokenName: { flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+  // ux-fabric-a W1 — PBI field-pill anatomy: a grab grip that brightens on
+  // hover (the pill is draggable between wells) + a leading data-type glyph
+  // (Σ measure brand-tinted; 123 / calendar / abc / bool neutral).
+  tokenGrip: {
+    display: 'inline-flex', alignItems: 'center', flexShrink: 0, cursor: 'grab',
+    color: tokens.colorNeutralForeground4,
+    ':hover': { color: tokens.colorBrandForeground1 },
+  },
+  tokenType: { display: 'inline-flex', alignItems: 'center', flexShrink: 0, color: tokens.colorNeutralForeground3 },
+  tokenTypeMeasure: { color: tokens.colorBrandForeground1 },
   chip: {
     display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXXS, cursor: 'grab',
     padding: `${tokens.spacingVerticalXXS} ${tokens.spacingHorizontalXS}`,
@@ -2134,11 +2209,11 @@ function WellEditor({
                 <MenuGroup key={t.name}>
                   <MenuGroupHeader>{t.name}</MenuGroupHeader>
                   {t.measures.map((m) => (
-                    <MenuItem key={`m:${m.name}`} icon={<NumberSymbol20Regular />}
+                    <MenuItem key={`m:${m.name}`} icon={<MathFormula16Regular />}
                       onClick={() => onAdd(well, { uid: uid('f'), measure: m.name })}>{m.name}</MenuItem>
                   ))}
                   {t.columns.map((c) => (
-                    <MenuItem key={`c:${c.name}`}
+                    <MenuItem key={`c:${c.name}`} icon={dataTypeGlyph(c.dataType)}
                       onClick={() => onAdd(well, { uid: uid('f'), table: t.name, column: c.name, aggregation: well === 'values' ? 'Sum' : undefined })}>{c.name}</MenuItem>
                   ))}
                   <MenuDivider />
@@ -2155,14 +2230,27 @@ function WellEditor({
         onDrop={(e) => {
           e.preventDefault(); setOver(false);
           try {
-            const p = JSON.parse(e.dataTransfer.getData('application/json')) as WellField;
-            if (p && (p.column || p.measure)) onDrop(well, { ...p, uid: uid('f'), aggregation: well === 'values' && p.column ? (p.aggregation || 'Sum') : p.aggregation });
+            const p = JSON.parse(e.dataTransfer.getData('application/json')) as WellField & { __fromWell?: WellName; __fromUid?: string };
+            if (!p || (!p.column && !p.measure)) return;
+            const { __fromWell, __fromUid, ...field } = p;
+            // ux-fabric-a W1 — a pill dragged FROM another well MOVES (PBI parity):
+            // add to this well first (addToWell dedupes on fieldKey), then remove
+            // from the source well. Dropping back into the same well is a no-op.
+            if (__fromWell && __fromUid && __fromWell === well) return;
+            onDrop(well, { ...field, uid: uid('f'), aggregation: well === 'values' && field.column ? (field.aggregation || 'Sum') : field.aggregation });
+            if (__fromWell && __fromUid) onRemove(__fromWell, __fromUid);
           } catch { /* ignore non-field drops */ }
         }}
       >
         {items.length === 0 && <Caption1 className={styles.muted}>Drop a field here</Caption1>}
         {items.map((f) => (
-          <div key={f.uid} className={styles.token}>
+          <div key={f.uid} className={styles.token} draggable
+            onDragStart={(e) => e.dataTransfer.setData('application/json', JSON.stringify({ ...f, __fromWell: well, __fromUid: f.uid }))}>
+            {/* Drag grip + type badge (Σ measure / 123 / calendar / abc / bool) — PBI pill anatomy. */}
+            <span className={styles.tokenGrip} aria-hidden><ReOrderDotsVertical16Regular /></span>
+            <Tooltip content={f.measure ? 'Measure' : (wellFieldDataType(tables, f) || 'Text')} relationship="label">
+              <span className={mergeClasses(styles.tokenType, f.measure && styles.tokenTypeMeasure)}>{wellFieldGlyph(tables, f)}</span>
+            </Tooltip>
             <span className={styles.tokenName}>{fieldLabel(f)}</span>
             {well === 'values' && f.column && (
               <Dropdown size="small" value={f.aggregation || 'Sum'} selectedOptions={[f.aggregation || 'Sum']}
@@ -4420,32 +4508,49 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
       {rightTab === 'build' && (
       <>
       <PaneSection styles={styles} icon={<DataBarVertical20Regular />} label="Visualizations">
-      <div className={styles.gallery}>
-        {VISUALS.filter((vt) => vt.group !== 'ai').map((vt) => {
-          // Two tiles share type 'scriptVisual' (Python / R) — distinguish them by
-          // the seed language for the React key AND the active state, and carry the
-          // seed into add / type-change so the right language is applied.
-          const active = selected?.type === vt.type
-            && (!vt.seed || ((selected?.config?.language as 'python' | 'r') || 'python') === vt.seed.language);
-          const key = vt.seed ? `${vt.type}:${vt.seed.language}` : vt.type;
-          return (
-            <Tooltip key={key} content={selected ? `Change to ${vt.label}` : `Add a ${vt.label}`} relationship="label">
-              <button type="button"
-                aria-label={selected ? `Change to ${vt.label}` : `Add a ${vt.label}`}
-                aria-pressed={active}
-                className={mergeClasses(styles.galleryBtn, active && styles.galleryBtnActive)}
-                onClick={() => (selected
-                  ? mutateVisual(selected.id, (v) => ({
-                      ...v, type: vt.type,
-                      ...(vt.seed ? { config: { ...(v.config || {}), language: vt.seed.language, script: v.config?.script ?? '' } } : {}),
-                    }))
-                  : addVisual(vt.type, vt.seed))}>
-                <span className={mergeClasses(styles.galleryIcon, active && styles.galleryIconActive)} aria-hidden>{vt.icon}</span>
-              </button>
-            </Tooltip>
-          );
-        })}
-      </div>
+      {/* ux-fabric-a W1: Fabric-style CATEGORIZED gallery — visual families under
+          compact labelled headers, each family's glyphs tinted with its branded
+          Loom accent (theme-aware --loom-accent-* pairs). Selection keeps the
+          brand fill; every tile is the same real add/change-type action. */}
+      {GALLERY_CATS.map((cat) => {
+        const tiles = VISUALS.filter((vt) => vt.group !== 'ai' && vt.cat === cat.key);
+        if (tiles.length === 0) return null;
+        return (
+          <div key={cat.key} className={styles.galleryCat}>
+            <div className={styles.galleryCatHead}>
+              <span className={styles.galleryCatDot} style={{ backgroundColor: cat.accent }} aria-hidden />
+              <Caption1 className={styles.galleryCatLabel}>{cat.label}</Caption1>
+            </div>
+            <div className={styles.gallery} role="group" aria-label={cat.label}>
+              {tiles.map((vt) => {
+                // Two tiles share type 'scriptVisual' (Python / R) — distinguish them by
+                // the seed language for the React key AND the active state, and carry the
+                // seed into add / type-change so the right language is applied.
+                const active = selected?.type === vt.type
+                  && (!vt.seed || ((selected?.config?.language as 'python' | 'r') || 'python') === vt.seed.language);
+                const key = vt.seed ? `${vt.type}:${vt.seed.language}` : vt.type;
+                return (
+                  <Tooltip key={key} content={selected ? `Change to ${vt.label}` : `Add a ${vt.label}`} relationship="label">
+                    <button type="button"
+                      aria-label={selected ? `Change to ${vt.label}` : `Add a ${vt.label}`}
+                      aria-pressed={active}
+                      className={mergeClasses(styles.galleryBtn, active && styles.galleryBtnActive)}
+                      onClick={() => (selected
+                        ? mutateVisual(selected.id, (v) => ({
+                            ...v, type: vt.type,
+                            ...(vt.seed ? { config: { ...(v.config || {}), language: vt.seed.language, script: v.config?.script ?? '' } } : {}),
+                          }))
+                        : addVisual(vt.type, vt.seed))}>
+                      <span className={mergeClasses(styles.galleryIcon, active && styles.galleryIconActive)}
+                        style={active ? undefined : { color: cat.accent }} aria-hidden>{vt.icon}</span>
+                    </button>
+                  </Tooltip>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })}
       </PaneSection>
 
       {/* AI visuals (real backends) — smart narrative + Q&A over Azure OpenAI;
@@ -4562,7 +4667,9 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
               <Tree>
                 {t.measures.map((m) => (
                   <TreeItem key={`m:${m.name}`} itemType="leaf" value={`m:${t.name}.${m.name}`}>
-                    <TreeItemLayout iconBefore={<NumberSymbol20Regular />}>
+                    {/* ux-fabric-a W1: measures lead with the brand-tinted fx glyph
+                        (PBI Fields-pane parity); the chip stays the drag source. */}
+                    <TreeItemLayout iconBefore={<span className={styles.tokenTypeMeasure} style={{ display: 'inline-flex' }}><MathFormula16Regular /></span>}>
                       <span className={styles.chip} draggable
                         onDragStart={(e) => e.dataTransfer.setData('application/json', JSON.stringify({ measure: m.name }))}>
                         {m.name}
@@ -4572,7 +4679,8 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
                 ))}
                 {t.columns.map((c) => (
                   <TreeItem key={`c:${c.name}`} itemType="leaf" value={`c:${t.name}.${c.name}`}>
-                    <TreeItemLayout>
+                    {/* Data-type glyph per column (123 / calendar / abc / bool). */}
+                    <TreeItemLayout iconBefore={<span className={styles.tokenType} style={{ display: 'inline-flex' }}>{dataTypeGlyph(c.dataType)}</span>}>
                       <span className={styles.chip} draggable
                         onDragStart={(e) => e.dataTransfer.setData('application/json', JSON.stringify({ table: t.name, column: c.name }))}>
                         {c.name}

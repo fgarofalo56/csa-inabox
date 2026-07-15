@@ -66,6 +66,7 @@ import { OpenInPbiDesktopButton } from '../components/open-in-pbi-desktop-button
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
+import { DaxSnippet } from '@/lib/components/editor/dax-snippet';
 import { DaxQueryView } from '../components/dax-query-view';
 import { ModelHealthPane } from '../components/model-health-pane';
 import { MetricViewBuilder } from '../components/metric-view-builder';
@@ -1672,12 +1673,15 @@ function LoomNativeModelView({
             <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
               {measures.map((m, i) => (
                 <Card key={`${m.table}.${m.name}.${i}`} className={s.card}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, marginBottom: tokens.spacingVerticalS }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, marginBottom: tokens.spacingVerticalS, minWidth: 0, flexWrap: 'wrap' }}>
                     <span className={sm.measureIcon}><MathFormula20Regular /></span>
                     <Subtitle2 style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.name}</Subtitle2>
                     <Badge appearance="tint" color="informative">{m.table}</Badge>
+                    <Badge appearance="outline" color="brand">DAX</Badge>
                   </div>
-                  <pre style={{ margin: '0', padding: tokens.spacingVerticalS, backgroundColor: tokens.colorNeutralBackground3, borderRadius: tokens.borderRadiusMedium, fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase200, whiteSpace: 'pre-wrap', overflowX: 'auto' }}>{m.expression || '—'}</pre>
+                  {/* ux-fabric-a W1 — DAX syntax hints (functions / refs / strings
+                      colorized) on the read-only measure list, Fabric parity. */}
+                  <DaxSnippet expression={m.expression || '—'} ariaLabel={`DAX for ${m.name}`} />
                 </Card>
               ))}
             </div>
@@ -3095,8 +3099,11 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
           )}
           {(datasetId || tab === 'build' || tab === 'copilot' || tab === 'prep-for-ai' || tab === 'daxquery' || tab === 'health' || tab === 'metrics') && (
             <>
-              <div className={s.tabBar}>
-                <TabList selectedValue={tab} onTabSelect={(_: unknown, d: any) => setTab(d.value as any)}>
+              {/* ux-fabric-a W1 — tab-strip density: Fabric's item-tab strips are
+                  compact (size=small) and scroll horizontally instead of wrapping
+                  or clipping; this strip carries 20+ real surfaces. */}
+              <div className={s.tabBar} style={{ overflowX: 'auto', overflowY: 'hidden' }}>
+                <TabList selectedValue={tab} size="small" onTabSelect={(_: unknown, d: any) => setTab(d.value as any)}>
                   <Tab value="tables">Tables ({detail?.tables?.length ?? 0})</Tab>
                   <Tab value="relationships">Relationships ({relationships.length})</Tab>
                   <Tab value="model">Model view</Tab>
