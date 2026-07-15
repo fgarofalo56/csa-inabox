@@ -108,13 +108,17 @@ jobs:
                unityUamiId="$UAMI_ID" \
                acrLoginServer="$ACR_LOGIN" \
                image="$ACR_LOGIN/loom-unity:$SHA" \
+               dbEphemeral=true \
                complianceTags='{"env":"gov","boundary":"usgovvirginia"}' \
             -o none
-          # Gov posture: H2 on the Azure Files SMB mount crash-loops (uid/CIFS
-          # semantics). Until Postgres (LOOM_UNITY_DB_URL) is wired — gated on Gov
-          # Postgres quota — run H2 in a local ephemeral dir so UC is FUNCTIONAL
-          # now. Catalog metadata is not persisted across restarts (documented).
-          az containerapp update -n "$UNITY_APP" -g "$RG" --set-env-vars "LOOM_UNITY_DB_LOCAL=1" -o none
+          # Gov posture: H2 on an Azure Files SMB mount fails to ATTACH on this
+          # boundary — the mount blocks container start (CrashLoopBackOff, restarts:0,
+          # never logs) before the app runs, so an app-level LOOM_UNITY_DB_LOCAL
+          # fallback can't help. dbEphemeral=true makes the DB volume an EmptyDir
+          # (no storage account/share, no SMB mount) + sets LOOM_UNITY_DB_LOCAL in
+          # the container spec, so UC boots FUNCTIONAL now. Catalog metadata is not
+          # persisted across restarts; wire unityDbUrl (Postgres) — gated on Gov
+          # Postgres quota — for durable storage.
           FQDN=$(az containerapp show -n "$UNITY_APP" -g "$RG" --query properties.configuration.ingress.fqdn -o tsv | tr -d '\r')
           echo "UNITY_FQDN=$FQDN" >> "$GITHUB_ENV"
           echo "::notice::loom-unity internal FQDN: $FQDN (H2 local-ephemeral; wire LOOM_UNITY_DB_URL=postgres for durable metadata)"
