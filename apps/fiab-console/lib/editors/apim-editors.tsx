@@ -31,6 +31,7 @@ import {
   Document20Regular, Code20Regular, Library20Regular, Play20Regular, BranchFork20Regular,
   ArrowImport20Regular, Add20Regular, Delete20Regular, Eye20Regular, EyeOff20Regular, Key20Regular, Edit20Regular,
   Pulse20Regular, Database20Regular, Warning20Filled, MoreHorizontal20Regular, Link20Regular,
+  ShieldCheckmark20Regular,
   ChevronDown16Regular, DocumentBulletList20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
@@ -55,6 +56,7 @@ import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { LinkedResourcesPanel } from './components/linked-resources';
 import { DataContractStudioTab } from './components/data-contract-designer';
 import { DataProductEditDialog } from './data-product-edit-dialog';
+import { CertificationPanel } from './components/certification-panel';
 import { useSharedEditorStyles } from './shared-styles';
 
 const useLocalStyles = makeStyles({
@@ -2029,6 +2031,9 @@ interface DataProductState {
   // ('Draft'/'Published'/'Expired') while the F6 publish/expire status API uses
   // UPPERCASE ('DRAFT'/'PUBLISHED'/'EXPIRED'). The union keeps both working.
   lifecycleStatus?: 'Draft' | 'Published' | 'Expired' | 'PUBLISHED' | 'DRAFT' | 'EXPIRED';
+  /** DP-5 — persisted certification state (managed via the Certification tab /
+   *  the /certify route); drives the header endorsement-ladder badge. */
+  certificationState?: 'draft' | 'validated' | 'certified';
   // Phase 2 parity surfaces — datasets/assets, linked glossary terms.
   datasets?: DataProductDataset[];
   glossaryLinks?: DataProductGlossaryLink[];
@@ -2339,10 +2344,10 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
   // Tabs: Overview | Datasets | Data assets | Glossary | Linked resources | Lineage | Access policies | Observability
   // Initial tab can be deep-linked via ?tab= (e.g. the details page's
   // "Manage policies" action opens directly on the policies tab).
-  type DpTab = 'overview' | 'contract' | 'datasets' | 'data-assets' | 'glossary' | 'linked-resources' | 'lineage' | 'policies' | 'observability';
+  type DpTab = 'overview' | 'contract' | 'datasets' | 'data-assets' | 'glossary' | 'linked-resources' | 'lineage' | 'policies' | 'observability' | 'certification';
   const initialTab = ((): DpTab => {
     const t = searchParams?.get('tab');
-    return t === 'contract' || t === 'datasets' || t === 'data-assets' || t === 'glossary' || t === 'linked-resources' || t === 'lineage' || t === 'policies' || t === 'observability'
+    return t === 'contract' || t === 'datasets' || t === 'data-assets' || t === 'glossary' || t === 'linked-resources' || t === 'lineage' || t === 'policies' || t === 'observability' || t === 'certification'
       ? t
       : 'overview';
   })();
@@ -3007,8 +3012,12 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
           })()}
           {state.domain && <Badge appearance="filled" color="brand">Domain: {state.domain}</Badge>}
           {state.owner && <Badge appearance="outline">Owner: {state.owner}</Badge>}
-          {state.certified && <Badge appearance="outline" color="success">Certified</Badge>}
-          {state.endorsed && <Badge appearance="tint" color="brand">Endorsed</Badge>}
+          {/* DP-5 — the two-rung endorsement ladder (reconciles the legacy
+              certified/endorsed booleans): Certified (reviewer-gated) outranks
+              Promoted (lightweight). Manage it on the Certification tab. */}
+          {state.certificationState === 'certified'
+            ? <Badge appearance="filled" color="success" icon={<ShieldCheckmark20Regular />}>Certified</Badge>
+            : (state.endorsed || state.certified) && <Badge appearance="tint" color="brand">Promoted</Badge>}
           {state.purviewDataProductId && <Badge appearance="outline" color="success">Purview: {state.purviewDataProductId.slice(0, 8)}…</Badge>}
           {state.apimApiId && <Badge appearance="outline" color="success" icon={<Key20Regular />}>APIM API: {state.apimApiId}</Badge>}
           {dirty && <Badge appearance="outline" color="warning">unsaved</Badge>}
@@ -3116,6 +3125,7 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
           <Tab value="lineage" icon={<BranchFork20Regular />}>Lineage</Tab>
           <Tab value="policies" icon={<Library20Regular />}>Access policies</Tab>
           <Tab value="observability" icon={<Pulse20Regular />}>Observability</Tab>
+          <Tab value="certification" icon={<ShieldCheckmark20Regular />}>Certification</Tab>
         </TabList>
 
         {tab === 'overview' && (
@@ -3533,6 +3543,8 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
             refresh={observability.refresh}
           />
         )}
+
+        {tab === 'certification' && <CertificationPanel id={id} isNew={isNew} />}
 
         <DeleteDataProductDialog
           open={deleteOpen}

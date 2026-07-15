@@ -70,6 +70,9 @@ export interface DataProductDoc {
   url: string;
   /** governed (default) | self-serve | request — drives the subscribe flow. */
   accessModel?: string;
+  /** DP-5 — certification state (draft|validated|certified) so the trust badge
+   *  shows at the point of discovery. */
+  certification?: string;
   touchedAt: string; // ISO-8601
 }
 
@@ -128,6 +131,7 @@ export const DATA_PRODUCTS_INDEX_DEFINITION = {
     { name: 'sla', type: 'Edm.String', retrievable: true },
     { name: 'url', type: 'Edm.String', retrievable: true },
     { name: 'accessModel', type: 'Edm.String', filterable: true, facetable: true, retrievable: true },
+    { name: 'certification', type: 'Edm.String', filterable: true, facetable: true, retrievable: true },
     { name: 'touchedAt', type: 'Edm.DateTimeOffset', sortable: true, filterable: true, retrievable: true },
   ],
 };
@@ -142,7 +146,7 @@ export const DEFAULT_FACETS = [
 ];
 
 const SELECT =
-  'id,tenantId,workspaceId,displayName,description,domain,domainName,productType,owner,glossaryTerms,CDEs,publishStatus,sla,url,accessModel,touchedAt';
+  'id,tenantId,workspaceId,displayName,description,domain,domainName,productType,owner,glossaryTerms,CDEs,publishStatus,sla,url,accessModel,certification,touchedAt';
 
 /** Idempotent: create the `loom-data-products` index if absent, and reconcile
  *  its schema when it already exists so newly-added fields (e.g. accessModel)
@@ -244,8 +248,8 @@ export async function upsertDataProductDoc(doc: DataProductDoc): Promise<void> {
       await ensureDataProductsIndex();
       fail = await failureOf(await post(doc as unknown as Record<string, unknown>));
       if (fail) {
-        const { accessModel, ...rest } = doc as DataProductDoc & Record<string, unknown>;
-        void accessModel;
+        const { accessModel, certification, ...rest } = doc as DataProductDoc & Record<string, unknown>;
+        void accessModel; void certification;
         fail = await failureOf(await post(rest));
       }
     }
@@ -359,8 +363,8 @@ export async function searchDataProducts(opts: DataProductSearchOpts): Promise<D
       if (!res.ok) {
         const t2 = await res.text();
         if (res.status === 400 && /Could not find a property named|Invalid expression/i.test(t2)) {
-          // Final fallback: drop the optional accessModel field from $select.
-          body.select = SELECT.split(',').filter((f) => f.trim() !== 'accessModel').join(',');
+          // Final fallback: drop the optional newer fields from $select.
+          body.select = SELECT.split(',').filter((f) => f.trim() !== 'accessModel' && f.trim() !== 'certification').join(',');
           res = await doSearch();
           if (!res.ok) {
             const t3 = await res.text();
@@ -438,6 +442,9 @@ export function docForDataProduct(
     sla: state.sla ? String(state.sla) : undefined,
     url: `/items/data-product/${item.id}`,
     accessModel: state.accessModel ? String(state.accessModel) : 'governed',
+    // DP-5: the persisted certification state (written by the certify/revoke
+    // route); the detail page re-evaluates it live.
+    certification: state.certificationState ? String(state.certificationState) : 'draft',
     touchedAt: item.updatedAt || item.createdAt,
   };
 }
