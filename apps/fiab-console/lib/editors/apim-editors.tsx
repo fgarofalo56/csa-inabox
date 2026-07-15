@@ -31,7 +31,7 @@ import {
   Document20Regular, Code20Regular, Library20Regular, Play20Regular, BranchFork20Regular,
   ArrowImport20Regular, Add20Regular, Delete20Regular, Eye20Regular, EyeOff20Regular, Key20Regular, Edit20Regular,
   Pulse20Regular, Database20Regular, Warning20Filled, MoreHorizontal20Regular, Link20Regular,
-  ShieldCheckmark20Regular,
+  ShieldCheckmark20Regular, History20Regular,
   ChevronDown16Regular, DocumentBulletList20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
@@ -57,6 +57,8 @@ import { LinkedResourcesPanel } from './components/linked-resources';
 import { DataContractStudioTab } from './components/data-contract-designer';
 import { DataProductEditDialog } from './data-product-edit-dialog';
 import { CertificationPanel } from './components/certification-panel';
+import { PortsPanel } from './components/ports-panel';
+import { VersionsPanel } from './components/versions-panel';
 import { useSharedEditorStyles } from './shared-styles';
 
 const useLocalStyles = makeStyles({
@@ -2344,7 +2346,7 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
   // Tabs: Overview | Datasets | Data assets | Glossary | Linked resources | Lineage | Access policies | Observability
   // Initial tab can be deep-linked via ?tab= (e.g. the details page's
   // "Manage policies" action opens directly on the policies tab).
-  type DpTab = 'overview' | 'contract' | 'datasets' | 'data-assets' | 'glossary' | 'linked-resources' | 'lineage' | 'policies' | 'observability' | 'certification';
+  type DpTab = 'overview' | 'contract' | 'datasets' | 'data-assets' | 'glossary' | 'linked-resources' | 'lineage' | 'policies' | 'observability' | 'certification' | 'ports' | 'versions';
   const initialTab = ((): DpTab => {
     const t = searchParams?.get('tab');
     return t === 'contract' || t === 'datasets' || t === 'data-assets' || t === 'glossary' || t === 'linked-resources' || t === 'lineage' || t === 'policies' || t === 'observability' || t === 'certification'
@@ -3126,6 +3128,8 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
           <Tab value="policies" icon={<Library20Regular />}>Access policies</Tab>
           <Tab value="observability" icon={<Pulse20Regular />}>Observability</Tab>
           <Tab value="certification" icon={<ShieldCheckmark20Regular />}>Certification</Tab>
+          <Tab value="ports" icon={<ArrowImport20Regular />}>Ports</Tab>
+          <Tab value="versions" icon={<History20Regular />}>Versions</Tab>
         </TabList>
 
         {tab === 'overview' && (
@@ -3545,6 +3549,10 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
         )}
 
         {tab === 'certification' && <CertificationPanel id={id} isNew={isNew} />}
+
+        {tab === 'ports' && <PortsPanel id={id} isNew={isNew} />}
+
+        {tab === 'versions' && <VersionsPanel id={id} isNew={isNew} />}
 
         <DeleteDataProductDialog
           open={deleteOpen}

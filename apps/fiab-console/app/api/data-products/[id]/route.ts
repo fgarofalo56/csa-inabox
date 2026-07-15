@@ -94,6 +94,7 @@ import type {
 import {
   resolveLifecycleState, setLifecycleState, toStatus, type LifecycleState,
 } from '@/lib/dataproducts/lifecycle';
+import { sanitizePorts, portsSummary } from '@/lib/dataproducts/ports';
 import { apiError } from '@/lib/api/respond';
 import { recordListingView } from '@/lib/marketplace/listing-analytics';
 
@@ -616,7 +617,7 @@ export async function PATCH(req: NextRequest, props: { params: Promise<{ id: str
     patched.push('CDEs');
   }
 
-  // ---- DP-3 guided-wizard fields (template provenance + access model + ports)
+  // ---- DP-3 guided-wizard fields (template provenance + access model) ------
   if ('templateSlug' in body) {
     statePatch.templateSlug = body.templateSlug ? String(body.templateSlug) : undefined;
     patched.push('templateSlug');
@@ -630,21 +631,16 @@ export async function PATCH(req: NextRequest, props: { params: Promise<{ id: str
     statePatch.accessModel = am;
     patched.push('accessModel');
   }
-  // Declared output/input ports (DP-8 formalizes; DP-3 persists the structured
-  // declaration). Each { name, direction: 'input'|'output'|'management', kind? }.
+  // ---- DP-8 — the structured input/output/management ports model -----------
+  // Supersedes DP-3's flat ports declaration. Accepts either the structured
+  // object or the legacy flat array (DP-3 wizard); sanitizePorts normalizes +
+  // constrains kinds per direction (no freeform).
   if ('ports' in body) {
-    if (body.ports !== null && !Array.isArray(body.ports)) return err('ports must be an array or null', 400, 'bad_ports');
-    const DIR = ['input', 'output', 'management'];
-    const ports = Array.isArray(body.ports)
-      ? body.ports
-          .filter((p: any) => p && typeof p === 'object' && typeof p.name === 'string' && p.name.trim())
-          .map((p: any) => ({
-            name: String(p.name).trim(),
-            direction: DIR.includes(String(p.direction)) ? String(p.direction) : 'output',
-            kind: p.kind ? String(p.kind) : undefined,
-          }))
-      : undefined;
-    statePatch.ports = ports;
+    if (body.ports === null) statePatch.ports = undefined;
+    else {
+      const model = sanitizePorts(body.ports);
+      statePatch.ports = portsSummary(model).total > 0 ? model : undefined;
+    }
     patched.push('ports');
   }
 

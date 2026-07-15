@@ -256,6 +256,33 @@ describe('POST /api/data-products/[id]/status', () => {
     expect((await res.json()).preconditionFailed.reason).toBe('no_active_policy');
   });
 
+  // ── DP-9: the breaking-change publish gate ────────────────────────────────
+  const ACTIVE_POLICY = [{ kind: 'Access', scope: 'data-product:dp-1', enabled: true }];
+  it('blocks re-publish of a breaking contract change without a major bump', async () => {
+    (getSession as any).mockReturnValue({ claims: { oid: 'u' } });
+    const publishedContract = { version: '1.0.0', schema: [{ name: 'id', type: 'string' }, { name: 'amount', type: 'number' }] };
+    const currentContract = { version: '1.0.1', schema: [{ name: 'id', type: 'string' }] }; // dropped a column, only patch-bumped
+    (loadOwnedItem as any).mockResolvedValue(item({ domain: DOMAIN, datasets: [{ name: 's' }], publishedContract, contract: currentContract }));
+    stubPolicies(ACTIVE_POLICY);
+    const res = await POST(req({ status: 'PUBLISHED' }), ctx('dp-1'));
+    expect(res.status).toBe(422);
+    expect((await res.json()).preconditionFailed.reason).toBe('breaking_change');
+  });
+
+  it('allows re-publish of a breaking change once MAJOR-bumped', async () => {
+    (getSession as any).mockReturnValue({ claims: { oid: 'u' } });
+    const publishedContract = { version: '1.0.0', schema: [{ name: 'id', type: 'string' }, { name: 'amount', type: 'number' }] };
+    const currentContract = { version: '2.0.0', schema: [{ name: 'id', type: 'string' }] }; // dropped a column, major bump
+    const loaded = item({ domain: DOMAIN, datasets: [{ name: 's' }], publishedContract, contract: currentContract });
+    (loadOwnedItem as any).mockResolvedValue(loaded);
+    stubPolicies(ACTIVE_POLICY);
+    (updateOwnedItem as any).mockImplementation(async (_i: string, _t: string, _o: string, patch: any) => ({ ...loaded, state: patch.state }));
+    const res = await POST(req({ status: 'PUBLISHED' }), ctx('dp-1'));
+    expect(res.status).toBe(200);
+    // The publish snapshots the new baseline for the next gate.
+    expect((updateOwnedItem as any).mock.calls[0][3].state.publishedContract.version).toBe('2.0.0');
+  });
+
   it('an Expire maps to canonical deprecated across the trio', async () => {
     (getSession as any).mockReturnValue({ claims: { oid: 'u' } });
     const loaded = item({ status: 'Published', publishStatus: 'Published', lifecycleStatus: 'PUBLISHED' });
