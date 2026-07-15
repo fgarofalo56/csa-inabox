@@ -20,11 +20,19 @@ import {
   databricksConfigGate,
   listUcVolumes, createUcVolume, deleteUcVolume,
 } from '@/lib/azure/databricks-client';
+import { isOssUc } from '@/lib/azure/uc-backend';
+import {
+  primaryWorkspaceHost,
+  listVolumes as listVolumesUc, createVolume as createVolumeUc, deleteVolume as deleteVolumeUc,
+} from '@/lib/azure/unity-catalog-client';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 function gate() {
+  // OSS Unity Catalog backend (loom-unity — the Azure-Government default) has
+  // no Databricks dependency; the UC client routes to LOOM_UNITY_URL.
+  if (isOssUc()) return null;
   const g = databricksConfigGate();
   if (g) {
     return NextResponse.json(
@@ -45,7 +53,9 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ ok: false, error: 'catalog and schema are required' }, { status: 400 });
   }
   try {
-    const volumes = await listUcVolumes(catalog, schema);
+    const volumes = isOssUc()
+      ? await listVolumesUc(await primaryWorkspaceHost(), catalog, schema)
+      : await listUcVolumes(catalog, schema);
     return NextResponse.json({ ok: true, volumes });
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: e?.status || 502 });
@@ -69,11 +79,17 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: false, error: 'EXTERNAL volumes require storage_location (abfss://…)' }, { status: 400 });
   }
   try {
-    const volume = await createUcVolume({
-      name, catalog_name, schema_name, volume_type,
-      storage_location: body?.storage_location ? String(body.storage_location).trim() : undefined,
-      comment: body?.comment ? String(body.comment) : undefined,
-    });
+    const volume = isOssUc()
+      ? await createVolumeUc(await primaryWorkspaceHost(), {
+          name, catalog_name, schema_name, volume_type,
+          storage_location: body?.storage_location ? String(body.storage_location).trim() : undefined,
+          comment: body?.comment ? String(body.comment) : undefined,
+        })
+      : await createUcVolume({
+          name, catalog_name, schema_name, volume_type,
+          storage_location: body?.storage_location ? String(body.storage_location).trim() : undefined,
+          comment: body?.comment ? String(body.comment) : undefined,
+        });
     return NextResponse.json({ ok: true, volume });
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: e?.status || 502 });
@@ -89,7 +105,8 @@ export async function DELETE(req: NextRequest) {
     return NextResponse.json({ ok: false, error: 'full_name (catalog.schema.volume) is required' }, { status: 400 });
   }
   try {
-    await deleteUcVolume(fullName);
+    if (isOssUc()) await deleteVolumeUc(await primaryWorkspaceHost(), fullName);
+    else await deleteUcVolume(fullName);
     return NextResponse.json({ ok: true });
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: e?.status || 502 });

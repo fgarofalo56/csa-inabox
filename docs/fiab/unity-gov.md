@@ -56,23 +56,31 @@ Console (fiab-console)                         loom-unity Container App (interna
 
 ## Honest capability matrix — OSS Unity Catalog vs Databricks Unity Catalog
 
-| Capability | Databricks UC | OSS UC (loom-unity) | Loom on the OSS backend |
+> **The complete, per-capability matrix now lives at
+> `docs/fiab/unity-catalog-capability-matrix.md`** (and live per-deployment at
+> `GET /api/catalog/unity/capabilities`, rendered on `/catalog/unity →
+> Capabilities`). Summary below.
+
+| Capability | Databricks UC | OSS UC (loom-unity, v0.5) | Loom on the OSS backend |
 |---|---|---|---|
-| Catalogs / schemas / tables / volumes / functions (list, get, create, delete) | ✅ | ✅ | ✅ Routed to `LOOM_UNITY_URL` |
+| Catalogs / schemas / tables / volumes / functions / **registered models** (list, get, create, delete; update where the spec has PATCH) | ✅ | ✅ | ✅ Routed to `LOOM_UNITY_URL` — full CRUD from `/catalog/unity` |
 | Metadata catalog + table registry | ✅ | ✅ | ✅ |
-| Temporary credential vending — **AWS S3 / GCS** | ✅ | ✅ (0.2+) | n/a (Azure deploy) |
-| Temporary credential vending — **Azure ADLS** (delegation SAS) | ✅ | ⚠️ Supported via `adls.*` server config, evolving | ⚠️ Opt-in (`LOOM_UNITY_ADLS_*`). **Default OFF** — data access stays on Loom's existing managed-identity / ACL paths |
-| Grants — REST permission graph (`/permissions/*`) | ✅ | ❌ Different/evolving RBAC model | **Gated (501)** — use the Databricks backend, or manage RBAC on the underlying Azure services |
-| Delta Sharing (shares / recipients / providers) | ✅ | ❌ Not in the server | **Gated (501)** |
-| Table / column lineage (system tables + lineage-tracking) | ✅ | ❌ | **Gated (501)** — Loom's unified lineage uses Purview + ADLS on this backend |
+| **Grants — permissions API (`GET/PATCH /permissions/{securable}/{name}`)** | ✅ | ✅ (spec-confirmed; securables incl. `registered_model`, `credential`) | ✅ **Wired** — `/catalog/unity → Grants`; per-backend privilege spelling handled. Effective (inherited) expansion is Databricks-only (honest note). |
+| **External locations + credentials (storage credentials)** | ✅ | ✅ (`/credentials`; Loom rewrites the path) | ✅ **Wired** — `/catalog/unity → Storage` |
+| Temporary credential vending — **Azure ADLS** (delegation SAS) | ✅ | ✅ via `adls.*` server config | ⚠️ Opt-in (`LOOM_UNITY_ADLS_*`). **Default OFF** — data access stays on Loom's existing managed-identity / ACL paths |
+| Delta Sharing (shares / recipients / providers) | ✅ | ❌ Not in the server | **Gated (501)** with the Loom-native fallback named: Loom Marketplace shares |
+| Table / column lineage (system tables + lineage-tracking) | ✅ | ❌ | **Gated (501)** — Loom unified lineage (Purview + ADX + item edges) is the equivalent |
+| Connections (Lakehouse Federation) / workspace bindings / system schemas | ✅ | ❌ | **Gated (501)** with Loom-native fallbacks named |
 | Governed tags / policies / metric views (SQL-warehouse features) | ✅ | ❌ | Naturally gated (no SQL warehouse on OSS) |
 | API stability | GA | **Evolving** ("APIs should not be assumed stable" — upstream) | Pin the image tag; bump deliberately |
 
 **Bottom line (honest scope):** on the OSS backend, `loom-unity` is a **real,
-functional metadata catalog + table registry** with the full catalog/schema/table/
-volume/function REST surface. Grants, Delta Sharing, and lineage are Databricks-UC
-features that OSS UC does not (yet) provide; Loom **gates them honestly** on this
-backend and routes governance/lineage through Purview + Azure-native paths instead.
+functional Unity Catalog** — the full object surface (catalogs → models),
+**grants**, external locations, storage credentials, and temporary-credential
+vending all work against the real server. Delta Sharing, lineage, federation,
+and the SQL-warehouse families are Databricks-UC features OSS UC does not (yet)
+provide; Loom **gates them honestly** and routes each through its named
+Azure-native equivalent instead.
 
 ## Deploy
 
