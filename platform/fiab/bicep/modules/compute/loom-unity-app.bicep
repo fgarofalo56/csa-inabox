@@ -60,6 +60,9 @@ param dbStorageAccountName string = take('st${replace(name, '-', '')}${uniqueStr
 @description('Opt-in Postgres JDBC URL (jdbc:postgresql://host:5432/db). Empty => the DEFAULT H2 file DB on the mounted Azure Files share. Postgres requires a one-time UC schema migration (docs/fiab/unity-gov.md).')
 param unityDbUrl string = ''
 
+@description('When true, back the catalog DB with an EPHEMERAL EmptyDir volume instead of an Azure Files share — no storage account/share is created and no SMB mount is attached. Use in boundaries where H2-on-Azure-Files fails to mount/boot (observed on Azure Government: the CIFS mount blocks container start with CrashLoopBackOff before the app runs). Catalog metadata is NOT persisted across restarts; wire unityDbUrl (Postgres) for durable storage. Ignored when unityDbUrl is set (Postgres owns its storage).')
+param dbEphemeral bool = false
+
 @description('Log Analytics workspace resource id for storage diagnostics. Empty => no diagnostic settings (container stdout/stderr still flows through the CAE Log Analytics integration).')
 param workspaceId string = ''
 
@@ -73,7 +76,8 @@ var dbMountPath = '/home/unitycatalog/etc/db'
 // ── Persistent catalog DB: dedicated Azure Files share (shared-key for the ACA
 //    mount, exactly like the airflow metadata store). The H2 .mv.db lives here so
 //    the catalog survives container restarts.
-resource dbStorage 'Microsoft.Storage/storageAccounts@2024-01-01' = {
+var useAzureFiles = !dbEphemeral && empty(unityDbUrl)
+resource dbStorage 'Microsoft.Storage/storageAccounts@2024-01-01' = if (useAzureFiles) {
   name: dbStorageAccountName
   location: location
   tags: complianceTags
@@ -88,12 +92,12 @@ resource dbStorage 'Microsoft.Storage/storageAccounts@2024-01-01' = {
   }
 }
 
-resource fileSvc 'Microsoft.Storage/storageAccounts/fileServices@2024-01-01' = {
+resource fileSvc 'Microsoft.Storage/storageAccounts/fileServices@2024-01-01' = if (useAzureFiles) {
   parent: dbStorage
   name: 'default'
 }
 
-resource dbShare 'Microsoft.Storage/storageAccounts/fileServices/shares@2024-01-01' = {
+resource dbShare 'Microsoft.Storage/storageAccounts/fileServices/shares@2024-01-01' = if (useAzureFiles) {
   parent: fileSvc
   name: dbShareName
   properties: {
@@ -101,7 +105,7 @@ resource dbShare 'Microsoft.Storage/storageAccounts/fileServices/shares@2024-01-
   }
 }
 
-resource dbDiag 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = if (!empty(workspaceId)) {
+resource dbDiag 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = if (useAzureFiles && !empty(workspaceId)) {
   name: 'diag-loom-unity-db'
   scope: fileSvc
   properties: {
@@ -119,7 +123,7 @@ resource cae 'Microsoft.App/managedEnvironments@2024-03-01' existing = {
   name: last(split(environmentId, '/'))
 }
 
-resource dbCaeStorage 'Microsoft.App/managedEnvironments/storages@2024-03-01' = {
+resource dbCaeStorage 'Microsoft.App/managedEnvironments/storages@2024-03-01' = if (useAzureFiles) {
   parent: cae
   name: dbStorageLink
   properties: {
@@ -138,7 +142,13 @@ resource dbCaeStorage 'Microsoft.App/managedEnvironments/storages@2024-03-01' = 
 var envVars = concat(
   [
     { name: 'LOOM_UNITY_PORT', value: string(targetPort) }
+  ],
+  // Azure Files DB path only when we actually mount it; otherwise force the
+  // entrypoint's local ephemeral H2 dir (no SMB mount to fail on start).
+  useAzureFiles ? [
     { name: 'LOOM_UNITY_DB_DIR', value: dbMountPath }
+  ] : [
+    { name: 'LOOM_UNITY_DB_LOCAL', value: '1' }
   ],
   empty(unityDbUrl) ? [] : [
     { name: 'LOOM_UNITY_DB_URL', value: unityDbUrl }
@@ -182,9 +192,9 @@ resource app 'Microsoft.App/containerApps@2025-02-02-preview' = {
           name: name
           image: image
           env: envVars
-          volumeMounts: [
+          volumeMounts: useAzureFiles ? [
             { volumeName: 'unity-db', mountPath: dbMountPath }
-          ]
+          ] : []
           // 1 vCPU / 2Gi — the JVM UC server + H2 has a steady, modest footprint.
           resources: {
             cpu: json('1.0')
@@ -211,9 +221,9 @@ resource app 'Microsoft.App/containerApps@2025-02-02-preview' = {
           ]
         }
       ]
-      volumes: [
+      volumes: useAzureFiles ? [
         { name: 'unity-db', storageType: 'AzureFile', storageName: dbStorageLink }
-      ]
+      ] : []
       // NOT scale-to-zero: the catalog is on the metadata hot path AND the H2
       // file DB is single-writer, so pin exactly one warm replica.
       scale: {
@@ -233,5 +243,5 @@ output fqdn string = app.properties.configuration.ingress.fqdn
 @description('Container App resource id.')
 output appId string = app.id
 
-@description('Persistent catalog DB storage account name.')
-output dbStorageAccountName string = dbStorage.name
+@description('Persistent catalog DB storage account name (empty when dbEphemeral / Postgres — no Azure Files share is created).')
+output dbStorageAccountName string = useAzureFiles ? dbStorage.name : ''
