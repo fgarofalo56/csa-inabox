@@ -49,6 +49,7 @@ export const LOOM_EVENT_TYPES = [
   'pipeline.run.failed',
   'marketplace.listing.subscribed',
   'marketplace.sla.breached',
+  'marketplace.listing.deprecated',
 ] as const;
 
 export type LoomEventType = (typeof LOOM_EVENT_TYPES)[number];
@@ -100,6 +101,7 @@ export const LOOM_EVENT_GROUPS: ReadonlyArray<{
     events: [
       { type: 'marketplace.listing.subscribed', label: 'Listing subscribed' },
       { type: 'marketplace.sla.breached', label: 'SLA breached' },
+      { type: 'marketplace.listing.deprecated', label: 'Listing deprecated' },
     ],
   },
   {

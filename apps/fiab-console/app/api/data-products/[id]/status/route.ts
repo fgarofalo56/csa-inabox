@@ -44,6 +44,8 @@ import {
 import { loadOwnedItem, updateOwnedItem, jerr } from '@/app/api/items/_lib/item-crud';
 import { upsertDataProductDoc, docForDataProduct } from '@/lib/azure/loom-data-products-search';
 import { setLifecycleState, type LifecycleState } from '@/lib/dataproducts/lifecycle';
+import { diffContracts, parseSemver } from '@/lib/dataproducts/versioning';
+import type { DataContract } from '@/lib/dataproducts/contract';
 import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
@@ -164,6 +166,26 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
           { status: 422 },
         );
       }
+      // DP-9 breaking-change gate: if the current contract has a breaking change
+      // vs the last-PUBLISHED contract and the version wasn't MAJOR-bumped, block
+      // publish (honest, never silent) — the owner must bump major + note it.
+      const published = state.publishedContract as DataContract | undefined;
+      const current = state.contract as DataContract | undefined;
+      if (published && current) {
+        const diff = diffContracts(published, current);
+        const majorBumped = parseSemver(current.version)[0] > parseSemver(published.version)[0];
+        if (diff.breaking && !majorBumped) {
+          return NextResponse.json(
+            {
+              ok: false,
+              error: 'Cannot publish a breaking contract change without a MAJOR version bump. Bump the version (major) and record a migration note in the Versions tab.',
+              preconditionFailed: { reason: 'breaking_change', field: 'state.contract', message: 'Breaking contract change requires a major version bump.' },
+              breakingChanges: diff.changes.filter((c) => c.breaking),
+            },
+            { status: 422 },
+          );
+        }
+      }
     }
 
     // Best-effort push to the Purview unified catalog (gated on the classic
@@ -194,6 +216,9 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     // the "Publish here doesn't publish there" defect.
     const lifecycleStatusAt = new Date().toISOString();
     const nextState = setLifecycleState(state, CANONICAL[status], lifecycleStatusAt);
+    // DP-9: on a successful Publish, snapshot the contract as the baseline the
+    // NEXT publish's breaking-change gate diffs against.
+    if (status === 'PUBLISHED' && state.contract) nextState.publishedContract = state.contract;
     const updated = await updateOwnedItem(id, ITEM_TYPE, session.claims.oid, { state: nextState });
     if (!updated) return jerr('Cosmos write to record lifecycleStatus failed', 500);
 
