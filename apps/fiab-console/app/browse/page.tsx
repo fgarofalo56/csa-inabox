@@ -50,6 +50,7 @@ import { TileGrid } from '@/lib/components/ui/tile-grid';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { itemVisual } from '@/lib/components/ui/item-type-visual';
 import { usePins, type PinnedItem } from '@/lib/components/pin-store';
+import { WorkspaceAvatar } from '@/lib/components/workspace-avatar';
 
 interface WorkspaceLite {
   id: string;
@@ -58,6 +59,8 @@ interface WorkspaceLite {
   description?: string;
   createdAt?: string;
   lastAccessedAt?: string;
+  /** Uploaded workspace image pointer (drives WorkspaceAvatar cache-bust). */
+  image?: { updatedAt?: string } | null;
 }
 
 const LS_BROWSE_VIEW = 'loom.browse.workspaces.viewMode.v1';
@@ -96,26 +99,12 @@ const useStyles = makeStyles({
   spinnerWrap: {
     padding: tokens.spacingVerticalM,
   },
-  // Workspace name-cell: icon chip + label. Static layout here; the chip's
-  // colour tint stays inline (data-driven), mirroring item-tile.tsx:194-200.
+  // Workspace name-cell: the workspace's real avatar + label.
   nameCell: {
     display: 'inline-flex',
     alignItems: 'center',
     gap: tokens.spacingHorizontalS,
     minWidth: 0,
-  },
-  nameChip: {
-    display: 'inline-flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    width: '24px',
-    height: '24px',
-    borderRadius: tokens.borderRadiusMedium,
-    flexShrink: 0,
-  },
-  nameChipIcon: {
-    width: '16px',
-    height: '16px',
   },
 });
 
@@ -203,21 +192,14 @@ export default function BrowsePage() {
         filterable: true,
         width: 320,
         getValue: (w) => w.name,
-        render: (w) => {
-          const visual = itemVisual('workspace');
-          return (
-            <span className={styles.nameCell}>
-              <span
-                className={styles.nameChip}
-                style={{ backgroundColor: `${visual.color}1f` }}
-                aria-hidden
-              >
-                <visual.icon className={styles.nameChipIcon} style={{ color: visual.color }} />
-              </span>
-              <Text weight="semibold">{w.name}</Text>
-            </span>
-          );
-        },
+        render: (w) => (
+          // The workspace's REAL visual (uploaded image, else its deterministic
+          // initials chip) — not the generic item-type document glyph.
+          <span className={styles.nameCell}>
+            <WorkspaceAvatar workspaceId={w.id} name={w.name} image={w.image} size={24} />
+            <Text weight="semibold">{w.name}</Text>
+          </span>
+        ),
       },
       {
         key: 'type',
@@ -372,6 +354,9 @@ export default function BrowsePage() {
                 <ItemTile
                   key={w.id}
                   type="workspace"
+                  leadingVisual={
+                    <WorkspaceAvatar workspaceId={w.id} name={w.name} image={w.image} size={40} />
+                  }
                   title={w.name}
                   subtitle={w.description || 'Workspace'}
                   meta={
