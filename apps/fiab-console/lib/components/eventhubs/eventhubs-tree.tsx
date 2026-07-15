@@ -1,5 +1,7 @@
 'use client';
 
+import { HonestGate } from '@/lib/components/shared/honest-gate';
+
 /**
  * EventHubsNamespaceTree — the Azure Event Hubs namespace navigator.
  *
@@ -610,19 +612,12 @@ export function EventHubsNamespaceTree({ refreshKey = 0, onSelectEventHub }: Eve
     return (
       <div className={s.root}>
         <div className={s.header}><span className={s.title}>Event Hubs namespace</span></div>
-        <MessageBar intent="warning">
-          <MessageBarBody>
-            <MessageBarTitle>Event Hubs namespace not configured</MessageBarTitle>
-            Set <code>{gate.missing}</code> on the Console Container App (e.g.{' '}
-            <code>LOOM_EVENTHUB_NAMESPACE=loom-evhns</code>, plus{' '}
-            <code>LOOM_SUBSCRIPTION_ID</code> and <code>LOOM_EVENTHUB_RG</code> / <code>LOOM_DLZ_RG</code>) so
-            the Loom console can reach a real Azure Event Hubs namespace. The navigator stays here; entities
-            appear once the namespace is reachable. The Loom UAMI must hold{' '}
-            <strong>Azure Event Hubs Data Owner</strong> (data plane) and <strong>Contributor</strong>
-            (control plane) on the namespace. Provisioned by{' '}
-            <code>platform/fiab/bicep/modules/landing-zone/eventhubs*.bicep</code>.
-          </MessageBarBody>
-        </MessageBar>
+        <HonestGate
+          gateId="svc-eventhubs"
+          surface="Event Hubs navigator"
+          missing={gate.missing}
+          onResolved={() => { setGate(null); void loadAll(); }}
+        />
       </div>
     );
   }

@@ -1,5 +1,7 @@
 'use client';
 
+import { HonestGate } from '@/lib/components/shared/honest-gate';
+
 import { clientFetch } from '@/lib/client-fetch';
 /**
  * Synapse Serverless SQL editor — dedicated SQL-script surface for the
@@ -402,14 +404,12 @@ export function SynapseServerlessSqlEditor({ item, id }: { item: FabricItemType;
       main={
         <div className={s.pad}>
           {!configured && (
-            <MessageBar intent="warning">
-              <MessageBarBody>
-                <MessageBarTitle>Synapse Serverless SQL endpoint not configured</MessageBarTitle>
-                Set <strong>LOOM_SYNAPSE_WORKSPACE</strong> on the Console container app
-                (admin-plane bicep deploys the Synapse workspace + Serverless endpoint).
-                No Microsoft Fabric or Power BI workspace is required — this is the Azure-native default.
-              </MessageBarBody>
-            </MessageBar>
+            <HonestGate
+              gateId="svc-synapse"
+              surface="Synapse Serverless SQL"
+              missing="LOOM_SYNAPSE_WORKSPACE"
+              detail="Set LOOM_SYNAPSE_WORKSPACE on the Console container app (admin-plane bicep deploys the Synapse workspace + Serverless endpoint). No Microsoft Fabric or Power BI workspace is required — this is the Azure-native default."
+            />
           )}
           <div className={s.toolbar}>
             <Badge appearance="filled" color="brand" icon={<Server16Regular />}>Serverless</Badge>

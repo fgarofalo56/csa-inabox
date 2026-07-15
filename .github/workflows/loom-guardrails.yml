@@ -47,3 +47,5 @@ jobs:
         run: node scripts/ci/check-duplicate-env.mjs
       - name: docs-hygiene (live estate identifiers + operator PII)
         run: node scripts/ci/check-docs-hygiene.mjs
+      - name: health-coverage (every Azure client + item family has a health check mapping)
+        run: node scripts/ci/check-health-coverage.mjs

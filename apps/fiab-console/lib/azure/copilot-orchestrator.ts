@@ -985,6 +985,139 @@ export function buildDefaultRegistry(): LoomToolRegistry {
     handler: async ({ fixId }) => applyFix(String(fixId)),
   });
 
+  // -------- Gate registry (G2) — discover / explain / resolve config gates ----
+  // The complete registry of every configuration gate (lib/gates/registry.ts,
+  // derived from self-audit ENV_CHECKS). resolve goes through EXACTLY the same
+  // whitelisted, capability-gated env-config write path as /admin/env-config
+  // and the Fix-it wizard — never a side channel.
+  r.register({
+    name: 'loom_list_gates',
+    service: 'Loom',
+    description:
+      'List EVERY configuration gate in the CSA Loom deployment with live status (configured / blocked), the missing env vars, and the owning surfaces. Use when asked what is not configured, what gates exist, why a feature shows a warning banner, or what setup remains. Follow up with loom_explain_gate / loom_resolve_gate.',
+    whenToUse: 'Ask “what is blocked / not configured / what gates remain?”',
+    parameters: obj({ status: { type: 'string', enum: ['all', 'blocked', 'configured'] } }),
+    handler: async ({ status }) => {
+      const { GATES, allGateStatuses } = await import('@/lib/gates/registry');
+      const statuses = new Map(allGateStatuses().map((s) => [s.id, s]));
+      const filter = String(status || 'all');
+      const lines: string[] = [];
+      let blocked = 0;
+      for (const g of GATES) {
+        const st = statuses.get(g.id);
+        const stat = st?.status ?? 'blocked';
+        if (stat === 'blocked') blocked += 1;
+        if (filter !== 'all' && stat !== filter) continue;
+        const miss = st?.missing?.length ? ` — missing: ${st.missing.join(', ')}` : '';
+        const auto = g.canAutoResolve ? ' (auto-resolves on a push-button deploy)' : '';
+        lines.push(`- ${stat === 'configured' ? '✅' : '⚠️'} **${g.title}** (\`${g.id}\`, ${g.severity})${miss}${auto}`);
+      }
+      const md = [
+        `## Gate registry — ${GATES.length} gates, ${GATES.length - blocked} configured · ${blocked} blocked`,
+        '',
+        ...lines,
+        '',
+        'Use loom_explain_gate for the exact remediation of one gate, or loom_resolve_gate (tenant admin) to set its values. Full UI: /admin/gates.',
+      ].join('\n');
+      return asSummary(md, `Gates · ${GATES.length - blocked}/${GATES.length} configured`);
+    },
+  });
+  r.register({
+    name: 'loom_explain_gate',
+    service: 'Loom',
+    description:
+      'Explain ONE configuration gate by id (from loom_list_gates): what it gates, live status, every required env var (with example value), the RBAC role, the bicep module that provisions it, the owning surfaces, and the exact pre-filled fix script. Use before resolving a gate or when a user asks why a specific surface is gated.',
+    whenToUse: 'Ask “why is X gated / what does gate Y need?”',
+    parameters: obj({ gateId: S_STRING }, ['gateId']),
+    handler: async ({ gateId }) => {
+      const { getGate, gateStatus } = await import('@/lib/gates/registry');
+      const g = getGate(String(gateId));
+      if (!g) return { ok: false, error: `unknown gate id '${gateId}' — call loom_list_gates for valid ids.` };
+      const st = gateStatus(g.id);
+      const md = [
+        `## ${g.title} (\`${g.id}\`)`,
+        `**Status:** ${st?.status ?? 'blocked'}${st?.missing?.length ? ` — missing: ${st.missing.join(', ')}` : ''}`,
+        `**Severity:** ${g.severity} · **Category:** ${g.category}${g.canAutoResolve ? ' · **auto-resolves on a push-button deploy**' : ''}`,
+        '',
+        `**Remediation:** ${g.remediation}`,
+        g.role ? `**Role required:** ${g.role}` : '',
+        g.provisionedBy ? `**Provisioned by:** \`${g.provisionedBy}\`` : '',
+        '',
+        '**Required settings:**',
+        ...g.requiredSettings.map((s) =>
+          `- \`${s.envVar}\`${s.valueHint ? ` — e.g. \`${s.valueHint}\`` : ''}${s.aliasOf ? ` (any one of ${s.aliasOf.join(' / ')})` : ''}`),
+        '',
+        g.surfaces.length ? `**Surfaces:** ${g.surfaces.map((s) => s.label).join(' · ')}` : '',
+        st?.check.fixScript ? `\n**Fix script (pre-filled):**\n\`\`\`powershell\n${st.check.fixScript}\n\`\`\`` : '',
+        '',
+        `A tenant admin can apply values with loom_resolve_gate (gateId \`${g.id}\`) or the Fix-it wizard on /admin/gates.`,
+      ].filter(Boolean).join('\n');
+      return asSummary(md, `Gate · ${g.title}`);
+    },
+  });
+  r.register({
+    name: 'loom_resolve_gate',
+    service: 'Loom',
+    description:
+      "Resolve a configuration gate by setting its required env values (WRITE — tenant admin only; the same capability-gated env-config path as /admin/env-config, with audit + SIEM trail). Pass the gateId and a values object mapping the gate's env vars to the values the user confirmed (get valid vars from loom_explain_gate). The change rolls a new container revision (~1–2 min) — report that honestly; the gate flips to configured once the revision is live. NEVER invent values: ask the user or read them from loom_explain_gate's discovered options.",
+    whenToUse: 'The user (a tenant admin) asked to fix/set a gate\'s configuration.',
+    parameters: obj({ gateId: S_STRING, values: S_OBJECT }, ['gateId', 'values']),
+    handler: async ({ gateId, values }, ctx) => {
+      const { getGate, gateStatus } = await import('@/lib/gates/registry');
+      const g = getGate(String(gateId));
+      if (!g) return { ok: false, error: `unknown gate id '${gateId}' — call loom_list_gates for valid ids.` };
+      if (!values || typeof values !== 'object' || Array.isArray(values)) {
+        return { ok: false, error: 'values must be an object mapping env var → value.' };
+      }
+      // WRITE gate — same capability as PUT /api/admin/env-config. The tool
+      // context carries the caller's oid; group-based admins may not resolve
+      // here (no group claims in tool context) — they get an honest pointer to
+      // the UI instead of a bypass.
+      const { checkCapability } = await import('@/lib/auth/feature-gate');
+      const cap = await checkCapability(ctx.session as any, 'admin.env-config', 'Admin');
+      if (!cap.allow) {
+        return {
+          ok: false,
+          error: 'forbidden — resolving a gate writes deployment config and needs the admin.env-config Admin capability.',
+          remediation: 'Ask a tenant admin to run this, or use the Fix-it wizard on /admin/gates (which honors group-based admin membership).',
+        };
+      }
+      const allowed = new Set<string>();
+      for (const s of g.requiredSettings) {
+        allowed.add(s.envVar);
+        for (const a of s.aliasOf || []) allowed.add(a);
+      }
+      const unknown = Object.keys(values).filter((k) => !allowed.has(k));
+      if (unknown.length > 0) {
+        return { ok: false, error: `key(s) not part of gate '${g.id}': ${unknown.join(', ')}. Allowed: ${Array.from(allowed).join(', ')}.` };
+      }
+      const { applyEnvChanges } = await import('@/lib/admin/env-apply');
+      const who = ctx.session.claims.upn || ctx.session.claims.email || ctx.userOid;
+      const result = await applyEnvChanges({
+        tenantId: ctx.session.claims.oid,
+        who,
+        actorOid: ctx.userOid,
+        values: values as Record<string, unknown>,
+        action: 'gate.resolve',
+        auditDetail: { gateId: g.id, via: 'copilot' },
+      });
+      if (!result.ok) return { ok: false, error: result.error };
+      const st = gateStatus(g.id);
+      return {
+        ok: true,
+        gateId: g.id,
+        changed: result.changed,
+        secretsChanged: result.secretsChanged,
+        rejected: result.rejected,
+        platform: result.platform,
+        statusAfterApply: st?.status ?? 'blocked',
+        message: result.changedCount === 0
+          ? (result.message || 'No changes to apply.')
+          : `Applied ${result.changedCount} value(s) — a new revision is rolling (~1–2 min); the gate reports configured once it is live. ${result.driftWarning || ''}`,
+      };
+    },
+  });
+
   // -------- Tabular model reading (Semantic Link parity, no Power BI) --------
   // Four tools: tabular_list_models / tabular_list_tables / tabular_list_measures
   // / tabular_eval_dax. Default backend is loom-native (Cosmos metadata +

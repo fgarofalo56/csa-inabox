@@ -1,5 +1,7 @@
 'use client';
 
+import { HonestGate } from '@/lib/components/shared/honest-gate';
+
 /**
  * AiSearchServiceTree — the Azure AI Search service navigator.
  *
@@ -740,18 +742,12 @@ export function AiSearchServiceTree({
     return (
       <div className={s.root}>
         <div className={s.header}><span className={s.title}>Search service</span></div>
-        <MessageBar intent="warning">
-          <MessageBarBody>
-            <MessageBarTitle>Azure AI Search not configured</MessageBarTitle>
-            Set <code>{gate.missing}</code> on the Console Container App to a deployed{' '}
-            <code>Microsoft.Search/searchServices</code> name (or its{' '}
-            <code>&lt;service&gt;.search.windows.net</code> host). The navigator stays here; objects
-            appear once the service is reachable. The Loom UAMI must hold{' '}
-            <strong>Search Service Contributor</strong> + <strong>Search Index Data Contributor</strong>{' '}
-            on the service. Provisioned by{' '}
-            <code>platform/fiab/bicep/modules/admin-plane/ai-search.bicep</code>.
-          </MessageBarBody>
-        </MessageBar>
+        <HonestGate
+          gateId="svc-aisearch"
+          surface="AI Search navigator"
+          missing={gate.missing}
+          onResolved={() => { setGate(null); void loadAll(); }}
+        />
       </div>
     );
   }
