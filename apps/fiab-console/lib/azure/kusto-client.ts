@@ -26,6 +26,7 @@ import { itemsContainer, workspacesContainer } from './cosmos-client';
 import { armBase, armScope, isGovCloud, kustoClusterUri } from './cloud-endpoints';
 import { buildCreateMaterializedViewCommand } from './kusto-mv-command';
 import { recordCacheHit, recordCacheMiss } from '@/lib/perf/cache-counters';
+import { buildScopedCacheKey, getOrComputeCached } from './query-result-cache';
 
 const CLUSTER_URI = process.env.LOOM_KUSTO_CLUSTER_URI || kustoClusterUri('adx-csa-loom-shared', 'eastus2');
 const DEFAULT_DB = process.env.LOOM_KUSTO_DEFAULT_DB || 'loomdb-default';
@@ -94,6 +95,16 @@ export interface KustoQueryResult {
   truncated: boolean;
   /** True when a PSR-6 server-side paging window was applied to this query. */
   paged?: boolean;
+  /**
+   * PSR-6 — true when a paged query has at least one more row beyond the
+   * returned window (detected by over-fetching `take + 1`). Absent for
+   * non-paged runs.
+   */
+  hasMore?: boolean;
+  /** PSR-6 — the next window to request when {@link hasMore} is true. */
+  nextPage?: KqlPage;
+  /** PSR-6 — true when this result was served from the Loom ADX result cache. */
+  cached?: boolean;
   /**
    * The parsed `render` visualization hint, when the query ended with a
    * `| render <viz>` operator. Absent for queries / mgmt commands with no render.
@@ -410,6 +421,38 @@ export function buildKqlWithOptions(
   return { csl: base, paged };
 }
 
+/**
+ * PSR-6 — pure paging-envelope math (unit tested). Given how many rows the
+ * OVER-FETCHED page returned (the executor asks for `take + 1` so a full page
+ * flags "there is more"), decide how many rows to KEEP, whether more remain,
+ * and the next window to request. `skip`/`take` are floored to safe integers so
+ * the envelope never leaks a fractional or negative window to the client.
+ */
+export function computePagingEnvelope(
+  overFetchedRowCount: number,
+  page: KqlPage,
+): { keep: number; hasMore: boolean; nextPage?: KqlPage } {
+  const skip = Math.max(0, Math.floor(Number(page.skip) || 0));
+  const take = Math.max(1, Math.floor(Number(page.take) || 0));
+  const hasMore = overFetchedRowCount > take;
+  return { keep: take, hasMore, nextPage: hasMore ? { skip: skip + take, take } : undefined };
+}
+
+/**
+ * PSR-6 — parse a client-supplied paging request off a route body into a safe
+ * {@link KqlPage}, or undefined when no paging was requested. `take` is clamped
+ * to `[1, KQL_MAX_ROWS]` so a caller can't request an unbounded page; `skip` is
+ * floored non-negative. Pure — unit tested.
+ */
+export function parseKqlPage(raw: unknown): KqlPage | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const p = raw as { skip?: unknown; take?: unknown };
+  if (p.skip === undefined && p.take === undefined) return undefined;
+  const skip = Math.max(0, Math.floor(Number(p.skip) || 0));
+  const take = Math.min(MAX_ROWS, Math.max(1, Math.floor(Number(p.take) || MAX_ROWS)));
+  return { skip, take };
+}
+
 /** Execute a KQL query. Returns the primary results table (Table_0).
  *  Pass `opts.clusterUri` to target a *different* ADX cluster than the
  *  env-configured default (e.g. previewing a cluster discovered in the RTI
@@ -419,7 +462,16 @@ export function buildKqlWithOptions(
  *  results-cache + server-side paging. */
 export async function executeQuery(database: string, kql: string, opts?: ExecuteQueryOptions): Promise<KustoQueryResult> {
   const started = Date.now();
-  const { csl, paged } = buildKqlWithOptions(kql, opts);
+  // PSR-6 real row-cap paging: when the caller asks for a page, OVER-FETCH one
+  // extra row (`take + 1`) so a full page deterministically signals "there is
+  // more" without a second count() round-trip. We trim back to `take` and emit
+  // { hasMore, nextPage } in the envelope so the grid can offer "load more"
+  // instead of silently truncating at KQL_MAX_ROWS.
+  const page = opts?.page;
+  const execOpts: ExecuteQueryOptions | undefined = page
+    ? { ...opts, page: { skip: page.skip, take: Math.max(1, Math.floor(Number(page.take) || 0)) + 1 } }
+    : opts;
+  const { csl, paged } = buildKqlWithOptions(kql, execOpts);
   const json = await postRest('/v1/rest/query', database || DEFAULT_DB, csl, opts?.clusterUri, opts?.userToken);
   const tables = json?.Tables || [];
   const primary = tables.find((t: any) => t?.TableName === 'Table_0') || tables[0];
@@ -431,7 +483,7 @@ export async function executeQuery(database: string, kql: string, opts?: Execute
   const usedResultsCache = !!(opts?.resultsCacheMaxAgeSec && opts.resultsCacheMaxAgeSec > 0);
   if (!primary) {
     if (usedResultsCache) recordCacheMiss('adx');
-    return { columns: [], columnTypes: [], rows: [], rowCount: 0, executionMs: Date.now() - started, truncated: false, visualization, paged };
+    return { columns: [], columnTypes: [], rows: [], rowCount: 0, executionMs: Date.now() - started, truncated: false, visualization, paged, ...(page ? { hasMore: false } : {}) };
   }
   const shaped = shapeTable(primary, Date.now() - started);
   if (usedResultsCache) {
@@ -440,8 +492,61 @@ export async function executeQuery(database: string, kql: string, opts?: Execute
     if (shaped.executionMs < 100) recordCacheHit('adx');
     else recordCacheMiss('adx');
   }
-  const withPaged = { ...shaped, paged };
+  let withPaged: KustoQueryResult = { ...shaped, paged };
+  if (page) {
+    const env = computePagingEnvelope(shaped.rows.length, page);
+    const rows = shaped.rows.slice(0, env.keep);
+    withPaged = {
+      ...withPaged,
+      rows,
+      rowCount: rows.length,
+      truncated: false, // paging replaces silent truncation with hasMore/nextPage
+      hasMore: env.hasMore,
+      ...(env.nextPage ? { nextPage: env.nextPage } : {}),
+    };
+  }
   return visualization ? { ...withPaged, visualization } : withPaged;
+}
+
+/**
+ * PSR-6 — {@link executeQuery} fronted by the always-on Loom result cache
+ * (query-result-cache.ts: in-process LRU → shared Redis → Cosmos), the SAME
+ * tiered cache PSR-5 uses for the semantic layer. The key folds the target
+ * cluster + database + the full KQL text (+ paging window) so two callers hit
+ * the same slot IFF they would get byte-identical rows. Default-ON per the
+ * die-hard default-ON rule; the operator disables it with
+ * `LOOM_QUERY_CACHE_DISABLED=1`. Cache hit/miss is attributed to the `adx`
+ * backend counter for the perf surface's ADX hit-rate.
+ *
+ * NEVER caches a per-user (OBO) query — a delegated `userToken` yields
+ * identity-scoped rows that must not be shared across callers — and never
+ * caches control commands (handled by the caller: only read queries route
+ * here). A missing/failed cache tier degrades to a live {@link executeQuery}.
+ */
+export async function executeQueryCached(
+  database: string,
+  kql: string,
+  opts?: ExecuteQueryOptions,
+): Promise<KustoQueryResult> {
+  const db = database || DEFAULT_DB;
+  const cluster = opts?.clusterUri || CLUSTER_URI;
+  // OBO / per-user results are identity-scoped — bypass the shared cache.
+  if (opts?.userToken) return executeQuery(db, kql, opts);
+  const key = buildScopedCacheKey('adx-query', {
+    cluster,
+    db,
+    kql,
+    skip: opts?.page?.skip ?? null,
+    take: opts?.page?.take ?? null,
+  });
+  const { value, meta } = await getOrComputeCached<KustoQueryResult>(
+    key,
+    `adx:${cluster}:${db}`,
+    () => executeQuery(db, kql, opts),
+    { backend: 'adx', counterBackend: 'adx' },
+  );
+  // Flag a cache-served result so the route/grid can surface "cached" honestly.
+  return meta.hit ? { ...value, cached: true } : value;
 }
 
 /** Execute a Kusto control command (`.show`, `.create`, `.add`, `.ingest`, etc.).

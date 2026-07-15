@@ -10,8 +10,11 @@ import {
   buildQueryCacheKey,
   buildScopedCacheKey,
   getOrComputeCached,
+  distributedContainerId,
+  DEFAULT_QUERY_CACHE_COSMOS_CONTAINER,
   _awaitBackgroundRefreshes,
 } from '../query-result-cache';
+import { cacheCountersSnapshot, resetCacheCounters } from '@/lib/perf/cache-counters';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 /** Unique key per test so the module-global in-process store never cross-contaminates. */
@@ -154,5 +157,52 @@ describe('getOrComputeCached — stale-while-revalidate', () => {
     expect(bypassed.value).toEqual({ v: 2 });
     expect(bypassed.meta.stale).toBe(false);
     expect(compute).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('distributedContainerId — PSR-5 Cosmos tier default-ON', () => {
+  it('is OFF (null) when no Cosmos endpoint is configured (local dev / tests)', () => {
+    delete process.env.LOOM_COSMOS_ENDPOINT;
+    expect(distributedContainerId()).toBeNull();
+  });
+  it('defaults ON to the canonical container when a Cosmos endpoint is set', () => {
+    process.env.LOOM_COSMOS_ENDPOINT = 'https://loom.documents.azure.com:443/';
+    delete process.env.LOOM_QUERY_CACHE_COSMOS_CONTAINER;
+    delete process.env.LOOM_QUERY_CACHE_COSMOS_DISABLED;
+    expect(distributedContainerId()).toBe(DEFAULT_QUERY_CACHE_COSMOS_CONTAINER);
+  });
+  it('honours an explicit container override', () => {
+    process.env.LOOM_COSMOS_ENDPOINT = 'https://loom.documents.azure.com:443/';
+    process.env.LOOM_QUERY_CACHE_COSMOS_CONTAINER = 'my-cache';
+    expect(distributedContainerId()).toBe('my-cache');
+  });
+  it('opts OUT when LOOM_QUERY_CACHE_COSMOS_DISABLED=1 (admin disable, no spend gate)', () => {
+    process.env.LOOM_COSMOS_ENDPOINT = 'https://loom.documents.azure.com:443/';
+    process.env.LOOM_QUERY_CACHE_COSMOS_DISABLED = '1';
+    expect(distributedContainerId()).toBeNull();
+  });
+});
+
+describe('getOrComputeCached — counterBackend + hit flag (PSR-5/6 hit-rate telemetry)', () => {
+  it('attributes hits/misses to the requested backend and flags hit correctly', async () => {
+    resetCacheCounters();
+    const scope = uniqueScope();
+    const key = buildScopedCacheKey(scope, {});
+    const compute = vi.fn(async () => ({ rows: [[1]] }));
+
+    // First call = miss (computed inline), attributed to the `adx` backend.
+    const first = await getOrComputeCached(key, scope, compute, { ttlMs: 10_000, counterBackend: 'adx' });
+    expect(first.meta.hit).toBe(false);
+
+    // Second call = hit, served from cache, `adx` hit counted.
+    const second = await getOrComputeCached(key, scope, compute, { ttlMs: 10_000, counterBackend: 'adx' });
+    expect(second.meta.hit).toBe(true);
+    expect(compute).toHaveBeenCalledTimes(1);
+
+    const snap = cacheCountersSnapshot();
+    expect(snap.byBackend.adx.hits).toBe(1);
+    expect(snap.byBackend.adx.misses).toBe(1);
+    // Default backend untouched by an adx-attributed call.
+    expect(snap.byBackend['result-cache'].hits).toBe(0);
   });
 });

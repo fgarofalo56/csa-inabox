@@ -114,8 +114,13 @@ describe('EH-P1-OBO per-user data-plane path — real wiring', () => {
     expect(src).toMatch(/normalizeAccessMode/);
     expect(src).toMatch(/resolveUserRead\('user', 'kusto'/);
     expect(src).toMatch(/clusterUri\(\)/);
-    expect(src).toMatch(/executeQuery\(database, kql, \{ userToken \}\)/);
+    // PSR-6 threads the paging window alongside the user token; the OBO branch
+    // still runs the LIVE executeQuery (never the shared executeQueryCached) so
+    // per-user data-plane isolation holds — the cache is bypassed for user-mode.
+    expect(src).toMatch(/executeQuery\(database, kql, \{ userToken, page \}\)/);
     expect(src).toMatch(/executeMgmtCommand\(database, kql, \{ userToken \}\)/);
+    // Guard: the user-token branch must NOT route through the shared cache.
+    expect(src).toMatch(/userToken\s*\n?\s*\?\s*await executeQuery\(database, kql, \{ userToken, page \}\)/);
   });
 
   it('kusto-client accepts a per-user delegated token on the real REST call', () => {

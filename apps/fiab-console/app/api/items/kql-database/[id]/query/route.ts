@@ -12,10 +12,12 @@ import { enforceAdmissionControl } from '@/lib/azure/capacity-guardrails';
 import { recordCostAttribution } from '@/lib/azure/cost-attribution';
 import { tenantScopeId } from '@/lib/auth/session';
 import {
-  executeQuery, executeMgmtCommand, loadKustoItem, resolveDatabase, clusterUri, KustoError,
+  executeQuery, executeQueryCached, executeMgmtCommand, loadKustoItem, resolveDatabase, clusterUri, KustoError,
+  parseKqlPage, KQL_MAX_ROWS, type KqlPage,
 } from '@/lib/azure/kusto-client';
 import { normalizeAccessMode } from '@/lib/azure/sql-access-mode';
 import { resolveUserRead } from '@/lib/azure/user-pool-registry';
+import { jsonWithQueryCache } from '@/lib/api/query-cache-headers';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -83,9 +85,19 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       if (resolution.mode === 'user') userToken = resolution.token;
     }
 
+    // PSR-6 — real row-cap paging. A client paging control passes { page:{skip,take} };
+    // we over-fetch take+1 and echo { hasMore, nextPage } so the grid loads more
+    // rows instead of hitting the silent KQL_MAX_ROWS cap.
+    const page: KqlPage | undefined = isMgmt ? undefined : parseKqlPage((body as { page?: unknown })?.page);
+
     const result = isMgmt
       ? await executeMgmtCommand(database, kql, { userToken })
-      : await executeQuery(database, kql, { userToken });
+      // Per-user (OBO) results are identity-scoped → run live (executeQueryCached
+      // bypasses the shared cache when a userToken is present, but we keep the
+      // explicit executeQuery call to make that intent obvious).
+      : userToken
+        ? await executeQuery(database, kql, { userToken, page })
+        : await executeQueryCached(database, kql, { page });
     // BR-COSTATTR — tag each ADX query for the chargeback per-user drill-down.
     if (!isMgmt) {
       void recordCostAttribution({
@@ -94,14 +106,26 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
         resourceId: database, domainId: (item as any)?.domainId,
       });
     }
-    return NextResponse.json({
+
+    // Uniform "load more" affordance: when an unpaged query truncated at the
+    // cap, surface hasMore + the first paged window so the grid can continue.
+    let hasMore = (result as { hasMore?: boolean }).hasMore ?? false;
+    let nextPage = (result as { nextPage?: KqlPage }).nextPage;
+    if (!isMgmt && !page && result.truncated) {
+      hasMore = true;
+      nextPage = { skip: result.rows.length, take: KQL_MAX_ROWS };
+    }
+
+    return jsonWithQueryCache({
       ok: true,
       database,
       mode: isMgmt ? 'mgmt' : 'query',
       accessMode,
       ...result,
+      hasMore,
+      ...(nextPage ? { nextPage } : {}),
       executedBy: session.claims.upn,
-    });
+    }, { ifNoneMatch: req.headers.get('if-none-match'), maxAgeSec: isMgmt ? 0 : 60 });
   } catch (e: any) {
     const status = e instanceof KustoError ? e.status : 502;
     return NextResponse.json({ ok: false, error: e?.message || String(e), body: e?.body }, { status });

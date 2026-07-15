@@ -56,6 +56,12 @@ export interface KqlResult {
   mode?: 'query' | 'mgmt';
   /** Parsed `| render` hint from the cluster (drives auto-chart selection). */
   visualization?: KqlVisualization;
+  /** PSR-6 — more rows are available beyond the loaded window (paging). */
+  hasMore?: boolean;
+  /** PSR-6 — the next window to request when {@link hasMore}. */
+  nextPage?: { skip: number; take: number };
+  /** PSR-6 — this result was served from the Loom ADX result cache. */
+  cached?: boolean;
 }
 
 /**
@@ -522,7 +528,16 @@ export const KQL_VIZ_CHOICES: { value: TileViz; label: string }[] = [
   { value: 'map', label: 'Map' },
 ];
 
-export function KqlResultsPanel({ result, loading, itemId, itemType }: { result: KqlResult | null; loading: boolean; itemId?: string; itemType?: string }) {
+export function KqlResultsPanel({ result, loading, itemId, itemType, onLoadMore, loadingMore }: {
+  result: KqlResult | null;
+  loading: boolean;
+  itemId?: string;
+  itemType?: string;
+  /** PSR-6 — fetch + append the next page of rows (shown when result.hasMore). */
+  onLoadMore?: () => void;
+  /** PSR-6 — a load-more fetch is in flight. */
+  loadingMore?: boolean;
+}) {
   const s = useStyles();
   // F19 — sensitivity-label export protection. When this panel belongs to a
   // labeled item, gate CSV export through the real /export-check BFF route so a
@@ -599,7 +614,9 @@ export function KqlResultsPanel({ result, loading, itemId, itemType }: { result:
         <Caption1>· {result.executionMs} ms</Caption1>
         {result.mode === 'mgmt' && <Badge appearance="outline">mgmt</Badge>}
         {renderName && <Badge appearance="outline" color="brand" title="from the query's | render operator">render: {renderName}</Badge>}
-        {result.truncated && <Badge appearance="outline" color="warning">truncated at 5,000</Badge>}
+        {result.cached && <Badge appearance="outline" color="success" title="served from the Loom result cache (PSR-6)">cached</Badge>}
+        {result.hasMore && <Badge appearance="outline" color="informative" title="more rows available — load the next page (PSR-6)">more rows available</Badge>}
+        {!result.hasMore && result.truncated && <Badge appearance="outline" color="warning">truncated at 5,000</Badge>}
         {rows.length > 0 && (
           <div style={{ marginLeft: 'auto', display: 'flex', gap: tokens.spacingVerticalXS, flexWrap: 'wrap' }} role="tablist" aria-label="Result view">
             {KQL_VIZ_CHOICES.map((v) => (
@@ -634,6 +651,17 @@ export function KqlResultsPanel({ result, loading, itemId, itemType }: { result:
           exportName={`kql-${result.database || 'results'}`}
           onExportCheck={onExportCheck}
         />
+      )}
+      {/* PSR-6 — server-side paging: load the next window of rows instead of
+          hitting the silent 5,000-row cap. Shown only for tabular results with
+          more rows and a wired onLoadMore handler. */}
+      {onLoadMore && result.hasMore && viz === 'table' && (
+        <div style={{ display: 'flex', justifyContent: 'center', marginTop: tokens.spacingVerticalS }}>
+          <Button size="small" appearance="outline" icon={<DataBarVertical20Regular />}
+            disabled={!!loadingMore} onClick={onLoadMore}>
+            {loadingMore ? 'Loading more rows…' : `Load ${result.nextPage?.take ?? 5000} more rows`}
+          </Button>
+        </div>
       )}
     </div>
   );

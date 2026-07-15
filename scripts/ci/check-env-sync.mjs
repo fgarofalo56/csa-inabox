@@ -281,7 +281,8 @@ const ALLOWLIST = new Set([
   'LOOM_CAPACITY_LCU',              // capacity-unit tuning knob (code default)
   'LOOM_OBO_CLIENT_ID',             // opt-in on-behalf-of flow (default off; EH Phase-1 scaffold)
   'LOOM_OBO_DATA_PLANE',            // opt-in on-behalf-of data-plane target (default off)
-  'LOOM_QUERY_CACHE_COSMOS_CONTAINER', // opt-in query-cache container (derived; default off)
+  'LOOM_QUERY_CACHE_COSMOS_CONTAINER', // opt-in override of the query-cache Cosmos container id (default 'query-result-cache' when a Cosmos endpoint is set — PSR-5 default-ON)
+  'LOOM_QUERY_CACHE_COSMOS_DISABLED', // opt-OUT of the distributed (Cosmos) result-cache tier (PSR-5 default-ON; set '1' to disable)
   'LOOM_QUERY_CACHE_DISABLED',      // query-cache toggle (code default)
   'LOOM_QUERY_CACHE_MAX',           // query-cache size cap (code default)
   'LOOM_ADMIN_CENTER_MCP_ENDPOINT', // opt-in M365 Admin Center MCP
