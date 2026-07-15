@@ -90,7 +90,15 @@ resource caeApps 'Microsoft.App/containerApps@2025-02-02-preview' = [for app in 
     managedEnvironmentId: caeId
     workloadProfileName: contains(app, 'workloadProfile') ? app.workloadProfile : 'Consumption'
     configuration: {
-      activeRevisionsMode: 'Single'
+      // BR-BLUEGREEN — a per-app opt-in to MULTIPLE-revision mode so a new
+      // image can land as a 0%-traffic revision, be health-gated, then take
+      // traffic 0->100 (blue-green) with the prior revision as an instant
+      // rollback. Default STAYS 'Single' for every app that doesn't set the
+      // flag (byte-identical to before); only the Console opts in. The live
+      // traffic split is managed imperatively by console-bluegreen-roll.yml —
+      // this only enables revisions to accumulate so a bad roll never becomes
+      // an instant outage. See docs/fiab/deployment/bluegreen-rolls.md.
+      activeRevisionsMode: (contains(app, 'multiRevision') && app.multiRevision) ? 'Multiple' : 'Single'
       ingress: contains(app, 'ingressPort') ? {
         external: contains(app, 'external') ? app.external : false
         targetPort: app.ingressPort
