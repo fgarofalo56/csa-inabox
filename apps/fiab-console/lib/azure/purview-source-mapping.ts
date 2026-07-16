@@ -160,6 +160,11 @@ const ARM_PROVIDER_BY_KIND: Record<string, string | undefined> = {
  * callers then register without it and surface Purview's honest
  * `OperationNotAllowed` message (never a fabricated id).
  */
+/** ARM provider path for a Purview source kind (undefined for non-Azure kinds). */
+export function purviewArmProviderForKind(kind: string): string | undefined {
+  return ARM_PROVIDER_BY_KIND[kind];
+}
+
 export function derivePurviewArmResourceId(
   kind: string,
   coords: { subscriptionId?: string; resourceGroup?: string; resourceName?: string },
