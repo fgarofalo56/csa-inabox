@@ -1586,8 +1586,17 @@ export function LakehouseEditor({ item, id }: Props) {
       const qs = new URLSearchParams({ container: activeContainer, path: entry.name });
       if (opts?.top) qs.set('top', String(opts.top));
       if (opts?.format) qs.set('format', opts.format);
-      const r = await clientFetch(`/api/lakehouse/preview?${qs.toString()}`);
-      const j = await parseJsonOrError<PreviewResponse>(r, 'Preview');
+      // Auto-retry the transient post-upload windows (serverless cold start,
+      // storage RBAC/visibility propagation) instead of erroring on first
+      // click — the BFF marks them `transient` with a suggested delay.
+      let j: PreviewResponse;
+      for (let attempt = 0; ; attempt++) {
+        const r = await clientFetch(`/api/lakehouse/preview?${qs.toString()}`);
+        j = await parseJsonOrError<PreviewResponse>(r, 'Preview');
+        if (j.ok || !j.transient || attempt >= 3) break;
+        setPreview({ ...j, message: j.error });
+        await new Promise((res) => setTimeout(res, Math.min(j.retryAfterMs ?? 10_000, 30_000)));
+      }
       setPreview(j);
       if (j.sql) {
         setSqlText(j.sql);

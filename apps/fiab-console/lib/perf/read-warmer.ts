@@ -37,9 +37,10 @@ interface WarmTarget {
 
 async function targets(): Promise<WarmTarget[]> {
   // Dynamic imports keep the warmer out of every route's module graph.
-  const [{ getLoomCostSummary }, monitor] = await Promise.all([
+  const [{ getLoomCostSummary }, monitor, { getDefenderSummary }] = await Promise.all([
     import('@/lib/azure/cost-client'),
     import('@/lib/azure/monitor-client'),
+    import('@/lib/azure/defender-client'),
   ]);
   return [
     {
@@ -69,6 +70,32 @@ async function targets(): Promise<WarmTarget[]> {
       modelId: 'monitor',
       ttlMs: 5 * 60_000,
       produce: () => monitor.listActionGroups(),
+    },
+    // 2026-07-16 live receipt: defender (secure score crawl) and health
+    // (whole-subscription Resource Health, ~20 serial paginated calls) both
+    // measured ~12s on a cache miss — the slowest monitor first-paints left.
+    {
+      label: 'monitor/defender',
+      key: buildScopedCacheKey('monitor/defender', {}),
+      modelId: 'monitor',
+      ttlMs: 10 * 60_000,
+      produce: () => getDefenderSummary(),
+    },
+    {
+      label: 'monitor/health',
+      key: buildScopedCacheKey('monitor/health', {}),
+      modelId: 'monitor',
+      ttlMs: 90_000,
+      produce: async () => ({ statuses: Object.values(await monitor.listResourceHealth()) }),
+    },
+    {
+      label: 'monitor/activities default',
+      // Mirrors the route's DEFAULT param set (days=30, limit=200,
+      // synapse on, arm off) — the shape the Monitor page first-paints with.
+      key: buildScopedCacheKey('monitor/activities', { days: 30, limit: 200, includeSynapse: true, includeArmLog: false }),
+      modelId: 'monitor',
+      ttlMs: 3 * 60_000,
+      produce: () => monitor.queryActivityFeed({ days: 30, limit: 200, includeSynapse: true, includeArmLog: false }),
     },
   ];
 }
