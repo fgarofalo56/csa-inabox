@@ -11,6 +11,7 @@
  */
 import { NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { buildScopedCacheKey, getOrComputeCached } from '@/lib/azure/query-result-cache';
 import { workspacesContainer, itemsContainer, auditLogContainer, tenantSettingsContainer } from '@/lib/azure/cosmos-client';
 import { apiServerError } from '@/lib/api/respond';
 
@@ -22,6 +23,23 @@ export async function GET() {
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   const tenantId = s.claims.oid;
   try {
+    // Cached 3 min + SWR: the posture KPIs union several cross-partition
+    // Cosmos scans per paint — one cached crawl serves every viewer
+    // (perf directive 2026-07-15; VA-scale).
+    const { value: payload } = await getOrComputeCached(
+      buildScopedCacheKey('governance/insights', { tenantId }),
+      'governance',
+      () => computeInsights(tenantId),
+      { ttlMs: 3 * 60_000, staleWhileRevalidate: true, budgetMs: 22_000, serveStaleOnError: true },
+    );
+    return NextResponse.json(payload);
+  } catch (e: any) {
+    return apiServerError(e);
+  }
+}
+
+async function computeInsights(tenantId: string): Promise<Record<string, unknown>> {
+  {
     const wsC = await workspacesContainer();
     const itC = await itemsContainer();
     const audC = await auditLogContainer();
@@ -115,7 +133,7 @@ export async function GET() {
       ? Math.round((pct(labeled) + pct(classified) + pct(owned) + pct(endorsed)) / 4)
       : 0;
 
-    return NextResponse.json({
+    return {
       ok: true,
       kpis: {
         totalItems: total,
@@ -131,8 +149,6 @@ export async function GET() {
       topClassified,
       policies,
       source: 'cosmos',
-    });
-  } catch (e: any) {
-    return apiServerError(e);
+    };
   }
 }

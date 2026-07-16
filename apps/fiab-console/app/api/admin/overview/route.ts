@@ -227,7 +227,7 @@ export async function GET() {
     buildScopedCacheKey('admin/overview', { tenantId }),
     'admin',
     () => computeTiles(tenantId),
-    { ttlMs: 2 * 60_000, staleWhileRevalidate: true, budgetMs: 45_000, serveStaleOnError: true },
+    { ttlMs: 2 * 60_000, staleWhileRevalidate: true, budgetMs: 22_000, serveStaleOnError: true },
   );
   return NextResponse.json({ ok: true, tiles });
 }

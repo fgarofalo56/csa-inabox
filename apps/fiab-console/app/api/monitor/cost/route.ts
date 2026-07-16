@@ -12,7 +12,7 @@ import { getSession } from '@/lib/auth/session';
 import { getLoomCostSummary, type CostTimeframe } from '@/lib/azure/cost-client';
 import { MonitorNotConfiguredError, MonitorError } from '@/lib/azure/monitor-client';
 import { apiServerError } from '@/lib/api/respond';
-import { getOrComputeCached, buildScopedCacheKey } from '@/lib/azure/query-result-cache';
+import { getOrComputeCached, buildScopedCacheKey, ComputeBudgetExceededError } from '@/lib/azure/query-result-cache';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -39,10 +39,20 @@ export async function GET(req: NextRequest) {
       buildScopedCacheKey('monitor/cost', { timeframe }),
       'monitor',
       () => getLoomCostSummary({ timeframe }),
-      { ttlMs: 15 * 60_000, staleWhileRevalidate: true, bypass: refresh, budgetMs: 50_000, serveStaleOnError: true },
+      { ttlMs: 15 * 60_000, staleWhileRevalidate: true, bypass: refresh, budgetMs: 22_000, serveStaleOnError: true },
     );
     return NextResponse.json({ ok: true, data: value, meta });
   } catch (e) {
+    if (e instanceof ComputeBudgetExceededError) {
+      // Cold aggregation exceeded the inline budget: the read-warmer (and the
+      // request's own background refresh) will populate the cache shortly —
+      // tell the tab honestly instead of letting Front Door 504 with HTML.
+      return NextResponse.json({
+        ok: false,
+        warming: true,
+        error: 'Cost data is still aggregating for this deployment — the first load takes a minute. It will appear automatically; retry shortly.',
+      }, { status: 202 });
+    }
     if (e instanceof MonitorNotConfiguredError) {
       return NextResponse.json({ ok: false, gate: { missing: e.missing, message: e.message } });
     }
