@@ -16,6 +16,15 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
+// registerDataSource now resolves ARM coordinates by name via Resource Graph
+// when properties carry no resourceId/subscriptionId — mock it out so the
+// fetch mocks below keep their exact call ordering. The resolve path itself
+// gets its own spec at the bottom of this file.
+const discoverCoordsMock = vi.fn(async () => null as { subscriptionId: string; resourceGroup: string } | null);
+vi.mock('../resource-graph-coords', () => ({
+  discoverResourceCoordsByName: (...args: any[]) => discoverCoordsMock(...args),
+}));
+
 vi.mock('@azure/identity', () => {
   class FakeCred {
     async getToken() { return { token: 'fake-token-purview', expiresOnTimestamp: Date.now() + 60_000 }; }
@@ -88,6 +97,28 @@ describe('purview-client scan plane (register + scan fixes)', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const body = JSON.parse((fetchMock.mock.calls[0][1] as any).body);
     expect(body.properties.collection.referenceName).toBe('finance');
+  });
+
+  it('registerDataSource resolves the ARM resourceId by name when properties carry none (manual Register dialog)', async () => {
+    discoverCoordsMock.mockResolvedValueOnce({ subscriptionId: 'sub-1', resourceGroup: 'rg-1' });
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({
+      name: 'lake', kind: 'AdlsGen2', properties: { collection: { referenceName: 'finance' } },
+    }), { status: 201 }));
+    const mod = await import('../purview-client');
+    await mod.registerDataSource({
+      name: 'lake', kind: 'AdlsGen2',
+      properties: { collection: { referenceName: 'finance', type: 'CollectionReference' } },
+    });
+    expect(discoverCoordsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ resourceType: 'Microsoft.Storage/storageAccounts', name: 'lake' }),
+    );
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as any).body);
+    expect(body.properties.resourceId).toBe(
+      '/subscriptions/sub-1/resourceGroups/rg-1/providers/Microsoft.Storage/storageAccounts/lake',
+    );
+    expect(body.properties.subscriptionId).toBe('sub-1');
+    // AdlsGen2 endpoint defaulted from the account name (sovereign-correct).
+    expect(body.properties.endpoint).toContain('lake.dfs.core.windows.net');
   });
 
   it('registerDataSource propagates the REAL upstream 404 body (no "empty body" masking)', async () => {
