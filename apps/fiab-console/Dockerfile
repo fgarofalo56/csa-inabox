@@ -30,8 +30,14 @@ ENV NEXT_TELEMETRY_DISABLED=1
 # The Next build OOMed in the ACR Tasks container (JS heap out of memory) as the
 # app grew — give Node a larger old-space heap. 4096 became the ceiling again on
 # 2026-07-02 (run cj9h: Mark-Compact 3.6GB → SIGABRT), so 6144; the default ACR
-# Tasks agent has 8 GB RAM.
-ENV NODE_OPTIONS=--max-old-space-size=6144
+# Tasks agent has 8 GB RAM. 2026-07-16 (runs cjdq/cjds/cjdt/cjdu): the build
+# worker started getting cgroup-SIGKILLed at 6144 — with that much old-space,
+# V8 grows past what the 8 GB agent can actually give before it feels GC
+# pressure (heap + external/webpack buffers + RSS overhead > ceiling). 5120
+# forces earlier GC so the TOTAL stays under the agent limit; paired with
+# experimental.webpackMemoryOptimizations (next.config.mjs) to keep the JS
+# heap itself inside the lower cap.
+ENV NODE_OPTIONS=--max-old-space-size=5120
 RUN npm install -g pnpm@9 && \
     pnpm build
 
