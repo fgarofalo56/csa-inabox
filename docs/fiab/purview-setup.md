@@ -229,6 +229,40 @@ Use the **managed-VNet IR** for Azure PaaS sources behind Private Link (Storage 
 Azure SQL / etc.); keep the **SHIR VMSS** ([purview-shir-autoscale](parity/purview-shir-autoscale.md))
 for on-prem / VM-hosted sources that a managed PE can't reach.
 
+## Troubleshooting — endpoint + network failure modes (field-diagnosed 2026-07-15)
+
+**Gate says `role_missing` (403) even after a correct grant — new-platform host.**
+Accounts upgraded to the new Microsoft Purview platform report ARM
+`properties.endpoints.catalog` as a tenant-scoped
+`{guid}-api.purview-service.microsoft.com` host. That host is NOT the classic
+Data Map data plane and rejects the Console UAMI with a bare 403 regardless of
+collection metadata-policy roles, while the classic
+`{account}.purview.azure.{com|us}` host answers 200 with the same token. The
+client detects that hostname and falls back to the classic convention host
+(`lib/azure/purview-endpoints.ts`); check the `endpoint` field returned by
+`GET /api/governance/purview/status` — it names the base actually probed.
+
+**Gate says `fetch failed` / `ENOTFOUND` — empty privatelink zone shadowing.**
+When the Purview account is reused brownfield (e.g. a pre-existing DMLZ
+account), `catalog.bicep`'s private-endpoint wiring never runs, but the
+`privatelink.purview.azure.{com|us}` / `privatelink.purviewstudio.…` zones are
+still deployed and linked to the hub VNet **empty**. Public DNS CNAMEs the
+account host into the privatelink zone, and the linked empty zone answers
+NXDOMAIN authoritatively — so the host resolves publicly but NOT from inside
+the Container Apps VNet. Fix (Gov: run `gov-purview-verify` with
+`fix_dns=true`): create `pe-purview-account` + `pe-purview-portal` into the hub
+private-endpoint subnet with `dns-zone-group`s (populates the A records), then
+approve the pending private-endpoint connections on the account — the data
+plane rejects `Pending` connections with 403 `AccountProtectedByPrivateEndpoint`.
+
+**Grant bootstrap.** The metadata-policy PUT requires the CALLER to already be
+a Collection Admin. ARM `accounts/{name}/addRootCollectionAdmin` bootstraps
+that with any objectId — but it needs `Microsoft.Authorization/roleAssignments/write`
+(Owner / User Access Administrator), NOT just Contributor. Where the account's
+`publicNetworkAccess` toggle is blocked by Azure Policy (error 21010), run the
+grant from inside the Console container (in-VNet through the PE) — the Console
+UAMI can self-grant once it's been added as a root Collection Admin via ARM.
+
 ## Files
 
 - Client: `apps/fiab-console/lib/azure/purview-client.ts`
