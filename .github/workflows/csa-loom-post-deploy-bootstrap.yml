@@ -67,8 +67,14 @@ on:
         default: single
         required: false
 
+# NOTE: no id-token permission — every login step uses secret-based
+# azure/login `creds:` (no OIDC). Declaring an unused `id-token: write` here
+# broke every CALLER whose own permissions block doesn't grant it: GitHub
+# refuses the workflow_call at STARTUP ("requesting 'id-token: write', but is
+# only allowed 'id-token: none'") — seen live when the in-product Update
+# button dispatched full-app-deploy-commercial at csa-inabox-v0.71.0
+# (run 29466697351).
 permissions:
-  id-token: write
   contents: read
 
 env:
