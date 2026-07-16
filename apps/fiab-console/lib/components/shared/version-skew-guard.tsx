@@ -22,6 +22,7 @@
 
 import { useEffect, useRef } from 'react';
 import { usePathname } from 'next/navigation';
+import { clientFetch } from '@/lib/client-fetch';
 
 const CHECK_INTERVAL_MS = 5 * 60_000;
 const IDLE_RELOAD_GRACE_MS = 60_000;
@@ -43,7 +44,7 @@ export function VersionSkewGuard() {
 
     async function check() {
       try {
-        const r = await fetch('/api/version', { cache: 'no-store', credentials: 'include' });
+        const r = await clientFetch('/api/version', { cache: 'no-store' });
         if (!r.ok) return;
         const j = await r.json();
         const sha: string | undefined = j?.build?.sha;
