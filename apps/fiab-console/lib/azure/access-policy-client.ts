@@ -13,10 +13,16 @@
  *   - kql-database   → Azure Data Explorer **database role** (.add database
  *                      viewers / users / admins).
  *
- * No Microsoft Fabric / Purview-policy dependency (no-fabric-dependency.md): all
- * three are Azure-native data-plane grants. Scopes Loom still can't bind
- * (workspace / item / collection) return status 'pending' with a precise reason
- * — never a silent no-op (no-vaporware.md).
+ *   - item / workspace → Loom-native WORKSPACE ROLE assignment (Cosmos
+ *                      `workspace-roles`, honored by resolveWorkspaceRole on
+ *                      every BFF call; mirrored to Azure RBAC where wired) —
+ *                      the real grant for logical assets like data products,
+ *                      reports and APIs (#51).
+ *
+ * No Microsoft Fabric / Purview-policy dependency (no-fabric-dependency.md):
+ * everything above is Azure-native or Loom-native. The one scope Loom still
+ * can't bind (collection) returns status 'pending' with a precise reason —
+ * never a silent no-op (no-vaporware.md).
  */
 import { grantContainerRole, revokeContainerRoleAssignment } from './adls-client';
 import { dedicatedTarget, executeQuery as synapseExecute } from './synapse-sql-client';
@@ -28,6 +34,8 @@ import {
   dropDatabasePrincipal,
 } from './kusto-client';
 import { escapeSqlLiteral, bracket } from '@/lib/sql/quoting';
+import { itemsContainer } from './cosmos-client';
+import { addWorkspaceRole } from './workspace-roles-client';
 
 export type AccessPermission = 'read' | 'write' | 'admin';
 export type AccessScopeType = 'adls-container' | 'adls-path' | 'warehouse' | 'warehouse-schema' | 'kql-database' | 'workspace' | 'item' | 'collection';
@@ -178,6 +186,56 @@ export async function enforceAccessGrant(input: AccessGrantInput): Promise<Acces
         return { status: 'active', roleName, detail: `Granted ${roleName} on ADX database ${db}.` };
       } catch (e: any) {
         return { status: 'error', detail: (e?.message || String(e)).slice(0, 400) };
+      }
+    }
+
+    case 'item':
+    case 'workspace': {
+      // LOGICAL assets (#51, live-found 2026-07-16): data products, reports,
+      // semantic models, APIs and other items with no dedicated physical store
+      // are enforced by Loom's own authorization model — a workspace-role
+      // assignment (Cosmos `workspace-roles`, honored by resolveWorkspaceRole
+      // on every BFF call, mirrored to Azure RBAC where configured). read →
+      // Viewer; write/admin → Contributor (workspace Admin is never granted
+      // by an access request).
+      const role = input.permission === 'read' ? 'Viewer' as const : 'Contributor' as const;
+      try {
+        let workspaceId = (input.scopeType === 'workspace' ? input.scopeRef : '').trim();
+        if (!workspaceId) {
+          const itemId = (input.scopeRef || '').trim();
+          if (!itemId) return { status: 'error', detail: 'An item id (scopeRef) is required for item-scope grants.' };
+          const items = await itemsContainer();
+          const { resources } = await items.items
+            .query<{ workspaceId: string }>({
+              query: 'SELECT c.workspaceId FROM c WHERE c.id = @id',
+              parameters: [{ name: '@id', value: itemId }],
+            })
+            .fetchAll();
+          workspaceId = resources[0]?.workspaceId || '';
+          if (!workspaceId) {
+            return { status: 'error', detail: 'The requested item no longer exists — nothing to grant.' };
+          }
+        }
+        const res = await addWorkspaceRole({
+          workspaceId,
+          principalId: input.principalId,
+          principalType: input.principalType,
+          displayName: input.principalName || input.principalId,
+          role,
+          addedBy: 'access-request-workflow',
+        });
+        return {
+          status: 'active',
+          roleName: role,
+          roleAssignmentId: res.roleAssignment?.id,
+          detail: `Granted workspace ${role} on ${workspaceId} — Loom-native access to the requested ${input.scopeType}.`,
+        };
+      } catch (e: any) {
+        const msg = (e?.message || String(e)).slice(0, 400);
+        if (/already|exists|conflict/i.test(msg)) {
+          return { status: 'active', roleName: role, detail: 'Role already assigned (idempotent).' };
+        }
+        return { status: 'error', detail: msg };
       }
     }
 
