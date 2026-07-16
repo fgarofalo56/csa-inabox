@@ -38,6 +38,7 @@ import {
 import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
 import { LOOM_ACCENT } from '@/lib/components/shared/accent-tokens';
 import { accentTint, CanvasRightRail } from '@/lib/components/canvas/canvas-node-kit';
+import { ResizableCanvasRegion } from '@/lib/components/canvas/resizable-canvas';
 import { SubscriptionNode, DomainNode, ServiceNode, ServiceIconChip } from './deploy-plan-nodes';
 import {
   SERVICE_CATALOG, SERVICE_CATEGORY_ORDER, servicesByCategory, serviceByKey, serviceVisual,
@@ -165,12 +166,13 @@ const useStyles = makeStyles({
     alignItems: 'center', flexWrap: 'wrap',
   },
   body: {
-    // Height-bounded to the viewport so the PALETTE scrolls internally and the
-    // CANVAS stays fixed — collapsing/expanding categories never grows the page.
-    // minmax(0,1fr) lets the canvas column shrink instead of overflowing wide.
+    // Height comes from the ResizableCanvasRegion wrapper (G3: user-adjustable,
+    // persisted) — the PALETTE scrolls internally and the CANVAS fills the
+    // region. minmax(0,1fr) lets the canvas column shrink instead of
+    // overflowing wide.
     display: 'grid', gridTemplateColumns: '300px minmax(0, 1fr)',
     gap: tokens.spacingHorizontalL,
-    height: 'calc(100vh - 220px)', minHeight: '460px',
+    height: '100%', minHeight: 0,
   },
   palette: {
     border: `1px solid ${tokens.colorNeutralStroke2}`,
@@ -681,6 +683,12 @@ function PlannerInner() {
         </div>
       )}
 
+      <ResizableCanvasRegion
+        storageKey="deploy-planner"
+        defaultPx={620}
+        minPx={460}
+        ariaLabel="Resize deployment planner canvas height"
+      >
       <div className={s.body}>
         {/* palette */}
         <div className={s.palette} role="navigation" aria-label="Azure service catalog">
@@ -821,6 +829,7 @@ function PlannerInner() {
           )}
         </div>
       </div>
+      </ResizableCanvasRegion>
 
       {/* selected-subscription inline editor */}
       {selectedSub && (
