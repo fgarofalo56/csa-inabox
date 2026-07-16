@@ -87,14 +87,23 @@ export const TIER_APPROVAL_KEY: Record<ApprovalTier, keyof AccessRequestDoc> = {
 };
 
 /**
- * Infer the Azure-native grant scope type from a catalog item type. Lakehouses
+ * Infer the grant scope type from a catalog item type. Lakehouse-family assets
  * map to ADLS containers, warehouses to Synapse SQL, KQL/eventhouse to ADX.
- * Everything else defaults to adls-container (the most common data asset);
- * the access provider can override the scope at the final tier.
+ * Everything else — data products, reports, semantic models, APIs, apps, and
+ * any other LOGICAL asset with no dedicated physical store — maps to the
+ * 'item' scope: a real Loom-native workspace-role grant (Viewer/Contributor)
+ * enforced by resolveWorkspaceRole. (#51 live finding 2026-07-16: the old
+ * default of 'adls-container' sent data-product grants into
+ * grantContainerRole('') → 502 at the final approval tier.)
+ * The access provider can still override the scope at the final tier.
  */
 export function inferScopeType(itemType: string): AccessScopeType {
   const t = (itemType || '').toLowerCase();
   if (t === 'warehouse' || t === 'mirrored-warehouse') return 'warehouse';
   if (t === 'kql-database' || t === 'eventhouse' || t === 'kusto-database') return 'kql-database';
-  return 'adls-container';
+  if (
+    t === 'lakehouse' || t === 'materialized-lake-view' ||
+    t === 'mirrored-database' || t === 'mirrored-databricks' || t === 'lakehouse-shortcut'
+  ) return 'adls-container';
+  return 'item';
 }
