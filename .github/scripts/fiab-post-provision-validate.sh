@@ -54,12 +54,42 @@ echo
 # 2. Per-app from-inside-cluster health check
 # ---------------------------------------------------------------------
 echo "── Per-app /health from inside cluster ──"
-probe_health() {  # $1=app $2=path $3=port → echoes the HTTP code (or curl noise)
-  # az containerapp exec runs a command inside any running replica.
-  az containerapp exec \
-    --resource-group "$RG" \
-    --name "$1" \
-    --command "curl -fsS -o /dev/null -w '%{http_code}' http://localhost:${3}${2}" 2>&1 | tail -1
+# In-replica probe, hardened (both failure modes SEEN LIVE 2026-07-15 on the
+# v0.71.1 self-update — the gate false-negatived while the console served 200
+# externally):
+#   1. `az containerapp exec` REQUIRES a TTY; on a headless runner it dies with
+#      "(25, 'Inappropriate ioctl for device')" → fake one via script(1).
+#   2. The slim app images ship NO curl, and the exec argv-splitter passes
+#      quotes/backslashes through literally → the payload must be quote-free.
+#      Every Loom app image has either node (console) or python (runtimes), so
+#      probe with whichever exists, shipping the code as a bare base64 argv
+#      token: node -e eval(atob(argv[1])) / python -c exec(b64decode(...)).
+probe_health() {  # $1=app $2=path $3=port → echoes the HTTP code (or a failure token)
+  local app="$1" path="$2" port="$3"
+  local njs pys nb64 pb64 out
+  njs="const h=require('http');h.get('http://127.0.0.1:${port}${path}',{timeout:8000},(r)=>{console.log('HCODE',r.statusCode);r.resume();}).on('error',()=>console.log('HCODE ERR'));"
+  pys="import urllib.request
+try:
+    print('HCODE', urllib.request.urlopen('http://127.0.0.1:${port}${path}', timeout=8).status)
+except Exception:
+    print('HCODE ERR')"
+  nb64=$(printf '%s' "$njs" | base64 -w0)
+  pb64=$(printf '%s' "$pys" | base64 -w0)
+  out=$(script -qec "az containerapp exec --resource-group $RG --name $app --command \"node -e eval(atob(process.argv[1])) $nb64\"" /dev/null 2>&1 | tr -d '\r' | grep -oE 'HCODE [0-9A-Z]+' | head -1)
+  if [[ -z "$out" ]]; then
+    out=$(script -qec "az containerapp exec --resource-group $RG --name $app --command \"python -c exec(__import__('base64').b64decode('$pb64'))\"" /dev/null 2>&1 | tr -d '\r' | grep -oE 'HCODE [0-9A-Z]+' | head -1)
+  fi
+  echo "${out#HCODE }"
+}
+
+# External fallback for the BLOCKING console gate: when the in-replica exec
+# path itself fails (TTY, websocket 404/429, quota), validate what users
+# actually reach — the ingress FQDN. An external 200 IS a healthy console.
+probe_console_external() {
+  local fqdn
+  fqdn=$(az containerapp show -g "$RG" -n loom-console --query "properties.configuration.ingress.fqdn" -o tsv 2>/dev/null | tr -d '\r')
+  [[ -z "$fqdn" ]] && { echo "ERR"; return; }
+  curl -fsS -o /dev/null -w '%{http_code}' --max-time 15 "https://${fqdn}/api/health" 2>/dev/null || echo "ERR"
 }
 
 for app in $APPS; do
@@ -76,16 +106,24 @@ for app in $APPS; do
   esac
 
   if [[ "$app" == "loom-console" ]]; then
-    # BLOCKING gate: retry to tolerate warm-up, then record ok/fail.
+    # BLOCKING gate: retry to tolerate warm-up, then record ok/fail. Each round
+    # tries in-replica first, then the ingress FQDN — an external 200 is a
+    # healthy console even when the exec transport is unavailable.
     CONSOLE_OK="fail"
     for i in $(seq 1 "$CONSOLE_HEALTH_RETRIES"); do
       RESULT=$(probe_health "$app" "$HPATH" "$PORT")
       if [[ "$RESULT" == "200" ]]; then
-        echo "  ✓ $app$HPATH → 200 (attempt $i)"
+        echo "  ✓ $app$HPATH → 200 in-replica (attempt $i)"
         CONSOLE_OK="ok"
         break
       fi
-      echo "  … $app$HPATH → $RESULT (attempt $i/$CONSOLE_HEALTH_RETRIES; warming up)"
+      EXT=$(probe_console_external)
+      if [[ "$EXT" == "200" ]]; then
+        echo "  ✓ $app /api/health → 200 via ingress FQDN (attempt $i; in-replica probe said '$RESULT')"
+        CONSOLE_OK="ok"
+        break
+      fi
+      echo "  … $app$HPATH → in-replica '$RESULT', external '$EXT' (attempt $i/$CONSOLE_HEALTH_RETRIES; warming up)"
       sleep "$CONSOLE_HEALTH_INTERVAL"
     done
     [[ "$CONSOLE_OK" != "ok" ]] && echo "  ✗ $app$HPATH never returned 200 after $CONSOLE_HEALTH_RETRIES attempts"
