@@ -38,7 +38,7 @@ import {
   searchDataMapAssets,
   deleteAtlasEntityByQualifiedName,
 } from './purview-client';
-import { itemsContainer } from './cosmos-client';
+import { itemsContainer, accessRequestWorkflowContainer, notificationsContainer } from './cosmos-client';
 
 /**
  * A minimal item shape for metadata cleanup — the delete choke points only
@@ -56,6 +56,9 @@ export interface MetadataCleanupOutcome {
   /** 'ok' = both primitives ran without throwing; 'error' = one threw (swallowed). */
   purview: 'ok' | 'skipped' | 'error';
   edges: 'ok' | 'error';
+  /** Marketplace access artifacts (#51): open access requests auto-closed +
+   *  notifications deep-linking the dead item tombstoned. */
+  accessArtifacts: 'ok' | 'error';
 }
 
 /**
@@ -75,6 +78,7 @@ export async function cleanupItemMetadata(
     itemId: item.id,
     purview: isPurviewConfigured() ? 'ok' : 'skipped',
     edges: 'ok',
+    accessArtifacts: 'ok',
   };
   // Purview Atlas entity + Loom-owned scan source (soft-delete → status DELETED,
   // retained — the faithful 1:1 of the portal "Delete asset"). No-op when
@@ -91,7 +95,62 @@ export async function cleanupItemMetadata(
   } catch {
     outcome.edges = 'error';
   }
+  // Marketplace access artifacts (#51, live-found 2026-07-16): deleting an item
+  // left its OPEN access-request workflow rows pending forever AND left
+  // notifications deep-linking `/items/<type>/<id>` — clicking one lands on
+  // "Couldn't open this data product". Close the requests (denied +
+  // resolution:'target_deleted') and tombstone the notification links.
+  try {
+    await cleanupAccessArtifacts(item);
+  } catch {
+    outcome.accessArtifacts = 'error';
+  }
   return outcome;
+}
+
+/** Auto-close open access requests for a deleted asset + tombstone the
+ *  notifications that deep-link to it. Best-effort per row; throws only if a
+ *  container itself is unreachable (caught by the caller). */
+async function cleanupAccessArtifacts(item: CleanupItem): Promise<void> {
+  const nowIso = new Date().toISOString();
+  const ar = await accessRequestWorkflowContainer();
+  // Cross-partition by design: requests are partitioned by the REQUESTER's oid,
+  // which the deleting owner doesn't know. Volume per asset is tiny.
+  const { resources: openReqs } = await ar.items
+    .query<{ id: string; tenantId: string; status: string } & Record<string, unknown>>({
+      query: "SELECT * FROM c WHERE c.assetId = @id AND c.status = 'open'",
+      parameters: [{ name: '@id', value: item.id }],
+    })
+    .fetchAll();
+  for (const req of openReqs) {
+    try {
+      await ar.item(req.id, req.tenantId).replace({
+        ...req,
+        status: 'denied',
+        resolution: 'target_deleted',
+        decisionNote: 'Closed automatically: the requested item was deleted.',
+        resolvedAt: nowIso,
+      });
+    } catch { /* per-row best effort */ }
+  }
+
+  const notifs = await notificationsContainer();
+  const deadLink = `/items/${item.itemType}/${item.id}`;
+  const { resources: linked } = await notifs.items
+    .query<{ id: string; userId: string; body?: string } & Record<string, unknown>>({
+      query: 'SELECT * FROM c WHERE c.link = @link',
+      parameters: [{ name: '@link', value: deadLink }],
+    })
+    .fetchAll();
+  for (const n of linked) {
+    try {
+      await notifs.item(n.id, n.userId).replace({
+        ...n,
+        link: null,
+        body: `${n.body ?? ''} (This item has since been deleted.)`.trim(),
+      });
+    } catch { /* per-row best effort */ }
+  }
 }
 
 /**
@@ -405,4 +464,93 @@ export async function purgeThreadEdgeOrphans(
     out.push({ edgeId: o.edgeId, tenantId: o.tenantId, result: ok ? 'deleted' : 'error' });
   }
   return out;
+}
+
+// ============================================================================
+// Access-artifact orphans (#51) — the third orphan plane. Notifications that
+// deep-link `/items/<type>/<id>` for items that no longer exist ("Couldn't
+// open this data product"), and access-request workflow rows still 'open' for
+// deleted assets. cleanupAccessArtifacts handles this at DELETE time going
+// forward; this sweep clears PRE-EXISTING debris via the same admin
+// reconcile endpoint that purges lineage orphans.
+// ============================================================================
+
+export interface AccessArtifactScan {
+  notifications: { scanned: number; orphans: Array<{ id: string; userId: string; link: string; title?: string }> };
+  requests: { scanned: number; orphans: Array<{ id: string; tenantId: string; assetId: string; assetName?: string }> };
+}
+
+export async function findAccessArtifactOrphans(): Promise<AccessArtifactScan> {
+  const notifs = await notificationsContainer();
+  const { resources: linkedNotifs } = await notifs.items
+    .query<{ id: string; userId: string; link: string; title?: string }>({
+      query: "SELECT c.id, c.userId, c.link, c.title FROM c WHERE IS_STRING(c.link) AND STARTSWITH(c.link, '/items/')",
+    })
+    .fetchAll();
+  const ar = await accessRequestWorkflowContainer();
+  const { resources: openReqs } = await ar.items
+    .query<{ id: string; tenantId: string; assetId: string; assetName?: string }>({
+      query: "SELECT c.id, c.tenantId, c.assetId, c.assetName FROM c WHERE c.status = 'open'",
+    })
+    .fetchAll();
+
+  const linkItemId = (link: string) => link.split('/').filter(Boolean).pop() || '';
+  const candidateIds = [
+    ...new Set([
+      ...linkedNotifs.map((n) => linkItemId(n.link)),
+      ...openReqs.map((r) => r.assetId),
+    ]),
+  ].filter(Boolean);
+  const live = await liveItemIds(candidateIds);
+
+  return {
+    notifications: {
+      scanned: linkedNotifs.length,
+      orphans: linkedNotifs.filter((n) => !live.has(linkItemId(n.link))),
+    },
+    requests: {
+      scanned: openReqs.length,
+      orphans: openReqs.filter((r) => !live.has(r.assetId)),
+    },
+  };
+}
+
+export async function purgeAccessArtifactOrphans(
+  scan: AccessArtifactScan,
+): Promise<{ notificationsTombstoned: number; requestsClosed: number }> {
+  const nowIso = new Date().toISOString();
+  let notificationsTombstoned = 0;
+  let requestsClosed = 0;
+
+  const notifs = await notificationsContainer();
+  for (const o of scan.notifications.orphans) {
+    try {
+      const { resource: doc } = await notifs.item(o.id, o.userId).read<Record<string, unknown>>();
+      if (!doc) continue;
+      await notifs.item(o.id, o.userId).replace({
+        ...doc,
+        link: null,
+        body: `${(doc.body as string) ?? ''} (This item has since been deleted.)`.trim(),
+      });
+      notificationsTombstoned++;
+    } catch { /* per-row best effort */ }
+  }
+
+  const ar = await accessRequestWorkflowContainer();
+  for (const o of scan.requests.orphans) {
+    try {
+      const { resource: doc } = await ar.item(o.id, o.tenantId).read<Record<string, unknown>>();
+      if (!doc) continue;
+      await ar.item(o.id, o.tenantId).replace({
+        ...doc,
+        status: 'denied',
+        resolution: 'target_deleted',
+        decisionNote: 'Closed automatically: the requested item was deleted.',
+        resolvedAt: nowIso,
+      });
+      requestsClosed++;
+    } catch { /* per-row best effort */ }
+  }
+
+  return { notificationsTombstoned, requestsClosed };
 }

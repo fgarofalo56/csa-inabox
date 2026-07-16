@@ -39,6 +39,8 @@ import {
   purgeLineageOrphans,
   findThreadEdgeOrphans,
   purgeThreadEdgeOrphans,
+  findAccessArtifactOrphans,
+  purgeAccessArtifactOrphans,
 } from '@/lib/azure/lineage-gc';
 import { isPurviewConfigured } from '@/lib/azure/purview-client';
 import { apiOk, apiUnauthorized, apiServerError } from '@/lib/api/respond';
@@ -72,9 +74,12 @@ export async function POST(req: NextRequest) {
     // entities, and Loom-native Weave/Thread edges (Cosmos). The Thread sweep
     // runs even when Purview is unconfigured — the /thread graph has its own
     // pre-existing debris.
-    const [scan, threadScan] = await Promise.all([
+    // Third orphan plane (#51): notifications deep-linking deleted items +
+    // access-request rows still 'open' for deleted assets.
+    const [scan, threadScan, accessScan] = await Promise.all([
       findLineageOrphans(),
       findThreadEdgeOrphans(),
+      findAccessArtifactOrphans(),
     ]);
     if (dryRun) {
       return apiOk({
@@ -83,10 +88,12 @@ export async function POST(req: NextRequest) {
         scanned: scan.scanned,
         orphans: scan.orphans,
         threadEdges: { scanned: threadScan.scanned, orphans: threadScan.orphans },
+        accessArtifacts: accessScan,
       });
     }
     const purged = await purgeLineageOrphans(scan.orphans);
     const threadPurged = await purgeThreadEdgeOrphans(threadScan.orphans);
+    const accessPurged = await purgeAccessArtifactOrphans(accessScan);
     return apiOk({
       dryRun: false,
       purviewConfigured: scan.purviewConfigured,
@@ -98,6 +105,7 @@ export async function POST(req: NextRequest) {
         orphans: threadScan.orphans,
         purged: threadPurged,
       },
+      accessArtifacts: { ...accessScan, purged: accessPurged },
     });
   } catch (e) {
     return apiServerError(e);
