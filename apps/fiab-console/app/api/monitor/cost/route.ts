@@ -12,6 +12,7 @@ import { getSession } from '@/lib/auth/session';
 import { getLoomCostSummary, type CostTimeframe } from '@/lib/azure/cost-client';
 import { MonitorNotConfiguredError, MonitorError } from '@/lib/azure/monitor-client';
 import { apiServerError } from '@/lib/api/respond';
+import { getOrComputeCached, buildScopedCacheKey } from '@/lib/azure/query-result-cache';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -27,9 +28,20 @@ export async function GET(req: NextRequest) {
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   const tfParam = req.nextUrl.searchParams.get('timeframe') as CostTimeframe | null;
   const timeframe = tfParam && TIMEFRAMES.includes(tfParam) ? tfParam : 'MonthToDate';
+  const refresh = req.nextUrl.searchParams.get('refresh') === '1';
   try {
-    const data = await getLoomCostSummary({ timeframe });
-    return NextResponse.json({ ok: true, data });
+    // Serve-from-cache-first (15 min fresh, SWR after): the multi-sub Cost
+    // Management aggregation can outlive Front Door's ~60s edge budget on a
+    // cold read — cached, the tab paints in milliseconds and one background
+    // refresh serves every user (cost data isn't per-user). The 50s inline
+    // budget + serveStaleOnError keep even the cold path inside the edge.
+    const { value, meta } = await getOrComputeCached(
+      buildScopedCacheKey('monitor/cost', { timeframe }),
+      'monitor',
+      () => getLoomCostSummary({ timeframe }),
+      { ttlMs: 15 * 60_000, staleWhileRevalidate: true, bypass: refresh, budgetMs: 50_000, serveStaleOnError: true },
+    );
+    return NextResponse.json({ ok: true, data: value, meta });
   } catch (e) {
     if (e instanceof MonitorNotConfiguredError) {
       return NextResponse.json({ ok: false, gate: { missing: e.missing, message: e.message } });

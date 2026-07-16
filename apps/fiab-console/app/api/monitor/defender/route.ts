@@ -7,6 +7,7 @@
  */
 import { NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { buildScopedCacheKey, getOrComputeCached } from '@/lib/azure/query-result-cache';
 import { getDefenderSummary } from '@/lib/azure/defender-client';
 import { MonitorNotConfiguredError, MonitorError } from '@/lib/azure/monitor-client';
 
@@ -17,7 +18,13 @@ export async function GET() {
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   try {
-    const data = await getDefenderSummary();
+    // Cached 10 min + SWR: Defender posture is a slow cross-sub read.
+    const { value: data } = await getOrComputeCached(
+      buildScopedCacheKey('monitor/defender', {}),
+      'monitor',
+      () => getDefenderSummary(),
+      { ttlMs: 10 * 60_000, staleWhileRevalidate: true, budgetMs: 45_000, serveStaleOnError: true },
+    );
     return NextResponse.json({ ok: true, data });
   } catch (e) {
     if (e instanceof MonitorNotConfiguredError) {

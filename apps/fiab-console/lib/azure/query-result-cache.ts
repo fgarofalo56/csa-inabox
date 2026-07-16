@@ -600,6 +600,20 @@ export async function getOrComputeCached<T>(
      * its Loom-tier hits land on the ADX hit-rate.
      */
     counterBackend?: CacheCounterBackend;
+    /**
+     * Hard wall-clock budget for the INLINE compute on a miss. A cold read
+     * that fans out across ARM / Cost Management / Log Analytics can outlive
+     * Front Door's ~60s edge budget — with a budget set the route fails FAST
+     * (or serves stale via `serveStaleOnError`) instead of 504ing at the edge.
+     */
+    budgetMs?: number;
+    /**
+     * When the inline compute throws (including a blown budget), serve the
+     * most recent EXPIRED copy from any tier — flagged `stale: true` — and
+     * kick one background recompute. A dashboard that shows slightly-old
+     * numbers beats one that 504s (operator directive 2026-07-15).
+     */
+    serveStaleOnError?: boolean;
   },
 ): Promise<{ value: T; meta: CacheMeta }> {
   const ttl = opts?.ttlMs && opts.ttlMs > 0 ? opts.ttlMs : ttlMsForBackend(opts?.backend);
@@ -629,9 +643,39 @@ export async function getOrComputeCached<T>(
 
   // Miss, or expired without SWR → compute inline and store.
   recordCacheMiss(counter);
-  const value = await compute();
-  await writeAllTiers(key, modelId, value, ttl);
-  return { value, meta: { cachedAt: now, stale: false, hit: false } };
+  try {
+    const value = opts?.budgetMs
+      ? await computeWithBudget(compute(), opts.budgetMs, key)
+      : await compute();
+    await writeAllTiers(key, modelId, value, ttl);
+    return { value, meta: { cachedAt: now, stale: false, hit: false } };
+  } catch (e) {
+    if (opts?.serveStaleOnError && env) {
+      // Serve the expired copy rather than failing; one background recompute
+      // repairs the cache for the next request.
+      kickBackgroundRefresh(key, modelId, compute, ttl);
+      return { value: env.value as T, meta: { cachedAt: env.cachedAt, stale: true, hit: true } };
+    }
+    throw e;
+  }
+}
+
+/** Race a compute against a hard wall-clock budget (see `budgetMs`). */
+export class ComputeBudgetExceededError extends Error {
+  constructor(key: string, budgetMs: number) {
+    super(`read '${key.slice(0, 24)}…' exceeded its ${Math.round(budgetMs / 1000)}s budget — the backend is slow or throttled; a cached copy will serve once one exists`);
+    this.name = 'ComputeBudgetExceededError';
+  }
+}
+
+function computeWithBudget<T>(p: Promise<T>, budgetMs: number, key: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const t = setTimeout(() => reject(new ComputeBudgetExceededError(key, budgetMs)), budgetMs);
+    p.then(
+      (v) => { clearTimeout(t); resolve(v); },
+      (e) => { clearTimeout(t); reject(e); },
+    );
+  });
 }
 
 /**

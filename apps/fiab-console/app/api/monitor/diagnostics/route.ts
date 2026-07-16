@@ -17,6 +17,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { buildScopedCacheKey, getOrComputeCached } from '@/lib/azure/query-result-cache';
 import {
   getDiagnosticsCoverage, enableDiagnostics, logAnalyticsResourceId,
   MonitorNotConfiguredError, MonitorError,
@@ -33,11 +34,19 @@ function gateOrError(e: unknown) {
   return NextResponse.json({ ok: false, error: (e as Error).message }, { status });
 }
 
-export async function GET() {
+export async function GET(req?: NextRequest) {
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   try {
-    const items = await getDiagnosticsCoverage();
+    // Cached 5 min + SWR: coverage enumerates diagnostic settings across the
+    // estate (per-resource ARM reads) — cache one crawl for all users.
+    const refresh = req?.nextUrl?.searchParams.get('refresh') === '1';
+    const { value: items } = await getOrComputeCached(
+      buildScopedCacheKey('monitor/diagnostics', {}),
+      'monitor',
+      () => getDiagnosticsCoverage(),
+      { ttlMs: 5 * 60_000, staleWhileRevalidate: true, bypass: refresh, budgetMs: 45_000, serveStaleOnError: true },
+    );
     const supported = items.filter((i) => i.supported);
     const summary = {
       total: items.length,

@@ -25,6 +25,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { buildScopedCacheKey, getOrComputeCached } from '@/lib/azure/query-result-cache';
 import {
   listAlertRules,
   listScheduledQueryRules,
@@ -76,13 +77,27 @@ export async function GET(req?: NextRequest) {
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   const kind = req?.url ? new URL(req.url).searchParams.get('kind') : null;
+  const refresh = req?.url ? new URL(req.url).searchParams.get('refresh') === '1' : false;
   try {
+    // Cached 2 min + SWR: alert-rule enumeration is an ARM fan-out that grows
+    // with the estate; the list changes rarely relative to how often the
+    // Monitor tab reads it (perf directive 2026-07-15 — no read may 504).
     if (kind === 'scheduled') {
-      const rules = await listScheduledQueryRules();
-      return NextResponse.json({ ok: true, rules });
+      const { value: rules, meta } = await getOrComputeCached(
+        buildScopedCacheKey('monitor/alerts', { kind: 'scheduled' }),
+        'monitor',
+        () => listScheduledQueryRules(),
+        { ttlMs: 2 * 60_000, staleWhileRevalidate: true, bypass: refresh, budgetMs: 45_000, serveStaleOnError: true },
+      );
+      return NextResponse.json({ ok: true, rules, meta });
     }
-    const rules = await listAlertRules();
-    return NextResponse.json({ ok: true, data: { rules } });
+    const { value: rules, meta } = await getOrComputeCached(
+      buildScopedCacheKey('monitor/alerts', { kind: 'metric' }),
+      'monitor',
+      () => listAlertRules(),
+      { ttlMs: 2 * 60_000, staleWhileRevalidate: true, bypass: refresh, budgetMs: 45_000, serveStaleOnError: true },
+    );
+    return NextResponse.json({ ok: true, data: { rules }, meta });
   } catch (e) {
     if (e instanceof MonitorNotConfiguredError) {
       return NextResponse.json({ ok: false, gate: { missing: e.missing, message: e.message } });
