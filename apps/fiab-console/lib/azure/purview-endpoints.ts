@@ -198,6 +198,24 @@ function fromArmProperties(account: string, properties: any): ResolvedPurviewEnd
   } catch {
     return null;
   }
+  // Accounts upgraded to the NEW Purview platform report a tenant-scoped
+  // `{guid}-api.purview-service.microsoft.com` host here. That host is NOT the
+  // classic Data Map data plane this client speaks: it rejects the UAMI with a
+  // bare 403 even when the collection metadata-policy roles are granted (seen
+  // live 2026-07-15 on purview-csa-loom-eastus2 — the classic
+  // `{account}.purview.azure.{com|us}` host answered 200 with the same token).
+  // Prefer the classic convention host for those accounts.
+  if (/-api\.purview-service\.microsoft\.com$/i.test(new URL(base).hostname)) {
+    return {
+      account,
+      base: purviewConventionBase(account),
+      catalog: undefined,
+      scan: undefined,
+      guardian: undefined,
+      source: 'convention',
+      armError: `ARM endpoints.catalog is the new-platform host (${base}) — using the classic Data Map convention host instead`,
+    };
+  }
   return {
     account,
     base,
