@@ -45,7 +45,7 @@ export async function GET(req?: NextRequest) {
       buildScopedCacheKey('monitor/diagnostics', {}),
       'monitor',
       () => getDiagnosticsCoverage(),
-      { ttlMs: 5 * 60_000, staleWhileRevalidate: true, bypass: refresh, budgetMs: 45_000, serveStaleOnError: true },
+      { ttlMs: 5 * 60_000, staleWhileRevalidate: true, bypass: refresh, budgetMs: 22_000, serveStaleOnError: true },
     );
     const supported = items.filter((i) => i.supported);
     const summary = {

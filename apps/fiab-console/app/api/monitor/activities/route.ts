@@ -54,7 +54,7 @@ export async function GET(req: NextRequest) {
       buildScopedCacheKey('monitor/activities', { days, limit, includeSynapse, includeArmLog }),
       'monitor',
       () => queryActivityFeed({ days, limit, includeSynapse, includeArmLog }),
-      { ttlMs: 3 * 60_000, staleWhileRevalidate: true, bypass: refresh, budgetMs: 45_000, serveStaleOnError: true },
+      { ttlMs: 3 * 60_000, staleWhileRevalidate: true, bypass: refresh, budgetMs: 22_000, serveStaleOnError: true },
     );
     let rows = allRows;
     void meta;

@@ -64,7 +64,7 @@ export async function GET() {
       buildScopedCacheKey('monitor/action-groups', {}),
       'monitor',
       () => listActionGroups(),
-      { ttlMs: 5 * 60_000, staleWhileRevalidate: true, budgetMs: 45_000, serveStaleOnError: true },
+      { ttlMs: 5 * 60_000, staleWhileRevalidate: true, budgetMs: 22_000, serveStaleOnError: true },
     );
     return NextResponse.json({ ok: true, actionGroups });
   } catch (e) {

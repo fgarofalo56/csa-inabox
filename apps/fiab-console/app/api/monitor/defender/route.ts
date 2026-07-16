@@ -23,7 +23,7 @@ export async function GET() {
       buildScopedCacheKey('monitor/defender', {}),
       'monitor',
       () => getDefenderSummary(),
-      { ttlMs: 10 * 60_000, staleWhileRevalidate: true, budgetMs: 45_000, serveStaleOnError: true },
+      { ttlMs: 10 * 60_000, staleWhileRevalidate: true, budgetMs: 22_000, serveStaleOnError: true },
     );
     return NextResponse.json({ ok: true, data });
   } catch (e) {

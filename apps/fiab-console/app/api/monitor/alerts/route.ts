@@ -87,7 +87,7 @@ export async function GET(req?: NextRequest) {
         buildScopedCacheKey('monitor/alerts', { kind: 'scheduled' }),
         'monitor',
         () => listScheduledQueryRules(),
-        { ttlMs: 2 * 60_000, staleWhileRevalidate: true, bypass: refresh, budgetMs: 45_000, serveStaleOnError: true },
+        { ttlMs: 2 * 60_000, staleWhileRevalidate: true, bypass: refresh, budgetMs: 22_000, serveStaleOnError: true },
       );
       return NextResponse.json({ ok: true, rules, meta });
     }
@@ -95,7 +95,7 @@ export async function GET(req?: NextRequest) {
       buildScopedCacheKey('monitor/alerts', { kind: 'metric' }),
       'monitor',
       () => listAlertRules(),
-      { ttlMs: 2 * 60_000, staleWhileRevalidate: true, bypass: refresh, budgetMs: 45_000, serveStaleOnError: true },
+      { ttlMs: 2 * 60_000, staleWhileRevalidate: true, bypass: refresh, budgetMs: 22_000, serveStaleOnError: true },
     );
     return NextResponse.json({ ok: true, data: { rules }, meta });
   } catch (e) {
