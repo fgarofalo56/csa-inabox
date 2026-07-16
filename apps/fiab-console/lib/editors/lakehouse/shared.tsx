@@ -106,6 +106,10 @@ interface PreviewResponse {
   message?: string;
   error?: string;
   code?: string;
+  /** Serverless cold-start / storage-propagation windows right after an
+   *  upload — the editor auto-retries these instead of showing the error. */
+  transient?: boolean;
+  retryAfterMs?: number;
 }
 
 interface HistoryRow {

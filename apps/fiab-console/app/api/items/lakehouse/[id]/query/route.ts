@@ -82,6 +82,8 @@ export async function POST(req: NextRequest, _ctx: { params: Promise<{ id: strin
       return NextResponse.json(
         {
           ok: false,
+          transient: true,
+          retryAfterMs: 10_000,
           code: 'synapse_cold_start',
           error:
             'Query took longer than 60 seconds (Synapse serverless pool cold-start). ' +
@@ -100,9 +102,15 @@ export async function POST(req: NextRequest, _ctx: { params: Promise<{ id: strin
       return NextResponse.json(
         {
           ok: false,
+          // A just-created container / just-granted role can 403 for a few
+          // minutes while RBAC propagates to the SQL engine — let the editor
+          // auto-retry a few times before showing the standing-gate text.
+          transient: true,
+          retryAfterMs: 20_000,
           code: 'synapse_access_denied',
           error:
-            'Access denied to the Synapse Serverless SQL endpoint ' +
+            'If this container or file was just created, storage permissions may still be propagating (up to ~5 minutes). ' +
+            'Otherwise: access denied to the Synapse Serverless SQL endpoint ' +
             `(${process.env.LOOM_SYNAPSE_WORKSPACE}-ondemand.${getSynapseSqlSuffix()}). ` +
             'Two grants are required and one is missing in this deployment: ' +
             '(1) the Console UAMI must have CONNECT + db_datareader on the serverless DB ' +

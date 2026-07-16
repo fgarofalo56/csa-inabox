@@ -10,6 +10,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { KNOWN_CONTAINERS, pathToHttpsUrl, pathToHttpsUrlFor } from '@/lib/azure/adls-client';
 import { executeQuery, serverlessTarget } from '@/lib/azure/synapse-sql-client';
+import { classifyTransientSynapseError } from '@/lib/azure/synapse-transient';
 import { escapeSqlLiteral } from '@/lib/sql/quoting';
 
 export const runtime = 'nodejs';
@@ -141,6 +142,26 @@ FROM OPENROWSET(BULK '${safeUrl}', FORMAT = '${fmt}') AS r;`;
       ...result,
     });
   } catch (e: any) {
+    // Right after an upload two warm-up windows stack (serverless cold start +
+    // storage RBAC/visibility propagation). Classify them so the editor shows
+    // an honest "warming up — retrying" state instead of a raw SQL error.
+    const transient = classifyTransientSynapseError(e?.message || String(e));
+    if (transient) {
+      return NextResponse.json(
+        {
+          ok: false,
+          transient: true,
+          format: fmt,
+          bulkUrl: url,
+          sql: sqlText,
+          error: transient.friendly,
+          code: transient.code,
+          retryAfterMs: transient.retryAfterMs,
+          detail: e?.message || String(e),
+        },
+        { status: 503 },
+      );
+    }
     return NextResponse.json(
       {
         ok: false,
