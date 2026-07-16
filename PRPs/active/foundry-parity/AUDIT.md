@@ -43,6 +43,44 @@ Each finding cites code; grades feed the PRP matrix. ✅ built / η partial / �
 - docs/migrations/palantir-foundry/: 20 docs incl. 65-feature Azure mapping,
   ontology/pipeline/AIP tutorials — reusable as the docs seed for W9.
 
+### Static batch 2 (2026-07-16 eve)
+
+- **1.7 Pipeline Builder — ✅ strong (batch).** `lib/components/pipeline/activity-catalog.ts`
+  carries a ~40+ activity catalog (160 type-entries incl. variants) on the canvas.
+  Streaming lives in eventstream by design (Loom splits what Foundry merges —
+  honest architectural parity). UDF-node check moves to the browser pass.
+- **3.4→5.3 aip-logic — η quantified.** Block kinds: `create-variable |
+  get-object-property | use-llm | execute-function | transform | branch` (6).
+  Missing vs AIP Logic: **apply-action (ontology edit), semantic-search block,
+  loop/map block, agent/tool-call block**. W7 items.
+- **1.1 Dataset versioning — η better than seeded.** `lib/azure/delta-history.ts`
+  (listDeltaVersions/checkpoints per DESCRIBE HISTORY) exists and powers
+  warehouse clone/copy-into/snapshots. Gap narrows to SURFACING: a version-
+  history tab + restore action on lakehouse Tables. W6.
+- **5.2 agent-flow — ❌ ontology tools confirmed.** Zero ontology/object
+  references in the agent-flow editor family — agents cannot query objects or
+  invoke actions. W1/W7 anchor item.
+- **1.5 media — η.** Preview route handles TEXT/IMAGE/BINARY as metadata-only
+  + download; no inline render, no typed media collections. W6.
+
+### Static batch 3 (2026-07-16 eve)
+
+- **1.2 Data Connection — ✅ better than seeded.** `/connections` is a real
+  Data-Connection-app equivalent: reusable KV-backed connections
+  (ConnectionBuilder; consumed by mirroring, ADF/Synapse linked services,
+  datasets). Browser confirm + connector-count inventory remain.
+- **5.3 aip-logic ontology binding — REAL.** Routes exist:
+  `items/aip-logic/[id]/bind-ontology`, `/deploy`, `/invoke` — binding +
+  deployment are wired; the missing pieces stay block-level (apply-action,
+  semantic-search, loop, tool-call).
+- **6.3 Row-level security authoring — ❌ confirmed.** No CREATE SECURITY
+  POLICY / row-policy authoring anywhere in lib/app (content bundles only). W8.
+- **2.2 Object sync — ❌ confirmed.** No objectSync/backfill machinery in
+  weave/editors; ontology item API exists (`items/ontology/[id]`) but dataset→
+  object-instance sync UX/pipeline is absent. W1 anchor.
+- **5.4 Evals wiring — ❌ confirmed.** aip-logic editor has zero evaluation
+  references; evals exist as a standalone item only. W7.
+
 ## Live browser pass — TODO checklist (next session)
 
 - [ ] Ontology designer: author interface + shared group + action; check UX depth vs
