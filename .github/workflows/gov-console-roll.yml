@@ -57,12 +57,23 @@ jobs:
           echo "::notice::Building loom-console:$SHA on $ACR"
           az acr update -n "$ACR" --public-network-enabled true --default-action Allow -o none
           for i in $(seq 1 12); do az acr login -n "$ACR" >/dev/null 2>&1 && break; sleep 15; done
+          # 2026-07-16: console builds run on a dedicated 16 GB S3 agent pool —
+          # the default 8 GB agent cgroup-OOM-SIGKILLs the compile. Agent pools
+          # are available in USGov Arizona/Texas/Virginia. Pool builds don't get
+          # the trusted-service bypass, so the ACR stays open through the build
+          # (it already is for the tarball upload).
+          az acr agentpool show -r "$ACR" -n loombuild -o none 2>/dev/null \
+            || az acr agentpool create -r "$ACR" -n loombuild --tier S3 -o none
+          CNT=$(az acr agentpool show -r "$ACR" -n loombuild --query count -o tsv | tr -d '\r')
+          [ "${CNT:-0}" -ge 1 ] || az acr agentpool update -r "$ACR" -n loombuild --count 1 -o none
           STAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-          az acr build --registry "$ACR" --no-logs \
+          az acr build --registry "$ACR" --no-logs --agent-pool loombuild \
             --image "loom-console:$SHA" --image "loom-console:latest" \
             --file apps/fiab-console/Dockerfile \
             --build-arg "LOOM_BUILD_SHA=$SHA" --build-arg "LOOM_BUILD_TIMESTAMP=$STAMP" \
             apps/fiab-console
+          q=$(az acr agentpool show -r "$ACR" -n loombuild --queue-count -o tsv 2>/dev/null | tr -d '\r' || echo 1)
+          [ "${q:-1}" = "0" ] && az acr agentpool update -r "$ACR" -n loombuild --count 0 --no-wait -o none || true
           az acr update -n "$ACR" --default-action Deny --public-network-enabled false -o none
 
       - name: Roll loom-console + health-gate

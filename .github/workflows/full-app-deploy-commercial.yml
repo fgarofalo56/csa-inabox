@@ -218,18 +218,37 @@ jobs:
         run: |
           ACR_NAME="${{ needs.resolve.outputs.acr_name }}"
           APP="${{ matrix.app }}"; CTX="${{ matrix.ctx }}"; TAG="${{ inputs.tag || 'v0.1' }}"
+          # 2026-07-16: the console compile outgrew the DEFAULT ACR Task agent
+          # (8 GB) — consecutive builds were cgroup-OOM-SIGKILLed (runs
+          # cjdq..cjdv) with no code change. loom-console builds on the
+          # dedicated 16 GB S3 pool `loombuild` (scaled 0↔1 around the build;
+          # proven on run cjdy). Other apps stay on default agents.
+          POOL_ARGS=""
+          if [ "$APP" = "loom-console" ]; then
+            az acr agentpool show -r "$ACR_NAME" -n loombuild -o none 2>/dev/null \
+              || az acr agentpool create -r "$ACR_NAME" -n loombuild --tier S3 -o none
+            CNT=$(az acr agentpool show -r "$ACR_NAME" -n loombuild --query count -o tsv | tr -d '\r')
+            [ "${CNT:-0}" -ge 1 ] || az acr agentpool update -r "$ACR_NAME" -n loombuild --count 1 -o none
+            POOL_ARGS="--agent-pool loombuild"
+          fi
+          scale_down_pool() {
+            [ -z "$POOL_ARGS" ] && return 0
+            q=$(az acr agentpool show -r "$ACR_NAME" -n loombuild --queue-count -o tsv 2>/dev/null | tr -d '\r' || echo 1)
+            [ "${q:-1}" = "0" ] && az acr agentpool update -r "$ACR_NAME" -n loombuild --count 0 --no-wait -o none || true
+          }
           build() {
-            az acr build --registry "$ACR_NAME" \
+            az acr build --registry "$ACR_NAME" $POOL_ARGS \
               --image "$APP:$TAG" --image "$APP:${{ github.sha }}" --image "$APP:latest" \
               --build-arg "LOOM_BUILD_SHA=${{ github.sha }}" \
               --build-arg "LOOM_BUILD_TIMESTAMP=${{ github.run_id }}" \
               --file "$CTX/Dockerfile" "$CTX"
           }
           for attempt in 1 2 3; do
-            if build; then echo "✓ $APP built+pushed by ACR Tasks on attempt $attempt"; exit 0; fi
+            if build; then echo "✓ $APP built+pushed by ACR Tasks on attempt $attempt"; scale_down_pool; exit 0; fi
             echo "::warning::$APP ACR build attempt $attempt failed — retrying"
             sleep 30
           done
+          scale_down_pool
           echo "::error::$APP ACR build failed after 3 attempts"; exit 1
 
   close-acr:
