@@ -239,6 +239,14 @@ export default function GovernanceScansPage() {
                 <Field label="Endpoint (optional)" hint="e.g. https://saloom.dfs.core.windows.net">
                   <Input value={endpoint} onChange={(_, d) => setEndpoint(d.value)} />
                 </Field>
+                {/* Register failures land here — the page-level bar sits BEHIND
+                    the modal, so without this the dialog looks like a dead
+                    button (walk-caught 2026-07-15). */}
+                {actionErr && (
+                  <MessageBar intent="error" layout="multiline">
+                    <MessageBarBody><MessageBarTitle>Register failed</MessageBarTitle>{actionErr}</MessageBarBody>
+                  </MessageBar>
+                )}
               </div>
             </DialogContent>
             <DialogActions>

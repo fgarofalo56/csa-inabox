@@ -71,6 +71,9 @@ import {
   purviewBaseSync,
   resolvePurviewEndpoints,
 } from './purview-endpoints';
+import { discoverResourceCoordsByName } from './resource-graph-coords';
+import { derivePurviewArmResourceId, purviewArmProviderForKind } from './purview-source-mapping';
+import { dfsUrl, getBlobSuffix } from './cloud-endpoints';
 
 const PURVIEW_SCOPE = 'https://purview.azure.net/.default';
 
@@ -1453,6 +1456,36 @@ export async function registerDataSource(payload: {
       const root = await rootCollectionName();
       if (root) properties.collection = { referenceName: root, type: 'CollectionReference' };
     } catch { /* propagate the register error instead */ }
+  }
+  // Azure kinds REQUIRE properties.resourceId — the scan plane answers 403
+  // OperationNotAllowed("…requires a valid resourceId or subscriptionId")
+  // without it. The Auto-add wizard maps this from discovery, but the manual
+  // Register dialog only has a NAME: resolve the coordinates by name via
+  // Resource Graph (walk-caught live 2026-07-15 on dlzdlzstorageraw).
+  if (!properties.resourceId && !properties.subscriptionId) {
+    const provider = purviewArmProviderForKind(payload.kind);
+    if (provider) {
+      try {
+        const coords = await discoverResourceCoordsByName({ resourceType: provider, name: payload.name });
+        if (coords) {
+          const resourceId = derivePurviewArmResourceId(payload.kind, {
+            subscriptionId: coords.subscriptionId,
+            resourceGroup: coords.resourceGroup,
+            resourceName: payload.name,
+          });
+          if (resourceId) properties.resourceId = resourceId;
+          properties.subscriptionId = coords.subscriptionId;
+          properties.resourceGroup = coords.resourceGroup;
+        }
+      } catch { /* register proceeds; Purview's honest error propagates */ }
+    }
+  }
+  // Storage kinds: default the sovereign-correct endpoint from the account name.
+  if (!properties.endpoint && (payload.kind === 'AdlsGen2' || payload.kind === 'AzureStorage')) {
+    properties.endpoint =
+      payload.kind === 'AdlsGen2'
+        ? `${dfsUrl(payload.name)}/`
+        : `https://${payload.name}.${getBlobSuffix()}/`;
   }
   const res = await purviewFetch(`/scan/datasources/${encodeURIComponent(payload.name)}`, {
     method: 'PUT',
