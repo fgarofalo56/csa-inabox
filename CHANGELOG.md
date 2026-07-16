@@ -25,6 +25,13 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.71.1](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.71.0...csa-inabox-v0.71.1) (2026-07-16)
+
+
+### Bug Fixes
+
+* **ci:** drop unused id-token permission from post-deploy bootstrap — unbreaks the in-product Update pipeline ([#2110](https://github.com/fgarofalo56/csa-inabox/issues/2110)) ([420397d](https://github.com/fgarofalo56/csa-inabox/commit/420397db8f6384b2212f48cd43431a7e427afde0))
+
 ## [0.71.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.70.0...csa-inabox-v0.71.0) (2026-07-16)
 
 
