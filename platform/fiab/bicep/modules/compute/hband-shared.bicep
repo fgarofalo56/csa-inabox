@@ -66,8 +66,20 @@ param redisCapacity int = 1
 @description('Availability zones for the zone-redundant Premium cache. Empty ([]) disables zone redundancy (e.g. a region without 3 zones). Default is the standard 3-zone spread.')
 param redisZones array = ['1', '2', '3']
 
-@description('Deny public network access (publicNetworkAccess=Disabled) — reachable only over a private endpoint. Default true: the H-band services reach Redis over the CAE-integrated VNet + a private endpoint (wired out-of-band by the networking module), never the public internet. Set false only for a temporary non-PE bring-up.')
+@description('Deny public network access (publicNetworkAccess=Disabled) — reachable only over a private endpoint. Default true: the H-band services reach Redis over the CAE-integrated VNet + the private endpoint THIS module wires (see privateEndpointSubnetId / privateDnsZoneRedisId). Set false only for a temporary non-PE bring-up.')
 param redisPublicNetworkDisabled bool = true
+
+// #53 (2026-07-16): the original claim that the PE was "wired out-of-band by
+// the networking module" was FALSE — no PE or privatelink.redis.cache.* zone
+// ever existed, so with publicNetworkAccess=Disabled the cache was unreachable
+// and the console's redis-cache-client silently fell back to per-replica local
+// tiers. The PE now ships FROM THIS MODULE. Both params empty ⇒ skip (honest
+// no-op for a non-PE bring-up); supply both for the locked default.
+@description('Private-endpoint subnet resource id (hub snet-private-endpoints). Empty skips PE creation.')
+param privateEndpointSubnetId string = ''
+
+@description('privatelink.redis.cache.windows.net zone id (Gov: .usgovcloudapi.net) from network.bicep outputs (privateDnsZoneIds.redis). Empty skips the DNS zone group.')
+param privateDnsZoneRedisId string = ''
 
 // ── Shared diagnostics ──
 
@@ -116,6 +128,41 @@ resource redis 'Microsoft.Cache/redis@2024-11-01' = {
       // rely on eviction for correctness.
       'maxmemory-policy': 'allkeys-lru'
     }
+  }
+}
+
+// ── 1b. Private endpoint + DNS zone group for the PE-locked cache (#53) ──
+// Live estate got this imperatively (pe-redis-loom-hband, 2026-07-16); the
+// names match so a redeploy is an idempotent no-op there.
+resource redisPe 'Microsoft.Network/privateEndpoints@2024-05-01' = if (!empty(privateEndpointSubnetId)) {
+  // NAME MUST STAY 'pe-redis-loom-hband': the live-estate PE was created
+  // imperatively under this exact name (2026-07-16) — matching it makes the
+  // redeploy an idempotent update instead of a duplicate PE. One hband cache
+  // per RG, so the unsuffixed name cannot collide.
+  name: 'pe-redis-loom-hband'
+  location: location
+  tags: complianceTags
+  properties: {
+    subnet: { id: privateEndpointSubnetId }
+    privateLinkServiceConnections: [
+      {
+        name: 'redis-link'
+        properties: {
+          privateLinkServiceId: redis.id
+          groupIds: ['redisCache']
+        }
+      }
+    ]
+  }
+}
+
+resource redisPeDnsGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2024-05-01' = if (!empty(privateEndpointSubnetId) && !empty(privateDnsZoneRedisId)) {
+  parent: redisPe
+  name: 'default'
+  properties: {
+    privateDnsZoneConfigs: [
+      { name: 'redis', properties: { privateDnsZoneId: privateDnsZoneRedisId } }
+    ]
   }
 }
 
