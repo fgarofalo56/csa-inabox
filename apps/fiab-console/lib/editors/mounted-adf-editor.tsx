@@ -42,6 +42,7 @@ import {
   Add20Regular, ArrowSync20Regular, Play20Regular, Delete20Regular, BoxMultiple20Regular,
   Save20Regular, Database20Regular, FullScreenMaximize20Regular, LockClosed20Regular,
 } from '@fluentui/react-icons';
+import { ResizableCanvasRegion } from '@/lib/components/canvas/resizable-canvas';
 import { accentTint, CanvasRightRail } from '@/lib/components/canvas/canvas-node-kit';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { DetailsPanel, type DetailsSection } from '@/lib/components/shared/details-panel';
@@ -772,7 +773,9 @@ const useDesignerStyles = makeStyles({
   shell: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, flex: 1, minHeight: 0 },
   topbar: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
   // Let the user drag the data-flow designer taller; bounded + scrollable children.
-  threePane: { display: 'flex', flex: 1, minHeight: '460px', gap: tokens.spacingHorizontalS, resize: 'vertical', overflow: 'hidden', boxSizing: 'border-box' },
+  // Height comes from ResizableCanvasRegion (G3: shared handle + persisted
+  // sizingKey) — the CSS resize corner it replaces persisted nothing.
+  threePane: { display: 'flex', height: '100%', minHeight: 0, gap: tokens.spacingHorizontalS, overflow: 'hidden', boxSizing: 'border-box' },
   palette: {
     flexShrink: 0, width: '200px', padding: tokens.spacingVerticalS, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalSNudge,
     border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium,
@@ -1005,6 +1008,12 @@ function InnerDesigner({ name, datasets, reloadKey }: DesignerProps) {
         </MessageBar>
       )}
 
+      <ResizableCanvasRegion
+        storageKey="mounted-adf"
+        defaultPx={560}
+        minPx={460}
+        ariaLabel="Resize data flow canvas height"
+      >
       <div className={s.threePane}>
         <div className={s.palette} role="navigation" aria-label="Data flow transformation palette">
           <Subtitle2>Transformations</Subtitle2>
@@ -1176,6 +1185,7 @@ function InnerDesigner({ name, datasets, reloadKey }: DesignerProps) {
           )}
         </div>
       </div>
+      </ResizableCanvasRegion>
     </div>
   );
 }
