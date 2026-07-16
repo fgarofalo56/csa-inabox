@@ -76,6 +76,8 @@ const ALLOWLIST_PATTERNS = [
 // Seeded from the CURRENT tree (2026-07). Each MUST carry a reason.
 const ALLOWLIST = new Set([
   // ---- Build / ambient (injected by the container runtime or platform, not app bicep) ----
+  'LOOM_READ_WARMER_DISABLED',      // runtime-only opt-out for the dashboard read-warmer (lib/perf/read-warmer.ts) — warming is on by default, never a deploy dependency
+  'LOOM_READ_WARMER_INTERVAL_MS',   // runtime-only tuning knob for the read-warmer interval (default 10 min)
   'LOOM_BUILD_SHA',                 // stamped at image build time
   'LOOM_BUILD_TIMESTAMP',           // stamped at image build time
   'LOOM_APP_REVISION',              // ambient container revision fallback for the PSR-1 perf runner (CONTAINER_APP_REVISION is the real ACA-injected value; this is a manual override) — never a blocking dependency
