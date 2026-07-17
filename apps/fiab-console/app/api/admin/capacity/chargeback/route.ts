@@ -34,7 +34,7 @@ import {
   type ChargebackOptions,
 } from '@/lib/azure/cost-management-client';
 import type { CostTimeframe } from '@/lib/azure/cost-client';
-import { buildScopedCacheKey, getOrComputeCached, resolveBackendTtl } from '@/lib/azure/query-result-cache';
+import { buildScopedCacheKey, getOrComputeCached, resolveBackendTtl, ComputeBudgetExceededError } from '@/lib/azure/query-result-cache';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -90,10 +90,22 @@ export async function GET(req: NextRequest) {
       cacheKey,
       tenantId,
       () => getChargebackModel(opts),
-      { ttlMs: CHARGEBACK_TTL_MS(), staleWhileRevalidate: true, bypass: refresh },
+      // Front Door cuts at ~30s; the cross-subscription Cost Management
+      // aggregation can outlive that on a cold miss and 504 with an HTML page
+      // (operator report 2026-07-17: chargeback stuck at a 30s timeout). Cap the
+      // inline compute at 25s and serve the last copy on error; a budget-exceed
+      // returns a 202 "warming" JSON the client shows as a friendly retry.
+      { ttlMs: CHARGEBACK_TTL_MS(), staleWhileRevalidate: true, bypass: refresh, budgetMs: 25_000, serveStaleOnError: true },
     );
     return NextResponse.json({ ok: true, data: value, meta });
   } catch (e) {
+    if (e instanceof ComputeBudgetExceededError) {
+      return NextResponse.json({
+        ok: false,
+        warming: true,
+        message: 'The chargeback aggregation across your subscriptions is still running (first load can take a minute). It’s warming in the background — refresh in a moment.',
+      }, { status: 202 });
+    }
     // Billing scope / subscription unset, or no access / no offer → honest gate.
     // (A thrown error is never cached, so the gate self-clears once access lands.)
     if (e instanceof MonitorNotConfiguredError) return costGate();

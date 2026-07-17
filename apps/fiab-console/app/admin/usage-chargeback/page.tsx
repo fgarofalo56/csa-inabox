@@ -356,6 +356,9 @@ export function ChargebackPane() {
         return;
       }
       if (res.status === 403) { setError(j?.reason || j?.error || 'Tenant-admin access required.'); setLoading(false); return; }
+      // 202 warming: the cross-sub aggregation exceeded the edge budget and is
+      // populating the cache in the background — show a friendly retry, not an error.
+      if (res.status === 202 && j?.warming) { setError(j.message || 'Chargeback is warming up — refresh in a moment.'); setLoading(false); return; }
       if (j?.ok === false && j?.gate) { setGate(j.gate as Gate); setLoading(false); return; }
       if (j?.ok === false) { setError(j?.error || 'Failed to load chargeback data.'); setLoading(false); return; }
       setModel((j.data as ChargebackModel) ?? null);
