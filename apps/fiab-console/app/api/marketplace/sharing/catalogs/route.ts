@@ -14,7 +14,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
-import { listCatalogs } from '@/lib/azure/unity-catalog-client';
+import { listCatalogs, deleteCatalog } from '@/lib/azure/unity-catalog-client';
 import { resolveShareHost, sharingErrorResponse } from '../_lib';
 
 export const runtime = 'nodejs';
@@ -46,6 +46,26 @@ export async function GET(req: NextRequest) {
       owner: c.owner,
     }));
     return NextResponse.json({ ok: true, host, catalogs });
+  } catch (e) {
+    return sharingErrorResponse(e);
+  }
+}
+
+/**
+ * DELETE /api/marketplace/sharing/catalogs?name=<catalog>
+ *   Unmount a subscribed share — drops the read-only Delta-Sharing catalog from
+ *   the workspace. No source data is touched (the share is a live pointer); this
+ *   only removes the local mount so it stops appearing under "Subscribed shares".
+ */
+export async function DELETE(req: NextRequest) {
+  const s = getSession();
+  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  const name = req.nextUrl.searchParams.get('name');
+  if (!name) return NextResponse.json({ ok: false, error: 'name (catalog) is required' }, { status: 400 });
+  try {
+    const host = await resolveShareHost(req.nextUrl.searchParams.get('host'));
+    await deleteCatalog(host, name, /* force */ true);
+    return NextResponse.json({ ok: true });
   } catch (e) {
     return sharingErrorResponse(e);
   }

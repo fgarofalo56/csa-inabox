@@ -30,6 +30,7 @@ import {
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   MessageBar, MessageBarBody, MessageBarTitle,
   Dialog, DialogTrigger, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
+  Menu, MenuTrigger, MenuPopover, MenuList, MenuItem, MenuButton,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
@@ -37,6 +38,7 @@ import {
   CloudArrowDown20Regular, Copy20Regular, Database20Regular,
   CloudArrowDown24Regular, Share24Regular, Person24Regular,
   DatabaseSearch20Regular, DatabaseSearch24Regular,
+  Code20Regular, DocumentText20Regular, PlugDisconnected20Regular,
 } from '@fluentui/react-icons';
 import { TileGrid } from '@/lib/components/ui/tile-grid';
 import { EmptyState } from '@/lib/components/empty-state';
@@ -339,6 +341,34 @@ function MountedCatalogs({
                 <Button size="small" appearance="primary" icon={<DatabaseSearch20Regular />} onClick={() => onExplore(c.name)}>
                   Explore &amp; query
                 </Button>
+                <Menu>
+                  <MenuTrigger disableButtonEnhancement>
+                    <MenuButton size="small" appearance="subtle">Use / manage</MenuButton>
+                  </MenuTrigger>
+                  <MenuPopover>
+                    <MenuList>
+                      <MenuItem icon={<Copy20Regular />} onClick={() => copyText(c.name)}>
+                        Copy catalog name
+                      </MenuItem>
+                      <MenuItem icon={<Code20Regular />} onClick={() => copyText(sparkReadSnippet(c.name))}>
+                        Copy Spark read (notebook)
+                      </MenuItem>
+                      <MenuItem icon={<DocumentText20Regular />} onClick={() => copyText(sqlSnippet(c.name))}>
+                        Copy SQL query
+                      </MenuItem>
+                      <MenuItem
+                        icon={<PlugDisconnected20Regular />}
+                        onClick={async () => {
+                          if (!confirm(`Unmount "${c.name}"? This removes the local read-only mount only — the provider's source data is untouched and you can re-mount the share anytime.`)) return;
+                          await clientFetch(`/api/marketplace/sharing/catalogs?name=${encodeURIComponent(c.name)}`, { method: 'DELETE' });
+                          void load();
+                        }}
+                      >
+                        Unmount (unsubscribe)
+                      </MenuItem>
+                    </MenuList>
+                  </MenuPopover>
+                </Menu>
               </div>
             </Card>
           ))}
@@ -346,6 +376,24 @@ function MountedCatalogs({
       )}
     </>
   );
+}
+
+/** Copy text to the clipboard (best-effort; silent on older browsers). */
+function copyText(text: string) {
+  try { void navigator.clipboard?.writeText(text); } catch { /* noop */ }
+}
+/** A ready-to-paste PySpark cell reading a table from a mounted Delta-Share catalog. */
+function sparkReadSnippet(catalog: string): string {
+  return `# Read a table from the "${catalog}" Delta share (live, no copy).\n`
+    + `# Replace <schema>.<table> with a table you saw in Explore & query.\n`
+    + `df = spark.read.table("${catalog}.<schema>.<table>")\n`
+    + `display(df)\n`;
+}
+/** A ready-to-paste SQL query against a mounted Delta-Share catalog. */
+function sqlSnippet(catalog: string): string {
+  return `-- Query a table from the "${catalog}" Delta share.\n`
+    + `-- Replace <schema>.<table> with a table you saw in Explore & query.\n`
+    + `SELECT * FROM \`${catalog}\`.<schema>.<table> LIMIT 100;`;
 }
 
 function MountShareButton({
