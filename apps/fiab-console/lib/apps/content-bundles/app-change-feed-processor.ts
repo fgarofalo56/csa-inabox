@@ -456,12 +456,18 @@ const DELTA_CELLS = [
       '        .whenMatchedUpdateAll()\n' +
       '        .whenNotMatchedInsertAll()\n' +
       '        .execute())\n\n' +
+      '# `.trigger(availableNow=True)` drains all currently-available change-feed\n' +
+      '# records then STOPS, so this cell completes instead of hanging on an\n' +
+      '# endless query. For a continuously-running processor switch to\n' +
+      '# `.trigger(processingTime="1 minute")` and run it as a background\n' +
+      '# streaming job (interactive `awaitTermination()` blocks the session).\n' +
       'query = (changes.writeStream\n' +
       '    .foreachBatch(upsert_to_delta)\n' +
       '    .option("checkpointLocation", CHECKPOINT)\n' +
-      '    .trigger(processingTime="1 minute")\n' +
+      '    .trigger(availableNow=True)\n' +
       '    .start())\n\n' +
-      'query.awaitTermination()',
+      'query.awaitTermination()\n' +
+      'print("Change-feed batch complete — all available changes merged into Delta.")',
   },
   {
     id: 'delta-md-verify',

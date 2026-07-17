@@ -322,16 +322,25 @@ const NB_STREAM_CELLS = [
       '     .withColumn("timestamp", F.current_timestamp())\n' +
       '    (metrics.write.format("delta").mode("append")\n' +
       '            .saveAsTable("realtime_analytics.gold.streaming_quality_metrics"))\n\n\n' +
+      '# NOTE: `.trigger(availableNow=True)` processes all currently-available\n' +
+      '# Bronze data in 30-second-style micro-batches and then STOPS, so this\n' +
+      '# cell COMPLETES (it demonstrates the exact streaming code path without\n' +
+      '# hanging on an endless query). For a continuously-running production\n' +
+      '# stream, switch to `.trigger(processingTime="30 seconds")` and start it\n' +
+      '# as a background job (Loom → Run as streaming job) rather than an\n' +
+      '# interactive cell — an interactive `awaitTermination()` blocks the whole\n' +
+      '# session so no other cell can run.\n' +
       'query = (\n' +
       '    quality_checked.writeStream\n' +
       '    .format("delta")\n' +
       '    .outputMode("append")\n' +
       '    .option("checkpointLocation", "/mnt/checkpoints/silver/validated_events")\n' +
-      '    .trigger(processingTime="30 seconds")\n' +
+      '    .trigger(availableNow=True)\n' +
       '    .foreachBatch(process_quality_batch)\n' +
       '    .start()\n' +
       ')\n' +
-      'query.awaitTermination()',
+      'query.awaitTermination()\n' +
+      'print("Streaming batch complete — processed all available Bronze data into Silver + Gold.")',
   },
 ];
 
