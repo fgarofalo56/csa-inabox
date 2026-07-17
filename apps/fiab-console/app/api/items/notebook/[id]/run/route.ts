@@ -210,12 +210,60 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       } catch { /* probe/start best-effort — submit still attempted */ }
       // R cells run via Rscript; everything else via python.
       const lang: 'python' | 'r' = stmtKind === 'sparkr' ? 'r' : 'python';
-      const job = await submitCiJob({
-        ciName,
-        code,
-        lang,
-        displayName: `Loom: ${nb.displayName?.slice(0, 60) || 'notebook'}${cellId ? ' · ' + cellId.slice(0, 6) : ''}`,
-      });
+      let job;
+      try {
+        job = await submitCiJob({
+          ciName,
+          code,
+          lang,
+          displayName: `Loom: ${nb.displayName?.slice(0, 60) || 'notebook'}${cellId ? ' · ' + cellId.slice(0, 6) : ''}`,
+        });
+      } catch (e: any) {
+        // AML personal Compute Instances only accept jobs from their assigned
+        // user; Loom submits with the Console service identity, so a CI assigned
+        // to a person 400s with "not an owner or assigned user to the Compute
+        // Instance" (operator report 2026-07-17). Auto-fall-back to AML
+        // serverless compute, which has NO assigned-user restriction, so the
+        // cell just runs. Only if serverless also fails do we surface a gate.
+        const msg = String(e?.message || e);
+        const isOwnershipReject = e?.status === 400 && /not an owner or assigned user|assigned user to the Compute Instance/i.test(msg);
+        if (!isOwnershipReject) throw e;
+        try {
+          const { submitServerlessJob } = await import('@/lib/azure/aml-client');
+          const sjob = await submitServerlessJob({
+            code, lang,
+            displayName: `Loom: ${nb.displayName?.slice(0, 60) || 'notebook'}${cellId ? ' · ' + cellId.slice(0, 6) : ''} (serverless)`,
+          });
+          return NextResponse.json({
+            ok: true,
+            runId: `aml-ci:${sjob.name}`,
+            status: sjob.status || 'NotStarted',
+            autoStarted: false,
+            compute: { kind: 'aml-serverless', ciName },
+            note: `The Compute Instance "${ciName}" is personal (assigned to a specific user), so this cell ran on AML serverless compute instead.`,
+            cellId: cellId || null,
+            sourcePreview: code.slice(0, 200),
+          });
+        } catch (se: any) {
+          return NextResponse.json(
+            {
+              ok: false,
+              gate: {
+                reason:
+                  `The Compute Instance "${ciName}" is a personal instance assigned to a specific user, ` +
+                  `so Azure ML only lets that user submit jobs to it — Loom runs cells with its service ` +
+                  `identity. The automatic serverless fallback also couldn't start (${String(se?.message || se).slice(0, 160)}).`,
+                remediation:
+                  `Run this cell on a Spark pool (spark:<pool>) or an AML compute cluster, which accept ` +
+                  `jobs from the Loom service identity. To use serverless, ensure the AML workspace has ` +
+                  `serverless compute quota; to keep using a personal Compute Instance, an admin must ` +
+                  `enable user-mode (OBO) execution so Loom submits the job as you.`,
+              },
+            },
+            { status: 200 },
+          );
+        }
+      }
       return NextResponse.json({
         ok: true,
         runId: `aml-ci:${job.name}`,

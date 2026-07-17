@@ -669,6 +669,43 @@ export async function submitCiJob(opts: {
   return j ? shapeJob(j) : { name, status: 'NotStarted', jobType: 'Command' };
 }
 
+/**
+ * Submit a notebook cell as a Command job on AML SERVERLESS compute (no
+ * computeId — `resources.instanceType` instead). Unlike a personal Compute
+ * Instance, serverless has NO assigned-user restriction, so the Loom service
+ * identity can always submit (operator report 2026-07-17: a personal CI 400s
+ * with "not an owner or assigned user"). Used as the automatic fallback when a
+ * personal-CI submit is rejected. Instance type is LOOM_AML_SERVERLESS_VMSIZE
+ * (default Standard_DS3_v2).
+ */
+export async function submitServerlessJob(opts: {
+  code: string;
+  lang?: 'python' | 'r';
+  displayName?: string;
+}): Promise<AmlJob> {
+  const name = `loom-nb-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+  const command = opts.lang === 'r'
+    ? `Rscript -e ${shellQuote(opts.code)}`
+    : `python -c ${shellQuote(opts.code)}`;
+  const instanceType = (process.env.LOOM_AML_SERVERLESS_VMSIZE || 'Standard_DS3_v2').trim();
+  const armBody = {
+    properties: {
+      jobType: 'Command',
+      displayName: opts.displayName || 'Loom notebook cell run (serverless)',
+      experimentName: 'loom-notebook-runs',
+      command,
+      environmentId: DEFAULT_AML_ENVIRONMENT,
+      resources: { instanceType, instanceCount: 1 },
+    },
+  };
+  const res = await amlFetch(`/jobs/${encodeURIComponent(name)}`, {
+    method: 'PUT',
+    body: JSON.stringify(armBody),
+  });
+  const j = await readAmlJson<any>(res, 'submitServerlessJob');
+  return j ? shapeJob(j) : { name, status: 'NotStarted', jobType: 'Command' };
+}
+
 /** Poll a Command job's status. Null on 404. */
 export async function getCiJob(name: string): Promise<AmlJob | null> {
   const res = await amlFetch(`/jobs/${encodeURIComponent(name)}`);
