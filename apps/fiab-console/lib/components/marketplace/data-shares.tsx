@@ -288,6 +288,8 @@ function MountedCatalogs({
 }: { styles: ReturnType<typeof useStyles>; onExplore: (catalog: string) => void; reloadKey: unknown }) {
   const [catalogs, setCatalogs] = useState<MountedCatalog[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  // "Open in notebook" — which catalog the workspace-picker dialog is open for.
+  const [nbCatalog, setNbCatalog] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setErr(null); setCatalogs(null);
@@ -350,6 +352,9 @@ function MountedCatalogs({
                       <MenuItem icon={<Copy20Regular />} onClick={() => copyText(c.name)}>
                         Copy catalog name
                       </MenuItem>
+                      <MenuItem icon={<Code20Regular />} onClick={() => setNbCatalog(c.name)}>
+                        Open in notebook…
+                      </MenuItem>
                       <MenuItem icon={<Code20Regular />} onClick={() => copyText(sparkReadSnippet(c.name))}>
                         Copy Spark read (notebook)
                       </MenuItem>
@@ -374,7 +379,92 @@ function MountedCatalogs({
           ))}
         </TileGrid>
       )}
+      <OpenInNotebookDialog catalog={nbCatalog} onClose={() => setNbCatalog(null)} />
     </>
+  );
+}
+
+/**
+ * OpenInNotebookDialog — pick a workspace, create a real notebook item seeded
+ * with explore + read cells for the mounted share catalog, then navigate to it.
+ * This is the "use it in a notebook" bridge from Marketplace → workspace items.
+ */
+function OpenInNotebookDialog({ catalog, onClose }: { catalog: string | null; onClose: () => void }) {
+  const [wsList, setWsList] = useState<{ id: string; displayName: string }[] | null>(null);
+  const [wsId, setWsId] = useState('');
+  const [name, setName] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!catalog) return;
+    setName(`Explore ${catalog}`); setErr(null); setWsList(null); setWsId('');
+    clientFetch('/api/workspaces').then((r) => r.json()).then((d: any) => {
+      const list = (Array.isArray(d) ? d : (d?.workspaces || [])).map((w: any) => ({ id: w.id, displayName: w.displayName || w.name || w.id }));
+      setWsList(list);
+      if (list.length) setWsId(list[0].id);
+    }).catch((e) => { setErr(String(e?.message || e)); setWsList([]); });
+  }, [catalog]);
+
+  const create = useCallback(async () => {
+    if (!catalog || !wsId) return;
+    setBusy(true); setErr(null);
+    try {
+      const code = `# Explore the "${catalog}" Delta share (live, read-only — no data copied)\n`
+        + `spark.sql("SHOW SCHEMAS IN \`${catalog}\`").show()\n\n`
+        + `# List tables in a schema:\n`
+        + `# spark.sql("SHOW TABLES IN \`${catalog}\`.<schema>").show()\n\n`
+        + `# Read a shared table:\n`
+        + `# df = spark.read.table("${catalog}.<schema>.<table>")\n`
+        + `# display(df)\n`;
+      const r = await clientFetch(`/api/items/notebook?workspaceId=${encodeURIComponent(wsId)}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ displayName: name.trim() || `Explore ${catalog}`, definition: { code, lang: 'python' } }),
+      });
+      const j = await r.json().catch(() => null);
+      if (!j?.ok || !j.notebook?.id) { setErr(j?.error || `HTTP ${r.status}`); return; }
+      window.location.href = `/items/notebook/${j.notebook.id}`;
+    } catch (e: any) {
+      setErr(String(e?.message || e));
+    } finally {
+      setBusy(false);
+    }
+  }, [catalog, wsId, name]);
+
+  return (
+    <Dialog open={!!catalog} onOpenChange={(_, d) => { if (!d.open) onClose(); }}>
+      <DialogSurface>
+        <DialogBody>
+          <DialogTitle>Open “{catalog}” in a notebook</DialogTitle>
+          <DialogContent>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
+              <Caption1>
+                Creates a notebook seeded with cells that browse this share&apos;s schemas and read its tables —
+                live against the mounted catalog, no data copied.
+              </Caption1>
+              {err && <MessageBar intent="error"><MessageBarBody>{err}</MessageBarBody></MessageBar>}
+              <Field label="Workspace" required>
+                {wsList === null ? <Spinner size="tiny" /> : (
+                  <Select value={wsId} onChange={(_, d) => setWsId(d.value)}>
+                    {wsList.map((w) => <option key={w.id} value={w.id}>{w.displayName}</option>)}
+                  </Select>
+                )}
+              </Field>
+              <Field label="Notebook name" required>
+                <Input value={name} onChange={(_, d) => setName(d.value)} />
+              </Field>
+            </div>
+          </DialogContent>
+          <DialogActions>
+            <Button appearance="secondary" onClick={onClose}>Cancel</Button>
+            <Button appearance="primary" disabled={busy || !wsId || !name.trim()} icon={busy ? <Spinner size="tiny" /> : undefined} onClick={() => { void create(); }}>
+              {busy ? 'Creating…' : 'Create notebook'}
+            </Button>
+          </DialogActions>
+        </DialogBody>
+      </DialogSurface>
+    </Dialog>
   );
 }
 
