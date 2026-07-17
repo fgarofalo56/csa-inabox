@@ -575,6 +575,15 @@ export interface BuildAcaBodyOptions {
   memory?: string;
   /** External ingress (public URL). Default true — a hosted app needs a URL. */
   external?: boolean;
+  /** Base Key Vault URI backing `secretRef` env bindings (e.g.
+   *  https://<vault>.vault.azure.net). When an env uses secretRef but no vault
+   *  is configured, the builder throws an honest LoomAppSpecError. */
+  keyVaultUri?: string;
+}
+
+/** ACA secret names must be lowercase [a-z0-9-]. */
+function acaSecretName(raw: string): string {
+  return (raw || '').toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '').slice(0, 253) || 'secret';
 }
 
 export class LoomAppSpecError extends Error {
@@ -604,11 +613,36 @@ export function buildAcaAppBody(opts: BuildAcaBodyOptions): Record<string, unkno
   }
   const minReplicas = typeof opts.minReplicas === 'number' ? Math.max(0, opts.minReplicas) : 0;
   const maxReplicas = typeof opts.maxReplicas === 'number' ? Math.max(1, opts.maxReplicas) : 3;
-  const env = (opts.env || []).map((e) =>
-    e.secretRef !== undefined ? { name: e.name, secretRef: e.secretRef } : { name: e.name, value: e.value ?? '' },
-  );
+
+  // Key Vault-backed secrets: each secretRef env names a KV secret. ACA needs a
+  // matching configuration.secrets[] entry that maps a lowercase ACA secret name
+  // → the KV secret URI, resolved with the app UAMI. WITHOUT this block a
+  // secretRef env is rejected by ARM (the audited latent bug — a secretRef that
+  // pointed at nothing). The env's secretRef is rewritten to the sanitized ACA
+  // secret name. Dedup by ACA name so two envs can share one KV secret.
+  const secretsByAca = new Map<string, { name: string; keyVaultUrl: string; identity: string }>();
+  const env = (opts.env || []).map((e) => {
+    if (e.secretRef === undefined) return { name: e.name, value: e.value ?? '' };
+    const kvName = e.secretRef.trim();
+    if (!opts.keyVaultUri) {
+      throw new LoomAppSpecError(
+        `env "${e.name}" references Key Vault secret "${kvName}" but no vault is configured — ` +
+        `set LOOM_KEY_VAULT_URI (or LOOM_APPS_KEY_VAULT_URI) on the Console so the app can resolve it.`,
+      );
+    }
+    const acaName = acaSecretName(`kv-${kvName}`);
+    if (!secretsByAca.has(acaName)) {
+      secretsByAca.set(acaName, {
+        name: acaName,
+        keyVaultUrl: `${opts.keyVaultUri.replace(/\/+$/, '')}/secrets/${encodeURIComponent(kvName)}`,
+        identity: opts.uamiId,
+      });
+    }
+    return { name: e.name, secretRef: acaName };
+  });
   // Always inject PORT so the container binds the ingress target port.
   if (!env.find((e) => e.name === 'PORT')) env.push({ name: 'PORT', value: String(opts.targetPort) });
+  const secrets = [...secretsByAca.values()];
 
   return {
     location: opts.location,
@@ -629,6 +663,7 @@ export function buildAcaAppBody(opts: BuildAcaBodyOptions): Record<string, unkno
           traffic: [{ latestRevision: true, weight: 100 }],
         },
         registries: [{ server: opts.acrLoginServer, identity: opts.uamiId }],
+        ...(secrets.length ? { secrets } : {}),
       },
       template: {
         containers: [

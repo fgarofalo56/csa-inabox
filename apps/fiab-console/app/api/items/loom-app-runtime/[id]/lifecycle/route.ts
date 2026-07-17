@@ -14,7 +14,7 @@ import { apiOk, apiError, apiUnauthorized, apiServerError, apiHonestError } from
 import { resolveItemAccessByOid } from '@/lib/auth/item-access';
 import { readAppRuntime, saveAppRuntime, LOOM_APP_RUNTIME_TYPE } from '@/lib/apps/runtime-store';
 import { resolveAppsRuntimeState, appsRuntimeDisabledReason } from '@/lib/apps/runtime-flag';
-import { startApp, stopApp, LoomAppsNotConfiguredError, LoomAppsError } from '@/lib/azure/loom-apps-client';
+import { startApp, stopApp, restartApp, LoomAppsNotConfiguredError, LoomAppsError } from '@/lib/azure/loom-apps-client';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -26,7 +26,7 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
   let body: any;
   try { body = await req.json(); } catch { return apiError('Invalid JSON', 400, { code: 'bad_json' }); }
   const action = String(body?.action || '');
-  if (action !== 'start' && action !== 'stop') return apiError("action must be 'start' or 'stop'", 400);
+  if (action !== 'start' && action !== 'stop' && action !== 'restart') return apiError("action must be 'start', 'stop' or 'restart'", 400);
   try {
     const access = await resolveItemAccessByOid(session, id, LOOM_APP_RUNTIME_TYPE);
     if (!access) return apiError('Item not found', 404, { code: 'not_found' });
@@ -34,10 +34,14 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
     const rt = readAppRuntime(access.item);
     if (!rt.containerAppName) return apiError('No deployed app to control (deploy first)', 409, { code: 'not_deployed' });
 
-    if (action === 'start') {
-      // Start respects the kill switch; Stop never does (it is the disable path).
+    if (action === 'start' || action === 'restart') {
+      // Start/Restart respect the kill switch; Stop never does (disable path).
       const state = await resolveAppsRuntimeState(session.claims.oid);
       if (!state.enabled) return apiError(appsRuntimeDisabledReason(state), 403, { code: 'runtime_disabled' });
+      if (action === 'restart') {
+        const r = await restartApp(rt.containerAppName);
+        return apiOk({ result: r, runtime: readAppRuntime(access.item) });
+      }
       const r = await startApp(rt.containerAppName);
       const updated = await saveAppRuntime(access.item, { disabled: false });
       return apiOk({ result: r, runtime: readAppRuntime(updated) });

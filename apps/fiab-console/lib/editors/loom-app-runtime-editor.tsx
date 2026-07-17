@@ -234,7 +234,7 @@ export function LoomAppRuntimeEditor({ item, id }: EditorProps) {
     finally { setBusy(null); }
   }, [latestSucceededImage, id, port, env, minReplicas, maxReplicas, loadItem]);
 
-  const lifecycle = useCallback(async (action: 'start' | 'stop') => {
+  const lifecycle = useCallback(async (action: 'start' | 'stop' | 'restart') => {
     setBusy(action); setBanner(null);
     try {
       const r = await clientFetch(`/api/items/loom-app-runtime/${encodeURIComponent(id)}/lifecycle`, {
@@ -242,7 +242,7 @@ export function LoomAppRuntimeEditor({ item, id }: EditorProps) {
       });
       const j = await r.json();
       if (!j.ok) { setBanner({ intent: 'error', text: j.error || `HTTP ${r.status}` }); }
-      else { setBanner({ intent: 'success', text: `${action === 'start' ? 'Start' : 'Stop'} requested (${j.result?.status}).` }); if (j.runtime) setRt(j.runtime); loadItem(); }
+      else { setBanner({ intent: 'success', text: `${action === 'start' ? 'Start' : action === 'restart' ? 'Restart' : 'Stop'} requested (${j.result?.status || j.result?.revision || 'ok'}).` }); if (j.runtime) setRt(j.runtime); loadItem(); }
     } catch (e: any) { setBanner({ intent: 'error', text: e?.message || String(e) }); }
     finally { setBusy(null); }
   }, [id, loadItem]);
@@ -285,6 +285,7 @@ export function LoomAppRuntimeEditor({ item, id }: EditorProps) {
       ]},
       { label: 'Lifecycle', actions: [
         { label: 'Start', icon: <Play20Regular />, onClick: busy ? undefined : () => lifecycle('start'), disabled: !!busy || !rt.containerAppName },
+        { label: 'Restart', icon: <ArrowSync20Regular />, onClick: busy ? undefined : () => lifecycle('restart'), disabled: !!busy || !rt.containerAppName },
         { label: 'Stop', icon: <Stop20Regular />, onClick: busy ? undefined : () => lifecycle('stop'), disabled: !!busy || !rt.containerAppName },
         { label: 'Delete', icon: <Delete20Regular />, onClick: busy ? undefined : doDelete, disabled: !!busy || !rt.containerAppName },
       ]},
