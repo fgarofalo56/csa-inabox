@@ -100,9 +100,11 @@ export function DataShares() {
 
   // Explore/Query dialog — opened from a successful mount OR the mounted-catalogs
   // list, scoped to a single subscribed catalog. Lifted here so both entry points
-  // share one dialog instance.
-  const [explore, setExplore] = useState<{ open: boolean; catalog: string | null }>({ open: false, catalog: null });
-  const openExplore = useCallback((catalog: string) => setExplore({ open: true, catalog }), []);
+  // share one dialog instance. provider/share coordinates travel along so the
+  // explorer can offer "Create lakehouse shortcut" (delta-sharing://share/…)
+  // reusing the provider credential stored at add time (loom-dsp-<provider>).
+  const [explore, setExplore] = useState<{ open: boolean; catalog: string | null; provider?: string; share?: string }>({ open: false, catalog: null });
+  const openExplore = useCallback((catalog: string, provider?: string, share?: string) => setExplore({ open: true, catalog, provider, share }), []);
 
   const handleGate = (status: number, j: any): boolean => {
     if (status === 501 && j?.gated) { setGate({ error: j.error, hint: j.hint, missing: j.missing }); return true; }
@@ -201,6 +203,8 @@ export function DataShares() {
         setOpen={(o) => setExplore((prev) => ({ ...prev, open: o }))}
         catalog={explore.catalog}
         host={host}
+        providerName={explore.provider}
+        shareName={explore.share}
       />
     </div>
   );
@@ -217,7 +221,7 @@ function InboundPanel({
   onChange: () => void;
   busy: boolean;
   setBusy: (b: boolean) => void;
-  onExplore: (catalog: string) => void;
+  onExplore: (catalog: string, provider?: string, share?: string) => void;
 }) {
   const [addOpen, setAddOpen] = useState(false);
 
@@ -285,7 +289,7 @@ function InboundPanel({
  */
 function MountedCatalogs({
   styles, onExplore, reloadKey,
-}: { styles: ReturnType<typeof useStyles>; onExplore: (catalog: string) => void; reloadKey: unknown }) {
+}: { styles: ReturnType<typeof useStyles>; onExplore: (catalog: string, provider?: string, share?: string) => void; reloadKey: unknown }) {
   const [catalogs, setCatalogs] = useState<MountedCatalog[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
   // "Open in notebook" — which catalog the workspace-picker dialog is open for.
@@ -340,7 +344,7 @@ function MountedCatalogs({
                 }
               />
               <div className={styles.cardActions}>
-                <Button size="small" appearance="primary" icon={<DatabaseSearch20Regular />} onClick={() => onExplore(c.name)}>
+                <Button size="small" appearance="primary" icon={<DatabaseSearch20Regular />} onClick={() => onExplore(c.name, c.provider_name, c.share_name)}>
                   Explore &amp; query
                 </Button>
                 <Menu>
@@ -488,7 +492,7 @@ function sqlSnippet(catalog: string): string {
 
 function MountShareButton({
   provider, share, onDone, busy, setBusy, onExplore,
-}: { provider: string; share: string; onDone: () => void; busy: boolean; setBusy: (b: boolean) => void; onExplore: (catalog: string) => void }) {
+}: { provider: string; share: string; onDone: () => void; busy: boolean; setBusy: (b: boolean) => void; onExplore: (catalog: string, provider?: string, share?: string) => void }) {
   const [open, setOpen] = useState(false);
   const [catalog, setCatalog] = useState(`${provider}_${share}`.replace(/[^a-zA-Z0-9_]/g, '_'));
   const [msg, setMsg] = useState<string | null>(null);
@@ -533,7 +537,7 @@ function MountShareButton({
             )}
             {mounted && (
               <Button appearance="primary" icon={<DatabaseSearch20Regular />}
-                onClick={() => { const c = mounted; setOpen(false); reset(); onExplore(c); }}>
+                onClick={() => { const c = mounted; setOpen(false); reset(); onExplore(c, provider, share); }}>
                 Explore &amp; query
               </Button>
             )}
