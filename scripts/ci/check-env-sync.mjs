@@ -197,9 +197,11 @@ const ALLOWLIST = new Set([
   'LOOM_AAS_XMLA_URL',              // AAS XMLA endpoint (opt-in)
   'LOOM_ADLS_CONTAINER',            // default 'loom'; derived when unset
   'LOOM_AML_SCHEDULE_ENVIRONMENT',  // AML curated env name (code default)
+  'LOOM_AML_SERVERLESS_VMSIZE',     // AML serverless job VM size (code default Standard_DS3_v2)
   'LOOM_AML_SPARK_INSTANCE_TYPE',   // AML spark sizing (code default)
   'LOOM_AML_SPARK_RUNTIME',         // AML spark runtime version (code default)
   'LOOM_AML_WORKSPACE_NAME',        // derived from Foundry hub
+  'LOOM_APPS_KEY_VAULT_URI',        // opt-in KV uri for Loom Apps secretRef env resolution; falls back to LOOM_KEY_VAULT_URI (loom-apps-client)
   'LOOM_AOAI_CLIENT_V2',            // opt-in AOAI client switch
   // Model-strategy M4 — OPT-IN APIM AI-gateway routing. Emitted by admin-plane/main.bicep
   // (default OFF/direct), and read via an injected `env` param in aoai-apim-gateway.ts
