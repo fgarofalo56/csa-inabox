@@ -290,6 +290,27 @@ export async function getLivyStatement(
   return jsonOrThrow<LivyStatement>(r, `getLivyStatement(${poolName}/${sessionId}/${stmtId})`);
 }
 
+/**
+ * Cancel a running Livy statement — the backing for the notebook cell "Stop"
+ * control (a structured-streaming cell with awaitTermination() otherwise runs
+ * forever and the cell shows "running" indefinitely).
+ *   POST {livyBase(pool)}/sessions/{id}/statements/{stmtId}/cancel
+ * Learn: https://learn.microsoft.com/rest/api/synapse/data-plane/spark-session/cancel-spark-statement
+ */
+export async function cancelLivyStatement(
+  poolName: string,
+  sessionId: number,
+  stmtId: number,
+): Promise<void> {
+  const r = await callDev(`${livyBase(poolName)}/sessions/${sessionId}/statements/${stmtId}/cancel`, {
+    method: 'POST',
+  });
+  if (!r.ok) {
+    const text = await r.text().catch(() => '');
+    throw new Error(`cancelLivyStatement(${poolName}/${sessionId}/${stmtId}) failed ${r.status}: ${text.slice(0, 200)}`);
+  }
+}
+
 interface LivyStatementsResponse {
   from?: number;
   total?: number;

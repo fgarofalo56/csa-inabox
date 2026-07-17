@@ -24,6 +24,46 @@ import { buildLoomDisplay, enrichChartRecs } from '@/lib/notebook/display-stats'
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+/**
+ * DELETE /api/items/notebook/[id]/runs/[runId]?workspaceId=...
+ *   Stop an in-flight run — the backing for the cell "Stop" control. A
+ *   structured-streaming cell (writeStream + awaitTermination) otherwise runs
+ *   forever and the UI shows "running" indefinitely (operator report).
+ *
+ *   spark:<pool>:<sessionId>[:<statementId>]
+ *     → statementId present: cancel that Livy statement (session survives, so
+ *       the next cell run reuses the warm session).
+ *     → no statement yet (still 'starting'): nothing to cancel; report ok so
+ *       the client clears its polling state.
+ *   databricks:/aml-ci: not yet supported — honest 501 naming the gap.
+ */
+export async function DELETE(req: NextRequest, ctx: { params: Promise<{ id: string; runId: string }> }) {
+  const s = getSession();
+  if (!s) return apiError('unauthenticated', 401);
+  const workspaceId = req.nextUrl.searchParams.get('workspaceId');
+  if (!workspaceId) return apiError('workspaceId required', 400);
+  if (!(await assertOwner(workspaceId, s.claims.oid))) return apiError('notebook not found', 404);
+
+  const runId = decodeURIComponent((await ctx.params).runId);
+  if (runId.startsWith('spark:')) {
+    const [, pool, sessionIdStr, statementIdStr] = runId.split(':');
+    const sessionId = Number(sessionIdStr);
+    if (!pool || !Number.isFinite(sessionId)) return apiError('malformed runId', 400);
+    if (!statementIdStr) return NextResponse.json({ ok: true, cancelled: false, note: 'no statement submitted yet' });
+    try {
+      const { cancelLivyStatement } = await import('@/lib/azure/synapse-livy-client');
+      await cancelLivyStatement(pool, sessionId, Number(statementIdStr));
+      return NextResponse.json({ ok: true, cancelled: true });
+    } catch (e) {
+      return apiError(`cancel failed: ${(e as Error)?.message || e}`, 502);
+    }
+  }
+  return NextResponse.json(
+    { ok: false, error: `Stop is not yet supported for this backend (${runId.split(':')[0]}). The run continues server-side.` },
+    { status: 501 },
+  );
+}
+
 
 
 interface RunRecord {
