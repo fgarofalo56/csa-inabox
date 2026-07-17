@@ -26,7 +26,7 @@ import { clientFetch } from '@/lib/client-fetch';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Subtitle2, Body1, Caption1, Badge, Button, Spinner, Tree, TreeItem,
-  TreeItemLayout, Tooltip, Input,
+  TreeItemLayout, Tooltip, Input, Field, Select,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   MessageBar, MessageBarBody, MessageBarTitle,
   Dialog, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions, DialogTrigger,
@@ -129,9 +129,14 @@ const bt = (id: string) => `\`${id.replace(/`/g, '``')}\``;
  * ShareExplorerPanel — the inner content. Given a catalog name (the mounted
  * share) and the workspace host, browse + query it.
  */
-export function ShareExplorerPanel({ catalog, host }: { catalog: string; host: string | null }) {
+export function ShareExplorerPanel({ catalog, host, providerName, shareName }: {
+  catalog: string; host: string | null;
+  /** When set (mounted-share coordinates), the selected table gains "Create lakehouse shortcut". */
+  providerName?: string; shareName?: string;
+}) {
   const s = useStyles();
 
+  const [scOpen, setScOpen] = useState(false);
   const [schemas, setSchemas] = useState<string[] | null>(null);
   const [browseErr, setBrowseErr] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Record<string, { tables: string[] | null; err?: string }>>({});
@@ -321,6 +326,23 @@ export function ShareExplorerPanel({ catalog, host }: { catalog: string; host: s
                   Copy SQL
                 </Button>
               </Tooltip>
+              {providerName && shareName && (
+                <Tooltip content="Register the selected shared table in one of your lakehouses — reuses the provider credential stored when the share was added" relationship="label">
+                  <Button appearance="subtle" disabled={!selected} onClick={() => setScOpen(true)}>
+                    Create lakehouse shortcut
+                  </Button>
+                </Tooltip>
+              )}
+              {providerName && shareName && selected && (
+                <ShareShortcutDialog
+                  open={scOpen}
+                  onClose={() => setScOpen(false)}
+                  providerName={providerName}
+                  shareName={shareName}
+                  schema={selected.schema}
+                  table={selected.table}
+                />
+              )}
               <Button
                 appearance="primary" icon={running ? <Spinner size="tiny" /> : <Play20Regular />}
                 disabled={running || !sql.trim()}
@@ -444,8 +466,12 @@ export function ShareExplorerPanel({ catalog, host }: { catalog: string; host: s
  * full experience scoped to a single mounted catalog.
  */
 export function ShareExplorerDialog({
-  open, setOpen, catalog, host,
-}: { open: boolean; setOpen: (b: boolean) => void; catalog: string | null; host: string | null }) {
+  open, setOpen, catalog, host, providerName, shareName,
+}: {
+  open: boolean; setOpen: (b: boolean) => void; catalog: string | null; host: string | null;
+  /** Provider + share coordinates of the mounted catalog — enable "Create lakehouse shortcut" when present. */
+  providerName?: string; shareName?: string;
+}) {
   return (
     <Dialog open={open} onOpenChange={(_, d) => setOpen(d.open)}>
       <DialogSurface style={{ maxWidth: '1100px', width: '92vw' }}>
@@ -453,13 +479,130 @@ export function ShareExplorerDialog({
           <DialogTitle>Explore &amp; query — {catalog}</DialogTitle>
           <DialogContent>
             {catalog
-              ? <ShareExplorerPanel catalog={catalog} host={host} />
+              ? <ShareExplorerPanel catalog={catalog} host={host} providerName={providerName} shareName={shareName} />
               : <Caption1>No catalog selected.</Caption1>}
           </DialogContent>
           <DialogActions>
             <DialogTrigger disableButtonEnhancement>
               <Button appearance="secondary">Close</Button>
             </DialogTrigger>
+          </DialogActions>
+        </DialogBody>
+      </DialogSurface>
+    </Dialog>
+  );
+}
+
+/**
+ * ShareShortcutDialog — register a shared table as a Tables shortcut in one of
+ * the user's lakehouses. targetUri = delta-sharing://<share>/<schema>/<table>;
+ * credentialRef reuses the provider activation credential stored at add time
+ * (KV secret loom-dsp-<provider>) so nothing is re-pasted. The shortcuts route
+ * validates the credential against the share server and (with Databricks
+ * configured) registers a real delta_sharing UC table; otherwise it answers
+ * with the honest engine gate, which is surfaced verbatim.
+ */
+function ShareShortcutDialog({ open, onClose, providerName, shareName, schema, table }: {
+  open: boolean; onClose: () => void;
+  providerName: string; shareName: string; schema: string; table: string;
+}) {
+  const [wsList, setWsList] = useState<{ id: string; displayName: string }[] | null>(null);
+  const [wsId, setWsId] = useState('');
+  const [lhList, setLhList] = useState<{ id: string; displayName: string }[] | null>(null);
+  const [lhId, setLhId] = useState('');
+  const [name, setName] = useState(table);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [done, setDone] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    setErr(null); setDone(null); setName(table);
+    clientFetch('/api/workspaces').then((r) => r.json()).then((d: any) => {
+      const list = (Array.isArray(d) ? d : (d?.workspaces || [])).map((w: any) => ({ id: w.id, displayName: w.displayName || w.name || w.id }));
+      setWsList(list);
+      if (list.length) setWsId(list[0].id);
+    }).catch((e) => { setErr(String(e?.message || e)); setWsList([]); });
+  }, [open, table]);
+
+  useEffect(() => {
+    if (!open || !wsId) return;
+    setLhList(null); setLhId('');
+    clientFetch(`/api/workspaces/${encodeURIComponent(wsId)}/items`).then((r) => r.json()).then((d: any) => {
+      const items = (Array.isArray(d) ? d : (d?.items || []))
+        .filter((it: any) => it.itemType === 'lakehouse')
+        .map((it: any) => ({ id: it.id, displayName: it.displayName || it.id }));
+      setLhList(items);
+      if (items.length) setLhId(items[0].id);
+    }).catch(() => setLhList([]));
+  }, [open, wsId]);
+
+  const create = useCallback(async () => {
+    if (!lhId) return;
+    setBusy(true); setErr(null); setDone(null);
+    try {
+      const r = await clientFetch('/api/lakehouse/shortcuts', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          lakehouseId: lhId,
+          name: (name.trim() || table).replace(/[^A-Za-z0-9 _.-]/g, '_'),
+          kind: 'tables',
+          targetType: 'delta_sharing',
+          targetUri: `delta-sharing://${shareName}/${schema}/${table}`,
+          credentialRef: { kind: 'deltaSharing', keyVaultSecret: `loom-dsp-${providerName}` },
+          format: 'delta',
+        }),
+      });
+      const j = await r.json().catch(() => null);
+      if (!j?.ok) { setErr(j?.hint || j?.error || `HTTP ${r.status}`); return; }
+      setDone(`Shortcut "${j.data?.name || name}" created — the shared table now appears under the lakehouse's Tables.`);
+    } catch (e: any) {
+      setErr(String(e?.message || e));
+    } finally {
+      setBusy(false);
+    }
+  }, [lhId, name, providerName, shareName, schema, table]);
+
+  return (
+    <Dialog open={open} onOpenChange={(_, d) => { if (!d.open) onClose(); }}>
+      <DialogSurface>
+        <DialogBody>
+          <DialogTitle>Shortcut “{schema}.{table}” into a lakehouse</DialogTitle>
+          <DialogContent>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
+              <Caption1>
+                Registers the shared table as a Tables shortcut — live, no copy. Reuses the credential stored
+                when provider “{providerName}” was added.
+              </Caption1>
+              {err && <MessageBar intent="error"><MessageBarBody>{err}</MessageBarBody></MessageBar>}
+              {done && <MessageBar intent="success"><MessageBarBody>{done}</MessageBarBody></MessageBar>}
+              <Field label="Workspace" required>
+                {wsList === null ? <Spinner size="tiny" /> : (
+                  <Select value={wsId} onChange={(_, d) => setWsId(d.value)}>
+                    {wsList.map((w) => <option key={w.id} value={w.id}>{w.displayName}</option>)}
+                  </Select>
+                )}
+              </Field>
+              <Field label="Lakehouse" required>
+                {lhList === null ? <Spinner size="tiny" /> : lhList.length === 0 ? (
+                  <Caption1>No lakehouse in this workspace — pick another workspace or create a lakehouse first.</Caption1>
+                ) : (
+                  <Select value={lhId} onChange={(_, d) => setLhId(d.value)}>
+                    {lhList.map((l) => <option key={l.id} value={l.id}>{l.displayName}</option>)}
+                  </Select>
+                )}
+              </Field>
+              <Field label="Shortcut name" required>
+                <Input value={name} onChange={(_, d) => setName(d.value)} />
+              </Field>
+            </div>
+          </DialogContent>
+          <DialogActions>
+            <Button appearance="secondary" onClick={onClose}>{done ? 'Close' : 'Cancel'}</Button>
+            <Button appearance="primary" disabled={busy || !lhId || !name.trim() || !!done} icon={busy ? <Spinner size="tiny" /> : undefined} onClick={() => { void create(); }}>
+              {busy ? 'Creating…' : 'Create shortcut'}
+            </Button>
           </DialogActions>
         </DialogBody>
       </DialogSurface>
