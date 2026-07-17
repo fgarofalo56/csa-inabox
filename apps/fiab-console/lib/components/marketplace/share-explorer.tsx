@@ -555,7 +555,16 @@ function ShareShortcutDialog({ open, onClose, providerName, shareName, schema, t
         }),
       });
       const j = await r.json().catch(() => null);
-      if (!j?.ok) { setErr(j?.hint || j?.error || `HTTP ${r.status}`); return; }
+      if (!j?.ok) {
+        const raw = j?.hint || j?.error || `HTTP ${r.status}`;
+        // Providers added before credential-storing existed (#2146) have no
+        // loom-dsp-* secret — turn the KV 404 into the exact remediation
+        // instead of a raw SecretNotFound blob (operator report 2026-07-17).
+        setErr(/SecretNotFound|was not found in this key vault/i.test(String(raw))
+          ? `No stored credential for provider “${providerName}” — it was added before Loom started storing share credentials. Fix: Data shares → Add provider → re-add “${providerName}” with the same activation file (this stores the credential), then retry this shortcut.`
+          : String(raw));
+        return;
+      }
       setDone(`Shortcut "${j.data?.name || name}" created — the shared table now appears under the lakehouse's Tables.`);
     } catch (e: any) {
       setErr(String(e?.message || e));
