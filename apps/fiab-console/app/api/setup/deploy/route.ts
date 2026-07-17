@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { enforceCapability } from '@/lib/auth/feature-gate';
+import { getScriptContext, fillScriptPlaceholders } from '@/lib/azure/script-context';
 import { getArmTokenPreferUser, type ArmTokenIdentity } from '@/lib/auth/obo';
 import { swrAwait } from '@/lib/azure/cross-sub-cache';
 import {
@@ -763,15 +764,19 @@ async function handleDeploy(req: NextRequest): Promise<NextResponse> {
         // The signed-in user / orchestrator identity lacks rights — surface honestly.
         // For dlz-attach the most common gate is the orchestrator identity not
         // holding Contributor on the NEW subscription; surface the exact command.
+        const sctx = await getScriptContext();
         const attachCmd =
           topology === 'dlz-attach' && body.targetSubscriptionId
-            ? '\n\nGrant the orchestrator identity Contributor on the new subscription:\n' +
+            ? fillScriptPlaceholders(
+              '\n\nGrant the orchestrator identity Contributor on the new subscription:\n' +
               (isGov ? 'az cloud set --name AzureUSGovernment\n' : '') +
               'az role assignment create \\\n' +
               '  --assignee-object-id <orchestrator-principal-object-id> \\\n' +
               '  --assignee-principal-type ServicePrincipal \\\n' +
               '  --role Contributor \\\n' +
-              `  --scope /subscriptions/${body.targetSubscriptionId}`
+              `  --scope /subscriptions/${body.targetSubscriptionId}`,
+              sctx,
+            )
             : ' Grant the orchestrator identity Contributor on each target subscription ' +
               '(setup-orchestrator-rbac.bicep), or confirm your account has rights to deploy.';
         return NextResponse.json(
@@ -942,7 +947,8 @@ async function handleDeploy(req: NextRequest): Promise<NextResponse> {
   // provisioned; this only governs the Embed codes / Org visuals grant + env.
   const orgVisualsParamLines =
     body.loomOrgVisualsEnabled === false ? ['  -p loomOrgVisualsEnabled=false \\'] : [];
-  const commands =
+  const cmdCtx = await getScriptContext();
+  const commandsRaw =
     topology === 'dlz-attach'
       ? [
           `az login${isGov ? ' --tenant <your-gov-tenant>' : ''}`,
@@ -983,6 +989,10 @@ async function handleDeploy(req: NextRequest): Promise<NextResponse> {
           dlzParamLine,
           `bash scripts/csa-loom/post-deploy-bootstrap.sh`,
         ];
+  // Every surfaced command is pre-filled with the deployment's REAL values —
+  // no `<placeholder>` left for the user (operator rule 2026-07-17). The
+  // orchestrator principal id etc. come from the resolved script context.
+  const commands = commandsRaw.map((c) => fillScriptPlaceholders(c, cmdCtx));
 
   return NextResponse.json(
     {

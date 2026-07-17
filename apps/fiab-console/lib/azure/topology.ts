@@ -320,6 +320,9 @@ const CONTRIBUTOR_ROLE_ID = 'b24988ac-6180-42a0-ab88-20f7382dd24c';
  */
 export function buildItemCreateGate(target: DeployTarget, reason?: string): DeployTargetGate {
   const principal = uamiClientId || '<uami-client-id>';
+  // Pre-fill the object id from env so the script is copy-paste ready (operator
+  // rule 2026-07-17: no placeholders). Synchronous env read — no await here.
+  const principalObjectId = (process.env.LOOM_UAMI_PRINCIPAL_ID || '').trim() || '<uami-object-id>';
   const scope = `/subscriptions/${target.subscriptionId}/resourceGroups/${target.resourceGroup}`;
   const missingGrant =
     `Console UAMI (clientId ${principal}) needs role "Contributor" ` +
@@ -329,10 +332,10 @@ export function buildItemCreateGate(target: DeployTarget, reason?: string): Depl
     `(the dlzItemCreateRbac loop in main.bicep).`;
   const fixScript = [
     '# CSA Loom — grant the Console UAMI Contributor on the domain DLZ resource group so item-create ARM PUTs succeed.',
-    '# Run in Azure Cloud Shell (PowerShell) or local pwsh with the Az CLI. <uami-object-id> is the UAMI principalId.',
+    '# Run in Azure Cloud Shell (PowerShell) or local pwsh with the Az CLI.',
     `az account set --subscription "${target.subscriptionId}"`,
     `az role assignment create \\`,
-    `  --assignee-object-id <uami-object-id> --assignee-principal-type ServicePrincipal \\`,
+    `  --assignee-object-id ${principalObjectId} --assignee-principal-type ServicePrincipal \\`,
     `  --role "${CONTRIBUTOR_ROLE_ID}" \\`,
     `  --scope "${scope}"`,
   ].join('\n');
