@@ -191,7 +191,7 @@ function rbacAdminRemediation(): string {
   return (
     `Console UAMI (clientId=${who}) lacks Microsoft.Authorization/roleAssignments/write on ${rg}. ` +
     `Workspace membership is recorded in Cosmos but Azure RBAC is NOT enforced. To fix, run: ` +
-    `az role assignment create --role "Role Based Access Control Administrator" --assignee <uami-principal-id> ` +
+    `az role assignment create --role "Role Based Access Control Administrator" --assignee ${who} ` +
     `--scope /subscriptions/${sub}/resourceGroups/${rg} ` +
     `--condition-version 2.0 (constrained to Contributor + Reader) — or re-run Bicep with skipRoleGrants=false ` +
     `(module workspace-rbac.bicep).`
