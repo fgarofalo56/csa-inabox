@@ -291,6 +291,19 @@ function isCiStopped(state?: string): boolean {
 }
 
 /**
+ * Heuristic: does this cell run a Structured Streaming query that never
+ * completes on its own? (writeStream/readStream + awaitTermination — but NOT
+ * trigger(availableNow=...), which is a batch-style run that finishes.) Used to
+ * surface "Streaming (live)" instead of an indefinite "running", and to treat
+ * the poll-window end as expected rather than a timeout error.
+ */
+function looksStreaming(source: string): boolean {
+  if (/availableNow\s*=\s*True/i.test(source)) return false;
+  return /\bawaitTermination\s*\(/.test(source)
+    || (/\bwriteStream\b/.test(source) && !/\btrigger\s*\(\s*once\s*=\s*True/i.test(source));
+}
+
+/**
  * Idle auto-shutdown TTL options (ISO-8601 duration → label) offered in the
  * Configure / New Compute Instance dialogs. Dropdown only — no freeform input
  * (loom_no_freeform_config). Backs both the create body and the
@@ -2042,11 +2055,25 @@ export function NotebookEditor({ item, id }: Props) {
 
   // ---- Stop: client-side interrupt registry checked by the poll loops ----
   const cancelRef = useRef<Set<string>>(new Set());
+  // Live runId per running cell so Stop can cancel the SERVER-side statement,
+  // not just abandon the client poll. Without this a stopped streaming cell
+  // (writeStream + awaitTermination) kept running on the Spark pool forever —
+  // the root of the "stuck on running" report AND the pool-hog incidents.
+  const cellRunIdRef = useRef<Map<string, string>>(new Map());
   const stopCell = useCallback((id: string) => {
     cancelRef.current.add(id);
+    // Best-effort server-side cancel (Livy statement cancel via DELETE /runs/[runId]).
+    const runId = cellRunIdRef.current.get(id);
+    if (runId && workspaceId && notebookId) {
+      void clientFetch(
+        `/api/items/notebook/${encodeURIComponent(notebookId)}/runs/${encodeURIComponent(runId)}?workspaceId=${encodeURIComponent(workspaceId)}`,
+        { method: 'DELETE' },
+      ).catch(() => { /* poll abandonment above is the fallback */ });
+    }
+    cellRunIdRef.current.delete(id);
     patchCell(id, { output: { status: 'error', ename: 'Cancelled', evalue: 'Execution stopped by user.' } });
-    setRunMsg(`Cell ${id.slice(0, 6)} stopped.`);
-  }, [patchCell]);
+    setRunMsg(`Cell ${id.slice(0, 6)} stopped${runId ? ' — server-side statement cancelled' : ''}.`);
+  }, [patchCell, workspaceId, notebookId]);
 
   // ---- Split / merge (Edit menu) ----
   // Split a code cell into two at its midpoint (no Monaco cursor coupling):
@@ -2131,6 +2158,7 @@ export function NotebookEditor({ item, id }: Props) {
         return;
       }
       let runId: string = j.runId;
+      cellRunIdRef.current.set(cell.id, runId);
       const start = Date.now();
       const MAX_MS = 15 * 60 * 1000;
       let pollInterval = 2000;
@@ -2140,7 +2168,7 @@ export function NotebookEditor({ item, id }: Props) {
         const pollRes = await clientFetch(`/api/items/notebook/${encodeURIComponent(notebookId)}/execute-spark?workspaceId=${encodeURIComponent(workspaceId)}&runId=${encodeURIComponent(runId)}`);
         const p = await pollRes.json();
         if (!p.ok) { patchCell(cell.id, { output: { status: 'error', ename: 'PollError', evalue: p.error || String(pollRes.status) } }); break; }
-        if (p.runId && p.runId !== runId) runId = p.runId;
+        if (p.runId && p.runId !== runId) { runId = p.runId; cellRunIdRef.current.set(cell.id, runId); }
         const phaseHint = p.phase === 'session-starting' ? ' · Spark pool warming (~60-90s)' : p.phase ? ` · ${p.phase}` : '';
         const elapsed = Math.floor((Date.now() - start) / 1000);
         setRunMsg(`%%pyspark ${cell.id.slice(0, 6)}: ${p.status}${phaseHint} · ${elapsed}s · ${p.backend || ''}`);
@@ -2169,6 +2197,8 @@ export function NotebookEditor({ item, id }: Props) {
       }
     } catch (e: any) {
       patchCell(cell.id, { output: { status: 'error', ename: 'Exception', evalue: e?.message || String(e) } });
+    } finally {
+      cellRunIdRef.current.delete(cell.id);
     }
   }, [workspaceId, notebookId, patchCell]);
 
@@ -2236,6 +2266,8 @@ export function NotebookEditor({ item, id }: Props) {
       }
       if (j.session) setSessionReceipt(j.session);
       let runId: string = j.runId;
+      cellRunIdRef.current.set(cell.id, runId);
+      const streaming = looksStreaming(cell.source);
       const start = Date.now();
       const MAX_MS = 12 * 60 * 1000; // 12 min to allow for slow cold-starts
       let pollInterval = 2000; // 2s during session-starting, 1s during statement
@@ -2260,12 +2292,15 @@ export function NotebookEditor({ item, id }: Props) {
           settled = true;
           break;
         }
-        if (p.runId && p.runId !== runId) runId = p.runId;
+        if (p.runId && p.runId !== runId) { runId = p.runId; cellRunIdRef.current.set(cell.id, runId); }
         const elapsed = Math.floor((Date.now() - start) / 1000);
         const phaseHint = p.phase === 'session-starting'
           ? ` · cold-start: Spark pool warming up (~60-90s on first cell)`
           : p.phase ? ` · ${p.phase}` : '';
-        setRunMsg(`Cell ${cell.id.slice(0, 6)}: ${p.status}${phaseHint} · ${elapsed}s`);
+        // A streaming cell legitimately never completes — say so instead of
+        // reading as a hung "running" (ADF/Databricks show the same live state).
+        const streamHint = streaming && p.phase === 'statement-running' ? ' · Streaming (live) — runs until stopped; use Stop to end it' : '';
+        setRunMsg(`Cell ${cell.id.slice(0, 6)}: ${p.status}${phaseHint}${streamHint} · ${elapsed}s`);
         // R4-NB-4 — surface real-time Spark progress under the cell. `p.progress`
         // arrives once the shared poll surface (R4-SYN-5) lands; until then the
         // RunProgress bar stays honest-indeterminate off the phase + elapsed.
@@ -2306,17 +2341,34 @@ export function NotebookEditor({ item, id }: Props) {
         }
       }
       if (!settled) {
-        // 12-min timeout with no terminal result — honest error, never a silent
-        // spinner (R3 #3).
         const mins = Math.round(MAX_MS / 60000);
-        patchCell(cell.id, { output: { status: 'error', ename: 'Timeout', evalue: `Run timed out after ${mins}m — the session may be starting slowly or the statement hung. Retry or Configure session.` } });
-        setSessionStatus('Error');
+        if (streaming) {
+          // A streaming query running past the poll window is EXPECTED, not a
+          // fault — stop polling honestly and leave the query live with a clear
+          // note + the Stop affordance (the statement keeps running server-side).
+          patchCell(cell.id, {
+            output: {
+              status: 'ok',
+              textPlain: `Streaming query is live (polled for ${mins}m, still running server-side).\n`
+                + `It processes new data continuously until stopped — click the cell's Stop button to cancel it,\n`
+                + `or use trigger(availableNow=True) for a run that completes on its own.`,
+              executedAtUtc: new Date().toISOString(),
+            },
+          });
+          setSessionStatus('Idle');
+        } else {
+          // 12-min timeout with no terminal result — honest error, never a silent
+          // spinner (R3 #3).
+          patchCell(cell.id, { output: { status: 'error', ename: 'Timeout', evalue: `Run timed out after ${mins}m — the session may be starting slowly or the statement hung. Retry or Configure session.` } });
+          setSessionStatus('Error');
+        }
       }
       loadJobs(workspaceId, notebookId);
     } catch (e: any) {
       patchCell(cell.id, { output: { status: 'error', ename: 'Exception', evalue: e?.message || String(e) } });
       setSessionStatus('Error');
     } finally {
+      cellRunIdRef.current.delete(cell.id);
       clearCellProgress(cell.id); setRunPhase(null); // R4-NB-4 cleanup
     }
   }, [workspaceId, notebookId, computeId, defaultLang, sessionConfigBody, pollRunStatus, patchCell, loadJobs, runSparkCell, clearCellProgress, cellDurationMs]);
