@@ -261,6 +261,17 @@ export async function getLivySessionLog(
   size = 200,
 ): Promise<{ from: number; total: number; log: string[] }> {
   const r = await callDev(`${livyBase(poolName)}/sessions/${sessionId}/log?from=${from}&size=${size}`);
+  if (r.status === 404) {
+    // Synapse's Livy-compat surface doesn't implement /log (live 404 receipt
+    // 2026-07-17: getLivySessionLog(loometl/36) 404 while statements on the
+    // same session worked). The detailed session read carries the same Livy
+    // log tail in its `log` array — slice it to honor the caller's window.
+    const rs = await callDev(`${livyBase(poolName)}/sessions/${sessionId}?detailed=true`);
+    const s = await jsonOrThrow<{ log?: string[] }>(rs, `getLivySession(${poolName}/${sessionId})`);
+    const all = Array.isArray(s.log) ? s.log : [];
+    const start = Math.max(0, Math.min(from, all.length));
+    return { from: start, total: all.length, log: all.slice(start, start + size) };
+  }
   const body = await jsonOrThrow<{ from?: number; total?: number; log?: string[] }>(r, `getLivySessionLog(${poolName}/${sessionId})`);
   return { from: body.from ?? from, total: body.total ?? 0, log: Array.isArray(body.log) ? body.log : [] };
 }
