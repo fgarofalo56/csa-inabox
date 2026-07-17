@@ -19,7 +19,7 @@
  * Escape hatch: LOOM_READ_WARMER_DISABLED=1.
  */
 
-import { buildScopedCacheKey, getOrComputeCached } from '@/lib/azure/query-result-cache';
+import { buildScopedCacheKey, getOrComputeCached, resolveBackendTtl } from '@/lib/azure/query-result-cache';
 
 const SETTLE_MS = 90_000;
 const WARM_INTERVAL_MS = Number(process.env.LOOM_READ_WARMER_INTERVAL_MS) || 10 * 60_000;
@@ -96,6 +96,62 @@ async function targets(): Promise<WarmTarget[]> {
       modelId: 'monitor',
       ttlMs: 3 * 60_000,
       produce: () => monitor.queryActivityFeed({ days: 30, limit: 200, includeSynapse: true, includeArmLog: false }),
+    },
+    ...(await chargebackTargets()),
+  ];
+}
+
+/**
+ * Chargeback warm targets (operator report 2026-07-17: the cross-subscription
+ * Cost Management aggregation exceeds the 25s inline budget under QPU throttle,
+ * so users kept landing on 202-"warming" — the cache only populated if someone
+ * waited out the background compute). Warming server-side means the first user
+ * click always finds a copy.
+ *
+ * The routes scope their keys AND modelId by tenantScopeId (= session tid) —
+ * every real signed-in user shares the AAD tenant id, which the server knows as
+ * AZURE_TENANT_ID. No tenant id → skip (keys would never match a real session).
+ */
+async function chargebackTargets(): Promise<WarmTarget[]> {
+  const tenantId = process.env.AZURE_TENANT_ID;
+  if (!tenantId) return [];
+  const timeframe = 'MonthToDate';
+  const [{ getChargebackModel }, { getDomainChargeback }, { loadOrSeedDomains }, { tenantSettingsContainer }] = await Promise.all([
+    import('@/lib/azure/cost-management-client'),
+    import('@/lib/azure/domain-chargeback'),
+    import('@/lib/azure/domain-registry'),
+    import('@/lib/azure/cosmos-client'),
+  ]);
+  return [
+    {
+      label: 'admin/capacity/chargeback MonthToDate',
+      key: buildScopedCacheKey('admin/capacity/chargeback', { tenantId, timeframe }),
+      modelId: tenantId,
+      ttlMs: resolveBackendTtl('costmgmt', 10 * 60_000),
+      produce: () => getChargebackModel({ timeframe }),
+    },
+    {
+      label: 'admin/chargeback MonthToDate',
+      key: buildScopedCacheKey('admin/chargeback', { tenantId, timeframe }),
+      modelId: tenantId,
+      ttlMs: resolveBackendTtl('costmgmt', 20 * 60_000),
+      // Mirrors the route's closure shape { data, taggingEnabled } exactly.
+      produce: async () => {
+        const [domainDoc, tagging] = await Promise.all([
+          loadOrSeedDomains(tenantId, 'system:read-warmer').catch(() => null),
+          (async () => {
+            try {
+              const c = await tenantSettingsContainer();
+              const { resource } = await c.item(tenantId, tenantId).read<{ settings?: Record<string, boolean> }>();
+              return resource?.settings?.['billing.chargebackTagging'] === true;
+            } catch { return false; }
+          })(),
+        ]);
+        const domainNames: Record<string, string> = {};
+        for (const d of domainDoc?.items || []) domainNames[d.id] = d.name;
+        const data = await getDomainChargeback({ timeframe, domainNames });
+        return { data, taggingEnabled: tagging };
+      },
     },
   ];
 }
