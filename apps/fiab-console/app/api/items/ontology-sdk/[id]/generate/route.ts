@@ -67,7 +67,12 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     .filter((a) => included.has(a.objectType))
     .map((a) => ({ name: a.name, objectType: a.objectType, kind: a.kind, params: a.params }));
 
-  const propertiesByType = deriveObjectProperties(classes, surface.bindings, actionTypes);
+  // FOUNDRY-W1: when the ontology was authored in the structured designer, use
+  // its REAL typed properties (surface.propertiesByType) verbatim; otherwise
+  // reverse-engineer string-typed props from class/binding/action names.
+  const propertiesByType = surface.propertiesByType
+    ? Object.fromEntries(classes.map((c) => [c.name, surface.propertiesByType![c.name] ?? []]))
+    : deriveObjectProperties(classes, surface.bindings, actionTypes);
   const input = { displayName: surface.displayName, classes, links, propertiesByType, actionTypes };
   const typescript = generateTypeScriptSdk(input);
   const python = generatePythonSdk(input);
