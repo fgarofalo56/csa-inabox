@@ -66,13 +66,17 @@ export async function GET(req: NextRequest) {
     cache: 'no-store',
   });
   if (res.status === 401 || res.status === 403) {
+    // Pre-fill the UAMI's own id so the fix runs verbatim (no <uami-objectid>
+    // placeholder — .claude/rules rule #70). az ad sp permission add --id takes
+    // the SP's appId (client id), which Loom always has as LOOM_UAMI_CLIENT_ID.
+    const uamiId = (process.env.LOOM_UAMI_CLIENT_ID || process.env.LOOM_UAMI_PRINCIPAL_ID || '').trim() || '<uami-objectid>';
     return NextResponse.json(
       {
         ok: false,
         error: `graph_${res.status}`,
         remediation: kind === 'group'
-          ? 'UAMI lacks Graph Group.Read.All permission. Run: az ad sp permission add --id <uami-objectid> --api 00000003-0000-0000-c000-000000000046 --api-permissions 5b567255-7703-4780-807c-7be8301ae99b=Role; then admin-consent.'
-          : 'UAMI lacks Graph User.Read.All permission. Run: az ad sp permission add --id <uami-objectid> --api 00000003-0000-0000-c000-000000000046 --api-permissions df021288-bdef-4463-88db-98f22de89214=Role; then admin-consent.',
+          ? `UAMI lacks Graph Group.Read.All permission. Run: az ad sp permission add --id ${uamiId} --api 00000003-0000-0000-c000-000000000046 --api-permissions 5b567255-7703-4780-807c-7be8301ae99b=Role; then admin-consent.`
+          : `UAMI lacks Graph User.Read.All permission. Run: az ad sp permission add --id ${uamiId} --api 00000003-0000-0000-c000-000000000046 --api-permissions df021288-bdef-4463-88db-98f22de89214=Role; then admin-consent.`,
       },
       { status: 503 },
     );

@@ -201,11 +201,13 @@ async function stepTelemetry(input: AttachIntegrationInput): Promise<Integration
     const code: string = body?.error?.code || body?.code || '';
     const message: string = body?.error?.message || body?.message || `HTTP ${res.status}`;
     if (res.status === 403 || /AuthorizationFailed/i.test(code)) {
+      const { getScriptContext } = await import('@/lib/azure/script-context');
+      const principal = input.principalId || (await getScriptContext()).consoleUamiPrincipalId;
       return {
         status: 'pending-grants',
         detail: 'The Console UAMI lacks Monitoring Contributor on the resource, so diagnostic settings could not be set.',
         grantScript:
-          `az role assignment create --assignee-object-id ${input.principalId || '<console-uami-principal-id>'} ` +
+          `az role assignment create --assignee-object-id ${principal} ` +
           `--assignee-principal-type ServicePrincipal --role "Monitoring Contributor" --scope "${scope}"`,
         checkedAt: now(),
       };

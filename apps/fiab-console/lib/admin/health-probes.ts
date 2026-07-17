@@ -159,11 +159,22 @@ async function probeKusto(h: ProbeHelpers): Promise<CheckResult> {
       redeploy: true,
       portalSteps: denied ? grantPortalSteps(h, 'the ADX cluster → Permissions', 'AllDatabasesViewer') : undefined,
       fixScript: denied
-        ? [
-            '# Grant the Console UAMI AllDatabasesViewer on the ADX cluster.',
-            `az account set --subscription "${h.ctx.sub}"`,
-            'az kusto cluster-principal-assignment create --cluster-name "<adx-cluster>" --resource-group "<rg>" --principal-assignment-name "loom-console-viewer" --principal-id "<uami-principal-id>" --principal-type App --role AllDatabasesViewer',
-          ].join('\n')
+        ? (() => {
+            // Pre-fill the cluster name, RG, and principal id from Loom's own
+            // env so the admin runs it verbatim (no <…> placeholders — rule #70).
+            const clusterName = env('LOOM_KUSTO_CLUSTER_NAME')
+              || (env('LOOM_KUSTO_CLUSTER_URI').match(/https:\/\/([^.]+)\./)?.[1] ?? '')
+              || env('LOOM_ADX_CLUSTER')
+              || '<adx-cluster>';
+            const kustoRg = env('LOOM_KUSTO_RG') || h.ctx.dlzRg || '<rg>';
+            const kustoSub = env('LOOM_KUSTO_SUB') || h.ctx.sub;
+            return [
+              '# Grant the Console UAMI AllDatabasesViewer on the ADX cluster.',
+              `az account set --subscription "${kustoSub}"`,
+              `$pid = az ad sp show --id "${h.ctx.uamiClientId}" --query id -o tsv`,
+              `az kusto cluster-principal-assignment create --cluster-name "${clusterName}" --resource-group "${kustoRg}" --principal-assignment-name "loom-console-viewer" --principal-id $pid --principal-type App --role AllDatabasesViewer`,
+            ].join('\n');
+          })()
         : undefined,
     };
   }

@@ -4053,6 +4053,11 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // read LOOM_MSAL_CLIENT_SECRET / LOOM_DATAVERSE_CLIENT_SECRET instead.
             // (SESSION_SECRET is now set unconditionally in the base env above.)
             { name: 'LOOM_UAMI_CLIENT_ID', value: identity.outputs.uamiConsoleClientId }
+            // Orchestrator UAMI principal (object) id — the identity a DLZ-attach
+            // deploy grants Contributor to. Emitted so script-context.ts can
+            // pre-fill the `--assignee-object-id` on every remediation script
+            // (no <orchestrator-principal-object-id> placeholder — .claude rule #70).
+            { name: 'LOOM_ORCHESTRATOR_PRINCIPAL_ID', value: identity.outputs.uamiOrchestratorPrincipalId }
             // Console UAMI principal (object) id — used by the F16 Azure
             // Connections role check (azure-connections-client) to verify the
             // UAMI holds Storage Blob Data Contributor / Log Analytics
@@ -4285,6 +4290,8 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_DAB_PREVIEW_URL',        value: (dabRuntimeEnabled && !empty(dabSqlServerFqdn)) ? dabRuntime!.outputs.dabPreviewUrl : '' }
           ] : [
             { name: 'LOOM_UAMI_CLIENT_ID', value: identity.outputs.uamiConsoleClientId }
+            { name: 'LOOM_UAMI_PRINCIPAL_ID', value: identity.outputs.uamiConsolePrincipalId }
+            { name: 'LOOM_ORCHESTRATOR_PRINCIPAL_ID', value: identity.outputs.uamiOrchestratorPrincipalId }
             { name: 'LOOM_GRAPH_USERS_ENABLED', value: 'true' }
             // OneLake Security (F7) — Azure-native folder/table ACL roles for
             // lakehouse / mirrored items. The ADLS-ACL backend is enabled when
