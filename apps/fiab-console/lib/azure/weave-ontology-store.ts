@@ -137,6 +137,33 @@ function cypherScalar(v: unknown): string {
  * `search_path` is set on the same connection so `cypher` + the graph schema
  * resolve without qualification inside the statement.
  */
+/**
+ * One-time (self-healing) AGE bootstrap: enable the extension and create the
+ * named graph. Idempotent — CREATE EXTENSION IF NOT EXISTS + a create_graph
+ * guarded by a catalog check. Runs on the data plane the first time a cypher
+ * query hits a server whose AGE bootstrap never ran (FOUNDRY-W1 live finding
+ * 2026-07-17: the Weave PG server was provisioned but the post-deploy
+ * bootstrap-weave-pg.sh had not executed, so object write-back 502'd with
+ * `schema "ag_catalog" does not exist`). Requires the Console PG principal to
+ * hold CREATE on the database + AGE in azure.extensions — if it doesn't, the
+ * CREATE EXTENSION error propagates and the caller surfaces the honest gate.
+ */
+async function ensureAgeGraph(fqdn: string, db: string, graph: string): Promise<void> {
+  const sql =
+    'CREATE EXTENSION IF NOT EXISTS age CASCADE; ' +
+    'LOAD \'age\'; ' +
+    'SET search_path = ag_catalog, "$user", public; ' +
+    `SELECT create_graph('${graph}') WHERE NOT EXISTS ` +
+    `(SELECT 1 FROM ag_catalog.ag_graph WHERE name = '${graph}');`;
+  await executePostgresQuery(fqdn, db, sql);
+}
+
+/** Exported for unit testing the self-heal trigger. */
+export function isAgeNotBootstrapped(e: unknown): boolean {
+  const msg = (e as Error)?.message || String(e);
+  return /ag_catalog.*does not exist|schema "ag_catalog"|function .*cypher.* does not exist|graph .* does not exist/i.test(msg);
+}
+
 export async function runCypher(
   statement: string,
   columns: Array<{ name: string; type?: string }>,
@@ -154,7 +181,14 @@ export async function runCypher(
   const sql =
     'SET search_path = ag_catalog, "$user", public; ' +
     `SELECT * FROM ag_catalog.cypher('${graph}', $weave$ ${statement} $weave$) AS (${colDefs});`;
-  return executePostgresQuery(fqdn, db, sql);
+  try {
+    return await executePostgresQuery(fqdn, db, sql);
+  } catch (e) {
+    // Self-heal a never-bootstrapped server exactly once, then retry.
+    if (!isAgeNotBootstrapped(e)) throw e;
+    await ensureAgeGraph(fqdn, db, graph);
+    return executePostgresQuery(fqdn, db, sql);
+  }
 }
 
 // ============================================================
