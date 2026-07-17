@@ -722,9 +722,17 @@ const PipelineCanvasInner = forwardRef<CanvasHandle, PipelineCanvasProps>(functi
         edgeTypes={edgeTypes}
         onNodesChange={handleNodesChange}
         onConnect={handleConnect}
-        onNodeClick={(_, n) => onSelect(n.id)}
+        onNodeClick={(_, n) => {
+          onSelect(n.id);
+          // Selecting a node rebuilds the node list (the `selected` flag flips),
+          // which blurs the just-clicked node DOM element back to <body> — after
+          // which the wrapper's onKeyDown (Delete/copy/paste/align) never fires.
+          // Refocus the STABLE wrapper (it is never re-keyed) so keyboard actions
+          // land, matching ADF/Fabric where a selected activity is Delete-able.
+          wrapRef.current?.focus({ preventScroll: true });
+        }}
         onNodeDoubleClick={handleNodeDoubleClick}
-        onPaneClick={() => onSelect(null)}
+        onPaneClick={() => { onSelect(null); wrapRef.current?.focus({ preventScroll: true }); }}
         onMove={(_, vp) => { setZoom(vp.zoom); onZoomChange?.(vp.zoom); }}
         connectionMode={ConnectionMode.Loose}
         snapToGrid={snapToGrid}
