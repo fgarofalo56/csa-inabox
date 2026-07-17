@@ -508,7 +508,13 @@ const useStyles = makeStyles({
     position: 'relative',
     display: 'flex',
     flexDirection: 'column',
-    overflow: 'hidden',
+    // NOT 'hidden': React Flow connection ports live just OUTSIDE the card edge
+    // (right:-6 / left:-6). `overflow:hidden` clips them, so they render neither
+    // visibly nor click-targetably — which reads to the user as "there's no way
+    // to connect nodes" (the ADF/Synapse on-success/-failure/-completion ports).
+    // The card's own rounded background/border still paint correctly under
+    // `visible` (overflow only affects children), and the rail/header self-round.
+    overflow: 'visible',
     borderRadius: tokens.borderRadiusLarge,
     background: tokens.colorNeutralBackground1,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
@@ -569,7 +575,10 @@ const useStyles = makeStyles({
     top: 0,
     bottom: 0,
     width: '6px',
-    borderRadius: tokens.borderRadiusSmall,
+    // Hug the card's rounded left corners now that root is overflow:visible, so
+    // the accent rail can't show a square poke past the card radius.
+    borderTopLeftRadius: tokens.borderRadiusLarge,
+    borderBottomLeftRadius: tokens.borderRadiusLarge,
     zIndex: 1,
   },
   // Header strip (gradient).

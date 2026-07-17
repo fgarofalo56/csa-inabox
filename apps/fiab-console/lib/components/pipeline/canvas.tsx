@@ -735,6 +735,9 @@ const PipelineCanvasInner = forwardRef<CanvasHandle, PipelineCanvasProps>(functi
         onPaneClick={() => { onSelect(null); wrapRef.current?.focus({ preventScroll: true }); }}
         onMove={(_, vp) => { setZoom(vp.zoom); onZoomChange?.(vp.zoom); }}
         connectionMode={ConnectionMode.Loose}
+        // Forgiving drop radius so dragging an on-success/-failure/-completion/
+        // -skip port near a target node snaps the connection (ADF/Synapse feel).
+        connectionRadius={34}
         snapToGrid={snapToGrid}
         snapGrid={[16, 16]}
         defaultEdgeOptions={{ type: 'loom' }}
