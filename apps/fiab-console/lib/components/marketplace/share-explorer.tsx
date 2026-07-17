@@ -105,6 +105,10 @@ function csvEscape(v: unknown): string {
   const str = typeof v === 'object' ? JSON.stringify(v) : String(v);
   return /[",\n\r]/.test(str) ? `"${str.replace(/"/g, '""')}"` : str;
 }
+/** Copy text to the clipboard (best-effort; silent on older browsers). */
+function copyText(text: string) {
+  try { void navigator.clipboard?.writeText(text); } catch { /* noop */ }
+}
 function downloadCsv(filename: string, columns: string[], rows: unknown[][]) {
   const csv = [
     columns.map(csvEscape).join(','),
@@ -302,7 +306,21 @@ export function ShareExplorerPanel({ catalog, host }: { catalog: string; host: s
           <div className={s.toolbar}>
             <Body1><b>SQL</b></Body1>
             <Caption1 className={s.hint}>Read-only — SELECT / SHOW / DESCRIBE</Caption1>
-            <div className={s.spacer}>
+            <div className={s.spacer} style={{ display: 'flex', gap: tokens.spacingHorizontalS }}>
+              <Tooltip content="Copy a PySpark cell that reads the selected table — paste into any notebook" relationship="label">
+                <Button
+                  appearance="subtle" icon={<Copy20Regular />}
+                  disabled={!selected}
+                  onClick={() => { if (selected) copyText(`# ${catalog}.${selected.schema}.${selected.table} (live Delta share)\ndf = spark.read.table("${catalog}.${selected.schema}.${selected.table}")\ndisplay(df)\n`); }}
+                >
+                  Copy Spark read
+                </Button>
+              </Tooltip>
+              <Tooltip content="Copy the current SQL to run elsewhere" relationship="label">
+                <Button appearance="subtle" icon={<Copy20Regular />} disabled={!sql.trim()} onClick={() => copyText(sql)}>
+                  Copy SQL
+                </Button>
+              </Tooltip>
               <Button
                 appearance="primary" icon={running ? <Spinner size="tiny" /> : <Play20Regular />}
                 disabled={running || !sql.trim()}
