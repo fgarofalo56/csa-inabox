@@ -42,6 +42,35 @@ import {
 const env = (k: string) => (process.env[k] || '').trim();
 const has = (k: string) => env(k).length > 0;
 const anyHas = (...ks: string[]) => ks.some(has);
+
+/**
+ * Build a full ARM resource id from the Loom env vars for a service, so the
+ * remediation `--scope` is pre-filled (no <…-resource-id> placeholder for the
+ * admin to hand-edit — .claude/rules rule #70). Returns the placeholder ONLY
+ * when Loom genuinely doesn't have the coordinates (honest gate, no fabrication).
+ */
+function armResourceId(
+  subKeys: string[], rgKeys: string[], nameKeys: string[], provider: string, placeholder: string,
+): string {
+  const first = (ks: string[]) => ks.map(env).find((v) => v.length > 0) || '';
+  const sub = first(subKeys), rg = first(rgKeys), name = first(nameKeys);
+  if (!sub || !rg || !name) return placeholder;
+  return `/subscriptions/${sub}/resourceGroups/${rg}/providers/${provider}/${name}`;
+}
+/** AOAI/Foundry Cognitive Services account resource id (or honest placeholder). */
+function aoaiResourceId(): string {
+  return armResourceId(
+    ['LOOM_AOAI_SUB', 'LOOM_SUBSCRIPTION_ID'], ['LOOM_AOAI_RG', 'LOOM_ADMIN_RG'],
+    ['LOOM_AOAI_ACCOUNT'], 'Microsoft.CognitiveServices/accounts', '<aoai-resource-id>',
+  );
+}
+/** Azure AI Search service resource id (or honest placeholder). */
+function aiSearchResourceId(): string {
+  return armResourceId(
+    ['LOOM_AI_SEARCH_SUB', 'LOOM_SUBSCRIPTION_ID'], ['LOOM_AI_SEARCH_RG', 'LOOM_ADMIN_RG'],
+    ['LOOM_AI_SEARCH_SERVICE'], 'Microsoft.Search/searchServices', '<ai-search-resource-id>',
+  );
+}
 // ── live probes (best-effort; bounded) ──────────────────────────────────────
 async function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
   return Promise.race([
@@ -140,7 +169,7 @@ async function probeAoai(): Promise<CheckResult> {
         '# Grant the Console UAMI "Cognitive Services OpenAI User" on the AOAI/Foundry resource.',
         `az account set --subscription "${CTX.sub}"`,
         `$pid = az ad sp show --id "${CTX.uamiClientId}" --query id -o tsv`,
-        'az role assignment create --assignee-object-id $pid --assignee-principal-type ServicePrincipal --role "Cognitive Services OpenAI User" --scope "<aoai-resource-id>"',
+        `az role assignment create --assignee-object-id $pid --assignee-principal-type ServicePrincipal --role "Cognitive Services OpenAI User" --scope "${aoaiResourceId()}"`,
       ].join('\n'),
     };
   }
@@ -241,7 +270,7 @@ async function probeGovernanceSearchIndex(): Promise<CheckResult> {
         '# If the failure was 401/403, grant the Console UAMI search data-plane RBAC first:',
         `az account set --subscription "${CTX.sub}"`,
         `$pid = az ad sp show --id "${CTX.uamiClientId}" --query id -o tsv`,
-        'az role assignment create --assignee-object-id $pid --assignee-principal-type ServicePrincipal --role "Search Index Data Contributor" --scope "<ai-search-resource-id>"',
+        `az role assignment create --assignee-object-id $pid --assignee-principal-type ServicePrincipal --role "Search Index Data Contributor" --scope "${aiSearchResourceId()}"`,
       ].join('\n'),
     };
   } catch (e: any) {
