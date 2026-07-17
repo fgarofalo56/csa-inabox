@@ -682,6 +682,56 @@ export function amlJobIsTerminal(status?: string): boolean {
   return AML_TERMINAL.includes(status || '');
 }
 
+/**
+ * Fetch a Command job's driver stdout/stderr from the AML run-artifacts
+ * data-plane — the real output a notebook cell printed, which the ARM job
+ * resource never carries (before this, an AML cell only got a "view logs in
+ * AML" pointer; notebook output-fidelity gap #63).
+ *
+ *   GET {dp}/artifact/v2.0/subscriptions/{sub}/resourceGroups/{rg}/providers/
+ *       Microsoft.MachineLearningServices/workspaces/{ws}/artifacts/prefix/
+ *       contentinfo/ExperimentRun/dcid.{jobName}
+ *   → { value: [{ path, contentUri }] }; contentUri is a SAS'd blob URL.
+ *
+ * Data-plane host + token scope are cloud-aware (Gov: *.api.ml.azure.us /
+ * ml.azure.us audience — a hard-coded .ms host silently fails in Gov).
+ * Prefers user_logs/std_log*.txt (current runtime), falls back to
+ * azureml-logs/*driver_log*. Returns null (never throws) when logs aren't
+ * available — callers keep the pointer-message fallback.
+ */
+export async function getCiJobLog(jobName: string, capBytes = 200_000): Promise<string | null> {
+  try {
+    const t = resolveAmlTarget();
+    const host = isGovCloud()
+      ? `https://${t.region}.api.ml.azure.us`
+      : `https://${t.region}.api.azureml.ms`;
+    const scope = isGovCloud() ? 'https://ml.azure.us/.default' : 'https://ml.azure.com/.default';
+    const token = await credential.getToken(scope);
+    if (!token?.token) return null;
+    const base = `${host}/artifact/v2.0/subscriptions/${t.subscriptionId}/resourceGroups/${t.resourceGroup}`
+      + `/providers/Microsoft.MachineLearningServices/workspaces/${t.workspace}`;
+    const listRes = await fetchWithTimeout(
+      `${base}/artifacts/prefix/contentinfo/ExperimentRun/dcid.${encodeURIComponent(jobName)}`,
+      { headers: { authorization: `Bearer ${token.token}` } },
+    );
+    if (!listRes.ok) return null;
+    const listing = await listRes.json().catch(() => null) as { value?: Array<{ path?: string; contentUri?: string }> } | null;
+    const arts = listing?.value || [];
+    const pick =
+      arts.find((a) => /^user_logs\/std_log.*\.txt$/i.test(a.path || ''))
+      || arts.find((a) => /driver_log/i.test(a.path || ''))
+      || arts.find((a) => /^user_logs\/.*\.txt$/i.test(a.path || ''));
+    if (!pick?.contentUri) return null;
+    const logRes = await fetchWithTimeout(pick.contentUri, {});
+    if (!logRes.ok) return null;
+    const text = await logRes.text();
+    if (!text.trim()) return null;
+    return text.length > capBytes ? `…(truncated to last ${Math.round(capBytes / 1000)}KB)\n${text.slice(-capBytes)}` : text;
+  } catch {
+    return null; // best-effort — the poll's pointer message is the fallback
+  }
+}
+
 // ============================================================
 // 4. Models (model containers)
 // ============================================================
