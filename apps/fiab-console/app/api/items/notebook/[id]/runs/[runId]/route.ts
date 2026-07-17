@@ -364,9 +364,16 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string;
       // Two copies: a RICH one for the client (bounded images + HTML, R3 #5) and
       // a LEAN one persisted to Cosmos (text only — resume backs the running run).
       const qIdx = Number(pending?.qIdx) || 0;
-      const truncText = (rest: Record<string, unknown>) => {
-        if (typeof rest.textPlain === 'string' && rest.textPlain.length > 20000) {
-          rest.textPlain = rest.textPlain.slice(0, 20000) + '\n… (truncated)';
+      // Two different caps (fidelity vs Databricks/Synapse, operator report
+      // 2026-07-17: "missing full output"): the CLIENT copy keeps a generous
+      // 512 KB of text so large prints / .show(n=big) / collect() render in
+      // full, while the PERSISTED (Cosmos-backed resume) copy stays lean at
+      // 20 KB so a Run-all with several big outputs can't blow the 2 MB doc cap.
+      const RICH_TEXT_CAP = 512_000;
+      const LEAN_TEXT_CAP = 20_000;
+      const truncText = (rest: Record<string, unknown>, cap: number) => {
+        if (typeof rest.textPlain === 'string' && rest.textPlain.length > cap) {
+          rest.textPlain = rest.textPlain.slice(0, cap) + `\n… (output truncated at ${Math.round(cap / 1000)} KB)`;
         }
       };
       // RICH (returned to the client): keep richDisplay + a bounded rich data map
@@ -374,7 +381,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string;
       // a single-cell run (R3 #5).
       const boundRich = (o: NonNullable<typeof stmtOutput>): Record<string, unknown> => {
         const { data, ...rest } = o as Record<string, unknown>;
-        truncText(rest);
+        truncText(rest, RICH_TEXT_CAP);
         const rich = pickRichData(data);
         if (rich) rest.data = rich;
         return rest;
@@ -385,7 +392,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string;
       // finished; the persisted copy only backs resume of the STILL-running run.
       const boundLean = (o: NonNullable<typeof stmtOutput>): Record<string, unknown> => {
         const { data: _drop, ...rest } = o as Record<string, unknown>;
-        truncText(rest);
+        truncText(rest, LEAN_TEXT_CAP);
         return rest;
       };
       let cellOutputs: Record<string, unknown> | undefined;        // rich → client
