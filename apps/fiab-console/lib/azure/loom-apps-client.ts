@@ -429,6 +429,7 @@ export async function deployApp(opts: DeployAppOptions): Promise<DeployedApp> {
     cpu: opts.cpu,
     memory: opts.memory,
     external: true,
+    keyVaultUri: (process.env.LOOM_APPS_KEY_VAULT_URI || process.env.LOOM_KEY_VAULT_URI || '').trim() || undefined,
   });
   const { json } = await armFetch('PUT', appUrl(cfg, name), body);
 
@@ -484,6 +485,29 @@ export async function stopApp(name: string): Promise<{ name: string; status: str
     `/subscriptions/${cfg.subscriptionId}/resourceGroups/${cfg.resourceGroup}/providers/Microsoft.App/containerApps/${name}/stop?api-version=${ACA_ACTION_API}`,
   );
   return { name, status: status === 202 ? 'Stopping' : 'Stopped' };
+}
+
+/**
+ * Restart a running app's active revision (ACA has no single "restart" action,
+ * so this restarts the latest active revision — the Databricks-Apps "Restart"
+ * parity, e.g. to pick up a rotated KV secret without a full redeploy).
+ */
+export async function restartApp(name: string): Promise<{ name: string; revision: string }> {
+  const cfg = readLoomAppsConfig();
+  if (!isValidLoomAppName(name)) throw new LoomAppsError(`Invalid app name '${name}'.`, 400);
+  // Find the active (latest) revision.
+  const { json } = await armFetch(
+    'GET',
+    `/subscriptions/${cfg.subscriptionId}/resourceGroups/${cfg.resourceGroup}/providers/Microsoft.App/containerApps/${name}/revisions?api-version=${ACA_ACTION_API}`,
+  );
+  const revs = ((json as any)?.value || []) as Array<{ name: string; properties?: { active?: boolean } }>;
+  const active = revs.find((r) => r.properties?.active) || revs[revs.length - 1];
+  if (!active?.name) throw new LoomAppsError(`No active revision to restart for '${name}'.`, 409);
+  await armFetch(
+    'POST',
+    `/subscriptions/${cfg.subscriptionId}/resourceGroups/${cfg.resourceGroup}/providers/Microsoft.App/containerApps/${name}/revisions/${active.name}/restart?api-version=${ACA_ACTION_API}`,
+  );
+  return { name, revision: active.name };
 }
 
 /** DELETE a deployed app (idempotent — a 404 is success). */
