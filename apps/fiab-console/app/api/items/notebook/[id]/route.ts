@@ -70,7 +70,12 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
         // New cell-based shape.
         cells: migrated.cells,
         defaultLang: migrated.defaultLang,
-        attachedSources: migrated.attachedSources || [],
+        // Read attachments from RAW state, not the migrate result:
+        // migrateLegacyState returns only { cells, defaultLang }, so
+        // `migrated.attachedSources` was ALWAYS undefined — every reopen
+        // reported [] even though the PUT had persisted the attachment
+        // (operator report 2026-07-17: "it does not stay once you close").
+        attachedSources: Array.isArray(state.attachedSources) ? state.attachedSources : [],
         attachedAmlEnv: state.attachedAmlEnv || null,
         customLibraries: Array.isArray(state.customLibraries) ? state.customLibraries : [],
         // Resource files (R4-NB-3) bundled with the notebook (Loom-native).
