@@ -1,0 +1,73 @@
+# Grant CAN_USE on a Databricks SQL Warehouse to the Loom Console UAMI (and,
+# default-on per loom_default_on_opt_out, the workspace `users` group) — from
+# the IN-VNET self-hosted runner, because the workspace has public network
+# access disabled so GitHub-hosted runners (and workstations off the VPN)
+# cannot reach it.
+#
+# WHY (operator report 2026-07-17): Marketplace → Data shares → Explore & query
+# returned `executeStatement submit failed 403 PERMISSION_DENIED — user is not
+# authorized to use this warehouse` (warehouse bbda0b913e84a621). The Console
+# UAMI submits warehouse statements for share queries/previews but was never
+# granted CAN_USE on the warehouse.
+#
+# Auth: the deploy SP created the workspace, so it is a workspace admin and can
+# PATCH warehouse permissions.
+name: csa-loom grant warehouse CAN_USE
+
+on:
+  workflow_dispatch:
+    inputs:
+      workspace_host:
+        description: 'Databricks workspace host'
+        required: true
+        default: adb-7405606457049619.19.azuredatabricks.net
+      warehouse_id:
+        description: 'SQL Warehouse id'
+        required: true
+        default: bbda0b913e84a621
+      console_uami_client_id:
+        description: 'Loom Console UAMI application (client) id'
+        required: true
+        default: f4f25dd9-e7aa-4ba0-ae18-6c902217964d
+      grant_users_group:
+        description: 'Also grant the workspace `users` group CAN_USE (default-on principle)'
+        required: true
+        default: 'true'
+
+jobs:
+  grant:
+    runs-on: [self-hosted, loom-aca]
+    steps:
+      - name: Azure login (deploy SP)
+        uses: azure/login@v2
+        with:
+          creds: '{"clientId":"${{ secrets.AZURE_CLIENT_ID }}","clientSecret":"${{ secrets.AZURE_CLIENT_SECRET }}","subscriptionId":"e093f4fd-5047-4ee4-968d-a56942c665f3","tenantId":"${{ secrets.AZURE_TENANT_ID }}"}'
+
+      - name: Grant CAN_USE on the warehouse
+        shell: bash
+        run: |
+          set -euo pipefail
+          HOST='${{ inputs.workspace_host }}'
+          WH='${{ inputs.warehouse_id }}'
+          UAMI='${{ inputs.console_uami_client_id }}'
+          TOK=$(az account get-access-token --resource 2ff814a6-3304-4ab8-85cb-cd0e6f879c1d --query accessToken -o tsv)
+
+          echo "--- current permissions ---"
+          curl -sf -H "Authorization: Bearer $TOK" "https://$HOST/api/2.0/permissions/sql/warehouses/$WH" | head -c 1000 || true
+          echo
+
+          ACL='[{"service_principal_name":"'"$UAMI"'","permission_level":"CAN_USE"}'
+          if [ '${{ inputs.grant_users_group }}' = 'true' ]; then
+            ACL="$ACL"',{"group_name":"users","permission_level":"CAN_USE"}'
+          fi
+          ACL="$ACL"']'
+
+          echo "--- applying grant ---"
+          # PATCH merges into the existing ACL (does not replace owner/admin entries).
+          curl -sf -X PATCH \
+            -H "Authorization: Bearer $TOK" \
+            -H 'Content-Type: application/json' \
+            -d '{"access_control_list":'"$ACL"'}' \
+            "https://$HOST/api/2.0/permissions/sql/warehouses/$WH" | head -c 1500
+          echo
+          echo "--- done ---"
