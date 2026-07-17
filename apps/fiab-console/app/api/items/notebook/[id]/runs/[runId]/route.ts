@@ -159,7 +159,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string;
     // contract the editor already understands. Azure-native — no Fabric.
     if (runId.startsWith('aml-ci:')) {
       const jobName = runId.slice('aml-ci:'.length);
-      const { getCiJob, amlJobIsTerminal } = await import('@/lib/azure/aml-client');
+      const { getCiJob, amlJobIsTerminal, getCiJobLog } = await import('@/lib/azure/aml-client');
       const job = await getCiJob(jobName);
       if (!job) return NextResponse.json({ ok: true, status: 'NotStarted', runId, phase: 'job-pending' });
       const terminal = amlJobIsTerminal(job.status);
@@ -168,6 +168,10 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string;
         status: ok ? 'Completed' : 'Failed', endTimeUtc: new Date().toISOString(),
         failureReason: ok ? null : { errorCode: job.status, message: `AML job ${jobName} ended with status '${job.status}'` },
       });
+      // Output fidelity (#63): pull the REAL driver stdout from the run
+      // artifacts instead of a "view logs in AML" pointer, so print()s and
+      // tracebacks land in the cell like Synapse/Databricks output does.
+      const log = terminal ? await getCiJobLog(jobName) : null;
       return NextResponse.json({
         ok: true,
         status: job.status || 'NotStarted',
@@ -175,11 +179,12 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string;
         phase: terminal ? 'job-complete' : 'job-running',
         output: terminal ? (ok ? {
           status: 'ok',
-          textPlain: `Job ${jobName} completed on the AML Compute Instance. View driver logs + outputs in the run's "Outputs + logs" tab.`,
+          textPlain: log || `Job ${jobName} completed on the AML Compute Instance. View driver logs + outputs in the run's "Outputs + logs" tab.`,
         } : {
           status: 'error',
           ename: job.status,
-          evalue: `AML job ${jobName} ended with status '${job.status}'. Open the run's "Outputs + logs" for the full traceback.`,
+          evalue: `AML job ${jobName} ended with status '${job.status}'.${log ? '' : ' Open the run\'s "Outputs + logs" for the full traceback.'}`,
+          ...(log ? { traceback: log.split('\n').slice(-60) } : {}),
         }) : null,
       });
     }
