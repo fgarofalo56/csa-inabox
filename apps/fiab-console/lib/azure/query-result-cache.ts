@@ -644,9 +644,32 @@ export async function getOrComputeCached<T>(
   // Miss, or expired without SWR → compute inline and store.
   recordCacheMiss(counter);
   try {
-    const value = opts?.budgetMs
-      ? await computeWithBudget(compute(), opts.budgetMs, key)
-      : await compute();
+    let value: T;
+    if (opts?.budgetMs) {
+      // COLD-MISS BUDGET FIX (2026-07-17): the compute must WRITE THROUGH to the
+      // cache even when the budget wins the race, otherwise a genuinely-slow
+      // backend (e.g. cross-subscription Cost Management > 25s under QPU
+      // throttling) never populates on a cold miss — computeWithBudget would
+      // orphan and DISCARD the in-flight result, so every request restarted a
+      // doomed budgeted compute and the dashboard was stuck "warming" forever.
+      // Share ONE write-through compute per key (stampede guard, reusing the SWR
+      // in-flight map) so concurrent budgeted callers don't each hammer the
+      // backend; the shared promise keeps running past the budget and populates
+      // the cache, so the NEXT request is a fresh hit.
+      let shared = inFlightRefresh.get(key) as Promise<T> | undefined;
+      if (!shared) {
+        shared = (async () => {
+          const v = await compute();
+          await writeAllTiers(key, modelId, v, ttl);
+          return v;
+        })();
+        inFlightRefresh.set(key, shared);
+        void shared.catch(() => { /* next request retries */ }).finally(() => inFlightRefresh.delete(key));
+      }
+      value = await computeWithBudget(shared, opts.budgetMs, key);
+      return { value, meta: { cachedAt: now, stale: false, hit: false } };
+    }
+    value = await compute();
     await writeAllTiers(key, modelId, value, ttl);
     return { value, meta: { cachedAt: now, stale: false, hit: false } };
   } catch (e) {
