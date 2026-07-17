@@ -50,7 +50,22 @@ export async function POST(req: NextRequest) {
     }
     const host = await resolveShareHost(body?.host);
     const provider = await createProvider(host, { name, recipient_profile_str: profile, comment: body?.comment });
-    return NextResponse.json({ ok: true, host, provider });
+    // Keep the activation credential for downstream consumption (best-effort):
+    // a lakehouse "Delta Sharing" shortcut can then reference this provider via
+    // credentialRef { kind:'deltaSharing', keyVaultSecret:'loom-dsp-<name>' }
+    // instead of making the user re-paste the credential file they just used.
+    // Skipped silently when no Key Vault is wired — the paste-file path remains.
+    let credentialSecret: string | undefined;
+    try {
+      const { putKeyVaultSecret, kvSecretsConfigGate } = await import('@/lib/azure/kv-secrets-client');
+      if (!kvSecretsConfigGate()) {
+        const saved = await putKeyVaultSecret(`loom-dsp-${name}`, profile);
+        credentialSecret = saved.name;
+      }
+    } catch (e) {
+      console.warn(`[sharing] provider '${name}' added but credential not stored in KV:`, (e as Error)?.message);
+    }
+    return NextResponse.json({ ok: true, host, provider, credentialSecret });
   } catch (e) {
     return sharingErrorResponse(e);
   }
