@@ -473,7 +473,14 @@ export async function getLoomCostSummary(opts: CostOptions = {}): Promise<CostSu
 
   // Query each subscription independently; one sub failing (e.g. no Cost
   // Management Reader) is folded into subscriptionErrors, not fatal.
-  await Promise.all(subs.map(async (sub) => {
+  //
+  // THROTTLE CONTROL (2026-07-17): all-subs-concurrent × 8 grouped queries =
+  // a ~32-request burst that reliably trips the Cost Management QPU limiter
+  // ("Too many requests" on every sub — live receipt: a cached summary with
+  // total=0 + all 4 subs throttled). Chunk subscriptions two-at-a-time so the
+  // burst halves (≤16) while wall-clock stays ~2 rounds of the slowest query.
+  const SUB_CHUNK = 2;
+  const perSub = async (sub: string) => {
     // Fire all six CostManagement calls for this sub CONCURRENTLY. They are
     // independent groupings of the same period, so the wall-clock cost is the
     // slowest single query — not the sum — which keeps the aggregate under the
@@ -648,7 +655,24 @@ export async function getLoomCostSummary(opts: CostOptions = {}): Promise<CostSu
         addTo(byTagMap, raw || '(untagged)', Number(row[tCost]) || 0);
       }
     }
-  }));
+  };
+  for (let i = 0; i < subs.length; i += SUB_CHUNK) {
+    await Promise.all(subs.slice(i, i + SUB_CHUNK).map(perSub));
+  }
+
+  // Every subscription throttled/failed → there is NO data in this result.
+  // THROW instead of returning a zero-total summary: the cache layer keeps the
+  // last GOOD copy (warmer catch / serveStaleOnError) rather than overwriting
+  // it with garbage — live receipt 2026-07-17: the warmer's bypass recompute
+  // persisted total=0 + "Too many requests"×4 over a healthy $1,774 copy.
+  if (subscriptionErrors.length >= subs.length && subs.length > 0) {
+    throw new MonitorError(
+      `Cost Management throttled/failed for all ${subs.length} subscription(s): ` +
+      subscriptionErrors.map((e) => e.error).slice(0, 2).join('; ') +
+      ' — retaining the previously cached summary.',
+      429,
+    );
+  }
 
   const daily = Array.from(dailyMap.entries()).sort((a, b) => a[0].localeCompare(b[0])).map(([date, cost]) => ({ date, cost }));
 

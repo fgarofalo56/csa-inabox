@@ -224,6 +224,7 @@ function InboundPanel({
   onExplore: (catalog: string, provider?: string, share?: string) => void;
 }) {
   const [addOpen, setAddOpen] = useState(false);
+  const [removeErr, setRemoveErr] = useState<string | null>(null);
 
   return (
     <>
@@ -264,14 +265,39 @@ function InboundPanel({
             <div className={styles.cardActions}>
               <Button size="small" appearance="subtle" icon={<Delete20Regular />}
                 onClick={async () => {
-                  setBusy(true);
-                  await clientFetch(`/api/marketplace/sharing/providers/${encodeURIComponent(p.name)}`, { method: 'DELETE' });
-                  setBusy(false); onChange();
+                  setBusy(true); setRemoveErr(null);
+                  try {
+                    // Surface the REAL outcome — this used to swallow the response,
+                    // so a failed delete (e.g. dependent mounted catalogs) looked
+                    // like "nothing happens" (operator report 2026-07-17).
+                    const r = await clientFetch(`/api/marketplace/sharing/providers/${encodeURIComponent(p.name)}`, { method: 'DELETE' });
+                    const j = await r.json().catch(() => null);
+                    if (!r.ok || (j && j.ok === false)) {
+                      const msg = j?.error || `HTTP ${r.status}`;
+                      setRemoveErr(
+                        /dependent|catalog|in use/i.test(msg)
+                          ? `Couldn't remove "${p.name}": ${msg} — unmount its subscribed catalogs below (Use / manage → Unmount) first, then retry.`
+                          : `Couldn't remove "${p.name}": ${msg}`,
+                      );
+                      return;
+                    }
+                  } catch (e: any) {
+                    setRemoveErr(`Couldn't remove "${p.name}": ${String(e?.message || e)}`);
+                    return;
+                  } finally {
+                    setBusy(false);
+                  }
+                  onChange();
                 }}>Remove</Button>
             </div>
           </Card>
         ))}
       </TileGrid>
+      {removeErr && (
+        <MessageBar intent="error" layout="multiline">
+          <MessageBarBody><MessageBarTitle>Remove failed</MessageBarTitle>{removeErr}</MessageBarBody>
+        </MessageBar>
+      )}
 
       <Divider />
 
@@ -369,7 +395,13 @@ function MountedCatalogs({
                         icon={<PlugDisconnected20Regular />}
                         onClick={async () => {
                           if (!confirm(`Unmount "${c.name}"? This removes the local read-only mount only — the provider's source data is untouched and you can re-mount the share anytime.`)) return;
-                          await clientFetch(`/api/marketplace/sharing/catalogs?name=${encodeURIComponent(c.name)}`, { method: 'DELETE' });
+                          try {
+                            const r = await clientFetch(`/api/marketplace/sharing/catalogs?name=${encodeURIComponent(c.name)}`, { method: 'DELETE' });
+                            const j = await r.json().catch(() => null);
+                            if (!r.ok || (j && j.ok === false)) { setErr(`Unmount "${c.name}" failed: ${j?.error || `HTTP ${r.status}`}`); return; }
+                          } catch (e: any) {
+                            setErr(`Unmount "${c.name}" failed: ${String(e?.message || e)}`); return;
+                          }
                           void load();
                         }}
                       >

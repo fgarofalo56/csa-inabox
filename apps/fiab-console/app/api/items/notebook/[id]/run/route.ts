@@ -196,7 +196,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     if (compute.startsWith('aml-ci:')) {
       const ciName = compute.slice('aml-ci:'.length);
       const {
-        submitCiJob, startCI, getCI, ciIsStopped, amlIsConfigured, AmlNotConfiguredError,
+        submitCiJob, submitServerlessJob, startCI, getCI, ciIsStopped, amlIsConfigured, AmlNotConfiguredError,
       } = await import('@/lib/azure/aml-client');
       if (!amlIsConfigured()) {
         const e = new AmlNotConfiguredError(['LOOM_AML_WORKSPACE', 'LOOM_AML_REGION']);
@@ -210,18 +210,31 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       } catch { /* probe/start best-effort — submit still attempted */ }
       // R cells run via Rscript; everything else via python.
       const lang: 'python' | 'r' = stmtKind === 'sparkr' ? 'r' : 'python';
-      const job = await submitCiJob({
-        ciName,
-        code,
-        lang,
-        displayName: `Loom: ${nb.displayName?.slice(0, 60) || 'notebook'}${cellId ? ' · ' + cellId.slice(0, 6) : ''}`,
-      });
+      const displayName = `Loom: ${nb.displayName?.slice(0, 60) || 'notebook'}${cellId ? ' · ' + cellId.slice(0, 6) : ''}`;
+      let job; let usedServerless = false;
+      try {
+        job = await submitCiJob({ ciName, code, lang, displayName });
+      } catch (e: any) {
+        // A PERSONAL Compute Instance only accepts jobs from its assigned user
+        // — the Console identity gets a 400 ownership reject (operator report:
+        // "User starting the run is not an owner or assigned user to the
+        // Compute Instance"). Fall back to AML SERVERLESS compute, which has no
+        // ownership restriction; anything else rethrows to the honest handler.
+        if (/not an owner or assigned user/i.test(String(e?.message || e))) {
+          job = await submitServerlessJob({ code, lang, displayName: `${displayName} (serverless)` });
+          usedServerless = true;
+        } else {
+          throw e;
+        }
+      }
       return NextResponse.json({
         ok: true,
         runId: `aml-ci:${job.name}`,
         status: job.status || 'NotStarted',
         autoStarted,
-        compute: { kind: 'aml-ci', ciName },
+        compute: usedServerless
+          ? { kind: 'aml-serverless', note: `CI '${ciName}' is assigned to another user — ran on AML serverless compute instead.` }
+          : { kind: 'aml-ci', ciName },
         cellId: cellId || null,
         sourcePreview: code.slice(0, 200),
       });
