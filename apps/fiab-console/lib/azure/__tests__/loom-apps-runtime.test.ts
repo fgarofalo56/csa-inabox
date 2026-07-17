@@ -156,12 +156,27 @@ describe('buildAcaAppBody', () => {
   it('rejects a non-allowlisted env name', () => {
     expect(() => buildAcaAppBody({ ...base, env: [{ name: 'DATABASE_URL', value: 'x' }] })).toThrow(LoomAppSpecError);
   });
-  it('accepts allowlisted plain + secretRef env, rejects both-set', () => {
-    const body: any = buildAcaAppBody({ ...base, env: [{ name: 'LOOM_ADX', value: 'c' }, { name: 'APP_KEY', secretRef: 'kv-key' }] });
+  it('accepts allowlisted plain + secretRef env (KV-backed), rejects both-set', () => {
+    const body: any = buildAcaAppBody({
+      ...base,
+      keyVaultUri: 'https://kv-loom.vault.azure.net',
+      env: [{ name: 'LOOM_ADX', value: 'c' }, { name: 'APP_KEY', secretRef: 'kv-key' }],
+    });
     const env = body.properties.template.containers[0].env;
     expect(env.find((e: any) => e.name === 'LOOM_ADX').value).toBe('c');
-    expect(env.find((e: any) => e.name === 'APP_KEY').secretRef).toBe('kv-key');
+    // secretRef is rewritten to the sanitized ACA secret name (kv-<kvName>).
+    const acaSecretRef = env.find((e: any) => e.name === 'APP_KEY').secretRef;
+    expect(acaSecretRef).toBe('kv-kv-key');
+    // A matching configuration.secrets[] entry is emitted, KV-backed via the app UAMI.
+    const secrets = body.properties.configuration.secrets;
+    const sec = secrets.find((s: any) => s.name === acaSecretRef);
+    expect(sec.keyVaultUrl).toBe('https://kv-loom.vault.azure.net/secrets/kv-key');
+    expect(sec.identity).toBe('/uami/1');
     expect(() => buildAcaAppBody({ ...base, env: [{ name: 'APP_X', value: 'a', secretRef: 'b' }] })).toThrow(/both value and secretRef/);
+  });
+  it('throws an honest error when a secretRef env has no vault configured', () => {
+    expect(() => buildAcaAppBody({ ...base, env: [{ name: 'APP_KEY', secretRef: 'kv-key' }] }))
+      .toThrow(/no vault is configured/);
   });
   it('clamps a negative minReplicas up to 0', () => {
     const body: any = buildAcaAppBody({ ...base, minReplicas: -5 });
