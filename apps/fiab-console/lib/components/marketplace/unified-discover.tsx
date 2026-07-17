@@ -22,13 +22,15 @@ import { clientFetch } from '@/lib/client-fetch';
 import { useCallback, useEffect, useMemo, useState, type ReactElement } from 'react';
 import {
   Body1, Caption1, Text, Badge, Button, Spinner, Card, CardHeader,
-  Input, Tag, Tooltip, makeStyles, tokens,
+  Input, Tag, Tooltip, makeStyles, shorthands, tokens,
 } from '@fluentui/react-components';
 import {
   Search20Regular, ArrowSync20Regular, Connector20Regular, Database20Regular,
   Share20Regular, DataPie20Regular, Open20Regular, StoreMicrosoft24Regular,
+  Ribbon16Regular,
 } from '@fluentui/react-icons';
 import { TileGrid } from '@/lib/components/ui/tile-grid';
+import { BrandedItemIcon } from '@/lib/components/ui/branded-item-icon';
 import { EmptyState } from '@/lib/components/empty-state';
 
 const useStyles = makeStyles({
@@ -42,8 +44,18 @@ const useStyles = makeStyles({
     borderRadius: tokens.borderRadiusLarge,
     boxShadow: tokens.shadow4,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
-    transition: 'box-shadow 0.15s, transform 0.15s',
-    ':hover': { boxShadow: tokens.shadow16, transform: 'translateY(-2px)' },
+    transitionProperty: 'box-shadow, transform, border-color',
+    transitionDuration: tokens.durationNormal,
+    transitionTimingFunction: tokens.curveEasyEase,
+    ':hover': {
+      boxShadow: tokens.shadow16,
+      transform: 'translateY(-2px)',
+      ...shorthands.borderColor(tokens.colorBrandStroke1),
+    },
+    '@media (prefers-reduced-motion: reduce)': {
+      transitionDuration: '0.01ms',
+      ':hover': { transform: 'none' },
+    },
   },
   meta: { display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap', alignItems: 'center', marginTop: tokens.spacingVerticalXS },
   actions: { display: 'flex', gap: tokens.spacingHorizontalS, marginTop: tokens.spacingVerticalS },
@@ -58,6 +70,14 @@ const KIND_ICON: Record<Kind, ReactElement> = {
   'Data share': <Share20Regular />,
   'Model & report': <DataPie20Regular />,
 };
+/** Kind → item-type slug so cards carry the same branded tinted icon chips the
+ *  rest of the product uses (item-type-visual registry). */
+const KIND_TYPE: Record<Kind, string> = {
+  'Data product': 'data-product',
+  API: 'apim-api',
+  'Data share': 'data-marketplace',
+  'Model & report': 'semantic-model',
+};
 
 interface Listing {
   id: string;
@@ -70,6 +90,9 @@ interface Listing {
   href?: string;
   /** Which marketplace tab subscribes/uses this listing. */
   goTab?: string;
+  /** REAL data — true only when the product's persisted certification state is
+   *  'certified' (DP-5 certify workflow). Drives the Recommended badge. */
+  recommended?: boolean;
 }
 
 export function UnifiedDiscover({ onGoTab }: { onGoTab?: (tab: string) => void }) {
@@ -109,6 +132,7 @@ export function UnifiedDiscover({ onGoTab }: { onGoTab?: (tab: string) => void }
             badges: [h.productType, ...(h.glossaryTerms || [])].filter(Boolean),
             href: h.url,
             goTab: 'products',
+            recommended: String(h.certification || '').toLowerCase() === 'certified',
           });
         }
       }
@@ -229,9 +253,16 @@ export function UnifiedDiscover({ onGoTab }: { onGoTab?: (tab: string) => void }
         {filtered.map((l) => (
           <Tooltip key={l.id} relationship="description" content={l.subtitle || l.title}>
             <Card className={s.card}>
-              <CardHeader image={KIND_ICON[l.kind]}
+              <CardHeader
+                image={<BrandedItemIcon type={KIND_TYPE[l.kind]} size="md" />}
                 header={<Body1><b>{l.title}</b></Body1>}
-                description={<Caption1 className={s.hint}>{l.subtitle || '—'}</Caption1>} />
+                description={<Caption1 className={s.hint}>{l.subtitle || '—'}</Caption1>}
+                action={l.recommended ? (
+                  <Tooltip content="Certified by your data governance team" relationship="description">
+                    <Badge appearance="filled" color="brand" icon={<Ribbon16Regular />}>Recommended</Badge>
+                  </Tooltip>
+                ) : undefined}
+              />
               <div className={s.meta}>
                 <Badge appearance="tint" color="brand">{l.kind}</Badge>
                 {l.domain && <Badge appearance="outline">{l.domain}</Badge>}

@@ -12,6 +12,7 @@
  */
 import { NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { buildScopedCacheKey, getOrComputeCached } from '@/lib/azure/query-result-cache';
 import { itemsContainer, workspacesContainer, labelPropagationContainer } from '@/lib/azure/cosmos-client';
 import { computePropagation, type PropagationStatus } from '@/lib/governance/label-propagation';
 import { apiServerError } from '@/lib/api/respond';
@@ -53,14 +54,31 @@ export async function GET() {
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
 
   try {
+    // Cached 3 min + SWR: the tenant-wide lineage graph walks every workspace's
+    // items + propagation state per paint — one cached crawl serves every
+    // viewer (perf directive 2026-07-15; VA-scale).
+    const { value: payload } = await getOrComputeCached(
+      buildScopedCacheKey('governance/lineage', { tenantId: s.claims.oid }),
+      'governance',
+      () => computeLineage(s.claims.oid),
+      { ttlMs: 3 * 60_000, staleWhileRevalidate: true, budgetMs: 22_000, serveStaleOnError: true },
+    );
+    return NextResponse.json(payload);
+  } catch (e: any) {
+    return apiServerError(e);
+  }
+}
+
+async function computeLineage(tenantOid: string): Promise<Record<string, unknown>> {
+  {
     const wsC = await workspacesContainer();
     const itC = await itemsContainer();
 
     // 1. List workspaces in this tenant
     const { resources: workspaces } = await wsC.items.query({
       query: 'SELECT c.id, c.name FROM c WHERE c.tenantId = @t',
-      parameters: [{ name: '@t', value: s.claims.oid }],
-    }, { partitionKey: s.claims.oid }).fetchAll();
+      parameters: [{ name: '@t', value: tenantOid }],
+    }, { partitionKey: tenantOid }).fetchAll();
 
     // 2. Across all workspaces, list every item (cross-partition fanout is fine
     //    for governance views; expected order of magnitude ≤ thousands per tenant)
@@ -131,8 +149,8 @@ export async function GET() {
       const propC = await labelPropagationContainer();
       const { resources: stored } = await propC.items.query({
         query: 'SELECT c.itemId, c.runAt FROM c WHERE c.tenantId = @t',
-        parameters: [{ name: '@t', value: s.claims.oid }],
-      }, { partitionKey: s.claims.oid }).fetchAll();
+        parameters: [{ name: '@t', value: tenantOid }],
+      }, { partitionKey: tenantOid }).fetchAll();
       const storedRun = new Map<string, string>();
       for (const r of stored as Array<{ itemId: string; runAt?: string }>) {
         if (r.runAt) {
@@ -160,7 +178,7 @@ export async function GET() {
       }
     }
 
-    return NextResponse.json({
+    return {
       ok: true,
       workspaces: workspaceNodes,
       nodes,
@@ -176,8 +194,6 @@ export async function GET() {
         edges: edges.length,
       },
       source: 'cosmos', // 'purview' once binding lands
-    });
-  } catch (e: any) {
-    return apiServerError(e);
+    };
   }
 }

@@ -245,6 +245,26 @@ export async function listLivySessions(
  * success. A 404 means the session is already gone — treat as success so the
  * editor's kill-on-unmount never throws.
  */
+/**
+ * Fetch a slice of the Livy session DRIVER LOG — the stdout/stderr stream the
+ * Spark driver writes (Databricks/Synapse notebook parity: the "driver logs"
+ * pane). `from:-1`-style tailing isn't in the Synapse Livy surface, so callers
+ * tail by passing from = max(0, total - size) from the previous response.
+ *   GET {livyBase(pool)}/sessions/{id}/log?from=&size=
+ *   → { id, from, total, log: string[] }
+ * Learn: https://learn.microsoft.com/rest/api/synapse/data-plane/spark-session/get-spark-session-log (Livy log slice)
+ */
+export async function getLivySessionLog(
+  poolName: string,
+  sessionId: number,
+  from = 0,
+  size = 200,
+): Promise<{ from: number; total: number; log: string[] }> {
+  const r = await callDev(`${livyBase(poolName)}/sessions/${sessionId}/log?from=${from}&size=${size}`);
+  const body = await jsonOrThrow<{ from?: number; total?: number; log?: string[] }>(r, `getLivySessionLog(${poolName}/${sessionId})`);
+  return { from: body.from ?? from, total: body.total ?? 0, log: Array.isArray(body.log) ? body.log : [] };
+}
+
 export async function killLivySession(poolName: string, sessionId: number): Promise<void> {
   const r = await callDev(`${livyBase(poolName)}/sessions/${sessionId}`, { method: 'DELETE' });
   if (!r.ok && r.status !== 200 && r.status !== 204 && r.status !== 404) {
@@ -288,6 +308,27 @@ export async function getLivyStatement(
 ): Promise<LivyStatement> {
   const r = await callDev(`${livyBase(poolName)}/sessions/${sessionId}/statements/${stmtId}`);
   return jsonOrThrow<LivyStatement>(r, `getLivyStatement(${poolName}/${sessionId}/${stmtId})`);
+}
+
+/**
+ * Cancel a running Livy statement — the backing for the notebook cell "Stop"
+ * control (a structured-streaming cell with awaitTermination() otherwise runs
+ * forever and the cell shows "running" indefinitely).
+ *   POST {livyBase(pool)}/sessions/{id}/statements/{stmtId}/cancel
+ * Learn: https://learn.microsoft.com/rest/api/synapse/data-plane/spark-session/cancel-spark-statement
+ */
+export async function cancelLivyStatement(
+  poolName: string,
+  sessionId: number,
+  stmtId: number,
+): Promise<void> {
+  const r = await callDev(`${livyBase(poolName)}/sessions/${sessionId}/statements/${stmtId}/cancel`, {
+    method: 'POST',
+  });
+  if (!r.ok) {
+    const text = await r.text().catch(() => '');
+    throw new Error(`cancelLivyStatement(${poolName}/${sessionId}/${stmtId}) failed ${r.status}: ${text.slice(0, 200)}`);
+  }
 }
 
 interface LivyStatementsResponse {

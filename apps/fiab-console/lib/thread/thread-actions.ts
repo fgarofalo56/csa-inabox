@@ -611,6 +611,87 @@ export const THREAD_ACTIONS: ThreadAction[] = [
     submitLabel: 'Weave',
   },
   {
+    // Query → Dashboard conversion (operator review 5.2) — from a KQL database,
+    // pin a KQL query as a tile on a Real-Time Dashboard (a NEW kql-dashboard
+    // or an EXISTING one in the workspace). The route validates the query by
+    // EXECUTING it against the real ADX cluster before creating/updating the
+    // dashboard (no-vaporware.md) — a failing query is an honest 422, never a
+    // dead tile. Azure-native ADX end-to-end (no-fabric-dependency.md). The
+    // KQL textarea is the ADX-native escape hatch (same as the query editor);
+    // the KQL-database editor's step-by-step wizard pre-fills it from the
+    // current query and POSTs to the same route.
+    id: 'create-dashboard-tile-from-query',
+    label: 'Create dashboard tile from query',
+    description:
+      'Pin a KQL query as a tile on a Real-Time Dashboard — pick a new or existing dashboard, the ' +
+      'visual type, and a title. Loom validates the query by executing it against the real ADX ' +
+      'cluster, then creates/updates the dashboard with the new tile. Azure-native — no Fabric required.',
+    group: 'Visualize',
+    fromTypes: ['kql-database'],
+    icon: 'kql',
+    fields: [
+      {
+        name: 'dashboardId',
+        label: 'Target dashboard',
+        kind: 'loom-item',
+        itemTypes: ['kql-dashboard'],
+        allowCreate: true,
+        createLabel: '+ Create a new Real-Time Dashboard',
+        required: true,
+        hint: 'The Real-Time Dashboard to add the tile to — pick an existing one or create a new one.',
+      },
+      {
+        name: 'newDashboardName',
+        label: 'New dashboard name',
+        kind: 'text',
+        showWhen: { field: 'dashboardId', equals: '__new__' },
+        hint: 'A name for the new Real-Time Dashboard.',
+      },
+      {
+        name: 'kql',
+        label: 'KQL query',
+        kind: 'textarea',
+        required: true,
+        hint:
+          'The tabular KQL query the tile runs. It is validated by executing it against the real ADX ' +
+          'cluster before the tile is created. Use _startTime / _endTime for the dashboard time range.',
+      },
+      {
+        name: 'viz',
+        label: 'Visual type',
+        kind: 'select',
+        options: [
+          { value: 'table', label: 'Table' },
+          { value: 'timechart', label: 'Time chart' },
+          { value: 'column', label: 'Column chart' },
+          { value: 'bar', label: 'Bar chart' },
+          { value: 'pie', label: 'Pie chart' },
+          { value: 'stat', label: 'Card (KPI)' },
+        ],
+        default: 'table',
+        required: true,
+        hint: 'How the tile renders the query result.',
+      },
+      { name: 'title', label: 'Tile title', kind: 'text', required: true, hint: 'The tile heading shown on the dashboard.' },
+      {
+        name: 'size',
+        label: 'Tile size',
+        kind: 'select',
+        options: [
+          { value: 'small', label: 'Small (4 × 2)' },
+          { value: 'medium', label: 'Medium (6 × 3)' },
+          { value: 'wide', label: 'Wide (12 × 3)' },
+          { value: 'tall', label: 'Tall (6 × 5)' },
+        ],
+        default: 'medium',
+        required: true,
+        hint: 'Grid footprint of the tile (dashboard grid is 12 columns wide).',
+      },
+    ],
+    route: '/api/thread/kql-query-to-dashboard-tile',
+    submitLabel: 'Weave',
+  },
+  {
     // Promote (medallion) — from a lakehouse, promote one of its bronze/silver
     // Delta tables to the next layer. Loom scaffolds a real Synapse Spark
     // notebook (read the source Delta table → clean/dedup or aggregate → write

@@ -569,6 +569,14 @@ var dnsZones = [
   // (private-endpoint-dns: Microsoft.Databricks/workspaces, subresources
   // databricks_ui_api / browser_authentication).
   'privatelink.${boundary == 'GCC-High' || boundary == 'IL5' ? 'databricks.azure.us' : 'azuredatabricks.net'}'
+  // #53 (2026-07-16) — Azure Cache for Redis (H-band shared cache: query-result
+  // cache tier + Direct Lake residency + Broker ledger). hband-shared.bicep
+  // deploys the cache with publicNetworkAccess='Disabled', but NO PE/zone was
+  // ever wired — the console's redis-cache-client silently fell back to
+  // per-replica local tiers ("shared Redis tier unavailable"), which is why
+  // rarely-hit monitor reads stayed cold across replicas. Index 24.
+  // Gov suffix per Learn private-endpoint-dns: redis.cache.usgovcloudapi.net.
+  'privatelink.redis.cache.${boundary == 'GCC-High' || boundary == 'IL5' ? 'usgovcloudapi.net' : 'windows.net'}'
 ]
 
 resource privateDnsZones 'Microsoft.Network/privateDnsZones@2024-06-01' = [for zone in dnsZones: {
@@ -763,4 +771,8 @@ output privateDnsZoneIds object = {
   // (publicNetworkAccess Disabled) resolves to a private IP from the hub VNet.
   // Without it the Console hits "403 Unauthorized network access to workspace".
   databricks: privateDnsZones[23].id
+  // #53 — Azure Cache for Redis zone (index 24). hband-shared.bicep consumes
+  // this for the shared cache's PE DNS group so the PE-locked cache resolves
+  // privately from the hub VNet (the console cache tier depends on it).
+  redis: privateDnsZones[24].id
 }

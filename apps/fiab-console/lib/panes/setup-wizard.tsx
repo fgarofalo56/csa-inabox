@@ -1,6 +1,6 @@
 'use client';
 
-import { clientFetch, CROSS_SUB_FETCH_TIMEOUT_MS } from '@/lib/client-fetch';
+import { clientFetch, describeNonJsonResponse, CROSS_SUB_FETCH_TIMEOUT_MS } from '@/lib/client-fetch';
 /**
  * Loom Setup Wizard — PRP-04 (redesigned multi-step wizard)
  *
@@ -639,8 +639,7 @@ export function SetupWizardPane() {
       const res = await clientFetch('/api/setup/subscriptions', undefined, CROSS_SUB_FETCH_TIMEOUT_MS);
       const ct = res.headers.get('content-type') || '';
       if (!ct.includes('application/json')) {
-        const t = await res.text().catch(() => '');
-        setSubsError(`Subscriptions service returned non-JSON (HTTP ${res.status}). ${t.slice(0, 160)}`);
+        setSubsError(describeNonJsonResponse(res.status, 'The subscriptions service'));
         setSubs([]);
         return;
       }
@@ -847,8 +846,9 @@ export function SetupWizardPane() {
       }, CROSS_SUB_FETCH_TIMEOUT_MS);
       const ct = res.headers.get('content-type') || '';
       if (!ct.includes('application/json')) {
-        const t = await res.text().catch(() => '');
-        setState((s) => ({ ...s, deployError: `Deploy service returned non-JSON (HTTP ${res.status}). ${t.slice(0, 200)}` }));
+        // Gateway HTML error page (Front Door origin timeout / edge failure) —
+        // honest message with the status, never the raw HTML.
+        setState((s) => ({ ...s, deployError: describeNonJsonResponse(res.status, 'The deploy service') }));
         return;
       }
       const j = await res.json().catch(() => ({}));

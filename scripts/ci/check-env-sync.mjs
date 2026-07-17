@@ -76,6 +76,8 @@ const ALLOWLIST_PATTERNS = [
 // Seeded from the CURRENT tree (2026-07). Each MUST carry a reason.
 const ALLOWLIST = new Set([
   // ---- Build / ambient (injected by the container runtime or platform, not app bicep) ----
+  'LOOM_READ_WARMER_DISABLED',      // runtime-only opt-out for the dashboard read-warmer (lib/perf/read-warmer.ts) — warming is on by default, never a deploy dependency
+  'LOOM_READ_WARMER_INTERVAL_MS',   // runtime-only tuning knob for the read-warmer interval (default 10 min)
   'LOOM_BUILD_SHA',                 // stamped at image build time
   'LOOM_BUILD_TIMESTAMP',           // stamped at image build time
   'LOOM_APP_REVISION',              // ambient container revision fallback for the PSR-1 perf runner (CONTAINER_APP_REVISION is the real ACA-injected value; this is a manual override) — never a blocking dependency
@@ -264,6 +266,7 @@ const ALLOWLIST = new Set([
   'LOOM_POSTGRES_HOST',             // opt-in postgres host
   'LOOM_PURVIEW_AUTOSCAN',          // opt-in Purview auto-register flag
   'LOOM_PURVIEW_DEFAULT_DOMAIN_NAME', // Purview domain default (code default)
+  'LOOM_PURVIEW_ENDPOINT',          // optional operator override: explicit Purview data-plane base URL (default: ARM-derived endpoints → cloud-aware convention host; purview-endpoints.ts)
   'LOOM_PURVIEW_GOVERNANCE_DOMAIN_ID', // derived Purview governance domain
   'LOOM_PURVIEW_MANAGED_VNET',      // opt-in Purview managed VNet flag
   'LOOM_PURVIEW_MANAGED_VNET_IR',   // opt-in Purview managed VNet IR

@@ -68,6 +68,9 @@ beforeEach(() => {
 
 afterEach(() => {
   delete process.env.LOOM_TENANT_ADMIN_OID;
+  delete process.env.LOOM_SETUP_ORCHESTRATOR_URL;
+  delete process.env.LOOM_ORCH_SUBMIT_TIMEOUT_MS;
+  delete process.env.LOOM_DEPLOY_SUBMIT_BUDGET_MS;
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   vi.resetModules();
@@ -240,6 +243,99 @@ describe('POST /api/setup/deploy', () => {
     expect(cmds).toContain('commercial-full.bicepparam');
     expect(cmds).toContain('boundary=Commercial');
     expect(cmds).toContain("dlzDomainNames=\"['finance']\"");
+  });
+
+  /** ARM stub for the orchestrator-tier tests: pre-flight says "can deploy"
+   * (full actions, RPs registered) and the user-ARM deployment PUT fails with a
+   * transient 500 (a NON-auth error), so the route falls through to the Setup
+   * Orchestrator tier — the hop under test. */
+  function armTierStub(url: string): Response {
+    const u = String(url);
+    const json = (body: unknown, status = 200) =>
+      new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+    if (u.includes('/providers/Microsoft.Authorization/permissions')) {
+      return json({ value: [{ actions: ['*'], notActions: [] }] });
+    }
+    if (u.includes('/providers?api-version=')) {
+      return json({
+        value: ['Microsoft.Storage', 'Microsoft.Kusto', 'Microsoft.DocumentDB', 'Microsoft.KeyVault', 'Microsoft.ManagedIdentity', 'Microsoft.Network'].map(
+          (ns) => ({ namespace: ns, registrationState: 'Registered' }),
+        ),
+      });
+    }
+    if (u.includes('/providers/Microsoft.Resources/deployments/')) {
+      return json({ error: { message: 'transient ARM 500' } }, 500);
+    }
+    return json({});
+  }
+
+  it('answers fast (bounded, JSON) when the Setup Orchestrator hangs — the live-504 regression', async () => {
+    // The live defect: LOOM_SETUP_ORCHESTRATOR_URL wired (default on Commercial)
+    // but the orchestrator Container App wedged → the unbounded fetch hung the
+    // submit past Front Door's origin timeout → HTML 504. The orchestrator POST
+    // is now bounded (LOOM_ORCH_SUBMIT_TIMEOUT_MS) and the route falls through
+    // to the next tier, always answering structured JSON quickly.
+    process.env.LOOM_SETUP_ORCHESTRATOR_URL = 'http://orch.internal';
+    process.env.LOOM_ORCH_SUBMIT_TIMEOUT_MS = '100';
+    const orchCalls: string[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string, init?: RequestInit) => {
+        if (String(url).includes('orch.internal')) {
+          orchCalls.push(String(url));
+          // Hangs until the caller's timeout signal aborts (a wedged origin).
+          return new Promise((_resolve, reject) => {
+            init?.signal?.addEventListener('abort', () => {
+              const e = new Error('aborted');
+              e.name = 'AbortError';
+              reject(e);
+            });
+          });
+        }
+        return Promise.resolve(armTierStub(String(url)));
+      }),
+    );
+    const { POST } = await import('@/app/api/setup/deploy/route');
+    const started = Date.now();
+    const r = await POST(
+      bodyReq({ subscriptionId: GOOD_SUB, boundary: 'Commercial', mode: 'single-sub', domainName: 'finance', capacitySku: 'F8', location: 'eastus2' }),
+    );
+    const elapsed = Date.now() - started;
+    const j = await r.json();
+    // Fell through the hung orchestrator to the honest copy-paste gate — JSON,
+    // never an edge HTML 504, and well inside any gateway timeout.
+    expect(orchCalls.length).toBe(1);
+    expect(r.status).toBe(503);
+    expect(j.ok).toBe(false);
+    expect(elapsed).toBeLessThan(10_000);
+  });
+
+  it('returns an honest JSON 504 backstop when the whole submit pipeline stalls', async () => {
+    // A truly wedged origin hop that even ignores its abort signal: the
+    // route-level TOTAL budget (LOOM_DEPLOY_SUBMIT_BUDGET_MS) must answer a
+    // parseable JSON 504 before the deployment edge can emit its HTML page.
+    process.env.LOOM_SETUP_ORCHESTRATOR_URL = 'http://orch.internal';
+    process.env.LOOM_ORCH_SUBMIT_TIMEOUT_MS = '60000'; // inner bound never fires
+    process.env.LOOM_DEPLOY_SUBMIT_BUDGET_MS = '200';
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: string) => {
+        if (String(url).includes('orch.internal')) return new Promise(() => {}); // never settles
+        return Promise.resolve(armTierStub(String(url)));
+      }),
+    );
+    const { POST } = await import('@/app/api/setup/deploy/route');
+    const started = Date.now();
+    const r = await POST(
+      bodyReq({ subscriptionId: GOOD_SUB, boundary: 'Commercial', mode: 'single-sub', domainName: 'finance', capacitySku: 'F8', location: 'eastus2' }),
+    );
+    const elapsed = Date.now() - started;
+    const j = await r.json();
+    expect(r.status).toBe(504);
+    expect(j.ok).toBe(false);
+    expect(j.error).toBe('deploy-submit-timeout');
+    expect(j.remediation).toMatch(/az deployment sub list/);
+    expect(elapsed).toBeLessThan(5_000);
   });
 
   it('503 honest gate uses Gov cloud + il5 param file for IL5', async () => {

@@ -198,6 +198,13 @@ interface AppApplyResult {
   error?: string;
 }
 
+interface GatePipelineInfo {
+  available: boolean;
+  workflow: string;
+  monitorUrl: string;
+  missingEnv?: string[];
+}
+
 interface PreflightGate {
   ok: false;
   reason: 'already-up-to-date' | 'no-upstream-release' | 'images-not-published' | 'arm-not-configured' | 'requires-infra-redeploy';
@@ -206,6 +213,32 @@ interface PreflightGate {
   missingEnv?: string[];
   missingRequiredEnv?: { name: string; reason: string; remediation: string }[];
   infraTooOld?: { required: string; actual: string };
+  pipeline?: GatePipelineInfo;
+}
+
+/** A dispatched build+roll pipeline run being tracked to completion. */
+interface PipelineState {
+  workflow: string;
+  monitorUrl: string;
+  dispatchedAt: string;
+  ref: string;
+  /** Target release tag (e.g. csa-inabox-v0.68.0). */
+  tag: string;
+  /** pending | queued | in_progress | completed (GitHub run status). */
+  status: string;
+  conclusion?: string | null;
+  runUrl?: string;
+  /** Set once /api/version confirms the new version is actually serving. */
+  liveVersion?: string;
+}
+
+/** Per-app ARM state from /api/admin/updates/status?mode=roll. */
+interface AppRollState {
+  app: string;
+  provisioningState: string;
+  image?: string;
+  notDeployed?: boolean;
+  error?: string;
 }
 
 const useStyles = makeStyles({
@@ -252,6 +285,12 @@ const useStyles = makeStyles({
   dim: { flex: 1, minWidth: 0, color: tokens.colorNeutralForeground3, overflowWrap: 'anywhere' },
   dialogList: { margin: `${tokens.spacingVerticalS} 0 0`, paddingLeft: '18px', fontSize: tokens.fontSizeBase300, overflowWrap: 'anywhere' },
   codeWrap: { overflowWrap: 'anywhere', wordBreak: 'break-word' },
+  fixIt: {
+    marginTop: tokens.spacingVerticalS,
+    paddingTop: tokens.spacingVerticalS,
+    borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
+    display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: tokens.spacingHorizontalS,
+  },
 });
 
 export default function UpdatesPage() {
@@ -267,6 +306,12 @@ export default function UpdatesPage() {
   const [applyGate, setApplyGate] = useState<PreflightGate | null>(null);
   const [applyError, setApplyError] = useState<string | null>(null);
   const [applyDone, setApplyDone] = useState<{ ok: boolean; tag: string } | null>(null);
+
+  // Build+roll pipeline tracking (the "images not in your registry yet" path).
+  const [pipeline, setPipeline] = useState<PipelineState | null>(null);
+  // Post-roll progress: per-app ARM state until every revision is healthy and
+  // the new version is actually serving.
+  const [rollProgress, setRollProgress] = useState<{ apps: AppRollState[]; allHealthy: boolean; current: string } | null>(null);
 
   async function load() {
     setLoading(true);
@@ -284,6 +329,8 @@ export default function UpdatesPage() {
     setApplyGate(null);
     setApplyError(null);
     setApplyDone(null);
+    setPipeline(null);
+    setRollProgress(null);
     try {
       const res = await clientFetch('/api/admin/updates/apply', {
         method: 'POST',
@@ -294,8 +341,22 @@ export default function UpdatesPage() {
       if (j?.results) {
         setApplyResults(j.results as AppApplyResult[]);
         setApplyDone({ ok: !!j.ok, tag: j?.target?.tag_name ?? info.upstream.tag });
+      } else if (j?.mode === 'pipeline' && j?.pipeline) {
+        // Images aren't in the deployment's registry — the server dispatched
+        // the real image build+roll workflow. Track it to completion.
+        setPipeline({
+          workflow: j.pipeline.workflow,
+          monitorUrl: j.pipeline.monitorUrl,
+          dispatchedAt: j.pipeline.dispatchedAt,
+          ref: j.pipeline.ref,
+          tag: j?.target?.tag_name ?? info.upstream.tag,
+          status: 'pending',
+        });
       } else if (j?.preflight && j.preflight.ok === false) {
         setApplyGate(j.preflight as PreflightGate);
+        // A pipeline dispatch that genuinely failed carries the error alongside
+        // the gate — show both, never swallow the cause.
+        if (j?.error) setApplyError(String(j.error));
       } else {
         setApplyError(j?.error || `Update failed (HTTP ${res.status}).`);
       }
@@ -305,6 +366,71 @@ export default function UpdatesPage() {
       setApplying(false);
     }
   }
+
+  // ── Pipeline run progress: poll the GitHub run every 15s until it completes.
+  const pipelineDone = pipeline?.status === 'completed';
+  useEffect(() => {
+    if (!pipeline || pipelineDone) return;
+    const since = pipeline.dispatchedAt;
+    const t = setInterval(async () => {
+      try {
+        const r = await clientFetch(
+          `/api/admin/updates/status?mode=pipeline&since=${encodeURIComponent(since)}`,
+          undefined,
+          20_000,
+        );
+        const j = await r.json().catch(() => ({}));
+        if (j?.run) {
+          setPipeline((p) => p ? {
+            ...p,
+            status: j.run.status || p.status,
+            conclusion: j.run.conclusion ?? p.conclusion,
+            runUrl: j.run.runUrl || p.runUrl,
+          } : p);
+        }
+      } catch { /* transient — keep polling */ }
+    }, 15_000);
+    return () => clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pipeline?.dispatchedAt, pipelineDone]);
+
+  // ── After a successful pipeline run, confirm the new version is SERVING
+  // (the console itself was rolled last, so /api/version flips when it's live).
+  useEffect(() => {
+    if (!pipeline || pipeline.status !== 'completed' || pipeline.conclusion !== 'success' || pipeline.liveVersion) return;
+    const tag = pipeline.tag;
+    const t = setInterval(async () => {
+      try {
+        const r = await clientFetch('/api/version', undefined, 20_000);
+        const j = await r.json().catch(() => ({}));
+        if (j?.current && tag.includes(j.current)) {
+          setPipeline((p) => (p ? { ...p, liveVersion: j.current } : p));
+          setInfo(j as VersionInfo);
+        }
+      } catch { /* console may be restarting mid-roll — keep polling */ }
+    }, 15_000);
+    return () => clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pipeline?.status, pipeline?.conclusion, pipeline?.liveVersion]);
+
+  // ── Direct-roll progress: after the ARM rolls are accepted, poll the real
+  // per-app provisioningState until every revision is healthy AND the new
+  // version is serving (revision rolling → healthy → new version live).
+  const rollTag = applyDone?.ok ? applyDone.tag : null;
+  const rollLive = !!(rollProgress && rollTag && rollProgress.allHealthy && rollTag.includes(rollProgress.current));
+  useEffect(() => {
+    if (!rollTag || rollLive) return;
+    const t = setInterval(async () => {
+      try {
+        const r = await clientFetch('/api/admin/updates/status?mode=roll', undefined, 30_000);
+        const j = await r.json().catch(() => ({}));
+        if (j?.ok && Array.isArray(j.apps)) {
+          setRollProgress({ apps: j.apps as AppRollState[], allHealthy: !!j.allHealthy, current: String(j.current || '') });
+        }
+      } catch { /* the console itself restarts during its own roll — keep polling */ }
+    }, 8_000);
+    return () => clearInterval(t);
+  }, [rollTag, rollLive]);
 
   const recentColumns: LoomColumn<RecentRelease>[] = [
     {
@@ -411,7 +537,7 @@ export default function UpdatesPage() {
                           reconnect at the end. No data is deleted; only the application images change.
                           <ul className={s.dialogList}>
                             <li>Each app is updated one at a time, with live status below.</li>
-                            <li>If the public images for this release are not yet published, the update will refuse with a clear message rather than break anything.</li>
+                            <li>If this release&apos;s images are not in your registry yet, Loom triggers the image build + roll pipeline instead (when a GitHub token is configured) and tracks it here — otherwise it tells you exactly what to configure. It never breaks anything.</li>
                           </ul>
                         </DialogContent>
                         <DialogActions>
@@ -444,6 +570,49 @@ export default function UpdatesPage() {
             {applyError && (
               <MessageBar intent="error" className={a.messageBar}>
                 <MessageBarBody><MessageBarTitle>Update failed</MessageBarTitle>{applyError}</MessageBarBody>
+              </MessageBar>
+            )}
+
+            {pipeline && (
+              <MessageBar
+                intent={
+                  pipeline.liveVersion ? 'success'
+                  : pipeline.status === 'completed'
+                    ? (pipeline.conclusion === 'success' ? 'success' : 'error')
+                    : 'info'
+                }
+                layout="multiline"
+                className={a.messageBar}
+              >
+                <MessageBarBody>
+                  <MessageBarTitle>
+                    {pipeline.liveVersion
+                      ? `Update to ${pipeline.tag} is live`
+                      : pipeline.status === 'completed'
+                        ? (pipeline.conclusion === 'success'
+                            ? `Build + roll pipeline succeeded — waiting for ${pipeline.tag} to serve`
+                            : `Build + roll pipeline ${pipeline.conclusion || 'failed'}`)
+                        : `Building + rolling ${pipeline.tag} via pipeline`}
+                  </MessageBarTitle>
+                  {pipeline.liveVersion ? (
+                    <>The console is now serving version <code>{pipeline.liveVersion}</code>. All apps were rolled onto the new release images.</>
+                  ) : pipeline.status === 'completed' && pipeline.conclusion !== 'success' ? (
+                    <>The workflow run did not succeed — nothing was faked as updated. Inspect the run, fix the cause, and retry the update.</>
+                  ) : (
+                    <>
+                      {pipeline.status !== 'completed' && <Spinner size="tiny" />}{' '}
+                      The release images for {pipeline.tag} are not in this deployment&apos;s registry, so Loom dispatched
+                      the image build + roll workflow (<code>{pipeline.workflow}</code> @ <code>{pipeline.ref}</code>).
+                      It builds every app image into your ACR, then rolls the Container Apps onto them — typically
+                      10–25 minutes. Status: <b>{pipeline.status === 'pending' ? 'starting…' : pipeline.status.replace('_', ' ')}</b>.
+                      {pipeline.status === 'completed' && pipeline.conclusion === 'success' && (
+                        <> Confirming the new version is serving (the console restarts last)…</>
+                      )}
+                    </>
+                  )}
+                  {' '}
+                  <a href={pipeline.runUrl || pipeline.monitorUrl} target="_blank" rel="noreferrer">View the run</a>
+                </MessageBarBody>
               </MessageBar>
             )}
 
@@ -483,6 +652,18 @@ export default function UpdatesPage() {
                       Re-deploy <code className={s.codeWrap}>platform/fiab/bicep</code> first.
                     </div>
                   )}
+                  {applyGate.pipeline && !applyGate.pipeline.available && (
+                    <div className={s.fixIt}>
+                      <b>Fix it:</b> set <code className={s.codeWrap}>{(applyGate.pipeline.missingEnv || ['LOOM_UPDATE_GITHUB_TOKEN']).join(', ')}</code> on
+                      the console (a GitHub token with <code>actions: write</code> on {info.repo}) and Loom will trigger the
+                      image build + roll pipeline (<code className={s.codeWrap}>{applyGate.pipeline.workflow}</code>) for you on the next
+                      Update click — no manual CI run needed.{' '}
+                      <Button appearance="secondary" size="small" as="a" href="/admin/env-config">
+                        Open Environment config
+                      </Button>{' '}
+                      <a href={applyGate.pipeline.monitorUrl} target="_blank" rel="noreferrer">View the pipeline</a>
+                    </div>
+                  )}
                 </MessageBarBody>
               </MessageBar>
             )}
@@ -490,24 +671,44 @@ export default function UpdatesPage() {
             {applyResults && (
               <>
                 {applyDone && (
-                  <MessageBar intent={applyDone.ok ? 'success' : 'warning'} className={a.messageBar}>
+                  <MessageBar
+                    intent={rollLive ? 'success' : applyDone.ok ? 'info' : 'warning'}
+                    className={a.messageBar}
+                  >
                     <MessageBarBody>
                       <MessageBarTitle>
-                        {applyDone.ok
-                          ? `Update to ${applyDone.tag} applied`
-                          : `Update to ${applyDone.tag} completed with issues`}
+                        {rollLive
+                          ? `Update to ${applyDone.tag} is live`
+                          : applyDone.ok
+                            ? `Rolling to ${applyDone.tag} — revisions restarting`
+                            : `Update to ${applyDone.tag} completed with issues`}
                       </MessageBarTitle>
-                      {applyDone.ok
-                        ? 'Apps are rolling to new revisions. Re-check in a minute to confirm the running version.'
-                        : 'Some apps did not update — see per-app status below. The update did not fake success.'}
+                      {rollLive ? (
+                        <>Every app revision is healthy and the console is serving <code>{rollProgress?.current}</code>.</>
+                      ) : applyDone.ok ? (
+                        <>
+                          <Spinner size="tiny" /> ARM accepted the image roll for every app. Live per-app revision
+                          state below — the console itself restarts last, so expect a brief reconnect at the end.
+                        </>
+                      ) : (
+                        'Some apps did not update — see per-app status below. The update did not fake success.'
+                      )}
                     </MessageBarBody>
                   </MessageBar>
                 )}
                 <div className={s.applyList}>
                   {applyResults.map((r) => {
+                    // Live ARM revision state (polled) supersedes the static
+                    // roll-accepted snapshot: rolling → healthy per app.
+                    const live = rollProgress?.apps.find((x) => x.app === r.app);
+                    const liveState = r.status === 'failed' || r.status === 'skipped'
+                      ? undefined
+                      : live?.provisioningState;
+                    const rolling = liveState !== undefined && liveState !== 'Succeeded';
                     const icon =
                       r.status === 'failed' ? <ErrorCircle20Filled className={s.fail} />
                       : r.status === 'skipped' ? <Subtract20Regular className={s.dim} />
+                      : rolling ? <Spinner size="tiny" />
                       : <Checkmark20Filled className={s.ok} />;
                     return (
                       <div key={r.app} className={s.applyRow}>
@@ -519,7 +720,7 @@ export default function UpdatesPage() {
                           <span className={s.dim}>not deployed on this boundary — skipped</span>
                         ) : (
                           <span className={s.applyImage}>
-                            → {r.toImage.split('/').pop()} ({r.provisioningState || r.status})
+                            → {r.toImage.split('/').pop()} ({liveState ?? r.provisioningState ?? r.status})
                           </span>
                         )}
                       </div>

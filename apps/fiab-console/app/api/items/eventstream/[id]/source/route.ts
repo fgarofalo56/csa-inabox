@@ -31,6 +31,7 @@ import {
   eventhubsConfigGate,
   readEventHubsConfig,
   createEventHub,
+  ensureEventHub,
   createEventHubAuthRule,
   listEventHubKeys,
   EventHubsArmError,
@@ -266,6 +267,13 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       if (!entityPath) {
         return NextResponse.json({ ok: false, error: 'Event Hub name is required for an Event Hubs source.' }, { status: 422 });
       }
+      // Provision means the entity EXISTS when we hand back the receipt — a
+      // resolved-but-nonexistent hub made every send/preview 404 while the
+      // inspector claimed a live ingest endpoint. ensureEventHub is get-or-
+      // create: an existing hub keeps its partition/retention settings.
+      await ensureEventHub(readEventHubsConfig(), {
+        name: entityPath, partitionCount: 4, messageRetentionInDays: 1,
+      });
       endpoint = {
         fqdn, entityPath,
         kafkaBootstrap: `${fqdn}:9093`,
@@ -292,6 +300,11 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       if (!topic) {
         return NextResponse.json({ ok: false, error: 'Topic (Event Hub name) is required for a Kafka source.' }, { status: 422 });
       }
+      // Kafka topics on Event Hubs ARE Event Hub entities — same ensure-exists
+      // contract as the eventhub branch.
+      await ensureEventHub(readEventHubsConfig(), {
+        name: topic, partitionCount: 4, messageRetentionInDays: 1,
+      });
       endpoint = {
         fqdn, entityPath: topic,
         kafkaBootstrap: `${fqdn}:9093`,

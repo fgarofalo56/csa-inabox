@@ -71,20 +71,16 @@ resource dataOwner 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   }
 }
 
-// 3. Event Grid system topic on the instance (twin change events) -----------
-resource egTopic 'Microsoft.EventGrid/systemTopics@2023-12-15-preview' = {
-  name: '${instanceName}-egtopic'
-  location: location
-  tags: tags
-  properties: {
-    source: adt.id
-    topicType: 'Microsoft.DigitalTwins.DigitalTwinsInstances'
-  }
-}
+// 3. Twin-change event routing --------------------------------------------
+// NOTE: there is NO Event Grid SYSTEM-topic type for Digital Twins —
+// 'Microsoft.DigitalTwins.DigitalTwinsInstances' is rejected by ARM
+// ("Unrecognized topic type", live 2026-07-15) and is absent from
+// providers/Microsoft.EventGrid/topicTypes. ADT publishes twin-change events
+// through its OWN endpoints + routes (Microsoft.DigitalTwins/…/endpoints →
+// eventRoutes, targeting an Event Grid CUSTOM topic / Event Hub / Service
+// Bus). Wire that from the digital-twin editor when event routing is enabled.
 
 @description('The ADT data-plane hostname — set LOOM_ADT_ENDPOINT to this to enable the opt-in ADT backend.')
 output hostName string = adt.properties.hostName
 @description('The ADT instance resource id.')
 output instanceId string = adt.id
-@description('The Event Grid system topic id (hook point for the Eventhouse/Activator event route).')
-output eventGridSystemTopicId string = egTopic.id

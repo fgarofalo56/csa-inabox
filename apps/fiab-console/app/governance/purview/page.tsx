@@ -120,7 +120,9 @@ export default function PurviewPage() {
             </div>
             <Caption1>
               Account <span className={s.mono}>{purview.account}</span> · Data Map data plane{' '}
-              <span className={s.mono}>{purview.account}.purview.azure.com</span>
+              <span className={s.mono}>
+                {(purview.endpoint || `https://${purview.account}.purview.azure.com`).replace(/^https?:\/\//, '')}
+              </span>
             </Caption1>
             <div className={s.actions}>
               <Button appearance="primary" as="a" href={portal} target="_blank" rel="noreferrer" icon={<Open20Regular />}>

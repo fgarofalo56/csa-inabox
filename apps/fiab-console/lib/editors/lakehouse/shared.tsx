@@ -10,6 +10,12 @@
  */
 
 import { makeStyles, tokens } from '@fluentui/react-components';
+import type { FluentIcon } from '@fluentui/react-icons';
+import {
+  Folder20Filled, Document20Regular, DocumentText20Regular, Table20Regular,
+  Layer20Regular, Braces20Regular, Code20Regular, Image20Regular,
+  FolderZip20Regular, DatabaseSearch20Regular, Notebook20Regular,
+} from '@fluentui/react-icons';
 import { useSharedEditorStyles } from '../shared-styles';
 import { useMemo } from 'react';
 
@@ -18,8 +24,28 @@ const useLocalStyles = makeStyles({
   tabs: { borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalS} 0` },
   toolbar: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
   tableWrap: { overflow: 'auto', maxHeight: '480px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
-  rowHover: { ':hover': { backgroundColor: tokens.colorNeutralBackground2Hover, cursor: 'pointer' } },
+  // Fabric OneLake-explorer density — the row's secondary "…" actions stay
+  // hidden until the row is hovered or focused (keyboard reachable via
+  // :focus-within), matching the Fabric object-list hover affordance.
+  rowHover: {
+    ':hover': { backgroundColor: tokens.colorNeutralBackground2Hover, cursor: 'pointer' },
+    '& .lh-row-actions': { opacity: 0, transitionProperty: 'opacity', transitionDuration: tokens.durationFaster },
+    ':hover .lh-row-actions': { opacity: 1 },
+    ':focus-within .lh-row-actions': { opacity: 1 },
+  },
   rowSelected: { backgroundColor: tokens.colorNeutralBackground1Selected },
+  // Name cell — glyph + truncating label so long blob names never push the
+  // size/modified columns out of view (badges/columns never overlap).
+  nameCell: {
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS,
+    minWidth: 0, maxWidth: '100%',
+  },
+  nameLabel: { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+  // Breadcrumb path bar above the object list (Fabric Files header parity).
+  breadcrumbBar: {
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS,
+    minWidth: 0, flexWrap: 'wrap',
+  },
   editor: {
     width: '100%', minHeight: '160px',
     fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase300, padding: tokens.spacingVerticalM,
@@ -80,6 +106,10 @@ interface PreviewResponse {
   message?: string;
   error?: string;
   code?: string;
+  /** Serverless cold-start / storage-propagation windows right after an
+   *  upload — the editor auto-retries these instead of showing the error. */
+  transient?: boolean;
+  retryAfterMs?: number;
 }
 
 interface HistoryRow {
@@ -155,6 +185,63 @@ function formatCell(v: unknown): string {
 }
 
 /**
+ * Per-object-type branded glyph (Fabric OneLake-explorer parity). Folders,
+ * Delta/parquet data, tabular files, notebooks/code, JSON, SQL, images and
+ * archives each get a distinct Fluent glyph + a theme-aware palette tint so
+ * the tree and the object list read at a glance — matching the density and
+ * iconography of the real OneLake file explorer. Colors are Fluent palette
+ * tokens (light+dark correct), never raw hex.
+ */
+interface FileVisual { icon: FluentIcon; color: string; kind: string }
+
+const FILE_EXT_VISUAL: Record<string, FileVisual> = {
+  csv:     { icon: Table20Regular,          color: tokens.colorPaletteGreenForeground2,    kind: 'CSV' },
+  tsv:     { icon: Table20Regular,          color: tokens.colorPaletteGreenForeground2,    kind: 'TSV' },
+  parquet: { icon: Layer20Regular,          color: tokens.colorPaletteBlueForeground2,     kind: 'Parquet' },
+  delta:   { icon: Layer20Regular,          color: tokens.colorPaletteBlueForeground2,     kind: 'Delta' },
+  orc:     { icon: Layer20Regular,          color: tokens.colorPaletteBlueForeground2,     kind: 'ORC' },
+  avro:    { icon: Layer20Regular,          color: tokens.colorPaletteBlueForeground2,     kind: 'Avro' },
+  json:    { icon: Braces20Regular,         color: tokens.colorPaletteMarigoldForeground2, kind: 'JSON' },
+  jsonl:   { icon: Braces20Regular,         color: tokens.colorPaletteMarigoldForeground2, kind: 'JSON Lines' },
+  ndjson:  { icon: Braces20Regular,         color: tokens.colorPaletteMarigoldForeground2, kind: 'JSON Lines' },
+  py:      { icon: Code20Regular,           color: tokens.colorPaletteBerryForeground2,    kind: 'Python' },
+  ipynb:   { icon: Notebook20Regular,       color: tokens.colorPaletteBerryForeground2,    kind: 'Notebook' },
+  scala:   { icon: Code20Regular,           color: tokens.colorPaletteBerryForeground2,    kind: 'Scala' },
+  r:       { icon: Code20Regular,           color: tokens.colorPaletteBerryForeground2,    kind: 'R' },
+  sql:     { icon: DatabaseSearch20Regular, color: tokens.colorPaletteTealForeground2,     kind: 'SQL' },
+  kql:     { icon: DatabaseSearch20Regular, color: tokens.colorPaletteTealForeground2,     kind: 'KQL' },
+  md:      { icon: DocumentText20Regular,   color: tokens.colorNeutralForeground3,         kind: 'Markdown' },
+  txt:     { icon: DocumentText20Regular,   color: tokens.colorNeutralForeground3,         kind: 'Text' },
+  log:     { icon: DocumentText20Regular,   color: tokens.colorNeutralForeground3,         kind: 'Log' },
+  png:     { icon: Image20Regular,          color: tokens.colorPaletteSeafoamForeground2,  kind: 'Image' },
+  jpg:     { icon: Image20Regular,          color: tokens.colorPaletteSeafoamForeground2,  kind: 'Image' },
+  jpeg:    { icon: Image20Regular,          color: tokens.colorPaletteSeafoamForeground2,  kind: 'Image' },
+  gif:     { icon: Image20Regular,          color: tokens.colorPaletteSeafoamForeground2,  kind: 'Image' },
+  svg:     { icon: Image20Regular,          color: tokens.colorPaletteSeafoamForeground2,  kind: 'Image' },
+  zip:     { icon: FolderZip20Regular,      color: tokens.colorNeutralForeground3,         kind: 'Archive' },
+  gz:      { icon: FolderZip20Regular,      color: tokens.colorNeutralForeground3,         kind: 'Archive' },
+  tar:     { icon: FolderZip20Regular,      color: tokens.colorNeutralForeground3,         kind: 'Archive' },
+};
+
+const FOLDER_VISUAL: FileVisual = { icon: Folder20Filled, color: tokens.colorPaletteMarigoldForeground2, kind: 'Folder' };
+const DEFAULT_FILE_VISUAL: FileVisual = { icon: Document20Regular, color: tokens.colorNeutralForeground3, kind: 'File' };
+
+function fileVisual(name: string, isDirectory: boolean): FileVisual {
+  if (isDirectory) return FOLDER_VISUAL;
+  const leaf = leafName(name);
+  const dot = leaf.lastIndexOf('.');
+  const ext = dot >= 0 ? leaf.slice(dot + 1).toLowerCase() : '';
+  return FILE_EXT_VISUAL[ext] ?? DEFAULT_FILE_VISUAL;
+}
+
+/** Rendered glyph for a path entry — tinted per object type. */
+function FileGlyph({ name, isDirectory }: { name: string; isDirectory: boolean }) {
+  const v = fileVisual(name, isDirectory);
+  const Icon = v.icon;
+  return <Icon style={{ color: v.color, flexShrink: 0 }} title={v.kind} />;
+}
+
+/**
  * Defensive response parser. If a gateway / Container App / WAF / 404 returns
  * an HTML error page (`<!DOCTYPE ...`), `r.json()` throws
  * "Unexpected token '<', "<!DOCTYPE "... is not valid JSON". Sniff the
@@ -199,6 +286,7 @@ async function parseJsonOrError<T extends { ok?: boolean; error?: string }>(
 
 export {
   useStyles, formatBytes, leafName, collectEntries, formatCell, parseJsonOrError,
+  fileVisual, FileGlyph,
 };
 export type {
   ContainerInfo, PathEntry, ReferenceLakehouse, RefSelection, PreviewResponse,

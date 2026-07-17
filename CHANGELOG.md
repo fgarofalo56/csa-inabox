@@ -25,6 +25,58 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.71.1](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.71.0...csa-inabox-v0.71.1) (2026-07-16)
+
+
+### Bug Fixes
+
+* **ci:** drop unused id-token permission from post-deploy bootstrap — unbreaks the in-product Update pipeline ([#2110](https://github.com/fgarofalo56/csa-inabox/issues/2110)) ([420397d](https://github.com/fgarofalo56/csa-inabox/commit/420397db8f6384b2212f48cd43431a7e427afde0))
+
+## [0.71.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.70.0...csa-inabox-v0.71.0) (2026-07-16)
+
+
+### Features
+
+* **g2:** zero day-one gates — central gate registry, HonestGate Fix-it wizard, /admin/gates, Copilot gate tools ([#2095](https://github.com/fgarofalo56/csa-inabox/issues/2095)) ([2d1dba9](https://github.com/fgarofalo56/csa-inabox/commit/2d1dba939dfbaadf36b08f6990a784bf90dd205b))
+* **kql:** Query→Dashboard-tile conversion wizard + Open in Loom report builder (review 5.2/5.3) ([#2084](https://github.com/fgarofalo56/csa-inabox/issues/2084)) ([0fac251](https://github.com/fgarofalo56/csa-inabox/commit/0fac2516fe3e89ecf10cf762939c0b4513cc91e9))
+* **perf:** actionable recommendations + auto-adjust + usage-learning warm schedule + warm-session proof (4.1-4.4) ([#2090](https://github.com/fgarofalo56/csa-inabox/issues/2090)) ([bdc9f37](https://github.com/fgarofalo56/csa-inabox/commit/bdc9f37603d6e51383b1da623ee00f7f92ce782d))
+* **prpt-renderer:** ACA host for the paginated-report renderer (policy-locked estates) ([#2109](https://github.com/fgarofalo56/csa-inabox/issues/2109)) ([15fdcfe](https://github.com/fgarofalo56/csa-inabox/commit/15fdcfee8dc9deda4b166c61258b6bbd1916e1c0))
+* **unity-catalog:** full UC capability wiring, cloud-aware (Databricks Commercial / OSS Gov) ([#2096](https://github.com/fgarofalo56/csa-inabox/issues/2096)) ([10000ac](https://github.com/fgarofalo56/csa-inabox/commit/10000acd728c0b181e5e5e90339bdbbb4acc89b3))
+* **ux-fabric-a W1:** lift BI-core surfaces to Fabric-A visual grade ([#2086](https://github.com/fgarofalo56/csa-inabox/issues/2086)) ([35c542a](https://github.com/fgarofalo56/csa-inabox/commit/35c542a1b8c293c3cbfc3649628e4c216f6f9a7c))
+* **ux-w2:** canvas node-kit v3 — branded glyphs, typed port labels, run-status pulse ([#2076](https://github.com/fgarofalo56/csa-inabox/issues/2076)) ([2c4ec71](https://github.com/fgarofalo56/csa-inabox/commit/2c4ec71401873cf84c3aa20d183e3e63b7486508))
+* **ux-w3:** data-engineering surfaces to Fabric-A visual grade — lakehouse explorer, notebook, warehouse ([#2089](https://github.com/fgarofalo56/csa-inabox/issues/2089)) ([9effb70](https://github.com/fgarofalo56/csa-inabox/commit/9effb7029fda99e61236c9ba8daf6a563698fc1f))
+* **ux-w3:** shared dense-grid skin + guided-picker-rail primitives ([#2078](https://github.com/fgarofalo56/csa-inabox/issues/2078)) ([a6f352d](https://github.com/fgarofalo56/csa-inabox/commit/a6f352dbd51cf29d97a547b7e6a458fdd358b3b5))
+* **ux-w4:** hubs/homes to Fabric floor — Home rails, workspace list density, OneLake/RT-hub row actions, marketplace cards ([#2085](https://github.com/fgarofalo56/csa-inabox/issues/2085)) ([fd432ce](https://github.com/fgarofalo56/csa-inabox/commit/fd432ced9370a3960cc83e7c9ebdb90500d85c6a))
+* **ux:** G3 — user-adjustable height for every fixed-height query editor (sizingKey on MonacoTextarea) ([#2083](https://github.com/fgarofalo56/csa-inabox/issues/2083)) ([bdcc523](https://github.com/fgarofalo56/csa-inabox/commit/bdcc523a0a45e645eeb0fe6ecf8fc5af40419fa2))
+
+
+### Bug Fixes
+
+* **admin/updates:** Update button actually updates — dispatch the real build+roll pipeline when release images aren't in the deployment's ACR ([#2092](https://github.com/fgarofalo56/csa-inabox/issues/2092)) ([9ba781e](https://github.com/fgarofalo56/csa-inabox/commit/9ba781e64c8542f04d8fac62bbb39e3283ac79d5))
+* **browse:** all-items scan, pins, recents, workspace avatars + Domains filter ([#2087](https://github.com/fgarofalo56/csa-inabox/issues/2087)) ([9994b05](https://github.com/fgarofalo56/csa-inabox/commit/9994b05ce7bfc09f14abd36b4c19f2f4e1483a55))
+* **eventstream:** creation-state UX, add-source revert loop, node deletion, badge overlap, EH tree scoping, Spark gate auto-bind ([#2091](https://github.com/fgarofalo56/csa-inabox/issues/2091)) ([75aba2b](https://github.com/fgarofalo56/csa-inabox/commit/75aba2b221442dbb2fc994b390e911dc993e1da6))
+* **eventstream:** make live preview actually show events + provision really creates the hub ([#2098](https://github.com/fgarofalo56/csa-inabox/issues/2098)) ([ae9a259](https://github.com/fgarofalo56/csa-inabox/commit/ae9a2598eeab3a108ac2b453b67a8d7fb5bbd2ba))
+* **gov:** ARM-derived Purview endpoints + cloud-aware fallback (Gov gate probed .com instead of .us) ([#2088](https://github.com/fgarofalo56/csa-inabox/issues/2088)) ([eb5518b](https://github.com/fgarofalo56/csa-inabox/commit/eb5518b97408817dc43b31db45db7e2edacd9f79))
+* **items:** createOwnedItem works in shared/admin-accessible workspaces ([#2100](https://github.com/fgarofalo56/csa-inabox/issues/2100)) ([17b44d0](https://github.com/fgarofalo56/csa-inabox/commit/17b44d01466752a46706304544778b31e11ba583))
+* **kql-dashboard:** tile results missing ok:true wrap + ci(gov-purview-verify): ARM Collection Admin bootstrap ([#2102](https://github.com/fgarofalo56/csa-inabox/issues/2102)) ([d377e3a](https://github.com/fgarofalo56/csa-inabox/commit/d377e3a0602745cab117bcfc211404b8353f9940))
+* **kql:** tile wizard works on workspace-visible items, not only owned ones ([#2099](https://github.com/fgarofalo56/csa-inabox/issues/2099)) ([bb154a8](https://github.com/fgarofalo56/csa-inabox/commit/bb154a8fb6948f2fe07899b59551709ca3817fe3))
+* **purview:** make source registration + scanning actually work (4 live-proven scan-plane defects) ([#2097](https://github.com/fgarofalo56/csa-inabox/issues/2097)) ([2e7b8aa](https://github.com/fgarofalo56/csa-inabox/commit/2e7b8aac07c90c39da31974bacac2a4f91f55d88))
+* **purview:** manual Register resolves ARM coords by name + dialog shows the register error ([#2107](https://github.com/fgarofalo56/csa-inabox/issues/2107)) ([8048dd6](https://github.com/fgarofalo56/csa-inabox/commit/8048dd6cf42a9ab67a44ecb474e8573a6778640b))
+* Recent-rail coverage for type-specific routes + /home redirect + honest prove-warm miss copy ([#2101](https://github.com/fgarofalo56/csa-inabox/issues/2101)) ([a798a11](https://github.com/fgarofalo56/csa-inabox/commit/a798a11cb51c976d9e42ad0998b1aac203a9521b))
+* **setup:** landing-zone deploy submit can never 504 at the edge — bound every hop + honest gateway errors ([#2094](https://github.com/fgarofalo56/csa-inabox/issues/2094)) ([ab87922](https://github.com/fgarofalo56/csa-inabox/commit/ab87922632150ae3d3dc5c38683dfee61655eed1))
+
+
+### Documentation
+
+* **purview:** troubleshooting — new-platform host 403, empty privatelink-zone ENOTFOUND, grant bootstrap ([#2106](https://github.com/fgarofalo56/csa-inabox/issues/2106)) ([524abb4](https://github.com/fgarofalo56/csa-inabox/commit/524abb4525f5005f36df24989a80c403552b92af))
+* **ux:** codify 2026-07-15 operator live-review platform UX standards ([#2081](https://github.com/fgarofalo56/csa-inabox/issues/2081)) ([c46a615](https://github.com/fgarofalo56/csa-inabox/commit/c46a615711f7c8ba431fe54f6465d4e91f167ab3))
+
+
+### Continuous Integration
+
+* **gov-purview-verify:** fix_dns also approves pending PE connections ([#2104](https://github.com/fgarofalo56/csa-inabox/issues/2104)) ([510d1f0](https://github.com/fgarofalo56/csa-inabox/commit/510d1f00c5ed2f43295b8ca4c3691a4e1db5732b))
+* **gov-purview-verify:** in-container DNS diagnosis + raw exec output capture ([#2103](https://github.com/fgarofalo56/csa-inabox/issues/2103)) ([78484a0](https://github.com/fgarofalo56/csa-inabox/commit/78484a078941493d4d5952ae797860a042081cee))
+
 ## [0.70.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.69.0...csa-inabox-v0.70.0) (2026-07-15)
 
 

@@ -70,9 +70,13 @@ interface EventstreamState {
 }
 
 const DEFAULT_ES_CFG: StreamCfg = {
-  source: { kind: 'eventhub', namespace: '', name: '', consumerGroup: '$Default' },
+  // Seeded starter topology: named nodes so the canvas, the inspector and the
+  // authoring lint all refer to the same "source-1" / "destination-1" labels.
+  // A brand-new stream opens PRISTINE (no validation banners) — the inspector
+  // shows next-step guidance instead until the user edits or saves.
+  source: { kind: 'eventhub', namespace: '', name: 'source-1', consumerGroup: '$Default' },
   transforms: [],
-  sink: { kind: 'kusto', database: 'loomdb-default', table: '' },
+  sink: { kind: 'kusto', name: 'destination-1', database: 'loomdb-default', table: '' },
 };
 
 // ============================================================
@@ -321,6 +325,17 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
   // topology there gives action-level undo across the designer, operators
   // builder, ghost node, and transform menu.
   const history = useCanvasHistory<string>(cfgText);
+  // CRITICAL: useCanvasHistory returns a FRESH object every render (only its
+  // methods are stable). Depending on `history` itself inside useCallback deps
+  // recreates the callback each render — which made the `load` effect refire
+  // load() after EVERY state change, refetching the persisted config and
+  // OVERWRITING unsaved canvas edits (the "Add source flashes and disappears"
+  // defect). Depend on these stable methods instead.
+  const { commit: historyCommit, undo: historyUndo, redo: historyRedo, reset: historyReset } = history;
+  // Deferred-validation flag: a brand-new stream opens CLEAN (no red authoring
+  // banners) until the user touches the topology or attempts a save. Items
+  // loaded with a previously-saved topology count as touched.
+  const [touched, setTouched] = useState(false);
   // Draft/publish separation (Fabric parity): the topology persists to Cosmos
   // as a DRAFT continuously; it only goes live on the Azure-native backend when
   // the operator Publishes (Provision to Azure). `topologyDirtySincePublish`
@@ -386,22 +401,23 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
     if (sinks.length > 1) projected.sinks = sinks;
     const text = JSON.stringify(projected, null, 2);
     setCfgText(text);
-    history.commit(text);
+    historyCommit(text);
     setDirty(true);
+    setTouched(true);
     setTopologyDirtySincePublish(true);
     setParseErr(null);
     setSaveErr(null);
-  }, [history]);
+  }, [historyCommit]);
 
   // Undo/redo apply a prior topology snapshot back into the editor state.
   const doUndo = useCallback(() => {
-    const snap = history.undo();
-    if (snap != null) { setCfgText(snap); setDirty(true); setTopologyDirtySincePublish(true); setParseErr(null); }
-  }, [history]);
+    const snap = historyUndo();
+    if (snap != null) { setCfgText(snap); setDirty(true); setTouched(true); setTopologyDirtySincePublish(true); setParseErr(null); }
+  }, [historyUndo]);
   const doRedo = useCallback(() => {
-    const snap = history.redo();
-    if (snap != null) { setCfgText(snap); setDirty(true); setTopologyDirtySincePublish(true); setParseErr(null); }
-  }, [history]);
+    const snap = historyRedo();
+    if (snap != null) { setCfgText(snap); setDirty(true); setTouched(true); setTopologyDirtySincePublish(true); setParseErr(null); }
+  }, [historyRedo]);
 
   // Merge a partial topology patch (sources/transforms/sinks) into the wire cfg
   // and push it through the same projection the designer uses, so the guided
@@ -440,13 +456,16 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
       setState(j);
       if (j.fabricEventstreamId) setPublishedId(j.fabricEventstreamId);
       if (j.asaJobName) setAsaJobName(j.asaJobName);
-      const cfg = j.config && (j.config.source || j.config.sink || (j.config.transforms?.length ?? 0) > 0)
-        ? j.config
-        : DEFAULT_ES_CFG;
+      const hasSavedTopology = !!(j.config && (j.config.source || j.config.sink || (j.config.transforms?.length ?? 0) > 0));
+      const cfg = hasSavedTopology ? j.config! : DEFAULT_ES_CFG;
       const text = JSON.stringify(cfg, null, 2);
       setCfgText(text);
-      history.reset(text);
+      historyReset(text);
       setDirty(false);
+      // A stream with a previously-saved / provisioned topology has been worked
+      // on — validation shows. A freshly-minted item opens pristine (guided
+      // setup instead of red authoring errors) until the user edits or saves.
+      setTouched(hasSavedTopology || !!(j.ehId || j.asaJobName || j.fabricEventstreamId));
       // A stream with a live Azure Event Hub (ehId) / recorded ASA job / Fabric
       // publish has been provisioned; otherwise treat the loaded topology as a
       // not-yet-provisioned draft. ehId is the Azure-native DEFAULT signal so a
@@ -456,12 +475,13 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
     } catch (e: any) {
       setState({ ok: false, error: e?.message || String(e) });
     }
-  }, [id, history]);
+  }, [id, historyReset]);
 
   useEffect(() => { load(); }, [load]);
 
   const save = useCallback(async () => {
     setParseErr(null); setSaveErr(null);
+    setTouched(true); // a save attempt surfaces validation from here on
     let parsed: StreamCfg;
     try { parsed = JSON.parse(cfgText); }
     catch (e: any) {
@@ -1180,7 +1200,7 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
             authoring tabs (designer / operators); hidden on the read-only
             definition + code-first SQL tabs which have their own result grids. */}
         {(activeTab === 'designer' || activeTab === 'operators') && (
-          <DataPreviewDock itemId={id} topology={esTopology(parsedVisual)} />
+          <DataPreviewDock itemId={id} topology={esTopology(parsedVisual)} pristine={!touched} />
         )}
       </div>
     } />
@@ -1710,6 +1730,25 @@ function EventstreamOperatorsTab({
   const derivedStreams = sinks.map((sk, i) => ({ sk, i })).filter((x) => x.sk?.kind === 'derivedStream');
   const sparkSinks = sinks.map((sk, i) => ({ sk, i })).filter((x) => x.sk?.kind === 'spark-notebook');
 
+  // Spark structured-streaming binding — AUTO-DETECTED server-side (runtime
+  // admin setting > LOOM_SYNAPSE_WORKSPACE / LOOM_DATABRICKS_WORKSPACE_URL env).
+  // When bound, notebook routing is NOT gated; when unbound, the gate carries an
+  // inline "Fix it" wizard (admin) that discovers real Synapse / Databricks
+  // workspaces via ARM and persists the choice to the platform settings.
+  const [sparkBinding, setSparkBinding] = useState<SparkBindingInfo | null>(null);
+  const [sparkWizardOpen, setSparkWizardOpen] = useState(false);
+  const loadSparkBinding = useCallback(async () => {
+    try {
+      const r = await clientFetch('/api/items/eventstream/spark-binding');
+      const j = await r.json();
+      if (j?.ok) setSparkBinding(j as SparkBindingInfo);
+      else setSparkBinding({ ok: false, bound: false });
+    } catch {
+      setSparkBinding({ ok: false, bound: false });
+    }
+  }, []);
+  useEffect(() => { void loadSparkBinding(); }, [loadSparkBinding]);
+
   const doValidate = useCallback(async () => {
     setValidating(true); setValidateResult(null); setValidateErr(null); setValidateHint(null);
     try {
@@ -1880,15 +1919,40 @@ function EventstreamOperatorsTab({
           {sparkSinks.length > 0 && <Badge appearance="tint" color="informative">{sparkSinks.length}</Badge>}
           <Button appearance="outline" size="small" icon={<Add20Regular />} onClick={addSparkSink} style={{ marginLeft: 'auto' }}>Add Spark notebook sink</Button>
         </div>
-        <MessageBar intent="warning">
-          <MessageBarBody>
-            <MessageBarTitle>Requires a Spark structured-streaming binding</MessageBarTitle>
-            Routing the stream to a notebook runs an Azure-native Spark structured-streaming job that reads the
-            stream&apos;s Event Hub / ADLS landing. Set <code>LOOM_SYNAPSE_WORKSPACE</code> (or
-            <code> LOOM_DATABRICKS_WORKSPACE_URL</code>) and pick a Spark pool below. Until the binding is
-            provisioned the mapping is saved as configuration only — no events are processed yet.
-          </MessageBarBody>
-        </MessageBar>
+        {sparkBinding?.bound ? (
+          <MessageBar intent="success" data-testid="spark-binding-bound">
+            <MessageBarBody>
+              <MessageBarTitle>Spark structured-streaming binding detected</MessageBarTitle>
+              Notebook sinks run on {sparkBinding.kind === 'databricks'
+                ? <>Databricks workspace <code>{sparkBinding.databricksUrl}</code></>
+                : <>Synapse workspace <code>{sparkBinding.synapseWorkspace}</code></>}
+              {' '}({sparkBinding.source === 'runtime' ? 'set by an admin' : 'auto-detected from the deployment'}).
+              Pick a notebook + Spark pool below — no extra setup required.
+            </MessageBarBody>
+          </MessageBar>
+        ) : sparkBinding && !sparkBinding.bound ? (
+          <MessageBar intent="warning" layout="multiline" data-testid="spark-binding-gate">
+            <MessageBarBody>
+              <MessageBarTitle>No Spark structured-streaming binding yet</MessageBarTitle>
+              Routing the stream to a notebook runs an Azure-native Spark structured-streaming job that reads the
+              stream&apos;s Event Hub / ADLS landing. No Synapse or Databricks workspace is bound for this
+              deployment yet.{' '}
+              {sparkBinding.isAdmin
+                ? 'Use Fix it to pick one of the workspaces already deployed in this subscription (real ARM discovery) — the choice is saved as the platform default.'
+                : 'Ask a tenant admin to bind one (Admin → platform settings), or set LOOM_SYNAPSE_WORKSPACE / LOOM_DATABRICKS_WORKSPACE_URL.'}
+            </MessageBarBody>
+            {sparkBinding.isAdmin && (
+              <MessageBarActions>
+                <Button size="small" appearance="primary" onClick={() => setSparkWizardOpen(true)}>Fix it</Button>
+              </MessageBarActions>
+            )}
+          </MessageBar>
+        ) : null}
+        <SparkBindingWizard
+          open={sparkWizardOpen}
+          onClose={() => setSparkWizardOpen(false)}
+          onSaved={() => { setSparkWizardOpen(false); void loadSparkBinding(); }}
+        />
         {sparkSinks.length === 0 && (
           <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>No Spark notebook sinks. Add one to hand the stream to a PySpark notebook.</Caption1>
         )}
@@ -1918,6 +1982,154 @@ function EventstreamOperatorsTab({
         ))}
       </div>
     </div>
+  );
+}
+
+// ============================================================
+// Spark structured-streaming binding (defect: day-one gate) — the notebook
+// routing gate is auto-resolved server-side (admin runtime setting >
+// LOOM_SYNAPSE_WORKSPACE / LOOM_DATABRICKS_WORKSPACE_URL env). When genuinely
+// unbound, this wizard lets a tenant admin pick a REAL Synapse / Databricks
+// workspace discovered via ARM list calls and persists it to platform settings.
+// ============================================================
+
+interface SparkBindingInfo {
+  ok: boolean;
+  bound: boolean;
+  kind?: 'synapse' | 'databricks';
+  synapseWorkspace?: string;
+  databricksUrl?: string;
+  source?: 'runtime' | 'env';
+  isAdmin?: boolean;
+}
+
+interface SparkBindingOptions {
+  synapseWorkspaces: Array<{ name: string; id: string }>;
+  databricksWorkspaces: Array<{ name: string; url: string }>;
+}
+
+function SparkBindingWizard({ open, onClose, onSaved }: { open: boolean; onClose: () => void; onSaved: () => void }) {
+  const [options, setOptions] = useState<SparkBindingOptions | null>(null);
+  const [discoverErr, setDiscoverErr] = useState<string | null>(null);
+  const [kind, setKind] = useState<'synapse' | 'databricks'>('synapse');
+  const [synapseWorkspace, setSynapseWorkspace] = useState('');
+  const [databricksUrl, setDatabricksUrl] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [saveErr, setSaveErr] = useState<string | null>(null);
+
+  // Discover real workspaces (ARM list) when the wizard opens.
+  useEffect(() => {
+    if (!open) return;
+    let alive = true;
+    setOptions(null); setDiscoverErr(null); setSaveErr(null);
+    (async () => {
+      try {
+        const r = await clientFetch('/api/items/eventstream/spark-binding?discover=1');
+        const j = await r.json();
+        if (!alive) return;
+        if (j?.ok) {
+          const opts: SparkBindingOptions = {
+            synapseWorkspaces: Array.isArray(j.options?.synapseWorkspaces) ? j.options.synapseWorkspaces : [],
+            databricksWorkspaces: Array.isArray(j.options?.databricksWorkspaces) ? j.options.databricksWorkspaces : [],
+          };
+          setOptions(opts);
+          // Sensible defaults: preselect the first discovered workspace.
+          if (opts.synapseWorkspaces.length) setSynapseWorkspace(opts.synapseWorkspaces[0].name);
+          else if (opts.databricksWorkspaces.length) { setKind('databricks'); setDatabricksUrl(opts.databricksWorkspaces[0].url); }
+        } else {
+          setDiscoverErr(j?.error || 'Workspace discovery failed');
+          setOptions({ synapseWorkspaces: [], databricksWorkspaces: [] });
+        }
+      } catch (e: any) {
+        if (!alive) return;
+        setDiscoverErr(e?.message || String(e));
+        setOptions({ synapseWorkspaces: [], databricksWorkspaces: [] });
+      }
+    })();
+    return () => { alive = false; };
+  }, [open]);
+
+  const canSave = kind === 'synapse' ? !!synapseWorkspace.trim() : !!databricksUrl.trim();
+
+  const doSave = useCallback(async () => {
+    setBusy(true); setSaveErr(null);
+    try {
+      const r = await clientFetch('/api/items/eventstream/spark-binding', {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(kind === 'synapse' ? { kind, synapseWorkspace: synapseWorkspace.trim() } : { kind, databricksUrl: databricksUrl.trim() }),
+      });
+      const j = await r.json();
+      if (!j?.ok) { setSaveErr(j?.error || `HTTP ${r.status}`); return; }
+      onSaved();
+    } catch (e: any) {
+      setSaveErr(e?.message || String(e));
+    } finally {
+      setBusy(false);
+    }
+  }, [kind, synapseWorkspace, databricksUrl, onSaved]);
+
+  return (
+    <Dialog open={open} onOpenChange={(_: unknown, d: any) => { if (!d.open) onClose(); }}>
+      <DialogSurface>
+        <DialogBody>
+          <DialogTitle>Bind a Spark structured-streaming workspace</DialogTitle>
+          <DialogContent>
+            <Caption1>
+              Pick the Synapse or Databricks workspace this deployment routes notebook sinks to.
+              The options below are the REAL workspaces discovered in this subscription (ARM list);
+              the choice is saved as the deployment-wide platform default — no redeploy needed.
+            </Caption1>
+            {!options && <Spinner size="tiny" label="Discovering workspaces…" style={{ marginTop: tokens.spacingVerticalM }} />}
+            {options && (
+              <>
+                <Field label="Runtime" style={{ marginTop: tokens.spacingVerticalM }}>
+                  <Select value={kind} onChange={(_: unknown, d: any) => setKind(d.value === 'databricks' ? 'databricks' : 'synapse')} aria-label="Spark runtime kind">
+                    <option value="synapse">Synapse Spark ({options.synapseWorkspaces.length} discovered)</option>
+                    <option value="databricks">Databricks ({options.databricksWorkspaces.length} discovered)</option>
+                  </Select>
+                </Field>
+                {kind === 'synapse' && (
+                  <Field label="Synapse workspace" style={{ marginTop: tokens.spacingVerticalM }}>
+                    <Select value={synapseWorkspace} onChange={(_: unknown, d: any) => setSynapseWorkspace(d.value)} aria-label="Synapse workspace">
+                      <option value="">{options.synapseWorkspaces.length ? 'Select a workspace…' : 'No Synapse workspaces found in this subscription'}</option>
+                      {options.synapseWorkspaces.map((w) => <option key={w.id} value={w.name}>{w.name}</option>)}
+                    </Select>
+                  </Field>
+                )}
+                {kind === 'databricks' && (
+                  <Field label="Databricks workspace" style={{ marginTop: tokens.spacingVerticalM }}>
+                    <Select value={databricksUrl} onChange={(_: unknown, d: any) => setDatabricksUrl(d.value)} aria-label="Databricks workspace">
+                      <option value="">{options.databricksWorkspaces.length ? 'Select a workspace…' : 'No Databricks workspaces found in this subscription'}</option>
+                      {options.databricksWorkspaces.map((w) => <option key={w.url} value={w.url}>{w.name} ({w.url})</option>)}
+                    </Select>
+                  </Field>
+                )}
+              </>
+            )}
+            {discoverErr && (
+              <MessageBar intent="warning" style={{ marginTop: tokens.spacingVerticalM }}>
+                <MessageBarBody>
+                  <MessageBarTitle>Discovery failed</MessageBarTitle>
+                  {discoverErr} — the Console UAMI needs Reader on the subscription to list workspaces.
+                </MessageBarBody>
+              </MessageBar>
+            )}
+            {saveErr && (
+              <MessageBar intent="error" style={{ marginTop: tokens.spacingVerticalM }}>
+                <MessageBarBody><MessageBarTitle>Save failed</MessageBarTitle>{saveErr}</MessageBarBody>
+              </MessageBar>
+            )}
+          </DialogContent>
+          <DialogActions>
+            <Button appearance="secondary" onClick={onClose} disabled={busy}>Cancel</Button>
+            <Button appearance="primary" onClick={doSave} disabled={busy || !canSave}>
+              {busy ? 'Saving…' : 'Save binding'}
+            </Button>
+          </DialogActions>
+        </DialogBody>
+      </DialogSurface>
+    </Dialog>
   );
 }
 

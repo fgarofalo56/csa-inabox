@@ -20,6 +20,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { recordItemOpen } from '@/lib/items/record-open';
 import {
   loadKustoItem, saveItemState, resolveDatabase, resolveDashboardDatabase, defaultDatabase,
   executeQuery, KustoError,
@@ -85,6 +86,8 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
   try {
     const item = await loadKustoItem((await ctx.params).id, 'kql-dashboard', session.claims.oid);
     if (!item) return NextResponse.json({ ok: false, error: 'not found' }, { status: 404 });
+    // Feed "Recent": type-specific base routes bypass the generic GET's write.
+    await recordItemOpen({ oid: session.claims.oid, upn: session.claims.upn }, { id: item.id, itemType: 'kql-dashboard', workspaceId: item.workspaceId });
 
     const model = readModel(item.state);
     // Bundle dashboards have no DB of their own — their tiles query the
@@ -196,7 +199,9 @@ export async function runTiles(
       const db = resolveTileDatabase(t, dataSources, fallbackDb);
       const kql = buildTileKql(t.kql, params, timeKey, baseQueries);
       const result = await executeQuery(db, kql, { resultsCacheMaxAgeSec: opts?.cacheMaxAgeSec });
-      return { ...t, result, resolvedDatabase: db };
+      // The editors' KqlResult contract carries ok:true (same wrap the KQL
+      // Database /query route applies) — without it the tile never renders.
+      return { ...t, result: { ok: true, ...result }, resolvedDatabase: db };
     } catch (e: any) {
       return { ...t, error: e?.message || String(e) };
     }

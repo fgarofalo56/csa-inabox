@@ -21,13 +21,17 @@ export async function GET(req?: NextRequest) {
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   const refresh = req?.nextUrl?.searchParams.get('refresh') === '1';
   try {
-    // Whole-subscription Resource Health crawl (up to ~20 serial paginated calls).
-    // Served stale-while-revalidate on a short 90s window (LOOM_QUERY_CACHE_TTL_MS_MONITOR).
+    // Whole-subscription Resource Health crawl (up to ~20 serial paginated
+    // calls) — measured 12-13s on a cache miss (2026-07-16 live receipt). The
+    // old 90s TTL expired between the read-warmer's 10-minute cycles, so users
+    // still paid the full crawl most of the time. Resource Health state doesn't
+    // move second-to-second: 5 min TTL keeps every read inside the warmed
+    // window while staying fresher than the portal's own refresh cadence.
     const { value, meta } = await getOrComputeCached(
       buildScopedCacheKey('monitor/health', {}),
       'monitor',
       async () => ({ statuses: Object.values(await listResourceHealth()) }),
-      { ttlMs: resolveBackendTtl('monitor', 90_000), staleWhileRevalidate: true, bypass: refresh },
+      { ttlMs: resolveBackendTtl('monitor', 5 * 60_000), staleWhileRevalidate: true, bypass: refresh, budgetMs: 22_000, serveStaleOnError: true },
     );
     return NextResponse.json({ ok: true, data: value, meta });
   } catch (e) {

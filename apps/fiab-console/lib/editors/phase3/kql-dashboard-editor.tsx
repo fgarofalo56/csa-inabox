@@ -31,6 +31,9 @@ import {
   Add20Regular, Add24Regular, Delete20Regular, ArrowSync20Regular,
   MathFormula20Regular, Sparkle20Regular, ArrowDownload20Regular, Copy20Regular,
   Alert20Regular, Open20Regular,
+  // ux-fabric-a W1 — tile drag-reorder grip (Fabric RTD tiles drag by a grab
+  // handle in the tile header; the same glyph the report canvas cards use).
+  ReOrderDotsVertical16Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from '../item-editor-chrome';
 import { NewItemCreateGate } from '../new-item-gate';
@@ -66,6 +69,7 @@ const DASHBOARD_TILE_CONCURRENCY = 4;
  */
 const useTileChrome = makeStyles({
   tile: {
+    position: 'relative',
     boxShadow: tokens.shadow4,
     transitionProperty: 'box-shadow, border-color',
     transitionDuration: tokens.durationNormal,
@@ -77,12 +81,54 @@ const useTileChrome = makeStyles({
     },
     ':hover .tile-actions': { opacity: 1 },
     ':focus-within .tile-actions': { opacity: 1 },
+    // The resize grip + drag grip reveal with the same hover/focus rhythm as
+    // the action cluster (no persistent clutter — operator standard).
+    '& .tile-grip': {
+      opacity: 0,
+      transitionProperty: 'opacity',
+      transitionDuration: tokens.durationFaster,
+    },
+    ':hover .tile-grip': { opacity: 1 },
+    ':focus-within .tile-grip': { opacity: 1 },
   },
   tileSelected: {
     border: `1px solid ${tokens.colorBrandStroke1}`,
     boxShadow: tokens.shadow16,
     '& .tile-actions': { opacity: 1 },
+    '& .tile-grip': { opacity: 1 },
   },
+  /** ux-fabric-a W1 — the tile being dragged (fades while in flight). */
+  tileDragging: { opacity: 0.55 },
+  /** Drop indicators — a brand inset edge on the side the tile will land. */
+  tileDropBefore: { boxShadow: `inset 3px 0 0 0 ${tokens.colorBrandStroke1}, ${tokens.shadow16}` },
+  tileDropAfter: { boxShadow: `inset -3px 0 0 0 ${tokens.colorBrandStroke1}, ${tokens.shadow16}` },
+  /** Drag handle in the tile header — grab cursor, brightens on hover. */
+  dragGrip: {
+    display: 'inline-flex', alignItems: 'center', flexShrink: 0, cursor: 'grab',
+    color: tokens.colorNeutralForeground4, borderRadius: tokens.borderRadiusSmall,
+    ':hover': { color: tokens.colorBrandForeground1, backgroundColor: tokens.colorNeutralBackground1Hover },
+    ':active': { cursor: 'grabbing' },
+  },
+  /** Corner resize grip — drag snaps the tile's real w/h grid spans. */
+  resizeGrip: {
+    position: 'absolute', right: '2px', bottom: '2px', width: '14px', height: '14px',
+    cursor: 'nwse-resize', touchAction: 'none',
+    borderRight: `2px solid ${tokens.colorNeutralStroke1}`,
+    borderBottom: `2px solid ${tokens.colorNeutralStroke1}`,
+    borderBottomRightRadius: tokens.borderRadiusSmall,
+    ':hover': {
+      borderRight: `2px solid ${tokens.colorBrandStroke1}`,
+      borderBottom: `2px solid ${tokens.colorBrandStroke1}`,
+    },
+  },
+  /** Per-tile timing/status footer (rows · duration · updated-at). */
+  tileFooter: {
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS,
+    marginTop: tokens.spacingVerticalXS, paddingTop: tokens.spacingVerticalXXS,
+    borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
+    color: tokens.colorNeutralForeground3, minWidth: 0, flexWrap: 'wrap',
+  },
+  tileFooterText: { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
   tileHeader: {
     display: 'flex',
     alignItems: 'flex-start',
@@ -151,6 +197,9 @@ interface DashTile {
   error?: string;
   /** PSR-7 — this tile's query is in flight (drives the per-tile skeleton/SWR). */
   loading?: boolean;
+  /** ux-fabric-a W1 — transient timing for the tile's status footer (never persisted). */
+  lastRunAt?: number;
+  durationMs?: number;
 }
 
 interface DashDataSource { id: string; name: string; database: string; clusterUri?: string; }
@@ -514,7 +563,7 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
 
   // Build the live model the /run + /param-values + PUT routes consume.
   const buildModel = useCallback(() => ({
-    tiles: tiles.map(({ result, error, loading, ...t }) => t),
+    tiles: tiles.map(({ result, error, loading, lastRunAt, durationMs, ...t }) => t),
     dataSources,
     parameters: params,
     baseQueries,
@@ -571,6 +620,8 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
     setTiles((prev) => prev.map((t) => ({ ...t, loading: true, error: undefined })));
     try {
       await mapWithConcurrency(model.tiles, DASHBOARD_TILE_CONCURRENCY, async (tile, i) => {
+        // ux-fabric-a W1 — per-tile client-measured query timing for the status footer.
+        const t0 = performance.now();
         try {
           const r = await clientFetch(`/api/items/kql-dashboard/${id}/run`, {
             method: 'POST',
@@ -584,8 +635,9 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
             return;
           }
           // Progressive: commit THIS tile's result as soon as it lands.
+          const durationMs = Math.round(performance.now() - t0);
           setTiles((prev) => prev.map((t, idx) => idx === i
-            ? { ...t, loading: false, result: j.tiles?.[0]?.result, error: j.tiles?.[0]?.error }
+            ? { ...t, loading: false, result: j.tiles?.[0]?.result, error: j.tiles?.[0]?.error, lastRunAt: Date.now(), durationMs }
             : t));
         } catch (e: any) {
           setTiles((prev) => prev.map((t, idx) => idx === i ? { ...t, loading: false, error: e?.message || String(e) } : t));
@@ -633,6 +685,72 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
       return next;
     });
     setDirty(true);
+  }, []);
+
+  // ── ux-fabric-a W1 — tile DRAG-REORDER (Fabric RTD tiles drag by a header
+  // grip). HTML5 dnd: the grip is the drag source; each tile is a drop target
+  // showing a brand before/after edge; drop splices the real tiles array (the
+  // grid reflows) and marks the model dirty so Save persists the new order. ────
+  const [dragTileIdx, setDragTileIdx] = useState<number | null>(null);
+  const [dropHint, setDropHint] = useState<{ idx: number; before: boolean } | null>(null);
+
+  const moveTile = useCallback((from: number, to: number, before: boolean) => {
+    setTiles((prev) => {
+      if (from < 0 || from >= prev.length || to < 0 || to >= prev.length) return prev;
+      let target = to + (before ? 0 : 1);
+      if (from < target) target -= 1;
+      if (target === from) return prev;
+      const next = [...prev];
+      const [moved] = next.splice(from, 1);
+      next.splice(target, 0, moved);
+      return next;
+    });
+    setDirty(true);
+  }, []);
+
+  // ── ux-fabric-a W1 — corner RESIZE GRIP: pointer-drag snaps the tile's REAL
+  // w (1..12 grid columns) / h (1..8 row units) live — the same fields the edit
+  // flyout sets (which stays the keyboard-accessible path). Pointer capture on
+  // the grip keeps move/up events flowing during the drag. ────────────────────
+  const tileGridRef = useRef<HTMLDivElement | null>(null);
+  const tileResizeRef = useRef<{
+    idx: number; startX: number; startY: number;
+    startW: number; startH: number; lastW: number; lastH: number;
+    colPx: number; rowPx: number;
+  } | null>(null);
+
+  const onTileResizeDown = useCallback((e: React.PointerEvent<HTMLElement>, idx: number) => {
+    const grid = tileGridRef.current;
+    const t = tiles[idx];
+    if (!grid || !t) return;
+    e.preventDefault(); e.stopPropagation();
+    const rect = grid.getBoundingClientRect();
+    // Grid math mirror: 12 columns with an M gap (≈12px), rows are
+    // minmax(120px, auto) + gap — enough precision for snap-to-span.
+    const GAP = 12;
+    const colPx = Math.max(24, (rect.width - GAP * 11) / 12);
+    const rowPx = 120 + GAP;
+    const startW = Math.max(1, Math.min(12, t.w || 4));
+    const startH = Math.max(1, Math.min(8, t.h || 2));
+    tileResizeRef.current = { idx, startX: e.clientX, startY: e.clientY, startW, startH, lastW: startW, lastH: startH, colPx, rowPx };
+    e.currentTarget.setPointerCapture(e.pointerId);
+  }, [tiles]);
+
+  const onTileResizeMove = useCallback((e: React.PointerEvent<HTMLElement>) => {
+    const r = tileResizeRef.current;
+    if (!r) return;
+    const w = Math.max(1, Math.min(12, r.startW + Math.round((e.clientX - r.startX) / r.colPx)));
+    const h = Math.max(1, Math.min(8, r.startH + Math.round((e.clientY - r.startY) / r.rowPx)));
+    if (w === r.lastW && h === r.lastH) return;
+    r.lastW = w; r.lastH = h;
+    setTiles((prev) => prev.map((t, i) => (i === r.idx ? { ...t, w, h } : t)));
+    setDirty(true);
+  }, []);
+
+  const onTileResizeUp = useCallback((e: React.PointerEvent<HTMLElement>) => {
+    if (!tileResizeRef.current) return;
+    tileResizeRef.current = null;
+    try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* already released */ }
   }, []);
 
   // AI tile generator: POST the NL prompt → server grounds on the live ADX
@@ -738,6 +856,8 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
     // PSR-7 — SWR: keep the prior result on screen while re-querying (loading
     // flag drives the tile spinner/skeleton, never a whole-board block).
     updateTile(idx, { error: undefined, loading: true });
+    // ux-fabric-a W1 — client-measured query timing for the tile status footer.
+    const t0 = performance.now();
     try {
       const r = await clientFetch(`/api/items/kql-dashboard/${id}/run`, {
         method: 'POST',
@@ -747,7 +867,10 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
       const ct = r.headers.get('content-type') || '';
       const j = ct.includes('application/json') ? await r.json() : { ok: false, error: `HTTP ${r.status}` };
       if (!j.ok) { updateTile(idx, { error: j.error || `run failed (HTTP ${r.status})`, result: undefined, loading: false }); return; }
-      updateTile(idx, { result: j.tiles?.[0]?.result, error: j.tiles?.[0]?.error, loading: false });
+      updateTile(idx, {
+        result: j.tiles?.[0]?.result, error: j.tiles?.[0]?.error, loading: false,
+        lastRunAt: Date.now(), durationMs: Math.round(performance.now() - t0),
+      });
     } catch (e: any) {
       updateTile(idx, { error: e?.message || String(e), loading: false });
     }
@@ -1177,15 +1300,48 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
         </MessageBar>
       )}
 
-      {/* Tile grid — 12-col CSS grid; each tile spans its w/h. */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(12, 1fr)', gap: tokens.spacingVerticalM, gridAutoRows: 'minmax(120px, auto)' }}>
+      {/* Tile grid — 12-col CSS grid; each tile spans its w/h. Tiles drag-reorder
+          by the header grip and resize by the corner grip (ux-fabric-a W1). */}
+      <div ref={tileGridRef} style={{ display: 'grid', gridTemplateColumns: 'repeat(12, 1fr)', gap: tokens.spacingVerticalM, gridAutoRows: 'minmax(120px, auto)' }}>
         {tiles.map((t, i) => {
           const span = Math.max(1, Math.min(12, t.w || 4));
           const rowSpan = Math.max(1, Math.min(8, t.h || 2));
           const dsName = t.dataSourceId ? (dataSources.find((d) => d.id === t.dataSourceId)?.name || t.dataSourceId) : (t.database || defaultDb);
           return (
-            <div key={i} className={mergeClasses(s.card, tc.tile, tileFlyoutIdx === i ? tc.tileSelected : undefined)} style={{ gridColumn: `span ${span}`, gridRow: `span ${rowSpan}`, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+            <div key={i}
+              className={mergeClasses(
+                s.card, tc.tile,
+                tileFlyoutIdx === i ? tc.tileSelected : undefined,
+                dragTileIdx === i && tc.tileDragging,
+                dropHint?.idx === i && dragTileIdx !== i && (dropHint.before ? tc.tileDropBefore : tc.tileDropAfter),
+              )}
+              style={{ gridColumn: `span ${span}`, gridRow: `span ${rowSpan}`, display: 'flex', flexDirection: 'column', minWidth: 0 }}
+              onDragOver={(e) => {
+                if (dragTileIdx === null || dragTileIdx === i) return;
+                e.preventDefault();
+                const r = e.currentTarget.getBoundingClientRect();
+                const before = e.clientX - r.left < r.width / 2;
+                setDropHint((h) => (h?.idx === i && h.before === before ? h : { idx: i, before }));
+              }}
+              onDragLeave={() => setDropHint((h) => (h?.idx === i ? null : h))}
+              onDrop={(e) => {
+                if (dragTileIdx === null || dragTileIdx === i) return;
+                e.preventDefault();
+                const r = e.currentTarget.getBoundingClientRect();
+                moveTile(dragTileIdx, i, e.clientX - r.left < r.width / 2);
+                setDragTileIdx(null); setDropHint(null);
+              }}>
               <div className={tc.tileHeader}>
+                {/* Drag grip — the tile's reorder handle (hover/focus-revealed). */}
+                <span
+                  className={mergeClasses(tc.dragGrip, 'tile-grip')}
+                  role="button" tabIndex={-1} aria-label={`Reorder tile ${t.title}`} title="Drag to reorder"
+                  draggable
+                  onDragStart={(e) => { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', String(i)); setDragTileIdx(i); }}
+                  onDragEnd={() => { setDragTileIdx(null); setDropHint(null); }}
+                >
+                  <ReOrderDotsVertical16Regular />
+                </span>
                 <div className={tc.tileMeta}>
                   <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{t.viz.toUpperCase()} · {dsName}</Caption1>
                   <div className={tc.tileTitle}>{t.title}</div>
@@ -1255,6 +1411,37 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
                 </div>
               )}
               {!t.result && !t.error && !t.loading && <Caption1 style={{ marginTop: tokens.spacingVerticalS, color: tokens.colorNeutralForeground3 }}>Run the tile to see results.</Caption1>}
+
+              {/* ux-fabric-a W1 — timing/status footer: rows · query duration ·
+                  updated-at, from the tile's REAL last run (client-measured). */}
+              {t.result?.ok && (() => {
+                const rowN = t.result.rowCount ?? t.result.rows?.length;
+                // Prefer the REAL server-side Kusto execution time when the run
+                // route returned one; the client round-trip is the fallback.
+                const ms = typeof t.result.executionMs === 'number' ? t.result.executionMs : t.durationMs;
+                return (
+                  <div className={tc.tileFooter}>
+                    <Caption1 className={tc.tileFooterText}>
+                      {typeof rowN === 'number' ? `${rowN} row${rowN === 1 ? '' : 's'}` : 'OK'}
+                      {typeof ms === 'number' ? ` · ${ms >= 1000 ? `${(ms / 1000).toFixed(1)} s` : `${Math.round(ms)} ms`}` : ''}
+                      {t.result.truncated ? ' · truncated' : ''}
+                      {t.lastRunAt ? ` · updated ${new Date(t.lastRunAt).toLocaleTimeString()}` : ''}
+                    </Caption1>
+                  </div>
+                );
+              })()}
+
+              {/* Corner resize grip — drag snaps the tile's real w/h grid spans
+                  (the edit flyout's Width/Height stay the keyboard path). */}
+              <span
+                className={mergeClasses(tc.resizeGrip, 'tile-grip')}
+                aria-hidden
+                title="Drag to resize"
+                onPointerDown={(e) => onTileResizeDown(e, i)}
+                onPointerMove={onTileResizeMove}
+                onPointerUp={onTileResizeUp}
+                onPointerCancel={onTileResizeUp}
+              />
             </div>
           );
         })}

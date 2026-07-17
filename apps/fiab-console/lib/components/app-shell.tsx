@@ -11,6 +11,7 @@ import { clientFetch } from '@/lib/client-fetch';
  */
 
 import { ReactNode, useEffect, useMemo, useState } from 'react';
+import { VersionSkewGuard } from '@/lib/components/shared/version-skew-guard';
 import {
   makeStyles, tokens, Avatar, Button,
   Menu, MenuTrigger, MenuPopover, MenuList, MenuItem,
@@ -177,6 +178,7 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   return (
     <SessionProvider value={session}>
+    <VersionSkewGuard />
     <div className={styles.root} style={rootStyle}>
       <header className={styles.topbar} role="banner">
         <Tooltip content={navCollapsed ? 'Expand navigation' : 'Collapse navigation'} relationship="label">

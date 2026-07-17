@@ -1,5 +1,7 @@
 'use client';
 
+import { HonestGate } from '@/lib/components/shared/honest-gate';
+
 /**
  * EventHubsNamespaceTree — the Azure Event Hubs namespace navigator.
  *
@@ -424,6 +426,13 @@ export function EventHubsNamespaceTree({ refreshKey = 0, onSelectEventHub }: Eve
   const [busy, setBusy] = useState(false);
 
   const [hubs, setHubs] = useState<HubRow[]>([]);
+  // Least-privilege scope (defect fix): by default the route returns only the
+  // hubs referenced by eventstreams in the CALLER's accessible workspaces.
+  // Tenant admins get a "Show all hubs" toggle for the full namespace listing.
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [showAllHubs, setShowAllHubs] = useState(false);
+  const [hubsScoped, setHubsScoped] = useState(true);
+  const [totalInNamespace, setTotalInNamespace] = useState<number | null>(null);
   const [schemaGroups, setSchemaGroups] = useState<SgRow[]>([]);
   const [authRules, setAuthRules] = useState<AuthRow[]>([]);
   const [network, setNetwork] = useState<NetSummary | null>(null);
@@ -460,7 +469,7 @@ export function EventHubsNamespaceTree({ refreshKey = 0, onSelectEventHub }: Eve
     setLoading(true); setError(null);
     try {
       const [hr, sr, ar, nr, gr, pr] = await Promise.all([
-        fetch(HUBS_ROUTE).then(readJson),
+        fetch(showAllHubs ? `${HUBS_ROUTE}?scope=all` : HUBS_ROUTE).then(readJson),
         fetch(SG_ROUTE).then(readJson),
         fetch(AUTH_ROUTE).then(readJson),
         fetch(NET_ROUTE).then(readJson),
@@ -469,7 +478,12 @@ export function EventHubsNamespaceTree({ refreshKey = 0, onSelectEventHub }: Eve
       ]);
       for (const b of [hr, sr, ar, nr, gr, pr]) { if (applyGate(b)) { setLoading(false); return; } }
       setGate(null);
-      if (hr.ok) setHubs(hr.hubs || []); else setError(hr.error || 'failed to list event hubs');
+      if (hr.ok) {
+        setHubs(hr.hubs || []);
+        setIsAdmin(!!hr.isAdmin);
+        setHubsScoped(hr.scoped !== false);
+        setTotalInNamespace(typeof hr.totalInNamespace === 'number' ? hr.totalInNamespace : null);
+      } else setError(hr.error || 'failed to list event hubs');
       if (sr.ok) setSchemaGroups(sr.schemaGroups || []);
       if (ar.ok) setAuthRules(ar.rules || []);
       if (nr.ok) setNetwork(nr.network || null);
@@ -487,7 +501,7 @@ export function EventHubsNamespaceTree({ refreshKey = 0, onSelectEventHub }: Eve
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [showAllHubs]);
 
   useEffect(() => { loadAll(); }, [loadAll, refreshKey]);
 
@@ -598,19 +612,12 @@ export function EventHubsNamespaceTree({ refreshKey = 0, onSelectEventHub }: Eve
     return (
       <div className={s.root}>
         <div className={s.header}><span className={s.title}>Event Hubs namespace</span></div>
-        <MessageBar intent="warning">
-          <MessageBarBody>
-            <MessageBarTitle>Event Hubs namespace not configured</MessageBarTitle>
-            Set <code>{gate.missing}</code> on the Console Container App (e.g.{' '}
-            <code>LOOM_EVENTHUB_NAMESPACE=loom-evhns</code>, plus{' '}
-            <code>LOOM_SUBSCRIPTION_ID</code> and <code>LOOM_EVENTHUB_RG</code> / <code>LOOM_DLZ_RG</code>) so
-            the Loom console can reach a real Azure Event Hubs namespace. The navigator stays here; entities
-            appear once the namespace is reachable. The Loom UAMI must hold{' '}
-            <strong>Azure Event Hubs Data Owner</strong> (data plane) and <strong>Contributor</strong>
-            (control plane) on the namespace. Provisioned by{' '}
-            <code>platform/fiab/bicep/modules/landing-zone/eventhubs*.bicep</code>.
-          </MessageBarBody>
-        </MessageBar>
+        <HonestGate
+          gateId="svc-eventhubs"
+          surface="Event Hubs navigator"
+          missing={gate.missing}
+          onResolved={() => { setGate(null); void loadAll(); }}
+        />
       </div>
     );
   }
@@ -649,6 +656,22 @@ export function EventHubsNamespaceTree({ refreshKey = 0, onSelectEventHub }: Eve
           onChange={(_, d) => setFilter(d.value)}
         />
       </Field>
+
+      {/* Least-privilege scope: default listing shows only hubs your workspaces'
+          eventstreams use. Tenant admins can flip to the full namespace. */}
+      {isAdmin && (
+        <Switch
+          label={<Caption1>Show all hubs in namespace{hubsScoped && totalInNamespace !== null ? ` (${totalInNamespace})` : ''}</Caption1>}
+          checked={showAllHubs}
+          onChange={(_, d) => setShowAllHubs(!!d.checked)}
+          aria-label="Show all hubs in namespace (admin)"
+        />
+      )}
+      {!isAdmin && hubsScoped && (
+        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+          Showing the hubs used by eventstreams in your workspaces.
+        </Caption1>
+      )}
 
       {loading && <div style={{ padding: tokens.spacingVerticalS }}><Spinner size="tiny" label="Loading namespace…" /></div>}
       {error && (

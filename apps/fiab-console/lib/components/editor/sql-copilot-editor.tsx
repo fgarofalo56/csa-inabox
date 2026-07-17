@@ -81,6 +81,8 @@ export interface SqlCopilotEditorProps {
   /** Auto-fit the editor to its content (script grows without manual resize). */
   autoHeight?: boolean;
   maxHeight?: number;
+  /** G3: user-adjustable editor height — forwarded to {@link MonacoTextarea}. */
+  sizingKey?: string;
   /** Human dialect label used in UI copy (e.g. 'T-SQL', 'Spark SQL'). */
   dialectLabel?: string;
   /** Current run error (enables the Fix action when present). */
@@ -104,6 +106,7 @@ export function SqlCopilotEditor({
   minHeight = 200,
   autoHeight = false,
   maxHeight = 640,
+  sizingKey,
   dialectLabel = 'SQL',
   resultError,
   extraBody,
@@ -292,6 +295,7 @@ export function SqlCopilotEditor({
         minHeight={minHeight}
         autoHeight={autoHeight}
         maxHeight={maxHeight}
+        sizingKey={sizingKey}
         ariaLabel={ariaLabel}
         onReady={onReady}
       />

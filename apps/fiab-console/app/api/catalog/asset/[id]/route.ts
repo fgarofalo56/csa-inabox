@@ -9,6 +9,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { purviewPortalAssetLink } from '@/lib/azure/purview-endpoints';
 import {
   getAssetDetail, getLineageSubgraph,
   PurviewNotConfiguredError, PurviewError,
@@ -43,7 +44,8 @@ export async function GET(req: NextRequest, ctx: { params: { id: string } }) {
         lineage,
         upstreamLink:
           process.env.LOOM_PURVIEW_ACCOUNT
-            ? `https://${process.env.LOOM_PURVIEW_ACCOUNT}.purview.azure.com/main.html#/asset/${encodeURIComponent(id)}`
+            // Cloud-aware account host (.purview.azure.us in Azure Government).
+            ? purviewPortalAssetLink(process.env.LOOM_PURVIEW_ACCOUNT, id)
             : null,
       });
     }

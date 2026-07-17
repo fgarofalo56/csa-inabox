@@ -16,9 +16,19 @@
  *
  * Body:
  *   { prompt: string,            // the natural-language ask (required)
+ *     kql?: string,              // SUGGEST mode — an existing query: the model
+ *                                //   picks the best {title, viz} for THIS query
+ *                                //   (the KQL is preserved verbatim, validated
+ *                                //   by execution as usual). Used by the
+ *                                //   query→dashboard-tile wizard's "Help me
+ *                                //   choose" (operator review 5.2).
  *     dataSourceId?: string,     // bind the new tile to a saved data source
  *     database?: string,         // explicit DB override (else resolved)
  *     timeRange?: string }       // global time key for validation run (default last-24h)
+ *
+ * `[id]` is normally a kql-dashboard item; in SUGGEST mode it may also be the
+ * SOURCE kql-database / eventhouse item (the wizard runs before the target
+ * dashboard exists), which resolves the database the same way.
  *
  * Response (200):
  *   { ok: true,
@@ -118,11 +128,29 @@ Rules:
 
 Respond with ONLY a JSON object: {"title": string, "kql": string, "viz": string}. No prose, no markdown fences.`;
 
+/** SUGGEST mode — the query already exists; the model only picks title + viz. */
+const SUGGEST_SYSTEM_PROMPT = `You are a KQL (Kusto Query Language) expert helping title and visualize an EXISTING Azure Data Explorer dashboard tile query.
+
+You are given the exact KQL query the tile will run. DO NOT modify, rewrite, or replace the query — return it verbatim in "kql".
+
+- Choose the best visualization "viz" for the query's result shape from EXACTLY one of:
+    "stat"      single KPI number (one row, one numeric column)
+    "table"     rows of data
+    "timechart" time-series line (x is a datetime column)
+    "line"      generic line by category
+    "column"    vertical bars
+    "bar"       horizontal bars
+    "pie"       proportion of a whole
+    "map"       points with latitude/longitude columns
+- Give the tile a short human title (max 6 words) describing what the query shows.
+
+Respond with ONLY a JSON object: {"title": string, "kql": string, "viz": string}. No prose, no markdown fences.`;
+
 export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
 
-  let body: { prompt?: string; dataSourceId?: string; database?: string; timeRange?: string } = {};
+  let body: { prompt?: string; kql?: string; dataSourceId?: string; database?: string; timeRange?: string } = {};
   try { body = await req.json(); } catch { /* validated below */ }
   const prompt = (body.prompt || '').trim();
   if (!prompt) {
@@ -130,6 +158,14 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   }
   if (prompt.length > 2000) {
     return NextResponse.json({ ok: false, error: 'prompt too long (max 2000 chars)' }, { status: 400 });
+  }
+  // SUGGEST mode — an existing query the model must NOT rewrite (title/viz only).
+  const suggestKql = (body.kql || '').trim();
+  if (suggestKql.length > 65_536) {
+    return NextResponse.json({ ok: false, error: 'kql too long (max 65,536 chars)' }, { status: 400 });
+  }
+  if (suggestKql.startsWith('.')) {
+    return NextResponse.json({ ok: false, error: 'Management commands cannot be dashboard tiles — tiles run tabular queries only.' }, { status: 400 });
   }
 
   // ADX gate FIRST — without a cluster the model has no schema to ground on and
@@ -145,7 +181,15 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   }
 
   try {
-    const item = await loadKustoItem((await ctx.params).id, 'kql-dashboard', session.claims.oid);
+    // Normally a kql-dashboard item; in SUGGEST mode the caller may be the
+    // SOURCE kql-database / eventhouse (the wizard runs before the target
+    // dashboard exists) — fall back to those types so the database resolves.
+    const itemId = (await ctx.params).id;
+    let item = await loadKustoItem(itemId, 'kql-dashboard', session.claims.oid);
+    if (!item && suggestKql) {
+      item = await loadKustoItem(itemId, 'kql-database', session.claims.oid)
+        || await loadKustoItem(itemId, 'eventhouse', session.claims.oid);
+    }
     if (!item) return NextResponse.json({ ok: false, error: 'not found' }, { status: 404 });
 
     // Resolve the DB the tile will query (explicit override → bound source DB is
@@ -186,17 +230,21 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       (schemaGrounded
         ? `Schema (Table(col:type, …)):\n${schemaSummary}\n\n`
         : `(No schema could be read from the database — use only table/column names that the user mentions explicitly.)\n\n`) +
-      `Question: ${prompt}`;
+      (suggestKql
+        ? `The tile's exact KQL query (return it verbatim):\n${suggestKql}\n\nRequest: ${prompt}`
+        : `Question: ${prompt}`);
 
     const gen = await aoaiCompleteJson<GeneratedTile>(
       [
-        { role: 'system', content: SYSTEM_PROMPT },
+        { role: 'system', content: suggestKql ? SUGGEST_SYSTEM_PROMPT : SYSTEM_PROMPT },
         { role: 'user', content: userMessage },
       ],
       tenantConfig,
     );
 
-    const kql = String(gen?.kql || '').trim();
+    // SUGGEST mode guarantees the caller's query is preserved verbatim —
+    // whatever the model echoed, the provided KQL is the tile query.
+    const kql = suggestKql || String(gen?.kql || '').trim();
     if (!kql) {
       return NextResponse.json({ ok: false, error: 'The model did not return any KQL for that request. Try rephrasing.' }, { status: 422 });
     }
@@ -219,7 +267,9 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     let validated = false;
     let validationError: string | undefined;
     try {
-      result = await executeQuery(resolvedDatabase, runnableKql);
+      // Wrap with ok:true — the editor's KqlResult contract (tiles gate their
+      // render on result.ok, same wrap the KQL Database /query route applies).
+      result = { ok: true, ...(await executeQuery(resolvedDatabase, runnableKql)) };
       validated = true;
     } catch (e: any) {
       validationError = e?.message || String(e);

@@ -19,6 +19,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { loadKustoItem, saveItemState, KustoError } from '@/lib/azure/kusto-client';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
+import { recordItemOpen } from '@/lib/items/record-open';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -116,6 +117,8 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
   try {
     const item = await loadKustoItem((await ctx.params).id, 'eventstream', session.claims.oid);
     if (!item) return NextResponse.json({ ok: false, error: 'not found' }, { status: 404 });
+    // Feed "Recent": type-specific base routes bypass the generic GET's write.
+    await recordItemOpen({ oid: session.claims.oid, upn: session.claims.upn }, { id: item.id, itemType: 'eventstream', workspaceId: item.workspaceId });
     const hasSaved =
       !!item.state?.source || !!item.state?.sink ||
       (Array.isArray(item.state?.sources) && item.state!.sources.length > 0) ||

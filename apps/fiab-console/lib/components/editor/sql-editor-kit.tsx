@@ -12,9 +12,9 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  Tab, TabList, Button, Spinner, tokens,
+  Tab, TabList, Button, Spinner, Tooltip, makeStyles, mergeClasses, tokens,
 } from '@fluentui/react-components';
-import { Add16Regular, Dismiss12Regular } from '@fluentui/react-icons';
+import { Add16Regular, Dismiss12Regular, DocumentBulletList16Regular } from '@fluentui/react-icons';
 import { getRunSql } from './sql-run-selection';
 import { registerCopilotContext, clearCopilotContext } from '@/lib/copilot/use-copilot-context';
 
@@ -154,35 +154,74 @@ export interface SqlTabBarProps<R = unknown> {
   onClose: (id: string) => void;
 }
 
+// Fabric query-tab-strip polish: a per-tab query glyph, and the per-tab close
+// button reveals on hover / keyboard focus of the tab (matching the Fabric /
+// VS Code tab-strip affordance) instead of crowding every tab. Tokens only.
+const useSqlTabBarStyles = makeStyles({
+  bar: {
+    display: 'flex',
+    alignItems: 'center',
+    borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
+    gap: tokens.spacingHorizontalXXS,
+  },
+  tabList: { flex: 1, minWidth: 0, overflowX: 'auto' },
+  tabInner: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXS,
+    minWidth: 0,
+  },
+  tabGlyph: { color: tokens.colorNeutralForeground3, flexShrink: 0 },
+  tabLabel: { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+  tab: {
+    '& .sql-tab-close': { opacity: 0, transitionProperty: 'opacity', transitionDuration: tokens.durationFaster },
+    ':hover .sql-tab-close': { opacity: 1 },
+    ':focus-within .sql-tab-close': { opacity: 1 },
+  },
+  tabActive: {
+    '& .sql-tab-close': { opacity: 1 },
+  },
+  closeBtn: {
+    minWidth: 'auto',
+    padding: tokens.spacingVerticalNone,
+    height: '16px',
+    width: '16px',
+  },
+});
+
 export function SqlTabBar<R = unknown>({ tabs, activeTabId, onSelect, onAdd, onClose }: SqlTabBarProps<R>) {
+  const s = useSqlTabBarStyles();
   return (
-    <div style={{ display: 'flex', alignItems: 'center', borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, gap: tokens.spacingHorizontalXXS }}>
+    <div className={s.bar}>
       <TabList
         selectedValue={activeTabId}
         onTabSelect={(_, d) => onSelect(d.value as string)}
         size="small"
-        style={{ flex: 1, minWidth: 0, overflowX: 'auto' }}
+        className={s.tabList}
       >
         {tabs.map((t) => (
-          <Tab key={t.id} value={t.id}>
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXS }}>
-              {t.label}
-              {t.loading && <Spinner size="extra-tiny" />}
+          <Tab key={t.id} value={t.id} className={mergeClasses(s.tab, t.id === activeTabId && s.tabActive)}>
+            <span className={s.tabInner}>
+              <DocumentBulletList16Regular className={s.tabGlyph} />
+              <span className={s.tabLabel} title={t.label}>{t.label}</span>
+              {t.loading && <Spinner size="extra-tiny" aria-label={`${t.label} running`} />}
               {tabs.length > 1 && (
                 <Button
                   size="small"
                   appearance="subtle"
+                  className={mergeClasses(s.closeBtn, 'sql-tab-close')}
                   icon={<Dismiss12Regular />}
                   aria-label={`Close ${t.label}`}
                   onClick={(e) => { e.stopPropagation(); onClose(t.id); }}
-                  style={{ minWidth: 'auto', padding: tokens.spacingVerticalNone, height: 16, width: 16 }}
                 />
               )}
             </span>
           </Tab>
         ))}
       </TabList>
-      <Button size="small" appearance="subtle" icon={<Add16Regular />} aria-label="New query tab" onClick={onAdd} />
+      <Tooltip content="New query tab" relationship="label">
+        <Button size="small" appearance="subtle" icon={<Add16Regular />} aria-label="New query tab" onClick={onAdd} />
+      </Tooltip>
     </div>
   );
 }

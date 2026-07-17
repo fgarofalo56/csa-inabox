@@ -16,12 +16,17 @@ vi.mock('@azure/identity', () => {
 });
 
 import { isPurviewConfigured, getPurviewAccountName, probePurview } from '../purview-client';
+import { __clearPurviewEndpointCache } from '../purview-endpoints';
 
 const realFetch = global.fetch;
 
 afterEach(() => {
   delete process.env.LOOM_PURVIEW_ACCOUNT;
+  delete process.env.LOOM_PURVIEW_ENDPOINT;
+  delete process.env.AZURE_CLOUD;
+  delete process.env.LOOM_CLOUD;
   global.fetch = realFetch;
+  __clearPurviewEndpointCache();
   vi.restoreAllMocks();
 });
 
@@ -96,7 +101,60 @@ describe('probePurview', () => {
     expect(r.configured).toBe(true);
     expect(r.reason).toBe('not_configured');
     expect(r.account).toBe('purview-bogus');
-    expect(r.hint?.followUp).toMatch(/did not resolve|classic Purview/i);
+    expect(r.hint?.followUp).toMatch(/did not answer|classic Purview/i);
+    // The gate names the EXACT endpoint that was probed (Gov-incident fix) +
+    // whether the ARM properties.endpoints lookup succeeded.
+    expect(r.hint?.followUp).toContain('https://purview-bogus.purview.azure.com');
+    expect(r.hint?.followUp).toMatch(/ARM lookup FAILED/i);
+    expect(r.endpoint).toBe('https://purview-bogus.purview.azure.com');
+    expect(r.endpointSource).toBe('convention');
+  });
+
+  it('CLOUD MATRIX — probes (and reports) the *.purview.azure.us host in Azure Government', async () => {
+    process.env.AZURE_CLOUD = 'AzureUSGovernment';
+    process.env.LOOM_PURVIEW_ACCOUNT = 'dmlz-dev-purview001';
+    const urls: string[] = [];
+    global.fetch = vi.fn(async (u: any) => {
+      urls.push(String(u));
+      throw new Error('fetch failed');
+    }) as any;
+    const r = await probePurview();
+    expect(r.reason).toBe('not_configured');
+    // The probe target is the GOV data-plane host — never .purview.azure.com.
+    const probeUrl = urls.find((u) => u.includes('/datamap/api/atlas/v2/types/typedefs/headers'));
+    expect(probeUrl).toContain('dmlz-dev-purview001.purview.azure.us');
+    expect(probeUrl).not.toContain('.purview.azure.com');
+    // And the gate message names the Gov host it actually tried.
+    expect(r.hint?.followUp).toContain('https://dmlz-dev-purview001.purview.azure.us');
+    expect(r.endpoint).toBe('https://dmlz-dev-purview001.purview.azure.us');
+  });
+
+  it('probes the ARM-derived endpoint when Resource Graph resolves properties.endpoints', async () => {
+    process.env.LOOM_PURVIEW_ACCOUNT = 'purview-arm';
+    const urls: string[] = [];
+    global.fetch = vi.fn(async (u: any) => {
+      const url = String(u);
+      urls.push(url);
+      if (url.includes('Microsoft.ResourceGraph')) {
+        return new Response(JSON.stringify({
+          data: [{
+            name: 'purview-arm', subscriptionId: 'sub1', resourceGroup: 'rg1',
+            properties: { endpoints: {
+              catalog: 'https://purview-arm.purview.azure.us/catalog',
+              scan: 'https://purview-arm.purview.azure.us/scan',
+              guardian: 'https://purview-arm.purview.azure.us/guardian',
+            } },
+          }],
+        }), { status: 200 });
+      }
+      return new Response('{}', { status: 200 });
+    }) as any;
+    const r = await probePurview();
+    expect(r.reason).toBe('live');
+    expect(r.endpoint).toBe('https://purview-arm.purview.azure.us');
+    expect(r.endpointSource).toBe('arm');
+    const probeUrl = urls.find((u) => u.includes('/datamap/api/atlas/v2/types/typedefs/headers'));
+    expect(probeUrl).toContain('purview-arm.purview.azure.us');
   });
 
   it('reports upstream_error on a 5xx', async () => {

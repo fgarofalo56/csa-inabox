@@ -31,6 +31,11 @@ vi.mock('@/lib/auth/feature-gate', async () => {
 });
 vi.mock('@/lib/azure/purview-client', () => ({ isPurviewConfigured: () => true }));
 vi.mock('@/lib/azure/lineage-gc', () => ({
+  findAccessArtifactOrphans: vi.fn(async () => ({
+    notifications: { scanned: 0, orphans: [] },
+    requests: { scanned: 0, orphans: [] },
+  })),
+  purgeAccessArtifactOrphans: vi.fn(async () => ({ notificationsTombstoned: 0, requestsClosed: 0 })),
   findLineageOrphans: (...a: any[]) => findLineageOrphansMock(...a),
   purgeLineageOrphans: (...a: any[]) => purgeLineageOrphansMock(...a),
   findThreadEdgeOrphans: (...a: any[]) => findThreadEdgeOrphansMock(...a),

@@ -36,7 +36,7 @@ import Link from 'next/link';
 import {
   Text, Badge, Dropdown, Option, Button, Subtitle2, Caption1,
   TabList, Tab, type SelectTabData,
-  MessageBar, MessageBarBody, Spinner,
+  MessageBar, MessageBarBody,
   Dialog, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
   makeStyles, tokens,
 } from '@fluentui/react-components';
@@ -48,6 +48,7 @@ import {
 } from '@fluentui/react-icons';
 import { PageShell } from '@/lib/components/page-shell';
 import { EmptyState as SharedEmptyState } from '@/lib/components/empty-state';
+import { TileRailSkeleton } from '@/lib/components/recent-items';
 import { Section, Toolbar } from '@/lib/components/ui/section';
 import { ViewToggle, type LoomView } from '@/lib/components/ui/view-toggle';
 import { TileGrid } from '@/lib/components/ui/tile-grid';
@@ -406,7 +407,7 @@ export default function LearnPage(): React.ReactElement {
                   <NotebookImportWizard />
                 </div>
               </div>
-              {notebooks === null && !nbErr && <Spinner label="Loading notebook samples…" />}
+              {notebooks === null && !nbErr && <TileRailSkeleton count={6} label="Loading notebook samples" />}
               {nbErr && <MessageBar intent="warning"><MessageBarBody>{nbErr}</MessageBarBody></MessageBar>}
               {notebooks && filteredNotebooks.length === 0 && <EmptyState onClear={() => setQuery('')} />}
               {filteredNotebooks.length > 0 && (
@@ -440,7 +441,7 @@ export default function LearnPage(): React.ReactElement {
               </div>
 
               <Section title="Scenarios that ship seedable sample data">
-                {notebooks === null && !nbErr && <Spinner label="Loading scenarios…" />}
+                {notebooks === null && !nbErr && <TileRailSkeleton count={3} label="Loading scenarios" />}
                 {nbErr && <MessageBar intent="warning"><MessageBarBody>{nbErr}</MessageBarBody></MessageBar>}
                 {notebooks && (
                   <TileGrid minTileWidth={300}>

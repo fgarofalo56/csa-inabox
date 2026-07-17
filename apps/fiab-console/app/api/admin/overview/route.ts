@@ -27,6 +27,7 @@
 import { NextResponse } from 'next/server';
 import { uamiArmCredential } from '@/lib/azure/arm-credential';
 import { getSession } from '@/lib/auth/session';
+import { buildScopedCacheKey, getOrComputeCached } from '@/lib/azure/query-result-cache';
 import { requireTenantAdmin } from '@/lib/auth/feature-gate';
 import {
   workspacesContainer,
@@ -219,6 +220,19 @@ export async function GET() {
   if (denied) return denied;
   const tenantId = s.claims.oid;
 
+  // Cached 2 min + SWR: 12 parallel cross-partition Cosmos counts + ARM +
+  // Graph reads per paint — at scale that is the Admin landing page's whole
+  // budget. One cached crawl serves every admin (perf directive 2026-07-15).
+  const { value: tiles } = await getOrComputeCached(
+    buildScopedCacheKey('admin/overview', { tenantId }),
+    'admin',
+    () => computeTiles(tenantId),
+    { ttlMs: 2 * 60_000, staleWhileRevalidate: true, budgetMs: 22_000, serveStaleOnError: true },
+  );
+  return NextResponse.json({ ok: true, tiles });
+}
+
+async function computeTiles(tenantId: string): Promise<OverviewTiles> {
   const [
     workspaces, domains, items, auditEvents, permissions, attributeGroups,
     labeledItems, tenantSettings, users, capacity, openAuditItems, sensitivityLabels,
@@ -241,9 +255,8 @@ export async function GET() {
     tile(() => sensitivityLabelCount(), MIP_HINT),
   ]);
 
-  const tiles: OverviewTiles = {
+  return {
     workspaces, domains, items, auditEvents, permissions, attributeGroups,
     labeledItems, tenantSettings, users, capacity, openAuditItems, sensitivityLabels,
   };
-  return NextResponse.json({ ok: true, tiles });
 }

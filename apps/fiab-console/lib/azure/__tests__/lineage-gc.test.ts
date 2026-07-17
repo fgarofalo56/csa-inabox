@@ -20,6 +20,10 @@ const h = vi.hoisted(() => ({
   deleteAtlasEntityByQualifiedName: vi.fn(),
   itemsContainer: vi.fn(),
   query: vi.fn(),
+  emptyContainer: {
+    items: { query: () => ({ fetchAll: async () => ({ resources: [] }) }) },
+    item: () => ({ read: async () => ({ resource: null }), replace: async () => ({}) }),
+  },
 }));
 
 vi.mock('../purview-autoonboard', () => ({
@@ -38,6 +42,10 @@ vi.mock('../purview-client', () => ({
 }));
 vi.mock('../cosmos-client', () => ({
   itemsContainer: h.itemsContainer,
+  // #51 access-artifact cleanup containers — empty by default so the new
+  // cleanup step is a no-op in the classic scenarios.
+  accessRequestWorkflowContainer: vi.fn(async () => h.emptyContainer),
+  notificationsContainer: vi.fn(async () => h.emptyContainer),
 }));
 
 import {
@@ -74,7 +82,7 @@ describe('cleanupItemMetadata', () => {
     const out = await cleanupItemMetadata(item('i1'), 'tenant-1');
     expect(h.offboardFromPurview).toHaveBeenCalledWith(expect.objectContaining({ id: 'i1' }), 'tenant-1');
     expect(h.reconcileThreadEdgesOnDelete).toHaveBeenCalledWith('tenant-1', 'i1', { mode: 'remove' });
-    expect(out).toEqual({ itemId: 'i1', purview: 'ok', edges: 'ok' });
+    expect(out).toEqual({ itemId: 'i1', purview: 'ok', edges: 'ok', accessArtifacts: 'ok' });
   });
 
   it('reports purview skipped when Purview is unconfigured', async () => {
@@ -87,7 +95,7 @@ describe('cleanupItemMetadata', () => {
     h.offboardFromPurview.mockRejectedValue(new Error('atlas 500'));
     h.reconcileThreadEdgesOnDelete.mockRejectedValue(new Error('cosmos down'));
     const out = await cleanupItemMetadata(item('i1'), 'tenant-1');
-    expect(out).toEqual({ itemId: 'i1', purview: 'error', edges: 'error' });
+    expect(out).toEqual({ itemId: 'i1', purview: 'error', edges: 'error', accessArtifacts: 'ok' });
   });
 });
 

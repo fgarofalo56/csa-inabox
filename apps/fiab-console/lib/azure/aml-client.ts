@@ -669,6 +669,47 @@ export async function submitCiJob(opts: {
   return j ? shapeJob(j) : { name, status: 'NotStarted', jobType: 'Command' };
 }
 
+/**
+ * Submit a Command job on AML SERVERLESS compute — no computeId; AML provisions
+ * an ephemeral VM per job (JobResourceConfiguration.instanceType).
+ *
+ * WHY: a PERSONAL Compute Instance only accepts jobs from its assigned user, so
+ * the Console identity submitting to someone's CI gets
+ * `400: User starting the run is not an owner or assigned user to the Compute
+ * Instance` (operator report). Serverless has no ownership restriction — the
+ * run route falls back here when a CI rejects on ownership.
+ * VM size: LOOM_AML_SERVERLESS_VMSIZE (default Standard_DS3_v2).
+ */
+export async function submitServerlessJob(opts: {
+  code: string;
+  lang?: 'python' | 'r';
+  displayName?: string;
+}): Promise<AmlJob> {
+  const name = `loom-nb-sl-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+  const command = opts.lang === 'r'
+    ? `Rscript -e ${shellQuote(opts.code)}`
+    : `python -c ${shellQuote(opts.code)}`;
+  const armBody = {
+    properties: {
+      jobType: 'Command',
+      displayName: opts.displayName || 'Loom notebook cell run (serverless)',
+      experimentName: 'loom-notebook-runs',
+      command,
+      environmentId: DEFAULT_AML_ENVIRONMENT,
+      resources: {
+        instanceCount: 1,
+        instanceType: (process.env.LOOM_AML_SERVERLESS_VMSIZE || 'Standard_DS3_v2').trim(),
+      },
+    },
+  };
+  const res = await amlFetch(`/jobs/${encodeURIComponent(name)}`, {
+    method: 'PUT',
+    body: JSON.stringify(armBody),
+  });
+  const j = await readAmlJson<any>(res, 'submitServerlessJob');
+  return j ? shapeJob(j) : { name, status: 'NotStarted', jobType: 'Command' };
+}
+
 /** Poll a Command job's status. Null on 404. */
 export async function getCiJob(name: string): Promise<AmlJob | null> {
   const res = await amlFetch(`/jobs/${encodeURIComponent(name)}`);
@@ -680,6 +721,56 @@ export async function getCiJob(name: string): Promise<AmlJob | null> {
 const AML_TERMINAL = ['Completed', 'Failed', 'Canceled', 'NotResponding'];
 export function amlJobIsTerminal(status?: string): boolean {
   return AML_TERMINAL.includes(status || '');
+}
+
+/**
+ * Fetch a Command job's driver stdout/stderr from the AML run-artifacts
+ * data-plane — the real output a notebook cell printed, which the ARM job
+ * resource never carries (before this, an AML cell only got a "view logs in
+ * AML" pointer; notebook output-fidelity gap #63).
+ *
+ *   GET {dp}/artifact/v2.0/subscriptions/{sub}/resourceGroups/{rg}/providers/
+ *       Microsoft.MachineLearningServices/workspaces/{ws}/artifacts/prefix/
+ *       contentinfo/ExperimentRun/dcid.{jobName}
+ *   → { value: [{ path, contentUri }] }; contentUri is a SAS'd blob URL.
+ *
+ * Data-plane host + token scope are cloud-aware (Gov: *.api.ml.azure.us /
+ * ml.azure.us audience — a hard-coded .ms host silently fails in Gov).
+ * Prefers user_logs/std_log*.txt (current runtime), falls back to
+ * azureml-logs/*driver_log*. Returns null (never throws) when logs aren't
+ * available — callers keep the pointer-message fallback.
+ */
+export async function getCiJobLog(jobName: string, capBytes = 200_000): Promise<string | null> {
+  try {
+    const t = resolveAmlTarget();
+    const host = isGovCloud()
+      ? `https://${t.region}.api.ml.azure.us`
+      : `https://${t.region}.api.azureml.ms`;
+    const scope = isGovCloud() ? 'https://ml.azure.us/.default' : 'https://ml.azure.com/.default';
+    const token = await credential.getToken(scope);
+    if (!token?.token) return null;
+    const base = `${host}/artifact/v2.0/subscriptions/${t.subscriptionId}/resourceGroups/${t.resourceGroup}`
+      + `/providers/Microsoft.MachineLearningServices/workspaces/${t.workspace}`;
+    const listRes = await fetchWithTimeout(
+      `${base}/artifacts/prefix/contentinfo/ExperimentRun/dcid.${encodeURIComponent(jobName)}`,
+      { headers: { authorization: `Bearer ${token.token}` } },
+    );
+    if (!listRes.ok) return null;
+    const listing = await listRes.json().catch(() => null) as { value?: Array<{ path?: string; contentUri?: string }> } | null;
+    const arts = listing?.value || [];
+    const pick =
+      arts.find((a) => /^user_logs\/std_log.*\.txt$/i.test(a.path || ''))
+      || arts.find((a) => /driver_log/i.test(a.path || ''))
+      || arts.find((a) => /^user_logs\/.*\.txt$/i.test(a.path || ''));
+    if (!pick?.contentUri) return null;
+    const logRes = await fetchWithTimeout(pick.contentUri, {});
+    if (!logRes.ok) return null;
+    const text = await logRes.text();
+    if (!text.trim()) return null;
+    return text.length > capBytes ? `…(truncated to last ${Math.round(capBytes / 1000)}KB)\n${text.slice(-capBytes)}` : text;
+  } catch {
+    return null; // best-effort — the poll's pointer message is the fallback
+  }
 }
 
 // ============================================================

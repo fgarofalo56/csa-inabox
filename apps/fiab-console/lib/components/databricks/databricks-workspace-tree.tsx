@@ -1,5 +1,7 @@
 'use client';
 
+import { HonestGate } from '@/lib/components/shared/honest-gate';
+
 /**
  * DatabricksWorkspaceTree — the Databricks-workspace "Workspace" navigator.
  *
@@ -328,18 +330,12 @@ export function DatabricksWorkspaceTree({
     return (
       <div className={s.root}>
         <div className={s.header}><span className={s.title}>Workspace</span></div>
-        <MessageBar intent="warning">
-          <MessageBarBody>
-            <MessageBarTitle>Databricks workspace not configured</MessageBarTitle>
-            Set <code>{gate.missing}</code> on the Console Container App (e.g.{' '}
-            <code>adb-7405613013893759.19.azuredatabricks.net</code>) so the Loom console can reach a
-            real Azure Databricks workspace. The navigator stays here; objects appear once the
-            workspace is reachable. The Loom UAMI must be a <strong>workspace user/admin</strong> (granted
-            via the SCIM bootstrap) and hold the <strong>Contributor</strong> role on the workspace
-            resource. Provisioned by{' '}
-            <code>platform/fiab/bicep/modules/landing-zone/databricks*.bicep</code>.
-          </MessageBarBody>
-        </MessageBar>
+        <HonestGate
+          gateId="svc-databricks"
+          surface="Databricks navigator"
+          missing={gate.missing}
+          onResolved={() => { setGate(null); void loadAll(); }}
+        />
       </div>
     );
   }

@@ -24,6 +24,46 @@ import { buildLoomDisplay, enrichChartRecs } from '@/lib/notebook/display-stats'
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+/**
+ * DELETE /api/items/notebook/[id]/runs/[runId]?workspaceId=...
+ *   Stop an in-flight run — the backing for the cell "Stop" control. A
+ *   structured-streaming cell (writeStream + awaitTermination) otherwise runs
+ *   forever and the UI shows "running" indefinitely (operator report).
+ *
+ *   spark:<pool>:<sessionId>[:<statementId>]
+ *     → statementId present: cancel that Livy statement (session survives, so
+ *       the next cell run reuses the warm session).
+ *     → no statement yet (still 'starting'): nothing to cancel; report ok so
+ *       the client clears its polling state.
+ *   databricks:/aml-ci: not yet supported — honest 501 naming the gap.
+ */
+export async function DELETE(req: NextRequest, ctx: { params: Promise<{ id: string; runId: string }> }) {
+  const s = getSession();
+  if (!s) return apiError('unauthenticated', 401);
+  const workspaceId = req.nextUrl.searchParams.get('workspaceId');
+  if (!workspaceId) return apiError('workspaceId required', 400);
+  if (!(await assertOwner(workspaceId, s.claims.oid))) return apiError('notebook not found', 404);
+
+  const runId = decodeURIComponent((await ctx.params).runId);
+  if (runId.startsWith('spark:')) {
+    const [, pool, sessionIdStr, statementIdStr] = runId.split(':');
+    const sessionId = Number(sessionIdStr);
+    if (!pool || !Number.isFinite(sessionId)) return apiError('malformed runId', 400);
+    if (!statementIdStr) return NextResponse.json({ ok: true, cancelled: false, note: 'no statement submitted yet' });
+    try {
+      const { cancelLivyStatement } = await import('@/lib/azure/synapse-livy-client');
+      await cancelLivyStatement(pool, sessionId, Number(statementIdStr));
+      return NextResponse.json({ ok: true, cancelled: true });
+    } catch (e) {
+      return apiError(`cancel failed: ${(e as Error)?.message || e}`, 502);
+    }
+  }
+  return NextResponse.json(
+    { ok: false, error: `Stop is not yet supported for this backend (${runId.split(':')[0]}). The run continues server-side.` },
+    { status: 501 },
+  );
+}
+
 
 
 interface RunRecord {
@@ -159,7 +199,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string;
     // contract the editor already understands. Azure-native — no Fabric.
     if (runId.startsWith('aml-ci:')) {
       const jobName = runId.slice('aml-ci:'.length);
-      const { getCiJob, amlJobIsTerminal } = await import('@/lib/azure/aml-client');
+      const { getCiJob, amlJobIsTerminal, getCiJobLog } = await import('@/lib/azure/aml-client');
       const job = await getCiJob(jobName);
       if (!job) return NextResponse.json({ ok: true, status: 'NotStarted', runId, phase: 'job-pending' });
       const terminal = amlJobIsTerminal(job.status);
@@ -168,6 +208,10 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string;
         status: ok ? 'Completed' : 'Failed', endTimeUtc: new Date().toISOString(),
         failureReason: ok ? null : { errorCode: job.status, message: `AML job ${jobName} ended with status '${job.status}'` },
       });
+      // Output fidelity (#63): pull the REAL driver stdout from the run
+      // artifacts instead of a "view logs in AML" pointer, so print()s and
+      // tracebacks land in the cell like Synapse/Databricks output does.
+      const log = terminal ? await getCiJobLog(jobName) : null;
       return NextResponse.json({
         ok: true,
         status: job.status || 'NotStarted',
@@ -175,11 +219,12 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string;
         phase: terminal ? 'job-complete' : 'job-running',
         output: terminal ? (ok ? {
           status: 'ok',
-          textPlain: `Job ${jobName} completed on the AML Compute Instance. View driver logs + outputs in the run's "Outputs + logs" tab.`,
+          textPlain: log || `Job ${jobName} completed on the AML Compute Instance. View driver logs + outputs in the run's "Outputs + logs" tab.`,
         } : {
           status: 'error',
           ename: job.status,
-          evalue: `AML job ${jobName} ended with status '${job.status}'. Open the run's "Outputs + logs" for the full traceback.`,
+          evalue: `AML job ${jobName} ended with status '${job.status}'.${log ? '' : ' Open the run\'s "Outputs + logs" for the full traceback.'}`,
+          ...(log ? { traceback: log.split('\n').slice(-60) } : {}),
         }) : null,
       });
     }
@@ -364,9 +409,16 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string;
       // Two copies: a RICH one for the client (bounded images + HTML, R3 #5) and
       // a LEAN one persisted to Cosmos (text only — resume backs the running run).
       const qIdx = Number(pending?.qIdx) || 0;
-      const truncText = (rest: Record<string, unknown>) => {
-        if (typeof rest.textPlain === 'string' && rest.textPlain.length > 20000) {
-          rest.textPlain = rest.textPlain.slice(0, 20000) + '\n… (truncated)';
+      // Two different caps (fidelity vs Databricks/Synapse, operator report
+      // 2026-07-17: "missing full output"): the CLIENT copy keeps a generous
+      // 512 KB of text so large prints / .show(n=big) / collect() render in
+      // full, while the PERSISTED (Cosmos-backed resume) copy stays lean at
+      // 20 KB so a Run-all with several big outputs can't blow the 2 MB doc cap.
+      const RICH_TEXT_CAP = 512_000;
+      const LEAN_TEXT_CAP = 20_000;
+      const truncText = (rest: Record<string, unknown>, cap: number) => {
+        if (typeof rest.textPlain === 'string' && rest.textPlain.length > cap) {
+          rest.textPlain = rest.textPlain.slice(0, cap) + `\n… (output truncated at ${Math.round(cap / 1000)} KB)`;
         }
       };
       // RICH (returned to the client): keep richDisplay + a bounded rich data map
@@ -374,7 +426,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string;
       // a single-cell run (R3 #5).
       const boundRich = (o: NonNullable<typeof stmtOutput>): Record<string, unknown> => {
         const { data, ...rest } = o as Record<string, unknown>;
-        truncText(rest);
+        truncText(rest, RICH_TEXT_CAP);
         const rich = pickRichData(data);
         if (rich) rest.data = rich;
         return rest;
@@ -385,7 +437,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string;
       // finished; the persisted copy only backs resume of the STILL-running run.
       const boundLean = (o: NonNullable<typeof stmtOutput>): Record<string, unknown> => {
         const { data: _drop, ...rest } = o as Record<string, unknown>;
-        truncText(rest);
+        truncText(rest, LEAN_TEXT_CAP);
         return rest;
       };
       let cellOutputs: Record<string, unknown> | undefined;        // rich → client

@@ -39,6 +39,10 @@ import { PerfMetricCard } from '@/lib/components/admin/perf-metric-card';
 import { SparkPoolCard } from '@/lib/components/admin/spark-pool-card';
 import { CopilotSloCard } from '@/lib/components/admin/copilot-slo-card';
 import { CacheHitRateCard } from '@/lib/components/admin/cache-hit-rate-card';
+import { PerfRecommendationsCard } from '@/lib/components/admin/perf-recommendations-card';
+import { PerfAutoTuneCard } from '@/lib/components/admin/perf-autotune-card';
+import { UsageLearningCard } from '@/lib/components/admin/usage-learning-card';
+import { WarmProbeCard } from '@/lib/components/admin/warm-probe-card';
 import { isPageTtiMetric } from '@/lib/perf/perf-metrics';
 import type { MetricTrend, TrendModel } from '@/lib/perf/perf-store';
 
@@ -278,10 +282,16 @@ export function PerformanceEditor() {
         </MessageBar>
       )}
 
+      <PerfRecommendationsCard />
+
       <SparkPoolCard />
+      <WarmProbeCard />
 
       <CopilotSloCard />
       <CacheHitRateCard />
+
+      <PerfAutoTuneCard />
+      <UsageLearningCard />
 
       <Section
         title="Benchmark run"

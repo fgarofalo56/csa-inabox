@@ -23,6 +23,7 @@
  */
 
 import { useMemo, useState } from 'react';
+import { ResizableCanvasRegion } from '@/lib/components/canvas/resizable-canvas';
 import {
   ReactFlow, ReactFlowProvider, Background, BackgroundVariant, MiniMap, Panel,
   useReactFlow,
@@ -240,8 +241,9 @@ function buildNodes(props: SetupDiagramProps): Node[] {
 
 const useStyles = makeStyles({
   canvas: {
+    // Height comes from ResizableCanvasRegion (G3: user-adjustable, persisted).
     position: 'relative',
-    height: '340px',
+    height: '100%',
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusLarge,
     overflow: 'hidden',
@@ -256,6 +258,12 @@ function DiagramInner(props: SetupDiagramProps) {
   const [zoom, setZoom] = useState(1);
   const [railCollapsed, setRailCollapsed] = useState(false);
   return (
+    <ResizableCanvasRegion
+      storageKey="setup-deployment-diagram"
+      defaultPx={340}
+      minPx={260}
+      ariaLabel="Resize deployment diagram height"
+    >
     <div className={s.canvas} data-canvas="setup-deployment-diagram">
       <ReactFlow
         nodes={nodes}
@@ -303,6 +311,7 @@ function DiagramInner(props: SetupDiagramProps) {
         </Panel>
       </ReactFlow>
     </div>
+    </ResizableCanvasRegion>
   );
 }
 

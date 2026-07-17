@@ -291,6 +291,19 @@ function isCiStopped(state?: string): boolean {
 }
 
 /**
+ * Heuristic: does this cell run a Structured Streaming query that never
+ * completes on its own? (writeStream/readStream + awaitTermination — but NOT
+ * trigger(availableNow=...), which is a batch-style run that finishes.) Used to
+ * surface "Streaming (live)" instead of an indefinite "running", and to treat
+ * the poll-window end as expected rather than a timeout error.
+ */
+function looksStreaming(source: string): boolean {
+  if (/availableNow\s*=\s*True/i.test(source)) return false;
+  return /\bawaitTermination\s*\(/.test(source)
+    || (/\bwriteStream\b/.test(source) && !/\btrigger\s*\(\s*once\s*=\s*True/i.test(source));
+}
+
+/**
  * Idle auto-shutdown TTL options (ISO-8601 duration → label) offered in the
  * Configure / New Compute Instance dialogs. Dropdown only — no freeform input
  * (loom_no_freeform_config). Backs both the create body and the
@@ -540,6 +553,13 @@ export function NotebookEditor({ item, id }: Props) {
   const [runPhase, setRunPhase] = useState<string | null>(null);
   const cellRunStartRef = useRef<Map<string, number>>(new Map());
   const [nowTs, setNowTs] = useState<number>(() => Date.now());
+  // Real per-cell run duration for the cell chrome ("✓ 2.4 s"), measured from
+  // the run dispatch. Undefined when no start was recorded (e.g. a resumed run
+  // after remount) — the chrome simply omits the duration; never fabricated.
+  const cellDurationMs = useCallback((cellId: string): number | undefined => {
+    const t0 = cellRunStartRef.current.get(cellId);
+    return typeof t0 === 'number' ? Math.max(0, Date.now() - t0) : undefined;
+  }, []);
   const clearCellProgress = useCallback((cellId: string) => {
     cellRunStartRef.current.delete(cellId);
     setCellProgress((prev) => {
@@ -1522,6 +1542,7 @@ export function NotebookEditor({ item, id }: Props) {
             evalue: (o as any).evalue,
             traceback: (o as any).traceback,
             executedAtUtc: new Date().toISOString(),
+            durationMs: cellDurationMs(cid),
           },
         });
       }
@@ -1635,7 +1656,7 @@ export function NotebookEditor({ item, id }: Props) {
         runnableCellIds.forEach((id) => {
           if (appliedCells.has(id)) return;
           appliedCells.add(id);
-          patchCell(id, { output: { status: 'ok', textPlain: '(no output)' } });
+          patchCell(id, { output: { status: 'ok', textPlain: '(no output)', durationMs: cellDurationMs(id) } });
         });
       }
       loadJobs(workspaceId, notebookId);
@@ -1644,7 +1665,7 @@ export function NotebookEditor({ item, id }: Props) {
       setRunPhase(null);
       setCellProgress(new Map()); cellRunStartRef.current.clear(); // R4-NB-4 cleanup
     }
-  }, [workspaceId, notebookId, computeId, cells, patchCell, sessionConfigBody, pollRunStatus, loadJobs]);
+  }, [workspaceId, notebookId, computeId, cells, patchCell, sessionConfigBody, pollRunStatus, loadJobs, cellDurationMs]);
 
   // Always-fresh ref to run() so a parameterized run fires the LATEST closure
   // after we inject the override cell + re-render (R4-NB-2).
@@ -2034,11 +2055,25 @@ export function NotebookEditor({ item, id }: Props) {
 
   // ---- Stop: client-side interrupt registry checked by the poll loops ----
   const cancelRef = useRef<Set<string>>(new Set());
+  // Live runId per running cell so Stop can cancel the SERVER-side statement,
+  // not just abandon the client poll. Without this a stopped streaming cell
+  // (writeStream + awaitTermination) kept running on the Spark pool forever —
+  // the root of the "stuck on running" report AND the pool-hog incidents.
+  const cellRunIdRef = useRef<Map<string, string>>(new Map());
   const stopCell = useCallback((id: string) => {
     cancelRef.current.add(id);
+    // Best-effort server-side cancel (Livy statement cancel via DELETE /runs/[runId]).
+    const runId = cellRunIdRef.current.get(id);
+    if (runId && workspaceId && notebookId) {
+      void clientFetch(
+        `/api/items/notebook/${encodeURIComponent(notebookId)}/runs/${encodeURIComponent(runId)}?workspaceId=${encodeURIComponent(workspaceId)}`,
+        { method: 'DELETE' },
+      ).catch(() => { /* poll abandonment above is the fallback */ });
+    }
+    cellRunIdRef.current.delete(id);
     patchCell(id, { output: { status: 'error', ename: 'Cancelled', evalue: 'Execution stopped by user.' } });
-    setRunMsg(`Cell ${id.slice(0, 6)} stopped.`);
-  }, [patchCell]);
+    setRunMsg(`Cell ${id.slice(0, 6)} stopped${runId ? ' — server-side statement cancelled' : ''}.`);
+  }, [patchCell, workspaceId, notebookId]);
 
   // ---- Split / merge (Edit menu) ----
   // Split a code cell into two at its midpoint (no Monaco cursor coupling):
@@ -2123,6 +2158,7 @@ export function NotebookEditor({ item, id }: Props) {
         return;
       }
       let runId: string = j.runId;
+      cellRunIdRef.current.set(cell.id, runId);
       const start = Date.now();
       const MAX_MS = 15 * 60 * 1000;
       let pollInterval = 2000;
@@ -2132,7 +2168,7 @@ export function NotebookEditor({ item, id }: Props) {
         const pollRes = await clientFetch(`/api/items/notebook/${encodeURIComponent(notebookId)}/execute-spark?workspaceId=${encodeURIComponent(workspaceId)}&runId=${encodeURIComponent(runId)}`);
         const p = await pollRes.json();
         if (!p.ok) { patchCell(cell.id, { output: { status: 'error', ename: 'PollError', evalue: p.error || String(pollRes.status) } }); break; }
-        if (p.runId && p.runId !== runId) runId = p.runId;
+        if (p.runId && p.runId !== runId) { runId = p.runId; cellRunIdRef.current.set(cell.id, runId); }
         const phaseHint = p.phase === 'session-starting' ? ' · Spark pool warming (~60-90s)' : p.phase ? ` · ${p.phase}` : '';
         const elapsed = Math.floor((Date.now() - start) / 1000);
         setRunMsg(`%%pyspark ${cell.id.slice(0, 6)}: ${p.status}${phaseHint} · ${elapsed}s · ${p.backend || ''}`);
@@ -2148,6 +2184,7 @@ export function NotebookEditor({ item, id }: Props) {
               evalue: p.output.evalue,
               traceback: p.output.traceback,
               executedAtUtc: new Date().toISOString(),
+              durationMs: Date.now() - start,
             },
           });
           setRunMsg(`%%pyspark cell ${cell.id.slice(0, 6)} complete (${p.backend || 'spark'})`);
@@ -2160,6 +2197,8 @@ export function NotebookEditor({ item, id }: Props) {
       }
     } catch (e: any) {
       patchCell(cell.id, { output: { status: 'error', ename: 'Exception', evalue: e?.message || String(e) } });
+    } finally {
+      cellRunIdRef.current.delete(cell.id);
     }
   }, [workspaceId, notebookId, patchCell]);
 
@@ -2227,6 +2266,8 @@ export function NotebookEditor({ item, id }: Props) {
       }
       if (j.session) setSessionReceipt(j.session);
       let runId: string = j.runId;
+      cellRunIdRef.current.set(cell.id, runId);
+      const streaming = looksStreaming(cell.source);
       const start = Date.now();
       const MAX_MS = 12 * 60 * 1000; // 12 min to allow for slow cold-starts
       let pollInterval = 2000; // 2s during session-starting, 1s during statement
@@ -2251,12 +2292,15 @@ export function NotebookEditor({ item, id }: Props) {
           settled = true;
           break;
         }
-        if (p.runId && p.runId !== runId) runId = p.runId;
+        if (p.runId && p.runId !== runId) { runId = p.runId; cellRunIdRef.current.set(cell.id, runId); }
         const elapsed = Math.floor((Date.now() - start) / 1000);
         const phaseHint = p.phase === 'session-starting'
           ? ` · cold-start: Spark pool warming up (~60-90s on first cell)`
           : p.phase ? ` · ${p.phase}` : '';
-        setRunMsg(`Cell ${cell.id.slice(0, 6)}: ${p.status}${phaseHint} · ${elapsed}s`);
+        // A streaming cell legitimately never completes — say so instead of
+        // reading as a hung "running" (ADF/Databricks show the same live state).
+        const streamHint = streaming && p.phase === 'statement-running' ? ' · Streaming (live) — runs until stopped; use Stop to end it' : '';
+        setRunMsg(`Cell ${cell.id.slice(0, 6)}: ${p.status}${phaseHint}${streamHint} · ${elapsed}s`);
         // R4-NB-4 — surface real-time Spark progress under the cell. `p.progress`
         // arrives once the shared poll surface (R4-SYN-5) lands; until then the
         // RunProgress bar stays honest-indeterminate off the phase + elapsed.
@@ -2278,6 +2322,7 @@ export function NotebookEditor({ item, id }: Props) {
               evalue: p.output.evalue,
               traceback: p.output.traceback,
               executedAtUtc: new Date().toISOString(),
+              durationMs: cellDurationMs(cell.id),
             },
           });
           setRunMsg(`Cell ${cell.id.slice(0, 6)} complete`);
@@ -2296,20 +2341,37 @@ export function NotebookEditor({ item, id }: Props) {
         }
       }
       if (!settled) {
-        // 12-min timeout with no terminal result — honest error, never a silent
-        // spinner (R3 #3).
         const mins = Math.round(MAX_MS / 60000);
-        patchCell(cell.id, { output: { status: 'error', ename: 'Timeout', evalue: `Run timed out after ${mins}m — the session may be starting slowly or the statement hung. Retry or Configure session.` } });
-        setSessionStatus('Error');
+        if (streaming) {
+          // A streaming query running past the poll window is EXPECTED, not a
+          // fault — stop polling honestly and leave the query live with a clear
+          // note + the Stop affordance (the statement keeps running server-side).
+          patchCell(cell.id, {
+            output: {
+              status: 'ok',
+              textPlain: `Streaming query is live (polled for ${mins}m, still running server-side).\n`
+                + `It processes new data continuously until stopped — click the cell's Stop button to cancel it,\n`
+                + `or use trigger(availableNow=True) for a run that completes on its own.`,
+              executedAtUtc: new Date().toISOString(),
+            },
+          });
+          setSessionStatus('Idle');
+        } else {
+          // 12-min timeout with no terminal result — honest error, never a silent
+          // spinner (R3 #3).
+          patchCell(cell.id, { output: { status: 'error', ename: 'Timeout', evalue: `Run timed out after ${mins}m — the session may be starting slowly or the statement hung. Retry or Configure session.` } });
+          setSessionStatus('Error');
+        }
       }
       loadJobs(workspaceId, notebookId);
     } catch (e: any) {
       patchCell(cell.id, { output: { status: 'error', ename: 'Exception', evalue: e?.message || String(e) } });
       setSessionStatus('Error');
     } finally {
+      cellRunIdRef.current.delete(cell.id);
       clearCellProgress(cell.id); setRunPhase(null); // R4-NB-4 cleanup
     }
-  }, [workspaceId, notebookId, computeId, defaultLang, sessionConfigBody, pollRunStatus, patchCell, loadJobs, runSparkCell, clearCellProgress]);
+  }, [workspaceId, notebookId, computeId, defaultLang, sessionConfigBody, pollRunStatus, patchCell, loadJobs, runSparkCell, clearCellProgress, cellDurationMs]);
 
   /**
    * Variable explorer — submit a Python introspection snippet to the ACTIVE
@@ -3377,6 +3439,14 @@ export function NotebookEditor({ item, id }: Props) {
                   }}
                 >{JSON.stringify(redactReceiptSecrets(sessionReceipt), null, 2)}</code>
               </details>
+              {notebookId && workspaceId && computeId?.startsWith('spark:') && sessionReceipt.id != null && (
+                <DriverLogPane
+                  notebookId={notebookId}
+                  workspaceId={workspaceId}
+                  pool={computeId.slice('spark:'.length)}
+                  sessionId={Number(sessionReceipt.id)}
+                />
+              )}
             </div>
           )}
 
@@ -3652,19 +3722,30 @@ export function NotebookEditor({ item, id }: Props) {
             onClose={() => setCfgDialogOpen(false)}
           />
 
-          {/* Bottom-left session status badge (Idle / Running / Error). */}
-          <Badge
-            className={s.statusBadge}
-            appearance="filled"
-            color={sessionStatus === 'Running' ? 'warning' : sessionStatus === 'Error' ? 'danger' : 'success'}
-            title={
-              sessionReceipt && typeof sessionReceipt.numExecutors === 'number'
-                ? `Spark session ${sessionReceipt.id ?? ''} · ${sessionReceipt.numExecutors} executors · ${sessionReceipt.executorMemory ?? ''}`
-                : `Session ${sessionStatus.toLowerCase()}`
-            }
-          >
-            {sessionStatus}{sessionReceipt && typeof sessionReceipt.numExecutors === 'number' ? ` · ${sessionReceipt.numExecutors} exec` : ''}
-          </Badge>
+          {/* Bottom-left kernel/session status pill — live state color, Fabric
+              kernel-indicator parity: Idle (green) / Starting (amber, session
+              cold-start) / Busy (brand, statement executing) / Error (red).
+              The Starting state is derived from the real Livy poll phase. */}
+          {(() => {
+            const starting = sessionStatus === 'Running' && runPhase === 'session-starting';
+            const label = starting ? 'Starting' : sessionStatus === 'Running' ? 'Busy' : sessionStatus;
+            const color = starting ? 'warning' : sessionStatus === 'Running' ? 'brand' : sessionStatus === 'Error' ? 'danger' : 'success';
+            return (
+              <Badge
+                className={s.statusBadge}
+                appearance="filled"
+                color={color}
+                icon={sessionStatus === 'Running' ? <Spinner size="extra-tiny" appearance="inverted" /> : undefined}
+                title={
+                  sessionReceipt && typeof sessionReceipt.numExecutors === 'number'
+                    ? `Spark session ${sessionReceipt.id ?? ''} · ${sessionReceipt.numExecutors} executors · ${sessionReceipt.executorMemory ?? ''}`
+                    : starting ? 'Spark session is starting (cold start)' : `Session ${label.toLowerCase()}`
+                }
+              >
+                {label}{sessionReceipt && typeof sessionReceipt.numExecutors === 'number' ? ` · ${sessionReceipt.numExecutors} exec` : ''}
+              </Badge>
+            );
+          })()}
         </div>
         <CopilotChatPane
           open={copilotOpen}
@@ -3684,5 +3765,74 @@ export function NotebookEditor({ item, id }: Props) {
         </div>
       }
     />
+  );
+}
+
+/**
+ * DriverLogPane — collapsible live tail of the Spark DRIVER LOG for the active
+ * Livy session (Databricks/Synapse notebook parity, #63 output fidelity).
+ * Polls GET /runs/spark:<pool>:<sessionId>/log every 4s while expanded; shows
+ * the last ~200 lines (cold-start progress, stdout, stderr). Collapsing stops
+ * the poll — no background traffic while closed.
+ */
+function DriverLogPane({ notebookId, workspaceId, pool, sessionId }: {
+  notebookId: string; workspaceId: string; pool: string; sessionId: number;
+}) {
+  const [open, setOpen] = useState(false);
+  const [lines, setLines] = useState<string[]>([]);
+  const [logErr, setLogErr] = useState<string | null>(null);
+  const [total, setTotal] = useState(0);
+
+  useEffect(() => {
+    if (!open) return;
+    let alive = true;
+    const runId = `spark:${pool}:${sessionId}`;
+    const tick = async () => {
+      try {
+        const r = await clientFetch(
+          `/api/items/notebook/${encodeURIComponent(notebookId)}/runs/${encodeURIComponent(runId)}/log?workspaceId=${encodeURIComponent(workspaceId)}&size=200`,
+        );
+        const j = await r.json().catch(() => null);
+        if (!alive) return;
+        if (!j?.ok) { setLogErr(j?.error || `HTTP ${r.status}`); return; }
+        setLogErr(null); setTotal(j.total || 0); setLines(j.lines || []);
+      } catch (e: any) {
+        if (alive) setLogErr(String(e?.message || e));
+      }
+    };
+    void tick();
+    const t = setInterval(() => { void tick(); }, 4000);
+    return () => { alive = false; clearInterval(t); };
+  }, [open, notebookId, workspaceId, pool, sessionId]);
+
+  return (
+    <details
+      style={{ minWidth: 0, maxWidth: '100%' }}
+      onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)}
+    >
+      <summary style={{ cursor: 'pointer', fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground3, userSelect: 'none' }}>
+        Driver log (live tail{total ? ` · ${total} lines` : ''})
+      </summary>
+      {logErr && <Caption1 style={{ color: tokens.colorPaletteRedForeground1 }}>{logErr}</Caption1>}
+      <code
+        style={{
+          display: 'block',
+          marginTop: tokens.spacingVerticalXS,
+          padding: tokens.spacingHorizontalS,
+          borderRadius: tokens.borderRadiusSmall,
+          backgroundColor: tokens.colorNeutralBackground3,
+          color: tokens.colorNeutralForeground3,
+          fontFamily: tokens.fontFamilyMonospace,
+          fontSize: tokens.fontSizeBase100,
+          whiteSpace: 'pre-wrap',
+          overflowWrap: 'anywhere',
+          maxWidth: '100%',
+          minWidth: 0,
+          maxHeight: 260,
+          overflow: 'auto',
+          boxSizing: 'border-box',
+        }}
+      >{lines.length ? lines.join('\n') : 'No driver output yet — the log fills as the session starts and cells run.'}</code>
+    </details>
   );
 }

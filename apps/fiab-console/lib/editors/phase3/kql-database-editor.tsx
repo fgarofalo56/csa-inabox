@@ -51,6 +51,8 @@ import {
 } from '@/lib/components/adx/schema-diagram-canvas';
 import { ItemEditorChrome } from '../item-editor-chrome';
 import { OpenInPbiDesktopButton } from '../components/open-in-pbi-desktop-button';
+import { OpenInLoomReportBuilderButton } from '../components/open-in-loom-report-builder-button';
+import { QueryToDashboardWizard } from './query-to-dashboard-wizard';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
@@ -317,6 +319,9 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
     enabled: !!(id && id !== 'new'),
     staleTime: 60_000,
   });
+
+  // ── 5.2 — Query → Dashboard conversion wizard (ribbon + result context). ──
+  const [tileWizardOpen, setTileWizardOpen] = useState(false);
 
   // ── Data-connection wizard (Event Hub / IoT Hub → ADX) ──────────────────
   // Azure-native parity for a Fabric Eventhouse data connection. Works with NO
@@ -1229,10 +1234,16 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
         { label: 'Analyze', actions: [
           { label: 'Detect anomalies', onClick: () => openAnomaly('anomaly'), title: 'Native-KQL time-series anomaly detection (series_decompose_anomalies) over a table' },
           { label: 'Forecast', onClick: () => openAnomaly('forecast'), title: 'Native-KQL time-series forecasting (series_decompose_forecast) over a table' },
+          { label: 'Create dashboard tile from query',
+            onClick: () => setTileWizardOpen(true),
+            disabled: !id || id === 'new',
+            title: !id || id === 'new'
+              ? 'Save the KQL database first'
+              : 'Pin the current query as a Real-Time Dashboard tile — new or existing dashboard, validated against ADX' },
         ]},
       ]},
     ];
-  }, [openWizard, openFnEditor, openDcWizard, openRlsEditor, openAnomaly, info?.isFollower, info?.tables]);
+  }, [openWizard, openFnEditor, openDcWizard, openRlsEditor, openAnomaly, info?.isFollower, info?.tables, id]);
 
   return (
     <ItemEditorChrome splitKeyPrefix={item.slug} item={item} id={id} ribbon={ribbon}
@@ -1288,6 +1299,7 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
             )}
             <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={load}>Refresh</Button>
             <OpenInPbiDesktopButton type="kql-database" id={id} name={info?.database} />
+            <OpenInLoomReportBuilderButton type="kql-database" id={id} name={itemRecord?.displayName || info?.database} />
             {info?.isFollower && (
               <Button appearance="outline" icon={<Delete20Regular />} disabled={detaching} onClick={detachFollower}>
                 {detaching ? 'Detaching…' : 'Detach follower'}
@@ -1359,6 +1371,18 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
             <Tab value="diagram" icon={<Flowchart20Regular />}>Diagram</Tab>
           </TabList>
 
+          {/* 5.2 — Query → Dashboard conversion wizard (ribbon + result-context
+              entry points). Rendered outside the tab conditional so the ribbon
+              action opens it from either tab. */}
+          <QueryToDashboardWizard
+            open={tileWizardOpen}
+            onClose={() => setTileWizardOpen(false)}
+            itemId={id}
+            itemName={itemRecord?.displayName || info?.database || 'KQL database'}
+            workspaceId={itemRecord?.workspaceId}
+            kql={kql}
+          />
+
           {editorTab === 'query' && (
           <>
           <div className={s.toolbar}>
@@ -1391,6 +1415,7 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
             language="kql"
             height={240}
             minHeight={180}
+            sizingKey="kql-database.query"
             ariaLabel="KQL query editor"
           />
           {/* NL prompt input — generate mode */}
@@ -1450,7 +1475,8 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
               </MessageBarActions>
             </MessageBar>
           )}
-          <KqlResultsPanel result={result} loading={loading} itemId={id} itemType="kql-database" onLoadMore={loadMore} loadingMore={loadingMore} />
+          <KqlResultsPanel result={result} loading={loading} itemId={id} itemType="kql-database" onLoadMore={loadMore} loadingMore={loadingMore}
+            onCreateTile={id && id !== 'new' ? () => setTileWizardOpen(true) : undefined} />
 
           {/* Starter schema + queries from the app-install template. Surfaced
               when the live ADX object isn't provisioned yet so a bundle-
@@ -1786,6 +1812,7 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
                           onChange={setWizQuery}
                           language="kql"
                           height={180}
+                          sizingKey="kql-database.mv-wizard"
                           ariaLabel="Materialized view KQL query"
                         />
                         <Switch
@@ -2084,6 +2111,7 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
                         language="kql"
                         height={220}
                         minHeight={140}
+                        sizingKey="kql-database.function-body"
                         ariaLabel="Function body KQL editor"
                       />
                     </Field>

@@ -86,7 +86,7 @@ describe('GET /api/items/kql-dashboard/[id]', () => {
     const res = await GET(getReq('?run=1&time=last-7d'), ctx);
     const j = await res.json();
     expect(j.ok).toBe(true);
-    expect(j.tiles[0].result).toEqual(RESULT);
+    expect(j.tiles[0].result).toEqual({ ok: true, ...RESULT });
     const [, executedKql] = (executeQuery as any).mock.calls[0];
     expect(executedKql).toContain('ago(7d)');
   });
@@ -246,7 +246,7 @@ describe('POST /api/items/kql-dashboard/[id]/run', () => {
     const res = await RUN(jsonReq(body), ctxNew);
     const j = await res.json();
     expect(j.ok).toBe(true);
-    expect(j.tiles[0].result).toEqual(RESULT);
+    expect(j.tiles[0].result).toEqual({ ok: true, ...RESULT });
     expect(loadKustoItem).not.toHaveBeenCalled(); // /new short-circuits the Cosmos read
     const [, executedKql] = (executeQuery as any).mock.calls[0];
     // Synthetic time tokens (_startTime) are text-substituted; named params

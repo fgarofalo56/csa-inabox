@@ -24,6 +24,7 @@ import type { ConnectionType } from './connections-store';
 import {
   dfsUrl, cosmosEndpointFromName, getSqlSuffix, synapseSqlSuffix,
 } from './cloud-endpoints';
+import { derivePurviewArmResourceId } from './purview-source-mapping';
 
 /** Non-secret coordinates we can pin onto a Purview source registration. */
 export interface PurviewSourceInput {
@@ -88,6 +89,25 @@ function firstLabel(fqdn: string): string {
  * scan (Event Hubs, Service Bus, Key Vault — messaging / secret stores).
  */
 export function purviewSourceForConnectable(
+  input: PurviewSourceInput,
+): PurviewSourceMapped | PurviewSourceUnsupported {
+  const mapped = mapConnectable(input);
+  if (isUnsupportedPurviewSource(mapped)) return mapped;
+  // The scan plane REQUIRES properties.resourceId for Azure endpoint kinds
+  // (403 OperationNotAllowed without it — proven live 2026-07-15). Derive it
+  // from the non-secret ARM coordinates whenever they're complete.
+  if (!mapped.properties.resourceId) {
+    const resourceId = derivePurviewArmResourceId(mapped.kind, {
+      subscriptionId: input.subscriptionId,
+      resourceGroup: input.resourceGroup,
+      resourceName: String(mapped.properties.resourceName || input.resourceName || '') || undefined,
+    });
+    if (resourceId) mapped.properties.resourceId = resourceId;
+  }
+  return mapped;
+}
+
+function mapConnectable(
   input: PurviewSourceInput,
 ): PurviewSourceMapped | PurviewSourceUnsupported {
   const arm: Record<string, unknown> = {};

@@ -861,11 +861,31 @@ function DiagnosticsTab({ onUnauth }: { onUnauth: () => void }) {
       const r = await actionFetch('/api/monitor/diagnostics', {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
       });
-      const j = await r.json();
+      // A gateway timeout page (HTML) is not JSON — never let JSON.parse throw a
+      // raw "Unexpected token '<'". Enable-all is now edge-budgeted server-side,
+      // but keep the guard for any transient non-JSON edge response.
+      const j = await r.json().catch(() => null);
+      if (!j) {
+        setErr(
+          r.ok
+            ? 'The request timed out at the gateway before finishing. Some resources may already be enabled — click again to continue.'
+            : `Enable request failed (HTTP ${r.status}). Click again to retry.`,
+        );
+        return;
+      }
       if (j.gate) { setGate(j.gate); return; }
       if (!j.ok) { setErr(j.error || 'Enable failed'); return; }
       if (j.data.enabled) {
-        setMsg(`Enabled diagnostics on ${j.data.enabled.length} of ${j.data.attempted} resource(s)${j.data.failed?.length ? ` · ${j.data.failed.length} failed` : ''}.`);
+        const failedNote = j.data.failed?.length ? ` · ${j.data.failed.length} failed` : '';
+        if (j.data.partial) {
+          setMsg(`Enabled ${j.data.enabled.length} of ${j.data.total} resource(s); ${j.data.remaining} remaining${failedNote}. Continuing…`);
+          await load();
+          // Auto-continue the remainder (enableDiagnostics is idempotent, so
+          // already-enabled resources are skipped cheaply).
+          if (key === '__all') { await enable(body, key); return; }
+        } else {
+          setMsg(`Enabled diagnostics on ${j.data.enabled.length} of ${j.data.attempted ?? j.data.total} resource(s)${failedNote}.`);
+        }
       } else {
         setMsg(`Diagnostics enabled (${j.data.mode}).`);
       }

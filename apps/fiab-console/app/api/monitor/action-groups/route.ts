@@ -15,6 +15,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { buildScopedCacheKey, getOrComputeCached } from '@/lib/azure/query-result-cache';
 import {
   listActionGroups,
   upsertActionGroup,
@@ -58,7 +59,13 @@ export async function GET() {
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   try {
-    const actionGroups = await listActionGroups();
+    // Cached 5 min + SWR — action groups change rarely; the list is an ARM crawl.
+    const { value: actionGroups } = await getOrComputeCached(
+      buildScopedCacheKey('monitor/action-groups', {}),
+      'monitor',
+      () => listActionGroups(),
+      { ttlMs: 5 * 60_000, staleWhileRevalidate: true, budgetMs: 22_000, serveStaleOnError: true },
+    );
     return NextResponse.json({ ok: true, actionGroups });
   } catch (e) {
     return gate(e) || NextResponse.json({ ok: false, error: (e as Error).message }, { status: e instanceof MonitorError ? e.status : 500 });

@@ -21,6 +21,12 @@ import { getSession } from '@/lib/auth/session';
 import {
   databricksConfigGate, listUcSchemas, createUcSchema, deleteUcSchema, patchUcSchema,
 } from '@/lib/azure/databricks-client';
+import { isOssUc } from '@/lib/azure/uc-backend';
+import {
+  primaryWorkspaceHost,
+  listSchemas as listSchemasUc, createSchema as createSchemaUc,
+  updateSchema as updateSchemaUc, deleteSchema as deleteSchemaUc,
+} from '@/lib/azure/unity-catalog-client';
 
 // Coerce a free-form object into a Record<string,string> (drops empty keys).
 function toStringMap(v: any): Record<string, string> | undefined {
@@ -37,6 +43,9 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 function gate() {
+  // OSS Unity Catalog backend (loom-unity — the Azure-Government default) has
+  // no Databricks dependency; the UC client routes to LOOM_UNITY_URL.
+  if (isOssUc()) return null;
   const g = databricksConfigGate();
   if (g) {
     return NextResponse.json(
@@ -54,10 +63,12 @@ export async function GET(req: NextRequest) {
   const catalog = req.nextUrl.searchParams.get('catalog')?.trim();
   if (!catalog) return NextResponse.json({ ok: false, error: 'catalog is required' }, { status: 400 });
   try {
-    const schemas = await listUcSchemas(catalog);
+    const schemas = isOssUc()
+      ? await listSchemasUc(await primaryWorkspaceHost(), catalog)
+      : await listUcSchemas(catalog);
     return NextResponse.json({ ok: true, schemas });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
+    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: e?.status || 502 });
   }
 }
 
@@ -73,13 +84,19 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: false, error: 'name and catalog_name are required' }, { status: 400 });
   }
   try {
-    const schema = await createUcSchema({
-      name,
-      catalog_name,
-      comment: body?.comment ? String(body.comment) : undefined,
-      storage_root: body?.storage_root ? String(body.storage_root) : undefined,
-      properties: toStringMap(body?.properties),
-    });
+    const schema = isOssUc()
+      ? await createSchemaUc(await primaryWorkspaceHost(), {
+          name, catalog_name,
+          comment: body?.comment ? String(body.comment) : undefined,
+          storage_root: body?.storage_root ? String(body.storage_root) : undefined,
+        })
+      : await createUcSchema({
+          name,
+          catalog_name,
+          comment: body?.comment ? String(body.comment) : undefined,
+          storage_root: body?.storage_root ? String(body.storage_root) : undefined,
+          properties: toStringMap(body?.properties),
+        });
     return NextResponse.json({ ok: true, schema });
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: e?.status || 502 });
@@ -105,7 +122,9 @@ export async function PATCH(req: NextRequest) {
     return NextResponse.json({ ok: false, error: 'provide owner, comment, and/or new_name to update' }, { status: 400 });
   }
   try {
-    const schema = await patchUcSchema(fullName, { owner, comment, new_name: newName });
+    const schema = isOssUc()
+      ? await updateSchemaUc(await primaryWorkspaceHost(), fullName, { owner, comment, new_name: newName })
+      : await patchUcSchema(fullName, { owner, comment, new_name: newName });
     return NextResponse.json({ ok: true, schema });
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: e?.status || 502 });
@@ -122,7 +141,8 @@ export async function DELETE(req: NextRequest) {
     return NextResponse.json({ ok: false, error: 'full_name (catalog.schema) is required' }, { status: 400 });
   }
   try {
-    await deleteUcSchema(fullName, force);
+    if (isOssUc()) await deleteSchemaUc(await primaryWorkspaceHost(), fullName, force);
+    else await deleteUcSchema(fullName, force);
     return NextResponse.json({ ok: true });
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: e?.status || 502 });

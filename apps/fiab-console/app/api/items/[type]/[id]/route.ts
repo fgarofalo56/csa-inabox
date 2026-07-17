@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
+import crypto from 'node:crypto';
 import { getSession } from '@/lib/auth/session';
-import { itemsContainer, workspacesContainer } from '@/lib/azure/cosmos-client';
+import { auditLogContainer, itemsContainer, workspacesContainer } from '@/lib/azure/cosmos-client';
 import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
 import { apiError } from '@/lib/api/respond';
+import { recordItemOpen } from '@/lib/items/record-open';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -47,6 +49,11 @@ export async function GET(
   try {
     const item = await loadItem(params.id, params.type, session.claims.oid);
     if (!item) return err('Item not found', 404, 'not_found');
+    // Feed "Recent": record the open (throttled, best-effort — never blocks).
+    await recordItemOpen(
+      { oid: session.claims.oid, upn: session.claims.upn },
+      { id: item.id, itemType: params.type, workspaceId: item.workspaceId },
+    );
     return NextResponse.json(item);
   } catch (e: any) {
     return err(e?.message || 'Failed to fetch item', 500, 'cosmos_error');

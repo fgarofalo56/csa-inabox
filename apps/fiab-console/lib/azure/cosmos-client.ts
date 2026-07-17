@@ -258,6 +258,14 @@ let _costAttribution: Container | null = null;
 // Created lazily here (no ARM/Bicep pre-step beyond the account+database); the
 // optional LoomPerf_CL Log-Analytics export is a separate honest-gated path.
 let _perfBenchmarks: Container | null = null;
+// PERF-4.2/4.4 — performance tunables + usage-learning histograms + auto-tune
+// audit. Docs: {id:'tunables', scopeKey:'#config'} (admin auto-adjust bounds +
+// cache override + learning config), {id:'hist:<scope>:<pool>', scopeKey:scope}
+// (EWMA hour-of-week usage histograms per workspace/'global' × pool group), and
+// {id:'audit:…', scopeKey:'#audit', ttl:30d} applied-change audit rows. PK
+// /scopeKey so tunables reads + per-scope histogram merges are single-partition.
+// TTL-enabled (defaultTtl -1) — only audit rows carry a ttl.
+let _perfLearning: Container | null = null;
 // PSR-3 — cross-replica warm Spark-session lease registry. One doc per warm/
 // leased pooled session: {id: leaseId, groupKey, backend, poolName, kind,
 // sizingKey, sessionId, state, leases[], ownerReplica, warmedAt, lastActivityAt,
@@ -958,6 +966,15 @@ async function ensure() {
   _costAttribution = costAttr;
   // PSR-1 — perf-benchmark trend rows. PK /runId (see declaration).
   _perfBenchmarks = await mk('perf-benchmarks', '/runId');
+  // PERF-4.2/4.4 — perf tunables + usage-learning histograms + auto-tune audit.
+  // PK /scopeKey, TTL-enabled (audit rows carry their own ttl; config/histogram
+  // docs are durable). Distinct createIfNotExists (not `mk`) to set defaultTtl.
+  const { container: perfLearn } = await database.containers.createIfNotExists({
+    id: 'perf-learning',
+    partitionKey: { paths: ['/scopeKey'] },
+    defaultTtl: -1, // TTL enabled; only audit docs carry a per-doc `ttl`
+  });
+  _perfLearning = perfLearn;
   // PSR-3 — cross-replica warm-session lease registry. PK /groupKey, TTL-enabled
   // (each lease doc carries its own `ttl` so a dead replica's leases self-evict).
   // Distinct createIfNotExists (not `mk`) to set defaultTtl.
@@ -1124,6 +1141,8 @@ export async function capacityGuardrailsContainer(): Promise<Container> { await 
 /** BR-COSTATTR — per-execution cost attribution ledger (append-only, TTL), PK /tenantId. */
 export async function costAttributionContainer(): Promise<Container> { await ensure(); return _costAttribution!; }
 export async function perfBenchmarksContainer(): Promise<Container> { await ensure(); return _perfBenchmarks!; }
+/** PERF-4.2/4.4 — perf tunables + usage-learning histograms + auto-tune audit, PK /scopeKey. */
+export async function perfLearningContainer(): Promise<Container> { await ensure(); return _perfLearning!; }
 export async function sparkWarmLeasesContainer(): Promise<Container> { await ensure(); return _sparkWarmLeases!; }
 /** CTS-07 — Copilot skills registry (custom skills + seeded built-ins), PK /scope. */
 export async function copilotSkillsContainer(): Promise<Container> { await ensure(); return _copilotSkills!; }

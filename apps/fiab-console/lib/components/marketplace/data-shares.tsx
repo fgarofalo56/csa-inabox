@@ -30,6 +30,7 @@ import {
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   MessageBar, MessageBarBody, MessageBarTitle,
   Dialog, DialogTrigger, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
+  Menu, MenuTrigger, MenuPopover, MenuList, MenuItem, MenuButton,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
@@ -37,6 +38,7 @@ import {
   CloudArrowDown20Regular, Copy20Regular, Database20Regular,
   CloudArrowDown24Regular, Share24Regular, Person24Regular,
   DatabaseSearch20Regular, DatabaseSearch24Regular,
+  Code20Regular, DocumentText20Regular, PlugDisconnected20Regular,
 } from '@fluentui/react-icons';
 import { TileGrid } from '@/lib/components/ui/tile-grid';
 import { EmptyState } from '@/lib/components/empty-state';
@@ -98,9 +100,11 @@ export function DataShares() {
 
   // Explore/Query dialog — opened from a successful mount OR the mounted-catalogs
   // list, scoped to a single subscribed catalog. Lifted here so both entry points
-  // share one dialog instance.
-  const [explore, setExplore] = useState<{ open: boolean; catalog: string | null }>({ open: false, catalog: null });
-  const openExplore = useCallback((catalog: string) => setExplore({ open: true, catalog }), []);
+  // share one dialog instance. provider/share coordinates travel along so the
+  // explorer can offer "Create lakehouse shortcut" (delta-sharing://share/…)
+  // reusing the provider credential stored at add time (loom-dsp-<provider>).
+  const [explore, setExplore] = useState<{ open: boolean; catalog: string | null; provider?: string; share?: string }>({ open: false, catalog: null });
+  const openExplore = useCallback((catalog: string, provider?: string, share?: string) => setExplore({ open: true, catalog, provider, share }), []);
 
   const handleGate = (status: number, j: any): boolean => {
     if (status === 501 && j?.gated) { setGate({ error: j.error, hint: j.hint, missing: j.missing }); return true; }
@@ -199,6 +203,8 @@ export function DataShares() {
         setOpen={(o) => setExplore((prev) => ({ ...prev, open: o }))}
         catalog={explore.catalog}
         host={host}
+        providerName={explore.provider}
+        shareName={explore.share}
       />
     </div>
   );
@@ -215,9 +221,10 @@ function InboundPanel({
   onChange: () => void;
   busy: boolean;
   setBusy: (b: boolean) => void;
-  onExplore: (catalog: string) => void;
+  onExplore: (catalog: string, provider?: string, share?: string) => void;
 }) {
   const [addOpen, setAddOpen] = useState(false);
+  const [removeErr, setRemoveErr] = useState<string | null>(null);
 
   return (
     <>
@@ -258,14 +265,39 @@ function InboundPanel({
             <div className={styles.cardActions}>
               <Button size="small" appearance="subtle" icon={<Delete20Regular />}
                 onClick={async () => {
-                  setBusy(true);
-                  await clientFetch(`/api/marketplace/sharing/providers/${encodeURIComponent(p.name)}`, { method: 'DELETE' });
-                  setBusy(false); onChange();
+                  setBusy(true); setRemoveErr(null);
+                  try {
+                    // Surface the REAL outcome — this used to swallow the response,
+                    // so a failed delete (e.g. dependent mounted catalogs) looked
+                    // like "nothing happens" (operator report 2026-07-17).
+                    const r = await clientFetch(`/api/marketplace/sharing/providers/${encodeURIComponent(p.name)}`, { method: 'DELETE' });
+                    const j = await r.json().catch(() => null);
+                    if (!r.ok || (j && j.ok === false)) {
+                      const msg = j?.error || `HTTP ${r.status}`;
+                      setRemoveErr(
+                        /dependent|catalog|in use/i.test(msg)
+                          ? `Couldn't remove "${p.name}": ${msg} — unmount its subscribed catalogs below (Use / manage → Unmount) first, then retry.`
+                          : `Couldn't remove "${p.name}": ${msg}`,
+                      );
+                      return;
+                    }
+                  } catch (e: any) {
+                    setRemoveErr(`Couldn't remove "${p.name}": ${String(e?.message || e)}`);
+                    return;
+                  } finally {
+                    setBusy(false);
+                  }
+                  onChange();
                 }}>Remove</Button>
             </div>
           </Card>
         ))}
       </TileGrid>
+      {removeErr && (
+        <MessageBar intent="error" layout="multiline">
+          <MessageBarBody><MessageBarTitle>Remove failed</MessageBarTitle>{removeErr}</MessageBarBody>
+        </MessageBar>
+      )}
 
       <Divider />
 
@@ -283,9 +315,11 @@ function InboundPanel({
  */
 function MountedCatalogs({
   styles, onExplore, reloadKey,
-}: { styles: ReturnType<typeof useStyles>; onExplore: (catalog: string) => void; reloadKey: unknown }) {
+}: { styles: ReturnType<typeof useStyles>; onExplore: (catalog: string, provider?: string, share?: string) => void; reloadKey: unknown }) {
   const [catalogs, setCatalogs] = useState<MountedCatalog[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  // "Open in notebook" — which catalog the workspace-picker dialog is open for.
+  const [nbCatalog, setNbCatalog] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setErr(null); setCatalogs(null);
@@ -336,21 +370,161 @@ function MountedCatalogs({
                 }
               />
               <div className={styles.cardActions}>
-                <Button size="small" appearance="primary" icon={<DatabaseSearch20Regular />} onClick={() => onExplore(c.name)}>
+                <Button size="small" appearance="primary" icon={<DatabaseSearch20Regular />} onClick={() => onExplore(c.name, c.provider_name, c.share_name)}>
                   Explore &amp; query
                 </Button>
+                <Menu>
+                  <MenuTrigger disableButtonEnhancement>
+                    <MenuButton size="small" appearance="subtle">Use / manage</MenuButton>
+                  </MenuTrigger>
+                  <MenuPopover>
+                    <MenuList>
+                      <MenuItem icon={<Copy20Regular />} onClick={() => copyText(c.name)}>
+                        Copy catalog name
+                      </MenuItem>
+                      <MenuItem icon={<Code20Regular />} onClick={() => setNbCatalog(c.name)}>
+                        Open in notebook…
+                      </MenuItem>
+                      <MenuItem icon={<Code20Regular />} onClick={() => copyText(sparkReadSnippet(c.name))}>
+                        Copy Spark read (notebook)
+                      </MenuItem>
+                      <MenuItem icon={<DocumentText20Regular />} onClick={() => copyText(sqlSnippet(c.name))}>
+                        Copy SQL query
+                      </MenuItem>
+                      <MenuItem
+                        icon={<PlugDisconnected20Regular />}
+                        onClick={async () => {
+                          if (!confirm(`Unmount "${c.name}"? This removes the local read-only mount only — the provider's source data is untouched and you can re-mount the share anytime.`)) return;
+                          try {
+                            const r = await clientFetch(`/api/marketplace/sharing/catalogs?name=${encodeURIComponent(c.name)}`, { method: 'DELETE' });
+                            const j = await r.json().catch(() => null);
+                            if (!r.ok || (j && j.ok === false)) { setErr(`Unmount "${c.name}" failed: ${j?.error || `HTTP ${r.status}`}`); return; }
+                          } catch (e: any) {
+                            setErr(`Unmount "${c.name}" failed: ${String(e?.message || e)}`); return;
+                          }
+                          void load();
+                        }}
+                      >
+                        Unmount (unsubscribe)
+                      </MenuItem>
+                    </MenuList>
+                  </MenuPopover>
+                </Menu>
               </div>
             </Card>
           ))}
         </TileGrid>
       )}
+      <OpenInNotebookDialog catalog={nbCatalog} onClose={() => setNbCatalog(null)} />
     </>
   );
 }
 
+/**
+ * OpenInNotebookDialog — pick a workspace, create a real notebook item seeded
+ * with explore + read cells for the mounted share catalog, then navigate to it.
+ * This is the "use it in a notebook" bridge from Marketplace → workspace items.
+ */
+function OpenInNotebookDialog({ catalog, onClose }: { catalog: string | null; onClose: () => void }) {
+  const [wsList, setWsList] = useState<{ id: string; displayName: string }[] | null>(null);
+  const [wsId, setWsId] = useState('');
+  const [name, setName] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!catalog) return;
+    setName(`Explore ${catalog}`); setErr(null); setWsList(null); setWsId('');
+    clientFetch('/api/workspaces').then((r) => r.json()).then((d: any) => {
+      const list = (Array.isArray(d) ? d : (d?.workspaces || [])).map((w: any) => ({ id: w.id, displayName: w.displayName || w.name || w.id }));
+      setWsList(list);
+      if (list.length) setWsId(list[0].id);
+    }).catch((e) => { setErr(String(e?.message || e)); setWsList([]); });
+  }, [catalog]);
+
+  const create = useCallback(async () => {
+    if (!catalog || !wsId) return;
+    setBusy(true); setErr(null);
+    try {
+      const code = `# Explore the "${catalog}" Delta share (live, read-only — no data copied)\n`
+        + `spark.sql("SHOW SCHEMAS IN \`${catalog}\`").show()\n\n`
+        + `# List tables in a schema:\n`
+        + `# spark.sql("SHOW TABLES IN \`${catalog}\`.<schema>").show()\n\n`
+        + `# Read a shared table:\n`
+        + `# df = spark.read.table("${catalog}.<schema>.<table>")\n`
+        + `# display(df)\n`;
+      const r = await clientFetch(`/api/items/notebook?workspaceId=${encodeURIComponent(wsId)}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ displayName: name.trim() || `Explore ${catalog}`, definition: { code, lang: 'python' } }),
+      });
+      const j = await r.json().catch(() => null);
+      if (!j?.ok || !j.notebook?.id) { setErr(j?.error || `HTTP ${r.status}`); return; }
+      window.location.href = `/items/notebook/${j.notebook.id}`;
+    } catch (e: any) {
+      setErr(String(e?.message || e));
+    } finally {
+      setBusy(false);
+    }
+  }, [catalog, wsId, name]);
+
+  return (
+    <Dialog open={!!catalog} onOpenChange={(_, d) => { if (!d.open) onClose(); }}>
+      <DialogSurface>
+        <DialogBody>
+          <DialogTitle>Open “{catalog}” in a notebook</DialogTitle>
+          <DialogContent>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
+              <Caption1>
+                Creates a notebook seeded with cells that browse this share&apos;s schemas and read its tables —
+                live against the mounted catalog, no data copied.
+              </Caption1>
+              {err && <MessageBar intent="error"><MessageBarBody>{err}</MessageBarBody></MessageBar>}
+              <Field label="Workspace" required>
+                {wsList === null ? <Spinner size="tiny" /> : (
+                  <Select value={wsId} onChange={(_, d) => setWsId(d.value)}>
+                    {wsList.map((w) => <option key={w.id} value={w.id}>{w.displayName}</option>)}
+                  </Select>
+                )}
+              </Field>
+              <Field label="Notebook name" required>
+                <Input value={name} onChange={(_, d) => setName(d.value)} />
+              </Field>
+            </div>
+          </DialogContent>
+          <DialogActions>
+            <Button appearance="secondary" onClick={onClose}>Cancel</Button>
+            <Button appearance="primary" disabled={busy || !wsId || !name.trim()} icon={busy ? <Spinner size="tiny" /> : undefined} onClick={() => { void create(); }}>
+              {busy ? 'Creating…' : 'Create notebook'}
+            </Button>
+          </DialogActions>
+        </DialogBody>
+      </DialogSurface>
+    </Dialog>
+  );
+}
+
+/** Copy text to the clipboard (best-effort; silent on older browsers). */
+function copyText(text: string) {
+  try { void navigator.clipboard?.writeText(text); } catch { /* noop */ }
+}
+/** A ready-to-paste PySpark cell reading a table from a mounted Delta-Share catalog. */
+function sparkReadSnippet(catalog: string): string {
+  return `# Read a table from the "${catalog}" Delta share (live, no copy).\n`
+    + `# Replace <schema>.<table> with a table you saw in Explore & query.\n`
+    + `df = spark.read.table("${catalog}.<schema>.<table>")\n`
+    + `display(df)\n`;
+}
+/** A ready-to-paste SQL query against a mounted Delta-Share catalog. */
+function sqlSnippet(catalog: string): string {
+  return `-- Query a table from the "${catalog}" Delta share.\n`
+    + `-- Replace <schema>.<table> with a table you saw in Explore & query.\n`
+    + `SELECT * FROM \`${catalog}\`.<schema>.<table> LIMIT 100;`;
+}
+
 function MountShareButton({
   provider, share, onDone, busy, setBusy, onExplore,
-}: { provider: string; share: string; onDone: () => void; busy: boolean; setBusy: (b: boolean) => void; onExplore: (catalog: string) => void }) {
+}: { provider: string; share: string; onDone: () => void; busy: boolean; setBusy: (b: boolean) => void; onExplore: (catalog: string, provider?: string, share?: string) => void }) {
   const [open, setOpen] = useState(false);
   const [catalog, setCatalog] = useState(`${provider}_${share}`.replace(/[^a-zA-Z0-9_]/g, '_'));
   const [msg, setMsg] = useState<string | null>(null);
@@ -395,7 +569,7 @@ function MountShareButton({
             )}
             {mounted && (
               <Button appearance="primary" icon={<DatabaseSearch20Regular />}
-                onClick={() => { const c = mounted; setOpen(false); reset(); onExplore(c); }}>
+                onClick={() => { const c = mounted; setOpen(false); reset(); onExplore(c, provider, share); }}>
                 Explore &amp; query
               </Button>
             )}

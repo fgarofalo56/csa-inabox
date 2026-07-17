@@ -685,12 +685,27 @@ export function UsageMetricsPane() {
                   height={640}
                 />
               ) : embed.ok && embed.kind === 'grafana' && embed.iframeUrl ? (
-                <iframe
-                  className={s.grafanaFrame}
-                  src={embed.iframeUrl}
-                  title="Usage analytics (Managed Grafana)"
-                  allow="fullscreen"
-                />
+                // Azure Managed Grafana CANNOT be iframed inline: it requires
+                // Entra SSO (a 302 to login.microsoftonline.com, which sets
+                // frame-ancestors that block framing), and Managed Grafana
+                // exposes no anonymous/allow_embedding mode — so an inline
+                // frame always renders "This content is blocked." (operator
+                // report 2026-07-17). The native live charts ABOVE are the
+                // inline analytics; this opens the curated Grafana dashboard in
+                // a new tab where SSO completes normally.
+                <MessageBar intent="info">
+                  <MessageBarBody>
+                    <MessageBarTitle>Curated Grafana dashboard</MessageBarTitle>
+                    The native charts above are fully live inline. Azure Managed Grafana
+                    requires single sign-on and can’t be embedded in a frame, so open the
+                    curated dashboard in a new tab.
+                  </MessageBarBody>
+                  <MessageBarActions>
+                    <FluentLink href={embed.iframeUrl} target="_blank" rel="noopener noreferrer">
+                      <Open24Regular className={s.docIcon} /> Open in Grafana
+                    </FluentLink>
+                  </MessageBarActions>
+                </MessageBar>
               ) : (
                 <MessageBar intent="info">
                   <MessageBarBody>

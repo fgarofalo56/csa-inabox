@@ -31,11 +31,22 @@ const useStyles = makeStyles({
     display: 'flex',
     flexDirection: 'column',
     border: `1px solid ${tokens.colorNeutralStroke2}`,
+    // Fabric cell anatomy — a colored left accent rail marks the cell type
+    // (brand blue = code); the rail brightens with the active state.
+    borderLeft: `3px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusMedium,
     backgroundColor: tokens.colorNeutralBackground1,
+    // Secondary cell actions (convert / lock / duplicate / maximize / move /
+    // delete / AI toggle) are hover-only, matching the Fabric notebook's
+    // hover toolbar. :focus-within keeps them keyboard-reachable.
+    '& .nb-cell-actions': { opacity: 0, transitionProperty: 'opacity', transitionDuration: tokens.durationFaster },
+    ':hover .nb-cell-actions': { opacity: 1 },
+    ':focus-within .nb-cell-actions': { opacity: 1 },
   },
   shellActive: {
     border: `1px solid ${tokens.colorBrandStroke1}`,
+    borderLeft: `3px solid ${tokens.colorBrandStroke1}`,
+    '& .nb-cell-actions': { opacity: 1 },
   },
   shellMaximized: {
     position: 'fixed',
@@ -99,9 +110,17 @@ const useStyles = makeStyles({
     wordBreak: 'break-word',
     maxWidth: '100%',
     borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
-    backgroundColor: tokens.colorNeutralBackground2,
     maxHeight: '240px',
     overflow: 'auto',
+    // Pure-CSS scroll fade (background-attachment trick): a soft shadow appears
+    // at the top/bottom edge only while more output is scrolled out of view —
+    // honest affordance, theme-correct, no overlay elements.
+    backgroundColor: tokens.colorNeutralBackground2,
+    backgroundImage: `linear-gradient(${tokens.colorNeutralBackground2} 30%, transparent), linear-gradient(transparent, ${tokens.colorNeutralBackground2} 70%), linear-gradient(${tokens.colorNeutralShadowAmbient}, transparent), linear-gradient(transparent, ${tokens.colorNeutralShadowAmbient})`,
+    backgroundPosition: 'top, bottom, top, bottom',
+    backgroundRepeat: 'no-repeat',
+    backgroundSize: '100% 24px, 100% 24px, 100% 8px, 100% 8px',
+    backgroundAttachment: 'local, local, scroll, scroll',
   },
   outputBoxMaximized: {
     maxHeight: '40%',
@@ -157,7 +176,28 @@ const useStyles = makeStyles({
     minWidth: '32px',
     textAlign: 'right',
   },
+  // Per-cell execution duration ("✓ 2.4 s"), Fabric cell status parity.
+  durationText: {
+    fontFamily: 'Consolas, monospace',
+    fontSize: '11px',
+    color: tokens.colorNeutralForeground3,
+    whiteSpace: 'nowrap',
+  },
+  hoverActions: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXXS,
+  },
 });
+
+/** "842 ms" / "2.4 s" / "1 m 12 s" — per-cell run duration. */
+export function formatCellDuration(ms: number): string {
+  if (ms < 1000) return `${Math.round(ms)} ms`;
+  if (ms < 60_000) return `${(ms / 1000).toFixed(1)} s`;
+  const m = Math.floor(ms / 60_000);
+  const sec = Math.round((ms % 60_000) / 1000);
+  return `${m} m ${sec} s`;
+}
 
 const LANG_OPTIONS: { value: NotebookCellLang; label: string }[] = [
   { value: 'pyspark', label: 'PySpark (Python)' },
@@ -574,6 +614,14 @@ export function CodeCell({ cell, active, onFocus, onChange, onRun, onStop, onDel
           title={collapsed ? 'Expand cell' : 'Collapse cell'}
         />
         <Caption1 className={s.badgeCount}>{exec}</Caption1>
+        {typeof cell.output?.durationMs === 'number' && cell.output.status !== 'pending' && (
+          <Caption1
+            className={s.durationText}
+            title={cell.output.executedAtUtc ? `Last run ${new Date(cell.output.executedAtUtc).toLocaleString()}` : 'Last run duration'}
+          >
+            {cell.output.status === 'ok' ? '✓' : '✗'} {formatCellDuration(cell.output.durationMs)}
+          </Caption1>
+        )}
         {running ? (
           <Button size="small" appearance="subtle" icon={<Stop16Filled />} disabled={!onStop} onClick={(e) => { e.stopPropagation(); onStop?.(); }}>
             Stop
@@ -728,43 +776,47 @@ export function CodeCell({ cell, active, onFocus, onChange, onRun, onStop, onDel
           </Popover>
         )}
         <div className={s.spacer} />
-        <Button
-          size="small"
-          appearance="subtle"
-          icon={<ArrowSwap16Regular />}
-          disabled={!onConvertToMarkdown}
-          onClick={(e) => { e.stopPropagation(); onConvertToMarkdown?.(); }}
-          aria-label="Convert to markdown cell"
-          title="Convert to markdown cell"
-        />
-        <Button
-          size="small"
-          appearance={completionEnabled ? 'primary' : 'subtle'}
-          icon={completionEnabled ? <Sparkle16Filled /> : <Sparkle16Regular />}
-          onClick={(e) => { e.stopPropagation(); toggleCompletion(); }}
-          aria-label={completionEnabled ? 'Disable AI inline completion' : 'Enable AI inline completion'}
-          title={completionEnabled ? 'AI inline completion: on — pause typing for a ghost suggestion, Tab to accept' : 'AI inline completion: off'}
-        />
-        <Button
-          size="small"
-          appearance={locked ? 'primary' : 'subtle'}
-          icon={locked ? <LockClosed16Filled /> : <LockClosed16Regular />}
-          onClick={(e) => { e.stopPropagation(); toggleLock(); }}
-          aria-label={locked ? 'Unlock cell' : 'Lock cell'}
-          title={locked ? 'Unlock cell' : 'Lock cell'}
-        />
-        <Button size="small" appearance="subtle" icon={<Copy16Regular />} disabled={!onDuplicate} onClick={(e) => { e.stopPropagation(); onDuplicate?.(); }} aria-label="Duplicate cell" title="Duplicate cell" />
-        <Button
-          size="small"
-          appearance="subtle"
-          icon={maximized ? <ArrowMinimize16Regular /> : <ArrowMaximize16Regular />}
-          onClick={(e) => { e.stopPropagation(); setMaximized(m => !m); }}
-          aria-label={maximized ? 'Restore cell' : 'Maximize cell'}
-          title={maximized ? 'Restore cell (Esc)' : 'Maximize cell'}
-        />
-        <Button size="small" appearance="subtle" icon={<ChevronUp16Regular />} disabled={!canMoveUp} onClick={(e) => { e.stopPropagation(); onMoveUp?.(); }} aria-label="Move cell up" />
-        <Button size="small" appearance="subtle" icon={<ChevronDown16Regular />} disabled={!canMoveDown} onClick={(e) => { e.stopPropagation(); onMoveDown?.(); }} aria-label="Move cell down" />
-        <Button size="small" appearance="subtle" icon={<Delete16Regular />} onClick={(e) => { e.stopPropagation(); onDelete?.(); }} aria-label="Delete cell" />
+        {/* Secondary actions — hover-only (`.nb-cell-actions` reveals on shell
+            hover / focus-within / active), Fabric hover-toolbar density. */}
+        <span className={mergeClasses(s.hoverActions, 'nb-cell-actions')}>
+          <Button
+            size="small"
+            appearance="subtle"
+            icon={<ArrowSwap16Regular />}
+            disabled={!onConvertToMarkdown}
+            onClick={(e) => { e.stopPropagation(); onConvertToMarkdown?.(); }}
+            aria-label="Convert to markdown cell"
+            title="Convert to markdown cell"
+          />
+          <Button
+            size="small"
+            appearance={completionEnabled ? 'primary' : 'subtle'}
+            icon={completionEnabled ? <Sparkle16Filled /> : <Sparkle16Regular />}
+            onClick={(e) => { e.stopPropagation(); toggleCompletion(); }}
+            aria-label={completionEnabled ? 'Disable AI inline completion' : 'Enable AI inline completion'}
+            title={completionEnabled ? 'AI inline completion: on — pause typing for a ghost suggestion, Tab to accept' : 'AI inline completion: off'}
+          />
+          <Button
+            size="small"
+            appearance={locked ? 'primary' : 'subtle'}
+            icon={locked ? <LockClosed16Filled /> : <LockClosed16Regular />}
+            onClick={(e) => { e.stopPropagation(); toggleLock(); }}
+            aria-label={locked ? 'Unlock cell' : 'Lock cell'}
+            title={locked ? 'Unlock cell' : 'Lock cell'}
+          />
+          <Button size="small" appearance="subtle" icon={<Copy16Regular />} disabled={!onDuplicate} onClick={(e) => { e.stopPropagation(); onDuplicate?.(); }} aria-label="Duplicate cell" title="Duplicate cell" />
+          <Button
+            size="small"
+            appearance="subtle"
+            icon={maximized ? <ArrowMinimize16Regular /> : <ArrowMaximize16Regular />}
+            onClick={(e) => { e.stopPropagation(); setMaximized(m => !m); }}
+            aria-label={maximized ? 'Restore cell' : 'Maximize cell'}
+            title={maximized ? 'Restore cell (Esc)' : 'Maximize cell'}
+          />
+          <Button size="small" appearance="subtle" icon={<ChevronUp16Regular />} disabled={!canMoveUp} onClick={(e) => { e.stopPropagation(); onMoveUp?.(); }} aria-label="Move cell up" title="Move cell up" />
+          <Button size="small" appearance="subtle" icon={<ChevronDown16Regular />} disabled={!canMoveDown} onClick={(e) => { e.stopPropagation(); onMoveDown?.(); }} aria-label="Move cell down" title="Move cell down" />
+          <Button size="small" appearance="subtle" icon={<Delete16Regular />} onClick={(e) => { e.stopPropagation(); onDelete?.(); }} aria-label="Delete cell" title="Delete cell" />
+        </span>
       </div>
       {!collapsed && (
         maximized ? (

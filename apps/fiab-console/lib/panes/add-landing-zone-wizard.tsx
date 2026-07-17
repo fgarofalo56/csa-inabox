@@ -1,6 +1,6 @@
 'use client';
 
-import { clientFetch, CROSS_SUB_FETCH_TIMEOUT_MS } from '@/lib/client-fetch';
+import { clientFetch, describeNonJsonResponse, CROSS_SUB_FETCH_TIMEOUT_MS } from '@/lib/client-fetch';
 /**
  * Add Data Landing Zone — dlz-attach ONLY wizard (audit-t157)
  *
@@ -465,8 +465,9 @@ export function AddLandingZoneWizardPane() {
       }, CROSS_SUB_FETCH_TIMEOUT_MS);
       const ct = res.headers.get('content-type') || '';
       if (!ct.includes('application/json')) {
-        const t = await res.text().catch(() => '');
-        setDeployError(`Deploy service returned non-JSON (HTTP ${res.status}). ${t.slice(0, 200)}`);
+        // An HTML error page from the gateway (Front Door origin timeout / edge
+        // failure) — surface an honest, actionable message, NEVER the raw HTML.
+        setDeployError(describeNonJsonResponse(res.status, 'The deploy service'));
         return;
       }
       const j = await res.json().catch(() => ({}));

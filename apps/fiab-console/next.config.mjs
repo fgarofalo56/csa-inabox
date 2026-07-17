@@ -25,6 +25,11 @@ const nextConfig = {
     serverActions: { allowedOrigins: ['localhost:3000', 'loom-console.*'] },
     // Next.js 15: instrumentation.ts is enabled by default; instrumentationHook
     // flag is no longer supported and was removed here.
+    // The production compile peaks near the ACR build agent's memory ceiling
+    // (the build worker was OOM-SIGKILLed on 2026-07-16 runs cjdq/cjds even
+    // with the 6144MB heap cap). This trades a slightly slower compile for a
+    // lower peak so server-side image builds don't die by lottery.
+    webpackMemoryOptimizations: true,
   },
   async headers() {
     return [

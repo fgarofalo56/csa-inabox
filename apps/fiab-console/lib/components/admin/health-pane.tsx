@@ -29,7 +29,7 @@ import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
 
 type AuditStatus = 'pass' | 'warn' | 'fail';
 type AuditSeverity = 'critical' | 'recommended' | 'optional';
-type AuditCategory = 'identity' | 'data-plane' | 'azure-services' | 'permissions' | 'security' | 'enrichment' | 'builders' | 'catalog-governance' | 'ai-copilot';
+type AuditCategory = 'identity' | 'data-plane' | 'azure-services' | 'permissions' | 'security' | 'enrichment' | 'builders' | 'catalog-governance' | 'ai-copilot' | 'workloads';
 interface CheckResult {
   id: string; category: AuditCategory; title: string; severity: AuditSeverity; status: AuditStatus;
   detail: string; remediation?: string; fixId?: string; redeploy?: boolean; docs?: string;
@@ -51,8 +51,9 @@ const CATEGORY_LABEL: Record<AuditCategory, string> = {
   'builders': 'Builders',
   'catalog-governance': 'Catalog & governance backends',
   'ai-copilot': 'AI & Copilot',
+  'workloads': 'Workload families (derived from the item-type catalog)',
 };
-const CATEGORY_ORDER: AuditCategory[] = ['identity', 'data-plane', 'permissions', 'azure-services', 'catalog-governance', 'ai-copilot', 'builders', 'security', 'enrichment'];
+const CATEGORY_ORDER: AuditCategory[] = ['identity', 'data-plane', 'permissions', 'azure-services', 'catalog-governance', 'ai-copilot', 'builders', 'workloads', 'security', 'enrichment'];
 
 const card: React.CSSProperties = {
   padding: tokens.spacingVerticalXL, border: `1px solid ${tokens.colorNeutralStroke2}`,

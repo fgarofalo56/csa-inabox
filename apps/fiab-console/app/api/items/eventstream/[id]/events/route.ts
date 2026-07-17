@@ -46,8 +46,8 @@ interface SourceNodeState {
 }
 
 async function resolveSource(id: string, oid: string, nodeIdx: number): Promise<
-  | { ok: true; node: SourceNodeState; item: KustoItem }
-  | { ok: false; status: number; error: string }
+  | { ok: true; node: SourceNodeState; item: KustoItem; hub: string }
+  | { ok: false; status: number; code?: string; error: string }
 > {
   const item = await loadKustoItem(id, 'eventstream', oid);
   if (!item) return { ok: false, status: 404, error: 'not found' };
@@ -55,11 +55,27 @@ async function resolveSource(id: string, oid: string, nodeIdx: number): Promise<
     ? (item.state!.sources as any[])
     : (item.state?.source ? [item.state.source] : []);
   const node = (nodeIdx >= 0 ? sources[nodeIdx] : sources[0]) as SourceNodeState | undefined;
-  if (!node) return { ok: false, status: 404, error: 'source node not found' };
-  if (!node.provisionedEndpoint?.entityPath) {
-    return { ok: false, status: 409, error: 'Source has no provisioned ingest endpoint yet. Provision the source first.' };
+  if (!node) {
+    // A brand-new / not-yet-saved topology has no source node. This is a
+    // configure-me state, not a failure — the dock renders it as a friendly
+    // "configure a source to preview" empty state via the code.
+    return {
+      ok: false, status: 404, code: 'source_not_found',
+      error: 'This stream has no source node yet — add and configure a source on the canvas first.',
+    };
   }
-  return { ok: true, node, item };
+  // Hub resolution: the node's own provisioned endpoint, else the stream's
+  // provisioned transport Event Hub (bundle-installed streams record
+  // state.transportHub without per-node endpoints).
+  const hub = node.provisionedEndpoint?.entityPath
+    || (typeof item.state?.transportHub === 'string' && item.state.transportHub.trim() ? item.state.transportHub.trim() : undefined);
+  if (!hub) {
+    return {
+      ok: false, status: 409, code: 'source_unconfigured',
+      error: 'Source has no provisioned ingest endpoint yet. Configure the source, then click "Provision endpoint".',
+    };
+  }
+  return { ok: true, node, item, hub };
 }
 
 /**
@@ -129,12 +145,20 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
   try {
     const id = (await ctx.params).id;
     const r = await resolveSource(id, session.claims.oid, nodeIdx);
-    if (!r.ok) return NextResponse.json({ ok: false, error: r.error }, { status: r.status });
+    if (!r.ok) return NextResponse.json({ ok: false, code: r.code, error: r.error }, { status: r.status });
     try {
-      const hub = r.node.provisionedEndpoint!.entityPath!;
+      const hub = r.hub;
+      // Peek within the requested enqueued-time window across ALL partitions.
+      // A tail-open (fromLatest) single-partition receiver only ever saw events
+      // that arrived on one partition DURING the ~3s listen window — real,
+      // already-enqueued events never rendered.
+      const sinceMs = Math.min(
+        24 * 3600 * 1000,
+        Math.max(60_000, Number(req.nextUrl.searchParams.get('sinceMs') ?? '3600000') || 3_600_000),
+      );
       const result = await peekEvents(hub, {
         maxEvents,
-        fromLatest: true,
+        sinceMs,
         consumerGroup: r.node.consumerGroup || '$Default',
       });
       return NextResponse.json({ ok: true, events: result.events, source: 'eventhub' });
@@ -202,9 +226,8 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   try {
     const id = (await ctx.params).id;
     const r = await resolveSource(id, session.claims.oid, nodeIdx);
-    if (!r.ok) return NextResponse.json({ ok: false, error: r.error }, { status: r.status });
-    const hub = r.node.provisionedEndpoint!.entityPath!;
-    const out = await sendEvents(hub, events, { partitionKey });
+    if (!r.ok) return NextResponse.json({ ok: false, code: r.code, error: r.error }, { status: r.status });
+    const out = await sendEvents(r.hub, events, { partitionKey });
     return NextResponse.json({ ok: true, sent: out.sent, status: out.status, batched: out.batched });
   } catch (e: any) {
     if (e instanceof EventHubsDataError) {

@@ -263,6 +263,13 @@ export interface PeekOptions {
   partition?: string;
   /** Upper bound on events to return. */
   maxEvents?: number;
+  /**
+   * Read events ENQUEUED within the last N milliseconds (capped at 7 days).
+   * Overrides fromLatest — the receiver opens at the enqueued-time position, so
+   * already-sent events inside the window are returned (a tail-open receiver
+   * only sees events that arrive while it is listening).
+   */
+  sinceMs?: number;
   /** Start at the latest position (true) vs the earliest retained (false). */
   fromLatest?: boolean;
   /** Consumer group to read under (defaults to $Default). */
@@ -335,9 +342,16 @@ export async function peekEvents(
   const consumerGroup = (opts.consumerGroup || '$Default').trim() || '$Default';
   const maxEvents = Math.max(1, Math.min(opts.maxEvents ?? 20, 200));
   const maxWaitMs = Math.max(500, Math.min(opts.maxWaitMs ?? 3000, 15000));
-  // fromLatest defaults true (tail) unless explicitly reading from the start.
-  const startPosition =
-    opts.fromLatest === false ? earliestEventPosition : latestEventPosition;
+  // sinceMs (enqueued-time window) wins; else fromLatest defaults true (tail).
+  const sinceMs =
+    typeof opts.sinceMs === 'number' && opts.sinceMs > 0
+      ? Math.min(opts.sinceMs, 7 * 24 * 3600 * 1000)
+      : undefined;
+  const startPosition = sinceMs
+    ? { enqueuedOn: new Date(Date.now() - sinceMs) }
+    : opts.fromLatest === false
+      ? earliestEventPosition
+      : latestEventPosition;
 
   const client = new EventHubConsumerClient(
     consumerGroup,
@@ -346,46 +360,51 @@ export async function peekEvents(
     credential,
   );
   try {
-    // Resolve which partition to read. If none requested, read the first.
-    let partitionId = (opts.partition || '').trim();
-    if (!partitionId) {
-      const ids: string[] = await client.getPartitionIds();
-      partitionId = ids[0] ?? '0';
-    }
-    const received: ReceivedEvent[] = await new Promise((resolve, reject) => {
-      const acc: ReceivedEvent[] = [];
-      let settled = false;
-      const finish = (err?: unknown) => {
-        if (settled) return;
-        settled = true;
-        try { sub.close(); } catch { /* best-effort */ }
-        clearTimeout(timer);
-        if (err) reject(err); else resolve(acc);
-      };
-      const timer = setTimeout(() => finish(), maxWaitMs);
-      const sub = client.subscribe(
-        partitionId,
-        {
-          processEvents: async (events: any[]) => {
-            for (const e of events) {
-              acc.push({
-                offset: e.offset != null ? String(e.offset) : undefined,
-                sequenceNumber: typeof e.sequenceNumber === 'number' ? e.sequenceNumber : undefined,
-                enqueuedTime: e.enqueuedTimeUtc ? new Date(e.enqueuedTimeUtc).toISOString() : undefined,
-                partitionId,
-                partitionKey: e.partitionKey ?? undefined,
-                body: e.body,
-                properties: e.properties ?? undefined,
-              });
-              if (acc.length >= maxEvents) { finish(); return; }
-            }
+    // Resolve which partitions to read. Events without a partition key are
+    // round-robined across ALL partitions, so an unspecified partition peeks
+    // every partition in parallel (a single-partition peek misses most events).
+    const requested = (opts.partition || '').trim();
+    const partitionIds: string[] = requested ? [requested] : await client.getPartitionIds();
+    const peekPartition = (partitionId: string): Promise<ReceivedEvent[]> =>
+      new Promise((resolve, reject) => {
+        const acc: ReceivedEvent[] = [];
+        let settled = false;
+        const finish = (err?: unknown) => {
+          if (settled) return;
+          settled = true;
+          try { sub.close(); } catch { /* best-effort */ }
+          clearTimeout(timer);
+          if (err) reject(err); else resolve(acc);
+        };
+        const timer = setTimeout(() => finish(), maxWaitMs);
+        const sub = client.subscribe(
+          partitionId,
+          {
+            processEvents: async (events: any[]) => {
+              for (const e of events) {
+                acc.push({
+                  offset: e.offset != null ? String(e.offset) : undefined,
+                  sequenceNumber: typeof e.sequenceNumber === 'number' ? e.sequenceNumber : undefined,
+                  enqueuedTime: e.enqueuedTimeUtc ? new Date(e.enqueuedTimeUtc).toISOString() : undefined,
+                  partitionId,
+                  partitionKey: e.partitionKey ?? undefined,
+                  body: e.body,
+                  properties: e.properties ?? undefined,
+                });
+                if (acc.length >= maxEvents) { finish(); return; }
+              }
+            },
+            processError: async (err: unknown) => { finish(err); },
           },
-          processError: async (err: unknown) => { finish(err); },
-        },
-        { startPosition, maxBatchSize: maxEvents, maxWaitTimeInSeconds: Math.ceil(maxWaitMs / 1000) },
-      );
-    });
-    return { ok: true, partition: partitionId, events: received };
+          { startPosition, maxBatchSize: maxEvents, maxWaitTimeInSeconds: Math.ceil(maxWaitMs / 1000) },
+        );
+      });
+    const perPartition = await Promise.all(partitionIds.map((pid) => peekPartition(pid)));
+    const received = perPartition
+      .flat()
+      .sort((a, b) => (b.enqueuedTime || '').localeCompare(a.enqueuedTime || ''))
+      .slice(0, maxEvents);
+    return { ok: true, partition: partitionIds.join(','), events: received };
   } catch (e: any) {
     // Surface a real AMQP authorization / connectivity error honestly.
     throw new EventHubsDataError(e?.code === 'UnauthorizedError' ? 403 : 502, e?.message || String(e), `peekEvents failed: ${e?.message || String(e)}`);

@@ -35,15 +35,24 @@ import {
   type GhRelease,
   type UpdateDeps,
   type PreflightOk,
+  type PreflightGate,
 } from '@/lib/updates/update-apply';
+import { resolveCurrentVersion } from '@/lib/updates/current-version';
+import {
+  readPipelineConfig,
+  resolveDeployRegion,
+  dispatchBuildRoll,
+} from '@/lib/updates/pipeline-dispatch';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 const UPSTREAM_OWNER = process.env.LOOM_FEEDBACK_REPO_OWNER || 'fgarofalo56';
 const UPSTREAM_REPO = process.env.LOOM_FEEDBACK_REPO_NAME || 'csa-inabox';
-const CURRENT_VERSION =
-  process.env.LOOM_VERSION || process.env.NEXT_PUBLIC_LOOM_VERSION || 'dev';
+// SAME resolver as /api/version (package.json → LOOM_VERSION → build marker) so
+// the pre-flight's already-up-to-date verdict can never contradict the page's
+// "Update available" badge (they previously read different sources).
+const CURRENT_VERSION = resolveCurrentVersion();
 
 /** Real GitHub releases fetch (public API; optional token for rate limit). */
 async function listReleases(): Promise<GhRelease[]> {
@@ -199,6 +208,25 @@ async function audit(tenantId: string, who: string, kind: string, fields: Record
   } catch { /* best-effort */ }
 }
 
+/**
+ * Attach build-pipeline availability to an 'images-not-published' gate so the
+ * caller (and the UI) always sees a real next step: dispatch the pipeline when
+ * a token is wired, or the exact env var to set when it isn't. Never a dead end.
+ */
+function withPipelineInfo(pre: PreflightGate): PreflightGate {
+  if (pre.reason !== 'images-not-published') return pre;
+  const cfg = readPipelineConfig();
+  return {
+    ...pre,
+    pipeline: {
+      available: cfg.available,
+      workflow: cfg.workflow,
+      monitorUrl: cfg.monitorUrl,
+      ...(cfg.available ? {} : { missingEnv: cfg.missingEnv }),
+    },
+  };
+}
+
 export async function GET() {
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
@@ -211,7 +239,7 @@ export async function GET() {
     if (!pre.ok && pre.reason === 'arm-not-configured') {
       return NextResponse.json({ ok: false, preflight: pre }, { status: 503 });
     }
-    return NextResponse.json({ ok: pre.ok, preflight: pre });
+    return NextResponse.json({ ok: pre.ok, preflight: pre.ok ? pre : withPipelineInfo(pre) });
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }
@@ -237,6 +265,75 @@ export async function POST(req: NextRequest) {
   }
 
   if (!pre.ok) {
+    // The images for the target release are not in the deployment's registry.
+    // This is NOT a dead end: this deployment channel builds images per-git-SHA
+    // (release-semver tags never land in the private ACR), so the REAL update
+    // mechanism is the image build+roll pipeline. Dispatch it when a GitHub
+    // token is configured; otherwise return the gate WITH the Fix-it env var.
+    if (pre.reason === 'images-not-published' && pre.target) {
+      // Same drift guard as the direct-roll path: the operator confirmed a
+      // specific tag in the dialog; refuse if the latest release moved.
+      if (body.confirmTag && body.confirmTag !== pre.target.tag_name) {
+        return NextResponse.json({
+          ok: false,
+          error: `Target drifted: you confirmed ${body.confirmTag} but the latest release is now ${pre.target.tag_name}. Re-check and confirm again.`,
+        }, { status: 409 });
+      }
+      const cfg = readPipelineConfig();
+      if (cfg.available) {
+        const dispatchedAt = new Date().toISOString();
+        const dispatch = await dispatchBuildRoll(cfg, {
+          imageVersion: pre.imageVersion || '',
+          releaseTag: pre.target.tag_name,
+          region: resolveDeployRegion(),
+          subscriptionId: process.env.LOOM_SUBSCRIPTION_ID,
+        });
+        if (dispatch.ok) {
+          await audit(tenantId, who, 'loom-update.pipeline-dispatched', {
+            to: pre.target.tag_name, workflow: dispatch.workflow, ref: dispatch.ref,
+          });
+          emitAuditEvent({
+            actorOid: s.claims.oid,
+            actorUpn: who,
+            action: 'platform.update-pipeline-dispatch',
+            targetType: 'loom-update',
+            targetId: pre.target.tag_name,
+            tenantId: s.claims.tid || tenantId,
+            outcome: 'success',
+            detail: { workflow: dispatch.workflow, ref: dispatch.ref },
+          });
+          return NextResponse.json({
+            ok: true,
+            mode: 'pipeline',
+            target: pre.target,
+            imageVersion: pre.imageVersion,
+            pipeline: {
+              workflow: dispatch.workflow,
+              ref: dispatch.ref,
+              monitorUrl: dispatch.monitorUrl,
+              dispatchedAt,
+            },
+            message:
+              `Release images for ${pre.target.tag_name} are not in this deployment's registry yet — ` +
+              `the image build + roll pipeline (${dispatch.workflow}) was dispatched at ${dispatch.ref}. ` +
+              'It builds every app image into your ACR and rolls the Container Apps onto them.',
+          }, { status: 202 });
+        }
+        // Dispatch genuinely failed (bad token scope / workflow missing) —
+        // surface it verbatim on the gate, still with the monitor link.
+        await audit(tenantId, who, 'loom-update.gated', {
+          reason: pre.reason, pipelineError: dispatch.error,
+        });
+        return NextResponse.json({
+          ok: false,
+          preflight: withPipelineInfo(pre),
+          error: dispatch.error,
+        }, { status: 502 });
+      }
+      await audit(tenantId, who, 'loom-update.gated', { reason: pre.reason, pipeline: 'no-token' });
+      return NextResponse.json({ ok: false, preflight: withPipelineInfo(pre) }, { status: 409 });
+    }
+
     // Honest gate — do not roll anything.
     const status = pre.reason === 'arm-not-configured' ? 503 : 409;
     await audit(tenantId, who, 'loom-update.gated', { reason: pre.reason });

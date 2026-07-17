@@ -782,6 +782,7 @@ export const PipelineDesigner = forwardRef<PipelineDesignerHandle, PipelineDesig
               insertActivity(def);
             }}
             onConnect={connect}
+            onDeleteActivity={deleteActivity}
             onUndo={doUndo}
             onRedo={doRedo}
             canUndo={history.canUndo}

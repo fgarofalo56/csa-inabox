@@ -52,8 +52,12 @@ export async function POST(req: NextRequest) {
   // access provider at the final approval tier.
   const scopeType: AccessScopeType =
     SCOPE_TYPES.has(body?.scopeType) ? body.scopeType : inferScopeType(itemType);
-  const scopeRef = String(body?.scopeRef || '').trim().slice(0, 200);
+  let scopeRef = String(body?.scopeRef || '').trim().slice(0, 200);
   const accessModel = ACCESS_MODELS.has(body?.accessModel) ? body.accessModel : 'governed';
+  // Logical 'item' scope defaults its grant target to the asset itself (#51):
+  // enforceAccessGrant resolves the item's workspace and grants a Loom-native
+  // workspace role, so an empty scopeRef must not reach the final tier.
+  if (scopeType === 'item' && !scopeRef) scopeRef = assetId;
   if (!assetId) return NextResponse.json({ ok: false, error: 'assetId is required' }, { status: 400 });
 
   const requester = s.claims.upn || s.claims.email || s.claims.oid;

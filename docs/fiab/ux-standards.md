@@ -320,6 +320,25 @@ Before calling a surface **done**, the author walks the checklist for its kind.
 **Every applicable box must be checked (or an honest-gate documented).** This is
 the review gate — reviewers reject a surface with unchecked boxes and no gate.
 
+### 7.0 Universal (EVERY surface — live-review standards, §9)
+
+- [ ] **G1 — Browser E2E receipt attached**: every config, button, and flow
+      exercised in a real browser with real data end-to-end. tsc + vitest +
+      DOM-string checks are NOT completion evidence (§9.1).
+- [ ] **G2 — Zero day-one gates**: the surface works by default; any unavoidable
+      gate renders an inline **Fix it** button (wizard/option-picker), is
+      registered in the central gate registry (`lib/gates/registry`), and
+      appears on the Admin Panel gate-registry page (§9.2).
+- [ ] **G3 — Resizable panels**: every canvas, graph, and query-editor section
+      is user-resizable (height AND width) via the shared `SplitPane` primitive
+      with a persisted `sizingKey` (§9.3).
+- [ ] **Node compactness**: canvas nodes ~160–190px wide, 2-row anatomy, actions
+      on hover/selection only, ≤1 on-node badge, light accent only (§9.4).
+- [ ] **Badges never overlap**: every badge/tag row uses `flexWrap` +
+      `minWidth: 0` + truncation; zero overlap at any width (§9.5).
+- [ ] **New-item first-open is clean**: no error banners on a freshly created
+      item; validation appears only after touch/save-attempt (§9.6).
+
 ### 7.1 Canvas surfaces
 
 - [ ] Nodes render through **`canvas-node-kit`** — colored band, icon+title,
@@ -388,6 +407,111 @@ DOM strings are **not** parity. A surface is verified only by:
 
 **A surface is A-grade only when its checklist (§7) is fully checked, its parity
 doc shows zero ❌, and its verification receipt is attached.**
+
+---
+
+## 9. Platform standards — operator live review, 2026-07-15 (NORMATIVE)
+
+These six standards come from the operator's live in-browser review of the
+platform on 2026-07-15. They are **normative and blocking** — enforced by
+`.claude/rules/ux-baseline.md` on every branch, every contributor, every PR —
+and they extend (never relax) everything above. Each has a checkbox in §7.0.
+
+### 9.1 G1 — Browser E2E before done (BLOCKING)
+
+**No surface is complete — and no surface is "A grade" — until a full
+in-browser E2E proves every config, every button, and every flow works with
+real data flowing end-to-end.**
+
+- `tsc`, `vitest`, and DOM-string assertions are **NOT completion evidence**.
+  They are necessary build gates, nothing more. The proof is a live browser
+  walk (minted-session UAT harness or authenticated capture) that clicks every
+  control and watches real data come back.
+- **Why this is non-negotiable (2026-07-15 evidence):** the GuidedPickerRail
+  adoption passed **every CI gate** — tsc clean, vitest green, DOM strings
+  present — and **hard-froze the renderer** in the live browser (reverted in
+  hotfix #2079). The same review found Browse pages that *rendered* perfectly
+  yet showed **0-counts everywhere** — the DOM was fine; the data path was
+  dead. Both classes of failure are invisible to every non-browser gate we
+  have. Only a real browser session with real data catches them.
+- The receipt (per §8 and `no-vaporware.md`) must show the flow **completing**,
+  not merely the surface rendering: endpoint hit, real response body, and the
+  UI reflecting that data.
+- Saying "done", "validated", or "shipped" without this receipt is a
+  `no-scaffold` violation.
+
+### 9.2 G2 — Zero day-one gates; every gate carries "Fix it"
+
+**All features work by default — opt-out, never opt-in.** A freshly deployed
+Loom presents zero remediation gates on day one for anything the deployment
+can support (per the default-ON principle and `no-fabric-dependency.md`).
+
+When a gate is genuinely unavoidable (tenant one-time grant, operator-only
+credential), it MUST satisfy **all three** of:
+
+1. **Inline "Fix it" button.** The gate renders an inline **Fix it** action
+   that launches a wizard / option-picker which actually sets the required
+   values (env var, role grant, resource selection) — not a MessageBar that
+   tells the user to go do it elsewhere. **A bare remediation MessageBar
+   without Fix-it is no longer compliant.** (This supersedes the
+   MessageBar-only floor in §6.2 — the MessageBar text + bicep link remain
+   required, and the Fix-it button is now required alongside them.)
+2. **Registered in the central gate registry** (`lib/gates/registry` — being
+   built) with the gate's id, blocked capability, required values, and
+   resolution wizard — so **Copilot can discover and resolve gates**
+   programmatically.
+3. **Visible on the Admin Panel gate-registry page**, so an admin sees every
+   outstanding gate in one place and can launch each Fix-it from there.
+
+An unregistered gate, or a gate without Fix-it, is a defect even if its
+MessageBar text is honest.
+
+### 9.3 G3 — Resizable panels everywhere
+
+**Every canvas, graph, and query-editor section supports user-adjustable
+height AND width** via the shared `SplitPane` primitive with a **persisted
+`sizingKey`** — the user's chosen sizes survive navigation and reload.
+
+- No fixed-height canvas cages, no fixed-width inspectors on these surfaces.
+- Hand-rolled drag-resize handles are forbidden — use `SplitPane` so behavior,
+  affordance, and persistence are identical surface to surface.
+
+### 9.4 Node compactness standard
+
+Canvas nodes are **compact**: the node-kit v2 anatomy (§2.2) renders at
+**~160–190px wide**, in **2 rows**:
+
+- **Row 1:** glyph chip + truncated instance name + status dot.
+- **Row 2:** caption subtitle (type label / detail).
+- **Actions appear on hover/selection only** — never permanently rendered on
+  the node face.
+- **At most ONE badge on the node**; every additional signal moves to the
+  tooltip and the inspector.
+- **Light accent only**: a 3px accent bar or a tinted glyph chip — **no heavy
+  full-width colored band**.
+
+A node wider than ~190px, with permanent action buttons, stacked badges, or a
+full-width band, is below baseline.
+
+### 9.5 Badges never overlap
+
+**Every badge/tag row uses `flexWrap` + `minWidth: 0` + truncation.** A badge
+overlapping a neighbor, its container, or any text — at ANY viewport width or
+zoom — is a **defect**, exactly like a broken button. Verify at narrow widths
+during the G1 browser walk.
+
+### 9.6 New-item first-open is clean
+
+**A freshly created item NEVER opens with error banners.** First-open is a
+guided, welcoming state:
+
+- Validation surfaces only **after the user touches a field or attempts
+  save/run** — never on first paint of a new item.
+- Unconfigured state renders as **guidance** (launcher cards, ghost next-step,
+  neutral "configure X to continue" affordances per §5.1), **never red**.
+- Red error chrome on a brand-new item that the user hasn't touched yet is a
+  defect. (The pre-run validation dots of §3.2 still apply — after touch or a
+  run/publish attempt, not before.)
 
 ---
 

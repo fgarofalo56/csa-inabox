@@ -26,6 +26,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { databricksConfigGate } from '@/lib/azure/databricks-client';
 import { isGovCloud, cloudBoundaryLabel } from '@/lib/azure/cloud-endpoints';
+import { isOssUc } from '@/lib/azure/uc-backend';
 import {
   primaryWorkspaceHost, listRegisteredModels, getRegisteredModel, listModelVersions,
 } from '@/lib/azure/unity-catalog-client';
@@ -36,6 +37,9 @@ export const dynamic = 'force-dynamic';
 interface Gate { gated: true; error: string }
 
 function resolveGate(): Gate | null {
+  // The OSS Unity Catalog backend (loom-unity — the Azure-Government default)
+  // fully supports registered models + versions — no Databricks/Gov gate.
+  if (isOssUc()) return null;
   const cfg = databricksConfigGate();
   if (cfg) {
     return { gated: true, error: `Databricks is not configured in this deployment. Set ${cfg.missing} on the Console (landing-zone bicep deploys the Databricks workspace).` };
@@ -44,9 +48,8 @@ function resolveGate(): Gate | null {
     return {
       gated: true,
       error:
-        `Unity Catalog registered models are not available at the ${cloudBoundaryLabel()} boundary. ` +
-        `They require a Commercial or GCC Databricks account (Microsoft Entra-connected Unity Catalog metastore). ` +
-        `At this boundary models are tracked in the workspace MLflow registry instead.`,
+        `Databricks Unity Catalog registered models are not available at the ${cloudBoundaryLabel()} boundary. ` +
+        `Deploy the OSS Unity Catalog backend (loom-unity) and set LOOM_UC_BACKEND=oss — it has a first-class registered-model securable.`,
     };
   }
   return null;

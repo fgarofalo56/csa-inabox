@@ -56,6 +56,22 @@ export function handleSecurityError(e: unknown): NextResponse {
     );
   }
   if (e instanceof PurviewError) {
+    // The scan plane answers 403 for PAYLOAD problems too (code
+    // `OperationNotAllowed`, e.g. "Azure data source registration requires a
+    // valid resourceId when an endpoint is specified") and 4xx with other
+    // request-level codes (`InvalidField`, `DataSource_Duplicate`,
+    // `Scan_IntegrationRuntimeMustBeOnline`, …). Those are NOT role gates —
+    // surface the real upstream code + message so the operator can fix the
+    // request, instead of misreporting a missing Data Map role.
+    const upstreamCode = String((e.body as any)?.error?.code || '');
+    const isAuthz = /^(unauthorized|forbidden|authorizationfailed|accountprotectedbyprivateendpoint)$/i.test(upstreamCode)
+      || (!upstreamCode && (e.status === 401 || e.status === 403));
+    if ((e.status === 401 || e.status === 403) && !isAuthz) {
+      return NextResponse.json(
+        { ok: false, error: e.message, code: 'purview_client_error', status: e.status, body: e.body },
+        { status: 400 },
+      );
+    }
     // 401/403 from the Data Map data-plane = the Console UAMI lacks a Data Map
     // role on the root collection (classic metadata-policy, NOT ARM RBAC). This
     // is the "Not authorized to access account" 403. Surface it as an HONEST

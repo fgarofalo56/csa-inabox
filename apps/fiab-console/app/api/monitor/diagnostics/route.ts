@@ -17,6 +17,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { buildScopedCacheKey, getOrComputeCached } from '@/lib/azure/query-result-cache';
 import {
   getDiagnosticsCoverage, enableDiagnostics, logAnalyticsResourceId,
   MonitorNotConfiguredError, MonitorError,
@@ -33,11 +34,19 @@ function gateOrError(e: unknown) {
   return NextResponse.json({ ok: false, error: (e as Error).message }, { status });
 }
 
-export async function GET() {
+export async function GET(req?: NextRequest) {
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   try {
-    const items = await getDiagnosticsCoverage();
+    // Cached 5 min + SWR: coverage enumerates diagnostic settings across the
+    // estate (per-resource ARM reads) — cache one crawl for all users.
+    const refresh = req?.nextUrl?.searchParams.get('refresh') === '1';
+    const { value: items } = await getOrComputeCached(
+      buildScopedCacheKey('monitor/diagnostics', {}),
+      'monitor',
+      () => getDiagnosticsCoverage(),
+      { ttlMs: 5 * 60_000, staleWhileRevalidate: true, bypass: refresh, budgetMs: 22_000, serveStaleOnError: true },
+    );
     const supported = items.filter((i) => i.supported);
     const summary = {
       total: items.length,
@@ -63,8 +72,18 @@ export async function POST(req: NextRequest) {
       const targets = items.filter((i) => i.supported && !i.routesToLoomLaw);
       const enabled: Array<{ id: string; name: string; mode: string }> = [];
       const failed: Array<{ id: string; name: string; error: string }> = [];
-      // Sequential to be gentle on ARM write limits; the set is small.
+      // Enable-all does one ARM write per resource. With many resources the loop
+      // outlived Front Door's ~30s edge budget, so FD returned an HTML 504 the
+      // client tried to JSON.parse ("Unexpected token '<'"). Bound the batch to a
+      // wall-clock budget UNDER the edge cut and report `remaining` so the client
+      // re-invokes to finish — enableDiagnostics is idempotent, so re-runs skip
+      // the already-enabled ones cheaply. (2026-07-17 operator report.)
+      const BUDGET_MS = 22_000;
+      const startedAt = Date.now();
+      let processed = 0;
       for (const t of targets) {
+        if (Date.now() - startedAt > BUDGET_MS) break;
+        processed++;
         try {
           const r = await enableDiagnostics(t.id);
           enabled.push({ id: t.id, name: t.name, mode: r.mode });
@@ -72,7 +91,11 @@ export async function POST(req: NextRequest) {
           failed.push({ id: t.id, name: t.name, error: (e as Error).message });
         }
       }
-      return NextResponse.json({ ok: true, data: { enabled, failed, attempted: targets.length } });
+      const remaining = Math.max(0, targets.length - processed);
+      return NextResponse.json({
+        ok: true,
+        data: { enabled, failed, attempted: processed, total: targets.length, remaining, partial: remaining > 0 },
+      });
     }
 
     const resourceId = typeof body?.resourceId === 'string' ? body.resourceId.trim() : '';

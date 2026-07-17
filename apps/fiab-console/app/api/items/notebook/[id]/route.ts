@@ -17,6 +17,7 @@ import { assertOwner } from '@/lib/auth/workspace-guard';
 import { itemsContainer, workspacesContainer } from '@/lib/azure/cosmos-client';
 import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
 import { migrateLegacyState, type NotebookCell, type NotebookCellLang } from '@/lib/types/notebook-cell';
+import { recordItemOpen } from '@/lib/items/record-open';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -42,6 +43,8 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
     const items = await itemsContainer();
     const { resource } = await items.item((await ctx.params).id, workspaceId).read<WorkspaceItem>();
     if (!resource || resource.itemType !== 'notebook') return apiError('notebook not found', 404);
+    // Feed "Recent": type-specific base routes bypass the generic GET's write.
+    await recordItemOpen({ oid: s.claims.oid, upn: s.claims.upn }, { id: resource.id, itemType: 'notebook', workspaceId: resource.workspaceId });
     const state = (resource.state as any) || {};
     // Fallback for bundle-installed notebooks whose cells were stamped only
     // into state.content (NotebookContent shape) and never into state.cells —

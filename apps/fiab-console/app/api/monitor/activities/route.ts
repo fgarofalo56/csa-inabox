@@ -24,6 +24,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { buildScopedCacheKey, getOrComputeCached } from '@/lib/azure/query-result-cache';
 import {
   queryActivityFeed, MonitorNotConfiguredError, MonitorError,
 } from '@/lib/azure/monitor-client';
@@ -43,8 +44,20 @@ export async function GET(req: NextRequest) {
   const includeSynapse = sp.get('synapse') !== '0';
   const includeArmLog = sp.get('arm') === '1';
 
+  const refresh = sp.get('refresh') === '1';
   try {
-    let rows = await queryActivityFeed({ days, limit, includeSynapse, includeArmLog });
+    // Cached 3 min + SWR: the activity feed unions Log Analytics + Synapse +
+    // ARM activity-log reads — the slowest first paint on Monitor. Status/name
+    // filters apply AFTER the cache so every filter permutation shares one
+    // upstream read (perf directive 2026-07-15).
+    const { value: allRows, meta } = await getOrComputeCached(
+      buildScopedCacheKey('monitor/activities', { days, limit, includeSynapse, includeArmLog }),
+      'monitor',
+      () => queryActivityFeed({ days, limit, includeSynapse, includeArmLog }),
+      { ttlMs: 3 * 60_000, staleWhileRevalidate: true, bypass: refresh, budgetMs: 22_000, serveStaleOnError: true },
+    );
+    let rows = allRows;
+    void meta;
     if (status) {
       const want = status.toLowerCase();
       rows = rows.filter((r) => (r.status || '').toLowerCase() === want);
