@@ -194,6 +194,13 @@ export interface PipelineCanvasProps {
    * No-op at the top level.
    */
   onDrillBack?: () => void;
+  /**
+   * Delete the selected activity — wired to the Delete / Del key (ADF + Fabric
+   * both delete the selected activity on Delete; Backspace stays "return to
+   * previous canvas"). No-op when nothing is selected or the canvas is
+   * read-only.
+   */
+  onDeleteActivity?: (name: string) => void;
   /** Whether the snap-to-grid toggle is on. */
   snapToGrid?: boolean;
   /** Whether the dot grid is visible. */
@@ -269,7 +276,7 @@ function buildEdges(activities: PipelineActivity[]): Edge[] {
 }
 
 const PipelineCanvasInner = forwardRef<CanvasHandle, PipelineCanvasProps>(function PipelineCanvasInner(
-  { activities, selectedName, onSelect, onDropPaletteKey, onConnect, onDrillInto, onDrillBack, snapToGrid = true, showGrid = true, onZoomChange,
+  { activities, selectedName, onSelect, onDropPaletteKey, onConnect, onDrillInto, onDrillBack, onDeleteActivity, snapToGrid = true, showGrid = true, onZoomChange,
     onUndo, onRedo, canUndo = false, canRedo = false, onAddActivities, onExplainNode, readOnly = false, hideEmptyState = false,
     aiSuggest = false, itemType = 'data-pipeline', itemId },
   ref,
@@ -680,6 +687,12 @@ const PipelineCanvasInner = forwardRef<CanvasHandle, PipelineCanvasProps>(functi
     if (key === 'a' || key === 'A') { e.preventDefault(); void autoAlign(); return; }
     if (key === 'n' || key === 'N') { e.preventDefault(); setShowNestedPreviews((v) => !v); return; }
     if (key === 'Backspace') { e.preventDefault(); onDrillBack?.(); return; }
+    // Delete / Del removes the selected activity (ADF + Fabric parity). Ignored
+    // when read-only or nothing is selected; never fires while typing in a field
+    // (the early input/textarea guard at the top of this handler already returns).
+    if ((key === 'Delete' || key === 'Del') && !readOnly && selectedName) {
+      e.preventDefault(); onDeleteActivity?.(selectedName); return;
+    }
     if (e.shiftKey) {
       const PAN = 80;
       if (key === 'ArrowUp')    { e.preventDefault(); rf.setViewport(shiftViewport(rf.getViewport(), 0, PAN), { duration: 120 }); return; }
@@ -687,7 +700,7 @@ const PipelineCanvasInner = forwardRef<CanvasHandle, PipelineCanvasProps>(functi
       if (key === 'ArrowLeft')  { e.preventDefault(); rf.setViewport(shiftViewport(rf.getViewport(), PAN, 0), { duration: 120 }); return; }
       if (key === 'ArrowRight') { e.preventDefault(); rf.setViewport(shiftViewport(rf.getViewport(), -PAN, 0), { duration: 120 }); return; }
     }
-  }, [rf, autoAlign, onDrillBack, onUndo, onRedo, copySelection, paste, duplicateSelection, alignSelection, distributeSelection]);
+  }, [rf, autoAlign, onDrillBack, onDeleteActivity, selectedName, readOnly, onUndo, onRedo, copySelection, paste, duplicateSelection, alignSelection, distributeSelection]);
 
   return (
     <div
