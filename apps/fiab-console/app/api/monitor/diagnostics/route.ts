@@ -72,8 +72,18 @@ export async function POST(req: NextRequest) {
       const targets = items.filter((i) => i.supported && !i.routesToLoomLaw);
       const enabled: Array<{ id: string; name: string; mode: string }> = [];
       const failed: Array<{ id: string; name: string; error: string }> = [];
-      // Sequential to be gentle on ARM write limits; the set is small.
+      // Enable-all does one ARM write per resource. With many resources the loop
+      // outlived Front Door's ~30s edge budget, so FD returned an HTML 504 the
+      // client tried to JSON.parse ("Unexpected token '<'"). Bound the batch to a
+      // wall-clock budget UNDER the edge cut and report `remaining` so the client
+      // re-invokes to finish — enableDiagnostics is idempotent, so re-runs skip
+      // the already-enabled ones cheaply. (2026-07-17 operator report.)
+      const BUDGET_MS = 22_000;
+      const startedAt = Date.now();
+      let processed = 0;
       for (const t of targets) {
+        if (Date.now() - startedAt > BUDGET_MS) break;
+        processed++;
         try {
           const r = await enableDiagnostics(t.id);
           enabled.push({ id: t.id, name: t.name, mode: r.mode });
@@ -81,7 +91,11 @@ export async function POST(req: NextRequest) {
           failed.push({ id: t.id, name: t.name, error: (e as Error).message });
         }
       }
-      return NextResponse.json({ ok: true, data: { enabled, failed, attempted: targets.length } });
+      const remaining = Math.max(0, targets.length - processed);
+      return NextResponse.json({
+        ok: true,
+        data: { enabled, failed, attempted: processed, total: targets.length, remaining, partial: remaining > 0 },
+      });
     }
 
     const resourceId = typeof body?.resourceId === 'string' ? body.resourceId.trim() : '';

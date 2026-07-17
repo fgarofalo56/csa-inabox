@@ -343,10 +343,22 @@ export function ChargebackPane() {
       const res = await clientFetch(`/api/admin/capacity/chargeback?${qs}`, { cache: 'no-store' }, CHARGEBACK_FETCH_TIMEOUT_MS);
       if (res.status === 401) { setUnauth(true); setLoading(false); return; }
       const j = await res.json().catch(() => null);
+      // Non-JSON body (an edge 502/504 HTML page, an empty response) → j is null.
+      // Guard BEFORE reading j.data so the report shows an honest error instead
+      // of crashing with "Cannot read properties of null (reading 'data')".
+      if (!j) {
+        setError(
+          res.ok
+            ? 'The chargeback service returned an empty response. Retry in a moment.'
+            : `Chargeback request failed (HTTP ${res.status}). Retry in a moment.`,
+        );
+        setLoading(false);
+        return;
+      }
       if (res.status === 403) { setError(j?.reason || j?.error || 'Tenant-admin access required.'); setLoading(false); return; }
       if (j?.ok === false && j?.gate) { setGate(j.gate as Gate); setLoading(false); return; }
       if (j?.ok === false) { setError(j?.error || 'Failed to load chargeback data.'); setLoading(false); return; }
-      setModel(j.data as ChargebackModel);
+      setModel((j.data as ChargebackModel) ?? null);
       setMeta((j.meta as CacheMeta) ?? null);
     } catch (e) {
       setError((e as Error).message);
