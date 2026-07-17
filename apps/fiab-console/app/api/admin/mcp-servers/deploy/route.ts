@@ -83,6 +83,13 @@ export async function GET(_req: NextRequest) {
 
 /** Honest infra gate — names the missing env var / role / bicep module. */
 function gate(entry: McpCatalogEntry, missing: string, detail: string, appName: string) {
+  // Pre-fill the RG + CAE name from LOOM_ACA_ENV_ID when it IS set (this gate
+  // also fires for non-CAE gaps like a missing UAMI) — rule #70: no <token> the
+  // admin must hand-resolve when Loom already knows the value.
+  const envId = (process.env.LOOM_ACA_ENV_ID || '').trim();
+  const acaRg = envId.match(/\/resourceGroups\/([^/]+)\//i)?.[1]
+    || (process.env.LOOM_ADMIN_RG || '').trim() || '<LOOM_ACA_RG>';
+  const caeName = envId.split('/').pop() || '<managed-environment-name>';
   return NextResponse.json(
     {
       ok: false,
@@ -96,8 +103,8 @@ function gate(entry: McpCatalogEntry, missing: string, detail: string, appName: 
           `# Deploy ${entry.name} MCP server (the console would do this for you once the env vars below are set)`,
           `az containerapp create \\`,
           `  --name ${appName} \\`,
-          `  --resource-group <LOOM_ACA_RG> \\`,
-          `  --environment <managed-environment-name> \\`,
+          `  --resource-group ${acaRg} \\`,
+          `  --environment ${caeName} \\`,
           `  --image ${entry.image} \\`,
           `  --target-port ${entry.ingressPort} --ingress internal \\`,
           `  --min-replicas 1 --max-replicas 2`,

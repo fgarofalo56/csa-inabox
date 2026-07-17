@@ -125,7 +125,7 @@ export async function POST(req: NextRequest) {
         missing: 'LOOM_SAMPLE_ADLS',
         reason: 'ADLS Gen2 sample seeding is not configured for this deployment.',
         remediation:
-          'Set LOOM_SAMPLE_ADLS=<storage-account-name> on the Console container app ' +
+          `Set LOOM_SAMPLE_ADLS=${(process.env.LOOM_ADLS_ACCOUNT || '').trim() || '<storage-account-name>'} on the Console container app ` +
           '(typically the same value as LOOM_ADLS_ACCOUNT). The Console UAMI must hold ' +
           'Storage Blob Data Contributor on the account, and the ADF factory ' +
           'system-assigned identity must hold Storage Blob Data Contributor so the copy ' +

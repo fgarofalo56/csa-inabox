@@ -42,13 +42,22 @@ export interface SqlLoginGate {
  * surface ("warehouse", "Synapse dedicated pool", "DAB source") for the message;
  * `principal` is the UAMI display name / client id when known.
  */
+/** The Console UAMI's display name, resolved from Loom's own env so the CREATE
+ * USER script is copy-paste-runnable (rule #70) — the UAMI resource name IS the
+ * Entra SP display name. Placeholder only when neither env coordinate exists. */
+function consoleUamiName(): string {
+  const fromRid = (process.env.LOOM_UAMI_RESOURCE_ID || '').trim().split('/').pop() || '';
+  return fromRid || (process.env.LOOM_UAMI_NAME || '').trim() || '<console-uami-name>';
+}
+
 export function sqlLoginGateBody(opts: { target?: string; principal?: string; detail?: string } = {}): SqlLoginGate {
   const target = opts.target || 'the dedicated SQL pool / warehouse';
   const principal = opts.principal || 'the Console UAMI (LOOM_UAMI_CLIENT_ID)';
+  const user = opts.principal || consoleUamiName();
   const sql =
     `-- Run as an Entra admin on ${target}:\n` +
-    `CREATE USER [${opts.principal || '<console-uami-name>'}] FROM EXTERNAL PROVIDER;\n` +
-    `ALTER ROLE db_datareader ADD MEMBER [${opts.principal || '<console-uami-name>'}];\n` +
+    `CREATE USER [${user}] FROM EXTERNAL PROVIDER;\n` +
+    `ALTER ROLE db_datareader ADD MEMBER [${user}];\n` +
     `-- (add db_datawriter / db_ddladmin only if write/DDL is required)`;
   return {
     ok: false,
@@ -59,7 +68,7 @@ export function sqlLoginGateBody(opts: { target?: string; principal?: string; de
       reason: `${principal} authenticates to ${target} as an Entra principal but has no SQL login there, so the query can't run.`,
       remediation:
         `Grant ${principal} a SQL login on ${target}: connect as an Entra admin and run ` +
-        `CREATE USER [<console-uami-name>] FROM EXTERNAL PROVIDER, then add it to the needed database role(s). ` +
+        `CREATE USER [${user}] FROM EXTERNAL PROVIDER, then add it to the needed database role(s). ` +
         `No Microsoft Fabric is required — this is an Azure SQL/Synapse RBAC grant.`,
       sql,
     },
