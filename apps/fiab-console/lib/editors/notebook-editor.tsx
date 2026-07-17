@@ -1938,6 +1938,26 @@ export function NotebookEditor({ item, id }: Props) {
     setRunMsg('Inserted Data Wrangler code cell — review and Run to apply on your full DataFrame.');
   }, []);
 
+  // "Use this lakehouse" — append a ready-to-run cell against an ATTACHED
+  // lakehouse (operator report 2026-07-17: attach existed but there was no way
+  // to actually USE it from the notebook). Snippets go through the auto-mount
+  // preamble's `loom_lakehouses['<name>']` dict (real abfss paths — see
+  // lib/notebook/lakehouse-mount-preamble.ts), matching Fabric's attached-
+  // lakehouse "Load data" affordance.
+  const insertLakehouseUseCell = useCallback((name: string, what: 'list-tables' | 'list-files' | 'read-table') => {
+    const ref = `loom_lakehouses[${JSON.stringify(name)}]`;
+    const source = what === 'list-tables'
+      ? `# Tables in "${name}" (attached lakehouse)\ndisplay(mssparkutils.fs.ls(${ref} + "/Tables"))`
+      : what === 'list-files'
+        ? `# Files in "${name}" (attached lakehouse)\ndisplay(mssparkutils.fs.ls(${ref} + "/Files"))`
+        : `# Read a Delta table from "${name}" — replace <table> (run the List-tables cell to see names)\ndf = spark.read.format("delta").load(${ref} + "/Tables/<table>")\ndisplay(df)`;
+    const fresh = { ...emptyCell('code', 'pyspark' as NotebookCellLang), source };
+    setCells(prev => [...prev, fresh]);
+    setActiveCellId(fresh.id);
+    setDirty(true);
+    setRunMsg(`Inserted "${what}" cell for ${name} — Run it against the attached lakehouse.`);
+  }, []);
+
   // Register an editor-mutation bridge per code cell so a Copilot-proposed
   // change (orchestrator `proposed_change` step → CopilotDiff Keep) mutates the
   // REAL cell via applyChange('notebook-cell:<id>', after). The bridge clears
@@ -2791,6 +2811,23 @@ export function NotebookEditor({ item, id }: Props) {
                               {src.isDefault ? <strong>{src.displayName}</strong> : src.displayName}
                               {src.isDefault && <Badge appearance="outline" color="brand" size="small" style={{ marginLeft: tokens.spacingHorizontalXS }}>default</Badge>}
                             </span>
+                            {src.kind === 'lakehouse' && (
+                              <Menu>
+                                <MenuTrigger disableButtonEnhancement>
+                                  <Button size="small" appearance="subtle" onClick={(e) => e.stopPropagation()}>Use</Button>
+                                </MenuTrigger>
+                                <MenuPopover>
+                                  <MenuList>
+                                    <MenuItem onClick={() => insertLakehouseUseCell(src.displayName, 'list-tables')}>Insert: list tables</MenuItem>
+                                    <MenuItem onClick={() => insertLakehouseUseCell(src.displayName, 'read-table')}>Insert: read a table</MenuItem>
+                                    <MenuItem onClick={() => insertLakehouseUseCell(src.displayName, 'list-files')}>Insert: list files</MenuItem>
+                                    {resolved?.abfss && (
+                                      <MenuItem onClick={() => { void navigator.clipboard?.writeText(resolved.abfss || ''); }}>Copy abfss path</MenuItem>
+                                    )}
+                                  </MenuList>
+                                </MenuPopover>
+                              </Menu>
+                            )}
                             {!src.isDefault && (
                               <Button size="small" appearance="subtle" onClick={(e) => { e.stopPropagation(); promoteDefault(src.id); }}>Pin</Button>
                             )}
