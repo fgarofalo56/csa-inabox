@@ -672,9 +672,15 @@ export function DataPipelineEditor({ item, id, runtimePreset, templateId }: Prop
     setSelectedActivity(null);
   }, []);
 
-  // Wire a success dependency from→to (drag a node's output port to another
-  // node's input port). Cycle-guarded so the DAG stays acyclic.
-  const connect = useCallback((from: string, to: string) => {
+  // Wire a dependency from→to (drag a node's output port to another node's
+  // input port). The port dragged from carries the ADF/Synapse dependency
+  // CONDITION — Succeeded / Failed / Completed / Skipped — which the canvas
+  // passes as `cond`. (Before 2026-07-17 this hardcoded 'Succeeded', so every
+  // edge — no matter which coloured port — became a success dependency, which
+  // read as "the other connect types are missing".) Cycle-guarded so the DAG
+  // stays acyclic. An existing from→to edge gains the new condition (ADF allows
+  // multiple conditions on one dependency, e.g. Succeeded + Skipped).
+  const connect = useCallback((from: string, to: string, cond: 'Succeeded' | 'Failed' | 'Completed' | 'Skipped' = 'Succeeded') => {
     if (from === to) return;
     patchSpec((prev) => {
       const acts = prev.properties.activities;
@@ -696,8 +702,19 @@ export function DataPipelineEditor({ item, id, runtimePreset, templateId }: Prop
           activities: acts.map((a) => {
             if (a.name !== to) return a;
             const deps = a.dependsOn || [];
-            if (deps.some((d) => d.activity === from)) return a;
-            return { ...a, dependsOn: [...deps, { activity: from, dependencyConditions: ['Succeeded'] }] };
+            const existing = deps.find((d) => d.activity === from);
+            if (existing) {
+              // Same edge already there — add the condition if it's a new one.
+              const conds = existing.dependencyConditions || [];
+              if (conds.includes(cond)) return a;
+              return {
+                ...a,
+                dependsOn: deps.map((d) =>
+                  d.activity === from ? { ...d, dependencyConditions: [...conds, cond] } : d,
+                ),
+              };
+            }
+            return { ...a, dependsOn: [...deps, { activity: from, dependencyConditions: [cond] }] };
           }),
         },
       };
@@ -1441,6 +1458,7 @@ export function DataPipelineEditor({ item, id, runtimePreset, templateId }: Prop
                             if (def) insertActivity(def);
                           }}
                           onConnect={connect}
+                          onDeleteActivity={deleteActivity}
                           onExplainNode={setExplainActivity}
                           aiSuggest
                           itemType="data-pipeline"
