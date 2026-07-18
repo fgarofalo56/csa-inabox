@@ -116,6 +116,18 @@ export function LoomAppRuntimeEditor({ item, id }: EditorProps) {
   const [logs, setLogs] = useState<string>('');
   const [logsBusy, setLogsBusy] = useState(false);
 
+  // ---- Resources (APPS-W2 — Databricks-Apps "App resources" parity) -------
+  interface AppResourceRec {
+    id: string; kind: string; label: string; envNames: string[];
+    grant: { role: string; scope: string; status: string; detail: string; grantScript?: string };
+    addedAt: string; addedBy?: string;
+  }
+  interface ResKindInfo { kind: string; label: string; description: string; available: boolean; missing?: string }
+  const [resources, setResources] = useState<AppResourceRec[]>([]);
+  const [resKinds, setResKinds] = useState<ResKindInfo[]>([]);
+  const [attachKind, setAttachKind] = useState<string>('');
+  const [resBusy, setResBusy] = useState(false);
+
   const currentTemplate = useMemo(() => templates.find((t) => t.id === templateId), [templates, templateId]);
 
   // ---- initial load -------------------------------------------------------
@@ -149,8 +161,52 @@ export function LoomAppRuntimeEditor({ item, id }: EditorProps) {
     finally { setLoading(false); }
   }, [id, isNew]);
 
+  const loadResources = useCallback(async () => {
+    if (isNew) return;
+    try {
+      const r = await clientFetch(`/api/items/loom-app-runtime/${encodeURIComponent(id)}/resources`);
+      const j = await r.json();
+      if (j.ok) { setResources(j.resources || []); setResKinds(j.kinds || []); }
+    } catch { /* table renders empty; attach errors surface via banner */ }
+  }, [id, isNew]);
+
+  const attachResource = useCallback(async () => {
+    if (!attachKind) return;
+    setResBusy(true); setBanner(null);
+    try {
+      const r = await clientFetch(`/api/items/loom-app-runtime/${encodeURIComponent(id)}/resources`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ kind: attachKind }),
+      });
+      const j = await r.json();
+      if (j.ok) {
+        setResources(j.resources || []);
+        setAttachKind('');
+        const g = j.resource?.grant;
+        setBanner(g?.status === 'pending-grants'
+          ? { intent: 'warning', text: `${j.resource.label} attached — one admin grant is still needed (see the script on the row). Env applies on the next Deploy.` }
+          : { intent: 'success', text: `${j.resource?.label || attachKind} attached — grant ${g?.status}. Env applies on the next Deploy.` });
+        await loadItem(); // bindings gained the injected env rows
+      } else {
+        setBanner({ intent: 'error', text: j.error || `HTTP ${r.status}` });
+      }
+    } catch (e: any) { setBanner({ intent: 'error', text: e?.message || String(e) }); }
+    finally { setResBusy(false); }
+  }, [attachKind, id, loadItem]);
+
+  const detachResource = useCallback(async (rid: string) => {
+    setResBusy(true); setBanner(null);
+    try {
+      const r = await clientFetch(`/api/items/loom-app-runtime/${encodeURIComponent(id)}/resources?rid=${encodeURIComponent(rid)}`, { method: 'DELETE' });
+      const j = await r.json();
+      if (j.ok) { setResources(j.resources || []); await loadItem(); }
+      else setBanner({ intent: 'error', text: j.error || `HTTP ${r.status}` });
+    } catch (e: any) { setBanner({ intent: 'error', text: e?.message || String(e) }); }
+    finally { setResBusy(false); }
+  }, [id, loadItem]);
+
   useEffect(() => { loadConfig(); }, [loadConfig]);
   useEffect(() => { loadItem(); }, [loadItem]);
+  useEffect(() => { loadResources(); }, [loadResources]);
   useEffect(() => () => { if (buildPoll.current) clearInterval(buildPoll.current); }, []);
 
   // Seed Monaco panes from the template starter (or persisted user edits) once
@@ -343,6 +399,7 @@ export function LoomAppRuntimeEditor({ item, id }: EditorProps) {
           <Tab value="overview">Overview</Tab>
           <Tab value="source">Source</Tab>
           <Tab value="deploy">Deploy</Tab>
+          <Tab value="resources">Resources</Tab>
           <Tab value="bindings">Bindings</Tab>
           <Tab value="logs">Logs</Tab>
           <Tab value="history">History</Tab>
@@ -470,6 +527,87 @@ export function LoomAppRuntimeEditor({ item, id }: EditorProps) {
         )}
 
         {/* ---- BINDINGS ---- */}
+        {/* ---- RESOURCES (APPS-W2) ---- */}
+        {tab === 'resources' && !loading && (
+          <>
+            <Subtitle2>Resources</Subtitle2>
+            <Body1>
+              Attach a Loom backend to this app in one click — the shared apps identity is granted the
+              needed role and the connection env vars are injected automatically (Databricks-Apps
+              &quot;App resources&quot; parity). Env applies on the next Deploy.
+            </Body1>
+            <div className={s.row}>
+              <Dropdown
+                placeholder="Pick a resource to attach"
+                value={resKinds.find((k) => k.kind === attachKind)?.label || ''}
+                selectedOptions={attachKind ? [attachKind] : []}
+                onOptionSelect={(_, d) => setAttachKind(d.optionValue || '')}
+                style={{ minWidth: '280px' }}
+              >
+                {resKinds.map((k) => {
+                  const attached = resources.some((r) => r.kind === k.kind);
+                  return (
+                    <Option key={k.kind} value={k.kind} disabled={!k.available || attached}
+                      text={k.label}>
+                      {k.label}{attached ? ' (attached)' : !k.available ? ` — set ${k.missing}` : ''}
+                    </Option>
+                  );
+                })}
+              </Dropdown>
+              <Button appearance="primary" icon={<Add20Regular />} onClick={attachResource}
+                disabled={!attachKind || resBusy}>
+                {resBusy ? 'Attaching…' : 'Attach'}
+              </Button>
+            </div>
+            {resources.length === 0 ? (
+              <Caption1>No resources attached yet — pick one above. Each attach grants the apps identity + injects env.</Caption1>
+            ) : (
+              <Table size="small" aria-label="Attached resources">
+                <TableHeader>
+                  <TableRow>
+                    <TableHeaderCell>Resource</TableHeaderCell>
+                    <TableHeaderCell>Role</TableHeaderCell>
+                    <TableHeaderCell>Grant</TableHeaderCell>
+                    <TableHeaderCell>Injected env</TableHeaderCell>
+                    <TableHeaderCell />
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {resources.map((r) => (
+                    <TableRow key={r.id}>
+                      <TableCell>{r.label}</TableCell>
+                      <TableCell>{r.grant.role}</TableCell>
+                      <TableCell>
+                        <Badge appearance="tint"
+                          color={r.grant.status === 'granted' || r.grant.status === 'already-exists' ? 'success'
+                            : r.grant.status === 'pending-grants' ? 'warning' : r.grant.status === 'error' ? 'danger' : 'informative'}>
+                          {r.grant.status}
+                        </Badge>
+                      </TableCell>
+                      <TableCell style={{ overflowWrap: 'anywhere' }}>
+                        <Caption1>{r.envNames.join(', ')}</Caption1>
+                      </TableCell>
+                      <TableCell>
+                        <Button size="small" icon={<Delete20Regular />} disabled={resBusy}
+                          onClick={() => detachResource(r.id)} aria-label={`Detach ${r.label}`} />
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
+            {resources.filter((r) => r.grant.status === 'pending-grants' && r.grant.grantScript).map((r) => (
+              <MessageBar key={r.id} intent="warning" layout="multiline">
+                <MessageBarBody>
+                  <MessageBarTitle>{r.label}: one admin grant still needed</MessageBarTitle>
+                  {r.grant.detail}
+                  <pre className={s.logs}>{r.grant.grantScript}</pre>
+                </MessageBarBody>
+              </MessageBar>
+            ))}
+          </>
+        )}
+
         {tab === 'bindings' && !loading && (
           <>
             <Subtitle2>Bindings</Subtitle2>
