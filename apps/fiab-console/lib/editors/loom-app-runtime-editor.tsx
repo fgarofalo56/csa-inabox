@@ -127,6 +127,10 @@ export function LoomAppRuntimeEditor({ item, id }: EditorProps) {
   const [resKinds, setResKinds] = useState<ResKindInfo[]>([]);
   const [attachKind, setAttachKind] = useState<string>('');
   const [resBusy, setResBusy] = useState(false);
+  // Per-item picker (slice 2): workspace lakehouse items for kind='lakehouse'.
+  const [appWorkspaceId, setAppWorkspaceId] = useState<string>('');
+  const [lakeItems, setLakeItems] = useState<Array<{ id: string; displayName: string }>>([]);
+  const [attachItemId, setAttachItemId] = useState<string>('');
 
   const currentTemplate = useMemo(() => templates.find((t) => t.id === templateId), [templates, templateId]);
 
@@ -166,21 +170,45 @@ export function LoomAppRuntimeEditor({ item, id }: EditorProps) {
     try {
       const r = await clientFetch(`/api/items/loom-app-runtime/${encodeURIComponent(id)}/resources`);
       const j = await r.json();
-      if (j.ok) { setResources(j.resources || []); setResKinds(j.kinds || []); }
+      if (j.ok) { setResources(j.resources || []); setResKinds(j.kinds || []); setAppWorkspaceId(j.workspaceId || ''); }
     } catch { /* table renders empty; attach errors surface via banner */ }
   }, [id, isNew]);
+
+  // Workspace lakehouse items for the per-item picker (loaded when relevant).
+  useEffect(() => {
+    if (attachKind !== 'lakehouse' || !appWorkspaceId) { setLakeItems([]); setAttachItemId(''); return; }
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await clientFetch('/api/items?type=lakehouse&limit=100');
+        const j = await r.json();
+        if (!cancelled && j.ok) {
+          setLakeItems((j.items || [])
+            .filter((it: any) => it.workspaceId === appWorkspaceId)
+            .map((it: any) => ({ id: it.id, displayName: it.displayName || it.id })));
+        }
+      } catch { /* picker renders with the default-lake option only */ }
+    })();
+    return () => { cancelled = true; };
+  }, [attachKind, appWorkspaceId]);
 
   const attachResource = useCallback(async () => {
     if (!attachKind) return;
     setResBusy(true); setBanner(null);
     try {
+      const picked = lakeItems.find((it) => it.id === attachItemId);
       const r = await clientFetch(`/api/items/loom-app-runtime/${encodeURIComponent(id)}/resources`, {
-        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ kind: attachKind }),
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          kind: attachKind,
+          ...(attachKind === 'lakehouse' && picked ? { itemId: picked.id, itemName: picked.displayName } : {}),
+        }),
       });
       const j = await r.json();
       if (j.ok) {
         setResources(j.resources || []);
         setAttachKind('');
+        setAttachItemId('');
         const g = j.resource?.grant;
         setBanner(g?.status === 'pending-grants'
           ? { intent: 'warning', text: `${j.resource.label} attached — one admin grant is still needed (see the script on the row). Env applies on the next Deploy.` }
@@ -191,7 +219,7 @@ export function LoomAppRuntimeEditor({ item, id }: EditorProps) {
       }
     } catch (e: any) { setBanner({ intent: 'error', text: e?.message || String(e) }); }
     finally { setResBusy(false); }
-  }, [attachKind, id, loadItem]);
+  }, [attachKind, attachItemId, lakeItems, id, loadItem]);
 
   const detachResource = useCallback(async (rid: string) => {
     setResBusy(true); setBanner(null);
@@ -554,6 +582,20 @@ export function LoomAppRuntimeEditor({ item, id }: EditorProps) {
                   );
                 })}
               </Dropdown>
+              {attachKind === 'lakehouse' && lakeItems.length > 0 && (
+                <Dropdown
+                  placeholder="Deployment default lake"
+                  value={lakeItems.find((it) => it.id === attachItemId)?.displayName || ''}
+                  selectedOptions={attachItemId ? [attachItemId] : []}
+                  onOptionSelect={(_, d) => setAttachItemId(d.optionValue || '')}
+                  style={{ minWidth: '240px' }}
+                >
+                  <Option value="" text="Deployment default lake">Deployment default lake (all layers)</Option>
+                  {lakeItems.map((it) => (
+                    <Option key={it.id} value={it.id} text={it.displayName}>{it.displayName}</Option>
+                  ))}
+                </Dropdown>
+              )}
               <Button appearance="primary" icon={<Add20Regular />} onClick={attachResource}
                 disabled={!attachKind || resBusy}>
                 {resBusy ? 'Attaching…' : 'Attach'}
