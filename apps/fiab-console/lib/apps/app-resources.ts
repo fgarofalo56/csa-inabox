@@ -265,6 +265,46 @@ async function armFetch(url: string, init?: RequestInit): Promise<Response> {
   });
 }
 
+/**
+ * Resolve a resource's TRUE ARM id by (type, name) via Azure Resource Graph —
+ * authoritative across every subscription the Console UAMI can read. The
+ * env-derived scope guess can point at the WRONG subscription for DLZ-hosted
+ * resources (live receipt 2026-07-18: the lake `saloomdefault…` lives in the
+ * DLZ sub 363ef5d1 while LOOM_SUBSCRIPTION_ID is the admin sub, so the guessed
+ * scope 404'd/failed the grant). Same Resource-Graph-by-name self-heal pattern
+ * the dlz-attach console wiring uses. Returns '' when not found (caller keeps
+ * the env guess).
+ */
+async function resolveArmIdByName(resourceType: string, name: string): Promise<string> {
+  if (!name) return '';
+  try {
+    const res = await armFetch(
+      `${armBase()}/providers/Microsoft.ResourceGraph/resources?api-version=2022-10-01`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          query: `resources | where type =~ '${resourceType}' and name =~ '${name.replace(/'/g, '')}' | project id | limit 1`,
+        }),
+      },
+    );
+    const j: any = await res.json().catch(() => ({}));
+    return (res.ok && j?.data?.[0]?.id) ? String(j.data[0].id) : '';
+  } catch {
+    return '';
+  }
+}
+
+/** ARM resource type per kind — used for the Resource-Graph authoritative lookup. */
+const KIND_ARM_TYPE: Partial<Record<AppResourceKind, string>> = {
+  lakehouse: 'microsoft.storage/storageaccounts',
+  adx: 'microsoft.kusto/clusters',
+  eventhubs: 'microsoft.eventhub/namespaces',
+  keyvault: 'microsoft.keyvault/vaults',
+  'ai-search': 'microsoft.search/searchservices',
+  aoai: 'microsoft.cognitiveservices/accounts',
+  cosmos: 'microsoft.documentdb/databaseaccounts',
+};
+
 /** principalId (objectId) of the shared apps UAMI — ARM GET, cached. */
 export async function appsUamiPrincipalId(): Promise<string> {
   const rid = appsUamiResourceId();
@@ -368,6 +408,16 @@ export async function attachAppResource(kind: AppResourceKind, addedBy?: string)
   if (missing) throw new Error(`${def.label} is not configured in this deployment — set ${missing} on the Console.`);
 
   const resolved = def.resolve();
+
+  // Authoritative scope: Resource-Graph lookup by name (cross-sub-safe) —
+  // the env-derived guess stays as fallback when ARG has no hit.
+  const armType = KIND_ARM_TYPE[kind];
+  if (armType && resolved.grantScope) {
+    const name = resolved.grantScope.split('/').pop() || '';
+    const trueId = await resolveArmIdByName(armType, name);
+    if (trueId) resolved.grantScope = trueId;
+  }
+
   let grant: AppResource['grant'];
 
   if (resolved.dataPlaneScript) {
