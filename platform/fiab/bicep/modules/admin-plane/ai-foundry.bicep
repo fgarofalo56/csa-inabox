@@ -136,6 +136,29 @@ resource foundryHub 'Microsoft.MachineLearningServices/workspaces@2024-10-01' = 
   }
 }
 
+// AML PROJECT workspace (kind=Project, hub-attached). Foundry HUB workspaces
+// reject serverless/batch job submission ("Batch jobs should not be submitted
+// from workspacehub directly" — live receipt 2026-07-17), so the notebook AML
+// path (submitCiJob + the owner-400 serverless fallback in
+// aml-client.submitServerlessJob) targets THIS project via LOOM_AML_WORKSPACE
+// instead of the hub. Projects share the hub's compute instances and
+// auto-provision their own workspaceblobstore datastores — which serverless
+// job staging requires. Hub-only (a Project needs a Hub parent), so classic
+// kind=Default boundaries skip it and LOOM_AML_WORKSPACE falls back to the hub.
+// Live mapping: aiproj-csa-loom-centralus (shipped imperatively 2026-07-17).
+resource amlProject 'Microsoft.MachineLearningServices/workspaces@2024-10-01' = if (foundryPortalEnabled) {
+  name: 'aiproj-csa-loom-${location}'
+  location: location
+  tags: complianceTags
+  kind: 'Project'
+  identity: { type: 'SystemAssigned' }
+  properties: {
+    friendlyName: 'Loom AML project (serverless jobs)'
+    description: 'Hub-attached AML project — notebook AML runs + serverless-job fallback land here (hubs reject batch submission).'
+    hubResourceId: foundryHub.id
+  }
+}
+
 // Azure ML Data Scientist role to admin group.
 // Guarded on !empty(adminEntraGroupId): an empty admin-group principal would
 // trigger ARM InvalidPrincipalId (day-one centralus deploy failure 2026-06-17).
@@ -405,6 +428,9 @@ resource aiServicesOpenAIContributorRole 'Microsoft.Authorization/roleAssignment
 
 output hubId string = foundryHub.id
 output hubName string = foundryHub.name
+// The hub-attached AML Project workspace name — the LOOM_AML_WORKSPACE target
+// (empty on classic kind=Default boundaries where no project is created).
+output amlProjectName string = foundryPortalEnabled ? amlProject!.name : ''
 output hubKind string = workspaceKind
 output hubManagedIdentityPrincipalId string = foundryHub.identity.principalId
 output aiServicesAccountName string = aiServices.name
