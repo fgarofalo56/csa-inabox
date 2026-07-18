@@ -1579,6 +1579,39 @@ module dlzAccessPolicyRbac 'modules/admin-plane/access-policy-rbac.bicep' = [for
   }
 }]
 
+// APPS-W2 (Loom Apps "Resources" tab) — constrained RBAC-Administrator for the
+// Console UAMI at the Admin Plane RG + each DLZ RG, so one-click resource
+// attaches can assign the apps UAMI its data-plane roles (see the module
+// header for the exact allowed-role ABAC constraint). Shipped imperatively
+// 2026-07-18; encoded here for from-scratch parity.
+module adminAppResourcesRbac 'modules/admin-plane/app-resources-rbac.bicep' = if (deployAdminPlane) {
+  name: 'admin-app-resources-rbac'
+  scope: resourceGroup(adminPlaneRgName)
+  params: {
+    consolePrincipalId: hub.consolePrincipalId
+    skipRoleGrants: skipRoleGrants
+  }
+}
+
+module singleDlzAppResourcesRbac 'modules/admin-plane/app-resources-rbac.bicep' = if (useSingleDlz) {
+  name: 'dlz-single-app-resources-rbac'
+  scope: singleDlzRg
+  params: {
+    consolePrincipalId: hub.consolePrincipalId
+    skipRoleGrants: skipRoleGrants
+  }
+}
+
+@batchSize(1)
+module dlzAppResourcesRbac 'modules/admin-plane/app-resources-rbac.bicep' = [for (subId, i) in dlzSubscriptionIds: if (useMultiDlz) {
+  name: 'dlz-${i}-app-resources-rbac'
+  scope: resourceGroup(subId, 'rg-csa-loom-dlz-${dlzDomainNames[i]}-${location}')
+  params: {
+    consolePrincipalId: hub.consolePrincipalId
+    skipRoleGrants: skipRoleGrants
+  }
+}]
+
 // Multi-sub: per-DLZ item-create Contributor grant (audit-t159 domain-aware
 // resource routing). The Console UAMI lives in the admin sub; this grants it
 // Contributor on each domain DLZ resource group (in the DLZ's own subscription)
