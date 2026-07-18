@@ -4144,11 +4144,15 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_TRANSLATOR_REGION', value: location }
             // Azure ML workspace for notebook Library & Environment management
             // (aml-environments-client.ts) AND MLflow experiment tracking
-            // (ml-experiment "Runs & metrics" tab, mlflow-client.ts). The Foundry
-            // hub IS an AML workspace (kind=Hub), so we point at it by default;
+            // (ml-experiment "Runs & metrics" tab, mlflow-client.ts). Default is
+            // the hub-attached AML PROJECT workspace (ai-foundry amlProject) —
+            // Foundry HUBS reject serverless/batch job submission ("Batch jobs
+            // should not be submitted from workspacehub directly", live receipt
+            // 2026-07-17), and projects share the hub's compute instances. Falls
+            // back to the hub name only on classic kind=Default boundaries;
             // loomAmlWorkspace / loomAmlRg override to a dedicated AML workspace.
             // Falls back to LOOM_FOUNDRY_NAME/_RG in code when empty. No Fabric dep.
-            { name: 'LOOM_AML_WORKSPACE', value: !empty(amlWorkspaceName) ? amlWorkspaceName : (!empty(loomAmlWorkspace) ? loomAmlWorkspace : ((aiFoundryEnabled && empty(existingFoundryAccountName)) ? aiFoundry!.outputs.hubName : '')) }
+            { name: 'LOOM_AML_WORKSPACE', value: !empty(amlWorkspaceName) ? amlWorkspaceName : (!empty(loomAmlWorkspace) ? loomAmlWorkspace : ((aiFoundryEnabled && empty(existingFoundryAccountName)) ? (!empty(aiFoundry!.outputs.amlProjectName) ? aiFoundry!.outputs.amlProjectName : aiFoundry!.outputs.hubName) : '')) }
             { name: 'LOOM_AML_RG', value: !empty(amlWorkspaceRg) ? amlWorkspaceRg : (!empty(loomAmlRg) ? loomAmlRg : byoFoundryRg) }
             // Always-on default AML Compute Instance the deploy-planner provisions
             // (ml-workspace.bicep defaultCiName). The notebook editor auto-selects
