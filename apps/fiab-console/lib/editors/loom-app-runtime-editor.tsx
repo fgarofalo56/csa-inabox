@@ -573,11 +573,16 @@ export function LoomAppRuntimeEditor({ item, id }: EditorProps) {
                 style={{ minWidth: '280px' }}
               >
                 {resKinds.map((k) => {
+                  // Lakehouse supports MULTIPLE per-item attaches, so it stays
+                  // pickable even when a lakehouse is already attached (the
+                  // route still 409s an exact duplicate honestly). Other kinds
+                  // are single-attach.
                   const attached = resources.some((r) => r.kind === k.kind);
+                  const disabled = !k.available || (attached && k.kind !== 'lakehouse');
                   return (
-                    <Option key={k.kind} value={k.kind} disabled={!k.available || attached}
+                    <Option key={k.kind} value={k.kind} disabled={disabled}
                       text={k.label}>
-                      {k.label}{attached ? ' (attached)' : !k.available ? ` — set ${k.missing}` : ''}
+                      {k.label}{disabled && attached ? ' (attached)' : !k.available ? ` — set ${k.missing}` : ''}
                     </Option>
                   );
                 })}
