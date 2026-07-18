@@ -401,6 +401,70 @@ export interface AttachResult {
   envVars: LoomAppEnvVar[];
 }
 
+/** APP_-prefixed (allowlisted) env-name slug from an item display name. */
+function envSlug(name: string): string {
+  return (name || 'ITEM').toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 40) || 'ITEM';
+}
+
+/**
+ * Attach a SPECIFIC workspace lakehouse ITEM (APPS-W2 slice 2 — the
+ * Databricks-Apps "pick the resource instance" flow). Resolves the item's REAL
+ * abfss root via lakehouse-abfss (provisioned path or convention fallback),
+ * injects APP_LH_<SLUG>_URL / _NAME / _CONTAINER, and grants the apps UAMI
+ * Storage Blob Data Contributor on the item's ACTUAL storage account
+ * (Resource-Graph-resolved, cross-sub-safe). Multiple lakehouse items can be
+ * attached side-by-side — each carries its own env slug.
+ */
+export async function attachLakehouseItemResource(
+  itemId: string,
+  workspaceId: string,
+  displayName: string,
+  addedBy?: string,
+): Promise<AttachResult> {
+  const { resolveLakehouseAbfss } = await import('@/lib/azure/lakehouse-abfss');
+  const resolved = await resolveLakehouseAbfss(itemId, workspaceId);
+  if (!resolved) {
+    throw new Error(
+      `Could not resolve real storage for lakehouse "${displayName}" — the deployment has no configured ` +
+      'ADLS containers (set LOOM_ADLS_ACCOUNT / the layer URLs), or the item was deleted.',
+    );
+  }
+  const account = resolved.abfss.match(/@([^.]+)\./)?.[1] || '';
+  const slug = envSlug(displayName);
+  const envVars: LoomAppEnvVar[] = [
+    { name: `APP_LH_${slug}_URL`, value: resolved.abfss },
+    { name: `APP_LH_${slug}_NAME`, value: displayName },
+    { name: `APP_LH_${slug}_CONTAINER`, value: resolved.container },
+  ];
+
+  const scope = (await resolveArmIdByName('microsoft.storage/storageaccounts', account))
+    || armId(SUB(), DLZ_RG(), 'Microsoft.Storage/storageAccounts', account);
+  const principalId = await appsUamiPrincipalId();
+  const r = await putRoleAssignment(scope, 'ba92f5b4-2d11-453d-a403-e96b0029c9fe', principalId);
+
+  return {
+    resource: {
+      id: `lakehouse-item-${itemId.slice(0, 8)}`,
+      kind: 'lakehouse',
+      label: `Lakehouse: ${displayName}`,
+      envNames: envVars.map((e) => e.name),
+      grant: {
+        role: 'Storage Blob Data Contributor', scope, status: r.status, detail: r.detail,
+        ...(r.status === 'pending-grants'
+          ? {
+              grantScript:
+                `az role assignment create --assignee-object-id ${principalId} --assignee-principal-type ServicePrincipal ` +
+                `--role "Storage Blob Data Contributor" --scope "${scope}"`,
+            }
+          : {}),
+      },
+      addedAt: new Date().toISOString(),
+      addedBy,
+    },
+    envVars,
+  };
+}
+
 export async function attachAppResource(kind: AppResourceKind, addedBy?: string): Promise<AttachResult> {
   const def = KINDS[kind];
   if (!def) throw new Error(`Unknown resource kind: ${kind}`);

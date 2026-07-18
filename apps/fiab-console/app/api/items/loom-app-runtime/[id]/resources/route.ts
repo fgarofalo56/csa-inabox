@@ -26,6 +26,7 @@ import { resolveItemAccessByOid } from '@/lib/auth/item-access';
 import { readAppRuntime, saveAppRuntime, LOOM_APP_RUNTIME_TYPE } from '@/lib/apps/runtime-store';
 import {
   attachAppResource,
+  attachLakehouseItemResource,
   listAppResourceKinds,
   type AppResourceKind,
 } from '@/lib/apps/app-resources';
@@ -41,7 +42,12 @@ export async function GET(_req: NextRequest, props: { params: Promise<{ id: stri
     const access = await resolveItemAccessByOid(session, id, LOOM_APP_RUNTIME_TYPE);
     if (!access) return apiError('Item not found', 404, { code: 'not_found' });
     const rt = readAppRuntime(access.item);
-    return apiOk({ resources: rt.resources || [], kinds: listAppResourceKinds() });
+    return apiOk({
+      resources: rt.resources || [],
+      kinds: listAppResourceKinds(),
+      // The app's workspace — the UI scopes the per-item picker to it.
+      workspaceId: access.item.workspaceId,
+    });
   } catch (e) {
     return apiServerError(e, 'failed to list app resources');
   }
@@ -56,7 +62,7 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
     if (!access) return apiError('Item not found', 404, { code: 'not_found' });
     if (!access.canWrite) return apiError('Read-only access', 403, { code: 'forbidden' });
 
-    const body = (await req.json().catch(() => ({}))) as { kind?: string };
+    const body = (await req.json().catch(() => ({}))) as { kind?: string; itemId?: string; itemName?: string };
     const kind = (body.kind || '').trim() as AppResourceKind;
     if (!kind) return apiError('kind required', 400);
     const known = listAppResourceKinds().find((k) => k.kind === kind);
@@ -66,12 +72,24 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
     }
 
     const rt = readAppRuntime(access.item);
-    if ((rt.resources || []).some((r) => r.kind === kind)) {
-      return apiError(`${known.label} is already attached — detach it first to re-attach.`, 409, { code: 'conflict' });
-    }
-
+    const itemId = (body.itemId || '').trim();
     const who = session.claims.upn || session.claims.email || session.claims.oid;
-    const { resource, envVars } = await attachAppResource(kind, who);
+
+    let resource; let envVars;
+    if (itemId && kind === 'lakehouse') {
+      // Per-item attach — a SPECIFIC workspace lakehouse (multiple allowed).
+      if ((rt.resources || []).some((r) => r.id === `lakehouse-item-${itemId.slice(0, 8)}`)) {
+        return apiError('That lakehouse is already attached.', 409, { code: 'conflict' });
+      }
+      ({ resource, envVars } = await attachLakehouseItemResource(
+        itemId, access.item.workspaceId, (body.itemName || '').trim() || 'Lakehouse', who,
+      ));
+    } else {
+      if ((rt.resources || []).some((r) => r.kind === kind && !r.id.startsWith('lakehouse-item-'))) {
+        return apiError(`${known.label} is already attached — detach it first to re-attach.`, 409, { code: 'conflict' });
+      }
+      ({ resource, envVars } = await attachAppResource(kind, who));
+    }
 
     // Merge injected env into bindings (resource values win over stale manual
     // rows of the same name — the resource is now the owner of those names).
