@@ -12,6 +12,7 @@
 import { itemsContainer } from '@/lib/azure/cosmos-client';
 import type { WorkspaceItem } from '@/lib/types/workspace';
 import type { LoomAppEnvVar } from '@/lib/azure/loom-apps-runtime-templates';
+import type { AppResource } from '@/lib/apps/app-resources';
 
 export const LOOM_APP_RUNTIME_TYPE = 'loom-app-runtime';
 
@@ -32,6 +33,8 @@ export interface AppRuntimeState {
   port?: number;
   /** Structured env bindings (names allowlisted at the client). */
   env?: LoomAppEnvVar[];
+  /** Attached resources (APPS-W2) — each carries its grant status + env names. */
+  resources?: AppResource[];
   /** Persisted user source edits (path → content). */
   userFiles?: Record<string, string>;
   /** Deployed Container App name (stable across redeploys). */
