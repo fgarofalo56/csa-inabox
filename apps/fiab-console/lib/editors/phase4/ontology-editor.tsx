@@ -1200,12 +1200,14 @@ function OntologyTypedModelPanel({
     implementsList: string[];
     /** Shared property group apiNames attached to this object type. */
     sharedGroups: string[];
+    /** Invariant rules (Foundry row 4.4) enforced on instance create/update. */
+    invariants: OntoActionCriterion[];
   }
   const blankOt = (): OtDraft => ({
     index: null, apiName: '', displayName: '', pluralDisplayName: '', description: '',
     status: 'active', color: '', properties: [], primaryKey: '', titleKey: '',
     dsKind: '', dsSourceId: '', dsTable: '', dsPkColumn: '', dsColumnMap: {},
-    implementsList: [], sharedGroups: [],
+    implementsList: [], sharedGroups: [], invariants: [],
   });
   const [otOpen, setOtOpen] = useState(false);
   const [ot, setOt] = useState<OtDraft>(blankOt);
@@ -1282,6 +1284,7 @@ function OntologyTypedModelPanel({
       dsKind: ds?.kind || '', dsSourceId: ds?.sourceItemId || '', dsTable: ds?.table || '', dsPkColumn: ds?.primaryKeyColumn || '',
       dsColumnMap: ds?.columnMap ? { ...ds.columnMap } : {},
       implementsList: [...(o.implements || [])], sharedGroups: [...(o.sharedPropertyGroups || [])],
+      invariants: (o.invariants || []).map((c) => ({ ...c })),
     });
     setOtErr(null); setDsGate(null); setDsErr(null); setOtOpen(true);
   };
@@ -1348,6 +1351,17 @@ function OntologyTypedModelPanel({
         return;
       }
     }
+    // Invariant rules (Foundry row 4.4) — each targets a declared property;
+    // value-ops need a value.
+    const propNames = new Set(properties.map((p) => p.apiName));
+    const invariants: OntoActionCriterion[] = [];
+    for (const c of ot.invariants) {
+      const parameter = c.parameter.trim();
+      if (!parameter) continue;
+      if (!propNames.has(parameter)) { setOtErr(`Invariant targets "${parameter}", which is not a declared property.`); return; }
+      if (ONTO_CRITERION_OPS_WITH_VALUE.includes(c.op) && !String(c.value ?? '').trim()) { setOtErr(`Invariant "${parameter} ${ONTO_CRITERION_OP_LABELS[c.op]}" needs a value.`); return; }
+      invariants.push({ parameter, op: c.op, ...(c.value?.trim() ? { value: c.value.trim() } : {}), ...(c.message?.trim() ? { message: c.message.trim() } : {}) });
+    }
     const base = ot.index === null ? ({} as Partial<OntoObjectType>) : objectTypes[ot.index];
     const pk = seen.has(ot.primaryKey) && ONTO_KEY_ELIGIBLE_TYPES.has(properties.find((p) => p.apiName === ot.primaryKey)!.baseType) ? ot.primaryKey : undefined;
     const title = seen.has(ot.titleKey) ? ot.titleKey : undefined;
@@ -1368,6 +1382,7 @@ function OntologyTypedModelPanel({
       ...(datasource ? { datasource } : {}),
       ...(ot.implementsList.length ? { implements: [...ot.implementsList] } : {}),
       ...(ot.sharedGroups.length ? { sharedPropertyGroups: [...ot.sharedGroups] } : {}),
+      ...(invariants.length ? { invariants } : {}),
     };
     const arr2 = [...objectTypes];
     if (ot.index === null) arr2.push(next); else arr2[ot.index] = next;
@@ -1891,6 +1906,37 @@ function OntologyTypedModelPanel({
                     {otAllNamed.map((p) => <Option key={p.apiName} value={p.apiName}>{p.apiName}</Option>)}
                   </Dropdown>
                 </Field>
+
+                <div className={s.tmSubBlock}>
+                  <div className={s.ontoActionHead}>
+                    <ShieldTask20Regular />
+                    <Subtitle2>Invariant rules</Subtitle2>
+                    <span className={s.ontoBindRowSpacer} />
+                    <Button size="small" icon={<Add16Regular />} disabled={otAllNamed.length === 0} onClick={() => patchOt({ invariants: [...ot.invariants, { parameter: otAllNamed[0]?.apiName || '', op: 'nonEmpty' }] })}>Add rule</Button>
+                  </div>
+                  {otAllNamed.length === 0 ? (
+                    <Caption1 className={s.ontoSectionHint}>Add properties first — invariants validate property values on every instance create/update.</Caption1>
+                  ) : ot.invariants.length === 0 ? (
+                    <Caption1 className={s.ontoSectionHint}>No rules. Add a rule to require, bound, or pattern-match a property on every instance.</Caption1>
+                  ) : ot.invariants.map((c, ci) => (
+                    <div key={ci} className={s.tmParamRow}>
+                      <Field label={ci === 0 ? 'Property' : undefined}>
+                        <Dropdown value={c.parameter} selectedOptions={[c.parameter]} onOptionSelect={(_, d) => patchOt({ invariants: ot.invariants.map((x, xi) => xi === ci ? { ...x, parameter: d.optionValue || '' } : x) })}>
+                          {otAllNamed.map((p) => <Option key={p.apiName} value={p.apiName}>{p.apiName}</Option>)}
+                        </Dropdown>
+                      </Field>
+                      <Field label={ci === 0 ? 'Rule' : undefined}>
+                        <Dropdown value={ONTO_CRITERION_OP_LABELS[c.op]} selectedOptions={[c.op]} onOptionSelect={(_, d) => patchOt({ invariants: ot.invariants.map((x, xi) => xi === ci ? { ...x, op: (d.optionValue as OntoCriterionOp) || 'nonEmpty' } : x) })}>
+                          {ONTO_CRITERION_OPS.map((op) => <Option key={op} value={op}>{ONTO_CRITERION_OP_LABELS[op]}</Option>)}
+                        </Dropdown>
+                      </Field>
+                      <Field label={ci === 0 ? 'Value' : undefined}>
+                        <Input value={c.value ?? ''} disabled={c.op === 'nonEmpty'} onChange={(_, d) => patchOt({ invariants: ot.invariants.map((x, xi) => xi === ci ? { ...x, value: d.value } : x) })} placeholder={c.op === 'in' ? 'a, b, c' : c.op === 'regex' ? '^[A-Z]+$' : c.op === 'nonEmpty' ? '—' : '0'} />
+                      </Field>
+                      <Button size="small" appearance="subtle" icon={<Dismiss16Regular />} aria-label={`Remove invariant ${ci + 1}`} onClick={() => patchOt({ invariants: ot.invariants.filter((_, xi) => xi !== ci) })} />
+                    </div>
+                  ))}
+                </div>
 
                 <div className={s.tmSubBlock}>
                   <div className={s.ontoActionHead}>

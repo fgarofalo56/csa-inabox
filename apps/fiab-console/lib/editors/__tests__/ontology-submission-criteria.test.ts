@@ -71,3 +71,18 @@ describe('evaluateSubmissionCriteria', () => {
     expect(r).toEqual({ ok: false, error: 'Total must be positive.' });
   });
 });
+
+import { evaluateObjectInvariants } from '../ontology-model';
+describe('evaluateObjectInvariants', () => {
+  const ot = (invariants: any[]) => ({ apiName: 'Order', properties: [], invariants } as any);
+  it('enforces invariants on instance values with the Invariant label', () => {
+    expect(evaluateObjectInvariants(ot([{ parameter: 'total', op: 'gt', value: '0' }]), { total: 5 })).toEqual({ ok: true });
+    const r = evaluateObjectInvariants(ot([{ parameter: 'total', op: 'gt', value: '0' }]), { total: 0 });
+    expect(r.ok).toBe(false);
+    expect((r as { error: string }).error).toMatch(/Invariant failed/);
+  });
+  it('no invariants → ok; null type → ok', () => {
+    expect(evaluateObjectInvariants(ot([]), { x: 1 })).toEqual({ ok: true });
+    expect(evaluateObjectInvariants(null, { x: 1 })).toEqual({ ok: true });
+  });
+});
