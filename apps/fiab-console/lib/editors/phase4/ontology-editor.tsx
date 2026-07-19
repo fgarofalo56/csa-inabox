@@ -491,6 +491,32 @@ function WeaveInstancePanel({
   }, [id]);
   useEffect(() => { if (anyGatedAction) void loadJustifications(); }, [anyGatedAction, loadJustifications]);
 
+  // Approvals review (Foundry-parity row 4.6) — pending/decided requests for
+  // approval-gated actions, with approve/reject.
+  interface ApprovalRow { id: string; action: string; objectType: string; actionKind: string; status: 'pending' | 'approved' | 'rejected'; paramsPreview?: string; requesterName?: string; decidedByName?: string; note?: string; at: string }
+  const [approvals, setApprovals] = useState<ApprovalRow[]>([]);
+  const [apprBusy, setApprBusy] = useState(false);
+  const anyApprovalAction = useMemo(() => actionTypes.some((a) => a.requiresApproval), [actionTypes]);
+  const loadApprovals = useCallback(async () => {
+    if (!id || id === 'new') return;
+    setApprBusy(true);
+    try {
+      const r = await clientFetch(`/api/items/ontology/${encodeURIComponent(id)}/approvals?top=50`);
+      const j = await r.json().catch(() => ({}));
+      setApprovals(j?.ok ? (j.approvals || []) : []);
+    } catch { setApprovals([]); } finally { setApprBusy(false); }
+  }, [id]);
+  const decideApprovalReq = useCallback(async (requestId: string, decision: 'approve' | 'reject') => {
+    setApprBusy(true);
+    try {
+      await clientFetch(`/api/items/ontology/${encodeURIComponent(id)}/approvals`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ requestId, decision }),
+      });
+      await loadApprovals();
+    } catch { /* surfaced by reload */ } finally { setApprBusy(false); }
+  }, [id, loadApprovals]);
+  useEffect(() => { if (anyApprovalAction) void loadApprovals(); }, [anyApprovalAction, loadApprovals]);
+
   const openActDlg = useCallback(() => {
     setActName(''); setActObjType(classNames[0] || ''); setActKind('create'); setActReqJust(false); setActDlgErr(null); setActDlgOpen(true);
   }, [classNames]);
@@ -550,6 +576,11 @@ function WeaveInstancePanel({
         body: JSON.stringify({ action: action.name, params, ...(action.requiresJustification ? { reason } : {}) }),
       });
       const j = await r.json().catch(() => ({}));
+      if (j?.code === 'approval_required') {
+        setRunMsg({ intent: 'warning', text: j?.error || `"${action.name}" requires approval — a request has been submitted.` });
+        void loadApprovals();
+        return;
+      }
       if (!j?.ok) {
         const gate = j?.gate ? ` ${j.gate.remediation || j.gate.reason || ''}` : '';
         setRunMsg({ intent: r.status === 503 ? 'warning' : 'error', text: `${j?.error || `HTTP ${r.status}`}${gate}` });
@@ -563,7 +594,7 @@ function WeaveInstancePanel({
     } catch (e: any) {
       setRunMsg({ intent: 'error', text: e?.message || String(e) });
     } finally { setRunningAction(null); }
-  }, [id, runParams, objType, loadObjects, loadJustifications]);
+  }, [id, runParams, objType, loadObjects, loadJustifications, loadApprovals]);
 
   const toggleSort = useCallback((col: string) => {
     setSort((prev) => (prev.col === col ? { col, dir: prev.dir === 'asc' ? 'desc' : 'asc' } : { col, dir: 'asc' }));
@@ -850,6 +881,7 @@ function WeaveInstancePanel({
                 <Body1><strong>{a.name}</strong></Body1>
                 <Caption1 className={s.ontoSectionHint}>→ {a.objectType}</Caption1>
                 {a.requiresJustification && <Badge appearance="outline" color="warning" icon={<ShieldTask20Regular />}>Justification required</Badge>}
+                {a.requiresApproval && <Badge appearance="outline" color="important" icon={<CheckmarkCircle20Regular />}>Approval required</Badge>}
                 <span className={s.ontoBindRowSpacer} />
                 <Button size="small" appearance="subtle" icon={<Dismiss16Regular />} aria-label={`Remove action ${a.name}`} onClick={() => removeActionType(a.name)}>Remove</Button>
               </div>
@@ -991,6 +1023,53 @@ function WeaveInstancePanel({
                       <TableCell><Badge appearance="filled" color={jr.outcome === 'succeeded' ? 'success' : 'danger'}>{jr.outcome}</Badge></TableCell>
                       <TableCell>{jr.reason}</TableCell>
                       <TableCell><Caption1>{jr.actorName || jr.actorUpn || '—'}</Caption1></TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
+          </div>
+        )}
+
+        {anyApprovalAction && (
+          <div className={s.ontoActionCard}>
+            <div className={s.ontoActionHead}>
+              <CheckmarkCircle20Regular />
+              <Body1><strong>Approvals</strong></Body1>
+              <Caption1 className={s.ontoSectionHint}>Requests to run approval-gated actions</Caption1>
+              <span className={s.ontoBindRowSpacer} />
+              <Button size="small" appearance="subtle" icon={apprBusy ? <Spinner size="tiny" /> : <ArrowClockwise20Regular />} onClick={() => void loadApprovals()} disabled={apprBusy}>Refresh</Button>
+            </div>
+            {approvals.length === 0 ? (
+              <Caption1>{apprBusy ? 'Loading…' : 'No approval requests yet.'}</Caption1>
+            ) : (
+              <Table size="small" aria-label="Approval requests">
+                <TableHeader>
+                  <TableRow>
+                    <TableHeaderCell>When</TableHeaderCell>
+                    <TableHeaderCell>Action</TableHeaderCell>
+                    <TableHeaderCell>Parameters</TableHeaderCell>
+                    <TableHeaderCell>Requester</TableHeaderCell>
+                    <TableHeaderCell>Status</TableHeaderCell>
+                    <TableHeaderCell />
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {approvals.map((ap) => (
+                    <TableRow key={ap.id}>
+                      <TableCell><Caption1>{new Date(ap.at).toLocaleString()}</Caption1></TableCell>
+                      <TableCell><Badge appearance="tint" color={ap.actionKind === 'delete' ? 'danger' : ap.actionKind === 'create' ? 'success' : 'brand'}>{ap.action}</Badge></TableCell>
+                      <TableCell><Caption1>{ap.paramsPreview || '—'}</Caption1></TableCell>
+                      <TableCell><Caption1>{ap.requesterName || '—'}</Caption1></TableCell>
+                      <TableCell><Badge appearance="filled" color={ap.status === 'approved' ? 'success' : ap.status === 'rejected' ? 'danger' : 'warning'}>{ap.status}</Badge></TableCell>
+                      <TableCell>
+                        {ap.status === 'pending' ? (
+                          <div className={s.tmCardMeta}>
+                            <Button size="small" appearance="primary" onClick={() => void decideApprovalReq(ap.id, 'approve')} disabled={apprBusy}>Approve</Button>
+                            <Button size="small" onClick={() => void decideApprovalReq(ap.id, 'reject')} disabled={apprBusy}>Reject</Button>
+                          </div>
+                        ) : <Caption1>{ap.decidedByName ? `by ${ap.decidedByName}` : ''}</Caption1>}
+                      </TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
@@ -1314,8 +1393,8 @@ function OntologyTypedModelPanel({
   const removeLt = (i: number) => commit({ linkTypes: linkTypes.filter((_, idx) => idx !== i) });
 
   // ───────────────────────── Action-type dialog ─────────────────────────
-  interface AtDraft { index: number | null; name: string; objectType: string; kind: OntoActionType['kind']; description: string; parameters: OntoActionParam[]; requiresJustification: boolean; submissionCriteria: OntoActionCriterion[]; emitLineage: boolean; }
-  const blankAt = (): AtDraft => ({ index: null, name: '', objectType: objNames[0] || '', kind: 'create', description: '', parameters: [], requiresJustification: false, submissionCriteria: [], emitLineage: false });
+  interface AtDraft { index: number | null; name: string; objectType: string; kind: OntoActionType['kind']; description: string; parameters: OntoActionParam[]; requiresJustification: boolean; submissionCriteria: OntoActionCriterion[]; emitLineage: boolean; requiresApproval: boolean; }
+  const blankAt = (): AtDraft => ({ index: null, name: '', objectType: objNames[0] || '', kind: 'create', description: '', parameters: [], requiresJustification: false, submissionCriteria: [], emitLineage: false, requiresApproval: false });
   const [atOpen, setAtOpen] = useState(false);
   const [at, setAt] = useState<AtDraft>(blankAt);
   const [atErr, setAtErr] = useState<string | null>(null);
@@ -1323,7 +1402,7 @@ function OntologyTypedModelPanel({
   const openNewAt = () => { setAt(blankAt()); setAtErr(null); setAtOpen(true); };
   const openEditAt = (i: number) => {
     const a = actionTypes[i];
-    setAt({ index: i, name: a.name, objectType: a.objectType, kind: a.kind, description: a.description || '', parameters: a.parameters.map((p) => ({ ...p })), requiresJustification: !!a.requiresJustification, submissionCriteria: (a.submissionCriteria || []).map((c) => ({ ...c })), emitLineage: !!a.emitLineage });
+    setAt({ index: i, name: a.name, objectType: a.objectType, kind: a.kind, description: a.description || '', parameters: a.parameters.map((p) => ({ ...p })), requiresJustification: !!a.requiresJustification, submissionCriteria: (a.submissionCriteria || []).map((c) => ({ ...c })), emitLineage: !!a.emitLineage, requiresApproval: !!a.requiresApproval });
     setAtErr(null); setAtOpen(true);
   };
   const saveAt = () => {
@@ -1351,7 +1430,7 @@ function OntologyTypedModelPanel({
       if (ONTO_CRITERION_OPS_WITH_VALUE.includes(c.op) && !String(c.value ?? '').trim()) { setAtErr(`Criterion "${parameter} ${ONTO_CRITERION_OP_LABELS[c.op]}" needs a value.`); return; }
       submissionCriteria.push({ parameter, op: c.op, ...(c.value?.trim() ? { value: c.value.trim() } : {}), ...(c.message?.trim() ? { message: c.message.trim() } : {}) });
     }
-    const next: OntoActionType = { name, objectType: at.objectType, kind: at.kind, ...(at.description.trim() ? { description: at.description.trim() } : {}), parameters, ...(at.requiresJustification ? { requiresJustification: true } : {}), ...(submissionCriteria.length ? { submissionCriteria } : {}), ...(at.emitLineage ? { emitLineage: true } : {}) };
+    const next: OntoActionType = { name, objectType: at.objectType, kind: at.kind, ...(at.description.trim() ? { description: at.description.trim() } : {}), parameters, ...(at.requiresJustification ? { requiresJustification: true } : {}), ...(submissionCriteria.length ? { submissionCriteria } : {}), ...(at.emitLineage ? { emitLineage: true } : {}), ...(at.requiresApproval ? { requiresApproval: true } : {}) };
     const arr2 = [...actionTypes];
     if (at.index === null) arr2.push(next); else arr2[at.index] = next;
     commit({ actionTypes: arr2 });
@@ -1586,6 +1665,7 @@ function OntologyTypedModelPanel({
                     <Body1><strong>{a.name}</strong></Body1>
                     <Badge appearance="tint" color={a.kind === 'create' ? 'success' : a.kind === 'delete' ? 'danger' : 'brand'}>{a.kind}</Badge>
                     {a.requiresJustification && <Badge appearance="outline" color="warning" icon={<ShieldTask20Regular />}>Justification required</Badge>}
+                    {a.requiresApproval && <Badge appearance="outline" color="important" icon={<CheckmarkCircle20Regular />}>Approval required</Badge>}
                     <span className={s.ontoBindRowSpacer} />
                     <Button size="small" appearance="subtle" icon={<Edit16Regular />} aria-label={`Edit ${a.name}`} onClick={() => openEditAt(i)} />
                     <Button size="small" appearance="subtle" icon={<Dismiss16Regular />} aria-label={`Remove ${a.name}`} onClick={() => removeAt(i)} />
@@ -1993,6 +2073,9 @@ function OntologyTypedModelPanel({
                 </Field>
                 <Field label="Emit lineage on run" hint="Side effect — a successful run records a Thread lineage edge (ontology → object), which also flows to Microsoft Purview lineage when configured.">
                   <Switch checked={at.emitLineage} onChange={(_, d) => patchAt({ emitLineage: d.checked })} label={at.emitLineage ? 'Records lineage on success' : 'No lineage side-effect'} />
+                </Field>
+                <Field label="Require approval" hint="A run is blocked until an approver approves the request for the exact parameters. One-shot — the approval is consumed on the next matching run.">
+                  <Switch checked={at.requiresApproval} onChange={(_, d) => patchAt({ requiresApproval: d.checked })} label={at.requiresApproval ? 'Approval required before running' : 'No approval required'} />
                 </Field>
                 {atErr && <MessageBar intent="error"><MessageBarBody>{atErr}</MessageBarBody></MessageBar>}
               </div>

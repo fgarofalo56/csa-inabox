@@ -28,6 +28,7 @@ import { weaveGate, runActionType, type WeaveActionType } from '@/lib/azure/weav
 import { PostgresError } from '@/lib/azure/postgres-flex-client';
 import { recordActionJustification, isValidReason, MIN_JUSTIFICATION_LEN } from '@/lib/azure/action-justification-store';
 import { recordThreadEdge } from '@/lib/thread/thread-edges';
+import { paramsHash, findUsableApproval, requestApproval, consumeApproval } from '@/lib/azure/action-approval-store';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -111,6 +112,25 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     });
   }
 
+  // Approval gate (Foundry-parity row 4.6): a run is blocked until an approver
+  // approves the request for the EXACT parameters. Approvals are one-shot.
+  let approvalToConsume: string | undefined;
+  if (action.requiresApproval) {
+    const hash = paramsHash(runParams);
+    const usable = await findUsableApproval(id, action.name, hash);
+    if (!usable) {
+      const reqRec = await requestApproval(s, {
+        ontologyId: id, ontologyName: onto.displayName, action: action.name,
+        objectType: action.objectType, actionKind: action.kind, params: runParams, nowIso: new Date().toISOString(),
+      });
+      return NextResponse.json(
+        { ok: false, code: 'approval_required', error: `Action "${actionName}" requires approval — a request has been submitted for review.`, requestId: reqRec.id },
+        { status: 202 },
+      );
+    }
+    approvalToConsume = usable.id;
+  }
+
   const recordJust = action.requiresJustification;
   const targetId = typeof runParams.id === 'string' ? runParams.id : undefined;
   try {
@@ -144,6 +164,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
         lineageEmitted = true;
       } catch { /* lineage is best-effort */ }
     }
+    if (approvalToConsume) { try { await consumeApproval(approvalToConsume, id); } catch { /* best-effort */ } }
     return NextResponse.json({ ...result, ...(justificationId ? { justificationId } : {}), ...(lineageEmitted ? { lineageEmitted } : {}) });
   } catch (e: unknown) {
     const status = e instanceof PostgresError ? e.status : 502;
