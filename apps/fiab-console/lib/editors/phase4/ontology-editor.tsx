@@ -1313,8 +1313,8 @@ function OntologyTypedModelPanel({
   const removeLt = (i: number) => commit({ linkTypes: linkTypes.filter((_, idx) => idx !== i) });
 
   // ───────────────────────── Action-type dialog ─────────────────────────
-  interface AtDraft { index: number | null; name: string; objectType: string; kind: OntoActionType['kind']; description: string; parameters: OntoActionParam[]; }
-  const blankAt = (): AtDraft => ({ index: null, name: '', objectType: objNames[0] || '', kind: 'create', description: '', parameters: [] });
+  interface AtDraft { index: number | null; name: string; objectType: string; kind: OntoActionType['kind']; description: string; parameters: OntoActionParam[]; requiresJustification: boolean; }
+  const blankAt = (): AtDraft => ({ index: null, name: '', objectType: objNames[0] || '', kind: 'create', description: '', parameters: [], requiresJustification: false });
   const [atOpen, setAtOpen] = useState(false);
   const [at, setAt] = useState<AtDraft>(blankAt);
   const [atErr, setAtErr] = useState<string | null>(null);
@@ -1322,7 +1322,7 @@ function OntologyTypedModelPanel({
   const openNewAt = () => { setAt(blankAt()); setAtErr(null); setAtOpen(true); };
   const openEditAt = (i: number) => {
     const a = actionTypes[i];
-    setAt({ index: i, name: a.name, objectType: a.objectType, kind: a.kind, description: a.description || '', parameters: a.parameters.map((p) => ({ ...p })) });
+    setAt({ index: i, name: a.name, objectType: a.objectType, kind: a.kind, description: a.description || '', parameters: a.parameters.map((p) => ({ ...p })), requiresJustification: !!a.requiresJustification });
     setAtErr(null); setAtOpen(true);
   };
   const saveAt = () => {
@@ -1340,7 +1340,7 @@ function OntologyTypedModelPanel({
       apiName: p.apiName.trim(), type: p.type, ...(p.required ? { required: true } : {}),
       ...(p.prompt ? { prompt: p.prompt } : {}),
     }));
-    const next: OntoActionType = { name, objectType: at.objectType, kind: at.kind, ...(at.description.trim() ? { description: at.description.trim() } : {}), parameters };
+    const next: OntoActionType = { name, objectType: at.objectType, kind: at.kind, ...(at.description.trim() ? { description: at.description.trim() } : {}), parameters, ...(at.requiresJustification ? { requiresJustification: true } : {}) };
     const arr2 = [...actionTypes];
     if (at.index === null) arr2.push(next); else arr2[at.index] = next;
     commit({ actionTypes: arr2 });
@@ -1574,6 +1574,7 @@ function OntologyTypedModelPanel({
                     <Play20Regular />
                     <Body1><strong>{a.name}</strong></Body1>
                     <Badge appearance="tint" color={a.kind === 'create' ? 'success' : a.kind === 'delete' ? 'danger' : 'brand'}>{a.kind}</Badge>
+                    {a.requiresJustification && <Badge appearance="outline" color="warning" icon={<ShieldTask20Regular />}>Justification required</Badge>}
                     <span className={s.ontoBindRowSpacer} />
                     <Button size="small" appearance="subtle" icon={<Edit16Regular />} aria-label={`Edit ${a.name}`} onClick={() => openEditAt(i)} />
                     <Button size="small" appearance="subtle" icon={<Dismiss16Regular />} aria-label={`Remove ${a.name}`} onClick={() => removeAt(i)} />
@@ -1946,6 +1947,9 @@ function OntologyTypedModelPanel({
                     </div>
                   ))}
                 </div>
+                <Field label="Require justification" hint="Checkpoint — the operator must enter a written reason before this action runs; the reason is recorded to the tamper-evident audit chain.">
+                  <Switch checked={at.requiresJustification} onChange={(_, d) => patchAt({ requiresJustification: d.checked })} label={at.requiresJustification ? 'Reason required at run time' : 'No justification required'} />
+                </Field>
                 {atErr && <MessageBar intent="error"><MessageBarBody>{atErr}</MessageBarBody></MessageBar>}
               </div>
             </DialogContent>
