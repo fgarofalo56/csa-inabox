@@ -20,7 +20,7 @@ import {
   Add20Regular, Play20Regular, Dismiss16Regular, ArrowUp16Regular, ArrowDown16Regular,
 } from '@fluentui/react-icons';
 import { clientFetch } from '@/lib/client-fetch';
-import type { EditorProps } from '../registry';
+import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import {
   normalizeBoard, compileBoardToKql, BOARD_STEP_TYPES, BOARD_STEP_LABELS,
   FILTER_OPS, FILTER_OP_KQL, AGG_FNS,
@@ -49,7 +49,7 @@ function blankStep(type: BoardStep['type']): BoardStep {
   }
 }
 
-export function AnalysisBoardEditor({ id }: EditorProps) {
+export function AnalysisBoardEditor({ id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   const [board, setBoard] = useState<AnalysisBoard>({ source: { kind: 'table', table: '' }, steps: [] });
   const [addType, setAddType] = useState<BoardStep['type']>('filter');
