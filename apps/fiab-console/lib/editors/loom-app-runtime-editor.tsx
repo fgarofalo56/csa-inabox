@@ -33,6 +33,7 @@ import {
 import { ItemEditorChrome } from './item-editor-chrome';
 import { NewItemCreateGate } from './new-item-gate';
 import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
+import { CopilotBuilderPane } from '@/lib/components/shared/copilot-builder-pane';
 import { ToolbarCrossLinks } from '@/lib/components/shared/item-tab-strip';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { clientFetch } from '@/lib/client-fetch';
@@ -430,6 +431,7 @@ export function LoomAppRuntimeEditor({ item, id }: EditorProps) {
         <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as string)}>
           <Tab value="overview">Overview</Tab>
           <Tab value="source">Source</Tab>
+          <Tab value="copilot">Copilot</Tab>
           <Tab value="deploy">Deploy</Tab>
           <Tab value="resources">Resources</Tab>
           <Tab value="bindings">Bindings</Tab>
@@ -560,6 +562,19 @@ export function LoomAppRuntimeEditor({ item, id }: EditorProps) {
 
         {/* ---- BINDINGS ---- */}
         {/* ---- RESOURCES (APPS-W2) ---- */}
+        {tab === 'copilot' && !loading && (
+          <CopilotBuilderPane
+            endpoint={`/api/items/loom-app-runtime/${encodeURIComponent(id)}/assist`}
+            title="Copilot — describe your app"
+            intro="Describe the data app you want and Copilot scaffolds real source files (template choice, entry file, dependencies) grounded on your attached resources and injected bindings. Review the plan, then Apply — a checkpoint is captured first so every scaffold is reversible. Build + Deploy from the Source and Deploy tabs afterwards."
+            fieldLabel="Describe the app"
+            fieldHint="Plain English. Generated code reads the injected env bindings (APP_ONT_* / APP_LH_* / LOOM_*) — no hard-coded endpoints or secrets."
+            placeholder={'e.g. "A Streamlit dashboard over my attached Sales ontology: list Customers, traverse OWNS links to Accounts, and a form to create Orders."'}
+            opNoun="edit"
+            onApplied={loadItem}
+          />
+        )}
+
         {tab === 'resources' && !loading && (
           <>
             <Subtitle2>Resources</Subtitle2>
