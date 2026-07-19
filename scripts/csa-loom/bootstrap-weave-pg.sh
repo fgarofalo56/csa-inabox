@@ -117,15 +117,20 @@ run_sql() {
 }
 
 echo "== registering Console UAMI '$CONSOLE_UAMI_NAME' as a PG principal =="
-run_sql "$WEAVE_PG_DB" "SELECT * FROM pgaadauth_create_principal('$CONSOLE_UAMI_NAME', false, false);" \
+# pgaadauth_* functions exist ONLY in the server's `postgres` database (live
+# receipt 2026-07-19: 42883 "does not exist" when run in the weave db — this
+# call had silently failed since day one; the console role only existed because
+# the ARM ad-admin registration auto-creates the admin's role).
+run_sql postgres "SELECT * FROM pgaadauth_create_principal('$CONSOLE_UAMI_NAME', false, false);" \
   || echo "  (principal may already exist — continuing)"
 
 echo "== CREATE EXTENSION AGE + create_graph('$WEAVE_GRAPH') =="
 run_sql "$WEAVE_PG_DB" "CREATE EXTENSION IF NOT EXISTS age CASCADE;"
 # create_graph errors if the graph exists; guard via ag_graph lookup.
+# NO `LOAD 'age'`: superuser-gated on Azure PG Flexible (42501 even for the
+# Entra admin — live receipt 2026-07-19). The library is preloaded via bicep
+# shared_preload_libraries=AGE; ag_catalog-qualified names resolve without it.
 run_sql "$WEAVE_PG_DB" "
-LOAD 'age';
-SET search_path = ag_catalog, \"\$user\", public;
 DO \$do\$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM ag_catalog.ag_graph WHERE name = '$WEAVE_GRAPH') THEN
@@ -157,7 +162,7 @@ for P in "${EXTRAS[@]}"; do
     echo "::warning::EXTRA_PG_PRINCIPALS entry '$P' is not a valid principal name — skipped"; continue
   fi
   echo "== registering extra principal '$P' (apps identity) =="
-  run_sql "$WEAVE_PG_DB" "SELECT * FROM pgaadauth_create_principal('$P', false, false);" \
+  run_sql postgres "SELECT * FROM pgaadauth_create_principal('$P', false, false);" \
     || echo "  (principal may already exist — continuing)"
   run_sql "$WEAVE_PG_DB" "
 GRANT CONNECT ON DATABASE \"$WEAVE_PG_DB\" TO \"$P\";

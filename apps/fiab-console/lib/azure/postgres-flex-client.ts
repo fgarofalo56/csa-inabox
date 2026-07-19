@@ -355,7 +355,17 @@ export async function executePostgresQuery(fqdn: string, database: string, sql: 
   const started = Date.now();
   try {
     await client.connect();
-    const res = await client.query(sql);
+    const raw: any = await client.query(sql);
+    // node-postgres returns a Result ARRAY for multi-statement text (simple
+    // query protocol). Mapping fields/rows off the array yielded columns:[] /
+    // rows:[] — which silently EMPTIED every multi-statement caller, most
+    // critically runCypher's `SET search_path; SELECT cypher(...)` (the whole
+    // Weave AGE store read as empty and writes reported "no vertex" — live
+    // receipt 2026-07-19). Use the last row-bearing result (the data-returning
+    // statement), falling back to the final one.
+    const res: any = Array.isArray(raw)
+      ? (raw.filter((r: any) => (r?.fields?.length || 0) > 0).pop() ?? raw[raw.length - 1] ?? {})
+      : raw;
     const fields = (res as any).fields || [];
     const columns: string[] = fields.map((f: any) => f.name);
     const rows: unknown[][] = (res.rows || []).map((r: any) => columns.map((c) => r[c]));
