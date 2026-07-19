@@ -103,13 +103,13 @@ Each finding cites code; grades feed the PRP matrix. ✅ built / η partial / �
 
 ## Gap register (running — feeds waves)
 
-| Row | Gap | Wave |
-|---|---|---|
-| 2.4 | Action validation rules + side effects (webhook/notify/audit chain) | W1 |
-| 2.6 | Ontology instance explorer (search/facet/traverse/saved explorations) | W1 |
-| 4.1 | Workshop widget catalog 7→~40 + variables/events/interactions | W3 |
-| 3.2 | Quiver card catalog 5→~30 (TS analysis families) | W3 |
-| 3.1 | analysis-board (Contour) — net-new | W2 |
-| 3.3/3.4 | notepad + fusion-sheet — net-new | W5 |
-| 4.4/4.6/4.7 | rules engine, approvals, checkpoints — net-new | W4 |
-| 6.10 | retention/export controls — net-new | W8 |
+| Row | Gap | Wave | Status |
+|---|---|---|---|
+| 2.4 | Action validation rules + side effects (webhook/notify/audit chain) | W1 | ✅ validation rules SHIPPED + E2E'd (#2200, submission criteria, rev 0000340); audit chain done via checkpoints (#2196); webhook/notify side-effects remain |
+| 2.6 | Ontology instance explorer (search/facet/traverse/saved explorations) | W1 | ✅ SHIPPED + E2E'd (#2195, search-fix #2197) |
+| 4.1 | Workshop widget catalog 7→~40 + variables/events/interactions | W3 | open |
+| 3.2 | Quiver card catalog 5→~30 (TS analysis families) | W3 | open |
+| 3.1 | analysis-board (Contour) — net-new | W2 | open |
+| 3.3/3.4 | notepad + fusion-sheet — net-new | W5 | open |
+| 4.4/4.6/4.7 | rules engine, approvals, checkpoints — net-new | W4 | ✅ 4.7 checkpoints/justifications SHIPPED + E2E'd (#2196, dialog-fix #2198); 4.4 rules + 4.6 approvals remain |
+| 6.10 | retention/export controls — net-new | W8 | open |
