@@ -169,7 +169,12 @@ export function AnalysisBoardEditor({ id }: { item: FabricItemType; id: string }
       {/* Compiled KQL preview */}
       <div className={s.card}>
         <Subtitle2>Compiled KQL</Subtitle2>
-        {compiled.ok ? <div className={s.kql}>{compiled.kql}</div> : <MessageBar intent="error"><MessageBarBody>{compiled.error}</MessageBarBody></MessageBar>}
+        {compiled.ok ? <div className={s.kql}>{compiled.kql}</div>
+          : (board.source.kind === 'table' && !(board.source.table || '').trim() && board.steps.length === 0)
+            // ux-baseline G6: a freshly created, untouched board shows a guided
+            // hint, never a red error — validation surfaces after touch.
+            ? <Caption1>Pick a source table (or base query) above — the compiled KQL preview updates live.</Caption1>
+            : <MessageBar intent="error"><MessageBarBody>{compiled.error}</MessageBarBody></MessageBar>}
       </div>
 
       {runMsg && <MessageBar intent={runMsg.intent}><MessageBarBody>{runMsg.intent === 'warning' ? <MessageBarTitle>ADX not configured</MessageBarTitle> : null}{runMsg.text}</MessageBarBody></MessageBar>}
