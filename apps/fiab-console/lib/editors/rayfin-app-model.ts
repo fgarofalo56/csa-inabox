@@ -54,7 +54,7 @@ export interface ModelBinding {
 // Visual app definition (the low-code BUILDER)
 // ---------------------------------------------------------------------------
 
-export type ComponentKind = 'table' | 'metric' | 'chart' | 'form' | 'text';
+export type ComponentKind = 'table' | 'metric' | 'chart' | 'form' | 'text' | 'image' | 'link' | 'divider' | 'badge';
 
 /** A data component's read-view selection over the app's bound model. */
 export interface ComponentBinding {
@@ -74,6 +74,12 @@ export interface RayfinComponent {
   entity?: string;
   /** For 'text': static markdown/plain content shown on the page. */
   text?: string;
+  /** For 'image': https-only image URL. */
+  src?: string;
+  /** For 'link': https-only target URL (text is the label). */
+  href?: string;
+  /** For 'badge': Fluent badge color. */
+  badgeColor?: 'brand' | 'success' | 'warning' | 'danger' | 'informative';
 }
 
 export interface RayfinPage {
@@ -296,11 +302,13 @@ export function newId(prefix: string): string {
 export function emptyComponent(kind: ComponentKind, entityName = ''): RayfinComponent {
   const titles: Record<ComponentKind, string> = {
     table: 'Table', metric: 'Metric', chart: 'Chart', form: 'Form', text: 'Text',
+    image: 'Image', link: 'Link', divider: 'Divider', badge: 'Badge',
   };
   const c: RayfinComponent = { id: newId('cmp'), kind, title: titles[kind] };
   if (isDataComponent(kind)) c.binding = { measures: [], groupBy: [], topN: kind === 'metric' ? 1 : 50 };
   if (kind === 'form') c.entity = entityName;
   if (kind === 'text') c.text = 'Describe this page…';
+  if (kind === 'badge') { c.text = 'Status'; c.badgeColor = 'brand'; }
   return c;
 }
 

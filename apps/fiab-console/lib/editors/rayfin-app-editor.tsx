@@ -103,9 +103,11 @@ interface RenderResult { ok: boolean; model: string; pages: RenderedPage[] }
 const KIND_ICON: Record<ComponentKind, ReactElement> = {
   table: <Table20Regular />, metric: <Gauge20Regular />, chart: <DataBarVertical20Regular />,
   form: <Form20Regular />, text: <TextT20Regular />,
+  image: <TextT20Regular />, link: <TextT20Regular />, divider: <TextT20Regular />, badge: <Gauge20Regular />,
 };
 const KIND_LABEL: Record<ComponentKind, string> = {
   table: 'Table', metric: 'Metric', chart: 'Chart', form: 'Form', text: 'Text',
+  image: 'Image', link: 'Link', divider: 'Divider', badge: 'Badge',
 };
 const KIND_HINT: Record<ComponentKind, string> = {
   table: 'Add a data table bound to the model — rows from your selected measures and group-by fields.',
@@ -113,6 +115,10 @@ const KIND_HINT: Record<ComponentKind, string> = {
   chart: 'Add a bar chart — one measure plotted across a category column.',
   form: 'Add a create/edit form bound to a backend entity (write-back runs in the deployed app, not in Loom).',
   text: 'Add a static text block for a heading, caption, or notes.',
+  image: 'Add an https image by URL.',
+  link: 'Add a styled link to an https URL.',
+  divider: 'Add a horizontal section divider.',
+  badge: 'Add a colored status badge.',
 };
 
 const useStyles = makeStyles({
@@ -1106,6 +1112,24 @@ function ComponentEditor({ s, comp, objects, entities, rendered, onChange, onDel
           </Field>
           <Caption1>The deployed Rayfin app renders a create/edit form for this entity (write-back runs in the app, not in Loom).</Caption1>
         </>
+      ) : comp.kind === 'image' ? (
+        <Field label="Image URL (https)"><Input value={comp.src || ''} onChange={(_, d) => onChange({ src: d.value })} placeholder="https://…" /></Field>
+      ) : comp.kind === 'link' ? (
+        <>
+          <Field label="Link URL (https)"><Input value={comp.href || ''} onChange={(_, d) => onChange({ href: d.value })} placeholder="https://…" /></Field>
+          <Field label="Link text"><Input value={comp.text || ''} onChange={(_, d) => onChange({ text: d.value })} placeholder="Open dashboard" /></Field>
+        </>
+      ) : comp.kind === 'badge' ? (
+        <>
+          <Field label="Badge text"><Input value={comp.text || ''} onChange={(_, d) => onChange({ text: d.value })} placeholder="Status" /></Field>
+          <Field label="Color">
+            <Dropdown value={comp.badgeColor || 'brand'} selectedOptions={[comp.badgeColor || 'brand']} onOptionSelect={(_, d) => onChange({ badgeColor: (d.optionValue as RayfinComponent['badgeColor']) || 'brand' })}>
+              {(['brand', 'success', 'warning', 'danger', 'informative'] as const).map((c) => <Option key={c} value={c}>{c}</Option>)}
+            </Dropdown>
+          </Field>
+        </>
+      ) : comp.kind === 'divider' ? (
+        <Caption1>A horizontal divider — no configuration.</Caption1>
       ) : (
         <Field label="Text">
           <Textarea value={comp.text || ''} onChange={(_, d) => onChange({ text: d.value })} resize="vertical" />
@@ -1128,6 +1152,19 @@ function ComponentEditor({ s, comp, objects, entities, rendered, onChange, onDel
           </div>
         ) : kind === 'text' ? (
           <Body1>{comp.text}</Body1>
+        ) : kind === 'divider' ? (
+          <hr style={{ border: 'none', borderTop: `1px solid ${tokens.colorNeutralStroke2}`, width: '100%' }} aria-label="Divider" />
+        ) : kind === 'badge' ? (
+          <Badge appearance="filled" color={comp.badgeColor || 'brand'}>{comp.text || comp.title}</Badge>
+        ) : kind === 'image' ? (
+          /^https:\/\//i.test(comp.src || '')
+            // eslint-disable-next-line @next/next/no-img-element
+            ? <img src={comp.src} alt={comp.title} style={{ maxWidth: '100%', objectFit: 'contain' }} />
+            : <Caption1>Set an https image URL in the inspector.</Caption1>
+        ) : kind === 'link' ? (
+          /^https:\/\//i.test(comp.href || '')
+            ? <a href={comp.href} target="_blank" rel="noreferrer noopener" style={{ color: tokens.colorBrandForeground1 }}>{comp.text?.trim() || comp.title}</a>
+            : <Caption1>Set an https link URL in the inspector.</Caption1>
         ) : (
           <Caption1>Form preview — bound to entity “{comp.entity || '(none)'}”.</Caption1>
         )
