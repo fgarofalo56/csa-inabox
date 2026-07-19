@@ -67,7 +67,17 @@ function makeConfig(): CopilotBuilderConfig<AppScaffoldDoc> {
       'the chosen template are the conventional paths (app.py / requirements.txt or server.js / package.json). ' +
       'Read configuration from the injected env vars listed in the context — NEVER hard-code endpoints, keys, ' +
       'or connection strings; azure-identity DefaultAzureCredential resolves the app identity (AZURE_CLIENT_ID ' +
-      'is injected). For ontology data use the loom_ontology module conventions (APP_ONT_* env). Never write a ' +
+      'is injected). For ontology data the ontology-explorer template ships a loom_ontology module whose EXACT ' +
+      'public API is:\n' +
+      '  from loom_ontology import attached_ontologies   # -> dict[slug, Ontology] from APP_ONT_* env\n' +
+      '  ont = attached_ontologies()["<SLUG>"]           # slug = the env slug, e.g. ENTERPRISE_ONTOLOGY\n' +
+      '  ont.object_types                                # list[str] from APP_ONT_<SLUG>_TYPES\n' +
+      '  ont.query_objects(type_name, limit=100)         # -> list[dict] of properties (+_id)\n' +
+      '  ont.create_object(type_name, props_dict)        # -> created vertex\n' +
+      '  ont.traverse(from_type, link_type, limit=100)   # -> [{from, to, to_label}]\n' +
+      '  ont.labels()                                    # discover labels in the graph\n' +
+      'Use ONLY this API (never invent classes like OntologyClient), and when writing app.py for ' +
+      'ontology-explorer do NOT rewrite loom_ontology.py — it ships with the template. Never write a ' +
       'Dockerfile (it is generated). Keep dependencies minimal and pinned.',
     groundingText: (doc) => {
       const catalog = LOOM_APP_TEMPLATES
