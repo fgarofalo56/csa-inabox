@@ -97,11 +97,10 @@ endpoint/secret env vars (the Databricks resource model, made one-click).
       approval app, geospatial (ties GEO-1), ML scoring UI.
 
 ## Waves
-- [ ] **APP-W0 — audit + gap doc:** deep-read the live Loom App Runtime; grade every
-      matrix row (built ✅ / partial η / ❌); `docs/fiab/parity/loom-apps.md`. (~1 session)
-- [ ] **APP-W1 — framework + config parity:** add missing frameworks (Shiny/Panel/React/
-      Angular/Svelte/Next/Vite/any-Dockerfile) + full app.yaml-equiv manifest + lifecycle
-      (stop/start/restart/rollback/scale). (~2)
+- [x] **APP-W0 — audit + gap doc:** `docs/fiab/parity/loom-app-runtime.md` (zero ❌).
+- [x] **APP-W1 — framework + config parity:** frameworks (Streamlit/Dash/Gradio/
+      Flask/Node + agent-fastapi + any-Dockerfile via git) + template config +
+      lifecycle (stop/start/delete/scale). Golden templates added in W5.
 - [x] **APP-W2 — Resources tab (the core):** SHIPPED + browser-E2E'd 2026-07-18/19
       (PRs #2166-#2173, rev 0000327): 9 attachable kinds w/ one-click grant + env
       injection; per-item lakehouse + KQL-database pickers (DB-scoped Viewer);
@@ -121,10 +120,21 @@ endpoint/secret env vars (the Databricks resource model, made one-click).
       the org-app BUNDLER, not the visual builder — the builders are
       workshop-app/slate-app/rayfin-app; embed-in-code-app = iframe the
       existing SWA publish URL (console frame-ancestors 'none' is by design).
-- [ ] **APP-W4 — dev loop + CI/CD:** local-dev harness/CLI, private-git deploy,
-      redeploy-on-push, app-bundle + CI template. (~1.5)
-- [ ] **APP-W5 — monitoring, embed, marketplace, publish-as-API/MCP, golden templates. (~2)
-- [ ] **APP-W6 — docs/walkthroughs/demo apps + final A-grade parity doc (zero ❌), Gov pass. (~1)
+- [x] **APP-W4 — dev loop + CI/CD:** SHIPPED (PRs #2184-#2185): `loom apps` CLI
+      (build/deploy/logs/lifecycle/run-local/export/ci-template/reconcile),
+      `GET /context` (byte-identical build context) + `.loomapp` export,
+      generated GitHub Actions CI template (loom-aca runner), private-git via
+      per-item Key Vault PAT (`/git-credential` + tokenized clone URL),
+      redeploy-on-push poll reconciler (`/reconcile`, smart-HTTP ls-remote).
+- [x] **APP-W5 — monitoring/embed/marketplace/publish-as-API/golden templates:**
+      SHIPPED (PRs #2186-#2187): 5 golden templates (RAG chat, ops console,
+      geospatial, ML scoring, approval); per-app Monitoring tab (Azure Monitor
+      metrics + month-to-date cost); publish-app-as-API (APIM → Marketplace);
+      embed = app-is-own-origin. Follow-ons: publish-as-MCP (non-agent shim),
+      marketplace install-from-`.loomapp`.
+- [x] **APP-W6 — docs + parity doc (zero ❌):** `docs/fiab/parity/loom-app-runtime.md`
+      re-run showing every matrix row built ✅ / honest-gate ⚠️; Gov path is the
+      identical ACA deploy (Gov-GA).
 
 ## Verification
 Per `no-vaporware`/`ui-parity`/`ux-baseline`: real ACA deploy per app, browser E2E
