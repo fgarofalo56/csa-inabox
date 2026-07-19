@@ -36,8 +36,10 @@ export async function getApiSession(req: ApiRequestLike): Promise<SessionPayload
   // Cookie wins — identical to every existing route's `getSession()`.
   const cookie = getSession();
   if (cookie) return cookie;
-  // Fallback: a scoped API token on the Authorization header.
-  return resolvePat(req.headers.get('authorization'));
+  // Fallback: a scoped API token on the Authorization header. Null-safe on
+  // headers: synthetic test requests (and some framework shims) omit them —
+  // no header simply means no PAT, never a throw.
+  return resolvePat(req?.headers?.get?.('authorization') ?? null);
 }
 
 /**

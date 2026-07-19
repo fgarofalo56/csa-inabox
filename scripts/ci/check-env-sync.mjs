@@ -76,6 +76,7 @@ const ALLOWLIST_PATTERNS = [
 // Seeded from the CURRENT tree (2026-07). Each MUST carry a reason.
 const ALLOWLIST = new Set([
   // ---- Build / ambient (injected by the container runtime or platform, not app bicep) ----
+  'LOOM_CONSOLE_URL',               // read only inside GENERATED hosted-app source (workshop eject-to-code server.js template in _palantir-codegen.ts) — the eject route seeds it as an app binding; never a console-runtime var
   'LOOM_READ_WARMER_DISABLED',      // runtime-only opt-out for the dashboard read-warmer (lib/perf/read-warmer.ts) — warming is on by default, never a deploy dependency
   'LOOM_READ_WARMER_INTERVAL_MS',   // runtime-only tuning knob for the read-warmer interval (default 10 min)
   'LOOM_BUILD_SHA',                 // stamped at image build time
