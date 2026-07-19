@@ -89,12 +89,17 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
         apiId: apiPath, displayName, path: apiPath, format: 'openapi+json', value: JSON.stringify(openApi),
         serviceUrl,
       });
-      await saveAppRuntime(access.item, { publishedApiId: api.name, publishedApiPath: api.path });
+      // APIM's import PUT response can omit properties.path/displayName — fall
+      // back to the values we SENT (apiPath/displayName) so the receipt never
+      // shows 'undefined' (live receipt 2026-07-19: banner said "API 'undefined'").
+      const resolvedPath = api.path || apiPath;
+      const resolvedName = api.name || apiPath;
+      await saveAppRuntime(access.item, { publishedApiId: resolvedName, publishedApiPath: resolvedPath });
       await recordThreadEdge(session, {
         fromItemId: id, fromType: LOOM_APP_RUNTIME_TYPE, fromName: access.item.displayName,
-        toItemId: api.name || apiPath, toType: 'apim-api', toName: displayName, action: 'app-publish-apim',
+        toItemId: resolvedName, toType: 'apim-api', toName: displayName, action: 'app-publish-apim',
       });
-      return apiOk({ api: { id: api.id, name: api.name, path: api.path, displayName: api.displayName }, serviceUrl, note: 'Published to Azure API Management — find it in the Marketplace → APIs tab.' });
+      return apiOk({ api: { id: api.id, name: resolvedName, path: resolvedPath, displayName: api.displayName || displayName }, serviceUrl, note: 'Published to Azure API Management — find it in the Marketplace → APIs tab.' });
     } catch (e: unknown) {
       const status = e instanceof ApimError ? (e.status || 502) : 502;
       return apiError(`APIM publish failed: ${e instanceof Error ? e.message : String(e)}`, status, { code: 'publish_failed' });
