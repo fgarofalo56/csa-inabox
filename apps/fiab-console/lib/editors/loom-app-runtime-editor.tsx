@@ -316,7 +316,11 @@ export function LoomAppRuntimeEditor({ item, id }: EditorProps) {
       const url = j.deployed?.url;
       setBanner({
         intent: 'success',
-        text: url ? `Deployed. Live at ${url}${j.deployed?.authConfigured ? ' (Entra-gated).' : ' — set LOOM_MSAL_CLIENT_ID to gate with Entra.'}` : 'Deployed.',
+        text: url
+          ? `Deployed. Live at ${url}${j.deployed?.authConfigured
+              ? ' (Entra-gated).'
+              : ` — Entra gate NOT applied: ${j.deployed?.authDetail || 'set LOOM_MSAL_CLIENT_ID on the Console.'} Redeploy to retry.`}`
+          : 'Deployed.',
       });
       loadItem();
     } catch (e: any) { setBanner({ intent: 'error', text: e?.message || String(e) }); }

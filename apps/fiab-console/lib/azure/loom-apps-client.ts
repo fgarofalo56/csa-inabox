@@ -373,9 +373,11 @@ export interface DeployedApp {
   maxReplicas?: number;
   /** True when the Entra Easy-Auth wrapper was configured. */
   authConfigured?: boolean;
+  /** Why the Easy-Auth PUT failed, when authConfigured is false (honest detail). */
+  authDetail?: string;
 }
 
-function shapeApp(json: any, authConfigured?: boolean): DeployedApp {
+function shapeApp(json: any, authConfigured?: boolean, authDetail?: string): DeployedApp {
   const props = json?.properties || {};
   const fqdn: string | undefined = props?.configuration?.ingress?.fqdn || undefined;
   const image: string | undefined = props?.template?.containers?.[0]?.image;
@@ -389,6 +391,7 @@ function shapeApp(json: any, authConfigured?: boolean): DeployedApp {
     minReplicas: props?.template?.scale?.minReplicas,
     maxReplicas: props?.template?.scale?.maxReplicas,
     authConfigured,
+    ...(authDetail ? { authDetail } : {}),
   };
 }
 
@@ -458,27 +461,33 @@ export async function deployApp(opts: DeployAppOptions): Promise<DeployedApp> {
   const { json } = await armFetch('PUT', appUrl(cfg, name), body);
 
   // OAuth wrapper — Entra Easy Auth via the Console's existing MSAL app reg.
+  // The PUT can transiently fail while the app is still provisioning (live
+  // receipt 2026-07-19: first deploy false, identical manual PUT minutes later
+  // 200) — retry once after a short settle, and when it still fails carry the
+  // REASON on authDetail instead of a silent false.
   let authConfigured = false;
+  let authDetail: string | undefined;
   if (cfg.msalClientId && cfg.msalTenantId) {
-    try {
-      const authBody = buildAuthConfigBody({
-        clientId: cfg.msalClientId,
-        openIdIssuer: `https://login.microsoftonline.com/${cfg.msalTenantId}/v2.0`,
-      });
-      await armFetch(
-        'PUT',
-        `/subscriptions/${cfg.subscriptionId}/resourceGroups/${cfg.resourceGroup}/providers/Microsoft.App/containerApps/${name}/authConfigs/current?api-version=${ACA_API}`,
-        authBody,
-      );
-      authConfigured = true;
-    } catch {
-      // Non-fatal: the app is deployed; the auth wrapper needs the app's redirect
-      // URI registered on the MSAL app reg (one-time admin action). Surface the
-      // unconfigured state honestly via authConfigured=false rather than failing.
-      authConfigured = false;
+    const authBody = buildAuthConfigBody({
+      clientId: cfg.msalClientId,
+      openIdIssuer: `https://login.microsoftonline.com/${cfg.msalTenantId}/v2.0`,
+    });
+    const authUrl = `/subscriptions/${cfg.subscriptionId}/resourceGroups/${cfg.resourceGroup}/providers/Microsoft.App/containerApps/${name}/authConfigs/current?api-version=${ACA_API}`;
+    for (let attempt = 0; attempt < 2 && !authConfigured; attempt++) {
+      try {
+        if (attempt > 0) await new Promise((r) => setTimeout(r, 15_000));
+        await armFetch('PUT', authUrl, authBody);
+        authConfigured = true;
+        authDetail = undefined;
+      } catch (e: any) {
+        // Non-fatal: the app is deployed; surface the reason honestly.
+        authDetail = e?.message || String(e);
+      }
     }
+  } else {
+    authDetail = 'Entra Easy-Auth skipped — LOOM_MSAL_CLIENT_ID / LOOM_MSAL_TENANT_ID are not configured on the Console.';
   }
-  return shapeApp(json, authConfigured);
+  return shapeApp(json, authConfigured, authDetail);
 }
 
 /** GET the live status of a deployed app. */
