@@ -30,6 +30,12 @@ export interface AppRuntimeState {
   /** Source configuration. */
   templateId?: string;
   gitSource?: string;
+  /** Private-git auth (APP-W4 S3): the PAT lives in Key Vault — this holds ONLY the reference. */
+  gitAuth?: { provider: string; secretName: string; setAt: string };
+  /** Commit SHA the last git build was triggered from (APP-W4 S4 redeploy-on-push reconciler). */
+  lastBuiltSha?: string;
+  /** True to auto-build when the reconciler sees a new commit (opt-in). */
+  autoRedeploy?: boolean;
   port?: number;
   /** Structured env bindings (names allowlisted at the client). */
   env?: LoomAppEnvVar[];

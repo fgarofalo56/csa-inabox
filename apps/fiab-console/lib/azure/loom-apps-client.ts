@@ -216,6 +216,12 @@ export interface BuildAppOptions {
   /** User source edits: path → content (overrides starter files). */
   userFiles?: Record<string, string>;
   /**
+   * Private-git PAT (APP-W4 S3), resolved by the ROUTE from Key Vault at build
+   * time — never persisted here, never echoed. When set, buildApp composes the
+   * provider's tokenized clone URL server-side for ACR's source fetch.
+   */
+  gitToken?: string;
+  /**
    * Public git repository URL to build FROM instead of the template context.
    * ACR accepts a git URL (optionally #branch:subdir) as the build sourceLocation.
    * Private repos need a token — honest-gated below (named follow-up).
@@ -253,6 +259,63 @@ async function acrScheduleRunUrl(cfg: LoomAppsConfig, action: string): Promise<s
  * build context (Dockerfile + starter/edited files); git builds point ACR at a
  * public repo URL. Returns the ACR run id — poll getBuildStatus for completion.
  */
+/**
+ * Compose the provider-specific tokenized https clone URL ACR uses to fetch a
+ * PRIVATE repository. The username segment is each provider's documented
+ * PAT-basic-auth convention; the token is URL-encoded. Exported for tests.
+ */
+export function tokenizedGitUrl(gitUrl: string, token: string): string {
+  const t = encodeURIComponent(token);
+  const host = gitUrl.replace(/^https:\/\//i, '').split('/')[0].toLowerCase();
+  const user =
+    host === 'github.com' ? 'x-access-token'
+    : host === 'gitlab.com' ? 'oauth2'
+    : host === 'bitbucket.org' ? 'x-token-auth'
+    : 'pat'; // dev.azure.com / *.visualstudio.com accept any username with a PAT
+  return gitUrl.replace(/^https:\/\//i, `https://${user}:${t}@`);
+}
+
+/**
+ * Resolve the current commit SHA of a git repo's default branch (or the
+ * #branch pinned in the URL) via the git SMART-HTTP protocol
+ * (`GET <repo>.git/info/refs?service=git-upload-pack`) — uniform across
+ * GitHub/GitLab/Bitbucket/Azure DevOps, no per-provider API. Private repos
+ * authenticate with the same tokenized URL as the build. Returns null when the
+ * ref can't be resolved (surfaced as "no change" by the reconciler, never a
+ * fake SHA). Exported for tests.
+ */
+export function parseInfoRefs(body: string, wantRef?: string): string | null {
+  // pkt-line stream: "<4-hex-len><data>". Each ref line is "<sha> <refname>".
+  // First line often carries capabilities after a NUL. We scan for the ref.
+  const lines = body.split('\n');
+  let headSha: string | null = null;
+  const target = wantRef ? `refs/heads/${wantRef}` : null;
+  for (const raw of lines) {
+    const line = raw.replace(/^[0-9a-f]{4}/, '').replace(/\0.*$/, '').trim();
+    const m = /^([0-9a-f]{40})\s+(\S+)/.exec(line);
+    if (!m) continue;
+    const [, sha, ref] = m;
+    if (target && ref === target) return sha;
+    if (!target && ref === 'HEAD') headSha = sha;
+    if (!target && !headSha && /^refs\/heads\/(main|master)$/.test(ref)) headSha = sha;
+  }
+  return headSha;
+}
+
+export async function resolveRemoteHeadSha(gitSource: string, token?: string): Promise<string | null> {
+  const hashIdx = gitSource.indexOf('#');
+  const base = (hashIdx >= 0 ? gitSource.slice(0, hashIdx) : gitSource).replace(/\.git$/, '');
+  const branch = hashIdx >= 0 ? gitSource.slice(hashIdx + 1).split(':')[0] : '';
+  const url = `${token ? tokenizedGitUrl(base, token) : base}.git/info/refs?service=git-upload-pack`;
+  try {
+    const res = await fetchWithTimeout(url, { headers: { 'user-agent': 'git/2.40' } });
+    if (!res.ok) return null;
+    return parseInfoRefs(await res.text(), branch || undefined);
+  } catch {
+    return null;
+  }
+}
+
 export async function buildApp(opts: BuildAppOptions): Promise<BuildAppResult> {
   const cfg = readLoomAppsConfig();
   const repo = `loom-app-${opts.itemId}`.toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').slice(0, 60);
@@ -266,24 +329,29 @@ export async function buildApp(opts: BuildAppOptions): Promise<BuildAppResult> {
 
   if (opts.gitSource && opts.gitSource.trim()) {
     const git = opts.gitSource.trim();
-    // Private-repo auth (token-in-URL / PAT) is a named follow-up — see the PRP
-    // DBX-1 "deferred" note. Only public https git URLs are accepted here.
     if (!/^https:\/\/(github\.com|dev\.azure\.com|[a-z0-9.-]+\.visualstudio\.com|gitlab\.com|bitbucket\.org)\//i.test(git)) {
       throw new LoomAppsError(
-        'Only public https git repositories (github.com / dev.azure.com / gitlab.com / bitbucket.org) are ' +
-          'supported. Private-repo authentication (PAT/OAuth) is a tracked follow-up — use a runtime template ' +
-          'or a public repo for now.',
+        'Only https git repositories on github.com / dev.azure.com / gitlab.com / bitbucket.org are supported.',
         400,
       );
     }
-    // Any '@' means embedded credentials (user:pass@host) or an unsupported
-    // scp-style ref — reject outright. A plain includes() check covers every
-    // credential form without a backtracking regex (js/polynomial-redos).
+    // Any '@' in the USER-SUPPLIED url means embedded credentials
+    // (user:pass@host) or an scp-style ref — reject outright. Private repos
+    // are authenticated via the STORED Key Vault PAT (gitToken below), never a
+    // credential pasted into the URL. Plain includes() avoids a backtracking
+    // regex (js/polynomial-redos).
     if (git.includes('@')) {
-      throw new LoomAppsError('Credentials in the git URL are not accepted (private-repo auth is a tracked follow-up).', 400);
+      throw new LoomAppsError(
+        'Credentials in the git URL are not accepted — store a token via the Source tab (kept in Key Vault) for private repositories.',
+        400,
+      );
     }
     source = 'git';
-    sourceLocation = git; // ACR accepts https://host/org/repo(.git)#branch:subfolder
+    // Private repo (APP-W4 S3): compose the provider's tokenized clone URL
+    // SERVER-SIDE for ACR's source fetch. The token comes from Key Vault at
+    // build time and exists only in this request body — never persisted,
+    // never logged, never echoed back.
+    sourceLocation = opts.gitToken ? tokenizedGitUrl(git, opts.gitToken) : git; // ACR accepts https://host/org/repo(.git)#branch:subfolder
     // If the user pointed at a subdir with a Dockerfile they can encode it in #branch:dir;
     // when the repo has no Dockerfile the build fails with a real ACR error (honest).
   } else {

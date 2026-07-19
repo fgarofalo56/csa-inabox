@@ -54,12 +54,36 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
     const tpl = templateId ? getLoomAppTemplate(templateId) : undefined;
     const effPort = port && port > 0 ? port : (tpl?.defaultPort ?? 8000);
 
-    const result = await buildApp({ itemId: id, templateId, gitSource, userFiles, port: effPort, tag: body?.tag });
+    // Private-git (APP-W4 S3): resolve the stored Key Vault PAT at build time
+    // and hand it to buildApp (tokenized clone URL for ACR). Resolution
+    // failure is a REAL error — a silent fallback would "work" on public
+    // repos and mysteriously 403 on private ones.
+    let gitToken: string | undefined;
+    if (gitSource && rt.gitAuth?.secretName) {
+      const { getKeyVaultSecretValue } = await import('@/lib/azure/kv-secrets-client');
+      try {
+        gitToken = await getKeyVaultSecretValue(rt.gitAuth.secretName);
+      } catch (e: any) {
+        return apiError(
+          `Could not resolve the stored git token (${rt.gitAuth.secretName}) from Key Vault: ${e?.message || e}. ` +
+          'Re-save it on the Source tab or remove it to build a public repo.',
+          502, { code: 'git_token_unavailable' },
+        );
+      }
+    }
+
+    const result = await buildApp({ itemId: id, templateId, gitSource, userFiles, port: effPort, tag: body?.tag, gitToken });
 
     // Persist the source config + the build record. Spread-guard userFiles:
     // a present-but-undefined key would clobber the persisted files in the
-    // {...current, ...patch} merge.
-    await saveAppRuntime(access.item, { templateId, gitSource, port: effPort, ...(userFiles ? { userFiles } : {}) });
+    // {...current, ...patch} merge. Stamp the git SHA (from the reconciler or
+    // resolved now) so redeploy-on-push can tell new commits from stale state.
+    const builtSha = typeof body?.sha === 'string' ? body.sha : undefined;
+    await saveAppRuntime(access.item, {
+      templateId, gitSource, port: effPort,
+      ...(userFiles ? { userFiles } : {}),
+      ...(builtSha ? { lastBuiltSha: builtSha } : {}),
+    });
     const updated = await recordBuild(access.item, {
       runId: result.runId, image: result.image, imageName: result.imageName,
       status: result.status, source: result.source, at: new Date().toISOString(),
