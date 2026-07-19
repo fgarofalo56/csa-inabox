@@ -428,6 +428,12 @@ function appUrl(cfg: LoomAppsConfig, name: string): string {
   return `/subscriptions/${cfg.subscriptionId}/resourceGroups/${cfg.resourceGroup}/providers/Microsoft.App/containerApps/${name}?api-version=${ACA_API}`;
 }
 
+/** The bare ARM resource id of a deployed app's Container App (for metrics/cost scoping). */
+export function appContainerResourceId(name: string): string {
+  const cfg = readLoomAppsConfig();
+  return `/subscriptions/${cfg.subscriptionId}/resourceGroups/${cfg.resourceGroup}/providers/Microsoft.App/containerApps/${name}`;
+}
+
 export interface DeployedApp {
   name: string;
   provisioningState: string;
