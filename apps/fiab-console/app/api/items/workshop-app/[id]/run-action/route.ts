@@ -29,7 +29,6 @@
  * warehouse source is bound to the type; honest 400 on bad/missing key/columns.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { loadOwnedItem } from '../../../_lib/item-crud';
 import { dedicatedTarget, executeQuery, type SynapseQueryParam } from '@/lib/azure/synapse-sql-client';
 import {
@@ -71,8 +70,15 @@ interface RunBody {
 }
 
 export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const s = getSession();
+  // PAT-aware (APP-W3 eject-to-code): an ejected loom-app-runtime container has
+  // no browser session — its server proxy authenticates with a scoped API
+  // token. Cookie sessions behave exactly as before (cookie wins in
+  // getApiSession); a read-only PAT is rejected for this mutating verb.
+  const { getApiSession, enforcePatAccess } = await import('@/lib/auth/api-session');
+  const s = await getApiSession(req);
   if (!s) return err('unauthenticated', 401, 'unauthenticated');
+  const patBlock = enforcePatAccess(s, req.method);
+  if (patBlock) return patBlock;
   const { id } = await ctx.params;
   if (!id || id === 'new') return err('save the workshop app first', 400, 'no_id');
   const body = (await req.json().catch(() => ({}))) as RunBody;

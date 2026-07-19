@@ -708,3 +708,81 @@ export function generateWorkshopBundle(spec: {
     { name: 'staticwebapp.config.json', content: config },
   ];
 }
+
+/**
+ * APP-W3 visual→code "eject": turn a Workshop app's canvas into a runnable
+ * loom-app-runtime source tree (userFiles shape: path → content). Reuses the
+ * SWA bundle emitter for the front-end, adds an Express server that statically
+ * serves it and PROXIES /run-action to the Console's workshop run-action API
+ * with a scoped API token (PAT) — the deployed container has no browser
+ * session, so the proxy is the honest data path (run-action accepts PATs via
+ * getApiSession). Missing env → precise 503, never a silent dead widget.
+ */
+export function generateWorkshopCodeApp(spec: {
+  displayName: string; workshopAppId: string;
+  widgets: WorkshopWidget[]; variables: WorkshopVariable[];
+}): Record<string, string> {
+  // Relative URL — app.js calls same-origin /run-action; server.js forwards.
+  const bundle = generateWorkshopBundle({
+    displayName: spec.displayName,
+    runActionUrl: '/run-action',
+    widgets: spec.widgets,
+    variables: spec.variables,
+  });
+  const byName = new Map(bundle.map((f) => [f.name, f.content]));
+
+  const serverJs = [
+    `// ${spec.displayName} — ejected from the Workshop visual builder (APP-W3 visual→code).`,
+    '// Serves the generated canvas from ./public and proxies /run-action to the',
+    '// CSA Loom console with a scoped API token. Wire on the Bindings tab:',
+    '//   LOOM_CONSOLE_URL — the console base URL (pre-seeded by the eject)',
+    '//   LOOM_API_TOKEN   — a scoped API token (Profile → API tokens); store it',
+    '//                      as a Key Vault secretRef binding, never a plain value.',
+    "const express = require('express');",
+    'const app = express();',
+    'app.use(express.json());',
+    "app.use(express.static('public'));",
+    '',
+    "const CONSOLE = (process.env.LOOM_CONSOLE_URL || '').replace(/\/+$/, '');",
+    "const TOKEN = process.env.LOOM_API_TOKEN || '';",
+    `const RUN_ACTION_PATH = '/api/items/workshop-app/${spec.workshopAppId}/run-action';`,
+    '',
+    "app.post('/run-action', async (req, res) => {",
+    '  if (!CONSOLE || !TOKEN) {',
+    '    res.status(503).json({ ok: false, error:',
+    "      'Not wired to CSA Loom yet — set LOOM_CONSOLE_URL (console base URL) and LOOM_API_TOKEN (a scoped API token from Profile → API tokens, stored as a Key Vault secretRef binding) on this app, then Deploy.' });",
+    '    return;',
+    '  }',
+    '  try {',
+    '    const r = await fetch(CONSOLE + RUN_ACTION_PATH, {',
+    "      method: 'POST',",
+    "      headers: { 'content-type': 'application/json', authorization: `Bearer ${TOKEN}` },",
+    '      body: JSON.stringify(req.body || {}),',
+    '    });',
+    "    res.status(r.status).type('application/json').send(await r.text());",
+    '  } catch (e) {',
+    '    res.status(502).json({ ok: false, error: String((e && e.message) || e) });',
+    '  }',
+    '});',
+    '',
+    "app.get('/health', (_req, res) => res.json({ ok: true }));",
+    'const port = process.env.PORT || 3000;',
+    "app.listen(port, () => console.log('workshop code app listening on :' + port));",
+    '',
+  ].join('\n');
+
+  const pkg = JSON.stringify({
+    name: 'workshop-code-app',
+    version: '1.0.0',
+    private: true,
+    scripts: { start: 'node server.js' },
+    dependencies: { express: '^4.21.2' },
+  }, null, 2) + '\n';
+
+  return {
+    'server.js': serverJs,
+    'package.json': pkg,
+    'public/index.html': byName.get('index.html') || '',
+    'public/app.js': byName.get('app.js') || '',
+  };
+}
