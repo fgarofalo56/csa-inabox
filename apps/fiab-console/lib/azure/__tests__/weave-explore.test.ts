@@ -27,16 +27,33 @@ describe('searchObjects', () => {
   it('rejects an invalid label (injection guard)', async () => {
     await expect(searchObjects('bad label; DROP', 'x')).rejects.toThrow(/valid AGE label/);
   });
-  it('embeds the needle as a JSON-escaped literal + parses vertices', async () => {
-    runCypher.mockResolvedValue({ rows: [['{"id":844,"label":"Customer","properties":{"name":"Contoso"}}::vertex']] });
-    const objs = await searchObjects('Customer', 'con"to', 50);
-    // the statement must contain the escaped needle, never a raw quote break
+  it('filters in JS (case-insensitive CONTAINS on any prop) — needle never in cypher', async () => {
+    runCypher.mockResolvedValue({ rows: [
+      ['{"id":1,"label":"Customer","properties":{"name":"Contoso E2E","customerId":"CUST-E2E-001"}}::vertex'],
+      ['{"id":2,"label":"Customer","properties":{"name":"Fabrikam","customerId":"CUST-002"}}::vertex'],
+    ] });
+    const objs = await searchObjects('Customer', 'contoso', 50);   // lower-case query, mixed-case data
+    expect(objs).toEqual([{ id: '1', objectType: 'Customer', properties: { name: 'Contoso E2E', customerId: 'CUST-E2E-001' } }]);
+    // AGE can't run the predicate — the query must NOT reach cypher (injection-free)
     const stmt = runCypher.mock.calls[0][0] as string;
-    expect(stmt).toContain('"con\\"to"'.toLowerCase().replace('con\\"to', 'con\\"to')); // escaped
-    expect(objs).toEqual([{ id: '844', objectType: 'Customer', properties: { name: 'Contoso' } }]);
+    expect(stmt).not.toContain('contoso');
+    expect(stmt).not.toContain('WHERE');
+    expect(stmt).toContain('MATCH (n:Customer) RETURN n LIMIT');
   });
-  it('lists without a WHERE when q is empty', async () => {
-    runCypher.mockResolvedValue({ rows: [] });
+  it('matches the hyphenated id substring (the live-caught miss)', async () => {
+    runCypher.mockResolvedValue({ rows: [
+      ['{"id":1,"label":"Customer","properties":{"name":"Contoso","customerId":"CUST-E2E-001"}}::vertex'],
+    ] });
+    const objs = await searchObjects('Customer', 'CUST-E2E', 50);
+    expect(objs).toHaveLength(1);
+  });
+  it('ignores private (_-prefixed) props and lists all when q is empty', async () => {
+    runCypher.mockResolvedValue({ rows: [
+      ['{"id":1,"label":"Customer","properties":{"_hidden":"secret","name":"A"}}::vertex'],
+    ] });
+    // q matches only a private prop → no result
+    expect(await searchObjects('Customer', 'secret')).toHaveLength(0);
+    runCypher.mockClear();
     await searchObjects('Customer', '');
     expect(runCypher.mock.calls[0][0]).toContain('MATCH (n:Customer) RETURN n LIMIT');
     expect(runCypher.mock.calls[0][0]).not.toContain('WHERE');
