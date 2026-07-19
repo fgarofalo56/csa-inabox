@@ -126,15 +126,18 @@ endpoint/secret env vars (the Databricks resource model, made one-click).
       generated GitHub Actions CI template (loom-aca runner), private-git via
       per-item Key Vault PAT (`/git-credential` + tokenized clone URL),
       redeploy-on-push poll reconciler (`/reconcile`, smart-HTTP ls-remote).
-- [x] **APP-W5 — monitoring/embed/marketplace/publish-as-API/golden templates:**
-      SHIPPED (PRs #2186-#2187): 5 golden templates (RAG chat, ops console,
+- [x] **APP-W5 — monitoring/embed/marketplace/publish-as-API+MCP/golden templates:**
+      FULLY SHIPPED (PRs #2186-#2193): 5 golden templates (RAG chat, ops console,
       geospatial, ML scoring, approval); per-app Monitoring tab (Azure Monitor
-      metrics + month-to-date cost); publish-app-as-API (APIM → Marketplace);
-      embed = app-is-own-origin. Follow-ons: publish-as-MCP (non-agent shim),
-      marketplace install-from-`.loomapp`.
+      metrics + bounded month-to-date cost); publish-app-as-API (APIM →
+      Marketplace) AND publish-as-MCP (agent-fastapi apps, `/mcp` JSON-RPC proxy);
+      `.loomapp` export + install-from-bundle round-trip; embed = app-is-own-origin.
+      Browser-E2E'd live (rev 0000337): Monitoring stat grid renders, Publish-as-API
+      creates a real APIM API. Three E2E-only defects caught+fixed (#2192/#2193:
+      cost-timeout, stale-URL, path-display).
 - [x] **APP-W6 — docs + parity doc (zero ❌):** `docs/fiab/parity/loom-app-runtime.md`
       re-run showing every matrix row built ✅ / honest-gate ⚠️; Gov path is the
-      identical ACA deploy (Gov-GA).
+      identical ACA deploy (Gov-GA). **PRP COMPLETE — 18 PRs #2183-#2193.**
 
 ## Verification
 Per `no-vaporware`/`ui-parity`/`ux-baseline`: real ACA deploy per app, browser E2E
