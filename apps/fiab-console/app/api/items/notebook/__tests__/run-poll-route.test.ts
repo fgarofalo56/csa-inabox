@@ -17,10 +17,11 @@ vi.mock('@/lib/auth/session', () => ({ getSession: vi.fn() }));
 vi.mock('@/lib/auth/workspace-guard', () => ({ assertOwner: vi.fn(async () => true) }));
 
 const replaceMock = vi.fn();
+const patchMock = vi.fn();
 const readMock = vi.fn();
 vi.mock('@/lib/azure/cosmos-client', () => ({
   itemsContainer: vi.fn(async () => ({
-    item: () => ({ read: readMock, replace: replaceMock }),
+    item: () => ({ read: readMock, replace: replaceMock, patch: patchMock }),
   })),
 }));
 
@@ -50,6 +51,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   (getSession as any).mockReturnValue({ claims: { oid: 'u1' } });
   replaceMock.mockResolvedValue({});
+  patchMock.mockResolvedValue({});
 });
 
 describe('phase-2 cellOutputs accumulation (R3 #2)', () => {
@@ -144,9 +146,10 @@ describe('honest terminal-state mapping (R3 #3)', () => {
     expect(j.ok).toBe(false);
     expect(j.status).toBe('shutting_down');
     // R3 #4 — a terminal session cleans its stale pendingRuns entry so a resume
-    // poll doesn't retry it forever.
-    const persisted = replaceMock.mock.calls.at(-1)![0].state.pendingRuns;
-    expect(persisted['spark:pool1:5']).toBeUndefined();
+    // poll doesn't retry it forever. The clean is an ATOMIC Cosmos PATCH remove
+    // (the replace variant raced the editor autosave and resurrected entries).
+    const removed = patchMock.mock.calls.flatMap((c) => c[0]).map((op: any) => op.path);
+    expect(removed).toContain('/state/pendingRuns/spark:pool1:5');
   });
 });
 
@@ -212,8 +215,9 @@ describe('resume in-flight runs (R3 #4)', () => {
     expect(j.ok).toBe(true);
     expect(j.output.status).toBe('error');
     expect(j.output.ename).toBe('SessionGone');
-    const persisted = replaceMock.mock.calls.at(-1)![0].state.pendingRuns;
-    expect(persisted['spark:pool1:5']).toBeUndefined();
+    // Atomic PATCH-remove cleanup (see the terminal-state test above).
+    const removed = patchMock.mock.calls.flatMap((c) => c[0]).map((op: any) => op.path);
+    expect(removed).toContain('/state/pendingRuns/spark:pool1:5');
   });
 
   it('rethrows a NON-404 getLivySession error (transient — entry preserved)', async () => {
