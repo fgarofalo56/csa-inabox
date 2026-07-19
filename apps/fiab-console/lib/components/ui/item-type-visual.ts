@@ -53,7 +53,7 @@ import {
   // Copilot Studio / Power Platform
   BookGlobe24Regular, ChatBubblesQuestion24Regular, PuzzlePiece24Regular,
   Channel24Regular, ChartPerson24Regular, Library24Regular, Apps24Regular,
-  Table24Regular, AppFolder24Regular,
+  Table24Regular, AppFolder24Regular, Notepad24Regular,
   // Geo / graph / vector
   Diversity24Regular, Branch24Regular, Earth24Regular, VirtualNetwork24Regular,
   PersonChat24Regular,
@@ -203,6 +203,7 @@ const REGISTRY: Record<string, Entry> = {
   'ontology':           { icon: TextBulletListTree24Regular, family: 'fabric-iq', label: 'Ontology' },
   'analysis-board':     { icon: BoardSplit24Regular,          family: 'fabric-iq', label: 'Analysis Board' },
   'fusion-sheet':       { icon: Table24Regular,                family: 'fabric-iq', label: 'Fusion Sheet' },
+  'notepad':            { icon: Notepad24Regular,              family: 'fabric-iq', label: 'Notepad' },
   'graph-model':        { icon: Diversity24Regular,           family: 'fabric-iq', label: 'Graph Model' },
   'plan':               { icon: ClipboardTaskListLtr24Regular, family: 'fabric-iq', label: 'Plan' },
   'map':                { icon: Map24Regular,                 family: 'fabric-iq', label: 'Map' },

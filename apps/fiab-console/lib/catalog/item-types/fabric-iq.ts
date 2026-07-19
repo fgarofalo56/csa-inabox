@@ -55,6 +55,17 @@ export const fabricIqItems: FabricItemType[] = [
       ],
       "docsUrl": "https://learn.microsoft.com/azure/data-explorer/"
     } },
+  { slug: 'notepad', displayName: 'Notepad', restType: 'Notepad', category: 'Loom IQ', preview: true,
+    description: 'Live-data document — narrative blocks with embedded KQL queries that run inline.',
+    learnContent: {
+      "overview": "A Notepad is an ordered document of heading, text, and KQL query blocks (preview). Query blocks run inline against Azure Data Explorer and render a live results grid next to your narrative — analysis and explanation in one document. No Microsoft Fabric required.",
+      "steps": [
+        { "title": "Add blocks", "body": "Compose heading, text, and KQL query blocks; reorder or remove them at any time." },
+        { "title": "Run query blocks", "body": "Each query block's Run executes the KQL against Azure Data Explorer and renders the live results grid inline." },
+        { "title": "Save", "body": "Save persists the document; results re-run on demand so the narrative always reflects live data." }
+      ],
+      "docsUrl": "https://learn.microsoft.com/azure/data-explorer/kusto/query/"
+    } },
   { slug: 'graph-model', displayName: 'Graph model', restType: 'GraphModel', category: 'Loom IQ', preview: true,
     description: 'Native graph storage + GQL queries for connected data.',
     learnContent: {
