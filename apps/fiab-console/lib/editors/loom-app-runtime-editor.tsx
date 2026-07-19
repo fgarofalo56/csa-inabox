@@ -99,6 +99,37 @@ export function LoomAppRuntimeEditor({ item, id }: EditorProps) {
   const [sourceMode, setSourceMode] = useState<SourceMode>('template');
   const [templateId, setTemplateId] = useState('streamlit');
   const [gitSource, setGitSource] = useState('');
+  // Private-git token (APP-W4 S3) — status only; the value never round-trips.
+  const [gitAuth, setGitAuth] = useState<{ configured: boolean; provider?: string; setAt?: string } | null>(null);
+  const [gitPat, setGitPat] = useState('');
+  const [gitPatBusy, setGitPatBusy] = useState(false);
+  const loadGitAuth = useCallback(async () => {
+    try {
+      const r = await clientFetch(`/api/items/loom-app-runtime/${encodeURIComponent(id)}/git-credential`);
+      const j = await r.json();
+      if (j.ok !== false) setGitAuth(j);
+    } catch { /* status stays unknown */ }
+  }, [id]);
+  const saveGitPat = useCallback(async () => {
+    setGitPatBusy(true); setBanner(null);
+    try {
+      const r = await clientFetch(`/api/items/loom-app-runtime/${encodeURIComponent(id)}/git-credential`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ pat: gitPat }),
+      });
+      const j = await r.json();
+      if (j.ok === false) setBanner({ intent: 'error', text: j.error || `HTTP ${r.status}` });
+      else { setGitPat(''); setBanner({ intent: 'success', text: 'Token stored in Key Vault — the next git build authenticates with it.' }); await loadGitAuth(); }
+    } catch (e: any) { setBanner({ intent: 'error', text: e?.message || String(e) }); }
+    finally { setGitPatBusy(false); }
+  }, [id, gitPat, loadGitAuth]);
+  const clearGitPat = useCallback(async () => {
+    setGitPatBusy(true);
+    try {
+      await clientFetch(`/api/items/loom-app-runtime/${encodeURIComponent(id)}/git-credential`, { method: 'DELETE' });
+      await loadGitAuth();
+    } catch { /* status refresh will show reality */ }
+    finally { setGitPatBusy(false); }
+  }, [id, loadGitAuth]);
   const [entryContent, setEntryContent] = useState('');
   const [manifestContent, setManifestContent] = useState('');
   const [port, setPort] = useState<number>(8501);
@@ -240,6 +271,7 @@ export function LoomAppRuntimeEditor({ item, id }: EditorProps) {
   useEffect(() => { loadConfig(); }, [loadConfig]);
   useEffect(() => { loadItem(); }, [loadItem]);
   useEffect(() => { loadResources(); }, [loadResources]);
+  useEffect(() => { if (!isNew) void loadGitAuth(); }, [loadGitAuth, isNew]);
   useEffect(() => () => { if (buildPoll.current) clearInterval(buildPoll.current); }, []);
 
   // Seed Monaco panes from the template starter (or persisted user edits) once
@@ -516,9 +548,22 @@ export function LoomAppRuntimeEditor({ item, id }: EditorProps) {
             </div>
 
             {sourceMode === 'git' ? (
-              <Field label="Public git repository URL" hint="Public https repo (github.com / dev.azure.com / gitlab.com / bitbucket.org). Optionally #branch:subdir. Must contain a Dockerfile. Private-repo auth is a tracked follow-up.">
-                <Input value={gitSource} onChange={(_, d) => setGitSource(d.value)} placeholder="https://github.com/org/repo#main:app" />
-              </Field>
+              <>
+                <Field label="Git repository URL" hint="https repo on github.com / dev.azure.com / gitlab.com / bitbucket.org. Optionally #branch:subdir. Must contain a Dockerfile. Private repos: store an access token below.">
+                  <Input value={gitSource} onChange={(_, d) => setGitSource(d.value)} placeholder="https://github.com/org/repo#main:app" />
+                </Field>
+                <Field label="Private-repo access token" hint={gitAuth?.configured
+                  ? `Token stored in Key Vault (${gitAuth.provider}, ${gitAuth.setAt ? new Date(gitAuth.setAt).toLocaleString() : ''}) — builds authenticate with it. Save a new value to rotate.`
+                  : 'Optional — for a private repository, paste a PAT (repo read scope). It is stored in Key Vault, never on the item, and used only at build time.'}>
+                  <div className={s.row}>
+                    <Input type="password" value={gitPat} onChange={(_, d) => setGitPat(d.value)} placeholder={gitAuth?.configured ? '••••••••  (stored)' : 'ghp_… / PAT'} style={{ minWidth: '280px' }} />
+                    <Button size="small" disabled={!gitPat.trim() || gitPatBusy} onClick={() => { void saveGitPat(); }}>{gitPatBusy ? 'Saving…' : 'Save token'}</Button>
+                    {gitAuth?.configured && (
+                      <Button size="small" appearance="subtle" disabled={gitPatBusy} onClick={() => { void clearGitPat(); }}>Remove</Button>
+                    )}
+                  </div>
+                </Field>
+              </>
             ) : currentTemplate ? (
               <>
                 <Caption1>{currentTemplate.description} — {currentTemplate.runtime === 'python' ? 'Python' : 'Node.js'}</Caption1>

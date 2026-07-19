@@ -89,6 +89,19 @@ export async function runApps(sub: string, args: ParsedArgs, opts: GlobalOptions
       printResult(out.deployed || out, output);
       return;
     }
+    case 'reconcile': {
+      // Redeploy-on-push (poll): check the git source for a new commit; with
+      // --build (or the app's autoRedeploy), rebuild from it.
+      const doBuild = flagBool(args.flags, 'build');
+      if (doBuild) {
+        const out = await client.request('POST', api('/reconcile'), { build: true });
+        printResult(out as object, output);
+      } else {
+        const out = await client.request('GET', api('/reconcile'));
+        printResult(out as object, output);
+      }
+      return;
+    }
     case 'logs': {
       const tail = flagStr(args.flags, 'tail') || '200';
       const out = await client.request<{ lines?: string[] }>('GET', api(`/logs?tail=${encodeURIComponent(tail)}`));

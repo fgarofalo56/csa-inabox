@@ -58,6 +58,8 @@ APPS (Loom App Runtime dev loop)
   loom apps status <itemId> --run <runId>
   loom apps deploy <itemId> [--image ref] [--min N --max N]
   loom apps logs <itemId> [--tail N]
+  loom apps reconcile <itemId> [--build]               Redeploy-on-push: check
+                                                       git for a new commit.
   loom apps start|stop <itemId>
   loom apps run-local <itemId> [--dir path] [--run]    Fetch the real build
                                                        context; docker run it.
