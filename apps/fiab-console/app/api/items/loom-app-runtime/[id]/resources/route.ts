@@ -28,6 +28,7 @@ import {
   attachAppResource,
   attachLakehouseItemResource,
   attachKqlItemResource,
+  attachOntologyItemResource,
   listAppResourceKinds,
   type AppResourceKind,
 } from '@/lib/apps/app-resources';
@@ -84,6 +85,14 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
       }
       ({ resource, envVars } = await attachLakehouseItemResource(
         itemId, access.item.workspaceId, (body.itemName || '').trim() || 'Lakehouse', who,
+      ));
+    } else if (itemId && kind === 'weave-ontology') {
+      // Per-item attach — a SPECIFIC workspace ontology (Weave-native apps).
+      if ((rt.resources || []).some((r) => r.id === `ont-item-${itemId.slice(0, 8)}`)) {
+        return apiError('That ontology is already attached.', 409, { code: 'conflict' });
+      }
+      ({ resource, envVars } = await attachOntologyItemResource(
+        itemId, access.item.workspaceId, (body.itemName || '').trim() || 'Ontology', who,
       ));
     } else if (itemId && kind === 'adx') {
       // Per-item attach — a SPECIFIC kql-database (database-scoped Viewer).

@@ -102,10 +102,18 @@ endpoint/secret env vars (the Databricks resource model, made one-click).
 - [ ] **APP-W1 — framework + config parity:** add missing frameworks (Shiny/Panel/React/
       Angular/Svelte/Next/Vite/any-Dockerfile) + full app.yaml-equiv manifest + lifecycle
       (stop/start/restart/rollback/scale). (~2)
-- [ ] **APP-W2 — Resources tab (the core):** the 13+ attachable resource types, one-click
-      grant + env injection, app-identity panel, runs-as (SP vs OBO). (~2)
-- [ ] **APP-W3 — Weave-native + Copilot authoring:** ontology-as-resource SDK, Copilot
-      "describe your app" scaffolder, visual↔code merge. (~2)
+- [x] **APP-W2 — Resources tab (the core):** SHIPPED + browser-E2E'd 2026-07-18/19
+      (PRs #2166-#2173, rev 0000327): 9 attachable kinds w/ one-click grant + env
+      injection; per-item lakehouse + KQL-database pickers (DB-scoped Viewer);
+      ARG-by-name cross-sub scopes; honest pending-grants scripts; bicep-synced
+      constrained RBAC-Admin (#2170). Warehouse per-item deliberately skipped
+      (items share the dedicated pool DB).
+- [ ] **APP-W3 — Weave-native + Copilot authoring:** slices A-C BUILT (PR #2175):
+      weave-ontology resource kind (AGE coordinates + honest PG grant + pg_roles
+      probe), Ontology Explorer template + loom_ontology SDK (+ auto
+      AZURE_CLIENT_ID injection), Copilot "describe your app" scaffolder
+      (/assist two-phase). REMAINING: browser E2E receipts (next roll) +
+      visual↔code merge (Workshop-class loom-app ↔ code runtime). (~2)
 - [ ] **APP-W4 — dev loop + CI/CD:** local-dev harness/CLI, private-git deploy,
       redeploy-on-push, app-bundle + CI template. (~1.5)
 - [ ] **APP-W5 — monitoring, embed, marketplace, publish-as-API/MCP, golden templates. (~2)

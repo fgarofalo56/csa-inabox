@@ -410,8 +410,237 @@ def invoke(req: InvokeRequest) -> dict[str, Any]:
   ],
 };
 
+const ONTOLOGY_EXPLORER: LoomAppTemplate = {
+  id: 'ontology-explorer',
+  label: 'Ontology Explorer (Weave)',
+  description: 'Streamlit app over a Weave ontology — query objects, traverse links, create instances via the zero-boilerplate loom_ontology SDK. Attach an ontology on the Resources tab.',
+  runtime: 'python',
+  defaultPort: 8501,
+  entryFile: 'app.py',
+  manifestFile: 'requirements.txt',
+  files: [
+    {
+      path: 'loom_ontology.py',
+      content: `"""
+loom_ontology — zero-boilerplate client for Weave ontologies attached as Loom
+App resources (APP-W3).
+
+When you attach an ontology on the app's Resources tab, Loom injects
+APP_ONT_<SLUG>_* env vars (PG host/db/graph, the app's PG login, the ontology
+id + object-type list) and prints the one-time PG grant for the app identity.
+This module turns those into ready-to-use query/create/traverse calls over the
+Apache AGE graph — the same store the Loom Console itself writes.
+
+    from loom_ontology import attached_ontologies
+    ont = next(iter(attached_ontologies().values()))
+    rows = ont.query_objects("Customer", limit=50)
+    ont.create_object("Customer", {"name": "Contoso"})
+    links = ont.traverse("Customer", "OWNS")
+"""
+import json
+import os
+import re
+
+PG_AAD_SCOPE = "https://ossrdbms-aad.database.windows.net/.default"
+_IDENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,62}$")
+
+
+def _safe(name: str) -> str:
+    """Last-line injection guard for labels flowing into cypher."""
+    if not _IDENT.match(name or ""):
+        raise ValueError(f"invalid ontology identifier: {name!r}")
+    return name
+
+
+def _cy_value(v):
+    """Encode a property value as a cypher literal (JSON escaping is a superset)."""
+    if v is None:
+        return "null"
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, (int, float)):
+        return str(v)
+    if isinstance(v, str):
+        return json.dumps(v)
+    raise ValueError("property values must be str, int, float, bool, or None")
+
+
+def _prop_map(props: dict) -> str:
+    entries = [(k, v) for k, v in (props or {}).items() if _IDENT.match(k)]
+    return "{" + ", ".join(f"{k}: {_cy_value(v)}" for k, v in entries) + "}"
+
+
+def _parse_agtype(cell: str):
+    """AGE returns vertices/edges as agtype text like '{...}::vertex' — strip + parse."""
+    if cell is None:
+        return None
+    text = str(cell)
+    for suffix in ("::vertex", "::edge", "::path"):
+        if text.endswith(suffix):
+            text = text[: -len(suffix)]
+            break
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        return text
+
+
+class Ontology:
+    """One attached ontology (or the deployment graph when attached graph-only)."""
+
+    def __init__(self, slug: str | None):
+        def p(s: str) -> str:
+            return os.environ.get(f"APP_ONT_{slug}_{s}", "") if slug else ""
+
+        self.slug = slug or "DEFAULT"
+        self.item_id = p("ID")
+        self.host = p("PG_HOST") or os.environ.get("LOOM_WEAVE_PG_FQDN", "")
+        self.database = p("PG_DB") or os.environ.get("LOOM_WEAVE_PG_DATABASE", "loom-weave")
+        self.graph = _safe(p("GRAPH") or os.environ.get("LOOM_WEAVE_GRAPH", "loom_ontology"))
+        self.user = p("PG_USER") or os.environ.get("LOOM_WEAVE_PG_USER", "")
+        self.object_types = [t for t in p("TYPES").split(",") if t]
+        self._conn = None
+
+    # -- connection -----------------------------------------------------------
+    def _connect(self):
+        if self._conn is not None and not self._conn.closed:
+            return self._conn
+        import psycopg
+        from azure.identity import DefaultAzureCredential
+
+        # AZURE_CLIENT_ID (the app UAMI) is injected by the Loom deploy, so
+        # DefaultAzureCredential resolves the app's own managed identity.
+        token = DefaultAzureCredential().get_token(PG_AAD_SCOPE).token
+        self._conn = psycopg.connect(
+            host=self.host, dbname=self.database, user=self.user,
+            password=token, sslmode="require", autocommit=True,
+        )
+        return self._conn
+
+    def cypher(self, statement: str, columns: tuple = ("v",)) -> list[list]:
+        """Run openCypher against the graph; returns parsed rows."""
+        conn = self._connect()
+        cols = ", ".join(f"{_safe(c)} agtype" for c in columns)
+        sql = (
+            'SET search_path = ag_catalog, "$user", public; '
+            f"SELECT * FROM ag_catalog.cypher('{self.graph}', $weave$ {statement} $weave$) AS ({cols});"
+        )
+        with conn.cursor() as cur:
+            cur.execute(sql)
+            rows = cur.fetchall() if cur.description else []
+        return [[_parse_agtype(c) for c in row] for row in rows]
+
+    # -- zero-boilerplate calls ----------------------------------------------
+    def query_objects(self, type_name: str, limit: int = 100) -> list[dict]:
+        t = _safe(type_name)
+        rows = self.cypher(f"MATCH (n:{t}) RETURN n LIMIT {int(limit)}")
+        return [r[0].get("properties", {}) | {"_id": r[0].get("id")} for r in rows if isinstance(r[0], dict)]
+
+    def create_object(self, type_name: str, props: dict) -> dict:
+        t = _safe(type_name)
+        rows = self.cypher(f"CREATE (n:{t} {_prop_map(props)}) RETURN n")
+        return rows[0][0] if rows else {}
+
+    def traverse(self, from_type: str, link_type: str, limit: int = 100) -> list[dict]:
+        """Follow a link type from objects of from_type; returns (from, to) pairs."""
+        f, l = _safe(from_type), _safe(link_type)
+        rows = self.cypher(
+            f"MATCH (a:{f})-[r:{l}]->(b) RETURN a, b LIMIT {int(limit)}", columns=("a", "b"),
+        )
+        out = []
+        for a, b in rows:
+            if isinstance(a, dict) and isinstance(b, dict):
+                out.append({"from": a.get("properties", {}), "to": b.get("properties", {}), "to_label": b.get("label")})
+        return out
+
+    def labels(self) -> list[str]:
+        """Discover labels actually present in the graph (fallback when _TYPES is absent)."""
+        rows = self.cypher("MATCH (n) RETURN DISTINCT label(n) LIMIT 100")
+        return sorted({r[0] for r in rows if isinstance(r[0], str)})
+
+
+def attached_ontologies() -> dict[str, Ontology]:
+    """Every ontology attached on the Resources tab, keyed by env slug."""
+    onts: dict[str, Ontology] = {}
+    for k in os.environ:
+        if k.startswith("APP_ONT_") and k.endswith("_PG_HOST"):
+            slug = k[len("APP_ONT_"):-len("_PG_HOST")]
+            onts[slug] = Ontology(slug)
+    if not onts and os.environ.get("LOOM_WEAVE_PG_FQDN"):
+        onts["DEFAULT"] = Ontology(None)
+    return onts
+`,
+    },
+    {
+      path: 'app.py',
+      content: `"""Ontology Explorer — a Weave-native Loom app (APP-W3 starter)."""
+import streamlit as st
+
+from loom_ontology import attached_ontologies
+
+st.set_page_config(page_title="Ontology Explorer", page_icon="🕸️", layout="wide")
+st.title("🕸️ Ontology Explorer")
+st.caption("Weave-native Loom app — objects, links, and actions over the AGE graph.")
+
+onts = attached_ontologies()
+if not onts:
+    st.warning(
+        "No ontology is attached. Open this app's Loom editor → Resources tab → "
+        "attach a Weave ontology, apply the one-time PG grant, then Deploy."
+    )
+    st.stop()
+
+slug = st.sidebar.selectbox("Ontology", sorted(onts))
+ont = onts[slug]
+st.sidebar.caption(f"graph '{ont.graph}' on {ont.host}")
+
+try:
+    types = ont.object_types or ont.labels()
+except Exception as e:  # connection / grant not applied yet — honest error
+    st.error(f"Could not reach the ontology graph: {e}")
+    st.info("If this is a fresh attach, ask an admin to run the PG grant script from the Resources tab.")
+    st.stop()
+
+if not types:
+    st.info("The graph has no object instances yet — create one below.")
+
+col_q, col_c = st.columns([3, 2])
+
+with col_q:
+    st.subheader("Objects")
+    t = st.selectbox("Object type", types) if types else st.text_input("Object type")
+    if t:
+        rows = ont.query_objects(t, limit=200)
+        st.dataframe(rows, use_container_width=True)
+        link = st.text_input("Traverse link type (e.g. OWNS)")
+        if link:
+            st.subheader(f"{t} —[{link}]→")
+            st.dataframe(ont.traverse(t, link), use_container_width=True)
+
+with col_c:
+    st.subheader("Create object")
+    ct = st.text_input("Type", value=t if types else "")
+    props_raw = st.text_area("Properties (one key=value per line)", "name=Example")
+    if st.button("Create", type="primary") and ct:
+        props = {}
+        for line in props_raw.splitlines():
+            if "=" in line:
+                k, v = line.split("=", 1)
+                props[k.strip()] = v.strip()
+        created = ont.create_object(ct, props)
+        st.success(f"Created {ct}: {created.get('properties', props)}")
+        st.rerun()
+`,
+    },
+    {
+      path: 'requirements.txt',
+      content: 'streamlit==1.39.0\nazure-identity==1.19.0\npsycopg[binary]==3.2.3\n',
+    },
+  ],
+};
+
 export const LOOM_APP_TEMPLATES: readonly LoomAppTemplate[] = [
-  STREAMLIT, DASH, GRADIO, FLASK, NODE_EXPRESS, AGENT_FASTAPI,
+  STREAMLIT, DASH, GRADIO, FLASK, NODE_EXPRESS, AGENT_FASTAPI, ONTOLOGY_EXPLORER,
 ];
 
 export function getLoomAppTemplate(id: string): LoomAppTemplate | undefined {
@@ -434,7 +663,7 @@ export function generateDockerfile(template: LoomAppTemplate, port: number): str
     // gunicorn for WSGI frameworks (Flask/Dash expose `server`/`app`); the
     // framework's own server for Streamlit/Gradio (they aren't WSGI apps).
     let cmd: string;
-    if (template.id === 'streamlit') {
+    if (template.id === 'streamlit' || template.id === 'ontology-explorer') {
       cmd = `CMD ["streamlit", "run", "app.py", "--server.port=${p}", "--server.address=0.0.0.0", "--server.headless=true"]`;
     } else if (template.id === 'flask') {
       cmd = `CMD ["gunicorn", "--bind", "0.0.0.0:${p}", "app:app"]`;
