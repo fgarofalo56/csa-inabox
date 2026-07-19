@@ -13,7 +13,7 @@
  */
 import { NextRequest } from 'next/server';
 import { getSession } from '@/lib/auth/session';
-import { apiOk, apiError, apiUnauthorized } from '@/lib/api/respond';
+import { apiOk, apiError, apiUnauthorized, apiServerError } from '@/lib/api/respond';
 import { resolveItemAccessByOid } from '@/lib/auth/item-access';
 import { readAppRuntime, saveAppRuntime, LOOM_APP_RUNTIME_TYPE } from '@/lib/apps/runtime-store';
 import { importApiFromOpenApi, apimConfigGate, ApimError } from '@/lib/azure/apim-client';
@@ -92,6 +92,6 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
       return apiError(`APIM publish failed: ${e instanceof Error ? e.message : String(e)}`, status, { code: 'publish_failed' });
     }
   } catch (e) {
-    return apiError(e instanceof Error ? e.message : String(e), 500);
+    return apiServerError(e, 'failed to publish the app API');
   }
 }
