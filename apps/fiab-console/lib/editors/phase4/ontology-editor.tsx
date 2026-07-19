@@ -1314,8 +1314,8 @@ function OntologyTypedModelPanel({
   const removeLt = (i: number) => commit({ linkTypes: linkTypes.filter((_, idx) => idx !== i) });
 
   // ───────────────────────── Action-type dialog ─────────────────────────
-  interface AtDraft { index: number | null; name: string; objectType: string; kind: OntoActionType['kind']; description: string; parameters: OntoActionParam[]; requiresJustification: boolean; submissionCriteria: OntoActionCriterion[]; }
-  const blankAt = (): AtDraft => ({ index: null, name: '', objectType: objNames[0] || '', kind: 'create', description: '', parameters: [], requiresJustification: false, submissionCriteria: [] });
+  interface AtDraft { index: number | null; name: string; objectType: string; kind: OntoActionType['kind']; description: string; parameters: OntoActionParam[]; requiresJustification: boolean; submissionCriteria: OntoActionCriterion[]; emitLineage: boolean; }
+  const blankAt = (): AtDraft => ({ index: null, name: '', objectType: objNames[0] || '', kind: 'create', description: '', parameters: [], requiresJustification: false, submissionCriteria: [], emitLineage: false });
   const [atOpen, setAtOpen] = useState(false);
   const [at, setAt] = useState<AtDraft>(blankAt);
   const [atErr, setAtErr] = useState<string | null>(null);
@@ -1323,7 +1323,7 @@ function OntologyTypedModelPanel({
   const openNewAt = () => { setAt(blankAt()); setAtErr(null); setAtOpen(true); };
   const openEditAt = (i: number) => {
     const a = actionTypes[i];
-    setAt({ index: i, name: a.name, objectType: a.objectType, kind: a.kind, description: a.description || '', parameters: a.parameters.map((p) => ({ ...p })), requiresJustification: !!a.requiresJustification, submissionCriteria: (a.submissionCriteria || []).map((c) => ({ ...c })) });
+    setAt({ index: i, name: a.name, objectType: a.objectType, kind: a.kind, description: a.description || '', parameters: a.parameters.map((p) => ({ ...p })), requiresJustification: !!a.requiresJustification, submissionCriteria: (a.submissionCriteria || []).map((c) => ({ ...c })), emitLineage: !!a.emitLineage });
     setAtErr(null); setAtOpen(true);
   };
   const saveAt = () => {
@@ -1351,7 +1351,7 @@ function OntologyTypedModelPanel({
       if (ONTO_CRITERION_OPS_WITH_VALUE.includes(c.op) && !String(c.value ?? '').trim()) { setAtErr(`Criterion "${parameter} ${ONTO_CRITERION_OP_LABELS[c.op]}" needs a value.`); return; }
       submissionCriteria.push({ parameter, op: c.op, ...(c.value?.trim() ? { value: c.value.trim() } : {}), ...(c.message?.trim() ? { message: c.message.trim() } : {}) });
     }
-    const next: OntoActionType = { name, objectType: at.objectType, kind: at.kind, ...(at.description.trim() ? { description: at.description.trim() } : {}), parameters, ...(at.requiresJustification ? { requiresJustification: true } : {}), ...(submissionCriteria.length ? { submissionCriteria } : {}) };
+    const next: OntoActionType = { name, objectType: at.objectType, kind: at.kind, ...(at.description.trim() ? { description: at.description.trim() } : {}), parameters, ...(at.requiresJustification ? { requiresJustification: true } : {}), ...(submissionCriteria.length ? { submissionCriteria } : {}), ...(at.emitLineage ? { emitLineage: true } : {}) };
     const arr2 = [...actionTypes];
     if (at.index === null) arr2.push(next); else arr2[at.index] = next;
     commit({ actionTypes: arr2 });
@@ -1990,6 +1990,9 @@ function OntologyTypedModelPanel({
                 </div>
                 <Field label="Require justification" hint="Checkpoint — the operator must enter a written reason before this action runs; the reason is recorded to the tamper-evident audit chain.">
                   <Switch checked={at.requiresJustification} onChange={(_, d) => patchAt({ requiresJustification: d.checked })} label={at.requiresJustification ? 'Reason required at run time' : 'No justification required'} />
+                </Field>
+                <Field label="Emit lineage on run" hint="Side effect — a successful run records a Thread lineage edge (ontology → object), which also flows to Microsoft Purview lineage when configured.">
+                  <Switch checked={at.emitLineage} onChange={(_, d) => patchAt({ emitLineage: d.checked })} label={at.emitLineage ? 'Records lineage on success' : 'No lineage side-effect'} />
                 </Field>
                 {atErr && <MessageBar intent="error"><MessageBarBody>{atErr}</MessageBarBody></MessageBar>}
               </div>

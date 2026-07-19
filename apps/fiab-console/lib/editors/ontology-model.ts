@@ -262,6 +262,12 @@ export interface OntoActionType {
    * before the write-back. Empty/absent = no extra validation.
    */
   submissionCriteria?: OntoActionCriterion[];
+  /**
+   * Foundry action "side effect" — when true, a successful run records a Thread
+   * lineage edge (ontology → the acted-on object type) which also flows to
+   * Microsoft Purview lineage when configured. Off by default (opt-in).
+   */
+  emitLineage?: boolean;
 }
 
 // ============================================================
@@ -477,6 +483,7 @@ export function normalizeOntoActionType(raw: unknown): OntoActionType | null {
     parameters,
     ...(r.requiresJustification === true ? { requiresJustification: true } : {}),
     ...(submissionCriteria.length ? { submissionCriteria } : {}),
+    ...(r.emitLineage === true ? { emitLineage: true } : {}),
   };
 }
 

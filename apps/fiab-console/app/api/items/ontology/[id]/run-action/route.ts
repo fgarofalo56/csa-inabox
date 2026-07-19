@@ -27,6 +27,7 @@ import { objectTypeNames, normalizeOntoActionTypes, validateActionRun, evaluateS
 import { weaveGate, runActionType, type WeaveActionType } from '@/lib/azure/weave-ontology-store';
 import { PostgresError } from '@/lib/azure/postgres-flex-client';
 import { recordActionJustification, isValidReason, MIN_JUSTIFICATION_LEN } from '@/lib/azure/action-justification-store';
+import { recordThreadEdge } from '@/lib/thread/thread-edges';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -129,7 +130,21 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
         justificationId = rec.id;
       } catch { /* audit best-effort — never fail the run on a record miss */ }
     }
-    return NextResponse.json({ ...result, ...(justificationId ? { justificationId } : {}) });
+    // Side effect (Foundry-parity row 2.4): emit a Thread lineage edge (which
+    // also flows to Purview when configured). Best-effort — never fails the run.
+    let lineageEmitted = false;
+    if (action.emitLineage) {
+      try {
+        const objId = result.object?.id != null ? String(result.object.id) : (targetId || action.objectType);
+        await recordThreadEdge(s, {
+          fromItemId: id, fromType: 'ontology', fromName: onto.displayName,
+          toItemId: `${action.objectType}:${objId}`, toType: 'ontology-object', toName: action.objectType,
+          action: `action:${action.name}`,
+        });
+        lineageEmitted = true;
+      } catch { /* lineage is best-effort */ }
+    }
+    return NextResponse.json({ ...result, ...(justificationId ? { justificationId } : {}), ...(lineageEmitted ? { lineageEmitted } : {}) });
   } catch (e: unknown) {
     const status = e instanceof PostgresError ? e.status : 502;
     const msg = e instanceof Error ? e.message : String(e);
