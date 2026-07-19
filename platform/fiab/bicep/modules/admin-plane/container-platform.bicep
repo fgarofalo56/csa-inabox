@@ -32,6 +32,9 @@ param consolePrincipalId string = ''
 @description('When true, skip all role grants (e.g. re-deploy where RBAC already exists or the deployer lacks User Access Administrator).')
 param skipRoleGrants bool = false
 
+@description('Private DNS zone for the internal CAE default domain (privatelink.<location>.azurecontainerapps.<suffix>, created by network.bicep). When set, A records for the env label + wildcard are created pointing at the CAE static IP so IN-VNET clients resolve every hosted app. Without them the zone ships EMPTY and authoritatively shadows public DNS — every *.azurecontainerapps FQDN is ENOTFOUND in-VNet (live incident 2026-07-19: hosted Loom-app probes failed until the records were added by hand). Empty = skip.')
+param acaPrivatelinkZoneName string = ''
+
 // =====================================================================
 // Container Apps Environment (Commercial / GCC)
 // =====================================================================
@@ -169,6 +172,25 @@ resource consoleAksAdmin 'Microsoft.Authorization/roleAssignments@2022-04-01' = 
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '0ab0b1a8-8aac-4efd-b8c2-3ee1fb270be8')
     principalId: consolePrincipalId
     principalType: 'ServicePrincipal'
+  }
+}
+
+// =====================================================================
+// In-VNet DNS for the internal CAE — env-label + wildcard A records in the
+// privatelink zone. Every hosted app's public FQDN CNAMEs to
+// <envLabel>.privatelink.<location>.azurecontainerapps.<suffix>; the linked
+// zone answers authoritatively, so with no record the whole default domain is
+// dead in-VNet (empty-zone-shadows-public-DNS class).
+// =====================================================================
+
+// Child module: the record names derive from the CAE's RUNTIME defaultDomain,
+// which BCP120 forbids on a resource name in this scope.
+module caeDnsRecords 'cae-dns-records.bicep' = if (containerPlatform == 'containerApps' && !empty(acaPrivatelinkZoneName)) {
+  name: 'cae-dns-records'
+  params: {
+    zoneName: acaPrivatelinkZoneName
+    defaultDomain: cae!.properties.defaultDomain
+    staticIp: cae!.properties.staticIp
   }
 }
 

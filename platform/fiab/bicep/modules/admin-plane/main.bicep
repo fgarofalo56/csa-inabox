@@ -1851,6 +1851,9 @@ module containerPlatformModule 'container-platform.bicep' = {
     // hold "Azure Kubernetes Service Cluster Admin" on the cluster (AKS path).
     consolePrincipalId: identity.outputs.uamiConsolePrincipalId
     skipRoleGrants: skipRoleGrants
+    // In-VNet DNS for the internal CAE (hosted Loom apps) — the zone is
+    // created by network.bicep; the records must point at the CAE static IP.
+    acaPrivatelinkZoneName: 'privatelink.${location}.azurecontainerapps.${(boundary == 'GCC-High' || boundary == 'IL5') ? 'us' : 'io'}'
   }
 }
 
