@@ -44,6 +44,17 @@ export const fabricIqItems: FabricItemType[] = [
       ],
       "docsUrl": "https://learn.microsoft.com/azure/data-explorer/kusto/query/"
     } },
+  { slug: 'fusion-sheet', displayName: 'Fusion sheet', restType: 'FusionSheet', category: 'Loom IQ', preview: true,
+    description: 'Spreadsheet with live formulas — SUM/AVG/IF over A1 cells and ranges.',
+    learnContent: {
+      "overview": "A Fusion sheet is an A1-addressed spreadsheet whose cells hold literals or =formulas (preview). Formulas support arithmetic, comparisons, cell refs, A1:B3 ranges, and SUM/AVG/MIN/MAX/COUNT/IF/ROUND/ABS/CONCAT — evaluated live with cycle detection and Excel-style errors. No Microsoft Fabric required.",
+      "steps": [
+        { "title": "Enter values", "body": "Click a cell and type a number or text; Enter commits." },
+        { "title": "Write formulas", "body": "Start with = — reference cells (A1), ranges (A1:B3), and functions like =SUM(A1:A10) or =IF(B1>0, \"yes\", \"no\")." },
+        { "title": "Save", "body": "Save persists the sheet; formulas re-evaluate live on every edit, with #CYCLE!/#DIV/0! style errors surfaced inline." }
+      ],
+      "docsUrl": "https://learn.microsoft.com/azure/data-explorer/"
+    } },
   { slug: 'graph-model', displayName: 'Graph model', restType: 'GraphModel', category: 'Loom IQ', preview: true,
     description: 'Native graph storage + GQL queries for connected data.',
     learnContent: {
