@@ -64,6 +64,7 @@ APPS (Loom App Runtime dev loop)
   loom apps run-local <itemId> [--dir path] [--run]    Fetch the real build
                                                        context; docker run it.
   loom apps export <itemId> [--out app.loomapp]        Portable app bundle.
+  loom apps import <bundle.loomapp> --workspace <wsId> [--name n]  Install an app.
   loom apps ci-template <itemId> [--out file.yml]      GitHub Actions workflow.
 
 FIND
