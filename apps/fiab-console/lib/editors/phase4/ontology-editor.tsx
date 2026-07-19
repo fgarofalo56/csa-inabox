@@ -491,6 +491,22 @@ function WeaveInstancePanel({
   }, [id]);
   useEffect(() => { if (anyGatedAction) void loadJustifications(); }, [anyGatedAction, loadJustifications]);
 
+  // Retention / export controls (Foundry-parity row 6.10) over the audit chain.
+  const [retentionDays, setRetentionDays] = useState('365');
+  const [reapMsg, setReapMsg] = useState<string | null>(null);
+  const auditExportHref = useCallback((fmt: 'csv' | 'json') => `/api/items/ontology/${encodeURIComponent(id)}/audit-export?format=${fmt}`, [id]);
+  const reapAudit = useCallback(async () => {
+    const days = Math.max(1, Math.floor(Number(retentionDays) || 0));
+    if (!days) { setReapMsg('Enter a positive retention window (days).'); return; }
+    setReapMsg('Applying…');
+    try {
+      const r = await clientFetch(`/api/items/ontology/${encodeURIComponent(id)}/audit-export`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ olderThanDays: days }) });
+      const j = await r.json().catch(() => ({}));
+      setReapMsg(j?.ok ? `Reaped ${j.reaped} record(s) older than ${days} days.` : (j?.error || 'Retention sweep failed.'));
+      void loadJustifications();
+    } catch (e: any) { setReapMsg(e?.message || 'Retention sweep failed.'); }
+  }, [id, retentionDays, loadJustifications]);
+
   // Approvals review (Foundry-parity row 4.6) — pending/decided requests for
   // approval-gated actions, with approve/reject.
   interface ApprovalRow { id: string; action: string; objectType: string; actionKind: string; status: 'pending' | 'approved' | 'rejected'; paramsPreview?: string; requesterName?: string; decidedByName?: string; note?: string; at: string }
@@ -1000,7 +1016,16 @@ function WeaveInstancePanel({
               <Body1><strong>Checkpoints</strong></Body1>
               <Caption1 className={s.ontoSectionHint}>Justifications recorded for gated actions</Caption1>
               <span className={s.ontoBindRowSpacer} />
+              <Button size="small" as="a" href={auditExportHref('csv')} download icon={<ArrowDownload16Regular />}>Export CSV</Button>
+              <Button size="small" as="a" href={auditExportHref('json')} download>JSON</Button>
               <Button size="small" appearance="subtle" icon={justLoading ? <Spinner size="tiny" /> : <ArrowClockwise20Regular />} onClick={() => void loadJustifications()} disabled={justLoading}>Refresh</Button>
+            </div>
+            <div className={s.tmCardMeta}>
+              <Caption1>Retention — delete audit records older than</Caption1>
+              <Input type="number" value={retentionDays} onChange={(_, d) => setRetentionDays(d.value)} className={s.retentionInput} />
+              <Caption1>days</Caption1>
+              <Button size="small" onClick={reapAudit}>Apply retention</Button>
+              {reapMsg && <Caption1 className={s.ontoSectionHint}>{reapMsg}</Caption1>}
             </div>
             {justifications.length === 0 ? (
               <Caption1>{justLoading ? 'Loading…' : 'No justification-gated actions have run yet.'}</Caption1>
