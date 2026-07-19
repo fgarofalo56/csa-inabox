@@ -40,7 +40,14 @@ export async function GET(req: NextRequest, props: { params: Promise<{ id: strin
 
     const timespan = (req.nextUrl.searchParams.get('window') || 'PT6H').trim();
 
-    // Metrics + cost degrade independently — one failing never blanks the other.
+    // Metrics + cost degrade independently. Cost is a cross-subscription Cost
+    // Management scan that can exceed the client's 20s budget and blank the whole
+    // tab (live receipt 2026-07-19) — so it gets its OWN short internal deadline;
+    // when it's slow the tab still renders metrics + an honest "open full
+    // Monitor" cost note instead of a whole-request timeout.
+    const withDeadline = <T>(p: Promise<T>, ms: number, onTimeout: T): Promise<T> =>
+      Promise.race([p, new Promise<T>((res) => setTimeout(() => res(onTimeout), ms))]);
+
     const [metrics, cost] = await Promise.all([
       (async () => {
         try {
@@ -50,17 +57,23 @@ export async function GET(req: NextRequest, props: { params: Promise<{ id: strin
           return { error: e?.message || String(e) };
         }
       })(),
-      (async () => {
-        try {
-          const { getLoomCostSummary } = await import('@/lib/azure/cost-client');
-          const summary = await getLoomCostSummary({ timeframe: 'MonthToDate' });
-          const tail = rt.containerAppName || '';
-          const row = (summary.byResource || []).find((r) => r.key === tail || (tail && r.key.endsWith(tail)));
-          return row ? { amount: row.cost, currency: summary.currency, timeframe: 'MonthToDate' } : { amount: 0, currency: summary.currency, timeframe: 'MonthToDate', note: 'No cost recorded yet (autoscale-to-zero apps rest at ~$0).' };
-        } catch (e: any) {
-          return { error: e?.message || String(e) };
-        }
-      })(),
+      withDeadline(
+        (async () => {
+          try {
+            const { getLoomCostSummary } = await import('@/lib/azure/cost-client');
+            const summary = await getLoomCostSummary({ timeframe: 'MonthToDate' });
+            const tail = rt.containerAppName || '';
+            const row = (summary.byResource || []).find((r) => r.key === tail || (tail && r.key.endsWith(tail)));
+            return row
+              ? { amount: row.cost, currency: summary.currency, timeframe: 'MonthToDate' }
+              : { amount: 0, currency: summary.currency, timeframe: 'MonthToDate', note: 'No cost recorded yet (autoscale-to-zero apps rest at ~$0).' };
+          } catch (e: any) {
+            return { error: e?.message || String(e) };
+          }
+        })(),
+        12_000,
+        { error: 'Cost query is taking a while (cross-subscription scan) — see it in the full Monitor → Cost tab.' } as Record<string, unknown>,
+      ),
     ]);
 
     return apiOk({ resourceId, containerAppName: rt.containerAppName, url: rt.url, metrics, cost });

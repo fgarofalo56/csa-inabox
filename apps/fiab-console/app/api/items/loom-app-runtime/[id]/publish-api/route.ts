@@ -36,7 +36,15 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
     if (!access) return apiError('Item not found', 404, { code: 'not_found' });
     if (!access.canWrite) return apiError('Read-only access', 403, { code: 'forbidden' });
     const rt = readAppRuntime(access.item);
-    const serviceUrl = (rt.url || '').trim();
+    // Prefer the persisted URL; fall back to the LIVE container app's URL when
+    // state is stale (deployed but rt.url not persisted — live receipt
+    // 2026-07-19: the Overview showed the URL from the ACA fetch while rt.url
+    // was empty, so publish wrongly reported "not deployed").
+    let serviceUrl = (rt.url || '').trim();
+    if (!serviceUrl && rt.containerAppName) {
+      try { const { getApp } = await import('@/lib/azure/loom-apps-client'); serviceUrl = (await getApp(rt.containerAppName)).url || ''; }
+      catch { /* fall through to the honest gate below */ }
+    }
     if (!serviceUrl) return apiError('The app is not deployed yet — Deploy it, then publish its API.', 409, { code: 'not_deployed' });
 
     const gate = apimConfigGate();
