@@ -136,6 +136,21 @@ export async function runApps(sub: string, args: ParsedArgs, opts: GlobalOptions
       }
       return;
     }
+    case 'import': {
+      // loom apps import <bundle.loomapp> --workspace <wsId> [--name <n>]
+      const file = args.positionals[0];
+      const workspaceId = flagStr(args.flags, 'workspace');
+      if (!file || !workspaceId) throw new CliError('Usage: loom apps import <bundle.loomapp> --workspace <workspaceId> [--name <name>]');
+      const { readFileSync } = await import('node:fs');
+      let bundle: unknown;
+      try { bundle = JSON.parse(readFileSync(resolve(file), 'utf-8')); }
+      catch (e: any) { throw new CliError(`Could not read/parse ${file}: ${e?.message || e}`); }
+      const out = await client.request('POST', '/api/items/loom-app-runtime/import', {
+        workspaceId, bundle, ...(flagStr(args.flags, 'name') ? { name: flagStr(args.flags, 'name') } : {}),
+      });
+      printResult(out as object, output);
+      return;
+    }
     case 'export': {
       const out = flagStr(args.flags, 'out') || `${id.slice(0, 8)}.loomapp`;
       const bundle = await client.request<Record<string, unknown>>('GET', api('/export'));
@@ -150,7 +165,7 @@ export async function runApps(sub: string, args: ParsedArgs, opts: GlobalOptions
       return;
     }
     default:
-      throw new CliError(`Unknown apps subcommand "${sub}". Use: build | status | deploy | logs | start | stop | run-local | export | ci-template`);
+      throw new CliError(`Unknown apps subcommand "${sub}". Use: build | status | deploy | logs | start | stop | run-local | export | import | ci-template | reconcile`);
   }
 }
 
