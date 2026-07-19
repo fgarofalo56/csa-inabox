@@ -201,6 +201,7 @@ const REGISTRY: Record<string, Entry> = {
 
   // ── Loom IQ ────────────────────────────────────────────────────
   'ontology':           { icon: TextBulletListTree24Regular, family: 'fabric-iq', label: 'Ontology' },
+  'analysis-board':     { icon: BoardSplit24Regular,          family: 'fabric-iq', label: 'Analysis Board' },
   'graph-model':        { icon: Diversity24Regular,           family: 'fabric-iq', label: 'Graph Model' },
   'plan':               { icon: ClipboardTaskListLtr24Regular, family: 'fabric-iq', label: 'Plan' },
   'map':                { icon: Map24Regular,                 family: 'fabric-iq', label: 'Map' },

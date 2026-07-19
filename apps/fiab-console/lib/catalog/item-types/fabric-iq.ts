@@ -33,6 +33,17 @@ export const fabricIqItems: FabricItemType[] = [
       ],
       "docsUrl": "https://learn.microsoft.com/fabric/fundamentals/fabric-iq"
     } },
+  { slug: 'analysis-board', displayName: 'Analysis board', restType: 'AnalysisBoard', category: 'Loom IQ', preview: true,
+    description: 'Point-and-click transform pipeline over Azure Data Explorer — Contour-class analysis.',
+    learnContent: {
+      "overview": "An Analysis board is an ordered list of typed transform steps (filter, select, derive, aggregate, sort, limit, distinct) over an ADX table or base query (preview). Each step compiles to a real KQL operator; Run executes the compiled query against Azure Data Explorer and shows a live results grid. No Microsoft Fabric required.",
+      "steps": [
+        { "title": "Pick a source", "body": "Choose an ADX table, or paste a base KQL query the steps will append onto." },
+        { "title": "Add transform steps", "body": "Compose filter / select / derive / aggregate / sort / limit / distinct steps — reorder or remove them at any time; the compiled KQL preview updates live." },
+        { "title": "Run", "body": "Run executes the compiled KQL against Azure Data Explorer and renders the results grid with row count + execution time." }
+      ],
+      "docsUrl": "https://learn.microsoft.com/azure/data-explorer/kusto/query/"
+    } },
   { slug: 'graph-model', displayName: 'Graph model', restType: 'GraphModel', category: 'Loom IQ', preview: true,
     description: 'Native graph storage + GQL queries for connected data.',
     learnContent: {
