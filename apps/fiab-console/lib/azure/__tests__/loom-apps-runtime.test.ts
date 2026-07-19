@@ -15,7 +15,8 @@ import {
 describe('template catalog', () => {
   it('ships the documented runtimes with unique ids + valid ports', () => {
     const ids = LOOM_APP_TEMPLATES.map((t) => t.id);
-    expect(ids).toEqual(['streamlit', 'dash', 'gradio', 'flask', 'node-express', 'agent-fastapi', 'ontology-explorer']);
+    expect(ids).toEqual(['streamlit', 'dash', 'gradio', 'flask', 'node-express', 'agent-fastapi', 'ontology-explorer',
+      'rag-chat', 'ops-console', 'geospatial', 'ml-scoring', 'approval-app']);
     expect(new Set(ids).size).toBe(ids.length);
     for (const t of LOOM_APP_TEMPLATES) {
       expect(t.defaultPort).toBeGreaterThan(0);
@@ -63,6 +64,19 @@ describe('generateDockerfile', () => {
     expect(df).toContain('app:app');
     expect(df).toContain('--port');
   });
+  it('serves every streamlit golden template with the streamlit CMD', () => {
+    for (const tid of ['rag-chat', 'ops-console', 'geospatial', 'approval-app']) {
+      const df = generateDockerfile(getLoomAppTemplate(tid)!, 8501);
+      expect(df).toContain('streamlit');
+      expect(df).toContain('--server.port=8501');
+    }
+  });
+  it('ships the approval-app with the loom_ontology SDK module', () => {
+    const t = getLoomAppTemplate('approval-app')!;
+    expect(t.files.some((f) => f.path === 'loom_ontology.py')).toBe(true);
+    expect(t.files.find((f) => f.path === 'loom_ontology.py')!.content).toContain('attached_ontologies');
+  });
+
   it('serves the ontology-explorer with streamlit and ships the SDK module', () => {
     const t = getLoomAppTemplate('ontology-explorer')!;
     const df = generateDockerfile(t, 8501);

@@ -639,8 +639,337 @@ with col_c:
   ],
 };
 
+// ---------------------------------------------------------------------------
+// Golden templates (APP-W5) — starter apps for the common Loom-app shapes.
+// Each reads the REAL env a Resource attach injects (APP_*/LOOM_*), so it works
+// the moment the matching resource is attached and honestly explains the gap
+// when it isn't. No new backend — the backends are the W2/W3 resource kinds.
+// ---------------------------------------------------------------------------
+
+const RAG_CHAT: LoomAppTemplate = {
+  id: 'rag-chat',
+  label: 'Chat over your data (RAG)',
+  description: 'Streamlit chat grounded on Azure AI Search + Azure OpenAI — attach the AI Search and Azure OpenAI resources.',
+  runtime: 'python',
+  defaultPort: 8501,
+  entryFile: 'app.py',
+  manifestFile: 'requirements.txt',
+  files: [
+    {
+      path: 'app.py',
+      content: `"""Chat-over-your-data (RAG) — grounded on Azure AI Search + Azure OpenAI.
+
+Attach an 'AI Search' resource and an 'Azure OpenAI' resource on the app's
+Resources tab; Loom injects LOOM_AI_SEARCH_SERVICE + LOOM_AOAI_ENDPOINT/
+LOOM_AOAI_DEPLOYMENT and grants this app's identity read access. The app
+retrieves top-k passages from your index and answers with the model.
+"""
+import os
+import streamlit as st
+
+SEARCH = os.environ.get("LOOM_AI_SEARCH_SERVICE", "")
+INDEX = os.environ.get("LOOM_AI_SEARCH_INDEX", "default")
+AOAI = os.environ.get("LOOM_AOAI_ENDPOINT", "").rstrip("/")
+DEPLOY = os.environ.get("LOOM_AOAI_DEPLOYMENT", "gpt-4o")
+API_VERSION = os.environ.get("AZURE_OPENAI_API_VERSION", "2024-10-21")
+
+st.set_page_config(page_title="Chat over your data", page_icon="💬", layout="wide")
+st.title("💬 Chat over your data")
+
+if not SEARCH or not AOAI:
+    st.warning(
+        "Attach an **AI Search** resource and an **Azure OpenAI** resource on this "
+        "app's Resources tab, then Deploy. (Missing: "
+        + ", ".join(x for x, v in [("LOOM_AI_SEARCH_SERVICE", SEARCH), ("LOOM_AOAI_ENDPOINT", AOAI)] if not v)
+        + ")"
+    )
+    st.stop()
+
+
+def _cred():
+    from azure.identity import DefaultAzureCredential
+    return DefaultAzureCredential()  # the app UAMI (AZURE_CLIENT_ID injected by Loom)
+
+
+def retrieve(query: str, k: int = 4):
+    from azure.search.documents import SearchClient
+    from azure.core.credentials import AzureKeyCredential  # noqa: F401 (AAD below)
+    client = SearchClient(f"https://{SEARCH}.search.windows.net", INDEX, _cred())
+    hits = client.search(search_text=query, top=k)
+    return [d.get("content") or d.get("text") or str(d) for d in hits]
+
+
+def answer(query: str, passages: list[str]) -> str:
+    from openai import AzureOpenAI
+    from azure.identity import get_bearer_token_provider
+    tp = get_bearer_token_provider(_cred(), "https://cognitiveservices.azure.com/.default")
+    client = AzureOpenAI(azure_endpoint=AOAI, azure_ad_token_provider=tp, api_version=API_VERSION)
+    context = "\\n\\n".join(f"[{i+1}] {p}" for i, p in enumerate(passages))
+    resp = client.chat.completions.create(
+        model=DEPLOY,
+        messages=[
+            {"role": "system", "content": "Answer only from the context. Cite [n]. If unknown, say so."},
+            {"role": "user", "content": f"Context:\\n{context}\\n\\nQuestion: {query}"},
+        ],
+    )
+    return resp.choices[0].message.content or ""
+
+
+q = st.chat_input("Ask a question about your indexed data…")
+if q:
+    st.chat_message("user").write(q)
+    with st.chat_message("assistant"):
+        with st.spinner("Retrieving + answering…"):
+            passages = retrieve(q)
+            st.write(answer(q, passages))
+            with st.expander("Sources"):
+                for i, p in enumerate(passages):
+                    st.caption(f"[{i+1}] {p[:400]}")
+`,
+    },
+    { path: 'requirements.txt', content: 'streamlit==1.39.0\nazure-identity==1.19.0\nazure-search-documents==11.5.2\nopenai==1.57.0\n' },
+  ],
+};
+
+const OPS_CONSOLE: LoomAppTemplate = {
+  id: 'ops-console',
+  label: 'Ops console (ADX/lakehouse)',
+  description: 'Streamlit operational console — live KPIs + a query grid over an attached Eventhouse (ADX) or lakehouse.',
+  runtime: 'python',
+  defaultPort: 8501,
+  entryFile: 'app.py',
+  manifestFile: 'requirements.txt',
+  files: [
+    {
+      path: 'app.py',
+      content: `"""Ops console — live KPIs over an attached Eventhouse (ADX).
+
+Attach an 'Eventhouse (Azure Data Explorer)' resource (or a specific KQL
+database); Loom injects APP_KQL_<SLUG>_CLUSTER_URI + _DB and grants the app's
+identity Viewer. Edit KQL below for your tables.
+"""
+import os
+import streamlit as st
+
+# First attached KQL database (APP_KQL_<SLUG>_CLUSTER_URI / _DB).
+def _kql_env():
+    uri = db = None
+    for k, v in os.environ.items():
+        if k.startswith("APP_KQL_") and k.endswith("_CLUSTER_URI"):
+            uri = v
+            db = os.environ.get(k[:-len("_CLUSTER_URI")] + "_DB", "")
+            break
+    return uri or os.environ.get("LOOM_ADX_CLUSTER_URI", ""), db or os.environ.get("LOOM_ADX_DEFAULT_DB", "")
+
+CLUSTER, DB = _kql_env()
+st.set_page_config(page_title="Ops console", page_icon="🛠️", layout="wide")
+st.title("🛠️ Ops console")
+
+if not CLUSTER:
+    st.warning("Attach an **Eventhouse (Azure Data Explorer)** resource on the Resources tab, then Deploy.")
+    st.stop()
+st.caption(f"cluster {CLUSTER} · db {DB}")
+
+
+def run_kql(query: str):
+    from azure.kusto.data import KustoClient, KustoConnectionStringBuilder
+    from azure.identity import DefaultAzureCredential
+    cred = DefaultAzureCredential()
+    kcsb = KustoConnectionStringBuilder.with_azure_token_credential(CLUSTER, cred)
+    with KustoClient(kcsb) as client:
+        rs = client.execute(DB, query)
+        t = rs.primary_results[0]
+        cols = [c.column_name for c in t.columns]
+        return [dict(zip(cols, row)) for row in t.rows]
+
+
+default_kql = st.text_area("KQL", ".show tables | project TableName", height=90)
+if st.button("Run", type="primary") and default_kql.strip():
+    try:
+        st.dataframe(run_kql(default_kql), use_container_width=True)
+    except Exception as e:  # honest error
+        st.error(f"Query failed: {e}")
+`,
+    },
+    { path: 'requirements.txt', content: 'streamlit==1.39.0\nazure-identity==1.19.0\nazure-kusto-data==4.6.1\n' },
+  ],
+};
+
+const GEOSPATIAL: LoomAppTemplate = {
+  id: 'geospatial',
+  label: 'Geospatial map',
+  description: 'Streamlit + pydeck map — plot points/routes from a CSV or an attached lakehouse. No backend required to start.',
+  runtime: 'python',
+  defaultPort: 8501,
+  entryFile: 'app.py',
+  manifestFile: 'requirements.txt',
+  files: [
+    {
+      path: 'app.py',
+      content: `"""Geospatial map — pydeck over sample points (swap for your lakehouse data)."""
+import os
+import pandas as pd
+import pydeck as pdk
+import streamlit as st
+
+st.set_page_config(page_title="Geospatial", page_icon="🗺️", layout="wide")
+st.title("🗺️ Geospatial map")
+
+# Sample data — replace with a read from an attached lakehouse
+# (APP_LH_<SLUG>_URL) or a KQL/geo query.
+df = pd.DataFrame(
+    {"lat": [47.6062, 40.7128, 51.5074, 35.6762], "lon": [-122.3321, -74.0060, -0.1278, 139.6503],
+     "name": ["Seattle", "New York", "London", "Tokyo"], "weight": [80, 100, 70, 90]},
+)
+lh = next((v for k, v in os.environ.items() if k.startswith("APP_LH_") and k.endswith("_URL")), None)
+if lh:
+    st.caption(f"Lakehouse attached: {lh} — read your geo table with pyarrow/deltalake and set df.")
+
+st.pydeck_chart(pdk.Deck(
+    map_style=None,
+    initial_view_state=pdk.ViewState(latitude=40, longitude=-40, zoom=1.2),
+    layers=[pdk.Layer("ScatterplotLayer", df, get_position="[lon, lat]",
+                      get_radius="weight * 8000", get_fill_color=[91, 46, 145, 180], pickable=True)],
+    tooltip={"text": "{name}"},
+))
+st.dataframe(df, use_container_width=True)
+`,
+    },
+    { path: 'requirements.txt', content: 'streamlit==1.39.0\npydeck==0.9.1\npandas==2.2.3\n' },
+  ],
+};
+
+const ML_SCORING: LoomAppTemplate = {
+  id: 'ml-scoring',
+  label: 'ML scoring UI',
+  description: 'Gradio form that posts features to an Azure ML / AOAI online endpoint and shows the prediction.',
+  runtime: 'python',
+  defaultPort: 7860,
+  entryFile: 'app.py',
+  manifestFile: 'requirements.txt',
+  files: [
+    {
+      path: 'app.py',
+      content: `"""ML scoring UI — a Gradio form over a model online endpoint.
+
+Set LOOM_SCORING_URL (the AML/AOAI online-endpoint scoring URL) as a Binding;
+for a key-auth endpoint set LOOM_SCORING_KEY as a Key Vault secretRef binding.
+AAD-auth endpoints use the app's managed identity automatically.
+"""
+import json
+import os
+import gradio as gr
+import requests
+
+SCORING_URL = os.environ.get("LOOM_SCORING_URL", "")
+SCORING_KEY = os.environ.get("LOOM_SCORING_KEY", "")
+
+
+def _auth_header():
+    if SCORING_KEY:
+        return {"Authorization": f"Bearer {SCORING_KEY}"}
+    try:
+        from azure.identity import DefaultAzureCredential
+        tok = DefaultAzureCredential().get_token("https://ml.azure.com/.default").token
+        return {"Authorization": f"Bearer {tok}"}
+    except Exception:
+        return {}
+
+
+def score(features_json: str):
+    if not SCORING_URL:
+        return "Set LOOM_SCORING_URL (the model endpoint) as a Binding, then Deploy."
+    try:
+        payload = json.loads(features_json)
+    except json.JSONDecodeError as e:
+        return f"Invalid JSON: {e}"
+    try:
+        r = requests.post(SCORING_URL, json=payload,
+                          headers={"Content-Type": "application/json", **_auth_header()}, timeout=30)
+        return r.text if r.ok else f"HTTP {r.status_code}: {r.text[:500]}"
+    except Exception as e:
+        return f"Request failed: {e}"
+
+
+demo = gr.Interface(
+    fn=score,
+    inputs=gr.Textbox(label="Features (JSON)", value='{"data": [[0, 1, 2, 3]]}', lines=6),
+    outputs=gr.Textbox(label="Prediction"),
+    title="ML scoring",
+    description="Posts your feature JSON to the configured model endpoint.",
+)
+if __name__ == "__main__":
+    demo.launch(server_name="0.0.0.0", server_port=int(os.environ.get("PORT", "7860")))
+`,
+    },
+    { path: 'requirements.txt', content: 'gradio==5.9.1\nrequests==2.32.3\nazure-identity==1.19.0\n' },
+  ],
+};
+
+const APPROVAL_APP: LoomAppTemplate = {
+  id: 'approval-app',
+  label: 'Approval app (write-back)',
+  description: 'Streamlit approve/reject queue that writes decisions back to an attached Weave ontology via actions.',
+  runtime: 'python',
+  defaultPort: 8501,
+  entryFile: 'app.py',
+  manifestFile: 'requirements.txt',
+  files: [
+    {
+      path: 'loom_ontology.py',
+      content: ONTOLOGY_EXPLORER.files.find((f) => f.path === 'loom_ontology.py')!.content,
+    },
+    {
+      path: 'app.py',
+      content: `"""Approval app — a review queue with write-back to a Weave ontology.
+
+Attach a 'Weave ontology' resource; the loom_ontology SDK (shipped with this
+template) queries pending objects and writes the decision back as a property
+update. Point OBJECT_TYPE + STATUS_FIELD at your ontology.
+"""
+import os
+import streamlit as st
+from loom_ontology import attached_ontologies
+
+OBJECT_TYPE = os.environ.get("APP_APPROVAL_OBJECT_TYPE", "Request")
+STATUS_FIELD = os.environ.get("APP_APPROVAL_STATUS_FIELD", "status")
+
+st.set_page_config(page_title="Approvals", page_icon="✅", layout="wide")
+st.title("✅ Approval queue")
+
+onts = attached_ontologies()
+if not onts:
+    st.warning("Attach a **Weave ontology** resource on the Resources tab, then Deploy.")
+    st.stop()
+ont = onts[sorted(onts)[0]]
+
+try:
+    rows = ont.query_objects(OBJECT_TYPE, limit=200)
+except Exception as e:
+    st.error(f"Could not read {OBJECT_TYPE}: {e}")
+    st.stop()
+
+pending = [r for r in rows if str(r.get(STATUS_FIELD, "pending")).lower() == "pending"]
+st.caption(f"{len(pending)} pending of {len(rows)} {OBJECT_TYPE}")
+for r in pending:
+    with st.container(border=True):
+        st.json({k: v for k, v in r.items() if not k.startswith("_")})
+        c1, c2 = st.columns(2)
+        if c1.button("Approve", key="a" + str(r.get("_id"))):
+            ont.create_object(OBJECT_TYPE, {**{k: v for k, v in r.items() if not k.startswith("_")}, STATUS_FIELD: "approved"})
+            st.rerun()
+        if c2.button("Reject", key="r" + str(r.get("_id"))):
+            ont.create_object(OBJECT_TYPE, {**{k: v for k, v in r.items() if not k.startswith("_")}, STATUS_FIELD: "rejected"})
+            st.rerun()
+`,
+    },
+    { path: 'requirements.txt', content: 'streamlit==1.39.0\nazure-identity==1.19.0\npsycopg[binary]==3.2.3\n' },
+  ],
+};
+
 export const LOOM_APP_TEMPLATES: readonly LoomAppTemplate[] = [
   STREAMLIT, DASH, GRADIO, FLASK, NODE_EXPRESS, AGENT_FASTAPI, ONTOLOGY_EXPLORER,
+  RAG_CHAT, OPS_CONSOLE, GEOSPATIAL, ML_SCORING, APPROVAL_APP,
 ];
 
 export function getLoomAppTemplate(id: string): LoomAppTemplate | undefined {
@@ -663,7 +992,7 @@ export function generateDockerfile(template: LoomAppTemplate, port: number): str
     // gunicorn for WSGI frameworks (Flask/Dash expose `server`/`app`); the
     // framework's own server for Streamlit/Gradio (they aren't WSGI apps).
     let cmd: string;
-    if (template.id === 'streamlit' || template.id === 'ontology-explorer') {
+    if (['streamlit', 'ontology-explorer', 'rag-chat', 'ops-console', 'geospatial', 'approval-app'].includes(template.id)) {
       cmd = `CMD ["streamlit", "run", "app.py", "--server.port=${p}", "--server.address=0.0.0.0", "--server.headless=true"]`;
     } else if (template.id === 'flask') {
       cmd = `CMD ["gunicorn", "--bind", "0.0.0.0:${p}", "app:app"]`;
