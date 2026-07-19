@@ -15,7 +15,7 @@ import {
 describe('template catalog', () => {
   it('ships the documented runtimes with unique ids + valid ports', () => {
     const ids = LOOM_APP_TEMPLATES.map((t) => t.id);
-    expect(ids).toEqual(['streamlit', 'dash', 'gradio', 'flask', 'node-express', 'agent-fastapi']);
+    expect(ids).toEqual(['streamlit', 'dash', 'gradio', 'flask', 'node-express', 'agent-fastapi', 'ontology-explorer']);
     expect(new Set(ids).size).toBe(ids.length);
     for (const t of LOOM_APP_TEMPLATES) {
       expect(t.defaultPort).toBeGreaterThan(0);
@@ -63,6 +63,18 @@ describe('generateDockerfile', () => {
     expect(df).toContain('app:app');
     expect(df).toContain('--port');
   });
+  it('serves the ontology-explorer with streamlit and ships the SDK module', () => {
+    const t = getLoomAppTemplate('ontology-explorer')!;
+    const df = generateDockerfile(t, 8501);
+    expect(df).toContain('streamlit');
+    expect(df).toContain('--server.port=8501');
+    expect(t.files.some((f) => f.path === 'loom_ontology.py')).toBe(true);
+    const sdk = t.files.find((f) => f.path === 'loom_ontology.py')!.content;
+    expect(sdk).toContain('APP_ONT_');
+    expect(sdk).toContain('ag_catalog.cypher');
+    expect(sdk).toContain('ossrdbms-aad.database.windows.net');
+  });
+
   it('emits a node image + npm start for express', () => {
     const df = generateDockerfile(getLoomAppTemplate('node-express')!, 3000);
     expect(df).toContain('FROM node:20-slim');

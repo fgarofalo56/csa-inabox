@@ -412,9 +412,33 @@ export interface DeployAppOptions {
  * MSAL app registration is configured (the app inherits the caller's Loom
  * tenant sign-in). Real ARM PUT; returns the live URL + provisioning state.
  */
+/** Cached clientId of the shared apps UAMI (ARM GET on cfg.appUamiId). */
+let cachedAppUamiClientId: { rid: string; clientId: string } | null = null;
+async function appUamiClientId(rid: string): Promise<string> {
+  if (!rid) return '';
+  if (cachedAppUamiClientId?.rid === rid) return cachedAppUamiClientId.clientId;
+  try {
+    const { json } = await armFetch('GET', `${rid}?api-version=2023-01-31`);
+    const clientId = (json as any)?.properties?.clientId || '';
+    if (clientId) cachedAppUamiClientId = { rid, clientId };
+    return clientId;
+  } catch {
+    return '';
+  }
+}
+
 export async function deployApp(opts: DeployAppOptions): Promise<DeployedApp> {
   const cfg = readLoomAppsConfig();
   const name = opts.name && isValidLoomAppName(opts.name) ? opts.name : loomAppContainerName(opts.itemId);
+  // Auto-inject the app identity's clientId so in-app azure-identity
+  // (DefaultAzureCredential) resolves the attached UAMI without boilerplate —
+  // the Databricks-Apps "credential injection" parity row. A user-set
+  // AZURE_CLIENT_ID binding wins.
+  const env = [...(opts.env || [])];
+  if (!env.some((e) => e.name === 'AZURE_CLIENT_ID')) {
+    const cid = await appUamiClientId(cfg.appUamiId);
+    if (cid) env.push({ name: 'AZURE_CLIENT_ID', value: cid }, { name: 'LOOM_APP_CLIENT_ID', value: cid });
+  }
   const body = buildAcaAppBody({
     name,
     environmentId: cfg.caeId,
@@ -423,7 +447,7 @@ export async function deployApp(opts: DeployAppOptions): Promise<DeployedApp> {
     image: opts.image,
     targetPort: opts.targetPort,
     acrLoginServer: cfg.acrLoginServer,
-    env: opts.env,
+    env,
     minReplicas: opts.minReplicas,
     maxReplicas: opts.maxReplicas,
     cpu: opts.cpu,
