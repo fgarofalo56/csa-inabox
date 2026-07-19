@@ -20,7 +20,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { loadOwnedItem } from '../../../_lib/item-crud';
-import { objectTypeNames, objectTypeByName, validateObjectInstance } from '@/lib/editors/ontology-model';
+import { objectTypeNames, objectTypeByName, validateObjectInstance, evaluateObjectInvariants } from '@/lib/editors/ontology-model';
 import { weaveGate, createObject, listObjects } from '@/lib/azure/weave-ontology-store';
 import { PostgresError } from '@/lib/azure/postgres-flex-client';
 
@@ -111,6 +111,11 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   const ot = objectTypeByName(state, objectType);
   const validated = validateObjectInstance(ot, props);
   if (!validated.ok) return err(validated.error, 400, 'invalid_properties');
+
+  // Object invariant rules (Foundry-parity row 4.4) — enforced on the coerced
+  // instance values before the write-back.
+  const invariant = evaluateObjectInvariants(ot, validated.values as Record<string, unknown>);
+  if (!invariant.ok) return err(invariant.error, 422, 'invariant_failed');
 
   const gate = weaveGate();
   if (gate) {

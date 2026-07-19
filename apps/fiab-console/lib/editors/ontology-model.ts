@@ -134,6 +134,12 @@ export interface OntoObjectType {
    * The group's properties merge into the type's effective schema.
    */
   sharedPropertyGroups?: string[];
+  /**
+   * Foundry "rules" (row 4.4) — invariant rules enforced server-side on every
+   * object-instance create/update. Same operator set as action submission
+   * criteria, applied to the instance's property values. Empty/absent = none.
+   */
+  invariants?: OntoActionCriterion[];
 }
 
 /**
@@ -373,6 +379,7 @@ export function normalizeObjectType(raw: unknown): OntoObjectType | null {
     ...(normalizeDatasource(r.datasource) ? { datasource: normalizeDatasource(r.datasource) } : {}),
     ...(identArr(r.implements).length ? { implements: identArr(r.implements) } : {}),
     ...(identArr(r.sharedPropertyGroups).length ? { sharedPropertyGroups: identArr(r.sharedPropertyGroups) } : {}),
+    ...(normalizeOntoActionCriteria(r.invariants).length ? { invariants: normalizeOntoActionCriteria(r.invariants) } : {}),
   };
 }
 
@@ -524,11 +531,31 @@ export function evaluateSubmissionCriteria(
   action: OntoActionType,
   values: Record<string, unknown>,
 ): { ok: true } | { ok: false; error: string } {
-  const criteria = action.submissionCriteria || [];
+  return evaluateCriteria(action.submissionCriteria || [], values, 'Submission criterion');
+}
+
+/**
+ * Enforce an object type's invariant rules (Foundry-parity row 4.4) against an
+ * object instance's property values. Same operator semantics as submission
+ * criteria. Returns the first failing rule's message, or ok.
+ */
+export function evaluateObjectInvariants(
+  ot: OntoObjectType | null,
+  values: Record<string, unknown>,
+): { ok: true } | { ok: false; error: string } {
+  return evaluateCriteria(ot?.invariants || [], values, 'Invariant');
+}
+
+/** Shared criterion evaluator used by submission criteria + object invariants. */
+export function evaluateCriteria(
+  criteria: OntoActionCriterion[],
+  values: Record<string, unknown>,
+  label: string,
+): { ok: true } | { ok: false; error: string } {
   for (const c of criteria) {
     const raw = values[c.parameter];
     const present = raw !== undefined && raw !== null && raw !== '';
-    const fail = (why: string) => ({ ok: false as const, error: c.message?.trim() || `Submission criterion failed: "${c.parameter}" ${why}.` });
+    const fail = (why: string) => ({ ok: false as const, error: c.message?.trim() || `${label} failed: "${c.parameter}" ${why}.` });
     if (c.op === 'nonEmpty') {
       if (!present) return fail('must not be empty');
       continue;
@@ -553,7 +580,7 @@ export function evaluateSubmissionCriteria(
       case 'regex': {
         let re: RegExp | null = null;
         try { re = new RegExp(operand); } catch { re = null; }
-        if (!re) return { ok: false, error: `Submission criterion for "${c.parameter}" has an invalid regex.` };
+        if (!re) return { ok: false, error: `${label} for "${c.parameter}" has an invalid regex.` };
         if (!re.test(String(raw))) return fail(`must match /${operand}/`);
         break;
       }
