@@ -149,12 +149,16 @@ function cypherScalar(v: unknown): string {
  * CREATE EXTENSION error propagates and the caller surfaces the honest gate.
  */
 async function ensureAgeGraph(fqdn: string, db: string, graph: string): Promise<void> {
+  // NO `LOAD 'age'` here: on Azure PG Flexible LOAD is superuser-gated and
+  // fails 42501 "access to library \"age\" is not allowed" even for the Entra
+  // ADMIN principal (live receipt 2026-07-19 — it silently killed this
+  // self-heal since #2129). The library is already preloaded via the bicep
+  // shared_preload_libraries=AGE, so LOAD is unnecessary; ag_catalog-qualified
+  // names resolve without it.
   const sql =
     'CREATE EXTENSION IF NOT EXISTS age CASCADE; ' +
-    'LOAD \'age\'; ' +
-    'SET search_path = ag_catalog, "$user", public; ' +
-    `SELECT create_graph('${graph}') WHERE NOT EXISTS ` +
-    `(SELECT 1 FROM ag_catalog.ag_graph WHERE name = '${graph}');`;
+    `DO $do$ BEGIN IF NOT EXISTS (SELECT 1 FROM ag_catalog.ag_graph WHERE name = '${graph}') ` +
+    `THEN PERFORM ag_catalog.create_graph('${graph}'); END IF; END $do$;`;
   await executePostgresQuery(fqdn, db, sql);
 }
 

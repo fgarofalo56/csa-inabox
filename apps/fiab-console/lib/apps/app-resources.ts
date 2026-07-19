@@ -654,10 +654,13 @@ export async function attachOntologyItemResource(
         grantDetail = `'${uami}' is already a PG principal on ${fqdn} — no action needed.`;
       } else {
         // Same SQL as bootstrap-weave-pg.sh's EXTRA_PG_PRINCIPALS block
-        // (DML, deliberately no CREATE). Idempotent.
+        // (DML, deliberately no CREATE). Idempotent. pgaadauth_* functions
+        // exist ONLY in the server's `postgres` database (live receipt
+        // 2026-07-19: 42883 in loom-weave; 'Created role' in postgres) —
+        // the grants then run in the weave database.
         const graph = weaveGraph();
         await executePostgresQuery(
-          fqdn, weaveDb(),
+          fqdn, 'postgres',
           `SELECT * FROM pgaadauth_create_principal('${uami}', false, false);`,
         ).catch(() => { /* may already exist under a race — the re-probe decides */ });
         await executePostgresQuery(
