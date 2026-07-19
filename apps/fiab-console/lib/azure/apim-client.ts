@@ -397,6 +397,8 @@ export async function importApiFromOpenApi(opts: {
   path: string;
   format: 'openapi' | 'openapi+json' | 'swagger-link-json' | 'openapi-link';
   value: string;
+  /** Override backend origin APIM proxies to (else the spec's servers[0].url). */
+  serviceUrl?: string;
 }): Promise<ApimApiSummary> {
   const gate = apimConfigGate();
   if (gate) throw new Error(`APIM service not configured: set ${gate.missing}.`);
@@ -406,6 +408,7 @@ export async function importApiFromOpenApi(opts: {
     path: opts.path,
   };
   if (opts.displayName) properties.displayName = opts.displayName;
+  if (opts.serviceUrl) properties.serviceUrl = opts.serviceUrl;
   const res = await apimFetch(`/apis/${encodeURIComponent(opts.apiId)}`, {
     method: 'PUT',
     body: JSON.stringify({ properties }),

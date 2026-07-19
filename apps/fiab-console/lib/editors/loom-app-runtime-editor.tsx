@@ -117,6 +117,32 @@ export function LoomAppRuntimeEditor({ item, id }: EditorProps) {
   const [logs, setLogs] = useState<string>('');
   const [logsBusy, setLogsBusy] = useState(false);
 
+  // Monitoring (APP-W5 S4) + publish-as-API (S3)
+  const [mon, setMon] = useState<any>(null);
+  const [monBusy, setMonBusy] = useState(false);
+  const [pubApiBusy, setPubApiBusy] = useState(false);
+  const loadMonitoring = useCallback(async () => {
+    setMonBusy(true);
+    try {
+      const r = await clientFetch(`/api/items/loom-app-runtime/${encodeURIComponent(id)}/monitoring`);
+      const j = await r.json();
+      setMon(j.ok === false ? { error: j.error } : j);
+    } catch (e: any) { setMon({ error: e?.message || String(e) }); }
+    finally { setMonBusy(false); }
+  }, [id]);
+  const publishAsApi = useCallback(async () => {
+    setPubApiBusy(true); setBanner(null);
+    try {
+      const r = await clientFetch(`/api/items/loom-app-runtime/${encodeURIComponent(id)}/publish-api`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({}),
+      });
+      const j = await r.json();
+      if (j.ok === false) setBanner({ intent: j.gate ? 'warning' : 'error', text: `${j.error}${j.gate ? ` — ${j.gate.remediation}` : ''}` });
+      else setBanner({ intent: 'success', text: `Published as API '${j.api?.path}' — find it in Marketplace → APIs.` });
+    } catch (e: any) { setBanner({ intent: 'error', text: e?.message || String(e) }); }
+    finally { setPubApiBusy(false); }
+  }, [id]);
+
   // ---- Resources (APPS-W2 — Databricks-Apps "App resources" parity) -------
   interface AppResourceRec {
     id: string; kind: string; label: string; envNames: string[];
@@ -363,6 +389,7 @@ export function LoomAppRuntimeEditor({ item, id }: EditorProps) {
   }, [id]);
 
   useEffect(() => { if (tab === 'logs' && !isNew) refreshLogs(); }, [tab, isNew, refreshLogs]);
+  useEffect(() => { if (tab === 'monitoring' && !isNew && !mon) void loadMonitoring(); }, [tab, isNew, mon, loadMonitoring]);
 
   // ---- env-binding table helpers -----------------------------------------
   const addEnv = () => setEnv((e) => [...e, { name: '', value: '' }]);
@@ -440,6 +467,7 @@ export function LoomAppRuntimeEditor({ item, id }: EditorProps) {
           <Tab value="resources">Resources</Tab>
           <Tab value="bindings">Bindings</Tab>
           <Tab value="logs">Logs</Tab>
+          <Tab value="monitoring">Monitoring</Tab>
           <Tab value="history">History</Tab>
         </TabList>
       </div>
@@ -467,6 +495,7 @@ export function LoomAppRuntimeEditor({ item, id }: EditorProps) {
                 </MessageBarBody>
                 <MessageBarActions>
                   <Button size="small" icon={<Open20Regular />} onClick={() => window.open(live?.url || rt.url!, '_blank', 'noreferrer')}>Open</Button>
+                  <Button size="small" icon={<Rocket20Regular />} disabled={pubApiBusy} onClick={publishAsApi}>{pubApiBusy ? 'Publishing…' : 'Publish as API'}</Button>
                 </MessageBarActions>
               </MessageBar>
             ) : (
@@ -733,6 +762,36 @@ export function LoomAppRuntimeEditor({ item, id }: EditorProps) {
               <Button size="small" icon={<ArrowSync20Regular />} onClick={refreshLogs} disabled={logsBusy}>{logsBusy ? 'Loading…' : 'Refresh'}</Button>
             </div>
             <pre className={s.logs}>{logs || 'No logs loaded yet.'}</pre>
+          </>
+        )}
+
+        {/* ---- MONITORING ---- */}
+        {tab === 'monitoring' && !loading && (
+          <>
+            <div className={s.row}>
+              <Subtitle2>Monitoring</Subtitle2>
+              <Button size="small" icon={<ArrowSync20Regular />} onClick={loadMonitoring} disabled={monBusy}>{monBusy ? 'Loading…' : 'Refresh'}</Button>
+            </div>
+            <Body1>Live metrics + month-to-date cost for this app&apos;s Container App (Azure Monitor + Cost Management). Logs are on the Logs tab.</Body1>
+            {!rt.containerAppName ? (
+              <Caption1>Deploy the app first — metrics + cost appear once a revision is running.</Caption1>
+            ) : mon?.error ? (
+              <MessageBar intent="warning"><MessageBarBody>{mon.error}</MessageBarBody></MessageBar>
+            ) : mon ? (
+              <>
+                <div className={s.statGrid}>
+                  <div className={s.stat}><span className={s.statLabel}>Month-to-date cost</span><Text weight="semibold">{mon.cost?.error ? '—' : `${(mon.cost?.amount ?? 0).toFixed(2)} ${mon.cost?.currency || ''}`}</Text></div>
+                  {(Array.isArray(mon.metrics) ? mon.metrics : []).map((m: any) => {
+                    const pts = (m.series || m.timeseries || m.data || []) as any[];
+                    const last = pts.length ? pts[pts.length - 1] : null;
+                    const val = last && typeof last === 'object' ? (last.value ?? last.average ?? last.total) : last;
+                    return <div key={m.name} className={s.stat}><span className={s.statLabel}>{m.name}</span><Text weight="semibold">{val != null ? Number(val).toLocaleString(undefined, { maximumFractionDigits: 2 }) : '—'}</Text></div>;
+                  })}
+                </div>
+                {mon.cost?.note && <Caption1>{mon.cost.note}</Caption1>}
+                <Button size="small" appearance="subtle" icon={<Open20Regular />} onClick={() => window.open('/monitor', '_blank', 'noopener')}>Open full Monitor</Button>
+              </>
+            ) : <Caption1>Click Refresh to load metrics + cost.</Caption1>}
           </>
         )}
 

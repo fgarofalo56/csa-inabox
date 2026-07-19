@@ -51,6 +51,9 @@ export interface AppRuntimeState {
   builds?: AppBuildRecord[];
   lastDeployAt?: string;
   updatedAt?: string;
+  /** APIM API this app was published as (APP-W5 S3 publish-as-API). */
+  publishedApiId?: string;
+  publishedApiPath?: string;
 }
 
 const MAX_BUILDS = 20;
