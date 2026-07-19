@@ -219,6 +219,30 @@ export interface OntoActionParam {
 export type OntoActionKind = 'create' | 'update' | 'delete';
 export const ONTO_ACTION_KINDS: readonly OntoActionKind[] = ['create', 'update', 'delete'];
 
+/**
+ * Foundry "submission criteria" (row 2.4) — a per-action validation rule the
+ * executor enforces AFTER type coercion and BEFORE the write-back. Each rule
+ * targets one parameter with a comparison operator; a failing rule blocks the
+ * run with `message` (or a generated default).
+ */
+export type OntoCriterionOp = 'nonEmpty' | 'gt' | 'gte' | 'lt' | 'lte' | 'eq' | 'neq' | 'regex' | 'in';
+export const ONTO_CRITERION_OPS: readonly OntoCriterionOp[] = ['nonEmpty', 'gt', 'gte', 'lt', 'lte', 'eq', 'neq', 'regex', 'in'];
+export const ONTO_CRITERION_OP_LABELS: Record<OntoCriterionOp, string> = {
+  nonEmpty: 'is not empty', gt: '>', gte: '≥', lt: '<', lte: '≤', eq: '=', neq: '≠',
+  regex: 'matches regex', in: 'is one of (comma-list)',
+};
+/** Ops that compare against a value (all but nonEmpty). */
+export const ONTO_CRITERION_OPS_WITH_VALUE: readonly OntoCriterionOp[] = ['gt', 'gte', 'lt', 'lte', 'eq', 'neq', 'regex', 'in'];
+
+export interface OntoActionCriterion {
+  parameter: string;
+  op: OntoCriterionOp;
+  /** Comparison operand (string-encoded; coerced at eval time). Absent for nonEmpty. */
+  value?: string;
+  /** Operator-facing message shown when the rule fails. */
+  message?: string;
+}
+
 /** A typed action type (Foundry "action type" — the write-back surface). */
 export interface OntoActionType {
   name: string;
@@ -233,6 +257,11 @@ export interface OntoActionType {
    * to the tamper-evident audit chain. Off by default (opt-in per action).
    */
   requiresJustification?: boolean;
+  /**
+   * Foundry "submission criteria" — validation rules enforced server-side
+   * before the write-back. Empty/absent = no extra validation.
+   */
+  submissionCriteria?: OntoActionCriterion[];
 }
 
 // ============================================================
@@ -441,12 +470,82 @@ export function normalizeOntoActionType(raw: unknown): OntoActionType | null {
       .filter(isOntoIdent)
       .map((apiName) => ({ apiName, type: 'string' as const }));
   }
+  const submissionCriteria = normalizeOntoActionCriteria(r.submissionCriteria);
   return {
     name, objectType, kind,
     ...(r.description ? { description: str(r.description) } : {}),
     parameters,
     ...(r.requiresJustification === true ? { requiresJustification: true } : {}),
+    ...(submissionCriteria.length ? { submissionCriteria } : {}),
   };
+}
+
+/** Coerce a persisted submission-criteria array into the clean typed model. */
+export function normalizeOntoActionCriteria(raw: unknown): OntoActionCriterion[] {
+  if (!Array.isArray(raw)) return [];
+  const out: OntoActionCriterion[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue;
+    const r = item as Record<string, unknown>;
+    const parameter = str(r.parameter).trim();
+    const op = str(r.op) as OntoCriterionOp;
+    if (!parameter || !(ONTO_CRITERION_OPS as readonly string[]).includes(op)) continue;
+    out.push({
+      parameter, op,
+      ...(r.value !== undefined && r.value !== null ? { value: str(r.value) } : {}),
+      ...(r.message ? { message: str(r.message) } : {}),
+    });
+  }
+  return out;
+}
+
+/**
+ * Evaluate an action's submission criteria against the coerced run values.
+ * Returns the first failing rule's message (or a generated default), or ok.
+ * A rule whose parameter is missing/empty passes UNLESS the op is nonEmpty —
+ * required-ness is the parameter schema's job (validateActionRun); criteria are
+ * value constraints on supplied values.
+ */
+export function evaluateSubmissionCriteria(
+  action: OntoActionType,
+  values: Record<string, unknown>,
+): { ok: true } | { ok: false; error: string } {
+  const criteria = action.submissionCriteria || [];
+  for (const c of criteria) {
+    const raw = values[c.parameter];
+    const present = raw !== undefined && raw !== null && raw !== '';
+    const fail = (why: string) => ({ ok: false as const, error: c.message?.trim() || `Submission criterion failed: "${c.parameter}" ${why}.` });
+    if (c.op === 'nonEmpty') {
+      if (!present) return fail('must not be empty');
+      continue;
+    }
+    if (!present) continue; // value constraints only apply when a value is supplied
+    const operand = c.value ?? '';
+    const numL = Number(raw);
+    const numR = Number(operand);
+    const bothNumeric = Number.isFinite(numL) && Number.isFinite(numR);
+    switch (c.op) {
+      case 'gt': if (!(bothNumeric && numL > numR)) return fail(`must be > ${operand}`); break;
+      case 'gte': if (!(bothNumeric && numL >= numR)) return fail(`must be ≥ ${operand}`); break;
+      case 'lt': if (!(bothNumeric && numL < numR)) return fail(`must be < ${operand}`); break;
+      case 'lte': if (!(bothNumeric && numL <= numR)) return fail(`must be ≤ ${operand}`); break;
+      case 'eq': if (String(raw) !== operand) return fail(`must equal "${operand}"`); break;
+      case 'neq': if (String(raw) === operand) return fail(`must not equal "${operand}"`); break;
+      case 'in': {
+        const allowed = operand.split(',').map((x) => x.trim()).filter(Boolean);
+        if (!allowed.includes(String(raw))) return fail(`must be one of: ${allowed.join(', ')}`);
+        break;
+      }
+      case 'regex': {
+        let re: RegExp | null = null;
+        try { re = new RegExp(operand); } catch { re = null; }
+        if (!re) return { ok: false, error: `Submission criterion for "${c.parameter}" has an invalid regex.` };
+        if (!re.test(String(raw))) return fail(`must match /${operand}/`);
+        break;
+      }
+    }
+  }
+  return { ok: true };
 }
 
 export function normalizeOntoActionTypes(raw: unknown): OntoActionType[] {

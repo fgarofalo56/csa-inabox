@@ -69,9 +69,10 @@ import {
   withEffectiveProperties, validateInterfaceImplementation, interfaceConformances,
   ONTO_BASE_TYPES, ONTO_BASE_TYPE_LABELS, ONTO_KEY_ELIGIBLE_TYPES, ONTO_STATUSES, ONTO_COLORS,
   ONTO_CARDINALITIES, ONTO_CARDINALITY_LABELS, ONTO_PARAM_TYPES, ONTO_PARAM_TYPE_LABELS, ONTO_ACTION_KINDS,
+  ONTO_CRITERION_OPS, ONTO_CRITERION_OP_LABELS, ONTO_CRITERION_OPS_WITH_VALUE,
   type OntoObjectType, type OntoProperty, type OntoLinkType, type OntoActionType, type OntoActionParam,
   type OntoBaseType, type OntoCardinality, type OntoParamType, type OntoStatus, type OntoColor, type OntoDatasource,
-  type OntoInterface, type OntoSharedPropertyGroup,
+  type OntoInterface, type OntoSharedPropertyGroup, type OntoActionCriterion, type OntoCriterionOp,
 } from '../ontology-model';
 // Pure-logic helpers extracted for vitest coverage. See
 // `lib/editors/__tests__/family-utils.test.ts`.
@@ -1313,8 +1314,8 @@ function OntologyTypedModelPanel({
   const removeLt = (i: number) => commit({ linkTypes: linkTypes.filter((_, idx) => idx !== i) });
 
   // ───────────────────────── Action-type dialog ─────────────────────────
-  interface AtDraft { index: number | null; name: string; objectType: string; kind: OntoActionType['kind']; description: string; parameters: OntoActionParam[]; requiresJustification: boolean; }
-  const blankAt = (): AtDraft => ({ index: null, name: '', objectType: objNames[0] || '', kind: 'create', description: '', parameters: [], requiresJustification: false });
+  interface AtDraft { index: number | null; name: string; objectType: string; kind: OntoActionType['kind']; description: string; parameters: OntoActionParam[]; requiresJustification: boolean; submissionCriteria: OntoActionCriterion[]; }
+  const blankAt = (): AtDraft => ({ index: null, name: '', objectType: objNames[0] || '', kind: 'create', description: '', parameters: [], requiresJustification: false, submissionCriteria: [] });
   const [atOpen, setAtOpen] = useState(false);
   const [at, setAt] = useState<AtDraft>(blankAt);
   const [atErr, setAtErr] = useState<string | null>(null);
@@ -1322,7 +1323,7 @@ function OntologyTypedModelPanel({
   const openNewAt = () => { setAt(blankAt()); setAtErr(null); setAtOpen(true); };
   const openEditAt = (i: number) => {
     const a = actionTypes[i];
-    setAt({ index: i, name: a.name, objectType: a.objectType, kind: a.kind, description: a.description || '', parameters: a.parameters.map((p) => ({ ...p })), requiresJustification: !!a.requiresJustification });
+    setAt({ index: i, name: a.name, objectType: a.objectType, kind: a.kind, description: a.description || '', parameters: a.parameters.map((p) => ({ ...p })), requiresJustification: !!a.requiresJustification, submissionCriteria: (a.submissionCriteria || []).map((c) => ({ ...c })) });
     setAtErr(null); setAtOpen(true);
   };
   const saveAt = () => {
@@ -1340,7 +1341,17 @@ function OntologyTypedModelPanel({
       apiName: p.apiName.trim(), type: p.type, ...(p.required ? { required: true } : {}),
       ...(p.prompt ? { prompt: p.prompt } : {}),
     }));
-    const next: OntoActionType = { name, objectType: at.objectType, kind: at.kind, ...(at.description.trim() ? { description: at.description.trim() } : {}), parameters, ...(at.requiresJustification ? { requiresJustification: true } : {}) };
+    // Submission criteria — each must target a declared parameter; value-ops need a value.
+    const paramNames = new Set(parameters.map((p) => p.apiName));
+    const submissionCriteria: OntoActionCriterion[] = [];
+    for (const c of at.submissionCriteria) {
+      const parameter = c.parameter.trim();
+      if (!parameter) continue;
+      if (!paramNames.has(parameter)) { setAtErr(`Submission criterion targets "${parameter}", which is not a declared parameter.`); return; }
+      if (ONTO_CRITERION_OPS_WITH_VALUE.includes(c.op) && !String(c.value ?? '').trim()) { setAtErr(`Criterion "${parameter} ${ONTO_CRITERION_OP_LABELS[c.op]}" needs a value.`); return; }
+      submissionCriteria.push({ parameter, op: c.op, ...(c.value?.trim() ? { value: c.value.trim() } : {}), ...(c.message?.trim() ? { message: c.message.trim() } : {}) });
+    }
+    const next: OntoActionType = { name, objectType: at.objectType, kind: at.kind, ...(at.description.trim() ? { description: at.description.trim() } : {}), parameters, ...(at.requiresJustification ? { requiresJustification: true } : {}), ...(submissionCriteria.length ? { submissionCriteria } : {}) };
     const arr2 = [...actionTypes];
     if (at.index === null) arr2.push(next); else arr2[at.index] = next;
     commit({ actionTypes: arr2 });
@@ -1944,6 +1955,36 @@ function OntologyTypedModelPanel({
                       </Field>
                       <Switch checked={!!p.required} label="Required" onChange={(_, d) => patchAt({ parameters: at.parameters.map((x, xi) => xi === pi ? { ...x, required: d.checked } : x) })} />
                       <Button size="small" appearance="subtle" icon={<Dismiss16Regular />} aria-label={`Remove parameter ${p.apiName || pi + 1}`} onClick={() => patchAt({ parameters: at.parameters.filter((_, xi) => xi !== pi) })} />
+                    </div>
+                  ))}
+                </div>
+                <div className={s.tmSubBlock}>
+                  <div className={s.ontoActionHead}>
+                    <ShieldTask20Regular />
+                    <Subtitle2>Submission criteria</Subtitle2>
+                    <span className={s.ontoBindRowSpacer} />
+                    <Button size="small" icon={<Add16Regular />} disabled={at.parameters.length === 0} onClick={() => patchAt({ submissionCriteria: [...at.submissionCriteria, { parameter: at.parameters[0]?.apiName || '', op: 'nonEmpty' }] })}>Add rule</Button>
+                  </div>
+                  {at.parameters.length === 0 ? (
+                    <Caption1 className={s.ontoSectionHint}>Add parameters first — rules validate parameter values before the action runs.</Caption1>
+                  ) : at.submissionCriteria.length === 0 ? (
+                    <Caption1 className={s.ontoSectionHint}>No rules. Add a rule to require, bound, or pattern-match a parameter before the write-back.</Caption1>
+                  ) : at.submissionCriteria.map((c, ci) => (
+                    <div key={ci} className={s.tmParamRow}>
+                      <Field label={ci === 0 ? 'Parameter' : undefined}>
+                        <Dropdown value={c.parameter} selectedOptions={[c.parameter]} onOptionSelect={(_, d) => patchAt({ submissionCriteria: at.submissionCriteria.map((x, xi) => xi === ci ? { ...x, parameter: d.optionValue || '' } : x) })}>
+                          {at.parameters.map((p) => <Option key={p.apiName} value={p.apiName}>{p.apiName}</Option>)}
+                        </Dropdown>
+                      </Field>
+                      <Field label={ci === 0 ? 'Rule' : undefined}>
+                        <Dropdown value={ONTO_CRITERION_OP_LABELS[c.op]} selectedOptions={[c.op]} onOptionSelect={(_, d) => patchAt({ submissionCriteria: at.submissionCriteria.map((x, xi) => xi === ci ? { ...x, op: (d.optionValue as OntoCriterionOp) || 'nonEmpty' } : x) })}>
+                          {ONTO_CRITERION_OPS.map((op) => <Option key={op} value={op}>{ONTO_CRITERION_OP_LABELS[op]}</Option>)}
+                        </Dropdown>
+                      </Field>
+                      <Field label={ci === 0 ? 'Value' : undefined}>
+                        <Input value={c.value ?? ''} disabled={c.op === 'nonEmpty'} onChange={(_, d) => patchAt({ submissionCriteria: at.submissionCriteria.map((x, xi) => xi === ci ? { ...x, value: d.value } : x) })} placeholder={c.op === 'in' ? 'a, b, c' : c.op === 'regex' ? '^[A-Z]+$' : c.op === 'nonEmpty' ? '—' : '0'} />
+                      </Field>
+                      <Button size="small" appearance="subtle" icon={<Dismiss16Regular />} aria-label={`Remove rule ${ci + 1}`} onClick={() => patchAt({ submissionCriteria: at.submissionCriteria.filter((_, xi) => xi !== ci) })} />
                     </div>
                   ))}
                 </div>
