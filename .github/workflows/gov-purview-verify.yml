@@ -322,6 +322,19 @@ jobs:
           set -e
           if [ $RC -ne 0 ]; then
             echo "$OUT"
+            # The ARM bootstrap needs roleAssignments/write — but if the SP was
+            # ALREADY added as a root Collection Admin out-of-band (portal
+            # "Root collection permission" blade, done live 2026-07-19), the
+            # data plane is what matters. Probe it before declaring failure:
+            # a Collection Admin can GET the root-collection metadata policy.
+            DTOKEN=$(az account get-access-token --resource https://purview.azure.net --query accessToken -o tsv | tr -d '\r')
+            PHTTP=$(curl -sS -o /tmp/pol-probe.json -w '%{http_code}' -H "Authorization: Bearer $DTOKEN" \
+              "$BASE/policystore/metadataPolicies?collectionName=$PVW&api-version=$POLICY_API" || echo 000)
+            if [ "$PHTTP" = "200" ]; then
+              echo "::notice::ARM addRootCollectionAdmin denied (rc=$RC) but the deploy SP already reads the root metadata policy (HTTP 200) — it IS a Collection Admin (added out-of-band); continuing to the grant step."
+              exit 0
+            fi
+            echo "data-plane policy probe HTTP $PHTTP:"; head -c 300 /tmp/pol-probe.json || true; echo
             if echo "$OUT" | grep -q "RoleAssignmentWriter"; then
               # Seen live 2026-07-15: addRootCollectionAdmin requires
               # Microsoft.Authorization/roleAssignments/write (Owner / User
