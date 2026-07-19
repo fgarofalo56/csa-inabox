@@ -112,6 +112,24 @@ export function WorkshopAppEditor({ item, id }: { item: FabricItemType; id: stri
     finally { setPubBusy(false); }
   }, [id, dirty, save, reload]);
 
+  // APP-W3 visual→code: eject the canvas into a linked loom-app-runtime item
+  // (generated Express source over the run-action API) and open it.
+  const [ejecting, setEjecting] = useState(false);
+  const eject = useCallback(async () => {
+    setEjecting(true); setPubMsg(null);
+    try {
+      if (dirty) await save();
+      const r = await clientFetch(`/api/items/workshop-app/${encodeURIComponent(id)}/eject`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({}),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (j?.ok && j.itemId) { router.push(`/items/loom-app-runtime/${j.itemId}`); return; }
+      if (r.status === 409 && j?.itemId) { router.push(`/items/loom-app-runtime/${j.itemId}`); return; }
+      setPubMsg({ intent: 'error', text: j?.error || `HTTP ${r.status}` });
+    } catch (e: any) { setPubMsg({ intent: 'error', text: e?.message || String(e) }); }
+    finally { setEjecting(false); }
+  }, [id, dirty, save, router]);
+
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'App', actions: [
@@ -119,9 +137,10 @@ export function WorkshopAppEditor({ item, id }: { item: FabricItemType; id: stri
       ]},
       { label: 'Deploy', actions: [
         { label: 'Publish…', onClick: () => { setPubMsg(null); setPubOpen(true); }, disabled: false },
+        { label: ejecting ? 'Ejecting…' : 'Open as code', onClick: () => { void eject(); }, disabled: ejecting },
       ]},
     ]},
-  ], [save, saving, dirty]);
+  ], [save, saving, dirty, eject, ejecting]);
 
   if (id === 'new') return <NewItemCreateGate item={item} createLabel="Create Workshop app" intro="An operational low-code app builder bound to a Loom Ontology. Place widgets — object tables, charts, KPIs, filters, forms and buttons — on a drag-resize canvas, drive them with typed variables, and wire events, all over the ontology's Azure-native Synapse warehouse. No Fabric required." />;
 

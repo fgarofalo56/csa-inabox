@@ -108,12 +108,19 @@ endpoint/secret env vars (the Databricks resource model, made one-click).
       ARG-by-name cross-sub scopes; honest pending-grants scripts; bicep-synced
       constrained RBAC-Admin (#2170). Warehouse per-item deliberately skipped
       (items share the dedicated pool DB).
-- [ ] **APP-W3 — Weave-native + Copilot authoring:** slices A-C BUILT (PR #2175):
-      weave-ontology resource kind (AGE coordinates + honest PG grant + pg_roles
-      probe), Ontology Explorer template + loom_ontology SDK (+ auto
-      AZURE_CLIENT_ID injection), Copilot "describe your app" scaffolder
-      (/assist two-phase). REMAINING: browser E2E receipts (next roll) +
-      visual↔code merge (Workshop-class loom-app ↔ code runtime). (~2)
+- [x] **APP-W3 — Weave-native + Copilot authoring:** SHIPPED + E2E'd (PRs
+      #2175-#2180, rev 0000331): weave-ontology resource kind (self-healing PG
+      grant — Console is the weave PG Entra admin), Ontology Explorer template
+      + loom_ontology SDK (+ auto AZURE_CLIENT_ID), Copilot scaffolder
+      (/assist; E2E'd incl. real deploy — in-VNet APPHEALTH 200). Side-finds
+      fixed: Weave AGE store was silently empty since day one (#2179, 3 bugs);
+      CAE privatelink zone empty → all hosted apps ENOTFOUND in-VNet (#2180).
+      Visual↔code merge = workshop-app "Open as code" eject → linked
+      loom-app-runtime (generated Express source over a PAT-authenticated
+      run-action proxy; run-action is now PAT-capable). NOTE: 'loom-app' is
+      the org-app BUNDLER, not the visual builder — the builders are
+      workshop-app/slate-app/rayfin-app; embed-in-code-app = iframe the
+      existing SWA publish URL (console frame-ancestors 'none' is by design).
 - [ ] **APP-W4 — dev loop + CI/CD:** local-dev harness/CLI, private-git deploy,
       redeploy-on-push, app-bundle + CI template. (~1.5)
 - [ ] **APP-W5 — monitoring, embed, marketplace, publish-as-API/MCP, golden templates. (~2)

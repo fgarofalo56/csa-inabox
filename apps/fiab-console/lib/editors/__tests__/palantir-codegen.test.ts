@@ -9,7 +9,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   pascal, generateDabConfig, generateTypeScriptSdk, generatePythonSdk, generateSlateBundle,
-  deriveObjectProperties, generateActionReference,
+  deriveObjectProperties, generateActionReference, generateWorkshopCodeApp,
 } from '../_palantir-codegen';
 
 const surface = {
@@ -101,6 +101,27 @@ describe('generateSlateBundle', () => {
     expect(files.find((f) => f.name === 'index.html')!.content).toContain('<title>Ops</title>');
     const cfg = JSON.parse(files.find((f) => f.name === 'staticwebapp.config.json')!.content);
     expect(cfg.routes[0].route).toBe('/api/*');
+  });
+});
+
+describe('generateWorkshopCodeApp (APP-W3 eject-to-code)', () => {
+  it('emits a runnable userFiles tree: express proxy + static canvas, relative run-action', () => {
+    const files = generateWorkshopCodeApp({
+      displayName: 'Field Ops',
+      workshopAppId: 'abc-123',
+      widgets: [{ id: 'w1', kind: 'metric', title: 'Open orders', entityType: 'Order' } as any],
+      variables: [],
+    });
+    expect(Object.keys(files).sort()).toEqual(['package.json', 'public/app.js', 'public/index.html', 'server.js']);
+    // Front-end calls same-origin /run-action; the server proxies with a PAT.
+    expect(files['public/app.js']).toContain('const RUN_ACTION_URL = "/run-action"');
+    expect(files['server.js']).toContain("'/api/items/workshop-app/abc-123/run-action'");
+    expect(files['server.js']).toContain('LOOM_API_TOKEN');
+    expect(files['server.js']).toContain('503'); // honest gate when unwired
+    expect(files['public/index.html']).toContain('<title>Field Ops</title>');
+    const pkg = JSON.parse(files['package.json']);
+    expect(pkg.scripts.start).toBe('node server.js');
+    expect(pkg.dependencies.express).toBeTruthy();
   });
 });
 
