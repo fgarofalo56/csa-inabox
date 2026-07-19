@@ -39,7 +39,12 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
         400, { code: 'unsupported_template' },
       );
     }
-    if (!rt.url) return apiError('Deploy the app first — MCP proxies to its live endpoint.', 409, { code: 'not_deployed' });
+    let liveUrl = (rt.url || '').trim();
+    if (!liveUrl && rt.containerAppName) {
+      try { const { getApp } = await import('@/lib/azure/loom-apps-client'); liveUrl = (await getApp(rt.containerAppName)).url || ''; }
+      catch { /* honest gate below */ }
+    }
+    if (!liveUrl) return apiError('Deploy the app first — MCP proxies to its live endpoint.', 409, { code: 'not_deployed' });
 
     const toolName = appMcpToolName(access.item.displayName || id);
     await saveAppRuntime(access.item, { mcpPublished: true, mcpToolName: toolName, mcpPublishedAt: new Date().toISOString() });

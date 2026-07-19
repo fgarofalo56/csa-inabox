@@ -31,11 +31,16 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
   const access = await resolveItemAccessByOid(session, id, LOOM_APP_RUNTIME_TYPE);
   if (!access) return rpcErr(null, RPC.INTERNAL, 'app not found', 404);
   const rt = readAppRuntime(access.item);
-  if (!rt.mcpPublished || !rt.url) {
+  let liveUrl = (rt.url || '').trim();
+  if (rt.mcpPublished && !liveUrl && rt.containerAppName) {
+    try { const { getApp } = await import('@/lib/azure/loom-apps-client'); liveUrl = (await getApp(rt.containerAppName)).url || ''; }
+    catch { /* falls through to the gate */ }
+  }
+  if (!rt.mcpPublished || !liveUrl) {
     return rpcErr(null, RPC.INTERNAL, 'This app is not published as MCP (or is not deployed). Publish it from the app editor.', 409);
   }
 
-  const appUrl = rt.url.replace(/\/+$/, '');
+  const appUrl = liveUrl.replace(/\/+$/, '');
   const toolName = rt.mcpToolName || appMcpToolName(access.item.displayName || id);
 
   // Forward the caller's bearer to the app when present (the app's own
