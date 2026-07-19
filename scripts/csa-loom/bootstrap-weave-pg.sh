@@ -28,6 +28,12 @@
 #   WEAVE_PG_DB    (loom-weave)        — database name
 #   WEAVE_GRAPH    (loom_ontology)     — AGE graph name
 #   CONSOLE_UAMI_NAME (loom-console)   — Entra principal name (matches LOOM_POSTGRES_AAD_USER)
+#   EXTRA_PG_PRINCIPALS ('')           — comma-separated ADDITIONAL Entra principal
+#                                        names to register + grant graph DML (no
+#                                        CREATE). APPS-W3: the shared apps UAMI
+#                                        (uami-loom-mcp-<region>) so hosted Loom
+#                                        apps can query the ontology graph with
+#                                        their own identity.
 #   PG_HOST_SUFFIX (postgres.database.azure.com)
 #   PG_AAD_RESOURCE (https://ossrdbms-aad.database.azure.com) — token audience (no /.default)
 #
@@ -138,6 +144,31 @@ GRANT USAGE, CREATE ON SCHEMA \"$WEAVE_GRAPH\" TO \"$CONSOLE_UAMI_NAME\";
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA \"$WEAVE_GRAPH\" TO \"$CONSOLE_UAMI_NAME\";
 ALTER DEFAULT PRIVILEGES IN SCHEMA \"$WEAVE_GRAPH\" GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO \"$CONSOLE_UAMI_NAME\";
 " || echo "  (some grants may have failed if the principal was just created — re-run is idempotent)"
+
+# APPS-W3: additional principals (the shared apps UAMI) — registered with the
+# SAME graph access minus CREATE, so hosted Loom apps query/write instances but
+# never alter the schema. Idempotent; a bad name is skipped with a warning.
+EXTRA_PG_PRINCIPALS="${EXTRA_PG_PRINCIPALS:-}"
+IFS=',' read -ra EXTRAS <<< "$EXTRA_PG_PRINCIPALS"
+for P in "${EXTRAS[@]}"; do
+  P=$(echo "$P" | xargs)  # trim
+  [ -z "$P" ] && continue
+  if ! [[ "$P" =~ ^[A-Za-z0-9_-]{1,128}$ ]]; then
+    echo "::warning::EXTRA_PG_PRINCIPALS entry '$P' is not a valid principal name — skipped"; continue
+  fi
+  echo "== registering extra principal '$P' (apps identity) =="
+  run_sql "$WEAVE_PG_DB" "SELECT * FROM pgaadauth_create_principal('$P', false, false);" \
+    || echo "  (principal may already exist — continuing)"
+  run_sql "$WEAVE_PG_DB" "
+GRANT CONNECT ON DATABASE \"$WEAVE_PG_DB\" TO \"$P\";
+GRANT USAGE ON SCHEMA ag_catalog TO \"$P\";
+GRANT SELECT ON ALL TABLES IN SCHEMA ag_catalog TO \"$P\";
+GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA ag_catalog TO \"$P\";
+GRANT USAGE ON SCHEMA \"$WEAVE_GRAPH\" TO \"$P\";
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA \"$WEAVE_GRAPH\" TO \"$P\";
+ALTER DEFAULT PRIVILEGES IN SCHEMA \"$WEAVE_GRAPH\" GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO \"$P\";
+" || echo "  (some grants may have failed if the principal was just created — re-run is idempotent)"
+done
 
 echo "== Weave PG bootstrap complete =="
 echo "   The Console (LOOM_WEAVE_PG_FQDN=$FQDN) can now write object/link/action instances to graph '$WEAVE_GRAPH'."
