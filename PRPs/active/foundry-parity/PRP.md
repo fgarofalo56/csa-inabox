@@ -59,7 +59,7 @@ repo knowledge; Wave 0 audits every row live and re-grades (✅ built / η parti
 | 2.3 | Functions (on-object compute, derived props) | TS/Py functions over ontology | aip-logic + function items | Azure Functions / Container Apps + Loom fn runtime | η — function registry, versioning, derived-property binding |
 | 2.4 | Actions (typed write-back + validation + side effects) | Governed edits | ontology action types | Loom action runtime → real backend writes + audit | η — action forms in apps, validation rules, webhooks/effects |
 | 2.5 | OSDK (generated TS/Py/Java SDKs) | Type-safe app dev kit | ontology-sdk editor + Loom SDK | codegen service; npm/pip artifacts | η — generated-package pipeline E2E (download/publish) |
-| 2.6 | Object Explorer | Search/filter/traverse objects, saved explorations | object explorer surface | AI Search + ADX + graph canvas | ❌→build (object browse exists?; audit) |
+| 2.6 | Object Explorer | Search/filter/traverse objects, saved explorations | object explorer surface | AI Search + ADX + graph canvas | ✅ SHIPPED + E2E'd (#2195, search-fix #2197) — cross-type facets+search+traverse+saved over the AGE store; Explore tab. Live E2E rev 0000339: facets (Customer×2), traverse (real query), search returns matches. E2E caught a search bug (AGE-unsupported cypher → 0 rows), fixed to JS filtering (#2197) |
 | 2.7 | Vertex (graph exploration/simulation) | Interactive object graph | graph item (gql-graph) + ontology overlay | ADX graph semantics | η — ontology-aware layer on graph canvas |
 | 2.8 | Semantic search / OAG | Vector search over objects | ai-search-index + ontology embeddings | AI Search vectors + AOAI embeddings | η — one-click "embed ontology" + retrieval in agents |
 
@@ -86,7 +86,7 @@ repo knowledge; Wave 0 audits every row live and re-grades (✅ built / η parti
 | 4.4 | Foundry Rules (Taurus) | No-code business rules | **NEW: rules item** (or DQ+activator composite) | Loom rules engine (JSON-logic/OSS rules on ACA) → actions | ❌ build |
 | 4.5 | Automate (object monitors → effects) | Event-driven automation | activator + agent-flow | Monitor alerts, Logic Apps, Functions | η — object-condition monitors on ontology |
 | 4.6 | Approvals | Human-in-the-loop gates | **NEW: approvals framework** (per-action) | Loom approvals service (Cosmos) + Teams/email via Logic Apps | ❌ build |
-| 4.7 | Checkpoints (justifications) | Friction/justify sensitive ops | audit + MIP labels | Loom checkpoint middleware + audit log | ❌ build (thin: middleware + dialog) |
+| 4.7 | Checkpoints (justifications) | Friction/justify sensitive ops | audit + MIP labels | Loom checkpoint middleware + audit log | ✅ SHIPPED + E2E'd (#2196, dialog-parity #2198) — per-action requiresJustification gate (HTTP 422 without a reason); reason recorded to Cosmos audit chain w/ actor+target+outcome; Checkpoints review table. Live E2E rev 0000339: gated action authored (badge shows both surfaces), run blocked without reason, ran with reason (real AGE vertex + recorded), review table shows actor/reason/outcome. E2E caught a two-surface gap (toggle missing in the Typed-model dialog), fixed #2198 |
 | 4.8 | Machinery (process mining) | Process discovery | **evaluate**: PM4Py on Spark + dashboard | OSS pm4py; ADX for event logs | ❌ backlog (phase 2) |
 
 ### Pillar 5 — AI Platform (AIP)
