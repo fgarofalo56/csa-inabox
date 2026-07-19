@@ -105,11 +105,11 @@ Each finding cites code; grades feed the PRP matrix. ✅ built / η partial / �
 
 | Row | Gap | Wave | Status |
 |---|---|---|---|
-| 2.4 | Action validation rules + side effects (webhook/notify/audit chain) | W1 | ✅ validation rules SHIPPED + E2E'd (#2200, submission criteria, rev 0000340); audit chain done via checkpoints (#2196); webhook/notify side-effects remain |
+| 2.4 | Action validation rules + side effects (webhook/notify/audit chain) | W1 | ✅ COMPLETE — validation rules E2E'd (#2200, rev 0000340); audit chain via checkpoints (#2196); lineage side-effect SHIPPED (#2202, emitLineage → Thread/Purview). External webhook deferred (freeform-URL rule); lineage covers the Loom-native side-effect |
 | 2.6 | Ontology instance explorer (search/facet/traverse/saved explorations) | W1 | ✅ SHIPPED + E2E'd (#2195, search-fix #2197) |
 | 4.1 | Workshop widget catalog 7→~40 + variables/events/interactions | W3 | open |
 | 3.2 | Quiver card catalog 5→~30 (TS analysis families) | W3 | open |
 | 3.1 | analysis-board (Contour) — net-new | W2 | open |
 | 3.3/3.4 | notepad + fusion-sheet — net-new | W5 | open |
-| 4.4/4.6/4.7 | rules engine, approvals, checkpoints — net-new | W4 | ✅ 4.7 checkpoints/justifications SHIPPED + E2E'd (#2196, dialog-fix #2198); 4.4 rules + 4.6 approvals remain |
-| 6.10 | retention/export controls — net-new | W8 | open |
+| 4.4/4.6/4.7 | rules engine, approvals, checkpoints — net-new | W4 | ✅ ALL SHIPPED. 4.7 checkpoints E2E'd (#2196/#2198); 4.6 approvals E2E'd rev 0000341 (#2203 — block→approve→re-run-succeeds, one-shot consumed, real vertex 1125899906842626); 4.4 rules = object-type invariants SHIPPED (#2205, enforced on instance create/update; E2E pending rev 0000342) |
+| 6.10 | retention/export controls — net-new | W8 | ✅ SHIPPED + E2E'd rev 0000341 (#2204) — CSV/JSON export + real retention-reap; Export/retention controls render in the Checkpoints panel |
