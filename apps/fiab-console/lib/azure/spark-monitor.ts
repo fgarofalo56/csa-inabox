@@ -10,10 +10,12 @@
  *     lib/spark/config-presets.synapseLogAnalyticsConf()).
  *   - Databricks workspace diagnostic settings: DatabricksJobs (run history).
  *
- * Every KQL leads with `union isfuzzy=true (<table>)` + `column_ifexists(...)`
- * so a workspace WITHOUT the Spark diagnostic tables (telemetry not wired yet)
- * degrades to ZERO rows instead of a 400 BadArgumentError — exactly the pattern
- * monitor-client.queryActivityFeed / queryLoomAppEvents use. The honest gate
+ * Every KQL leads with ONE `union isfuzzy=true (legA), (legB), …` +
+ * `column_ifexists(...)` so a workspace WITHOUT the Spark diagnostic tables
+ * (telemetry not wired yet) degrades to ZERO rows instead of a 400. NOTE the
+ * legs are COMMA-separated inside a single union — chaining `union (A) union
+ * (B)` is a KQL SYNTAX ERROR (SYN0002), which silently zeroed this pane for
+ * weeks because the 400 was degraded to [] (fixed 2026-07-19). The honest gate
  * (MonitorNotConfiguredError → MessageBar naming the env var) fires only when
  * the workspace id itself is unset.
  *
@@ -83,8 +85,8 @@ union isfuzzy=true (SparkListenerEvent_CL
   | summarize _start=min(TimeGenerated), _end=max(TimeGenerated), _events=count(),
               name=any(_name), pool=any(_pool), user=any(_user) by appId=_appId
   | project appId, name, pool, user, start=_start, end=_end, events=_events,
-            engine="synapse-spark", status="")
-union isfuzzy=true (SynapseBigDataPoolApplicationsEnded
+            engine="synapse-spark", status=""),
+(SynapseBigDataPoolApplicationsEnded
   // Pool DIAGNOSTIC-SETTINGS stream (BigDataPoolAppsEnded → this table) — the
   // control-plane route that works even when the in-session LA emitter cannot:
   // on a workspace with preventDataExfiltration=true the managed VNet blocks
@@ -107,8 +109,8 @@ union isfuzzy=true (SynapseBigDataPoolApplicationsEnded
               name=any(_name), pool=any(_pool), user=any(_user), st=any(_state) by appId=_appId
   | project appId, name, pool, user, start=_startm, end=_endm, events=_events,
             engine="synapse-spark",
-            status=case(st == "success", "Succeeded", st in ("dead", "killed", "error"), "Failed", "Unknown"))
-union isfuzzy=true (DatabricksJobs
+            status=case(st == "success", "Succeeded", st == "killed", "Stopped", st in ("dead", "error"), "Failed", "Unknown")),
+(DatabricksJobs
   | where TimeGenerated >= ago(${days}d)
   | extend
       _rid    = tostring(column_ifexists("RequestId_s", column_ifexists("RunId_s", ""))),
