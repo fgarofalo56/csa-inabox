@@ -111,5 +111,5 @@ Each finding cites code; grades feed the PRP matrix. ✅ built / η partial / �
 | 3.2 | Quiver card catalog 5→~30 (TS analysis families) | W3 | open |
 | 3.1 | analysis-board (Contour) — net-new | W2 | open |
 | 3.3/3.4 | notepad + fusion-sheet — net-new | W5 | open |
-| 4.4/4.6/4.7 | rules engine, approvals, checkpoints — net-new | W4 | ✅ ALL SHIPPED. 4.7 checkpoints E2E'd (#2196/#2198); 4.6 approvals E2E'd rev 0000341 (#2203 — block→approve→re-run-succeeds, one-shot consumed, real vertex 1125899906842626); 4.4 rules = object-type invariants SHIPPED (#2205, enforced on instance create/update; E2E pending rev 0000342) |
+| 4.4/4.6/4.7 | rules engine, approvals, checkpoints — net-new | W4 | ✅ ALL SHIPPED. 4.7 checkpoints E2E'd (#2196/#2198); 4.6 approvals E2E'd rev 0000341 (#2203 — block→approve→re-run-succeeds, one-shot consumed, real vertex 1125899906842626); 4.4 rules = object-type invariants SHIPPED + E2E'd rev 0000342 (#2205; declared customerId regex invariant → POST violating instance = HTTP 422 "Invariant failed: customerId must match /^CUST-/" → reverted) |
 | 6.10 | retention/export controls — net-new | W8 | ✅ SHIPPED + E2E'd rev 0000341 (#2204) — CSV/JSON export + real retention-reap; Export/retention controls render in the Checkpoints panel |
