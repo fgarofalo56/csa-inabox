@@ -39,7 +39,8 @@ export type AppResourceKind =
   | 'keyvault'
   | 'ai-search'
   | 'aoai'
-  | 'cosmos';
+  | 'cosmos'
+  | 'weave-ontology';
 
 export type AppResourceGrantStatus = 'granted' | 'already-exists' | 'pending-grants' | 'skipped' | 'error';
 
@@ -229,7 +230,63 @@ const KINDS: Record<AppResourceKind, KindDef> = {
       };
     },
   },
+  'weave-ontology': {
+    label: 'Weave ontology (semantic graph)',
+    description: 'Query ontology objects/links + invoke actions over the Weave AGE graph — injects the PG host/db/graph; the PG principal is a data-plane grant (script provided).',
+    missing: () => (env('LOOM_WEAVE_PG_FQDN') ? null : 'LOOM_WEAVE_PG_FQDN'),
+    resolve: () => ({
+      envVars: weavePgEnvVars(),
+      grantScope: '',
+      roleGuid: '',
+      roleName: 'PG principal + AGE graph access (data-plane)',
+      dataPlaneScript: weavePgGrantScript(),
+    }),
+  },
 };
+
+// ---------------------------------------------------------------------------
+// Weave PG (AGE) coordinates + grant script — shared by the deployment-level
+// kind and the per-item ontology attach
+// ---------------------------------------------------------------------------
+
+function weaveDb(): string { return env('LOOM_WEAVE_PG_DATABASE') || 'loom-weave'; }
+function weaveGraph(): string { return env('LOOM_WEAVE_GRAPH') || 'loom_ontology'; }
+
+function weavePgEnvVars(): LoomAppEnvVar[] {
+  return [
+    { name: 'LOOM_WEAVE_PG_FQDN', value: env('LOOM_WEAVE_PG_FQDN') },
+    { name: 'LOOM_WEAVE_PG_DATABASE', value: weaveDb() },
+    { name: 'LOOM_WEAVE_GRAPH', value: weaveGraph() },
+    // The PG login the app must connect as (its own UAMI, token = password).
+    { name: 'LOOM_WEAVE_PG_USER', value: appsUamiName() },
+  ];
+}
+
+/**
+ * The one-time data-plane grant: register the apps UAMI as a PG Entra
+ * principal + grant it the same ag_catalog/graph-schema access the Console
+ * principal gets in scripts/csa-loom/bootstrap-weave-pg.sh (mirrored SQL —
+ * keep the two in sync). Pre-filled with REAL values per scripts rule #70.
+ */
+function weavePgGrantScript(): string {
+  const fqdn = env('LOOM_WEAVE_PG_FQDN');
+  const db = weaveDb();
+  const graph = weaveGraph();
+  const uami = appsUamiName();
+  return (
+    `-- Run once as the PG Entra admin on ${fqdn} (idempotent):\n` +
+    `-- psql "host=${fqdn} port=5432 dbname=${db} user=<pg-entra-admin> sslmode=require"\n` +
+    `-- (password = az account get-access-token --resource https://ossrdbms-aad.database.windows.net --query accessToken -o tsv)\n` +
+    `SELECT * FROM pgaadauth_create_principal('${uami}', false, false);\n` +
+    `GRANT CONNECT ON DATABASE "${db}" TO "${uami}";\n` +
+    `GRANT USAGE ON SCHEMA ag_catalog TO "${uami}";\n` +
+    `GRANT SELECT ON ALL TABLES IN SCHEMA ag_catalog TO "${uami}";\n` +
+    `GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA ag_catalog TO "${uami}";\n` +
+    `GRANT USAGE ON SCHEMA "${graph}" TO "${uami}";\n` +
+    `GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA "${graph}" TO "${uami}";\n` +
+    `ALTER DEFAULT PRIVILEGES IN SCHEMA "${graph}" GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO "${uami}";`
+  );
+}
 
 /** Catalog for the UI — every kind with an honest availability flag. */
 export function listAppResourceKinds(): AppResourceKindInfo[] {
@@ -536,6 +593,86 @@ export async function attachLakehouseItemResource(
                 `--role "Storage Blob Data Contributor" --scope "${scope}"`,
             }
           : {}),
+      },
+      addedAt: new Date().toISOString(),
+      addedBy,
+    },
+    envVars,
+  };
+}
+
+/**
+ * Attach a SPECIFIC workspace ontology ITEM (APP-W3 slice A — Weave-native
+ * apps). Resolves the item's declared object types from the structured
+ * designer model (state.objectTypes[]), injects APP_ONT_<SLUG>_* coordinates
+ * for the Weave AGE graph (host/db/graph/login + the ontology id + type
+ * list), and reports the grant honestly: the PG principal is a DATA-PLANE
+ * grant ARM cannot apply — but we CHECK pg_roles through the Console's own
+ * PG connection first, so an already-bootstrapped apps principal shows
+ * 'already-exists' instead of a stale pending-grants banner.
+ */
+export async function attachOntologyItemResource(
+  itemId: string,
+  workspaceId: string,
+  displayName: string,
+  addedBy?: string,
+): Promise<AttachResult> {
+  const fqdn = env('LOOM_WEAVE_PG_FQDN');
+  if (!fqdn) throw new Error('The Weave ontology store is not configured in this deployment — set LOOM_WEAVE_PG_FQDN on the Console.');
+
+  const { itemsContainer } = await import('@/lib/azure/cosmos-client');
+  const items = await itemsContainer();
+  const { resource: item } = await items.item(itemId, workspaceId).read<any>();
+  if (!item || item.itemType !== 'ontology') throw new Error('Ontology item not found.');
+
+  // Object type names from the structured designer model (post-#2128 the
+  // canonical representation); legacy text-DSL-only items just omit _TYPES.
+  const typeNames: string[] = Array.isArray(item.state?.objectTypes)
+    ? item.state.objectTypes.map((t: any) => String(t?.name || '').trim()).filter(Boolean)
+    : [];
+
+  // Honest grant status: probe pg_roles for the apps principal through the
+  // Console's own PG connection (cheap SELECT); fall back to pending-grants
+  // with the pre-filled script when the probe can't run or the role is absent.
+  const uami = appsUamiName();
+  let grantStatus: AppResourceGrantStatus = 'pending-grants';
+  let grantDetail =
+    'The apps identity must be a PG Entra principal with AGE graph access — run the script below once as the PG admin (idempotent).';
+  try {
+    const { executePostgresQuery } = await import('@/lib/azure/postgres-flex-client');
+    const r = await executePostgresQuery(
+      fqdn, weaveDb(),
+      `SELECT 1 FROM pg_roles WHERE rolname = '${uami.replace(/'/g, '')}';`,
+    );
+    if (r.rowCount > 0) {
+      grantStatus = 'already-exists';
+      grantDetail = `'${uami}' is already a PG principal on ${fqdn} — no action needed.`;
+    }
+  } catch {
+    /* probe unavailable (console principal not wired yet) — keep pending-grants */
+  }
+
+  const slug = envSlug(displayName);
+  const envVars: LoomAppEnvVar[] = [
+    { name: `APP_ONT_${slug}_ID`, value: itemId },
+    { name: `APP_ONT_${slug}_PG_HOST`, value: fqdn },
+    { name: `APP_ONT_${slug}_PG_DB`, value: weaveDb() },
+    { name: `APP_ONT_${slug}_GRAPH`, value: weaveGraph() },
+    { name: `APP_ONT_${slug}_PG_USER`, value: uami },
+    ...(typeNames.length ? [{ name: `APP_ONT_${slug}_TYPES`, value: typeNames.join(',') }] : []),
+  ];
+  return {
+    resource: {
+      id: `ont-item-${itemId.slice(0, 8)}`,
+      kind: 'weave-ontology',
+      label: `Ontology: ${displayName}`,
+      envNames: envVars.map((e) => e.name),
+      grant: {
+        role: 'PG principal + AGE graph access (data-plane)',
+        scope: `${fqdn}/${weaveDb()} (graph '${weaveGraph()}')`,
+        status: grantStatus,
+        detail: grantDetail,
+        ...(grantStatus === 'pending-grants' ? { grantScript: weavePgGrantScript() } : {}),
       },
       addedAt: new Date().toISOString(),
       addedBy,

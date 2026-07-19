@@ -176,7 +176,7 @@ export function LoomAppRuntimeEditor({ item, id }: EditorProps) {
 
   // Workspace items for the per-item picker — kinds that support attaching a
   // SPECIFIC item instead of the deployment default.
-  const ITEM_PICKER_TYPES: Record<string, string> = { lakehouse: 'lakehouse', adx: 'kql-database' };
+  const ITEM_PICKER_TYPES: Record<string, string> = { lakehouse: 'lakehouse', adx: 'kql-database', 'weave-ontology': 'ontology' };
   useEffect(() => {
     const itemType = ITEM_PICKER_TYPES[attachKind];
     if (!itemType || !appWorkspaceId) { setLakeItems([]); setAttachItemId(''); return; }
@@ -593,14 +593,17 @@ export function LoomAppRuntimeEditor({ item, id }: EditorProps) {
               </Dropdown>
               {ITEM_PICKER_TYPES[attachKind] && lakeItems.length > 0 && (
                 <Dropdown
-                  placeholder={attachKind === 'adx' ? 'Deployment default database' : 'Deployment default lake'}
+                  placeholder={attachKind === 'adx' ? 'Deployment default database'
+                    : attachKind === 'weave-ontology' ? 'Graph only (no specific ontology)' : 'Deployment default lake'}
                   value={lakeItems.find((it) => it.id === attachItemId)?.displayName || ''}
                   selectedOptions={attachItemId ? [attachItemId] : []}
                   onOptionSelect={(_, d) => setAttachItemId(d.optionValue || '')}
                   style={{ minWidth: '240px' }}
                 >
-                  <Option value="" text={attachKind === 'adx' ? 'Deployment default database' : 'Deployment default lake'}>
-                    {attachKind === 'adx' ? 'Deployment default database (cluster-wide viewer)' : 'Deployment default lake (all layers)'}
+                  <Option value="" text={attachKind === 'adx' ? 'Deployment default database'
+                    : attachKind === 'weave-ontology' ? 'Graph only (no specific ontology)' : 'Deployment default lake'}>
+                    {attachKind === 'adx' ? 'Deployment default database (cluster-wide viewer)'
+                      : attachKind === 'weave-ontology' ? 'Graph coordinates only (no ontology id/types)' : 'Deployment default lake (all layers)'}
                   </Option>
                   {lakeItems.map((it) => (
                     <Option key={it.id} value={it.id} text={it.displayName}>{it.displayName}</Option>
