@@ -133,7 +133,7 @@ export function ObjectExplorerPanel({ ontologyId }: { ontologyId: string }) {
             <Badge key={sv.name} appearance="tint" color="brand" style={{ cursor: 'pointer' }}
               onClick={() => { setType(sv.type); setQ(sv.q || ''); void search(sv.type, sv.q || ''); }}>
               {sv.name}
-              <Dismiss16Regular style={{ marginLeft: 4, cursor: 'pointer' }} onClick={(e) => { e.stopPropagation(); void removeSaved(sv.name); }} />
+              <Dismiss16Regular style={{ marginLeft: tokens.spacingHorizontalXS, cursor: 'pointer' }} onClick={(e) => { e.stopPropagation(); void removeSaved(sv.name); }} />
             </Badge>
           ))}
         </div>
@@ -146,7 +146,7 @@ export function ObjectExplorerPanel({ ontologyId }: { ontologyId: string }) {
           {facets.map((f) => (
             <div key={f.objectType} className={`${s.railItem} ${type === f.objectType ? s.railItemActive : ''}`}
               onClick={() => setType(f.objectType)}>
-              <span><Cube20Regular style={{ verticalAlign: 'middle', marginRight: 6 }} />{f.objectType}</span>
+              <span><Cube20Regular style={{ verticalAlign: 'middle', marginRight: tokens.spacingHorizontalSNudge }} />{f.objectType}</span>
               <Badge appearance="tint" size="small">{f.count}</Badge>
             </div>
           ))}
