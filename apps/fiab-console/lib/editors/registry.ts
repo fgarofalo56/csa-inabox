@@ -121,6 +121,7 @@ export const EDITOR_REGISTRY: Record<string, EditorComponent> = {
   'user-data-function':   reg(() => import('./phase4/user-data-function-editor'), 'UserDataFunctionEditor'),
   'variable-library':     reg(() => import('./phase4/variable-library-editor'), 'VariableLibraryEditor'),
   'ontology':             reg(() => import('./phase4/ontology-editor'),         'OntologyEditor'),
+  'analysis-board':       reg(() => import('./phase4/analysis-board-editor'),   'AnalysisBoardEditor'),
   'graph-model':          reg(() => import('./phase4/graph-model-editor'),      'GraphModelEditor'),
   // FGC-12 — Digital Twin Builder (RTI). ADX-native twin graph by DEFAULT
   // (entity/relationship tables + make-graph); Azure Digital Twins opt-in only.
