@@ -174,6 +174,21 @@ export function LoomAppRuntimeEditor({ item, id }: EditorProps) {
     finally { setPubApiBusy(false); }
   }, [id]);
 
+  // Publish-as-MCP (APP-W5 S5) — agent-fastapi apps.
+  const [pubMcpBusy, setPubMcpBusy] = useState(false);
+  const publishAsMcp = useCallback(async () => {
+    setPubMcpBusy(true); setBanner(null);
+    try {
+      const r = await clientFetch(`/api/items/loom-app-runtime/${encodeURIComponent(id)}/publish-mcp`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({}),
+      });
+      const j = await r.json();
+      if (j.ok === false) setBanner({ intent: 'warning', text: j.error });
+      else setBanner({ intent: 'success', text: `Published as MCP tool '${j.toolName}' — point an MCP client at ${j.endpoint} with a scoped Loom token.` });
+    } catch (e: any) { setBanner({ intent: 'error', text: e?.message || String(e) }); }
+    finally { setPubMcpBusy(false); }
+  }, [id]);
+
   // ---- Resources (APPS-W2 — Databricks-Apps "App resources" parity) -------
   interface AppResourceRec {
     id: string; kind: string; label: string; envNames: string[];
@@ -528,6 +543,9 @@ export function LoomAppRuntimeEditor({ item, id }: EditorProps) {
                 <MessageBarActions>
                   <Button size="small" icon={<Open20Regular />} onClick={() => window.open(live?.url || rt.url!, '_blank', 'noreferrer')}>Open</Button>
                   <Button size="small" icon={<Rocket20Regular />} disabled={pubApiBusy} onClick={publishAsApi}>{pubApiBusy ? 'Publishing…' : 'Publish as API'}</Button>
+                  {rt.templateId === 'agent-fastapi' && (
+                    <Button size="small" icon={<Rocket20Regular />} disabled={pubMcpBusy} onClick={publishAsMcp}>{pubMcpBusy ? 'Publishing…' : 'Publish as MCP'}</Button>
+                  )}
                 </MessageBarActions>
               </MessageBar>
             ) : (
