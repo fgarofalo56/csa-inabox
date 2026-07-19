@@ -1855,8 +1855,13 @@ jobs:
             export PG_ADMIN_USER="loom-deploy-sp"
           fi
           chmod +x scripts/csa-loom/bootstrap-weave-pg.sh
+          # APPS-W3: also register the shared apps UAMI (the identity every hosted
+          # Loom app runs as) so weave-ontology app resources work day-one — the
+          # Resources-tab attach then reports already-exists instead of a
+          # pending-grants script.
           SUB="$DLZ_SUB" DLZ_RG="$DLZ_RG" WEAVE_PG_SERVER="$WEAVE_PG_SERVER" \
             CONSOLE_UAMI_NAME="$CONSOLE_UAMI_NAME" \
+            EXTRA_PG_PRINCIPALS="uami-loom-mcp-${{ inputs.region }}" \
             bash scripts/csa-loom/bootstrap-weave-pg.sh \
             || echo "::warning::Weave PG bootstrap incomplete — ensure the deploy SP is a PG Entra admin on $WEAVE_PG_SERVER, then re-run."
 
