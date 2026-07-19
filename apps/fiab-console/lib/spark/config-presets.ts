@@ -247,6 +247,15 @@ export const COMMON_SPARK_CONF_KEYS: { key: string; hint: string }[] = [
  * @param env defaults to process.env (server-side).
  */
 export function synapseLogAnalyticsConf(env: NodeJS.ProcessEnv = process.env): SparkConf {
+  // EXPLICIT OPT-IN (live incident 2026-07-18): on a Synapse workspace with
+  // preventDataExfiltration=true the managed VNet blocks the emitter's egress
+  // and every session carrying these confs DIES at startup (state=dead —
+  // sessions 44/48 + the warm pool all died while conf-less sessions ran
+  // fine). Monitor>Spark now reads the pool diagnostic-settings table
+  // (SynapseBigDataPoolApplicationsEnded) instead, which needs NO in-session
+  // emitter. Set LOOM_SPARK_LA_EMITTER=1 ONLY on workspaces without DEP (or
+  // after wiring AMPLS + a managed private endpoint for Azure Monitor).
+  if ((env.LOOM_SPARK_LA_EMITTER || '').trim() !== '1') return {};
   const workspaceId = (env.LOOM_SPARK_LA_WORKSPACE_ID || '').trim();
   const secret = (env.LOOM_SPARK_LA_KEY || '').trim();
   const kvName = (env.LOOM_SPARK_LA_KEYVAULT_NAME || '').trim();
