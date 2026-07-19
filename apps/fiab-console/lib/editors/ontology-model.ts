@@ -268,6 +268,12 @@ export interface OntoActionType {
    * Microsoft Purview lineage when configured. Off by default (opt-in).
    */
   emitLineage?: boolean;
+  /**
+   * Foundry "approvals" — when true a run is blocked until an approver approves
+   * the request for the exact parameters; the approval is one-shot (consumed on
+   * the next matching run). Off by default (opt-in).
+   */
+  requiresApproval?: boolean;
 }
 
 // ============================================================
@@ -484,6 +490,7 @@ export function normalizeOntoActionType(raw: unknown): OntoActionType | null {
     ...(r.requiresJustification === true ? { requiresJustification: true } : {}),
     ...(submissionCriteria.length ? { submissionCriteria } : {}),
     ...(r.emitLineage === true ? { emitLineage: true } : {}),
+    ...(r.requiresApproval === true ? { requiresApproval: true } : {}),
   };
 }
 
