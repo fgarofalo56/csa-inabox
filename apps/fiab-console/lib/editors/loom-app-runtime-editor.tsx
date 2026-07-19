@@ -174,22 +174,26 @@ export function LoomAppRuntimeEditor({ item, id }: EditorProps) {
     } catch { /* table renders empty; attach errors surface via banner */ }
   }, [id, isNew]);
 
-  // Workspace lakehouse items for the per-item picker (loaded when relevant).
+  // Workspace items for the per-item picker — kinds that support attaching a
+  // SPECIFIC item instead of the deployment default.
+  const ITEM_PICKER_TYPES: Record<string, string> = { lakehouse: 'lakehouse', adx: 'kql-database' };
   useEffect(() => {
-    if (attachKind !== 'lakehouse' || !appWorkspaceId) { setLakeItems([]); setAttachItemId(''); return; }
+    const itemType = ITEM_PICKER_TYPES[attachKind];
+    if (!itemType || !appWorkspaceId) { setLakeItems([]); setAttachItemId(''); return; }
     let cancelled = false;
     (async () => {
       try {
-        const r = await clientFetch('/api/items?type=lakehouse&limit=100');
+        const r = await clientFetch(`/api/items?type=${encodeURIComponent(itemType)}&limit=100`);
         const j = await r.json();
         if (!cancelled && j.ok) {
           setLakeItems((j.items || [])
             .filter((it: any) => it.workspaceId === appWorkspaceId)
             .map((it: any) => ({ id: it.id, displayName: it.displayName || it.id })));
         }
-      } catch { /* picker renders with the default-lake option only */ }
+      } catch { /* picker renders with the default option only */ }
     })();
     return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [attachKind, appWorkspaceId]);
 
   const attachResource = useCallback(async () => {
@@ -201,7 +205,7 @@ export function LoomAppRuntimeEditor({ item, id }: EditorProps) {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           kind: attachKind,
-          ...(attachKind === 'lakehouse' && picked ? { itemId: picked.id, itemName: picked.displayName } : {}),
+          ...(picked ? { itemId: picked.id, itemName: picked.displayName } : {}),
         }),
       });
       const j = await r.json();
@@ -573,12 +577,12 @@ export function LoomAppRuntimeEditor({ item, id }: EditorProps) {
                 style={{ minWidth: '280px' }}
               >
                 {resKinds.map((k) => {
-                  // Lakehouse supports MULTIPLE per-item attaches, so it stays
-                  // pickable even when a lakehouse is already attached (the
-                  // route still 409s an exact duplicate honestly). Other kinds
-                  // are single-attach.
+                  // Kinds with a per-item picker (lakehouse, adx) support
+                  // MULTIPLE attaches, so they stay pickable even when one is
+                  // attached (the route still 409s an exact duplicate
+                  // honestly). Other kinds are single-attach.
                   const attached = resources.some((r) => r.kind === k.kind);
-                  const disabled = !k.available || (attached && k.kind !== 'lakehouse');
+                  const disabled = !k.available || (attached && !ITEM_PICKER_TYPES[k.kind]);
                   return (
                     <Option key={k.kind} value={k.kind} disabled={disabled}
                       text={k.label}>
@@ -587,15 +591,17 @@ export function LoomAppRuntimeEditor({ item, id }: EditorProps) {
                   );
                 })}
               </Dropdown>
-              {attachKind === 'lakehouse' && lakeItems.length > 0 && (
+              {ITEM_PICKER_TYPES[attachKind] && lakeItems.length > 0 && (
                 <Dropdown
-                  placeholder="Deployment default lake"
+                  placeholder={attachKind === 'adx' ? 'Deployment default database' : 'Deployment default lake'}
                   value={lakeItems.find((it) => it.id === attachItemId)?.displayName || ''}
                   selectedOptions={attachItemId ? [attachItemId] : []}
                   onOptionSelect={(_, d) => setAttachItemId(d.optionValue || '')}
                   style={{ minWidth: '240px' }}
                 >
-                  <Option value="" text="Deployment default lake">Deployment default lake (all layers)</Option>
+                  <Option value="" text={attachKind === 'adx' ? 'Deployment default database' : 'Deployment default lake'}>
+                    {attachKind === 'adx' ? 'Deployment default database (cluster-wide viewer)' : 'Deployment default lake (all layers)'}
+                  </Option>
                   {lakeItems.map((it) => (
                     <Option key={it.id} value={it.id} text={it.displayName}>{it.displayName}</Option>
                   ))}

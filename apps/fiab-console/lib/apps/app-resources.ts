@@ -407,6 +407,85 @@ function envSlug(name: string): string {
 }
 
 /**
+ * Attach a SPECIFIC workspace kql-database ITEM (APPS-W2 slice 3). Resolves
+ * the item's REAL ADX database (state.databaseName → provisioning.secondaryIds
+ * — the same chain kusto-client.resolveDatabase uses), injects
+ * APP_KQL_<SLUG>_CLUSTER_URI/_DB, and grants the apps UAMI **Viewer scoped to
+ * that DATABASE only** (clusters/{c}/databases/{db}/principalAssignments) —
+ * tighter than the cluster-wide AllDatabasesViewer the deployment-level
+ * attach uses.
+ */
+export async function attachKqlItemResource(
+  itemId: string,
+  workspaceId: string,
+  displayName: string,
+  addedBy?: string,
+): Promise<AttachResult> {
+  const clusterUri = env('LOOM_KUSTO_CLUSTER_URI');
+  if (!clusterUri) throw new Error('ADX is not configured in this deployment — set LOOM_KUSTO_CLUSTER_URI on the Console.');
+
+  // The item's REAL database — same resolution chain as kusto-client.
+  const { itemsContainer } = await import('@/lib/azure/cosmos-client');
+  const items = await itemsContainer();
+  const { resource: item } = await items.item(itemId, workspaceId).read<any>();
+  if (!item || item.itemType !== 'kql-database') throw new Error('KQL database item not found.');
+  const st = item.state || {};
+  const prov = st.provisioning;
+  const database: string =
+    (typeof st.databaseName === 'string' && st.databaseName.trim())
+      ? st.databaseName.trim()
+      : (prov && (prov.status === 'created' || prov.status === 'exists') && typeof (prov.secondaryIds?.database || prov.resourceId) === 'string')
+        ? String(prov.secondaryIds?.database || prov.resourceId).trim()
+        : env('LOOM_KUSTO_DEFAULT_DB');
+  if (!database) throw new Error(`Could not resolve the ADX database for "${displayName}" (set LOOM_KUSTO_DEFAULT_DB or provision the item).`);
+
+  const clusterName = env('LOOM_KUSTO_CLUSTER_NAME') || (clusterUri.match(/https:\/\/([^.]+)\./)?.[1] ?? '');
+  const clusterScope = (await resolveArmIdByName('microsoft.kusto/clusters', clusterName))
+    || armId(env('LOOM_KUSTO_SUB') || SUB(), env('LOOM_KUSTO_RG') || DLZ_RG(), 'Microsoft.Kusto/clusters', clusterName);
+  const principalId = await appsUamiPrincipalId();
+
+  // DATABASE-scoped Viewer principal-assignment (ADX's own RBAC plane).
+  const tenant = env('LOOM_TENANT_ID') || env('AZURE_TENANT_ID');
+  let grantStatus: AppResourceGrantStatus; let grantDetail: string;
+  try {
+    const res = await armFetch(
+      `${armBase()}${clusterScope}/databases/${encodeURIComponent(database)}/principalAssignments/loom-app-db-viewer-${principalId.slice(0, 8)}?api-version=2023-08-15`,
+      {
+        method: 'PUT',
+        body: JSON.stringify({ properties: { principalId, principalType: 'App', role: 'Viewer', ...(tenant ? { tenantId: tenant } : {}) } }),
+      },
+    );
+    if (res.ok) { grantStatus = 'granted'; grantDetail = `Viewer granted on ADX database '${database}'.`; }
+    else {
+      const body: any = await res.json().catch(() => ({}));
+      const message: string = body?.error?.message || `HTTP ${res.status}`;
+      if (res.status === 409 || /already exists|Conflict/i.test(message)) { grantStatus = 'already-exists'; grantDetail = 'The apps identity already has a Viewer assignment on this database.'; }
+      else { grantStatus = res.status === 403 ? 'pending-grants' : 'error'; grantDetail = message; }
+    }
+  } catch (e: any) {
+    grantStatus = 'error'; grantDetail = e?.message || String(e);
+  }
+
+  const slug = envSlug(displayName);
+  const envVars: LoomAppEnvVar[] = [
+    { name: `APP_KQL_${slug}_CLUSTER_URI`, value: clusterUri },
+    { name: `APP_KQL_${slug}_DB`, value: database },
+  ];
+  return {
+    resource: {
+      id: `kql-item-${itemId.slice(0, 8)}`,
+      kind: 'adx',
+      label: `KQL database: ${displayName}`,
+      envNames: envVars.map((e) => e.name),
+      grant: { role: `Viewer (database '${database}')`, scope: `${clusterScope}/databases/${database}`, status: grantStatus, detail: grantDetail },
+      addedAt: new Date().toISOString(),
+      addedBy,
+    },
+    envVars,
+  };
+}
+
+/**
  * Attach a SPECIFIC workspace lakehouse ITEM (APPS-W2 slice 2 — the
  * Databricks-Apps "pick the resource instance" flow). Resolves the item's REAL
  * abfss root via lakehouse-abfss (provisioned path or convention fallback),
