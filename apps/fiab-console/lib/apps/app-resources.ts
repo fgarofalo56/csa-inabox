@@ -631,25 +631,53 @@ export async function attachOntologyItemResource(
     ? item.state.objectTypes.map((t: any) => String(t?.name || '').trim()).filter(Boolean)
     : [];
 
-  // Honest grant status: probe pg_roles for the apps principal through the
-  // Console's own PG connection (cheap SELECT); fall back to pending-grants
-  // with the pre-filled script when the probe can't run or the role is absent.
+  // Grant with SELF-HEAL (G2 zero-day-one-gates): the Console's own PG
+  // principal is the server's Entra ADMIN (bicep registers it; live receipt
+  // 2026-07-19: administrators list = ['loom-console'] only — the deploy SP
+  // path can NEVER apply this grant here). So when pg_roles shows the apps
+  // principal missing, the Console creates it + grants graph DML itself, and
+  // only falls back to the pending-grants script if that fails (e.g. the
+  // Console principal is not the admin in this deployment).
   const uami = appsUamiName();
   let grantStatus: AppResourceGrantStatus = 'pending-grants';
   let grantDetail =
     'The apps identity must be a PG Entra principal with AGE graph access — run the script below once as the PG admin (idempotent).';
-  try {
-    const { executePostgresQuery } = await import('@/lib/azure/postgres-flex-client');
-    const r = await executePostgresQuery(
-      fqdn, weaveDb(),
-      `SELECT 1 FROM pg_roles WHERE rolname = '${uami.replace(/'/g, '')}';`,
-    );
-    if (r.rowCount > 0) {
-      grantStatus = 'already-exists';
-      grantDetail = `'${uami}' is already a PG principal on ${fqdn} — no action needed.`;
+  if (/^[A-Za-z0-9_-]{1,128}$/.test(uami)) {
+    try {
+      const { executePostgresQuery } = await import('@/lib/azure/postgres-flex-client');
+      const probe = () => executePostgresQuery(
+        fqdn, weaveDb(),
+        `SELECT 1 FROM pg_roles WHERE rolname = '${uami}';`,
+      );
+      if ((await probe()).rowCount > 0) {
+        grantStatus = 'already-exists';
+        grantDetail = `'${uami}' is already a PG principal on ${fqdn} — no action needed.`;
+      } else {
+        // Same SQL as bootstrap-weave-pg.sh's EXTRA_PG_PRINCIPALS block
+        // (DML, deliberately no CREATE). Idempotent.
+        const graph = weaveGraph();
+        await executePostgresQuery(
+          fqdn, weaveDb(),
+          `SELECT * FROM pgaadauth_create_principal('${uami}', false, false);`,
+        ).catch(() => { /* may already exist under a race — the re-probe decides */ });
+        await executePostgresQuery(
+          fqdn, weaveDb(),
+          `GRANT CONNECT ON DATABASE "${weaveDb()}" TO "${uami}"; ` +
+          `GRANT USAGE ON SCHEMA ag_catalog TO "${uami}"; ` +
+          `GRANT SELECT ON ALL TABLES IN SCHEMA ag_catalog TO "${uami}"; ` +
+          `GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA ag_catalog TO "${uami}"; ` +
+          `GRANT USAGE ON SCHEMA "${graph}" TO "${uami}"; ` +
+          `GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA "${graph}" TO "${uami}"; ` +
+          `ALTER DEFAULT PRIVILEGES IN SCHEMA "${graph}" GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO "${uami}";`,
+        );
+        if ((await probe()).rowCount > 0) {
+          grantStatus = 'granted';
+          grantDetail = `'${uami}' registered as a PG principal with graph DML on '${graph}' (self-applied by the Console admin principal).`;
+        }
+      }
+    } catch {
+      /* self-heal unavailable (console principal not the PG admin) — keep pending-grants */
     }
-  } catch {
-    /* probe unavailable (console principal not wired yet) — keep pending-grants */
   }
 
   const slug = envSlug(displayName);
