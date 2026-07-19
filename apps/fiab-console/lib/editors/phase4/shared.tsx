@@ -294,6 +294,7 @@ const useLocalStyles = makeStyles({
     '@media (max-width: 900px)': { gridTemplateColumns: 'minmax(0, 1fr)' },
   },
   ontoBindRowSpacer: { flex: 1 },
+  retentionInput: { width: '84px' },
   ontoEmpty: {
     display: 'flex', alignItems: 'center', justifyContent: 'center',
     padding: tokens.spacingVerticalL, borderRadius: tokens.borderRadiusLarge,
