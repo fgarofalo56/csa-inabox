@@ -43,28 +43,37 @@ export async function objectFacets(declared: readonly string[]): Promise<ObjectF
   return out.sort((a, b) => b.count - a.count);
 }
 
+/** How many instances a search scans before filtering (honest upper bound). */
+export const SEARCH_SCAN_CAP = 2000;
+
 /**
  * Free-text search of an object type's instances: case-insensitive CONTAINS on
- * any string property. `q` is embedded via a JSON-escaped cypher literal (the
- * same guard runCypher uses for values) so it can't break out of the string.
+ * any string property value.
+ *
+ * We fetch the type's instances (bounded by SEARCH_SCAN_CAP) and filter in JS
+ * rather than pushing the predicate into Cypher. Apache AGE's openCypher lacks
+ * the list/map machinery a generic "any string property CONTAINS" needs
+ * (`keys(properties(n))`, dynamic `properties(n)[k]` indexing, `any(... )`) — a
+ * server-side predicate built on them silently matches nothing (caught live
+ * 2026-07-19: every search returned 0 rows). JS filtering is reliable for
+ * ontology-scale instance sets and, as a bonus, `q` never touches Cypher — only
+ * the safeLabel-guarded label does — so there is no query-injection surface.
  */
 export async function searchObjects(objectType: string, q: string, top = 100): Promise<WeaveObject[]> {
   const label = safeLabel(objectType);
   if (!label) throw new PostgresError(`Object type '${objectType}' is not a valid AGE label`, 400);
   const limit = Math.min(Math.max(Math.trunc(top) || 100, 1), 1000);
-  const query = (q || '').trim();
-  if (!query) {
-    const res = await runCypher(`MATCH (n:${label}) RETURN n LIMIT ${limit}`, [{ name: 'n', type: 'agtype' }]);
-    return res.rows.map((r) => parseVertex(r[0])).filter((o): o is WeaveObject => !!o);
-  }
-  const needle = JSON.stringify(query.toLowerCase()); // double-quoted, escaped
-  // AGE openCypher: toLower + CONTAINS over properties(n) values, any string prop.
-  const stmt =
-    `MATCH (n:${label}) WITH n, [k IN keys(properties(n)) WHERE toString(properties(n)[k]) IS NOT NULL] AS ks ` +
-    `WHERE any(k IN ks WHERE toLower(toString(properties(n)[k])) CONTAINS ${needle}) ` +
-    `RETURN n LIMIT ${limit}`;
-  const res = await runCypher(stmt, [{ name: 'n', type: 'agtype' }]);
-  return res.rows.map((r) => parseVertex(r[0])).filter((o): o is WeaveObject => !!o);
+  const query = (q || '').trim().toLowerCase();
+  const scanCap = query ? SEARCH_SCAN_CAP : limit;
+  const res = await runCypher(`MATCH (n:${label}) RETURN n LIMIT ${scanCap}`, [{ name: 'n', type: 'agtype' }]);
+  const objs = res.rows.map((r) => parseVertex(r[0])).filter((o): o is WeaveObject => !!o);
+  if (!query) return objs.slice(0, limit);
+  const matched = objs.filter((o) =>
+    Object.entries(o.properties || {}).some(
+      ([k, v]) => !k.startsWith('_') && v != null && String(v).toLowerCase().includes(query),
+    ),
+  );
+  return matched.slice(0, limit);
 }
 
 export interface TraverseNeighbor { linkType: string; direction: 'out' | 'in'; neighbor: WeaveObject }
