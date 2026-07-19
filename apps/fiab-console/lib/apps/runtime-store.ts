@@ -60,6 +60,10 @@ export interface AppRuntimeState {
   /** APIM API this app was published as (APP-W5 S3 publish-as-API). */
   publishedApiId?: string;
   publishedApiPath?: string;
+  /** Published as an MCP tool (APP-W5 S5; agent-fastapi apps). */
+  mcpPublished?: boolean;
+  mcpToolName?: string;
+  mcpPublishedAt?: string;
 }
 
 const MAX_BUILDS = 20;
