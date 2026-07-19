@@ -27,6 +27,7 @@ import { readAppRuntime, saveAppRuntime, LOOM_APP_RUNTIME_TYPE } from '@/lib/app
 import {
   attachAppResource,
   attachLakehouseItemResource,
+  attachKqlItemResource,
   listAppResourceKinds,
   type AppResourceKind,
 } from '@/lib/apps/app-resources';
@@ -84,8 +85,17 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
       ({ resource, envVars } = await attachLakehouseItemResource(
         itemId, access.item.workspaceId, (body.itemName || '').trim() || 'Lakehouse', who,
       ));
+    } else if (itemId && kind === 'adx') {
+      // Per-item attach — a SPECIFIC kql-database (database-scoped Viewer).
+      if ((rt.resources || []).some((r) => r.id === `kql-item-${itemId.slice(0, 8)}`)) {
+        return apiError('That KQL database is already attached.', 409, { code: 'conflict' });
+      }
+      ({ resource, envVars } = await attachKqlItemResource(
+        itemId, access.item.workspaceId, (body.itemName || '').trim() || 'KQL database', who,
+      ));
     } else {
-      if ((rt.resources || []).some((r) => r.kind === kind && !r.id.startsWith('lakehouse-item-'))) {
+      // Item-scoped rows (…-item-… ids) never block a deployment-level attach.
+      if ((rt.resources || []).some((r) => r.kind === kind && !/-item-/.test(r.id))) {
         return apiError(`${known.label} is already attached — detach it first to re-attach.`, 409, { code: 'conflict' });
       }
       ({ resource, envVars } = await attachAppResource(kind, who));
