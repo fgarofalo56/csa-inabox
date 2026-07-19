@@ -23,7 +23,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { loadOwnedItem } from '../../../_lib/item-crud';
-import { objectTypeNames, normalizeOntoActionTypes, validateActionRun } from '@/lib/editors/ontology-model';
+import { objectTypeNames, normalizeOntoActionTypes, validateActionRun, evaluateSubmissionCriteria } from '@/lib/editors/ontology-model';
 import { weaveGate, runActionType, type WeaveActionType } from '@/lib/azure/weave-ontology-store';
 import { PostgresError } from '@/lib/azure/postgres-flex-client';
 import { recordActionJustification, isValidReason, MIN_JUSTIFICATION_LEN } from '@/lib/azure/action-justification-store';
@@ -90,6 +90,12 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   // Validate + coerce the typed parameters against the declared schema.
   const validated = validateActionRun(action, rawParams);
   if (!validated.ok) return err(validated.error, 400, 'invalid_parameters');
+
+  // Enforce the action's submission criteria (Foundry-parity row 2.4) on the
+  // coerced values, before any write-back.
+  const criteria = evaluateSubmissionCriteria(action, validated.values);
+  if (!criteria.ok) return err(criteria.error, 422, 'criteria_failed');
+
   const runParams: Record<string, unknown> = { ...validated.values };
   // The target object id (update/delete) is not a declared property — pass it
   // through verbatim when supplied.
