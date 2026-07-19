@@ -118,18 +118,24 @@ async function recordRun(
 async function clearPendingRuns(
   items: any, nb: WorkspaceItem, workspaceId: string, keys: string[],
 ): Promise<void> {
-  try {
-    const state = (nb.state as any) || {};
-    const pendingRuns = state.pendingRuns;
-    if (!pendingRuns || typeof pendingRuns !== 'object') return;
-    let changed = false;
-    const next = { ...pendingRuns };
-    for (const k of keys) { if (k in next) { delete next[k]; changed = true; } }
-    if (!changed) return;
-    await items.item(nb.id, workspaceId).replace({
-      ...nb, state: { ...state, pendingRuns: next }, updatedAt: new Date().toISOString(),
-    } as WorkspaceItem);
-  } catch { /* non-fatal */ }
+  // ATOMIC per-key removal via Cosmos PATCH — NOT read-modify-replace. The
+  // replace variant raced the editor's autosave PUT (both read-modify-write the
+  // whole item without etag): the autosave could re-persist the stale
+  // pendingRuns map and RESURRECT the cleaned entry, so a dead-session run
+  // re-resumed ("Reconnecting to an in-flight run…") on every notebook open
+  // (live receipt 2026-07-18, sessions 44/48). PATCH removes just the key on
+  // the CURRENT server document, immune to concurrent full-state writes.
+  const state = (nb.state as any) || {};
+  const pendingRuns = state.pendingRuns;
+  if (!pendingRuns || typeof pendingRuns !== 'object') return;
+  for (const k of keys) {
+    if (!(k in pendingRuns)) continue;
+    try {
+      // JSON-pointer escape: '~' → '~0', '/' → '~1' (colons in run keys are safe).
+      const ptr = k.replace(/~/g, '~0').replace(/\//g, '~1');
+      await items.item(nb.id, workspaceId).patch([{ op: 'remove', path: `/state/pendingRuns/${ptr}` }]);
+    } catch { /* non-fatal — key already gone or patch unsupported; next poll retries */ }
+  }
 }
 
 // Bounds for surfacing rich output shapes (R3 #5) without bloating the response

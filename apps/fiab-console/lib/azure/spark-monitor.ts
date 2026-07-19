@@ -84,6 +84,30 @@ union isfuzzy=true (SparkListenerEvent_CL
               name=any(_name), pool=any(_pool), user=any(_user) by appId=_appId
   | project appId, name, pool, user, start=_start, end=_end, events=_events,
             engine="synapse-spark", status="")
+union isfuzzy=true (SynapseBigDataPoolApplicationsEnded
+  // Pool DIAGNOSTIC-SETTINGS stream (BigDataPoolAppsEnded → this table) — the
+  // control-plane route that works even when the in-session LA emitter cannot:
+  // on a workspace with preventDataExfiltration=true the managed VNet blocks
+  // the emitter's egress and a session carrying the spark.synapse.logAnalytics
+  // confs DIES at startup (live receipt 2026-07-18: sessions 44/48 + warm-pool
+  // sessions all state=dead while conf-less sessions ran fine). One row per
+  // ENDED application with livyState + submit/start/end times in Properties.
+  | where TimeGenerated >= ago(${days}d)
+  | extend p = parse_json(Properties)
+  | extend
+      _appId = tostring(p.applicationId),
+      _name  = tostring(p.applicationName),
+      _pool  = tostring(extract(@"/bigdatapools/([^/]+)$", 1, tolower(_ResourceId))),
+      _user  = tostring(p.submitterId),
+      _state = tolower(tostring(p.livyState)),
+      _start = todatetime(p.startTime),
+      _end   = todatetime(p.endTime)
+  | where isnotempty(_appId)
+  | summarize _startm=min(_start), _endm=max(_end), _events=count(),
+              name=any(_name), pool=any(_pool), user=any(_user), st=any(_state) by appId=_appId
+  | project appId, name, pool, user, start=_startm, end=_endm, events=_events,
+            engine="synapse-spark",
+            status=case(st == "success", "Succeeded", st in ("dead", "killed", "error"), "Failed", "Unknown"))
 union isfuzzy=true (DatabricksJobs
   | where TimeGenerated >= ago(${days}d)
   | extend
@@ -519,7 +543,13 @@ export function sparkNativeDiagLinks(env: NodeJS.ProcessEnv = process.env): Nati
   return links;
 }
 
-/** Whether Spark telemetry (Synapse→LA) emission is configured in this deployment. */
+/**
+ * Whether the IN-SESSION Spark→LA emitter is opted in + configured. NOTE: the
+ * Monitor→Spark application list no longer depends on it — the pool
+ * diagnostic-settings table (SynapseBigDataPoolApplicationsEnded) supplies
+ * application rows with no in-session emitter (which DIES on
+ * preventDataExfiltration workspaces — see synapseLogAnalyticsConf).
+ */
 export function sparkTelemetryConfigured(env: NodeJS.ProcessEnv = process.env): boolean {
-  return !!(env.LOOM_SPARK_LA_WORKSPACE_ID || '').trim();
+  return (env.LOOM_SPARK_LA_EMITTER || '').trim() === '1' && !!(env.LOOM_SPARK_LA_WORKSPACE_ID || '').trim();
 }

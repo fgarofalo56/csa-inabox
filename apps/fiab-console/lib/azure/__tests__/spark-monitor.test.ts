@@ -72,8 +72,11 @@ describe('sparkNativeDiagLinks — env-gated', () => {
 });
 
 describe('sparkTelemetryConfigured', () => {
-  it('true only when LOOM_SPARK_LA_WORKSPACE_ID is set', () => {
+  it('true only when the emitter is OPTED IN and the workspace id is set', () => {
     expect(sparkTelemetryConfigured({} as NodeJS.ProcessEnv)).toBe(false);
-    expect(sparkTelemetryConfigured({ LOOM_SPARK_LA_WORKSPACE_ID: 'guid' } as unknown as NodeJS.ProcessEnv)).toBe(true);
+    // Workspace id alone is NOT enough — the emitter kills sessions on
+    // preventDataExfiltration workspaces, so it requires the explicit opt-in.
+    expect(sparkTelemetryConfigured({ LOOM_SPARK_LA_WORKSPACE_ID: 'guid' } as unknown as NodeJS.ProcessEnv)).toBe(false);
+    expect(sparkTelemetryConfigured({ LOOM_SPARK_LA_EMITTER: '1', LOOM_SPARK_LA_WORKSPACE_ID: 'guid' } as unknown as NodeJS.ProcessEnv)).toBe(true);
   });
 });
