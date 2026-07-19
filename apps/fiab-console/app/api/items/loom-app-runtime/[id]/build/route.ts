@@ -38,7 +38,16 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
 
     const templateId: string | undefined = body?.templateId;
     const gitSource: string | undefined = body?.gitSource;
-    const userFiles = body?.userFiles && typeof body.userFiles === 'object' ? body.userFiles : undefined;
+    // Source files: the request body (the editor's in-Monaco copies) wins;
+    // otherwise FALL BACK to the item's persisted userFiles — eject-to-code
+    // and the Copilot scaffolder write there, and an API-driven build that
+    // omitted body.userFiles used to silently ship STARTER files instead
+    // (live receipt 2026-07-19: the ejected app deployed the node-express
+    // starter, not the generated canvas).
+    const rt = readAppRuntime(access.item);
+    const userFiles = body?.userFiles && typeof body.userFiles === 'object'
+      ? body.userFiles
+      : (rt.userFiles && Object.keys(rt.userFiles).length ? rt.userFiles : undefined);
     const port = Number.isFinite(body?.port) ? Number(body.port) : undefined;
 
     // Resolve the listen/ingress port from the template default unless overridden.
@@ -47,8 +56,10 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
 
     const result = await buildApp({ itemId: id, templateId, gitSource, userFiles, port: effPort, tag: body?.tag });
 
-    // Persist the source config + the build record.
-    await saveAppRuntime(access.item, { templateId, gitSource, port: effPort, userFiles });
+    // Persist the source config + the build record. Spread-guard userFiles:
+    // a present-but-undefined key would clobber the persisted files in the
+    // {...current, ...patch} merge.
+    await saveAppRuntime(access.item, { templateId, gitSource, port: effPort, ...(userFiles ? { userFiles } : {}) });
     const updated = await recordBuild(access.item, {
       runId: result.runId, image: result.image, imageName: result.imageName,
       status: result.status, source: result.source, at: new Date().toISOString(),
