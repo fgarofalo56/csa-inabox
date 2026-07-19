@@ -67,10 +67,10 @@ repo knowledge; Wave 0 audits every row live and re-grades (✅ built / η parti
 
 | # | Foundry | What it is | Loom surface | Azure/OSS backend | Status |
 |---|---|---|---|---|---|
-| 3.1 | Contour (path-based point-and-click analysis) | Board-based dataset analysis | **NEW: analysis-board item** | Synapse serverless/ADX behind step DAG; each board step = query node | ❌ build (Loom's biggest analytics gap) |
+| 3.1 | Contour (path-based point-and-click analysis) | Board-based dataset analysis | **NEW: analysis-board item** | Synapse serverless/ADX behind step DAG; each board step = query node | η — COMPILER CORE SHIPPED (analysis-board-model.ts: typed step-board → KQL, injection-guarded, 16 tests). Remaining: board editor + item-type registration + ADX run route (UI E2E blocked on browser-tool recovery) |
 | 3.2 | Quiver (object + time-series analysis, dashboards) | Object-centric cards/canvas | rayfin-app | ADX timeseries + ontology objects | η — audit vs Quiver card catalog (~30 card types) |
 | 3.3 | Notepad (live-data documents) | Docs w/ embedded live queries/objects | **NEW: notepad item** | Loom-native doc model (Cosmos) + embedded query/visual blocks | ❌ build |
-| 3.4 | Fusion (spreadsheets on live data) | Spreadsheet UX | **NEW: fusion-sheet item** | OSS sheet engine (e.g. Univer/Luckysheet) on ACA + Loom data binding | ❌ build (evaluate OSS; Excel-online embed is not all-clouds) |
+| 3.4 | Fusion (spreadsheets on live data) | Spreadsheet UX | **NEW: fusion-sheet item** | Loom-native formula engine + Loom data binding | η — FORMULA ENGINE CORE SHIPPED (fusion-sheet-engine.ts: A1 refs/ranges, parser, SUM/AVG/MIN/MAX/COUNT/IF/ROUND/ABS/CONCAT, #CYCLE! detection, 16 tests). Chose a Loom-native engine over an OSS embed (all-clouds/Gov-safe). Remaining: grid editor + item-type registration + data binding (UI E2E blocked on browser-tool recovery) |
 | 3.5 | Map (geotemporal layers) | GIS app | map visual + GEO-1/2 program | Azure Maps + ADX geo + GeoAnalytics | η — dedicated map workspace surface |
 | 3.6 | Time series (Codex) | Sensor/TS mgmt | eventhouse + kql-dashboard + rayfin | ADX native TS functions | ✅ |
 | 3.7 | Reports/dashboards | BI surfaces | report designer + kql-dashboard + semantic-model | Loom-native renderer + AAS + optional PBI | ✅ |
