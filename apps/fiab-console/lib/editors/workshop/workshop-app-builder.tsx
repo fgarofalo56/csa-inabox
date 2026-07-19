@@ -93,6 +93,11 @@ const DEFAULT_SIZE: Record<WorkshopWidgetKind, { w: number; h: number }> = {
   form: { w: 384, h: 320 },
   button: { w: 224, h: 96 },
   text: { w: 336, h: 160 },
+  image: { w: 336, h: 224 },
+  link: { w: 224, h: 80 },
+  divider: { w: 448, h: 48 },
+  badge: { w: 224, h: 80 },
+  iframe: { w: 448, h: 320 },
 };
 
 const KIND_META: Record<WorkshopWidgetKind, { label: string; icon: ReactElement; hint: string; data: boolean }> = {
@@ -103,6 +108,11 @@ const KIND_META: Record<WorkshopWidgetKind, { label: string; icon: ReactElement;
   form: { label: 'Form', icon: <Form20Regular />, hint: 'Create / update / delete an object — real write-back', data: true },
   button: { label: 'Button', icon: <Cursor20Regular />, hint: 'Fires events: set a variable, run an action, refresh', data: false },
   text: { label: 'Text', icon: <DocumentText20Regular />, hint: 'Markdown-lite label with {{variable}} interpolation', data: false },
+  image: { label: 'Image', icon: <Apps20Regular />, hint: 'An https image by URL', data: false },
+  link: { label: 'Link', icon: <ArrowMaximize20Regular />, hint: 'A styled link to an https URL', data: false },
+  divider: { label: 'Divider', icon: <Edit20Regular />, hint: 'A horizontal section divider', data: false },
+  badge: { label: 'Badge', icon: <Flash20Regular />, hint: 'A colored status badge with {{variable}} interpolation', data: false },
+  iframe: { label: 'Embed', icon: <Code20Regular />, hint: 'Embed an https page (iframe)', data: false },
 };
 
 const CHART_TYPES: LoomChartType[] = ['column', 'bar', 'line', 'area', 'pie', 'donut'];
@@ -463,6 +473,29 @@ function WidgetBody({
     return <div>{renderText(widget.text || '_Empty text widget — set its content in the inspector._', variables, runtime)}</div>;
   }
 
+  if (widget.kind === 'divider') {
+    return <hr style={{ border: 'none', borderTop: `1px solid ${tokens.colorNeutralStroke2}`, width: '100%' }} aria-label="Divider" />;
+  }
+  if (widget.kind === 'badge') {
+    return <Badge appearance="filled" color={widget.badgeColor || 'brand'}>{renderText(widget.text || widget.title, variables, runtime)}</Badge>;
+  }
+  if (widget.kind === 'image') {
+    const src = (widget.src || '').trim();
+    if (!/^https:\/\//i.test(src)) return <Caption1 className={s.hint}>Set an https image URL in the inspector.</Caption1>;
+    // eslint-disable-next-line @next/next/no-img-element
+    return <img src={src} alt={widget.title} style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }} />;
+  }
+  if (widget.kind === 'link') {
+    const href = (widget.href || '').trim();
+    if (!/^https:\/\//i.test(href)) return <Caption1 className={s.hint}>Set an https link URL in the inspector.</Caption1>;
+    return <a href={href} target="_blank" rel="noreferrer noopener" style={{ color: tokens.colorBrandForeground1 }}>{widget.text?.trim() || widget.title}</a>;
+  }
+  if (widget.kind === 'iframe') {
+    const src = (widget.src || '').trim();
+    if (!/^https:\/\//i.test(src)) return <Caption1 className={s.hint}>Set an https embed URL in the inspector.</Caption1>;
+    return <iframe src={src} title={widget.title} style={{ width: '100%', height: '100%', border: 'none' }} sandbox="allow-scripts allow-same-origin" />;
+  }
+
   if (widget.kind === 'button') {
     const evs = widget.events || [];
     return (
@@ -703,6 +736,28 @@ function WidgetInspector({
         <Field label="Content (markdown-lite)" hint="# heading, - list. Use {{variableName}} to interpolate a live variable value.">
           <Textarea value={widget.text || ''} onChange={(_, d) => onChange({ text: d.value })} rows={6} resize="vertical" placeholder={'# Title\nSelected: {{selectedOrder}}'} />
         </Field>
+      )}
+
+      {(widget.kind === 'image' || widget.kind === 'iframe') && (
+        <Field label={widget.kind === 'image' ? 'Image URL (https)' : 'Embed URL (https)'} hint="https:// only — non-https sources are not rendered.">
+          <Input value={widget.src || ''} onChange={(_, d) => onChange({ src: d.value })} placeholder="https://…" />
+        </Field>
+      )}
+      {widget.kind === 'link' && (
+        <>
+          <Field label="Link URL (https)"><Input value={widget.href || ''} onChange={(_, d) => onChange({ href: d.value })} placeholder="https://…" /></Field>
+          <Field label="Link text"><Input value={widget.text || ''} onChange={(_, d) => onChange({ text: d.value })} placeholder="Open dashboard" /></Field>
+        </>
+      )}
+      {widget.kind === 'badge' && (
+        <>
+          <Field label="Badge text" hint="Supports {{variableName}} interpolation."><Input value={widget.text || ''} onChange={(_, d) => onChange({ text: d.value })} placeholder="Status: {{status}}" /></Field>
+          <Field label="Color">
+            <Dropdown value={widget.badgeColor || 'brand'} selectedOptions={[widget.badgeColor || 'brand']} onOptionSelect={(_, d) => onChange({ badgeColor: (d.optionValue as WorkshopWidget['badgeColor']) || 'brand' })}>
+              {(['brand', 'success', 'warning', 'danger', 'informative'] as const).map((c) => <Option key={c} value={c}>{c}</Option>)}
+            </Dropdown>
+          </Field>
+        </>
       )}
 
       {/* applied object-set-filter variables for data widgets */}
@@ -950,6 +1005,7 @@ export function WorkshopAppBuilder({ id, entityTypes, widgets, variables, onWidg
       ...(kind === 'filter' ? { filterOp: 'eq' as AtelierFilterOp, filterControl: 'dropdown' as const } : {}),
       ...(kind === 'form' ? { formKind: 'create' as const } : {}),
       ...(kind === 'text' ? { text: '# New text widget\nUse {{variableName}} to show a live value.' } : {}),
+      ...(kind === 'badge' ? { text: 'Status', badgeColor: 'brand' as const } : {}),
     };
     onWidgetsChange([...widgets, widget]);
     setSelectedId(wid);

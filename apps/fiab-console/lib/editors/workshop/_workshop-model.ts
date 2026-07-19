@@ -27,7 +27,7 @@ export interface WorkshopVariable {
   defaultValue?: string;
 }
 
-export type WorkshopWidgetKind = 'table' | 'chart' | 'metric' | 'filter' | 'form' | 'button' | 'text';
+export type WorkshopWidgetKind = 'table' | 'chart' | 'metric' | 'filter' | 'form' | 'button' | 'text' | 'image' | 'link' | 'divider' | 'badge' | 'iframe';
 
 export interface WorkshopWidgetLayout { x: number; y: number; w: number; h: number }
 
@@ -79,6 +79,12 @@ export interface WorkshopWidget {
   formKind?: 'create' | 'update' | 'delete';
   // text
   text?: string;
+  // image / iframe — the source URL (https only, enforced at render).
+  src?: string;
+  // link — the target URL (https only) shown as a styled anchor.
+  href?: string;
+  // badge — Fluent badge color name.
+  badgeColor?: 'brand' | 'success' | 'warning' | 'danger' | 'informative';
   // button + table events
   events?: WorkshopEvent[];
 }
