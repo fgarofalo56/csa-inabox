@@ -743,7 +743,7 @@ export function generateWorkshopCodeApp(spec: {
     'app.use(express.json());',
     "app.use(express.static('public'));",
     '',
-    "const CONSOLE = (process.env.LOOM_CONSOLE_URL || '').replace(/\/+$/, '');",
+    "const CONSOLE = (process.env.LOOM_CONSOLE_URL || '').replace(/\\/+$/, '');",
     "const TOKEN = process.env.LOOM_API_TOKEN || '';",
     `const RUN_ACTION_PATH = '/api/items/workshop-app/${spec.workshopAppId}/run-action';`,
     '',

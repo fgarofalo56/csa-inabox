@@ -122,6 +122,10 @@ describe('generateWorkshopCodeApp (APP-W3 eject-to-code)', () => {
     const pkg = JSON.parse(files['package.json']);
     expect(pkg.scripts.start).toBe('node server.js');
     expect(pkg.dependencies.express).toBeTruthy();
+    // The emitted server MUST parse — a lost regex backslash shipped a
+    // SyntaxError to a live container (2026-07-19). Function() parses only.
+    expect(() => new Function(files['server.js'])).not.toThrow();
+    expect(files['server.js']).toContain("replace(/\\/+$/, '')");
   });
 });
 
