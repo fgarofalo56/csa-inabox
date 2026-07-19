@@ -33,7 +33,7 @@ import {
   Cube20Regular, Calculator20Regular, Ruler20Regular, Layer20Regular,
   ChevronRight16Regular, ChevronDown16Regular, ChevronLeft16Regular,
   Add16Regular, Edit16Regular, CheckmarkCircle20Regular, ArrowUndo16Regular,
-  Key16Regular, Search20Regular,
+  Key16Regular, Search20Regular, ShieldTask20Regular, ArrowClockwise20Regular,
 } from '@fluentui/react-icons';
 import { useQuery } from '@tanstack/react-query';
 import { getItem } from '@/lib/api/workspaces';
@@ -465,15 +465,33 @@ function WeaveInstancePanel({
   const [actName, setActName] = useState('');
   const [actObjType, setActObjType] = useState('');
   const [actKind, setActKind] = useState<'create' | 'update' | 'delete'>('create');
+  const [actReqJust, setActReqJust] = useState(false);
   const [actDlgErr, setActDlgErr] = useState<string | null>(null);
   const [runMsg, setRunMsg] = useState<{ intent: 'success' | 'error' | 'warning'; text: string } | null>(null);
   const [runningAction, setRunningAction] = useState<string | null>(null);
   // Per-action runtime values keyed `${action.name}.${param.apiName}` (plus
-  // `.id` for update/delete targets and legacy `.props` key/value rows).
+  // `.id` for update/delete targets, `.__reason` for justification-gated
+  // actions, and legacy `.props` key/value rows).
   const [runParams, setRunParams] = useState<Record<string, string | boolean>>({});
 
+  // Checkpoint review — the reasons recorded when justification-gated actions ran.
+  interface JustRow { id: string; action: string; objectType: string; actionKind: string; targetId?: string; reason: string; outcome: string; detail?: string; actorName?: string; actorUpn?: string; at: string }
+  const [justifications, setJustifications] = useState<JustRow[]>([]);
+  const [justLoading, setJustLoading] = useState(false);
+  const anyGatedAction = useMemo(() => actionTypes.some((a) => a.requiresJustification), [actionTypes]);
+  const loadJustifications = useCallback(async () => {
+    if (!id || id === 'new') return;
+    setJustLoading(true);
+    try {
+      const r = await clientFetch(`/api/items/ontology/${encodeURIComponent(id)}/justifications?top=50`);
+      const j = await r.json().catch(() => ({}));
+      setJustifications(j?.ok ? (j.justifications || []) : []);
+    } catch { setJustifications([]); } finally { setJustLoading(false); }
+  }, [id]);
+  useEffect(() => { if (anyGatedAction) void loadJustifications(); }, [anyGatedAction, loadJustifications]);
+
   const openActDlg = useCallback(() => {
-    setActName(''); setActObjType(classNames[0] || ''); setActKind('create'); setActDlgErr(null); setActDlgOpen(true);
+    setActName(''); setActObjType(classNames[0] || ''); setActKind('create'); setActReqJust(false); setActDlgErr(null); setActDlgOpen(true);
   }, [classNames]);
 
   const addActionType = useCallback(() => {
@@ -481,9 +499,9 @@ function WeaveInstancePanel({
     if (!/^[A-Za-z_][\w]*$/.test(name)) { setActDlgErr('Action name must start with a letter/underscore (letters, digits, _).'); return; }
     if (actionTypes.some((a) => a.name === name)) { setActDlgErr(`Action "${name}" already exists.`); return; }
     if (!actObjType) { setActDlgErr('Pick an object type.'); return; }
-    onActionTypesChange([...actionTypes, { name, objectType: actObjType, kind: actKind, parameters: [] }]);
+    onActionTypesChange([...actionTypes, { name, objectType: actObjType, kind: actKind, parameters: [], ...(actReqJust ? { requiresJustification: true } : {}) }]);
     setActDlgOpen(false);
-  }, [actName, actObjType, actKind, actionTypes, onActionTypesChange]);
+  }, [actName, actObjType, actKind, actReqJust, actionTypes, onActionTypesChange]);
 
   const removeActionType = useCallback((name: string) => {
     onActionTypesChange(actionTypes.filter((a) => a.name !== name));
@@ -495,6 +513,12 @@ function WeaveInstancePanel({
   // /run-action backend, which validates + coerces via validateActionRun.
   const runAction = useCallback(async (action: OntoActionType) => {
     setRunningAction(action.name); setRunMsg(null);
+    // Checkpoint: a justification-gated action needs a written reason first.
+    const reason = String(runParams[`${action.name}.__reason`] ?? '').trim();
+    if (action.requiresJustification && reason.length < 4) {
+      setRunMsg({ intent: 'error', text: `"${action.name}" requires a justification — enter a reason (≥4 characters) before running it.` });
+      setRunningAction(null); return;
+    }
     const params: Record<string, unknown> = {};
     if (action.kind === 'update' || action.kind === 'delete') {
       const idVal = String(runParams[`${action.name}.id`] ?? '').trim();
@@ -522,7 +546,7 @@ function WeaveInstancePanel({
     try {
       const r = await clientFetch(`/api/items/ontology/${encodeURIComponent(id)}/run-action`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ action: action.name, params }),
+        body: JSON.stringify({ action: action.name, params, ...(action.requiresJustification ? { reason } : {}) }),
       });
       const j = await r.json().catch(() => ({}));
       if (!j?.ok) {
@@ -531,12 +555,14 @@ function WeaveInstancePanel({
         return;
       }
       const detail = j.kind === 'delete' ? `deleted ${j.deleted ?? 0}` : `vertex id ${j.object?.id}`;
-      setRunMsg({ intent: 'success', text: `Action "${action.name}" (${j.kind}) ran on ${j.objectType} — ${detail}.` });
+      const just = j.justificationId ? ' — justification recorded' : '';
+      setRunMsg({ intent: 'success', text: `Action "${action.name}" (${j.kind}) ran on ${j.objectType} — ${detail}${just}.` });
+      if (action.requiresJustification) { setRunParams((p) => ({ ...p, [`${action.name}.__reason`]: '' })); void loadJustifications(); }
       if (objType === action.objectType) await loadObjects(objType);
     } catch (e: any) {
       setRunMsg({ intent: 'error', text: e?.message || String(e) });
     } finally { setRunningAction(null); }
-  }, [id, runParams, objType, loadObjects]);
+  }, [id, runParams, objType, loadObjects, loadJustifications]);
 
   const toggleSort = useCallback((col: string) => {
     setSort((prev) => (prev.col === col ? { col, dir: prev.dir === 'asc' ? 'desc' : 'asc' } : { col, dir: 'asc' }));
@@ -822,6 +848,7 @@ function WeaveInstancePanel({
                 <Badge appearance="tint" color={a.kind === 'create' ? 'success' : a.kind === 'delete' ? 'danger' : 'brand'}>{a.kind}</Badge>
                 <Body1><strong>{a.name}</strong></Body1>
                 <Caption1 className={s.ontoSectionHint}>→ {a.objectType}</Caption1>
+                {a.requiresJustification && <Badge appearance="outline" color="warning" icon={<ShieldTask20Regular />}>Justification required</Badge>}
                 <span className={s.ontoBindRowSpacer} />
                 <Button size="small" appearance="subtle" icon={<Dismiss16Regular />} aria-label={`Remove action ${a.name}`} onClick={() => removeActionType(a.name)}>Remove</Button>
               </div>
@@ -915,6 +942,16 @@ function WeaveInstancePanel({
                     keyPlaceholder="name" valuePlaceholder="Acme" />
                 </Field>
               ) : null}
+              {a.requiresJustification && (
+                <Field label="Justification" required hint="Recorded to the audit chain. Explain why this action is being taken.">
+                  <Textarea
+                    value={String(runParams[`${a.name}.__reason`] ?? '')}
+                    onChange={(_, d) => setRunParams((p) => ({ ...p, [`${a.name}.__reason`]: d.value }))}
+                    placeholder="e.g. Correcting a mis-keyed account per ticket OPS-1423."
+                    resize="vertical"
+                  />
+                </Field>
+              )}
               <Button appearance="secondary" icon={runningAction === a.name ? <Spinner size="tiny" /> : <Play20Regular />} onClick={() => runAction(a)} disabled={runningAction === a.name} className={s.ontoStartBtn}>
                 {runningAction === a.name ? 'Running…' : `Run ${a.name}`}
               </Button>
@@ -922,6 +959,44 @@ function WeaveInstancePanel({
           ))
         )}
         {runMsg && <MessageBar intent={runMsg.intent}><MessageBarBody>{runMsg.text}</MessageBarBody></MessageBar>}
+
+        {anyGatedAction && (
+          <div className={s.ontoActionCard}>
+            <div className={s.ontoActionHead}>
+              <ShieldTask20Regular />
+              <Body1><strong>Checkpoints</strong></Body1>
+              <Caption1 className={s.ontoSectionHint}>Justifications recorded for gated actions</Caption1>
+              <span className={s.ontoBindRowSpacer} />
+              <Button size="small" appearance="subtle" icon={justLoading ? <Spinner size="tiny" /> : <ArrowClockwise20Regular />} onClick={() => void loadJustifications()} disabled={justLoading}>Refresh</Button>
+            </div>
+            {justifications.length === 0 ? (
+              <Caption1>{justLoading ? 'Loading…' : 'No justification-gated actions have run yet.'}</Caption1>
+            ) : (
+              <Table size="small" aria-label="Recorded justifications">
+                <TableHeader>
+                  <TableRow>
+                    <TableHeaderCell>When</TableHeaderCell>
+                    <TableHeaderCell>Action</TableHeaderCell>
+                    <TableHeaderCell>Outcome</TableHeaderCell>
+                    <TableHeaderCell>Reason</TableHeaderCell>
+                    <TableHeaderCell>By</TableHeaderCell>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {justifications.map((jr) => (
+                    <TableRow key={jr.id}>
+                      <TableCell><Caption1>{new Date(jr.at).toLocaleString()}</Caption1></TableCell>
+                      <TableCell><Badge appearance="tint" color={jr.actionKind === 'delete' ? 'danger' : jr.actionKind === 'create' ? 'success' : 'brand'}>{jr.action}</Badge></TableCell>
+                      <TableCell><Badge appearance="filled" color={jr.outcome === 'succeeded' ? 'success' : 'danger'}>{jr.outcome}</Badge></TableCell>
+                      <TableCell>{jr.reason}</TableCell>
+                      <TableCell><Caption1>{jr.actorName || jr.actorUpn || '—'}</Caption1></TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Declare action type dialog */}
@@ -944,6 +1019,9 @@ function WeaveInstancePanel({
                   <Option value="update">update</Option>
                   <Option value="delete">delete</Option>
                 </Dropdown>
+              </Field>
+              <Field label="Require justification" hint="A checkpoint — the operator must enter a written reason before this action runs; the reason is recorded to the tamper-evident audit chain.">
+                <Switch checked={actReqJust} onChange={(_, d) => setActReqJust(d.checked)} label={actReqJust ? 'Reason required at run time' : 'No justification required'} />
               </Field>
               {actDlgErr && <MessageBar intent="error"><MessageBarBody>{actDlgErr}</MessageBarBody></MessageBar>}
             </DialogContent>

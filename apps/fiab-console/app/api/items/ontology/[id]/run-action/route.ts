@@ -26,6 +26,7 @@ import { loadOwnedItem } from '../../../_lib/item-crud';
 import { objectTypeNames, normalizeOntoActionTypes, validateActionRun } from '@/lib/editors/ontology-model';
 import { weaveGate, runActionType, type WeaveActionType } from '@/lib/azure/weave-ontology-store';
 import { PostgresError } from '@/lib/azure/postgres-flex-client';
+import { recordActionJustification, isValidReason, MIN_JUSTIFICATION_LEN } from '@/lib/azure/action-justification-store';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -74,6 +75,18 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     return err(`Action "${actionName}" targets object type "${action.objectType}" which is no longer declared on this ontology.`, 409, 'undeclared_type');
   }
 
+  // Checkpoint (Foundry-parity row 4.7): a justification-gated action requires a
+  // written reason BEFORE it runs. Enforced only when the action opts in
+  // (requiresJustification) so existing actions are unchanged.
+  const reason = String((body as { reason?: string }).reason || '');
+  if (action.requiresJustification && !isValidReason(reason)) {
+    return err(
+      `Action "${actionName}" requires a justification — provide a reason of at least ${MIN_JUSTIFICATION_LEN} characters before running it.`,
+      422,
+      'justification_required',
+    );
+  }
+
   // Validate + coerce the typed parameters against the declared schema.
   const validated = validateActionRun(action, rawParams);
   if (!validated.ok) return err(validated.error, 400, 'invalid_parameters');
@@ -91,12 +104,38 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     });
   }
 
+  const recordJust = action.requiresJustification;
+  const targetId = typeof runParams.id === 'string' ? runParams.id : undefined;
   try {
     const weaveAction: WeaveActionType = { name: action.name, objectType: action.objectType, kind: action.kind };
     const result = await runActionType(weaveAction, runParams);
-    return NextResponse.json(result);
+    let justificationId: string | undefined;
+    if (recordJust) {
+      const detail = result.kind === 'delete'
+        ? `deleted ${result.deleted ?? 0}`
+        : `vertex id ${result.object?.id ?? '?'}`;
+      try {
+        const rec = await recordActionJustification(s, {
+          ontologyId: id, ontologyName: onto.displayName, action: action.name,
+          objectType: action.objectType, actionKind: action.kind, targetId,
+          reason, outcome: 'succeeded', detail, nowIso: new Date().toISOString(),
+        });
+        justificationId = rec.id;
+      } catch { /* audit best-effort — never fail the run on a record miss */ }
+    }
+    return NextResponse.json({ ...result, ...(justificationId ? { justificationId } : {}) });
   } catch (e: unknown) {
     const status = e instanceof PostgresError ? e.status : 502;
-    return err(`Action "${actionName}" failed: ${e instanceof Error ? e.message : String(e)}`, status, 'action_failed');
+    const msg = e instanceof Error ? e.message : String(e);
+    if (recordJust) {
+      try {
+        await recordActionJustification(s, {
+          ontologyId: id, ontologyName: onto.displayName, action: action.name,
+          objectType: action.objectType, actionKind: action.kind, targetId,
+          reason, outcome: 'failed', detail: msg, nowIso: new Date().toISOString(),
+        });
+      } catch { /* best-effort */ }
+    }
+    return err(`Action "${actionName}" failed: ${msg}`, status, 'action_failed');
   }
 }

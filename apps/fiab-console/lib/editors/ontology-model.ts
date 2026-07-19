@@ -227,6 +227,12 @@ export interface OntoActionType {
   description?: string;
   /** Typed parameters. */
   parameters: OntoActionParam[];
+  /**
+   * Foundry "checkpoint" — when true the executor requires a written
+   * justification (reason) before it runs the action, and records that reason
+   * to the tamper-evident audit chain. Off by default (opt-in per action).
+   */
+  requiresJustification?: boolean;
 }
 
 // ============================================================
@@ -439,6 +445,7 @@ export function normalizeOntoActionType(raw: unknown): OntoActionType | null {
     name, objectType, kind,
     ...(r.description ? { description: str(r.description) } : {}),
     parameters,
+    ...(r.requiresJustification === true ? { requiresJustification: true } : {}),
   };
 }
 
