@@ -87,6 +87,52 @@ jobs:
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
       # -----------------------------------------------------------------------
+      # 2b. LOGIN-HEALTH PREFLIGHT — catch the exact P0 that this minted-session
+      #     verify CANNOT see: an MSAL client-secret expiry/drift (AADSTS7000215)
+      #     silently breaks EVERY real sign-in while the cookie-minted UI stays
+      #     green (live outage 2026-07-19). Two independent, non-blocking checks:
+      #       (a) the console's ACA logs carry an invalid_client callback error
+      #           in the recent window (the smoking gun), and
+      #       (b) the MSAL app's soonest credential expiry is < 30 days out.
+      #     continue-on-error so a missing perm never fails the whole verify —
+      #     it annotates instead, with the exact rotation command.
+      # -----------------------------------------------------------------------
+      - name: Login-health preflight (MSAL secret expiry + callback errors)
+        continue-on-error: true
+        env:
+          MSAL_APP_ID: ${{ vars.LOOM_MSAL_CLIENT_ID || '5c59f3f3-e26d-4122-a707-a04e21ff5255' }}
+          CONSOLE_RG: ${{ vars.LOOM_ADMIN_RG || format('rg-csa-loom-admin-{0}', inputs.region) }}
+        run: |
+          set +e
+          echo "== (a) recent auth/callback invalid_client in the console logs =="
+          LAW=$(az monitor log-analytics workspace list -g "$CONSOLE_RG" --query "[?contains(name,'loom')].customerId | [0]" -o tsv 2>/dev/null | tr -d '\r')
+          if [ -n "$LAW" ]; then
+            HITS=$(az monitor log-analytics query --workspace "$LAW" \
+              --analytics-query "ContainerAppConsoleLogs_CL | where TimeGenerated > ago(7d) | where Log_s has 'auth/callback' and Log_s has 'invalid_client' | count" \
+              -o tsv 2>/dev/null | tr -d '\r' | grep -oE '[0-9]+' | head -1)
+            if [ "${HITS:-0}" -gt 0 ]; then
+              echo "::error::LOGIN BROKEN — $HITS auth/callback invalid_client errors in the last 7d (AADSTS7000215). The MSAL secret has drifted/expired. Rotate: az containerapp secret set -n loom-console -g $CONSOLE_RG --secrets \"loom-msal-client-secret=\$(az ad app credential reset --id $MSAL_APP_ID --append --years 2 --query password -o tsv)\" then roll a new revision."
+            else
+              echo "  OK — no invalid_client callback errors in the last 7d."
+            fi
+          else
+            echo "::warning::could not resolve the console Log Analytics workspace in $CONSOLE_RG — skipping the callback-error check."
+          fi
+          echo "== (b) MSAL app credential expiry =="
+          MINEND=$(az ad app credential list --id "$MSAL_APP_ID" --query "min([].endDateTime)" -o tsv 2>/dev/null | tr -d '\r')
+          if [ -z "$MINEND" ] || [ "$MINEND" = "None" ]; then
+            echo "::warning::could not read MSAL app $MSAL_APP_ID credentials (the verify SP likely lacks Application.Read.All / owner) — grant it to enable the expiry check."
+          else
+            NOWSEC=$(date -u +%s); ENDSEC=$(date -u -d "$MINEND" +%s 2>/dev/null || echo "$NOWSEC")
+            DAYS=$(( (ENDSEC - NOWSEC) / 86400 ))
+            echo "  soonest MSAL secret expiry: $MINEND (${DAYS}d)"
+            if [ "$DAYS" -lt 0 ]; then echo "::error::MSAL secret is EXPIRED — sign-in is down. Rotate now (see command above).";
+            elif [ "$DAYS" -lt 30 ]; then echo "::warning::MSAL secret expires in ${DAYS}d — rotate before it lapses to avoid a login outage.";
+            else echo "  OK — >30 days of runway."; fi
+          fi
+          exit 0
+
+      # -----------------------------------------------------------------------
       # 3. Resolve Key Vault name, then fetch + mask SESSION_SECRET.
       #    Priority:  workflow input → repo var → auto-discover from admin RG.
       # -----------------------------------------------------------------------
