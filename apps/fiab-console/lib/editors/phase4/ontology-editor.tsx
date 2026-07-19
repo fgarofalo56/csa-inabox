@@ -33,7 +33,7 @@ import {
   Cube20Regular, Calculator20Regular, Ruler20Regular, Layer20Regular,
   ChevronRight16Regular, ChevronDown16Regular, ChevronLeft16Regular,
   Add16Regular, Edit16Regular, CheckmarkCircle20Regular, ArrowUndo16Regular,
-  Key16Regular,
+  Key16Regular, Search20Regular,
 } from '@fluentui/react-icons';
 import { useQuery } from '@tanstack/react-query';
 import { getItem } from '@/lib/api/workspaces';
@@ -112,6 +112,7 @@ import {
   type PlanFormulaFn, type PlanFormulaOp, type ModelIssue,
 } from '../_plan-model';
 import { arr, useItemState, SaveBar, useStyles } from './shared';
+import { ObjectExplorerPanel } from './object-explorer-panel';
 
 /**
  * Local Loom-token styles for the two typed surfaces added in this editor:
@@ -984,7 +985,7 @@ function OntologyTypedModelPanel({
   const model = useMemo(() => migrateOntologyState(state), [state]);
   const { objectTypes, linkTypes, actionTypes, interfaces, sharedPropertyGroups } = model;
   const objNames = useMemo(() => objectTypes.map((o) => o.apiName), [objectTypes]);
-  const [tab, setTab] = useState<'objects' | 'links' | 'actions' | 'interfaces' | 'shared'>('objects');
+  const [tab, setTab] = useState<'objects' | 'links' | 'actions' | 'interfaces' | 'shared' | 'explore'>('objects');
 
   const commit = useCallback((patch: {
     objectTypes?: OntoObjectType[]; linkTypes?: OntoLinkType[]; actionTypes?: OntoActionType[];
@@ -1404,6 +1405,7 @@ function OntologyTypedModelPanel({
         <Tab value="actions" icon={<Play20Regular />}>Actions ({actionTypes.length})</Tab>
         <Tab value="interfaces" icon={<ShieldCheckmark20Regular />}>Interfaces ({interfaces.length})</Tab>
         <Tab value="shared" icon={<Layer20Regular />}>Shared properties ({sharedPropertyGroups.length})</Tab>
+        <Tab value="explore" icon={<Search20Regular />}>Explore</Tab>
       </TabList>
 
       {/* ── Object types ── */}
@@ -1597,6 +1599,13 @@ function OntologyTypedModelPanel({
               })}
             </div>
           )}
+        </div>
+      )}
+
+      {/* ── Explore (Object Explorer — Foundry-parity row 2.6) ── */}
+      {tab === 'explore' && (
+        <div className={s.tmTabPanel}>
+          <ObjectExplorerPanel ontologyId={id} />
         </div>
       )}
 
