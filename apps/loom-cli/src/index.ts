@@ -16,6 +16,7 @@ import { runAuth } from './commands/auth.js';
 import { runWorkspace } from './commands/workspace.js';
 import { runItem } from './commands/item.js';
 import { runFind } from './commands/find.js';
+import { runApps } from './commands/apps.js';
 import { CLI_NAME, CLI_VERSION } from './constants.js';
 
 const HELP = `${CLI_NAME} v${CLI_VERSION} — CSA Loom CLI (wraps the Loom REST API)
@@ -51,6 +52,17 @@ ITEM
   loom item update <type> <id> [--name --description]
   loom item delete <type> <id>
   loom item types                                     List valid item types.
+
+APPS (Loom App Runtime dev loop)
+  loom apps build <itemId> [--template t | --git url] [--port N] [--watch]
+  loom apps status <itemId> --run <runId>
+  loom apps deploy <itemId> [--image ref] [--min N --max N]
+  loom apps logs <itemId> [--tail N]
+  loom apps start|stop <itemId>
+  loom apps run-local <itemId> [--dir path] [--run]    Fetch the real build
+                                                       context; docker run it.
+  loom apps export <itemId> [--out app.loomapp]        Portable app bundle.
+  loom apps ci-template <itemId> [--out file.yml]      GitHub Actions workflow.
 
 FIND
   loom find <query> [--type <itemType>] [--limit N]   Estate-wide catalog search
@@ -105,6 +117,9 @@ async function main(): Promise<number> {
         return 0;
       case 'item':
         await runItem(sub, rest, opts);
+        return 0;
+      case 'apps':
+        await runApps(sub, rest, opts);
         return 0;
       case 'find':
         // `find` is a flat command — the whole query follows the verb (no
