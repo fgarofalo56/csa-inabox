@@ -1,0 +1,124 @@
+name: gov-dataverse
+
+# Gov Dataverse S2S remediation. The gov svc-dataverse gate reads "configured"
+# but LOOM_DATAVERSE_CLIENT_SECRET points at secretRef:loom-msal-client-secret
+# (the SIGN-IN app secret) — not a real dedicated S2S app. This workflow:
+#   1) confirms the aliasing (prints DATAVERSE vs MSAL client ids),
+#   2) ATTEMPTS to create a distinct S2S app 'loom-dataverse-s2s-gov' + secret
+#      via the gov deploy SP (needs Entra directory-write; may be blocked),
+#   3) on success: stores the secret as a gov console container-app secret and
+#      wires LOOM_DATAVERSE_CLIENT_ID + LOOM_DATAVERSE_CLIENT_SECRET, health-gates,
+#   4) always prints the OPERATOR runbook for the two Power-Platform-admin-only
+#      steps (BAP management-app registration + per-environment application user).
+on:
+  workflow_dispatch:
+    inputs:
+      wire_env:
+        description: 'If the app is created, also wire it onto the console env (true/false)'
+        required: false
+        default: 'true'
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  RG: rg-csa-loom-admin-usgovvirginia
+  APP: loom-console
+  APP_NAME: loom-dataverse-s2s-gov
+
+jobs:
+  dataverse:
+    name: Gov Dataverse S2S remediation
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Azure login (Gov sub) — deploy SP
+        uses: Azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_GOV_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_GOV_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_GOV_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}",
+              "activeDirectoryEndpointUrl": "https://login.microsoftonline.us",
+              "resourceManagerEndpointUrl": "https://management.usgovcloudapi.net/",
+              "sqlManagementEndpointUrl": "https://management.core.usgovcloudapi.net:8443/",
+              "galleryEndpointUrl": "https://gallery.usgovcloudapi.net/",
+              "managementEndpointUrl": "https://management.core.usgovcloudapi.net/"
+            }
+          environment: AzureUSGovernment
+
+      - name: Set Azure cloud to Gov
+        run: az cloud set --name AzureUSGovernment
+
+      - name: Confirm current Dataverse wiring (aliasing check)
+        run: |
+          set -euo pipefail
+          E=$(az containerapp show -n "$APP" -g "$RG" --query "properties.template.containers[0].env" -o json)
+          get() { echo "$E" | python3 -c "import json,sys;d={x['name']:x.get('value','') for x in json.load(sys.stdin)};print(d.get('$1',''))"; }
+          getref() { echo "$E" | python3 -c "import json,sys;d={x['name']:(x.get('secretRef') or '') for x in json.load(sys.stdin)};print(d.get('$1',''))"; }
+          DV_ID=$(get LOOM_DATAVERSE_CLIENT_ID); MSAL_ID=$(get LOOM_MSAL_CLIENT_ID)
+          DV_SECREF=$(getref LOOM_DATAVERSE_CLIENT_SECRET)
+          echo "LOOM_DATAVERSE_CLIENT_ID = $DV_ID"
+          echo "LOOM_MSAL_CLIENT_ID      = $MSAL_ID"
+          echo "LOOM_DATAVERSE_CLIENT_SECRET secretRef = $DV_SECREF"
+          if [ "$DV_ID" = "$MSAL_ID" ]; then echo "::warning::Dataverse CLIENT_ID is ALIASED to the MSAL sign-in app"; fi
+          if [ "$DV_SECREF" = "loom-msal-client-secret" ]; then echo "::warning::Dataverse CLIENT_SECRET points at the MSAL sign-in secret — not a dedicated S2S secret"; fi
+          echo "GOV_TENANT=${{ secrets.AZURE_GOV_TENANT_ID }}"
+
+      - name: Attempt to create loom-dataverse-s2s-gov app + secret (may be directory-write blocked)
+        id: create
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          EXIST=$(az ad app list --display-name "$APP_NAME" --query "[0].appId" -o tsv 2>/dev/null | tr -d '\r' || echo "")
+          if [ -n "$EXIST" ]; then
+            echo "app already exists: $EXIST"; APPID="$EXIST"
+          else
+            echo "creating $APP_NAME ..."
+            APPID=$(az ad app create --display-name "$APP_NAME" --sign-in-audience AzureADMyOrg --query appId -o tsv | tr -d '\r')
+            echo "created appId=$APPID"
+            az ad sp create --id "$APPID" -o none 2>/dev/null || true
+          fi
+          echo "APPID=$APPID" >> "$GITHUB_ENV"
+          echo "appid=$APPID" >> "$GITHUB_OUTPUT"
+          # reset/create a client secret (2y)
+          SECRET=$(az ad app credential reset --id "$APPID" --display-name "loom-dataverse-gov" --years 2 --query password -o tsv | tr -d '\r')
+          echo "::add-mask::$SECRET"
+          echo "SECRET=$SECRET" >> "$GITHUB_ENV"
+          echo "secret-created=yes" >> "$GITHUB_OUTPUT"
+
+      - name: Wire the app onto the console (only if created + wire_env=true)
+        if: steps.create.outputs.secret-created == 'yes' && inputs.wire_env == 'true'
+        run: |
+          set -euo pipefail
+          az containerapp secret set -n "$APP" -g "$RG" --secrets "loom-dataverse-s2s-secret=$SECRET" -o none
+          az containerapp update -n "$APP" -g "$RG" \
+            --set-env-vars "LOOM_DATAVERSE_CLIENT_ID=$APPID" "LOOM_DATAVERSE_CLIENT_SECRET=secretref:loom-dataverse-s2s-secret" -o none
+          LR=$(az containerapp show -n "$APP" -g "$RG" --query properties.latestRevisionName -o tsv | tr -d '\r')
+          for i in $(seq 1 20); do
+            H=$(az containerapp revision show -n "$APP" -g "$RG" --revision "$LR" --query properties.healthState -o tsv 2>/dev/null | tr -d '\r')
+            echo "$(date -u +%H:%M:%S) $LR health=$H"
+            case "$H" in Healthy) echo "::notice::DATAVERSE WIRED + HEALTHY ($LR, appId=$APPID)"; break;; Unhealthy) echo "::error::Unhealthy after wiring"; exit 1;; esac
+            sleep 20
+          done
+
+      - name: Operator runbook (Power-Platform-admin-only steps)
+        if: always()
+        run: |
+          echo "===== GOV DATAVERSE — OPERATOR RUNBOOK (needs a gov Power Platform / Global admin) ====="
+          echo "App to grant: $APP_NAME  (appId=${APPID:-<create-first>}), gov tenant ${{ secrets.AZURE_GOV_TENANT_ID }}"
+          echo ""
+          echo "Step A — register as a Power Platform management application (gov BAP):"
+          echo "  # gov BAP host is api.bap.microsoft.us (GCC). Sign in as a gov PP/Global admin:"
+          echo "  TOKEN=\$(az account get-access-token --resource https://api.bap.microsoft.us --query accessToken -o tsv)"
+          echo "  curl -s -X PUT \"https://api.bap.microsoft.us/providers/Microsoft.BusinessAppPlatform/adminApplications/${APPID:-<appId>}?api-version=2020-10-01\" \\"
+          echo "       -H \"Authorization: Bearer \$TOKEN\" -H 'Content-Type: application/json' -d '{}'"
+          echo ""
+          echo "Step B — add as an Application User (System Administrator) in the gov PP environment:"
+          echo "  pac admin application-user create --application-id ${APPID:-<appId>} \\"
+          echo "      --environment <GOV_PP_ENVIRONMENT_ID> --role 'System Administrator'"
+          echo "  # <GOV_PP_ENVIRONMENT_ID> = the gov Power Platform environment backing Loom Dataverse"
+          echo "  #   (Power Platform admin centre -> Environments -> <gov env> -> Settings)."
