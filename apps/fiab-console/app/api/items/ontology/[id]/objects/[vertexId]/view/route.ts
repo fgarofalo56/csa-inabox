@@ -28,6 +28,7 @@ import { objectTypeNames, objectTypeByName, normalizeLinkTypes } from '@/lib/edi
 import { weaveGate, getObject } from '@/lib/azure/weave-ontology-store';
 import { traverseObject } from '@/lib/azure/weave-explore';
 import { PostgresError } from '@/lib/azure/postgres-flex-client';
+import { apiError, apiHonestError } from '@/lib/api/respond';
 import {
   resolveObjectView, shapeLinkedSections, toTimeseriesGrid, toGeoFeatureCollection,
   type RawNeighbor, type ViewRecord,
@@ -38,8 +39,9 @@ export const dynamic = 'force-dynamic';
 
 const ITEM_TYPE = 'ontology';
 
+// Delegates to the shared apiError envelope (bff-errors: no raw NextResponse envelopes).
 function err(error: string, status: number, code?: string, gate?: Record<string, unknown>) {
-  return NextResponse.json({ ok: false, error, ...(code ? { code } : {}), ...(gate ? { gate } : {}) }, { status });
+  return apiError(error, status, { ...(code ? { code } : {}), ...(gate ? { gate } : {}) });
 }
 
 export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string; vertexId: string }> }) {
