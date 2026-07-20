@@ -1,0 +1,151 @@
+name: gov-selfaudit
+
+# Non-interactive Gov self-audit: mints an ADMIN loom_session cookie (oid +
+# admin-group both set from the Gov console's OWN env: LOOM_TENANT_ADMIN_OID /
+# LOOM_TENANT_ADMIN_GROUP_ID) and hits the two authoritative audit surfaces the
+# operator would see in-product:
+#
+#   • GET  /api/admin/gates            → the full gate registry + live status
+#                                        (count / configured / blocked + which)
+#   • POST /api/admin/health/exercise  → run EVERY real-backend probe, then
+#     GET  /api/admin/health/exercise    poll for the structured report
+#
+# Also dumps the loom-console container-app env (KEYS only + secretRef markers,
+# values redacted) so the medic can diff Gov vs Commercial for day-one config
+# gaps. Read-only — no mutation of any Azure resource.
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+env:
+  RG: rg-csa-loom-admin-usgovvirginia
+  APP: loom-console
+  BASE: https://loom-console-dcmt6cqoezlgs-agg6h9e5cjamh5h2.z01.azurefd.us
+
+jobs:
+  audit:
+    name: Gov self-audit (gates + exercise)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Azure login (Gov sub) — deploy SP
+        uses: Azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_GOV_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_GOV_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_GOV_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}",
+              "activeDirectoryEndpointUrl": "https://login.microsoftonline.us",
+              "resourceManagerEndpointUrl": "https://management.usgovcloudapi.net/",
+              "sqlManagementEndpointUrl": "https://management.core.usgovcloudapi.net:8443/",
+              "galleryEndpointUrl": "https://gallery.usgovcloudapi.net/",
+              "managementEndpointUrl": "https://management.core.usgovcloudapi.net/"
+            }
+          environment: AzureUSGovernment
+
+      - name: Set Azure cloud to Gov
+        run: az cloud set --name AzureUSGovernment
+
+      - name: Resolve SESSION_SECRET + admin identity from the app's own env
+        run: |
+          set -euo pipefail
+          # SESSION_SECRET (inline value OR keyvaultref → resolve via KV, same as gov-bff-verify)
+          J=$(az containerapp secret show -n "$APP" -g "$RG" --secret-name session-secret -o json)
+          SS=$(echo "$J" | python3 -c "import json,sys;d=json.load(sys.stdin);print(d.get('value') or '')")
+          KVURL=$(echo "$J" | python3 -c "import json,sys;d=json.load(sys.stdin);print(d.get('keyVaultUrl') or '')")
+          if [ -z "$SS" ] && [ -n "$KVURL" ]; then SS=$(az keyvault secret show --id "$KVURL" --query value -o tsv | tr -d '\r'); fi
+          case "$SS" in https://*) SS=$(az keyvault secret show --id "$SS" --query value -o tsv | tr -d '\r');; esac
+          [ -n "$SS" ] || { echo "::error::session-secret unreadable"; exit 1; }
+          echo "::add-mask::$SS"; echo "SS=$SS" >> "$GITHUB_ENV"
+          # Admin identity straight from the running app env (whatever it was deployed with).
+          ENVJSON=$(az containerapp show -n "$APP" -g "$RG" --query "properties.template.containers[0].env" -o json)
+          AOID=$(echo "$ENVJSON" | python3 -c "import json,sys;e={x['name']:x.get('value','') for x in json.load(sys.stdin)};print(e.get('LOOM_TENANT_ADMIN_OID',''))")
+          AGRP=$(echo "$ENVJSON" | python3 -c "import json,sys;e={x['name']:x.get('value','') for x in json.load(sys.stdin)};print(e.get('LOOM_TENANT_ADMIN_GROUP_ID',''))")
+          echo "admin oid present: $([ -n "$AOID" ] && echo yes || echo NO); admin group present: $([ -n "$AGRP" ] && echo yes || echo NO)"
+          echo "AOID=$AOID" >> "$GITHUB_ENV"
+          echo "AGRP=$AGRP" >> "$GITHUB_ENV"
+
+      - name: Dump loom-console env KEYS (values redacted) for Gov-vs-Commercial diff
+        run: |
+          set -euo pipefail
+          az containerapp show -n "$APP" -g "$RG" --query "properties.template.containers[0].env" -o json \
+            | python3 -c "
+          import json,sys
+          e=json.load(sys.stdin)
+          for x in sorted(e,key=lambda d:d['name']):
+              n=x['name']
+              if 'value' in x and x['value'] not in (None,''): mark='=<set>'
+              elif x.get('secretRef'): mark='=<secretRef:%s>'%x['secretRef']
+              else: mark='=<EMPTY>'
+              print(n+mark)
+          " | tee gov-console-env-keys.txt
+          echo "---- total keys: $(wc -l < gov-console-env-keys.txt) ----"
+
+      - name: Mint ADMIN session + hit gates + exercise
+        run: |
+          set -euo pipefail
+          node - <<'EOF'
+          const crypto = require('node:crypto');
+          const S = process.env.SS, B = process.env.BASE;
+          const OID = process.env.AOID || '00000000-0000-0000-0000-000000000000';
+          const GRP = process.env.AGRP || '';
+          const K = Buffer.from(crypto.hkdfSync('sha256', Buffer.from(S,'utf-8'), Buffer.alloc(32), Buffer.from('loom-session-v1'), 32));
+          const claims = { oid: OID, name: 'gov-selfaudit', email: 'selfaudit@automation.inv', upn: 'gov-selfaudit@automation' };
+          if (GRP) claims.groups = GRP.split(',').map(s=>s.trim()).filter(Boolean);
+          const p = { claims, exp: Math.floor(Date.now()/1000)+3600 };
+          const iv = crypto.randomBytes(12), c = crypto.createCipheriv('aes-256-gcm', K, iv);
+          const enc = Buffer.concat([c.update(Buffer.from(JSON.stringify(p))), c.final()]);
+          const cookie = 'loom_session=' + Buffer.concat([iv, c.getAuthTag(), enc]).toString('base64url');
+          const H = { cookie };
+          const sleep = (ms)=>new Promise(r=>setTimeout(r,ms));
+
+          (async () => {
+            // ---- GATES ----
+            const gr = await fetch(B + '/api/admin/gates', { headers: H });
+            const gt = await gr.text();
+            console.log('\n===== /api/admin/gates -> ' + gr.status + ' =====');
+            let gates;
+            try { gates = JSON.parse(gt); } catch { console.log(gt.slice(0,400)); }
+            if (gates && gates.ok) {
+              console.log(`GATE SCORE: ${gates.configured}/${gates.count} configured, ${gates.blocked} blocked (cloud=${gates.cloud}, platform=${gates.platform}, writeConfigured=${gates.writeConfigured})`);
+              const blocked = (gates.gates||[]).filter(g=>g.status!=='configured');
+              if (blocked.length) {
+                console.log('\nBLOCKED GATES:');
+                for (const g of blocked) console.log(`  - ${g.id} [${g.status}] missing=[${(g.missing||[]).join(', ')}] :: ${g.detail||''}`);
+              } else console.log('ALL GATES CONFIGURED ✅');
+            } else {
+              console.log('gates call not ok:', gt.slice(0,400));
+            }
+
+            // ---- EXERCISE (all real-backend probes) ----
+            console.log('\n===== POST /api/admin/health/exercise (all probes) =====');
+            const pr = await fetch(B + '/api/admin/health/exercise', { method:'POST', headers:{...H,'content-type':'application/json'}, body:'{}' });
+            const pt = await pr.text();
+            console.log('POST -> ' + pr.status + ' ' + pt.slice(0,200));
+            // poll GET up to ~14 min; state.status is 'running' | 'complete'
+            let state=null;
+            for (let i=0;i<56;i++) {
+              await sleep(15000);
+              const er = await fetch(B + '/api/admin/health/exercise', { headers: H });
+              const ej = await er.json().catch(()=>({}));
+              const st = ej && ej.data && ej.data.state;
+              if (!st) { console.log(`  poll ${i}: no state (${er.status})`); continue; }
+              if (st.status === 'running') { console.log(`  poll ${i}: running...`); continue; }
+              state = st; break;
+            }
+            if (!state) { console.log('::warning::exercise did not complete in window'); return; }
+            const report = state.report || {};
+            const results = report.results || [];
+            console.log('\n===== EXERCISE REPORT =====');
+            for (const r of results) {
+              const badge = r.status === 'pass' ? 'PASS' : (r.status === 'gate' ? 'GATE' : 'FAIL');
+              console.log(`  [${badge}] ${r.service||r.title||''}: ${(r.detail||'').toString().slice(0,180)}`);
+            }
+            console.log(`\nEXERCISE TOTALS: ${report.pass||0} pass / ${report.gate||0} honest-gate / ${report.fail||0} fail (of ${report.total||results.length})`);
+            if ((report.fail||0) > 0) console.log('::warning::exercise has failing probes — see FAIL rows above');
+          })().catch(e=>{ console.log('::error::'+e.message); process.exit(1); });
+          EOF
