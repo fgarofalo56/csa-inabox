@@ -117,6 +117,12 @@ const GETSESSION_RE = /getSession\s*\(|with(?:Session|WorkspaceOwner|BackendGate
 // ── Allowlist: routes that legitimately need no per-resource authorization.
 // Repo-relative POSIX paths. Each MUST carry a reason.
 const ALLOWLIST = new Map([
+  // Self-hosted map tile proxy (Gov OSS Azure-Maps replacement): fronts the
+  // internal-ingress MapLibre tileserver, which serves a SHARED OSS basemap
+  // (OpenMapTiles) identical for every tenant — there is no per-tenant resource
+  // to own-scope. Session-gated (no anonymous tile scraping); the tileserver
+  // host never leaks to the browser.
+  ['apps/fiab-console/app/api/maps/tiles/[...path]/route.ts', 'shared OSS basemap tileserver proxy resolved by type; no per-tenant resource'],
   // Bulk access-request decision (access-governance W4, AG-14): delegates each
   // leg to POST /api/access-requests/[id]/decision, which enforces the real
   // per-request approver check (actorMayApprove over that request's approvalPlan
