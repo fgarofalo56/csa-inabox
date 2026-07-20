@@ -82,7 +82,7 @@ jobs:
               await sleep(16000);
               const er=await fetch(B+'/api/admin/health/exercise',{headers:{cookie}});
               const ej=await er.json().catch(()=>({}));
-              const st=ej&&ej.data&&ej.data.state;
+              const st=ej&&(ej.state||(ej.data&&ej.data.state));
               if(!st){console.log(`  poll ${i}: no state (${er.status})`);continue;}
               if(st.status==='running'){console.log(`  poll ${i}: running...`);continue;}
               const rep=st.report||{};
