@@ -34,6 +34,9 @@
  * (https://learn.microsoft.com/azure/foundry/openai/how-to/model-router).
  */
 
+import { bestModelsFor } from './model-availability-matrix';
+import type { LoomCloud } from '../azure/cloud-endpoints';
+
 /** Cost/quality tier a turn is dispatched on. */
 export type ModelTier = 'mini' | 'standard' | 'strong';
 
@@ -250,7 +253,13 @@ function envDeployment(name: string): string | undefined {
  * degrades gracefully to the standard deployment rather than hard-failing.
  */
 export function tierPolicyFromConfig(cfg: TierPolicyConfigShape | null | undefined): TierPolicy {
-  const enabled = cfg?.modelTierRoutingEnabled !== false; // default ON
+  // Default-ON / opt-out. Disabled ONLY when the tenant admin explicitly sets
+  // modelTierRoutingEnabled:false (Admin → Copilot & Agents → Model tiers) OR
+  // the deployment-wide env kill-switch LOOM_MODEL_TIER_ROUTING_ENABLED='false'
+  // is present. Either opt-out makes the router a hard no-op (every turn rides
+  // the resolved default) — "no-op ONLY when the admin opts out" (WS-1.1).
+  const envOff = (process.env.LOOM_MODEL_TIER_ROUTING_ENABLED || '').trim().toLowerCase() === 'false';
+  const enabled = cfg?.modelTierRoutingEnabled !== false && !envOff;
   const tiers: TierDeployments = {
     mini: cfg?.modelTiers?.mini?.trim() || envDeployment('LOOM_AOAI_MINI_DEPLOYMENT'),
     standard:
@@ -274,4 +283,134 @@ export function resolveTierForTurn(
   input: TierSelectInput,
 ): TierSelection {
   return selectTier(tierPolicyFromConfig(cfg), input);
+}
+
+// ── WS-1.1: shared call-path wiring (messages classifier + escalate-only auto) ─
+
+/** A structural chat message — only `role` + `content` matter for classification
+ *  (kept structural so this pure module never imports the AOAI contract types). */
+export interface ClassifiableMessage {
+  role?: string;
+  content?: unknown;
+}
+
+/** Flatten a message `content` (string OR an array of `{type,text}` parts, the
+ *  multimodal shape) to plain text for the classifier. */
+function messageText(content: unknown): string {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    return content
+      .map((p) => (p && typeof p === 'object' && typeof (p as any).text === 'string' ? (p as any).text : ''))
+      .join(' ');
+  }
+  return '';
+}
+
+/**
+ * Extract the classifiable prompt from a chat `messages` array: the LAST user
+ * message (what the turn is actually asking). Falls back to the concatenation of
+ * every user message, then to '' — never throws. Used by the unified
+ * aoai-chat-client so a turn passing NO explicit tier still classifies from its
+ * messages (WS-1.1).
+ */
+export function promptFromMessages(messages: readonly ClassifiableMessage[] | undefined | null): string {
+  const msgs = Array.isArray(messages) ? messages : [];
+  const users = msgs.filter((m) => (m?.role ?? 'user') === 'user');
+  const last = users.length ? users[users.length - 1] : undefined;
+  const lastText = messageText(last?.content).trim();
+  if (lastText) return lastText;
+  return users.map((m) => messageText(m.content)).join('\n').trim();
+}
+
+export interface TurnRouteInput {
+  /** Tenant Copilot config (tier deployments + task map + opt-out). */
+  cfg?: TierPolicyConfigShape | null;
+  /** Explicit forced tier (per-call override) — always honored (no escalate-only guard). */
+  tier?: ModelTier;
+  /** Explicit task class — always honored. */
+  taskClass?: TaskClass;
+  /** Prompt to classify when neither `tier` nor `taskClass` is supplied. */
+  prompt?: string;
+  /** Messages to classify from when `prompt` is absent (last user message wins). */
+  messages?: readonly ClassifiableMessage[];
+  /** Whether the turn advertises tools (nudges toward reasoning). */
+  hasTools?: boolean;
+  /** The resolved default deployment this turn would otherwise ride. */
+  baseDeployment?: string;
+  /** PSR-8 latency-SLO burn (see {@link TierSelectInput.latencyBurn}). */
+  latencyBurn?: number;
+  /**
+   * ESCALATE-ONLY guard for the AUTO path (default true). When a turn supplies
+   * NO explicit `tier`/`taskClass`, an auto-classified route is applied ONLY
+   * when it escalates to the STRONG (reasoning) tier — a lightweight turn is
+   * NEVER silently downshifted to a mini deployment. This keeps the ~18 shared
+   * aoai-chat-client callers byte-identical unless a reasoning deployment is
+   * wired AND the turn classifies hard (WS-1.1: "default behavior identical
+   * unless a reasoning deployment is configured or a turn classifies as hard").
+   * Set false to allow auto mini-downshift (an explicit opt-in by the caller).
+   */
+  escalateOnly?: boolean;
+}
+
+/**
+ * WS-1.1 — resolve the tier + deployment for a turn on the SHARED call path.
+ *
+ * This is the one entry point the unified aoai-chat-client consults so EVERY
+ * copilot / agent / data-agent turn is tier-aware, not just the streaming
+ * orchestrator. It classifies the turn (explicit hint → prompt → messages),
+ * applies the policy via {@link selectTier}, and — on the auto path — enforces
+ * the escalate-only guard so only a hard-turn upshift to the reasoning tier
+ * changes the deployment. The returned {@link TierSelection.tier} is always the
+ * honestly-ridden tier (the trace attribute), whether or not the deployment
+ * swapped.
+ */
+export function routeTurnTier(input: TurnRouteInput): TierSelection {
+  const explicit = input.tier != null || input.taskClass != null;
+  const prompt = input.prompt ?? promptFromMessages(input.messages);
+  const sel = resolveTierForTurn(input.cfg ?? null, {
+    overrideTier: input.tier,
+    taskClass: input.taskClass,
+    prompt,
+    hasTools: input.hasTools,
+    baseDeployment: input.baseDeployment,
+    latencyBurn: input.latencyBurn,
+  });
+  // Auto path + escalate-only: suppress a non-strong deployment swap (i.e. a
+  // lightweight→mini downshift) so a hint-less caller only ever escalates.
+  const escalateOnly = input.escalateOnly !== false;
+  if (!explicit && escalateOnly && sel.routed && sel.tier !== 'strong') {
+    return { ...sel, tier: sel.tier, deployment: input.baseDeployment, routed: false };
+  }
+  return sel;
+}
+
+/**
+ * WS-1.1 — true when a REASONING (strong) tier deployment resolves for this
+ * config (tenant cfg `modelTiers.strong` or the `LOOM_AOAI_STRONG_DEPLOYMENT`
+ * env). When false the router silently rides the standard deployment for hard
+ * turns and the `svc-model-reasoning-tier` gate surfaces the honest Fix-it.
+ */
+export function reasoningTierConfigured(cfg?: TierPolicyConfigShape | null): boolean {
+  return !!tierPolicyFromConfig(cfg).tiers.strong;
+}
+
+/**
+ * WS-1.1 — the BEST reasoning-capable model per cloud/region, from the
+ * Learn-grounded availability matrix (Commercial → gpt-5.6/gpt-5.5; Gov →
+ * gpt-5.2/gpt-5.1/gpt-5; floor gpt-4.1). This is what a push-button deploy binds
+ * `LOOM_AOAI_STRONG_DEPLOYMENT` to, and what the reasoning-tier gate names as the
+ * remediation target — so the 3-tier default is bound to the strongest model the
+ * boundary can actually serve (incl. Gov `*.openai.azure.us`), never a Commercial
+ * frontier model that 404s in a sovereign cloud.
+ */
+export function bestReasoningModelFor(cloud: LoomCloud, region?: string): string {
+  return bestModelsFor(cloud, region).strong;
+}
+
+/** WS-1.1 — the full 3-tier default model binding per cloud/region (mini /
+ *  standard / strong), from the availability matrix. The source of truth for the
+ *  default tier config bicep seeds per cloud + the admin "Model tiers" defaults. */
+export function defaultTierModelsFor(cloud: LoomCloud, region?: string): TierDeployments {
+  const best = bestModelsFor(cloud, region);
+  return { mini: best.mini, standard: best.chat, strong: best.strong };
 }

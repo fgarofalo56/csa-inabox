@@ -30,6 +30,7 @@ interface TraceTool { name: string; serverName?: string; durationMs: number; ok:
 interface Turn {
   index: number; prompt: string; model?: string; provider?: string;
   usage?: Record<string, number>; latencyMs?: number; costUsd?: number; routedTier?: string;
+  modelTier?: string; taskClass?: string;
   routedAgentName?: string; routedReason?: string; phaseTimings: PhaseTiming[];
   tools: TraceTool[]; citations: Array<Record<string, unknown>>; contextUsage?: Record<string, unknown>;
   steps: Array<Record<string, unknown>>; error?: string;
@@ -242,7 +243,7 @@ export function CopilotDebugPanel() {
           {tab === 'routing' && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS }}>
               <Caption1><strong>Model:</strong> {turn.model || '—'} ({turn.provider || '—'})</Caption1>
-              <Caption1><strong>Tier:</strong> {turn.routedTier || 'default'}</Caption1>
+              <Caption1><strong>Tier:</strong> {turn.routedTier || turn.modelTier || 'default'}{turn.taskClass ? ` · ${turn.taskClass}` : ''}</Caption1>
               <Caption1><strong>Routed agent:</strong> {turn.routedAgentName || '— (single-agent turn)'}</Caption1>
               {turn.routedReason && <Caption1 className={styles.muted}>{turn.routedReason}</Caption1>}
               {turn.contextUsage && (

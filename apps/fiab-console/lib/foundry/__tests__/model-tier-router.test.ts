@@ -5,6 +5,8 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
   classifyTaskClass, selectTier, tierPolicyFromConfig, resolveTierForTurn,
   downshiftTier,
+  promptFromMessages, routeTurnTier, reasoningTierConfigured,
+  bestReasoningModelFor, defaultTierModelsFor,
   DEFAULT_TIER_POLICY, DEFAULT_TASK_TIER_MAP, MODEL_TIERS, TASK_CLASSES,
   type TierPolicy,
 } from '../model-tier-router';
@@ -248,5 +250,136 @@ describe('PSR-8 latency-SLO tier protection', () => {
     const without = selectTier(policy, { taskClass: 'general', baseDeployment: 'gpt' });
     expect(withBurn.tier).toBe(without.tier);
     expect(withBurn.sloProtected).toBeUndefined();
+  });
+});
+
+// ── WS-1.1: env kill-switch, message classifier, escalate-only shared routing ─
+
+describe('WS-1.1 tierPolicyFromConfig — env kill-switch (opt-out)', () => {
+  const KEY = 'LOOM_MODEL_TIER_ROUTING_ENABLED';
+  let saved: string | undefined;
+  beforeEach(() => { saved = process.env[KEY]; delete process.env[KEY]; });
+  afterEach(() => { if (saved === undefined) delete process.env[KEY]; else process.env[KEY] = saved; });
+
+  it('stays enabled by default (unset env)', () => {
+    expect(tierPolicyFromConfig(null).enabled).toBe(true);
+  });
+  it('disables when LOOM_MODEL_TIER_ROUTING_ENABLED=false (case/space tolerant)', () => {
+    process.env[KEY] = ' FALSE ';
+    expect(tierPolicyFromConfig(null).enabled).toBe(false);
+    // A disabled policy is a hard no-op even for a hard turn with tiers wired.
+    const sel = resolveTierForTurn(
+      { modelTiers: { strong: 'o3' } },
+      { prompt: 'debug the root cause of this failure', baseDeployment: 'gpt-4o' },
+    );
+    expect(sel.routed).toBe(false);
+    expect(sel.deployment).toBe('gpt-4o');
+  });
+  it('any non-false value leaves routing on', () => {
+    process.env[KEY] = 'true';
+    expect(tierPolicyFromConfig(null).enabled).toBe(true);
+  });
+});
+
+describe('WS-1.1 promptFromMessages', () => {
+  it('returns the LAST user message text', () => {
+    expect(promptFromMessages([
+      { role: 'system', content: 'you are helpful' },
+      { role: 'user', content: 'first' },
+      { role: 'assistant', content: 'ok' },
+      { role: 'user', content: 'debug the root cause' },
+    ])).toBe('debug the root cause');
+  });
+  it('flattens multimodal content parts to text', () => {
+    expect(promptFromMessages([
+      { role: 'user', content: [{ type: 'text', text: 'design an' }, { type: 'text', text: 'architecture' }] },
+    ])).toBe('design an architecture');
+  });
+  it('treats a role-less message as a user message', () => {
+    expect(promptFromMessages([{ content: 'hello' }])).toBe('hello');
+  });
+  it('is empty + safe for no/empty messages', () => {
+    expect(promptFromMessages([])).toBe('');
+    expect(promptFromMessages(undefined)).toBe('');
+    expect(promptFromMessages(null)).toBe('');
+  });
+});
+
+describe('WS-1.1 routeTurnTier — auto classify + escalate-only', () => {
+  const cfg = { copilotChatDeployment: 'gpt-4o', modelTiers: { mini: 'gpt-4o-mini', strong: 'o3' } };
+
+  it('auto-escalates a HARD turn to the strong deployment (no explicit hint)', () => {
+    const sel = routeTurnTier({
+      cfg,
+      messages: [{ role: 'user', content: 'debug the root cause of this failure' }],
+      baseDeployment: 'gpt-4o',
+    });
+    expect(sel).toMatchObject({ tier: 'strong', deployment: 'o3', routed: true });
+    expect(sel.taskClass).toBe('reasoning');
+  });
+
+  it('does NOT auto-downshift a LIGHTWEIGHT turn to mini (escalate-only default)', () => {
+    const sel = routeTurnTier({
+      cfg,
+      messages: [{ role: 'user', content: 'hi' }],
+      baseDeployment: 'gpt-4o',
+    });
+    // classified lightweight, but the auto path suppresses the mini swap.
+    expect(sel.tier).toBe('mini');
+    expect(sel.deployment).toBe('gpt-4o');
+    expect(sel.routed).toBe(false);
+  });
+
+  it('honors an EXPLICIT tier even to mini (explicit opt-in bypasses escalate-only)', () => {
+    const sel = routeTurnTier({ cfg, tier: 'mini', baseDeployment: 'gpt-4o' });
+    expect(sel).toMatchObject({ tier: 'mini', deployment: 'gpt-4o-mini', routed: true });
+  });
+
+  it('allows auto mini-downshift when escalateOnly:false is opted in', () => {
+    const sel = routeTurnTier({
+      cfg, escalateOnly: false,
+      messages: [{ role: 'user', content: 'hi' }],
+      baseDeployment: 'gpt-4o',
+    });
+    expect(sel).toMatchObject({ tier: 'mini', deployment: 'gpt-4o-mini', routed: true });
+  });
+
+  it('is a pure no-op (identical to base) when NO strong deployment is configured, even for a hard turn', () => {
+    const sel = routeTurnTier({
+      cfg: { copilotChatDeployment: 'gpt-4o' }, // no strong tier
+      messages: [{ role: 'user', content: 'debug the root cause of this failure' }],
+      baseDeployment: 'gpt-4o',
+    });
+    expect(sel.tier).toBe('standard');
+    expect(sel.deployment).toBe('gpt-4o');
+    expect(sel.routed).toBe(false);
+  });
+});
+
+describe('WS-1.1 reasoningTierConfigured', () => {
+  it('true when a strong deployment resolves (cfg)', () => {
+    expect(reasoningTierConfigured({ modelTiers: { strong: 'o3' } })).toBe(true);
+  });
+  it('false when no strong tier is wired', () => {
+    expect(reasoningTierConfigured({ copilotChatDeployment: 'gpt-4o' })).toBe(false);
+    expect(reasoningTierConfigured(null)).toBe(false);
+  });
+});
+
+describe('WS-1.1 per-cloud default reasoning binding (Commercial + Gov)', () => {
+  it('binds the strong tier to the best reasoning model the boundary can serve', () => {
+    // Commercial gets the frontier reasoning model; Gov clouds get a Gov-served
+    // gpt-5.x (never a Commercial-only model that 404s in *.openai.azure.us).
+    expect(bestReasoningModelFor('Commercial')).toBe('gpt-5.6');
+    expect(bestReasoningModelFor('GCC-High')).toBe('gpt-5.1');
+    expect(bestReasoningModelFor('DoD')).toBe('gpt-5.2');
+    // A leaner Gov region still resolves to a Gov-served model, never empty.
+    expect(bestReasoningModelFor('GCC-High', 'usgovarizona')).toBe('gpt-5');
+  });
+  it('defaultTierModelsFor returns a full 3-tier binding per cloud', () => {
+    const gov = defaultTierModelsFor('GCC-High');
+    expect(gov.strong).toBe('gpt-5.1');
+    expect(gov.mini).toBe('gpt-4.1-mini');
+    expect(gov.standard).toBeTruthy();
   });
 });

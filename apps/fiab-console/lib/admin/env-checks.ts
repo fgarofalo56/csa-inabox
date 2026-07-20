@@ -98,6 +98,10 @@ export const VALUE_HINT: Record<string, string> = {
   LOOM_POSTURE_FUNCTION_URL: 'https://func-loom-posture-refresh-<hash>.azurewebsites.net',
   LOOM_AOAI_ENDPOINT: 'https://<aoai-or-foundry>.openai.azure.com/',
   LOOM_AOAI_DEPLOYMENT: 'gpt-4o-mini',
+  // WS-1.1 — model tier router deployments (mini / strong). Bicep wires both
+  // from the Foundry project's best-per-cloud model (availability matrix).
+  LOOM_AOAI_MINI_DEPLOYMENT: 'gpt-4.1-mini',
+  LOOM_AOAI_STRONG_DEPLOYMENT: 'gpt-5.6 (Commercial) / gpt-5.2 (Gov) / gpt-4.1 (floor)',
   LOOM_AOAI_VISION_DEPLOYMENT: '<opt-in gpt-4o vision deployment for multimodal AI columns>',
   LOOM_LOG_ANALYTICS_RESOURCE_ID: '/subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.OperationalInsights/workspaces/<law>',
   LOOM_ALERT_RG: env('LOOM_ADMIN_RG') || '<alert-resource-group (defaults to the admin RG)>',
@@ -464,6 +468,32 @@ export const ENV_CHECKS: EnvSpec[] = [
     remediation: 'Set LOOM_AOAI_ENDPOINT + LOOM_AOAI_DEPLOYMENT (or a Foundry project endpoint) so Copilot, the help agent, and data agents have a model. Deploy a model from the AI Foundry hub if none exists.',
     provisionedBy: 'modules/admin-plane (agentFoundryEnabled / aiFoundryEnabled) → AIServices account + project → apps[] env',
     role: 'Cognitive Services OpenAI User (UAMI) on the AOAI/Foundry account',
+  },
+  {
+    // WS-1.1 — the model tier router's REASONING (strong) + MINI tiers. The
+    // router (lib/foundry/model-tier-router.ts) is default-ON: it classifies
+    // every copilot / agent / data-agent turn and, when a strong deployment is
+    // wired, rides it for hard analytical/agentic turns (design / debug /
+    // multi-step / tool-heavy / long-context) while cheap turns can ride mini.
+    // When NO strong deployment is configured the router SILENTLY rides the
+    // single default AOAI deployment (LOOM_AOAI_DEPLOYMENT) for every turn — the
+    // turn still works, it just is not upshifted. optionalDefault so that
+    // fully-functional posture is a pass (never a hard-fail), while the gate +
+    // Fix-it stay discoverable on /admin/gates for an admin who wants best-per-
+    // task routing. The strong tier binds to the BEST reasoning model the cloud
+    // can serve (bicep miniDeployment/strongDeployment from the availability
+    // matrix — Commercial gpt-5.6/gpt-5.5; Gov gpt-5.2/gpt-5.1/gpt-5; floor
+    // gpt-4.1), so it works in Commercial AND Gov (*.openai.azure.us).
+    id: 'svc-model-reasoning-tier', category: 'ai-copilot',
+    title: 'Model tier router — reasoning (strong) + mini tiers', severity: 'optional',
+    required: ['LOOM_AOAI_STRONG_DEPLOYMENT', 'LOOM_AOAI_MINI_DEPLOYMENT'],
+    warnOnMiss: true,
+    optionalDefault: true,
+    optionalDefaultDetail: 'the model tier router rides the single resolved default AOAI deployment (LOOM_AOAI_DEPLOYMENT) for every turn — hard analytical turns are not upshifted to a stronger reasoning model, but every turn still works. Set LOOM_AOAI_STRONG_DEPLOYMENT (a reasoning-capable o-series / gpt-5-class deployment) so hard turns ride the reasoning tier, and LOOM_AOAI_MINI_DEPLOYMENT (a cheap model, e.g. gpt-4.1-mini) so lightweight turns ride mini.',
+    remediation: 'Deploy a reasoning-capable model on the Foundry hub (Commercial: gpt-5.6 / gpt-5.5; Gov: gpt-5.2 / gpt-5.1 / gpt-5; floor gpt-4.1) and set LOOM_AOAI_STRONG_DEPLOYMENT to its deployment name so hard analytical/agentic turns route to it; set LOOM_AOAI_MINI_DEPLOYMENT to a cheap model (gpt-4.1-mini) for lightweight turns. A push-button deploy wires both from the Foundry project automatically. Opt out entirely with LOOM_MODEL_TIER_ROUTING_ENABLED=false or Admin → Copilot & Agents → Model tiers.',
+    provisionedBy: 'modules/ai/foundry-project.bicep (miniDeployment / strongDeployment) → modules/admin-plane/main.bicep apps[] env (LOOM_AOAI_MINI_DEPLOYMENT / LOOM_AOAI_STRONG_DEPLOYMENT)',
+    role: 'Cognitive Services OpenAI User (UAMI) on the AOAI/Foundry account',
+    docs: 'docs/fiab/model-strategy.md',
   },
   {
     // SVC-1 / SVC-8 — AI-enrichment pipeline activities (Document Intelligence,
