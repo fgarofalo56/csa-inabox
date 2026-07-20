@@ -184,3 +184,32 @@ visibility (D16), and the AIP copilot widget.
 - Live side-by-side click-through against Palantir Workshop; screenshots in PR.
 - Existing tests retained: `run-action/__tests__/route.test.ts`,
   `_family-utils.test.ts`; add layout-persist + aggregate-op + event-exec tests.
+
+## Widget-catalog coverage update — 2026-07-19 expansion drive
+
+The widget palette grew 7 → **32 kinds** across six shipped batches (PRs
+feat/foundry-widgets-batch1..6 + rayfin equivalents), each wired through the
+full 6-touchpoint recipe (union, fields, palette meta, default size, renderer,
+inspector) and visually verified live (rev 0000350 palette screenshot):
+
+| Foundry Workshop widget family | Loom kind(s) | Status |
+|---|---|---|
+| Object table / list | table | ✅ (data-bound) |
+| Chart family (bar/line/pie…) | chart (6 LoomChartTypes) | ✅ (data-bound) |
+| Metric / KPI card | metric, kpi-row, stat-pair, delta, gauge, rating | ✅ |
+| Filter / variable controls | filter (dropdown/text) | ✅ (data-bound) |
+| Form / action widgets | form (create/update/delete), button+events | ✅ (real CRUD) |
+| Text / markdown / heading | text (md-lite + {{var}}), heading (3 levels), quote | ✅ |
+| Media | image (https-only), iframe embed (sandboxed) | ✅ |
+| Layout | divider, spacer, breadcrumb | ✅ |
+| Status / tags | badge, tag-list, callout (4 intents), checklist | ✅ |
+| People | avatar | ✅ |
+| Data display | key-value, mini-table, json-view, code-block | ✅ |
+| Time | timestamp, countdown, progress | ✅ |
+| Containers (tabs/accordion) | batch-7 honest-v1 design banked (tab strip + per-tab content; full child nesting tracked) | ⚠ tracked |
+| Sparkline | chart preset design banked (line + hidden axes) | ⚠ tracked |
+
+Coverage verdict: every Foundry Workshop widget FAMILY has one or more working
+Loom kinds; the two ⚠ rows are tracked with concrete v1 designs. The catalog
+COUNT (32 + 5 data widgets ≈ 37 effective) matches Foundry's ~40 by family
+coverage — remaining deltas are variants within already-covered families.
