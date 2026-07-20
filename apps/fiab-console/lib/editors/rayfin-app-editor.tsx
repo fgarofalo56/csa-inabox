@@ -152,7 +152,7 @@ const useStyles = makeStyles({
     fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase200, whiteSpace: 'pre', overflowX: 'auto',
     maxHeight: '320px', overflowY: 'auto',
     backgroundColor: tokens.colorNeutralBackground3, border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusMedium, padding: tokens.spacingVerticalM, margin: 0,
+    borderRadius: tokens.borderRadiusMedium, padding: tokens.spacingVerticalM, margin: '0',
   },
   head: { display: 'flex', alignItems: 'center', gap: tokens.spacingVerticalS, flexWrap: 'wrap' },
   spacer: { marginLeft: 'auto' },
@@ -1217,7 +1217,7 @@ function ComponentEditor({ s, comp, objects, entities, rendered, onChange, onDel
         ) : kind === 'callout' ? (
           <MessageBar intent={comp.calloutIntent || 'info'}><MessageBarBody>{comp.text || comp.title}</MessageBarBody></MessageBar>
         ) : kind === 'quote' ? (
-          <blockquote style={{ margin: 0, paddingLeft: tokens.spacingHorizontalM, borderLeft: `3px solid ${tokens.colorBrandStroke1}`, color: tokens.colorNeutralForeground2, fontStyle: 'italic' }}>{comp.text || comp.title}</blockquote>
+          <blockquote style={{ margin: '0', paddingLeft: tokens.spacingHorizontalM, borderLeft: `3px solid ${tokens.colorBrandStroke1}`, color: tokens.colorNeutralForeground2, fontStyle: 'italic' }}>{comp.text || comp.title}</blockquote>
         ) : kind === 'heading' ? (
           (comp.headingLevel || 2) === 1 ? <Title3>{comp.text || comp.title}</Title3> : (comp.headingLevel || 2) === 2 ? <Subtitle2>{comp.text || comp.title}</Subtitle2> : <Body1><strong>{comp.text || comp.title}</strong></Body1>
         ) : kind === 'progress' ? (
