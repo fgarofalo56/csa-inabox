@@ -27,7 +27,7 @@ export interface WorkshopVariable {
   defaultValue?: string;
 }
 
-export type WorkshopWidgetKind = 'table' | 'chart' | 'metric' | 'filter' | 'form' | 'button' | 'text' | 'image' | 'link' | 'divider' | 'badge' | 'iframe' | 'heading' | 'progress' | 'spacer' | 'timestamp' | 'kpi-row' | 'gauge' | 'callout' | 'quote' | 'rating' | 'tag-list' | 'delta' | 'checklist' | 'avatar' | 'code-block' | 'key-value' | 'countdown';
+export type WorkshopWidgetKind = 'table' | 'chart' | 'metric' | 'filter' | 'form' | 'button' | 'text' | 'image' | 'link' | 'divider' | 'badge' | 'iframe' | 'heading' | 'progress' | 'spacer' | 'timestamp' | 'kpi-row' | 'gauge' | 'callout' | 'quote' | 'rating' | 'tag-list' | 'delta' | 'checklist' | 'avatar' | 'code-block' | 'key-value' | 'countdown' | 'stat-pair' | 'mini-table' | 'breadcrumb' | 'json-view';
 
 export interface WorkshopWidgetLayout { x: number; y: number; w: number; h: number }
 
@@ -116,6 +116,15 @@ export interface WorkshopWidget {
   keyValues?: string;
   // countdown — ISO date (yyyy-mm-dd) to count down to.
   countdownTo?: string;
+  // stat-pair — two labeled stats side by side ("Label=value" each; {{variable}} ok).
+  statLeft?: string;
+  statRight?: string;
+  // mini-table — first line = comma headers; following lines = comma rows.
+  miniTable?: string;
+  // breadcrumb — comma list of trail segments.
+  crumbs?: string;
+  // json-view — JSON text pretty-printed (or shown raw when invalid).
+  json?: string;
   // button + table events
   events?: WorkshopEvent[];
 }
