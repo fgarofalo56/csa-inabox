@@ -489,6 +489,7 @@ export const GATE_META: Record<string, GateMeta> = {
     ],
     fixit: { kind: 'resource-picker' },
     loaders: { LOOM_AAS_SERVER: L.aas },
+    autoResolveNote: 'The Loom-native tabular layer (LOOM_SEMANTIC_BACKEND=loom-native, always emitted) is the default engine and satisfies this gate — semantic models / reports work with zero config. Azure Analysis Services is an OPT-IN fast path (Commercial/GCC only; unavailable in GCC-High / IL5). Fix-it only applies where AAS exists.',
     legacyCodes: ['aas_not_configured', 'AAS_NOT_IN_GOV', 'xmla_not_configured'],
   },
   'svc-aml': {
