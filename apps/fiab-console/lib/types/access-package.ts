@@ -46,6 +46,13 @@ export interface AccessPackage {
   sodConflictsWith?: string[];
   /** How a SoD conflict is treated at request time. */
   sodMode?: SodMode;
+  /**
+   * W4 (AG-8/AG-9) — Entra security-group object ids whose transitive members
+   * are auto-granted this package's grants. Membership changes reconcile through
+   * the group-sync sweeper (join→grant, leave→revoke) as `group:<id>` ledger
+   * rows. Read-only against Entra — Loom never mutates tenant group membership.
+   */
+  groupTargets?: string[];
   enabled: boolean;
   createdBy?: string;
   createdAt: string;

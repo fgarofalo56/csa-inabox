@@ -208,6 +208,10 @@ var loomContainers = [
   // PK /tenantId. createIfNotExists in cosmos-client.ts ensure() is the fallback.
   { name: 'access-packages',    partitionKey: '/tenantId' }
   { name: 'approval-policies',  partitionKey: '/tenantId' }
+  // Access-governance W4 — recertification campaigns (scope, reviewers, cadence,
+  // per-assignment decisions). PK /tenantId. createIfNotExists in
+  // cosmos-client.ts ensure() is the hotfix fallback.
+  { name: 'access-reviews',     partitionKey: '/tenantId' }
   // Durable cross-session agent memory + per-agent thread persistence (AIF-14).
   // PK /agentId so every per-agent thread list + memory retrieve hits a single
   // physical partition. NO TTL — memory facts are durable; threads are retained

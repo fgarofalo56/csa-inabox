@@ -90,6 +90,8 @@ let _accessAssignments: Container | null = null;
 // here AND ARM-provisioned in cosmos.bicep's loomContainers.
 let _accessPackages: Container | null = null;
 let _approvalPolicies: Container | null = null;
+// Access-governance W4 — access-review / recertification campaigns, PK /tenantId.
+let _accessReviews: Container | null = null;
 // Saved SQL queries — per-item "My Queries" (private) + "Shared Queries" rows
 // for the SQL-database editor. Partitioned by /itemId so every per-item fetch
 // (and bulk delete) hits a single physical partition. Created lazily; no
@@ -844,6 +846,11 @@ async function ensure() {
   _accessAssignments = await mk('access-assignments', '/principalId');
   _accessPackages = await mk('access-packages', '/tenantId');
   _approvalPolicies = await mk('approval-policies', '/tenantId');
+  // Access-governance W4 — recertification campaigns (scope, reviewers, cadence,
+  // per-assignment decisions). PK /tenantId so an admin's campaign list and each
+  // reviewer's inbox query hit a single physical partition. Created lazily so a
+  // fresh environment needs no extra ARM step beyond the account+database.
+  _accessReviews = await mk('access-reviews', '/tenantId');
   // Saved SQL queries (My Queries / Shared Queries) — one row per saved query
   // per SQL-database item. PK /itemId so the editor's per-item list and the
   // bulk-delete both hit a single physical partition. Private rows are scoped
@@ -1090,6 +1097,8 @@ export async function accessAssignmentsContainer(): Promise<Container> { await e
 // Access-governance W2 — entitlement bundles + configurable approval policies, PK /tenantId.
 export async function accessPackagesContainer(): Promise<Container> { await ensure(); return _accessPackages!; }
 export async function approvalPoliciesContainer(): Promise<Container> { await ensure(); return _approvalPolicies!; }
+// Access-governance W4 — recertification campaigns, PK /tenantId.
+export async function accessReviewsContainer(): Promise<Container> { await ensure(); return _accessReviews!; }
 // Sign-in-boundary onboarding queue container (PK /tenantId). Distinct from both
 // access-request systems above — this is the front-door "Request access" queue.
 export async function signinAccessRequestsContainer(): Promise<Container> { await ensure(); return _signinAccessRequests!; }
@@ -1320,6 +1329,7 @@ const KNOWN_CONTAINER_IDS = [
   'access-assignments',
   'access-packages',
   'approval-policies',
+  'access-reviews',
   'saved-queries',
   // Foundation admin containers (shared cloud-endpoints resolver task).
   'loom-workspaces', 'workspace-folders',

@@ -522,6 +522,14 @@ export const ENV_CHECKS: EnvSpec[] = [
     role: 'Microsoft Graph Directory.Read.All (application) granted to the Console UAMI',
   },
   {
+    id: 'graph-group-sync', category: 'enrichment', title: 'Entra group sync (access-package group targets)', severity: 'optional',
+    required: ['LOOM_GRAPH_GROUP_SYNC_ENABLED'], warnOnMiss: true, optionalDefault: true,
+    remediation: 'Set LOOM_GRAPH_GROUP_SYNC_ENABLED=true and grant the Console UAMI Microsoft Graph Group.Read.All + GroupMember.Read.All (application, admin-consented) via scripts/csa-loom/grant-identity-graph-approles.sh to auto-reconcile Entra group-targeted access packages (member joins→grant, leaves→revoke). This is READ-ONLY on Entra — Loom never mutates tenant group membership. Without it, group-targeted packages still install and are requestable directly; only the automatic membership reconcile is gated. Everything else in access-governance is day-one-ON.',
+    docs: 'https://learn.microsoft.com/entra/id-governance/entitlement-management-scenarios',
+    provisionedBy: 'platform/fiab/bicep/modules/admin-plane/identity-graph-rbac.bicep (loomIdentityPickerEnabled) → apps[] env + post-deploy Graph grant',
+    role: 'Microsoft Graph Group.Read.All + GroupMember.Read.All (application) granted to the Console UAMI',
+  },
+  {
     id: 'purview', category: 'azure-services', title: 'Microsoft Purview (governance)', severity: 'optional',
     required: ['LOOM_PURVIEW_ACCOUNT'], warnOnMiss: true,
     remediation: 'Set LOOM_PURVIEW_ACCOUNT to link a Purview account. Domains + data-quality work Loom-native (Cosmos) without it; Purview adds the external mirror + scan plane.',
