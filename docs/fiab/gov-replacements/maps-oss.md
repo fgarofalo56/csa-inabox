@@ -1,6 +1,6 @@
 # Azure Maps → OSS MapLibre + self-hosted tiles (GCC-High replacement)
 
-**Status:** design (net-new build)
+**Status:** IMPLEMENTED (branch `feat/gov-maps-oss`) — owed: browser-E2E receipt (Track-0).
 **Gate:** `svc-azure-maps` (`LOOM_MAPS_BACKEND` + `LOOM_AZURE_MAPS_CLIENT_ID` / `LOOM_AZURE_MAPS_KEY`)
 **Boundary:** GCC-High / IL5 / DoD — Azure Maps is **not** available.
 **Rule basis:** `no-fabric-dependency.md`, `no-vaporware.md`, `ui-parity.md`.
@@ -148,3 +148,40 @@ MapLibre GL JS (BSD-3), tileserver-gl (BSD-2), OpenMapTiles schema (BSD) + map
 data (OpenStreetMap, ODbL — attribution required in the map footer). All
 redistributable in a sovereign image; add the ODbL attribution to the map
 canvas footer.
+
+## 8. Implementation (2026-07-20)
+
+Delivered on `feat/gov-maps-oss`. Differs from the design in two respects, both
+for sovereignty correctness:
+
+- **Module path:** `platform/fiab/bicep/modules/compute/loom-maps-app.bicep`
+  (not `integration/maps-tileserver.bicep`), mirroring the dbt-runner/wrangler
+  ACA shape. Wired in `modules/admin-plane/main.bicep` as a `var`-gated app
+  (`mapsTileServerEnabled = boundary is GCC-High/IL5`; `mapsTileServerActive`
+  also requires containerApps + deployApps) to stay under the 256-param cap.
+- **Browser reachability:** the tile server is INTERNAL-ingress, so the browser
+  (off-VNet) cannot reach it. The Console fronts it via a new session-guarded
+  proxy `GET /api/maps/tiles/[...path]` (`app/api/maps/tiles`), which forwards
+  to `LOOM_MAPS_TILE_URL` in-VNet and rewrites style.json sub-resource URLs to
+  proxy paths. `resolveMapsBackend()` hands the client only the proxy paths
+  (`/api/maps/tiles/style.json`, `…/maplibre-gl.js`, `…/maplibre-gl.css`) — the
+  internal host never leaks. No public map endpoint.
+
+Files:
+- `lib/azure/maps-client.ts` — `maplibre` verdict + `resolveMapsTileOrigin()` +
+  `isMapLibreConfigured()`.
+- `app/api/maps/tiles/[...path]/route.ts` — the session-guarded tile proxy.
+- `lib/components/graph/maplibre-canvas.tsx` — OSS MapLibre GL renderer (circle /
+  heatmap / cluster / fill, popups, legend, auto-fit). Loads maplibre-gl JS/CSS
+  from the in-VNet proxy — no CDN.
+- Consumers branch on mode: `azure-maps-canvas.tsx` (graph/map editor),
+  `report/map-visual.tsx` (report Map visual), plus the `map`/`report` map-token
+  routes. `map/[id]/geocode` uses OSS Nominatim (`LOOM_MAPS_GEOCODE_URL`) or an
+  honest sub-feature gate; `/api/maps/static` honest-gates on maplibre (the
+  atlas Render v2 raster endpoint is atlas-only).
+- Gate `svc-azure-maps` (`lib/admin/env-checks.ts`) anyOf gains
+  `LOOM_MAPS_TILE_URL` — flips "configured" honestly on a Gov deploy.
+
+**Owed (Track-0):** an in-browser E2E receipt showing a map surface rendering
+self-hosted tiles with `LOOM_MAPS_BACKEND=maplibre` set and NO
+`atlas.microsoft.com` egress (network trace), per §6.

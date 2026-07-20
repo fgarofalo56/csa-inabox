@@ -54,6 +54,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { loadModelItem } from '@/lib/azure/model-binding';
 import { uamiArmCredential } from '@/lib/azure/arm-credential';
+import { MAPS_STYLE_PROXY_URL, MAPS_GL_JS_PROXY_URL, MAPS_GL_CSS_PROXY_URL } from '@/lib/azure/maps-client';
 import {
   isLoomContentId,
   cosmosIdFromLoomId,
@@ -85,10 +86,35 @@ const AZURE_MAPS_BICEP = 'platform/fiab/bicep/modules/landing-zone/azure-maps.bi
 type MapsBackend =
   | { ok: true; mode: 'aad'; token: string; clientId: string; expiresOn: number }
   | { ok: true; mode: 'key'; key: string }
+  | { ok: true; mode: 'maplibre'; styleUrl: string; glJsUrl: string; glCssUrl: string }
   | { ok: false; error: string };
 
 async function resolveMapsBackend(): Promise<MapsBackend> {
   const backend = (process.env.LOOM_MAPS_BACKEND || '').trim().toLowerCase();
+
+  // ── OSS MapLibre path (GCC-High / sovereign) ─────────────────────────────────
+  // LOOM_MAPS_BACKEND=maplibre serves the map from the in-VNet tileserver-gl via
+  // the session-guarded /api/maps/tiles proxy — no credential, no atlas / Fabric.
+  if (backend === 'maplibre') {
+    const tile = (process.env.LOOM_MAPS_TILE_URL || '').trim();
+    if (tile) {
+      return {
+        ok: true,
+        mode: 'maplibre',
+        styleUrl: MAPS_STYLE_PROXY_URL,
+        glJsUrl: MAPS_GL_JS_PROXY_URL,
+        glCssUrl: MAPS_GL_CSS_PROXY_URL,
+      };
+    }
+    return {
+      ok: false,
+      error:
+        'LOOM_MAPS_BACKEND=maplibre (OSS MapLibre + self-hosted tileserver, the GCC-High path) is set but ' +
+        'LOOM_MAPS_TILE_URL is not. Deploy platform/fiab/bicep/modules/compute/loom-maps-app.bicep — a Gov ' +
+        'push-button deploy wires it automatically. No Azure Maps / Power BI / Fabric required.',
+    };
+  }
+
   if (backend !== 'azure-maps') {
     return {
       ok: false,
@@ -203,6 +229,16 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
       token: backend.token,
       clientId: backend.clientId,
       expiresOn: backend.expiresOn,
+    });
+  }
+
+  if (backend.mode === 'maplibre') {
+    return NextResponse.json({
+      ok: true,
+      mode: 'maplibre',
+      styleUrl: backend.styleUrl,
+      glJsUrl: backend.glJsUrl,
+      glCssUrl: backend.glCssUrl,
     });
   }
 

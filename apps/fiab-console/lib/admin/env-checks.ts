@@ -160,6 +160,9 @@ export const VALUE_HINT: Record<string, string> = {
   LOOM_MAPS_BACKEND: 'azure-maps',
   LOOM_AZURE_MAPS_CLIENT_ID: '<azure-maps-account-uniqueId-guid>',
   LOOM_AZURE_MAPS_KEY: '<azure-maps-shared-key (Commercial only; prefer AAD)>',
+  // OSS MapLibre (GCC-High / sovereign) — self-hosted tileserver-gl style URL,
+  // read server-side + proxied in-VNet through /api/maps/tiles (bicep-emitted).
+  LOOM_MAPS_TILE_URL: 'https://loom-maps-tiles.<aca-env-domain>/style.json',
   // ── wave-3 (G2 gate registry) — every remaining bespoke *_not_configured
   //    gate promoted into the declarative registry ──
   LOOM_AAS_SERVER: 'asazure://<region>.asazure.windows.net/<server>',
@@ -754,13 +757,13 @@ export const ENV_CHECKS: EnvSpec[] = [
     role: 'Monitoring Metrics Publisher (Console UAMI) on the audit DCR',
   },
   {
-    id: 'svc-azure-maps', category: 'azure-services', title: 'Azure Maps (map visuals / Geo)', severity: 'optional',
+    id: 'svc-azure-maps', category: 'azure-services', title: 'Map visuals / Geo (Azure Maps or OSS MapLibre)', severity: 'optional',
     required: ['LOOM_MAPS_BACKEND'],
-    anyOf: [['LOOM_AZURE_MAPS_CLIENT_ID', 'LOOM_AZURE_MAPS_KEY']],
+    anyOf: [['LOOM_AZURE_MAPS_CLIENT_ID', 'LOOM_AZURE_MAPS_KEY', 'LOOM_MAPS_TILE_URL']],
     warnOnMiss: true,
-    remediation: 'Set LOOM_MAPS_BACKEND=azure-maps plus a credential: LOOM_AZURE_MAPS_CLIENT_ID (the Maps account uniqueId — Entra/AAD path, gov-safe, PREFERRED; grant the Console UAMI "Azure Maps Data Reader") or LOOM_AZURE_MAPS_KEY (subscription key, Commercial only). Lights up the report Map visual + the graph/Geo map canvases; the aggregated location rows render without it. No Power BI / Fabric required.',
-    provisionedBy: 'modules/landing-zone/azure-maps.bicep (azureMapsEnabled → Gen2 account + "Azure Maps Data Reader" grant + mapsClientId output)',
-    role: 'Azure Maps Data Reader (Console UAMI) on the Maps account',
+    remediation: 'Two Azure-native/OSS paths, no Power BI / Fabric. Commercial/GCC: LOOM_MAPS_BACKEND=azure-maps + LOOM_AZURE_MAPS_CLIENT_ID (the Maps account uniqueId — Entra/AAD, PREFERRED; grant the Console UAMI "Azure Maps Data Reader") or LOOM_AZURE_MAPS_KEY (subscription key). GCC-High / sovereign (Azure Maps unavailable): LOOM_MAPS_BACKEND=maplibre + LOOM_MAPS_TILE_URL — the self-hosted OSS tileserver-gl (MapLibre GL) served in-VNet through the Console proxy; a Gov push-button deploy wires both. The aggregated location rows render without either.',
+    provisionedBy: 'Commercial/GCC: modules/landing-zone/azure-maps.bicep (azureMapsEnabled → Gen2 account + "Azure Maps Data Reader" grant + mapsClientId output). GCC-High/IL5: modules/compute/loom-maps-app.bicep (tileserver-gl ACA app, internal ingress) → admin-plane emits LOOM_MAPS_BACKEND=maplibre + LOOM_MAPS_TILE_URL.',
+    role: 'Azure Maps Data Reader (Console UAMI) on the Maps account (azure-maps path). The MapLibre path needs no credential — tiles are proxied in-VNet.',
   },
   // ── Hyperscale band (HYP-16) — the three optional H-band substrate services.
   //    Each is default-OFF/opt-out: unset → the console lib client honest-503

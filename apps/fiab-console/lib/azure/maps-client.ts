@@ -47,6 +47,51 @@ import { uamiArmCredential } from '@/lib/azure/arm-credential';
 export const LOOM_MAPS_ENV = 'LOOM_MAPS_BACKEND';
 
 /**
+ * OSS MapLibre (GCC-High / sovereign) backend selector value + its wiring env.
+ *
+ * `LOOM_MAPS_BACKEND=maplibre` routes every map surface to a self-hosted
+ * `tileserver-gl` (OSS, in-VNet Azure Container App — no atlas.microsoft.com, no
+ * Fabric / Power BI). The tile server is INTERNAL-ingress, so the BROWSER can not
+ * reach it directly (it is not on the VNet); instead the Console fronts it through
+ * the session-guarded proxy route `/api/maps/tiles/*`. `LOOM_MAPS_TILE_URL` is the
+ * internal tileserver style.json URL bicep emits on a Gov deploy — read ONLY
+ * server-side (the proxy + these resolvers); the client is handed the
+ * Console-relative proxy paths, never the internal host.
+ */
+export const LOOM_MAPS_TILE_ENV = 'LOOM_MAPS_TILE_URL';
+/** Console-relative base the browser uses for every tile/style/asset request; the
+ *  proxy route forwards each to the internal tile server in-VNet. */
+export const MAPS_TILE_PROXY_BASE = '/api/maps/tiles';
+/** Style JSON + the MapLibre GL JS/CSS the tileserver image also serves (same
+ *  in-VNet origin, proxied) — loaded by the client renderer. No external CDN. */
+export const MAPS_STYLE_PROXY_URL = `${MAPS_TILE_PROXY_BASE}/style.json`;
+export const MAPS_GL_JS_PROXY_URL = `${MAPS_TILE_PROXY_BASE}/maplibre-gl.js`;
+export const MAPS_GL_CSS_PROXY_URL = `${MAPS_TILE_PROXY_BASE}/maplibre-gl.css`;
+
+/**
+ * Server-only: the internal tile-server ORIGIN (scheme://host[:port]) derived from
+ * `LOOM_MAPS_TILE_URL`, used by the proxy route to forward browser requests to the
+ * in-VNet `tileserver-gl`. Returns '' when the MapLibre backend is not configured.
+ * Strips any trailing path (e.g. `/style.json`) so callers append the resource.
+ */
+export function resolveMapsTileOrigin(): string {
+  const raw = (process.env.LOOM_MAPS_TILE_URL || '').trim();
+  if (!raw) return '';
+  try {
+    return new URL(raw).origin;
+  } catch {
+    // Not a full URL (defensive) — strip any trailing path segment.
+    return raw.replace(/\/[^/]*$/, '').replace(/\/+$/, '');
+  }
+}
+
+/** True when the OSS MapLibre backend is selected AND a tile-server URL is wired. */
+export function isMapLibreConfigured(): boolean {
+  const backend = (process.env.LOOM_MAPS_BACKEND || '').trim().toLowerCase();
+  return backend === 'maplibre' && !!(process.env.LOOM_MAPS_TILE_URL || '').trim();
+}
+
+/**
  * AAD audience for the Azure Maps data-plane. Overridable for sovereign clouds
  * via `LOOM_AZURE_MAPS_SCOPE` (Azure Maps has limited Gov availability — stated
  * honestly per no-vaporware) but defaults to the public atlas audience. The
@@ -62,11 +107,16 @@ const ATLAS_SCOPE = process.env.LOOM_AZURE_MAPS_SCOPE || 'https://atlas.microsof
  *     `clientId` (x-ms-client-id) + `expiresOn` (unix ms). Preferred / gov-safe.
  *  - `{ ok:true, mode:'key' }`  — subscription key (commercial fallback). Azure
  *     Maps keys are designed for client SDK use; AAD is still preferred.
+ *  - `{ ok:true, mode:'maplibre' }` — OSS MapLibre GL over the self-hosted
+ *     tileserver-gl (GCC-High / sovereign). No credential — the browser loads the
+ *     style + tiles + GL JS/CSS through the session-guarded Console proxy
+ *     (`/api/maps/tiles/*`), which forwards to the in-VNet tile server.
  *  - `{ ok:false }`             — honest gate: `reason` + the `envVar` to set.
  */
 export type MapsBackend =
   | { ok: true; mode: 'aad'; token: string; clientId: string; expiresOn: number }
   | { ok: true; mode: 'key'; key: string }
+  | { ok: true; mode: 'maplibre'; styleUrl: string; glJsUrl: string; glCssUrl: string }
   | { ok: false; reason: string; envVar: string };
 
 /**
@@ -94,6 +144,7 @@ export type MapsBackend =
  */
 export function isMapsConfigured(): boolean {
   const backend = (process.env.LOOM_MAPS_BACKEND || '').trim().toLowerCase();
+  if (backend === 'maplibre') return !!(process.env.LOOM_MAPS_TILE_URL || '').trim();
   if (backend !== 'azure-maps') return false;
   return !!(process.env.LOOM_AZURE_MAPS_CLIENT_ID?.trim() || process.env.LOOM_AZURE_MAPS_KEY?.trim());
 }
@@ -101,13 +152,43 @@ export function isMapsConfigured(): boolean {
 export async function resolveMapsBackend(): Promise<MapsBackend> {
   const backend = (process.env.LOOM_MAPS_BACKEND || '').trim().toLowerCase();
 
+  // ── OSS MapLibre path (GCC-High / sovereign DEFAULT where Azure Maps is not
+  //    available) ─────────────────────────────────────────────────────────────
+  // Selected by LOOM_MAPS_BACKEND=maplibre. Needs no credential: tiles + style +
+  // GL JS/CSS are served by the in-VNet tileserver-gl and reached by the browser
+  // through the session-guarded Console proxy (/api/maps/tiles/*). The client is
+  // handed the Console-relative proxy paths, so the internal host never leaks and
+  // nothing external (atlas / Fabric / Power BI) is contacted.
+  if (backend === 'maplibre') {
+    const tile = (process.env.LOOM_MAPS_TILE_URL || '').trim();
+    if (tile) {
+      return {
+        ok: true,
+        mode: 'maplibre',
+        styleUrl: MAPS_STYLE_PROXY_URL,
+        glJsUrl: MAPS_GL_JS_PROXY_URL,
+        glCssUrl: MAPS_GL_CSS_PROXY_URL,
+      };
+    }
+    return {
+      ok: false,
+      envVar: LOOM_MAPS_TILE_ENV,
+      reason:
+        'LOOM_MAPS_BACKEND=maplibre (OSS MapLibre + self-hosted tileserver, the GCC-High / sovereign path) ' +
+        'is selected but LOOM_MAPS_TILE_URL is not set. Deploy the in-VNet tile server ' +
+        '(platform/fiab/bicep/modules/compute/loom-maps-app.bicep) — a Gov push-button deploy wires ' +
+        'LOOM_MAPS_TILE_URL automatically. No Azure Maps / Power BI / Fabric required; tiles are served ' +
+        'in-VNet through the Console proxy.',
+    };
+  }
+
   if (backend !== 'azure-maps') {
     return {
       ok: false,
       envVar: LOOM_MAPS_ENV,
       reason: backend
-        ? `LOOM_MAPS_BACKEND="${backend}" is not a supported map backend. Set LOOM_MAPS_BACKEND=azure-maps to enable the Azure-native map visual (no Power BI / Fabric required).`
-        : 'Azure Maps is not configured. Set LOOM_MAPS_BACKEND=azure-maps (plus an Azure Maps account via platform/fiab/bicep/modules/landing-zone/azure-maps.bicep) to enable the map visual. The aggregated location rows still render.',
+        ? `LOOM_MAPS_BACKEND="${backend}" is not a supported map backend. Set LOOM_MAPS_BACKEND=azure-maps (Commercial/GCC, Azure-native) or LOOM_MAPS_BACKEND=maplibre (GCC-High / sovereign OSS: self-hosted tileserver-gl, no Power BI / Fabric).`
+        : 'Azure Maps is not configured. Set LOOM_MAPS_BACKEND=azure-maps (plus an Azure Maps account via platform/fiab/bicep/modules/landing-zone/azure-maps.bicep) for the Commercial/GCC path, or LOOM_MAPS_BACKEND=maplibre + LOOM_MAPS_TILE_URL (self-hosted OSS MapLibre, the GCC-High / sovereign path — platform/fiab/bicep/modules/compute/loom-maps-app.bicep). The aggregated location rows still render.',
     };
   }
 

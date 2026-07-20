@@ -68,6 +68,8 @@ import {
   Map20Regular, Globe20Regular, Location16Regular, CircleSmall20Regular, Warning20Regular,
 } from '@fluentui/react-icons';
 import { EmptyState } from '@/lib/components/empty-state';
+import { MapLibreCanvas } from '@/lib/components/graph/maplibre-canvas';
+import type { MapLayer } from '@/lib/components/graph/geojson-map';
 import { formatValue, type NumberFormatPreset } from './format-pane';
 
 // ── public props ─────────────────────────────────────────────────────────────
@@ -162,7 +164,8 @@ function loadAtlas(): Promise<Atlas> {
 
 type MapAuth =
   | { ok: true; mode: 'aad'; token: string; clientId: string; expiresOn?: number }
-  | { ok: true; mode: 'key'; key: string };
+  | { ok: true; mode: 'key'; key: string }
+  | { ok: true; mode: 'maplibre'; styleUrl: string; glJsUrl: string; glCssUrl: string };
 
 type TokenState =
   | { kind: 'loading' }
@@ -404,7 +407,7 @@ async function geocodeName(name: string, auth: MapAuth, reportId: string): Promi
     } catch { /* fall back to the init token */ }
     headers['Authorization'] = `Bearer ${tok}`;
     if (cid) headers['x-ms-client-id'] = cid;
-  } else {
+  } else if (auth.mode === 'key') {
     url += `&subscription-key=${encodeURIComponent(auth.key)}`;
   }
   const r = await fetch(url, { headers });
@@ -469,7 +472,7 @@ export function MapVisual(props: MapVisualProps): ReactElement {
           setToken({ kind: 'gate', error: j?.error, envVar: j?.envVar || MAPS_ENV, bicep: j?.bicep || MAPS_BICEP });
           return;
         }
-        if (r.ok && j?.ok && (j.mode === 'aad' || j.mode === 'key')) {
+        if (r.ok && j?.ok && (j.mode === 'aad' || j.mode === 'key' || j.mode === 'maplibre')) {
           setToken({ kind: 'ok', auth: j as MapAuth });
           return;
         }
@@ -483,7 +486,7 @@ export function MapVisual(props: MapVisualProps): ReactElement {
 
   // ── 2. init the atlas map once auth is OK ────────────────────────────────────
   useEffect(() => {
-    if (token.kind !== 'ok' || !containerRef.current || mapRef.current) return;
+    if (token.kind !== 'ok' || token.auth.mode === 'maplibre' || !containerRef.current || mapRef.current) return;
     const auth = token.auth; // capture the narrowed auth for nested closures
     let disposed = false;
     setMapErr(null);
@@ -526,7 +529,7 @@ export function MapVisual(props: MapVisualProps): ReactElement {
   }, [token, reportId]);
 
   // ── 3. geocode distinct Location names (bubble, no lat/long) ──────────────────
-  const needGeocode = mode === 'bubble' && !resolved.hasLatLong && !!resolved.locationCol && token.kind === 'ok';
+  const needGeocode = mode === 'bubble' && !resolved.hasLatLong && !!resolved.locationCol && token.kind === 'ok' && token.auth.mode !== 'maplibre';
   useEffect(() => {
     if (!needGeocode || token.kind !== 'ok') return;
     const auth = token.auth; // capture the narrowed auth for the async pass
@@ -618,6 +621,47 @@ export function MapVisual(props: MapVisualProps): ReactElement {
     const i = legendValues.indexOf(legend);
     return CATEGORICAL[(i < 0 ? 0 : i) % CATEGORICAL.length];
   }, [resolved.legendCol, legendValues]);
+
+  // ── OSS MapLibre (GCC-High / sovereign) model ─────────────────────────────────
+  // When the backend is maplibre, the SAME real aggregate rows are rendered on the
+  // self-hosted tileserver via <MapLibreCanvas> instead of the atlas SDK. We build
+  // the GeoJSON here (bubbles from lat/long points; a choropleth from the joined
+  // OSS TopoJSON) and hand it to the shared OSS renderer. Name-only geocoding is
+  // the honest-gated sub-feature (Nominatim follow-on) — lat/long + filled work.
+  const maplibreModel = useMemo(() => {
+    if (mode === 'bubble') {
+      const feats = bubblePoints.map((p) => ({
+        type: 'Feature',
+        geometry: { type: 'Point', coordinates: [p.lon, p.lat] },
+        properties: { label: p.label, size: p.size ?? null, legend: p.legend ?? null },
+      }));
+      const hasSize = resolved.sizeCol && bubblePoints.some((p) => p.size != null);
+      const layer: MapLayer = {
+        id: 'loom-bubbles', type: 'point',
+        weightProp: hasSize ? 'size' : undefined, sizeByMetric: !!hasSize,
+        colorLow: RAMP_LO, colorHigh: RAMP_HI,
+        tooltipFields: ['label', ...(resolved.sizeCol ? ['size'] : [])],
+      };
+      return { geojson: { type: 'FeatureCollection', features: feats }, layers: [layer] };
+    }
+    // filled / choropleth — join the OSS TopoJSON polygons to the Size aggregate.
+    if (topo.status !== 'ready' || !topo.geo) return { geojson: { type: 'FeatureCollection', features: [] }, layers: [] as MapLayer[] };
+    const { locationCol, sizeCol } = resolved;
+    const byName = new Map<string, number>();
+    if (locationCol) {
+      for (const r of rows) {
+        const k = normKey(String(r[locationCol] ?? ''));
+        if (k && sizeCol && isNum(r[sizeCol])) byName.set(k, Number(r[sizeCol]));
+      }
+    }
+    const feats = (topo.geo.features || []).map((f: any) => { // eslint-disable-line @typescript-eslint/no-explicit-any
+      const nm = normKey(featureName(f.properties));
+      const v = byName.has(nm) ? byName.get(nm)! : undefined;
+      return { ...f, properties: { ...f.properties, label: featureName(f.properties), size: v ?? null } };
+    });
+    const layer: MapLayer = { id: 'loom-fill', type: 'choropleth', weightProp: 'size', colorLow: RAMP_LO, colorHigh: RAMP_HI, tooltipFields: ['label', 'size'] };
+    return { geojson: { type: 'FeatureCollection', features: feats }, layers: [layer] };
+  }, [mode, bubblePoints, topo, rows, resolved]);
 
   // ── 5. (re)draw the data layer whenever ready / mode / data change ────────────
   // Signatures keep the heavy effect from re-running on unrelated renders.
@@ -728,7 +772,9 @@ export function MapVisual(props: MapVisualProps): ReactElement {
             Filled
           </ToggleButton>
         </div>
-        <Badge appearance="tint" color="brand" size="small">Azure Maps</Badge>
+        <Badge appearance="tint" color="brand" size="small">
+          {token.kind === 'ok' && token.auth.mode === 'maplibre' ? 'MapLibre · OSS' : 'Azure Maps'}
+        </Badge>
       </div>
 
       {/* Honest Azure-Maps gate (LOOM_MAPS_BACKEND unset) — full surface + rows */}
@@ -759,6 +805,46 @@ export function MapVisual(props: MapVisualProps): ReactElement {
               title="Add a location"
               body="Bind Latitude + Longitude for bubbles, or a Location name (Country / City) for geocoded bubbles or a filled choropleth. The Size well sets the bubble radius and the color ramp."
             />
+          ) : token.kind === 'ok' && token.auth.mode === 'maplibre' ? (
+            <>
+              {/* OSS MapLibre (GCC-High / sovereign) — same real aggregate rows,
+                  rendered on the self-hosted tileserver. */}
+              <MapLibreCanvas
+                styleUrl={token.auth.styleUrl}
+                glJsUrl={token.auth.glJsUrl}
+                glCssUrl={token.auth.glCssUrl}
+                geojson={maplibreModel.geojson}
+                layers={maplibreModel.layers}
+                height={height}
+              />
+              {/* Legend (Size ramp or categorical Legend) + row count */}
+              <div className={styles.legend}>
+                {resolved.legendCol && legendValues.length > 0 ? (
+                  <div className={styles.legChips}>
+                    <Caption1>{resolved.legendCol}:</Caption1>
+                    {legendValues.slice(0, 8).map((lv) => (
+                      <Caption1 key={lv}>
+                        <span className={styles.swatch} style={{ backgroundColor: legendColorFor(lv) }} />{lv}
+                      </Caption1>
+                    ))}
+                  </div>
+                ) : resolved.sizeCol ? (
+                  <>
+                    <Caption1>{resolved.sizeCol}</Caption1>
+                    <span className={styles.rampBar} aria-hidden />
+                    <Caption1>{formatValue(sizeExtent.min, numberFormat)} – {formatValue(sizeExtent.max, numberFormat)}</Caption1>
+                  </>
+                ) : (
+                  <Caption1>Bubble per location</Caption1>
+                )}
+                <span className={styles.grow} />
+                <Caption1 className={styles.notes}>
+                  {mode === 'bubble'
+                    ? `${bubblePoints.length} of ${rows.length} location${rows.length === 1 ? '' : 's'} plotted`
+                    : `${rows.length} location${rows.length === 1 ? '' : 's'}`}
+                </Caption1>
+              </div>
+            </>
           ) : (
             <>
               <div className={styles.canvasWrap} style={{ height }}>

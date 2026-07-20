@@ -98,6 +98,18 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
     });
   }
 
+  if (backend.mode === 'maplibre') {
+    // OSS MapLibre (GCC-High / sovereign): no credential — the browser loads the
+    // style + tiles + GL JS/CSS through the session-guarded /api/maps/tiles proxy.
+    return NextResponse.json({
+      ok: true,
+      mode: 'maplibre',
+      styleUrl: backend.styleUrl,
+      glJsUrl: backend.glJsUrl,
+      glCssUrl: backend.glCssUrl,
+    });
+  }
+
   // mode === 'key'
   return NextResponse.json({ ok: true, mode: 'key', key: backend.key });
 }
