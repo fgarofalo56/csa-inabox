@@ -24,7 +24,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Tab, TabList, Button, Dropdown, Option, Input, Field, Spinner, Badge, Divider,
   Body1, Caption1, Subtitle2,
-  MessageBar, MessageBarBody, MessageBarTitle,
+  MessageBar, MessageBarBody, MessageBarTitle, MessageBarActions, Link,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   makeStyles, tokens,
 } from '@fluentui/react-components';
@@ -432,12 +432,10 @@ export function LakebaseEditor({ item, id }: EditorProps) {
                 </Field>
               </div>
             </div>
-            {queryGate ? (
-              <MessageBar intent="warning"><MessageBarBody>
-                <MessageBarTitle>One-time setup for in-database query</MessageBarTitle>
-                <span className={s.err}>{queryGate.detail}</span>
-              </MessageBarBody></MessageBar>
-            ) : null}
+            {/* In-database query IS wired (Query tab → real pg wire execution).
+                The only non-functional case is the one-time Entra-principal
+                setup; that honest Fix-it gate lives on the Query tab itself,
+                so the overview no longer carries a stale query banner here. */}
           </div>
           {serverDetails}
         </div>
@@ -508,7 +506,20 @@ export function LakebaseEditor({ item, id }: EditorProps) {
   const query = (
     <div className={s.pad}>
       {banners}
-      {queryGate ? <MessageBar intent="warning"><MessageBarBody><MessageBarTitle>Query execution needs {queryGate.missing}</MessageBarTitle><span className={s.err}>{queryGate.detail}</span></MessageBarBody></MessageBar> : null}
+      {/* In-database query is wired end-to-end (Run → POST /query → real pg
+          wire execution). The one honest gate is a ONE-TIME Entra-principal
+          registration; we surface it as a guided Fix-it (the exact SQL + a
+          Learn link) rather than a "not wired" banner. The Query editor still
+          renders + runs the moment the principal is registered. */}
+      {queryGate ? (
+        <MessageBar intent="warning" layout="multiline"><MessageBarBody>
+          <MessageBarTitle>One-time Entra setup enables in-database query</MessageBarTitle>
+          <span className={s.err}>{queryGate.detail}</span>
+        </MessageBarBody>
+        <MessageBarActions>
+          <Link href="https://learn.microsoft.com/azure/postgresql/flexible-server/how-to-configure-sign-in-azure-ad-authentication" target="_blank" rel="noreferrer">Set up Entra sign-in</Link>
+        </MessageBarActions></MessageBar>
+      ) : null}
       <div className={s.row}><Caption1>Database: <b>{cfg.database || 'postgres'}</b> · Server: <b>{cfg.server?.name || '—'}</b></Caption1></div>
       <div style={{ height: 220 }}>
         <MonacoTextarea value={sql} onChange={setSql} language="sql" ariaLabel="PostgreSQL query" />
