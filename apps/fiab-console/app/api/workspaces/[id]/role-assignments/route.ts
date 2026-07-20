@@ -33,6 +33,7 @@ import {
   type PrincipalType,
 } from '@/lib/azure/workspace-roles-client';
 import { apiServerError } from '@/lib/api/respond';
+import { recordAssignment } from '@/lib/access/assignment-ledger';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -122,6 +123,21 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
       { workspaceId: id, principalId, principalType, displayName, role: wsRole, addedBy },
       (workspace as any).fabricWorkspaceId ?? null,
     );
+    // Entitlement ledger (access-governance W1): record the workspace-role grant
+    // so the who-has-access report reflects it. Best-effort (never throws).
+    await recordAssignment({
+      principalId,
+      principalUpn: displayName,
+      principalType,
+      tenantId: s.claims.oid,
+      resourceType: 'workspace',
+      resourceRef: id,
+      resourceName: (workspace as any).displayName || (workspace as any).name,
+      role: wsRole,
+      source: 'workspace-acl',
+      sourceRef: `${id}:${principalId}`,
+      grantedBy: addedBy,
+    });
     return NextResponse.json({ ok: true, ...result }, { status: 201 });
   } catch (e: any) {
     return apiServerError(e);

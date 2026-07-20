@@ -14,6 +14,7 @@ import { resolveWorkspaceRole } from '@/lib/auth/workspace-role';
 import { isTenantAdmin } from '@/lib/auth/feature-gate';
 import { removeWorkspaceRole } from '@/lib/azure/workspace-roles-client';
 import { apiServerError } from '@/lib/api/respond';
+import { revokeAssignmentLedger } from '@/lib/access/assignment-ledger';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -37,6 +38,9 @@ export async function DELETE(
     const pid = decodeURIComponent(principalId).trim();
     if (!pid) return NextResponse.json({ ok: false, error: 'principalId required' }, { status: 400 });
     const result = await removeWorkspaceRole(id, pid, (workspace as any).fabricWorkspaceId ?? null);
+    // Entitlement ledger (access-governance W1): mark the grant revoked so the
+    // who-has-access report reflects the removal. Best-effort (never throws).
+    await revokeAssignmentLedger(pid, 'workspace', id, 'workspace-acl', s.claims.upn || s.claims.email || s.claims.oid);
     return NextResponse.json({ ok: true, ...result });
   } catch (e: any) {
     return apiServerError(e);

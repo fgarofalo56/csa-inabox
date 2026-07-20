@@ -29,6 +29,7 @@ import { recordListingSubscribe } from '@/lib/marketplace/listing-analytics';
 import { emitLoomEvent } from '@/lib/events/webhook-emitter';
 import { resolveGrantTargets, rollUpFulfillment } from '@/lib/dataproducts/fulfillment';
 import { enforceAccessGrant } from '@/lib/azure/access-policy-client';
+import { recordAssignment } from '@/lib/access/assignment-ledger';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -205,6 +206,25 @@ export async function PATCH(req: NextRequest, props: { params: Promise<{ id: str
         permission: t.permission,
       });
       provisioned.push({ scopeType: t.scopeType, scopeRef: t.scopeRef, roleName: grant.roleName, roleAssignmentId: grant.roleAssignmentId, status: grant.status, detail: grant.detail, source: t.source });
+      // Entitlement ledger (access-governance W1): record each provisioned grant
+      // so the who-has-access report reflects it. Best-effort (never throws).
+      if (grant.status === 'active') {
+        await recordAssignment({
+          principalId: doc.requesterId,
+          principalUpn: doc.requesterUpn,
+          principalType: 'User',
+          tenantId: s.claims.oid,
+          resourceType: t.scopeType,
+          resourceRef: t.scopeRef,
+          resourceName: owner.name,
+          role: grant.roleName || t.scopeType,
+          permission: t.permission,
+          source: 'data-product',
+          sourceRef: doc.id,
+          grantedBy: s.claims.upn || s.claims.email || s.claims.oid,
+          roleAssignmentId: grant.roleAssignmentId,
+        });
+      }
     }
     const roll = rollUpFulfillment(provisioned);
     doc.provisionedTargets = provisioned;
