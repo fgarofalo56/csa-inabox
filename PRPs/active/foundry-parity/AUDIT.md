@@ -202,3 +202,19 @@ top-level canvas), Design mode keeps them editable with name chips, cycle
 guard + delete cleanup, pure `nestedWidgetIds` helper + 5 unit tests. Parity
 doc rows A4/A5 + Containers flipped ✅ — zero tracked notes remain on the
 catalog.
+
+**LIVE E2E RECEIPT (rev loom-console--0000353, sha addd7049, 2026-07-20):**
+"TabNest E2E" workshop app in CSA Loom Demo, bound to Enterprise Ontology;
+`dbo.Customer` created in the Finance Warehouse dedicated pool (CTAS from
+`gold.dim_customer` via the warehouse query route — real Synapse SQL) and
+Customer mapped via the ontology's Bind-to-data-source. Click-walk verified:
+Design mode shows the per-tab multiselect ("Data" tab widgets = Rows:
+Customer) + name chips in the pane; Run mode hides the claimed table from the
+top-level canvas and renders its FULL live body inside the Data tab — real
+rows returned (C-1004 Adventure Works Cycles / SMB / US / South, C-1002
+Fabrikam Outfitters, C-1003 Northwind Traders, C-1001 Contoso Retail Group).
+Honest-gate path also verified pre-mapping (no_binding 409 → MessageBar with
+exact remediation, inside the pane). Test item deleted; the Customer
+data-source mapping was kept — it makes the seeded Enterprise Ontology's
+Customer class live for every demo workshop app. Task #9 (visual A-grade
+sweep vs Azure + Fabric) CLOSED with this + the two portal receipts above.
