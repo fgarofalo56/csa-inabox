@@ -2,10 +2,14 @@
  * Loom docs index — RAG corpus for the Help Copilot widget.
  *
  * Indexes:
- *   - docs/fiab/**\/*.md      (published CSA Loom pages)
+ *   - docs/fiab/**\/*.md      (published CSA Loom pages, incl. docs/fiab/parity/**)
  *   - docs/**\/*.md           (broader csa-inabox docs)
  *   - apps/fiab-console/lib/**\/*.{ts,tsx} summaries
  *   - PRPs/completed/csa-loom-pillar/*.md
+ *   - PRPs/active/**\/*.md    (in-flight PRPs — AUDIT.md receipts, OPEN-REGISTER, etc.
+ *     Without these the Copilot only ever saw *completed* PRPs and answered from
+ *     stale gap analyses — e.g. claiming Foundry parity was unshipped when
+ *     PRPs/active/foundry-parity/AUDIT.md carried the live shipped receipts.)
  *   - docs/fiab/adr/*.md
  *
  * Two backends:
@@ -304,6 +308,8 @@ interface RepoRoots {
   consoleLibRoot: string;
   /** `PRPs/completed/csa-loom-pillar/` */
   prpRoot: string;
+  /** `PRPs/active/` — in-flight PRP folders (AUDIT.md receipts, PRP.md, OPEN-REGISTER) */
+  prpActiveRoot: string;
   /** `docs/fiab/adr/` */
   adrRoot: string;
 }
@@ -321,6 +327,7 @@ function detectRoots(): RepoRoots {
       docsRoot: path.join(bundled, 'docs'),
       consoleLibRoot: path.join(bundled, 'lib'),
       prpRoot: path.join(bundled, 'PRPs', 'completed', 'csa-loom-pillar'),
+      prpActiveRoot: path.join(bundled, 'PRPs', 'active'),
       adrRoot: path.join(bundled, 'docs', 'fiab', 'adr'),
     };
   }
@@ -335,6 +342,7 @@ function detectRoots(): RepoRoots {
     docsRoot: path.join(dir, 'docs'),
     consoleLibRoot: path.join(dir, 'apps', 'fiab-console', 'lib'),
     prpRoot: path.join(dir, 'PRPs', 'completed', 'csa-loom-pillar'),
+    prpActiveRoot: path.join(dir, 'PRPs', 'active'),
     adrRoot: path.join(dir, 'docs', 'fiab', 'adr'),
   };
 }
@@ -472,6 +480,10 @@ export async function buildCorpus(): Promise<DocChunk[]> {
     { root: path.join(roots.docsRoot, 'fiab'), kind: 'docs', prefix: path.join(roots.repoRoot) },
     { root: roots.docsRoot, kind: 'docs', prefix: path.join(roots.repoRoot) },
     { root: roots.prpRoot, kind: 'prp', prefix: path.join(roots.repoRoot) },
+    // In-flight PRPs: AUDIT.md receipts + PRP.md + OPEN-REGISTER. These carry the
+    // shipped-reality receipts (e.g. foundry-parity) — excluding them made every
+    // active-wave feature structurally invisible to the Copilot.
+    { root: roots.prpActiveRoot, kind: 'prp', prefix: path.join(roots.repoRoot) },
     { root: roots.adrRoot, kind: 'adr', prefix: path.join(roots.repoRoot) },
   ];
 

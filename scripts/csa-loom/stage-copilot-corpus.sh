@@ -15,7 +15,7 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 DEST="$ROOT/apps/fiab-console/copilot-corpus"
 
 rm -rf "$DEST/docs" "$DEST/PRPs"
-mkdir -p "$DEST/docs" "$DEST/PRPs/completed/csa-loom-pillar"
+mkdir -p "$DEST/docs" "$DEST/PRPs/completed/csa-loom-pillar" "$DEST/PRPs/active"
 
 # Fast, portable, markdown-only copy preserving structure: find → tar stream.
 copy_md() {  # $1 = src dir, $2 = dest dir
@@ -24,5 +24,8 @@ copy_md() {  # $1 = src dir, $2 = dest dir
 }
 copy_md "$ROOT/docs" "$DEST/docs"
 copy_md "$ROOT/PRPs/completed/csa-loom-pillar" "$DEST/PRPs/completed/csa-loom-pillar"
+# In-flight PRPs (AUDIT.md receipts, PRP.md, OPEN-REGISTER) — without these the
+# Copilot answered from stale gap docs because shipped-but-active work was invisible.
+copy_md "$ROOT/PRPs/active" "$DEST/PRPs/active"
 
 echo "staged $(find "$DEST" -name '*.md' | wc -l | tr -d ' ') markdown files into apps/fiab-console/copilot-corpus/"
