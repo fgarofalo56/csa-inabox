@@ -103,6 +103,10 @@ export async function POST(_req: NextRequest, props: { params: Promise<{ id: str
         packageName: pkg.name,
         approvalPolicyId: plan.policyId,
         approvalPlan: plan,
+        // W3 — time-bound / PIM snapshot from the package.
+        grantLifetimeDays: pkg.defaultLifetimeDays ?? null,
+        activationRequired: !!pkg.activationRequired,
+        activationWindowHours: pkg.activationWindowHours ?? null,
       };
       const { resource } = await wf.items.create(doc);
       created.push({ id: resource?.id || doc.id, resourceRef: g.resourceRef });

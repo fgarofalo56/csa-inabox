@@ -35,8 +35,13 @@ export interface AccessPackage {
   requestable: boolean;
   /** Approval policy governing requests for this package (else the default policy). */
   approvalPolicyId?: string;
-  /** W3 hook — default grant lifetime; null = permanent. */
+  /** W3 — default grant lifetime; null = permanent. Sets expiresAt at grant time. */
   defaultLifetimeDays?: number | null;
+  /** W3 — PIM: when true, approval yields an ELIGIBLE assignment the user must
+   *  activate (rather than an immediately-active grant). */
+  activationRequired?: boolean;
+  /** W3 — activation window in hours (how long an activated grant lasts). */
+  activationWindowHours?: number | null;
   /** Separation-of-duties: package ids incompatible with this one. */
   sodConflictsWith?: string[];
   /** How a SoD conflict is treated at request time. */

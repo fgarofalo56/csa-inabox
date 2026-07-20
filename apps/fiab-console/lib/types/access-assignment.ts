@@ -23,7 +23,14 @@ export type AssignmentSource =
   | `package:${string}`
   | `group:${string}`;
 
-export type AssignmentState = 'active' | 'expired' | 'revoked';
+/**
+ * active   — granted and in force (real RBAC provisioned).
+ * eligible — assigned but NOT active (PIM-style): no RBAC yet; the principal must
+ *            activate it to receive a time-bounded grant (W3).
+ * expired  — was active, past its expiresAt; swept + revoked.
+ * revoked  — explicitly revoked.
+ */
+export type AssignmentState = 'active' | 'eligible' | 'expired' | 'revoked';
 
 export type AssignmentPrincipalType = 'User' | 'Group' | 'ServicePrincipal';
 
@@ -55,6 +62,8 @@ export interface AccessAssignment {
   roleAssignmentId?: string;
   /** W3 — populated by time-bound/PIM; null = permanent. */
   expiresAt?: string | null;
+  /** W3 — activation window (hours) carried on an eligible row for activation. */
+  activationWindowHours?: number | null;
   state: AssignmentState;
   revokedAt?: string;
   revokedBy?: string;
@@ -77,4 +86,7 @@ export interface RecordAssignmentInput {
   grantedBy?: string;
   roleAssignmentId?: string;
   expiresAt?: string | null;
+  activationWindowHours?: number | null;
+  /** W3 — initial state; 'active' (default) or 'eligible' (PIM assign-not-active). */
+  state?: AssignmentState;
 }
