@@ -665,6 +665,43 @@ async function probeBatch(h: ProbeHelpers): Promise<CheckResult> {
 
 // ── runner ───────────────────────────────────────────────────────────────────
 
+/** Help Copilot corpus freshness (WS-G / G2). Compares the staged docs against
+ *  what the incremental index last built (via the corpus manifest) so a stale
+ *  or never-built RAG corpus is detectable at runtime. No env gate — the corpus
+ *  is a Loom-internal artifact (Cosmos fallback always available); the only
+ *  action is an admin reindex. */
+async function probeCopilotCorpus(h: ProbeHelpers): Promise<CheckResult> {
+  const base = { id: 'probe-copilot-corpus', category: 'ai-copilot' as const, title: 'Help Copilot corpus freshness (docs RAG index)', severity: 'optional' as const };
+  try {
+    const { corpusFreshness } = await import('@/lib/azure/loom-docs-index');
+    const f = await withTimeout(corpusFreshness(), 8000);
+    if (f.state === 'never-indexed') {
+      return {
+        ...base, status: 'warn',
+        detail: `Help Copilot corpus has never been indexed (backend ${f.backend}) — the docs RAG returns nothing until a first build.`,
+        remediation: 'POST /api/help-copilot/reindex as an admin to build the corpus (one-time after deploy). The incremental builder then only re-processes changed docs on later runs.',
+        redeploy: false,
+      };
+    }
+    if (f.state === 'stale') {
+      return {
+        ...base, status: 'warn',
+        detail: `Help Copilot corpus is STALE — the staged docs changed since the last index build (indexed ${f.indexedAt || 'n/a'}, ${f.indexedChunkCount ?? 0} chunks, backend ${f.backend}).`,
+        remediation: 'POST /api/help-copilot/reindex as an admin to re-index. The incremental build only re-processes the changed/new/removed docs.',
+        redeploy: false,
+      };
+    }
+    return { ...base, status: 'pass', detail: `Help Copilot corpus fresh (backend ${f.backend}, ${f.indexedChunkCount ?? 0} chunks, indexed ${f.indexedAt || 'n/a'}).` };
+  } catch (e: any) {
+    return {
+      ...base, status: 'warn',
+      detail: `Corpus freshness check failed: ${e?.message || String(e)}`,
+      remediation: 'Verify Cosmos (or AI Search) reachability — the corpus manifest is read from the help-copilot-corpus container / loom-docs index. Then POST /api/help-copilot/reindex.',
+      redeploy: false,
+    };
+  }
+}
+
 /** Run every extended probe in parallel (each individually time-bounded). */
 export async function runExtraProbes(h: ProbeHelpers): Promise<CheckResult[]> {
   return Promise.all([
@@ -703,5 +740,7 @@ export async function runExtraProbes(h: ProbeHelpers): Promise<CheckResult[]> {
     probeHttpService(
       'probe-paginated-renderer', 'builders', 'Paginated-report renderer reachable — RDL export', 'LOOM_PAGINATED_RENDER_URL',
       'paginated-report (RDL) export', 'Deployed by the paginated-report-renderer Azure Function (post-deploy bootstrap); authoring persists in Cosmos regardless.', h),
+    // WS-G / G2 — Help Copilot docs-RAG corpus freshness (incremental-index manifest).
+    probeCopilotCorpus(h),
   ]);
 }

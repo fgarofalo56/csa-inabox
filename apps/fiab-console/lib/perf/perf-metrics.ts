@@ -269,3 +269,39 @@ export const CACHE_HIT_RATE_KPI: CacheHitRateKpi = {
   description:
     'Share of report / semantic-layer / ADX tile queries served from the Loom result cache (in-process LRU → shared Redis → Cosmos) instead of a live backend round-trip. Higher is better — the outcome-equivalence lever behind sub-second repeat visuals (PSR-5/PSR-6).',
 };
+
+// ── Docs-Copilot retrieval hit-rate KPI (WS-G / G3) ──────────────────────────
+// Browser-safe metadata for the Help Copilot doc-retrieval hit-rate the perf /
+// diagnostics surface reports alongside latency + fallback. This is a RATE
+// (0..1) — kept separate from ENGINE_METRICS (ms-with-a-Fabric-bar). The live
+// numbers come from `lib/perf/retrieval-metrics.ts` (Node-side runtime).
+
+/** Stable id for the docs-retrieval hit-rate KPI on the perf surface. */
+export const RETRIEVAL_HIT_RATE_METRIC_ID = 'docs-retrieval-hit-rate';
+
+/**
+ * Target hit-rate for the docs Copilot RAG path — the share of retrieval
+ * lookups that return at least one grounding chunk. A healthy corpus + index
+ * clears this bar; below it signals a stale/empty corpus (see the corpus
+ * freshness guard) or queries the index can't ground.
+ */
+export const RETRIEVAL_HIT_RATE_TARGET = 0.8;
+
+export interface RetrievalHitRateKpi {
+  id: string;
+  label: string;
+  /** Target rate (0..1) — the reference line on the KPI. */
+  targetRate: number;
+  learnUrl: string;
+  description: string;
+}
+
+/** Display metadata for the docs-retrieval hit-rate KPI (labels/target/help). */
+export const RETRIEVAL_HIT_RATE_KPI: RetrievalHitRateKpi = {
+  id: RETRIEVAL_HIT_RATE_METRIC_ID,
+  label: 'Docs-retrieval hit-rate',
+  targetRate: RETRIEVAL_HIT_RATE_TARGET,
+  learnUrl: 'https://learn.microsoft.com/azure/search/search-what-is-azure-search',
+  description:
+    'Share of Help Copilot doc-retrieval lookups (searchDocs) that returned at least one grounding chunk, over AI Search → Cosmos-substring. Tracked with retrieval latency (p50/p95) and AI-Search→Cosmos fallback rate so the corpus + index can be tuned (WS-G / G3).',
+};
