@@ -1,0 +1,116 @@
+name: gov-exercise
+
+# Deep "does the real path WORK" verification for Gov. Mints an admin
+# loom_session and runs the health/exercise real-backend probes in two phases so
+# a slow Spark cold-pool probe can't hide the rest:
+#   phase 1 (fast): warehouse-sql, adx, adls, cosmos, aoai, domain-sync, adf  (~6 min)
+#   phase 2 (spark): spark alone with a long (~24 min) poll
+# Each probe EXERCISES the real backend (TDS SELECT 1, KQL print 1, lake list,
+# Cosmos query, AOAI completion, domain dry-run, ADF list, Livy session).
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+env:
+  RG: rg-csa-loom-admin-usgovvirginia
+  APP: loom-console
+  BASE: https://loom-console-dcmt6cqoezlgs-agg6h9e5cjamh5h2.z01.azurefd.us
+
+jobs:
+  exercise:
+    name: Gov real-backend exercise
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Azure login (Gov sub) — deploy SP
+        uses: Azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_GOV_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_GOV_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_GOV_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}",
+              "activeDirectoryEndpointUrl": "https://login.microsoftonline.us",
+              "resourceManagerEndpointUrl": "https://management.usgovcloudapi.net/",
+              "sqlManagementEndpointUrl": "https://management.core.usgovcloudapi.net:8443/",
+              "galleryEndpointUrl": "https://gallery.usgovcloudapi.net/",
+              "managementEndpointUrl": "https://management.core.usgovcloudapi.net/"
+            }
+          environment: AzureUSGovernment
+
+      - name: Set Azure cloud to Gov
+        run: az cloud set --name AzureUSGovernment
+
+      - name: Resolve SESSION_SECRET + admin identity
+        run: |
+          set -euo pipefail
+          J=$(az containerapp secret show -n "$APP" -g "$RG" --secret-name session-secret -o json)
+          SS=$(echo "$J" | python3 -c "import json,sys;d=json.load(sys.stdin);print(d.get('value') or '')")
+          KVURL=$(echo "$J" | python3 -c "import json,sys;d=json.load(sys.stdin);print(d.get('keyVaultUrl') or '')")
+          if [ -z "$SS" ] && [ -n "$KVURL" ]; then SS=$(az keyvault secret show --id "$KVURL" --query value -o tsv | tr -d '\r'); fi
+          case "$SS" in https://*) SS=$(az keyvault secret show --id "$SS" --query value -o tsv | tr -d '\r');; esac
+          [ -n "$SS" ] || { echo "::error::session-secret unreadable"; exit 1; }
+          echo "::add-mask::$SS"; echo "SS=$SS" >> "$GITHUB_ENV"
+          E=$(az containerapp show -n "$APP" -g "$RG" --query "properties.template.containers[0].env" -o json)
+          AOID=$(echo "$E" | python3 -c "import json,sys;d={x['name']:x.get('value','') for x in json.load(sys.stdin)};print(d.get('LOOM_TENANT_ADMIN_OID',''))")
+          AGRP=$(echo "$E" | python3 -c "import json,sys;d={x['name']:x.get('value','') for x in json.load(sys.stdin)};print(d.get('LOOM_TENANT_ADMIN_GROUP_ID',''))")
+          echo "AOID=$AOID" >> "$GITHUB_ENV"; echo "AGRP=$AGRP" >> "$GITHUB_ENV"
+
+      - name: Run exercise (fast probes, then spark)
+        run: |
+          set -euo pipefail
+          node - <<'EOF'
+          const crypto=require('node:crypto'), fs=require('node:fs');
+          const S=process.env.SS, B=process.env.BASE, OID=process.env.AOID||'00000000-0000-0000-0000-000000000000', GRP=process.env.AGRP||'';
+          const K=Buffer.from(crypto.hkdfSync('sha256',Buffer.from(S,'utf-8'),Buffer.alloc(32),Buffer.from('loom-session-v1'),32));
+          const claims={oid:OID,name:'gov-exercise',email:'exercise@automation.inv',upn:'gov-exercise@automation'};
+          if(GRP) claims.groups=GRP.split(',').map(s=>s.trim()).filter(Boolean);
+          const iv=crypto.randomBytes(12), c=crypto.createCipheriv('aes-256-gcm',K,iv);
+          const enc=Buffer.concat([c.update(Buffer.from(JSON.stringify({claims,exp:Math.floor(Date.now()/1000)+7200}))),c.final()]);
+          const cookie='loom_session='+Buffer.concat([iv,c.getAuthTag(),enc]).toString('base64url');
+          const H={cookie,'content-type':'application/json'};
+          const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+          const all=[];
+          async function runPhase(services,label,maxPolls){
+            console.log(`\n===== PHASE ${label}: ${services.join(',')} =====`);
+            const pr=await fetch(B+'/api/admin/health/exercise',{method:'POST',headers:H,body:JSON.stringify({services})});
+            console.log('POST -> '+pr.status+' '+(await pr.text()).slice(0,160));
+            for(let i=0;i<maxPolls;i++){
+              await sleep(16000);
+              const er=await fetch(B+'/api/admin/health/exercise',{headers:{cookie}});
+              const ej=await er.json().catch(()=>({}));
+              const st=ej&&ej.data&&ej.data.state;
+              if(!st){console.log(`  poll ${i}: no state (${er.status})`);continue;}
+              if(st.status==='running'){console.log(`  poll ${i}: running...`);continue;}
+              const rep=st.report||{};
+              for(const r of (rep.results||[])){
+                const badge=r.status==='pass'?'PASS':(r.status==='gate'?'GATE':'FAIL');
+                console.log(`  [${badge}] ${r.service||r.title}: ${(r.detail||'').toString().slice(0,180)}`);
+                all.push({phase:label,service:r.service,status:r.status,detail:r.detail});
+              }
+              console.log(`  phase ${label} totals: ${rep.pass||0} pass / ${rep.gate||0} gate / ${rep.fail||0} fail`);
+              return;
+            }
+            console.log(`::warning::phase ${label} did not complete in window`);
+            all.push({phase:label,service:services.join('+'),status:'timeout',detail:'did not complete'});
+          }
+          (async()=>{
+            await runPhase(['warehouse-sql','adx','adls','cosmos','aoai','domain-sync','adf'],'fast',26);
+            await runPhase(['spark'],'spark',90);
+            fs.writeFileSync('exercise-combined.json',JSON.stringify(all,null,2));
+            const fails=all.filter(x=>x.status==='fail');
+            console.log(`\n===== COMBINED: ${all.filter(x=>x.status==='pass').length} pass / ${all.filter(x=>x.status==='gate').length} gate / ${fails.length} fail / ${all.filter(x=>x.status==='timeout').length} timeout =====`);
+            if(fails.length) console.log('::warning::FAILING PROBES: '+fails.map(f=>f.service).join(', '));
+          })().catch(e=>{console.log('::error::'+e.message);process.exit(1);});
+          EOF
+
+      - name: Upload exercise artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gov-exercise
+          path: exercise-combined.json
+          if-no-files-found: warn
