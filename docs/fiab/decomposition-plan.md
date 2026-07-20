@@ -204,3 +204,11 @@ file, all < 1500 after the data-product pane split.
   can never regrow to its old size.
 - **Done** = each target < 1500 LOC (or a justified, allowlisted exception), new
   modules have focused unit tests, and the E2E receipt shows behavior parity.
+
+## Follow-on (WS-3.1) — report-definition-sanitizer.ts
+
+Grew to ~2126 LOC with the Wave-6 Format-pane persistence whitelist. It is a pure
+format-validation module (no UI). Extract the card sub-sanitizers
+(`sanitizeNumberFormatByField`, `sanitizeFill`, `sanitizeHeaderIcons`, axis/title/
+legend/effects) into `apps/fiab-console/lib/report/report-format-sanitizer.ts` and
+re-import, dropping the ceiling back below 1800 on the next `--update-baseline`.

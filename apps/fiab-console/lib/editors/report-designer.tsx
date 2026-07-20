@@ -4455,6 +4455,11 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
             visualType={selected.type}
             format={selected.format}
             condFields={fieldOptions(tables)}
+            // The selected visual's REAL /query result columns — drives the
+            // Secondary-axis / Tooltip-fields / Small-multiples-facet pickers off
+            // the actual aggregated result (not the raw table field list), so a
+            // pick targets a column the chart really plots (no-vaporware.md).
+            valueColumns={Object.keys(visualRows[selected.id]?.rows?.[0] ?? {})}
             onChange={(f) => mutateVisual(selected.id, (v) => ({ ...v, format: f }))}
           />
         ) : (
