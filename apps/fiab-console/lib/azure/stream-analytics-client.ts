@@ -314,6 +314,13 @@ export interface AsaInputCreateSpec {
   pathPattern?: string;
   dateFormat?: string;
   timeFormat?: string;
+  /**
+   * Auth mode for the Blob datasource (ADLS Gen2 / Blob). Default: MSI when no
+   * storageAccountKey is supplied (the ASA job MI must hold "Storage Blob Data
+   * Reader" on the account) — the Azure-native default for reference-data inputs.
+   * 'ConnectionString' is selected automatically when a key IS supplied.
+   */
+  authenticationMode?: 'ConnectionString' | 'Msi';
   // serialization
   serialization: AsaSerializationFormat;
   fieldDelimiter?: string;
@@ -342,17 +349,28 @@ function buildInputProperties(spec: AsaInputCreateSpec): any {
         endpoint: spec.endpoint || 'messages/events',
       };
       break;
-    case 'Microsoft.Storage/Blob':
+    case 'Microsoft.Storage/Blob': {
+      // ADLS Gen2 reached through the same Blob datasource type. MSI by default
+      // (reference-data geofence tables) — the ASA job MI must hold "Storage Blob
+      // Data Reader" on the account. ConnectionString only when a key is supplied.
+      const blobMsi = !spec.storageAccountKey && spec.authenticationMode !== 'ConnectionString';
       datasource.properties = {
         storageAccounts: [
-          { accountName: spec.storageAccount, accountKey: spec.storageAccountKey },
+          blobMsi
+            ? { accountName: spec.storageAccount }
+            : { accountName: spec.storageAccount, accountKey: spec.storageAccountKey },
         ],
         container: spec.container,
         pathPattern: spec.pathPattern || '',
-        dateFormat: spec.dateFormat || 'yyyy/MM/dd',
-        timeFormat: spec.timeFormat || 'HH',
+        // Only emit date/time formats when the path actually uses those tokens —
+        // a static reference-blob path has none, and a stray format would make
+        // ASA look for a partitioned folder tree that isn't there.
+        ...((spec.pathPattern || '').includes('{date}') ? { dateFormat: spec.dateFormat || 'yyyy/MM/dd' } : {}),
+        ...((spec.pathPattern || '').includes('{time}') ? { timeFormat: spec.timeFormat || 'HH' } : {}),
+        authenticationMode: blobMsi ? 'Msi' : 'ConnectionString',
       };
       break;
+    }
   }
 
   const serialization: any = { type: spec.serialization, properties: {} };

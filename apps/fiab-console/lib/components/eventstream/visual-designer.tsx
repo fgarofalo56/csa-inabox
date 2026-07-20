@@ -80,6 +80,7 @@ import {
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { isGeoTransformKind, geoDefaultOperator, geoNodeSubtitle, type GeoTransformKind } from '@/lib/editors/eventstream/geo-sql';
 import { GeoOperatorConfig } from './geo-operator-config';
+import type { GeoAlertPreset } from '@/lib/editors/eventstream/geo-sql';
 import {
   compileToSaql,
   type SourceKind,
@@ -233,6 +234,13 @@ export interface VisualDesignerProps {
    * Absent on the pre-save `/new` surface, where provisioning is hidden.
    */
   itemId?: string;
+  /**
+   * Geospatial operator actions, threaded to the transform inspector's
+   * GeoOperatorConfig so the designer canvas offers the same "create alert" /
+   * "publish reference geofence" affordances as the guided Operators tab.
+   */
+  onCreateGeoAlert?: (preset: GeoAlertPreset) => void;
+  onPublishGeoReference?: (inputAlias: string) => Promise<{ ok: boolean; message: string }>;
 }
 
 function normalizeSources(c: PipelineConfig): SourceNode[] {
@@ -247,7 +255,7 @@ function normalizeSinks(c: PipelineConfig): SinkNode[] {
   return [];
 }
 
-export function VisualDesigner({ config, onChange, itemId }: VisualDesignerProps) {
+export function VisualDesigner({ config, onChange, itemId, onCreateGeoAlert, onPublishGeoReference }: VisualDesignerProps) {
   const s = useStyles();
   const [selected, setSelected] = useState<SelectedNode>(null);
 
@@ -406,6 +414,8 @@ export function VisualDesigner({ config, onChange, itemId }: VisualDesignerProps
             topology={{ sources, transforms, sinks }}
             onChange={(patch) => updateTransform(selected.idx, patch)}
             onDelete={deleteSelected}
+            onCreateAlert={onCreateGeoAlert}
+            onPublishReference={onPublishGeoReference}
           />
         )}
 
@@ -1506,6 +1516,8 @@ export function AsaTransformInspector({
   topology,
   onChange,
   onDelete,
+  onCreateAlert,
+  onPublishReference,
 }: {
   value: TransformNode;
   sources: SourceNode[];
@@ -1515,6 +1527,9 @@ export function AsaTransformInspector({
   topology?: { sources?: any[]; transforms?: any[]; sinks?: any[] };
   onChange: (p: Partial<TransformNode>) => void;
   onDelete: () => void;
+  /** Geospatial actions forwarded to GeoOperatorConfig (create alert / publish reference geofence). */
+  onCreateAlert?: (preset: GeoAlertPreset) => void;
+  onPublishReference?: (inputAlias: string) => Promise<{ ok: boolean; message: string }>;
 }) {
   const previewSaql = useMemo(() => {
     const src: SourceNode = sources[0] || { kind: 'eventhub', name: 'input' };
@@ -1560,6 +1575,8 @@ export function AsaTransformInspector({
           topology={topology || { sources, transforms: [value], sinks: [] }}
           itemId={itemId}
           onChange={onChange as (patch: Record<string, any>) => void}
+          onCreateAlert={onCreateAlert}
+          onPublishReference={onPublishReference}
         />
       )}
 
