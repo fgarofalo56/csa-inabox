@@ -27,7 +27,7 @@ export interface WorkshopVariable {
   defaultValue?: string;
 }
 
-export type WorkshopWidgetKind = 'table' | 'chart' | 'metric' | 'filter' | 'form' | 'button' | 'text' | 'image' | 'link' | 'divider' | 'badge' | 'iframe' | 'heading' | 'progress' | 'spacer' | 'timestamp';
+export type WorkshopWidgetKind = 'table' | 'chart' | 'metric' | 'filter' | 'form' | 'button' | 'text' | 'image' | 'link' | 'divider' | 'badge' | 'iframe' | 'heading' | 'progress' | 'spacer' | 'timestamp' | 'kpi-row' | 'gauge' | 'callout' | 'quote' | 'rating' | 'tag-list' | 'delta' | 'checklist';
 
 export interface WorkshopWidgetLayout { x: number; y: number; w: number; h: number }
 
@@ -89,6 +89,24 @@ export interface WorkshopWidget {
   progressValue?: string;
   // heading — visual level 1..3.
   headingLevel?: 1 | 2 | 3;
+  // kpi-row — comma list of "Label=value" pairs; values support {{variable}}.
+  kpiItems?: string;
+  // gauge — value/min/max (string-encoded; value supports {{variable}}).
+  gaugeValue?: string;
+  gaugeMin?: string;
+  gaugeMax?: string;
+  // callout — Fluent MessageBar intent.
+  calloutIntent?: 'info' | 'success' | 'warning' | 'error';
+  // rating — value out of max stars (string-encoded; value supports {{variable}}).
+  ratingValue?: string;
+  ratingMax?: string;
+  // tag-list — comma list of tags rendered as badges.
+  tags?: string;
+  // delta — current vs previous value; renders signed change with color.
+  deltaValue?: string;
+  deltaPrevious?: string;
+  // checklist — newline list; lines starting "[x]" render checked.
+  checklistItems?: string;
   // button + table events
   events?: WorkshopEvent[];
 }

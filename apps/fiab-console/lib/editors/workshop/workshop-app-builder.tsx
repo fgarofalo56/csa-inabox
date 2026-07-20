@@ -44,7 +44,7 @@ import {
   Add20Regular, Dismiss16Regular, Play20Regular, ArrowSync20Regular,
   Table20Regular, DataUsage20Regular, NumberSymbol20Regular, DocumentText20Regular,
   Apps20Regular, Filter20Regular, Form20Regular, Cursor20Regular, Edit20Regular,
-  ArrowMaximize20Regular, Flash20Regular, Database20Regular, Code20Regular,
+  ArrowMaximize20Regular, Flash20Regular, Database20Regular, Code20Regular, Sparkle20Regular,
 } from '@fluentui/react-icons';
 import { LoomChart, type LoomChartType } from '@/lib/components/charts/loom-chart';
 import { EmptyState } from '@/lib/components/empty-state';
@@ -102,6 +102,14 @@ const DEFAULT_SIZE: Record<WorkshopWidgetKind, { w: number; h: number }> = {
   progress: { w: 336, h: 80 },
   spacer: { w: 224, h: 64 },
   timestamp: { w: 224, h: 64 },
+  'kpi-row': { w: 448, h: 112 },
+  gauge: { w: 288, h: 128 },
+  callout: { w: 448, h: 96 },
+  quote: { w: 400, h: 112 },
+  rating: { w: 224, h: 80 },
+  'tag-list': { w: 336, h: 80 },
+  delta: { w: 224, h: 96 },
+  checklist: { w: 336, h: 160 },
 };
 
 const KIND_META: Record<WorkshopWidgetKind, { label: string; icon: ReactElement; hint: string; data: boolean }> = {
@@ -121,6 +129,14 @@ const KIND_META: Record<WorkshopWidgetKind, { label: string; icon: ReactElement;
   progress: { label: 'Progress', icon: <DataUsage20Regular />, hint: 'A progress bar (0–100%), value supports {{variable}}', data: false },
   spacer: { label: 'Spacer', icon: <ArrowMaximize20Regular />, hint: 'Blank layout spacing', data: false },
   timestamp: { label: 'Timestamp', icon: <Flash20Regular />, hint: 'Shows when the page was last refreshed', data: false },
+  'kpi-row': { label: 'KPI Row', icon: <NumberSymbol20Regular />, hint: 'A row of labeled KPI chips — values support {{variable}}', data: false },
+  gauge: { label: 'Gauge', icon: <DataUsage20Regular />, hint: 'A value against a min–max range, colored by fill', data: false },
+  callout: { label: 'Callout', icon: <Flash20Regular />, hint: 'A highlighted MessageBar note (info/success/warning/error)', data: false },
+  quote: { label: 'Quote', icon: <DocumentText20Regular />, hint: 'A styled blockquote with {{variable}} interpolation', data: false },
+  rating: { label: 'Rating', icon: <Sparkle20Regular />, hint: 'Star rating (value / max), value supports {{variable}}', data: false },
+  'tag-list': { label: 'Tags', icon: <Filter20Regular />, hint: 'A wrapping row of tag badges', data: false },
+  delta: { label: 'Delta', icon: <DataUsage20Regular />, hint: 'Current vs previous — signed change, colored by direction', data: false },
+  checklist: { label: 'Checklist', icon: <Form20Regular />, hint: 'A static checklist — prefix a line with [x] to check it', data: false },
 };
 
 const CHART_TYPES: LoomChartType[] = ['column', 'bar', 'line', 'area', 'pie', 'donut'];
@@ -481,6 +497,80 @@ function WidgetBody({
     return <div>{renderText(widget.text || '_Empty text widget — set its content in the inspector._', variables, runtime)}</div>;
   }
 
+  if (widget.kind === 'rating') {
+    const num = (v: string | undefined, d: number) => { const n = Number(String(renderText(String(v ?? ''), variables, runtime)).replace(/[^0-9.]/g, '')); return Number.isFinite(n) && String(v ?? '') !== '' ? n : d; };
+    const max = Math.max(1, Math.min(10, Math.round(num(widget.ratingMax, 5))));
+    const val = Math.max(0, Math.min(max, num(widget.ratingValue, 0)));
+    return <Subtitle2 aria-label={`${val} of ${max}`}>{'★'.repeat(Math.round(val))}{'☆'.repeat(max - Math.round(val))} <Caption1>{val}/{max}</Caption1></Subtitle2>;
+  }
+  if (widget.kind === 'tag-list') {
+    const tags = String(widget.tags || '').split(',').map((t) => t.trim()).filter(Boolean);
+    if (!tags.length) return <Caption1 className={s.hint}>Add comma-separated tags in the inspector.</Caption1>;
+    return <div style={{ display: 'flex', gap: tokens.spacingHorizontalXS, flexWrap: 'wrap' }}>{tags.map((t, i) => <Badge key={i} appearance="tint">{t}</Badge>)}</div>;
+  }
+  if (widget.kind === 'delta') {
+    const num = (v: string | undefined) => { const n = Number(String(renderText(String(v ?? ''), variables, runtime)).replace(/[^0-9.-]/g, '')); return Number.isFinite(n) ? n : 0; };
+    const cur = num(widget.deltaValue); const prev = num(widget.deltaPrevious);
+    const diff = cur - prev; const pct = prev !== 0 ? (diff / Math.abs(prev)) * 100 : 0;
+    const up = diff >= 0;
+    return (
+      <div>
+        <Subtitle2>{cur.toLocaleString()}</Subtitle2>
+        <Caption1 style={{ color: up ? tokens.colorPaletteGreenForeground1 : tokens.colorPaletteRedForeground1 }}>
+          {up ? '▲' : '▼'} {Math.abs(diff).toLocaleString()} ({Math.abs(pct).toFixed(1)}%)
+        </Caption1>
+      </div>
+    );
+  }
+  if (widget.kind === 'checklist') {
+    const lines = String(widget.checklistItems || '').split('\n').map((l) => l.trim()).filter(Boolean);
+    if (!lines.length) return <Caption1 className={s.hint}>Add one item per line; prefix with [x] to check.</Caption1>;
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS }}>
+        {lines.map((l, i) => { const done = /^\[x\]/i.test(l); const label = l.replace(/^\[[x ]?\]\s*/i, ''); return (
+          <Caption1 key={i} style={done ? { textDecoration: 'line-through', color: tokens.colorNeutralForeground3 } : undefined}>{done ? '☑' : '☐'} {label}</Caption1>
+        ); })}
+      </div>
+    );
+  }
+  if (widget.kind === 'kpi-row') {
+    const items = String(widget.kpiItems || '').split(',').map((p) => p.trim()).filter(Boolean).map((p) => {
+      const [label, ...rest] = p.split('=');
+      const val = renderText(rest.join('=') || '', variables, runtime);
+      return { label: (label || '').trim(), val };
+    });
+    if (!items.length) return <Caption1 className={s.hint}>Add KPI items in the inspector — e.g. Orders=42, Revenue={'{{revenue}}'}.</Caption1>;
+    return (
+      <div style={{ display: 'flex', gap: tokens.spacingHorizontalM, flexWrap: 'wrap' }}>
+        {items.map((it, i) => (
+          <div key={i} style={{ padding: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusMedium, backgroundColor: tokens.colorNeutralBackground3, minWidth: 0 }}>
+            <Caption1 block>{it.label}</Caption1>
+            <Subtitle2>{it.val}</Subtitle2>
+          </div>
+        ))}
+      </div>
+    );
+  }
+  if (widget.kind === 'gauge') {
+    const num = (v: string | undefined, d: number) => { const n = Number(String(renderText(String(v ?? ''), variables, runtime)).replace(/[^0-9.-]/g, '')); return Number.isFinite(n) && String(v ?? '') !== '' ? n : d; };
+    const min = num(widget.gaugeMin, 0); const max = num(widget.gaugeMax, 100); const val = num(widget.gaugeValue, 0);
+    const pct = max > min ? Math.max(0, Math.min(100, ((val - min) / (max - min)) * 100)) : 0;
+    return (
+      <div style={{ width: '100%' }}>
+        <Subtitle2>{val}</Subtitle2>
+        <div style={{ height: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusMedium, backgroundColor: tokens.colorNeutralBackground5, overflow: 'hidden' }}>
+          <div style={{ width: `${pct}%`, height: '100%', backgroundColor: pct > 80 ? tokens.colorPaletteRedBackground3 : pct > 60 ? tokens.colorPaletteMarigoldBackground3 : tokens.colorBrandBackground }} />
+        </div>
+        <Caption1>{min} – {max}</Caption1>
+      </div>
+    );
+  }
+  if (widget.kind === 'callout') {
+    return <MessageBar intent={widget.calloutIntent || 'info'}><MessageBarBody>{renderText(widget.text || widget.title, variables, runtime)}</MessageBarBody></MessageBar>;
+  }
+  if (widget.kind === 'quote') {
+    return <blockquote style={{ margin: 0, paddingLeft: tokens.spacingHorizontalM, borderLeft: `3px solid ${tokens.colorBrandStroke1}`, color: tokens.colorNeutralForeground2, fontStyle: 'italic' }}>{renderText(widget.text || widget.title, variables, runtime)}</blockquote>;
+  }
   if (widget.kind === 'heading') {
     const lvl = widget.headingLevel || 2;
     const txt = renderText(widget.text || widget.title, variables, runtime);
@@ -771,6 +861,44 @@ function WidgetInspector({
         </Field>
       )}
 
+      {widget.kind === 'rating' && (
+        <>
+          <Field label="Value" hint="Number or {{variableName}}."><Input value={widget.ratingValue || ''} onChange={(_, d) => onChange({ ratingValue: d.value })} placeholder="4" /></Field>
+          <Field label="Max stars (1–10)"><Input value={widget.ratingMax || ''} onChange={(_, d) => onChange({ ratingMax: d.value })} placeholder="5" /></Field>
+        </>
+      )}
+      {widget.kind === 'tag-list' && (
+        <Field label="Tags" hint="Comma-separated."><Input value={widget.tags || ''} onChange={(_, d) => onChange({ tags: d.value })} placeholder="gold, verified, priority" /></Field>
+      )}
+      {widget.kind === 'delta' && (
+        <>
+          <Field label="Current value" hint="Number or {{variableName}}."><Input value={widget.deltaValue || ''} onChange={(_, d) => onChange({ deltaValue: d.value })} placeholder="1250" /></Field>
+          <Field label="Previous value"><Input value={widget.deltaPrevious || ''} onChange={(_, d) => onChange({ deltaPrevious: d.value })} placeholder="1100" /></Field>
+        </>
+      )}
+      {widget.kind === 'checklist' && (
+        <Field label="Items" hint="One per line; prefix with [x] to check."><Textarea value={widget.checklistItems || ''} onChange={(_, d) => onChange({ checklistItems: d.value })} rows={5} resize="vertical" placeholder={'[x] Kickoff\n[ ] Review\n[ ] Ship'} /></Field>
+      )}
+      {widget.kind === 'kpi-row' && (
+        <Field label="KPI items" hint="Comma list of Label=value; values support {{variableName}}."><Input value={widget.kpiItems || ''} onChange={(_, d) => onChange({ kpiItems: d.value })} placeholder="Orders=42, Revenue={{revenue}}" /></Field>
+      )}
+      {widget.kind === 'gauge' && (
+        <>
+          <Field label="Value" hint="Number or {{variableName}}."><Input value={widget.gaugeValue || ''} onChange={(_, d) => onChange({ gaugeValue: d.value })} placeholder="75" /></Field>
+          <Field label="Min"><Input value={widget.gaugeMin || ''} onChange={(_, d) => onChange({ gaugeMin: d.value })} placeholder="0" /></Field>
+          <Field label="Max"><Input value={widget.gaugeMax || ''} onChange={(_, d) => onChange({ gaugeMax: d.value })} placeholder="100" /></Field>
+        </>
+      )}
+      {(widget.kind === 'callout' || widget.kind === 'quote') && (
+        <Field label={widget.kind === 'callout' ? 'Callout text' : 'Quote text'} hint="Supports {{variableName}} interpolation."><Textarea value={widget.text || ''} onChange={(_, d) => onChange({ text: d.value })} resize="vertical" /></Field>
+      )}
+      {widget.kind === 'callout' && (
+        <Field label="Intent">
+          <Dropdown value={widget.calloutIntent || 'info'} selectedOptions={[widget.calloutIntent || 'info']} onOptionSelect={(_, d) => onChange({ calloutIntent: (d.optionValue as WorkshopWidget['calloutIntent']) || 'info' })}>
+            {(['info', 'success', 'warning', 'error'] as const).map((c) => <Option key={c} value={c}>{c}</Option>)}
+          </Dropdown>
+        </Field>
+      )}
       {widget.kind === 'heading' && (
         <>
           <Field label="Heading text" hint="Supports {{variableName}} interpolation."><Input value={widget.text || ''} onChange={(_, d) => onChange({ text: d.value })} placeholder="Section title" /></Field>
@@ -1054,6 +1182,14 @@ export function WorkshopAppBuilder({ id, entityTypes, widgets, variables, onWidg
       ...(kind === 'badge' ? { text: 'Status', badgeColor: 'brand' as const } : {}),
       ...(kind === 'heading' ? { text: 'Section title', headingLevel: 2 as const } : {}),
       ...(kind === 'progress' ? { progressValue: '50' } : {}),
+      ...(kind === 'kpi-row' ? { kpiItems: 'Orders=42, Revenue=1.2M' } : {}),
+      ...(kind === 'gauge' ? { gaugeValue: '75', gaugeMin: '0', gaugeMax: '100' } : {}),
+      ...(kind === 'callout' ? { text: 'Heads up — check the latest numbers.', calloutIntent: 'info' as const } : {}),
+      ...(kind === 'quote' ? { text: 'Data beats opinions.' } : {}),
+      ...(kind === 'rating' ? { ratingValue: '4', ratingMax: '5' } : {}),
+      ...(kind === 'tag-list' ? { tags: 'gold, verified, priority' } : {}),
+      ...(kind === 'delta' ? { deltaValue: '1250', deltaPrevious: '1100' } : {}),
+      ...(kind === 'checklist' ? { checklistItems: '[x] Kickoff\n[ ] Review\n[ ] Ship' } : {}),
     };
     onWidgetsChange([...widgets, widget]);
     setSelectedId(wid);
