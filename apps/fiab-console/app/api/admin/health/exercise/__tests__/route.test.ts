@@ -94,6 +94,27 @@ describe('/api/admin/health/exercise', () => {
     expect(j.stale).toBe(true);
   });
 
+  // Regression guard (2026-07-20): the route uses apiOk(), which SPREADS its
+  // fields next to `ok: true` — the body is FLAT `{ ok, state, stale, services }`
+  // with NO `data` wrapper. A poller that read `resp.data.state` (assuming a
+  // `{ ok, data: {...} }` envelope) silently saw `undefined` and logged
+  // "no state" on every poll, which looked like a non-converging exercise. Pin
+  // the flat contract so no future consumer makes that mistake again.
+  it('GET response is FLAT { ok, state, stale, services } with NO data wrapper', async () => {
+    const report = { summary: { pass: 2, gate: 0, fail: 0, total: 2 }, results: [] };
+    stateMock.mockResolvedValue({ runId: 'exr-flat', tenantId: 'tenant-1', status: 'complete', startedAt: 't', report });
+    const { GET } = await import('../route');
+    const j = await (await GET()).json();
+    // The state lives at the TOP level, not under `.data`.
+    expect(j.state).not.toBeUndefined();
+    expect(j.state.report.summary.pass).toBe(2);
+    // There must be NO `data` envelope — this is the exact mis-read to prevent.
+    expect('data' in j).toBe(false);
+    expect(j.data).toBeUndefined();
+    // The full flat key set the contract promises.
+    expect(Object.keys(j).sort()).toEqual(['ok', 'services', 'stale', 'state']);
+  });
+
   it('POST is 401 without a session and 403 for non-admin', async () => {
     const { POST } = await import('../route');
     sessionVal = null;
