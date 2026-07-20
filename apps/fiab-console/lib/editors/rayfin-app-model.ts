@@ -54,7 +54,7 @@ export interface ModelBinding {
 // Visual app definition (the low-code BUILDER)
 // ---------------------------------------------------------------------------
 
-export type ComponentKind = 'table' | 'metric' | 'chart' | 'form' | 'text' | 'image' | 'link' | 'divider' | 'badge' | 'heading' | 'progress' | 'spacer' | 'timestamp' | 'kpi-row' | 'gauge' | 'callout' | 'quote' | 'rating' | 'tag-list' | 'delta' | 'checklist' | 'avatar' | 'code-block' | 'key-value' | 'countdown' | 'stat-pair' | 'mini-table' | 'breadcrumb' | 'json-view';
+export type ComponentKind = 'table' | 'metric' | 'chart' | 'form' | 'text' | 'image' | 'link' | 'divider' | 'badge' | 'heading' | 'progress' | 'spacer' | 'timestamp' | 'kpi-row' | 'gauge' | 'callout' | 'quote' | 'rating' | 'tag-list' | 'delta' | 'checklist' | 'avatar' | 'code-block' | 'key-value' | 'countdown' | 'stat-pair' | 'mini-table' | 'breadcrumb' | 'json-view' | 'tabs' | 'accordion' | 'sparkline' | 'video-embed' | 'map-embed';
 
 /** A data component's read-view selection over the app's bound model. */
 export interface ComponentBinding {
@@ -120,6 +120,14 @@ export interface RayfinComponent {
   crumbs?: string;
   /** For 'json-view': JSON text (pretty-printed when valid). */
   json?: string;
+  /** For 'tabs': "|"-separated "Title: content" entries (tab strip + per-tab text). */
+  tabItems?: string;
+  /** For 'accordion': newline "Title: body" entries (Fluent Accordion). */
+  accordionItems?: string;
+  /** For 'sparkline': comma list of numbers rendered as a tiny inline line. */
+  sparkValues?: string;
+  /** For 'video-embed' / 'map-embed': https-only embed URL (sandboxed iframe). */
+  embedUrl?: string;
 }
 
 export interface RayfinPage {
@@ -161,7 +169,7 @@ export const DEFAULT_SPEC: RayfinSpec = {
   binding: { ...DEFAULT_BINDING },
 };
 
-export const COMPONENT_KINDS: readonly ComponentKind[] = ['table', 'metric', 'chart', 'form', 'text', 'image', 'link', 'divider', 'badge', 'heading', 'progress', 'spacer', 'timestamp', 'kpi-row', 'gauge', 'callout', 'quote', 'rating', 'tag-list', 'delta', 'checklist', 'avatar', 'code-block', 'key-value', 'countdown', 'stat-pair', 'mini-table', 'breadcrumb', 'json-view'];
+export const COMPONENT_KINDS: readonly ComponentKind[] = ['table', 'metric', 'chart', 'form', 'text', 'image', 'link', 'divider', 'badge', 'heading', 'progress', 'spacer', 'timestamp', 'kpi-row', 'gauge', 'callout', 'quote', 'rating', 'tag-list', 'delta', 'checklist', 'avatar', 'code-block', 'key-value', 'countdown', 'stat-pair', 'mini-table', 'breadcrumb', 'json-view', 'tabs', 'accordion', 'sparkline', 'video-embed', 'map-embed'];
 
 /** True when a component reads from the bound model (vs. form/text). */
 export function isDataComponent(kind: ComponentKind): boolean {
@@ -348,6 +356,7 @@ export function emptyComponent(kind: ComponentKind, entityName = ''): RayfinComp
     rating: 'Rating', 'tag-list': 'Tags', delta: 'Delta', checklist: 'Checklist',
     avatar: 'Avatar', 'code-block': 'Code', 'key-value': 'Key-Value', countdown: 'Countdown',
     'stat-pair': 'Stat Pair', 'mini-table': 'Mini Table', breadcrumb: 'Breadcrumb', 'json-view': 'JSON',
+    tabs: 'Tabs', accordion: 'Accordion', sparkline: 'Sparkline', 'video-embed': 'Video', 'map-embed': 'Map',
   };
   const c: RayfinComponent = { id: newId('cmp'), kind, title: titles[kind] };
   if (isDataComponent(kind)) c.binding = { measures: [], groupBy: [], topN: kind === 'metric' ? 1 : 50 };
@@ -372,6 +381,10 @@ export function emptyComponent(kind: ComponentKind, entityName = ''): RayfinComp
   if (kind === 'mini-table') c.miniTable = 'Region, Total\nWest, 42\nEast, 17';
   if (kind === 'breadcrumb') c.crumbs = 'Home, Sales, Q3';
   if (kind === 'json-view') c.json = '{"region": "West", "total": 42}';
+  if (kind === 'tabs') c.tabItems = 'Overview: Key numbers here | Details: More depth here';
+  if (kind === 'accordion') c.accordionItems = 'FAQ 1: Answer one\nFAQ 2: Answer two';
+  if (kind === 'sparkline') c.sparkValues = '3, 5, 2, 8, 6, 9';
+  if (kind === 'video-embed' || kind === 'map-embed') c.embedUrl = '';
   return c;
 }
 
