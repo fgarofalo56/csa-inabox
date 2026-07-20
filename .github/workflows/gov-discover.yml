@@ -1,0 +1,116 @@
+name: gov-discover
+
+# Read-only Gov resource discovery for the medic's day-one config pass. For each
+# optional gate whose backing resource MIGHT be deployed, probe ARM existence
+# and read the app-env values needed to compose a pointer. Prints a PLAN of
+# proposed KEY=VALUE settings for the ones that exist; the rest are honest
+# gates. No mutation.
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+env:
+  RG: rg-csa-loom-admin-usgovvirginia
+  APP: loom-console
+  BLOB_SUFFIX: blob.core.usgovcloudapi.net
+
+jobs:
+  discover:
+    name: Probe gov resources
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Azure login (Gov sub) — deploy SP
+        uses: Azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_GOV_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_GOV_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_GOV_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}",
+              "activeDirectoryEndpointUrl": "https://login.microsoftonline.us",
+              "resourceManagerEndpointUrl": "https://management.usgovcloudapi.net/",
+              "sqlManagementEndpointUrl": "https://management.core.usgovcloudapi.net:8443/",
+              "galleryEndpointUrl": "https://gallery.usgovcloudapi.net/",
+              "managementEndpointUrl": "https://management.core.usgovcloudapi.net/"
+            }
+          environment: AzureUSGovernment
+
+      - name: Set Azure cloud to Gov
+        run: az cloud set --name AzureUSGovernment
+
+      - name: Read app-env values needed to compose pointers
+        run: |
+          set -euo pipefail
+          E=$(az containerapp show -n "$APP" -g "$RG" --query "properties.template.containers[0].env" -o json)
+          get() { echo "$E" | python3 -c "import json,sys;d={x['name']:x.get('value','') for x in json.load(sys.stdin)};print(d.get('$1',''))"; }
+          {
+            echo "ADLS_ACCOUNT=$(get LOOM_ADLS_ACCOUNT)"
+            echo "AI_SEARCH_RG=$(get LOOM_AI_SEARCH_RG)"
+            echo "DATABRICKS_HOSTNAME=$(get LOOM_DATABRICKS_HOSTNAME)"
+            echo "EVENTHUB_NAMESPACE=$(get LOOM_EVENTHUB_NAMESPACE)"
+            echo "EVENTHUB_RG=$(get LOOM_EVENTHUB_RG)"
+            echo "POSTGRES_HOST_SUFFIX=$(get LOOM_POSTGRES_HOST_SUFFIX)"
+            echo "AAS_RG=$(get LOOM_AAS_RG)"
+          } | tee vals.env
+          # shellcheck disable=SC1091
+          set -a; . ./vals.env; set +a
+
+      - name: Probe ARM existence (sub-wide) + compose PLAN
+        run: |
+          set -euo pipefail
+          set -a; . ./vals.env; set +a
+          SUB="${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}"
+          probe() { # $1=friendly $2=resourceType $3=env-key-to-set $4=jmes-for-value
+            local n="$1" t="$2" k="$3" q="$4"
+            local out; out=$(az resource list --subscription "$SUB" --resource-type "$t" -o json 2>/dev/null || echo '[]')
+            local cnt; cnt=$(echo "$out" | python3 -c "import json,sys;print(len(json.load(sys.stdin)))")
+            if [ "$cnt" = "0" ]; then
+              echo "  [$n] NONE deployed ($t) → honest-gate"
+            else
+              local val; val=$(echo "$out" | python3 -c "import json,sys;a=json.load(sys.stdin);print($q)")
+              echo "  [$n] EXISTS ($cnt) → suggest $k=$val"
+            fi
+          }
+          echo "===== ARM EXISTENCE PROBES ====="
+          probe "AI Search"      "Microsoft.Search/searchServices"                 LOOM_AI_SEARCH_SERVICE   "a[0]['name']"
+          probe "Postgres Flex"  "Microsoft.DBforPostgreSQL/flexibleServers"       LOOM_POSTGRES_HOST       "a[0]['name']+'.'+'${POSTGRES_HOST_SUFFIX}' if '${POSTGRES_HOST_SUFFIX}' else a[0]['name']"
+          probe "Cosmos vCore"   "Microsoft.DocumentDB/mongoClusters"              LOOM_COSMOS_VCORE        "a[0]['name']"
+          probe "Batch"          "Microsoft.Batch/batchAccounts"                   LOOM_BATCH_ACCOUNT       "a[0]['name']"
+          probe "Digital Twins"  "Microsoft.DigitalTwins/digitalTwinsInstances"    LOOM_ADT_ENDPOINT        "a[0]['name']"
+          probe "Data Factory"   "Microsoft.DataFactory/factories"                 LOOM_ADF_FACTORY         "a[0]['name']"
+          probe "Analysis Svcs"  "Microsoft.AnalysisServices/servers"              LOOM_AAS_SERVER          "a[0]['name']"
+          probe "Azure Maps"     "Microsoft.Maps/accounts"                         LOOM_AZURE_MAPS_ACCOUNT  "a[0]['name']"
+          probe "Redis"          "Microsoft.Cache/Redis"                           LOOM_SPARK_POOL_REDIS    "a[0]['name']"
+          probe "Func (posture)" "Microsoft.Web/sites"                             LOOM_POSTURE_FUNCTION_URL "';'.join(x['name'] for x in a)"
+          probe "Container Apps" "Microsoft.App/containerApps"                     _CONTAINER_APPS          "';'.join(x['name'] for x in a)"
+
+          echo ""
+          echo "===== ALWAYS-SAFE (deployed-backed) ====="
+          echo "  [spark-warm-pool] Cosmos deployed → SET LOOM_SPARK_POOL_LEASE_CONTAINER=spark-warm-leases"
+          if [ -n "${ADLS_ACCOUNT:-}" ]; then
+            echo "  [csv-imports] ADLS '$ADLS_ACCOUNT' → SET LOOM_CSV_IMPORTS_URL=https://$ADLS_ACCOUNT.$BLOB_SUFFIX/csv-imports"
+          else
+            echo "  [csv-imports] LOOM_ADLS_ACCOUNT empty → honest-gate"
+          fi
+
+          echo ""
+          echo "===== EVENT HUBS SCHEMA GROUPS (existing groups in the namespace) ====="
+          if [ -n "${EVENTHUB_NAMESPACE:-}" ] && [ -n "${EVENTHUB_RG:-}" ]; then
+            az eventhubs namespace schema-registry list --namespace-name "$EVENTHUB_NAMESPACE" -g "$EVENTHUB_RG" -o table 2>&1 | head -20 || echo "  (schema-registry list unavailable — may need creation)"
+          else
+            echo "  EH namespace/RG not both set"
+          fi
+
+          echo ""
+          echo "===== DATABRICKS SQL WAREHOUSES (data-plane; may 403 without workspace token) ====="
+          if [ -n "${DATABRICKS_HOSTNAME:-}" ]; then
+            TOK=$(az account get-access-token --resource "2ff814a6-3304-4ab8-85cb-cd0e6f879c1d" --query accessToken -o tsv 2>/dev/null || echo "")
+            if [ -n "$TOK" ]; then
+              curl -s -H "Authorization: Bearer $TOK" "https://$DATABRICKS_HOSTNAME/api/2.0/sql/warehouses" --max-time 25 2>/dev/null | python3 -c "import json,sys;\
+d=json.load(sys.stdin);ws=d.get('warehouses',[]);print('  warehouses:', [(w.get('id'),w.get('name')) for w in ws]) if ws else print('  no warehouses (or 403)')" 2>/dev/null || echo "  databricks SQL query failed"
+            else echo "  no databricks AAD token"; fi
+          else echo "  LOOM_DATABRICKS_HOSTNAME empty"; fi
