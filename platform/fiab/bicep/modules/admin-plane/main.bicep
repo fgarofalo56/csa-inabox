@@ -3298,6 +3298,15 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // the name is a valid bare KQL identifier. For a reused cluster the
             // real default DB is reconciled post-deploy by patch-navigator-env.sh.
             { name: 'LOOM_KUSTO_DEFAULT_DB',   value: (!empty(existingAdxClusterName) || adxEnabled) ? 'loomdb_default' : '' }
+            // Digital Twin Builder (GCC-High replacement for Azure Digital Twins,
+            // unavailable in Gov). The DEFAULT twin backend is the ADX graph-twin:
+            // twins materialize as DT_<key>_E_*/DT_<key>_R_* tables on the cluster
+            // above and are explored with make-graph/graph-match. This marker makes
+            // the Azure-native default explicit (read by the twin query route) and
+            // flips svc-digital-twins on deploy via LOOM_KUSTO_CLUSTER_URI. ADT is a
+            // Commercial-only opt-in (set LOOM_ADT_ENDPOINT + LOOM_TWIN_BACKEND=adt).
+            // See docs/fiab/gov-replacements/digital-twins-graph.md.
+            { name: 'LOOM_TWIN_BACKEND',       value: 'adx-graph' }
             // Activator (Reflex) — continuous scheduled evaluation for
             // Eventhouse/ADX-sourced rules (lib/azure/activator-monitor.ts).
             // The value is the ADX cluster ARM id: the scope of the

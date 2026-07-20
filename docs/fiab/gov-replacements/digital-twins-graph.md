@@ -1,7 +1,7 @@
 # Digital Twins → ADX / AGE graph-twin (GCC-High replacement)
 
-**Status:** design (net-new gate wiring; the graph-twin backend already exists)
-**Gate:** `svc-digital-twins` (`LOOM_ADT_ENDPOINT`)
+**Status:** IMPLEMENTED (gate wiring landed; ADX graph-twin backend pre-existing)
+**Gate:** `svc-digital-twins` (now `LOOM_KUSTO_CLUSTER_URI` default | `LOOM_ADT_ENDPOINT` opt-in)
 **Boundary:** GCC-High / IL5 / DoD — Azure Digital Twins (ADT) is **not** available.
 **Rule basis:** `.claude/rules/no-fabric-dependency.md` (Azure-native default),
 `no-vaporware.md` (real backend), `ui-parity.md` (Fabric Digital Twin Builder parity).
@@ -92,11 +92,15 @@ Make `svc-digital-twins` recognize the ADX-native default so it is not blocked i
 Gov, mirroring the `svc-aas` → Loom-native recognition landed in this PR:
 
 ```ts
-// lib/admin/env-checks.ts — svc-digital-twins
-anyOf: [['LOOM_ADT_ENDPOINT', 'LOOM_KUSTO_CLUSTER_URI', 'LOOM_TWIN_PG_FQDN']],
+// lib/admin/env-checks.ts — svc-digital-twins (AS SHIPPED)
+anyOf: [['LOOM_ADT_ENDPOINT', 'LOOM_KUSTO_CLUSTER_URI']],
 // LOOM_KUSTO_CLUSTER_URI is emitted whenever ADX is deployed (adxEnabled=true
 // in gcc-high.bicepparam), so the twin surface is backed by the ADX graph-twin
 // with zero ADT dependency; LOOM_ADT_ENDPOINT stays the Commercial opt-in.
+// NOTE: LOOM_TWIN_PG_FQDN (AGE relational-graph option) is intentionally NOT in
+// the anyOf yet — the twin routes (materialize/query/time-series) only implement
+// the ADX path, so satisfying the gate on Postgres alone would be a dishonest
+// green gate (no-vaporware.md). Add it here only once the AGE twin backend ships.
 ```
 
 Remediation copy: "Digital twins run on the Azure Data Explorer graph-twin

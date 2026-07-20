@@ -36,7 +36,13 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   const body = await req.json().catch(() => ({}));
   const pattern: string = (body?.pattern || '').toString();
   const mode: string = body?.mode === 'opencypher' ? 'opencypher' : 'kql-graph';
-  const backend: string = body?.backend === 'adt' ? 'adt' : 'adx';
+  // Backend selection: an explicit body.backend wins; otherwise the deployment
+  // default LOOM_TWIN_BACKEND (emitted 'adx-graph' by admin-plane/main.bicep).
+  // Only 'adt' opts into the Commercial Azure Digital Twins alternate — every
+  // other value (incl. 'adx-graph', the Gov default) resolves to the ADX graph
+  // engine, so a Gov deploy never reaches Azure Digital Twins.
+  const backendPref = (body?.backend || process.env.LOOM_TWIN_BACKEND || 'adx').toString().trim().toLowerCase();
+  const backend: string = backendPref === 'adt' ? 'adt' : 'adx';
   if (!pattern.trim()) return NextResponse.json({ ok: false, error: 'pattern required' }, { status: 400 });
 
   // ── Azure Digital Twins (opt-in only) ──────────────────────────────────

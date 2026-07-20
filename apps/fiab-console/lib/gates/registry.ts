@@ -613,9 +613,13 @@ export const GATE_META: Record<string, GateMeta> = {
     legacyCodes: ['iothub_not_configured'],
   },
   'svc-digital-twins': {
-    surfaces: [{ path: '/items/digital-twin', label: 'Digital twin queries' }],
+    surfaces: [
+      { path: '/items/digital-twin', label: 'Digital Twin Builder (ADX graph-twin)' },
+      { path: '/api/items/digital-twin/*', label: 'Twin materialize / graph query / time-series (ADX)' },
+    ],
     fixit: { kind: 'resource-picker' },
-    loaders: { LOOM_ADT_ENDPOINT: L.adt },
+    loaders: { LOOM_KUSTO_CLUSTER_URI: L.adxUri, LOOM_ADT_ENDPOINT: L.adt },
+    autoResolveNote: 'Digital twins run on the ADX graph-twin (make-graph / graph-match) by default — LOOM_KUSTO_CLUSTER_URI is emitted whenever ADX is deployed (adxEnabled=true), so the gate is satisfied with zero Azure Digital Twins dependency. ADT (unavailable in GCC-High) is a Commercial-only opt-in alternate.',
     legacyCodes: ['adt_not_configured'],
   },
   'svc-airflow': {

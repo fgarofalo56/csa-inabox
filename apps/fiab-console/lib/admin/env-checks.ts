@@ -873,11 +873,25 @@ export const ENV_CHECKS: EnvSpec[] = [
     role: 'IoT Hub Data Contributor (Console UAMI)',
   },
   {
-    id: 'svc-digital-twins', category: 'azure-services', title: 'Azure Digital Twins (digital-twin items)', severity: 'optional',
-    required: ['LOOM_ADT_ENDPOINT'], warnOnMiss: true,
-    remediation: 'Set LOOM_ADT_ENDPOINT (https://<instance>.api.<region>.digitaltwins.azure.net) so digital-twin queries run against a real ADT instance (adt_not_configured).',
-    provisionedBy: 'modules/deploy-planner/digital-twins.bicep → apps[] env LOOM_ADT_ENDPOINT',
-    role: 'Azure Digital Twins Data Owner (Console UAMI) on the instance',
+    id: 'svc-digital-twins', category: 'azure-services', title: 'Digital twins (ADX graph-twin — Azure-native default)', severity: 'optional',
+    // Azure Digital Twins (ADT) is NOT available in GCC-High / IL5 / DoD, so it can
+    // never be the default backing. The DEFAULT twin backend is the ADX graph-twin:
+    // the Digital Twin Builder editor materializes entity/relationship types as
+    // `DT_<key>_E_*` / `DT_<key>_R_*` tables on the shared Azure Data Explorer
+    // cluster and explores them with the Kusto graph engine (make-graph /
+    // graph-match) — every real op (materialize/query/time-series) runs against ADX
+    // and is gated by LOOM_KUSTO_CLUSTER_URI (kustoConfigGate). That var is emitted
+    // whenever ADX is deployed (adxEnabled=true, incl. gcc-high.bicepparam), so this
+    // gate is satisfied on a Gov deploy with ZERO Azure Digital Twins dependency.
+    // LOOM_ADT_ENDPOINT stays the strictly-opt-in Commercial alternate (unavailable
+    // in GCC-High). Keeping both in the anyOf makes this an honest gate backed by a
+    // real ADX graph-twin — no fake ADT instance — per no-fabric-dependency.md +
+    // the gov 89/89 provision drive (2026-07-20). See
+    // docs/fiab/gov-replacements/digital-twins-graph.md.
+    anyOf: [['LOOM_ADT_ENDPOINT', 'LOOM_KUSTO_CLUSTER_URI']], warnOnMiss: true,
+    remediation: 'Digital twins run on the Azure Data Explorer graph-twin (make-graph / graph-match) by DEFAULT — no Azure Digital Twins required (ADT is unavailable in GCC-High / IL5). Set LOOM_KUSTO_CLUSTER_URI to the shared ADX cluster (adxEnabled=true emits it automatically) and grant the Console UAMI Database Viewer/Ingestor so twin materialize + graph query run against ADX. Azure Digital Twins is a Commercial-only opt-in alternate (LOOM_ADT_ENDPOINT).',
+    provisionedBy: 'modules/admin-plane/main.bicep (LOOM_KUSTO_CLUSTER_URI, emitted whenever adxEnabled/existingAdxClusterName — the ADX graph-twin default; + LOOM_TWIN_BACKEND=adx-graph marker); modules/integration/adt-instance.bicep → LOOM_ADT_ENDPOINT is the Commercial opt-in',
+    role: 'Database Viewer/Ingestor (Console UAMI) on the ADX cluster for the default; Azure Digital Twins Data Owner only for the opt-in ADT alternate',
   },
   {
     id: 'svc-airflow', category: 'builders', title: 'Managed Airflow (airflow-job items)', severity: 'optional',
