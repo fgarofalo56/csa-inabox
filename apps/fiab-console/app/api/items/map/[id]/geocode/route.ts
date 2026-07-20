@@ -97,6 +97,62 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   const countrySet = String(body?.countrySet || '').trim();
   const limit = Math.max(1, Math.min(Number(body?.limit) || 1, 10));
 
+  // ── OSS MapLibre (GCC-High / sovereign) geocoding ────────────────────────────
+  // Azure Maps Search is not available on the maplibre backend. Geocoding is done
+  // by a self-hosted OSS Nominatim (OpenStreetMap) when LOOM_MAPS_GEOCODE_URL is
+  // wired; otherwise this sub-feature is honest-gated (the map itself still renders
+  // — lat/long-bound layers need no geocoding). Design: maps-oss.md §4.
+  if (backend.mode === 'maplibre') {
+    const nominatim = (process.env.LOOM_MAPS_GEOCODE_URL || '').trim().replace(/\/+$/, '');
+    if (!nominatim) {
+      return err(
+        'Address geocoding is not available on the OSS MapLibre backend. Deploy a self-hosted OSS Nominatim ' +
+          '(OpenStreetMap) service and set LOOM_MAPS_GEOCODE_URL to enable it. Layers bound to Latitude + ' +
+          'Longitude render on the map without geocoding.',
+        503,
+        { code: 'geocode_not_configured', envVar: 'LOOM_MAPS_GEOCODE_URL', bicep: 'platform/fiab/bicep/modules/compute/loom-maps-app.bicep' },
+      );
+    }
+    const results: Array<{ query: string; ok: boolean; lat?: number; lon?: number; label?: string; confidence?: number; error?: string }> = [];
+    const rows: GeoRow[] = [];
+    const CHUNK = 5;
+    for (let i = 0; i < addresses.length; i += CHUNK) {
+      const slice = addresses.slice(i, i + CHUNK);
+      // eslint-disable-next-line no-await-in-loop
+      await Promise.all(slice.map(async (query) => {
+        try {
+          const params = new URLSearchParams({ format: 'jsonv2', q: query, limit: String(limit) });
+          if (countrySet) params.set('countrycodes', countrySet.toLowerCase());
+          const r = await fetch(`${nominatim}/search?${params.toString()}`, {
+            headers: { accept: 'application/json', 'user-agent': 'csa-loom-maps/1.0' },
+            cache: 'no-store',
+          });
+          if (!r.ok) { results.push({ query, ok: false, error: `HTTP ${r.status}` }); return; }
+          const j: any = await r.json();
+          const top = Array.isArray(j) ? j[0] : undefined;
+          const lat = top ? Number(top.lat) : NaN;
+          const lon = top ? Number(top.lon) : NaN;
+          if (!Number.isFinite(lat) || !Number.isFinite(lon)) { results.push({ query, ok: false, error: 'no match' }); return; }
+          const label = top?.display_name ? String(top.display_name) : query;
+          const confidence = typeof top?.importance === 'number' ? top.importance : undefined;
+          rows.push({ lat, lon, label, query, confidence });
+          results.push({ query, ok: true, lat, lon, label, confidence });
+        } catch (e: any) {
+          results.push({ query, ok: false, error: (e?.message || String(e)).slice(0, 200) });
+        }
+      }));
+    }
+    const geocoded = rows.length;
+    const failed = addresses.length - geocoded;
+    const allFailed = geocoded === 0 && failed > 0;
+    return NextResponse.json({
+      ok: !allFailed,
+      ...(allFailed ? { error: `None of the ${addresses.length} address(es) could be geocoded (OSS Nominatim). See results[] for detail.`, code: 'geocode_all_failed' } : {}),
+      mode: 'maplibre',
+      rows, geocoded, failed, total: addresses.length, results,
+    });
+  }
+
   // Build the auth for the Search REST call once (matches the SDK contract).
   const headers: Record<string, string> = { accept: 'application/json' };
   let keyParam = '';

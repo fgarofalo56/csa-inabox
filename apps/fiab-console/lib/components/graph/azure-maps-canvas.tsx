@@ -43,6 +43,7 @@ import {
 } from '@fluentui/react-components';
 import { Warning20Regular } from '@fluentui/react-icons';
 import { GeoJsonMap, type MapLayer } from './geojson-map';
+import { MapLibreCanvas } from './maplibre-canvas';
 
 // ── Azure Maps Web SDK (atlas) — loaded from the Azure-native CDN ─────────────
 // Loaded once at runtime (shared script/css ids with report/map-visual.tsx so a
@@ -185,7 +186,8 @@ export const DEFAULT_CONTROLS: AzureMapsControls = { zoom: true, compass: true, 
 
 type MapAuth =
   | { mode: 'aad'; token: string; clientId: string; expiresOn?: number }
-  | { mode: 'key'; key: string };
+  | { mode: 'key'; key: string }
+  | { mode: 'maplibre'; styleUrl: string; glJsUrl: string; glCssUrl: string };
 
 type TokenState =
   | { kind: 'loading' }
@@ -404,7 +406,7 @@ export function AzureMapsCanvas(props: AzureMapsCanvasProps): ReactElement {
         let j: any = {};
         try { j = await r.json(); } catch { j = {}; }
         if (!alive) return;
-        if (r.ok && j?.ok && (j.mode === 'aad' || j.mode === 'key')) {
+        if (r.ok && j?.ok && (j.mode === 'aad' || j.mode === 'key' || j.mode === 'maplibre')) {
           setToken({ kind: 'ok', auth: j as MapAuth });
           return;
         }
@@ -430,7 +432,7 @@ export function AzureMapsCanvas(props: AzureMapsCanvasProps): ReactElement {
 
   // ── 2. init the atlas map once auth is OK ────────────────────────────────────
   useEffect(() => {
-    if (token.kind !== 'ok' || !containerRef.current || mapRef.current) return;
+    if (token.kind !== 'ok' || token.auth.mode === 'maplibre' || !containerRef.current || mapRef.current) return;
     const auth = token.auth;
     let disposed = false;
     setMapErr(null);
@@ -751,10 +753,21 @@ export function AzureMapsCanvas(props: AzureMapsCanvasProps): ReactElement {
 
   // ── render ───────────────────────────────────────────────────────────────────
   const showGate = token.kind === 'gate';
-  const showInteractive = token.kind === 'loading' || token.kind === 'ok';
+  const isMapLibre = token.kind === 'ok' && token.auth.mode === 'maplibre';
+  const showInteractive = token.kind === 'loading' || (token.kind === 'ok' && !isMapLibre);
 
   return (
     <div className={s.root}>
+      {isMapLibre && token.kind === 'ok' && token.auth.mode === 'maplibre' && (
+        <MapLibreCanvas
+          styleUrl={token.auth.styleUrl}
+          glJsUrl={token.auth.glJsUrl}
+          glCssUrl={token.auth.glCssUrl}
+          geojson={geojson}
+          layers={layers}
+          height={height}
+        />
+      )}
       {showGate && (
         <div className={s.gate}>
           <MessageBar intent="warning">

@@ -55,6 +55,26 @@ export async function GET(req: NextRequest) {
     );
   }
 
+  // ── OSS MapLibre (GCC-High / sovereign) ──────────────────────────────────────
+  // The Azure Maps Render v2 static-raster endpoint is atlas-only. On the maplibre
+  // backend, static previews are served by the interactive MapLibre surface over
+  // the self-hosted tileserver — this raster route honest-gates rather than call
+  // atlas. (Interactive maps + tiles work fully via /api/maps/tiles.)
+  if (backend.mode === 'maplibre') {
+    return NextResponse.json(
+      {
+        ok: false,
+        error:
+          'Static raster map previews are not available on the OSS MapLibre backend (LOOM_MAPS_BACKEND=maplibre). ' +
+          'Use the interactive MapLibre surface — it renders the same basemap live over the self-hosted tile server ' +
+          '(/api/maps/tiles). No Azure Maps / Power BI / Fabric required.',
+        envVar: 'LOOM_MAPS_BACKEND',
+        bicep: 'platform/fiab/bicep/modules/compute/loom-maps-app.bicep',
+      },
+      { status: 412 },
+    );
+  }
+
   // ── Validate + clamp the render params (never trust the client verbatim) ──
   const q = req.nextUrl.searchParams;
   const style = /^[a-z0-9_-]{1,40}$/i.test(q.get('style') || '') ? q.get('style')! : 'main';

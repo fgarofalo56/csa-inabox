@@ -264,6 +264,10 @@ param appImageTags object = {
   // steps to a data sample and returns the preview + generated pandas/PySpark
   // code (Microsoft Fabric "Data Wrangler" 1:1 on Azure). Pinned image version.
   wrangler: 'v0.1'
+  // loom-maps-tileserver — OSS tileserver-gl (GCC-High / sovereign Azure Maps
+  // replacement, compute/loom-maps-app.bicep). Serves the MapLibre basemap +
+  // vector tiles + maplibre-gl assets in-VNet. Pinned image version.
+  mapsTiles: 'v1'
 }
 
 @description('Deploy the browser-driven Setup Orchestrator Container App (loom-setup-orchestrator) so the Setup Wizard\'s Deploy submits the real subscription-scoped ARM deployment (templateLink to main.json). On by default — the activation gate `setupOrchestratorActive` additionally requires containerPlatform==containerApps + deployAppsEnabled, so it is a safe no-op on AKS boundaries (GCC-High / IL5), which deploy the orchestrator via the cluster GitOps path instead. The loom-setup-orchestrator image is built by the standard release matrix; if setupTemplateUri is unset the orchestrator honestly fails the Deploy with the publish remediation rather than faking success. Set false to skip the Container App + its cross-sub Contributor grants. The Setup Orchestrator UAMI (the Console UAMI) is granted Contributor per target subscription by main.bicep\'s setup-orchestrator-rbac module.')
@@ -382,6 +386,20 @@ var scriptRunnerActive = scriptRunnerEnabled && containerPlatform == 'containerA
 // honest-gates on LOOM_WRANGLER_ENDPOINT — the panel still renders.
 var wranglerEnabled = true
 var wranglerActive = wranglerEnabled && containerPlatform == 'containerApps' && deployAppsEnabled && boundary != 'GCC-High' && boundary != 'IL5'
+
+// ── OSS MapLibre tile server (GCC-High / sovereign Azure Maps replacement) ─────
+// mapsTileServerEnabled (var, default: Gov boundaries only — same 256-param-cap
+// rationale as wranglerEnabled/scriptRunnerEnabled above): deploys the
+// loom-maps-tiles ACA app (compute/loom-maps-app.bicep, tileserver-gl) that serves
+// the MapLibre basemap + tiles in-VNet where Azure Maps has no Government data
+// plane. Commercial/GCC keep the Azure Maps path (azureMapsEnabled). The tile
+// server is internal-ingress; the browser reaches it ONLY through the Console
+// proxy /api/maps/tiles/*. When active, LOOM_MAPS_BACKEND=maplibre +
+// LOOM_MAPS_TILE_URL are emitted on the Console app below. Needs the
+// loom-maps-tileserver image in ACR (built by the app-deploy workflow); until then
+// the map surfaces honest-gate on LOOM_MAPS_TILE_URL — the aggregate rows render.
+var mapsTileServerEnabled = (boundary == 'GCC-High' || boundary == 'IL5')
+var mapsTileServerActive = mapsTileServerEnabled && containerPlatform == 'containerApps' && deployAppsEnabled
 
 // ── Day-one OSS Apache Airflow host (rel-T86) — deploy toggle ──────────────────
 // airflowHostEnabled (var, default true — same 256-param-cap rationale as
@@ -3462,8 +3480,14 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // Only derivable for the DEPLOYED account; a BYO account falls back
             // to the subscription-key path (NEXT_PUBLIC_LOOM_AZURE_MAPS_KEY)
             // or the operator sets the client id post-deploy.
-            { name: 'LOOM_MAPS_BACKEND',             value: !empty(effectiveMapsAccount) ? 'azure-maps' : '' }
+            { name: 'LOOM_MAPS_BACKEND',             value: mapsTileServerActive ? 'maplibre' : (!empty(effectiveMapsAccount) ? 'azure-maps' : '') }
             { name: 'LOOM_AZURE_MAPS_CLIENT_ID',     value: (azureMapsEnabled && (boundary == 'Commercial' || boundary == 'GCC')) ? azureMaps!.outputs.mapsClientId : '' }
+            // OSS MapLibre (GCC-High / sovereign): the internal-ingress
+            // loom-maps-tiles tileserver-gl style.json URL. Read server-side only
+            // (maps-client.ts + the /api/maps/tiles proxy) — the browser is handed
+            // the Console-relative proxy paths, never this internal host. Emitted
+            // ONLY when the tile server deploys (Gov + Container Apps + apps).
+            { name: 'LOOM_MAPS_TILE_URL',            value: mapsTileServerActive ? '${mapsTiles.outputs.tileServerInternalEndpoint}/style.json' : '' }
             // Slate-app / Workshop-app Publish → Azure Static Web Apps (ARM
             // Microsoft.Web/staticSites + listSecrets; app/api/items/
             // {slate-app,workshop-app}/[id]/publish). RG defaults to this
@@ -4623,6 +4647,31 @@ module dbtRunner '../integration/dbt-runner.bicep' = if (dbtRunnerActive) {
     caeId: containerPlatformModule.outputs.caeId
     acrLoginServer: registry.outputs.acrLoginServer
     imageTag: appImageTags.console
+    uamiId: identity.outputs.uamiConsoleId
+    uamiClientId: identity.outputs.uamiConsoleClientId
+    appInsightsConnectionString: monitoring.outputs.appInsightsConnectionString
+    complianceTags: complianceTags
+  }
+}
+
+// =====================================================================
+// OSS MapLibre tile server (GCC-High / sovereign) — loom-maps-tiles ACA app
+// (compute/loom-maps-app.bicep, tileserver-gl). The sovereign replacement for
+// Azure Maps (no Government data plane): serves the MapLibre basemap + vector
+// tiles + the maplibre-gl assets in-VNet. Internal ingress; the browser reaches
+// it ONLY through the Console proxy /api/maps/tiles/*. Reuses the Console UAMI for
+// ACR pull (AcrPull already held). Gov boundaries only (Commercial/GCC keep Azure
+// Maps). When active, LOOM_MAPS_BACKEND=maplibre + LOOM_MAPS_TILE_URL are emitted
+// on the Console app above; when the loom-maps-tileserver image is not yet in ACR
+// the map surfaces honest-gate on LOOM_MAPS_TILE_URL (the aggregate rows render).
+// =====================================================================
+module mapsTiles '../compute/loom-maps-app.bicep' = if (mapsTileServerActive) {
+  name: 'loom-maps-tiles'
+  params: {
+    location: location
+    caeId: containerPlatformModule.outputs.caeId
+    acrLoginServer: registry.outputs.acrLoginServer
+    imageTag: appImageTags.?mapsTiles ?? 'v1'
     uamiId: identity.outputs.uamiConsoleId
     uamiClientId: identity.outputs.uamiConsoleClientId
     appInsightsConnectionString: monitoring.outputs.appInsightsConnectionString

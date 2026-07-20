@@ -166,7 +166,10 @@ describe('admin/env-config registry', () => {
     // endpoints, opt-in 'databricks' = Mosaic serving; the workspace/hostname keys
     // it also references are shared with svc-aml / svc-databricks, so only the
     // selector is a NEW editable var).
-    expect(EDITABLE_ENV.length).toBe(139);
+    // Bumped to 140 by the Gov OSS Maps replacement: LOOM_MAPS_TILE_URL joins the
+    // svc-azure-maps anyOf (the self-hosted OSS MapLibre tileserver — the GCC-High
+    // path where Azure Maps is unavailable; served in-VNet via the Console proxy).
+    expect(EDITABLE_ENV.length).toBe(140);
   });
 
   it('surfaces the wave-2 env vars as settable (previously dropped by the whitelist)', () => {
