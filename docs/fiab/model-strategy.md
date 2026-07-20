@@ -272,10 +272,35 @@ Gov.
 | `LOOM_AOAI_AVAILABILITY_TTL_MS` | 300000 (5 min) | TTL for the live-deployment-list cache (M5). |
 | `LOOM_AOAI_SUB` / `LOOM_FOUNDRY_SUB` / `LOOM_SUBSCRIPTION_ID` | — | Subscription for the live deployment read (M5); absent ⇒ availability check is skipped. |
 | `LOOM_AOAI_CLIENT_V2` | — | Cut-over flag routing the orchestrator's legacy `callAoai`/`aoaiComplete*` through the unified client. |
+| `LOOM_MODEL_TIER_ROUTING_ENABLED` | `true` (on) | WS-1.1 deployment-wide kill switch. Set `false` to opt out of tier routing entirely (every turn rides the resolved default) — the ONLY way tiering becomes a no-op besides the tenant `modelTierRoutingEnabled:false`. |
 
 Admin tenant Copilot config (Admin → Copilot & Agents → Model tiers) **overrides**
 the env defaults: `modelTierRoutingEnabled` (default-ON), `modelTiers.{mini,
 standard,strong}`, and `modelTierTaskMap`.
+
+### WS-1.1 — wired on the shared call path + gate + trace attribute
+
+- **Shared-client wiring.** The unified `aoai-chat-client` (`aoaiChat` /
+  `aoaiChatJson` / `aoaiChatRaw` / `aoaiChatStream`) now consults
+  `routeTurnTier()` on EVERY call, so all copilot / agent / data-agent turns are
+  tier-aware — not just the streaming orchestrator. The auto path is
+  **escalate-only**: a hint-less turn only upshifts to the strong (reasoning)
+  deployment when it classifies hard AND a strong deployment is configured; a
+  lightweight turn is never silently downshifted to mini. So the ~18 existing
+  callers stay byte-identical unless a reasoning deployment is wired and the turn
+  is hard.
+- **Per-cloud reasoning binding.** `bestReasoningModelFor(cloud, region)` /
+  `defaultTierModelsFor(...)` bind the 3-tier default to the strongest model the
+  boundary can serve (Commercial `gpt-5.6`; Gov `gpt-5.2`/`gpt-5.1`/`gpt-5`;
+  floor `gpt-4.1`) — Gov-correct on `*.openai.azure.us`, no Fabric.
+- **Honest gate + Fix-it.** `svc-model-reasoning-tier` (registry + `/admin/gates`)
+  is `optionalDefault`: unset ⇒ the router rides the single default deployment
+  for every turn (fully functional), and the Fix-it resource-picker lists the
+  account's live AOAI deployments so an admin can bind the reasoning + mini tiers.
+- **Trace attribute.** The orchestrator emits `modelTier` (the honestly-ridden
+  tier, always present) + `taskClass` on the SSE `final` step — the durable
+  attribution a browser E2E reads on every copilot turn — alongside `routedTier`
+  (present only on an active deployment swap; drives the transparency chip).
 
 ---
 

@@ -28,6 +28,10 @@ export interface TurnTrace {
   latencyMs?: number;
   costUsd?: number;
   routedTier?: string;
+  /** WS-1.1 — the always-present tier attribution for the turn (mini/standard/
+   *  strong) + the classified task class, whether or not the deployment swapped. */
+  modelTier?: string;
+  taskClass?: string;
   routedAgentName?: string;
   routedReason?: string;
   phaseTimings: PhaseTiming[];
@@ -101,6 +105,8 @@ function buildTurn(steps: Step[], index: number): TurnTrace {
     latencyMs: final?.turnLatencyMs as number | undefined,
     costUsd: final?.costUsd as number | undefined,
     routedTier: final?.routedTier as string | undefined,
+    modelTier: final?.modelTier as string | undefined,
+    taskClass: final?.taskClass as string | undefined,
     routedAgentName: turnDetail.routedAgentName as string | undefined,
     routedReason: turnDetail.routedReason as string | undefined,
     phaseTimings: Array.isArray(final?.phaseTimings) ? (final!.phaseTimings as PhaseTiming[]) : [],
