@@ -48,6 +48,7 @@ import { ConnectedAgentsEditor } from '@/lib/copilot/connected-agents-editor';
 import { normalizeSubAgents, type SubAgentRef } from '@/lib/copilot/connected-agents';
 import { migrateLegacyTools, type AgentTool } from '@/lib/copilot/agent-tool-catalog';
 import { AgentFlowCanvas } from './agent-flow-canvas';
+import { ReasoningTrace, type ReasoningTraceData } from './data-agent-reasoning-trace';
 import type { LayoutMap } from './agent-flow-layout';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
@@ -209,7 +210,7 @@ interface DaTool {
   // Azure-native backend; these are the actual results or an honest gate.
   executed?: boolean; rowCount?: number; columns?: string[]; rows?: unknown[][]; gate?: string;
 }
-interface DaChatMsg { role: 'user' | 'assistant'; content: string; query?: string; sourceUsed?: string; error?: boolean; usage?: { totalTokens?: number }; model?: string; tools?: DaTool[] }
+interface DaChatMsg { role: 'user' | 'assistant'; content: string; query?: string; sourceUsed?: string; error?: boolean; usage?: { totalTokens?: number }; model?: string; tools?: DaTool[]; reasoning?: ReasoningTraceData }
 
 export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
@@ -417,10 +418,13 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
       });
       // Content-type guard: a 404/500 returns an HTML page, not JSON — calling
       // r.json() on that throws "Unexpected token <" and the answer is lost.
-      const res = await safeModelJson<{ answer?: string; query?: string; sourceUsed?: string; hint?: string; usage?: { totalTokens?: number }; model?: string; tools?: DaTool[] }>(r);
+      const res = await safeModelJson<{ answer?: string; query?: string; sourceUsed?: string; hint?: string; usage?: { totalTokens?: number }; model?: string; tools?: DaTool[]; mode?: string; plan?: ReasoningTraceData['plan']; steps?: ReasoningTraceData['steps']; verify?: ReasoningTraceData['verify']; modelTier?: string; reasoningConfigured?: boolean }>(r);
       const j = res.data;
       if (res.ok && j) {
-        assistantTurn = { role: 'assistant', content: String(j.answer ?? ''), query: j.query, sourceUsed: j.sourceUsed, usage: j.usage, model: j.model, tools: j.tools };
+        const reasoning: ReasoningTraceData | undefined = j.mode === 'plan-execute-verify' && j.verify
+          ? { plan: j.plan || [], steps: j.steps || [], verify: j.verify, modelTier: j.modelTier, reasoningConfigured: j.reasoningConfigured }
+          : undefined;
+        assistantTurn = { role: 'assistant', content: String(j.answer ?? ''), query: j.query, sourceUsed: j.sourceUsed, usage: j.usage, model: j.model, tools: j.tools, reasoning };
       } else {
         const detail = res.error || j?.error || `HTTP ${res.status}`;
         const hint = j?.hint ? `\n\n${j.hint}` : '';
@@ -1021,6 +1025,9 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
                     <div className={m.role === 'user' ? s.bubbleUser : m.error ? s.bubbleErr : s.bubbleBot}>
                       {m.content || (m.error ? 'Unknown error' : '')}
                     </div>
+                    {m.role === 'assistant' && !m.error && m.reasoning && (
+                      <ReasoningTrace data={m.reasoning} />
+                    )}
                     {m.role === 'assistant' && !m.error && tools.length > 0 && (
                       <details style={{ marginTop: tokens.spacingVerticalXXS }} open={tools.length > 1}>
                         <summary style={{ cursor: 'pointer', fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground2 }}>

@@ -20,7 +20,7 @@ import {
   ChainedTokenCredential,
 } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
-import { resolveAoaiTarget, NoAoaiDeploymentError } from './copilot-orchestrator';
+import { resolveAoaiTarget, NoAoaiDeploymentError, type AoaiTarget } from './copilot-orchestrator';
 import { buildAoaiBody, type AoaiChatMessage } from './aoai-model-contract';
 import { cogScope } from './cloud-endpoints';
 import { executeSourceQuery, executionToText, type SourceExecution } from './data-agent-execute';
@@ -201,6 +201,46 @@ async function aoaiToken(): Promise<string> {
 
 export interface ChatTurn { role: 'user' | 'assistant'; content: string }
 
+/**
+ * One AOAI chat round-trip against a resolved {@link AoaiTarget}, with the
+ * reasoning-model temperature fallback (some reasoning deployments reject a
+ * non-default `temperature`/`top_p` — we retry once without it). `opts.deployment`
+ * overrides the target's deployment so a caller can route THIS turn to a
+ * different tier (e.g. the WS-1.1 strong/reasoning deployment) without changing
+ * the endpoint. Reused by {@link chatGrounded} and the reasoning-mode planner
+ * (`data-agent-reasoning.ts`), so both share one battle-tested request path.
+ */
+export async function aoaiChatTurn(
+  target: AoaiTarget,
+  messages: Array<{ role: string; content: string }>,
+  opts: { deployment?: string; maxCompletionTokens?: number } = {},
+): Promise<{ content: string; usage: any }> {
+  const token = await aoaiToken();
+  const deployment = opts.deployment?.trim() || target.deployment;
+  const url = `${target.endpoint}/openai/deployments/${encodeURIComponent(deployment)}/chat/completions?api-version=${target.apiVersion}`;
+  const maxCompletionTokens = opts.maxCompletionTokens ?? 1200;
+  const send = async (withTemp: boolean) => fetchWithTimeout(url, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+    body: JSON.stringify(buildAoaiBody({ messages: messages as AoaiChatMessage[], maxCompletionTokens, temperature: withTemp ? 0.2 : undefined })),
+  }, LLM_FETCH_TIMEOUT_MS);
+  let res = await send(true);
+  if (res.status === 400) {
+    const t = await res.text();
+    if (/unsupported_value|does not support|Only the default \(1\) value is supported/i.test(t) && /temperature|top_p/i.test(t)) {
+      res = await send(false);
+    } else {
+      throw new Error(`Data agent chat failed (400): ${t.slice(0, 400)}`);
+    }
+  }
+  if (!res.ok) {
+    const t = await res.text();
+    throw new Error(`Data agent chat failed (${res.status}): ${t.slice(0, 400)}`);
+  }
+  const j: any = await res.json();
+  return { content: j?.choices?.[0]?.message?.content || '', usage: j?.usage || {} };
+}
+
 export interface DataAgentUsage { promptTokens: number; completionTokens: number; totalTokens: number; }
 
 /** One tool/source the agent consulted for an answer (sourcing metadata). */
@@ -296,32 +336,9 @@ function parseAnswer(content: string, sources: DataAgentSource[]): DataAgentAnsw
  */
 export async function chatGrounded(cfg: DataAgentConfig, history: ChatTurn[], question: string, ctx?: { tenantId?: string }): Promise<DataAgentAnswer> {
   const target = await resolveAoaiTarget();
-  const token = await aoaiToken();
-  const url = `${target.endpoint}/openai/deployments/${encodeURIComponent(target.deployment)}/chat/completions?api-version=${target.apiVersion}`;
 
-  // One AOAI round-trip with the reasoning-model temperature fallback.
-  const runChat = async (messages: Array<{ role: string; content: string }>): Promise<{ content: string; usage: any }> => {
-    const send = async (withTemp: boolean) => fetchWithTimeout(url, {
-      method: 'POST',
-      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-      body: JSON.stringify(buildAoaiBody({ messages: messages as AoaiChatMessage[], maxCompletionTokens: 1200, temperature: withTemp ? 0.2 : undefined })),
-    }, LLM_FETCH_TIMEOUT_MS);
-    let res = await send(true);
-    if (res.status === 400) {
-      const t = await res.text();
-      if (/unsupported_value|does not support|Only the default \(1\) value is supported/i.test(t) && /temperature|top_p/i.test(t)) {
-        res = await send(false);
-      } else {
-        throw new Error(`Data agent chat failed (400): ${t.slice(0, 400)}`);
-      }
-    }
-    if (!res.ok) {
-      const t = await res.text();
-      throw new Error(`Data agent chat failed (${res.status}): ${t.slice(0, 400)}`);
-    }
-    const j: any = await res.json();
-    return { content: j?.choices?.[0]?.message?.content || '', usage: j?.usage || {} };
-  };
+  // One AOAI round-trip on the resolved target (shared temperature-fallback path).
+  const runChat = (messages: Array<{ role: string; content: string }>) => aoaiChatTurn(target, messages);
 
   // ── Phase 1: model proposes an answer + the per-source query it would run ──
   const phase1Messages = [

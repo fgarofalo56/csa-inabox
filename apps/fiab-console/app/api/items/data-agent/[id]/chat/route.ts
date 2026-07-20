@@ -16,6 +16,9 @@ import { getSession } from '@/lib/auth/session';
 import { loadOwnedItem } from '../../../_lib/item-crud';
 import { enrichSemanticModelSources } from '../../../semantic-model/_lib/prep-for-ai-store';
 import { chatGrounded, NoAoaiDeploymentError, type DataAgentConfig, type ChatTurn } from '@/lib/azure/data-agent-client';
+import { runReasoningAgent } from '@/lib/azure/data-agent-reasoning';
+import { shouldPlan } from '@/lib/azure/data-agent-planner';
+import { classifyTaskClass } from '@/lib/foundry/model-tier-router';
 import { orchestrate, type SubAgentRuntime } from '@/lib/azure/agent-orchestrator';
 import { normalizeSubAgents } from '@/lib/copilot/connected-agents';
 import { emitCopilotUsage } from '@/lib/azure/copilot-orchestrator';
@@ -25,6 +28,9 @@ import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+// The reasoning-mode (plan→execute→verify) path fans out several grounded turns,
+// so allow more wall-clock than a single-shot chat.
+export const maxDuration = 120;
 
 const ITEM_TYPE = 'data-agent';
 
@@ -96,6 +102,11 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   try { body = await req.json(); } catch { return NextResponse.json({ ok: false, error: 'invalid JSON body' }, { status: 400 }); }
   const question = String(body?.question || '').trim();
   if (!question) return NextResponse.json({ ok: false, error: 'question required' }, { status: 400 });
+  // Reasoning mode: 'auto' (default — plan hard multi-hop turns, single-shot the
+  // rest), 'plan' (force the planner→execute→verify loop), 'single' (force the
+  // cheap single grounded turn). Keeps the simple path for simple questions.
+  const mode: 'auto' | 'plan' | 'single' =
+    body?.mode === 'plan' || body?.mode === 'single' ? body.mode : 'auto';
   const history: ChatTurn[] = Array.isArray(body?.history)
     ? body.history.filter((h: any) => h && (h.role === 'user' || h.role === 'assistant') && typeof h.content === 'string').slice(-10)
     : [];
@@ -119,11 +130,24 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   try {
     // AIF-4: when this agent has connected sub-agents, delegate through the
     // Azure-native Loom orchestrator (real grounded run per sub-agent + a
-    // synthesis pass); otherwise run the single grounded turn as before.
+    // synthesis pass). Otherwise WS-5.5: a hard, multi-hop question runs the
+    // reasoning-tier planner→execute→verify loop; a simple turn stays single-shot.
     const subAgents = await resolveSubAgents(itemState, session.claims.oid);
-    const answer = subAgents.length > 0
-      ? await orchestrate(cfg, subAgents, history, question, { tenantId: session.claims.oid })
-      : await chatGrounded(cfg, history, question, { tenantId: session.claims.oid });
+    let answer: import('@/lib/azure/data-agent-client').DataAgentAnswer;
+    if (subAgents.length > 0) {
+      answer = await orchestrate(cfg, subAgents, history, question, { tenantId: session.claims.oid });
+    } else {
+      const wantPlan =
+        mode === 'plan' ||
+        (mode !== 'single' &&
+          shouldPlan(question, {
+            taskClass: classifyTaskClass(question, { hasTools: cfg.sources.length > 0 }),
+            sourceCount: cfg.sources.length,
+          }));
+      answer = wantPlan
+        ? await runReasoningAgent(cfg, history, question, { tenantId: session.claims.oid })
+        : await chatGrounded(cfg, history, question, { tenantId: session.claims.oid });
+    }
 
     // Fire-and-forget DSPM-for-AI usage receipt: stamp the copilot.usage event
     // with the agent id + the sensitivity labels of the data this agent touched
