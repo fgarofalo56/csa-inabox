@@ -42,6 +42,22 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ query, variables: b?.variables || {} }),
     });
+    // HONEST GATE: a synthetic GraphQL API with NO field resolver policies and
+    // no backend service URL answers every query with "Resolvers are not
+    // defined and a service url is not configured". Surface the real cause —
+    // nothing is mapped yet — instead of wrapping that raw backend error.
+    const bodyText = typeof result.body === 'string' ? result.body : JSON.stringify(result.body ?? '');
+    if (result.status >= 400 && /resolvers are not defined/i.test(bodyText)) {
+      return NextResponse.json({
+        ok: false,
+        error: 'This GraphQL API has no entities/resolvers defined yet.',
+        code: 'no_resolvers',
+        gate: {
+          reason: 'This GraphQL API has no entities/resolvers defined yet — no field is mapped to a backend, so every query fails.',
+          remediation: 'Use the "Edit resolver policies" ribbon action (Home › Resolvers — opens the apim-policy editor for this API) to author set-graphql-resolver policies mapping each field to its backend, or set the "Backend service URL" field and republish.',
+        },
+      }, { status: 409 });
+    }
     return NextResponse.json({ ok: true, status: result.status, body: result.body });
   } catch (e: any) {
     const status = e instanceof ApimError ? e.status : 502;

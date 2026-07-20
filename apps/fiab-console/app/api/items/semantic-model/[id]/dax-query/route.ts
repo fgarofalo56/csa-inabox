@@ -20,7 +20,8 @@
 import { NextRequest } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { apiOk, apiError, apiUnauthorized, apiServerError } from '@/lib/api/respond';
-import { evalDax, warmSemanticModel, resolveBackend, TabularError } from '@/lib/azure/tabular-eval-client';
+import { evalDax, warmSemanticModel, resolveBackend, TabularError, getModelItem } from '@/lib/azure/tabular-eval-client';
+import { extractContent } from '@/lib/azure/tabular-model';
 import { looksLikeDaxQuery } from '@/lib/semantic-model/semantic-link';
 import {
   readModelState, writeModelState, normalizeMeasure, upsertMeasure,
@@ -54,6 +55,33 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     if (!dax) return apiError('dax is required', 400);
     if (!looksLikeDaxQuery(dax)) {
       return apiError('A DAX query must start with EVALUATE (or DEFINE … EVALUATE).', 400);
+    }
+    // HONEST GATE (same 412 the report routes surface via report-model-resolver):
+    // an empty model — no Loom-native content (0 tables / 0 measures) and no AAS
+    // binding — can never evaluate DAX, so say THAT instead of falling through to
+    // the "supported DAX patterns" translator help, which hides the real cause.
+    if (resolveBackend() !== 'analysis-services') {
+      const item = await getModelItem(id, tenantId);
+      if (!item) return apiError(`Semantic model ${id} not found or not owned by you.`, 404);
+      const mstate = (item.state || {}) as Record<string, unknown>;
+      // The model item may itself be AAS-bound → evaluable over XMLA, don't gate.
+      if (!mstate.aasServer && !mstate.aasDatabase) {
+        const { tables, measures } = extractContent(item);
+        if (tables.length === 0 && measures.length === 0) {
+          return apiError(
+            `Semantic model "${item.displayName}" has no Loom-native content or AAS binding to query. ` +
+              'Open it and define tables/measures (or bind it to Azure Analysis Services), then retry.',
+            412,
+            {
+              code: 'unbound',
+              gate: {
+                reason: 'This semantic model has no tables or measures yet, and no Azure Analysis Services binding — there is nothing for a DAX query to evaluate.',
+                remediation: 'Open the semantic model and define tables/measures (or bind it to Azure Analysis Services), then retry.',
+              },
+            },
+          );
+        }
+      }
     }
     try {
       const result = await evalDax(id, dax, tenantId, body?.database ? String(body.database) : undefined);
