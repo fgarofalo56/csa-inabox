@@ -1,8 +1,61 @@
-# operations-agent — parity gap (validator v2, 2026-05-26)
+<!-- parity-doc-meta
+Reviewed-on: 2026-07-20
+Validated-against:
+  - apps/fiab-console/lib/editors/phase4/operations-agent-editor.tsx
+  - apps/fiab-console/app/api/items/operations-agent/[id]/rules/route.ts
+  - apps/fiab-console/app/api/items/operations-agent/[id]/run/route.ts
+  - apps/fiab-console/app/api/items/operations-agent/[id]/deploy/route.ts
+-->
 
-**Loom URL**: `/items/operations-agent/new`
+# operations-agent — parity with Fabric IQ Operations Agent
+
+> **RE-BASELINED 2026-07-20** (rev `9ad350d3`, code-path refresh). The 2026-05-26
+> capture retained below graded this **C+** ("free-text tools", "deferred playbook",
+> "deploy stub only") and is **stale**: the editor now has typed pickers, a real
+> rules engine, and a run/test path on real backends. A live click-walk
+> re-certification is still owed before a fresh grade.
+
+## Current state (code-grounded, 2026-07-20)
+
+`lib/editors/phase4/operations-agent-editor.tsx` (~955 LOC) replaced the free-text
+form with **`Dropdown` pickers** (tools, Eventhouse binding, model, etc.,
+`:674–:714`) and Teams-notification fields. Two new real backend routes exist
+beyond `/deploy`:
+
+- **`…/rules`** — triggers = time/data-change actions on the **Azure-native**
+  default: each is a real `Microsoft.Insights/scheduledQueryRule` (+ action group)
+  over Log Analytics, or a KQL rule the **"Trigger now"** path runs against the
+  agent's ADX Eventhouse. Carries `evaluationFrequency` / `windowSize` (the polling
+  cadence the old doc listed as MISSING). Reuses the shared activator-monitor client.
+- **`…/run`** — run/test the agent: the published **Azure AI Foundry** agent
+  (thread → message → run → poll) with real per-tool run STEPS when deployed, else
+  an Azure-native grounded turn (no Fabric dependency).
+
+Corrections to the 2026-05-26 matrix:
+
+| 2026-05-26 claim | Current reality |
+|---|---|
+| Tools = free-text comma list (MAJOR) | **`Dropdown` pickers** for tools/bindings. |
+| Eventhouse binding = free text (MAJOR) | **Eventhouse binding picker** present. |
+| 5-minute polling cadence config (DEFERRED) | Rules carry `evaluationFrequency` / `windowSize` via `scheduledQueryRule`. |
+| Activator handshake (DEFERRED) | Real `scheduledQueryRule` + action-group rules engine (`…/rules`). |
+| Test agent on historical event (MAJOR) | **"Trigger now"** evaluates the rule's KQL against ADX; `…/run` tests the agent. |
+| Deploy = Foundry stub only | `…/run` runs the **published Foundry agent** with per-tool STEPS, or Azure-native fallback. |
+
+**Remaining residuals to confirm live:** natural-language **playbook generator**
+(auto-build rule + flow from a description) and **Power Automate** flow handshake +
+Teams routing depth were not fully verified in this code-path pass — confirm against
+the editor before claiming complete.
+
+---
+
+<details>
+<summary>Historical capture — 2026-05-26 (superseded, kept for provenance)</summary>
+
+Do NOT cite the "free-text"/"deferred"/"C+" claims below as current — see the
+corrections above.
+
 **Fabric reference**: Fabric IQ — Operations Agent (Activator + Power Automate orchestration; playbook generator; 5-minute polling; Teams notifications)
-**Loom screenshot**: `temp/parity/operations-agent-loom.png`
 
 ## Phase 4
 
@@ -40,3 +93,5 @@ Form fields: System prompt · Model · Tools (comma) · Eventhouse binding · On
 ## Grade — **C+**
 
 Most honest editor of the AI/ML batch. **Phase-1 stub is explicitly labeled in a warning MessageBar** with the exact deferred features and the spec doc path. Save + Deploy actions are real (where backends exist). Minus the typed tool/eventhouse pickers and the playbook generator, but those are honestly deferred. **Grade C+** by honesty — would be B once tool pickers wire and Foundry deploy is live.
+
+</details>

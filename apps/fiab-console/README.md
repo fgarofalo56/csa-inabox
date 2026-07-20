@@ -15,14 +15,17 @@ is the primary UI for the CSA Loom platform (Commercial and Azure Government).
 The console is a working, feature-rich analytics workbench — not a scaffold.
 It exposes:
 
-- **~117 item-type editors across 22 categories** (lakehouse, warehouse,
+- **132 item-type editors across 22 categories** (lakehouse, warehouse,
   notebook, KQL database/queryset, eventhouse, eventstream, activator, data
   pipeline, dataflow, mirrored database, semantic model, report, ML model,
   data agent, ontology/graph model, APIs & functions, and more). Every editor
   is mapped from an item-type slug in `lib/catalog/` to a rich editor in
-  `lib/editors/` (see `lib/editors/registry.ts` for the full slug→editor map).
-  Each item type ships an Azure-native default backend; Fabric/Power BI is
-  opt-in only.
+  `lib/editors/` (see `lib/editors/registry.ts` for the full slug→editor map):
+  the catalog holds 132 item types and `EDITOR_REGISTRY` maps all 132 to a
+  dedicated editor (1:1 at this rev). Each item type ships an Azure-native
+  default backend; Fabric/Power BI is opt-in only. Counts are code-derived and
+  tracked in
+  [`docs/fiab/meta/canonical-metrics.md`](../../docs/fiab/meta/canonical-metrics.md).
 - **Unified marketplace** (`/marketplace`) — publish and subscribe to both API
   products and data products, with bidirectional Delta Sharing.
 - **Copilots** — a general chat copilot (`/copilot`), per-editor build-assist,
