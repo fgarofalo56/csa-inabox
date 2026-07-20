@@ -16,7 +16,7 @@ import {
   PanelLeftExpand24Regular, Globe24Regular, Heart24Regular,
   Tag24Regular, TagMultiple24Regular, Sparkle24Regular, Code24Regular, DataPie24Regular,
   Wrench24Regular, ShieldLock24Regular, PlugConnected24Regular,
-  Money24Regular, Send24Regular, PersonAdd24Regular,
+  Money24Regular, Send24Regular, PersonAdd24Regular, Bot24Regular,
   type FluentIcon,
 } from '@fluentui/react-icons';
 
@@ -46,6 +46,7 @@ const SECTIONS: Section[] = [
   { href: '/admin/audit-logs', label: 'Audit logs', icon: ClipboardTask24Regular, description: 'Microsoft 365 audit log activity for every Fabric operation.' },
   { href: '/admin/usage', label: 'Usage metrics', icon: ChartMultiple24Regular, description: 'Feature usage & adoption report, item inventory, item details.' },
   { href: '/admin/copilot-usage', label: 'Copilot usage', icon: Sparkle24Regular, description: 'Per-persona Copilot token consumption from App Insights — real prompt + completion tokens by persona, model, day, and user (hashed). No synthetic numbers.' },
+  { href: '/admin/agent-quality', label: 'Agent Quality', icon: Bot24Regular, description: 'Unified agent evals + observability: LLM-judge eval sets with regression-vs-baseline, red-team refusal results, per-agent trace timelines (token/cost/latency + model tier), and the live Copilot turn-latency SLO — one page, all real backends.' },
   { href: '/admin/mcp-servers', label: 'MCP Servers', icon: PlugConnected24Regular, description: 'Browse + deploy the curated catalog of gov-safe MCP servers (Azure Container Apps + Key Vault secretRef + Azure Files), manage deployed servers with live status + teardown, and connect external MCP endpoints — the single home for Model Context Protocol tools Copilot can call.' },
   { href: '/admin/webhooks', label: 'Event subscriptions', icon: Send24Regular, description: 'Register outbound webhook endpoints that receive Loom events (item lifecycle, workspace, pipeline runs, marketplace subscribe / SLA breach, admin changes). HMAC-SHA256 signed direct HTTPS delivery by default, or Azure Event Grid when configured; per-hook delivery history + test-fire.' },
   { href: '/admin/developer/tokens', label: 'API tokens', icon: Key24Regular, description: 'Tenant-wide inventory of scoped API tokens (PAT) for non-interactive access — who created each token, its scope, last-used and expiry. Revoke any token immediately. Users create + manage their own under Settings → Developer.' },

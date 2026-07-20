@@ -170,6 +170,10 @@ export const VALUE_HINT: Record<string, string> = {
   LOOM_POWERBI_XMLA_ENDPOINT: 'powerbi://api.powerbi.com/v1.0/myorg/<workspace> (opt-in only)',
   LOOM_AML_WORKSPACE: '<azure-ml-workspace-name>',
   LOOM_AML_REGION: '<azure-ml-workspace-region (e.g. centralus)>',
+  // WS-1.2 — model-serving backend selector. Default (unset) = Azure ML managed
+  // online endpoints (Azure-native, Gov-safe). Set to 'databricks' to use
+  // Databricks Mosaic AI Model Serving (opt-in) with LOOM_DATABRICKS_HOSTNAME.
+  LOOM_MODEL_SERVING_BACKEND: 'aml (default) | databricks',
   LOOM_APIM_NAME: '<apim-service-name>',
   LOOM_APIM_RG: '<apim-resource-group (defaults to the admin RG)>',
   LOOM_MIP_ENABLED: 'true',
@@ -1062,6 +1066,22 @@ export const ENV_CHECKS: EnvSpec[] = [
     remediation: 'Set LOOM_AML_WORKSPACE (+ LOOM_AML_RESOURCE_GROUP; falls back to the AI Foundry hub via LOOM_FOUNDRY_NAME/LOOM_FOUNDRY_RG) so ml-model / ml-experiment / AutoML items have a workspace. The Data Science item family is gated on this.',
     provisionedBy: 'modules/admin-plane (aiFoundryEnabled → hub workspace) or a dedicated AML workspace → apps[] env (resolve-aml-target.ts)',
     role: 'AzureML Data Scientist + Contributor (Console UAMI) on the workspace',
+  },
+  {
+    // WS-1.2 — Model Serving as a first-class item. The Azure-native DEFAULT
+    // backend is Azure ML managed online endpoints (works in Gov *.api.ml.azure.us);
+    // Databricks Mosaic AI Model Serving is the opt-in alternative selected via
+    // LOOM_MODEL_SERVING_BACKEND=databricks + LOOM_DATABRICKS_HOSTNAME. The gate is
+    // satisfied when ANY serving backend is addressable (or the operator has picked
+    // one via the selector); the per-request servingConfigGate() gates precisely.
+    // LOOM_MODEL_SERVING_BACKEND is the only NEW editable var here (the workspace /
+    // hostname keys are shared with svc-aml / svc-databricks). No Fabric.
+    id: 'svc-model-serving', category: 'azure-services', title: 'Model serving endpoints (Azure ML online endpoints / Databricks Mosaic)', severity: 'optional',
+    anyOf: [['LOOM_AML_WORKSPACE', 'LOOM_FOUNDRY_NAME', 'LOOM_DATABRICKS_HOSTNAME', 'LOOM_MODEL_SERVING_BACKEND']], warnOnMiss: true,
+    remediation: 'Model-serving endpoints run on Azure ML managed online endpoints by DEFAULT — set LOOM_AML_WORKSPACE (or rely on the AI Foundry hub via LOOM_FOUNDRY_NAME) and grant the Console UAMI "AzureML Data Scientist" on the workspace. To use Databricks Mosaic AI Model Serving instead, set LOOM_MODEL_SERVING_BACKEND=databricks + LOOM_DATABRICKS_HOSTNAME. No Microsoft Fabric required.',
+    provisionedBy: 'modules/admin-plane (aiFoundryEnabled → AML/Foundry workspace) → apps[] env (LOOM_AML_WORKSPACE); LOOM_MODEL_SERVING_BACKEND selector defaults to the Azure ML path',
+    role: 'AzureML Data Scientist + onlineEndpoints/listkeys/action (Console UAMI) on the AML workspace, OR Databricks serving access (SCIM) for the opt-in path',
+    docs: 'https://learn.microsoft.com/azure/machine-learning/concept-endpoints-online',
   },
   {
     id: 'svc-apim', category: 'builders', title: 'API Management (publish-as-API / API marketplace)', severity: 'optional',
