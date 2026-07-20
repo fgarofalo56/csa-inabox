@@ -106,12 +106,14 @@ const KIND_ICON: Record<ComponentKind, ReactElement> = {
   image: <TextT20Regular />, link: <TextT20Regular />, divider: <TextT20Regular />, badge: <Gauge20Regular />,
   heading: <TextT20Regular />, progress: <Gauge20Regular />, spacer: <TextT20Regular />, timestamp: <TextT20Regular />,
   'kpi-row': <Gauge20Regular />, gauge: <Gauge20Regular />, callout: <TextT20Regular />, quote: <TextT20Regular />,
+  rating: <Gauge20Regular />, 'tag-list': <TextT20Regular />, delta: <Gauge20Regular />, checklist: <TextT20Regular />,
 };
 const KIND_LABEL: Record<ComponentKind, string> = {
   table: 'Table', metric: 'Metric', chart: 'Chart', form: 'Form', text: 'Text',
   image: 'Image', link: 'Link', divider: 'Divider', badge: 'Badge',
   heading: 'Heading', progress: 'Progress', spacer: 'Spacer', timestamp: 'Timestamp',
   'kpi-row': 'KPI Row', gauge: 'Gauge', callout: 'Callout', quote: 'Quote',
+  rating: 'Rating', 'tag-list': 'Tags', delta: 'Delta', checklist: 'Checklist',
 };
 const KIND_HINT: Record<ComponentKind, string> = {
   table: 'Add a data table bound to the model — rows from your selected measures and group-by fields.',
@@ -128,6 +130,7 @@ const KIND_HINT: Record<ComponentKind, string> = {
   spacer: 'Add blank layout spacing.',
   timestamp: 'Shows when the page rendered.',
   'kpi-row': 'A row of labeled KPI chips.', gauge: 'A value against a min-max range.', callout: 'A highlighted MessageBar note.', quote: 'A styled blockquote.',
+  rating: 'Star rating (value / max).', 'tag-list': 'A wrapping row of tag badges.', delta: 'Current vs previous, signed and colored.', checklist: 'Static checklist; [x] lines render checked.',
 };
 
 const useStyles = makeStyles({
@@ -1150,6 +1153,20 @@ function ComponentEditor({ s, comp, objects, entities, rendered, onChange, onDel
         <Field label="Value (0–100)"><Input value={comp.progressValue || ''} onChange={(_, d) => onChange({ progressValue: d.value })} placeholder="75" /></Field>
       ) : comp.kind === 'kpi-row' ? (
         <Field label="KPI items" hint="Comma list of Label=value."><Input value={comp.kpiItems || ''} onChange={(_, d) => onChange({ kpiItems: d.value })} placeholder="Orders=42, Revenue=1.2M" /></Field>
+      ) : comp.kind === 'rating' ? (
+        <>
+          <Field label="Value"><Input value={comp.ratingValue || ''} onChange={(_, d) => onChange({ ratingValue: d.value })} placeholder="4" /></Field>
+          <Field label="Max stars (1–10)"><Input value={comp.ratingMax || ''} onChange={(_, d) => onChange({ ratingMax: d.value })} placeholder="5" /></Field>
+        </>
+      ) : comp.kind === 'tag-list' ? (
+        <Field label="Tags" hint="Comma-separated."><Input value={comp.tags || ''} onChange={(_, d) => onChange({ tags: d.value })} placeholder="gold, verified, priority" /></Field>
+      ) : comp.kind === 'delta' ? (
+        <>
+          <Field label="Current value"><Input value={comp.deltaValue || ''} onChange={(_, d) => onChange({ deltaValue: d.value })} placeholder="1250" /></Field>
+          <Field label="Previous value"><Input value={comp.deltaPrevious || ''} onChange={(_, d) => onChange({ deltaPrevious: d.value })} placeholder="1100" /></Field>
+        </>
+      ) : comp.kind === 'checklist' ? (
+        <Field label="Items" hint="One per line; prefix with [x] to check."><Textarea value={comp.checklistItems || ''} onChange={(_, d) => onChange({ checklistItems: d.value })} rows={5} resize="vertical" /></Field>
       ) : comp.kind === 'gauge' ? (
         <>
           <Field label="Value"><Input value={comp.gaugeValue || ''} onChange={(_, d) => onChange({ gaugeValue: d.value })} placeholder="75" /></Field>
@@ -1193,6 +1210,23 @@ function ComponentEditor({ s, comp, objects, entities, rendered, onChange, onDel
           </div>
         ) : kind === 'text' ? (
           <Body1>{comp.text}</Body1>
+        ) : kind === 'rating' ? (
+          (() => { const n = (v: string | undefined, d: number) => { const x = Number(String(v ?? '').replace(/[^0-9.]/g, '')); return Number.isFinite(x) && String(v ?? '') !== '' ? x : d; }; const max = Math.max(1, Math.min(10, Math.round(n(comp.ratingMax, 5)))); const val = Math.max(0, Math.min(max, n(comp.ratingValue, 0))); return <Subtitle2 aria-label={`${val} of ${max}`}>{'★'.repeat(Math.round(val))}{'☆'.repeat(max - Math.round(val))} <Caption1>{val}/{max}</Caption1></Subtitle2>; })()
+        ) : kind === 'tag-list' ? (
+          (() => { const tags = String(comp.tags || '').split(',').map((t) => t.trim()).filter(Boolean); return tags.length ? <div style={{ display: 'flex', gap: tokens.spacingHorizontalXS, flexWrap: 'wrap' }}>{tags.map((t, i) => <Badge key={i} appearance="tint">{t}</Badge>)}</div> : <Caption1>Add tags in the inspector.</Caption1>; })()
+        ) : kind === 'delta' ? (
+          (() => { const n = (v: string | undefined) => { const x = Number(String(v ?? '').replace(/[^0-9.-]/g, '')); return Number.isFinite(x) ? x : 0; }; const cur = n(comp.deltaValue); const prev = n(comp.deltaPrevious); const diff = cur - prev; const pct = prev !== 0 ? (diff / Math.abs(prev)) * 100 : 0; const up = diff >= 0; return (
+            <div>
+              <Subtitle2>{cur.toLocaleString()}</Subtitle2>
+              <Caption1 style={{ color: up ? tokens.colorPaletteGreenForeground1 : tokens.colorPaletteRedForeground1 }}>{up ? '▲' : '▼'} {Math.abs(diff).toLocaleString()} ({Math.abs(pct).toFixed(1)}%)</Caption1>
+            </div>
+          ); })()
+        ) : kind === 'checklist' ? (
+          (() => { const lines = String(comp.checklistItems || '').split('\n').map((l) => l.trim()).filter(Boolean); return lines.length ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS }}>
+              {lines.map((l, i) => { const done = /^\[x\]/i.test(l); const label = l.replace(/^\[[x ]?\]\s*/i, ''); return <Caption1 key={i} style={done ? { textDecoration: 'line-through', color: tokens.colorNeutralForeground3 } : undefined}>{done ? '☑' : '☐'} {label}</Caption1>; })}
+            </div>
+          ) : <Caption1>Add items in the inspector.</Caption1>; })()
         ) : kind === 'kpi-row' ? (
           (() => { const items = String(comp.kpiItems || '').split(',').map((p) => p.trim()).filter(Boolean).map((p) => { const [l, ...r] = p.split('='); return { l: (l || '').trim(), v: r.join('=') }; }); return items.length ? (
             <div style={{ display: 'flex', gap: tokens.spacingHorizontalM, flexWrap: 'wrap' }}>
