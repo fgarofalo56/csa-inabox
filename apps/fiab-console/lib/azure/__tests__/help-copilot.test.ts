@@ -404,6 +404,22 @@ describe('loom-docs-index', () => {
     }
   }, 30_000);
 
+  it('buildCorpus includes in-flight PRPs (PRPs/active) and parity docs — stale-corpus regression guard', async () => {
+    // Regression guard for the 2026-07 stale-corpus incident: the corpus only
+    // ingested PRPs/completed/**, so shipped-but-active work (foundry-parity
+    // AUDIT receipts) was structurally invisible and the Copilot answered from
+    // an outdated gap analysis. These paths must stay in the corpus.
+    const chunks = await buildCorpus();
+    // foundry-parity AUDIT.md — the live shipped-receipt register.
+    expect(chunks.some((c) => c.kind === 'prp' && c.path.startsWith('PRPs/active/foundry-parity/'))).toBe(true);
+    // Any active-PRP PRP.md / AUDIT.md beyond foundry-parity should also land.
+    expect(chunks.some((c) => c.kind === 'prp' && /^PRPs\/active\//.test(c.path))).toBe(true);
+    // docs/fiab/parity/** — per-surface parity receipts, walked via docs/.
+    expect(chunks.some((c) => c.kind === 'docs' && c.path.startsWith('docs/fiab/parity/'))).toBe(true);
+    // Completed PRPs must remain ingested (no regression the other way).
+    expect(chunks.some((c) => c.kind === 'prp' && c.path.startsWith('PRPs/completed/csa-loom-pillar/'))).toBe(true);
+  }, 60_000);
+
   it('reindex (Cosmos fallback) persists chunks and warns about missing AI Search', async () => {
     delete process.env.LOOM_AI_SEARCH_SERVICE;
     const r = await reindex();
