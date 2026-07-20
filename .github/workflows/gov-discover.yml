@@ -110,7 +110,7 @@ jobs:
           if [ -n "${DATABRICKS_HOSTNAME:-}" ]; then
             TOK=$(az account get-access-token --resource "2ff814a6-3304-4ab8-85cb-cd0e6f879c1d" --query accessToken -o tsv 2>/dev/null || echo "")
             if [ -n "$TOK" ]; then
-              curl -s -H "Authorization: Bearer $TOK" "https://$DATABRICKS_HOSTNAME/api/2.0/sql/warehouses" --max-time 25 2>/dev/null | python3 -c "import json,sys;\
-d=json.load(sys.stdin);ws=d.get('warehouses',[]);print('  warehouses:', [(w.get('id'),w.get('name')) for w in ws]) if ws else print('  no warehouses (or 403)')" 2>/dev/null || echo "  databricks SQL query failed"
+              curl -s -H "Authorization: Bearer $TOK" "https://$DATABRICKS_HOSTNAME/api/2.0/sql/warehouses" --max-time 25 2>/dev/null > dbx.json || true
+              python3 -c "import json;d=json.load(open('dbx.json'));ws=d.get('warehouses',[]);print('  warehouses:',[(w.get('id'),w.get('name')) for w in ws]) if ws else print('  no warehouses (or 403)')" 2>/dev/null || echo "  databricks SQL query failed/no warehouses"
             else echo "  no databricks AAD token"; fi
           else echo "  LOOM_DATABRICKS_HOSTNAME empty"; fi
