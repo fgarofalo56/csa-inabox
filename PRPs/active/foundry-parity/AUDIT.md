@@ -203,6 +203,35 @@ guard + delete cleanup, pure `nestedWidgetIds` helper + 5 unit tests. Parity
 doc rows A4/A5 + Containers flipped ✅ — zero tracked notes remain on the
 catalog.
 
+## Backlog-drain wave — 2026-07-20 (rev loom-console--0000354, sha 210ab098)
+
+- **Compact-v4 node anatomy LANDED** (PR #2082, was open+conflicting since
+  07-15): rebased onto main preserving the #2140 port-unclip fix (kept
+  `overflow: visible`; v4's inset 3px accent bar replaces the 6px rail).
+  tsc clean, 47/47 canvas tests, no-raw-px OK. Live verify: task-flow +
+  eventstream canvases have correct v4 DOM (2-row compact nodes, glyph chip,
+  typed ports); a body-level clone of the node paints correctly. NOTE: CDP
+  screenshots of React-Flow *composited viewports* return empty on this
+  long-running Chrome session (GPU-layer capture artifact — even a forced
+  red node with z-index 9999 doesn't capture, while elementFromPoint proves
+  the node is topmost; everything outside canvases captures fine). Dark+light
+  pixel pass banked pending a Chrome restart (operator-side).
+- **Rayfin batch-7 (PR #2237): card catalog 29 → 34** — Tabs/Accordion/
+  Sparkline/Video/Map. VISUALLY VERIFIED live: full Add-component palette
+  renders all 34 kinds in the App builder (bound to SalesModel; honest gate
+  verified pre-binding; app.config.ts codegen reflects the binding). Test
+  item + test task-flow deleted after verification.
+- **Task-flow "enhancement candidate" CORRECTED — already built**: the
+  Fabric-workspace task-flow parity surface exists as `TaskFlowsPane` (F11) —
+  the "Task flows" tab on every workspace page (xyflow canvas, real Cosmos
+  CRUD via /api/workspaces/<id>/task-flows, step↔item links, Run flow,
+  History). Live-verified: created a flow, added a step linked to a real
+  pipeline item, saved + reloaded from Cosmos, then deleted it.
+- **Dependabot backlog drained**: 6 merged (autoprefixer, msal-react,
+  tailwind, radix-select, eslint-config-next, sse-starlette), TS 7 major
+  closed with `@dependabot ignore this major version` (failing check),
+  msal-browser bump self-closed as up-to-date after the transitive bump.
+
 **LIVE E2E RECEIPT (rev loom-console--0000353, sha addd7049, 2026-07-20):**
 "TabNest E2E" workshop app in CSA Loom Demo, bound to Enterprise Ontology;
 `dbo.Customer` created in the Finance Warehouse dedicated pool (CTAS from
