@@ -223,3 +223,89 @@ class TestErrorPath:
         monkeypatch.setattr(ai_router, "_try_get_rag_service", lambda: _BoomService())
         response = client.post("/api/v1/ai/chat", json={"query": "x"})
         assert response.status_code == 500
+
+
+# ── AI_MODE control (W-C3) ──────────────────────────────────────────────────
+
+
+class TestAIModeControl:
+    """AI_MODE gates the demo-stub fallback so prod can't silently stay demo."""
+
+    def test_disabled_mode_503s_chat_embed_search(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("AI_MODE", "disabled")
+        for path, payload in (
+            ("/api/v1/ai/chat", {"query": "x"}),
+            ("/api/v1/ai/embed", {"texts": ["x"]}),
+            ("/api/v1/ai/search", {"query": "x"}),
+        ):
+            resp = client.post(path, json=payload)
+            assert resp.status_code == 503, path
+            assert resp.json()["detail"]["code"] == "ai_disabled"
+
+    def test_live_mode_unconfigured_503s_with_reasons_not_demo(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("AI_MODE", "live")
+        monkeypatch.delenv("AZURE_OPENAI_ENDPOINT", raising=False)
+        monkeypatch.delenv("AZURE_SEARCH_ENDPOINT", raising=False)
+        monkeypatch.setattr(ai_router, "_try_get_rag_service", lambda: None)
+        monkeypatch.setattr(ai_router, "_try_get_embedder", lambda: None)
+        resp = client.post("/api/v1/ai/chat", json={"query": "x"})
+        assert resp.status_code == 503
+        detail = resp.json()["detail"]
+        assert detail["code"] == "ai_not_configured"
+        assert detail["mode"] == "live"
+        # per-dependency reasons name the exact missing env vars — never a demo-stub
+        names = {d["name"] for d in detail["dependencies"]}
+        assert {"azure_openai", "azure_search"} <= names
+        assert any("AZURE_OPENAI_ENDPOINT" in d["missing"] for d in detail["dependencies"])
+        assert detail["reasons"]
+
+    def test_demo_mode_unconfigured_still_serves_demo_stub(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("AI_MODE", "demo")
+        monkeypatch.setattr(ai_router, "_try_get_rag_service", lambda: None)
+        resp = client.post("/api/v1/ai/chat", json={"query": "hi"})
+        assert resp.status_code == 200
+        assert resp.json()["model"] == "demo-stub"
+
+    def test_status_reports_mode_ready_and_missing_dependencies(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("AI_MODE", "live")
+        monkeypatch.delenv("AZURE_OPENAI_ENDPOINT", raising=False)
+        monkeypatch.delenv("AZURE_SEARCH_INDEX_NAME", raising=False)
+        monkeypatch.setattr(ai_router, "_try_get_rag_service", lambda: None)
+        resp = client.get("/api/v1/ai/status")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["mode"] == "live"
+        assert body["ready"] is False
+        assert body["status"] == "unavailable"
+        assert body["reasons"]
+        oai = next(d for d in body["dependencies"] if d["name"] == "azure_openai")
+        assert "AZURE_OPENAI_ENDPOINT" in oai["missing"]
+        assert oai["detail"]  # remediation present
+
+    def test_status_disabled_mode(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("AI_MODE", "disabled")
+        body = client.get("/api/v1/ai/status").json()
+        assert body["status"] == "disabled"
+        assert body["mode"] == "disabled"
+        assert body["ready"] is False
+
+    def test_status_live_configured_is_ready(
+        self, client: TestClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("AI_MODE", "live")
+        monkeypatch.setattr(ai_router, "_try_get_rag_service", lambda: _FakeService())
+        body = client.get("/api/v1/ai/status").json()
+        assert body["mode"] == "live"
+        assert body["ready"] is True
+        assert body["status"] == "healthy"
+        assert body["embedding_model"] == "emb-dep"
