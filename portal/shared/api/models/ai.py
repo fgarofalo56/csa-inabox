@@ -98,11 +98,39 @@ class SearchResponse(BaseModel):
     latency_ms: float = Field(..., ge=0.0, description="Search latency in milliseconds")
 
 
-class AIServiceStatus(BaseModel):
-    """Health status of AI services."""
+class AIDependencyStatus(BaseModel):
+    """Readiness of a single AI backend dependency."""
 
-    status: str = Field(..., description="Overall status: healthy | degraded | unavailable")
+    name: str = Field(..., description="Dependency name, e.g. azure_openai | azure_search")
+    configured: bool = Field(..., description="True when every required setting for this dependency is present")
+    missing: list[str] = Field(
+        default_factory=list,
+        description="Exact env vars / resources that must be set to configure this dependency",
+    )
+    detail: str = Field("", description="Human-readable remediation when not configured")
+
+
+class AIServiceStatus(BaseModel):
+    """Health status of AI services.
+
+    ``mode`` reflects the AI_MODE control (disabled | demo | live). ``ready``
+    is the machine-readable readiness the caller keys on: a production profile
+    (AI_MODE=live) that is not ready surfaces here (and its endpoints return an
+    honest 503) instead of silently serving demo-stub responses.
+    """
+
+    status: str = Field(..., description="Overall status: healthy | degraded | unavailable | disabled")
+    mode: str = Field("demo", description="AI_MODE control: disabled | demo | live")
+    ready: bool = Field(False, description="True when the real AI stack is configured + usable")
     embedding_model: str = Field(..., description="Configured embedding model")
     chat_model: str = Field(..., description="Configured chat/completion model")
     vector_store: str = Field(..., description="Vector store connection: connected | disconnected")
+    dependencies: list[AIDependencyStatus] = Field(
+        default_factory=list,
+        description="Per-dependency readiness with the exact missing env vars/resources",
+    )
+    reasons: list[str] = Field(
+        default_factory=list,
+        description="Human-readable reasons the service is not ready (empty when ready)",
+    )
     last_check: str = Field(..., description="ISO-8601 timestamp of last health check")
