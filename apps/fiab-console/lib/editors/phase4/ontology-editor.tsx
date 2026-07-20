@@ -33,7 +33,7 @@ import {
   Cube20Regular, Calculator20Regular, Ruler20Regular, Layer20Regular,
   ChevronRight16Regular, ChevronDown16Regular, ChevronLeft16Regular,
   Add16Regular, Edit16Regular, CheckmarkCircle20Regular, ArrowUndo16Regular,
-  Key16Regular, Search20Regular, ShieldTask20Regular, ArrowClockwise20Regular,
+  Key16Regular, Search20Regular, ShieldTask20Regular, ArrowClockwise20Regular, Open16Regular,
 } from '@fluentui/react-icons';
 import { useQuery } from '@tanstack/react-query';
 import { getItem } from '@/lib/api/workspaces';
@@ -114,6 +114,7 @@ import {
 } from '../_plan-model';
 import { arr, useItemState, SaveBar, useStyles } from './shared';
 import { ObjectExplorerPanel } from './object-explorer-panel';
+import { ObjectViewPanel } from './object-view-panel';
 
 /**
  * Local Loom-token styles for the two typed surfaces added in this editor:
@@ -304,6 +305,7 @@ function WeaveInstancePanel({
   const [kvNonce, setKvNonce] = useState(0);
   const [creating, setCreating] = useState(false);
   const [sort, setSort] = useState<{ col: string; dir: 'asc' | 'desc' }>({ col: 'id', dir: 'asc' });
+  const [viewVertex, setViewVertex] = useState<{ id: string; objectType: string } | null>(null); // WS-4.1 open instance
 
   // The declared object type currently selected — its `properties` drive the
   // typed create form. Falls back to null for a legacy (property-less) type.
@@ -645,6 +647,16 @@ function WeaveInstancePanel({
   const SortIcon = ({ col }: { col: string }) =>
     sort.col !== col ? null : sort.dir === 'asc' ? <ArrowSortUp16Regular /> : <ArrowSortDown16Regular />;
 
+  // WS-4.1 — an opened instance replaces the objects/links surface with its Object View.
+  if (viewVertex) {
+    return (
+      <div className={s.ontoBindGrid}>
+        <ObjectViewPanel ontologyId={id} objectType={viewVertex.objectType} vertexId={viewVertex.id}
+          onClose={() => { setViewVertex(null); void loadObjects(objType); }} />
+      </div>
+    );
+  }
+
   return (
     <div className={s.ontoBindGrid}>
       {/* ── Object instances ── */}
@@ -752,6 +764,7 @@ function WeaveInstancePanel({
                             <button type="button" className={s.ontoSortHeader} onClick={() => toggleSort(c)}>{c}<SortIcon col={c} /></button>
                           </TableHeaderCell>
                         ))}
+                        <TableHeaderCell />
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -759,6 +772,9 @@ function WeaveInstancePanel({
                         <TableRow key={o.id}>
                           <TableCell><span className={s.ontoCellId}>{o.id}</span></TableCell>
                           {objColumns.map((c) => <TableCell key={c}>{String(o.properties?.[c] ?? '')}</TableCell>)}
+                          <TableCell>
+                            <Button size="small" appearance="primary" icon={<Open16Regular />} onClick={() => setViewVertex({ id: o.id, objectType: objType })}>View</Button>
+                          </TableCell>
                         </TableRow>
                       ))}
                     </TableBody>

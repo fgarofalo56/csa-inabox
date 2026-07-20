@@ -252,6 +252,22 @@ export async function createObject(objectType: string, props: Record<string, unk
   return obj;
 }
 
+/**
+ * Fetch a single object instance by its numeric AGE id, scoped to its type:
+ * `MATCH (n:<type>) WHERE id(n) = <id> RETURN n`. Returns null when no vertex of
+ * that type carries the id (the object-view route surfaces that as a 404). The
+ * type scope means a wrong-typed id can never leak another type's vertex.
+ */
+export async function getObject(objectType: string, vertexId: string): Promise<WeaveObject | null> {
+  const label = safeLabel(objectType);
+  if (!label) throw new PostgresError(`Object type '${objectType}' is not a valid AGE label`, 400);
+  const idNum = String(vertexId).trim();
+  if (!/^\d+$/.test(idNum)) throw new PostgresError('vertexId must be the numeric AGE id', 400);
+  const stmt = `MATCH (n:${label}) WHERE id(n) = ${idNum} RETURN n`;
+  const res = await runCypher(stmt, [{ name: 'n', type: 'agtype' }]);
+  return res.rows.length ? rowToObject(res.rows[0][0]) : null;
+}
+
 /** List object instances of a type: `MATCH (n:<type>) RETURN n LIMIT <top>`. */
 export async function listObjects(objectType: string, top = 100): Promise<WeaveObject[]> {
   const label = safeLabel(objectType);

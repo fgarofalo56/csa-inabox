@@ -107,7 +107,7 @@ generation.
 | Link instances | `/links` AGE-edge route is real but **not yet surfaced** in the editor UI. | ⚠️ backend only | `/links` → Apache AGE |
 | Shared properties | None. | ❌ MISSING | — |
 | Interfaces | None. | ❌ MISSING | — |
-| Object views | None. | ❌ MISSING | — |
+| Object views | **Per-instance Object View** (`object-view-panel.tsx`, opened via the "View" action on each instance): overview header, type-badged **properties inspector** (G3 `SplitPane`), **linked objects** grouped by link type × direction (traversed from real AGE edges), **time-series** chart (`TimeSeriesChart` over a real timestamp+numeric property series), and a **map** (`GeoJsonMap` over real geopoint/geoshape props). Panels auto-resolve from the property schema; a persisted `state.objectViews[<type>]` config can override. Backend: `GET /objects/[vertexId]/view` → `weave-ontology-store.getObject` + `weave-explore.traverseObject` + `lib/foundry/object-view.ts` shaping. Honest empty states when a widget's data is absent. | ✅ (WS-4.1) | `/objects/[vertexId]/view` → Apache AGE |
 | Security / granular permissions | None. | ❌ MISSING | — |
 | Derived properties | None. | ❌ MISSING | — |
 | Activator triggers | Real Azure Monitor scheduled-query alert per entity change (`createTrigger :1142-1168`); honest gate when Monitor unconfigured. | ✅ (Loom extra) | `/activator` → `monitor-client` |
@@ -120,9 +120,10 @@ is **stale**. The primary surface is now a **typed Object/Link/Action-type
 designer** (`OntologyTypedModelPanel`) persisting to Cosmos, backed by real
 Apache-AGE object/action write-back, real Azure Monitor Activator triggers,
 Cosmos data-bindings, and graph-model materialization — the Foundry core is
-built. Genuine remaining gaps are the advanced Foundry pillars: **shared
-properties, interfaces, object views, granular security, derived properties,
-link-instance UI, and OSDK-in-editor**, plus two honest partials (the
+built. **Object views shipped (WS-4.1)** — a per-instance viewer over real AGE
+data. Genuine remaining gaps are the advanced Foundry pillars: **shared
+properties, interfaces, granular security, derived properties,** and
+OSDK-in-editor, plus two honest partials (the
 object-instance create form and the action run-form are still freeform JSON, and
 datasource binding lacks a column→property mapping grid). The
 `loom_no_freeform_config` cleanup is therefore partially delivered (typed model
@@ -167,9 +168,12 @@ dialogs shipped; the instance/run JSON textareas remain to convert).
 7. **Interfaces** — abstract types with property/link/action constraints; object
    types declare `implements[]`; enforce constraints at action runtime. Persist
    `state.interfaces[]`.
-8. **Object views + instance viewer** — configurable per-type view (overview /
-   properties / linked objects / timeseries / map widgets) persisted as JSON; an
-   instance detail page that renders it from real AGE data.
+8. **Object views + instance viewer** — ✅ **SHIPPED (WS-4.1).** Configurable
+   per-type view (overview / properties / linked objects / timeseries / map
+   widgets); an instance viewer (`object-view-panel.tsx`) that renders it from
+   real AGE data via `GET /objects/[vertexId]/view`. Panels auto-resolve from
+   the property schema and a persisted `state.objectViews[<type>]` config
+   overrides.
 9. **Security / granular permissions** — Entra-group ACL on object type +
    property-level + row-level, enforced at `/objects` and `/run-action` (reuse the
    EH Phase-1 PDP/RLS pattern). Honest gate if group resolution unavailable.
