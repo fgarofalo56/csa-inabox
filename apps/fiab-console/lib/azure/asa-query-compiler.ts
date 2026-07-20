@@ -21,6 +21,10 @@
  * SnapshotWindow, System.Timestamp(), HAVING, JOIN ... DATEDIFF, UNION, WITH.
  */
 import { isAnalyticsReady, deltaflowSelectList } from './deltaflow-transform';
+import {
+  isGeoTransformKind, geoSelectList, geoTail,
+  type GeoFenceDef, type GeoAggregateSpec as GeoAggSpec, type GeoDistanceUnit,
+} from '@/lib/editors/eventstream/geo-sql';
 
 // ============================================================
 // Canonical node types (shared with the visual designer, which re-exports
@@ -38,7 +42,11 @@ export type TransformKind =
   | 'filter' | 'aggregate' | 'group-by' | 'project' | 'union' | 'join' | 'window'
   // rel-T91: DeltaFlow CDC-flatten — Debezium before/after/op/ts envelope →
   // flattened tabular rows + change-metadata columns (__op / __changed_at / …).
-  | 'cdc-flatten';
+  | 'cdc-flatten'
+  // geo-graph-ml GEO-1: geospatial operators (ASA built-in geospatial fns —
+  // CreatePoint / CreatePolygon / ST_WITHIN / ST_DISTANCE). Pure SQL builders
+  // live in lib/editors/eventstream/geo-sql.ts; this compiler delegates.
+  | 'geo-point' | 'geo-fence' | 'geo-proximity' | 'geo-aggregate';
 export type SinkKind = 'kusto' | 'lakehouse' | 'eventhub' | 'reflex' | 'derivedStream';
 
 export type AsaAggregateFunc = 'AVG' | 'SUM' | 'COUNT' | 'MIN' | 'MAX';
@@ -135,6 +143,35 @@ export interface TransformNode {
   cdcChangeTsColumn?: string;
   cdcDestinationTable?: string;
   cdcSchemaEvolution?: boolean;
+  // Geospatial operators (geo-graph-ml GEO-1). All slots are typed config
+  // authored through dropdowns / numeric fields; the SQL builders live in
+  // lib/editors/eventstream/geo-sql.ts. See GeoTransformNode there for docs.
+  pointMode?: 'latlon' | 'column';
+  latColumn?: string;
+  lonColumn?: string;
+  pointColumn?: string;
+  pointAlias?: string;
+  fenceSource?: 'inline' | 'reference';
+  fenceMode?: 'inside' | 'outside';
+  fences?: GeoFenceDef[];
+  fenceRefInput?: string;
+  fenceRefNameColumn?: string;
+  fenceRefPolygonColumn?: string;
+  fenceOutputColumn?: string;
+  proximityTarget?: 'static' | 'stream';
+  staticLat?: number;
+  staticLon?: number;
+  rightPointMode?: 'latlon' | 'column';
+  rightLatColumn?: string;
+  rightLonColumn?: string;
+  rightPointColumn?: string;
+  thresholdValue?: number;
+  thresholdUnit?: GeoDistanceUnit;
+  distanceAlias?: string;
+  regionColumn?: string;
+  // (geo-aggregate reuses windowSize/windowUnit/hopSize/aggregates above; its
+  // aggregates rows are wire-compatible with AggregateSpec / GeoAggSpec.)
+  geoAggregates?: GeoAggSpec[];
   // Legacy / misc (kept wire-compatible with pre-existing Cosmos state)
   columns?: string[];
   window?: string;
@@ -288,6 +325,7 @@ export function cdcFlattenSelectList(t: TransformNode): string {
  * The SELECT column list for a transform (without the leading "SELECT").
  */
 function selectListFor(t: TransformNode): string {
+  if (isGeoTransformKind(t.kind)) return geoSelectList(t as any);
   switch (t.kind) {
     case 'aggregate':
     case 'group-by':
@@ -321,6 +359,7 @@ function tailFor(
   sources: SourceNode[],
 ): string {
   const ts = isSource ? tsBy(t.timestampBy) : '';
+  if (isGeoTransformKind(t.kind)) return geoTail(t as any, fromRef, ts);
   switch (t.kind) {
     case 'filter': {
       const where = (t.expression || '').trim();

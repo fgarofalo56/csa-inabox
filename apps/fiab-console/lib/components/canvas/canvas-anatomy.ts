@@ -193,6 +193,13 @@ export const OPERATOR_CATEGORY: Record<string, CanvasNodeCategoryName> = {
   foreach: 'iteration',
   loop: 'iteration',
   until: 'iteration',
+  // geospatial (geo-graph-ml GEO-1): the point builder + region aggregate
+  // reshape rows (transform); the fence + proximity operators gate the stream
+  // (control), like filter.
+  'geo-point': 'transform',
+  'geo-aggregate': 'transform',
+  'geo-fence': 'control',
+  'geo-proximity': 'control',
 };
 
 /** Resolve the canvas category for a generic operator role (case-insensitive). */

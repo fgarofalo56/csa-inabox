@@ -83,3 +83,61 @@ describe('ordering + counts', () => {
     expect(counts).toEqual({ errors: 2, warnings: 0 });
   });
 });
+
+// ---- geospatial operators (geo-graph-ml GEO-1) ----
+describe('geo operator lint', () => {
+  const wrap = (transform: Record<string, unknown>) => collectAuthoringErrors({
+    sources: [{ kind: 'eventhub', name: 'src', eventHubName: 'h' }],
+    transforms: [transform],
+    sinks: [{ kind: 'kusto', name: 'dst', table: 'T' }],
+  });
+
+  it('geo-point requires lat + lon columns', () => {
+    const errs = wrap({ kind: 'geo-point', name: 'p' });
+    expect(errs.some((e) => e.id === 'transform-0-geo-lat' && e.severity === 'error')).toBe(true);
+    expect(errs.some((e) => e.id === 'transform-0-geo-lon' && e.severity === 'error')).toBe(true);
+    expect(wrap({ kind: 'geo-point', name: 'p', latColumn: 'lat', lonColumn: 'lon' })
+      .filter((e) => e.nodeType === 'transform')).toHaveLength(0);
+  });
+
+  it('geo-fence (inline) requires a point source and one valid fence', () => {
+    const errs = wrap({ kind: 'geo-fence', name: 'g', fences: [] });
+    expect(errs.some((e) => e.id === 'transform-0-geo-fence-latlon')).toBe(true);
+    expect(errs.some((e) => e.id === 'transform-0-geo-fence-none')).toBe(true);
+    const ok = wrap({
+      kind: 'geo-fence', name: 'g', latColumn: 'lat', lonColumn: 'lon',
+      fences: [{ name: 'z', vertices: [{ lat: 0, lon: 0 }, { lat: 0, lon: 1 }, { lat: 1, lon: 1 }] }],
+    });
+    expect(ok.filter((e) => e.nodeType === 'transform')).toHaveLength(0);
+  });
+
+  it('geo-fence (reference) requires the reference input alias', () => {
+    const errs = wrap({ kind: 'geo-fence', name: 'g', pointMode: 'column', pointColumn: 'pos', fenceSource: 'reference', fenceRefInput: '' });
+    expect(errs.some((e) => e.id === 'transform-0-geo-fence-ref')).toBe(true);
+  });
+
+  it('geo-proximity stream mode requires the joined source + right point', () => {
+    const errs = wrap({
+      kind: 'geo-proximity', name: 'near', latColumn: 'lat', lonColumn: 'lon',
+      proximityTarget: 'stream', thresholdValue: 100,
+    });
+    expect(errs.some((e) => e.id === 'transform-0-geo-prox-source')).toBe(true);
+    expect(errs.some((e) => e.id === 'transform-0-geo-prox-right-latlon')).toBe(true);
+  });
+
+  it('geo-proximity requires a positive threshold', () => {
+    const errs = wrap({
+      kind: 'geo-proximity', name: 'near', latColumn: 'lat', lonColumn: 'lon',
+      proximityTarget: 'static', staticLat: 1, staticLon: 2, thresholdValue: 0,
+    });
+    expect(errs.some((e) => e.id === 'transform-0-geo-prox-threshold' && e.severity === 'error')).toBe(true);
+  });
+
+  it('geo-aggregate warns (not errors) on missing region/aggregations', () => {
+    const errs = wrap({ kind: 'geo-aggregate', name: 'agg', aggregates: [] });
+    const region = errs.find((e) => e.id === 'transform-0-geo-agg-region');
+    const aggs = errs.find((e) => e.id === 'transform-0-geo-agg-none');
+    expect(region?.severity).toBe('warning');
+    expect(aggs?.severity).toBe('warning');
+  });
+});

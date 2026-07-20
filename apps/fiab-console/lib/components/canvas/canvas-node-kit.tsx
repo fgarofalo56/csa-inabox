@@ -72,6 +72,9 @@ import {
   NumberSymbol20Regular, Merge20Regular, CheckboxChecked20Regular,
   ArrowJoin20Regular, DocumentBulletList20Regular, TextQuote20Regular,
   ArrowSortDown20Regular, TableEdit20Regular,
+  // Geospatial operator glyphs (geo-graph-ml GEO-1)
+  Location20Regular, LocationTargetSquare20Regular, LocationLive20Regular,
+  GlobeLocation20Regular,
 } from '@fluentui/react-icons';
 import {
   // v2 node-action-bar + ghost + right-rail glyphs
@@ -392,6 +395,11 @@ const OPERATOR_ICONS: Record<string, JSX.Element> = {
   foreach: <ArrowRepeatAll20Regular />,
   loop: <ArrowRepeatAll20Regular />,
   until: <ArrowSync20Regular />,
+  // geospatial (geo-graph-ml GEO-1)
+  'geo-point': <Location20Regular />,
+  'geo-fence': <LocationTargetSquare20Regular />,
+  'geo-proximity': <LocationLive20Regular />,
+  'geo-aggregate': <GlobeLocation20Regular />,
 };
 
 /**

@@ -26,7 +26,14 @@ export type EsOperatorKind =
   | 'expand'
   | 'cdc-flatten'
   | 'union'
-  | 'join';
+  | 'join'
+  // Geospatial operators (geo-graph-ml GEO-1) — ASA built-in geospatial fns
+  // (CreatePoint / CreatePolygon / ST_WITHIN / ST_DISTANCE), zero gate in
+  // Commercial + Gov. SQL builders: lib/editors/eventstream/geo-sql.ts.
+  | 'geo-point'
+  | 'geo-fence'
+  | 'geo-proximity'
+  | 'geo-aggregate';
 
 /** What a menu item does when clicked. */
 export type TransformMenuTarget =
@@ -77,11 +84,24 @@ export const TRANSFORM_MENU: TransformMenuCategory[] = [
       { id: 'expand', label: 'Expand', hint: 'Flatten an array column into one row per element.' },
     ],
   },
+  {
+    // Loom EXCEEDS the Fabric menu here (ux-baseline: our richer bar is the
+    // standard): first-class geospatial operators over ASA's built-in
+    // geospatial functions — zero gate, Commercial + Gov.
+    category: 'Geospatial',
+    items: [
+      { id: 'geo-point', label: 'Geo point', hint: 'Build a GeoJSON point with CreatePoint(lat, lon) from two stream columns.' },
+      { id: 'geo-fence', label: 'Geofence', hint: 'Keep events inside/outside fences via ST_WITHIN(point, fence) — inline polygons or ASA reference data.' },
+      { id: 'geo-proximity', label: 'Proximity', hint: 'Keep events within a distance threshold via ST_DISTANCE(a, b) < d.' },
+      { id: 'geo-aggregate', label: 'Geo aggregate', hint: 'Aggregate per region over a HoppingWindow (requests-per-region).' },
+    ],
+  },
 ];
 
 /** All operator kinds that the predefined-operations section can add. */
 const OPERATOR_IDS: ReadonlySet<string> = new Set<EsOperatorKind>([
   'filter', 'manage-fields', 'aggregate', 'group-by', 'expand', 'cdc-flatten', 'union', 'join',
+  'geo-point', 'geo-fence', 'geo-proximity', 'geo-aggregate',
 ]);
 
 /**

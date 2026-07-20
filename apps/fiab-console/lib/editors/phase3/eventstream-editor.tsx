@@ -29,6 +29,7 @@ import {
   MathFormula20Regular, Flowchart20Regular, Open20Regular, Form20Regular, Flash20Regular,
   Filter20Regular, Table20Regular, DataArea20Regular, Merge20Regular, Branch20Regular,
   Notebook20Regular, DocumentBulletList20Regular, CloudArrowUp20Regular, Code20Regular,
+  Location20Regular, LocationTargetSquare20Regular, LocationLive20Regular, GlobeLocation20Regular,
 } from '@fluentui/react-icons';
 import { useCanvasHistory } from '@/lib/components/canvas/use-canvas-history';
 import { DataPreviewDock } from '@/lib/components/eventstream/data-preview-dock';
@@ -46,6 +47,10 @@ import {
   type SinkNode as VisualSinkNode,
 } from '@/lib/components/eventstream/visual-designer';
 import { compileToSaql, cdcFlattenSelectList } from '@/lib/azure/asa-query-compiler';
+import {
+  isGeoTransformKind, geoSelectList, geoTail, geoDefaultOperator,
+} from '@/lib/editors/eventstream/geo-sql';
+import { GeoOperatorConfig } from '@/lib/components/eventstream/geo-operator-config';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { useWorkspaces, WorkspacePicker } from './workspace-picker';
@@ -99,7 +104,10 @@ interface EsFieldMap {
   cast?: string;
 }
 
-type EsOpKind = 'filter' | 'manage-fields' | 'aggregate' | 'group-by' | 'expand' | 'cdc-flatten' | 'union' | 'join';
+type EsOpKind =
+  | 'filter' | 'manage-fields' | 'aggregate' | 'group-by' | 'expand' | 'cdc-flatten' | 'union' | 'join'
+  // Geospatial operators (geo-graph-ml GEO-1) — ASA built-in geospatial fns.
+  | 'geo-point' | 'geo-fence' | 'geo-proximity' | 'geo-aggregate';
 
 const ES_OPERATOR_KINDS: Array<{ value: EsOpKind; label: string; icon: ReactNode; hint: string }> = [
   { value: 'filter', label: 'Filter', icon: <Filter20Regular />, hint: 'Keep only events matching a WHERE condition.' },
@@ -110,6 +118,10 @@ const ES_OPERATOR_KINDS: Array<{ value: EsOpKind; label: string; icon: ReactNode
   { value: 'cdc-flatten', label: 'CDC transform (DeltaFlow)', icon: <Branch20Regular />, hint: 'Flatten a Debezium change envelope. Raw mode → tabular rows + __op/__changed_at; Analytics-ready mode → normalized change-type/timestamp columns + keyed, auto-managed destination Delta table (Fabric DeltaFlow parity).' },
   { value: 'union', label: 'Union', icon: <Merge20Regular />, hint: 'Merge all upstream sources into one stream.' },
   { value: 'join', label: 'Join', icon: <Branch20Regular />, hint: 'Temporal JOIN with another source within a time bound.' },
+  { value: 'geo-point', label: 'Geo point', icon: <Location20Regular />, hint: 'Build a GeoJSON point with CreatePoint(lat, lon) from two stream columns.' },
+  { value: 'geo-fence', label: 'Geofence', icon: <LocationTargetSquare20Regular />, hint: 'Keep events inside/outside geofences via ST_WITHIN(point, fence) — inline polygons or an ASA reference-data fence table.' },
+  { value: 'geo-proximity', label: 'Proximity', icon: <LocationLive20Regular />, hint: 'Keep events within a distance threshold via ST_DISTANCE(a, b) < d — against a fixed point or a second stream.' },
+  { value: 'geo-aggregate', label: 'Geo aggregate', icon: <GlobeLocation20Regular />, hint: 'Aggregate per region over a HoppingWindow (requests-per-region pattern).' },
 ];
 
 const ES_CAST_TYPES = ['', 'bigint', 'float', 'nvarchar(max)', 'datetime', 'bit', 'record', 'array'];
@@ -119,6 +131,7 @@ const ES_WINDOW_UNITS = ['second', 'minute', 'hour', 'day'] as const;
 
 /** Default typed config for a freshly-added operator of `kind`. */
 function esDefaultOperator(kind: EsOpKind, n: number): Record<string, any> {
+  if (isGeoTransformKind(kind)) return geoDefaultOperator(kind, n);
   const base = { kind, name: `${kind}-${n}` };
   switch (kind) {
     case 'filter':
@@ -200,6 +213,7 @@ function esManageFieldsSelectList(t: any): string {
   }).join(', ');
 }
 function esSelectList(t: any): string {
+  if (isGeoTransformKind(t.kind)) return geoSelectList(t);
   switch (t.kind) {
     case 'manage-fields': return esManageFieldsSelectList(t);
     case 'cdc-flatten': return cdcFlattenSelectList(t);
@@ -219,6 +233,7 @@ function esSelectList(t: any): string {
 }
 function esTail(t: any, fromRef: string, isSource: boolean, sources: any[]): string {
   const ts = isSource && t.timestampBy ? ` TIMESTAMP BY ${String(t.timestampBy).trim()}` : '';
+  if (isGeoTransformKind(t.kind)) return geoTail(t, fromRef, ts);
   switch (t.kind) {
     case 'filter': {
       const where = (t.expression || '').trim();
@@ -740,6 +755,16 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
         { label: 'CDC flatten', onClick: () => ribbonAdd('transform', { kind: 'cdc-flatten' }) },
         { label: 'Union', onClick: () => ribbonAdd('transform', { kind: 'union' }) },
         { label: 'Join', onClick: () => ribbonAdd('transform', { kind: 'join' }) },
+      ]},
+      { label: 'Geospatial', actions: [
+        { label: 'Geo point', onClick: () => ribbonAdd('transform', { kind: 'geo-point' }),
+          title: 'Build a GeoJSON point with CreatePoint(lat, lon) from two stream columns' },
+        { label: 'Geofence', onClick: () => ribbonAdd('transform', { kind: 'geo-fence' }),
+          title: 'Keep events inside/outside geofences via ST_WITHIN (inline polygons or ASA reference data)' },
+        { label: 'Proximity', onClick: () => ribbonAdd('transform', { kind: 'geo-proximity' }),
+          title: 'Keep events within a distance threshold via ST_DISTANCE' },
+        { label: 'Geo aggregate', onClick: () => ribbonAdd('transform', { kind: 'geo-aggregate' }),
+          title: 'Aggregate per region over a HoppingWindow (requests-per-region)' },
       ]},
       { label: 'Destination', actions: [
         { label: 'KQL Database', onClick: () => ribbonAdd('sink', { kind: 'kusto' }) },
@@ -1786,7 +1811,7 @@ function EventstreamOperatorsTab({
     <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
       <MessageBar intent="info">
         <MessageBarBody>
-          <MessageBarTitle>Guided operator builder — Filter · Manage fields · Aggregate · Group by · Expand · Union · Join</MessageBarTitle>
+          <MessageBarTitle>Guided operator builder — Filter · Manage fields · Aggregate · Group by · Expand · Union · Join · Geo point · Geofence · Proximity · Geo aggregate</MessageBarTitle>
           Build the stream transformation with typed controls (no query typing). The chain compiles to a
           Stream Analytics query shown below — <strong>Validate</strong> runs the real ASA compiler and
           <strong> Apply to ASA</strong> pushes it to the live streaming job. Azure-native — no Fabric required.
@@ -1821,6 +1846,8 @@ function EventstreamOperatorsTab({
           total={transforms.length}
           op={op}
           sources={sources}
+          itemId={id}
+          topology={{ sources, transforms, sinks }}
           onChange={(patch) => updateOp(idx, patch)}
           onRemove={() => removeOp(idx)}
           onMove={(dir) => moveOp(idx, dir)}
@@ -2135,12 +2162,14 @@ function SparkBindingWizard({ open, onClose, onSaved }: { open: boolean; onClose
 
 // ---- one operator card (typed config per Fabric Eventstream operator) ----
 function EsOperatorCard({
-  idx, total, op, sources, onChange, onRemove, onMove,
+  idx, total, op, sources, itemId, topology, onChange, onRemove, onMove,
 }: {
   idx: number;
   total: number;
   op: any;
   sources: any[];
+  itemId?: string;
+  topology?: { sources?: any[]; transforms?: any[]; sinks?: any[] };
   onChange: (patch: Record<string, any>) => void;
   onRemove: () => void;
   onMove: (dir: -1 | 1) => void;
@@ -2360,6 +2389,19 @@ function EsOperatorCard({
         </div>
         );
       })()}
+
+      {/* GEOSPATIAL (geo-point / geo-fence / geo-proximity / geo-aggregate) —
+          the SHARED typed inspector (same surface as the Visual designer's
+          transform inspector, so the two canvases never drift). */}
+      {isGeoTransformKind(kind) && (
+        <GeoOperatorConfig
+          op={op}
+          sources={sources}
+          topology={topology || { sources, transforms: [op], sinks: [] }}
+          itemId={itemId}
+          onChange={onChange}
+        />
+      )}
 
       {/* UNION */}
       {kind === 'union' && (

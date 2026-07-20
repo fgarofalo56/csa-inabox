@@ -78,6 +78,8 @@ import {
   ArrowSwap20Regular, DatabaseArrowRight20Regular, Sparkle20Regular,
 } from '@fluentui/react-icons';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
+import { isGeoTransformKind, geoDefaultOperator, geoNodeSubtitle, type GeoTransformKind } from '@/lib/editors/eventstream/geo-sql';
+import { GeoOperatorConfig } from './geo-operator-config';
 import {
   compileToSaql,
   type SourceKind,
@@ -400,6 +402,8 @@ export function VisualDesigner({ config, onChange, itemId }: VisualDesignerProps
           <AsaTransformInspector
             value={transforms[selected.idx]}
             sources={sources}
+            itemId={itemId}
+            topology={{ sources, transforms, sinks }}
             onChange={(patch) => updateTransform(selected.idx, patch)}
             onDelete={deleteSelected}
           />
@@ -523,7 +527,13 @@ function EventstreamCanvasInner({
       { label: n.name, kind: n.kind, role: 'source' as NodeRole, subtitle: n.namespace || n.iotHub, onDelete: () => onDeleteNode('source', i) },
       selected?.type === 'source' && selected.idx === i));
     transforms.forEach((n, i) => push(`transform-${i}`,
-      { label: n.name, kind: n.kind, role: 'transform' as NodeRole, subtitle: n.expression ? (n.expression.length > 28 ? n.expression.slice(0, 28) + '…' : n.expression) : undefined, onDelete: () => onDeleteNode('transform', i) },
+      {
+        label: n.name, kind: n.kind, role: 'transform' as NodeRole,
+        subtitle: isGeoTransformKind(n.kind)
+          ? geoNodeSubtitle(n as any)
+          : (n.expression ? (n.expression.length > 28 ? n.expression.slice(0, 28) + '…' : n.expression) : undefined),
+        onDelete: () => onDeleteNode('transform', i),
+      },
       selected?.type === 'transform' && selected.idx === i));
     sinks.forEach((n, i) => push(`sink-${i}`,
       { label: n.name, kind: n.kind, role: 'sink' as NodeRole, subtitle: n.table || n.lakehouseId, onDelete: () => onDeleteNode('sink', i) },
@@ -1292,6 +1302,11 @@ const TRANSFORM_KINDS: { value: TransformKind; label: string }[] = [
   { value: 'cdc-flatten', label: 'CDC flatten (DeltaFlow)' },
   { value: 'join', label: 'Join' },
   { value: 'union', label: 'Union' },
+  // Geospatial operators (geo-graph-ml GEO-1) — ASA built-in geospatial fns.
+  { value: 'geo-point', label: 'Geo point (CreatePoint)' },
+  { value: 'geo-fence', label: 'Geofence (ST_WITHIN)' },
+  { value: 'geo-proximity', label: 'Proximity (ST_DISTANCE)' },
+  { value: 'geo-aggregate', label: 'Geo aggregate (per region)' },
 ];
 const AGG_FUNCS: AsaAggregateFunc[] = ['AVG', 'SUM', 'COUNT', 'MIN', 'MAX'];
 const WINDOW_TYPES: AsaWindowType[] = ['Tumbling', 'Hopping', 'Sliding', 'Session', 'Snapshot'];
@@ -1487,11 +1502,17 @@ function WindowPanel({
 export function AsaTransformInspector({
   value,
   sources,
+  itemId,
+  topology,
   onChange,
   onDelete,
 }: {
   value: TransformNode;
   sources: SourceNode[];
+  /** Cosmos item id — enables live column discovery for the geo dropdowns. */
+  itemId?: string;
+  /** Full topology (column-hint fallback for the geo dropdowns). */
+  topology?: { sources?: any[]; transforms?: any[]; sinks?: any[] };
   onChange: (p: Partial<TransformNode>) => void;
   onDelete: () => void;
 }) {
@@ -1513,13 +1534,34 @@ export function AsaTransformInspector({
         <Dropdown
           value={TRANSFORM_KINDS.find((k) => k.value === value.kind)?.label || value.kind}
           selectedOptions={[value.kind]}
-          onOptionSelect={(_: unknown, d: any) => onChange({ kind: (d.optionValue as TransformKind) || 'filter' })}
+          onOptionSelect={(_: unknown, d: any) => {
+            const next = (d.optionValue as TransformKind) || 'filter';
+            // Switching onto a geo kind seeds its typed defaults so the fence
+            // list / threshold slots exist before the panel renders.
+            if (isGeoTransformKind(next) && next !== value.kind) {
+              onChange({ ...(geoDefaultOperator(next as GeoTransformKind, 1) as Partial<TransformNode>), name: value.name });
+            } else {
+              onChange({ kind: next });
+            }
+          }}
         >
           {TRANSFORM_KINDS.map((k) => (
             <Option key={k.value} value={k.value}>{k.label}</Option>
           ))}
         </Dropdown>
       </Field>
+
+      {/* ---- GEOSPATIAL (shared typed inspector — same surface as the guided
+              Operators tab, so the two canvases never drift) ---- */}
+      {isGeoTransformKind(value.kind) && (
+        <GeoOperatorConfig
+          op={value}
+          sources={sources}
+          topology={topology || { sources, transforms: [value], sinks: [] }}
+          itemId={itemId}
+          onChange={onChange as (patch: Record<string, any>) => void}
+        />
+      )}
 
       {/* ---- FILTER ---- */}
       {value.kind === 'filter' && (
