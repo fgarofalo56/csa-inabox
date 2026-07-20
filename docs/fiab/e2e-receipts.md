@@ -20,7 +20,7 @@
 SESSION_SECRET=any-nonempty node scripts/csa-loom/e2e-receipt.mjs --route /catalog --dry-run
 
 # 2. Real receipt — LOCAL, over the P2S VPN, with the real secret from Key Vault
-export LOOM_URL=https://csa-loom.limitlessdata.ai
+export LOOM_URL=https://<your-console-hostname>
 export SESSION_SECRET=$(az keyvault secret show --vault-name <loom-kv> --name session-secret --query value -o tsv)
 node scripts/csa-loom/e2e-receipt.mjs --route /admin/readiness
 
@@ -102,7 +102,7 @@ Env: `SESSION_SECRET` (required, never logged), `LOOM_URL`,
 ## Path 1 — Local, over the P2S VPN
 
 The live console origin is **private-link only**; the public vanity host
-`https://csa-loom.limitlessdata.ai` reaches it through Azure Front Door. The
+`https://<your-console-hostname>` reaches it through Azure Front Door. The
 **session Key Vault is private-link-locked**, so reading `SESSION_SECRET`
 requires being on the network. Connect the admin **P2S VPN**
 (`vpngw-loom-centralus`, AAD/OpenVPN — see
@@ -114,7 +114,7 @@ KV=$(az keyvault list -g rg-csa-loom-admin-centralus --query "[0].name" -o tsv)
 export SESSION_SECRET=$(az keyvault secret show --vault-name "$KV" --name session-secret --query value -o tsv)
 
 # 2. Point at the console + capture
-export LOOM_URL=https://csa-loom.limitlessdata.ai
+export LOOM_URL=https://<your-console-hostname>
 node scripts/csa-loom/e2e-receipt.mjs --route /catalog
 open apps/fiab-console/test-results/receipts/receipt-catalog-light.png
 ```
