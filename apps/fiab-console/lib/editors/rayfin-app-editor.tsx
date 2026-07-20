@@ -107,6 +107,7 @@ const KIND_ICON: Record<ComponentKind, ReactElement> = {
   heading: <TextT20Regular />, progress: <Gauge20Regular />, spacer: <TextT20Regular />, timestamp: <TextT20Regular />,
   'kpi-row': <Gauge20Regular />, gauge: <Gauge20Regular />, callout: <TextT20Regular />, quote: <TextT20Regular />,
   rating: <Gauge20Regular />, 'tag-list': <TextT20Regular />, delta: <Gauge20Regular />, checklist: <TextT20Regular />,
+  avatar: <TextT20Regular />, 'code-block': <TextT20Regular />, 'key-value': <Table20Regular />, countdown: <Gauge20Regular />,
 };
 const KIND_LABEL: Record<ComponentKind, string> = {
   table: 'Table', metric: 'Metric', chart: 'Chart', form: 'Form', text: 'Text',
@@ -114,6 +115,7 @@ const KIND_LABEL: Record<ComponentKind, string> = {
   heading: 'Heading', progress: 'Progress', spacer: 'Spacer', timestamp: 'Timestamp',
   'kpi-row': 'KPI Row', gauge: 'Gauge', callout: 'Callout', quote: 'Quote',
   rating: 'Rating', 'tag-list': 'Tags', delta: 'Delta', checklist: 'Checklist',
+  avatar: 'Avatar', 'code-block': 'Code', 'key-value': 'Key-Value', countdown: 'Countdown',
 };
 const KIND_HINT: Record<ComponentKind, string> = {
   table: 'Add a data table bound to the model — rows from your selected measures and group-by fields.',
@@ -131,6 +133,7 @@ const KIND_HINT: Record<ComponentKind, string> = {
   timestamp: 'Shows when the page rendered.',
   'kpi-row': 'A row of labeled KPI chips.', gauge: 'A value against a min-max range.', callout: 'A highlighted MessageBar note.', quote: 'A styled blockquote.',
   rating: 'Star rating (value / max).', 'tag-list': 'A wrapping row of tag badges.', delta: 'Current vs previous, signed and colored.', checklist: 'Static checklist; [x] lines render checked.',
+  avatar: 'Initials avatar with name and caption.', 'code-block': 'Monospace pre-formatted block.', 'key-value': 'Key: value grid.', countdown: 'Days until a date.',
 };
 
 const useStyles = makeStyles({
@@ -1153,6 +1156,17 @@ function ComponentEditor({ s, comp, objects, entities, rendered, onChange, onDel
         <Field label="Value (0–100)"><Input value={comp.progressValue || ''} onChange={(_, d) => onChange({ progressValue: d.value })} placeholder="75" /></Field>
       ) : comp.kind === 'kpi-row' ? (
         <Field label="KPI items" hint="Comma list of Label=value."><Input value={comp.kpiItems || ''} onChange={(_, d) => onChange({ kpiItems: d.value })} placeholder="Orders=42, Revenue=1.2M" /></Field>
+      ) : comp.kind === 'avatar' ? (
+        <>
+          <Field label="Name"><Input value={comp.avatarName || ''} onChange={(_, d) => onChange({ avatarName: d.value })} placeholder="Ada Lovelace" /></Field>
+          <Field label="Caption"><Input value={comp.avatarCaption || ''} onChange={(_, d) => onChange({ avatarCaption: d.value })} placeholder="Data engineer" /></Field>
+        </>
+      ) : comp.kind === 'code-block' ? (
+        <Field label="Code"><Textarea value={comp.code || ''} onChange={(_, d) => onChange({ code: d.value })} rows={6} resize="vertical" /></Field>
+      ) : comp.kind === 'key-value' ? (
+        <Field label="Pairs" hint={'One "Key: value" per line.'}><Textarea value={comp.keyValues || ''} onChange={(_, d) => onChange({ keyValues: d.value })} rows={5} resize="vertical" /></Field>
+      ) : comp.kind === 'countdown' ? (
+        <Field label="Target date"><Input type="date" value={comp.countdownTo || ''} onChange={(_, d) => onChange({ countdownTo: d.value })} /></Field>
       ) : comp.kind === 'rating' ? (
         <>
           <Field label="Value"><Input value={comp.ratingValue || ''} onChange={(_, d) => onChange({ ratingValue: d.value })} placeholder="4" /></Field>
@@ -1210,6 +1224,23 @@ function ComponentEditor({ s, comp, objects, entities, rendered, onChange, onDel
           </div>
         ) : kind === 'text' ? (
           <Body1>{comp.text}</Body1>
+        ) : kind === 'avatar' ? (
+          (() => { const name = comp.avatarName || comp.title; const initials = name.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]?.toUpperCase() || '').join('') || '?'; return (
+            <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS }}>
+              <div style={{ width: '40px', height: '40px', borderRadius: '50%', backgroundColor: tokens.colorBrandBackground, color: tokens.colorNeutralForegroundOnBrand, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Subtitle2>{initials}</Subtitle2></div>
+              <div><Body1 block>{name}</Body1>{comp.avatarCaption && <Caption1>{comp.avatarCaption}</Caption1>}</div>
+            </div>
+          ); })()
+        ) : kind === 'code-block' ? (
+          <pre style={{ margin: '0', padding: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusMedium, backgroundColor: tokens.colorNeutralBackground3, fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, overflowX: 'auto' }}>{comp.code || '// code'}</pre>
+        ) : kind === 'key-value' ? (
+          (() => { const rows = String(comp.keyValues || '').split('\n').map((l) => l.trim()).filter(Boolean).map((l) => { const i = l.indexOf(':'); return i < 0 ? { k: l, v: '' } : { k: l.slice(0, i).trim(), v: l.slice(i + 1).trim() }; }); return rows.length ? (
+            <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', columnGap: tokens.spacingHorizontalM, rowGap: tokens.spacingVerticalXS }}>
+              {rows.map((r, i) => (<><Caption1 key={`k${i}`}>{r.k}</Caption1><Body1 key={`v${i}`}>{r.v}</Body1></>))}
+            </div>
+          ) : <Caption1>Add pairs in the inspector.</Caption1>; })()
+        ) : kind === 'countdown' ? (
+          (() => { const t = new Date(String(comp.countdownTo || '')); if (isNaN(t.getTime())) return <Caption1>Set a target date in the inspector.</Caption1>; const days = Math.ceil((t.getTime() - Date.now()) / 86_400_000); return <div><Subtitle2>{Math.abs(days)} day{Math.abs(days) === 1 ? '' : 's'}</Subtitle2><Caption1>{days >= 0 ? 'until' : 'since'} {t.toLocaleDateString()}</Caption1></div>; })()
         ) : kind === 'rating' ? (
           (() => { const n = (v: string | undefined, d: number) => { const x = Number(String(v ?? '').replace(/[^0-9.]/g, '')); return Number.isFinite(x) && String(v ?? '') !== '' ? x : d; }; const max = Math.max(1, Math.min(10, Math.round(n(comp.ratingMax, 5)))); const val = Math.max(0, Math.min(max, n(comp.ratingValue, 0))); return <Subtitle2 aria-label={`${val} of ${max}`}>{'★'.repeat(Math.round(val))}{'☆'.repeat(max - Math.round(val))} <Caption1>{val}/{max}</Caption1></Subtitle2>; })()
         ) : kind === 'tag-list' ? (
