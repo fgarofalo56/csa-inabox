@@ -27,7 +27,7 @@ export interface WorkshopVariable {
   defaultValue?: string;
 }
 
-export type WorkshopWidgetKind = 'table' | 'chart' | 'metric' | 'filter' | 'form' | 'button' | 'text' | 'image' | 'link' | 'divider' | 'badge' | 'iframe';
+export type WorkshopWidgetKind = 'table' | 'chart' | 'metric' | 'filter' | 'form' | 'button' | 'text' | 'image' | 'link' | 'divider' | 'badge' | 'iframe' | 'heading' | 'progress' | 'spacer' | 'timestamp';
 
 export interface WorkshopWidgetLayout { x: number; y: number; w: number; h: number }
 
@@ -85,6 +85,10 @@ export interface WorkshopWidget {
   href?: string;
   // badge — Fluent badge color name.
   badgeColor?: 'brand' | 'success' | 'warning' | 'danger' | 'informative';
+  // progress — percent 0..100 (string-encoded; supports {{variable}}).
+  progressValue?: string;
+  // heading — visual level 1..3.
+  headingLevel?: 1 | 2 | 3;
   // button + table events
   events?: WorkshopEvent[];
 }
