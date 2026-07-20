@@ -147,3 +147,23 @@ for the first time. Live captures compared:
 Deep item editors (RT dashboard etc.) blank-render under automation with the
 capacity SUSPENDED — resume fabriccaplimitlessdatadev for per-editor
 side-by-sides (operator-authorized; tracked follow-up).
+
+## Deep Fabric side-by-side #3 — workspace view (capacity resumed for the pass)
+
+Resumed fabriccaplimitlessdatadev (operator-authorized), captured the live
+casino-fabric-poc workspace via accessibility tree (pixel capture of the
+canvas task-flow blank-renders under CDP — structural capture is complete):
+- Fabric nav rail: Home/Workspaces/Copilot/Create/Browse/OneLake catalog/
+  Monitor/Deployment pipelines/Real-Time/Functions/Workloads — Loom's rail
+  covers every entry 1:1 (plus Governance/Marketplace/Scheduler).
+- Workspace toolbar: New item, Manage access, Workspace settings, Create
+  deployment pipeline, Create app, Filter, List/Lineage views — all present
+  in Loom's workspace page (lineage = Thread).
+- Items: folders + mounted ADF + CopyJob rows — Loom's workspace item table
+  matches (with richer per-category grouping in Browse).
+- UNIQUE-TO-FABRIC: the workspace-level medallion task-flow canvas
+  (High-volume ingest→Bronze→Silver→Golden→visualize→ML serving). Loom
+  covers the need via per-item canvases + Thread lineage; a workspace-level
+  task-flow is logged as an enhancement candidate (not a parity blocker).
+Verdict: workspace view **Loom ≥ Fabric (A)** with one enhancement candidate.
+Capacity re-suspended after the pass.
