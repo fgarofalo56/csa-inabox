@@ -123,6 +123,24 @@ describe('gate live status (evalEnv-backed)', () => {
     expect(st.status).toBe('configured');
   });
 
+  it('svc-digital-twins is satisfied by the ADX graph-twin default (no Azure Digital Twins needed)', () => {
+    // GCC-High has no Azure Digital Twins; the ADX graph-twin is the default
+    // backend, gated on LOOM_KUSTO_CLUSTER_URI (emitted whenever adxEnabled).
+    delete process.env.LOOM_ADT_ENDPOINT;
+    delete process.env.LOOM_KUSTO_CLUSTER_URI;
+    const blocked = gateStatus('svc-digital-twins')!;
+    expect(blocked.status).toBe('blocked');
+
+    process.env.LOOM_KUSTO_CLUSTER_URI = 'https://adx-csa-loom.eastus2.kusto.usgovcloudapi.net';
+    try {
+      const st = gateStatus('svc-digital-twins')!;
+      expect(st.status).toBe('configured');
+      expect(st.missing).toEqual([]);
+    } finally {
+      delete process.env.LOOM_KUSTO_CLUSTER_URI;
+    }
+  });
+
   it('evaluates the whole registry in one pass', () => {
     const all = allGateStatuses();
     expect(all.length).toBe(GATES.length);

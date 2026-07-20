@@ -86,7 +86,7 @@ grant), `wizard` (multi-setting flow).
 | `svc-servicebus` | `LOOM_SERVICEBUS_NAMESPACE` | Service Bus editor | resource-picker | — |
 | `svc-iothub` | `LOOM_IOTHUB_SUB` (fallback sub) | IoT Hub editor | env-picker | **yes** (falls back) |
 | `svc-eventgrid-topics` | `LOOM_EVENTGRID_SUB` (fallback sub) | Event Grid topic editor | env-picker | **yes** (falls back) |
-| `svc-digital-twins` | `LOOM_ADT_ENDPOINT` | digital-twin queries | resource-picker | — |
+| `svc-digital-twins` | `LOOM_KUSTO_CLUSTER_URI` (ADX graph-twin default) or `LOOM_ADT_ENDPOINT` (Commercial opt-in) | Digital Twin Builder + twin graph query | resource-picker | **yes** (ADX-backed; no Azure Digital Twins needed) |
 | `svc-azure-maps` | maps backend + client-id/key | report Map visual, geo canvases | resource-picker | deploy (azureMapsEnabled) |
 | `svc-postgres-flex` | `LOOM_POSTGRES_AAD_USER` | Postgres editor | env-picker | — |
 | `svc-pgvector` | `LOOM_PGVECTOR_HOST` | pgvector backend | resource-picker | — |
