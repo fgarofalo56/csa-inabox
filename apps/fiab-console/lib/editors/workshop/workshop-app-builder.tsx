@@ -44,7 +44,7 @@ import {
   Add20Regular, Dismiss16Regular, Play20Regular, ArrowSync20Regular,
   Table20Regular, DataUsage20Regular, NumberSymbol20Regular, DocumentText20Regular,
   Apps20Regular, Filter20Regular, Form20Regular, Cursor20Regular, Edit20Regular,
-  ArrowMaximize20Regular, Flash20Regular, Database20Regular, Code20Regular, Sparkle20Regular,
+  ArrowMaximize20Regular, Flash20Regular, Database20Regular, Code20Regular, Sparkle20Regular, ChevronRight16Regular,
 } from '@fluentui/react-icons';
 import { LoomChart, type LoomChartType } from '@/lib/components/charts/loom-chart';
 import { EmptyState } from '@/lib/components/empty-state';
@@ -114,6 +114,10 @@ const DEFAULT_SIZE: Record<WorkshopWidgetKind, { w: number; h: number }> = {
   'code-block': { w: 448, h: 160 },
   'key-value': { w: 336, h: 160 },
   countdown: { w: 224, h: 96 },
+  'stat-pair': { w: 336, h: 112 },
+  'mini-table': { w: 448, h: 176 },
+  breadcrumb: { w: 448, h: 64 },
+  'json-view': { w: 448, h: 176 },
 };
 
 const KIND_META: Record<WorkshopWidgetKind, { label: string; icon: ReactElement; hint: string; data: boolean }> = {
@@ -145,6 +149,10 @@ const KIND_META: Record<WorkshopWidgetKind, { label: string; icon: ReactElement;
   'code-block': { label: 'Code', icon: <Code20Regular />, hint: 'Monospace pre-formatted block', data: false },
   'key-value': { label: 'Key–Value', icon: <Table20Regular />, hint: 'Key: value lines with {{variable}} interpolation', data: false },
   countdown: { label: 'Countdown', icon: <Flash20Regular />, hint: 'Days remaining until a date', data: false },
+  'stat-pair': { label: 'Stat Pair', icon: <NumberSymbol20Regular />, hint: 'Two labeled stats side by side, {{variable}} values', data: false },
+  'mini-table': { label: 'Mini Table', icon: <Table20Regular />, hint: 'A small static table (CSV: first line headers)', data: false },
+  breadcrumb: { label: 'Breadcrumb', icon: <ChevronRight16Regular />, hint: 'A navigation trail of segments', data: false },
+  'json-view': { label: 'JSON', icon: <Code20Regular />, hint: 'Pretty-printed JSON block', data: false },
 };
 
 const CHART_TYPES: LoomChartType[] = ['column', 'bar', 'line', 'area', 'pie', 'donut'];
@@ -505,6 +513,37 @@ function WidgetBody({
     return <div>{renderText(widget.text || '_Empty text widget — set its content in the inspector._', variables, runtime)}</div>;
   }
 
+  if (widget.kind === 'stat-pair') {
+    const parse = (v: string | undefined) => { const [l, ...r] = String(v || '').split('='); return { l: (l || '').trim(), v: String(renderText(r.join('='), variables, runtime)) }; };
+    const a = parse(widget.statLeft); const b = parse(widget.statRight);
+    return (
+      <div style={{ display: 'flex', gap: tokens.spacingHorizontalL }}>
+        {[a, b].map((x, i) => <div key={i}><Caption1 block>{x.l || '—'}</Caption1><Subtitle2>{x.v}</Subtitle2></div>)}
+      </div>
+    );
+  }
+  if (widget.kind === 'mini-table') {
+    const lines = String(widget.miniTable || '').split('\n').map((l) => l.trim()).filter(Boolean);
+    if (lines.length < 2) return <Caption1 className={s.hint}>First line = headers, following lines = rows (comma-separated).</Caption1>;
+    const heads = lines[0].split(',').map((h) => h.trim());
+    const rows = lines.slice(1).map((l) => l.split(',').map((c) => c.trim()));
+    return (
+      <table style={{ borderCollapse: 'collapse', width: '100%' }}>
+        <thead><tr>{heads.map((h, i) => <th key={i} style={{ textAlign: 'left', padding: tokens.spacingVerticalXS, borderBottom: `1px solid ${tokens.colorNeutralStroke2}` }}><Caption1>{h}</Caption1></th>)}</tr></thead>
+        <tbody>{rows.map((r, ri) => <tr key={ri}>{heads.map((_, ci) => <td key={ci} style={{ padding: tokens.spacingVerticalXS, borderBottom: `1px solid ${tokens.colorNeutralStroke3}` }}><Caption1>{r[ci] ?? ''}</Caption1></td>)}</tr>)}</tbody>
+      </table>
+    );
+  }
+  if (widget.kind === 'breadcrumb') {
+    const crumbs = String(widget.crumbs || '').split(',').map((c) => c.trim()).filter(Boolean);
+    if (!crumbs.length) return <Caption1 className={s.hint}>Add comma-separated segments in the inspector.</Caption1>;
+    return <Caption1>{crumbs.join(' › ')}</Caption1>;
+  }
+  if (widget.kind === 'json-view') {
+    let pretty = String(widget.json || '');
+    try { pretty = JSON.stringify(JSON.parse(pretty), null, 2); } catch { /* show raw */ }
+    return <pre style={{ margin: 0, padding: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusMedium, backgroundColor: tokens.colorNeutralBackground3, fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, overflowX: 'auto' }}>{pretty || '{}'}</pre>;
+  }
   if (widget.kind === 'avatar') {
     const name = String(renderText(widget.avatarName || widget.title, variables, runtime));
     const initials = name.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]?.toUpperCase() || '').join('') || '?';
@@ -899,6 +938,21 @@ function WidgetInspector({
         </Field>
       )}
 
+      {widget.kind === 'stat-pair' && (
+        <>
+          <Field label="Left stat" hint="Label=value; value supports {{variableName}}."><Input value={widget.statLeft || ''} onChange={(_, d) => onChange({ statLeft: d.value })} placeholder="Orders=42" /></Field>
+          <Field label="Right stat"><Input value={widget.statRight || ''} onChange={(_, d) => onChange({ statRight: d.value })} placeholder="Revenue={{revenue}}" /></Field>
+        </>
+      )}
+      {widget.kind === 'mini-table' && (
+        <Field label="Table (CSV)" hint="First line = headers; following lines = rows."><Textarea value={widget.miniTable || ''} onChange={(_, d) => onChange({ miniTable: d.value })} rows={5} resize="vertical" placeholder={'Region, Total\nWest, 42\nEast, 17'} /></Field>
+      )}
+      {widget.kind === 'breadcrumb' && (
+        <Field label="Segments" hint="Comma-separated."><Input value={widget.crumbs || ''} onChange={(_, d) => onChange({ crumbs: d.value })} placeholder="Home, Sales, Q3" /></Field>
+      )}
+      {widget.kind === 'json-view' && (
+        <Field label="JSON" hint="Pretty-printed when valid; raw otherwise."><Textarea value={widget.json || ''} onChange={(_, d) => onChange({ json: d.value })} rows={6} resize="vertical" placeholder='{"region": "West"}' /></Field>
+      )}
       {widget.kind === 'avatar' && (
         <>
           <Field label="Name" hint="Initials derive from it; supports {{variableName}}."><Input value={widget.avatarName || ''} onChange={(_, d) => onChange({ avatarName: d.value })} placeholder="Ada Lovelace" /></Field>
@@ -1247,6 +1301,10 @@ export function WorkshopAppBuilder({ id, entityTypes, widgets, variables, onWidg
       ...(kind === 'code-block' ? { code: 'SELECT *\nFROM orders' } : {}),
       ...(kind === 'key-value' ? { keyValues: 'Owner: Frank\nRegion: Central US' } : {}),
       ...(kind === 'countdown' ? { countdownTo: '2026-12-31' } : {}),
+      ...(kind === 'stat-pair' ? { statLeft: 'Orders=42', statRight: 'Revenue=1.2M' } : {}),
+      ...(kind === 'mini-table' ? { miniTable: 'Region, Total\nWest, 42\nEast, 17' } : {}),
+      ...(kind === 'breadcrumb' ? { crumbs: 'Home, Sales, Q3' } : {}),
+      ...(kind === 'json-view' ? { json: '{"region": "West", "total": 42}' } : {}),
     };
     onWidgetsChange([...widgets, widget]);
     setSelectedId(wid);
