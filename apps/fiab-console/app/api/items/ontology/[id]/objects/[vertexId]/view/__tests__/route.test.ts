@@ -10,8 +10,13 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
-const getSessionMock = vi.fn(() => ({ claims: { oid: 'o' }, exp: Date.now() / 1000 + 3600 }) as any);
+const getSessionMock = vi.fn(() => ({ claims: { oid: 'o', groups: [] }, exp: Date.now() / 1000 + 3600 }) as any);
 vi.mock('@/lib/auth/session', () => ({ getSession: () => getSessionMock() }));
+
+vi.mock('@/lib/auth/pdp/enforce', () => ({ pdpCheck: vi.fn(async () => null) }));
+const isTenantAdminTierMock = vi.fn(() => false);
+vi.mock('@/lib/auth/domain-role', () => ({ isTenantAdminTier: (...a: any[]) => isTenantAdminTierMock(...a) }));
+vi.mock('@/lib/azure/object-security-audit', () => ({ auditObjectSecurity: vi.fn() }));
 
 const loadOwnedItemMock = vi.fn();
 vi.mock('@/app/api/items/_lib/item-crud', () => ({ loadOwnedItem: (...a: any[]) => loadOwnedItemMock(...a) }));
@@ -45,7 +50,8 @@ const ONTO = {
 };
 
 beforeEach(() => {
-  getSessionMock.mockReturnValue({ claims: { oid: 'o' }, exp: Date.now() / 1000 + 3600 } as any);
+  getSessionMock.mockReturnValue({ claims: { oid: 'o', groups: [] }, exp: Date.now() / 1000 + 3600 } as any);
+  isTenantAdminTierMock.mockReset().mockReturnValue(false);
   loadOwnedItemMock.mockReset().mockResolvedValue(ONTO);
   weaveGateMock.mockReset().mockReturnValue(null);
   getObjectMock.mockReset().mockResolvedValue({ id: '5', objectType: 'Reading', properties: { ts: '2024-01-02', value: 20 } });
@@ -99,5 +105,75 @@ describe('GET object view', () => {
   it('400s when objectType is missing', async () => {
     const r = await GET(req(), ctx('onto1', '5'));
     expect(r.status).toBe(400);
+  });
+});
+
+describe('GET object view — WS-4.3 object-level security', () => {
+  // Reading has a property marking on `value` (cleared group g-cleared) and a
+  // row marking on `ts` — clearance value "2024-01-02" needs g-cleared.
+  const SECURED = {
+    id: 'onto1',
+    state: {
+      ...ONTO.state,
+      objectSecurity: {
+        objectTypes: [
+          {
+            objectType: 'Reading',
+            propertyMarkings: [{ property: 'value', allowGroups: [{ id: 'g-cleared', name: 'Cleared' }] }],
+          },
+        ],
+      },
+    },
+  };
+
+  it('masks a gated property for a restricted caller (server-side drop)', async () => {
+    loadOwnedItemMock.mockResolvedValue(SECURED);
+    getSessionMock.mockReturnValue({ claims: { oid: 'o', groups: ['g-other'] }, exp: Date.now() / 1000 + 3600 } as any);
+    const r = await GET(req('Reading'), ctx('onto1', '5'));
+    expect(r.status).toBe(200);
+    const j = await r.json();
+    expect(j.object.properties.value).toBeUndefined(); // masked value never serialized
+    expect(j.object.properties.ts).toBe('2024-01-02'); // ungated property still present
+    expect(j.security.restricted).toBe(true);
+    expect(j.security.maskedProperties).toContain('value');
+  });
+
+  it('returns the gated property to a cleared caller', async () => {
+    loadOwnedItemMock.mockResolvedValue(SECURED);
+    getSessionMock.mockReturnValue({ claims: { oid: 'o', groups: ['g-cleared'] }, exp: Date.now() / 1000 + 3600 } as any);
+    const r = await GET(req('Reading'), ctx('onto1', '5'));
+    const j = await r.json();
+    expect(j.object.properties.value).toBe(20);
+    expect(j.security.restricted).toBe(false);
+  });
+
+  it('403s a row-restricted instance for a caller not cleared for its marking value', async () => {
+    loadOwnedItemMock.mockResolvedValue({
+      id: 'onto1',
+      state: {
+        ...ONTO.state,
+        objectSecurity: {
+          objectTypes: [{
+            objectType: 'Reading',
+            rowMarking: { markingProperty: 'ts', clearances: [{ value: '2024-01-02', allowGroups: [{ id: 'g-cleared' }] }] },
+          }],
+        },
+      },
+    });
+    getSessionMock.mockReturnValue({ claims: { oid: 'o', groups: ['g-other'] }, exp: Date.now() / 1000 + 3600 } as any);
+    const r = await GET(req('Reading'), ctx('onto1', '5'));
+    expect(r.status).toBe(403);
+    const j = await r.json();
+    expect(j.code).toBe('row_forbidden');
+  });
+
+  it('tenant admins bypass all markings', async () => {
+    loadOwnedItemMock.mockResolvedValue(SECURED);
+    isTenantAdminTierMock.mockReturnValue(true);
+    getSessionMock.mockReturnValue({ claims: { oid: 'o', groups: [] }, exp: Date.now() / 1000 + 3600 } as any);
+    const r = await GET(req('Reading'), ctx('onto1', '5'));
+    const j = await r.json();
+    expect(j.object.properties.value).toBe(20);
+    expect(j.security.restricted).toBe(false);
   });
 });

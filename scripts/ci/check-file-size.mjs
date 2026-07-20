@@ -131,7 +131,7 @@ const ALLOWLIST = {
   "apps/fiab-console/lib/azure/aas-client.ts": { max: 3000, reason: "pre-existing large module — ratchet-frozen" },
   "apps/fiab-console/lib/azure/unity-catalog-client.ts": { max: 2900, reason: "pre-existing large module — ratchet-frozen" },
   "apps/fiab-console/lib/editors/phase4/plan-editor.tsx": { max: 2900, reason: "pre-existing large module — ratchet-frozen" },
-  "apps/fiab-console/lib/editors/phase4/ontology-editor.tsx": { max: 2800, reason: "pre-existing large module — ratchet-frozen" },
+  "apps/fiab-console/lib/editors/phase4/ontology-editor.tsx": { max: 2900, reason: "large module — WS-4.3 Security tab wiring; heavy markings UI extracted to ontology-security-panel.tsx" },
   "apps/fiab-console/lib/azure/purview-client.ts": { max: 2800, reason: "pre-existing large module — ratchet-frozen" },
   "apps/fiab-console/lib/components/charts/loom-chart.tsx": { max: 2800, reason: "pre-existing large module — ratchet-frozen" },
   "apps/fiab-console/lib/azure/copilot-orchestrator.ts": { max: 2800, reason: "pre-existing large module — ratchet-frozen" },
