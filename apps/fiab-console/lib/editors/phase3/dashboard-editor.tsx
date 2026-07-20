@@ -357,7 +357,11 @@ export function DashboardEditor({ item, id }: { item: FabricItemType; id: string
     <ItemEditorChrome splitKeyPrefix={item.slug} item={item} id={id} ribbon={dashRibbon} dirty={dirty}
       leftPanel={
         <div className={s.treePad}>
-          <Subtitle2 style={{ marginBottom: tokens.spacingVerticalS}}>Power BI dashboards</Subtitle2>
+          {/* ux-standards §2.3: every section header carries a Fluent glyph. */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, marginBottom: tokens.spacingVerticalS }}>
+            <Database20Regular />
+            <Subtitle2>Power BI dashboards</Subtitle2>
+          </div>
           {!workspaceId && <Caption1>Select a workspace to link a Power BI dashboard (optional).</Caption1>}
           {dashboards && dashboards.length === 0 && <Caption1>No dashboards in this workspace.</Caption1>}
           <Tree aria-label="Dashboards">
@@ -591,8 +595,18 @@ function LoomTileCard({ tile, result, onRefresh, onFullscreen, onRemove }: {
       <div className={tc.tileHeader}>
         {kindIcon[tile.kind]}
         <Caption1 className={tc.tileTitle}>{tile.title}</Caption1>
-        <Badge appearance="tint" size="small">{kindLabel[tile.kind]}</Badge>
-        {tile.kind === 'streaming-adx' && tile.autoRefreshMs ? <Badge appearance="outline" size="small">{Math.round(tile.autoRefreshMs / 1000)}s</Badge> : null}
+        {/* ux-standards §9.4: at most ONE badge on the tile face — the refresh
+            cadence for streaming tiles moves into the badge tooltip rather than a
+            second badge, and flexShrink:0 keeps it from overlapping the title at
+            narrow tile widths (§9.5). */}
+        <Tooltip
+          content={tile.kind === 'streaming-adx' && tile.autoRefreshMs
+            ? `${kindLabel[tile.kind]} tile · auto-refreshes every ${Math.round(tile.autoRefreshMs / 1000)}s`
+            : `${kindLabel[tile.kind]} tile`}
+          relationship="label"
+        >
+          <Badge appearance="tint" size="small" style={{ flexShrink: 0 }}>{kindLabel[tile.kind]}</Badge>
+        </Tooltip>
         <div className={mergeClasses(tc.tileActions, 'tile-actions')}>
           <Tooltip content="Refresh" relationship="label"><Button size="small" appearance="subtle" icon={<ArrowSync20Regular />} onClick={onRefresh} aria-label="Refresh tile" /></Tooltip>
           <Tooltip content="Fullscreen" relationship="label"><Button size="small" appearance="subtle" icon={<ArrowMaximize20Regular />} onClick={onFullscreen} aria-label="Fullscreen tile" /></Tooltip>
