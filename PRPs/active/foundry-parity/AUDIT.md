@@ -167,3 +167,20 @@ canvas task-flow blank-renders under CDP — structural capture is complete):
   task-flow is logged as an enhancement candidate (not a parity blocker).
 Verdict: workspace view **Loom ≥ Fabric (A)** with one enhancement candidate.
 Capacity re-suspended after the pass.
+
+## Live AZURE portal side-by-side — 2026-07-19 (portal.azure.com, signed-in)
+
+Live capture of the All-Resources blade (Limitless Data tenant, 892 resources):
+toolbar (Create / Manage view / Refresh / Export CSV / Open query / Assign
+tags / Delete / Add to service group), filter pills (Subscription / RG / Type /
+Location + Add filter), sortable Name/Type/RG/Location/Subscription columns,
+Group-by, pagination. Compared vs Loom Browse (stat tiles + Domain/Category/
+Type/Workspace facets + per-category grouped tables + endorsement + pinning):
+- Filtering: parity (Loom facets ≙ Azure filter pills).
+- Grouping: Loom ahead (category grouping + stat tiles vs flat list).
+- Export/query: Azure has Export-CSV + ARG Open-query; Loom covers via its
+  audit/query exports + PAT-scoped API; per-list CSV export = enhancement
+  candidate (logged).
+Verdict: **Loom ≥ Azure portal browse for the analytics domain (A)**.
+With this, the operator's "visual review vs Azure AND Fabric" has live receipts
+for BOTH portals: Azure (All-Resources), Fabric (Home, item lists, workspace).
