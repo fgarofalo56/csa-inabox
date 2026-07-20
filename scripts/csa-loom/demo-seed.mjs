@@ -81,6 +81,160 @@ async function installApp(appId, wsId) {
   console.log(`      install ${appId}: still running (items created; provisioning continues async)`);
 }
 
+// ── Content stamping (task #17) ──────────────────────────────────────────────
+// After the shell items exist, fill the authored-content shells IN PLACE via the
+// content-authoring routes so the demo actually demos (dashboards render tiles,
+// the report binds a semantic model, the scorecard shows goals, the paginated
+// report renders an RDL). Every step is idempotent + additive + best-effort — a
+// missing backend/route logs a ::warn:: and never aborts the seed.
+
+const LAKE_DB = 'loom_lakehouse';         // serverless db holding the gold views
+const ADX_DB = 'loomdb_default';          // ADX db holding the sample telemetry
+
+async function listItems(wsId) {
+  const r = await api('GET', `/api/workspaces/${wsId}/items`);
+  return Array.isArray(r.json) ? r.json : (r.json?.items || []);
+}
+const findItem = (items, type, nameIncludes) =>
+  items.find((i) => i.itemType === type && (!nameIncludes || String(i.displayName || '').includes(nameIncludes)));
+
+/** Ensure the denormalized dbo.loom_sales_wide view (+ its inputs) exist on the
+ *  serverless lakehouse, so the semantic model / report / scorecard / RDL all
+ *  have a single real table to bind. Best-effort: no-ops if the gold views the
+ *  medallion apps create aren't present yet. */
+async function ensureSalesWideView(lakehouseId) {
+  if (!lakehouseId) { console.log('    ::warn:: no lakehouse item — skipping loom_sales_wide view'); return false; }
+  const sql = `CREATE OR ALTER VIEW dbo.loom_sales_wide AS
+    SELECT f.order_id, dc.customer_name, dc.customer_segment, dc.country,
+           dp.product_name, dp.category, d.month_name, d.[year] AS order_year,
+           f.quantity, f.extended_amount, f.margin_amount, f.cost_amount
+    FROM lakehouse.fact_sales f
+    JOIN lakehouse.dim_customer dc ON f.customer_key = dc.customer_key
+    JOIN lakehouse.dim_product  dp ON f.product_key  = dp.product_key
+    JOIN lakehouse.dim_date     d  ON f.date_key     = d.date_key`;
+  const r = await api('POST', `/api/items/lakehouse/${lakehouseId}/query`, { database: LAKE_DB, sql });
+  if (r.status >= 300 || r.json?.ok === false) {
+    console.log(`    ::warn:: loom_sales_wide view not created (gold views may not exist yet): ${JSON.stringify(r.json).slice(0,140)}`);
+    return false;
+  }
+  console.log('    ✓ ensured view: dbo.loom_sales_wide');
+  return true;
+}
+
+const DASHBOARD_TILES = {
+  earthquakes: [
+    { title: 'Total Seismic Events', kql: 'SampleEarthquakes | count', viz: 'stat', database: ADX_DB, w: 3, h: 2 },
+    { title: 'Events by Magnitude Band', kql: 'SampleEarthquakes | summarize Events=count() by MagBand=bin(Magnitude,1.0) | order by MagBand asc', viz: 'bar', database: ADX_DB, w: 5, h: 3 },
+    { title: 'Strongest Quakes', kql: 'SampleEarthquakes | top 5 by Magnitude desc | project Place, Magnitude, Depth, EventTime', viz: 'table', database: ADX_DB, w: 6, h: 3 },
+  ],
+};
+
+async function stampDashboards(items) {
+  const dashboards = items.filter((i) => i.itemType === 'kql-dashboard');
+  for (const dash of dashboards) {
+    const cur = await api('GET', `/api/items/kql-dashboard/${dash.id}`);
+    const existing = Array.isArray(cur.json?.tiles) ? cur.json.tiles : [];
+    if (existing.length > 0) { console.log(`    ✓ dashboard already has ${existing.length} tiles: ${dash.displayName}`); continue; }
+    const body = { timeRange: 'last-24h', autoRefreshMs: 0,
+      dataSources: [{ id: 'ds1', name: 'Telemetry ADX', database: ADX_DB }],
+      tiles: DASHBOARD_TILES.earthquakes };
+    const r = await api('PUT', `/api/items/kql-dashboard/${dash.id}`, body);
+    if (r.status >= 300 || r.json?.ok === false) { console.log(`    ::warn:: dashboard tiles ${dash.displayName} -> ${r.status} ${JSON.stringify(r.json).slice(0,120)}`); continue; }
+    console.log(`    ✓ stamped ${DASHBOARD_TILES.earthquakes.length} tiles: ${dash.displayName}`);
+  }
+}
+
+async function stampSemanticModel(items) {
+  const sm = findItem(items, 'semantic-model', 'Sales Semantic Model');
+  if (!sm) { console.log('    ::warn:: no Sales Semantic Model item to stamp'); return null; }
+  const cur = await api('GET', `/api/items/semantic-model/${sm.id}/content`);
+  if (cur.json?.content?.tables?.length) { console.log('    ✓ semantic model already has content'); return sm.id; }
+  const content = {
+    kind: 'semantic-model',
+    tables: [{
+      name: 'loom_sales_wide',
+      columns: [
+        { name: 'order_id', dataType: 'String' }, { name: 'customer_name', dataType: 'String' },
+        { name: 'customer_segment', dataType: 'String' }, { name: 'country', dataType: 'String' },
+        { name: 'product_name', dataType: 'String' }, { name: 'category', dataType: 'String' },
+        { name: 'month_name', dataType: 'String' }, { name: 'order_year', dataType: 'String' },
+        { name: 'quantity', dataType: 'Int64' }, { name: 'extended_amount', dataType: 'Double' },
+        { name: 'margin_amount', dataType: 'Double' }, { name: 'cost_amount', dataType: 'Double' },
+      ],
+    }],
+    measures: [
+      { table: 'loom_sales_wide', name: 'Total Sales', expression: "CALCULATE(SUM('loom_sales_wide'[extended_amount]))", formatString: '$#,0' },
+      { table: 'loom_sales_wide', name: 'Total Margin', expression: "CALCULATE(SUM('loom_sales_wide'[margin_amount]))", formatString: '$#,0' },
+    ],
+  };
+  const r = await api('PUT', `/api/items/semantic-model/${sm.id}/content`, { content, sourceTarget: 'lakehouse', sourceSchema: 'dbo', sourceDatabase: LAKE_DB });
+  if (r.status >= 300 || r.json?.ok === false) { console.log(`    ::warn:: semantic model content -> ${r.status} ${JSON.stringify(r.json).slice(0,140)}`); return sm.id; }
+  console.log('    ✓ stamped semantic model content (loom_sales_wide + 2 measures)');
+  return sm.id;
+}
+
+async function stampScorecard(items) {
+  const sc = findItem(items, 'scorecard', 'Revenue KPI');
+  if (!sc) { console.log('    ::warn:: no Revenue KPI Scorecard item to stamp'); return; }
+  const cur = await api('GET', `/api/items/scorecard/${sc.id}/goals`);
+  if (Array.isArray(cur.json?.goals) && cur.json.goals.length) { console.log('    ✓ scorecard already has goals'); return; }
+  const goals = [
+    { id: 'goal-total-sales', name: 'Total Sales', metric: 'USD', target: 5000, current: 0 },
+    { id: 'goal-total-margin', name: 'Total Margin', metric: 'USD', target: 2000, current: 0 },
+  ];
+  const r = await api('POST', `/api/items/scorecard/${sc.id}/goals`, { goals });
+  if (r.status >= 300 || r.json?.ok === false) { console.log(`    ::warn:: scorecard goals -> ${r.status} ${JSON.stringify(r.json).slice(0,140)}`); return; }
+  console.log(`    ✓ stamped ${goals.length} scorecard goals`);
+  // Bind each goal to a Loom-native (serverless SQL) metric — no Power BI / Fabric.
+  const binds = [
+    ['goal-total-sales', 'SELECT SUM(extended_amount) AS v FROM dbo.loom_sales_wide'],
+    ['goal-total-margin', 'SELECT SUM(margin_amount) AS v FROM dbo.loom_sales_wide'],
+  ];
+  for (const [goalId, sqlQuery] of binds) {
+    const b = await api('POST', `/api/items/scorecard/${sc.id}`, { goalId, connectedMetric: { sqlQuery, database: LAKE_DB } });
+    if (b.status >= 300 || b.json?.ok === false) { console.log(`    ::warn:: bind metric ${goalId} -> ${b.status} ${JSON.stringify(b.json).slice(0,120)}`); }
+  }
+}
+
+const INVOICE_RDL = `<?xml version="1.0" encoding="utf-8"?>
+<Report xmlns="http://schemas.microsoft.com/sqlserver/reporting/2016/01/reportdefinition">
+  <DataSources><DataSource Name="LoomSynapse"><ConnectionProperties><DataProvider>SQL</DataProvider><ConnectString>Data Source=serverless;Initial Catalog=master</ConnectString></ConnectionProperties></DataSource></DataSources>
+  <DataSets><DataSet Name="SalesByCategory">
+    <Query><DataSourceName>LoomSynapse</DataSourceName><CommandText>SELECT category, SUM(extended_amount) AS total, SUM(margin_amount) AS margin FROM ${LAKE_DB}.dbo.loom_sales_wide GROUP BY category ORDER BY total DESC</CommandText></Query>
+    <Fields><Field Name="category"><DataField>category</DataField></Field><Field Name="total"><DataField>total</DataField></Field><Field Name="margin"><DataField>margin</DataField></Field></Fields>
+  </DataSet></DataSets>
+  <Body><ReportItems><Tablix Name="Tablix1"><TablixBody>
+    <TablixColumns><TablixColumn><Width>3in</Width></TablixColumn><TablixColumn><Width>2in</Width></TablixColumn></TablixColumns>
+    <TablixRows><TablixRow><Height>0.25in</Height><TablixCells>
+      <TablixCell><CellContents><Textbox Name="c1"><Paragraphs><Paragraph><TextRuns><TextRun><Value>=Fields!category.Value</Value></TextRun></TextRuns></Paragraph></Paragraphs></Textbox></CellContents></TablixCell>
+      <TablixCell><CellContents><Textbox Name="c2"><Paragraphs><Paragraph><TextRuns><TextRun><Value>=Fields!total.Value</Value></TextRun></TextRuns></Paragraph></Paragraphs></Textbox></CellContents></TablixCell>
+    </TablixCells></TablixRow></TablixRows>
+  </TablixBody><DataSetName>SalesByCategory</DataSetName></Tablix></ReportItems></Body>
+  <Width>7in</Width>
+</Report>`;
+
+async function stampPaginatedRdl(items) {
+  const pr = findItem(items, 'paginated-report', 'Invoice');
+  if (!pr) { console.log('    ::warn:: no Invoice Paginated Report item to stamp'); return; }
+  const cur = await api('GET', `/api/items/paginated-report/${pr.id}/rdl`);
+  if (cur.json?.rdl && String(cur.json.rdl).trim()) { console.log('    ✓ paginated report already has an RDL'); return; }
+  const r = await api('PUT', `/api/items/paginated-report/${pr.id}/rdl`, { rdl: INVOICE_RDL });
+  if (r.status >= 300 || r.json?.ok === false) { console.log(`    ::warn:: paginated RDL -> ${r.status} ${JSON.stringify(r.json).slice(0,140)}`); return; }
+  console.log('    ✓ stamped default invoice RDL');
+}
+
+/** Fill the authored-content shells in the demo workspace (idempotent). */
+async function stampDemoContent(wsId) {
+  console.log('  · stamping authored content (task #17 content-authoring routes)…');
+  const items = await listItems(wsId);
+  const lakehouse = findItem(items, 'lakehouse', 'Sales Lakehouse');
+  await ensureSalesWideView(lakehouse?.id);
+  await stampDashboards(items);
+  await stampSemanticModel(items);
+  await stampScorecard(items);
+  await stampPaginatedRdl(items);
+}
+
 // ── The demo layout ──────────────────────────────────────────────────────────
 // A clean, hand-curated flagship workspace that tells the medallion → Direct Lake
 // → report + real-time + AI/governance story end to end.
@@ -135,6 +289,9 @@ async function main() {
   const demoWs = await ensureWorkspace('CSA Loom Demo');
   if (demoWs) {
     for (const [type, label] of SHOWCASE_ITEMS) await createItem(demoWs, type, label);
+    // Fill the authored-content shells in place (dashboards/semantic-model/
+    // scorecard/paginated-report) via the content-authoring routes — idempotent.
+    await stampDemoContent(demoWs);
   }
   // 2) One workspace PER app so each vertical is clean + navigable. Kick installs
   //    off (async provisioning continues on the backend); don't block the whole
