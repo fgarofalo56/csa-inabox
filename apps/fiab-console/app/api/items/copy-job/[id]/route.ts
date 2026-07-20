@@ -8,9 +8,10 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { deletePipeline } from '@/lib/azure/synapse-dev-client';
 import {
-  deleteOwnedItem, jerr, loadOwnedItem, updateOwnedItem,
+  deleteOwnedItem, jerr, updateOwnedItem,
 } from '../../_lib/item-crud';
-import { apiServerError } from '@/lib/api/respond';
+import { apiOk, apiServerError } from '@/lib/api/respond';
+import { withWorkspaceOwner } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -18,17 +19,11 @@ export const dynamic = 'force-dynamic';
 const ITEM_TYPE = 'copy-job';
 const pipelineName = (id: string) => `loom-copy-${id}`;
 
-export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return jerr('unauthenticated', 401);
-  try {
-    const item = await loadOwnedItem((await ctx.params).id, ITEM_TYPE, session.claims.oid);
-    if (!item) return jerr('not found', 404);
-    return NextResponse.json({ ok: true, item });
-  } catch (e: any) {
-    return apiServerError(e);
-  }
-}
+// WS-D1: owner-scoped GET adopted onto `withWorkspaceOwner` (write-scoped, the
+// wrapper default). PUT/DELETE keep the `updateOwnedItem`/`deleteOwnedItem`
+// owner helpers (they resolve ownership internally) — both remain route-guard
+// recognized.
+export const GET = withWorkspaceOwner(ITEM_TYPE, (_req, { item }) => apiOk({ item }));
 
 export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();

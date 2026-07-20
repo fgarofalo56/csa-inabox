@@ -1,16 +1,14 @@
 /** GET /api/copilot/tools — registered orchestrator tools, grouped by service. */
-import { NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { getRegistry } from '@/lib/azure/copilot-orchestrator';
+import { apiOk } from '@/lib/api/respond';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET() {
-  const session = getSession();
-  if (!session) {
-    return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  }
+// WS-D1: session-only route adopted onto `withSession` — the wrapper runs the
+// exact `getSession()` 401 check; the body is pure work.
+export const GET = withSession(() => {
   const reg = getRegistry();
   const tools = reg.list().map((t) => ({
     name: t.name,
@@ -27,5 +25,5 @@ export async function GET() {
     if (!grouped[t.service]) grouped[t.service] = [];
     grouped[t.service].push(t);
   }
-  return NextResponse.json({ ok: true, count: tools.length, tools, grouped });
-}
+  return apiOk({ count: tools.length, tools, grouped });
+});
