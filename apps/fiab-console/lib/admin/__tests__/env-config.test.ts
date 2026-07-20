@@ -154,7 +154,10 @@ describe('admin/env-config registry', () => {
     // Bumped to 135 by access-governance W4 (svc-graph-group-sync:
     // LOOM_GRAPH_GROUP_SYNC_ENABLED — opt-in, optionalDefault, Graph read-only
     // Entra group reconcile for group-targeted access packages).
-    expect(EDITABLE_ENV.length).toBe(135);
+    // Bumped to 136 by the Gov-89 AAS recognition: LOOM_SEMANTIC_BACKEND joins
+    // the svc-aas anyOf (the Loom-native tabular layer is the DEFAULT engine;
+    // AAS is an optional Commercial/GCC fast-path, unavailable in GCC-High).
+    expect(EDITABLE_ENV.length).toBe(136);
   });
 
   it('surfaces the wave-2 env vars as settable (previously dropped by the whitelist)', () => {
