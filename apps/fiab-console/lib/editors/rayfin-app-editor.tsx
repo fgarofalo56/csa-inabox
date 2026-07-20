@@ -108,6 +108,7 @@ const KIND_ICON: Record<ComponentKind, ReactElement> = {
   'kpi-row': <Gauge20Regular />, gauge: <Gauge20Regular />, callout: <TextT20Regular />, quote: <TextT20Regular />,
   rating: <Gauge20Regular />, 'tag-list': <TextT20Regular />, delta: <Gauge20Regular />, checklist: <TextT20Regular />,
   avatar: <TextT20Regular />, 'code-block': <TextT20Regular />, 'key-value': <Table20Regular />, countdown: <Gauge20Regular />,
+  'stat-pair': <Gauge20Regular />, 'mini-table': <Table20Regular />, breadcrumb: <TextT20Regular />, 'json-view': <TextT20Regular />,
 };
 const KIND_LABEL: Record<ComponentKind, string> = {
   table: 'Table', metric: 'Metric', chart: 'Chart', form: 'Form', text: 'Text',
@@ -116,6 +117,7 @@ const KIND_LABEL: Record<ComponentKind, string> = {
   'kpi-row': 'KPI Row', gauge: 'Gauge', callout: 'Callout', quote: 'Quote',
   rating: 'Rating', 'tag-list': 'Tags', delta: 'Delta', checklist: 'Checklist',
   avatar: 'Avatar', 'code-block': 'Code', 'key-value': 'Key-Value', countdown: 'Countdown',
+  'stat-pair': 'Stat Pair', 'mini-table': 'Mini Table', breadcrumb: 'Breadcrumb', 'json-view': 'JSON',
 };
 const KIND_HINT: Record<ComponentKind, string> = {
   table: 'Add a data table bound to the model — rows from your selected measures and group-by fields.',
@@ -134,10 +136,13 @@ const KIND_HINT: Record<ComponentKind, string> = {
   'kpi-row': 'A row of labeled KPI chips.', gauge: 'A value against a min-max range.', callout: 'A highlighted MessageBar note.', quote: 'A styled blockquote.',
   rating: 'Star rating (value / max).', 'tag-list': 'A wrapping row of tag badges.', delta: 'Current vs previous, signed and colored.', checklist: 'Static checklist; [x] lines render checked.',
   avatar: 'Initials avatar with name and caption.', 'code-block': 'Monospace pre-formatted block.', 'key-value': 'Key: value grid.', countdown: 'Days until a date.',
+  'stat-pair': 'Two labeled stats side by side.', 'mini-table': 'A small static CSV table.', breadcrumb: 'A navigation trail.', 'json-view': 'Pretty-printed JSON block.',
 };
 
 const useStyles = makeStyles({
   root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, padding: tokens.spacingVerticalM, minWidth: 0, maxWidth: '100%' },
+  miniTh: { textAlign: 'left', padding: tokens.spacingVerticalXS, borderBottom: `1px solid ${tokens.colorNeutralStroke2}` },
+  miniTd: { padding: tokens.spacingVerticalXS, borderBottom: `1px solid ${tokens.colorNeutralStroke3}` },
   row: { display: 'flex', gap: tokens.spacingVerticalM, flexWrap: 'wrap', alignItems: 'flex-end' },
   cols: { display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1fr)', gap: tokens.spacingVerticalL, minWidth: 0 },
   builderCols: { display: 'grid', gridTemplateColumns: '260px minmax(0,1fr)', gap: tokens.spacingVerticalL, minWidth: 0 },
@@ -1156,6 +1161,17 @@ function ComponentEditor({ s, comp, objects, entities, rendered, onChange, onDel
         <Field label="Value (0–100)"><Input value={comp.progressValue || ''} onChange={(_, d) => onChange({ progressValue: d.value })} placeholder="75" /></Field>
       ) : comp.kind === 'kpi-row' ? (
         <Field label="KPI items" hint="Comma list of Label=value."><Input value={comp.kpiItems || ''} onChange={(_, d) => onChange({ kpiItems: d.value })} placeholder="Orders=42, Revenue=1.2M" /></Field>
+      ) : comp.kind === 'stat-pair' ? (
+        <>
+          <Field label="Left stat" hint="Label=value."><Input value={comp.statLeft || ''} onChange={(_, d) => onChange({ statLeft: d.value })} placeholder="Orders=42" /></Field>
+          <Field label="Right stat"><Input value={comp.statRight || ''} onChange={(_, d) => onChange({ statRight: d.value })} placeholder="Revenue=1.2M" /></Field>
+        </>
+      ) : comp.kind === 'mini-table' ? (
+        <Field label="Table (CSV)" hint="First line = headers."><Textarea value={comp.miniTable || ''} onChange={(_, d) => onChange({ miniTable: d.value })} rows={5} resize="vertical" /></Field>
+      ) : comp.kind === 'breadcrumb' ? (
+        <Field label="Segments" hint="Comma-separated."><Input value={comp.crumbs || ''} onChange={(_, d) => onChange({ crumbs: d.value })} placeholder="Home, Sales, Q3" /></Field>
+      ) : comp.kind === 'json-view' ? (
+        <Field label="JSON"><Textarea aria-label="JSON data payload shown by the JSON card" value={comp.json || ''} onChange={(_, d) => onChange({ json: d.value })} rows={6} resize="vertical" /></Field>
       ) : comp.kind === 'avatar' ? (
         <>
           <Field label="Name"><Input value={comp.avatarName || ''} onChange={(_, d) => onChange({ avatarName: d.value })} placeholder="Ada Lovelace" /></Field>
@@ -1224,6 +1240,21 @@ function ComponentEditor({ s, comp, objects, entities, rendered, onChange, onDel
           </div>
         ) : kind === 'text' ? (
           <Body1>{comp.text}</Body1>
+        ) : kind === 'stat-pair' ? (
+          (() => { const parse = (v: string | undefined) => { const [l, ...r] = String(v || '').split('='); return { l: (l || '').trim(), v: r.join('=') }; }; const a = parse(comp.statLeft); const b = parse(comp.statRight); return (
+            <div style={{ display: 'flex', gap: tokens.spacingHorizontalL }}>{[a, b].map((x, i) => <div key={i}><Caption1 block>{x.l || '—'}</Caption1><Subtitle2>{x.v}</Subtitle2></div>)}</div>
+          ); })()
+        ) : kind === 'mini-table' ? (
+          (() => { const lines = String(comp.miniTable || '').split('\n').map((l) => l.trim()).filter(Boolean); if (lines.length < 2) return <Caption1>First line = headers; following = rows.</Caption1>; const heads = lines[0].split(',').map((h) => h.trim()); const rows = lines.slice(1).map((l) => l.split(',').map((c) => c.trim())); return (
+            <table style={{ borderCollapse: 'collapse', width: '100%' }}>
+              <thead><tr>{heads.map((h, i) => <th key={i} className={s.miniTh}><Caption1>{h}</Caption1></th>)}</tr></thead>
+              <tbody>{rows.map((r, ri) => <tr key={ri}>{heads.map((_, ci) => <td key={ci} className={s.miniTd}><Caption1>{r[ci] ?? ''}</Caption1></td>)}</tr>)}</tbody>
+            </table>
+          ); })()
+        ) : kind === 'breadcrumb' ? (
+          (() => { const crumbs = String(comp.crumbs || '').split(',').map((c2) => c2.trim()).filter(Boolean); return crumbs.length ? <Caption1>{crumbs.join(' › ')}</Caption1> : <Caption1>Add segments in the inspector.</Caption1>; })()
+        ) : kind === 'json-view' ? (
+          (() => { let pretty = String(comp.json || ''); try { pretty = JSON.stringify(JSON.parse(pretty), null, 2); } catch { /* raw */ } return <pre style={{ margin: '0', padding: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusMedium, backgroundColor: tokens.colorNeutralBackground3, fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, overflowX: 'auto' }}>{pretty || '{}'}</pre>; })()
         ) : kind === 'avatar' ? (
           (() => { const name = comp.avatarName || comp.title; const initials = name.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]?.toUpperCase() || '').join('') || '?'; return (
             <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS }}>
