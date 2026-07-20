@@ -125,9 +125,14 @@ export interface WorkshopWidget {
   crumbs?: string;
   // json-view — JSON text pretty-printed (or shown raw when invalid).
   json?: string;
-  // tabs — "|"-separated "Title: content" entries; v1 renders a tab strip with
-  // per-tab text content (full child-widget nesting tracked as a follow-up).
+  // tabs — "|"-separated "Title: content" entries rendered as a tab strip with
+  // per-tab text content.
   tabItems?: string;
+  // tabs — per-tab nested child widget ids, aligned with tabItems entries.
+  // A nested widget renders INSIDE its tab pane in Run mode (full live body:
+  // real reads, filters, buttons) instead of at the canvas top level. Tabs
+  // widgets themselves are not nestable (no cycles).
+  tabChildIds?: string[][];
   // accordion — newline "Title: body" entries (Fluent Accordion).
   accordionItems?: string;
   // sparkline — comma list of numbers rendered as a tiny inline line.
@@ -136,4 +141,22 @@ export interface WorkshopWidget {
   embedUrl?: string;
   // button + table events
   events?: WorkshopEvent[];
+}
+
+/**
+ * IDs of every widget claimed as a nested child by some tabs widget. Nested
+ * widgets are hidden from the top-level canvas in Run mode (they render inside
+ * their tab pane instead). Pure — shared by the builder and unit tests.
+ */
+export function nestedWidgetIds(widgets: WorkshopWidget[]): Set<string> {
+  const ids = new Set<string>();
+  for (const w of widgets) {
+    if (w.kind !== 'tabs' || !w.tabChildIds) continue;
+    for (const perTab of w.tabChildIds) {
+      for (const cid of perTab || []) if (cid && cid !== w.id) ids.add(cid);
+    }
+  }
+  // A tabs widget can never be nested (no cycles) — drop any stale claims.
+  for (const w of widgets) if (w.kind === 'tabs') ids.delete(w.id);
+  return ids;
 }

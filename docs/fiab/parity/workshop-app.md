@@ -83,7 +83,7 @@ been corrected.
 | A1 | Multi-page app | ❌ MISSING | — |
 | A2 | Visual layout designer (drag-resize widget canvas) | ✅ built | `WorkshopAppBuilder` canvas (layout JSON → Cosmos via PATCH) |
 | A3 | Sections (rows/cols, drop zones) | ❌ MISSING (free-form absolute canvas only) | — |
-| A4/A5 | Tabs + overlays (drawer/modal) | ❌ MISSING | — |
+| A4/A5 | Tabs + overlays (drawer/modal) | ✅ built (tabs w/ full child-widget nesting; run-action CRUD dialog covers modal) | `tabs` kind + `tabChildIds` per-tab nesting — nested widgets render their full live body inside the tab pane in Run mode |
 | A6 | Loop/flow layouts | ❌ MISSING | — |
 | A8 | **Preview / run mode** (live app distinct from editor) | ✅ built | Run-mode tab; widgets read real Synapse via `run-action` `list`/`aggregate`/`distinct` |
 | A9 | **Publish / share** the app | ❌ MISSING | only a display-only "Runs on ACA" info banner; no real ACA/DAB/APIM deploy action |
@@ -206,7 +206,7 @@ inspector) and visually verified live (rev 0000350 palette screenshot):
 | People | avatar | ✅ |
 | Data display | key-value, mini-table, json-view, code-block | ✅ |
 | Time | timestamp, countdown, progress | ✅ |
-| Containers (tabs/accordion) | batch-7 honest-v1 design banked (tab strip + per-tab content; full child nesting tracked) | ⚠ tracked |
+| Containers (tabs/accordion) | `tabs` (tab strip + per-tab content + **full child-widget nesting** — per-tab multiselect in the inspector; nested widgets render live inside the pane in Run mode) + `accordion` | ✅ |
 | Sparkline | chart preset design banked (line + hidden axes) | ⚠ tracked |
 
 Coverage verdict: every Foundry Workshop widget FAMILY has one or more working

@@ -62,6 +62,7 @@ import type {
   WorkshopVarType, WorkshopVariable, WorkshopWidgetKind,
   WorkshopEventTrigger, WorkshopEventEffect, WorkshopAggFn, WorkshopEvent, WorkshopWidget,
 } from './_workshop-model';
+import { nestedWidgetIds } from './_workshop-model';
 export type {
   WorkshopVarType, WorkshopVariable, WorkshopWidgetKind, WorkshopWidgetLayout,
   WorkshopEventTrigger, WorkshopEventEffect, WorkshopAggFn, WorkshopEvent, WorkshopWidget,
@@ -230,18 +231,42 @@ function fmtMetric(v: number): string {
   return v.toLocaleString(undefined, { maximumFractionDigits: 2 });
 }
 
-/** Tabs widget (v1) — tab strip + per-tab text content; child-widget nesting tracked. */
-function TabsWidget({ items, variables, runtime }: { items: string; variables: WorkshopVariable[]; runtime: Record<string, RuntimeVarValue> }) {
+/**
+ * Tabs widget — tab strip + per-tab text content + nested child widgets.
+ * In Run mode each tab renders its nested children's FULL live bodies (real
+ * reads / filters / buttons via renderChild); in Design mode nested children
+ * stay editable on the canvas, so the tab pane shows their names as chips.
+ */
+function TabsWidget({ items, variables, runtime, childIdsPerTab, renderChild, childLabel }: {
+  items: string; variables: WorkshopVariable[]; runtime: Record<string, RuntimeVarValue>;
+  childIdsPerTab?: string[][];
+  /** Run mode: renders a nested child's live WidgetBody (null = child gone). */
+  renderChild?: (wid: string) => ReactNode;
+  /** Design mode: resolves a nested child's display name (null = child gone). */
+  childLabel?: (wid: string) => string | null;
+}) {
   const entries = items.split('|').map((p) => p.trim()).filter(Boolean).map((p) => { const i = p.indexOf(':'); return i < 0 ? { t: p, b: '' } : { t: p.slice(0, i).trim(), b: p.slice(i + 1).trim() }; });
   const [active, setActive] = useState(0);
   if (!entries.length) return <Caption1>Add "Title: content | Title: content" entries in the inspector.</Caption1>;
-  const cur = entries[Math.min(active, entries.length - 1)];
+  const idx = Math.min(active, entries.length - 1);
+  const cur = entries[idx];
+  const childIds = (childIdsPerTab?.[idx] || []).filter(Boolean);
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, minWidth: 0 }}>
-      <TabList selectedValue={String(Math.min(active, entries.length - 1))} onTabSelect={(_, d) => setActive(Number(d.value))}>
+      <TabList selectedValue={String(idx)} onTabSelect={(_, d) => setActive(Number(d.value))}>
         {entries.map((e, i) => <Tab key={i} value={String(i)}>{e.t}</Tab>)}
       </TabList>
-      <Body1>{renderText(cur.b, variables, runtime)}</Body1>
+      {cur.b !== '' && <Body1>{renderText(cur.b, variables, runtime)}</Body1>}
+      {childIds.length > 0 && renderChild && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, minWidth: 0 }}>
+          {childIds.map((cid) => <div key={cid} style={{ minWidth: 0 }}>{renderChild(cid)}</div>)}
+        </div>
+      )}
+      {childIds.length > 0 && !renderChild && childLabel && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: tokens.spacingHorizontalXS, minWidth: 0 }}>
+          {childIds.map((cid) => { const t = childLabel(cid); return t === null ? null : <Badge key={cid} appearance="outline">{t}</Badge>; })}
+        </div>
+      )}
     </div>
   );
 }
@@ -533,11 +558,16 @@ function FilterControl({
 function WidgetBody({
   id, widget, variables, runtime, result, readOnly, height,
   selectedRow, onSelectRow, onClickButton, setFilterValue, filterValue, columnsForEntity,
+  renderNested, nestedLabel,
 }: {
   id: string; widget: WorkshopWidget; variables: WorkshopVariable[]; runtime: Record<string, RuntimeVarValue>;
   result?: RunResult; readOnly: boolean; height: number;
   selectedRow: number | null; onSelectRow: (index: number, row: unknown[]) => void;
   onClickButton: () => void; setFilterValue: (v: string) => void; filterValue: string; columnsForEntity: string[];
+  /** tabs nesting — Run mode renders a nested child's live body inside its tab pane. */
+  renderNested?: (wid: string) => ReactNode;
+  /** tabs nesting — Design mode shows nested child names as chips. */
+  nestedLabel?: (wid: string) => string | null;
 }) {
   const s = useStyles();
 
@@ -546,7 +576,12 @@ function WidgetBody({
   }
 
   if (widget.kind === 'tabs') {
-    return <TabsWidget items={String(widget.tabItems || '')} variables={variables} runtime={runtime} />;
+    return (
+      <TabsWidget items={String(widget.tabItems || '')} variables={variables} runtime={runtime}
+        childIdsPerTab={widget.tabChildIds}
+        renderChild={readOnly ? renderNested : undefined}
+        childLabel={nestedLabel} />
+    );
   }
   if (widget.kind === 'accordion') {
     const sections = String(widget.accordionItems || '').split('\n').map((l) => l.trim()).filter(Boolean).map((l) => { const i = l.indexOf(':'); return i < 0 ? { t: l, b: '' } : { t: l.slice(0, i).trim(), b: l.slice(i + 1).trim() }; });
@@ -886,10 +921,12 @@ function WidgetPalette({ onAdd, disabled }: { onAdd: (kind: WorkshopWidgetKind) 
 // ───────────────────────── inspector ─────────────────────────
 
 function WidgetInspector({
-  widget, entityTypes, variables, columns, onChange, onRemove,
+  widget, entityTypes, variables, columns, onChange, onRemove, allWidgets = [],
 }: {
   widget: WorkshopWidget; entityTypes: string[]; variables: WorkshopVariable[]; columns: string[];
   onChange: (patch: Partial<WorkshopWidget>) => void; onRemove: () => void;
+  /** tabs nesting — the full widget list, so tabs can pick child widgets per tab. */
+  allWidgets?: WorkshopWidget[];
 }) {
   const s = useStyles();
   const meta = KIND_META[widget.kind];
@@ -1004,9 +1041,30 @@ function WidgetInspector({
         </Field>
       )}
 
-      {widget.kind === 'tabs' && (
-        <Field label="Tabs" hint={'"Title: content | Title: content" — content supports {{variableName}}. Child widgets per tab are tracked as a follow-up.'}><Textarea value={widget.tabItems || ''} onChange={(_, d) => onChange({ tabItems: d.value })} rows={4} resize="vertical" placeholder={'Overview: Key numbers here | Details: More depth here'} /></Field>
-      )}
+      {widget.kind === 'tabs' && (() => {
+        const tabTitles = String(widget.tabItems || '').split('|').map((p) => p.trim()).filter(Boolean).map((p) => { const i = p.indexOf(':'); return i < 0 ? p : p.slice(0, i).trim(); });
+        const nestable = allWidgets.filter((w) => w.id !== widget.id && w.kind !== 'tabs');
+        const childIds = widget.tabChildIds || [];
+        const setTabChildren = (ti: number, ids: string[]) => {
+          const next = tabTitles.map((_, i) => (i === ti ? ids : childIds[i] || []));
+          onChange({ tabChildIds: next });
+        };
+        return (
+          <>
+            <Field label="Tabs" hint={'"Title: content | Title: content" — content supports {{variableName}}.'}><Textarea value={widget.tabItems || ''} onChange={(_, d) => onChange({ tabItems: d.value })} rows={4} resize="vertical" placeholder={'Overview: Key numbers here | Details: More depth here'} /></Field>
+            {tabTitles.map((t, ti) => (
+              <Field key={ti} label={`"${t}" tab widgets`} hint="Nested widgets render inside this tab in Run mode (full live body) instead of on the canvas.">
+                <Dropdown multiselect placeholder={nestable.length ? 'Pick widgets to nest' : 'Add other widgets first'}
+                  selectedOptions={(childIds[ti] || []).filter((cid) => nestable.some((w) => w.id === cid))}
+                  value={(childIds[ti] || []).map((cid) => nestable.find((w) => w.id === cid)?.title).filter(Boolean).join(', ')}
+                  onOptionSelect={(_, d) => setTabChildren(ti, (d.selectedOptions as string[]) || [])}>
+                  {nestable.map((w) => <Option key={w.id} value={w.id} text={w.title || w.kind}>{w.title || w.kind}</Option>)}
+                </Dropdown>
+              </Field>
+            ))}
+          </>
+        );
+      })()}
       {widget.kind === 'accordion' && (
         <Field label="Sections" hint={'One "Title: body" per line; body supports {{variableName}}.'}><Textarea value={widget.accordionItems || ''} onChange={(_, d) => onChange({ accordionItems: d.value })} rows={5} resize="vertical" placeholder={'FAQ 1: Answer one\nFAQ 2: Answer two'} /></Field>
       )}
@@ -1391,6 +1449,10 @@ export function WorkshopAppBuilder({ id, entityTypes, widgets, variables, onWidg
     setSelectedId(wid);
   }, [normalized, widgets, onWidgetsChange]);
 
+  // Widgets claimed as nested children by a tabs widget — hidden from the
+  // top-level canvas in Run mode (they render inside their tab pane instead).
+  const nestedIds = useMemo(() => nestedWidgetIds(normalized), [normalized]);
+
   const patchWidget = useCallback((wid: string, patch: Partial<WorkshopWidget>) => {
     onWidgetsChange(widgets.map((w) => {
       if (w.id !== wid) return w;
@@ -1408,7 +1470,12 @@ export function WorkshopAppBuilder({ id, entityTypes, widgets, variables, onWidg
   }, [widgets, onWidgetsChange]);
 
   const removeWidget = useCallback((wid: string) => {
-    onWidgetsChange(widgets.filter((w) => w.id !== wid));
+    // Drop the widget AND strip any stale nesting claims on it from tabs widgets.
+    onWidgetsChange(widgets.filter((w) => w.id !== wid).map((w) => (
+      w.kind === 'tabs' && w.tabChildIds?.some((t) => t?.includes(wid))
+        ? { ...w, tabChildIds: w.tabChildIds.map((t) => (t || []).filter((cid) => cid !== wid)) }
+        : w
+    )));
     if (selectedId === wid) setSelectedId(null);
   }, [widgets, onWidgetsChange, selectedId]);
 
@@ -1522,6 +1589,20 @@ export function WorkshopAppBuilder({ id, entityTypes, widgets, variables, onWidg
       setFilterValue={(v) => onFilterChange(w, v)}
       filterValue={filterValues[w.id] || ''}
       columnsForEntity={(w.entityType && colsByEntity[w.entityType]) || []}
+      renderNested={(cid) => {
+        const cw = normalized.find((x) => x.id === cid);
+        if (!cw || cw.kind === 'tabs') return null; // gone or would cycle
+        return (
+          <div style={{ minWidth: 0 }}>
+            <Caption1 block>{cw.title || KIND_META[cw.kind]?.label || cw.kind}</Caption1>
+            {renderWidgetBody(cw)}
+          </div>
+        );
+      }}
+      nestedLabel={(cid) => {
+        const cw = normalized.find((x) => x.id === cid);
+        return cw && cw.kind !== 'tabs' ? (cw.title || KIND_META[cw.kind]?.label || cw.kind) : null;
+      }}
     />
   );
 
@@ -1599,6 +1680,7 @@ export function WorkshopAppBuilder({ id, entityTypes, widgets, variables, onWidg
             >
               {canvasBlock}
               <WidgetInspector widget={selected} entityTypes={entityTypes} variables={variables} columns={colsForSelected}
+                allWidgets={normalized}
                 onChange={(patch) => patchWidget(selected.id, patch)} onRemove={() => removeWidget(selected.id)} />
             </SplitPane>
           ) : (
@@ -1613,7 +1695,7 @@ export function WorkshopAppBuilder({ id, entityTypes, widgets, variables, onWidg
                 <div style={{ position: 'absolute', inset: 0 }}>
                   <EmptyState icon={<Play20Regular />} title="Nothing to preview yet" body="Switch to Design and add widgets bound to object types, then come back to Run mode." />
                 </div>
-              ) : normalized.map((w) => (
+              ) : normalized.filter((w) => !nestedIds.has(w.id)).map((w) => (
                 <CanvasWidget key={w.id} widget={w} selected={false} readOnly
                   onSelect={() => {}} onMove={() => {}} onResize={() => {}} onRemove={() => {}}>
                   {renderWidgetBody(w)}
