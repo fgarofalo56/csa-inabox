@@ -223,9 +223,50 @@ async function stampPaginatedRdl(items) {
   console.log('    ✓ stamped default invoice RDL');
 }
 
+// DAB entity config authored over the gold warehouse tables (idempotent).
+function dabEntity(name, obj, sing, plur) {
+  return { name, source: { object: obj, type: 'table' }, rest: { enabled: true },
+    graphql: { enabled: true, singular: sing, plural: plur },
+    permissions: [{ role: 'anonymous', actions: [{ action: 'read' }] }] };
+}
+const DAB_RUNTIME = { rest: { enabled: true, path: '/api', requestBodyStrict: true },
+  graphql: { enabled: true, path: '/graphql', allowIntrospection: true },
+  host: { mode: 'development', corsOrigins: [], corsAllowCredentials: false, authProvider: 'Simulator' },
+  cache: { enabled: false, ttlSeconds: 5 }, pagination: { defaultPageSize: 100, maxPageSize: 100000 } };
+
+async function stampDabEntities(items) {
+  const dabItems = items.filter((i) => i.itemType === 'data-api-builder');
+  for (const it of dabItems) {
+    const cur = await api('GET', `/api/dab/${it.id}/config`);
+    if (Array.isArray(cur.json?.config?.entities) && cur.json.config.entities.length) { console.log(`    ✓ DAB item already has entities: ${it.displayName}`); continue; }
+    const config = { sourceRef: { kind: 'mssql', database: 'loompool' }, runtime: DAB_RUNTIME,
+      entities: [ dabEntity('Order', 'gold.fact_sales', 'Order', 'Orders'),
+        dabEntity('Customer', 'gold.dim_customer', 'Customer', 'Customers'),
+        dabEntity('Product', 'gold.dim_product', 'Product', 'Products') ] };
+    const r = await api('PUT', `/api/dab/${it.id}/config`, { config });
+    if (r.status >= 300 || r.json?.ok === false) { console.log(`    ::warn:: DAB config ${it.displayName} -> ${r.status} ${JSON.stringify(r.json).slice(0,120)}`); continue; }
+    console.log(`    ✓ authored 3 DAB entities: ${it.displayName}`);
+  }
+}
+
+/** Apply the MERGED DAB config to the shared preview runtime ONCE (idempotent:
+ *  skip if the running runtime already serves the demo entities). Best-effort —
+ *  a ::warn:: when the ARM target isn't configured, never aborts the seed. */
+async function applyDabRuntime(items) {
+  const dab = findItem(items, 'data-api-builder');
+  if (!dab) { console.log('    ::warn:: no Data API item to apply to the runtime'); return; }
+  // Idempotency probe: does the running runtime already expose our entities?
+  const schema = await api('GET', `/api/dab/${dab.id}/preview/schema`);
+  const paths = schema.json?.doc?.paths || {};
+  if (Object.keys(paths).some((p) => /order/i.test(p))) { console.log('    ✓ DAB runtime already serves demo entities'); return; }
+  const r = await api('POST', `/api/dab/${dab.id}/apply-to-runtime`);
+  if (r.status >= 300 || r.json?.ok === false) { console.log(`    ::warn:: apply-to-runtime -> ${r.status} ${JSON.stringify(r.json).slice(0,160)}`); return; }
+  console.log(`    ✓ applied ${r.json.entitiesApplied?.length ?? '?'} entities to shared DAB runtime (rev ${r.json.revisionState}); collisions: ${r.json.collisions?.length ?? 0}`);
+}
+
 /** Fill the authored-content shells in the demo workspace (idempotent). */
 async function stampDemoContent(wsId) {
-  console.log('  · stamping authored content (task #17 content-authoring routes)…');
+  console.log('  · stamping authored content (task #17/#19 content-authoring routes)…');
   const items = await listItems(wsId);
   const lakehouse = findItem(items, 'lakehouse', 'Sales Lakehouse');
   await ensureSalesWideView(lakehouse?.id);
@@ -233,6 +274,8 @@ async function stampDemoContent(wsId) {
   await stampSemanticModel(items);
   await stampScorecard(items);
   await stampPaginatedRdl(items);
+  await stampDabEntities(items);
+  await applyDabRuntime(items);
 }
 
 // ── The demo layout ──────────────────────────────────────────────────────────
