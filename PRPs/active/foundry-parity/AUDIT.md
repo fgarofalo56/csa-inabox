@@ -184,3 +184,21 @@ Type/Workspace facets + per-category grouped tables + endorsement + pinning):
 Verdict: **Loom ≥ Azure portal browse for the analytics domain (A)**.
 With this, the operator's "visual review vs Azure AND Fabric" has live receipts
 for BOTH portals: Azure (All-Resources), Fabric (Home, item lists, workspace).
+
+## Azure re-verification pass — 2026-07-20 (fresh live capture, both portals open)
+
+Re-ran the Azure side-by-side live: portal.azure.com All-Resources (892
+resources, signed-in fgarofalo@limitlessdata.ai) vs Loom /browse (1448 items /
+125 types / 441 workspaces) captured back-to-back in the same session. Same
+verdict: filtering parity, Loom ahead on grouping + stat tiles + pinning +
+guided banner; **A confirmed**. Closes the visual-review sweep (task #9).
+
+## Tabs child-widget nesting — final deferred item CLOSED (2026-07-20, PR #2235)
+
+The one remaining v1 note on the widget catalog is shipped: `tabChildIds`
+per-tab nesting — inspector multiselect per tab (no-freeform), Run mode
+renders nested widgets' full live bodies inside the tab pane (hidden from the
+top-level canvas), Design mode keeps them editable with name chips, cycle
+guard + delete cleanup, pure `nestedWidgetIds` helper + 5 unit tests. Parity
+doc rows A4/A5 + Containers flipped ✅ — zero tracked notes remain on the
+catalog.
