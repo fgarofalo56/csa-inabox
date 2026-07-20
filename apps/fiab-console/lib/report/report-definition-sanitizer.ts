@@ -105,6 +105,44 @@ type StylePreset = 'default' | 'minimal' | 'bold' | 'condensed' | 'accent';
 const DATA_LABEL_POSITIONS = new Set<DataLabelPosition>(['auto', 'inside', 'outside', 'above', 'below']);
 const STYLE_PRESETS = new Set<StylePreset>(['default', 'minimal', 'bold', 'condensed', 'accent']);
 
+/**
+ * Format-pane WAVE-6 enums — mirror format-pane.tsx. These gate the structured
+ * per-axis / title / legend / effects / data-label cards so their authored values
+ * SURVIVE PUT /definition (before this whitelist they were silently stripped, so
+ * the cards edited + applied live but never persisted — a no-vaporware.md gap).
+ */
+type AxisDisplayUnits = 'auto' | 'none' | 'thousands' | 'millions' | 'billions';
+type AxisType = 'categorical' | 'continuous';
+type LabelContent = 'value' | 'titleValue' | 'titleValueDetail';
+type TitleAlign = 'left' | 'center' | 'right';
+type TitleHeading = 'title' | 'subtitle';
+type LegendStyle = 'normal' | 'bold' | 'italic';
+type ShadowPosition = 'outer' | 'inner';
+type TooltipType = 'default' | 'report';
+type HeaderIconKey =
+  | 'visualInfo' | 'drillUp' | 'drillDown' | 'drillToggle' | 'filter' | 'focus' | 'more';
+const AXIS_DISPLAY_UNITS = new Set<AxisDisplayUnits>(['auto', 'none', 'thousands', 'millions', 'billions']);
+const AXIS_TYPES = new Set<AxisType>(['categorical', 'continuous']);
+const AXIS_LABEL_ROTATIONS = new Set<number>([0, 45, -45, 90, -90]);
+const LABEL_CONTENTS = new Set<LabelContent>(['value', 'titleValue', 'titleValueDetail']);
+const TITLE_ALIGNS = new Set<TitleAlign>(['left', 'center', 'right']);
+const TITLE_HEADINGS = new Set<TitleHeading>(['title', 'subtitle']);
+const LEGEND_STYLES = new Set<LegendStyle>(['normal', 'bold', 'italic']);
+const SHADOW_POSITIONS = new Set<ShadowPosition>(['outer', 'inner']);
+const TOOLTIP_TYPES = new Set<TooltipType>(['default', 'report']);
+const HEADER_ICON_KEYS = new Set<HeaderIconKey>([
+  'visualInfo', 'drillUp', 'drillDown', 'drillToggle', 'filter', 'focus', 'more',
+]);
+/**
+ * Font whitelist — mirror format-pane.tsx FONT_CHOICES. A font flows into an SVG /
+ * CSS `fontFamily`, so we whitelist rather than free-clamp (no CSS injection via a
+ * persisted family string; no-freeform-config.md — the pane is a Dropdown anyway).
+ */
+const FONT_CHOICES = new Set<string>([
+  'Segoe UI', 'Arial', 'Calibri', 'Georgia', 'Times New Roman', 'Verdana', 'Tahoma', 'Consolas',
+]);
+const MAX_MULTIPLES_FIELDS = 32; // secondary-axis series / tooltip-field / by-field caps
+
 /** Conditional-formatting enums — mirror conditional-format.tsx. */
 type CondMode = 'rules' | 'colorScale' | 'dataBars' | 'icons';
 type CondOp = 'gt' | 'ge' | 'lt' | 'le' | 'eq' | 'ne' | 'between';
@@ -218,8 +256,12 @@ interface PersistedFormat {
   legendPosition?: LegendPosition;
   numberFormat?: NumberFormatPreset;
   // ── wave-1 additions (all optional/sparse) ──
-  dataLabels?: { show?: boolean; position?: DataLabelPosition };
-  totalLabels?: { show?: boolean };
+  dataLabels?: {
+    show?: boolean; position?: DataLabelPosition;
+    font?: string; color?: string; units?: AxisDisplayUnits; decimals?: number;
+    background?: string; content?: LabelContent;
+  };
+  totalLabels?: { show?: boolean; font?: string; color?: string; units?: AxisDisplayUnits };
   background?: { color?: string; transparency?: number };
   border?: { show?: boolean; color?: string; radius?: number };
   shadow?: { show?: boolean };
@@ -227,6 +269,72 @@ interface PersistedFormat {
   general?: { width?: number; height?: number; lockAspect?: boolean; altText?: string };
   stylePreset?: StylePreset;
   conditionalFormat?: PersistedConditionalFormat;
+  // ── wave-6 structured Format-card objects (all optional/sparse, whitelisted) ──
+  axisX?: PersistedAxisFormat;
+  axisY?: PersistedAxisFormat;
+  axisY2?: PersistedAxisFormat;
+  title?: PersistedTitleFormat;
+  legend?: PersistedLegendFormat;
+  effects?: PersistedEffectsFormat;
+  headerIcons?: Partial<Record<HeaderIconKey, boolean>>;
+  tooltipOptions?: { show?: boolean; type?: TooltipType; fields?: string[] };
+  zoom?: { enabled?: boolean; from?: number; to?: number };
+  smallMultiplesGrid?: { columns?: number; sharedY?: boolean; padding?: number; facetColumn?: string };
+  numberFormatByField?: Record<string, { preset?: NumberFormatPreset; decimals?: number; units?: AxisDisplayUnits }>;
+}
+
+/** A field reference (table/column/measure) — used by the fx-conditional title
+ * (reuses the shared {@link sanitizeFieldRef} defined below for drillthrough). */
+
+/** Persisted per-axis format (mirror of format-pane.tsx ReportAxisFormat). */
+interface PersistedAxisFormat {
+  show?: boolean;
+  title?: string;
+  showTitle?: boolean;
+  gridlines?: boolean;
+  gridlineColor?: string;
+  min?: number;
+  max?: number;
+  logScale?: boolean;
+  displayUnits?: AxisDisplayUnits;
+  decimals?: number;
+  labelFont?: string;
+  labelFontSize?: number;
+  labelColor?: string;
+  labelRotation?: number;
+  axisType?: AxisType;
+  series?: string[];
+  target?: number;
+}
+
+/** Persisted rich title (mirror of ReportTitleFormat). */
+interface PersistedTitleFormat {
+  show?: boolean;
+  text?: string;
+  font?: string;
+  fontSize?: number;
+  color?: string;
+  align?: TitleAlign;
+  heading?: TitleHeading;
+  subtitle?: string;
+  divider?: boolean;
+  conditionalField?: PersistedFieldRef;
+}
+
+/** Persisted legend styling (mirror of ReportLegendFormat). */
+interface PersistedLegendFormat {
+  title?: string;
+  font?: string;
+  fontSize?: number;
+  color?: string;
+  style?: LegendStyle;
+}
+
+/** Persisted unified effects (mirror of ReportEffectsFormat). */
+interface PersistedEffectsFormat {
+  shadow?: { show?: boolean; color?: string; offsetX?: number; offsetY?: number; position?: ShadowPosition };
+  border?: { show?: boolean; color?: string; width?: number; radius?: number };
+  plotAreaBg?: { color?: string; transparency?: number };
 }
 
 /** One structured analytics reference line (mirror of AnalyticsLine). */
@@ -613,13 +721,261 @@ function sanitizeShow(raw: unknown): { show?: boolean } | undefined {
   const o = raw as Record<string, unknown>;
   return typeof o.show === 'boolean' ? { show: o.show } : undefined;
 }
-function sanitizeDataLabels(raw: unknown): { show?: boolean; position?: DataLabelPosition } | undefined {
+function sanitizeDataLabels(raw: unknown): PersistedFormat['dataLabels'] | undefined {
   if (!raw || typeof raw !== 'object') return undefined;
   const o = raw as Record<string, unknown>;
-  const out: { show?: boolean; position?: DataLabelPosition } = {};
+  const out: NonNullable<PersistedFormat['dataLabels']> = {};
   if (typeof o.show === 'boolean') out.show = o.show;
   if (typeof o.position === 'string' && DATA_LABEL_POSITIONS.has(o.position as DataLabelPosition)) {
     out.position = o.position as DataLabelPosition;
+  }
+  // wave-6 extended data-label styling (font/color/units/decimals/background/content)
+  const font = sanitizeFontChoice(o.font);
+  if (font) out.font = font;
+  const color = clampColor(o.color);
+  if (color) out.color = color;
+  if (typeof o.units === 'string' && AXIS_DISPLAY_UNITS.has(o.units as AxisDisplayUnits)) {
+    out.units = o.units as AxisDisplayUnits;
+  }
+  const decimals = clampNum(o.decimals, 0, 4);
+  if (decimals !== undefined) out.decimals = Math.round(decimals);
+  const bg = clampColor(o.background);
+  if (bg) out.background = bg;
+  if (typeof o.content === 'string' && LABEL_CONTENTS.has(o.content as LabelContent)) {
+    out.content = o.content as LabelContent;
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+/** Total-labels — the wave-1 `show` plus wave-6 font/color/units (model round-trip). */
+function sanitizeTotalLabels(raw: unknown): PersistedFormat['totalLabels'] | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const o = raw as Record<string, unknown>;
+  const out: NonNullable<PersistedFormat['totalLabels']> = {};
+  if (typeof o.show === 'boolean') out.show = o.show;
+  const font = sanitizeFontChoice(o.font);
+  if (font) out.font = font;
+  const color = clampColor(o.color);
+  if (color) out.color = color;
+  if (typeof o.units === 'string' && AXIS_DISPLAY_UNITS.has(o.units as AxisDisplayUnits)) {
+    out.units = o.units as AxisDisplayUnits;
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+/** Whitelist a font family against FONT_CHOICES (never a free-form string). */
+function sanitizeFontChoice(v: unknown): string | undefined {
+  return typeof v === 'string' && FONT_CHOICES.has(v) ? v : undefined;
+}
+/** A bounded, de-duplicated list of result-column names (secondary series / tooltip fields). */
+function sanitizeStringList(raw: unknown): string[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const r of raw) {
+    if (typeof r !== 'string') continue;
+    const s = r.trim().slice(0, MAX_COLOR_STR);
+    if (!s || seen.has(s)) continue;
+    seen.add(s);
+    out.push(s);
+    if (out.length >= MAX_MULTIPLES_FIELDS) break;
+  }
+  return out.length ? out : undefined;
+}
+
+// ── format-pane WAVE-6 structured cards (sparse, whitelisted) ─────────────────
+
+/** Per-axis card (axisX / axisY / axisY2). Numbers are finite-clamped; enums whitelisted. */
+function sanitizeAxisFormat(raw: unknown): PersistedAxisFormat | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const o = raw as Record<string, unknown>;
+  const out: PersistedAxisFormat = {};
+  if (typeof o.show === 'boolean') out.show = o.show;
+  const title = clampStr(o.title, 200);
+  if (title !== undefined) out.title = title;
+  if (typeof o.showTitle === 'boolean') out.showTitle = o.showTitle;
+  if (typeof o.gridlines === 'boolean') out.gridlines = o.gridlines;
+  const gc = clampColor(o.gridlineColor);
+  if (gc) out.gridlineColor = gc;
+  const min = clampNum(o.min, -1e15, 1e15);
+  if (min !== undefined) out.min = min;
+  const max = clampNum(o.max, -1e15, 1e15);
+  if (max !== undefined) out.max = max;
+  if (typeof o.logScale === 'boolean') out.logScale = o.logScale;
+  if (typeof o.displayUnits === 'string' && AXIS_DISPLAY_UNITS.has(o.displayUnits as AxisDisplayUnits)) {
+    out.displayUnits = o.displayUnits as AxisDisplayUnits;
+  }
+  const decimals = clampNum(o.decimals, 0, 4);
+  if (decimals !== undefined) out.decimals = Math.round(decimals);
+  const labelFont = sanitizeFontChoice(o.labelFont);
+  if (labelFont) out.labelFont = labelFont;
+  const labelFontSize = clampNum(o.labelFontSize, 6, 96);
+  if (labelFontSize !== undefined) out.labelFontSize = Math.round(labelFontSize);
+  const labelColor = clampColor(o.labelColor);
+  if (labelColor) out.labelColor = labelColor;
+  if (typeof o.labelRotation === 'number' && AXIS_LABEL_ROTATIONS.has(o.labelRotation)) {
+    out.labelRotation = o.labelRotation;
+  }
+  if (typeof o.axisType === 'string' && AXIS_TYPES.has(o.axisType as AxisType)) {
+    out.axisType = o.axisType as AxisType;
+  }
+  const series = sanitizeStringList(o.series);
+  if (series) out.series = series;
+  const target = clampNum(o.target, -1e15, 1e15);
+  if (target !== undefined) out.target = target;
+  return Object.keys(out).length ? out : undefined;
+}
+
+/** Rich title card (subtitle / font / color / align / heading / divider / fx-conditional). */
+function sanitizeTitleFormat(raw: unknown): PersistedTitleFormat | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const o = raw as Record<string, unknown>;
+  const out: PersistedTitleFormat = {};
+  if (typeof o.show === 'boolean') out.show = o.show;
+  const text = clampStr(o.text, 200);
+  if (text !== undefined) out.text = text;
+  const font = sanitizeFontChoice(o.font);
+  if (font) out.font = font;
+  const fontSize = clampNum(o.fontSize, 6, 96);
+  if (fontSize !== undefined) out.fontSize = Math.round(fontSize);
+  const color = clampColor(o.color);
+  if (color) out.color = color;
+  if (typeof o.align === 'string' && TITLE_ALIGNS.has(o.align as TitleAlign)) out.align = o.align as TitleAlign;
+  if (typeof o.heading === 'string' && TITLE_HEADINGS.has(o.heading as TitleHeading)) out.heading = o.heading as TitleHeading;
+  const subtitle = clampStr(o.subtitle, 300);
+  if (subtitle !== undefined) out.subtitle = subtitle;
+  if (typeof o.divider === 'boolean') out.divider = o.divider;
+  const cond = sanitizeFieldRef(o.conditionalField);
+  if (cond) out.conditionalField = cond;
+  return Object.keys(out).length ? out : undefined;
+}
+
+/** Legend styling card (title / font / fontSize / color / style). */
+function sanitizeLegendFormat(raw: unknown): PersistedLegendFormat | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const o = raw as Record<string, unknown>;
+  const out: PersistedLegendFormat = {};
+  const title = clampStr(o.title, 200);
+  if (title !== undefined) out.title = title;
+  const font = sanitizeFontChoice(o.font);
+  if (font) out.font = font;
+  const fontSize = clampNum(o.fontSize, 6, 96);
+  if (fontSize !== undefined) out.fontSize = Math.round(fontSize);
+  const color = clampColor(o.color);
+  if (color) out.color = color;
+  if (typeof o.style === 'string' && LEGEND_STYLES.has(o.style as LegendStyle)) out.style = o.style as LegendStyle;
+  return Object.keys(out).length ? out : undefined;
+}
+
+/** Unified effects card (shadow / border / plot-area background). */
+function sanitizeEffectsFormat(raw: unknown): PersistedEffectsFormat | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const o = raw as Record<string, unknown>;
+  const out: PersistedEffectsFormat = {};
+  if (o.shadow && typeof o.shadow === 'object') {
+    const s = o.shadow as Record<string, unknown>;
+    const sh: NonNullable<PersistedEffectsFormat['shadow']> = {};
+    if (typeof s.show === 'boolean') sh.show = s.show;
+    const color = clampColor(s.color);
+    if (color) sh.color = color;
+    const ox = clampNum(s.offsetX, -64, 64);
+    if (ox !== undefined) sh.offsetX = Math.round(ox);
+    const oy = clampNum(s.offsetY, -64, 64);
+    if (oy !== undefined) sh.offsetY = Math.round(oy);
+    if (typeof s.position === 'string' && SHADOW_POSITIONS.has(s.position as ShadowPosition)) {
+      sh.position = s.position as ShadowPosition;
+    }
+    if (Object.keys(sh).length) out.shadow = sh;
+  }
+  if (o.border && typeof o.border === 'object') {
+    const b = o.border as Record<string, unknown>;
+    const bd: NonNullable<PersistedEffectsFormat['border']> = {};
+    if (typeof b.show === 'boolean') bd.show = b.show;
+    const color = clampColor(b.color);
+    if (color) bd.color = color;
+    const width = clampNum(b.width, 0, 24);
+    if (width !== undefined) bd.width = Math.round(width);
+    const radius = clampNum(b.radius, 0, 200);
+    if (radius !== undefined) bd.radius = Math.round(radius);
+    if (Object.keys(bd).length) out.border = bd;
+  }
+  const plotAreaBg = sanitizeFill(o.plotAreaBg);
+  if (plotAreaBg) out.plotAreaBg = plotAreaBg;
+  return Object.keys(out).length ? out : undefined;
+}
+
+/** Visual-header icon visibility (only whitelisted keys with boolean values). */
+function sanitizeHeaderIcons(raw: unknown): Partial<Record<HeaderIconKey, boolean>> | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const o = raw as Record<string, unknown>;
+  const out: Partial<Record<HeaderIconKey, boolean>> = {};
+  for (const k of HEADER_ICON_KEYS) {
+    if (typeof o[k] === 'boolean') out[k] = o[k] as boolean;
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
+/** Per-visual Tooltips card (show / type / extra fields). */
+function sanitizeTooltipOptions(raw: unknown): PersistedFormat['tooltipOptions'] | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const o = raw as Record<string, unknown>;
+  const out: NonNullable<PersistedFormat['tooltipOptions']> = {};
+  if (typeof o.show === 'boolean') out.show = o.show;
+  if (typeof o.type === 'string' && TOOLTIP_TYPES.has(o.type as TooltipType)) out.type = o.type as TooltipType;
+  const fields = sanitizeStringList(o.fields);
+  if (fields) out.fields = fields;
+  return Object.keys(out).length ? out : undefined;
+}
+
+/** Category-window zoom (from/to as 0..1 fractions). */
+function sanitizeZoom(raw: unknown): PersistedFormat['zoom'] | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const o = raw as Record<string, unknown>;
+  const out: NonNullable<PersistedFormat['zoom']> = {};
+  if (typeof o.enabled === 'boolean') out.enabled = o.enabled;
+  const from = clampNum(o.from, 0, 1);
+  if (from !== undefined) out.from = from;
+  const to = clampNum(o.to, 0, 1);
+  if (to !== undefined) out.to = to;
+  return Object.keys(out).length ? out : undefined;
+}
+
+/** Small-multiples grid (facet column / columns / shared-Y / padding). */
+function sanitizeSmallMultiplesGrid(raw: unknown): PersistedFormat['smallMultiplesGrid'] | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const o = raw as Record<string, unknown>;
+  const out: NonNullable<PersistedFormat['smallMultiplesGrid']> = {};
+  const columns = clampPosInt(o.columns, 12);
+  if (columns !== undefined) out.columns = columns;
+  if (typeof o.sharedY === 'boolean') out.sharedY = o.sharedY;
+  const padding = clampNum(o.padding, 0, 64);
+  if (padding !== undefined) out.padding = Math.round(padding);
+  const facetColumn = typeof o.facetColumn === 'string' ? o.facetColumn.trim().slice(0, MAX_COLOR_STR) : undefined;
+  if (facetColumn) out.facetColumn = facetColumn;
+  return Object.keys(out).length ? out : undefined;
+}
+
+/** "Apply settings to" per-field number-format overrides (result column → {preset,decimals,units}). */
+function sanitizeNumberFormatByField(raw: unknown): PersistedFormat['numberFormatByField'] | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const o = raw as Record<string, unknown>;
+  const out: NonNullable<PersistedFormat['numberFormatByField']> = {};
+  let n = 0;
+  for (const key of Object.keys(o)) {
+    if (n >= MAX_MULTIPLES_FIELDS) break;
+    const k = key.trim().slice(0, MAX_COLOR_STR);
+    if (!k) continue;
+    const v = o[key];
+    if (!v || typeof v !== 'object') continue;
+    const ov = v as Record<string, unknown>;
+    const entry: { preset?: NumberFormatPreset; decimals?: number; units?: AxisDisplayUnits } = {};
+    if (typeof ov.preset === 'string' && NUMBER_FORMATS.has(ov.preset as NumberFormatPreset)) {
+      entry.preset = ov.preset as NumberFormatPreset;
+    }
+    const decimals = clampNum(ov.decimals, 0, 4);
+    if (decimals !== undefined) entry.decimals = Math.round(decimals);
+    if (typeof ov.units === 'string' && AXIS_DISPLAY_UNITS.has(ov.units as AxisDisplayUnits)) {
+      entry.units = ov.units as AxisDisplayUnits;
+    }
+    if (Object.keys(entry).length) { out[k] = entry; n += 1; }
   }
   return Object.keys(out).length ? out : undefined;
 }
@@ -764,7 +1120,7 @@ function sanitizeFormat(raw: unknown): PersistedFormat | undefined {
   // ── wave-1 nested effect groups (sparse) ──
   const dataLabels = sanitizeDataLabels(o.dataLabels);
   if (dataLabels) out.dataLabels = dataLabels;
-  const totalLabels = sanitizeShow(o.totalLabels);
+  const totalLabels = sanitizeTotalLabels(o.totalLabels);
   if (totalLabels) out.totalLabels = totalLabels;
   const background = sanitizeFill(o.background);
   if (background) out.background = background;
@@ -781,6 +1137,33 @@ function sanitizeFormat(raw: unknown): PersistedFormat | undefined {
   }
   const cf = sanitizeConditionalFormat(o.conditionalFormat);
   if (cf) out.conditionalFormat = cf;
+
+  // ── wave-6 structured Format-card objects (sparse; without this whitelist the
+  //    per-axis / title / legend / effects / header-icon / tooltip / zoom /
+  //    small-multiples / per-field-number cards edited + applied live but were
+  //    silently dropped on PUT /definition — the no-vaporware.md persistence gap) ──
+  const axisX = sanitizeAxisFormat(o.axisX);
+  if (axisX) out.axisX = axisX;
+  const axisY = sanitizeAxisFormat(o.axisY);
+  if (axisY) out.axisY = axisY;
+  const axisY2 = sanitizeAxisFormat(o.axisY2);
+  if (axisY2) out.axisY2 = axisY2;
+  const title = sanitizeTitleFormat(o.title);
+  if (title) out.title = title;
+  const legend = sanitizeLegendFormat(o.legend);
+  if (legend) out.legend = legend;
+  const effects = sanitizeEffectsFormat(o.effects);
+  if (effects) out.effects = effects;
+  const headerIcons = sanitizeHeaderIcons(o.headerIcons);
+  if (headerIcons) out.headerIcons = headerIcons;
+  const tooltipOptions = sanitizeTooltipOptions(o.tooltipOptions);
+  if (tooltipOptions) out.tooltipOptions = tooltipOptions;
+  const zoom = sanitizeZoom(o.zoom);
+  if (zoom) out.zoom = zoom;
+  const smallMultiplesGrid = sanitizeSmallMultiplesGrid(o.smallMultiplesGrid);
+  if (smallMultiplesGrid) out.smallMultiplesGrid = smallMultiplesGrid;
+  const numberFormatByField = sanitizeNumberFormatByField(o.numberFormatByField);
+  if (numberFormatByField) out.numberFormatByField = numberFormatByField;
 
   return Object.keys(out).length ? out : undefined;
 }
