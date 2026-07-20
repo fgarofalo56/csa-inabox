@@ -204,6 +204,10 @@ var loomContainers = [
   // workspace ACL) appends here; the who-has-access report reads it.
   // createIfNotExists in cosmos-client.ts ensure() remains the hotfix fallback.
   { name: 'access-assignments', partitionKey: '/principalId' }
+  // Access-governance W2 — entitlement bundles + configurable approval policies,
+  // PK /tenantId. createIfNotExists in cosmos-client.ts ensure() is the fallback.
+  { name: 'access-packages',    partitionKey: '/tenantId' }
+  { name: 'approval-policies',  partitionKey: '/tenantId' }
   // Durable cross-session agent memory + per-agent thread persistence (AIF-14).
   // PK /agentId so every per-agent thread list + memory retrieve hits a single
   // physical partition. NO TTL — memory facts are durable; threads are retained

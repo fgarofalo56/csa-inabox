@@ -30,12 +30,14 @@ import {
 } from '@/lib/azure/cosmos-client';
 import { enforceAccessGrant, type AccessScopeType } from '@/lib/azure/rbac-client';
 import {
-  TIER_SEQUENCE, TIER_APPROVAL_KEY, TIER_LABEL,
+  TIER_APPROVAL_KEY, TIER_LABEL,
   type AccessRequestDoc, type ApprovalStep, type ApprovalTier,
 } from '@/lib/types/access-request-workflow';
 import crypto from 'node:crypto';
 import { apiServerError } from '@/lib/api/respond';
 import { recordAssignment } from '@/lib/access/assignment-ledger';
+import { effectiveStages, nextStage, actorMayApprove } from '@/lib/access/approval-policy';
+import { isTenantAdmin } from '@/lib/auth/feature-gate';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -82,6 +84,12 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     }
 
     const currentTier = doc.tier;
+    // W2 — configurable approver enforcement. No-op for legacy requests and for
+    // policies that don't enforce named approvers; tenant admins always pass.
+    const approverCheck = actorMayApprove(doc.approvalPlan, currentTier, s.claims.oid, isTenantAdmin(s));
+    if (!approverCheck.allowed) {
+      return NextResponse.json({ ok: false, error: approverCheck.reason || 'You are not an approver for this stage.' }, { status: 403 });
+    }
     const step: ApprovalStep = {
       decision,
       by: s.claims.upn || tenantId,
@@ -101,10 +109,14 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       doc.denialReason = reason;
       doc.deniedAtTier = currentTier;
     } else {
-      const idx = TIER_SEQUENCE.indexOf(currentTier);
-      const isFinal = idx === TIER_SEQUENCE.length - 1;
+      // W2 — advance over the request's approval-plan snapshot (an ordered subset
+      // of the canonical tiers) when present; legacy requests fall back to the
+      // full canonical sequence, so behaviour is identical by default.
+      const stages = effectiveStages(doc.approvalPlan);
+      const nxt = nextStage(stages, currentTier);
+      const isFinal = nxt === null;
       if (!isFinal) {
-        doc.tier = TIER_SEQUENCE[idx + 1];
+        doc.tier = nxt;
       } else {
         // FINAL tier — the access provider may confirm/override the grant scope.
         if (SCOPE_TYPES.has(body?.scopeType)) doc.scopeType = body.scopeType;
