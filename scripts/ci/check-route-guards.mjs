@@ -89,6 +89,11 @@ const GUARD_SIGNAL_RE = new RegExp(
     // loadKustoItem / resolveOwnedItemDatabase thread the caller tenant into
     // the item read the same way loadOwnedItem does.
     'guardAdxRequest', 'loadKustoItem', 'resolveOwnedItemDatabase',
+    // WS-D1 route-toolkit: `withWorkspaceOwner(itemType, …)` runs the exact
+    // loadOwnedItem owner/workspace-ACL check internally, so a route that adopts
+    // it is authorized the same as a hand-rolled loadOwnedItem route. (withSession
+    // and withBackendGate are NOT guard signals — session/gate are not authz.)
+    'withWorkspaceOwner',
     // Item-level ACL resolver (rel-T87): resolveItemAccessByOid chains owner →
     // workspace ACL → per-item grant under the tid boundary (lib/auth/item-access.ts),
     // so a route threading it is fully authorized (not a bare session).
@@ -98,9 +103,16 @@ const GUARD_SIGNAL_RE = new RegExp(
 );
 
 
-const MUTATING_EXPORT_RE = /export\s+async\s+function\s+(POST|PUT|PATCH|DELETE)\b/;
-const GET_EXPORT_RE = /export\s+async\s+function\s+GET\b/;
-const GETSESSION_RE = /getSession\s*\(/;
+// A route "exports a data surface" when it exports a mutating/GET handler as
+// EITHER `export async function GET` (classic) OR `export const GET = …`
+// (the WS-D1 route-toolkit idiom: `export const GET = withWorkspaceOwner(…)`).
+const MUTATING_EXPORT_RE = /export\s+(?:async\s+function\s+(?:POST|PUT|PATCH|DELETE)\b|const\s+(?:POST|PUT|PATCH|DELETE)\s*=)/;
+const GET_EXPORT_RE = /export\s+(?:async\s+function\s+GET\b|const\s+GET\s*=)/;
+// A route is "session-based" (in this check's remit) when it calls getSession()
+// directly OR routes through the WS-D1 toolkit wrappers (which call getSession
+// internally). Including the wrappers keeps toolkit-adopted routes IN scope so
+// the checker still verifies their guard rather than silently skipping them.
+const GETSESSION_RE = /getSession\s*\(|with(?:Session|WorkspaceOwner|BackendGate)\s*\(/;
 
 // ── Allowlist: routes that legitimately need no per-resource authorization.
 // Repo-relative POSIX paths. Each MUST carry a reason.

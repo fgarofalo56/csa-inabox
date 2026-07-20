@@ -10,6 +10,8 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { apiOk, apiError } from '@/lib/api/respond';
+import { withSession, withBackendGate } from '@/lib/api/route-toolkit';
 import {
   listIndexes, createIndex, deleteIndex,
   searchConfigGate, SearchNotDeployedError, SearchDataError,
@@ -50,10 +52,12 @@ export async function GET(req: NextRequest) {
   } catch (e: any) { return fail(e); }
 }
 
-export async function POST(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  const g = gate(); if (g) return g;
+// WS-D1/D2: session-first, then the normalized backend gate. `withBackendGate`
+// composes INSIDE `withSession` so a 401 always precedes any 503 config
+// disclosure. The gate 'svc-aisearch' is the SAME LOOM_AI_SEARCH_SERVICE
+// presence check `searchConfigGate()` runs, now surfaced through the shared
+// gate envelope ({ ok:false, gated:true, gate:{ id, remediation, fixItHref } }).
+export const POST = withSession(withBackendGate('svc-aisearch', async (req: NextRequest) => {
   try {
     const body = await req.json().catch(() => ({}));
     let definition = body?.definition;
@@ -67,19 +71,16 @@ export async function POST(req: NextRequest) {
       definition = { name, fields };
     }
     if (!definition?.name || !Array.isArray(definition?.fields) || definition.fields.length === 0) {
-      return NextResponse.json({ ok: false, error: 'definition.name + non-empty definition.fields[] required (or { name } for a starter index)' }, { status: 400 });
+      return apiError('definition.name + non-empty definition.fields[] required (or { name } for a starter index)', 400);
     }
     const index = await createIndex(definition);
-    return NextResponse.json({ ok: true, index });
+    return apiOk({ index });
   } catch (e: any) { return fail(e); }
-}
+}));
 
-export async function DELETE(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  const g = gate(); if (g) return g;
+export const DELETE = withSession(withBackendGate('svc-aisearch', async (req: NextRequest) => {
   const name = req.nextUrl.searchParams.get('name');
-  if (!name) return NextResponse.json({ ok: false, error: 'name query param required' }, { status: 400 });
-  try { await deleteIndex(name); return NextResponse.json({ ok: true }); }
+  if (!name) return apiError('name query param required', 400);
+  try { await deleteIndex(name); return apiOk(); }
   catch (e: any) { return fail(e); }
-}
+}));

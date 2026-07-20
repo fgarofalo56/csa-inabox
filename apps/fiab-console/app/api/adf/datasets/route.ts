@@ -12,9 +12,11 @@
  * Real ARM REST. No mocks.
  */
 
-import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import type { NextRequest } from 'next/server';
 import { withFactoryFromRequest } from '@/lib/azure/adf-factory-context';
+import { apiOk, apiError } from '@/lib/api/respond';
+import { apiHonestGateError } from '@/lib/api/gate-envelope';
+import { withSession } from '@/lib/api/route-toolkit';
 import {
   adfConfigGate, listDatasets, upsertDataset, deleteDataset,
   type AdfDataset,
@@ -25,46 +27,48 @@ export const dynamic = 'force-dynamic';
 
 const NAME_RE = /^[A-Za-z0-9_]{1,260}$/;
 
+// WS-D2: the ADF config gate normalized onto the shared gate envelope. The
+// CHECK is unchanged (`adfConfigGate()`, preserving the anyOf LOOM_ADF_FACTORY /
+// LOOM_ADF_RG semantics); only the response shape is normalized — now
+// { ok:false, gated:true, gate:{ id:'svc-adf', remediation, fixItHref } } with
+// the back-compat code/error/missing mirrors intact. Kept INSIDE the factory
+// closure so it reflects the selected factory, not a pre-resolution guess.
 function gate() {
   const g = adfConfigGate();
   if (g) {
-    return NextResponse.json(
-      { ok: false, code: 'not_configured', error: `Data Factory not configured: set ${g.missing}.`, missing: g.missing },
-      { status: 503 },
-    );
+    return apiHonestGateError('svc-adf', {
+      missing: [g.missing],
+      message: `Data Factory not configured: set ${g.missing}.`,
+    });
   }
   return null;
 }
 
-export async function GET(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  return withFactoryFromRequest(req, async () => {
-    const g = gate(); if (g) return g;
-    try {
-      const datasets = await listDatasets();
-      return NextResponse.json({ ok: true, datasets });
-    } catch (e: any) {
-      return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
-    }
-  });
-}
+// WS-D1: session-only routes adopted onto `withSession`. The factory scope +
+// the (normalized) gate stay inside the wrapped body exactly as before.
+export const GET = withSession((req: NextRequest) => withFactoryFromRequest(req, async () => {
+  const g = gate(); if (g) return g;
+  try {
+    const datasets = await listDatasets();
+    return apiOk({ datasets });
+  } catch (e: any) {
+    return apiError(e?.message || String(e), 502);
+  }
+}));
 
-export async function POST(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const POST = withSession(async (req: NextRequest) => {
   const body = await req.json().catch(() => ({}));
   return withFactoryFromRequest(req, async () => {
     const g = gate(); if (g) return g;
     const name: string = typeof body?.name === 'string' ? body.name.trim() : '';
-    if (!name) return NextResponse.json({ ok: false, error: 'name is required' }, { status: 400 });
-    if (!NAME_RE.test(name)) return NextResponse.json({ ok: false, error: 'name must be 1-260 chars: letters, digits, _' }, { status: 400 });
+    if (!name) return apiError('name is required', 400);
+    if (!NAME_RE.test(name)) return apiError('name must be 1-260 chars: letters, digits, _', 400);
     const properties = body?.properties as AdfDataset['properties'] | undefined;
     if (!properties || typeof properties.type !== 'string') {
-      return NextResponse.json({ ok: false, error: 'properties.type is required' }, { status: 400 });
+      return apiError('properties.type is required', 400);
     }
     if (!properties.linkedServiceName?.referenceName) {
-      return NextResponse.json({ ok: false, error: 'properties.linkedServiceName.referenceName is required' }, { status: 400 });
+      return apiError('properties.linkedServiceName.referenceName is required', 400);
     }
     // Force the reference type so ADF accepts it regardless of caller payload.
     properties.linkedServiceName = {
@@ -74,25 +78,21 @@ export async function POST(req: NextRequest) {
     };
     try {
       const saved = await upsertDataset(name, { name, properties });
-      return NextResponse.json({ ok: true, dataset: saved });
+      return apiOk({ dataset: saved });
     } catch (e: any) {
-      return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
+      return apiError(e?.message || String(e), 502);
     }
   });
-}
+});
 
-export async function DELETE(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  return withFactoryFromRequest(req, async () => {
-    const g = gate(); if (g) return g;
-    const name = req.nextUrl.searchParams.get('name')?.trim();
-    if (!name) return NextResponse.json({ ok: false, error: 'name query param is required' }, { status: 400 });
-    try {
-      await deleteDataset(name);
-      return NextResponse.json({ ok: true });
-    } catch (e: any) {
-      return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
-    }
-  });
-}
+export const DELETE = withSession((req: NextRequest) => withFactoryFromRequest(req, async () => {
+  const g = gate(); if (g) return g;
+  const name = req.nextUrl.searchParams.get('name')?.trim();
+  if (!name) return apiError('name query param is required', 400);
+  try {
+    await deleteDataset(name);
+    return apiOk();
+  } catch (e: any) {
+    return apiError(e?.message || String(e), 502);
+  }
+}));
