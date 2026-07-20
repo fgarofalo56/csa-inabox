@@ -18,6 +18,7 @@
 
 import crypto from 'node:crypto';
 import { armGet, armPut, armPost } from '@/lib/azure/arm-client';
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 
 export const SWA_API = '2024-04-01';
 
@@ -192,7 +193,7 @@ export async function waitForContentLive(url: string, marker: string, budgetMs =
   const deadline = Date.now() + budgetMs;
   while (Date.now() < deadline) {
     try {
-      const res = await fetch(url, { cache: 'no-store', signal: AbortSignal.timeout(10_000) });
+      const res = await fetchWithTimeout(url, { cache: 'no-store' }, 10_000);
       const text = await res.text();
       if (res.ok && text.includes(marker)) return true;
     } catch { /* transient — keep polling */ }
