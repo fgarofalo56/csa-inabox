@@ -63,7 +63,7 @@ import {
   isFabricCopilotEnabled,
   resolveCopilotFabricWorkspace,
 } from '../types/copilot-config';
-import { resolveTierForTurn, type ModelTier } from '@/lib/foundry/model-tier-router';
+import { resolveTierForTurn, type ModelTier, type TaskClass } from '@/lib/foundry/model-tier-router';
 import { recordCopilotTurn, recentFullTurnBurn } from '@/lib/perf/copilot-latency-tracker';
 import { resolveAoaiCallTarget, aoaiApimHeaders, type AoaiCallTarget } from './aoai-apim-gateway';
 import { applyAvailabilityFallback } from '@/lib/foundry/model-availability-runtime';
@@ -1390,6 +1390,12 @@ export type OrchestratorStep =
       // in the CTS-01 metadata bar). Present only when routing actively swapped
       // the deployment away from the resolved default.
       routedTier?: ModelTier;
+      // WS-1.1: the honestly-ridden model tier + classified task class for THIS
+      // turn — ALWAYS present (unlike routedTier, which is swap-only). This is
+      // the durable tier-attribution trace attribute a browser E2E reads on
+      // every copilot turn, and the admin deep-trace / debug panel surfaces.
+      modelTier?: ModelTier;
+      taskClass?: TaskClass;
       // CTS-02 per-message detail roll-up.
       turnDetail?: TurnDetail;
       // CTS-04 grounding citations mapped from tool provenance.
@@ -2170,6 +2176,8 @@ export async function* orchestrate(opts: OrchestrateOptions): AsyncIterable<Orch
   // deployment (Wave-4 model-tier override via tenantConfig) still wins because
   // it becomes the `standard`/base the selector falls back to.
   let routedTier: ModelTier | undefined;
+  let modelTier: ModelTier | undefined;
+  let taskClass: TaskClass | undefined;
   try {
     const sel = resolveTierForTurn(opts.tenantConfig ?? null, {
       prompt,
@@ -2179,9 +2187,15 @@ export async function* orchestrate(opts: OrchestrateOptions): AsyncIterable<Orch
       // shaves a tier off a non-reasoning turn to answer faster.
       latencyBurn: recentFullTurnBurn(),
     });
+    // WS-1.1: ALWAYS capture the honestly-ridden tier + task class as the trace
+    // attribution (surfaced on the final step below), even when the router did
+    // NOT swap the deployment — a standard-tier turn is still attributed so a
+    // browser E2E can read `modelTier` on every copilot turn.
+    modelTier = sel.tier;
+    taskClass = sel.taskClass;
     if (sel.routed && sel.deployment) {
       target = { ...target, deployment: sel.deployment };
-      routedTier = sel.tier;
+      routedTier = sel.tier; // present only on an ACTIVE swap (CTS-16 chip emphasis)
     }
   } catch { /* routing is best-effort — never block a turn */ }
 
@@ -2521,6 +2535,10 @@ export async function* orchestrate(opts: OrchestrateOptions): AsyncIterable<Orch
         costUsd: estCostUsd(target.deployment, usage.promptTokens, usage.completionTokens),
         // CTS-16: the AIF-12 tier the router chose (omitted when no active swap).
         ...(routedTier ? { routedTier } : {}),
+        // WS-1.1: always-present tier attribution (the trace attribute), so a
+        // standard-tier turn is attributed too — a browser E2E reads modelTier.
+        ...(modelTier ? { modelTier } : {}),
+        ...(taskClass ? { taskClass } : {}),
         // CTS-02: the per-turn tool roll-up (empty tools = a no-tool answer).
         turnDetail: { tools: turnTools },
         // CTS-04: grounding citations (omit the key entirely when none, so older

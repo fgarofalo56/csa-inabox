@@ -25,6 +25,9 @@ import {
   isNumericColumn,
   formatCell,
   clampColumnWidth,
+  filterRows,
+  csvTimestamp,
+  CSV_BOM,
   MIN_COL_WIDTH,
   MAX_COL_WIDTH,
 } from '../kusto-results-grid';
@@ -116,14 +119,55 @@ describe('KustoResultsGrid — search-in-grid filter', () => {
   });
 });
 
-describe('KustoResultsGrid — pure helpers', () => {
-  it('buildCsv produces a correct, RFC-4180-quoted CSV', () => {
-    const csv = buildCsv(COLUMNS, ROWS);
-    expect(csv).toBe('City,Population\nSeattle,100\nAustin,20\nBoston,9');
+describe('KustoResultsGrid — per-column filter control', () => {
+  it('toggling column filters reveals inputs that narrow rows, and Clear resets', () => {
+    renderGrid();
+    expect(bodyRowTexts()).toHaveLength(3);
 
-    // Quoting: a cell with a comma must be wrapped + internal quotes doubled.
+    // Reveal the per-column filter inputs.
+    fireEvent.click(screen.getByLabelText('Toggle column filters'));
+    const cityFilter = screen.getByLabelText('Filter City');
+    fireEvent.change(cityFilter, { target: { value: 'bo' } });
+
+    const data = bodyRowTexts();
+    expect(data).toHaveLength(1);
+    expect(data[0][0]).toBe('Boston');
+
+    // The Clear-filters button restores every row.
+    fireEvent.click(screen.getByLabelText('Clear filters'));
+    expect(bodyRowTexts()).toHaveLength(3);
+  });
+});
+
+describe('KustoResultsGrid — pure helpers', () => {
+  it('buildCsv produces a correct, RFC-4180-quoted CSV (CRLF records)', () => {
+    const csv = buildCsv(COLUMNS, ROWS);
+    expect(csv).toBe('City,Population\r\nSeattle,100\r\nAustin,20\r\nBoston,9');
+
+    // Quoting: a cell with a comma must be wrapped + internal quotes doubled;
+    // an embedded newline forces quoting too (and stays intact in the cell).
     const tricky = buildCsv(['a', 'b'], [['x,y', 'he said "hi"']]);
-    expect(tricky).toBe('a,b\n"x,y","he said ""hi"""');
+    expect(tricky).toBe('a,b\r\n"x,y","he said ""hi"""');
+    const multiline = buildCsv(['a'], [['line1\nline2']]);
+    expect(multiline).toBe('a\r\n"line1\nline2"');
+
+    // Header-only (no rows) has no trailing separator.
+    expect(buildCsv(['a', 'b'], [])).toBe('a,b');
+  });
+
+  it('CSV_BOM is the UTF-8 byte-order mark so Excel reads Unicode', () => {
+    expect(CSV_BOM).toBe('﻿');
+    expect(CSV_BOM.charCodeAt(0)).toBe(0xfeff);
+    // The exported blob is BOM + CSV — accented text survives round-trip.
+    const withBom = CSV_BOM + buildCsv(['name'], [['Åsa']]);
+    expect(withBom.startsWith('﻿')).toBe(true);
+    expect(withBom).toContain('Åsa');
+  });
+
+  it('csvTimestamp is a sortable YYYYMMDD-HHMMSS local stamp', () => {
+    const stamp = csvTimestamp(new Date(2026, 6, 20, 9, 5, 3)); // month is 0-based → July
+    expect(stamp).toBe('20260720-090503');
+    expect(csvTimestamp()).toMatch(/^\d{8}-\d{6}$/);
   });
 
   it('clampColumnWidth clamps into the allowed range and rounds', () => {
@@ -167,6 +211,61 @@ describe('KustoResultsGrid — pure helpers', () => {
     expect(stats.max).toBe(100);
     expect(stats.sum).toBe(129);
     expect(stats.avg).toBeCloseTo(43, 5);
+  });
+
+  it('computeColumnStats returns earliest/latest for a datetime column', () => {
+    const cols = ['ts'];
+    const types = ['DateTime'];
+    const rows: unknown[][] = [
+      ['2026-07-20T10:00:00Z'],
+      ['2026-07-18T06:30:00Z'],
+      ['2026-07-19T23:15:00Z'],
+      [null],
+    ];
+    const stats = computeColumnStats(0, rows, types);
+    expect(stats.isNumeric).toBe(false);
+    expect(stats.isDateTime).toBe(true);
+    expect(stats.count).toBe(4);
+    expect(stats.nulls).toBe(1);
+    expect(stats.distinct).toBe(3);
+    expect(stats.min).toBe(Date.parse('2026-07-18T06:30:00Z'));
+    expect(stats.max).toBe(Date.parse('2026-07-20T10:00:00Z'));
+    expect(stats.minLabel).toBe('2026-07-18T06:30:00.000Z');
+    expect(stats.maxLabel).toBe('2026-07-20T10:00:00.000Z');
+  });
+
+  it('computeColumnStats reports distinct + most-common for a string column', () => {
+    const rows: unknown[][] = [['a'], ['b'], ['a'], ['a'], ['']];
+    const stats = computeColumnStats(0, rows, ['String']);
+    expect(stats.isNumeric).toBe(false);
+    expect(stats.isDateTime).toBe(false);
+    expect(stats.nulls).toBe(1); // empty string counts as null/empty
+    expect(stats.distinct).toBe(2); // 'a', 'b'
+    expect(stats.mostCommon).toEqual({ value: 'a', n: 3 });
+  });
+
+  it('filterRows applies global search and per-column filters (AND), ignoring blanks', () => {
+    // No terms → identity (same reference).
+    expect(filterRows(ROWS, COLUMNS, '', [])).toBe(ROWS);
+
+    // Global search across any column, case-insensitive.
+    const g = filterRows(ROWS, COLUMNS, 'aust', []);
+    expect(g).toHaveLength(1);
+    expect(g[0][0]).toBe('Austin');
+
+    // Numeric cell matched by substring via the global search too.
+    expect(filterRows(ROWS, COLUMNS, '100', [])).toHaveLength(1);
+
+    // Per-column filter on the City column only.
+    const c = filterRows(ROWS, COLUMNS, '', [[0, 'bo']]);
+    expect(c).toHaveLength(1);
+    expect(c[0][0]).toBe('Boston');
+
+    // Blank per-column terms are ignored (no over-filtering).
+    expect(filterRows(ROWS, COLUMNS, '', [[0, '   ']])).toBe(ROWS);
+
+    // Global + per-column combine with AND (no row satisfies both).
+    expect(filterRows(ROWS, COLUMNS, 'seattle', [[0, 'austin']])).toHaveLength(0);
   });
 
   it('formatCell stringifies objects and blanks null/undefined', () => {

@@ -1,5 +1,19 @@
 # adx-kusto — parity with Azure Data Explorer (Kusto)
 
+> **rev — WS-3.5 (2026-07-20): results-grid section C+ → A.** The **results grid**
+> sub-surface (`KustoResultsGrid`) is graded **A** (production-grade + Vitest-
+> covered) on its named deliverables: **column stats** (min/max/distinct/null per
+> column — numeric aggregates for numeric, earliest/latest for datetime),
+> **in-grid filter/search** (per-column + global via the pure exported
+> `filterRows` predicate), and **CSV export polish** (RFC-4180 CRLF, doubled-quote
+> escaping, UTF-8 BOM for Excel, timestamped filename, respects active
+> filters/sort). All computed from the REAL query rows, no mock. 18 Vitest cases
+> in `kusto-results-grid.test.tsx` cover stat computation, the filter predicate,
+> and CSV serialization/quoting. **Owed:** a browser-E2E receipt on a live ADX
+> query result (Track-0). The *overall* service grade stays **C+** — cluster
+> lifecycle/scale (F1–F5), RBAC (F7/F8), RLS (E10), group-by/pivot (B4/B5), and
+> Open-in-Excel/Power-BI (C4/C5) remain the ceiling.
+
 > **rev — re-audited against Wave-8→11 code (2026-06-10), audit-T31.** This doc's
 > top gaps — cluster lifecycle/scale/start-stop, RBAC principal mgmt (cluster +
 > database), and RLS authoring (tooltip-only before; audit-T20) — are closed by
@@ -192,11 +206,11 @@ Legend: **built ✅** (full 1:1 + real backend) · **partial ⚠️** (exists, i
 |---|--------|----------------------|
 | B1 | built ✅ | `KustoResultsGrid` (`lib/components/adx/kusto-results-grid.tsx`) over real `{columns, columnTypes, rows}` from `/v1/rest/query`, wired into `phase3-editors.tsx:384`; sticky header, render cap with honest "capped at N" badge, "Showing N of M · total" readout |
 | B2 | built ✅ | **Column sort now built.** Header click cycles asc → desc → none; type-aware via `makeComparator` — numeric/datetime columns sort by value (epoch for datetime), strings case-insensitively, empties last (`kusto-results-grid.tsx:131-161`) |
-| B3 | built ✅ | **Per-column filter now built.** Filter-toggle reveals a per-column substring (case-insensitive) input row (`:625-635`); `activeColFilters` AND-combined |
+| B3 | built ✅ | **Per-column filter now built.** Filter-toggle reveals a per-column substring (case-insensitive) input row (`:625-635`); combined with the global search via the pure, exported **`filterRows`** predicate (AND-combined, blank terms ignored — unit-tested + reusable by sibling grids). WS-3.5 |
 | B4 | MISSING ❌ | No group-by |
 | B5 | MISSING ❌ | No pivot mode |
 | B6 | built ✅ | **In-grid search now built.** Global "Search in grid" box filters rows + `HighlightedText` highlights matched substrings in cells (`:553-562`, `:346-363`) |
-| B7 | built ✅ | **Cell/column statistics now built.** Per-column stats popover (`ColumnStatsPopover`): count / nulls / distinct, and for numeric columns min / max / sum / avg; non-numeric → most-common value (`computeColumnStats`, `:368-434`) over the current (sorted+filtered) view |
+| B7 | built ✅ | **Cell/column statistics now built + polished (WS-3.5).** Per-column stats popover (`ColumnStatsPopover`): count / nulls / distinct for every column; numeric → min / max / sum / avg; **datetime → earliest / latest** (min/max ISO timestamps); non-numeric/non-datetime → most-common value (`computeColumnStats`) over the current (sorted+filtered) view. Min/max/distinct/null now complete across all column kinds |
 | B8 | MISSING ❌ | No cell-selection → filter insertion (Ctrl+Shift+Space) |
 | B9 | partial ⚠️ | Per-column stats popover (B7) doubles as quick column insights (distinct/nulls/most-common/numeric aggregates); not the full ADX per-column data-profile pane (type histogram / top-values bars) |
 | B10 | partial ⚠️ | Dependency-free SVG charts: table/bar/line in query panel; dashboard tiles add column/pie/stat/map/timechart. **Not** the KQL `render`-operator-driven viz; hand-rolled |
@@ -209,7 +223,7 @@ Legend: **built ✅** (full 1:1 + real backend) · **partial ⚠️** (exists, i
 |---|--------|----------------------|
 | C1 | built ✅ | Queryset "Save to dashboard" → lists kql-dashboards, appends a tile, `PUT /api/items/kql-dashboard/[id]` (real Cosmos) |
 | C2 | partial ⚠️ | **Copy results now built** — grid toolbar "Copy" writes the visible (sorted+filtered) rows as TSV to the clipboard, with a hidden-textarea fallback (`kusto-results-grid.tsx:524-540`). No separate copy-*query*-text affordance |
-| C3 | built ✅ | **Export-to-CSV now built** — grid toolbar "CSV" downloads the visible rows as an RFC-4180 CSV Blob (`buildCsv` + `downloadCsv`, `:214-222`, `:513-522`) |
+| C3 | built ✅ | **Export-to-CSV now built + polished (WS-3.5).** Grid toolbar "CSV" downloads the *filtered + sorted* rows as an RFC-4180 CSV Blob — **CRLF record separators**, doubled-quote escaping, **UTF-8 BOM prefix** so Excel opens Unicode correctly, and a **timestamped filename** (`<name>-YYYYMMDD-HHMMSS.csv`). `buildCsv` + `csvTimestamp` + `CSV_BOM` are pure + unit-tested; respects the active filters (`downloadCsv` exports `sorted`) |
 | C4 | MISSING ❌ | No Open-in-Excel |
 | C5 | MISSING ❌ | No Query-to-Power-BI export |
 | C6 | MISSING ❌ | No share-link |
@@ -309,14 +323,29 @@ All routes session-guard, apply the `LOOM_KUSTO_CLUSTER_URI` config gate (honest
 
 1. **Cluster lifecycle mostly absent in this surface** — no Stop/Start (F3), no scale-up (F4), no Overview/metrics (F2), no create/delete cluster (F1/F12). **Optimized auto-scale (F5) is now built** (Eventhouse › Manage › Auto-scale → real ARM `optimizedAutoscale` PATCH, honest Dev/Basic-SKU gate); custom metric-driven autoscale rules remain a hole. These portal verbs are still the biggest parity gap.
 2. **Permissions management missing** — no cluster (F7) or database (F8) RBAC principal assignment UI; the live UAMI runs as AllDatabasesAdmin and there's no way to grant/revoke from Loom.
-3. ~~Results grid is a static table~~ — **largely RESOLVED (PR #545).** `KustoResultsGrid` now does sort (B2), per-column filter (B3), in-grid search+highlight (B6), and column statistics (B7). Still missing: group-by (B4), pivot (B5), cell-selection→filter (B8), full data-profile pane (B9).
-4. **Export/share partly built** — CSV download (C3) + copy-as-TSV (C2) now built in the grid; still no Open-in-Excel (C4) / Query-to-Power-BI (C5) / share-link (C6).
+3. ~~Results grid is a static table~~ — **RESOLVED to A-grade (PR #545 + WS-3.5).**
+   `KustoResultsGrid` does sort (B2), per-column + global filter via the pure
+   `filterRows` predicate (B3/B6), in-grid search+highlight (B6), and **complete
+   column statistics** — min/max/distinct/null for every column, numeric
+   aggregates (sum/avg) for numeric, **earliest/latest for datetime** (B7). Still
+   missing the heavier grid modes: group-by (B4), pivot (B5), cell-selection→
+   filter (B8), full data-profile pane (B9).
+4. **Export/share — CSV polished to A (WS-3.5).** CSV download (C3) is now RFC-4180
+   (CRLF + doubled-quote escaping), UTF-8-BOM'd for Excel, timestamp-named, and
+   respects the active filters/sort; copy-as-TSV (C2) also built. Still no
+   Open-in-Excel (C4) / Query-to-Power-BI (C5) / share-link (C6).
 5. **Table schema editing** — drop only; no edit-schema/rename/command-viewer (E3); RLS (E10) and external tables (E11) are tooltip-only "coming" rows with no backend.
 6. **Get-data wizards thin** — file inline + Event Hub (gated) + OneLake path only; no blob/ADLS wizard, no schema inference / mapping preview, no continuous-vs-one-time toggle (D2, D5).
 7. **No query tabs / recall / IntelliSense confirmation** (A3, A7, A8; A4 unverified).
 8. **Dashboards lack pages, file import/export, visual-formatting pane** (G7, G8, G10) — though tiles/params/data-sources/time-range/run are genuinely built ✅.
 
-## Grade: **C+ (functional, rough in places; results grid now strong)**
+## Grade: **C+ (functional, rough in places; results grid now A-grade)**
+
+> **Results-grid sub-surface: A (WS-3.5).** Per the WS-3.5 rev at the top of this
+> doc, the `KustoResultsGrid` is graded **A** for its three named deliverables
+> (column stats, in-grid filter/search, CSV export polish) — all real-row,
+> Vitest-covered, browser-E2E owed. The *overall* ADX service grade below remains
+> **C+**, gated by cluster lifecycle / RBAC / heavier grid modes.
 
 > **rev.2 — corrected against current code (PRs #536 / #545).** Two pillars the
 > rev.1 audit graded as essentially unbuilt are now real: (1) the **rich results

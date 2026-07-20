@@ -537,6 +537,21 @@ export const GATE_META: Record<string, GateMeta> = {
     loaders: { LOOM_AOAI_EMBED_DEPLOYMENT: L.aoaiDeployment },
     legacyCodes: ['embedding_not_configured'],
   },
+  'svc-model-reasoning-tier': {
+    surfaces: [
+      { path: '/copilot', label: 'Copilot — reasoning-tier routing' },
+      { path: '/admin/copilot', label: 'Copilot & Agents — Model tiers' },
+      { path: '/items/*', label: 'Data agents / item Copilots (hard-turn routing)' },
+    ],
+    // Fix-it: pick a real deployed reasoning/mini model from the account's live
+    // AOAI deployments (the aoai-deployments loader lists deployments across the
+    // subscription's OpenAI/AIServices accounts), then it's written via the one
+    // shared env-apply write path.
+    fixit: { kind: 'resource-picker' },
+    loaders: { LOOM_AOAI_STRONG_DEPLOYMENT: L.aoaiDeployment, LOOM_AOAI_MINI_DEPLOYMENT: L.aoaiDeployment },
+    autoResolveNote: 'Unset → the tier router silently rides the single default AOAI deployment for every turn (fully functional, just no hard-turn upshift). A push-button deploy wires the mini/strong tiers from the Foundry project (best model per cloud) — set them here to enable best-per-task routing on an existing deployment.',
+    legacyCodes: [],
+  },
   'svc-databricks-sql': {
     surfaces: [
       { path: '/governance/data-quality', label: 'DQ monitor' },

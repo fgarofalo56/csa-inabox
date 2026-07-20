@@ -154,10 +154,14 @@ describe('admin/env-config registry', () => {
     // Bumped to 135 by access-governance W4 (svc-graph-group-sync:
     // LOOM_GRAPH_GROUP_SYNC_ENABLED — opt-in, optionalDefault, Graph read-only
     // Entra group reconcile for group-targeted access packages).
-    // Bumped to 136 by the Gov-89 AAS recognition: LOOM_SEMANTIC_BACKEND joins
+    // Bumped to 137 by WS-1.1 (svc-model-reasoning-tier: LOOM_AOAI_STRONG_DEPLOYMENT
+    // + LOOM_AOAI_MINI_DEPLOYMENT — the model tier router's reasoning + mini tier
+    // deployments, admin-tunable + optionalDefault: unset silently rides the single
+    // default AOAI deployment for every turn, fully functional).
+    // Bumped to 138 by the Gov-89 AAS recognition: LOOM_SEMANTIC_BACKEND joins
     // the svc-aas anyOf (the Loom-native tabular layer is the DEFAULT engine;
     // AAS is an optional Commercial/GCC fast-path, unavailable in GCC-High).
-    expect(EDITABLE_ENV.length).toBe(136);
+    expect(EDITABLE_ENV.length).toBe(138);
   });
 
   it('surfaces the wave-2 env vars as settable (previously dropped by the whitelist)', () => {
@@ -222,6 +226,7 @@ describe('admin/env-config registry', () => {
     // per-replica in-memory cache with zero loss of function).
     const optDefault = EDITABLE_ENV.filter((e) => e.optionalDefault).map((e) => e.key).sort();
     expect(optDefault).toEqual([
+      'LOOM_AOAI_MINI_DEPLOYMENT', 'LOOM_AOAI_STRONG_DEPLOYMENT',
       'LOOM_AUDIT_DCR_ENDPOINT', 'LOOM_AUDIT_DCR_ID',
       'LOOM_BROKER_REDIS', 'LOOM_BROKER_URL',
       'LOOM_CONTENT_SAFETY_ENDPOINT', 'LOOM_DIRECTLAKE_URL', 'LOOM_DOCINTEL_ENDPOINT',
