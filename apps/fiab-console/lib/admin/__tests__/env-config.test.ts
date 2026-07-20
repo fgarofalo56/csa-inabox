@@ -161,7 +161,12 @@ describe('admin/env-config registry', () => {
     // Bumped to 138 by the Gov-89 AAS recognition: LOOM_SEMANTIC_BACKEND joins
     // the svc-aas anyOf (the Loom-native tabular layer is the DEFAULT engine;
     // AAS is an optional Commercial/GCC fast-path, unavailable in GCC-High).
-    expect(EDITABLE_ENV.length).toBe(138);
+    // Bumped to 139 by WS-1.2 (svc-model-serving: LOOM_MODEL_SERVING_BACKEND —
+    // the model-serving backend selector, default 'aml' = Azure ML managed online
+    // endpoints, opt-in 'databricks' = Mosaic serving; the workspace/hostname keys
+    // it also references are shared with svc-aml / svc-databricks, so only the
+    // selector is a NEW editable var).
+    expect(EDITABLE_ENV.length).toBe(139);
   });
 
   it('surfaces the wave-2 env vars as settable (previously dropped by the whitelist)', () => {

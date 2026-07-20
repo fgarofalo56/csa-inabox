@@ -198,6 +198,7 @@ const REGISTRY: Record<string, Entry> = {
   'ml-model':           { icon: BrainCircuit24Regular,  family: 'science', label: 'ML Model' },
   'ml-experiment':      { icon: BeakerEdit24Regular,    family: 'science', label: 'ML Experiment' },
   'automl':             { icon: Sparkle24Regular,       family: 'science', label: 'AutoML' },
+  'model-serving-endpoint': { icon: Rocket24Regular,    family: 'science', label: 'Model Serving Endpoint' },
 
   // ── Loom IQ ────────────────────────────────────────────────────
   'ontology':           { icon: TextBulletListTree24Regular, family: 'fabric-iq', label: 'Ontology' },

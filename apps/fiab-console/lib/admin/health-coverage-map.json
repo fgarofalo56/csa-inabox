@@ -1,146 +1,820 @@
 {
   "$comment": "CSA Loom health-coverage registry — the SINGLE SOURCE mapping every lib/azure/*-client.ts and every item-type workload family to the self-audit checks that guard its backend. Consumed by (a) lib/admin/health-coverage.ts, which DERIVES one health check per workload family from this map + the live item-type catalog, and (b) scripts/ci/check-health-coverage.mjs, which FAILS the build when a new client or family appears with no mapping (structural coverage growth — see docs/fiab/health-coverage-audit.md). An entry is either {\"checks\": [ids...]} (the self-audit checks covering that backend) or {\"allow\": \"reason\"} (genuinely uncheckable / deliberately opt-in — reason required).",
   "families": {
-    "Data Engineering": { "checks": ["svc-adls", "probe-adls", "svc-synapse", "probe-synapse"] },
-    "Data Factory": { "checks": ["svc-adf", "probe-adf", "svc-synapse", "probe-synapse"] },
-    "Data Warehouse": { "checks": ["svc-synapse", "probe-synapse"] },
-    "Databases": { "checks": ["cosmos-config", "probe-cosmos", "svc-azure-sql", "svc-postgres"] },
-    "Real-Time Intelligence": { "checks": ["svc-adx", "probe-kusto", "svc-eventhubs", "probe-eventhubs", "svc-monitor-alerts"] },
-    "Data Science": { "checks": ["svc-aml", "svc-databricks"] },
-    "Loom IQ": { "checks": ["cosmos-config", "probe-cosmos", "svc-aoai", "probe-aoai"] },
-    "Power BI": { "checks": ["cosmos-config", "probe-cosmos", "svc-azure-maps", "svc-aas"] },
-    "APIs and functions": { "checks": ["svc-dab-runtime", "probe-dab-runtime", "svc-udf-function", "probe-udf-runtime", "svc-apim", "probe-apim"] },
-    "Synapse Analytics": { "checks": ["svc-synapse", "probe-synapse"] },
-    "Azure Databricks": { "checks": ["svc-databricks", "probe-databricks"] },
-    "Azure Data Factory": { "checks": ["svc-adf", "probe-adf"] },
-    "Streaming analytics": { "checks": ["svc-stream-analytics", "svc-eventhubs", "probe-eventhubs"] },
-    "Azure AI Foundry": { "checks": ["svc-aoai", "probe-aoai"] },
-    "Azure SQL Database": { "checks": ["svc-azure-sql"] },
-    "Azure Geoanalytics": { "checks": ["svc-azure-maps", "svc-adx", "probe-kusto"] },
-    "Azure Graph + Vector": { "checks": ["svc-adx", "probe-kusto", "cosmos-config", "probe-cosmos"] },
-    "CSA Data Products": { "checks": ["cosmos-config", "probe-cosmos", "svc-adls", "probe-adls"] },
-    "Copilot Studio": { "checks": ["svc-powerplatform", "probe-powerplatform"] },
-    "Power Platform": { "checks": ["svc-powerplatform", "probe-powerplatform"] },
-    "AI & Agents": { "checks": ["svc-aoai", "probe-aoai"] },
-    "Loom Apps": { "checks": ["cosmos-config", "probe-cosmos", "svc-swa-publish"] }
+    "Data Engineering": {
+      "checks": [
+        "svc-adls",
+        "probe-adls",
+        "svc-synapse",
+        "probe-synapse"
+      ]
+    },
+    "Data Factory": {
+      "checks": [
+        "svc-adf",
+        "probe-adf",
+        "svc-synapse",
+        "probe-synapse"
+      ]
+    },
+    "Data Warehouse": {
+      "checks": [
+        "svc-synapse",
+        "probe-synapse"
+      ]
+    },
+    "Databases": {
+      "checks": [
+        "cosmos-config",
+        "probe-cosmos",
+        "svc-azure-sql",
+        "svc-postgres"
+      ]
+    },
+    "Real-Time Intelligence": {
+      "checks": [
+        "svc-adx",
+        "probe-kusto",
+        "svc-eventhubs",
+        "probe-eventhubs",
+        "svc-monitor-alerts"
+      ]
+    },
+    "Data Science": {
+      "checks": [
+        "svc-aml",
+        "svc-databricks"
+      ]
+    },
+    "Loom IQ": {
+      "checks": [
+        "cosmos-config",
+        "probe-cosmos",
+        "svc-aoai",
+        "probe-aoai"
+      ]
+    },
+    "Power BI": {
+      "checks": [
+        "cosmos-config",
+        "probe-cosmos",
+        "svc-azure-maps",
+        "svc-aas"
+      ]
+    },
+    "APIs and functions": {
+      "checks": [
+        "svc-dab-runtime",
+        "probe-dab-runtime",
+        "svc-udf-function",
+        "probe-udf-runtime",
+        "svc-apim",
+        "probe-apim"
+      ]
+    },
+    "Synapse Analytics": {
+      "checks": [
+        "svc-synapse",
+        "probe-synapse"
+      ]
+    },
+    "Azure Databricks": {
+      "checks": [
+        "svc-databricks",
+        "probe-databricks"
+      ]
+    },
+    "Azure Data Factory": {
+      "checks": [
+        "svc-adf",
+        "probe-adf"
+      ]
+    },
+    "Streaming analytics": {
+      "checks": [
+        "svc-stream-analytics",
+        "svc-eventhubs",
+        "probe-eventhubs"
+      ]
+    },
+    "Azure AI Foundry": {
+      "checks": [
+        "svc-aoai",
+        "probe-aoai"
+      ]
+    },
+    "Azure SQL Database": {
+      "checks": [
+        "svc-azure-sql"
+      ]
+    },
+    "Azure Geoanalytics": {
+      "checks": [
+        "svc-azure-maps",
+        "svc-adx",
+        "probe-kusto"
+      ]
+    },
+    "Azure Graph + Vector": {
+      "checks": [
+        "svc-adx",
+        "probe-kusto",
+        "cosmos-config",
+        "probe-cosmos"
+      ]
+    },
+    "CSA Data Products": {
+      "checks": [
+        "cosmos-config",
+        "probe-cosmos",
+        "svc-adls",
+        "probe-adls"
+      ]
+    },
+    "Copilot Studio": {
+      "checks": [
+        "svc-powerplatform",
+        "probe-powerplatform"
+      ]
+    },
+    "Power Platform": {
+      "checks": [
+        "svc-powerplatform",
+        "probe-powerplatform"
+      ]
+    },
+    "AI & Agents": {
+      "checks": [
+        "svc-aoai",
+        "probe-aoai"
+      ]
+    },
+    "Loom Apps": {
+      "checks": [
+        "cosmos-config",
+        "probe-cosmos",
+        "svc-swa-publish"
+      ]
+    }
   },
   "clients": {
-    "aas-client": { "checks": ["svc-aas", "probe-aas"] },
-    "aas-server-client": { "checks": ["svc-aas"] },
-    "access-policy-client": { "checks": ["svc-synapse", "subscription"] },
-    "activator-client": { "checks": ["svc-monitor-alerts", "svc-activator-adx-scope"] },
-    "adf-client": { "checks": ["svc-adf", "probe-adf"] },
-    "adls-client": { "checks": ["svc-adls", "probe-adls"] },
-    "adls-user-client": { "checks": ["svc-adls", "probe-adls"] },
-    "agent-memory-client": { "checks": ["cosmos-config", "probe-cosmos", "svc-aoai"] },
-    "ai-enrichment-client": { "checks": ["svc-ai-enrich"] },
-    "ai-functions-client": { "checks": ["svc-aoai", "probe-aoai"] },
-    "ai-language-client": { "checks": ["svc-ai-enrich"] },
-    "aisearch-client": { "checks": ["svc-aisearch", "probe-search-governance-index"] },
-    "ai-translator-client": { "checks": ["svc-ai-enrich"] },
-    "ai-vision-client": { "checks": ["svc-ai-enrich"] },
-    "aks-arm-client": { "checks": ["probe-arm-reader"] },
-    "aml-automl-client": { "checks": ["svc-aml"] },
-    "aml-client": { "checks": ["svc-aml"] },
-    "aml-environments-client": { "checks": ["svc-aml"] },
-    "aml-spark-client": { "checks": ["svc-aml"] },
-    "aoai-chat-client": { "checks": ["svc-aoai", "probe-aoai"] },
-    "apim-client": { "checks": ["svc-apim", "probe-apim"] },
-    "app-service-slots-client": { "checks": ["svc-swa-publish", "probe-arm-reader"] },
-    "arm-client": { "checks": ["probe-arm-reader"] },
-    "arm-deployments-client": { "checks": ["probe-arm-reader"] },
-    "azure-sql-client": { "checks": ["svc-azure-sql", "probe-azure-sql"] },
-    "batch-client": { "checks": ["svc-batch", "probe-batch"] },
-    "browser-tool-client": { "allow": "Optional Copilot browser-tool ACA job (LOOM_BROWSER_TOOL_ENDPOINT); Copilot is fully functional without it and the tool self-gates honestly per call." },
-    "capacity-broker-client": { "checks": ["svc-loom-capacity-broker"] },
-    "container-apps-arm-client": { "checks": ["probe-arm-reader", "svc-mcp-deploy"] },
-    "copilot-studio-client": { "checks": ["svc-powerplatform", "probe-powerplatform"] },
-    "cosmos-account-client": { "checks": ["cosmos-config", "probe-cosmos"] },
-    "cosmos-client": { "checks": ["cosmos-config", "probe-cosmos"] },
-    "cosmos-data-client": { "checks": ["cosmos-config", "probe-cosmos"] },
-    "cosmos-vcore-vector-client": { "allow": "Opt-in Cosmos vCore vector store (LOOM_COSMOS_VCORE_CONNECTION_STRING); the default vector path is AI Search, covered by svc-aisearch." },
-    "cost-client": { "checks": ["probe-arm-reader"] },
-    "cost-management-client": { "checks": ["probe-arm-reader"] },
-    "data-agent-client": { "checks": ["svc-aoai", "probe-aoai"] },
-    "databricks-client": { "checks": ["svc-databricks", "probe-databricks"] },
-    "databricks-scale-client": { "checks": ["svc-databricks", "probe-databricks"] },
-    "dataflow-engine-client": { "checks": ["svc-synapse", "probe-synapse", "svc-adf", "probe-adf"] },
-    "data-quality-client": { "checks": ["svc-databricks", "svc-adx", "svc-synapse"] },
-    "defender-client": { "checks": ["probe-arm-reader"] },
-    "devcenter-client": { "allow": "Optional Dev Center / deployment-environments backend (LOOM_DEVCENTER_URI); the platform functions fully without it and the surface gates honestly." },
-    "dlp-graph-client": { "checks": ["probe-dlp-graph-roles"] },
-    "doc-intelligence-client": { "checks": ["svc-ai-enrich"] },
-    "domains-client": { "checks": ["cosmos-config", "probe-cosmos", "purview"] },
-    "dq-monitor-client": { "checks": ["svc-databricks", "probe-databricks"] },
-    "dspm-ai-client": { "checks": ["probe-log-analytics", "cosmos-config"] },
-    "embeddings-client": { "checks": ["svc-aoai", "probe-aoai"] },
-    "eventgrid-client": { "checks": ["svc-eventgrid"] },
-    "eventgrid-topics-client": { "checks": ["svc-eventgrid", "probe-eventgrid"] },
-    "eventhubs-client": { "checks": ["svc-eventhubs", "probe-eventhubs"] },
-    "eventhubs-data-client": { "checks": ["svc-eventhubs", "probe-eventhubs"] },
-    "external-share-client": { "checks": ["cosmos-config", "probe-cosmos"] },
-    "fabric-client": { "allow": "Microsoft Fabric backend is OPT-IN ONLY (no-fabric-dependency.md); it is never on the default path, so health deliberately does not gate on it." },
-    "foundry-agent-client": { "checks": ["svc-aoai", "probe-aoai"] },
-    "foundry-client": { "checks": ["svc-aoai", "probe-aoai", "svc-aml", "probe-aml"] },
-    "foundry-connections-client": { "checks": ["svc-aoai", "probe-aoai"] },
-    "foundry-cs-client": { "checks": ["svc-aoai", "probe-aoai"] },
-    "git-integration-client": { "checks": ["svc-keyvault", "probe-keyvault"] },
-    "graph-drive-client": { "allow": "Opt-in SharePoint/OneDrive shortcut source (LOOM_SHAREPOINT_SHORTCUTS_ENABLED); the shortcut editor renders its own honest Graph Files.Read gate." },
-    "graph-identity-client": { "checks": ["graph-users", "probe-graph-directory"] },
-    "graph-search-client": { "checks": ["graph-users", "probe-graph-directory"] },
-    "gremlin-client": { "allow": "Opt-in Cosmos Gremlin graph backend (LOOM_COSMOS_GREMLIN_ENDPOINT); the default graph path is ADX-native, covered by svc-adx + probe-kusto." },
-    "iothub-client": { "allow": "Optional IoT Hub eventstream source (LOOM_IOTHUB_RG); Event Hubs is the default source, covered by svc-eventhubs + probe-eventhubs." },
-    "irm-client": { "checks": ["probe-log-analytics"] },
-    "item-permissions-client": { "checks": ["cosmos-config", "probe-cosmos"] },
-    "kusto-arm-client": { "checks": ["svc-adx", "probe-kusto"] },
-    "kusto-client": { "checks": ["svc-adx", "probe-kusto"] },
-    "kv-secrets-client": { "checks": ["svc-keyvault", "probe-keyvault"] },
-    "lakebase-databricks-client": { "checks": ["svc-databricks", "probe-databricks", "svc-postgres"] },
-    "loom-apps-client": { "checks": ["svc-mcp-deploy", "probe-arm-reader"] },
-    "loom-onelake-client": { "checks": ["svc-loom-onelake"] },
-    "maps-client": { "checks": ["svc-azure-maps"] },
-    "mcp-client": { "checks": ["svc-mcp-catalog", "probe-builtin-mcp", "svc-keyvault"] },
-    "mcp-deploy-client": { "checks": ["svc-mcp-deploy"] },
-    "mip-graph-client": { "checks": ["probe-dlp-graph-roles"] },
-    "mlflow-client": { "checks": ["svc-aml", "svc-databricks"] },
-    "monitor-client": { "checks": ["svc-monitor-alerts", "probe-log-analytics"] },
-    "onelake-catalog-client": { "allow": "Fabric OneLake catalog is opt-in only; the Azure-native catalog rides Cosmos + Purview, covered by cosmos-config + purview." },
-    "onelake-security-client": { "checks": ["svc-onelake-acl"] },
-    "paginated-report-client": { "checks": ["probe-paginated-renderer"] },
-    "pgvector-client": { "checks": ["svc-postgres"] },
-    "plan-approval-client": { "checks": ["cosmos-config", "probe-cosmos"] },
-    "postgres-flex-client": { "checks": ["svc-postgres", "probe-postgres"] },
-    "posture-client": { "checks": ["svc-posture-refresh", "probe-posture-function", "probe-log-analytics"] },
-    "powerbi-client": { "checks": ["usage-embed", "govern-embed"] },
-    "powerplatform-client": { "checks": ["svc-powerplatform", "probe-powerplatform"] },
-    "protection-policy-client": { "checks": ["cosmos-config", "probe-cosmos"] },
-    "purview-client": { "checks": ["purview", "probe-purview-datamap"] },
-    "purview-mip-client": { "checks": ["purview", "probe-dlp-graph-roles"] },
-    "purview-unified-client": { "checks": ["purview", "probe-purview-datamap"] },
-    "rbac-client": { "checks": ["probe-arm-reader"] },
-    "redis-cache-client": { "checks": ["svc-redis-result-cache"] },
-    "report-accel-client": { "checks": ["svc-databricks", "probe-databricks"] },
-    "role-grant-client": { "checks": ["probe-arm-reader"] },
-    "scc-dlp-client": { "checks": ["probe-dlp-graph-roles"] },
-    "scc-labels-client": { "checks": ["probe-dlp-graph-roles"] },
-    "search-index-client": { "checks": ["svc-aisearch", "probe-search-governance-index"] },
-    "servicebus-client": { "checks": ["svc-servicebus", "probe-servicebus"] },
-    "servicebus-data-client": { "checks": ["svc-servicebus", "probe-servicebus"] },
-    "shortcut-client": { "checks": ["svc-adls", "probe-adls"] },
-    "sql-objects-client": { "checks": ["svc-azure-sql"] },
-    "statistics-client": { "checks": ["svc-synapse", "probe-synapse"] },
-    "stream-analytics-client": { "checks": ["svc-stream-analytics", "probe-stream-analytics"] },
-    "synapse-artifacts-client": { "checks": ["svc-synapse", "probe-synapse"] },
-    "synapse-catalog-client": { "checks": ["svc-synapse", "probe-synapse"] },
-    "synapse-dev-client": { "checks": ["svc-synapse", "probe-synapse"] },
-    "synapse-livy-client": { "checks": ["svc-synapse", "probe-synapse"] },
-    "synapse-permissions-client": { "checks": ["svc-synapse", "probe-synapse"] },
-    "synapse-sql-client": { "checks": ["svc-synapse", "probe-synapse"] },
-    "tabular-eval-client": { "checks": ["svc-aas"] },
-    "unity-catalog-account-client": { "checks": ["svc-databricks", "probe-databricks"] },
-    "unity-catalog-client": { "checks": ["svc-databricks", "probe-databricks", "probe-delta-sharing"] },
-    "vmss-client": { "checks": ["probe-arm-reader"] },
-    "workspace-identity-client": { "checks": ["probe-arm-reader"] },
-    "workspace-roles-client": { "checks": ["cosmos-config", "probe-cosmos"] }
+    "aas-client": {
+      "checks": [
+        "svc-aas",
+        "probe-aas"
+      ]
+    },
+    "aas-server-client": {
+      "checks": [
+        "svc-aas"
+      ]
+    },
+    "access-policy-client": {
+      "checks": [
+        "svc-synapse",
+        "subscription"
+      ]
+    },
+    "activator-client": {
+      "checks": [
+        "svc-monitor-alerts",
+        "svc-activator-adx-scope"
+      ]
+    },
+    "adf-client": {
+      "checks": [
+        "svc-adf",
+        "probe-adf"
+      ]
+    },
+    "adls-client": {
+      "checks": [
+        "svc-adls",
+        "probe-adls"
+      ]
+    },
+    "adls-user-client": {
+      "checks": [
+        "svc-adls",
+        "probe-adls"
+      ]
+    },
+    "agent-memory-client": {
+      "checks": [
+        "cosmos-config",
+        "probe-cosmos",
+        "svc-aoai"
+      ]
+    },
+    "ai-enrichment-client": {
+      "checks": [
+        "svc-ai-enrich"
+      ]
+    },
+    "ai-functions-client": {
+      "checks": [
+        "svc-aoai",
+        "probe-aoai"
+      ]
+    },
+    "ai-language-client": {
+      "checks": [
+        "svc-ai-enrich"
+      ]
+    },
+    "aisearch-client": {
+      "checks": [
+        "svc-aisearch",
+        "probe-search-governance-index"
+      ]
+    },
+    "ai-translator-client": {
+      "checks": [
+        "svc-ai-enrich"
+      ]
+    },
+    "ai-vision-client": {
+      "checks": [
+        "svc-ai-enrich"
+      ]
+    },
+    "aks-arm-client": {
+      "checks": [
+        "probe-arm-reader"
+      ]
+    },
+    "aml-automl-client": {
+      "checks": [
+        "svc-aml"
+      ]
+    },
+    "aml-client": {
+      "checks": [
+        "svc-aml"
+      ]
+    },
+    "aml-environments-client": {
+      "checks": [
+        "svc-aml"
+      ]
+    },
+    "aml-spark-client": {
+      "checks": [
+        "svc-aml"
+      ]
+    },
+    "aoai-chat-client": {
+      "checks": [
+        "svc-aoai",
+        "probe-aoai"
+      ]
+    },
+    "apim-client": {
+      "checks": [
+        "svc-apim",
+        "probe-apim"
+      ]
+    },
+    "app-service-slots-client": {
+      "checks": [
+        "svc-swa-publish",
+        "probe-arm-reader"
+      ]
+    },
+    "arm-client": {
+      "checks": [
+        "probe-arm-reader"
+      ]
+    },
+    "arm-deployments-client": {
+      "checks": [
+        "probe-arm-reader"
+      ]
+    },
+    "azure-sql-client": {
+      "checks": [
+        "svc-azure-sql",
+        "probe-azure-sql"
+      ]
+    },
+    "batch-client": {
+      "checks": [
+        "svc-batch",
+        "probe-batch"
+      ]
+    },
+    "browser-tool-client": {
+      "allow": "Optional Copilot browser-tool ACA job (LOOM_BROWSER_TOOL_ENDPOINT); Copilot is fully functional without it and the tool self-gates honestly per call."
+    },
+    "capacity-broker-client": {
+      "checks": [
+        "svc-loom-capacity-broker"
+      ]
+    },
+    "container-apps-arm-client": {
+      "checks": [
+        "probe-arm-reader",
+        "svc-mcp-deploy"
+      ]
+    },
+    "copilot-studio-client": {
+      "checks": [
+        "svc-powerplatform",
+        "probe-powerplatform"
+      ]
+    },
+    "cosmos-account-client": {
+      "checks": [
+        "cosmos-config",
+        "probe-cosmos"
+      ]
+    },
+    "cosmos-client": {
+      "checks": [
+        "cosmos-config",
+        "probe-cosmos"
+      ]
+    },
+    "cosmos-data-client": {
+      "checks": [
+        "cosmos-config",
+        "probe-cosmos"
+      ]
+    },
+    "cosmos-vcore-vector-client": {
+      "allow": "Opt-in Cosmos vCore vector store (LOOM_COSMOS_VCORE_CONNECTION_STRING); the default vector path is AI Search, covered by svc-aisearch."
+    },
+    "cost-client": {
+      "checks": [
+        "probe-arm-reader"
+      ]
+    },
+    "cost-management-client": {
+      "checks": [
+        "probe-arm-reader"
+      ]
+    },
+    "data-agent-client": {
+      "checks": [
+        "svc-aoai",
+        "probe-aoai"
+      ]
+    },
+    "databricks-client": {
+      "checks": [
+        "svc-databricks",
+        "probe-databricks"
+      ]
+    },
+    "databricks-scale-client": {
+      "checks": [
+        "svc-databricks",
+        "probe-databricks"
+      ]
+    },
+    "dataflow-engine-client": {
+      "checks": [
+        "svc-synapse",
+        "probe-synapse",
+        "svc-adf",
+        "probe-adf"
+      ]
+    },
+    "data-quality-client": {
+      "checks": [
+        "svc-databricks",
+        "svc-adx",
+        "svc-synapse"
+      ]
+    },
+    "defender-client": {
+      "checks": [
+        "probe-arm-reader"
+      ]
+    },
+    "devcenter-client": {
+      "allow": "Optional Dev Center / deployment-environments backend (LOOM_DEVCENTER_URI); the platform functions fully without it and the surface gates honestly."
+    },
+    "dlp-graph-client": {
+      "checks": [
+        "probe-dlp-graph-roles"
+      ]
+    },
+    "doc-intelligence-client": {
+      "checks": [
+        "svc-ai-enrich"
+      ]
+    },
+    "domains-client": {
+      "checks": [
+        "cosmos-config",
+        "probe-cosmos",
+        "purview"
+      ]
+    },
+    "dq-monitor-client": {
+      "checks": [
+        "svc-databricks",
+        "probe-databricks"
+      ]
+    },
+    "dspm-ai-client": {
+      "checks": [
+        "probe-log-analytics",
+        "cosmos-config"
+      ]
+    },
+    "embeddings-client": {
+      "checks": [
+        "svc-aoai",
+        "probe-aoai"
+      ]
+    },
+    "eventgrid-client": {
+      "checks": [
+        "svc-eventgrid"
+      ]
+    },
+    "eventgrid-topics-client": {
+      "checks": [
+        "svc-eventgrid",
+        "probe-eventgrid"
+      ]
+    },
+    "eventhubs-client": {
+      "checks": [
+        "svc-eventhubs",
+        "probe-eventhubs"
+      ]
+    },
+    "eventhubs-data-client": {
+      "checks": [
+        "svc-eventhubs",
+        "probe-eventhubs"
+      ]
+    },
+    "external-share-client": {
+      "checks": [
+        "cosmos-config",
+        "probe-cosmos"
+      ]
+    },
+    "fabric-client": {
+      "allow": "Microsoft Fabric backend is OPT-IN ONLY (no-fabric-dependency.md); it is never on the default path, so health deliberately does not gate on it."
+    },
+    "foundry-agent-client": {
+      "checks": [
+        "svc-aoai",
+        "probe-aoai"
+      ]
+    },
+    "foundry-client": {
+      "checks": [
+        "svc-aoai",
+        "probe-aoai",
+        "svc-aml",
+        "probe-aml"
+      ]
+    },
+    "foundry-connections-client": {
+      "checks": [
+        "svc-aoai",
+        "probe-aoai"
+      ]
+    },
+    "foundry-cs-client": {
+      "checks": [
+        "svc-aoai",
+        "probe-aoai"
+      ]
+    },
+    "git-integration-client": {
+      "checks": [
+        "svc-keyvault",
+        "probe-keyvault"
+      ]
+    },
+    "graph-drive-client": {
+      "allow": "Opt-in SharePoint/OneDrive shortcut source (LOOM_SHAREPOINT_SHORTCUTS_ENABLED); the shortcut editor renders its own honest Graph Files.Read gate."
+    },
+    "graph-identity-client": {
+      "checks": [
+        "graph-users",
+        "probe-graph-directory"
+      ]
+    },
+    "graph-search-client": {
+      "checks": [
+        "graph-users",
+        "probe-graph-directory"
+      ]
+    },
+    "gremlin-client": {
+      "allow": "Opt-in Cosmos Gremlin graph backend (LOOM_COSMOS_GREMLIN_ENDPOINT); the default graph path is ADX-native, covered by svc-adx + probe-kusto."
+    },
+    "iothub-client": {
+      "allow": "Optional IoT Hub eventstream source (LOOM_IOTHUB_RG); Event Hubs is the default source, covered by svc-eventhubs + probe-eventhubs."
+    },
+    "irm-client": {
+      "checks": [
+        "probe-log-analytics"
+      ]
+    },
+    "item-permissions-client": {
+      "checks": [
+        "cosmos-config",
+        "probe-cosmos"
+      ]
+    },
+    "kusto-arm-client": {
+      "checks": [
+        "svc-adx",
+        "probe-kusto"
+      ]
+    },
+    "kusto-client": {
+      "checks": [
+        "svc-adx",
+        "probe-kusto"
+      ]
+    },
+    "kv-secrets-client": {
+      "checks": [
+        "svc-keyvault",
+        "probe-keyvault"
+      ]
+    },
+    "lakebase-databricks-client": {
+      "checks": [
+        "svc-databricks",
+        "probe-databricks",
+        "svc-postgres"
+      ]
+    },
+    "loom-apps-client": {
+      "checks": [
+        "svc-mcp-deploy",
+        "probe-arm-reader"
+      ]
+    },
+    "loom-onelake-client": {
+      "checks": [
+        "svc-loom-onelake"
+      ]
+    },
+    "maps-client": {
+      "checks": [
+        "svc-azure-maps"
+      ]
+    },
+    "mcp-client": {
+      "checks": [
+        "svc-mcp-catalog",
+        "probe-builtin-mcp",
+        "svc-keyvault"
+      ]
+    },
+    "mcp-deploy-client": {
+      "checks": [
+        "svc-mcp-deploy"
+      ]
+    },
+    "mip-graph-client": {
+      "checks": [
+        "probe-dlp-graph-roles"
+      ]
+    },
+    "mlflow-client": {
+      "checks": [
+        "svc-aml",
+        "svc-databricks"
+      ]
+    },
+    "monitor-client": {
+      "checks": [
+        "svc-monitor-alerts",
+        "probe-log-analytics"
+      ]
+    },
+    "onelake-catalog-client": {
+      "allow": "Fabric OneLake catalog is opt-in only; the Azure-native catalog rides Cosmos + Purview, covered by cosmos-config + purview."
+    },
+    "onelake-security-client": {
+      "checks": [
+        "svc-onelake-acl"
+      ]
+    },
+    "paginated-report-client": {
+      "checks": [
+        "probe-paginated-renderer"
+      ]
+    },
+    "pgvector-client": {
+      "checks": [
+        "svc-postgres"
+      ]
+    },
+    "plan-approval-client": {
+      "checks": [
+        "cosmos-config",
+        "probe-cosmos"
+      ]
+    },
+    "postgres-flex-client": {
+      "checks": [
+        "svc-postgres",
+        "probe-postgres"
+      ]
+    },
+    "posture-client": {
+      "checks": [
+        "svc-posture-refresh",
+        "probe-posture-function",
+        "probe-log-analytics"
+      ]
+    },
+    "powerbi-client": {
+      "checks": [
+        "usage-embed",
+        "govern-embed"
+      ]
+    },
+    "powerplatform-client": {
+      "checks": [
+        "svc-powerplatform",
+        "probe-powerplatform"
+      ]
+    },
+    "protection-policy-client": {
+      "checks": [
+        "cosmos-config",
+        "probe-cosmos"
+      ]
+    },
+    "purview-client": {
+      "checks": [
+        "purview",
+        "probe-purview-datamap"
+      ]
+    },
+    "purview-mip-client": {
+      "checks": [
+        "purview",
+        "probe-dlp-graph-roles"
+      ]
+    },
+    "purview-unified-client": {
+      "checks": [
+        "purview",
+        "probe-purview-datamap"
+      ]
+    },
+    "rbac-client": {
+      "checks": [
+        "probe-arm-reader"
+      ]
+    },
+    "redis-cache-client": {
+      "checks": [
+        "svc-redis-result-cache"
+      ]
+    },
+    "report-accel-client": {
+      "checks": [
+        "svc-databricks",
+        "probe-databricks"
+      ]
+    },
+    "role-grant-client": {
+      "checks": [
+        "probe-arm-reader"
+      ]
+    },
+    "scc-dlp-client": {
+      "checks": [
+        "probe-dlp-graph-roles"
+      ]
+    },
+    "scc-labels-client": {
+      "checks": [
+        "probe-dlp-graph-roles"
+      ]
+    },
+    "search-index-client": {
+      "checks": [
+        "svc-aisearch",
+        "probe-search-governance-index"
+      ]
+    },
+    "servicebus-client": {
+      "checks": [
+        "svc-servicebus",
+        "probe-servicebus"
+      ]
+    },
+    "servicebus-data-client": {
+      "checks": [
+        "svc-servicebus",
+        "probe-servicebus"
+      ]
+    },
+    "shortcut-client": {
+      "checks": [
+        "svc-adls",
+        "probe-adls"
+      ]
+    },
+    "sql-objects-client": {
+      "checks": [
+        "svc-azure-sql"
+      ]
+    },
+    "statistics-client": {
+      "checks": [
+        "svc-synapse",
+        "probe-synapse"
+      ]
+    },
+    "stream-analytics-client": {
+      "checks": [
+        "svc-stream-analytics",
+        "probe-stream-analytics"
+      ]
+    },
+    "synapse-artifacts-client": {
+      "checks": [
+        "svc-synapse",
+        "probe-synapse"
+      ]
+    },
+    "synapse-catalog-client": {
+      "checks": [
+        "svc-synapse",
+        "probe-synapse"
+      ]
+    },
+    "synapse-dev-client": {
+      "checks": [
+        "svc-synapse",
+        "probe-synapse"
+      ]
+    },
+    "synapse-livy-client": {
+      "checks": [
+        "svc-synapse",
+        "probe-synapse"
+      ]
+    },
+    "synapse-permissions-client": {
+      "checks": [
+        "svc-synapse",
+        "probe-synapse"
+      ]
+    },
+    "synapse-sql-client": {
+      "checks": [
+        "svc-synapse",
+        "probe-synapse"
+      ]
+    },
+    "tabular-eval-client": {
+      "checks": [
+        "svc-aas"
+      ]
+    },
+    "unity-catalog-account-client": {
+      "checks": [
+        "svc-databricks",
+        "probe-databricks"
+      ]
+    },
+    "unity-catalog-client": {
+      "checks": [
+        "svc-databricks",
+        "probe-databricks",
+        "probe-delta-sharing"
+      ]
+    },
+    "vmss-client": {
+      "checks": [
+        "probe-arm-reader"
+      ]
+    },
+    "workspace-identity-client": {
+      "checks": [
+        "probe-arm-reader"
+      ]
+    },
+    "workspace-roles-client": {
+      "checks": [
+        "cosmos-config",
+        "probe-cosmos"
+      ]
+    },
+    "model-serving-client": {
+      "checks": [
+        "svc-model-serving"
+      ]
+    }
   }
 }

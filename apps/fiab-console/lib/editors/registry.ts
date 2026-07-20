@@ -113,6 +113,10 @@ export const EDITOR_REGISTRY: Record<string, EditorComponent> = {
   'ml-model':             reg(() => import('./ml-model-editor'),            'MlModelEditor'),
   'ml-experiment':        reg(() => import('./ml-experiment-editor'),     'MlExperimentEditor'),
   'automl':               reg(() => import('./automl-editor'),            'AutoMlEditor'),
+  // WS-1.2 — Model Serving as a first-class item: create endpoint + traffic-split
+  // + invoke console + latency/error monitoring over Azure ML online endpoints
+  // (Azure-native default) or Databricks Mosaic serving (LOOM_MODEL_SERVING_BACKEND=databricks).
+  'model-serving-endpoint': reg(() => import('./model-serving-endpoint-editor'), 'ModelServingEndpointEditor'),
   // AIF-7 — batch LLM augmentation over a table column (Fabric AI-functions item).
   'ai-enrichment':        reg(() => import('./ai-enrichment-editor'),     'AiEnrichmentEditor'),
   // AIF-15 — AI red-team scan: defensive safety probe of a model deployment.
