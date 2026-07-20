@@ -105,6 +105,13 @@ const GETSESSION_RE = /getSession\s*\(/;
 // ── Allowlist: routes that legitimately need no per-resource authorization.
 // Repo-relative POSIX paths. Each MUST carry a reason.
 const ALLOWLIST = new Map([
+  // Bulk access-request decision (access-governance W4, AG-14): delegates each
+  // leg to POST /api/access-requests/[id]/decision, which enforces the real
+  // per-request approver check (actorMayApprove over that request's approvalPlan
+  // + isTenantAdmin). A blanket inline admin gate would be WRONG here — named
+  // non-admin approvers are legitimately allowed per-request — so authorization
+  // is correctly delegated per leg, not duplicated at the batch entry point.
+  ['apps/fiab-console/app/api/access-requests/bulk-decision/route.ts', 'bulk wrapper: per-leg delegation to [id]/decision enforces the real per-request approver check; no batch-level owner scope applies'],
   // Feedback intake is deliberately session-OPTIONAL (rel-T15/B16): anonymous
   // auto-error reports are accepted but hard-throttled + deduped server-side;
   // bug/feature kinds require a session INSIDE the handler. No per-tenant
