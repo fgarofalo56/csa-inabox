@@ -962,7 +962,7 @@ function sanitizeNumberFormatByField(raw: unknown): PersistedFormat['numberForma
   for (const key of Object.keys(o)) {
     if (n >= MAX_MULTIPLES_FIELDS) break;
     const k = key.trim().slice(0, MAX_COLOR_STR);
-    if (!k) continue;
+    if (!k || k === '__proto__' || k === 'constructor' || k === 'prototype') continue;
     const v = o[key];
     if (!v || typeof v !== 'object') continue;
     const ov = v as Record<string, unknown>;
