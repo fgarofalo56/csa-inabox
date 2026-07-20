@@ -205,6 +205,26 @@ export async function applyLabelInheritance(
  * calls loadOwnedItem. Pass `{ allowReadRoles: true }` from a strictly read-only
  * GET route to admit read-only members. Returns null when unauthorized.
  */
+/**
+ * RAW item load by id+type — NO ownership / workspace-ACL check. ONLY for the
+ * published-app token path (run-action pub-read + /api/pub/swa-bundle), where
+ * the caller is authorized by a per-item HMAC token instead of a session.
+ * Never expose this on a session-authenticated code path.
+ */
+export async function loadItemRaw(itemId: string, itemType: string): Promise<WorkspaceItem | null> {
+  const items = await itemsContainer();
+  const { resources } = await items.items
+    .query<WorkspaceItem>({
+      query: 'SELECT * FROM c WHERE c.id = @id AND c.itemType = @t',
+      parameters: [
+        { name: '@id', value: itemId },
+        { name: '@t', value: itemType },
+      ],
+    })
+    .fetchAll();
+  return resources[0] ?? null;
+}
+
 export async function loadOwnedItem(
   itemId: string,
   itemType: string,
