@@ -27,7 +27,7 @@ export interface WorkshopVariable {
   defaultValue?: string;
 }
 
-export type WorkshopWidgetKind = 'table' | 'chart' | 'metric' | 'filter' | 'form' | 'button' | 'text' | 'image' | 'link' | 'divider' | 'badge' | 'iframe' | 'heading' | 'progress' | 'spacer' | 'timestamp' | 'kpi-row' | 'gauge' | 'callout' | 'quote' | 'rating' | 'tag-list' | 'delta' | 'checklist';
+export type WorkshopWidgetKind = 'table' | 'chart' | 'metric' | 'filter' | 'form' | 'button' | 'text' | 'image' | 'link' | 'divider' | 'badge' | 'iframe' | 'heading' | 'progress' | 'spacer' | 'timestamp' | 'kpi-row' | 'gauge' | 'callout' | 'quote' | 'rating' | 'tag-list' | 'delta' | 'checklist' | 'avatar' | 'code-block' | 'key-value' | 'countdown';
 
 export interface WorkshopWidgetLayout { x: number; y: number; w: number; h: number }
 
@@ -107,6 +107,15 @@ export interface WorkshopWidget {
   deltaPrevious?: string;
   // checklist — newline list; lines starting "[x]" render checked.
   checklistItems?: string;
+  // avatar — display name (initials derived) + optional caption.
+  avatarName?: string;
+  avatarCaption?: string;
+  // code-block — monospace pre-formatted content.
+  code?: string;
+  // key-value — newline list of "Key: value" pairs; values support {{variable}}.
+  keyValues?: string;
+  // countdown — ISO date (yyyy-mm-dd) to count down to.
+  countdownTo?: string;
   // button + table events
   events?: WorkshopEvent[];
 }

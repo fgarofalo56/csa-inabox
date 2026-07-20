@@ -110,6 +110,10 @@ const DEFAULT_SIZE: Record<WorkshopWidgetKind, { w: number; h: number }> = {
   'tag-list': { w: 336, h: 80 },
   delta: { w: 224, h: 96 },
   checklist: { w: 336, h: 160 },
+  avatar: { w: 224, h: 96 },
+  'code-block': { w: 448, h: 160 },
+  'key-value': { w: 336, h: 160 },
+  countdown: { w: 224, h: 96 },
 };
 
 const KIND_META: Record<WorkshopWidgetKind, { label: string; icon: ReactElement; hint: string; data: boolean }> = {
@@ -137,6 +141,10 @@ const KIND_META: Record<WorkshopWidgetKind, { label: string; icon: ReactElement;
   'tag-list': { label: 'Tags', icon: <Filter20Regular />, hint: 'A wrapping row of tag badges', data: false },
   delta: { label: 'Delta', icon: <DataUsage20Regular />, hint: 'Current vs previous — signed change, colored by direction', data: false },
   checklist: { label: 'Checklist', icon: <Form20Regular />, hint: 'A static checklist — prefix a line with [x] to check it', data: false },
+  avatar: { label: 'Avatar', icon: <Cursor20Regular />, hint: 'An initials avatar with name + caption', data: false },
+  'code-block': { label: 'Code', icon: <Code20Regular />, hint: 'Monospace pre-formatted block', data: false },
+  'key-value': { label: 'Key–Value', icon: <Table20Regular />, hint: 'Key: value lines with {{variable}} interpolation', data: false },
+  countdown: { label: 'Countdown', icon: <Flash20Regular />, hint: 'Days remaining until a date', data: false },
 };
 
 const CHART_TYPES: LoomChartType[] = ['column', 'bar', 'line', 'area', 'pie', 'donut'];
@@ -497,6 +505,36 @@ function WidgetBody({
     return <div>{renderText(widget.text || '_Empty text widget — set its content in the inspector._', variables, runtime)}</div>;
   }
 
+  if (widget.kind === 'avatar') {
+    const name = String(renderText(widget.avatarName || widget.title, variables, runtime));
+    const initials = name.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]?.toUpperCase() || '').join('') || '?';
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS }}>
+        <div style={{ width: '40px', height: '40px', borderRadius: '50%', backgroundColor: tokens.colorBrandBackground, color: tokens.colorNeutralForegroundOnBrand, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+          <Subtitle2>{initials}</Subtitle2>
+        </div>
+        <div><Body1 block>{name}</Body1>{widget.avatarCaption && <Caption1>{widget.avatarCaption}</Caption1>}</div>
+      </div>
+    );
+  }
+  if (widget.kind === 'code-block') {
+    return <pre style={{ margin: 0, padding: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusMedium, backgroundColor: tokens.colorNeutralBackground3, fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, overflowX: 'auto' }}>{widget.code || '// code'}</pre>;
+  }
+  if (widget.kind === 'key-value') {
+    const rows = String(widget.keyValues || '').split('\n').map((l) => l.trim()).filter(Boolean).map((l) => { const i = l.indexOf(':'); return i < 0 ? { k: l, v: '' } : { k: l.slice(0, i).trim(), v: String(renderText(l.slice(i + 1).trim(), variables, runtime)) }; });
+    if (!rows.length) return <Caption1 className={s.hint}>Add "Key: value" lines in the inspector.</Caption1>;
+    return (
+      <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', columnGap: tokens.spacingHorizontalM, rowGap: tokens.spacingVerticalXS }}>
+        {rows.map((r, i) => (<><Caption1 key={`k${i}`}>{r.k}</Caption1><Body1 key={`v${i}`}>{r.v}</Body1></>))}
+      </div>
+    );
+  }
+  if (widget.kind === 'countdown') {
+    const target = new Date(String(widget.countdownTo || ''));
+    if (isNaN(target.getTime())) return <Caption1 className={s.hint}>Set a target date (yyyy-mm-dd) in the inspector.</Caption1>;
+    const days = Math.ceil((target.getTime() - Date.now()) / 86_400_000);
+    return <div><Subtitle2>{Math.abs(days)} day{Math.abs(days) === 1 ? '' : 's'}</Subtitle2><Caption1>{days >= 0 ? 'until' : 'since'} {target.toLocaleDateString()}</Caption1></div>;
+  }
   if (widget.kind === 'rating') {
     const num = (v: string | undefined, d: number) => { const n = Number(String(renderText(String(v ?? ''), variables, runtime)).replace(/[^0-9.]/g, '')); return Number.isFinite(n) && String(v ?? '') !== '' ? n : d; };
     const max = Math.max(1, Math.min(10, Math.round(num(widget.ratingMax, 5))));
@@ -861,6 +899,21 @@ function WidgetInspector({
         </Field>
       )}
 
+      {widget.kind === 'avatar' && (
+        <>
+          <Field label="Name" hint="Initials derive from it; supports {{variableName}}."><Input value={widget.avatarName || ''} onChange={(_, d) => onChange({ avatarName: d.value })} placeholder="Ada Lovelace" /></Field>
+          <Field label="Caption"><Input value={widget.avatarCaption || ''} onChange={(_, d) => onChange({ avatarCaption: d.value })} placeholder="Data engineer" /></Field>
+        </>
+      )}
+      {widget.kind === 'code-block' && (
+        <Field label="Code"><Textarea value={widget.code || ''} onChange={(_, d) => onChange({ code: d.value })} rows={6} resize="vertical" placeholder={'SELECT *\nFROM orders'} /></Field>
+      )}
+      {widget.kind === 'key-value' && (
+        <Field label="Pairs" hint={'One "Key: value" per line; values support {{variableName}}.'}><Textarea value={widget.keyValues || ''} onChange={(_, d) => onChange({ keyValues: d.value })} rows={5} resize="vertical" placeholder={'Owner: Frank\nRegion: {{region}}'} /></Field>
+      )}
+      {widget.kind === 'countdown' && (
+        <Field label="Target date"><Input type="date" value={widget.countdownTo || ''} onChange={(_, d) => onChange({ countdownTo: d.value })} /></Field>
+      )}
       {widget.kind === 'rating' && (
         <>
           <Field label="Value" hint="Number or {{variableName}}."><Input value={widget.ratingValue || ''} onChange={(_, d) => onChange({ ratingValue: d.value })} placeholder="4" /></Field>
@@ -1190,6 +1243,10 @@ export function WorkshopAppBuilder({ id, entityTypes, widgets, variables, onWidg
       ...(kind === 'tag-list' ? { tags: 'gold, verified, priority' } : {}),
       ...(kind === 'delta' ? { deltaValue: '1250', deltaPrevious: '1100' } : {}),
       ...(kind === 'checklist' ? { checklistItems: '[x] Kickoff\n[ ] Review\n[ ] Ship' } : {}),
+      ...(kind === 'avatar' ? { avatarName: 'Ada Lovelace', avatarCaption: 'Data engineer' } : {}),
+      ...(kind === 'code-block' ? { code: 'SELECT *\nFROM orders' } : {}),
+      ...(kind === 'key-value' ? { keyValues: 'Owner: Frank\nRegion: Central US' } : {}),
+      ...(kind === 'countdown' ? { countdownTo: '2026-12-31' } : {}),
     };
     onWidgetsChange([...widgets, widget]);
     setSelectedId(wid);
