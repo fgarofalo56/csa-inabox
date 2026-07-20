@@ -38,6 +38,7 @@ import { apiServerError } from '@/lib/api/respond';
 import { recordAssignment } from '@/lib/access/assignment-ledger';
 import { effectiveStages, nextStage, actorMayApprove } from '@/lib/access/approval-policy';
 import { isTenantAdmin } from '@/lib/auth/feature-gate';
+import { computeExpiry } from '@/lib/access/expiry';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -123,6 +124,39 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
         if (typeof body?.scopeRef === 'string' && body.scopeRef.trim()) {
           doc.scopeRef = String(body.scopeRef).trim().slice(0, 200);
         }
+        if (doc.activationRequired) {
+          // W3 (PIM) — final approval yields an ELIGIBLE assignment (no RBAC yet);
+          // the requester activates it for a bounded window from the Access report.
+          doc.status = 'completed';
+          await recordAssignment({
+            principalId: doc.requesterId,
+            principalUpn: doc.requesterUpn,
+            principalType: 'User',
+            tenantId: s.claims.oid,
+            resourceType: doc.scopeType,
+            resourceRef: doc.scopeRef,
+            resourceName: doc.assetName,
+            role: doc.scopeType,
+            permission: doc.permission,
+            source: 'direct',
+            sourceRef: doc.id,
+            grantedBy: s.claims.upn || s.claims.oid,
+            state: 'eligible',
+            expiresAt: null,
+            activationWindowHours: doc.activationWindowHours ?? null,
+          });
+          const nc = await notificationsContainer();
+          await nc.items.create({
+            id: crypto.randomUUID(),
+            userId: doc.requesterId,
+            title: `Access eligible: ${doc.assetName}`,
+            body: `Your access to ${doc.assetName} is approved as ELIGIBLE. Activate it from the Access report to receive a time-bounded grant.`,
+            severity: 'info',
+            link: '/admin/access-report',
+            read: false,
+            createdAt: now,
+          });
+        } else {
         // Provision the REAL Azure RBAC grant on the backing data store.
         const grant = await enforceAccessGrant({
           principalId: doc.requesterId,
@@ -136,6 +170,8 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
         if (grant.status === 'active') {
           doc.status = 'completed';
           doc.subscribedAt = now;
+          // W3 — apply the package's grant lifetime (if any) as the expiry.
+          const grantExpiry = computeExpiry(new Date(now), { lifetimeDays: doc.grantLifetimeDays });
           // Entitlement ledger (access-governance W1): record the effective grant
           // so the who-has-access report reflects it. Best-effort (never throws).
           await recordAssignment({
@@ -152,6 +188,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
             sourceRef: doc.id,
             grantedBy: s.claims.upn || s.claims.oid,
             roleAssignmentId: grant.roleAssignmentId,
+            expiresAt: grantExpiry,
           });
           // Notify the requester they're now a subscriber.
           const nc = await notificationsContainer();
@@ -176,6 +213,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
           ok = grant.status !== 'error';
           httpStatus = grant.status === 'error' ? 502 : 200;
           warning = grant.detail;
+        }
         }
       }
     }

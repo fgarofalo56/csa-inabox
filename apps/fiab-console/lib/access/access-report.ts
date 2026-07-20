@@ -16,6 +16,8 @@ import type { AccessAssignment } from '@/lib/types/access-assignment';
 import type { WorkspaceRoleAssignment } from '@/lib/azure/workspace-roles-client';
 
 export interface AccessEntry {
+  /** Ledger assignment id (present for ledger-sourced rows; enables Activate). */
+  id?: string;
   principalId: string;
   principalUpn?: string;
   principalType: string;
@@ -38,6 +40,7 @@ export interface AccessEntry {
 /** Normalize a ledger assignment into a report entry. */
 export function assignmentToEntry(a: AccessAssignment): AccessEntry {
   return {
+    id: a.id,
     principalId: a.principalId,
     principalUpn: a.principalUpn,
     principalType: a.principalType,

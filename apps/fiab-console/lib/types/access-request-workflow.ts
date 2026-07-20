@@ -88,6 +88,13 @@ export interface AccessRequestDoc {
    * tiers) instead of the hard-coded TIER_SEQUENCE; absent = legacy behaviour.
    */
   approvalPlan?: import('./approval-policy').ApprovalPlan;
+  // ── access-governance W3 (time-bound / PIM; snapshot from the package) ───────
+  /** Grant lifetime in days applied at final approval; null/absent = permanent. */
+  grantLifetimeDays?: number | null;
+  /** When true, final approval records an ELIGIBLE assignment (no grant); the
+   *  requester activates it for a bounded window instead. */
+  activationRequired?: boolean;
+  activationWindowHours?: number | null;
 }
 
 /** Map a tier to the doc field that records its decision. */

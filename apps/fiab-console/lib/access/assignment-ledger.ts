@@ -48,7 +48,8 @@ export function toAssignmentDoc(input: RecordAssignmentInput, now = new Date().t
     grantedAt: now,
     roleAssignmentId: input.roleAssignmentId,
     expiresAt: input.expiresAt ?? null,
-    state: 'active',
+    activationWindowHours: input.activationWindowHours ?? null,
+    state: input.state || 'active',
     updatedAt: now,
   };
 }
@@ -74,6 +75,47 @@ export async function recordAssignment(input: RecordAssignmentInput): Promise<bo
  * Mark an assignment revoked (state='revoked'). Best-effort; matches on the
  * deterministic id, so callers pass the same tuple used to record it.
  */
+/**
+ * Activate an ELIGIBLE assignment (W3, PIM) — flip it to 'active', stamp the real
+ * roleAssignmentId + a bounded expiresAt. Returns the updated doc or null.
+ */
+export async function activateAssignment(
+  id: string,
+  principalId: string,
+  patch: { roleAssignmentId?: string; expiresAt: string | null; activatedBy?: string; role?: string },
+): Promise<AccessAssignment | null> {
+  const c = await accessAssignmentsContainer();
+  const { resource } = await c.item(id, principalId).read<AccessAssignment>();
+  if (!resource || resource.state !== 'eligible') return null;
+  const now = new Date().toISOString();
+  resource.state = 'active';
+  resource.expiresAt = patch.expiresAt;
+  if (patch.roleAssignmentId) resource.roleAssignmentId = patch.roleAssignmentId;
+  if (patch.role) resource.role = patch.role;
+  resource.grantedAt = now;
+  if (patch.activatedBy) resource.grantedBy = patch.activatedBy;
+  resource.updatedAt = now;
+  const { resource: saved } = await c.item(id, principalId).replace(resource);
+  return saved || resource;
+}
+
+/** Mark an assignment expired (W3 sweeper). Best-effort. */
+export async function expireAssignment(id: string, principalId: string): Promise<boolean> {
+  try {
+    const c = await accessAssignmentsContainer();
+    const { resource } = await c.item(id, principalId).read<AccessAssignment>();
+    if (!resource || resource.state !== 'active') return false;
+    const now = new Date().toISOString();
+    resource.state = 'expired';
+    resource.updatedAt = now;
+    await c.item(id, principalId).replace(resource);
+    return true;
+  } catch (e: any) {
+    console.warn('[access-ledger] expireAssignment failed:', e?.message || String(e));
+    return false;
+  }
+}
+
 export async function revokeAssignmentLedger(
   principalId: string,
   resourceType: string,
