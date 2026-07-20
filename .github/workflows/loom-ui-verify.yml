@@ -35,6 +35,14 @@ on:
         description: 'Key Vault name containing the session-secret (overrides auto-discovery)'
         type: string
         default: ''
+      target_route:
+        description: 'Optional: capture a browser-E2E RECEIPT (light+dark screenshot + trace) for this route, e.g. /admin/readiness. Blank = smoke-only.'
+        type: string
+        default: ''
+      target_slug:
+        description: 'Optional artifact slug for the receipt (derived from target_route when blank)'
+        type: string
+        default: ''
 
   schedule:
     # Weekly on Monday at 06:00 UTC — early morning before the business day
@@ -244,7 +252,32 @@ jobs:
           CI: 'true'
 
       # -----------------------------------------------------------------------
-      # 7. Upload Playwright HTML report as artifact (always, even on failure)
+      # 6b. Optional browser-E2E RECEIPT (G1 / no-vaporware.md).
+      #     Runs only when `target_route` is set. Uses the SAME minted-session
+      #     path (scripts/csa-loom/e2e-receipt.mjs shares the exact cookie mint)
+      #     to capture a light+dark screenshot + Playwright trace of the route
+      #     against the live console, into apps/fiab-console/test-results/receipts/.
+      #     continue-on-error so an UNREACHABLE/REJECTED receipt annotates the run
+      #     but does not mask the smoke-verify result above.
+      # -----------------------------------------------------------------------
+      - name: Capture browser-E2E receipt (optional)
+        if: ${{ inputs.target_route != '' }}
+        continue-on-error: true
+        run: |
+          if [ -d "/ms-playwright" ]; then export PLAYWRIGHT_BROWSERS_PATH=/ms-playwright; fi
+          SLUG_ARG=""
+          if [ -n "${{ inputs.target_slug }}" ]; then SLUG_ARG="--slug ${{ inputs.target_slug }}"; fi
+          node scripts/csa-loom/e2e-receipt.mjs --route "${{ inputs.target_route }}" $SLUG_ARG
+        env:
+          SESSION_SECRET:       ${{ env.SESSION_SECRET }}
+          LOOM_URL:             ${{ env.LOOM_URL }}
+          LOOM_AUTOMATION_OID:  ${{ env.LOOM_AUTOMATION_OID }}
+          LOOM_AUTOMATION_UPN:  ${{ env.LOOM_AUTOMATION_UPN }}
+          LOOM_AUTOMATION_NAME: ${{ env.LOOM_AUTOMATION_NAME }}
+          CI: 'true'
+
+      # -----------------------------------------------------------------------
+      # 7. Upload Playwright HTML report + any receipts as artifact (always).
       # -----------------------------------------------------------------------
       - name: Upload Playwright report
         if: always()
@@ -254,4 +287,5 @@ jobs:
           path: |
             apps/fiab-console/playwright-report/
             apps/fiab-console/test-results/uat/
+            apps/fiab-console/test-results/receipts/
           retention-days: 14
