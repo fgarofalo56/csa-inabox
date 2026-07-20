@@ -119,7 +119,7 @@ function buildRows() {
   return files.map((f) => classify(fs.readFileSync(f, 'utf8'), relApi(f)));
 }
 
-function esc(s) { return String(s).replace(/\|/g, '\\|'); }
+function esc(s) { return String(s).replace(/\\/g, '\\\\').replace(/\|/g, '\\|'); }
 
 function render(rows) {
   const byArea = new Map();
