@@ -55,7 +55,7 @@ import { clientFetch } from '@/lib/client-fetch';
 
 import { useCallback, useEffect, useMemo, useState, type ReactElement } from 'react';
 import {
-  makeStyles, tokens, Button, Input, Field, InfoLabel, Switch, Subtitle2, Body1, Caption1,
+  makeStyles, tokens, Button, Input, Field, InfoLabel, Switch, Subtitle2, Title3, Body1, Caption1,
   Badge, MessageBar, MessageBarBody, MessageBarTitle, Dropdown, Option, Divider,
   Spinner, Tooltip, useId, useToastController, Toast, ToastTitle, Toaster,
   Checkbox, SpinButton, Table, TableHeader, TableHeaderCell, TableRow, TableBody, TableCell,
@@ -104,10 +104,12 @@ const KIND_ICON: Record<ComponentKind, ReactElement> = {
   table: <Table20Regular />, metric: <Gauge20Regular />, chart: <DataBarVertical20Regular />,
   form: <Form20Regular />, text: <TextT20Regular />,
   image: <TextT20Regular />, link: <TextT20Regular />, divider: <TextT20Regular />, badge: <Gauge20Regular />,
+  heading: <TextT20Regular />, progress: <Gauge20Regular />, spacer: <TextT20Regular />, timestamp: <TextT20Regular />,
 };
 const KIND_LABEL: Record<ComponentKind, string> = {
   table: 'Table', metric: 'Metric', chart: 'Chart', form: 'Form', text: 'Text',
   image: 'Image', link: 'Link', divider: 'Divider', badge: 'Badge',
+  heading: 'Heading', progress: 'Progress', spacer: 'Spacer', timestamp: 'Timestamp',
 };
 const KIND_HINT: Record<ComponentKind, string> = {
   table: 'Add a data table bound to the model — rows from your selected measures and group-by fields.',
@@ -119,6 +121,10 @@ const KIND_HINT: Record<ComponentKind, string> = {
   link: 'Add a styled link to an https URL.',
   divider: 'Add a horizontal section divider.',
   badge: 'Add a colored status badge.',
+  heading: 'Add a section heading (levels 1–3).',
+  progress: 'Add a progress bar (0–100%).',
+  spacer: 'Add blank layout spacing.',
+  timestamp: 'Shows when the page rendered.',
 };
 
 const useStyles = makeStyles({
@@ -1128,6 +1134,19 @@ function ComponentEditor({ s, comp, objects, entities, rendered, onChange, onDel
             </Dropdown>
           </Field>
         </>
+      ) : comp.kind === 'heading' ? (
+        <>
+          <Field label="Heading text"><Input value={comp.text || ''} onChange={(_, d) => onChange({ text: d.value })} placeholder="Section title" /></Field>
+          <Field label="Level">
+            <Dropdown value={String(comp.headingLevel || 2)} selectedOptions={[String(comp.headingLevel || 2)]} onOptionSelect={(_, d) => onChange({ headingLevel: (Number(d.optionValue) as 1 | 2 | 3) || 2 })}>
+              <Option value="1">1 — large</Option><Option value="2">2 — medium</Option><Option value="3">3 — small</Option>
+            </Dropdown>
+          </Field>
+        </>
+      ) : comp.kind === 'progress' ? (
+        <Field label="Value (0–100)"><Input value={comp.progressValue || ''} onChange={(_, d) => onChange({ progressValue: d.value })} placeholder="75" /></Field>
+      ) : (comp.kind === 'spacer' || comp.kind === 'timestamp') ? (
+        <Caption1>No configuration.</Caption1>
       ) : comp.kind === 'divider' ? (
         <Caption1>A horizontal divider — no configuration.</Caption1>
       ) : (
@@ -1152,6 +1171,21 @@ function ComponentEditor({ s, comp, objects, entities, rendered, onChange, onDel
           </div>
         ) : kind === 'text' ? (
           <Body1>{comp.text}</Body1>
+        ) : kind === 'heading' ? (
+          (comp.headingLevel || 2) === 1 ? <Title3>{comp.text || comp.title}</Title3> : (comp.headingLevel || 2) === 2 ? <Subtitle2>{comp.text || comp.title}</Subtitle2> : <Body1><strong>{comp.text || comp.title}</strong></Body1>
+        ) : kind === 'progress' ? (
+          (() => { const pct = Math.max(0, Math.min(100, Number(String(comp.progressValue ?? '0').replace(/[^0-9.]/g, '')) || 0)); return (
+            <div style={{ width: '100%' }}>
+              <div style={{ height: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusMedium, backgroundColor: tokens.colorNeutralBackground5, overflow: 'hidden' }}>
+                <div style={{ width: `${pct}%`, height: '100%', backgroundColor: tokens.colorBrandBackground }} />
+              </div>
+              <Caption1>{pct}%</Caption1>
+            </div>
+          ); })()
+        ) : kind === 'spacer' ? (
+          <div aria-hidden="true" />
+        ) : kind === 'timestamp' ? (
+          <Caption1>Rendered {new Date().toLocaleString()}</Caption1>
         ) : kind === 'divider' ? (
           <hr style={{ border: 'none', borderTop: `1px solid ${tokens.colorNeutralStroke2}`, width: '100%' }} aria-label="Divider" />
         ) : kind === 'badge' ? (
