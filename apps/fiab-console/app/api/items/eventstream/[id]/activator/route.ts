@@ -96,6 +96,8 @@ function buildStreamAlertQuery(
       process.env.LOOM_ACTIVATOR_DEFAULT_TABLE ||
       'AppEvents').trim() || 'AppEvents';
   const srcName = source?.name ? String(source.name).replace(/"/g, '\\"') : '';
+  const rawOp = String(cond.operator || '').toLowerCase();
+  const isNullCheck = rawOp === 'isnotnull' || rawOp === 'isnull';
   const op = mapOp(cond.operator);
   const prop = (cond.property && String(cond.property).trim()) || 'value';
   const val = formatVal(cond.threshold);
@@ -111,7 +113,17 @@ function buildStreamAlertQuery(
     `| extend _src = ${safe('source')}, _streamSource = ${safe('streamSource_s')}, _v = ${safe(prop)}`,
   ];
   if (srcName) lines.push(`| where _src == "${srcName}" or _streamSource == "${srcName}"`);
-  lines.push(`| where _v ${op} ${val}`);
+  // Geofence-violation presets use null-checks (isnotnull(matchedFence) = "an
+  // event entered a fence") — these are KQL functions, not infix comparisons.
+  // An empty property on isnotnull means "any event reached the stream" (the
+  // geofence-exit case) — then just count rows (no per-column predicate).
+  if (isNullCheck) {
+    const hasProp = !!(cond.property && String(cond.property).trim());
+    if (hasProp) lines.push(`| where ${rawOp === 'isnull' ? 'isnull' : 'isnotnull'}(_v)`);
+    // else: no predicate — the alert fires when the (source-scoped) window has rows.
+  } else {
+    lines.push(`| where _v ${op} ${val}`);
+  }
   return lines.join('\n');
 }
 

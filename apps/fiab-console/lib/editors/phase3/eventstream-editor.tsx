@@ -49,6 +49,7 @@ import {
 import { compileToSaql, cdcFlattenSelectList } from '@/lib/azure/asa-query-compiler';
 import {
   isGeoTransformKind, geoSelectList, geoTail, geoDefaultOperator,
+  type GeoAlertPreset, type GeoAlertOperator,
 } from '@/lib/editors/eventstream/geo-sql';
 import { GeoOperatorConfig } from '@/lib/components/eventstream/geo-operator-config';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
@@ -388,7 +389,7 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
   const [alertOpen, setAlertOpen] = useState(false);
   const [alertName, setAlertName] = useState('');
   const [alertProperty, setAlertProperty] = useState('value');
-  const [alertOperator, setAlertOperator] = useState<'gt' | 'lt' | 'gte' | 'lte' | 'eq' | 'ne'>('gt');
+  const [alertOperator, setAlertOperator] = useState<GeoAlertOperator>('gt');
   const [alertThreshold, setAlertThreshold] = useState('0');
   const [alertFrequency, setAlertFrequency] = useState<'PT1M' | 'PT5M' | 'PT15M' | 'PT1H'>('PT5M');
   const [alertEmail, setAlertEmail] = useState('');
@@ -694,6 +695,42 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
       setAlertBusy(false);
     }
   }, [dirty, save, id, alertEmail, alertName, alertProperty, alertOperator, alertThreshold, alertFrequency]);
+
+  // Geofence → alert wiring (GEO-1 slice 2): a Geofence / Proximity node's
+  // "Create violation alert" pre-fills THIS dialog from the node's typed config
+  // (geoViolationAlertPreset) and opens it, then the existing Azure Monitor
+  // scheduled-query path (doAddAlert) creates the real rule. No Fabric Reflex.
+  const createAlertFromGeoPreset = useCallback((preset: GeoAlertPreset) => {
+    setAlertResult(null); setAlertErr(null); setAlertHint(null);
+    setAlertName(preset.ruleName);
+    setAlertProperty(preset.property);
+    setAlertOperator(preset.operator);
+    setAlertThreshold(preset.threshold);
+    setAlertOpen(true);
+  }, []);
+
+  // Publish a geofence reference-data table (GEO-1 slice 2): saves the topology
+  // first (so the route reads the latest fences + asaJobName), then POSTs to the
+  // geo-reference route which uploads the fence blob + PUTs the ASA reference
+  // input. Returns an inline outcome message for the node panel.
+  const publishGeoReference = useCallback(async (inputAlias: string): Promise<{ ok: boolean; message: string }> => {
+    try {
+      if (dirty) { await save(); }
+      const r = await clientFetch(`/api/items/eventstream/${id}/geo-reference`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ inputAlias }),
+      });
+      const j = await r.json();
+      if (!j.ok) return { ok: false, message: j.hint ? `${j.error} — ${j.hint}` : (j.error || `HTTP ${r.status}`) };
+      const first = Array.isArray(j.published) ? j.published[0] : null;
+      return {
+        ok: true,
+        message: first
+          ? `Published ${first.records} fence${first.records === 1 ? '' : 's'} to ${first.blob} and attached ASA reference input “${first.inputAlias}” to job ${j.asaJobName}.`
+          : `Published the fence reference table to ASA job ${j.asaJobName}.`,
+      };
+    } catch (e: any) { return { ok: false, message: e?.message || String(e) }; }
+  }, [dirty, save, id]);
 
   // Ribbon-driven add/transform helpers. They mutate cfgText (the on-wire
   // shape) directly so the visual designer + Monaco JSON view stay in sync.
@@ -1044,7 +1081,7 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
                   <Field label="Operator" style={{ flex: 1 }}>
                     <Dropdown
                       selectedOptions={[alertOperator]}
-                      value={{ gt: 'greater than', lt: 'less than', gte: '≥', lte: '≤', eq: 'equals', ne: 'not equals' }[alertOperator]}
+                      value={{ gt: 'greater than', lt: 'less than', gte: '≥', lte: '≤', eq: 'equals', ne: 'not equals', isnotnull: 'is set (not null)', isnull: 'is null' }[alertOperator]}
                       onOptionSelect={(_: unknown, d: any) => setAlertOperator(d.optionValue)}
                       aria-label="Operator"
                     >
@@ -1054,6 +1091,8 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
                       <Option value="lte">≤</Option>
                       <Option value="eq">equals</Option>
                       <Option value="ne">not equals</Option>
+                      <Option value="isnotnull">is set (not null)</Option>
+                      <Option value="isnull">is null</Option>
                     </Dropdown>
                   </Field>
                   <Field label="Threshold" style={{ flex: 1 }}>
@@ -1062,6 +1101,7 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
                       onChange={(_: unknown, d: any) => setAlertThreshold(d.value)}
                       placeholder="0"
                       aria-label="Threshold"
+                      disabled={alertOperator === 'isnotnull' || alertOperator === 'isnull'}
                     />
                   </Field>
                 </div>
@@ -1102,8 +1142,9 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
                   <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Rule preview</Caption1>
                   <div style={{ marginTop: tokens.spacingVerticalXS, fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground1 }}>
                     Fire when <strong>{(alertProperty.trim() || 'value')}</strong>{' '}
-                    {{ gt: '>', lt: '<', gte: '≥', lte: '≤', eq: '=', ne: '≠' }[alertOperator]}{' '}
-                    <strong>{(alertThreshold.trim() || '0')}</strong>, evaluated every{' '}
+                    {{ gt: '>', lt: '<', gte: '≥', lte: '≤', eq: '=', ne: '≠', isnotnull: 'is set', isnull: 'is null' }[alertOperator]}
+                    {alertOperator !== 'isnotnull' && alertOperator !== 'isnull' && <> <strong>{(alertThreshold.trim() || '0')}</strong></>},
+                    {' '}evaluated every{' '}
                     {{ PT1M: '1 minute', PT5M: '5 minutes', PT15M: '15 minutes', PT1H: '1 hour' }[alertFrequency]}
                     {alertEmail.trim() ? <> → email <strong>{alertEmail.trim()}</strong></> : null}.
                   </div>
@@ -1184,7 +1225,8 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
         </TabList>
 
         {activeTab === 'designer' && (
-          <EventstreamVisualDesigner config={parsedVisual} onChange={onDesignerChange} itemId={id} />
+          <EventstreamVisualDesigner config={parsedVisual} onChange={onDesignerChange} itemId={id}
+            onCreateGeoAlert={createAlertFromGeoPreset} onPublishGeoReference={publishGeoReference} />
         )}
 
         {activeTab === 'operators' && (
@@ -1197,6 +1239,8 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
             saving={saving}
             onCommit={commitTopology}
             onSave={save}
+            onCreateGeoAlert={createAlertFromGeoPreset}
+            onPublishGeoReference={publishGeoReference}
           />
         )}
 
@@ -1694,7 +1738,7 @@ function EventstreamSqlOperatorTab({
 // Fluent gates surface when Stream Analytics / Spark bindings aren't provisioned.
 // ============================================================
 function EventstreamOperatorsTab({
-  id, cfg, asaJobName, onAsaJobName, dirty, saving, onCommit, onSave,
+  id, cfg, asaJobName, onAsaJobName, dirty, saving, onCommit, onSave, onCreateGeoAlert, onPublishGeoReference,
 }: {
   id: string;
   cfg: VisualPipelineConfig;
@@ -1704,6 +1748,9 @@ function EventstreamOperatorsTab({
   saving: boolean;
   onCommit: (patch: { sources?: any[]; transforms?: any[]; sinks?: any[] }) => void;
   onSave: () => void;
+  /** Geo operator affordances threaded to each EsOperatorCard's GeoOperatorConfig. */
+  onCreateGeoAlert?: (preset: GeoAlertPreset) => void;
+  onPublishGeoReference?: (inputAlias: string) => Promise<{ ok: boolean; message: string }>;
 }) {
   const s = useStyles();
   const { sources, transforms, sinks } = useMemo(() => esTopology(cfg), [cfg]);
@@ -1851,6 +1898,8 @@ function EventstreamOperatorsTab({
           onChange={(patch) => updateOp(idx, patch)}
           onRemove={() => removeOp(idx)}
           onMove={(dir) => moveOp(idx, dir)}
+          onCreateGeoAlert={onCreateGeoAlert}
+          onPublishGeoReference={onPublishGeoReference}
         />
       ))}
 
@@ -2162,7 +2211,7 @@ function SparkBindingWizard({ open, onClose, onSaved }: { open: boolean; onClose
 
 // ---- one operator card (typed config per Fabric Eventstream operator) ----
 function EsOperatorCard({
-  idx, total, op, sources, itemId, topology, onChange, onRemove, onMove,
+  idx, total, op, sources, itemId, topology, onChange, onRemove, onMove, onCreateGeoAlert, onPublishGeoReference,
 }: {
   idx: number;
   total: number;
@@ -2173,6 +2222,8 @@ function EsOperatorCard({
   onChange: (patch: Record<string, any>) => void;
   onRemove: () => void;
   onMove: (dir: -1 | 1) => void;
+  onCreateGeoAlert?: (preset: GeoAlertPreset) => void;
+  onPublishGeoReference?: (inputAlias: string) => Promise<{ ok: boolean; message: string }>;
 }) {
   const s = useStyles();
   const kind = op.kind as EsOpKind;
@@ -2400,6 +2451,8 @@ function EsOperatorCard({
           topology={topology || { sources, transforms: [op], sinks: [] }}
           itemId={itemId}
           onChange={onChange}
+          onCreateAlert={onCreateGeoAlert}
+          onPublishReference={onPublishGeoReference}
         />
       )}
 

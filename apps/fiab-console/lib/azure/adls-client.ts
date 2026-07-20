@@ -109,6 +109,11 @@ export function hasConfiguredContainers(): boolean {
   return KNOWN_CONTAINERS.some((c) => !!containerUrl(c));
 }
 
+/** The known DLZ containers whose LOOM_*_URL is configured (fast, no network). */
+export function configuredContainerNames(): KnownContainer[] {
+  return KNOWN_CONTAINERS.filter((c) => !!containerUrl(c));
+}
+
 export async function listContainers(): Promise<ContainerInfo[]> {
   // Day-1, no-config: if no LOOM_{BRONZE,SILVER,GOLD,LANDING}_URL is set there is
   // nothing to probe — return an honest empty list FAST (never throw, never hang).

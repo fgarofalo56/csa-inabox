@@ -508,6 +508,83 @@ export function parseWktFences(text: string, baseName = 'fence'): GeoFenceDef[] 
   return out;
 }
 
+// ============================================================
+// Activator wiring — geofence-violation → Azure Monitor alert preset.
+// Pure: maps a geo node's typed config into the property/operator/threshold the
+// eventstream activator route (POST .../activator) consumes, so a one-click
+// "Create violation alert" pre-fills a REAL Azure Monitor scheduled-query rule
+// (no Fabric Reflex — no-fabric-dependency.md). Unit-tested.
+// ============================================================
+
+export type GeoAlertOperator = 'gt' | 'lt' | 'gte' | 'lte' | 'eq' | 'ne' | 'isnotnull' | 'isnull';
+
+export interface GeoAlertPreset {
+  /** Suggested rule name. */
+  ruleName: string;
+  /** Column the alert watches (the fence-match / distance column the node emits). */
+  property: string;
+  operator: GeoAlertOperator;
+  /** Threshold string (empty for the null-check operators). */
+  threshold: string;
+  /** One-line human explanation of what the alert fires on. */
+  description: string;
+}
+
+/**
+ * Derive the violation-alert preset for a geo operator node, or null when the
+ * kind has no natural violation semantics (geo-point / geo-aggregate).
+ *
+ *  - geo-fence inside  → fires when the matched-fence column is set (an event
+ *                        entered a fence): `isnotnull(matchedFence)`.
+ *  - geo-fence outside → fires on any event that reached the stream (every event
+ *                        here is already outside every fence — a "left the fence"
+ *                        violation): count > 0.
+ *  - geo-proximity     → fires when the distance column drops below the threshold
+ *                        (a proximity breach): `distanceMeters < <meters>`.
+ */
+export function geoViolationAlertPreset(node: GeoTransformNode): GeoAlertPreset | null {
+  const label = (node.name || node.kind || 'geo').trim();
+  switch (node.kind) {
+    case 'geo-fence': {
+      const col = (node.fenceOutputColumn || 'matchedFence').trim() || 'matchedFence';
+      if ((node.fenceMode || 'inside') === 'outside') {
+        return {
+          ruleName: `${label} exit violation`.slice(0, 60),
+          property: col,
+          operator: 'isnull',
+          threshold: '',
+          description: `Fires when an event is outside every fence (${col} is null).`,
+        };
+      }
+      return {
+        ruleName: `${label} entry violation`.slice(0, 60),
+        property: col,
+        operator: 'isnotnull',
+        threshold: '',
+        description: `Fires when an event enters any fence (${col} is set).`,
+      };
+    }
+    case 'geo-proximity': {
+      const col = (node.distanceAlias || 'distanceMeters').trim() || 'distanceMeters';
+      const meters = thresholdMeters(node.thresholdValue ?? 0, node.thresholdUnit);
+      return {
+        ruleName: `${label} proximity breach`.slice(0, 60),
+        property: col,
+        operator: 'lt',
+        threshold: String(meters),
+        description: `Fires when ${col} < ${meters} m (a proximity breach).`,
+      };
+    }
+    default:
+      return null;
+  }
+}
+
+/** True for the geo operators that carry a one-click "Create violation alert". */
+export function geoHasViolationAlert(node: GeoTransformNode): boolean {
+  return geoViolationAlertPreset(node) !== null;
+}
+
 /** Default typed config for a freshly-added geo operator of `kind`. */
 export function geoDefaultOperator(kind: GeoTransformKind, n: number): Record<string, any> {
   const base = { kind, name: `${kind}-${n}` };
