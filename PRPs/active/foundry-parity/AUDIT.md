@@ -214,8 +214,15 @@ catalog.
   screenshots of React-Flow *composited viewports* return empty on this
   long-running Chrome session (GPU-layer capture artifact — even a forced
   red node with z-index 9999 doesn't capture, while elementFromPoint proves
-  the node is topmost; everything outside canvases captures fine). Dark+light
-  pixel pass banked pending a Chrome restart (operator-side).
+  the node is topmost; everything outside canvases captures fine).
+  **Pixel pass CLOSED same-day**: minted a loom_session cookie
+  (Container-App secret `session-secret` — the KV itself is policy-pinned
+  closed even to owner IP rules) and drove a FRESH Playwright Chromium:
+  the eventstream canvas captured cleanly in BOTH themes —
+  `receipts/nodekit-v4-light.png` + `receipts/nodekit-v4-dark.png`
+  (compact 2-row cards, glyph chips, slim inset accent bar, typed ports,
+  wired edge, guided ghost card, zoom rail + minimap). Confirms the empty
+  captures were purely the long-lived Chrome session's GPU state.
 - **Rayfin batch-7 (PR #2237): card catalog 29 → 34** — Tabs/Accordion/
   Sparkline/Video/Map. VISUALLY VERIFIED live: full Add-component palette
   renders all 34 kinds in the App builder (bound to SalesModel; honest gate
