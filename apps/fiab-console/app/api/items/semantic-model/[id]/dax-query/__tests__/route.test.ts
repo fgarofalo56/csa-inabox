@@ -8,6 +8,13 @@ const getSessionMock = vi.fn(() => ({ claims: { oid: 'oid-1' } } as any));
 vi.mock('@/lib/auth/session', () => ({ getSession: () => getSessionMock() }));
 
 const evalDaxMock = vi.fn(async (..._a: any[]) => ({ columns: ['Amount'], rows: [{ Amount: 10 }], backend: 'loom-native' }));
+// Default: a model WITH authored content, so the empty-model 412 gate does not
+// fire and the pre-gate tests exercise the same paths as before.
+const getModelItemMock = vi.fn(async (..._a: any[]) => ({
+  id: 'model-1',
+  displayName: 'Model 1',
+  state: { content: { kind: 'semantic-model', tables: [{ name: 'Sales', columns: [{ name: 'Amount', dataType: 'decimal' }] }] } },
+} as any));
 vi.mock('@/lib/azure/tabular-eval-client', () => {
   class TabularError extends Error {
     status?: number; backend?: string; hint?: string;
@@ -18,6 +25,7 @@ vi.mock('@/lib/azure/tabular-eval-client', () => {
   return {
     evalDax: (...a: any[]) => evalDaxMock(...a),
     resolveBackend: () => 'loom-native',
+    getModelItem: (...a: any[]) => getModelItemMock(...a),
     TabularError,
   };
 });
@@ -41,7 +49,7 @@ function post(body: unknown): NextRequest {
     method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
   });
 }
-beforeEach(() => { getSessionMock.mockReturnValue({ claims: { oid: 'oid-1' } } as any); evalDaxMock.mockClear(); writeModelStateMock.mockClear(); });
+beforeEach(() => { getSessionMock.mockReturnValue({ claims: { oid: 'oid-1' } } as any); evalDaxMock.mockClear(); writeModelStateMock.mockClear(); getModelItemMock.mockClear(); });
 
 describe('dax-query route', () => {
   it('401 when unauthenticated', async () => {
@@ -73,6 +81,37 @@ describe('dax-query route', () => {
   it('400s an invalid measure name', async () => {
     const res = await POST(post({ op: 'save-measure', name: '1bad name', expression: 'SUM(x)' }), PARAMS);
     expect(res.status).toBe(400);
+  });
+
+  it('412 honest gate on an EMPTY model (0 tables/measures, no AAS binding) — never the DAX-patterns help', async () => {
+    getModelItemMock.mockResolvedValueOnce({ id: 'model-1', displayName: 'Empty Model', state: {} } as any);
+    const res = await POST(post({ op: 'run', dax: 'EVALUATE Sales' }), PARAMS);
+    expect(res.status).toBe(412);
+    const j = await res.json();
+    expect(j.ok).toBe(false);
+    expect(j.code).toBe('unbound');
+    expect(j.error).toBe(
+      'Semantic model "Empty Model" has no Loom-native content or AAS binding to query. ' +
+        'Open it and define tables/measures (or bind it to Azure Analysis Services), then retry.',
+    );
+    expect(j.gate.reason).toContain('no tables or measures yet');
+    expect(j.gate.remediation).toContain('define tables/measures');
+    expect(evalDaxMock).not.toHaveBeenCalled();
+  });
+
+  it('does NOT gate an AAS-bound model with no Loom-native content', async () => {
+    getModelItemMock.mockResolvedValueOnce({ id: 'model-1', displayName: 'AAS Model', state: { aasServer: 'asazure://x/y' } } as any);
+    const res = await POST(post({ op: 'run', dax: 'EVALUATE Sales' }), PARAMS);
+    const j = await res.json();
+    expect(j.ok).toBe(true);
+    expect(evalDaxMock).toHaveBeenCalledOnce();
+  });
+
+  it('404 when the model item is not found/owned', async () => {
+    getModelItemMock.mockResolvedValueOnce(null as any);
+    const res = await POST(post({ op: 'run', dax: 'EVALUATE Sales' }), PARAMS);
+    expect(res.status).toBe(404);
+    expect(evalDaxMock).not.toHaveBeenCalled();
   });
 
   it('surfaces a TabularError honestly', async () => {
