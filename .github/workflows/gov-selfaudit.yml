@@ -101,12 +101,14 @@ jobs:
           const enc = Buffer.concat([c.update(Buffer.from(JSON.stringify(p))), c.final()]);
           const cookie = 'loom_session=' + Buffer.concat([iv, c.getAuthTag(), enc]).toString('base64url');
           const H = { cookie };
+          const fs = require('node:fs');
           const sleep = (ms)=>new Promise(r=>setTimeout(r,ms));
 
           (async () => {
             // ---- GATES ----
             const gr = await fetch(B + '/api/admin/gates', { headers: H });
             const gt = await gr.text();
+            fs.writeFileSync('gates.json', gt);
             console.log('\n===== /api/admin/gates -> ' + gr.status + ' =====');
             let gates;
             try { gates = JSON.parse(gt); } catch { console.log(gt.slice(0,400)); }
@@ -114,8 +116,12 @@ jobs:
               console.log(`GATE SCORE: ${gates.configured}/${gates.count} configured, ${gates.blocked} blocked (cloud=${gates.cloud}, platform=${gates.platform}, writeConfigured=${gates.writeConfigured})`);
               const blocked = (gates.gates||[]).filter(g=>g.status!=='configured');
               if (blocked.length) {
-                console.log('\nBLOCKED GATES:');
-                for (const g of blocked) console.log(`  - ${g.id} [${g.status}] missing=[${(g.missing||[]).join(', ')}] :: ${g.detail||''}`);
+                console.log('\nBLOCKED GATES (with severity + fix):');
+                for (const g of blocked) {
+                  console.log(`\n  - ${g.id} [${g.severity||'?'}/${g.status}] missing=[${(g.missing||[]).join(', ')}]`);
+                  if (g.detail) console.log(`      detail: ${g.detail}`);
+                  if (g.fixScript) console.log(`      fixScript: ${g.fixScript.replace(/\n/g,' ; ')}`);
+                }
               } else console.log('ALL GATES CONFIGURED ✅');
             } else {
               console.log('gates call not ok:', gt.slice(0,400));
@@ -138,6 +144,7 @@ jobs:
               state = st; break;
             }
             if (!state) { console.log('::warning::exercise did not complete in window'); return; }
+            fs.writeFileSync('exercise.json', JSON.stringify(state, null, 2));
             const report = state.report || {};
             const results = report.results || [];
             console.log('\n===== EXERCISE REPORT =====');
@@ -149,3 +156,14 @@ jobs:
             if ((report.fail||0) > 0) console.log('::warning::exercise has failing probes — see FAIL rows above');
           })().catch(e=>{ console.log('::error::'+e.message); process.exit(1); });
           EOF
+
+      - name: Upload audit artifacts (gates + exercise + env keys)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gov-selfaudit
+          path: |
+            gates.json
+            exercise.json
+            gov-console-env-keys.txt
+          if-no-files-found: warn
