@@ -957,9 +957,11 @@ function sanitizeSmallMultiplesGrid(raw: unknown): PersistedFormat['smallMultipl
 function sanitizeNumberFormatByField(raw: unknown): PersistedFormat['numberFormatByField'] | undefined {
   if (!raw || typeof raw !== 'object') return undefined;
   const o = raw as Record<string, unknown>;
-  // Null-prototype target: user-supplied field keys can never reach Object.prototype
-  // (defeats js/remote-property-injection); the explicit key guard below is belt-and-suspenders.
-  const out = Object.create(null) as NonNullable<PersistedFormat['numberFormatByField']>;
+  // Build from a guarded [key, entry] pair array via Object.fromEntries — no
+  // dynamic-property-write sink, so user-supplied field keys cannot inject into
+  // any prototype (js/remote-property-injection safe).
+  type NfEntry = { preset?: NumberFormatPreset; decimals?: number; units?: AxisDisplayUnits };
+  const pairs: Array<[string, NfEntry]> = [];
   let n = 0;
   for (const key of Object.keys(o)) {
     if (n >= MAX_MULTIPLES_FIELDS) break;
@@ -968,7 +970,7 @@ function sanitizeNumberFormatByField(raw: unknown): PersistedFormat['numberForma
     const v = o[key];
     if (!v || typeof v !== 'object') continue;
     const ov = v as Record<string, unknown>;
-    const entry: { preset?: NumberFormatPreset; decimals?: number; units?: AxisDisplayUnits } = {};
+    const entry: NfEntry = {};
     if (typeof ov.preset === 'string' && NUMBER_FORMATS.has(ov.preset as NumberFormatPreset)) {
       entry.preset = ov.preset as NumberFormatPreset;
     }
@@ -977,9 +979,11 @@ function sanitizeNumberFormatByField(raw: unknown): PersistedFormat['numberForma
     if (typeof ov.units === 'string' && AXIS_DISPLAY_UNITS.has(ov.units as AxisDisplayUnits)) {
       entry.units = ov.units as AxisDisplayUnits;
     }
-    if (Object.keys(entry).length) { out[k] = entry; n += 1; }
+    if (Object.keys(entry).length) { pairs.push([k, entry]); n += 1; }
   }
-  return Object.keys(out).length ? out : undefined;
+  return pairs.length
+    ? (Object.fromEntries(pairs) as NonNullable<PersistedFormat['numberFormatByField']>)
+    : undefined;
 }
 function sanitizeFill(raw: unknown): { color?: string; transparency?: number } | undefined {
   if (!raw || typeof raw !== 'object') return undefined;
