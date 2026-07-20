@@ -46,6 +46,8 @@ export function sanitizePackage(body: any, base: Partial<AccessPackage> = {}): {
       requestable: body?.requestable !== undefined ? !!body.requestable : (base.requestable ?? true),
       approvalPolicyId: body?.approvalPolicyId ? String(body.approvalPolicyId).trim() : base.approvalPolicyId,
       defaultLifetimeDays: lifetime === null || lifetime === undefined ? (base.defaultLifetimeDays ?? null) : Number(lifetime) || null,
+      activationRequired: body?.activationRequired !== undefined ? !!body.activationRequired : (base.activationRequired ?? false),
+      activationWindowHours: body?.activationWindowHours === null || body?.activationWindowHours === undefined ? (base.activationWindowHours ?? null) : Number(body.activationWindowHours) || null,
       sodConflictsWith,
       sodMode: body?.sodMode === 'warn' ? 'warn' : (body?.sodMode === 'block' ? 'block' : (base.sodMode || 'block')),
       enabled: body?.enabled !== undefined ? !!body.enabled : (base.enabled ?? true),

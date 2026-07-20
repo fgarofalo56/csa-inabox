@@ -18,16 +18,29 @@ import {
 import {
   ArrowSync20Regular, ArrowDownload20Regular, DatabaseArrowUp20Regular,
   Person20Regular, Group20Regular, Search20Regular, ShieldTask24Regular,
+  Play20Regular, Timer20Regular,
 } from '@fluentui/react-icons';
 import { EmptyState } from '@/lib/components/empty-state';
 import { isUnauthorized } from '@/lib/components/sign-in-required';
 
 interface Entry {
+  id?: string;
   principalId: string; principalUpn?: string; principalType: string;
   resourceType: string; resourceRef: string; resourceName?: string;
   role: string; permission?: string; source: string;
   grantedBy?: string; grantedAt?: string; expiresAt?: string | null; state: string;
   viaGroupId?: string; viaGroupName?: string;
+}
+
+/** Human "expires in" / "expired" / permanent, from an ISO expiresAt. */
+function expiryLabel(expiresAt?: string | null): { text: string; danger: boolean } {
+  if (!expiresAt) return { text: '—', danger: false };
+  const ms = Date.parse(expiresAt) - Date.now();
+  if (Number.isNaN(ms)) return { text: '—', danger: false };
+  if (ms <= 0) return { text: 'expired', danger: true };
+  const h = ms / 3600_000;
+  if (h < 48) return { text: `in ${Math.round(h)}h`, danger: h < 12 };
+  return { text: `in ${Math.round(h / 24)}d`, danger: false };
 }
 type Mode = 'tenant' | 'principal' | 'resource';
 
@@ -56,7 +69,7 @@ function sourceBadge(source: string) {
   return <Badge appearance="tint" color={color as any} size="small">{label}</Badge>;
 }
 function stateBadge(state: string) {
-  const color = state === 'active' ? 'success' : state === 'revoked' ? 'danger' : 'warning';
+  const color = state === 'active' ? 'success' : state === 'eligible' ? 'brand' : state === 'revoked' ? 'danger' : state === 'expired' ? 'subtle' : 'warning';
   return <Badge appearance="tint" color={color as any} size="small">{state}</Badge>;
 }
 
@@ -113,6 +126,28 @@ export function AccessReportPanel() {
     window.open(`/api/access-governance/report?${qs}${sep}format=csv`, '_blank', 'noreferrer');
   }, [queryString]);
 
+  const activate = useCallback(async (e: Entry) => {
+    if (!e.id) return;
+    setErr(null); setNote(null);
+    try {
+      const r = await clientFetch(`/api/access-governance/assignments/${encodeURIComponent(e.id)}/activate`, { method: 'POST' });
+      const j = await r.json();
+      if (!j.ok || !j.activated) { setErr(j.detail || j.error || 'activation failed'); return; }
+      setNote(j.message || 'Activated.'); await load();
+    } catch (er: any) { setErr(er?.message || String(er)); }
+  }, [load]);
+
+  const runSweep = useCallback(async () => {
+    setErr(null); setNote(null); setBusy(true);
+    try {
+      const r = await clientFetch('/api/access-governance/sweep', { method: 'POST' });
+      const j = await r.json();
+      if (!j.ok) { setErr(j.error || 'sweep failed'); return; }
+      setNote(`Sweep complete — ${j.expired ?? 0} expired of ${j.candidates ?? 0} due.`); await load();
+    } catch (er: any) { setErr(er?.message || String(er)); }
+    finally { setBusy(false); }
+  }, [load]);
+
   return (
     <div className={s.root}>
       <div className={s.controls}>
@@ -145,6 +180,7 @@ export function AccessReportPanel() {
             <Button appearance="subtle" icon={<ArrowSync20Regular />} onClick={() => void load()} aria-label="Reload" />
           </Tooltip>
           <Button appearance="secondary" icon={<ArrowDownload20Regular />} disabled={!rows || rows.length === 0} onClick={downloadCsv}>Export CSV</Button>
+          <Button appearance="secondary" icon={<Timer20Regular />} disabled={busy} onClick={() => void runSweep()}>Run sweep</Button>
           <Button appearance="primary" icon={busy ? <Spinner size="tiny" /> : <DatabaseArrowUp20Regular />} disabled={busy} onClick={() => void runBackfill()}>Backfill ledger</Button>
         </div>
       </div>
@@ -183,6 +219,7 @@ export function AccessReportPanel() {
                   <TableHeaderCell>Role</TableHeaderCell>
                   <TableHeaderCell>Source</TableHeaderCell>
                   <TableHeaderCell>Granted</TableHeaderCell>
+                  <TableHeaderCell>Expires</TableHeaderCell>
                   <TableHeaderCell>State</TableHeaderCell>
                 </TableRow>
               </TableHeader>
@@ -211,7 +248,17 @@ export function AccessReportPanel() {
                         {e.grantedBy && <Caption1 className={s.via}>by {e.grantedBy}</Caption1>}
                       </div>
                     </TableCell>
-                    <TableCell><div className={s.badges}>{stateBadge(e.state)}</div></TableCell>
+                    <TableCell>
+                      {(() => { const x = expiryLabel(e.expiresAt); return <Caption1 style={{ color: x.danger ? tokens.colorPaletteRedForeground1 : tokens.colorNeutralForeground2 }}>{x.text}</Caption1>; })()}
+                    </TableCell>
+                    <TableCell>
+                      <div className={s.badges}>
+                        {stateBadge(e.state)}
+                        {e.state === 'eligible' && e.id && (
+                          <Button size="small" appearance="primary" icon={<Play20Regular />} onClick={() => void activate(e)}>Activate</Button>
+                        )}
+                      </div>
+                    </TableCell>
                   </TableRow>
                 ))}
               </TableBody>

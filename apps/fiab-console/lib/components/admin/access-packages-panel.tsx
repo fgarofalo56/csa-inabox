@@ -218,6 +218,9 @@ function PackageDialog({ value, policies, packages, onClose, onSaved }: {
   const [approvalPolicyId, setApprovalPolicyId] = useState(value?.approvalPolicyId || '');
   const [grants, setGrants] = useState<PackageGrant[]>(value?.grants?.length ? value.grants : [{ resourceType: 'workspace', resourceRef: '', role: 'Viewer' }]);
   const [sodConflictsWith, setSod] = useState<string[]>(value?.sodConflictsWith || []);
+  const [defaultLifetimeDays, setLifetime] = useState<string>(value?.defaultLifetimeDays != null ? String(value.defaultLifetimeDays) : '');
+  const [activationRequired, setActivationReq] = useState(value?.activationRequired ?? false);
+  const [activationWindowHours, setWindow] = useState<string>(value?.activationWindowHours != null ? String(value.activationWindowHours) : '');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -225,7 +228,14 @@ function PackageDialog({ value, policies, packages, onClose, onSaved }: {
   const save = async () => {
     setBusy(true); setErr(null);
     try {
-      const body = { name, description, requestable, enabled, sodMode, approvalPolicyId: approvalPolicyId || undefined, sodConflictsWith, grants: grants.filter((g) => g.resourceRef.trim()) };
+      const body = {
+        name, description, requestable, enabled, sodMode,
+        approvalPolicyId: approvalPolicyId || undefined, sodConflictsWith,
+        defaultLifetimeDays: defaultLifetimeDays.trim() ? Number(defaultLifetimeDays) : null,
+        activationRequired,
+        activationWindowHours: activationWindowHours.trim() ? Number(activationWindowHours) : null,
+        grants: grants.filter((g) => g.resourceRef.trim()),
+      };
       const r = await clientFetch(value ? `/api/access-packages/${value.id}` : '/api/access-packages', {
         method: value ? 'PUT' : 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
       });
@@ -262,6 +272,11 @@ function PackageDialog({ value, policies, packages, onClose, onSaved }: {
               <div className={s.grantRow}>
                 <Checkbox label="Requestable" checked={requestable} onChange={(_, d) => setRequestable(!!d.checked)} />
                 <Checkbox label="Enabled" checked={enabled} onChange={(_, d) => setEnabled(!!d.checked)} />
+              </div>
+              <div className={s.grantRow}>
+                <Field label="Grant lifetime (days; blank = permanent)"><Input type="number" min={0} value={defaultLifetimeDays} onChange={(_, d) => setLifetime(d.value)} placeholder="e.g. 30" style={{ maxWidth: 200 }} /></Field>
+                <Checkbox label="Require activation (PIM: assign eligible, user activates)" checked={activationRequired} onChange={(_, d) => setActivationReq(!!d.checked)} />
+                {activationRequired && <Field label="Activation window (hours)"><Input type="number" min={1} value={activationWindowHours} onChange={(_, d) => setWindow(d.value)} placeholder="8" style={{ maxWidth: 140 }} /></Field>}
               </div>
               <Field label="Approval policy">
                 <Dropdown value={policies.find((p) => p.id === approvalPolicyId)?.name || 'Default (four-stage chain)'} selectedOptions={[approvalPolicyId]} onOptionSelect={(_, d) => setApprovalPolicyId(d.optionValue || '')}>
