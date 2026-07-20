@@ -15,6 +15,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { isTenantAdmin } from '@/lib/auth/feature-gate';
 import {
   accessPackagesContainer, approvalPoliciesContainer, accessRequestWorkflowContainer,
 } from '@/lib/azure/cosmos-client';
@@ -38,8 +39,17 @@ export async function POST(_req: NextRequest, props: { params: Promise<{ id: str
   const { id } = await props.params;
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  const requesterId = s.claims.oid;
-  const requesterUpn = s.claims.upn || s.claims.email || s.claims.oid;
+  // AG-14 — request-on-behalf-of: a tenant admin may open a package request for
+  // another principal. Absent/non-admin, the requester is always the caller.
+  const body = (typeof (_req as any)?.json === 'function' ? await _req.json().catch(() => ({})) : {}) as any;
+  let requesterId = s.claims.oid;
+  let requesterUpn = s.claims.upn || s.claims.email || s.claims.oid;
+  let onBehalf = false;
+  if (body?.onBehalfOf?.oid && isTenantAdmin(s)) {
+    requesterId = String(body.onBehalfOf.oid).trim();
+    requesterUpn = String(body.onBehalfOf.upn || body.onBehalfOf.oid).trim();
+    onBehalf = true;
+  }
 
   try {
     // 1) The package must exist, be enabled + requestable.
@@ -93,7 +103,7 @@ export async function POST(_req: NextRequest, props: { params: Promise<{ id: str
         scopeType: toScopeType(g.resourceType),
         scopeRef: g.resourceRef,
         permission: (g.permission as any) || 'read',
-        justification: `Access package: ${pkg.name}`,
+        justification: onBehalf ? `Access package: ${pkg.name} (requested on behalf by ${s.claims.upn || s.claims.oid})` : `Access package: ${pkg.name}`,
         requesterId,
         requesterUpn,
         requestedAt: now,

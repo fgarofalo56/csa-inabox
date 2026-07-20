@@ -37,6 +37,9 @@ export function sanitizePackage(body: any, base: Partial<AccessPackage> = {}): {
   const sodConflictsWith = Array.isArray(body?.sodConflictsWith)
     ? [...new Set(body.sodConflictsWith.map((s: any) => String(s)).filter(Boolean))] as string[]
     : (base.sodConflictsWith || []);
+  const groupTargets = Array.isArray(body?.groupTargets)
+    ? [...new Set(body.groupTargets.map((g: any) => String(g).trim()).filter(Boolean))] as string[]
+    : (base.groupTargets || []);
   const lifetime = body?.defaultLifetimeDays;
   return {
     pkg: {
@@ -50,6 +53,7 @@ export function sanitizePackage(body: any, base: Partial<AccessPackage> = {}): {
       activationWindowHours: body?.activationWindowHours === null || body?.activationWindowHours === undefined ? (base.activationWindowHours ?? null) : Number(body.activationWindowHours) || null,
       sodConflictsWith,
       sodMode: body?.sodMode === 'warn' ? 'warn' : (body?.sodMode === 'block' ? 'block' : (base.sodMode || 'block')),
+      groupTargets,
       enabled: body?.enabled !== undefined ? !!body.enabled : (base.enabled ?? true),
       createdBy: base.createdBy,
     },
@@ -60,6 +64,8 @@ export async function GET(req: NextRequest) {
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   const adminScope = req.nextUrl.searchParams.get('scope') === 'admin';
+  // AG-13 — request-on-item: qualifying packages that grant a given resource.
+  const resourceRef = (req.nextUrl.searchParams.get('resourceRef') || '').trim();
   if (adminScope) { const gate = requireTenantAdmin(s); if (gate) return gate; }
   try {
     const c = await accessPackagesContainer();
@@ -68,7 +74,10 @@ export async function GET(req: NextRequest) {
       .fetchAll();
     const all = resources || [];
     // Non-admin catalog view: only enabled + requestable packages.
-    const packages = adminScope ? all : all.filter((p) => p.enabled && p.requestable);
+    let packages = adminScope ? all : all.filter((p) => p.enabled && p.requestable);
+    if (resourceRef) {
+      packages = packages.filter((p) => (p.grants || []).some((g) => g.resourceRef === resourceRef));
+    }
     return NextResponse.json({ ok: true, packages, isAdmin: isTenantAdmin(s) });
   } catch (e: any) {
     return apiServerError(e);
