@@ -2627,6 +2627,17 @@ export interface ConnectedMetric {
    * (`[Total Revenue]`) or an inline expression (`SUM(Sales[Amount])`).
    */
   daxExpression: string;
+  /**
+   * Loom-native (no-fabric-dependency) alternative to the Power BI DAX binding:
+   * a single read-only scalar SELECT run against Synapse. When present (and no
+   * `workspaceId`/`datasetId` Power BI binding is set) the scorecard metric-value
+   * route evaluates THIS via `serverlessTarget(database)` instead of Power BI —
+   * so a goal can bind to a warehouse/lakehouse metric with NO Fabric/PBI/AAS.
+   * The query must return a single row with a single numeric column.
+   */
+  sqlQuery?: string;
+  /** Serverless SQL database the `sqlQuery` runs against (default 'master'). */
+  database?: string;
 }
 
 /** True when a standalone AAS server is configured (opt-in XMLA path). */
