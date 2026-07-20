@@ -198,6 +198,12 @@ var loomContainers = [
   // version docs never pollute the untyped item-list/count/reindex queries.
   // createIfNotExists in cosmos-client.ts ensure() remains the hotfix fallback.
   { name: 'item-versions',     partitionKey: '/itemId' }
+  // Access-governance entitlement ledger (access-governance W1). One row per
+  // effective grant, PK /principalId → "what can principal X reach" is a
+  // single-partition read. Every grant path (F16 workflow, F15 fulfillment,
+  // workspace ACL) appends here; the who-has-access report reads it.
+  // createIfNotExists in cosmos-client.ts ensure() remains the hotfix fallback.
+  { name: 'access-assignments', partitionKey: '/principalId' }
   // Durable cross-session agent memory + per-agent thread persistence (AIF-14).
   // PK /agentId so every per-agent thread list + memory retrieve hits a single
   // physical partition. NO TTL — memory facts are durable; threads are retained

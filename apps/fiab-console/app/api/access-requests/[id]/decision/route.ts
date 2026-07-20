@@ -35,6 +35,7 @@ import {
 } from '@/lib/types/access-request-workflow';
 import crypto from 'node:crypto';
 import { apiServerError } from '@/lib/api/respond';
+import { recordAssignment } from '@/lib/access/assignment-ledger';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -123,6 +124,23 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
         if (grant.status === 'active') {
           doc.status = 'completed';
           doc.subscribedAt = now;
+          // Entitlement ledger (access-governance W1): record the effective grant
+          // so the who-has-access report reflects it. Best-effort (never throws).
+          await recordAssignment({
+            principalId: doc.requesterId,
+            principalUpn: doc.requesterUpn,
+            principalType: 'User',
+            tenantId: s.claims.oid,
+            resourceType: doc.scopeType,
+            resourceRef: doc.scopeRef,
+            resourceName: doc.assetName,
+            role: grant.roleName || doc.scopeType,
+            permission: doc.permission,
+            source: 'direct',
+            sourceRef: doc.id,
+            grantedBy: s.claims.upn || s.claims.oid,
+            roleAssignmentId: grant.roleAssignmentId,
+          });
           // Notify the requester they're now a subscriber.
           const nc = await notificationsContainer();
           await nc.items.create({
