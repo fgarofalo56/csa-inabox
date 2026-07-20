@@ -155,8 +155,10 @@ async function probeKusto(h: ProbeHelpers): Promise<CheckResult> {
       detail: `ADX probe failed: ${msg}`,
       remediation: denied
         ? 'Grant the Console UAMI "AllDatabasesViewer" (or Database Admin) on the ADX cluster.'
-        : 'Verify LOOM_KUSTO_CLUSTER_URI, that the cluster is RUNNING (not stopped), and network reachability from the Console subnet.',
+        : 'Verify LOOM_KUSTO_CLUSTER_URI, that the cluster is RUNNING (not stopped), and network reachability from the Console subnet. A missing default database is runtime-fixable (Heal).',
       redeploy: true,
+      // Idempotent runtime fix: createOrUpdate the default KQL database.
+      fixId: denied ? undefined : 'ensure-adx-default-db',
       portalSteps: denied ? grantPortalSteps(h, 'the ADX cluster → Permissions', 'AllDatabasesViewer') : undefined,
       fixScript: denied
         ? (() => {
@@ -204,8 +206,10 @@ async function probeEventHubs(h: ProbeHelpers): Promise<CheckResult> {
       detail: `Event Hubs probe failed: ${msg}`,
       remediation: denied
         ? 'Grant the Console UAMI "Azure Event Hubs Data Owner" on the namespace (control-plane reads additionally need Reader on the RG).'
-        : 'Verify LOOM_EVENTHUB_NAMESPACE (+ LOOM_EVENTHUB_RG/SUB) and network reachability.',
+        : 'Verify LOOM_EVENTHUB_NAMESPACE (+ LOOM_EVENTHUB_RG/SUB) and network reachability. A missing hub / consumer group is runtime-fixable (Heal).',
       redeploy: true,
+      // Idempotent runtime fix: ensure the default hub + a "loom" consumer group.
+      fixId: denied ? undefined : 'ensure-eventhub-consumer-group',
       portalSteps: denied ? grantPortalSteps(h, `Event Hubs namespace "${env('LOOM_EVENTHUB_NAMESPACE')}"`, 'Azure Event Hubs Data Owner') : undefined,
       fixScript: denied ? grantScript(h, 'Azure Event Hubs Data Owner', `/subscriptions/${h.ctx.sub}/resourceGroups/${h.ctx.dlzRg}/providers/Microsoft.EventHub/namespaces/${env('LOOM_EVENTHUB_NAMESPACE') || '<namespace>'}`) : undefined,
     };
@@ -521,6 +525,144 @@ async function probeHttpService(
   }
 }
 
+// ── W-B depth wave: 8 live probes for backends that had an env gate but no
+//    live call (docs/fiab/health-coverage-audit.md §5 items 1-5, 7). Each is a
+//    real read-only call as the Console UAMI, honest-gated when unconfigured. ──
+
+/** Analysis Services (semantic-model fast path). ARM read of the server(s) —
+ *  surfaces a PAUSED/STOPPED server (the exact invisible-misconfig class from
+ *  06-29), which a mere env gate can't see. AAS is unavailable in Gov clouds —
+ *  that is an honest warn (the Synapse-serverless fallback stays functional). */
+async function probeAas(h: ProbeHelpers): Promise<CheckResult> {
+  const base = { id: 'probe-aas', category: 'azure-services' as const, title: 'Analysis Services reachable + running (semantic-model fast path)', severity: 'optional' as const };
+  if (!anyHas('LOOM_AAS_SERVER', 'LOOM_AAS_SERVER_NAME', 'LOOM_AAS_XMLA_ENDPOINT', 'LOOM_POWERBI_XMLA_ENDPOINT')) {
+    return { ...base, status: 'warn', detail: 'AAS not configured — semantic models fall back to the Synapse Serverless tabular layer (functional, slower cold queries).', remediation: 'Set LOOM_AAS_SERVER (asazure://… URI) or LOOM_AAS_SERVER_NAME. See the "Analysis Services (semantic-model fast path)" check.', redeploy: true, ...h.envVarFix(['LOOM_AAS_SERVER']) };
+  }
+  try {
+    const { aasAvailabilityGate } = await import('@/lib/azure/aas-client');
+    const gov = aasAvailabilityGate();
+    if (gov) return { ...base, status: 'warn', detail: gov.detail, remediation: 'No action — the Loom-native tabular layer over Synapse Serverless is the Azure-native default in this cloud (no Power BI / Fabric required).' };
+    const sub = env('LOOM_SUBSCRIPTION_ID');
+    const rg = env('LOOM_AAS_RG') || h.ctx.adminRg || h.ctx.dlzRg;
+    if (!sub || !rg) return { ...base, status: 'warn', detail: 'AAS server configured but LOOM_SUBSCRIPTION_ID / resource group unresolved for the ARM liveness read.', remediation: 'Set LOOM_SUBSCRIPTION_ID and LOOM_AAS_RG (or LOOM_ADMIN_RG).', redeploy: true };
+    const { armGet } = await import('@/lib/azure/arm-client');
+    const r: any = await withTimeout(armGet(`/subscriptions/${sub}/resourceGroups/${rg}/providers/Microsoft.AnalysisServices/servers?api-version=2017-08-01`), 6000);
+    const servers: any[] = Array.isArray(r?.value) ? r.value : [];
+    if (servers.length === 0) return { ...base, status: 'warn', detail: `No Analysis Services server found in ${rg}. Serverless fallback is active.`, remediation: 'Deploy the AAS server (modules/admin-plane/aas.bicep, aasEnabled) or clear LOOM_AAS_SERVER to use the serverless fallback silently.', redeploy: true };
+    const states = servers.map((s) => `${s?.name}=${s?.properties?.state || 'state n/a'}`).join(', ');
+    const paused = servers.find((s) => /paus|suspend|stopp/i.test(String(s?.properties?.state || '')));
+    if (paused) return { ...base, status: 'warn', detail: `AAS server is PAUSED (${states}) — semantic-model fast-path queries fail until it is resumed.`, remediation: `Resume the server: az analysis-services server resume --name "${paused.name}" --resource-group "${rg}". Or set an auto-resume policy.`, redeploy: false };
+    return { ...base, status: 'pass', detail: `Analysis Services reachable + running (${states}).` };
+  } catch (e: any) {
+    const msg = e?.message || String(e); const denied = DENIED.test(msg);
+    return { ...base, status: denied ? 'fail' : 'warn', detail: `AAS probe failed: ${msg}`, remediation: denied ? 'Grant the Console UAMI "Reader" (+ "Analysis Services Admin" for XMLA) on the AAS server.' : 'Verify LOOM_AAS_SERVER / LOOM_AAS_RG and Console network reachability.', redeploy: true, portalSteps: denied ? grantPortalSteps(h, 'the Analysis Services server', 'Reader') : undefined, fixScript: denied ? grantScript(h, 'Reader', `/subscriptions/${env('LOOM_SUBSCRIPTION_ID')}/resourceGroups/${env('LOOM_AAS_RG') || h.ctx.adminRg}/providers/Microsoft.AnalysisServices/servers/<aas-server>`) : undefined };
+  }
+}
+
+/** Azure ML workspace (Data Science family: ml-model / AutoML / experiments).
+ *  ARM read of the workspace as the Console UAMI. */
+async function probeAml(h: ProbeHelpers): Promise<CheckResult> {
+  const base = { id: 'probe-aml', category: 'azure-services' as const, title: 'Azure ML workspace reachable + authorized (Data Science family)', severity: 'optional' as const };
+  try {
+    const { resolveAmlTarget, amlWorkspaceArmPath, AmlNotConfiguredError } = await import('@/lib/azure/resolve-aml-target');
+    let target;
+    try { target = resolveAmlTarget(); }
+    catch (e) {
+      if (e instanceof AmlNotConfiguredError) return { ...base, status: 'warn', detail: 'No Azure ML workspace configured — the Data Science item family (ml-model / ml-experiment / AutoML) is gated.', remediation: 'Set LOOM_AML_WORKSPACE (+ LOOM_AML_RESOURCE_GROUP) or the AI Foundry hub (LOOM_FOUNDRY_NAME/LOOM_FOUNDRY_RG). See the "Azure Machine Learning" check.', redeploy: true, ...h.envVarFix(['LOOM_AML_WORKSPACE']) };
+      throw e;
+    }
+    const { armGet } = await import('@/lib/azure/arm-client');
+    const r: any = await withTimeout(armGet(`${amlWorkspaceArmPath(target)}?api-version=2024-09-01`), 6000);
+    return { ...base, status: 'pass', detail: `Azure ML workspace reachable + authorized (${target.workspace} in ${target.resourceGroup}, ${r?.properties?.provisioningState || 'state n/a'}).` };
+  } catch (e: any) {
+    const msg = e?.message || String(e); const denied = DENIED.test(msg); const notFound = /404|not found/i.test(msg);
+    return { ...base, status: denied ? 'fail' : 'warn', detail: `AML probe failed: ${msg}`, remediation: denied ? 'Grant the Console UAMI "AzureML Data Scientist" + "Reader" on the AML workspace.' : notFound ? 'The configured LOOM_AML_WORKSPACE does not exist in that resource group — deploy it or correct the name.' : 'Verify LOOM_AML_WORKSPACE / LOOM_AML_RESOURCE_GROUP and reachability.', redeploy: true, portalSteps: denied ? grantPortalSteps(h, 'the Azure ML workspace', 'AzureML Data Scientist') : undefined, fixScript: denied ? grantScript(h, 'AzureML Data Scientist', `/subscriptions/${env('LOOM_SUBSCRIPTION_ID')}/resourceGroups/${env('LOOM_AML_RESOURCE_GROUP') || h.ctx.adminRg}/providers/Microsoft.MachineLearningServices/workspaces/${env('LOOM_AML_WORKSPACE') || '<aml-workspace>'}`) : undefined };
+  }
+}
+
+/** Azure SQL logical servers (SQL database items + mirroring source ops). ARM list. */
+async function probeAzureSql(h: ProbeHelpers): Promise<CheckResult> {
+  const base = { id: 'probe-azure-sql', category: 'azure-services' as const, title: 'Azure SQL logical servers reachable + authorized', severity: 'optional' as const };
+  if (!anyHas('LOOM_AZURE_SQL_DEFAULT_SERVER', 'LOOM_SUBSCRIPTION_ID')) {
+    return { ...base, status: 'warn', detail: 'Azure SQL not configured — SQL database items / mirroring source ops have no default server.', remediation: 'Set LOOM_SUBSCRIPTION_ID (Azure SQL items provision via ARM) and optionally LOOM_AZURE_SQL_DEFAULT_SERVER. See the "Azure SQL" check.', redeploy: true, ...h.envVarFix(['LOOM_AZURE_SQL_DEFAULT_SERVER']) };
+  }
+  try {
+    const { listServers } = await import('@/lib/azure/azure-sql-client');
+    const servers = await withTimeout(listServers(env('LOOM_SUBSCRIPTION_ID') || undefined), 6000);
+    const dflt = env('LOOM_AZURE_SQL_DEFAULT_SERVER');
+    return { ...base, status: 'pass', detail: `Azure SQL ARM readable as the Console UAMI: ${servers.length} logical server(s)${dflt ? ` (default: ${dflt})` : ''}${servers.length ? ` — ${servers.slice(0, 5).map((s: any) => s.name).join(', ')}` : ''}.` };
+  } catch (e: any) {
+    const msg = e?.message || String(e); const denied = DENIED.test(msg);
+    return { ...base, status: denied ? 'fail' : 'warn', detail: `Azure SQL probe failed: ${msg}`, remediation: denied ? 'Grant the Console UAMI "Reader" on the subscription/RG for ARM reads (+ an AAD login with db_owner on target servers for mirroring change-feed DDL).' : 'Verify LOOM_SUBSCRIPTION_ID / LOOM_AZURE_SQL_DEFAULT_SERVER and reachability.', redeploy: true, portalSteps: denied ? grantPortalSteps(h, 'the subscription or SQL resource group', 'Reader') : undefined, fixScript: denied ? grantScript(h, 'Reader', `/subscriptions/${env('LOOM_SUBSCRIPTION_ID')}`) : undefined };
+  }
+}
+
+/** PostgreSQL Flexible (Lakebase / pgvector). Real AAD token + SELECT 1 over the
+ *  pg wire protocol — the deepest liveness (proves auth + reachability). */
+async function probePostgres(h: ProbeHelpers): Promise<CheckResult> {
+  const base = { id: 'probe-postgres', category: 'azure-services' as const, title: 'PostgreSQL Flexible reachable + authorized (Lakebase — AAD SELECT 1)', severity: 'optional' as const };
+  const host = env('LOOM_POSTGRES_HOST') || env('LOOM_PGVECTOR_HOST');
+  if (!host) {
+    return { ...base, status: 'warn', detail: 'Postgres Flexible not configured — lakebase-postgres items and the pgvector store are gated.', remediation: 'Set LOOM_POSTGRES_HOST (+ LOOM_POSTGRES_AAD_USER). See the "PostgreSQL Flexible Server (Lakebase / pgvector)" check.', redeploy: true, ...h.envVarFix(['LOOM_POSTGRES_HOST']) };
+  }
+  try {
+    const { postgresQueryGate, executePostgresQuery } = await import('@/lib/azure/postgres-flex-client');
+    const g = postgresQueryGate();
+    if (g) return { ...base, status: 'warn', detail: `Postgres server configured but AAD principal not registered: ${g.detail}`, remediation: `Set ${g.missing} and run the one-time pgaadauth_create_principal for the Console UAMI (ARM/provisioning/firewall already work).`, redeploy: true, ...h.envVarFix([g.missing]) };
+    const r = await withTimeout(executePostgresQuery(host, 'postgres', 'SELECT 1 AS loom_health'), 8000);
+    return { ...base, status: 'pass', detail: `Postgres reachable + AAD-authorized (${host}): SELECT 1 returned ${r.rows?.length ?? 0} row(s).` };
+  } catch (e: any) {
+    const msg = e?.message || String(e); const denied = DENIED.test(msg) || /password authentication|no pg_hba|role .* does not exist/i.test(msg);
+    return { ...base, status: denied ? 'fail' : 'warn', detail: `Postgres SELECT 1 failed: ${msg}`, remediation: denied ? 'Register the Console UAMI as a PG Entra principal: connect as the PG Entra admin and run SELECT * FROM pgaadauth_create_principal(\'<console-uami-name>\', false, false); then GRANT it privileges.' : 'Verify LOOM_POSTGRES_HOST, the server firewall / private endpoint from the Console subnet, and LOOM_POSTGRES_AAD_USER.', redeploy: true };
+  }
+}
+
+/** Stream Analytics jobs (eventstream processing). ARM list at the RG. */
+async function probeStreamAnalytics(h: ProbeHelpers): Promise<CheckResult> {
+  const base = { id: 'probe-stream-analytics', category: 'azure-services' as const, title: 'Stream Analytics reachable + authorized (eventstream processing)', severity: 'optional' as const };
+  if (!anyHas('LOOM_ASA_RG', 'LOOM_DLZ_RG')) {
+    return { ...base, status: 'warn', detail: 'Stream Analytics RG not configured — eventstream processing has no ASA target.', remediation: 'Set LOOM_ASA_RG (falls back to LOOM_DLZ_RG). See the "Stream Analytics" check.', redeploy: true, ...h.envVarFix(['LOOM_ASA_RG']) };
+  }
+  try {
+    const { listJobs } = await import('@/lib/azure/stream-analytics-client');
+    const jobs = await withTimeout(listJobs(), 6000);
+    return { ...base, status: 'pass', detail: `Stream Analytics ARM readable as the Console UAMI: ${jobs.length} streaming job(s) in ${env('LOOM_ASA_RG') || h.ctx.dlzRg}${jobs.length ? ` — ${jobs.slice(0, 5).map((j: any) => j.name).join(', ')}` : ' (jobs are created on demand by the eventstream provisioner)'}.` };
+  } catch (e: any) {
+    const msg = e?.message || String(e); const denied = DENIED.test(msg);
+    return { ...base, status: denied ? 'fail' : 'warn', detail: `Stream Analytics probe failed: ${msg}`, remediation: denied ? 'Grant the Console UAMI "Contributor" on the Stream Analytics resource group.' : 'Verify LOOM_ASA_RG / LOOM_ASA_SUB and reachability.', redeploy: true, portalSteps: denied ? grantPortalSteps(h, 'the Stream Analytics resource group', 'Contributor') : undefined, fixScript: denied ? grantScript(h, 'Contributor', `/subscriptions/${env('LOOM_ASA_SUB') || env('LOOM_SUBSCRIPTION_ID')}/resourceGroups/${env('LOOM_ASA_RG') || h.ctx.dlzRg}`) : undefined };
+  }
+}
+
+/** Event Grid topics (business-events / real-time shims). ARM list. */
+async function probeEventGrid(h: ProbeHelpers): Promise<CheckResult> {
+  const base = { id: 'probe-eventgrid', category: 'azure-services' as const, title: 'Event Grid reachable + authorized (business-events topics)', severity: 'optional' as const };
+  try {
+    const { eventgridTopicsConfigGate, listEventGridTopics } = await import('@/lib/azure/eventgrid-topics-client');
+    const g = eventgridTopicsConfigGate();
+    if (g) return { ...base, status: 'warn', detail: 'Event Grid not configured — business-events topics / shims are unavailable (Event Hubs / Service Bus paths still work).', remediation: `Set ${g.missing}. See the "Event Grid" check.`, redeploy: true, ...h.envVarFix([g.missing]) };
+    const topics = await withTimeout(listEventGridTopics(), 6000);
+    return { ...base, status: 'pass', detail: `Event Grid ARM readable as the Console UAMI: ${topics.length} custom topic(s)${topics.length ? ` — ${topics.slice(0, 5).map((t: any) => t.name).join(', ')}` : ''}.` };
+  } catch (e: any) {
+    const msg = e?.message || String(e); const denied = DENIED.test(msg);
+    return { ...base, status: denied ? 'fail' : 'warn', detail: `Event Grid probe failed: ${msg}`, remediation: denied ? 'Grant the Console UAMI "EventGrid Contributor" on the RG (+ "EventGrid Data Sender" on the topic to publish).' : 'Verify LOOM_EVENTGRID_RG / LOOM_EVENTGRID_BUSINESS_TOPIC and reachability.', redeploy: true, portalSteps: denied ? grantPortalSteps(h, 'the Event Grid resource group', 'EventGrid Contributor') : undefined, fixScript: denied ? grantScript(h, 'EventGrid Contributor', `/subscriptions/${env('LOOM_EVENTGRID_SUB') || env('LOOM_SUBSCRIPTION_ID')}/resourceGroups/${env('LOOM_EVENTGRID_RG') || h.ctx.dlzRg}`) : undefined };
+  }
+}
+
+/** Azure Batch account (batch-pool compute items). ARM read. */
+async function probeBatch(h: ProbeHelpers): Promise<CheckResult> {
+  const base = { id: 'probe-batch', category: 'azure-services' as const, title: 'Azure Batch account reachable + authorized (batch-pool items)', severity: 'optional' as const };
+  try {
+    const { batchConfigGate, getBatchAccount } = await import('@/lib/azure/batch-client');
+    const g = batchConfigGate();
+    if (g) return { ...base, status: 'warn', detail: 'Azure Batch not configured — batch-pool compute items are gated.', remediation: `Set ${g.missing} (+ LOOM_BATCH_RG). See the "Azure Batch" check.`, redeploy: true, ...h.envVarFix([g.missing]) };
+    const acct: any = await withTimeout(getBatchAccount(), 6000);
+    return { ...base, status: 'pass', detail: `Azure Batch reachable + authorized (${acct?.name || env('LOOM_BATCH_ACCOUNT')}, ${acct?.properties?.provisioningState || acct?.provisioningState || 'state n/a'}).` };
+  } catch (e: any) {
+    const msg = e?.message || String(e); const denied = DENIED.test(msg);
+    return { ...base, status: denied ? 'fail' : 'warn', detail: `Azure Batch probe failed: ${msg}`, remediation: denied ? 'Grant the Console UAMI "Contributor" on the Batch account.' : 'Verify LOOM_BATCH_ACCOUNT / LOOM_BATCH_RG and reachability.', redeploy: true, portalSteps: denied ? grantPortalSteps(h, 'the Azure Batch account', 'Contributor') : undefined, fixScript: denied ? grantScript(h, 'Contributor', `/subscriptions/${env('LOOM_SUBSCRIPTION_ID')}/resourceGroups/${env('LOOM_BATCH_RG') || h.ctx.dlzRg}/providers/Microsoft.Batch/batchAccounts/${env('LOOM_BATCH_ACCOUNT') || '<batch-account>'}`) : undefined };
+  }
+}
+
 // ── runner ───────────────────────────────────────────────────────────────────
 
 /** Run every extended probe in parallel (each individually time-bounded). */
@@ -538,6 +680,17 @@ export async function runExtraProbes(h: ProbeHelpers): Promise<CheckResult[]> {
     probeServiceBus(h),
     probeApim(h),
     probeKeyVault(h),
+    // W-B depth wave — 8 live probes for env-gated backends that had no live call.
+    probeAas(h),
+    probeAml(h),
+    probeAzureSql(h),
+    probePostgres(h),
+    probeStreamAnalytics(h),
+    probeEventGrid(h),
+    probeBatch(h),
+    probeHttpService(
+      'probe-grafana', 'azure-services', 'Grafana reachable — usage/governance embeds', 'LOOM_GRAFANA_ENDPOINT',
+      'the usage/governance Grafana dashboard embeds (Gov clouds especially)', 'Deployed by the Azure Managed Grafana module; the embeds render an honest gate when unset.', h),
     probeHttpService(
       'probe-dab-runtime', 'builders', 'DAB preview runtime reachable — REST/GraphQL testers', 'LOOM_DAB_PREVIEW_URL',
       'the Data API builder live testers + ontology-sdk "Try it"', 'Deployed by modules/admin-plane/dab-runtime.bicep (dabRuntimeEnabled, default on).', h),

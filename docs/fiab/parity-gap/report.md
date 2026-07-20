@@ -1,10 +1,61 @@
-# Loom Power BI Report — Fabric parity gap
+<!-- parity-doc-meta
+Reviewed-on: 2026-07-20
+Validated-against:
+  - apps/fiab-console/lib/editors/phase3/report-editor.tsx
+  - apps/fiab-console/lib/editors/report-designer.tsx
+  - apps/fiab-console/lib/components/embed/powerbi-embed.tsx
+  - apps/fiab-console/app/api/items/report/[id]/embed-token/route.ts
+  - apps/fiab-console/app/api/items/report/route.ts
+-->
 
-> **Validator: v2 4-phase (live browser) — 2026-05-26**
-> Loom URL: https://<your-console-hostname>/items/report/new
-> Fabric reference: app.powerbi.com / app.fabric.microsoft.com (login-gated; spec-derived from docs/fiab/report-parity-spec.md)
-> Screenshot: temp/parity/report-loom.png
-> Source under review: apps/fiab-console/lib/editors/phase3-editors.tsx lines 1540-1641
+# Loom Report — parity with Power BI report authoring
+
+> **RE-BASELINED 2026-07-20** (rev `9ad350d3`, code-path refresh). The 2026-05-26
+> capture retained below graded this surface `D` ("powerbi-client NOT INSTALLED",
+> "no panes", "embed lands in v2.2", 7 dead ribbon buttons) and is **stale in
+> every headline claim** — the report item now opens a full Loom-native report
+> designer. A live click-walk re-certification (per `no-scaffold`) is still owed
+> before stamping a fresh A grade.
+
+## Current state (code-grounded, 2026-07-20)
+
+The report item opens the **Loom-native report designer**, not a metadata browser.
+`lib/editors/phase3/report-editor.tsx` resolves to `ReportDesigner`
+(`LoomNativeReportEditor → ReportDesigner`; import `:42`, active editor `:1145`).
+The designer (`lib/editors/report-designer.tsx`, ~5,135 LOC) is the Azure-native
+default: it queries a **bound Azure Analysis Services tabular model with DAX**
+(`POST …/query`) and needs **no Power BI or Fabric workspace**. A live Power BI
+embed is the **opt-in** alternative.
+
+Corrections to the 2026-05-26 matrix (each verified in code):
+
+| 2026-05-26 claim | Current reality |
+|---|---|
+| `powerbi-client` NOT INSTALLED | **Installed** — `powerbi-client ^2.23.1` + `powerbi-client-react ^2.0.2` (`package.json`). |
+| No embed / "lands in v2.2" placeholder | **`PowerBIEmbed`** (`lib/components/embed/powerbi-embed.tsx`); embed token minted by **`app/api/items/report/[id]/embed-token/route.ts`** (GenerateToken). |
+| Visualizations / Fields / Format panes MISSING | **Present** in `report-designer.tsx` (Visualizations, Fields wells, Format pane, DAX-backed live visuals). |
+| Ribbon = Home only; Insert/Modeling/View MISSING | **Insert** (and further tabs) present in the designer ribbon. |
+| Ribbon buttons are dead labels (7 BROKEN) | Designer controls wired to the DAX/AAS data path (real rows), not `{ label }`-only no-ops. |
+| Only working surface = metadata card | The primary surface is now the authoring canvas; list + detail remain real. |
+
+**Run-path (`temp/runpath-verdicts-2026-07-20.md`):** `report` → **B** (honest `412`
+when no model bound; **real GROUP BY rows** once bound). Sibling `paginated-report`
+→ **A** (real RDL: DataSource + DataSet + Tablix over `loom_sales_wide`).
+
+**Remaining residuals:** live click-walk certification (dark+light, every control)
+not re-done in this doc-currency pass; Q&A NL + full bookmark/selection navigator
+parity to confirm against the designer.
+
+---
+
+<details>
+<summary>Historical capture — 2026-05-26 (superseded, kept for provenance)</summary>
+
+The rows below graded the surface **D** and are retained only to show what changed.
+Do NOT cite their "MISSING"/"BROKEN" claims as current — they were remediated by the
+report-designer + AAS + PBI-embed work (report auto-bind #2002; Fabric-parity /
+report-catalog waves). Original source under review then:
+`apps/fiab-console/lib/editors/phase3-editors.tsx:1540-1641`.
 
 ## Phase 1 + 2 captures
 Live Loom DOM (heading + ribbon):
@@ -77,3 +128,5 @@ Phase 3 has 7 BLOCKER rows + multiple MAJOR. Phase 4 has 7 BROKEN primary contro
 7. Vitest/Playwright coverage: mock GenerateToken, assert iframe src matches app.powerbi.com/reportEmbed.
 
 Estimated effort to grade B: 2 sessions. Grade A adds Loom-chrome panes wrapping embed SDK events.
+
+</details>

@@ -256,20 +256,25 @@ graph TB
 │   └── 📁 finops/                 # FinOps budget alerts (Bicep)
 ├── 📁 docs/                       # Platform documentation
 │   └── 📁 runbooks/               # Incident response & DR runbooks
-├── 📁 tests/                      # pytest test suite (80% coverage gate — see note below)
+├── 📁 tests/                      # pytest test suite (coverage gate — see note below)
 ├── 📁 tools/                      # Development tools
 │   └── 📁 dbt/                    # dbt for data transformations
 └── 📁 .github/                    # CI/CD workflows
 ```
 
 > [!NOTE]
-> **Coverage gate scope (CSA-0088).** The `fail_under = 80` gate in
-> `pyproject.toml` applies to `governance/` (common, dataquality, contracts)
-> and the Azure Functions packages under `csa_platform/functions/`.
-> `csa_platform/` (broad) and `portal/shared/api/` are **measured** in the
-> coverage report so the true gap is visible, but they are **not** yet
-> gated — their suites are still growing. Do not raise `fail_under` until
-> those packages have real parity tests.
+> **Coverage gate scope (CSA-0088).** The coverage gate that actually fails CI is
+> **`--cov-fail-under=60`** in `.github/workflows/test.yml` (the pytest-cov CLI flag
+> overrides `pyproject.toml`, which *declares* `fail_under = 65`). It is scoped to the
+> packages listed in `pyproject.toml` `[tool.coverage.run] source` — `governance/`
+> (common, dataquality, contracts, compliance), the Azure Functions packages under
+> `csa_platform/functions/`, and `csa_platform/ai_integration/{rag,enrichment}`. Broad
+> `csa_platform/` and `portal/shared/api/` are **measured** in the coverage report so
+> the true gap is visible, but they are **not** yet gated — their suites are still
+> growing. The 60→65→70→75 ratchet roadmap and the enforced-vs-declared reconciliation
+> live in **[`docs/fiab/meta/canonical-metrics.md`](docs/fiab/meta/canonical-metrics.md)**
+> (the single source of truth for this and every other headline count). Raise the gate
+> only through the coverage-ratchet wave, one notch at a time.
 
 ---
 
@@ -398,7 +403,7 @@ All environment-specific values are externalized to parameter files:
 
 | Module                                                                   | Status  | Notes                                                                                                                       |
 | ------------------------------------------------------------------------ | ------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `governance/` (contracts, dataquality, purview, common, finops, rbac)    | GA      | Most mature module; covered by 80% gate; only one packaged for PyPI extraction                                              |
+| `governance/` (contracts, dataquality, purview, common, finops, rbac)    | GA      | Most mature module; inside the coverage gate (see [canonical-metrics](docs/fiab/meta/canonical-metrics.md)); only one packaged for PyPI extraction |
 | `functions/` (validation, aiEnrichment, eventProcessing, secretRotation) | GA      | Azure Functions apps with tests under `tests/functions/`                                                                    |
 | `ai_integration/rag/`                                                    | Beta    | Real RAG pipeline + service; has tests; **not** yet wired into the portal router                                            |
 | `ai_integration/graphrag/`                                               | Beta    | ~1,500 LOC across 4 modules; 200 LOC of unit tests cover document loader + graph store                                      |

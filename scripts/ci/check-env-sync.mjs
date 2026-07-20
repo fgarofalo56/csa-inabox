@@ -246,8 +246,11 @@ const ALLOWLIST = new Set([
   'LOOM_DSPM_AI_AGENT_ITEM_TYPES',  // classifier config list (code default)
   'LOOM_DSPM_AI_WINDOW_DAYS',       // opt-in default usage-window override (code default 14)
   'LOOM_DSPM_AI_TTL_MS',            // opt-in posture-memo TTL tuning (code default 60s)
+  'LOOM_EVENTHUB_CONSUMER_GROUP',   // opt-in consumer-group override for the EH health-exercise probe (code default 'loom')
+  'LOOM_EVENTHUB_DEFAULT_HUB',      // opt-in default hub name for the EH health-exercise probe (code default 'loom-eventstream')
   'LOOM_EVENTSTREAM_EVENTS_TABLE',  // ADX table default (code default)
   'LOOM_ASA_REFERENCE_CONTAINER',   // opt-in blob container for the ASA reference-data geofence (falls back to 'landing' → first configured container)
+  'LOOM_EVENTSTREAM_HUB',           // opt-in eventstream hub-name alias for the EH health-exercise probe (fallback for LOOM_EVENTHUB_DEFAULT_HUB)
   'LOOM_FABRIC_GRAPH_WORKSPACE',    // opt-in Fabric graph workspace
   'LOOM_FABRIC_SEMANTIC_MODEL_ID',  // opt-in Fabric semantic model
   'LOOM_FABRIC_WORKSPACE_ID',       // opt-in Fabric workspace (no-fabric-dependency.md: never a default gate)

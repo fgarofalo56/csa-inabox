@@ -173,19 +173,30 @@ Every non-pass finding renders ON the page (no "see docs elsewhere"):
 
 ## 5. Prioritized remaining gaps (next wave)
 
+> **Wave W-B update (2026-07-20):** items **1–5, 7, 8, and 10 are now CLOSED.**
+> Added 8 live probes (`probe-aas`, `probe-aml`, `probe-azure-sql`,
+> `probe-postgres`, `probe-stream-analytics`, `probe-eventgrid`, `probe-batch`,
+> `probe-grafana`) in `lib/admin/health-probes.ts`; 4 deep exercises
+> (`eventstream-roundtrip`, `purview-scan`, `databricks-sql`, `report-render`) in
+> `lib/admin/service-probes.ts`; and 2 healers (`ensure-eventhub-consumer-group`,
+> `ensure-adx-default-db`) in `lib/admin/self-audit.ts` (dry-run capable,
+> role-limited, payload-asserted tests). The AAS probe surfaces a **PAUSED**
+> server (the invisible-misconfig class). Only **#6 (SWA publish probe)** and
+> **#9 (gates-registry wiring)** remain.
+
 Live probes still missing (env gate only today) — in priority order:
 
-1. **AAS live probe** (semantic-model fast path — a stopped/paused server is invisible today; known env-misconfig class from 06-29).
-2. **AML workspace live probe** (Data Science family: workspace read + compute list).
-3. **Azure SQL live probe** (logical-server ARM read; mirroring change-feed grant check).
-4. **Postgres Flexible live probe** (AAD token + `SELECT 1` — Lakebase).
-5. **Grafana reachability probe** (usage/govern embeds on Gov clouds).
-6. **SWA publish probe** (RG + Website Contributor verification).
-7. **Stream Analytics / Event Grid / Batch ARM reads** (cheap `armGet` liveness).
-8. **Deep exercises** (service-probes.ts layer): eventstream publish→consume round-trip, Purview scan trigger, Databricks SQL warehouse query, report render.
+1. ~~**AAS live probe**~~ — DONE (W-B): ARM read of the server(s) — surfaces PAUSED/STOPPED.
+2. ~~**AML workspace live probe**~~ — DONE (W-B): workspace ARM read as the Console UAMI.
+3. ~~**Azure SQL live probe**~~ — DONE (W-B): logical-server ARM list.
+4. ~~**Postgres Flexible live probe**~~ — DONE (W-B): AAD token + `SELECT 1` over the pg wire.
+5. ~~**Grafana reachability probe**~~ — DONE (W-B): reachability of `LOOM_GRAFANA_ENDPOINT`.
+6. **SWA publish probe** (RG + Website Contributor verification). — still open.
+7. ~~**Stream Analytics / Event Grid / Batch ARM reads**~~ — DONE (W-B): cheap ARM liveness for each.
+8. ~~**Deep exercises**~~ — DONE (W-B): eventstream publish→consume round-trip, Purview scan trigger, Databricks SQL warehouse query, report render.
 9. **Gates registry wiring** — when `lib/gates/registry.ts` lands, flip
-   `GATES_REGISTRY_WIRED` per the bridge header (CI fails if forgotten).
-10. **Healer growth**: `ensure-eventhub-consumer-group`, `ensure-adx-default-db`
+   `GATES_REGISTRY_WIRED` per the bridge header (CI fails if forgotten). — still open.
+10. ~~**Healer growth**~~ — DONE (W-B): `ensure-eventhub-consumer-group`, `ensure-adx-default-db`
     (idempotent createIfNotExists-class fixes the UAMI can already perform).
 
 ## 6. How coverage stays honest (no-vaporware)

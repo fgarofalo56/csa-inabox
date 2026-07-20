@@ -30,12 +30,15 @@ import {
 } from '@/lib/azure/cosmos-client';
 import { enforceAccessGrant, type AccessScopeType } from '@/lib/azure/rbac-client';
 import {
-  TIER_SEQUENCE, TIER_APPROVAL_KEY, TIER_LABEL,
+  TIER_APPROVAL_KEY, TIER_LABEL,
   type AccessRequestDoc, type ApprovalStep, type ApprovalTier,
 } from '@/lib/types/access-request-workflow';
 import crypto from 'node:crypto';
 import { apiServerError } from '@/lib/api/respond';
 import { recordAssignment } from '@/lib/access/assignment-ledger';
+import { effectiveStages, nextStage, actorMayApprove } from '@/lib/access/approval-policy';
+import { isTenantAdmin } from '@/lib/auth/feature-gate';
+import { computeExpiry } from '@/lib/access/expiry';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -82,6 +85,12 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     }
 
     const currentTier = doc.tier;
+    // W2 — configurable approver enforcement. No-op for legacy requests and for
+    // policies that don't enforce named approvers; tenant admins always pass.
+    const approverCheck = actorMayApprove(doc.approvalPlan, currentTier, s.claims.oid, isTenantAdmin(s));
+    if (!approverCheck.allowed) {
+      return NextResponse.json({ ok: false, error: approverCheck.reason || 'You are not an approver for this stage.' }, { status: 403 });
+    }
     const step: ApprovalStep = {
       decision,
       by: s.claims.upn || tenantId,
@@ -101,16 +110,53 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       doc.denialReason = reason;
       doc.deniedAtTier = currentTier;
     } else {
-      const idx = TIER_SEQUENCE.indexOf(currentTier);
-      const isFinal = idx === TIER_SEQUENCE.length - 1;
+      // W2 — advance over the request's approval-plan snapshot (an ordered subset
+      // of the canonical tiers) when present; legacy requests fall back to the
+      // full canonical sequence, so behaviour is identical by default.
+      const stages = effectiveStages(doc.approvalPlan);
+      const nxt = nextStage(stages, currentTier);
+      const isFinal = nxt === null;
       if (!isFinal) {
-        doc.tier = TIER_SEQUENCE[idx + 1];
+        doc.tier = nxt;
       } else {
         // FINAL tier — the access provider may confirm/override the grant scope.
         if (SCOPE_TYPES.has(body?.scopeType)) doc.scopeType = body.scopeType;
         if (typeof body?.scopeRef === 'string' && body.scopeRef.trim()) {
           doc.scopeRef = String(body.scopeRef).trim().slice(0, 200);
         }
+        if (doc.activationRequired) {
+          // W3 (PIM) — final approval yields an ELIGIBLE assignment (no RBAC yet);
+          // the requester activates it for a bounded window from the Access report.
+          doc.status = 'completed';
+          await recordAssignment({
+            principalId: doc.requesterId,
+            principalUpn: doc.requesterUpn,
+            principalType: 'User',
+            tenantId: s.claims.oid,
+            resourceType: doc.scopeType,
+            resourceRef: doc.scopeRef,
+            resourceName: doc.assetName,
+            role: doc.scopeType,
+            permission: doc.permission,
+            source: 'direct',
+            sourceRef: doc.id,
+            grantedBy: s.claims.upn || s.claims.oid,
+            state: 'eligible',
+            expiresAt: null,
+            activationWindowHours: doc.activationWindowHours ?? null,
+          });
+          const nc = await notificationsContainer();
+          await nc.items.create({
+            id: crypto.randomUUID(),
+            userId: doc.requesterId,
+            title: `Access eligible: ${doc.assetName}`,
+            body: `Your access to ${doc.assetName} is approved as ELIGIBLE. Activate it from the Access report to receive a time-bounded grant.`,
+            severity: 'info',
+            link: '/admin/access-report',
+            read: false,
+            createdAt: now,
+          });
+        } else {
         // Provision the REAL Azure RBAC grant on the backing data store.
         const grant = await enforceAccessGrant({
           principalId: doc.requesterId,
@@ -124,6 +170,8 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
         if (grant.status === 'active') {
           doc.status = 'completed';
           doc.subscribedAt = now;
+          // W3 — apply the package's grant lifetime (if any) as the expiry.
+          const grantExpiry = computeExpiry(new Date(now), { lifetimeDays: doc.grantLifetimeDays });
           // Entitlement ledger (access-governance W1): record the effective grant
           // so the who-has-access report reflects it. Best-effort (never throws).
           await recordAssignment({
@@ -140,6 +188,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
             sourceRef: doc.id,
             grantedBy: s.claims.upn || s.claims.oid,
             roleAssignmentId: grant.roleAssignmentId,
+            expiresAt: grantExpiry,
           });
           // Notify the requester they're now a subscriber.
           const nc = await notificationsContainer();
@@ -164,6 +213,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
           ok = grant.status !== 'error';
           httpStatus = grant.status === 'error' ? 502 : 200;
           warning = grant.detail;
+        }
         }
       }
     }
