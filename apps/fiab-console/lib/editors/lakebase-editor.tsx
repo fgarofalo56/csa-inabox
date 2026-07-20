@@ -434,7 +434,7 @@ export function LakebaseEditor({ item, id }: EditorProps) {
             </div>
             {queryGate ? (
               <MessageBar intent="warning"><MessageBarBody>
-                <MessageBarTitle>In-database query not yet wired</MessageBarTitle>
+                <MessageBarTitle>One-time setup for in-database query</MessageBarTitle>
                 <span className={s.err}>{queryGate.detail}</span>
               </MessageBarBody></MessageBar>
             ) : null}

@@ -298,12 +298,17 @@ export interface PgQueryResult {
  */
 export function postgresQueryGate(): { missing: string; detail: string } | null {
   if (!process.env.LOOM_POSTGRES_AAD_USER) {
+    // Pre-fill the Console UAMI's real name so the pgaadauth_create_principal
+    // setup runs verbatim (no <console-uami-name> placeholder — rule #70). The
+    // UAMI resource name IS its Entra principal name.
+    const uami = (process.env.LOOM_UAMI_RESOURCE_ID || '').trim().split('/').pop()
+      || (process.env.LOOM_UAMI_NAME || '').trim() || '<console-uami-name>';
     return {
       missing: 'LOOM_POSTGRES_AAD_USER',
       detail:
         'Set LOOM_POSTGRES_AAD_USER to the Entra principal name the console identity is registered ' +
         'under in PostgreSQL. One-time setup: connect as the PG Entra admin and run ' +
-        "SELECT * FROM pgaadauth_create_principal('<console-uami-name>', false, false); then grant it " +
+        `SELECT * FROM pgaadauth_create_principal('${uami}', false, false); then grant it ` +
         'the needed privileges. ARM inventory, provisioning, databases, and firewall are already live.',
     };
   }
