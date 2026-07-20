@@ -22,8 +22,12 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { isTenantAdminTier } from '@/lib/auth/domain-role';
+import { pdpCheck } from '@/lib/auth/pdp/enforce';
 import { loadOwnedItem } from '../../../_lib/item-crud';
 import { objectTypeNames, normalizeOntoActionTypes, validateActionRun, evaluateSubmissionCriteria } from '@/lib/editors/ontology-model';
+import { normalizeObjectSecurity, actionSecurity, isActionAllowed } from '@/lib/foundry/object-security';
+import { auditObjectSecurity } from '@/lib/azure/object-security-audit';
 import { weaveGate, runActionType, type WeaveActionType } from '@/lib/azure/weave-ontology-store';
 import { PostgresError } from '@/lib/azure/postgres-flex-client';
 import { recordActionJustification, isValidReason, MIN_JUSTIFICATION_LEN } from '@/lib/azure/action-justification-store';
@@ -63,6 +67,8 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
 
   const onto = await loadOwnedItem(id, ITEM_TYPE, s.claims.oid);
   if (!onto) return err('ontology not found', 404, 'not_found');
+  const blocked = await pdpCheck(s, { level: 'item', id, itemType: ITEM_TYPE }, 'write');
+  if (blocked) return blocked;
   const state = (onto.state || {}) as Record<string, unknown>;
   const actionTypes = normalizeOntoActionTypes(state.actionTypes);
   const action = actionTypes.find((a) => a.name === actionName);
@@ -75,6 +81,33 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   const classNames = objectTypeNames(state);
   if (!classNames.has(action.objectType)) {
     return err(`Action "${actionName}" targets object type "${action.objectType}" which is no longer declared on this ontology.`, 409, 'undeclared_type');
+  }
+
+  // WS-4.3 object-level security: an ACTION marking gates who may run this
+  // write-back by Entra group. Enforced server-side (403) + audited BEFORE any
+  // validation or write. Tenant admins bypass (mirrors the PDP short-circuit).
+  const security = normalizeObjectSecurity(state.objectSecurity);
+  const callerGroups = s.claims.groups || [];
+  const bypass = isTenantAdminTier(s);
+  if (!isActionAllowed(security, actionName, callerGroups, bypass)) {
+    const allow = actionSecurity(security, actionName)?.allowGroups.map((g) => g.name || g.id) || [];
+    auditObjectSecurity(s, {
+      ontologyId: id, ontologyName: onto.displayName, decision: 'action-denied', action: actionName,
+      objectType: action.objectType, callerGroups, nowIso: new Date().toISOString(),
+    });
+    return err(
+      `Action "${actionName}" is restricted — your account is not in a security group cleared to run it${allow.length ? ` (allowed: ${allow.join(', ')})` : ''}.`,
+      403,
+      'action_forbidden',
+    );
+  }
+  // A gated action the caller WAS cleared to run — record the authorization
+  // decision so the trail shows who ran a restricted action (best-effort).
+  if (!bypass && actionSecurity(security, actionName)) {
+    auditObjectSecurity(s, {
+      ontologyId: id, ontologyName: onto.displayName, decision: 'action-allowed', action: actionName,
+      objectType: action.objectType, callerGroups, nowIso: new Date().toISOString(),
+    });
   }
 
   // Checkpoint (Foundry-parity row 4.7): a justification-gated action requires a

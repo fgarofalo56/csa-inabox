@@ -24,7 +24,7 @@ import {
 import {
   Bot24Regular, Database20Regular, Add20Regular, Sparkle20Regular,
   Link20Regular, Flash20Regular, Dismiss16Regular,
-  ShieldCheckmark20Regular, Mail16Regular, ArrowSync16Regular,
+  ShieldCheckmark20Regular, ShieldLock20Regular, Mail16Regular, ArrowSync16Regular,
   DataUsage20Regular, ArrowUpload16Regular,
   Settings20Regular, Money20Regular, BranchFork20Regular,
   Table20Regular, ChartMultiple20Regular,
@@ -74,6 +74,8 @@ import {
   type OntoBaseType, type OntoCardinality, type OntoParamType, type OntoStatus, type OntoColor, type OntoDatasource,
   type OntoInterface, type OntoSharedPropertyGroup, type OntoActionCriterion, type OntoCriterionOp,
 } from '../ontology-model';
+import { normalizeObjectSecurity } from '@/lib/foundry/object-security';
+import { OntologySecurityPanel } from './ontology-security-panel';
 // Pure-logic helpers extracted for vitest coverage. See
 // `lib/editors/__tests__/family-utils.test.ts`.
 import {
@@ -1184,7 +1186,7 @@ function OntologyTypedModelPanel({
   const model = useMemo(() => migrateOntologyState(state), [state]);
   const { objectTypes, linkTypes, actionTypes, interfaces, sharedPropertyGroups } = model;
   const objNames = useMemo(() => objectTypes.map((o) => o.apiName), [objectTypes]);
-  const [tab, setTab] = useState<'objects' | 'links' | 'actions' | 'interfaces' | 'shared' | 'explore'>('objects');
+  const [tab, setTab] = useState<'objects' | 'links' | 'actions' | 'interfaces' | 'shared' | 'security' | 'explore'>('objects');
 
   const commit = useCallback((patch: {
     objectTypes?: OntoObjectType[]; linkTypes?: OntoLinkType[]; actionTypes?: OntoActionType[];
@@ -1629,6 +1631,7 @@ function OntologyTypedModelPanel({
         <Tab value="actions" icon={<Play20Regular />}>Actions ({actionTypes.length})</Tab>
         <Tab value="interfaces" icon={<ShieldCheckmark20Regular />}>Interfaces ({interfaces.length})</Tab>
         <Tab value="shared" icon={<Layer20Regular />}>Shared properties ({sharedPropertyGroups.length})</Tab>
+        <Tab value="security" icon={<ShieldLock20Regular />}>Security</Tab>
         <Tab value="explore" icon={<Search20Regular />}>Explore</Tab>
       </TabList>
 
@@ -1825,6 +1828,15 @@ function OntologyTypedModelPanel({
               })}
             </div>
           )}
+        </div>
+      )}
+
+      {/* ── Security (WS-4.3 object-level security — Entra-group markings) ── */}
+      {tab === 'security' && (
+        <div className={s.tmTabPanel}>
+          <OntologySecurityPanel objectTypes={objectTypes} actionTypes={actionTypes}
+            security={normalizeObjectSecurity(state.objectSecurity)}
+            onChange={(next) => persistOnto({ ...state, objectSecurity: next })} saving={saving} />
         </div>
       )}
 
