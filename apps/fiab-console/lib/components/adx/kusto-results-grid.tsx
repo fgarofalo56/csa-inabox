@@ -15,11 +15,15 @@
  *   - Sort by column header (asc → desc → none), type-aware: numeric and
  *     datetime columns sort by value, not lexically.
  *   - Per-column filter (substring, case-insensitive) + a global
- *     search-in-grid box; matching cells are highlighted.
- *   - Column statistics popover: numeric → count / nulls / min / max / sum /
- *     avg; any column → distinct count + most-common value.
- *   - Export: download the *visible* (sorted + filtered) rows as CSV
- *     (real client-side Blob), and Copy-to-clipboard as TSV.
+ *     search-in-grid box; matching cells are highlighted. The filter is a pure,
+ *     exported `filterRows` predicate (reusable + unit-tested).
+ *   - Column statistics popover: numeric → count / nulls / distinct / min /
+ *     max / sum / avg; datetime → count / nulls / distinct + earliest / latest;
+ *     any other column → distinct count + most-common value.
+ *   - Export: download the *visible* (filtered + sorted) rows as CSV — an
+ *     RFC-4180 blob (CRLF record separators, doubled-quote escaping) prefixed
+ *     with a UTF-8 BOM so Excel opens Unicode correctly, and a timestamped
+ *     filename. Copy-to-clipboard as TSV. (Real client-side Blob, no backend.)
  *   - "Showing N of M" readout, sticky header, and a render cap so large
  *     result sets never freeze the tab (the cap is honest: it tells you how
  *     many of the matched rows are rendered).
@@ -72,10 +76,18 @@ interface ColumnStats {
   nulls: number;
   distinct: number;
   isNumeric: boolean;
+  isDateTime: boolean;
   min?: number;
   max?: number;
   sum?: number;
   avg?: number;
+  /**
+   * Display strings for min/max. For datetime columns these are the earliest /
+   * latest ISO timestamps (min/max hold the underlying epoch ms). Absent for
+   * numeric columns, which format min/max numerically in the popover.
+   */
+  minLabel?: string;
+  maxLabel?: string;
   mostCommon?: { value: string; n: number };
 }
 
@@ -175,10 +187,11 @@ export function computeColumnStats(
   columnTypes?: string[],
 ): ColumnStats {
   const numeric = isNumericColumn(colIdx, rows, columnTypes);
+  const datetime = !numeric && isDateTimeColumn(colIdx, columnTypes);
   let count = 0;
   let nulls = 0;
   let sum = 0;
-  let numericCount = 0;
+  let rangeCount = 0; // numeric OR datetime values that parsed
   let min = Number.POSITIVE_INFINITY;
   let max = Number.NEGATIVE_INFINITY;
   const freq = new Map<string, number>();
@@ -192,9 +205,16 @@ export function computeColumnStats(
       const n = Number(v);
       if (!Number.isNaN(n)) {
         sum += n;
-        numericCount++;
+        rangeCount++;
         if (n < min) min = n;
         if (n > max) max = n;
+      }
+    } else if (datetime) {
+      const t = Date.parse(String(v));
+      if (!Number.isNaN(t)) {
+        rangeCount++;
+        if (t < min) min = t;
+        if (t > max) max = t;
       }
     }
   }
@@ -202,22 +222,36 @@ export function computeColumnStats(
   for (const [value, n] of freq) {
     if (!mostCommon || n > mostCommon.n) mostCommon = { value, n };
   }
-  return {
+  const hasRange = rangeCount > 0;
+  const stats: ColumnStats = {
     count,
     nulls,
     distinct: freq.size,
     isNumeric: numeric,
-    min: numericCount ? min : undefined,
-    max: numericCount ? max : undefined,
-    sum: numericCount ? sum : undefined,
-    avg: numericCount ? sum / numericCount : undefined,
+    isDateTime: datetime,
     mostCommon,
   };
+  if (numeric && hasRange) {
+    stats.min = min;
+    stats.max = max;
+    stats.sum = sum;
+    stats.avg = sum / rangeCount;
+  } else if (datetime && hasRange) {
+    // Keep epoch ms in min/max, expose the earliest / latest ISO labels.
+    stats.min = min;
+    stats.max = max;
+    stats.minLabel = new Date(min).toISOString();
+    stats.maxLabel = new Date(max).toISOString();
+  }
+  return stats;
 }
 
 /**
- * Build RFC-4180 CSV text from columns + rows. Cells containing a comma,
- * double-quote, or newline are quoted with `"` doubled. Exported for testing.
+ * Build RFC-4180 CSV text from columns + rows. Records are separated by CRLF
+ * (`\r\n`, the RFC-4180 line break); cells containing a comma, double-quote,
+ * CR, or LF are wrapped in `"` with any internal quotes doubled. The returned
+ * string is body-only — `downloadCsv` prepends a UTF-8 BOM (`CSV_BOM`) so Excel
+ * reads Unicode correctly. Exported for testing.
  */
 export function buildCsv(columns: string[], rows: unknown[][]): string {
   const esc = (cell: unknown): string => {
@@ -225,8 +259,55 @@ export function buildCsv(columns: string[], rows: unknown[][]): string {
     return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
   };
   const header = columns.map(esc).join(',');
-  const body = rows.map((r) => columns.map((_, j) => esc(r[j])).join(',')).join('\n');
-  return body ? `${header}\n${body}` : header;
+  const body = rows.map((r) => columns.map((_, j) => esc(r[j])).join(',')).join('\r\n');
+  return body ? `${header}\r\n${body}` : header;
+}
+
+/**
+ * UTF-8 byte-order mark. Prepended to the CSV blob so Excel (and other
+ * consumers) detect UTF-8 and render accented / non-Latin characters correctly.
+ */
+export const CSV_BOM = String.fromCharCode(0xFEFF);
+
+/**
+ * `YYYYMMDD-HHMMSS` local timestamp for a unique, sortable export filename so
+ * repeated exports never overwrite each other. Exported for testing.
+ */
+export function csvTimestamp(d: Date = new Date()): string {
+  const p = (n: number) => String(n).padStart(2, '0');
+  return (
+    `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}` +
+    `-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`
+  );
+}
+
+/**
+ * Pure filter predicate for the grid: keep a row when it passes the global
+ * search (case-insensitive substring across ANY column) AND every active
+ * per-column substring filter (AND-combined). Blank terms are ignored. Exported
+ * so it is unit-testable and reusable by sibling grids. Real rows only.
+ */
+export function filterRows(
+  rows: unknown[][],
+  columns: string[],
+  globalSearch: string,
+  colFilters: Array<[number, string]>,
+): unknown[][] {
+  const g = globalSearch.trim().toLowerCase();
+  const perCol = colFilters
+    .map(([k, v]) => [k, v.trim().toLowerCase()] as [number, string])
+    .filter(([, v]) => v !== '');
+  if (!g && perCol.length === 0) return rows;
+  return rows.filter((row) => {
+    if (g) {
+      const hit = columns.some((_, j) => formatCell(row[j]).toLowerCase().includes(g));
+      if (!hit) return false;
+    }
+    for (const [idx, term] of perCol) {
+      if (!formatCell(row[idx]).toLowerCase().includes(term)) return false;
+    }
+    return true;
+  });
 }
 
 /** Build TSV text (used for clipboard copy). Exported for testing. */
@@ -448,7 +529,14 @@ function ColumnStatsPopover({
                   <div className={s.statRow}><span className={s.statLabel}>Avg</span><span className={s.statValue}>{fmtNum(stats.avg)}</span></div>
                 </>
               )}
-              {!stats.isNumeric && stats.mostCommon && (
+              {stats.isDateTime && stats.minLabel && (
+                <>
+                  <Divider />
+                  <div className={s.statRow}><span className={s.statLabel}>Earliest</span><span className={s.statValue} title={stats.minLabel}>{stats.minLabel}</span></div>
+                  <div className={s.statRow}><span className={s.statLabel}>Latest</span><span className={s.statValue} title={stats.maxLabel}>{stats.maxLabel}</span></div>
+                </>
+              )}
+              {!stats.isNumeric && !stats.isDateTime && stats.mostCommon && (
                 <>
                   <Divider />
                   <div className={s.statRow}>
@@ -548,19 +636,8 @@ export function KustoResultsGrid({
 
   // 1) Filter (per-column + global), 2) sort. Pure derivation over real rows.
   const filtered = useMemo(() => {
-    const g = globalSearch.trim().toLowerCase();
-    const perCol = activeColFilters.map(([k, v]) => [Number(k), v.trim().toLowerCase()] as [number, string]);
-    if (!g && perCol.length === 0) return rows;
-    return rows.filter((row) => {
-      if (g) {
-        const hit = columns.some((_, j) => formatCell(row[j]).toLowerCase().includes(g));
-        if (!hit) return false;
-      }
-      for (const [idx, term] of perCol) {
-        if (!formatCell(row[idx]).toLowerCase().includes(term)) return false;
-      }
-      return true;
-    });
+    const perCol = activeColFilters.map(([k, v]) => [Number(k), v] as [number, string]);
+    return filterRows(rows, columns, globalSearch, perCol);
   }, [rows, columns, globalSearch, activeColFilters]);
 
   const sorted = useMemo(() => {
@@ -607,11 +684,13 @@ export function KustoResultsGrid({
       }
     }
     const csv = buildCsv(columns, sorted);
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    // Prepend a UTF-8 BOM so Excel opens the file as Unicode (accented / CJK
+    // characters render correctly) rather than in the local ANSI code page.
+    const blob = new Blob([CSV_BOM + csv], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const a = linkRef.current ?? document.createElement('a');
     a.href = url;
-    a.download = `${exportName}.csv`;
+    a.download = `${exportName}-${csvTimestamp()}.csv`;
     a.click();
     setTimeout(() => URL.revokeObjectURL(url), 0);
   }, [columns, sorted, exportName, onExportCheck]);
@@ -682,7 +761,7 @@ export function KustoResultsGrid({
         <Tooltip content="Copy visible rows (TSV) to clipboard" relationship="label">
           <Button size="small" appearance="subtle" icon={<Copy16Regular />} onClick={copyTsv}>Copy</Button>
         </Tooltip>
-        <Tooltip content="Download visible rows as CSV" relationship="label">
+        <Tooltip content="Download the filtered + sorted rows as a UTF-8 CSV" relationship="label">
           <Button size="small" appearance="subtle" icon={<ArrowDownload16Regular />} onClick={downloadCsv}>CSV</Button>
         </Tooltip>
         {/* eslint-disable-next-line jsx-a11y/anchor-has-content */}
