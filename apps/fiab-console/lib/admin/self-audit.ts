@@ -567,6 +567,10 @@ const FIX_PLAN: Record<string, string> = {
     'Would call ensureGovernanceCatalogIndex(): create the loom-governance-items index on the configured AI Search service if absent (idempotent — an existing index is left untouched).',
   'ensure-spark-lease-container':
     'Would call createIfNotExists for the spark-warm-leases Cosmos container (the cross-replica warm Spark pool lease registry). Idempotent.',
+  'ensure-eventhub-consumer-group':
+    'Would createIfNotExists a "loom" consumer group on the default eventstream Event Hub (ensure the hub exists, then ensure the consumer group). Idempotent — an existing hub / group is left untouched.',
+  'ensure-adx-default-db':
+    'Would createIfNotExists the default KQL database (LOOM_KUSTO_DEFAULT_DB) on the configured ADX cluster. Idempotent — an existing database is left untouched.',
 };
 
 /**
@@ -613,6 +617,39 @@ export async function applyFix(fixId: string, opts: { dryRun?: boolean } = {}): 
         return { ok: true, detail: 'spark-warm-leases Cosmos container ensured (createIfNotExists).' };
       } catch (e: any) {
         return { ok: false, detail: `Could not ensure the spark-warm-leases container: ${e?.message || String(e)}` };
+      }
+    }
+    case 'ensure-eventhub-consumer-group': {
+      // Idempotent createIfNotExists: the Console UAMI (Event Hubs Data Owner +
+      // Contributor on the namespace) can create the hub + consumer group at
+      // runtime. A leader-only continuous-eval / eventstream consumer needs a
+      // dedicated group; a missing one silently drops reads.
+      try {
+        const eh = await import('@/lib/azure/eventhubs-client');
+        const gate = eh.eventhubsConfigGate();
+        if (gate) return { ok: false, detail: `Event Hubs not configured (missing ${gate.missing}) — not runtime-fixable; set the env + redeploy.` };
+        const cfg = eh.readEventHubsConfig();
+        const hub = (process.env.LOOM_EVENTHUB_DEFAULT_HUB || process.env.LOOM_EVENTSTREAM_HUB || 'loom-eventstream').trim();
+        const group = (process.env.LOOM_EVENTHUB_CONSUMER_GROUP || 'loom').trim();
+        await eh.ensureEventHub(cfg, { name: hub, partitionCount: 4, messageRetentionInDays: 1 });
+        await eh.ensureConsumerGroup(cfg, hub, group);
+        return { ok: true, detail: `Consumer group "${group}" ensured on Event Hub "${hub}" (createIfNotExists — existing left untouched).` };
+      } catch (e: any) {
+        const msg = e?.message || String(e);
+        return { ok: false, detail: `Could not ensure the consumer group: ${msg}${/401|403/.test(msg) ? ' — grant the Console UAMI "Azure Event Hubs Data Owner" + Contributor on the namespace first (not runtime-fixable).' : ''}` };
+      }
+    }
+    case 'ensure-adx-default-db': {
+      // Idempotent createOrUpdate of the default KQL database on the ADX cluster.
+      try {
+        const kc = await import('@/lib/azure/kusto-client');
+        if (!process.env.LOOM_KUSTO_CLUSTER_URI) return { ok: false, detail: 'ADX cluster not configured (LOOM_KUSTO_CLUSTER_URI unset) — not runtime-fixable; set the env + redeploy.' };
+        const db = kc.defaultDatabase();
+        const r = await kc.createDatabase(db);
+        return { ok: true, detail: `ADX default database "${db}" ensured (${r.provisioningState}) on the configured cluster.` };
+      } catch (e: any) {
+        const msg = e?.message || String(e);
+        return { ok: false, detail: `Could not ensure the ADX default database: ${msg}${/401|403/.test(msg) ? ' — grant the Console UAMI "Contributor" on the ADX cluster first (not runtime-fixable).' : ''}` };
       }
     }
     default:
