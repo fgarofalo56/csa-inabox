@@ -1,9 +1,50 @@
-# Admin Portal — Usage Metrics (`/admin/usage`) — Parity Gap
+<!-- parity-doc-meta
+Reviewed-on: 2026-07-20
+Validated-against:
+  - apps/fiab-console/app/admin/usage/page.tsx
+  - apps/fiab-console/app/api/admin/usage/route.ts
+  - apps/fiab-console/app/api/admin/usage/embed/route.ts
+  - apps/fiab-console/lib/components/embed/powerbi-embed.tsx
+-->
 
-> Validator: v2 fabric-parity-loop · 4-phase check  
-> Run date: 2026-05-26  
-> Fabric reference: Fabric admin portal → **Usage metrics** / **Feature usage and adoption report** (in the Admin monitoring workspace)  
-> Loom URL: <https://<your-console-hostname>/admin/usage>
+# Admin Portal — Usage Metrics (`/admin/usage`) — parity with Fabric Feature Usage & Adoption
+
+> **RE-BASELINED 2026-07-20** (rev `9ad350d3`, code-path refresh). The 2026-05-26
+> capture retained below graded this a **bare `EmptyState` placeholder**; the page
+> is now a **751-LOC data-backed usage surface** with two real backends. A live
+> click-walk re-certification is still owed before a fresh grade.
+
+## Current state (code-grounded, 2026-07-20)
+
+`app/admin/usage/page.tsx` (~751 LOC) is no longer a promotional empty state — it
+fetches via `clientFetch` and renders real metrics with a 1–90 day window,
+feature drill-through, and an optional embedded analytics frame
+(`PowerBIEmbedFrame`). Two real backends power it (`app/api/admin/usage/route.ts`):
+
+- **Cosmos (always on):** items per type / per workspace, daily audit activity
+  (last *N* days from `audit-log`), top items by audit count.
+- **Log Analytics (when `LOOM_LOG_ANALYTICS_WORKSPACE_ID` is set):** active-users
+  trend (daily DAU from `AppRequests`), feature adoption (events + distinct users
+  per route prefix), top items by request events (merged with Cosmos audit counts).
+  When LA is unconfigured the LA queries are skipped (`Promise.allSettled`,
+  `laConfigured:false`) and the page renders an **honest** EmptyState rather than a
+  fake grid — matching the Fabric "Feature usage and adoption" surface's intent.
+
+An optional **"Open analytics" embed** renders Power BI Embedded (Commercial) or
+Managed Grafana (Gov) via `app/api/admin/usage/embed/route.ts`.
+
+Net: the 2026-05-26 "placeholder EmptyState, no backend" grade is **stale**. Loom
+now has a real usage-metrics surface with an honest infra-gate for the LA-only
+enrichments. Remaining parity work (per-item usage-metrics deep-links, full
+drill-through page set) to confirm live.
+
+---
+
+<details>
+<summary>Historical capture — 2026-05-26 (superseded, kept for provenance)</summary>
+
+Do NOT cite the "placeholder" claims below as current — the page was built out into
+the data-backed surface described above.
 
 ## Captures
 
@@ -71,3 +112,5 @@ No interactive controls. The "(preview)" badge in the title is the only honest s
 - "(preview)" doesn't redeem it — preview features per `no-vaporware.md` must be tagged `Badge` "Preview" AND surface in the catalog AND have a tracked TODO. The Loom page does have the "(preview)" word, but doesn't ship even a preview-quality data source.
 - Minimum fix: replace body with a MessageBar reading "Usage metrics require Microsoft 365 audit log ingestion + a Cosmos `loom-usage` container + a daily scheduled function to aggregate. Tracked under v3.5." OR build a minimum-viable version using the existing `/api/admin/azure-resources` + a `loom-items` index (which already exists per `csa_loom_v33_state` memory) to render at least an "items count by type" card and a "modified in last 30 days" chart.
 - Until either ships, this is **F**.
+
+</details>

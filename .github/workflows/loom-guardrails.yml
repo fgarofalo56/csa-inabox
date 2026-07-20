@@ -23,6 +23,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          # full history so check-parity-doc-freshness can read per-file commit dates
+          fetch-depth: 0
       - name: Set up Node.js 20
         uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
         with:
@@ -49,3 +52,5 @@ jobs:
         run: node scripts/ci/check-docs-hygiene.mjs
       - name: health-coverage (every Azure client + item family has a health check mapping)
         run: node scripts/ci/check-health-coverage.mjs
+      - name: parity-doc-freshness (parity docs vs their source files; warn-first)
+        run: node scripts/ci/check-parity-doc-freshness.mjs
