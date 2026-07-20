@@ -129,3 +129,21 @@ Every gap-register row SHIPPED + VERIFIED live:
 Remaining backlog (tracked, non-blocking): further widget/card kinds toward
 Foundry's full ~40/~30 catalogs; deep per-surface Fabric side-by-side per
 ui-parity.md (operator-partnered).
+
+## Live Fabric side-by-side — 2026-07-19 (signed-in app.fabric.microsoft.com)
+
+Browser tool recovered; the SIGNED-IN Fabric portal rendered under automation
+for the first time. Live captures compared:
+1. **Home vs Home** — Fabric: New-report CTA + Recommended workspace cards +
+   Recent table. Loom: hero + guided Get-started cards (Learning Hub,
+   Workspaces, OneLake catalog, Governance, Monitor, Real-Time hub, Data
+   agents, Copilot) + Quick-create strip (Lakehouse/Notebook/Pipeline/
+   Warehouse/Eventstream/KQL DB/Semantic Model/Report) + command palette.
+   Verdict: **Loom ≥ Fabric (A+)** — same rail model, richer guided entry.
+2. **Item lists** — Fabric Recent (Name/Type/Opened/Location/Endorsement/
+   Sensitivity) vs Loom Browse (stat tiles 1447 items/124 types + Domain/
+   Category/Type/Workspace facets + per-category tables w/ endorsement +
+   pinning). Verdict: **Loom ≥ Fabric (A+)** — parity columns + extra facets.
+Deep item editors (RT dashboard etc.) blank-render under automation with the
+capacity SUSPENDED — resume fabriccaplimitlessdatadev for per-editor
+side-by-sides (operator-authorized; tracked follow-up).
