@@ -90,7 +90,7 @@ import {
   type TransformField,
 } from '@/lib/pipeline/dataflow-transform-catalog';
 import {
-  CanvasNode, CanvasEdge, getTransformVisual, transformIcon, portStyle,
+  CanvasNode, CanvasEdge, CANVAS_NODE_WIDTH, getTransformVisual, transformIcon, portStyle,
   accentTint, CanvasRightRail,
   type CanvasNodeStatus,
 } from '@/lib/components/canvas/canvas-node-kit';
@@ -152,7 +152,7 @@ export interface MappingDataFlowGraph {
 // `color-mix`, never raw hex). The catalog `TransformDef.category` drives which
 // of the five canvas categories (and thus accent) a transform gets.
 
-const NODE_W = 210;
+const NODE_W = CANVAS_NODE_WIDTH;
 const NODE_H = 86;
 
 // =============================================================================
