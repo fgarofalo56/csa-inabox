@@ -60,6 +60,7 @@ import {
   Spinner, Tooltip, useId, useToastController, Toast, ToastTitle, Toaster,
   Checkbox, SpinButton, Table, TableHeader, TableHeaderCell, TableRow, TableBody, TableCell,
   TabList, Tab, Textarea,
+  Accordion, AccordionItem, AccordionHeader, AccordionPanel,
   Dialog, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions, DialogTrigger,
 } from '@fluentui/react-components';
 import {
@@ -109,6 +110,7 @@ const KIND_ICON: Record<ComponentKind, ReactElement> = {
   rating: <Gauge20Regular />, 'tag-list': <TextT20Regular />, delta: <Gauge20Regular />, checklist: <TextT20Regular />,
   avatar: <TextT20Regular />, 'code-block': <TextT20Regular />, 'key-value': <Table20Regular />, countdown: <Gauge20Regular />,
   'stat-pair': <Gauge20Regular />, 'mini-table': <Table20Regular />, breadcrumb: <TextT20Regular />, 'json-view': <TextT20Regular />,
+  tabs: <Table20Regular />, accordion: <TextT20Regular />, sparkline: <DataBarVertical20Regular />, 'video-embed': <TextT20Regular />, 'map-embed': <TextT20Regular />,
 };
 const KIND_LABEL: Record<ComponentKind, string> = {
   table: 'Table', metric: 'Metric', chart: 'Chart', form: 'Form', text: 'Text',
@@ -118,6 +120,7 @@ const KIND_LABEL: Record<ComponentKind, string> = {
   rating: 'Rating', 'tag-list': 'Tags', delta: 'Delta', checklist: 'Checklist',
   avatar: 'Avatar', 'code-block': 'Code', 'key-value': 'Key-Value', countdown: 'Countdown',
   'stat-pair': 'Stat Pair', 'mini-table': 'Mini Table', breadcrumb: 'Breadcrumb', 'json-view': 'JSON',
+  tabs: 'Tabs', accordion: 'Accordion', sparkline: 'Sparkline', 'video-embed': 'Video', 'map-embed': 'Map',
 };
 const KIND_HINT: Record<ComponentKind, string> = {
   table: 'Add a data table bound to the model — rows from your selected measures and group-by fields.',
@@ -137,7 +140,25 @@ const KIND_HINT: Record<ComponentKind, string> = {
   rating: 'Star rating (value / max).', 'tag-list': 'A wrapping row of tag badges.', delta: 'Current vs previous, signed and colored.', checklist: 'Static checklist; [x] lines render checked.',
   avatar: 'Initials avatar with name and caption.', 'code-block': 'Monospace pre-formatted block.', 'key-value': 'Key: value grid.', countdown: 'Days until a date.',
   'stat-pair': 'Two labeled stats side by side.', 'mini-table': 'A small static CSV table.', breadcrumb: 'A navigation trail.', 'json-view': 'Pretty-printed JSON block.',
+  tabs: 'A tab strip with per-tab text content.', accordion: 'Collapsible "Title: body" sections.', sparkline: 'A tiny inline trend line.', 'video-embed': 'A sandboxed https video embed.', 'map-embed': 'A sandboxed https map embed.',
 };
+
+/** Tabs card — module-level so its tab-selection state survives re-renders
+ *  (own useState; avoids conditional hooks inside the preview render chain). */
+function RayfinTabsCard({ items }: { items: string }) {
+  const entries = items.split('|').map((p) => p.trim()).filter(Boolean).map((p) => { const i = p.indexOf(':'); return i < 0 ? { t: p, b: '' } : { t: p.slice(0, i).trim(), b: p.slice(i + 1).trim() }; });
+  const [active, setActive] = useState(0);
+  if (!entries.length) return <Caption1>Add "Title: content | Title: content" entries in the inspector.</Caption1>;
+  const cur = entries[Math.min(active, entries.length - 1)];
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, minWidth: 0 }}>
+      <TabList selectedValue={String(Math.min(active, entries.length - 1))} onTabSelect={(_, d) => setActive(Number(d.value))}>
+        {entries.map((e, i) => <Tab key={i} value={String(i)}>{e.t}</Tab>)}
+      </TabList>
+      <Body1>{cur.b}</Body1>
+    </div>
+  );
+}
 
 const useStyles = makeStyles({
   root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, padding: tokens.spacingVerticalM, minWidth: 0, maxWidth: '100%' },
@@ -1172,6 +1193,14 @@ function ComponentEditor({ s, comp, objects, entities, rendered, onChange, onDel
         <Field label="Segments" hint="Comma-separated."><Input value={comp.crumbs || ''} onChange={(_, d) => onChange({ crumbs: d.value })} placeholder="Home, Sales, Q3" /></Field>
       ) : comp.kind === 'json-view' ? (
         <Field label="JSON"><Textarea aria-label="JSON data payload shown by the JSON card" value={comp.json || ''} onChange={(_, d) => onChange({ json: d.value })} rows={6} resize="vertical" /></Field>
+      ) : comp.kind === 'tabs' ? (
+        <Field label="Tabs" hint={'"Title: content | Title: content".'}><Textarea value={comp.tabItems || ''} onChange={(_, d) => onChange({ tabItems: d.value })} rows={4} resize="vertical" placeholder={'Overview: Key numbers here | Details: More depth here'} /></Field>
+      ) : comp.kind === 'accordion' ? (
+        <Field label="Sections" hint={'One "Title: body" per line.'}><Textarea value={comp.accordionItems || ''} onChange={(_, d) => onChange({ accordionItems: d.value })} rows={5} resize="vertical" placeholder={'FAQ 1: Answer one\nFAQ 2: Answer two'} /></Field>
+      ) : comp.kind === 'sparkline' ? (
+        <Field label="Values" hint="Comma-separated numbers."><Input value={comp.sparkValues || ''} onChange={(_, d) => onChange({ sparkValues: d.value })} placeholder="3, 5, 2, 8, 6, 9" /></Field>
+      ) : comp.kind === 'video-embed' || comp.kind === 'map-embed' ? (
+        <Field label="Embed URL (https)" hint="https:// only — sandboxed iframe."><Input value={comp.embedUrl || ''} onChange={(_, d) => onChange({ embedUrl: d.value })} placeholder="https://…" /></Field>
       ) : comp.kind === 'avatar' ? (
         <>
           <Field label="Name"><Input value={comp.avatarName || ''} onChange={(_, d) => onChange({ avatarName: d.value })} placeholder="Ada Lovelace" /></Field>
@@ -1255,6 +1284,27 @@ function ComponentEditor({ s, comp, objects, entities, rendered, onChange, onDel
           (() => { const crumbs = String(comp.crumbs || '').split(',').map((c2) => c2.trim()).filter(Boolean); return crumbs.length ? <Caption1>{crumbs.join(' › ')}</Caption1> : <Caption1>Add segments in the inspector.</Caption1>; })()
         ) : kind === 'json-view' ? (
           (() => { let pretty = String(comp.json || ''); try { pretty = JSON.stringify(JSON.parse(pretty), null, 2); } catch { /* raw */ } return <pre style={{ margin: '0', padding: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusMedium, backgroundColor: tokens.colorNeutralBackground3, fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, overflowX: 'auto' }}>{pretty || '{}'}</pre>; })()
+        ) : kind === 'tabs' ? (
+          <RayfinTabsCard items={String(comp.tabItems || '')} />
+        ) : kind === 'accordion' ? (
+          (() => { const sections = String(comp.accordionItems || '').split('\n').map((l) => l.trim()).filter(Boolean).map((l) => { const i = l.indexOf(':'); return i < 0 ? { t: l, b: '' } : { t: l.slice(0, i).trim(), b: l.slice(i + 1).trim() }; }); return sections.length ? (
+            <Accordion multiple collapsible>
+              {sections.map((sec, i) => (
+                <AccordionItem key={i} value={String(i)}>
+                  <AccordionHeader>{sec.t}</AccordionHeader>
+                  <AccordionPanel><Body1>{sec.b}</Body1></AccordionPanel>
+                </AccordionItem>
+              ))}
+            </Accordion>
+          ) : <Caption1>Add "Title: body" lines in the inspector.</Caption1>; })()
+        ) : kind === 'sparkline' ? (
+          (() => { const nums = String(comp.sparkValues || '').split(',').map((x) => Number(x.trim())).filter((n2) => Number.isFinite(n2)); if (nums.length < 2) return <Caption1>Add a comma list of numbers in the inspector.</Caption1>; const min = Math.min(...nums); const max = Math.max(...nums); const span = max - min || 1; const W = 200; const H = 40; const pts = nums.map((n2, i) => `${(i / (nums.length - 1)) * W},${H - ((n2 - min) / span) * H}`).join(' '); return (
+            <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', maxHeight: '48px' }} aria-label="Sparkline">
+              <polyline points={pts} fill="none" stroke={tokens.colorBrandStroke1} strokeWidth="2" />
+            </svg>
+          ); })()
+        ) : kind === 'video-embed' || kind === 'map-embed' ? (
+          (() => { const src = (comp.embedUrl || '').trim(); if (!/^https:\/\//i.test(src)) return <Caption1>Set an https embed URL in the inspector.</Caption1>; return <iframe src={src} sandbox="allow-scripts allow-same-origin allow-presentation" title={comp.title || kind} style={{ width: '100%', height: '220px', border: '0', borderRadius: tokens.borderRadiusMedium }} />; })()
         ) : kind === 'avatar' ? (
           (() => { const name = comp.avatarName || comp.title; const initials = name.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]?.toUpperCase() || '').join('') || '?'; return (
             <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS }}>
