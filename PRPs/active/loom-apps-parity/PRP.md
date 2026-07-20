@@ -78,23 +78,21 @@ endpoint/secret env vars (the Databricks resource model, made one-click).
 | Permissions / sharing | workspace-guard + access-requests (marketplace publish) |
 
 ## EXPANSION (beyond Databricks — the "better")
-- [ ] **Weave-native apps:** bind an ontology as a first-class resource — the app SDK
-      can `query objects`, `invoke actions`, `traverse links` with zero boilerplate.
-      Databricks Apps have no ontology; this is Loom's moat inside apps.
-- [ ] **Copilot-authored apps:** "describe your app" → Loom scaffolds the template +
-      resources + code (AOAI); one-click from a data product / ontology / report.
-- [ ] **Visual + code, one item:** merge the Workshop-class visual builder (`loom-app`)
-      with the code runtime (`loom-app-runtime`) — start visual, "eject to code",
-      or embed a visual widget IN a code app.
-- [ ] **Publish app as API / MCP:** one-click expose an app's function as a Loom API
-      (APIM) or an MCP tool (already a Weave edge — wire it to apps).
-- [ ] **Marketplace-publish an app:** package + share via the Loom marketplace (install
-      → provision → seed), exceeding Databricks' app sharing.
-- [ ] **Multi-cloud day one:** every app deploys identically in Commercial + Gov (ACA is
-      Gov-GA) — Databricks Apps Gov availability is limited.
-- [ ] **Golden templates gallery:** dashboards (Streamlit/Dash), data-entry (write-back
-      via Weave actions), chat-over-your-data (RAG on AI Search + ontology), ops console,
-      approval app, geospatial (ties GEO-1), ML scoring UI.
+> Doc-currency re-baseline 2026-07-20: these boxes shipped in APP-W3–W6
+> (2026-07-19) but were never ticked. Receipts: memory + AUDIT trail of that
+> drive; parity doc `docs/fiab/parity/loom-app-runtime.md` zero-❌.
+- [x] **Weave-native apps** — SHIPPED APP-W3: ontology resource attach + app SDK
+      (`query objects` / `invoke actions` / `traverse links`) + scaffolder.
+- [x] **Copilot-authored apps** — SHIPPED APP-W3/W5 ("describe your app" scaffold
+      via AOAI; golden-template pick + resource wiring).
+- [x] **Visual + code, one item** — SHIPPED APP-W3 final: workshop-app "Open as
+      code" eject → loom-app-runtime.
+- [x] **Publish app as API / MCP** — SHIPPED APP-W5 (publish-as-API/MCP).
+- [x] **Marketplace-publish an app** — SHIPPED APP-W5 (.loomapp export/import +
+      marketplace publish→install→provision).
+- [x] **Multi-cloud day one** — Gov pass in APP-W6 (ACA both clouds).
+- [x] **Golden templates gallery** — SHIPPED APP-W5 (dashboards, data-entry
+      write-back, RAG chat, ops console, approval app, ML scoring UI).
 
 ## Waves
 - [x] **APP-W0 — audit + gap doc:** `docs/fiab/parity/loom-app-runtime.md` (zero ❌).

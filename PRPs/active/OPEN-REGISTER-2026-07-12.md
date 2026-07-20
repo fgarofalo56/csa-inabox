@@ -1,5 +1,20 @@
 # OPEN REGISTER — everything not completed / not fully baked (audit 2026-07-12)
 
+> **RE-BASELINE 2026-07-20.** Shipped since 07-14 (all merged + rolled, receipts
+> in `PRPs/active/foundry-parity/AUDIT.md` + memory): loom-apps-parity PRP
+> COMPLETE (APP-W3–W6: weave-native apps, Copilot-authored, visual↔code eject,
+> publish-as-API/MCP, marketplace .loomapp, golden templates, Gov pass — its
+> EXPANSION boxes now ticked); Foundry-parity governance suite (Object
+> Explorer, Checkpoints, criteria+lineage, Approvals, Invariants,
+> retention/export) + greenfield analysis-board / fusion-sheet / notepad;
+> widget catalogs workshop 7→37 + rayfin 5→34 incl. tabs child-widget nesting
+> (real-rows E2E); compact-v4 canvas nodes (#2082) with dark+light pixel
+> receipts; G-band gates score 100; releases v0.72.0/v0.72.1. **NEW P1 GOAL
+> (operator, 2026-07-20): catalog-wide FUNCTIONAL E2E — every item type and
+> app must be proven create→configure→publish→RUN→USE against its real Azure
+> backend (not Cosmos-only, not design-surface-only). Tracked as tasks #12/#13;
+> verdict table to land in this register.**
+>
 > **RE-BASELINE 2026-07-14.** A verification pass confirmed all eight **P1** items
 > below (§P1 1-8) were ALREADY fixed on `main` — none was still open. Residual
 > doc-truth + catch-logging cleanup for those items lands in **PR #2025**. Other

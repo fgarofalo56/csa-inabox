@@ -1,5 +1,13 @@
 # CSA Loom — MASTER ROLLOUT (single authoritative phased plan)
 
+> **⚠ DOC-CURRENCY (2026-07-20):** this plan is a 07-09 snapshot; ~40 listed
+> items have since SHIPPED (loom-apps APP-W1–W6 complete, Foundry-parity
+> governance+greenfield suite, widget catalogs 37/34, compact-v4 canvas,
+> G-band gates 100, read-perf program, v0.72.x). Cross-check
+> `PRPs/active/OPEN-REGISTER-2026-07-12.md` (RE-BASELINE 2026-07-20 header)
+> before planning from this file. A standing operator P1 sits ABOVE phase
+> order: catalog-wide functional E2E (create→publish→RUN→USE per item type).
+
 > **Date:** 2026-07-09 · **This is the canonical build sequence.**
 > **Supersedes** the scattered numbering schemes in `WAVES.md` (numeric 1–20, fractional 6.5,
 > lettered U0–U13, PSR-A/PSR-B, H1–H3). Those schemes stay in `WAVES.md` and the 10 per-PRP files
