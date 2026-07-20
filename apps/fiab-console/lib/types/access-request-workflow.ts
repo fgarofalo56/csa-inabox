@@ -76,6 +76,18 @@ export interface AccessRequestDoc {
   denialReason?: string;
   /** Tier that issued the denial (for the receipt). */
   deniedAtTier?: ApprovalTier;
+  // ── access-governance W2 (optional; absent on legacy per-asset requests) ──────
+  /** Set when this request is one leg of an access-package request. */
+  packageId?: string;
+  packageName?: string;
+  /** The approval policy that governed this request (snapshot below). */
+  approvalPolicyId?: string;
+  /**
+   * Immutable approval-plan snapshot. When present the F16 decision route
+   * advances over `approvalPlan.stages` (an ordered subset of the canonical
+   * tiers) instead of the hard-coded TIER_SEQUENCE; absent = legacy behaviour.
+   */
+  approvalPlan?: import('./approval-policy').ApprovalPlan;
 }
 
 /** Map a tier to the doc field that records its decision. */
