@@ -957,7 +957,9 @@ function sanitizeSmallMultiplesGrid(raw: unknown): PersistedFormat['smallMultipl
 function sanitizeNumberFormatByField(raw: unknown): PersistedFormat['numberFormatByField'] | undefined {
   if (!raw || typeof raw !== 'object') return undefined;
   const o = raw as Record<string, unknown>;
-  const out: NonNullable<PersistedFormat['numberFormatByField']> = {};
+  // Null-prototype target: user-supplied field keys can never reach Object.prototype
+  // (defeats js/remote-property-injection); the explicit key guard below is belt-and-suspenders.
+  const out = Object.create(null) as NonNullable<PersistedFormat['numberFormatByField']>;
   let n = 0;
   for (const key of Object.keys(o)) {
     if (n >= MAX_MULTIPLES_FIELDS) break;
