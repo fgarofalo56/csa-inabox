@@ -45,8 +45,8 @@ with the exact command that reproduces it.
 | — security-posture checks | **3** | `securityChecks()` in `lib/admin/self-audit.ts` |
 | **Azure clients under health coverage** | **117** | `clients` map in `lib/admin/health-coverage-map.json` (109 checks-mapped + 8 allowlisted) |
 | **Gate registry** | derived from the 89 `ENV_CHECKS`; **wired** | `lib/gates/registry.ts` + `GATES_REGISTRY_WIRED = true` in `lib/admin/gate-registry.ts` |
-| **Python coverage gate — enforced in CI** | **60%** | `pytest --cov-fail-under=60` in `.github/workflows/test.yml` |
-| **Python coverage gate — declared** | **65%** | `fail_under = 65` in `pyproject.toml` `[tool.coverage.report]` |
+| **Python coverage gate — enforced in CI** | **75%** | `pytest --cov-fail-under=75` in `.github/workflows/test.yml` |
+| **Python coverage gate — declared** | **75%** | `fail_under = 75` in `pyproject.toml` `[tool.coverage.report]` (in lockstep with the CI flag) |
 
 ### ENV_CHECKS by category (89 total)
 
@@ -64,26 +64,28 @@ with the exact command that reproduces it.
 
 ---
 
-## Coverage threshold — the full truth (three numbers, reconciled)
+## Coverage threshold — the full truth (reconciled)
 
-There are **three** coverage numbers in the repo; they do **not** agree, and this
-is the canonical reconciliation. Quote **60%** as the enforced gate.
+The enforced and declared Python coverage gates are now **both 75%** (WS-F3,
+2026-07-20). Quote **75%**.
 
-1. **Enforced (what actually fails CI): 60%.** `.github/workflows/test.yml` runs
-   `pytest … --cov-fail-under=60`. The pytest-cov **CLI flag overrides** the
-   `pyproject.toml` value, so 60 is the number that blocks a merge today.
-2. **Declared: 65%.** `pyproject.toml` `[tool.coverage.report] fail_under = 65`
-   (ratcheted 60→65 on 2026-05-17 per the in-file history). This is the *intended*
-   floor, but it is dormant because the CI CLI flag overrides it.
-3. **Previously documented: 80%** — **stale/incorrect**. The READMEs claimed an
-   `80%` gate (CSA-0088 note). No `fail_under = 80` exists anywhere in the repo.
-   Corrected in this batch.
+1. **Enforced (what actually fails CI): 75%.** `.github/workflows/test.yml` runs
+   `pytest … --cov-fail-under=75`. The pytest-cov **CLI flag overrides** the
+   `pyproject.toml` value, so this is the number that blocks a merge.
+2. **Declared: 75%.** `pyproject.toml` `[tool.coverage.report] fail_under = 75`.
+   Now kept in lockstep with the CI flag (previously drifted: CLI 60 vs
+   declared 65 — resolved in the WS-F3 wave).
+3. **Previously documented: 80%** — **stale/incorrect**. The READMEs once claimed
+   an `80%` gate (CSA-0088 note). No `fail_under = 80` exists anywhere in the
+   repo. Corrected.
 
-> **Known drift (tracked as WS-F3, task #26):** the CI flag (`60`) and the declared
-> `pyproject` floor (`65`) should be reconciled — either raise the CI flag to 65 to
-> match intent, or lower the declared floor to 65-with-CLI-60 documented. Do this
-> through the coverage-ratchet wave (gated on sustained margin), **not** as a
-> silent doc edit. Until then, **60% is the honest enforced number.**
+> **Ratchet basis (WS-F3):** measured gated coverage on 2026-07-20 was **81.33%**
+> (branch-inclusive total, `pytest --cov`). The gate was raised 60/65 → **75**,
+> leaving a ~6-point margin (the repo policy requires 5+ points of headroom).
+> `floor(actual)=81` was available but rejected as too brittle for the 3-version
+> CI matrix. Next notch **75 → 80** once the streaming / portal-backend suites
+> join the gated `source` set. The machine-generated per-release summary lives at
+> [`docs/fiab/coverage-summary.md`](../coverage-summary.md).
 
 **Scope (what the gate measures).** Only the packages in `pyproject.toml`
 `[tool.coverage.run] source` are gated:
@@ -94,14 +96,19 @@ is the canonical reconciliation. Quote **60%** as the enforced gate.
 suites are still growing.
 
 **Ignored suites** (`pytest --ignore`, `pyproject.toml` `addopts`):
-`csa_platform/streaming/tests`, `csa_platform/multi_synapse/tests`. Re-enabling
-these is WS-F2 (task #26).
+`csa_platform/streaming/tests` only. `csa_platform/multi_synapse/tests` was
+**re-enabled** in the WS-F2 wave (2026-07-20 — its azure imports are lazy, so it
+needs no extra deps and runs green in-suite). `streaming/tests` stays ignored
+because `csa_platform.streaming.__init__` eager-imports azure-storage-file-datalake
+/ azure-eventhub-checkpointstoreblob-aio / azure-kusto-data (now declared on the
+`[streaming]` extra, but that extra is not yet on the Test Suite install line —
+the remaining half of WS-F2).
 
 **Ratchet roadmap** (from the `pyproject.toml` `[tool.coverage.report]` comment):
-60/65 → **70** once `streaming` / `data_activator` / `metadata_framework` suites
-are consolidated into the root runner → **75** after the portal backend reaches
-parity with the platform packages. Raise one notch only after CI sits 5+ points
-above the current floor for a full release cycle.
+60 → 65 → **75** (current, WS-F3) → **80** once `streaming` / `data_activator` /
+`metadata_framework` / portal-backend suites are consolidated into the gated
+`source` set. Raise one notch only after CI sits 5+ points above the current
+floor for a full release cycle.
 
 ---
 
@@ -131,9 +138,9 @@ grep -oE "id: 'probe-[^']+'" apps/fiab-console/lib/admin/self-audit.ts \
 # Azure clients under coverage (117)
 python -c "import json;print(len(json.load(open('apps/fiab-console/lib/admin/health-coverage-map.json'))['clients']))"
 
-# Coverage — enforced (60) vs declared (65)
-grep -oE "cov-fail-under=[0-9]+" .github/workflows/test.yml     # -> 60
-grep -E "^fail_under" pyproject.toml                            # -> 65
+# Coverage — enforced (75) vs declared (75), kept in lockstep
+grep -oE "cov-fail-under=[0-9]+" .github/workflows/test.yml     # -> 75
+grep -E "^fail_under" pyproject.toml                            # -> 75
 ```
 
 The `/admin/health` self-audit narrative (what each check probes, the coverage-map
@@ -152,6 +159,8 @@ literal that can drift:
 - `README.md` — coverage gate note + repo-tree comment.
 - `apps/fiab-console/README.md` — item-type / editor counts.
 - `docs/fiab/health-coverage-audit.md` — health-check component counts.
+- `docs/fiab/coverage-summary.md` — machine-generated coverage gates (regenerated
+  by `scripts/ci/generate-coverage-summary.mjs` from this repo's config).
 
 A CI guard (`scripts/ci/check-parity-doc-freshness.mjs`, wired into
 `.github/workflows/loom-guardrails.yml`) warns when a parity / parity-gap doc's
