@@ -81,4 +81,17 @@ export const dataScienceItems: FabricItemType[] = [
       ],
       "docsUrl": "https://learn.microsoft.com/azure/machine-learning/concept-automated-ml"
     } },
+  // WS-1.2 — Model Serving as a first-class item (Databricks / AI-Foundry parity).
+  { slug: 'model-serving-endpoint', displayName: 'Model serving endpoint', restType: 'ModelServingEndpoint', category: 'Data Science',
+    description: 'Real-time model serving with traffic-split, autoscale, an invoke console, and live latency/error monitoring.',
+    learnContent: {
+      "overview": "A model-serving endpoint hosts one or more registered model versions behind an HTTPS scoring route with autoscale and blue/green traffic splitting. In Loom the Azure-native DEFAULT is an Azure Machine Learning managed online endpoint (Microsoft.MachineLearningServices/workspaces/onlineEndpoints — works in Azure Government); Databricks Mosaic AI Model Serving is an opt-in alternative (LOOM_MODEL_SERVING_BACKEND=databricks). No Microsoft Fabric dependency. Create an endpoint, split traffic to canary a new version, invoke it from the console, and watch live latency and error tiles from real Azure Monitor metrics.",
+      "steps": [
+        { "title": "Create an endpoint", "body": "Pick a registered model version, compute size, and scaling (manual instances or autoscale min/max); Loom provisions the endpoint and a 'blue' deployment serving 100% of traffic." },
+        { "title": "Split traffic", "body": "Add a second deployment for a new model version and set a blue/green split (e.g. 80/20) to canary it against live traffic — applied via a real backend update." },
+        { "title": "Invoke from the console", "body": "Send a real scoring request from the Invoke tab and see the model response plus the measured round-trip latency." },
+        { "title": "Monitor", "body": "The Monitoring tab shows live request latency, requests-per-minute, and 5xx errors from Azure Monitor for the endpoint." }
+      ],
+      "docsUrl": "https://learn.microsoft.com/azure/machine-learning/concept-endpoints-online"
+    } },
 ];

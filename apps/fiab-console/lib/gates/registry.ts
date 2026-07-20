@@ -501,6 +501,16 @@ export const GATE_META: Record<string, GateMeta> = {
     loaders: { LOOM_AML_WORKSPACE: L.aml },
     legacyCodes: ['aml_not_configured', 'automl_not_configured'],
   },
+  'svc-model-serving': {
+    surfaces: [
+      { path: '/items/model-serving-endpoint', label: 'Model serving endpoint editor' },
+      { path: '/api/items/model-serving-endpoint/*', label: 'Model serving BFF routes' },
+    ],
+    fixit: { kind: 'resource-picker' },
+    loaders: { LOOM_AML_WORKSPACE: L.aml, LOOM_DATABRICKS_HOSTNAME: L.databricks },
+    autoResolveNote: 'A push-button deploy wires the Azure ML / Foundry workspace (LOOM_AML_WORKSPACE), so serving works day-one on the Azure-native path. Databricks Mosaic serving is opt-in via LOOM_MODEL_SERVING_BACKEND=databricks + LOOM_DATABRICKS_HOSTNAME.',
+    legacyCodes: ['model_serving_not_configured'],
+  },
   'svc-apim': {
     surfaces: [
       { path: '/admin/api-management', label: 'API Management admin' },

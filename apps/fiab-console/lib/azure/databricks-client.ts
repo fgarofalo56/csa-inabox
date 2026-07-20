@@ -2656,3 +2656,38 @@ export async function deleteServingEndpoint(name: string): Promise<void> {
   await asJsonOrThrow<unknown>(res, 'deleteServingEndpoint');
 }
 
+/** GET /api/2.0/serving-endpoints/{name} — one serving endpoint (incl. config + traffic). */
+export async function getServingEndpoint(name: string): Promise<ServingEndpoint & { config?: any; pending_config?: any }> {
+  const res = await dbxFetch(`/api/2.0/serving-endpoints/${encodeURIComponent(name)}`);
+  return asJsonOrThrow<ServingEndpoint>(res, 'getServingEndpoint');
+}
+
+/**
+ * PUT /api/2.0/serving-endpoints/{name}/config — update served entities + traffic
+ * split (percentages must sum to 100). Real Mosaic REST.
+ * https://docs.databricks.com/api/azure/workspace/servingendpoints/updateconfig
+ */
+export async function updateServingEndpointConfig(name: string, opts: {
+  served: Array<{ name?: string; model_name: string; model_version: string; workload_size?: 'Small' | 'Medium' | 'Large'; scale_to_zero_enabled?: boolean }>;
+  traffic: Record<string, number>;
+}): Promise<ServingEndpoint> {
+  const served_entities = opts.served.map((m) => ({
+    name: m.name || `${m.model_name.replace(/[^a-zA-Z0-9_-]/g, '-')}-${m.model_version}`,
+    entity_name: m.model_name, entity_version: m.model_version,
+    workload_size: m.workload_size ?? 'Small', scale_to_zero_enabled: m.scale_to_zero_enabled ?? true,
+  }));
+  const routes = Object.entries(opts.traffic).map(([served_model_name, traffic_percentage]) => ({ served_model_name, traffic_percentage }));
+  const res = await dbxFetch(`/api/2.0/serving-endpoints/${encodeURIComponent(name)}/config`, { method: 'PUT', body: JSON.stringify({ served_entities, traffic_config: { routes } }) });
+  return asJsonOrThrow<ServingEndpoint>(res, 'updateServingEndpointConfig');
+}
+
+/** POST /serving-endpoints/{name}/invocations — score real data (Mosaic data-plane invoke). */
+export async function queryServingEndpoint(name: string, payload: unknown): Promise<{ status: number; latencyMs: number; body: unknown }> {
+  const started = Date.now();
+  const res = await dbxFetch(`/serving-endpoints/${encodeURIComponent(name)}/invocations`, { method: 'POST', body: JSON.stringify(payload ?? {}) });
+  const latencyMs = Date.now() - started;
+  const text = await res.text();
+  let body: unknown; try { body = text ? JSON.parse(text) : {}; } catch { body = text; }
+  return { status: res.status, latencyMs, body };
+}
+
