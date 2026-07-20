@@ -110,7 +110,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     app = await loadOwnedItem(id, ITEM_TYPE, s.claims.oid);
     if (!app) return err('workshop app not found', 404, 'not_found');
   } else {
-    const bearer = (req.headers.get('authorization') || '').replace(/^Bearer\s+/i, '').trim();
+    const bearer = (req.headers?.get?.('authorization') || '').replace(/^Bearer\s+/i, '').trim();
     if (!bearer) return err('unauthenticated', 401, 'unauthenticated');
     if (WRITE_OPS.has(op)) {
       return err('Write-back requires signing in to Loom — the published app token is read-only.', 403, 'pub_token_readonly');

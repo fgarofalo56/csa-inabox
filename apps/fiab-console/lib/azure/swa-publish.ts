@@ -192,7 +192,7 @@ export async function waitForContentLive(url: string, marker: string, budgetMs =
   const deadline = Date.now() + budgetMs;
   while (Date.now() < deadline) {
     try {
-      const res = await fetch(url, { cache: 'no-store' });
+      const res = await fetch(url, { cache: 'no-store', signal: AbortSignal.timeout(10_000) });
       const text = await res.text();
       if (res.ok && text.includes(marker)) return true;
     } catch { /* transient — keep polling */ }
