@@ -35,9 +35,14 @@ import argparse
 import json
 import sys
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from csa_platform.common.logging import configure_structlog, get_logger
+
+if TYPE_CHECKING:
+    from azure.core.credentials import TokenCredential
+
+    from csa_platform.common.typed_clients import SynapseManagementClient
 
 configure_structlog(service="workspace-manager")
 logger = get_logger(__name__)
@@ -96,29 +101,30 @@ class SynapseWorkspaceManager:
     def __init__(
         self,
         subscription_id: str,
-        credential: Any | None = None,
+        credential: TokenCredential | None = None,
     ) -> None:
         self.subscription_id = subscription_id
         self._credential = credential
-        self._client: Any | None = None  # TODO: Replace with typed client when SDK stubs are available
+        self._client: SynapseManagementClient | None = None
 
-    def _get_client(self) -> Any:
+    def _get_client(self) -> SynapseManagementClient:
         """Lazily initialize the Synapse management client."""
         if self._client is not None:
             return self._client
 
-        from azure.mgmt.synapse import SynapseManagementClient
+        from azure.mgmt.synapse import SynapseManagementClient as _SynapseManagementClient
 
         if self._credential is None:
             from azure.identity import DefaultAzureCredential
 
             self._credential = DefaultAzureCredential()
 
-        self._client = SynapseManagementClient(
+        client: SynapseManagementClient = _SynapseManagementClient(
             credential=self._credential,
             subscription_id=self.subscription_id,
         )
-        return self._client
+        self._client = client
+        return client
 
     # -- Workspace CRUD -----------------------------------------------------
 
@@ -215,9 +221,9 @@ class SynapseWorkspaceManager:
         for ws in workspaces:
             results.append(
                 WorkspaceInfo(
-                    name=ws.name,
+                    name=ws.name or "",
                     resource_group=resource_group,
-                    location=ws.location,
+                    location=ws.location or "",
                     state=ws.provisioning_state or "Unknown",
                     managed_vnet=ws.managed_virtual_network is not None,
                     connectivity_endpoints=dict(ws.connectivity_endpoints or {}),

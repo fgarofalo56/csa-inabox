@@ -73,6 +73,12 @@ make typecheck-platform          # Type check platform code
 
 RAG pipeline: `csa_platform/ai_integration/rag/`. Pipeline auto-generation: `csa_platform/metadata_framework/generator/`. Data marketplace: `csa_platform/data_marketplace/`.
 
+> Typing third-party SDK clients (Azure management SDKs, Databricks, etc.)?
+> Follow the [SDK typing strategy](developer/sdk-typing-strategy.md) — use the
+> real client type for typed SDKs, or a structural `Protocol` in
+> `csa_platform/common/typed_clients.py` for untyped ones. Never annotate a
+> client as `Any`.
+
 ### Working on monitoring & alerting?
 
 **Code:** `monitoring/alerts/`, `monitoring/grafana/`
