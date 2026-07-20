@@ -151,7 +151,10 @@ describe('admin/env-config registry', () => {
     // so every gate is editable on /admin/env-config and resolvable from
     // /admin/gates + the Fix-it wizard (docs/fiab/gate-registry.md), plus
     // LOOM_AOAI_DEPLOYMENT joining the svc-aoai anyOf groups.
-    expect(EDITABLE_ENV.length).toBe(134);
+    // Bumped to 135 by access-governance W4 (svc-graph-group-sync:
+    // LOOM_GRAPH_GROUP_SYNC_ENABLED — opt-in, optionalDefault, Graph read-only
+    // Entra group reconcile for group-targeted access packages).
+    expect(EDITABLE_ENV.length).toBe(135);
   });
 
   it('surfaces the wave-2 env vars as settable (previously dropped by the whitelist)', () => {
@@ -220,6 +223,7 @@ describe('admin/env-config registry', () => {
       'LOOM_BROKER_REDIS', 'LOOM_BROKER_URL',
       'LOOM_CONTENT_SAFETY_ENDPOINT', 'LOOM_DIRECTLAKE_URL', 'LOOM_DOCINTEL_ENDPOINT',
       'LOOM_EVENTGRID_TOPIC_ENDPOINT', 'LOOM_EVENTGRID_TOPIC_KEY',
+      'LOOM_GRAPH_GROUP_SYNC_ENABLED',
       'LOOM_LANGUAGE_ENDPOINT', 'LOOM_ONELAKE_URL',
       'LOOM_PLAN_BACKING_SQL_DATABASE', 'LOOM_PLAN_BACKING_SQL_SERVER',
       'LOOM_RESULT_CACHE_REDIS',
