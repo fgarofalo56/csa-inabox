@@ -49,7 +49,7 @@ import {
 } from './copilot-orchestrator';
 import { buildAoaiBody, type AoaiChatMessage, type AoaiResponseFormat } from './aoai-model-contract';
 import type { TenantCopilotConfig } from '../types/copilot-config';
-import { resolveTierForTurn, DEFAULT_TASK_TIER_MAP, type ModelTier, type TaskClass } from '@/lib/foundry/model-tier-router';
+import { routeTurnTier, DEFAULT_TASK_TIER_MAP, type ModelTier, type TaskClass } from '@/lib/foundry/model-tier-router';
 import { resolveAoaiCallTarget, aoaiApimHeaders, type AoaiCallTarget } from './aoai-apim-gateway';
 
 // Re-export so unified-client callers can `instanceof`-check the 503 gate
@@ -111,27 +111,55 @@ async function withApimFallback<T>(
 }
 
 /**
- * AIF-12 — apply the Loom-native tier router to a resolved target.
+ * WS-1.1 — apply the Loom-native tier router to a resolved target on the SHARED
+ * client path, so EVERY copilot / agent / data-agent turn is tier-aware (not
+ * just the streaming orchestrator).
  *
- * When the caller supplies a `tier` or `taskClass` (and did NOT pre-resolve a
- * `target` — an explicit target/deployment is the per-call override that always
- * wins), consult the tenant's tier policy and swap ONLY the deployment segment
- * so cheap task classes ride a mini deployment and hard ones ride a strong
- * deployment. A no-op when no tier deployments are configured (routed=false) or
- * when no tier hint is given — existing callers are unaffected.
+ * Behavior:
+ *   • An explicit pre-resolved `target` is the per-call override (Wave-4 model
+ *     selector) — never re-routed.
+ *   • An explicit `tier`/`taskClass` hint is always honored.
+ *   • With NO hint, the turn is auto-classified from its `messages` (and whether
+ *     it advertises `tools`) and — via {@link routeTurnTier}'s escalate-only
+ *     guard — is upshifted to the STRONG (reasoning) deployment ONLY when the
+ *     turn classifies hard AND a strong deployment is configured. A lightweight
+ *     turn is never silently downshifted to mini. So the ~18 existing callers
+ *     stay byte-identical unless a reasoning deployment is wired and the turn is
+ *     hard (WS-1.1 / no-vaporware: real deployment resolution + real routing).
+ *
+ * The chosen tier is traced (`[tier-router]`) for server-side attribution; the
+ * streaming orchestrator surfaces the tier on the SSE final step for the browser
+ * transparency chip.
  */
 function applyTierRouting(
   base: AoaiTarget,
-  opts: { cfg?: TenantCopilotConfig | null; tier?: ModelTier; taskClass?: TaskClass; target?: AoaiTarget },
+  opts: {
+    cfg?: TenantCopilotConfig | null;
+    tier?: ModelTier;
+    taskClass?: TaskClass;
+    target?: AoaiTarget;
+    messages?: readonly AoaiChatMessage[];
+    tools?: readonly unknown[];
+  },
 ): AoaiTarget {
   if (opts.target) return base; // explicit target = per-call override; never re-route.
-  if (!opts.tier && !opts.taskClass) return base; // no hint → no change.
-  const sel = resolveTierForTurn(opts.cfg ?? null, {
-    overrideTier: opts.tier,
+  const sel = routeTurnTier({
+    cfg: opts.cfg ?? null,
+    tier: opts.tier,
     taskClass: opts.taskClass,
+    messages: opts.messages as readonly { role?: string; content?: unknown }[] | undefined,
+    hasTools: !!(opts.tools && opts.tools.length),
     baseDeployment: base.deployment,
   });
-  return sel.routed && sel.deployment ? { ...base, deployment: sel.deployment } : base;
+  if (sel.routed && sel.deployment && sel.deployment !== base.deployment) {
+    try {
+      console.debug(
+        `[tier-router] tier=${sel.tier} taskClass=${sel.taskClass} deployment=${sel.deployment} base=${base.deployment}`,
+      );
+    } catch { /* trace only */ }
+    return { ...base, deployment: sel.deployment };
+  }
+  return base;
 }
 
 /**
@@ -248,7 +276,7 @@ export interface AoaiChatRawOptions {
 export async function aoaiChat(opts: AoaiChatOptions): Promise<string> {
   const { messages, temperature, responseFormat } = opts;
   const maxCompletionTokens = opts.maxCompletionTokens ?? defaultMaxCompletionTokens(opts);
-  const target = applyTierRouting(opts.target ?? (await resolveAoaiTarget(opts.cfg ?? null)), opts);
+  const target = applyTierRouting(opts.target ?? (await resolveAoaiTarget(opts.cfg ?? null)), { ...opts, messages });
   const token = await aoaiToken();
   return withApimFallback(target, async (call) => {
     const url = chatUrl(call);
@@ -295,7 +323,7 @@ export async function aoaiChatJson<T = Record<string, unknown>>(opts: AoaiChatJs
   const { messages, temperature } = opts;
   const maxCompletionTokens = opts.maxCompletionTokens ?? defaultMaxCompletionTokens(opts);
   const responseFormat: AoaiResponseFormat = opts.responseFormat ?? 'json_object';
-  const target = applyTierRouting(opts.target ?? (await resolveAoaiTarget(opts.cfg ?? null)), opts);
+  const target = applyTierRouting(opts.target ?? (await resolveAoaiTarget(opts.cfg ?? null)), { ...opts, messages });
   const token = await aoaiToken();
   return withApimFallback(target, async (call) => {
     const url = chatUrl(call);
@@ -345,7 +373,7 @@ export async function aoaiChatJson<T = Record<string, unknown>>(opts: AoaiChatJs
 export async function aoaiChatRaw(opts: AoaiChatRawOptions): Promise<any> {
   const { messages, tools, temperature, maxCompletionTokens } = opts;
   const toolChoice = opts.toolChoice ?? 'auto';
-  const target = applyTierRouting(opts.target ?? (await resolveAoaiTarget(opts.cfg ?? null)), opts);
+  const target = applyTierRouting(opts.target ?? (await resolveAoaiTarget(opts.cfg ?? null)), { ...opts, messages, tools });
   let token: string;
   try {
     token = await aoaiToken();
@@ -500,7 +528,7 @@ export async function aoaiEmbed(opts: AoaiEmbedOptions): Promise<AoaiEmbedResult
 export async function aoaiChatStream(opts: AoaiChatOptions): Promise<Response> {
   const { messages, temperature, responseFormat } = opts;
   const maxCompletionTokens = opts.maxCompletionTokens ?? defaultMaxCompletionTokens(opts);
-  const target = opts.target ?? (await resolveAoaiTarget(opts.cfg ?? null));
+  const target = applyTierRouting(opts.target ?? (await resolveAoaiTarget(opts.cfg ?? null)), { ...opts, messages });
   const token = await aoaiToken();
   return withApimFallback(target, async (call) => {
     const url = chatUrl(call);

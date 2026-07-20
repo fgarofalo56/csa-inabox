@@ -154,7 +154,11 @@ describe('admin/env-config registry', () => {
     // Bumped to 135 by access-governance W4 (svc-graph-group-sync:
     // LOOM_GRAPH_GROUP_SYNC_ENABLED — opt-in, optionalDefault, Graph read-only
     // Entra group reconcile for group-targeted access packages).
-    expect(EDITABLE_ENV.length).toBe(135);
+    // Bumped to 137 by WS-1.1 (svc-model-reasoning-tier: LOOM_AOAI_STRONG_DEPLOYMENT
+    // + LOOM_AOAI_MINI_DEPLOYMENT — the model tier router's reasoning + mini tier
+    // deployments, admin-tunable + optionalDefault: unset silently rides the single
+    // default AOAI deployment for every turn, fully functional).
+    expect(EDITABLE_ENV.length).toBe(137);
   });
 
   it('surfaces the wave-2 env vars as settable (previously dropped by the whitelist)', () => {
@@ -219,6 +223,7 @@ describe('admin/env-config registry', () => {
     // per-replica in-memory cache with zero loss of function).
     const optDefault = EDITABLE_ENV.filter((e) => e.optionalDefault).map((e) => e.key).sort();
     expect(optDefault).toEqual([
+      'LOOM_AOAI_MINI_DEPLOYMENT', 'LOOM_AOAI_STRONG_DEPLOYMENT',
       'LOOM_AUDIT_DCR_ENDPOINT', 'LOOM_AUDIT_DCR_ID',
       'LOOM_BROKER_REDIS', 'LOOM_BROKER_URL',
       'LOOM_CONTENT_SAFETY_ENDPOINT', 'LOOM_DIRECTLAKE_URL', 'LOOM_DOCINTEL_ENDPOINT',
