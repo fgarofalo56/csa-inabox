@@ -26,11 +26,14 @@ import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 import yaml
 
 from csa_platform.common.logging import configure_structlog, get_logger
+
+if TYPE_CHECKING:
+    from databricks.sdk import WorkspaceClient
 
 configure_structlog(service="semantic-model-generator")
 logger = get_logger(__name__)
@@ -135,9 +138,9 @@ class SemanticModelGenerator:
     ) -> None:
         self.workspace_url = workspace_url.rstrip("/")
         self._token = token
-        self._client: Any | None = None  # TODO: Replace with typed client when SDK stubs are available
+        self._client: WorkspaceClient | None = None
 
-    def _get_client(self) -> Any:
+    def _get_client(self) -> WorkspaceClient:
         """Lazily initialize the Databricks workspace client."""
         if self._client is not None:
             return self._client

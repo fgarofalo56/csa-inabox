@@ -29,9 +29,14 @@ import json
 import sys
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
-from typing import Any
+from typing import TYPE_CHECKING
 
 from csa_platform.common.logging import configure_structlog, get_logger
+
+if TYPE_CHECKING:
+    from azure.core.credentials import TokenCredential
+
+    from csa_platform.common.typed_clients import CostManagementClient
 
 configure_structlog(service="cost-allocator")
 logger = get_logger(__name__)
@@ -103,28 +108,29 @@ class CostAllocator:
     def __init__(
         self,
         subscription_id: str,
-        credential: Any | None = None,
+        credential: TokenCredential | None = None,
     ) -> None:
         self.subscription_id = subscription_id
         self._credential = credential
-        self._client: Any | None = None  # TODO: Replace with typed client when SDK stubs are available
+        self._client: CostManagementClient | None = None
 
-    def _get_client(self) -> Any:
+    def _get_client(self) -> CostManagementClient:
         """Lazily initialize the Cost Management client."""
         if self._client is not None:
             return self._client
 
-        from azure.mgmt.costmanagement import CostManagementClient
+        from azure.mgmt.costmanagement import CostManagementClient as _CostManagementClient
 
         if self._credential is None:
             from azure.identity import DefaultAzureCredential
 
             self._credential = DefaultAzureCredential()
 
-        self._client = CostManagementClient(
+        client: CostManagementClient = _CostManagementClient(
             credential=self._credential,
         )
-        return self._client
+        self._client = client
+        return client
 
     def get_costs_by_tag(
         self,

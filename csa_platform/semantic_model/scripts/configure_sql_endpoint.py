@@ -29,9 +29,12 @@ import argparse
 import json
 import sys
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from csa_platform.common.logging import configure_structlog, get_logger
+
+if TYPE_CHECKING:
+    from databricks.sdk import WorkspaceClient
 
 configure_structlog(service="sql-endpoint-config")
 logger = get_logger(__name__)
@@ -104,9 +107,9 @@ class DatabricksSQLEndpointManager:
     ) -> None:
         self.workspace_url = workspace_url.rstrip("/")
         self._token = token
-        self._client: Any | None = None  # TODO: Replace with typed client when SDK stubs are available
+        self._client: WorkspaceClient | None = None
 
-    def _get_client(self) -> Any:
+    def _get_client(self) -> WorkspaceClient:
         """Lazily initialize the Databricks workspace client."""
         if self._client is not None:
             return self._client
@@ -156,7 +159,10 @@ class DatabricksSQLEndpointManager:
             enable_serverless_compute=config.enable_serverless_compute,
             warehouse_type=warehouse_type_map.get(config.warehouse_type),
             spot_instance_policy=spot_policy_map.get(config.spot_instance_policy),
-            tags={"custom_tags": [{"key": k, "value": v} for k, v in config.tags.items()]} if config.tags else None,
+            # The SDK models tags as ``EndpointTags``; the ``{"custom_tags": [...]}``
+            # dict form is accepted at runtime and serialized identically. Keep
+            # the dict to preserve behavior; override the strict model type here.
+            tags={"custom_tags": [{"key": k, "value": v} for k, v in config.tags.items()]} if config.tags else None,  # type: ignore[arg-type]
         )
 
         info = self._build_info(response)
@@ -270,7 +276,10 @@ class DatabricksSQLEndpointManager:
                 client.permissions.update(
                     request_object_type="sql/warehouses",
                     request_object_id=endpoint_id,
-                    access_control_list=acl_items,
+                    # The SDK models ACL entries as ``AccessControlRequest``; the
+                    # plain-dict form is accepted at runtime. Keep dicts to
+                    # preserve behavior; override the strict model type here.
+                    access_control_list=acl_items,  # type: ignore[arg-type]
                 )
 
                 results.append(
@@ -357,7 +366,7 @@ class DatabricksSQLEndpointManager:
             "odbc_dsn": odbc_dsn,
             "catalog": catalog,
             "schema": schema,
-            "warehouse_name": warehouse.name,
+            "warehouse_name": warehouse.name or "",
             "warehouse_id": endpoint_id,
         }
 
