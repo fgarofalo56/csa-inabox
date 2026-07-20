@@ -83,6 +83,11 @@ Each finding cites code; grades feed the PRP matrix. ✅ built / η partial / �
 
 ## Live browser pass — TODO checklist (next session)
 
+> **2026-07-20:** the probes below are FOLDED INTO the operator's new
+> catalog-wide functional-E2E goal (tasks #12 apps / #13 data items): every
+> item type proven create→configure→publish→RUN→USE against its real backend.
+> They stay listed here for traceability; verdicts land in the E2E table.
+
 - [ ] Ontology designer: author interface + shared group + action; check UX depth vs
       model capability (model may exceed UI).
 - [ ] Object sync: dataset→object backfill flow + status surfaces (2.2).

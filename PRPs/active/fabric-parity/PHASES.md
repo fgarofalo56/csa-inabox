@@ -1,5 +1,11 @@
 # CSA Loom ⇄ Microsoft Fabric Parity — Phased Roadmap (Kickoff-Ready)
 
+> **⚠ DOC-CURRENCY (2026-07-20):** the per-appendix scorecards in this folder
+> carry ~130 stale ❌/MISSING markers that predate the 06-26→07-20 drives
+> (Fabric-parity E2E validation 07-12, Foundry drives, widget catalogs,
+> G-band). Treat `PRPs/active/OPEN-REGISTER-2026-07-12.md` (RE-BASELINE
+> 2026-07-20) as the live truth; re-verify a scorecard row before building it.
+
 > Companion to [`README.md`](./README.md) (the master PRP). Each phase is
 > **independently kick-offable**: it lists scope, the appendices/audits it draws
 > from, exact Loom files to create/edit, Azure + bicep/deploy work, Commercial
