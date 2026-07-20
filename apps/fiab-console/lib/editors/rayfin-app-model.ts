@@ -54,7 +54,7 @@ export interface ModelBinding {
 // Visual app definition (the low-code BUILDER)
 // ---------------------------------------------------------------------------
 
-export type ComponentKind = 'table' | 'metric' | 'chart' | 'form' | 'text' | 'image' | 'link' | 'divider' | 'badge' | 'heading' | 'progress' | 'spacer' | 'timestamp';
+export type ComponentKind = 'table' | 'metric' | 'chart' | 'form' | 'text' | 'image' | 'link' | 'divider' | 'badge' | 'heading' | 'progress' | 'spacer' | 'timestamp' | 'kpi-row' | 'gauge' | 'callout' | 'quote';
 
 /** A data component's read-view selection over the app's bound model. */
 export interface ComponentBinding {
@@ -84,6 +84,14 @@ export interface RayfinComponent {
   progressValue?: string;
   /** For 'heading': visual level 1..3. */
   headingLevel?: 1 | 2 | 3;
+  /** For 'kpi-row': comma list of "Label=value" pairs. */
+  kpiItems?: string;
+  /** For 'gauge': value/min/max (string-encoded). */
+  gaugeValue?: string;
+  gaugeMin?: string;
+  gaugeMax?: string;
+  /** For 'callout': Fluent MessageBar intent. */
+  calloutIntent?: 'info' | 'success' | 'warning' | 'error';
 }
 
 export interface RayfinPage {
@@ -125,7 +133,7 @@ export const DEFAULT_SPEC: RayfinSpec = {
   binding: { ...DEFAULT_BINDING },
 };
 
-export const COMPONENT_KINDS: readonly ComponentKind[] = ['table', 'metric', 'chart', 'form', 'text'];
+export const COMPONENT_KINDS: readonly ComponentKind[] = ['table', 'metric', 'chart', 'form', 'text', 'image', 'link', 'divider', 'badge', 'heading', 'progress', 'spacer', 'timestamp', 'kpi-row', 'gauge', 'callout', 'quote'];
 
 /** True when a component reads from the bound model (vs. form/text). */
 export function isDataComponent(kind: ComponentKind): boolean {
@@ -308,6 +316,7 @@ export function emptyComponent(kind: ComponentKind, entityName = ''): RayfinComp
     table: 'Table', metric: 'Metric', chart: 'Chart', form: 'Form', text: 'Text',
     image: 'Image', link: 'Link', divider: 'Divider', badge: 'Badge',
     heading: 'Heading', progress: 'Progress', spacer: 'Spacer', timestamp: 'Timestamp',
+    'kpi-row': 'KPI Row', gauge: 'Gauge', callout: 'Callout', quote: 'Quote',
   };
   const c: RayfinComponent = { id: newId('cmp'), kind, title: titles[kind] };
   if (isDataComponent(kind)) c.binding = { measures: [], groupBy: [], topN: kind === 'metric' ? 1 : 50 };
@@ -316,6 +325,10 @@ export function emptyComponent(kind: ComponentKind, entityName = ''): RayfinComp
   if (kind === 'badge') { c.text = 'Status'; c.badgeColor = 'brand'; }
   if (kind === 'heading') { c.text = 'Section title'; c.headingLevel = 2; }
   if (kind === 'progress') c.progressValue = '50';
+  if (kind === 'kpi-row') c.kpiItems = 'Orders=42, Revenue=1.2M';
+  if (kind === 'gauge') { c.gaugeValue = '75'; c.gaugeMin = '0'; c.gaugeMax = '100'; }
+  if (kind === 'callout') { c.text = 'Heads up.'; c.calloutIntent = 'info'; }
+  if (kind === 'quote') c.text = 'Data beats opinions.';
   return c;
 }
 

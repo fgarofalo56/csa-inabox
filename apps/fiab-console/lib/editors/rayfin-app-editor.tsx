@@ -105,11 +105,13 @@ const KIND_ICON: Record<ComponentKind, ReactElement> = {
   form: <Form20Regular />, text: <TextT20Regular />,
   image: <TextT20Regular />, link: <TextT20Regular />, divider: <TextT20Regular />, badge: <Gauge20Regular />,
   heading: <TextT20Regular />, progress: <Gauge20Regular />, spacer: <TextT20Regular />, timestamp: <TextT20Regular />,
+  'kpi-row': <Gauge20Regular />, gauge: <Gauge20Regular />, callout: <TextT20Regular />, quote: <TextT20Regular />,
 };
 const KIND_LABEL: Record<ComponentKind, string> = {
   table: 'Table', metric: 'Metric', chart: 'Chart', form: 'Form', text: 'Text',
   image: 'Image', link: 'Link', divider: 'Divider', badge: 'Badge',
   heading: 'Heading', progress: 'Progress', spacer: 'Spacer', timestamp: 'Timestamp',
+  'kpi-row': 'KPI Row', gauge: 'Gauge', callout: 'Callout', quote: 'Quote',
 };
 const KIND_HINT: Record<ComponentKind, string> = {
   table: 'Add a data table bound to the model — rows from your selected measures and group-by fields.',
@@ -125,6 +127,7 @@ const KIND_HINT: Record<ComponentKind, string> = {
   progress: 'Add a progress bar (0–100%).',
   spacer: 'Add blank layout spacing.',
   timestamp: 'Shows when the page rendered.',
+  'kpi-row': 'A row of labeled KPI chips.', gauge: 'A value against a min-max range.', callout: 'A highlighted MessageBar note.', quote: 'A styled blockquote.',
 };
 
 const useStyles = makeStyles({
@@ -1145,6 +1148,25 @@ function ComponentEditor({ s, comp, objects, entities, rendered, onChange, onDel
         </>
       ) : comp.kind === 'progress' ? (
         <Field label="Value (0–100)"><Input value={comp.progressValue || ''} onChange={(_, d) => onChange({ progressValue: d.value })} placeholder="75" /></Field>
+      ) : comp.kind === 'kpi-row' ? (
+        <Field label="KPI items" hint="Comma list of Label=value."><Input value={comp.kpiItems || ''} onChange={(_, d) => onChange({ kpiItems: d.value })} placeholder="Orders=42, Revenue=1.2M" /></Field>
+      ) : comp.kind === 'gauge' ? (
+        <>
+          <Field label="Value"><Input value={comp.gaugeValue || ''} onChange={(_, d) => onChange({ gaugeValue: d.value })} placeholder="75" /></Field>
+          <Field label="Min"><Input value={comp.gaugeMin || ''} onChange={(_, d) => onChange({ gaugeMin: d.value })} placeholder="0" /></Field>
+          <Field label="Max"><Input value={comp.gaugeMax || ''} onChange={(_, d) => onChange({ gaugeMax: d.value })} placeholder="100" /></Field>
+        </>
+      ) : comp.kind === 'callout' ? (
+        <>
+          <Field label="Callout text"><Textarea value={comp.text || ''} onChange={(_, d) => onChange({ text: d.value })} resize="vertical" /></Field>
+          <Field label="Intent">
+            <Dropdown value={comp.calloutIntent || 'info'} selectedOptions={[comp.calloutIntent || 'info']} onOptionSelect={(_, d) => onChange({ calloutIntent: (d.optionValue as RayfinComponent['calloutIntent']) || 'info' })}>
+              {(['info', 'success', 'warning', 'error'] as const).map((c) => <Option key={c} value={c}>{c}</Option>)}
+            </Dropdown>
+          </Field>
+        </>
+      ) : comp.kind === 'quote' ? (
+        <Field label="Quote text"><Textarea value={comp.text || ''} onChange={(_, d) => onChange({ text: d.value })} resize="vertical" /></Field>
       ) : (comp.kind === 'spacer' || comp.kind === 'timestamp') ? (
         <Caption1>No configuration.</Caption1>
       ) : comp.kind === 'divider' ? (
@@ -1171,6 +1193,31 @@ function ComponentEditor({ s, comp, objects, entities, rendered, onChange, onDel
           </div>
         ) : kind === 'text' ? (
           <Body1>{comp.text}</Body1>
+        ) : kind === 'kpi-row' ? (
+          (() => { const items = String(comp.kpiItems || '').split(',').map((p) => p.trim()).filter(Boolean).map((p) => { const [l, ...r] = p.split('='); return { l: (l || '').trim(), v: r.join('=') }; }); return items.length ? (
+            <div style={{ display: 'flex', gap: tokens.spacingHorizontalM, flexWrap: 'wrap' }}>
+              {items.map((it, i) => (
+                <div key={i} style={{ padding: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusMedium, backgroundColor: tokens.colorNeutralBackground3 }}>
+                  <Caption1 block>{it.l}</Caption1>
+                  <Subtitle2>{it.v}</Subtitle2>
+                </div>
+              ))}
+            </div>
+          ) : <Caption1>Add KPI items in the inspector.</Caption1>; })()
+        ) : kind === 'gauge' ? (
+          (() => { const n = (v: string | undefined, d: number) => { const x = Number(String(v ?? '').replace(/[^0-9.-]/g, '')); return Number.isFinite(x) && String(v ?? '') !== '' ? x : d; }; const min = n(comp.gaugeMin, 0); const max = n(comp.gaugeMax, 100); const val = n(comp.gaugeValue, 0); const pct = max > min ? Math.max(0, Math.min(100, ((val - min) / (max - min)) * 100)) : 0; return (
+            <div style={{ width: '100%' }}>
+              <Subtitle2>{val}</Subtitle2>
+              <div style={{ height: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusMedium, backgroundColor: tokens.colorNeutralBackground5, overflow: 'hidden' }}>
+                <div style={{ width: `${pct}%`, height: '100%', backgroundColor: pct > 80 ? tokens.colorPaletteRedBackground3 : pct > 60 ? tokens.colorPaletteMarigoldBackground3 : tokens.colorBrandBackground }} />
+              </div>
+              <Caption1>{min} – {max}</Caption1>
+            </div>
+          ); })()
+        ) : kind === 'callout' ? (
+          <MessageBar intent={comp.calloutIntent || 'info'}><MessageBarBody>{comp.text || comp.title}</MessageBarBody></MessageBar>
+        ) : kind === 'quote' ? (
+          <blockquote style={{ margin: 0, paddingLeft: tokens.spacingHorizontalM, borderLeft: `3px solid ${tokens.colorBrandStroke1}`, color: tokens.colorNeutralForeground2, fontStyle: 'italic' }}>{comp.text || comp.title}</blockquote>
         ) : kind === 'heading' ? (
           (comp.headingLevel || 2) === 1 ? <Title3>{comp.text || comp.title}</Title3> : (comp.headingLevel || 2) === 2 ? <Subtitle2>{comp.text || comp.title}</Subtitle2> : <Body1><strong>{comp.text || comp.title}</strong></Body1>
         ) : kind === 'progress' ? (
