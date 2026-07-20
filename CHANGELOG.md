@@ -31,6 +31,7 @@ This file is maintained automatically by
 ### Documentation
 
 * **foundry-parity:** backlog-drain wave receipts — compact-v4 landed, rayfin 34 verified, task-flow correction ([#2238](https://github.com/fgarofalo56/csa-inabox/issues/2238)) ([db5ee84](https://github.com/fgarofalo56/csa-inabox/commit/db5ee84088254259d5f7ef7fd71f185c338b2691))
+* **foundry-parity:** compact-v4 dark+light pixel receipts — final deferred item closed ([#2240](https://github.com/fgarofalo56/csa-inabox/issues/2240)) ([85c59a3](https://github.com/fgarofalo56/csa-inabox/commit/85c59a3ce644a9d720828d34d9860192fce8090a))
 
 ## [0.72.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.71.1...csa-inabox-v0.72.0) (2026-07-20)
 
