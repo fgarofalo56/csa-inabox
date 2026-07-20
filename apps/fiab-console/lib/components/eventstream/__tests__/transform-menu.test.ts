@@ -9,8 +9,8 @@ import {
 } from '../transform-menu';
 
 describe('TRANSFORM_MENU', () => {
-  it('has the Custom code + Predefined operations sections in Fabric order', () => {
-    expect(TRANSFORM_MENU.map((c) => c.category)).toEqual(['Custom code', 'Predefined operations']);
+  it('has the Custom code + Predefined operations sections in Fabric order, then the Loom-exceeds Geospatial section', () => {
+    expect(TRANSFORM_MENU.map((c) => c.category)).toEqual(['Custom code', 'Predefined operations', 'Geospatial']);
   });
   it('surfaces SQL code under Custom code with a badge', () => {
     const sql = TRANSFORM_MENU[0].items[0];
@@ -21,6 +21,10 @@ describe('TRANSFORM_MENU', () => {
     const ids = TRANSFORM_MENU[1].items.map((i) => i.id);
     expect(ids).toEqual(['filter', 'manage-fields', 'aggregate', 'join', 'group-by', 'union', 'expand']);
   });
+  it('lists the four geospatial operators (geo-graph-ml GEO-1)', () => {
+    const ids = TRANSFORM_MENU[2].items.map((i) => i.id);
+    expect(ids).toEqual(['geo-point', 'geo-fence', 'geo-proximity', 'geo-aggregate']);
+  });
 });
 
 describe('resolveTransformMenuItem', () => {
@@ -29,6 +33,11 @@ describe('resolveTransformMenuItem', () => {
   });
   it('maps every predefined item to its operator kind', () => {
     for (const it of TRANSFORM_MENU[1].items) {
+      expect(resolveTransformMenuItem(it.id)).toEqual({ kind: 'operator', op: it.id });
+    }
+  });
+  it('maps every geospatial item to its operator kind', () => {
+    for (const it of TRANSFORM_MENU[2].items) {
       expect(resolveTransformMenuItem(it.id)).toEqual({ kind: 'operator', op: it.id });
     }
   });
@@ -44,7 +53,7 @@ describe('resolveTransformMenuItem', () => {
 
 describe('flattenTransformMenu', () => {
   it('returns every item across categories', () => {
-    expect(flattenTransformMenu()).toHaveLength(8);
+    expect(flattenTransformMenu()).toHaveLength(12);
   });
   it('every flattened item resolves to a non-gate target', () => {
     for (const it of flattenTransformMenu()) {

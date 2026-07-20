@@ -131,6 +131,50 @@ export function collectAuthoringErrors(topology: EsTopology): AuthoringError[] {
       case 'union':
         if (sources.length < 2) warn('union-one', `Union "${name}": only one source — union has no effect until a second source is added.`);
         break;
+      // ---- geospatial operators (geo-graph-ml GEO-1) ----
+      case 'geo-point':
+        if (isBlank(n?.latColumn)) err('geo-lat', `Geo point "${name}": pick the latitude column.`);
+        if (isBlank(n?.lonColumn)) err('geo-lon', `Geo point "${name}": pick the longitude column.`);
+        break;
+      case 'geo-fence': {
+        const usesPointCol = n?.pointMode === 'column';
+        if (usesPointCol && isBlank(n?.pointColumn)) err('geo-fence-point', `Geofence "${name}": pick the point column.`);
+        if (!usesPointCol && (isBlank(n?.latColumn) || isBlank(n?.lonColumn))) {
+          err('geo-fence-latlon', `Geofence "${name}": pick the latitude and longitude columns (or an existing point column).`);
+        }
+        if (String(n?.fenceSource || 'inline') === 'reference') {
+          if (isBlank(n?.fenceRefInput)) err('geo-fence-ref', `Geofence "${name}": name the ASA reference-data input holding the fences.`);
+        } else {
+          const valid = (Array.isArray(n?.fences) ? n.fences : []).filter((f: any) => (f?.vertices?.length || 0) >= 3);
+          if (valid.length === 0) err('geo-fence-none', `Geofence "${name}": define at least one fence with 3+ vertices (or import GeoJSON/WKT).`);
+        }
+        break;
+      }
+      case 'geo-proximity': {
+        const usesPointCol = n?.pointMode === 'column';
+        if (usesPointCol && isBlank(n?.pointColumn)) err('geo-prox-point', `Proximity "${name}": pick the point column.`);
+        if (!usesPointCol && (isBlank(n?.latColumn) || isBlank(n?.lonColumn))) {
+          err('geo-prox-latlon', `Proximity "${name}": pick the latitude and longitude columns (or an existing point column).`);
+        }
+        if (!(Number(n?.thresholdValue) > 0)) err('geo-prox-threshold', `Proximity "${name}": set a distance threshold greater than zero.`);
+        if (String(n?.proximityTarget || 'static') === 'stream') {
+          if (isBlank(n?.joinSource)) err('geo-prox-source', `Proximity "${name}": select the second source to join with.`);
+          const rightUsesCol = n?.rightPointMode === 'column';
+          if (rightUsesCol && isBlank(n?.rightPointColumn)) err('geo-prox-right-point', `Proximity "${name}": pick the joined stream's point column.`);
+          if (!rightUsesCol && (isBlank(n?.rightLatColumn) || isBlank(n?.rightLonColumn))) {
+            err('geo-prox-right-latlon', `Proximity "${name}": pick the joined stream's latitude and longitude columns.`);
+          }
+        } else if (!Number.isFinite(Number(n?.staticLat)) || !Number.isFinite(Number(n?.staticLon))) {
+          err('geo-prox-ref', `Proximity "${name}": set the reference point's latitude and longitude.`);
+        }
+        break;
+      }
+      case 'geo-aggregate': {
+        const aggs = Array.isArray(n?.aggregates) ? n.aggregates.filter((a: any) => a && a.func) : [];
+        if (aggs.length === 0) warn('geo-agg-none', `Geo aggregate "${name}": no aggregations listed — defaults to COUNT(*) AS eventCount.`);
+        if (isBlank(n?.regionColumn)) warn('geo-agg-region', `Geo aggregate "${name}": no region column — aggregates the whole stream per window.`);
+        break;
+      }
     }
   });
 

@@ -55,6 +55,8 @@ function operatorRole(role: NodeRole, kind: string): string {
   if (role === 'sink') return 'sink';
   if (kind === 'filter') return 'filter';
   if (kind === 'join' || kind === 'union') return 'join';
+  // Geospatial operators carry their own kit glyphs (geo-graph-ml GEO-1).
+  if (kind === 'geo-point' || kind === 'geo-fence' || kind === 'geo-proximity' || kind === 'geo-aggregate') return kind;
   return 'transform';
 }
 
