@@ -33,7 +33,7 @@ import { clientFetch } from '@/lib/client-fetch';
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type ReactElement } from 'react';
 import {
-  Body1, Caption1, Subtitle2, Badge, Button, Input, Textarea, Field, Dropdown, Option,
+  Body1, Caption1, Subtitle2, Title3, Badge, Button, Input, Textarea, Field, Dropdown, Option,
   Spinner, Switch, Tab, TabList, Tooltip, Divider,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   MessageBar, MessageBarBody, MessageBarTitle,
@@ -98,6 +98,10 @@ const DEFAULT_SIZE: Record<WorkshopWidgetKind, { w: number; h: number }> = {
   divider: { w: 448, h: 48 },
   badge: { w: 224, h: 80 },
   iframe: { w: 448, h: 320 },
+  heading: { w: 448, h: 80 },
+  progress: { w: 336, h: 80 },
+  spacer: { w: 224, h: 64 },
+  timestamp: { w: 224, h: 64 },
 };
 
 const KIND_META: Record<WorkshopWidgetKind, { label: string; icon: ReactElement; hint: string; data: boolean }> = {
@@ -113,6 +117,10 @@ const KIND_META: Record<WorkshopWidgetKind, { label: string; icon: ReactElement;
   divider: { label: 'Divider', icon: <Edit20Regular />, hint: 'A horizontal section divider', data: false },
   badge: { label: 'Badge', icon: <Flash20Regular />, hint: 'A colored status badge with {{variable}} interpolation', data: false },
   iframe: { label: 'Embed', icon: <Code20Regular />, hint: 'Embed an https page (iframe)', data: false },
+  heading: { label: 'Heading', icon: <DocumentText20Regular />, hint: 'A section heading (levels 1–3) with {{variable}} interpolation', data: false },
+  progress: { label: 'Progress', icon: <DataUsage20Regular />, hint: 'A progress bar (0–100%), value supports {{variable}}', data: false },
+  spacer: { label: 'Spacer', icon: <ArrowMaximize20Regular />, hint: 'Blank layout spacing', data: false },
+  timestamp: { label: 'Timestamp', icon: <Flash20Regular />, hint: 'Shows when the page was last refreshed', data: false },
 };
 
 const CHART_TYPES: LoomChartType[] = ['column', 'bar', 'line', 'area', 'pie', 'donut'];
@@ -473,6 +481,31 @@ function WidgetBody({
     return <div>{renderText(widget.text || '_Empty text widget — set its content in the inspector._', variables, runtime)}</div>;
   }
 
+  if (widget.kind === 'heading') {
+    const lvl = widget.headingLevel || 2;
+    const txt = renderText(widget.text || widget.title, variables, runtime);
+    return lvl === 1 ? <Title3>{txt}</Title3> : lvl === 2 ? <Subtitle2>{txt}</Subtitle2> : <Body1><strong>{txt}</strong></Body1>;
+  }
+  if (widget.kind === 'progress') {
+    const raw = String(widget.progressValue ?? '0');
+    // resolve {{variable}} then coerce; clamp 0..100.
+    const resolved = typeof renderText(raw, variables, runtime) === 'string' ? String(renderText(raw, variables, runtime)) : raw;
+    const pct = Math.max(0, Math.min(100, Number(resolved.replace(/[^0-9.]/g, '')) || 0));
+    return (
+      <div style={{ width: '100%' }}>
+        <div style={{ height: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusMedium, backgroundColor: tokens.colorNeutralBackground5, overflow: 'hidden' }}>
+          <div style={{ width: `${pct}%`, height: '100%', backgroundColor: tokens.colorBrandBackground }} />
+        </div>
+        <Caption1>{pct}%</Caption1>
+      </div>
+    );
+  }
+  if (widget.kind === 'spacer') {
+    return <div aria-hidden="true" />;
+  }
+  if (widget.kind === 'timestamp') {
+    return <Caption1>Last refreshed {new Date().toLocaleString()}</Caption1>;
+  }
   if (widget.kind === 'divider') {
     return <hr style={{ border: 'none', borderTop: `1px solid ${tokens.colorNeutralStroke2}`, width: '100%' }} aria-label="Divider" />;
   }
@@ -738,6 +771,19 @@ function WidgetInspector({
         </Field>
       )}
 
+      {widget.kind === 'heading' && (
+        <>
+          <Field label="Heading text" hint="Supports {{variableName}} interpolation."><Input value={widget.text || ''} onChange={(_, d) => onChange({ text: d.value })} placeholder="Section title" /></Field>
+          <Field label="Level">
+            <Dropdown value={String(widget.headingLevel || 2)} selectedOptions={[String(widget.headingLevel || 2)]} onOptionSelect={(_, d) => onChange({ headingLevel: (Number(d.optionValue) as 1 | 2 | 3) || 2 })}>
+              <Option value="1">1 — large</Option><Option value="2">2 — medium</Option><Option value="3">3 — small</Option>
+            </Dropdown>
+          </Field>
+        </>
+      )}
+      {widget.kind === 'progress' && (
+        <Field label="Value (0–100)" hint="A number or {{variableName}}."><Input value={widget.progressValue || ''} onChange={(_, d) => onChange({ progressValue: d.value })} placeholder="75 or {{pct}}" /></Field>
+      )}
       {(widget.kind === 'image' || widget.kind === 'iframe') && (
         <Field label={widget.kind === 'image' ? 'Image URL (https)' : 'Embed URL (https)'} hint="https:// only — non-https sources are not rendered.">
           <Input value={widget.src || ''} onChange={(_, d) => onChange({ src: d.value })} placeholder="https://…" />
@@ -1006,6 +1052,8 @@ export function WorkshopAppBuilder({ id, entityTypes, widgets, variables, onWidg
       ...(kind === 'form' ? { formKind: 'create' as const } : {}),
       ...(kind === 'text' ? { text: '# New text widget\nUse {{variableName}} to show a live value.' } : {}),
       ...(kind === 'badge' ? { text: 'Status', badgeColor: 'brand' as const } : {}),
+      ...(kind === 'heading' ? { text: 'Section title', headingLevel: 2 as const } : {}),
+      ...(kind === 'progress' ? { progressValue: '50' } : {}),
     };
     onWidgetsChange([...widgets, widget]);
     setSelectedId(wid);
