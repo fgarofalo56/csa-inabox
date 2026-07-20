@@ -33,11 +33,13 @@ import {
 } from '@fluentui/react-components';
 import {
   Add20Regular, Delete20Regular, ArrowSync16Regular, Map20Regular,
+  Alert20Regular, CloudArrowUp20Regular,
 } from '@fluentui/react-icons';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { clientFetch } from '@/lib/client-fetch';
 import {
   thresholdMeters, parseGeoJsonFences, parseWktFences,
+  geoViolationAlertPreset, type GeoAlertPreset,
   type GeoFenceDef, type GeoFenceVertex, type GeoDistanceUnit,
 } from '@/lib/editors/eventstream/geo-sql';
 import { useStreamColumns } from './use-stream-columns';
@@ -377,11 +379,35 @@ export interface GeoOperatorConfigProps {
   /** Cosmos item id — enables LIVE column discovery (absent pre-save). */
   itemId?: string;
   onChange: (patch: Record<string, any>) => void;
+  /**
+   * One-click "Create violation alert" from a Geofence / Proximity node — the
+   * editor pre-fills + opens its Add-alert dialog from this preset (wires the
+   * existing Azure Monitor scheduled-query Activator path). Absent → the button
+   * is hidden (e.g. the Visual designer inspector without an alert dialog).
+   */
+  onCreateAlert?: (preset: GeoAlertPreset) => void;
+  /**
+   * Publish the geofence reference table (fenceSource='reference') to ASA — the
+   * editor POSTs /api/items/eventstream/[id]/geo-reference. Absent → hidden.
+   * Returns an outcome message the panel surfaces inline.
+   */
+  onPublishReference?: (inputAlias: string) => Promise<{ ok: boolean; message: string }>;
 }
 
-export function GeoOperatorConfig({ op, sources, topology, itemId, onChange }: GeoOperatorConfigProps) {
+export function GeoOperatorConfig({ op, sources, topology, itemId, onChange, onCreateAlert, onPublishReference }: GeoOperatorConfigProps) {
   const { columns, liveColumns, loading, gate, refresh } = useStreamColumns(itemId, topology);
   const [importOpen, setImportOpen] = useState(false);
+  const [publishBusy, setPublishBusy] = useState(false);
+  const [publishMsg, setPublishMsg] = useState<{ ok: boolean; message: string } | null>(null);
+
+  const alertPreset = useMemo(() => geoViolationAlertPreset(op), [op]);
+  const AlertButton = onCreateAlert && alertPreset ? (
+    <Tooltip content={alertPreset.description} relationship="description">
+      <Button size="small" appearance="secondary" icon={<Alert20Regular />} onClick={() => onCreateAlert(alertPreset)}>
+        Create violation alert
+      </Button>
+    </Tooltip>
+  ) : null;
 
   const kind = String(op.kind || '');
   const fences: GeoFenceDef[] = Array.isArray(op.fences) ? op.fences : [];
@@ -460,22 +486,52 @@ export function GeoOperatorConfig({ op, sources, topology, itemId, onChange }: G
           )}
         </div>
 
-        {fenceSource === 'reference' ? (
-          <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap', alignItems: 'flex-end' }}>
-            <Field label="Reference input alias" required hint="The ASA reference-data input (blob-backed fence table)" style={{ minWidth: 180 }}>
-              <Input value={op.fenceRefInput ?? 'geofences'} placeholder="geofences"
-                onChange={(_: unknown, d: any) => onChange({ fenceRefInput: d.value })} aria-label="Reference input alias" />
-            </Field>
-            <Field label="Fence-name column" style={{ minWidth: 150 }}>
-              <Input value={op.fenceRefNameColumn ?? 'fenceName'} placeholder="fenceName"
-                onChange={(_: unknown, d: any) => onChange({ fenceRefNameColumn: d.value })} aria-label="Reference fence-name column" />
-            </Field>
-            <Field label="Polygon column" style={{ minWidth: 150 }}>
-              <Input value={op.fenceRefPolygonColumn ?? 'polygon'} placeholder="polygon"
-                onChange={(_: unknown, d: any) => onChange({ fenceRefPolygonColumn: d.value })} aria-label="Reference polygon column" />
-            </Field>
+        {fenceSource === 'reference' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS }}>
+            <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+              <Field label="Reference input alias" required hint="The ASA reference-data input (blob-backed fence table)" style={{ minWidth: 180 }}>
+                <Input value={op.fenceRefInput ?? 'geofences'} placeholder="geofences"
+                  onChange={(_: unknown, d: any) => onChange({ fenceRefInput: d.value })} aria-label="Reference input alias" />
+              </Field>
+              <Field label="Fence-name column" style={{ minWidth: 150 }}>
+                <Input value={op.fenceRefNameColumn ?? 'fenceName'} placeholder="fenceName"
+                  onChange={(_: unknown, d: any) => onChange({ fenceRefNameColumn: d.value })} aria-label="Reference fence-name column" />
+              </Field>
+              <Field label="Polygon column" style={{ minWidth: 150 }}>
+                <Input value={op.fenceRefPolygonColumn ?? 'polygon'} placeholder="polygon"
+                  onChange={(_: unknown, d: any) => onChange({ fenceRefPolygonColumn: d.value })} aria-label="Reference polygon column" />
+              </Field>
+            </div>
+            <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+              Define the fences below; Publish writes them as a blob-backed ASA reference table
+              (one <code>{op.fenceRefNameColumn || 'fenceName'}</code> + GeoJSON <code>{op.fenceRefPolygonColumn || 'polygon'}</code>
+              {' '}record per fence) and attaches the reference-data input to the Stream Analytics job.
+            </Caption1>
+            {onPublishReference && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' }}>
+                <Button size="small" appearance="primary" icon={<CloudArrowUp20Regular />} disabled={publishBusy}
+                  onClick={async () => {
+                    setPublishBusy(true); setPublishMsg(null);
+                    try { setPublishMsg(await onPublishReference((op.fenceRefInput || 'geofences').trim() || 'geofences')); }
+                    catch (e: any) { setPublishMsg({ ok: false, message: e?.message || String(e) }); }
+                    finally { setPublishBusy(false); }
+                  }}>
+                  {publishBusy ? 'Publishing…' : 'Publish reference table'}
+                </Button>
+                {publishBusy && <Spinner size="tiny" />}
+              </div>
+            )}
+            {publishMsg && (
+              <MessageBar intent={publishMsg.ok ? 'success' : 'warning'} layout="multiline">
+                <MessageBarBody>{publishMsg.message}</MessageBarBody>
+              </MessageBar>
+            )}
           </div>
-        ) : (
+        )}
+        {/* Fence editor — shown in BOTH modes. In reference mode these rows ARE
+            the reference table (published to blob); in inline mode they compile
+            straight into the query. */}
+        {(
           <>
             <GeoMapPreview fences={fences} />
             <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' }}>
@@ -541,6 +597,14 @@ export function GeoOperatorConfig({ op, sources, topology, itemId, onChange }: G
             <FenceImportDialog open={importOpen} onClose={() => setImportOpen(false)}
               onImport={(imported) => setFences([...fences.filter((f) => (f.vertices?.length || 0) >= 3), ...imported])} />
           </>
+        )}
+        {AlertButton && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap', marginTop: tokens.spacingVerticalXS }}>
+            {AlertButton}
+            <Caption1 style={{ color: tokens.colorNeutralForeground3, minWidth: 0 }}>
+              Wires an Azure Monitor scheduled-query alert from this fence — no Fabric Reflex.
+            </Caption1>
+          </div>
         )}
       </div>
     );
@@ -627,6 +691,14 @@ export function GeoOperatorConfig({ op, sources, topology, itemId, onChange }: G
                   onSelect={(v) => onChange({ rightLonColumn: v })} />
               </>
             )}
+          </div>
+        )}
+        {AlertButton && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap', marginTop: tokens.spacingVerticalXS }}>
+            {AlertButton}
+            <Caption1 style={{ color: tokens.colorNeutralForeground3, minWidth: 0 }}>
+              Wires an Azure Monitor scheduled-query alert when the distance drops below the threshold.
+            </Caption1>
           </div>
         )}
       </div>
