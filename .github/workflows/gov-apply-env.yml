@@ -1,0 +1,79 @@
+name: gov-apply-env
+
+# Medic fix path: set one or more env vars on the Gov loom-console container app
+# via the Gov deploy SP, then health-gate the resulting revision. Values are
+# NON-secret day-one config (resource names / endpoints / URIs) — real secrets
+# stay in Key Vault and are referenced via secretRef, never passed here.
+#
+# env_pairs: space- or newline-separated KEY=VALUE list, e.g.
+#   "LOOM_AZURE_MAPS_ACCOUNT=maps-loom-gov LOOM_KUSTO_CLUSTER_URI=https://adx.usgovvirginia.kusto.usgovcloudapi.net"
+#
+# Read-then-write on a single container app; --set-env-vars is additive/merge
+# (existing keys not listed are preserved). Health-gate rolls forward only.
+on:
+  workflow_dispatch:
+    inputs:
+      env_pairs:
+        description: 'Space/newline-separated KEY=VALUE env vars to set on loom-console'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  RG: rg-csa-loom-admin-usgovvirginia
+  APP: loom-console
+
+jobs:
+  apply:
+    name: Set env + health-gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Azure login (Gov sub) — deploy SP
+        uses: Azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_GOV_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_GOV_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_GOV_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}",
+              "activeDirectoryEndpointUrl": "https://login.microsoftonline.us",
+              "resourceManagerEndpointUrl": "https://management.usgovcloudapi.net/",
+              "sqlManagementEndpointUrl": "https://management.core.usgovcloudapi.net:8443/",
+              "galleryEndpointUrl": "https://gallery.usgovcloudapi.net/",
+              "managementEndpointUrl": "https://management.core.usgovcloudapi.net/"
+            }
+          environment: AzureUSGovernment
+
+      - name: Set Azure cloud to Gov
+        run: az cloud set --name AzureUSGovernment
+
+      - name: Apply env vars
+        run: |
+          set -euo pipefail
+          # Normalize newlines to spaces; keep KEY=VALUE tokens intact.
+          PAIRS=$(printf '%s' "${{ inputs.env_pairs }}" | tr '\n' ' ')
+          echo "Setting: $(printf '%s' "$PAIRS" | sed -E 's/=[^ ]*/=<redacted>/g')"
+          # shellcheck disable=SC2086
+          az containerapp update -n "$APP" -g "$RG" --set-env-vars $PAIRS -o none
+          echo "::notice::env applied to $APP"
+
+      - name: Health-gate the new revision
+        run: |
+          set -euo pipefail
+          LR=$(az containerapp show -n "$APP" -g "$RG" --query properties.latestRevisionName -o tsv | tr -d '\r')
+          echo "latest revision: $LR"
+          for i in $(seq 1 20); do
+            H=$(az containerapp revision show -n "$APP" -g "$RG" --revision "$LR" --query properties.healthState -o tsv 2>/dev/null | tr -d '\r')
+            R=$(az containerapp revision show -n "$APP" -g "$RG" --revision "$LR" --query properties.runningState -o tsv 2>/dev/null | tr -d '\r')
+            echo "$(date -u +%H:%M:%S) $LR health=$H running=$R"
+            case "$H" in
+              Healthy) echo "::notice::GOV-APPLY-ENV HEALTHY ($LR)"; exit 0 ;;
+              Unhealthy) echo "::error::revision Unhealthy after env change"; exit 1 ;;
+            esac
+            sleep 20
+          done
+          echo "::warning::did not observe Healthy in window (may still be provisioning)"
