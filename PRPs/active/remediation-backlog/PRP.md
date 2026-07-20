@@ -86,7 +86,7 @@ Legend: **DONE** (drop) · **PARTIAL** (reduced residual kept) · **IN-FLIGHT** 
 | **A2** Coverage claim mismatch | OPEN | `README.md:266` states `fail_under = 80` + "80% coverage gate"; `pyproject.toml:525` is `fail_under = 65`. Genuine contradiction. |
 | **A3** Parity-doc freshness CI guard | OPEN | Only `scripts/ci/check-bicep-sync.mjs` + `check-health-coverage.mjs` exist; no `check-parity-doc-freshness.mjs`. |
 | **A4** Parity-gap docs re-baseline | PARTIAL | `docs/fiab/parity-gap/**` exists but stale; #2249 re-baselined only the Foundry gap doc + corpus. `report.md`/`admin-usage.md`/`operations-agent.md` + the `Reviewed-on`/`Validated-against` metadata convention still open. |
-| **B1** 8 missing live probes | OPEN* | No `probe-aas/aml/azure-sql/postgres/grafana/stream-analytics/eventgrid/batch` in `lib/admin/`. Health audit §5 lists all 8 as "next wave". *pending gov-medic scope reply — may be in-flight.* |
+| **B1** 8 missing live probes | OPEN | No `probe-aas/aml/azure-sql/postgres/grafana/stream-analytics/eventgrid/batch` in `lib/admin/`. Health audit §5 lists all 8 as "next wave". gov-medic confirmed (07-20) their work is Gov CI only and does NOT touch these — genuinely OPEN, needs a health-coverage owner. |
 | **B2** Deep-exercise expansion | OPEN | `service-probes.ts` has 8 exercises; the 4 new (eventstream round-trip, Purview scan, Databricks-SQL, report-render) not added (health §5.8). |
 | **B3** Gates registry wiring | **DONE** | `lib/gates/registry.ts` + `GATES_REGISTRY_WIRED=true` + `app/admin/gates` + API + coherence test. Memory: ~89 gates, score 100. |
 | **B4** Safe healer expansion | OPEN | Healers today = 3 (`ensure-cosmos`, `ensure-search-index`, `ensure-spark-lease-container`). `ensure-eventhub-consumer-group` + `ensure-adx-default-db` absent. |
@@ -104,8 +104,8 @@ Legend: **DONE** (drop) · **PARTIAL** (reduced residual kept) · **IN-FLIGHT** 
 | **F3** Ratchet `fail_under` | OPEN | Currently 65; staged 65→68→70→75 not started. |
 | **F4** Vitest thresholds + toolkit tests | OPEN | Depends on D1; no route-toolkit tests exist yet. |
 | **F5** E2E route expansion | IN-FLIGHT | Owned by tasks #12/#13 (e2e-sweeper) + `runpath-verdicts`. Reduce to folding remediation-completed paths into that sweep. |
-| **G1** Incremental corpus indexing | OPEN* | `loom-docs-index.ts` has no hash/manifest/incremental path (full rebuild only). *pending corpus-fixer reply.* |
-| **G2** Corpus freshness guard | OPEN* | No source-hash vs staged-hash startup/health signal. *pending corpus-fixer reply.* |
+| **G1** Incremental corpus indexing | OPEN | `loom-docs-index.ts` has no hash/manifest/incremental path (full rebuild only). corpus-fixer confirmed (07-20): staging is a full `rm -rf` + tar re-copy of **2453 md files** at build time, no hash/skip — the natural G1 target. |
+| **G2** Corpus freshness guard | OPEN | No source-hash vs staged-hash startup/health signal. corpus-fixer note (07-20): reindex uses `mergeOrUpload`/upsert with **no delete of removed ids**, so stale chunks orphan in AI Search when a doc shrinks — fold into freshness-guard scope. |
 | **G3** Retrieval telemetry (docs copilot) | OPEN | Only perf `query-result-cache` hit-rate exists; no docs-retrieval latency/hit-rate/freshness/fallback metrics. |
 | **H1** Capability dependency graph | OPEN | No readiness/capability-graph surface. `/admin/health` (104 checks) + gate registry are adjacent but not a feature→backend/env/RBAC/probe graph. |
 | **H2** Workload readiness scorecard | OPEN | `health-coverage.ts` derives per-family checks (adjacent) but no go/no-go Ready/Partial/Blocked scorecard. |
@@ -116,8 +116,9 @@ Legend: **DONE** (drop) · **PARTIAL** (reduced residual kept) · **IN-FLIGHT** 
 | **J2** Local profile validator | OPEN | No `scripts/dev/check-local-profile.*`. |
 
 **Counts:** DONE 1 (B3) · PARTIAL 4 (A4, C1, C2, D2) · IN-FLIGHT 1 (F5) · OPEN 26.
-*(B1, G1, G2 flagged OPEN* pending two teammate scope replies; if gov-medic/corpus-fixer own
-them, reclassify to IN-FLIGHT — see report.)*
+*(Reconciled 07-20: gov-medic confirmed Gov-CI-only — B1/B2 stay OPEN, need a health-coverage
+owner; corpus-fixer confirmed coverage-only — G1/G2/G3 stay OPEN. No item reclassified to
+IN-FLIGHT beyond F5.)*
 
 ---
 
@@ -218,9 +219,12 @@ checklist green for any touched surface.
 ### W-G — Copilot Corpus & Docs-Index Performance  *(PRD P2 — corpus CONTENT already fixed #2249)*
 - **G1** Hash-based incremental corpus staging/indexing in `loom-docs-index.ts` +
   `stage-copilot-corpus.sh`; persist a freshness manifest with build metadata; re-index only
-  changed docs. *(Confirm corpus-fixer ownership first.)*
+  changed docs. *Concrete target (corpus-fixer 07-20): today staging is a full `rm -rf` + tar
+  re-copy of 2453 md files with no hash/skip — replace with a per-file content-hash diff.*
 - **G2** Corpus freshness guard: a startup/health signal comparing source commit hash vs staged
-  corpus hash; surface state + remediation on `/admin/health`.
+  corpus hash; surface state + remediation on `/admin/health`. *Also fix the orphan-chunk leak
+  (corpus-fixer 07-20): reindex `mergeOrUpload`/upsert never deletes removed ids, so stale chunks
+  survive when a doc shrinks — add a delete-by-manifest-diff pass so the index tracks source.*
 - **G3** Docs-copilot retrieval telemetry (latency, hit rate, source freshness, fallback usage)
   via the existing monitoring channels.
 - **Rules:** `no-vaporware` (real metrics), G2 (freshness surfaced as a health signal).
