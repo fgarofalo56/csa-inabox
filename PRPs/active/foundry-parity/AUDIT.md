@@ -113,3 +113,19 @@ Each finding cites code; grades feed the PRP matrix. ✅ built / η partial / �
 | 3.3/3.4 | notepad + fusion-sheet — net-new | W5 | open |
 | 4.4/4.6/4.7 | rules engine, approvals, checkpoints — net-new | W4 | ✅ ALL SHIPPED. 4.7 checkpoints E2E'd (#2196/#2198); 4.6 approvals E2E'd rev 0000341 (#2203 — block→approve→re-run-succeeds, one-shot consumed, real vertex 1125899906842626); 4.4 rules = object-type invariants SHIPPED + E2E'd rev 0000342 (#2205; declared customerId regex invariant → POST violating instance = HTTP 422 "Invariant failed: customerId must match /^CUST-/" → reverted) |
 | 6.10 | retention/export controls — net-new | W8 | ✅ SHIPPED + E2E'd rev 0000341 (#2204) — CSV/JSON export + real retention-reap; Export/retention controls render in the Checkpoints panel |
+
+## Final receipt — 2026-07-19 drive (revs 0000339→0000347)
+
+Every gap-register row SHIPPED + VERIFIED live:
+- Governance suite (2.6, 4.7, 2.4-full, 4.6, 4.4, 6.10): browser/session E2E'd.
+- Greenfield items (3.1 analysis-board, 3.4 fusion-sheet, 3.3 notepad):
+  full items (editor + registrations + backend routes), session-fetch E2E'd on
+  real ADX/Cosmos; VISUAL PASS A (browser tool recovered): fusion-sheet clean
+  grid, notepad clean empty-state, analysis-board guided hint after the G6 fix
+  (rev 0000347 — red-banner-on-pristine caught by the visual pass and fixed).
+- Catalog expansions: workshop widgets 7→12 (palette visually verified live),
+  rayfin cards 5→9 (editor renders A; same 6-touchpoint pattern).
+~30 PRs #2195-#2219; visual pass receipts in the session transcript.
+Remaining backlog (tracked, non-blocking): further widget/card kinds toward
+Foundry's full ~40/~30 catalogs; deep per-surface Fabric side-by-side per
+ui-parity.md (operator-partnered).
