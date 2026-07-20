@@ -469,6 +469,8 @@ function bundleWidget(w: WorkshopWidget, y: number): Record<string, unknown> {
  */
 export function generateWorkshopBundle(spec: {
   displayName: string; runActionUrl: string; widgets: WorkshopWidget[]; variables: WorkshopVariable[];
+  /** Published-app read-only data token (embedded; reads only, revocable server-side). */
+  appReadToken?: string;
 }): GeneratedFile[] {
   const title = spec.displayName || 'Workshop app';
   let autoY = 16;
@@ -527,6 +529,7 @@ export function generateWorkshopBundle(spec: {
   const appJs = [
     `// ${title} — generated Workshop app over the CSA Loom ontology run-action API (Azure-native, no Fabric).`,
     `const RUN_ACTION_URL = ${JSON.stringify(spec.runActionUrl)};`,
+    `const APP_READ_TOKEN = ${JSON.stringify(spec.appReadToken || '')};`,
     `const WIDGETS = ${widgetsJson};`,
     `const VARIABLES = ${variablesJson};`,
     '// Runtime variable values: object-set-filter → predicate[], scalars → string.',
@@ -555,7 +558,9 @@ export function generateWorkshopBundle(spec: {
     '  return out;',
     '}',
     'async function runAction(body) {',
-    '  const r = await fetch(RUN_ACTION_URL, { method: "POST", headers: { "content-type": "application/json" }, credentials: "include", body: JSON.stringify(body) });',
+    '  const headers = { "content-type": "application/json" };',
+    '  if (APP_READ_TOKEN) headers["authorization"] = "Bearer " + APP_READ_TOKEN;',
+    '  const r = await fetch(RUN_ACTION_URL, { method: "POST", headers, body: JSON.stringify(body) });',
     '  const j = await r.json().catch(() => ({}));',
     '  if (!j.ok) throw new Error((j.error || "HTTP " + r.status) + (j.gate && j.gate.remediation ? " — " + j.gate.remediation : ""));',
     '  return j;',

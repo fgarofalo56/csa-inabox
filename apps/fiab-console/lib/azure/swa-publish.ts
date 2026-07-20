@@ -16,6 +16,7 @@
  * ARM error mapping. 100% Azure-native (ARM staticSites) — no Microsoft Fabric.
  */
 
+import crypto from 'node:crypto';
 import { armGet, armPut, armPost } from '@/lib/azure/arm-client';
 
 export const SWA_API = '2024-04-01';
@@ -117,4 +118,85 @@ export async function publishStaticSite(opts: {
   } catch { /* token retrieval is best-effort; resource is still live */ }
 
   return { url, hostname, staticSiteName: opts.name, tokenRetrieved };
+}
+
+// ── real content deployment (the half that makes the URL actually serve the app) ──
+
+function bundleHmacKey(): Buffer {
+  const secret = (process.env.SESSION_SECRET || '').trim();
+  if (!secret) throw new Error('SESSION_SECRET is not configured');
+  return Buffer.from(crypto.hkdfSync('sha256', Buffer.from(secret, 'utf-8'), Buffer.alloc(32), Buffer.from('loom-swa-bundle-v1'), 32));
+}
+
+/**
+ * Sign a short-lived anonymous bundle-download token. The SWA zipdeploy
+ * service fetches `appZipUrl` unauthenticated, so the download route is
+ * public-but-signed: HMAC over `${itemType}:${itemId}:${exp}` — nothing
+ * beyond the referenced item's generated bundle is reachable with it.
+ */
+export function signSwaBundleToken(itemType: string, itemId: string, ttlSecs = 1800): { exp: number; sig: string } {
+  const exp = Math.floor(Date.now() / 1000) + ttlSecs;
+  const sig = crypto.createHmac('sha256', bundleHmacKey()).update(`${itemType}:${itemId}:${exp}`).digest('base64url');
+  return { exp, sig };
+}
+
+export function verifySwaBundleToken(itemType: string, itemId: string, exp: number, sig: string): boolean {
+  if (!Number.isFinite(exp) || exp < Math.floor(Date.now() / 1000)) return false;
+  const expect = crypto.createHmac('sha256', bundleHmacKey()).update(`${itemType}:${itemId}:${exp}`).digest();
+  const got = Buffer.from(String(sig || ''), 'base64url');
+  return got.length === expect.length && crypto.timingSafeEqual(got, expect);
+}
+
+/**
+ * Published-app READ token (Power-BI publish-to-web semantics): embedded in
+ * the deployed bundle so anyone with the app URL can view its data — reads
+ * ONLY (list/aggregate/distinct); writes stay session-gated. Scoped to one
+ * item and revocable by bumping the item's `pubTokenVersion` state field
+ * (re-publish rotates; unpublish invalidates).
+ */
+export function signAppReadToken(itemId: string, tokenVersion: number): string {
+  const key = Buffer.from(crypto.hkdfSync('sha256', Buffer.from((process.env.SESSION_SECRET || '').trim(), 'utf-8'), Buffer.alloc(32), Buffer.from('loom-swa-app-read-v1'), 32));
+  return crypto.createHmac('sha256', key).update(`pub-read:${itemId}:${tokenVersion}`).digest('base64url');
+}
+
+export function verifyAppReadToken(itemId: string, tokenVersion: number, token: string): boolean {
+  const key = Buffer.from(crypto.hkdfSync('sha256', Buffer.from((process.env.SESSION_SECRET || '').trim(), 'utf-8'), Buffer.alloc(32), Buffer.from('loom-swa-app-read-v1'), 32));
+  const expect = crypto.createHmac('sha256', key).update(`pub-read:${itemId}:${tokenVersion}`).digest();
+  const got = Buffer.from(String(token || ''), 'base64url');
+  return got.length === expect.length && crypto.timingSafeEqual(got, expect);
+}
+
+/**
+ * Deploy zipped content to the Static Web App via the ARM
+ * `StaticSites_CreateZipDeploymentForStaticSite` action. `appZipUrl` must be
+ * fetchable by the SWA service (we hand it the signed public bundle route on
+ * this console — the estate storage accounts are PE-locked, so a SAS blob
+ * would be unreachable from SWA's fetcher).
+ */
+export async function deployZipToStaticSite(opts: {
+  sub: string; rg: string; name: string; appZipUrl: string; title: string;
+}): Promise<void> {
+  const armBase = `/subscriptions/${opts.sub}/resourceGroups/${opts.rg}/providers/Microsoft.Web/staticSites/${encodeURIComponent(opts.name)}`;
+  await armPost(`${armBase}/zipdeploy?api-version=${SWA_API}`, {
+    properties: { appZipUrl: opts.appZipUrl, deploymentTitle: opts.title, provider: 'LoomConsole' },
+  });
+}
+
+/**
+ * Poll the published site until it serves the Loom bundle instead of the SWA
+ * placeholder. Returns true once live within the budget; false = still
+ * propagating (callers surface an honest "deploying" status, never a fake
+ * success).
+ */
+export async function waitForContentLive(url: string, marker: string, budgetMs = 90_000): Promise<boolean> {
+  const deadline = Date.now() + budgetMs;
+  while (Date.now() < deadline) {
+    try {
+      const res = await fetch(url, { cache: 'no-store' });
+      const text = await res.text();
+      if (res.ok && text.includes(marker)) return true;
+    } catch { /* transient — keep polling */ }
+    await new Promise((r) => setTimeout(r, 5000));
+  }
+  return false;
 }

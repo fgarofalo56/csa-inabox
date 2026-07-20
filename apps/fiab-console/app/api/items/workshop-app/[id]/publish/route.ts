@@ -26,7 +26,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { loadOwnedItem, updateOwnedItem } from '../../../_lib/item-crud';
-import { slug, swaConfig, swaNotConfiguredError, mapSwaPublishError, publishStaticSite } from '@/lib/azure/swa-publish';
+import { slug, swaConfig, swaNotConfiguredError, mapSwaPublishError, publishStaticSite, signSwaBundleToken, deployZipToStaticSite, waitForContentLive } from '@/lib/azure/swa-publish';
 import { generateWorkshopBundle } from '@/lib/editors/_palantir-codegen';
 import type { WorkshopWidget, WorkshopVariable } from '@/lib/editors/workshop/_workshop-model';
 
@@ -88,6 +88,14 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     // ARM create + hostname poll + deployment-token retrieval (shared path).
     const { url, hostname, tokenRetrieved } = await publishStaticSite({ sub: cfg.sub, rg: cfg.rg, name: staticSiteName, location });
 
+    // REAL content deployment: hand the ARM zipdeploy action a signed,
+    // short-lived URL on this console that serves the regenerated bundle zip
+    // (see /api/pub/swa-bundle). Without this the SWA serves its placeholder.
+    const tok = signSwaBundleToken(ITEM_TYPE, id);
+    const appZipUrl = `${publicBase}/api/pub/swa-bundle?type=${ITEM_TYPE}&item=${encodeURIComponent(id)}&exp=${tok.exp}&sig=${encodeURIComponent(tok.sig)}`;
+    await deployZipToStaticSite({ sub: cfg.sub, rg: cfg.rg, name: staticSiteName, appZipUrl, title: `Loom publish ${new Date().toISOString()}` });
+    const contentLive = url ? await waitForContentLive(url, `<title>${app.displayName || 'Workshop app'}</title>`) : false;
+
     // Append a version record to Cosmos.
     const prior: WorkshopVersionRecord[] = Array.isArray(state.versions) ? (state.versions as WorkshopVersionRecord[]) : [];
     const version = `v${prior.length + 1}`;
@@ -99,7 +107,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       state: { ...state, staticSiteName, swaLocation: location, versions: [record, ...prior].slice(0, 50), lastPublishedAt: record.createdAt, lastPublishedUrl: url },
     });
 
-    return NextResponse.json({ ok: true, url, hostname, staticSiteName, version, tokenRetrieved, widgetCount: widgets.length, files });
+    return NextResponse.json({ ok: true, url, hostname, staticSiteName, version, tokenRetrieved, contentLive, widgetCount: widgets.length, files });
   } catch (e: unknown) {
     const mapped = mapSwaPublishError(e);
     return err(mapped.error, mapped.status, mapped.code, mapped.gate);

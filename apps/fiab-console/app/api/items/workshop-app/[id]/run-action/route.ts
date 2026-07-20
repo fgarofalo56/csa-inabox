@@ -46,8 +46,22 @@ const WRITE_OPS = new Set(['create', 'update', 'delete']);
 const ALL_OPS = new Set(['list', 'get', 'aggregate', 'distinct', 'create', 'update', 'delete']);
 const AGG_FNS = new Set(['count', 'sum', 'avg', 'min', 'max']);
 
+// CORS: the PUBLISHED app (Azure Static Web Apps origin) calls this route with
+// its embedded read-only app token. Access is gated by that token (or a
+// session), never by origin — so a permissive ACAO is safe and required.
+const CORS: Record<string, string> = {
+  'access-control-allow-origin': '*',
+  'access-control-allow-methods': 'POST, OPTIONS',
+  'access-control-allow-headers': 'content-type, authorization',
+  'access-control-max-age': '86400',
+};
+
+export function OPTIONS() {
+  return new NextResponse(null, { status: 204, headers: CORS });
+}
+
 function err(error: string, status: number, code?: string, gate?: Record<string, unknown>) {
-  return NextResponse.json({ ok: false, error, ...(code ? { code } : {}), ...(gate ? { gate } : {}) }, { status });
+  return NextResponse.json({ ok: false, error, ...(code ? { code } : {}), ...(gate ? { gate } : {}) }, { status, headers: CORS });
 }
 
 interface RunBody {
@@ -76,9 +90,6 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   // getApiSession); a read-only PAT is rejected for this mutating verb.
   const { getApiSession, enforcePatAccess } = await import('@/lib/auth/api-session');
   const s = await getApiSession(req);
-  if (!s) return err('unauthenticated', 401, 'unauthenticated');
-  const patBlock = enforcePatAccess(s, req.method);
-  if (patBlock) return patBlock;
   const { id } = await ctx.params;
   if (!id || id === 'new') return err('save the workshop app first', 400, 'no_id');
   const body = (await req.json().catch(() => ({}))) as RunBody;
@@ -88,12 +99,38 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   if (!entityType) return err('entityType is required', 400, 'bad_request');
   if (!ALL_OPS.has(op)) return err(`unsupported op "${op}"`, 400, 'bad_op');
 
-  const app = await loadOwnedItem(id, ITEM_TYPE, s.claims.oid);
-  if (!app) return err('workshop app not found', 404, 'not_found');
+  // Auth: browser session / PAT (full access, ownership-scoped) — OR the
+  // published app's embedded READ token (public-viewer path: reads only,
+  // scoped to this one item, revocable via state.pubTokenVersion).
+  let app: WorkspaceItem | null = null;
+  let onto: WorkspaceItem | null = null;
+  if (s) {
+    const patBlock = enforcePatAccess(s, req.method);
+    if (patBlock) return patBlock;
+    app = await loadOwnedItem(id, ITEM_TYPE, s.claims.oid);
+    if (!app) return err('workshop app not found', 404, 'not_found');
+  } else {
+    const bearer = (req.headers.get('authorization') || '').replace(/^Bearer\s+/i, '').trim();
+    if (!bearer) return err('unauthenticated', 401, 'unauthenticated');
+    if (WRITE_OPS.has(op)) {
+      return err('Write-back requires signing in to Loom — the published app token is read-only.', 403, 'pub_token_readonly');
+    }
+    const { verifyAppReadToken } = await import('@/lib/azure/swa-publish');
+    const { loadItemRaw } = await import('../../../_lib/item-crud');
+    const candidate = await loadItemRaw(id, ITEM_TYPE);
+    const ver = Number(((candidate?.state || {}) as Record<string, unknown>).pubTokenVersion) || 1;
+    if (!candidate || !verifyAppReadToken(id, ver, bearer)) return err('unauthenticated', 401, 'unauthenticated');
+    app = candidate;
+  }
   const boundOntologyId = String(((app.state || {}) as Record<string, unknown>).boundOntologyId || '');
   if (!boundOntologyId) return err('Bind an ontology to this Workshop app first.', 409, 'no_ontology');
 
-  const onto: WorkspaceItem | null = await loadOwnedItem(boundOntologyId, 'ontology', s.claims.oid);
+  if (s) {
+    onto = await loadOwnedItem(boundOntologyId, 'ontology', s.claims.oid);
+  } else {
+    const { loadItemRaw } = await import('../../../_lib/item-crud');
+    onto = await loadItemRaw(boundOntologyId, 'ontology');
+  }
   if (!onto) return err('bound ontology not found', 404, 'ontology_not_found');
   const bindings = (((onto.state || {}) as Record<string, unknown>).entityBindings as OntologyEntityBinding[]) || [];
   const binding = bindings.find((b) => (b.entityTypes || []).includes(entityType) && b.sourceKind === 'warehouse');
@@ -140,7 +177,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     const where = buildAtelierWhere(filters);
     try {
       const result = await executeQuery(target, `SELECT TOP (${top}) * FROM [${table}]${where.clause}`, 60_000, where.params.length ? where.params : undefined);
-      return NextResponse.json({ ok: true, op, entityType, columns: result.columns, rows: result.rows, rowCount: result.rows.length });
+      return NextResponse.json({ ok: true, op, entityType, columns: result.columns, rows: result.rows, rowCount: result.rows.length }, { headers: CORS });
     } catch (e: unknown) {
       return err(`Query failed: ${e instanceof Error ? e.message : String(e)}`, 502, 'query_failed');
     }
@@ -153,7 +190,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     try {
       const params: SynapseQueryParam[] = [{ name: 'k', value: keyValueRaw }];
       const result = await executeQuery(target, `SELECT TOP (1) * FROM [${table}] WHERE [${keyColumn}] = @k`, 60_000, params);
-      return NextResponse.json({ ok: true, op, entityType, columns: result.columns, rows: result.rows, rowCount: result.rows.length });
+      return NextResponse.json({ ok: true, op, entityType, columns: result.columns, rows: result.rows, rowCount: result.rows.length }, { headers: CORS });
     } catch (e: unknown) {
       return err(`Query failed: ${e instanceof Error ? e.message : String(e)}`, 502, 'query_failed');
     }
@@ -186,7 +223,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     }
     try {
       const result = await executeQuery(target, sql, 60_000, where.params.length ? where.params : undefined);
-      return NextResponse.json({ ok: true, op, entityType, columns: result.columns, rows: result.rows, rowCount: result.rows.length });
+      return NextResponse.json({ ok: true, op, entityType, columns: result.columns, rows: result.rows, rowCount: result.rows.length }, { headers: CORS });
     } catch (e: unknown) {
       return err(`Aggregate failed: ${e instanceof Error ? e.message : String(e)}`, 502, 'query_failed');
     }
@@ -202,7 +239,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     const sql = `SELECT DISTINCT TOP (${top}) [${col}] AS [value] FROM [${table}]${nullPredicate} ORDER BY [${col}]`;
     try {
       const result = await executeQuery(target, sql, 60_000, where.params.length ? where.params : undefined);
-      return NextResponse.json({ ok: true, op, entityType, column: col, columns: result.columns, rows: result.rows, rowCount: result.rows.length });
+      return NextResponse.json({ ok: true, op, entityType, column: col, columns: result.columns, rows: result.rows, rowCount: result.rows.length }, { headers: CORS });
     } catch (e: unknown) {
       return err(`Distinct failed: ${e instanceof Error ? e.message : String(e)}`, 502, 'query_failed');
     }
@@ -210,6 +247,9 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
 
   // ── WRITE ops (the core of "real CRUD") ───────────────────────────────────
   if (WRITE_OPS.has(op)) {
+    // Token-auth callers were rejected above; this narrows `s` for the
+    // lineage record below and hard-stops any future bypass.
+    if (!s) return err('unauthenticated', 401, 'unauthenticated');
     // Validate + collect column/value pairs for create/update.
     const cols: AtelierColumnValue[] = [];
     if (op === 'create' || op === 'update') {
@@ -254,7 +294,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
           action: `atelier-${op}`,
         });
       } catch { /* lineage is best-effort; never fail the write on edge-record error */ }
-      return NextResponse.json({ ok: true, op, entityType, recordsAffected: result.recordsAffected });
+      return NextResponse.json({ ok: true, op, entityType, recordsAffected: result.recordsAffected }, { headers: CORS });
     } catch (e: unknown) {
       return err(`Write failed: ${e instanceof Error ? e.message : String(e)}`, 502, 'write_failed');
     }
