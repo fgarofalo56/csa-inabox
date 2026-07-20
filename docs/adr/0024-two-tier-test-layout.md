@@ -61,7 +61,7 @@ review cohesion).
 [tool.pytest.ini_options]
 testpaths = ["tests", "portal/shared/portal_tests", "csa_platform"]
 pythonpath = ["."]
-addopts = "--tb=short -q --strict-markers --import-mode=importlib --ignore=csa_platform/streaming/tests --ignore=csa_platform/multi_synapse/tests"
+addopts = "--tb=short -q --strict-markers --import-mode=importlib --ignore=csa_platform/streaming/tests"
 ```
 
 Three non-obvious bits:
@@ -85,10 +85,24 @@ Three non-obvious bits:
 
 ### Currently ignored
 
-`csa_platform/streaming/tests/` and `csa_platform/multi_synapse/tests/`
-import `azure.storage.filedatalake` which isn't pinned on any
-project extra. Until the dep is declared on the `streaming` extra,
-they're suppressed via the `--ignore` flags above.
+`csa_platform/streaming/tests/` is ignored (`--ignore` in `addopts`) because
+`csa_platform/streaming/__init__.py` **eager-imports** `batch_layer`,
+`event_processor`, `serving_layer`, and `speed_layer`, which pull
+`azure.storage.filedatalake`, `azure.eventhub.extensions.checkpointstoreblobaio`,
+and `azure.kusto.data` at import time. Those three are now declared on the
+`[streaming]` optional-dependency extra (WS-F2, 2026-07-20), but the extra is not
+yet added to the Test Suite install line, so `import csa_platform.streaming` still
+fails with `ModuleNotFoundError` in CI. Adding `streaming` to that install line +
+dropping the `--ignore` (and verifying the required check stays green on the
+3-version matrix) is the remaining half of WS-F2.
+
+`csa_platform/multi_synapse/tests/` was **re-enabled** in the same wave — its
+`azure.*` imports are all lazy (inside methods, mocked in tests), so it needs no
+extra deps and runs green in the full CI suite (1829 passed at re-enable). Note:
+run standalone it can trip a namespace-package resolution artifact under
+`--import-mode=importlib` when it is the *first* module to touch
+`azure.identity.aio`; in the full suite an earlier `tests/` module imports and
+caches it first, so this does not occur in CI's fixed testpaths order.
 
 ## Consequences
 

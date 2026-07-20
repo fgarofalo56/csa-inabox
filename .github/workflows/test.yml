@@ -146,12 +146,16 @@ jobs:
         env:
           ENVIRONMENT: local
         run: |
+          # --cov-fail-under is the ENFORCED gate (the pytest-cov CLI flag
+          # overrides pyproject.toml's fail_under). Keep this in lockstep with
+          # `fail_under` in pyproject.toml [tool.coverage.report]. Raised
+          # 60 → 75 on 2026-07-20 (WS-F3); measured gated coverage was 81.33%.
           pytest \
             --cov \
             --cov-report=xml \
             --cov-report=term-missing \
             --cov-report=html \
-            --cov-fail-under=60
+            --cov-fail-under=75
 
       - name: Upload coverage report (xml + html)
         if: always() && steps.relevant.outputs.run == 'true'

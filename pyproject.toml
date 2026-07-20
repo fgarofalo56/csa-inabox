@@ -274,6 +274,16 @@ streaming = [
     "azure-eventhub>=5.11.0,<6.0.0",
     "azure-storage-blob>=12.20.0,<13.0.0",
     "azure-identity>=1.17.0,<2.0.0",
+    # EAGER imports pulled by csa_platform.streaming.__init__ (batch_layer,
+    # event_processor, serving_layer, speed_layer) — these MUST be declared
+    # here or `import csa_platform.streaming` fails at import time (this is the
+    # WS-F2 blocker that keeps streaming/tests behind a pytest --ignore):
+    #   batch_layer      -> azure.storage.filedatalake.aio
+    #   event_processor  -> azure.eventhub.extensions.checkpointstoreblobaio
+    #   serving/speed    -> azure.kusto.data
+    "azure-storage-file-datalake>=12.14.0,<13.0.0",
+    "azure-eventhub-checkpointstoreblob-aio>=1.1.4,<2.0.0",
+    "azure-kusto-data>=4.5.0,<7.0.0",
     # HTTP client — used by ConfluentCompatRegistry (schema registry)
     # and FabricRTISource (Fabric RTI REST API, ADR-0018).
     "httpx>=0.27.0,<1.0.0",
@@ -467,11 +477,26 @@ indent-style = "space"
 # between tests/contracts/test_*.py and csa_platform/<pkg>/tests/test_*.py.
 # pythonpath ensures from portal.shared.api... resolves at collection.
 # --ignore paths track to-fix items (see ADR 0024 "Currently ignored" section).
+#
+# WS-F2 (2026-07-20): csa_platform/multi_synapse/tests was RE-ENABLED — its
+# azure.* imports are all lazy (inside methods, mocked in tests), so it needs no
+# extra deps and runs green in the full CI suite (verified: 1829 passed).
+#
+# csa_platform/streaming/tests remains ignored because
+# csa_platform/streaming/__init__.py EAGER-imports batch_layer / event_processor
+# / serving_layer / speed_layer, which pull azure-storage-file-datalake,
+# azure-eventhub-checkpointstoreblob-aio, and azure-kusto-data at import time.
+# Those three are now declared on the [streaming] optional-dependency extra
+# (below), but the extra is NOT yet added to the Test Suite install line
+# (.github/workflows/test.yml), so importing csa_platform.streaming still fails
+# with ModuleNotFoundError in CI. Re-enabling it is the remaining half of WS-F2:
+# add `streaming` to that pip install line and drop this --ignore in the same PR,
+# then verify the required Python check stays green on the 3-version matrix.
 testpaths = ["tests", "portal/shared/portal_tests", "csa_platform"]
 pythonpath = ["."]
 python_files = ["test_*.py", "*_test.py"]
 python_functions = ["test_*"]
-addopts = "--tb=short -q --strict-markers --import-mode=importlib --ignore=csa_platform/streaming/tests --ignore=csa_platform/multi_synapse/tests"
+addopts = "--tb=short -q --strict-markers --import-mode=importlib --ignore=csa_platform/streaming/tests"
 markers = [
     "live: requires a live Azure connection (az login)",
 ]
@@ -513,16 +538,25 @@ omit = [
 # ratchets upward as the test suite grows — do not lower it without an
 # explicit justification in the commit message.
 #
+# NOTE: the pytest-cov CLI flag `--cov-fail-under` in the Test Suite workflow
+# OVERRIDES this value at runtime, so the two MUST be kept in lockstep (they
+# were previously drifted: CLI 60 vs declared 65). Both are now 75.
+#
 # Ratchet history:
 #   60 → 65 on 2026-05-17 (post-audit; the suite has matured well past 60 and
 #       was hiding regressions).
+#   65 → 75 on 2026-07-20 (WS-F3). Measured gated coverage was 81.33% (CI
+#       command: `pytest --cov`), giving a ~6-point safety margin at 75 — the
+#       repo ratchet policy requires 5+ points of headroom, and 75 is the top
+#       of the documented 65→68→70→75 ladder. floor(actual)=81 was available
+#       but rejected: a 0.33-point margin is too brittle for the 3-version CI
+#       matrix. The CI `--cov-fail-under` flag was raised to 75 in the same PR.
 #
-# Next targets (raise one notch only after CI is consistently 5+ points
-# above the current threshold for a full release cycle):
-#   65 → 70 once streaming/data_activator/metadata_framework test suites
-#           are consolidated into the root test runner.
-#   70 → 75 after portal backend reaches parity with platform packages.
-fail_under = 65
+# Next target (raise one notch only after CI is consistently 5+ points above
+# the current threshold for a full release cycle):
+#   75 → 80 once the streaming / portal-backend suites are consolidated into
+#           the gated coverage source set.
+fail_under = 75
 show_missing = true
 skip_covered = false
 exclude_lines = [
