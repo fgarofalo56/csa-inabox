@@ -35,6 +35,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type
 import {
   Body1, Caption1, Subtitle2, Title3, Badge, Button, Input, Textarea, Field, Dropdown, Option,
   Spinner, Switch, Tab, TabList, Tooltip, Divider,
+  Accordion, AccordionItem, AccordionHeader, AccordionPanel,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   MessageBar, MessageBarBody, MessageBarTitle,
   Dialog, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
@@ -44,7 +45,7 @@ import {
   Add20Regular, Dismiss16Regular, Play20Regular, ArrowSync20Regular,
   Table20Regular, DataUsage20Regular, NumberSymbol20Regular, DocumentText20Regular,
   Apps20Regular, Filter20Regular, Form20Regular, Cursor20Regular, Edit20Regular,
-  ArrowMaximize20Regular, Flash20Regular, Database20Regular, Code20Regular, Sparkle20Regular, ChevronRight16Regular,
+  ArrowMaximize20Regular, Flash20Regular, Database20Regular, Code20Regular, Sparkle20Regular, ChevronRight16Regular, ChevronDown16Regular,
 } from '@fluentui/react-icons';
 import { LoomChart, type LoomChartType } from '@/lib/components/charts/loom-chart';
 import { EmptyState } from '@/lib/components/empty-state';
@@ -118,6 +119,11 @@ const DEFAULT_SIZE: Record<WorkshopWidgetKind, { w: number; h: number }> = {
   'mini-table': { w: 448, h: 176 },
   breadcrumb: { w: 448, h: 64 },
   'json-view': { w: 448, h: 176 },
+  tabs: { w: 448, h: 192 },
+  accordion: { w: 448, h: 192 },
+  sparkline: { w: 224, h: 80 },
+  'video-embed': { w: 448, h: 288 },
+  'map-embed': { w: 448, h: 288 },
 };
 
 const KIND_META: Record<WorkshopWidgetKind, { label: string; icon: ReactElement; hint: string; data: boolean }> = {
@@ -153,6 +159,11 @@ const KIND_META: Record<WorkshopWidgetKind, { label: string; icon: ReactElement;
   'mini-table': { label: 'Mini Table', icon: <Table20Regular />, hint: 'A small static table (CSV: first line headers)', data: false },
   breadcrumb: { label: 'Breadcrumb', icon: <ChevronRight16Regular />, hint: 'A navigation trail of segments', data: false },
   'json-view': { label: 'JSON', icon: <Code20Regular />, hint: 'Pretty-printed JSON block', data: false },
+  tabs: { label: 'Tabs', icon: <Apps20Regular />, hint: 'A tab strip with per-tab text content (v1 — child widgets tracked)', data: false },
+  accordion: { label: 'Accordion', icon: <ChevronDown16Regular />, hint: 'Collapsible titled sections', data: false },
+  sparkline: { label: 'Sparkline', icon: <DataUsage20Regular />, hint: 'A tiny inline trend line from a number list', data: false },
+  'video-embed': { label: 'Video', icon: <Play20Regular />, hint: 'Embed an https video player (sandboxed iframe)', data: false },
+  'map-embed': { label: 'Map', icon: <ArrowMaximize20Regular />, hint: 'Embed an https map view (sandboxed iframe)', data: false },
 };
 
 const CHART_TYPES: LoomChartType[] = ['column', 'bar', 'line', 'area', 'pie', 'donut'];
@@ -217,6 +228,22 @@ function fmtMetric(v: number): string {
   if (Math.abs(v) >= 1_000_000) return (v / 1_000_000).toLocaleString(undefined, { maximumFractionDigits: 1 }) + 'M';
   if (Math.abs(v) >= 1_000) return (v / 1_000).toLocaleString(undefined, { maximumFractionDigits: 1 }) + 'K';
   return v.toLocaleString(undefined, { maximumFractionDigits: 2 });
+}
+
+/** Tabs widget (v1) — tab strip + per-tab text content; child-widget nesting tracked. */
+function TabsWidget({ items, variables, runtime }: { items: string; variables: WorkshopVariable[]; runtime: Record<string, RuntimeVarValue> }) {
+  const entries = items.split('|').map((p) => p.trim()).filter(Boolean).map((p) => { const i = p.indexOf(':'); return i < 0 ? { t: p, b: '' } : { t: p.slice(0, i).trim(), b: p.slice(i + 1).trim() }; });
+  const [active, setActive] = useState(0);
+  if (!entries.length) return <Caption1>Add "Title: content | Title: content" entries in the inspector.</Caption1>;
+  const cur = entries[Math.min(active, entries.length - 1)];
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, minWidth: 0 }}>
+      <TabList selectedValue={String(Math.min(active, entries.length - 1))} onTabSelect={(_, d) => setActive(Number(d.value))}>
+        {entries.map((e, i) => <Tab key={i} value={String(i)}>{e.t}</Tab>)}
+      </TabList>
+      <Body1>{renderText(cur.b, variables, runtime)}</Body1>
+    </div>
+  );
 }
 
 /** Render markdown-lite with {{variable}} interpolation from current runtime values. */
@@ -518,6 +545,40 @@ function WidgetBody({
     return <div>{renderText(widget.text || '_Empty text widget — set its content in the inspector._', variables, runtime)}</div>;
   }
 
+  if (widget.kind === 'tabs') {
+    return <TabsWidget items={String(widget.tabItems || '')} variables={variables} runtime={runtime} />;
+  }
+  if (widget.kind === 'accordion') {
+    const sections = String(widget.accordionItems || '').split('\n').map((l) => l.trim()).filter(Boolean).map((l) => { const i = l.indexOf(':'); return i < 0 ? { t: l, b: '' } : { t: l.slice(0, i).trim(), b: l.slice(i + 1).trim() }; });
+    if (!sections.length) return <Caption1 className={s.hint}>Add "Title: body" lines in the inspector.</Caption1>;
+    return (
+      <Accordion multiple collapsible>
+        {sections.map((sec, i) => (
+          <AccordionItem key={i} value={String(i)}>
+            <AccordionHeader>{sec.t}</AccordionHeader>
+            <AccordionPanel><Body1>{renderText(sec.b, variables, runtime)}</Body1></AccordionPanel>
+          </AccordionItem>
+        ))}
+      </Accordion>
+    );
+  }
+  if (widget.kind === 'sparkline') {
+    const nums = String(widget.sparkValues || '').split(',').map((x) => Number(x.trim())).filter((n) => Number.isFinite(n));
+    if (nums.length < 2) return <Caption1 className={s.hint}>Add a comma list of numbers in the inspector.</Caption1>;
+    const min = Math.min(...nums); const max = Math.max(...nums); const span = max - min || 1;
+    const W = 200; const H = 40;
+    const pts = nums.map((n, i) => `${(i / (nums.length - 1)) * W},${H - ((n - min) / span) * H}`).join(' ');
+    return (
+      <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', maxHeight: '48px' }} aria-label="Sparkline">
+        <polyline points={pts} fill="none" stroke={tokens.colorBrandStroke1} strokeWidth="2" />
+      </svg>
+    );
+  }
+  if (widget.kind === 'video-embed' || widget.kind === 'map-embed') {
+    const src = (widget.embedUrl || '').trim();
+    if (!/^https:\/\//i.test(src)) return <Caption1 className={s.hint}>Set an https embed URL in the inspector.</Caption1>;
+    return <iframe src={src} title={widget.title} style={{ width: '100%', height: '100%', border: 'none' }} sandbox="allow-scripts allow-same-origin allow-presentation" allowFullScreen />;
+  }
   if (widget.kind === 'stat-pair') {
     const parse = (v: string | undefined) => { const [l, ...r] = String(v || '').split('='); return { l: (l || '').trim(), v: String(renderText(r.join('='), variables, runtime)) }; };
     const a = parse(widget.statLeft); const b = parse(widget.statRight);
@@ -943,6 +1004,18 @@ function WidgetInspector({
         </Field>
       )}
 
+      {widget.kind === 'tabs' && (
+        <Field label="Tabs" hint={'"Title: content | Title: content" — content supports {{variableName}}. Child widgets per tab are tracked as a follow-up.'}><Textarea value={widget.tabItems || ''} onChange={(_, d) => onChange({ tabItems: d.value })} rows={4} resize="vertical" placeholder={'Overview: Key numbers here | Details: More depth here'} /></Field>
+      )}
+      {widget.kind === 'accordion' && (
+        <Field label="Sections" hint={'One "Title: body" per line; body supports {{variableName}}.'}><Textarea value={widget.accordionItems || ''} onChange={(_, d) => onChange({ accordionItems: d.value })} rows={5} resize="vertical" placeholder={'FAQ 1: Answer one\nFAQ 2: Answer two'} /></Field>
+      )}
+      {widget.kind === 'sparkline' && (
+        <Field label="Values" hint="Comma-separated numbers."><Input value={widget.sparkValues || ''} onChange={(_, d) => onChange({ sparkValues: d.value })} placeholder="3, 5, 2, 8, 6, 9" /></Field>
+      )}
+      {(widget.kind === 'video-embed' || widget.kind === 'map-embed') && (
+        <Field label="Embed URL (https)" hint="https:// only — sandboxed iframe."><Input value={widget.embedUrl || ''} onChange={(_, d) => onChange({ embedUrl: d.value })} placeholder="https://…" /></Field>
+      )}
       {widget.kind === 'stat-pair' && (
         <>
           <Field label="Left stat" hint="Label=value; value supports {{variableName}}."><Input value={widget.statLeft || ''} onChange={(_, d) => onChange({ statLeft: d.value })} placeholder="Orders=42" /></Field>
@@ -1310,6 +1383,9 @@ export function WorkshopAppBuilder({ id, entityTypes, widgets, variables, onWidg
       ...(kind === 'mini-table' ? { miniTable: 'Region, Total\nWest, 42\nEast, 17' } : {}),
       ...(kind === 'breadcrumb' ? { crumbs: 'Home, Sales, Q3' } : {}),
       ...(kind === 'json-view' ? { json: '{"region": "West", "total": 42}' } : {}),
+      ...(kind === 'tabs' ? { tabItems: 'Overview: Key numbers here | Details: More depth here' } : {}),
+      ...(kind === 'accordion' ? { accordionItems: 'FAQ 1: Answer one\nFAQ 2: Answer two' } : {}),
+      ...(kind === 'sparkline' ? { sparkValues: '3, 5, 2, 8, 6, 9' } : {}),
     };
     onWidgetsChange([...widgets, widget]);
     setSelectedId(wid);

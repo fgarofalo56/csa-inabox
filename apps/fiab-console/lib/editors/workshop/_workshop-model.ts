@@ -27,7 +27,7 @@ export interface WorkshopVariable {
   defaultValue?: string;
 }
 
-export type WorkshopWidgetKind = 'table' | 'chart' | 'metric' | 'filter' | 'form' | 'button' | 'text' | 'image' | 'link' | 'divider' | 'badge' | 'iframe' | 'heading' | 'progress' | 'spacer' | 'timestamp' | 'kpi-row' | 'gauge' | 'callout' | 'quote' | 'rating' | 'tag-list' | 'delta' | 'checklist' | 'avatar' | 'code-block' | 'key-value' | 'countdown' | 'stat-pair' | 'mini-table' | 'breadcrumb' | 'json-view';
+export type WorkshopWidgetKind = 'table' | 'chart' | 'metric' | 'filter' | 'form' | 'button' | 'text' | 'image' | 'link' | 'divider' | 'badge' | 'iframe' | 'heading' | 'progress' | 'spacer' | 'timestamp' | 'kpi-row' | 'gauge' | 'callout' | 'quote' | 'rating' | 'tag-list' | 'delta' | 'checklist' | 'avatar' | 'code-block' | 'key-value' | 'countdown' | 'stat-pair' | 'mini-table' | 'breadcrumb' | 'json-view' | 'tabs' | 'accordion' | 'sparkline' | 'video-embed' | 'map-embed';
 
 export interface WorkshopWidgetLayout { x: number; y: number; w: number; h: number }
 
@@ -125,6 +125,15 @@ export interface WorkshopWidget {
   crumbs?: string;
   // json-view — JSON text pretty-printed (or shown raw when invalid).
   json?: string;
+  // tabs — "|"-separated "Title: content" entries; v1 renders a tab strip with
+  // per-tab text content (full child-widget nesting tracked as a follow-up).
+  tabItems?: string;
+  // accordion — newline "Title: body" entries (Fluent Accordion).
+  accordionItems?: string;
+  // sparkline — comma list of numbers rendered as a tiny inline line.
+  sparkValues?: string;
+  // video-embed / map-embed — https-only embed URL.
+  embedUrl?: string;
   // button + table events
   events?: WorkshopEvent[];
 }
