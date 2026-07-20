@@ -246,6 +246,11 @@ function renderText(text: string, variables: WorkshopVariable[], runtime: Record
 
 const useStyles = makeStyles({
   root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minWidth: 0 },
+  hrDivider: { border: 'none', borderTop: `1px solid ${tokens.colorNeutralStroke2}`, width: '100%' },
+  quoteBlock: { margin: '0', paddingLeft: tokens.spacingHorizontalM, borderLeft: `3px solid ${tokens.colorBrandStroke1}`, color: tokens.colorNeutralForeground2, fontStyle: 'italic' },
+  miniTh: { textAlign: 'left', padding: tokens.spacingVerticalXS, borderBottom: `1px solid ${tokens.colorNeutralStroke2}` },
+  miniTd: { padding: tokens.spacingVerticalXS, borderBottom: `1px solid ${tokens.colorNeutralStroke3}` },
+  avatarCircle: { width: '40px', height: '40px', borderRadius: '50%', backgroundColor: tokens.colorBrandBackground, color: tokens.colorNeutralForegroundOnBrand, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
   modeBar: {
     display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM, flexWrap: 'wrap',
     padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalM}`,
@@ -529,8 +534,8 @@ function WidgetBody({
     const rows = lines.slice(1).map((l) => l.split(',').map((c) => c.trim()));
     return (
       <table style={{ borderCollapse: 'collapse', width: '100%' }}>
-        <thead><tr>{heads.map((h, i) => <th key={i} style={{ textAlign: 'left', padding: tokens.spacingVerticalXS, borderBottom: `1px solid ${tokens.colorNeutralStroke2}` }}><Caption1>{h}</Caption1></th>)}</tr></thead>
-        <tbody>{rows.map((r, ri) => <tr key={ri}>{heads.map((_, ci) => <td key={ci} style={{ padding: tokens.spacingVerticalXS, borderBottom: `1px solid ${tokens.colorNeutralStroke3}` }}><Caption1>{r[ci] ?? ''}</Caption1></td>)}</tr>)}</tbody>
+        <thead><tr>{heads.map((h, i) => <th key={i} className={s.miniTh}><Caption1>{h}</Caption1></th>)}</tr></thead>
+        <tbody>{rows.map((r, ri) => <tr key={ri}>{heads.map((_, ci) => <td key={ci} className={s.miniTd}><Caption1>{r[ci] ?? ''}</Caption1></td>)}</tr>)}</tbody>
       </table>
     );
   }
@@ -542,14 +547,14 @@ function WidgetBody({
   if (widget.kind === 'json-view') {
     let pretty = String(widget.json || '');
     try { pretty = JSON.stringify(JSON.parse(pretty), null, 2); } catch { /* show raw */ }
-    return <pre style={{ margin: 0, padding: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusMedium, backgroundColor: tokens.colorNeutralBackground3, fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, overflowX: 'auto' }}>{pretty || '{}'}</pre>;
+    return <pre style={{ margin: '0', padding: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusMedium, backgroundColor: tokens.colorNeutralBackground3, fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, overflowX: 'auto' }}>{pretty || '{}'}</pre>;
   }
   if (widget.kind === 'avatar') {
     const name = String(renderText(widget.avatarName || widget.title, variables, runtime));
     const initials = name.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]?.toUpperCase() || '').join('') || '?';
     return (
       <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS }}>
-        <div style={{ width: '40px', height: '40px', borderRadius: '50%', backgroundColor: tokens.colorBrandBackground, color: tokens.colorNeutralForegroundOnBrand, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+        <div className={s.avatarCircle}>
           <Subtitle2>{initials}</Subtitle2>
         </div>
         <div><Body1 block>{name}</Body1>{widget.avatarCaption && <Caption1>{widget.avatarCaption}</Caption1>}</div>
@@ -557,7 +562,7 @@ function WidgetBody({
     );
   }
   if (widget.kind === 'code-block') {
-    return <pre style={{ margin: 0, padding: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusMedium, backgroundColor: tokens.colorNeutralBackground3, fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, overflowX: 'auto' }}>{widget.code || '// code'}</pre>;
+    return <pre style={{ margin: '0', padding: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusMedium, backgroundColor: tokens.colorNeutralBackground3, fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, overflowX: 'auto' }}>{widget.code || '// code'}</pre>;
   }
   if (widget.kind === 'key-value') {
     const rows = String(widget.keyValues || '').split('\n').map((l) => l.trim()).filter(Boolean).map((l) => { const i = l.indexOf(':'); return i < 0 ? { k: l, v: '' } : { k: l.slice(0, i).trim(), v: String(renderText(l.slice(i + 1).trim(), variables, runtime)) }; });
@@ -646,7 +651,7 @@ function WidgetBody({
     return <MessageBar intent={widget.calloutIntent || 'info'}><MessageBarBody>{renderText(widget.text || widget.title, variables, runtime)}</MessageBarBody></MessageBar>;
   }
   if (widget.kind === 'quote') {
-    return <blockquote style={{ margin: 0, paddingLeft: tokens.spacingHorizontalM, borderLeft: `3px solid ${tokens.colorBrandStroke1}`, color: tokens.colorNeutralForeground2, fontStyle: 'italic' }}>{renderText(widget.text || widget.title, variables, runtime)}</blockquote>;
+    return <blockquote className={s.quoteBlock}>{renderText(widget.text || widget.title, variables, runtime)}</blockquote>;
   }
   if (widget.kind === 'heading') {
     const lvl = widget.headingLevel || 2;
@@ -674,7 +679,7 @@ function WidgetBody({
     return <Caption1>Last refreshed {new Date().toLocaleString()}</Caption1>;
   }
   if (widget.kind === 'divider') {
-    return <hr style={{ border: 'none', borderTop: `1px solid ${tokens.colorNeutralStroke2}`, width: '100%' }} aria-label="Divider" />;
+    return <hr className={s.hrDivider} aria-label="Divider" />;
   }
   if (widget.kind === 'badge') {
     return <Badge appearance="filled" color={widget.badgeColor || 'brand'}>{renderText(widget.text || widget.title, variables, runtime)}</Badge>;
