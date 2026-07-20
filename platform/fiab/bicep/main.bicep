@@ -139,6 +139,12 @@ param loomDomainGroupProvisioningEnabled bool = false
 @description('Enable OneLake shortcuts to SharePoint document libraries / OneDrive folders via Microsoft Graph (lakehouse editor → New shortcut → SharePoint / OneDrive). Requires the Console UAMI admin-consented for Sites.Read.All + Files.Read.All (scripts/csa-loom/grant-shortcut-graph-approles.sh). Defaults off — the bootstrap workflow flips the AppRoles, then operators re-deploy with this true. When false the SharePoint source renders but browse/create return 503 with the exact remediation (no mock data). Azure-native parity with Fabric OneLake OneDrive/SharePoint shortcuts; NO Fabric dependency.')
 param loomSharepointShortcutsEnabled bool = false
 
+@description('Enable workspace ↔ Microsoft 365 group linking (workspace settings → "Teams and SharePoint" tab). When true, sets LOOM_WORKSPACE_M365_LINK=true on the Console; the Console UAMI additionally needs the Group.ReadWrite.All Graph AppRole to CREATE a group for a workspace (linking an EXISTING group needs only Group.Read.All, already covered by the identity-picker grant). Defaults off so existing deployments do not get a surprise consent prompt. Threaded to the admin plane → loomWorkspaceM365LinkEnabled. Azure-native (Microsoft Graph), no Fabric dependency — works in GCC-High via graph.microsoft.us.')
+param loomWorkspaceM365LinkEnabled bool = false
+
+@description('Expose the unified Fabric IQ MCP tool surface (/api/iq/mcp) to EXTERNAL agents (Microsoft Agent 365, Azure AI Foundry, Copilot Studio) via Bearer-token auth. Console users always reach it via their MSAL session; this flag only gates the external token path. When true the Console gets LOOM_IQ_MCP_ENABLED=true plus the shared LOOM_INTERNAL_TOKEN used as the default Bearer secret. Threaded to the admin plane → loomIqMcpEnabled. Built-in Loom tool surface — no Fabric dependency.')
+param loomIqMcpEnabled bool = false
+
 @description('Apache Atlas on AKS deployment (IL5 only)')
 param atlasOnAksEnabled bool = false
 
@@ -1228,6 +1234,8 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
     loomIdentityPickerEnabled: loomIdentityPickerEnabled
     loomDomainGroupProvisioningEnabled: loomDomainGroupProvisioningEnabled
     loomSharepointShortcutsEnabled: loomSharepointShortcutsEnabled
+    loomWorkspaceM365LinkEnabled: loomWorkspaceM365LinkEnabled
+    loomIqMcpEnabled: loomIqMcpEnabled
     loomMsalClientId: loomMsalClientId
     loomMsalClientSecret: loomMsalClientSecret
     loomSessionSecret: loomSessionSecret

@@ -194,7 +194,14 @@ param aiFoundryEnabled = true
 param contentSafetyEnabled = true
 param apimEnabled = true
 param hubFirewallEnabled = true
-param aiSearchEnabled = false
+// Azure AI Search IS GA in the USGov regions this param targets (US Gov
+// Virginia + US Gov Arizona). Operator green-light (gov 89/89 provision drive,
+// 2026-07-20): stand it up so the AI Search index / RAG surfaces
+// (svc-aisearch → LOOM_AI_SEARCH_SERVICE) are backed by a real service instead
+// of honest-gating. If a target region hits capacity at deploy time the ARM
+// call fails honestly (not vaporware) — flip back to false or set the EXISTING_*
+// AI Search vars to reuse a tenant service.
+param aiSearchEnabled = true
 // Azure Analysis Services is NOT available in GCC-High — pin OFF (main.bicep now
 // defaults aasEnabled=true for Commercial day-one). The semantic-model surfaces
 // fall back to Synapse-Serverless / Loom-native here per the documented boundary.
@@ -235,3 +242,23 @@ param loomSynapseEnabled = true
 param loomDatabricksEnabled = true
 param loomDataFactoryEnabled = true
 param loomSelfHostedIrEnabled = true
+
+// =====================================================================
+// Graph-native / built-in surfaces — ON in GCC-High (gov 89/89 provision
+// drive, 2026-07-20). None of these require Microsoft Fabric; all run on
+// Azure-native / Microsoft Graph backends that work in the Gov boundary
+// (Graph via graph.microsoft.us, built-in Loom MCP tool surface).
+// =====================================================================
+// Workspace ↔ M365 group link (svc-m365-link → LOOM_WORKSPACE_M365_LINK).
+// Backed by Microsoft Graph. The Console UAMI needs the Group.ReadWrite.All
+// AppRole to CREATE a group (scripts/csa-loom/grant-identity-graph-approles.sh
+// + admin consent) — a real, documented data-plane grant, not a fake config.
+param loomWorkspaceM365LinkEnabled = true
+// OneDrive / SharePoint OneLake shortcuts (svc-sharepoint-shortcuts →
+// LOOM_SHAREPOINT_SHORTCUTS_ENABLED). Backed by Microsoft Graph
+// (Sites.Read.All + Files.Read.All AppRoles — grant-shortcut-graph-approles.sh).
+param loomSharepointShortcutsEnabled = true
+// Fabric IQ MCP bridge external-token surface (svc-iq-mcp → LOOM_IQ_MCP_ENABLED).
+// Built-in Loom tool surface exposed to external agents via Bearer auth; no
+// external resource required.
+param loomIqMcpEnabled = true

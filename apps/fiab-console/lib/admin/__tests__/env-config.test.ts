@@ -158,7 +158,10 @@ describe('admin/env-config registry', () => {
     // + LOOM_AOAI_MINI_DEPLOYMENT — the model tier router's reasoning + mini tier
     // deployments, admin-tunable + optionalDefault: unset silently rides the single
     // default AOAI deployment for every turn, fully functional).
-    expect(EDITABLE_ENV.length).toBe(137);
+    // Bumped to 138 by the Gov-89 AAS recognition: LOOM_SEMANTIC_BACKEND joins
+    // the svc-aas anyOf (the Loom-native tabular layer is the DEFAULT engine;
+    // AAS is an optional Commercial/GCC fast-path, unavailable in GCC-High).
+    expect(EDITABLE_ENV.length).toBe(138);
   });
 
   it('surfaces the wave-2 env vars as settable (previously dropped by the whitelist)', () => {

@@ -1038,10 +1038,20 @@ export const ENV_CHECKS: EnvSpec[] = [
   //    matching live probe (lib/admin/health-probes.ts) exercises the real call. ──
   {
     id: 'svc-aas', category: 'azure-services', title: 'Analysis Services (semantic-model fast path)', severity: 'optional',
-    anyOf: [['LOOM_AAS_SERVER', 'LOOM_AAS_SERVER_NAME', 'LOOM_AAS_XMLA_ENDPOINT', 'LOOM_POWERBI_XMLA_ENDPOINT']], warnOnMiss: true,
-    remediation: 'Set LOOM_AAS_SERVER (asazure://… URI) or LOOM_AAS_SERVER_NAME so semantic models / reports use the AAS tabular fast path. Without it the Loom-native tabular layer falls back to Synapse Serverless (slower cold queries, still functional). No Power BI / Fabric required.',
-    provisionedBy: 'modules/admin-plane/aas.bicep (aasEnabled → the loom-aas server) → apps[] env LOOM_AAS_SERVER',
-    role: 'Analysis Services Admin (Console UAMI) on the server (wired by the module)',
+    // The Loom-native tabular layer (LOOM_SEMANTIC_BACKEND, always emitted —
+    // default 'loom-native') is the DEFAULT semantic engine and is fully
+    // functional (Synapse-Serverless / loom-columnar). It satisfies this gate
+    // on its own, so the semantic-model / report surfaces are never blocked by
+    // the absence of a real Analysis Services server. AAS is an OPT-IN fast
+    // path (Commercial/GCC only — NOT available in GCC-High / IL5 / DoD); when
+    // present it is used, otherwise the Loom-native layer serves DAX-class
+    // queries. Keeping LOOM_SEMANTIC_BACKEND in the anyOf makes this an honest,
+    // always-satisfied gate (no fake AAS server), per no-fabric-dependency.md +
+    // the gov 89/89 provision drive (2026-07-20).
+    anyOf: [['LOOM_AAS_SERVER', 'LOOM_AAS_SERVER_NAME', 'LOOM_AAS_XMLA_ENDPOINT', 'LOOM_POWERBI_XMLA_ENDPOINT', 'LOOM_SEMANTIC_BACKEND']], warnOnMiss: true,
+    remediation: 'The Loom-native tabular layer (LOOM_SEMANTIC_BACKEND, default "loom-native") is the DEFAULT engine and serves semantic models / reports fully — no configuration required. Azure Analysis Services is an OPTIONAL fast path (Commercial / GCC only; NOT available in GCC-High / IL5). To use it, set LOOM_AAS_SERVER (asazure://… URI) or LOOM_AAS_SERVER_NAME. No Power BI / Fabric required.',
+    provisionedBy: 'modules/admin-plane/main.bicep (LOOM_SEMANTIC_BACKEND = loomSemanticBackend, always emitted — the Loom-native tabular default) + modules/admin-plane/aas.bicep (aasEnabled → the opt-in loom-aas fast-path server, Commercial/GCC only)',
+    role: 'none for the Loom-native default; Analysis Services Admin (Console UAMI) on the opt-in AAS server (wired by the module)',
   },
   {
     id: 'svc-aml', category: 'azure-services', title: 'Azure Machine Learning (ML models / AutoML / experiments)', severity: 'optional',
