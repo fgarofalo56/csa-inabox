@@ -112,7 +112,7 @@
 | Action write-back | Foundry Action types | `weave-ontology-store.ts` (Apache AGE on Postgres) | **A−** | Real ACID graph write-back; create/run forms partly freeform JSON. |
 | Validation rules / submission criteria | Foundry param validation | `ontology-model.ts` (`evaluateSubmissionCriteria`) | **A** | Server-enforced (422), E2E'd; no cross-parameter/conditional-visibility rules. |
 | Invariants (Rules on objects) | Foundry Rules (Taurus) | `ontology-model.ts` (`evaluateObjectInvariants`) | **A−** | Enforced on instance write. |
-| **Object views** (per-instance viewer) | Foundry Object Views | — | **F** | **P0 — MISSING.** No configurable per-instance view (overview/linked/timeseries/map). |
+| **Object views** (per-instance viewer) | Foundry Object Views | `lib/foundry/object-view.ts` + `/objects/[vertexId]/view` route + `object-view-panel.tsx` | **A−** | **WS-4.1 SHIPPED.** Configurable per-object-type view (overview / properties / linked objects / timeseries / map) rendered from real AGE data; auto-resolves panels from the property schema. Owed: browser-E2E receipt. |
 | **Derived properties** | Foundry derived props | — | **F** | **P0 — MISSING.** No rollup/computed-from-link. |
 | Granular/row/property security on objects | Foundry Restricted Views | — | **D** | MISSING as ontology feature (platform RLS/RBAC exists elsewhere; not wired to objects). |
 | Dataset→object sync (OSv2) + backfill | Foundry Object Storage v2 | ontology `/bind` (Cosmos) | **C** | Binding exists; no scaled sync/backfill. |
