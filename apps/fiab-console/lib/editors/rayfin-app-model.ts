@@ -54,7 +54,7 @@ export interface ModelBinding {
 // Visual app definition (the low-code BUILDER)
 // ---------------------------------------------------------------------------
 
-export type ComponentKind = 'table' | 'metric' | 'chart' | 'form' | 'text' | 'image' | 'link' | 'divider' | 'badge' | 'heading' | 'progress' | 'spacer' | 'timestamp' | 'kpi-row' | 'gauge' | 'callout' | 'quote' | 'rating' | 'tag-list' | 'delta' | 'checklist';
+export type ComponentKind = 'table' | 'metric' | 'chart' | 'form' | 'text' | 'image' | 'link' | 'divider' | 'badge' | 'heading' | 'progress' | 'spacer' | 'timestamp' | 'kpi-row' | 'gauge' | 'callout' | 'quote' | 'rating' | 'tag-list' | 'delta' | 'checklist' | 'avatar' | 'code-block' | 'key-value' | 'countdown';
 
 /** A data component's read-view selection over the app's bound model. */
 export interface ComponentBinding {
@@ -102,6 +102,15 @@ export interface RayfinComponent {
   deltaPrevious?: string;
   /** For 'checklist': newline list; "[x]"-prefixed lines render checked. */
   checklistItems?: string;
+  /** For 'avatar': display name (initials derived) + optional caption. */
+  avatarName?: string;
+  avatarCaption?: string;
+  /** For 'code-block': monospace pre-formatted content. */
+  code?: string;
+  /** For 'key-value': newline list of "Key: value" pairs. */
+  keyValues?: string;
+  /** For 'countdown': ISO date (yyyy-mm-dd) to count down to. */
+  countdownTo?: string;
 }
 
 export interface RayfinPage {
@@ -143,7 +152,7 @@ export const DEFAULT_SPEC: RayfinSpec = {
   binding: { ...DEFAULT_BINDING },
 };
 
-export const COMPONENT_KINDS: readonly ComponentKind[] = ['table', 'metric', 'chart', 'form', 'text', 'image', 'link', 'divider', 'badge', 'heading', 'progress', 'spacer', 'timestamp', 'kpi-row', 'gauge', 'callout', 'quote', 'rating', 'tag-list', 'delta', 'checklist'];
+export const COMPONENT_KINDS: readonly ComponentKind[] = ['table', 'metric', 'chart', 'form', 'text', 'image', 'link', 'divider', 'badge', 'heading', 'progress', 'spacer', 'timestamp', 'kpi-row', 'gauge', 'callout', 'quote', 'rating', 'tag-list', 'delta', 'checklist', 'avatar', 'code-block', 'key-value', 'countdown'];
 
 /** True when a component reads from the bound model (vs. form/text). */
 export function isDataComponent(kind: ComponentKind): boolean {
@@ -328,6 +337,7 @@ export function emptyComponent(kind: ComponentKind, entityName = ''): RayfinComp
     heading: 'Heading', progress: 'Progress', spacer: 'Spacer', timestamp: 'Timestamp',
     'kpi-row': 'KPI Row', gauge: 'Gauge', callout: 'Callout', quote: 'Quote',
     rating: 'Rating', 'tag-list': 'Tags', delta: 'Delta', checklist: 'Checklist',
+    avatar: 'Avatar', 'code-block': 'Code', 'key-value': 'Key-Value', countdown: 'Countdown',
   };
   const c: RayfinComponent = { id: newId('cmp'), kind, title: titles[kind] };
   if (isDataComponent(kind)) c.binding = { measures: [], groupBy: [], topN: kind === 'metric' ? 1 : 50 };
@@ -344,6 +354,10 @@ export function emptyComponent(kind: ComponentKind, entityName = ''): RayfinComp
   if (kind === 'tag-list') c.tags = 'gold, verified, priority';
   if (kind === 'delta') { c.deltaValue = '1250'; c.deltaPrevious = '1100'; }
   if (kind === 'checklist') c.checklistItems = '[x] Kickoff\n[ ] Review\n[ ] Ship';
+  if (kind === 'avatar') { c.avatarName = 'Ada Lovelace'; c.avatarCaption = 'Data engineer'; }
+  if (kind === 'code-block') c.code = 'SELECT *\nFROM orders';
+  if (kind === 'key-value') c.keyValues = 'Owner: Frank\nRegion: Central US';
+  if (kind === 'countdown') c.countdownTo = '2026-12-31';
   return c;
 }
 
