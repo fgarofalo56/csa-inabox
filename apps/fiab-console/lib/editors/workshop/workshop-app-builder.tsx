@@ -956,7 +956,7 @@ function WidgetInspector({
         <Field label="Segments" hint="Comma-separated."><Input value={widget.crumbs || ''} onChange={(_, d) => onChange({ crumbs: d.value })} placeholder="Home, Sales, Q3" /></Field>
       )}
       {widget.kind === 'json-view' && (
-        <Field label="JSON" hint="Pretty-printed when valid; raw otherwise."><Textarea value={widget.json || ''} onChange={(_, d) => onChange({ json: d.value })} rows={6} resize="vertical" placeholder='{"region": "West"}' /></Field>
+        <Field label="JSON" hint="Pretty-printed when valid; raw otherwise."><Textarea aria-label="JSON data payload shown by the JSON widget" value={widget.json || ''} onChange={(_, d) => onChange({ json: d.value })} rows={6} resize="vertical" placeholder='{"region": "West"}' /></Field>
       )}
       {widget.kind === 'avatar' && (
         <>
