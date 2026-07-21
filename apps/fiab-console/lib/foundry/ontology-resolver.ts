@@ -44,6 +44,10 @@ import {
   type SourceRows, normalizeOntologyBinding, mapRowsToInstances,
   buildSqlSelect, buildKql, buildDax, clampTop, sourceKindLabel,
 } from './ontology-binding';
+import {
+  LIVE, isLive, resolveTimeTravel, backendForOntologySourceKind,
+  type AsOfSpec, type TimeTravelResolution,
+} from '@/lib/time-machine/time-machine';
 
 /** An honest-gate outcome — the resolver ran, but a backend/config is missing. */
 export interface ResolveGate {
@@ -68,6 +72,13 @@ function gate(sourceKind: OntologyBindingSourceKind, code: string, hint: string)
   return { gated: true, code, hint, sourceKind };
 }
 
+/** Human phrase for an asOf spec used in honest-gate messages. */
+function asOfDesc(asOf: AsOfSpec): string {
+  if (asOf.kind === 'version') return `Delta version ${asOf.version}`;
+  if (asOf.kind === 'timestamp') return asOf.iso;
+  return 'the requested time';
+}
+
 /**
  * Resolve ONE binding to typed instances of its object type against the real
  * backend for its source kind. `ot` is the object type's effective schema (for
@@ -77,10 +88,20 @@ function gate(sourceKind: OntologyBindingSourceKind, code: string, hint: string)
 export async function resolveBindingInstances(
   binding: OntologyBinding,
   ot: OntoObjectType | null,
-  opts: { top?: number; tenantId?: string } = {},
+  opts: { top?: number; tenantId?: string; asOf?: AsOfSpec } = {},
 ): Promise<ResolveOutcome> {
   const top = clampTop(opts.top);
   const { kind } = binding.source;
+  const asOf = opts.asOf ?? LIVE;
+
+  // WS-10.3 Time-Machine: resolve the ONE asOf to this source's backend clause.
+  // A live/no-op resolution keeps every query byte-identical; a non-live asOf on
+  // a backend without inline time-travel (Serverless Delta snapshot / DAX) is an
+  // HONEST GATE naming the as-of-capable backend (no silently-live "as of T").
+  const tt: TimeTravelResolution = resolveTimeTravel(backendForOntologySourceKind(kind), asOf);
+  if (!isLive(asOf) && !tt.supported) {
+    return gate(kind, tt.code, `${sourceKindLabel(kind)} cannot be queried as of ${asOfDesc(asOf)}: ${tt.reason}`);
+  }
 
   try {
     switch (kind) {
@@ -90,7 +111,7 @@ export async function resolveBindingInstances(
             'Lakehouse-table resolution reads Delta via the Synapse Serverless SQL endpoint. Set ' +
             'LOOM_SYNAPSE_WORKSPACE (its -ondemand endpoint) and grant the Console UAMI Storage Blob Data Reader.');
         }
-        const sql = buildSqlSelect(binding.source.ref, top);
+        const sql = buildSqlSelect(binding.source.ref, top, tt);
         const res = await synapseExecute(serverlessTarget(binding.source.database || 'master'), sql);
         return ok(binding, ot, res, sql, kind);
       }
@@ -100,7 +121,7 @@ export async function resolveBindingInstances(
             'Warehouse-table resolution reads the Synapse Dedicated SQL pool. Set LOOM_SYNAPSE_WORKSPACE + ' +
             'LOOM_SYNAPSE_DEDICATED_POOL and grant the Console UAMI db_datareader.');
         }
-        const sql = buildSqlSelect(binding.source.ref, top);
+        const sql = buildSqlSelect(binding.source.ref, top, tt);
         const res = await synapseExecute(dedicatedTarget(), sql);
         return ok(binding, ot, res, sql, kind);
       }
@@ -112,7 +133,7 @@ export async function resolveBindingInstances(
             'AllDatabasesViewer on the ADX cluster.');
         }
         const db = binding.source.database || defaultDatabase();
-        const kql = buildKql(binding.source.ref, top);
+        const kql = buildKql(binding.source.ref, top, tt);
         const res = await kustoExecute(db, kql);
         return ok(binding, ot, { columns: res.columns, rows: res.rows }, kql, kind);
       }
@@ -166,7 +187,7 @@ export async function resolveBindingInstances(
           return gate(kind, 'serverless_not_configured',
             'Shortcut resolution queries the Synapse Serverless engine object. Set LOOM_SYNAPSE_WORKSPACE.');
         }
-        const sql = buildSqlSelect(engineObject, top);
+        const sql = buildSqlSelect(engineObject, top, tt);
         const res = await synapseExecute(serverlessTarget('master'), sql);
         return ok(binding, ot, res, sql, kind);
       }
@@ -225,7 +246,7 @@ export async function resolveOntologyObjectInstances(
   bindings: Array<{ itemId: string; itemName?: string; binding: OntologyBinding }>,
   objectType: string,
   ot: OntoObjectType | null,
-  opts: { top?: number; tenantId?: string } = {},
+  opts: { top?: number; tenantId?: string; asOf?: AsOfSpec } = {},
 ): Promise<{ sources: ResolvedSourceResult[]; instances: ResolvedInstance[] }> {
   const sources: ResolvedSourceResult[] = [];
   const merged: ResolvedInstance[] = [];
@@ -295,6 +316,7 @@ export async function resolveOntologyObjectForGrounding(
   objectType: string,
   tenantId: string,
   top = 25,
+  asOf: AsOfSpec = LIVE,
 ): Promise<{ columns: string[]; rows: unknown[][]; rowCount: number; sources: ResolvedSourceResult[] } | { gate: string }> {
   const items = await itemsContainer();
   const { resources } = await items.items
@@ -317,7 +339,7 @@ export async function resolveOntologyObjectForGrounding(
   if (bindings.filter((b) => b.binding.objectType === objectType).length === 0) {
     return { gate: `No item binds to the object type '${objectType}' yet — use the "Bind to ontology" Weave on a lakehouse/KQL/semantic-model to make its rows resolve as ${objectType} instances.` };
   }
-  const { sources, instances } = await resolveOntologyObjectInstances(bindings, objectType, ot, { top, tenantId });
+  const { sources, instances } = await resolveOntologyObjectInstances(bindings, objectType, ot, { top, tenantId, asOf });
 
   // Flatten typed instances to a stable column set (the declared properties, or
   // the union of resolved property keys when the type declares none).

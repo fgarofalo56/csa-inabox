@@ -85,6 +85,7 @@ import {
   type UserExecutionContext,
 } from '@/lib/report/executors/loom-native';
 import { executeConnectionQueryPath } from '@/lib/report/executors/connection';
+import { parseAsOf, isLive, TimeMachineError } from '@/lib/time-machine/time-machine';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -109,6 +110,8 @@ interface QueryRequest {
   // Forwarded straight to `buildSqlFromVisual`'s 4th options arg.
   drill?: DrillState;
   whatIf?: ScalarParamBinding[];
+  /** WS-10.3 Time-Machine — view this visual AS OF a point in time (ISO / v:<n>). */
+  asOf?: string;
 }
 
 export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
@@ -117,6 +120,31 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
 
   const body = (await req.json().catch(() => ({}))) as QueryRequest;
   const filters = Array.isArray(body.filters) ? body.filters : undefined;
+
+  // WS-10.3 Time-Machine — resolve the ONE asOf. Live ⇒ unchanged (byte-identical).
+  // A non-live asOf over a report resolves through the report's Delta/lakehouse
+  // source's native time-travel; until the in-report Delta-AS-OF accel path is
+  // wired + E2E-verified, a non-live asOf is an HONEST gate naming the real as-of
+  // path rather than silently returning LIVE rows labelled "as of T"
+  // (no-vaporware.md). Malformed ⇒ 400.
+  let asOf;
+  try {
+    asOf = parseAsOf(body.asOf ?? null);
+  } catch (e) {
+    if (e instanceof TimeMachineError) return NextResponse.json({ ok: false, error: e.message, code: 'bad_asof' }, { status: 400 });
+    throw e;
+  }
+  if (!isLive(asOf)) {
+    return NextResponse.json(
+      {
+        ok: false,
+        code: 'time_travel_report',
+        error:
+          'Viewing a report as of a past time resolves through its Delta/lakehouse source. Query the bound ontology object or the lakehouse/warehouse source as of this time (they resolve the asOf natively), or enable the Databricks SQL accel engine (LOOM_REPORT_ACCEL_URL) for in-report Delta AS OF.',
+      },
+      { status: 412 },
+    );
+  }
   // Wave-8 interactivity compile options (drill + what-if). Structured + bounded
   // by the wells-to-sql compiler; undefined ⇒ the pre-Wave-8 compile (no change).
   const compileOpts: VisualCompileOptions | undefined =

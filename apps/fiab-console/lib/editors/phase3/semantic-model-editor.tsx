@@ -76,6 +76,7 @@ import { parseSharedQueries, setQueryBody } from '@/lib/components/pipeline/data
 import { usePowerBiWorkspaces, WorkspacePicker } from './workspace-picker';
 import { useBiBackend, useSemanticBackend } from '@/lib/components/platform-config';
 import { useStyles } from './styles';
+import { AskAffordance } from '@/lib/components/ask/AskAffordance';
 
 interface DatasetLite {
   id: string; name: string; configuredBy?: string; isRefreshable?: boolean; targetStorageMode?: string; createdDate?: string;
@@ -1731,7 +1732,7 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
   const [refreshing, setRefreshing] = useState(false);
   const [refreshErr, setRefreshErr] = useState<string | null>(null);
   const [relationships, setRelationships] = useState<Array<{ name?: string; fromTable?: string; fromColumn?: string; toTable?: string; toColumn?: string; crossFilteringBehavior?: string }>>([]);
-  const [tab, setTab] = useState<'tables' | 'relationships' | 'model' | 'entity' | 'modeling' | 'measures' | 'metrics' | 'daxquery' | 'health' | 'build' | 'aggregations' | 'refresh' | 'incremental' | 'config' | 'direct-lake' | 'direct-lake-query' | 'security' | 'access' | 'governance' | 'embed' | 'calcGroups' | 'fieldParams' | 'datasource' | 'copilot' | 'prep-for-ai'>('tables');
+  const [tab, setTab] = useState<'tables' | 'relationships' | 'model' | 'entity' | 'modeling' | 'measures' | 'metrics' | 'daxquery' | 'health' | 'build' | 'aggregations' | 'refresh' | 'incremental' | 'config' | 'direct-lake' | 'direct-lake-query' | 'security' | 'access' | 'governance' | 'embed' | 'calcGroups' | 'fieldParams' | 'datasource' | 'copilot' | 'prep-for-ai' | 'ask'>('tables');
   // Loom-native Model-view sub-tab — the DEFAULT surface when no Power BI dataset
   // is selected (the Power BI dataset tab strip needs a datasetId; without one
   // the body was empty). Model / Tables / Measures over the item's own Cosmos
@@ -3122,7 +3123,8 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
                   <Tab value="health" icon={<Stethoscope20Regular />}>Model health</Tab>
                   <Tab value="copilot" icon={<Sparkle20Regular />}>Copilot (structure)</Tab>
                   <Tab value="prep-for-ai" icon={<Sparkle20Regular />}>Prep for AI</Tab>
-                  <Tab value="calcGroups">Calc groups ({calcGroups.length})</Tab>
+                  {/* WS-5.4 — NL "Ask" tab backed by /api/ask → chatGrounded */}
+                  <Tab value="ask" icon={<Sparkle20Regular />}>Ask</Tab>                  <Tab value="calcGroups">Calc groups ({calcGroups.length})</Tab>
                   <Tab value="fieldParams">Field parameters ({fieldParams.length})</Tab>
                   <Tab value="build">Build model</Tab>
                   <Tab value="aggregations">Aggregations ({aggAltMaps.length})</Tab>
@@ -4249,6 +4251,20 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
                 {tab === 'daxquery' && <DaxQueryView id={id} tables={(detail?.tables || []).map((t) => ({ name: t.name, columns: (t.columns || []).map((c) => ({ name: c.name, dataType: c.dataType })) }))} />}
                 {tab === 'health' && <ModelHealthPane id={id} />}
                 {tab === 'copilot' && <SemanticModelCopilotPane id={id} />}
+                {/* WS-5.4 — NL "Ask" tab: ask questions about the semantic model.
+                    Backed by /api/ask → chatGrounded against the semantic-model source.
+                    Tables from the model schema are passed as grounding context. */}
+                {tab === 'ask' && (
+                  <div style={{ padding: tokens.spacingHorizontalM, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS }}>
+                    <AskAffordance
+                      surfaceKind="semantic-model"
+                      itemId={id}
+                      itemType="semantic-model"
+                      context={{ tables: (detail?.tables || []).map((t: { name: string }) => t.name) }}
+                      alwaysOpen
+                    />
+                  </div>
+                )}
                 {tab === 'prep-for-ai' && <SemanticModelPrepForAiPane id={id} datasetId={datasetId} workspaceId={workspaceId} />}
                 {tab === 'calcGroups' && (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS}}>
