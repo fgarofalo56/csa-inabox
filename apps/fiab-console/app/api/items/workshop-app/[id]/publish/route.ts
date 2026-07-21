@@ -28,7 +28,7 @@ import { getSession } from '@/lib/auth/session';
 import { loadOwnedItem, updateOwnedItem } from '../../../_lib/item-crud';
 import { slug, swaConfig, swaNotConfiguredError, mapSwaPublishError, publishStaticSite, signSwaBundleToken, deployZipToStaticSite, waitForContentLive } from '@/lib/azure/swa-publish';
 import { generateWorkshopBundle } from '@/lib/editors/_palantir-codegen';
-import type { WorkshopWidget, WorkshopVariable } from '@/lib/editors/workshop/_workshop-model';
+import type { WorkshopWidget, WorkshopVariable, WorkshopPage } from '@/lib/editors/workshop/_workshop-model';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -63,11 +63,18 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   const body = (await req.json().catch(() => ({}))) as { name?: string; location?: string };
   const widgetsRaw = Array.isArray(state.widgets) ? (state.widgets as WorkshopWidget[]) : [];
   const variables = Array.isArray(state.variables) ? (state.variables as WorkshopVariable[]) : [];
-  // Embed every widget that has enough config to function in the bundle.
+  const pages = Array.isArray(state.pages) ? (state.pages as WorkshopPage[]) : [];
+  // Widgets whose config/kind lets them do something in the published bundle:
+  //  - text / button always;
+  //  - object-view / links / aip-copilot render an honest "sign in to Loom" note
+  //    (the read-only publish token can't reach the ontology/copilot routes);
+  //  - every other data widget (table/chart/metric/map/pivot/timeline/filter/form)
+  //    needs a bound object type.
+  const NOTE_KINDS = new Set(['object-view', 'links', 'aip-copilot']);
   const widgets = widgetsRaw.filter((w) => {
     if (!w || !w.kind || !w.id) return false;
-    if (w.kind === 'text' || w.kind === 'button') return true;
-    return !!w.entityType; // table / chart / metric / filter / form need a bound object type
+    if (w.kind === 'text' || w.kind === 'button' || NOTE_KINDS.has(w.kind)) return true;
+    return !!w.entityType; // table / chart / metric / map / pivot / timeline / filter / form need a bound object type
   });
   if (widgets.length === 0) {
     return err('Nothing to publish — add at least one configured widget to the canvas (data widgets need a bound object type).', 400, 'empty_app');
@@ -77,7 +84,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   // parameterised T-SQL over the ontology's Synapse warehouse).
   const publicBase = (process.env.LOOM_PUBLIC_BASE_URL || '').trim().replace(/\/+$/, '') || req.nextUrl.origin;
   const runActionUrl = `${publicBase}/api/items/workshop-app/${encodeURIComponent(id)}/run-action`;
-  const files = generateWorkshopBundle({ displayName: app.displayName, runActionUrl, widgets, variables });
+  const files = generateWorkshopBundle({ displayName: app.displayName, runActionUrl, widgets, variables, pages });
 
   const location = (body?.location || cfg.location).trim();
   // Stable per-item resource name so re-publishing updates the same SWA.

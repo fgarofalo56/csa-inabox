@@ -9,7 +9,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   pascal, generateDabConfig, generateTypeScriptSdk, generatePythonSdk, generateSlateBundle,
-  deriveObjectProperties, generateActionReference, generateWorkshopCodeApp,
+  deriveObjectProperties, generateActionReference, generateWorkshopCodeApp, generateWorkshopBundle,
 } from '../_palantir-codegen';
 
 const surface = {
@@ -126,6 +126,57 @@ describe('generateWorkshopCodeApp (APP-W3 eject-to-code)', () => {
     // SyntaxError to a live container (2026-07-19). Function() parses only.
     expect(() => new Function(files['server.js'])).not.toThrow();
     expect(files['server.js']).toContain("replace(/\\/+$/, '')");
+  });
+});
+
+describe('generateWorkshopBundle (WS-4.5 multi-page + overlays + widgets)', () => {
+  const spec = {
+    displayName: 'Ops Console',
+    runActionUrl: 'https://loom.example/api/items/workshop-app/a1/run-action',
+    variables: [{ id: 'v1', name: 'selected', type: 'string' as const }],
+    pages: [
+      { id: 'home', name: 'Home', kind: 'page' as const },
+      { id: 'detail', name: 'Detail', kind: 'page' as const },
+      { id: 'ov1', name: 'Inspector', kind: 'overlay' as const, overlayStyle: 'drawer' as const },
+    ],
+    widgets: [
+      { id: 'w1', kind: 'metric' as const, title: 'Count', entityType: 'Order', pageId: 'home' },
+      { id: 'w2', kind: 'pivot' as const, title: 'By region', entityType: 'Order', pageId: 'detail', pivotRowField: 'region', pivotColField: 'quarter', pivotAggFn: 'sum' as const, pivotAggColumn: 'amount' },
+      { id: 'w3', kind: 'timeline' as const, title: 'Events', entityType: 'Order', pageId: 'detail', timeColumn: 'created' },
+      { id: 'w4', kind: 'map' as const, title: 'Sites', entityType: 'Site', pageId: 'home', geoColumn: 'geo' },
+      { id: 'w5', kind: 'object-view' as const, title: 'Detail', entityType: 'Order', pageId: 'ov1', keyVariableId: 'v1', visibleWhen: { variableId: 'v1', op: 'notEmpty' as const } },
+      { id: 'b1', kind: 'button' as const, title: 'Open', pageId: 'home', events: [{ id: 'e1', trigger: 'click' as const, effect: 'open-overlay' as const, targetPageId: 'ov1' }] },
+    ],
+  };
+
+  it('emits index.html + app.js + SWA config; app.js MUST parse (no lost backslash)', () => {
+    const files = generateWorkshopBundle(spec as any);
+    expect(files.map((f) => f.name).sort()).toEqual(['app.js', 'index.html', 'staticwebapp.config.json']);
+    const appJs = files.find((f) => f.name === 'app.js')!.content;
+    // A hand-written regex/quote slip ships a SyntaxError to a live SWA (2026-07-19 lesson).
+    expect(() => new Function(appJs)).not.toThrow();
+  });
+
+  it('embeds the multi-page + overlay + visibility model and the new widget renderers', () => {
+    const appJs = generateWorkshopBundle(spec as any).find((f) => f.name === 'app.js')!.content;
+    expect(appJs).toContain('const PAGES =');
+    expect(appJs).toContain('"kind": "overlay"');
+    expect(appJs).toContain('openOverlay');
+    expect(appJs).toContain('isVisible');            // conditional visibility
+    expect(appJs).toContain('pivotHtml');            // pivot renderer
+    expect(appJs).toContain('timelineHtml');         // timeline renderer
+    expect(appJs).toContain('mapHtml');              // map renderer
+    // object-view falls back to an honest sign-in note in the unauthenticated bundle.
+    expect(appJs).toContain('noteHtml');
+    const html = generateWorkshopBundle(spec as any).find((f) => f.name === 'index.html')!.content;
+    expect(html).toContain('id="nav"');
+    expect(html).toContain('id="overlay-host"');
+  });
+
+  it('synthesizes a default page when none is passed (back-compat)', () => {
+    const appJs = generateWorkshopBundle({ ...spec, pages: undefined } as any).find((f) => f.name === 'app.js')!.content;
+    expect(appJs).toContain('"id": "page-1"');
+    expect(() => new Function(appJs)).not.toThrow();
   });
 });
 

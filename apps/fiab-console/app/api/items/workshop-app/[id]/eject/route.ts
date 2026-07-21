@@ -18,7 +18,7 @@ import { getSession } from '@/lib/auth/session';
 import { apiOk, apiError, apiUnauthorized, apiServerError } from '@/lib/api/respond';
 import { loadOwnedItem, updateOwnedItem, createOwnedItem } from '../../../_lib/item-crud';
 import { generateWorkshopCodeApp } from '@/lib/editors/_palantir-codegen';
-import type { WorkshopWidget, WorkshopVariable } from '@/lib/editors/workshop/_workshop-model';
+import type { WorkshopWidget, WorkshopVariable, WorkshopPage } from '@/lib/editors/workshop/_workshop-model';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -50,6 +50,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
 
     const widgets = (Array.isArray(state.widgets) ? state.widgets : []) as WorkshopWidget[];
     const variables = (Array.isArray(state.variables) ? state.variables : []) as WorkshopVariable[];
+    const pages = (Array.isArray(state.pages) ? state.pages : []) as WorkshopPage[];
     if (widgets.length === 0) {
       return apiError('Add at least one widget to the canvas before ejecting to code.', 400, { code: 'empty_canvas' });
     }
@@ -59,6 +60,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       workshopAppId: id,
       widgets,
       variables,
+      pages,
     });
 
     // Pre-seed the console base URL binding (real value — rule #70); the API
