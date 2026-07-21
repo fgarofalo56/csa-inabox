@@ -20,16 +20,11 @@ else
   node /usr/src/app/ --config /data/config.json --port 8081 --public_url "http://localhost:8080/" 2>&1 &
 fi
 TS_PID=$!
-echo "[entrypoint] tileserver-gl started pid=$TS_PID"
+echo "[entrypoint] tileserver-gl started pid=$TS_PID (loads mbtiles in background, ~30-60s)"
 
-# Wait (bounded) for tileserver-gl to bind before Caddy fronts it.
-for i in $(seq 1 40); do
-  if curl -fsS "http://localhost:8081/health" >/dev/null 2>&1; then echo "[entrypoint] tileserver-gl healthy"; break; fi
-  if ! kill -0 "$TS_PID" 2>/dev/null; then echo "[entrypoint] ERROR: tileserver-gl exited early"; break; fi
-  sleep 2
-done
-
-# Caddy in the foreground = container lifecycle. Serves /health, /style.json,
-# /maplibre-gl.* and proxies the rest to tileserver-gl.
+# Do NOT block on tileserver-gl here: start Caddy IMMEDIATELY so :8080 serves
+# /health right away (the ACA readiness probe passes → the revision goes Ready →
+# internal ingress routes). tileserver-gl finishes loading in the background;
+# /style.json + tile requests succeed once it binds :8081 (the caller retries).
 echo "[entrypoint] starting caddy (foreground) on :8080"
 exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
