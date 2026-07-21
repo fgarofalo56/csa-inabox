@@ -37,10 +37,14 @@
 | Parity-Autopilot | `/admin/parity-autopilot` | WS-10.5 | ✅ run 29825273499 |
 | Agent-Quality / eval-depth | `/admin/agent-quality` | WS-1.4/1.5 | ✅ run 29825278707 |
 | NL-to-Estate / One-Canvas | `/estate` | WS-8.1/8.2 | ✅ run 29825283844 |
+| Model Serving endpoint editor | `/items/model-serving-endpoint/new` | WS-1.2 | ✅ run 29826424822 |
+| Eventstream editor | `/items/eventstream/new` | WS-3.4 | ✅ run 29826429508 |
+| Ontology editor | `/items/ontology/new` | WS-6/4.4 | ✅ run 29826434663 |
+| Data-agent editor | `/items/data-agent/new` | WS-5.3/5.4 | ✅ run 29826439370 |
 
-**Gaps in the tables below now CLOSED on `main`** (shipped since this matrix was first written): Model Serving (WS-1.2 `model-serving-endpoint` item+editor, traffic-split/invoke/monitoring — was C+, now **A**), tier-router **wired** (WS-1.1, no longer "when wired"), A2A interop (WS-5.2 — was a frontier gap), conversational code-interpreter (WS-5.3), eval-library + OTel span-tree (WS-1.5), visual agent-builder (WS-5.1), NL-to-estate + one-canvas (WS-8). **Residual true gap: WS-11.1 monolith decomposition** (maintainability refactor) and receipts for the item-editor (`/items/<type>/<id>`) surfaces beyond the 6 flagship routes above.
+**Gaps in the tables below now CLOSED on `main`** (shipped since this matrix was first written): Model Serving (WS-1.2 `model-serving-endpoint` item+editor, traffic-split/invoke/monitoring — was C+, now **A**), tier-router **wired** (WS-1.1, no longer "when wired"), A2A interop (WS-5.2 — was a frontier gap), conversational code-interpreter (WS-5.3), eval-library + OTel span-tree (WS-1.5), visual agent-builder (WS-5.1), NL-to-estate + one-canvas (WS-8). **Residual true gap: WS-11.1 monolith decomposition** (maintainability refactor, in progress).
 
-**Revised composite: B+ / A− → A− (A on the sovereignty/integration/agentic axes), with live browser-E2E receipts on the 6 flagship new surfaces.**
+**Revised composite: B+ / A− → A− (A on the sovereignty/integration/agentic axes), with live browser-E2E receipts on 10 surfaces (6 flagship + 4 item editors).**
 
 ---
 
