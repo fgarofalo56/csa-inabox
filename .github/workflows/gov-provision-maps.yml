@@ -119,12 +119,15 @@ jobs:
           echo "----- system logs -----"
           az containerapp logs show -n "$TILE_APP" -g "$RG" --tail 40 --type system 2>&1 | tail -40 || true
           echo "===== end diagnostics ====="
-          # Probe /style.json from inside the CAE — retry while tileserver-gl
-          # finishes loading the mbtiles (Caddy is up immediately; the backend
-          # takes ~30-60s). The env is wired ONLY on a 200.
+          # Probe /style.json from inside the tileserver container via Caddy.
+          # az exec prepends a "Connecting…/Successfully Connected [Revision 000…]"
+          # banner full of digits, so parse the code via an explicit MC:<code>:
+          # marker rather than scraping digits. Retry while the mbtiles loads.
           CODE=000
           for p in $(seq 1 12); do
-            CODE=$(az containerapp exec -n "$TILE_APP" -g "$RG" --command "sh -c 'curl -s -o /dev/null -w %{http_code} http://localhost:8080/style.json'" 2>/dev/null | tr -dc '0-9' | tail -c 3 || echo "000")
+            OUT=$(az containerapp exec -n "$TILE_APP" -g "$RG" --command "sh -c 'curl -s -o /dev/null -w MC:%{http_code}: http://localhost:8080/style.json'" 2>/dev/null || true)
+            CODE=$(printf '%s' "$OUT" | grep -oE 'MC:[0-9]+:' | grep -oE '[0-9]+' | tail -1)
+            [ -n "$CODE" ] || CODE=000
             echo "  /style.json probe attempt $p → HTTP=$CODE"; [ "$CODE" = "200" ] && break; sleep 15
           done
           echo "::notice::/style.json probe HTTP=$CODE"
