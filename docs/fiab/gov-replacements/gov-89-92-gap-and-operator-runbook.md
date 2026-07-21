@@ -21,7 +21,7 @@ engineering.
 ### A. Impossible in GCC-High *by design* (4) — param-proven
 | Gate | Proof (in `params/gcc-high.bicepparam` / bicep) |
 |------|--------------------------------------------------|
-| `svc-databricks-sql` | `databricksSqlWarehouseEnabled = false  // NOT in Gov` |
+| `svc-databricks-sql` | `databricksSqlWarehouseEnabled = false  // NOT in Gov` — **empirically proven**: an in-VNet Container App job (`gov-provision-dbx-sql-invnet.yml`) reached the private workspace (SP login ✅, no 403) but `/api/2.0/sql/warehouses` returns `TEMPORARILY_UNAVAILABLE`; MS Learn: *"Databricks SQL is not available in Azure Government regions."* Capability is served by the multi-backend DQ engine (kusto/synapse) instead. |
 | `svc-batch`          | `// OpenAI Batch API NOT in Gov` |
 | `svc-data-wrangler`  | `wranglerActive` is `false` on GCC-High / IL5 by construction |
 | `svc-purview-uc`     | `catalogPrimary = 'purview'  // UC managed not yet in Gov` |
