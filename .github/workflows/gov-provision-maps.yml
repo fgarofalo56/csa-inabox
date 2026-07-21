@@ -76,7 +76,7 @@ jobs:
           for i in $(seq 1 12); do az acr login -n "$ACR" >/dev/null 2>&1 && break; sleep 15; done
           # The basemap bake (Natural Earth + tippecanoe) + tileserver base is a
           # large build — allow a generous timeout.
-          az acr build --registry "$ACR" --no-logs --timeout 3600 \
+          az acr build --registry "$ACR" --timeout 3600 \
             --image "loom-maps-tileserver:$SHA" --image "loom-maps-tileserver:v1" \
             apps/loom-maps-tileserver
           az acr update -n "$ACR" --default-action Deny -o none || true
