@@ -1,0 +1,94 @@
+name: gov-provision-dbx-sql-invnet
+# In-VNet provisioner for the Databricks SQL warehouse (closes svc-databricks-sql).
+# The Gov Databricks workspace is private-link-locked, so the public GitHub
+# runner gets "403 Unauthorized network access to workspace". This runs the
+# warehouse-create from a one-shot Container App JOB inside the Gov CAE (which is
+# VNet-injected and reaches the private workspace), which then wires
+# LOOM_DATABRICKS_SQL_WAREHOUSE_ID on the console. No security-posture change to
+# the workspace (vs. temporarily opening public access). Idempotent.
+on:
+  workflow_dispatch: {}
+permissions:
+  contents: read
+env:
+  RG: rg-csa-loom-admin-usgovvirginia
+  APP: loom-console
+  JOB: loom-dbx-warehouse-init
+jobs:
+  provision:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Azure Gov Login
+        uses: Azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_GOV_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_GOV_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_GOV_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}",
+              "activeDirectoryEndpointUrl": "https://login.microsoftonline.us",
+              "resourceManagerEndpointUrl": "https://management.usgovcloudapi.net/",
+              "sqlManagementEndpointUrl": "https://management.core.usgovcloudapi.net:8443/",
+              "galleryEndpointUrl": "https://gallery.usgovcloudapi.net/",
+              "managementEndpointUrl": "https://management.core.usgovcloudapi.net/"
+            }
+          environment: AzureUSGovernment
+      - name: Set Azure cloud to Gov
+        run: az cloud set --name AzureUSGovernment
+
+      - name: Run the warehouse-create job in-VNet + wait
+        run: |
+          set -euo pipefail
+          CAE_ID=$(az containerapp show -n "$APP" -g "$RG" --query properties.environmentId -o tsv | tr -d '\r')
+          # The job script: login (SP) → mint Databricks token → create/reuse a SQL
+          # warehouse against the private workspace → wire the console env. Runs
+          # in-VNet so the private-link workspace is reachable.
+          SCRIPT=$(cat <<'S'
+          set -e
+          az cloud set -n AzureUSGovernment
+          az login --service-principal -u "$SP_ID" -p "$SP_SECRET" --tenant "$TENANT" -o none
+          az account set -s "$SUB"
+          HOST=$(az containerapp show -n loom-console -g "$RG" --query "properties.template.containers[0].env[?name=='LOOM_DATABRICKS_HOSTNAME'].value | [0]" -o tsv)
+          HOST="${HOST#https://}"; HOST="${HOST%%/*}"
+          echo "host=$HOST"
+          TOK=$(az account get-access-token --resource 2ff814a6-3304-4ab8-85cb-cd0e6f879c1d --query accessToken -o tsv)
+          LIST=$(curl -sS -H "Authorization: Bearer $TOK" "https://$HOST/api/2.0/sql/warehouses")
+          WID=$(printf '%s' "$LIST" | python3 -c "import json,sys; d=json.load(sys.stdin); ws=d.get('warehouses',[]); m=[w for w in ws if str(w.get('name','')).lower().startswith('loom')]; print((m[0] if m else (ws[0] if ws else {})).get('id',''))" 2>/dev/null || echo "")
+          if [ -z "$WID" ]; then
+            RESP=$(curl -sS -X POST -H "Authorization: Bearer $TOK" -H "Content-Type: application/json" -d '{"name":"loom-governance","cluster_size":"2X-Small","min_num_clusters":1,"max_num_clusters":1,"auto_stop_mins":10,"warehouse_type":"PRO"}' "https://$HOST/api/2.0/sql/warehouses")
+            echo "create-resp=$RESP" | head -c 400
+            WID=$(printf '%s' "$RESP" | python3 -c "import json,sys; print(json.load(sys.stdin).get('id',''))" 2>/dev/null || echo "")
+          fi
+          [ -n "$WID" ] || { echo "NO_WAREHOUSE_ID"; exit 1; }
+          echo "warehouse_id=$WID"
+          az containerapp update -n loom-console -g "$RG" --set-env-vars "LOOM_DATABRICKS_SQL_WAREHOUSE_ID=$WID" -o none
+          echo "WIRED_OK $WID"
+          S
+          )
+          B64=$(printf '%s' "$SCRIPT" | base64 -w0)
+          # Create (or update) a one-shot manual job in the CAE, then start it.
+          if ! az containerapp job show -n "$JOB" -g "$RG" -o none 2>/dev/null; then
+            az containerapp job create -n "$JOB" -g "$RG" --environment "$CAE_ID" \
+              --trigger-type Manual --replica-timeout 900 --replica-retry-limit 1 --parallelism 1 \
+              --image mcr.microsoft.com/azure-cli:2.62.0 \
+              --cpu 0.5 --memory 1.0Gi \
+              --secrets sp-secret="${{ secrets.AZURE_GOV_CLIENT_SECRET }}" \
+              --env-vars SP_ID="${{ secrets.AZURE_GOV_CLIENT_ID }}" SP_SECRET=secretref:sp-secret \
+                         TENANT="${{ secrets.AZURE_GOV_TENANT_ID }}" SUB="${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}" RG="$RG" \
+              --command "/bin/sh" --args "-c","echo $B64 | base64 -d | /bin/sh" -o none
+          else
+            az containerapp job update -n "$JOB" -g "$RG" \
+              --image mcr.microsoft.com/azure-cli:2.62.0 \
+              --command "/bin/sh" --args "-c","echo $B64 | base64 -d | /bin/sh" -o none
+          fi
+          EXEC=$(az containerapp job start -n "$JOB" -g "$RG" --query name -o tsv | tr -d '\r')
+          echo "::notice::started in-VNet job execution: $EXEC"
+          for i in $(seq 1 40); do
+            ST=$(az containerapp job execution show -n "$JOB" -g "$RG" --job-execution-name "$EXEC" --query properties.status -o tsv 2>/dev/null | tr -d '\r')
+            echo "job status=$ST"; [ "$ST" = "Succeeded" ] && break; [ "$ST" = "Failed" ] && break; sleep 15
+          done
+          echo "----- job logs -----"
+          az containerapp job logs show -n "$JOB" -g "$RG" --execution "$EXEC" --tail 60 2>&1 | tail -60 || \
+          az monitor log-analytics query --help >/dev/null 2>&1 || true
+          [ "$ST" = "Succeeded" ] && echo "::notice::warehouse wired in-VNet — re-run gov-selfaudit." || { echo "::error::in-VNet warehouse job did not succeed (status=$ST)"; exit 1; }
