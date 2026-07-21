@@ -280,6 +280,14 @@ export interface OntoActionType {
    * the next matching run). Off by default (opt-in).
    */
   requiresApproval?: boolean;
+  /**
+   * WS-4.2 functions-on-objects — a registered function that VALIDATES the write
+   * server-side before it commits. When set, the run-action executor invokes the
+   * function on the Loom UDF runtime with the coerced parameters; a non-`valid`
+   * verdict blocks the run (422). `version` pins a version; absent = latest.
+   * Off by default (opt-in per action).
+   */
+  validationFunction?: { name: string; version?: string };
 }
 
 // ============================================================
@@ -490,6 +498,7 @@ export function normalizeOntoActionType(raw: unknown): OntoActionType | null {
       .map((apiName) => ({ apiName, type: 'string' as const }));
   }
   const submissionCriteria = normalizeOntoActionCriteria(r.submissionCriteria);
+  const validationFunction = normalizeValidationFunctionRef(r.validationFunction);
   return {
     name, objectType, kind,
     ...(r.description ? { description: str(r.description) } : {}),
@@ -498,7 +507,23 @@ export function normalizeOntoActionType(raw: unknown): OntoActionType | null {
     ...(submissionCriteria.length ? { submissionCriteria } : {}),
     ...(r.emitLineage === true ? { emitLineage: true } : {}),
     ...(r.requiresApproval === true ? { requiresApproval: true } : {}),
+    ...(validationFunction ? { validationFunction } : {}),
   };
+}
+
+/**
+ * Coerce a persisted action `validationFunction` ref into `{ name, version? }`.
+ * Requires a valid function-name identifier; an absent/blank version means
+ * "latest registered". Returns null when the ref is malformed (the action then
+ * simply has no function validation).
+ */
+export function normalizeValidationFunctionRef(raw: unknown): { name: string; version?: string } | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  const name = str(r.name).trim();
+  if (!isOntoIdent(name)) return null;
+  const version = str(r.version).trim();
+  return { name, ...(version ? { version } : {}) };
 }
 
 /** Coerce a persisted submission-criteria array into the clean typed model. */

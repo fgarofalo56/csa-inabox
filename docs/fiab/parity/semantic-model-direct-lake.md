@@ -172,3 +172,77 @@ GCC / DoDCON / DoD `scopeBase` values.)
 5. "Refresh status" → newest run shows `Completed` within the SLA.
 6. Re-run the DAX count → **after** > before.
 7. Receipt = before/after row count + the shim run-log row (requestId, duration).
+
+---
+
+## Part 3 — Direct Lake substitute: framed columnar-cache perf path (WS-3.3)
+
+**This closes the last honest-gate with a real perf path — not a Power BI Desktop
+deferral.** Parts 1–2 give correct rows and freshness; Part 3 gives Direct Lake's
+*defining property*: **import-like latency with no manual refresh**, on 100%
+Azure-native + OSS backends (no Fabric F-SKU, no VertiPaq, no Power BI).
+
+### The three mechanisms (all real, all default-Azure)
+
+| Direct Lake concept | Loom Azure-native realization | Code |
+|---------------------|-------------------------------|------|
+| Columns loaded from Delta on demand (no import) | **Synapse Serverless `OPENROWSET(…, FORMAT='DELTA')`** DirectQuery over the Gold Delta files on ADLS Gen2 (or the loom-directlake ACA app's DataFusion scan when `LOOM_DIRECTLAKE_URL` is set) | `synapse-sql-client.buildDeltaOpenRowsetSql`, `columnar-cache-query.ts` |
+| Warm in-memory (VertiPaq) speed on repeat | **Aggressive three-tier result cache** (in-process LRU → shared Redis → Cosmos) keyed by compiled SQL + params + the current **Delta frame token** — a repeat query collapses to a Map/Redis read (sub-ms, import-like) | `query-result-cache.ts` (`getCachedResult`/`setCachedResult`), `columnar-cache-query.columnarCacheQuery` |
+| **Framing** (advance to the latest committed Delta version without an import) | The current Delta commit **version** is resolved (metadata-only via the loom-directlake `/frame` endpoint, else a per-item hint proxy) and folded into the cache key; when the version advances, the frame **token rotates** so stale keys are stranded and the next query re-reads live **once**, then re-caches | `columnar-cache-query.resolveFrame` / `frameToken`, `/api/directlake/frame` |
+
+### Routing
+
+Opt in with **`LOOM_SEMANTIC_BACKEND=loom-columnar-cache`**
+(`columnar-cache-query.columnarCacheBackendSelected`). The
+`POST /api/items/semantic-model/[id]/direct-lake` route then wraps its Serverless
+DirectQuery in the framing + result-cache path:
+
+- First query for a frame → `servingFrom:'serverless-direct'`, `cached:false` (live Delta read, then cached).
+- Repeat query, same frame → `servingFrom:'columnar-cache'`, `cached:true` (sub-ms — import-like latency).
+- New Delta rows land → the version advances → frame token rotates → next query is `serverless-direct` again (framing), **no manual refresh**.
+
+The frame version is real (`Delta v<n>`) when the loom-directlake service is
+deployed; otherwise a per-item hint proxy still gives correct invalidate-on-change
+semantics — **never a Fabric gate** (`no-fabric-dependency.md`). The frame is
+reused for `LOOM_DL_FRAME_TTL_SECONDS` (default 30s — the framing cadence).
+
+### Feature inventory → Loom coverage
+
+| Capability | Status | Backend per control |
+|-----------|--------|---------------------|
+| Storage mode "Direct Lake (Azure-native)" over a lake source | built ✅ | SemanticModelEditor → **Direct Lake query** tab; `servingFrom` + storage-mode caption |
+| DirectQuery over Serverless external Delta (no import) | built ✅ | `columnarCacheQuery` → `executeQuery(serverlessTarget, OPENROWSET DELTA)` |
+| Import-like latency on repeat (result cache) | built ✅ | `getCachedResult`/`setCachedResult` keyed by SQL + params + frame token |
+| Framing refresh on Delta version change (no full reload) | built ✅ | `resolveFrame` + `frameToken` (rotates the cache freshness slot) |
+| Real Delta version when loom-directlake deployed | built ✅ | `fetchServiceFrameVersion` → `/frame` (`delta_version`) |
+| Honest hint proxy when the service is absent | built ✅ | `resolveFrame` `via:'hint'` (last-refresh / `_ts`) — no Fabric gate |
+| Frame + cache-hit badges + version/framed-at caption | built ✅ | `dlResult.servingFrom` / `cached` / `deltaVersion` / `framedAt` |
+| Honest gate when Synapse unconfigured | gate ⚠️ | 503 naming `LOOM_SYNAPSE_WORKSPACE` (shared with Part 1) |
+
+Zero ❌. The former "true Direct Lake needs a Fabric F-SKU" gap is closed by a real
+perf path: framed columnar caching over Serverless Delta.
+
+### Acceptance (no-Fabric, no-vaporware, real perf)
+
+With `LOOM_DEFAULT_FABRIC_WORKSPACE` unset and `LOOM_SEMANTIC_BACKEND=loom-columnar-cache`:
+
+1. `POST {table:'fact_sales', maxRows:100}` → `servingFrom:'serverless-direct'`,
+   `cached:false`, real Gold Delta rows, `deltaVersion` pinned.
+2. Re-issue the identical query → `servingFrom:'columnar-cache'`, `cached:true`,
+   `executionMs` an order of magnitude lower (cache hit — import-like), **no manual refresh**.
+3. Append rows to the Delta table (version advances) → next identical query →
+   `servingFrom:'serverless-direct'` again with the new `deltaVersion`, then caches —
+   the framing behaviour, proven without a Fabric capacity.
+
+### Verification
+
+- `lib/azure/__tests__/columnar-cache-query.test.ts` — 10 green: cache-hit runs
+  Serverless once (import-like repeat), a Delta version bump invalidates the frame
+  and re-reads live, framing is metadata-only, cache-disabled degrades to live,
+  the frame TTL/fallback contract.
+- `npx tsc -p tsconfig.build.json --noEmit` — clean.
+- Guardrails: `check-env-sync`, `check-route-guards`, `check-file-size`,
+  `check-bff-errors` — all OK.
+- **Owed (Track-0):** browser-E2E receipt — a semantic model over lake data
+  answering at import-like latency on the cache hit, no manual refresh.
+

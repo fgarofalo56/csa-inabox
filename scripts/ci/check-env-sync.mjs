@@ -79,6 +79,7 @@ const ALLOWLIST = new Set([
   'LOOM_CONSOLE_URL',               // read only inside GENERATED hosted-app source (workshop eject-to-code server.js template in _palantir-codegen.ts) — the eject route seeds it as an app binding; never a console-runtime var
   'LOOM_READ_WARMER_DISABLED',      // runtime-only opt-out for the dashboard read-warmer (lib/perf/read-warmer.ts) — warming is on by default, never a deploy dependency
   'LOOM_READ_WARMER_INTERVAL_MS',   // runtime-only tuning knob for the read-warmer interval (default 10 min)
+  'LOOM_DL_FRAME_TTL_SECONDS',       // WS-3.3 runtime-only tuning knob: how long the Direct Lake substitute reuses a resolved Delta frame/version before re-framing (default 30s in columnar-cache-query.ts) — framing works without it, never a deploy dependency
   'LOOM_BUILD_SHA',                 // stamped at image build time
   'LOOM_BUILD_TIMESTAMP',           // stamped at image build time
   'LOOM_APP_REVISION',              // ambient container revision fallback for the PSR-1 perf runner (CONTAINER_APP_REVISION is the real ACA-injected value; this is a manual override) — never a blocking dependency

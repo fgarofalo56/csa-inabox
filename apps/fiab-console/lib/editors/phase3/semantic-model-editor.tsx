@@ -2205,7 +2205,7 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
   // Azure-native analog of Fabric "Direct Lake on SQL" DirectQuery fallback.
   interface DlQueryResult {
     ok: boolean;
-    servingFrom?: 'warm-cache' | 'serverless-fallback';
+    servingFrom?: 'warm-cache' | 'serverless-fallback' | 'columnar-cache' | 'serverless-direct';
     columns?: string[];
     rows?: unknown[][];
     rowCount?: number;
@@ -2216,6 +2216,11 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
     lastRefreshedAt?: string | null;
     cacheTtlSeconds?: number;
     error?: string;
+    /** WS-3.3 Direct Lake substitute (loom-columnar-cache backend): */
+    cached?: boolean;
+    deltaVersion?: number | null;
+    framedAt?: string;
+    frameVia?: 'directlake-service' | 'hint' | 'time-bucket';
   }
   const [dlTable, setDlTable] = useState('');
   const [dlMaxRows, setDlMaxRows] = useState(1000);
@@ -4368,7 +4373,10 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
                         in-memory VertiPaq cache. When stale or unbuilt, the same Gold Delta files
                         are queried transparently via Synapse Serverless <code>OPENROWSET</code> —
                         the Azure-native analog of Fabric Direct Lake on SQL DirectQuery fallback.
-                        No Fabric capacity required.
+                        No Fabric capacity required. With <code>LOOM_SEMANTIC_BACKEND=loom-columnar-cache</code>,
+                        the Serverless DirectQuery is <strong>framed + result-cached</strong>: a repeat query
+                        answers from cache at import-like latency, and when the Delta version advances the frame
+                        rotates so the next query re-reads live — no manual refresh.
                       </MessageBarBody>
                     </MessageBar>
 
@@ -4422,12 +4430,18 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
 
                     {dlResult && (
                       <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS}}>
-                        <div style={{ display: 'flex', gap: tokens.spacingVerticalS, alignItems: 'center', flexWrap: 'wrap' }}>
+                        <div style={{ display: 'flex', gap: tokens.spacingVerticalS, alignItems: 'center', flexWrap: 'wrap', minWidth: 0 }}>
                           {dlResult.servingFrom === 'warm-cache' && (
                             <Badge appearance="filled" color="success">Serving from: warm cache</Badge>
                           )}
                           {dlResult.servingFrom === 'serverless-fallback' && (
                             <Badge appearance="filled" color="warning">Serving from: fallback (Serverless)</Badge>
+                          )}
+                          {dlResult.servingFrom === 'columnar-cache' && (
+                            <Badge appearance="filled" color="success">Serving from: columnar cache (import-like)</Badge>
+                          )}
+                          {dlResult.servingFrom === 'serverless-direct' && (
+                            <Badge appearance="filled" color="brand">Serving from: Serverless DirectQuery (framed)</Badge>
                           )}
                           {dlResult.executionMs !== undefined && (
                             <Caption1>{dlResult.executionMs} ms</Caption1>
@@ -4438,7 +4452,18 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
                           {dlResult.truncated && <Badge color="warning">Truncated</Badge>}
                         </div>
 
-                        {dlResult.servingFrom === 'serverless-fallback' && dlResult.endpoint && (
+                        {(dlResult.servingFrom === 'columnar-cache' || dlResult.servingFrom === 'serverless-direct') && (
+                          <Caption1>
+                            Storage mode: <strong>Direct Lake (Azure-native)</strong> — Serverless DirectQuery over
+                            external Delta with framed result caching. No VertiPaq import, no manual refresh.
+                            {dlResult.deltaVersion != null && <> · Frame: <code>Delta v{dlResult.deltaVersion}</code></>}
+                            {dlResult.deltaVersion == null && dlResult.frameVia && <> · Frame via <code>{dlResult.frameVia}</code></>}
+                            {dlResult.framedAt && <> · framed {new Date(dlResult.framedAt).toLocaleTimeString()}</>}
+                            {dlResult.cached ? ' · cache hit' : ' · live read (re-cached)'}
+                          </Caption1>
+                        )}
+
+                        {(dlResult.servingFrom === 'serverless-fallback' || dlResult.servingFrom === 'serverless-direct' || dlResult.servingFrom === 'columnar-cache') && dlResult.endpoint && (
                           <Caption1>
                             Serverless endpoint: <code>{dlResult.endpoint}</code>
                             {dlResult.deltaPath && <> · Delta path: <code>{dlResult.deltaPath}</code></>}

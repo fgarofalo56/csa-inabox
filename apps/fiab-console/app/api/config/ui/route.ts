@@ -50,11 +50,12 @@ export async function GET() {
   // NEXT_PUBLIC_LOOM_SEMANTIC_BACKEND reads so the Semantic model + Dashboard
   // editors pick the AAS surface at runtime (no rebuild). Non-sensitive: it's a
   // backend selector, not a credential. 'aas' is normalized to 'analysis-services'.
-  let semanticBackend: 'loom-native' | 'analysis-services' | 'fabric' = 'loom-native';
+  let semanticBackend: 'loom-native' | 'analysis-services' | 'fabric' | 'loom-columnar-cache' = 'loom-native';
   try {
     const raw = (process.env.LOOM_SEMANTIC_BACKEND || '').trim().toLowerCase();
     if (raw === 'analysis-services' || raw === 'aas') semanticBackend = 'analysis-services';
     else if (raw === 'fabric') semanticBackend = 'fabric';
+    else if (raw === 'loom-columnar-cache') semanticBackend = 'loom-columnar-cache';
   } catch {
     semanticBackend = 'loom-native';
   }
