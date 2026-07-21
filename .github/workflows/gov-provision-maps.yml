@@ -112,9 +112,13 @@ jobs:
             H=$(az containerapp revision show -n "$TILE_APP" -g "$RG" --revision "$REV" --query properties.healthState -o tsv 2>/dev/null | tr -d '\r')
             echo "loom-maps-tiles running=$RS health=$H"; { [ "$H" = "Healthy" ] || [ "$RS" = "Running" ]; } && break; sleep 15
           done
-          echo "===== loom-maps-tiles container logs (startup diagnostics) ====="
+          echo "===== loom-maps-tiles diagnostics ====="
+          az containerapp revision show -n "$TILE_APP" -g "$RG" --revision "$REV" --query "{running:properties.runningState, health:properties.healthState, err:properties.provisioningError}" -o json 2>&1 | tail -20 || true
+          echo "----- console logs -----"
           az containerapp logs show -n "$TILE_APP" -g "$RG" --tail 80 --type console 2>&1 | tail -80 || true
-          echo "===== end logs ====="
+          echo "----- system logs -----"
+          az containerapp logs show -n "$TILE_APP" -g "$RG" --tail 40 --type system 2>&1 | tail -40 || true
+          echo "===== end diagnostics ====="
           # Probe /style.json AND /health from inside the CAE (internal ingress).
           CODE=$(az containerapp exec -n "$APP" -g "$RG" --command "sh -c 'curl -s -o /dev/null -w %{http_code} http://$FQDN/style.json'" 2>/dev/null | tr -dc '0-9' | tail -c 3 || echo "000")
           echo "::notice::/style.json probe HTTP=$CODE"
