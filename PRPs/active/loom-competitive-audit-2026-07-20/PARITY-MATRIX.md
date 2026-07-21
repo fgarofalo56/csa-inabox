@@ -23,6 +23,27 @@
 
 ---
 
+## 0.1 Live browser-E2E verification (2026-07-21) — updates several rows below
+
+**The live commercial console (`csa-loom.limitlessdata.ai`, centralus) was rolled to `main` app-code `0d310856`** (all burn-the-box workstreams) via `loom-roll-and-validate` (health + build-marker + version-via-`build.sha` + notebook/data-pipeline page-shell + copilot gates all PASS; zero downtime). Rolling it required repairing the commercial deploy pipeline in **7 places** (PR #2317: 2 wrong admin-RG names, a stale ACR name, a `jq`/`$GITHUB_OUTPUT` bug, a brittle `<title>` smoke-check, a `pipefail`+SIGPIPE false-negative, and a version gate reading the semver `current` instead of `build.sha`).
+
+**Browser-E2E receipts captured** (`loom-ui-verify`, in-VNet runner minting a real session → light+dark screenshots + Playwright trace, ~9 MB artifact each):
+
+| Surface | Route | Workstream | Receipt |
+|---|---|---|---|
+| Living Marketplace | `/marketplace` | WS-10.4 | ✅ run 29825257680 |
+| Sovereign Agent Mesh | `/mesh` | WS-9 | ✅ run 29825262738 |
+| LCU-Autopilot | `/admin/autopilot` | WS-10.1 | ✅ run 29825268188 |
+| Parity-Autopilot | `/admin/parity-autopilot` | WS-10.5 | ✅ run 29825273499 |
+| Agent-Quality / eval-depth | `/admin/agent-quality` | WS-1.4/1.5 | ✅ run 29825278707 |
+| NL-to-Estate / One-Canvas | `/estate` | WS-8.1/8.2 | ✅ run 29825283844 |
+
+**Gaps in the tables below now CLOSED on `main`** (shipped since this matrix was first written): Model Serving (WS-1.2 `model-serving-endpoint` item+editor, traffic-split/invoke/monitoring — was C+, now **A**), tier-router **wired** (WS-1.1, no longer "when wired"), A2A interop (WS-5.2 — was a frontier gap), conversational code-interpreter (WS-5.3), eval-library + OTel span-tree (WS-1.5), visual agent-builder (WS-5.1), NL-to-estate + one-canvas (WS-8). **Residual true gap: WS-11.1 monolith decomposition** (maintainability refactor) and receipts for the item-editor (`/items/<type>/<id>`) surfaces beyond the 6 flagship routes above.
+
+**Revised composite: B+ / A− → A− (A on the sovereignty/integration/agentic axes), with live browser-E2E receipts on the 6 flagship new surfaces.**
+
+---
+
 ## 1. Data Engineering
 
 | Capability | Competitor product/surface | Loom surface (file) | Grade | Gap |
