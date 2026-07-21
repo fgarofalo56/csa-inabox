@@ -67,6 +67,7 @@ const ICON_BY_HREF: Record<string, FluentIcon | typeof CopilotIcon> = {
   '/business-events': Send24Regular,
   '/rti-hub': DataUsage24Regular,
   '/data-agent': Bot24Regular,
+  '/mesh': Flow24Regular,
   '/experience/data-science/home': BeakerEdit24Regular,
   '/experience/warp/home': Flow24Regular,
   '/copilot': CopilotIcon,
