@@ -23,7 +23,7 @@ import { useEffect, useState } from 'react';
 import { clientFetch } from '@/lib/client-fetch';
 
 export type BiBackendMode = 'loom-native' | 'powerbi';
-export type SemanticBackendMode = 'loom-native' | 'analysis-services' | 'fabric';
+export type SemanticBackendMode = 'loom-native' | 'analysis-services' | 'fabric' | 'loom-columnar-cache';
 
 export interface PlatformConfig {
   biBackend: BiBackendMode;
@@ -60,6 +60,7 @@ function coerce(d: unknown): PlatformConfig {
   const semanticBackend: SemanticBackendMode =
     o.semanticBackend === 'analysis-services' ? 'analysis-services'
     : o.semanticBackend === 'fabric' ? 'fabric'
+    : o.semanticBackend === 'loom-columnar-cache' ? 'loom-columnar-cache'
     : 'loom-native';
   return {
     biBackend,

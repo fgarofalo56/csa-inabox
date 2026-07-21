@@ -22,9 +22,16 @@
  * falls through to Serverless silently.
  *
  * Body:  { workspaceId: string; table: string; maxRows?: number; sql?: string }
- * Reply: { ok; servingFrom: 'warm-cache'|'serverless-fallback'; columns; rows;
- *          rowCount; executionMs; endpoint?; truncated?; deltaPath?;
- *          lastRefreshedAt?; cacheTtlSeconds? }
+ * Reply: { ok; servingFrom: 'warm-cache'|'serverless-fallback'|'columnar-cache'|'serverless-direct';
+ *          columns; rows; rowCount; executionMs; endpoint?; truncated?; deltaPath?;
+ *          lastRefreshedAt?; cacheTtlSeconds?; cached?; deltaVersion?; framedAt?; frameVia? }
+ *
+ * WS-3.3 Direct Lake substitute: when LOOM_SEMANTIC_BACKEND=loom-columnar-cache,
+ * the Serverless DirectQuery is wrapped in the framing + result-cache path
+ * (lib/azure/columnar-cache-query) — a repeat query answers from cache at
+ * import-like latency (servingFrom:'columnar-cache'); when the Delta version
+ * advances the frame token rotates and the next query re-reads live
+ * (servingFrom:'serverless-direct'). No VertiPaq import, no manual refresh.
  *
  * Honest infra gates (per no-vaporware.md):
  *   - LOOM_SYNAPSE_WORKSPACE missing → 503 naming the var
@@ -96,6 +103,11 @@ import {
 } from '@/lib/azure/eventgrid-client';
 import { xmlaEndpointFromWorkspace } from '@/lib/azure/cloud-endpoints';
 import { escapeSqlLiteral } from '@/lib/sql/quoting';
+import {
+  columnarCacheBackendSelected,
+  columnarCacheQuery,
+  resolveFrame,
+} from '@/lib/azure/columnar-cache-query';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -219,6 +231,63 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   }
 
   const openrowsetSql = buildDeltaOpenRowsetSql(deltaUrl, maxRows);
+
+  // ── Direct Lake substitute (WS-3.3): when the semantic layer is on the
+  // loom-columnar-cache backend, route the Serverless DirectQuery through the
+  // framing + result-cache path. A repeat query answers at import-like latency
+  // from cache (servingFrom:'columnar-cache'); when the Delta version advances,
+  // the frame token rotates and the next query re-reads live — no manual refresh.
+  if (columnarCacheBackendSelected()) {
+    try {
+      const cq = await columnarCacheQuery(
+        { modelId: id, sql: openrowsetSql, source: deltaUrl },
+        {
+          resolveFrame: (src) => resolveFrame(src, { hint: lastAt ?? undefined }),
+          runQuery: async () => {
+            const r = await executeQuery(serverlessTarget('master'), openrowsetSql, 60_000);
+            return {
+              rows: r.rows as unknown as Record<string, unknown>[],
+              columns: r.columns,
+              rowCount: r.rowCount,
+              sql: openrowsetSql,
+            };
+          },
+        },
+      );
+      return NextResponse.json({
+        ok: true,
+        servingFrom: cq.servingFrom, // 'columnar-cache' | 'serverless-direct'
+        cached: cq.cached,
+        deltaVersion: cq.frame.deltaVersion,
+        framedAt: new Date(cq.frame.framedAt).toISOString(),
+        frameVia: cq.frame.via,
+        lastRefreshedAt: lastAt,
+        cacheTtlSeconds: ttl,
+        endpoint,
+        deltaPath: deltaUrl,
+        columns: cq.columns,
+        rows: cq.rows,
+        rowCount: cq.rowCount,
+        executionMs: cq.executionMs,
+        truncated: (cq.rowCount ?? 0) >= maxRows,
+      });
+    } catch (e: any) {
+      const raw = sanitize(e);
+      if (/timeout|cold/.test(raw)) {
+        return NextResponse.json(
+          {
+            ok: false,
+            code: 'synapse_cold_start',
+            error:
+              'Serverless DirectQuery took longer than 60 seconds (cold-start). ' +
+              'Retry — the pool stays warm and the framed result caches for subsequent queries.',
+          },
+          { status: 504 },
+        );
+      }
+      return NextResponse.json({ ok: false, error: raw, code: e?.code }, { status: 502 });
+    }
+  }
 
   try {
     const result = await executeQuery(serverlessTarget('master'), openrowsetSql, 60_000);
