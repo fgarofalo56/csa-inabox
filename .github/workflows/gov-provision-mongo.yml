@@ -1,0 +1,104 @@
+name: gov-provision-mongo
+# Incremental Gov provisioner for the Cosmos-vCore vector store (closes
+# svc-cosmos-vcore). Microsoft.DocumentDB/mongoClusters is absent in this Gov
+# sub, but the console's cosmos-vcore-vector-client just opens a MongoClient
+# against LOOM_COSMOS_VCORE_CONNECTION_STRING (key-based, no AAD, no role grant),
+# so an OSS MongoDB Container App with TCP ingress satisfies it 1:1 — the exact
+# "build the OSS replacement" pattern. Imports mongo:7 into the Gov ACR, deploys
+# a TCP-ingress Container App, wires the connection string. Idempotent.
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: 'false = import image + plan only; true = deploy Mongo CA + wire.'
+        required: false
+        default: 'false'
+permissions:
+  contents: read
+env:
+  RG: rg-csa-loom-admin-usgovvirginia
+  ACR: acrloomdcmt6cqoezlgs
+  ACR_LOGIN: acrloomdcmt6cqoezlgs.azurecr.us
+  APP: loom-console
+  MONGO_APP: loom-mongo
+jobs:
+  provision:
+    name: Provision loom-mongo (OSS Cosmos-vCore replacement) into the Gov CAE
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
+      - name: Azure Gov Login
+        uses: Azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_GOV_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_GOV_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_GOV_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}",
+              "activeDirectoryEndpointUrl": "https://login.microsoftonline.us",
+              "resourceManagerEndpointUrl": "https://management.usgovcloudapi.net/",
+              "sqlManagementEndpointUrl": "https://management.core.usgovcloudapi.net:8443/",
+              "galleryEndpointUrl": "https://gallery.usgovcloudapi.net/",
+              "managementEndpointUrl": "https://management.core.usgovcloudapi.net/"
+            }
+          environment: AzureUSGovernment
+      - name: Set Azure cloud to Gov
+        run: az cloud set --name AzureUSGovernment
+
+      - name: Discover CAE
+        run: |
+          set -euo pipefail
+          CAE_ID=$(az containerapp show -n "$APP" -g "$RG" --query properties.environmentId -o tsv | tr -d '\r')
+          CAE_NAME=$(basename "$CAE_ID")
+          LOCATION=$(az containerapp show -n "$APP" -g "$RG" --query location -o tsv | tr -d '\r' | tr '[:upper:]' '[:lower:]' | tr -d ' ')
+          UAMI_ID=$(az containerapp show -n "$APP" -g "$RG" --query 'identity.userAssignedIdentities | keys(@) | [0]' -o tsv | tr -d '\r')
+          { echo "CAE_ID=$CAE_ID"; echo "CAE_NAME=$CAE_NAME"; echo "LOCATION=$LOCATION"; echo "UAMI_ID=$UAMI_ID"; } >> "$GITHUB_ENV"
+          echo "::notice::CAE=$CAE_NAME location=$LOCATION"
+          [ -n "$CAE_ID" ] || { echo "::error::missing CAE"; exit 1; }
+
+      - name: Import mongo:7 into the Gov ACR
+        if: ${{ inputs.apply == 'true' }}
+        run: |
+          set -euo pipefail
+          # ACR import copies the public image into the sovereign ACR (no public
+          # Docker Hub pull from the CAE at runtime — Gov-safe).
+          az acr import -n "$ACR" --source docker.io/library/mongo:7 --image loom-mongo:7 --force -o none \
+            || az acr import -n "$ACR" --source mcr.microsoft.com/mirror/docker/library/mongo:7 --image loom-mongo:7 --force -o none
+          echo "::notice::loom-mongo:7 imported."
+
+      - name: Deploy loom-mongo (TCP ingress) + wire LOOM_COSMOS_VCORE_CONNECTION_STRING
+        if: ${{ inputs.apply == 'true' }}
+        run: |
+          set -euo pipefail
+          PASS=$(openssl rand -hex 20)
+          # Create/update the Mongo Container App with internal TCP ingress on 27017.
+          if az containerapp show -n "$MONGO_APP" -g "$RG" -o none 2>/dev/null; then
+            az containerapp update -n "$MONGO_APP" -g "$RG" \
+              --image "$ACR_LOGIN/loom-mongo:7" \
+              --set-env-vars MONGO_INITDB_ROOT_USERNAME=loomadmin "MONGO_INITDB_ROOT_PASSWORD=$PASS" -o none
+          else
+            az containerapp create -n "$MONGO_APP" -g "$RG" \
+              --environment "$CAE_ID" \
+              --image "$ACR_LOGIN/loom-mongo:7" \
+              --registry-server "$ACR_LOGIN" --registry-identity "$UAMI_ID" \
+              --user-assigned "$UAMI_ID" \
+              --transport tcp --ingress internal --target-port 27017 --exposed-port 27017 \
+              --min-replicas 1 --max-replicas 1 --cpu 1.0 --memory 2.0Gi \
+              --env-vars MONGO_INITDB_ROOT_USERNAME=loomadmin "MONGO_INITDB_ROOT_PASSWORD=$PASS" \
+              -o none
+          fi
+          FQDN=$(az containerapp show -n "$MONGO_APP" -g "$RG" --query properties.configuration.ingress.fqdn -o tsv | tr -d '\r')
+          echo "::notice::loom-mongo FQDN: $FQDN"
+          # Wait for the container to be Running (Mongo starts fast).
+          for i in $(seq 1 20); do
+            REV=$(az containerapp show -n "$MONGO_APP" -g "$RG" --query properties.latestRevisionName -o tsv | tr -d '\r')
+            RS=$(az containerapp revision show -n "$MONGO_APP" -g "$RG" --revision "$REV" --query properties.runningState -o tsv 2>/dev/null | tr -d '\r')
+            echo "loom-mongo running=$RS"; [ "$RS" = "Running" ] && break; sleep 15
+          done
+          echo "----- loom-mongo console logs -----"
+          az containerapp logs show -n "$MONGO_APP" -g "$RG" --tail 30 --type console 2>&1 | tail -30 || true
+          # Wire the connection string (key auth, no TLS on the in-VNet TCP link).
+          CONN="mongodb://loomadmin:${PASS}@${FQDN}:27017/loomvectors?tls=false&directConnection=true&retryWrites=false"
+          az containerapp update -n "$APP" -g "$RG" --set-env-vars "LOOM_COSMOS_VCORE_CONNECTION_STRING=$CONN" -o none
+          echo "::notice::wired LOOM_COSMOS_VCORE_CONNECTION_STRING (loom-mongo) — re-run gov-selfaudit to confirm svc-cosmos-vcore."
