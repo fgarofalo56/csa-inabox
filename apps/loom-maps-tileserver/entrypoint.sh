@@ -7,20 +7,18 @@ set -x
 echo "[entrypoint] starting loom-maps-tileserver"
 ls -la /usr/src/app 2>/dev/null | head -20 || true
 
-# The maptiler/tileserver-gl image launches the server via its own entrypoint /
-# `node /usr/src/app/`, NOT a `tileserver-gl` binary on PATH. Serving vector
-# tiles + style.json needs no xvfb (only server-side raster rendering does), so
-# invoke node directly on :8081. Fall back across known layouts.
-if [ -f /usr/src/app/src/main.js ]; then
-  TS_CMD="node /usr/src/app/src/main.js"
-elif [ -x /usr/src/app/docker-entrypoint.sh ]; then
-  TS_CMD="/usr/src/app/docker-entrypoint.sh"
+# The maptiler/tileserver-gl image launches the server as `node /usr/src/app/`
+# (the package main via package.json), wrapped in xvfb-run — tileserver-gl loads
+# native GL bindings at startup that need a virtual display even to serve vector
+# tiles/style. Mirror that exact launch on :8081. Fall back to no-xvfb.
+if command -v xvfb-run >/dev/null 2>&1; then
+  echo "[entrypoint] tileserver launch: xvfb-run node /usr/src/app/"
+  xvfb-run -a --server-args="-screen 0 1024x768x24 -nolisten tcp" \
+    node /usr/src/app/ --config /data/config.json --port 8081 --public_url "http://localhost:8080/" 2>&1 &
 else
-  TS_CMD="node /usr/src/app/"
+  echo "[entrypoint] tileserver launch: node /usr/src/app/ (no xvfb)"
+  node /usr/src/app/ --config /data/config.json --port 8081 --public_url "http://localhost:8080/" 2>&1 &
 fi
-echo "[entrypoint] tileserver launch: $TS_CMD"
-# shellcheck disable=SC2086
-$TS_CMD --config /data/config.json --port 8081 --public_url "http://localhost:8080/" 2>&1 &
 TS_PID=$!
 echo "[entrypoint] tileserver-gl started pid=$TS_PID"
 
