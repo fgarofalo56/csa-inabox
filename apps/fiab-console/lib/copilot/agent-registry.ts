@@ -345,13 +345,16 @@ const GOV_INTERNAL_SUFFIXES = [
 ];
 
 /** Commercial-cloud hosts a `gov` profile must NOT reach (would cross boundary). */
+const COMMERCIAL_ONLY_SUFFIXES = [
+  'openai.azure.com',
+  'microsoftonline.com',
+  'api.fabric.microsoft.com',
+  'api.powerbi.com',
+];
 function isCommercialOnlyHost(host: string): boolean {
-  return (
-    host.endsWith('openai.azure.com') ||
-    host.endsWith('.microsoftonline.com') ||
-    host.endsWith('api.fabric.microsoft.com') ||
-    host.endsWith('api.powerbi.com')
-  );
+  // Exact-or-dotted-subdomain match (never a bare substring endsWith, which would
+  // treat `notopenai.azure.com` as a match) — same discipline as matchesSuffix.
+  return matchesSuffix(host, COMMERCIAL_ONLY_SUFFIXES);
 }
 
 export interface EgressDecision {
