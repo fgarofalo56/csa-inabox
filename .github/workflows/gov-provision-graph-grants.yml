@@ -1,0 +1,75 @@
+name: gov-provision-graph-grants
+# Attempts the two Microsoft Graph app-role grants the Console UAMI needs for
+# svc-m365-link (Group.ReadWrite.All) + svc-sharepoint-shortcuts (Files.Read.All),
+# then sets the corresponding enable-flag ONLY for a grant that succeeded (no
+# vaporware — a flag without its grant would 403 at the Graph call). If the Gov
+# deploy SP lacks directory role-management, the grants 403 and the gates stay
+# honestly operator-owned (a Privileged Role Admin must grant them).
+on:
+  workflow_dispatch: {}
+permissions:
+  contents: read
+env:
+  RG: rg-csa-loom-admin-usgovvirginia
+  APP: loom-console
+  GRAPH: https://graph.microsoft.us
+  GROUP_RW: 62a82d76-70ea-41e2-9197-370581804d09
+  FILES_READ: 01d4889c-1287-42c6-ac1f-5d1e02578ef6
+jobs:
+  grant:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Azure Gov Login
+        uses: Azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_GOV_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_GOV_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_GOV_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}",
+              "activeDirectoryEndpointUrl": "https://login.microsoftonline.us",
+              "resourceManagerEndpointUrl": "https://management.usgovcloudapi.net/",
+              "sqlManagementEndpointUrl": "https://management.core.usgovcloudapi.net:8443/",
+              "galleryEndpointUrl": "https://gallery.usgovcloudapi.net/",
+              "managementEndpointUrl": "https://management.core.usgovcloudapi.net/"
+            }
+          environment: AzureUSGovernment
+      - name: Set Azure cloud to Gov
+        run: az cloud set --name AzureUSGovernment
+
+      - name: Attempt Graph app-role grants + set flags on success
+        run: |
+          set -uo pipefail
+          UAMI_ID=$(az containerapp show -n "$APP" -g "$RG" --query 'identity.userAssignedIdentities | keys(@) | [0]' -o tsv | tr -d '\r')
+          UAMI_PRINCIPAL=$(az identity show --ids "$UAMI_ID" --query principalId -o tsv | tr -d '\r')
+          GRAPH_SP=$(az ad sp list --filter "appId eq '00000003-0000-0000-c000-000000000000'" --query "[0].id" -o tsv 2>/dev/null | tr -d '\r')
+          echo "::notice::UAMI principal=$UAMI_PRINCIPAL  Graph SP=$GRAPH_SP"
+          [ -n "$UAMI_PRINCIPAL" ] && [ -n "$GRAPH_SP" ] || { echo "::error::could not resolve UAMI principal or Graph SP"; exit 1; }
+
+          grant() { # $1=roleId $2=name
+            local rid="$1" nm="$2"
+            # already granted?
+            local have
+            have=$(az rest --method GET --url "$GRAPH/v1.0/servicePrincipals/$UAMI_PRINCIPAL/appRoleAssignments" 2>/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin); print('yes' if any(a.get('appRoleId')=='$rid' for a in d.get('value',[])) else 'no')" 2>/dev/null || echo no)
+            if [ "$have" = "yes" ]; then echo "  $nm already granted"; return 0; fi
+            if az rest --method POST --url "$GRAPH/v1.0/servicePrincipals/$GRAPH_SP/appRoleAssignedTo" \
+                 --headers "Content-Type=application/json" \
+                 --body "{\"principalId\":\"$UAMI_PRINCIPAL\",\"resourceId\":\"$GRAPH_SP\",\"appRoleId\":\"$rid\"}" -o none 2>/tmp/gerr; then
+              echo "  $nm GRANTED"; return 0
+            else
+              echo "::warning::$nm grant FAILED (deploy SP likely lacks AppRoleAssignment.ReadWrite.All / Privileged Role Admin):"; cat /tmp/gerr | head -c 400; return 1
+            fi
+          }
+
+          VARS=""
+          if grant "$GROUP_RW" "Group.ReadWrite.All (m365-link)"; then VARS="$VARS LOOM_WORKSPACE_M365_LINK=true"; fi
+          if grant "$FILES_READ" "Files.Read.All (sharepoint-shortcuts)"; then VARS="$VARS LOOM_SHAREPOINT_SHORTCUTS_ENABLED=true"; fi
+
+          if [ -n "$VARS" ]; then
+            # shellcheck disable=SC2086
+            az containerapp update -n "$APP" -g "$RG" --set-env-vars $VARS -o none
+            echo "::notice::set$VARS on $APP (grants succeeded) — re-run gov-selfaudit."
+          else
+            echo "::notice::no grants succeeded — flags NOT set (honest operator-owned; a Privileged Role Admin must grant the two Graph app-roles to $UAMI_PRINCIPAL)."
+          fi
