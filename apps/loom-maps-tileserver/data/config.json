@@ -1,0 +1,12 @@
+{
+  "options": {
+    "paths": { "root": "/data", "fonts": "fonts", "styles": "styles", "mbtiles": "" },
+    "serveStaticMaps": true
+  },
+  "data": {
+    "basemap": { "mbtiles": "basemap.mbtiles" }
+  },
+  "styles": {
+    "loom": { "style": "styles/loom/style.json" }
+  }
+}
