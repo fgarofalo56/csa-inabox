@@ -35,6 +35,7 @@ import {
   Chat20Regular, Clock20Regular,
 } from '@fluentui/react-icons';
 import { DataAgentResultViz, type VizTool } from '@/lib/editors/data-agent-result-viz';
+import { clientFetch } from '@/lib/client-fetch';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -179,7 +180,7 @@ async function postAsk(
   itemType: string,
   context: AskContext | undefined,
 ): Promise<{ ok: boolean; answer?: string; tools?: VizTool[]; usage?: { totalTokens: number }; model?: string; error?: string; hint?: string; missing?: string }> {
-  const res = await fetch('/api/ask', {
+  const res = await clientFetch('/api/ask', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ question, surfaceKind, itemId, itemType, context }),
