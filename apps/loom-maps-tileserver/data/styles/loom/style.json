@@ -1,30 +1,75 @@
 {
   "version": 8,
   "name": "Loom Sovereign Basemap (Natural Earth)",
-  "metadata": { "loom:source": "Natural Earth (public domain) via tippecanoe" },
-  "sources": {
-    "basemap": { "type": "vector", "url": "mbtiles://{basemap}" }
+  "metadata": {
+    "loom:source": "Natural Earth (public domain) via tippecanoe"
   },
-  "glyphs": "{fontstack}/{range}.pbf",
+  "sources": {
+    "basemap": {
+      "type": "vector",
+      "url": "mbtiles://{basemap}"
+    }
+  },
   "layers": [
-    { "id": "background", "type": "background", "paint": { "background-color": "#0b1021" } },
-    { "id": "ocean", "type": "fill", "source": "basemap", "source-layer": "ocean",
-      "paint": { "fill-color": "#0d1b3e" } },
-    { "id": "land", "type": "fill", "source": "basemap", "source-layer": "land",
-      "paint": { "fill-color": "#1b2350" } },
-    { "id": "countries-fill", "type": "fill", "source": "basemap", "source-layer": "countries",
-      "paint": { "fill-color": "#232c63", "fill-opacity": 0.35 } },
-    { "id": "boundaries", "type": "line", "source": "basemap", "source-layer": "boundaries",
-      "paint": { "line-color": "#5a6bb5", "line-width": 0.6 } },
-    { "id": "states", "type": "line", "source": "basemap", "source-layer": "states",
-      "minzoom": 3, "paint": { "line-color": "#3d4a8a", "line-width": 0.4, "line-dasharray": [2, 2] } },
-    { "id": "country-labels", "type": "symbol", "source": "basemap", "source-layer": "countries",
-      "layout": { "text-field": ["coalesce", ["get", "NAME"], ["get", "name"]], "text-font": ["Open Sans Regular"],
-                  "text-size": 11, "text-transform": "uppercase", "text-letter-spacing": 0.05 },
-      "paint": { "text-color": "#aeb8e8", "text-halo-color": "#0b1021", "text-halo-width": 1 } },
-    { "id": "place-labels", "type": "symbol", "source": "basemap", "source-layer": "places",
-      "minzoom": 3, "layout": { "text-field": ["coalesce", ["get", "name"], ["get", "NAME"]],
-                  "text-font": ["Open Sans Regular"], "text-size": 10 },
-      "paint": { "text-color": "#dfe4f7", "text-halo-color": "#0b1021", "text-halo-width": 1 } }
+    {
+      "id": "background",
+      "type": "background",
+      "paint": {
+        "background-color": "#0b1021"
+      }
+    },
+    {
+      "id": "ocean",
+      "type": "fill",
+      "source": "basemap",
+      "source-layer": "ocean",
+      "paint": {
+        "fill-color": "#0d1b3e"
+      }
+    },
+    {
+      "id": "land",
+      "type": "fill",
+      "source": "basemap",
+      "source-layer": "land",
+      "paint": {
+        "fill-color": "#1b2350"
+      }
+    },
+    {
+      "id": "countries-fill",
+      "type": "fill",
+      "source": "basemap",
+      "source-layer": "countries",
+      "paint": {
+        "fill-color": "#232c63",
+        "fill-opacity": 0.35
+      }
+    },
+    {
+      "id": "boundaries",
+      "type": "line",
+      "source": "basemap",
+      "source-layer": "boundaries",
+      "paint": {
+        "line-color": "#5a6bb5",
+        "line-width": 0.6
+      }
+    },
+    {
+      "id": "states",
+      "type": "line",
+      "source": "basemap",
+      "source-layer": "states",
+      "minzoom": 3,
+      "paint": {
+        "line-color": "#3d4a8a",
+        "line-width": 0.4,
+        "line-dasharray": [
+          2,
+          2
+        ]
+      }
+    }
   ]
 }
