@@ -53,6 +53,9 @@ WORKDIR /data
 COPY --from=basemap /build/basemap.mbtiles /data/basemap.mbtiles
 COPY data/config.json /data/config.json
 COPY data/styles/loom/style.json /data/styles/loom/style.json
+# Label-free basemap → no glyphs, but tileserver-gl still validates that the
+# configured `fonts` path exists at boot, so create an empty dir.
+RUN mkdir -p /data/fonts
 # (label-free basemap — no glyph fonts needed, keeps the image self-contained)
 # maplibre-gl assets (served at /maplibre-gl.js|css by caddy; console loads them from same origin).
 RUN mkdir -p /assets && \
