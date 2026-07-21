@@ -42,6 +42,7 @@ import {
 } from './delta-preview-grid-utils';
 import { AddAiColumnDialog, type ProducedAiColumn } from './add-ai-column-dialog';
 import { DataWranglerAiPanel, type PreviewSource } from './data-wrangler-ai-panel';
+import { AskAffordance, type AskSurfaceKind } from '@/lib/components/ask/AskAffordance';
 
 // Re-exported for existing consumers that import `ColStat` from this module
 // (e.g. lakehouse-editor-shell). The type now lives in the leaf utils module.
@@ -72,6 +73,11 @@ export interface DeltaPreviewGridProps {
   /** G4 — insert generated/suggested code into a bound notebook cell. When
    *  absent the AI tab falls back to copy-to-clipboard. */
   onInsertToNotebook?: (code: string, lang: string) => void;
+  // WS-5.4 — NL "Ask" affordance. When all three are provided, an "Ask" bar
+  // appears below the grid backed by /api/ask → data-agent-client chatGrounded.
+  askSurfaceKind?: AskSurfaceKind;
+  askItemId?: string;
+  askItemType?: string;
 }
 
 interface GridRow {
@@ -124,7 +130,7 @@ const useStyles = makeStyles({
 
 export function DeltaPreviewGrid(props: DeltaPreviewGridProps) {
   const s = useStyles();
-  const { columns: baseColumns, rows: baseRows, rowCount, executionMs, truncated, columnStats, statsLoading, statsError, mode, onModeChange, enableAiColumn = true, enableAiTab = true, previewSource, onInsertToNotebook } = props;
+  const { columns: baseColumns, rows: baseRows, rowCount, executionMs, truncated, columnStats, statsLoading, statsError, mode, onModeChange, enableAiColumn = true, enableAiTab = true, previewSource, onInsertToNotebook, askSurfaceKind, askItemId, askItemType } = props;
 
   const [filterText, setFilterText] = useState('');
   const [selectedRows, setSelectedRows] = useState<Set<TableRowId>>(new Set());
@@ -469,6 +475,18 @@ export function DeltaPreviewGrid(props: DeltaPreviewGridProps) {
           columns={columns}
           rows={rows}
           onApply={(produced) => setAiColumns((prev) => [...prev, ...produced])}
+        />
+      )}
+
+      {/* WS-5.4 — NL "Ask" affordance: appears when the host passes askSurfaceKind
+          + askItemId. Backed by /api/ask → chatGrounded (no Fabric required). */}
+      {askSurfaceKind && askItemId && (
+        <AskAffordance
+          surfaceKind={askSurfaceKind}
+          itemId={askItemId}
+          itemType={askItemType ?? askSurfaceKind}
+          context={{ columns, tables: undefined }}
+          placeholder={`Ask about these ${rowCount.toLocaleString()} rows…`}
         />
       )}
     </div>
