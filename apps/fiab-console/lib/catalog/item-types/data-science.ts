@@ -94,4 +94,17 @@ export const dataScienceItems: FabricItemType[] = [
       ],
       "docsUrl": "https://learn.microsoft.com/azure/machine-learning/concept-endpoints-online"
     } },
+  // WS-2.1 — Feature Store as a first-class item (Databricks Feature Store parity).
+  { slug: 'feature-table', displayName: 'Feature table', restType: 'FeatureTable', category: 'Data Science',
+    description: 'Author governed feature tables, point-in-time-join them onto a training set, and serve features online at inference.',
+    learnContent: {
+      "overview": "A feature table is a governed, keyed table of ML features with an event-time column for point-in-time correctness. In Loom the Azure-native DEFAULT is a Unity Catalog feature table (Delta) authored + queried through the Databricks SQL warehouse; the sovereign / Gov path uses OSS Unity Catalog + Azure Database for PostgreSQL. Online serving (feature-lookup-at-inference) is backed by Lakebase / pgvector. No Microsoft Fabric dependency. Define entity keys + a timestamp key + typed features, point-in-time-join onto a spine/label table to build a training set, publish the latest features to the online store, then look up features at inference to enrich a model-serving-endpoint (WS-1.2) scoring call.",
+      "steps": [
+        { "title": "Define a feature table", "body": "Name the table (catalog.schema.table), the entity (primary) keys, the event-time column, and the typed feature columns; Loom creates the real offline (Delta / PostgreSQL) table and the online serving table." },
+        { "title": "Point-in-time join", "body": "Pick a spine/label table and its keys + event-time column; Loom builds an AS-OF join that attaches the latest feature values as of each label's time and runs it against the real backend, returning the training set." },
+        { "title": "Publish online", "body": "Materialise the latest features per entity into the Lakebase/pgvector online table for low-latency serving." },
+        { "title": "Serve at inference", "body": "Provide entity keys and a serving endpoint; Loom looks up the online features, merges them into the scoring payload, and invokes the endpoint — the feature-lookup-at-serving path." }
+      ],
+      "docsUrl": "https://learn.microsoft.com/azure/databricks/machine-learning/feature-store/"
+    } },
 ];

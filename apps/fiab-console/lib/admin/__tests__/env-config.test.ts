@@ -169,7 +169,12 @@ describe('admin/env-config registry', () => {
     // Bumped to 140 by the Gov OSS Maps replacement: LOOM_MAPS_TILE_URL joins the
     // svc-azure-maps anyOf (the self-hosted OSS MapLibre tileserver — the GCC-High
     // path where Azure Maps is unavailable; served in-VNet via the Console proxy).
-    expect(EDITABLE_ENV.length).toBe(140);
+    // Bumped to 141 by WS-2.1 (svc-feature-store: LOOM_FEATURE_STORE_BACKEND — the
+    // Feature Store offline backend selector, default = Unity Catalog on Commercial /
+    // auto-PostgreSQL on the sovereign OSS-UC / Gov path; the databricks-hostname /
+    // pgvector-host keys it also references are shared with svc-databricks /
+    // svc-postgres, so only the selector is a NEW editable var).
+    expect(EDITABLE_ENV.length).toBe(141);
   });
 
   it('surfaces the wave-2 env vars as settable (previously dropped by the whitelist)', () => {

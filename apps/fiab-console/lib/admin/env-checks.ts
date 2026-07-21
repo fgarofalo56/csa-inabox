@@ -174,6 +174,10 @@ export const VALUE_HINT: Record<string, string> = {
   // online endpoints (Azure-native, Gov-safe). Set to 'databricks' to use
   // Databricks Mosaic AI Model Serving (opt-in) with LOOM_DATABRICKS_HOSTNAME.
   LOOM_MODEL_SERVING_BACKEND: 'aml (default) | databricks',
+  // WS-2.1 — feature-store offline backend selector. Default (unset) = Unity
+  // Catalog (Databricks) on Commercial, auto-switching to PostgreSQL for the
+  // sovereign OSS-UC / Gov path. Set to 'postgres' to force the sovereign path.
+  LOOM_FEATURE_STORE_BACKEND: 'databricks (default) | postgres',
   LOOM_APIM_NAME: '<apim-service-name>',
   LOOM_APIM_RG: '<apim-resource-group (defaults to the admin RG)>',
   LOOM_MIP_ENABLED: 'true',
@@ -1096,6 +1100,23 @@ export const ENV_CHECKS: EnvSpec[] = [
     provisionedBy: 'modules/admin-plane (aiFoundryEnabled → AML/Foundry workspace) → apps[] env (LOOM_AML_WORKSPACE); LOOM_MODEL_SERVING_BACKEND selector defaults to the Azure ML path',
     role: 'AzureML Data Scientist + onlineEndpoints/listkeys/action (Console UAMI) on the AML workspace, OR Databricks serving access (SCIM) for the opt-in path',
     docs: 'https://learn.microsoft.com/azure/machine-learning/concept-endpoints-online',
+  },
+  {
+    // WS-2.1 — Feature Store (feature-table item). Offline authoring + point-in-
+    // time joins run on the Azure-native DEFAULT: Unity Catalog feature tables
+    // (Databricks) on Commercial, or OSS-UC + Azure Database for PostgreSQL on the
+    // sovereign / Gov path (LOOM_FEATURE_STORE_BACKEND=postgres). Online serving
+    // (feature-lookup-at-inference) uses Lakebase/pgvector. The gate is satisfied
+    // when ANY backend is addressable (or the operator picked one via the
+    // selector); the per-request featureStoreConfigGate() / onlineStoreGate() gate
+    // precisely. LOOM_FEATURE_STORE_BACKEND is the only NEW editable var here (the
+    // hostname / pgvector keys are shared with svc-databricks / svc-postgres). No Fabric.
+    id: 'svc-feature-store', category: 'azure-services', title: 'Feature Store (UC feature tables + pgvector online serving)', severity: 'optional',
+    anyOf: [['LOOM_FEATURE_STORE_BACKEND', 'LOOM_DATABRICKS_HOSTNAME', 'LOOM_PGVECTOR_HOST']], warnOnMiss: true,
+    remediation: 'Feature tables author on the Azure-native offline backend by DEFAULT — Unity Catalog (set LOOM_DATABRICKS_HOSTNAME) on Commercial, or set LOOM_FEATURE_STORE_BACKEND=postgres for the sovereign OSS-UC + Azure Database for PostgreSQL path (Gov). Online serving (feature-lookup-at-inference) uses Lakebase/pgvector — set LOOM_PGVECTOR_HOST + LOOM_POSTGRES_AAD_USER. No Microsoft Fabric required.',
+    provisionedBy: 'modules/landing-zone (Databricks UC + postgres-flex) → apps[] env (LOOM_DATABRICKS_HOSTNAME / LOOM_PGVECTOR_HOST); LOOM_FEATURE_STORE_BACKEND selector defaults to the Unity Catalog path',
+    role: 'Unity Catalog USE CATALOG/SCHEMA + CREATE TABLE (Console UAMI on the metastore) for the offline store; AAD principal on the PostgreSQL server for the online store',
+    docs: 'https://learn.microsoft.com/azure/databricks/machine-learning/feature-store/',
   },
   {
     id: 'svc-apim', category: 'builders', title: 'API Management (publish-as-API / API marketplace)', severity: 'optional',

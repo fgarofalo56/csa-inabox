@@ -614,6 +614,13 @@
         "svc-postgres"
       ]
     },
+    "feature-store-client": {
+      "checks": [
+        "svc-feature-store",
+        "svc-databricks",
+        "svc-postgres"
+      ]
+    },
     "plan-approval-client": {
       "checks": [
         "cosmos-config",

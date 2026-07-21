@@ -117,6 +117,9 @@ export const EDITOR_REGISTRY: Record<string, EditorComponent> = {
   // + invoke console + latency/error monitoring over Azure ML online endpoints
   // (Azure-native default) or Databricks Mosaic serving (LOOM_MODEL_SERVING_BACKEND=databricks).
   'model-serving-endpoint': reg(() => import('./model-serving-endpoint-editor'), 'ModelServingEndpointEditor'),
+  // WS-2.1 — Feature Store: author UC feature tables + point-in-time joins +
+  // online feature-lookup-at-serving over UC (Databricks / OSS-UC) + Lakebase/pgvector.
+  'feature-table':        reg(() => import('./feature-table-editor'),   'FeatureTableEditor'),
   // AIF-7 — batch LLM augmentation over a table column (Fabric AI-functions item).
   'ai-enrichment':        reg(() => import('./ai-enrichment-editor'),     'AiEnrichmentEditor'),
   // AIF-15 — AI red-team scan: defensive safety probe of a model deployment.
