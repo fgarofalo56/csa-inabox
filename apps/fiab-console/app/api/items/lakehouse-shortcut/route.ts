@@ -42,6 +42,12 @@ import {
 } from '@/lib/azure/kv-secrets-client';
 import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
 import { apiError } from '@/lib/api/respond';
+import {
+  pickTablesEngine, createTablesShortcut, dropShortcutObject, bindExternalSource,
+  dropExternalBinding, type TablesRegistration, type EngineGate,
+} from '@/lib/azure/shortcut-engines';
+import type { ShortcutCredentialRef } from '@/lib/azure/lakehouse-shortcuts';
+import { executeQuery, serverlessTarget } from '@/lib/azure/synapse-sql-client';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -50,6 +56,79 @@ export type SourceType = 'internal' | 'adls' | 'blob' | 's3' | 's3compatible' | 
 const SOURCE_TYPES: SourceType[] = ['internal', 'adls', 'blob', 's3', 's3compatible', 'gcs', 'dataverse'];
 /** Sources whose credential MUST be persisted to Key Vault to resolve later. */
 const SECRET_REQUIRED = new Set<SourceType>(['s3', 's3compatible', 'gcs']);
+
+/** A shortcut is a named POINTER (kind='files') or a zero-copy queryable external
+ *  TABLE/VIEW (kind='tables') the lakehouse SQL endpoint reads in place. */
+export type ShortcutKind = 'files' | 'tables';
+const SHORTCUT_KINDS: ShortcutKind[] = ['files', 'tables'];
+type TableFormat = 'delta' | 'parquet' | 'csv' | 'json';
+const TABLE_FORMATS: TableFormat[] = ['delta', 'parquet', 'csv', 'json'];
+
+function isGate(x: unknown): x is EngineGate {
+  return !!x && typeof x === 'object' && (x as EngineGate).gated === true;
+}
+
+/**
+ * Register a Tables shortcut as a REAL zero-copy external table/view on the
+ * default Azure-native engine (Synapse Serverless view via OPENROWSET, or —
+ * when only Databricks is configured — a Unity Catalog external table over the
+ * abfss/object location). The lakehouse SQL analytics endpoint then queries it
+ * by its 3-part `engineObject` name WITHOUT copying a byte. No Fabric REST.
+ *
+ * `resolved` is the proven read address from resolveByType(); `secretRef` is the
+ * Key Vault secret name for S3/GCS credentials (bindExternalSource resolves it).
+ * Returns a TablesRegistration on success or an EngineGate (honest, Fix-it-able).
+ */
+async function registerTablesObject(opts: {
+  id: string;
+  displayName: string;
+  sourceType: SourceType;
+  resolved: ResolveOk;
+  secretRef?: string;
+  format?: TableFormat;
+}): Promise<TablesRegistration | EngineGate> {
+  const { id, displayName, sourceType, resolved, secretRef, format } = opts;
+  // Namespace the engine object by the shortcut id so two shortcuts of the same
+  // display name (across workspaces) never collide in the shared `shortcuts`
+  // schema / `loom` UC catalog, and never leak across tenants.
+  const engName = `${id.slice(0, 8)}_${displayName}`;
+  const lakehouseNs = `sc_${id.slice(0, 8)}`;
+
+  // S3 / GCS: bind the external cloud source (UC external location / Synapse
+  // data source over a Key-Vault-stored credential) then register the table.
+  if (sourceType === 's3' || sourceType === 'gcs') {
+    if (!secretRef) {
+      return { gated: true, code: 'needs_credential', hint: `${sourceType.toUpperCase()} Tables shortcuts need a stored credential — save a Key Vault-backed shortcut secret first.` };
+    }
+    const targetType = sourceType === 'gcs' ? 'gcs' : 's3';
+    const credentialRef: ShortcutCredentialRef = {
+      kind: sourceType === 'gcs' ? 'gcsServiceAccount' : 'awsKeys',
+      keyVaultSecret: secretRef,
+    };
+    const bind = await bindExternalSource({ lakehouseId: lakehouseNs, name: engName, targetType, targetUri: resolved.targetUri, credentialRef });
+    if (isGate(bind)) return bind;
+    const m = bind.readUri.match(/^(?:s3a?|gs):\/\/[^/]+\/?(.*)$/i);
+    return createTablesShortcut({
+      lakehouseId: lakehouseNs, name: engName, abfssUri: bind.readUri, format,
+      external: { objectUri: bind.readUri, ucExternalLocation: bind.ucExternalLocation, synapseDataSource: bind.synapse?.dataSource, objectKey: m ? m[1] : '' },
+    });
+  }
+
+  // S3-compatible (MinIO/Wasabi/etc): no Synapse/UC external-location binding on
+  // the default path — surface as a Files shortcut, or use the lakehouse editor's
+  // Shortcuts tab which carries the full external-credential engine.
+  if (sourceType === 's3compatible') {
+    return { gated: true, code: 's3compatible_files_only', hint: 'S3-compatible sources register as Files shortcuts (read in a notebook via the stored credential). Use kind=files, or create the Tables shortcut from the lakehouse editor Shortcuts tab.' };
+  }
+
+  // ADLS / Blob / internal / Dataverse: an abfss read address the engine reads
+  // in place on the Console UAMI (OPENROWSET / UC external table over abfss).
+  const abfss = resolved.abfss;
+  if (!abfss) {
+    return { gated: true, code: 'no_abfss_target', hint: 'A Tables shortcut needs an ADLS Gen2 (abfss) target the query engine can read in place.' };
+  }
+  return createTablesShortcut({ lakehouseId: lakehouseNs, name: engName, abfssUri: abfss, format });
+}
 
 function err(error: string, status: number, extra?: Record<string, unknown>) {
   return apiError(error, status, extra);
@@ -192,6 +271,12 @@ function shortcutView(r: WorkspaceItem) {
     id: r.id,
     displayName: r.displayName,
     sourceType,
+    kind: (st.kind as ShortcutKind) || 'files',
+    format: st.format,
+    engine: st.engine || 'none',
+    engineObject: st.engineObject,
+    engineStatus: st.engineStatus || (st.engineObject ? 'active' : undefined),
+    engineDetail: st.engineDetail,
     container: st.container,
     path: st.path,
     account: st.account,
@@ -239,10 +324,57 @@ export async function POST(req: NextRequest) {
   if (!SOURCE_TYPES.includes(sourceType)) return err(`sourceType must be one of ${SOURCE_TYPES.join(', ')}`, 400);
   const cfg = connectorFromBody(body);
   const secret = typeof body?.secret === 'string' ? body.secret : '';
+  const kind: ShortcutKind = SHORTCUT_KINDS.includes(body?.kind) ? body.kind : 'files';
+  const format: TableFormat = TABLE_FORMATS.includes(body?.format) ? body.format : 'delta';
 
   try {
     const ws = await loadWs(workspaceId, s.claims.oid);
     if (!ws) return err('workspace not found', 404);
+
+    // Zero-copy QUERY: run SELECT TOP n over a Tables shortcut's engine object
+    // through the Synapse Serverless SQL endpoint (the lakehouse SQL endpoint) —
+    // reading the external data IN PLACE, no copy. Proves the acceptance in-editor.
+    if (body?.action === 'query') {
+      const id = String(body?.id || '').trim();
+      if (!id) return err('id required', 400);
+      const items = await itemsContainer();
+      let row: WorkspaceItem | undefined;
+      try {
+        const { resource } = await items.item(id, workspaceId).read<WorkspaceItem>();
+        row = resource || undefined;
+      } catch (e: any) { if (e?.code !== 404) throw e; }
+      if (!row || row.itemType !== 'lakehouse-shortcut') return err('shortcut not found', 404);
+      const stt = (row.state as any) || {};
+      if ((stt.kind || 'files') !== 'tables' || !stt.engineObject) {
+        return err('This shortcut is not a queryable Tables shortcut. Create it with kind=tables.', 400, { code: 'not_queryable' });
+      }
+      if (stt.engine === 'databricks') {
+        // The UC external table is queryable from a Databricks SQL editor; the
+        // Synapse TDS client cannot read a UC catalog. Return the queryable name
+        // honestly rather than a fake grid (no-vaporware).
+        return NextResponse.json({
+          ok: true, engineObject: stt.engineObject, engine: 'databricks',
+          columns: [], rows: [],
+          note: `Query zero-copy in a Databricks SQL editor: SELECT * FROM ${stt.engineObject} LIMIT 100;`,
+        });
+      }
+      if (!process.env.LOOM_SYNAPSE_WORKSPACE) {
+        return err(
+          'Synapse Serverless SQL endpoint not provisioned. Set LOOM_SYNAPSE_WORKSPACE and grant the Console UAMI Synapse SQL admin + Storage Blob Data Reader to query shortcuts zero-copy.',
+          503, { code: 'synapse_not_configured' },
+        );
+      }
+      const top = Math.min(Math.max(parseInt(String(body?.top || '100'), 10) || 100, 1), 1000);
+      try {
+        const result = await executeQuery(serverlessTarget('master'), `SELECT TOP ${top} * FROM ${stt.engineObject};`);
+        return NextResponse.json({ ok: true, engineObject: stt.engineObject, engine: 'synapse', columns: result.columns, rows: result.rows, rowCount: result.rowCount });
+      } catch (e: any) {
+        const raw = sanitize(e);
+        const isEmpty = /cannot be listed|does not exist|not found|no files|0x80070002/i.test(raw);
+        if (isEmpty) return NextResponse.json({ ok: true, engineObject: stt.engineObject, engine: 'synapse', columns: [], rows: [], rowCount: 0, note: 'The shortcut target is empty or not yet populated — no rows (expected until the source has data).' });
+        return err(raw, 502, { code: 'query_failed' });
+      }
+    }
 
     // Verify-only: resolve the target without persisting a pointer or a secret.
     if (body?.action === 'verify') {
@@ -281,12 +413,43 @@ export async function POST(req: NextRequest) {
       secretRef = name;
     }
 
+    // Tables shortcut → register a REAL zero-copy external table/view on the
+    // Azure-native engine so the lakehouse SQL endpoint can query it in place.
+    let engine: 'synapse' | 'databricks' | 'none' = 'none';
+    let engineObject: string | undefined;
+    let engineStatus: 'active' | 'pending' | 'error' | undefined;
+    let engineDetail: string | undefined;
+    let tablesGate: EngineGate | undefined;
+    if (kind === 'tables') {
+      if (!pickTablesEngine()) {
+        // Honest infra-gate: no query engine configured. Persist the pointer as
+        // pending so it's visible + retryable; the editor renders a Fix-it.
+        tablesGate = {
+          gated: true, code: 'no_tables_engine',
+          hint: 'A Tables shortcut registers a zero-copy external table, which needs a query engine. Set LOOM_SYNAPSE_WORKSPACE (Synapse Serverless — preferred) or LOOM_DATABRICKS_HOSTNAME (Databricks Unity Catalog). Files shortcuts work without either.',
+        };
+        engineStatus = 'pending';
+        engineDetail = tablesGate.hint;
+      } else {
+        try {
+          const reg = await registerTablesObject({ id, displayName, sourceType, resolved: r, secretRef, format });
+          if (isGate(reg)) { tablesGate = reg; engineStatus = 'pending'; engineDetail = reg.hint; }
+          else { engine = reg.engine as 'synapse' | 'databricks'; engineObject = reg.engineObject; engineStatus = 'active'; }
+        } catch (e: any) {
+          engineStatus = 'error';
+          engineDetail = sanitize(e);
+        }
+      }
+    }
+
     const now = new Date().toISOString();
     const item: WorkspaceItem = {
       id, workspaceId, itemType: 'lakehouse-shortcut',
       displayName, description: body?.description,
       state: {
         sourceType,
+        kind, format: kind === 'tables' ? format : undefined,
+        engine, engineObject, engineStatus, engineDetail,
         container: cfg.container, path: cfg.path, account: cfg.account,
         bucket: cfg.bucket, region: cfg.region, endpointHost: cfg.endpointHost,
         environmentUrl: cfg.environmentUrl, exportAbfssUri: cfg.exportAbfssUri,
@@ -299,7 +462,22 @@ export async function POST(req: NextRequest) {
     };
     const items = await itemsContainer();
     const { resource } = await items.items.create(item);
-    return NextResponse.json({ ok: true, shortcut: resource ? shortcutView(resource as WorkspaceItem) : null, resolution: r });
+    const view = resource ? shortcutView(resource as WorkspaceItem) : null;
+    // Tables shortcut whose engine object could not be created → honest 503 with
+    // the exact remediation, but the pointer row exists (visible + retryable).
+    if (tablesGate) {
+      return NextResponse.json(
+        { ok: false, code: tablesGate.code, error: tablesGate.hint, hint: tablesGate.hint, shortcut: view, resolution: r },
+        { status: 503 },
+      );
+    }
+    if (engineStatus === 'error') {
+      return NextResponse.json(
+        { ok: false, code: 'engine_error', error: engineDetail, shortcut: view, resolution: r },
+        { status: 502 },
+      );
+    }
+    return NextResponse.json({ ok: true, shortcut: view, resolution: r, engineObject });
   } catch (e: any) { return err(sanitize(e), 500); }
 }
 
@@ -312,11 +490,19 @@ export async function DELETE(req: NextRequest) {
   if (!(await assertOwner(workspaceId, s.claims.oid))) return err('workspace not found', 404);
   try {
     const items = await itemsContainer();
-    // Best-effort: read the row first so we can also delete its KV secret.
+    // Best-effort: read the row first so we can also drop the engine object +
+    // delete its KV secret. The engine object (Synapse view / UC table) is
+    // dropped — NEVER the underlying source bytes (matches UC/Fabric semantics).
     try {
       const { resource } = await items.item(id, workspaceId).read<WorkspaceItem>();
-      const secretRef = (resource?.state as any)?.secretRef;
-      if (secretRef) await deleteShortcutSecret(secretRef);
+      const st = (resource?.state as any) || {};
+      if (st.engine && st.engine !== 'none' && st.engineObject) {
+        await dropShortcutObject({ engine: st.engine, engineObject: st.engineObject }).catch(() => { /* already-dropped/missing must not block */ });
+        if ((st.sourceType === 's3' || st.sourceType === 'gcs') && st.engine === 'databricks') {
+          await dropExternalBinding(`sc_${id.slice(0, 8)}`, `${id.slice(0, 8)}_${resource?.displayName || ''}`).catch(() => { /* best-effort */ });
+        }
+      }
+      if (st.secretRef) await deleteShortcutSecret(st.secretRef);
     } catch { /* proceed to delete the pointer regardless */ }
     await items.item(id, workspaceId).delete();
     return NextResponse.json({ ok: true });

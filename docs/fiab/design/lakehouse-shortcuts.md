@@ -272,6 +272,31 @@ Data Reader) and the UC/Synapse credential wiring for external clouds remain as 
 
 ---
 
+## 8b. WS-3.2 — standalone `lakehouse-shortcut` item editor now delivers zero-copy QUERY (2026-07-20)
+
+The standalone `lakehouse-shortcut` item editor (`lib/editors/lakehouse-shortcut-editor.tsx`
++ `app/api/items/lakehouse-shortcut/route.ts`) previously only **verified/resolved** a source
+(a real listing to prove zero-copy resolution) but registered **no queryable object** — so you
+could not query it from the lakehouse SQL endpoint. WS-3.2 closes that: the editor now carries a
+**kind (Files/Tables)** + **format** and, for a **Tables** shortcut, calls the shared engine
+(`createTablesShortcut` / `bindExternalSource` / `pickTablesEngine` / `dropShortcutObject`) to
+register a **real zero-copy external table/view** (Synapse Serverless `OPENROWSET` view — 3-part
+`engineObject` in `loom_lakehouse` — or a Databricks UC external table). A new
+`POST … {action:'query'}` runs a live `SELECT TOP 100 * FROM <engineObject>` through the Synapse
+Serverless SQL endpoint (`serverlessTarget('master')` — cross-DB 3-part), rendering the rows in an
+in-editor grid: the acceptance proof ("create a shortcut → query it zero-copy from the lakehouse
+SQL endpoint"). DELETE drops the engine object (never the source bytes) + the KV secret + the row.
+Honest-gates: no query engine → 503 naming `LOOM_SYNAPSE_WORKSPACE` **or**
+`LOOM_DATABRICKS_HOSTNAME` (the pointer row still persists, `engineStatus:'pending'`, retryable);
+S3-compatible Tables → Files-only note. No Fabric REST on any path. The engine object is namespaced
+by the shortcut id (`sc_<id8>` / `<id8>_<name>`) so shortcuts never collide across workspaces.
+This is the WS-6 "shortcuts for zero-copy bind" dependency: an ontology object can bind to the
+stable `engineObject` (a UC/Synapse external table) an item resolves to.
+Tests: `app/api/items/__tests__/lakehouse-shortcut.test.ts` (Files vs Tables create, engine-object
+persistence, no-engine honest-gate, zero-copy `query` action, delete-drops-object).
+
+---
+
 ## 9. Biggest technical risk
 
 **Unity Catalog external-table registration permissions and storage-credential provisioning.** The Databricks path is the only way to get a *true* Fabric-parity "Tables shortcut" (a named Delta table queryable from both Spark and a SQL endpoint, auto-recognized). But it requires a UC **metastore** attached to the workspace, an **Access Connector / storage credential** with Storage Blob Data Contributor on every target account, and the Console identity holding `CREATE EXTERNAL LOCATION` + `CREATE EXTERNAL TABLE` + `EXTERNAL USE LOCATION` — privileges that **cannot** be granted purely from ARM/bicep (they are UC data-plane grants requiring a metastore admin and a SCIM-provisioned principal). If UC isn't fully bootstrapped in a given tenant, Tables-shortcut creation fails. **Mitigation:** make **Synapse Serverless** (`CREATE EXTERNAL TABLE`/`OPENROWSET` view, which Loom already authenticates to) the **default Tables engine**, treat Databricks UC as the preferred-when-available upgrade, and **honest-gate** any path that needs UC bootstrap with the exact metastore/grant/Access-Connector remediation. This keeps the feature functional end-to-end on the UAMI-only path while still reaching full UC parity where the tenant has provisioned Unity Catalog.
