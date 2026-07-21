@@ -75,6 +75,7 @@ const ALLOWLIST_HELPERS = new Map([
   ['apps/fiab-console/app/api/items/ontology/[id]/links/route.ts', 'error + code + gate spread'],
   ['apps/fiab-console/app/api/items/ontology/[id]/objects/route.ts', 'error + code + gate spread'],
   ['apps/fiab-console/app/api/items/ontology/[id]/run-action/route.ts', 'error + code + gate spread'],
+  ['apps/fiab-console/app/api/items/ontology/[id]/sync/route.ts', 'error + code + gate spread'],
   ['apps/fiab-console/app/api/items/workshop-app/[id]/run-action/route.ts', 'error + code + gate spread'],
 ]);
 

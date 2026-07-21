@@ -78,6 +78,7 @@ import { normalizeObjectSecurity } from '@/lib/foundry/object-security';
 import { OntologySecurityPanel } from './ontology-security-panel';
 import { OntologyDerivedPanel } from './ontology-derived-panel';
 import { OntologyFunctionsPanel } from './ontology-functions-panel';
+import { OntologySyncPanel } from './ontology-sync-panel';
 import { normalizeDerivedPropertyMap, type OntoDerivedProperty } from '@/lib/foundry/derived-properties';
 import { normalizeRegisteredFunctions, functionNames as registeredFunctionNames } from '@/lib/foundry/function-registry-model';
 // Pure-logic helpers extracted for vitest coverage. See
@@ -789,6 +790,15 @@ function WeaveInstancePanel({
               </>
             )}
           </>
+        )}
+        {/* ── WS-4.4 Dataset→object backfill (shown when datasource is configured) ── */}
+        {selectedOt?.datasource?.kind && selectedOt.datasource.table && (
+          <OntologySyncPanel
+            ontologyId={id}
+            objectType={objType}
+            datasource={selectedOt.datasource}
+            titleKey={selectedOt.titleKey}
+          />
         )}
       </div>
 
