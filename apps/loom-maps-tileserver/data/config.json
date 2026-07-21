@@ -14,7 +14,7 @@
   },
   "styles": {
     "loom": {
-      "style": "styles/loom/style.json"
+      "style": "loom/style.json"
     }
   }
 }
