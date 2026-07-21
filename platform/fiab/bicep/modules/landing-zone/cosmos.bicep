@@ -178,6 +178,10 @@ var loomContainers = [
   { name: 'workspace-folders', partitionKey: '/workspaceId' }
   { name: 'task-flows',        partitionKey: '/workspaceId' }
   { name: 'task-flow-runs',    partitionKey: '/workspaceId' }
+  // WS-10.3 Time-Machine — time-branch (shadow-workspace) pins. One row per
+  // named as-of snapshot over a workspace, PK /workspaceId → single-partition
+  // list. createIfNotExists in cosmos-client.ts ensure() is the hotfix fallback.
+  { name: 'time-branches',     partitionKey: '/workspaceId' }
   { name: 'embed-codes',       partitionKey: '/tenantId' }
   { name: 'org-visuals',       partitionKey: '/tenantId' }
   { name: 'azure-connections', partitionKey: '/tenantId' }
