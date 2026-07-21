@@ -120,6 +120,16 @@ const LAKEHOUSE_KQL_MATERIALIZABLE = lakehouseKqlMaterializableTypes();
 /** Item types the Weave "Promote (medallion)" edge can source (manifest `medallionPromotable`). */
 const MEDALLION_PROMOTABLE = medallionPromotableTypes();
 
+/**
+ * WS-6 (BTB-1) — item types the Weave "Bind to ontology" edge can source: every
+ * `notebookAttachable` data store (lakehouse / warehouse / KQL / synapse pools /
+ * Azure SQL) PLUS `semantic-model` (so a semantic measure binds too — the third
+ * acceptance source kind). Each member is already in `WEAVE_SOURCEABLE_ITEM_TYPES`
+ * so this adds no new weave-sourceable type. A bound item's rows resolve as typed
+ * instances of an ontology object type via `lib/foundry/ontology-resolver.ts`.
+ */
+const ONTOLOGY_BINDABLE = Array.from(new Set([...NOTEBOOK_ATTACHABLE, 'semantic-model']));
+
 export const THREAD_ACTIONS: ThreadAction[] = [
   {
     id: 'analyze-in-notebook',
@@ -135,6 +145,49 @@ export const THREAD_ACTIONS: ThreadAction[] = [
     ],
     route: '/api/thread/analyze-in-notebook',
     submitLabel: 'Weave',
+  },
+  {
+    id: 'bind-to-ontology',
+    label: 'Bind to an Ontology object',
+    description:
+      'Promote this item to the Weave ontology substrate — its rows become typed instances of an ' +
+      'ontology object type. A lakehouse table, a KQL stream, and a semantic measure can all bind to the ' +
+      'SAME object, so the ontology resolves across every backend. Grounds Copilot + resolves lineage/access.',
+    group: 'Promote',
+    fromTypes: ONTOLOGY_BINDABLE,
+    icon: 'bot',
+    fields: [
+      {
+        name: 'ontologyId',
+        label: 'Ontology',
+        kind: 'loom-item',
+        itemTypes: ['ontology'],
+        required: true,
+        hint: 'The Weave ontology that declares the object type to bind to.',
+      },
+      {
+        name: 'objectType',
+        label: 'Object type',
+        kind: 'text',
+        required: true,
+        hint: 'The api-name of the ontology object type this data materializes (e.g. Customer). Must be declared on the ontology.',
+      },
+      {
+        name: 'sourceRef',
+        label: 'Source table / stream / measure',
+        kind: 'text',
+        required: true,
+        hint: 'The backing object: a SQL table (schema.table), a KQL table/stream, or a semantic-model table. Its columns map to the object properties by name.',
+      },
+      {
+        name: 'keyColumn',
+        label: 'Primary-key column (optional)',
+        kind: 'text',
+        hint: 'The source column that identifies each instance. Defaults to the object type’s primary-key property.',
+      },
+    ],
+    route: '/api/thread/bind-to-ontology',
+    submitLabel: 'Bind',
   },
   {
     id: 'add-data-agent-source',

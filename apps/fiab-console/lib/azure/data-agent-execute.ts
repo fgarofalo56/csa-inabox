@@ -22,6 +22,7 @@ import { graphGroundingSearch, GraphSearchAccessError, type GraphGroundingScope 
 import { fetchWithTimeout } from './fetch-with-timeout';
 import { resolveAgentInvokeUrl, type DataAgentSource } from './data-agent-client';
 import { evalDax, TabularError } from './tabular-eval-client';
+import { resolveOntologyObjectForGrounding } from '@/lib/foundry/ontology-resolver';
 
 /** Owner/runtime context threaded from the grounded-chat caller (session oid).
  * Required to run a `semantic-model` DAX query, since the Azure-native tabular
@@ -305,6 +306,31 @@ export async function executeSourceQuery(source: DataAgentSource, query: string,
           note: steps.length
             ? `The hosted agent ran ${steps.length} tool step(s) to produce this answer; treat it as an authoritative sub-answer and integrate it into your response.`
             : 'Treat the hosted agent\'s answer as an authoritative sub-answer and integrate it into your response.',
+        };
+      }
+      case 'ontology': {
+        // WS-6 (BTB-1) — ground THROUGH the Weave ontology graph: resolve the
+        // object type to its bound sources (lakehouse / KQL / semantic measure)
+        // and return typed OBJECT INSTANCES the model reasons over — not raw
+        // tables. `source.id` = ontology item id; `source.tables` names the
+        // object type (first token). Owner-scoped via ctx.tenantId.
+        const tenantId = ctx?.tenantId;
+        if (!tenantId) {
+          return { executed: false, gate: 'Ontology grounding needs the signed-in owner context (route this through the data-agent chat).' };
+        }
+        const objectType = (source.tables ? source.tables.split(',')[0].trim() : '') || query.trim();
+        if (!objectType) {
+          return { executed: false, gate: 'No object type is selected for this ontology source — set it in the source Tables field.' };
+        }
+        const outcome = await resolveOntologyObjectForGrounding(source.id, objectType, tenantId, MAX_ROWS);
+        if ('gate' in outcome) return { executed: false, gate: outcome.gate };
+        return {
+          executed: true,
+          columns: outcome.columns,
+          rows: outcome.rows.slice(0, MAX_ROWS),
+          rowCount: outcome.rowCount,
+          truncated: outcome.rowCount > MAX_ROWS,
+          note: `Grounded through the Weave ontology: "${objectType}" resolved to ${outcome.rowCount} typed instance(s) from ${outcome.sources.filter((s) => s.resolved).length} bound source(s).`,
         };
       }
       default:
