@@ -242,10 +242,19 @@ jobs:
           ENVV="UAT_GREP_INVERT=tutorial"
           [[ -n "$UAT_GREP" ]] && ENVV="$ENVV UAT_GREP=$UAT_GREP"
           echo "Starting loom-uat execution (env overrides: $ENVV) ..."
+          # NOTE: `az containerapp job start --env-vars` overrides the execution's
+          # container template, and the CLI then REQUIRES an explicit --image
+          # (ContainerAppImageRequired) — omitting it fails the start in <1s and
+          # (previously, with stderr swallowed) looked like a mystery UAT flake.
+          # Pass the job's own image so env overrides apply cleanly.
+          UAT_IMAGE="${ACR_NAME}.azurecr.io/loom-uat:latest"
+          START_ERR=$(mktemp)
           EXEC=$(az containerapp job start -n loom-uat -g "$RG" \
-            --env-vars $ENVV --query name -o tsv 2>/dev/null | tr -d '\r')
+            --image "$UAT_IMAGE" \
+            --env-vars $ENVV --query name -o tsv 2>"$START_ERR" | tr -d '\r')
           if [[ -z "$EXEC" ]]; then
-            echo "::error::Failed to start loom-uat execution."
+            echo "::error::Failed to start loom-uat execution. az stderr:"
+            cat "$START_ERR" >&2 || true
             exit 1
           fi
           echo "::notice::Started loom-uat execution: $EXEC"
