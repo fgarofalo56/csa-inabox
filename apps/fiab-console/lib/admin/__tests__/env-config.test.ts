@@ -179,10 +179,11 @@ describe('admin/env-config registry', () => {
     // OpenAI account the fine-tuning + model-deployment REST targets) are both NEW
     // editable vars; the LOOM_AOAI_ENDPOINT / LOOM_FOUNDRY_NAME keys it also
     // references are shared with svc-aoai / svc-aml.
-    // Bumped to 144 by WS-5.2 (svc-a2a-egress): LOOM_A2A_EGRESS_ALLOW — the gov-safe
-    // A2A OUTBOUND egress allow-list (a runtime-only knob; unset = outbound A2A
-    // disabled, the sovereign default). One NEW editable var.
-    expect(EDITABLE_ENV.length).toBe(144);
+    // 143 base → WS-5.2 svc-a2a-egress added LOOM_A2A_EGRESS_ALLOW (144) →
+    // WS-10.1 svc-lcu-autopilot adds LOOM_AUTOPILOT_MODE (the self-driving FinOps
+    // loop bootstrap approval mode) + LOOM_CAPACITY_LCU (the published LCU
+    // capacity ceiling the autopilot right-sizes via env-apply) — both NEW.
+    expect(EDITABLE_ENV.length).toBe(146);
   });
 
   it('surfaces the wave-2 env vars as settable (previously dropped by the whitelist)', () => {
@@ -250,7 +251,11 @@ describe('admin/env-config registry', () => {
       'LOOM_A2A_EGRESS_ALLOW',
       'LOOM_AOAI_MINI_DEPLOYMENT', 'LOOM_AOAI_STRONG_DEPLOYMENT',
       'LOOM_AUDIT_DCR_ENDPOINT', 'LOOM_AUDIT_DCR_ID',
+      // WS-10.1 svc-lcu-autopilot — both optionalDefault (propose mode +
+      // auto-derived LCU ceiling are the fully-functional defaults).
+      'LOOM_AUTOPILOT_MODE',
       'LOOM_BROKER_REDIS', 'LOOM_BROKER_URL',
+      'LOOM_CAPACITY_LCU',
       'LOOM_CONTENT_SAFETY_ENDPOINT', 'LOOM_DIRECTLAKE_URL', 'LOOM_DOCINTEL_ENDPOINT',
       'LOOM_EVENTGRID_TOPIC_ENDPOINT', 'LOOM_EVENTGRID_TOPIC_KEY',
       'LOOM_GRAPH_GROUP_SYNC_ENABLED',

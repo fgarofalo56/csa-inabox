@@ -2774,6 +2774,13 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // then enforce per-domain. _aclGrants/_protectionPolicies are created
             // on-demand by the PDP context-loader/reconciler (createIfNotExists).
             { name: 'LOOM_PDP_ENFORCE', value: 'off' }
+            // WS-10.1 LCU-Autopilot (BTB-2) — bootstrap approval mode for the
+            // self-driving FinOps loop (/admin/autopilot). 'propose' = compute +
+            // surface recommendations only (day-one default, opt-out); an admin
+            // flips to 'auto' from the page to let the loop actuate live (auto-pause
+            // idle compute + roll capacity env-config). The persisted per-tenant mode
+            // in the Cosmos `autopilot` container overrides this once set.
+            { name: 'LOOM_AUTOPILOT_MODE', value: 'propose' }
             { name: 'NEXT_PUBLIC_LOOM_VERSION', value: loomVersion }
             { name: 'LOOM_SUBSCRIPTION_ID', value: subscription().subscriptionId }
             { name: 'LOOM_ADMIN_RG', value: resourceGroup().name }

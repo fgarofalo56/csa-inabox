@@ -467,6 +467,11 @@ export const GATE_META: Record<string, GateMeta> = {
     fixit: { kind: 'env-picker' },
     autoResolveNote: 'The built-in Cosmos audit trail records every event regardless — the DCR only adds an external SIEM mirror.',
   },
+  'svc-lcu-autopilot': {
+    surfaces: [{ path: '/admin/autopilot', label: 'LCU-Autopilot (self-driving FinOps)' }],
+    fixit: { kind: 'env-picker' },
+    autoResolveNote: "Unset → the autopilot runs in 'propose' mode and the LCU ceiling auto-derives from peak; both are fully-functional defaults, not a gap.",
+  },
   'svc-azure-maps': {
     surfaces: [
       { path: '/items/report', label: 'Report Map visual' },
