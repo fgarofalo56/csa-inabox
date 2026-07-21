@@ -27,12 +27,14 @@ RUN for f in \
       "https://naciscdn.org/naturalearth/50m/cultural/ne_50m_populated_places_simple.zip" ; do \
         n=$(basename "$f" .zip); curl -fsSL "$f" -o "$n.zip" && unzip -o "$n.zip" -d "$n" ; done
 # shp → GeoJSONSeq (one file per layer), then tippecanoe → a single MBTiles with named layers.
-RUN set -e; declare -A L=( \
-      [ocean]=ne_50m_ocean [land]=ne_50m_land [countries]=ne_50m_admin_0_countries \
-      [states]=ne_50m_admin_1_states_provinces_lines [boundaries]=ne_50m_admin_0_boundary_lines_land \
-      [places]=ne_50m_populated_places_simple ); \
-    for layer in "${!L[@]}"; do d="${L[$layer]}"; \
-      ogr2ogr -f GeoJSONSeq "/build/$layer.geojsonl" "/build/$d/$d.shp" -t_srs EPSG:4326; done; \
+# POSIX sh (Docker RUN uses /bin/sh) — no bash associative arrays.
+RUN set -e; \
+    ogr2ogr -f GeoJSONSeq /build/ocean.geojsonl      /build/ne_50m_ocean/ne_50m_ocean.shp -t_srs EPSG:4326; \
+    ogr2ogr -f GeoJSONSeq /build/land.geojsonl       /build/ne_50m_land/ne_50m_land.shp -t_srs EPSG:4326; \
+    ogr2ogr -f GeoJSONSeq /build/countries.geojsonl  /build/ne_50m_admin_0_countries/ne_50m_admin_0_countries.shp -t_srs EPSG:4326; \
+    ogr2ogr -f GeoJSONSeq /build/states.geojsonl     /build/ne_50m_admin_1_states_provinces_lines/ne_50m_admin_1_states_provinces_lines.shp -t_srs EPSG:4326; \
+    ogr2ogr -f GeoJSONSeq /build/boundaries.geojsonl /build/ne_50m_admin_0_boundary_lines_land/ne_50m_admin_0_boundary_lines_land.shp -t_srs EPSG:4326; \
+    ogr2ogr -f GeoJSONSeq /build/places.geojsonl     /build/ne_50m_populated_places_simple/ne_50m_populated_places_simple.shp -t_srs EPSG:4326; \
     tippecanoe -o /build/basemap.mbtiles -Z0 -z7 --drop-densest-as-needed --force \
       -L ocean:/build/ocean.geojsonl -L land:/build/land.geojsonl \
       -L countries:/build/countries.geojsonl -L states:/build/states.geojsonl \
