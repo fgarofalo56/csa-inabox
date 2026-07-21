@@ -65,6 +65,7 @@ const ALLOW_INTENT_RE = new RegExp(
 
 // Files that legitimately need no per-surface intent tag. Repo-relative POSIX.
 const ALLOWLIST = new Map([
+  ['apps/fiab-console/lib/editors/palantir/aip-logic-studio-panels.tsx', 'AIP-Logic eval-case fields: a sample typed-inputs payload + a free-text NL pass-criteria for the LLM judge — per-case test data, not a config surface (the function itself is authored in the typed block graph)'],
   // ADX / Fabric real-time dashboards expose a raw JSON model view 1:1 (the
   // "Edit model (JSON)" advanced dialog). Primary authoring is the visual tile
   // canvas; this editable JSON dialog mirrors the portal's JSON view.
