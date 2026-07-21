@@ -69,30 +69,31 @@ jobs:
           az acr build --registry "$ACR" --no-logs \
             --image "loom-dbx-init:$SHA" --image "loom-dbx-init:latest" \
             apps/loom-dbx-init
-          az acr update -n "$ACR" --default-action Deny -o none || true
-          echo "::notice::loom-dbx-init:$SHA built on Gov ACR."
+          # NOTE: leave the ACR public-Allow through job create+start below — ARM's
+          # container-app-job image-existence validation runs OUTSIDE the VNet and
+          # gets "UNAUTHORIZED: authentication required" against a network-Denied
+          # ACR. The final "Re-lock ACR" step (if: always) restores Deny.
+          echo "::notice::loom-dbx-init:$SHA built on Gov ACR (ACR left Allow for job create; re-locked at end)."
 
       - name: Run the warehouse-create job in-VNet + wait
         if: ${{ inputs.apply == 'true' }}
         run: |
           set -euo pipefail
           IMG="$ACR_LOGIN/loom-dbx-init:${SHA:-latest}"
-          # Create (or update) a one-shot manual job in the CAE that runs the baked
-          # image (ENTRYPOINT /init.sh). SP creds + RG passed via env; no args.
-          if ! az containerapp job show -n "$JOB" -g "$RG" -o none 2>/dev/null; then
-            az containerapp job create -n "$JOB" -g "$RG" --environment "$CAE_ID" \
-              --trigger-type Manual --replica-timeout 900 --replica-retry-limit 1 --parallelism 1 \
-              --image "$IMG" \
-              --registry-server "$ACR_LOGIN" --registry-identity "$UAMI_ID" \
-              --mi-user-assigned "$UAMI_ID" \
-              --cpu 0.5 --memory 1.0Gi \
-              --secrets sp-secret="${{ secrets.AZURE_GOV_CLIENT_SECRET }}" \
-              --env-vars SP_ID="${{ secrets.AZURE_GOV_CLIENT_ID }}" SP_SECRET=secretref:sp-secret \
-                         TENANT="${{ secrets.AZURE_GOV_TENANT_ID }}" SUB="${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}" RG="$RG" \
-              -o none
-          else
-            az containerapp job update -n "$JOB" -g "$RG" --image "$IMG" -o none
-          fi
+          # Delete any prior job first: an earlier attempt may have baked a stale
+          # --command/--args into the job template that would override the new
+          # image's /init.sh ENTRYPOINT. Recreate clean each run.
+          az containerapp job delete -n "$JOB" -g "$RG" --yes -o none 2>/dev/null || true
+          az containerapp job create -n "$JOB" -g "$RG" --environment "$CAE_ID" \
+            --trigger-type Manual --replica-timeout 900 --replica-retry-limit 1 --parallelism 1 \
+            --image "$IMG" \
+            --registry-server "$ACR_LOGIN" --registry-identity "$UAMI_ID" \
+            --mi-user-assigned "$UAMI_ID" \
+            --cpu 0.5 --memory 1.0Gi \
+            --secrets sp-secret="${{ secrets.AZURE_GOV_CLIENT_SECRET }}" \
+            --env-vars SP_ID="${{ secrets.AZURE_GOV_CLIENT_ID }}" SP_SECRET=secretref:sp-secret \
+                       TENANT="${{ secrets.AZURE_GOV_TENANT_ID }}" SUB="${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}" RG="$RG" \
+            -o none
           EXEC=$(az containerapp job start -n "$JOB" -g "$RG" --query name -o tsv | tr -d '\r')
           echo "::notice::started in-VNet job execution: $EXEC"
           ST=""
@@ -103,3 +104,7 @@ jobs:
           echo "----- job console logs -----"
           az containerapp job logs show -n "$JOB" -g "$RG" --container "$JOB" --execution "$EXEC" --tail 120 2>&1 | tail -120 || true
           [ "$ST" = "Succeeded" ] && echo "::notice::warehouse wired in-VNet — re-run gov-selfaudit." || { echo "::error::in-VNet warehouse job did not succeed (status=$ST)"; exit 1; }
+
+      - name: Re-lock ACR to Deny
+        if: ${{ always() && inputs.apply == 'true' }}
+        run: az acr update -n "$ACR" --default-action Deny -o none || true
