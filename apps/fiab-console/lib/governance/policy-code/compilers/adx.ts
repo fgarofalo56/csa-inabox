@@ -136,7 +136,7 @@ function adxRlsOp(
     warnings.push(`statement "${stmt.id}" / ${db}/${table}: RLS query invalid — ${check.error}`);
     return null;
   }
-  const escaped = query.replace(/"/g, '\\"');
+  const escaped = query.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
   return {
     key: `adx:rls:${db}/${table}:${stmt.id}`,
     kind: 'rls',

@@ -295,7 +295,7 @@ export function fromYaml(text: string): unknown {
     const t = v.trim();
     if ((t.startsWith('"') && t.endsWith('"')) || (t.startsWith("'") && t.endsWith("'"))) {
       try {
-        return JSON.parse(t.startsWith("'") ? `"${t.slice(1, -1).replace(/"/g, '\\"')}"` : t);
+        return JSON.parse(t.startsWith("'") ? `"${t.slice(1, -1).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"` : t);
       } catch {
         return t.slice(1, -1);
       }
