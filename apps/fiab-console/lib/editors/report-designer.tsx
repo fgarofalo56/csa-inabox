@@ -255,6 +255,7 @@ import {
   whatIfBindings, activeField,
   type WhatIfParam, type FieldParameter,
 } from './report/what-if-pane';
+import { AskAffordance } from '@/lib/components/ask/AskAffordance';
 
 // ── Model ───────────────────────────────────────────────────────────────────
 
@@ -2277,7 +2278,7 @@ function WellEditor({
 // ── main ────────────────────────────────────────────────────────────────────
 
 /** Right-rail tab identifiers (wave-2 adds Bookmarks + Selection). */
-type RightTab = 'build' | 'format' | 'analytics' | 'filters' | 'interactions' | 'bookmarks' | 'selection' | 'syncSlicers' | 'whatIf' | 'performance' | 'copilot';
+type RightTab = 'build' | 'format' | 'analytics' | 'filters' | 'interactions' | 'bookmarks' | 'selection' | 'syncSlicers' | 'whatIf' | 'performance' | 'copilot' | 'ask';
 
 export function ReportDesigner({ item, id }: { item: FabricItemType; id: string }) {
   const styles = useStyles();
@@ -4372,6 +4373,7 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
         <Tab value="whatIf" icon={<DataTrending20Regular />}>What-if</Tab>
         <Tab value="performance" icon={<Gauge20Regular />}>Performance</Tab>
         <Tab value="copilot" icon={<Sparkle20Regular />}>Power BI Copilot</Tab>
+        <Tab value="ask" icon={<Sparkle20Regular />}>Ask</Tab>
       </TabList>
       {rightTab === 'bookmarks' && (
         <BookmarksPane
@@ -4448,6 +4450,19 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
           onApplyVisual={applyCopilotVisual}
           onAddPage={addCopilotPage}
         />
+      )}
+      {/* WS-5.4 — NL "Ask" tab: ask questions about the report data. Backed by
+          /api/ask → chatGrounded against the semantic-model source (no Fabric). */}
+      {rightTab === 'ask' && (
+        <div style={{ padding: tokens.spacingHorizontalM, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS }}>
+          <AskAffordance
+            surfaceKind="report"
+            itemId={id}
+            itemType="report"
+            context={{ tables: tables.map((t) => t.name) }}
+            alwaysOpen
+          />
+        </div>
       )}
       {rightTab === 'format' && (
         selected ? (
