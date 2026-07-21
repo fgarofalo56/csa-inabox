@@ -100,6 +100,7 @@ var loomContainers = [
   { name: 'env-config',        partitionKey: '/tenantId' }
   { name: 'app-install-jobs',  partitionKey: '/tenantId' }
   { name: 'tenant-topology',   partitionKey: '/tenantId' }
+  { name: 'function-registry', partitionKey: '/tenantId' }
 ]
 
 resource loomDb 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases@2024-12-01-preview' = {

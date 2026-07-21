@@ -23,6 +23,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { tenantScopeId } from '@/lib/auth/session';
 import { isTenantAdminTier } from '@/lib/auth/domain-role';
 import { pdpCheck } from '@/lib/auth/pdp/enforce';
 import { loadOwnedItem } from '../../../../../_lib/item-crud';
@@ -39,6 +40,9 @@ import {
   resolveObjectView, shapeLinkedSections, toTimeseriesGrid, toGeoFeatureCollection,
   type RawNeighbor, type ViewRecord,
 } from '@/lib/foundry/object-view';
+import { derivedPropertiesFor, computeRollups, describeDerived, type DerivedValue } from '@/lib/foundry/derived-properties';
+import { getRegisteredFunction } from '@/lib/azure/function-registry-store';
+import { functionRuntimeGate, invokeFunction } from '@/lib/azure/loom-function-runtime';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -143,6 +147,30 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string;
     const timeseries = toTimeseriesGrid(records, { timeProp: view.timeProp, valueProp: view.valueProp });
     const geo = toGeoFeatureCollection(records, { geoProp: view.geoProp });
 
+    // WS-4.2 derived properties: rollups computed LIVE from the SECURED linked
+    // neighbours (so a rollup can never sum a value the caller can't see), plus
+    // function-kind derived props executed on the Loom UDF runtime with the
+    // masked anchor + secured links. An unregistered function / unset runtime is
+    // an honest per-property gate — never a fake value (no-vaporware.md).
+    const derivedDefs = derivedPropertiesFor(state, objectType);
+    const { values: derived, functionRefs } = computeRollups(derivedDefs, securedNeighbors);
+    for (const dp of functionRefs) {
+      const base: DerivedValue = {
+        apiName: dp.apiName, ...(dp.displayName ? { displayName: dp.displayName } : {}),
+        kind: 'function', value: null, summary: describeDerived(dp),
+      };
+      const fn = dp.functionName ? await getRegisteredFunction(tenantScopeId(s), dp.functionName, dp.functionVersion) : null;
+      if (!fn) { derived.push({ ...base, gated: true, error: `function "${dp.functionName}" is not registered` }); continue; }
+      const fnGate = functionRuntimeGate(fn);
+      if (fnGate) { derived.push({ ...base, gated: true, error: fnGate.detail }); continue; }
+      const inv = await invokeFunction(fn, {
+        objectType, id: object.id, properties: anchorMask.properties,
+        linked: securedNeighbors.map((n) => ({ linkType: n.linkType, direction: n.direction, id: n.neighbor.id, objectType: n.neighbor.objectType, properties: n.neighbor.properties })),
+      });
+      if (inv.ok) derived.push({ ...base, value: inv.value });
+      else derived.push({ ...base, gated: true, error: inv.error || `HTTP ${inv.status}` });
+    }
+
     // A linked neighbour may supply timeseries/map data the anchor type doesn't
     // declare — surface those panels too rather than hide real data.
     const panels = [...view.panels];
@@ -159,6 +187,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string;
       linked,
       timeseries,
       geo,
+      derived,
       security: restricted
         ? { restricted: true, maskedProperties: anchorMask.maskedProperties }
         : { restricted: false },

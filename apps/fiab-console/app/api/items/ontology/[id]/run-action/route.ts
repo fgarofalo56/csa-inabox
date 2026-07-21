@@ -22,6 +22,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { tenantScopeId } from '@/lib/auth/session';
 import { isTenantAdminTier } from '@/lib/auth/domain-role';
 import { pdpCheck } from '@/lib/auth/pdp/enforce';
 import { loadOwnedItem } from '../../../_lib/item-crud';
@@ -33,6 +34,8 @@ import { PostgresError } from '@/lib/azure/postgres-flex-client';
 import { recordActionJustification, isValidReason, MIN_JUSTIFICATION_LEN } from '@/lib/azure/action-justification-store';
 import { recordThreadEdge } from '@/lib/thread/thread-edges';
 import { paramsHash, findUsableApproval, requestApproval, consumeApproval } from '@/lib/azure/action-approval-store';
+import { getRegisteredFunction } from '@/lib/azure/function-registry-store';
+import { functionRuntimeGate, invokeFunction, interpretVerdict } from '@/lib/azure/loom-function-runtime';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -136,6 +139,39 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   // through verbatim when supplied.
   const rawId = (rawParams as { id?: unknown }).id;
   if (rawId !== undefined && rawId !== null && rawId !== '') runParams.id = String(rawId);
+
+  // WS-4.2 functions-on-objects: an action may delegate final validation to a
+  // REGISTERED function executed on the Loom UDF runtime (Azure-native). It is
+  // invoked with the coerced params + target context; a non-`valid` verdict
+  // BLOCKS the write (422). Fail-closed — a missing function/runtime is an
+  // honest gate, never a silent pass (no-vaporware.md).
+  if (action.validationFunction) {
+    const fn = await getRegisteredFunction(tenantScopeId(s), action.validationFunction.name, action.validationFunction.version);
+    if (!fn) {
+      return err(
+        `Action "${actionName}" validates via function "${action.validationFunction.name}", which is not registered. Register it under Functions first.`,
+        409, 'validation_function_missing',
+      );
+    }
+    const fnGate = functionRuntimeGate(fn);
+    if (fnGate) {
+      return err(`Validation function runtime not configured (${fnGate.missing}).`, 503, 'function_runtime_not_configured', {
+        reason: fnGate.detail, remediation: fnGate.remediation,
+      });
+    }
+    const targetIdForFn = typeof runParams.id === 'string' ? runParams.id : undefined;
+    const invoke = await invokeFunction(fn, {
+      action: action.name, objectType: action.objectType, kind: action.kind,
+      id: targetIdForFn, parameters: validated.values,
+    });
+    if (invoke.status >= 500 || (!invoke.ok && invoke.error)) {
+      return err(`Validation function "${fn.name}@${fn.version}" failed to run: ${invoke.error || `HTTP ${invoke.status}`}`, 502, 'validation_function_error');
+    }
+    const verdict = interpretVerdict(invoke.value);
+    if (!verdict.valid) {
+      return err(verdict.message || `Action "${actionName}" was rejected by validation function "${fn.name}".`, 422, 'validation_failed');
+    }
+  }
 
   const gate = weaveGate();
   if (gate) {
