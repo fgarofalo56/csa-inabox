@@ -166,14 +166,14 @@ export function parseParityDoc(md: string, slug: string): ParityInventory {
   let route: string | undefined;
   let source: string | undefined;
   for (const line of lines) {
-    const h = line.match(/^#[ \t]+(.+)$/);
+    const h = line.match(/^#(.+)$/);
     if (h && title === slug) title = h[1].trim();
     const r = line.match(/^\s*(?:Live\s+)?Route:\s*`?([^`\s]+)`?/i);
     if (r && !route) {
       const cand = r[1].trim();
       if (cand.startsWith('/')) route = cand;
     }
-    const s = line.match(/^[ \t]*Source(?:[ \t]*UI)?:[ \t]*(.+)$/i);
+    const s = line.match(/^[ \t]*Source(?:[ \t]*UI)?:(.+)$/i);
     if (s && !source) source = s[1].trim();
     // Some docs embed the route inside a URL like /admin/foo in a metadata line.
   }
