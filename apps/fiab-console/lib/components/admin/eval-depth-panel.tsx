@@ -717,7 +717,7 @@ export function EvalDepthPanel({ recentRuns = [], selectedAgent = '' }: Props) {
               style={{ width: '80px' }}
             >
               {[4.5, 4.0, 3.5, 3.0].map((v) => (
-                <Option key={v} value={String(v)}>{v}</Option>
+                <Option key={v} value={String(v)} text={String(v)}>{String(v)}</Option>
               ))}
             </Dropdown>
             <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
