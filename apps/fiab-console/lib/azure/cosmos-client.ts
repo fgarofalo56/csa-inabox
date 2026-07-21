@@ -50,6 +50,7 @@ let _lakehouseShortcuts: Container | null = null;
 let _lakehouseSchemas: Container | null = null;
 let _vectorSyncManifests: Container | null = null;
 let _modelFabric: Container | null = null;
+let _autopilot: Container | null = null;
 let _networkingConfig: Container | null = null;
 let _copilotConfig: Container | null = null;
 let _workspaceAgentConfig: Container | null = null;
@@ -734,6 +735,10 @@ async function ensure() {
   _vectorSyncManifests = await mk('vector-sync-manifests', '/itemId');
   // WS-7 Closed-Loop Model Fabric — one doc per tenant (PK /tenantId): approval mode + per-endpoint cooldown + decision history. Lazily created.
   _modelFabric = await mk('model-fabric', '/tenantId');
+  // WS-10.1 LCU-Autopilot — one doc per tenant (PK /tenantId): approval mode
+  // (auto|propose) + per-target actuation cooldown timestamps + action history
+  // for the self-driving FinOps loop (/admin/autopilot). Lazily created.
+  _autopilot = await mk('autopilot', '/tenantId');
   // Advanced networking (F15) — per-workspace allowlist (trusted instances) +
   // outbound private-endpoint rule registry. One doc per workspace
   // (id = workspaceId), PK /workspaceId so every networking-pane read hits a
@@ -1306,6 +1311,7 @@ export async function lakehouseShortcutsContainer(): Promise<Container> { await 
 export async function lakehouseSchemasContainer(): Promise<Container> { await ensure(); return _lakehouseSchemas!; }
 export async function vectorSyncManifestsContainer(): Promise<Container> { await ensure(); return _vectorSyncManifests!; }
 export async function modelFabricContainer(): Promise<Container> { await ensure(); return _modelFabric!; }
+export async function autopilotContainer(): Promise<Container> { await ensure(); return _autopilot!; }
 export async function networkingConfigContainer(): Promise<Container> { await ensure(); return _networkingConfig!; }
 
 export async function marketplaceListingsContainer(): Promise<Container> {
@@ -1418,7 +1424,7 @@ const KNOWN_CONTAINER_IDS = [
   'copilot-memory-write-audit',
   'copilot-memory-contradictions',
   'copilot-topic-pages',
-  'canvas-comments', 'canvas-presence', 'model-fabric',
+  'canvas-comments', 'canvas-presence', 'model-fabric', 'autopilot',
 ];
 
 /** List all Loom containers with their current throughput shape.

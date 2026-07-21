@@ -47,6 +47,7 @@ import { useStyles, CodeBlock, useItemState, SaveStrip, SectionHead, useOntology
 import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
 import { ToolbarCrossLinks } from '@/lib/components/shared/item-tab-strip';
 import { PreviewTable } from '@/lib/components/shared/preview-table';
+import { AskAffordance } from '@/lib/components/ask/AskAffordance';
 
 // ───────────────────────── Ontology SDK (OSDK) ─────────────────────────
 interface OsdkState {
@@ -460,6 +461,19 @@ export function OntologySdkEditor({ item, id }: { item: FabricItemType; id: stri
             objectTypes={[...selObj].length ? [...selObj] : classes.map((c) => c.name)}
             serviceUrl={String(state.serviceUrl || '')}
             onServiceUrl={(v) => setState((p) => ({ ...p, serviceUrl: v }))}
+          />
+        )}
+
+        {/* WS-5.4 — NL "Ask" affordance: ask questions about ontology objects.
+            Backed by /api/ask → chatGrounded against the ontology source type.
+            Renders only when an ontology is bound (context is non-trivial). */}
+        {onto.boundOntologyId && (
+          <AskAffordance
+            surfaceKind="ontology"
+            itemId={id}
+            itemType="ontology"
+            context={{ tables: [...selObj].slice(0, 10) }}
+            placeholder="Ask about object types, relationships, or write-back actions…"
           />
         )}
       </div>

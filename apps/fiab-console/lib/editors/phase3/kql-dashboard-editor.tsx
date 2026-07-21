@@ -55,6 +55,7 @@ import {
 import { AnomalyForecastDialog } from './anomaly-forecast';
 import { mapWithConcurrency } from '@/lib/util/concurrency';
 import { useStyles } from './styles';
+import { AskAffordance } from '@/lib/components/ask/AskAffordance';
 
 /** PSR-7 — max tiles queried in parallel during a full-board refresh. Bounded so
  *  a large board fans out fast without tripping the ADX query rate-limiter. */
@@ -1469,6 +1470,19 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
           </div>
         )}
       </div>
+
+      {/* WS-5.4 — NL "Ask" affordance: ask questions about the dashboard data.
+          Backed by /api/ask → chatGrounded against the ADX-native kql source. */}
+      {tiles.length > 0 && (
+        <AskAffordance
+          surfaceKind="kql-dashboard"
+          itemId={id}
+          itemType="kql-dashboard"
+          context={{
+            tables: [...new Set(tiles.map((t) => t.kql?.split('\n')[0]?.trim()).filter(Boolean) as string[])].slice(0, 5),
+          }}
+        />
+      )}
 
       {/* Tile edit flyout — Fabric "tile editing window": one Dialog edits the
           tile at tileFlyoutIdx (title, visual, data source, geometry, KQL),
