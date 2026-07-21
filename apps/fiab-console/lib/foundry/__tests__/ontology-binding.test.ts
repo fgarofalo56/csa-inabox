@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { OntoObjectType } from '@/lib/editors/ontology-model';
+import { LIVE, parseAsOf, resolveTimeTravel } from '@/lib/time-machine/time-machine';
 import {
   normalizeOntologyBinding,
   resolveColumnMap,
@@ -148,6 +149,21 @@ describe('query builders — pure + injection-guarded', () => {
   it('buildKql projects a validated table with take', () => {
     expect(buildKql('Signals', 50)).toBe('Signals | take 50');
     expect(() => buildKql('Signals | where x', 10)).toThrow(BindingQueryError);
+  });
+
+  it('WS-10.3 buildSqlSelect threads a Delta time-travel clause after the ref', () => {
+    const delta = resolveTimeTravel('delta', parseAsOf('2026-07-01T00:00:00Z'));
+    expect(buildSqlSelect('dbo.Customer', 100, delta))
+      .toBe("SELECT TOP 100 * FROM dbo.Customer TIMESTAMP AS OF '2026-07-01T00:00:00.000Z'");
+    // A live/no-op resolution leaves the query byte-identical.
+    const live = resolveTimeTravel('delta', LIVE);
+    expect(buildSqlSelect('dbo.Customer', 100, live)).toBe('SELECT TOP 100 * FROM dbo.Customer');
+  });
+
+  it('WS-10.3 buildKql threads an ADX ingestion-time filter before take', () => {
+    const adx = resolveTimeTravel('adx', parseAsOf('2026-07-01T00:00:00Z'));
+    expect(buildKql('Signals', 50, adx))
+      .toBe('Signals | where ingestion_time() <= datetime(2026-07-01T00:00:00.000Z) | take 50');
   });
 
   it('buildDax handles a table (TOPN) and a measure (ROW)', () => {
