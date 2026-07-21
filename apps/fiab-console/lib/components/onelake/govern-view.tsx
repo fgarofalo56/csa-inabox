@@ -54,7 +54,8 @@ import {
 } from '@fluentui/react-icons';
 
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
-import { itemVisual } from '@/lib/components/ui/item-type-visual';
+import { itemVisual, readableAccent } from '@/lib/components/ui/item-type-visual';
+import { useTheme } from '@/lib/theme/theme-context';
 
 interface ClassificationRow {
   classification: string;
@@ -311,6 +312,7 @@ function ScoreCard({
 
 export function GovernView() {
   const styles = useStyles();
+  const { mode } = useTheme();
   const router = useRouter();
   const [data, setData] = useState<GovernanceData | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -489,15 +491,16 @@ export function GovernView() {
           <div role="list">
             {data.attention.map((a) => {
               const v = itemVisual(a.itemType);
+              const fg = readableAccent(v.color, mode === 'dark');
               const Icon = v.icon;
               return (
                 <div key={a.id} className={styles.attentionRow} role="listitem">
                   <span
                     className={styles.attentionIcon}
-                    style={{ backgroundColor: `${v.color}1f`, color: v.color }}
+                    style={{ backgroundColor: `${fg}1f`, color: fg }}
                     aria-hidden
                   >
-                    <Icon style={{ width: 18, height: 18, color: v.color }} />
+                    <Icon style={{ width: 18, height: 18, color: fg }} />
                   </span>
                   <span className={styles.attentionMain}>
                     <Text className={styles.attentionName} title={a.displayName}>

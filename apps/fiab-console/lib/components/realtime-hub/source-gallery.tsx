@@ -22,6 +22,8 @@ import {
   SOURCE_CONNECTORS, SOURCE_CATEGORIES, sourceVisual,
   type SourceConnector, type SourceCategory,
 } from './source-catalog';
+import { readableAccent } from '@/lib/components/ui/item-type-visual';
+import { useTheme } from '@/lib/theme/theme-context';
 
 const useStyles = makeStyles({
   controls: {
@@ -88,6 +90,7 @@ const useStyles = makeStyles({
 
 export function SourceGallery({ onPick }: { onPick: (c: SourceConnector) => void }) {
   const styles = useStyles();
+  const { mode } = useTheme();
   const [query, setQuery] = useState('');
   const [category, setCategory] = useState<SourceCategory | 'all'>('all');
 
@@ -133,6 +136,7 @@ export function SourceGallery({ onPick }: { onPick: (c: SourceConnector) => void
         {connectors.map((c) => {
           const v = sourceVisual(c);
           const Icon = v.icon;
+          const fg = readableAccent(v.color, mode === 'dark');
           return (
             <button
               key={c.id} type="button" className={styles.tile}
@@ -142,10 +146,10 @@ export function SourceGallery({ onPick }: { onPick: (c: SourceConnector) => void
               <div className={styles.head}>
                 <span
                   className={styles.chip}
-                  style={{ backgroundColor: `${v.color}1f`, color: v.color }}
+                  style={{ backgroundColor: `${fg}1f`, color: fg }}
                   aria-hidden
                 >
-                  <Icon style={{ width: 22, height: 22, color: v.color }} />
+                  <Icon style={{ width: 22, height: 22, color: fg }} />
                 </span>
                 <Text className={styles.name} title={c.name}>{c.name}</Text>
               </div>

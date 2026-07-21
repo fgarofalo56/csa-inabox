@@ -56,7 +56,8 @@ import {
   Search16Regular, Dismiss16Regular,
 } from '@fluentui/react-icons';
 import { portStyle, accentTint, CanvasRightRail } from '@/lib/components/canvas/canvas-node-kit';
-import { itemVisual, isKnownItemType } from '@/lib/components/ui/item-type-visual';
+import { itemVisual, isKnownItemType, readableAccent } from '@/lib/components/ui/item-type-visual';
+import { useTheme } from '@/lib/theme/theme-context';
 
 // ---------------------------------------------------------------------------
 // Public model — kept in sync with the LineageNode / LineageEdge the BFF
@@ -193,12 +194,15 @@ export interface LineageNodeData {
 
 function LineageNodeImpl({ data, selected }: NodeProps) {
   const { node, dimmed } = data as LineageNodeData;
+  const { mode } = useTheme();
   const style = styleForType(node.type);
   const Icon = style.Icon;
   const deleted = !!node.deleted;
   // A deleted-in-Loom asset that a metadata-plane entity still reports: mute the
   // accent, dash the border, and drop the opacity so it reads as a tombstone.
-  const accent = deleted ? tokens.colorNeutralForeground4 : style.color;
+  // readableAccent lifts the dark item-type hexes to a legible foreground on the
+  // dark theme (and is a no-op on the built-in `var(--loom-accent-*)` values).
+  const accent = deleted ? tokens.colorNeutralForeground4 : readableAccent(style.color, mode === 'dark');
   return (
     <div
       data-lineage-node-id={node.id}
@@ -418,6 +422,7 @@ const LineageCanvasInner = forwardRef<LineageCanvasHandle, LineageCanvasProps>(f
   ref,
 ) {
   const s = useStyles();
+  const { mode } = useTheme();
   const rf = useReactFlow();
   const detailRef = useRef<HTMLDivElement | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -615,7 +620,7 @@ const LineageCanvasInner = forwardRef<LineageCanvasHandle, LineageCanvasProps>(f
           <div className={s.legend} aria-label="Lineage legend">
             {presentTypes.map((t) => (
               <span key={t.kind} className={s.legendItem}>
-                <span className={s.legendSwatch} style={{ background: t.color }} />
+                <span className={s.legendSwatch} style={{ background: readableAccent(t.color, mode === 'dark') }} />
                 <Caption1>{t.kind}</Caption1>
               </span>
             ))}
@@ -638,7 +643,7 @@ const LineageCanvasInner = forwardRef<LineageCanvasHandle, LineageCanvasProps>(f
         <MiniMap
           pannable
           zoomable
-          nodeColor={(n) => styleForType((n.data as LineageNodeData)?.node?.type).color}
+          nodeColor={(n) => readableAccent(styleForType((n.data as LineageNodeData)?.node?.type).color, mode === 'dark')}
           nodeStrokeColor={tokens.colorNeutralStroke2}
           maskColor={accentTint(tokens.colorNeutralBackground3, 70)}
           style={{ backgroundColor: tokens.colorNeutralBackground1 }}

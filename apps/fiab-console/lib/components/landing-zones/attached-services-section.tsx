@@ -23,7 +23,8 @@ import {
   ShieldKeyhole16Regular, Database16Regular, DataUsage16Regular, MoneyHand16Regular,
 } from '@fluentui/react-icons';
 import { EmptyState } from '@/lib/components/empty-state';
-import { itemVisual } from '@/lib/components/ui/item-type-visual';
+import { itemVisual, readableAccent } from '@/lib/components/ui/item-type-visual';
+import { useTheme } from '@/lib/theme/theme-context';
 import { getKindDef, kindLabel } from '@/lib/azure/attached-service-kinds';
 import { AttachServiceWizard } from './attach-service-wizard';
 
@@ -143,6 +144,7 @@ export function AttachedServicesSection({
   landingZoneLabel?: string;
 }) {
   const s = useStyles();
+  const { mode } = useTheme();
   const [services, setServices] = useState<AttachedServiceView[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -217,6 +219,7 @@ export function AttachedServicesSection({
           {services.map((svc) => {
             const def = getKindDef(svc.kind);
             const visual = itemVisual(def?.tileSlug || svc.kind);
+            const fg = readableAccent(visual.color, mode === 'dark');
             const Icon = visual.icon;
             const integ = svc.integration;
             // Honest gates: any step that emitted a grant command to run by hand.
@@ -225,7 +228,7 @@ export function AttachedServicesSection({
             return (
               <div key={svc.id} className={s.card}>
                 <div className={s.row}>
-                  <span className={s.rowIcon} style={{ color: visual.color }}><Icon /></span>
+                  <span className={s.rowIcon} style={{ color: fg }}><Icon /></span>
                   <span className={s.rowText}>
                     <span className={s.rowName} title={svc.displayName}>{svc.displayName}</span>
                     <Caption1 className={s.rowSub} title={svc.armResourceId}>

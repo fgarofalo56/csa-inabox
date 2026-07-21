@@ -48,7 +48,8 @@ import { EmptyState } from '@/lib/components/empty-state';
 import { Section } from '@/lib/components/ui/section';
 import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
-import { itemVisual } from '@/lib/components/ui/item-type-visual';
+import { itemVisual, readableAccent } from '@/lib/components/ui/item-type-visual';
+import { useTheme } from '@/lib/theme/theme-context';
 import { CatalogItemActions } from '@/lib/components/catalog/catalog-item-actions';
 
 interface FederatedHit {
@@ -302,6 +303,7 @@ function prettyClassification(v: string): string {
 
 export function FederatedSearch() {
   const s = useStyles();
+  const { mode } = useTheme();
   const [q, setQ] = useState('');
   const [sourceFilter, setSourceFilter] = useState<Set<string>>(new Set());
   const [typeFilter, setTypeFilter] = useState('');
@@ -376,15 +378,16 @@ export function FederatedSearch() {
       getValue: (h) => h.display_name,
       render: (h) => {
         const visual = itemVisual(h.type);
+        const fg = readableAccent(visual.color, mode === 'dark');
         const Icon = visual.icon;
         return (
           <span className={s.nameCell}>
             <span
               className={s.nameChip}
-              style={{ backgroundColor: `${visual.color}1f`, color: visual.color }}
+              style={{ backgroundColor: `${fg}1f`, color: fg }}
               aria-hidden
             >
-              <Icon style={{ width: 18, height: 18, color: visual.color }} />
+              <Icon style={{ width: 18, height: 18, color: fg }} />
             </span>
             <span className={s.nameText}>
               <Text className={s.nameTitle} title={h.display_name}>{h.display_name}</Text>
@@ -514,7 +517,7 @@ export function FederatedSearch() {
               <FilterChip
                 key={src}
                 active={active}
-                color={visual.color}
+                color={readableAccent(visual.color, mode === 'dark')}
                 onToggle={() => toggleSource(src)}
                 testId={`source-chip-${src}`}
               >
@@ -540,7 +543,7 @@ export function FederatedSearch() {
                 <FilterChip
                   key={t}
                   active={typeFilter === t}
-                  color={visual.color}
+                  color={readableAccent(visual.color, mode === 'dark')}
                   onToggle={() => setTypeFilter(t === typeFilter ? '' : t)}
                 >
                   {visual.label}
@@ -648,8 +651,10 @@ export function FederatedSearch() {
 /** Full-metadata tile shown when a result row/name is clicked. */
 function CatalogDetailTile({ hit, onClose }: { hit: FederatedHit | null; onClose: () => void }) {
   const s = useStyles();
+  const { mode } = useTheme();
   if (!hit) return null;
   const visual = itemVisual(hit.type);
+  const fg = readableAccent(visual.color, mode === 'dark');
   const Icon = visual.icon;
   const meta: Array<{ label: string; value?: string }> = [
     { label: 'Source', value: SOURCE_LABEL[hit.source] ?? hit.source },
@@ -667,8 +672,8 @@ function CatalogDetailTile({ hit, onClose }: { hit: FederatedHit | null; onClose
         <DialogBody>
           <DialogTitle>
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalMNudge }}>
-              <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 34, height: 34, borderRadius: 8, backgroundColor: `${visual.color}1f`, color: visual.color }}>
-                <Icon style={{ width: 20, height: 20, color: visual.color }} />
+              <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 34, height: 34, borderRadius: 8, backgroundColor: `${fg}1f`, color: fg }}>
+                <Icon style={{ width: 20, height: 20, color: fg }} />
               </span>
               {hit.display_name}
             </span>

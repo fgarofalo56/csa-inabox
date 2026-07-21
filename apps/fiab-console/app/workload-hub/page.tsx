@@ -40,7 +40,8 @@ import { clientFetch } from '@/lib/client-fetch';
 import { ItemTile } from '@/lib/components/ui/item-tile';
 import { TileGrid } from '@/lib/components/ui/tile-grid';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
-import { itemVisual } from '@/lib/components/ui/item-type-visual';
+import { itemVisual, readableAccent } from '@/lib/components/ui/item-type-visual';
+import { useTheme } from '@/lib/theme/theme-context';
 import { LearnPopover } from '@/lib/components/ui/learn-popover';
 import {
   workloadGroups,
@@ -150,6 +151,7 @@ const useStyles = makeStyles({
 export default function WorkloadHubPage() {
   const s = useStyles();
   const router = useRouter();
+  const { mode } = useTheme();
   // Tenant catalog overlay (real backend) — null = still loading.
   const [catalog, setCatalog] = useState<CatalogWorkload[] | null>(null);
   const [unauth, setUnauth] = useState(false);
@@ -273,14 +275,15 @@ export default function WorkloadHubPage() {
       getValue: (w) => w.name,
       render: (w) => {
         const v = itemVisual(w.repType);
+        const fg = readableAccent(v.color, mode === 'dark');
         return (
           <span className={s.nameCell}>
             <span
               className={s.nameChip}
-              style={{ backgroundColor: `${v.color}1f` }}
+              style={{ backgroundColor: `${fg}1f` }}
               aria-hidden
             >
-              <v.icon className={s.nameChipIcon} style={{ color: v.color }} />
+              <v.icon className={s.nameChipIcon} style={{ color: fg }} />
             </span>
             <Text weight="semibold">{w.name}</Text>
             {w.csa && <Badge appearance="tint" color="brand" size="small">CSA</Badge>}

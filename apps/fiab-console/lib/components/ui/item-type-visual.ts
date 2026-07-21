@@ -393,3 +393,54 @@ export function iconUrl(type: string | null | undefined): string | undefined {
   const slug = type.toLowerCase().trim();
   return `${base.replace(/\/$/, '')}/${encodeURIComponent(slug)}.svg`;
 }
+
+/**
+ * Theme-aware foreground accent from a static FAMILY_COLOR hex.
+ *
+ * FAMILY_COLOR values are dark, saturated brand hues chosen to read on a LIGHT
+ * surface. Used verbatim as a foreground (icon glyph / badge text) they become
+ * dark-on-dark and unreadable in the dark theme. When `isDark` is true this
+ * lifts the hue's lightness to a legible floor (keeping hue, capping saturation)
+ * so the accent reads on `colorNeutralBackground1` in BOTH themes. Pure; no React.
+ */
+export function readableAccent(hex: string, isDark: boolean): string {
+  const m = /^#?([0-9a-fA-F]{6})$/.exec((hex || '').trim());
+  if (!m) return hex;
+  const int = parseInt(m[1], 16);
+  const r = ((int >> 16) & 255) / 255;
+  const g = ((int >> 8) & 255) / 255;
+  const b = (int & 255) / 255;
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  let h = 0;
+  const l = (max + min) / 2;
+  const d = max - min;
+  let s = 0;
+  if (d !== 0) {
+    s = d / (1 - Math.abs(2 * l - 1));
+    switch (max) {
+      case r: h = ((g - b) / d) % 6; break;
+      case g: h = (b - r) / d + 2; break;
+      default: h = (r - g) / d + 4; break;
+    }
+    h *= 60;
+    if (h < 0) h += 360;
+  }
+  if (!isDark) return `#${m[1].toLowerCase()}`;
+  // Dark theme: guarantee a light-enough, not-too-saturated accent.
+  const L = Math.max(l, 0.68);
+  const S = Math.min(s, 0.85);
+  // HSL → RGB
+  const c = (1 - Math.abs(2 * L - 1)) * S;
+  const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
+  const mm = L - c / 2;
+  let rr = 0, gg = 0, bb = 0;
+  if (h < 60) { rr = c; gg = x; }
+  else if (h < 120) { rr = x; gg = c; }
+  else if (h < 180) { gg = c; bb = x; }
+  else if (h < 240) { gg = x; bb = c; }
+  else if (h < 300) { rr = x; bb = c; }
+  else { rr = c; bb = x; }
+  const to2 = (v: number) => Math.round((v + mm) * 255).toString(16).padStart(2, '0');
+  return `#${to2(rr)}${to2(gg)}${to2(bb)}`;
+}

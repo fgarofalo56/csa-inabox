@@ -38,7 +38,8 @@ import {
   Building16Regular, Open16Regular, WindowNew16Regular,
 } from '@fluentui/react-icons';
 import { EmptyState } from '@/lib/components/empty-state';
-import { itemVisual } from '@/lib/components/ui/item-type-visual';
+import { itemVisual, readableAccent } from '@/lib/components/ui/item-type-visual';
+import { useTheme } from '@/lib/theme/theme-context';
 import { FABRIC_ITEM_TYPES } from '@/lib/catalog/fabric-item-types';
 
 const EVT_OPEN = 'loom:open-object-explorer';
@@ -121,6 +122,7 @@ const useStyles = makeStyles({
 
 export function ObjectExplorer() {
   const styles = useStyles();
+  const { mode } = useTheme();
   const [open, setOpen] = useState(false);
   const [workspaces, setWorkspaces] = useState<Workspace[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -391,6 +393,7 @@ export function ObjectExplorer() {
                   )}
                   {openWs && rows.map((it) => {
                     const v = itemVisual(it.itemType);
+                    const fg = readableAccent(v.color, mode === 'dark');
                     const Icon = v.icon;
                     return (
                       <Menu key={it.id} openOnContext positioning="below-start">
@@ -404,7 +407,7 @@ export function ObjectExplorer() {
                             onKeyDown={(e) => onKeyDown(e, 'item', w.id, it)}
                             aria-label={`${it.displayName || v.label} — ${v.label}. Open in a tab`}
                           >
-                            <span className={styles.itemIcon} style={{ color: v.color }}><Icon /></span>
+                            <span className={styles.itemIcon} style={{ color: fg }}><Icon /></span>
                             <span className={styles.itemName}>{it.displayName || '(unnamed)'}</span>
                             <Caption1 className={styles.itemType}>{v.label}</Caption1>
                           </div>

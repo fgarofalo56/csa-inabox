@@ -29,7 +29,8 @@ import {
   Add20Regular, CheckmarkCircle20Filled, ArrowSync16Regular, Search20Regular,
   PlugConnected24Regular, ShieldCheckmark20Regular, Warning20Regular,
 } from '@fluentui/react-icons';
-import { itemVisual } from '@/lib/components/ui/item-type-visual';
+import { itemVisual, readableAccent } from '@/lib/components/ui/item-type-visual';
+import { useTheme } from '@/lib/theme/theme-context';
 import {
   ATTACHED_KIND_DEFS, getKindDef, kindLabel, type AttachedServiceKind,
 } from '@/lib/azure/attached-service-kinds';
@@ -130,6 +131,7 @@ export function AttachServiceWizard({
   onAttached?: () => void;
 }) {
   const s = useStyles();
+  const { mode } = useTheme();
   const [candidates, setCandidates] = useState<AttachedServiceCandidate[]>([]);
   const [via, setVia] = useState<'user' | 'uami' | null>(null);
   const [loading, setLoading] = useState(false);
@@ -438,13 +440,14 @@ export function AttachServiceWizard({
                       {g.items.map((c) => {
                         const def = getKindDef(c.kind);
                         const visual = itemVisual(def?.tileSlug || c.kind);
+                        const fg = readableAccent(visual.color, mode === 'dark');
                         const Icon = visual.icon;
                         const checked = selected.has(c.armResourceId);
                         const v = verdicts[c.armResourceId];
                         return (
                           <div key={c.armResourceId} className={s.row}>
                             <Checkbox checked={checked} onChange={() => toggle(c.armResourceId)} aria-label={`Select ${c.name}`} />
-                            <span className={s.rowIcon} style={{ color: visual.color }}><Icon /></span>
+                            <span className={s.rowIcon} style={{ color: fg }}><Icon /></span>
                             <span className={s.rowText}>
                               <span className={s.rowName} title={c.name}>{c.name}</span>
                               <Caption1 className={s.rowSub} title={`${kindLabel(c.kind)} · ${c.resourceGroup} · ${c.location || ''}`}>

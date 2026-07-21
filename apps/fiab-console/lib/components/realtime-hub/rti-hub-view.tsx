@@ -39,6 +39,8 @@ import { Section } from '@/lib/components/ui/section';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { ConnectSourceDialog } from './connect-source-dialog';
 import { SOURCE_CONNECTORS, sourceVisual, type SourceConnector } from './source-catalog';
+import { readableAccent } from '@/lib/components/ui/item-type-visual';
+import { useTheme } from '@/lib/theme/theme-context';
 import { StreamPreviewDrawer } from './stream-preview-drawer';
 import { StreamEndpointsDrawer } from './stream-endpoints-drawer';
 import { EventTestDrawer, type EventTestTarget } from './event-test-drawer';
@@ -135,6 +137,7 @@ function preFillProps(props: Record<string, unknown>): Record<string, string> {
 
 export function RtiHubView() {
   const styles = useStyles();
+  const { mode } = useTheme();
   const toasterId = useId('rti-hub');
   const { dispatchToast } = useToastController(toasterId);
 
@@ -302,10 +305,11 @@ export function RtiHubView() {
         const connector = connectorFor(r.subscribePreFill.sourceType);
         const v = connector ? sourceVisual(connector) : { icon: PlugConnected20Regular, color: '#6b7280' };
         const Icon = v.icon;
+        const fg = readableAccent(v.color, mode === 'dark');
         return (
           <span className={styles.nameCell}>
-            <span className={styles.nameChip} style={{ backgroundColor: `${v.color}1f`, color: v.color }} aria-hidden>
-              <Icon style={{ width: 18, height: 18, color: v.color }} />
+            <span className={styles.nameChip} style={{ backgroundColor: `${fg}1f`, color: fg }} aria-hidden>
+              <Icon style={{ width: 18, height: 18, color: fg }} />
             </span>
             <span className={styles.name} title={r.name}>{r.name}</span>
           </span>

@@ -18,7 +18,8 @@ import {
   Text, Badge, Button, Caption1, makeStyles, tokens,
 } from '@fluentui/react-components';
 import { Notebook24Regular, Database16Regular, Code16Regular } from '@fluentui/react-icons';
-import { itemVisual } from '@/lib/components/ui/item-type-visual';
+import { itemVisual, readableAccent } from '@/lib/components/ui/item-type-visual';
+import { useTheme } from '@/lib/theme/theme-context';
 import { NotebookImportWizard, type PrefillNotebook } from '@/lib/learn/notebook-import-wizard';
 
 export interface NotebookSample {
@@ -70,7 +71,9 @@ const useStyles = makeStyles({
 
 export function NotebookGalleryCard({ nb }: { nb: NotebookSample }): React.ReactElement {
   const s = useStyles();
+  const { mode } = useTheme();
   const visual = itemVisual(nb.itemType);
+  const fg = readableAccent(visual.color, mode === 'dark');
   const prefill: PrefillNotebook = {
     bundleId: nb.bundleId,
     notebookDisplayName: nb.notebookDisplayName,
@@ -80,7 +83,7 @@ export function NotebookGalleryCard({ nb }: { nb: NotebookSample }): React.React
   return (
     <div className={s.card}>
       <div className={s.head}>
-        <span className={s.chip} style={{ backgroundColor: `${visual.color}1f`, color: visual.color }} aria-hidden>
+        <span className={s.chip} style={{ backgroundColor: `${fg}1f`, color: fg }} aria-hidden>
           <Notebook24Regular />
         </span>
         <div className={s.titles}>

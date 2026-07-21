@@ -28,7 +28,8 @@ import {
   Add20Regular, CheckmarkCircle20Filled, ArrowSync16Regular, Search20Regular,
   DatabaseSearch24Regular,
 } from '@fluentui/react-icons';
-import { itemVisual } from '@/lib/components/ui/item-type-visual';
+import { itemVisual, readableAccent } from '@/lib/components/ui/item-type-visual';
+import { useTheme } from '@/lib/theme/theme-context';
 import { CONN_TYPE_LABEL, CONN_TILE_SLUG, type ConnectableResource } from '@/lib/azure/connectable-types';
 import type { ConnectionType } from '@/lib/azure/connections-store';
 
@@ -119,6 +120,7 @@ export function RegisterExistingSourceDialog({
   onRegistered: () => void;
 }) {
   const s = useStyles();
+  const { mode } = useTheme();
   const [resources, setResources] = useState<ConnectableResource[]>([]);
   const [via, setVia] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -321,13 +323,14 @@ export function RegisterExistingSourceDialog({
                       <Divider />
                       {g.items.map((r) => {
                         const visual = itemVisual(CONN_TILE_SLUG[r.connType] || r.connType);
+                        const fg = readableAccent(visual.color, mode === 'dark');
                         const Icon = visual.icon;
                         const isDone = !!done[r.armResourceId];
                         const scannable = isScannable(r.connType);
                         const kind = CONN_TYPE_PURVIEW_KIND[r.connType];
                         return (
                           <div key={r.armResourceId} className={s.row}>
-                            <span className={s.rowIcon} style={{ color: visual.color }}><Icon /></span>
+                            <span className={s.rowIcon} style={{ color: fg }}><Icon /></span>
                             <span className={s.rowText}>
                               <span className={s.rowName} title={r.name}>{r.name}</span>
                               <Caption1 className={s.rowSub} title={`${r.host || ''} · ${r.resourceGroup} · ${r.location || ''}`}>

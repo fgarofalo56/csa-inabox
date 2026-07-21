@@ -26,7 +26,8 @@ import {
 } from '@fluentui/react-icons';
 import { PageShell } from '@/lib/components/page-shell';
 import { Section } from '@/lib/components/ui/section';
-import { itemVisual } from '@/lib/components/ui/item-type-visual';
+import { itemVisual, readableAccent } from '@/lib/components/ui/item-type-visual';
+import { useTheme } from '@/lib/theme/theme-context';
 import { InstallAppDialog } from '@/lib/components/apps/install-app-dialog';
 import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
 import { ToolbarCrossLinks, type CrossLink } from '@/lib/components/shared/item-tab-strip';
@@ -117,6 +118,7 @@ const useStyles = makeStyles({
 
 export default function AppDetailPage() {
   const styles = useStyles();
+  const { mode } = useTheme();
   const params = useParams<{ id: string }>();
   const router = useRouter();
   const [app, setApp] = useState<AppDoc | null | 'notfound'>(null);
@@ -196,6 +198,7 @@ export default function AppDetailPage() {
           <div className={styles.items}>
             {app.items.map((it, i) => {
               const visual = itemVisual(it.type);
+              const fg = readableAccent(visual.color, mode === 'dark');
               const Icon = visual.icon;
               return (
                 // v2 validator finding: prefetch={false} kills the RSC payload
@@ -211,10 +214,10 @@ export default function AppDetailPage() {
                 >
                   <span
                     className={styles.itemChip}
-                    style={{ backgroundColor: `${visual.color}1f`, color: visual.color }}
+                    style={{ backgroundColor: `${fg}1f`, color: fg }}
                     aria-hidden
                   >
-                    <Icon style={{ width: 22, height: 22, color: visual.color }} />
+                    <Icon style={{ width: 22, height: 22, color: fg }} />
                   </span>
                   <span className={styles.itemMain}>
                     <Text size={300} className={styles.itemType}>

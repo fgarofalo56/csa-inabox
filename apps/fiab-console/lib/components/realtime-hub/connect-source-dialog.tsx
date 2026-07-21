@@ -30,6 +30,8 @@ import {
   SOURCE_CONNECTORS, SOURCE_CATEGORIES, sourceVisual, SCOPE_KEYS,
   type SourceConnector, type SourceCategory, type SourceField, type ResourceSelectSource,
 } from './source-catalog';
+import { readableAccent } from '@/lib/components/ui/item-type-visual';
+import { useTheme } from '@/lib/theme/theme-context';
 
 /** Sentinel option value for the inline "+ Create new…" affordance. */
 const CREATE_SENTINEL = '__loom_create_new__';
@@ -159,6 +161,7 @@ export function ConnectSourceDialog({
   open: openProp, onOpenChange, initialConnector, initialProps, initialDisplayName,
 }: Props) {
   const styles = useStyles();
+  const { mode } = useTheme();
   const [openState, setOpenState] = useState(false);
   const controlled = openProp !== undefined;
   const open = controlled ? !!openProp : openState;
@@ -532,10 +535,11 @@ export function ConnectSourceDialog({
                 {(() => {
                   const v = sourceVisual(picked);
                   const Icon = v.icon;
+                  const fg = readableAccent(v.color, mode === 'dark');
                   return (
                     <div className={styles.formHead}>
-                      <span className={styles.chip} style={{ backgroundColor: `${v.color}1f`, color: v.color }} aria-hidden>
-                        <Icon style={{ width: 20, height: 20, color: v.color }} />
+                      <span className={styles.chip} style={{ backgroundColor: `${fg}1f`, color: fg }} aria-hidden>
+                        <Icon style={{ width: 20, height: 20, color: fg }} />
                       </span>
                       <Caption1 style={{ color: tokens.colorNeutralForeground2 }}>{picked.description}</Caption1>
                     </div>
@@ -916,12 +920,13 @@ export function ConnectSourceDialog({
                     {connectors.map((c) => {
                       const v = sourceVisual(c);
                       const Icon = v.icon;
+                      const fg = readableAccent(v.color, mode === 'dark');
                       return (
                         <button key={c.id} type="button" className={styles.card}
                           onClick={() => pick(c)} aria-label={`Connect ${c.name}`}>
                           <div className={styles.cardHead}>
-                            <span className={styles.chip} style={{ backgroundColor: `${v.color}1f`, color: v.color }} aria-hidden>
-                              <Icon style={{ width: 20, height: 20, color: v.color }} />
+                            <span className={styles.chip} style={{ backgroundColor: `${fg}1f`, color: fg }} aria-hidden>
+                              <Icon style={{ width: 20, height: 20, color: fg }} />
                             </span>
                             <Subtitle2 className={styles.cardName}>{c.name}</Subtitle2>
                           </div>

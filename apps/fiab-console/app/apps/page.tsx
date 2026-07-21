@@ -39,7 +39,8 @@ import { ViewToggle, type LoomView } from '@/lib/components/ui/view-toggle';
 import { ItemTile } from '@/lib/components/ui/item-tile';
 import { TileGrid } from '@/lib/components/ui/tile-grid';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
-import { itemVisual } from '@/lib/components/ui/item-type-visual';
+import { itemVisual, readableAccent } from '@/lib/components/ui/item-type-visual';
+import { useTheme } from '@/lib/theme/theme-context';
 import { DeployDemoBanner } from '@/lib/components/apps/deploy-demo-banner';
 
 interface AppItemRef { type: string; template?: string; displayName?: string; }
@@ -132,6 +133,7 @@ function bucket(apps: AppDoc[]): CategoryGroup[] {
 
 export default function AppsPage() {
   const styles = useStyles();
+  const { mode } = useTheme();
   const router = useRouter();
   const [apps, setApps] = useState<AppDoc[] | null>(null);
   const [unauth, setUnauth] = useState(false);
@@ -191,15 +193,16 @@ export default function AppsPage() {
       getValue: (a) => a.name,
       render: (a) => {
         const visual = itemVisual(appVisualType(a));
+        const fg = readableAccent(visual.color, mode === 'dark');
         const Icon = visual.icon;
         return (
           <span className={styles.nameCell}>
             <span
               className={styles.nameChip}
-              style={{ backgroundColor: `${visual.color}1f` }}
+              style={{ backgroundColor: `${fg}1f` }}
               aria-hidden
             >
-              <Icon style={{ width: 16, height: 16, color: visual.color }} />
+              <Icon style={{ width: 16, height: 16, color: fg }} />
             </span>
             <Text weight="semibold">{a.name}</Text>
           </span>
@@ -241,7 +244,7 @@ export default function AppsPage() {
       width: 180,
       getValue: (a) => a.publisher ?? '—',
     },
-  ], [styles.nameCell, styles.nameChip]);
+  ], [styles.nameCell, styles.nameChip, mode]);
 
   function openApp(a: AppDoc) {
     router.push(`/apps/${a.id}`);
