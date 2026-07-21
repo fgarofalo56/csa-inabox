@@ -34,9 +34,43 @@ import {
   type OntologyEntityBinding, type AtelierColumnValue,
 } from '@/lib/editors/_family-utils';
 import { resolveSpindleGrounding, type GroundingResult } from './_spindle-grounding';
+import { tierPolicyFromConfig, selectTier, type ModelTier } from '@/lib/foundry/model-tier-router';
 
 const ITEM_TYPE = 'aip-logic';
 const MAX_DEPTH = 3; // execute-function recursion guard
+
+// ───────────────────────── model / execution settings ─────────────────────────
+
+/** Per-function model & execution settings (Palantir AIP-Logic settings panel). */
+export interface AipSettings {
+  tier?: ModelTier;          // mini | standard | strong (routes the use-llm turn)
+  temperature?: number;      // sampling temperature (0–1)
+  maxTokens?: number;        // max completion tokens per use-llm turn
+  defaultMode?: 'logic' | 'agent';
+  evalThreshold?: number;    // LLM-judge pass threshold (1–5)
+  minPassRate?: number;      // fraction of eval cases that must pass to publish (0–1)
+}
+
+/** Turn the persisted settings into the per-turn AOAI overrides threaded through
+ *  chatGrounded. Tier → deployment resolves via the env-driven tier router
+ *  (LOOM_AOAI_MINI/STRONG_DEPLOYMENT); when the tier has no configured
+ *  deployment the router falls back to the resolved default (deployment
+ *  undefined ⇒ chatGrounded rides its own resolved target). 100% Azure-native. */
+export function resolveTurnOverrides(settings: AipSettings | undefined): { deployment?: string; temperature?: number; maxCompletionTokens?: number } {
+  const out: { deployment?: string; temperature?: number; maxCompletionTokens?: number } = {};
+  if (settings?.tier) {
+    const policy = tierPolicyFromConfig({});
+    const sel = selectTier(policy, { overrideTier: settings.tier, taskClass: 'general' });
+    if (sel.deployment) out.deployment = sel.deployment;
+  }
+  if (typeof settings?.temperature === 'number' && Number.isFinite(settings.temperature)) {
+    out.temperature = Math.max(0, Math.min(2, settings.temperature));
+  }
+  if (typeof settings?.maxTokens === 'number' && Number.isFinite(settings.maxTokens) && settings.maxTokens > 0) {
+    out.maxCompletionTokens = Math.floor(settings.maxTokens);
+  }
+  return out;
+}
 
 // ───────────────────────── types (mirrors the editor) ─────────────────────────
 
@@ -418,7 +452,7 @@ async function runSiblingFunction(
   // Legacy sibling (ordered steps) → one grounded turn.
   const grounding = await resolveSpindleGrounding(sibState.boundOntologyId as string | undefined, tenantId).catch(() => ({ sources: [] as DataAgentSource[], surface: null, entityTypes: [] as string[] }));
   try {
-    const answer = await chatGrounded({ instructions: composeGraphPrompt(sibState), sources: grounding.sources }, [], `Inputs:\n${JSON.stringify(args, null, 2)}`);
+    const answer = await chatGrounded({ instructions: composeGraphPrompt(sibState), sources: grounding.sources }, [], `Inputs:\n${JSON.stringify(args, null, 2)}`, resolveTurnOverrides(sibState.settings as AipSettings | undefined));
     return { ok: true, output: asText(answer.answer), outputType: String(sibState.outputType || 'string'), model: answer.model, usage: answer.usage, steps: [] };
   } catch (e) {
     if (e instanceof NoAoaiDeploymentError) return { ...empty, notDeployed: true, gate: AOAI_GATE, error: e.message };
@@ -441,6 +475,7 @@ export async function runBlockGraph(
   const boundOntologyId = (state.boundOntologyId as string | undefined) || undefined;
   const grounding: GroundingResult = await resolveSpindleGrounding(boundOntologyId, tenantId).catch(() => ({ sources: [], surface: null, entityTypes: [] }));
   const bindings = await loadEntityBindings(boundOntologyId, tenantId).catch(() => []);
+  const turnOverrides = resolveTurnOverrides(state.settings as AipSettings | undefined);
 
   // System context each use-llm turn is grounded with (inputs + output contract).
   const fnContext = composeGraphPrompt(state);
@@ -501,7 +536,7 @@ export async function runBlockGraph(
           const question = `${interp(block.prompt, bag)}${tools.text ? `\n\nTool results (from real Azure-native backends — ground your answer in these):\n${tools.text}` : ''}`;
           const cfg: DataAgentConfig = { instructions: `${fnContext}\n\nYou are executing block "${block.name || outName}". Produce ONLY its ${block.outputType || 'string'} output.`, sources: grounding.sources };
           step.prompt = question;
-          const answer = await chatGrounded(cfg, [], question || 'Execute this block.');
+          const answer = await chatGrounded(cfg, [], question || 'Execute this block.', turnOverrides);
           const val = coerceOut(block.outputType, answer.answer);
           bag[outName] = val; step.result = val; step.content = asText(answer.answer);
           step.model = answer.model; step.usage = answer.usage; lastModel = answer.model || lastModel;

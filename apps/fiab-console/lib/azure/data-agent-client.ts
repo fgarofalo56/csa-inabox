@@ -213,16 +213,20 @@ export interface ChatTurn { role: 'user' | 'assistant'; content: string }
 export async function aoaiChatTurn(
   target: AoaiTarget,
   messages: Array<{ role: string; content: string }>,
-  opts: { deployment?: string; maxCompletionTokens?: number } = {},
+  opts: { deployment?: string; maxCompletionTokens?: number; temperature?: number } = {},
 ): Promise<{ content: string; usage: any }> {
   const token = await aoaiToken();
   const deployment = opts.deployment?.trim() || target.deployment;
   const url = `${target.endpoint}/openai/deployments/${encodeURIComponent(deployment)}/chat/completions?api-version=${target.apiVersion}`;
   const maxCompletionTokens = opts.maxCompletionTokens ?? 1200;
+  // Caller-supplied sampling temperature (e.g. a Spindle function's model/settings
+  // panel) overrides the default 0.2; the unsupported-param retry still drops it
+  // entirely for reasoning deployments that reject any non-default temperature.
+  const temp = typeof opts.temperature === 'number' ? opts.temperature : 0.2;
   const send = async (withTemp: boolean) => fetchWithTimeout(url, {
     method: 'POST',
     headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-    body: JSON.stringify(buildAoaiBody({ messages: messages as AoaiChatMessage[], maxCompletionTokens, temperature: withTemp ? 0.2 : undefined })),
+    body: JSON.stringify(buildAoaiBody({ messages: messages as AoaiChatMessage[], maxCompletionTokens, temperature: withTemp ? temp : undefined })),
   }, LLM_FETCH_TIMEOUT_MS);
   let res = await send(true);
   if (res.status === 400) {
@@ -334,11 +338,15 @@ function parseAnswer(content: string, sources: DataAgentSource[]): DataAgentAnsw
  * Throws NoAoaiDeploymentError when no model is deployed (editor surfaces a
  * MessageBar with the Foundry-hub "deploy gpt-4o-mini" remediation).
  */
-export async function chatGrounded(cfg: DataAgentConfig, history: ChatTurn[], question: string, ctx?: { tenantId?: string }): Promise<DataAgentAnswer> {
+export async function chatGrounded(cfg: DataAgentConfig, history: ChatTurn[], question: string, ctx?: { tenantId?: string; deployment?: string; temperature?: number; maxCompletionTokens?: number }): Promise<DataAgentAnswer> {
   const target = await resolveAoaiTarget();
 
   // One AOAI round-trip on the resolved target (shared temperature-fallback path).
-  const runChat = (messages: Array<{ role: string; content: string }>) => aoaiChatTurn(target, messages);
+  // A caller may PIN this turn to a specific tier deployment / temperature / token
+  // cap (Spindle's per-function model & settings panel) — all optional, so every
+  // existing caller is byte-identical.
+  const runChat = (messages: Array<{ role: string; content: string }>) =>
+    aoaiChatTurn(target, messages, { deployment: ctx?.deployment, temperature: ctx?.temperature, maxCompletionTokens: ctx?.maxCompletionTokens });
 
   // ── Phase 1: model proposes an answer + the per-source query it would run ──
   const phase1Messages = [
@@ -405,7 +413,7 @@ export async function chatGrounded(cfg: DataAgentConfig, history: ChatTurn[], qu
     usage: (u.total_tokens != null)
       ? { promptTokens: u.prompt_tokens ?? 0, completionTokens: u.completion_tokens ?? 0, totalTokens: u.total_tokens ?? 0 }
       : undefined,
-    model: target.deployment,
+    model: ctx?.deployment?.trim() || target.deployment,
     sourcesAvailable: cfg.sources.map((s) => s.name).filter(Boolean),
   };
 }
