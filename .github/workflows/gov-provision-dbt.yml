@@ -1,0 +1,120 @@
+name: gov-provision-dbt
+# Incremental Gov provisioner for the loom-dbt-runner Container App (closes the
+# svc-dbt gate on GCC-High). The from-scratch installer (deploy-fiab-gcch) is
+# topology-guarded against re-running on an existing hub, and admin-plane is at
+# the 256-param ceiling, so — exactly like gov-uc-purview-wire.yml deploys OSS
+# Unity Catalog out-of-band — this job builds the dbt-runner image on the Gov
+# ACR, deploys ONLY the loom-dbt-runner Container App (integration/dbt-runner.bicep)
+# into the existing Gov CAE via a group-scoped Incremental deployment (a what-if
+# preview runs first and the apply NEVER touches other resources), then sets
+# LOOM_DBT_RUNNER_URL on the console. Idempotent + safe to re-run.
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: 'false = what-if preview only (safe); true = build + deploy + wire.'
+        required: false
+        default: 'false'
+permissions:
+  contents: read
+env:
+  RG: rg-csa-loom-admin-usgovvirginia
+  ACR: acrloomdcmt6cqoezlgs
+  ACR_LOGIN: acrloomdcmt6cqoezlgs.azurecr.us
+  APP: loom-console
+jobs:
+  provision:
+    name: Provision loom-dbt-runner into the Gov CAE
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
+
+      - name: Azure Gov Login
+        uses: Azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_GOV_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_GOV_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_GOV_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}",
+              "activeDirectoryEndpointUrl": "https://login.microsoftonline.us",
+              "resourceManagerEndpointUrl": "https://management.usgovcloudapi.net/",
+              "sqlManagementEndpointUrl": "https://management.core.usgovcloudapi.net:8443/",
+              "galleryEndpointUrl": "https://gallery.usgovcloudapi.net/",
+              "managementEndpointUrl": "https://management.core.usgovcloudapi.net/"
+            }
+          environment: AzureUSGovernment
+
+      - name: Set Azure cloud to Gov
+        run: az cloud set --name AzureUSGovernment
+
+      - name: Discover Gov console context (CAE / UAMI / App Insights)
+        run: |
+          set -euo pipefail
+          CAE_ID=$(az containerapp show -n "$APP" -g "$RG" --query properties.environmentId -o tsv | tr -d '\r')
+          UAMI_ID=$(az containerapp show -n "$APP" -g "$RG" --query 'identity.userAssignedIdentities | keys(@) | [0]' -o tsv | tr -d '\r')
+          UAMI_CLIENT_ID=$(az identity show --ids "$UAMI_ID" --query clientId -o tsv | tr -d '\r')
+          LOCATION=$(az containerapp show -n "$APP" -g "$RG" --query location -o tsv | tr -d '\r' | tr '[:upper:]' '[:lower:]' | tr -d ' ')
+          AI_CONN=$(az containerapp show -n "$APP" -g "$RG" --query "properties.template.containers[0].env[?name=='APPLICATIONINSIGHTS_CONNECTION_STRING'].value | [0]" -o tsv | tr -d '\r')
+          {
+            echo "CAE_ID=$CAE_ID"; echo "UAMI_ID=$UAMI_ID"; echo "UAMI_CLIENT_ID=$UAMI_CLIENT_ID"
+            echo "LOCATION=$LOCATION"; echo "AI_CONN=$AI_CONN"
+          } >> "$GITHUB_ENV"
+          echo "::notice::CAE=$CAE_ID UAMI=$UAMI_ID clientId=$UAMI_CLIENT_ID location=$LOCATION"
+          [ -n "$CAE_ID" ] && [ -n "$UAMI_ID" ] && [ -n "$UAMI_CLIENT_ID" ] || { echo "::error::missing CAE/UAMI"; exit 1; }
+
+      - name: Build loom-dbt-runner image on the Gov ACR
+        if: ${{ inputs.apply == 'true' }}
+        run: |
+          set -euo pipefail
+          SHA=$(git rev-parse --short=8 HEAD)
+          echo "SHA=$SHA" >> "$GITHUB_ENV"
+          az acr update -n "$ACR" --public-network-enabled true --default-action Allow -o none
+          for i in $(seq 1 12); do az acr login -n "$ACR" >/dev/null 2>&1 && break; sleep 15; done
+          az acr build --registry "$ACR" --no-logs \
+            --image "loom-dbt-runner:$SHA" --image "loom-dbt-runner:latest" \
+            apps/fiab-dbt-runner
+          az acr update -n "$ACR" --default-action Deny -o none || true
+
+      - name: What-if the loom-dbt-runner group deployment (never touches other resources)
+        run: |
+          set -euo pipefail
+          TAG="${SHA:-latest}"
+          az deployment group what-if -g "$RG" \
+            -f platform/fiab/bicep/modules/integration/dbt-runner.bicep \
+            -p location="$LOCATION" caeId="$CAE_ID" acrLoginServer="$ACR_LOGIN" \
+               imageTag="$TAG" uamiId="$UAMI_ID" uamiClientId="$UAMI_CLIENT_ID" \
+               appInsightsConnectionString="$AI_CONN" \
+               complianceTags='{"env":"gov","boundary":"usgovvirginia","app":"dbt-runner"}' \
+            --mode Incremental 2>&1 | tee whatif.txt || true
+          echo "::notice::what-if above — apply only creates/updates loom-dbt-runner."
+
+      - name: Deploy loom-dbt-runner Container App (Incremental)
+        if: ${{ inputs.apply == 'true' }}
+        run: |
+          set -euo pipefail
+          az deployment group create -g "$RG" \
+            -n "loom-dbt-runner-$(date -u +%Y%m%d%H%M%S)" \
+            -f platform/fiab/bicep/modules/integration/dbt-runner.bicep \
+            -p location="$LOCATION" caeId="$CAE_ID" acrLoginServer="$ACR_LOGIN" \
+               imageTag="$SHA" uamiId="$UAMI_ID" uamiClientId="$UAMI_CLIENT_ID" \
+               appInsightsConnectionString="$AI_CONN" \
+               complianceTags='{"env":"gov","boundary":"usgovvirginia","app":"dbt-runner"}' \
+            --mode Incremental -o none
+          FQDN=$(az containerapp show -n loom-dbt-runner -g "$RG" --query properties.configuration.ingress.fqdn -o tsv | tr -d '\r')
+          echo "DBT_URL=https://$FQDN" >> "$GITHUB_ENV"
+          echo "::notice::loom-dbt-runner endpoint: https://$FQDN"
+          for i in $(seq 1 20); do
+            REV=$(az containerapp show -n loom-dbt-runner -g "$RG" --query properties.latestRevisionName -o tsv | tr -d '\r')
+            H=$(az containerapp revision show -n loom-dbt-runner -g "$RG" --revision "$REV" --query properties.healthState -o tsv 2>/dev/null | tr -d '\r')
+            echo "loom-dbt-runner health=$H"; [ "$H" = "Healthy" ] && break; sleep 15
+          done
+
+      - name: Wire LOOM_DBT_RUNNER_URL on the console
+        if: ${{ inputs.apply == 'true' }}
+        run: |
+          set -euo pipefail
+          [ -n "${DBT_URL:-}" ] || { echo "::error::no dbt URL"; exit 1; }
+          az containerapp update -n "$APP" -g "$RG" --set-env-vars "LOOM_DBT_RUNNER_URL=$DBT_URL" -o none
+          echo "::notice::set LOOM_DBT_RUNNER_URL=$DBT_URL on $APP — svc-dbt gate should now pass. Re-run gov-selfaudit to confirm."
