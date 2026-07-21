@@ -46,6 +46,8 @@ export interface AgentFlowState {
   subAgents?: unknown;
   /** Canvas node positions (opaque here). */
   flowLayout?: Record<string, { x: number; y: number }>;
+  /** WS-5.1 inline guardrails/evals config applied to every run. */
+  guardrails?: unknown;
   /** Persisted run history (newest first). */
   runs?: AgentFlowRun[];
 }
@@ -72,6 +74,14 @@ export interface AgentFlowRun {
   durationMs: number;
   startedBy: string;
   error?: string;
+  /** WS-5.1: count of MCP-server tool nodes that executed this turn. */
+  mcpCalls?: number;
+  /** WS-5.1: guardrail rules that ran this turn. */
+  guardrails?: string[];
+  /** WS-5.1: number of guardrail findings (block + warn). */
+  guardrailViolations?: number;
+  /** WS-5.1: true when guardrails withheld the answer. */
+  blocked?: boolean;
 }
 
 const MAX_FLOW_RUNS = 50;
@@ -83,7 +93,16 @@ const TOOL_KIND_TO_SOURCE_TYPE: Record<string, DataAgentSourceType> = {
   kql: 'kql',
   'search-index': 'ai-search',
   'knowledge-base': 'ai-search',
+  // WS-5.1: an ontology-object tool grounds THROUGH the Weave ontology graph —
+  // its instances resolve via resolveOntologyObjectForGrounding (WS-6). It maps
+  // to the DataAgentSource `ontology` type, executed for real by the run route.
+  'ontology-object': 'ontology',
 };
+
+/** True when a tool kind produces a grounded source (vs a capability tool). */
+export function isGroundingToolKind(kind: string): boolean {
+  return kind in TOOL_KIND_TO_SOURCE_TYPE;
+}
 
 /** Normalize the persisted tools blob into typed AgentTool[]. */
 export function flowTools(state: AgentFlowState | undefined): AgentTool[] {
@@ -107,6 +126,23 @@ export function flowGroundedSources(tools: AgentTool[]): DataAgentSource[] {
   for (const t of tools) {
     const sourceType = TOOL_KIND_TO_SOURCE_TYPE[t.kind];
     if (!sourceType || !t.itemId) continue;
+    if (t.kind === 'ontology-object') {
+      // Needs a bound object type to resolve typed instances (WS-6). The executor
+      // reads source.id (ontology item id) + source.tables (the object type).
+      const objectType = (t.objectType || '').trim();
+      if (!objectType) continue;
+      const key = `ontology:${t.itemId}:${objectType}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({
+        id: t.itemId,
+        type: 'ontology',
+        name: t.itemName || t.itemId,
+        tables: objectType,
+        description: t.description || `Typed "${objectType}" instances resolved through the ontology.`,
+      });
+      continue;
+    }
     if (seen.has(t.itemId)) continue;
     seen.add(t.itemId);
     out.push({

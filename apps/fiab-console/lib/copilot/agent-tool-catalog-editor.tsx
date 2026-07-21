@@ -25,6 +25,7 @@ import {
   Database20Regular, Table20Regular, Pulse20Regular, SearchInfo20Regular,
   Library20Regular, Code20Regular, BracesVariable20Regular, PlugConnected20Regular,
   Globe20Regular, GlobeSearch20Regular, Add20Regular, Delete16Regular, Warning16Regular,
+  Shapes20Regular,
 } from '@fluentui/react-icons';
 import type { JSX } from 'react';
 import {
@@ -64,6 +65,7 @@ export const TOOL_ICON: Record<string, JSX.Element> = {
   mcp: <PlugConnected20Regular />,
   openapi: <Globe20Regular />,
   web: <GlobeSearch20Regular />,
+  ontology: <Shapes20Regular />,
 };
 
 export function toolIcon(kind: AgentToolKind): JSX.Element {
@@ -189,9 +191,16 @@ export function AgentToolsEditor({ tools, onChange, disabled, compact, workspace
               </Field>
             )}
 
+            {/* Ontology-object (WS-6) — pick the ontology item above, then name the object type. */}
+            {t.kind === 'ontology-object' && (
+              <Field label="Object type" hint={t.itemId ? 'The declared Weave object type whose typed instances the agent grounds on.' : 'Pick an ontology item first, then name its object type.'}>
+                <Input disabled={disabled || !t.itemId} value={t.objectType || ''} placeholder="Customer"
+                  onChange={(_, d) => patch(t.id, { objectType: d.value })} />
+              </Field>
+            )}
+
             {/* MCP tool. */}
-            {t.kind === 'mcp' && (
-              <>
+            {t.kind === 'mcp' && (              <>
                 <Field label="MCP server">
                   <Dropdown
                     disabled={disabled}

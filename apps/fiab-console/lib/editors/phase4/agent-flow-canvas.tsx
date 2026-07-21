@@ -41,12 +41,14 @@ import { CanvasCollabLayer } from '@/lib/components/canvas/canvas-collab-layer';
 import { useCanvasHistory } from '@/lib/components/canvas/use-canvas-history';
 import { ResizableCanvasRegion } from '@/lib/components/canvas/resizable-canvas';
 import {
-  AGENT_TOOL_KINDS, newAgentTool, agentToolKind, toolCanvasCategory,
+  AGENT_TOOL_KINDS, newAgentTool, agentToolKind, toolCanvasCategory, isAgentToolConfigured,
   type AgentTool, type AgentToolKind,
 } from '@/lib/copilot/agent-tool-catalog';
 import { AgentToolsEditor, toolIcon } from '@/lib/copilot/agent-tool-catalog-editor';
 import { newSubAgentRef, type SubAgentRef } from '@/lib/copilot/connected-agents';
 import { ConnectedAgentsEditor } from '@/lib/copilot/connected-agents-editor';
+import { FlowGuardrailsEditor } from './agent-flow-guardrails-editor';
+import { normalizeGuardrails, type FlowGuardrails } from '@/lib/copilot/agent-flow-guardrails';
 import { safeModelJson } from '../model-fetch';
 import { DataAgentResultViz } from '../data-agent-result-viz';
 import {
@@ -139,7 +141,11 @@ export interface AgentFlowCanvasProps {
   tools: AgentTool[];
   subAgents: SubAgentRef[];
   layout: LayoutMap;
-  onPatch: (patch: { tools?: AgentTool[]; subAgents?: SubAgentRef[]; layout?: LayoutMap }) => void;
+  /** WS-5.1 inline guardrails/evals config (edited on the agent node). */
+  guardrails?: FlowGuardrails;
+  /** Show the guardrails/evals inspector on the agent node (standalone agent-flow only). */
+  showGuardrails?: boolean;
+  onPatch: (patch: { tools?: AgentTool[]; subAgents?: SubAgentRef[]; layout?: LayoutMap; guardrails?: FlowGuardrails }) => void;
   dirty: boolean;
   save: () => Promise<boolean>;
   /**
@@ -155,7 +161,7 @@ export interface AgentFlowCanvasProps {
 interface FlowSnapshot { tools: AgentTool[]; subAgents: SubAgentRef[]; layout: LayoutMap }
 
 function InnerCanvas(props: AgentFlowCanvasProps) {
-  const { id, workspaceId, agentName, sources, tools, subAgents, layout, onPatch, dirty, save, runEndpoint } = props;
+  const { id, workspaceId, agentName, sources, tools, subAgents, layout, guardrails, showGuardrails, onPatch, dirty, save, runEndpoint } = props;
   const s = useStyles();
 
   // Undo/redo over the canvas snapshot (tools + sub-agents + layout). Re-seeded
@@ -196,7 +202,7 @@ function InnerCanvas(props: AgentFlowCanvasProps) {
       } else if (ln.kind === 'tool') {
         const t = tools.find((x) => x.id === refId);
         const meta = t ? agentToolKind(t.kind) : undefined;
-        data = { kind: 'tool', label: t?.label || meta?.label || 'Tool', typeLabel: meta?.short || 'Tool', visual: visualFor(t ? toolCanvasCategory(t.kind) : 'external', t ? toolIcon(t.kind) : <Database20Regular />), incomplete: t ? !isToolBound(t) : false };
+        data = { kind: 'tool', label: t?.label || meta?.label || 'Tool', typeLabel: meta?.short || 'Tool', visual: visualFor(t ? toolCanvasCategory(t.kind) : 'external', t ? toolIcon(t.kind) : <Database20Regular />), incomplete: t ? !isAgentToolConfigured(t) : false };
       } else {
         const sa = subAgents.find((x) => x.id === refId);
         data = { kind: 'subagent', label: sa?.name || refId, typeLabel: sa?.role || 'Sub-agent', subtitle: sa?.description, visual: visualFor('iteration', <BranchFork20Regular />), incomplete: sa ? !sa.itemId : false };
@@ -206,9 +212,16 @@ function InnerCanvas(props: AgentFlowCanvasProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }), [structureSig, layoutSig, agentName, sources, tools, subAgents]);
 
-  const rfEdges = useMemo<Edge[]>(() => buildFlowEdges(logical.map((n) => n.id)).map((e) => ({
-    ...e, animated: false, style: { stroke: tokens.colorNeutralStroke1 },
-  })), [logical]);
+  const rfEdges = useMemo<Edge[]>(() => buildFlowEdges(logical.map((n) => n.id)).map((e) => (
+    e.kind === 'handoff'
+      ? {
+          id: e.id, source: e.source, target: e.target, animated: true, label: 'handoff',
+          labelStyle: { fill: tokens.colorBrandForeground1, fontSize: 10, fontWeight: 600 },
+          labelBgStyle: { fill: tokens.colorNeutralBackground1 },
+          style: { stroke: tokens.colorBrandStroke1, strokeDasharray: '5 3' },
+        }
+      : { id: e.id, source: e.source, target: e.target, animated: false, style: { stroke: tokens.colorNeutralStroke1 } }
+  )), [logical]);
 
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>(rfNodes);
   // Rebuild the stateful node list only when structure or persisted layout
@@ -379,6 +392,15 @@ function InnerCanvas(props: AgentFlowCanvasProps) {
               <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
                 The orchestrator. It grounds on its {sources.length} data source{sources.length === 1 ? '' : 's'} and delegates to {subAgents.length} connected agent{subAgents.length === 1 ? '' : 's'} at run time. Edit instructions + sources on the Build tab.
               </Caption1>
+              {showGuardrails && (
+                <>
+                  <div role="separator" style={{ height: 1, background: tokens.colorNeutralStroke2, margin: `${tokens.spacingVerticalS} 0` }} />
+                  <FlowGuardrailsEditor
+                    guardrails={normalizeGuardrails(guardrails)}
+                    onChange={(next) => onPatch({ guardrails: next })}
+                  />
+                </>
+              )}
             </>
           )}
 
@@ -459,23 +481,12 @@ function InnerCanvas(props: AgentFlowCanvasProps) {
             onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); if (question.trim() && !running) run(); } }} />
           <Button appearance="primary" icon={<Play20Regular />} onClick={run} disabled={!question.trim() || running}>{running ? 'Running…' : 'Run'}</Button>
         </div>
-        {sources.length === 0 && subAgents.length === 0 && (
-          <MessageBar intent="warning"><MessageBarBody><MessageBarTitle>Nothing to run yet</MessageBarTitle>Add a data source (Build tab) or a connected agent before running the workflow.</MessageBarBody></MessageBar>
+        {sources.length === 0 && subAgents.length === 0 && tools.length === 0 && (
+          <MessageBar intent="warning"><MessageBarBody><MessageBarTitle>Nothing to run yet</MessageBarTitle>Add a tool node (data / ontology object / MCP server), a data source, or a connected agent before running the workflow.</MessageBarBody></MessageBar>
         )}
       </div>
     </div>
   );
-}
-
-/** A tool node is "incomplete" when its binding is missing. */
-function isToolBound(t: AgentTool): boolean {
-  switch (t.kind) {
-    case 'warehouse': case 'lakehouse': case 'kql': case 'search-index': case 'knowledge-base': return !!t.itemId;
-    case 'mcp': return !!t.serverId;
-    case 'openapi': return !!t.specUrl;
-    case 'function': return !!(t.functionName && t.functionName.trim());
-    default: return true;
-  }
 }
 
 export function AgentFlowCanvas(props: AgentFlowCanvasProps) {

@@ -24,17 +24,19 @@ import {
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
-  FlowchartRegular, HistoryRegular, BotRegular,
+  FlowchartRegular, HistoryRegular, BotRegular, PlugConnectedRegular,
 } from '@fluentui/react-icons';
 import { clientFetch } from '@/lib/client-fetch';
 import { ItemEditorChrome } from '../item-editor-chrome';
 import { NewItemCreateGate } from '../new-item-gate';
 import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
 import { AgentFlowCanvas } from './agent-flow-canvas';
+import { AgentFlowPublishPanel } from './agent-flow-publish-panel';
 import type { LayoutMap } from './agent-flow-layout';
 import { useItemState, SaveBar } from './shared';
 import { migrateLegacyTools, type AgentTool } from '@/lib/copilot/agent-tool-catalog';
 import { normalizeSubAgents, type SubAgentRef } from '@/lib/copilot/connected-agents';
+import { normalizeGuardrails, type FlowGuardrails } from '@/lib/copilot/agent-flow-guardrails';
 import type { AgentFlowRun } from '@/lib/azure/agent-flow-run';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
@@ -44,7 +46,11 @@ interface AgentFlowEditorState extends Record<string, unknown> {
   tools?: AgentTool[];
   subAgents?: SubAgentRef[];
   flowLayout?: LayoutMap;
+  guardrails?: FlowGuardrails;
   runs?: AgentFlowRun[];
+  mcpPublished?: boolean;
+  mcpToolName?: string;
+  mcpPublishedAt?: string;
 }
 
 const useStyles = makeStyles({
@@ -70,11 +76,14 @@ export function AgentFlowEditor({ item, id }: { item: FabricItemType; id: string
     state, setState, loading, saving, error, savedAt, save, dirty, workspaceId,
   } = useItemState<AgentFlowEditorState>('agent-flow', id, { instructions: '', tools: [], subAgents: [], flowLayout: {} });
 
-  const [tab, setTab] = useState<'design' | 'runs'>('design');
+  const [tab, setTab] = useState<'design' | 'runs' | 'publish'>('design');
   const [runs, setRuns] = useState<AgentFlowRun[]>([]);
 
   const tools = useMemo(() => migrateLegacyTools(state.tools), [state.tools]);
   const subAgents = useMemo(() => normalizeSubAgents(state.subAgents), [state.subAgents]);
+  const guardrails = useMemo(() => normalizeGuardrails(state.guardrails), [state.guardrails]);
+  const canPublish = (!!String(state.instructions || '').trim()) || tools.length > 0 || subAgents.length > 0;
+  const origin = typeof window !== 'undefined' ? window.location.origin : '';
 
   const loadRuns = useCallback(async () => {
     if (!id || id === 'new') return;
@@ -95,6 +104,7 @@ export function AgentFlowEditor({ item, id }: { item: FabricItemType; id: string
       { label: 'View', actions: [
         { label: 'Design', onClick: () => setTab('design') },
         { label: 'Runs', onClick: () => { setTab('runs'); loadRuns(); } },
+        { label: 'Publish', onClick: () => setTab('publish') },
       ]},
     ]},
   ], [saving, dirty, save, loadRuns]);
@@ -110,9 +120,10 @@ export function AgentFlowEditor({ item, id }: { item: FabricItemType; id: string
     <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
       <div>
         <div className={s.tabBar}>
-          <TabList selectedValue={tab} onTabSelect={(_, d) => { const v = d.value as 'design' | 'runs'; setTab(v); if (v === 'runs') loadRuns(); }}>
+          <TabList selectedValue={tab} onTabSelect={(_, d) => { const v = d.value as 'design' | 'runs' | 'publish'; setTab(v); if (v === 'runs') loadRuns(); }}>
             <Tab value="design" icon={<FlowchartRegular />}>Design</Tab>
             <Tab value="runs" icon={<HistoryRegular />}>Runs{runs.length ? ` (${runs.length})` : ''}</Tab>
+            <Tab value="publish" icon={<PlugConnectedRegular />}>Publish</Tab>
           </TabList>
         </div>
 
@@ -148,11 +159,14 @@ export function AgentFlowEditor({ item, id }: { item: FabricItemType; id: string
                   tools={tools}
                   subAgents={subAgents}
                   layout={(state.flowLayout || {}) as LayoutMap}
+                  guardrails={guardrails}
+                  showGuardrails
                   onPatch={(patch) => setState((p) => ({
                     ...p,
                     ...(patch.tools ? { tools: patch.tools } : {}),
                     ...(patch.subAgents ? { subAgents: patch.subAgents } : {}),
                     ...(patch.layout ? { flowLayout: patch.layout } : {}),
+                    ...(patch.guardrails ? { guardrails: patch.guardrails } : {}),
                   }))}
                   dirty={dirty}
                   save={save}
@@ -203,6 +217,28 @@ export function AgentFlowEditor({ item, id }: { item: FabricItemType; id: string
               )}
               <Divider />
               <Caption1>Runs are persisted with the item and survive reloads. Newest first; up to 50 retained.</Caption1>
+            </div>
+          )}
+
+          {tab === 'publish' && (
+            <div className={s.card}>
+              <AgentFlowPublishPanel
+                id={id}
+                origin={origin}
+                published={!!state.mcpPublished}
+                toolName={state.mcpToolName}
+                publishedAt={state.mcpPublishedAt}
+                canPublish={canPublish && !dirty}
+                onChange={(next) => setState((p) => ({
+                  ...p,
+                  mcpPublished: next.published,
+                  ...(next.toolName ? { mcpToolName: next.toolName } : {}),
+                  ...(next.publishedAt ? { mcpPublishedAt: next.publishedAt } : {}),
+                }))}
+              />
+              {dirty && (
+                <MessageBar intent="info"><MessageBarBody><MessageBarTitle>Unsaved changes</MessageBarTitle>Save the flow before publishing so the MCP server serves the latest design.</MessageBarBody></MessageBar>
+              )}
             </div>
           )}
         </div>
