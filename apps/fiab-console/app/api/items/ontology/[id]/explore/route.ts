@@ -16,7 +16,7 @@ import { NextRequest } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { apiOk, apiError, apiUnauthorized, apiServerError } from '@/lib/api/respond';
 import { loadOwnedItem, updateOwnedItem } from '../../../_lib/item-crud';
-import { objectTypeNames } from '@/lib/editors/ontology-model';
+import { objectTypeNames, objectTypeByName } from '@/lib/editors/ontology-model';
 import { weaveGate } from '@/lib/azure/weave-ontology-store';
 import { objectFacets, searchObjects, traverseObject } from '@/lib/azure/weave-explore';
 import { PostgresError } from '@/lib/azure/postgres-flex-client';
@@ -57,7 +57,17 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
     const top = Number(req.nextUrl.searchParams.get('top')) || 100;
     if (mode === 'search') {
       const objects = await searchObjects(type, req.nextUrl.searchParams.get('q') || '', top);
-      return apiOk({ objectType: type, objects });
+      // Ship the type's declared property schema so the Object Explorer can pick
+      // the right facet/histogram per property type (WS-4.7) — client-side
+      // aggregate over these real instances (AGE can't run the aggregate).
+      const ot = objectTypeByName(state, type);
+      const properties = (ot?.properties || []).map((p) => ({
+        apiName: p.apiName,
+        displayName: p.displayName || p.apiName,
+        baseType: p.baseType,
+        ...(p.arrayOf ? { arrayOf: true } : {}),
+      }));
+      return apiOk({ objectType: type, objects, properties });
     }
     if (mode === 'traverse') {
       const from = (req.nextUrl.searchParams.get('from') || '').trim();
