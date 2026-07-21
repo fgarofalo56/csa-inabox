@@ -18,6 +18,7 @@
  * action does not require validation). No mocks, ever.
  */
 import { getKeyVaultSecretValue, vaultUrl } from '@/lib/azure/kv-secrets-client';
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import type { RegisteredFunction } from '@/lib/foundry/function-registry-model';
 
 /** Base URL of the Loom UDF runtime / an Azure Function App host. */
@@ -93,7 +94,7 @@ export async function invokeFunction(
     }
   }
   try {
-    const res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(payload ?? {}) });
+    const res = await fetchWithTimeout(url, { method: 'POST', headers, body: JSON.stringify(payload ?? {}) });
     const text = (await res.text()).slice(0, 64 * 1024);
     let value: unknown = text;
     try { value = JSON.parse(text); } catch { /* non-JSON body → raw text */ }
