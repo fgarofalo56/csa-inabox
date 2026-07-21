@@ -41,6 +41,10 @@ let _wsGit: Container | null = null;
 let _tenantThemes: Container | null = null;
 let _tenantSettings: Container | null = null;
 let _marketplaceListings: Container | null = null;
+// WS-10.4 Living Marketplace — the UNIFIED product catalog covering all five
+// publishable/subscribable kinds (data|agent|mcp|app|ontology) under one schema.
+// Partitioned by tenant so the exchange list hits one physical partition.
+let _marketplace: Container | null = null;
 let _featurePermissions: Container | null = null;
 let _lakehouseShortcuts: Container | null = null;
 let _lakehouseSchemas: Container | null = null;
@@ -693,6 +697,8 @@ async function ensure() {
   _tenantThemes = await mk('tenant-themes', '/tenantId');
   _tenantSettings = await mk('tenant-settings', '/tenantId');
   _marketplaceListings = await mk('marketplace-listings', '/tenantId');
+  // WS-10.4 Living Marketplace — unified 5-type product catalog (one schema).
+  _marketplace = await mk('marketplace', '/tenantId');
   // Phase 2 — Fabric-style RBAC: grant rows partitioned by tenant so
   // every per-request lookup hits a single physical partition.
   _featurePermissions = await mk('feature-permissions', '/tenantId');
@@ -1209,6 +1215,8 @@ export async function workspaceFoldersContainer(): Promise<Container> { await en
 
 // Wave 4 — Data Marketplace / Governance accessors.
 export async function dataProductsContainer(): Promise<Container> { await ensure(); return _dataProducts!; }
+/** WS-10.4 Living Marketplace — unified 5-type product catalog. */
+export async function marketplaceContainer(): Promise<Container> { await ensure(); return _marketplace!; }
 export async function dataProductJobsContainer(): Promise<Container> { await ensure(); return _dataProductJobs!; }
 export async function accessRequestsContainer(): Promise<Container> { await ensure(); return _accessRequests!; }
 export async function attributeGroupsContainer(): Promise<Container> { await ensure(); return _attributeGroups!; }
