@@ -12,6 +12,7 @@
 
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
+import { LIVE, type AsOfSpec } from '@/lib/time-machine/time-machine';
 
 export interface WorkspaceRef {
   id: string;
@@ -28,6 +29,14 @@ interface UiState {
    * also pinned to the top of the recent list (auto-pin last-opened).
    */
   setActiveWorkspace: (w: WorkspaceRef | null) => void;
+  /**
+   * WS-10.3 Time-Machine — the SESSION `asOf`. The global time-bar sets it; every
+   * time-aware surface flows it into the temporal coordinator (append `?asOf=` to
+   * ontology-resolve / report / pipeline reads). Default `live` = current state.
+   * Persisted so an as-of view survives navigation + reload.
+   */
+  asOf: AsOfSpec;
+  setAsOf: (spec: AsOfSpec) => void;
 }
 
 export const useUi = create<UiState>()(
@@ -43,6 +52,8 @@ export const useUi = create<UiState>()(
         const recent = [w, ...get().recentWorkspaces.filter((x) => x.id !== w.id)].slice(0, 5);
         set({ activeWorkspace: w, recentWorkspaces: recent });
       },
+      asOf: LIVE,
+      setAsOf: (spec) => set({ asOf: spec ?? LIVE }),
     }),
     {
       name: 'loom-ui',

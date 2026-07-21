@@ -45,6 +45,7 @@ import { GlobalJobToaster } from './global-job-toaster';
 import { OnboardingTour, openTour } from './onboarding/onboarding-tour';
 import { SessionProvider, type ShellSession } from './session-context';
 import { RequestAccessButton } from './access/request-access-button';
+import { GlobalTimeBar } from './time-machine/global-time-bar';
 
 interface MeResponse {
   authenticated: boolean;
@@ -204,6 +205,8 @@ export function AppShell({ children }: { children: ReactNode }) {
         <SavedStatus />
         <TopbarSearch />
         <div className={styles.actions} role="toolbar" aria-label="Global actions">
+          {/* WS-10.3 Time-Machine — global as-of picker (ontology/report/pipeline). */}
+          <GlobalTimeBar />
           <Tooltip content="Loom Copilot — ask anything about CSA Loom; it routes your question to the right agent (Ctrl+/)" relationship="label">
             <Button appearance="transparent" className={styles.iconBtn} icon={<CopilotIcon />}
               onClick={openCopilot} aria-label="Open Loom Copilot" data-tour="copilot" />

@@ -136,6 +136,13 @@ const ALLOWLIST = new Map([
   // resource exists to own-scope — the write target is the product's GitHub
   // repo via a server-held token.
   ['apps/fiab-console/app/api/feedback/route.ts', 'session-optional by design (rel-T15): anonymous auto-error intake is rate-limited + deduped; bug/feature require session in-handler'],
+  // WS-10.4 Living Marketplace product read: the unified `marketplace` catalog is
+  // a TENANT-WIDE exchange (any tenant member browses it). getProduct scopes the
+  // Cosmos point-read by tenantScopeId(session) as the partition key, so a caller
+  // can only ever read their own tenant's products — there is no per-item owner to
+  // scope (subscribe/certify DO carry their own checks). Same shared-by-tenant
+  // class as the other allowlisted catalog reads.
+  ['apps/fiab-console/app/api/marketplace/products/[id]/route.ts', 'tenant-wide marketplace catalog read; Cosmos PK = tenantScopeId(session) → no cross-tenant access, no per-item owner'],
   // Generic per-item handlers that operate on a SHARED Azure backend resolved
   // by item TYPE (warehouse/AOAI/etc.) — no per-tenant Cosmos ownership to
   // scope; gated by getSession + a type gate.

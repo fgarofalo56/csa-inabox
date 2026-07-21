@@ -26,6 +26,9 @@
  * a Fabric/OneLake REST host.
  */
 import type { OntoObjectType, OntoBaseType } from '@/lib/editors/ontology-model';
+import {
+  applySqlTableSuffix, applyKqlFilter, type TimeTravelResolution,
+} from '@/lib/time-machine/time-machine';
 
 // ============================================================
 // Binding shape (persisted on an item's Cosmos `state.ontologyBinding`)
@@ -290,22 +293,31 @@ export class BindingQueryError extends Error {
  * properties, so a projection is unnecessary and `*` avoids building a fragile
  * (injectable) column list. `ref` is validated to a safe SQL object reference;
  * anything else throws (never concatenated raw).
+ *
+ * WS-10.3 Time-Machine: an optional `timeTravel` resolution appends the backend's
+ * native as-of clause to the table ref (Delta `TIMESTAMP AS OF '…'` / `VERSION AS
+ * OF n`, or Synapse temporal `FOR SYSTEM_TIME AS OF '…'`). A live/no-op or gated
+ * resolution leaves the query byte-identical.
  */
-export function buildSqlSelect(ref: string, top: number): string {
+export function buildSqlSelect(ref: string, top: number, timeTravel?: TimeTravelResolution): string {
   const r = (ref || '').trim();
   if (!SQL_REF_RE.test(r)) {
     throw new BindingQueryError(`Unsafe SQL source reference '${ref}' — use a bare or bracketed schema.table.`);
   }
-  return `SELECT TOP ${clampTop(top)} * FROM ${r}`;
+  return `SELECT TOP ${clampTop(top)} * FROM ${applySqlTableSuffix(r, timeTravel)}`;
 }
 
-/** `<table> | take <n>` — validated KQL table identifier. */
-export function buildKql(ref: string, top: number): string {
+/**
+ * `<table> | take <n>` — validated KQL table identifier. WS-10.3 Time-Machine:
+ * an optional ADX `timeTravel` resolution inserts `| where ingestion_time() <=
+ * datetime(…)` between the table and the `take`.
+ */
+export function buildKql(ref: string, top: number, timeTravel?: TimeTravelResolution): string {
   const r = (ref || '').trim();
   if (!KQL_IDENT_RE.test(r)) {
     throw new BindingQueryError(`Unsafe KQL table name '${ref}'.`);
   }
-  return `${r} | take ${clampTop(top)}`;
+  return applyKqlFilter(r, `| take ${clampTop(top)}`, timeTravel);
 }
 
 /**
