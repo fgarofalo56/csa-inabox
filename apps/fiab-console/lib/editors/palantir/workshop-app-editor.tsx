@@ -34,7 +34,7 @@ import {
 import { ItemEditorChrome } from '../item-editor-chrome';
 import { NewItemCreateGate } from '../new-item-gate';
 import { SlateAppBuilder, type SlateQueryDef, type SlateWidgetDef, type SlateVariable } from '../slate/slate-app-builder';
-import { WorkshopAppBuilder, type WorkshopWidget, type WorkshopVariable } from '../workshop/workshop-app-builder';
+import { WorkshopAppBuilder, type WorkshopWidget, type WorkshopVariable, type WorkshopPage } from '../workshop/workshop-app-builder';
 import { deriveObjectProperties } from '../_palantir-codegen';
 import { TileGrid } from '@/lib/components/ui/tile-grid';
 import {
@@ -54,6 +54,8 @@ interface WorkshopState {
   objectViews?: string[]; actions?: WorkshopAction[];
   // New app-builder model (canvas widgets + typed variables), persisted to Cosmos.
   widgets?: WorkshopWidget[]; variables?: WorkshopVariable[];
+  // WS-4.5 multi-page: app pages + drawer/modal overlays.
+  pages?: WorkshopPage[];
   // Real SWA publish history (Microsoft.Web/staticSites) persisted to Cosmos.
   versions?: WorkshopVersion[]; staticSiteName?: string; lastPublishedUrl?: string; lastPublishedAt?: string;
   // Set by the slate-workshop-app demote-to-template scaffold: the backing
@@ -90,6 +92,8 @@ export function WorkshopAppEditor({ item, id }: { item: FabricItemType; id: stri
 
   const onWidgetsChange = useCallback((next: WorkshopWidget[]) => setState((p) => ({ ...p, widgets: next })), [setState]);
   const onVariablesChange = useCallback((next: WorkshopVariable[]) => setState((p) => ({ ...p, variables: next })), [setState]);
+  const onPagesChange = useCallback((next: WorkshopPage[]) => setState((p) => ({ ...p, pages: next })), [setState]);
+  const pages = Array.isArray(state.pages) ? state.pages : [];
 
   const publish = useCallback(async () => {
     setPubBusy(true); setPubMsg(null);
@@ -186,6 +190,7 @@ export function WorkshopAppEditor({ item, id }: { item: FabricItemType; id: stri
         </div>
 
         <WorkshopAppBuilder id={id} entityTypes={entityTypes} widgets={widgets} variables={variables}
+          ontologyId={onto.boundOntologyId} pages={pages} onPagesChange={onPagesChange}
           onWidgetsChange={onWidgetsChange} onVariablesChange={onVariablesChange} />
 
         {/* Publish history — real Azure Static Web Apps versions persisted to Cosmos. */}

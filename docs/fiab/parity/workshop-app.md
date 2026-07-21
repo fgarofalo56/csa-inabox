@@ -213,3 +213,33 @@ Coverage verdict: every Foundry Workshop widget FAMILY has one or more working
 Loom kinds; the two ⚠ rows are tracked with concrete v1 designs. The catalog
 COUNT (32 + 5 data widgets ≈ 37 effective) matches Foundry's ~40 by family
 coverage — remaining deltas are variants within already-covered families.
+
+## WS-4.5 — Workshop depth (multi-page + overlays + conditional visibility + 6 B+ widgets + real Publish) — 2026-07-20
+
+Closes the remaining Palantir Workshop app-builder depth gaps. Model + pure
+helpers in `lib/editors/workshop/_workshop-model.ts` (unit-tested); advanced
+widget bodies + page/overlay/visibility primitives in
+`lib/editors/workshop/workshop-advanced-widgets.tsx`; widget registry in
+`workshop-widget-meta.tsx`; publish/eject codegen in `_palantir-codegen.ts`
+(`generateWorkshopBundle`).
+
+| Foundry Workshop capability | Loom coverage | Backend per control |
+|---|---|---|
+| **Multi-page app** (N pages + nav) | ✅ `WorkshopPage[]` persisted; page strip adds/renames/deletes pages; each widget carries a `pageId`; canvas + Run mode scope to the current page; published bundle renders a page nav bar | Cosmos `state.pages`; per-page render |
+| **Sections / overlays** (drawer + modal) | ✅ overlay pages (`kind:'overlay'`, `overlayStyle:'drawer'|'modal'`); a button `open-overlay`/`close-overlay` event opens/closes them (Fluent `Drawer`/`Dialog` in-console, modal/drawer host in the published bundle) | event wiring; run-action for the overlay's own widgets |
+| **Conditional visibility** | ✅ per-widget `visibleWhen` rule (variable + op: eq/ne/empty/notEmpty/truthy/falsy) authored by a wizard (no freeform); hides in Run mode + published bundle; `evalVisibility` is pure + unit-tested | live runtime variable value |
+| **object-view widget** | ✅ reuses WS-4.1 `ObjectViewPanel` — properties / linked / timeseries / map for the object held in a bound variable | Apache AGE via `/api/items/ontology/[id]/objects/[vertexId]/view` |
+| **links widget** | ✅ linked objects grouped by link type × direction | same AGE object-view route (`linked[]`) |
+| **map widget** | ✅ object-type geo rows → GeoJSON (`toGeoFeatureCollection`) rendered with the sovereign `GeoJsonMap` (MapLibre-compatible, no external tiles) | Synapse rows via run-action `list` |
+| **pivot widget** | ✅ row × column matrix aggregating a measure (`pivotShape`, unit-tested) | Synapse rows via run-action `list` |
+| **timeline widget** | ✅ time-ordered event stream (`timelineShape`, unit-tested) | Synapse rows via run-action `list` |
+| **AIP-copilot widget** | ✅ per-surface Copilot grounded in the app's ontology + object types + variables (`registerCopilotContext` + `csaloom:open-copilot`) | `/api/copilot/orchestrate` (AOAI) |
+| **Real Publish → live URL** | ✅ existing SWA publish path (`generateWorkshopBundle` → `Microsoft.Web/staticSites`); bundle now carries pages, overlays, visibility + map/pivot/timeline renderers; object-view/links/aip-copilot show an honest "sign in to Loom" note (the read-only publish token can't reach ontology/copilot routes) | ARM `staticSites` + run-action (Synapse) |
+
+Azure-native / sovereign: AGE + Synapse + GeoJSON + ARM + AOAI — **no Microsoft
+Fabric / Power BI** on any path (Gov-safe).
+
+**Owed (Track-0): browser-E2E receipt** — build a 2-page app with an overlay +
+an object-view widget + an AIP-copilot widget → Publish to a live URL over real
+data (the WS-4.5 acceptance flow). tsc + vitest + the four CI guards are green;
+the in-browser walk is the outstanding completion evidence per G1.

@@ -31,7 +31,7 @@ import { clientFetch } from '@/lib/client-fetch';
  * / `onVariablesChange` write back into the workshop-app item `state`.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type ReactElement } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   Body1, Caption1, Subtitle2, Title3, Badge, Button, Input, Textarea, Field, Dropdown, Option,
   Spinner, Switch, Tab, TabList, Tooltip, Divider,
@@ -43,14 +43,17 @@ import {
 } from '@fluentui/react-components';
 import {
   Add20Regular, Dismiss16Regular, Play20Regular, ArrowSync20Regular,
-  Table20Regular, DataUsage20Regular, NumberSymbol20Regular, DocumentText20Regular,
-  Apps20Regular, Filter20Regular, Form20Regular, Cursor20Regular, Edit20Regular,
-  ArrowMaximize20Regular, Flash20Regular, Database20Regular, Code20Regular, Sparkle20Regular, ChevronRight16Regular, ChevronDown16Regular,
+  Apps20Regular, Cursor20Regular, Edit20Regular,
+  ArrowMaximize20Regular, Flash20Regular, Database20Regular, Code20Regular,
 } from '@fluentui/react-icons';
 import { LoomChart, type LoomChartType } from '@/lib/components/charts/loom-chart';
 import { EmptyState } from '@/lib/components/empty-state';
 import { SplitPane } from '@/lib/components/shared/split-pane';
 import type { AtelierFilter, AtelierFilterOp } from '@/lib/editors/_family-utils';
+import { KIND_META, DEFAULT_SIZE } from './workshop-widget-meta';
+import {
+  AdvancedWidgetBody, AdvancedWidgetInspector, VisibilityRuleField, PageStrip, OverlayHost,
+} from './workshop-advanced-widgets';
 
 // ───────────────────────── types (persisted in Cosmos item state) ─────────────────────────
 // Defined in ./_workshop-model (plain module, no 'use client') so server-side
@@ -61,11 +64,13 @@ import type { AtelierFilter, AtelierFilterOp } from '@/lib/editors/_family-utils
 import type {
   WorkshopVarType, WorkshopVariable, WorkshopWidgetKind,
   WorkshopEventTrigger, WorkshopEventEffect, WorkshopAggFn, WorkshopEvent, WorkshopWidget,
+  WorkshopPage, WorkshopVisibilityRule,
 } from './_workshop-model';
-import { nestedWidgetIds } from './_workshop-model';
+import { nestedWidgetIds, isAdvancedKind, resolvePages, defaultPageId, pageIdForWidget, evalVisibility } from './_workshop-model';
 export type {
   WorkshopVarType, WorkshopVariable, WorkshopWidgetKind, WorkshopWidgetLayout,
   WorkshopEventTrigger, WorkshopEventEffect, WorkshopAggFn, WorkshopEvent, WorkshopWidget,
+  WorkshopPage, WorkshopVisibilityRule,
 } from './_workshop-model';
 
 interface RunResult {
@@ -87,86 +92,7 @@ const CANVAS_MIN_H = 540;
 const HEADER_H = 34;
 const snap = (v: number) => Math.max(0, Math.round(v / GRID) * GRID);
 
-const DEFAULT_SIZE: Record<WorkshopWidgetKind, { w: number; h: number }> = {
-  table: { w: 448, h: 288 },
-  chart: { w: 400, h: 272 },
-  metric: { w: 224, h: 144 },
-  filter: { w: 288, h: 128 },
-  form: { w: 384, h: 320 },
-  button: { w: 224, h: 96 },
-  text: { w: 336, h: 160 },
-  image: { w: 336, h: 224 },
-  link: { w: 224, h: 80 },
-  divider: { w: 448, h: 48 },
-  badge: { w: 224, h: 80 },
-  iframe: { w: 448, h: 320 },
-  heading: { w: 448, h: 80 },
-  progress: { w: 336, h: 80 },
-  spacer: { w: 224, h: 64 },
-  timestamp: { w: 224, h: 64 },
-  'kpi-row': { w: 448, h: 112 },
-  gauge: { w: 288, h: 128 },
-  callout: { w: 448, h: 96 },
-  quote: { w: 400, h: 112 },
-  rating: { w: 224, h: 80 },
-  'tag-list': { w: 336, h: 80 },
-  delta: { w: 224, h: 96 },
-  checklist: { w: 336, h: 160 },
-  avatar: { w: 224, h: 96 },
-  'code-block': { w: 448, h: 160 },
-  'key-value': { w: 336, h: 160 },
-  countdown: { w: 224, h: 96 },
-  'stat-pair': { w: 336, h: 112 },
-  'mini-table': { w: 448, h: 176 },
-  breadcrumb: { w: 448, h: 64 },
-  'json-view': { w: 448, h: 176 },
-  tabs: { w: 448, h: 192 },
-  accordion: { w: 448, h: 192 },
-  sparkline: { w: 224, h: 80 },
-  'video-embed': { w: 448, h: 288 },
-  'map-embed': { w: 448, h: 288 },
-};
-
-const KIND_META: Record<WorkshopWidgetKind, { label: string; icon: ReactElement; hint: string; data: boolean }> = {
-  table: { label: 'Object Table', icon: <Table20Regular />, hint: 'Rows of an ontology object type, filtered by variables', data: true },
-  chart: { label: 'Chart', icon: <DataUsage20Regular />, hint: 'Aggregate (GROUP BY) over an object type', data: true },
-  metric: { label: 'Metric', icon: <NumberSymbol20Regular />, hint: 'A single aggregated KPI number', data: true },
-  filter: { label: 'Filter', icon: <Filter20Regular />, hint: 'A control that writes an object-set-filter variable', data: true },
-  form: { label: 'Form', icon: <Form20Regular />, hint: 'Create / update / delete an object — real write-back', data: true },
-  button: { label: 'Button', icon: <Cursor20Regular />, hint: 'Fires events: set a variable, run an action, refresh', data: false },
-  text: { label: 'Text', icon: <DocumentText20Regular />, hint: 'Markdown-lite label with {{variable}} interpolation', data: false },
-  image: { label: 'Image', icon: <Apps20Regular />, hint: 'An https image by URL', data: false },
-  link: { label: 'Link', icon: <ArrowMaximize20Regular />, hint: 'A styled link to an https URL', data: false },
-  divider: { label: 'Divider', icon: <Edit20Regular />, hint: 'A horizontal section divider', data: false },
-  badge: { label: 'Badge', icon: <Flash20Regular />, hint: 'A colored status badge with {{variable}} interpolation', data: false },
-  iframe: { label: 'Embed', icon: <Code20Regular />, hint: 'Embed an https page (iframe)', data: false },
-  heading: { label: 'Heading', icon: <DocumentText20Regular />, hint: 'A section heading (levels 1–3) with {{variable}} interpolation', data: false },
-  progress: { label: 'Progress', icon: <DataUsage20Regular />, hint: 'A progress bar (0–100%), value supports {{variable}}', data: false },
-  spacer: { label: 'Spacer', icon: <ArrowMaximize20Regular />, hint: 'Blank layout spacing', data: false },
-  timestamp: { label: 'Timestamp', icon: <Flash20Regular />, hint: 'Shows when the page was last refreshed', data: false },
-  'kpi-row': { label: 'KPI Row', icon: <NumberSymbol20Regular />, hint: 'A row of labeled KPI chips — values support {{variable}}', data: false },
-  gauge: { label: 'Gauge', icon: <DataUsage20Regular />, hint: 'A value against a min–max range, colored by fill', data: false },
-  callout: { label: 'Callout', icon: <Flash20Regular />, hint: 'A highlighted MessageBar note (info/success/warning/error)', data: false },
-  quote: { label: 'Quote', icon: <DocumentText20Regular />, hint: 'A styled blockquote with {{variable}} interpolation', data: false },
-  rating: { label: 'Rating', icon: <Sparkle20Regular />, hint: 'Star rating (value / max), value supports {{variable}}', data: false },
-  'tag-list': { label: 'Tags', icon: <Filter20Regular />, hint: 'A wrapping row of tag badges', data: false },
-  delta: { label: 'Delta', icon: <DataUsage20Regular />, hint: 'Current vs previous — signed change, colored by direction', data: false },
-  checklist: { label: 'Checklist', icon: <Form20Regular />, hint: 'A static checklist — prefix a line with [x] to check it', data: false },
-  avatar: { label: 'Avatar', icon: <Cursor20Regular />, hint: 'An initials avatar with name + caption', data: false },
-  'code-block': { label: 'Code', icon: <Code20Regular />, hint: 'Monospace pre-formatted block', data: false },
-  'key-value': { label: 'Key–Value', icon: <Table20Regular />, hint: 'Key: value lines with {{variable}} interpolation', data: false },
-  countdown: { label: 'Countdown', icon: <Flash20Regular />, hint: 'Days remaining until a date', data: false },
-  'stat-pair': { label: 'Stat Pair', icon: <NumberSymbol20Regular />, hint: 'Two labeled stats side by side, {{variable}} values', data: false },
-  'mini-table': { label: 'Mini Table', icon: <Table20Regular />, hint: 'A small static table (CSV: first line headers)', data: false },
-  breadcrumb: { label: 'Breadcrumb', icon: <ChevronRight16Regular />, hint: 'A navigation trail of segments', data: false },
-  'json-view': { label: 'JSON', icon: <Code20Regular />, hint: 'Pretty-printed JSON block', data: false },
-  tabs: { label: 'Tabs', icon: <Apps20Regular />, hint: 'A tab strip with per-tab text content (v1 — child widgets tracked)', data: false },
-  accordion: { label: 'Accordion', icon: <ChevronDown16Regular />, hint: 'Collapsible titled sections', data: false },
-  sparkline: { label: 'Sparkline', icon: <DataUsage20Regular />, hint: 'A tiny inline trend line from a number list', data: false },
-  'video-embed': { label: 'Video', icon: <Play20Regular />, hint: 'Embed an https video player (sandboxed iframe)', data: false },
-  'map-embed': { label: 'Map', icon: <ArrowMaximize20Regular />, hint: 'Embed an https map view (sandboxed iframe)', data: false },
-};
-
+// DEFAULT_SIZE + KIND_META (the full widget registry incl. WS-4.5 advanced widgets) live in ./workshop-widget-meta.
 const CHART_TYPES: LoomChartType[] = ['column', 'bar', 'line', 'area', 'pie', 'donut'];
 const AGG_FNS: WorkshopAggFn[] = ['count', 'sum', 'avg', 'min', 'max'];
 const FILTER_OPS: AtelierFilterOp[] = ['eq', 'ne', 'gt', 'lt', 'gte', 'lte', 'contains', 'startsWith'];
@@ -558,7 +484,7 @@ function FilterControl({
 function WidgetBody({
   id, widget, variables, runtime, result, readOnly, height,
   selectedRow, onSelectRow, onClickButton, setFilterValue, filterValue, columnsForEntity,
-  renderNested, nestedLabel,
+  renderNested, nestedLabel, ontologyId, entityTypes,
 }: {
   id: string; widget: WorkshopWidget; variables: WorkshopVariable[]; runtime: Record<string, RuntimeVarValue>;
   result?: RunResult; readOnly: boolean; height: number;
@@ -568,8 +494,16 @@ function WidgetBody({
   renderNested?: (wid: string) => ReactNode;
   /** tabs nesting — Design mode shows nested child names as chips. */
   nestedLabel?: (wid: string) => string | null;
+  /** advanced widgets — the app's bound ontology + object types. */
+  ontologyId?: string; entityTypes?: string[];
 }) {
   const s = useStyles();
+
+  // WS-4.5 advanced widgets (object-view / links / map / pivot / timeline / aip-copilot).
+  if (isAdvancedKind(widget.kind)) {
+    return <AdvancedWidgetBody id={id} widget={widget} ontologyId={ontologyId} entityTypes={entityTypes}
+      variables={variables} runtime={runtime} readOnly={readOnly} height={height} />;
+  }
 
   if (widget.kind === 'text') {
     return <div>{renderText(widget.text || '_Empty text widget — set its content in the inspector._', variables, runtime)}</div>;
@@ -921,12 +855,14 @@ function WidgetPalette({ onAdd, disabled }: { onAdd: (kind: WorkshopWidgetKind) 
 // ───────────────────────── inspector ─────────────────────────
 
 function WidgetInspector({
-  widget, entityTypes, variables, columns, onChange, onRemove, allWidgets = [],
+  widget, entityTypes, variables, columns, onChange, onRemove, allWidgets = [], pages = [],
 }: {
   widget: WorkshopWidget; entityTypes: string[]; variables: WorkshopVariable[]; columns: string[];
   onChange: (patch: Partial<WorkshopWidget>) => void; onRemove: () => void;
   /** tabs nesting — the full widget list, so tabs can pick child widgets per tab. */
   allWidgets?: WorkshopWidget[];
+  /** app pages — so button open-overlay events can target an overlay. */
+  pages?: WorkshopPage[];
 }) {
   const s = useStyles();
   const meta = KIND_META[widget.kind];
@@ -1188,10 +1124,18 @@ function WidgetInspector({
         </Field>
       )}
 
+      {/* WS-4.5 advanced widget config (object-view / links / map / pivot / timeline / aip-copilot) */}
+      {isAdvancedKind(widget.kind) && (
+        <AdvancedWidgetInspector widget={widget} variables={variables} columns={columns} onChange={onChange} />
+      )}
+
       {/* events for button + table */}
       {(widget.kind === 'button' || widget.kind === 'table') && (
-        <EventEditor widget={widget} variables={variables} entityTypes={entityTypes} columns={columns} onChange={onChange} />
+        <EventEditor widget={widget} variables={variables} entityTypes={entityTypes} columns={columns} pages={pages} onChange={onChange} />
       )}
+
+      {/* conditional visibility — applies to every widget kind */}
+      <VisibilityRuleField rule={widget.visibleWhen} variables={variables} onChange={(r) => onChange({ visibleWhen: r })} />
 
       <Divider />
       <Button appearance="subtle" icon={<Dismiss16Regular />} onClick={onRemove}>Remove widget</Button>
@@ -1202,15 +1146,16 @@ function WidgetInspector({
 // ───────────────────────── event editor ─────────────────────────
 
 function EventEditor({
-  widget, variables, entityTypes, columns, onChange,
+  widget, variables, entityTypes, columns, onChange, pages = [],
 }: {
   widget: WorkshopWidget; variables: WorkshopVariable[]; entityTypes: string[]; columns: string[];
-  onChange: (patch: Partial<WorkshopWidget>) => void;
+  onChange: (patch: Partial<WorkshopWidget>) => void; pages?: WorkshopPage[];
 }) {
   const s = useStyles();
   const events = widget.events || [];
   const isButton = widget.kind === 'button';
   const defaultTrigger: WorkshopEventTrigger = isButton ? 'click' : 'row-select';
+  const overlays = pages.filter((p) => p.kind === 'overlay');
 
   const addEvent = () => onChange({
     events: [...events, { id: `ev_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`, trigger: defaultTrigger, effect: 'set-variable' }],
@@ -1219,7 +1164,7 @@ function EventEditor({
   const removeEvent = (eid: string) => onChange({ events: events.filter((e) => e.id !== eid) });
 
   const triggers: WorkshopEventTrigger[] = isButton ? ['click', 'page-load'] : ['row-select'];
-  const effects: WorkshopEventEffect[] = isButton ? ['set-variable', 'clear-variable', 'run-action', 'refresh'] : ['set-variable'];
+  const effects: WorkshopEventEffect[] = isButton ? ['set-variable', 'clear-variable', 'run-action', 'refresh', 'open-overlay', 'close-overlay'] : ['set-variable'];
 
   return (
     <Field label="Events" hint={isButton ? 'What this button does when clicked (or on page load).' : 'What happens when a row is selected (master → detail).'}>
@@ -1281,6 +1226,13 @@ function EventEditor({
                     <Option value="create">create</Option><Option value="update">update</Option><Option value="delete">delete</Option>
                   </Dropdown>
                 </>
+              )}
+
+              {e.effect === 'open-overlay' && (
+                <Dropdown size="small" placeholder={overlays.length ? 'Overlay to open' : 'Add an overlay page first'} value={overlays.find((p) => p.id === e.targetPageId)?.name || ''} selectedOptions={e.targetPageId ? [e.targetPageId] : []}
+                  onOptionSelect={(_, d) => patchEvent(e.id, { targetPageId: d.optionValue || undefined })}>
+                  {overlays.map((p) => <Option key={p.id} value={p.id} text={p.name}>{p.name} ({p.overlayStyle || 'drawer'})</Option>)}
+                </Dropdown>
               )}
             </div>
           );
@@ -1367,9 +1319,14 @@ export interface WorkshopAppBuilderProps {
   variables: WorkshopVariable[];
   onWidgetsChange: (next: WorkshopWidget[]) => void;
   onVariablesChange: (next: WorkshopVariable[]) => void;
+  /** The app's bound ontology id (drives the object-view / links widgets over AGE). */
+  ontologyId?: string;
+  /** App pages (multi-page + overlays). Undefined → a single synthesized default page. */
+  pages?: WorkshopPage[];
+  onPagesChange?: (next: WorkshopPage[]) => void;
 }
 
-export function WorkshopAppBuilder({ id, entityTypes, widgets, variables, onWidgetsChange, onVariablesChange }: WorkshopAppBuilderProps) {
+export function WorkshopAppBuilder({ id, entityTypes, widgets, variables, onWidgetsChange, onVariablesChange, ontologyId, pages, onPagesChange }: WorkshopAppBuilderProps) {
   const s = useStyles();
   const [mode, setMode] = useState<'design' | 'preview'>('design');
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -1379,7 +1336,17 @@ export function WorkshopAppBuilder({ id, entityTypes, widgets, variables, onWidg
   const [selectedRows, setSelectedRows] = useState<Record<string, number | null>>({});
   const [busy, setBusy] = useState(false);
   const [actionDialog, setActionDialog] = useState<{ entityType: string; kind: 'create' | 'update' | 'delete' } | null>(null);
+  // Multi-page: the page currently open in the canvas / nav, and (Run mode) the open overlay.
+  const resolvedPages = useMemo(() => resolvePages(pages), [pages]);
+  const [currentPageId, setCurrentPageId] = useState<string>(() => defaultPageId(pages));
+  const [openOverlayId, setOpenOverlayId] = useState<string | null>(null);
   const { colsByEntity, ensure } = useEntityColumns(id);
+
+  // Keep currentPageId valid as pages change (deleted page → fall back to a real page).
+  useEffect(() => {
+    if (!resolvedPages.some((p) => p.id === currentPageId)) setCurrentPageId(defaultPageId(pages));
+  }, [resolvedPages, currentPageId, pages]);
+  const setPages = useCallback((next: WorkshopPage[]) => onPagesChange?.(next), [onPagesChange]);
 
   const selected = widgets.find((w) => w.id === selectedId) || null;
   const saved = id && id !== 'new';
@@ -1396,10 +1363,16 @@ export function WorkshopAppBuilder({ id, entityTypes, widgets, variables, onWidg
     });
   }, [widgets]);
 
+  // Widgets on the page currently open in the canvas / nav (multi-page scope).
+  const pageWidgets = useMemo(
+    () => normalized.filter((w) => pageIdForWidget(w, resolvedPages) === currentPageId),
+    [normalized, resolvedPages, currentPageId],
+  );
+
   const canvasHeight = useMemo(() => {
-    const maxBottom = normalized.reduce((m, w) => Math.max(m, (w.layout?.y || 0) + (w.layout?.h || 0)), 0);
+    const maxBottom = pageWidgets.reduce((m, w) => Math.max(m, (w.layout?.y || 0) + (w.layout?.h || 0)), 0);
     return Math.max(CANVAS_MIN_H, maxBottom + GRID * 3);
-  }, [normalized]);
+  }, [pageWidgets]);
 
   // Discover columns for every bound entity type (inspectors + forms need them).
   useEffect(() => {
@@ -1412,13 +1385,15 @@ export function WorkshopAppBuilder({ id, entityTypes, widgets, variables, onWidg
   // ── widget mutations ──
   const addWidget = useCallback((kind: WorkshopWidgetKind) => {
     const size = DEFAULT_SIZE[kind];
-    const maxBottom = normalized.reduce((m, w) => Math.max(m, (w.layout?.y || 0) + (w.layout?.h || 0)), 0);
+    const maxBottom = pageWidgets.reduce((m, w) => Math.max(m, (w.layout?.y || 0) + (w.layout?.h || 0)), 0);
     const wid = `w_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
     const widget: WorkshopWidget = {
       id: wid, kind, title: `${KIND_META[kind].label} ${widgets.filter((w) => w.kind === kind).length + 1}`,
       layout: { x: GRID, y: maxBottom ? maxBottom + GRID : GRID, w: size.w, h: size.h },
+      pageId: currentPageId,
       ...(kind === 'chart' ? { chartType: 'column' as LoomChartType, aggFn: 'count' as WorkshopAggFn } : {}),
       ...(kind === 'metric' ? { metricFn: 'count' as WorkshopAggFn } : {}),
+      ...(kind === 'pivot' ? { pivotAggFn: 'count' as WorkshopAggFn } : {}),
       ...(kind === 'filter' ? { filterOp: 'eq' as AtelierFilterOp, filterControl: 'dropdown' as const } : {}),
       ...(kind === 'form' ? { formKind: 'create' as const } : {}),
       ...(kind === 'text' ? { text: '# New text widget\nUse {{variableName}} to show a live value.' } : {}),
@@ -1447,7 +1422,7 @@ export function WorkshopAppBuilder({ id, entityTypes, widgets, variables, onWidg
     };
     onWidgetsChange([...widgets, widget]);
     setSelectedId(wid);
-  }, [normalized, widgets, onWidgetsChange]);
+  }, [pageWidgets, currentPageId, widgets, onWidgetsChange]);
 
   // Widgets claimed as nested children by a tabs widget — hidden from the
   // top-level canvas in Run mode (they render inside their tab pane instead).
@@ -1564,6 +1539,8 @@ export function WorkshopAppBuilder({ id, entityTypes, widgets, variables, onWidg
     for (const e of w.events || []) {
       if (e.trigger !== 'click') continue;
       if (e.effect === 'run-action' && e.actionEntityType) { setActionDialog({ entityType: e.actionEntityType, kind: e.actionKind || 'create' }); continue; }
+      if (e.effect === 'open-overlay') { if (e.targetPageId) setOpenOverlayId(e.targetPageId); continue; }
+      if (e.effect === 'close-overlay') { setOpenOverlayId(null); continue; }
       if (e.effect === 'refresh') { needsRead = true; continue; }
       applyEffectInto(next, e);
       needsRead = true;
@@ -1583,6 +1560,7 @@ export function WorkshopAppBuilder({ id, entityTypes, widgets, variables, onWidg
     <WidgetBody
       id={id} widget={w} variables={variables} runtime={runtime} result={results[w.id]} readOnly={readOnly}
       height={w.layout?.h || DEFAULT_SIZE[w.kind].h}
+      ontologyId={ontologyId} entityTypes={entityTypes}
       selectedRow={selectedRows[w.id] ?? null}
       onSelectRow={(index, row) => onRowSelect(w, index, row)}
       onClickButton={() => (w.kind === 'button' ? onButtonClick(w) : runAllData(runtime))}
@@ -1606,18 +1584,47 @@ export function WorkshopAppBuilder({ id, entityTypes, widgets, variables, onWidg
     />
   );
 
+  // Conditional visibility (Run mode): a widget hides unless its rule holds over
+  // the live runtime value of its bound variable.
+  const isVisible = useCallback((w: WorkshopWidget): boolean => (
+    evalVisibility(w.visibleWhen, w.visibleWhen ? runtime[w.visibleWhen.variableId] : undefined)
+  ), [runtime]);
+
+  // Run-mode canvas for a single page: its widgets (minus tab-nested + hidden),
+  // positioned as on the design canvas. Shared by the main preview + overlays.
+  const renderRunPage = useCallback((pageId: string): ReactNode => {
+    const items = normalized.filter((w) => pageIdForWidget(w, resolvedPages) === pageId && !nestedIds.has(w.id) && isVisible(w));
+    const h = Math.max(CANVAS_MIN_H, items.reduce((m, w) => Math.max(m, (w.layout?.y || 0) + (w.layout?.h || 0)), 0) + GRID * 3);
+    return (
+      <div className={s.canvasWrap} style={{ height: h }}>
+        <div className={s.canvas} style={{ height: h }}>
+          {items.length === 0 ? (
+            <div style={{ position: 'absolute', inset: 0 }}>
+              <EmptyState icon={<Play20Regular />} title="Nothing to show" body="This page has no visible widgets yet — add some in Design, or the visibility rules are hiding them." />
+            </div>
+          ) : items.map((w) => (
+            <CanvasWidget key={w.id} widget={w} selected={false} readOnly
+              onSelect={() => {}} onMove={() => {}} onResize={() => {}} onRemove={() => {}}>
+              {renderWidgetBody(w)}
+            </CanvasWidget>
+          ))}
+        </div>
+      </div>
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [normalized, resolvedPages, nestedIds, isVisible, s, runtime, results, filterValues, selectedRows]);
+
   // Design-mode canvas block, extracted so both the SplitPane (widget selected)
   // and the plain single-column layout (nothing selected) render the same canvas
-  // without duplicating JSX. Closes over normalized / canvasHeight / selectedId
-  // and the widget handlers, all in scope here.
+  // without duplicating JSX. Scoped to the page currently open (multi-page).
   const canvasBlock = (
     <div className={s.canvasWrap} style={{ height: canvasHeight }} onPointerDown={() => setSelectedId(null)}>
       <div className={s.canvas} style={{ height: canvasHeight }}>
-        {normalized.length === 0 ? (
+        {pageWidgets.length === 0 ? (
           <div style={{ position: 'absolute', inset: 0 }}>
-            <EmptyState icon={<Apps20Regular />} title="Empty canvas" body="Add a widget from the palette above, bind it to an ontology object type, then switch to Preview to see real data." />
+            <EmptyState icon={<Apps20Regular />} title="Empty page" body="Add a widget from the palette above, bind it to an ontology object type, then switch to Preview to see real data. Use the page strip to add more pages or an overlay." />
           </div>
-        ) : normalized.map((w) => (
+        ) : pageWidgets.map((w) => (
           <CanvasWidget key={w.id} widget={w} selected={selectedId === w.id} readOnly={false}
             onSelect={() => setSelectedId(w.id)} onMove={(x, y) => moveWidget(w.id, x, y)} onResize={(cw, ch) => resizeWidget(w.id, cw, ch)} onRemove={() => removeWidget(w.id)}>
             {renderWidgetBody(w)}
@@ -1662,9 +1669,14 @@ export function WorkshopAppBuilder({ id, entityTypes, widgets, variables, onWidg
           <span className={s.sectionIcon}><Apps20Regular /></span>
           <div><Subtitle2>{mode === 'design' ? 'Canvas' : 'Live app (Run mode)'}</Subtitle2>
             <Caption1 as="p" block className={s.hint}>{mode === 'design'
-              ? 'Drag widget headers to move, drag the corner to resize. Click a widget to edit it in the inspector.'
-              : 'Every data widget reads its object type\'s real rows from Synapse; filters, buttons and row-selection are live.'}</Caption1></div>
+              ? 'Drag widget headers to move, drag the corner to resize. Click a widget to edit it in the inspector. Add pages and overlays from the page strip.'
+              : 'Every data widget reads its object type\'s real rows from Synapse; filters, buttons, overlays, conditional visibility and row-selection are live.'}</Caption1></div>
         </div>
+
+        {/* Multi-page nav + management (pages + drawer/modal overlays). */}
+        <PageStrip pages={resolvedPages} currentPageId={currentPageId} readOnly={readOnly}
+          onSelect={setCurrentPageId} onPagesChange={setPages} />
+
         {mode === 'design' && <WidgetPalette onAdd={addWidget} disabled={false} />}
 
         {mode === 'design' ? (
@@ -1680,7 +1692,7 @@ export function WorkshopAppBuilder({ id, entityTypes, widgets, variables, onWidg
             >
               {canvasBlock}
               <WidgetInspector widget={selected} entityTypes={entityTypes} variables={variables} columns={colsForSelected}
-                allWidgets={normalized}
+                allWidgets={normalized} pages={resolvedPages}
                 onChange={(patch) => patchWidget(selected.id, patch)} onRemove={() => removeWidget(selected.id)} />
             </SplitPane>
           ) : (
@@ -1689,20 +1701,13 @@ export function WorkshopAppBuilder({ id, entityTypes, widgets, variables, onWidg
             </div>
           )
         ) : (
-          <div className={s.canvasWrap} style={{ height: canvasHeight }}>
-            <div className={s.canvas} style={{ height: canvasHeight }}>
-              {normalized.length === 0 ? (
-                <div style={{ position: 'absolute', inset: 0 }}>
-                  <EmptyState icon={<Play20Regular />} title="Nothing to preview yet" body="Switch to Design and add widgets bound to object types, then come back to Run mode." />
-                </div>
-              ) : normalized.filter((w) => !nestedIds.has(w.id)).map((w) => (
-                <CanvasWidget key={w.id} widget={w} selected={false} readOnly
-                  onSelect={() => {}} onMove={() => {}} onResize={() => {}} onRemove={() => {}}>
-                  {renderWidgetBody(w)}
-                </CanvasWidget>
-              ))}
-            </div>
-          </div>
+          <>
+            {renderRunPage(currentPageId)}
+            <OverlayHost
+              overlay={openOverlayId ? (resolvedPages.find((p) => p.id === openOverlayId && p.kind === 'overlay') || null) : null}
+              onClose={() => setOpenOverlayId(null)}
+              renderPage={renderRunPage} />
+          </>
         )}
       </div>
 
