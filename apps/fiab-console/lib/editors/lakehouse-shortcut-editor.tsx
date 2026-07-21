@@ -27,7 +27,7 @@ import {
 } from '@fluentui/react-components';
 import {
   Add20Regular, ArrowSync20Regular, Delete20Regular, Link20Regular, CheckmarkCircle20Regular,
-  Folder20Regular, Cloud20Regular, Server20Regular, Database20Regular,
+  Folder20Regular, Cloud20Regular, Server20Regular, Database20Regular, Play20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { ConnectionPicker } from '@/lib/components/connections/connection-picker';
@@ -78,8 +78,13 @@ const SOURCES: SourceDef[] = [
 const SOURCE_LABEL: Record<SourceType, string> = Object.fromEntries(SOURCES.map((s) => [s.value, s.label])) as Record<SourceType, string>;
 
 interface WorkspaceLite { id: string; name: string }
+type ShortcutKindT = 'files' | 'tables';
+type TableFormatT = 'delta' | 'parquet' | 'csv' | 'json';
 interface Shortcut {
   id: string; displayName: string; sourceType?: SourceType;
+  kind?: ShortcutKindT; format?: TableFormatT;
+  engine?: 'synapse' | 'databricks' | 'none'; engineObject?: string;
+  engineStatus?: 'active' | 'pending' | 'error'; engineDetail?: string;
   container?: string; path?: string; account?: string; bucket?: string;
   targetUri?: string; abfss?: string; hasSecret?: boolean; entryCount?: number; lastVerifiedAt?: string;
 }
@@ -97,6 +102,8 @@ export function LakehouseShortcutEditor({ item, id }: Props) {
   const [createOpen, setCreateOpen] = useState(false);
   const [cName, setCName] = useState('');
   const [cSource, setCSource] = useState<SourceType>('internal');
+  const [cKind, setCKind] = useState<ShortcutKindT>('files');
+  const [cFormat, setCFormat] = useState<TableFormatT>('delta');
   // Connector fields (per source).
   const [cContainer, setCContainer] = useState('bronze');
   const [cPath, setCPath] = useState('');
@@ -115,6 +122,11 @@ export function LakehouseShortcutEditor({ item, id }: Props) {
   const [cErr, setCErr] = useState<string | null>(null);
   const [verifyResult, setVerifyResult] = useState<{ resolved: boolean; reason?: string; targetUri?: string; abfss?: string; entryCount?: number } | null>(null);
   const [verifyBusy, setVerifyBusy] = useState(false);
+  // Zero-copy query grid (proves a Tables shortcut reads its source IN PLACE).
+  const [queryFor, setQueryFor] = useState<Shortcut | null>(null);
+  const [queryBusy, setQueryBusy] = useState(false);
+  const [queryResult, setQueryResult] = useState<{ columns: string[]; rows: unknown[][]; rowCount?: number; note?: string } | null>(null);
+  const [queryErr, setQueryErr] = useState<string | null>(null);
 
   useEffect(() => {
     clientFetch('/api/loom/workspaces').then(r => r.json()).then(j => setWorkspaces(j.ok ? (j.workspaces || []) : [])).catch(() => setWorkspaces([]));
@@ -135,7 +147,8 @@ export function LakehouseShortcutEditor({ item, id }: Props) {
   useEffect(() => { if (workspaceId) void load(workspaceId); }, [workspaceId, load]);
 
   function resetForm() {
-    setCName(''); setCSource('internal'); setCContainer('bronze'); setCPath('');
+    setCName(''); setCSource('internal'); setCKind('files'); setCFormat('delta');
+    setCContainer('bronze'); setCPath('');
     setCAccount(''); setCBucket(''); setCRegion('us-east-1'); setCEndpoint('');
     setCEnvUrl(''); setCExportUri(''); setCSecret(''); setCConnId(undefined);
     setVerifyResult(null); setCErr(null);
@@ -195,15 +208,41 @@ export function LakehouseShortcutEditor({ item, id }: Props) {
     try {
       const r = await clientFetch(`/api/items/lakehouse-shortcut?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ displayName: cName.trim(), ...connectorBody() }),
+        body: JSON.stringify({ displayName: cName.trim(), kind: cKind, format: cFormat, ...connectorBody() }),
       });
       const j = await r.json();
-      if (!j.ok) { setCErr(j.error || 'create failed'); return; }
-      setMsg({ intent: 'success', text: `Created ${SOURCE_LABEL[cSource]} shortcut "${cName.trim()}" → resolved ${j.resolution?.entryCount ?? 0} entries (no copy).` });
+      if (!j.ok) {
+        // Honest infra-gate (e.g. no Tables engine): the pointer row was still
+        // created — show the exact remediation and refresh so it's visible.
+        setCErr(j.hint || j.error || 'create failed');
+        if (j.shortcut) { setCreateOpen(false); resetForm(); await load(workspaceId); }
+        return;
+      }
+      const zc = cKind === 'tables' && j.engineObject
+        ? ` — queryable zero-copy as ${j.engineObject}`
+        : '';
+      setMsg({ intent: 'success', text: `Created ${SOURCE_LABEL[cSource]} ${cKind === 'tables' ? 'Tables' : 'Files'} shortcut "${cName.trim()}" → resolved ${j.resolution?.entryCount ?? 0} entries (no copy)${zc}.` });
       setCreateOpen(false); resetForm();
       await load(workspaceId);
     } finally { setCBusy(false); }
-  }, [workspaceId, cName, cSource, missing, connectorBody, load]);
+  }, [workspaceId, cName, cSource, cKind, cFormat, missing, connectorBody, load]);
+
+  /** Run a real zero-copy SELECT over a Tables shortcut's engine object through
+   *  the Synapse Serverless (lakehouse SQL) endpoint — reads the source in place. */
+  const runQuery = useCallback(async (sc: Shortcut) => {
+    if (!workspaceId) return;
+    setQueryFor(sc); setQueryBusy(true); setQueryResult(null); setQueryErr(null);
+    try {
+      const r = await clientFetch(`/api/items/lakehouse-shortcut?workspaceId=${encodeURIComponent(workspaceId)}`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ action: 'query', id: sc.id, top: 100 }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setQueryErr(j.error || 'query failed'); return; }
+      setQueryResult({ columns: j.columns || [], rows: j.rows || [], rowCount: j.rowCount, note: j.note });
+    } catch (e: any) { setQueryErr(e?.message || String(e)); }
+    finally { setQueryBusy(false); }
+  }, [workspaceId]);
 
   const del = useCallback(async (sid: string) => {
     if (!workspaceId) return;
@@ -286,6 +325,23 @@ export function LakehouseShortcutEditor({ item, id }: Props) {
               <DialogContent>
                 <div className={s.section}>
                   <Field label="Display name" required><Input value={cName} onChange={(_, d) => setCName(d.value)} placeholder="external-orders" /></Field>
+
+                  <Field label="Shortcut kind" hint="Files = a pointer read in a notebook in place. Tables = a zero-copy external table/view the lakehouse SQL endpoint queries directly (no copy).">
+                    <Select value={cKind} onChange={(_, d) => { setCKind(d.value as ShortcutKindT); setVerifyResult(null); }}>
+                      <option value="files">Files — read-in-place pointer</option>
+                      <option value="tables">Tables — zero-copy queryable table</option>
+                    </Select>
+                  </Field>
+                  {cKind === 'tables' && (
+                    <Field label="Table format" hint="The on-disk format at the target — used to register the external table/view (Delta/Parquet auto-detect schema; CSV assumes a header row).">
+                      <Select value={cFormat} onChange={(_, d) => setCFormat(d.value as TableFormatT)}>
+                        <option value="delta">Delta</option>
+                        <option value="parquet">Parquet</option>
+                        <option value="csv">CSV</option>
+                        <option value="json">JSON</option>
+                      </Select>
+                    </Field>
+                  )}
 
                   <Subtitle2>Source type</Subtitle2>
                   <div className={s.sourceGrid} role="radiogroup" aria-label="Shortcut source type">
@@ -443,25 +499,73 @@ export function LakehouseShortcutEditor({ item, id }: Props) {
           <div className={s.tableWrap}>
             <Table aria-label="Lakehouse shortcuts" size="small">
               <TableHeader><TableRow>
-                <TableHeaderCell>Name</TableHeaderCell><TableHeaderCell>Source</TableHeaderCell><TableHeaderCell>Target</TableHeaderCell>
+                <TableHeaderCell>Name</TableHeaderCell><TableHeaderCell>Kind</TableHeaderCell><TableHeaderCell>Source</TableHeaderCell><TableHeaderCell>Target / queryable</TableHeaderCell>
                 <TableHeaderCell>Entries</TableHeaderCell><TableHeaderCell>Last verified</TableHeaderCell>
                 <TableHeaderCell>Actions</TableHeaderCell>
               </TableRow></TableHeader>
               <TableBody>
-                {shortcuts.map((sc) => (
+                {shortcuts.map((sc) => {
+                  const isTables = sc.kind === 'tables';
+                  const queryable = isTables && !!sc.engineObject && sc.engineStatus !== 'pending';
+                  return (
                   <TableRow key={sc.id}>
                     <TableCell className={s.mono}>{sc.displayName}</TableCell>
+                    <TableCell>
+                      <Badge appearance="tint" color={isTables ? 'success' : 'informative'}>{isTables ? 'Tables' : 'Files'}</Badge>
+                      {isTables && sc.engineStatus === 'pending' && <Badge appearance="tint" color="warning" style={{ marginInlineStart: tokens.spacingHorizontalXS }}>gated</Badge>}
+                    </TableCell>
                     <TableCell><Badge appearance="tint" color="brand">{SOURCE_LABEL[sc.sourceType || 'internal'] || sc.sourceType || 'internal'}</Badge></TableCell>
-                    <TableCell className={s.mono}>{sc.targetUri || sc.abfss || `${sc.container || ''}/${sc.path || ''}`}</TableCell>
+                    <TableCell className={s.mono}>{sc.engineObject || sc.targetUri || sc.abfss || `${sc.container || ''}/${sc.path || ''}`}</TableCell>
                     <TableCell>{sc.entryCount ?? '—'}</TableCell>
                     <TableCell>{sc.lastVerifiedAt?.replace('T', ' ').replace(/\..*/, '') || '—'}</TableCell>
-                    <TableCell><Button size="small" appearance="subtle" icon={<Delete20Regular />} onClick={() => del(sc.id)}>Delete</Button></TableCell>
+                    <TableCell>
+                      {queryable && <Button size="small" appearance="subtle" icon={<Play20Regular />} onClick={() => runQuery(sc)}>Query</Button>}
+                      <Button size="small" appearance="subtle" icon={<Delete20Regular />} onClick={() => del(sc.id)}>Delete</Button>
+                    </TableCell>
                   </TableRow>
-                ))}
+                  );
+                })}
               </TableBody>
             </Table>
           </div>
         )}
+
+        {/* Zero-copy query grid — proves a Tables shortcut reads its source IN PLACE
+            through the Synapse Serverless (lakehouse SQL) endpoint. */}
+        <Dialog open={!!queryFor} onOpenChange={(_, d) => { if (!d.open) { setQueryFor(null); setQueryResult(null); setQueryErr(null); } }}>
+          <DialogSurface style={{ maxWidth: '900px', width: '94vw' }}>
+            <DialogBody>
+              <DialogTitle>Query zero-copy — {queryFor?.displayName}</DialogTitle>
+              <DialogContent>
+                <div className={s.section}>
+                  <Caption1>
+                    Reading <code className={s.mono}>SELECT TOP 100 * FROM {queryFor?.engineObject}</code> through the Synapse Serverless SQL endpoint — the external data is read in place, nothing is copied.
+                  </Caption1>
+                  {queryBusy && <Spinner size="small" label="Running query…" labelPosition="after" />}
+                  {queryErr && <MessageBar intent="error"><MessageBarBody>{queryErr}</MessageBarBody></MessageBar>}
+                  {queryResult?.note && <MessageBar intent="info"><MessageBarBody>{queryResult.note}</MessageBarBody></MessageBar>}
+                  {queryResult && queryResult.columns.length > 0 && (
+                    <div className={s.tableWrap}>
+                      <Table aria-label="Query results" size="small">
+                        <TableHeader><TableRow>{queryResult.columns.map((c) => <TableHeaderCell key={c}>{c}</TableHeaderCell>)}</TableRow></TableHeader>
+                        <TableBody>
+                          {queryResult.rows.slice(0, 100).map((row, ri) => (
+                            <TableRow key={ri}>{row.map((cell, ci) => <TableCell key={ci} className={s.mono}>{cell === null || cell === undefined ? '—' : String(cell)}</TableCell>)}</TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  )}
+                  {queryResult && queryResult.columns.length > 0 && <Caption1>{queryResult.rows.length} row(s) — read zero-copy, no data moved.</Caption1>}
+                </div>
+              </DialogContent>
+              <DialogActions>
+                <Button appearance="secondary" onClick={() => { setQueryFor(null); setQueryResult(null); setQueryErr(null); }}>Close</Button>
+                {queryFor && <Button appearance="primary" icon={<ArrowSync20Regular />} disabled={queryBusy} onClick={() => runQuery(queryFor)}>Re-run</Button>}
+              </DialogActions>
+            </DialogBody>
+          </DialogSurface>
+        </Dialog>
       </div>
     } />
   );
