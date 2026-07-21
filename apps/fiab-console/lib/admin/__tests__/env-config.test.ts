@@ -174,7 +174,12 @@ describe('admin/env-config registry', () => {
     // auto-PostgreSQL on the sovereign OSS-UC / Gov path; the databricks-hostname /
     // pgvector-host keys it also references are shared with svc-databricks /
     // svc-postgres, so only the selector is a NEW editable var).
-    expect(EDITABLE_ENV.length).toBe(141);
+    // Bumped to 143 by WS-1.3 (svc-fine-tuning): LOOM_FINETUNE_BACKEND (the AOAI vs
+    // Databricks fine-tuning backend selector) + LOOM_AOAI_ACCOUNT (the AIServices/
+    // OpenAI account the fine-tuning + model-deployment REST targets) are both NEW
+    // editable vars; the LOOM_AOAI_ENDPOINT / LOOM_FOUNDRY_NAME keys it also
+    // references are shared with svc-aoai / svc-aml.
+    expect(EDITABLE_ENV.length).toBe(143);
   });
 
   it('surfaces the wave-2 env vars as settable (previously dropped by the whitelist)', () => {

@@ -822,6 +822,11 @@
       "checks": [
         "svc-model-serving"
       ]
+    },
+    "fine-tuning-client": {
+      "checks": [
+        "svc-fine-tuning"
+      ]
     }
   }
 }

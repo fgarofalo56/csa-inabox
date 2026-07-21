@@ -120,6 +120,10 @@ export const EDITOR_REGISTRY: Record<string, EditorComponent> = {
   // WS-2.1 — Feature Store: author UC feature tables + point-in-time joins +
   // online feature-lookup-at-serving over UC (Databricks / OSS-UC) + Lakebase/pgvector.
   'feature-table':        reg(() => import('./feature-table-editor'),   'FeatureTableEditor'),
+  // WS-1.3 — LLM fine-tuning: submit a real Azure OpenAI / AI Foundry fine-tuning
+  // job (Databricks Mosaic opt-in), training-data + resulting-model safety-eval
+  // gates, then deploy the fine-tuned model for serving (WS-1.2).
+  'fine-tuning-job':      reg(() => import('./fine-tuning-job-editor'),  'FineTuningJobEditor'),
   // AIF-7 — batch LLM augmentation over a table column (Fabric AI-functions item).
   'ai-enrichment':        reg(() => import('./ai-enrichment-editor'),     'AiEnrichmentEditor'),
   // AIF-15 — AI red-team scan: defensive safety probe of a model deployment.

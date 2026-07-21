@@ -107,4 +107,17 @@ export const dataScienceItems: FabricItemType[] = [
       ],
       "docsUrl": "https://learn.microsoft.com/azure/databricks/machine-learning/feature-store/"
     } },
+  // WS-1.3 — LLM fine-tuning as a first-class item (Azure OpenAI / AI Foundry FT).
+  { slug: 'fine-tuning-job', displayName: 'Fine-tuning job', restType: 'FineTuningJob', category: 'Data Science',
+    description: 'Fine-tune a base chat model on your data with training-data + resulting-model safety-eval gates, then deploy the result for serving.',
+    learnContent: {
+      "overview": "A fine-tuning job customises a base chat model on your labelled examples. In Loom the Azure-native DEFAULT is Azure OpenAI in Azure AI Foundry fine-tuning (serverless + managed-compute, Gov-correct *.openai.azure.us); Databricks Mosaic AI fine-tuning is an opt-in alternative (LOOM_FINETUNE_BACKEND=databricks). No Microsoft Fabric dependency. Before submit, the training-data-eval gate validates the JSONL dataset; after the job succeeds, the resulting model is deployed and a resulting-model safety-eval (Loom red-team + Azure Content Safety / Foundry RAI) must PASS before the model is approved for serving via a Model serving endpoint (WS-1.2).",
+      "steps": [
+        { "title": "Submit a job", "body": "Pick a base chat model, paste your JSONL training examples (validated by the training-data-eval gate), set optional epochs/seed, and submit a real fine-tuning job." },
+        { "title": "Watch progress", "body": "The Progress tab streams real per-step training/validation-loss events until the job reaches a terminal status." },
+        { "title": "Safety-evaluate the result", "body": "Deploy the resulting fine-tuned model, then run the resulting-model safety-eval — adversarial red-team probes scored by Azure Content Safety. The model is approved only on a high refusal rate with no harmful completions." },
+        { "title": "Deploy for serving", "body": "Once the safety-eval passes, the fine-tuned model is deployed and approved — route and monitor it from a Model serving endpoint item (WS-1.2)." }
+      ],
+      "docsUrl": "https://learn.microsoft.com/azure/ai-foundry/openai/how-to/fine-tuning"
+    } },
 ];
