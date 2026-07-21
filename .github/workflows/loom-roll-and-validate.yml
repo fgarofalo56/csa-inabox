@@ -239,13 +239,29 @@ jobs:
           # suite so the gate fits the ~20-min budget; a caller can narrow further
           # with uat_grep. Non-strict provisioning is the job default (infra-gates
           # exit 0; only real code bugs exit 1) — exactly the roll-gate semantics.
-          ENVV="UAT_GREP_INVERT=tutorial"
-          [[ -n "$UAT_GREP" ]] && ENVV="$ENVV UAT_GREP=$UAT_GREP"
-          echo "Starting loom-uat execution (env overrides: $ENVV) ..."
+          # `az containerapp job start --env-vars` (even with --image) REPLACES the
+          # execution's whole container spec, dropping every baseline env var the
+          # job needs — LOOM_URL, SESSION_SECRET, LOOM_AUTOMATION_*, results
+          # account, UAMI. That made the container die in <1s with
+          # "LOOM_URL is required" (pass=0 fail=2 realFails=0). Instead MERGE the
+          # tutorial-exclude default (and optional grep) into the job template with
+          # --set-env-vars (which preserves all other env), then start PLAIN so the
+          # execution inherits the full, correct env.
+          echo "Merging UAT gate env (UAT_GREP_INVERT=tutorial${UAT_GREP:+, UAT_GREP=$UAT_GREP}) into loom-uat template ..."
+          SET_ENV=(UAT_GREP_INVERT=tutorial)
+          [[ -n "$UAT_GREP" ]] && SET_ENV+=("UAT_GREP=$UAT_GREP")
+          UPD_ERR=$(mktemp)
+          if ! az containerapp job update -n loom-uat -g "$RG" \
+              --set-env-vars "${SET_ENV[@]}" -o none 2>"$UPD_ERR"; then
+            echo "::error::Failed to set loom-uat gate env. az stderr:"; cat "$UPD_ERR" >&2 || true; exit 1
+          fi
+          echo "Starting loom-uat execution (plain start — inherits full template env) ..."
+          START_ERR=$(mktemp)
           EXEC=$(az containerapp job start -n loom-uat -g "$RG" \
-            --env-vars $ENVV --query name -o tsv 2>/dev/null | tr -d '\r')
+            --query name -o tsv 2>"$START_ERR" | tr -d '\r')
           if [[ -z "$EXEC" ]]; then
-            echo "::error::Failed to start loom-uat execution."
+            echo "::error::Failed to start loom-uat execution. az stderr:"
+            cat "$START_ERR" >&2 || true
             exit 1
           fi
           echo "::notice::Started loom-uat execution: $EXEC"
