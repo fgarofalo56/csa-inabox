@@ -305,6 +305,14 @@ var loomContainers = [
   // an explicit "leave". createIfNotExists in cosmos-client.ts ensure() remains
   // the hotfix fallback.
   { name: 'canvas-presence',       partitionKey: '/itemId', ttl: -1 }
+  // WS-10.5 — Parity Autopilot run ledger. One doc per autopilot run of a parity
+  // surface (Playwright capture → vision-diff vs the parity doc → filed gap
+  // issues), PK /tenantId so the per-tenant "recent autopilot runs" admin list
+  // hits a single physical partition. TTL-enabled (each run doc carries a 180-day
+  // `ttl`; container-level defaultTtl: -1 turns TTL ON without a blanket expiry)
+  // so the ledger self-evicts. createIfNotExists in cosmos-client.ts ensure()
+  // remains the hotfix fallback.
+  { name: 'parity-autopilot-runs', partitionKey: '/tenantId', ttl: -1 }
 ]
 
 resource loomDb 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases@2024-12-01-preview' = {
