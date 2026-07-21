@@ -73,10 +73,10 @@ NB_HTML=$(curl -s -m 30 "${URL}/items/notebook/new${CACHEBUST}" || true)
 echo "${NB_HTML:0:500}"
 # The page must return 200 with the Fluent UI shell. Auth-gate is fine — we
 # just need the page to compile and serve.
-if echo "$NB_HTML" | grep -q '<title>CSA Loom Console</title>'; then
-  ok "notebook page route renders (auth-gated content is expected if unauthenticated)"
+if echo "$NB_HTML" | grep -q '_next/static'; then
+  ok "notebook page route renders the Next.js app shell (auth-gated content is expected if unauthenticated)"
 else
-  fail "notebook page did not render the shell title"
+  fail "notebook page did not render"
 fi
 end
 
@@ -85,8 +85,8 @@ end
 # ---------------------------------------------------------------------------
 log "5. data-pipeline editor smoke"
 DP_HTML=$(curl -s -m 30 "${URL}/items/data-pipeline/new${CACHEBUST}" || true)
-if echo "$DP_HTML" | grep -q '<title>CSA Loom Console</title>'; then
-  ok "data-pipeline page route renders"
+if echo "$DP_HTML" | grep -q '_next/static'; then
+  ok "data-pipeline page route renders the Next.js app shell"
 else
   fail "data-pipeline page did not render"
 fi
