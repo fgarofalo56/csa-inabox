@@ -252,6 +252,9 @@ let _agentMemory: Container | null = null;
 // tasks/get retrieves a recently delegated task without unbounded growth. Lazy
 // createIfNotExists here + ARM-provisioned in cosmos.bicep's loomContainers.
 let _a2aTasks: Container | null = null;
+// WS-4.4 — Dataset→object sync job progress (object-sync-jobs). PK /ontologyId
+// so per-ontology progress reads are single-partition. Azure-native; no Fabric.
+let _objectSyncJobs: Container | null = null;
 // Scoped API tokens (PAT) — BR-PAT. One doc per token, PK /id so the hot
 // resolvePat() path (every non-interactive API request) is a single-partition
 // point-read by the token id carried in the Authorization: Bearer header. Stores
@@ -1115,6 +1118,8 @@ async function ensure() {
   _a2aTasks = (await database.containers.createIfNotExists({
     id: 'a2a-tasks', partitionKey: { paths: ['/tenantId'] }, defaultTtl: 604800,
   })).container;
+  // WS-4.4 — Dataset→object sync job progress. PK /ontologyId.
+  _objectSyncJobs = await mk('object-sync-jobs', '/ontologyId');
   _ensured = true;
 }
 
@@ -1222,6 +1227,8 @@ export async function itemVersionsContainer(): Promise<Container> { await ensure
 export async function agentMemoryContainer(): Promise<Container> { await ensure(); return _agentMemory!; }
 /** WS-5.2 — A2A delegated tasks (PK /tenantId, TTL 7 days). tasks/get reads it. */
 export async function a2aTasksContainer(): Promise<Container> { await ensure(); return _a2aTasks!; }
+/** WS-4.4 — Dataset→object sync job progress (PK /ontologyId). */
+export async function objectSyncJobsContainer(): Promise<Container> { await ensure(); return _objectSyncJobs!; }
 /** Scoped API tokens (PAT, BR-PAT) — PK /id; stores a SHA-256 hash of the secret only. */
 export async function loomPatTokensContainer(): Promise<Container> { await ensure(); return _loomPatTokens!; }
 /** BR-SCIM — SCIM 2.0 provisioned users (PK /id). */
@@ -1431,6 +1438,7 @@ const KNOWN_CONTAINER_IDS = [
   'copilot-memory-contradictions',
   'copilot-topic-pages',
   'canvas-comments', 'canvas-presence', 'model-fabric', 'autopilot',
+  'object-sync-jobs',
 ];
 
 /** List all Loom containers with their current throughput shape.
