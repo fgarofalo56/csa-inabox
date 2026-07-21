@@ -5,6 +5,10 @@
 	auto_https off
 }
 :8080 {
+	# ACA readiness/liveness probe target — always 200 once Caddy is up.
+	handle /health {
+		respond "ok" 200
+	}
 	# maplibre-gl runtime assets (the Console loads these from the same in-VNet origin).
 	handle /maplibre-gl.js {
 		root * /assets
