@@ -117,7 +117,7 @@ const ALLOWLIST = {
   // --- WS-E E1 priority editors (tracked for decomposition; do NOT grow) -----
   "apps/fiab-console/lib/editors/lakehouse/lakehouse-editor-shell.tsx": { max: 5300, reason: "tracked for WS-E decomposition" },
   "apps/fiab-console/lib/editors/report-designer.tsx": { max: 5200, reason: "tracked for WS-E decomposition" },
-  "apps/fiab-console/lib/editors/phase3/semantic-model-editor.tsx": { max: 4600, reason: "tracked for WS-E decomposition" },
+  "apps/fiab-console/lib/editors/phase3/semantic-model-editor.tsx": { max: 4700, reason: "tracked for WS-E decomposition; +WS-3.3 Direct Lake (Azure-native) storage-mode UI" },
   "apps/fiab-console/lib/editors/notebook-editor.tsx": { max: 3900, reason: "tracked for WS-E decomposition" },
   "apps/fiab-console/lib/editors/apim-editors.tsx": { max: 3600, reason: "tracked for WS-E decomposition" },
   // --- Generated content bundles (WS-E E2 target; machine-emitted) -----------
