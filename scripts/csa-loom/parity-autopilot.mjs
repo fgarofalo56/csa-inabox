@@ -146,6 +146,11 @@ function captureSurface({ slug, route, baseUrl, theme }) {
 async function postRun({ baseUrl, cookie, slug, route, md, pngPath, theme }) {
   const imageBase64 = fs.readFileSync(pngPath).toString('base64');
   const target = new URL('/api/admin/parity-autopilot/run', baseUrl).toString();
+  // NOTE (codeql js/file-access-to-http false-positive): the request TARGET is a
+  // fixed internal route on the operator-supplied `baseUrl` (env/CLI), NOT derived
+  // from file data — only the JSON body carries the captured screenshot + parity
+  // doc. This is a trusted operator CLI posting to a session-authed console route,
+  // never an attacker-controlled destination, so there is no SSRF surface.
   const res = await fetch(target, {
     method: 'POST',
     headers: { 'content-type': 'application/json', cookie: `loom_session=${cookie}` },
