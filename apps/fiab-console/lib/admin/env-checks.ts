@@ -142,6 +142,11 @@ export const VALUE_HINT: Record<string, string> = {
   LOOM_ACA_ENV_ID: '/subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.App/managedEnvironments/<aca-env>',
   LOOM_ACA_ENV_DOMAIN: '<aca-env-default-domain>.<region>.azurecontainerapps.io',
   LOOM_BUILTIN_MCP_URL: 'https://<loom-builtin-mcp-host>',
+  // WS-5.2 — A2A OUTBOUND egress allow-list (the gov-safe egress profile). Comma-
+  // separated external A2A host suffixes a Loom agent may delegate OUT to. UNSET =
+  // outbound A2A disabled (the sovereign / air-gapped default); inbound A2A works
+  // regardless. Runtime-only knob (no bicep resource).
+  LOOM_A2A_EGRESS_ALLOW: 'partner-agents.example.com,agents.contoso.com',
   // ── wave-2 coverage: builder/publish/networking env the earlier checks missed
   //    (env-config derives its editable whitelist from ENV_CHECKS, so a var
   //    absent there is silently dropped by PUT /api/admin/env-config) ──
@@ -1219,6 +1224,20 @@ export const ENV_CHECKS: EnvSpec[] = [
     remediation: 'The warm Spark session pool is DEFAULT-ON (instant notebook attach on a warm hit; opt out with LOOM_SPARK_POOL_ENABLED=0 or the /admin/performance kill switch). To make warm sessions SHARED across Console replicas, signal the shared H-band substrate: set LOOM_SPARK_POOL_REDIS to the shared Azure Cache for Redis host from compute/hband-shared.bicep (same value as LOOM_BROKER_REDIS), or set LOOM_SPARK_POOL_LEASE_CONTAINER to a Cosmos container name. Either turns on the cross-replica lease registry (the Cosmos spark-warm-leases container). Unset → the pool runs per-replica (still fully functional, just not shared).',
     provisionedBy: 'modules/landing-zone/cosmos.bicep (loomContainers → spark-warm-leases) + modules/compute/hband-shared.bicep (shared Redis substrate) → LOOM_SPARK_POOL_REDIS / LOOM_SPARK_POOL_LEASE_CONTAINER on the Console app',
     role: 'Cosmos DB Built-in Data Contributor (Console UAMI, already granted) on the loom database — the lease registry is a Cosmos container, no extra grant',
+  },
+  {
+    id: 'svc-a2a-egress', category: 'security', title: 'A2A outbound egress profile (gov-safe allow-list)', severity: 'optional',
+    required: ['LOOM_A2A_EGRESS_ALLOW'], warnOnMiss: true, optionalDefault: true,
+    // WS-5.2. INBOUND A2A (an external agent delegating a task INTO Loom, and Loom
+    // agents registering as A2A cards) is fully functional with ZERO config. This
+    // var only governs OUTBOUND delegation (a Loom agent calling an EXTERNAL A2A
+    // agent). UNSET = outbound A2A disabled = the sovereign / air-gapped default
+    // (nothing leaves the boundary), which is the intended posture — so an unset
+    // value is a fully-functional default, not a gap (optionalDefault).
+    optionalDefaultDetail: 'inbound A2A task delegation + Loom agent cards work with no config. Setting LOOM_A2A_EGRESS_ALLOW (comma-separated external A2A host suffixes) is only needed to ENABLE Loom agents to delegate OUT to those specific external agents; left unset, outbound A2A stays disabled (the sovereign default).',
+    remediation: 'Runtime-only knob (no Azure resource). To let Loom agents delegate tasks OUT to external A2A agents (WS-5.2 outbound), set LOOM_A2A_EGRESS_ALLOW to a comma-separated list of allowed external A2A host suffixes (e.g. "partner-agents.example.com"). ONLY those hosts become reachable; everything else (incl. the whole public internet) stays refused — the gov-safe egress profile. Leave it unset in sovereign / air-gapped deployments so nothing leaves the boundary. Inbound A2A (external agents delegating INTO Loom via /api/a2a) needs no config.',
+    provisionedBy: 'runtime-only (admin-plane apps[] env LOOM_A2A_EGRESS_ALLOW; no bicep resource — an outbound-egress policy knob)',
+    role: 'none (an egress allow-list; the outbound fetch uses the Console UAMI / the caller-supplied token)',
   },
 ];
 

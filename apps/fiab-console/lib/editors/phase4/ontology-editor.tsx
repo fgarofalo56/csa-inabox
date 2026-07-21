@@ -30,7 +30,7 @@ import {
   Table20Regular, ChartMultiple20Regular,
   ArrowDownload16Regular, ArrowSortUp16Regular, ArrowSortDown16Regular,
   Save16Regular, DataTrending20Regular, Play20Regular, Pulse20Regular,
-  Cube20Regular, Calculator20Regular, Ruler20Regular, Layer20Regular,
+  Cube20Regular, Calculator20Regular, Ruler20Regular, Layer20Regular, Code20Regular,
   ChevronRight16Regular, ChevronDown16Regular, ChevronLeft16Regular,
   Add16Regular, Edit16Regular, CheckmarkCircle20Regular, ArrowUndo16Regular,
   Key16Regular, Search20Regular, ShieldTask20Regular, ArrowClockwise20Regular, Open16Regular,
@@ -76,6 +76,10 @@ import {
 } from '../ontology-model';
 import { normalizeObjectSecurity } from '@/lib/foundry/object-security';
 import { OntologySecurityPanel } from './ontology-security-panel';
+import { OntologyDerivedPanel } from './ontology-derived-panel';
+import { OntologyFunctionsPanel } from './ontology-functions-panel';
+import { normalizeDerivedPropertyMap, type OntoDerivedProperty } from '@/lib/foundry/derived-properties';
+import { normalizeRegisteredFunctions, functionNames as registeredFunctionNames } from '@/lib/foundry/function-registry-model';
 // Pure-logic helpers extracted for vitest coverage. See
 // `lib/editors/__tests__/family-utils.test.ts`.
 import {
@@ -1186,7 +1190,20 @@ function OntologyTypedModelPanel({
   const model = useMemo(() => migrateOntologyState(state), [state]);
   const { objectTypes, linkTypes, actionTypes, interfaces, sharedPropertyGroups } = model;
   const objNames = useMemo(() => objectTypes.map((o) => o.apiName), [objectTypes]);
-  const [tab, setTab] = useState<'objects' | 'links' | 'actions' | 'interfaces' | 'shared' | 'security' | 'explore'>('objects');
+  const [tab, setTab] = useState<'objects' | 'links' | 'actions' | 'interfaces' | 'shared' | 'derived' | 'functions' | 'security' | 'explore'>('objects');
+
+  // WS-4.2: registered functions-on-objects (for the derived-property + action
+  // validation pickers). Loaded from the tenant-scoped registry API.
+  const [regFnNames, setRegFnNames] = useState<string[]>([]);
+  const reloadRegFns = useCallback(async () => {
+    try {
+      const r = await clientFetch('/api/ontology-functions');
+      const j = await r.json().catch(() => ({}));
+      if (j?.ok) setRegFnNames(registeredFunctionNames(normalizeRegisteredFunctions(j.functions)));
+    } catch { /* registry unavailable — pickers just show no options */ }
+  }, []);
+  useEffect(() => { void reloadRegFns(); }, [reloadRegFns]);
+  const derivedMap = useMemo(() => normalizeDerivedPropertyMap(state.derivedProperties), [state.derivedProperties]);
 
   const commit = useCallback((patch: {
     objectTypes?: OntoObjectType[]; linkTypes?: OntoLinkType[]; actionTypes?: OntoActionType[];
@@ -1451,8 +1468,8 @@ function OntologyTypedModelPanel({
   const removeLt = (i: number) => commit({ linkTypes: linkTypes.filter((_, idx) => idx !== i) });
 
   // ───────────────────────── Action-type dialog ─────────────────────────
-  interface AtDraft { index: number | null; name: string; objectType: string; kind: OntoActionType['kind']; description: string; parameters: OntoActionParam[]; requiresJustification: boolean; submissionCriteria: OntoActionCriterion[]; emitLineage: boolean; requiresApproval: boolean; }
-  const blankAt = (): AtDraft => ({ index: null, name: '', objectType: objNames[0] || '', kind: 'create', description: '', parameters: [], requiresJustification: false, submissionCriteria: [], emitLineage: false, requiresApproval: false });
+  interface AtDraft { index: number | null; name: string; objectType: string; kind: OntoActionType['kind']; description: string; parameters: OntoActionParam[]; requiresJustification: boolean; submissionCriteria: OntoActionCriterion[]; emitLineage: boolean; requiresApproval: boolean; validationFunctionName: string; validationFunctionVersion: string; }
+  const blankAt = (): AtDraft => ({ index: null, name: '', objectType: objNames[0] || '', kind: 'create', description: '', parameters: [], requiresJustification: false, submissionCriteria: [], emitLineage: false, requiresApproval: false, validationFunctionName: '', validationFunctionVersion: '' });
   const [atOpen, setAtOpen] = useState(false);
   const [at, setAt] = useState<AtDraft>(blankAt);
   const [atErr, setAtErr] = useState<string | null>(null);
@@ -1460,7 +1477,7 @@ function OntologyTypedModelPanel({
   const openNewAt = () => { setAt(blankAt()); setAtErr(null); setAtOpen(true); };
   const openEditAt = (i: number) => {
     const a = actionTypes[i];
-    setAt({ index: i, name: a.name, objectType: a.objectType, kind: a.kind, description: a.description || '', parameters: a.parameters.map((p) => ({ ...p })), requiresJustification: !!a.requiresJustification, submissionCriteria: (a.submissionCriteria || []).map((c) => ({ ...c })), emitLineage: !!a.emitLineage, requiresApproval: !!a.requiresApproval });
+    setAt({ index: i, name: a.name, objectType: a.objectType, kind: a.kind, description: a.description || '', parameters: a.parameters.map((p) => ({ ...p })), requiresJustification: !!a.requiresJustification, submissionCriteria: (a.submissionCriteria || []).map((c) => ({ ...c })), emitLineage: !!a.emitLineage, requiresApproval: !!a.requiresApproval, validationFunctionName: a.validationFunction?.name || '', validationFunctionVersion: a.validationFunction?.version || '' });
     setAtErr(null); setAtOpen(true);
   };
   const saveAt = () => {
@@ -1488,7 +1505,7 @@ function OntologyTypedModelPanel({
       if (ONTO_CRITERION_OPS_WITH_VALUE.includes(c.op) && !String(c.value ?? '').trim()) { setAtErr(`Criterion "${parameter} ${ONTO_CRITERION_OP_LABELS[c.op]}" needs a value.`); return; }
       submissionCriteria.push({ parameter, op: c.op, ...(c.value?.trim() ? { value: c.value.trim() } : {}), ...(c.message?.trim() ? { message: c.message.trim() } : {}) });
     }
-    const next: OntoActionType = { name, objectType: at.objectType, kind: at.kind, ...(at.description.trim() ? { description: at.description.trim() } : {}), parameters, ...(at.requiresJustification ? { requiresJustification: true } : {}), ...(submissionCriteria.length ? { submissionCriteria } : {}), ...(at.emitLineage ? { emitLineage: true } : {}), ...(at.requiresApproval ? { requiresApproval: true } : {}) };
+    const next: OntoActionType = { name, objectType: at.objectType, kind: at.kind, ...(at.description.trim() ? { description: at.description.trim() } : {}), parameters, ...(at.requiresJustification ? { requiresJustification: true } : {}), ...(submissionCriteria.length ? { submissionCriteria } : {}), ...(at.emitLineage ? { emitLineage: true } : {}), ...(at.requiresApproval ? { requiresApproval: true } : {}), ...(at.validationFunctionName.trim() ? { validationFunction: { name: at.validationFunctionName.trim(), ...(at.validationFunctionVersion.trim() ? { version: at.validationFunctionVersion.trim() } : {}) } } : {}) };
     const arr2 = [...actionTypes];
     if (at.index === null) arr2.push(next); else arr2[at.index] = next;
     commit({ actionTypes: arr2 });
@@ -1631,6 +1648,8 @@ function OntologyTypedModelPanel({
         <Tab value="actions" icon={<Play20Regular />}>Actions ({actionTypes.length})</Tab>
         <Tab value="interfaces" icon={<ShieldCheckmark20Regular />}>Interfaces ({interfaces.length})</Tab>
         <Tab value="shared" icon={<Layer20Regular />}>Shared properties ({sharedPropertyGroups.length})</Tab>
+        <Tab value="derived" icon={<Calculator20Regular />}>Derived</Tab>
+        <Tab value="functions" icon={<Code20Regular />}>Functions</Tab>
         <Tab value="security" icon={<ShieldLock20Regular />}>Security</Tab>
         <Tab value="explore" icon={<Search20Regular />}>Explore</Tab>
       </TabList>
@@ -1828,6 +1847,23 @@ function OntologyTypedModelPanel({
               })}
             </div>
           )}
+        </div>
+      )}
+
+      {/* ── Derived properties (WS-4.2 — linked-object rollups + function-backed) ── */}
+      {tab === 'derived' && (
+        <div className={s.tmTabPanel}>
+          <OntologyDerivedPanel objectTypes={objectTypes} linkTypes={linkTypes}
+            derivedMap={derivedMap} functionNames={regFnNames}
+            onChange={(next: Record<string, OntoDerivedProperty[]>) => persistOnto({ ...state, derivedProperties: next })}
+            saving={saving} />
+        </div>
+      )}
+
+      {/* ── Functions on objects (WS-4.2 — versioned function registry) ── */}
+      {tab === 'functions' && (
+        <div className={s.tmTabPanel}>
+          <OntologyFunctionsPanel onChanged={reloadRegFns} />
         </div>
       )}
 
@@ -2176,6 +2212,18 @@ function OntologyTypedModelPanel({
                 <Field label="Require approval" hint="A run is blocked until an approver approves the request for the exact parameters. One-shot — the approval is consumed on the next matching run.">
                   <Switch checked={at.requiresApproval} onChange={(_, d) => patchAt({ requiresApproval: d.checked })} label={at.requiresApproval ? 'Approval required before running' : 'No approval required'} />
                 </Field>
+                <Field label="Validation function (WS-4.2)" hint="A registered function-on-objects that validates the write server-side before it commits. It receives the coerced parameters and must return { valid: boolean, message? }; a non-valid verdict blocks the run (422). Register functions in the Functions tab.">
+                  <Dropdown value={at.validationFunctionName || 'None'} selectedOptions={[at.validationFunctionName]}
+                    onOptionSelect={(_, o) => patchAt({ validationFunctionName: o.optionValue || '' })}>
+                    <Option value="">None</Option>
+                    {regFnNames.map((n) => <Option key={n} value={n}>{n}</Option>)}
+                  </Dropdown>
+                </Field>
+                {at.validationFunctionName && (
+                  <Field label="Validation function version" hint="Blank = latest registered version.">
+                    <Input value={at.validationFunctionVersion} onChange={(_, v) => patchAt({ validationFunctionVersion: v.value })} placeholder="latest" />
+                  </Field>
+                )}
                 {atErr && <MessageBar intent="error"><MessageBarBody>{atErr}</MessageBarBody></MessageBar>}
               </div>
             </DialogContent>

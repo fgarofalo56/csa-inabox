@@ -313,6 +313,12 @@ var loomContainers = [
   // so the ledger self-evicts. createIfNotExists in cosmos-client.ts ensure()
   // remains the hotfix fallback.
   { name: 'parity-autopilot-runs', partitionKey: '/tenantId', ttl: -1 }
+  // WS-5.2 — A2A delegated tasks. One doc per delegated A2A task, PK /tenantId so
+  // a caller's tasks/get is single-partition + tenant-isolated. TTL 7 days
+  // (604800s) — delegated tasks are short-lived; tasks/get retrieves a recently
+  // completed task. createIfNotExists in cosmos-client.ts ensure() remains the
+  // hotfix fallback.
+  { name: 'a2a-tasks',             partitionKey: '/tenantId', ttl: 604800 }
 ]
 
 resource loomDb 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases@2024-12-01-preview' = {

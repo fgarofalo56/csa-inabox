@@ -23,7 +23,7 @@ import {
 } from '@fluentui/react-components';
 import {
   ArrowLeft20Regular, ArrowSync20Regular, Cube20Regular, BranchFork20Regular,
-  DataArea20Regular, Location20Regular, Table20Regular, Info20Regular,
+  DataArea20Regular, Location20Regular, Table20Regular, Info20Regular, Calculator20Regular,
 } from '@fluentui/react-icons';
 import { clientFetch } from '@/lib/client-fetch';
 import { SplitPane } from '@/lib/components/shared/split-pane';
@@ -34,6 +34,7 @@ import { TimeSeriesChart } from '@/lib/components/adx/time-series-chart';
 import { GeoJsonMap } from '@/lib/components/graph/geojson-map';
 import type { OntoProperty } from '@/lib/editors/ontology-model';
 import type { ObjectViewPanelKind } from '@/lib/foundry/object-view';
+import type { DerivedValue } from '@/lib/foundry/derived-properties';
 
 const useStyles = makeStyles({
   root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minWidth: 0 },
@@ -79,6 +80,7 @@ interface ViewResponse {
   view: { panels: ObjectViewPanelKind[]; timeProp?: string; valueProp?: string; geoProp?: string };
   properties: OntoProperty[]; titleKey: string | null;
   linked: LinkedSection[]; timeseries: TsGrid | null; geo: unknown | null;
+  derived?: DerivedValue[];
 }
 
 function neighborLabel(o: WeaveObj): string {
@@ -232,6 +234,35 @@ export function ObjectViewPanel({
             <div className={s.fact}><Caption1>AGE vertex id</Caption1><Body1 className={s.mono}>{data.object.id}</Body1></div>
             <div className={s.fact}><Caption1>Title</Caption1><Body1 className={s.factVal}>{title}</Body1></div>
             <div className={s.fact}><Caption1>Linked objects</Caption1><Body1 className={s.factVal}>{data.linked.reduce((n, l) => n + l.count, 0)}</Body1></div>
+          </div>
+        </Card>
+      )}
+
+      {/* Derived properties (WS-4.2) — live rollups + function-backed values */}
+      {(data.derived?.length ?? 0) > 0 && (
+        <Card className={s.panelCard}>
+          <div className={s.panelHead}>
+            <span className={s.panelIcon}><Calculator20Regular /></span>
+            <Subtitle2>Derived properties</Subtitle2>
+            <Badge appearance="tint" color="brand">{data.derived!.length}</Badge>
+          </div>
+          <div className={s.factGrid}>
+            {data.derived!.map((dp) => (
+              <div key={dp.apiName} className={s.fact}>
+                <div className={s.propHead}>
+                  <Caption1>{dp.displayName || dp.apiName}</Caption1>
+                  <Badge appearance="outline" size="small" color={dp.kind === 'function' ? 'important' : 'informative'}>{dp.kind}</Badge>
+                </div>
+                {dp.gated ? (
+                  <span className={s.factVal} style={{ color: tokens.colorNeutralForeground3 }}>
+                    — <Caption1>({dp.error || 'not available'})</Caption1>
+                  </span>
+                ) : (
+                  <Body1 className={s.factVal}>{dp.value === null || dp.value === undefined ? '—' : (typeof dp.value === 'object' ? JSON.stringify(dp.value) : String(dp.value))}</Body1>
+                )}
+                <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{dp.summary}</Caption1>
+              </div>
+            ))}
           </div>
         </Card>
       )}

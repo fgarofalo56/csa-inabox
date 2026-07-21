@@ -72,6 +72,7 @@ let _okrs: Container | null = null;
 let _scorecardGoals: Container | null = null;
 let _scorecardCheckins: Container | null = null;
 let _governanceDomains: Container | null = null;
+let _functionRegistry: Container | null = null;
 let _itemPermissions: Container | null = null;
 let _externalShares: Container | null = null;
 let _wsRoles: Container | null = null;
@@ -236,6 +237,10 @@ let _itemVersions: Container | null = null;
 // unrelated threads). Created lazily (createIfNotExists) here AND ARM-provisioned
 // in cosmos.bicep's loomContainers — the lazy call is the hotfix fallback.
 let _agentMemory: Container | null = null;
+// WS-5.2 A2A delegated-task store. PK /tenantId, TTL 7 days (self-expiring) so
+// tasks/get retrieves a recently delegated task without unbounded growth. Lazy
+// createIfNotExists here + ARM-provisioned in cosmos.bicep's loomContainers.
+let _a2aTasks: Container | null = null;
 // Scoped API tokens (PAT) — BR-PAT. One doc per token, PK /id so the hot
 // resolvePat() path (every non-interactive API request) is a single-partition
 // point-read by the token id carried in the Authorization: Bearer header. Stores
@@ -833,6 +838,10 @@ async function ensure() {
   // Purview classic-collection mirror is best-effort on top of this store.
   // Shared by both the Wave-4 marketplace catalog and the governance dashboard.
   _governanceDomains = await mk('governance-domains', '/tenantId');
+  // Functions-on-objects registry (WS-4.2) — one doc per tenant holding the
+  // versioned RegisteredFunction[] referenced by derived properties + ontology
+  // action validation. Azure-native; executed on the Loom UDF runtime.
+  _functionRegistry = await mk('function-registry', '/tenantId');
   // Sensitivity-label assignments — one row per manual label application to a
   // Loom item (F12 sensitivity-label flyout). Mirrors what's written into
   // item.state.sensitivityLabel, but as an append-only, tenant-partitioned
@@ -1081,6 +1090,11 @@ async function ensure() {
     defaultTtl: -1, // TTL enabled; each beacon doc carries its own `ttl` seconds
   });
   _canvasPresence = canvasPresence;
+  // WS-5.2 — A2A delegated tasks. PK /tenantId, TTL 7 days. ARM-provisioned in
+  // cosmos.bicep's loomContainers; this createIfNotExists is the hotfix fallback.
+  _a2aTasks = (await database.containers.createIfNotExists({
+    id: 'a2a-tasks', partitionKey: { paths: ['/tenantId'] }, defaultTtl: 604800,
+  })).container;
   _ensured = true;
 }
 
@@ -1106,6 +1120,7 @@ export async function itemPermissionsContainer(): Promise<Container> { await ens
 export async function externalSharesContainer(): Promise<Container> { await ensure(); return _externalShares!; }
 export async function workspaceRolesContainer(): Promise<Container> { await ensure(); return _wsRoles!; }
 export async function governanceDomainsContainer(): Promise<Container> { await ensure(); return _governanceDomains!; }
+export async function functionRegistryContainer(): Promise<Container> { await ensure(); return _functionRegistry!; }
 export async function labelAssignmentsContainer(): Promise<Container> { await ensure(); return _labelAssignments!; }
 // F16 — access-request approval workflow container (PK /tenantId). Distinct
 // from the marketplace accessRequestsContainer() below (PK /dataProductId).
@@ -1182,6 +1197,8 @@ export async function rateLimitsContainer(): Promise<Container> { await ensure()
 export async function itemVersionsContainer(): Promise<Container> { await ensure(); return _itemVersions!; }
 /** Durable agent memory + per-agent thread persistence (AIF-14), PK /agentId. */
 export async function agentMemoryContainer(): Promise<Container> { await ensure(); return _agentMemory!; }
+/** WS-5.2 — A2A delegated tasks (PK /tenantId, TTL 7 days). tasks/get reads it. */
+export async function a2aTasksContainer(): Promise<Container> { await ensure(); return _a2aTasks!; }
 /** Scoped API tokens (PAT, BR-PAT) — PK /id; stores a SHA-256 hash of the secret only. */
 export async function loomPatTokensContainer(): Promise<Container> { await ensure(); return _loomPatTokens!; }
 /** BR-SCIM — SCIM 2.0 provisioned users (PK /id). */
@@ -1370,6 +1387,7 @@ const KNOWN_CONTAINER_IDS = [
   'rate-limits',
   'item-versions',
   'loom-agent-memory',
+  'a2a-tasks',
   'report-subscriptions', 'report-delivery-log',
   'webhook-subscriptions', 'webhook-deliveries',
   'data-product-analytics',

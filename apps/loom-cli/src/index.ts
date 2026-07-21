@@ -17,6 +17,7 @@ import { runWorkspace } from './commands/workspace.js';
 import { runItem } from './commands/item.js';
 import { runFind } from './commands/find.js';
 import { runApps } from './commands/apps.js';
+import { runPolicy } from './commands/policy.js';
 import { CLI_NAME, CLI_VERSION } from './constants.js';
 
 const HELP = `${CLI_NAME} v${CLI_VERSION} — CSA Loom CLI (wraps the Loom REST API)
@@ -73,6 +74,18 @@ FIND
                                                        matched by name/type/desc/tags).
   loom find --all [--limit N]                         Browse most-recent items.
 
+POLICY (Governance-as-Code — WS-10.2)
+  loom policy show                                    The authored policy set +
+                                                      which backends it compiles to.
+  loom policy compile [--backend b]                   One-pass compiled artifacts
+                                                      (real SQL/KQL/REST/scope) per
+                                                      backend.
+  loom policy diff                                    Dry-run reconcile — per-backend
+                                                      drift, no mutation.
+  loom policy apply [--yes]                           Reconcile: converge every
+                                                      configured backend + self-heal
+                                                      drift (--yes applies; else dry-run).
+
 EXAMPLES
   loom auth login --api-url https://loom.example.azurefd.net
   loom workspace create "Analytics" --description "Team WS" --output json
@@ -123,6 +136,9 @@ async function main(): Promise<number> {
         return 0;
       case 'apps':
         await runApps(sub, rest, opts);
+        return 0;
+      case 'policy':
+        await runPolicy(sub, rest, opts);
         return 0;
       case 'find':
         // `find` is a flat command — the whole query follows the verb (no
