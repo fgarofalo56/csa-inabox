@@ -82,9 +82,18 @@ import {
   Copy16Regular,
   Delete16Regular,
   CloudArrowUp16Regular,
+  Code16Regular,
+  Play16Regular,
+  ImageMultiple16Regular,
+  CheckmarkCircle16Regular,
+  ErrorCircle16Regular,
 } from '@fluentui/react-icons';
 import { normalizeDaSources } from '@/lib/editors/_family-utils';
 import { EmptyState } from '@/lib/components/empty-state';
+import {
+  extractPythonProposals,
+  formatElapsed,
+} from '@/lib/copilot/code-interpreter';
 
 // ---------------------------------------------------------------------------
 // Wire types — mirror the BFF route shapes.
@@ -117,6 +126,21 @@ interface ChatTool {
   gate?: string;
 }
 
+/** Result from POST /api/copilot/code-interpret (WS-5.3 sandbox run). */
+interface CodeInterpResult {
+  status: 'pending' | 'running' | 'ok' | 'error' | 'gate';
+  code: string;
+  stdout?: string;
+  charts?: string[];
+  ename?: string;
+  evalue?: string;
+  traceback?: string[];
+  elapsedMs?: number;
+  gate?: boolean;
+  missing?: string;
+  error?: string;
+}
+
 interface ChatMessage {
   id: string;
   role: 'user' | 'assistant';
@@ -124,6 +148,8 @@ interface ChatMessage {
   tools?: ChatTool[];
   pending?: boolean;
   error?: boolean;
+  /** Code-interpreter turns: one per Python proposal detected in the message. */
+  codeInterp?: CodeInterpResult[];
 }
 
 /** Honest infra-gate payload (HTTP 503 from the chat BFF). */
@@ -402,7 +428,95 @@ const useStyles = makeStyles({
   citeHead: { fontWeight: tokens.fontWeightSemibold, marginBottom: '2px' },
   citeMeta: { color: tokens.colorNeutralForeground3 },
 
-  // --- composer (pinned) -------------------------------------------------
+  // --- code-interpreter block -------------------------------------------
+  ciBlock: {
+    marginTop: tokens.spacingVerticalM,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusMedium,
+    overflow: 'hidden',
+    minWidth: 0,
+  },
+  ciCodeHead: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
+    padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalM}`,
+    backgroundColor: tokens.colorNeutralBackground3,
+    borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
+    flexWrap: 'wrap' as const,
+    minWidth: 0,
+  },
+  ciCodeLabel: {
+    flex: 1,
+    minWidth: 0,
+    fontWeight: tokens.fontWeightSemibold,
+    color: tokens.colorNeutralForeground2,
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXS,
+  },
+  ciCodePre: {
+    fontFamily: 'var(--loom-font-mono, Cascadia Code, Consolas, monospace)',
+    fontSize: tokens.fontSizeBase200,
+    padding: tokens.spacingVerticalM,
+    paddingLeft: tokens.spacingHorizontalL,
+    paddingRight: tokens.spacingHorizontalL,
+    margin: 0,
+    whiteSpace: 'pre-wrap' as const,
+    wordBreak: 'break-word' as const,
+    overflowWrap: 'anywhere' as const,
+    backgroundColor: tokens.colorNeutralBackground4,
+    maxHeight: '240px',
+    overflowY: 'auto' as const,
+    minWidth: 0,
+  },
+  ciOutput: {
+    borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
+    padding: tokens.spacingVerticalM,
+    paddingLeft: tokens.spacingHorizontalL,
+    paddingRight: tokens.spacingHorizontalL,
+    minWidth: 0,
+  },
+  ciOutputPre: {
+    fontFamily: 'var(--loom-font-mono, Cascadia Code, Consolas, monospace)',
+    fontSize: tokens.fontSizeBase200,
+    whiteSpace: 'pre-wrap' as const,
+    wordBreak: 'break-word' as const,
+    overflowWrap: 'anywhere' as const,
+    margin: 0,
+    minWidth: 0,
+    maxHeight: '320px',
+    overflowY: 'auto' as const,
+  },
+  ciCharts: {
+    marginTop: tokens.spacingVerticalS,
+    display: 'flex',
+    flexWrap: 'wrap' as const,
+    gap: tokens.spacingHorizontalM,
+    minWidth: 0,
+  },
+  ciChart: {
+    maxWidth: '100%',
+    borderRadius: tokens.borderRadiusMedium,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    objectFit: 'contain' as const,
+  },
+  ciStatusBar: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
+    flexWrap: 'wrap' as const,
+    minWidth: 0,
+    padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalL}`,
+    borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
+    backgroundColor: tokens.colorNeutralBackground3,
+    color: tokens.colorNeutralForeground3,
+  },
+  ciStatusOk: { color: tokens.colorStatusSuccessForeground1 },
+  ciStatusErr: { color: tokens.colorStatusDangerForeground1 },
+  ciGateBar: {
+    margin: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalL}`,
+  },
   // The whole dock (input row + Send + hint) is a single flex child with
   // flexShrink:0, so it never participates in the transcript's scroll and the
   // Send button is always visible regardless of how long the conversation runs.
@@ -440,6 +554,143 @@ const STARTERS = [
 ];
 
 // ---------------------------------------------------------------------------
+// CodeInterpreterBlock — inline sandboxed Python run result (WS-5.3)
+// ---------------------------------------------------------------------------
+
+function CodeInterpreterBlock({
+  result,
+  onRun,
+}: {
+  result: CodeInterpResult;
+  onRun: () => void;
+}) {
+  const s = useStyles();
+  const isPending = result.status === 'pending';
+  const isRunning = result.status === 'running';
+  const isOk = result.status === 'ok';
+  const isErr = result.status === 'error';
+  const isGate = result.status === 'gate';
+
+  return (
+    <div className={s.ciBlock}>
+      {/* Code head: label + Run button */}
+      <div className={s.ciCodeHead}>
+        <span className={s.ciCodeLabel}>
+          <Code16Regular aria-hidden />
+          Python · Sandbox
+        </span>
+        {isPending && (
+          <Button
+            appearance="primary"
+            size="small"
+            icon={<Play16Regular />}
+            onClick={onRun}
+            aria-label="Run code in Spark sandbox"
+          >
+            Run in sandbox
+          </Button>
+        )}
+        {isRunning && (
+          <Spinner size="tiny" label="Running in Spark…" />
+        )}
+        {(isOk || isErr) && (
+          <Button
+            appearance="subtle"
+            size="small"
+            icon={<ArrowClockwise20Regular />}
+            onClick={onRun}
+            aria-label="Re-run code in Spark sandbox"
+          >
+            Re-run
+          </Button>
+        )}
+      </div>
+
+      {/* Code body */}
+      <pre className={s.ciCodePre} tabIndex={0} aria-label="Python code">
+        {result.code}
+      </pre>
+
+      {/* Honest infra gate */}
+      {isGate && (
+        <div className={s.ciGateBar}>
+          <MessageBar intent="warning">
+            <MessageBarBody>
+              <MessageBarTitle>Spark sandbox not configured</MessageBarTitle>
+              {result.error || 'Set LOOM_SYNAPSE_WORKSPACE and LOOM_SYNAPSE_SPARK_POOL in Admin → Config → Azure Services.'}
+            </MessageBarBody>
+            <MessageBarActions>
+              <Button
+                appearance="primary"
+                size="small"
+                as="a"
+                href="/admin?tab=health"
+                target="_blank"
+                rel="noreferrer"
+              >
+                Fix it in Admin
+              </Button>
+            </MessageBarActions>
+          </MessageBar>
+        </div>
+      )}
+
+      {/* Stdout + charts */}
+      {(isOk || isErr) && (
+        <div className={s.ciOutput}>
+          {result.stdout && (
+            <pre className={s.ciOutputPre} tabIndex={0} aria-label="Sandbox stdout">
+              {result.stdout}
+            </pre>
+          )}
+          {isErr && result.evalue && (
+            <Caption1 style={{ color: tokens.colorStatusDangerForeground1, display: 'block', marginTop: tokens.spacingVerticalXS }}>
+              {result.ename ? `${result.ename}: ` : ''}{result.evalue}
+            </Caption1>
+          )}
+          {result.charts && result.charts.length > 0 && (
+            <div className={s.ciCharts} aria-label={`${result.charts.length} chart${result.charts.length === 1 ? '' : 's'}`}>
+              {result.charts.map((b64, i) => (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  key={i}
+                  src={`data:image/png;base64,${b64}`}
+                  alt={`Chart ${i + 1} from sandbox run`}
+                  className={s.ciChart}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Status bar */}
+      {(isOk || isErr) && (
+        <div className={s.ciStatusBar}>
+          {isOk ? (
+            <CheckmarkCircle16Regular className={s.ciStatusOk} aria-hidden />
+          ) : (
+            <ErrorCircle16Regular className={s.ciStatusErr} aria-hidden />
+          )}
+          <Caption1 className={isOk ? s.ciStatusOk : s.ciStatusErr}>
+            {isOk ? 'Completed' : 'Error'}
+          </Caption1>
+          <Caption1>· pyspark</Caption1>
+          {result.elapsedMs !== undefined && (
+            <Caption1>· {formatElapsed(result.elapsedMs)}</Caption1>
+          )}
+          {result.charts && result.charts.length > 0 && (
+            <Caption1>
+              <ImageMultiple16Regular aria-hidden /> {result.charts.length} chart{result.charts.length === 1 ? '' : 's'}
+            </Caption1>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Pane
 // ---------------------------------------------------------------------------
 
@@ -475,6 +726,107 @@ export function DataAgentPane() {
   const [deleteErr, setDeleteErr] = useState<string | null>(null);
 
   const transcriptRef = useRef<HTMLDivElement>(null);
+
+  // --- run a Python proposal through the Spark sandbox (WS-5.3) ----------
+  const runCodeInterp = useCallback(
+    async (msgId: string, interpIdx: number) => {
+      // Mark this specific code-interpreter slot as running.
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id !== msgId
+            ? m
+            : {
+                ...m,
+                codeInterp: m.codeInterp?.map((ci, i) =>
+                  i === interpIdx ? { ...ci, status: 'running' } : ci,
+                ),
+              },
+        ),
+      );
+
+      const targetMsg = messages.find((m) => m.id === msgId);
+      const ci = targetMsg?.codeInterp?.[interpIdx];
+      if (!ci) return;
+
+      try {
+        const res = await clientFetch('/api/copilot/code-interpret', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ code: ci.code }),
+        });
+        const data = await res.json().catch(() => ({}));
+
+        if (res.status === 503 && data?.gate) {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id !== msgId
+                ? m
+                : {
+                    ...m,
+                    codeInterp: m.codeInterp?.map((slot, i) =>
+                      i === interpIdx
+                        ? {
+                            ...slot,
+                            status: 'gate',
+                            gate: true,
+                            missing: data.missing,
+                            error: data.error,
+                          }
+                        : slot,
+                    ),
+                  },
+            ),
+          );
+          return;
+        }
+
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id !== msgId
+              ? m
+              : {
+                  ...m,
+                  codeInterp: m.codeInterp?.map((slot, i) =>
+                    i === interpIdx
+                      ? {
+                          ...slot,
+                          status: (data?.status === 'error' ? 'error' : 'ok') as 'ok' | 'error',
+                          stdout: data?.stdout ?? '',
+                          charts: Array.isArray(data?.charts) ? data.charts : [],
+                          ename: data?.ename,
+                          evalue: data?.evalue,
+                          traceback: data?.traceback,
+                          elapsedMs: data?.elapsedMs,
+                          error: !data?.ok ? data?.error : undefined,
+                        }
+                      : slot,
+                  ),
+                },
+          ),
+        );
+      } catch (e) {
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id !== msgId
+              ? m
+              : {
+                  ...m,
+                  codeInterp: m.codeInterp?.map((slot, i) =>
+                    i === interpIdx
+                      ? {
+                          ...slot,
+                          status: 'error',
+                          error: e instanceof Error ? e.message : String(e),
+                        }
+                      : slot,
+                  ),
+                },
+          ),
+        );
+      }
+    },
+    [messages],
+  );
 
   // --- load workspaces (for the create dialog picker) -------------------
   useEffect(() => {
@@ -571,10 +923,16 @@ export function DataAgentPane() {
           return;
         }
         const answer: string = data.answer || 'The agent completed without returning text.';
+        // WS-5.3: detect Python code proposals and add pending code-interp slots.
+        const proposals = extractPythonProposals(answer);
+        const codeInterp: CodeInterpResult[] = proposals.map((code) => ({
+          status: 'pending',
+          code,
+        }));
         setMessages((m) =>
           m.map((x) =>
             x.id === pendingId
-              ? { ...x, pending: false, content: answer, tools: Array.isArray(data.tools) ? data.tools : [] }
+              ? { ...x, pending: false, content: answer, tools: Array.isArray(data.tools) ? data.tools : [], codeInterp: codeInterp.length > 0 ? codeInterp : undefined }
               : x,
           ),
         );
@@ -914,6 +1272,15 @@ export function DataAgentPane() {
                       ))}
                     </div>
                   )}
+
+                  {/* WS-5.3: inline code-interpreter turns */}
+                  {m.codeInterp && m.codeInterp.map((ci, idx) => (
+                    <CodeInterpreterBlock
+                      key={idx}
+                      result={ci}
+                      onRun={() => void runCodeInterp(m.id, idx)}
+                    />
+                  ))}
                 </div>
               </div>
             ))

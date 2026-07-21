@@ -64,6 +64,7 @@ const SECTIONS: Section[] = [
   { href: '/admin/workspaces', label: 'Workspaces', icon: Building24Regular, description: 'Tenant-wide inventory: every workspace, owner, capacity, state.' },
   { href: '/admin/network', label: 'Network & DNS', icon: Globe24Regular, description: 'Private endpoints, copy/paste hosts-file override, and enterprise DNS guidance for reaching the private-by-default Azure services.' },
   { href: '/admin/updates', label: 'Updates & version sync', icon: ArrowSync24Regular, description: 'See your running version vs latest upstream; pull bug fixes and new features.' },
+  { href: '/admin/parity-autopilot', label: 'Parity Autopilot', icon: Bot24Regular, description: 'WS-10.5 — scheduled Playwright capture → AOAI vision diff against the parity docs → auto-filed gap issues with a proposed plan. Shows the run ledger and the open gap issues; the run is driven by the loom-parity-autopilot workflow.' },
 ];
 
 const useStyles = makeStyles({
