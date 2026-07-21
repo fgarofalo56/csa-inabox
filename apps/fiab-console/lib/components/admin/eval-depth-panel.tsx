@@ -577,11 +577,14 @@ export function EvalDepthPanel({ recentRuns = [], selectedAgent = '' }: Props) {
                   onOptionSelect={(_, d) => setSelectedThreadId(d.optionValue as string)}
                   style={{ minWidth: '300px' }}
                 >
-                  {recentRuns.map((run) => (
-                    <Option key={run.threadId} value={run.threadId}>
-                      {run.threadId.slice(0, 8)}… · {run.model} · {fmtMs(run.latencyMs)} · {run.status}
-                    </Option>
-                  ))}
+                  {recentRuns.map((run) => {
+                    const optLabel = `${run.threadId.slice(0, 8)}… · ${run.model} · ${fmtMs(run.latencyMs)} · ${run.status}`;
+                    return (
+                      <Option key={run.threadId} value={run.threadId} text={optLabel}>
+                        {optLabel}
+                      </Option>
+                    );
+                  })}
                 </Dropdown>
                 {selectedThreadId && (
                   <Button
