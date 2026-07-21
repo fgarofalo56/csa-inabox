@@ -1,0 +1,86 @@
+name: gov-provision-dbx-sql
+# Incremental Gov provisioner for the Databricks SQL warehouse (closes
+# svc-databricks-sql). A Databricks workspace is already bound in Gov
+# (LOOM_DATABRICKS_HOSTNAME is set); this creates a SQL warehouse via the
+# Databricks REST API using a Gov-SP AAD token for the AzureDatabricks resource
+# (2ff814a6-…), then wires LOOM_DATABRICKS_SQL_WAREHOUSE_ID. Idempotent — reuses
+# an existing loom warehouse if present.
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: 'false = discover + list warehouses; true = create/reuse + wire.'
+        required: false
+        default: 'false'
+permissions:
+  contents: read
+env:
+  RG: rg-csa-loom-admin-usgovvirginia
+  APP: loom-console
+  DBX_RESOURCE: 2ff814a6-3304-4ab8-85cb-cd0e6f879c1d
+jobs:
+  provision:
+    name: Provision Databricks SQL warehouse (Gov)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
+      - name: Azure Gov Login
+        uses: Azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_GOV_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_GOV_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_GOV_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}",
+              "activeDirectoryEndpointUrl": "https://login.microsoftonline.us",
+              "resourceManagerEndpointUrl": "https://management.usgovcloudapi.net/",
+              "sqlManagementEndpointUrl": "https://management.core.usgovcloudapi.net:8443/",
+              "galleryEndpointUrl": "https://gallery.usgovcloudapi.net/",
+              "managementEndpointUrl": "https://management.core.usgovcloudapi.net/"
+            }
+          environment: AzureUSGovernment
+      - name: Set Azure cloud to Gov
+        run: az cloud set --name AzureUSGovernment
+
+      - name: Discover Databricks host + create/reuse SQL warehouse + wire
+        run: |
+          set -euo pipefail
+          HOST=$(az containerapp show -n "$APP" -g "$RG" --query "properties.template.containers[0].env[?name=='LOOM_DATABRICKS_HOSTNAME'].value | [0]" -o tsv | tr -d '\r')
+          [ -n "$HOST" ] || { echo "::error::LOOM_DATABRICKS_HOSTNAME not set on the console — no bound workspace."; exit 1; }
+          HOST="${HOST#https://}"; HOST="${HOST%%/*}"
+          echo "::notice::Databricks host: $HOST"
+          TOKEN=$(az account get-access-token --resource "$DBX_RESOURCE" --query accessToken -o tsv | tr -d '\r')
+          [ -n "$TOKEN" ] || { echo "::error::could not mint a Databricks AAD token"; exit 1; }
+          AUTH="Authorization: Bearer $TOKEN"
+          # Reuse an existing loom warehouse if one exists.
+          LIST=$(curl -sS -H "$AUTH" "https://$HOST/api/2.0/sql/warehouses" || echo '{}')
+          WID=$(printf '%s' "$LIST" | python3 -c "import json,sys
+try:
+  d=json.load(sys.stdin); ws=d.get('warehouses',[])
+  m=[w for w in ws if str(w.get('name','')).lower().startswith('loom')]
+  print((m[0] if m else (ws[0] if ws else {})).get('id',''))
+except Exception: print('')" 2>/dev/null || echo "")
+          echo "existing warehouse id: ${WID:-<none>}"
+          if [ "${{ inputs.apply }}" != "true" ]; then
+            echo "::notice::plan only — warehouses listed above (HTTP reachable=$( [ -n "$LIST" ] && echo yes || echo no ))"; exit 0
+          fi
+          if [ -z "$WID" ]; then
+            echo "Creating a SQL warehouse (loom-governance)…"
+            RESP=$(curl -sS -X POST -H "$AUTH" -H "Content-Type: application/json" \
+              -d '{"name":"loom-governance","cluster_size":"2X-Small","min_num_clusters":1,"max_num_clusters":1,"auto_stop_mins":10,"enable_serverless_compute":true,"warehouse_type":"PRO"}' \
+              "https://$HOST/api/2.0/sql/warehouses" || echo '{}')
+            WID=$(printf '%s' "$RESP" | python3 -c "import json,sys;print(json.load(sys.stdin).get('id',''))" 2>/dev/null || echo "")
+            if [ -z "$WID" ]; then
+              echo "::error::warehouse create failed (serverless may be unavailable in Gov Databricks). Response:"; printf '%s\n' "$RESP" | head -c 800
+              # retry without serverless (classic PRO warehouse)
+              RESP=$(curl -sS -X POST -H "$AUTH" -H "Content-Type: application/json" \
+                -d '{"name":"loom-governance","cluster_size":"2X-Small","min_num_clusters":1,"max_num_clusters":1,"auto_stop_mins":10,"warehouse_type":"PRO"}' \
+                "https://$HOST/api/2.0/sql/warehouses" || echo '{}')
+              WID=$(printf '%s' "$RESP" | python3 -c "import json,sys;print(json.load(sys.stdin).get('id',''))" 2>/dev/null || echo "")
+            fi
+          fi
+          [ -n "$WID" ] || { echo "::error::no warehouse id — cannot wire (check SP workspace-admin access)."; exit 1; }
+          echo "::notice::warehouse id: $WID"
+          az containerapp update -n "$APP" -g "$RG" --set-env-vars "LOOM_DATABRICKS_SQL_WAREHOUSE_ID=$WID" -o none
+          echo "::notice::wired LOOM_DATABRICKS_SQL_WAREHOUSE_ID=$WID — re-run gov-selfaudit to confirm svc-databricks-sql."
