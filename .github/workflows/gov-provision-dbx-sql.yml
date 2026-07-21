@@ -55,12 +55,7 @@ jobs:
           AUTH="Authorization: Bearer $TOKEN"
           # Reuse an existing loom warehouse if one exists.
           LIST=$(curl -sS -H "$AUTH" "https://$HOST/api/2.0/sql/warehouses" || echo '{}')
-          WID=$(printf '%s' "$LIST" | python3 -c "import json,sys
-try:
-  d=json.load(sys.stdin); ws=d.get('warehouses',[])
-  m=[w for w in ws if str(w.get('name','')).lower().startswith('loom')]
-  print((m[0] if m else (ws[0] if ws else {})).get('id',''))
-except Exception: print('')" 2>/dev/null || echo "")
+          WID=$(printf '%s' "$LIST" | python3 -c "import json,sys; d=json.load(sys.stdin) if sys.stdin.isatty()==False else {}; ws=(d or {}).get('warehouses',[]); m=[w for w in ws if str(w.get('name','')).lower().startswith('loom')]; print((m[0] if m else (ws[0] if ws else {})).get('id',''))" 2>/dev/null || echo "")
           echo "existing warehouse id: ${WID:-<none>}"
           if [ "${{ inputs.apply }}" != "true" ]; then
             echo "::notice::plan only — warehouses listed above (HTTP reachable=$( [ -n "$LIST" ] && echo yes || echo no ))"; exit 0
@@ -70,14 +65,13 @@ except Exception: print('')" 2>/dev/null || echo "")
             RESP=$(curl -sS -X POST -H "$AUTH" -H "Content-Type: application/json" \
               -d '{"name":"loom-governance","cluster_size":"2X-Small","min_num_clusters":1,"max_num_clusters":1,"auto_stop_mins":10,"enable_serverless_compute":true,"warehouse_type":"PRO"}' \
               "https://$HOST/api/2.0/sql/warehouses" || echo '{}')
-            WID=$(printf '%s' "$RESP" | python3 -c "import json,sys;print(json.load(sys.stdin).get('id',''))" 2>/dev/null || echo "")
+            WID=$(printf '%s' "$RESP" | python3 -c "import json,sys; print(json.load(sys.stdin).get('id',''))" 2>/dev/null || echo "")
             if [ -z "$WID" ]; then
-              echo "::error::warehouse create failed (serverless may be unavailable in Gov Databricks). Response:"; printf '%s\n' "$RESP" | head -c 800
-              # retry without serverless (classic PRO warehouse)
+              echo "::warning::serverless create failed — retrying classic PRO. Response:"; printf '%s\n' "$RESP" | head -c 800
               RESP=$(curl -sS -X POST -H "$AUTH" -H "Content-Type: application/json" \
                 -d '{"name":"loom-governance","cluster_size":"2X-Small","min_num_clusters":1,"max_num_clusters":1,"auto_stop_mins":10,"warehouse_type":"PRO"}' \
                 "https://$HOST/api/2.0/sql/warehouses" || echo '{}')
-              WID=$(printf '%s' "$RESP" | python3 -c "import json,sys;print(json.load(sys.stdin).get('id',''))" 2>/dev/null || echo "")
+              WID=$(printf '%s' "$RESP" | python3 -c "import json,sys; print(json.load(sys.stdin).get('id',''))" 2>/dev/null || echo "")
             fi
           fi
           [ -n "$WID" ] || { echo "::error::no warehouse id — cannot wire (check SP workspace-admin access)."; exit 1; }
