@@ -174,6 +174,12 @@ export const VALUE_HINT: Record<string, string> = {
   // online endpoints (Azure-native, Gov-safe). Set to 'databricks' to use
   // Databricks Mosaic AI Model Serving (opt-in) with LOOM_DATABRICKS_HOSTNAME.
   LOOM_MODEL_SERVING_BACKEND: 'aml (default) | databricks',
+  // WS-1.3 — LLM fine-tuning. LOOM_FINETUNE_BACKEND selects the backend (default
+  // unset = Azure OpenAI / AI Foundry fine-tuning, Gov-safe; 'databricks' opts
+  // into Mosaic AI FT). LOOM_AOAI_ACCOUNT names the AIServices/OpenAI account the
+  // fine-tuning + model-deployment REST target (else discovered in LOOM_FOUNDRY_RG).
+  LOOM_FINETUNE_BACKEND: 'aoai (default) | databricks',
+  LOOM_AOAI_ACCOUNT: '<aiservices-or-openai-account-name>',
   // WS-2.1 — feature-store offline backend selector. Default (unset) = Unity
   // Catalog (Databricks) on Commercial, auto-switching to PostgreSQL for the
   // sovereign OSS-UC / Gov path. Set to 'postgres' to force the sovereign path.
@@ -1100,6 +1106,24 @@ export const ENV_CHECKS: EnvSpec[] = [
     provisionedBy: 'modules/admin-plane (aiFoundryEnabled → AML/Foundry workspace) → apps[] env (LOOM_AML_WORKSPACE); LOOM_MODEL_SERVING_BACKEND selector defaults to the Azure ML path',
     role: 'AzureML Data Scientist + onlineEndpoints/listkeys/action (Console UAMI) on the AML workspace, OR Databricks serving access (SCIM) for the opt-in path',
     docs: 'https://learn.microsoft.com/azure/machine-learning/concept-endpoints-online',
+  },
+  {
+    // WS-1.3 — LLM fine-tuning (fine-tuning-job item). The Azure-native DEFAULT is
+    // Azure OpenAI in Azure AI Foundry fine-tuning, reached on the AOAI account
+    // resolved by foundry-cs-client (LOOM_AOAI_ACCOUNT → LOOM_FOUNDRY_NAME →
+    // discovery in LOOM_FOUNDRY_RG; Gov-correct *.openai.azure.us). Databricks
+    // Mosaic AI fine-tuning is the opt-in alternative via LOOM_FINETUNE_BACKEND=
+    // databricks. The gate is satisfied when an AOAI account is addressable (or a
+    // backend is picked); the per-request fineTuneConfigGate() gates precisely.
+    // LOOM_FINETUNE_BACKEND + LOOM_AOAI_ACCOUNT are the NEW editable vars here
+    // (LOOM_AOAI_ENDPOINT / LOOM_FOUNDRY_NAME are shared with svc-aoai / svc-aml).
+    // No Fabric.
+    id: 'svc-fine-tuning', category: 'azure-services', title: 'LLM fine-tuning (Azure OpenAI / AI Foundry fine-tuning; Databricks Mosaic opt-in)', severity: 'optional',
+    anyOf: [['LOOM_AOAI_ACCOUNT', 'LOOM_AOAI_ENDPOINT', 'LOOM_FOUNDRY_NAME', 'LOOM_FINETUNE_BACKEND']], warnOnMiss: true,
+    remediation: 'Fine-tuning runs on Azure OpenAI in Azure AI Foundry by DEFAULT — ensure an AIServices/OpenAI account is resolvable (set LOOM_AOAI_ACCOUNT, or rely on the AI Foundry hub via LOOM_FOUNDRY_NAME / discovery in LOOM_FOUNDRY_RG) and grant the Console UAMI "Cognitive Services OpenAI Contributor" on it. To use Databricks Mosaic AI fine-tuning instead, set LOOM_FINETUNE_BACKEND=databricks + LOOM_DATABRICKS_HOSTNAME. No Microsoft Fabric required.',
+    provisionedBy: 'modules/admin-plane/ai-foundry.bicep (AIServices/OpenAI account) → apps[] env (LOOM_AOAI_ACCOUNT / LOOM_FOUNDRY_NAME); LOOM_FINETUNE_BACKEND selector defaults to the Azure OpenAI path',
+    role: 'Cognitive Services OpenAI Contributor (Console UAMI) on the AOAI account for fine-tuning + model deployment; Azure Content Safety access for the resulting-model safety-eval',
+    docs: 'https://learn.microsoft.com/azure/ai-foundry/openai/how-to/fine-tuning',
   },
   {
     // WS-2.1 — Feature Store (feature-table item). Offline authoring + point-in-

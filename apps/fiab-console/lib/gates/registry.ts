@@ -168,6 +168,10 @@ const L = {
     armApiVersion: '2023-05-01', kindFilter: ['OpenAI', 'AIServices'],
   } as GateOptionsLoader,
   aoaiDeployment: { armType: 'Microsoft.CognitiveServices/accounts', valueFrom: 'name', special: 'aoai-deployments' } as GateOptionsLoader,
+  aoaiAccount: {
+    armType: 'Microsoft.CognitiveServices/accounts', valueFrom: 'name',
+    armApiVersion: '2023-05-01', kindFilter: ['OpenAI', 'AIServices'],
+  } as GateOptionsLoader,
   databricks: { armType: 'Microsoft.Databricks/workspaces', valueFrom: 'properties.workspaceUrl', armApiVersion: '2024-05-01' } as GateOptionsLoader,
   adf: { armType: 'Microsoft.DataFactory/factories', valueFrom: 'name' } as GateOptionsLoader,
   purview: { armType: 'Microsoft.Purview/accounts', valueFrom: 'name' } as GateOptionsLoader,
@@ -510,6 +514,16 @@ export const GATE_META: Record<string, GateMeta> = {
     loaders: { LOOM_AML_WORKSPACE: L.aml, LOOM_DATABRICKS_HOSTNAME: L.databricks },
     autoResolveNote: 'A push-button deploy wires the Azure ML / Foundry workspace (LOOM_AML_WORKSPACE), so serving works day-one on the Azure-native path. Databricks Mosaic serving is opt-in via LOOM_MODEL_SERVING_BACKEND=databricks + LOOM_DATABRICKS_HOSTNAME.',
     legacyCodes: ['model_serving_not_configured'],
+  },
+  'svc-fine-tuning': {
+    surfaces: [
+      { path: '/items/fine-tuning-job', label: 'Fine-tuning job editor' },
+      { path: '/api/items/fine-tuning-job/*', label: 'Fine-tuning BFF routes' },
+    ],
+    fixit: { kind: 'resource-picker' },
+    loaders: { LOOM_AOAI_ACCOUNT: L.aoaiAccount, LOOM_AOAI_ENDPOINT: L.aoaiEndpoint },
+    autoResolveNote: 'A push-button deploy provisions the AI Foundry AIServices/OpenAI account (LOOM_AOAI_ACCOUNT / LOOM_FOUNDRY_NAME), so Azure OpenAI fine-tuning works day-one on the Azure-native path. Databricks Mosaic AI fine-tuning is opt-in via LOOM_FINETUNE_BACKEND=databricks + LOOM_DATABRICKS_HOSTNAME.',
+    legacyCodes: ['fine_tuning_not_configured'],
   },
   'svc-feature-store': {
     surfaces: [
