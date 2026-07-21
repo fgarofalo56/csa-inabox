@@ -76,11 +76,11 @@ jobs:
               --secrets sp-secret="${{ secrets.AZURE_GOV_CLIENT_SECRET }}" \
               --env-vars SP_ID="${{ secrets.AZURE_GOV_CLIENT_ID }}" SP_SECRET=secretref:sp-secret \
                          TENANT="${{ secrets.AZURE_GOV_TENANT_ID }}" SUB="${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}" RG="$RG" \
-              --command "/bin/sh" --args "-c","echo $B64 | base64 -d | /bin/sh" -o none
+              --command "/bin/sh" --args "-c" "echo $B64 | base64 -d | /bin/sh" -o none
           else
             az containerapp job update -n "$JOB" -g "$RG" \
               --image mcr.microsoft.com/azure-cli:2.62.0 \
-              --command "/bin/sh" --args "-c","echo $B64 | base64 -d | /bin/sh" -o none
+              --command "/bin/sh" --args "-c" "echo $B64 | base64 -d | /bin/sh" -o none
           fi
           EXEC=$(az containerapp job start -n "$JOB" -g "$RG" --query name -o tsv | tr -d '\r')
           echo "::notice::started in-VNet job execution: $EXEC"
