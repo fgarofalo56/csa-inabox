@@ -105,13 +105,17 @@ jobs:
             --mode Incremental -o none
           FQDN=$(az containerapp show -n "$TILE_APP" -g "$RG" --query properties.configuration.ingress.fqdn -o tsv | tr -d '\r')
           echo "::notice::loom-maps-tiles internal FQDN: $FQDN"
-          # Wait for Healthy, then probe /style.json FROM INSIDE the CAE (internal ingress)
-          # via an exec on the console container — the env is wired ONLY on a 200.
-          for i in $(seq 1 24); do
+          # Give the container time to pull the (large basemap) image + start.
+          for i in $(seq 1 20); do
             REV=$(az containerapp show -n "$TILE_APP" -g "$RG" --query properties.latestRevisionName -o tsv | tr -d '\r')
+            RS=$(az containerapp revision show -n "$TILE_APP" -g "$RG" --revision "$REV" --query "properties.runningState" -o tsv 2>/dev/null | tr -d '\r')
             H=$(az containerapp revision show -n "$TILE_APP" -g "$RG" --revision "$REV" --query properties.healthState -o tsv 2>/dev/null | tr -d '\r')
-            echo "loom-maps-tiles health=$H"; [ "$H" = "Healthy" ] && break; sleep 15
+            echo "loom-maps-tiles running=$RS health=$H"; { [ "$H" = "Healthy" ] || [ "$RS" = "Running" ]; } && break; sleep 15
           done
+          echo "===== loom-maps-tiles container logs (startup diagnostics) ====="
+          az containerapp logs show -n "$TILE_APP" -g "$RG" --tail 80 --type console 2>&1 | tail -80 || true
+          echo "===== end logs ====="
+          # Probe /style.json AND /health from inside the CAE (internal ingress).
           CODE=$(az containerapp exec -n "$APP" -g "$RG" --command "sh -c 'curl -s -o /dev/null -w %{http_code} http://$FQDN/style.json'" 2>/dev/null | tr -dc '0-9' | tail -c 3 || echo "000")
           echo "::notice::/style.json probe HTTP=$CODE"
           if [ "$CODE" = "200" ]; then
