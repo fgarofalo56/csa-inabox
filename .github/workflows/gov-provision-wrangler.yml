@@ -1,0 +1,102 @@
+name: gov-provision-wrangler
+# Incremental Gov provisioner for the Data Wrangler runtime (closes
+# svc-data-wrangler). apps/fiab-wrangler-host is a FastAPI+pandas Container App
+# the Console BFF calls over HTTP at LOOM_WRANGLER_ENDPOINT — no auth-token
+# mismatch. The main deploy leaves wranglerActive=false on GCC-High (256-param
+# cap), so provision it out-of-band exactly like gov-provision-dbt: build the
+# image on the Gov ACR, deploy integration/wrangler.bicep into the existing Gov
+# CAE (--mode Incremental, what-if first), wire LOOM_WRANGLER_ENDPOINT. Idempotent.
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: 'false = what-if only (safe); true = build + deploy + wire.'
+        required: false
+        default: 'false'
+permissions:
+  contents: read
+env:
+  RG: rg-csa-loom-admin-usgovvirginia
+  ACR: acrloomdcmt6cqoezlgs
+  ACR_LOGIN: acrloomdcmt6cqoezlgs.azurecr.us
+  APP: loom-console
+  WRANGLER_APP: loom-wrangler-host
+jobs:
+  provision:
+    name: Provision loom-wrangler-host into the Gov CAE
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
+      - name: Azure Gov Login
+        uses: Azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_GOV_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_GOV_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_GOV_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}",
+              "activeDirectoryEndpointUrl": "https://login.microsoftonline.us",
+              "resourceManagerEndpointUrl": "https://management.usgovcloudapi.net/",
+              "sqlManagementEndpointUrl": "https://management.core.usgovcloudapi.net:8443/",
+              "galleryEndpointUrl": "https://gallery.usgovcloudapi.net/",
+              "managementEndpointUrl": "https://management.core.usgovcloudapi.net/"
+            }
+          environment: AzureUSGovernment
+      - name: Set Azure cloud to Gov
+        run: az cloud set --name AzureUSGovernment
+
+      - name: Discover CAE + UAMI
+        run: |
+          set -euo pipefail
+          CAE_ID=$(az containerapp show -n "$APP" -g "$RG" --query properties.environmentId -o tsv | tr -d '\r')
+          UAMI_ID=$(az containerapp show -n "$APP" -g "$RG" --query 'identity.userAssignedIdentities | keys(@) | [0]' -o tsv | tr -d '\r')
+          LOCATION=$(az containerapp show -n "$APP" -g "$RG" --query location -o tsv | tr -d '\r' | tr '[:upper:]' '[:lower:]' | tr -d ' ')
+          { echo "CAE_ID=$CAE_ID"; echo "UAMI_ID=$UAMI_ID"; echo "LOCATION=$LOCATION"; } >> "$GITHUB_ENV"
+          echo "::notice::CAE=$CAE_ID UAMI=$UAMI_ID location=$LOCATION"
+          [ -n "$CAE_ID" ] && [ -n "$UAMI_ID" ] || { echo "::error::missing CAE/UAMI"; exit 1; }
+
+      - name: Build loom-wrangler-host image on the Gov ACR
+        if: ${{ inputs.apply == 'true' }}
+        run: |
+          set -euo pipefail
+          SHA=$(git rev-parse --short=8 HEAD)
+          echo "SHA=$SHA" >> "$GITHUB_ENV"
+          az acr update -n "$ACR" --public-network-enabled true --default-action Allow -o none
+          for i in $(seq 1 12); do az acr login -n "$ACR" >/dev/null 2>&1 && break; sleep 15; done
+          az acr build --registry "$ACR" --no-logs \
+            --image "loom-wrangler-host:$SHA" --image "loom-wrangler-host:latest" \
+            apps/fiab-wrangler-host
+          az acr update -n "$ACR" --default-action Deny -o none || true
+
+      - name: What-if wrangler deployment
+        run: |
+          set -euo pipefail
+          TAG="${SHA:-latest}"
+          az deployment group what-if -g "$RG" \
+            -f platform/fiab/bicep/modules/integration/wrangler.bicep \
+            -p location="$LOCATION" environmentId="$CAE_ID" wranglerUamiId="$UAMI_ID" \
+               acrLoginServer="$ACR_LOGIN" image="$ACR_LOGIN/loom-wrangler-host:$TAG" \
+               complianceTags='{"env":"gov","boundary":"usgovvirginia","app":"wrangler"}' \
+            --mode Incremental 2>&1 | tail -30 || true
+
+      - name: Deploy loom-wrangler-host + wire LOOM_WRANGLER_ENDPOINT
+        if: ${{ inputs.apply == 'true' }}
+        run: |
+          set -euo pipefail
+          az deployment group create -g "$RG" -n "loom-wrangler-$(date -u +%Y%m%d%H%M%S)" \
+            -f platform/fiab/bicep/modules/integration/wrangler.bicep \
+            -p location="$LOCATION" environmentId="$CAE_ID" wranglerUamiId="$UAMI_ID" \
+               acrLoginServer="$ACR_LOGIN" image="$ACR_LOGIN/loom-wrangler-host:$SHA" \
+               complianceTags='{"env":"gov","boundary":"usgovvirginia","app":"wrangler"}' \
+            --mode Incremental -o none
+          FQDN=$(az containerapp show -n "$WRANGLER_APP" -g "$RG" --query properties.configuration.ingress.fqdn -o tsv | tr -d '\r')
+          echo "::notice::loom-wrangler-host FQDN: $FQDN"
+          for i in $(seq 1 20); do
+            REV=$(az containerapp show -n "$WRANGLER_APP" -g "$RG" --query properties.latestRevisionName -o tsv | tr -d '\r')
+            RS=$(az containerapp revision show -n "$WRANGLER_APP" -g "$RG" --revision "$REV" --query properties.runningState -o tsv 2>/dev/null | tr -d '\r')
+            H=$(az containerapp revision show -n "$WRANGLER_APP" -g "$RG" --revision "$REV" --query properties.healthState -o tsv 2>/dev/null | tr -d '\r')
+            echo "loom-wrangler-host running=$RS health=$H"; { [ "$H" = "Healthy" ] || [ "$RS" = "Running" ]; } && break; sleep 15
+          done
+          az containerapp update -n "$APP" -g "$RG" --set-env-vars "LOOM_WRANGLER_ENDPOINT=https://$FQDN" -o none
+          echo "::notice::wired LOOM_WRANGLER_ENDPOINT=https://$FQDN — re-run gov-selfaudit to confirm svc-data-wrangler."
