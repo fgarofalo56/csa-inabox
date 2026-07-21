@@ -18,6 +18,7 @@
 export type AssignmentSource =
   | 'direct'          // F16 governed multi-tier approval → real RBAC
   | 'data-product'    // F15 marketplace subscribe → zero-touch fulfillment
+  | 'marketplace'     // WS-10.4 Living Marketplace subscribe (unified 5-type product entitlement)
   | 'workspace-acl'   // F5 Manage-access workspace role (mirrored to Azure RBAC)
   | 'self-serve'      // self-serve immediate grant
   | `package:${string}`

@@ -62,13 +62,17 @@ const useStyles = makeStyles({
   notes: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
 });
 
-type Kind = 'Data product' | 'API' | 'Data share' | 'Model & report';
-const KINDS: Kind[] = ['Data product', 'API', 'Data share', 'Model & report'];
+type Kind = 'Data product' | 'API' | 'Data share' | 'Model & report' | 'Agent' | 'MCP server' | 'App' | 'Ontology';
+const KINDS: Kind[] = ['Data product', 'Agent', 'MCP server', 'App', 'Ontology', 'API', 'Data share', 'Model & report'];
 const KIND_ICON: Record<Kind, ReactElement> = {
   'Data product': <Database20Regular />,
   API: <Connector20Regular />,
   'Data share': <Share20Regular />,
   'Model & report': <DataPie20Regular />,
+  Agent: <Database20Regular />,
+  'MCP server': <Connector20Regular />,
+  App: <Database20Regular />,
+  Ontology: <Share20Regular />,
 };
 /** Kind → item-type slug so cards carry the same branded tinted icon chips the
  *  rest of the product uses (item-type-visual registry). */
@@ -77,6 +81,14 @@ const KIND_TYPE: Record<Kind, string> = {
   API: 'apim-api',
   'Data share': 'data-marketplace',
   'Model & report': 'semantic-model',
+  Agent: 'agent-flow',
+  'MCP server': 'mcp-server',
+  App: 'loom-app',
+  Ontology: 'ontology',
+};
+/** WS-10.4 unified-product kind → its Discover display kind. */
+const UNIFIED_KIND: Record<string, Kind> = {
+  data: 'Data product', agent: 'Agent', mcp: 'MCP server', app: 'App', ontology: 'Ontology',
 };
 
 interface Listing {
@@ -175,6 +187,34 @@ export function UnifiedDiscover({ onGoTab }: { onGoTab?: (tab: string) => void }
         }
       }
     } catch { /* shares optional */ }
+
+    // Unified Living-Marketplace products (WS-10.4) — agents, MCP servers,
+    // apps, ontologies, and data products from the single `marketplace` schema.
+    try {
+      const r = await clientFetch('/api/marketplace/products');
+      const j = await r.json();
+      if (j.ok && Array.isArray(j.products)) {
+        for (const p of j.products) {
+          const kind = UNIFIED_KIND[String(p.productKind)];
+          if (!kind) continue;
+          out.push({
+            id: `mp:${p.id}`,
+            kind,
+            title: p.displayName,
+            subtitle: p.description,
+            domain: p.domain,
+            owner: p.owner,
+            badges: [
+              p.accessModel === 'open' ? 'Self-serve' : 'Request',
+              `${p.lcuPerSubscription} LCU/sub`,
+              ...(p.tags || []),
+            ].filter(Boolean),
+            goTab: 'catalog',
+            recommended: String(p.certification || '').toLowerCase() === 'certified',
+          });
+        }
+      }
+    } catch { /* unified catalog optional */ }
 
     setListings(out);
     setNotes(info);

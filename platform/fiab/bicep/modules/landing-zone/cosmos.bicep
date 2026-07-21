@@ -216,6 +216,13 @@ var loomContainers = [
   // per-assignment decisions). PK /tenantId. createIfNotExists in
   // cosmos-client.ts ensure() is the hotfix fallback.
   { name: 'access-reviews',     partitionKey: '/tenantId' }
+  // WS-10.4 Living Marketplace (BTB-11) — the UNIFIED product exchange. One row
+  // per published product across all five kinds (data|agent|mcp|app|ontology),
+  // PK /tenantId so the exchange list + publish + subscribe all hit a single
+  // physical partition. Auto-certification (gate registry run) + entitlement
+  // (access-assignments) + LCU chargeback (cost-attribution) reference it.
+  // createIfNotExists in cosmos-client.ts ensure() remains the hotfix fallback.
+  { name: 'marketplace',        partitionKey: '/tenantId' }
   // Durable cross-session agent memory + per-agent thread persistence (AIF-14).
   // PK /agentId so every per-agent thread list + memory retrieve hits a single
   // physical partition. NO TTL — memory facts are durable; threads are retained

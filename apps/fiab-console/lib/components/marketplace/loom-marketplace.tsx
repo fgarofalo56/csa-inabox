@@ -22,8 +22,10 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { Tab, TabList, makeStyles, tokens } from '@fluentui/react-components';
 import {
   Search20Regular, Database20Regular, Connector20Regular, Share20Regular, KeyReset20Regular,
+  StoreMicrosoft20Regular,
 } from '@fluentui/react-icons';
 import { UnifiedDiscover } from './unified-discover';
+import { LivingMarketplace } from './living-marketplace';
 import { ApiMarketplace } from './api-marketplace';
 import { DataShares } from './data-shares';
 import { MyAccess } from './my-access';
@@ -36,7 +38,7 @@ const useStyles = makeStyles({
   body: { display: 'flex', flexDirection: 'column', minHeight: 0, flex: 1 },
 });
 
-const TABS = ['discover', 'products', 'apis', 'shares', 'access'] as const;
+const TABS = ['discover', 'catalog', 'products', 'apis', 'shares', 'access'] as const;
 type TabId = (typeof TABS)[number];
 
 export function LoomMarketplace() {
@@ -67,11 +69,12 @@ export function LoomMarketplace() {
           icon={Search20Regular}
           accent={LOOM_ACCENT.violet}
           title="One exchange for every product kind"
-          message="Discover, subscribe to, and publish data products, APIs, and live Delta shares from a single data-mesh exchange. Start in Discover to search across all kinds at once, then request access — every grant is tracked under My access."
+          message="Discover, subscribe to, and publish data products, agents, MCP servers, apps, and ontologies — plus APIs and live Delta shares — from one data-mesh exchange. The Catalog tab unifies all five product kinds: publishing runs the platform gates as auto-certification, every subscription creates a real access grant, and usage meters to your tenant chargeback."
         />
       </div>
       <TabList className={s.tabs} selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as TabId)} size="large">
         <Tab value="discover" icon={<Search20Regular />}>Discover</Tab>
+        <Tab value="catalog" icon={<StoreMicrosoft20Regular />}>Catalog</Tab>
         <Tab value="products" icon={<Database20Regular />}>Data products</Tab>
         <Tab value="apis" icon={<Connector20Regular />}>APIs</Tab>
         <Tab value="shares" icon={<Share20Regular />}>Data shares</Tab>
@@ -79,6 +82,7 @@ export function LoomMarketplace() {
       </TabList>
 
       {tab === 'discover' && <UnifiedDiscover onGoTab={goTab} />}
+      {tab === 'catalog' && <LivingMarketplace />}
       {tab === 'products' && <DataProductsMarketplace />}
       {tab === 'apis' && <ApiMarketplace />}
       {tab === 'shares' && <DataShares />}
