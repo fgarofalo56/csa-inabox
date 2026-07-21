@@ -53,10 +53,7 @@ WORKDIR /data
 COPY --from=basemap /build/basemap.mbtiles /data/basemap.mbtiles
 COPY data/config.json /data/config.json
 COPY data/styles/loom/style.json /data/styles/loom/style.json
-# OSS Open Sans glyph set (free, from the openmaptiles fonts release).
-RUN mkdir -p /data/fonts && curl -fsSL \
-      https://github.com/openmaptiles/fonts/releases/download/v2.0/open-sans.zip -o /tmp/f.zip \
-    && unzip -o /tmp/f.zip -d /data/fonts && rm /tmp/f.zip
+# (label-free basemap — no glyph fonts needed, keeps the image self-contained)
 # maplibre-gl assets (served at /maplibre-gl.js|css by caddy; console loads them from same origin).
 RUN mkdir -p /assets && \
     curl -fsSL https://unpkg.com/maplibre-gl@4.5.0/dist/maplibre-gl.js  -o /assets/maplibre-gl.js && \
