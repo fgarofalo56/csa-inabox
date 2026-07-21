@@ -67,9 +67,9 @@ permissions:
   checks: read
 
 env:
-  AZURE_LOCATION: eastus2
-  RG_NAME: rg-csa-loom-admin-eastus2
-  ACR_NAME: acrloomm56yejezt7bjo
+  AZURE_LOCATION: centralus
+  RG_NAME: rg-csa-loom-admin-centralus
+  ACR_NAME: acrloomk6mvh5sm6z7do
   APP_NAME: loom-console
 
 jobs:
