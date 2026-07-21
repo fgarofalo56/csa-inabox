@@ -1,0 +1,120 @@
+name: gov-provision-aisearch
+# Incremental Gov provisioner for Azure AI Search (closes svc-aisearch — the
+# service IS available in GCC-High; aiSearchEnabled=true in gcc-high.bicepparam,
+# LOOM_AI_SEARCH_RG is already set, but no service was ever stood up). Same
+# out-of-band, what-if-gated pattern as gov-provision-dbt/posture, for a PaaS
+# resource with a private endpoint: discover the PE subnet (from an existing PE),
+# the privatelink search DNS zone (CREATE + VNet-link if missing — additive), the
+# Log Analytics workspace, and the Console UAMI principal, then deploy
+# admin-plane/ai-search.bicep --mode Incremental (what-if preview MUST show only
+# Creates — the PE + DNS record are NEW, nothing existing is modified), and wire
+# LOOM_AI_SEARCH_SERVICE. Idempotent.
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: 'false = discover + what-if only (safe); true = deploy + wire. Apply ONLY proceeds if the what-if is purely additive.'
+        required: false
+        default: 'false'
+permissions:
+  contents: read
+env:
+  RG: rg-csa-loom-admin-usgovvirginia
+  APP: loom-console
+  SEARCH_DNS_ZONE: privatelink.search.usgovcloudapi.net
+jobs:
+  provision:
+    name: Provision Azure AI Search into the Gov admin RG
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
+      - name: Azure Gov Login
+        uses: Azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_GOV_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_GOV_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_GOV_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}",
+              "activeDirectoryEndpointUrl": "https://login.microsoftonline.us",
+              "resourceManagerEndpointUrl": "https://management.usgovcloudapi.net/",
+              "sqlManagementEndpointUrl": "https://management.core.usgovcloudapi.net:8443/",
+              "galleryEndpointUrl": "https://gallery.usgovcloudapi.net/",
+              "managementEndpointUrl": "https://management.core.usgovcloudapi.net/"
+            }
+          environment: AzureUSGovernment
+      - name: Set Azure cloud to Gov
+        run: az cloud set --name AzureUSGovernment
+
+      - name: Discover PE subnet / DNS zone / LA workspace / Console UAMI
+        run: |
+          set -euo pipefail
+          LOCATION=$(az containerapp show -n "$APP" -g "$RG" --query location -o tsv | tr -d '\r' | tr '[:upper:]' '[:lower:]' | tr -d ' ')
+          UAMI_ID=$(az containerapp show -n "$APP" -g "$RG" --query 'identity.userAssignedIdentities | keys(@) | [0]' -o tsv | tr -d '\r')
+          CONSOLE_PRINCIPAL=$(az identity show --ids "$UAMI_ID" --query principalId -o tsv | tr -d '\r')
+          # PE subnet: reuse the subnet an existing private endpoint already lives in.
+          PE_SUBNET=$(az network private-endpoint list -g "$RG" --query "[0].subnet.id" -o tsv 2>/dev/null | tr -d '\r')
+          [ -n "$PE_SUBNET" ] || PE_SUBNET=$(az network private-endpoint list --query "[?contains(id,'usgovvirginia')].subnet.id | [0]" -o tsv 2>/dev/null | tr -d '\r')
+          # LA workspace (diagnostics target)
+          WS_ID=$(az monitor log-analytics workspace list -g "$RG" --query "[0].id" -o tsv 2>/dev/null | tr -d '\r')
+          # Search private DNS zone (search across sub; may live in a networking RG)
+          DNS_ID=$(az network private-dns zone list --query "[?name=='$SEARCH_DNS_ZONE'].id | [0]" -o tsv 2>/dev/null | tr -d '\r')
+          { echo "LOCATION=$LOCATION"; echo "CONSOLE_PRINCIPAL=$CONSOLE_PRINCIPAL"; echo "PE_SUBNET=$PE_SUBNET"; echo "WS_ID=$WS_ID"; echo "DNS_ID=$DNS_ID"; } >> "$GITHUB_ENV"
+          echo "::notice::location=$LOCATION consolePrincipal=$CONSOLE_PRINCIPAL"
+          echo "::notice::peSubnet=$PE_SUBNET"
+          echo "::notice::laWorkspace=$WS_ID"
+          echo "::notice::searchDnsZone=${DNS_ID:-<missing — will create on apply>}"
+          [ -n "$PE_SUBNET" ] && [ -n "$WS_ID" ] && [ -n "$CONSOLE_PRINCIPAL" ] || { echo "::error::missing PE subnet / LA workspace / console principal — cannot proceed safely"; exit 1; }
+
+      - name: Ensure the search private DNS zone exists (+ VNet link) — additive
+        if: ${{ inputs.apply == 'true' }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DNS_ID:-}" ]; then
+            echo "Creating $SEARCH_DNS_ZONE in $RG (additive; only the new search PE resolves through it)…"
+            az network private-dns zone create -g "$RG" -n "$SEARCH_DNS_ZONE" -o none
+            # Link to the VNet that owns the PE subnet so the A-record resolves in-VNet.
+            VNET_ID=$(echo "$PE_SUBNET" | sed -E 's#/subnets/.*##')
+            az network private-dns link vnet create -g "$RG" -z "$SEARCH_DNS_ZONE" \
+              -n "link-search-$(date -u +%s)" --virtual-network "$VNET_ID" --registration-enabled false -o none || true
+            DNS_ID=$(az network private-dns zone show -g "$RG" -n "$SEARCH_DNS_ZONE" --query id -o tsv | tr -d '\r')
+            echo "DNS_ID=$DNS_ID" >> "$GITHUB_ENV"
+          fi
+          echo "::notice::searchDnsZone=$DNS_ID"
+
+      - name: What-if ai-search deployment (MUST be purely additive)
+        run: |
+          set -euo pipefail
+          DZ="${DNS_ID:-/subscriptions/placeholder/resourceGroups/$RG/providers/Microsoft.Network/privateDnsZones/$SEARCH_DNS_ZONE}"
+          az deployment group what-if -g "$RG" \
+            -f platform/fiab/bicep/modules/admin-plane/ai-search.bicep \
+            -p location="$LOCATION" sku=standard partitions=1 replicas=1 \
+               privateEndpointSubnetId="$PE_SUBNET" privateDnsZoneSearchId="$DZ" \
+               workspaceId="$WS_ID" adminEntraGroupId="" consolePrincipalId="$CONSOLE_PRINCIPAL" \
+               deployGovernanceIndex=false \
+               complianceTags='{"env":"gov","boundary":"usgovvirginia","app":"ai-search"}' \
+            --mode Incremental 2>&1 | tee whatif.txt | tail -50 || true
+          if grep -qiE "~ Modify|- Delete" whatif.txt; then
+            echo "::warning::what-if shows Modify/Delete on existing resources — review before apply."
+          else
+            echo "::notice::what-if is purely additive (Create only)."
+          fi
+
+      - name: Deploy Azure AI Search (Incremental) + wire LOOM_AI_SEARCH_SERVICE
+        if: ${{ inputs.apply == 'true' }}
+        run: |
+          set -euo pipefail
+          az deployment group create -g "$RG" --name "ai-search-$(date -u +%Y%m%d%H%M%S)" \
+            -f platform/fiab/bicep/modules/admin-plane/ai-search.bicep \
+            -p location="$LOCATION" sku=standard partitions=1 replicas=1 \
+               privateEndpointSubnetId="$PE_SUBNET" privateDnsZoneSearchId="$DNS_ID" \
+               workspaceId="$WS_ID" adminEntraGroupId="" consolePrincipalId="$CONSOLE_PRINCIPAL" \
+               deployGovernanceIndex=false \
+               complianceTags='{"env":"gov","boundary":"usgovvirginia","app":"ai-search"}' \
+            -o none
+          SVC=$(az search service list -g "$RG" --query "[?starts_with(name,'search-loom')].name | [0]" -o tsv | tr -d '\r')
+          [ -n "$SVC" ] || { echo "::error::deploy yielded no search-loom* service"; exit 1; }
+          echo "::notice::AI Search service: $SVC"
+          az containerapp update -n "$APP" -g "$RG" --set-env-vars "LOOM_AI_SEARCH_SERVICE=$SVC" -o none
+          echo "::notice::wired LOOM_AI_SEARCH_SERVICE=$SVC — re-run gov-selfaudit to confirm svc-aisearch."
