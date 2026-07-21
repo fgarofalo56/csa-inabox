@@ -179,7 +179,11 @@ describe('admin/env-config registry', () => {
     // OpenAI account the fine-tuning + model-deployment REST targets) are both NEW
     // editable vars; the LOOM_AOAI_ENDPOINT / LOOM_FOUNDRY_NAME keys it also
     // references are shared with svc-aoai / svc-aml.
-    expect(EDITABLE_ENV.length).toBe(143);
+    // Bumped to 145 by WS-10.1 (svc-lcu-autopilot): LOOM_AUTOPILOT_MODE (the
+    // self-driving FinOps loop bootstrap approval mode) + LOOM_CAPACITY_LCU (the
+    // published LCU capacity ceiling the autopilot right-sizes via env-apply) are
+    // both NEW editable vars.
+    expect(EDITABLE_ENV.length).toBe(145);
   });
 
   it('surfaces the wave-2 env vars as settable (previously dropped by the whitelist)', () => {
@@ -246,7 +250,11 @@ describe('admin/env-config registry', () => {
     expect(optDefault).toEqual([
       'LOOM_AOAI_MINI_DEPLOYMENT', 'LOOM_AOAI_STRONG_DEPLOYMENT',
       'LOOM_AUDIT_DCR_ENDPOINT', 'LOOM_AUDIT_DCR_ID',
+      // WS-10.1 svc-lcu-autopilot — both optionalDefault (propose mode +
+      // auto-derived LCU ceiling are the fully-functional defaults).
+      'LOOM_AUTOPILOT_MODE',
       'LOOM_BROKER_REDIS', 'LOOM_BROKER_URL',
+      'LOOM_CAPACITY_LCU',
       'LOOM_CONTENT_SAFETY_ENDPOINT', 'LOOM_DIRECTLAKE_URL', 'LOOM_DOCINTEL_ENDPOINT',
       'LOOM_EVENTGRID_TOPIC_ENDPOINT', 'LOOM_EVENTGRID_TOPIC_KEY',
       'LOOM_GRAPH_GROUP_SYNC_ENABLED',

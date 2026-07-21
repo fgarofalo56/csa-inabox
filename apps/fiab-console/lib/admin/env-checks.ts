@@ -76,6 +76,8 @@ export const CTX = {
 // Friendly placeholder for the value an admin must supply for a given env var.
 export const VALUE_HINT: Record<string, string> = {
   SESSION_SECRET: '<32+char-random-secret-from-key-vault>',
+  LOOM_AUTOPILOT_MODE: 'propose  (or auto)',
+  LOOM_CAPACITY_LCU: '<lcu-ceiling-e.g.-500>  (unset = auto-derive from peak)',
   LOOM_MSAL_CLIENT_ID: '<entra-app-client-id>',
   LOOM_MSAL_CLIENT_SECRET: '<entra-app-client-secret-from-key-vault>',
   LOOM_MSAL_TENANT_ID: CTX.tenant,
@@ -804,6 +806,20 @@ export const ENV_CHECKS: EnvSpec[] = [
     remediation: 'Set LOOM_BROKER_URL to the internal-ingress Loom Capacity Broker ACA app (synchronous POST /admit choke-point + smoothing/bursting/4-stage-throttle over an LCU timepoint ledger) and LOOM_BROKER_REDIS to <hband-redis-host>:6380 (the shared Azure Cache for Redis Premium ledger from compute/hband-shared.bicep). Deploy compute/loom-capacity-broker-app.bicep. Unset → job submission proceeds UNTHROTTLED with a MessageBar (default-ON posture — the broker constrains, it never blocks the platform if absent).',
     provisionedBy: 'modules/compute/hband-shared.bicep (uami-loom-capacity-broker + shared Redis timepoint ledger) + modules/compute/loom-capacity-broker-app.bicep (out-of-band) → LOOM_BROKER_URL / LOOM_BROKER_REDIS on the Console app',
     role: 'none (uami-loom-capacity-broker holds ZERO data-plane roles — it gates the caller, never proxies; Redis Data Contributor on the shared cache is wired by hband-shared.bicep)',
+  },
+  {
+    // WS-10.1 LCU-Autopilot (BTB-2) — the self-driving FinOps knobs. Both are
+    // fully-functional-by-default (optionalDefault): unset → the loop runs in
+    // 'propose' mode (surfaces recommendations, actuates nothing) and the
+    // capacity ceiling auto-derives from observed peak. Making them editable here
+    // lets the autopilot ROLL LOOM_CAPACITY_LCU through env-apply (the right-size
+    // actuator) and an admin bootstrap the default mode from /admin/env-config.
+    id: 'svc-lcu-autopilot', category: 'azure-services', title: 'LCU-Autopilot — self-driving FinOps (idle-pause + capacity right-size)', severity: 'optional',
+    required: ['LOOM_AUTOPILOT_MODE', 'LOOM_CAPACITY_LCU'], warnOnMiss: true, optionalDefault: true,
+    optionalDefaultDetail: "the autopilot runs in 'propose' mode by default (LOOM_AUTOPILOT_MODE bicep default 'propose' — surfaces pause-idle/right-size recommendations with real $ impact, actuates nothing) and the LCU capacity ceiling auto-derives from observed peak + 25% headroom when LOOM_CAPACITY_LCU is unset. Set LOOM_AUTOPILOT_MODE=auto (per-tenant, from /admin/autopilot) to let it pause idle compute + roll the ceiling unattended.",
+    remediation: "Set LOOM_AUTOPILOT_MODE ('auto' to let the loop actuate unattended, 'propose' to surface recommendations only — the per-tenant mode on /admin/autopilot overrides this bootstrap default) and LOOM_CAPACITY_LCU (the published LCU capacity ceiling; unset auto-derives from peak + 25% headroom). The autopilot reads real per-resource LCU + $ from the chargeback model (Cost Management Reader on the Console UAMI) and pauses idle Synapse/ADX compute via ARM. The push-button deploy wires LOOM_AUTOPILOT_MODE='propose' from admin-plane/main.bicep.",
+    provisionedBy: "admin-plane/main.bicep apps[] env LOOM_AUTOPILOT_MODE (default 'propose') — LOOM_CAPACITY_LCU is a runtime tuning knob the autopilot right-sizes via env-apply",
+    role: 'Cost Management Reader (Console UAMI) on the Loom subscription(s) for LCU $; the pause actuators reuse the existing Synapse/Kusto Contributor grants',
   },
   // ── wave-3 coverage (G2 gate registry): every remaining bespoke
   //    *_not_configured gate promoted into the declarative registry. Each spec
