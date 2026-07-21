@@ -6,7 +6,7 @@ import {
   Field, Input, Textarea, Switch, Dropdown, Option,
 } from '@fluentui/react-components';
 import { Copy20Regular } from '@fluentui/react-icons';
-import { sparkConfigWarnings, cloudFabricNote } from '../lakehouse-spark-conf';
+import { sparkConfigWarnings, cloudFabricNote } from '../../lakehouse-spark-conf';
 import { useStyles, leafName } from '../shared';
 import { useLakehouseCtx } from '../lakehouse-editor-context';
 

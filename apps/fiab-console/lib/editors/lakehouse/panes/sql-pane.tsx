@@ -6,8 +6,8 @@ import {
 } from '@fluentui/react-components';
 import { ArrowSync20Regular, Eye20Regular, Play20Regular } from '@fluentui/react-icons';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
-import { OpenInPbiDesktopButton } from '../components/open-in-pbi-desktop-button';
-import { OpenInLoomReportBuilderButton } from '../components/open-in-loom-report-builder-button';
+import { OpenInPbiDesktopButton } from '../../components/open-in-pbi-desktop-button';
+import { OpenInLoomReportBuilderButton } from '../../components/open-in-loom-report-builder-button';
 import { useStyles, formatCell } from '../shared';
 import { useLakehouseCtx } from '../lakehouse-editor-context';
 

@@ -6,7 +6,7 @@ import {
 } from '@fluentui/react-components';
 import { ArrowSync20Regular, Eye20Regular } from '@fluentui/react-icons';
 import { EmptyState } from '@/lib/components/empty-state';
-import { DeltaPreviewGrid } from '../components/delta-preview-grid';
+import { DeltaPreviewGrid } from '../../components/delta-preview-grid';
 import { useStyles, leafName, formatBytes } from '../shared';
 import { useLakehouseCtx } from '../lakehouse-editor-context';
 
