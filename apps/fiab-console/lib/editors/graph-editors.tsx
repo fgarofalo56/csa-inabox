@@ -31,7 +31,7 @@ import { CopilotBuilderPane } from '@/lib/components/shared/copilot-builder-pane
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Caption1, Subtitle2, Badge, Button, Input, Label, Spinner,
+  Caption1, Subtitle2, Badge, Button, Input, Label, Spinner, Switch,
   Tab, TabList, Textarea, Dropdown, Option, Field, Divider, InfoLabel, Tooltip,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   MessageBar, MessageBarBody, MessageBarTitle,
@@ -40,6 +40,7 @@ import {
 import {
   Play20Regular, Add20Regular, Search20Regular, ArrowClockwise20Regular,
   Save20Regular, DocumentSearch24Regular, Database24Regular,
+  ArrowSync20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
@@ -763,7 +764,7 @@ function VectorSearchResults({ result }: { result: any }) {
 
 export function VectorStoreEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
-  const [tab, setTab] = useState<'schema' | 'documents' | 'search'>('schema');
+  const [tab, setTab] = useState<'schema' | 'documents' | 'sync' | 'search'>('schema');
   const [backend, setBackend] = useState<VectorBackend>('ai-search');
   const [indexName, setIndexName] = useState<string>('docs-vec');
   const [dim, setDim] = useState<number>(1536);
@@ -803,6 +804,22 @@ export function VectorStoreEditor({ item, id }: { item: FabricItemType; id: stri
   const [k, setK] = useState<number>(5);
   const [searching, setSearching] = useState(false);
   const [searchResult, setSearchResult] = useState<any>(null);
+  // Hybrid + rerank controls (WS-2.2). Rerank is ON by default (the precision
+  // stage over the recall-oriented k-NN); semantic asks AI Search for its L2
+  // reranker score (ai-search only).
+  const [rerank, setRerank] = useState<boolean>(true);
+  const [semantic, setSemantic] = useState<boolean>(false);
+
+  // Delta sync tab (WS-2.2) — bind the index to a source lakehouse/UC Delta
+  // table and incrementally auto-index it (Databricks Vector Search parity).
+  const [deltaUri, setDeltaUri] = useState<string>('');
+  const [keyColumn, setKeyColumn] = useState<string>('');
+  const [contentColumnsText, setContentColumnsText] = useState<string>('');
+  const [maxRows, setMaxRows] = useState<number>(5000);
+  const [syncing, setSyncing] = useState(false);
+  const [syncResult, setSyncResult] = useState<any>(null);
+  const [syncStatus, setSyncStatus] = useState<any>(null);
+  const [syncStatusLoading, setSyncStatusLoading] = useState(false);
 
   // ai-search, pgvector and cosmos-vcore all have live data planes; cosmos-nosql
   // is the one config-only backend (honest gate).
@@ -907,16 +924,62 @@ export function VectorStoreEditor({ item, id }: { item: FabricItemType; id: stri
   const runSearch = useCallback(async () => {
     setSearching(true); setSearchResult(null);
     try {
-      let vector: number[];
-      try { vector = JSON.parse(searchVec); } catch { setSearchResult({ ok: false, error: 'Query vector must be a JSON number array, e.g. [0.1, 0.2, …]' }); return; }
+      const payload: any = { indexName, k, metric, text: searchText || undefined, backend, rerank, semantic };
+      if (searchVec.trim()) {
+        try { payload.vector = JSON.parse(searchVec); }
+        catch { setSearchResult({ ok: false, error: 'Query vector must be a JSON number array, e.g. [0.1, 0.2, …]' }); return; }
+      } else if (searchText.trim()) {
+        // Text-only: the route embeds queryText with Azure OpenAI to form the k-NN vector.
+        payload.queryText = searchText;
+      } else {
+        setSearchResult({ ok: false, error: 'Enter a query vector or query text.' }); return;
+      }
       const r = await clientFetch(`/api/items/vector-store/${encodeURIComponent(id || 'new')}/search`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ indexName, vector, k, metric, text: searchText || undefined, backend }),
+        body: JSON.stringify(payload),
       });
       setSearchResult(await r.json());
     } catch (e: any) { setSearchResult({ ok: false, error: e?.message || String(e) }); }
     finally { setSearching(false); }
-  }, [searchVec, searchText, k, indexName, id, metric, backend]);
+  }, [searchVec, searchText, k, indexName, id, metric, backend, rerank, semantic]);
+
+  // Load the persisted Delta-sync binding + last-sync status.
+  const loadSyncStatus = useCallback(async () => {
+    if (!id || id === 'new' || !indexName) return;
+    setSyncStatusLoading(true);
+    try {
+      const r = await clientFetch(`/api/items/vector-store/${encodeURIComponent(id)}/sync?name=${encodeURIComponent(indexName)}`);
+      const j = await r.json();
+      if (j.ok) {
+        setSyncStatus(j.status);
+        if (j.status?.bound) {
+          setDeltaUri((cur) => cur || j.status.deltaUri || '');
+          setKeyColumn((cur) => cur || j.status.keyColumn || '');
+          setContentColumnsText((cur) => cur || (j.status.contentColumns || []).join(', '));
+        }
+      }
+    } catch { /* ignore */ }
+    finally { setSyncStatusLoading(false); }
+  }, [id, indexName]);
+
+  // Trigger an incremental Delta→index sync.
+  const runSync = useCallback(async () => {
+    setSyncing(true); setSyncResult(null);
+    try {
+      await persistSpec();
+      const contentColumns = contentColumnsText.split(',').map((c) => c.trim()).filter(Boolean);
+      const r = await clientFetch(`/api/items/vector-store/${encodeURIComponent(id || 'new')}/sync`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ indexName, deltaUri, keyColumn, contentColumns, maxRows, backend }),
+      });
+      const j = await r.json();
+      setSyncResult(j);
+      if (j.ok) await loadSyncStatus();
+    } catch (e: any) { setSyncResult({ ok: false, error: e?.message || String(e) }); }
+    finally { setSyncing(false); }
+  }, [persistSpec, id, indexName, deltaUri, keyColumn, contentColumnsText, maxRows, backend, loadSyncStatus]);
+
+  useEffect(() => { if (tab === 'sync') loadSyncStatus(); }, [tab, loadSyncStatus]);
 
   // Ctrl+S persists the spec.
   useEffect(() => {
@@ -936,6 +999,7 @@ export function VectorStoreEditor({ item, id }: { item: FabricItemType; id: stri
       ]},
       { label: 'Test', actions: [
         { label: 'Documents', icon: <Add20Regular />, onClick: () => setTab('documents') },
+        { label: 'Delta sync', icon: <ArrowSync20Regular />, onClick: () => setTab('sync') },
         { label: 'Vector search', icon: <Search20Regular />, onClick: () => setTab('search') },
       ]},
     ]},
@@ -1024,6 +1088,7 @@ export function VectorStoreEditor({ item, id }: { item: FabricItemType; id: stri
             <TabList selectedValue={tab} onTabSelect={(_: unknown, d: any) => setTab(d.value)}>
               <Tab value="schema">Index schema</Tab>
               <Tab value="documents">Add documents</Tab>
+              <Tab value="sync">Delta sync</Tab>
               <Tab value="search">Vector search</Tab>
             </TabList>
           </div>
@@ -1148,23 +1213,127 @@ export function VectorStoreEditor({ item, id }: { item: FabricItemType; id: stri
               </>
             )}
 
+            {tab === 'sync' && (
+              <>
+                <div className={s.sectionHeader}>
+                  <ArrowSync20Regular className={s.emptyIcon} />
+                  <Subtitle2>Delta-synced auto-indexing</Subtitle2>
+                  <Badge appearance="tint" color="brand">Incremental</Badge>
+                </div>
+                <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                  Bind this index to a source lakehouse / Unity Catalog <strong>Delta table</strong> (ADLS Gen2).
+                  Each sync reads the table via Synapse Serverless, diffs rows by a key + content hash, embeds only the
+                  new/changed rows with Azure OpenAI, upserts them into the vector index, and deletes rows that left the
+                  source — no manual re-population. This is Azure-native Databricks Vector Search parity.
+                </Caption1>
+
+                {backend !== 'ai-search' && (
+                  <MessageBar intent="warning" layout="multiline">
+                    <MessageBarBody>
+                      <MessageBarTitle>Delta auto-sync targets the AI Search backend</MessageBarTitle>
+                      Switch the backend to <code>ai-search</code> on the left to bind a Delta table and auto-index it.
+                      The pgvector / Cosmos vCore backends support manual document upload on the <strong>Add documents</strong> tab today.
+                    </MessageBarBody>
+                  </MessageBar>
+                )}
+
+                <Field label={<InfoLabel info="The ROOT folder of the source Delta table (the folder that contains _delta_log). abfss:// or https:// on ADLS Gen2.">Source Delta table URI</InfoLabel>}>
+                  <Input value={deltaUri} onChange={(_: unknown, d: any) => setDeltaUri(d.value)} disabled={backend !== 'ai-search'}
+                    placeholder="abfss://gold@acct.dfs.core.windows.net/Tables/products" />
+                </Field>
+                <div className={s.searchRow}>
+                  <Field className={s.fullField} label={<InfoLabel info="Column whose value uniquely identifies each row — used as the document key so re-syncs update in place and deletes remove the right rows.">Key column</InfoLabel>}>
+                    <Input value={keyColumn} onChange={(_: unknown, d: any) => setKeyColumn(d.value)} disabled={backend !== 'ai-search'} placeholder="id" />
+                  </Field>
+                  <Field className={s.kField} label={<InfoLabel info="Row cap per sync pass (1–50000).">Max rows</InfoLabel>}>
+                    <Input type="number" min={1} value={String(maxRows)} onChange={(_: unknown, d: any) => setMaxRows(Number(d.value || '5000'))} disabled={backend !== 'ai-search'} />
+                  </Field>
+                </div>
+                <Field label={<InfoLabel info="Comma-separated columns concatenated into the embedded + searchable content for each row.">Content columns</InfoLabel>}>
+                  <Input value={contentColumnsText} onChange={(_: unknown, d: any) => setContentColumnsText(d.value)} disabled={backend !== 'ai-search'} placeholder="title, description, category" />
+                </Field>
+                <div className={s.toolbar}>
+                  <Button appearance="primary" icon={syncing ? <Spinner size="tiny" /> : <ArrowSync20Regular />}
+                    onClick={runSync}
+                    disabled={syncing || backend !== 'ai-search' || !deltaUri.trim() || !keyColumn.trim() || !contentColumnsText.trim()}>
+                    {syncing ? 'Syncing…' : 'Sync now'}
+                  </Button>
+                  <Button icon={<ArrowClockwise20Regular />} onClick={loadSyncStatus} disabled={syncStatusLoading || !id || id === 'new'}>Reload status</Button>
+                </div>
+
+                {syncResult && (
+                  <MessageBar intent={syncResult.ok ? 'success' : syncResult.deferred ? 'warning' : 'error'} layout="multiline">
+                    <MessageBarBody>
+                      <MessageBarTitle>
+                        {syncResult.ok
+                          ? `Sync complete (${syncResult.mode})`
+                          : syncResult.deferred ? 'Sync not provisioned' : 'Sync failed'}
+                      </MessageBarTitle>
+                      {syncResult.ok
+                        ? `${syncResult.synced} embedded/upserted · ${syncResult.skipped} unchanged · ${syncResult.removed} removed · ${syncResult.sourceRows} source rows · ${syncResult.executionMs}ms.`
+                        : syncResult.error}
+                      {syncResult.hint && <><br />{syncResult.hint}</>}
+                    </MessageBarBody>
+                  </MessageBar>
+                )}
+
+                {syncStatusLoading && <Spinner size="small" label="Loading sync status…" labelPosition="after" />}
+                {!syncStatusLoading && syncStatus?.bound && (
+                  <>
+                    <Divider />
+                    <div className={s.sectionHeader}>
+                      <Database24Regular className={s.emptyIcon} />
+                      <Subtitle2>Bound source</Subtitle2>
+                    </div>
+                    <Table aria-label="Delta sync status" size="small">
+                      <TableBody>
+                        <TableRow><TableCell><strong>Delta table</strong></TableCell><TableCell className={s.monoCell}>{syncStatus.deltaUri}</TableCell></TableRow>
+                        <TableRow><TableCell><strong>Key column</strong></TableCell><TableCell>{syncStatus.keyColumn}</TableCell></TableRow>
+                        <TableRow><TableCell><strong>Content columns</strong></TableCell><TableCell>{(syncStatus.contentColumns || []).join(', ')}</TableCell></TableRow>
+                        <TableRow><TableCell><strong>Rows indexed</strong></TableCell><TableCell>{syncStatus.rowCount}</TableCell></TableRow>
+                        <TableRow><TableCell><strong>Last sync</strong></TableCell><TableCell>{syncStatus.builtAt ? new Date(syncStatus.builtAt).toLocaleString() : '—'}</TableCell></TableRow>
+                      </TableBody>
+                    </Table>
+                  </>
+                )}
+                {!syncStatusLoading && !syncResult && !syncStatus?.bound && backend === 'ai-search' && (
+                  <div className={s.emptyState}>
+                    <ArrowSync20Regular className={s.emptyIcon} fontSize={40} />
+                    <Subtitle2>Not bound to a Delta table yet</Subtitle2>
+                    <Caption1>Enter a source Delta table URI, a key column, and the content columns above, then choose <strong>Sync now</strong> to run the first incremental index build.</Caption1>
+                  </div>
+                )}
+              </>
+            )}
+
             {tab === 'search' && (
               <>
                 <div className={s.sectionHeader}>
                   <Search20Regular className={s.emptyIcon} />
                   <Subtitle2>Vector similarity search</Subtitle2>
                 </div>
-                <Field label={`Query vector (JSON number array, ${dim}-dim)`} hint="Paste an embedding to find its nearest neighbours via k-NN.">
-                  <Textarea value={searchVec} onChange={(_: unknown, d: any) => setSearchVec(d.value)} rows={3} placeholder="[0.12, -0.04, …]" />
+                <Field label={`Query vector (optional — JSON number array, ${dim}-dim)`} hint="Paste an embedding to find its nearest neighbours, or leave blank and search by text below (embedded automatically).">
+                  <Textarea value={searchVec} onChange={(_: unknown, d: any) => setSearchVec(d.value)} rows={3} placeholder="[0.12, -0.04, …]  (or use query text below)" />
                 </Field>
                 <div className={s.searchRow}>
-                  <Field className={s.fullField} label="Hybrid text (optional)" hint="Adds BM25 keyword ranking fused with the vector score.">
-                    <Input value={searchText} onChange={(_: unknown, d: any) => setSearchText(d.value)} placeholder="keyword filter (BM25 + vector)" />
+                  <Field className={s.fullField} label="Query text (hybrid BM25 + embed)" hint="Used for BM25 keyword ranking, the rerank lexical signal, and — when no vector is given — the embedded k-NN query.">
+                    <Input value={searchText} onChange={(_: unknown, d: any) => setSearchText(d.value)} placeholder="search text (hybrid + rerank)" />
                   </Field>
                   <Field className={s.kField} label="k (neighbors)">
                     <Input type="number" min={1} value={String(k)} onChange={(_: unknown, d: any) => setK(Number(d.value || '5'))} />
                   </Field>
-                  <Button appearance="primary" icon={searching ? <Spinner size="tiny" /> : <Search20Regular />} onClick={runSearch} disabled={searching || !searchVec.trim()}>{searching ? 'Searching…' : 'Search'}</Button>
+                  <Button appearance="primary" icon={searching ? <Spinner size="tiny" /> : <Search20Regular />} onClick={runSearch} disabled={searching || (!searchVec.trim() && !searchText.trim())}>{searching ? 'Searching…' : 'Search'}</Button>
+                </div>
+                <div className={s.toolbar}>
+                  <Switch checked={rerank} onChange={(_: unknown, d: any) => setRerank(d.checked)} label="Rerank results" />
+                  <Tooltip content="AI Search L2 semantic reranker (queryType=semantic) — needs a Basic+ search service with semantic ranking enabled. Falls back to the portable reranker otherwise." relationship="label">
+                    <Switch checked={semantic} onChange={(_: unknown, d: any) => setSemantic(d.checked)} disabled={backend !== 'ai-search' || !rerank} label="Semantic (AI Search L2)" />
+                  </Tooltip>
+                  {searchResult?.ok && typeof searchResult.tookMs === 'number' && (
+                    <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                      {searchResult.tookMs}ms{searchResult.reranked ? ' · reranked' : ''}{searchResult.semanticApplied ? ' · semantic' : ''}
+                    </Caption1>
+                  )}
                 </div>
                 {searching && <Spinner size="small" label="Running k-NN…" labelPosition="after" />}
                 {!searching && !searchResult && (

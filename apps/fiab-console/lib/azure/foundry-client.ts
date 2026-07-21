@@ -1853,21 +1853,70 @@ export async function uploadDocuments(name: string, docs: any[]): Promise<{ uplo
 }
 
 /**
- * Vector (k-NN) search against a vector field. `vector` is the query
- * embedding, `field` the vector field name, `k` the neighbor count.
- * When `text` is supplied it runs a hybrid (text + vector) query.
+ * Delete documents by key from an index via the data-plane `/docs/index`
+ * endpoint (`@search.action = delete`). Batched at 1000/call (AI Search's cap);
+ * used by the WS-2.2 Delta→vector incremental sync to remove rows that no longer
+ * exist in the source Delta table. Returns the number of delete actions accepted.
+ */
+export async function deleteDocuments(name: string, keys: string[], keyField = 'id'): Promise<{ deleted: number; results: any[] }> {
+  if (!keys.length) return { deleted: 0, results: [] };
+  const svc = searchService();
+  const tok = await searchToken();
+  let deleted = 0;
+  const results: any[] = [];
+  const BATCH = 1000;
+  for (let i = 0; i < keys.length; i += BATCH) {
+    const batch = keys.slice(i, i + BATCH);
+    const value = batch.map((k) => ({ '@search.action': 'delete', [keyField]: k }));
+    const res = await fetchWithTimeout(`${searchEndpointBase(svc)}/indexes/${encodeURIComponent(name)}/docs/index?api-version=${SEARCH_API}`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ value }),
+    });
+    if (!res.ok) {
+      const t = await res.text();
+      throw new FoundryError(res.status, t, `Search delete documents failed: ${t.slice(0, 240)}`);
+    }
+    const j: any = await res.json();
+    const rs = j?.value || [];
+    results.push(...rs);
+    deleted += rs.filter((r: any) => r?.status).length;
+  }
+  return { deleted, results };
+}
+
+/**
+ * Vector (k-NN) search against a vector field. `vector` is the query embedding,
+ * `field` the vector field name, `k` the neighbor count. When `text` is supplied
+ * it runs a hybrid (text + vector) query; `top` widens the candidate set for an
+ * in-process reranker; `semanticConfiguration` opts into the AI Search L2 reranker.
  */
 export async function vectorSearch(name: string, opts: {
   vector: number[]; field: string; k?: number; text?: string; select?: string;
+  /** Retrieve this many candidates (defaults to k). Set larger than k when an
+   *  in-process reranker (WS-2.2) will re-order + trim to k. */
+  top?: number;
+  /** When set, run AI Search's L2 semantic reranker (queryType=semantic) over
+   *  the hybrid candidate set — the index must carry this semantic config. The
+   *  results then include `@search.rerankerScore`. Needs `text` for the L2 stage. */
+  semanticConfiguration?: string;
 }): Promise<any> {
   const svc = searchService();
   const tok = await searchToken();
+  const k = opts.k || 5;
+  const top = Math.max(opts.top || k, k);
   const body: any = {
-    vectorQueries: [{ kind: 'vector', vector: opts.vector, fields: opts.field, k: opts.k || 5 }],
-    top: opts.k || 5,
+    vectorQueries: [{ kind: 'vector', vector: opts.vector, fields: opts.field, k: top }],
+    top,
   };
   if (opts.text) body.search = opts.text;
   if (opts.select) body.select = opts.select;
+  // Native L2 semantic reranker (hybrid retrieval → cross-encoder rerank). Only
+  // meaningful with a text query; guard so a vector-only call never 400s.
+  if (opts.semanticConfiguration && opts.text) {
+    body.queryType = 'semantic';
+    body.semanticConfiguration = opts.semanticConfiguration;
+  }
   const res = await fetchWithTimeout(`${searchEndpointBase(svc)}/indexes/${encodeURIComponent(name)}/docs/search?api-version=${SEARCH_API}`, {
     method: 'POST',
     headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
@@ -1885,6 +1934,8 @@ export async function vectorSearch(name: string, opts: {
  * spec: a key field, a content field, and a single vector field with the
  * given dimensions + metric. Used by the vector-store editor's Create.
  */
+export const LOOM_SEMANTIC_CONFIG = 'loom-semantic';
+
 export function buildVectorIndexDefinition(opts: {
   indexName: string; dim: number; metric: 'cosine' | 'euclidean' | 'dotProduct';
   vectorField?: string; contentField?: string; algorithm?: 'hnsw' | 'exhaustiveKnn';
@@ -1912,6 +1963,17 @@ export function buildVectorIndexDefinition(opts: {
     vectorSearch: {
       algorithms: [algorithm],
       profiles: [{ name: profileName, algorithm: algoName }],
+    },
+    // Semantic configuration for the L2 reranker (hybrid retrieval → cross-encoder
+    // rerank). Query-time semantic ranking needs a Basic+ service with the feature
+    // enabled; defining the config here is tier-safe and lets the WS-2.2 hybrid+
+    // rerank query opt into `queryType=semantic`. When the service lacks the
+    // semantic ranker the query falls back to the portable in-process reranker.
+    semantic: {
+      configurations: [{
+        name: LOOM_SEMANTIC_CONFIG,
+        prioritizedFields: { prioritizedContentFields: [{ fieldName: contentField }] },
+      }],
     },
   };
 }

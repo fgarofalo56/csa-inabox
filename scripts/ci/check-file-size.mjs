@@ -140,7 +140,7 @@ const ALLOWLIST = {
   "apps/fiab-console/lib/components/deployment/deployment-pipelines-pane.tsx": { max: 2600, reason: "pre-existing large module — ratchet-frozen" },
   "apps/fiab-console/lib/editors/foundry-hub-editor.tsx": { max: 2600, reason: "pre-existing large module — ratchet-frozen" },
   "apps/fiab-console/lib/editors/phase3/eventstream-editor.tsx": { max: 2600, reason: "pre-existing large module — ratchet-frozen" },
-  "apps/fiab-console/lib/azure/foundry-client.ts": { max: 2500, reason: "pre-existing large module — ratchet-frozen" },
+  "apps/fiab-console/lib/azure/foundry-client.ts": { max: 2600, reason: "pre-existing large module — ratchet-frozen; +WS-2.2 AI Search deleteDocuments + semantic-rerank config for Delta-synced vector search" },
   "apps/fiab-console/lib/editors/phase3/kql-database-editor.tsx": { max: 2500, reason: "pre-existing large module — ratchet-frozen" },
   "apps/fiab-console/lib/editors/unified-sql-database-editor.tsx": { max: 2400, reason: "pre-existing large module — ratchet-frozen" },
   "apps/fiab-console/lib/mcp/catalog.ts": { max: 2400, reason: "pre-existing large module — ratchet-frozen" },
