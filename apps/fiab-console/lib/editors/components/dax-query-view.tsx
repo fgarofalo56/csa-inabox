@@ -31,6 +31,7 @@ import {
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { clientFetch } from '@/lib/client-fetch';
 import { daxQueryTemplate, looksLikeDaxQuery, type DaxTemplateKind } from '@/lib/semantic-model/semantic-link';
+import { ResultVisualize } from './result-visualize';
 
 export interface DaxQueryViewTable {
   name: string;
@@ -326,6 +327,15 @@ export function DaxQueryView({ id, tables }: { id: string; tables: DaxQueryViewT
               </TableBody>
             </Table>
           </div>
+          {result.rows.length > 0 && (() => {
+            const cols = result.columns.length ? result.columns : Object.keys(result.rows[0] || {});
+            const matrix = result.rows.map((r) => cols.map((c) => (r as Record<string, unknown>)[c]));
+            return (
+              <div style={{ marginTop: tokens.spacingVerticalM }}>
+                <ResultVisualize columns={cols} rows={matrix} />
+              </div>
+            );
+          })()}
         </div>
       )}
 
