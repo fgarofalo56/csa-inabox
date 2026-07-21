@@ -11,7 +11,7 @@ import { clientFetch } from '@/lib/client-fetch';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type CSSProperties } from 'react';
 import { useRouter } from 'next/navigation';
 import {
-  Title2, Subtitle2, Body1, Caption1, Badge, Button, Input, Textarea, Spinner, Switch, Divider,
+  Title2, Subtitle2, Body1, Caption1, Badge, Button, Input, Textarea, Spinner, Switch,
   Tab, TabList, Field, Dropdown, Option, Checkbox, SearchBox,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   Accordion, AccordionItem, AccordionHeader, AccordionPanel,
@@ -33,6 +33,11 @@ import {
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from '../item-editor-chrome';
 import { NewItemCreateGate } from '../new-item-gate';
+import { SplitPane } from '@/lib/components/shared/split-pane';
+import {
+  SpindleSettingsPanel, SpindleEvalsPanel, SpindlePublishPanel, SpindleVersionsPanel,
+  type AipEvalCase, type AipSettingsShape, type AipVersion,
+} from './aip-logic-studio-panels';
 import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
 import { GuidedEmptyState } from '@/lib/components/shared/guided-empty-state';
 import { useRegisterRibbonCommands } from '@/lib/components/shared/ribbon-commands';
@@ -629,6 +634,51 @@ export function AipLogicEditor({ item, id }: { item: FabricItemType; id: string 
     finally { setInvokeBusy(false); }
   }, [id, buildTyped, persistRun, state.foundryModel]);
 
+  // ── Studio right-rail: model settings · evals · publish · versions ──
+  const [rightTab, setRightTab] = useState<'run' | 'settings' | 'evals' | 'publish' | 'versions' | 'foundry'>('run');
+  const settings = (state.settings && typeof state.settings === 'object' ? state.settings : {}) as AipSettingsShape;
+  const versions = (Array.isArray(state.versions) ? state.versions : []) as AipVersion[];
+  const lastEval = (state.lastEval && typeof state.lastEval === 'object' ? state.lastEval : null) as any;
+  const evalCases: AipEvalCase[] = useMemo(() => (Array.isArray(state.evalSuite) ? state.evalSuite : []).map((r: any, n: number) => ({
+    id: typeof r?.id === 'string' ? r.id : `ec_${n}`,
+    name: typeof r?.name === 'string' ? r.name : undefined,
+    inputsText: typeof r?.inputsText === 'string' ? r.inputsText : JSON.stringify(r?.inputs || {}),
+    criteria: typeof r?.criteria === 'string' ? r.criteria : '',
+  })), [state.evalSuite]);
+  const hasEvalSuite = evalCases.some((c) => (c.criteria || '').trim());
+
+  const onSettings = useCallback((patch: Partial<AipSettingsShape>) => setState((p) => ({ ...p, settings: { ...(p.settings as object || {}), ...patch } })), [setState]);
+  const onEvalCases = useCallback((next: AipEvalCase[]) => setState((p) => ({
+    ...p,
+    evalSuite: next.map((c) => {
+      let inputs: Record<string, unknown> = {};
+      try { inputs = c.inputsText ? JSON.parse(c.inputsText) : {}; } catch { inputs = {}; }
+      return { id: c.id, name: c.name, criteria: c.criteria, inputs, inputsText: c.inputsText };
+    }),
+  })), [setState]);
+  const onRanEval = useCallback((le: any) => setState((p) => ({ ...p, lastEval: le })), [setState]);
+  const onVersions = useCallback((next: AipVersion[]) => setState((p) => ({ ...p, versions: next })), [setState]);
+  const ensureSaved = useCallback(async () => (dirty ? Boolean(await save()) : true), [dirty, save]);
+  // "Generate sample" (AIP Logic parity) — fill the invoke form with typed
+  // placeholder values derived from the input schema (deterministic, no backend).
+  const fillSample = useCallback(() => {
+    setInvokeVals(() => {
+      const next: Record<string, string> = {};
+      for (const i of inputs) {
+        next[i.name] = AIP_NUMERIC.has(i.type) ? '0'
+          : i.type === 'boolean' ? 'true'
+          : i.type === 'array' ? '["sample"]'
+          : i.type === 'struct' ? '{"key":"value"}'
+          : AIP_OBJECT.has(i.type) ? 'sample-id'
+          : `sample ${i.name}`;
+      }
+      return next;
+    });
+  }, [inputs]);
+  const currentSnapshot = useMemo(() => ({
+    inputs, blocks, outputType: state.outputType ?? 'string', outputDescription: state.outputDescription ?? '', settings,
+  }), [inputs, blocks, state.outputType, state.outputDescription, settings]);
+
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'Function', actions: [
@@ -645,126 +695,239 @@ export function AipLogicEditor({ item, id }: { item: FabricItemType; id: string 
 
   if (id === 'new') return <NewItemCreateGate item={item} createLabel="Create Spindle logic / agent" intro="Spindle Studio — author a no-code typed AI function or agent: typed inputs → a TYPED BLOCK GRAPH (create-variable, get-object-property, use-LLM with tools, execute-function, transform, branch) → typed output, grounded on the Weave ontology and runnable against Azure OpenAI / Synapse. No Fabric required." />;
 
-  return (
-    <ItemEditorChrome item={item} id={id} ribbon={ribbon} dirty={dirty} commandSearch main={
-      <div className={s.pad}>
-        {loading && <Spinner size="small" label="Loading…" labelPosition="after" />}
-        <TeachingBanner
-          surfaceKey="aip-logic-editor"
-          title="Author a typed AI function with Spindle"
-          message="Declare typed inputs, then build a TYPED BLOCK GRAPH (dropdowns, no freeform JSON) — each block emits a named, typed output later blocks reference. Ground on a Weave ontology, then invoke as deterministic logic or as a tool-calling agent against the live Azure OpenAI deployment. Optionally publish as an Azure AI Foundry agent — no Microsoft Fabric required."
-          icon={BrainCircuit20Regular}
-        />
+  // ── Studio pane content (3-pane: authoring · debugger · run+settings) ──
+  const leftPane = (
+    <div className={s.pad} style={{ height: '100%', overflowY: 'auto' }}>
+      {loading && <Spinner size="small" label="Loading…" labelPosition="after" />}
+      <TeachingBanner
+        surfaceKey="aip-logic-editor"
+        title="Author a typed AI function with Spindle"
+        message="Declare typed inputs, then build a TYPED BLOCK GRAPH (dropdowns, no freeform JSON) — each block emits a named, typed output later blocks reference. Ground on a Weave ontology, then invoke as deterministic logic or as a tool-calling agent against the live Azure OpenAI deployment. Gate publish on an eval suite and publish as REST — no Microsoft Fabric required."
+        icon={BrainCircuit20Regular}
+      />
 
-        <div className={s.section}>
-          <SectionHead icon={<Link20Regular />} title="Ontology grounding" hint="Bind a Weave ontology — Spindle runs against its entity types and Lakehouse/Warehouse data bindings." />
-          {!onto.loaded ? <div className={s.empty}><Spinner size="tiny" /></div> : onto.ontologies.length === 0 ? (
-            <MessageBar intent="warning"><MessageBarBody>No ontologies found. Create an Ontology item first, then bind it here to ground this function on the Weave.</MessageBarBody></MessageBar>
-          ) : (
-            <div className={s.addBar}>
-              <Field label="Bound ontology" className={s.fieldWide}>
-                <Dropdown
-                  value={state.boundOntologyName || (onto.boundOntologyId ? '(bound)' : 'None — runs ungrounded')}
-                  selectedOptions={[String(onto.boundOntologyId || state.boundOntologyId || '')]}
-                  disabled={onto.busy}
-                  onOptionSelect={(_, d) => onto.bind(String(d.optionValue || ''))}>
-                  <Option value="">None — runs ungrounded</Option>
-                  {onto.ontologies.map((o) => <Option key={o.id} value={o.id} text={o.displayName}>{o.displayName}{typeof o.classCount === 'number' ? ` (${o.classCount} types)` : ''}</Option>)}
-                </Dropdown>
-              </Field>
-              {onto.busy && <Spinner size="tiny" />}
-            </div>
-          )}
-          {Array.isArray(state.ontologyEntityTypes) && state.ontologyEntityTypes.length > 0 && (
-            <div className={s.row}><Caption1 className={s.hint}>Entity types:</Caption1>{state.ontologyEntityTypes.slice(0, 12).map((t) => <Badge key={t} appearance="tint">{t}</Badge>)}</div>
-          )}
-          {onto.msg && <MessageBar intent={onto.msg.intent}><MessageBarBody>{onto.msg.text}</MessageBarBody></MessageBar>}
-        </div>
-
-        <div className={s.grid2}>
-          <div className={s.section}>
-            <SectionHead icon={<Add20Regular />} title="Typed inputs" hint="Named parameters with an AIP Logic type — object types bind to the Weave ontology." />
-            <div className={s.addBar}>
-              <Field label="Name"><Input value={inName} onChange={(_, d) => setInName(d.value)} placeholder="customerId" /></Field>
-              <Field label="Type" className={s.fieldMed}><Dropdown value={inType} selectedOptions={[inType]} onOptionSelect={(_, d) => { const v = String(d.optionValue || 'string'); setInType(v); if (!AIP_OBJECT.has(v)) setInObjType(''); }}>
-                {AIP_INPUT_TYPES.map((t) => <Option key={t} value={t}>{t}</Option>)}
-              </Dropdown></Field>
-              {AIP_OBJECT.has(inType) && (
-                <Field label="Object type" className={s.fieldMed}>
-                  <Dropdown
-                    value={inObjType || (state.ontologyEntityTypes && state.ontologyEntityTypes.length ? 'Pick entity type' : 'Bind an ontology first')}
-                    selectedOptions={[inObjType]}
-                    disabled={!(state.ontologyEntityTypes && state.ontologyEntityTypes.length)}
-                    onOptionSelect={(_, d) => setInObjType(String(d.optionValue || ''))}>
-                    {(state.ontologyEntityTypes || []).map((t) => <Option key={t} value={t}>{t}</Option>)}
-                  </Dropdown>
-                </Field>
-              )}
-              <Field label="Description" className={s.fieldStep}><Input value={inDesc} onChange={(_, d) => setInDesc(d.value)} placeholder="The customer to assess" /></Field>
-              <Checkbox label="Required" checked={inReq} onChange={(_, d) => setInReq(!!d.checked)} />
-              <Button appearance="primary" icon={<Add20Regular />} disabled={!/^[A-Za-z_][\w]*$/.test(inName.trim()) || (AIP_OBJECT.has(inType) && !inObjType)} onClick={addInput}>Add</Button>
-            </div>
-            {inputs.length === 0 ? <div className={s.empty}><Caption1>No inputs yet.</Caption1></div> : inputs.map((i) => (
-              <div key={i.id} className={s.row}>
-                <Body1><strong>{i.name}</strong></Body1>
-                <Badge appearance="tint">{i.type}{i.objectType ? `: ${i.objectType}` : ''}</Badge>
-                {i.required && <Badge appearance="outline" color="danger">required</Badge>}
-                {i.description && <Caption1 className={s.hint}>{i.description}</Caption1>}
-                <span className={s.spacer} />
-                <Button size="small" appearance="subtle" icon={<Dismiss16Regular />} aria-label={`Remove ${i.name}`} onClick={() => removeInput(i.id)}>Remove</Button>
-              </div>
-            ))}
-          </div>
-
-          <div className={s.section}>
-            <SectionHead icon={<Code20Regular />} title="Typed output" hint="The shape the function returns." />
-            <Field label="Output type"><Dropdown value={String(state.outputType || 'string')} selectedOptions={[String(state.outputType || 'string')]} onOptionSelect={(_, d) => setState((p) => ({ ...p, outputType: d.optionValue || 'string' }))}>
-              <Option value="string">string</Option><Option value="number">number</Option><Option value="boolean">boolean</Option><Option value="object">object (JSON)</Option>
-            </Dropdown></Field>
-            <Field label="Output description"><Input value={String(state.outputDescription || '')} onChange={(_, d) => setState((p) => ({ ...p, outputDescription: d.value }))} placeholder="A one-line risk summary" /></Field>
-          </div>
-        </div>
-
-        <div className={s.section}>
-          <SectionHead icon={<Flash20Regular />} title="Typed block graph" hint="Ordered typed blocks — each emits a named, typed output later blocks reference. Configured with dropdowns; every block runs a real Azure-native backend." />
+      <div className={s.section}>
+        <SectionHead icon={<Link20Regular />} title="Ontology grounding" hint="Bind a Weave ontology — Spindle runs against its entity types and Lakehouse/Warehouse data bindings." />
+        {!onto.loaded ? <div className={s.empty}><Spinner size="tiny" /></div> : onto.ontologies.length === 0 ? (
+          <MessageBar intent="warning"><MessageBarBody>No ontologies found. Create an Ontology item first, then bind it here to ground this function on the Weave.</MessageBarBody></MessageBar>
+        ) : (
           <div className={s.addBar}>
-            <Field label="Add block" className={s.fieldMed}>
+            <Field label="Bound ontology" className={s.fieldWide}>
               <Dropdown
-                value={AIP_BLOCK_META[addBlockKind].label}
-                selectedOptions={[addBlockKind]}
-                onOptionSelect={(_, d) => setAddBlockKind((d.optionValue as AipBlockKind) || 'use-llm')}>
-                {(Object.keys(AIP_BLOCK_META) as AipBlockKind[]).map((k) => <Option key={k} value={k} text={AIP_BLOCK_META[k].label}>{AIP_BLOCK_META[k].label}</Option>)}
+                value={state.boundOntologyName || (onto.boundOntologyId ? '(bound)' : 'None — runs ungrounded')}
+                selectedOptions={[String(onto.boundOntologyId || state.boundOntologyId || '')]}
+                disabled={onto.busy}
+                onOptionSelect={(_, d) => onto.bind(String(d.optionValue || ''))}>
+                <Option value="">None — runs ungrounded</Option>
+                {onto.ontologies.map((o) => <Option key={o.id} value={o.id} text={o.displayName}>{o.displayName}{typeof o.classCount === 'number' ? ` (${o.classCount} types)` : ''}</Option>)}
               </Dropdown>
             </Field>
-            <Caption1 className={s.hint}>{AIP_BLOCK_META[addBlockKind].hint}</Caption1>
-            <span className={s.spacer} />
-            <Button appearance="primary" icon={<Add20Regular />} onClick={() => addBlock(addBlockKind)}>Add block</Button>
+            {onto.busy && <Spinner size="tiny" />}
           </div>
-          {blocks.length === 0 ? (
-            <GuidedEmptyState
-              heroIcon={Flash20Regular}
-              title="Build your logic graph"
-              intro="Add typed blocks in order — each emits a named output later blocks reference. Start from a common block below, or add any kind from the picker above."
-              paths={[
-                { key: 'llm', title: 'Use-LLM block', body: 'One grounded Azure OpenAI turn that can call Apply-action, Ontology-function, and Execute-function tools.', icon: BrainCircuit20Regular, onClick: () => addBlock('use-llm') },
-                { key: 'prop', title: 'Get object property', body: 'Read one property off a bound ontology object with a real Synapse read.', icon: Database20Regular, onClick: () => addBlock('get-object-property') },
-              ]}
-              askCopilot={{ onClick: () => openCopilot(), body: 'Describe the function you want and Copilot suggests the block sequence.' }}
-            />
-          ) : blocks.map((b, n) => (
-            <div key={b.id}>
-              {n > 0 && <div className={s.blockConnector}><ChevronRight20Regular style={{ transform: 'rotate(90deg)' }} /></div>}
-              <AipBlockCard
-                block={b} index={n} total={blocks.length}
-                priorRefs={[...inputs.map((i) => i.name), ...blocks.slice(0, n).map((x) => x.output)]}
-                entityTypes={entityTypes} propsByType={propsByType} actionTypes={actionTypes} siblingFns={siblingFns}
-                onChange={(patch) => updateBlock(b.id, patch)} onRemove={() => removeBlock(b.id)} onMove={(dir) => moveBlock(b.id, dir)} />
+        )}
+        {Array.isArray(state.ontologyEntityTypes) && state.ontologyEntityTypes.length > 0 && (
+          <div className={s.row}><Caption1 className={s.hint}>Entity types:</Caption1>{state.ontologyEntityTypes.slice(0, 12).map((t) => <Badge key={t} appearance="tint">{t}</Badge>)}</div>
+        )}
+        {onto.msg && <MessageBar intent={onto.msg.intent}><MessageBarBody>{onto.msg.text}</MessageBarBody></MessageBar>}
+      </div>
+
+      <div className={s.grid2}>
+        <div className={s.section}>
+          <SectionHead icon={<Add20Regular />} title="Typed inputs" hint="Named parameters with an AIP Logic type — object types bind to the Weave ontology." />
+          <div className={s.addBar}>
+            <Field label="Name"><Input value={inName} onChange={(_, d) => setInName(d.value)} placeholder="customerId" /></Field>
+            <Field label="Type" className={s.fieldMed}><Dropdown value={inType} selectedOptions={[inType]} onOptionSelect={(_, d) => { const v = String(d.optionValue || 'string'); setInType(v); if (!AIP_OBJECT.has(v)) setInObjType(''); }}>
+              {AIP_INPUT_TYPES.map((t) => <Option key={t} value={t}>{t}</Option>)}
+            </Dropdown></Field>
+            {AIP_OBJECT.has(inType) && (
+              <Field label="Object type" className={s.fieldMed}>
+                <Dropdown
+                  value={inObjType || (state.ontologyEntityTypes && state.ontologyEntityTypes.length ? 'Pick entity type' : 'Bind an ontology first')}
+                  selectedOptions={[inObjType]}
+                  disabled={!(state.ontologyEntityTypes && state.ontologyEntityTypes.length)}
+                  onOptionSelect={(_, d) => setInObjType(String(d.optionValue || ''))}>
+                  {(state.ontologyEntityTypes || []).map((t) => <Option key={t} value={t}>{t}</Option>)}
+                </Dropdown>
+              </Field>
+            )}
+            <Field label="Description" className={s.fieldStep}><Input value={inDesc} onChange={(_, d) => setInDesc(d.value)} placeholder="The customer to assess" /></Field>
+            <Checkbox label="Required" checked={inReq} onChange={(_, d) => setInReq(!!d.checked)} />
+            <Button appearance="primary" icon={<Add20Regular />} disabled={!/^[A-Za-z_][\w]*$/.test(inName.trim()) || (AIP_OBJECT.has(inType) && !inObjType)} onClick={addInput}>Add</Button>
+          </div>
+          {inputs.length === 0 ? <div className={s.empty}><Caption1>No inputs yet.</Caption1></div> : inputs.map((i) => (
+            <div key={i.id} className={s.row}>
+              <Body1><strong>{i.name}</strong></Body1>
+              <Badge appearance="tint">{i.type}{i.objectType ? `: ${i.objectType}` : ''}</Badge>
+              {i.required && <Badge appearance="outline" color="danger">required</Badge>}
+              {i.description && <Caption1 className={s.hint}>{i.description}</Caption1>}
+              <span className={s.spacer} />
+              <Button size="small" appearance="subtle" icon={<Dismiss16Regular />} aria-label={`Remove ${i.name}`} onClick={() => removeInput(i.id)}>Remove</Button>
             </div>
           ))}
         </div>
 
         <div className={s.section}>
-          <SectionHead icon={<Play20Regular />} title="Invoke" hint="Run against the live Azure OpenAI deployment — as typed logic or as a tool-calling agent over the bound ontology." />
+          <SectionHead icon={<Code20Regular />} title="Typed output" hint="The shape the function returns." />
+          <Field label="Output type"><Dropdown value={String(state.outputType || 'string')} selectedOptions={[String(state.outputType || 'string')]} onOptionSelect={(_, d) => setState((p) => ({ ...p, outputType: d.optionValue || 'string' }))}>
+            <Option value="string">string</Option><Option value="number">number</Option><Option value="boolean">boolean</Option><Option value="object">object (JSON)</Option>
+          </Dropdown></Field>
+          <Field label="Output description"><Input value={String(state.outputDescription || '')} onChange={(_, d) => setState((p) => ({ ...p, outputDescription: d.value }))} placeholder="A one-line risk summary" /></Field>
+        </div>
+      </div>
+
+      <div className={s.section}>
+        <SectionHead icon={<Flash20Regular />} title="Typed block graph" hint="Ordered typed blocks — each emits a named, typed output later blocks reference. Configured with dropdowns; every block runs a real Azure-native backend." />
+        <div className={s.addBar}>
+          <Field label="Add block" className={s.fieldMed}>
+            <Dropdown
+              value={AIP_BLOCK_META[addBlockKind].label}
+              selectedOptions={[addBlockKind]}
+              onOptionSelect={(_, d) => setAddBlockKind((d.optionValue as AipBlockKind) || 'use-llm')}>
+              {(Object.keys(AIP_BLOCK_META) as AipBlockKind[]).map((k) => <Option key={k} value={k} text={AIP_BLOCK_META[k].label}>{AIP_BLOCK_META[k].label}</Option>)}
+            </Dropdown>
+          </Field>
+          <Caption1 className={s.hint}>{AIP_BLOCK_META[addBlockKind].hint}</Caption1>
+          <span className={s.spacer} />
+          <Button appearance="primary" icon={<Add20Regular />} onClick={() => addBlock(addBlockKind)}>Add block</Button>
+        </div>
+        {blocks.length === 0 ? (
+          <GuidedEmptyState
+            heroIcon={Flash20Regular}
+            title="Build your logic graph"
+            intro="Add typed blocks in order — each emits a named output later blocks reference. Start from a common block below, or add any kind from the picker above."
+            paths={[
+              { key: 'llm', title: 'Use-LLM block', body: 'One grounded Azure OpenAI turn that can call Apply-action, Ontology-function, and Execute-function tools.', icon: BrainCircuit20Regular, onClick: () => addBlock('use-llm') },
+              { key: 'prop', title: 'Get object property', body: 'Read one property off a bound ontology object with a real Synapse read.', icon: Database20Regular, onClick: () => addBlock('get-object-property') },
+            ]}
+            askCopilot={{ onClick: () => openCopilot(), body: 'Describe the function you want and Copilot suggests the block sequence.' }}
+          />
+        ) : blocks.map((b, n) => (
+          <div key={b.id}>
+            {n > 0 && <div className={s.blockConnector}><ChevronRight20Regular style={{ transform: 'rotate(90deg)' }} /></div>}
+            <AipBlockCard
+              block={b} index={n} total={blocks.length}
+              priorRefs={[...inputs.map((i) => i.name), ...blocks.slice(0, n).map((x) => x.output)]}
+              entityTypes={entityTypes} propsByType={propsByType} actionTypes={actionTypes} siblingFns={siblingFns}
+              onChange={(patch) => updateBlock(b.id, patch)} onRemove={() => removeBlock(b.id)} onMove={(dir) => moveBlock(b.id, dir)} />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+
+  const centerPane = (
+    <div className={s.pad} style={{ height: '100%', overflowY: 'auto' }}>
+      <div className={s.section}>
+        <SectionHead icon={<Bug20Regular />} title="Debugger" hint="Per-block execution cards from the real run — resolved output, generated prompt/SQL, tool calls, and timing. Run the function from the Run tab." />
+        {invokeMsg && <MessageBar intent={invokeMsg.intent}><MessageBarBody>{invokeMsg.text}</MessageBarBody></MessageBar>}
+        {sourcesUsed.length > 0 && <div className={s.row}><Caption1 className={s.hint}>Grounded sources:</Caption1>{sourcesUsed.map((src) => <Badge key={src} appearance="tint" color="brand">{src}</Badge>)}</div>}
+        {invokeOut !== null && <CodeBlock ariaLabel="Function output" content={invokeOut} />}
+        {runSteps.length === 0 ? (
+          invokeOut === null && !invokeMsg && <div className={s.empty}><Caption1>No run yet — set inputs and Invoke from the Run tab to populate the debugger.</Caption1></div>
+        ) : (
+          <>
+            <Caption1 as="p" block className={s.hint}>{runSteps.length} step{runSteps.length === 1 ? '' : 's'} — expand a card to inspect the prompt, tool calls, output, and timing.</Caption1>
+            <Accordion multiple collapsible>
+              {runSteps.map((st, n) => {
+                const label = st.kind || st.type || st.name || 'step';
+                const isErr = st.kind === 'error' || st.status === 'error' || !!st.error;
+                const isGate = st.status === 'gate' || !!st.gate;
+                const isFinal = st.kind === 'final';
+                const isBlock = !!st.output && (st.kind ? st.kind in AIP_BLOCK_META : false);
+                const head = isBlock ? (AIP_BLOCK_META[st.kind as AipBlockKind]?.label || label)
+                  : st.kind === 'tool_call' ? `tool · ${st.name || ''}`
+                  : st.kind === 'tool_result' ? `result · ${st.name || ''}`
+                  : label;
+                const detail = st.error || st.gate?.remediation || st.content || st.prompt
+                  || (st.result !== undefined ? JSON.stringify(st.result, null, 2) : '')
+                  || st.name || '';
+                const key = st.callId || `${label}-${n}`;
+                const tone = isErr ? 'danger' : isGate ? 'warning' : isFinal ? 'success' : 'brand';
+                return (
+                  <AccordionItem key={key} value={key}>
+                    <AccordionHeader>
+                      <div className={s.traceHead}>
+                        <Badge appearance="filled" color={tone as any}>{n + 1}</Badge>
+                        {isBlock && AIP_BLOCK_META[st.kind as AipBlockKind]?.icon}
+                        <Badge appearance="tint" color={isErr ? 'danger' : isGate ? 'warning' : isFinal ? 'success' : 'informative'}>{head}</Badge>
+                        {st.output && <span className={s.outPill}><Badge appearance="outline" color="brand">{st.output}: {st.outputType || 'string'}</Badge></span>}
+                        {typeof st.elapsedMs === 'number' && <Caption1 className={s.hint}>{st.elapsedMs} ms</Caption1>}
+                        {st.model && <Badge appearance="outline">{st.model}</Badge>}
+                        {st.status && <Badge appearance="outline" color={isErr ? 'danger' : isGate ? 'warning' : undefined}>{st.status}</Badge>}
+                      </div>
+                    </AccordionHeader>
+                    <AccordionPanel>
+                      {isGate && st.gate && (
+                        <MessageBar intent="warning"><MessageBarBody>
+                          <MessageBarTitle>{st.gate.reason || 'Infrastructure required'}</MessageBarTitle>
+                          {st.gate.remediation}
+                        </MessageBarBody></MessageBar>
+                      )}
+                      {st.output && st.content !== undefined && st.content !== '' && (
+                        <Caption1 className={s.hint}>Resolved output <strong>{st.output}</strong> = {String(st.content).slice(0, 200)}</Caption1>
+                      )}
+                      {Array.isArray(st.tools) && st.tools.length > 0 && (
+                        <>
+                          <Caption1 className={s.hint}>Proposed edits / tool calls (real Azure-native backends):</Caption1>
+                          <CodeBlock ariaLabel={`Step ${n + 1} tool calls`} content={JSON.stringify(st.tools, null, 2).slice(0, 4000)} />
+                        </>
+                      )}
+                      {detail ? <CodeBlock ariaLabel={`Step ${n + 1} detail`} content={String(detail).slice(0, 4000)} /> : <Caption1 className={s.hint}>No additional detail for this step.</Caption1>}
+                    </AccordionPanel>
+                  </AccordionItem>
+                );
+              })}
+            </Accordion>
+          </>
+        )}
+      </div>
+
+      <div className={s.section}>
+        <SectionHead icon={<History20Regular />} title="Run history" hint="Recent invocations persisted to Cosmos with this function — open a run to rehydrate its output and debugger trace." />
+        {runs.length === 0 ? <div className={s.empty}><Caption1>No runs yet — Invoke the function to record a run.</Caption1></div> : (
+          <div className={s.tableWrap}>
+            <Table aria-label="Run history" size="small">
+              <TableHeader><TableRow>
+                <TableHeaderCell>When</TableHeaderCell>
+                <TableHeaderCell>Mode</TableHeaderCell>
+                <TableHeaderCell>Model</TableHeaderCell>
+                <TableHeaderCell>Tokens</TableHeaderCell>
+                <TableHeaderCell>Output</TableHeaderCell>
+                <TableHeaderCell aria-label="actions" />
+              </TableRow></TableHeader>
+              <TableBody>
+                {runs.map((rec) => (
+                  <TableRow key={rec.id}>
+                    <TableCell><Caption1>{new Date(rec.ts).toLocaleString()}</Caption1></TableCell>
+                    <TableCell><Badge appearance="tint" color={rec.mode === 'agent' ? 'brand' : 'informative'}>{rec.mode}</Badge></TableCell>
+                    <TableCell><Caption1 className={s.hint}>{rec.model || '—'}</Caption1></TableCell>
+                    <TableCell><Caption1 className={s.hint}>{rec.usage?.totalTokens ?? '—'}</Caption1></TableCell>
+                    <TableCell><Caption1 className={s.hint}>{String(rec.output || '').slice(0, 60) || '—'}</Caption1></TableCell>
+                    <TableCell><Button size="small" appearance="subtle" icon={<Play20Regular />} onClick={() => loadRun(rec)}>Open</Button></TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+
+  const rightPane = (
+    <div className={s.pad} style={{ height: '100%', overflowY: 'auto' }}>
+      <TabList selectedValue={rightTab} onTabSelect={(_, d) => setRightTab(d.value as typeof rightTab)} className={s.tabStrip}>
+        <Tab value="run" icon={<Play20Regular />}>Run</Tab>
+        <Tab value="settings" icon={<Settings20Regular />}>Settings</Tab>
+        <Tab value="evals" icon={<Beaker20Regular />}>Evals</Tab>
+        <Tab value="publish" icon={<Globe20Regular />}>Publish</Tab>
+        <Tab value="versions" icon={<History20Regular />}>Versions</Tab>
+        <Tab value="foundry" icon={<Rocket20Regular />}>Foundry</Tab>
+      </TabList>
+
+      {rightTab === 'run' && (
+        <div className={s.section}>
+          <SectionHead icon={<Play20Regular />} title="Run" hint="Run against the live Azure OpenAI deployment — as typed logic or as a tool-calling agent over the bound ontology. Output + trace appear in the Debugger pane." />
           <div className={s.modeBar}>
             <Switch checked={agentMode} onChange={(_, d) => setAgentMode(!!d.checked)} label={agentMode ? 'Agent mode (multi-step, tool-calling)' : 'Logic mode (single grounded turn)'} />
             <span className={s.spacer} />
@@ -779,101 +942,28 @@ export function AipLogicEditor({ item, id }: { item: FabricItemType; id: string 
             </Field>
           ))}
           <Button appearance="primary" icon={<Play20Regular />} disabled={invokeBusy || blocks.length === 0} onClick={invoke}>{invokeBusy ? 'Running…' : agentMode ? 'Run agent' : 'Invoke function'}</Button>
-          {invokeMsg && <MessageBar intent={invokeMsg.intent}><MessageBarBody>{invokeMsg.text}</MessageBarBody></MessageBar>}
-          {sourcesUsed.length > 0 && <div className={s.row}><Caption1 className={s.hint}>Grounded sources:</Caption1>{sourcesUsed.map((src) => <Badge key={src} appearance="tint" color="brand">{src}</Badge>)}</div>}
-          {invokeOut !== null && <CodeBlock ariaLabel="Function output" content={invokeOut} />}
-          {runSteps.length > 0 && (
-            <>
-              <Divider />
-              <div className={s.sectionHead}>
-                <span className={s.sectionIcon}><Bug20Regular /></span>
-                <div>
-                  <Subtitle2>Debugger</Subtitle2>
-                  <Caption1 as="p" block className={s.hint}>{runSteps.length} step{runSteps.length === 1 ? '' : 's'} — expand a card to inspect the prompt, tool calls, output, and timing.</Caption1>
-                </div>
-              </div>
-              <Accordion multiple collapsible>
-                {runSteps.map((st, n) => {
-                  const label = st.kind || st.type || st.name || 'step';
-                  const isErr = st.kind === 'error' || st.status === 'error' || !!st.error;
-                  const isGate = st.status === 'gate' || !!st.gate;
-                  const isFinal = st.kind === 'final';
-                  const isBlock = !!st.output && (st.kind ? st.kind in AIP_BLOCK_META : false);
-                  const head = isBlock ? (AIP_BLOCK_META[st.kind as AipBlockKind]?.label || label)
-                    : st.kind === 'tool_call' ? `tool · ${st.name || ''}`
-                    : st.kind === 'tool_result' ? `result · ${st.name || ''}`
-                    : label;
-                  const detail = st.error || st.gate?.remediation || st.content || st.prompt
-                    || (st.result !== undefined ? JSON.stringify(st.result, null, 2) : '')
-                    || st.name || '';
-                  const key = st.callId || `${label}-${n}`;
-                  const tone = isErr ? 'danger' : isGate ? 'warning' : isFinal ? 'success' : 'brand';
-                  return (
-                    <AccordionItem key={key} value={key}>
-                      <AccordionHeader>
-                        <div className={s.traceHead}>
-                          <Badge appearance="filled" color={tone as any}>{n + 1}</Badge>
-                          {isBlock && AIP_BLOCK_META[st.kind as AipBlockKind]?.icon}
-                          <Badge appearance="tint" color={isErr ? 'danger' : isGate ? 'warning' : isFinal ? 'success' : 'informative'}>{head}</Badge>
-                          {st.output && <span className={s.outPill}><Badge appearance="outline" color="brand">{st.output}: {st.outputType || 'string'}</Badge></span>}
-                          {typeof st.elapsedMs === 'number' && <Caption1 className={s.hint}>{st.elapsedMs} ms</Caption1>}
-                          {st.model && <Badge appearance="outline">{st.model}</Badge>}
-                          {st.status && <Badge appearance="outline" color={isErr ? 'danger' : isGate ? 'warning' : undefined}>{st.status}</Badge>}
-                        </div>
-                      </AccordionHeader>
-                      <AccordionPanel>
-                        {isGate && st.gate && (
-                          <MessageBar intent="warning"><MessageBarBody>
-                            <MessageBarTitle>{st.gate.reason || 'Infrastructure required'}</MessageBarTitle>
-                            {st.gate.remediation}
-                          </MessageBarBody></MessageBar>
-                        )}
-                        {st.output && st.content !== undefined && st.content !== '' && (
-                          <Caption1 className={s.hint}>Resolved output <strong>{st.output}</strong> = {String(st.content).slice(0, 200)}</Caption1>
-                        )}
-                        {Array.isArray(st.tools) && st.tools.length > 0 && (
-                          <CodeBlock ariaLabel={`Step ${n + 1} tool calls`} content={JSON.stringify(st.tools, null, 2).slice(0, 4000)} />
-                        )}
-                        {detail ? <CodeBlock ariaLabel={`Step ${n + 1} detail`} content={String(detail).slice(0, 4000)} /> : <Caption1 className={s.hint}>No additional detail for this step.</Caption1>}
-                      </AccordionPanel>
-                    </AccordionItem>
-                  );
-                })}
-              </Accordion>
-            </>
-          )}
+          {inputs.length > 0 && <Button appearance="subtle" icon={<Beaker20Regular />} disabled={invokeBusy} onClick={fillSample}>Generate sample inputs</Button>}
         </div>
+      )}
 
-        <div className={s.section}>
-          <SectionHead icon={<History20Regular />} title="Run history" hint="Recent invocations persisted to Cosmos with this function — open a run to rehydrate its output and debugger trace." />
-          {runs.length === 0 ? <div className={s.empty}><Caption1>No runs yet — Invoke the function to record a run.</Caption1></div> : (
-            <div className={s.tableWrap}>
-              <Table aria-label="Run history" size="small">
-                <TableHeader><TableRow>
-                  <TableHeaderCell>When</TableHeaderCell>
-                  <TableHeaderCell>Mode</TableHeaderCell>
-                  <TableHeaderCell>Model</TableHeaderCell>
-                  <TableHeaderCell>Tokens</TableHeaderCell>
-                  <TableHeaderCell>Output</TableHeaderCell>
-                  <TableHeaderCell aria-label="actions" />
-                </TableRow></TableHeader>
-                <TableBody>
-                  {runs.map((rec) => (
-                    <TableRow key={rec.id}>
-                      <TableCell><Caption1>{new Date(rec.ts).toLocaleString()}</Caption1></TableCell>
-                      <TableCell><Badge appearance="tint" color={rec.mode === 'agent' ? 'brand' : 'informative'}>{rec.mode}</Badge></TableCell>
-                      <TableCell><Caption1 className={s.hint}>{rec.model || '—'}</Caption1></TableCell>
-                      <TableCell><Caption1 className={s.hint}>{rec.usage?.totalTokens ?? '—'}</Caption1></TableCell>
-                      <TableCell><Caption1 className={s.hint}>{String(rec.output || '').slice(0, 60) || '—'}</Caption1></TableCell>
-                      <TableCell><Button size="small" appearance="subtle" icon={<Play20Regular />} onClick={() => loadRun(rec)}>Open</Button></TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
-          )}
-        </div>
-
+      {rightTab === 'settings' && <SpindleSettingsPanel settings={settings} onChange={onSettings} />}
+      {rightTab === 'evals' && (
+        <SpindleEvalsPanel
+          id={id} cases={evalCases} onCases={onEvalCases} lastEval={lastEval} onRan={onRanEval}
+          inputNames={inputs.map((i) => i.name)} ensureSaved={ensureSaved} blocksReady={blocks.length > 0} />
+      )}
+      {rightTab === 'publish' && (
+        <SpindlePublishPanel
+          id={id}
+          published={{ publishedApiPath: state.publishedApiPath as string | undefined, publishedCallableUrl: state.publishedCallableUrl as string | null | undefined, publishedAt: state.publishedAt as string | undefined }}
+          ensureSaved={ensureSaved} blocksReady={blocks.length > 0} hasEvalSuite={hasEvalSuite} />
+      )}
+      {rightTab === 'versions' && (
+        <SpindleVersionsPanel
+          id={id} versions={versions} onVersions={onVersions} currentSnapshot={currentSnapshot as any}
+          ensureSaved={ensureSaved} blocksReady={blocks.length > 0} />
+      )}
+      {rightTab === 'foundry' && (
         <div className={s.section}>
           <SectionHead icon={<Rocket20Regular />} title="Publish as Azure AI Foundry agent" hint="Deploy this Spindle logic as a real Foundry Agent Service agent, then run + inspect its steps. Unsupported in Azure Government — use Invoke (Azure-native) there." />
           <div className={s.addBar}>
@@ -884,8 +974,22 @@ export function AipLogicEditor({ item, id }: { item: FabricItemType; id: string 
           </div>
           {deployMsg && <MessageBar intent={deployMsg.intent}><MessageBarBody>{deployMsg.text}</MessageBarBody></MessageBar>}
         </div>
+      )}
 
-        <SaveStrip saving={saving} savedAt={savedAt} error={error} dirty={dirty} onSave={() => save()} />
+      <SaveStrip saving={saving} savedAt={savedAt} error={error} dirty={dirty} onSave={() => save()} />
+    </div>
+  );
+
+  return (
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon} dirty={dirty} commandSearch main={
+      <div style={{ display: 'flex', flex: 1, minWidth: 0, minHeight: '72vh', overflow: 'hidden' }}>
+        <SplitPane direction="horizontal" storageKey="aip-logic.studio.left" defaultSize="34%" minSize={300} dividerLabel="Resize the authoring pane">
+          {leftPane}
+          <SplitPane direction="horizontal" primary="second" storageKey="aip-logic.studio.right" defaultSize="36%" minSize={320} dividerLabel="Resize the run & settings pane">
+            {centerPane}
+            {rightPane}
+          </SplitPane>
+        </SplitPane>
       </div>
     } />
   );
