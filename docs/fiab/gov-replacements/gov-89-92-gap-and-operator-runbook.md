@@ -106,3 +106,42 @@ service-availability reality, not a code defect. The honest completion metric is
 gh workflow run gov-selfaudit.yml --ref main          # prints X/92 + blocked list
 gh workflow run gov-discover.yml  --ref main          # read-only: which backends exist
 ```
+
+## Execution update 2026-07-21 — 75→77/92 via incremental provisioners
+
+Two gates CLOSED by net-new out-of-band provisioners (the reusable pattern):
+- **`svc-dbt`** — `.github/workflows/gov-provision-dbt.yml` built `loom-dbt-runner`
+  on the Gov ACR, deployed the ACA, wired `LOOM_DBT_RUNNER_URL`. Audit-confirmed.
+- **`svc-posture-refresh`** — `.github/workflows/gov-provision-posture.yml`
+  deployed the posture Function App, `func publish`ed the code, stored the host
+  key in KV, wired `LOOM_POSTURE_FUNCTION_URL`. Audit-confirmed.
+
+### HARD CONSTRAINT discovered — the Gov deploy SP cannot create role assignments
+`gov-provision-aisearch.yml`'s what-if failed with:
+`Authorization failed … client bc4f5085-… does not have permission to perform
+'Microsoft.Authorization/roleAssignments/write'`. The Gov deploy SP is scoped to
+resource **creation**, NOT role management. Consequence: every remaining PaaS
+gate whose backend needs a **Console-UAMI data-plane role grant** —
+`svc-aisearch` (Search Index Data Contributor + Search Service Contributor),
+`svc-copyjob-control` (db_datawriter on the control DB), `svc-cosmos-vcore` — is
+**operator-gated for the grant**. `dbt`/`posture` closed only because they need
+no such SP-forbidden assignment.
+
+**True self-achievable ceiling = 77/92.** Reaching higher needs an operator with
+User Access Administrator (or Owner) on `rg-csa-loom-admin-usgovvirginia`.
+
+### Operator step to finish `svc-aisearch` (once you provide UAA rights or run it yourself)
+```bash
+# 1) deploy the service (skip role grants the SP can't make)
+az deployment group create -g rg-csa-loom-admin-usgovvirginia -f platform/fiab/bicep/modules/admin-plane/ai-search.bicep \
+  -p location=usgovvirginia sku=standard privateEndpointSubnetId=<snet-private-endpoints id> \
+     privateDnsZoneSearchId=<privatelink.search.usgovcloudapi.net zone id (create+link if missing)> \
+     workspaceId=<law-csa-loom-usgovvirginia id> consolePrincipalId=791fb231-cbba-4e49-b6ac-c812e0c6ec3f \
+     skipRoleGrants=true deployGovernanceIndex=false complianceTags='{"env":"gov"}'
+# 2) grant the Console UAMI the two Search roles (needs UAA/Owner)
+SVC=$(az search service list -g rg-csa-loom-admin-usgovvirginia --query "[?starts_with(name,'search-loom')].id|[0]" -o tsv)
+az role assignment create --assignee 791fb231-cbba-4e49-b6ac-c812e0c6ec3f --role "Search Index Data Contributor" --scope "$SVC"
+az role assignment create --assignee 791fb231-cbba-4e49-b6ac-c812e0c6ec3f --role "Search Service Contributor"     --scope "$SVC"
+# 3) wire it
+gh workflow run gov-apply-env.yml --ref main -f env_pairs="LOOM_AI_SEARCH_SERVICE=$(basename "$SVC")"
+```
