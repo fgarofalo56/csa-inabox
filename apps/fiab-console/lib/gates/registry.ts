@@ -511,6 +511,16 @@ export const GATE_META: Record<string, GateMeta> = {
     autoResolveNote: 'A push-button deploy wires the Azure ML / Foundry workspace (LOOM_AML_WORKSPACE), so serving works day-one on the Azure-native path. Databricks Mosaic serving is opt-in via LOOM_MODEL_SERVING_BACKEND=databricks + LOOM_DATABRICKS_HOSTNAME.',
     legacyCodes: ['model_serving_not_configured'],
   },
+  'svc-feature-store': {
+    surfaces: [
+      { path: '/items/feature-table', label: 'Feature table editor' },
+      { path: '/api/items/feature-table/*', label: 'Feature Store BFF routes' },
+    ],
+    fixit: { kind: 'resource-picker' },
+    loaders: { LOOM_DATABRICKS_HOSTNAME: L.databricks, LOOM_PGVECTOR_HOST: L.pgFqdn },
+    autoResolveNote: 'Feature tables author on the Azure-native offline backend by DEFAULT — Unity Catalog (LOOM_DATABRICKS_HOSTNAME) on Commercial, or set LOOM_FEATURE_STORE_BACKEND=postgres for the sovereign OSS-UC + Azure Database for PostgreSQL path (Gov). Online serving (feature-lookup-at-inference) uses Lakebase/pgvector (LOOM_PGVECTOR_HOST + LOOM_POSTGRES_AAD_USER). No Microsoft Fabric required.',
+    legacyCodes: ['feature_store_not_configured'],
+  },
   'svc-apim': {
     surfaces: [
       { path: '/admin/api-management', label: 'API Management admin' },
