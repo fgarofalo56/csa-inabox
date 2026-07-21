@@ -179,7 +179,11 @@ describe('admin/env-config registry', () => {
     // OpenAI account the fine-tuning + model-deployment REST targets) are both NEW
     // editable vars; the LOOM_AOAI_ENDPOINT / LOOM_FOUNDRY_NAME keys it also
     // references are shared with svc-aoai / svc-aml.
-    expect(EDITABLE_ENV.length).toBe(143);
+    // Bumped to 145 by WS-9 (svc-agent-mesh): LOOM_MESH_PROFILE (the mesh egress
+    // profile override) + LOOM_A2A_EGRESS_ALLOW (the A2A/MCP hop egress allow-list)
+    // are both NEW editable vars, opt-in + optionalDefault (the mesh runs on the
+    // cloud default profile when unset).
+    expect(EDITABLE_ENV.length).toBe(145);
   });
 
   it('surfaces the wave-2 env vars as settable (previously dropped by the whitelist)', () => {
@@ -244,13 +248,14 @@ describe('admin/env-config registry', () => {
     // per-replica in-memory cache with zero loss of function).
     const optDefault = EDITABLE_ENV.filter((e) => e.optionalDefault).map((e) => e.key).sort();
     expect(optDefault).toEqual([
+      'LOOM_A2A_EGRESS_ALLOW',
       'LOOM_AOAI_MINI_DEPLOYMENT', 'LOOM_AOAI_STRONG_DEPLOYMENT',
       'LOOM_AUDIT_DCR_ENDPOINT', 'LOOM_AUDIT_DCR_ID',
       'LOOM_BROKER_REDIS', 'LOOM_BROKER_URL',
       'LOOM_CONTENT_SAFETY_ENDPOINT', 'LOOM_DIRECTLAKE_URL', 'LOOM_DOCINTEL_ENDPOINT',
       'LOOM_EVENTGRID_TOPIC_ENDPOINT', 'LOOM_EVENTGRID_TOPIC_KEY',
       'LOOM_GRAPH_GROUP_SYNC_ENABLED',
-      'LOOM_LANGUAGE_ENDPOINT', 'LOOM_ONELAKE_URL',
+      'LOOM_LANGUAGE_ENDPOINT', 'LOOM_MESH_PROFILE', 'LOOM_ONELAKE_URL',
       'LOOM_PLAN_BACKING_SQL_DATABASE', 'LOOM_PLAN_BACKING_SQL_SERVER',
       'LOOM_RESULT_CACHE_REDIS',
       'LOOM_TRANSLATOR_ENDPOINT', 'LOOM_VISION_ENDPOINT',

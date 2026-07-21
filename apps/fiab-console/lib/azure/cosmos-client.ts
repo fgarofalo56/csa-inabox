@@ -50,6 +50,7 @@ let _networkingConfig: Container | null = null;
 let _copilotConfig: Container | null = null;
 let _workspaceAgentConfig: Container | null = null;
 let _mcpServers: Container | null = null;
+let _agentRegistry: Container | null = null;
 let _threadEdges: Container | null = null;
 let _connections: Container | null = null;
 let _maintenanceJobs: Container | null = null;
@@ -732,6 +733,9 @@ async function ensure() {
   _workspaceAgentConfig = await mk('workspace-agent-config', '/workspaceId');
   // "Connect MCP tools" — external MCP tool-server connections per tenant.
   _mcpServers = await mk('mcp-servers', '/tenantId');
+  // WS-9 Sovereign Agent Mesh — registered mesh agents (PK /tenantId): per-agent
+  // tool scope, MCP grant, egress profile. Lazy createIfNotExists (see cosmos.bicep).
+  _agentRegistry = await mk('agent-registry', '/tenantId');
   // Loom Thread edge graph — one row per "Weave" integration (from → to),
   // partitioned by tenant so the lineage view hits a single physical partition.
   _threadEdges = await mk('thread-edges', '/tenantId');
@@ -1078,6 +1082,8 @@ async function ensure() {
 export async function copilotConfigContainer(): Promise<Container> { await ensure(); return _copilotConfig!; }
 export async function workspaceAgentConfigContainer(): Promise<Container> { await ensure(); return _workspaceAgentConfig!; }
 export async function mcpServersContainer(): Promise<Container> { await ensure(); return _mcpServers!; }
+/** WS-9 Sovereign Agent Mesh — registered mesh agents, PK /tenantId. */
+export async function agentRegistryContainer(): Promise<Container> { await ensure(); return _agentRegistry!; }
 export async function threadEdgesContainer(): Promise<Container> { await ensure(); return _threadEdges!; }
 export async function connectionsContainer(): Promise<Container> { await ensure(); return _connections!; }
 /** Brownfield Landing-Zone Service Registry (Phase 1) — PK /tenantId. */

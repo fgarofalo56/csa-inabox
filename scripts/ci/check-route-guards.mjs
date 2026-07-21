@@ -184,6 +184,17 @@ const ALLOWLIST = new Map([
   ['apps/fiab-console/app/api/external-shares/received/route.ts', 'recipient self-endpoint: returns only shares addressed to the caller\'s own email'],
   ['apps/fiab-console/app/api/external-shares/[id]/route.ts', 'GET/DELETE verify share.tenantId === tenantScopeId(session) before returning/revoking'],
   ['apps/fiab-console/app/api/external-shares/[id]/accept/route.ts', 'accept verifies caller email === share.targetEmail (only the addressed guest may accept)'],
+  // WS-9 Sovereign Agent Mesh registry (PK /tenantId, per-tenant config like
+  // mcp-servers). Every store call keys on tenantScopeId(session) as the Cosmos
+  // PARTITION key (getMeshAgent/listMeshAgents/upsert/delete/executeMeshTask all
+  // take that tenantId), so a URL [id] from another tenant resolves to nothing —
+  // no cross-tenant read/write. Scoped via tenantScopeId(session) rather than a
+  // signal the heuristic recognizes (same class as external-shares above).
+  ['apps/fiab-console/app/api/mesh/agents/[id]/route.ts', 'GET/PUT/DELETE key on tenantScopeId(session) (Cosmos PK /tenantId); a cross-tenant id resolves to nothing'],
+  ['apps/fiab-console/app/api/mesh/run/route.ts', 'runs only agents from the caller\'s own tenant registry (listMeshAgents(tenantScopeId(session)))'],
+  ['apps/fiab-console/app/api/mesh/catalog/route.ts', 'returns the static Tier-0 tool catalog + deployment egress profile; no per-tenant Cosmos read by id'],
+  ['apps/fiab-console/app/api/mesh/a2a/[id]/card/route.ts', 'reads the agent by tenantScopeId(session) (Cosmos PK /tenantId) then publishes its A2A card; publishA2A-gated'],
+  ['apps/fiab-console/app/api/mesh/a2a/delegate/route.ts', 'loads the target by tenantScopeId(session) (Cosmos PK /tenantId) + gates on publishA2A before delegating'],
   // Loom App Runtime (DBX-1) type-level config: returns the fixed runtime-template
   // catalog (static) + the deployment-wide Container Apps/ACR infra status. No
   // per-tenant Cosmos resource — auth = signed-in + deployment RBAC. The per-item

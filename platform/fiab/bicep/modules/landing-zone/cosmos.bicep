@@ -124,6 +124,8 @@ var databases = [
 // (PK /tenantId unless noted):
 //   tenant-settings, feature-permissions, marketplace-listings, mcp-servers,
 //   thread-edges, connections, maintenance-jobs,
+//   agent-registry    ← WS-9 Sovereign Agent Mesh registered agents (PK /tenantId).
+//     Loom-native governed multi-agent mesh — per-agent tool scope + egress profile.
 //   attribute-groups  ← F17 (custom attributes / attribute groups schema store)
 //   saved-queries     ← SQL-database "My Queries" / "Shared Queries" (PK /itemId)
 //   folders           ← F10 nested folder hierarchy (PK /workspaceId)

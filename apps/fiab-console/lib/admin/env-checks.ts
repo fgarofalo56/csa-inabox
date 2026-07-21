@@ -513,6 +513,22 @@ export const ENV_CHECKS: EnvSpec[] = [
     docs: 'docs/fiab/model-strategy.md',
   },
   {
+    // WS-9 — Sovereign Agent Mesh egress profile + allow-list. Both are OPT-IN
+    // knobs: unset ⇒ the mesh runs on the cloud default profile (Gov cloud →
+    // 'gov', else 'commercial') and a FAIL-CLOSED air-gap posture only when
+    // LOOM_MESH_PROFILE=air-gap is explicitly set — so the mesh is fully
+    // functional day-one (default-ON / opt-out). LOOM_A2A_EGRESS_ALLOW is the
+    // comma-separated host-suffix allow-list that lets an air-gap / gov agent
+    // reach an approved in-boundary proxy (empty ⇒ nothing egresses).
+    id: 'svc-agent-mesh', category: 'ai-copilot', title: 'Sovereign Agent Mesh (egress profile + allow-list)', severity: 'optional',
+    required: ['LOOM_MESH_PROFILE', 'LOOM_A2A_EGRESS_ALLOW'],
+    warnOnMiss: true, optionalDefault: true,
+    optionalDefaultDetail: 'the mesh runs on the cloud default egress profile (Gov cloud → gov, else commercial) with an empty egress allow-list. Set LOOM_MESH_PROFILE=air-gap for a sovereign/disconnected boundary (fail-closed egress) and LOOM_A2A_EGRESS_ALLOW to a comma-separated host-suffix list only if an approved in-boundary proxy exists.',
+    remediation: 'Optional. Set LOOM_MESH_PROFILE (commercial | gov | air-gap) to pin the mesh egress posture, and LOOM_A2A_EGRESS_ALLOW to a comma-separated host-suffix allow-list for approved external hops. Both are opt-in — the mesh works without them.',
+    provisionedBy: 'modules/admin-plane/main.bicep (apps[] env — LOOM_MESH_PROFILE / LOOM_A2A_EGRESS_ALLOW, opt-in)',
+    docs: 'docs/fiab/parity/sovereign-agent-mesh.md',
+  },
+  {
     // SVC-1 / SVC-8 — AI-enrichment pipeline activities (Document Intelligence,
     // Vision, Language, Translator, Content Safety). Each endpoint is a wiring
     // selector for its cognitive account; unset → honest infra gate on the AI

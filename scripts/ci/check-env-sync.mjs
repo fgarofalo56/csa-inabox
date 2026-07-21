@@ -100,6 +100,8 @@ const ALLOWLIST = new Set([
   'LOOM_M365_ADMIN_CENTER_URL',      // opt-in cloud override for the M365 admin-center approval link (default commercial admin.microsoft.com; admin.microsoft.us for Gov) — T93
   'LOOM_INTERNAL_ALLOWED_OIDS',     // opt-in allowlist of automation oids for the token-gated internal surface (rel-T10/B3); unset default = any well-formed GUID
   'LOOM_MCP_EGRESS_ALLOW',          // opt-in SSRF egress allow-list for admin MCP test-connection (rel-T13)
+  'LOOM_A2A_EGRESS_ALLOW',          // opt-in egress allow-list (host suffixes) for the WS-9 Sovereign Agent Mesh A2A/MCP hops; unset = fail-closed on air-gap
+  'LOOM_MESH_PROFILE',              // opt-in WS-9 mesh egress profile override (commercial|gov|air-gap); unset = cloud default (gov cloud → gov, else commercial)
   'LOOM_MULTIUSER_ACL',             // opt-out kill switch for the multi-user ACL fallback (default on in code; rel-T11)
   'LOOM_SEMANTIC_LINK',             // opt-out kill switch for injecting the Semantic Link notebook helper preamble (default on in code; FGC-17) — Azure-native, no Fabric
   'LOOM_SCHEDULER_EMAIL_WEBHOOK',   // opt-in email relay (ACS/Logic App/SMTP) for scheduler failure alerts (rel-T81); unset = alerts land in the Loom inbox + optional webhook only
