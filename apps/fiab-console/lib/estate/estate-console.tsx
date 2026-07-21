@@ -18,12 +18,12 @@
 import { useCallback, useState } from 'react';
 import {
   TabList, Tab, Textarea, Button, Select, Field, Card, Badge, Spinner,
-  Subtitle2, Body1, Caption1, MessageBar, MessageBarBody, MessageBarTitle,
+  Subtitle2, Body1, Caption1, MessageBar, MessageBarBody, MessageBarTitle, MessageBarActions,
   Link as FluentLink, makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
   Sparkle20Regular, Rocket20Regular, CheckmarkCircle16Filled,
-  ErrorCircle16Filled, SubtractCircle16Regular, ArrowRight16Regular,
+  ErrorCircle16Filled, SubtractCircle16Regular, ArrowRight16Regular, Wrench16Regular,
 } from '@fluentui/react-icons';
 import { PageShell } from '@/lib/components/page-shell';
 import { clientFetch } from '@/lib/client-fetch';
@@ -59,6 +59,8 @@ export function EstateConsole() {
   const [validation, setValidation] = useState<EstateValidation | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  const [errorCode, setErrorCode] = useState<string | null>(null);
+
   const [executing, setExecuting] = useState(false);
   const [result, setResult] = useState<EstateExecResult | null>(null);
 
@@ -66,7 +68,7 @@ export function EstateConsole() {
 
   const runPlan = useCallback(async () => {
     if (!prompt.trim()) return;
-    setPlanning(true); setError(null); setResult(null); setPlan(null); setDiff(null); setValidation(null);
+    setPlanning(true); setError(null); setErrorCode(null); setResult(null); setPlan(null); setDiff(null); setValidation(null);
     try {
       const r = await clientFetch('/api/estate/plan', {
         method: 'POST',
@@ -74,7 +76,7 @@ export function EstateConsole() {
         body: JSON.stringify({ prompt: prompt.trim(), workspaceId: resolvedWs }),
       });
       const j = await r.json();
-      if (!j.ok) { setError(j.error || 'Failed to plan the estate.'); return; }
+      if (!j.ok) { setError(j.error || 'Failed to plan the estate.'); setErrorCode(j.code || null); return; }
       setPlan(j.plan); setDiff(j.diff); setValidation(j.validation);
     } catch (e: any) {
       setError(e?.message || 'Failed to plan the estate.');
@@ -95,7 +97,7 @@ export function EstateConsole() {
 
   const execute = useCallback(async () => {
     if (!plan || !resolvedWs) return;
-    setExecuting(true); setError(null); setResult(null);
+    setExecuting(true); setError(null); setErrorCode(null); setResult(null);
     try {
       const r = await clientFetch('/api/estate/execute', {
         method: 'POST',
@@ -158,8 +160,16 @@ export function EstateConsole() {
         )}
 
         {error && (
-          <MessageBar intent="error" layout="multiline">
-            <MessageBarBody><MessageBarTitle>Couldn't complete that</MessageBarTitle>{error}</MessageBarBody>
+          <MessageBar intent={errorCode === 'no_aoai_deployment' ? 'warning' : 'error'} layout="multiline">
+            <MessageBarBody>
+              <MessageBarTitle>{errorCode === 'no_aoai_deployment' ? 'Reasoning model not configured' : "Couldn't complete that"}</MessageBarTitle>
+              {error}
+            </MessageBarBody>
+            {errorCode === 'no_aoai_deployment' && (
+              <MessageBarActions>
+                <Button size="small" icon={<Wrench16Regular />} as="a" href="/admin/gates?gate=svc-model-reasoning-tier">Fix it</Button>
+              </MessageBarActions>
+            )}
           </MessageBar>
         )}
 
@@ -195,7 +205,7 @@ export function EstateConsole() {
                   <Body1><strong>{op.title}</strong></Body1>
                   <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>({op.itemType})</Caption1>
                   {op.op === 'weave' && op.fromTitle && (
-                    <Caption1 style={{ color: tokens.colorNeutralForeground3, display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                    <Caption1 style={{ color: tokens.colorNeutralForeground3, display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXS }}>
                       <ArrowRight16Regular /> {op.actionLabel} from {op.fromTitle}
                     </Caption1>
                   )}
