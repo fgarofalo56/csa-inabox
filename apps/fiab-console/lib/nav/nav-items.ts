@@ -109,6 +109,7 @@ export const NAV_SECTIONS: NavSection[] = [
 export const DEMOTED_NAV_ITEMS: NavItem[] = [
   { href: '/semantic-model', label: 'Semantic models' },
   { href: '/data-agent', label: 'Data agents' },
+  { href: '/admin/autopilot', label: 'Autopilot (self-driving FinOps)', adminOnly: true },
 ];
 
 /**
