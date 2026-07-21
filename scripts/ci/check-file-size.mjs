@@ -115,7 +115,7 @@ function scan() {
 // is a pre-existing large module, ratchet-frozen so it cannot grow further.
 const ALLOWLIST = {
   // --- WS-E E1 priority editors (tracked for decomposition; do NOT grow) -----
-  "apps/fiab-console/lib/editors/lakehouse/lakehouse-editor-shell.tsx": { max: 5300, reason: "tracked for WS-E decomposition" },
+  "apps/fiab-console/lib/editors/lakehouse/lakehouse-editor-shell.tsx": { max: 1400, reason: "WS-11.1 decomposed (5227→<1200 LOC); ratchet-frozen at 1400 post-decomp" },
   "apps/fiab-console/lib/editors/report-designer.tsx": { max: 5200, reason: "tracked for WS-E decomposition" },
   "apps/fiab-console/lib/editors/phase3/semantic-model-editor.tsx": { max: 4700, reason: "tracked for WS-E decomposition; +WS-3.3 Direct Lake (Azure-native) storage-mode UI" },
   "apps/fiab-console/lib/editors/notebook-editor.tsx": { max: 3900, reason: "tracked for WS-E decomposition" },
@@ -184,7 +184,7 @@ const ALLOWLIST = {
 // __ALLOWLIST_END__
 
 const WS_E_EDITORS = new Set([
-  "apps/fiab-console/lib/editors/lakehouse/lakehouse-editor-shell.tsx",
+  // lakehouse-editor-shell.tsx decomposed via WS-11.1 (2026-07-21)
   "apps/fiab-console/lib/editors/report-designer.tsx",
   "apps/fiab-console/lib/editors/phase3/semantic-model-editor.tsx",
   "apps/fiab-console/lib/editors/notebook-editor.tsx",
