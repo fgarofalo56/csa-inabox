@@ -70,6 +70,7 @@ export const NAV_SECTIONS: NavSection[] = [
       { href: '/realtime-hub', label: 'Real-Time Intelligence' },
       { href: '/experience/data-science/home', label: 'Data Science' },
       { href: '/experience/warp/home', label: 'Orchestration (Warp)' },
+      { href: '/estate', label: 'Estate builder' },
       { href: '/deployment-pipelines', label: 'Deployment' },
       { href: '/workload-hub', label: 'Workload hub' },
       { href: '/developer', label: 'Developer' },
