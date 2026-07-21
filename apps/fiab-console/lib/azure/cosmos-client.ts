@@ -45,6 +45,7 @@ let _featurePermissions: Container | null = null;
 let _lakehouseShortcuts: Container | null = null;
 let _lakehouseSchemas: Container | null = null;
 let _vectorSyncManifests: Container | null = null;
+let _modelFabric: Container | null = null;
 let _networkingConfig: Container | null = null;
 let _copilotConfig: Container | null = null;
 let _workspaceAgentConfig: Container | null = null;
@@ -713,6 +714,8 @@ async function ensure() {
   // Created lazily — a fresh environment needs no extra ARM/Bicep step beyond the
   // account+database (parity with the other lazily-created registries above).
   _vectorSyncManifests = await mk('vector-sync-manifests', '/itemId');
+  // WS-7 Closed-Loop Model Fabric — one doc per tenant (PK /tenantId): approval mode + per-endpoint cooldown + decision history. Lazily created.
+  _modelFabric = await mk('model-fabric', '/tenantId');
   // Advanced networking (F15) — per-workspace allowlist (trusted instances) +
   // outbound private-endpoint rule registry. One doc per workspace
   // (id = workspaceId), PK /workspaceId so every networking-pane read hits a
@@ -1261,6 +1264,7 @@ export async function featurePermissionsContainer(): Promise<Container> { await 
 export async function lakehouseShortcutsContainer(): Promise<Container> { await ensure(); return _lakehouseShortcuts!; }
 export async function lakehouseSchemasContainer(): Promise<Container> { await ensure(); return _lakehouseSchemas!; }
 export async function vectorSyncManifestsContainer(): Promise<Container> { await ensure(); return _vectorSyncManifests!; }
+export async function modelFabricContainer(): Promise<Container> { await ensure(); return _modelFabric!; }
 export async function networkingConfigContainer(): Promise<Container> { await ensure(); return _networkingConfig!; }
 
 export async function marketplaceListingsContainer(): Promise<Container> {
@@ -1372,7 +1376,7 @@ const KNOWN_CONTAINER_IDS = [
   'copilot-memory-write-audit',
   'copilot-memory-contradictions',
   'copilot-topic-pages',
-  'canvas-comments', 'canvas-presence',
+  'canvas-comments', 'canvas-presence', 'model-fabric',
 ];
 
 /** List all Loom containers with their current throughput shape.
