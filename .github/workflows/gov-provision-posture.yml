@@ -1,0 +1,120 @@
+name: gov-provision-posture
+# Incremental Gov provisioner for the Govern posture-refresh Function (closes
+# svc-posture-refresh). Same out-of-band pattern as gov-provision-dbt.yml, but
+# for a Function App: discover the Loom Cosmos account, deploy
+# azure-functions/posture-refresh/deploy/main.bicep into the admin RG, publish
+# the Python code (func Core Tools), store the host key in Key Vault (private-KV
+# single-IP firewall window), then set LOOM_POSTURE_FUNCTION_URL (+ the
+# LOOM_POSTURE_FUNCTION_KEY secretRef) on the console. The Govern tab already
+# computes posture LIVE from Cosmos — this is the on-open pre-warm, never a hard
+# dependency. Idempotent. apply=false = discovery + bicep what-if only.
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: 'false = discover + what-if only (safe); true = deploy + publish + wire.'
+        required: false
+        default: 'false'
+permissions:
+  contents: read
+env:
+  RG: rg-csa-loom-admin-usgovvirginia
+  APP: loom-console
+jobs:
+  provision:
+    name: Provision posture-refresh Function into the Gov admin RG
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
+
+      - name: Azure Gov Login
+        uses: Azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_GOV_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_GOV_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_GOV_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}",
+              "activeDirectoryEndpointUrl": "https://login.microsoftonline.us",
+              "resourceManagerEndpointUrl": "https://management.usgovcloudapi.net/",
+              "sqlManagementEndpointUrl": "https://management.core.usgovcloudapi.net:8443/",
+              "galleryEndpointUrl": "https://gallery.usgovcloudapi.net/",
+              "managementEndpointUrl": "https://management.core.usgovcloudapi.net/"
+            }
+          environment: AzureUSGovernment
+
+      - name: Set Azure cloud to Gov
+        run: az cloud set --name AzureUSGovernment
+
+      - name: Discover Loom Cosmos account + existing posture Function
+        run: |
+          set -euo pipefail
+          COSMOS_ACCT=$(az cosmosdb list -g "$RG" --query "[?starts_with(name,'cosmos-loom')].name | [0]" -o tsv | tr -d '\r')
+          [ -n "$COSMOS_ACCT" ] || { echo "::error::No cosmos-loom* account in $RG — cannot deploy posture-refresh."; exit 1; }
+          COSMOS_ENDPOINT=$(az cosmosdb show -n "$COSMOS_ACCT" -g "$RG" --query documentEndpoint -o tsv | tr -d '\r')
+          EXISTING=$(az functionapp list -g "$RG" --query "[?starts_with(name,'func-loom-posture')].name | [0]" -o tsv | tr -d '\r')
+          { echo "COSMOS_ACCT=$COSMOS_ACCT"; echo "COSMOS_ENDPOINT=$COSMOS_ENDPOINT"; echo "EXISTING=$EXISTING"; } >> "$GITHUB_ENV"
+          echo "::notice::cosmos=$COSMOS_ACCT endpoint=$COSMOS_ENDPOINT existing-func=${EXISTING:-<none>}"
+
+      - name: What-if the posture-refresh deployment
+        run: |
+          set -euo pipefail
+          az deployment group what-if -g "$RG" \
+            -f azure-functions/posture-refresh/deploy/main.bicep \
+            -p loomCosmosEndpoint="$COSMOS_ENDPOINT" loomCosmosAccountName="$COSMOS_ACCT" \
+               loomCosmosAccountResourceGroup="$RG" \
+               tags='{"env":"gov","boundary":"usgovvirginia","app":"posture-refresh"}' \
+            --mode Incremental 2>&1 | tail -40 || true
+
+      - name: Deploy posture-refresh Function (Incremental)
+        if: ${{ inputs.apply == 'true' }}
+        run: |
+          set -euo pipefail
+          az deployment group create -g "$RG" --name "posture-refresh-$(date -u +%Y%m%d%H%M%S)" \
+            -f azure-functions/posture-refresh/deploy/main.bicep \
+            -p loomCosmosEndpoint="$COSMOS_ENDPOINT" loomCosmosAccountName="$COSMOS_ACCT" \
+               loomCosmosAccountResourceGroup="$RG" \
+               tags='{"env":"gov","boundary":"usgovvirginia","app":"posture-refresh"}' \
+            -o none
+          FUNC=$(az functionapp list -g "$RG" --query "[?starts_with(name,'func-loom-posture')].name | [0]" -o tsv | tr -d '\r')
+          [ -n "$FUNC" ] || { echo "::error::deploy yielded no func-loom-posture app"; exit 1; }
+          echo "FUNC=$FUNC" >> "$GITHUB_ENV"
+          echo "::notice::posture Function App: $FUNC"
+
+      - name: Publish Python code (func Core Tools)
+        if: ${{ inputs.apply == 'true' }}
+        run: |
+          set -euo pipefail
+          npm i -g azure-functions-core-tools@4 --unsafe-perm true >/dev/null 2>&1 || true
+          command -v func >/dev/null 2>&1 || { echo "::warning::func Core Tools unavailable — skipping publish; re-run."; exit 0; }
+          ( cd azure-functions/posture-refresh && func azure functionapp publish "$FUNC" --python ) \
+            || echo "::warning::publish returned non-zero — the Function App exists; re-run publish."
+
+      - name: Store host key in Key Vault + wire LOOM_POSTURE_FUNCTION_URL
+        if: ${{ inputs.apply == 'true' }}
+        run: |
+          set +e
+          FUNC_HOST=$(az functionapp show -n "$FUNC" -g "$RG" --query defaultHostName -o tsv | tr -d '\r')
+          FUNC_URL="https://${FUNC_HOST}"
+          HOST_KEY=$(az functionapp keys list -n "$FUNC" -g "$RG" --query "functionKeys.default || masterKey" -o tsv 2>/dev/null | tr -d '\r')
+          KV_NAME=$(az keyvault list -g "$RG" --query "[?starts_with(name,'kv-loom')].name | [0]" -o tsv | tr -d '\r')
+          [ -z "$KV_NAME" ] && KV_NAME=$(az keyvault list -g "$RG" --query "[0].name" -o tsv | tr -d '\r')
+          if [ -n "$HOST_KEY" ] && [ -n "$KV_NAME" ]; then
+            KV_PNA=$(az keyvault show -n "$KV_NAME" --query "properties.publicNetworkAccess" -o tsv 2>/dev/null || echo Enabled)
+            RIP=""
+            if [ "$KV_PNA" != "Enabled" ]; then
+              RIP=$(curl -sS https://ifconfig.me 2>/dev/null || curl -sS https://api.ipify.org 2>/dev/null || true)
+              az keyvault update -n "$KV_NAME" --public-network-access Enabled --default-action Deny -o none 2>/dev/null
+              [ -n "$RIP" ] && az keyvault network-rule add -n "$KV_NAME" --ip-address "$RIP" -o none 2>/dev/null || az keyvault update -n "$KV_NAME" --default-action Allow -o none 2>/dev/null
+              sleep 15
+            fi
+            az keyvault secret set --vault-name "$KV_NAME" --name loom-posture-function-key --value "$HOST_KEY" -o none 2>/dev/null \
+              && echo "::notice::stored loom-posture-function-key in $KV_NAME"
+            if [ "$KV_PNA" != "Enabled" ]; then
+              [ -n "$RIP" ] && az keyvault network-rule remove -n "$KV_NAME" --ip-address "$RIP" -o none 2>/dev/null
+              az keyvault update -n "$KV_NAME" --public-network-access Disabled --default-action Deny -o none 2>/dev/null
+            fi
+          fi
+          az containerapp update -n "$APP" -g "$RG" --set-env-vars "LOOM_POSTURE_FUNCTION_URL=$FUNC_URL" -o none \
+            && echo "::notice::wired LOOM_POSTURE_FUNCTION_URL=$FUNC_URL — re-run gov-selfaudit to confirm svc-posture-refresh."
