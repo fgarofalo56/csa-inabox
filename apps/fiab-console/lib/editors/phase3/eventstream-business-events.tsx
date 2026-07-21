@@ -788,7 +788,7 @@ export function EventstreamBusinessEventsTab({ id }: { id: string }) {
                 background: tokens.colorNeutralBackground2,
               }}
             >
-              <FlashCheckmark20Regular style={{ fontSize: 32, color: tokens.colorBrandForeground1 }} />
+              <FlashCheckmark20Regular style={{ fontSize: tokens.fontSizeHero800, color: tokens.colorBrandForeground1 }} />
               <Subtitle2>No event types registered yet</Subtitle2>
               <Caption1 style={{ color: tokens.colorNeutralForeground3, textAlign: 'center', maxWidth: 420 }}>
                 Define a governed event type — give it a name, category, and typed field schema. Every
