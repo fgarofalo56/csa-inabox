@@ -65,7 +65,16 @@ jobs:
             }
       - id: acr
         run: |
+          # Resolve the admin RG by PREFIX — it may or may not carry a region
+          # suffix (rg-csa-loom-admin OR rg-csa-loom-admin-usgovvirginia). Try the
+          # AZURE_LOCATION-suffixed name first, else fall back to the first
+          # 'rg-csa-loom-admin' prefix match (mirrors console-bluegreen-roll).
           RG="rg-csa-loom-admin-${AZURE_LOCATION}"
+          if ! az group show -n "$RG" -o none 2>/dev/null; then
+            RG=$(az group list --query "[?starts_with(name, 'rg-csa-loom-admin')] | [0].name" -o tsv | tr -d '\r')
+          fi
+          if [[ -z "$RG" ]]; then echo "::error::Admin RG not found (prefix rg-csa-loom-admin)."; exit 1; fi
+          echo "::notice::admin RG = $RG"
           ACR=$(az acr list --resource-group "$RG" --query "[?starts_with(name, 'acrloom')]|[0].name" -o tsv)
           if [[ -z "$ACR" ]]; then echo "::error::ACR not found"; exit 1; fi
           echo "acr_name=$ACR" >> "$GITHUB_OUTPUT"
