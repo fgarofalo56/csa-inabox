@@ -11,12 +11,15 @@ ls -la /usr/src/app 2>/dev/null | head -20 || true
 # (the package main via package.json), wrapped in xvfb-run — tileserver-gl loads
 # native GL bindings at startup that need a virtual display even to serve vector
 # tiles/style. Mirror that exact launch on :8081. Fall back to no-xvfb.
+# tileserver-gl ignored --port and defaulted to :8080 (EADDRINUSE vs Caddy). The
+# PORT env var has unambiguous precedence — pin the backend to :8081.
+export PORT=8081
 if command -v xvfb-run >/dev/null 2>&1; then
-  echo "[entrypoint] tileserver launch: xvfb-run node /usr/src/app/"
+  echo "[entrypoint] tileserver launch: xvfb-run node /usr/src/app/ (PORT=8081)"
   xvfb-run -a --server-args="-screen 0 1024x768x24 -nolisten tcp" \
     node /usr/src/app/ --config /data/config.json --port 8081 --public_url "http://localhost:8080/" 2>&1 &
 else
-  echo "[entrypoint] tileserver launch: node /usr/src/app/ (no xvfb)"
+  echo "[entrypoint] tileserver launch: node /usr/src/app/ (no xvfb, PORT=8081)"
   node /usr/src/app/ --config /data/config.json --port 8081 --public_url "http://localhost:8080/" 2>&1 &
 fi
 TS_PID=$!
