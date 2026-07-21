@@ -616,6 +616,11 @@ export const GATE_META: Record<string, GateMeta> = {
     legacyCodes: [],
   },
   'svc-databricks-sql': {
+    // Databricks SQL Warehouses do NOT exist in Azure Government (MS Learn:
+    // "Databricks SQL is not available in Azure Government regions"). This is an
+    // opt-in backend only — the DQ monitor + MDM surfaces run on a multi-backend
+    // engine (kusto default / synapse), so the capability is fully present in
+    // Gov without it. In GCC-High this gate stays optional + unmet by design.
     surfaces: [
       { path: '/governance/data-quality', label: 'DQ monitor' },
       { path: '/governance/mdm', label: 'MDM match-merge' },
