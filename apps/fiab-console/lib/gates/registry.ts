@@ -402,6 +402,18 @@ export const GATE_META: Record<string, GateMeta> = {
     surfaces: [{ path: '/admin/mcp-servers', label: 'MCP Servers — built-in server' }],
     fixit: { kind: 'env-picker' },
   },
+  'svc-a2a-egress': {
+    surfaces: [
+      { path: '/admin/copilot', label: 'Copilot & Agents — outbound A2A delegation' },
+      { path: '/api/a2a/delegate/*', label: 'Outbound A2A delegate route (egress allow-list)' },
+    ],
+    // Fix-it: set LOOM_A2A_EGRESS_ALLOW (comma-separated external A2A host suffixes)
+    // through the shared env-apply write path. INBOUND A2A + Loom agent cards work
+    // with zero config; this only ENABLES outbound delegation to those hosts.
+    fixit: { kind: 'env-picker' },
+    autoResolveNote: 'Unset → outbound A2A is disabled (the sovereign / air-gapped default): inbound task delegation and Loom agent A2A cards remain fully functional, nothing leaves the boundary. Set a comma-separated allow-list of external A2A host suffixes here only to let Loom agents delegate OUT to those specific partner agents.',
+    legacyCodes: [],
+  },
   'svc-databricks': {
     surfaces: [
       { path: '/items/notebook', label: 'Notebooks (Databricks backend)' },

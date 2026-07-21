@@ -180,6 +180,7 @@ const ALLOWLIST = {
   "apps/fiab-console/lib/editors/data-api-builder-editor.tsx": { max: 1600, reason: "pre-existing large module — ratchet-frozen" },
   "apps/fiab-console/lib/azure/copilot-studio-client.ts": { max: 1600, reason: "pre-existing large module — ratchet-frozen" },
   "apps/fiab-console/lib/azure/spark-session-pool.ts": { max: 1600, reason: "pre-existing large module — ratchet-frozen" },
+  "apps/fiab-console/lib/azure/cosmos-client.ts": { max: 1600, reason: "the single exhaustive Cosmos container registry (one declaration + accessor per container); crossed 1500 with the WS-5.2 a2a-tasks container. Necessarily grows one entry per new container" },
 };
 // __ALLOWLIST_END__
 

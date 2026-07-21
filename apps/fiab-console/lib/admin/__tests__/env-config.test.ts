@@ -179,7 +179,10 @@ describe('admin/env-config registry', () => {
     // OpenAI account the fine-tuning + model-deployment REST targets) are both NEW
     // editable vars; the LOOM_AOAI_ENDPOINT / LOOM_FOUNDRY_NAME keys it also
     // references are shared with svc-aoai / svc-aml.
-    expect(EDITABLE_ENV.length).toBe(143);
+    // Bumped to 144 by WS-5.2 (svc-a2a-egress): LOOM_A2A_EGRESS_ALLOW — the gov-safe
+    // A2A OUTBOUND egress allow-list (a runtime-only knob; unset = outbound A2A
+    // disabled, the sovereign default). One NEW editable var.
+    expect(EDITABLE_ENV.length).toBe(144);
   });
 
   it('surfaces the wave-2 env vars as settable (previously dropped by the whitelist)', () => {
@@ -244,6 +247,7 @@ describe('admin/env-config registry', () => {
     // per-replica in-memory cache with zero loss of function).
     const optDefault = EDITABLE_ENV.filter((e) => e.optionalDefault).map((e) => e.key).sort();
     expect(optDefault).toEqual([
+      'LOOM_A2A_EGRESS_ALLOW',
       'LOOM_AOAI_MINI_DEPLOYMENT', 'LOOM_AOAI_STRONG_DEPLOYMENT',
       'LOOM_AUDIT_DCR_ENDPOINT', 'LOOM_AUDIT_DCR_ID',
       'LOOM_BROKER_REDIS', 'LOOM_BROKER_URL',
