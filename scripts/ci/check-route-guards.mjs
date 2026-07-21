@@ -426,6 +426,7 @@ const SHARED_BACKEND_ITEM_ROUTES = [
   'apps/fiab-console/app/api/items/user-data-function/[id]/invoke/route.ts',
   'apps/fiab-console/app/api/items/vector-store/[id]/index/route.ts',
   'apps/fiab-console/app/api/items/vector-store/[id]/search/route.ts',
+  'apps/fiab-console/app/api/items/vector-store/[id]/sync/route.ts',
   'apps/fiab-console/app/api/items/warehouse/[id]/cancel/route.ts',
   'apps/fiab-console/app/api/items/warehouse/[id]/clone/route.ts',
   'apps/fiab-console/app/api/items/warehouse/[id]/copy-into/route.ts',

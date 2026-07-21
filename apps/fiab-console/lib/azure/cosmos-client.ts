@@ -44,6 +44,7 @@ let _marketplaceListings: Container | null = null;
 let _featurePermissions: Container | null = null;
 let _lakehouseShortcuts: Container | null = null;
 let _lakehouseSchemas: Container | null = null;
+let _vectorSyncManifests: Container | null = null;
 let _networkingConfig: Container | null = null;
 let _copilotConfig: Container | null = null;
 let _workspaceAgentConfig: Container | null = null;
@@ -704,6 +705,14 @@ async function ensure() {
   // the lakehouse id so every Tables-tree lookup hits a single physical
   // partition. 'dbo' is synthetic (never stored) and always present.
   _lakehouseSchemas = await mk('lakehouse-schemas', '/lakehouseId');
+  // Vector-store Delta→index sync manifests (WS-2.2) — one doc per
+  // (vector-store item, index): the per-row content-hash map the incremental
+  // Delta-sync diffs against so unchanged rows are skipped and removed rows are
+  // deleted from the vector index (mirrors the WS-G corpus manifest). Partitioned
+  // by the owning item id so every sync reads/writes a single physical partition.
+  // Created lazily — a fresh environment needs no extra ARM/Bicep step beyond the
+  // account+database (parity with the other lazily-created registries above).
+  _vectorSyncManifests = await mk('vector-sync-manifests', '/itemId');
   // Advanced networking (F15) — per-workspace allowlist (trusted instances) +
   // outbound private-endpoint rule registry. One doc per workspace
   // (id = workspaceId), PK /workspaceId so every networking-pane read hits a
@@ -1251,6 +1260,7 @@ export async function scorecardCheckinsContainer(): Promise<Container> { await e
 export async function featurePermissionsContainer(): Promise<Container> { await ensure(); return _featurePermissions!; }
 export async function lakehouseShortcutsContainer(): Promise<Container> { await ensure(); return _lakehouseShortcuts!; }
 export async function lakehouseSchemasContainer(): Promise<Container> { await ensure(); return _lakehouseSchemas!; }
+export async function vectorSyncManifestsContainer(): Promise<Container> { await ensure(); return _vectorSyncManifests!; }
 export async function networkingConfigContainer(): Promise<Container> { await ensure(); return _networkingConfig!; }
 
 export async function marketplaceListingsContainer(): Promise<Container> {
