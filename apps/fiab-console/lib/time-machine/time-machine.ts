@@ -37,6 +37,8 @@
  * wall-clock (the common case: "as of yesterday 5pm"); `version` addresses a
  * Delta commit version directly (exact reproducibility of a specific commit).
  */
+import { escapeSqlLiteral } from '@/lib/sql/quoting';
+
 export type AsOfSpec =
   | { kind: 'live' }
   | { kind: 'timestamp'; iso: string }
@@ -205,7 +207,7 @@ function gate(backend: TimeTravelBackend, spec: AsOfSpec, code: string, reason: 
  * never raw user text, so this only defends in depth.
  */
 function sqlTsLiteral(iso: string): string {
-  return `'${iso.replace(/'/g, "''")}'`;
+  return `'${escapeSqlLiteral(iso)}'`;
 }
 
 /**
