@@ -87,7 +87,7 @@ jobs:
             # MAF tier lives at ./apps/copilot-maf (not the ./apps/fiab-* convention).
             APPS='[{"name":"loom-copilot-maf","ctx":"./apps/copilot-maf"}]'
           else
-            APPS=$(echo "$INPUT" | jq -R 'split(",") | map({name: ., ctx: ("./apps/fiab-" + (sub("^loom-"; "") | sub("loom-mcp"; "mcp-config") | sub("loom-setup-orchestrator"; "setup-orchestrator") | sub("loom-activator"; "activator-engine") | sub("loom-mirroring"; "mirroring-engine") | sub("loom-direct-lake-shim"; "direct-lake-shim")))})')
+            APPS=$(echo "$INPUT" | jq -cR 'split(",") | map({name: ., ctx: ("./apps/fiab-" + (sub("^loom-"; "") | sub("loom-mcp"; "mcp-config") | sub("loom-setup-orchestrator"; "setup-orchestrator") | sub("loom-activator"; "activator-engine") | sub("loom-mirroring"; "mirroring-engine") | sub("loom-direct-lake-shim"; "direct-lake-shim")))})')
           fi
           echo "matrix={\"include\":$APPS}" >> "$GITHUB_OUTPUT"
 
