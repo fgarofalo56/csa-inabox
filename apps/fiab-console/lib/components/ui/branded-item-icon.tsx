@@ -22,6 +22,8 @@
 import * as React from 'react';
 import { makeStyles, tokens, mergeClasses } from '@fluentui/react-components';
 import { itemTypeIcon } from '@/lib/catalog/item-type-icon';
+import { readableAccent } from '@/lib/components/ui/item-type-visual';
+import { useTheme } from '@/lib/theme/theme-context';
 
 export type BrandedItemIconSize = 'sm' | 'md' | 'lg';
 
@@ -63,17 +65,21 @@ export function BrandedItemIcon({
 }: BrandedItemIconProps): React.ReactElement {
   const styles = useStyles();
   const { icon: Icon, accent } = itemTypeIcon(type);
+  const { mode } = useTheme();
+  // Static FAMILY_COLOR hues are dark (legible on light). On the dark theme lift
+  // them to a readable foreground so the glyph never renders dark-on-dark.
+  const fg = readableAccent(accent, mode === 'dark');
   const px = ICON_PX[size];
 
   return (
     <span
       className={mergeClasses(styles.tile, styles[size], className)}
-      style={{ backgroundColor: `${accent}1f` /* ~12% brand tint */ }}
+      style={{ backgroundColor: `${fg}1f` /* ~12% theme-aware brand tint */ }}
       role={ariaLabel ? 'img' : undefined}
       aria-label={ariaLabel}
       aria-hidden={ariaLabel ? undefined : true}
     >
-      <Icon style={{ width: px, height: px, color: accent }} />
+      <Icon style={{ width: px, height: px, color: fg }} />
     </span>
   );
 }

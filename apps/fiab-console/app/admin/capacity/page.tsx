@@ -18,7 +18,8 @@ import { Section, Toolbar } from '@/lib/components/ui/section';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { useAdminTabStyles } from '@/lib/components/ui/admin-tab-styles';
 import { SectionExplainer, LearnPopover } from '@/lib/components/ui/learn-popover';
-import { itemVisual } from '@/lib/components/ui/item-type-visual';
+import { itemVisual, readableAccent } from '@/lib/components/ui/item-type-visual';
+import { useTheme } from '@/lib/theme/theme-context';
 import { ScaleManagePanel } from '@/lib/components/admin/scale-manage-panel';
 import { SurgeProtectionPanel } from '@/lib/components/admin/surge-protection-panel';
 import { SparkTelemetryAuditPanel } from '@/lib/components/admin/spark-telemetry-audit-panel';
@@ -452,6 +453,7 @@ function DetailPane({ res, viz, onClose }: { res: AzureRes; viz: VizConfig | nul
 export default function CapacityPage() {
   const styles = useStyles();
   const a = useAdminTabStyles();
+  const { mode } = useTheme();
   const [data, setData] = useState<Response | null>(null);
   const [unauth, setUnauth] = useState(false);
   const [q, setQ] = useState('');
@@ -526,12 +528,13 @@ export default function CapacityPage() {
       render: (r) => {
         const v = itemVisual(resourceTypeToSlug(r.type));
         const Icon = v.icon;
+        const fg = readableAccent(v.color, mode === 'dark');
         return (
           <span className={styles.resName}>
             {/* dynamic: resource icon tint derives from itemVisual color */}
-            <span className={styles.resIcon} style={{ backgroundColor: `${v.color}1f`, color: v.color }} aria-hidden>
+            <span className={styles.resIcon} style={{ backgroundColor: `${fg}1f`, color: fg }} aria-hidden>
               {/* dynamic: glyph color derives from itemVisual color */}
-              <Icon className={a.iconSm} style={{ color: v.color }} />
+              <Icon className={a.iconSm} style={{ color: fg }} />
             </span>
             <strong title={r.name} className={a.ellipsis}>{r.name}</strong>
           </span>

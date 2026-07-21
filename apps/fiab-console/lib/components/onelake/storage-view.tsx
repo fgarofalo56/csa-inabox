@@ -52,8 +52,9 @@ import {
 } from '@fluentui/react-icons';
 
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
-import { itemVisual } from '@/lib/components/ui/item-type-visual';
+import { itemVisual, readableAccent } from '@/lib/components/ui/item-type-visual';
 import { findItemType } from '@/lib/catalog/fabric-item-types';
+import { useTheme } from '@/lib/theme/theme-context';
 
 interface PrefixUsage {
   liveBytes: number;
@@ -289,6 +290,7 @@ function ScoreCard({
 
 export function StorageView({ workspaceId }: { workspaceId?: string | null }) {
   const styles = useStyles();
+  const { mode } = useTheme();
   const [data, setData] = useState<StorageResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -321,11 +323,12 @@ export function StorageView({ workspaceId }: { workspaceId?: string | null }) {
       getValue: (r) => r.displayName,
       render: (r) => {
         const v = itemVisual(r.itemType);
+        const fg = readableAccent(v.color, mode === 'dark');
         const Icon = v.icon;
         return (
           <span className={styles.nameCell}>
-            <span className={styles.nameIcon} style={{ backgroundColor: `${v.color}1f`, color: v.color }} aria-hidden>
-              <Icon style={{ width: 16, height: 16, color: v.color }} />
+            <span className={styles.nameIcon} style={{ backgroundColor: `${fg}1f`, color: fg }} aria-hidden>
+              <Icon style={{ width: 16, height: 16, color: fg }} />
             </span>
             <span className={styles.nameText} title={r.displayName}>{r.displayName}</span>
           </span>

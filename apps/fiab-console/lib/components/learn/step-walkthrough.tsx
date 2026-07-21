@@ -24,7 +24,8 @@ import {
 import {
   Open16Regular, BookOpen16Regular, ImageOff24Regular, Camera20Regular,
 } from '@fluentui/react-icons';
-import { itemVisual } from '@/lib/components/ui/item-type-visual';
+import { itemVisual, readableAccent } from '@/lib/components/ui/item-type-visual';
+import { useTheme } from '@/lib/theme/theme-context';
 import type { WalkthroughStep } from '@/lib/learn/content';
 
 const useStyles = makeStyles({
@@ -163,7 +164,9 @@ export function StepWalkthrough({
   visualType, title, summary, steps, docsUrl, docsLabel, msLearnUrl,
 }: StepWalkthroughProps): React.ReactElement {
   const s = useStyles();
+  const { mode } = useTheme();
   const visual = itemVisual(visualType);
+  const fg = readableAccent(visual.color, mode === 'dark');
   const Icon = visual.icon;
   const captured = steps.filter((st) => st.hasImage).length;
 
@@ -172,7 +175,7 @@ export function StepWalkthrough({
       <div className={s.head}>
         <span
           className={s.headIcon}
-          style={{ background: `linear-gradient(135deg, ${visual.color}26 0%, ${visual.color}0d 100%)`, color: visual.color }}
+          style={{ background: `linear-gradient(135deg, ${fg}26 0%, ${fg}0d 100%)`, color: fg }}
           aria-hidden
         >
           <Icon />

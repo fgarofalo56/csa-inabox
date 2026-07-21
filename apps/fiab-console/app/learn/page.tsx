@@ -52,7 +52,8 @@ import { TileRailSkeleton } from '@/lib/components/recent-items';
 import { Section, Toolbar } from '@/lib/components/ui/section';
 import { ViewToggle, type LoomView } from '@/lib/components/ui/view-toggle';
 import { TileGrid } from '@/lib/components/ui/tile-grid';
-import { itemVisual } from '@/lib/components/ui/item-type-visual';
+import { itemVisual, readableAccent } from '@/lib/components/ui/item-type-visual';
+import { useTheme } from '@/lib/theme/theme-context';
 import { LearnTopicCard } from '@/lib/components/learn/learn-topic-card';
 import { StepWalkthrough } from '@/lib/components/learn/step-walkthrough';
 import { InstallAppDialog } from '@/lib/components/apps/install-app-dialog';
@@ -194,6 +195,7 @@ function groupByCategory(rows: LearnTopic[]): Array<{ cat: string; rows: LearnTo
 
 export default function LearnPage(): React.ReactElement {
   const s = useStyles();
+  const { mode } = useTheme();
 
   // Full catalog: core-surface tutorials lead so "Loom doc first" links resolve.
   const all = React.useMemo(() => [...getCoreSurfaceTutorials(), ...getLearnCatalog()], []);
@@ -498,10 +500,11 @@ export default function LearnPage(): React.ReactElement {
                     {filtered.map((t) => {
                       const visual = itemVisual(t.visualType);
                       const Icon = visual.icon;
+                      const fg = readableAccent(visual.color, mode === 'dark');
                       return (
                         <div key={t.id} className={s.listRow}>
-                          <span className={s.listChip} style={{ backgroundColor: `${visual.color}1f`, color: visual.color }} aria-hidden>
-                            <Icon className={s.listChipIcon} style={{ color: visual.color }} />
+                          <span className={s.listChip} style={{ backgroundColor: `${fg}1f`, color: fg }} aria-hidden>
+                            <Icon className={s.listChipIcon} style={{ color: fg }} />
                           </span>
                           <div className={s.listMain}>
                             <div className={s.listTitleRow}>

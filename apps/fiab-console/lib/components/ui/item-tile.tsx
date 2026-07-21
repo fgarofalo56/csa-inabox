@@ -19,7 +19,8 @@
 
 import * as React from 'react';
 import { Text, Badge, makeStyles, tokens, mergeClasses } from '@fluentui/react-components';
-import { itemVisual } from './item-type-visual';
+import { itemVisual, readableAccent } from './item-type-visual';
+import { useTheme } from '@/lib/theme/theme-context';
 import { PinButton } from '../pin-button';
 import type { PinnedItem } from '../pin-store';
 
@@ -195,6 +196,9 @@ export function ItemTile({
 }: ItemTileProps): React.ReactElement {
   const styles = useStyles();
   const visual = itemVisual(type);
+  const { mode } = useTheme();
+  // Lift the static FAMILY_COLOR hue to a readable foreground on the dark theme.
+  const fg = readableAccent(visual.color, mode === 'dark');
   const Icon = visual.icon;
   const iconPx = size === 'lg' ? 28 : 22;
 
@@ -238,12 +242,12 @@ export function ItemTile({
               size === 'lg' ? styles.chipLg : styles.chipMd,
             )}
             style={{
-              backgroundColor: `${visual.color}1f`, // ~12% tint
-              color: visual.color,
+              backgroundColor: `${fg}1f`, // ~12% theme-aware tint
+              color: fg,
             }}
             aria-hidden
           >
-            <Icon style={{ width: iconPx, height: iconPx, color: visual.color }} />
+            <Icon style={{ width: iconPx, height: iconPx, color: fg }} />
           </span>
         )}
         <span className={styles.titleWrap}>

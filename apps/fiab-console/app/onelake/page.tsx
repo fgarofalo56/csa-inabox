@@ -98,7 +98,8 @@ import {
 } from '@/lib/components/ui/loom-data-table';
 import { BrandedItemIcon } from '@/lib/components/ui/branded-item-icon';
 import { TileRailSkeleton } from '@/lib/components/recent-items';
-import { itemVisual } from '@/lib/components/ui/item-type-visual';
+import { itemVisual, readableAccent } from '@/lib/components/ui/item-type-visual';
+import { useTheme } from '@/lib/theme/theme-context';
 import { OneLakeSecurityTab } from '@/lib/panes/onelake-security-tab';
 import { SecureView } from '@/lib/components/onelake/secure-view';
 import { GovernView } from '@/lib/components/onelake/govern-view';
@@ -571,8 +572,10 @@ function ItemDetails({
 }) {
   const styles = useStyles();
   const router = useRouter();
+  const { mode } = useTheme();
   const visual = itemVisual(item.itemType);
   const Icon = visual.icon;
+  const fg = readableAccent(visual.color, mode === 'dark');
   const hasTables = TABLE_BACKED_TYPES.has(item.itemType);
   const [tab, setTab] = useState<'overview' | 'tables' | 'security'>('overview');
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -674,10 +677,10 @@ function ItemDetails({
       <div className={styles.detailsHead}>
         <span
           className={styles.detailsChip}
-          style={{ backgroundColor: `${visual.color}1f`, color: visual.color }}
+          style={{ backgroundColor: `${fg}1f`, color: fg }}
           aria-hidden
         >
-          <Icon className={styles.detailsChipIcon} style={{ color: visual.color }} />
+          <Icon className={styles.detailsChipIcon} style={{ color: fg }} />
         </span>
         <span className={styles.detailsTitleWrap}>
           <Title3 className={styles.detailsTitle} title={item.displayName}>

@@ -53,7 +53,8 @@ import { GuidedEmptyState } from '@/lib/components/shared/guided-empty-state';
 import {
   LoomDataTable, type LoomColumn, type LoomRowAction, type LoomRowMenuItem,
 } from '@/lib/components/ui/loom-data-table';
-import { itemVisual } from '@/lib/components/ui/item-type-visual';
+import { itemVisual, readableAccent } from '@/lib/components/ui/item-type-visual';
+import { useTheme } from '@/lib/theme/theme-context';
 import { ViewToggle, type LoomView } from '@/lib/components/ui/view-toggle';
 import { ItemTile } from '@/lib/components/ui/item-tile';
 import { TileGrid } from '@/lib/components/ui/tile-grid';
@@ -185,6 +186,7 @@ function Stat({
 
 export function RealTimeHubView() {
   const styles = useStyles();
+  const { mode } = useTheme();
   const router = useRouter();
   const [data, setData] = useState<StreamsResponse | null>(null);
   const [loomWorkspaces, setLoomWorkspaces] = useState<Array<{ id: string; name: string }>>([]);
@@ -342,10 +344,11 @@ export function RealTimeHubView() {
       render: (s) => {
         const v = streamVisual(s.dataType);
         const Icon = v.icon;
+        const fg = readableAccent(v.color, mode === 'dark');
         return (
           <span className={styles.dataCell}>
-            <span className={styles.dataChip} style={{ backgroundColor: `${v.color}1f`, color: v.color }} aria-hidden>
-              <Icon style={{ width: 18, height: 18, color: v.color }} />
+            <span className={styles.dataChip} style={{ backgroundColor: `${fg}1f`, color: fg }} aria-hidden>
+              <Icon style={{ width: 18, height: 18, color: fg }} />
             </span>
             <span className={styles.dataName} title={s.name}>{s.name}</span>
           </span>
@@ -356,8 +359,9 @@ export function RealTimeHubView() {
       key: 'dataType', label: 'Type', sortable: true, filterable: true, width: 120,
       render: (s) => {
         const v = streamVisual(s.dataType);
+        const fg = readableAccent(v.color, mode === 'dark');
         return (
-          <Badge appearance="tint" size="small" style={{ backgroundColor: `${v.color}24`, color: v.color }}>
+          <Badge appearance="tint" size="small" style={{ backgroundColor: `${fg}24`, color: fg }}>
             {s.dataType === 'stream' ? 'Stream' : 'Table'}
           </Badge>
         );
@@ -412,11 +416,11 @@ export function RealTimeHubView() {
       <div className={styles.stats}>
         <Stat
           styles={styles} icon={<Pulse24Regular />} loading={loading}
-          color={itemVisual('eventstream').color} value={streamCount} label="Eventstreams"
+          color={readableAccent(itemVisual('eventstream').color, mode === 'dark')} value={streamCount} label="Eventstreams"
         />
         <Stat
           styles={styles} icon={<Flash24Regular />} loading={loading}
-          color={itemVisual('kql-database').color} value={tableCount} label="KQL tables"
+          color={readableAccent(itemVisual('kql-database').color, mode === 'dark')} value={tableCount} label="KQL tables"
         />
         <Stat
           styles={styles} icon={<PlugConnected24Regular />} loading={false}

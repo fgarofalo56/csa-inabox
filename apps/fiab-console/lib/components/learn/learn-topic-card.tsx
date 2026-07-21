@@ -22,7 +22,8 @@ import {
   Open16Regular, BookOpen16Regular, ArrowDownload16Regular, Apps16Regular,
   ImageMultiple16Regular, Dismiss24Regular,
 } from '@fluentui/react-icons';
-import { itemVisual } from '@/lib/components/ui/item-type-visual';
+import { itemVisual, readableAccent } from '@/lib/components/ui/item-type-visual';
+import { useTheme } from '@/lib/theme/theme-context';
 import { InstallAppDialog } from '@/lib/components/apps/install-app-dialog';
 import { StepWalkthrough } from '@/lib/components/learn/step-walkthrough';
 import { getWalkthrough, type LearnTopic } from '@/lib/learn/content';
@@ -147,7 +148,9 @@ const useStyles = makeStyles({
 
 export function LearnTopicCard({ topic }: { topic: LearnTopic }): React.ReactElement {
   const s = useStyles();
+  const { mode } = useTheme();
   const visual = itemVisual(topic.visualType);
+  const fg = readableAccent(visual.color, mode === 'dark');
   const Icon = visual.icon;
   // Thumbnail can 404 on the published site for some slugs → fall back to icon art.
   const [imgOk, setImgOk] = React.useState<boolean>(!!topic.thumbUrl);
@@ -170,7 +173,7 @@ export function LearnTopicCard({ topic }: { topic: LearnTopic }): React.ReactEle
       <div
         className={s.thumbWrap}
         style={{
-          background: `linear-gradient(135deg, ${visual.color}26 0%, ${visual.color}0d 100%)`,
+          background: `linear-gradient(135deg, ${fg}26 0%, ${fg}0d 100%)`,
         }}
       >
         {showImg ? (
@@ -182,8 +185,8 @@ export function LearnTopicCard({ topic }: { topic: LearnTopic }): React.ReactEle
             onError={() => setImgOk(false)}
           />
         ) : (
-          <span className={s.iconArt} style={{ color: visual.color }} aria-hidden>
-            <Icon style={{ width: 34, height: 34, color: visual.color }} />
+          <span className={s.iconArt} style={{ color: fg }} aria-hidden>
+            <Icon style={{ width: 34, height: 34, color: fg }} />
           </span>
         )}
       </div>

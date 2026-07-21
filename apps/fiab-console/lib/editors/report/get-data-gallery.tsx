@@ -77,7 +77,8 @@ import { clientFetch } from '@/lib/client-fetch';
 import { CONNECTORS, connectorByType, type ConnectorDef } from '@/lib/pipeline/connector-catalog';
 import { AddExistingConnectionWizard } from '@/lib/components/connections/add-existing-wizard';
 import { EmptyState } from '@/lib/components/empty-state';
-import { itemVisual } from '@/lib/components/ui/item-type-visual';
+import { itemVisual, readableAccent } from '@/lib/components/ui/item-type-visual';
+import { useTheme } from '@/lib/theme/theme-context';
 import { CONN_TYPE_LABEL, CONN_TILE_SLUG } from '@/lib/azure/connectable-types';
 import type { ConnectionType, LoomConnectionView } from '@/lib/azure/connections-store';
 import { readOnlySelect } from '@/lib/thread/sql-guard';
@@ -397,6 +398,7 @@ function ConnectorGallery({
   onPickLoom: () => void;
 }) {
   const s = useStyles();
+  const { mode } = useTheme();
   const [q, setQ] = useState('');
   const [optInNote, setOptInNote] = useState<string | null>(null);
 
@@ -474,6 +476,7 @@ function ConnectorGallery({
                 const def = representativeConnector(rct);
                 const visual = itemVisual(CONN_TILE_SLUG[c.type] || c.type);
                 const Icon = visual.icon;
+                const fg = readableAccent(visual.color, mode === 'dark');
                 return (
                   <button
                     key={c.id}
@@ -482,7 +485,7 @@ function ConnectorGallery({
                     onClick={() => def && onPickRecent({ connType: rct, def, connectionId: c.id })}
                     aria-label={`Use connection ${c.name}`}
                   >
-                    <span className={s.recentIcon} style={{ color: visual.color }}><Icon /></span>
+                    <span className={s.recentIcon} style={{ color: fg }}><Icon /></span>
                     <span className={s.recentText}>
                       <Text weight="semibold" className={s.recentName} title={c.name}>{c.name}</Text>
                       <Caption1 className={s.muted}>{CONN_TYPE_LABEL[c.type] || c.type}</Caption1>

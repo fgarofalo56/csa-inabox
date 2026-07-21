@@ -29,7 +29,8 @@ import {
   Add20Regular, CheckmarkCircle20Filled, ArrowSync16Regular, Search20Regular,
   PlugConnected24Regular, ChevronDown20Regular, ChevronUp20Regular, Eye20Regular, EyeOff20Regular,
 } from '@fluentui/react-icons';
-import { itemVisual } from '@/lib/components/ui/item-type-visual';
+import { itemVisual, readableAccent } from '@/lib/components/ui/item-type-visual';
+import { useTheme } from '@/lib/theme/theme-context';
 import {
   CONN_TYPE_LABEL, CONN_TILE_SLUG, CONN_TYPE_AUTH_OPTIONS, AUTH_METHOD_LABEL,
   type ConnectableResource,
@@ -123,6 +124,7 @@ export function AddExistingConnectionWizard({
   onImported: () => void;
 }) {
   const s = useStyles();
+  const { mode } = useTheme();
   const [resources, setResources] = useState<ConnectableResource[]>([]);
   const [via, setVia] = useState<'user' | 'uami' | null>(null);
   const [loading, setLoading] = useState(false);
@@ -343,6 +345,7 @@ export function AddExistingConnectionWizard({
                       <Divider />
                       {g.items.map((r) => {
                         const visual = itemVisual(CONN_TILE_SLUG[r.connType] || r.connType);
+                        const fg = readableAccent(visual.color, mode === 'dark');
                         const Icon = visual.icon;
                         const done = !!added[r.armResourceId];
                         const isExpanded = expandedId === r.armResourceId;
@@ -353,7 +356,7 @@ export function AddExistingConnectionWizard({
                         return (
                           <div key={r.armResourceId} className={s.row}>
                             <div className={s.rowMain}>
-                              <span className={s.rowIcon} style={{ color: visual.color }}><Icon /></span>
+                              <span className={s.rowIcon} style={{ color: fg }}><Icon /></span>
                               <span className={s.rowText}>
                                 <span className={s.rowName} title={r.name}>{r.name}</span>
                                 <Caption1 className={s.rowSub} title={`${r.host || ''} · ${r.resourceGroup} · ${r.location || ''}`}>

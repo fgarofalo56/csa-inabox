@@ -47,7 +47,8 @@ import {
 
 import { Section } from '@/lib/components/ui/section';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
-import { itemVisual } from '@/lib/components/ui/item-type-visual';
+import { itemVisual, readableAccent } from '@/lib/components/ui/item-type-visual';
+import { useTheme } from '@/lib/theme/theme-context';
 import { findItemType } from '@/lib/catalog/fabric-item-types';
 
 export interface DeletedItem {
@@ -147,6 +148,7 @@ const useStyles = makeStyles({
 
 export function RecycleView({ workspaceNames }: RecycleViewProps) {
   const styles = useStyles();
+  const { mode } = useTheme();
   const [items, setItems] = useState<DeletedItem[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -201,11 +203,12 @@ export function RecycleView({ workspaceNames }: RecycleViewProps) {
       width: 240,
       render: (r) => {
         const v = itemVisual(r.itemType);
+        const fg = readableAccent(v.color, mode === 'dark');
         const Icon = v.icon;
         return (
           <span className={styles.nameCell}>
-            <span className={styles.nameIcon} style={{ backgroundColor: `${v.color}1f`, color: v.color }} aria-hidden>
-              <Icon style={{ width: 16, height: 16, color: v.color }} />
+            <span className={styles.nameIcon} style={{ backgroundColor: `${fg}1f`, color: fg }} aria-hidden>
+              <Icon style={{ width: 16, height: 16, color: fg }} />
             </span>
             <span className={styles.nameText} title={r.displayName}>{r.displayName}</span>
           </span>
@@ -273,7 +276,7 @@ export function RecycleView({ workspaceNames }: RecycleViewProps) {
         </span>
       ),
     },
-  ], [styles.nameCell, styles.nameIcon, styles.nameText, styles.rowActions, wsName, busyId]);
+  ], [styles.nameCell, styles.nameIcon, styles.nameText, styles.rowActions, wsName, busyId, mode]);
 
   return (
     <div className={styles.root}>

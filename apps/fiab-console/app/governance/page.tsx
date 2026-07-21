@@ -45,7 +45,8 @@ import { ViewToggle, type LoomView } from '@/lib/components/ui/view-toggle';
 import { ItemTile } from '@/lib/components/ui/item-tile';
 import { TileGrid } from '@/lib/components/ui/tile-grid';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
-import { itemVisual } from '@/lib/components/ui/item-type-visual';
+import { itemVisual, readableAccent } from '@/lib/components/ui/item-type-visual';
+import { useTheme } from '@/lib/theme/theme-context';
 import { clientFetch } from '@/lib/client-fetch';
 
 interface Kpis {
@@ -248,6 +249,7 @@ function pct(n: number, d: number): number {
 
 export default function GovernancePage() {
   const s = useStyles();
+  const { mode } = useTheme();
   const router = useRouter();
   const { status: purview, reload: reloadStatus } = usePurviewStatus();
   const [kpis, setKpis] = useState<Kpis | null>(null);
@@ -297,15 +299,16 @@ export default function GovernancePage() {
       getValue: (r) => itemVisual(r.type).label,
       render: (r) => {
         const v = itemVisual(r.type);
+        const fg = readableAccent(v.color, mode === 'dark');
         const Icon = v.icon;
         return (
           <span className={s.typeChip}>
             <span
               className={s.typeChipIcon}
-              style={{ backgroundColor: `${v.color}1f` }}
+              style={{ backgroundColor: `${fg}1f` }}
               aria-hidden
             >
-              <Icon className={s.chipIcon16} style={{ color: v.color }} />
+              <Icon className={s.chipIcon16} style={{ color: fg }} />
             </span>
             <Text weight="semibold">{v.label}</Text>
           </span>
@@ -346,7 +349,7 @@ export default function GovernancePage() {
         );
       },
     },
-  ], [s]);
+  ], [s, mode]);
 
   const statValue = (k: keyof Kpis, pctFlag?: boolean): string => {
     const v = kpis ? kpis[k] : 0;

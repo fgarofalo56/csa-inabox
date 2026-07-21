@@ -1,5 +1,6 @@
 'use client';
 
+import { useTheme } from '@/lib/theme/theme-context';
 import { clientFetch } from '@/lib/client-fetch';
 /**
  * AllItemsExplorer — the "everything in Loom" view for /browse. Lists every
@@ -27,7 +28,7 @@ import {
   Open16Regular, OpenFolder16Regular, Copy16Regular, Link16Regular,
 } from '@fluentui/react-icons';
 import { FABRIC_ITEM_TYPES } from '@/lib/catalog/fabric-item-types';
-import { itemVisual } from '@/lib/components/ui/item-type-visual';
+import { itemVisual, readableAccent } from '@/lib/components/ui/item-type-visual';
 import { BrandedItemIcon } from '@/lib/components/ui/branded-item-icon';
 import {
   LoomDataTable, type LoomColumn, type LoomRowAction, type LoomRowMenuItem,
@@ -73,7 +74,9 @@ const useStyles = makeStyles({
 
 function TypeBadge({ type }: { type: string }) {
   const v = itemVisual(type);
-  return <Badge appearance="tint" style={{ backgroundColor: `${v.color}22`, color: v.color }}>{META.get(type)?.displayName || type}</Badge>;
+  const { mode } = useTheme();
+  const fg = readableAccent(v.color, mode === 'dark');
+  return <Badge appearance="tint" style={{ backgroundColor: `${fg}22`, color: fg }}>{META.get(type)?.displayName || type}</Badge>;
 }
 
 export function AllItemsExplorer() {

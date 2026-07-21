@@ -76,7 +76,8 @@ import {
   Rocket24Regular,
 } from '@fluentui/react-icons';
 import type { FluentIcon } from '@fluentui/react-icons';
-import { itemVisual } from '@/lib/components/ui/item-type-visual';
+import { itemVisual, readableAccent } from '@/lib/components/ui/item-type-visual';
+import { useTheme } from '@/lib/theme/theme-context';
 import { CapacityEquivalencePanel } from '@/lib/components/setup/capacity-equivalence-panel';
 import { ServiceScanPanel } from '@/lib/components/setup/service-scan-panel';
 import { QuotaPreflightPanel, type QuotaTarget } from '@/lib/components/setup/quota-preflight-panel';
@@ -496,6 +497,7 @@ const useStyles = makeStyles({
 
 export function SetupWizardPane() {
   const styles = useStyles();
+  const { mode } = useTheme();
   const [state, setState] = useState<WizardState>({ step: 'intro' });
   const [subs, setSubs] = useState<AzureSubscription[]>([]);
   const [subsLoading, setSubsLoading] = useState(false);
@@ -1369,9 +1371,10 @@ export function SetupWizardPane() {
                 {CAPACITY_SERVICES.map((svc) => {
                   const v = itemVisual(svc.type);
                   const Icon = v.icon;
+                  const fg = readableAccent(v.color, mode === 'dark');
                   return (
                     <span key={svc.type} className={styles.serviceChip}>
-                      <span className={styles.serviceIconChip} style={{ backgroundColor: `${v.color}1f`, color: v.color }} aria-hidden>
+                      <span className={styles.serviceIconChip} style={{ backgroundColor: `${fg}1f`, color: fg }} aria-hidden>
                         <Icon />
                       </span>
                       <Caption1>{svc.label}</Caption1>

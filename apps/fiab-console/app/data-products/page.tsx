@@ -35,7 +35,8 @@ import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-ta
 import { ViewToggle, type LoomView } from '@/lib/components/ui/view-toggle';
 import { ItemTile } from '@/lib/components/ui/item-tile';
 import { TileGrid } from '@/lib/components/ui/tile-grid';
-import { itemVisual } from '@/lib/components/ui/item-type-visual';
+import { itemVisual, readableAccent } from '@/lib/components/ui/item-type-visual';
+import { useTheme } from '@/lib/theme/theme-context';
 
 const LS_VIEW = 'loom.dataProducts.viewMode.v1';
 
@@ -68,6 +69,7 @@ function statusColor(status?: string): 'success' | 'informative' {
 
 export default function DataProductsPage() {
   const s = useStyles();
+  const { mode } = useTheme();
   const router = useRouter();
   const [rows, setRows] = useState<DataProductRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -99,6 +101,7 @@ export default function DataProductsPage() {
   useEffect(() => { load(); }, [load]);
 
   const visual = itemVisual('data-product');
+  const fg = readableAccent(visual.color, mode === 'dark');
 
   const columns = useMemo<LoomColumn<DataProductRow>[]>(() => [
     {
@@ -106,8 +109,8 @@ export default function DataProductsPage() {
       getValue: (r) => r.displayName,
       render: (r) => (
         <span className={s.nameCell}>
-          <span className={s.nameChip} style={{ backgroundColor: `${visual.color}1f`, color: visual.color }} aria-hidden>
-            <visual.icon style={{ width: 16, height: 16, color: visual.color }} />
+          <span className={s.nameChip} style={{ backgroundColor: `${fg}1f`, color: fg }} aria-hidden>
+            <visual.icon style={{ width: 16, height: 16, color: fg }} />
           </span>
           <Text className={s.link}>{r.displayName}</Text>
           {r.endorsed && <Badge appearance="tint" color="success" size="small">Endorsed</Badge>}
@@ -135,7 +138,7 @@ export default function DataProductsPage() {
         ? <Badge appearance="tint" color="success">Registered</Badge>
         : <Caption1>Loom only</Caption1>,
     },
-  ], [s, visual]);
+  ], [s, visual, fg]);
 
   const open = (id: string) => router.push(`/data-products/${encodeURIComponent(id)}`);
   const hasRows = rows.length > 0;
