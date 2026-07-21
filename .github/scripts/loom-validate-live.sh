@@ -38,12 +38,16 @@ log "2. /api/version"
 VER_JSON=$(curl -s -m 30 "${URL}/api/version${CACHEBUST}" || true)
 echo "$VER_JSON"
 CURRENT=$(echo "$VER_JSON" | python -c "import json,sys; d=json.load(sys.stdin); print(d.get('current',''))" 2>/dev/null || echo "")
-echo "current=$CURRENT"
+# The rolled SHA lives in build.sha (the semver `current` is the last cut
+# release tag, e.g. 0.72.1, and does NOT carry the commit SHA). Validate the
+# SHA against build.sha; keep `current` only for the human-readable message.
+BUILD_SHA=$(echo "$VER_JSON" | python -c "import json,sys; print((json.load(sys.stdin).get('build') or {}).get('sha',''))" 2>/dev/null || echo "")
+echo "current=$CURRENT build.sha=$BUILD_SHA"
 if [[ -n "$EXPECTED_SHA" ]]; then
-  if [[ "$CURRENT" == *"$EXPECTED_SHA"* ]]; then
-    ok "version $CURRENT contains expected SHA prefix $EXPECTED_SHA"
+  if [[ "$BUILD_SHA" == *"$EXPECTED_SHA"* ]]; then
+    ok "version $CURRENT (build.sha $BUILD_SHA) contains expected SHA prefix $EXPECTED_SHA"
   else
-    fail "version is '$CURRENT' but expected to contain '$EXPECTED_SHA' — env var LOOM_VERSION not updated OR rollout did not take"
+    fail "build.sha is '$BUILD_SHA' but expected to contain '$EXPECTED_SHA' — rollout did not take"
   fi
 else
   ok "no expected SHA passed, current is '$CURRENT' (informational)"
