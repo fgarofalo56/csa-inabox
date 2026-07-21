@@ -89,6 +89,5 @@ jobs:
             echo "job status=$ST"; [ "$ST" = "Succeeded" ] && break; [ "$ST" = "Failed" ] && break; sleep 15
           done
           echo "----- job logs -----"
-          az containerapp job logs show -n "$JOB" -g "$RG" --execution "$EXEC" --tail 60 2>&1 | tail -60 || \
-          az monitor log-analytics query --help >/dev/null 2>&1 || true
+          az containerapp job logs show -n "$JOB" -g "$RG" --container "$JOB" --execution "$EXEC" --tail 100 2>&1 | tail -100 || true
           [ "$ST" = "Succeeded" ] && echo "::notice::warehouse wired in-VNet — re-run gov-selfaudit." || { echo "::error::in-VNet warehouse job did not succeed (status=$ST)"; exit 1; }
