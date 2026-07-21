@@ -30,6 +30,7 @@ import {
 } from '@/lib/foundry/object-security';
 import { auditObjectSecurity } from '@/lib/azure/object-security-audit';
 import { discoverOntologyBindings, resolveOntologyObjectInstances } from '@/lib/foundry/ontology-resolver';
+import { parseAsOf, isLive, asOfLabel, TimeMachineError } from '@/lib/time-machine/time-machine';
 import { apiOk, apiError, apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
@@ -47,6 +48,17 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
   if (!objectType) return apiError('objectType query param is required', 400, { code: 'bad_request' });
   const top = Number(req.nextUrl.searchParams.get('top')) || 100;
 
+  // WS-10.3 Time-Machine — one `asOf` param threaded to every bound source's
+  // native time-travel. Absent/`live` ⇒ current state (byte-identical to before);
+  // a malformed value is a precise 400 (never a silent live read).
+  let asOf;
+  try {
+    asOf = parseAsOf(req.nextUrl.searchParams.get('asOf'));
+  } catch (e) {
+    if (e instanceof TimeMachineError) return apiError(e.message, 400, { code: 'bad_asof' });
+    throw e;
+  }
+
   // Owner/workspace-ACL gate (read-only) + PDP item-level read check.
   const onto = await loadOwnedItem(id, ITEM_TYPE, s.claims.oid, { allowReadRoles: true });
   if (!onto) return apiError('ontology not found', 404, { code: 'not_found' });
@@ -63,7 +75,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
     const bindings = await discoverOntologyBindings(onto);
     const forType = bindings.filter((b) => b.binding.objectType === objectType);
     const { sources, instances } = await resolveOntologyObjectInstances(
-      forType, objectType, ot, { top, tenantId: s.claims.oid },
+      forType, objectType, ot, { top, tenantId: s.claims.oid, asOf },
     );
 
     // WS-4.3 object-level security over the resolved instances — access policy
@@ -84,6 +96,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
 
     return apiOk({
       objectType,
+      asOf: { live: isLive(asOf), label: asOfLabel(asOf) },
       sources: sources.map((src) => ({
         itemId: src.itemId,
         itemName: src.itemName,

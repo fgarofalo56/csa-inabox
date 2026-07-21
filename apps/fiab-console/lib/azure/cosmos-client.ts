@@ -137,6 +137,11 @@ let _paginatedReportDefinitions: Container | null = null;
 let _loomPipelines: Container | null = null;
 let _pipelineStageRules: Container | null = null;
 let _pipelineHistory: Container | null = null;
+// WS-10.3 Time-Machine — time-branch (shadow-workspace) pins. One row per
+// named as-of snapshot over a workspace, PK /workspaceId so every per-workspace
+// list is a single-partition query. Created lazily (createIfNotExists) here AND
+// ARM-provisioned in cosmos.bicep's loomContainers.
+let _timeBranches: Container | null = null;
 // Scorecard rollup + status-rule config — one row per scorecard (id =
 // scorecardId), PK /scorecardId so every per-scorecard read is a single-
 // partition point-read. Stores the rollupMethod / statusRules / otherwiseStatus
@@ -908,7 +913,7 @@ async function ensure() {
   // (PK /pipelineId). Created lazily so a fresh environment needs no extra
   // ARM/Bicep step beyond the account+database.
   _loomPipelines = await mk('loom-pipelines', '/tenantId');
-  _pipelineStageRules = await mk('pipeline-stage-rules', '/pipelineId');
+  _timeBranches = await mk('time-branches', '/workspaceId');  _pipelineStageRules = await mk('pipeline-stage-rules', '/pipelineId');
   _pipelineHistory = await mk('pipeline-history', '/pipelineId');
   // Scorecard rollup + status-rule config — one row per scorecard (PK
   // /scorecardId). Overlays rollupMethod / statusRules / otherwiseStatus onto
@@ -1152,6 +1157,7 @@ export async function pbiDashboardOverlaysContainer(): Promise<Container> { awai
 export async function paginatedReportDefinitionsContainer(): Promise<Container> { await ensure(); return _paginatedReportDefinitions!; }
 /** Loom-native deployment-pipeline catalog — PK /tenantId. */
 export async function loomPipelinesContainer(): Promise<Container> { await ensure(); return _loomPipelines!; }
+export async function timeBranchesContainer(): Promise<Container> { await ensure(); return _timeBranches!; }
 /** Per-stage deployment rules (parameter / data-source overrides) — PK /pipelineId. */
 export async function pipelineStageRulesContainer(): Promise<Container> { await ensure(); return _pipelineStageRules!; }
 /** Deploy-receipt history (diff + deployed item ids per run) — PK /pipelineId. */
