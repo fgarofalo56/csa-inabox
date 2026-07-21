@@ -30,7 +30,9 @@ import {
   Filter20Regular, Table20Regular, DataArea20Regular, Merge20Regular, Branch20Regular,
   Notebook20Regular, DocumentBulletList20Regular, CloudArrowUp20Regular, Code20Regular,
   Location20Regular, LocationTargetSquare20Regular, LocationLive20Regular, GlobeLocation20Regular,
+  Send20Regular,
 } from '@fluentui/react-icons';
+import { EventstreamBusinessEventsTab } from './eventstream-business-events';
 import { useCanvasHistory } from '@/lib/components/canvas/use-canvas-history';
 import { DataPreviewDock } from '@/lib/components/eventstream/data-preview-dock';
 import { CopilotBuilderPane } from '@/lib/components/shared/copilot-builder-pane';
@@ -335,7 +337,7 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
   const [parseErr, setParseErr] = useState<string | null>(null);
   const [saveErr, setSaveErr] = useState<string | null>(null);
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<'designer' | 'operators' | 'sql' | 'definition' | 'copilot'>('designer');
+  const [activeTab, setActiveTab] = useState<'designer' | 'operators' | 'sql' | 'definition' | 'copilot' | 'business-events'>('designer');
   // Undo/redo over the topology JSON (Wave-2 history primitive). Every genuine
   // user mutation flows through onDesignerChange, so committing the serialized
   // topology there gives action-level undo across the designer, operators
@@ -1216,12 +1218,13 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
           </MessageBar>
         )}
 
-        <TabList selectedValue={activeTab} onTabSelect={(_: unknown, d: any) => setActiveTab((d.value as 'designer' | 'operators' | 'sql' | 'definition' | 'copilot') || 'designer')}>
+        <TabList selectedValue={activeTab} onTabSelect={(_: unknown, d: any) => setActiveTab((d.value as 'designer' | 'operators' | 'sql' | 'definition' | 'copilot' | 'business-events') || 'designer')}>
           <Tab value="designer" icon={<Flowchart20Regular />}>Visual designer</Tab>
           <Tab value="operators" icon={<Filter20Regular />}>Operators</Tab>
           <Tab value="sql" icon={<MathFormula20Regular />}>SQL operator</Tab>
           <Tab value="definition" icon={<DocumentBulletList20Regular />}>Definition</Tab>
           <Tab value="copilot" icon={<Flash20Regular />}>Copilot</Tab>
+          <Tab value="business-events" icon={<Send20Regular />}>Business events</Tab>
         </TabList>
 
         {activeTab === 'designer' && (
@@ -1262,6 +1265,10 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
             placeholder={'e.g. "Add a filter that keeps only error events, then add a Kusto destination called errors-adx."'}
             onApplied={load}
           />
+        )}
+
+        {activeTab === 'business-events' && (
+          <EventstreamBusinessEventsTab id={id} />
         )}
 
         {/* Docked bottom data-preview panel (Fabric parity): live type-badged
