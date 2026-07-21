@@ -20,8 +20,10 @@ import {
 import {
   ChartMultiple20Regular, DataBarVertical20Regular, DataLine20Regular,
   DataArea20Regular, DataPie20Regular, DataScatter20Regular, DataTrending24Regular,
+  SparkleFilled,
 } from '@fluentui/react-icons';
 import { EmptyState } from '@/lib/components/empty-state';
+import { ExplainMetricPanel } from '@/lib/analytics/explain-metric-panel';
 
 export type ChartKind = 'bar' | 'line' | 'area' | 'pie' | 'scatter';
 
@@ -148,6 +150,7 @@ export function ResultVisualize({ columns, rows }: ResultVisualizeProps) {
   const [kind, setKind] = useState<ChartKind>('bar');
   const [xIdx, setXIdx] = useState<number>(defaultX);
   const [yIdx, setYIdx] = useState<number>(defaultY);
+  const [view, setView] = useState<'chart' | 'explain'>('chart');
 
   // Re-seed axes if the columns change shape (e.g. a new query result arrives).
   useEffect(() => { setXIdx(defaultX); }, [defaultX]);
@@ -165,6 +168,31 @@ export function ResultVisualize({ columns, rows }: ResultVisualizeProps) {
     );
   }
 
+  // Outer view toggle (Chart ↔ Explain with AI) — shared across every result
+  // surface that hosts ResultVisualize (report / warehouse / synapse / databricks).
+  const viewToggle = (
+    <TabList selectedValue={view} onTabSelect={(_, d) => setView(d.value as 'chart' | 'explain')} size="small">
+      <Tab value="chart" icon={<ChartMultiple20Regular />}>Chart</Tab>
+      <Tab value="explain" icon={<SparkleFilled />}>Explain (AI)</Tab>
+    </TabList>
+  );
+
+  if (view === 'explain') {
+    return (
+      <div className={s.card}>
+        <div className={s.header}>
+          <span className={s.headerIcon} aria-hidden><SparkleFilled /></span>
+          <div className={s.headerText}>
+            <Subtitle2>Explain this metric</Subtitle2>
+            <Caption1 className={s.meta}>AI-authored chart · forecast · key drivers — over these real rows</Caption1>
+          </div>
+        </div>
+        {viewToggle}
+        <ExplainMetricPanel columns={columns} rows={rows} />
+      </div>
+    );
+  }
+
   if (numericIdx.length === 0) {
     return (
       <div className={s.card}>
@@ -175,6 +203,7 @@ export function ResultVisualize({ columns, rows }: ResultVisualizeProps) {
             <Caption1 className={s.meta}>Chart this query result without leaving Loom</Caption1>
           </div>
         </div>
+        {viewToggle}
         <MessageBar intent="warning">
           <MessageBarBody>
             No numeric column in this result, so there is nothing to plot. Add an
@@ -205,6 +234,8 @@ export function ResultVisualize({ columns, rows }: ResultVisualizeProps) {
           <Caption1 className={s.meta}>Chart this query result without leaving Loom</Caption1>
         </div>
       </div>
+
+      {viewToggle}
 
       <TabList selectedValue={kind} onTabSelect={(_, d) => setKind(d.value as ChartKind)} size="small">
         {CHART_KINDS.map((c) => <Tab key={c.key} value={c.key} icon={c.icon}>{c.label}</Tab>)}
