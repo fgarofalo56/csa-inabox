@@ -80,8 +80,8 @@ export interface LakehouseEditorCtx {
   setActionStatus: (s: string | null) => void;
 
   // ---- Upload ----
-  fileInputRef: React.RefObject<HTMLInputElement>;
-  folderInputRef: React.RefObject<HTMLInputElement>;
+  fileInputRef: React.RefObject<HTMLInputElement | null>;
+  folderInputRef: React.RefObject<HTMLInputElement | null>;
   isDragOver: boolean;
   setIsDragOver: (v: boolean) => void;
   uploadQueue: { done: number; total: number } | null;
@@ -417,7 +417,7 @@ export interface LakehouseEditorCtx {
   loadPaths: (container: string, prefix: string) => Promise<void>;
   cacheKey: (container: string, prefix: string) => string;
   refreshActive: () => void;
-  selectFile: (entry: PathEntry, opts?: { tab?: string }) => Promise<void>;
+  selectFile: (entry: PathEntry, opts?: { top?: number; format?: string }) => Promise<void>;
   previewTable: (relPath: string) => void;
   goToPrefix: (prefix: string) => void;
   currentPrefix: string;
