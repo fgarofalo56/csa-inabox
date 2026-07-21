@@ -21,7 +21,7 @@
  */
 import { costAttributionContainer } from '@/lib/azure/cosmos-client';
 
-export type AttributionEngine = 'spark' | 'databricks' | 'adx' | 'aoai' | 'pipeline';
+export type AttributionEngine = 'spark' | 'databricks' | 'adx' | 'aoai' | 'pipeline' | 'marketplace';
 
 /**
  * Published LCU coefficients per engine's billable unit. Aligned with the
@@ -35,6 +35,11 @@ export const ATTRIBUTION_RATES: Record<AttributionEngine, { unit: string; lcuPer
   adx: { unit: 'query', lcuPerUnit: 0.5 },
   aoai: { unit: 'token', lcuPerUnit: 0.00002 }, // 50K tokens ≈ 1 LCU (matches CU model)
   pipeline: { unit: 'run', lcuPerUnit: 10 },
+  // WS-10.4: a Living-Marketplace subscription meters the catalog/entitlement/
+  // serving overhead of standing up a subscriber against a published product.
+  // `quantity` carries the product's declared `lcuPerSubscription`, so
+  // lcuPerUnit=1 makes the recorded LCU equal that declared figure (transparent).
+  marketplace: { unit: 'subscription', lcuPerUnit: 1 },
 };
 
 /** Transparent published USD-per-LCU used for the estimate column. */

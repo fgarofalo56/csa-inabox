@@ -68,12 +68,19 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   }
 
   const endpoint = endpointFor(req, id);
+  const a2aEndpoint = endpoint.replace(/\/mcp$/, '/a2a');
   return NextResponse.json({
     ok: true,
     published: true,
     toolName,
     endpoint,
     publishedAt: now,
+    // The agent is ALSO reachable as an A2A agent (WS-5.2) at the sibling /a2a
+    // endpoint — an A2A card (GET) + JSON-RPC task delegation (POST message/send).
+    a2a: {
+      endpoint: a2aEndpoint,
+      agentCardUrl: a2aEndpoint, // GET a2aEndpoint returns the A2A agent card
+    },
     // A ready-to-paste MCP client config (streamable-http transport + a Loom API token).
     mcpClientConfig: {
       mcpServers: {

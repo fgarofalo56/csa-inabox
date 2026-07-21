@@ -41,6 +41,10 @@ let _wsGit: Container | null = null;
 let _tenantThemes: Container | null = null;
 let _tenantSettings: Container | null = null;
 let _marketplaceListings: Container | null = null;
+// WS-10.4 Living Marketplace — the UNIFIED product catalog covering all five
+// publishable/subscribable kinds (data|agent|mcp|app|ontology) under one schema.
+// Partitioned by tenant so the exchange list hits one physical partition.
+let _marketplace: Container | null = null;
 let _featurePermissions: Container | null = null;
 let _lakehouseShortcuts: Container | null = null;
 let _lakehouseSchemas: Container | null = null;
@@ -73,6 +77,7 @@ let _okrs: Container | null = null;
 let _scorecardGoals: Container | null = null;
 let _scorecardCheckins: Container | null = null;
 let _governanceDomains: Container | null = null;
+let _functionRegistry: Container | null = null;
 let _itemPermissions: Container | null = null;
 let _externalShares: Container | null = null;
 let _wsRoles: Container | null = null;
@@ -133,6 +138,11 @@ let _paginatedReportDefinitions: Container | null = null;
 let _loomPipelines: Container | null = null;
 let _pipelineStageRules: Container | null = null;
 let _pipelineHistory: Container | null = null;
+// WS-10.3 Time-Machine — time-branch (shadow-workspace) pins. One row per
+// named as-of snapshot over a workspace, PK /workspaceId so every per-workspace
+// list is a single-partition query. Created lazily (createIfNotExists) here AND
+// ARM-provisioned in cosmos.bicep's loomContainers.
+let _timeBranches: Container | null = null;
 // Scorecard rollup + status-rule config — one row per scorecard (id =
 // scorecardId), PK /scorecardId so every per-scorecard read is a single-
 // partition point-read. Stores the rollupMethod / statusRules / otherwiseStatus
@@ -237,6 +247,10 @@ let _itemVersions: Container | null = null;
 // unrelated threads). Created lazily (createIfNotExists) here AND ARM-provisioned
 // in cosmos.bicep's loomContainers — the lazy call is the hotfix fallback.
 let _agentMemory: Container | null = null;
+// WS-5.2 A2A delegated-task store. PK /tenantId, TTL 7 days (self-expiring) so
+// tasks/get retrieves a recently delegated task without unbounded growth. Lazy
+// createIfNotExists here + ARM-provisioned in cosmos.bicep's loomContainers.
+let _a2aTasks: Container | null = null;
 // Scoped API tokens (PAT) — BR-PAT. One doc per token, PK /id so the hot
 // resolvePat() path (every non-interactive API request) is a single-partition
 // point-read by the token id carried in the Authorization: Bearer header. Stores
@@ -694,6 +708,8 @@ async function ensure() {
   _tenantThemes = await mk('tenant-themes', '/tenantId');
   _tenantSettings = await mk('tenant-settings', '/tenantId');
   _marketplaceListings = await mk('marketplace-listings', '/tenantId');
+  // WS-10.4 Living Marketplace — unified 5-type product catalog (one schema).
+  _marketplace = await mk('marketplace', '/tenantId');
   // Phase 2 — Fabric-style RBAC: grant rows partitioned by tenant so
   // every per-request lookup hits a single physical partition.
   _featurePermissions = await mk('feature-permissions', '/tenantId');
@@ -836,6 +852,10 @@ async function ensure() {
   // Purview classic-collection mirror is best-effort on top of this store.
   // Shared by both the Wave-4 marketplace catalog and the governance dashboard.
   _governanceDomains = await mk('governance-domains', '/tenantId');
+  // Functions-on-objects registry (WS-4.2) — one doc per tenant holding the
+  // versioned RegisteredFunction[] referenced by derived properties + ontology
+  // action validation. Azure-native; executed on the Loom UDF runtime.
+  _functionRegistry = await mk('function-registry', '/tenantId');
   // Sensitivity-label assignments — one row per manual label application to a
   // Loom item (F12 sensitivity-label flyout). Mirrors what's written into
   // item.state.sensitivityLabel, but as an append-only, tenant-partitioned
@@ -898,7 +918,7 @@ async function ensure() {
   // (PK /pipelineId). Created lazily so a fresh environment needs no extra
   // ARM/Bicep step beyond the account+database.
   _loomPipelines = await mk('loom-pipelines', '/tenantId');
-  _pipelineStageRules = await mk('pipeline-stage-rules', '/pipelineId');
+  _timeBranches = await mk('time-branches', '/workspaceId');  _pipelineStageRules = await mk('pipeline-stage-rules', '/pipelineId');
   _pipelineHistory = await mk('pipeline-history', '/pipelineId');
   // Scorecard rollup + status-rule config — one row per scorecard (PK
   // /scorecardId). Overlays rollupMethod / statusRules / otherwiseStatus onto
@@ -1077,6 +1097,11 @@ async function ensure() {
     defaultTtl: -1, // TTL enabled; each beacon doc carries its own `ttl` seconds
   });
   _canvasPresence = canvasPresence;
+  // WS-5.2 — A2A delegated tasks. PK /tenantId, TTL 7 days. ARM-provisioned in
+  // cosmos.bicep's loomContainers; this createIfNotExists is the hotfix fallback.
+  _a2aTasks = (await database.containers.createIfNotExists({
+    id: 'a2a-tasks', partitionKey: { paths: ['/tenantId'] }, defaultTtl: 604800,
+  })).container;
   _ensured = true;
 }
 
@@ -1102,6 +1127,7 @@ export async function itemPermissionsContainer(): Promise<Container> { await ens
 export async function externalSharesContainer(): Promise<Container> { await ensure(); return _externalShares!; }
 export async function workspaceRolesContainer(): Promise<Container> { await ensure(); return _wsRoles!; }
 export async function governanceDomainsContainer(): Promise<Container> { await ensure(); return _governanceDomains!; }
+export async function functionRegistryContainer(): Promise<Container> { await ensure(); return _functionRegistry!; }
 export async function labelAssignmentsContainer(): Promise<Container> { await ensure(); return _labelAssignments!; }
 // F16 — access-request approval workflow container (PK /tenantId). Distinct
 // from the marketplace accessRequestsContainer() below (PK /dataProductId).
@@ -1136,6 +1162,7 @@ export async function pbiDashboardOverlaysContainer(): Promise<Container> { awai
 export async function paginatedReportDefinitionsContainer(): Promise<Container> { await ensure(); return _paginatedReportDefinitions!; }
 /** Loom-native deployment-pipeline catalog — PK /tenantId. */
 export async function loomPipelinesContainer(): Promise<Container> { await ensure(); return _loomPipelines!; }
+export async function timeBranchesContainer(): Promise<Container> { await ensure(); return _timeBranches!; }
 /** Per-stage deployment rules (parameter / data-source overrides) — PK /pipelineId. */
 export async function pipelineStageRulesContainer(): Promise<Container> { await ensure(); return _pipelineStageRules!; }
 /** Deploy-receipt history (diff + deployed item ids per run) — PK /pipelineId. */
@@ -1178,6 +1205,8 @@ export async function rateLimitsContainer(): Promise<Container> { await ensure()
 export async function itemVersionsContainer(): Promise<Container> { await ensure(); return _itemVersions!; }
 /** Durable agent memory + per-agent thread persistence (AIF-14), PK /agentId. */
 export async function agentMemoryContainer(): Promise<Container> { await ensure(); return _agentMemory!; }
+/** WS-5.2 — A2A delegated tasks (PK /tenantId, TTL 7 days). tasks/get reads it. */
+export async function a2aTasksContainer(): Promise<Container> { await ensure(); return _a2aTasks!; }
 /** Scoped API tokens (PAT, BR-PAT) — PK /id; stores a SHA-256 hash of the secret only. */
 export async function loomPatTokensContainer(): Promise<Container> { await ensure(); return _loomPatTokens!; }
 /** BR-SCIM — SCIM 2.0 provisioned users (PK /id). */
@@ -1214,6 +1243,8 @@ export async function workspaceFoldersContainer(): Promise<Container> { await en
 
 // Wave 4 — Data Marketplace / Governance accessors.
 export async function dataProductsContainer(): Promise<Container> { await ensure(); return _dataProducts!; }
+/** WS-10.4 Living Marketplace — unified 5-type product catalog. */
+export async function marketplaceContainer(): Promise<Container> { await ensure(); return _marketplace!; }
 export async function dataProductJobsContainer(): Promise<Container> { await ensure(); return _dataProductJobs!; }
 export async function accessRequestsContainer(): Promise<Container> { await ensure(); return _accessRequests!; }
 export async function attributeGroupsContainer(): Promise<Container> { await ensure(); return _attributeGroups!; }
@@ -1366,6 +1397,7 @@ const KNOWN_CONTAINER_IDS = [
   'rate-limits',
   'item-versions',
   'loom-agent-memory',
+  'a2a-tasks',
   'report-subscriptions', 'report-delivery-log',
   'webhook-subscriptions', 'webhook-deliveries',
   'data-product-analytics',

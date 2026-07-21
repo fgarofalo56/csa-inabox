@@ -179,11 +179,11 @@ describe('admin/env-config registry', () => {
     // OpenAI account the fine-tuning + model-deployment REST targets) are both NEW
     // editable vars; the LOOM_AOAI_ENDPOINT / LOOM_FOUNDRY_NAME keys it also
     // references are shared with svc-aoai / svc-aml.
-    // Bumped to 145 by WS-10.1 (svc-lcu-autopilot): LOOM_AUTOPILOT_MODE (the
-    // self-driving FinOps loop bootstrap approval mode) + LOOM_CAPACITY_LCU (the
-    // published LCU capacity ceiling the autopilot right-sizes via env-apply) are
-    // both NEW editable vars.
-    expect(EDITABLE_ENV.length).toBe(145);
+    // 143 base → WS-5.2 svc-a2a-egress added LOOM_A2A_EGRESS_ALLOW (144) →
+    // WS-10.1 svc-lcu-autopilot adds LOOM_AUTOPILOT_MODE (the self-driving FinOps
+    // loop bootstrap approval mode) + LOOM_CAPACITY_LCU (the published LCU
+    // capacity ceiling the autopilot right-sizes via env-apply) — both NEW.
+    expect(EDITABLE_ENV.length).toBe(146);
   });
 
   it('surfaces the wave-2 env vars as settable (previously dropped by the whitelist)', () => {
@@ -248,6 +248,7 @@ describe('admin/env-config registry', () => {
     // per-replica in-memory cache with zero loss of function).
     const optDefault = EDITABLE_ENV.filter((e) => e.optionalDefault).map((e) => e.key).sort();
     expect(optDefault).toEqual([
+      'LOOM_A2A_EGRESS_ALLOW',
       'LOOM_AOAI_MINI_DEPLOYMENT', 'LOOM_AOAI_STRONG_DEPLOYMENT',
       'LOOM_AUDIT_DCR_ENDPOINT', 'LOOM_AUDIT_DCR_ID',
       // WS-10.1 svc-lcu-autopilot — both optionalDefault (propose mode +

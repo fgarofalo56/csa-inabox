@@ -178,6 +178,10 @@ var loomContainers = [
   { name: 'workspace-folders', partitionKey: '/workspaceId' }
   { name: 'task-flows',        partitionKey: '/workspaceId' }
   { name: 'task-flow-runs',    partitionKey: '/workspaceId' }
+  // WS-10.3 Time-Machine — time-branch (shadow-workspace) pins. One row per
+  // named as-of snapshot over a workspace, PK /workspaceId → single-partition
+  // list. createIfNotExists in cosmos-client.ts ensure() is the hotfix fallback.
+  { name: 'time-branches',     partitionKey: '/workspaceId' }
   { name: 'embed-codes',       partitionKey: '/tenantId' }
   { name: 'org-visuals',       partitionKey: '/tenantId' }
   { name: 'azure-connections', partitionKey: '/tenantId' }
@@ -212,6 +216,13 @@ var loomContainers = [
   // per-assignment decisions). PK /tenantId. createIfNotExists in
   // cosmos-client.ts ensure() is the hotfix fallback.
   { name: 'access-reviews',     partitionKey: '/tenantId' }
+  // WS-10.4 Living Marketplace (BTB-11) — the UNIFIED product exchange. One row
+  // per published product across all five kinds (data|agent|mcp|app|ontology),
+  // PK /tenantId so the exchange list + publish + subscribe all hit a single
+  // physical partition. Auto-certification (gate registry run) + entitlement
+  // (access-assignments) + LCU chargeback (cost-attribution) reference it.
+  // createIfNotExists in cosmos-client.ts ensure() remains the hotfix fallback.
+  { name: 'marketplace',        partitionKey: '/tenantId' }
   // Durable cross-session agent memory + per-agent thread persistence (AIF-14).
   // PK /agentId so every per-agent thread list + memory retrieve hits a single
   // physical partition. NO TTL — memory facts are durable; threads are retained
@@ -305,6 +316,12 @@ var loomContainers = [
   // an explicit "leave". createIfNotExists in cosmos-client.ts ensure() remains
   // the hotfix fallback.
   { name: 'canvas-presence',       partitionKey: '/itemId', ttl: -1 }
+  // WS-5.2 — A2A delegated tasks. One doc per delegated A2A task, PK /tenantId so
+  // a caller's tasks/get is single-partition + tenant-isolated. TTL 7 days
+  // (604800s) — delegated tasks are short-lived; tasks/get retrieves a recently
+  // completed task. createIfNotExists in cosmos-client.ts ensure() remains the
+  // hotfix fallback.
+  { name: 'a2a-tasks',             partitionKey: '/tenantId', ttl: 604800 }
 ]
 
 resource loomDb 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases@2024-12-01-preview' = {
