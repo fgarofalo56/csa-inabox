@@ -180,10 +180,10 @@ describe('admin/env-config registry', () => {
     // editable vars; the LOOM_AOAI_ENDPOINT / LOOM_FOUNDRY_NAME keys it also
     // references are shared with svc-aoai / svc-aml.
     // 143 base → WS-5.2 svc-a2a-egress added LOOM_A2A_EGRESS_ALLOW (144) →
-    // WS-10.1 svc-lcu-autopilot adds LOOM_AUTOPILOT_MODE (the self-driving FinOps
-    // loop bootstrap approval mode) + LOOM_CAPACITY_LCU (the published LCU
-    // capacity ceiling the autopilot right-sizes via env-apply) — both NEW.
-    expect(EDITABLE_ENV.length).toBe(146);
+    // WS-10.1 svc-lcu-autopilot added LOOM_AUTOPILOT_MODE + LOOM_CAPACITY_LCU
+    // (146) → WS-9 svc-agent-mesh adds LOOM_MESH_PROFILE (the mesh egress profile
+    // override; LOOM_A2A_EGRESS_ALLOW is already counted from WS-5.2) — one NEW.
+    expect(EDITABLE_ENV.length).toBe(147);
   });
 
   it('surfaces the wave-2 env vars as settable (previously dropped by the whitelist)', () => {
@@ -259,7 +259,7 @@ describe('admin/env-config registry', () => {
       'LOOM_CONTENT_SAFETY_ENDPOINT', 'LOOM_DIRECTLAKE_URL', 'LOOM_DOCINTEL_ENDPOINT',
       'LOOM_EVENTGRID_TOPIC_ENDPOINT', 'LOOM_EVENTGRID_TOPIC_KEY',
       'LOOM_GRAPH_GROUP_SYNC_ENABLED',
-      'LOOM_LANGUAGE_ENDPOINT', 'LOOM_ONELAKE_URL',
+      'LOOM_LANGUAGE_ENDPOINT', 'LOOM_MESH_PROFILE', 'LOOM_ONELAKE_URL',
       'LOOM_PLAN_BACKING_SQL_DATABASE', 'LOOM_PLAN_BACKING_SQL_SERVER',
       'LOOM_RESULT_CACHE_REDIS',
       'LOOM_TRANSLATOR_ENDPOINT', 'LOOM_VISION_ENDPOINT',

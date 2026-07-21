@@ -39,7 +39,7 @@ with the exact command that reproduces it.
 | **Item-type editors** | **132** | `EDITOR_REGISTRY` slug→component map in `apps/fiab-console/lib/editors/registry.ts` |
 | **Editor ↔ item-type coverage** | **1:1** (0 orphans either way at this rev) | set comparison of registry slugs vs catalog slugs — every item type has a dedicated editor; no editor slug lacks an item type |
 | **/admin/health checks (total)** | **≈134** | sum of the four check families below |
-| — env-presence gates (`ENV_CHECKS`) | **89** | `apps/fiab-console/lib/admin/env-checks.ts` |
+| — env-presence gates (`ENV_CHECKS`) | **90** | `apps/fiab-console/lib/admin/env-checks.ts` |
 | — live probes (real Azure calls) | **20** | 8 in `lib/admin/self-audit.ts` + 12 in `lib/admin/health-probes.ts` |
 | — workload-family aggregate checks | **22** | `lib/admin/health-coverage.ts` (one `family-*` per catalog category) |
 | — security-posture checks | **3** | `securityChecks()` in `lib/admin/self-audit.ts` |
