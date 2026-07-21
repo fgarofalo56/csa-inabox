@@ -305,6 +305,8 @@ let _perfLearning: Container | null = null;
 // replica-local). TTL-enabled (each doc carries its own `ttl`) so a crashed
 // replica's leases self-evict instead of pinning a session forever.
 let _sparkWarmLeases: Container | null = null;
+// WS-10.5 — Parity Autopilot run ledger. PK /tenantId; TTL-enabled (per-doc `ttl`).
+let _parityAutopilotRuns: Container | null = null;
 // Brownfield Landing-Zone Service Registry (Phase 1). One doc per attached
 // existing Azure service (Synapse / ADX / ADLS / …) bound to a landing zone (or
 // the hub). PK /tenantId so the per-tenant "what belongs to Loom" enumeration +
@@ -1042,6 +1044,13 @@ async function ensure() {
     defaultTtl: -1, // TTL enabled; each lease doc carries its own `ttl`
   });
   _sparkWarmLeases = swl;
+  // WS-10.5 — Parity Autopilot run ledger. PK /tenantId, TTL-enabled (per-doc `ttl`).
+  const { container: par } = await database.containers.createIfNotExists({
+    id: 'parity-autopilot-runs',
+    partitionKey: { paths: ['/tenantId'] },
+    defaultTtl: -1,
+  });
+  _parityAutopilotRuns = par;
   // Brownfield Landing-Zone Service Registry (Phase 1) — PK /tenantId so the
   // per-tenant registry enumeration + every per-LZ services read hit a single
   // physical partition. ARM-provisioned in cosmos.bicep's loomContainers; this
@@ -1221,6 +1230,7 @@ export async function perfBenchmarksContainer(): Promise<Container> { await ensu
 /** PERF-4.2/4.4 — perf tunables + usage-learning histograms + auto-tune audit, PK /scopeKey. */
 export async function perfLearningContainer(): Promise<Container> { await ensure(); return _perfLearning!; }
 export async function sparkWarmLeasesContainer(): Promise<Container> { await ensure(); return _sparkWarmLeases!; }
+export async function parityAutopilotRunsContainer(): Promise<Container> { await ensure(); return _parityAutopilotRuns!; }
 /** CTS-07 — Copilot skills registry (custom skills + seeded built-ins), PK /scope. */
 export async function copilotSkillsContainer(): Promise<Container> { await ensure(); return _copilotSkills!; }
 /** CTS-07 — per-user skill toggle overrides + tenant-default overlay, PK /userKey. */
