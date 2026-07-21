@@ -54,11 +54,20 @@ export function buildFlowNodes(parts: {
   return nodes;
 }
 
-/** Every non-agent node is wired from the orchestrator agent. */
-export function buildFlowEdges(nodeIds: string[]): { id: string; source: string; target: string }[] {
+/**
+ * Every non-agent node is wired from the orchestrator agent. Sub-agent edges are
+ * tagged `handoff` (the orchestrator hands the turn off to a connected agent);
+ * data/tool edges are `grounding`. The canvas styles the two distinctly.
+ */
+export function buildFlowEdges(nodeIds: string[]): { id: string; source: string; target: string; kind: 'handoff' | 'grounding' }[] {
   return nodeIds
     .filter((id) => id !== 'agent')
-    .map((id) => ({ id: `e-agent-${id}`, source: 'agent', target: id }));
+    .map((id) => ({
+      id: `e-agent-${id}`,
+      source: 'agent',
+      target: id,
+      kind: id.startsWith('subagent:') ? 'handoff' : 'grounding',
+    }));
 }
 
 /** Parse a canvas node id back into its kind + underlying ref id. */

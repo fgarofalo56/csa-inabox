@@ -34,6 +34,9 @@ export type AgentToolKind =
   | 'kql'
   | 'search-index'
   | 'knowledge-base'
+  // Weave ontology-object tool (WS-6): the agent reasons over TYPED object
+  // instances resolved through the ontology graph, not raw tables.
+  | 'ontology-object'
   // capability tools
   | 'code-interpreter'
   | 'function'
@@ -58,6 +61,9 @@ export interface AgentTool {
   // --- item-bound kinds (warehouse / lakehouse / kql / search-index / knowledge-base) ---
   itemId?: string;
   itemName?: string;
+  // --- ontology-object (WS-6) — itemId binds the ontology item; objectType names
+  // the declared object type whose typed instances the agent grounds on. ---
+  objectType?: string;
   // --- mcp ---
   /** Registry id of the bound MCP server (REMOTE_BUILTIN_MCP_CATALOG / registered). */
   serverId?: string;
@@ -149,6 +155,15 @@ export const AGENT_TOOL_KINDS: readonly AgentToolKindMeta[] = [
     bindItemType: 'knowledge-base',
     icon: 'knowledge',
     category: 'move',
+  },
+  {
+    kind: 'ontology-object',
+    label: 'Ontology object',
+    short: 'Object',
+    description: 'Ground on TYPED instances of a Weave ontology object type (WS-6) — resolved through the ontology graph from its bound lakehouse / KQL / semantic sources.',
+    bindItemType: 'ontology',
+    icon: 'ontology',
+    category: 'transform',
   },
   {
     kind: 'code-interpreter',
@@ -288,6 +303,10 @@ export function describeAgentTool(tool: AgentTool): string {
     case 'search-index':
     case 'knowledge-base':
       return tool.itemName || tool.itemId || '(pick an item)';
+    case 'ontology-object':
+      return tool.objectType
+        ? `${tool.objectType}${tool.itemName ? ` · ${tool.itemName}` : ''}`
+        : (tool.itemName || tool.itemId ? '(pick an object type)' : '(pick an ontology)');
     case 'mcp':
       return tool.serverLabel || tool.serverId || '(pick a server)';
     case 'openapi':
@@ -312,6 +331,8 @@ export function isAgentToolConfigured(tool: AgentTool): boolean {
     case 'search-index':
     case 'knowledge-base':
       return !!tool.itemId;
+    case 'ontology-object':
+      return !!(tool.itemId && tool.objectType && tool.objectType.trim());
     case 'mcp':
       return !!tool.serverId;
     case 'openapi':
@@ -361,6 +382,20 @@ export function toFoundryTool(tool: AgentTool): Record<string, unknown> | null {
         },
         loom_binding: { kind: tool.kind, itemId: tool.itemId, itemName: tool.itemName },
       };
+    case 'ontology-object':
+      return {
+        type: 'function',
+        function: {
+          name: `loom_ontology_${(tool.objectType || 'object').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'object'}`,
+          description: tool.description || `Resolve typed "${tool.objectType}" instances through the Weave ontology "${tool.itemName || tool.itemId}".`,
+          parameters: {
+            type: 'object',
+            properties: { question: { type: 'string', description: 'The natural-language question to answer over the object instances.' } },
+            required: ['question'],
+          },
+        },
+        loom_binding: { kind: 'ontology-object', itemId: tool.itemId, itemName: tool.itemName, objectType: tool.objectType },
+      };
     case 'function':
       return {
         type: 'function',
@@ -369,8 +404,7 @@ export function toFoundryTool(tool: AgentTool): Record<string, unknown> | null {
           description: tool.description || undefined,
           parameters: { type: 'object', properties: {} },
         },
-      };
-    case 'mcp':
+      };    case 'mcp':
       return {
         type: 'mcp',
         server_label: (tool.serverLabel || tool.serverId || 'mcp').trim(),

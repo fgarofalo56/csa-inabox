@@ -82,6 +82,12 @@ describe('isAgentToolConfigured + describeAgentTool', () => {
     expect(isAgentToolConfigured({ id: '1', kind: 'mcp', serverId: 'ms-learn' })).toBe(true);
     expect(isAgentToolConfigured({ id: '1', kind: 'openapi', specUrl: 'https://x/o.json' })).toBe(true);
   });
+  it('ontology-object needs both an ontology item and an object type (WS-6)', () => {
+    expect(isAgentToolConfigured({ id: '1', kind: 'ontology-object' })).toBe(false);
+    expect(isAgentToolConfigured({ id: '1', kind: 'ontology-object', itemId: 'o1' })).toBe(false);
+    expect(isAgentToolConfigured({ id: '1', kind: 'ontology-object', itemId: 'o1', objectType: 'Customer' })).toBe(true);
+    expect(describeAgentTool({ id: '1', kind: 'ontology-object', itemId: 'o1', itemName: 'Ent', objectType: 'Customer' })).toContain('Customer');
+  });
 });
 
 describe('toFoundryTool wire mapping', () => {
@@ -110,6 +116,14 @@ describe('toFoundryTool wire mapping', () => {
     const t = toFoundryTool({ id: '1', kind: 'openapi', specUrl: 'https://x/o.json', authKind: 'bearer', authRef: 'sec' });
     expect((t as any).openapi.spec_url).toBe('https://x/o.json');
     expect((t as any).openapi.auth).toEqual({ type: 'bearer', secret_ref: 'sec' });
+  });
+  it('maps ontology-object to a function tool with a loom_binding (WS-6)', () => {
+    const t = toFoundryTool({ id: '1', kind: 'ontology-object', itemId: 'o1', itemName: 'Ent', objectType: 'Customer' });
+    expect((t as any).type).toBe('function');
+    expect((t as any).function.name).toBe('loom_ontology_customer');
+    expect((t as any).loom_binding).toMatchObject({ kind: 'ontology-object', itemId: 'o1', objectType: 'Customer' });
+    // unconfigured (no object type) → dropped
+    expect(toFoundryTool({ id: '2', kind: 'ontology-object', itemId: 'o1' })).toBeNull();
   });
   it('toolsToFoundryTools skips unconfigured entries', () => {
     const out = toolsToFoundryTools([

@@ -39,6 +39,19 @@ describe('agent-flow-run — FlowDag serialization', () => {
     expect(sources).toHaveLength(2);
   });
 
+  it('maps an ontology-object node to a grounded `ontology` source (WS-6)', () => {
+    const tools: AgentTool[] = [
+      { id: 'o1', kind: 'ontology-object', itemId: 'onto-1', itemName: 'Enterprise', objectType: 'Customer' },
+      { id: 'o2', kind: 'ontology-object', itemId: 'onto-1', itemName: 'Enterprise', objectType: 'Order' },
+      // an ontology-object without an object type is NOT grounded (needs both).
+      { id: 'o3', kind: 'ontology-object', itemId: 'onto-1', itemName: 'Enterprise' },
+    ];
+    const sources = flowGroundedSources(tools);
+    expect(sources).toHaveLength(2);
+    expect(sources.every((s) => s.type === 'ontology' && s.id === 'onto-1')).toBe(true);
+    expect(sources.map((s) => s.tables).sort()).toEqual(['Customer', 'Order']);
+  });
+
   it('flowStateToConfig carries instructions + grounded sources', () => {
     const cfg = flowStateToConfig(sampleState());
     expect(cfg.instructions).toBe('You are an analyst.');
