@@ -252,6 +252,26 @@ jobs:
           CI: 'true'
 
       # -----------------------------------------------------------------------
+      # 6a2. Publish-version E2E (task #7) — live front-end version-history +
+      #      restore across publishing object types, with the SAME minted
+      #      session. Separate project so its heavier per-type create/save flow
+      #      is its own signal; continue-on-error so a per-type selector hiccup
+      #      annotates the run but does not mask the core verify gate.
+      # -----------------------------------------------------------------------
+      - name: Run publish-version E2E (--project=publish-version)
+        continue-on-error: true
+        run: |
+          if [ -d "/ms-playwright" ]; then export PLAYWRIGHT_BROWSERS_PATH=/ms-playwright; fi
+          pnpm -C apps/fiab-console exec playwright test --project=publish-version
+        env:
+          SESSION_SECRET:       ${{ env.SESSION_SECRET }}
+          LOOM_URL:             ${{ env.LOOM_URL }}
+          LOOM_AUTOMATION_OID:  ${{ env.LOOM_AUTOMATION_OID }}
+          LOOM_AUTOMATION_UPN:  ${{ env.LOOM_AUTOMATION_UPN }}
+          LOOM_AUTOMATION_NAME: ${{ env.LOOM_AUTOMATION_NAME }}
+          CI: 'true'
+
+      # -----------------------------------------------------------------------
       # 6b. Optional browser-E2E RECEIPT (G1 / no-vaporware.md).
       #     Runs only when `target_route` is set. Uses the SAME minted-session
       #     path (scripts/csa-loom/e2e-receipt.mjs shares the exact cookie mint)
