@@ -22,7 +22,8 @@
 export type CacheCounterBackend =
   | 'result-cache' // report / semantic-layer result cache (query-result-cache.ts)
   | 'adx' // ADX server-side results-cache hits (kusto-client.ts)
-  | 'tabular'; // AAS / loom-native DAX result cache (tabular-eval-client.ts)
+  | 'tabular' // AAS / loom-native DAX result cache (tabular-eval-client.ts)
+  | 'cost'; // Cost Management pulls (cost-client.ts / cost-scope.ts — C1)
 
 interface Counter {
   hits: number;
@@ -33,6 +34,7 @@ const counters: Record<CacheCounterBackend, Counter> = {
   'result-cache': { hits: 0, misses: 0 },
   adx: { hits: 0, misses: 0 },
   tabular: { hits: 0, misses: 0 },
+  cost: { hits: 0, misses: 0 },
 };
 
 /** Record a cache hit for a backend. */

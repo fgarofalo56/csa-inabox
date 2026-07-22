@@ -37,18 +37,21 @@ interface WarmTarget {
 
 async function targets(): Promise<WarmTarget[]> {
   // Dynamic imports keep the warmer out of every route's module graph.
-  const [{ getLoomCostSummary }, monitor, { getDefenderSummary }] = await Promise.all([
+  const [{ computeLoomCostSummary, costKey, loomScopeLabel }, monitor, { getDefenderSummary }] = await Promise.all([
     import('@/lib/azure/cost-client'),
     import('@/lib/azure/monitor-client'),
     import('@/lib/azure/defender-client'),
   ]);
   return [
     {
+      // C1: warm the CANONICAL cost-client cache key (the same key
+      // getLoomCostSummaryCached reads) with the RAW compute — warming through
+      // the cached wrapper would just read its own fresh copy back.
       label: 'monitor/cost MonthToDate',
-      key: buildScopedCacheKey('monitor/cost', { timeframe: 'MonthToDate' }),
-      modelId: 'monitor',
+      key: costKey(loomScopeLabel(), 'MonthToDate', 'summary'),
+      modelId: 'cost-mgmt',
       ttlMs: 15 * 60_000,
-      produce: () => getLoomCostSummary({ timeframe: 'MonthToDate' }),
+      produce: () => computeLoomCostSummary({ timeframe: 'MonthToDate' }),
     },
     {
       label: 'monitor/alerts metric',

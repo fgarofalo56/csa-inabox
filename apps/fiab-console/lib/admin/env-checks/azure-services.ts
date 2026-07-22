@@ -230,6 +230,28 @@ export const AZURE_SERVICES_ENV_CHECKS: EnvSpec[] = [
     },
   },
   {
+    // C1 (loom-next-level) — the FinOps cost-pull stack: /monitor Cost tab,
+    // /admin/usage-chargeback + /admin/chargeback rollups, /admin/capacity
+    // $/mo column. Default-ON per loom_default_on_opt_out: LOOM_SUBSCRIPTION_ID
+    // is auto-wired by the push-button deploy AND the Cost Management Reader
+    // grant is now bicep-provisioned, so cost pulls run day-one with zero
+    // operator input — LOOM_BILLING_SCOPE is an optional widener only.
+    id: 'svc-cost-management', category: 'azure-services', title: 'Cost Management (FinOps — cost / chargeback pulls)', severity: 'optional',
+    anyOf: [['LOOM_BILLING_SCOPE', 'LOOM_SUBSCRIPTION_ID']], warnOnMiss: true,
+    remediation: 'Cost pulls run per Loom subscription by default (LOOM_SUBSCRIPTION_ID — auto-wired by the push-button deploy) and the Console UAMI is granted "Cost Management Reader" at subscription scope by bicep (main.bicep console-cost-management-reader → modules/admin-plane/cost-management-reader-rbac.bicep), so cost/chargeback works day-one with no operator input. Optionally set LOOM_BILLING_SCOPE to a billing-account / enrollment / management-group scope (e.g. "/providers/Microsoft.Billing/billingAccounts/<id>") to roll the report up to a wider billing scope (required on some Gov EA/MCA enrollments).',
+    provisionedBy: 'platform/fiab/bicep/main.bicep (console-cost-management-reader, skipRoleGrants-aware) → modules/admin-plane/cost-management-reader-rbac.bicep + modules/admin-plane/main.bicep apps[] env LOOM_SUBSCRIPTION_ID',
+    role: 'Cost Management Reader (Console UAMI) at subscription scope — bicep-granted by cost-management-reader-rbac.bicep (role id 72fafb9e-0641-4937-9268-a91bfd8191a3, identical across Commercial / GCC-High / IL5)',
+    // X-MATRIX (C1 per-cloud): Query/Forecast REST is GA in Commercial AND on
+    // management.usgovcloudapi.net (GCC-High) for EA/PAYG offers — enrollment/CSP
+    // scope variance is a config note, not an availability gap. IL5/air-gapped
+    // enclaves cannot reach the Cost Management endpoint → CSV-export ingest
+    // fallback (documented in the fallbackNote; the UI surfaces identically).
+    availability: {
+      commercial: 'ga', gccHigh: 'ga', il5: 'unavailable',
+      fallbackNote: 'Azure Government (GCC-High): Cost Management Query/Forecast REST is GA on management.usgovcloudapi.net for EA/PAYG offers, but enrollment/CSP scope support varies — set LOOM_BILLING_SCOPE to the EA enrollment / billing-account scope when the per-subscription default returns no data. IL5/air-gapped: the Cost Management endpoint is typically unreachable — ingest the "Generate Cost Details Report" CSV export into ADLS and compute the rollups from it (the C1 cost-details-ingest design); the cost surfaces render identically from the ingested rollup.',
+    },
+  },
+  {
     id: 'svc-databricks-sql', category: 'azure-services', title: 'Databricks SQL warehouse (DQ monitor / MDM / DLP schemas)', severity: 'optional',
     required: ['LOOM_DATABRICKS_SQL_WAREHOUSE_ID'], warnOnMiss: true,
     remediation: 'Set LOOM_DATABRICKS_SQL_WAREHOUSE_ID (with LOOM_DATABRICKS_HOSTNAME) so DQ monitoring, MDM match-merge, and governance DLP schema surfaces run against a real Databricks SQL warehouse (warehouseConfigGate). Synapse covers the warehouse item type without it.',

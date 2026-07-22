@@ -26,6 +26,8 @@ import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { MonitorError } from '@/lib/azure/monitor-client';
 import { armBase, armScope } from '@/lib/azure/cloud-endpoints';
 import { subscriptionFromResourceId, parseResourceCost } from '@/lib/clients/cost-parse';
+import { costKey, COST_CACHE_OPTS } from '@/lib/azure/cost-client';
+import { getOrComputeCached } from '@/lib/azure/query-result-cache';
 
 const ARM = armBase();
 const ARM_SCOPE = armScope();
@@ -63,6 +65,11 @@ export { subscriptionFromResourceId, parseResourceCost };
  * Month-to-date actual cost for ONE Azure resource. Throws MonitorError on
  * 401/403 (→ honest gate) or other ARM failure. The Cost Management QPU quota
  * is small (12/10s) so a 429 is retried with Retry-After-honoring backoff.
+ *
+ * C1: cached per (resourceId, timeframe) under the shared cost-cache posture
+ * (15 min TTL, 45s budget, serve-stale-on-error, 'cost' hit-rate counter) —
+ * the /admin/capacity grid asks per row, so uncached it burned the 12-per-10s
+ * QPU quota on every paint.
  */
 export async function getResourceMonthlyCost(
   resourceId: string,
@@ -70,9 +77,23 @@ export async function getResourceMonthlyCost(
 ): Promise<ResourceCost> {
   const rid = (resourceId || '').trim();
   if (!rid) throw new MonitorError('resourceId required', 400);
+  const timeframe = opts.timeframe || 'MonthToDate';
+  const { value } = await getOrComputeCached(
+    costKey(rid.toLowerCase(), timeframe, 'resource'),
+    'cost-mgmt',
+    () => computeResourceMonthlyCost(rid, timeframe),
+    COST_CACHE_OPTS,
+  );
+  return value;
+}
+
+async function computeResourceMonthlyCost(
+  resourceId: string,
+  timeframe: ResourceCostTimeframe,
+): Promise<ResourceCost> {
+  const rid = resourceId;
   const sub = subscriptionFromResourceId(rid);
   if (!sub) throw new MonitorError('resourceId is not a subscription-scoped ARM id', 400);
-  const timeframe = opts.timeframe || 'MonthToDate';
 
   const t = await credential.getToken(ARM_SCOPE);
   if (!t?.token) throw new MonitorError('Failed to acquire ARM token for Cost Management', 401);

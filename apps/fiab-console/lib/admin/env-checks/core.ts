@@ -91,6 +91,8 @@ export const VALUE_HINT: Record<string, string> = {
   LOOM_COSMOS_ENDPOINT: 'https://<account>.documents.azure.com:443/',
   LOOM_COSMOS_DATABASE: 'loom',
   LOOM_SUBSCRIPTION_ID: '<subscription-id>',
+  // C1 — optional widener for the FinOps cost rollup (per-subscription default).
+  LOOM_BILLING_SCOPE: '/providers/Microsoft.Billing/billingAccounts/<billing-account-id>  (unset = per Loom subscription)',
   LOOM_DLZ_RG: '<dlz-resource-group>',
   LOOM_ADMIN_RG: '<admin-resource-group>',
   LOOM_TENANT_ADMIN_OID: '<your-entra-user-object-id>',

@@ -35,6 +35,14 @@ describe('cache-counters', () => {
     expect(snap.total).toEqual({ hits: 2, misses: 1, hitRate: 2 / 3 });
   });
 
+  it('tracks the C1 cost backend independently', () => {
+    recordCacheMiss('cost');
+    recordCacheHit('cost');
+    expect(backendHitRate('cost')).toBe(0.5);
+    expect(cacheCountersSnapshot().byBackend.cost).toEqual({ hits: 1, misses: 1, hitRate: 0.5 });
+    expect(backendHitRate('result-cache')).toBe(0);
+  });
+
   it('reset clears every counter', () => {
     recordCacheHit('adx');
     resetCacheCounters();
