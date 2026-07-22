@@ -384,6 +384,12 @@ let _canvasComments: Container | null = null;
 // its own `ttl` seconds) so a peer that closed the tab / crashed self-evicts
 // without an explicit "leave" — the heartbeat is the only write path.
 let _canvasPresence: Container | null = null;
+// FLAG0 — runtime kill-switch flags (loom-runtime-flags). One doc per
+// registered flag (id = flag id, PK /id → single-partition point-reads on the
+// hot path). Default-ON: a MISSING doc means the flag is enabled, so the
+// container never gates anything (loom_default_on_opt_out). See
+// lib/admin/runtime-flags.ts for the registry + audited toggle path.
+let _runtimeFlags: Container | null = null;
 let _ensured = false;
 
 /**
@@ -1113,6 +1119,8 @@ async function ensure() {
     defaultTtl: -1, // TTL enabled; each beacon doc carries its own `ttl` seconds
   });
   _canvasPresence = canvasPresence;
+  // FLAG0 — runtime kill-switch flags, PK /id (point-reads; missing doc = ON).
+  _runtimeFlags = await mk('loom-runtime-flags', '/id');
   // WS-5.2 — A2A delegated tasks. PK /tenantId, TTL 7 days. ARM-provisioned in
   // cosmos.bicep's loomContainers; this createIfNotExists is the hotfix fallback.
   _a2aTasks = (await database.containers.createIfNotExists({
@@ -1254,6 +1262,8 @@ export async function copilotSkillUsageContainer(): Promise<Container> { await e
 export async function canvasCommentsContainer(): Promise<Container> { await ensure(); return _canvasComments!; }
 /** W5 — canvas presence beacons (TTL-enabled, per-item), PK /itemId. */
 export async function canvasPresenceContainer(): Promise<Container> { await ensure(); return _canvasPresence!; }
+/** FLAG0 — runtime kill-switch flag docs, PK /id (missing doc = default-ON). */
+export async function runtimeFlagsContainer(): Promise<Container> { await ensure(); return _runtimeFlags!; }
 
 // Foundation admin containers (shared cloud-endpoints resolver task).
 /** Admin Workspace Catalog — one row per Loom-managed workspace, PK /tenantId. */

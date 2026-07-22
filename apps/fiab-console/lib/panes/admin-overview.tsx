@@ -26,7 +26,7 @@ import {
   Building24Regular, Organization24Regular, ChartMultiple24Regular,
   ClipboardTask24Regular, Key24Regular, TagMultiple24Regular, Tag24Regular,
   Settings24Regular, People24Regular, Server24Regular, Heart24Regular,
-  ShieldCheckmark24Regular, LockClosed16Regular, type FluentIcon,
+  ShieldCheckmark24Regular, LockClosed16Regular, ToggleLeft24Regular, type FluentIcon,
 } from '@fluentui/react-icons';
 import { SignInRequired } from '@/lib/components/sign-in-required';
 import type { OverviewTileKey, OverviewTiles, TileCount } from '@/app/api/admin/overview/route';
@@ -39,7 +39,7 @@ interface TileSpec {
   description: string;
 }
 
-// The 12 section tiles. href + icon mirror lib/components/admin-shell.tsx
+// The 13 section tiles. href + icon mirror lib/components/admin-shell.tsx
 // SECTIONS so the landing grid and the left nav stay one-for-one.
 const TILE_SPECS: TileSpec[] = [
   { key: 'workspaces', href: '/admin/workspaces', label: 'Workspaces', icon: Building24Regular,
@@ -66,6 +66,8 @@ const TILE_SPECS: TileSpec[] = [
     description: 'Fired alerts from Loom Activator' },
   { key: 'sensitivityLabels', href: '/admin/security', label: 'Security & governance', icon: ShieldCheckmark24Regular,
     description: 'Sensitivity labels in the tenant' },
+  { key: 'runtimeFlags', href: '/admin/runtime-flags', label: 'Runtime flags', icon: ToggleLeft24Regular,
+    description: 'Kill-switches currently flipped off' },
 ];
 
 const useStyles = makeStyles({
@@ -160,7 +162,9 @@ export function AdminOverview() {
           <Link key={spec.key} href={spec.href} className={styles.tile} aria-label={spec.label}>
             <div className={styles.tileHead}>
               <span className={styles.tileIcon}><Icon /></span>
-              <CountBadge tile={tiles[spec.key]} />
+              {/* `?? gated` guards deploy skew: a tile key the running server
+                  doesn't emit yet renders the honest locked badge, not a crash. */}
+              <CountBadge tile={tiles[spec.key] ?? { count: null, gated: true, hint: 'Not reported by this deployment yet' }} />
             </div>
             <div className={styles.tileName}>{spec.label}</div>
             <div className={styles.tileDesc}>{spec.description}</div>
