@@ -6,28 +6,29 @@
  * Keys are sensitive: returned only to an authenticated admin session, never
  * logged. Honest 503 gate when APIM is unconfigured. No mocks.
  */
-import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { NextResponse } from 'next/server';
 import { apimConfigGate, getSubscriptionKeys, ApimError } from '@/lib/azure/apim-client';
+import { apiHonestGateError } from '@/lib/api/gate-envelope';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET(_req: NextRequest, ctx: { params: Promise<{ sid: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+// WS-D1: session-only route adopted onto `withSession` (params resolved by the
+// wrapper). WS-D2: the inline APIM config gate normalized onto svc-apim.
+export const GET = withSession<{ sid: string }>(async (_req, { params }) => {
   const g = apimConfigGate();
   if (g) {
-    return NextResponse.json(
-      { ok: false, code: 'not_configured', error: `APIM service not configured: set ${g.missing}.`, missing: g.missing },
-      { status: 503 },
-    );
+    return apiHonestGateError('svc-apim', {
+      missing: [g.missing],
+      message: `APIM service not configured: set ${g.missing}.`,
+    });
   }
   try {
-    const keys = await getSubscriptionKeys((await ctx.params).sid);
+    const keys = await getSubscriptionKeys(params.sid);
     return NextResponse.json({ ok: true, primaryKey: keys.primaryKey, secondaryKey: keys.secondaryKey });
   } catch (e: any) {
     const status = e instanceof ApimError ? e.status : 502;
     return NextResponse.json({ ok: false, error: e?.message || String(e), body: e?.body }, { status });
   }
-}
+});

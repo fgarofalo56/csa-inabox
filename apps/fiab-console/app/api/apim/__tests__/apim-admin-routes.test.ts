@@ -74,7 +74,11 @@ describe('GET /api/apim/service', () => {
     const j = await res.json();
     expect(j.ok).toBe(false);
     expect(j.code).toBe('not_configured');
-    expect(j.missing).toBe('LOOM_SUBSCRIPTION_ID');
+    // WS-D2: the gate error is now the normalized envelope — `missing` is an
+    // array, alongside the `gated:true` + `gate` block. Back-compat `code` kept.
+    expect(j.missing).toEqual(['LOOM_SUBSCRIPTION_ID']);
+    expect(j.gated).toBe(true);
+    expect(j.gate.id).toBe('svc-apim');
     expect(getApimService).not.toHaveBeenCalled();
   });
 

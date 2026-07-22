@@ -10,21 +10,23 @@
  * Honest 503 gate when the APIM service is unset. Real ARM REST. No mocks.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import {
   apimConfigGate, listSubscriptions, createSubscription, deleteSubscription, ApimError,
 } from '@/lib/azure/apim-client';
+import { apiHonestGateError } from '@/lib/api/gate-envelope';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+// WS-D2: APIM config gate normalized onto the shared svc-apim gate envelope.
 function gate() {
   const g = apimConfigGate();
   if (g) {
-    return NextResponse.json(
-      { ok: false, code: 'not_configured', error: `APIM service not configured: set ${g.missing}.`, missing: g.missing },
-      { status: 503 },
-    );
+    return apiHonestGateError('svc-apim', {
+      missing: [g.missing],
+      message: `APIM service not configured: set ${g.missing}.`,
+    });
   }
   return null;
 }
@@ -34,18 +36,15 @@ function fail(e: any) {
   return NextResponse.json({ ok: false, error: e?.message || String(e), body: e?.body }, { status });
 }
 
-export async function GET() {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+// WS-D1: session-only routes adopted onto `withSession`.
+export const GET = withSession(async () => {
   const g = gate(); if (g) return g;
   try {
     return NextResponse.json({ ok: true, subscriptions: await listSubscriptions() });
   } catch (e: any) { return fail(e); }
-}
+});
 
-export async function POST(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const POST = withSession(async (req: NextRequest) => {
   const g = gate(); if (g) return g;
   const body = await req.json().catch(() => ({}));
   const displayName = body?.displayName ? String(body.displayName) : '';
@@ -69,11 +68,9 @@ export async function POST(req: NextRequest) {
     const subscription = await createSubscription({ displayName, ...target, state: 'active' });
     return NextResponse.json({ ok: true, subscription });
   } catch (e: any) { return fail(e); }
-}
+});
 
-export async function DELETE(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const DELETE = withSession(async (req: NextRequest) => {
   const g = gate(); if (g) return g;
   const id = req.nextUrl.searchParams.get('id')?.trim();
   if (!id) return NextResponse.json({ ok: false, error: 'id is required' }, { status: 400 });
@@ -81,4 +78,4 @@ export async function DELETE(req: NextRequest) {
     await deleteSubscription(id);
     return NextResponse.json({ ok: true });
   } catch (e: any) { return fail(e); }
-}
+});

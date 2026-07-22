@@ -15,8 +15,9 @@
  * apiId/path/value; ApimError → its own status; anything else → 502.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { apimConfigGate, importApiFromOpenApi, ApimError } from '@/lib/azure/apim-client';
+import { apiHonestGateError } from '@/lib/api/gate-envelope';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -24,13 +25,14 @@ export const dynamic = 'force-dynamic';
 const FORMATS = ['openapi', 'openapi+json', 'swagger-link-json', 'openapi-link'] as const;
 type ImportFormat = (typeof FORMATS)[number];
 
+// WS-D2: APIM config gate normalized onto the shared svc-apim gate envelope.
 function gate() {
   const g = apimConfigGate();
   if (g) {
-    return NextResponse.json(
-      { ok: false, code: 'not_configured', error: `APIM service not configured: set ${g.missing}.`, missing: g.missing },
-      { status: 503 },
-    );
+    return apiHonestGateError('svc-apim', {
+      missing: [g.missing],
+      message: `APIM service not configured: set ${g.missing}.`,
+    });
   }
   return null;
 }
@@ -40,9 +42,7 @@ function fail(e: any) {
   return NextResponse.json({ ok: false, error: e?.message || String(e), body: e?.body }, { status });
 }
 
-export async function POST(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const POST = withSession(async (req: NextRequest) => {
   const g = gate(); if (g) return g;
   const body = await req.json().catch(() => ({}));
   const apiId = body?.apiId && String(body.apiId).trim();
@@ -62,4 +62,4 @@ export async function POST(req: NextRequest) {
     });
     return NextResponse.json({ ok: true, api });
   } catch (e: any) { return fail(e); }
-}
+});
