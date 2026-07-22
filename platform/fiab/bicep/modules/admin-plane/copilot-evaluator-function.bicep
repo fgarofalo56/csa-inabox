@@ -109,11 +109,17 @@ var saName = take('sacpeval${uniqueString(resourceGroup().id)}', 24)
 var planName = take('plan-cpeval-${uniqueString(resourceGroup().id)}', 40)
 var siteName = take('func-cpeval-${uniqueString(resourceGroup().id)}', 60)
 
+// COST0 tag convention: every loom-next-level program resource carries the
+// `loom-next-level` tag so program-budget.bicep's tag-filtered Consumption
+// budget bounds the program's aggregate run-rate (E2 is ~$0 idle Y1 + a
+// day-capped judge token spend — see program-budget.README.md).
+var programTags = union(complianceTags, { 'loom-next-level': 'true' })
+
 // ── Host storage (identity-based; AAD-only estate — NO account key) ──────────
 resource sa 'Microsoft.Storage/storageAccounts@2024-01-01' = {
   name: saName
   location: location
-  tags: complianceTags
+  tags: programTags
   kind: 'StorageV2'
   sku: { name: 'Standard_LRS' }
   properties: {
@@ -127,7 +133,7 @@ resource sa 'Microsoft.Storage/storageAccounts@2024-01-01' = {
 resource plan 'Microsoft.Web/serverfarms@2024-04-01' = {
   name: planName
   location: location
-  tags: complianceTags
+  tags: programTags
   sku: { name: 'Y1', tier: 'Dynamic' }
   kind: 'functionapp,linux'
   properties: { reserved: true }
@@ -160,7 +166,7 @@ var baseAppSettings = [
 resource site 'Microsoft.Web/sites@2024-04-01' = {
   name: siteName
   location: location
-  tags: complianceTags
+  tags: programTags
   kind: 'functionapp,linux'
   identity: { type: 'SystemAssigned' }
   properties: {

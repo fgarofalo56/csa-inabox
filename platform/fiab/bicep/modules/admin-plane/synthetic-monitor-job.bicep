@@ -112,12 +112,18 @@ var syntheticLoginSecret = loginProbeWired
     ]
   : []
 
+// COST0 tag convention: every loom-next-level program resource carries the
+// `loom-next-level` tag so program-budget.bicep's tag-filtered Consumption
+// budget bounds the program's aggregate run-rate (V1 is a ~$30-60/mo/cloud
+// always-on item — see program-budget.README.md).
+var programTags = union(complianceTags, { 'loom-next-level': 'true' })
+
 // Pinned to the same Container Apps api-version the sibling ACA job modules use
 // (gh-runner-job.bicep) — bicep/runtime sync.
 resource syntheticMonitorJob 'Microsoft.App/jobs@2025-02-02-preview' = {
   name: 'loom-synthetic-monitor'
   location: location
-  tags: complianceTags
+  tags: programTags
   identity: {
     type: 'UserAssigned'
     userAssignedIdentities: {
