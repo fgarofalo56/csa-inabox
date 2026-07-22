@@ -1,0 +1,243 @@
+name: copilot-quality-evals
+
+# E4 (PRPs/active/loom-next-level/ws-copilot-cost.md) — the in-product Copilot
+# quality-eval trigger + gate. NEW name on purpose: the legacy copilot-evals.yml
+# covers the Python apps/copilot (pydantic-ai DryRunAgent), NOT this harness.
+#
+# What it does:
+#   1. stages the corpus (manifest = corpusCommit + counts) and lints the E1
+#      golden sets — fail-fast BEFORE spending any judge tokens;
+#   2. POSTs the E2 copilot-evaluator Function's HTTP trigger PER SURFACE
+#      (the Azure HTTP path has a hard ~230s load-balancer response limit and
+#      Y1 caps execution at 10 min — a 10-surface × ~15-Q run cannot answer a
+#      single POST in time, so each POST runs ONE surface and the responses are
+#      merged into one run artifact);
+#   3. gates the merged artifact with scripts/csa-loom/check-eval-regression.mjs
+#      (E3): below-floor = fail; > EVAL_REGRESSION_DELTA-point one-run drop
+#      above floor = warn; judge-'deferred' = no-change (E2 cap contract);
+#   4. sticky PR comment with the per-surface score/delta table + uploads the
+#      run artifact (the NEXT run downloads it as the delta baseline).
+#
+# Change gating: the corpus paths below ARE the change filter — CI runners are
+# fresh, so stage-copilot-corpus.sh has no incremental baseline to diff against
+# (its .corpus-manifest.json 'copied' count is always the full tree here); the
+# nightly schedule runs unconditionally with --strict-missing.
+#
+# Token spend: bounded by E2's LOOM_COPILOT_EVAL_JUDGE_DAILY_CAP (default 500
+# judged Q/day, Cosmos-ledgered cross-replica) — a busy docs day degrades to
+# judge-'deferred' retrieval-only scoring, never uncapped spend (round-3 F1).
+#
+# Per-cloud: Commercial-first (centralus estate). Gov rides the same script
+# against the .us Function via the csa-loom-gov-deploy SP (tracked follow-up —
+# see the PR's per-cloud table). IL5: in-enclave scheduled task replaces
+# GitHub-hosted cron (design note in ws-copilot-cost.md E4).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/**'
+      - 'PRPs/active/**'
+      - 'PRPs/completed/csa-loom-pillar/**'
+      - 'content/evals/**'
+      - '.github/workflows/copilot-quality-evals.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'docs/**'
+      - 'PRPs/active/**'
+      - 'PRPs/completed/csa-loom-pillar/**'
+      - 'content/evals/**'
+  schedule:
+    # Nightly full run (UTC). Offset from the Function's own 07:00 timer so the
+    # two runs don't share a burst window against the AOAI judge TPM.
+    - cron: '30 8 * * *'
+  workflow_dispatch:
+    inputs:
+      surfaces:
+        description: 'Comma-separated surface subset (default: every content/evals/*.jsonl)'
+        type: string
+        required: false
+      region:
+        description: 'Azure region of the target Admin Plane'
+        type: string
+        default: centralus
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write # sticky PR comment with per-surface deltas
+  actions: read # download the previous run artifact (delta baseline)
+
+env:
+  AZURE_LOCATION: ${{ inputs.region || 'centralus' }}
+
+jobs:
+  evals:
+    name: Run + gate Copilot quality evals
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    # Secrets (Azure SP) are required to reach the Function — fork PRs have
+    # none; run only for same-repo events.
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Stage corpus + lint eval sets (fail-fast before any token spend)
+        id: stage
+        run: |
+          set -euo pipefail
+          bash scripts/csa-loom/stage-copilot-corpus.sh
+          node scripts/csa-loom/lint-eval-sets.mjs
+          COMMIT=$(node -e "console.log(JSON.parse(require('fs').readFileSync('apps/fiab-console/copilot-corpus/.corpus-manifest.json','utf-8')).sourceCommit || 'unknown')")
+          echo "corpus_commit=$COMMIT" >> "$GITHUB_OUTPUT"
+          echo "::notice::corpus manifest commit $COMMIT"
+
+      - name: Azure login
+        uses: Azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+            }
+
+      - name: Discover the copilot-evaluator Function (honest-gate if absent)
+        id: func
+        run: |
+          set -euo pipefail
+          RG="rg-csa-loom-admin-${AZURE_LOCATION}"
+          FUNC=$(az functionapp list -g "$RG" --query "[?starts_with(name,'func-cpeval-')].name | [0]" -o tsv 2>/dev/null | tr -d '\r' || true)
+          if [ -z "$FUNC" ]; then
+            # G2-honest gate, not a red X: the svc-copilot-evaluator gate names
+            # the bicep module that deploys it. Nightly runs surface this as a
+            # warning until the Function exists.
+            echo "::warning::copilot-evaluator Function (func-cpeval-*) not found in $RG — svc-copilot-evaluator gate unresolved. Deploy platform/fiab/bicep/modules/admin-plane/copilot-evaluator-function.bicep (+ publish the package). Skipping the eval run."
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          HOST=$(az functionapp show -g "$RG" -n "$FUNC" --query defaultHostName -o tsv | tr -d '\r')
+          KEY=$(az functionapp keys list -g "$RG" -n "$FUNC" --query "functionKeys.default // masterKey" -o tsv | tr -d '\r')
+          if [ -z "$KEY" ]; then
+            echo "::warning::could not read a function key for $FUNC — skipping the eval run."
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "::add-mask::$KEY"
+          echo "found=true" >> "$GITHUB_OUTPUT"
+          echo "host=$HOST" >> "$GITHUB_OUTPUT"
+          # masked values may not cross step OUTPUTS (Actions drops them) —
+          # env is the supported channel for a discovered secret
+          echo "FUNC_KEY=$KEY" >> "$GITHUB_ENV"
+          echo "::notice::Function $FUNC ($HOST)"
+
+      - name: Run evals per surface (POST the E2 HTTP trigger; merge responses)
+        id: run
+        if: steps.func.outputs.found == 'true'
+        run: |
+          set -uo pipefail
+          HOST='${{ steps.func.outputs.host }}'
+          KEY="$FUNC_KEY"
+          # 'corpus' when a corpus change triggered us; the HTTP trigger maps
+          # anything else to 'manual' (nightly timer-trigger runs are the
+          # Function's own).
+          case '${{ github.event_name }}' in
+            push|pull_request) TRIGGER=corpus ;;
+            *) TRIGGER=manual ;;
+          esac
+          SURFACES='${{ inputs.surfaces }}'
+          if [ -z "$SURFACES" ]; then
+            SURFACES=$(ls content/evals/*.jsonl | xargs -n1 basename | sed 's/\.jsonl$//' | grep -v '^_' | paste -sd, -)
+          fi
+          echo "surfaces: $SURFACES (trigger $TRIGGER)"
+          mkdir -p eval-responses
+          FAILED=""
+          for S in $(echo "$SURFACES" | tr ',' ' '); do
+            echo "::group::eval $S"
+            # --max-time 400 > the ~230s ALB response ceiling: a timeout here
+            # means the surface's run kept executing server-side but we have no
+            # scores for it — recorded as a warning, gated as 'missing'.
+            HTTP=$(curl -sS --max-time 400 -o "eval-responses/$S.json" -w '%{http_code}' \
+              -X POST "https://$HOST/api/copilotEvaluatorHttp?code=$KEY" \
+              -H 'content-type: application/json' \
+              -d "{\"surfaces\":[\"$S\"],\"trigger\":\"$TRIGGER\"}" || echo 000)
+            if [ "$HTTP" = "200" ]; then
+              node -e "const r=require('./eval-responses/$S.json');for(const s of r.surfaces||[])console.log(\`  \${s.surface}: \${s.questions} Q, hit-rate \${s.retrievalHitRate}, grounding \${s.groundingAvg ?? 'deferred'}, pass-rate \${s.passRate}\`)"
+            else
+              echo "::warning::surface $S: HTTP $HTTP from the eval trigger (409 = honest-gated Function config; 000 = timeout/unreachable — the run may still be completing server-side)"
+              rm -f "eval-responses/$S.json"
+              FAILED="$FAILED $S"
+            fi
+            echo "::endgroup::"
+          done
+          # Merge the per-surface responses into ONE run artifact (the E3 gate
+          # + delta-baseline shape — identical to a single HTTP response body).
+          jq -s '{ok: (length > 0), trigger: (.[0].trigger // "manual"), surfaces: (map(.surfaces // []) | add)}' \
+            eval-responses/*.json > eval-run.json 2>/dev/null \
+            || echo '{"ok":false,"surfaces":[]}' > eval-run.json
+          echo "merged $(jq '.surfaces | length' eval-run.json) surface run(s) into eval-run.json${FAILED:+ (no response:$FAILED)}"
+
+      - name: Fetch the previous run artifact (delta baseline, best-effort)
+        if: steps.func.outputs.found == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          RUN_ID=$(gh run list --workflow copilot-quality-evals.yml --branch main --status success --limit 1 --json databaseId -q '.[0].databaseId')
+          if [ -n "$RUN_ID" ]; then
+            gh run download "$RUN_ID" -n copilot-quality-eval-run -D prev/ \
+              && echo "delta baseline: run $RUN_ID" \
+              || echo "::notice::no previous artifact downloadable — delta check will be skipped"
+          else
+            echo "::notice::no previous successful run — delta check will be skipped"
+          fi
+          exit 0
+
+      - name: Gate — check-eval-regression (floors + delta)
+        id: gate
+        if: steps.func.outputs.found == 'true'
+        env:
+          EVAL_REGRESSION_DELTA: '5'
+        run: |
+          set -euo pipefail
+          ARGS=(--artifact eval-run.json --summary eval-summary.md)
+          [ -f prev/eval-run.json ] && ARGS+=(--previous prev/eval-run.json)
+          # nightly = full run: a floored surface with no scores is a failure
+          [ '${{ github.event_name }}' = 'schedule' ] && ARGS+=(--strict-missing)
+          node scripts/csa-loom/check-eval-regression.mjs "${ARGS[@]}"
+
+      - name: Upload the run artifact (next run's delta baseline)
+        if: always() && steps.func.outputs.found == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: copilot-quality-eval-run
+          path: |
+            eval-run.json
+            eval-summary.md
+          retention-days: 90
+
+      - name: Sticky PR comment with per-surface deltas
+        if: always() && github.event_name == 'pull_request' && steps.func.outputs.found == 'true'
+        uses: marocchino/sticky-pull-request-comment@773744901bac0e8cbb5a0dc842800d45e9b2b405 # v2
+        with:
+          header: copilot-quality-evals
+          path: eval-summary.md
+
+      - name: Sticky PR comment (Function honest-gated)
+        if: always() && github.event_name == 'pull_request' && steps.func.outputs.found != 'true'
+        uses: marocchino/sticky-pull-request-comment@773744901bac0e8cbb5a0dc842800d45e9b2b405 # v2
+        with:
+          header: copilot-quality-evals
+          message: |
+            ## Copilot quality evals — honest gate
+
+            The `copilot-evaluator` Function (`func-cpeval-*`) is not deployed in this
+            estate, so no eval run was executed for this corpus change
+            (`svc-copilot-evaluator` gate). Deploy
+            `platform/fiab/bicep/modules/admin-plane/copilot-evaluator-function.bicep`
+            and publish the Function package, then re-run the workflow.

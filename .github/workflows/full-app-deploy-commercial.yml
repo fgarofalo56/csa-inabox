@@ -437,6 +437,61 @@ jobs:
       region: ${{ needs.resolve.outputs.region }}
       admin_subscription: ${{ needs.resolve.outputs.admin_sub }}
 
+  # E4 (loom-next-level ws-copilot-cost): fire a post-deploy Copilot quality
+  # eval run so EVERY roll re-baselines quality against the freshly-staged
+  # corpus. Fire-and-forget + report: one short POST per surface (the HTTP
+  # response has a ~230s ALB ceiling and a full run far exceeds it; the
+  # Function keeps executing after the client disconnects, one surface per
+  # invocation stays inside the Y1 execution window). Scores land in Cosmos
+  # `loom-copilot-evals` (gating + sticky comments live in
+  # copilot-quality-evals.yml; browse on /admin/copilot-quality once E5 lands).
+  # Token spend is bounded by E2's LOOM_COPILOT_EVAL_JUDGE_DAILY_CAP. Never
+  # fails the deploy (continue-on-error).
+  post-deploy-evals:
+    name: Post-deploy Copilot quality evals (fire-and-forget)
+    needs: [resolve, redeploy-with-apps]
+    if: ${{ always() && inputs.enable_apps_after && needs.redeploy-with-apps.result == 'success' }}
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: Azure login
+        uses: Azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_TENANT_ID }}",
+              "subscriptionId": "${{ inputs.subscription || secrets.AZURE_SUBSCRIPTION_ID }}"
+            }
+      - name: Dispatch per-surface eval runs on the copilot-evaluator Function
+        run: |
+          set -uo pipefail
+          RG='${{ needs.resolve.outputs.rg }}'
+          FUNC=$(az functionapp list -g "$RG" --query "[?starts_with(name,'func-cpeval-')].name | [0]" -o tsv 2>/dev/null | tr -d '\r' || true)
+          if [ -z "$FUNC" ]; then
+            echo "::warning::copilot-evaluator Function (func-cpeval-*) not found in $RG — svc-copilot-evaluator gate unresolved; post-deploy eval re-baseline skipped."
+            exit 0
+          fi
+          HOST=$(az functionapp show -g "$RG" -n "$FUNC" --query defaultHostName -o tsv | tr -d '\r')
+          KEY=$(az functionapp keys list -g "$RG" -n "$FUNC" --query "functionKeys.default // masterKey" -o tsv | tr -d '\r')
+          if [ -z "$KEY" ]; then echo "::warning::no function key readable for $FUNC — eval dispatch skipped."; exit 0; fi
+          echo "::add-mask::$KEY"
+          DISPATCHED=""
+          for F in content/evals/*.jsonl; do
+            S=$(basename "$F" .jsonl)
+            case "$S" in _*) continue ;; esac
+            # fire-and-forget: a 15s client timeout only abandons the RESPONSE;
+            # the invocation continues server-side to completion.
+            curl -sS --max-time 15 -o /dev/null \
+              -X POST "https://$HOST/api/copilotEvaluatorHttp?code=$KEY" \
+              -H 'content-type: application/json' \
+              -d "{\"surfaces\":[\"$S\"],\"trigger\":\"corpus\"}" || true
+            DISPATCHED="$DISPATCHED $S"
+          done
+          echo "::notice::post-deploy eval runs dispatched for:$DISPATCHED — scores land in Cosmos loom-copilot-evals (runId trigger=corpus); the copilot-quality-evals workflow + /admin/copilot-quality read them."
+
   notify:
     name: Notify final state
     needs: [resolve, build, close-acr, redeploy-with-apps]
