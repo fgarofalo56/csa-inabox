@@ -79,12 +79,15 @@ export interface EntityDiagramProps {
   /** Canvas height. Default 560. */
   height?: number | string;
   /**
-   * Opt into a user-draggable, persisted canvas HEIGHT (ADF/Fabric-grade resize
-   * grip). When set — and `height` is a finite number — the diagram canvas is
-   * wrapped in the shared {@link ResizableCanvasRegion}, keyed under
-   * `loom.canvasHeight.<resizeStorageKey>`, so the operator can drag or keyboard-
-   * resize the schema canvas and the choice persists per surface. `height`
-   * becomes the initial size. Omit to keep the fixed-height canvas unchanged.
+   * Persistence key for the user-draggable canvas HEIGHT (ADF/Fabric-grade
+   * resize grip). Whenever `height` is a finite number (the default, 560) the
+   * diagram canvas is wrapped in the shared {@link ResizableCanvasRegion},
+   * keyed under `loom.canvasHeight.<resizeStorageKey>`, so the operator can
+   * drag or keyboard-resize the schema canvas and the choice persists per
+   * surface. Defaults to `entity-diagram.<source.kind>` (U5: resizing is
+   * always-on, per-surface-kind) — pass an explicit key only to give a caller
+   * its own persisted slot. `height` becomes the initial size; a string
+   * `height` keeps the fixed-height canvas unchanged.
    */
   resizeStorageKey?: string;
   /** Optional heading above the toggle. */
@@ -676,11 +679,14 @@ export function EntityDiagram(props: EntityDiagramProps) {
 
   const hasTables = !!graph && graph.tables.length > 0;
 
-  // When the canvas is wrapped in a resizable region (opt-in), the region owns
-  // the pixel height and the inner React Flow must fill it (100%) instead of
+  // When the canvas is wrapped in a resizable region, the region owns the
+  // pixel height and the inner React Flow must fill it (100%) instead of
   // re-imposing the fixed `height` — otherwise dragging the grip wouldn't move
-  // the canvas. Non-resizable hosts keep the exact fixed height as before.
-  const resizable = !!resizeStorageKey && typeof height === 'number';
+  // the canvas. U5: the storage key is DEFAULTED per surface kind, so any
+  // numeric-height host (the default) is resizable — callers may still pass an
+  // explicit key for their own persisted slot. String heights stay fixed.
+  const effectiveResizeKey = resizeStorageKey ?? `entity-diagram.${source.kind}`;
+  const resizable = typeof height === 'number';
   const canvasHeight: number | string = resizable ? '100%' : height;
 
   const body = useMemo(() => {
@@ -751,7 +757,7 @@ export function EntityDiagram(props: EntityDiagramProps) {
         // Opt-in draggable/persisted canvas height (ADF/Fabric-grade). The region
         // supplies the definite pixel height React Flow needs; canvasWrap fills it.
         <ResizableCanvasRegion
-          storageKey={resizeStorageKey!}
+          storageKey={effectiveResizeKey}
           defaultPx={height as number}
           minPx={320}
           ariaLabel="Resize entity diagram canvas height"

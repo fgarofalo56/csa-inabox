@@ -26,6 +26,7 @@ import {
   DataArea20Regular, Location20Regular, Table20Regular, Info20Regular, Calculator20Regular,
 } from '@fluentui/react-icons';
 import { clientFetch } from '@/lib/client-fetch';
+import { ResizableCanvasRegion } from '@/lib/components/canvas/resizable-canvas';
 import { SplitPane } from '@/lib/components/shared/split-pane';
 import { EmptyState } from '@/lib/components/empty-state';
 import { LearnPopover } from '@/lib/components/ui/learn-popover';
@@ -44,7 +45,9 @@ const useStyles = makeStyles({
   },
   titleWrap: { display: 'flex', flexDirection: 'column', minWidth: 0, flex: '1 1 auto' },
   badgeRow: { display: 'flex', gap: tokens.spacingHorizontalXS, flexWrap: 'wrap', alignItems: 'center', minWidth: 0 },
-  split: { height: '620px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge, overflow: 'hidden' },
+  // Height comes from the surrounding ResizableCanvasRegion (G3 user-set,
+  // persisted under loom.canvasHeight.object-view) — was a fixed 620px.
+  split: { height: '100%', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge, overflow: 'hidden' },
   main: {
     display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM,
     padding: tokens.spacingHorizontalL, overflowY: 'auto', minWidth: 0, width: '100%',
@@ -378,15 +381,19 @@ export function ObjectViewPanel({
       {header}
       {busy && <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center' }}><Spinner size="tiny" /><Caption1>Refreshing…</Caption1></div>}
       {panels.includes('properties') ? (
-        <div className={s.split}>
-          <SplitPane direction="horizontal" primary="second" defaultSize="340px" minSize={240} maxSize={520}
-            storageKey="ontology-object-view" dividerLabel="Resize property inspector">
-            {main}
-            {inspector}
-          </SplitPane>
-        </div>
+        <ResizableCanvasRegion storageKey="object-view" defaultPx={620} minPx={320} ariaLabel="Resize object view height">
+          <div className={s.split}>
+            <SplitPane direction="horizontal" primary="second" defaultSize="340px" minSize={240} maxSize={520}
+              storageKey="ontology-object-view" dividerLabel="Resize property inspector">
+              {main}
+              {inspector}
+            </SplitPane>
+          </div>
+        </ResizableCanvasRegion>
       ) : (
-        <div className={s.split}>{main}</div>
+        <ResizableCanvasRegion storageKey="object-view" defaultPx={620} minPx={320} ariaLabel="Resize object view height">
+          <div className={s.split}>{main}</div>
+        </ResizableCanvasRegion>
       )}
     </div>
   );
