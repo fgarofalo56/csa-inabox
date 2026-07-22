@@ -13,8 +13,8 @@ same classic + WS-D1 toolkit export styles).
 
 | Metric | Count |
 | --- | ---: |
-| Total routes | 1546 |
-| Public (no session) | 106 |
+| Total routes | 1547 |
+| Public (no session) | 107 |
 | Session-only | 568 |
 | Owner-scoped | 632 |
 | Admin | 240 |
@@ -859,6 +859,7 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 
 | Route | Methods | Auth scope | Gated | Backends |
 | --- | --- | --- | :---: | --- |
+| `internal/copilot/eval-probe/route.ts` | GET POST | public |  | — |
 | `internal/copilot/memory/consolidate/route.ts` | GET POST | public |  | — |
 | `internal/copilot/skills/learn/route.ts` | GET POST | public |  | — |
 | `internal/copilot/tools/[name]/invoke/route.ts` | POST | public |  | — |
