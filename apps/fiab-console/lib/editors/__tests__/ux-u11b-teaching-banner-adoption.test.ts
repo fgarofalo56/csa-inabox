@@ -13,13 +13,26 @@
  * lib/components/shared/__tests__/teaching-toast.test.tsx.
  */
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { readFileSync, existsSync, readdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 const EDITORS_ROOT = resolve(__dirname, '..');
 
+/**
+ * Read a surface's source. After WS-E1 decomposition an editor's TeachingBanner
+ * can live in a sibling module (e.g. phase3/semantic-model-editor/aas-panel.tsx),
+ * so concatenate the main file with any files in its decomposed `<base>/` dir —
+ * the banner is still present, just relocated.
+ */
 function read(rel: string): string {
-  return readFileSync(resolve(EDITORS_ROOT, rel), 'utf-8');
+  let src = readFileSync(resolve(EDITORS_ROOT, rel), 'utf-8');
+  const dir = resolve(EDITORS_ROOT, rel.replace(/\.tsx?$/, ''));
+  if (existsSync(dir)) {
+    for (const f of readdirSync(dir)) {
+      if (/\.tsx?$/.test(f)) src += '\n' + readFileSync(resolve(dir, f), 'utf-8');
+    }
+  }
+  return src;
 }
 
 /** file (relative to lib/editors) → the surfaceKey the banner must carry. */
