@@ -106,11 +106,15 @@ export default defineConfig({
       // The gap to 100% is mostly client `app/**/page.tsx` components, which the
       // vitest slice does not render (routes/editors/lib ARE covered); those are
       // exercised by the Playwright UAT slice (rel-T30), not here.
+      // WS-F4 (2026-07-22): ratcheted 30/54/28/30 → 32/58/34/32 after the full
+      // suite measured statements 34.16 / branches 61.57 / functions 37.57 /
+      // lines 34.16 (v8, full run) — floors held ~2pts below measured with a
+      // small margin for CI-vs-local variance.
       thresholds: {
-        statements: 30,
-        branches: 54,
-        functions: 28,
-        lines: 30,
+        statements: 32,
+        branches: 58,
+        functions: 34,
+        lines: 32,
       },
     },
   },
