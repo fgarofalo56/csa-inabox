@@ -29,17 +29,38 @@ run. Receipts live in the PR bodies; this file is the program-level index.
 | E2 — copilot-evaluator Function | #2418 | 2026-07-22 | Real-path eval runner: `/api/internal/copilot/eval-probe` (byte-identical searchDocs + aoaiChat turn, internal-token fail-closed), pure evaluator-core (28 tests; hit-rate/MRR, deterministic guards BEFORE the judge, judge cap 500/day → 'deferred'), Cosmos `loom-copilot-evals`, `copilot-evaluator-function.bicep` (no storage keys, 5 in-bicep roles), STRIDE row in PR + runbook. Live HTTP-trigger receipt post-roll. |
 | FRESH0 — PRP self-freshness gate (Phase-1 rider) | #2420 | 2026-07-22 | `check-prp-freshness.mjs` facts table + live counters; warn >10% drift / flipped PR state; `--strict` for boundary runs; wired into loom-guardrails (warn-only). Seeded-stale acceptance proven. |
 
-## Phase 0 — COMPLETE (build set)
+## Phase 0 — COMPLETE (rolled + receipts)
 
-All Phase-0 items merged 2026-07-22. Post-roll receipts pending (tracked in
-the boundary PR): the batch roll (SHA + expected_sha), G1 browser receipts
-(U10 /browse scroll + flag flip, X2 gates page, V1 Journeys tab, S1
-secret-health, /admin/runtime-flags), E2 live HTTP-trigger run, V1 first
-scheduled run. **Operator actions queued:** SYNTHETIC_LOGIN_* automation
-account (V1 J1 honest-skips until then); S1 Graph `Application.Read.All`
-admin consent; `deploy-loom-uat-job.sh` (loom-uat image); Function code
-publish for secret-expiry-monitor + copilot-evaluator; S2's live FIC
-migration (runbook decision: MIGRATE).
+All Phase-0 items merged AND ROLLED 2026-07-22. **Batch roll:**
+`loom-roll-and-validate` run 29963010863 → success on
+`image_tag=a0eded62…` + `expected_sha=a0eded62`; live
+`build-marker.txt` = `sha=a0eded624947…` (first attempt failed on a
+transient loom-uat "provisioning in progress" lock; the a0eded62 ACR build
+needed a full rerun after an OOM flake — `--failed`-only rerun skips the
+ACR-unlock step and firewall-denies, use full rerun).
+
+**Live G1 receipts (operator's browser, signed session, post-roll):**
+- U10 — windowing live on /browse: `aria-rowcount=628`, virtual height
+  25,337px vs 797px viewport, **33→45 rendered DOM rows across a 12,000px
+  scroll jump** (the pre-U10 path mounted all 1,437). Full 60fps trace
+  deferred to a foreground session (background-tab rAF throttling makes
+  fps unmeasurable headless — same finding class as U0's paced-drag note).
+- FLAG0 — `/api/runtime-flags` serves `u10-browse-virtualization` +
+  `v1-journeys-tab`, both default-ON; admin flip surface registered.
+- X2 — `/api/admin/gates`: 105 gates, 18 with `availability`; 0
+  `cloud-unavailable` on Commercial (correct — fires only where a cloud
+  lacks the service).
+- V1 — `/api/admin/synthetic-runs` returns the honest 503 gate (the
+  synthetic-monitor ACA job + results container land at the next infra
+  deploy); S1 — `/api/admin/secret-health` responds on the live session.
+
+**Operator actions queued:** SYNTHETIC_LOGIN_* automation account (V1 J1
+honest-skips until then); S1 Graph `Application.Read.All` admin consent;
+`deploy-loom-uat-job.sh` (loom-uat image); infra deploy pass to create the
+new bicep resources (synthetic job, 2 Functions, cost/ws-identity RBAC);
+Function code publish for secret-expiry-monitor + copilot-evaluator; E2
+live HTTP-trigger receipt after that; S2's live FIC migration (runbook
+decision: MIGRATE).
 
 ## Phase boundaries (FRESH0 runs)
 
