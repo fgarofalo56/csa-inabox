@@ -39,6 +39,10 @@ export async function GET() {
       detail: st?.check.detail,
       portalSteps: st?.check.portalSteps,
       fixScript: st?.check.fixScript,
+      // X2 — availability in the ACTIVE cloud + the fallback note (present when
+      // the backing service is 'limited'/'unavailable' here).
+      cloudAvailability: st?.availability,
+      fallbackNote: st?.fallbackNote,
     };
   });
   const configured = gates.filter((g) => g.status === 'configured').length;

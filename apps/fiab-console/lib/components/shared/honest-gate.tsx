@@ -31,6 +31,7 @@ import {
 } from '@fluentui/react-components';
 import {
   Wrench16Regular, Open16Regular, ArrowSync16Regular, CheckmarkCircle20Regular,
+  CloudDismiss20Regular, ArrowRight16Regular,
 } from '@fluentui/react-icons';
 import { clientFetch } from '@/lib/client-fetch';
 import { getGate, type GateDef, type GateRequiredSetting } from '@/lib/gates/registry';
@@ -303,6 +304,8 @@ export function HonestGate({
   missing,
   configured = false,
   detail,
+  cloudUnavailable,
+  fallbackNote,
   onResolved,
 }: {
   /** Gate id — OR pass the whole `gate` envelope block below and this is derived. */
@@ -313,7 +316,13 @@ export function HonestGate({
    * When provided, gateId/missing/detail are sourced from it so ANY gated route
    * renders through this ONE renderer uniformly — no per-surface re-derivation.
    */
-  gate?: { id: string; title?: string; remediation?: string; fixItHref?: string; missing?: string[] };
+  gate?: {
+    id: string; title?: string; remediation?: string; fixItHref?: string; missing?: string[];
+    /** X2 — 'cloud-unavailable' when the backing service does not exist in the active cloud. */
+    state?: 'blocked' | 'cloud-unavailable';
+    /** X2 — the Azure-native / OSS / Loom-native fallback for the active cloud. */
+    fallbackNote?: string;
+  };
   /** Human name of the calling surface (e.g. 'SQL Copilot'). */
   surface: string;
   /** The exact missing env var(s) the surface's API reported. */
@@ -322,6 +331,12 @@ export function HonestGate({
   configured?: boolean;
   /** Optional extra detail from the surface's gate response. */
   detail?: string;
+  /** X2 — force the cloud-unavailable rendering (derived from the envelope's
+   * `state` when omitted): honest bar naming the fallback, NO Fix-it. */
+  cloudUnavailable?: boolean;
+  /** X2 — the fallback note override (defaults to the envelope's, then the
+   * registry availability declaration). */
+  fallbackNote?: string;
   /** Called when the Fix-it wizard confirms the gate flipped to configured. */
   onResolved?: () => void;
 }) {
@@ -362,6 +377,40 @@ export function HonestGate({
 
   const missingList = (Array.isArray(resolvedMissing) ? resolvedMissing : resolvedMissing ? [resolvedMissing] : [])
     .filter(Boolean);
+
+  // X2 — cloud-unavailable: the backing service does not exist in this cloud.
+  // Honest bar naming the Azure-native/OSS/Loom-native fallback, NO Fix-it (no
+  // wizard can provision an impossible resource) — a "Use the Loom-native
+  // equivalent" CTA instead (G2 stays satisfied: never a bare remediation bar).
+  const isCloudUnavailable = cloudUnavailable ?? envelope?.state === 'cloud-unavailable';
+  if (isCloudUnavailable) {
+    const note = fallbackNote
+      || envelope?.fallbackNote
+      || gate.availability?.fallbackNote
+      || gate.remediation;
+    return (
+      <MessageBar intent="warning" layout="multiline" className={s.bar} icon={<CloudDismiss20Regular />}>
+        <MessageBarBody>
+          <MessageBarTitle>{gate.title} is not available in this cloud</MessageBarTitle>
+          {note}
+        </MessageBarBody>
+        <MessageBarActions>
+          {onResolved ? (
+            <Button size="small" appearance="primary" icon={<ArrowRight16Regular />} onClick={onResolved}>
+              Use the Loom-native equivalent
+            </Button>
+          ) : (
+            <Button as="a" size="small" appearance="primary" icon={<ArrowRight16Regular />} href="/admin/gates">
+              Use the Loom-native equivalent
+            </Button>
+          )}
+          <Button as="a" size="small" appearance="transparent" icon={<Open16Regular />} href="/admin/gates">
+            Gate registry
+          </Button>
+        </MessageBarActions>
+      </MessageBar>
+    );
+  }
 
   return (
     <>

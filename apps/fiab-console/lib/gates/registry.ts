@@ -34,9 +34,15 @@ import {
   evalEnv,
   type AuditCategory,
   type AuditSeverity,
+  type Avail,
   type CheckResult,
   type EnvSpec,
+  type ServiceAvailability,
 } from '@/lib/admin/env-checks';
+// Pure host/cloud resolver (zero server-only imports) — safe in client bundles.
+import { detectLoomCloud } from '@/lib/azure/cloud-endpoints';
+
+export type { Avail, ServiceAvailability } from '@/lib/admin/env-checks';
 
 export type FixitKind = 'env-picker' | 'resource-picker' | 'role-grant' | 'wizard';
 
@@ -130,19 +136,34 @@ export interface GateDef {
   fixit: GateFixit;
   /** Bespoke error codes routes return today for this gate (Phase-1 inventory). */
   legacyCodes: string[];
+  /** X2 — structured per-cloud availability of the backing Azure service,
+   * passed through verbatim from the ENV_CHECKS spec. Absent = GA everywhere. */
+  availability?: ServiceAvailability;
 }
 
 /** Live status for a gate — evaluated from the REAL env-presence check (the
  * per-client *ConfigGate() helpers gate on exactly these vars). */
 export interface GateStatus {
   id: string;
-  /** 'configured' — every required value present (or auto-resolved default);
-   *  'blocked'    — missing values; the surfaces honest-gate. */
-  status: 'configured' | 'blocked';
+  /** 'configured'         — every required value present (or auto-resolved default);
+   *  'blocked'            — missing values; the surfaces honest-gate with a Fix-it.
+   *  'cloud-unavailable'  — X2: the values are missing AND the backing service is
+   *                         structurally unavailable in the active cloud — the
+   *                         honest bar names the Azure-native/OSS fallback
+   *                         (`fallbackNote`) with NO Fix-it (you cannot provision
+   *                         the impossible). Distinct from 'blocked'. */
+  status: 'configured' | 'blocked' | 'cloud-unavailable';
   /** The underlying audit result (detail, portalSteps, fixScript). */
   check: CheckResult;
   /** Missing env vars (preferred member of each unsatisfied group). */
   missing: string[];
+  /** X2 — the service's availability in the ACTIVE cloud (absent = 'ga').
+   * 'limited' NEVER gates: the surface renders normally plus a non-blocking
+   * info note sourced from `fallbackNote`. */
+  availability?: Avail;
+  /** X2 — the Azure-native / OSS / Loom-native fallback note for the active
+   * cloud (present when availability is 'limited' or 'unavailable'). */
+  fallbackNote?: string;
 }
 
 // ── per-gate enrichment (surfaces / fixit / legacy codes) ────────────────────
@@ -894,6 +915,7 @@ export const GATES: GateDef[] = ENV_CHECKS.map((spec) => {
     autoResolveNote: meta?.autoResolveNote,
     fixit: meta?.fixit || { kind: 'env-picker' },
     legacyCodes: meta?.legacyCodes || [],
+    availability: spec.availability,
   };
 });
 
@@ -906,6 +928,41 @@ export function getGate(id: string): GateDef | undefined {
 /** Map a bespoke legacy error code (e.g. 'adls_not_configured') to its gate. */
 export function gateForLegacyCode(code: string): GateDef | undefined {
   return GATES.find((g) => g.legacyCodes.includes(code));
+}
+
+// ── X2 — availability-gate convention ────────────────────────────────────────
+
+/** The ServiceAvailability key for the active sovereign boundary. Commercial +
+ * GCC read `commercial` (GCC runs on Commercial Azure endpoints); GCC-High
+ * reads `gccHigh`; DoD deployments carry the IL5 air-gap posture → `il5`. */
+export function activeCloudAvailabilityKey(): keyof Pick<ServiceAvailability, 'commercial' | 'gccHigh' | 'il5'> {
+  switch (detectLoomCloud()) {
+    case 'GCC-High':
+      return 'gccHigh';
+    case 'DoD':
+      return 'il5';
+    default:
+      return 'commercial';
+  }
+}
+
+/** The structured per-cloud availability declared on the gate's ENV_CHECKS
+ * spec (X-MATRIX as data). Undefined = no declaration = GA everywhere. */
+export function availabilityFor(id: string): ServiceAvailability | undefined {
+  return ENV_CHECKS.find((s) => s.id === id)?.availability;
+}
+
+/** The service's availability in the ACTIVE cloud ('ga' when undeclared). */
+export function availabilityInActiveCloud(id: string): Avail {
+  return availabilityFor(id)?.[activeCloudAvailabilityKey()] ?? 'ga';
+}
+
+/** False ONLY when the backing service is structurally 'unavailable' in the
+ * active cloud — 'limited' still counts as available (round-3 clarification:
+ * 'limited' renders the surface normally + a non-blocking info note; only
+ * 'unavailable' produces the cloud-unavailable gate). */
+export function isAvailableInActiveCloud(id: string): boolean {
+  return availabilityInActiveCloud(id) !== 'unavailable';
 }
 
 /**
@@ -921,11 +978,25 @@ export function gateStatus(id: string): GateStatus | undefined {
     ? []
     : (check.detail.match(/Missing: (.+)\.$/)?.[1]?.split(', ') || []).map((m) =>
         m.includes(' | ') ? m.split(' | ')[0].trim() : m.trim());
+  // X2 — cloud availability overlay. A PASSING check always stays 'configured'
+  // (e.g. the ADX graph-twin satisfying svc-digital-twins in Gov). A FAILING
+  // check in a cloud where the backing service is 'unavailable' becomes the
+  // distinct 'cloud-unavailable' state (fallbackNote, no Fix-it) — telling the
+  // operator to set an env var for a service that does not exist in their cloud
+  // would be dishonest. 'limited' never changes the state: it only attaches the
+  // non-blocking info note.
+  const avail = spec.availability ? availabilityInActiveCloud(id) : 'ga';
+  const fallbackNote = avail !== 'ga' ? spec.availability?.fallbackNote : undefined;
+  const status: GateStatus['status'] = check.status === 'pass'
+    ? 'configured'
+    : avail === 'unavailable' ? 'cloud-unavailable' : 'blocked';
   return {
     id,
-    status: check.status === 'pass' ? 'configured' : 'blocked',
+    status,
     check,
     missing,
+    availability: spec.availability ? avail : undefined,
+    fallbackNote,
   };
 }
 

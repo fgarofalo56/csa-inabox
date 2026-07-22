@@ -296,7 +296,9 @@ export function buildCapabilityNodes(input: ReadinessInput): CapabilityNode[] {
 
   return input.gates.map((g) => {
     const st = statusById.get(g.id);
-    const gateStatus: 'configured' | 'blocked' = st?.status ?? 'blocked';
+    // X2: 'cloud-unavailable' folds into 'blocked' for readiness purposes — the
+    // node's remediation (the gate remediation / fallbackNote) stays honest.
+    const gateStatus: 'configured' | 'blocked' = st?.status === 'configured' ? 'configured' : 'blocked';
     const missing = st?.missing ?? [];
 
     const requiredEnv: RequiredEnv[] = g.requiredSettings.map((rs) => ({

@@ -288,6 +288,38 @@ export function envVarFix(vars: string[]): { portalSteps: string[]; fixScript: s
   return { portalSteps, fixScript };
 }
 
+// ── X2 — structured per-service cloud availability ─────────────────────────
+/**
+ * Availability of the backing Azure service in one sovereign boundary:
+ *   'ga'          — generally available; the surface renders + configures normally.
+ *   'limited'     — available with limits/variance (region lag, reduced catalog,
+ *                   tier restrictions). The surface renders NORMALLY plus a
+ *                   NON-BLOCKING info note sourced from `fallbackNote` — never a
+ *                   gate (round-3 clarification: only 'unavailable' gates).
+ *   'unavailable' — the service does not exist in that cloud. A failing env
+ *                   check becomes state 'cloud-unavailable' (distinct from
+ *                   'blocked'): the honest MessageBar names the Azure-native /
+ *                   OSS / Loom-native fallback with NO Fix-it (you cannot
+ *                   provision the impossible) — a "Use the Loom-native
+ *                   equivalent" CTA instead.
+ */
+export type Avail = 'ga' | 'limited' | 'unavailable';
+
+/** Per-cloud availability descriptor for the service behind an EnvSpec (X2 —
+ * turns the loom-next-level X-MATRIX into data so honest gates are automatic,
+ * not hand-maintained prose). Keys align with detectLoomCloud(): Commercial +
+ * GCC read `commercial` (GCC runs on Commercial Azure endpoints), GCC-High
+ * reads `gccHigh`, DoD/IL5 read `il5`. */
+export interface ServiceAvailability {
+  commercial: Avail;
+  gccHigh: Avail;
+  il5: Avail;
+  /** Names the exact Azure-native / OSS / Loom-native fallback for the
+   * limited/unavailable clouds — surfaced verbatim on the honest gate / info
+   * note. Required in practice whenever any cloud is not 'ga'. */
+  fallbackNote?: string;
+}
+
 // ── env-presence check helper ──────────────────────────────────────────────
 export interface EnvSpec {
   id: string;
@@ -336,6 +368,11 @@ export interface EnvSpec {
    * (e.g. "falls back to the shared Azure AI Services account", "Cosmos audit trail
    * keeps every event"). Falls back to a generic H-band substrate message. */
   optionalDefaultDetail?: string;
+  /** X2 — structured per-cloud availability of the BACKING Azure service
+   * (from the loom-next-level X-MATRIX). Absent = 'ga' everywhere. Only
+   * 'unavailable' in the active cloud produces the cloud-unavailable gate;
+   * 'limited' is a non-blocking info note (see the Avail doc above). */
+  availability?: ServiceAvailability;
 }
 
 export function evalEnv(spec: EnvSpec): CheckResult {
@@ -499,6 +536,12 @@ export const ENV_CHECKS: EnvSpec[] = [
     remediation: 'Set LOOM_AOAI_ENDPOINT + LOOM_AOAI_DEPLOYMENT (or a Foundry project endpoint) so Copilot, the help agent, and data agents have a model. Deploy a model from the AI Foundry hub if none exists.',
     provisionedBy: 'modules/admin-plane (agentFoundryEnabled / aiFoundryEnabled) → AIServices account + project → apps[] env',
     role: 'Cognitive Services OpenAI User (UAMI) on the AOAI/Foundry account',
+    // X-MATRIX: AOAI IS in Gov (openai.azure.us via cogScope()/getOpenAiSuffix())
+    // but the model/version catalog lags Commercial — 'limited', never a gate.
+    availability: {
+      commercial: 'ga', gccHigh: 'limited', il5: 'limited',
+      fallbackNote: 'Azure OpenAI is available in Azure Government (openai.azure.us) with a reduced model catalog that lags Commercial — the tier router selects from the Gov-available deployments; verify the exact model list per deployment.',
+    },
   },
   {
     // WS-1.1 — the model tier router's REASONING (strong) + MINI tiers. The
@@ -525,6 +568,12 @@ export const ENV_CHECKS: EnvSpec[] = [
     provisionedBy: 'modules/ai/foundry-project.bicep (miniDeployment / strongDeployment) → modules/admin-plane/main.bicep apps[] env (LOOM_AOAI_MINI_DEPLOYMENT / LOOM_AOAI_STRONG_DEPLOYMENT)',
     role: 'Cognitive Services OpenAI User (UAMI) on the AOAI/Foundry account',
     docs: 'docs/fiab/model-strategy.md',
+    // X-MATRIX (AOAI-model-lag): the strong/mini tiers bind to the best model
+    // the cloud can serve — Gov lags Commercial ('limited', non-blocking note).
+    availability: {
+      commercial: 'ga', gccHigh: 'limited', il5: 'limited',
+      fallbackNote: 'The Gov AOAI model catalog lags Commercial — the tier router binds LOOM_AOAI_STRONG_DEPLOYMENT to the best Gov-available reasoning model (gpt-5.2 / gpt-5.1 / gpt-5; floor gpt-4.1) instead of the Commercial flagship; every turn still works.',
+    },
   },
   {
     // WS-9 — Sovereign Agent Mesh egress profile + allow-list. Both are OPT-IN
@@ -623,6 +672,14 @@ export const ENV_CHECKS: EnvSpec[] = [
     docs: 'https://learn.microsoft.com/power-bi/developer/embedded/embedded-analytics-power-bi',
     provisionedBy: 'main.bicep (params loomUsageReportKind / loomUsagePbiWorkspaceId / loomUsagePbiReportId / loomGrafanaUsageDashboardUid) → modules/admin-plane/main.bicep apps[] env (lines ~2475-2490)',
     role: 'powerbi: Console UAMI = Power BI workspace Member + "Service principals can use Power BI APIs" tenant setting on. grafana: Grafana Viewer (UAMI) on the Managed Grafana instance.',
+    // X-MATRIX (Grafana IL5 + Fabric/PBI): Managed Grafana is FedRAMP High GA but
+    // Enterprise plugins/Essential tier are unsupported in Gov ('limited'); IL4/IL5
+    // are NOT in compliance scope and Power BI embed is Fabric-family (opt-in only)
+    // → 'unavailable' at IL5; the native Fluent usage charts always render.
+    availability: {
+      commercial: 'ga', gccHigh: 'limited', il5: 'unavailable',
+      fallbackNote: 'Azure Managed Grafana is not in IL4/IL5 compliance scope and Power BI embed is Fabric-family (opt-in only, never a default path). The native Fluent usage charts on /admin/usage render regardless — for an embedded dashboard, self-host OSS Grafana in-cluster or use Loom-native dashboards over ADX (kql-dashboard-model).',
+    },
   },
   {
     id: 'govern-embed', category: 'azure-services', title: 'Governance analytics embed (F2 — /governance Govern)', severity: 'optional',
@@ -632,6 +689,11 @@ export const ENV_CHECKS: EnvSpec[] = [
     remediation: 'Set LOOM_REPORT_KIND=powerbi (Commercial/GCC) + LOOM_GOVERN_PBI_WORKSPACE_ID + LOOM_GOVERN_PBI_REPORT_ID, OR =grafana (GCC-High/IL5) + LOOM_GRAFANA_DASHBOARD_UID. The native governance surface works without this — it only lights up the "View more" embedded report.',
     provisionedBy: 'main.bicep (params loomReportKind / loomGovernPbiWorkspaceId / loomGovernPbiReportId / loomGrafanaDashboardUid) → modules/admin-plane/main.bicep apps[] env (lines ~2455-2470)',
     role: 'powerbi: Console UAMI = Power BI workspace Member + "Service principals can use Power BI APIs" on. grafana: Grafana Viewer (UAMI).',
+    // X-MATRIX (Grafana IL5 + Fabric/PBI) — same boundary facts as usage-embed.
+    availability: {
+      commercial: 'ga', gccHigh: 'limited', il5: 'unavailable',
+      fallbackNote: 'Azure Managed Grafana is not in IL4/IL5 compliance scope and Power BI embed is Fabric-family (opt-in only, never a default path). The native governance surface renders regardless — for an embedded report, self-host OSS Grafana in-cluster or use Loom-native dashboards over ADX (kql-dashboard-model).',
+    },
   },
   // ── derived (bicep auto-fills from another resource; operator rarely sets) ──
   {
@@ -808,6 +870,13 @@ export const ENV_CHECKS: EnvSpec[] = [
     remediation: 'Two Azure-native/OSS paths, no Power BI / Fabric. Commercial/GCC: LOOM_MAPS_BACKEND=azure-maps + LOOM_AZURE_MAPS_CLIENT_ID (the Maps account uniqueId — Entra/AAD, PREFERRED; grant the Console UAMI "Azure Maps Data Reader") or LOOM_AZURE_MAPS_KEY (subscription key). GCC-High / sovereign (Azure Maps unavailable): LOOM_MAPS_BACKEND=maplibre + LOOM_MAPS_TILE_URL — the self-hosted OSS tileserver-gl (MapLibre GL) served in-VNet through the Console proxy; a Gov push-button deploy wires both. The aggregated location rows render without either.',
     provisionedBy: 'Commercial/GCC: modules/landing-zone/azure-maps.bicep (azureMapsEnabled → Gen2 account + "Azure Maps Data Reader" grant + mapsClientId output). GCC-High/IL5: modules/compute/loom-maps-app.bicep (tileserver-gl ACA app, internal ingress) → admin-plane emits LOOM_MAPS_BACKEND=maplibre + LOOM_MAPS_TILE_URL.',
     role: 'Azure Maps Data Reader (Console UAMI) on the Maps account (azure-maps path). The MapLibre path needs no credential — tiles are proxied in-VNet.',
+    // X-MATRIX (Azure Maps): in FedRAMP High/IL4/IL5 compliance scope but with
+    // account/region variance ('limited') — Loom ships the OSS MapLibre tile
+    // server substitute in Gov to avoid it.
+    availability: {
+      commercial: 'ga', gccHigh: 'limited', il5: 'limited',
+      fallbackNote: 'Azure Maps is in FedRAMP High/IL5 compliance scope with account/region variance — Gov deployments ship the self-hosted OSS MapLibre tile server instead (LOOM_MAPS_BACKEND=maplibre + LOOM_MAPS_TILE_URL, served in-VNet through the Console proxy).',
+    },
   },
   // ── Hyperscale band (HYP-16) — the three optional H-band substrate services.
   //    Each is default-OFF/opt-out: unset → the console lib client honest-503
@@ -848,6 +917,13 @@ export const ENV_CHECKS: EnvSpec[] = [
     remediation: "Set LOOM_AUTOPILOT_MODE ('auto' to let the loop actuate unattended, 'propose' to surface recommendations only — the per-tenant mode on /admin/autopilot overrides this bootstrap default) and LOOM_CAPACITY_LCU (the published LCU capacity ceiling; unset auto-derives from peak + 25% headroom). The autopilot reads real per-resource LCU + $ from the chargeback model (Cost Management Reader on the Console UAMI) and pauses idle Synapse/ADX compute via ARM. The push-button deploy wires LOOM_AUTOPILOT_MODE='propose' from admin-plane/main.bicep.",
     provisionedBy: "admin-plane/main.bicep apps[] env LOOM_AUTOPILOT_MODE (default 'propose') — LOOM_CAPACITY_LCU is a runtime tuning knob the autopilot right-sizes via env-apply",
     role: 'Cost Management Reader (Console UAMI) on the Loom subscription(s) for LCU $; the pause actuators reuse the existing Synapse/Kusto Contributor grants',
+    // X-MATRIX (Cost-CSP): Cost Management + Query/Forecast REST is GA through
+    // IL5, but Cost Management for CSPs and the Power BI template app are NOT
+    // available in Gov ('limited', non-blocking note).
+    availability: {
+      commercial: 'ga', gccHigh: 'limited', il5: 'limited',
+      fallbackNote: 'Cost Management (incl. the Query/Forecast REST API) is GA through IL5, but Cost Management for CSPs and the Cost Management Power BI template app are not supported in Azure Government — Loom reads the REST Query/Forecast API and renders cost/chargeback natively, never the PBI template app.',
+    },
   },
   // ── wave-3 coverage (G2 gate registry): every remaining bespoke
   //    *_not_configured gate promoted into the declarative registry. Each spec
@@ -868,6 +944,13 @@ export const ENV_CHECKS: EnvSpec[] = [
     remediation: 'Set LOOM_DLP_ENABLED=true (+ LOOM_DLP_ADMIN_ENABLED=true for the admin DLP panes) and grant the Graph DLP application roles so DLP policy surfaces drive the real Purview DLP plane (dlp_not_configured / dlp_admin_not_configured). The Loom-native policy library works without it.',
     provisionedBy: 'modules/admin-plane/main.bicep (apps[] env) + post-deploy Graph grant',
     role: 'Purview DLP Graph application roles on the Console UAMI',
+    // X-MATRIX (DLP-policy): the Graph DLP policy API
+    // (/beta/security/dataLossPreventionPolicies) does NOT exist in GCC-High/IL5
+    // (graphDlpPolicyApiAvailable() = false in Gov) → 'unavailable' there.
+    availability: {
+      commercial: 'ga', gccHigh: 'unavailable', il5: 'unavailable',
+      fallbackNote: 'The Microsoft Graph DLP policy API is not available in Azure Government — manage DLP policies via the Purview compliance portal + Security & Compliance PowerShell. DLP alerts + restrict-access RBAC still work, and the Loom-native policy library is fully functional.',
+    },
   },
   {
     id: 'svc-purview-uc', category: 'catalog-governance', title: 'Purview Unified Catalog endpoint', severity: 'optional',
@@ -889,6 +972,12 @@ export const ENV_CHECKS: EnvSpec[] = [
     remediation: 'Set LOOM_DATABRICKS_SQL_WAREHOUSE_ID (with LOOM_DATABRICKS_HOSTNAME) so DQ monitoring, MDM match-merge, and governance DLP schema surfaces run against a real Databricks SQL warehouse (warehouseConfigGate). Synapse covers the warehouse item type without it.',
     provisionedBy: 'modules/landing-zone (Databricks workspace + SQL warehouse) → apps[] env',
     role: 'Databricks SQL access (Console UAMI, SCIM-provisioned)',
+    // X-MATRIX (Databricks-SQL): region-limited in Azure Government ('limited',
+    // non-blocking note) — Synapse dedicated SQL covers the warehouse workload.
+    availability: {
+      commercial: 'ga', gccHigh: 'limited', il5: 'limited',
+      fallbackNote: 'Databricks SQL warehouses are region-limited in Azure Government — Synapse dedicated SQL covers the warehouse workload, and the DQ monitor / MDM engines run on the Kusto/Synapse backends by default.',
+    },
   },
   {
     id: 'svc-synapse-spark-pool', category: 'azure-services', title: 'Synapse Spark pool (ML predict / scheduled runs)', severity: 'optional',
@@ -953,6 +1042,14 @@ export const ENV_CHECKS: EnvSpec[] = [
     remediation: 'Digital twins run on the Azure Data Explorer graph-twin (make-graph / graph-match) by DEFAULT — no Azure Digital Twins required (ADT is unavailable in GCC-High / IL5). Set LOOM_KUSTO_CLUSTER_URI to the shared ADX cluster (adxEnabled=true emits it automatically) and grant the Console UAMI Database Viewer/Ingestor so twin materialize + graph query run against ADX. Azure Digital Twins is a Commercial-only opt-in alternate (LOOM_ADT_ENDPOINT).',
     provisionedBy: 'modules/admin-plane/main.bicep (LOOM_KUSTO_CLUSTER_URI, emitted whenever adxEnabled/existingAdxClusterName — the ADX graph-twin default; + LOOM_TWIN_BACKEND=adx-graph marker); modules/integration/adt-instance.bicep → LOOM_ADT_ENDPOINT is the Commercial opt-in',
     role: 'Database Viewer/Ingestor (Console UAMI) on the ADX cluster for the default; Azure Digital Twins Data Owner only for the opt-in ADT alternate',
+    // X-MATRIX (ADT): Azure Digital Twins is NOT available in GCC-High / IL5 —
+    // 'unavailable' there. A configured ADX graph-twin (LOOM_KUSTO_CLUSTER_URI)
+    // still satisfies the gate normally; only a MISSING check in Gov renders the
+    // cloud-unavailable bar naming the ADX graph-twin default.
+    availability: {
+      commercial: 'ga', gccHigh: 'unavailable', il5: 'unavailable',
+      fallbackNote: 'Azure Digital Twins is not available in GCC-High / IL5 — digital twins run on the Loom ADX graph-twin default (Kusto make-graph / graph-match over DT_* tables): deploy ADX (adxEnabled=true emits LOOM_KUSTO_CLUSTER_URI) and the Digital Twin Builder is fully functional with zero ADT dependency.',
+    },
   },
   {
     id: 'svc-airflow', category: 'builders', title: 'Managed Airflow (airflow-job items)', severity: 'optional',
@@ -1127,6 +1224,19 @@ export const ENV_CHECKS: EnvSpec[] = [
     remediation: 'The Loom-native tabular layer (LOOM_SEMANTIC_BACKEND, default "loom-native") is the DEFAULT engine and serves semantic models / reports fully — no configuration required. Azure Analysis Services is an OPTIONAL fast path (Commercial / GCC only; NOT available in GCC-High / IL5). To use it, set LOOM_AAS_SERVER (asazure://… URI) or LOOM_AAS_SERVER_NAME. No Power BI / Fabric required.',
     provisionedBy: 'modules/admin-plane/main.bicep (LOOM_SEMANTIC_BACKEND = loomSemanticBackend, always emitted — the Loom-native tabular default) + modules/admin-plane/aas.bicep (aasEnabled → the opt-in loom-aas fast-path server, Commercial/GCC only)',
     role: 'none for the Loom-native default; Analysis Services Admin (Console UAMI) on the opt-in AAS server (wired by the module)',
+    // X-MATRIX (AAS): encoded per the X-MATRIX row (Commercial ✅ / GCC-High ❌ /
+    // IL5 ❌ — the AAS_NOT_IN_GOV legacyCode posture the repo ships today).
+    // NOTE: PRP ground-truth correction #1 says AAS IS GA in Azure Government
+    // (FedRAMP High / IL4 / IL5, Learn-verified) — item A4 lifts this behind
+    // verification and flips these two values to 'ga' in the same PR that
+    // removes the isGovCloud() block. Until A4 lands, the structured value
+    // matches the repo's actual behavior. The gate stays satisfied everywhere
+    // via LOOM_SEMANTIC_BACKEND (always emitted), so this never blocks the
+    // semantic-model / report surfaces.
+    availability: {
+      commercial: 'ga', gccHigh: 'unavailable', il5: 'unavailable',
+      fallbackNote: 'Azure Analysis Services is not wired for Azure Government in this build — the Loom-native semantic layer (LOOM_SEMANTIC_BACKEND=loom-native, the default) serves semantic models and reports fully, with no AAS / Power BI / Fabric dependency.',
+    },
   },
   {
     id: 'svc-aml', category: 'azure-services', title: 'Azure Machine Learning (ML models / AutoML / experiments)', severity: 'optional',
