@@ -1,4 +1,4 @@
-# PRP — Loom Next Level (2026-07-22, rev 2 — post-adversarial-review)
+# PRP — Loom Next Level (2026-07-22, rev 2 pass 2 — +UI/UX Excellence +North Star)
 
 **Program:** take CSA Loom from "unbelievably broad B+" to "defensible A" by pointing a
 full cycle at the five structural gaps identified in the 2026-07-22 brutally-honest
@@ -18,6 +18,36 @@ gating before identity enforcement (I9), supply-chain signing gated into the
 real deploy path (SC1), the X-section renumbered, and the phase spine corrected
 for real dependencies. Item count: **77 → 97**.
 
+**Pass 2 (same day):** two new workstreams from the 2026-07-22 audit + research
+fan-out. **WS-U (UI/UX Excellence, U0–U12)** takes the remainder of the
+dark-font deep sweep + canvas G3/parity audit — everything NOT already fixed in
+PRs #2382/#2389/#2390: structural G3 on the flagship editors (report designer,
+notebook cells, Workshop/Slate, the query↔results divider across all 11 Monaco
+editors), the three leader-gap builds (mapping-dataflow Debug/Preview, KQL
+dashboard depth, full-screen canvas), and systemic hygiene (the `/browse`
+renderer-freeze virtualization, a ratcheted 142-site px-grid→TileGrid sweep —
+ratchet #13). **WS-N (North Star, N1–N20)** synthesizes the three research
+reports (datastack, ai-first, bi-dx-gov) into a Phase-4 program. Item count:
+**97 → 130**.
+
+**North-star thesis (pass 2):** the program's end-state is Loom as the **#1
+AI-first data & analytics platform**, on three pillars — **(1) OPENNESS:** the
+lakehouse speaks the protocols every engine already speaks (Iceberg REST
+catalog + Delta/Iceberg dual metadata as the flagship, DuckDB, Arrow
+Flight SQL/ADBC, SQLMesh, asset semantics, enforced ODCS contracts) so
+Snowflake/Databricks/Trino/DuckDB customers light up against Loom with zero
+migration; **(2) TRUST / AI-FIRST:** the agentic analyst is grounded in a
+verified semantic contract + an authored knowledge graph (GraphRAG over
+Weave/AGE — the headline nobody else has), refuses instead of guessing, and
+ships a receipt with every answer; **(3) GOVERNED ANALYTICS:** one headless
+metrics layer serves BI + NL2SQL + API from a single definition, reports are
+code, and observability is OpenLineage-conformant with a real incident
+console. Wrapping all three is the **sovereign moat**: the same agentic
+analyst runs disconnected in IL5/air-gap on in-boundary services — the
+position Databricks/Snowflake/ThoughtSpot structurally cannot reach. Every
+N-item's IL5 note must serve that principle (see the moat block in
+[ws-north-star.md](ws-north-star.md)).
+
 **Operator scoping decisions (2026-07-22, recorded verbatim):**
 
 1. **Cloud matrix:** build + validate on the two live estates — **Commercial**
@@ -36,7 +66,7 @@ for real dependencies. Item count: **77 → 97**.
    enforcement per-workspace behind a gate — now additionally gated on the I9
    threat-model/AppSec review.
 
-## Workstream index (97 items across 5 appendix files)
+## Workstream index (130 items across 7 appendix files)
 
 | WS | Appendix | Items | One-liner |
 |----|----------|-------|-----------|
@@ -51,6 +81,8 @@ for real dependencies. Item count: **77 → 97**.
 | **WS-A** Analyst-surface depth | [ws-lineage-depth.md](ws-lineage-depth.md) | A1–A14 | Real DAX parser/AST → SQL folding + 20 functions + golden numeric harness vs Power BI; report depth (small-multiples renderer, analytics pane, Gov map fallback, drill-through); Spark reliability (dashboard, FAULTED auto-recovery, quotas, chaos drill); real-time collab push transport + presence/comments on notebook/report/semantic-model/SQL editors (A14) |
 | **WS-I** Per-workspace identity | [ws-identity-cloudmatrix.md](ws-identity-cloudmatrix.md) | I1–I9 | Activate the DORMANT scaffolding (workspace-identity-client.ts + workspace-identity.bicep): provision-on-create/delete-cascade, scoped data-plane grants, shadow divergence audit into the live PDP store, credential-factory adoption ratchet, per-workspace enforce + migration runbook, threat-model/AppSec review gate before enforce (I9) |
 | **§X** Cloud matrix (cross-cutting) | [ws-identity-cloudmatrix.md](ws-identity-cloudmatrix.md) | X1–X3 | **Renumbered (rev 2):** X1 cloud-endpoints adoption ratchet (module exists, 1,339 lines); X2 structured `availability:{commercial,gccHigh,il5}` on ENV_CHECKS → automatic honest gates (formerly "X.3"); X3 per-cloud CI validation lanes incl. `gov-workspace-identity.yml` (formerly "X.5", previously uncounted). The Learn-verified service-availability matrix (X-MATRIX) and the IL5 checklist (X-IL5) are un-numbered reference blocks, not items |
+| **WS-U** UI/UX excellence | [ws-ui-excellence.md](ws-ui-excellence.md) | U0–U12 | **Pass 2.** Remainder of the 07-22 dark-font + canvas-G3 audits (post #2382/#2389/#2390): U0 P0-VERIFY drag+reload receipts on already-PASS canvases (resolves the operator's "nothing resizes" vs code-audit contradiction); structural G3 — report-designer full G3 + Power BI aux panes, notebook per-cell resize, Workshop/Slate, fixed-height stragglers, query↔results divider ×11 Monaco editors; leader-gap builds — mapping-dataflow Debug/Preview/Inspect/column-stats (the largest parity build), KQL dashboard parameters/drillthrough/live-refresh/pages, full-screen canvas kit mode (AHEAD); hygiene — `/browse` VirtualizedGrid (renderer-freeze P0), ratcheted 142-site px-grid→TileGrid sweep (ratchet #13), new-item-dialog token cluster |
+| **WS-N** North star (#1 AI-first platform) | [ws-north-star.md](ws-north-star.md) | N1–N20 | **Pass 2, Phase 4.** Three pillars + sovereign moat. **Openness:** Iceberg REST catalog + Delta↔Iceberg dual metadata (flagship N1), DuckDB dual-mode, Flight SQL/ADBC, SQLMesh+dbt, software-defined assets, ODCS contracts enforced at ingest, Tier-2 condensed (RisingWave/Debezium CP/reverse-ETL/data-diff/Trino), labs. **Trust/AI-first:** verified semantic contract + VQR + refuse-not-guess, answer receipts w/ verified badge, GraphRAG over Weave/AGE (headline), self-healing NL2SQL, unified LLMOps (extends WS-E), Tier-2 condensed. **Governed analytics:** headless MetricFlow metrics layer, BI-as-code `code-report` item, OpenLineage incident console (extends WS-L), embedded-analytics SDK w/ RLS, Tier-2 condensed, labs |
 
 ## Relationship to sibling PRPs (rev 2 — cross-PRP reconciliation)
 
@@ -87,6 +119,16 @@ this one; these are now the binding decision rules:**
    competitive-audit owner: **PARITY-MATRIX §2 "Source control (Git)" grade "C /
    honest-gate" is STALE — actual state is a real Fabric-parity git client;
    re-grade A− (folded into R28's acceptance).**
+   - **Pass-2 addition:** WS-N is now the **canonical spec for the
+     forward/competitive "north-star" roadmap** (the three-pillar synthesis of
+     the 07-22 datastack / ai-first / bi-dx-gov research). Any Track-C forward
+     item that overlaps a numbered N-item redirects here; Track-C keeps
+     ownership only of items WS-N does not number. Inside this PRP the
+     anti-duplication rules are explicit: N13 EXTENDS WS-E (prompt registry +
+     token budgets only — the eval harness/gates stay E1–E6), N17 EXTENDS WS-L
+     (L2 owns OL ingest; N17 adds emission generalization, export, and the
+     incident UX), N19d/N19e EXTEND WS-C (C5 delivery / cost-client), and the
+     bi-dx `/browse` virtualization item is owned by WS-U U10.
 
 ## Ground-truth corrections the drafting + review audits surfaced (these override stale memory/docs)
 
@@ -197,24 +239,36 @@ this one; these are now the binding decision rules:**
   the receipt.
 - **Ratchet convention:** every floor/baseline is set from measured reality and
   moves only toward the target; the ratchet file lives in-repo and CI enforces
-  it. **The program's ratchet inventory (rev 2 — 12, not 6):** vitest coverage
+  it. **The program's ratchet inventory (pass 2 — 13):** vitest coverage
   floor (existing, `14a16d8e`), a11y baseline (V3), route-toolkit baseline (R3),
   file-size allowlist (R7), cloud-endpoint literals (X1), eval floors incl.
   tierAccuracy (E3/E6), route-coverage floor (V4), committed visual baselines
   (V2), credential-adoption count (I5), client-fetch known-route baseline (R17),
   parity-doc-freshness baseline (R29), editor-snapshot-trick advisory count
-  (R19). **Shared mechanism note:** I5/X1/R17/R3/R19 are all
+  (R19), **px-`minmax` grid count (U11 — baseline 142, shrink-only)**.
+  **Shared mechanism note:** I5/X1/R17/R3/R19/**U11** are all
   "count-a-forbidden-pattern + ratchet down + `--update-baseline`" guards —
-  build/reuse ONE `scripts/ci/_ratchet-count.mjs` helper rather than five copies;
+  build/reuse ONE `scripts/ci/_ratchet-count.mjs` helper rather than six copies;
   V2/V3/V4 similarly share an e2e-baseline compare helper.
-- **Serialization list (rev 2 — expanded):** serialize PRs touching
+- **Serialization list (pass 2 — expanded again):** serialize PRs touching
   `lib/admin/env-checks.ts`, `lib/gates/registry.ts`,
   `lib/gates/__tests__/registry.test.ts` / `lib/admin/__tests__/env-config.test.ts`
-  (~13 items add ENV_CHECKS entries — guaranteed conflicts otherwise),
-  `playwright.config.ts` (V1/V2/V4/A5/A13/L5 all add projects — batch or land in
-  dependency order), `cost-client.ts`, shared admin nav registries, and the same
-  editor. **X2 lands before any other env-adding item** so all later EnvSpecs
-  adopt its `availability` field on first write, not via rebase.
+  (~13 rev-2 items + the env-adding N-items add ENV_CHECKS entries — guaranteed
+  conflicts otherwise),
+  `playwright.config.ts` (V1/V2/V4/A5/A13/L5 + the U0/U6 `loom-ui-verify` specs
+  all add projects — batch or land in dependency order), `cost-client.ts`
+  (WS-C + N19e), shared admin nav registries (+N16, `new-item-dialog` with
+  WS-U U12), and the same editor. **Pass-2 same-file pairs:**
+  `report-designer.tsx` (U1→A6–A9→U2, in that order),
+  notebook editor (U3 → A14 → N19a), the 11 Monaco editors (U6 vs R8–R12
+  decompositions), `spark-session-pool` (U7 with A11/A12),
+  `monitor-client` (U8 alert-create with WS-C), `data-agent-reasoning.ts`
+  (N9/N11/N12 serialize among themselves), `aoai-chat-client.ts` hot path
+  (N13 with E6), semantic-model editor + contract store (N9/N15 with A1–A5),
+  `unified-lineage`/OL ingest (N17 strictly after L2), lakehouse editor
+  (N1/N2 with the WS-R decomposition targets), report-subscriptions Function
+  (N19d extends C5). **X2 lands before any other env-adding item** so all later
+  EnvSpecs adopt its `availability` field on first write, not via rebase.
 - **Extend-vs-decompose policy (rev 2):** WS-R's R7/R14 decomposition targets
   collide with items that GROW the same files (L3→`adf-client`, L4→`purview-client`,
   L7→`unity-catalog-client`, A4→`aas-client`, I5→`kusto-client`,
@@ -235,10 +289,12 @@ this one; these are now the binding decision rules:**
 - **Per-cloud contract:** each item ships Commercial (live receipt) + GCC-High
   (live receipt or Learn-cited honest gate w/ fallback) + an IL5 design note
   answering the X-IL5 air-gap checklist (7 items).
-  ¹ **Carve-out (rev 2):** cloud-neutral code-health items — WS-R Areas 0–4 +
-  R28/R29/MIG1 (except where an item states its own per-cloud row, e.g. R21,
-  R28) — are exempt from the per-cloud contract; each carries an explicit
-  "Per-cloud: cloud-neutral" declaration instead.
+  ¹ **Carve-out (rev 2, extended pass 2):** cloud-neutral code-health items —
+  WS-R Areas 0–4 + R28/R29/MIG1 (except where an item states its own per-cloud
+  row, e.g. R21, R28) **and the pure-front-end WS-U items (U0–U6, U9–U12)** —
+  are exempt from the per-cloud contract; each carries an explicit
+  "Per-cloud: cloud-neutral" declaration instead. WS-U's U7/U8 touch real Azure
+  backends and carry full per-cloud rows.
 - **no-vaporware / no-fabric-dependency / ui-parity** die-hard rules apply as written.
 
 ## Dependency spine & execution phases
@@ -255,6 +311,12 @@ this one; these are now the binding decision rules:**
   JSONL)**; C1 cost-client hardening; L1 columnMappings schema;
   I1 identity provision-on-create (shadow plumbing prereq); MIG1 Cosmos
   schema-migration convention (so new doc shapes register migrators from day one)
+- **U0 P0-VERIFY (pass 2)** — in-browser drag+reload receipts on ≥4
+  already-PASS canvases; resolves the operator's "nothing resizes"
+  contradiction and gates every later WS-U G3 receipt (a hidden clipping
+  regression, if found, is a P0 fix before U1–U6); **U10 `/browse`
+  VirtualizedGrid** (confirmed renderer-freeze defect — defect-priority, no
+  dependencies)
 
 **Phase 1 — gates online (parallel, after their Phase-0 prereq):**
 - V2 visual regression (wide + narrow viewports); V3 a11y ratchet; V4 route-smoke
@@ -269,6 +331,10 @@ this one; these are now the binding decision rules:**
   reads existing state, zero dependency)**; I2 scoped grants → **I5 credential
   factory → I3 shadow audit (I5 strictly before/with I3 — the shadow hook lives
   in the factory, not 217 call sites)**; DR1–DR3 drill extensions
+- **WS-U structural G3 (pass 2, after U0's verdict):** U1 report-designer G3
+  (BEFORE A6–A9 land — same-editor serialization), U3 notebook per-cell
+  resize, U4 Workshop/Slate canvases, U5 fixed-height stragglers, U6
+  query↔results divider (per-editor, before/with each R8–R12 decomposition)
 
 **Phase 2 — depth + surfaces:**
 - A1–A5 DAX engine (A5 lands the harness + seeded reference data FIRST; each
@@ -287,16 +353,43 @@ this one; these are now the binding decision rules:**
   R8–R12 editor decompositions (R18 editor-state hook BEFORE R10); A14 collab
   push transport + editor coverage (AFTER the R8–R12 decomposition of the target
   editors, so the mount lands in the decomposed shell)
+- **WS-U leader-gap builds (pass 2):** U2 report-designer aux panes (after U1,
+  serialized with A6–A9), U7 mapping-dataflow Debug/Preview/Inspect/stats (3
+  PRs; `spark-session-pool` serialization with A11/A12), U8 KQL dashboard
+  depth (2 PRs; `monitor-client` serialization; "live" tier upgrades to A14's
+  push transport when it lands), U9 full-screen canvas kit mode
+- **Near-free WS-N riders (pass 2, may ride Phase 2/3 when their serialization
+  windows are open):** N2a duckdb-wasm preview (the Arrow producer already
+  exists), N10 answer-receipts substrate (assembly over existing
+  turn-trace/cost-estimate/verify pieces)
 - **Opportunistic bucket (Phase 2/3, independent/low-priority — placed per the
   consistency review):** R13, R14 (lowest-value churn — after all user-visible
   depth), R16, R17, R19, R28 git-client consolidation, R29 parity-freshness
-  ratchet, I8 limits doc, X3 gov-CI plugin guide + `gov-workspace-identity.yml`
+  ratchet, I8 limits doc, X3 gov-CI plugin guide + `gov-workspace-identity.yml`,
+  **U11 px-grid ratchet (guard early — after R3's `_ratchet-count.mjs` helper —
+  then batched drain), U12 new-item-dialog token cluster + dead-field cleanup**
 
 **Phase 3 — enforcement + structure:**
 - **I9 threat-model/AppSec review gate → I6 per-workspace enforce + I7 migration
   runbook (I6 only after I9 sign-off AND ≥2 weeks of clean shadow data)**;
   L6 dbt + L7 UC rebase; A11–A13 Spark auto-recovery/quota/chaos;
   E6 tier-router evals; X1 cloud-endpoints ratchet drain
+
+**Phase 4 — north star (pass 2, after Phase 3; full specs + intra-phase spines
+in [ws-north-star.md](ws-north-star.md)):**
+- **Pillar 2 trust chain (start immediately at phase open — it hardens
+  everything else):** N9 verified contract + VQR + refuse → (N10 receipts if
+  not already ridden earlier) → N11 GraphRAG (the headline) → N12 self-heal →
+  N13 unified LLMOps (strictly after the WS-E E-chain completes)
+- **Pillar 1 openness:** N1 Iceberg REST catalog + dual metadata (flagship) →
+  {N2b DuckDB server tier, N3 Flight SQL/ADBC, N7e Trino opt-in}; N4 SQLMesh →
+  N5 software-defined assets; N6 ODCS contracts → {N7b CDC control plane,
+  N14c AI data engineering}; N7a/N7c/N7d as scheduling allows; N8 labs
+- **Pillar 3 governed analytics:** N9→N15 headless metrics layer →
+  {N16 code-report, N18 embedded SDK w/ RLS}; L2→N17 OL incident console →
+  N19g catalog interop; N19a–N19f as scheduling allows; N20 labs
+- Every N-item's IL5 note must serve the sovereign-moat design principle
+  (reviewers check against the moat block in ws-north-star.md)
 
 **Housekeeping track (independent — execute LAST, any time, never blocking):**
 - R20–R27 `legacy/` restructure, one tree per PR, `examples/` stays at root per
@@ -312,14 +405,19 @@ E-chain); A5 harness before A1–A3 merge (golden rows ride the A1–A3 PRs);
 shadow-data cleanliness; L5 is the terminal L item — it ships incrementally
 against landed sources and re-verifies after L6/L7; A14 after the R8–R12
 decomposition of its target editors; V2 baselines land only after #2382
-(dark-theme fix) is deployed (else baselines bake the bug in); serialize per the
+(dark-theme fix) is deployed (else baselines bake the bug in); **U0 before any
+WS-U G3 item is declared done (and any clipping regression it finds is a P0 fix
+before U1–U6); U1 before A6–A9 before U2 (same editor); U11's guard after R3's
+`_ratchet-count.mjs` helper exists; N9 before N12/N15; N11 after N9; N13 after
+E1→…→E6; N15 before N16's renderer + N18's RLS; N17 after L2; N19d extends C5
+(never a parallel delivery path)**; serialize per the
 expanded serialization list above (env-checks/registry + their tests,
 playwright.config.ts, cost-client.ts, admin nav registries, same editor, and
 every extend-vs-decompose file pair).
 
 ## Verification of the program itself
 
-The program is DONE when: all 97 items merged with receipts; the synthetic-journey
+The program is DONE when: all 130 items merged with receipts; the synthetic-journey
 job has run green ≥7 consecutive days on BOTH clouds; the secret-expiry monitor
 (S1) shows green with >60 days of runway on every tracked credential; the
 visual-regression (wide + narrow) and a11y gates have each caught-or-passed a full
@@ -329,6 +427,13 @@ weeks AND the I9 security review is signed off before any workspace is enforced;
 the DAX golden harness passes vs Power BI on the seeded models; and a quarterly DR
 drill (the EXTENDED `dr-drill.yml`, all scenarios incl. `adls-versioning-restore`
 and the graph/vector Cosmos validation) has completed green end-to-end on
-Commercial + Gov. All 12 ratchets enforced in CI and at-or-below their baselines.
+Commercial + Gov. All 13 ratchets enforced in CI and at-or-below their baselines.
+**Pass-2 additions:** every WS-U G3 item carries a browser drag+reload receipt
+(with U0's live-grip verdict on record); an EXTERNAL engine (pyiceberg/DuckDB/
+Trino) has read a real Loom lakehouse table through the N1 IRC endpoint on both
+clouds; a multi-hop question has answered with graph-path citations (N11) and
+every agentic answer renders a receipt with a verified/refused badge (N9/N10);
+the same metric has returned the same number via report visual, NL question,
+and `/api/metrics/query` (N15 three-way receipt).
 Grade target: every touched surface A/A+ per ux-standards §7, zero ❌ parity rows
 introduced.
