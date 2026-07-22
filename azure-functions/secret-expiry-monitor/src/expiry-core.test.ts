@@ -7,6 +7,7 @@ import {
   alertingItems,
   nextState,
   buildAlertMessage,
+  severityForBand,
   issueTitle,
   missingConfig,
   parseTrackedSecrets,
@@ -36,6 +37,15 @@ describe('threshold math', () => {
     expect(bandFor(31)).toBe('warn60');
     expect(bandFor(60)).toBe('warn60');
     expect(bandFor(61)).toBe('ok');
+  });
+
+  it('maps bands to O1 P-band severities (P1 page / P3 email)', () => {
+    expect(severityForBand('expired')).toBe('P1');
+    expect(severityForBand('critical')).toBe('P1');
+    expect(severityForBand('warn30')).toBe('P2');
+    expect(severityForBand('warn60')).toBe('P3');
+    expect(severityForBand('ok')).toBe('P3');
+    expect(severityForBand('no-expiry')).toBe('P3');
   });
 
   it('honors a custom outer warn threshold (LOOM_SECRET_EXPIRY_WARN_DAYS)', () => {

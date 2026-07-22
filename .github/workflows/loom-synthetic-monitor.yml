@@ -19,12 +19,18 @@ name: loom-synthetic-monitor
 # The GH lane polls the job's LATEST execution rather than double-starting when
 # one is already running.
 #
-# ALERTING (rev-2 standard): failures notify through the ONE shared action
+# ALERTING (O1 unified convention — lib/azure/alert-dispatch.ts is the code
+# module; this bash lane mirrors its contract): failures are SEVERITY P1
+# (user-facing journeys / sign-in path down → page, per
+# docs/fiab/runbooks/on-call.md) and notify through the ONE shared action
 # group `loom-default-alerts` (monitoring-default-alerts.bicep::
 # defaultActionGroup, derived var LOOM_ALERT_ACTION_GROUP_ID) via
-# `az monitor action-group test-notifications create` — email + subscription-
-# Owner ARM-role receivers, the only receivers that exist today. NO parallel
-# Logic Apps, NO Teams webhooks (O1 absorbs this call when it lands).
+# `az monitor action-group test-notifications create` — which delivers to
+# EVERY receiver on the group: email + subscription-Owner ARM-role day-one,
+# plus the optional O1 on-call webhook receiver once wired (see the runbook).
+# NO parallel Logic Apps, NO per-item action groups. The dedup GitHub issue
+# below follows the O1 open-issue-else-comment convention
+# (alert-dispatch.upsertDedupIssue) and is the durable text channel.
 
 on:
   schedule:
@@ -135,14 +141,16 @@ jobs:
             exit 1
           fi
 
-      - name: Alert — notify the shared action group (loom-default-alerts)
+      - name: Alert — notify the shared action group (loom-default-alerts, P1)
         if: failure() && steps.run.outputs.status != 'NotDeployed'
         run: |
-          # Rev-2 alert standard: route through the ONE shared default action
-          # group (email + subscription-Owner ARM-role receivers). test-notifications
-          # delivers a real notification to every receiver. Best-effort — the
-          # dedup GitHub issue below is the durable signal. O1 (unified
-          # alert-dispatch) absorbs this call when it lands.
+          # O1 unified alert convention (P1 — journeys failing = page band):
+          # route through the ONE shared default action group. test-notifications
+          # delivers a real notification to EVERY receiver on the group (email +
+          # subscription-Owner ARM-role day-one; the optional oncall-webhook
+          # receiver too once wired per docs/fiab/runbooks/on-call.md — P1
+          # includes it by design). Best-effort — the dedup GitHub issue below
+          # is the durable signal.
           az monitor action-group test-notifications create \
             -g "$RG_NAME" --action-group-name "$ACTION_GROUP_NAME" \
             --alert-type log 2>/dev/null \
@@ -162,11 +170,12 @@ jobs:
             const body = [
               `Run: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
               ``,
+              `Severity: **P1** (page band — O1 alert convention, docs/fiab/runbooks/on-call.md)`,
               `Execution: \`${exec}\` → **${status}**`,
               `Summary: \`${uat}\``,
               ``,
               `The six synthetic journeys (J1 MSAL login / J2 create-item / J3 editor / J4 query / J5 marketplace / J6 git-promotion) run in-VNet every 15 min; a failure here is a REAL code or sign-in-path failure (honest infra gates never fail the run).`,
-              `Triage: Journeys tab on /admin/health · runbook docs/fiab/runbooks/synthetic-journeys.md · Log Analytics ContainerAppConsoleLogs_CL (ContainerAppName_s=='loom-synthetic-monitor').`,
+              `Triage + ack: on-call runbook docs/fiab/runbooks/on-call.md · Journeys tab on /admin/health · runbook docs/fiab/runbooks/synthetic-journeys.md · Log Analytics ContainerAppConsoleLogs_CL (ContainerAppName_s=='loom-synthetic-monitor').`,
             ].join('\n');
             const existing = await github.rest.issues.listForRepo({
               owner: context.repo.owner, repo: context.repo.repo,

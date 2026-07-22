@@ -88,13 +88,21 @@ export async function readKvSecretAttributes(vaultUri: string, names: string[]):
 
 /** Fire the shared loom-default-alerts action group via the createNotifications
  * API, mirroring its live receivers — the same mechanism the Console's
- * sendActionGroupTestNotification uses (monitor-client.ts). Needs Monitoring
- * Contributor on the admin RG (granted in bicep). Structured so O1's unified
- * alert-dispatch module can absorb this call verbatim. */
+ * sendActionGroupTestNotification uses (monitor-client.ts) and O1's unified
+ * `lib/azure/alert-dispatch.ts` (dispatchAlert) formalizes. Needs Monitoring
+ * Contributor on the admin RG (granted in bicep).
+ *
+ * O1 severity routing (aligned with alert-dispatch.receiversForSeverity —
+ * the Function cannot import the console module across packages, so the
+ * routing convention is mirrored here): 'P3' = email band — webhook + Logic
+ * App receivers are dropped from the notification; 'P1'/'P2' (and legacy
+ * callers passing no severity) mirror ALL receivers incl. the on-call
+ * webhook. Human contract: docs/fiab/runbooks/on-call.md. */
 export async function fireActionGroup(
   armEndpoint: string,
   actionGroupId: string,
   _subject: string,
+  severity?: 'P1' | 'P2' | 'P3',
 ): Promise<{ status: number }> {
   const m = /\/subscriptions\/([^/]+)\/resourceGroups\/([^/]+)\/providers\/[Mm]icrosoft\.[Ii]nsights\/actionGroups\/([^/?]+)/.exec(actionGroupId || '');
   if (!m) throw new Error('LOOM_ALERT_ACTION_GROUP_ID is not a valid action group ARM id');
@@ -107,6 +115,8 @@ export async function fireActionGroup(
   );
   if (!agRes.ok) throw new Error(`action group read ${agRes.status}: ${(await agRes.text()).slice(0, 200)}`);
   const p: any = (await agRes.json())?.properties || {};
+  // O1: P3 = email band only (no page); P1/P2/legacy mirror all receivers.
+  const emailBand = severity === 'P3';
   const res = await fetch(
     `${arm}/subscriptions/${sub}/resourceGroups/${rg}/providers/Microsoft.Insights/actionGroups/${name}/createNotifications?api-version=2023-01-01`,
     {
@@ -116,8 +126,8 @@ export async function fireActionGroup(
         alertType: 'logalertv2',
         emailReceivers: p.emailReceivers || [],
         smsReceivers: p.smsReceivers || [],
-        webhookReceivers: p.webhookReceivers || [],
-        logicAppReceivers: p.logicAppReceivers || [],
+        webhookReceivers: emailBand ? [] : (p.webhookReceivers || []),
+        logicAppReceivers: emailBand ? [] : (p.logicAppReceivers || []),
         armRoleReceivers: p.armRoleReceivers || [],
       }),
     },

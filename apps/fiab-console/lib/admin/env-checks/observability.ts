@@ -47,14 +47,38 @@ export const OBSERVABILITY_ENV_CHECKS: EnvSpec[] = [
   {
     // The ONE shared derived alert var (rev-2 alert standard) — the ARM id of
     // monitoring-default-alerts.bicep's defaultActionGroup (loom-default-alerts).
-    // Consumed by V1 (synthetic-failure alert) and later by DR4/C3/A11/S1/O1.
+    // Consumed by every alert emitter through O1's lib/azure/alert-dispatch.ts
+    // (dispatchAlert — S1 secret-expiry, V1 synthetic journeys, later DR4/C3/A11).
     // Bicep derives it on every push-button deploy; operators never hand-set it.
     id: 'svc-alert-action-group', category: 'observability',
     title: 'Shared alert action group (LOOM_ALERT_ACTION_GROUP_ID)', severity: 'optional',
     required: ['LOOM_ALERT_ACTION_GROUP_ID'],
     warnOnMiss: true, derived: true,
-    remediation: 'Auto-derived from modules/admin-plane/monitoring-default-alerts.bicep (defaultActionGroup loom-default-alerts) on a push-button deploy. If unset, redeploy the admin plane (or set it to the action group\'s ARM resource id) so synthetic-journey failures — and every later alert consumer (DR drills, cost anomaly, secret expiry) — notify through the ONE shared action group (admin email + subscription-Owner ARM-role receivers).',
+    remediation: 'Auto-derived from modules/admin-plane/monitoring-default-alerts.bicep (defaultActionGroup loom-default-alerts) on a push-button deploy. If unset, redeploy the admin plane (or set it to the action group\'s ARM resource id) so every alert routed through lib/azure/alert-dispatch.ts (dispatchAlert — synthetic journeys, secret expiry, DR drills, cost anomaly) notifies through the ONE shared action group (admin email + subscription-Owner ARM-role receivers).',
     provisionedBy: 'modules/admin-plane/monitoring-default-alerts.bicep (defaultActionGroup output) → admin-plane/main.bicep apps[] env LOOM_ALERT_ACTION_GROUP_ID (derived)',
     availability: { commercial: 'ga', gccHigh: 'ga', il5: 'ga' },
+  },
+  {
+    // O1 — the OPTIONAL on-call webhook bridge (Teams workflow / PagerDuty /
+    // bridge URL, KV secretRef). Absence is the fully-functional day-one
+    // default: dispatchAlert still delivers P1/P2/P3 through the shared action
+    // group's email + subscription-Owner ARM-role receivers (the channels that
+    // exist on every push-button deploy). When set, P1/P2 additionally page the
+    // webhook (P3 stays email-band per the severity convention) — see
+    // docs/fiab/runbooks/on-call.md. NOTE: LOOM_ALERT_ACTION_GROUP_ID is owned
+    // by svc-alert-action-group above (dedupe — never double-counted here).
+    id: 'svc-alerting', category: 'observability',
+    title: 'Unified alert dispatch — on-call webhook (optional)', severity: 'optional',
+    required: ['LOOM_ALERT_WEBHOOK_URL'],
+    warnOnMiss: true, optionalDefault: true,
+    optionalDefaultDetail: 'the unified alert path (lib/azure/alert-dispatch.ts → the shared loom-default-alerts action group) delivers every P1/P2/P3 via the email + subscription-Owner ARM-role receivers with zero config; the webhook is an optional page/bridge channel layered on top for P1/P2.',
+    remediation: 'Optional on-call paging bridge: store the incoming-webhook URL (Teams workflow, PagerDuty Events, or bridge endpoint) in Key Vault as loom-alert-webhook-url, then set observabilityConfig.alertWebhookEnabled=true (admin-plane bag) so the Console reads LOOM_ALERT_WEBHOOK_URL via secretRef. dispatchAlert then pages the webhook on P1/P2 (P3 remains email-only) and mirrors it into the shared loom-default-alerts action-group notification. To persist the receiver ON the action group for the default LogAlert rules too, pass alertWebhookUrl to monitoring-default-alerts.bicep (secure param) or add it once via the /monitor Alerts editor. Escalation + ack: docs/fiab/runbooks/on-call.md.',
+    provisionedBy: 'operator one-time (KV secret loom-alert-webhook-url) + modules/admin-plane/main.bicep observabilityConfig.alertWebhookEnabled → LOOM_ALERT_WEBHOOK_URL secretRef; receiver param on modules/admin-plane/monitoring-default-alerts.bicep',
+    role: 'Monitoring Contributor (Console UAMI) on the alert RG — already granted for the /monitor Alerts editor',
+    docs: 'docs/fiab/runbooks/on-call.md',
+    availability: {
+      commercial: 'ga', gccHigh: 'ga', il5: 'limited',
+      fallbackNote: 'IL5/air-gapped: external webhook egress is prohibited — keep LOOM_ALERT_WEBHOOK_URL unset; alerting stays fully in-boundary on the action group\'s email/ARM-role receivers (an in-enclave bridge URL may be used where policy allows).',
+    },
   },
 ];

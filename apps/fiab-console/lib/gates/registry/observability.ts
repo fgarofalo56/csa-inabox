@@ -39,4 +39,19 @@ export const OBSERVABILITY_GATE_META: Record<string, GateMeta> = {
     fixit: { kind: 'env-picker' },
     autoResolveNote: 'Auto-derived from monitoring-default-alerts.bicep (loom-default-alerts) on every push-button deploy — operators never set it by hand.',
   },
+  'svc-alerting': {
+    // O1 — optional on-call webhook bridge for the unified dispatchAlert path.
+    surfaces: [
+      { path: '/monitor', label: 'Monitor — Alerts (severity routing P1 page / P3 email)' },
+      { path: '/admin/health', label: 'Health & Reliability hub — alert consumers (journeys, secret health)' },
+    ],
+    // Fix-it: a one-time operator action (create the Teams-workflow / PagerDuty
+    // webhook, store it in KV, flip the bag flag) — a wizard-style grant, not a
+    // plain env write (the URL is secret-typed and rides a secretRef).
+    fixit: {
+      kind: 'wizard',
+      grantNote: 'Create the on-call incoming webhook (Teams workflow / PagerDuty Events / bridge), store the URL in Key Vault as loom-alert-webhook-url, and set observabilityConfig.alertWebhookEnabled=true on the admin-plane deploy so LOOM_ALERT_WEBHOOK_URL is wired as a secretRef. P1/P2 then page the webhook; P3 stays email-band. See docs/fiab/runbooks/on-call.md.',
+    },
+    autoResolveNote: 'Unset → the unified alert path still delivers every severity through the shared action group\'s email + subscription-Owner receivers (fully functional day-one); the webhook only adds the P1/P2 page channel.',
+  },
 };

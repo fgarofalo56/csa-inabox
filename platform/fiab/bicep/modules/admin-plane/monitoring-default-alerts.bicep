@@ -22,6 +22,34 @@
 // receiver can be wired, the action group is still created (enabled, zero
 // receivers) so the rules + group are present and visible day-one; the operator
 // adds receivers from the /monitor Alerts editor.
+//
+// O1 (loom-next-level rev-2 alert standard) — THE ONE ACTION GROUP:
+// every programmatic alert (S1 secret-expiry, V1 synthetic journeys, later
+// DR4/C3/A11) routes through lib/azure/alert-dispatch.ts::dispatchAlert to
+// THIS group (derived var LOOM_ALERT_ACTION_GROUP_ID). Email / ARM-role /
+// webhook are RECEIVERS here — never parallel per-item groups or Logic Apps.
+//
+// SEVERITY TAG CONVENTION (O1 — the P1-page vs P3-email contract; human side
+// in docs/fiab/runbooks/on-call.md):
+//   loom-severity: 'P1' — page: user-facing outage / sign-in down. ARM
+//                  severity 0–1. Delivered to ALL receivers incl. the on-call
+//                  webhook.
+//   loom-severity: 'P2' — urgent (next business hour): degraded but up. ARM
+//                  severity 2. All receivers.
+//   loom-severity: 'P3' — email band: informational / trending. ARM severity
+//                  3–4. dispatchAlert drops webhook/Logic App receivers for P3.
+// Every scheduledQueryRule below carries its loom-severity tag; new default
+// rules MUST tag one of the three bands.
+//
+// SECURE WEBHOOK RECEIVER (O1, optional/empty-safe): pass `alertWebhookUrl`
+// (@secure — e.g. from a .bicepparam getSecret() against the Loom Key Vault
+// secret `loom-alert-webhook-url`) to persist a Teams-workflow / PagerDuty /
+// on-call-bridge webhook receiver on the group so the default LogAlert rules
+// page it too. Empty (default) = receivers unchanged. The runtime dispatch
+// path does NOT require it: when the Console has LOOM_ALERT_WEBHOOK_URL
+// (secretRef via observabilityConfig.alertWebhookEnabled), dispatchAlert
+// mirrors the webhook into every P1/P2 notification and posts the full
+// loom-alert/v1 payload directly.
 
 targetScope = 'resourceGroup'
 
@@ -46,6 +74,10 @@ param notifyOwners bool = true
 @description('Skip provisioning the default alert set (e.g. an environment that already has it, or an operator who manages alerts entirely by hand). Default false — provisioned day-one.')
 param skipDefaultAlerts bool = false
 
+@description('OPTIONAL secure on-call webhook URL (O1). When set, a webhook receiver (name oncall-webhook, Common Alert Schema) is persisted on the default action group so the default LogAlert rules page it. Source from Key Vault (e.g. .bicepparam getSecret over secret loom-alert-webhook-url) — NEVER a literal in a params file. Empty (default) = no webhook receiver (empty-safe); the runtime dispatchAlert path can still page via the Console\'s LOOM_ALERT_WEBHOOK_URL secretRef.')
+@secure()
+param alertWebhookUrl string = ''
+
 // Owner built-in role id (8e3af657-a8ff-443c-a75c-2fe8c4bcb635) — used by the
 // ARM-role receiver so subscription Owners (the admin group) are notified.
 var ownerRoleId = '8e3af657-a8ff-443c-a75c-2fe8c4bcb635'
@@ -66,6 +98,15 @@ var armRoleReceivers = notifyOwners ? [
   }
 ] : []
 
+// O1 — optional secure on-call webhook receiver (empty-safe; see header).
+var webhookReceivers = empty(alertWebhookUrl) ? [] : [
+  {
+    name: 'oncall-webhook'
+    serviceUri: alertWebhookUrl
+    useCommonAlertSchema: true
+  }
+]
+
 // ---------------------------------------------------------------------------
 // Default action group — emails the admin + (optionally) notifies subscription
 // Owners. Created even with zero receivers so the group exists day-one.
@@ -79,6 +120,7 @@ resource defaultActionGroup 'Microsoft.Insights/actionGroups@2023-01-01' = if (!
     enabled: true
     emailReceivers: emailReceivers
     armRoleReceivers: armRoleReceivers
+    webhookReceivers: webhookReceivers
   }
 }
 
@@ -93,7 +135,8 @@ var actionGroupIds = skipDefaultAlerts ? [] : [ defaultActionGroup.id ]
 resource alertConsoleAvailability 'Microsoft.Insights/scheduledQueryRules@2023-12-01' = if (!skipDefaultAlerts) {
   name: 'loom-console-availability'
   location: location
-  tags: complianceTags
+  // O1 severity tag convention: heartbeat absence = possible outage → P1 (page).
+  tags: union(complianceTags, { 'loom-severity': 'P1' })
   kind: 'LogAlert'
   properties: {
     displayName: 'loom-console-availability'
@@ -144,7 +187,8 @@ resource alertConsoleAvailability 'Microsoft.Insights/scheduledQueryRules@2023-1
 resource alertConsole5xx 'Microsoft.Insights/scheduledQueryRules@2023-12-01' = if (!skipDefaultAlerts) {
   name: 'loom-console-5xx-errors'
   location: location
-  tags: complianceTags
+  // O1 severity tag convention: elevated 5xx = degraded but up → P2 (urgent).
+  tags: union(complianceTags, { 'loom-severity': 'P2' })
   kind: 'LogAlert'
   properties: {
     displayName: 'loom-console-5xx-errors'
@@ -185,7 +229,8 @@ resource alertConsole5xx 'Microsoft.Insights/scheduledQueryRules@2023-12-01' = i
 resource alertReplicaRestarts 'Microsoft.Insights/scheduledQueryRules@2023-12-01' = if (!skipDefaultAlerts) {
   name: 'loom-console-replica-restarts'
   location: location
-  tags: complianceTags
+  // O1 severity tag convention: crash-loop signals = degraded but self-healing → P2.
+  tags: union(complianceTags, { 'loom-severity': 'P2' })
   kind: 'LogAlert'
   properties: {
     displayName: 'loom-console-replica-restarts'
@@ -228,3 +273,8 @@ output ruleNames array = skipDefaultAlerts ? [] : [
   'loom-console-5xx-errors'
   'loom-console-replica-restarts'
 ]
+
+// NOTE (O1): intentionally NO output derived from alertWebhookUrl — even a
+// boolean trips the outputs-should-not-contain-secrets linter. Verify the
+// receiver live instead: az monitor action-group show -n loom-default-alerts
+// --query 'webhookReceivers[].name' (expects ['oncall-webhook'] when wired).
