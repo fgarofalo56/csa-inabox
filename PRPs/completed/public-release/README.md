@@ -75,7 +75,7 @@ Gov console is live at `csaloom-gov.limitlessdata.ai` (MSAL + PBI Embedded A1 + 
 ## Related
 
 - Mandates: `.claude/rules/{no-vaporware,ui-parity,web3-ui,no-fabric-dependency}.md` + BLOCKING memory.
-- Fabric-parity program: `PRPs/active/fabric-parity/{README.md,PHASES.md}`.
+- Fabric-parity program: `PRPs/completed/fabric-parity/{README.md,PHASES.md}`.
 - Enterprise hardening (Phase 1 OBO + multi-domain ACL, overlaps rel-T11): `PRPs/active/enterprise-hardening/PHASES.md`.
 - Prior audits: `docs/fiab/prp/{AUDIT-2026-06-10.md,AUDIT-2026-06-10-deep.md}`.
 - Per-dimension detail: `docs/fiab/prp/release-audit/*.md`.

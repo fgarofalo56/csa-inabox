@@ -3,7 +3,7 @@
 Source docs: https://docs.databricks.com/aws/en/dev-tools/databricks-apps/
 Audited: 2026-07-17 (APPS-W0, code-level with file:line evidence; paths relative to `apps/fiab-console/`).
 Loom baseline: **Loom App Runtime** (`loom-app-runtime` item) — ACR quick-build → ACA deploy.
-Program: `PRPs/active/loom-apps-parity/PRP.md`. Sibling doc `loom-apps.md` covers the
+Program: `PRPs/completed/loom-apps-parity/PRP.md`. Sibling doc `loom-apps.md` covers the
 *Fabric/Power-BI org-app* shape (`loom-app` visual item) — a different comparison.
 Grades: ✅ built (real backend) · η partial · ❌ missing.
 

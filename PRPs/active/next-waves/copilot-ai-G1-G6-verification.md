@@ -1,5 +1,5 @@
 > **Title:** Copilot & AI appendix (G1-G6) — 2026-07-08 code re-verification
-> **Date:** 2026-07-08 · **Status:** verified addendum to `PRPs/active/fabric-parity/appendix-copilot-ai.md`
+> **Date:** 2026-07-08 · **Status:** verified addendum to `PRPs/completed/fabric-parity/appendix-copilot-ai.md`
 > **Method:** per-gap code verification against origin/main (post-Wave-7, post-rel-T85) — the 06-26 appendix understates shipped progress.
 
 # Copilot-AI gap re-verification (G1-G6)
@@ -99,7 +99,7 @@ G3 — Operations Agent (autonomous monitor-over-ADX/Ontology -> reasoning -> Lo
 - [x] Add platform/fiab/bicep/modules/admin-plane/monitor-ops-agent.bicep (or extend monitoring.bicep) with the operations-agent-specific scheduled-query rule template, Logic App + Teams connector, the evaluator Function App, and role assignments (Database Viewer on bound Eventhouse/ADX, Microsoft Graph Chat.ReadWrite for Teams cards) — wire into admin-plane/main.bicep.
 - [x] Add an OSS/air-gapped-Gov fallback rules engine on ACA + KEDA (cron/queue) as an alternate evaluator for the same operations-agent item when Logic Apps/Teams aren't available.
 - [x] Expand apps/fiab-console/lib/editors/__tests__/operations-agent.test.tsx beyond the mount smoke test to cover rule creation, condition/action config, and the approval-channel flow once built.
-- [x] Update docs/fiab/operations-agent-parity-spec.md and PRPs/active/fabric-parity/appendix-copilot-ai.md G3 status once the rule-canvas + Monitor/Logic-App backend land (currently self-documented as deferred).
+- [x] Update docs/fiab/operations-agent-parity-spec.md and PRPs/completed/fabric-parity/appendix-copilot-ai.md G3 status once the rule-canvas + Monitor/Logic-App backend land (currently self-documented as deferred).
 
 **Notes:** The appendix's citation is accurate in spirit but slightly stale in one respect: an 'operations-agent' catalog item + editor + CRUD/deploy BFF DOES now exist (post-dating the appendix), so it's not a flat MISSING. However the built item deploys to Azure AI Foundry Agent Service (a conversational prompt agent) rather than the Azure Monitor scheduled-query + Logic App + Teams/email rule architecture G3 specifies, and has none of the required rule-canvas UI (ADX trigger builder, condition builder, action picker, approval channel, NL Copilot authoring). Critically, ALL the underlying Azure-native primitives G3 needs already exist and are proven live on the sibling 'activator' item: real scheduledQueryRule CRUD (monitor-client.ts), real action-group Teams/Email/Logic-App receivers, and a working NL-to-rule Copilot persona (activator_author_rule/activator_suggest_threshold/activator_create_rule, backed by real KQL percentile queries + real ARM rule creation). So this is best framed as an integration/composition gap, not a from-scratch build — which is why effort is L rather than XL despite the acceptance bar (fire a real ADX condition, receive a real Teams/email action) not yet being met by the operations-agent item itself.
 
@@ -108,7 +108,7 @@ G3 — Operations Agent (autonomous monitor-over-ADX/Ontology -> reasoning -> Lo
 G4 — Data Wrangler AI (Fabric parity appendix, apps/fiab-console)
 
 **Evidence (current code):**
-- PRPs/active/fabric-parity/appendix-copilot-ai.md:102 and :255-263 — the appendix itself grades G4 ❤ MISSING ("no Data Wrangler AI surface") with a P2 gap spec; nothing since 2026-06-26 supersedes it.
+- PRPs/completed/fabric-parity/appendix-copilot-ai.md:102 and :255-263 — the appendix itself grades G4 ❤ MISSING ("no Data Wrangler AI surface") with a P2 gap spec; nothing since 2026-06-26 supersedes it.
 - apps/fiab-console/lib/editors/components/delta-preview-grid.tsx (383 lines) is the only file in the repo matching /wrangler/i — it is a read-only Fluent v9 DataGrid (sort/filter/resize/multi-select/copy-CSV/cell-dialog) plus a Spark-computed column-statistics card (count/min/max/mean/stddev/nulls/histogram via /api/lakehouse/table-stats -> Livy). Zero AI content: no tab, no suggestion cards, no code-generation control, no apply/preview-transform button.
 - docs/fiab/parity/lakehouse-preview.md — the checked-in parity doc for this exact surface — enumerates every capability as built ✅ and explicitly scopes coverage to ‘Fabric Lakehouse preview + Data Wrangler column-statistics panel’ only; no row for AI functions, cleaning suggestions, or NL-to-code.
 - apps/fiab-console/lib/azure/ai-functions-client.ts:12-49 — AI Functions today is 5 single-text ops (summarize/classify/sentiment/extract/translate) called by a single-value BFF (app/api/ai-functions/route.ts). No table/DataFrame batch mode exists (matches appendix gap G2, which G4 depends on for the 'per-column AI functions in the grid' sub-claim).

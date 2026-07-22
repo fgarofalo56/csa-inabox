@@ -15,7 +15,7 @@
 
 None of these are deep architectural rewrites. The dominant theme is **"the last mile was never walked as a stranger"**: a brand-new public org hitting the README, the quickstart, the login flow, the first upgrade, and a second user in a shared workspace all hit walls. The core product a signed-in single operator uses today is largely B/A-grade. Fixing the Wave-0 blockers plus the security/access and deployment-truth items moves this to a defensible public v1.
 
-**Bottom line:** ship-blocked on ~13 confirmed blockers (Wave 0–2 below). Estimated effort to green the gates: one focused multi-wave program (see `PRPs/active/public-release/PRP.md`).
+**Bottom line:** ship-blocked on ~13 confirmed blockers (Wave 0–2 below). Estimated effort to green the gates: one focused multi-wave program (see `PRPs/completed/public-release/PRP.md`).
 
 ### 1.1 Release-blocking list (must clear before public v1)
 
@@ -321,4 +321,4 @@ A public v1 tag may be cut only when **all Wave-0 and Wave-1 items are green** a
 
 ---
 
-*Companion deliverable: the full remediation program is specified as numbered, waved items in `PRPs/active/public-release/PRP.md` (index at `PRPs/active/public-release/README.md`).*
+*Companion deliverable: the full remediation program is specified as numbered, waved items in `PRPs/completed/public-release/PRP.md` (index at `PRPs/completed/public-release/README.md`).*

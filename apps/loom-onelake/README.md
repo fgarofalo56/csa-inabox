@@ -114,5 +114,5 @@ silently (no Fabric gate, no regression).
 ## Related
 
 - `PRPs/active/next-waves/PRP-loom-hyperscale-custom-components.md` §5 (Component 1)
-- `PRPs/active/fabric-parity/appendix-onelake.md` — the 46/46 `strong` grade this promotes
+- `PRPs/completed/fabric-parity/appendix-onelake.md` — the 46/46 `strong` grade this promotes
 - `apps/fiab-console/lib/azure/lakehouse-abfss.ts` — the resolution semantics reused

@@ -57,7 +57,7 @@ Recommended next step: restart each Container App via
 ## Plumbing committed in this session
 
 - `apps/fiab-console/tests/uat-console-smoke.mjs` — Playwright smoke test (URL points at `loom-console.internal.delightfulmoss-…`)
-- `uat-runner-final.sh` — base64-bundled runner, installs Playwright locally on the jumpbox, runs the smoke test, writes screenshots + JSON to `/tmp/loom-uat/`
+- `scripts/csa-loom/uat-runner-final.sh` — base64-bundled runner, installs Playwright locally on the jumpbox, runs the smoke test, writes screenshots + JSON to `/tmp/loom-uat/`
 - Private DNS zone `delightfulmoss-96202bfd.eastus2.azurecontainerapps.io` — manually created in `rg-csa-loom-admin-eastus2`, wildcard A records, linked to hub + DLZ VNets
 - Container App `loom-console` — probes stripped via REST PUT, new `loom-console--0000001` revision Healthy
 

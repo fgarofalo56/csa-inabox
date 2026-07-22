@@ -14,7 +14,7 @@
 > Sources consulted: direct code review of `apps/fiab-console/lib/**`
 > (canvas/editor/catalog/apps subsystems, with file:line evidence per item);
 > the die-hard rules `.claude/rules/no-vaporware.md`, `no-fabric-dependency.md`,
-> `ui-parity.md`; the sibling `PRPs/active/fabric-parity/` effort (completeness
+> `ui-parity.md`; the sibling `PRPs/completed/fabric-parity/` effort (completeness
 > vs. Fabric is tracked there — **this PRP deliberately does not duplicate it**);
 > and grounding docs for each source-product UX pattern (Microsoft Learn, Azure
 > Web PubSub / Durable Functions / Retail Prices API / Event Grid / Monitor,

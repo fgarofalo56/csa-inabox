@@ -20,7 +20,7 @@
 > `lib/components/admin/surge-protection-panel.tsx`); the deployable-service template
 > `platform/runners/script-runner/**` + `platform/fiab/bicep/modules/admin-plane/script-runner-app.bicep`
 > and `apps/copilot-maf/**`; and the existing fabric-parity appendices
-> `PRPs/active/fabric-parity/appendix-onelake.md` / `appendix-power-bi.md` / `appendix-platform-alm.md`.
+> `PRPs/completed/fabric-parity/appendix-onelake.md` / `appendix-power-bi.md` / `appendix-platform-alm.md`.
 > **Hard prerequisite:** `PRPs/active/next-waves/PRP-performance-scale-parity.md` — **PSR-1**
 > (benchmark harness + `/admin/performance` + persisted trend) and **PSR-2** (CI perf gate) must
 > land **before** Wave H1. For this epic the die-hard `no-vaporware.md` receipt IS a PSR-1
@@ -599,8 +599,8 @@ never to a Fabric requirement).
 
 - `PRPs/active/next-waves/PRP-performance-scale-parity.md` — **hard prerequisite** (PSR-1/PSR-2 harness);
   supporting HYP-14/15 reference PSR-3/PSR-5/PSR-6 (do not duplicate).
-- `PRPs/active/fabric-parity/appendix-onelake.md` — the 46/46 `strong` grade + 7 residual gaps HYP-4 closes.
-- `PRPs/active/fabric-parity/appendix-power-bi.md` — G1 `LOOM_SEMANTIC_BACKEND` selector Loom Direct Lake extends.
-- `PRPs/active/fabric-parity/appendix-platform-alm.md` — GAP 2 Capacity-Metrics UI HYP-12 closes.
+- `PRPs/completed/fabric-parity/appendix-onelake.md` — the 46/46 `strong` grade + 7 residual gaps HYP-4 closes.
+- `PRPs/completed/fabric-parity/appendix-power-bi.md` — G1 `LOOM_SEMANTIC_BACKEND` selector Loom Direct Lake extends.
+- `PRPs/completed/fabric-parity/appendix-platform-alm.md` — GAP 2 Capacity-Metrics UI HYP-12 closes.
 - `PRPs/active/enterprise-hardening/appendix-capacity-cost-governance.md` — the cost/chargeback policy layer the Broker's LCU ledger feeds.
 - `platform/runners/script-runner/**` + `apps/copilot-maf/**` — the deployable-service template all three services follow.

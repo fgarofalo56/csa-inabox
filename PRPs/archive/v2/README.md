@@ -17,7 +17,7 @@
 | PRP-27 OneLake-equivalent unified namespace | Shipped — `apps/loom-onelake` sibling service + OneLake parity workload (`docs/fiab/workloads/onelake-parity.md`) |
 | PRP-28 APIM API builder for data sharing | Shipped — `publish-as-api` Weave edge + APIM (`apim.bicep`); AI-gateway via model-strategy M5/M6 |
 | PRP-29 Function App management Console pane | Shipped — service-navigator program (typed resource navigators on real REST) |
-| PRP-30 AI/ML API management Console pane | Shipped — Foundry hub editor + AIF-12 model tier router + APIM AI-gateway (`PRPs/active/model-strategy/PRP.md`) |
+| PRP-30 AI/ML API management Console pane | Shipped — Foundry hub editor + AIF-12 model tier router + APIM AI-gateway (`PRPs/completed/model-strategy/PRP.md`) |
 | PRP-31 Developer portal + dev tools | Shipped — Learning Hub `/learn` + `apps/loom-cli` |
 | PRP-32 Metadata-driven data source onboarding | Shipped — mirrored-database CDC + Copy Job + connector catalog + Get-data Loom-item source (#1927) |
 | PRP-33 Domain management | Shipped — multi-library domain designer (#1924: Federal Civilian, Defense & Intel, State & Local, Commercial) + domain→Unity Catalog governance sync (#1926/#1930) |

@@ -9,7 +9,7 @@
 > each verified via Grep/Read against `apps/fiab-console` on 2026-07-08 and grounded in Microsoft
 > Learn + the 2026 Fabric blog wave (FabCon Atlanta March 2026, Feb/April/June 2026 monthly
 > summaries). Prior baselines: `docs/fiab/prp/{data-engineering,data-factory,real-time-intelligence,data-science,power-bi,databases,platform,governance-security}.md`
-> (2026-06-26) and `PRPs/active/fabric-parity/`.
+> (2026-06-26) and `PRPs/completed/fabric-parity/`.
 > **Governing rules (die-hard, non-negotiable):** `.claude/rules/no-fabric-dependency.md`
 > (Azure-native is the DEFAULT; Fabric/Power BI are opt-in only, never a gate),
 > `.claude/rules/no-vaporware.md` (real backend + receipt per merge),

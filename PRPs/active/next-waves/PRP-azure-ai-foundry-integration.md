@@ -8,7 +8,7 @@
 **Sources consulted:**
 - Two live research streams (2026-07-08): (A) *Azure AI Foundry (classic) + Azure AI Search integration depth in Loom*; (B) *Azure AI Foundry Agent Service — agents, multi-agent workflows, tool catalog, AgentOps, model router, memory*.
 - In-repo parity docs: `docs/fiab/parity/ai-foundry.md` (rev.3 — 21 built / 17 partial / 2 gated / 4 missing of 44 rows), `docs/fiab/parity/ai-search.md` (graded B).
-- Existing PRPs: `PRPs/active/fabric-parity/appendix-copilot-ai.md`, `docs/fiab/prp/copilot-ai.md` (T7 typed-result renderer, T12 enrichment, T24 MAF, T25 usage metering), `PRPs/active/enterprise-hardening/appendix-scale-aoai-ptu.md`.
+- Existing PRPs: `PRPs/completed/fabric-parity/appendix-copilot-ai.md`, `docs/fiab/prp/copilot-ai.md` (T7 typed-result renderer, T12 enrichment, T24 MAF, T25 usage metering), `PRPs/active/enterprise-hardening/appendix-scale-aoai-ptu.md`.
 - Microsoft Learn (per-item URLs in each work-item section; agentic retrieval `2026-04-01` REST GA July 2026, Microsoft Agent Framework 1.0 GA April 2026).
 
 ---

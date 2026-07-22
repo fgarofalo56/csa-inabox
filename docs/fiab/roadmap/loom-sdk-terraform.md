@@ -4,7 +4,7 @@
 > Neither a language SDK (`packages/loom-sdk-*`) nor a Terraform provider
 > (`terraform-provider-loom`) exists in the repository today. Nothing here is
 > installable yet — it is the design and sequencing for the developer-platform
-> Phase 7 (P7) of the [Fabric-parity PRP](../../../PRPs/active/fabric-parity/README.md).
+> Phase 7 (P7) of the [Fabric-parity PRP](../../../PRPs/completed/fabric-parity/README.md).
 > Per `.claude/rules/no-vaporware.md`, this is disclosed as roadmap, not
 > presented as a working feature.
 >
@@ -141,19 +141,19 @@ Terraform provider, but against the Loom REST API and Azure-native backends.
 
 ## Acceptance (per the PRP)
 
-From `PRPs/active/fabric-parity/PHASES.md` (P7):
+From `PRPs/completed/fabric-parity/PHASES.md` (P7):
 
 > `loom` CLI + SDK call the live BFF; a Terraform apply provisions a workspace +
 > items against a live Loom (Azure-native backends, no Fabric on default).
 
 Until those artifacts exist and pass that acceptance test, this remains a
-roadmap item and the [parity ledger](../../../PRPs/active/fabric-parity/README.md)
+roadmap item and the [parity ledger](../../../PRPs/completed/fabric-parity/README.md)
 row stays **❌ (roadmap)** — not claimed as built.
 
 ## Related
 
 - [`../parity/loom-cli.md`](../parity/loom-cli.md) — the shipped CLI this builds on
-- [`../../../PRPs/active/fabric-parity/PHASES.md`](../../../PRPs/active/fabric-parity/PHASES.md) — Phase 7 developer-platform scope
-- [`../../../PRPs/active/fabric-parity/appendix-developer-platform.md`](../../../PRPs/active/fabric-parity/appendix-developer-platform.md) — developer-platform capability inventory
+- [`../../../PRPs/completed/fabric-parity/PHASES.md`](../../../PRPs/completed/fabric-parity/PHASES.md) — Phase 7 developer-platform scope
+- [`../../../PRPs/completed/fabric-parity/appendix-developer-platform.md`](../../../PRPs/completed/fabric-parity/appendix-developer-platform.md) — developer-platform capability inventory
 </content>
 </invoke>
