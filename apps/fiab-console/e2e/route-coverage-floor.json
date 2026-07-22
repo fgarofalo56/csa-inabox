@@ -1,0 +1,62 @@
+{
+  "_owner": "platform-verification (loom-next-level WS-V, V4)",
+  "_why": "Ratchet: every app/**/page.tsx route must stay under route-smoke coverage; the covered/total ratio may only move toward 1.0.",
+  "_unblock": "node scripts/ci/check-route-smoke-floor.mjs --update-baseline (commit the regenerated file with a one-line justification in the PR).",
+  "capturedAt": "2026-07-22T23:39:57.018Z",
+  "total": 121,
+  "enumerable": 113,
+  "covered": 109,
+  "floorRatio": 0.9008,
+  "excludedDynamic": [
+    {
+      "route": "/apps/[id]",
+      "reason": "dynamic segment(s) with no deterministic create-mode fixture — needs a seeded id"
+    },
+    {
+      "route": "/apps/view/[id]",
+      "reason": "dynamic segment(s) with no deterministic create-mode fixture — needs a seeded id"
+    },
+    {
+      "route": "/catalog/[source]/[id]",
+      "reason": "dynamic segment(s) with no deterministic create-mode fixture — needs a seeded id"
+    },
+    {
+      "route": "/data-products/[id]",
+      "reason": "dynamic segment(s) with no deterministic create-mode fixture — needs a seeded id"
+    },
+    {
+      "route": "/items/[type]/[id]/permissions",
+      "reason": "dynamic segment(s) with no deterministic create-mode fixture — needs a seeded id"
+    },
+    {
+      "route": "/workload-hub/[workload]/[type]",
+      "reason": "dynamic segment(s) with no deterministic create-mode fixture — needs a seeded id"
+    },
+    {
+      "route": "/workload-hub/[workload]",
+      "reason": "dynamic segment(s) with no deterministic create-mode fixture — needs a seeded id"
+    },
+    {
+      "route": "/workspaces/[id]",
+      "reason": "dynamic segment(s) with no deterministic create-mode fixture — needs a seeded id"
+    }
+  ],
+  "knownIssues": [
+    {
+      "route": "/admin/capacity",
+      "reason": "mounts clean (console/network green) but renders no <h1> — capacity dashboard shell without PageShell; adding the heading is a ratchet-down PR (measured live 2026-07-22)"
+    },
+    {
+      "route": "/copilot",
+      "reason": "mounts clean (console/network green) but renders no <h1> — chat shell without PageShell; adding the heading is a ratchet-down PR (measured live 2026-07-22)"
+    },
+    {
+      "route": "/copilot/skills",
+      "reason": "mounts clean (console/network green) but renders no <h1> — chat-skills shell without PageShell; adding the heading is a ratchet-down PR (measured live 2026-07-22)"
+    },
+    {
+      "route": "/thread",
+      "reason": "mounts clean (console/network green) but renders no <h1> — thread chat shell without PageShell; adding the heading is a ratchet-down PR (measured live 2026-07-22)"
+    }
+  ]
+}
