@@ -14,12 +14,11 @@
  */
 
 import { NextRequest } from 'next/server';
-import { getSession } from '@/lib/auth/session';
-import { requireTenantAdmin } from '@/lib/auth/feature-gate';
 import { apiOk, apiError } from '@/lib/api/respond';
 import { copilotSessionsContainer } from '@/lib/azure/cosmos-client';
 import { deriveTurnTraces, type TurnTrace } from '@/lib/copilot/turn-trace';
 import { redact } from '@/lib/feedback/redaction';
+import { withTenantAdmin } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -34,10 +33,7 @@ function redactDeep<T>(value: T): T {
   }
 }
 
-export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  const gate = requireTenantAdmin(session);
-  if (gate) return gate;
+export const GET = withTenantAdmin<{ id: string }>(async (req: NextRequest, { params }) => {
 
   const { id } = await params;
   if (!id) return apiError('session id is required', 400);
@@ -61,4 +57,4 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
   } catch (e) {
     return apiError(e instanceof Error ? e.message : String(e), 500, { code: 'trace_failed' });
   }
-}
+});

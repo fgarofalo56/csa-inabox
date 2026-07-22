@@ -8,7 +8,6 @@
  * step needed to fix it, not a blank chat box.
  */
 import { NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import {
   resolveAoaiTarget,
   getRegistry,
@@ -18,15 +17,12 @@ import {
 import { isSafetyConfigured } from '@/lib/azure/foundry-client';
 import { loadTenantCopilotConfig } from '@/lib/azure/copilot-config-store';
 import { detectLoomCloud, isGovCloud } from '@/lib/azure/cloud-endpoints';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET() {
-  const session = getSession();
-  if (!session) {
-    return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  }
+export const GET = withSession(async (_req, { session }) => {
 
   // Active sovereign boundary — surfaced regardless of AOAI config so the pane
   // can badge the cloud and pick the right AI Studio portal deep-link.
@@ -116,4 +112,4 @@ export async function GET() {
     sessions: { recent: recentSessionCount },
     ready: aoai.ok && tools.length > 0,
   });
-}
+});

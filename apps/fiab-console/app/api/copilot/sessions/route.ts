@@ -23,7 +23,6 @@
  * contacted; works with LOOM_DEFAULT_FABRIC_WORKSPACE unset.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import {
   listSessions,
   resolveAoaiTarget,
@@ -33,15 +32,12 @@ import { loadTenantCopilotConfig } from '@/lib/azure/copilot-config-store';
 import { copilotSessionsContainer } from '@/lib/azure/cosmos-client';
 import { aoaiChat } from '@/lib/azure/aoai-chat-client';
 import { buildCellFixMessages, parseCellFixResponse } from '@/lib/copilot/notebook-tools';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET() {
-  const session = getSession();
-  if (!session) {
-    return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  }
+export const GET = withSession(async (_req, { session }) => {
   const userOid = session.claims.oid || session.claims.upn || session.claims.email || 'unknown';
   try {
     const sessions = await listSessions(userOid);
@@ -49,7 +45,7 @@ export async function GET() {
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }
-}
+});
 
 interface CellFixBody {
   mode?: string;
@@ -67,11 +63,7 @@ interface CellFixBody {
   executedAtUtc?: string;
 }
 
-export async function POST(req: NextRequest) {
-  const session = getSession();
-  if (!session) {
-    return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  }
+export const POST = withSession(async (req: NextRequest, { session }) => {
   const userOid = session.claims.oid || session.claims.upn || session.claims.email || 'unknown';
 
   const body = (await req.json().catch(() => ({}))) as CellFixBody;
@@ -211,4 +203,4 @@ export async function POST(req: NextRequest) {
   }
 
   return NextResponse.json({ ok: true, sessionId, proposedCode, summary, rootCause });
-}
+});

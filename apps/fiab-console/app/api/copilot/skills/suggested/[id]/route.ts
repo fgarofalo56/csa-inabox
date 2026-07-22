@@ -17,14 +17,13 @@
  * are re-validated by the store's custom-skill validator. Azure-native (no Fabric).
  */
 import type { NextRequest } from 'next/server';
-import { getSession } from '@/lib/auth/session';
-import { requireTenantAdmin } from '@/lib/auth/feature-gate';
 import { apiOk, apiError, apiServerError } from '@/lib/api/respond';
 import {
   promoteSuggestedSkill,
   dismissSuggestedSkill,
   type CustomSkillInput,
 } from '@/lib/azure/skill-store';
+import { withTenantAdmin } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -45,13 +44,10 @@ function coerceEdits(raw: unknown): Partial<CustomSkillInput> | undefined {
   return out;
 }
 
-export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  const gate = requireTenantAdmin(session);
-  if (gate) return gate;
+export const POST = withTenantAdmin<{ id: string }>(async (req: NextRequest, { session, params }) => {
   const tid = session!.claims.tid || session!.claims.oid;
   const oid = session!.claims.oid || session!.claims.upn || session!.claims.email || 'unknown';
-  const { id } = await ctx.params;
+  const { id } = params;
   if (!id) return apiError('id required', 400);
 
   let body: Record<string, unknown> = {};
@@ -73,4 +69,4 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     if (e?.name === 'SkillStoreError') return apiError(e.message, e.status ?? 400, { code: e.code });
     return apiServerError(e, 'failed to act on suggested skill', 'suggested_action_failed');
   }
-}
+});

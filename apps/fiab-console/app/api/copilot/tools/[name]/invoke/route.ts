@@ -14,24 +14,17 @@
  * itself returns (truncated to 64KB for safety).
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { getRegistry, NoAoaiDeploymentError, type ToolContext } from '@/lib/azure/copilot-orchestrator';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 const MAX_RESULT_BYTES = 64 * 1024;
 
-export async function POST(
-  req: NextRequest,
-  ctx: { params: { name: string } },
-) {
-  const session = getSession();
-  if (!session) {
-    return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  }
+export const POST = withSession<{ name: string }>(async (req: NextRequest, { session, params }) => {
 
-  const name = decodeURIComponent(ctx.params.name || '');
+  const name = decodeURIComponent(params.name || '');
   if (!name) {
     return NextResponse.json({ ok: false, error: 'tool name required' }, { status: 400 });
   }
@@ -93,4 +86,4 @@ export async function POST(
       { status: 502 },
     );
   }
-}
+});

@@ -16,17 +16,15 @@
  * (no-fabric-dependency.md): Cosmos via LOOM_COSMOS_ENDPOINT; no Fabric host.
  */
 import type { NextRequest } from 'next/server';
-import { getSession } from '@/lib/auth/session';
-import { apiOk, apiError, apiUnauthorized, apiServerError } from '@/lib/api/respond';
+import { apiOk, apiError, apiServerError } from '@/lib/api/respond';
 import { listSkillsForUser, createCustomSkill } from '@/lib/azure/skill-store';
 import { resolveActiveSkills } from '@/lib/copilot/skill-registry-core';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET(req: NextRequest) {
-  const session = getSession();
-  if (!session) return apiUnauthorized();
+export const GET = withSession(async (req: NextRequest, { session }) => {
   const oid = session.claims.oid || session.claims.upn || session.claims.email || 'unknown';
   const tid = session.claims.tid || undefined;
   try {
@@ -48,11 +46,9 @@ export async function GET(req: NextRequest) {
   } catch (e) {
     return apiServerError(e, 'failed to list skills', 'skill_list_failed');
   }
-}
+});
 
-export async function POST(req: NextRequest) {
-  const session = getSession();
-  if (!session) return apiUnauthorized();
+export const POST = withSession(async (req: NextRequest, { session }) => {
   const oid = session.claims.oid || session.claims.upn || session.claims.email || 'unknown';
   const tid = session.claims.tid || oid; // fall back to oid for single-operator bootstrap
   let body: Record<string, unknown> = {};
@@ -73,4 +69,4 @@ export async function POST(req: NextRequest) {
     if (e?.name === 'SkillStoreError') return apiError(e.message, e.status ?? 400, { code: e.code });
     return apiServerError(e, 'failed to create skill', 'skill_create_failed');
   }
-}
+});

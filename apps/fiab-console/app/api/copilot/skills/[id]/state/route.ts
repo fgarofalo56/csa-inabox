@@ -13,20 +13,18 @@
  * Azure-native (no-fabric-dependency.md).
  */
 import type { NextRequest } from 'next/server';
-import { getSession } from '@/lib/auth/session';
-import { apiOk, apiError, apiUnauthorized, apiServerError } from '@/lib/api/respond';
+import { apiOk, apiError, apiServerError } from '@/lib/api/respond';
 import { requireTenantAdmin } from '@/lib/auth/feature-gate';
 import { setUserSkillState, setTenantSkillDefault } from '@/lib/azure/skill-store';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return apiUnauthorized();
+export const PATCH = withSession<{ id: string }>(async (req: NextRequest, { session, params }) => {
   const oid = session.claims.oid || session.claims.upn || session.claims.email || 'unknown';
   const tid = session.claims.tid || oid;
-  const id = (await ctx.params).id;
+  const id = params.id;
   let body: { enabled?: unknown; scope?: unknown } = {};
   try { body = await req.json(); } catch { /* validated below */ }
   if (typeof body.enabled !== 'boolean') {
@@ -47,4 +45,4 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
   } catch (e) {
     return apiServerError(e, 'failed to update skill state', 'skill_state_failed');
   }
-}
+});
