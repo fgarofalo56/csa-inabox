@@ -103,6 +103,25 @@ jobs:
           else
             TAG="${{ inputs.image_tag }}"
             EXPECTED="${{ inputs.expected_sha }}"
+            # ':latest' is NOT deterministic — it races the ACR image build (a roll
+            # dispatched minutes after a merge re-deploys the PREVIOUS image and
+            # reports success; happened live 2026-07-22). Resolve 'latest' to the
+            # newest main SHA whose image build actually CONCLUDED success, and
+            # roll that immutable SHA tag instead.
+            if [[ "$TAG" == "latest" ]]; then
+              BUILT_SHA=$(gh api "repos/${{ github.repository }}/actions/workflows/build-fiab-images-acr-tasks.yml/runs?branch=main&status=success&per_page=1" \
+                --jq '.workflow_runs[0].head_sha' 2>/dev/null || echo "")
+              if ! [[ "$BUILT_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+                echo "::error::Could not resolve a completed image build on main — refusing to roll ':latest' blind. Pass an explicit SHA image_tag."
+                exit 1
+              fi
+              if [[ "$BUILT_SHA" != "${{ github.sha }}" ]]; then
+                echo "::warning::Newest completed image build is $BUILT_SHA, but main HEAD is ${{ github.sha }} — the HEAD image is not built yet. Rolling the newest BUILT image ($BUILT_SHA) deterministically."
+              fi
+              TAG="$BUILT_SHA"
+              [[ -z "$EXPECTED" ]] && EXPECTED="${BUILT_SHA:0:8}"
+              echo "::notice::Resolved ':latest' → immutable tag $TAG (newest successfully built main commit)."
+            fi
           fi
           URL="${{ inputs.url }}"
           [[ -z "$URL" ]] && URL='https://csa-loom.limitlessdata.ai'
@@ -159,6 +178,23 @@ jobs:
           elif [[ -z "$CONCL" || "$CONCL" == "null" ]]; then
             echo "::error::No 'vitest (node 20)' check-run found for $SHA — refusing to roll an unverified commit. Re-run CI on this commit, roll a tested SHA, or (emergency only) dispatch with skip_uat=true."
             exit 1
+          elif [[ "$CONCL" == "cancelled" ]]; then
+            # A push-run can be auto-cancelled when a newer push supersedes it
+            # (concurrency), even though the commit's content was fully tested on
+            # its PR. Accept IFF the commit is an ancestor of current main AND
+            # main-HEAD's vitest concluded success (main includes this content).
+            MAIN_SHA=$(gh api "repos/${{ github.repository }}/branches/main" --jq '.commit.sha')
+            CMP=$(gh api "repos/${{ github.repository }}/compare/$SHA...$MAIN_SHA" --jq '{status: .status, behind: .behind_by}' 2>/dev/null || echo "")
+            STATUS=$(echo "$CMP" | jq -r '.status // empty')
+            BEHIND=$(echo "$CMP" | jq -r '.behind // 1')
+            MAIN_CONCL=$(gh api "repos/${{ github.repository }}/commits/$MAIN_SHA/check-runs?per_page=100" \
+              --jq '[.check_runs[] | select(.name=="vitest (node 20)")] | sort_by(.started_at) | last | .conclusion' 2>/dev/null || echo "")
+            if [[ ( "$STATUS" == "ahead" || "$STATUS" == "identical" ) && "$BEHIND" == "0" && "$MAIN_CONCL" == "success" ]]; then
+              echo "::notice::vitest for $SHA was superseded (cancelled), but the commit is an ancestor of main ($MAIN_SHA) whose vitest concluded success — content is verified, proceeding."
+            else
+              echo "::error::'vitest (node 20)' concluded 'cancelled' for $SHA and it could not be verified via main (status=$STATUS behind=$BEHIND main_vitest=$MAIN_CONCL) — refusing to roll. Fix CI or (emergency only) dispatch with skip_uat=true."
+              exit 1
+            fi
           else
             echo "::error::'vitest (node 20)' concluded '$CONCL' (not success) for $SHA — refusing to roll a failing commit. Fix CI or (emergency only) dispatch with skip_uat=true."
             exit 1
