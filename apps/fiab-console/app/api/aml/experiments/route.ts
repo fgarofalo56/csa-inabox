@@ -17,8 +17,8 @@
  * the editor renders a Fluent MessageBar naming the variable (IL5 path) instead
  * of an error banner.
  */
-import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { NextResponse } from 'next/server';
+import { withSession } from '@/lib/api/route-toolkit';
 import {
   searchExperiments,
   MlflowNotConfiguredError,
@@ -28,10 +28,7 @@ import {
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-
+export const GET = withSession(async (req) => {
   const url = new URL(req.url);
   const filter = url.searchParams.get('filter') || undefined;
   const maxResultsRaw = url.searchParams.get('maxResults');
@@ -58,4 +55,4 @@ export async function GET(req: NextRequest) {
       { status },
     );
   }
-}
+});

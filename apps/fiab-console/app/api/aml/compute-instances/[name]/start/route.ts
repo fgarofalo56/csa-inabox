@@ -10,17 +10,14 @@
  * kicks a Stopped CI when it's selected. Azure-native — no Fabric dependency.
  */
 import { NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { withSession } from '@/lib/api/route-toolkit';
 import { startCI, getCI, amlIsConfigured, AmlNotConfiguredError, AmlError } from '@/lib/azure/aml-client';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function POST(_req: Request, ctx: { params: Promise<{ name: string }> }) {
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-
-  const name = decodeURIComponent((await ctx.params).name);
+export const POST = withSession<{ name: string }>(async (_req, { params }) => {
+  const name = decodeURIComponent(params.name);
   if (!name) return NextResponse.json({ ok: false, error: 'compute instance name required' }, { status: 400 });
 
   if (!amlIsConfigured()) {
@@ -42,4 +39,4 @@ export async function POST(_req: Request, ctx: { params: Promise<{ name: string 
     const status = e instanceof AmlError ? e.status : 502;
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status });
   }
-}
+});

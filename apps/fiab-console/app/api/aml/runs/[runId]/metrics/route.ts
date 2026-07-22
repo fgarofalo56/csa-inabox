@@ -17,8 +17,8 @@
  * Honest gate: 200 with { ok: true, configured: false, missing, hint } when the
  * AML env / LOOM_MLFLOW_TRACKING_URI isn't set.
  */
-import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { NextResponse } from 'next/server';
+import { withSession } from '@/lib/api/route-toolkit';
 import {
   getRun,
   getMetricHistory,
@@ -29,12 +29,8 @@ import {
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET(req: NextRequest, ctx: { params: Promise<{ runId: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-
-  const { runId: runIdRaw } = await ctx.params;
-  const runId = decodeURIComponent(runIdRaw);
+export const GET = withSession<{ runId: string }>(async (req, { params }) => {
+  const runId = decodeURIComponent(params.runId);
   const metricKey = new URL(req.url).searchParams.get('metricKey') || undefined;
 
   try {
@@ -67,4 +63,4 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ runId: stri
       { status },
     );
   }
-}
+});

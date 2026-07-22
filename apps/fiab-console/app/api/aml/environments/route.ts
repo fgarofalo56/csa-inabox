@@ -25,8 +25,9 @@
  * Honest infra-gate: when no AML workspace is configured, list/create return 503
  * with the exact env vars to set; the editor renders a MessageBar.
  */
-import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { NextResponse } from 'next/server';
+import { withSession } from '@/lib/api/route-toolkit';
+import { apiHonestGateError } from '@/lib/api/gate-envelope';
 import { assertOwner } from '@/lib/auth/workspace-guard';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
 import type { WorkspaceItem } from '@/lib/types/workspace';
@@ -38,17 +39,20 @@ import {
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+// WS-D2: the AML-workspace not-configured honest gate normalized onto the
+// shared gate envelope (svc-aml). Same 503 status + the exact missing LOOM_*
+// vars the AML environments client names; only the response SHAPE changes
+// (now { ok:false, gated:true, gate:{ id:'svc-aml', … } } with the back-compat
+// error/missing mirrors). The AmlEnvError (real backend error) branch is intact.
 function fail(e: any) {
   if (e instanceof AmlEnvNotConfiguredError) {
-    return NextResponse.json({ ok: false, error: e.message, hint: e.hint, notDeployed: true }, { status: 503 });
+    return apiHonestGateError('svc-aml', { missing: e.missing, message: e.message });
   }
   const status = e instanceof AmlEnvError ? e.status : 502;
   return NextResponse.json({ ok: false, error: e?.message || String(e), body: e?.body }, { status });
 }
 
-export async function GET(req: NextRequest) {
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const GET = withSession(async (req) => {
   const name = req.nextUrl.searchParams.get('name');
   const version = req.nextUrl.searchParams.get('version') || undefined;
   try {
@@ -60,11 +64,9 @@ export async function GET(req: NextRequest) {
     const environments = await listEnvironments();
     return NextResponse.json({ ok: true, environments });
   } catch (e: any) { return fail(e); }
-}
+});
 
-export async function POST(req: NextRequest) {
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const POST = withSession(async (req) => {
   const body = await req.json().catch(() => ({}));
   const name = String(body?.name || '').trim();
   const image = String(body?.image || '').trim();
@@ -81,7 +83,7 @@ export async function POST(req: NextRequest) {
     });
     return NextResponse.json({ ok: true, environment });
   } catch (e: any) { return fail(e); }
-}
+});
 
 async function loadNotebook(id: string, workspaceId: string): Promise<WorkspaceItem | null> {
   const items = await itemsContainer();
@@ -91,9 +93,7 @@ async function loadNotebook(id: string, workspaceId: string): Promise<WorkspaceI
   } catch (e: any) { if (e?.code === 404) return null; throw e; }
 }
 
-export async function PATCH(req: NextRequest) {
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const PATCH = withSession(async (req, { session }) => {
   const action = req.nextUrl.searchParams.get('action') || 'attach';
   const body = await req.json().catch(() => ({}));
   const notebookId = String(body?.notebookId || '').trim();
@@ -101,7 +101,7 @@ export async function PATCH(req: NextRequest) {
   if (!notebookId || !workspaceId) {
     return NextResponse.json({ ok: false, error: 'notebookId + workspaceId required' }, { status: 400 });
   }
-  if (!(await assertOwner(workspaceId, s.claims.oid))) {
+  if (!(await assertOwner(workspaceId, session.claims.oid))) {
     return NextResponse.json({ ok: false, error: 'notebook not found' }, { status: 404 });
   }
   try {
@@ -143,4 +143,4 @@ export async function PATCH(req: NextRequest) {
 
     return NextResponse.json({ ok: false, error: `unsupported action: ${action}` }, { status: 400 });
   } catch (e: any) { return fail(e); }
-}
+});

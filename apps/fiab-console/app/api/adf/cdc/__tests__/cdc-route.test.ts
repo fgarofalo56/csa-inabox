@@ -82,8 +82,12 @@ describe('/api/adf/cdc', () => {
     const res = await GET(req('/api/adf/cdc'));
     expect(res.status).toBe(503);
     const body = await res.json();
+    // WS-D2: normalized gate envelope — back-compat `code` mirror preserved,
+    // `missing` normalized to a string[], plus the `gated`/`gate` block.
     expect(body.code).toBe('not_configured');
-    expect(body.missing).toBe('LOOM_ADF_NAME');
+    expect(body.gated).toBe(true);
+    expect(body.gate?.id).toBe('svc-adf');
+    expect(body.missing).toContain('LOOM_ADF_NAME');
   });
 
   it('GET list returns compact rows with source/target counts', async () => {

@@ -64,7 +64,10 @@ describe('GET /api/apim/developer-portal', () => {
     expect(res.status).toBe(503);
     const j = await res.json();
     expect(j.code).toBe('not_configured');
-    expect(j.missing).toBe('LOOM_SUBSCRIPTION_ID');
+    // WS-D2: normalized gate envelope — `missing` is an array + `gate` block.
+    expect(j.missing).toEqual(['LOOM_SUBSCRIPTION_ID']);
+    expect(j.gated).toBe(true);
+    expect(j.gate.id).toBe('svc-apim');
     expect(getServiceInfo).not.toHaveBeenCalled();
   });
 

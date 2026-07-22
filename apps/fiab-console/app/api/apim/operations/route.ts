@@ -8,26 +8,27 @@
  * Honest 503 gate when the APIM service is unset. No mocks.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { apimConfigGate, listOperations, ApimError } from '@/lib/azure/apim-client';
+import { apiHonestGateError } from '@/lib/api/gate-envelope';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+// WS-D2: APIM config gate normalized onto the shared svc-apim gate envelope.
 function gate() {
   const g = apimConfigGate();
   if (g) {
-    return NextResponse.json(
-      { ok: false, code: 'not_configured', error: `APIM service not configured: set ${g.missing}.`, missing: g.missing },
-      { status: 503 },
-    );
+    return apiHonestGateError('svc-apim', {
+      missing: [g.missing],
+      message: `APIM service not configured: set ${g.missing}.`,
+    });
   }
   return null;
 }
 
-export async function GET(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+// WS-D1: session-only route adopted onto `withSession`.
+export const GET = withSession(async (req: NextRequest) => {
   const g = gate(); if (g) return g;
   const apiId = req.nextUrl.searchParams.get('apiId')?.trim();
   if (!apiId) return NextResponse.json({ ok: false, error: 'apiId is required' }, { status: 400 });
@@ -37,4 +38,4 @@ export async function GET(req: NextRequest) {
     const status = e instanceof ApimError ? e.status : 502;
     return NextResponse.json({ ok: false, error: e?.message || String(e), body: e?.body }, { status });
   }
-}
+});

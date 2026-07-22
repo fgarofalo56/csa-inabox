@@ -23,8 +23,9 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { withFactoryFromRequest } from '@/lib/azure/adf-factory-context';
+import { apiHonestGateError } from '@/lib/api/gate-envelope';
+import { withSession } from '@/lib/api/route-toolkit';
 import {
   adfCdcConfigGate, listAdfCdcs, getAdfCdc, upsertAdfCdc,
   startAdfCdc, stopAdfCdc, deleteAdfCdc, statusAdfCdc, previewAdfCdcTarget,
@@ -36,13 +37,16 @@ export const dynamic = 'force-dynamic';
 
 const NAME_RE = /^[A-Za-z0-9_-]{1,260}$/;
 
+// WS-D2: the ADF-CDC config gate normalized onto the shared gate envelope. The
+// CHECK is unchanged (`adfCdcConfigGate()`); only the response shape is
+// normalized. Kept inside the factory closure so it reflects the selected factory.
 function gate() {
   const g = adfCdcConfigGate();
   if (g) {
-    return NextResponse.json(
-      { ok: false, code: 'not_configured', error: `Data Factory not configured: set ${g.missing}.`, missing: g.missing },
-      { status: 503 },
-    );
+    return apiHonestGateError('svc-adf', {
+      missing: [g.missing],
+      message: `Data Factory not configured: set ${g.missing}.`,
+    });
   }
   return null;
 }
@@ -82,50 +86,46 @@ function detail(c: AdfCdc) {
   };
 }
 
-export async function GET(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  return withFactoryFromRequest(req, async () => {
-    const g = gate(); if (g) return g;
+// WS-D1: session-only routes adopted onto `withSession`. The factory scope +
+// the (normalized) gate stay inside the wrapped body exactly as before.
+export const GET = withSession((req: NextRequest) => withFactoryFromRequest(req, async () => {
+  const g = gate(); if (g) return g;
 
-    const name = req.nextUrl.searchParams.get('name')?.trim();
-    const wantStatus = req.nextUrl.searchParams.get('status');
-    const wantPreview = req.nextUrl.searchParams.get('preview');
+  const name = req.nextUrl.searchParams.get('name')?.trim();
+  const wantStatus = req.nextUrl.searchParams.get('status');
+  const wantPreview = req.nextUrl.searchParams.get('preview');
 
-    try {
-      if (name) {
-        if (!NAME_RE.test(name)) return NextResponse.json({ ok: false, error: 'invalid name' }, { status: 400 });
-        // Lightweight live-status poll (used by the editor while Running).
-        if (wantStatus) {
-          const status = await statusAdfCdc(name);
-          return NextResponse.json({ ok: true, status });
-        }
-        // Change-data preview — read the rows the CDC resource landed in its
-        // Delta target via Synapse Serverless OPENROWSET FORMAT='DELTA'.
-        if (wantPreview) {
-          const entity = req.nextUrl.searchParams.get('entity')?.trim() || undefined;
-          if (entity && entity.length > 260) {
-            return NextResponse.json({ ok: false, error: 'invalid entity' }, { status: 400 });
-          }
-          const rowsParam = Number(req.nextUrl.searchParams.get('rows'));
-          const rowLimit = Number.isFinite(rowsParam) && rowsParam > 0 ? rowsParam : 100;
-          const preview = await previewAdfCdcTarget(name, entity, rowLimit);
-          return NextResponse.json({ ok: true, preview });
-        }
-        const c = await getAdfCdc(name);
-        return NextResponse.json({ ok: true, cdc: detail(c) });
+  try {
+    if (name) {
+      if (!NAME_RE.test(name)) return NextResponse.json({ ok: false, error: 'invalid name' }, { status: 400 });
+      // Lightweight live-status poll (used by the editor while Running).
+      if (wantStatus) {
+        const status = await statusAdfCdc(name);
+        return NextResponse.json({ ok: true, status });
       }
-      const cdcs = (await listAdfCdcs()).map(summarize);
-      return NextResponse.json({ ok: true, cdcs });
-    } catch (e: any) {
-      return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
+      // Change-data preview — read the rows the CDC resource landed in its
+      // Delta target via Synapse Serverless OPENROWSET FORMAT='DELTA'.
+      if (wantPreview) {
+        const entity = req.nextUrl.searchParams.get('entity')?.trim() || undefined;
+        if (entity && entity.length > 260) {
+          return NextResponse.json({ ok: false, error: 'invalid entity' }, { status: 400 });
+        }
+        const rowsParam = Number(req.nextUrl.searchParams.get('rows'));
+        const rowLimit = Number.isFinite(rowsParam) && rowsParam > 0 ? rowsParam : 100;
+        const preview = await previewAdfCdcTarget(name, entity, rowLimit);
+        return NextResponse.json({ ok: true, preview });
+      }
+      const c = await getAdfCdc(name);
+      return NextResponse.json({ ok: true, cdc: detail(c) });
     }
-  });
-}
+    const cdcs = (await listAdfCdcs()).map(summarize);
+    return NextResponse.json({ ok: true, cdcs });
+  } catch (e: any) {
+    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
+  }
+}));
 
-export async function POST(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const POST = withSession(async (req: NextRequest) => {
   const body = await req.json().catch(() => ({}));
   return withFactoryFromRequest(req, async () => {
     const g = gate(); if (g) return g;
@@ -152,20 +152,16 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
     }
   });
-}
+});
 
-export async function DELETE(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  return withFactoryFromRequest(req, async () => {
-    const g = gate(); if (g) return g;
-    const name = req.nextUrl.searchParams.get('name')?.trim();
-    if (!name) return NextResponse.json({ ok: false, error: 'name query param is required' }, { status: 400 });
-    try {
-      await deleteAdfCdc(name);
-      return NextResponse.json({ ok: true });
-    } catch (e: any) {
-      return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
-    }
-  });
-}
+export const DELETE = withSession((req: NextRequest) => withFactoryFromRequest(req, async () => {
+  const g = gate(); if (g) return g;
+  const name = req.nextUrl.searchParams.get('name')?.trim();
+  if (!name) return NextResponse.json({ ok: false, error: 'name query param is required' }, { status: 400 });
+  try {
+    await deleteAdfCdc(name);
+    return NextResponse.json({ ok: true });
+  } catch (e: any) {
+    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
+  }
+}));

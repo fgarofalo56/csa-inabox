@@ -15,6 +15,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { apiHonestGateError } from '@/lib/api/gate-envelope';
 import {
   kustoConfigGate, loadKustoItem, resolveDatabase, defaultDatabase, resolvedClusterUri, KustoError,
 } from '@/lib/azure/kusto-client';
@@ -51,18 +52,18 @@ export async function guardAdxRequest(req: NextRequest): Promise<AdxGuardResult>
     return { res: NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 }) };
   }
 
+  // WS-D2: the ADX/Kusto config gate normalized onto the shared gate envelope.
+  // The CHECK is unchanged (`kustoConfigGate()`, still gating on
+  // LOOM_KUSTO_CLUSTER_URI); only the response SHAPE is normalized — now
+  // { ok:false, gated:true, gate:{ id:'svc-adx', remediation, fixItHref } } with
+  // the back-compat code/error/missing mirrors intact (same 503, same message).
   const gate = kustoConfigGate();
   if (gate) {
     return {
-      res: NextResponse.json(
-        {
-          ok: false,
-          code: 'not_configured',
-          error: `ADX cluster not configured: set ${gate.missing}.`,
-          missing: gate.missing,
-        },
-        { status: 503 },
-      ),
+      res: apiHonestGateError('svc-adx', {
+        missing: [gate.missing],
+        message: `ADX cluster not configured: set ${gate.missing}.`,
+      }),
     };
   }
 
