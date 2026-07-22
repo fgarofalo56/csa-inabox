@@ -24,8 +24,9 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { withFactoryFromRequest } from '@/lib/azure/adf-factory-context';
+import { apiHonestGateError } from '@/lib/api/gate-envelope';
+import { withSession } from '@/lib/api/route-toolkit';
 import {
   adfConfigGate, DEFAULT_MANAGED_VNET,
   listManagedVnets, ensureManagedVnet,
@@ -38,13 +39,14 @@ export const dynamic = 'force-dynamic';
 // ManagedPrivateEndpoint name: 1-127, start/end alphanumeric or _, inner may include -.
 const PE_NAME_RE = /^[A-Za-z0-9_]([A-Za-z0-9_-]{0,125}[A-Za-z0-9_])?$/;
 
+// WS-D2: ADF config gate normalized onto the shared gate envelope (check unchanged).
 function gate() {
   const g = adfConfigGate();
   if (g) {
-    return NextResponse.json(
-      { ok: false, code: 'not_configured', error: `Data Factory not configured: set ${g.missing}.`, missing: g.missing },
-      { status: 503 },
-    );
+    return apiHonestGateError('svc-adf', {
+      missing: [g.missing],
+      message: `Data Factory not configured: set ${g.missing}.`,
+    });
   }
   return null;
 }
@@ -66,29 +68,23 @@ function approvalNextStep(resourceId: string, peName: string): { note: string; p
   };
 }
 
-export async function GET(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  return withFactoryFromRequest(req, async () => {
-    const g = gate(); if (g) return g;
-    try {
-      const mvnets = await listManagedVnets();
-      const managedVnetPresent = mvnets.some((v) => v.name === DEFAULT_MANAGED_VNET) || mvnets.length > 0;
-      const mvnetName = mvnets[0]?.name || DEFAULT_MANAGED_VNET;
-      // PEs live under a managed VNet — only list when one exists.
-      const managedPrivateEndpoints = managedVnetPresent
-        ? await listManagedPrivateEndpoints(mvnetName)
-        : [];
-      return NextResponse.json({ ok: true, managedVnetName: mvnetName, managedVnetPresent, managedPrivateEndpoints });
-    } catch (e: any) {
-      return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
-    }
-  });
-}
+export const GET = withSession((req: NextRequest) => withFactoryFromRequest(req, async () => {
+  const g = gate(); if (g) return g;
+  try {
+    const mvnets = await listManagedVnets();
+    const managedVnetPresent = mvnets.some((v) => v.name === DEFAULT_MANAGED_VNET) || mvnets.length > 0;
+    const mvnetName = mvnets[0]?.name || DEFAULT_MANAGED_VNET;
+    // PEs live under a managed VNet — only list when one exists.
+    const managedPrivateEndpoints = managedVnetPresent
+      ? await listManagedPrivateEndpoints(mvnetName)
+      : [];
+    return NextResponse.json({ ok: true, managedVnetName: mvnetName, managedVnetPresent, managedPrivateEndpoints });
+  } catch (e: any) {
+    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
+  }
+}));
 
-export async function POST(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const POST = withSession(async (req: NextRequest) => {
   const body = await req.json().catch(() => ({}));
   return withFactoryFromRequest(req, async () => {
     const g = gate(); if (g) return g;
@@ -138,20 +134,16 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
     }
   });
-}
+});
 
-export async function DELETE(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  return withFactoryFromRequest(req, async () => {
-    const g = gate(); if (g) return g;
-    const name = req.nextUrl.searchParams.get('name')?.trim();
-    if (!name) return NextResponse.json({ ok: false, error: 'name query param is required' }, { status: 400 });
-    try {
-      await deleteManagedPrivateEndpoint(name);
-      return NextResponse.json({ ok: true });
-    } catch (e: any) {
-      return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
-    }
-  });
-}
+export const DELETE = withSession((req: NextRequest) => withFactoryFromRequest(req, async () => {
+  const g = gate(); if (g) return g;
+  const name = req.nextUrl.searchParams.get('name')?.trim();
+  if (!name) return NextResponse.json({ ok: false, error: 'name query param is required' }, { status: 400 });
+  try {
+    await deleteManagedPrivateEndpoint(name);
+    return NextResponse.json({ ok: true });
+  } catch (e: any) {
+    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
+  }
+}));

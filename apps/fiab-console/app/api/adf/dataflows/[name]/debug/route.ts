@@ -38,7 +38,8 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { apiHonestGateError } from '@/lib/api/gate-envelope';
+import { withSession } from '@/lib/api/route-toolkit';
 import {
   dataFlowDebugConfigGate,
   getDataFlow,
@@ -75,10 +76,7 @@ const isNonEmpty = (s: unknown): s is string => typeof s === 'string' && s.lengt
  * error the editor should throw on); when configured it best-effort surfaces a
  * data-flow-capable (Managed) Azure Integration Runtime name as advisory info.
  */
-export async function GET(_req: NextRequest, _ctx: { params: Promise<{ name: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-
+export const GET = withSession<{ name: string }>(async () => {
   const gate = dataFlowDebugConfigGate();
   if (gate) {
     return NextResponse.json(
@@ -104,34 +102,26 @@ export async function GET(_req: NextRequest, _ctx: { params: Promise<{ name: str
   }
 
   return NextResponse.json({ ok: true, available: true, integrationRuntime }, { status: 200 });
-}
+});
 
 /**
  * POST — real data preview against a live ADF data-flow debug session. Returns
  * { ok, streamName, schema, rows, rowCount } with rows straight from the Spark
  * debug cluster, or an honest 503 gate when the factory env isn't configured.
  */
-export async function POST(req: NextRequest, ctx: { params: Promise<{ name: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-
+export const POST = withSession<{ name: string }>(async (req, { params }) => {
   const gate = dataFlowDebugConfigGate();
   if (gate) {
-    return NextResponse.json(
-      {
-        ok: false,
-        code: 'not_configured',
-        error:
-          `Data Factory not configured: set ${gate.missing}. A data-flow debug ` +
-          `session needs an Azure Data Factory with a data-flow-capable (Managed) ` +
-          `Azure Integration Runtime.`,
-        missing: gate.missing,
-      },
-      { status: 503 },
-    );
+    return apiHonestGateError('svc-adf', {
+      missing: [gate.missing],
+      message:
+        `Data Factory not configured: set ${gate.missing}. A data-flow debug ` +
+        `session needs an Azure Data Factory with a data-flow-capable (Managed) ` +
+        `Azure Integration Runtime.`,
+    });
   }
 
-  const { name } = await ctx.params;
+  const { name } = params;
   if (!name || !NAME_RE.test(name)) {
     return NextResponse.json({ ok: false, error: 'invalid data flow name' }, { status: 400 });
   }
@@ -259,4 +249,4 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ name: stri
     // 4) Always release the Spark cluster (best-effort; idempotent).
     if (sessionId) await deleteDataFlowDebugSession(sessionId).catch(() => {});
   }
-}
+});
