@@ -9,6 +9,12 @@
  *       <ItemTile key={it.id} type={it.type} title={it.name} ... />
  *     ))}
  *   </TileGrid>
+ *
+ * SIZE GUIDANCE (U10): TileGrid renders EVERY child — it is for bounded
+ * collections. A collection that can exceed the shared
+ * {@link import('./virtualization').VIRTUALIZATION_CUTOFF} (200 items) must
+ * use `VirtualizedGrid` (same visual contract, windowed rendering) instead;
+ * an unbounded TileGrid is exactly the /browse 1,437-item renderer freeze.
  */
 
 import * as React from 'react';

@@ -69,6 +69,8 @@ import {
   ArrowDown16Filled,
   ArrowSort16Regular,
 } from '@fluentui/react-icons';
+import { useVirtualizer } from '@tanstack/react-virtual';
+import { VIRTUALIZATION_CUTOFF, windowSpan } from '@/lib/components/ui/virtualization';
 
 /** A single column definition. Generic over the row type. */
 export interface LoomColumn<T> {
@@ -166,6 +168,18 @@ export interface LoomDataTableProps<T> {
    * `true` for the default of 6 rows.
    */
   skeleton?: boolean | number;
+  /**
+   * Opt-in ROW WINDOWING (U10). When true AND the (filtered) row count
+   * exceeds the shared `VIRTUALIZATION_CUTOFF` (200), the body renders only
+   * the rows near the viewport inside a bounded scroll container — a
+   * 1,400+-row table scrolls instead of freezing the renderer (the /browse
+   * P0 defect). At or below the cutoff — or when the caller passes `false`
+   * (e.g. the 'u10-browse-virtualization' kill-switch is OFF) — the render
+   * path is byte-for-byte the pre-U10 full table. Defaults off.
+   */
+  virtualizeRows?: boolean;
+  /** Bounded viewport height for the windowed mode. Default '65vh'. */
+  virtualMaxHeight?: string;
 }
 
 const useStyles = makeStyles({
@@ -335,6 +349,14 @@ const useStyles = makeStyles({
     whiteSpace: 'nowrap',
     border: 0,
   },
+  // U10 row-windowing viewport: the DataGrid scrolls inside this bounded box;
+  // spacer divs above/below it stand in for the unrendered rows.
+  virtualViewport: {
+    overflowY: 'auto',
+    width: '100%',
+    minWidth: 0,
+    maxWidth: '100%',
+  },
   // skeleton loading state: placeholder rows matching the column layout
   skeletonRow: {
     display: 'flex',
@@ -465,6 +487,8 @@ export function LoomDataTable<T>(props: LoomDataTableProps<T>): React.ReactEleme
     noFilters = false,
     ariaLabel,
     skeleton = false,
+    virtualizeRows = false,
+    virtualMaxHeight = '65vh',
   } = props;
   const styles = useStyles();
 
@@ -635,6 +659,41 @@ export function LoomDataTable<T>(props: LoomDataTableProps<T>): React.ReactEleme
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [columns, rowActions, rows]);
 
+  // ── Opt-in row windowing (U10) ────────────────────────────────────────────
+  // Above the shared cutoff, only the rows near the viewport are handed to the
+  // DataGrid; top/bottom spacers (pure windowSpan math) preserve the scroll
+  // metrics. Fluent's DataGrid sorts its `items` internally — to window over
+  // the FULL sorted order we mirror its comparator (same defaultGetValue +
+  // localeCompare the column definitions use) over the tracked sortSnap, then
+  // slice. Re-sorting the already-sorted slice inside DataGrid is a stable
+  // no-op, so ordering stays identical to the un-windowed path.
+  const virtualize = virtualizeRows && filteredRows.length > VIRTUALIZATION_CUTOFF;
+  const scrollRef = React.useRef<HTMLDivElement | null>(null);
+  const sortedRows = React.useMemo(() => {
+    if (!virtualize || !sortSnap.sortColumn) return filteredRows;
+    const col = columns.find((c) => c.key === sortSnap.sortColumn);
+    if (!col) return filteredRows;
+    const dir = sortSnap.sortDirection === 'descending' ? -1 : 1;
+    return [...filteredRows].sort((a, b) => {
+      const av = defaultGetValue(col, a);
+      const bv = defaultGetValue(col, b);
+      const r = typeof av === 'number' && typeof bv === 'number'
+        ? av - bv
+        : String(av).localeCompare(String(bv));
+      return dir * r;
+    });
+  }, [virtualize, filteredRows, columns, sortSnap]);
+  const rowVirtualizer = useVirtualizer<HTMLDivElement, HTMLDivElement>({
+    count: virtualize ? sortedRows.length : 0,
+    getScrollElement: () => scrollRef.current,
+    // Row height ≈ cell padding + one line; compact matches Fabric list density.
+    estimateSize: () => (density === 'compact' ? 40 : 56),
+    overscan: 12,
+  });
+  const vRows = rowVirtualizer.getVirtualItems();
+  const span = windowSpan(vRows, rowVirtualizer.getTotalSize());
+  const windowRows = virtualize ? sortedRows.slice(span.firstRow, span.lastRow + 1) : filteredRows;
+
   if (loading) {
     // Opt-in skeleton: stable placeholder rows matching the column layout so
     // the table doesn't collapse to a spinner / jump when data arrives.
@@ -756,8 +815,10 @@ export function LoomDataTable<T>(props: LoomDataTableProps<T>): React.ReactEleme
         </div>
       )}
 
+      {(() => {
+        const grid = (
       <DataGrid
-        items={filteredRows}
+        items={windowRows}
         columns={fluentColumns}
         getRowId={getRowId}
         sortable
@@ -765,6 +826,7 @@ export function LoomDataTable<T>(props: LoomDataTableProps<T>): React.ReactEleme
         columnSizingOptions={columnSizingOptions}
         focusMode="cell"
         aria-label={ariaLabel ?? 'Data table'}
+        aria-rowcount={virtualize ? sortedRows.length + 1 : undefined}
         className={mergeClasses(styles.grid, density === 'compact' && styles.compactGrid)}
         onSortChange={(_e, newSort) => {
           setSortSnap({
@@ -806,6 +868,10 @@ export function LoomDataTable<T>(props: LoomDataTableProps<T>): React.ReactEleme
           {({ item, rowId }) => (
             <DataGridRow<T>
               key={rowId}
+              // Windowed mode: report the row's position in the FULL sorted
+              // set (+2: 1-based, after the header row) so AT users hear
+              // "row 812 of 1438", not the window-relative index.
+              aria-rowindex={virtualize ? span.firstRow + windowRows.indexOf(item) + 2 : undefined}
               className={mergeClasses(
                 styles.bodyRow,
                 onRowClick ? styles.clickableRow : undefined,
@@ -837,6 +903,21 @@ export function LoomDataTable<T>(props: LoomDataTableProps<T>): React.ReactEleme
           )}
         </DataGridBody>
       </DataGrid>
+        );
+        if (!virtualize) return grid;
+        return (
+          <div
+            ref={scrollRef}
+            className={styles.virtualViewport}
+            style={{ maxHeight: virtualMaxHeight }}
+            data-loom-virtualized-rows
+          >
+            <div style={{ height: span.padTop }} aria-hidden />
+            {grid}
+            <div style={{ height: span.padBottom }} aria-hidden />
+          </div>
+        );
+      })()}
 
       {/* Right-click context menu — one Fluent Menu positioned at the cursor. */}
       {rowMenu && (
