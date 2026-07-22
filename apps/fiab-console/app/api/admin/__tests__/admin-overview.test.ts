@@ -137,14 +137,14 @@ describe('/api/admin/overview', () => {
     expect((await GET()).status).toBe(401);
   });
 
-  it('GET returns all 12 tiles with real counts when every backend resolves', async () => {
+  it('GET returns all 13 tiles with real counts when every backend resolves', async () => {
     process.env.LOOM_IDENTITY_PICKER_ENABLED = 'true';
     seedHappyCosmos();
     const { GET } = await import('@/app/api/admin/overview/route');
     const j = await (await GET()).json();
     expect(j.ok).toBe(true);
     const t = j.tiles;
-    expect(Object.keys(t)).toHaveLength(12);
+    expect(Object.keys(t)).toHaveLength(13);
     expect(t.workspaces).toEqual({ count: 4, gated: false });
     expect(t.items).toEqual({ count: 42, gated: false });
     expect(t.domains).toEqual({ count: 2, gated: false });
