@@ -47,6 +47,8 @@ import {
 import { ViewToggle, type LoomView } from '@/lib/components/ui/view-toggle';
 import { ItemTile } from '@/lib/components/ui/item-tile';
 import { TileGrid } from '@/lib/components/ui/tile-grid';
+import { VirtualizedGrid } from '@/lib/components/ui/virtualized-grid';
+import { useRuntimeFlag } from '@/lib/components/ui/use-runtime-flag';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { itemVisual } from '@/lib/components/ui/item-type-visual';
 import { usePins, type PinnedItem } from '@/lib/components/pin-store';
@@ -118,6 +120,9 @@ export default function BrowsePage() {
   const [workspaces, setWorkspaces] = useState<WorkspaceLite[] | null>(null);
   const [q, setQ] = useState('');
   const [view, setView] = useState<LoomView>('tile');
+  // U10 kill-switch (FLAG0 'u10-browse-virtualization', default-ON): OFF
+  // reverts every grid below to the pre-U10 plain-TileGrid render path.
+  const virtualizeOn = useRuntimeFlag('u10-browse-virtualization');
 
   // Hydrate the persisted workspace view mode (SSR-safe).
   useEffect(() => {
@@ -281,18 +286,21 @@ export default function BrowsePage() {
             <Text size={200} className={styles.groupLabel}>
               {itemVisual(type).label}
             </Text>
-            <TileGrid>
-              {list.map((p) => (
+            <VirtualizedGrid
+              items={list}
+              enabled={virtualizeOn}
+              getKey={(p) => p.id}
+              ariaLabel={`Pinned ${itemVisual(type).label}`}
+              renderTile={(p) => (
                 <ItemTile
-                  key={p.id}
                   type={p.type ?? 'workspace'}
                   title={p.label}
                   subtitle={itemVisual(p.type ?? 'workspace').label}
                   onClick={() => router.push(p.href)}
                   pinTarget={{ id: p.id, label: p.label, href: p.href, type: p.type }}
                 />
-              ))}
-            </TileGrid>
+              )}
+            />
           </div>
         ))}
       </Section>
@@ -365,10 +373,13 @@ export default function BrowsePage() {
         )}
         {!wsLoading && visibleWorkspaces.length > 0 && (
           view === 'tile' ? (
-            <TileGrid>
-              {visibleWorkspaces.map((w) => (
+            <VirtualizedGrid
+              items={visibleWorkspaces}
+              enabled={virtualizeOn}
+              getKey={(w) => w.id}
+              ariaLabel="All workspaces"
+              renderTile={(w) => (
                 <ItemTile
-                  key={w.id}
                   type="workspace"
                   leadingVisual={
                     <WorkspaceAvatar workspaceId={w.id} name={w.name} image={w.image} size={40} />
@@ -385,8 +396,8 @@ export default function BrowsePage() {
                   onClick={() => router.push(`/workspaces/${w.id}`)}
                   pinTarget={{ id: `workspace:${w.id}`, label: w.name, href: `/workspaces/${w.id}`, type: 'workspace' }}
                 />
-              ))}
-            </TileGrid>
+              )}
+            />
           ) : (
             <LoomDataTable
               columns={workspaceColumns}

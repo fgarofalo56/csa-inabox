@@ -11,6 +11,27 @@
  */
 import { defineConfig } from 'vitest/config';
 import path from 'node:path';
+import fs from 'node:fs';
+
+// U10 bootstrap (TEMPORARY, self-neutralizing): `@tanstack/react-virtual` is
+// declared in package.json but worktree agents can't run pnpm install
+// (parallel installs corrupt the shared node_modules). Until the integration
+// install lands the package on disk, alias the module id to a windowless
+// test stub so component suites keep running. The alias only exists while
+// the package directory is ABSENT — after `pnpm install` the condition is
+// false and the real library is used. Remove this block + the stub +
+// types/tanstack-react-virtual.d.ts once the install has landed.
+const tanstackVirtualInstalled = fs.existsSync(
+  path.resolve(__dirname, 'node_modules', '@tanstack', 'react-virtual'),
+);
+const tanstackVirtualAlias = tanstackVirtualInstalled
+  ? {}
+  : {
+      '@tanstack/react-virtual': path.resolve(
+        __dirname,
+        'lib/components/ui/__tests__/tanstack-virtual.stub.ts',
+      ),
+    };
 
 let react: any = null;
 try {
@@ -25,6 +46,7 @@ export default defineConfig({
   plugins: react ? [react()] : [],
   resolve: {
     alias: {
+      ...tanstackVirtualAlias,
       '@': path.resolve(__dirname, '.'),
       '@/lib': path.resolve(__dirname, './lib'),
       '@/app': path.resolve(__dirname, './app'),
