@@ -82,4 +82,22 @@ TOTAL="$(wc -l < "$NEW" | tr -d ' ')"
 skipped=$(( TOTAL - copied ))
 rm -f "$NEW" "$OLD"
 
-echo "staged corpus incrementally: copied=$copied skipped=$skipped deleted=$deleted total=$TOTAL (commit ${COMMIT:0:8}) → apps/fiab-console/copilot-corpus/"
+# ── 5. stage golden eval sets (E1): content/evals → copilot-corpus/evals ──
+# Small tree (10 JSONL + schema + README) — full copy each run, with removal of
+# staged files whose source is gone, so the E2 evaluator Function reads the
+# sets from the same in-image FS the corpus uses.
+EVAL_SRC="$ROOT/content/evals"
+EVAL_DEST="$DEST/evals"
+evals=0
+if [ -d "$EVAL_SRC" ]; then
+  mkdir -p "$EVAL_DEST"
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    [ -f "$EVAL_SRC/$f" ] || rm -f "$EVAL_DEST/$f"
+  done < <(cd "$EVAL_DEST" && find . -type f | sed 's#^\./##')
+  ( cd "$EVAL_SRC" && tar -cf - . ) | ( cd "$EVAL_DEST" && tar -xf - )
+  find "$EVAL_DEST" -type d -empty -delete 2>/dev/null || true
+  evals="$(find "$EVAL_DEST" -type f | wc -l | tr -d ' ')"
+fi
+
+echo "staged corpus incrementally: copied=$copied skipped=$skipped deleted=$deleted total=$TOTAL evals=$evals (commit ${COMMIT:0:8}) → apps/fiab-console/copilot-corpus/"

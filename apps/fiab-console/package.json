@@ -10,6 +10,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
+    "lint:evals": "node ../../scripts/csa-loom/lint-eval-sets.mjs",
     "guard:server-fetch": "node scripts/no-bare-server-fetch.mjs",
     "guard:circular": "node scripts/check-circular-deps.mjs",
     "test": "vitest run",
