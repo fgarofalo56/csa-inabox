@@ -44,11 +44,14 @@ const SELF_AUDIT = path.join(APP, 'lib', 'admin', 'self-audit.ts');
 // The declarative ENV_CHECKS layer was split out of self-audit.ts into a pure,
 // client-safe module (lib/admin/env-checks.ts) so the gate registry /
 // HonestGate can import it without dragging the probes' lazy Azure/copilot
-// imports (and next/headers) into a client bundle. The check-id universe spans
-// all three files.
-const ENV_CHECKS_FILE = path.join(APP, 'lib', 'admin', 'env-checks.ts');
+// imports (and next/headers) into a client bundle. R30 then split that module
+// into a per-domain fragment DIRECTORY (lib/admin/env-checks/<domain>.ts,
+// merged by its index.ts) — the check-id universe spans self-audit, every
+// env-checks fragment, and health-probes.
+const ENV_CHECKS_DIR = path.join(APP, 'lib', 'admin', 'env-checks');
 const HEALTH_PROBES = path.join(APP, 'lib', 'admin', 'health-probes.ts');
-const GATES_REGISTRY = path.join(APP, 'lib', 'gates', 'registry.ts');
+// R30: the gate registry is likewise a fragment directory with an index.
+const GATES_REGISTRY = path.join(APP, 'lib', 'gates', 'registry', 'index.ts');
 const GATE_BRIDGE = path.join(APP, 'lib', 'admin', 'gate-registry.ts');
 
 const errors = [];
@@ -74,9 +77,12 @@ function extractCheckIds(file) {
   for (const m of src.matchAll(/probeHttpService\(\s*\n?\s*'([a-z0-9][a-z0-9-]*)'/g)) ids.add(m[1]);
   return ids;
 }
+const envChecksFragments = fs.readdirSync(ENV_CHECKS_DIR)
+  .filter((f) => f.endsWith('.ts'))
+  .map((f) => path.join(ENV_CHECKS_DIR, f));
 const checkIds = new Set([
   ...extractCheckIds(SELF_AUDIT),
-  ...extractCheckIds(ENV_CHECKS_FILE),
+  ...envChecksFragments.flatMap((f) => [...extractCheckIds(f)]),
   ...extractCheckIds(HEALTH_PROBES),
 ]);
 
