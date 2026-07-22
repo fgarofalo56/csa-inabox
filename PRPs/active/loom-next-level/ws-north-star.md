@@ -109,11 +109,11 @@ storage only, no SaaS catalog) — this IS the moat item for data interop.
 
 **What/why (T1-B):** DuckDB is the frictionless engine of 2026 (ClickBench
 top, SO-survey #4). Two folds, both riding Loom's EXISTING Arrow pipeline:
-(a) **`duckdb-wasm` preview** — the Preview grid + SQL editors run local SQL
+(a) **N2a — `duckdb-wasm` preview** — the Preview grid + SQL editors run local SQL
 over the Arrow IPC that `loom-directlake` already returns: instant client-side
 slice/filter/aggregate, zero server cost, **near-free** (the Arrow producer
 exists — this sub-item may ride an earlier phase per the master spine);
-(b) **`loom-duckdb` ACA service** (DuckDB + httpfs/delta/iceberg extensions,
+(b) **N2b — `loom-duckdb` ACA server tier** (DuckDB + httpfs/delta/iceberg extensions,
 UAMI Blob Reader) as the "fast path" tier below Spark — new catalog item
 **SQL Lab (DuckDB)** with Monaco + Arrow results; falls back to Synapse
 Serverless on unset `LOOM_DUCKDB_URL` (honest gate + Fix-it).
@@ -243,6 +243,11 @@ into separate PRs at implementation — the id groups them for phasing):
   option in the SQL editors + Flight/ADBC exposure (N3). Opt-in (heavy tier;
   DuckDB is the light default) — the ONE Pillar-1 item that is opt-in rather
   than default-ON, disclosed per the master G2 convention.
+  **Carve-out from `loom_default_on_opt_out` (round-2 F5):** opt-in is
+  justified as a heavy-infra (AKS Trino) tier that is an ADDITIVE alternative
+  engine alongside a fully functional default (DuckDB N2b) — disclosed per G2,
+  no feature is gated behind it; the light path is fully default-ON. This is
+  not a spend-gate and does not breach the BLOCKING default-ON rule.
   Acceptance: one SQL statement joins a Loom Iceberg table with an external
   Postgres table. **L**
 
@@ -312,7 +317,10 @@ marks this near-free; the master spine lets it ride Phase 2/3).
 persistence to Cosmos for the governance audit trail (TTL'd; MIG1 migrator).
 **Acceptance:** G1 — ask a data-agent question, expand the receipt, see the
 REAL SQL + row count + tier + badge; persisted doc id in the receipt.
-**Per-cloud:** identical everywhere. **Size: M.**
+**Early-ride note (round-2 F8):** when ridden pre-N9 (Phase 2/3), the badge
+renders **Unverified ⚠ / Refused ⛔ only** (assembled from the existing verify
+verdict); the **Verified ✓** tier activates only once N9's semantic
+contract/VQR lands. **Per-cloud:** identical everywhere. **Size: M.**
 
 ## N11 — GraphRAG retriever over Weave/AGE (AIF-1 — the headline)
 
@@ -487,7 +495,10 @@ monitors (default-ON with baselines), incident timeline
 rendered from `unified-lineage`/OL facets. Incident alerts via O1 dispatch.
 **Acceptance:** G1 — a stale seeded table opens a real incident; the impact
 panel shows true downstream assets; acknowledge→resolve round-trip; OL export
-validates against the OL 1.x schema and imports into Marquez.
+validates against the OL 1.x schema and imports into Marquez. The Monitors +
+Incidents surface registers via `lib/components/admin-shell.tsx` +
+`lib/panes/admin-overview.tsx` and passes
+`lib/nav/__tests__/nav-registries.test.ts` (master ground-truth #16).
 **Per-cloud:** backend clients Gov-safe; anomaly detection server-side (no
 external ML); IL5 — the collector + console fully in-boundary.
 **Serialization:** WS-L (L2 first; `unified-lineage`), O1. **Size: L.**
@@ -525,7 +536,9 @@ One item id, seven PR-clusters:
   → grant-by-grant attest (approve/revoke/delegate + justification) →
   auto-revoke on reject through RBAC → **signed evidence record** (audit
   standard; SOX/FedRAMP CA headline on Gov). Quarterly via existing cron
-  infra. **M–L**
+  infra. The reviewer surface registers via `lib/components/admin-shell.tsx` +
+  `lib/panes/admin-overview.tsx` and passes
+  `lib/nav/__tests__/nav-registries.test.ts` (master ground-truth #16). **M–L**
 - **N19d Scheduled insights / anomaly narration** (T2.5): metric/monitor
   deltas on a cadence → Copilot-narrated "what changed" digest → delivered via
   the EXISTING report-subscriptions Function (WS-C C5 delivery path — extend,

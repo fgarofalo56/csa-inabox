@@ -14,8 +14,8 @@ ADF/Fabric/Power BI).
 > X2 `availability` where any env var is added — most WS-U items add none),
 > acceptance incl. a **G1 browser receipt**, and a per-cloud line. **Pure
 > front-end items here carry the master carve-out declaration "Per-cloud:
-> cloud-neutral"** (extended to WS-U in the pass-2 master update); only U7 and
-> U8 touch real Azure backends and carry full per-cloud rows. G3 items use the
+> cloud-neutral"** (extended to WS-U in the pass-2 master update); only U7, U8,
+> and U13 touch real Azure backends and carry full per-cloud rows. G3 items use the
 > existing primitives ONLY: `lib/components/canvas/resizable-canvas.tsx`
 > (`ResizableCanvasRegion`, key `loom.canvasHeight.<k>`) and
 > `lib/components/shared/split-pane.tsx` (`SplitPane`, key `loom.splitpane.<k>`)
@@ -28,7 +28,7 @@ ADF/Fabric/Power BI).
 | PR | What it closed (from the two audits) |
 |----|--------------------------------------|
 | **#2382** | Class-1 UA-`ButtonText` fix on the 11 gallery/tile classes + `deploy-plan-nodes.tsx` glyphs (`readableAccent`) |
-| **#2389** | The remaining **28 Class-1 sites** (wizards, list-row selection panels, option cards, Home shortcuts, canvas palettes, 21 files), the **Class-2 root-cause boundary** (`canvas-node-kit.tsx:344-350` / `item-type-icon.ts` — accent lifted through `readableAccent`, fixing the Estate One-Canvas glyph and `deploy-planner-view.tsx:878`), the `new-item-dialog.tsx:189` badge-wrap (5A), and the **3 hard grid overflows** (5B-hard: `visual-builder-dialog.tsx:50`, `foundry-agents.tsx:41`, `adx-rbac-panel.tsx:68`) |
+| **#2389** *(**OPEN as of 2026-07-22** — in flight, NOT merged; the scope in this row is do-not-re-plan ONLY while this PR is live. **If #2389 is abandoned/closed-unmerged, its 28 Class-1 sites + the `canvas-node-kit.tsx:344-350` Class-2 boundary + the new-item-dialog badge-wrap + the 3 grid overflows re-enter WS-U as a new item U14.**)* | The remaining **28 Class-1 sites** (wizards, list-row selection panels, option cards, Home shortcuts, canvas palettes, 21 files), the **Class-2 root-cause boundary** (`canvas-node-kit.tsx:344-350` / `item-type-icon.ts` — accent lifted through `readableAccent`, fixing the Estate One-Canvas glyph and `deploy-planner-view.tsx:878`), the `new-item-dialog.tsx:189` badge-wrap (5A), and the **3 hard grid overflows** (5B-hard: `visual-builder-dialog.tsx:50`, `foundry-agents.tsx:41`, `adx-rbac-panel.tsx:68`) |
 | **#2390** | The **13 easy FAIL-W SplitPane inspector wraps** (canvas-parity audit items U1+U2: pipeline-designer, mapping-dataflow, power-query-host, mounted-adf inner panes, deploy-planner, one-canvas, visual-query, gremlin-graph, agent-flow, eventstream, prompt-flow, warp, visual-builder) — reference pattern `databricks/pipeline-editor.tsx` L546 |
 
 WS-U covers the **remainder**: the medium/structural G3 work, the three
@@ -331,6 +331,32 @@ families (pipeline, eventstream, estate); axe-core pass in maximized state
 (feeds the V3 ratchet, no regression). **Per-cloud:** cloud-neutral.
 **Size: S–M.**
 
+## U13 — Pipeline in-canvas Debug/Output monitoring overlay (ADF pipeline parity) *(NEW, round-2 gap review)*
+
+**Goal:** match ADF's *pipeline* (orchestration, not dataflow) Debug loop — a
+Debug run whose per-activity output (status, rows/duration, error,
+input/output) renders as an **on-canvas overlay per activity node**, with an
+eyeglass → run-monitoring detail, not just the existing bottom dock. Closes
+canvas-parity audit Part 2 item #1(b) ("confirm Loom surfaces run receipts
+on-canvas to equal depth") — the one BEHIND verdict U7 (mapping-dataflow) does
+not cover.
+
+**First verify current state:** the audit's verdict was "confirm," so if the
+existing dock already renders per-activity run receipts on-canvas, **downgrade
+this item to a parity-doc row instead of a build.**
+
+**Files:** `lib/editors/data-pipeline-editor.tsx` +
+`lib/components/pipeline/pipeline-designer.tsx` + a new
+`pipeline-debug-overlay.tsx`; reuse the existing pipeline run-status client
+(verify which — `adf-client`/`synapse-dev-client` run-output) — **no second
+run path**.
+
+**Acceptance:** G1 — Debug-run a seeded pipeline, see per-activity
+status/rows/time on the node overlay + drill to run detail on real data;
+parity doc `docs/fiab/parity/pipeline.md` row → ✅. **Per-cloud:**
+Commercial + Gov live (ADF/Synapse GA), IL5 in-VNet. **Size: M.**
+**Serialize:** pipeline designer (touched by #2390).
+
 ---
 
 # AREA 3 — SYSTEMIC HYGIENE
@@ -395,7 +421,8 @@ dead `color`/`fg` fields in `lib/components/pipeline/activity-catalog.ts`**
 audit's recommended inoculation).
 
 **Acceptance:** G1 receipt — new-item dialog opened, narrow-width pass (badge
-row already wrapped by #2389), visual parity with siblings dark+light; grep
+row wrapped by #2389 — contingent on #2389 merging, see §0), visual parity
+with siblings dark+light; grep
 receipt showing zero remaining px literals in the named cluster; vitest still
 green after the dead-field deletion (proves nothing consumed them).
 **Per-cloud:** cloud-neutral. **Size: S.**
@@ -407,8 +434,13 @@ green after the dead-field deletion (proves nothing consumed them).
 - **Canvas-parity audit U11 (named layout presets Compact/Balanced/Canvas-max):**
   polish beyond both the G3 letter and leader parity; U9 full-screen delivers
   the AHEAD claim at a fraction of the surface area. Revisit post-program.
-- **Dark-font Class-1/-2/-5A/-5B-hard sites:** all shipped in #2382/#2389/#2390
-  (see §0) — nothing re-planned.
+- **Dark-font Class-1/-2/-5A/-5B-hard sites:** shipped in #2382/#2390
+  (merged) and #2389 (**OPEN at review time**) — see §0; nothing re-planned.
+  **The #2389 exclusions above are contingent on #2389 merging; tracked in F1
+  of the round-2 audit.** "#2389 merged" is an explicit DONE precondition for
+  WS-U's dark-font coverage claim (mirrored in the master's program
+  verification); if #2389 is abandoned/closed-unmerged, its scope re-enters
+  WS-U as a new item U14 per the §0 row.
 - **Per-tile KQL-dashboard resize rework:** the audit judges the per-tile model
   correct (matches Fabric RTD); only the region wrapper (U5) is taken.
 
@@ -417,5 +449,6 @@ green after the dead-field deletion (proves nothing consumed them).
 - **Phase 0/1:** U0 (FIRST — gates the G3 receipts), U10 (P0 freeze defect).
 - **Phase 1:** U1, U3, U4, U5, U6 (structural G3; serialize per-editor with
   WS-A/WS-R as noted).
-- **Phase 2:** U2 (after U1 + with A6–A9 serialization), U7, U8, U9.
+- **Phase 2:** U2 (after U1 + with A6–A9 serialization), U7, U8, U9, U13
+  (verify-current-dock-first; serialize with the pipeline designer).
 - **Opportunistic (Phase 2/3):** U11 guard early + batched drain, U12.

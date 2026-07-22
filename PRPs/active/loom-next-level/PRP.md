@@ -1,4 +1,4 @@
-# PRP — Loom Next Level (2026-07-22, rev 2 pass 2 — +UI/UX Excellence +North Star)
+# PRP — Loom Next Level (2026-07-22, rev 2 pass 2 + round-2 closing — +UI/UX Excellence +North Star +Inbound Migration)
 
 **Program:** take CSA Loom from "unbelievably broad B+" to "defensible A" by pointing a
 full cycle at the five structural gaps identified in the 2026-07-22 brutally-honest
@@ -29,6 +29,16 @@ renderer-freeze virtualization, a ratcheted 142-site px-grid→TileGrid sweep �
 ratchet #13). **WS-N (North Star, N1–N20)** synthesizes the three research
 reports (datastack, ai-first, bi-dx-gov) into a Phase-4 program. Item count:
 **97 → 130**.
+
+**Round-2 closing pass (same day):** the two round-2 review reports
+(`temp/prp-review/round2-integrity.md` F1–F8; `round2-gaps.md` final gap review)
+applied. **WS-M (Inbound Migration & Adoption, M1–M3)** added as a new
+mini-workstream — the defector **on-ramp** (the openness pillar was entirely
+outbound); **U13** (pipeline in-canvas Debug/Output monitoring depth) added to
+WS-U; PR **#2389 re-marked OPEN/contingent** with "#2389 merged" now an explicit
+DONE precondition for WS-U's dark-font coverage; A14's same-file serialization
+chains and sequencing note corrected. Item count: **130 → 134**. The ratchet
+inventory is **unchanged at 13** (no new ratchets in WS-M or U13).
 
 **North-star thesis (pass 2):** the program's end-state is Loom as the **#1
 AI-first data & analytics platform**, on three pillars — **(1) OPENNESS:** the
@@ -66,7 +76,7 @@ N-item's IL5 note must serve that principle (see the moat block in
    enforcement per-workspace behind a gate — now additionally gated on the I9
    threat-model/AppSec review.
 
-## Workstream index (130 items across 7 appendix files)
+## Workstream index (134 items across 8 appendix files)
 
 | WS | Appendix | Items | One-liner |
 |----|----------|-------|-----------|
@@ -81,8 +91,14 @@ N-item's IL5 note must serve that principle (see the moat block in
 | **WS-A** Analyst-surface depth | [ws-lineage-depth.md](ws-lineage-depth.md) | A1–A14 | Real DAX parser/AST → SQL folding + 20 functions + golden numeric harness vs Power BI; report depth (small-multiples renderer, analytics pane, Gov map fallback, drill-through); Spark reliability (dashboard, FAULTED auto-recovery, quotas, chaos drill); real-time collab push transport + presence/comments on notebook/report/semantic-model/SQL editors (A14) |
 | **WS-I** Per-workspace identity | [ws-identity-cloudmatrix.md](ws-identity-cloudmatrix.md) | I1–I9 | Activate the DORMANT scaffolding (workspace-identity-client.ts + workspace-identity.bicep): provision-on-create/delete-cascade, scoped data-plane grants, shadow divergence audit into the live PDP store, credential-factory adoption ratchet, per-workspace enforce + migration runbook, threat-model/AppSec review gate before enforce (I9) |
 | **§X** Cloud matrix (cross-cutting) | [ws-identity-cloudmatrix.md](ws-identity-cloudmatrix.md) | X1–X3 | **Renumbered (rev 2):** X1 cloud-endpoints adoption ratchet (module exists, 1,339 lines); X2 structured `availability:{commercial,gccHigh,il5}` on ENV_CHECKS → automatic honest gates (formerly "X.3"); X3 per-cloud CI validation lanes incl. `gov-workspace-identity.yml` (formerly "X.5", previously uncounted). The Learn-verified service-availability matrix (X-MATRIX) and the IL5 checklist (X-IL5) are un-numbered reference blocks, not items |
-| **WS-U** UI/UX excellence | [ws-ui-excellence.md](ws-ui-excellence.md) | U0–U12 | **Pass 2.** Remainder of the 07-22 dark-font + canvas-G3 audits (post #2382/#2389/#2390): U0 P0-VERIFY drag+reload receipts on already-PASS canvases (resolves the operator's "nothing resizes" vs code-audit contradiction); structural G3 — report-designer full G3 + Power BI aux panes, notebook per-cell resize, Workshop/Slate, fixed-height stragglers, query↔results divider ×11 Monaco editors; leader-gap builds — mapping-dataflow Debug/Preview/Inspect/column-stats (the largest parity build), KQL dashboard parameters/drillthrough/live-refresh/pages, full-screen canvas kit mode (AHEAD); hygiene — `/browse` VirtualizedGrid (renderer-freeze P0), ratcheted 142-site px-grid→TileGrid sweep (ratchet #13), new-item-dialog token cluster |
+| **WS-U** UI/UX excellence | [ws-ui-excellence.md](ws-ui-excellence.md) | U0–U13 | **Pass 2.** Remainder of the 07-22 dark-font + canvas-G3 audits (post #2382/#2390; **#2389 OPEN at review time — contingent, see WS-U §0**): U0 P0-VERIFY drag+reload receipts on already-PASS canvases (resolves the operator's "nothing resizes" vs code-audit contradiction); structural G3 — report-designer full G3 + Power BI aux panes, notebook per-cell resize, Workshop/Slate, fixed-height stragglers, query↔results divider ×11 Monaco editors; leader-gap builds — mapping-dataflow Debug/Preview/Inspect/column-stats (the largest parity build), KQL dashboard parameters/drillthrough/live-refresh/pages, full-screen canvas kit mode (AHEAD), pipeline in-canvas Debug/Output monitoring overlay (U13, verify-current-dock-first); hygiene — `/browse` VirtualizedGrid (renderer-freeze P0), ratcheted 142-site px-grid→TileGrid sweep (ratchet #13), new-item-dialog token cluster |
 | **WS-N** North star (#1 AI-first platform) | [ws-north-star.md](ws-north-star.md) | N1–N20 | **Pass 2, Phase 4.** Three pillars + sovereign moat. **Openness:** Iceberg REST catalog + Delta↔Iceberg dual metadata (flagship N1), DuckDB dual-mode, Flight SQL/ADBC, SQLMesh+dbt, software-defined assets, ODCS contracts enforced at ingest, Tier-2 condensed (RisingWave/Debezium CP/reverse-ETL/data-diff/Trino), labs. **Trust/AI-first:** verified semantic contract + VQR + refuse-not-guess, answer receipts w/ verified badge, GraphRAG over Weave/AGE (headline), self-healing NL2SQL, unified LLMOps (extends WS-E), Tier-2 condensed. **Governed analytics:** headless MetricFlow metrics layer, BI-as-code `code-report` item, OpenLineage incident console (extends WS-L), embedded-analytics SDK w/ RLS, Tier-2 condensed, labs |
+| **WS-M** Inbound migration & adoption | [ws-migration.md](ws-migration.md) | M1–M3 | **Round-2 closing pass, Phase 4 (rides N1/N4/N16).** The defector **on-ramp** the outbound openness pillar lacks: M1 estate assessment + inventory importer (point Loom at a Snowflake / Databricks-UC / Fabric-workspace / Power-BI-workspace estate → migration-readiness report), M2 schema + data copy-in (bulk table create + ADF/Synapse Delta-landing copy — the N7b/N7c substrate in reverse), M3 best-effort code translation (Snowflake/T-SQL → Loom SQL; DAX/PBIX → `code-report`/semantic-contract with a needs-review diff — never silent wrong output). Ship M1 first as the credible on-ramp |
+
+> **Item-vs-PR-count disclosure (round 2):** 134 = top-level numbered IDs;
+> the **actual PR count is ~180+** once XL splits (N1/N7/U7/M3 are 3-PR splits)
+> and the N7/N14/N19 sub-clusters + labs bundles are expanded — plan reviewer
+> budget against the larger number, not the headline item count.
 
 ## Relationship to sibling PRPs (rev 2 — cross-PRP reconciliation)
 
@@ -259,12 +275,14 @@ this one; these are now the binding decision rules:**
   all add projects — batch or land in dependency order), `cost-client.ts`
   (WS-C + N19e), shared admin nav registries (+N16, `new-item-dialog` with
   WS-U U12), and the same editor. **Pass-2 same-file pairs:**
-  `report-designer.tsx` (U1→A6–A9→U2, in that order),
+  `report-designer.tsx` (U1→A6–A9→U2→**A14**, in that order — A14 mounts the
+  collab layer into this file too),
   notebook editor (U3 → A14 → N19a), the 11 Monaco editors (U6 vs R8–R12
   decompositions), `spark-session-pool` (U7 with A11/A12),
   `monitor-client` (U8 alert-create with WS-C), `data-agent-reasoning.ts`
   (N9/N11/N12 serialize among themselves), `aoai-chat-client.ts` hot path
-  (N13 with E6), semantic-model editor + contract store (N9/N15 with A1–A5),
+  (N13 with E6), semantic-model editor + contract store (N9/N15 with A1–A5,
+  **then the A14 collab mount**),
   `unified-lineage`/OL ingest (N17 strictly after L2), lakehouse editor
   (N1/N2 with the WS-R decomposition targets), report-subscriptions Function
   (N19d extends C5). **X2 lands before any other env-adding item** so all later
@@ -293,8 +311,8 @@ this one; these are now the binding decision rules:**
   WS-R Areas 0–4 + R28/R29/MIG1 (except where an item states its own per-cloud
   row, e.g. R21, R28) **and the pure-front-end WS-U items (U0–U6, U9–U12)** —
   are exempt from the per-cloud contract; each carries an explicit
-  "Per-cloud: cloud-neutral" declaration instead. WS-U's U7/U8 touch real Azure
-  backends and carry full per-cloud rows.
+  "Per-cloud: cloud-neutral" declaration instead. WS-U's U7/U8/U13 touch real
+  Azure backends and carry full per-cloud rows.
 - **no-vaporware / no-fabric-dependency / ui-parity** die-hard rules apply as written.
 
 ## Dependency spine & execution phases
@@ -351,13 +369,16 @@ this one; these are now the binding decision rules:**
   (before I6/enforcement per the ATO-blocking set F2/F7/F9/F12); R4–R6 route
   batches;
   R8–R12 editor decompositions (R18 editor-state hook BEFORE R10); A14 collab
-  push transport + editor coverage (AFTER the R8–R12 decomposition of the target
-  editors, so the mount lands in the decomposed shell)
+  push transport + editor coverage (AFTER R9/R10 for the notebook and
+  semantic-model targets so the mount lands in the decomposed shell;
+  report-designer is already decomposed — see the hard-ordering note)
 - **WS-U leader-gap builds (pass 2):** U2 report-designer aux panes (after U1,
   serialized with A6–A9), U7 mapping-dataflow Debug/Preview/Inspect/stats (3
   PRs; `spark-session-pool` serialization with A11/A12), U8 KQL dashboard
   depth (2 PRs; `monitor-client` serialization; "live" tier upgrades to A14's
-  push transport when it lands), U9 full-screen canvas kit mode
+  push transport when it lands), U9 full-screen canvas kit mode, U13 pipeline
+  in-canvas Debug/Output monitoring overlay (verify-current-dock-first;
+  serialize with the pipeline designer, touched by #2390)
 - **Near-free WS-N riders (pass 2, may ride Phase 2/3 when their serialization
   windows are open):** N2a duckdb-wasm preview (the Arrow producer already
   exists), N10 answer-receipts substrate (assembly over existing
@@ -388,6 +409,12 @@ in [ws-north-star.md](ws-north-star.md)):**
 - **Pillar 3 governed analytics:** N9→N15 headless metrics layer →
   {N16 code-report, N18 embedded SDK w/ RLS}; L2→N17 OL incident console →
   N19g catalog interop; N19a–N19f as scheduling allows; N20 labs
+- **WS-M inbound migration on-ramp (round-2 closing pass; full specs in
+  [ws-migration.md](ws-migration.md)):** M1 estate assessment + inventory
+  importer (reuses N19g's catalog-metadata ingest) → M2 schema + data copy-in
+  (the N7b/N7c substrate in reverse) → M3 best-effort code translation
+  (PBIX→code-report rides N16; DAX rides the A1–A3 parser; SQL transpile with
+  needs-review diffs). Ship M1 first as the credible on-ramp; M2/M3 iterate
 - Every N-item's IL5 note must serve the sovereign-moat design principle
   (reviewers check against the moat block in ws-north-star.md)
 
@@ -403,21 +430,26 @@ other env-adding items; R1→R2→R3; R18 before R10; **E1→E2→E3→E4→E5�
 E-chain); A5 harness before A1–A3 merge (golden rows ride the A1–A3 PRs);
 **I1→I2→I5→I3→I4** (I5 before I3); I9 before I6; I6 additionally gated on
 shadow-data cleanliness; L5 is the terminal L item — it ships incrementally
-against landed sources and re-verifies after L6/L7; A14 after the R8–R12
-decomposition of its target editors; V2 baselines land only after #2382
+against landed sources and re-verifies after L6/L7; **A14 after R9 (notebook)
+and R10 (semantic-model); it mounts into report-designer's existing decomposed
+shell (report-designer has no R8–R12 item — already decomposed per
+ws-ratchets.md), and its SQL-editor target is `unified-sql-database-editor.tsx`
+(mount after its decomposition if one is scheduled, else directly)**; V2
+baselines land only after #2382
 (dark-theme fix) is deployed (else baselines bake the bug in); **U0 before any
 WS-U G3 item is declared done (and any clipping regression it finds is a P0 fix
 before U1–U6); U1 before A6–A9 before U2 (same editor); U11's guard after R3's
 `_ratchet-count.mjs` helper exists; N9 before N12/N15; N11 after N9; N13 after
 E1→…→E6; N15 before N16's renderer + N18's RLS; N17 after L2; N19d extends C5
-(never a parallel delivery path)**; serialize per the
+(never a parallel delivery path); M1 before M2/M3; M3 after N16 (the
+PBIX→code-report target) and after the A1–A3 DAX parser lands**; serialize per the
 expanded serialization list above (env-checks/registry + their tests,
 playwright.config.ts, cost-client.ts, admin nav registries, same editor, and
 every extend-vs-decompose file pair).
 
 ## Verification of the program itself
 
-The program is DONE when: all 130 items merged with receipts; the synthetic-journey
+The program is DONE when: all 134 items merged with receipts; the synthetic-journey
 job has run green ≥7 consecutive days on BOTH clouds; the secret-expiry monitor
 (S1) shows green with >60 days of runway on every tracked credential; the
 visual-regression (wide + narrow) and a11y gates have each caught-or-passed a full
@@ -429,7 +461,10 @@ drill (the EXTENDED `dr-drill.yml`, all scenarios incl. `adls-versioning-restore
 and the graph/vector Cosmos validation) has completed green end-to-end on
 Commercial + Gov. All 13 ratchets enforced in CI and at-or-below their baselines.
 **Pass-2 additions:** every WS-U G3 item carries a browser drag+reload receipt
-(with U0's live-grip verdict on record); an EXTERNAL engine (pyiceberg/DuckDB/
+(with U0's live-grip verdict on record); **PR #2389 is MERGED before WS-U
+dark-font coverage is claimed complete (round-2 F1 — #2389 was OPEN at review
+time; if it is abandoned/closed-unmerged, its scope re-enters WS-U as a new
+item per WS-U §0)**; an EXTERNAL engine (pyiceberg/DuckDB/
 Trino) has read a real Loom lakehouse table through the N1 IRC endpoint on both
 clouds; a multi-hop question has answered with graph-path citations (N11) and
 every agentic answer renders a receipt with a verified/refused badge (N9/N10);

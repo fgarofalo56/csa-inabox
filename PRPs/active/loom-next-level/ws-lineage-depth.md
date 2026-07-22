@@ -944,7 +944,9 @@ external cron (not setInterval) via a log receipt.
 
 **Grounding (verified).** Presence + comments EXIST (`lib/collab/` ~1,163 LOC:
 `canvas-presence-model/store`, `canvas-comment-model/store`,
-`item-comment-model`, hooks, `canvas-collab-kit.tsx` + `canvas-collab-layer.tsx`,
+`item-comment-model`, hooks; plus `canvas-collab-kit.tsx` +
+`canvas-collab-layer.tsx`, which live under `lib/components/canvas/` — NOT
+`lib/collab/` (round-2 path correction);
 routes `/api/items/[type]/[id]/canvas-presence` + `.../comments`) but are wired
 into only **4 canvas surfaces** (`agent-flow-canvas`, `eventstream/visual-designer`,
 `pipeline/canvas`, `mapping-dataflow-designer`) and the transport is **polling**
@@ -966,11 +968,16 @@ report-designer, semantic-model, one SQL editor), so multi-user is A-grade
 - `app/api/collab/negotiate/route.ts` (NEW) — session-gated Web PubSub
   client-access-token negotiate (UAMI-signed), honest-gated when the service is
   unset.
-- Extend the `canvas-collab-layer.tsx` mount into `notebook-editor.tsx`,
-  `report-designer.tsx`, `phase3/semantic-model-editor.tsx`, and one SQL editor
-  — presence avatars + item-comment thread rail. **(Sequence AFTER the WS-R
-  R8–R12 decompositions of those editors so the mount lands in the decomposed
-  shell, not the monolith — hard ordering in the master spine.)**
+- Extend the `canvas-collab-layer.tsx` (in `lib/components/canvas/`) mount into
+  `notebook-editor.tsx`, `report-designer.tsx`,
+  `phase3/semantic-model-editor.tsx`, and one SQL editor
+  (`unified-sql-database-editor.tsx`) — presence avatars + item-comment thread
+  rail. **(Sequencing, precision per round-2 F3: AFTER R9 for the notebook and
+  R10 for the semantic-model editor so the mount lands in the decomposed shell,
+  not the monolith; report-designer is ALREADY decomposed — mount into its
+  existing shell, no decomposition PR exists for it; the SQL-editor target
+  mounts after its decomposition if one is scheduled, else directly. Hard
+  ordering in the master spine.)**
 
 **Backend/infra (bicep-sync).**
 `platform/fiab/bicep/modules/admin-plane/web-pubsub.bicep` (NEW,
