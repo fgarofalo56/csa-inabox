@@ -1,0 +1,69 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "csa-loom://content/evals/_schema.json",
+  "title": "CSA Loom Copilot golden eval row",
+  "description": "One JSON object per JSONL line in content/evals/<surface>.jsonl. Every expectedChunks entry must resolve to a real corpus doc path (+ optional heading anchor) — scripts/csa-loom/lint-eval-sets.mjs enforces this against the docs tree and, where available, apps/fiab-console/copilot-corpus/.corpus-manifest.json.",
+  "type": "object",
+  "required": [
+    "id",
+    "question",
+    "expectedChunks",
+    "expectedAnswer",
+    "mustMention",
+    "mustNotMention",
+    "tier",
+    "taskClass"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "Unique row id: '<surface>-<NNN>' (surface = the JSONL basename).",
+      "pattern": "^[a-z0-9]+(-[a-z0-9]+)*-[0-9]{3}$"
+    },
+    "question": {
+      "type": "string",
+      "description": "The user question posed to the Copilot surface.",
+      "minLength": 10,
+      "maxLength": 500
+    },
+    "expectedChunks": {
+      "type": "array",
+      "description": "Corpus doc paths (repo-root-relative, optionally '#<heading-anchor>') the retriever SHOULD surface. Scored as hit-rate + MRR by the E2 evaluator.",
+      "minItems": 1,
+      "maxItems": 6,
+      "items": {
+        "type": "string",
+        "pattern": "^(docs|PRPs)/[^#\\s]+\\.md(#[a-z0-9][a-z0-9_-]*)?$"
+      }
+    },
+    "expectedAnswer": {
+      "type": "string",
+      "description": "The grounded reference answer, reflecting the ACTUAL product (Azure-native by default; Fabric strictly opt-in). Fed to the LLM judge as the gold answer.",
+      "minLength": 20,
+      "maxLength": 1500
+    },
+    "mustMention": {
+      "type": "array",
+      "description": "Deterministic grounding guard: case-insensitive substrings the answer MUST contain. Checked BEFORE the LLM judge.",
+      "maxItems": 8,
+      "items": { "type": "string", "minLength": 2, "maxLength": 120 }
+    },
+    "mustNotMention": {
+      "type": "array",
+      "description": "Deterministic anti-hallucination guard: case-insensitive substrings the answer must NOT contain. Encodes the no-fabric-dependency + no-vaporware rules as assertions (e.g. 'requires a Fabric capacity'). A hit = auto-fail, no judge spend.",
+      "maxItems": 8,
+      "items": { "type": "string", "minLength": 2, "maxLength": 120 }
+    },
+    "tier": {
+      "type": "string",
+      "description": "Expected model tier from lib/foundry/model-tier-router.ts ModelTier.",
+      "enum": ["mini", "standard", "strong"]
+    },
+    "taskClass": {
+      "type": "string",
+      "description": "Expected task class from lib/foundry/model-tier-router.ts TaskClass (feeds the E6 tier-accuracy set).",
+      "enum": ["lightweight", "general", "reasoning"]
+    }
+  }
+}
