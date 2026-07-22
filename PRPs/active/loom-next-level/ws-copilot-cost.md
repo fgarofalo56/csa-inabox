@@ -155,15 +155,26 @@ TTL 180d on results (keep run summaries indefinitely). Container created via cos
   `loom-copilot-evals` writes (shared account with I3 shadow + C3 rules + V1
   summaries) and the ACA/Function scale settings (min/max instances for the
   scheduled jobs) in the PR — the one-page capacity note SRE F10 requires.
+- **Judge-token cap (round 3, F1):** the judge token bill is the program's
+  recurring-cost sleeper — it scales with corpus size × roll frequency (E4
+  fires a run on EVERY roll plus nightly). E2 already gates the deterministic
+  forbidden-phrase guards BEFORE the judge (auto-fail = no judge spend) —
+  extend that thinking to a **per-day judge-call budget**:
+  `LOOM_COPILOT_EVAL_JUDGE_DAILY_CAP` (default e.g. 500 judged Q/day; rides
+  the existing env-adding PR). When the cap is hit, further runs that day
+  score retrieval-only (deterministic, free) and mark judge scores `deferred`
+  — the E3 gate treats deferred as no-change, never as a regression. The
+  per-item cost note: `Cost: +token spend (judge — capped/day, per-roll +
+  nightly)`; counted in COST0's program budget.
 
 **Env vars (ENV_CHECKS + gate registry):**
 - `COPILOT_EVALUATOR_CRON` (optional default). `LOOM_COPILOT_EVAL_JUDGE_DEPLOYMENT` (optional; defaults to `LOOM_AOAI_STRONG_DEPLOYMENT`→ mini→ default). `LOOM_COPILOT_EVAL_ENABLED` (default true, opt-out per `loom_default_on_opt_out`).
 - New ENV_CHECKS id `svc-copilot-evaluator` (category `ai-copilot`, severity `optional`, `warnOnMiss`), remediation naming the Function + roles, `provisionedBy` the new bicep module. Gate-registry Fix-it kind `wizard` (deploy-the-Function wizard) + `role-grant` for the three RBAC roles.
 
-**Acceptance / G1 receipt:** POST the HTTP trigger against the live centralus deployment with `{surfaces:["help"],trigger:"manual"}`; attach the real Cosmos `eval-run` doc (first 300 chars) showing `retrievalHitRate`/`groundingAvg` computed from REAL AI-Search + AOAI; attach the Function log line `[copilot-evaluator] run help: 20 Q, hit-rate 0.9, grounding 4.3`. Vitest for `evaluator-core` green.
+**Acceptance / G1 receipt:** POST the HTTP trigger against the live centralus deployment with `{surfaces:["help"],trigger:"manual"}`; attach the real Cosmos `eval-run` doc (first 300 chars) showing `retrievalHitRate`/`groundingAvg` computed from REAL AI-Search + AOAI; attach the Function log line `[copilot-evaluator] run help: 20 Q, hit-rate 0.9, grounding 4.3`. Vitest for `evaluator-core` green. **E2 ships with its threat-model row signed (round 3, Q6 — partial I9 pulled forward):** the STRIDE row for the evaluator Function (identity posture, no storage keys, role scopes, HTTP-trigger exposure) is written + reviewed in the E2 PR itself, so ATO evidence accrues as the item lands; the full I9 review remains the pre-I6 gate and cross-references it.
 
 **Per-cloud:**
-- **Commercial (centralus, live):** judge = `gpt-5.6`/`gpt-5.5` strong tier; AI-Search `loom-docs`. Run live to produce the receipt.
+- **Commercial (centralus, live):** judge = `gpt-5.6`/`gpt-5.5` strong tier (**model names illustrative — resolved via `bestReasoningModelForCloud()` at runtime; do NOT hardcode these as deployment names**); AI-Search `loom-docs`. Run live to produce the receipt.
 - **Gov GCC-High (live; `.us`):** judge = `gpt-5.1`/`gpt-4.1` (Gov floor, Learn-verified); AOAI scope `.us` handled by the unified client already; AI-Search `.us` endpoint. No global-standard deployment — use standard/data-zone. Verified Gov has reasoning + gpt-4.1 so the judge tier is real.
 - **IL5/air-gapped (design-only):** no nightly cloud judge egress needed (all in-tenant). If no strong-tier model is deployed, the judge falls back to `mini`/`default` deployment; document that answer-quality scores are advisory at lower judge tiers and retrieval hit-rate (deterministic) remains authoritative. No internet dependency — corpus + eval sets are in-image.
 

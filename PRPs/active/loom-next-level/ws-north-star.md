@@ -63,6 +63,29 @@ moat.
 > ON (`loom_default_on_opt_out`), is Fabric-free on the default path
 > (`no-fabric-dependency`), and labs items ship Preview-badged.
 
+> **Round-3 conventions (binding on every N-item):**
+> **(a) Cost note (F1):** every N-item's acceptance carries the master's
+> one-line cost note (`Cost: +$X/mo always-on | ~$0 idle | +token spend`);
+> the always-on ACA services (N1, N2b, N3, N4, N7a, N7e) each state a real
+> monthly number and carry the `loom-next-level` resource tag so COST0's
+> budget alert bounds the aggregate.
+> **(b) Runtime kill-switch (F3 — FLAG0):** every N-item with a NEW end-user
+> surface — **N2a/N2b (SQL Lab + wasm preview), N4 (plan/apply wizard), N5
+> (assets canvas), N6 (data-contract editor), N9 (refuse UX), N10 (receipts
+> panel), N11 (graph-grounding toggle), N12, N15 (metrics endpoint consumers),
+> N16 (Code report), N17 (Monitors + Incidents), N18 (embed SDK), N19a/N19c/
+> N19d and shipped labs** — registers a default-ON `loom-runtime-flags` flag
+> so an admin can kill the surface without a roll. Infra-only items (N7b
+> control plane internals, N19b SDKs, …) are exempt.
+> **(c) Audit extension (F7):** the **external data-access paths** — N1 IRC
+> catalog reads/writes, N2b DuckDB server queries, N3 Flight SQL ticket
+> issuance/sessions — write audit rows (principal, workspace/table scope,
+> operation, timestamp; aggregation allowed for high-volume reads) per the
+> master audit standard's round-3 extension.
+> **(d) License row (F5 — LIC0):** every N-item embedding an OSS component
+> states its SPDX license + pinned OSS version in its PR and adds the LIC0
+> inventory row; no BSL/SSPL/AGPL in the distributed set.
+
 ---
 
 # PILLAR 1 — OPENNESS (from datastack.md)
@@ -81,8 +104,11 @@ ADLS, zero copy. "The defector-maker."
 endpoint; `grep iceberg` hits only docs.
 
 **Build (3 PRs):**
-1. **`iceberg-catalog` service** — deploy **Unity Catalog OSS** (preferred:
-   natively bridges Delta+Iceberg; Polaris is the alternative) as an ACA
+1. **`iceberg-catalog` service** — deploy **Unity Catalog OSS (DECIDED —
+   operator, 2026-07-22:** UC-OSS natively bridges Delta+Iceberg, the
+   dual-metadata requirement, and Loom already runs UC-OSS in Gov; a second
+   catalog runtime would add no parity gain. Apache Polaris remains a footnote
+   only, not a build option) as an ACA
    service: bicep `modules/data-plane/iceberg-catalog-aca.bicep` (internal
    ingress, UAMI Storage Blob Data Reader on the DLZ lake, params via the R0
    config object), env `LOOM_ICEBERG_CATALOG_URL` (ENV_CHECKS + gate + Fix-it,
@@ -100,9 +126,11 @@ endpoint; `grep iceberg` hits only docs.
 **Acceptance:** G1 receipt = an EXTERNAL engine (`pyiceberg` or DuckDB iceberg
 ext) lists AND reads a real Loom lakehouse table through the IRC endpoint;
 Trino/DuckDB reads the same table Loom wrote as Delta (dual-metadata proof);
-`LOOM_DEFAULT_FABRIC_WORKSPACE` unset throughout. **Per-cloud:** Commercial +
+`LOOM_DEFAULT_FABRIC_WORKSPACE` unset throughout; IRC data-access audit rows
+present in the receipt (round-3 audit extension). **Per-cloud:** Commercial +
 GCC-High live (ACA + ADLS both GA); IL5 — fully in-boundary (container +
 storage only, no SaaS catalog) — this IS the moat item for data interop.
+**Cost:** +$100–200/mo/cloud always-on (min-1-replica ACA, 1–2 vCPU class).
 **Serialization:** lakehouse editor (WS-R decomposition targets). **Size: XL.**
 
 ## N2 — DuckDB dual-mode: in-browser WASM preview + server-side query tier
@@ -123,8 +151,12 @@ Serverless on unset `LOOM_DUCKDB_URL` (honest gate + Fix-it).
 three clouds `true` — embedded OSS binary; wasm is static JS).
 **Acceptance:** G1 — filter/group a 100k-row sample entirely client-side (no
 network, timing bar proves it); server tier: `delta_scan('abfss://…')` returns
-real rows with Fabric unset. **Per-cloud:** identical everywhere; IL5
-air-gap-safe (no external calls). **Size: M (wasm) + M (server tier).**
+real rows with Fabric unset; server-tier query audit rows present (round-3
+audit extension); the SQL Lab surface registers its FLAG0 runtime flag.
+**Per-cloud:** identical everywhere; IL5
+air-gap-safe (no external calls). **Cost:** wasm ~$0 (static JS); server tier
++$50–150/mo/cloud always-on (min-1-replica ACA).
+**Size: M (wasm) + M (server tier).**
 
 ## N3 — Arrow Flight SQL + ADBC serving wire
 
@@ -142,9 +174,12 @@ lakehouse/warehouse/SQL-endpoint items: ADBC/Flight/JDBC connection snippets
 Flight past a size threshold (measurable latency drop on wide results —
 receipt includes the before/after timing).
 **Acceptance:** G1 — `adbc_driver_flightsql` (Python) pulls ≥1M rows from a
-real lakehouse table in the receipt, with timing vs the TDS path.
+real lakehouse table in the receipt, with timing vs the TDS path; Flight
+ticket-issuance/session audit rows present (round-3 audit extension).
 **Per-cloud:** gRPC/HTTP2 on ACA works Commercial + Gov; IL5 in-VNet only
-(ticket issuance in-boundary). **Size: M–L.**
+(ticket issuance in-boundary). **Cost:** +$50–150/mo/cloud always-on when
+deployed as a sibling ACA (~$0 marginal if it rides `loom-directlake`).
+**Size: M–L.**
 
 ## N4 — SQLMesh alongside dbt: transform runner + plan/apply UI
 
@@ -163,7 +198,9 @@ env-list). (2) **Plan/apply wizard** — environment picker → impact-diff grid
 (`loom_no_freeform_config`). (3) Model DAG on `canvas-node-kit` as
 software-defined assets (feeds N5).
 **Acceptance:** G1 — change a model in a dev virtual env, see the real diff,
-apply, verify prod untouched until promote; rollback receipt.
+apply, verify prod untouched until promote; rollback receipt; the plan/apply
+wizard registers its FLAG0 runtime flag.
+**Cost:** +$100–200/mo/cloud always-on (min-1-replica Python ACA).
 **Per-cloud:** OSS Python on ACA, engines all Gov-available; IL5 in-VNet.
 **Serialization:** dbt CI workflows (`dbt-ci.yml`) + WS-L L6 (dbt manifest
 lineage) — L6's manifest parse consumes this runner's artifacts; coordinate.
@@ -204,7 +241,11 @@ table introspection), quality/semantic rules via dropdown builder (no raw
 YAML), SLA; stored as ODCS 3.1 JSON in Cosmos; import/export for portability.
 (2) **Enforcement hook** in the ingestion paths (mirroring engine, pipeline
 sinks, eventstream): conform → land; violate → quarantine to a Bronze
-`_rejected` dead-letter path + alert via O1 dispatch. (3) Governance registry
+`_rejected` dead-letter path + alert via O1 dispatch. **Default enforcement
+mode (round-3 Q4, CONFIRMED): default-ON in warn+quarantine-to-deadletter
+mode — NOT hard-reject-the-batch** — so a bad contract can never silently drop
+a production load on day one; hard-reject is a per-contract opt-in setting.
+(3) Governance registry
 page: contracts, bindings, pass/fail trend.
 **Acceptance:** G1 — push a schema-breaking row through the mirroring engine →
 rejected + quarantined + alerted, table uncorrupted; receipt shows the
@@ -220,7 +261,8 @@ into separate PRs at implementation — the id groups them for phasing):
   endpoint** + Debezium CDC; streaming materialized views in SQL; sink to
   Delta/Iceberg or serve over Postgres wire. ASA stays the light default.
   `LOOM_RISINGWAVE_URL` (X2 all-clouds true — Apache-2.0 container).
-  Acceptance: a two-stream join MV updates live and lands in Delta. **L**
+  Acceptance: a two-stream join MV updates live and lands in Delta.
+  Cost: +$150–300/mo/cloud always-on (stateful streaming tier). **L**
 - **N7b Debezium CDC control plane** (T2-B): source-connector wizard
   (SQL Server/Postgres/MySQL/Mongo/Oracle) writing the config
   `fiab-mirroring-engine` already consumes + a live connector monitor
@@ -248,8 +290,12 @@ into separate PRs at implementation — the id groups them for phasing):
   engine alongside a fully functional default (DuckDB N2b) — disclosed per G2,
   no feature is gated behind it; the light path is fully default-ON. This is
   not a spend-gate and does not breach the BLOCKING default-ON rule.
+  **Round-3 operator decision (2026-07-22): N7e is KEPT — confirmed as the
+  program's single opt-in carve-out** (Apache-2.0; the AKS footprint is
+  accepted for estates that opt in).
   Acceptance: one SQL statement joins a Loom Iceberg table with an external
-  Postgres table. **L**
+  Postgres table. Cost: $0 until opted in; opted-in estates carry the AKS
+  Trino tier's real cost (disclosed by the Fix-it wizard at enable time). **L**
 
 **Per-cloud (all five):** OSS containers on ACA/AKS + Azure services GA in
 Gov; IL5 self-hosted in-boundary (webhook/Event Grid destinations work
@@ -261,8 +307,13 @@ air-gapped; SaaS destinations honest-gated). **Combined size: XL.**
   N1's IRC (forward bet on the DuckDB ecosystem). **S**
 - **Malloy / PRQL "modern query" mode** — transpile-to-SQL over the N2 DuckDB
   engine in the SQL editor. Community signal, zero prod commitment. **S**
-- **S3-compatible ADLS gateway** — MinIO-gateway pattern so `s3://`-native OSS
-  clients connect; complements N1. Gov-viable (self-hosted). **M**
+- **S3-compatible ADLS gateway** — so `s3://`-native OSS clients connect;
+  complements N1. **Round-3 operator decision (2026-07-22): the MinIO-gateway
+  path is DROPPED** (AGPL-v3 + MinIO deprecated the gateway pattern — fails
+  the LIC0 no-AGPL gate). The lab proceeds only via a permissively-licensed
+  path (e.g. Apache-2.0 `s3proxy`, or the IRC/ADLS SDK path making the gateway
+  unnecessary) — **if no permissive path proves viable at spike time, this
+  line is CUT.** Gov-viable (self-hosted). **M**
 
 Acceptance per labs item: Preview badge + catalog `preview:true` + one real
 E2E receipt. **Per-cloud:** self-hosted, all clouds.
@@ -449,7 +500,13 @@ MetricFlow-compatible spec import/export (OSI interop) and the **compiler +
 / `kusto-client` / lakehouse). One definition substrate, two consumers (agent
 contract + metrics API); N9 lands first.
 **Build (3 PRs):** (1) spec types + MetricFlow YAML import/export on the
-contract store; (2) compiler + query route (gate-envelope, cached via
+contract store — **PR-1 states the round-3 operator decision (2026-07-22):
+N15 is MetricFlow SPEC-COMPATIBLE and compiles NATIVELY — Loom's own compiler
+emits the SQL (the `wells-to-sql`/`tabular-model` lineage); there is NO
+runtime MetricFlow engine dependency (no embedded Python engine, no
+dbt-coupled runtime, no extra ACA service, no added licensing surface). An
+executing agent must NOT embed the MetricFlow engine**; (2) compiler + query
+route (gate-envelope, cached via
 `getOrComputeCached`); (3) the report designer + Copilot NL2SQL + external
 SDK all resolve metrics through the one endpoint.
 **Acceptance:** G1 — the SAME metric returns the SAME number via a report
@@ -458,12 +515,15 @@ receipt); an OSI YAML round-trips. **Per-cloud:** control-plane + Gov-GA
 engines, identical; IL5 in-boundary. **Serialization:** semantic-model editor
 (WS-A), N9. **Size: L.**
 
-## N16 — BI-as-code `code-report` item type
+## N16 — BI-as-code `code-report` item type ("Code report")
 
 **What/why (T1.2):** BI-as-code went mainstream 2026 (Evidence.dev, Rill,
 Observable) — dashboards as versionable text: PR-reviewed, CI-tested,
 diff-able. A category Loom is missing, and exactly what its git integration +
-`.loomapp` export were built for.
+`.loomapp` export were built for. **Naming CONFIRMED (round-3 operator
+decision, 2026-07-22): the user-facing item-type name is "Code report"**
+(slug `code-report`) — bake it into the new-item dialog, nav registries, and
+catalog copy on first write.
 **Build (4 PRs):** (1) `code-report` item type + parser (markdown +
 ```sql loom``` fenced blocks + `{visual}` directives → AST); registers in
 `new-item-dialog` + nav registries (passes `nav-registries.test.ts`).
@@ -559,16 +619,64 @@ One item id, seven PR-clusters:
 ## N20 — Governed-analytics Tier-3 labs (one-liners, Preview-badged)
 
 Univer OSS spreadsheet `sheet` item over lakehouse tables (read + write-back
-through the existing Delta path) · VS Code extension (scaffold/preview/auth on
+through the existing Delta path) — **round-3 acceptance PRECONDITION (operator
+decision, 2026-07-22): a module-level license review** (Univer's core is
+Apache-2.0 but some modules are commercial/AGPL — the review pins the exact
+permissively-licensed module set into the LIC0 inventory BEFORE any build
+starts; a failing review cuts the lab) · VS Code extension (scaffold/preview/auth on
 the N19b SDK) · `loom dev` local loop/emulators · plugin/extension marketplace
 (needs N19f webhooks + a versioned item-type contract FIRST — contract before
 ecosystem) · privacy engineering (pragmatic first slice: **DSAR search** over
 catalog + classification-59; then purpose-based access; then differential
 privacy on shared datasets) · audit-grade evidence packs (falls out of N19c +
 N17 structured events) · dashboards-as-code Terraform resources (once N16 +
-N19b land) · virtualized pivot grid (extends WS-U U10's primitive).
+N19b land) · virtualized pivot grid (extends WS-U U10's primitive) ·
+**"What's new in Loom" panel** *(round 3, F7 — NOTE-ONLY, do not over-build)*:
+a single release-notes-fed change-communication panel so the ~40 user-visible
+UX changes landing over the 6–10 week program are absorbed, not silently
+shifted under users.
 Acceptance per shipped labs item: Preview badge + one real E2E receipt.
 **Sizes: S–L each; schedule opportunistically.**
+
+---
+
+# CROSS-PILLAR — LIC0: OSS license inventory + NOTICE manifest *(NEW, round 3 — blindspot F5, ATO/legal)*
+
+**Why.** The openness pillar embeds a large OSS bill of materials (Unity
+Catalog OSS, DuckDB + extensions, XTable/delta-rs, SQLMesh, dbt-core,
+RisingWave, Debezium, Trino, OpenLineage, MapLibre, Univer, pyiceberg, MLflow,
+Malloy, Marimo, Soda Core/GE) with **zero license-inventory or NOTICE
+treatment**. The risk is not copyleft contamination (the core set is
+Apache-2.0/MIT/BSD — **ACCEPTED**, round-3 operator decision) — it is
+(1) **Apache-2.0 §4(d) NOTICE propagation**: Loom is *distributed software*
+(customers deploy into their own subs, images pull into a customer ACR), so
+bundled Apache-2.0 components' NOTICE files must ship; a missing attribution
+manifest is an ATO audit finding. (2) **Open-core/commercial-tier traps**:
+Univer Pro, RisingWave Cloud, Databricks-managed UC — a dependency bump can
+silently pull a source-available/BSL tier (MetricFlow was BSL until Oct 2025 —
+the risk is live).
+
+**Build (1 PR + ratchet).**
+- Enumerate every embedded OSS component with **SPDX license + pinned
+  OSS-licensed version**; generate/commit **`THIRD_PARTY_LICENSES`** (+
+  `NOTICE` aggregation for the Apache-2.0 set) covering the `apps/loom-*`
+  container images and the console bundle.
+- `scripts/ci/check-license-inventory.mjs` (reuse `_ratchet-count.mjs`) —
+  **fails when a new dependency in the distributed OSS containers has no
+  inventory row**, and **asserts "no BSL / SSPL / AGPL in the distributed
+  set"** as a hard gate (this is what mechanically enforces the MinIO-gateway
+  drop and the Univer module review).
+- Per-N-item convention (round-3 conventions block (d)): each OSS-embedding
+  PR adds its inventory row.
+
+**Acceptance.** Manifest committed; CI ratchet green at the enumerated
+baseline; a scratch PR adding an AGPL dep FAILS the gate (receipt); the
+manifest ships inside the distributed images (verifiable via
+`docker run … cat /THIRD_PARTY_LICENSES`). **Cost:** ~$0.
+**Per-cloud.** Cloud-neutral (carve-out declaration: cloud-neutral); IL5 —
+the manifest is part of the offline-delivery artifact set (X-IL5 item 3).
+**Phase:** the ratchet lands Phase 1 (master spine) — **enforced BEFORE any
+Phase-4 OSS embed lands.** **Size: S–M.**
 
 ---
 

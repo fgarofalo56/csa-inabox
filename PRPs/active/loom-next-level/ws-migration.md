@@ -99,4 +99,5 @@ in-boundary; SaaS-source connectors honest-gated in IL5. **Size: XL, split**
   A1–A3 DAX parser lands**; contract emission targets N9's store.
 - Serialize with N19g (shared catalog-metadata ingest) and the env-checks/
   registry files for any new env var (X2 `availability` on every EnvSpec).
-- No new ratchets — the program's ratchet inventory stays at 13.
+- No new ratchets in WS-M (the program's round-3 ratchet inventory of 15 —
+  incl. LIC0 + FRESH0 — lands in other workstreams).

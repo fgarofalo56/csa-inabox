@@ -238,6 +238,11 @@ other than the monitor (unexpected-use detection).
   `synthetic-runs` container + the admin page instead of GitHub Issues; alert
   sink stays in-tenant (email via in-boundary SMTP relay / Log Analytics).
 
+**Cost (round 3, F1):** +$ low-tens/mo per cloud always-on-adjacent — the
+scheduled ACA job runs 4×/hr ×2 clouds (consumption-billed run minutes) + Blob
+artifact storage (bounded by the 30d lifecycle rule). Counted in COST0's
+program budget.
+
 ---
 
 ## V2 — Visual regression (screenshot-diff, light + dark, per-PR + post-roll)
@@ -522,6 +527,11 @@ the monthly drill has a wide-enough window.
   the tier to `param cosmosBackupTier string = 'Continuous7Days'`
   (allowed: `Continuous7Days` | `Continuous30Days`). Document that 30-day is
   recommended where the monthly DR drill cadence needs the window.
+  **Round-3 tier note (Learn-verified wrinkle):** `Continuous30Days` is the GA
+  default; **`Continuous7Days` is documented as "in preview"** — and the repo
+  currently runs `Continuous7Days`. **Prefer `Continuous30Days` (GA) for the
+  drill window**; at implementation, confirm the 7-day tier's Gov-region
+  support/GA status or move the default to `Continuous30Days`.
 - Wire params through `modules/admin-plane/main.bicep` +
   `params/commercial-full.bicepparam` (and the Gov paramfile) — **via the R0
   config-object pattern (`main.bicep` is at the 256-param cap; `enableBlobPitr`
@@ -608,7 +618,11 @@ DR-drills tab shows the run green.
 - **Commercial**: `centralus`, restore into scratch RG in the admin sub.
 - **Gov (GCC-High)**: identical; `az cosmosdb restore` supported in Gov;
   `.us`; Gov SP `csa-loom-gov-deploy`; scratch RG in the Gov sub. Restore region
-  must be one where backups exist (Gov region).
+  must be one where backups exist (Gov region). **Round 3:** the drill confirms
+  the account's continuous-backup tier per the DR0 tier note — prefer
+  `Continuous30Days` (GA) where the drill window needs it; verify the current
+  `Continuous7Days` (preview-documented) tier's Gov-region support or move to
+  30-day.
 - **IL5 (design only)**: same ARM verbs; runner in-enclave; report to in-boundary
   Blob only. If cross-region restore is disallowed, restore in-region.
 
@@ -781,21 +795,28 @@ Cosmos `dr-runs` container + the admin page; alert sink in-tenant.
   Secret-health surface shows a red row with days-to-expiry; dark+light
   screenshots.
 
-## S2 — Federated-credential migration feasibility spike (documented decision)
+## S2 — Federated-credential **migration spike** (documented decision) *(round 3 — re-scoped from "feasibility spike" per Q7: feasibility is established)*
 
-- **Goal:** determine whether the MSAL confidential web-app auth-code flow can
-  move to **workload-identity-federation / managed-identity as the
-  confidential-client credential**, eliminating the secret entirely.
-  *(Verification-at-implementation flag — Learn: Entra federated credentials on
-  app registrations are designed for external workload trust (CI, other IdPs);
-  "managed identity as a federated credential" / certificate-less flows exist
-  for confidential clients. Whether MSAL-Node's confidential-client web-app
-  auth-code flow supports a managed-identity-issued client assertion in ACA
-  needs a live Learn check + spike, not an assumption.)*
+- **Goal:** plan and de-risk moving the MSAL confidential web-app auth-code
+  flow to **managed identity as the federated credential** (certificateless
+  auth), eliminating the 2-year secret entirely — which retires WS-S's whole
+  root cause.
+  **Round-3 anchor (verbatim clarification):** anchor the spike on Learn
+  **"certificateless authentication"** (app-registration federated identity
+  credential with subject = the managed identity's principal ID, audience
+  `api://AzureADTokenExchange`) + the **MSAL-Node confidential-client
+  `clientAssertion` callback**, which expressly supports the FIC scenario. The
+  question is the **ACA-managed-identity token-issuance specifics**, NOT
+  whether confidential-client FIC exists (it does) — feasibility trends YES,
+  so S3 (auto-rotation) is a true fallback, not the expected path. The spike
+  must not dead-end on the wrong sub-question ("MSAL-Node managed-identity
+  confidential client" without the certificateless/FIC framing).
 - **Deliverable:** `docs/fiab/runbooks/msal-credential-strategy.md` —
-  feasibility verdict + migration plan, or a "stay-on-secret, automate rotation
-  (S3)" decision.
-- **Per-cloud:** no per-cloud build; design + one live spike on Commercial.
+  migration plan (FIC setup, ACA-MI assertion wiring, rollout + rollback), or
+  a documented "stay-on-secret, automate rotation (S3)" decision if the ACA-MI
+  specifics genuinely block.
+- **Per-cloud:** no per-cloud build; design + one live spike on Commercial
+  (Gov authority variant noted in the runbook).
 
 ## S3 — Secret auto-rotation runbook + workflow (fallback if S2 is negative)
 
@@ -981,6 +1002,65 @@ Cosmos `dr-runs` container + the admin page; alert sink in-tenant.
   unsigned scratch image is REJECTED by the roll (paste the rejection); V5 drift
   lane confirms the ACR enforcement toggle matches bicep.
 
+## COST0 — Program run-rate budget + Cost Management alert *(NEW, round 3 — blindspot F1)*
+
+- **Why.** The program stands up ~6 always-on ACA services (N1 `iceberg-catalog`,
+  N2b `loom-duckdb`, N3 `loom-flightsql`, N4 `loom-transform-runner`, N7a
+  RisingWave, N7e Trino opt-in), Azure Web PubSub (A14, when opted in), five
+  new Functions, scheduled synthetic jobs ×2 clouds (V1), visual-regression
+  artifact storage (V2), RUM ingestion (RUM1), and recurring AOAI LLM-judge
+  token spend on every eval run and roll (E2) — an unbudgeted low-four-to-
+  five-figures/mo structural run-rate across both estates that nothing bounded
+  or even acknowledged. An unbudgeted run-rate is a program-killer no reviewer
+  round catches.
+- **Goal.** A monthly **run-rate ceiling for the program's new resources**,
+  wired to a **Cost Management budget alert** (`Microsoft.Consumption/budgets`)
+  filtered on the **`loom-next-level` resource tag** at **80% and 100%**
+  thresholds, alerting through the O1 action group. Every new resource this
+  PRP deploys carries the `loom-next-level` tag in its bicep module (one-line
+  tag convention, retro-applied to earlier-landed items in this PR). This
+  **dogfoods the existing budgets client** (WS-C `cost-client.ts` budget CRUD)
+  — it is dogfooding, not new build — and doubles as a demo artifact: "the
+  platform monitors its own spend."
+- **Files.** A `loom-next-level` budget definition via the C4 budgets CRUD
+  path (audited, `kind:'finops.budget'`) or a small
+  `modules/admin-plane/program-budget.bicep`; the tag convention line added to
+  the master's bicep-sync standard; a "Program run-rate" row on `/admin/finops`.
+- **Env/gate.** None new beyond the O1 alert var (params via the R0 config
+  object).
+- **Acceptance (G1).** The budget exists on the live Commercial estate scoped
+  to the tag; a forced low-ceiling scratch budget fires the 80% alert through
+  the O1 action group (receipt); `/admin/finops` shows the program row.
+  **Cost:** ~$0 (a budget object is free; it *bounds* spend).
+- **Per-cloud.** Commercial + Gov (Cost Management budgets GA in Gov; Gov
+  billing scope via the Gov SP). IL5 design note: in-boundary Cost Management
+  only. **Size: S.**
+
+## FLAG0 — Cosmos-backed `loom-runtime-flags` runtime kill-switch *(NEW, round 3 — blindspot F3)*
+
+- **Why.** Every rollout control today is a `LOOM_*_ENABLED` env var — flipping
+  one requires an ACA revision roll; a pure-UX change has no flag at all, so
+  the only revert is git-revert + rebuild + roll (~15–30 min MTTR). The PRP's
+  own cited history (GuidedPickerRail #2079: passed every CI gate, hard-froze
+  the live renderer) proves user-visible regressions ship through all gates.
+  A runtime kill-switch cuts MTTR from "rebuild+roll" to "toggle" (seconds).
+- **Goal.** A **Cosmos-backed `loom-runtime-flags` document store** (existing
+  Cosmos plumbing; reads via `getOrComputeCached` so the hot path stays cheap)
+  + a `lib/admin/runtime-flags.ts` helper (`runtimeFlag(id, {default:true})`)
+  + an `/admin` **Runtime flags panel** (admin-shell registered;
+  `nav-registries.test.ts` green) where an admin flips any registered flag
+  **without a roll**. Flags are **default-ON** per `loom_default_on_opt_out`
+  and are NOT spend/config gates — they exist solely as an operational
+  kill-switch. **Scope: the user-visible N/U items** (U1/U2/U10/U12 + the
+  user-visible N-items per the WS-N conventions block), not infra items.
+  Every flag flip writes an `_auditLog` row (audit standard).
+- **Acceptance (G1).** A seeded user-visible surface registered on a flag:
+  flip OFF in `/admin` → the surface reverts to its pre-item behavior on next
+  load with NO deploy (network receipt shows no revision change); flip back ON
+  → restored; audit rows present; MIG1 migrator registered for the doc shape.
+  **Cost:** ~$0 (Cosmos reads are cached).
+- **Per-cloud.** Cloud-invariant (Cosmos only); IL5 in-boundary. **Size: S–M.**
+
 ---
 
 ## Build order (dependency spine — rev 2)
@@ -1005,6 +1085,9 @@ Cosmos `dr-runs` container + the admin page; alert sink in-tenant.
     summary/admin tab.
 11. **SLO1, DIAG1, CH1, EXP1, CMK1, SC1** — Phase 2, independent of each other;
     SLO1 after V1 has ≥1 week of run history.
+12. **FLAG0** (round 3) — Phase 0, with/before the first user-visible N/U item
+    (U10 lands Phase 0). **COST0** (round 3) — Phase 1, before the always-on
+    N-services start accruing spend.
 
 Every PR attaches its G1 receipt (live/preview browser E2E, dark+light where a
 surface is involved) per `no-vaporware.md` + `loom_browser_e2e_before_done`;
