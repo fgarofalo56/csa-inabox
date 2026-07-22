@@ -48,6 +48,7 @@ import { EmptyState } from '@/lib/components/empty-state';
 import { Section } from '@/lib/components/ui/section';
 import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
+import { useRuntimeFlag } from '@/lib/components/ui/use-runtime-flag';
 import { itemVisual, readableAccent } from '@/lib/components/ui/item-type-visual';
 import { useTheme } from '@/lib/theme/theme-context';
 import { CatalogItemActions } from '@/lib/components/catalog/catalog-item-actions';
@@ -304,6 +305,9 @@ function prettyClassification(v: string): string {
 export function FederatedSearch() {
   const s = useStyles();
   const { mode } = useTheme();
+  // U10 — window the result table past the shared 200-row cutoff (a broad
+  // federated query fans out to every source). Kill-switch OFF → pre-U10 path.
+  const virtualizeOn = useRuntimeFlag('u10-browse-virtualization');
   const [q, setQ] = useState('');
   const [sourceFilter, setSourceFilter] = useState<Set<string>>(new Set());
   const [typeFilter, setTypeFilter] = useState('');
@@ -632,6 +636,7 @@ export function FederatedSearch() {
             loading={loading}
             onRowClick={(h) => setDetail(h)}
             ariaLabel="Catalog search results"
+            virtualizeRows={virtualizeOn}
             empty={
               <EmptyState
                 icon={<Search16Regular />}

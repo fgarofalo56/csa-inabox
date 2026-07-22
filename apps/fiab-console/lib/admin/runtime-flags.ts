@@ -57,7 +57,14 @@ export interface RuntimeFlagDef {
  * Items register their flag here in the SAME PR that ships the flagged path.
  */
 export const RUNTIME_FLAGS: readonly RuntimeFlagDef[] = [
-  // U10 (same chain, next PR) registers 'u10-browse-virtualization' here.
+  {
+    id: 'u10-browse-virtualization',
+    label: 'Browse & marketplace virtualization',
+    description:
+      'Windowed rendering (VirtualizedGrid + windowed table rows) for 200+-item collections on /browse and the marketplace. OFF reverts every adopting surface to the pre-U10 full-render path on the next load — the GuidedPickerRail-class revert this substrate exists for.',
+    ownerItem: 'U10',
+    surface: '/browse (pins, workspaces, all-items table) + /marketplace grids',
+  },
 ];
 
 /** Union of registered flag ids (`never` while the list is empty). */

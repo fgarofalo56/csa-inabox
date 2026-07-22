@@ -30,7 +30,8 @@ import {
   Warning16Regular, MoneyRegular, StoreMicrosoft24Regular, Database20Regular,
   Bot20Regular, PlugConnected20Regular, Apps20Regular, Share20Regular,
 } from '@fluentui/react-icons';
-import { TileGrid } from '@/lib/components/ui/tile-grid';
+import { VirtualizedGrid } from '@/lib/components/ui/virtualized-grid';
+import { useRuntimeFlag } from '@/lib/components/ui/use-runtime-flag';
 import { BrandedItemIcon } from '@/lib/components/ui/branded-item-icon';
 import { EmptyState } from '@/lib/components/empty-state';
 
@@ -99,6 +100,8 @@ const useStyles = makeStyles({
 
 export function LivingMarketplace() {
   const s = useStyles();
+  // U10 kill-switch (FLAG0) — OFF reverts to the pre-U10 full-render grid.
+  const virtualizeOn = useRuntimeFlag('u10-browse-virtualization');
   const [q, setQ] = useState('');
   const [activeKinds, setActiveKinds] = useState<Set<Kind>>(new Set(KINDS));
   const [products, setProducts] = useState<Product[] | null>(null);
@@ -212,8 +215,15 @@ export function LivingMarketplace() {
         />
       )}
 
-      <TileGrid minTileWidth={300}>
-        {filtered.map((p) => {
+      {/* U10 — windows past 200 products; kill-switch OFF or ≤200 renders the
+          plain TileGrid path (pre-U10). */}
+      <VirtualizedGrid
+        items={filtered}
+        enabled={virtualizeOn}
+        minTileWidth={300}
+        getKey={(p) => p.id}
+        ariaLabel="Marketplace products"
+        renderTile={(p) => {
           const blockers = (p.certGates || []).flatMap((g) => g.missing).filter(Boolean);
           const subscribable = p.certification === 'certified' && p.publishStatus !== 'deprecated';
           return (
@@ -255,8 +265,8 @@ export function LivingMarketplace() {
               </div>
             </Card>
           );
-        })}
-      </TileGrid>
+        }}
+      />
 
       <PublishDialog open={publishOpen} setOpen={setPublishOpen} onDone={(res) => { setBanner(res); void load(); }} />
     </div>

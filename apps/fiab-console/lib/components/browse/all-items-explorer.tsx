@@ -34,6 +34,7 @@ import {
   LoomDataTable, type LoomColumn, type LoomRowAction, type LoomRowMenuItem,
 } from '@/lib/components/ui/loom-data-table';
 import { PinButton } from '@/lib/components/pin-button';
+import { useRuntimeFlag } from '@/lib/components/ui/use-runtime-flag';
 
 interface Item {
   id: string; itemType: string; workspaceId: string;
@@ -82,6 +83,10 @@ function TypeBadge({ type }: { type: string }) {
 export function AllItemsExplorer() {
   const s = useStyles();
   const router = useRouter();
+  // U10 — window the tenant-wide table above the shared 200-row cutoff (this
+  // is the surface that froze the renderer at 1437 items). Kill-switch
+  // 'u10-browse-virtualization' OFF → the pre-U10 full-render table.
+  const virtualizeOn = useRuntimeFlag('u10-browse-virtualization');
   const [items, setItems] = useState<Item[] | null>(null);
   const [scanning, setScanning] = useState(true);
   const [wsMap, setWsMap] = useState<Map<string, string>>(new Map());
@@ -291,6 +296,7 @@ export function AllItemsExplorer() {
             density="compact"
             rowActions={rowActions}
             rowMenu={rowMenu}
+            virtualizeRows={virtualizeOn}
           />
         </div>
       ))}

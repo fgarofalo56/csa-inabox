@@ -29,7 +29,8 @@ import {
   Share20Regular, DataPie20Regular, Open20Regular, StoreMicrosoft24Regular,
   Ribbon16Regular,
 } from '@fluentui/react-icons';
-import { TileGrid } from '@/lib/components/ui/tile-grid';
+import { VirtualizedGrid } from '@/lib/components/ui/virtualized-grid';
+import { useRuntimeFlag } from '@/lib/components/ui/use-runtime-flag';
 import { BrandedItemIcon } from '@/lib/components/ui/branded-item-icon';
 import { EmptyState } from '@/lib/components/empty-state';
 
@@ -109,6 +110,8 @@ interface Listing {
 
 export function UnifiedDiscover({ onGoTab }: { onGoTab?: (tab: string) => void }) {
   const s = useStyles();
+  // U10 kill-switch (FLAG0) — OFF reverts to the pre-U10 full-render grid.
+  const virtualizeOn = useRuntimeFlag('u10-browse-virtualization');
   const [q, setQ] = useState('');
   const [submitted, setSubmitted] = useState('');
   const [activeKinds, setActiveKinds] = useState<Set<Kind>>(new Set(KINDS));
@@ -289,8 +292,15 @@ export function UnifiedDiscover({ onGoTab }: { onGoTab?: (tab: string) => void }
         />
       )}
 
-      <TileGrid minTileWidth={280}>
-        {filtered.map((l) => (
+      {/* U10 — windows past 200 listings; kill-switch OFF or ≤200 renders the
+          plain TileGrid path (pre-U10). */}
+      <VirtualizedGrid
+        items={filtered}
+        enabled={virtualizeOn}
+        minTileWidth={280}
+        getKey={(l) => l.id}
+        ariaLabel="Marketplace listings"
+        renderTile={(l) => (
           <Tooltip key={l.id} relationship="description" content={l.subtitle || l.title}>
             <Card className={s.card}>
               <CardHeader
@@ -319,8 +329,8 @@ export function UnifiedDiscover({ onGoTab }: { onGoTab?: (tab: string) => void }
               </div>
             </Card>
           </Tooltip>
-        ))}
-      </TileGrid>
+        )}
+      />
     </div>
   );
 }
