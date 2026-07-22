@@ -8,12 +8,23 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('@/lib/auth/session', () => ({ getSession: vi.fn() }));
 vi.mock('@/app/api/items/_lib/item-crud', () => ({ loadOwnedItem: vi.fn() }));
 vi.mock('@/lib/gates/registry', () => ({ getGate: vi.fn(), gateStatus: vi.fn() }));
+vi.mock('@/lib/auth/feature-gate', () => ({ requireTenantAdmin: vi.fn() }));
+vi.mock('@/lib/auth/dlz-gate', () => ({ denyIfNoDlzAccess: vi.fn() }));
 
 import { getSession } from '@/lib/auth/session';
 import { loadOwnedItem } from '@/app/api/items/_lib/item-crud';
 import { gateStatus, getGate } from '@/lib/gates/registry';
+import { requireTenantAdmin } from '@/lib/auth/feature-gate';
+import { denyIfNoDlzAccess } from '@/lib/auth/dlz-gate';
+import { NextResponse } from 'next/server';
 import { apiOk } from '../respond';
-import { withSession, withWorkspaceOwner, withBackendGate } from '../route-toolkit';
+import {
+  withSession,
+  withWorkspaceOwner,
+  withBackendGate,
+  withTenantAdmin,
+  withDlzAccess,
+} from '../route-toolkit';
 
 const req = {} as any;
 const ctx = <P>(p: P) => ({ params: Promise.resolve(p) } as any);
@@ -82,6 +93,76 @@ describe('withWorkspaceOwner', () => {
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true, runs: 2 });
     expect(loadOwnedItem).toHaveBeenCalledWith('i1', 'agent-flow', 'user-1', { allowReadRoles: true });
+  });
+});
+
+describe('withTenantAdmin (R1)', () => {
+  it('401s with no session and never runs the admin check or handler', async () => {
+    (getSession as any).mockReturnValue(null);
+    const handler = vi.fn();
+    const res = await withTenantAdmin(handler)(req, ctx({}));
+    expect(res.status).toBe(401);
+    expect(await res.json()).toEqual({ ok: false, error: 'unauthenticated' });
+    expect(requireTenantAdmin).not.toHaveBeenCalled();
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('returns the requireTenantAdmin response unchanged for a non-admin session', async () => {
+    (getSession as any).mockReturnValue(SESSION);
+    const forbidden = NextResponse.json(
+      { ok: false, error: 'forbidden', code: 'admin_only' },
+      { status: 403 },
+    );
+    (requireTenantAdmin as any).mockReturnValue(forbidden);
+    const handler = vi.fn();
+    const res = await withTenantAdmin(handler)(req, ctx({}));
+    expect(res).toBe(forbidden);
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ ok: false, error: 'forbidden', code: 'admin_only' });
+    expect(requireTenantAdmin).toHaveBeenCalledWith(SESSION);
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('runs the handler with session + params when the caller is a tenant admin', async () => {
+    (getSession as any).mockReturnValue(SESSION);
+    (requireTenantAdmin as any).mockReturnValue(null);
+    const handler = vi.fn(async (_r, { session, params }) => apiOk({ oid: session.claims.oid, id: params.id }));
+    const res = await withTenantAdmin<{ id: string }>(handler)(req, ctx({ id: 'pkg-1' }));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true, oid: 'user-1', id: 'pkg-1' });
+  });
+});
+
+describe('withDlzAccess (R1)', () => {
+  it('401s with no session and never runs the DLZ check', async () => {
+    (getSession as any).mockReturnValue(null);
+    const handler = vi.fn();
+    const res = await withDlzAccess('scaling', handler)(req, ctx({}));
+    expect(res.status).toBe(401);
+    expect(denyIfNoDlzAccess).not.toHaveBeenCalled();
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('returns the denyIfNoDlzAccess response unchanged when DLZ access is denied', async () => {
+    (getSession as any).mockReturnValue(SESSION);
+    const denied = NextResponse.json({ ok: false, error: 'forbidden' }, { status: 403 });
+    (denyIfNoDlzAccess as any).mockResolvedValue(denied);
+    const handler = vi.fn();
+    const res = await withDlzAccess('cost', handler)(req, ctx({}));
+    expect(res).toBe(denied);
+    expect(res.status).toBe(403);
+    expect(denyIfNoDlzAccess).toHaveBeenCalledWith(SESSION, 'cost');
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('runs the handler (forwarding the pane) when DLZ access is allowed', async () => {
+    (getSession as any).mockReturnValue(SESSION);
+    (denyIfNoDlzAccess as any).mockResolvedValue(null);
+    const handler = vi.fn(async (_r, { session }) => apiOk({ oid: session.claims.oid }));
+    const res = await withDlzAccess('monitoring', handler)(req, ctx({}));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true, oid: 'user-1' });
+    expect(denyIfNoDlzAccess).toHaveBeenCalledWith(SESSION, 'monitoring');
   });
 });
 

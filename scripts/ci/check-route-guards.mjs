@@ -94,6 +94,11 @@ const GUARD_SIGNAL_RE = new RegExp(
     // it is authorized the same as a hand-rolled loadOwnedItem route. (withSession
     // and withBackendGate are NOT guard signals — session/gate are not authz.)
     'withWorkspaceOwner',
+    // R1 route-toolkit wrappers: `withTenantAdmin(…)` runs the exact
+    // requireTenantAdmin check and `withDlzAccess(pane, …)` runs the exact
+    // denyIfNoDlzAccess check internally, so a route that adopts either is
+    // authorized the same as its hand-rolled equivalent.
+    'withTenantAdmin', 'withDlzAccess',
     // Item-level ACL resolver (rel-T87): resolveItemAccessByOid chains owner →
     // workspace ACL → per-item grant under the tid boundary (lib/auth/item-access.ts),
     // so a route threading it is fully authorized (not a bare session).
@@ -112,7 +117,7 @@ const GET_EXPORT_RE = /export\s+(?:async\s+function\s+GET\b|const\s+GET\s*=)/;
 // directly OR routes through the WS-D1 toolkit wrappers (which call getSession
 // internally). Including the wrappers keeps toolkit-adopted routes IN scope so
 // the checker still verifies their guard rather than silently skipping them.
-const GETSESSION_RE = /getSession\s*\(|with(?:Session|WorkspaceOwner|BackendGate)\s*\(/;
+const GETSESSION_RE = /getSession\s*\(|with(?:Session|WorkspaceOwner|BackendGate|TenantAdmin|DlzAccess)\s*\(/;
 
 // ── Allowlist: routes that legitimately need no per-resource authorization.
 // Repo-relative POSIX paths. Each MUST carry a reason.
