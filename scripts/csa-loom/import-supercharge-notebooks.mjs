@@ -37,7 +37,7 @@
  * they run unchanged on Synapse Spark / Databricks once the OneLake host is
  * swapped for ADLS.
  */
-import { readFileSync, writeFileSync, readdirSync, statSync } from 'node:fs';
+import { readFileSync, writeFileSync, readdirSync, statSync, mkdirSync, existsSync } from 'node:fs';
 import { join, dirname, basename, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -381,6 +381,14 @@ function descFromCells(cells) {
 const tsLit = (s) => '`' + s.replace(/\\/g, '\\\\').replace(/`/g, '\\`').replace(/\$\{/g, '\\${') + '`';
 
 function emitBundle(appId, intro, layerDirRel, items) {
+  // WS-E2: write the cells to a versioned JSON asset (loaded via a typed adapter
+  // in the emitted .ts) instead of inlining a huge TS array literal.
+  const cellsByVar = {};
+  for (const it of items) cellsByVar[it.varName] = it.cells;
+  const cellsDir = join(BUNDLE_DIR, '_generated-cells');
+  mkdirSync(cellsDir, { recursive: true });
+  writeFileSync(join(cellsDir, `${appId}.cells.json`), JSON.stringify(cellsByVar), 'utf8');
+
   const lines = [];
   lines.push('/**');
   lines.push(` * ${appId} — Loom-native content bundle.`);
@@ -397,12 +405,14 @@ function emitBundle(appId, intro, layerDirRel, items) {
   lines.push(' */');
   lines.push("import type { AppBundle, NotebookContent } from './types';");
   lines.push("import type { NotebookCell } from '@/lib/types/notebook-cell';");
+  // WS-E2 (2026-07-22): the notebook cells are emitted as a VERSIONED JSON asset
+  // and loaded via a typed adapter, instead of a multi-thousand-line inline TS
+  // array literal. This keeps the module tiny (fast TS parse/bundle) while the
+  // runtime bundle is behaviourally identical (same cells, same order).
+  lines.push(`import cellData from './_generated-cells/${appId}.cells.json';`);
   lines.push('');
-
-  for (const it of items) {
-    lines.push(`const ${it.varName}: NotebookCell[] = ${JSON.stringify(it.cells, null, 2)};`);
-    lines.push('');
-  }
+  lines.push('const CELLS = cellData as unknown as Record<string, NotebookCell[]>;');
+  lines.push('');
 
   lines.push('const bundle: AppBundle = {');
   lines.push(`  appId: ${JSON.stringify(appId)},`);
@@ -414,7 +424,7 @@ function emitBundle(appId, intro, layerDirRel, items) {
     lines.push(`      itemType: 'notebook',`);
     lines.push(`      displayName: ${JSON.stringify(it.displayName)},`);
     lines.push(`      description: ${JSON.stringify(it.description)},`);
-    lines.push(`      content: { kind: 'notebook', defaultLang: ${JSON.stringify(it.defaultLang)}, cells: ${it.varName} } as NotebookContent,`);
+    lines.push(`      content: { kind: 'notebook', defaultLang: ${JSON.stringify(it.defaultLang)}, cells: CELLS[${JSON.stringify(it.varName)}] } as NotebookContent,`);
     lines.push('    },');
   }
   lines.push('  ],');
@@ -494,7 +504,11 @@ function main() {
   const offenders = [];
   for (const layer of LAYERS) {
     const outName = `app-supercharge-${layer.dir === 'hitchhikers-guide' ? 'guide' : layer.dir}.ts`;
-    if (forbidden.test(readFileSync(join(BUNDLE_DIR, outName), 'utf8'))) offenders.push(outName);
+    const tsText = readFileSync(join(BUNDLE_DIR, outName), 'utf8');
+    // WS-E2: cells now live in the sibling JSON — scan BOTH for forbidden hosts.
+    const jsonPath = join(BUNDLE_DIR, '_generated-cells', `${layer.appId}.cells.json`);
+    const jsonText = existsSync(jsonPath) ? readFileSync(jsonPath, 'utf8') : '';
+    if (forbidden.test(tsText) || forbidden.test(jsonText)) offenders.push(outName);
   }
   if (offenders.length) {
     console.error('FABRIC TOKENS REMAIN in:', offenders.join(', '));
