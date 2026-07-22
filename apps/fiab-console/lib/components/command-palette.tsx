@@ -46,6 +46,7 @@ const NAV_HINT_BY_HREF: Record<string, string> = {
   '/business-events': 'Event streams + triggers',
   '/rti-hub': 'Real-Time Intelligence catalog',
   '/data-agent': 'Conversational data agents',
+  '/experience': 'Persona experience hub',
   '/experience/data-science/home': 'Notebooks, experiments, models',
   '/experience/warp/home': 'Warp orchestration',
   '/copilot': 'Full-screen Copilot',

@@ -25,7 +25,7 @@ import {
   Open20Regular, ShieldCheckmark24Regular,
   BookDatabase24Regular, Building24Regular, DocumentSearch24Regular,
   BranchFork24Regular, Tag24Regular, ShieldLock24Regular, Key24Regular,
-  ChartMultiple24Regular,
+  ChartMultiple24Regular, BookOpen24Regular,
 } from '@fluentui/react-icons';
 import Link from 'next/link';
 import type { ReactNode } from 'react';
@@ -70,13 +70,18 @@ const useStyles = makeStyles({
 
 interface Surface { href: string; label: string; desc: string; icon: ReactNode }
 
+// Links point at the CANONICAL surfaces (the /governance/domains,
+// /governance/classifications, /governance/sensitivity, /catalog/domains
+// aliases are redirect() stubs to /admin/* — linking the alias cost a
+// pointless double-hop from this Purview surface).
 const NATIVE_SURFACES: Surface[] = [
   { href: '/governance/catalog', label: 'Data catalog', desc: 'Browse & search governed assets', icon: <BookDatabase24Regular /> },
-  { href: '/catalog/domains', label: 'Governance domains', desc: 'Business domains & data products', icon: <Building24Regular /> },
+  { href: '/admin/domains', label: 'Governance domains', desc: 'Business domains & data products', icon: <Building24Regular /> },
+  { href: '/governance/glossary', label: 'Business glossary', desc: 'Standardized terms on the Atlas glossary', icon: <BookOpen24Regular /> },
   { href: '/governance/scans', label: 'Scans & sources', desc: 'Registered sources & scan runs', icon: <DocumentSearch24Regular /> },
   { href: '/governance/lineage', label: 'Lineage', desc: 'Asset-to-asset data lineage', icon: <BranchFork24Regular /> },
-  { href: '/governance/classifications', label: 'Classifications', desc: 'Classification taxonomy & coverage', icon: <Tag24Regular /> },
-  { href: '/governance/sensitivity', label: 'Sensitivity labels', desc: 'MIP labels & protection', icon: <ShieldLock24Regular /> },
+  { href: '/admin/classifications', label: 'Classifications', desc: 'Classification taxonomy & coverage', icon: <Tag24Regular /> },
+  { href: '/admin/sensitivity-labels', label: 'Sensitivity labels', desc: 'MIP labels & protection', icon: <ShieldLock24Regular /> },
   { href: '/governance/policies', label: 'Access policies', desc: 'Data-access policy management', icon: <Key24Regular /> },
   { href: '/governance/insights', label: 'Insights & reports', desc: 'Governance health & coverage', icon: <ChartMultiple24Regular /> },
 ];

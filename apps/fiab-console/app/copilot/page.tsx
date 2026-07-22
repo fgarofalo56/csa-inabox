@@ -357,6 +357,19 @@ export default function CopilotPage() {
               >
                 Open in workspace
               </Button>
+              {/* Skills Studio (CTS-07) — author + manage the custom skills the
+                  orchestrator can call. Was orphaned (no inbound link) before
+                  the nav-IA reorg 2026-07-22. */}
+              <Button
+                appearance="outline"
+                size="large"
+                className={styles.heroOutlineBtn}
+                icon={<Wrench20Regular />}
+                as="a"
+                href="/copilot/skills"
+              >
+                Skills Studio
+              </Button>
             </div>
           </div>
         </div>

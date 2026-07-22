@@ -2,11 +2,18 @@
 
 /**
  * GovernanceShell — shared layout for /governance/* pages. Sidebar
- * mirrors Microsoft Purview's left nav so users moving between Loom
- * and Purview feel at home. Loom passes through to Purview where the
- * native experience is richer (full Atlas-style lineage exploration),
- * and natively renders what makes sense in-portal (catalog browse,
+ * mirrors Microsoft Purview's left nav (grouped: Catalog management /
+ * Data Map / Discovery & lineage / Policies & protection / Health &
+ * quality / Purview portal) so users moving between Loom and Purview
+ * feel at home. Loom passes through to Purview where the native
+ * experience is richer (full Atlas-style lineage exploration), and
+ * natively renders what makes sense in-portal (catalog browse,
  * sensitivity labels, scans, classification rules).
+ *
+ * The destinations come from the shared GOVERNANCE_SECTIONS registry
+ * (lib/nav/governance-sections.ts) — the same list the /governance
+ * overview grid renders — so the sidebar and the overview can never
+ * disagree about which governance surfaces exist.
  */
 
 import Link from 'next/link';
@@ -15,28 +22,8 @@ import { ReactNode } from 'react';
 import { PageShell } from '@/lib/components/page-shell';
 import { useIsTenantAdmin } from '@/lib/components/session-context';
 import { SectionExplainer } from '@/lib/components/ui/learn-popover';
+import { GOVERNANCE_SECTIONS } from '@/lib/nav/governance-sections';
 import { makeStyles, mergeClasses, tokens, Subtitle2, Title3, Badge } from '@fluentui/react-components';
-
-// adminOnly sections live in the Admin portal (/admin/*). They are hidden for
-// non-admins (rel-T53) — reusing the single shell admin probe — leaving the
-// read-only governance views (Overview, Govern, catalog, lineage, scans,
-// policies, insights, …) so a non-admin is never dumped into a per-page 403.
-const SECTIONS: { href: string; label: string; desc: string; adminOnly?: boolean }[] = [
-  { href: '/governance',                  label: 'Overview',           desc: 'Governance posture, coverage scores, recent activity.' },
-  { href: '/governance/govern',           label: 'Govern',             desc: 'My-items posture for data owners — label coverage, curation, recommended actions.' },
-  { href: '/admin/domains',               label: 'Domains',            desc: 'Business domains and subdomains, workspace assignment, delegated settings (Admin portal).', adminOnly: true },
-  { href: '/governance/catalog',          label: 'Governed inventory', desc: 'Governed data-asset inventory with endorsement, sensitivity, and access requests across OneLake, Synapse, Databricks, ADLS, on-prem.' },
-  { href: '/governance/lineage',          label: 'Lineage',            desc: 'End-to-end lineage across items, pipelines, notebooks, dataflows, and models — Governed / Mesh / Federated scopes; Purview edges merge in when bound.' },
-  { href: '/admin/classifications',       label: 'Classifications',    desc: 'Sensitive-info types, custom regex classifiers, scan rule sets (Admin portal).', adminOnly: true },
-  { href: '/admin/sensitivity-labels',    label: 'Sensitivity labels', desc: 'Define and auto-apply labels; enforce encryption and access policies (Admin portal).', adminOnly: true },
-  { href: '/governance/scans',            label: 'Scans & sources',    desc: 'Register data sources, schedule scans, monitor scan history.' },
-  { href: '/governance/policies',         label: 'Access policies',    desc: 'DLP, masking, RLS/CLS, Purview access policies.' },
-  { href: '/governance/data-quality',     label: 'Data quality',       desc: 'Author rules, run on Kusto/Databricks/Synapse, results + Delta/Lakehouse monitors.' },
-  { href: '/governance/mdm',              label: 'Master data',        desc: 'Golden-record match/merge + reference-data management on Azure-native compute.' },
-  { href: '/governance/insights',         label: 'Insights',           desc: 'Compliance reports, ownership coverage, endorsement trends.' },
-  { href: '/governance/irm',              label: 'Insider risk',       desc: 'IRM indicators — unusual volume, off-hours access, privileged access over audit logs + Monitor.' },
-  { href: '/governance/purview',          label: 'Purview portal',     desc: 'Embedded Microsoft Purview — full Atlas catalog and Unified Catalog.' },
-];
 
 const useStyles = makeStyles({
   layout: {
@@ -81,6 +68,21 @@ const useStyles = makeStyles({
     color: tokens.colorNeutralForeground3,
     fontWeight: tokens.fontWeightRegular,
   },
+  // Purview-style group header — matches the left-nav rail's uppercase
+  // caption styling (left-nav.tsx sectionHeader) so the two nav surfaces
+  // read as one product. Tokens only (web3-ui) — no raw px/hex.
+  groupLabel: {
+    display: 'block',
+    paddingTop: tokens.spacingVerticalM,
+    paddingBottom: tokens.spacingVerticalXS,
+    paddingLeft: tokens.spacingHorizontalM,
+    paddingRight: tokens.spacingHorizontalM,
+    fontSize: tokens.fontSizeBase100,
+    fontWeight: tokens.fontWeightSemibold,
+    textTransform: 'uppercase',
+    letterSpacing: '0.06em',
+    color: tokens.colorNeutralForeground3,
+  },
   body: { minWidth: 0 },
   sectionHead: {
     display: 'flex',
@@ -94,7 +96,13 @@ export function GovernanceShell({ sectionTitle, sectionBadge, explainer, childre
   const s = useStyles();
   const pathname = usePathname();
   const isTenantAdmin = useIsTenantAdmin();
-  const sections = SECTIONS.filter((sec) => !sec.adminOnly || isTenantAdmin);
+  // adminOnly destinations live in the Admin portal (/admin/*). They are
+  // hidden for non-admins (rel-T53) — reusing the single shell admin probe —
+  // so a non-admin is never dumped into a per-page 403. Groups left empty by
+  // the filter are dropped entirely (header included).
+  const groups = GOVERNANCE_SECTIONS
+    .map((g) => ({ ...g, items: g.items.filter((sec) => !sec.adminOnly || isTenantAdmin) }))
+    .filter((g) => g.items.length > 0);
   return (
     <PageShell
       title="Governance"
@@ -102,15 +110,20 @@ export function GovernanceShell({ sectionTitle, sectionBadge, explainer, childre
     >
       <div className={s.layout}>
         <nav className={s.sidebar} aria-label="Governance sections">
-          {sections.map((sec) => {
-            const active = pathname === sec.href || (sec.href !== '/governance' && pathname?.startsWith(sec.href));
-            return (
-              <Link key={sec.href} href={sec.href} className={mergeClasses(s.item, active && s.itemActive)}>
-                <Subtitle2>{sec.label}</Subtitle2>
-                <span className={s.desc}>{sec.desc}</span>
-              </Link>
-            );
-          })}
+          {groups.map((g) => (
+            <div key={g.label} role="group" aria-label={g.label}>
+              <span className={s.groupLabel}>{g.label}</span>
+              {g.items.map((sec) => {
+                const active = pathname === sec.href || (sec.href !== '/governance' && pathname?.startsWith(sec.href));
+                return (
+                  <Link key={sec.href} href={sec.href} className={mergeClasses(s.item, active && s.itemActive)}>
+                    <Subtitle2>{sec.label}</Subtitle2>
+                    <span className={s.desc}>{sec.desc}</span>
+                  </Link>
+                );
+              })}
+            </div>
+          ))}
         </nav>
         <div className={s.body}>
           {sectionTitle && (

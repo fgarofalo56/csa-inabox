@@ -353,13 +353,13 @@ function OverviewTab({ onNavigateTab }: { onNavigateTab: (t: TopTab) => void }) 
                   icon={<TagMultipleRegular />}
                   title="No sensitivity labels yet"
                   body="Apply sensitivity labels to your data items to see the distribution here. Labels classify how sensitive each item is and drive protection policies."
-                  primaryAction={{ label: 'Open Information Protection', href: '/governance/sensitivity', appearance: 'primary' }}
+                  primaryAction={{ label: 'Open Information Protection', href: '/admin/sensitivity-labels', appearance: 'primary' }}
                 />
               )}
               {sensitivity && sensitivity.distribution.length > 0 && (
                 <Caption1 className={a.mutedBlock}>
                   {sensitivity.unlabeled} of {sensitivity.total} items are unlabeled.
-                  <a href="/governance/sensitivity" className={a.badgeGap}>Open full view</a>
+                  <a href="/admin/sensitivity-labels" className={a.badgeGap}>Open full view</a>
                 </Caption1>
               )}
             </Section>
@@ -373,7 +373,7 @@ function OverviewTab({ onNavigateTab }: { onNavigateTab: (t: TopTab) => void }) 
                     ))}
                   </div>
                   <Caption1 className={a.mutedBlock}>
-                    <a href="/governance/classifications">Open full view</a>
+                    <a href="/admin/classifications">Open full view</a>
                   </Caption1>
                 </>
               ) : (
@@ -381,7 +381,7 @@ function OverviewTab({ onNavigateTab }: { onNavigateTab: (t: TopTab) => void }) 
                   icon={<DocumentBulletListRegular />}
                   title="No classifications yet"
                   body="Run Purview scans or apply classifications to your data items to surface the most common data categories here."
-                  primaryAction={{ label: 'Open classifications', href: '/governance/classifications', appearance: 'primary' }}
+                  primaryAction={{ label: 'Open classifications', href: '/admin/classifications', appearance: 'primary' }}
                 />
               )}
             </Section>
