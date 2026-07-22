@@ -482,7 +482,12 @@ indent-style = "space"
 # azure.* imports are all lazy (inside methods, mocked in tests), so it needs no
 # extra deps and runs green in the full CI suite (verified: 1829 passed).
 #
-# csa_platform/streaming/tests remains ignored because
+# csa_platform/streaming/tests RE-ENABLED (2026-07-22, WS-F2 second half): the
+# [streaming] extra (below) is now added to the Test Suite install line
+# (.github/workflows/test.yml) so the eager azure.* imports in
+# csa_platform/streaming/__init__.py resolve in CI, and the --ignore was dropped.
+# Verified locally: 124 streaming tests pass.
+#
 # csa_platform/streaming/__init__.py EAGER-imports batch_layer / event_processor
 # / serving_layer / speed_layer, which pull azure-storage-file-datalake,
 # azure-eventhub-checkpointstoreblob-aio, and azure-kusto-data at import time.
@@ -496,7 +501,7 @@ testpaths = ["tests", "portal/shared/portal_tests", "csa_platform"]
 pythonpath = ["."]
 python_files = ["test_*.py", "*_test.py"]
 python_functions = ["test_*"]
-addopts = "--tb=short -q --strict-markers --import-mode=importlib --ignore=csa_platform/streaming/tests"
+addopts = "--tb=short -q --strict-markers --import-mode=importlib"
 markers = [
     "live: requires a live Azure connection (az login)",
 ]
