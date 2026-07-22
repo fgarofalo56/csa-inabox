@@ -511,7 +511,10 @@ workspace UAMI for real), independently of the global mode, with a one-click Fix
 wizard. Global `LOOM_WORKSPACE_IDENTITY_MODE=enforce` is the "all workspaces" switch;
 the per-workspace flag is the safe, incremental path. **Rev-2 precondition: I6
 does not flip for ANY workspace until the I9 threat-model/AppSec review is
-signed off (in addition to the ≥2-weeks-clean-shadow gate).**
+signed off (in addition to the ≥2-weeks-clean-shadow gate).** **Round-3 Q4,
+CONFIRMED: I6 stays opt-in** — the deliberate carve-out from
+`loom_default_on_opt_out` is correct here (a blast-radius security-posture
+change needs operator intent + the ATO review, like PDP-enforce).
 
 **Files / paths.**
 - `apps/fiab-console/lib/types/workspace.ts` — `workspaceIdentity.enforce?: boolean`
@@ -676,6 +679,13 @@ precondition to I6** (alongside the existing "≥2 weeks clean shadow" gate).
 table per surface, abuse cases, mitigations mapped to the shipped controls) + a
 recorded review sign-off (reviewer, date, findings, disposition) referenced from
 the I7 runbook. Any HIGH finding blocks I6 until dispositioned.
+**Round-3 note (Q6 — partial I9 pulled forward):** the **L2 ingest** and **E2
+Function** rows of this threat model are written + signed **in their own PRs
+at Phase 0–1** ("ships with its threat-model row signed" acceptance lines on
+L2 and E2), because those internet-adjacent surfaces land Phases 0–2 while I9
+is Phase 3. I9 incorporates those pre-signed rows (verifying they held in
+implementation) rather than authoring them retroactively; the FULL review
+remains the pre-I6 gate.
 
 **Acceptance.** Doc merged; sign-off recorded; I6's admin panel shows
 "Security review: signed-off <date>" as part of the enforce-readiness rollup
@@ -763,7 +773,7 @@ encoded in `cloud-endpoints.ts` that is noted as the in-repo source of truth.
 | **Purview (classic Data Map)** (governance) | ✅ | ✅ | ✅ | Classic Data Map GA in Gov; note the Gov empty-privatelink-DNS-zone gotcha (memory `csa_loom_gov_purview_dns_empty_zone`). Unified-catalog data products are Commercial-only → classic-only path in Gov (already handled in `purview-client.ts`). |
 | **Azure Managed Grafana** (dashboards) | ✅ | ✅ (FedRAMP High GA) | ❌ (IL4/IL5 not in scope) | Compliance scope: Grafana ✅ FedRAMP High + DoD IL2, **blank IL4/IL5** (Learn: *azure-services-in-fedramp-auditscope*). **Enterprise plugins & Essential tier NOT supported in Gov** (Learn: *managed-grafana/known-limitations#feature-availability-in-sovereign-clouds*). Fallback IL5: OSS Grafana self-hosted in-cluster, or Loom-native dashboards over ADX (`kql-dashboard-model`). |
 | **Application Insights / RUM** (telemetry) | ✅ | ✅ | ✅ | App Insights + Log Analytics part of Azure Monitor, GA through IL5/IL6 (Learn: *azure-services-in-fedramp-auditscope*). Endpoint suffix differs → connection-string endpoint-suffix (Learn: *compare-azure-government*). **Browser RUM/CDN script** must be self-hosted in IL5 (no public CDN — see X-IL5; RUM1 in WS-O builds it). |
-| **Cosmos continuous backup / PITR** (BCDR) | ✅ | ✅ | ✅ | Continuous backup + point-in-time restore GA in Azure Gov. Verify 7-day vs 30-day tier availability per region at implementation. |
+| **Cosmos continuous backup / PITR** (BCDR) | ✅ | ✅ | ✅ | Continuous backup + point-in-time restore GA in Azure Gov. **Round-3 Learn wrinkle: `Continuous30Days` is the GA default; `Continuous7Days` is documented "in preview" — and the repo currently runs 7-day. DR0/DR1: prefer `Continuous30Days` (GA) for the drill window; confirm the 7-day tier's Gov-region support or move to 30-day.** |
 | **Microsoft Fabric / Power BI** (opt-in only) | ✅ (opt-in) | ❌ Fabric / ⚠️ PBI (`api.powerbigov.us`) | ❌ | `assertFabricFamilyAvailable()` throws with the Azure-native equivalent. Never on a default path (`no-fabric-dependency.md`). |
 | **Microsoft Graph DLP policy API** (governance) | ✅ | ❌ (`/beta/security/dataLossPreventionPolicies`) | ❌ | `graphDlpPolicyApiAvailable()` = false in Gov. Fallback: Purview compliance portal + Security & Compliance PowerShell; DLP **alerts** + restrict-access RBAC still work. |
 | **Azure Digital Twins** (graph/twin surfaces) | ✅ | ❌ (not in GCC-High) | ❌ | Encoded as `legacyCode` prose today (`svc-digital-twins`); fallback = Loom AGE/graph over Postgres/ADX. X2 structures this. |
@@ -792,6 +802,11 @@ the active cloud renders an honest gate **automatically** — no per-surface `if
   `isAvailableInActiveCloud(id)` using `detectLoomCloud()`; `gateStatus(id)` returns
   a new `state:'cloud-unavailable'` (distinct from `missing`) carrying the
   `fallbackNote`. `GateDef` gains `availability` passthrough.
+  **`'limited'` rendering (round 3, guess-risk clarification — verbatim):**
+  `'limited'` renders the surface **normally** PLUS a **non-blocking info
+  note** sourced from `fallbackNote` (e.g. AOAI-model-lag,
+  Databricks-SQL-region-limited); **only `'unavailable'` produces the
+  `cloud-unavailable` gate.** Two agents must not treat `'limited'` as a gate.
 - `apps/fiab-console/lib/components/shared/honest-gate.tsx` — when a gate is
   `cloud-unavailable`, render the honest MessageBar **naming the Azure-native/OSS
   fallback** (from `fallbackNote`) with NO Fix-it that would try to provision an

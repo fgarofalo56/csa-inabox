@@ -298,6 +298,12 @@ Gov; not required for v1.
 - Honest gate: credential unset → the OpenLineage source is silently absent
   (default-ON of the OTHER sources preserved), with a Fix-it wizard (mint +
   stamp the per-pool credential) on the gate registry page (G2).
+- **L2 ships with its threat-model row signed (round 3, Q6 — partial I9
+  pulled forward):** the STRIDE row for the OL ingest (per-pool credential,
+  workspace scoping, caps, private ingress — the F2 redesign) is written +
+  reviewed in the L2 PR itself, so ATO evidence accrues as the item lands
+  rather than retroactively at Phase 3; the full I9 review remains the pre-I6
+  gate and cross-references this row.
 
 **Per-cloud.** Commercial: live — **note (rev 2): the console's default topology
 is fronted by public Front Door, so "in-cluster" is NOT automatic; the ingest is
@@ -995,7 +1001,9 @@ fallback means unset = silent, no red.
 appear <1s apart with Web PubSub set (network shows the WS connection, not the
 poll); with it unset, the poll path still shows peers (degraded, honest). A
 comment posted by session A appears for session B. Dark+light, narrow-width
-pass.
+pass. **Cost (round 3, F1):** `~$0 idle` on the default poll path; when Web
+PubSub is opted in, **~$50/unit/mo × units × 2 clouds** always-on — counted in
+COST0's program budget and disclosed by the Fix-it wizard at enable time.
 
 **Per-cloud.** Commercial: Web PubSub live. **Gov (GCC-High): Azure Web PubSub
 availability must be Learn-verified at implementation — if unavailable, the

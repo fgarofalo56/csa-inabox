@@ -111,6 +111,10 @@ A6–A9 rebase onto it, U2 follows.
 **Acceptance:** G1 receipt — drag canvas taller, drag Build pane wider, reload,
 both persist from the correct keys; a real report renders + executes a visual
 query in the resized canvas (no vaporware); dark+light shots, narrow pass.
+**Runtime flag (round 3, FLAG0):** the new G3 layout registers a default-ON
+`loom-runtime-flags` flag — OFF restores the pre-U1 fixed layout without a
+roll (the report designer is the flagship user-visible surface; a live layout
+regression must be flag-revertible in seconds).
 **Per-cloud:** cloud-neutral. **Size: M.**
 
 ## U2 — Report designer aux panes (Power BI staples: Filters, Selection, Bookmarks, align/distribute, themes)
@@ -133,7 +137,9 @@ the report definition (versioned on save, per the publish-version model).
 query change (network tab) and rows update; hide a visual via Selection;
 capture + navigate a bookmark; reload — all persisted. Parity doc
 `docs/fiab/parity/report-designer.md` rows for these five capabilities flip to
-✅. **Per-cloud:** cloud-neutral (front-end + existing query path).
+✅. **Runtime flag (round 3, FLAG0):** the aux panes register a default-ON
+`loom-runtime-flags` flag (admin-killable without a roll).
+**Per-cloud:** cloud-neutral (front-end + existing query path).
 **Size: L.**
 
 ## U3 — Notebook per-cell resizable height (FAIL-H)
@@ -374,13 +380,22 @@ adopt it on every 1000+-item surface.
 `TileGrid` (drop-in tile renderer prop), unit-tested. Adopt in: `/browse`
 (pins + workspaces + items), catalog browse, marketplace, and the type-badged
 data-preview grids (row-virtualized). Explicitly NOT a fork of `TileGrid` —
-small collections keep `TileGrid`; the primitive is for unbounded lists (guide
-the cutoff in the component doc, ~200 items).
+small collections keep `TileGrid`; the primitive is for unbounded lists.
+**Round-3 clarifications (guess-risk + operator decision):** (a) the
+OSS-virtualization question is DECIDED — **PERMIT `@tanstack/virtual` as the
+single allowed virtualization dependency** (MIT, headless, small; vendorable
+in-repo for IL5 per X-IL5 item 3/4 — no other virtualization lib may be
+introduced); do not hand-roll the windowing math. (b) The **~200-item cutoff
+is a shared exported constant** (e.g. `VIRTUALIZATION_CUTOFF = 200` consumed
+by BOTH `TileGrid` guidance and `VirtualizedGrid`), not prose in a doc.
 
 **Acceptance:** G1 receipt — `/browse` with the live 1400+-item estate scrolls
 at 60fps-ish with no freeze (performance trace attached), narrow-width +
 first-open passes; catalog + marketplace adoption receipts; vitest for
-windowing math. **Per-cloud:** cloud-neutral. **Size: M.**
+windowing math. **Runtime flag (round 3, FLAG0):** `/browse` virtualization
+registers a default-ON `loom-runtime-flags` flag — OFF falls back to the
+pre-U10 renderer without a roll (this is the exact GuidedPickerRail-class
+surface FLAG0 exists for). **Per-cloud:** cloud-neutral. **Size: M.**
 
 ## U11 — px-grid → TileGrid/token sweep as a RATCHETED convention (142 sites / 112 files)
 
@@ -425,6 +440,9 @@ row wrapped by #2389 — contingent on #2389 merging, see §0), visual parity
 with siblings dark+light; grep
 receipt showing zero remaining px literals in the named cluster; vitest still
 green after the dead-field deletion (proves nothing consumed them).
+**Runtime flag (round 3, FLAG0):** the restructured dialog registers a
+default-ON `loom-runtime-flags` flag (admin-killable without a roll — the
+dialog is on every user's create path).
 **Per-cloud:** cloud-neutral. **Size: S.**
 
 ---

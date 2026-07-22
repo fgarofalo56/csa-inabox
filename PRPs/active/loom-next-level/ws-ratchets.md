@@ -93,6 +93,11 @@ go via a config-object or nested-module param, never a new top-level `param`."**
 - `platform/fiab/bicep/modules/admin-plane/main.bicep` — introduce the config
   objects; migrate an initial tranche of existing single-purpose flag params
   into them (keep ARM interface compatibility notes per param moved).
+  **Scope clarification (round 3, guess-risk):** consolidate ONLY the new
+  params this PRP introduces into bags; migrate existing top-level params only
+  as needed to reach ≤236, and **enumerate exactly which existing params move
+  (with their old→new bag mapping) in the PR description** — two agents must
+  not pick different tranches.
 - `platform/fiab/bicep/params/commercial-full.bicepparam` + the Gov paramfile —
   updated in lockstep.
 - `platform/fiab/bicep/main.bicep` — pass-through updates (mind the bicep
@@ -898,6 +903,73 @@ Cosmos.
 
 ---
 
+# AREA 7 — Round-3 additions (R30, FRESH0)
+
+## R30 — Split ENV_CHECKS / GATE_META into per-domain registry fragment files *(round 3, F2 — the #1 throughput unlock)*
+
+**Ground truth.** `lib/admin/env-checks.ts` (ENV_CHECKS) and
+`lib/gates/registry.ts` (GATE_META) are hand-edited monolith arrays. The master
+serialization list forces **~13 rev-2 items PLUS every env-adding N-item**
+(20–30+ PRs) through these two files plus their two test files — the dominant
+calendar bottleneck of the entire program, and R0 + X2 both sit upstream of it,
+making the critical path `R0 → X2 → [20–30 serialized env-registry PRs]`.
+
+**Goal.** Convert both monoliths into a **per-domain directory of registry
+fragments merged at load**: `lib/admin/env-checks/*.ts` and
+`lib/gates/registry/*.ts` (one file per domain — `identity`, `data-plane`,
+`ai-copilot`, `catalog-governance`, `observability`, `platform`, …) whose
+`index.ts` concatenates the fragments into the same exported `ENV_CHECKS` /
+`GATE_META` shapes (public API unchanged). A later item that adds an env var
+**appends a new/edits its own domain fragment** instead of editing a 256-entry
+array — the serialization requirement collapses to same-domain-fragment only.
+
+**Files.** `lib/admin/env-checks.ts` → `lib/admin/env-checks/` fragment dir +
+merging `index.ts` (barrel-cycle-safe — mind the WS-E1 barrel-cycle gotcha);
+`lib/gates/registry.ts` → `lib/gates/registry/` likewise;
+`lib/gates/__tests__/registry.test.ts` + `lib/admin/__tests__/env-config.test.ts`
+keep running their parity/invariant checks **over the merged whole** (unchanged
+assertions — the merge is behaviorally inert).
+
+**Acceptance.** `tsc` + full vitest green; `registry.test.ts` parity + the
+`env-config.test.ts` invariants pass over the merged arrays; a diff-proof that
+the merged ENV_CHECKS/GATE_META are element-for-element identical to the
+pre-split arrays (snapshot compare in the PR); one follow-up env-adding item
+lands touching ONLY its domain fragment (the receipt that the chain is dead).
+
+**Sequencing.** Phase 0, **immediately after X2** (X2 extends the `EnvSpec`
+type in the same files — serialize the pair), before the env-adding wave.
+**Per-cloud.** Cloud-neutral code health (carve-out declaration: cloud-neutral).
+**Size: M.**
+
+## FRESH0 — PRP self-freshness re-baseline gate *(round 3, F4 — R29's thesis, one level up)*
+
+**Ground truth.** The repo's history: "audit plans go STALE" (memory), a prior
+PRP invalidated by 109 commits in 2 days, and this PRP's own four same-day rev
+headers. R29 ratchets `docs/fiab/parity/*.md` freshness — nothing governs the
+PRP itself, which hard-codes ground truth that its own execution invalidates
+("1,356 hand-rolled routes", "exactly 256 param declarations", "the DAX
+evaluator is 3 regexes", "#2389 OPEN at review time").
+
+**Goal.** `scripts/ci/check-prp-freshness.mjs` — re-runs the ground-truth
+counts the PRP cites (route-toolkit gap count, `admin-plane/main.bicep` param
+count, the DAX-regex count, the open/merged state of referenced PRs via `gh`)
+against `PRPs/active/loom-next-level/**` and **warns when a stated number
+diverges from live by >10%** (or a referenced PR's state flipped). Not a
+merge-blocker — a **per-phase re-baseline gate**: the master spine's phase
+boundaries each include a ~30-minute "PRP re-verification" step that runs it
+and commits the updated numbers/statuses.
+
+**Files.** `scripts/ci/check-prp-freshness.mjs` (reuse `_ratchet-count.mjs`
+grep mechanics + the "how to spot a violation" greps already written into the
+.claude rules); an optional scheduled-lane wiring (weekly warn annotation).
+
+**Acceptance.** Run at current baseline → exits 0; seed a stale number (edit
+one count by >10%) → warn annotation names the drifted fact + live value; the
+Phase-0→1 boundary run is recorded in the phase's closing PR.
+**Per-cloud.** Cloud-neutral. **Size: S.**
+
+---
+
 ## Cross-cutting sequencing (rev 2)
 
 0. **AREA 0:** R0 **FIRST — before any bicep/env-adding item program-wide**
@@ -913,6 +985,10 @@ Cosmos.
 5. **AREA 6:** R28, R29, MIG1 — independent; the master places them in the
    Phase-2/3 opportunistic bucket (MIG1 in Phase 0 — the convention should exist
    before the new doc shapes land).
+5b. **AREA 7 (round 3):** R30 in Phase 0 **immediately after X2** (same registry
+   files — serialized pair), before the env-adding wave; FRESH0 lands Phase 1
+   and runs at every phase boundary thereafter (master spine's per-phase
+   re-baseline step).
 6. **AREA 5 (housekeeping track):** R20 → R21 → R22 → R23 → R24 → R25 → R26 →
    R27, each verified before the next (phase gate: CI + mkdocs + ruff green) —
    **execute LAST or in quiet windows; never interleaved with depth work; pause
