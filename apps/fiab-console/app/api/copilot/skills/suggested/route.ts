@@ -12,18 +12,14 @@
  * no-vaporware.md: reads the Cosmos-backed skill store (scope `suggested:<tid>`);
  * no mock arrays. Azure-native (no Fabric host).
  */
-import { getSession } from '@/lib/auth/session';
-import { requireTenantAdmin } from '@/lib/auth/feature-gate';
 import { apiOk, apiServerError } from '@/lib/api/respond';
 import { listSuggestedSkills } from '@/lib/azure/skill-store';
+import { withTenantAdmin } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET() {
-  const session = getSession();
-  const gate = requireTenantAdmin(session);
-  if (gate) return gate;
+export const GET = withTenantAdmin(async (_req, { session }) => {
   const tid = session!.claims.tid || session!.claims.oid;
   try {
     const suggested = await listSuggestedSkills(tid);
@@ -31,4 +27,4 @@ export async function GET() {
   } catch (e) {
     return apiServerError(e, 'failed to list suggested skills', 'suggested_list_failed');
   }
-}
+});

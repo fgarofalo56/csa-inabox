@@ -18,7 +18,6 @@
  * unset.
  */
 import { NextResponse } from 'next/server';
-import { getSession as getAuthSession } from '@/lib/auth/session';
 import {
   getSession as getCopilotSession,
   updateSessionMeta,
@@ -27,16 +26,13 @@ import {
   copilotSessionsContainer,
   copilotFeedbackContainer,
 } from '@/lib/azure/cosmos-client';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> }) {
-  const auth = getAuthSession();
-  if (!auth) {
-    return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  }
-  const id = (await ctx.params).id;
+export const GET = withSession<{ id: string }>(async (_req: Request, { session: auth, params }) => {
+  const id = params.id;
   try {
     const doc = await getCopilotSession(id);
     if (!doc) return NextResponse.json({ ok: false, error: 'not found' }, { status: 404 });
@@ -48,15 +44,11 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }
-}
+});
 
 /** DELETE /api/copilot/sessions/[id] — "Clear chat": delete the session doc. */
-export async function DELETE(_req: Request, ctx: { params: Promise<{ id: string }> }) {
-  const auth = getAuthSession();
-  if (!auth) {
-    return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  }
-  const id = (await ctx.params).id;
+export const DELETE = withSession<{ id: string }>(async (_req: Request, { session: auth, params }) => {
+  const id = params.id;
   const userOid = auth.claims.oid || auth.claims.upn || auth.claims.email || 'unknown';
   try {
     const c = await copilotSessionsContainer();
@@ -75,7 +67,7 @@ export async function DELETE(_req: Request, ctx: { params: Promise<{ id: string 
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }
-}
+});
 
 interface FeedbackBody {
   rating: 'up' | 'down';
@@ -96,12 +88,8 @@ interface MetaBody {
  *   - {rating, messageIndex, ...}    → per-message thumbs up/down feedback
  * The branch is chosen by which fields are present; rename/pin take precedence.
  */
-export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }> }) {
-  const auth = getAuthSession();
-  if (!auth) {
-    return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  }
-  const id = (await ctx.params).id;
+export const PATCH = withSession<{ id: string }>(async (req: Request, { session: auth, params }) => {
+  const id = params.id;
   const body: Partial<FeedbackBody & MetaBody> = await req.json().catch(() => ({}));
   const userOid = auth.claims.oid || auth.claims.upn || auth.claims.email || 'unknown';
 
@@ -164,7 +152,7 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }
-}
+});
 
 /**
  * Forward the feedback to the copilot-chat Azure Function's `/api/loom/feedback`

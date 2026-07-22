@@ -11,19 +11,17 @@
  * Azure-native (no-fabric-dependency.md).
  */
 import type { NextRequest } from 'next/server';
-import { getSession } from '@/lib/auth/session';
-import { apiOk, apiError, apiUnauthorized, apiServerError } from '@/lib/api/respond';
+import { apiOk, apiError, apiServerError } from '@/lib/api/respond';
 import { duplicateSkill } from '@/lib/azure/skill-store';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function POST(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return apiUnauthorized();
+export const POST = withSession<{ id: string }>(async (_req: NextRequest, { session, params }) => {
   const oid = session.claims.oid || session.claims.upn || session.claims.email || 'unknown';
   const tid = session.claims.tid || oid;
-  const id = (await ctx.params).id;
+  const id = params.id;
   try {
     const skill = await duplicateSkill(tid, oid, id);
     return apiOk({ skill }, { status: 201 });
@@ -31,4 +29,4 @@ export async function POST(_req: NextRequest, ctx: { params: Promise<{ id: strin
     if (e?.name === 'SkillStoreError') return apiError(e.message, e.status ?? 400, { code: e.code });
     return apiServerError(e, 'failed to duplicate skill', 'skill_duplicate_failed');
   }
-}
+});

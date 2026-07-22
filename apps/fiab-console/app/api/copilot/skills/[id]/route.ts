@@ -12,19 +12,17 @@
  * satisfies check-route-guards.mjs). Azure-native (no-fabric-dependency.md).
  */
 import type { NextRequest } from 'next/server';
-import { getSession } from '@/lib/auth/session';
-import { apiOk, apiError, apiUnauthorized, apiNotFound, apiServerError } from '@/lib/api/respond';
+import { apiOk, apiError, apiNotFound, apiServerError } from '@/lib/api/respond';
 import { listSkillsForUser, updateCustomSkill, deleteCustomSkill } from '@/lib/azure/skill-store';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return apiUnauthorized();
+export const GET = withSession<{ id: string }>(async (_req: NextRequest, { session, params }) => {
   const oid = session.claims.oid || session.claims.upn || session.claims.email || 'unknown';
   const tid = session.claims.tid || undefined;
-  const id = (await ctx.params).id;
+  const id = params.id;
   try {
     const skills = await listSkillsForUser(tid, oid);
     const skill = skills.find((s) => s.id === id);
@@ -33,14 +31,12 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
   } catch (e) {
     return apiServerError(e, 'failed to read skill', 'skill_read_failed');
   }
-}
+});
 
-export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return apiUnauthorized();
+export const PUT = withSession<{ id: string }>(async (req: NextRequest, { session, params }) => {
   const oid = session.claims.oid || session.claims.upn || session.claims.email || 'unknown';
   const tid = session.claims.tid || oid;
-  const id = (await ctx.params).id;
+  const id = params.id;
   let body: Record<string, unknown> = {};
   try { body = await req.json(); } catch { /* empty → validation error in store */ }
   try {
@@ -60,14 +56,12 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
     if (e?.name === 'SkillStoreError') return apiError(e.message, e.status ?? 400, { code: e.code });
     return apiServerError(e, 'failed to update skill', 'skill_update_failed');
   }
-}
+});
 
-export async function DELETE(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return apiUnauthorized();
+export const DELETE = withSession<{ id: string }>(async (_req: NextRequest, { session, params }) => {
   const oid = session.claims.oid || session.claims.upn || session.claims.email || 'unknown';
   const tid = session.claims.tid || oid;
-  const id = (await ctx.params).id;
+  const id = params.id;
   try {
     await deleteCustomSkill(tid, id);
     return apiOk({ deleted: id });
@@ -75,4 +69,4 @@ export async function DELETE(_req: NextRequest, ctx: { params: Promise<{ id: str
     if (e?.name === 'SkillStoreError') return apiError(e.message, e.status ?? 400, { code: e.code });
     return apiServerError(e, 'failed to delete skill', 'skill_delete_failed');
   }
-}
+});

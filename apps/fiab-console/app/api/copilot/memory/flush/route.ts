@@ -24,7 +24,6 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 import { NextRequest } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { resolveAoaiTarget, NoAoaiDeploymentError } from '@/lib/azure/copilot-orchestrator';
 import { flushConversationToMemory } from '@/lib/azure/memory-flush';
 import { loadTenantCopilotConfig } from '@/lib/azure/copilot-config-store';
@@ -35,6 +34,7 @@ import {
   flushWindow,
 } from '@/lib/copilot/memory-flush';
 import type { MemoryActor } from '@/lib/copilot/memory-types';
+import { withSession } from '@/lib/api/route-toolkit';
 
 interface FlushBody {
   messages?: unknown;
@@ -47,9 +47,7 @@ interface FlushBody {
   shareToWorkspace?: unknown;
 }
 
-export async function POST(req: NextRequest) {
-  const session = getSession();
-  if (!session) return apiUnauthorized();
+export const POST = withSession(async (req: NextRequest, { session }) => {
 
   if (!isCopilotMemoryEnabled()) {
     return apiOk({ stored: 0, facts: [] as string[], disabled: true });
@@ -105,4 +103,4 @@ export async function POST(req: NextRequest) {
   } catch (e) {
     return apiServerError(e, 'could not save conversation to memory', 'memory_flush_failed');
   }
-}
+});

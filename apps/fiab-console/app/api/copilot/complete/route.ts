@@ -32,7 +32,6 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { enforceRateLimit } from '@/lib/azure/rate-limiter';
 import { NoAoaiDeploymentError } from '@/lib/azure/copilot-orchestrator';
 import { buildAoaiBody } from '@/lib/azure/aoai-model-contract';
@@ -45,6 +44,7 @@ import {
   buildInlineMessages,
   cleanInlineCompletion,
 } from '@/lib/copilot/inline-complete-prompt';
+import { withSession } from '@/lib/api/route-toolkit';
 
 // ---------- Credential (ACA-first UAMI chain — shared helper) ----------
 const credential = uamiArmCredential();
@@ -88,11 +88,7 @@ async function inlineCompleteEnabled(tenantId: string): Promise<boolean> {
 // buildInlineMessages + cleanInlineCompletion live in
 // lib/copilot/inline-complete-prompt.ts (pure + unit-tested).
 
-export async function POST(req: NextRequest) {
-  const session = getSession();
-  if (!session) {
-    return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  }
+export const POST = withSession(async (req: NextRequest, { session }) => {
 
   // Per-principal AOAI rate limit — default ON (LOOM_RATE_LIMIT=off disables).
   // Two-tier: in-memory burst cap + durable cross-replica window. No streaming
@@ -209,4 +205,4 @@ export async function POST(req: NextRequest) {
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }
-}
+});

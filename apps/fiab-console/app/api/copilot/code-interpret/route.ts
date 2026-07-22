@@ -39,7 +39,6 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { synapseConfigGate } from '@/lib/azure/synapse-dev-client';
 import {
   createLivySession,
@@ -60,7 +59,8 @@ import {
   parseInterpreterOutput,
   SANDBOX_TIMEOUT_S,
 } from '@/lib/copilot/code-interpreter';
-import { apiError, apiUnauthorized, apiServerError } from '@/lib/api/respond';
+import { apiError, apiServerError } from '@/lib/api/respond';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -76,9 +76,7 @@ function sleep(ms: number) {
   return new Promise<void>((r) => setTimeout(r, ms));
 }
 
-export async function POST(req: NextRequest) {
-  const session = getSession();
-  if (!session) return apiUnauthorized();
+export const POST = withSession(async (req: NextRequest, { session }) => {
 
   // ------------------------------------------------------------------
   // Parse + validate body
@@ -277,4 +275,4 @@ export async function POST(req: NextRequest) {
       } catch { /* best-effort cleanup */ }
     }
   }
-}
+});
