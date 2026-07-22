@@ -250,6 +250,8 @@ const useStyles = makeStyles({
     padding: tokens.spacingVerticalM, textAlign: 'left', alignItems: 'flex-start',
     border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge,
     backgroundColor: tokens.colorNeutralBackground1, boxShadow: tokens.shadow4,
+    // Native <button>: without an explicit color, text inherits UA ButtonText (black-on-dark).
+    color: tokens.colorNeutralForeground1,
     cursor: 'pointer', height: '100%', minWidth: 0, width: '100%',
     transitionProperty: 'box-shadow, border-color, transform', transitionDuration: tokens.durationNormal,
     ':hover': { boxShadow: tokens.shadow16, border: `1px solid ${tokens.colorBrandStroke1}` },

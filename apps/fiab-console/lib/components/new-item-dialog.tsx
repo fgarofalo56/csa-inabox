@@ -177,6 +177,9 @@ const useStyles = makeStyles({
     flexDirection: 'column',
     gap: '6px',
     backgroundColor: tokens.colorNeutralBackground1,
+    // Native <button> text otherwise inherits UA ButtonText (near-black, not
+    // theme-aware) — Fluent Text presets set no color of their own.
+    color: tokens.colorNeutralForeground1,
     ':hover': {
       ...shorthands.borderColor(tokens.colorBrandStroke1),
       boxShadow: tokens.shadow4,

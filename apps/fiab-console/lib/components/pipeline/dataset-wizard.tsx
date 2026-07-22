@@ -192,6 +192,8 @@ const useStyles = makeStyles({
     borderRadius: tokens.borderRadiusLarge, padding: tokens.spacingVerticalM,
     cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS,
     backgroundColor: tokens.colorNeutralBackground1, textAlign: 'left',
+    // Native <button>: without an explicit color, text inherits UA ButtonText (black-on-dark).
+    color: tokens.colorNeutralForeground1,
     boxShadow: tokens.shadow4, transitionDuration: tokens.durationNormal, transitionProperty: 'box-shadow, border-color',
     ':hover': { ...shorthands.borderColor(tokens.colorBrandStroke1), boxShadow: tokens.shadow16 },
     ':focus-visible': { outline: `${tokens.strokeWidthThick} solid ${tokens.colorStrokeFocus2}`, outlineOffset: tokens.strokeWidthThin },

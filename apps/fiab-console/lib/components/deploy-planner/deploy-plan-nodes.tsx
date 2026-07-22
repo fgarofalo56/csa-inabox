@@ -21,7 +21,8 @@ import {
   Folder20Regular,
 } from '@fluentui/react-icons';
 import { serviceByKey, serviceVisual, type ConfigStatus } from './service-catalog';
-import { iconUrl } from '../ui/item-type-visual';
+import { iconUrl, readableAccent } from '../ui/item-type-visual';
+import { useTheme } from '@/lib/theme/theme-context';
 import { accentTint } from '../canvas/canvas-node-kit';
 
 /**
@@ -318,6 +319,10 @@ function ServiceIconChip({
   // endpoint is unreachable in an air-gapped/sovereign boundary), drop to the
   // bundled raster / Fluent glyph instead of leaving a broken-image box.
   const [remoteOk, setRemoteOk] = React.useState(true);
+  const { mode } = useTheme();
+  // Catalog brand hexes include dark navies/greens that vanish on the dark
+  // canvas — lift the glyph foreground while keeping the tint wash on the raw hue.
+  const fg = readableAccent(vis.color, mode === 'dark');
   // Re-arm the remote attempt whenever the slug changes so a recycled chip
   // (React Flow reuses node instances) never suppresses a valid icon because a
   // previous, different slug had 404'd.
@@ -332,7 +337,7 @@ function ServiceIconChip({
         // catalog (not authored here). Wash it via color-mix instead of
         // string-concatenating a hex alpha suffix — works for any CSS colour
         // and matches the kit's token-only tinting convention.
-        background: `color-mix(in srgb, ${vis.color} 12%, transparent)`, color: vis.color,
+        background: `color-mix(in srgb, ${vis.color} 12%, transparent)`, color: fg,
         display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
       }}
     >
@@ -344,7 +349,7 @@ function ServiceIconChip({
         // eslint-disable-next-line @next/next/no-img-element
         <img src={`/azure-icons/${def.icon}`} alt="" width={iconPx} height={iconPx} />
       ) : (
-        <Glyph style={{ width: iconPx, height: iconPx, color: vis.color }} />
+        <Glyph style={{ width: iconPx, height: iconPx, color: fg }} />
       )}
     </span>
   );
