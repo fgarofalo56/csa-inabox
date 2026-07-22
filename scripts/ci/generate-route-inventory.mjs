@@ -39,7 +39,7 @@ const METHOD_RES = {
 };
 const METHOD_ORDER = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'];
 
-const SESSION_RE = /getSession\s*\(|with(?:Session|WorkspaceOwner|BackendGate)\s*\(/;
+const SESSION_RE = /getSession\s*\(|with(?:Session|WorkspaceOwner|BackendGate|TenantAdmin|DlzAccess)\s*\(/;
 
 const OWNER_RE = new RegExp([
   'loadOwnedItem', 'updateOwnedItem', 'deleteOwnedItem', 'createOwnedItem',
@@ -55,6 +55,10 @@ const ADMIN_RE = new RegExp([
   'requireTenantAdmin', 'isTenantAdmin', 'isTenantAdminTier', 'requireDomainRole',
   'enforceCapability', 'canAccessDlzPanes', 'isAtLeastDomainAdmin',
   'isAtLeastDomainContributor', 'callerIsOpsAdmin',
+  // R1 route-toolkit wrappers (mirror withWorkspaceOwner in OWNER_RE):
+  // withTenantAdmin runs requireTenantAdmin internally; withDlzAccess runs
+  // denyIfNoDlzAccess (tenant-admin-or-domain-admin) internally.
+  'withTenantAdmin', 'withDlzAccess',
 ].join('|'));
 
 const GATE_RE = /ConfigGate\s*\(|withBackendGate\s*\(|apiHonestGateError\s*\(|backendGateResponse\s*\(|gateStatus\s*\(|assertFabricFamilyAvailable|not_configured|not configured/;

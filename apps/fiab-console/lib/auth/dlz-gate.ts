@@ -28,7 +28,7 @@ import type { SessionPayload } from './session';
 import { canAccessDlzPanes, TENANT_ADMIN_TIER_REMEDIATION, TENANT_ADMIN_BOOTSTRAP_ENV } from './domain-role';
 import { loadTenantDomains } from './load-domains';
 
-type DlzPane = 'scaling' | 'cost' | 'monitoring';
+export type DlzPane = 'scaling' | 'cost' | 'monitoring';
 
 const PANE_NOUN: Record<DlzPane, string> = {
   scaling: 'scaling',

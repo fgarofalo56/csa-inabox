@@ -7,6 +7,9 @@
  *   - `… ; const item = await loadOwnedItem(id, type, s.claims.oid);
  *      if (!item) return 404`                                     → withWorkspaceOwner
  *   - `const g = xConfigGate(); if (g) return 503 not_configured` → withBackendGate
+ *   - `… ; const gate = requireTenantAdmin(s); if (gate) return gate` → withTenantAdmin
+ *   - `… ; const denied = await denyIfNoDlzAccess(s, pane);
+ *      if (denied) return denied`                                  → withDlzAccess
  *
  * They COMPOSE with — never replace — the response helpers in ./respond
  * (`apiOk` / `apiError` / `apiUnauthorized` / `apiNotFound` / `apiServerError` /
@@ -29,6 +32,8 @@ import type { NextRequest, NextResponse } from 'next/server';
 import { getSession, type SessionPayload } from '@/lib/auth/session';
 import type { WorkspaceItem } from '@/lib/types/workspace';
 import { loadOwnedItem } from '@/app/api/items/_lib/item-crud';
+import { requireTenantAdmin } from '@/lib/auth/feature-gate';
+import { denyIfNoDlzAccess, type DlzPane } from '@/lib/auth/dlz-gate';
 import { apiUnauthorized, apiNotFound, apiServerError } from './respond';
 import { backendGateResponse, type GateEnvelopeOpts } from './gate-envelope';
 
@@ -131,6 +136,57 @@ export function withWorkspaceOwner<P extends { id: string } = { id: string }>(
     const item = await loadOwnedItem(id, itemType, sctx.session.claims.oid, opts);
     if (!item) return apiNotFound();
     return handler(req, { ...sctx, item });
+  });
+}
+
+/**
+ * Require a signed-in session AND tenant-admin standing (P3). Composes on
+ * `withSession` (401 first), then runs the exact `requireTenantAdmin(session)`
+ * check from `@/lib/auth/feature-gate` — when it returns a response (the
+ * canonical 403 `admin_only` envelope with its remediation text) that response
+ * is returned unchanged, so adopting the wrapper leaves a route's authorization
+ * + error bodies byte-compatible with the hand-rolled
+ * `const gate = requireTenantAdmin(s); if (gate) return gate;` idiom.
+ *
+ * The handler receives the same `SessionContext` as `withSession`, so it nests
+ * with `withBackendGate` exactly like the other wrappers:
+ *
+ *   export const PUT = withTenantAdmin(
+ *     withBackendGate('svc-purview', async (req, { session, params }) => { … }),
+ *   );
+ */
+export function withTenantAdmin<P = Record<string, string>>(handler: SessionHandler<P>): RouteHandler<P> {
+  return withSession<P>((req, sctx) => {
+    const gate = requireTenantAdmin(sctx.session);
+    if (gate) return gate;
+    return handler(req, sctx);
+  });
+}
+
+/**
+ * Require a signed-in session AND Data-Landing-Zone pane access (P4: tenant
+ * admin or domain admin of ≥1 domain). Composes on `withSession` (401 first),
+ * then awaits the exact `denyIfNoDlzAccess(session, pane)` check from
+ * `@/lib/auth/dlz-gate` — when it returns the canonical 403 response, that
+ * response is returned unchanged (byte-compatible with the hand-rolled
+ * `const denied = await denyIfNoDlzAccess(s, pane); if (denied) return denied;`
+ * idiom).
+ *
+ * The handler receives the same `SessionContext`, so it nests with
+ * `withBackendGate` the same way:
+ *
+ *   export const GET = withDlzAccess('cost',
+ *     withBackendGate('svc-costmgmt', async (req, { session }) => { … }),
+ *   );
+ */
+export function withDlzAccess<P = Record<string, string>>(
+  pane: DlzPane,
+  handler: SessionHandler<P>,
+): RouteHandler<P> {
+  return withSession<P>(async (req, sctx) => {
+    const denied = await denyIfNoDlzAccess(sctx.session, pane);
+    if (denied) return denied;
+    return handler(req, sctx);
   });
 }
 
