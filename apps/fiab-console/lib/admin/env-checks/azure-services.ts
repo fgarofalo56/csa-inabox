@@ -252,6 +252,31 @@ export const AZURE_SERVICES_ENV_CHECKS: EnvSpec[] = [
     },
   },
   {
+    // C2 (loom-next-level) — the FinOps period-end forecast: real Cost
+    // Management Forecast API (CostUSD aggregation) with a computed
+    // linear/seasonal fallback from the C1 cached daily series. Both knobs are
+    // fully-functional-by-default tuning vars (optionalDefault): unset → a
+    // 30-day horizon and method 'auto' (API first, computed projection on any
+    // failure). Editable here so an admin can force the computed method (e.g.
+    // IL5 CSV-ingest estates) or widen the horizon from /admin/env-config.
+    id: 'svc-cost-forecast', category: 'azure-services', title: 'Cost Management Forecast (FinOps — period-end projection)', severity: 'optional',
+    required: ['LOOM_COST_FORECAST_HORIZON_DAYS', 'LOOM_COST_FORECAST_METHOD'], warnOnMiss: true, optionalDefault: true,
+    optionalDefaultDetail: "the forecast runs day-one with fully-functional defaults — a 30-day horizon and method 'auto' (the real Cost Management Forecast API first, falling back to a computed linear/seasonal projection from the real daily series, honestly labeled on every surface).",
+    remediation: "Optional tuning only — the forecast works unset. Set LOOM_COST_FORECAST_HORIZON_DAYS (1–90, default 30) to change how far forward the FinOps forecast projects, and LOOM_COST_FORECAST_METHOD to 'api' (Forecast API only, computed fallback on failure), 'linear' (least-squares run-rate) or 'seasonal' (7-day weekday profile × trend) to force a method — e.g. 'seasonal' on Gov enrollments where the Forecast API returns FailedDependency, or 'linear'/'seasonal' on IL5 estates computing from the CSV-ingest series.",
+    provisionedBy: "modules/admin-plane/main.bicep apps[] env LOOM_COST_FORECAST_HORIZON_DAYS + LOOM_COST_FORECAST_METHOD (observabilityConfig bag costForecastHorizonDays/costForecastMethod, defaults 30/'auto')",
+    role: 'Cost Management Reader (Console UAMI) — the same C1 bicep grant (cost-management-reader-rbac.bicep); the computed fallback needs no additional role',
+    // X-MATRIX (C2 per-cloud): the Forecast API is GA in Commercial AND on
+    // management.usgovcloudapi.net, but Gov enrollment/scope support varies —
+    // a FailedDependency falls back to the 'seasonal' computed projection
+    // automatically. IL5/air-gapped: the endpoint is unreachable → the
+    // linear/seasonal projection computed from the C1 CSV-export-ingested
+    // series is the path; the surfaces render identically, honestly labeled.
+    availability: {
+      commercial: 'ga', gccHigh: 'ga', il5: 'unavailable',
+      fallbackNote: "Gov GCC-High: the Cost Management Forecast API is GA on management.usgovcloudapi.net but EA/MCA enrollment + scope support varies — a per-scope FailedDependency automatically falls back to the computed 'seasonal' (or 'linear') projection from the real daily series, labeled as such; set LOOM_BILLING_SCOPE for enrollment-scope rollups. IL5/air-gapped: the Forecast endpoint is unreachable — the forecast is computed 'linear'/'seasonal' from the C1 CSV-export-ingest series (no external call), surfaced identically.",
+    },
+  },
+  {
     id: 'svc-databricks-sql', category: 'azure-services', title: 'Databricks SQL warehouse (DQ monitor / MDM / DLP schemas)', severity: 'optional',
     required: ['LOOM_DATABRICKS_SQL_WAREHOUSE_ID'], warnOnMiss: true,
     remediation: 'Set LOOM_DATABRICKS_SQL_WAREHOUSE_ID (with LOOM_DATABRICKS_HOSTNAME) so DQ monitoring, MDM match-merge, and governance DLP schema surfaces run against a real Databricks SQL warehouse (warehouseConfigGate). Synapse covers the warehouse item type without it.',

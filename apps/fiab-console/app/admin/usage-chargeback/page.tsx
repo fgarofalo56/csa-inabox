@@ -48,6 +48,8 @@ interface NormalizedCapacity {
 }
 interface ChargebackModel {
   currency: string; timeframe: string; windowHours: number; totalCost: number; forecast: number;
+  /** C2 — what produced `forecast` (real Forecast API vs computed fallback). */
+  forecastMethod?: 'api' | 'linear' | 'seasonal';
   trendPct: number | null; perService: CostRow[]; perResourceType: CostRow[]; compute: CostRow[]; storage: CostRow[];
   perWorkspace: WorkspaceChargeback[]; timeSeries: { date: string; cost: number }[];
   normalizedCU: NormalizedCapacity; scope: string; subscriptions: string[];
@@ -170,7 +172,12 @@ function KpiCards({ m }: { m: ChargebackModel }) {
       <div className={styles.kpi}>
         <span className={styles.kpiHead}><TopSpeed20Regular /> <Caption1>Forecast (period end)</Caption1></span>
         <span className={styles.kpiValue}>{money(m.forecast, m.currency)}</span>
-        <span className={styles.kpiSub}>linear run-rate projection</span>
+        {/* C2 — honest method label: the real Forecast API vs a computed fallback. */}
+        <span className={styles.kpiSub}>
+          {m.forecastMethod === 'api' ? 'Cost Management Forecast API'
+            : m.forecastMethod === 'seasonal' ? '7-day seasonal projection'
+            : 'linear run-rate projection'}
+        </span>
       </div>
       <div className={styles.kpi}>
         <span className={styles.kpiHead}><DataHistogram20Regular /> <Caption1>Trend vs prior period</Caption1></span>

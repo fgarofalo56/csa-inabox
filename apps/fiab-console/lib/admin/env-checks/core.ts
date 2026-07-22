@@ -94,6 +94,9 @@ export const VALUE_HINT: Record<string, string> = {
   LOOM_SUBSCRIPTION_ID: '<subscription-id>',
   // C1 — optional widener for the FinOps cost rollup (per-subscription default).
   LOOM_BILLING_SCOPE: '/providers/Microsoft.Billing/billingAccounts/<billing-account-id>  (unset = per Loom subscription)',
+  // C2 — FinOps forecast tuning (fully-functional defaults; svc-cost-forecast).
+  LOOM_COST_FORECAST_HORIZON_DAYS: '30  (forecast days, 1–90)',
+  LOOM_COST_FORECAST_METHOD: 'auto (default) | api | linear | seasonal',
   LOOM_DLZ_RG: '<dlz-resource-group>',
   LOOM_ADMIN_RG: '<admin-resource-group>',
   LOOM_TENANT_ADMIN_OID: '<your-entra-user-object-id>',
