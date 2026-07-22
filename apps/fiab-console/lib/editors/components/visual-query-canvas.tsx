@@ -45,6 +45,9 @@ import {
   makeStyles, mergeClasses, shorthands, tokens,
 } from '@fluentui/react-components';
 import { ResizableCanvasRegion } from '@/lib/components/canvas/resizable-canvas';
+// Shared draggable width divider (G3): the Applied-steps inspector is sized by
+// SplitPane with a persisted sizingKey instead of a fixed 320px grid track.
+import { SplitPane } from '@/lib/components/shared/split-pane';
 import {
   Add20Regular, Delete20Regular, Play20Regular, Table20Regular,
   Filter20Regular, ColumnTriple20Regular, GroupList20Regular, BranchFork20Regular,
@@ -136,7 +139,9 @@ interface ResultGridRow {
 
 const useLocalStyles = makeStyles({
   root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minHeight: 0, flex: 1 },
-  body: { display: 'grid', gridTemplateColumns: '1fr 320px', gap: tokens.spacingHorizontalL, minHeight: '420px' },
+  // The canvas | inspector row is a SplitPane (G3): inspector width is
+  // user-draggable + persisted (was a fixed 320px grid track).
+  body: { minHeight: '420px' },
   canvas: {
     position: 'relative',
     backgroundColor: tokens.colorNeutralBackground3,
@@ -608,7 +613,18 @@ function CanvasInner(props: VisualQueryCanvasProps) {
 
   return (
     <div className={s.root}>
-      <div className={s.body}>
+      {/* G3: canvas | inspector divider is user-draggable (keyboard-accessible)
+          and persisted under loom.splitpane.visual-query.inspector. */}
+      <SplitPane
+        direction="horizontal"
+        primary="second"
+        storageKey="visual-query.inspector"
+        defaultSize={320}
+        minSize={280}
+        maxSize={560}
+        dividerLabel="Resize applied steps panel"
+        className={s.body}
+      >
         {/* Canvas region — user-resizable height (drag the grip below the canvas,
             or focus it and use Arrow / Shift+Arrow / Home / End). Height is
             persisted per-surface in localStorage; the canvas FILLS this region,
@@ -719,7 +735,7 @@ function CanvasInner(props: VisualQueryCanvasProps) {
             />
           )}
         </aside>
-      </div>
+      </SplitPane>
 
       {/* Generated SQL (read-only) + Run */}
       <div className={s.sqlBar}>

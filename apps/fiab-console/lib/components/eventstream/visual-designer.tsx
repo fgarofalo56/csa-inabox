@@ -58,6 +58,9 @@ import {
   shorthands,
 } from '@fluentui/react-components';
 import { ResizableCanvasRegion } from '@/lib/components/canvas/resizable-canvas';
+// Shared draggable width divider (G3): the node-properties inspector is sized
+// by SplitPane with a persisted sizingKey instead of a fixed 320px grid track.
+import { SplitPane } from '@/lib/components/shared/split-pane';
 import {
   Add20Regular,
   Delete20Regular,
@@ -132,10 +135,10 @@ export type SelectedNode =
 // ============================================================
 
 const useStyles = makeStyles({
+  // The canvas | inspector row is a SplitPane (G3): inspector width is
+  // user-draggable + persisted (was a fixed 320px grid track).
   designer: {
-    display: 'grid',
-    gridTemplateColumns: '1fr 320px',
-    gap: tokens.spacingHorizontalL,
+    display: 'flex',
     minHeight: '480px',
   },
   canvas: {
@@ -374,6 +377,17 @@ export function VisualDesigner({ config, onChange, itemId, onCreateGeoAlert, onP
 
   return (
     <div className={s.designer} role="region" aria-label="Eventstream visual designer">
+      {/* G3: canvas | inspector divider is user-draggable (keyboard-accessible)
+          and persisted under loom.splitpane.eventstream.inspector. */}
+      <SplitPane
+        direction="horizontal"
+        primary="second"
+        storageKey="eventstream.inspector"
+        defaultSize={320}
+        minSize={280}
+        maxSize={560}
+        dividerLabel="Resize node properties panel"
+      >
       <EventstreamCanvas
         sources={sources}
         transforms={transforms}
@@ -427,6 +441,7 @@ export function VisualDesigner({ config, onChange, itemId, onCreateGeoAlert, onP
           />
         )}
       </aside>
+      </SplitPane>
     </div>
   );
 }

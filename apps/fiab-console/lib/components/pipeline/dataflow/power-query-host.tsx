@@ -79,6 +79,9 @@ import { EmptyState } from '@/lib/components/empty-state';
 // surface only declares its bounds/storage key; the diagram + steps region
 // height becomes user-controlled while canvas behaviour stays unchanged.
 import { ResizableCanvasRegion } from '@/lib/components/canvas/resizable-canvas';
+// Shared draggable width divider (G3): the Queries / Applied-steps panes are
+// sized by SplitPane with persisted sizingKeys instead of fixed 244px widths.
+import { SplitPane } from '@/lib/components/shared/split-pane';
 
 /**
  * Power Query is a data-wrangling surface → it belongs to the kit's `transform`
@@ -122,13 +125,11 @@ const useStyles = makeStyles({
     background: accentGradient(PQ_ACCENT), color: PQ_ACCENT,
     border: `1px solid ${accentTint(PQ_ACCENT, 24)}`,
   },
-  // The definite height is now supplied by the wrapping <ResizableCanvasRegion>
-  // (user-resizable, persisted); the body just fills it (height:100% claims the
-  // region's resolved height; minHeight:0 lets the panes scroll instead of
-  // forcing overflow). Was a fixed minHeight:320 flex:1 region.
-  body: { display: 'flex', gap: tokens.spacingHorizontalM, height: '100%', minHeight: 0 },
+  // The definite height is supplied by the wrapping <ResizableCanvasRegion>
+  // (user-resizable, persisted); the nested SplitPanes fill it and make the
+  // Queries / Applied-steps pane widths user-draggable + persisted (G3).
   pane: {
-    width: '244px', flexShrink: 0, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS,
+    minWidth: 0, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS,
     padding: tokens.spacingHorizontalS, overflow: 'auto',
   },
   center: {
@@ -572,7 +573,17 @@ export function PowerQueryHost({
         minPx={300}
         ariaLabel="Resize Power Query canvas height"
       >
-      <div className={s.body}>
+      {/* G3: both side panes are user-draggable (keyboard-accessible) and
+          persisted under loom.splitpane.power-query.queries / .steps. */}
+      <SplitPane
+        direction="horizontal"
+        primary="first"
+        storageKey="power-query.queries"
+        defaultSize={244}
+        minSize={200}
+        maxSize={400}
+        dividerLabel="Resize queries pane"
+      >
         {/* Queries pane */}
         <div className={mergeClasses(s.card, s.pane)} role="navigation" aria-label="Queries">
           <div className={s.paneHeader}>
@@ -618,6 +629,15 @@ export function PowerQueryHost({
         </div>
 
         {/* Center — data preview (honest-gated) / column profile / query diagram */}
+        <SplitPane
+          direction="horizontal"
+          primary="second"
+          storageKey="power-query.steps"
+          defaultSize={244}
+          minSize={200}
+          maxSize={400}
+          dividerLabel="Resize applied steps pane"
+        >
         <div className={mergeClasses(s.card, s.center)}>
           <div className={s.paneHeader}>
             <span className={s.paneTitle}>
@@ -774,7 +794,8 @@ export function PowerQueryHost({
             Right-click (or use the ⋯ menu) for rename, insert, move, and delete.
           </Caption1>
         </div>
-      </div>
+        </SplitPane>
+      </SplitPane>
       </ResizableCanvasRegion>
 
       {/* Structured transform dialog — the shared pq-transform-dialogs module plugs

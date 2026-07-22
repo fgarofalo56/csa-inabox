@@ -40,6 +40,9 @@ import {
 import { CanvasCollabLayer } from '@/lib/components/canvas/canvas-collab-layer';
 import { useCanvasHistory } from '@/lib/components/canvas/use-canvas-history';
 import { ResizableCanvasRegion } from '@/lib/components/canvas/resizable-canvas';
+// Shared draggable width divider (G3): the inspector is sized by SplitPane
+// with a persisted sizingKey instead of a fixed grid ratio.
+import { SplitPane } from '@/lib/components/shared/split-pane';
 import {
   AGENT_TOOL_KINDS, newAgentTool, agentToolKind, toolCanvasCategory, isAgentToolConfigured,
   type AgentTool, type AgentToolKind,
@@ -100,7 +103,8 @@ function visualFor(category: CanvasNodeCategory, icon: JSX.Element): CanvasVisua
 const useStyles = makeStyles({
   root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minHeight: '0' },
   toolbar: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
-  body: { display: 'grid', gridTemplateColumns: 'minmax(0, 1.7fr) minmax(300px, 1fr)', gap: tokens.spacingHorizontalM, alignItems: 'stretch' },
+  // The canvas | inspector row is a SplitPane (G3): inspector width is
+  // user-draggable + persisted (was a fixed minmax grid ratio).
   canvasWrap: {
     // Fills the user-resizable ResizableCanvasRegion (default 460px, persisted
     // per-surface, bounded 300px–80vh). React Flow needs this definite height.
@@ -308,7 +312,17 @@ function InnerCanvas(props: AgentFlowCanvasProps) {
         <Button size="small" appearance="subtle" icon={<ArrowRedo16Regular />} onClick={doRedo} disabled={!history.canRedo}>Redo</Button>
       </div>
 
-      <div className={s.body}>
+      {/* G3: canvas | inspector divider is user-draggable (keyboard-accessible)
+          and persisted under loom.splitpane.agent-flow.inspector. */}
+      <SplitPane
+        direction="horizontal"
+        primary="second"
+        storageKey="agent-flow.inspector"
+        defaultSize={360}
+        minSize={300}
+        maxSize={640}
+        dividerLabel="Resize workflow inspector"
+      >
         <ResizableCanvasRegion
           storageKey="agent-flow-canvas"
           defaultPx={460}
@@ -435,7 +449,7 @@ function InnerCanvas(props: AgentFlowCanvasProps) {
             </>
           )}
         </div>
-      </div>
+      </SplitPane>
 
       {/* ---- Test run pane (real grounded run + delegation) ---- */}
       <div className={s.runPane}>
