@@ -39,6 +39,12 @@ export interface GateEnvelopeGate {
   fixItHref: string;
   /** The unmet env var(s) (preferred member of each unsatisfied anyOf group). */
   missing: string[];
+  /** X2 — 'cloud-unavailable' when the backing service is structurally
+   * unavailable in the active cloud (vs a plain config miss = 'blocked'). The
+   * HonestGate renderer drops the Fix-it and shows the fallback CTA instead. */
+  state?: 'blocked' | 'cloud-unavailable';
+  /** X2 — the Azure-native / OSS / Loom-native fallback for the active cloud. */
+  fallbackNote?: string;
 }
 
 /**
@@ -81,14 +87,19 @@ export function gateFixItHref(gateId: string): string {
  */
 export function buildGateEnvelope(gateId: string, opts: GateEnvelopeOpts = {}): GateEnvelope {
   const gate = getGate(gateId);
-  const missing = opts.missing ?? gateStatus(gateId)?.missing ?? [];
+  const st = gateStatus(gateId);
+  const missing = opts.missing ?? st?.missing ?? [];
   const title = gate?.title ?? gateId;
   const remediation = gate?.remediation ?? `Configure ${gateId} for this deployment (see /admin/gates).`;
+  // X2 — surface the cloud-unavailable state + fallback so the shared
+  // HonestGate renderer suppresses the Fix-it and names the Loom-native
+  // equivalent instead of prompting for an impossible resource.
+  const cloudUnavailable = st?.status === 'cloud-unavailable';
   return {
     ok: false,
     gated: true,
-    code: opts.code ?? 'not_configured',
-    error: opts.message ?? remediation,
+    code: opts.code ?? (cloudUnavailable ? 'cloud_unavailable' : 'not_configured'),
+    error: opts.message ?? (cloudUnavailable && st?.fallbackNote ? st.fallbackNote : remediation),
     missing,
     gate: {
       id: gateId,
@@ -96,6 +107,11 @@ export function buildGateEnvelope(gateId: string, opts: GateEnvelopeOpts = {}): 
       remediation,
       fixItHref: gateFixItHref(gateId),
       missing,
+      // Additive: the X2 fields appear ONLY on cloud-unavailable gates so the
+      // plain blocked envelope shape stays byte-identical for existing clients.
+      ...(cloudUnavailable
+        ? { state: 'cloud-unavailable' as const, fallbackNote: st?.fallbackNote }
+        : {}),
     },
   };
 }
@@ -117,7 +133,10 @@ export function apiHonestGateError(gateId: string, opts: GateEnvelopeOpts = {}):
  */
 export function backendGateResponse(gateId: string, opts: GateEnvelopeOpts = {}): NextResponse | null {
   const status = gateStatus(gateId);
-  if (status && status.status === 'blocked') {
+  // X2: 'cloud-unavailable' gates too — the route must not proceed to a
+  // backend that does not exist in this cloud; the envelope carries the
+  // fallbackNote so the surface renders the honest no-Fix-it bar.
+  if (status && status.status !== 'configured') {
     return apiHonestGateError(gateId, { missing: status.missing, ...opts });
   }
   return null;

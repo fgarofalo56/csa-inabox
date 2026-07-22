@@ -55,9 +55,13 @@ const useStyles = makeStyles({
 });
 
 interface GateRow extends GateDef {
-  status: 'configured' | 'blocked';
+  status: 'configured' | 'blocked' | 'cloud-unavailable';
   missing: string[];
   detail?: string;
+  /** X2 — the backing service's availability in the ACTIVE cloud. */
+  cloudAvailability?: 'ga' | 'limited' | 'unavailable';
+  /** X2 — the Azure-native / OSS / Loom-native fallback for this cloud. */
+  fallbackNote?: string;
 }
 
 export default function AdminGatesPage() {
@@ -65,7 +69,7 @@ export default function AdminGatesPage() {
   const [rows, setRows] = useState<GateRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [writeError, setWriteError] = useState<string | null>(null);
-  const [statusFilter, setStatusFilter] = useState<'all' | 'blocked' | 'configured'>('all');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'blocked' | 'configured' | 'cloud-unavailable'>('all');
   const [categoryFilter, setCategoryFilter] = useState<string>('all');
   const [query, setQuery] = useState('');
   const [fixGateId, setFixGateId] = useState<string | null>(null);
@@ -109,15 +113,18 @@ export default function AdminGatesPage() {
         r.requiredSettings.some((rs) => rs.envVar.toLowerCase().includes(q)) ||
         r.surfaces.some((sf) => sf.label.toLowerCase().includes(q) || sf.path.toLowerCase().includes(q)));
     }
-    // Blocked first, then severity, then id — the actionable rows lead.
+    // Blocked first (actionable), then cloud-unavailable, then configured;
+    // within a band: severity, then id.
     const sevRank = { critical: 0, recommended: 1, optional: 2 } as Record<string, number>;
+    const stRank = { blocked: 0, 'cloud-unavailable': 1, configured: 2 } as Record<string, number>;
     return [...out].sort((a, b) =>
-      (a.status === b.status ? 0 : a.status === 'blocked' ? -1 : 1) ||
+      (stRank[a.status] - stRank[b.status]) ||
       (sevRank[a.severity] - sevRank[b.severity]) ||
       a.id.localeCompare(b.id));
   }, [rows, statusFilter, categoryFilter, query]);
 
   const configured = (rows || []).filter((r) => r.status === 'configured').length;
+  const cloudUnavailable = (rows || []).filter((r) => r.status === 'cloud-unavailable').length;
   const fixGate = fixGateId ? getGate(fixGateId) : undefined;
 
   return (
@@ -153,7 +160,8 @@ export default function AdminGatesPage() {
           <ShieldCheckmark20Regular style={{ color: tokens.colorPaletteGreenForeground1 }} />
           <Subtitle2>{configured} configured</Subtitle2>
           <Warning20Regular style={{ color: tokens.colorPaletteYellowForeground1 }} />
-          <Subtitle2>{rows.length - configured} blocked</Subtitle2>
+          <Subtitle2>{rows.length - configured - cloudUnavailable} blocked</Subtitle2>
+          {cloudUnavailable > 0 && <Subtitle2>{cloudUnavailable} cloud-unavailable</Subtitle2>}
           <Caption1>of {rows.length} registered gates</Caption1>
           <Button size="small" appearance="transparent" icon={<ArrowSync16Regular />} onClick={reload}>
             Refresh
@@ -170,6 +178,7 @@ export default function AdminGatesPage() {
           <Option value="all">All statuses</Option>
           <Option value="blocked">blocked</Option>
           <Option value="configured">configured</Option>
+          <Option value="cloud-unavailable">cloud-unavailable</Option>
         </Dropdown>
         <Dropdown
           value={categoryFilter === 'all' ? 'All categories' : categoryFilter}
@@ -208,11 +217,18 @@ export default function AdminGatesPage() {
                   <TableCell>
                     <Badge
                       appearance="tint"
-                      color={g.status === 'configured' ? 'success' : 'warning'}
+                      color={g.status === 'configured' ? 'success' : g.status === 'cloud-unavailable' ? 'informative' : 'warning'}
                       size="small"
                     >
                       {g.status}
                     </Badge>
+                    {g.cloudAvailability === 'limited' && g.fallbackNote && (
+                      <Tooltip content={g.fallbackNote} relationship="description">
+                        <Badge appearance="outline" color="informative" size="small" style={{ marginLeft: tokens.spacingHorizontalXS }}>
+                          limited in this cloud
+                        </Badge>
+                      </Tooltip>
+                    )}
                     {g.canAutoResolve && (
                       <Tooltip content={g.autoResolveNote || 'Auto-resolved by a push-button deploy — zero operator input.'} relationship="description">
                         <Badge appearance="outline" size="small" style={{ marginLeft: tokens.spacingHorizontalXS }}>
@@ -258,6 +274,15 @@ export default function AdminGatesPage() {
                       >
                         Fix it
                       </Button>
+                    ) : g.status === 'cloud-unavailable' ? (
+                      // X2: no Fix-it — you cannot provision a service that does
+                      // not exist in this cloud; the tooltip names the fallback.
+                      <Tooltip
+                        content={g.fallbackNote || g.availability?.fallbackNote || g.remediation}
+                        relationship="description"
+                      >
+                        <Caption1>Use the Loom-native equivalent</Caption1>
+                      </Tooltip>
                     ) : (
                       <Button size="small" appearance="secondary" onClick={() => setFixGateId(g.id)}>
                         Edit
