@@ -28,7 +28,8 @@ export type AuditCategory =
   | 'builders'
   | 'catalog-governance'
   | 'ai-copilot'
-  | 'workloads';
+  | 'workloads'
+  | 'observability';
 
 export interface CheckResult {
   id: string;
@@ -267,6 +268,13 @@ export const VALUE_HINT: Record<string, string> = {
   LOOM_EVENTGRID_RG: '<eventgrid-resource-group (defaults to the DLZ RG)>',
   LOOM_RESULT_CACHE_REDIS: '<redis-host>.redis.cache.windows.net:6380',
   LOOM_PAGINATED_RENDER_URL: 'https://<paginated-report-renderer-function>.azurewebsites.net',
+  // ── V1 synthetic user-journey monitoring (loom-next-level WS-V) ──
+  LOOM_SYNTHETIC_MONITOR_ENABLED: 'true',
+  LOOM_UAT_RESULTS_ACCOUNT: '<storage-account-name (the DLZ ADLS account by default)>',
+  LOOM_UAT_RESULTS_CONTAINER: 'uat-results',
+  SYNTHETIC_LOGIN_UPN: '<synthetic-automation-account-upn (least-privilege, one Loom test workspace)>',
+  SYNTHETIC_LOGIN_SECRET: '<automation-account-password-from-key-vault (kv secret synthetic-login-secret)>',
+  LOOM_ALERT_ACTION_GROUP_ID: '/subscriptions/<sub>/resourceGroups/<rg>/providers/microsoft.insights/actionGroups/loom-default-alerts',
 };
 
 /** Pick the concrete env vars an admin should set from a missing-list that may

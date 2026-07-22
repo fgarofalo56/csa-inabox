@@ -358,6 +358,9 @@ param aasEnabled bool = true
 @description('Deploy the report-subscription delivery Logic App (integration/report-subscription-logicapp.bicep) so report subscriptions deliver day one. Day-one default ON; set false to opt out. Passed through to admin-plane/main.bicep reportSubscriptionsEnabled.')
 param reportSubscriptionsEnabled bool = true
 
+@description('Observability settings bag (loom-next-level R0/V1) — passed through to admin-plane/main.bicep observabilityConfig. {} (default) = the V1 synthetic-journey monitor deploys default-ON on its defaults (cron */15, uat-results container, MSAL login probe honest-skipped until syntheticLoginUpn + syntheticLoginSecretUri are supplied). Future observability items (V5 bicep-drift, O1 alert-dispatch, RUM1) ride THIS bag — never a new top-level param.')
+param observabilityConfig object = {}
+
 @description('Deploy ADX shared cluster (admin-plane) + per-DLZ ADX databases. Backs the RTI editor family — Eventhouse, KQL Database, KQL Queryset, KQL Dashboard, Eventstream. Default on as of 2026-05-27 (sweep-rti). Set false to skip ~$140/mo Dev SKU cluster.')
 param adxEnabled bool = true
 
@@ -1014,6 +1017,8 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
     // delivery Logic App never deployed even when intended. Wire them through.
     aasEnabled: aasEnabled
     reportSubscriptionsEnabled: reportSubscriptionsEnabled
+    // V1 — synthetic-journey monitor + future observability settings (one bag).
+    observabilityConfig: observabilityConfig
     copilotMafEnabled: copilotMafEnabled
     setupOrchestratorEnabled: setupOrchestratorEnabled
     setupTemplateUri: setupTemplateUri

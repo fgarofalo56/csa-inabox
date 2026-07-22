@@ -1,0 +1,206 @@
+name: loom-synthetic-monitor
+
+# V1 (loom-next-level WS-V) — synthetic user-journey monitoring.
+#
+# Every 15 minutes (+ on demand) this workflow starts the scheduled-capable
+# `loom-synthetic-monitor` Container App Job (modules/admin-plane/
+# synthetic-monitor-job.bicep) which runs the six real end-to-end journeys
+# (e2e/synthetic-journeys.uat.ts via e2e/run-synthetic.mjs) against the LIVE
+# deployment from INSIDE the console VNet:
+#   J1 TRUE MSAL login probe (the 2026-07-19 AADSTS7000215 class — the check
+#      minted-session `verify` monitoring is blind to), J2 create-item,
+#   J3 editor+primary action, J4 warehouse query, J5 marketplace subscribe,
+#   J6 git-sync/promotion.
+#
+# The ACA job itself ALSO carries a */15 Schedule trigger (in-VNet, no GitHub
+# dependency — the IL5-safe path). This workflow adds the pieces an in-VNet job
+# cannot do itself: the GitHub-issue dedup on failure and the shared
+# action-group notification, plus a dispatchable one-shot for receipts.
+# The GH lane polls the job's LATEST execution rather than double-starting when
+# one is already running.
+#
+# ALERTING (rev-2 standard): failures notify through the ONE shared action
+# group `loom-default-alerts` (monitoring-default-alerts.bicep::
+# defaultActionGroup, derived var LOOM_ALERT_ACTION_GROUP_ID) via
+# `az monitor action-group test-notifications create` — email + subscription-
+# Owner ARM-role receivers, the only receivers that exist today. NO parallel
+# Logic Apps, NO Teams webhooks (O1 absorbs this call when it lands).
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+    inputs:
+      timeout_minutes:
+        description: 'Minutes to wait for the synthetic run before declaring it failed.'
+        type: string
+        default: '20'
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  RG_NAME: rg-csa-loom-admin-centralus
+  JOB_NAME: loom-synthetic-monitor
+  ACTION_GROUP_NAME: loom-default-alerts
+
+concurrency:
+  group: loom-synthetic-monitor
+  cancel-in-progress: false
+
+jobs:
+  synthetic-journeys:
+    name: Run + gate the six synthetic journeys
+    runs-on: ubuntu-latest
+    steps:
+      - name: Azure login
+        uses: azure/login@v2.3.0
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+            }
+
+      - name: Start (or adopt) a synthetic-monitor execution + poll to completion
+        id: run
+        env:
+          TIMEOUT_MINUTES: ${{ inputs.timeout_minutes || '20' }}
+        run: |
+          set -e
+          az config set extension.use_dynamic_install=yes_without_prompt -o none 2>/dev/null || true
+
+          if ! az containerapp job show -n "$JOB_NAME" -g "$RG_NAME" -o none 2>/dev/null; then
+            echo "::warning::$JOB_NAME Container App Job not found in $RG_NAME — the synthetic monitor is not deployed in this estate (deploy modules/admin-plane/synthetic-monitor-job.bicep via the admin-plane observabilityConfig bag). Skipping."
+            echo "status=NotDeployed" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Adopt an already-Running execution (the job's own */15 Schedule
+          # trigger may have just fired) instead of double-starting.
+          EXEC=$(az containerapp job execution list -n "$JOB_NAME" -g "$RG_NAME" \
+            --query "[?properties.status=='Running'] | [0].name" -o tsv 2>/dev/null | tr -d '\r' || echo "")
+          if [[ -n "$EXEC" ]]; then
+            echo "::notice::Adopting in-flight execution $EXEC (job's own Schedule trigger)."
+          else
+            START_ERR=$(mktemp)
+            EXEC=$(az containerapp job start -n "$JOB_NAME" -g "$RG_NAME" \
+              --query name -o tsv 2>"$START_ERR" | tr -d '\r')
+            if [[ -z "$EXEC" ]]; then
+              echo "::error::Failed to start $JOB_NAME. az stderr:"; cat "$START_ERR" >&2 || true
+              echo "status=StartFailed" >> "$GITHUB_OUTPUT"
+              exit 1
+            fi
+            echo "::notice::Started execution $EXEC"
+          fi
+          echo "execution=$EXEC" >> "$GITHUB_OUTPUT"
+
+          DEADLINE=$(( $(date +%s) + TIMEOUT_MINUTES * 60 ))
+          STATUS="Running"
+          while :; do
+            STATUS=$(az containerapp job execution list -n "$JOB_NAME" -g "$RG_NAME" \
+              --query "[?name=='$EXEC'].properties.status | [0]" -o tsv 2>/dev/null | tr -d '\r' || echo "")
+            [[ -z "$STATUS" ]] && STATUS="Unknown"
+            echo "[synthetic] $(date -u +%H:%M:%S) status=$STATUS"
+            case "$STATUS" in
+              Succeeded) break ;;
+              Failed|Degraded|Cancelled) break ;;
+            esac
+            if (( $(date +%s) >= DEADLINE )); then STATUS="TimedOut"; break; fi
+            sleep 20
+          done
+          echo "status=$STATUS" >> "$GITHUB_OUTPUT"
+
+          # Best-effort: surface the UAT_RESULT summary line from Log Analytics
+          # (ingestion lags — the execution status above is the gate, never this).
+          WS=$(az monitor log-analytics workspace list -g "$RG_NAME" \
+            --query "[?starts_with(name, 'law-csa-loom-')]|[0].customerId" -o tsv 2>/dev/null | tr -d '\r' || echo "")
+          [[ -z "$WS" ]] && WS=$(az monitor log-analytics workspace list -g "$RG_NAME" --query "[0].customerId" -o tsv 2>/dev/null | tr -d '\r' || echo "")
+          if [[ -n "$WS" ]]; then
+            RESULT=$(az monitor log-analytics query -w "$WS" --analytics-query \
+              "ContainerAppConsoleLogs_CL | where ContainerAppName_s == '$JOB_NAME' | where Log_s contains 'UAT_RESULT' | order by TimeGenerated desc | take 1 | project Log_s" \
+              --query "[0].Log_s" -o tsv 2>/dev/null | tr -d '\r' || echo "")
+            if [[ -n "$RESULT" ]]; then
+              echo "::notice::$RESULT"
+              echo "loom-synthetic-monitor: $RESULT" >> "$GITHUB_STEP_SUMMARY"
+              echo "uat_result=$RESULT" >> "$GITHUB_OUTPUT"
+            fi
+          fi
+
+          if [[ "$STATUS" != "Succeeded" ]]; then
+            echo "::error::Synthetic journeys FAILED (status=$STATUS, execution $EXEC) — realFails>0 (the runner exits non-zero only on real code/login failures; honest infra gates exit 0). Inspect ContainerAppConsoleLogs_CL (ContainerAppName_s=='$JOB_NAME') for the failing journey + the Journeys tab on /admin/health."
+            exit 1
+          fi
+
+      - name: Alert — notify the shared action group (loom-default-alerts)
+        if: failure() && steps.run.outputs.status != 'NotDeployed'
+        run: |
+          # Rev-2 alert standard: route through the ONE shared default action
+          # group (email + subscription-Owner ARM-role receivers). test-notifications
+          # delivers a real notification to every receiver. Best-effort — the
+          # dedup GitHub issue below is the durable signal. O1 (unified
+          # alert-dispatch) absorbs this call when it lands.
+          az monitor action-group test-notifications create \
+            -g "$RG_NAME" --action-group-name "$ACTION_GROUP_NAME" \
+            --alert-type log 2>/dev/null \
+          || az monitor action-group test-notifications create \
+            -g "$RG_NAME" --action-group-name "$ACTION_GROUP_NAME" \
+            --alert-type budget 2>/dev/null \
+          || echo "::warning::action-group notification failed (receivers may still be empty on this estate) — the dedup issue below is the durable alert."
+
+      - name: File / update dedup issue on failure
+        if: failure() && steps.run.outputs.status != 'NotDeployed'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const status = `${{ steps.run.outputs.status }}` || 'Failed';
+            const exec = `${{ steps.run.outputs.execution }}` || '<unknown>';
+            const uat = `${{ steps.run.outputs.uat_result }}` || '(UAT_RESULT not yet in Log Analytics — check container logs)';
+            const body = [
+              `Run: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+              ``,
+              `Execution: \`${exec}\` → **${status}**`,
+              `Summary: \`${uat}\``,
+              ``,
+              `The six synthetic journeys (J1 MSAL login / J2 create-item / J3 editor / J4 query / J5 marketplace / J6 git-promotion) run in-VNet every 15 min; a failure here is a REAL code or sign-in-path failure (honest infra gates never fail the run).`,
+              `Triage: Journeys tab on /admin/health · runbook docs/fiab/runbooks/synthetic-journeys.md · Log Analytics ContainerAppConsoleLogs_CL (ContainerAppName_s=='loom-synthetic-monitor').`,
+            ].join('\n');
+            const existing = await github.rest.issues.listForRepo({
+              owner: context.repo.owner, repo: context.repo.repo,
+              state: 'open', labels: 'synthetic-monitor', per_page: 1,
+            });
+            if (existing.data.length > 0) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: existing.data[0].number,
+                body: `Synthetic journeys failing again.\n\n${body}`,
+              });
+            } else {
+              await github.rest.issues.create({
+                owner: context.repo.owner, repo: context.repo.repo,
+                title: `synthetic-monitor: journeys failing (${status})`,
+                body, labels: ['csa-loom', 'synthetic-monitor'],
+              });
+            }
+
+      - name: Auto-close stale synthetic-monitor issues on success
+        if: success() && steps.run.outputs.status == 'Succeeded'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const open = await github.rest.issues.listForRepo({
+              owner: context.repo.owner, repo: context.repo.repo,
+              state: 'open', labels: 'synthetic-monitor', per_page: 20,
+            });
+            for (const iss of open.data) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo, issue_number: iss.number,
+                body: `Auto-resolved: synthetic journeys are GREEN (run ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}). Closing.`,
+              });
+              await github.rest.issues.update({
+                owner: context.repo.owner, repo: context.repo.repo, issue_number: iss.number, state: 'closed',
+              });
+            }

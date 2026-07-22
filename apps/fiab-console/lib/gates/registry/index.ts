@@ -57,6 +57,7 @@ import { BUILDERS_GATE_META } from './builders';
 import { CATALOG_GOVERNANCE_GATE_META } from './catalog-governance';
 import { AI_COPILOT_GATE_META } from './ai-copilot';
 import { SECURITY_GATE_META } from './security';
+import { OBSERVABILITY_GATE_META } from './observability';
 
 // ── the merged per-gate enrichment (R30: per-domain fragments, same shape) ──
 // Every ENV_CHECKS id MUST have an entry in exactly one domain fragment
@@ -71,6 +72,7 @@ export const GATE_META: Record<string, GateMeta> = {
   ...CATALOG_GOVERNANCE_GATE_META,
   ...AI_COPILOT_GATE_META,
   ...SECURITY_GATE_META,
+  ...OBSERVABILITY_GATE_META,
 };
 
 // ── registry composition ─────────────────────────────────────────────────────

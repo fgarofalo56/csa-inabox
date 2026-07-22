@@ -65,6 +65,13 @@ export const RUNTIME_FLAGS: readonly RuntimeFlagDef[] = [
     ownerItem: 'U10',
     surface: '/browse (pins, workspaces, all-items table) + /marketplace grids',
   },
+  {
+    id: 'v1-journeys-tab',
+    label: 'Health hub — Journeys tab',
+    description: 'OFF reverts /admin/health to the pre-V1 self-audit-only layout (hides the synthetic-journey Journeys tab). The scheduled loom-synthetic-monitor job itself keeps running either way — this only controls the admin surface.',
+    ownerItem: 'V1',
+    surface: '/admin/health?tab=journeys',
+  },
 ];
 
 /** Union of registered flag ids (`never` while the list is empty). */
