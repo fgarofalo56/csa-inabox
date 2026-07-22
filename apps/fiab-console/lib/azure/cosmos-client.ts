@@ -14,6 +14,7 @@
 import { CosmosClient, type Container, type Database } from '@azure/cosmos';
 import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
+import { withMigrations } from '@/lib/azure/cosmos-migrations';
 
 let _client: CosmosClient | null = null;
 let _db: Database | null = null;
@@ -662,18 +663,18 @@ async function ensure() {
     id: 'workspaces',
     partitionKey: { paths: ['/tenantId'] },
   });
-  _workspaces = ws;
+  _workspaces = withMigrations(ws, 'workspaces');
   const { container: it } = await database.containers.createIfNotExists({
     id: 'items',
     partitionKey: { paths: ['/workspaceId'] },
   });
-  _items = it;
+  _items = withMigrations(it, 'items');
   const { container: cs } = await database.containers.createIfNotExists({
     id: 'copilot-sessions',
     partitionKey: { paths: ['/sessionId'] },
     defaultTtl: 2419200, // 28 days = 28 * 24 * 3600 — chat sessions auto-expire
   });
-  _copilotSessions = cs;
+  _copilotSessions = withMigrations(cs, 'copilot-sessions');
   // Idempotent TTL upgrade. createIfNotExists ignores `defaultTtl` for a
   // PRE-EXISTING container, so environments whose copilot-sessions container
   // was created before TTL was added would never expire. Read the current
@@ -693,11 +694,16 @@ async function ensure() {
     id: 'copilot-feedback',
     partitionKey: { paths: ['/sessionId'] },
   });
-  _copilotFeedback = cf;
+  _copilotFeedback = withMigrations(cf, 'copilot-feedback');
 
-  // Chunk 0 — UI foundation containers
+  // Chunk 0 — UI foundation containers. Every container is wrapped with
+  // withMigrations (MIG1) so central read paths apply registered schemaVersion
+  // migrators lazily — behaviorally inert until a migrator is registered.
   const mk = async (id: string, pk: string) =>
-    (await database.containers.createIfNotExists({ id, partitionKey: { paths: [pk] } })).container;
+    withMigrations(
+      (await database.containers.createIfNotExists({ id, partitionKey: { paths: [pk] } })).container,
+      id,
+    );
   _appsCatalog = await mk('apps-catalog', '/tenantId');
   _workloadsCatalog = await mk('workloads-catalog', '/tenantId');
   _userPrefs = await mk('user-prefs', '/userId');
@@ -1002,7 +1008,7 @@ async function ensure() {
     partitionKey: { paths: ['/key'] },
     defaultTtl: -1, // TTL enabled; each doc carries its own `ttl` (no default expiry)
   });
-  _rateLimits = rl;
+  _rateLimits = withMigrations(rl, 'rate-limits');
   // Item version history (Wave-2 W6) — PK /itemId so every per-item history read
   // + snapshot-cap prune is a single-partition operation. Dedicated container, no
   // TTL (versions are retained until the cap evicts the oldest on save).
@@ -1030,7 +1036,7 @@ async function ensure() {
     partitionKey: { paths: ['/tenantId'] },
     defaultTtl: -1, // TTL enabled; each row carries its own `ttl` (default 90d)
   });
-  _costAttribution = costAttr;
+  _costAttribution = withMigrations(costAttr, 'cost-attribution');
   // PSR-1 — perf-benchmark trend rows. PK /runId (see declaration).
   _perfBenchmarks = await mk('perf-benchmarks', '/runId');
   // PERF-4.2/4.4 — perf tunables + usage-learning histograms + auto-tune audit.
@@ -1041,7 +1047,7 @@ async function ensure() {
     partitionKey: { paths: ['/scopeKey'] },
     defaultTtl: -1, // TTL enabled; only audit docs carry a per-doc `ttl`
   });
-  _perfLearning = perfLearn;
+  _perfLearning = withMigrations(perfLearn, 'perf-learning');
   // PSR-3 — cross-replica warm-session lease registry. PK /groupKey, TTL-enabled
   // (each lease doc carries its own `ttl` so a dead replica's leases self-evict).
   // Distinct createIfNotExists (not `mk`) to set defaultTtl.
@@ -1050,14 +1056,14 @@ async function ensure() {
     partitionKey: { paths: ['/groupKey'] },
     defaultTtl: -1, // TTL enabled; each lease doc carries its own `ttl`
   });
-  _sparkWarmLeases = swl;
+  _sparkWarmLeases = withMigrations(swl, 'spark-warm-leases');
   // WS-10.5 — Parity Autopilot run ledger. PK /tenantId, TTL-enabled (per-doc `ttl`).
   const { container: par } = await database.containers.createIfNotExists({
     id: 'parity-autopilot-runs',
     partitionKey: { paths: ['/tenantId'] },
     defaultTtl: -1,
   });
-  _parityAutopilotRuns = par;
+  _parityAutopilotRuns = withMigrations(par, 'parity-autopilot-runs');
   // Brownfield Landing-Zone Service Registry (Phase 1) — PK /tenantId so the
   // per-tenant registry enumeration + every per-LZ services read hit a single
   // physical partition. ARM-provisioned in cosmos.bicep's loomContainers; this
@@ -1086,7 +1092,7 @@ async function ensure() {
     partitionKey: { paths: ['/tenantId'] },
     defaultTtl: 7776000, // 90 days = 90 * 24 * 3600 — usage telemetry self-evicts
   });
-  _copilotSkillUsage = skillUsage;
+  _copilotSkillUsage = withMigrations(skillUsage, 'copilot-skill-usage');
   // CTS-08 — long-term Copilot memory brain + its four sidecars. All PK
   // /scopeKey (`user:{oid}` / `workspace:{id}`) so a scope's recall/browse/audit
   // is single-partition and cross-scope leakage is structurally impossible. NO
@@ -1112,12 +1118,12 @@ async function ensure() {
     partitionKey: { paths: ['/itemId'] },
     defaultTtl: -1, // TTL enabled; each beacon doc carries its own `ttl` seconds
   });
-  _canvasPresence = canvasPresence;
+  _canvasPresence = withMigrations(canvasPresence, 'canvas-presence');
   // WS-5.2 — A2A delegated tasks. PK /tenantId, TTL 7 days. ARM-provisioned in
   // cosmos.bicep's loomContainers; this createIfNotExists is the hotfix fallback.
-  _a2aTasks = (await database.containers.createIfNotExists({
+  _a2aTasks = withMigrations((await database.containers.createIfNotExists({
     id: 'a2a-tasks', partitionKey: { paths: ['/tenantId'] }, defaultTtl: 604800,
-  })).container;
+  })).container, 'a2a-tasks');
   // WS-4.4 — Dataset→object sync job progress. PK /ontologyId.
   _objectSyncJobs = await mk('object-sync-jobs', '/ontologyId');
   _ensured = true;
