@@ -113,6 +113,10 @@ export const VALUE_HINT: Record<string, string> = {
   LOOM_AOAI_VISION_DEPLOYMENT: '<opt-in gpt-4o vision deployment for multimodal AI columns>',
   LOOM_LOG_ANALYTICS_RESOURCE_ID: '/subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.OperationalInsights/workspaces/<law>',
   LOOM_ALERT_RG: env('LOOM_ADMIN_RG') || '<alert-resource-group (defaults to the admin RG)>',
+  // S1 — the ONE shared derived alert sink (O1 convention): the
+  // loom-default-alerts action group from monitoring-default-alerts.bicep.
+  LOOM_ALERT_ACTION_GROUP_ID: '/subscriptions/<sub>/resourceGroups/<admin-rg>/providers/Microsoft.Insights/actionGroups/loom-default-alerts',
+  LOOM_SECRET_EXPIRY_WARN_DAYS: '60',
   LOOM_ADF_FACTORY: '<data-factory-name>',
   LOOM_PURVIEW_ACCOUNT: '<purview-account-name>',
   LOOM_GRAPH_USERS_ENABLED: 'true',

@@ -79,6 +79,25 @@ export const SECURITY_ENV_CHECKS: EnvSpec[] = [
     role: 'Key Vault Secrets Officer (Console UAMI) on the vault',
   },
   {
+    id: 'svc-secret-expiry', category: 'security', title: 'Secret & credential expiry monitoring (S1)', severity: 'recommended',
+    // The shared derived alert sink (O1 convention): monitoring-default-alerts.bicep's
+    // loom-default-alerts action group, auto-wired as LOOM_ALERT_ACTION_GROUP_ID on a
+    // push-button deploy. The warn-days threshold is an optional tuning alias (code
+    // default 60) — grouped with the action-group id so an unset threshold never warns.
+    required: ['LOOM_ALERT_ACTION_GROUP_ID'],
+    anyOf: [['LOOM_SECRET_EXPIRY_WARN_DAYS', 'LOOM_ALERT_ACTION_GROUP_ID']],
+    warnOnMiss: true, derived: true,
+    remediation: 'Set LOOM_ALERT_ACTION_GROUP_ID to the loom-default-alerts action group ARM id (auto-derived from modules/admin-plane/monitoring-default-alerts.bicep on a push-button deploy) so the secret-expiry monitor timer Function (azure-functions/secret-expiry-monitor) can fire the shared alert at the 60/30/7-day thresholds, and the /admin/health Secret-health section shows the same convention. Optionally tune LOOM_SECRET_EXPIRY_WARN_DAYS (default 60). The one-time Graph app-role Application.Read.All admin consent for the Function identity is in docs/fiab/runbooks/secret-rotation.md.',
+    provisionedBy: 'modules/admin-plane/monitoring-default-alerts.bicep (defaultActionGroup → LOOM_ALERT_ACTION_GROUP_ID apps[] env) + modules/admin-plane/secret-expiry-monitor-function.bicep (functionAppsConfig.secretExpiryEnabled, default ON)',
+    role: 'Microsoft Graph Application.Read.All (application) + Key Vault Secrets User + Monitoring Contributor on the secret-expiry Function identity (KV/Monitoring granted in bicep; the Graph app-role is a one-time admin consent)',
+    // X2: Graph + Key Vault + Azure Monitor action groups are GA in every
+    // boundary — only the endpoints differ (.us Graph/ARM, wired by bicep).
+    availability: {
+      commercial: 'ga', gccHigh: 'ga', il5: 'ga',
+      fallbackNote: 'Fully supported in Azure Government — the monitor uses graph.microsoft.us / dod-graph.microsoft.us and the .us ARM endpoint (injected by bicep). In IL5 the GitHub dedup issue is disabled (token unset) so alerting stays in-boundary via the action group.',
+    },
+  },
+  {
     id: 'svc-a2a-egress', category: 'security', title: 'A2A outbound egress profile (gov-safe allow-list)', severity: 'optional',
     required: ['LOOM_A2A_EGRESS_ALLOW'], warnOnMiss: true, optionalDefault: true,
     // WS-5.2. INBOUND A2A (an external agent delegating a task INTO Loom, and Loom

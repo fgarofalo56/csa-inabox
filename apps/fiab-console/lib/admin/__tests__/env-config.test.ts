@@ -185,8 +185,10 @@ describe('admin/env-config registry', () => {
     // svc-report-subscriptions adds LOOM_REPORT_SUBSCRIPTIONS_FUNCTION +
     // LOOM_SUBSCRIPTION_LOGIC_APP_NAME (149) — two NEW → C1 svc-cost-management
     // adds LOOM_BILLING_SCOPE (150) — the optional billing-account/enrollment
-    // rollup widener (LOOM_SUBSCRIPTION_ID it aliases is already counted).
-    expect(EDITABLE_ENV.length).toBe(150);
+    // rollup widener (LOOM_SUBSCRIPTION_ID it aliases is already counted) →
+    // S1 svc-secret-expiry adds LOOM_ALERT_ACTION_GROUP_ID (the ONE shared
+    // derived alert sink, O1 convention) + LOOM_SECRET_EXPIRY_WARN_DAYS (152).
+    expect(EDITABLE_ENV.length).toBe(152);
   });
 
   it('surfaces the wave-2 env vars as settable (previously dropped by the whitelist)', () => {

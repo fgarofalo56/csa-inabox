@@ -1,5 +1,6 @@
 import { AdminShell } from '@/lib/components/admin-shell';
 import { HealthPane } from '@/lib/components/admin/health-pane';
+import { SecretHealthPane } from '@/lib/components/admin/secret-health-pane';
 import { ServiceExercisePane } from '@/lib/components/admin/service-exercise-pane';
 
 export default function AdminHealthPage() {
@@ -14,9 +15,11 @@ export default function AdminHealthPage() {
           'The one-click healer only runs with admin approval and targets issues Loom can safely fix.',
           'Failed checks name the exact env var, role, or resource to fix — treat them as your remediation list.',
           'Exercise services executes a real end-to-end operation per backend — a green self-audit with a red exercise means the resource exists but cannot do work (e.g. a faulted Spark pool).',
+          'Secret & credential health tracks the MSAL app secrets + tracked Key Vault credentials with days-to-expiry — rotate anything red or amber via the secret-rotation runbook before it breaks sign-in.',
         ],
       }}
     >
+      <SecretHealthPane />
       <ServiceExercisePane />
       <HealthPane />
     </AdminShell>

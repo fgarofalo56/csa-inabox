@@ -1,0 +1,20 @@
+{
+  "IsEncrypted": false,
+  "Values": {
+    "AzureWebJobsStorage": "UseDevelopmentStorage=true",
+    "FUNCTIONS_WORKER_RUNTIME": "node",
+    "SECRET_EXPIRY_CRON": "0 0 6 * * *",
+    "LOOM_MSAL_CLIENT_ID": "<console-msal-app-client-id>",
+    "LOOM_KEY_VAULT_URI": "https://<vault-name>.vault.azure.net/",
+    "LOOM_SECRET_EXPIRY_KV_SECRETS": "loom-msal-client-secret,synthetic-login-secret",
+    "LOOM_SECRET_EXPIRY_WARN_DAYS": "60",
+    "LOOM_ALERT_ACTION_GROUP_ID": "/subscriptions/<sub>/resourceGroups/<admin-rg>/providers/Microsoft.Insights/actionGroups/loom-default-alerts",
+    "LOOM_ARM_ENDPOINT": "https://management.azure.com",
+    "LOOM_GRAPH_BASE": "https://graph.microsoft.com",
+    "LOOM_STORAGE_SUFFIX": "core.windows.net",
+    "SECRET_EXPIRY_STATE_CONTAINER": "secret-expiry-state",
+    "LOOM_SECRET_EXPIRY_GITHUB_TOKEN": "",
+    "LOOM_GITHUB_REPO_OWNER": "fgarofalo56",
+    "LOOM_GITHUB_REPO_NAME": "csa-inabox"
+  }
+}

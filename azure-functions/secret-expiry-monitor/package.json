@@ -1,0 +1,20 @@
+{
+  "name": "secret-expiry-monitor",
+  "version": "1.0.0",
+  "description": "CSA Loom secret-expiry monitor — timer-triggered Azure Function (S1). On a cron it inventories the MSAL app registration's passwordCredentials (Microsoft Graph) + tracked Key Vault secret attributes, computes days-to-expiry, and fires the shared Loom action group + a dedup GitHub issue at the 60/30/7-day thresholds — prevention for the 2026-07-19 expired-MSAL-secret sign-in outage class. Azure-native, identity-based auth, no keys.",
+  "main": "dist/src/functions/*.js",
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "start": "func start"
+  },
+  "dependencies": {
+    "@azure/functions": "^4.5.0",
+    "@azure/identity": "^4.5.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0",
+    "@types/node": "^20.0.0"
+  }
+}

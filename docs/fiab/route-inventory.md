@@ -13,11 +13,11 @@ same classic + WS-D1 toolkit export styles).
 
 | Metric | Count |
 | --- | ---: |
-| Total routes | 1544 |
+| Total routes | 1545 |
 | Public (no session) | 106 |
 | Session-only | 568 |
 | Owner-scoped | 632 |
-| Admin | 238 |
+| Admin | 239 |
 | Gated (backend config) | 505 |
 | Areas | 102 |
 
@@ -207,6 +207,7 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `admin/scaling/foundry-compute/route.ts` | GET POST | admin |  | — |
 | `admin/scaling/synapse-dwu/route.ts` | GET POST | admin | ● | Synapse |
 | `admin/scaling/utilization/route.ts` | GET | admin | ● | Azure Monitor |
+| `admin/secret-health/route.ts` | GET | admin |  | — |
 | `admin/security/dlp/alerts/route.ts` | GET | admin |  | — |
 | `admin/security/dlp/manage/route.ts` | GET POST PATCH DELETE | admin | ● | — |
 | `admin/security/dlp/policies/route.ts` | GET | admin |  | — |
