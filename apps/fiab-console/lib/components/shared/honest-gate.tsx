@@ -298,13 +298,22 @@ export function GateFixitDialog({
  */
 export function HonestGate({
   gateId,
+  gate: envelope,
   surface,
   missing,
   configured = false,
   detail,
   onResolved,
 }: {
-  gateId: string;
+  /** Gate id — OR pass the whole `gate` envelope block below and this is derived. */
+  gateId?: string;
+  /**
+   * WS-D2: the normalized gate block from a route's `buildGateEnvelope` response
+   * (`{ ok:false, gated:true, gate:{ id, title, remediation, fixItHref, missing } }`).
+   * When provided, gateId/missing/detail are sourced from it so ANY gated route
+   * renders through this ONE renderer uniformly — no per-surface re-derivation.
+   */
+  gate?: { id: string; title?: string; remediation?: string; fixItHref?: string; missing?: string[] };
   /** Human name of the calling surface (e.g. 'SQL Copilot'). */
   surface: string;
   /** The exact missing env var(s) the surface's API reported. */
@@ -318,7 +327,11 @@ export function HonestGate({
 }) {
   const s = useStyles();
   const [fixOpen, setFixOpen] = useState(false);
-  const gate = useMemo(() => getGate(gateId), [gateId]);
+  // Envelope-driven: derive id/missing/detail from the route's gate block.
+  const resolvedId = gateId ?? envelope?.id ?? '';
+  const resolvedMissing = missing ?? envelope?.missing;
+  const resolvedDetail = detail ?? envelope?.remediation;
+  const gate = useMemo(() => getGate(resolvedId), [resolvedId]);
 
   if (!gate) {
     // Unknown id — render an honest generic bar rather than nothing.
@@ -326,7 +339,7 @@ export function HonestGate({
       <MessageBar intent="warning" layout="multiline" className={s.bar}>
         <MessageBarBody>
           <MessageBarTitle>{surface} needs configuration</MessageBarTitle>
-          {detail || `Gate '${gateId}' is not in the registry — see /admin/gates.`}
+          {resolvedDetail || `Gate '${resolvedId}' is not in the registry — see /admin/gates.`}
         </MessageBarBody>
       </MessageBar>
     );
@@ -347,7 +360,7 @@ export function HonestGate({
     );
   }
 
-  const missingList = (Array.isArray(missing) ? missing : missing ? [missing] : [])
+  const missingList = (Array.isArray(resolvedMissing) ? resolvedMissing : resolvedMissing ? [resolvedMissing] : [])
     .filter(Boolean);
 
   return (
@@ -355,7 +368,7 @@ export function HonestGate({
       <MessageBar intent="warning" layout="multiline" className={s.bar}>
         <MessageBarBody>
           <MessageBarTitle>{surface} needs {gate.title} wired in this deployment</MessageBarTitle>
-          {detail || gate.remediation}
+          {resolvedDetail || gate.remediation}
           <ul className={s.list}>
             {missingList.length > 0 && (
               <li>Set {missingList.map((m, i) => (
