@@ -528,7 +528,9 @@ export function ObservabilityTabContent({ id, obs, loading, err, refresh }: {
 // the ?view=edit query param on the SAME route. Lazy-loaded so the heavy editor
 // module stays out of the details bundle until the owner clicks Edit.
 const DataProductEditForm = dynamic(
-  () => import('./apim-editors').then((m) => m.DataProductEditor),
+  // WS-E1: import from the DEFINING sibling (not the apim-editors barrel) so the
+  // decomposition doesn't route this lazy edge through the barrel → a new cycle.
+  () => import('./apim-editors/data-product-editor').then((m) => m.DataProductEditor),
   { ssr: false, loading: () => <Spinner label="Opening editor…" /> },
 );
 

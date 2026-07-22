@@ -26,7 +26,13 @@ import { execSync } from 'node:child_process';
 const ROOT = 'lib/editors';
 const BASELINE = [
   ['conditional-format.tsx', 'format-pane.tsx'],
-  ['apim-editors.tsx', 'data-product-detail.tsx'],
+  // WS-E1: after apim-editors.tsx was decomposed into apim-editors/*, this
+  // pre-existing intentional cycle relocated from the barrel to the defining
+  // sibling: data-product-editor.tsx statically imports observability helpers
+  // from data-product-detail.tsx, which lazily (dynamic import) opens
+  // DataProductEditor for its ?view=edit deep-link. Runtime-acyclic (the
+  // back-edge is a click-time dynamic import).
+  ['data-product-editor.tsx', 'data-product-detail.tsx'],
 ];
 
 const cycleKey = (files) => files.map((f) => f.split(/[\\/]/).pop()).sort().join('|');
