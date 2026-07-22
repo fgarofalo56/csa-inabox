@@ -116,6 +116,9 @@ param skipRoleGrants bool = false
 @maxValue(365)
 param recycleRetentionDays int = 30
 
+@description('DR0 — declarative blob versioning + PITR posture for the lake (storage.bicep). Default ON, but guarded off on HNS accounts: versioning/PITR are "Not yet supported" with a hierarchical namespace per the Learn feature matrix, and the lake is HNS by design (see storage.bicep). Rides drConfig.enableBlobPitr from the top-level orchestrator.')
+param enableBlobPitr bool = true
+
 @description('DLZ storage account SKU (replication). Default Standard_ZRS = zone-redundant single region. Opt into Standard_GZRS/Standard_GRS/Standard_RAGZRS for a geo-redundant DR tier; see docs/fiab/operations/disaster-recovery.md.')
 @allowed([
   'Standard_ZRS'
@@ -189,6 +192,7 @@ module storage 'storage.bicep' = {
     complianceTags: complianceTags
     recycleRetentionDays: recycleRetentionDays
     storageSkuName: storageSkuName
+    enableBlobPitr: enableBlobPitr
   }
 }
 
