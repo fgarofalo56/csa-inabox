@@ -81,5 +81,20 @@ export default defineConfig({
         baseURL: process.env.LOOM_UAT_BASE_URL || process.env.LOOM_URL || 'https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net',
       },
     },
+    {
+      // Publish-version project (task #7): live front-end version-history +
+      // restore across publishing object types, driven with the SAME minted
+      // session as `verify`. Kept as its own project so its heavier per-type
+      // create/save flow does not widen the core `verify` smoke gate.
+      // Run: pnpm exec playwright test --project=publish-version
+      name: 'publish-version',
+      testDir: './e2e',
+      testMatch: /publish-version\.spec\.ts/,
+      dependencies: ['mint'],
+      use: {
+        storageState: 'e2e/.auth/loom-state.json',
+        baseURL: process.env.LOOM_UAT_BASE_URL || process.env.LOOM_URL || 'https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net',
+      },
+    },
   ],
 });
