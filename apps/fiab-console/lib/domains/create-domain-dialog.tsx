@@ -55,6 +55,8 @@ const useStyles = makeStyles({
     textAlign: 'left', cursor: 'pointer', flexGrow: 1, flexShrink: 1, flexBasis: '160px', minWidth: 0,
     border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge,
     background: tokens.colorNeutralBackground1,
+    // Native <button>: without an explicit color, text inherits UA ButtonText (black-on-dark).
+    color: tokens.colorNeutralForeground1,
     ':hover': { backgroundColor: tokens.colorNeutralBackground1Hover, border: `1px solid ${tokens.colorNeutralStroke1}` },
   },
   libCardSel: { border: `2px solid ${tokens.colorBrandStroke1}`, backgroundColor: tokens.colorBrandBackground2 },
@@ -75,6 +77,8 @@ const useStyles = makeStyles({
     padding: tokens.spacingVerticalS, textAlign: 'left', cursor: 'pointer',
     border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge,
     background: tokens.colorNeutralBackground1,
+    // Native <button>: without an explicit color, text inherits UA ButtonText (black-on-dark).
+    color: tokens.colorNeutralForeground1,
     ':hover': { backgroundColor: tokens.colorNeutralBackground1Hover, border: `1px solid ${tokens.colorNeutralStroke1}` },
   },
   cardSel: { border: `2px solid ${tokens.colorBrandStroke1}`, backgroundColor: tokens.colorBrandBackground2 },

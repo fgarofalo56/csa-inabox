@@ -75,6 +75,8 @@ const useStyles = makeStyles({
     padding: tokens.spacingVerticalM,
     cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS,
     backgroundColor: tokens.colorNeutralBackground1, textAlign: 'left',
+    // Native <button>: without an explicit color, text inherits UA ButtonText (black-on-dark).
+    color: tokens.colorNeutralForeground1,
     ':hover': { ...shorthands.borderColor(tokens.colorBrandStroke1), boxShadow: tokens.shadow4 },
     ':focus-visible': { outline: `2px solid ${tokens.colorStrokeFocus2}`, outlineOffset: '1px' },
   },
