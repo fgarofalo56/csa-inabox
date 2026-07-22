@@ -72,6 +72,8 @@ const useLocal = makeStyles({
     padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`,
     border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium,
     background: tokens.colorNeutralBackground1,
+    // Native <button>: without an explicit color, text inherits UA ButtonText (black-on-dark).
+    color: tokens.colorNeutralForeground1,
   },
 });
 

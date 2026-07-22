@@ -47,7 +47,8 @@ const ACCENTS: { id: DashboardAccent; label: string }[] = [
 
 const useStyles = makeStyles({
   surface: { maxWidth: '97vw', width: '1340px' },
-  layout: { display: 'grid', gridTemplateColumns: 'minmax(420px, 1fr) minmax(520px, 1.3fr)', gap: tokens.spacingHorizontalL, alignItems: 'start' },
+  // minmax(0,…) tracks — px floors (420+520=940) clipped the dialog below ~960px.
+  layout: { display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1.3fr)', gap: tokens.spacingHorizontalL, alignItems: 'start' },
   leftCol: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minWidth: 0 },
   rightCol: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, minWidth: 0 },
   metaGrid: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: tokens.spacingHorizontalM },

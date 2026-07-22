@@ -50,6 +50,8 @@ const useStyles = makeStyles({
     display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS, alignItems: 'flex-start',
     padding: tokens.spacingVerticalM, border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusLarge, background: tokens.colorNeutralBackground1,
+    // Native <button>: without an explicit color, text inherits UA ButtonText (black-on-dark).
+    color: tokens.colorNeutralForeground1,
     cursor: 'pointer', textAlign: 'left', minWidth: 0,
     transitionProperty: 'box-shadow, border-color, background', transitionDuration: tokens.durationNormal,
     ':hover': { border: `1px solid ${tokens.colorBrandStroke1}`, boxShadow: tokens.shadow4 },

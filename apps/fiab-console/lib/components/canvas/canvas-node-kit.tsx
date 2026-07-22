@@ -95,6 +95,8 @@ import {
   type AnchorNode, type GhostAnchorOpts, type PortSide,
 } from './canvas-anatomy';
 import { itemTypeIcon } from '@/lib/catalog/item-type-icon';
+import { readableAccent } from '@/lib/components/ui/item-type-visual';
+import { useTheme } from '@/lib/theme/theme-context';
 
 // =============================================================================
 // A. Visual-mapping types + exports
@@ -333,9 +335,13 @@ export function getTransformVisual(type?: string): CanvasVisual {
 /**
  * Resolve a BRANDED CanvasVisual for a catalog item-type identifier — a route
  * `slug`, a Fabric/ARM `restType`, or a `WorkloadCategory`. The glyph + accent
- * come from the W1 icon SoT (`itemTypeIcon`); the accent is the family brand
- * colour (a hex that reads identically light + dark and drives the header
- * gradient / rail / selection ring via the kit's token-only tint helpers).
+ * come from the W1 icon SoT (`itemTypeIcon`); the accent is the RAW family
+ * brand hex. Raw is correct for BACKGROUND uses (header gradient / rail /
+ * selection ring via the kit's token-only tint helpers), but the family hexes
+ * are dark and go dark-on-dark when used verbatim as a FOREGROUND — any
+ * consumer drawing text/glyphs with the accent MUST route it through
+ * `readableAccent(accent, isDark)` (the kit's own `CanvasNode` / `StatusChip`
+ * already do).
  *
  * `category` only nominally groups the node (the kit reads `accent`/`icon`, not
  * `category`, for item-branded nodes); callers may override it when a node maps
@@ -950,6 +956,7 @@ export const StatusChip: React.FC<{ status: CanvasNodeStatus; idleLabel: string;
   status, idleLabel, accent,
 }) => {
   const styles = useStyles();
+  const { mode } = useTheme();
   if (status === 'idle') {
     return (
       <Badge
@@ -958,7 +965,9 @@ export const StatusChip: React.FC<{ status: CanvasNodeStatus; idleLabel: string;
         style={{
           flexShrink: 0,
           backgroundColor: accentTint(accent, 14),
-          color: accent,
+          // Foreground routes through readableAccent (raw family hexes are
+          // dark-on-dark); CSS-var accents pass through unchanged.
+          color: readableAccent(accent, mode === 'dark'),
           borderColor: accentTint(accent, 28),
         }}
       >
@@ -1051,6 +1060,11 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
 }) => {
   const styles = useStyles();
   const { accent } = visual;
+  const { mode } = useTheme();
+  // Family/catalog accents are dark brand hexes — lift the glyph FOREGROUND to a
+  // readable hue in dark theme while keeping tint washes on the raw accent.
+  // (`readableAccent` passes `var(--loom-accent-*)` values through unchanged.)
+  const glyphFg = readableAccent(accent, mode === 'dark');
 
   // Selection = accent outline + a soft accent glow; error = red outline.
   const ring = error
@@ -1120,7 +1134,7 @@ export const CanvasNode: React.FC<CanvasNodeProps> = ({
           {status === 'running' && <span className={styles.pulseRing} />}
           <span
             className={styles.iconChip}
-            style={{ background: accentTint(accent, 14), color: accent }}
+            style={{ background: accentTint(accent, 14), color: glyphFg }}
           >
             {visual.icon}
           </span>

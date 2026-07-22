@@ -85,6 +85,8 @@ const useStyles = makeStyles({
     borderRadius: tokens.borderRadiusSmall, cursor: 'pointer', textAlign: 'left',
     width: '100%', backgroundColor: 'transparent',
     border: 'none',
+    // Native <button>: without an explicit color, text inherits UA ButtonText (black-on-dark).
+    color: tokens.colorNeutralForeground1,
     ':hover': { backgroundColor: tokens.colorNeutralBackground1Hover },
     ':focus-visible': { outline: `${tokens.strokeWidthThick} solid ${tokens.colorStrokeFocus2}` },
   },

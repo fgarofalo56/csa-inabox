@@ -181,6 +181,8 @@ const useStyles = makeStyles({
     borderRadius: tokens.borderRadiusLarge,
     ...shorthands.border('1px', 'solid', tokens.colorNeutralStroke2),
     backgroundColor: tokens.colorNeutralBackground1, cursor: 'pointer', textAlign: 'left',
+    // Native <button>: without an explicit color, text inherits UA ButtonText (black-on-dark).
+    color: tokens.colorNeutralForeground1,
     ':hover': { ...shorthands.borderColor(tokens.colorBrandStroke1), boxShadow: tokens.shadow4 },
   },
   wizardGrid: { display: 'grid', gap: tokens.spacingHorizontalM, gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))' },

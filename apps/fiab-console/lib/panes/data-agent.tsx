@@ -282,6 +282,8 @@ const useStyles = makeStyles({
     gap: '2px',
     border: 'none',
     background: 'transparent',
+    // Native <button>: without an explicit color, text inherits UA ButtonText (black-on-dark).
+    color: tokens.colorNeutralForeground1,
     padding: 0,
     textAlign: 'left',
     cursor: 'pointer',

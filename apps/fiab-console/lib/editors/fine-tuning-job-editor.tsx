@@ -289,6 +289,8 @@ function FineTuningBody({ item, id }: { item: FabricItemType; id: string }) {
                   textAlign: 'left', cursor: 'pointer', border: 'none', borderRadius: tokens.borderRadiusMedium,
                   padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`,
                   background: jb.id === selected ? tokens.colorNeutralBackground2 : 'transparent',
+                  // Native <button>: without an explicit color, text inherits UA ButtonText (black-on-dark).
+                  color: tokens.colorNeutralForeground1,
                 }}
               >
                 <div className={s.badges}>

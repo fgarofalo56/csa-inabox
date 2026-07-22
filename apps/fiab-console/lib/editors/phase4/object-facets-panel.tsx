@@ -69,10 +69,12 @@ const useStyles = makeStyles({
     display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS,
     padding: tokens.spacingHorizontalXXS, borderRadius: tokens.borderRadiusSmall,
     border: `1px solid transparent`, cursor: 'pointer', background: 'none', textAlign: 'left',
+    // Native <button>: without an explicit color, text inherits UA ButtonText (black-on-dark).
+    color: tokens.colorNeutralForeground1,
     ':hover': { backgroundColor: tokens.colorNeutralBackground2 },
     ':focus-visible': { outline: `2px solid ${tokens.colorBrandStroke1}`, outlineOffset: '1px' },
   },
-  barActive: { border: `1px solid ${tokens.colorBrandStroke1}`, backgroundColor: tokens.colorBrandBackground2 },
+  barActive: { border: `1px solid ${tokens.colorBrandStroke1}`, backgroundColor: tokens.colorBrandBackground2, color: tokens.colorBrandForeground2 },
   barValue: {
     flexShrink: 0, width: '112px',
     overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',

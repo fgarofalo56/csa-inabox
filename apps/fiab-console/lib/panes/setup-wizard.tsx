@@ -336,6 +336,8 @@ const useStyles = makeStyles({
     background: 'none',
     cursor: 'default',
     width: '100%',
+    // Native <button>: without an explicit color, text inherits UA ButtonText (black-on-dark).
+    color: tokens.colorNeutralForeground1,
   },
   railItemClickable: {
     cursor: 'pointer',
@@ -402,6 +404,7 @@ const useStyles = makeStyles({
     borderRadius: tokens.borderRadiusLarge,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground1,
+    color: tokens.colorNeutralForeground1,
     cursor: 'pointer',
     textAlign: 'left',
     transitionDuration: tokens.durationFaster,
@@ -411,6 +414,7 @@ const useStyles = makeStyles({
   optionCardSelected: {
     border: `1px solid ${tokens.colorBrandStroke1}`,
     backgroundColor: tokens.colorBrandBackground2,
+    color: tokens.colorBrandForeground2,
     boxShadow: tokens.shadow4,
   },
   optionIconChip: {

@@ -65,6 +65,8 @@ const useStyles = makeStyles({
     display: 'flex', flexDirection: 'column', gap: '2px', textAlign: 'left',
     padding: tokens.spacingVerticalXS, borderRadius: tokens.borderRadiusMedium,
     border: `1px solid ${tokens.colorNeutralStroke2}`, background: tokens.colorNeutralBackground1,
+    // Native <button>: without an explicit color, text inherits UA ButtonText (black-on-dark).
+    color: tokens.colorNeutralForeground1,
     cursor: 'pointer', width: '100%',
   },
   inspector: {

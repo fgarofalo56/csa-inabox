@@ -256,6 +256,8 @@ export const useStyles = makeStyles({
     width: '200px', padding: tokens.spacingVerticalL,
     border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge,
     backgroundColor: tokens.colorNeutralBackground2,
+    // Native <button>: without an explicit color, text inherits UA ButtonText (black-on-dark).
+    color: tokens.colorNeutralForeground1,
     boxShadow: tokens.shadow2,
     transitionProperty: 'box-shadow, border-color', transitionDuration: tokens.durationFaster,
     ':hover': { boxShadow: tokens.shadow8, border: `1px solid ${tokens.colorBrandStroke2}` },
