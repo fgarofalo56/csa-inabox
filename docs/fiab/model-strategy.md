@@ -10,7 +10,7 @@ It grounds every claim in the merged code and bicep — file paths are given so 
 can verify. Nothing here is aspirational; where a capability is opt-in or has a
 caveat, that is called out.
 
-> Source of record: `PRPs/active/model-strategy/PRP.md` (the plan) and the merged
+> Source of record: `PRPs/completed/model-strategy/PRP.md` (the plan) and the merged
 > PRs #1906 (M1–M3), #1909 (M4), and #1912 (M5 — cloud matrix + runtime fallback).
 
 ---

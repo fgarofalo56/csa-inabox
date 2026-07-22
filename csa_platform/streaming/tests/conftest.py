@@ -1,20 +1,10 @@
 """Pytest configuration for the streaming test suite.
 
-Sets the asyncio mode so that ``@pytest.mark.asyncio`` tests execute
-without requiring a global ``pytest-asyncio`` configuration change.
+``pytest_asyncio`` loads via its setuptools entry point (it is a core dev
+dependency), so it must NOT be declared in ``pytest_plugins`` here — pytest 8
+hard-errors on ``pytest_plugins`` in a non-top-level conftest, which broke
+every push-CI run on main after the suite was re-enabled (WS-F2, #2366).
+Tests opt in per-function via ``@pytest.mark.asyncio``.
 """
 
 from __future__ import annotations
-
-import pytest
-
-
-def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
-    """Apply asyncio mode to streaming tests when collected in isolation."""
-    _ = config
-    _ = items
-
-
-# Mode is configured via the pytest_asyncio plugin; we set the default at
-# fixture level to avoid relying on global ini configuration.
-pytest_plugins: tuple[str, ...] = ("pytest_asyncio",)

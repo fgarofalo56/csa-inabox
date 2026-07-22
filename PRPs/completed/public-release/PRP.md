@@ -777,6 +777,6 @@ earlier ones (noted per item). Categories: **ADD** (net-new), **UPDATE** (fix ex
 
 ## 3. Traceability
 
-Every item above traces to either a **confirmed finding** in `docs/fiab/prp/RELEASE-READINESS-2026-07-02.md` (§3, with file:line evidence) or a **named mandate** (`.claude/rules/*.md` + BLOCKING memory) / **fabric-parity PRP** row (`PRPs/active/fabric-parity/{README.md,PHASES.md}`). The single refuted finding (AML tenant-topology gating) is excluded; its residual truth is folded into rel-T08 scope only where bicep-sync requires it.
+Every item above traces to either a **confirmed finding** in `docs/fiab/prp/RELEASE-READINESS-2026-07-02.md` (§3, with file:line evidence) or a **named mandate** (`.claude/rules/*.md` + BLOCKING memory) / **fabric-parity PRP** row (`PRPs/completed/fabric-parity/{README.md,PHASES.md}`). The single refuted finding (AML tenant-topology gating) is excluded; its residual truth is folded into rel-T08 scope only where bicep-sync requires it.
 
 **Effort roll-up:** S ≈ 46 · M ≈ 42 · L ≈ 15 · XL ≈ 5. Wave 0–1b (blockers) is the critical path to a v1 tag; Waves 2 gate Gov + teardown; Waves 3–7 raise the grade from "shippable" to A/A+.

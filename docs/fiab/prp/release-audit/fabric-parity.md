@@ -6,7 +6,7 @@
 docs), grounded on Microsoft Learn "What's new in Microsoft Fabric" (June 2026)
 and Build 2026 announcements.
 
-**Method:** read `PRPs/active/fabric-parity/` (README + PHASES + appendices/audits)
+**Method:** read `PRPs/completed/fabric-parity/` (README + PHASES + appendices/audits)
 and `docs/fiab/parity/MASTER-SCORECARD.md` (363 parity docs in the folder);
 enumerated Fabric's mid-2026 feature list from Learn (whats-new + whats-new-archive)
 and Build 2026 coverage; grepped/read the console source to confirm or refute
@@ -51,7 +51,7 @@ The residual parity risk splits into four buckets:
 2. **Tracked-open core capabilities** that Fabric ships GA and Loom still lacks:
    unified job scheduler, warehouse time-travel/CLONE/restore/COPY INTO/snapshots,
    Data Wrangler, PREDICT, 4-of-9 AI functions, Airflow day-one host, SDK/Terraform.
-   All are honestly tracked in `PRPs/active/fabric-parity/` — flagged here only
+   All are honestly tracked in `PRPs/completed/fabric-parity/` — flagged here only
    where they are release-notable.
 3. **Untracked mid-2026 Fabric additions** the PRP (authored 2026-06-26) predates
    or missed: tabbed multitasking + object explorer (GA Apr 2026), workspace
@@ -91,7 +91,7 @@ The residual parity risk splits into four buckets:
   `lib/catalog/item-types/power-bi.ts:108-111` declares `noRestApi: true` and
   *"no Fabric REST API for scorecards today, so in Loom this is metadata-only"*,
   while the route calls PBI REST; and
-  `PRPs/active/fabric-parity/appendix-power-bi.md:76` marks row 33 "Scorecards +
+  `PRPs/completed/fabric-parity/appendix-power-bi.md:76` marks row 33 "Scorecards +
   manual goals" ✅ built.
 - **Fix:** give scorecard the dashboard-overlay treatment — Cosmos-native goal
   store + rollup/status engine as DEFAULT (the rollup math is already local per
@@ -107,7 +107,7 @@ API tree has exactly two schedule surfaces:
 `app/api/notebook/[id]/schedule/` (verified via `find app/api -type d -name "*schedule*"`).
 Pipelines schedule via native ADF triggers, but there is no cross-item schedule
 store, no "scheduled runs" view, no exit-value orchestration. Tracked as
-`PRPs/active/fabric-parity/README.md:184` ("Unified Job Scheduler + schedule
+`PRPs/completed/fabric-parity/README.md:184` ("Unified Job Scheduler + schedule
 store | ❌ | P7"). For a public release positioned as a Fabric replacement this
 is the most conspicuous platform-primitive gap.
 
@@ -150,7 +150,7 @@ missing core capability for a parity-claiming release.
 - **Overstates (claims vs code):** F1's appendix-power-bi.md:76 ✅ scorecard row;
   and `docs/fiab/parity/MASTER-SCORECARD.md:491` is last-updated 2026-06-10
   (rev.6, "≈49% built") — roughly 70 console revisions ago per the memory ledger.
-- **Fix:** run one re-baseline pass over `PRPs/active/fabric-parity/README.md` §3
+- **Fix:** run one re-baseline pass over `PRPs/completed/fabric-parity/README.md` §3
   and `MASTER-SCORECARD.md` before release; the per-surface docs
   (`docs/fiab/parity/*.md`, 363 files) carry dated rev-notes and are the more
   trustworthy layer.
@@ -160,7 +160,7 @@ missing core capability for a parity-claiming release.
 Fabric GA'd tabbed multitasking across items + a cross-workspace object explorer
 pane (Learn whats-new-archive, April 2026). `grep -rE "multitask|openTabs|tabStrip"`
 over `lib/components` finds nothing relevant (only global-job-toaster/pipeline
-panels), and `grep -il multitask PRPs/active/fabric-parity/*.md` returns no file.
+panels), and `grep -il multitask PRPs/completed/fabric-parity/*.md` returns no file.
 Loom's navigation is route-per-item; there is no way to hold several items open.
 This is a platform-UX parity gap the PRP never inventoried.
 
@@ -168,7 +168,7 @@ This is a platform-UX parity gap the PRP never inventoried.
 
 Fabric GA'd workspace-level outbound access protection for Warehouse (data-
 exfiltration connector rules; Learn whats-new-archive March 2026).
-`grep -il "outbound access" PRPs/active/fabric-parity/*.md` returns nothing; code
+`grep -il "outbound access" PRPs/completed/fabric-parity/*.md` returns nothing; code
 hits for `outbound|exfiltration` are unrelated networking surfaces
 (`lib/clients/networking-client.ts`, `lib/components/network/network-pane.tsx`).
 Loom has the *inbound* story (managed PEs, trusted workspace access) but no

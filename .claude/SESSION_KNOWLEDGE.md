@@ -87,7 +87,7 @@ the close of each session.
 
 ## Session — 2026-07-03 (public-release Wave 1 + 1b LANDED + live-verified)
 
-**Focus:** Close Wave-1 (security + access-control) + Wave-1b (testing/CI) of `PRPs/active/public-release/PRP.md`.
+**Focus:** Close Wave-1 (security + access-control) + Wave-1b (testing/CI) of `PRPs/completed/public-release/PRP.md`.
 
 **Merged (17 PRs), rolled to live centralus (revision loom-console--0000192, image 6bef2e21):**
 - **Wave 1:** #1597 OAuth state/PKCE-S256/nonce (T12) · #1598 per-service internal tokens + FD WAF block on `/api/internal/*` (T10) · #1599 SSRF egress guard + fail-closed admin tier (T13/T14) · #1600 default-on two-tier rate limiting + authenticated feedback (T15/T16) · #1601 multi-user ACL model / **B4** (T11) · #1602 route-guard sweep — 54 cross-tenant holes (T17/T20) · #1604 preview + notebook ACL gates (T18/T19) · #1620 detail+items routes ACL-resolve (T11 live-caught).
@@ -103,7 +103,7 @@ the close of each session.
 
 ## Session — 2026-07-03 (public-release Wave 0 LANDED + live-verified)
 
-**Focus:** Close every Wave-0 release blocker from `PRPs/active/public-release/PRP.md`.
+**Focus:** Close every Wave-0 release blocker from `PRPs/completed/public-release/PRP.md`.
 
 **Merged (11 PRs):** #1585 B3 secrets (+ freed the 257th param: dropped the dead
 `agentOrchestrator` pass-through — admin-plane/main.bicep sits AT the 256-param

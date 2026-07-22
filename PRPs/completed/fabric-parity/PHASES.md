@@ -95,7 +95,7 @@ run. (4) Governance/notebook Copilot answers (no 503) in a tenant-config-only
 deploy. (5) UDF `hello(name)` Test → real 200. (6) DAB endpoint answers live.
 
 **Kick off with:** `loom-unleash` scoped to Track A (Activator+RTI first), or
-`/prp:prp-implement PRPs/active/fabric-parity/PHASES.md#phase-0`.
+`/prp:prp-implement PRPs/completed/fabric-parity/PHASES.md#phase-0`.
 
 ---
 

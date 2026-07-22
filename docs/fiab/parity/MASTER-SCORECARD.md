@@ -169,7 +169,7 @@ the per-service parity-doc staleness, closed by this rev.
 > real Azure REST / data-plane / ARM call — no commit-message trust). Grades are
 > honest: only shipped-and-working features are marked BUILT; the genuine Wave-6
 > gaps (rel-T81…T93 still open) stay ❌ and are tracked in
-> `PRPs/active/public-release/PRP.md` + `PRPs/active/fabric-parity/`.
+> `PRPs/completed/public-release/PRP.md` + `PRPs/completed/fabric-parity/`.
 
 ### Newly-confirmed BUILT (Fabric-parity features shipped since rev.6)
 
