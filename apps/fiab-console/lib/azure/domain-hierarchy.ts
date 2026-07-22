@@ -1,10 +1,11 @@
 /**
- * domain-hierarchy — invariants shared by BOTH domain move endpoints so they
- * enforce exactly the same tree rules:
+ * domain-hierarchy — tree invariants for the domain move endpoint:
  *
  *   • PATCH /api/admin/domains?id=...        (tenant-settings `items[]` store, `parentId`)
- *   • PATCH /api/governance/domains/[id]     (governance-domains Cosmos store, `parentDomainId`)
- *       → via cosmosDomainStore.moveDomain in domains-client.ts
+ *
+ * (The duplicate PATCH /api/governance/domains/[id] write route was removed in
+ * the 2026-07-22 wiring cleanup — /api/admin/domains is the canonical FE path;
+ * cosmosDomainStore.moveDomain in domains-client.ts remains for the store API.)
  *
  * Loom domains form a DEEP, ARBITRARY-DEPTH tree (department → agency →
  * sub-agency → office → program …) — issue #1483 Wave 2. This models real org

@@ -1301,6 +1301,13 @@ function PreviewStage({ cfg, id, mutate }: { cfg: DabConfig; id: string; mutate:
   const [apiId, setApiId] = useState(`dab-${id.substring(0, 8)}`);
   const [apiPath, setApiPath] = useState(`dab/${id.substring(0, 8)}`);
   const [publishResult, setPublishResult] = useState<string | null>(null);
+  // Apply-to-runtime state (tenant-admin action on the SHARED preview runtime).
+  const [applying, setApplying] = useState(false);
+  const [applyOutcome, setApplyOutcome] = useState<
+    | { kind: 'ok'; entitiesApplied: string[]; collisions: string[]; sourceItemIds: string[]; dabApp: string; revisionState?: string }
+    | { kind: 'error'; status: number; message: string }
+    | null
+  >(null);
   // API surface to publish into APIM — DAB emits BOTH a REST and a GraphQL
   // endpoint from the same dab-config.json (Merge #4: API-for-GraphQL folds
   // into Data API builder). REST imports the runtime's permission-aware
@@ -1373,6 +1380,31 @@ function PreviewStage({ cfg, id, mutate }: { cfg: DabConfig; id: string; mutate:
     } catch (e: any) { setPublishResult(`Error: ${e?.message || e}`); }
   }, [apiId, apiPath, cfg.runtime.rest.path, cfg.runtime.graphql.path, apiType, id]);
 
+  const applyToRuntime = useCallback(async () => {
+    setApplying(true);
+    setApplyOutcome(null);
+    try {
+      const r = await clientFetch(`/api/dab/${encodeURIComponent(id)}/apply-to-runtime`, { method: 'POST' });
+      const j = await r.json();
+      if (j.ok) {
+        setApplyOutcome({
+          kind: 'ok',
+          entitiesApplied: j.entitiesApplied || [],
+          collisions: j.collisions || [],
+          sourceItemIds: j.sourceItemIds || [],
+          dabApp: j.dabApp || '',
+          revisionState: j.revisionState,
+        });
+        // The runtime rolls a new revision — re-probe so the testers reflect it.
+        doProbe();
+      } else {
+        setApplyOutcome({ kind: 'error', status: r.status, message: j.error || `HTTP ${r.status}` });
+      }
+    } catch (e: any) {
+      setApplyOutcome({ kind: 'error', status: 0, message: e?.message || String(e) });
+    } finally { setApplying(false); }
+  }, [id, doProbe]);
+
   const gated = probe && !probe.ok && probe.gate;
 
   return (
@@ -1422,6 +1454,52 @@ function PreviewStage({ cfg, id, mutate }: { cfg: DabConfig; id: string; mutate:
           <Button appearance="primary" icon={<Play20Regular />} onClick={runGql} disabled={!probe?.ok}>Run</Button>
         </div>
         {gqlResult && <pre className={s.mono}>{gqlResult}</pre>}
+      </div>
+
+      {/* Apply to runtime — merge every DAB item's entities into the SHARED
+          preview runtime config and roll a new revision (tenant-admin only;
+          POST /api/dab/[id]/apply-to-runtime). */}
+      <div className={s.card}>
+        <span className={s.cardHeader}><ServerLink20Regular /><Caption1>Apply entities to the preview runtime (real ARM secret update + revision roll)</Caption1></span>
+        <Body1>
+          Merges the entities authored on <strong>every</strong> Data API item into the shared preview runtime&apos;s
+          config and rolls a new revision so the REST / GraphQL testers above serve them. Tenant-admin only —
+          the shared runtime briefly restarts for all DAB users while the revision rolls.
+        </Body1>
+        <div className={s.row}>
+          <Button appearance="primary" icon={<ServerLink20Regular />} onClick={applyToRuntime} disabled={applying || !!gated}>
+            {applying ? 'Applying…' : 'Apply to runtime'}
+          </Button>
+          {applying && <Spinner size="tiny" />}
+        </div>
+        {applyOutcome?.kind === 'ok' && (
+          <MessageBar intent="success"><MessageBarBody>
+            <MessageBarTitle>Runtime updated — revision {applyOutcome.revisionState || 'rolling'}</MessageBarTitle>
+            Applied {applyOutcome.entitiesApplied.length} entit{applyOutcome.entitiesApplied.length === 1 ? 'y' : 'ies'}
+            {' '}({applyOutcome.entitiesApplied.join(', ')}) from {applyOutcome.sourceItemIds.length} item{applyOutcome.sourceItemIds.length === 1 ? '' : 's'} to <code>{applyOutcome.dabApp}</code>.
+            {applyOutcome.collisions.length > 0 && (
+              <>
+                <br />
+                <Caption1>
+                  Skipped duplicate entity name{applyOutcome.collisions.length === 1 ? '' : 's'} (first-name-wins): {applyOutcome.collisions.join(', ')}
+                </Caption1>
+              </>
+            )}
+            <br />
+            <Caption1>The runtime restarts briefly while the new revision provisions — re-probe above if a tester 503s.</Caption1>
+          </MessageBarBody></MessageBar>
+        )}
+        {applyOutcome?.kind === 'error' && (
+          <MessageBar intent={applyOutcome.status === 403 || applyOutcome.status === 409 || applyOutcome.status === 503 ? 'warning' : 'error'}><MessageBarBody>
+            <MessageBarTitle>
+              {applyOutcome.status === 403 ? 'Tenant admin required'
+                : applyOutcome.status === 409 ? 'No entities to apply'
+                : applyOutcome.status === 503 ? 'Runtime not provisioned'
+                : 'Apply failed'}
+            </MessageBarTitle>
+            {applyOutcome.message}
+          </MessageBarBody></MessageBar>
+        )}
       </div>
 
       {/* Publish to APIM — REST (OpenAPI import) or GraphQL (endpoint surface). */}

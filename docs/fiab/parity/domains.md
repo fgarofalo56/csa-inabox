@@ -207,9 +207,10 @@ grant, not ARM RBAC) — surfaced as an honest note, never a Fabric requirement.
   persisted, independent Purview/UC gating, both-unconfigured skip, and
   move = Purview-reparent-only / no UC move**); `admin/domains/route.test.ts`
   (11 — move + cycle/depth/own-parent/parent-with-kids rejections; mirror
-  response shape); `governance/domains/[domainId]/route.test.ts` (4 — non-admin
-  reparent → 403, admin reparent delegated, guard 400 surfaced, non-move update
-  allowed). All green.
+  response shape). All green. (The duplicate `governance/domains/[domainId]`
+  write route + its 4 route tests were removed in the 2026-07-22 wiring
+  cleanup — `/api/admin/domains` is the canonical write path; the store-level
+  `moveDomain` coverage in `domains-client.test.ts` remains.)
 - Both back-ends unconfigured → mapper persists to Cosmos and reports
   `skipped:true` for each mirror (never throws) — proven by test on BOTH the
   `/api/admin/domains` path and the reconciled `cosmosDomainStore` path.

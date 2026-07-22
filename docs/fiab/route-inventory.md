@@ -13,12 +13,12 @@ same classic + WS-D1 toolkit export styles).
 
 | Metric | Count |
 | --- | ---: |
-| Total routes | 1543 |
-| Public (no session) | 92 |
-| Session-only | 581 |
-| Owner-scoped | 634 |
+| Total routes | 1541 |
+| Public (no session) | 106 |
+| Session-only | 567 |
+| Owner-scoped | 632 |
 | Admin | 236 |
-| Gated (backend config) | 502 |
+| Gated (backend config) | 505 |
 | Areas | 101 |
 
 **Auth scope** — `public`: no session check; `session-only`: signed-in but
@@ -76,15 +76,15 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | Route | Methods | Auth scope | Gated | Backends |
 | --- | --- | --- | :---: | --- |
 | `adf/cdc/route.ts` | GET POST DELETE | session-only | ● | ADF |
-| `adf/dataflows/[name]/debug/route.ts` | GET POST | session-only | ● | ADF |
-| `adf/dataflows/[name]/route.ts` | GET PUT DELETE | session-only | ● | ADF |
+| `adf/dataflows/[name]/debug/route.ts` | GET POST | public | ● | ADF |
+| `adf/dataflows/[name]/route.ts` | GET PUT DELETE | public | ● | ADF |
 | `adf/dataflows/route.ts` | GET POST DELETE | session-only | ● | ADF |
-| `adf/datasets/[name]/route.ts` | GET | session-only | ● | ADF |
+| `adf/datasets/[name]/route.ts` | GET | public | ● | ADF |
 | `adf/datasets/route.ts` | GET POST DELETE | session-only | ● | ADF |
 | `adf/factories/create/route.ts` | POST | session-only |  | — |
 | `adf/global-parameters/route.ts` | GET PUT | session-only | ● | ADF |
 | `adf/integration-runtimes/route.ts` | GET POST DELETE | session-only | ● | ADF |
-| `adf/linked-services/[name]/route.ts` | GET | session-only | ● | ADF |
+| `adf/linked-services/[name]/route.ts` | GET | public | ● | ADF |
 | `adf/linked-services/route.ts` | GET POST DELETE | session-only | ● | ADF |
 | `adf/linked-services/test/route.ts` | POST | session-only | ● | ADF |
 | `adf/managed-private-endpoints/route.ts` | GET POST DELETE | session-only | ● | ADF |
@@ -315,19 +315,19 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 
 | Route | Methods | Auth scope | Gated | Backends |
 | --- | --- | --- | :---: | --- |
-| `aml/compute-instances/[name]/idle-shutdown/route.ts` | POST | session-only | ● | AML |
-| `aml/compute-instances/[name]/start/route.ts` | POST | session-only | ● | AML |
-| `aml/compute-instances/[name]/stop/route.ts` | POST | session-only | ● | AML |
+| `aml/compute-instances/[name]/idle-shutdown/route.ts` | POST | public | ● | AML |
+| `aml/compute-instances/[name]/start/route.ts` | POST | public | ● | AML |
+| `aml/compute-instances/[name]/stop/route.ts` | POST | public | ● | AML |
 | `aml/compute-instances/mine/route.ts` | GET POST | owner-scoped | ● | AML |
 | `aml/compute-instances/route.ts` | GET POST | session-only | ● | AML |
 | `aml/datastores/route.ts` | GET | session-only | ● | AML |
-| `aml/environments/route.ts` | GET POST PATCH | owner-scoped |  | Cosmos |
+| `aml/environments/route.ts` | GET POST PATCH | owner-scoped | ● | Cosmos |
 | `aml/experiments/route.ts` | GET | session-only |  | — |
-| `aml/runs/[runId]/artifact/route.ts` | GET | session-only |  | — |
-| `aml/runs/[runId]/artifacts/route.ts` | GET | session-only |  | — |
-| `aml/runs/[runId]/metrics/route.ts` | GET | session-only |  | — |
-| `aml/runs/[runId]/route.ts` | POST | session-only |  | — |
-| `aml/runs/[runId]/traces/route.ts` | GET | session-only |  | — |
+| `aml/runs/[runId]/artifact/route.ts` | GET | public | ● | — |
+| `aml/runs/[runId]/artifacts/route.ts` | GET | public |  | — |
+| `aml/runs/[runId]/metrics/route.ts` | GET | public |  | — |
+| `aml/runs/[runId]/route.ts` | POST | public |  | — |
+| `aml/runs/[runId]/traces/route.ts` | GET | public |  | — |
 | `aml/runs/route.ts` | GET POST | session-only |  | — |
 
 ## analytics
@@ -345,13 +345,13 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `apim/developer-portal/route.ts` | GET POST | session-only | ● | APIM |
 | `apim/gateways/route.ts` | GET | session-only | ● | APIM |
 | `apim/import/route.ts` | POST | session-only | ● | APIM |
-| `apim/instances/route.ts` | GET | session-only |  | — |
+| `apim/instances/route.ts` | GET | session-only | ● | — |
 | `apim/named-values/route.ts` | GET POST DELETE | admin | ● | APIM |
 | `apim/operations/route.ts` | GET | session-only | ● | APIM |
 | `apim/products/route.ts` | GET POST DELETE | session-only | ● | APIM |
 | `apim/service/route.ts` | GET PATCH | session-only | ● | APIM |
-| `apim/subscriptions/[sid]/keys/route.ts` | GET | session-only | ● | APIM |
-| `apim/subscriptions/[sid]/route.ts` | PATCH DELETE | session-only | ● | APIM |
+| `apim/subscriptions/[sid]/keys/route.ts` | GET | public | ● | APIM |
+| `apim/subscriptions/[sid]/route.ts` | PATCH DELETE | public | ● | APIM |
 | `apim/subscriptions/route.ts` | GET POST DELETE | session-only | ● | APIM |
 
 ## app-templates
@@ -807,8 +807,6 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `governance/dlp/scan/route.ts` | GET POST | owner-scoped |  | — |
 | `governance/dlp/schemas/route.ts` | GET | session-only | ● | — |
 | `governance/dlp/violations/route.ts` | GET | owner-scoped |  | — |
-| `governance/domains/[domainId]/assignWorkspaces/route.ts` | POST | owner-scoped |  | — |
-| `governance/domains/[domainId]/route.ts` | PATCH DELETE | owner-scoped |  | — |
 | `governance/domains/route.ts` | GET POST | owner-scoped |  | Cosmos |
 | `governance/govern/actions/route.ts` | GET | admin |  | Cosmos |
 | `governance/govern/copilot/route.ts` | POST | admin |  | — |
