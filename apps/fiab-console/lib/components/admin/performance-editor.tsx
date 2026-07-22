@@ -39,6 +39,7 @@ import { PerfMetricCard } from '@/lib/components/admin/perf-metric-card';
 import { SparkPoolCard } from '@/lib/components/admin/spark-pool-card';
 import { CopilotSloCard } from '@/lib/components/admin/copilot-slo-card';
 import { CacheHitRateCard } from '@/lib/components/admin/cache-hit-rate-card';
+import { RetrievalMetricsCard } from '@/lib/components/admin/retrieval-metrics-card';
 import { PerfRecommendationsCard } from '@/lib/components/admin/perf-recommendations-card';
 import { PerfAutoTuneCard } from '@/lib/components/admin/perf-autotune-card';
 import { UsageLearningCard } from '@/lib/components/admin/usage-learning-card';
@@ -289,6 +290,7 @@ export function PerformanceEditor() {
 
       <CopilotSloCard />
       <CacheHitRateCard />
+      <RetrievalMetricsCard />
 
       <PerfAutoTuneCard />
       <UsageLearningCard />
