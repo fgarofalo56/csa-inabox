@@ -50,6 +50,27 @@ describe('HonestGate', () => {
     expect(link).toHaveAttribute('href', '/admin/gates');
   });
 
+  it('WS-D2: renders uniformly from a route buildGateEnvelope() gate block', () => {
+    // A gated route returns { ok:false, gated:true, gate:{ id,title,remediation,fixItHref,missing } }.
+    // Passing that gate block straight in must drive the same bar — no per-surface
+    // re-derivation of gateId/missing.
+    wrap(
+      <HonestGate
+        gate={{
+          id: 'svc-eventhubs',
+          title: 'Event Hubs (eventstream)',
+          remediation: 'Set LOOM_EVENTHUB_NAMESPACE to enable the Azure-native eventstream backend.',
+          fixItHref: '/admin/gates?gate=svc-eventhubs',
+          missing: ['LOOM_EVENTHUB_NAMESPACE'],
+        }}
+        surface="Eventstream editor"
+      />,
+    );
+    expect(screen.getByText(/Eventstream editor needs Event Hubs \(eventstream\)/)).toBeInTheDocument();
+    expect(screen.getByText('LOOM_EVENTHUB_NAMESPACE')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /fix it/i })).toBeInTheDocument();
+  });
+
   it('opens the Fix-it wizard, loads real options, and applies via the resolve route', async () => {
     fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
       if (url === '/api/admin/gates/svc-eventhubs/options') {
