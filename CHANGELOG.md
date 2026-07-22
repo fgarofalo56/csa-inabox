@@ -25,6 +25,48 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.74.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.73.1...csa-inabox-v0.74.0) (2026-07-22)
+
+
+### Features
+
+* **admin:** FLAG0 — Cosmos-backed loom-runtime-flags kill-switch substrate ([#2404](https://github.com/fgarofalo56/csa-inabox/issues/2404)) ([f38d355](https://github.com/fgarofalo56/csa-inabox/commit/f38d355aae7234c00f0dff249b31e525c66074c1))
+* **api:** R1 — route-toolkit withTenantAdmin + withDlzAccess wrappers ([#2400](https://github.com/fgarofalo56/csa-inabox/issues/2400)) ([32fbcde](https://github.com/fgarofalo56/csa-inabox/commit/32fbcde91d4d07520a09efa235da45d14c46e442))
+* **bicep:** R0 — consolidate admin-plane params into typed config bags (256→232, ARM-cap headroom) ([#2398](https://github.com/fgarofalo56/csa-inabox/issues/2398)) ([59e7abd](https://github.com/fgarofalo56/csa-inabox/commit/59e7abd550b5d0a7c992dd0497d1f6c139bd5c10))
+* **ci:** FRESH0 — PRP self-freshness re-baseline gate (warn-only) ([#2420](https://github.com/fgarofalo56/csa-inabox/issues/2420)) ([f694afa](https://github.com/fgarofalo56/csa-inabox/commit/f694afa5850e21d1f3f11c1585ecaea8d81cc85e))
+* **copilot-evals:** E1 — golden Q/A eval sets for top-10 Copilot surfaces (146 rows, corpus-grounded) ([#2406](https://github.com/fgarofalo56/csa-inabox/issues/2406)) ([a06c90a](https://github.com/fgarofalo56/csa-inabox/commit/a06c90a3f22fad8e1e07b21dc0c9c669b42b87d7))
+* **cosmos:** MIG1 — versioned doc-migration convention (schemaVersion registry + lazy on-read upgrade) ([#2402](https://github.com/fgarofalo56/csa-inabox/issues/2402)) ([9480013](https://github.com/fgarofalo56/csa-inabox/commit/94800138e438ba6436e958961b8bc890c7e68792))
+* **cost:** C1 — Cost Management pull hardening, shared cost cache + scope resolver, day-one UAMI role ([#2413](https://github.com/fgarofalo56/csa-inabox/issues/2413)) ([590a36e](https://github.com/fgarofalo56/csa-inabox/commit/590a36ee83383a7fbcef1857a34584002536d4bc))
+* **dr:** DR0 — restore-posture enablement: Cosmos PITR tier 30d + HNS-guarded lake versioning + live-ARM posture audit ([#2414](https://github.com/fgarofalo56/csa-inabox/issues/2414)) ([6365212](https://github.com/fgarofalo56/csa-inabox/commit/6365212e53e17311f92329cd9166d940aecf5110))
+* **gates:** X2 — structured cloud-availability convention (X-MATRIX as data → auto honest-gate) ([#2405](https://github.com/fgarofalo56/csa-inabox/issues/2405)) ([5909398](https://github.com/fgarofalo56/csa-inabox/commit/59093987ee2fb9ab34230de8854529a5f8801cc7))
+* **identity:** I1 — per-workspace UAMI provision-on-create + delete cascade (activates dormant scaffolding) ([#2415](https://github.com/fgarofalo56/csa-inabox/issues/2415)) ([70e5554](https://github.com/fgarofalo56/csa-inabox/commit/70e5554274bfcbd362bceb8538b6917dac4a8769))
+* **lineage:** L1 column-facet schema foundation — cross-source col: model ([#2403](https://github.com/fgarofalo56/csa-inabox/issues/2403)) ([6a7adda](https://github.com/fgarofalo56/csa-inabox/commit/6a7addacfc4ed6363c7321f431ff6d8da3c41b34))
+* **secops:** S1 — MSAL secret expiry inventory + burn alert (60/30/7-day bands, drift detection) ([#2416](https://github.com/fgarofalo56/csa-inabox/issues/2416)) ([1d9f19c](https://github.com/fgarofalo56/csa-inabox/commit/1d9f19c2c87ccdc8ab14bab36367d4283a06a655))
+* **ui:** U10 — /browse virtualization via shared VirtualizedGrid/List (@tanstack/virtual, flag-gated) ([#2410](https://github.com/fgarofalo56/csa-inabox/issues/2410)) ([959f04a](https://github.com/fgarofalo56/csa-inabox/commit/959f04a677264d4e4da181f1290942295ead89ad))
+* **verify:** V1 — synthetic user-journey monitoring (six journeys, TRUE MSAL login probe, scheduled in-VNet ACA job) ([#2417](https://github.com/fgarofalo56/csa-inabox/issues/2417)) ([7d5256e](https://github.com/fgarofalo56/csa-inabox/commit/7d5256e20dac5f19777dff6dc02262ba38e390e6))
+
+
+### Code Refactoring
+
+* **registry:** R30 — split ENV_CHECKS / GATE_META monoliths into per-domain fragment directories ([#2409](https://github.com/fgarofalo56/csa-inabox/issues/2409)) ([87c0c65](https://github.com/fgarofalo56/csa-inabox/commit/87c0c651cce125a9773540b1e261d2ed3b88663c))
+
+
+### Documentation
+
+* **prp:** loom-next-level DONE ledger — Wave A landed (R0/U0/R1/S2/MIG1/L1/R7/X2/R30/FLAG0/E1/U10) ([#2412](https://github.com/fgarofalo56/csa-inabox/issues/2412)) ([6a27baf](https://github.com/fgarofalo56/csa-inabox/commit/6a27baf1a97d5d747bcb8c61cdfb04ba969646e8))
+* **prp:** loom-next-level round-3 final — program dimensions (cost/calendar/kill-switch/freshness/licenses), operator decisions, 134→139 items ([#2396](https://github.com/fgarofalo56/csa-inabox/issues/2396)) ([7115720](https://github.com/fgarofalo56/csa-inabox/commit/7115720d9a641a5d7c9cb0bd84568de8aac2fa35))
+* **runbook:** S2 — MSAL federated-credential migration spike (certificateless plan) ([#2401](https://github.com/fgarofalo56/csa-inabox/issues/2401)) ([a0eeb60](https://github.com/fgarofalo56/csa-inabox/commit/a0eeb60fd494ff311a0f09160a6a1dc8bec592ec))
+
+
+### Tests
+
+* **e2e:** loom-next-level test-projects batch — stub ALL planned Playwright projects ([#2411](https://github.com/fgarofalo56/csa-inabox/issues/2411)) ([a82bd6f](https://github.com/fgarofalo56/csa-inabox/commit/a82bd6fcb45e3bb0ea26823025346cc947a90707))
+
+
+### Miscellaneous
+
+* **ci:** R7 file-size ratchet re-baseline — tighten 6 drifted ceilings ([#2399](https://github.com/fgarofalo56/csa-inabox/issues/2399)) ([13049d2](https://github.com/fgarofalo56/csa-inabox/commit/13049d24e155e5c7005d4821a9a736b6e2d1856e))
+
 ## [0.73.1](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.73.0...csa-inabox-v0.73.1) (2026-07-22)
 
 
