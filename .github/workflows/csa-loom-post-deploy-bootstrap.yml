@@ -1791,6 +1791,35 @@ jobs:
               || echo "::warning::Could not set LOOM_POSTURE_FUNCTION_URL on loom-console — set it manually (admin-plane param loomPostureFunctionUrl)."
           fi
 
+      - name: Publish report-subscriptions Function code + wire delivery (WS-C2)
+        continue-on-error: true
+        run: |
+          set -uo pipefail
+          # The report-subscriptions timer Function App (func-rptsub-*) is deployed
+          # by report-subscriptions-function.bicep, but the deploy ships no CODE —
+          # publish it here (Node v4) so scheduled delivery is reachable via the
+          # standard deploy path, then wire LOOM_REPORT_SUBSCRIPTIONS_FUNCTION.
+          RPTSUB=$(az functionapp list -g "$ADMIN_RG" --subscription "$ADMIN_SUB" --query "[?starts_with(name, 'func-rptsub')].name | [0]" -o tsv 2>/dev/null)
+          if [ -z "$RPTSUB" ]; then
+            echo "  No report-subscriptions Function App (reportSubscriptionsEnabled=false or not yet deployed) — skipping publish."
+          else
+            echo "report-subscriptions Function App: $RPTSUB"
+            if command -v func >/dev/null 2>&1; then
+              ( cd azure-functions/report-subscriptions && npm ci --no-audit --no-fund && npm run build \
+                  && func azure functionapp publish "$RPTSUB" ) \
+                || echo "::warning::report-subscriptions publish non-zero — re-run: cd azure-functions/report-subscriptions && npm ci && npm run build && func azure functionapp publish $RPTSUB"
+            else
+              echo "::warning::func Core Tools not on runner — skipping report-subscriptions code publish (re-run from a runner that has it)."
+            fi
+            FUNC_HOST=$(az functionapp show -n "$RPTSUB" -g "$ADMIN_RG" --subscription "$ADMIN_SUB" --query defaultHostName -o tsv 2>/dev/null)
+            if [ -n "$FUNC_HOST" ]; then
+              az containerapp update -g "$ADMIN_RG" -n loom-console \
+                --set-env-vars "LOOM_REPORT_SUBSCRIPTIONS_FUNCTION=https://$FUNC_HOST" -o none 2>/dev/null \
+                && echo "  Wired LOOM_REPORT_SUBSCRIPTIONS_FUNCTION=https://$FUNC_HOST on loom-console (svc-report-subscriptions gate)." \
+                || echo "::warning::Could not set LOOM_REPORT_SUBSCRIPTIONS_FUNCTION on loom-console — set it manually."
+            fi
+          fi
+
       - name: Grant Identity Picker Graph AppRoles (User/Group/Application Read.All for the reusable picker)
         run: |
           # Grant the Console UAMI the three Microsoft Graph application
