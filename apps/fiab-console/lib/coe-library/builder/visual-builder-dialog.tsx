@@ -29,6 +29,9 @@ import {
 import { ReportCanvas } from '../report-render/report-canvas';
 import { useReportModel } from '../report-render/use-report';
 import { ResizableCanvasRegion } from '@/lib/components/canvas/resizable-canvas';
+// Shared draggable width divider (G3): the config column is sized by SplitPane
+// with a persisted sizingKey instead of fixed minmax() grid tracks.
+import { SplitPane } from '@/lib/components/shared/split-pane';
 import {
   newDashboardSpec, newTile, validateSpec, accentBadgeColor,
   TILE_VISUALS, BUILDER_SOURCE_META, getSourceMeta, DASHBOARD_CATEGORIES,
@@ -47,7 +50,8 @@ const ACCENTS: { id: DashboardAccent; label: string }[] = [
 
 const useStyles = makeStyles({
   surface: { maxWidth: '97vw', width: '1340px' },
-  layout: { display: 'grid', gridTemplateColumns: 'minmax(420px, 1fr) minmax(520px, 1.3fr)', gap: tokens.spacingHorizontalL, alignItems: 'start' },
+  // The config | preview split is a SplitPane (G3): the config-column width is
+  // user-draggable + persisted (was fixed minmax() grid tracks).
   leftCol: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minWidth: 0 },
   rightCol: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, minWidth: 0 },
   metaGrid: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: tokens.spacingHorizontalM },
@@ -199,7 +203,17 @@ export function VisualBuilderDialog({ open, onClose, onSaved, edit }: VisualBuil
               </MessageBar>
             )}
 
-            <div className={s.layout}>
+            {/* G3: config | preview divider is user-draggable (keyboard-
+                accessible), persisted under loom.splitpane.org-visuals-builder.config. */}
+            <SplitPane
+              direction="horizontal"
+              primary="first"
+              storageKey="org-visuals-builder.config"
+              defaultSize={480}
+              minSize={420}
+              maxSize={760}
+              dividerLabel="Resize dashboard configuration column"
+            >
               {/* ---- left: spec + tiles ------------------------------------ */}
               <div className={s.leftCol}>
                 <div className={s.metaGrid}>
@@ -333,7 +347,7 @@ export function VisualBuilderDialog({ open, onClose, onSaved, edit }: VisualBuil
                   true provenance (live / sample / honest gate). No Microsoft Fabric or Power BI workspace is used.
                 </Caption1>
               </div>
-            </div>
+            </SplitPane>
           </DialogContent>
           <DialogActions>
             <Button appearance="secondary" onClick={onClose} disabled={saving}>Cancel</Button>

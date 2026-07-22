@@ -39,6 +39,9 @@ import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
 import { LOOM_ACCENT } from '@/lib/components/shared/accent-tokens';
 import { accentTint, CanvasRightRail } from '@/lib/components/canvas/canvas-node-kit';
 import { ResizableCanvasRegion } from '@/lib/components/canvas/resizable-canvas';
+// Shared draggable width divider (G3): the service palette is sized by
+// SplitPane with a persisted sizingKey instead of a fixed 300px grid track.
+import { SplitPane } from '@/lib/components/shared/split-pane';
 import { SubscriptionNode, DomainNode, ServiceNode, ServiceIconChip } from './deploy-plan-nodes';
 import {
   SERVICE_CATALOG, SERVICE_CATEGORY_ORDER, servicesByCategory, serviceByKey, serviceVisual,
@@ -165,15 +168,10 @@ const useStyles = makeStyles({
     display: 'flex', gap: tokens.spacingHorizontalS,
     alignItems: 'center', flexWrap: 'wrap',
   },
-  body: {
-    // Height comes from the ResizableCanvasRegion wrapper (G3: user-adjustable,
-    // persisted) — the PALETTE scrolls internally and the CANVAS fills the
-    // region. minmax(0,1fr) lets the canvas column shrink instead of
-    // overflowing wide.
-    display: 'grid', gridTemplateColumns: '300px minmax(0, 1fr)',
-    gap: tokens.spacingHorizontalL,
-    height: '100%', minHeight: 0,
-  },
+  // Height comes from the ResizableCanvasRegion wrapper (G3: user-adjustable,
+  // persisted) — the PALETTE scrolls internally, the CANVAS fills the region,
+  // and the palette | canvas divider is a SplitPane (width user-adjustable,
+  // persisted) instead of a fixed 300px grid track.
   palette: {
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusLarge,
@@ -689,7 +687,17 @@ function PlannerInner() {
         minPx={460}
         ariaLabel="Resize deployment planner canvas height"
       >
-      <div className={s.body}>
+      {/* G3: palette | canvas divider is user-draggable (keyboard-accessible)
+          and persisted under loom.splitpane.deploy-planner.palette. */}
+      <SplitPane
+        direction="horizontal"
+        primary="first"
+        storageKey="deploy-planner.palette"
+        defaultSize={300}
+        minSize={240}
+        maxSize={480}
+        dividerLabel="Resize service palette"
+      >
         {/* palette */}
         <div className={s.palette} role="navigation" aria-label="Azure service catalog">
           <Input size="small" contentBefore={<Search16Regular />} placeholder="Search all Azure services"
@@ -828,7 +836,7 @@ function PlannerInner() {
             </div>
           )}
         </div>
-      </div>
+      </SplitPane>
       </ResizableCanvasRegion>
 
       {/* selected-subscription inline editor */}

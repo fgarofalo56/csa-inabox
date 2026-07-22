@@ -31,6 +31,9 @@ import {
   makeStyles, tokens, shorthands, mergeClasses,
 } from '@fluentui/react-components';
 import { ResizableCanvasRegion } from '@/lib/components/canvas/resizable-canvas';
+// Shared draggable width divider (G3): the side inspector is sized by
+// SplitPane with a persisted sizingKey instead of a fixed 260px grid track.
+import { SplitPane } from '@/lib/components/shared/split-pane';
 import {
   Play20Regular, AddCircle20Regular, BranchCompare20Regular,
   ZoomIn20Regular, ZoomOut20Regular, ArrowReset20Regular, Delete16Regular,
@@ -46,11 +49,9 @@ const useStyles = makeStyles({
   editorRow: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS },
   toolbar: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' },
   spacer: { flex: 1 },
-  canvasWrap: {
-    display: 'grid', gridTemplateColumns: '1fr 260px', gap: tokens.spacingHorizontalM,
-    // Fill the resizable region body; the inner svg/side then take height:100%.
-    flexGrow: 1, minHeight: 0, height: '100%',
-  },
+  // The graph | inspector row is a SplitPane (G3): the side-panel width is
+  // user-draggable + persisted (was a fixed 260px grid track). The SplitPane
+  // fills the resizable region body; the inner svg/side take height:100%.
   svg: {
     width: '100%', height: '100%', minHeight: 0,
     backgroundColor: tokens.colorNeutralBackground2,
@@ -399,7 +400,17 @@ export function GremlinGraphCanvas({ itemId }: GremlinGraphCanvasProps) {
           minPx={300}
           ariaLabel="Resize graph canvas height"
         >
-          <div className={s.canvasWrap}>
+          {/* G3: graph | inspector divider is user-draggable (keyboard-accessible)
+              and persisted under loom.splitpane.gremlin-graph.inspector. */}
+          <SplitPane
+            direction="horizontal"
+            primary="second"
+            storageKey="gremlin-graph.inspector"
+            defaultSize={260}
+            minSize={220}
+            maxSize={480}
+            dividerLabel="Resize graph inspector"
+          >
           <svg
             className={mergeClasses(s.svg, drag.current.active && s.svgDragging)}
             viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
@@ -518,7 +529,7 @@ export function GremlinGraphCanvas({ itemId }: GremlinGraphCanvasProps) {
               </>
             )}
           </div>
-          </div>
+          </SplitPane>
         </ResizableCanvasRegion>
       )}
 

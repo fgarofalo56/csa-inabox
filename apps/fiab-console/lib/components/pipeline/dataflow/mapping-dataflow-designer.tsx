@@ -79,6 +79,9 @@ import {
   makeStyles, mergeClasses, tokens,
 } from '@fluentui/react-components';
 import { ResizableCanvasRegion } from '@/lib/components/canvas/resizable-canvas';
+// Shared draggable width divider (G3): the config panel is sized by SplitPane
+// with a persisted sizingKey instead of a fixed 340px width.
+import { SplitPane } from '@/lib/components/shared/split-pane';
 import {
   Add16Filled, Add20Regular, Bug20Regular, Save20Regular,
   Code20Regular, Delete20Regular, FullScreenMaximize20Regular,
@@ -840,10 +843,9 @@ const useStyles = makeStyles({
     borderRadius: tokens.borderRadiusMedium,
   },
   toolbarSpacer: { flex: 1 },
-  // The body fills the ResizableCanvasRegion (which now owns the definite
-  // height); `height:100%/minHeight:0` lets it shrink with the region instead
-  // of forcing its old fixed `flex:1` height.
-  body: { display: 'flex', height: '100%', gap: tokens.spacingHorizontalM, minHeight: 0, width: '100%' },
+  // The canvas | config split fills the ResizableCanvasRegion (which owns the
+  // definite height); the SplitPane divider replaces the old fixed gap and
+  // makes the config-panel width user-draggable + persisted (G3).
   canvasShell: {
     // `minHeight:0` (was 420) — the region supplies the definite height React
     // Flow needs, so the canvas stretches to the region and never overflows it
@@ -854,7 +856,8 @@ const useStyles = makeStyles({
     borderRadius: tokens.borderRadiusMedium,
   },
   panel: {
-    flexShrink: 0, width: '340px', overflow: 'auto',
+    // Width comes from the wrapping SplitPane pane (user-draggable, persisted).
+    minWidth: 0, overflow: 'auto',
     display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS,
     padding: tokens.spacingHorizontalM,
     background: tokens.colorNeutralBackground1,
@@ -866,7 +869,8 @@ const useStyles = makeStyles({
     gap: tokens.spacingHorizontalS,
   },
   panelEmpty: {
-    flexShrink: 0, width: '340px',
+    // Width comes from the wrapping SplitPane pane (user-draggable, persisted).
+    minWidth: 0,
     display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS,
     alignItems: 'center', justifyContent: 'center', textAlign: 'center',
     padding: tokens.spacingHorizontalXXL,
@@ -1265,7 +1269,17 @@ function DesignerInner({
         minPx={360}
         ariaLabel="Resize mapping data flow canvas height"
       >
-        <div className={s.body}>
+        {/* G3: canvas | config divider is user-draggable (keyboard-accessible)
+            and persisted under loom.splitpane.mapping-dataflow.inspector. */}
+        <SplitPane
+          direction="horizontal"
+          primary="second"
+          storageKey="mapping-dataflow.inspector"
+          defaultSize={340}
+          minSize={300}
+          maxSize={560}
+          dividerLabel="Resize configuration panel"
+        >
           {/* Canvas */}
           <div
             className={s.canvasShell}
@@ -1369,7 +1383,7 @@ function DesignerInner({
             </Caption1>
           </div>
         )}
-        </div>
+        </SplitPane>
       </ResizableCanvasRegion>
 
       {/* Hidden anchor + Menu for the per-stream "＋ add transformation". */}

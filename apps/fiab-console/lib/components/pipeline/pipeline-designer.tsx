@@ -66,6 +66,9 @@ import { getActivityVisual, accentTint, accentGradient } from '@/lib/components/
 // per-surface height to localStorage. Pointer + keyboard + ARIA live in the
 // primitive; this surface only declares its bounds/storage key.
 import { ResizableCanvasRegion } from '@/lib/components/canvas/resizable-canvas';
+// Shared draggable width divider (G3): the palette column is sized by SplitPane
+// with a persisted sizingKey instead of a fixed content width.
+import { SplitPane } from '@/lib/components/shared/split-pane';
 import { useCanvasHistory } from '@/lib/components/canvas/use-canvas-history';
 import { registerCanvasCommands, type CanvasCommand } from '@/lib/components/canvas/canvas-command-registry';
 import type {
@@ -89,6 +92,9 @@ const useStyles = makeStyles({
   // the upgraded palette tiles / canvas nodes.
   paletteCol: {
     flexShrink: 0,
+    // The SplitPane pane owns the column width (G3): let the ActivityPalette
+    // fill whatever width the user drags instead of its content max-width.
+    '> :last-child': { maxWidth: '100%' },
     backgroundColor: tokens.colorNeutralBackground1,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusLarge,
@@ -627,6 +633,19 @@ export const PipelineDesigner = forwardRef<PipelineDesignerHandle, PipelineDesig
       onFocus={() => setFocused(true)}
       onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setFocused(false); }}
     >
+      {/* G3: the palette | canvas split is user-draggable (keyboard-accessible)
+          and persisted under loom.splitpane.pipeline-designer.palette. The
+          existing collapse-to-rail button keeps working via `collapsed`. */}
+      <SplitPane
+        direction="horizontal"
+        primary="first"
+        storageKey="pipeline-designer.palette"
+        defaultSize={280}
+        minSize={260}
+        maxSize={440}
+        collapsed={paletteCollapsed}
+        dividerLabel="Resize activities palette"
+      >
       {paletteCollapsed ? (
         <div className={s.paletteRail}>
           <Tooltip content="Expand activities" relationship="label">
@@ -836,6 +855,7 @@ export const PipelineDesigner = forwardRef<PipelineDesignerHandle, PipelineDesig
           {levelActivities.length} activit{levelActivities.length === 1 ? 'y' : 'ies'} at this level · {ACTIVITY_CATALOG.length} types in palette
         </Caption1>
       </div>
+      </SplitPane>
 
       {/* Template gallery — curated pipeline patterns; selecting one seeds the
           canvas (through the host spec-apply when wired, else activities-only). */}
