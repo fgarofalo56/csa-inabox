@@ -101,12 +101,29 @@ export interface CanvasLineageNode {
    * dead asset as live while GC propagates.
    */
   deleted?: boolean;
+  /**
+   * Column-grain nodes only (L1 column facet): the node id of the table/asset
+   * this column belongs to, so a renderer can group/fan-out columns under their
+   * owning table. Absent on table-grain nodes (non-breaking).
+   */
+  parentTableId?: string;
+  /**
+   * Column-grain nodes only: the human-readable owning table/asset name (raw,
+   * pre-merge — `parentTableId` is the canonical post-merge node id).
+   */
+  columnOf?: string;
 }
 
 export interface CanvasLineageEdge {
   from: string;
   to: string;
   type?: string;
+  /**
+   * Edge grain (L1 column facet): 'column' marks a column→column edge between
+   * synthetic `col:<table>::<column>` nodes; 'table' (or absent — the
+   * pre-existing shape) is an item/table-grain edge. Optional, non-breaking.
+   */
+  kind?: 'table' | 'column';
 }
 
 // ---------------------------------------------------------------------------

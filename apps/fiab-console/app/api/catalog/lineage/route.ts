@@ -11,7 +11,13 @@
  *   that share a qualifiedName/storageLocation across two sources are
  *   collapsed and tagged with `multiSource: [...]`.
  *
- * Returns: { ok, nodes: LineageNode[], edges: LineageEdge[], source }
+ *   Optional ?columns=true (L1 column facet) additionally returns a
+ *   `columnEdges` array of column-grain edges (`kind:'column'`, endpoints are
+ *   synthetic `col:<table>::<column>` ids) and badges each node with its
+ *   participating `columns`. Default false → the payload is byte-identical to
+ *   the pre-L1 shape (snapshot-tested).
+ *
+ * Returns: { ok, nodes: LineageNode[], edges: LineageEdge[], source, columnEdges? }
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
@@ -19,8 +25,11 @@ import {
   getLineageSubgraph, PurviewNotConfiguredError, PurviewError,
 } from '@/lib/azure/purview-client';
 import {
-  getTableLineage, UnityCatalogNotConfiguredError, UnityCatalogError,
+  getTableLineage, getColumnLineageSystemTables, lineageWarehouseId,
+  UnityCatalogNotConfiguredError, UnityCatalogError,
 } from '@/lib/azure/unity-catalog-client';
+import { synthesizeColumnGraph, type ColumnGraphMember } from '@/lib/azure/unified-lineage';
+import type { CanvasLineageEdge } from '@/lib/components/catalog/lineage-canvas';
 import {
   getWorkspaceLineage, OneLakeError, OneLakeLineageNotSupportedError,
 } from '@/lib/azure/onelake-catalog-client';
@@ -39,6 +48,9 @@ export interface LineageNode {
   qualifiedName?: string;
   /** Set when the node's `loom://` entity no longer maps to a live item (LIN-GC-3). */
   deleted?: boolean;
+  /** Columns participating in lineage (L1 column facet) — only populated when
+   *  the request opts in via `?columns=true`. */
+  columns?: string[];
 }
 
 export interface LineageEdge {
@@ -54,6 +66,9 @@ export async function GET(req: NextRequest) {
   const id = req.nextUrl.searchParams.get('id') || '';
   const host = req.nextUrl.searchParams.get('host') || '';
   const workspaceId = req.nextUrl.searchParams.get('workspaceId') || '';
+  // L1 column facet — opt-in ONLY. When absent the response payload stays
+  // byte-identical to the pre-L1 shape (no columnEdges key, no columns badges).
+  const wantColumns = req.nextUrl.searchParams.get('columns') === 'true';
 
   if (!source || !id) {
     return NextResponse.json({ ok: false, error: 'source and id required' }, { status: 400 });
@@ -72,7 +87,9 @@ export async function GET(req: NextRequest) {
       const edges: LineageEdge[] = graph.relations.map((r) => ({
         from: r.fromEntityId, to: r.toEntityId, type: r.relationshipType,
       }));
-      return NextResponse.json({ ok: true, source, nodes, edges });
+      // Purview column facets land in L4 — until then the opted-in envelope
+      // carries an honest empty columnEdges (no fabricated column lineage).
+      return NextResponse.json({ ok: true, source, nodes, edges, ...(wantColumns ? { columnEdges: [] } : {}) });
     }
     if (source === 'unity-catalog') {
       if (!host) return NextResponse.json({ ok: false, error: 'host required' }, { status: 400 });
@@ -85,7 +102,31 @@ export async function GET(req: NextRequest) {
         if (!seen.has(e.target)) { seen.add(e.target); nodes.push({ id: e.target, label: e.target, type: 'table', source: 'unity-catalog' }); }
         edges.push({ from: e.source, to: e.target });
       }
-      return NextResponse.json({ ok: true, source, nodes, edges });
+      if (!wantColumns) return NextResponse.json({ ok: true, source, nodes, edges });
+      // L1 column facet: real column lineage from the Databricks system tables
+      // (`system.access.column_lineage`) when a lineage warehouse is wired.
+      // Best-effort — a column-lineage gate must NOT blank the table graph.
+      const columnEdges: CanvasLineageEdge[] = [];
+      const warehouseId = lineageWarehouseId();
+      if (warehouseId) {
+        try {
+          const col = await getColumnLineageSystemTables(host, id, warehouseId);
+          for (const [table, cols] of Object.entries(col.columnsByTable)) {
+            const n = nodes.find((x) => x.id.toLowerCase() === table);
+            if (n) n.columns = [...new Set([...(n.columns || []), ...cols])];
+          }
+          const members: ColumnGraphMember[] = col.edges.map((ce) => ({
+            fromTable: ce.sourceTable, fromColumn: ce.sourceColumn,
+            toTable: ce.targetTable, toColumn: ce.targetColumn,
+            confidence: 'declared' as const, source: 'unity-catalog' as const,
+          }));
+          columnEdges.push(...synthesizeColumnGraph(members).edges);
+        } catch {
+          // Column lineage unavailable (system.access.column_lineage gate) —
+          // the table-grain graph stands on its own; no fabricated columns.
+        }
+      }
+      return NextResponse.json({ ok: true, source, nodes, edges, columnEdges });
     }
     if (source === 'onelake') {
       const ws = workspaceId || id;
@@ -98,7 +139,8 @@ export async function GET(req: NextRequest) {
         if (!seen.has(e.target_item_id)) { seen.add(e.target_item_id); nodes.push({ id: e.target_item_id, label: e.target_item_id, type: e.target_type, source: 'onelake' }); }
         edges.push({ from: e.source_item_id, to: e.target_item_id });
       }
-      return NextResponse.json({ ok: true, source, nodes, edges });
+      // OneLake admin scan carries no column grain — honest empty when opted in.
+      return NextResponse.json({ ok: true, source, nodes, edges, ...(wantColumns ? { columnEdges: [] } : {}) });
     }
     return NextResponse.json({ ok: false, error: 'source must be purview|unity-catalog|onelake' }, { status: 400 });
   } catch (e: any) {

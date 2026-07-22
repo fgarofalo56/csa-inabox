@@ -96,14 +96,88 @@ export function ucIdentity(fullName: string): string {
   return `uc:${fullName.toLowerCase()}`;
 }
 
+/**
+ * Canonical column identity: `col:<table>::<column>`, where the table part is
+ * routed through {@link normalizeIdentity} so the SAME physical column surfaced
+ * by different sources (a UC full_name, a Loom item referencing that table, an
+ * abfss path) produces the SAME join key and the column nodes collapse in the
+ * UnionFind (L1 cross-source column merge).
+ */
+export function columnIdentity(table: string, column: string): string {
+  return `col:${normalizeIdentity(table)}::${column.toLowerCase()}`;
+}
+
 // ---------------------------------------------------------------------------
 // Public model
 // ---------------------------------------------------------------------------
 
 /** A node plus every candidate identity it could be joined on. */
-interface IdentifiedNode {
+export interface IdentifiedNode {
   node: CanvasLineageNode;
   identities: string[];
+}
+
+/**
+ * One column→column mapping contributed by a lineage source (L1 column facet).
+ * `fromTable`/`toTable` are the owning assets' raw ids in whatever key the
+ * source speaks (UC full_name, storage path, Loom item id) — the shared
+ * {@link columnIdentity} normalization is what makes them merge cross-source.
+ */
+export interface ColumnGraphMember {
+  fromTable: string;
+  fromColumn: string;
+  toTable: string;
+  toColumn: string;
+  /** Optional transform expression (e.g. "UPPER(x)", "CAST(...)", "1:1"). */
+  transform?: string;
+  /** Declared (OpenLineage/UC/ADF explicit) vs derived (heuristic). */
+  confidence?: 'declared' | 'derived';
+  /** Which lineage source contributed this mapping. */
+  source: LineageSource;
+}
+
+/**
+ * Source-agnostic column-graph synthesis (L1): turn column mappings from ANY
+ * source (UC system tables, ThreadEdge.columnMappings, Purview column facets)
+ * into synthetic `col:<table>::<column>` nodes + `kind:'column'` edges. Node
+ * identities use the canonical {@link columnIdentity} key so cross-source
+ * column nodes merge in the same UnionFind as tables. `existingEdges` is only
+ * consulted for de-duplication — it is not mutated.
+ */
+export function synthesizeColumnGraph(
+  members: ColumnGraphMember[],
+  existingEdges: CanvasLineageEdge[] = [],
+): { nodes: IdentifiedNode[]; edges: CanvasLineageEdge[] } {
+  const nodes = new Map<string, IdentifiedNode>();
+  const edges: CanvasLineageEdge[] = [];
+  const seen = new Set(existingEdges.map((e) => `${e.from}->${e.to}`));
+  const ensureCol = (table: string, column: string, source: LineageSource): string => {
+    const id = `col:${table}::${column}`;
+    if (!nodes.has(id)) {
+      nodes.set(id, {
+        node: {
+          id,
+          label: column,
+          type: 'column',
+          source,
+          parentTableId: table,
+          columnOf: table,
+        },
+        identities: [columnIdentity(table, column)],
+      });
+    }
+    return id;
+  };
+  for (const m of members) {
+    if (!m.fromTable || !m.fromColumn || !m.toTable || !m.toColumn) continue;
+    const from = ensureCol(m.fromTable, m.fromColumn, m.source);
+    const to = ensureCol(m.toTable, m.toColumn, m.source);
+    const k = `${from}->${to}`;
+    if (seen.has(k)) continue;
+    seen.add(k);
+    edges.push({ from, to, type: 'column', kind: 'column' });
+  }
+  return { nodes: [...nodes.values()], edges };
 }
 
 interface SourceGraph {
@@ -150,14 +224,16 @@ export interface UnifiedLineageInput {
   /** Max hops to walk the Weave thread-edge graph from the focus item. */
   weaveDepth?: number;
   /**
-   * Surface Databricks **column-level** lineage (`system.access.column_lineage`)
-   * for the Unity Catalog source. When set, each table node is badged with the
-   * columns that participate in lineage, and column→column edges are added
+   * Surface **column-level** lineage. When set, each table node is badged with
+   * the columns that participate in lineage, and column→column edges are added
    * between synthetic `col:<table>::<column>` nodes so the graph reads at the
    * column grain (matching Databricks Catalog Explorer's column-level view).
-   * Requires `LOOM_DATABRICKS_LINEAGE_WAREHOUSE_ID` (same warehouse as table
-   * lineage — no new env var). Defaults to off so the table-grain graph stays
-   * the default; the Lineage tab toggles it via `?columns=true`.
+   * Column facets come from every source that carries them (L1): Databricks UC
+   * `system.access.column_lineage` (requires
+   * `LOOM_DATABRICKS_LINEAGE_WAREHOUSE_ID` — same warehouse as table lineage,
+   * no new env var) AND Weave `ThreadEdge.columnMappings` (Cosmos, no gate).
+   * Defaults to off so the table-grain graph stays the default; the Lineage
+   * tab toggles it via `?columns=true`.
    */
   columnLineage?: boolean;
   /**
@@ -275,6 +351,9 @@ export function mergeGraphs(graphs: SourceGraph[]): {
     const type = members.find((m) => m.type && m.type !== 'process')?.type || canonical.type;
     const identity = all[indices[0]].identities.find((x) => x.startsWith('uc:') || x.startsWith('path:')) ||
       all[indices[0]].identities[0];
+    // Column facet (L1): carry the owning-table linkage through the merge.
+    const parentTableId = members.find((m) => m.parentTableId)?.parentTableId;
+    const columnOf = members.find((m) => m.columnOf)?.columnOf;
 
     const node: CanvasLineageNode = {
       id: canonical.id,
@@ -286,9 +365,21 @@ export function mergeGraphs(graphs: SourceGraph[]): {
       ...(openHref ? { openHref } : {}),
       ...(sources.length > 1 ? { multiSource: sources } : {}),
       ...(identity ? { identity } : {}),
+      ...(parentTableId ? { parentTableId } : {}),
+      ...(columnOf ? { columnOf } : {}),
     };
     merged.push(node);
     for (const m of members) idMap.set(m.id, canonical.id);
+  }
+
+  // Column facet (L1): a column node's parentTableId may point at a table that
+  // itself collapsed — remap it onto the canonical (surviving) node id so the
+  // fan-out grouping stays coherent post-merge.
+  for (const n of merged) {
+    if (n.parentTableId) {
+      const canonicalParent = idMap.get(n.parentTableId);
+      if (canonicalParent) n.parentTableId = canonicalParent;
+    }
   }
 
   // Rewrite + de-dupe edges onto the canonical ids; drop self-loops created by
@@ -303,7 +394,7 @@ export function mergeGraphs(graphs: SourceGraph[]): {
       const k = `${from}->${to}`;
       if (edgeSeen.has(k)) continue;
       edgeSeen.add(k);
-      edges.push({ from, to, ...(e.type ? { type: e.type } : {}) });
+      edges.push({ from, to, ...(e.type ? { type: e.type } : {}), ...(e.kind ? { kind: e.kind } : {}) });
     }
   }
 
@@ -449,22 +540,23 @@ async function unityGraph(
         }
       }
       if (columnLineage) {
-        const colNode = (table: string, column: string) => {
-          const id = `col:${table}::${column}`;
-          if (!nodes.has(id)) {
-            ensureEndpoint(table);
-            nodes.set(id, {
-              node: { id, label: column, type: 'column', source: 'unity-catalog' },
-              identities: [`col:${table.toLowerCase()}::${column.toLowerCase()}`],
-            });
-          }
-          return id;
-        };
-        for (const ce of col.edges) {
-          const from = colNode(ce.sourceTable, ce.sourceColumn);
-          const to = colNode(ce.targetTable, ce.targetColumn);
-          edges.push({ from, to, type: 'column' });
+        // Shared, source-agnostic synthesis (L1): UC is now one of N column
+        // sources writing the same `col:<table>::<column>` model.
+        const members: ColumnGraphMember[] = col.edges.map((ce) => ({
+          fromTable: ce.sourceTable,
+          fromColumn: ce.sourceColumn,
+          toTable: ce.targetTable,
+          toColumn: ce.targetColumn,
+          confidence: 'declared' as const,
+          source: 'unity-catalog' as const,
+        }));
+        const colGraph = synthesizeColumnGraph(members, edges);
+        for (const cn of colGraph.nodes) {
+          if (nodes.has(cn.node.id)) continue;
+          if (cn.node.parentTableId) ensureEndpoint(cn.node.parentTableId);
+          nodes.set(cn.node.id, cn);
         }
+        edges.push(...colGraph.edges);
       }
     } catch {
       // Column lineage unavailable (system.access.column_lineage gate) — the
@@ -505,9 +597,11 @@ function weaveGraph(
   itemId: string | undefined,
   maxHops: number,
   focusIds: string[],
+  includeColumns = false,
 ): SourceGraph {
   const nodes = new Map<string, IdentifiedNode>();
   const out: CanvasLineageEdge[] = [];
+  const usedEdges: ThreadEdge[] = [];
   if (!itemId) return { source: 'weave', nodes: [], edges: [] };
 
   // Adjacency (undirected for reachability, directed for the drawn edge).
@@ -550,6 +644,7 @@ function weaveGraph(
         const k = `${e.fromItemId}->${e.toItemId}`;
         if (!out.some((x) => `${x.from}->${x.to}` === k)) {
           out.push({ from: e.fromItemId, to: e.toItemId, type: e.action });
+          usedEdges.push(e);
         }
         const other = cur === e.fromItemId ? e.toItemId : e.fromItemId;
         if (!visited.has(other)) { visited.add(other); next.push(other); }
@@ -564,7 +659,48 @@ function weaveGraph(
       identities: [`item:${itemId.toLowerCase()}`, ...focusIds],
     });
   }
+
+  // Column facet (L1): synthesize column nodes/edges from the traversed edges'
+  // columnMappings via the shared source-agnostic helper. Gated behind the same
+  // `?columns=true` flag the UC column path uses so the default (table-grain)
+  // payload stays byte-identical.
+  if (includeColumns) {
+    const members: ColumnGraphMember[] = usedEdges.flatMap((e) =>
+      (e.columnMappings || []).map((m) => ({
+        fromTable: e.fromItemId,
+        fromColumn: m.fromColumn,
+        toTable: e.toItemId,
+        toColumn: m.toColumn,
+        ...(m.transform ? { transform: m.transform } : {}),
+        ...(m.confidence ? { confidence: m.confidence } : {}),
+        source: 'weave' as const,
+      })),
+    );
+    if (members.length) {
+      const colGraph = synthesizeColumnGraph(members, out);
+      for (const cn of colGraph.nodes) {
+        if (!nodes.has(cn.node.id)) nodes.set(cn.node.id, cn);
+      }
+      out.push(...colGraph.edges);
+      // Badge the endpoint nodes with their participating columns (mirrors the
+      // UC columnsByTable badge) so the detail panel lists them.
+      for (const e of usedEdges) {
+        for (const m of e.columnMappings || []) {
+          badgeColumn(nodes, e.fromItemId, m.fromColumn);
+          badgeColumn(nodes, e.toItemId, m.toColumn);
+        }
+      }
+    }
+  }
   return { source: 'weave', nodes: [...nodes.values()], edges: out };
+}
+
+/** Add `column` to the node's `columns` badge list (de-duped), when present. */
+function badgeColumn(nodes: Map<string, IdentifiedNode>, id: string, column: string): void {
+  const n = nodes.get(id);
+  if (!n || !column) return;
+  const merged = new Set([...(n.node.columns || []), column]);
+  n.node.columns = [...merged];
 }
 
 // ---------------------------------------------------------------------------
@@ -650,7 +786,7 @@ export async function getUnifiedLineage(input: UnifiedLineageInput): Promise<Uni
   tasks.push(
     listThreadEdges(input.session)
       .then((edges) => {
-        const g = weaveGraph(edges, input.itemId, weaveDepth, focusIds);
+        const g = weaveGraph(edges, input.itemId, weaveDepth, focusIds, input.columnLineage);
         graphs.push(g);
         sources.push({ source: 'weave', ok: true, nodeCount: g.nodes.length });
       })

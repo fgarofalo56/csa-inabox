@@ -15,6 +15,22 @@
 import { threadEdgesContainer } from '@/lib/azure/cosmos-client';
 import type { SessionPayload } from '@/lib/auth/session';
 
+/**
+ * A single column→column mapping riding an item→item Thread edge (L1 column
+ * facet). `fromColumn` belongs to the edge's `fromItemId` asset, `toColumn` to
+ * its `toItemId` asset. Every column-lineage source (OpenLineage/Spark, ADF
+ * Copy `translator.mappings`, dbt manifest, Purview column facets) writes this
+ * ONE shape so the unified-lineage merge reads a single column model.
+ */
+export interface ThreadColumnMapping {
+  fromColumn: string;
+  toColumn: string;
+  /** Optional transform expression (e.g. "UPPER(x)", "CAST(...)", "1:1"). */
+  transform?: string;
+  /** OpenLineage/UC/ADF explicit mapping = 'declared'; heuristic = 'derived'. */
+  confidence?: 'declared' | 'derived';
+}
+
 export interface ThreadEdge {
   id: string;
   tenantId: string;
@@ -48,6 +64,11 @@ export interface ThreadEdge {
    * item has been restored (this set is empty).
    */
   staleItemIds?: string[];
+  /**
+   * Optional column-grain mappings for this item→item edge. Absent = table-grain
+   * edge (the pre-existing shape; fully backward compatible).
+   */
+  columnMappings?: ThreadColumnMapping[];
 }
 
 export interface RecordEdgeInput {
@@ -60,6 +81,11 @@ export interface RecordEdgeInput {
   toExternal?: boolean;
   toLink?: string;
   action: string;
+  /**
+   * Optional column-grain mappings for this item→item edge. Absent = table-grain
+   * edge (the pre-existing shape; fully backward compatible).
+   */
+  columnMappings?: ThreadColumnMapping[];
 }
 
 /**
@@ -93,6 +119,9 @@ export async function recordThreadEdge(session: SessionPayload, input: RecordEdg
       action: input.action,
       createdAt: now,
       createdBy: session.claims.upn || session.claims.email || tenantId,
+      // Column facet (L1): persisted only when the caller provided mappings so
+      // pre-existing table-grain edges keep their exact stored shape.
+      ...(input.columnMappings?.length ? { columnMappings: input.columnMappings } : {}),
     };
     // Upsert so re-weaving the same pair/action refreshes (not duplicates) the edge.
     await container.items.upsert(doc);
