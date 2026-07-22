@@ -60,6 +60,12 @@ export const NAV_SECTIONS: NavSection[] = [
     label: 'Data',
     items: [
       { href: '/onelake', label: 'OneLake catalog' },
+      // Re-homed onto the rail (nav-IA reorg 2026-07-22): /catalog is the
+      // federated search surface (Search/Browse/Unity/Metastores/Permissions/
+      // Lineage) — distinct from /governance/catalog (governed inventory). It
+      // had been dropped from the rail without a demoted entry, stranding its
+      // sub-tabs at 3 clicks; on the rail they resolve in 2.
+      { href: '/catalog', label: 'Catalog (federated search)' },
       { href: '/marketplace', label: 'Marketplace' },
       { href: '/connections', label: 'Connections' },
     ],
@@ -110,6 +116,11 @@ export const NAV_SECTIONS: NavSection[] = [
 export const DEMOTED_NAV_ITEMS: NavItem[] = [
   { href: '/semantic-model', label: 'Semantic models' },
   { href: '/data-agent', label: 'Data agents' },
+  // The persona-experience landing hub (UX-1012). The rail links straight to
+  // the /experience/*/home children, so the hub itself lives off-rail — but it
+  // stays reachable via the palette + Copilot allow-list (it was a true orphan
+  // before the nav-IA reorg 2026-07-22).
+  { href: '/experience', label: 'Experiences' },
   { href: '/admin/autopilot', label: 'Autopilot (self-driving FinOps)', adminOnly: true },
 ];
 

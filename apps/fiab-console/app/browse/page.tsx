@@ -302,6 +302,22 @@ export default function BrowsePage() {
         <RecentItems />
       </Section>
 
+      {/* ── Shared with me ──────────────────────────────────────────── */}
+      {/* Entry point for cross-tenant Delta Sharing shares received by this
+          user. The accept flow used to be reachable ONLY via the emailed
+          link (a signed-in orphan before the nav-IA reorg 2026-07-22). */}
+      <Section title="Shared with me">
+        <TileGrid>
+          <ItemTile
+            type="external-share"
+            title="Received shares"
+            subtitle="Data shared to you from outside this tenant (Delta Sharing)"
+            meta="Review, accept, and open pending external shares"
+            onClick={() => router.push('/external-shares/received')}
+          />
+        </TileGrid>
+      </Section>
+
       {/* ── All workspaces ──────────────────────────────────────────── */}
       <Section
         title="All workspaces"

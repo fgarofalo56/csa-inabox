@@ -32,7 +32,7 @@ import {
   DataTrending20Regular, Shield20Regular, Tag20Regular, Branch20Regular,
   DatabaseSearch20Regular, DocumentBulletList20Regular, Beaker20Regular,
   Open16Regular, ArrowSync20Regular, Box20Regular, ShieldCheckmark20Regular,
-  History20Regular, ShieldGlobe20Regular, type FluentIcon,
+  History20Regular, ShieldGlobe20Regular, BookOpen20Regular, type FluentIcon,
 } from '@fluentui/react-icons';
 import { PageShell } from '@/lib/components/page-shell';
 import { EmptyState } from '@/lib/components/empty-state';
@@ -48,6 +48,8 @@ import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-ta
 import { itemVisual, readableAccent } from '@/lib/components/ui/item-type-visual';
 import { useTheme } from '@/lib/theme/theme-context';
 import { clientFetch } from '@/lib/client-fetch';
+import { GOVERNANCE_SECTIONS } from '@/lib/nav/governance-sections';
+import { useIsTenantAdmin } from '@/lib/components/session-context';
 
 interface Kpis {
   totalItems: number; sensitiveCoveragePct: number; classificationCoveragePct: number;
@@ -200,48 +202,33 @@ const useStyles = makeStyles({
   },
 });
 
-// Section grid mirroring the Purview portal left nav. Each card carries an
+// The DESTINATIONS (href / label / desc / grouping) come from the shared
+// GOVERNANCE_SECTIONS registry (lib/nav/governance-sections.ts) — the same
+// list the GovernanceShell sidebar renders — so this grid and the sidebar can
+// never disagree. Presentation (icon + accent color per card) is mapped here
+// by href, mirroring left-nav.tsx's ICON_BY_HREF pattern. Each card carries an
 // accent color so the surface reads as Web 3.0, not a flat menu.
-const SECTIONS: {
-  group: string;
-  items: { href: string; label: string; desc: string; icon: FluentIcon; color: string }[];
-}[] = [
-  {
-    group: 'Catalog management',
-    items: [
-      { href: '/governance/catalog', label: 'Data catalog', desc: 'Unified inventory across OneLake, Synapse, Databricks, ADLS.', icon: DatabaseSearch20Regular, color: 'var(--loom-accent-teal)' },
-      { href: '/admin/domains', label: 'Governance domains', desc: 'Business domains, subdomains, workspace assignment, delegated settings.', icon: DocumentBulletList20Regular, color: 'var(--loom-accent-indigo)' },
-    ],
-  },
-  {
-    group: 'Discovery & lineage',
-    items: [
-      { href: '/governance/lineage', label: 'Lineage', desc: 'End-to-end item lineage graph — Governed, Mesh, and Federated scopes.', icon: Branch20Regular, color: 'var(--loom-accent-indigo2)' },
-      { href: '/catalog', label: 'Search', desc: 'Federated search across Purview, Unity, OneLake.', icon: DatabaseSearch20Regular, color: 'var(--loom-accent-blue)' },
-    ],
-  },
-  {
-    group: 'Data Map',
-    items: [
-      { href: '/governance/scans', label: 'Scans & sources', desc: 'Register sources, schedule + run scans.', icon: ArrowSync20Regular, color: 'var(--loom-accent-azure)' },
-      { href: '/admin/classifications', label: 'Classification rules', desc: 'Define custom classification rules (Loom-native, no Purview).', icon: Tag20Regular, color: 'var(--loom-accent-green)' },
-      { href: '/admin/sensitivity-labels', label: 'Sensitivity labels', desc: 'Define + manage sensitivity labels (Loom-native).', icon: Shield20Regular, color: 'var(--loom-accent-violet)' },
-    ],
-  },
-  {
-    group: 'Governance & health',
-    items: [
-      { href: '/governance/policies', label: 'Access policies', desc: 'DLP, masking, RLS, retention, access.', icon: Shield20Regular, color: 'var(--loom-accent-orange)' },
-      { href: '/governance/protection-policies', label: 'Protection policies', desc: 'Label-driven restrict-only allow-lists → real RBAC reconcile (sovereign, no Fabric).', icon: ShieldCheckmark20Regular, color: 'var(--loom-accent-red)' },
-      { href: '/governance/workspace-egress', label: 'Outbound access protection', desc: 'Per-workspace egress allow-list → real Azure NSG outbound rules (sovereign, no Fabric).', icon: ShieldGlobe20Regular, color: 'var(--loom-accent-azure)' },
-      { href: '/governance/access-requests', label: 'Access requests', desc: 'Multi-tier approval inbox → real Azure RBAC grant.', icon: ShieldCheckmark20Regular, color: 'var(--loom-accent-violet)' },
-      { href: '/governance/data-quality', label: 'Data quality', desc: 'Author rules, run on your engine, results + Delta/Lakehouse monitors.', icon: Beaker20Regular, color: 'var(--loom-accent-cyan)' },
-      { href: '/governance/mdm', label: 'Master data', desc: 'Golden-record match/merge + reference data (Azure-native).', icon: Box20Regular, color: 'var(--loom-accent-indigo)' },
-      { href: '/governance/insights', label: 'Insights & reports', desc: 'Coverage KPIs, data-health reporting.', icon: DataTrending20Regular, color: 'var(--loom-accent-amber)' },
-      { href: '/governance/purview', label: 'Microsoft Purview', desc: 'Connection status + embedded portal.', icon: Beaker20Regular, color: 'var(--loom-accent-teal)' },
-    ],
-  },
-];
+const VISUAL_BY_HREF: Record<string, { icon: FluentIcon; color: string }> = {
+  '/governance/govern': { icon: ShieldCheckmark20Regular, color: 'var(--loom-accent-teal)' },
+  '/governance/catalog': { icon: DatabaseSearch20Regular, color: 'var(--loom-accent-teal)' },
+  '/admin/domains': { icon: DocumentBulletList20Regular, color: 'var(--loom-accent-indigo)' },
+  '/governance/glossary': { icon: BookOpen20Regular, color: 'var(--loom-accent-amber)' },
+  '/governance/scans': { icon: ArrowSync20Regular, color: 'var(--loom-accent-azure)' },
+  '/admin/classifications': { icon: Tag20Regular, color: 'var(--loom-accent-green)' },
+  '/admin/sensitivity-labels': { icon: Shield20Regular, color: 'var(--loom-accent-violet)' },
+  '/catalog': { icon: DatabaseSearch20Regular, color: 'var(--loom-accent-blue)' },
+  '/governance/lineage': { icon: Branch20Regular, color: 'var(--loom-accent-indigo2)' },
+  '/governance/policies': { icon: Shield20Regular, color: 'var(--loom-accent-orange)' },
+  '/governance/protection-policies': { icon: ShieldCheckmark20Regular, color: 'var(--loom-accent-red)' },
+  '/governance/workspace-egress': { icon: ShieldGlobe20Regular, color: 'var(--loom-accent-azure)' },
+  '/governance/access-requests': { icon: ShieldCheckmark20Regular, color: 'var(--loom-accent-violet)' },
+  '/governance/data-quality': { icon: Beaker20Regular, color: 'var(--loom-accent-cyan)' },
+  '/governance/mdm': { icon: Box20Regular, color: 'var(--loom-accent-indigo)' },
+  '/governance/irm': { icon: History20Regular, color: 'var(--loom-accent-red)' },
+  '/governance/insights': { icon: DataTrending20Regular, color: 'var(--loom-accent-amber)' },
+  '/governance/purview': { icon: Beaker20Regular, color: 'var(--loom-accent-teal)' },
+};
+const FALLBACK_VISUAL = { icon: DatabaseSearch20Regular, color: 'var(--loom-accent-teal)' };
 
 function pct(n: number, d: number): number {
   return d > 0 ? Math.round((100 * n) / d) : 0;
@@ -274,19 +261,25 @@ export default function GovernancePage() {
     })();
   }, []);
 
-  // Filter the nav cards by the capped Toolbar search.
+  const isTenantAdmin = useIsTenantAdmin();
+
+  // Build the card grid from the SHARED governance registry: skip the
+  // Overview entry (this page IS the overview), hide adminOnly rows for
+  // non-admins (rel-T53, same probe as the shell sidebar), attach the
+  // per-href visual, then filter by the capped Toolbar search.
   const nav = useMemo(() => {
     const f = navQuery.trim().toLowerCase();
-    if (!f) return SECTIONS;
-    return SECTIONS
+    return GOVERNANCE_SECTIONS
       .map((grp) => ({
-        ...grp,
-        items: grp.items.filter(
-          (it) => it.label.toLowerCase().includes(f) || it.desc.toLowerCase().includes(f),
-        ),
+        group: grp.label,
+        items: grp.items
+          .filter((it) => it.href !== '/governance')
+          .filter((it) => !it.adminOnly || isTenantAdmin)
+          .filter((it) => !f || it.label.toLowerCase().includes(f) || it.desc.toLowerCase().includes(f))
+          .map((it) => ({ ...it, ...(VISUAL_BY_HREF[it.href] ?? FALLBACK_VISUAL) })),
       }))
       .filter((grp) => grp.items.length > 0);
-  }, [navQuery]);
+  }, [navQuery, isTenantAdmin]);
 
   // Per-type coverage columns — sortable + filterable per the design guide.
   const coverageColumns = useMemo<LoomColumn<CoverageRow>[]>(() => [

@@ -295,11 +295,12 @@ function buildTools(deps: {
         // destinations in NAV_ITEMS) so the Copilot can route to every real
         // surface and never drifts from a hand-maintained array. A few non-nav
         // but navigable prefixes are appended (per-item editors, app + learn
-        // pages, experience sub-apps). The /api-marketplace redirect stub is
-        // intentionally NOT here — /marketplace (in NAV_ITEMS) supersedes it.
+        // pages, received external shares). /experience is covered by NAV_ITEMS
+        // (demoted entry). The /api-marketplace redirect stub is intentionally
+        // NOT here — /marketplace (in NAV_ITEMS) supersedes it.
         const allowed = [
           ...NAV_ITEMS.map((n) => n.href),
-          '/items', '/apps', '/learn', '/workloads', '/experience',
+          '/items', '/apps', '/learn', '/workloads', '/external-shares',
         ];
         if (!allowed.some((p) => safe === p || safe.startsWith(`${p}/`))) {
           return { result: { ok: false, error: `slug ${safe} not in allow-list` } };
