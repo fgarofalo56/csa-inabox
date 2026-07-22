@@ -113,6 +113,10 @@ column grain.** Specifics:
 Dependency spine: **L1 → {L2, L3, L4, L6, L7} → L5**. L1 is the schema
 foundation; capture items (L2/L3/L6) and the Purview push (L4) all write the L1
 column model; L5 renders it. L7 rebases the existing UC column path onto L1.
+**Rev-2 clarification (consistency 2c):** L5 renders the merged model
+incrementally — it **ships in Phase 2 against whatever sources have landed**
+(L2/L3/L4) and **re-verifies after L6/L7 land in Phase 3**; it is the terminal
+L item in verification order, not a Phase-3 blocker.
 
 ## L1 — Column-facet schema foundation (the enabling PR)
 
@@ -175,31 +179,62 @@ note in parity doc that the schema is metadata-plane only (no data movement).
 
 ---
 
-## L2 — OpenLineage capture from Synapse Spark (declared column lineage)
+## L2 — OpenLineage capture from Synapse Spark (declared column lineage) *(rev 2 — INGEST SECURITY REDESIGNED per SRE F2)*
 
 **Goal.** Emit OpenLineage `RunEvent`s (with the `columnLineage` facet) from
 Synapse Spark jobs and ingest them into the L1 column model — real, declared
 column lineage from Spark transforms, Azure-native, no Fabric.
 
+> **Rev-2 security redesign (SRE F2 — ATO-blocking as drafted).** The rev-1
+> design was an internet-reachable (Front Door public host), static-shared-token
+> write endpoint — and the token was stamped into Spark pool config, readable by
+> any workspace user who can view pool/job config. It also claimed to "mirror"
+> the eventhouse ingest route, but that route authenticates with `getSession()`
+> and enforces `MAX_FILE_BYTES = 5 MB` / `MAX_INLINE_ROWS = 50_000` — the rev-1
+> L2 had neither session-grade auth nor any size/rate cap, and no workspace
+> scoping (a single leaked token could forge lineage for ANY workspace —
+> spoofable provenance is an SI-7/SC-8 integrity finding). The redesign below is
+> binding:
+>
+> 1. **Auth:** a **per-pool Entra credential** — the ingest validates an Azure AD
+>    bearer token (audience = the console app registration; issuer = the estate
+>    tenant), minted by a per-pool app registration / the pool's identity — or,
+>    at minimum, a **per-workspace token minted + rotated by the Fix-it wizard**
+>    and stored per-pool. **Never one global static secret.** Rotation is
+>    documented in the runbook.
+> 2. **Scope:** the ingest MUST assert the resolved output item ids belong to
+>    the workspace the presented credential is authorized for; cross-workspace
+>    edge writes are rejected (403) and logged.
+> 3. **Limits:** enforce a body-size cap (mirror eventhouse's explicit byte
+>    cap), a per-credential rate limit, and a cap on `columnMappings` fan-out
+>    per RunEvent (Cosmos-write-amplification guard).
+> 4. **Topology:** the ingest route is reachable **only via the private/in-VNet
+>    ingress** (or an Event Hubs transport) — NOT on the public FD host.
+
 **Exact files.**
-- New BFF ingest route `apps/fiab-console/app/api/lineage/openlineage/route.ts`
-  (mirrors the per-item ingest pattern at
-  `app/api/items/eventhouse/[id]/ingest/route.ts`): validates a bearer shared
-  token (`LOOM_OPENLINEAGE_INGEST_TOKEN`), parses an OpenLineage RunEvent, maps
-  its `inputs[]`/`outputs[]` datasets + `columnLineage` facet
-  (`fields.<col>.inputFields[]`) into `RecordEdgeInput.columnMappings` (L1), and
-  calls `recordThreadEdge`. Resolves ADLS `abfss://` paths → Loom item ids via
-  the existing identity resolver (`unified-lineage.normalizeIdentity` `path:` key).
+- New BFF ingest route `apps/fiab-console/app/api/lineage/openlineage/route.ts`:
+  validates the **per-pool/per-workspace Entra bearer** (see redesign box; a
+  small `lib/azure/openlineage-auth.ts` verifier — JWKS-validated AAD token,
+  audience + tenant pinned, workspace claim → scope check), enforces the
+  body-size cap + per-credential rate limit + `columnMappings` fan-out cap,
+  parses an OpenLineage RunEvent, maps its `inputs[]`/`outputs[]` datasets +
+  `columnLineage` facet (`fields.<col>.inputFields[]`) into
+  `RecordEdgeInput.columnMappings` (L1) **only for items in the authorized
+  workspace**, and calls `recordThreadEdge`. Resolves ADLS `abfss://` paths →
+  Loom item ids via the existing identity resolver
+  (`unified-lineage.normalizeIdentity` `path:` key). Served on the in-VNet
+  ingress only.
 - New `apps/fiab-console/lib/azure/openlineage-ingest.ts` — pure mapper
   (OpenLineage RunEvent → `RecordEdgeInput[]`), fully unit-testable, SDK-free.
 - `platform/fiab/bicep/modules/landing-zone/synapse-spark-pools.bicep` — add
   `sparkConfigProperties` to the pool: `spark.extraListeners =
   io.openlineage.spark.agent.OpenLineageSparkListener`,
   `spark.openlineage.transport.type = http`,
-  `spark.openlineage.transport.url = <LOOM console ingest URL>`,
-  `spark.openlineage.transport.auth.type = api_key`,
-  `spark.openlineage.transport.auth.apiKey = <token>`,
-  `spark.openlineage.namespace = loom`.
+  `spark.openlineage.transport.url = <in-VNet console ingest URL>`,
+  `spark.openlineage.transport.auth.*` = the per-pool credential wiring (Entra
+  client-credential token provider where the listener supports it; else the
+  per-workspace minted token, rotated), `spark.openlineage.namespace = loom`.
+  Params ride the R0 config object.
 - New `scripts/csa-loom/openlineage-pool-setup.sh` — idempotent
   `az synapse spark pool update` that uploads the OpenLineage listener jar as a
   **workspace library** (required for DEP-enabled workspaces — Learn: public-repo
@@ -214,24 +249,28 @@ resource). *Opt-in enhancement noted in parity doc:* Event Hubs transport
 (`transport.type=kafka`/http→EH) for high-volume estates — Event Hubs is GA in
 Gov; not required for v1.
 
-**Env vars / gates.**
-- `LOOM_OPENLINEAGE_INGEST_TOKEN` (**secret**, `secretRef` in `apps[]` env — mirror
-  the MSAL secret pattern) — validates the ingest route.
-- `LOOM_OPENLINEAGE_ENDPOINT` (informational; the URL stamped onto the pool).
+**Env vars / gates (rev 2 — redesigned auth).**
+- `LOOM_OPENLINEAGE_AUTH_MODE` (`entra` default | `workspace-token`) + the
+  per-pool credential wiring (`secretRef` in `apps[]` env for the verifier
+  config — **no single global ingest token**; per-workspace tokens, where used,
+  live per-pool and are minted/rotated by the Fix-it wizard; S1's expiry
+  inventory tracks them).
+- `LOOM_OPENLINEAGE_ENDPOINT` (informational; the in-VNet URL stamped onto the
+  pool).
 - `ENV_CHECKS` entry (`lib/admin/env-checks.ts:380+`), following the verbatim
   shape:
   ```ts
   { id: 'svc-openlineage', category: 'catalog-governance',
     title: 'Spark column lineage (OpenLineage)', severity: 'optional',
-    required: ['LOOM_OPENLINEAGE_INGEST_TOKEN'], warnOnMiss: true,
+    required: ['LOOM_OPENLINEAGE_AUTH_MODE'], warnOnMiss: true,
     optionalDefault: true,
+    availability: { commercial: 'ga', gccHigh: 'ga', il5: 'ga' },   // X2 field
     optionalDefaultDetail: 'Column lineage still flows from Databricks UC, dbt, and ADF Copy mappings; the Synapse-Spark OpenLineage feed is an additive source.',
-    remediation: 'Set LOOM_OPENLINEAGE_INGEST_TOKEN and run scripts/csa-loom/openlineage-pool-setup.sh to install the listener on the Spark pool.',
+    remediation: 'Run scripts/csa-loom/openlineage-pool-setup.sh to install the listener + mint the per-pool credential on the Spark pool.',
     provisionedBy: 'modules/landing-zone/synapse-spark-pools.bicep (sparkConfigProperties + workspace library) → apps[] env',
     role: 'Synapse Spark pool contributor (to upload the workspace library)' },
   ```
-  Add `LOOM_OPENLINEAGE_INGEST_TOKEN: '<shared-secret>'` to `VALUE_HINT`
-  (`env-checks.ts:77`).
+  Update `lib/gates/__tests__/registry.test.ts` parity in the same PR.
 - `GATE_META` entry (`lib/gates/registry.ts:198`) — `id:'svc-openlineage'`:
   ```ts
   'svc-openlineage': {
@@ -250,13 +289,22 @@ Gov; not required for v1.
   `GET /api/catalog/lineage?...&columns=true`.
 - G1 receipt: browser walk of the Lakehouse → Lineage tab showing the Spark-
   derived column edges on real data; endpoint 200 body first 300 chars in PR.
-- Honest gate: token unset → the OpenLineage source is silently absent (default-
-  ON of the OTHER sources preserved), with a Fix-it wizard on the gate registry
-  page (G2).
+- **Security acceptance (rev 2, F2):** (a) an expired/foreign-tenant bearer →
+  401; (b) a valid credential posting an edge whose resolved output item belongs
+  to a DIFFERENT workspace → 403 + audit log line; (c) an oversized RunEvent
+  (> byte cap) → 413; (d) a burst past the rate limit → 429; (e) prove the route
+  is NOT reachable via the public FD host (curl from outside the VNet → no
+  route).
+- Honest gate: credential unset → the OpenLineage source is silently absent
+  (default-ON of the OTHER sources preserved), with a Fix-it wizard (mint +
+  stamp the per-pool credential) on the gate registry page (G2).
 
-**Per-cloud.** Commercial: live. Gov: live — Synapse Spark + workspace libraries
-GA in Gov; ingest route is in-cluster (no external host). IL5: design-doc only —
-note DEP-workspace jar-upload requirement and no public-repo pull.
+**Per-cloud.** Commercial: live — **note (rev 2): the console's default topology
+is fronted by public Front Door, so "in-cluster" is NOT automatic; the ingest is
+explicitly bound to the in-VNet ingress in both clouds.** Gov: live — Synapse
+Spark + workspace libraries GA in Gov; same in-VNet-only binding. IL5:
+design-doc only — note DEP-workspace jar-upload requirement, no public-repo
+pull, and PE-only ingest per the X-IL5 checklist.
 
 ---
 
@@ -288,7 +336,15 @@ no-code ingestion path where OpenLineage isn't emitted.
 - `platform/fiab/bicep/modules/admin-plane/lineage-extractor-function.bicep` —
   new Function App (Linux Y1 consumption, per the gates-zero recipe), MI with
   Cosmos + Data Factory Reader + Synapse Artifacts Reader, App Insights, wired
-  into `admin-plane/main.bicep` alongside `report-subscriptions-function.bicep`.
+  into `admin-plane/main.bicep` alongside `report-subscriptions-function.bicep`
+  (this path IS the binding precedent — rev 2 consistency 3a). **Rev-2 Function
+  standard applies:** identity-based `AzureWebJobsStorage__accountName` +
+  managed-identity credential (NO storage account key — do not mirror the
+  report-subscriptions `listKeys()` connection string), all role grants declared
+  in this module (`guid()`, `skipRoleGrants`-aware), params via the R0 config
+  object, and a **Rollback subsection** (last-known-good package +
+  `az functionapp` redeploy; drill via the existing `bicep-rollback` DR
+  scenario).
 
 **Backend/infra.** New timer Function + its bicep module. Reuses ADF/Synapse
 management + Cosmos. *Opt-in enhancement (parity doc):* an Event Grid subscription
@@ -493,8 +549,9 @@ Loom-native columns). IL5: design-doc.
 
 # WORKSTREAM A — ANALYST-SURFACE DEPTH
 
-Three sub-tracks: **DAX depth (A1–A5)**, **report visuals depth (A6–A9)**,
-**Spark reliability (A10–A13)**.
+Four sub-tracks (rev 2): **DAX depth (A1–A5)**, **report visuals depth
+(A6–A9)**, **Spark reliability (A10–A13)**, **real-time collaboration depth
+(A14 — NEW, product review)**.
 
 ## Sub-track: Semantic model / DAX depth
 
@@ -629,7 +686,11 @@ roadmap; documented, not run).
 
 **Goal.** A dedicated golden suite that asserts each supported DAX function's
 **numeric result** matches a Power BI reference, over seeded warehouse data — the
-G1-grade correctness gate for A1–A4.
+G1-grade correctness gate for A1–A4. **Ordering clarification (rev 2,
+consistency 2d):** A5 lands the harness + seeded reference data FIRST; each
+function's golden row is then added **in the A1/A2/A3 PR that introduces the
+function** — the harness gates the *numeric result*, not its own existence (no
+circularity).
 
 **Exact files.**
 - New `apps/fiab-console/lib/azure/__tests__/dax-golden/` — fixtures: a seeded
@@ -668,6 +729,10 @@ a format section today without a renderer (vaporware risk).
 facet by the small-multiples field well, N×M grid of mini-charts sharing axes),
 `lib/editors/report-designer/visual-body.tsx` (pass the facet well),
 `lib/editors/report/format-pane.tsx` (grid rows/cols, shared-axis toggle).
+**File-size ratchet note (rev 2, consistency 3f):** `loom-chart.tsx` (~2800) and
+`visual-body.tsx` are on R7/R14's ratchet allowlist — this PR must stay under
+their ceilings or run `check-file-size.mjs --update-baseline` with a one-line
+justification (extend-then-decompose policy; serialize vs the decomposition PR).
 
 **Backend/infra / env / gates.** None (client render over the same query — add a
 facet column to the wells→SQL GROUP BY).
@@ -676,7 +741,9 @@ facet column to the wells→SQL GROUP BY).
 real faceted grid bound to real data; format-pane grid controls work. G1: browser
 walk, dark+light screenshots, narrow-width pass. Parity doc row flips ✅.
 
-**Per-cloud.** Cloud-agnostic. IL5 design-doc.
+**Per-cloud.** Cloud-agnostic DOM; one-line render receipt on Commercial AND the
+Gov console (same DOM, single note suffices — rev 2, consistency 4b). IL5
+design-doc.
 
 ### A7 — Analytics-pane depth: reference/statistical lines + anomaly band
 
@@ -689,14 +756,18 @@ visuals, real data.
 UI), `lib/components/charts/loom-chart.tsx` (render overlays;
 `CARTESIAN_VISUAL_TYPES`), the analytics compute (percentile/median/anomaly over
 the visual's result set — server-side in the query route or client over returned
-rows).
+rows). **File-size ratchet note (rev 2):** `analytics-pane.tsx` (~2100) +
+`loom-chart.tsx` (~2800) are ratchet-capped — stay under ceiling or
+`--update-baseline` with justification (extend-then-decompose; serialize vs
+R7/R14).
 
 **Backend/infra / env / gates.** None new.
 
 **Acceptance.** Each line type computes from real data and renders; anomaly band
 flags real outliers on seeded series. G1 receipt + screenshots. Parity doc rows ✅.
 
-**Per-cloud.** Cloud-agnostic. IL5 design-doc.
+**Per-cloud.** Cloud-agnostic DOM; one-line render receipt on Commercial AND Gov
+(rev 2, consistency 4b). IL5 design-doc.
 
 ### A8 — Map hardening + Gov honest-gate + basemap-free choropleth fallback
 
@@ -737,7 +808,10 @@ table cells uniformly.
 pages + filter carry), `lib/editors/report/drillthrough-pane.tsx` (new),
 `lib/editors/report-designer/visual-body.tsx` (matrix/table drill + CF painters),
 `lib/editors/report/conditional-format.tsx` (ensure `applyConditionalFormat` /
-`cellStyleFor` cover matrix + all cell types).
+`cellStyleFor` cover matrix + all cell types). **File-size ratchet note
+(rev 2):** `visual-body.tsx` is ratchet-capped — stay under ceiling or
+`--update-baseline` with justification (extend-then-decompose; serialize vs the
+R8–R12/R14 decomposition PRs).
 
 **Backend/infra / env / gates.** None new (filters fold into the existing query
 route).
@@ -747,20 +821,26 @@ source filter applied on real data; matrix drill-down expands real hierarchy
 levels; conditional formatting renders on matrix/table cells. G1 receipt; parity
 doc `docs/fiab/parity/report.md` shows zero ❌ vs Power BI interactions.
 
-**Per-cloud.** Cloud-agnostic. IL5 design-doc.
+**Per-cloud.** Cloud-agnostic DOM; one-line render receipt on Commercial AND Gov
+(rev 2, consistency 4b). IL5 design-doc.
 
 ## Sub-track: Spark reliability hardening
 
 Builds on the existing reaper/circuit-breaker/lease-store/keep-warm stack.
 
-### A10 — Spark pool health telemetry + admin dashboard page
+### A10 — Spark pool health telemetry + admin dashboard *(rev 2: Phase-1 VISIBLE EARLY WIN; hub tab)*
 
 **Goal.** Close the biggest observability gap: warm/leased/warming counts,
 circuit-breaker state, reaper activity, and pool `provisioningState` are **API-
-only** today — build the operator dashboard.
+only** today — build the operator dashboard. **Rev-2 sequencing (product
+review): this is the program's visible early win — it only READS existing state
+(`getPoolStatus()`), has zero dependencies, and ships in Phase 1** (rev-1's
+invisible Phase-0/1 runway was a momentum risk).
 
-**Exact files.** New `apps/fiab-console/app/admin/spark-pools/page.tsx` (or a tab
-on `app/admin/capacity/page.tsx` next to `SparkTelemetryAuditPanel`); new
+**Exact files.** **A "Spark pools" TAB on the Health & Reliability hub** (rev 2
+hub consolidation — extend `/admin/health`; not a standalone
+`/admin/spark-pools` page; registered via `admin-shell.tsx`/`admin-overview.tsx`,
+passes `lib/nav/__tests__/nav-registries.test.ts`); new
 `app/api/admin/spark/health/route.ts` aggregating `getPoolStatus()`
 (`spark-session-pool.ts:1442`) + Synapse pool `provisioningState`
 (`synapse-dev-client.ts`) + reaper counters; a `SparkPoolHealthPanel` component
@@ -770,9 +850,10 @@ on `app/admin/capacity/page.tsx` next to `SparkTelemetryAuditPanel`); new
 
 **Env vars / gates.** None (tenant-admin gated route).
 
-**Acceptance.** Dashboard shows live warm/leased/warming/circuit-breaker/
+**Acceptance.** The hub tab shows live warm/leased/warming/circuit-breaker/
 provisioningState from a real pool; prove-warm probe surfaced. G1: browser walk,
-dark+light, real data. ux-baseline §7 checklist checked.
+dark+light, real data. ux-baseline §7 checklist checked; `nav-registries.test.ts`
+green.
 
 **Per-cloud.** Commercial + Gov: live. IL5: design-doc.
 
@@ -784,17 +865,23 @@ exponential backoff + admin notification.
 
 **Exact files.** New `apps/fiab-console/lib/azure/spark-pool-recovery.ts`
 (poll → detect FAULTED → `deleteSparkPool` + `createSparkPool` via
-`synapse-dev-client.ts` with backoff + a self-heal guard against thrash); wire
-into the keep-warm heartbeat (`/api/internal/spark/keep-warm`) and the A10
-dashboard (manual "Recreate pool" action + auto toggle); notification via the
-existing notifications container. New `scripts/csa-loom/recreate-spark-pool.sh`
-runbook (the missing drain/recreate script).
+`synapse-dev-client.ts` with backoff + a self-heal guard against thrash; **file-
+size note: `spark-session-pool.ts` is ratchet-capped — extend-then-decompose
+policy applies**); wire into the keep-warm heartbeat
+(`/api/internal/spark/keep-warm`) and the A10 hub tab (manual "Recreate pool"
+action + auto toggle); admin notification via the existing notifications
+container **and the shared alert-dispatch convention (`LOOM_ALERT_ACTION_GROUP_ID`
+via `lib/azure/alert-dispatch.ts` — rev 2 alert standard; a FAULTED-pool
+recreate is an operator-alertable event)**. New
+`scripts/csa-loom/recreate-spark-pool.sh` runbook (the missing drain/recreate
+script).
 
 **Backend/infra.** ARM Spark pool CRUD (existing client). No new resource.
 
-**Env vars / gates.** `LOOM_SPARK_AUTORECOVER` (default-ON per
-`loom-default-on-opt-out`; opt-out env), `LOOM_SPARK_RECOVER_MAX_ATTEMPTS`.
-ENV_CHECKS `optional`, `optionalDefault:true`.
+**Env vars / gates.** `LOOM_SPARK_AUTORECOVER_ENABLED` (rev 2 `_ENABLED` naming
+convention; default-ON per `loom-default-on-opt-out`; opt-out env),
+`LOOM_SPARK_RECOVER_MAX_ATTEMPTS`. ENV_CHECKS `optional`,
+`optionalDefault:true`; registry.test.ts parity; `availability` field.
 
 **Acceptance.** A deliberately faulted pool (chaos action from A13) is detected
 and recreated automatically; admins notified; no thrash loop (backoff verified).
@@ -851,22 +938,96 @@ external cron (not setInterval) via a log receipt.
 
 **Per-cloud.** Commercial + Gov: live drill in each UAT harness. IL5: design-doc.
 
+## Sub-track: Real-time collaboration depth
+
+### A14 — Collab push transport + presence/comments on the high-value editors *(NEW, rev 2 — product review §3.1)*
+
+**Grounding (verified).** Presence + comments EXIST (`lib/collab/` ~1,163 LOC:
+`canvas-presence-model/store`, `canvas-comment-model/store`,
+`item-comment-model`, hooks; plus `canvas-collab-kit.tsx` +
+`canvas-collab-layer.tsx`, which live under `lib/components/canvas/` — NOT
+`lib/collab/` (round-2 path correction);
+routes `/api/items/[type]/[id]/canvas-presence` + `.../comments`) but are wired
+into only **4 canvas surfaces** (`agent-flow-canvas`, `eventstream/visual-designer`,
+`pipeline/canvas`, `mapping-dataflow-designer`) and the transport is **polling**
+(~5s heartbeat; no Web PubSub / SignalR anywhere). Fabric co-authoring is
+live/push — this is the depth gap. Absent from both this PRP (rev 1) and
+Track-C.
+
+**Goal.** Move presence off polling onto a push transport and extend
+presence+comments beyond the 4 canvases to the high-value editors (notebook,
+report-designer, semantic-model, one SQL editor), so multi-user is A-grade
+(Fabric co-authoring is the floor).
+
+**Files.**
+- `apps/fiab-console/lib/collab/presence-transport.ts` (NEW) — pluggable
+  transport: default keeps the existing poll (zero-infra fallback), opt-in
+  **Azure Web PubSub** (`@azure/web-pubsub`) push when `LOOM_WEBPUBSUB_ENDPOINT`
+  is set. `use-canvas-presence.ts` consumes the transport instead of its inline
+  poll.
+- `app/api/collab/negotiate/route.ts` (NEW) — session-gated Web PubSub
+  client-access-token negotiate (UAMI-signed), honest-gated when the service is
+  unset.
+- Extend the `canvas-collab-layer.tsx` (in `lib/components/canvas/`) mount into
+  `notebook-editor.tsx`, `report-designer.tsx`,
+  `phase3/semantic-model-editor.tsx`, and one SQL editor
+  (`unified-sql-database-editor.tsx`) — presence avatars + item-comment thread
+  rail. **(Sequencing, precision per round-2 F3: AFTER R9 for the notebook and
+  R10 for the semantic-model editor so the mount lands in the decomposed shell,
+  not the monolith; report-designer is ALREADY decomposed — mount into its
+  existing shell, no decomposition PR exists for it; the SQL-editor target
+  mounts after its decomposition if one is scheduled, else directly. Hard
+  ordering in the master spine.)**
+
+**Backend/infra (bicep-sync).**
+`platform/fiab/bicep/modules/admin-plane/web-pubsub.bicep` (NEW,
+`Microsoft.SignalRService/webPubSub`, in-VNet private endpoint), UAMI
+`Web PubSub Service Owner`, wired into the admin-plane orchestrator **via the R0
+config object** (`loomWebPubSubEnabled` rides the collab/observability bag;
+opt-in — the poll is the default so there is no day-one gate).
+
+**Env/gate.** `LOOM_WEBPUBSUB_ENDPOINT` → ENV_CHECKS `svc-collab-presence`
+(`optionalDefault: true`, category `platform`, `availability` field set),
+`GATE_META` Fix-it `wizard` (deploy Web PubSub); registry.test.ts parity. Poll
+fallback means unset = silent, no red.
+
+**Acceptance (G1).** Two minted sessions on the same notebook: presence avatars
+appear <1s apart with Web PubSub set (network shows the WS connection, not the
+poll); with it unset, the poll path still shows peers (degraded, honest). A
+comment posted by session A appears for session B. Dark+light, narrow-width
+pass.
+
+**Per-cloud.** Commercial: Web PubSub live. **Gov (GCC-High): Azure Web PubSub
+availability must be Learn-verified at implementation — if unavailable, the
+poll transport IS the Gov path** (honest, documented; exactly the
+no-fabric-dependency Azure-native-fallback pattern). IL5: poll-only in-VNet (no
+push service assumed); design note per the X-IL5 checklist.
+
 ---
 
 ## Cross-workstream notes
 
-- **Bicep-sync (per `no-vaporware`).** New modules:
-  `admin-plane/lineage-extractor-function.bicep` (L3); edits to
+- **Bicep-sync (per `no-vaporware`; rev 2 — R0 rule applies).** New modules:
+  `admin-plane/lineage-extractor-function.bicep` (L3),
+  `admin-plane/web-pubsub.bicep` (A14); edits to
   `landing-zone/synapse-spark-pools.bicep` (L2 Spark config + library). New
-  `apps[]` env in `admin-plane/main.bicep`: `LOOM_OPENLINEAGE_INGEST_TOKEN`
-  (secretRef), `LOOM_OPENLINEAGE_ENDPOINT`, `LOOM_SPARK_VCORE_BUDGET`,
-  `LOOM_SPARK_TENANT_SESSION_MAX`, `LOOM_SPARK_AUTORECOVER` — each a computed
-  `eff*` var with an honest-gate `''` default.
+  `apps[]` env in `admin-plane/main.bicep`: the L2 per-pool credential wiring
+  (secretRef; no global ingest token — rev 2 F2), `LOOM_OPENLINEAGE_ENDPOINT`,
+  `LOOM_SPARK_VCORE_BUDGET`, `LOOM_SPARK_TENANT_SESSION_MAX`,
+  `LOOM_SPARK_AUTORECOVER_ENABLED`, `LOOM_WEBPUBSUB_ENDPOINT` — each a computed
+  `eff*` var with an honest-gate `''` default, **wired via the R0 config-object
+  pattern (`main.bicep` is at the 256-param ARM cap — no new top-level
+  params).**
 - **Gate registry (per G2).** Every new gate (`svc-openlineage`, optional
-  `svc-lineage-extractor`, Spark tunables) lands in `ENV_CHECKS` **and**
-  `GATE_META` together (registry test enforces parity) with an inline **Fix-it**
-  (`kind:'wizard'` for OpenLineage pool setup, `env-picker` for tunables) and an
-  Admin gate-page row.
+  `svc-lineage-extractor`, `svc-collab-presence`, Spark tunables) lands in
+  `ENV_CHECKS` **and** `GATE_META` together (registry test enforces parity —
+  update `lib/gates/__tests__/registry.test.ts` per item) with an inline
+  **Fix-it** (`kind:'wizard'` for OpenLineage pool setup, `env-picker` for
+  tunables), the X2 `availability` field, and an Admin gate-page row.
+  **Serialization (rev 2):** these env-adding PRs serialize on
+  `env-checks.ts`/`registry.ts`/`registry.test.ts` with every other env-adding
+  item program-wide; A5/A13/L5 `playwright.config.ts`/`loom-ui-verify` additions
+  serialize on that file too.
 - **Default-ON (per `loom-default-on-opt-out`).** Column lineage renders from
   whatever sources are configured with **no day-one gate**; DAX A1–A3 folds run on
   the default native backend with no opt-in; Spark auto-recovery is opt-out.

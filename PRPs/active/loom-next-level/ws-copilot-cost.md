@@ -1,12 +1,33 @@
 # loom-next-level — Workstreams E (Copilot Eval Harness) & C (Cost Intelligence)
 
-> Draft for the master PRP. Author: copilot-cost workstream agent. Date: 2026-07-22.
+> Draft for the master PRP (rev 2 — post-adversarial-review). Author: copilot-cost
+> workstream agent. Date: 2026-07-22.
 > Scope: `apps/fiab-console` + `azure-functions` + `platform/fiab/bicep`.
 > Conventions inherited from the master PRP: PR-sized items with IDs; each item lists
 > goal, exact files, backend/infra (bicep-sync per `no-vaporware.md`), env vars
 > (ENV_CHECKS in `lib/admin/env-checks.ts` + gate registry `lib/gates/registry.ts`
-> with a Fix-it per G2), acceptance incl. a G1 browser/E2E receipt, and a per-cloud
-> section (Commercial / Gov GCC-High / IL5-air-gapped).
+> with a Fix-it per G2 **+ `lib/gates/__tests__/registry.test.ts` parity updated in
+> the same PR; new EnvSpecs carry the X2 `availability` field**), acceptance incl. a
+> G1 browser/E2E receipt, and a per-cloud section (Commercial / Gov GCC-High /
+> IL5-air-gapped).
+>
+> **Rev-2 conventions binding on every item here (see master universal standards):**
+> **R0 param-cap rule** — `admin-plane/main.bicep` is at the 256-param ARM cap;
+> every new bicep param (C1/E2/C3/L3 modules) rides an object/config param, never a
+> new top-level `param`. **Function standard** — Function bicep modules are named
+> `modules/admin-plane/<name>-function.bicep` and wired into `admin-plane/main.bicep`
+> alongside `report-subscriptions-function.bicep` (there is NO `modules/functions/`
+> directory); identity-based `AzureWebJobsStorage__accountName` +
+> `AzureWebJobsStorage__credential=managedidentity` (NO storage account key — the
+> report-subscriptions precedent's `listKeys()` connection string must NOT be
+> mirrored); all role grants declared in bicep (`guid()` names,
+> `skipRoleGrants`-aware); each Function item carries a Rollback subsection
+> (last-known-good package + `az functionapp` redeploy + the existing
+> `bicep-rollback` DR scenario). **Alert standard** — alerts route through the
+> shared `lib/azure/alert-dispatch.ts` (O1) + `LOOM_ALERT_ACTION_GROUP_ID`.
+> **Admin pages** register via `admin-shell.tsx` + `admin-overview.tsx` (NOT
+> `NAV_ITEMS`) and must pass `lib/nav/__tests__/nav-registries.test.ts` (#2385).
+> Env-adding PRs serialize on `env-checks.ts`/`registry.ts`/`registry.test.ts`.
 
 ---
 
@@ -109,9 +130,31 @@ TTL 180d on results (keep run summaries indefinitely). Container created via cos
 - **Answer quality** = LLM-judge (grounding-fidelity rubric: grounding/relevance/completeness each 1-5) using the tier-router's **top tier** (`bestReasoningModelForCloud()` → strong deployment). Deterministic `mustMention`/`mustNotMention` guards gate BEFORE the judge (a forbidden phrase = auto-fail, no judge spend).
 - `pass` = retrievalHit && grounding≥4 && !forbiddenHit && mentionPass.
 
-**Backend/infra (bicep-sync):**
-- `platform/fiab/bicep/modules/functions/copilot-evaluator.bicep` — Linux Y1 Consumption Function (same shape as report-subscriptions), UAMI with: *Cognitive Services OpenAI User* on the AOAI/Foundry account, *Cosmos DB Built-in Data Contributor* on the Loom Cosmos, *Search Index Data Reader* on the `loom-docs` AI Search. Wired into the functions orchestrator.
+**Backend/infra (bicep-sync — rev 2 corrected paths):**
+- `platform/fiab/bicep/modules/admin-plane/copilot-evaluator-function.bicep` —
+  Linux Y1 Consumption Function following the `report-subscriptions-function.bicep`
+  precedent (rev 2: the previously-named `modules/functions/` directory does not
+  exist), **wired into `admin-plane/main.bicep` alongside
+  `report-subscriptions-function.bicep`** (params via the R0 config object). UAMI
+  with: *Cognitive Services OpenAI User* on the AOAI/Foundry account, *Cosmos DB
+  Built-in Data Contributor* on the Loom Cosmos, *Search Index Data Reader* on the
+  `loom-docs` AI Search — **all declared in the bicep module** (`guid()` names,
+  `skipRoleGrants`-aware; no post-deploy bootstrap grants). Storage:
+  identity-based `AzureWebJobsStorage__accountName` + managed-identity credential
+  + Storage Blob Data Owner grant in the module — **no storage account key**.
 - Cosmos container `loom-copilot-evals` (createIfNotExists at boot).
+- **Rollback (rev 2, SRE F4):** keep the last-known-good deployment package tag;
+  rollback = `az functionapp deployment source` / `az functionapp deploy` of the
+  prior package (documented command in the module README); drill step references
+  the existing `bicep-rollback` DR scenario.
+- **Capacity note (rev 2, SRE F10):** the nightly LLM-judge run (10 surfaces ×
+  12–20 Q, judged at top tier, + E6's ≥60 tier rows) competes with production
+  Copilot AOAI TPM — **use a separate judge deployment (or explicit TPM
+  allocation) and an off-peak schedule so prod Copilot quota is isolated**,
+  especially on Gov's reduced catalog. Size the Cosmos RU delta for
+  `loom-copilot-evals` writes (shared account with I3 shadow + C3 rules + V1
+  summaries) and the ACA/Function scale settings (min/max instances for the
+  scheduled jobs) in the PR — the one-page capacity note SRE F10 requires.
 
 **Env vars (ENV_CHECKS + gate registry):**
 - `COPILOT_EVALUATOR_CRON` (optional default). `LOOM_COPILOT_EVAL_JUDGE_DEPLOYMENT` (optional; defaults to `LOOM_AOAI_STRONG_DEPLOYMENT`→ mini→ default). `LOOM_COPILOT_EVAL_ENABLED` (default true, opt-out per `loom_default_on_opt_out`).
@@ -169,7 +212,12 @@ TTL 180d on results (keep run summaries indefinitely). Container created via cos
 - `app/admin/copilot-quality/page.tsx` — `AdminShell` + `PageShell`; top scorecard `TileGrid` (per-surface letter grade + retrieval hit-rate + grounding avg + trend sparkline), a trend chart (per-surface over runs), a "worst questions" table (lowest grounding, forbidden-phrase hits), and a drill-in dialog per question showing expected vs retrieved chunks + judge rationale. Fluent v9 + Loom tokens; `EmptyState` when no runs yet; skeletons while loading; honest MessageBar + **Fix it** if `svc-copilot-evaluator` gate is unresolved (G2).
 - `app/api/admin/copilot-quality/route.ts` — GET per-surface run summaries (Cosmos, `getOrComputeCached` 5-min TTL + `budgetMs`/`serveStaleOnError`). `app/api/admin/copilot-quality/[surface]/route.ts` — GET run history + per-question results for drill-in. `app/api/admin/copilot-quality/run/route.ts` — POST "Run now" (proxies the E2 HTTP trigger, session-validated).
 - `lib/admin/copilot-quality.ts` — pure roll-up/trend/grade helpers (shared with the page + route), unit-tested. Reuse `agent-quality.ts` grade + regression helpers where shapes align.
-- Register in `NAV_ITEMS` single-source (memory: NAV_ITEMS single-source) under Admin → Copilot & Agents.
+- **Registration (rev 2 corrected):** register via `lib/components/admin-shell.tsx`
+  + `lib/panes/admin-overview.tsx` under the Copilot & Agents group beside the
+  existing `/admin/agent-quality` + `/admin/copilot-usage` (NOT `NAV_ITEMS`);
+  acceptance includes passing `lib/nav/__tests__/nav-registries.test.ts` (#2385).
+  Per the master hub consolidation, copilot-quality stays a separate page (not a
+  Health & Reliability hub tab).
 
 **Backend/infra:** reads Cosmos `loom-copilot-evals` (real). No new infra beyond E2. **Env/gate:** surfaces the `svc-copilot-evaluator` gate with Fix-it.
 
@@ -197,6 +245,40 @@ TTL 180d on results (keep run summaries indefinitely). Container created via cos
 
 ---
 
+## SRCH1 — Federated-search relevance evals (WS-E pattern applied to `/catalog`) *(NEW, rev 2 — completeness gap 13)*
+
+**Goal:** WS-E evaluates only the Copilot RAG retrieval; the federated catalog
+search users type into directly (`lib/azure/catalog-search.ts`,
+`lib/azure/loom-search.ts` — governance-catalog-index, memory-vector-index) has
+**no relevance-eval harness**. Extend the exact WS-E machinery: golden
+query→expected-result sets for federated catalog search, scored
+hit-rate/MRR/NDCG against the real `catalog-search`/`loom-search` path, with a
+ratcheted floor and an admin drill-in.
+
+**Files/paths:**
+- `content/evals/search/<domain>.jsonl` — golden query sets (same `_schema.json`
+  lineage as E1; `expectedResults` = item ids/qualified names the federated
+  search should surface top-K).
+- Extend `azure-functions/copilot-evaluator` with a `searchRelevance` mode
+  (reuse E2's evaluator-core scoring; add NDCG to `scoreRetrieval`).
+- Extend `content/evals/eval-floors.json` with per-domain `searchHitRate` /
+  `ndcg` floors (E3 ratchet mechanics).
+- A "Search relevance" tab on `/admin/copilot-quality` (or a
+  `/admin/search-quality` sibling — default: tab, per the hub-consolidation
+  rule; `nav-registries.test.ts` green).
+
+**Backend/infra:** none new (rides E2's Function + roles). **Env:** none new.
+
+**Acceptance / G1:** a run reports search hit-rate/NDCG computed from real
+`catalog-search` results on the live deployment; a deliberately-broken index
+query drops the score below floor and fails `check-eval-regression.mjs`; the
+admin tab renders real per-domain scores (screenshots dark+light).
+
+**Per-cloud:** Commercial/Gov (AI-Search `.us`); IL5: in-image eval sets, no
+external fetch (X-IL5 item 3).
+
+---
+
 # WORKSTREAM C — COST INTELLIGENCE
 
 **Goal:** promote the existing cost stack from "chargeback rollup" to a FinOps
@@ -214,7 +296,7 @@ Builds ON `cost-client.ts` / `cost-management-client.ts` / `domain-chargeback.ts
 **Files/paths:**
 - `lib/azure/cost-client.ts` — wrap every cost `query`/`forecast` fan-out in `getOrComputeCached(key, 'cost-mgmt', compute, {ttlMs: 15*60_000, budgetMs: 45_000, serveStaleOnError: true, counterBackend: 'cost'})`. Add a `counterBackend: 'cost'` to `cache-counters.ts` so the perf surface shows cost-cache hit-rate. Add per-scope key builders `costKey(scope, timeframe, groupBy)`.
 - `lib/azure/cost-scope.ts` (NEW) — resolve sub / RG / tag scopes: `enumerateScopes()` (Loom subs + RGs from `listResources`), `tagScope(tagKey)` (Cost Management `query` with a `grouping` on `TagKey`). Bounded, unit-tested.
-- `platform/fiab/bicep/modules/**` — add a *Cost Management Reader* role assignment for the Console UAMI at the **billing/subscription** scope (widest reliable scope per `cost-management-client.ts` comment). Wire into the admin-plane orchestrator. This is the single most common honest-gate today; making it push-button-provisioned closes it.
+- `platform/fiab/bicep/modules/**` — add a *Cost Management Reader* role assignment for the Console UAMI at the **billing/subscription** scope (widest reliable scope per `cost-management-client.ts` comment). Wire into the admin-plane orchestrator — **any new param via the R0 config-object pattern (`main.bicep` is at the 256-param cap)**. This is the single most common honest-gate today; making it push-button-provisioned closes it.
 
 **Env/gate:** `LOOM_BILLING_SCOPE` (exists), `LOOM_SUBSCRIPTION_ID` (exists). Update the `chargeback`/`cost` ENV_CHECKS entry `role` to reference the now-bicep-granted role; gate-registry Fix-it kind `role-grant` (grant Cost Management Reader) + `resource-picker` (pick billing scope). **Default-ON:** per `loom_default_on_opt_out`, cost pulls run by default once the role exists; no spend gate.
 
@@ -250,18 +332,37 @@ Builds ON `cost-client.ts` / `cost-management-client.ts` / `domain-chargeback.ts
 
 **Files/paths (new dir `azure-functions/cost-anomaly-monitor/` OR extend an existing ops Function — new dir for isolation):**
 - `src/schedule.ts` — PURE: reuse/generalize `computeAnomalies` (currently in `cost-client.ts`) into a shared pure module `lib/azure/cost-anomaly-core.ts` (imported by BOTH the console and the Function), plus per-scope threshold config `{ scope, method:'3sigma'|'pct', threshold, minAbsDelta }`. Unit-tested.
-- `src/functions/costAnomalyTimer.ts` — `app.timer` on `COST_ANOMALY_CRON` (default daily `0 0 6 * * *`): read enabled anomaly rules from Cosmos (`loom-cost-anomaly-rules`, PK `/scope`) → for each scope pull daily series (C1 cached client) → `detectAnomalies` → for each firing anomaly: (a) write an in-product notification (Cosmos `loom-notifications` the console already reads), (b) POST the rendered alert to the delivery Logic App (same `deliverViaLogicApp` pattern as report-subscriptions) for email. Per-rule try/catch, honest failure telemetry.
+- `src/functions/costAnomalyTimer.ts` — `app.timer` on `COST_ANOMALY_CRON` (default daily `0 0 6 * * *`): read enabled anomaly rules from Cosmos (`loom-cost-anomaly-rules`, PK `/scope`) → for each scope pull daily series (C1 cached client) → `detectAnomalies` → for each firing anomaly: (a) write an in-product notification (Cosmos `loom-notifications` the console already reads), (b) dispatch the rendered alert through the shared `alert-dispatch` convention (O1) → the default action group's email receiver (rev 2 — not a parallel Logic App channel). Per-rule try/catch, honest failure telemetry.
 - `src/clients.ts` — REAL Cosmos + Logic App + cost pull (managed identity).
 - `host.json`/`package.json`/`tsconfig.json`/`vitest.config.ts`/`README.md`.
 
-**Backend/infra (bicep-sync):**
-- `platform/fiab/bicep/modules/functions/cost-anomaly-monitor.bicep` — Linux Y1 Function, UAMI: *Cost Management Reader* (billing scope) + *Cosmos Data Contributor* + rights to invoke the delivery Logic App. Wired into the functions orchestrator.
+**Backend/infra (bicep-sync — rev 2 corrected paths):**
+- `platform/fiab/bicep/modules/admin-plane/cost-anomaly-monitor-function.bicep` —
+  Linux Y1 Function following the `report-subscriptions-function.bicep` precedent
+  (rev 2: no `modules/functions/` directory exists), **wired into
+  `admin-plane/main.bicep`** (params via the R0 config object). UAMI: *Cost
+  Management Reader* (billing scope) + *Cosmos Data Contributor* — **declared in
+  bicep** (`guid()`, `skipRoleGrants`-aware). Identity-based
+  `AzureWebJobsStorage__accountName` — **no storage account key**.
 - Cosmos containers `loom-cost-anomaly-rules` + reuse `loom-notifications`. createIfNotExists at boot.
-- Reuse the existing delivery Logic App (report-subscriptions' Office 365 email) — no new Logic App.
+- **Alerting (rev 2 — unified per O1/the master alert standard):** email
+  delivery becomes a **receiver on the shared default action group**
+  (`LOOM_ALERT_ACTION_GROUP_ID`), dispatched via `lib/azure/alert-dispatch.ts` —
+  NOT a parallel Office-365 Logic App channel. (If the report-subscriptions
+  Logic App is reused as the action group's email mechanism, document why and
+  keep the var `LOOM_`-prefixed; the alert *path* is still the action group.)
+- **Rollback (rev 2, SRE F4):** last-known-good package + `az functionapp`
+  redeploy command documented; drill via the existing `bicep-rollback` scenario.
 
-**Env vars (ENV_CHECKS + gate registry):** `COST_ANOMALY_CRON` (optional), `LOOM_COST_ANOMALY_ENABLED` (default true, opt-out), `LOOM_ALERT_LOGICAPP` (reuse report-subscriptions' delivery Logic App var if shared, else new). New ENV_CHECKS `svc-cost-anomaly-monitor` (category `cost`/`finops`, `optional`, `warnOnMiss`) with Fix-it `wizard` (deploy Function) + `role-grant`.
+**Env vars (ENV_CHECKS + gate registry; registry.test.ts parity):**
+`COST_ANOMALY_CRON` (optional, per the report-subscriptions cron precedent),
+`LOOM_COST_ANOMALY_ENABLED` (default true, opt-out), shared
+`LOOM_ALERT_ACTION_GROUP_ID` (derived — rev 2 replaces the standalone
+`LOOM_ALERT_LOGICAPP` sink). New ENV_CHECKS `svc-cost-anomaly-monitor` (category
+`cost`/`finops`, `optional`, `warnOnMiss`, `availability` set) with Fix-it
+`wizard` (deploy Function) + `role-grant`.
 
-**Acceptance / G1:** live — seed an anomaly rule + inject a synthetic cost spike fixture (or run against a real spike), confirm the Function writes a real `loom-notifications` doc AND the Logic App sends a real email (attach the delivery-log row + the notification body first 300 chars + the Function log line). Vitest for `cost-anomaly-core` green.
+**Acceptance / G1:** live — seed an anomaly rule + inject a synthetic cost spike fixture (or run against a real spike), confirm the Function writes a real `loom-notifications` doc AND the shared action group delivers a real email via the alert-dispatch path (attach the delivery-log row + the notification body first 300 chars + the Function log line). Vitest for `cost-anomaly-core` green.
 
 **Per-cloud:** Commercial + Gov both run the timer (Gov `.us` Logic App + ARM host). IL5: email may be unavailable → the in-product notification is the primary channel; document the email path as an honest-gate when no Logic App is bound.
 
@@ -276,11 +377,23 @@ Builds ON `cost-client.ts` / `cost-management-client.ts` / `domain-chargeback.ts
 - `app/api/admin/finops/forecast/route.ts` — GET (C2, cached). `.../anomalies/route.ts` — GET feed + PUT rule config (threshold CRUD → `loom-cost-anomaly-rules`). `.../breakdown/route.ts` — GET per-scope rollup. `.../budgets/route.ts` — GET/POST/PUT/DELETE against `Microsoft.Consumption/budgets` (2023-05-01) — REAL create/update/delete, not read-only (`listBudgets` today only reads).
 - `lib/azure/budgets-client.ts` (NEW) — `createBudget`/`updateBudget`/`deleteBudget` (ARM PUT/DELETE on the Consumption budgets provider) + validation. Unit-tested against a mocked ARM.
 - `lib/admin/finops-view.ts` — pure view-model assembly (forecast + anomalies + breakdown + budgets → tiles), unit-tested.
-- Register in `NAV_ITEMS`.
+- **Registration (rev 2 corrected):** register via `lib/components/admin-shell.tsx`
+  + `lib/panes/admin-overview.tsx` (NOT `NAV_ITEMS` — that is the rail, not the
+  admin portal); acceptance includes passing
+  `lib/nav/__tests__/nav-registries.test.ts` (#2385). Per the master hub
+  consolidation, `/admin/finops` stays a separate hub and absorbs the
+  chargeback/usage-chargeback tabs.
 
-**Backend/infra:** budget CRUD needs the UAMI to have *Cost Management Contributor* (or Budgets write) at the target scope — add the role assignment in bicep (C1's module, upgraded scope). Anomaly rule CRUD writes `loom-cost-anomaly-rules` (C3's container).
+**Audit requirement (rev 2, SRE F7 — ATO):** every budget **create/update/delete**
+writes an `_auditLog` row via the existing `auditLogContainer()` helper —
+`{ kind:'finops.budget', who, oid, action:'create'|'update'|'delete', scope,
+prior, next, ts }`. Reviewer rejects the PR without the audit row in the G1
+receipt. Anomaly-rule CRUD (`PUT .../anomalies`) writes the same-shaped
+`kind:'finops.anomaly-rule'` row.
 
-**Env/gate:** reuse C1/C2/C3 vars; the page surfaces each unresolved gate with Fix-it (G2). Budget-write role is a new honest-gate `svc-budgets-write` (Fix-it `role-grant`).
+**Backend/infra:** budget CRUD needs the UAMI to have *Cost Management Contributor* (or Budgets write) at the target scope — add the role assignment in bicep (C1's module, upgraded scope; R0 config-object for any new param). Anomaly rule CRUD writes `loom-cost-anomaly-rules` (C3's container).
+
+**Env/gate:** reuse C1/C2/C3 vars; the page surfaces each unresolved gate with Fix-it (G2). Budget-write role is a new honest-gate `svc-budgets-write` (Fix-it `role-grant`; registry.test.ts parity).
 
 **Acceptance / G1 (BLOCKING browser E2E):** minted-session Playwright on live centralus — forecast chart renders real actual+forecast with the correct `method` badge; anomaly feed shows a real firing; breakdown shows real per-domain $ + LCU tied to the chargeback model; **create a real Azure Budget** via the UI and confirm it appears in the Azure portal / a subsequent `listBudgets`, then delete it (full CRUD round-trip). Narrow-width + first-open-clean passes. Screenshots dark+light. Receipt in PR.
 
@@ -291,10 +404,52 @@ Builds ON `cost-client.ts` / `cost-management-client.ts` / `domain-chargeback.ts
 
 ---
 
+## C5 — Scheduled snapshot delivery for KQL dashboards / scorecards / querysets *(NEW, rev 2 — product review §3.3, LOW)*
+
+**Goal:** `report-subscriptions` delivers reports on a schedule; Activator
+alerts on conditions — but there is **no scheduled snapshot delivery** ("email
+me this KQL dashboard / scorecard every morning") for KQL dashboards,
+scorecards, or saved KQL querysets. Extend the `report-subscriptions`
+timer-Function pattern to deliver a rendered snapshot of those item kinds on a
+schedule — the one delivery surface reports have that dashboards don't.
+
+**Files/paths:**
+- **Extend `azure-functions/report-subscriptions` (do NOT fork)** — add a
+  `kind: 'kql-dashboard' | 'scorecard' | 'queryset'` to the subscription doc +
+  a renderer branch per kind (dashboard tiles → ADX query + render; queryset →
+  result grid snapshot).
+- Subscription CRUD reuses the existing report-subscription admin surface with
+  a `kind` selector.
+
+**Backend/infra:** reuse the report-subscriptions Function + its delivery
+mechanism; new Cosmos field only (no new resource, no new bicep module). Note:
+when the shared Function is touched, apply the rev-2 Function standard
+storage-identity fix (F6) to it in the same PR if not already done.
+
+**Env/gate:** reuse the `report-subscriptions` gate; no new env.
+
+**Acceptance / G1:** create a daily subscription on a real KQL dashboard → the
+Function renders + delivers a real snapshot email via the existing delivery path
+(delivery-log row + first-300-char body in the PR).
+
+**Per-cloud:** Commercial + Gov identical (`.us` delivery). IL5: in-product
+notification channel per the C3 IL5 note (email honest-gated).
+
+---
+
 ## Cross-cutting
 
 - **No-Fabric-dependency:** every backend here is Azure-native (Cost Management, Consumption, Azure Monitor, AOAI, Cosmos, AI Search, Logic App). No `api.fabric`/`api.powerbi` on any path. The Copilot judge rubric explicitly asserts answers never claim a Fabric capacity is required (`mustNotMention`).
 - **Default-ON:** eval harness + cost intelligence run by default once their (bicep-provisioned) roles exist; the only gates are honest infra gates with Fix-it wizards (G2), registered in `lib/gates/registry.ts` and shown on `/admin/gates`.
 - **Shared pure modules** (extract-once, import-both): `lib/azure/cost-anomaly-core.ts` (console + Function), the `model-tier-router` (console + copilot-evaluator), `agent-quality.ts` regression helpers (agent-quality + copilot-quality).
 - **Ratchet convention** matches the existing vitest coverage floor (commit 14a16d8e): floors go up via a dedicated ratchet PR, never silently down.
-- **Sequencing:** E1→E2→(E3,E4)→E5→E6; C1→C2→C3→C4. E2 and C1 are the load-bearing foundations; do them first. Serialize any items touching `cost-client.ts` (C1/C2) and any touching the same admin nav (E5/C4).
+- **Sequencing (rev 2 — canonical, per the consistency review):**
+  **E1 → E2 → E3 → E4 → E5 → E6** (then SRCH1 anytime after E2/E3). **E1 then E2
+  are the load-bearing foundations; do them in that order** — E2's
+  `loadEvalSets` and its acceptance receipt ("run help: 20 Q") consume E1's
+  `content/evals/*.jsonl`, and E4's workflow runs E3's
+  `check-eval-regression.mjs`, so E3 precedes E4. C-chain: **C1 → C2 → C3 → C4 →
+  C5**; C1 is the C-side foundation. Serialize any items touching
+  `cost-client.ts` (C1/C2), any touching `env-checks.ts`/`gates/registry.ts`/
+  `registry.test.ts` (E2/C3/C4 + every other env-adding item program-wide), and
+  any touching the same admin nav registries (E5/C4).

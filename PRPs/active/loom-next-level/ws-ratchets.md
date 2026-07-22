@@ -1,21 +1,40 @@
 # WS-R — Convention Ratchets & Code Health
 
-Part of the master PRP **loom-next-level**. This workstream is **cloud-neutral
-code health**: it touches BFF-route structure, editor decomposition, generated
-typing, a shared editor hook, and repo layout. None of it changes an Azure vs
-Fabric code path, so there is **no per-cloud note** except where explicitly
-called out (only R20–R27, the repo restructure, has a CI/mkdocs surface that is
-cloud-adjacent, and even there the concern is workflow references, not backends).
+Part of the master PRP **loom-next-level** (rev 2 — post-adversarial-review).
+This workstream is **cloud-neutral code health**: it touches BFF-route
+structure, editor decomposition, generated typing, a shared editor hook, and
+repo layout. None of it changes an Azure vs Fabric code path. **Per-cloud
+contract (rev 2, per the master carve-out):** every item in Areas 0–4 (R0–R19)
+plus R29/MIG1 carries an implicit **"Per-cloud: cloud-neutral"** declaration in
+place of the Commercial/GCC-High/IL5 rows — the ONLY items with a real per-cloud
+surface are R21 (Commercial vs Gov deploy workflows, duplicated path refs) and
+R28 (ADO default all clouds, GitHub honest-gated in GCC-High/IL5), which state
+their own rows.
+
+**Rev-2 additions:** **R0** (the BLOCKER bicep param-cap prerequisite the whole
+program depends on), **R28** (git-integration-client consolidation — product
+review), **R29** (parity-doc-freshness ratchet — completeness review), **MIG1**
+(Cosmos schema-migration convention — completeness review), and Area 5
+(R20–R27) re-sequenced as an **independent housekeeping track — execute last,
+any time**.
 
 **Shared conventions for every item below**
-- Each item is PR-sized, has a stable ID (R1, R2 …), a goal, exact files/paths,
-  and acceptance criteria that include a **verification receipt** (command +
-  expected output, or a browser E2E where a live editor is touched per G1).
+- Each item is PR-sized, has a stable ID (R0, R1, R2 …), a goal, exact
+  files/paths, and acceptance criteria that include a **verification receipt**
+  (command + expected output, or a browser E2E where a live editor is touched
+  per G1).
 - Every new guard follows the **repo ratchet pattern** already used by
   `scripts/ci/check-file-size.mjs` and `scripts/ci/check-no-bare-client-fetch.mjs`:
   a baseline captured **~2 pts below** (or, for counts, **at**) the measured
   value, **up-only cannot regress**, and a `--update-baseline` regen path. The
   ratchet only tightens.
+- **Shared ratchet mechanism (rev 2, consistency 5b):** R3, R17, R19, I5's
+  credential-adoption guard, and X1's endpoint-literal guard are all
+  "count-a-forbidden-pattern + path-glob + baseline + `--update-baseline`"
+  guards. Build ONE tested helper — `scripts/ci/_ratchet-count.mjs` (pattern +
+  glob + baseline file in; pass/fail + regen out) — with R3 (the first new
+  guard), and have the other four consume it instead of five copies of the
+  mechanic.
 
 ---
 
@@ -47,6 +66,51 @@ The canonical migrated shapes to target (read and confirmed):
   (`guardAdxRequest` → `apiHonestGateError('svc-adx', …)`).
 - **gate envelope** — `lib/api/gate-envelope.ts`
   (`apiHonestGateError(gateId, opts)`, normalized `{ ok:false, gated:true, gate:{…} }`).
+
+---
+
+# AREA 0 — Bicep param-cap remediation (R0) *(NEW, rev 2 — BLOCKER; consistency 3b)*
+
+## R0 — Consolidate `admin-plane/main.bicep` env params into object params (prerequisite for EVERY bicep/env-adding item)
+
+**Ground truth (verified).** `platform/fiab/bicep/modules/admin-plane/main.bicep`
+declares **exactly 256 `param`s — the ARM hard cap** (memory
+`csa_loom_build_gate_bicep_param_cap`). The rev-1 PRP adds params/modules to
+this file from V1 (`loomSyntheticMonitorEnabled`), DR0
+(`enableBlobPitr`/`cosmosBackupTier`), DR4 (`loomDrDrillsEnabled`), C1/E2/C3/L3
+(Function modules + params), I1 (`ws-identity-rbac` wiring) and rev-2 items (S1,
+O1, RUM1, CMK1, V5, A14). **Any new top-level `param` breaks the deploy.**
+
+**Goal.** BEFORE any of those items land, consolidate related env/feature params
+into **object (bag) params** — e.g. `param observabilityConfig object` (synthetic
+monitor, drift, alerting, RUM), `param drConfig object` (PITR tier, blob-PITR,
+drill flags), `param functionAppsConfig object` (per-Function enable/cron/
+settings), `param workspaceIdentityConfig object` — freeing headroom well below
+the cap and establishing the pattern every later item cites: **"new bicep params
+go via a config-object or nested-module param, never a new top-level `param`."**
+
+**Exact files.**
+- `platform/fiab/bicep/modules/admin-plane/main.bicep` — introduce the config
+  objects; migrate an initial tranche of existing single-purpose flag params
+  into them (keep ARM interface compatibility notes per param moved).
+- `platform/fiab/bicep/params/commercial-full.bicepparam` + the Gov paramfile —
+  updated in lockstep.
+- `platform/fiab/bicep/main.bicep` — pass-through updates (mind the bicep
+  256-param cap there too — memory: main.bicep AT cap).
+- `docs/fiab/` deploy docs — document the bag-pattern rule.
+
+**Acceptance.**
+- `az deployment sub what-if` (V5 lane once it exists; manual before) shows
+  **NoChange** for the live estate after the refactor — the consolidation is
+  behaviorally inert. Receipt: the what-if summary.
+- Post-R0 `param` count in `admin-plane/main.bicep` is ≤ 236 (≥20 headroom) and
+  the count is asserted by a tiny CI check
+  (`scripts/ci/check-bicep-param-cap.mjs`, warn at 240 / fail at 250) so drift
+  back toward the cap is loud.
+- Every later bicep-touching item's PR references the R0 rule.
+
+**Per-cloud.** Cloud-neutral (same modules deploy both estates; both paramfiles
+updated together). IL5: n/a (design-time artifact).
 
 ---
 
@@ -323,6 +387,17 @@ but breaks at runtime (and can freeze the renderer — a G1 live-freeze class).
 **defining sibling module**, never at the barrel. A full `vitest run` (not the
 scoped editor suite) is required because the cycle only shows cross-module.
 
+**Extend-vs-decompose policy (rev 2, consistency 3f — binding).** Several R7/R14
+targets are simultaneously GROWN by other workstreams: `aas-client` (A4),
+`purview-client` (L4), `unity-catalog-client` (L7), `adf-client` (L3),
+`kusto-client` (I5), `spark-session-pool` (A11/A12), `monitor-client` (WS-C),
+`analytics-pane.tsx` + `loom-chart.tsx` (A6/A7), `visual-body.tsx` (A6/A9).
+Policy: **extend-then-decompose** — the feature item lands first and must either
+stay under the file's ratchet ceiling or run `check-file-size.mjs
+--update-baseline` in the same PR with a one-line justification; the R7/R14
+decomposition item then re-baselines downward. Serialize each pair (never race a
+decomposition PR against a feature PR on the same file).
+
 ## Files currently >1500 LOC (from the allowlist, ceiling→approx LOC)
 
 **Priority editors (decomposition-plan.md, 3 remaining):**
@@ -598,7 +673,17 @@ count (receipt) so future PRs can watch it fall.
 
 ---
 
-# AREA 5 — Repo restructure: legacy/ grouping (R20–R27)
+# AREA 5 — Repo restructure: legacy/ grouping (R20–R27) *(rev 2: INDEPENDENT HOUSEKEEPING TRACK — execute LAST, any time)*
+
+> **Rev-2 re-sequencing (product review — operator-approved scope, adjusted
+> schedule).** The restructure stays IN the PRP (the operator approved in-repo
+> `legacy/` grouping), but it is now an **independent housekeeping track that
+> never blocks or interleaves with the grade-bearing work**: 8 high-risk
+> `git mv` PRs (Windows case-folding, 33 workflow refs, 65 mkdocs nav lines)
+> contribute **zero** to the "B+ → defensible A" grade while competing for
+> reviewer attention and CI stability. **Execute last — or in any quiet window —
+> one tree per PR; pause the track instantly if it destabilizes CI.** R27's
+> "keep `examples/` at root" recommendation stands.
 
 ## Ground truth (from `temp/audit-2026-07-22/repo-audit.md` §4 + verified)
 
@@ -722,16 +807,116 @@ with the reference evidence, unless overridden.
 
 ---
 
-## Cross-cutting sequencing
+# AREA 6 — Rev-2 additions (R28, R29, MIG1)
 
-1. **AREA 1:** R1 → R2 → R3 (wrappers, codemod, guard) then R4∥ (parallel families),
-   R5/R6 serialized behind R1.
+## R28 — Consolidate the duplicate git-integration clients *(product review §3.2)*
+
+**Ground truth (verified).** There are **two** parallel Fabric-git-parity
+implementations serving the same workspace-git feature:
+- `lib/azure/git-integration-client.ts` — real commit/pull/status against Azure
+  DevOps Repos (REST 7.1) or GitHub (REST v3); serializes each item to canonical
+  text (TMSL `model.bim`, PBIR, scorecard JSON) and pushes real commits;
+  workspace-scoped PAT in KV; sovereign-aware (`LOOM_ADO_HOST`/`LOOM_GITHUB_HOST`);
+  routes `/api/git-integration/{commit,pull,resolve,status}` +
+  `/api/workspaces/[id]/scm`.
+- `lib/clients/git-integration-client.ts` — a second client behind
+  `/api/admin/workspaces/[id]/git/{route,status,sync,meta,branch-out}`.
+Both active = two sources of truth for workspace git serialization — drift + a
+serialization-format hazard.
+
+**Goal.** Collapse to one client + one route surface; kill the drift.
+
+**Files.** Pick the SDK-free serializer (`lib/clients/*`) as the canonical pure
+core; keep the KV/credential wiring from `lib/azure/*` as a thin adapter over
+it. Repoint `app/api/admin/workspaces/[id]/git/*` and `app/api/git-integration/*`
+at the single client (or converge the two route trees behind one, documented in
+a short ADR). Add a `check-*-sync.mjs`-style guard (via `_ratchet-count.mjs`)
+that fails if a second git serializer reappears.
+
+**Acceptance.** Full `vitest` (both git test files) green;
+`tsc -p tsconfig.build.json` green; a git commit→pull round-trip receipt on a
+real workspace item via the surviving route (real SHA = no-vaporware receipt).
+No behavior change. **Doc item (product review):** file the one-line correction
+re-grading `PRPs/active/loom-competitive-audit-2026-07-20/PARITY-MATRIX.md` §2
+"Source control (Git)" from the stale **C / honest-gate** to **A− (Loom-native,
+real ADO+GitHub, Fabric-parity, sovereign-aware)**. V1's J6 journey exercises
+the surviving route.
+
+**Per-cloud.** Cloud-neutral code health; ADO default all clouds, GitHub
+honest-gated in GCC-High/IL5 (already handled by `githubCloudGate()`).
+
+## R29 — Parity-doc-freshness ratchet *(completeness gap 5 — WS-R's own thesis applied to itself)*
+
+**Ground truth (verified).** `scripts/ci/check-parity-doc-freshness.mjs` is
+warn-first-by-design: it only hard-fails under `PARITY_DOC_FRESHNESS_ENFORCE=1`
+(default = warn, exit 0). Nothing in rev 1 pulled that lever — while the PRP
+itself adds new parity docs (L5 `lineage.md`, A6–A9 `report.md`, A8) that will
+accrue freshness debt ungated. Omitting this ratchet from a
+convention-ratchet workstream was a thematic inconsistency.
+
+**Goal.** Capture the current stale-doc count as a baseline
+(`scripts/ci/parity-freshness-baseline.json`), FAIL the PR when the count
+*rises* or when a *touched* parity doc is stale (the boy-scout rule, mirroring
+R3's touched-file mode), and let the baseline only shrink. Flip
+`PARITY_DOC_FRESHNESS_ENFORCE=1` for touched docs.
+
+**Files.** Extend `check-parity-doc-freshness.mjs` with a baseline +
+touched-file mode (reuse `_ratchet-count.mjs` mechanics); wire into the same
+`check-*.mjs` CI lane.
+
+**Acceptance.** Fresh run exits 0 at baseline; touch a parity doc without
+re-reviewing it → FAIL; re-review → PASS + baseline shrinks. **Per-cloud.**
+Cloud-neutral.
+
+## MIG1 — Versioned Cosmos doc-migration convention (registry + on-read upgrade) *(completeness gap 3)*
+
+**Ground truth (verified).** `lib/azure/cosmos-client.ts` has no
+`schemaVersion`/on-read-upgrade/backfill machinery; doc-shape changes rely on
+optional fields + tolerant readers. This PRP's new shapes (ThreadEdge
+`columnMappings`, Workspace `workspaceIdentity`, `loom-copilot-evals`,
+`loom-cost-anomaly-rules`) are all additive so none *needs* a migration — the
+gap is latent, and the convention must exist before someone needs a breaking
+change.
+
+**Goal.** A `schemaVersion` field convention + a `migrateOnRead(doc)` registry
+(per container), plus an optional backfill script pattern
+(`scripts/csa-loom/cosmos-backfill-<container>.mjs`) and a rollback note. New
+shapes register a migrator; readers upgrade lazily; a backfill sweeps at
+leisure.
+
+**Files.** `lib/azure/cosmos-migrations.ts` (registry + `migrateOnRead`), edit
+`cosmos-client.ts` read paths to apply it,
+`docs/fiab/cosmos-migration-convention.md`, a unit test proving a v1 fixture doc
+upgrades to v2 on read; backfill idempotent.
+
+**Coordinate with** `PRPs/active/enterprise-hardening/appendix-scale-cosmos-data-tier.md §4.2`
+(the partition-key migration there is the first real consumer of this
+convention — per the master's sibling-PRP decision rules).
+
+**Per-cloud.** Cloud-invariant (Cosmos only). IL5: n/a beyond in-boundary
+Cosmos.
+
+---
+
+## Cross-cutting sequencing (rev 2)
+
+0. **AREA 0:** R0 **FIRST — before any bicep/env-adding item program-wide**
+   (BLOCKER).
+1. **AREA 1:** R1 → R2 → R3 (wrappers, codemod, guard; R3 builds
+   `_ratchet-count.mjs`) then R4∥ (parallel families), R5/R6 serialized behind R1.
 2. **AREA 2:** R7 (mechanical re-baseline) anytime; R8→R9→R10 serialized (plan
-   order); R11/R12/R14 parallel by area; R13 independent.
+   order); R11/R12/R14 parallel by area (R14 = lowest-value churn — after all
+   user-visible depth, per the product review); R13 independent. Honor the
+   extend-then-decompose pairs (A4/L3/L4/L7/I5/A6/A7/A9/A11/A12/C — serialize).
 3. **AREA 3:** R15 → R16 → R17 (generator, typed client, guard) — serialized.
 4. **AREA 4:** R18 → R19; R18 lands before R10 so `useSemanticModel` can adopt it.
-5. **AREA 5:** R20 → R21 → R22 → R23 → R24 → R25 → R26 → R27, each verified before
-   the next (phase gate: CI + mkdocs + ruff green).
+5. **AREA 6:** R28, R29, MIG1 — independent; the master places them in the
+   Phase-2/3 opportunistic bucket (MIG1 in Phase 0 — the convention should exist
+   before the new doc shapes land).
+6. **AREA 5 (housekeeping track):** R20 → R21 → R22 → R23 → R24 → R25 → R26 →
+   R27, each verified before the next (phase gate: CI + mkdocs + ruff green) —
+   **execute LAST or in quiet windows; never interleaved with depth work; pause
+   on any CI destabilization.**
 
 Every PR carries its ratchet regen (`--update-baseline`) and, for any live-editor
 touch, a minted-session browser E2E receipt (G1). No item is "done" on
