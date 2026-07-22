@@ -12,16 +12,13 @@
  * — no Fabric dependency.
  */
 import { NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { withSession } from '@/lib/api/route-toolkit';
 import { listAmlDatastores, amlIsConfigured, amlConfig, AmlNotConfiguredError, AmlError } from '@/lib/azure/aml-client';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET() {
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-
+export const GET = withSession(async () => {
   if (!amlIsConfigured()) {
     const err = new AmlNotConfiguredError(['LOOM_AML_WORKSPACE', 'LOOM_AML_REGION']);
     return NextResponse.json(
@@ -58,4 +55,4 @@ export async function GET() {
     const status = e instanceof AmlError ? e.status : 502;
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status });
   }
-}
+});

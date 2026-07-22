@@ -8,8 +8,8 @@
  * Honest gate: 200 { ok:true, configured:false, hint } when MLflow tracking
  * isn't configured. Backs the ML Experiment editor's run row actions.
  */
-import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { NextResponse } from 'next/server';
+import { withSession } from '@/lib/api/route-toolkit';
 import {
   deleteRun, restoreRun, setRunTag, cloneRun,
   MlflowNotConfiguredError, MlflowError,
@@ -18,10 +18,8 @@ import {
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function POST(req: NextRequest, ctx: { params: Promise<{ runId: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  const runId = decodeURIComponent((await ctx.params).runId);
+export const POST = withSession<{ runId: string }>(async (req, { params }) => {
+  const runId = decodeURIComponent(params.runId);
   const body = await req.json().catch(() => ({}));
   const action = String(body?.action || '');
   try {
@@ -39,4 +37,4 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ runId: str
     const status = e instanceof MlflowError ? e.status : 502;
     return NextResponse.json({ ok: false, error: e?.message || String(e), body: e?.body }, { status });
   }
-}
+});

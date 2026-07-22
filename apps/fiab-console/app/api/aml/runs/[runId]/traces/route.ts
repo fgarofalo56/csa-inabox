@@ -17,19 +17,15 @@
  * sibling run routes (metrics/artifacts) — workspace-scoped AML/MLflow, not a
  * Cosmos-owned item, so a signed-in session is the gate.
  */
-import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { NextResponse } from 'next/server';
+import { withSession } from '@/lib/api/route-toolkit';
 import { queryTracesByRunId, queryTraceDetail, FoundryError, NotDeployedError } from '@/lib/azure/foundry-client';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET(req: NextRequest, ctx: { params: Promise<{ runId: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-
-  const { runId: runIdRaw } = await ctx.params;
-  const runId = decodeURIComponent(runIdRaw);
+export const GET = withSession<{ runId: string }>(async (req, { params }) => {
+  const runId = decodeURIComponent(params.runId);
   const traceId = new URL(req.url).searchParams.get('traceId') || undefined;
 
   try {
@@ -46,4 +42,4 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ runId: stri
     const status = e instanceof FoundryError ? e.status : 502;
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status });
   }
-}
+});

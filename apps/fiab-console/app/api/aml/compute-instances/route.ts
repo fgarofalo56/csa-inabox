@@ -17,7 +17,7 @@
  * Azure-native default — no Fabric dependency.
  */
 import { NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { withSession } from '@/lib/api/route-toolkit';
 import { listCIs, createCI, ciIsRunning, ciIsStopped, amlIsConfigured, amlConfig, AmlNotConfiguredError, AmlError } from '@/lib/azure/aml-client';
 import { computeRoleGate } from '@/lib/azure/foundry-compute-gate';
 
@@ -29,10 +29,9 @@ function defaultComputeName(): string | null {
   return process.env.LOOM_AML_DEFAULT_COMPUTE?.trim() || null;
 }
 
-export async function GET() {
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-
+// WS-D1: session boilerplate adopted onto `withSession`; the honest-200
+// not-configured gate + real ARM calls are unchanged.
+export const GET = withSession(async () => {
   if (!amlIsConfigured()) {
     const err = new AmlNotConfiguredError(['LOOM_AML_WORKSPACE', 'LOOM_AML_REGION']);
     return NextResponse.json(
@@ -69,17 +68,14 @@ export async function GET() {
     const status = e instanceof AmlError ? e.status : 502;
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status });
   }
-}
+});
 
 /** A CI name must match the AML compute naming rules (3-24, alnum + hyphen). */
 const CI_NAME_RE = /^[a-zA-Z][a-zA-Z0-9-]{2,23}$/;
 /** ISO-8601 idle-TTL durations the UI offers (dropdown only — no freeform). */
 const ALLOWED_TTL = new Set(['PT15M', 'PT30M', 'PT1H', 'PT2H', 'PT3H', 'PT4H']);
 
-export async function POST(req: Request) {
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-
+export const POST = withSession(async (req) => {
   const body = await req.json().catch(() => ({} as any));
   const name = String(body?.name || '').trim();
   const vmSize = String(body?.vmSize || '').trim();
@@ -119,4 +115,4 @@ export async function POST(req: Request) {
     const status = e instanceof AmlError ? e.status : 502;
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status });
   }
-}
+});
