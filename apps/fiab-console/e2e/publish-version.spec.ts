@@ -68,26 +68,39 @@ test.describe('publish-version', () => {
     test(`version timeline + restore — ${type}`, async ({ page, context }) => {
       await signIn(context).catch(() => { /* storageState may already be set */ });
       const { result } = await captureFailures(page, async () => {
-        // 1) Workspace + item (v1 via the real create path).
+        // 1) Workspace + item.
         const wsId = await createWorkspace(page, `pv-${type}`);
         createdWorkspaces.push(wsId);
         const id = await createItem(page, wsId, type, `uat-pubver-${type}`);
 
-        // 2) Open the editor and Save through the real chrome button → v2.
-        await page.goto(`${BASE}/items/${type}/${id}`, { waitUntil: 'domcontentloaded' });
-        // Touch the display-name field if present so the save is a real change.
-        const nameField = page.getByLabel(/display name|name/i).first();
-        if (await nameField.isVisible().catch(() => false)) {
-          await nameField.fill(`uat-pubver-${type}-v2`).catch(() => { /* some editors lock name */ });
+        // 2) Seed TWO real versions through the shared save chokepoint the editor
+        //    uses — PATCH /api/cosmos-items/<type>/<id> calls recordItemVersion on
+        //    every save. Item CREATE does not snapshot a version; only a save does.
+        //    Two patches → two versions so the restore path is exercisable.
+        const patch1 = await page.request.patch(`${BASE}/api/cosmos-items/${type}/${id}`, {
+          data: { description: 'uat publish-version v1' },
+        });
+        // A type whose save path isn't this generic route surfaces here honestly.
+        if (patch1.status() === 503) {
+          const b1 = await patch1.json().catch(() => ({}));
+          if (b1?.code === 'cosmos_not_configured') {
+            recordVerdict({
+              surface: `editor:${type}`, feature: 'version-history', verdict: 'B', status: 'pass',
+              notes: 'honest-gate: Cosmos not configured for version history',
+            });
+            return { type, gated: true };
+          }
         }
-        const saveBtn = page.getByRole('button', { name: /^Save\b/ }).first();
-        if (await saveBtn.isVisible().catch(() => false)) {
-          await saveBtn.click().catch(() => { /* fall through — v1 alone still lists */ });
-          await page.waitForTimeout(1500);
-        }
+        expect(patch1.ok(), `save #1 (PATCH cosmos-items) returned ${patch1.status()}`).toBeTruthy();
+        await page.waitForTimeout(400);
+        const patch2 = await page.request.patch(`${BASE}/api/cosmos-items/${type}/${id}`, {
+          data: { description: 'uat publish-version v2' },
+        });
+        expect(patch2.ok(), `save #2 (PATCH cosmos-items) returned ${patch2.status()}`).toBeTruthy();
 
         // 3) Real-data receipt: the versions BFF must return ok + ≥1 version, OR
         //    an honest Cosmos gate (503 cosmos_not_configured).
+        await page.goto(`${BASE}/items/${type}/${id}`, { waitUntil: 'domcontentloaded' });
         const vres = await page.request.get(`${BASE}/api/items/${type}/${id}/versions`);
         const vbody = await vres.json().catch(() => ({}));
         if (vres.status() === 503 || vbody?.code === 'cosmos_not_configured') {
