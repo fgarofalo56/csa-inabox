@@ -1,0 +1,27 @@
+{
+  "_meta": {
+    "owner": "copilot-cost workstream (loom-next-level E3) — fgarofalo",
+    "why": "Per-surface Copilot quality floors: a corpus/prompt/router change may never drop a surface below these. Enforced by scripts/csa-loom/check-eval-regression.mjs (E4 workflow + full-app-deploy post-roll run). Mirrors the vitest coverage-floor ratchet convention (commit 14a16d8e): floors move UP only, via a dedicated ratchet PR.",
+    "unblock": "Raise: node scripts/csa-loom/ratchet-eval-floors.mjs --write (raise-only, from measured runs). Lowering a floor is NEVER automated — it requires an explicit override commit editing this file with a one-line justification in the PR body.",
+    "note": "PROVISIONAL SEED (2026-07-22): these floors were set BEFORE any eval-run data existed (E2 landed the same day; the first live runs happen post-roll). They are deliberately conservative — low enough that a healthy retrieval+judge path clears them, high enough that a dead data path (0-count retrieval, empty-corpus image) or a mass forbidden-phrase regression fails loudly. The ratchet raises them from measured reality; per the ratchet-up-only convention they never silently go down.",
+    "metrics": {
+      "retrievalHitRate": "0..1 — fraction of questions where >=1 expectedChunks doc surfaced (deterministic; authoritative even judge-less)",
+      "groundingAvg": "1..5 LLM-judge grounding average over JUDGED questions only; null in a run = judge deferred (E2 daily cap / no deployment) and is treated as NO-CHANGE by the gate, never a regression",
+      "passRate": "0..1 — retrievalHit && mentionPass && !forbiddenHit && (grounding>=4 when judged)"
+    },
+    "deltaConvention": "EVAL_REGRESSION_DELTA (default 5) is in POINTS: rate metrics compare in percentage points (0.05 = 5 points); groundingAvg maps its 4-wide 1..5 scale onto 0..100 (a 0.2 drop = 5 points).",
+    "lastRatchet": null
+  },
+  "floors": {
+    "help": { "retrievalHitRate": 0.5, "groundingAvg": 3, "passRate": 0.4, "provisional": true },
+    "deploy-planner": { "retrievalHitRate": 0.5, "groundingAvg": 3, "passRate": 0.4, "provisional": true },
+    "lakehouse": { "retrievalHitRate": 0.5, "groundingAvg": 3, "passRate": 0.4, "provisional": true },
+    "kql-database": { "retrievalHitRate": 0.5, "groundingAvg": 3, "passRate": 0.4, "provisional": true },
+    "data-agent": { "retrievalHitRate": 0.5, "groundingAvg": 3, "passRate": 0.4, "provisional": true },
+    "cost": { "retrievalHitRate": 0.5, "groundingAvg": 3, "passRate": 0.4, "provisional": true },
+    "health": { "retrievalHitRate": 0.5, "groundingAvg": 3, "passRate": 0.4, "provisional": true },
+    "report": { "retrievalHitRate": 0.5, "groundingAvg": 3, "passRate": 0.4, "provisional": true },
+    "rbac": { "retrievalHitRate": 0.5, "groundingAvg": 3, "passRate": 0.4, "provisional": true },
+    "eventstream": { "retrievalHitRate": 0.5, "groundingAvg": 3, "passRate": 0.4, "provisional": true }
+  }
+}
