@@ -192,6 +192,13 @@ var loomContainers = [
   // cosmos-client.ts so every install-dialog poll is a single-partition
   // point-read. createIfNotExists in ensure() remains the hotfix fallback.
   { name: 'app-install-jobs',  partitionKey: '/tenantId' }
+  // E2 (loom-next-level) — Copilot quality eval runs/results written by the
+  // copilot-evaluator Function, read by /admin/copilot-quality. PK /surface →
+  // per-surface trend reads are single-partition. ttl -1 = TTL enabled with no
+  // default expiry (eval-result docs carry ttl 180d; run rollups are retained).
+  // createIfNotExists in cosmos-client.ts ensure() + the Function's client is
+  // the hotfix fallback.
+  { name: 'loom-copilot-evals', partitionKey: '/surface', ttl: -1 }
   // Tenant topology (audit-t157). One doc per tenant (id='tenant-topology')
   // holding the deployed hub's coordinates (VNet/LAW/DNS/ADX/Cosmos + Console
   // UAMI ids) written by the tenant deploy's post-bootstrap. The Setup Wizard

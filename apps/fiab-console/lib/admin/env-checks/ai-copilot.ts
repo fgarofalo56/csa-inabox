@@ -87,6 +87,31 @@ export const AI_COPILOT_ENV_CHECKS: EnvSpec[] = [
     role: 'Cognitive Services OpenAI User (UAMI) on the AOAI/Foundry account',
   },
   {
+    // E2 (loom-next-level) — the copilot-evaluator Function: nightly + per-roll
+    // Copilot quality evals (retrieval hit-rate/MRR + LLM-judge grounding) over
+    // the E1 golden sets, scored against the REAL searchDocs + aoai-chat-client
+    // path via the internal eval-probe route and written to Cosmos
+    // loom-copilot-evals. LOOM_COPILOT_EVALUATOR_URL is the deployed Function's
+    // base URL (bicep-wired from the module output) — the E5 admin "Run now"
+    // proxy targets it. The Function itself is default-ON in bicep
+    // (functionAppsConfig.copilotEvaluatorEnabled) and opt-out at runtime via
+    // LOOM_COPILOT_EVAL_ENABLED=false; its judge spend is capped per day
+    // (LOOM_COPILOT_EVAL_JUDGE_DAILY_CAP, default 500) and its judge deployment
+    // resolves LOOM_COPILOT_EVAL_JUDGE_DEPLOYMENT → strong → mini → default —
+    // never a hardcoded model name.
+    id: 'svc-copilot-evaluator', category: 'ai-copilot',
+    title: 'Copilot quality evaluator (eval harness Function)', severity: 'optional',
+    required: ['LOOM_COPILOT_EVALUATOR_URL'], warnOnMiss: true,
+    remediation: 'Deploy the copilot-evaluator Function (modules/admin-plane/copilot-evaluator-function.bicep — default-ON via the functionAppsConfig bag) and set LOOM_COPILOT_EVALUATOR_URL to its https://<app>.azurewebsites.net base URL so admin "Run now" + the corpus-staging workflow can trigger runs. The Function needs Search Index Data Reader (AI Search), Cognitive Services OpenAI User (AOAI judge), Cosmos DB Built-in Data Contributor (loom-copilot-evals) and Storage Blob Data Owner (its host storage) — all granted by the bicep module. Opt out with LOOM_COPILOT_EVAL_ENABLED=false; tune the judge with LOOM_COPILOT_EVAL_JUDGE_DEPLOYMENT + LOOM_COPILOT_EVAL_JUDGE_DAILY_CAP (default 500 judged Q/day).',
+    provisionedBy: 'modules/admin-plane/copilot-evaluator-function.bicep (wired in admin-plane/main.bicep via functionAppsConfig; LOOM_COPILOT_EVALUATOR_URL on the Console apps[] env)',
+    role: 'Function MI: Search Index Data Reader (AI Search) + Cognitive Services OpenAI User (AOAI) + Cosmos DB Built-in Data Contributor + Storage Blob Data Owner (host storage)',
+    docs: 'docs/fiab/runbooks/copilot-evaluator.md',
+    // X2 — every backing service (Functions, AI Search, AOAI, Cosmos) is
+    // in-tenant and GA in all three boundaries; eval sets ship in-image (no
+    // external fetch at IL5).
+    availability: { commercial: 'ga', gccHigh: 'ga', il5: 'ga' },
+  },
+  {
     id: 'svc-iq-mcp', category: 'ai-copilot', title: 'Fabric IQ MCP bridge', severity: 'optional',
     required: ['LOOM_IQ_MCP_ENABLED'], warnOnMiss: true,
     remediation: 'Set LOOM_IQ_MCP_ENABLED=true (+ LOOM_IQ_MCP_TOKEN when the bridge requires auth) so the IQ MCP panel exposes the ontology tools to Copilot. The built-in Loom tools work without it.',

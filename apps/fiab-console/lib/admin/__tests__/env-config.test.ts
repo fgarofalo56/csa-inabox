@@ -193,9 +193,9 @@ describe('admin/env-config registry', () => {
     // secret-typed honest-skip; the shared LOOM_ALERT_ACTION_GROUP_ID is
     // already counted) (157) → I1 svc-workspace-identity adds
     // LOOM_WORKSPACE_IDENTITY_MODE (off | shadow | enforce) +
-    // LOOM_WS_IDENTITY_RG (falls back to LOOM_DLZ_RG) (159);
-    // LOOM_WS_IDENTITY_SUB was already editable.
-    expect(EDITABLE_ENV.length).toBe(159);
+    // LOOM_WS_IDENTITY_RG (falls back to LOOM_DLZ_RG) (159) → E2
+    // svc-copilot-evaluator adds LOOM_COPILOT_EVALUATOR_URL (160).
+    expect(EDITABLE_ENV.length).toBe(160);
   });
 
   it('surfaces the wave-2 env vars as settable (previously dropped by the whitelist)', () => {

@@ -188,6 +188,18 @@ type functionAppsConfigT = {
 
   @description('Days-to-expiry OUTER warning threshold (LOOM_SECRET_EXPIRY_WARN_DAYS). Inner 30/7-day bands are fixed. Default 60.')
   secretExpiryWarnDays: int?
+
+  @description('Deploy the copilot-evaluator Function (loom-next-level E2) — nightly + on-demand Copilot quality evals (retrieval hit-rate/MRR + capped LLM-judge grounding) over the E1 golden sets, written to Cosmos loom-copilot-evals. Default ON (~$0 idle Y1; judge token spend is capped/day); a no-op without a Cosmos account.')
+  copilotEvaluatorEnabled: bool?
+
+  @description('NCRONTAB schedule (6-field) for the copilot-evaluator nightly run. Default 07:00 UTC — off-peak so judge spend never competes with business-hours Copilot AOAI TPM.')
+  copilotEvaluatorCron: string?
+
+  @description('DEDICATED judge deployment name (LOOM_COPILOT_EVAL_JUDGE_DEPLOYMENT) to isolate judge TPM from production Copilot quota. Empty → the Function falls back strong → mini → default at runtime.')
+  copilotEvalJudgeDeployment: string?
+
+  @description('Daily LLM-judge call cap for the copilot-evaluator (round-3 F1). Over cap → retrieval-only scoring, judge scores marked deferred.')
+  copilotEvalJudgeDailyCap: int?
 }
 
 @description('Scheduled/background Function-app settings bag (R0). Existing label-propagation + report-subscription cron settings live here; future per-Function enable/cron/settings (E2 copilot-evaluator, C3 cost-anomaly, L3 lineage-ingest, S1 secret-expiry) add properties to functionAppsConfigT — never a new top-level param.')
@@ -346,6 +358,11 @@ var reportSubscriptionsCron = functionAppsConfig.?reportSubscriptionsCron ?? '0 
 var secretExpiryEnabled = functionAppsConfig.?secretExpiryEnabled ?? true
 var secretExpiryCron = functionAppsConfig.?secretExpiryCron ?? '0 0 6 * * *'
 var secretExpiryWarnDays = functionAppsConfig.?secretExpiryWarnDays ?? 60
+// E2 copilot-evaluator (R0 bag) — default-ON per loom_default_on_opt_out.
+var copilotEvaluatorEnabled = functionAppsConfig.?copilotEvaluatorEnabled ?? true
+var copilotEvaluatorCron = functionAppsConfig.?copilotEvaluatorCron ?? '0 0 7 * * *'
+var copilotEvalJudgeDeployment = functionAppsConfig.?copilotEvalJudgeDeployment ?? ''
+var copilotEvalJudgeDailyCap = functionAppsConfig.?copilotEvalJudgeDailyCap ?? 500
 var adxSkuName = adxConfig.?adxSkuName ?? 'Dev(No SLA)_Standard_E2a_v4'
 var adxEnableOptimizedAutoscale = adxConfig.?adxEnableOptimizedAutoscale ?? false
 var adxAutoscaleMinimum = adxConfig.?adxAutoscaleMinimum ?? 2
@@ -4494,6 +4511,9 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // OpenAI User role. LOOM_AOAI_DEPLOYMENT (above) supplies the model.
             { name: 'LOOM_AZURE_OPENAI_ENDPOINT',  value: !empty(loomAzureOpenAiEndpoint) ? loomAzureOpenAiEndpoint : (agentFoundryEnabled ? agentFoundry!.outputs.aoaiEndpoint : byoFoundryEndpoint) }
             { name: 'LOOM_DAB_PREVIEW_URL',        value: (dabRuntimeEnabled && !empty(dabSqlServerFqdn)) ? dabRuntime!.outputs.dabPreviewUrl : '' }
+            // E2 copilot-evaluator — the eval-harness Function's base URL so the
+            // admin "Run now" (E5) + gate surface can reach its HTTP trigger.
+            { name: 'LOOM_COPILOT_EVALUATOR_URL',  value: copilotEvaluatorEnabled ? 'https://${copilotEvaluator!.outputs.defaultHostName}' : '' }
           ] : [
             { name: 'LOOM_UAMI_CLIENT_ID', value: identity.outputs.uamiConsoleClientId }
             { name: 'LOOM_UAMI_PRINCIPAL_ID', value: identity.outputs.uamiConsolePrincipalId }
@@ -5181,6 +5201,42 @@ module reportSubscriptions 'report-subscriptions-function.bicep' = if (reportSub
     subscriptionLogicAppName: loomSubscriptionLogicAppName
     subscriptionLogicAppRg: resourceGroup().name
     loomDlzRg: loomDlzRg
+    appInsightsConnectionString: monitoring.outputs.appInsightsConnectionString
+    complianceTags: complianceTags
+  }
+}
+
+// copilot-evaluator Function (loom-next-level E2) — nightly + on-demand Copilot
+// quality evals over the E1 golden sets: REAL retrieval + one REAL Copilot turn
+// via the console's internal eval-probe route (shared internal trust token),
+// deterministic guards gated BEFORE the capped LLM judge, results to Cosmos
+// loom-copilot-evals. Default-ON (R0 functionAppsConfig bag); a clean no-op
+// tick without a Cosmos account. Every role grant (host storage Blob Owner +
+// Queue Contributor, Search Index Data Reader, Cognitive Services OpenAI User,
+// Cosmos data-plane contributor on the same-RG hub account) is declared in the
+// module (guid() names, skipRoleGrants-aware) — no post-deploy bootstrap grant
+// needed on the hub topology.
+module copilotEvaluator 'copilot-evaluator-function.bicep' = if (copilotEvaluatorEnabled) {
+  name: 'copilot-evaluator-function'
+  params: {
+    location: location
+    loomCosmosEndpoint: !empty(loomCosmosAccount) ? 'https://${loomCosmosAccount}.documents.${environment().suffixes.storage == 'core.usgovcloudapi.net' ? 'azure.us' : 'azure.com'}:443/' : ''
+    loomCosmosDatabase: 'loom'
+    cosmosAccountName: (deployConsoleCosmos && !empty(loomCosmosAccount)) ? loomCosmosAccount : ''
+    copilotEvaluatorCron: copilotEvaluatorCron
+    // The probe rides the public Front Door URL when FD is on (a Consumption
+    // plan has no VNet integration into the CAE); otherwise the CAE FQDN.
+    consoleBaseUrl: fdOn ? frontDoor!.outputs.frontDoorPublicUrl : 'https://loom-console.${containerPlatformModule.outputs.caeDefaultDomain}'
+    internalToken: loomInternalToken
+    aoaiEndpoint: loomAoaiEndpointValue
+    aoaiAccountName: agentFoundryEnabled ? agentFoundry!.outputs.accountNameOut : ((aiFoundryEnabled && empty(existingFoundryAccountName)) ? aiFoundry!.outputs.aiServicesAccountName : '')
+    judgeDeployment: copilotEvalJudgeDeployment
+    strongDeployment: agentFoundryEnabled ? agentFoundry!.outputs.strongDeployment : ''
+    miniDeployment: agentFoundryEnabled ? agentFoundry!.outputs.miniDeployment : ''
+    defaultDeployment: agentFoundryEnabled ? agentFoundry!.outputs.chatDeployment : (!empty(byoFoundryChatDeployment) ? byoFoundryChatDeployment : ((aiFoundryEnabled && empty(existingFoundryAccountName)) ? aiFoundry!.outputs.defaultChatDeploymentName : ''))
+    judgeDailyCap: copilotEvalJudgeDailyCap
+    aiSearchServiceName: effBuiltinMcpAiSearch
+    skipRoleGrants: skipRoleGrants
     appInsightsConnectionString: monitoring.outputs.appInsightsConnectionString
     complianceTags: complianceTags
   }

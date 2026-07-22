@@ -1,0 +1,21 @@
+{
+  "compilerOptions": {
+    "module": "commonjs",
+    "target": "es2022",
+    "moduleResolution": "node",
+    "outDir": "dist",
+    // rootDir is the REPO root (../..): the pure judge-model helpers are shared
+    // with the console (bestReasoningModelFor / the Learn-grounded availability
+    // matrix — the E2 "shared pure modules, import-both" rule), so the compiled
+    // tree mirrors azure-functions/copilot-evaluator/src under dist/ (see
+    // package.json "main").
+    "rootDir": "../..",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "types": ["node"]
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["node_modules", "dist", "**/*.test.ts"]
+}

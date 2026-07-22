@@ -57,4 +57,19 @@ export const AI_COPILOT_GATE_META: Record<string, GateMeta> = {
     surfaces: [{ path: '/admin/mcp-servers', label: 'IQ MCP bridge' }],
     fixit: { kind: 'env-picker' },
   },
+  'svc-copilot-evaluator': {
+    surfaces: [
+      { path: '/admin/copilot-quality', label: 'Copilot quality — eval runs + "Run now"' },
+      { path: '/api/internal/copilot/eval-probe', label: 'Eval probe (internal, evaluator Function)' },
+    ],
+    // Fix-it: deploy-the-Function wizard — the one-time action is a bicep
+    // deploy (functionAppsConfig.copilotEvaluatorEnabled, default-ON) plus the
+    // role grants the module declares; not a plain env write.
+    fixit: {
+      kind: 'wizard',
+      grantNote:
+        'Deploy modules/admin-plane/copilot-evaluator-function.bicep (default-ON via the functionAppsConfig bag). The module grants the Function MI: Search Index Data Reader on the AI Search service, Cognitive Services OpenAI User on the AOAI/Foundry account, Cosmos DB Built-in Data Contributor on the Loom Cosmos, and Storage Blob Data Owner on its host storage (skipRoleGrants-aware). LOOM_COPILOT_EVALUATOR_URL is then wired onto the Console automatically.',
+    },
+    legacyCodes: [],
+  },
 };
