@@ -1,13 +1,27 @@
 # loom-next-level — Section I (Per-Workspace Managed Identity) + Section X (Cloud Matrix)
 
-> Draft workstream for the master PRP. Two sections:
-> **I** — per-workspace managed identity, phased shadow → enforce.
+> Draft workstream for the master PRP (rev 2 — post-adversarial-review). Two sections:
+> **I** — per-workspace managed identity, phased shadow → enforce (**I1–I9**;
+> I9 = the rev-2 threat-model/AppSec gate before enforcement).
 > **X** — cross-cutting per-cloud engineering matrix every other workstream references.
+>
+> **Rev-2 renumbering (consistency 1a):** the X-section items are now
+> contiguous — **X1** (cloud-endpoints adoption ratchet, unchanged), **X2**
+> (availability-gate convention — formerly "X.3"), **X3** (per-cloud CI
+> validation lanes — formerly "X.5", previously uncounted in the master).
+> The service-availability matrix (**X-MATRIX**, formerly "X.2") and the IL5
+> checklist (**X-IL5**, formerly "X.4") are un-numbered REFERENCE blocks, not
+> buildable items.
 >
 > Conventions (shared with the master PRP): PR-sized items with IDs (`I1…` identity,
 > `X1…` cross-cutting). Each item states goal, exact files/paths, backend/infra
-> (bicep per `no-vaporware.md` §"Bicep sync requirement"), env vars (registered in
-> `ENV_CHECKS` + the gate registry with a Fix-it per UX rule G2), acceptance criteria
+> (bicep per `no-vaporware.md` §"Bicep sync requirement" **+ the rev-2 R0 rule:
+> `admin-plane/main.bicep` is at the 256-param ARM cap — new params ride config
+> objects, never new top-level `param`s**), env vars (registered in
+> `ENV_CHECKS` + the gate registry with a Fix-it per UX rule G2, **updating
+> `lib/gates/__tests__/registry.test.ts` parity in the same PR; new EnvSpecs
+> carry the X2 `availability` field; env-adding PRs serialize on
+> `env-checks.ts`/`registry.ts`/the parity test**), acceptance criteria
 > including a real-data E2E receipt (per `loom_browser_e2e_before_done`), and a
 > per-cloud column: **Commercial** (live — centralus sub `e093f4fd`), **Gov GCC-High**
 > (live), **IL5/air-gap** (design-constraint documentation only, no live sub).
@@ -129,7 +143,7 @@ scratch. Verified against the live tree:
   Tests: `__tests__/cloud-endpoints.test.ts`, `__tests__/cloud-matrix.test.ts`.
 - **Therefore X1 is NOT "build a cloud-config module" — it is an *adoption
   ratchet*** that drives the last hard-coded literals into these helpers and adds
-  the missing structured availability layer (X3). See Section X.
+  the missing structured availability layer (X2). See Section X.
 
 ---
 
@@ -198,7 +212,17 @@ On workspace delete, cascade-delete the UAMI and its role assignments.
   'mi-contributor')`, `principalType:'ServicePrincipal'`, guarded by
   `if(!empty(consolePrincipalId) && !skipRoleGrants)`).
 - Wire `ws-identity-rbac` into `main.bicep` next to the existing `*-rbac` modules,
-  passing `consolePrincipalId: hub.consolePrincipalId` and the WS-identity RG.
+  passing `consolePrincipalId: hub.consolePrincipalId` and the WS-identity RG —
+  **via the R0 config-object pattern (`main.bicep` is at the 256-param cap; the
+  workspace-identity settings ride `workspaceIdentityConfig`, no new top-level
+  params).**
+- **ARM-write-throttle note (rev 2, SRE F16 addendum):** provision-on-create does
+  MULTIPLE ARM writes per workspace (UAMI PUT + role-assignment PUT + optional
+  firewall rule). Besides the UAMI-specific creation throttle (2 req/s per sub,
+  0.25 req/s per resource — I8), the **general ARM write bucket (~200 writes per
+  subscription per service principal, refill ~10/s, token-bucket — Learn:
+  request-limits-and-throttling)** applies: bulk topology deploys hit BOTH.
+  I1's provisioning queue/backoff must cite and respect both limits.
 
 **Env vars (ENV_CHECKS + gate).**
 - `LOOM_WORKSPACE_IDENTITY_MODE` (`off|shadow|enforce`, default `off`) —
@@ -331,9 +355,22 @@ have been authorized** and record divergence into the existing `_auditLog` store
   the factory (not 217 call sites) is why I5 must land first/with I3.
 - Sampling / cost guard: `LOOM_WS_IDENTITY_SHADOW_SAMPLE` (0..1, default 1.0) to
   cap `_auditLog` write volume on hot paths.
+- **Retention + classification (rev 2, SRE F8 — REQUIRED):** an
+  `identity.shadow` row is a **map of where least-privilege isn't yet satisfied**
+  — access-decision recon data. (a) Set a **TTL on `identity.shadow` rows (90d,
+  aligned to the audit-retention convention)** — and apply the same TTL decision
+  to the sibling `pdp.shadow` rows in the same PR; (b) classify the shadow data
+  as **"access-control sensitive — tenant-admin read only"** in the code comment
+  + runbook; (c) add a test asserting the report route (I4) rejects
+  non-tenant-admin sessions.
 
 **Backend / infra.** Reuses the `_auditLog` Cosmos container — no new container
-(per the PDP precedent). Confirm the container's RU headroom (I8 cost note).
+(per the PDP precedent). **Capacity note (rev 2, SRE F10):** quantify the RU
+delta — at sampling 1.0 and X workspace-context calls/s, shadow writes ≈
+(calls/s × ~5 RU) on the SAME account that also absorbs E2 eval writes + C3
+rules + V1 run summaries; state the combined headroom + the sampling value
+chosen for each estate in the PR (the `LOOM_WS_IDENTITY_SHADOW_SAMPLE` lever is
+the mitigation and must ship quantified, not default-blind).
 
 **Env vars / gate.** `LOOM_WS_IDENTITY_SHADOW_SAMPLE` (optionalDefault `1.0`).
 No new gate (folds under `svc-workspace-identity`).
@@ -364,8 +401,10 @@ migration tool the PDP report is for authz.
   `app/api/admin/identity/shadow-report/route.ts` reusing the same tenant-admin
   guard + tally helpers. **Recommendation:** sibling route, shared helper module,
   so the two report shapes stay independent but the admin surface is one page.
-- Admin UI: the page that renders the PDP shadow report (locate via the component
-  that fetches `/api/admin/pdp/shadow-report`) — add an "Identity" segmented tab.
+- Admin UI (rev 2 — named explicitly per consistency 6b): the PDP shadow surface
+  is **`lib/components/admin/pdp-shadow-report-card.tsx`, rendered as a TAB on
+  `/admin/permissions`** (added by PR #2386 — not a standalone page). Add the
+  "Identity" segmented tab there.
   Columns: workspace, backend, scope, action, wouldAllow, divergence, when. Filters
   `divergentOnly`, `byWorkspace`, `byBackend`. Per `web3-ui.md` + `ux-standards.md`:
   Fluent v9 + Loom tokens, `EmptyState` when zero rows, skeletons, type-badged
@@ -412,7 +451,14 @@ refactor; everything else rides on it.
     per-workspace enforce flag is on (I6) AND its UAMI exists; else shared UAMI
     (fail-safe, logged). Reuses the existing `getWorkspaceCredential`.
   - Per-workspace credential caching (LRU keyed by workspaceId, short TTL) so
-    enforce mode doesn't ARM-lookup every request.
+    enforce mode doesn't ARM-lookup every request. **Cache-key guard (rev 2,
+    SRE F14 — the one guard the confused-deputy review demanded): the LRU MUST
+    key strictly on `workspaceId` and MUST NEVER fall back to a *different*
+    workspace's cached credential on a collision/miss — add a unit test proving
+    a miss mints/looks-up fresh rather than returning a neighbor's entry.**
+    (F14 verdict, recorded: shadow mode does a cached ARM permission check, not
+    a second token mint — no doubled token traffic and no delegation confusion;
+    the LRU key is the only guard needed.)
 - **Adoption ratchet (not a big-bang):** add a `check-workspace-credential-adoption.mjs`
   CI script (mirroring the existing `scripts/ci/check-*-sync.mjs` pattern) that
   counts direct `new ChainedTokenCredential(new AcaManagedIdentityCredential()…)`
@@ -463,7 +509,9 @@ both work in gov ACA). IL5: same code path, in-VNet.
 **Goal.** Let an operator flip a *single* workspace from shadow to enforce (mint the
 workspace UAMI for real), independently of the global mode, with a one-click Fix-it
 wizard. Global `LOOM_WORKSPACE_IDENTITY_MODE=enforce` is the "all workspaces" switch;
-the per-workspace flag is the safe, incremental path.
+the per-workspace flag is the safe, incremental path. **Rev-2 precondition: I6
+does not flip for ANY workspace until the I9 threat-model/AppSec review is
+signed off (in addition to the ≥2-weeks-clean-shadow gate).**
 
 **Files / paths.**
 - `apps/fiab-console/lib/types/workspace.ts` — `workspaceIdentity.enforce?: boolean`
@@ -471,6 +519,11 @@ the per-workspace flag is the safe, incremental path.
 - `app/api/admin/workspaces/[id]/identity/route.ts` (NEW) — GET (status + readiness
   rollup from I4), POST `{enforce:true|false}` (tenant-admin only; on enable,
   preflight I7 grant-check; persist flag). Structured `{ok,data,error}`.
+  **Audit requirement (rev 2, SRE F7 — ATO):** the POST is a security-posture
+  change — every toggle writes an `_auditLog` row via `auditLogContainer()`:
+  `{ kind:'identity.enforce', who, oid, action:'enable'|'disable', workspaceId,
+  prior, next, ts }`. Reviewer rejects the PR without the audit row in the G1
+  receipt.
 - Admin workspace settings surface — an "Identity" panel: current mode, provisioned
   UAMI + grants (with per-grant green/red), the 14-day divergence rollup, and the
   **Enable enforcement** button (disabled with an inline reason until grant-check +
@@ -566,6 +619,14 @@ cannot be increased).** (Learn: *Troubleshoot Azure RBAC limits* / *azure-subscr
   breach. → I1 provisioning must be **queued/backoff** for bulk topology deploys,
   not a tight loop. There is no hard cap on the *count* of UAMIs per subscription,
   only this creation throttle.
+- **ARM write throttle (rev 2 addition, SRE F16 — Learn:
+  *request-limits-and-throttling*):** the general per-subscription-per-SP ARM
+  **write** bucket is ≈ **200 requests, refilling ~10/s** (token-bucket).
+  Provision-on-create does multiple ARM writes per workspace (UAMI PUT +
+  role-assignment PUT + optional firewall rule), so bulk topology deploys hit
+  ARM write throttling **in addition to** the MI-specific throttle above. I1's
+  queue/backoff must cite BOTH limits; the sizing table includes a
+  "workspaces provisionable per hour" row derived from them.
 - **Federated identity credentials** as an alternative to more UAMIs: a single UAMI
   can carry multiple FICs, but FICs solve external-workload trust, not per-workspace
   Azure-scope isolation — **not a fit here**; note and dismiss.
@@ -590,9 +651,49 @@ in Gov identically). Note only that Gov subscriptions are often more numerous/sm
 
 ---
 
+### I9 — Threat model + AppSec review gate (precondition to I6) *(NEW, rev 2 — SRE F12)*
+
+**Goal.** Section I carries a solid one-paragraph threat model, but the *new*
+attack surfaces this PRP adds have no abuse-case artifact, and nothing gated a
+security review before I6 flips a live workspace onto enforcement. I9 closes
+that: a short, written **STRIDE threat model** covering the program's new
+endpoints + credentials, and an **AppSec review sign-off that is a hard
+precondition to I6** (alongside the existing "≥2 weeks clean shadow" gate).
+
+**Scope of the threat model (minimum):**
+- The L2 OpenLineage ingest (per-pool credential, workspace scoping, caps —
+  verify the F2 redesign held in implementation).
+- The new Functions (E2 evaluator, C3 anomaly monitor, L3 extractor, S1 secret
+  monitor): identity posture (no storage keys — F6), role scopes, HTTP-trigger
+  exposure.
+- The V1 synthetic-login automation credential (CA exception, rotation,
+  unexpected-use alerting — verify F13 held).
+- The identity shadow store (`identity.shadow` recon sensitivity, TTL,
+  tenant-admin-only read — verify F8 held).
+- The I5/I6 enforce path (fail-safe fallback, LRU key guard, audit rows).
+
+**Deliverables.** `docs/fiab/security/loom-next-level-threat-model.md` (STRIDE
+table per surface, abuse cases, mitigations mapped to the shipped controls) + a
+recorded review sign-off (reviewer, date, findings, disposition) referenced from
+the I7 runbook. Any HIGH finding blocks I6 until dispositioned.
+
+**Acceptance.** Doc merged; sign-off recorded; I6's admin panel shows
+"Security review: signed-off <date>" as part of the enforce-readiness rollup
+(the Enable button stays disabled without it).
+
+**Per-cloud.** One artifact covers both estates (call out Gov-specific deltas —
+`.us` endpoints, gov SP scopes); IL5 posture is covered by the X-IL5 checklist
+answers each item already carries.
+
+---
+
 # SECTION X — Cross-cutting cloud matrix (whole-PRP reference)
 
-## X.0 Endpoint/suffix handling — current state
+> **Rev-2 numbering:** buildable items are **X1, X2, X3**. The grounding note,
+> the availability matrix (X-MATRIX), and the IL5 checklist (X-IL5) are
+> reference blocks.
+
+## X grounding — endpoint/suffix handling, current state
 
 **There is already a central cloud-config module:**
 `apps/fiab-console/lib/azure/cloud-endpoints.ts` (see §0.6). It is mature and
@@ -640,7 +741,7 @@ Commercial host is reached on a default gov path.
 
 ---
 
-## X.2 Service availability matrix (every service this PRP touches)
+## X-MATRIX — Service availability matrix (REFERENCE block — not a numbered item; formerly "X.2")
 
 Legend: ✅ available · ⚠️ available with limits/variance · ❌ not available →
 **Loom fallback** column names the honest gate or Azure/OSS substitute. GCC-High =
@@ -661,20 +762,20 @@ encoded in `cloud-endpoints.ts` that is noted as the in-repo source of truth.
 | **Azure Analysis Services (AAS)** (semantic-model DirectQuery) | ✅ | ❌ | ❌ | `cloud-endpoints.ts` `aasScope(serverUri)` **throws** in Gov. Fallback = **Loom-native semantic layer** (`LOOM_SEMANTIC_BACKEND=loom-native`, the default) — no Fabric/PBI/AAS needed. |
 | **Purview (classic Data Map)** (governance) | ✅ | ✅ | ✅ | Classic Data Map GA in Gov; note the Gov empty-privatelink-DNS-zone gotcha (memory `csa_loom_gov_purview_dns_empty_zone`). Unified-catalog data products are Commercial-only → classic-only path in Gov (already handled in `purview-client.ts`). |
 | **Azure Managed Grafana** (dashboards) | ✅ | ✅ (FedRAMP High GA) | ❌ (IL4/IL5 not in scope) | Compliance scope: Grafana ✅ FedRAMP High + DoD IL2, **blank IL4/IL5** (Learn: *azure-services-in-fedramp-auditscope*). **Enterprise plugins & Essential tier NOT supported in Gov** (Learn: *managed-grafana/known-limitations#feature-availability-in-sovereign-clouds*). Fallback IL5: OSS Grafana self-hosted in-cluster, or Loom-native dashboards over ADX (`kql-dashboard-model`). |
-| **Application Insights / RUM** (telemetry) | ✅ | ✅ | ✅ | App Insights + Log Analytics part of Azure Monitor, GA through IL5/IL6 (Learn: *azure-services-in-fedramp-auditscope*). Endpoint suffix differs → connection-string endpoint-suffix (Learn: *compare-azure-government*). **Browser RUM/CDN script** must be self-hosted in IL5 (no public CDN — see X.4). |
+| **Application Insights / RUM** (telemetry) | ✅ | ✅ | ✅ | App Insights + Log Analytics part of Azure Monitor, GA through IL5/IL6 (Learn: *azure-services-in-fedramp-auditscope*). Endpoint suffix differs → connection-string endpoint-suffix (Learn: *compare-azure-government*). **Browser RUM/CDN script** must be self-hosted in IL5 (no public CDN — see X-IL5; RUM1 in WS-O builds it). |
 | **Cosmos continuous backup / PITR** (BCDR) | ✅ | ✅ | ✅ | Continuous backup + point-in-time restore GA in Azure Gov. Verify 7-day vs 30-day tier availability per region at implementation. |
 | **Microsoft Fabric / Power BI** (opt-in only) | ✅ (opt-in) | ❌ Fabric / ⚠️ PBI (`api.powerbigov.us`) | ❌ | `assertFabricFamilyAvailable()` throws with the Azure-native equivalent. Never on a default path (`no-fabric-dependency.md`). |
 | **Microsoft Graph DLP policy API** (governance) | ✅ | ❌ (`/beta/security/dataLossPreventionPolicies`) | ❌ | `graphDlpPolicyApiAvailable()` = false in Gov. Fallback: Purview compliance portal + Security & Compliance PowerShell; DLP **alerts** + restrict-access RBAC still work. |
-| **Azure Digital Twins** (graph/twin surfaces) | ✅ | ❌ (not in GCC-High) | ❌ | Encoded as `legacyCode` prose today (`svc-digital-twins`); fallback = Loom AGE/graph over Postgres/ADX. X3 structures this. |
+| **Azure Digital Twins** (graph/twin surfaces) | ✅ | ❌ (not in GCC-High) | ❌ | Encoded as `legacyCode` prose today (`svc-digital-twins`); fallback = Loom AGE/graph over Postgres/ADX. X2 structures this. |
 | **Databricks SQL** (warehouse) | ✅ | ⚠️ region-limited | ⚠️ | Not in all Gov regions (`svc-databricks-sql` note). Fallback = Synapse dedicated SQL. |
 
 > **Action:** every ❌/⚠️ row that is currently only free-text prose in ENV_CHECKS
-> must become a structured `availability` field (X3) so the honest gate is
+> must become a structured `availability` field (X2) so the honest gate is
 > automatic, not hand-maintained per surface.
 
 ---
 
-## X.3 — Availability-gate convention (structured cloud availability → auto honest-gate)
+### X2 — Availability-gate convention (structured cloud availability → auto honest-gate) *(formerly "X.3"; rev 2: lands in Phase 0, BEFORE every other env-adding item, so all later EnvSpecs adopt `availability` on first write)*
 
 **Goal.** Turn the matrix above into data. Add a structured per-service availability
 descriptor keyed to cloud detection, so any feature whose backend is unavailable in
@@ -685,7 +786,7 @@ the active cloud renders an honest gate **automatically** — no per-surface `if
 - `apps/fiab-console/lib/admin/env-checks.ts` — extend `EnvSpec` with an optional
   `availability?: { commercial: Avail; gccHigh: Avail; il5: Avail; fallbackNote?: string }`
   where `type Avail = 'ga' | 'limited' | 'unavailable'`. Backfill the ~10 services
-  in X.2 that today carry only prose/legacyCodes (`AAS_NOT_IN_GOV`, Grafana IL5,
+  in the X-MATRIX that today carry only prose/legacyCodes (`AAS_NOT_IN_GOV`, Grafana IL5,
   ADT, Databricks-SQL, DLP-policy, Fabric/PBI, Cost-CSP, AOAI-model-lag).
 - `apps/fiab-console/lib/gates/registry.ts` — add `availabilityFor(id)` +
   `isAvailableInActiveCloud(id)` using `detectLoomCloud()`; `gateStatus(id)` returns
@@ -709,14 +810,14 @@ AAS / Grafana(IL5) / ADT → the honest gate renders automatically naming the
 fallback, with no broken Fix-it. Same surface in `LOOM_CLOUD=commercial` renders
 normally. **Receipt:** two screenshots (gov + commercial) + the `gateStatus` JSON
 showing `state:'cloud-unavailable'`. Vitest: `cloud-matrix.test.ts` extended to
-assert `availabilityFor()` matches the X.2 table for each service in each cloud.
+assert `availabilityFor()` matches the X-MATRIX table for each service in each cloud.
 
 **Per-cloud.** This item *is* the per-cloud mechanism; validated by toggling
 `LOOM_CLOUD` in tests + a live gov render.
 
 ---
 
-## X.4 — IL5 / air-gap design-constraint checklist (every PRP item answers these)
+## X-IL5 — IL5 / air-gap design-constraint checklist (REFERENCE block — formerly "X.4"; every PRP item answers these)
 
 Every item in the master PRP (Section I included) must answer this checklist in its
 "IL5 (design-only)" column. It is the acceptance gate for the air-gap posture; no
@@ -753,7 +854,7 @@ live IL5 sub exists, so these are documentation-verified, not E2E'd.
 
 ---
 
-## X.5 — Per-cloud CI validation lanes (how new features plug into gov validation)
+### X3 — Per-cloud CI validation lanes (how new features plug into gov validation) *(formerly "X.5" — a real, load-bearing buildable item the rev-1 master neither counted nor phased; it is the gov E2E receipt for I1–I3)*
 
 **Goal.** Every new feature (including Section I) gets validated in Gov, not just
 Commercial, via the existing gov workflow fleet — specify the plug-in points so a
@@ -778,7 +879,7 @@ PR author knows exactly which lane exercises their surface.
   `loom_session` cookie in Node. In-VNet execution = **ACA Container App Job** on the
   console's CAE + UAMI (not a GitHub runner).
 
-**X5 deliverable.**
+**X3 deliverable.**
 - `docs/fiab/runbooks/gov-ci-plugin-guide.md` — a table: "new surface kind → which
   gov lane validates it". E.g. a new **gate/env var** → `gov-gates.yml` asserts it
   appears + resolves; a new **BFF route** → add a probe to `gov-bff-verify.yml`; a
@@ -808,13 +909,16 @@ parity is the existing `loom-ui-verify.yml` / `loom-roll-and-validate.yml` lanes
   (both exist, dormant), `pdp/enforce.ts` + `shadow-report/route.ts` (shadow-store
   precedent), `workspace-bindings.ts` (create hook), delete-cascade #2020.
 - Section X depends on: `cloud-endpoints.ts` (X1 base, exists), `env-checks.ts` +
-  `gates/registry.ts` (X3), the `gov-*.yml` fleet (X5).
+  `gates/registry.ts` (X2), the `gov-*.yml` fleet (X3).
 - Rules honored: `no-fabric-dependency.md` (Azure-native defaults; Fabric/PBI/AAS
   gated), `no-vaporware.md` (real ARM/data-plane, E2E receipts), `loom_browser_e2e_before_done`
   (G1 receipts), `ux-standards.md` G2 (Fix-it wizards / gate registry) + G3, `loom_default_on_opt_out`
   (identity enforcement is the deliberate opt-in security exception, like PDP enforce).
+- Rev-2 sequencing (from the master spine): **I1 → I2 → I5 → I3 → I4** (I5
+  before I3 — the shadow hook lives in the credential factory, not 217 call
+  sites); **I9 before I6**; I8 + X3 sit in the Phase-2/3 opportunistic bucket;
+  X2 lands in Phase 0 before every other env-adding item.
 - Open verification-at-implementation flags: exact AOAI model catalog per Gov region;
   Cosmos PITR tier (7 vs 30 day) per Gov region; Azure Maps account availability vs
   the MapLibre substitute decision; whether the Console UAMI already holds Managed
   Identity Contributor in `LOOM_WS_IDENTITY_RG` (else add `ws-identity-rbac.bicep`).
-```
