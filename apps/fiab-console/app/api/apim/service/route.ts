@@ -16,10 +16,11 @@
  * updateApimSku) already existed in apim-client.ts but were never exposed.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import {
   apimConfigGate, getApimService, updateApimSku, ApimError,
 } from '@/lib/azure/apim-client';
+import { apiHonestGateError } from '@/lib/api/gate-envelope';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -29,13 +30,14 @@ export const dynamic = 'force-dynamic';
 // must match the pane's SKU dropdown (apim-service-pane.tsx SKU_OPTIONS).
 const ALLOWED_SKUS = ['Developer', 'Basic', 'Standard', 'Premium', 'BasicV2', 'StandardV2'];
 
+// WS-D2: APIM config gate normalized onto the shared svc-apim gate envelope.
 function gate() {
   const g = apimConfigGate();
   if (g) {
-    return NextResponse.json(
-      { ok: false, code: 'not_configured', error: `APIM service not configured: set ${g.missing}.`, missing: g.missing },
-      { status: 503 },
-    );
+    return apiHonestGateError('svc-apim', {
+      missing: [g.missing],
+      message: `APIM service not configured: set ${g.missing}.`,
+    });
   }
   return null;
 }
@@ -45,9 +47,8 @@ function fail(e: any) {
   return NextResponse.json({ ok: false, error: e?.message || String(e), body: e?.body }, { status });
 }
 
-export async function GET() {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+// WS-D1: session-only routes adopted onto `withSession`.
+export const GET = withSession(async () => {
   const g = gate(); if (g) return g;
   try {
     const service = await getApimService();
@@ -59,11 +60,9 @@ export async function GET() {
     }
     return NextResponse.json({ ok: true, service });
   } catch (e: any) { return fail(e); }
-}
+});
 
-export async function PATCH(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const PATCH = withSession(async (req: NextRequest) => {
   const g = gate(); if (g) return g;
   const body = await req.json().catch(() => ({}));
   const sku = body?.sku ? String(body.sku) : '';
@@ -80,4 +79,4 @@ export async function PATCH(req: NextRequest) {
     const service = await updateApimSku(sku, capacity);
     return NextResponse.json({ ok: true, service });
   } catch (e: any) { return fail(e); }
-}
+});

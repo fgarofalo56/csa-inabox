@@ -4,24 +4,26 @@
  *
  * Returns shape: { ok, instances:[{name, location, sku, gatewayUrl, state}] }
  */
-import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { NextResponse } from 'next/server';
 import { uamiArmCredential } from '@/lib/azure/arm-credential';
 import { armBase, armScope } from '@/lib/azure/cloud-endpoints';
+import { apiHonestGateError } from '@/lib/api/gate-envelope';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 const credential = uamiArmCredential();
 
-export async function GET(_req: NextRequest) {
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-
+// WS-D1: session-only route adopted onto `withSession`. WS-D2: the bespoke
+// LOOM_SUBSCRIPTION_ID 503 normalized onto the shared svc-apim gate envelope
+// (same check, same 503, back-compat error mirror preserved).
+export const GET = withSession(async () => {
   const sub = process.env.LOOM_SUBSCRIPTION_ID;
-  if (!sub) return NextResponse.json({
-    ok: false, error: 'LOOM_SUBSCRIPTION_ID not set',
-  }, { status: 503 });
+  if (!sub) return apiHonestGateError('svc-apim', {
+    missing: ['LOOM_SUBSCRIPTION_ID'],
+    message: 'LOOM_SUBSCRIPTION_ID not set',
+  });
 
   // Dedupe the RGs: in single-RG deployments LOOM_ADMIN_RG === LOOM_DLZ_RG, which
   // previously enumerated the same APIM twice (audit B7). Compare case-insensitively
@@ -77,4 +79,4 @@ export async function GET(_req: NextRequest) {
   }
 
   return NextResponse.json({ ok: true, instances: Array.from(byId.values()), errors });
-}
+});

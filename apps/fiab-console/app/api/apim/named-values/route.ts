@@ -24,17 +24,21 @@ import { requireTenantAdmin } from '@/lib/auth/feature-gate';
 import {
   apimConfigGate, listNamedValues, upsertNamedValue, deleteNamedValue, ApimError,
 } from '@/lib/azure/apim-client';
+import { apiHonestGateError } from '@/lib/api/gate-envelope';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+// WS-D2: APIM config gate normalized onto the shared svc-apim gate envelope.
+// (Session handling stays on requireTenantAdmin — APIM named values are shared
+// tenant infrastructure gated to tenant admins, not plain session routes.)
 function gate() {
   const g = apimConfigGate();
   if (g) {
-    return NextResponse.json(
-      { ok: false, code: 'not_configured', error: `APIM service not configured: set ${g.missing}.`, missing: g.missing },
-      { status: 503 },
-    );
+    return apiHonestGateError('svc-apim', {
+      missing: [g.missing],
+      message: `APIM service not configured: set ${g.missing}.`,
+    });
   }
   return null;
 }
