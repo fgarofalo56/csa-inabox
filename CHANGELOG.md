@@ -25,6 +25,20 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.73.1](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.73.0...csa-inabox-v0.73.1) (2026-07-22)
+
+
+### Bug Fixes
+
+* **ci:** roll gate — never roll a racy :latest, accept superseded-but-verified commits ([#2395](https://github.com/fgarofalo56/csa-inabox/issues/2395)) ([f3d4ab2](https://github.com/fgarofalo56/csa-inabox/commit/f3d4ab2973a23d85f41c574432a250bdcfa3fc17))
+* **ui:** dark theme sweep 2 — 28 remaining ButtonText sites + canvas-kit glyph boundary + grid overflows ([#2389](https://github.com/fgarofalo56/csa-inabox/issues/2389)) ([7b8edbc](https://github.com/fgarofalo56/csa-inabox/commit/7b8edbc3ea3f8708aff40df080380a64403bfa04))
+* **ux:** G3 — SplitPane-wrap 13 fixed-width canvas inspectors/palettes (U1+U2) ([#2390](https://github.com/fgarofalo56/csa-inabox/issues/2390)) ([093e0d4](https://github.com/fgarofalo56/csa-inabox/commit/093e0d4edc977c565de1c6411ebe585afd5f0201))
+
+
+### Documentation
+
+* **prp:** loom-next-level v2 — 134 items, critic-hardened, north-star + UI-excellence + inbound-migration workstreams ([#2392](https://github.com/fgarofalo56/csa-inabox/issues/2392)) ([476efba](https://github.com/fgarofalo56/csa-inabox/commit/476efbabf1eec35d270ee965671ae14285beeca2))
+
 ## [0.73.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.72.1...csa-inabox-v0.73.0) (2026-07-22)
 
 
