@@ -30,11 +30,12 @@
  *
  * CONSUMERS
  * ---------
- *  - GET /api/admin/mcp-catalog → catalogForUi() → McpCatalogPanel (deploy grid)
- *  - POST /api/admin/mcp-catalog/deploy → deployMcpContainerApp (mcp-deploy-client)
- *    wires the UAMI identity, internal ingress, secretRef from Key Vault, and the
- *    Azure Files volume (mounted /data) when `needsStorage`.
+ *  - lib/copilot/agent-registry.ts — MCP_CATALOG + airGapSafeServers drive the
+ *    Sovereign Agent Mesh tool/egress policy spine.
  *  - platform/fiab/bicep/modules/admin-plane/mcp-catalog-app.bicep (IaC mirror).
+ *  (The legacy /api/admin/mcp-catalog* routes + McpCatalogPanel/mcp-deploy-client
+ *  were removed — the live deploy surface is McpCatalogBrowser over
+ *  lib/mcp/catalog.ts + /api/admin/mcp-servers/*.)
  */
 
 /** Egress profile for a catalog server — drives the UI pre-deploy warning. */
