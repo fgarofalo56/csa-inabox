@@ -1,0 +1,17 @@
+{
+  "name": "report-subscriptions",
+  "version": "1.0.0",
+  "description": "CSA Loom report-subscriptions timer Function (WS-C2). On REPORT_SUBSCRIPTIONS_CRON it reads enabled report subscriptions from Cosmos, selects the ones whose own NCRONTAB cron is due, renders each report Azure-native (paginated-report-renderer — no Power BI ExportTo / Fabric dependency), POSTs the rendered bytes to the delivery Logic App (Office 365 email), and writes an append-only ReportDeliveryLog row the [subId]/logs route surfaces. Managed-identity auth, no keys.",
+  "main": "dist/src/functions/*.js",
+  "scripts": { "build": "tsc", "test": "vitest run", "start": "func start" },
+  "dependencies": {
+    "@azure/functions": "^4.5.0",
+    "@azure/identity": "^4.5.0",
+    "@azure/cosmos": "^4.2.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0",
+    "@types/node": "^20.0.0"
+  }
+}
