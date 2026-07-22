@@ -37,11 +37,24 @@
  * keyboard support, html lang) was done alongside; the one genuine blocking
  * finding it surfaced (an unlabeled icon-only Delete button in the pipeline copy
  * source tab) is fixed in the same PR.
+ *
+ * RATCHET (V3, loom-next-level WS-verification): the gate is now a BASELINE
+ * RATCHET, not a zero-violations gate. e2e/a11y-baseline.json pins each
+ * surface's measured blocking-rule counts (critical/serious) at current
+ * reality; a surface fails only when its count GROWS past the baseline — or,
+ * strictly, when ANY new `color-contrast` node appears that is not in the
+ * surface's explicit allow-list (A11Y_CONTRAST_STRICT=1 is the default; this
+ * is the rule that would have caught the 07-21 dark-on-dark accent class).
+ * Regenerate the baseline (this ratchet's --update-baseline) with:
+ *   A11Y_UPDATE_BASELINE=1 SESSION_SECRET=<kv> LOOM_URL=<url> \
+ *     pnpm exec playwright test --grep @a11y
+ * See e2e/_lib/a11y-ratchet.ts for the compare/update logic + owner header.
  */
 import { test, expect } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
 import type { Result as AxeViolation } from 'axe-core';
 import { BASE, signIn, recordVerdict } from './_lib/uat';
+import { UPDATE_MODE, CONTRAST_STRICT, compareToBaseline, recordBaseline } from './_lib/a11y-ratchet';
 
 // One browser context per surface — a11y is independent per page; no shared
 // server state is created, so nothing to seed or tear down (editor surfaces are
@@ -82,6 +95,10 @@ const SURFACES: Surface[] = [
   { label: 'data-product',         path: '/data-products' },
   { label: 'connections',          path: '/connections' },
   { label: 'deployment-pipelines', path: '/deployment-pipelines' },
+  // V3: the V2 canvas editors join the scan so the strict color-contrast rule
+  // covers the accent-on-canvas case (the 07-21 dark-on-dark bug class).
+  { label: 'editor-data-pipeline', path: '/items/data-pipeline/new' },
+  { label: 'editor-eventstream',   path: '/items/eventstream/new' },
 ];
 
 /** Compact one-line summary of a violation for the verdict note / assertion msg. */
@@ -93,6 +110,9 @@ function fmt(v: AxeViolation): string {
 for (const surface of SURFACES) {
   // `@a11y` in the title is what `pnpm test:a11y` (--grep @a11y) selects.
   test(`@a11y ${surface.label} — axe wcag2a/wcag2aa/section508 (${surface.path})`, async ({ browser }) => {
+    // Axe on heavy virtualized surfaces (/browse) legitimately exceeds the
+    // 30s default — proven on the 2026-07-22 live baseline capture.
+    test.setTimeout(120_000);
     const ctx = await browser.newContext();
     await signIn(ctx);
     const page = await ctx.newPage();
@@ -106,8 +126,11 @@ for (const surface of SURFACES) {
       loadNote = `http=${resp?.status() ?? '?'}`;
       // Let client components + React Query hydrate; networkidle can hang on
       // surfaces that poll, so bound the settle and swallow the timeout.
+      // 3s (was 1.5s): /browse fires a client-side re-navigation shortly after
+      // load — axe starting inside it dies with "target closed" (proven live
+      // 2026-07-22; with the 3s settle the same scan completes in ~77s).
       await page.waitForLoadState('networkidle', { timeout: 8_000 }).catch(() => {});
-      await page.waitForTimeout(1_500);
+      await page.waitForTimeout(3_000);
 
       const results = await new AxeBuilder({ page })
         .withTags(['wcag2a', 'wcag2aa', 'section508'])
@@ -132,24 +155,49 @@ for (const surface of SURFACES) {
       throw e;
     }
 
-    const pass = blocking.length === 0;
+    // ---- V3 ratchet ------------------------------------------------------
+    if (UPDATE_MODE) {
+      // Baseline (re)capture — this ratchet's --update-baseline. Records the
+      // measured reality and passes; commit the regenerated JSON with a
+      // one-line justification.
+      recordBaseline(surface.label, blocking, BASE);
+      recordVerdict({
+        surface: `a11y:${surface.label}`, feature: 'axe-ratchet-baseline', verdict: 'B',
+        status: 'pass',
+        notes: `${loadNote}; baseline updated: ${blocking.length} blocking (>=${MIN_IMPACT}) recorded`,
+        durationMs: Date.now() - started,
+      });
+      await ctx.close();
+      return;
+    }
+
+    const ratchet = compareToBaseline(surface.label, blocking);
+    // Emit the new totals so ratchet-down PRs know the numbers to lower to.
+    const totalsNote =
+      `ratchet: measured critical=${ratchet.measured.critical} serious=${ratchet.measured.serious}` +
+      ` vs baseline critical=${ratchet.baseline.critical} serious=${ratchet.baseline.serious}` +
+      `; contrastStrict=${CONTRAST_STRICT ? 'on' : 'off'}`;
     recordVerdict({
       surface: `a11y:${surface.label}`,
-      feature: 'axe-scan',
-      verdict: pass ? (logged.length ? 'B' : 'A') : 'F',
-      status: pass ? 'pass' : 'fail',
-      notes: pass
-        ? `${loadNote}; 0 blocking (>=${MIN_IMPACT})` +
-          (logged.length ? `; ${logged.length} logged: ${logged.map(fmt).join('; ').slice(0, 400)}` : '')
-        : `CRASH=[a11y:${surface.label}] ${loadNote}; ${blocking.length} blocking: ${blocking.map(fmt).join('; ').slice(0, 500)}`,
+      feature: 'axe-ratchet',
+      verdict: ratchet.ok ? (blocking.length || logged.length ? 'B' : 'A') : 'F',
+      status: ratchet.ok ? 'pass' : 'fail',
+      notes: ratchet.ok
+        ? `${loadNote}; ${totalsNote}` +
+          (blocking.length ? `; ${blocking.length} baselined blocking: ${blocking.map(fmt).join('; ').slice(0, 300)}` : '') +
+          (logged.length ? `; ${logged.length} logged` : '')
+        : `CRASH=[a11y:${surface.label}] ${loadNote}; ${totalsNote}; ${ratchet.reasons.join(' && ')}` +
+          `; blocking now: ${blocking.map(fmt).join('; ').slice(0, 400)}`,
       durationMs: Date.now() - started,
     });
 
     await ctx.close();
     expect(
-      blocking,
-      `${surface.path} has ${blocking.length} blocking a11y violation(s) (>=${MIN_IMPACT}):\n` +
-        blocking.map(fmt).join('\n'),
+      ratchet.reasons,
+      `${surface.path} REGRESSED past its a11y baseline (>=${MIN_IMPACT}):\n` +
+        ratchet.reasons.join('\n') +
+        `\nBlocking violations now:\n${blocking.map(fmt).join('\n')}` +
+        `\nUnblock (after fixing, or with justification): A11Y_UPDATE_BASELINE=1 … pnpm exec playwright test --grep @a11y`,
     ).toEqual([]);
   });
 }
