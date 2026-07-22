@@ -1,5 +1,5 @@
 /**
- * GET /api/admin/overview — live counts for the 13 admin-landing tiles.
+ * GET /api/admin/overview — live counts for the 14 admin-landing tiles.
  *
  * Replaces the static "Pick an area" EmptyState on /admin with real section
  * tiles, each showing a count fetched from its own backend. Every backend
@@ -40,9 +40,10 @@ import {
 } from '@/lib/azure/cosmos-client';
 import type { SqlParameter } from '@azure/cosmos';
 import { getGraphHost, getGraphScope } from '@/lib/azure/cloud-endpoints';
-import { listResources, listAlertHistory } from '@/lib/azure/monitor-client';
+import { listResources, listAlertHistory, queryLogs } from '@/lib/azure/monitor-client';
 import { listSensitivityLabels } from '@/lib/azure/mip-graph-client';
 import { countFlagsOff } from '@/lib/admin/runtime-flags';
+import { RUM_CLOUD_ROLE } from '@/lib/telemetry/rum-shared';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -64,7 +65,7 @@ export type OverviewTileKey =
   | 'workspaces' | 'domains' | 'items' | 'auditEvents' | 'permissions'
   | 'attributeGroups' | 'labeledItems' | 'tenantSettings'
   | 'users' | 'capacity' | 'openAuditItems' | 'sensitivityLabels'
-  | 'runtimeFlags';
+  | 'runtimeFlags' | 'rumClientErrors';
 
 export type OverviewTiles = Record<OverviewTileKey, TileCount>;
 
@@ -212,6 +213,22 @@ async function sensitivityLabelCount(): Promise<number> {
 }
 
 // ----------------------------------------------------------------------------
+// RUM1 — client JS errors (24 h) from the App Insights workspace tables
+// ----------------------------------------------------------------------------
+
+/** Browser-side unhandled errors in the last 24 h (AppExceptions, RUM role).
+ * Throws MonitorNotConfiguredError when the LAW workspace is unset → gated tile. */
+async function rumClientErrorCount(): Promise<number> {
+  const r = await queryLogs(
+    `AppExceptions | where AppRoleName == '${RUM_CLOUD_ROLE}' | summarize n = count()`,
+    'P1D',
+  );
+  const i = r.columns.indexOf('n');
+  const n = Number(r.rows[0]?.[i] ?? 0);
+  return Number.isFinite(n) ? n : 0;
+}
+
+// ----------------------------------------------------------------------------
 // Route
 // ----------------------------------------------------------------------------
 
@@ -238,7 +255,7 @@ async function computeTiles(tenantId: string): Promise<OverviewTiles> {
   const [
     workspaces, domains, items, auditEvents, permissions, attributeGroups,
     labeledItems, tenantSettings, users, capacity, openAuditItems, sensitivityLabels,
-    runtimeFlags,
+    runtimeFlags, rumClientErrors,
   ] = await Promise.all([
     tile(() => countWhereTenant(workspacesContainer, tenantId), COSMOS_HINT),
     tile(() => domainsCount(tenantId), COSMOS_HINT),
@@ -258,11 +275,14 @@ async function computeTiles(tenantId: string): Promise<OverviewTiles> {
     tile(() => sensitivityLabelCount(), MIP_HINT),
     // FLAG0 — runtime kill-switches currently flipped OFF (surfaces reverted).
     tile(() => countFlagsOff(), COSMOS_HINT),
+    // RUM1 — browser JS errors (24 h) from AppExceptions (role loom-console-browser).
+    tile(() => rumClientErrorCount(),
+      'Set LOOM_LOG_ANALYTICS_WORKSPACE_ID (auto-derived from the monitoring module) and grant the Console UAMI "Log Analytics Reader" on the workspace to count client-side errors.'),
   ]);
 
   return {
     workspaces, domains, items, auditEvents, permissions, attributeGroups,
     labeledItems, tenantSettings, users, capacity, openAuditItems, sensitivityLabels,
-    runtimeFlags,
+    runtimeFlags, rumClientErrors,
   };
 }

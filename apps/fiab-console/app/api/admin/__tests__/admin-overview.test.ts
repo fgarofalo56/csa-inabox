@@ -73,12 +73,14 @@ vi.mock('@/lib/azure/cosmos-client', () => ({
 // --------------------------------------------------------------------------
 const listResourcesMock = vi.fn();
 const listAlertHistoryMock = vi.fn();
+const queryLogsMock = vi.fn();
 class FakeMonitorNotConfigured extends Error {
   constructor(public missing: string[]) { super(`Monitor not configured. Missing env: ${missing.join(', ')}`); }
 }
 vi.mock('@/lib/azure/monitor-client', () => ({
   listResources: () => listResourcesMock(),
   listAlertHistory: (o: any) => listAlertHistoryMock(o),
+  queryLogs: (kql: string, timespan?: string) => queryLogsMock(kql, timespan),
   MonitorNotConfiguredError: FakeMonitorNotConfigured,
 }));
 
@@ -119,6 +121,8 @@ beforeEach(() => {
     { monitorCondition: 'Fired' }, { monitorCondition: 'Resolved' }, { monitorCondition: 'Fired' },
   ]);
   listSensitivityLabelsMock.mockResolvedValue([{ id: 'l1' }, { id: 'l2' }]);
+  // RUM1 — client-error count from AppExceptions (queryLogs over the LAW).
+  queryLogsMock.mockResolvedValue({ columns: ['n'], rows: [[5]], rowCount: 1 });
   delete process.env.LOOM_IDENTITY_PICKER_ENABLED;
   vi.stubGlobal('fetch', vi.fn(async () => new Response('893', { status: 200 })));
 });
@@ -137,14 +141,14 @@ describe('/api/admin/overview', () => {
     expect((await GET()).status).toBe(401);
   });
 
-  it('GET returns all 13 tiles with real counts when every backend resolves', async () => {
+  it('GET returns all 14 tiles with real counts when every backend resolves', async () => {
     process.env.LOOM_IDENTITY_PICKER_ENABLED = 'true';
     seedHappyCosmos();
     const { GET } = await import('@/app/api/admin/overview/route');
     const j = await (await GET()).json();
     expect(j.ok).toBe(true);
     const t = j.tiles;
-    expect(Object.keys(t)).toHaveLength(13);
+    expect(Object.keys(t)).toHaveLength(14);
     expect(t.workspaces).toEqual({ count: 4, gated: false });
     expect(t.items).toEqual({ count: 42, gated: false });
     expect(t.domains).toEqual({ count: 2, gated: false });
@@ -157,6 +161,17 @@ describe('/api/admin/overview', () => {
     expect(t.capacity).toEqual({ count: 3, gated: false });
     expect(t.openAuditItems).toEqual({ count: 2, gated: false }); // Fired only
     expect(t.sensitivityLabels).toEqual({ count: 2, gated: false });
+    // RUM1 — browser JS errors (24 h) from AppExceptions via queryLogs.
+    expect(t.rumClientErrors).toEqual({ count: 5, gated: false });
+  });
+
+  it('GET gates the rumClientErrors tile when Log Analytics is not configured', async () => {
+    queryLogsMock.mockRejectedValue(new FakeMonitorNotConfigured(['LOOM_LOG_ANALYTICS_WORKSPACE_ID']));
+    const { GET } = await import('@/app/api/admin/overview/route');
+    const j = await (await GET()).json();
+    expect(j.tiles.rumClientErrors.count).toBeNull();
+    expect(j.tiles.rumClientErrors.gated).toBe(true);
+    expect(j.tiles.rumClientErrors.hint).toMatch(/LOOM_LOG_ANALYTICS_WORKSPACE_ID/);
   });
 
   it('GET gates the users tile when LOOM_IDENTITY_PICKER_ENABLED is unset', async () => {
