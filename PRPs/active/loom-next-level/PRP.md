@@ -207,8 +207,13 @@ this one; these are now the binding decision rules:**
 3. **`lib/azure/cloud-endpoints.ts` already centralizes cloud detection/suffixes**
    (Commercial/GCC/GCC-High/DoD) — X1 is an adoption ratchet, not a build.
 4. **The real route-toolkit gap is 1,356 hand-rolled routes** (of 1,541), not ~310.
-5. **ADLS `isVersioningEnabled: false` in storage.bicep** — DR0 enables it; Cosmos
-   PITR (Continuous7Days) and KV soft-delete + purge protection are already on.
+5. **ADLS `isVersioningEnabled: false` in storage.bicep** — **CORRECTED at the
+   0→1 boundary (DR0 #2414, Learn-grounded): blob versioning is NOT SUPPORTED
+   on HNS (ADLS Gen2) accounts — the premise was wrong.** DR0 instead shipped
+   Cosmos PITR `Continuous30Days` (GA; the previous `Continuous7Days` is
+   documented-preview; the 7→30 tier change is a hot in-place ARM PATCH), an
+   HNS-guarded restore posture, and the `svc-dr-restore-posture` live-ARM
+   audit row. KV soft-delete + purge protection already on.
 6. **Column lineage exists today only for Databricks UC**; Purview and Weave/Thread
    edges are table-grain (no column fields).
 7. **The loom-native DAX "evaluator" is 3 regexes** — everything beyond
@@ -217,10 +222,14 @@ this one; these are now the binding decision rules:**
 8. **The report designer already has 25 visuals + conditional formatting +
    cross-filtering** — depth items target real gaps (small-multiples rendering,
    analytics pane, Gov maps, drill-through), not re-builds.
-9. **(rev 2, BLOCKER)** `platform/fiab/bicep/modules/admin-plane/main.bicep` sits at
-   **exactly 256 `param` declarations — the ARM hard cap**. Any item adding a
-   top-level param breaks the deploy. R0 consolidates env params into object/bag
-   params FIRST; every bicep-touching item cites the R0 rule.
+9. **(rev 2, BLOCKER — RESOLVED at the 0→1 boundary)**
+   `platform/fiab/bicep/modules/admin-plane/main.bicep` sat at **exactly 256
+   `param` declarations — the ARM hard cap**. **R0 landed (#2398): 232 params
+   via typed config bags + var shims; `check-bicep-param-cap.mjs` enforces
+   headroom (warn 240 / fail 250).** The bag rule stays binding for every later
+   bicep-touching item. **Boundary note: the TOP-LEVEL `main.bicep` is now at
+   249 params (its warn threshold) after the V1/I1 bags — run a consolidation
+   pass there before the next item adds a top-level bag.**
 10. **(rev 2)** A DR apparatus **already exists**: `.github/workflows/dr-drill.yml`
     (quarterly, scenarios cosmos-failover / storage-failover / keyvault-restore /
     bicep-rollback, scratch-env pre-flight + teardown) plus `docs/DR.md`,

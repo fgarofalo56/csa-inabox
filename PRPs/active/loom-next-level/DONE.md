@@ -20,15 +20,29 @@ run. Receipts live in the PR bodies; this file is the program-level index.
 | E1 — golden Q/A eval sets (top-10 surfaces) | #2406 | 2026-07-22 | `content/evals/` — `_schema.json` + README + 10 corpus-grounded JSONL sets (146 rows; help 20Q … eventstream 12Q); `lint-eval-sets.mjs` validates schema + chunk-path existence; staged into the corpus by `stage-copilot-corpus.sh`; `lint:evals` script. Also fixed: license gate now `--excludePrivatePackages` (workspace root false-positive). |
 | U10 — /browse virtualization (VirtualizedGrid/List) | #2410 (re-filed from #2408) | 2026-07-22 | `@tanstack/react-virtual` (sole permitted dep) windowed grid/list + `VIRTUALIZATION_CUTOFF=200`; adopted on /browse (1,437-item table), marketplace, federated search; FLAG0 flag `u10-browse-virtualization` (OFF = pre-U10 path, no roll); 53/53 tests vs the real lib. G1 live scroll receipt attaches at the batch roll. |
 
-## Phase 0 remaining
+| test-projects batch (Phase-1 rider, round-3 F2) | #2411 | 2026-07-22 | All planned Playwright project stubs (journey/visual-wide+narrow/route-smoke/u0-grip/monaco-divider/dax-golden/spark-chaos/lineage-columns) in ONE PR — the config serialization chain is dead; later items add spec files only. |
+| C1 — Cost Management hardening + cache + role | #2413 | 2026-07-22 | Every cost fan-out via `getOrComputeCached` ('cost' counter backend, 15m TTL, serve-stale); `cost-scope.ts` sub/RG/tag resolver; `cost-reader-rbac.bicep` day-one Cost Management Reader for the Console UAMI; cost ENV_CHECKS entry gains X2 availability (il5 → CSV-ingest fallback note). Live cache miss→hit receipt at the roll. |
+| DR0 — restore-posture enablement (CORRECTED) | #2414 | 2026-07-22 | **Learn-grounded correction: blob versioning is unsupported on HNS/ADLS Gen2 — the PRP premise was wrong.** Shipped: Cosmos PITR `Continuous30Days` (GA; 7-day is documented-preview; 7→30 = hot in-place ARM PATCH), HNS-guarded restore posture, `svc-dr-restore-posture` live-ARM audit row (data-plane fragment) + wizard fixit. Params ride the drConfig bag. |
+| S1 — MSAL secret-expiry inventory + burn alert | #2416 | 2026-07-22 | `secret-expiry-monitor` Function (pure core 13 tests; identity-based storage, in-bicep roles); Graph+KV live inventory route (withTenantAdmin); Secret & credential health section on the Health hub (red <7d, amber <30/<60); 60/30/7 band escalation w/ blob-state dedup through the ONE shared action group (`LOOM_ALERT_ACTION_GROUP_ID` — first consumer of the O1 convention); `docs/fiab/runbooks/secret-rotation.md`. Graph `Application.Read.All` consent = one-time operator action (runbook §4). |
+| V1 — synthetic user-journey monitoring | #2417 | 2026-07-22 | Six journeys J1–J6 (TRUE MSAL login probe with honest-skip; minted-session app journeys), `journey` Playwright project (rides #2411), `loom-synthetic-monitor.yml` */15 + `synthetic-monitor-job.bicep` (in-VNet ACA Schedule job, observabilityConfig bag, default-ON), Journeys TAB on the Health hub (HealthHubTabs; FLAG0 flag `v1-journeys-tab`), `/api/admin/synthetic-runs` (real Blob reads), observability ENV_CHECKS fragment ×3 specs. Cost ~$30–60/mo/cloud. First scheduled run + tab screenshots = post-roll receipts. |
+| I1 — per-workspace identity provision-on-create | #2415 | 2026-07-22 | Activates the dormant scaffolding: `applyWorkspaceIdentity` (best-effort, never blocks create) + delete cascade recorded on the doc; `ws-identity-rbac.bicep` (MI Contributor — verified the Console UAMI could NOT PUT UAMIs; ABAC-constrained RBAC-Admin); ARM-throttle-aware serialized queue; mode default **off** (sole Phase-0 default-ON exception — operator's phased shadow→enforce decision); workspaceIdentityConfig bag typed. |
+| E2 — copilot-evaluator Function | #2418 | 2026-07-22 | Real-path eval runner: `/api/internal/copilot/eval-probe` (byte-identical searchDocs + aoaiChat turn, internal-token fail-closed), pure evaluator-core (28 tests; hit-rate/MRR, deterministic guards BEFORE the judge, judge cap 500/day → 'deferred'), Cosmos `loom-copilot-evals`, `copilot-evaluator-function.bicep` (no storage keys, 5 in-bicep roles), STRIDE row in PR + runbook. Live HTTP-trigger receipt post-roll. |
+| FRESH0 — PRP self-freshness gate (Phase-1 rider) | #2420 | 2026-07-22 | `check-prp-freshness.mjs` facts table + live counters; warn >10% drift / flipped PR state; `--strict` for boundary runs; wired into loom-guardrails (warn-only). Seeded-stale acceptance proven. |
 
-- **In CI:** U10 #2410, test-projects batch #2411 (Phase-1 rider).
-- **Wave B in flight (agents):** V1, S1, DR0, C1, I1.
-- **Then:** E2 (strictly after E1 — Phase 0 tail), batch roll + G1 receipts,
-  FRESH0 re-baseline at the 0→1 boundary.
+## Phase 0 — COMPLETE (build set)
+
+All Phase-0 items merged 2026-07-22. Post-roll receipts pending (tracked in
+the boundary PR): the batch roll (SHA + expected_sha), G1 browser receipts
+(U10 /browse scroll + flag flip, X2 gates page, V1 Journeys tab, S1
+secret-health, /admin/runtime-flags), E2 live HTTP-trigger run, V1 first
+scheduled run. **Operator actions queued:** SYNTHETIC_LOGIN_* automation
+account (V1 J1 honest-skips until then); S1 Graph `Application.Read.All`
+admin consent; `deploy-loom-uat-job.sh` (loom-uat image); Function code
+publish for secret-expiry-monitor + copilot-evaluator; S2's live FIC
+migration (runbook decision: MIGRATE).
 
 ## Phase boundaries (FRESH0 runs)
 
 | Boundary | Date | Result |
 |----------|------|--------|
-| (none yet) | | |
+| 0 → 1 | 2026-07-22 | `check-prp-freshness.mjs --strict` → exit 0, 0 warnings. Re-baselined in the same commit: param-cap stated 256→232 (R0 landed; top-level main.bicep at 249 = warn, consolidation pass queued), route-total 1541→1547, toolkit-gap 1356→1359; PRP ground-truth #5 corrected (HNS blocks blob versioning — DR0 shipped the Learn-correct posture) and #9 marked RESOLVED. |

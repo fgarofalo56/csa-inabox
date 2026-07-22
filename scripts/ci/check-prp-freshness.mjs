@@ -90,21 +90,21 @@ const FACTS = [
     id: 'param-cap',
     where: 'PRP.md ground-truth #9 / ws-ratchets.md R0',
     statement: 'admin-plane/main.bicep param declarations',
-    stated: 256, // PRP still says "exactly 256" — R0 (#2398) took it to 232; re-baseline at the 0→1 boundary
+    stated: 232, // 0→1 boundary re-baseline (R0 #2398 landed; PRP text updated same commit)
     live: countAdminPlaneParams,
   },
   {
     id: 'route-total',
     where: 'ws-ratchets.md §0 ground truth',
     statement: 'total app/api/**/route.ts files',
-    stated: 1541,
+    stated: 1547, // 0→1 boundary re-baseline (Wave A/B added FLAG0 + eval-probe + synthetic-runs routes)
     live: countRoutes,
   },
   {
     id: 'route-toolkit-gap',
     where: 'PRP.md ground-truth #4 / ws-ratchets.md §0',
     statement: 'hand-rolled session routes not on the route-toolkit',
-    stated: 1356,
+    stated: 1359, // 0→1 boundary re-baseline; R2/R3 codemod+ratchet (Phase 1) drives this DOWN
     live: countHandRolledRoutes,
   },
   {
