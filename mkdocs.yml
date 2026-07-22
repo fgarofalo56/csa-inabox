@@ -1859,6 +1859,7 @@ nav:
               - Secrets Bootstrap (per boundary): fiab/runbooks/secrets-bootstrap.md
               - Secret Rotation (MSAL + tracked credentials): fiab/runbooks/secret-rotation.md
               - MSAL Credential Strategy (S2 FIC migration): fiab/runbooks/msal-credential-strategy.md
+              - Bicep Drift (live-estate what-if lanes): fiab/runbooks/bicep-drift.md
           - Developer:
               - REST API (OpenAPI): fiab/developer/api.md
               - Scoped API tokens (PAT): fiab/developer/api-tokens.md
