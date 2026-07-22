@@ -83,6 +83,12 @@ var planName = take('plan-secexp-${uniqueString(resourceGroup().id)}', 40)
 var siteName = take('func-secexp-${uniqueString(resourceGroup().id)}', 60)
 var stateContainerName = 'secret-expiry-state'
 
+// COST0 tag convention: every loom-next-level program resource carries the
+// `loom-next-level` tag so program-budget.bicep's tag-filtered Consumption
+// budget bounds the program's aggregate run-rate (S1 is ~$0 idle on Y1 — see
+// program-budget.README.md).
+var programTags = union(complianceTags, { 'loom-next-level': 'true' })
+
 // Built-in role definition ids (same constants the sibling modules use).
 var blobDataOwnerRoleId = 'b7e6dc6d-f1e8-4753-8033-0f276bb0955b' // Storage Blob Data Owner
 var queueDataContributorRoleId = '974c5e8b-45b9-4653-ba55-5f855dd0fb88' // Storage Queue Data Contributor
@@ -92,7 +98,7 @@ var monitoringContributorRoleId = '749f88d5-cbae-40b8-bcfc-e573ddc772fa' // Moni
 resource sa 'Microsoft.Storage/storageAccounts@2024-01-01' = {
   name: saName
   location: location
-  tags: complianceTags
+  tags: programTags
   kind: 'StorageV2'
   sku: { name: 'Standard_LRS' }
   properties: {
@@ -117,7 +123,7 @@ resource stateContainer 'Microsoft.Storage/storageAccounts/blobServices/containe
 resource plan 'Microsoft.Web/serverfarms@2024-04-01' = {
   name: planName
   location: location
-  tags: complianceTags
+  tags: programTags
   sku: {
     name: 'Y1'
     tier: 'Dynamic'
@@ -155,7 +161,7 @@ var baseAppSettings = [
 resource site 'Microsoft.Web/sites@2024-04-01' = {
   name: siteName
   location: location
-  tags: complianceTags
+  tags: programTags
   kind: 'functionapp,linux'
   identity: { type: 'SystemAssigned' }
   properties: {

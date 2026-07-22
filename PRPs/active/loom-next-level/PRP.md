@@ -283,6 +283,12 @@ this one; these are now the binding decision rules:**
   compactness; tokens only (no raw px/hex); TileGrid/EmptyState primitives.
 - **bicep-sync:** every new Azure resource/role/env lands in
   `platform/fiab/bicep/**` + the appropriate orchestrator + bootstrap workflow.
+  **Tag convention (COST0, round 3):** every Azure resource this PRP deploys
+  carries the `loom-next-level: 'true'` tag in its bicep module
+  (`tags: union(complianceTags, { 'loom-next-level': 'true' })`) so the COST0
+  tag-filtered program budget (`modules/admin-plane/program-budget.bicep`)
+  bounds the program's aggregate run-rate; an untagged program resource is
+  invisible to the ceiling and is a bicep-sync defect.
 - **R0 param-cap rule (BLOCKER, rev 2):** `admin-plane/main.bicep` is at the
   256-param ARM cap. New bicep params go via an **object/config param (bag
   pattern)** or a nested-module param — NEVER a new top-level `param`. Applies to

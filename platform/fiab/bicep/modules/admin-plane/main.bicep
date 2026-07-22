@@ -323,9 +323,22 @@ type observabilityConfigT = {
 
   @description('Key Vault secret URI holding the automation account password (e.g. <kvUri>secrets/synthetic-login-secret). Empty → J1 skips honestly.')
   syntheticLoginSecretUri: string?
+
+  // COST0 (program run-rate budget) — these three properties are CONSUMED BY
+  // THE TOP-LEVEL ORCHESTRATOR (platform/fiab/bicep/main.bicep programBudget
+  // module, subscription scope), not by this RG-scoped module. Declared here
+  // so the wholesale observabilityConfig pass-through stays type-clean.
+  @description('COST0 — deploy the loom-next-level-program Consumption budget (tag-filtered, Actual 80/100% + Forecasted 100% via the shared action group). Default ON; set false on offer types without budgets API support (MSDN/sponsored). Consumed at the top-level orchestrator.')
+  programBudgetEnabled: bool?
+
+  @description('COST0 — monthly run-rate ceiling for the program\'s loom-next-level-tagged resources (billing currency). Default 1000. Consumed at the top-level orchestrator.')
+  programBudgetAmount: int?
+
+  @description('COST0 — optional extra notification emails (finops DL) beyond the shared action group + subscription Owners. Consumed at the top-level orchestrator.')
+  programBudgetContactEmails: string[]?
 }
 
-@description('Observability settings bag (R0) — V1 synthetic-journey monitor settings live here; V5 bicep-drift, O1 alert-dispatch and RUM1 client-RUM settings add properties to observabilityConfigT — never a new top-level param.')
+@description('Observability settings bag (R0) — V1 synthetic-journey monitor settings live here (+ the COST0 program-budget props, consumed at the top-level orchestrator); V5 bicep-drift, O1 alert-dispatch and RUM1 client-RUM settings add properties to observabilityConfigT — never a new top-level param.')
 param observabilityConfig observabilityConfigT = {}
 
 type drConfigT = {
@@ -5657,3 +5670,9 @@ output secretExpiryPrincipalId string = secretExpiryEnabled ? secretExpiry.outpu
 // as LOOM_MAF_ENDPOINT; empty when the tier isn't active.
 output copilotMafEndpoint string = copilotMafActive ? copilotMaf!.outputs.mafInternalEndpoint : ''
 output copilotMafPrincipalId string = (copilotMafEnabled && (boundary == 'GCC-High' || boundary == 'IL5')) ? identity.outputs.uamiMafPrincipalId : ''
+
+// The ONE shared default action group (rev-2 alert standard; same id the apps
+// consume as LOOM_ALERT_ACTION_GROUP_ID). Exposed so subscription-scoped
+// alerting consumers at the top-level orchestrator — COST0's program-budget
+// notifications — route through the SAME group. Empty when skipDefaultAlerts.
+output alertActionGroupId string = defaultAlerts.outputs.actionGroupId

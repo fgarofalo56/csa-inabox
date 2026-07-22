@@ -386,7 +386,7 @@ param aasEnabled bool = true
 @description('Deploy the report-subscription delivery Logic App (integration/report-subscription-logicapp.bicep) so report subscriptions deliver day one. Day-one default ON; set false to opt out. Passed through to admin-plane/main.bicep reportSubscriptionsEnabled.')
 param reportSubscriptionsEnabled bool = true
 
-@description('Observability settings bag (loom-next-level R0/V1) — passed through to admin-plane/main.bicep observabilityConfig. {} (default) = the V1 synthetic-journey monitor deploys default-ON on its defaults (cron */15, uat-results container, MSAL login probe honest-skipped until syntheticLoginUpn + syntheticLoginSecretUri are supplied). Future observability items (V5 bicep-drift, O1 alert-dispatch, RUM1) ride THIS bag — never a new top-level param.')
+@description('Observability settings bag (loom-next-level R0/V1/COST0) — passed through to admin-plane/main.bicep observabilityConfig. {} (default) = the V1 synthetic-journey monitor deploys default-ON on its defaults (cron */15, uat-results container, MSAL login probe honest-skipped until syntheticLoginUpn + syntheticLoginSecretUri are supplied) AND the COST0 program run-rate budget deploys default-ON (loom-next-level-program, $1000/mo ceiling on the loom-next-level tag; programBudgetEnabled / programBudgetAmount / programBudgetContactEmails override — the COST0 props are consumed by THIS orchestrator at subscription scope, see the programBudget module below). Future observability items (V5 bicep-drift, O1 alert-dispatch, RUM1) ride THIS bag — never a new top-level param.')
 param observabilityConfig object = {}
 
 @description('Deploy ADX shared cluster (admin-plane) + per-DLZ ADX databases. Backs the RTI editor family — Eventhouse, KQL Database, KQL Queryset, KQL Dashboard, Eventstream. Default on as of 2026-05-27 (sweep-rti). Set false to skip ~$140/mo Dev SKU cluster.')
@@ -2284,6 +2284,31 @@ module consoleCostReaderRbac 'modules/admin-plane/cost-management-reader-rbac.bi
   params: {
     consolePrincipalId: hub.consolePrincipalId
     skipRoleGrants: skipRoleGrants
+  }
+}
+
+// =====================================================================
+// COST0 (loom-next-level round-3 F1) — program run-rate budget.
+// Subscription-scoped Consumption budget filtered on the `loom-next-level`
+// resource tag (every resource the program deploys carries it), alerting at
+// Actual 80/100% + Forecasted 100% through the ONE shared default action
+// group + subscription Owners. Default-ON, ~$0 (a budget is free — it BOUNDS
+// the program's always-on spend: V1 synthetic job, E2 judge cap, S1 Function,
+// future N-services; itemized in program-budget.README.md). Settings ride the
+// observabilityConfig bag (R0 — never a new top-level param). Opt out
+// (programBudgetEnabled=false) on offer types without budgets API support.
+// =====================================================================
+var programBudgetEnabled = bool(observabilityConfig.?programBudgetEnabled ?? true)
+module programBudget 'modules/admin-plane/program-budget.bicep' = if (programBudgetEnabled) {
+  name: 'loom-program-budget'
+  scope: subscription()
+  params: {
+    amount: int(observabilityConfig.?programBudgetAmount ?? 1000)
+    contactEmails: observabilityConfig.?programBudgetContactEmails ?? []
+    // The shared loom-default-alerts action group (rev-2 alert standard).
+    // Empty outside deployAdminPlane topologies (dlz-attach) → the budget
+    // still notifies subscription Owners via the contact role.
+    actionGroupId: deployAdminPlane ? adminPlane!.outputs.alertActionGroupId : ''
   }
 }
 
