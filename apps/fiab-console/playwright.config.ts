@@ -96,5 +96,121 @@ export default defineConfig({
         baseURL: process.env.LOOM_UAT_BASE_URL || process.env.LOOM_URL || 'https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net',
       },
     },
+
+    // ------------------------------------------------------------------
+    // loom-next-level test-projects batch (Phase 1, round-3 F2): ALL
+    // planned Playwright projects are stubbed here in ONE PR so the items
+    // that fill them in (V1/V2/V4/A5/A13/L5/U0/U6) only add spec files and
+    // never touch this config — killing the playwright.config.ts
+    // serialization chain. A project whose testMatch has no files yet is
+    // inert unless explicitly selected with --project.
+    // All reuse the minted-session auth (mint dependency + storageState).
+    // ------------------------------------------------------------------
+    {
+      // V1 — six synthetic user journeys (incl. the TRUE MSAL login probe).
+      // Scheduled in-VNet via the loom-synthetic-monitor Container Apps job.
+      name: 'journey',
+      testDir: './e2e',
+      testMatch: /synthetic-journeys\.uat\.ts/,
+      dependencies: ['mint'],
+      use: {
+        storageState: 'e2e/.auth/loom-state.json',
+        baseURL: process.env.LOOM_UAT_BASE_URL || process.env.LOOM_URL || 'https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net',
+      },
+    },
+    {
+      // V2 — visual regression, wide viewport (light+dark handled in-spec).
+      name: 'visual-wide',
+      testDir: './e2e',
+      testMatch: /visual-regression\.spec\.ts/,
+      dependencies: ['mint'],
+      use: {
+        storageState: 'e2e/.auth/loom-state.json',
+        viewport: { width: 1600, height: 1200 },
+        baseURL: process.env.LOOM_UAT_BASE_URL || process.env.LOOM_URL || 'https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net',
+      },
+    },
+    {
+      // V2 — visual regression, narrow viewport (badge-wrap / overflow gate).
+      name: 'visual-narrow',
+      testDir: './e2e',
+      testMatch: /visual-regression\.spec\.ts/,
+      dependencies: ['mint'],
+      use: {
+        storageState: 'e2e/.auth/loom-state.json',
+        viewport: { width: 900, height: 1200 },
+        baseURL: process.env.LOOM_UAT_BASE_URL || process.env.LOOM_URL || 'https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net',
+      },
+    },
+    {
+      // V4 — page.tsx route-smoke coverage ratchet.
+      name: 'route-smoke',
+      testDir: './e2e',
+      testMatch: /route-smoke\.spec\.ts/,
+      dependencies: ['mint'],
+      use: {
+        storageState: 'e2e/.auth/loom-state.json',
+        baseURL: process.env.LOOM_UAT_BASE_URL || process.env.LOOM_URL || 'https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net',
+      },
+    },
+    {
+      // U0 — automated grip drag+reload receipts. NOTE for the spec author:
+      // pace mouse moves across frames (slow mouse.move steps) — CDP-fast
+      // drags outrun both drag state machines (SplitPane React-state
+      // `dragging`; resizable-canvas rAF-batched commit) and false-fail
+      // (proven live 2026-07-22, see DONE ledger U0 row).
+      name: 'u0-grip',
+      testDir: './e2e',
+      testMatch: /u0-grip-verify\.spec\.ts/,
+      dependencies: ['mint'],
+      use: {
+        storageState: 'e2e/.auth/loom-state.json',
+        baseURL: process.env.LOOM_UAT_BASE_URL || process.env.LOOM_URL || 'https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net',
+      },
+    },
+    {
+      // U6 — Monaco query↔results divider receipts across the 11 editors.
+      name: 'monaco-divider',
+      testDir: './e2e',
+      testMatch: /u6-monaco-divider\.spec\.ts/,
+      dependencies: ['mint'],
+      use: {
+        storageState: 'e2e/.auth/loom-state.json',
+        baseURL: process.env.LOOM_UAT_BASE_URL || process.env.LOOM_URL || 'https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net',
+      },
+    },
+    {
+      // A5 — DAX golden numeric harness vs the seeded reference models.
+      name: 'dax-golden',
+      testDir: './e2e',
+      testMatch: /dax-golden\.spec\.ts/,
+      dependencies: ['mint'],
+      use: {
+        storageState: 'e2e/.auth/loom-state.json',
+        baseURL: process.env.LOOM_UAT_BASE_URL || process.env.LOOM_URL || 'https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net',
+      },
+    },
+    {
+      // A13 — Spark reliability chaos drill (kill sessions / FAULTED pool).
+      name: 'spark-chaos',
+      testDir: './e2e',
+      testMatch: /a13-spark-chaos\.spec\.ts/,
+      dependencies: ['mint'],
+      use: {
+        storageState: 'e2e/.auth/loom-state.json',
+        baseURL: process.env.LOOM_UAT_BASE_URL || process.env.LOOM_URL || 'https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net',
+      },
+    },
+    {
+      // L5 — column fan-out canvas + impact analysis receipts.
+      name: 'lineage-columns',
+      testDir: './e2e',
+      testMatch: /l5-column-canvas\.spec\.ts/,
+      dependencies: ['mint'],
+      use: {
+        storageState: 'e2e/.auth/loom-state.json',
+        baseURL: process.env.LOOM_UAT_BASE_URL || process.env.LOOM_URL || 'https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net',
+      },
+    },
   ],
 });
