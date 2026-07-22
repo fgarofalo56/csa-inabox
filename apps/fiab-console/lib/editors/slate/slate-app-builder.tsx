@@ -40,6 +40,7 @@ import {
 } from '@fluentui/react-icons';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { LoomChart, type LoomChartType } from '@/lib/components/charts/loom-chart';
+import { ResizableCanvasRegion } from '@/lib/components/canvas/resizable-canvas';
 import { EmptyState } from '@/lib/components/empty-state';
 import { SplitPane } from '@/lib/components/shared/split-pane';
 
@@ -337,6 +338,9 @@ const useStyles = makeStyles({
     backgroundImage: `radial-gradient(${tokens.colorNeutralStroke2} 1px, transparent 0)`,
     backgroundSize: `${GRID}px ${GRID}px`,
   },
+  // Fills the ResizableCanvasRegion viewport (G3): the visible height is
+  // user-set via the region's grip while the content-sized canvas scrolls.
+  canvasWrapFill: { flex: 1, minHeight: 0 },
   canvas: { position: 'relative', minWidth: `${CANVAS_MIN_W}px` },
   widget: {
     position: 'absolute', display: 'flex', flexDirection: 'column', overflow: 'hidden',
@@ -1148,19 +1152,24 @@ export function SlateAppBuilder({ id, apiBaseUrl, queries, widgets, variables, o
   const discoveredForSelected = (selected?.queryId && colsByQuery[selected.queryId]) || [];
   const columnsForWidget = (w: SlateWidgetDef | null): string[] => (w?.queryId && colsByQuery[w.queryId]) || [];
 
+  // The visible viewport height is user-resizable (G3) via ResizableCanvasRegion
+  // (persisted under loom.canvasHeight.slate-app-canvas); the content-sized
+  // canvas still scrolls inside it.
   const canvasBlock = (
-    <div className={s.canvasWrap} style={{ height: canvasHeight }} onPointerDown={() => setSelectedId(null)}>
-      <div className={s.canvas} style={{ height: canvasHeight }}>
-        {normalized.length === 0 ? (
-          <div style={{ position: 'absolute', inset: 0 }}>
-            <EmptyState icon={<Apps20Regular />} title="Empty canvas" body="Add a widget from the palette above, then bind it to a query to show live data." />
-          </div>
-        ) : normalized.map((w) => (
-          <CanvasWidget key={w.id} widget={w} selected={selectedId === w.id} readOnly={false} result={results[w.id]}
-            onSelect={() => setSelectedId(w.id)} onMove={(x, y) => moveWidget(w.id, x, y)} onResize={(cw, ch) => resizeWidget(w.id, cw, ch)} onRemove={() => removeWidget(w.id)} />
-        ))}
+    <ResizableCanvasRegion storageKey="slate-app-canvas" defaultPx={CANVAS_MIN_H} ariaLabel="Resize app canvas height">
+      <div className={mergeClasses(s.canvasWrap, s.canvasWrapFill)} onPointerDown={() => setSelectedId(null)}>
+        <div className={s.canvas} style={{ height: canvasHeight }}>
+          {normalized.length === 0 ? (
+            <div style={{ position: 'absolute', inset: 0 }}>
+              <EmptyState icon={<Apps20Regular />} title="Empty canvas" body="Add a widget from the palette above, then bind it to a query to show live data." />
+            </div>
+          ) : normalized.map((w) => (
+            <CanvasWidget key={w.id} widget={w} selected={selectedId === w.id} readOnly={false} result={results[w.id]}
+              onSelect={() => setSelectedId(w.id)} onMove={(x, y) => moveWidget(w.id, x, y)} onResize={(cw, ch) => resizeWidget(w.id, cw, ch)} onRemove={() => removeWidget(w.id)} />
+          ))}
+        </div>
       </div>
-    </div>
+    </ResizableCanvasRegion>
   );
 
   return (
@@ -1229,7 +1238,8 @@ export function SlateAppBuilder({ id, apiBaseUrl, queries, widgets, variables, o
             <span className={s.sectionIcon}><Play20Regular /></span>
             <div><Subtitle2>Live preview (Run mode)</Subtitle2><Caption1 as="p" block className={s.hint}>Every data-bound widget runs against its real Azure backend (ADX / Synapse / DAB REST). Change a variable, click a widget, or select a row to fire its interactions live.</Caption1></div>
           </div>
-          <div className={s.canvasWrap} style={{ height: canvasHeight }}>
+          <ResizableCanvasRegion storageKey="slate-app-canvas" defaultPx={CANVAS_MIN_H} ariaLabel="Resize app canvas height">
+          <div className={mergeClasses(s.canvasWrap, s.canvasWrapFill)}>
             <div className={s.canvas} style={{ height: canvasHeight }}>
               {normalized.length === 0 ? (
                 <div style={{ position: 'absolute', inset: 0 }}>
@@ -1252,6 +1262,7 @@ export function SlateAppBuilder({ id, apiBaseUrl, queries, widgets, variables, o
               })}
             </div>
           </div>
+          </ResizableCanvasRegion>
         </div>
       )}
 
