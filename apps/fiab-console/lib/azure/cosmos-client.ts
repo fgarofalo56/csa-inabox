@@ -15,6 +15,9 @@ import { CosmosClient, type Container, type Database } from '@azure/cosmos';
 import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { withMigrations } from '@/lib/azure/cosmos-migrations';
+// E2 — loom-copilot-evals doc shapes + MIG1 migrator registration (module-scope
+// side effect: the chain is live before any read materializes).
+import '@/lib/azure/copilot-evals-model';
 
 let _client: CosmosClient | null = null;
 let _db: Database | null = null;
@@ -256,6 +259,17 @@ let _a2aTasks: Container | null = null;
 // WS-4.4 — Dataset→object sync job progress (object-sync-jobs). PK /ontologyId
 // so per-ontology progress reads are single-partition. Azure-native; no Fabric.
 let _objectSyncJobs: Container | null = null;
+// E2 (loom-next-level) — Copilot quality eval store (loom-copilot-evals). Two
+// doc kinds written by the copilot-evaluator Function: `docType:'eval-run'`
+// (per-surface run rollup — retained indefinitely) and `docType:'eval-result'`
+// (one per judged question, `ttl` 180d self-evicting), plus the daily
+// judge-spend ledger (`docType:'judge-ledger'`, ttl 7d) enforcing
+// LOOM_COPILOT_EVAL_JUDGE_DAILY_CAP. PK /surface so the E5 per-surface trend
+// read is single-partition. Doc shapes + MIG1 versioning:
+// lib/azure/copilot-evals-model.ts. Distinct createIfNotExists (not `mk`) to
+// set defaultTtl -1 (TTL enabled, per-doc expiry); withMigrations wraps reads.
+// ARM-provisioned in cosmos.bicep's loomContainers; this is the hotfix fallback.
+let _copilotEvals: Container | null = null;
 // Scoped API tokens (PAT) — BR-PAT. One doc per token, PK /id so the hot
 // resolvePat() path (every non-interactive API request) is a single-partition
 // point-read by the token id carried in the Authorization: Bearer header. Stores
@@ -1134,6 +1148,11 @@ async function ensure() {
   })).container, 'a2a-tasks');
   // WS-4.4 — Dataset→object sync job progress. PK /ontologyId.
   _objectSyncJobs = await mk('object-sync-jobs', '/ontologyId');
+  // E2 — Copilot eval runs/results. defaultTtl -1 = TTL enabled with no default
+  // expiry: eval-result docs carry ttl 180d, eval-run rollups carry none.
+  _copilotEvals = withMigrations((await database.containers.createIfNotExists({
+    id: 'loom-copilot-evals', partitionKey: { paths: ['/surface'] }, defaultTtl: -1,
+  })).container, 'loom-copilot-evals');
   _ensured = true;
 }
 
@@ -1243,6 +1262,7 @@ export async function agentMemoryContainer(): Promise<Container> { await ensure(
 export async function a2aTasksContainer(): Promise<Container> { await ensure(); return _a2aTasks!; }
 /** WS-4.4 — Dataset→object sync job progress (PK /ontologyId). */
 export async function objectSyncJobsContainer(): Promise<Container> { await ensure(); return _objectSyncJobs!; }
+export async function copilotEvalsContainer(): Promise<Container> { await ensure(); return _copilotEvals!; }
 /** Scoped API tokens (PAT, BR-PAT) — PK /id; stores a SHA-256 hash of the secret only. */
 export async function loomPatTokensContainer(): Promise<Container> { await ensure(); return _loomPatTokens!; }
 /** BR-SCIM — SCIM 2.0 provisioned users (PK /id). */

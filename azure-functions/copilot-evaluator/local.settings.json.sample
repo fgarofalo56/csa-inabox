@@ -1,0 +1,19 @@
+{
+  "IsEncrypted": false,
+  "Values": {
+    "AzureWebJobsStorage": "UseDevelopmentStorage=true",
+    "FUNCTIONS_WORKER_RUNTIME": "node",
+    "COPILOT_EVALUATOR_CRON": "0 0 7 * * *",
+    "LOOM_COSMOS_ENDPOINT": "https://<acct>.documents.azure.com:443/",
+    "LOOM_COSMOS_DATABASE": "loom",
+    "LOOM_EVAL_PROBE_URL": "https://<console-host>",
+    "LOOM_INTERNAL_TOKEN": "<shared internal trust token (bicep-derived guid)>",
+    "LOOM_AOAI_ENDPOINT": "https://<res>.openai.azure.com/",
+    "LOOM_COPILOT_EVAL_JUDGE_DEPLOYMENT": "",
+    "LOOM_AOAI_STRONG_DEPLOYMENT": "<strong reasoning deployment (bicep-wired)>",
+    "LOOM_AOAI_MINI_DEPLOYMENT": "<mini deployment (bicep-wired)>",
+    "LOOM_AOAI_DEPLOYMENT": "<default chat deployment (bicep-wired)>",
+    "LOOM_COPILOT_EVAL_JUDGE_DAILY_CAP": "500",
+    "LOOM_COPILOT_EVAL_ENABLED": "true"
+  }
+}

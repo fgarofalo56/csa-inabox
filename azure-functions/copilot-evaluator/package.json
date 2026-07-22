@@ -1,0 +1,22 @@
+{
+  "name": "copilot-evaluator",
+  "version": "1.0.0",
+  "description": "CSA Loom Copilot quality evaluator — timer + HTTP Azure Function (loom-next-level E2). Executes the E1 golden Q/A eval sets against the REAL Copilot retrieval + AOAI path (via the console's internal eval-probe route — byte-identical searchDocs + tier routing), gates deterministic mustMention/mustNotMention guards BEFORE the LLM judge (forbidden phrase = auto-fail, zero judge spend), enforces a daily judge-token cap, and writes scored eval-run/eval-result docs to Cosmos loom-copilot-evals. Azure-native, no Microsoft Fabric dependency.",
+  "main": "dist/azure-functions/copilot-evaluator/src/functions/*.js",
+  "scripts": {
+    "build": "tsc",
+    "prestart": "node scripts/stage-evals.mjs",
+    "test": "vitest run",
+    "start": "func start"
+  },
+  "dependencies": {
+    "@azure/functions": "^4.5.0",
+    "@azure/identity": "^4.5.0",
+    "@azure/cosmos": "^4.2.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0",
+    "@types/node": "^20.0.0"
+  }
+}
