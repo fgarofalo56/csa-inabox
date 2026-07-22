@@ -15,24 +15,26 @@
 
 import { useEffect, useState } from 'react';
 import { Tab, TabList, tokens } from '@fluentui/react-components';
-import { HeartPulse24Regular, ShieldCheckmark24Regular } from '@fluentui/react-icons';
+import { Flash24Regular, HeartPulse24Regular, ShieldCheckmark24Regular } from '@fluentui/react-icons';
 import { HealthPane } from '@/lib/components/admin/health-pane';
 import { SecretHealthPane } from '@/lib/components/admin/secret-health-pane';
 import { ServiceExercisePane } from '@/lib/components/admin/service-exercise-pane';
+import { SparkPoolsPane } from '@/lib/components/admin/spark-pools-pane';
 import { SyntheticJourneysPane } from '@/lib/components/admin/synthetic-journeys-pane';
 
-type HubTab = 'audit' | 'journeys';
+type HubTab = 'audit' | 'journeys' | 'spark';
 
-export function HealthHubTabs({ journeysEnabled }: { journeysEnabled: boolean }) {
+export function HealthHubTabs({ journeysEnabled, sparkEnabled }: { journeysEnabled: boolean; sparkEnabled?: boolean }) {
   const [tab, setTab] = useState<HubTab>('audit');
 
-  // Deep link: /admin/health?tab=journeys (client-only read — no Suspense dance).
+  // Deep link: /admin/health?tab=journeys|spark (client-only read — no Suspense dance).
   useEffect(() => {
     try {
       const wanted = new URLSearchParams(window.location.search).get('tab');
       if (wanted === 'journeys' && journeysEnabled) setTab('journeys');
+      if (wanted === 'spark' && sparkEnabled) setTab('spark');
     } catch { /* no window (SSR) — default tab stands */ }
-  }, [journeysEnabled]);
+  }, [journeysEnabled, sparkEnabled]);
 
   return (
     <div style={{ minWidth: 0 }}>
@@ -46,6 +48,9 @@ export function HealthHubTabs({ journeysEnabled }: { journeysEnabled: boolean })
         {journeysEnabled && (
           <Tab value="journeys" icon={<HeartPulse24Regular />}>Journeys</Tab>
         )}
+        {sparkEnabled && (
+          <Tab value="spark" icon={<Flash24Regular />}>Spark pools</Tab>
+        )}
       </TabList>
       {tab === 'audit' && (
         <>
@@ -55,6 +60,7 @@ export function HealthHubTabs({ journeysEnabled }: { journeysEnabled: boolean })
         </>
       )}
       {tab === 'journeys' && journeysEnabled && <SyntheticJourneysPane />}
+      {tab === 'spark' && sparkEnabled && <SparkPoolsPane />}
     </div>
   );
 }
