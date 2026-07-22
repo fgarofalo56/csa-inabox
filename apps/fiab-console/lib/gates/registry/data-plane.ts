@@ -33,6 +33,15 @@ export const DATA_PLANE_GATE_META: Record<string, GateMeta> = {
     fixit: { kind: 'env-picker' },
     autoResolveNote: 'Unset → the AAS fast-path or Synapse-Serverless cold path serves DAX-class queries unchanged.',
   },
+  // ── DR0 — restore posture (verified live by probe-dr-restore-posture) ──
+  'svc-dr-restore-posture': {
+    surfaces: [{ path: '/admin/health', label: 'DR restore posture (Health & Reliability)' }],
+    fixit: {
+      kind: 'wizard',
+      grantNote: 'The Cosmos side is fixable in-product: Admin → the Cosmos account-management surface PATCHes backupPolicy (Continuous tier switch is a hot in-place ARM update). The lake side is bicep-provisioned (recycleRetentionDays soft delete + change feed); blob versioning cannot be enabled on an HNS account (platform limitation).',
+    },
+    autoResolveNote: 'A push-button deploy ships the full posture by default: Cosmos Continuous backup (drConfig.cosmosBackupTier, default Continuous30Days) + lake soft-delete/change-feed (recycleRetentionDays).',
+  },
   'perf-spark-warm-pool-store': {
     surfaces: [{ path: '/items/notebook', label: 'Warm Spark pool — cross-replica leases' }],
     fixit: { kind: 'env-picker' },

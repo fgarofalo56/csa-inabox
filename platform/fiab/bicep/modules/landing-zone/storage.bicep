@@ -42,6 +42,9 @@ param complianceTags object
 @maxValue(365)
 param recycleRetentionDays int = 30
 
+@description('DR0 — declarative blob versioning + point-in-time restore (restorePolicy) posture. Default ON, but see hnsSupportsVersioning below: BOTH features are "Not yet supported" on HNS-enabled (ADLS Gen2) accounts per the Learn feature matrix, and this lake is HNS by design, so the guard keeps them off (ARM rejects the combination). Rides drConfig.enableBlobPitr from the top-level orchestrator; becomes live the day the platform lifts the HNS restriction or this module is pointed at a flat-namespace account.')
+param enableBlobPitr bool = true
+
 @description('Storage account SKU (replication). Default Standard_ZRS = zone-redundant, single region (the shipped default DR posture). Opt into a geo-redundant tier (Standard_GZRS / Standard_GRS / Standard_RAGZRS) for cross-region survivability — an operator DR decision with added cost; see docs/fiab/operations/disaster-recovery.md.')
 @allowed([
   'Standard_ZRS'
@@ -100,10 +103,29 @@ resource sa 'Microsoft.Storage/storageAccounts@2025-01-01' = {
 // Containers: bronze (raw), silver (cleansed), gold (curated), landing
 // (Open Mirroring publisher drops — producers push Parquet here, merged into
 // managed Delta under bronze/mirrors/**), checkpoints (Spark checkpoint dirs)
+// DR0 — restore posture (Learn-grounded, verified 2026-07-22).
+// Blob versioning AND point-in-time restore (restorePolicy) are BOTH
+// "⬤ Not yet supported" on HNS-enabled accounts per the authoritative feature
+// matrix (learn.microsoft.com/azure/storage/blobs/storage-feature-support-in-
+// storage-accounts) and versioning-overview ("Storage accounts with a
+// hierarchical namespace enabled ... aren't currently supported"). This account
+// is HNS by design (isHnsEnabled: true — ABFS + POSIX ACLs + Delta), so the
+// guard below keeps both OFF: ARM rejects the combination at deploy time.
+// The effective, supported lake restore baseline is therefore:
+//   - blob + container soft delete (recycleRetentionDays window, below),
+//   - change feed (below),
+//   - Delta Lake _delta_log per-commit time travel for table data.
+// Flip hnsSupportsVersioning to true the day Azure lifts the HNS restriction —
+// enableBlobPitr (drConfig, default true) then turns versioning + a
+// restorePolicy of recycleRetentionDays-1 days (must be < delete retention) on
+// with no other edits.
+var hnsSupportsVersioning = false
+var blobPitrOn = enableBlobPitr && hnsSupportsVersioning
+
 resource bs 'Microsoft.Storage/storageAccounts/blobServices@2025-01-01' = {
   parent: sa
   name: 'default'
-  properties: {
+  properties: union({
     deleteRetentionPolicy: {
       enabled: true
       days: recycleRetentionDays
@@ -112,12 +134,15 @@ resource bs 'Microsoft.Storage/storageAccounts/blobServices@2025-01-01' = {
       enabled: true
       days: recycleRetentionDays
     }
-    // Blob versioning conflicts with HNS (ADLS Gen2) — disable.
-    // Delta Lake's _delta_log/ already gives us per-commit time travel,
-    // which is the use case versioning would have served.
-    isVersioningEnabled: false
+    isVersioningEnabled: blobPitrOn
     changeFeed: { enabled: true }
-  }
+  }, blobPitrOn ? {
+    restorePolicy: {
+      enabled: true
+      // PITR window must be strictly less than the soft-delete retention.
+      days: max(recycleRetentionDays - 1, 1)
+    }
+  } : {})
 }
 
 var containers = ['bronze', 'silver', 'gold', 'landing', 'checkpoints', 'csv-imports', 'org-visuals']

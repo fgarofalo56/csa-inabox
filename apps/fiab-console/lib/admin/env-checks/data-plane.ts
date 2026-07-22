@@ -65,6 +65,19 @@ export const DATA_PLANE_ENV_CHECKS: EnvSpec[] = [
     provisionedBy: 'modules/compute/hband-shared.bicep (shared Redis) → LOOM_RESULT_CACHE_REDIS on the Console app',
     role: 'Redis access key from Key Vault (LOOM_RESULT_CACHE_REDIS_PASSWORD secretRef) or AAD data-plane per module wiring',
   },
+  // ── DR0 — restore posture (loom-next-level ws-verification-dr) ──
+  {
+    id: 'svc-dr-restore-posture', category: 'data-plane', title: 'DR restore posture — Cosmos PITR + lake recovery', severity: 'optional',
+    anyOf: [['LOOM_COSMOS_ACCOUNT', 'LOOM_ADLS_ACCOUNT']], warnOnMiss: true,
+    remediation: 'Set LOOM_COSMOS_ACCOUNT (+ LOOM_COSMOS_ACCOUNT_RG) and/or LOOM_ADLS_ACCOUNT (+ LOOM_DLZ_RG) so the restore-posture probe can read live ARM and verify the estate is restorable: the Loom-store Cosmos account on Continuous (PITR) backup, and the lake with blob + container soft delete and change feed on. A push-button deploy ships both by default (drConfig.cosmosBackupTier, default Continuous30Days; recycleRetentionDays soft delete). NOTE: blob versioning / blob PITR are "Not yet supported" on HNS (ADLS Gen2) accounts per the Learn feature matrix — the supported lake restore path is soft delete + change feed + Delta time travel, and that is what this row verifies.',
+    docs: 'https://learn.microsoft.com/azure/cosmos-db/continuous-backup-restore-introduction',
+    provisionedBy: 'modules/admin-plane/loom-console-cosmos.bicep (backupPolicy Continuous, drConfig.cosmosBackupTier) + modules/landing-zone/storage.bicep (soft delete + change feed; versioning/PITR HNS-guarded)',
+    role: 'DocumentDB Account Contributor (Console UAMI, already granted) on the Cosmos account + Reader on the DLZ storage account (ARM reads)',
+    availability: {
+      commercial: 'ga', gccHigh: 'ga', il5: 'ga',
+      fallbackNote: 'Cosmos continuous backup (PITR) and blob/container soft delete + change feed are GA in Azure Government through IL5 — the whole posture stays in-boundary. Blob versioning is a platform-wide HNS limitation (all clouds), not a sovereign gap.',
+    },
+  },
   {
     id: 'perf-spark-warm-pool-store', category: 'data-plane', title: 'Warm Spark pool — cross-replica lease store (PSR-3)', severity: 'optional',
     anyOf: [['LOOM_SPARK_POOL_LEASE_CONTAINER', 'LOOM_SPARK_POOL_REDIS']], warnOnMiss: true,

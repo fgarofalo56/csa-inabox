@@ -26,9 +26,15 @@ built on three real, verifiable mechanisms:
    it keeps three synchronous copies across availability zones and survives a
    single-zone outage transparently.
 2. **Point-in-time restore (PITR) for stateful metadata** — the Console's Cosmos
-   account runs **continuous backup, `Continuous7Days` tier**
+   account runs **continuous backup**; the tier is parameterized as
+   `drConfig.cosmosBackupTier`, **default `Continuous30Days`** (GA; the
+   `Continuous7Days` tier is documented by Learn as *in preview*)
    (`platform/fiab/bicep/modules/admin-plane/loom-console-cosmos.bicep`), giving
-   restore to any second within the **last 7 days**.
+   restore to any second within the **last 30 days** (7 on the lower tier).
+   Switching tiers is a **hot in-place ARM update** — no recreate, no downtime;
+   after a 7→30 upgrade you can only restore within the last 7 days until new
+   backups accumulate
+   ([Learn](https://learn.microsoft.com/azure/cosmos-db/migrate-continuous-backup#change-continuous-mode-tiers)).
 3. **Redeploy-from-Git for stateless compute** — every app is a stateless
    container built from the repo; recovery is a bicep re-deploy + image roll, not
    a data restore.
@@ -45,7 +51,7 @@ this document was corrected.
 | Component | Bicep SKU / policy | Zone loss | Region loss | Recovery mechanism |
 |---|---|---|---|---|
 | Data lake (ADLS Gen2) | `Standard_ZRS` (zone-redundant, single region) | Transparent (3 synchronous zone copies) | **Not auto-covered** — re-ingest from source, or opt into GZRS/GRS | Storage zone redundancy; source re-ingest for region loss |
-| Console metadata (Cosmos) | Single write region, `isZoneRedundant:false`, `enableAutomaticFailover:false`, **Continuous 7-day PITR** | Azure-managed regional resilience | PITR restore (see caveat) | `az cosmosdb restore` → new account (runbook below) |
+| Console metadata (Cosmos) | Single write region, `isZoneRedundant:false`, `enableAutomaticFailover:false`, **Continuous PITR (default 30-day tier, `drConfig.cosmosBackupTier`)** | Azure-managed regional resilience | PITR restore (see caveat) | `az cosmosdb restore` → new account (runbook below) |
 | Admin-plane utility storage | `Standard_LRS` (locally redundant) | Not zone-redundant | Not auto-covered | Redeploy; holds no source-of-truth data |
 | Loom Console + parity apps | Stateless containers (ghcr/ACR images) | Restart on healthy nodes | Redeploy from Git in a new RG/region | `az deployment sub create` + in-product image roll |
 | Synapse Serverless / ADX / Databricks | Stateless compute over the lake | Service-managed | Redeploy; re-attach to the (restored) lake | Bicep redeploy; external tables re-create |
@@ -58,7 +64,7 @@ measurements):
 | Scenario | RPO (data loss) | RTO (time to recover) | Notes |
 |---|---|---|---|
 | Single **zone** outage | ~0 | ~0 (transparent) for ZRS lake; minutes for Cosmos (Azure-managed) | The design point of a zone-redundant single-region deployment |
-| Accidental data change / delete in Cosmos | **minutes** (continuous backup granularity) | **~1–2 h** (PITR provisions a new account + re-point Console) | Restore window = **7 days**; see runbook |
+| Accidental data change / delete in Cosmos | **minutes** (continuous backup granularity) | **~1–2 h** (PITR provisions a new account + re-point Console) | Restore window = **30 days** (default tier; 7 on `Continuous7Days`); see runbook |
 | Console/app corruption or bad image | 0 (no state in compute) | **~30–60 min** (bicep redeploy or image roll) | Stateless — nothing to restore |
 | Full **region** loss | Depends: lake = last source ingest; Cosmos = last replicated backup | **Hours**, and gated on the opt-ins below | **Not auto-covered by default** — plan the opt-in if your mission requires it |
 
@@ -67,7 +73,29 @@ measurements):
 Continuous backup is a near-real-time backup pipeline, not synchronous
 replication. Microsoft documents second-level restore granularity; the practical,
 honest RPO to plan against is **a few minutes** of the most recent writes. The
-restore **window** is 7 days (the `Continuous7Days` tier we deploy).
+restore **window** is 30 days on the default `Continuous30Days` tier
+(`drConfig.cosmosBackupTier`; 7 days on `Continuous7Days`).
+
+### Lake restore posture (DR0) — what is and is not possible on ADLS Gen2
+
+Blob **versioning** and blob **point-in-time restore** are *"Not yet
+supported"* on storage accounts with a **hierarchical namespace** (HNS) per the
+[Learn feature matrix](https://learn.microsoft.com/azure/storage/blobs/storage-feature-support-in-storage-accounts)
+— and the lake is HNS by design (ABFS, POSIX ACLs, Delta). The supported,
+deployed lake restore baseline is therefore:
+
+- **blob + container soft delete** (`recycleRetentionDays`, default 30) —
+  undelete files/containers inside the window,
+- **change feed** — an ordered log of every blob mutation,
+- **Delta Lake `_delta_log/` time travel** — per-commit restore for table data.
+
+`modules/landing-zone/storage.bicep` carries a guarded `enableBlobPitr`
+(default `true`, riding `drConfig.enableBlobPitr`): the day Azure lifts the HNS
+restriction, flipping the module's `hnsSupportsVersioning` const turns
+versioning + a `restorePolicy` window on with no other edits. The
+`/admin/health` row **"DR restore posture"** (`svc-dr-restore-posture` +
+`probe-dr-restore-posture`) verifies the whole posture — Cosmos Continuous
+backup tier + lake soft-delete/change-feed — from **live ARM** on every audit.
 
 ### The region-loss caveat you must understand
 

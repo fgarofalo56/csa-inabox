@@ -7,7 +7,8 @@ tenant-topology, …) held in the admin-plane Cosmos account provisioned by
 
 **When to use this:** an accidental delete/modify of workspace or item metadata,
 a corrupted config write, or loss of the account, where you need to roll the
-metadata store back to a known-good moment within the **last 7 days**.
+metadata store back to a known-good moment within the backup tier's window
+(**30 days** on the default `Continuous30Days` tier; 7 on `Continuous7Days`).
 
 **What this is NOT:** a way to recover the data lake, warehouse, or ADX — those
 are separate stores. This runbook only restores the Console's foundation Cosmos
@@ -21,8 +22,13 @@ database.
 
 ## How PITR behaves here (know before you run)
 
-- The account is provisioned with **continuous backup, `Continuous7Days` tier**,
-  so you can restore to any second within the **last 7 days**. ([Learn: provision continuous backup](https://learn.microsoft.com/azure/cosmos-db/provision-account-continuous-backup))
+- The account is provisioned with **continuous backup** — tier
+  `drConfig.cosmosBackupTier`, **default `Continuous30Days`** (GA; `Continuous7Days`
+  is documented as in-preview) — so you can restore to any second within the
+  tier's window. Tier switches are hot in-place ARM updates; after a 7→30
+  upgrade only the last 7 days are restorable until new backups accumulate.
+  ([Learn: provision continuous backup](https://learn.microsoft.com/azure/cosmos-db/provision-account-continuous-backup),
+  [change tiers](https://learn.microsoft.com/azure/cosmos-db/migrate-continuous-backup#change-continuous-mode-tiers))
 - Point-in-time restore of a **live** account always creates a **new** account —
   you cannot restore in place. ([Learn: restore continuous backup](https://learn.microsoft.com/azure/cosmos-db/restore-account-continuous-backup))
 - The account is **single-region**; PITR restores only into a region where the

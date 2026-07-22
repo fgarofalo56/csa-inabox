@@ -228,6 +228,17 @@ param storageRequireCmk bool = false
 @maxValue(365)
 param recycleRetentionDays int = 30
 
+type drConfigT = {
+  @description('DR0 — continuous-backup (PITR) tier for the Console Loom store. Continuous30Days = GA default (drill-wide restore window); Continuous7Days is the documented-preview lower tier. Switching is a hot in-place ARM update — no recreate, no downtime (Learn: cosmos-db/migrate-continuous-backup#change-continuous-mode-tiers).')
+  cosmosBackupTier: ('Continuous7Days' | 'Continuous30Days')?
+
+  @description('DR0 — declarative blob versioning + point-in-time-restore posture for the DLZ lake. Default true, but currently guarded OFF on the lake because versioning/PITR are "Not yet supported" on HNS (ADLS Gen2) accounts per the Learn feature matrix — the supported lake restore baseline is soft-delete + change feed + Delta time travel (see modules/landing-zone/storage.bicep).')
+  enableBlobPitr: bool?
+}
+
+@description('DR settings bag (R0/DR0) — rides to admin-plane (cosmosBackupTier → loom-console-cosmos.bicep) and to every landing-zone call (enableBlobPitr → storage.bicep). Add future DR/drill settings as typed properties here — NEVER as new scalar top-level params (256-param ARM cap; scripts/ci/check-bicep-param-cap.mjs).')
+param drConfig drConfigT = {}
+
 @description('DLZ lakehouse storage SKU (replication). Default Standard_ZRS = zone-redundant single region (shipped default DR posture). Opt into Standard_GZRS/Standard_GRS/Standard_RAGZRS for a cross-region geo-redundant DR tier — an operator cost/DR decision; see docs/fiab/operations/disaster-recovery.md.')
 @allowed([
   'Standard_ZRS'
@@ -999,6 +1010,9 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
     complianceTags: complianceTags
     skipRoleGrants: skipRoleGrants
     recycleRetentionDays: recycleRetentionDays
+    // DR0 — narrowed to the hub-relevant property (enableBlobPitr rides the
+    // landing-zone calls instead; admin-plane's typed bag only knows the tier).
+    drConfig: { cosmosBackupTier: drConfig.?cosmosBackupTier }
     deployAppsEnabled: deployAppsEnabled
     aiFoundryEnabled: aiFoundryEnabled
     contentSafetyEnabled: contentSafetyEnabled
@@ -1468,6 +1482,7 @@ module singleDlz 'modules/landing-zone/main.bicep' = if (useSingleDlz) {
     shirAdminPassword: effShirAdminPassword
     recycleRetentionDays: recycleRetentionDays
     storageSkuName: storageSkuName
+    enableBlobPitr: drConfig.?enableBlobPitr ?? true
     cosmosGraphVectorEnabled: cosmosGraphVectorEnabled
     weaveOntologyEnabled: weaveOntologyEnabled
     // RTI (Real-Time Intelligence) opt-out flags + existing-namespace reuse.
@@ -1565,6 +1580,7 @@ module dlz 'modules/landing-zone/main.bicep' = [for (subId, i) in dlzSubscriptio
     shirAdminPassword: effShirAdminPassword
     recycleRetentionDays: recycleRetentionDays
     storageSkuName: storageSkuName
+    enableBlobPitr: drConfig.?enableBlobPitr ?? true
     cosmosGraphVectorEnabled: cosmosGraphVectorEnabled
     weaveOntologyEnabled: weaveOntologyEnabled
     // RTI opt-out flags. Multi-sub: each DLZ provisions its OWN Event Hubs
@@ -1712,6 +1728,7 @@ module dlzAttach 'modules/landing-zone/main.bicep' = if (topology == 'dlz-attach
     shirAdminPassword: effShirAdminPassword
     recycleRetentionDays: recycleRetentionDays
     storageSkuName: storageSkuName
+    enableBlobPitr: drConfig.?enableBlobPitr ?? true
     cosmosGraphVectorEnabled: cosmosGraphVectorEnabled
     weaveOntologyEnabled: weaveOntologyEnabled
     // AAS opt-out honored on the attached DLZ. Azure Analysis Services is NOT

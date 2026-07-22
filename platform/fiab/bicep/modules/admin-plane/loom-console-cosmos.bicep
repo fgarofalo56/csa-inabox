@@ -14,7 +14,8 @@
 //
 // Posture matches cosmos.bicep (FedRAMP-High): publicNetworkAccess Disabled +
 // Private Endpoint into the hub VNet, disableLocalAuth (AAD-RBAC only),
-// Continuous7Days backup. The Console UAMI gets DocumentDB Account Contributor
+// Continuous (PITR) backup — tier via cosmosBackupTier, default Continuous30Days
+// (DR0). The Console UAMI gets DocumentDB Account Contributor
 // (control-plane navigator + Connect panel) AND Cosmos DB Built-in Data
 // Contributor (data-plane item read/upsert/query).
 
@@ -48,6 +49,10 @@ param complianceTags object
 @allowed(['Strong', 'BoundedStaleness', 'Session', 'ConsistentPrefix', 'Eventual'])
 param defaultConsistency string = 'Session'
 
+@description('DR0 — continuous-backup (PITR) tier for the Console Loom store. Continuous30Days is the GA default (Learn documents Continuous7Days as "in preview") and gives the quarterly DR drill a wide-enough restore window. Switching tiers is a HOT in-place ARM update — no recreate, no downtime (Learn: cosmos-db/migrate-continuous-backup#change-continuous-mode-tiers): the price change takes effect immediately; after a 7→30 upgrade you can only restore within the last 7 days until new backups accumulate; a 30→7 downgrade immediately loses the >7-day window. Rides drConfig.cosmosBackupTier from the orchestrator.')
+@allowed(['Continuous7Days', 'Continuous30Days'])
+param cosmosBackupTier string = 'Continuous30Days'
+
 resource account 'Microsoft.DocumentDB/databaseAccounts@2024-12-01-preview' = {
   name: accountName
   location: location
@@ -77,7 +82,7 @@ resource account 'Microsoft.DocumentDB/databaseAccounts@2024-12-01-preview' = {
     capabilities: []
     backupPolicy: {
       type: 'Continuous'
-      continuousModeProperties: { tier: 'Continuous7Days' }
+      continuousModeProperties: { tier: cosmosBackupTier }
     }
     minimalTlsVersion: 'Tls12'
   }

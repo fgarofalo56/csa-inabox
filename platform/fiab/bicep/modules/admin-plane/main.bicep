@@ -300,9 +300,13 @@ param eventsConfig eventsConfigT = {}
 #disable-next-line no-unused-params
 param observabilityConfig object = {}
 
-@description('DR settings bag (R0, reserved) — DR0 blob-versioning/PITR, cosmosBackupTier and DR4 drill flags land here as typed properties.')
-#disable-next-line no-unused-params
-param drConfig object = {}
+type drConfigT = {
+  @description('DR0 — continuous-backup (PITR) tier for the Console Loom store (loom-console-cosmos.bicep). Continuous30Days = GA default with a drill-wide restore window; Continuous7Days is the documented-preview lower tier. Tier switch is a hot in-place ARM update (no recreate/downtime; see the module description for the Learn-cited 7↔30 window semantics).')
+  cosmosBackupTier: ('Continuous7Days' | 'Continuous30Days')?
+}
+
+@description('DR settings bag (R0) — DR0 cosmos continuous-backup tier lands here; DR4 drill flags follow as typed properties. (The DR0 lake blob-versioning/PITR posture rides the landing-zone module — drConfig.enableBlobPitr at the top-level orchestrator — not this hub bag.)')
+param drConfig drConfigT = {}
 
 @description('Per-workspace identity settings bag (R0, reserved) — I1 provision-on-create + I2 scoped-grant settings land here as typed properties.')
 #disable-next-line no-unused-params
@@ -320,6 +324,10 @@ var adxSkuName = adxConfig.?adxSkuName ?? 'Dev(No SLA)_Standard_E2a_v4'
 var adxEnableOptimizedAutoscale = adxConfig.?adxEnableOptimizedAutoscale ?? false
 var adxAutoscaleMinimum = adxConfig.?adxAutoscaleMinimum ?? 2
 var adxAutoscaleMaximum = adxConfig.?adxAutoscaleMaximum ?? 10
+// DR0 shim — Continuous30Days is the GA default (Continuous7Days is
+// documented-preview); the live estates run 7-day today, and the 7→30 change is
+// a hot in-place ARM PATCH (Learn: migrate-continuous-backup#change-continuous-mode-tiers).
+var cosmosBackupTier = drConfig.?cosmosBackupTier ?? 'Continuous30Days'
 var aasSkuName = aasConfig.?aasSkuName ?? 'S1'
 var existingAasServerName = aasConfig.?existingAasServerName ?? ''
 var existingAasServerRegion = aasConfig.?existingAasServerRegion ?? ''
@@ -1918,6 +1926,7 @@ module consoleCosmos 'loom-console-cosmos.bicep' = if (deployConsoleCosmos && !e
     consolePrincipalId: identity.outputs.uamiConsolePrincipalId
     skipRoleGrants: skipRoleGrants
     complianceTags: complianceTags
+    cosmosBackupTier: cosmosBackupTier
   }
 }
 
