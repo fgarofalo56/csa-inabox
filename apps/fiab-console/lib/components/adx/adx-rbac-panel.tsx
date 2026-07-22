@@ -65,7 +65,8 @@ const useStyles = makeStyles({
   },
   formLabel: { fontWeight: tokens.fontWeightSemibold },
   form: {
-    display: 'grid', gridTemplateColumns: 'repeat(2, minmax(180px, 1fr))', gap: '12px',
+    // auto-fit so the fixed 2-col grid collapses to a single column at narrow width.
+    display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '12px',
   },
   formActions: { gridColumn: '1 / -1', display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' },
   hint: { color: tokens.colorNeutralForeground3 },

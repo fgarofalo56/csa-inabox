@@ -48,7 +48,8 @@ import {
   SERVICE_COUNT, TOGGLEABLE_SERVICE_COUNT, configFor, resolveConfigValue, configStatus,
   type ServiceDef, type ServiceCategory, type ConfigField,
 } from './service-catalog';
-import { iconUrl } from '../ui/item-type-visual';
+import { iconUrl, readableAccent } from '../ui/item-type-visual';
+import { useTheme } from '@/lib/theme/theme-context';
 import { planToBicepparam } from './bicepparam';
 import { planToBicep } from './planToBicep';
 import { validatePlan, parseServiceNodeId, type PlanIssue } from './plan-validation';
@@ -189,6 +190,8 @@ const useStyles = makeStyles({
     display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS,
     marginBottom: '2px', width: '100%', cursor: 'pointer',
     background: 'none', border: 'none', padding: '4px 2px', textAlign: 'left',
+    // Native <button>: without an explicit color, text inherits UA ButtonText (black-on-dark).
+    color: tokens.colorNeutralForeground1,
     borderRadius: tokens.borderRadiusMedium,
     ':hover': { backgroundColor: tokens.colorNeutralBackground1Hover },
   },
@@ -326,6 +329,7 @@ const MIME = 'application/x-loom-service';
 function PlannerInner() {
   const s = useStyles();
   const rf = useReactFlow();
+  const { mode } = useTheme();
   const [zoom, setZoom] = useState(1);
   const [railCollapsed, setRailCollapsed] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -883,7 +887,9 @@ function PlannerInner() {
       {selectedSvc?.def && (
         <div data-testid="service-config-panel" className={`${s.card} ${s.svcConfig}`}>
           <div className={s.svcConfigHead}>
-            <Settings20Regular style={{ color: selectedSvc.def.color }} />
+            {/* Azure-service brand hexes are dark — lift the icon FOREGROUND for
+                dark theme (matches sibling deploy-plan-nodes ServiceIconChip). */}
+            <Settings20Regular style={{ color: readableAccent(selectedSvc.def.color, mode === 'dark') }} />
             <Subtitle2>{selectedSvc.def.label}</Subtitle2>
             {selectedSvc.subName && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>in {selectedSvc.subName}</Caption1>}
             {!selectedSvc.def.bicepFlag && !selectedSvc.def.planOnly && (

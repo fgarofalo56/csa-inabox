@@ -110,6 +110,8 @@ const useStyles = makeStyles({
   resultRow: {
     display: 'flex', flexDirection: 'column', gap: '2px', width: '100%', textAlign: 'left',
     padding: '6px 8px', border: 'none', background: 'none', cursor: 'pointer',
+    // Native <button>: without an explicit color, text inherits UA ButtonText (black-on-dark).
+    color: tokens.colorNeutralForeground1,
     borderBottom: `1px solid ${tokens.colorNeutralStroke3}`,
     ':hover': { backgroundColor: tokens.colorNeutralBackground1Hover },
   },

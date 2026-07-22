@@ -158,6 +158,8 @@ const useStyles = makeStyles({
     borderRadius: tokens.borderRadiusMedium,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground1,
+    // Native <button>: without an explicit color, text inherits UA ButtonText (black-on-dark).
+    color: tokens.colorNeutralForeground1,
     cursor: 'pointer', textAlign: 'left', width: '100%',
     transitionDuration: tokens.durationFaster,
     transitionProperty: 'background-color, border-color, box-shadow',
@@ -168,6 +170,7 @@ const useStyles = makeStyles({
   pickerRowSelected: {
     ...shorthands.borderColor(tokens.colorBrandStroke1),
     backgroundColor: tokens.colorBrandBackground2,
+    color: tokens.colorBrandForeground2,
   },
   pickerIcon: { fontSize: '24px', color: tokens.colorBrandForeground1, flexShrink: 0 },
   pickerText: { display: 'flex', flexDirection: 'column', minWidth: 0, flexGrow: 1 },

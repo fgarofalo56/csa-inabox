@@ -44,6 +44,8 @@ const useStyles = makeStyles({
     backgroundColor: 'transparent',
     border: 'none',
     borderRadius: tokens.borderRadiusMedium,
+    // Native <button>: without an explicit color, text inherits UA ButtonText (black-on-dark).
+    color: tokens.colorNeutralForeground1,
     cursor: 'pointer',
     textAlign: 'left',
     width: '100%',

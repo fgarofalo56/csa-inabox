@@ -186,7 +186,9 @@ const useStyles = makeStyles({
     },
   },
   cardHeader: { display: 'flex', alignItems: 'center', gap: '6px' },
-  badges: { display: 'flex', gap: '4px', marginTop: '4px' },
+  // flexWrap + minWidth:0 so Preview/Core/status badges wrap instead of
+  // colliding on narrow item cards (ux-baseline: badges never overlap).
+  badges: { display: 'flex', gap: '4px', marginTop: '4px', flexWrap: 'wrap', minWidth: 0 },
   // WAVE C — configure step (Name + per-axis RadioGroup). Loom tokens only.
   configPane: {
     display: 'flex',

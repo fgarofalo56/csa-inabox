@@ -38,7 +38,8 @@ import { runMetrics, type AgentRollup } from '@/lib/foundry/agentops';
 
 const useStyles = makeStyles({
   root: { display: 'flex', flexDirection: 'column', gap: '12px', padding: '16px', minHeight: '0', flex: '1' },
-  cols: { display: 'grid', gridTemplateColumns: 'minmax(320px, 1fr) minmax(360px, 1fr)', gap: '16px', alignItems: 'start' },
+  // minmax(0,…) tracks — px floors (320+360=680) overflowed at narrow width.
+  cols: { display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: '16px', alignItems: 'start' },
   col: { display: 'flex', flexDirection: 'column', gap: '8px', minWidth: '0' },
   toolbar: { display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' },
   list: { display: 'flex', flexDirection: 'column', gap: '4px', maxHeight: '260px', overflow: 'auto', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: '4px', padding: '4px' },

@@ -185,6 +185,8 @@ const useStyles = makeStyles({
     border: `${tokens.strokeWidthThin} solid ${tokens.colorBrandStroke2}`,
     borderRadius: tokens.borderRadiusLarge,
     backgroundImage: `linear-gradient(135deg, ${tokens.colorBrandBackground2} 0%, ${tokens.colorNeutralBackground1} 70%)`,
+    // Native <button>: without an explicit color, text inherits UA ButtonText (black-on-dark).
+    color: tokens.colorNeutralForeground1,
     boxShadow: tokens.shadow4,
     transitionProperty: 'box-shadow, border-color',
     transitionDuration: tokens.durationFaster,
@@ -252,6 +254,7 @@ const useStyles = makeStyles({
     border: `${tokens.strokeWidthThin} solid ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusLarge,
     backgroundColor: tokens.colorNeutralBackground1,
+    color: tokens.colorNeutralForeground1,
     boxShadow: tokens.shadow4,
     transitionProperty: 'box-shadow, border-color',
     transitionDuration: tokens.durationFaster,
