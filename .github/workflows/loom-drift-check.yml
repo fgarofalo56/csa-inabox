@@ -1,0 +1,451 @@
+name: loom-drift-check
+
+# V5 (loom-next-level WS-V, ground-truth #11) — scheduled live bicep-drift
+# detection for BOTH live estates. Weekly (+ on demand) this workflow runs
+# `az deployment sub what-if` of platform/fiab/bicep/main.bicep against:
+#
+#   - Commercial: sub AZURE_SUBSCRIPTION_ID, centralus,
+#     params/commercial-full.bicepparam (the canonical from-scratch paramfile
+#     per no-vaporware.md's three-step path)
+#   - Gov (GCC-High): sub AZURE_GOV_SUBSCRIPTION_ID via the gov SP secrets
+#     pattern (same creds block as gov-console-roll.yml / deploy-fiab-gcch.yml),
+#     usgovvirginia, params/gcc-high.bicepparam
+#
+# Any Create/Delete/Modify delta = UNMANAGED DRIFT (a hand-portal change — e.g.
+# an ACR "allow unsigned" toggle or a firewall rule — that silently diverged
+# from IaC). The scheduled lane IS the per-cloud mechanism (one job per estate).
+#
+# deployAppsEnabled=false on both estates: the app plane (Container Apps) rolls
+# continuously via loom-roll-and-validate.yml / gov-console-roll.yml with
+# sha-tagged images that churn BY DESIGN — including them would make every run
+# "drift". With incremental-mode what-if they fall to changeType Ignore; this
+# lane covers the INFRA estate.
+#
+# ALERTING (rev-2 standard): drift notifies through the ONE shared action group
+# `loom-default-alerts` (monitoring-default-alerts.bicep::defaultActionGroup,
+# derived var LOOM_ALERT_ACTION_GROUP_ID) via
+# `az monitor action-group test-notifications create` — the same call
+# loom-synthetic-monitor.yml uses; no new channels (O1 absorbs this when the
+# unified alert-dispatch lands). The dedup GitHub issue (label `bicep-drift` +
+# per-cloud label) is the durable signal and auto-closes on a clean run.
+#
+# Tuning without code change: repo variable LOOM_DRIFT_EXTRA_PARAMS (and the
+# dispatch input extra_parameters) append `--parameters k=v` overrides — e.g.
+# to pin LOOM_PURVIEW_LOCATION cross-region or acknowledge a deliberate live
+# divergence while its reconcile PR is in flight.
+#
+# IL5 / air-gapped (design only, do NOT build): the what-if runs from the
+# in-enclave gh-aca-runner against the sovereign ARM endpoint; GitHub-issue
+# dedup is replaced by an in-boundary report (Cosmos row + the admin page) and
+# the alert sink stays in-tenant. Runbook: docs/fiab/runbooks/bicep-drift.md
+
+on:
+  schedule:
+    - cron: '17 7 * * 1'   # weekly, Monday 07:17 UTC
+  workflow_dispatch:
+    inputs:
+      cloud:
+        description: 'Which live estate(s) to what-if.'
+        type: choice
+        default: both
+        options:
+          - both
+          - commercial
+          - gov
+      extra_parameters:
+        description: 'Extra `--parameters k=v` overrides appended to the what-if (live-tuning; e.g. purviewEnabled=false).'
+        type: string
+        required: false
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: loom-drift-check
+  cancel-in-progress: false
+
+env:
+  ACTION_GROUP_NAME: loom-default-alerts
+
+jobs:
+  # ------------------------------------------------------------------
+  # Commercial estate
+  # ------------------------------------------------------------------
+  drift-commercial:
+    name: What-if vs live Commercial estate
+    if: github.event_name == 'schedule' || inputs.cloud == 'both' || inputs.cloud == 'commercial'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      CLOUD_LABEL: commercial
+      RG_NAME: rg-csa-loom-admin-centralus
+      LOCATION: centralus
+      PARAMS_FILE: commercial-full.bicepparam
+      FIAB_VANITY_DOMAIN: csa-loom.limitlessdata.ai
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login (Commercial)
+        uses: Azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+            }
+
+      - name: What-if vs live estate + drift verdict
+        id: whatif
+        env:
+          ADMIN_GROUP_ID: ${{ secrets.FIAB_ADMIN_GROUP_ID }}
+          EXTRA_PARAMS: ${{ inputs.extra_parameters }} ${{ vars.LOOM_DRIFT_EXTRA_PARAMS }}
+        run: |
+          az bicep install
+          set +e
+          az deployment sub what-if \
+            --name loom-drift-${CLOUD_LABEL}-${{ github.run_id }} \
+            --location "$LOCATION" \
+            --template-file platform/fiab/bicep/main.bicep \
+            --parameters "platform/fiab/bicep/params/$PARAMS_FILE" \
+            --parameters location="$LOCATION" \
+            --parameters adminEntraGroupId="$ADMIN_GROUP_ID" \
+            --parameters deployAppsEnabled=false \
+            --parameters loomVanityDomain="$FIAB_VANITY_DOMAIN" \
+            $EXTRA_PARAMS \
+            --no-pretty-print --only-show-errors > whatif.json 2> whatif.err
+          EXIT_CODE=$?
+          set -e
+
+          if [[ $EXIT_CODE -ne 0 ]] || ! jq -e '.changes' whatif.json >/dev/null 2>&1; then
+            echo "status=Error" >> "$GITHUB_OUTPUT"
+            echo "::error::[$CLOUD_LABEL] what-if FAILED (exit $EXIT_CODE) — the drift verdict is UNKNOWN. stderr:"
+            cat whatif.err || true
+            head -c 4000 whatif.json || true
+            exit 1
+          fi
+
+          COUNTS=$(jq -c '[.changes[]?] | group_by(.changeType) | map({(.[0].changeType): length}) | add // {}' whatif.json)
+          DRIFT=$(jq '[.changes[]? | select(.changeType == "Create" or .changeType == "Delete" or .changeType == "Modify")] | length' whatif.json)
+          jq -r '.changes[]? | select(.changeType != "NoChange" and .changeType != "Ignore") | "\(.changeType)\t\(.resourceId)"' whatif.json | head -200 > drift-list.txt
+
+          echo "counts=$COUNTS" >> "$GITHUB_OUTPUT"
+          echo "drift_count=$DRIFT" >> "$GITHUB_OUTPUT"
+          {
+            echo "drift_list<<DRIFT_EOF"
+            cat drift-list.txt
+            echo "DRIFT_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+          {
+            echo "### [$CLOUD_LABEL] bicep-drift check — $DRIFT managed-resource delta(s)"
+            echo ""
+            echo "Change counts: \`$COUNTS\`"
+            echo ""
+            echo '```'
+            cat drift-list.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [[ "$DRIFT" != "0" ]]; then
+            echo "status=Drift" >> "$GITHUB_OUTPUT"
+            echo "::error::[$CLOUD_LABEL] UNMANAGED DRIFT — $DRIFT Create/Delete/Modify delta(s) between platform/fiab/bicep and the live estate. See the step summary / artifact; runbook docs/fiab/runbooks/bicep-drift.md."
+            exit 1
+          fi
+          echo "status=Clean" >> "$GITHUB_OUTPUT"
+          echo "::notice::[$CLOUD_LABEL] estate matches IaC — zero unmanaged deltas."
+
+      - name: Upload full what-if JSON
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: whatif-drift-commercial-${{ github.run_id }}
+          path: |
+            whatif.json
+            whatif.err
+            drift-list.txt
+          if-no-files-found: ignore
+
+      - name: Alert — notify the shared action group (loom-default-alerts)
+        if: failure()
+        run: |
+          # Rev-2 alert standard: the ONE shared default action group
+          # (LOOM_ALERT_ACTION_GROUP_ID → monitoring-default-alerts.bicep::
+          # defaultActionGroup; email + subscription-Owner ARM-role receivers).
+          # Best-effort — the dedup GitHub issue below is the durable signal.
+          az monitor action-group test-notifications create \
+            -g "$RG_NAME" --action-group-name "$ACTION_GROUP_NAME" \
+            --alert-type log 2>/dev/null \
+          || az monitor action-group test-notifications create \
+            -g "$RG_NAME" --action-group-name "$ACTION_GROUP_NAME" \
+            --alert-type budget 2>/dev/null \
+          || echo "::warning::action-group notification failed — the dedup issue below is the durable alert."
+
+      - name: File / update dedup drift issue
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const cloud = 'Commercial';
+            const label = 'drift-commercial';
+            const status = `${{ steps.whatif.outputs.status }}` || 'Error';
+            const drift = `${{ steps.whatif.outputs.drift_count }}` || '?';
+            const counts = `${{ steps.whatif.outputs.counts }}` || '{}';
+            const list = process.env.DRIFT_LIST || '(what-if failed before a verdict — see the run logs)';
+            const body = [
+              `Run: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+              ``,
+              `Verdict: **${status}** — ${drift} Create/Delete/Modify delta(s) between \`platform/fiab/bicep/main.bicep\` and the live ${cloud} estate.`,
+              `Change counts: \`${counts}\``,
+              ``,
+              '```',
+              list.slice(0, 50000),
+              '```',
+              ``,
+              `A delta here means a hand-portal change diverged from IaC (or IaC merged without deploying). Reconcile by opening a PR that encodes the live state into bicep — or redeploy IaC over the estate if the live change was accidental.`,
+              `Triage: docs/fiab/runbooks/bicep-drift.md · full what-if JSON in the run artifact.`,
+            ].join('\n');
+            const existing = await github.rest.issues.listForRepo({
+              owner: context.repo.owner, repo: context.repo.repo,
+              state: 'open', labels: `bicep-drift,${label}`, per_page: 1,
+            });
+            if (existing.data.length > 0) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: existing.data[0].number,
+                body: `Drift still present.\n\n${body}`,
+              });
+            } else {
+              await github.rest.issues.create({
+                owner: context.repo.owner, repo: context.repo.repo,
+                title: `bicep-drift (${cloud}): ${drift} unmanaged delta(s) vs live estate`,
+                body, labels: ['csa-loom', 'bicep-drift', label],
+              });
+            }
+        env:
+          DRIFT_LIST: ${{ steps.whatif.outputs.drift_list }}
+
+      - name: Auto-close stale drift issues on a clean run
+        if: success() && steps.whatif.outputs.status == 'Clean'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const open = await github.rest.issues.listForRepo({
+              owner: context.repo.owner, repo: context.repo.repo,
+              state: 'open', labels: 'bicep-drift,drift-commercial', per_page: 20,
+            });
+            for (const iss of open.data) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo, issue_number: iss.number,
+                body: `Auto-resolved: the Commercial estate matches IaC (zero unmanaged deltas — run ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}). Closing.`,
+              });
+              await github.rest.issues.update({
+                owner: context.repo.owner, repo: context.repo.repo, issue_number: iss.number, state: 'closed',
+              });
+            }
+
+  # ------------------------------------------------------------------
+  # Gov (GCC-High) estate — gov SP secrets pattern (AZURE_GOV_*)
+  # ------------------------------------------------------------------
+  precheck-gov:
+    name: Verify Gov secrets are configured
+    if: github.event_name == 'schedule' || inputs.cloud == 'both' || inputs.cloud == 'gov'
+    runs-on: ubuntu-latest
+    outputs:
+      configured: ${{ steps.check.outputs.configured }}
+    steps:
+      - id: check
+        env:
+          C: ${{ secrets.AZURE_GOV_CLIENT_ID }}
+          S: ${{ secrets.AZURE_GOV_CLIENT_SECRET }}
+          T: ${{ secrets.AZURE_GOV_TENANT_ID }}
+          U: ${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}
+        run: |
+          if [[ -z "$C" || -z "$S" || -z "$T" || -z "$U" ]]; then
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::AZURE_GOV_* secrets not configured — skipping the Gov drift check. Bootstrap per docs/fiab/runbooks/secrets-bootstrap.md"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  drift-gov:
+    name: What-if vs live Gov (GCC-High) estate
+    needs: precheck-gov
+    if: needs.precheck-gov.outputs.configured == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      CLOUD_LABEL: gov
+      RG_NAME: rg-csa-loom-admin-usgovvirginia
+      LOCATION: usgovvirginia
+      PARAMS_FILE: gcc-high.bicepparam
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login (Gov sub) — deploy SP
+        uses: Azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_GOV_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_GOV_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_GOV_TENANT_ID }}",
+              "subscriptionId": "${{ secrets.AZURE_GOV_SUBSCRIPTION_ID }}",
+              "activeDirectoryEndpointUrl": "https://login.microsoftonline.us",
+              "resourceManagerEndpointUrl": "https://management.usgovcloudapi.net/",
+              "sqlManagementEndpointUrl": "https://management.core.usgovcloudapi.net:8443/",
+              "galleryEndpointUrl": "https://gallery.usgovcloudapi.net/",
+              "managementEndpointUrl": "https://management.core.usgovcloudapi.net/"
+            }
+          environment: AzureUSGovernment
+
+      - name: Set Azure cloud to Gov
+        run: az cloud set --name AzureUSGovernment
+
+      - name: What-if vs live estate + drift verdict
+        id: whatif
+        env:
+          ADMIN_GROUP_ID: ${{ secrets.FIAB_GOV_ADMIN_GROUP_ID }}
+          EXTRA_PARAMS: ${{ inputs.extra_parameters }} ${{ vars.LOOM_DRIFT_EXTRA_PARAMS_GOV }}
+        run: |
+          az bicep install
+          set +e
+          az deployment sub what-if \
+            --name loom-drift-${CLOUD_LABEL}-${{ github.run_id }} \
+            --location "$LOCATION" \
+            --template-file platform/fiab/bicep/main.bicep \
+            --parameters "platform/fiab/bicep/params/$PARAMS_FILE" \
+            --parameters location="$LOCATION" \
+            --parameters adminEntraGroupId="$ADMIN_GROUP_ID" \
+            --parameters deployAppsEnabled=false \
+            $EXTRA_PARAMS \
+            --no-pretty-print --only-show-errors > whatif.json 2> whatif.err
+          EXIT_CODE=$?
+          set -e
+
+          if [[ $EXIT_CODE -ne 0 ]] || ! jq -e '.changes' whatif.json >/dev/null 2>&1; then
+            echo "status=Error" >> "$GITHUB_OUTPUT"
+            echo "::error::[$CLOUD_LABEL] what-if FAILED (exit $EXIT_CODE) — the drift verdict is UNKNOWN. stderr:"
+            cat whatif.err || true
+            head -c 4000 whatif.json || true
+            exit 1
+          fi
+
+          COUNTS=$(jq -c '[.changes[]?] | group_by(.changeType) | map({(.[0].changeType): length}) | add // {}' whatif.json)
+          DRIFT=$(jq '[.changes[]? | select(.changeType == "Create" or .changeType == "Delete" or .changeType == "Modify")] | length' whatif.json)
+          jq -r '.changes[]? | select(.changeType != "NoChange" and .changeType != "Ignore") | "\(.changeType)\t\(.resourceId)"' whatif.json | head -200 > drift-list.txt
+
+          echo "counts=$COUNTS" >> "$GITHUB_OUTPUT"
+          echo "drift_count=$DRIFT" >> "$GITHUB_OUTPUT"
+          {
+            echo "drift_list<<DRIFT_EOF"
+            cat drift-list.txt
+            echo "DRIFT_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+          {
+            echo "### [$CLOUD_LABEL] bicep-drift check — $DRIFT managed-resource delta(s)"
+            echo ""
+            echo "Change counts: \`$COUNTS\`"
+            echo ""
+            echo '```'
+            cat drift-list.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [[ "$DRIFT" != "0" ]]; then
+            echo "status=Drift" >> "$GITHUB_OUTPUT"
+            echo "::error::[$CLOUD_LABEL] UNMANAGED DRIFT — $DRIFT Create/Delete/Modify delta(s) between platform/fiab/bicep and the live estate. See the step summary / artifact; runbook docs/fiab/runbooks/bicep-drift.md."
+            exit 1
+          fi
+          echo "status=Clean" >> "$GITHUB_OUTPUT"
+          echo "::notice::[$CLOUD_LABEL] estate matches IaC — zero unmanaged deltas."
+
+      - name: Upload full what-if JSON
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: whatif-drift-gov-${{ github.run_id }}
+          path: |
+            whatif.json
+            whatif.err
+            drift-list.txt
+          if-no-files-found: ignore
+
+      - name: Alert — notify the shared action group (loom-default-alerts)
+        if: failure()
+        run: |
+          # Same shared-action-group call as Commercial, on the Gov estate's
+          # default action group (.us ARM endpoint via the Gov login above).
+          az monitor action-group test-notifications create \
+            -g "$RG_NAME" --action-group-name "$ACTION_GROUP_NAME" \
+            --alert-type log 2>/dev/null \
+          || az monitor action-group test-notifications create \
+            -g "$RG_NAME" --action-group-name "$ACTION_GROUP_NAME" \
+            --alert-type budget 2>/dev/null \
+          || echo "::warning::action-group notification failed — the dedup issue below is the durable alert."
+
+      - name: File / update dedup drift issue
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const cloud = 'Gov (GCC-High)';
+            const label = 'drift-gov';
+            const status = `${{ steps.whatif.outputs.status }}` || 'Error';
+            const drift = `${{ steps.whatif.outputs.drift_count }}` || '?';
+            const counts = `${{ steps.whatif.outputs.counts }}` || '{}';
+            const list = process.env.DRIFT_LIST || '(what-if failed before a verdict — see the run logs)';
+            const body = [
+              `Run: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+              ``,
+              `Verdict: **${status}** — ${drift} Create/Delete/Modify delta(s) between \`platform/fiab/bicep/main.bicep\` and the live ${cloud} estate.`,
+              `Change counts: \`${counts}\``,
+              ``,
+              '```',
+              list.slice(0, 50000),
+              '```',
+              ``,
+              `A delta here means a hand-portal change diverged from IaC (or IaC merged without deploying). Reconcile by opening a PR that encodes the live state into bicep — or redeploy IaC over the estate if the live change was accidental.`,
+              `Triage: docs/fiab/runbooks/bicep-drift.md · full what-if JSON in the run artifact.`,
+            ].join('\n');
+            const existing = await github.rest.issues.listForRepo({
+              owner: context.repo.owner, repo: context.repo.repo,
+              state: 'open', labels: `bicep-drift,${label}`, per_page: 1,
+            });
+            if (existing.data.length > 0) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: existing.data[0].number,
+                body: `Drift still present.\n\n${body}`,
+              });
+            } else {
+              await github.rest.issues.create({
+                owner: context.repo.owner, repo: context.repo.repo,
+                title: `bicep-drift (${cloud}): ${drift} unmanaged delta(s) vs live estate`,
+                body, labels: ['csa-loom', 'bicep-drift', label],
+              });
+            }
+        env:
+          DRIFT_LIST: ${{ steps.whatif.outputs.drift_list }}
+
+      - name: Auto-close stale drift issues on a clean run
+        if: success() && steps.whatif.outputs.status == 'Clean'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const open = await github.rest.issues.listForRepo({
+              owner: context.repo.owner, repo: context.repo.repo,
+              state: 'open', labels: 'bicep-drift,drift-gov', per_page: 20,
+            });
+            for (const iss of open.data) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo, issue_number: iss.number,
+                body: `Auto-resolved: the Gov estate matches IaC (zero unmanaged deltas — run ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}). Closing.`,
+              });
+              await github.rest.issues.update({
+                owner: context.repo.owner, repo: context.repo.repo, issue_number: iss.number, state: 'closed',
+              });
+            }
