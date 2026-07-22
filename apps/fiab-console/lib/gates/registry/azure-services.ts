@@ -150,6 +150,24 @@ export const AZURE_SERVICES_GATE_META: Record<string, GateMeta> = {
     fixit: { kind: 'env-picker' },
     autoResolveNote: "Unset → the autopilot runs in 'propose' mode and the LCU ceiling auto-derives from peak; both are fully-functional defaults, not a gap.",
   },
+  // C1 — the FinOps cost-pull stack. The role is the real gap (env is
+  // auto-wired): Fix-it 'role-grant' with the bicep-granted Cost Management
+  // Reader; LOOM_BILLING_SCOPE stays a free-text setting (billing-account /
+  // enrollment scopes are tenant-level Microsoft.Billing paths, NOT
+  // subscription-ARM enumerable, so no resource loader exists for it).
+  'svc-cost-management': {
+    surfaces: [
+      { path: '/monitor', label: 'Monitor hub — Cost tab' },
+      { path: '/admin/usage-chargeback', label: 'Usage & chargeback (FinOps)' },
+      { path: '/admin/capacity', label: 'Capacity — $/mo cost column' },
+    ],
+    fixit: {
+      kind: 'role-grant',
+      grantNote: 'Grant the Console UAMI "Cost Management Reader" at subscription scope. The push-button deploy grants it automatically (main.bicep console-cost-management-reader → modules/admin-plane/cost-management-reader-rbac.bicep); on an existing estate re-run the deploy with skipRoleGrants=false or run the pre-filled az script. For a billing-account / EA-enrollment rollup, set LOOM_BILLING_SCOPE to the Microsoft.Billing scope path (free-text — billing scopes are not subscription-ARM enumerable).',
+    },
+    legacyCodes: ['cost_query_failed'],
+    autoResolveNote: 'A push-button deploy auto-wires LOOM_SUBSCRIPTION_ID AND bicep-grants Cost Management Reader — cost/chargeback is default-ON with zero operator input; LOOM_BILLING_SCOPE only widens the rollup scope.',
+  },
   'svc-azure-maps': {
     surfaces: [
       { path: '/items/report', label: 'Report Map visual' },

@@ -183,8 +183,10 @@ describe('admin/env-config registry', () => {
     // WS-10.1 svc-lcu-autopilot added LOOM_AUTOPILOT_MODE + LOOM_CAPACITY_LCU
     // (146) → WS-9 svc-agent-mesh adds LOOM_MESH_PROFILE (147) → WS-C2
     // svc-report-subscriptions adds LOOM_REPORT_SUBSCRIPTIONS_FUNCTION +
-    // LOOM_SUBSCRIPTION_LOGIC_APP_NAME (149) — two NEW.
-    expect(EDITABLE_ENV.length).toBe(149);
+    // LOOM_SUBSCRIPTION_LOGIC_APP_NAME (149) — two NEW → C1 svc-cost-management
+    // adds LOOM_BILLING_SCOPE (150) — the optional billing-account/enrollment
+    // rollup widener (LOOM_SUBSCRIPTION_ID it aliases is already counted).
+    expect(EDITABLE_ENV.length).toBe(150);
   });
 
   it('surfaces the wave-2 env vars as settable (previously dropped by the whitelist)', () => {

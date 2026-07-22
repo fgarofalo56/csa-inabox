@@ -9,10 +9,10 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
-import { getLoomCostSummary, type CostTimeframe } from '@/lib/azure/cost-client';
+import { getLoomCostSummaryCached, type CostTimeframe } from '@/lib/azure/cost-client';
 import { MonitorNotConfiguredError, MonitorError } from '@/lib/azure/monitor-client';
 import { apiServerError } from '@/lib/api/respond';
-import { getOrComputeCached, buildScopedCacheKey, ComputeBudgetExceededError } from '@/lib/azure/query-result-cache';
+import { ComputeBudgetExceededError } from '@/lib/azure/query-result-cache';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -33,15 +33,16 @@ export async function GET(req: NextRequest) {
     // Serve-from-cache-first (15 min fresh, SWR after): the multi-sub Cost
     // Management aggregation can outlive Front Door's ~60s edge budget on a
     // cold read — cached, the tab paints in milliseconds and one background
-    // refresh serves every user (cost data isn't per-user). The 50s inline
-    // budget + serveStaleOnError keep even the cold path inside the edge.
-    const { value, meta } = await getOrComputeCached(
-      buildScopedCacheKey('monitor/cost', { timeframe }),
-      'monitor',
-      () => getLoomCostSummary({ timeframe }),
-      { ttlMs: 15 * 60_000, staleWhileRevalidate: true, bypass: refresh, budgetMs: 22_000, serveStaleOnError: true },
-    );
-    return NextResponse.json({ ok: true, data: value, meta });
+    // refresh serves every user (cost data isn't per-user). C1: the cache now
+    // lives IN cost-client (shared 'cost-mgmt' posture: 15 min TTL, 45s inline
+    // budget, serveStaleOnError, 'cost' hit-rate counter) so the chargeback
+    // model / report bindings / this tab all share ONE cached pull per
+    // timeframe instead of each burning the Cost Management QPU quota.
+    const { value, meta } = await getLoomCostSummaryCached({ timeframe, bypass: refresh });
+    const res = NextResponse.json({ ok: true, data: value, meta });
+    // X-Cache lets a curl receipt show miss→hit without parsing the body.
+    res.headers.set('X-Cache', meta.hit ? (meta.stale ? 'stale' : 'hit') : 'miss');
+    return res;
   } catch (e) {
     if (e instanceof ComputeBudgetExceededError) {
       // Cold aggregation exceeded the inline budget: the read-warmer (and the

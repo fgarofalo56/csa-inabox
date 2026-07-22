@@ -32,6 +32,7 @@ import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { readMonitorConfig, MonitorError, MonitorNotConfiguredError } from './monitor-client';
 import { loomSubscriptionScope } from './loom-subscriptions';
 import { armBase, armScope } from './cloud-endpoints';
+import { getOrComputeCached, buildScopedCacheKey, type CacheMeta } from './query-result-cache';
 
 // Sovereign-cloud ARM host + scope (Commercial / GCC-High / IL5).
 const ARM = armBase();
@@ -131,6 +132,58 @@ export function createConcurrencyLimiter(max: number): <T>(fn: () => Promise<T>)
 
 /** Process-wide limiter shared by every cost query (all subs, all groupings). */
 const costQueryLimiter = createConcurrencyLimiter(COST_QUERY_CONCURRENCY);
+
+// ---------------------------------------------------------------------------
+// C1 — per-scope cache keys + the shared cache posture for EVERY Cost
+// Management fan-out (summary, tag-scope enumeration, per-resource $/mo).
+// ---------------------------------------------------------------------------
+
+/**
+ * Stable cache key for one Cost Management pull. `scope` is the ARM scope the
+ * pull rolls up (a subscription id / RG path / the sorted multi-sub label),
+ * `timeframe` the Cost Management timeframe, and `groupBy` the grouping shape
+ * ('summary', 'resource', `tag:<key>`, 'scopes', …) so distinct groupings of
+ * the same scope never collide.
+ */
+export function costKey(scope: string, timeframe: string, groupBy = 'summary'): string {
+  return buildScopedCacheKey('cost-mgmt', { scope, timeframe, groupBy });
+}
+
+/**
+ * The one cache posture every Cost Management pull shares (C1): 15 min fresh
+ * TTL (spend data moves slowly; the QPU quota is tiny), a 45s inline budget so
+ * a cold read fails fast instead of 504ing at the Front Door edge, and
+ * serve-stale-on-error so a throttled recompute serves the last GOOD copy
+ * (2026-07-17 live receipt: a bypass recompute once persisted a zero-total
+ * summary over a healthy $1,774 copy). Hits/misses land on the 'cost'
+ * cache-counter so the perf surface shows the cost-cache hit-rate.
+ */
+export const COST_CACHE_OPTS = {
+  ttlMs: 15 * 60_000,
+  budgetMs: 45_000,
+  serveStaleOnError: true,
+  counterBackend: 'cost',
+} as const;
+
+/**
+ * Stable label for the multi-subscription Loom scope, used in cache keys. Env
+ * scope only (sync + deterministic): registry-attached subs are read-time and
+ * would fragment the key; the compute itself still unions them.
+ */
+export function loomScopeLabel(): string {
+  const subs = [...loomSubscriptions()].sort();
+  return subs.length ? subs.join(',') : 'unconfigured';
+}
+
+/**
+ * Run ONE throttle-aware Cost Management query (the consolidated retry/backoff
+ * loop, funnelled through the shared QPU concurrency limiter). Exported so
+ * sibling cost modules (cost-scope.ts) reuse THIS loop instead of growing
+ * their own — the C1 "consolidate the throttle-aware loop" requirement.
+ */
+export function runCostQuery(subscriptionId: string, body: unknown, deadline?: number): Promise<any> {
+  return costQuery(subscriptionId, body, deadline);
+}
 
 /**
  * Distinct set of subscriptions the Loom deployment spans (admin + DLZ + BYO).
@@ -439,8 +492,15 @@ function computeAnomalies(daily: { date: string; cost: number }[]): CostAnomaly[
   return out.sort((a, b) => (a.severity === b.severity ? b.cost - a.cost : a.severity === 'high' ? -1 : 1));
 }
 
-/** Build the multi-subscription cost summary for the Loom deployment. */
-export async function getLoomCostSummary(opts: CostOptions = {}): Promise<CostSummary> {
+/**
+ * Build the multi-subscription cost summary for the Loom deployment — the RAW
+ * (uncached) fan-out. Exported for the read-warmer's `produce` (which writes
+ * the same tiers under the same key via its own bypass write) and for tests;
+ * every product caller goes through {@link getLoomCostSummary} /
+ * {@link getLoomCostSummaryCached} so the Cost Management QPU quota is hit at
+ * most once per TTL window per timeframe.
+ */
+export async function computeLoomCostSummary(opts: CostOptions = {}): Promise<CostSummary> {
   const cfg = readMonitorConfig(); // throws MonitorNotConfiguredError if unset
   const loomRgs = new Set(cfg.resourceGroups.map((r) => r.toLowerCase()));
   const timeframe = opts.timeframe || 'MonthToDate';
@@ -724,6 +784,36 @@ export async function getLoomCostSummary(opts: CostOptions = {}): Promise<CostSu
     subscriptionNames,
     subscriptionErrors,
   };
+}
+
+/**
+ * C1 cached entrypoint with metadata — wraps the multi-sub Cost Management
+ * fan-out in the shared result cache (per-scope key via {@link costKey};
+ * posture {@link COST_CACHE_OPTS}: 15 min TTL, 45s inline budget,
+ * serve-stale-on-error, 'cost' hit-rate counter). `staleWhileRevalidate`
+ * keeps an expired copy painting instantly while ONE background refresh
+ * renews it; `bypass` wires `?refresh=1`.
+ */
+export async function getLoomCostSummaryCached(
+  opts: CostOptions & { bypass?: boolean } = {},
+): Promise<{ value: CostSummary; meta: CacheMeta }> {
+  const timeframe = opts.timeframe || 'MonthToDate';
+  return getOrComputeCached(
+    costKey(loomScopeLabel(), timeframe, 'summary'),
+    'cost-mgmt',
+    () => computeLoomCostSummary({ timeframe }),
+    { ...COST_CACHE_OPTS, staleWhileRevalidate: true, bypass: opts.bypass },
+  );
+}
+
+/**
+ * Back-compat cached entrypoint (same signature as ever). Every existing
+ * caller — the chargeback model, report live-bindings, app-runtime monitoring
+ * — now transparently rides the shared 'cost' cache instead of each pulling
+ * Cost Management independently.
+ */
+export async function getLoomCostSummary(opts: CostOptions = {}): Promise<CostSummary> {
+  return (await getLoomCostSummaryCached(opts)).value;
 }
 
 export { MonitorError, MonitorNotConfiguredError };
