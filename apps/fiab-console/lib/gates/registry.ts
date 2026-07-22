@@ -669,6 +669,16 @@ export const GATE_META: Record<string, GateMeta> = {
     fixit: { kind: 'env-picker' },
     autoResolveNote: 'Webhooks deliver via HMAC-signed direct HTTPS by default — Event Grid is an optional alternative transport.',
   },
+  'svc-report-subscriptions': {
+    // WS-C2: scheduled report-subscription delivery. The Subscriptions panel
+    // saves to Cosmos regardless; actual scheduled delivery needs the timer
+    // Function + Logic App. Registered here so the honest delivery gate is
+    // discoverable on the Admin gate page with a Fix-it (G2).
+    surfaces: [{ path: '/items/report', label: 'Report → Subscriptions (scheduled delivery)' }],
+    fixit: { kind: 'env-picker' },
+    autoResolveNote: 'Subscriptions you save are stored in Cosmos and begin delivering automatically once the report-subscriptions Function + Logic App are deployed (reportSubscriptionsEnabled=true). No Fabric required.',
+    legacyCodes: ['report_subscription_delivery_not_configured', 'subscription_delivery_not_configured'],
+  },
   'svc-servicebus': {
     surfaces: [{ path: '/items/service-bus-namespace', label: 'Service Bus namespace editor' }],
     fixit: { kind: 'resource-picker' },

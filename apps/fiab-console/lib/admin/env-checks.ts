@@ -468,6 +468,13 @@ export const ENV_CHECKS: EnvSpec[] = [
     role: 'Azure Event Hubs Data Owner (UAMI) on the namespace',
   },
   {
+    id: 'svc-report-subscriptions', category: 'azure-services', title: 'Report-subscription scheduled delivery', severity: 'optional',
+    required: ['LOOM_REPORT_SUBSCRIPTIONS_FUNCTION', 'LOOM_SUBSCRIPTION_LOGIC_APP_NAME'], warnOnMiss: true,
+    remediation: 'Scheduled report delivery needs the report-subscriptions timer Function (LOOM_REPORT_SUBSCRIPTIONS_FUNCTION) + the delivery Logic App (LOOM_SUBSCRIPTION_LOGIC_APP_NAME). Deploy admin-plane/main.bicep with reportSubscriptionsEnabled=true (report-subscriptions-function.bicep + integration/report-subscription-logicapp.bicep), then authorize the Logic App\'s Office 365 connection in the portal. Subscriptions save to Cosmos regardless and begin delivering once the Function is live. No Microsoft Fabric required.',
+    provisionedBy: 'modules/admin-plane/report-subscriptions-function.bicep + modules/integration/report-subscription-logicapp.bicep (reportSubscriptionsEnabled) → apps[] env',
+    role: 'Function reads Cosmos (report-subscriptions) as the Console UAMI; Logic App uses an authorized Office 365 connection to deliver',
+  },
+  {
     id: 'svc-adls', category: 'azure-services', title: 'ADLS Gen2 (lakehouse / Bronze)', severity: 'recommended',
     anyOf: [['LOOM_ADLS_ACCOUNT', 'LOOM_LANDING_URL', 'LOOM_BRONZE_URL']], warnOnMiss: true,
     remediation: 'Set LOOM_ADLS_ACCOUNT (or the LOOM_{LANDING,BRONZE,SILVER,GOLD}_URL DLZ container URLs) to enable the Azure-native lakehouse + mirror Bronze sink.',
