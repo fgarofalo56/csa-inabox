@@ -45,6 +45,30 @@ describe('reconcileThreadEdgesOnDelete', () => {
     expect(h.upsert).not.toHaveBeenCalled();
   });
 
+  it("mode:'remove' still deletes an edge that carries columnMappings (LIN-GC regression, L1)", async () => {
+    h.query.mockResolvedValue({
+      resources: [edge({
+        id: 'edge_col',
+        columnMappings: [{ fromColumn: 'id', toColumn: 'customer_id', confidence: 'declared' }],
+      })],
+    });
+    await reconcileThreadEdgesOnDelete(TENANT, 'lh-1', { mode: 'remove' });
+    expect(h.itemDelete).toHaveBeenCalledWith('edge_col', TENANT);
+    expect(h.upsert).not.toHaveBeenCalled();
+  });
+
+  it("mode:'tombstone' preserves columnMappings on the tombstoned edge (L1)", async () => {
+    h.query.mockResolvedValue({
+      resources: [edge({
+        columnMappings: [{ fromColumn: 'id', toColumn: 'customer_id', confidence: 'declared' }],
+      })],
+    });
+    await reconcileThreadEdgesOnDelete(TENANT, 'lh-1', { mode: 'tombstone' });
+    const doc = h.upsert.mock.calls[0][0] as ThreadEdge;
+    expect(doc.columnMappings).toEqual([{ fromColumn: 'id', toColumn: 'customer_id', confidence: 'declared' }]);
+    expect(typeof doc.deletedAt).toBe('string');
+  });
+
   it("mode:'tombstone' stamps deletedAt + staleItemIds instead of deleting", async () => {
     h.query.mockResolvedValue({ resources: [edge()] });
     await reconcileThreadEdgesOnDelete(TENANT, 'lh-1', { mode: 'tombstone' });

@@ -103,8 +103,11 @@ vi.mock('./asset-identity', () => ({
 import {
   normalizeIdentity,
   ucIdentity,
+  columnIdentity,
+  synthesizeColumnGraph,
   mergeGraphs,
   getUnifiedLineage,
+  type ColumnGraphMember,
 } from '@/lib/azure/unified-lineage';
 
 const session: any = { claims: { oid: 'tenant-1', upn: 'a@b.com' } };
@@ -135,6 +138,59 @@ describe('normalizeIdentity', () => {
   });
   it('ucIdentity lowercases', () => {
     expect(ucIdentity('Main.B.C')).toBe('uc:main.b.c');
+  });
+});
+
+describe('columnIdentity (L1)', () => {
+  it('normalizes the table part so a UC full_name and its raw spelling produce the same key', () => {
+    expect(columnIdentity('Main.Bronze.Customers', 'Customer_ID'))
+      .toBe('col:uc:main.bronze.customers::customer_id');
+    expect(columnIdentity('main.bronze.customers', 'customer_id'))
+      .toBe('col:uc:main.bronze.customers::customer_id');
+  });
+  it('keeps a Loom item id as its own namespace (no accidental cross-merge)', () => {
+    expect(columnIdentity('lake1', 'amount')).toBe('col:lake1::amount');
+  });
+});
+
+describe('synthesizeColumnGraph (L1)', () => {
+  const member = (over: Partial<ColumnGraphMember> = {}): ColumnGraphMember => ({
+    fromTable: 'main.bronze.raw', fromColumn: 'id',
+    toTable: 'main.bronze.customers', toColumn: 'customer_id',
+    source: 'unity-catalog',
+    ...over,
+  });
+
+  it('builds col: nodes with parentTableId/columnOf and kind:column edges', () => {
+    const { nodes, edges } = synthesizeColumnGraph([member()]);
+    expect(nodes).toHaveLength(2);
+    const from = nodes.find((n) => n.node.id === 'col:main.bronze.raw::id')!;
+    expect(from.node.type).toBe('column');
+    expect(from.node.label).toBe('id');
+    expect(from.node.parentTableId).toBe('main.bronze.raw');
+    expect(from.node.columnOf).toBe('main.bronze.raw');
+    expect(from.identities).toEqual(['col:uc:main.bronze.raw::id']);
+    expect(edges).toEqual([
+      { from: 'col:main.bronze.raw::id', to: 'col:main.bronze.customers::customer_id', type: 'column', kind: 'column' },
+    ]);
+  });
+
+  it('de-dupes repeated mappings and skips incomplete ones', () => {
+    const { nodes, edges } = synthesizeColumnGraph([
+      member(), member(), member({ fromColumn: '' }),
+    ]);
+    expect(nodes).toHaveLength(2);
+    expect(edges).toHaveLength(1);
+  });
+
+  it('produces the SAME identity for the same physical column from different sources', () => {
+    const uc = synthesizeColumnGraph([member()]);
+    const weave = synthesizeColumnGraph([
+      member({ fromTable: 'nb-item', fromColumn: 'x', source: 'weave' }),
+    ]);
+    const ucTo = uc.nodes.find((n) => n.node.id.endsWith('::customer_id'))!;
+    const weaveTo = weave.nodes.find((n) => n.node.id.endsWith('::customer_id'))!;
+    expect(ucTo.identities).toEqual(weaveTo.identities);
   });
 });
 
@@ -349,5 +405,63 @@ describe('getUnifiedLineage', () => {
     expect(res.sources.find((s) => s.source === 'unity-catalog')?.ok).toBe(true);
     expect(res.nodes.some((n) => n.id === 'main.bronze.raw')).toBe(true);
     expect(res.nodes.some((n) => n.type === 'column')).toBe(false);
+  });
+
+  it('merges a Weave columnMappings edge with a UC column edge for the same physical column into ONE col: node (L1)', async () => {
+    mocks.isPurviewConfigured.mockReturnValue(false);
+    mocks.lineageWarehouseId.mockReturnValue('wh-1');
+    mocks.getTableLineageSystemTables.mockResolvedValue({
+      edges: [{ source: 'main.bronze.raw', target: 'main.bronze.customers' }],
+      entities: [],
+    });
+    mocks.getColumnLineageSystemTables.mockResolvedValue({
+      edges: [
+        { sourceTable: 'main.bronze.raw', sourceColumn: 'id', targetTable: 'main.bronze.customers', targetColumn: 'customer_id' },
+      ],
+      columnsByTable: { 'main.bronze.customers': ['customer_id'] },
+    });
+    // A Weave edge (e.g. an L2/L3-ingested transform) targeting the SAME
+    // physical UC table + column, carrying an L1 columnMapping.
+    mocks.listThreadEdges.mockResolvedValue([
+      {
+        id: 'e1', fromItemId: 'nb-item', fromType: 'notebook',
+        toItemId: 'main.bronze.customers', toType: 'table',
+        action: 'materialize', createdAt: 'now',
+        columnMappings: [{ fromColumn: 'x', toColumn: 'customer_id', transform: 'UPPER(x)', confidence: 'declared' }],
+      },
+    ] as any);
+
+    const res = await getUnifiedLineage({
+      session, ucFullName: 'main.bronze.customers', itemId: 'nb-item', columnLineage: true,
+    });
+
+    const colNodes = res.nodes.filter((n) => n.type === 'column');
+    // raw.id (UC) + nb-item.x (weave) + ONE merged customer_id — not four.
+    expect(colNodes).toHaveLength(3);
+    const mergedCol = colNodes.find((n) => n.multiSource);
+    expect(mergedCol?.multiSource).toEqual(expect.arrayContaining(['unity-catalog', 'weave']));
+    expect(mergedCol?.label).toBe('customer_id');
+    // Column edges from BOTH sources land on the canonical merged node id.
+    const colEdges = res.edges.filter((e) => e.kind === 'column');
+    expect(colEdges).toHaveLength(2);
+    expect(colEdges.every((e) => e.to === mergedCol?.id)).toBe(true);
+    // The Weave endpoint node is badged with its participating column.
+    const nbNode = res.nodes.find((n) => n.id === 'nb-item');
+    expect(nbNode?.columns).toContain('x');
+  });
+
+  it('ignores Weave columnMappings when columnLineage is off (default payload unchanged)', async () => {
+    mocks.isPurviewConfigured.mockReturnValue(false);
+    mocks.listThreadEdges.mockResolvedValue([
+      {
+        id: 'e1', fromItemId: 'lake1', fromType: 'lakehouse',
+        toItemId: 'nb1', toType: 'notebook', action: 'analyze-in-notebook', createdAt: 'now',
+        columnMappings: [{ fromColumn: 'a', toColumn: 'b' }],
+      },
+    ] as any);
+    const res = await getUnifiedLineage({ session, itemId: 'lake1', itemType: 'lakehouse' });
+    expect(res.nodes.some((n) => n.type === 'column')).toBe(false);
+    expect(res.edges.some((e) => e.kind === 'column')).toBe(false);
+    expect(res.nodes.find((n) => n.id === 'lake1')?.columns).toBeUndefined();
   });
 });
