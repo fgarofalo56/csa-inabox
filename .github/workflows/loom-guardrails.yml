@@ -50,6 +50,10 @@ jobs:
         run: node scripts/ci/check-bicep-sync.mjs
       - name: bicep-param-cap (ARM 256-param headroom — loom-next-level R0)
         run: node scripts/ci/check-bicep-param-cap.mjs
+      - name: prp-freshness (loom-next-level FRESH0 — warn-only)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/ci/check-prp-freshness.mjs
       - name: duplicate-env (env name emitted more than once per app)
         run: node scripts/ci/check-duplicate-env.mjs
       - name: docs-hygiene (live estate identifiers + operator PII)
