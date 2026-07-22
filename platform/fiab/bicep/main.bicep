@@ -339,6 +339,23 @@ param complianceTags object
 @description('Skip role-assignment grants — set true when re-provisioning an environment that already has the grants, to avoid RoleAssignmentExists.')
 param skipRoleGrants bool = false
 
+// loom-next-level I1 (R0 bag pattern — this file sits near the 256-param ARM
+// cap, so per-workspace-identity settings ride ONE typed bag; I2+ extend the
+// type with properties, never new top-level params).
+type workspaceIdentityConfigT = {
+  @description('Per-workspace managed-identity mode: off (default) | shadow (provision uami-ws-<id> + scoped lake grant on workspace create, outcome recorded, zero behavior change) | enforce (reserved for I6). The sole Phase-0 exception to default-ON — phased shadow → enforce per the operator decision in the PRP.')
+  workspaceIdentityMode: ('off' | 'shadow' | 'enforce')?
+
+  @description('Subscription id hosting the per-workspace UAMIs (LOOM_WS_IDENTITY_SUB). Empty → the console falls back to LOOM_SUBSCRIPTION_ID.')
+  wsIdentitySub: string?
+
+  @description('Resource group hosting the per-workspace UAMIs (LOOM_WS_IDENTITY_RG). Empty → the single-sub DLZ RG (which the console falls back to via LOOM_DLZ_RG). Also scopes the ws-identity-rbac Managed Identity Contributor grant for the Console UAMI.')
+  wsIdentityRg: string?
+}
+
+@description('Per-workspace identity settings bag (loom-next-level I1) — passed through to admin-plane workspaceIdentityConfig; wsIdentityRg additionally scopes the ws-identity-rbac grant below.')
+param workspaceIdentityConfig workspaceIdentityConfigT = {}
+
 @description('Deploy Loom apps (Container Apps for Console/MCP/etc.). Requires container images in ACR — set false on initial provision, then true after CI image-build pipeline runs (PRP-16).')
 param deployAppsEnabled bool = false
 
@@ -1033,6 +1050,9 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
     reportSubscriptionsEnabled: reportSubscriptionsEnabled
     // V1 — synthetic-journey monitor + future observability settings (one bag).
     observabilityConfig: observabilityConfig
+    // I1 per-workspace identity settings (R0 bag → typed bag on the module;
+    // emits LOOM_WORKSPACE_IDENTITY_MODE / LOOM_WS_IDENTITY_SUB / LOOM_WS_IDENTITY_RG).
+    workspaceIdentityConfig: workspaceIdentityConfig
     copilotMafEnabled: copilotMafEnabled
     setupOrchestratorEnabled: setupOrchestratorEnabled
     setupTemplateUri: setupTemplateUri
@@ -2231,6 +2251,24 @@ module dpPolicy 'modules/deploy-planner/policy-assignment.bicep' = if (useSingle
 module consoleMonitoringReaderRbac 'modules/admin-plane/monitoring-reader-rbac.bicep' = {
   name: 'console-monitoring-reader'
   scope: subscription()
+  params: {
+    consolePrincipalId: hub.consolePrincipalId
+    skipRoleGrants: skipRoleGrants
+  }
+}
+
+// Console UAMI → Managed Identity Contributor on the workspace-identity RG
+// (loom-next-level I1), so the runtime provision-on-create path can PUT/DELETE
+// uami-ws-<workspaceId> UAMIs. Defaults to the single-sub DLZ RG (the same RG
+// the console's LOOM_WS_IDENTITY_RG→LOOM_DLZ_RG fallback resolves); a custom
+// RG rides workspaceIdentityConfig.wsIdentityRg. Skipped in tenant/multi-sub
+// with no override (no local DLZ RG to scope to — grant post-attach instead).
+var wsIdentityRbacRg = !empty(workspaceIdentityConfig.?wsIdentityRg ?? '')
+  ? (workspaceIdentityConfig.?wsIdentityRg ?? '')
+  : (useSingleDlz ? singleDlzRg.name : '')
+module wsIdentityRbac 'modules/admin-plane/ws-identity-rbac.bicep' = if (deployAdminPlane && !empty(wsIdentityRbacRg)) {
+  name: 'ws-identity-rbac'
+  scope: resourceGroup(wsIdentityRbacRg)
   params: {
     consolePrincipalId: hub.consolePrincipalId
     skipRoleGrants: skipRoleGrants

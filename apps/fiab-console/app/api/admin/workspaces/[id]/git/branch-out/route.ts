@@ -149,13 +149,16 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
     if (!createdWs) return fail('Failed to create the new workspace.', 500, { code: 'workspace_create_failed' });
 
     let mergedWs: Workspace = createdWs;
-    if (createdWs.capacity || createdWs.domain) {
+    // Runs unconditionally so the I1 workspaceIdentity outcome (incl. the
+    // mode-off 'skipped' regression receipt) is always recorded.
+    {
       try {
         const bindings = await applyWorkspaceBindings(createdWs);
         mergedWs = {
           ...createdWs,
           ...(bindings.capacityAssignment ? { capacityAssignment: bindings.capacityAssignment } : {}),
           ...(bindings.domainRegistration ? { domainRegistration: bindings.domainRegistration } : {}),
+          ...(bindings.workspaceIdentity ? { workspaceIdentity: bindings.workspaceIdentity } : {}),
           updatedAt: new Date().toISOString(),
         };
         try { await wsc.item(mergedWs.id, tenantId).replace(mergedWs); } catch { /* race — keep original */ }

@@ -233,6 +233,9 @@ export const VALUE_HINT: Record<string, string> = {
   LOOM_CSV_IMPORTS_URL: 'https://<account>.blob.<storage-suffix>/csv-imports',
   LOOM_EH_SCHEMA_GROUP: '<event-hubs-schema-registry-group>',
   LOOM_WS_IDENTITY_SUB: CTX.sub,
+  // I1 — per-workspace managed identity (shadow → enforce). Default off.
+  LOOM_WORKSPACE_IDENTITY_MODE: 'off (default) | shadow | enforce',
+  LOOM_WS_IDENTITY_RG: CTX.dlzRg,
   LOOM_DATAVERSE_CLIENT_ID: '<dataverse-s2s-app-client-id>',
   LOOM_DATAVERSE_CLIENT_SECRET: '<dataverse-s2s-app-secret-from-key-vault>',
   LOOM_FEEDBACK_GITHUB_TOKEN: '<github-fine-grained-pat-from-key-vault>',

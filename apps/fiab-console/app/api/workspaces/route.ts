@@ -105,16 +105,19 @@ export async function POST(req: NextRequest) {
       return err('Cosmos returned no resource on create', 500, 'cosmos_no_resource');
     }
     // Best-effort side-effects: assign-to-capacity + Purview register +
-    // marketplace publish. Never blocks the create — outcome captured
+    // marketplace publish + I1 per-workspace identity. Runs unconditionally so
+    // the workspaceIdentity outcome (incl. the mode-off 'skipped' regression
+    // receipt) is always recorded. Never blocks the create — outcome captured
     // into status fields on the workspace doc and replaced.
     let merged: Workspace = resource;
-    if (capacity || domain) {
+    {
       try {
         const bindings = await applyWorkspaceBindings(resource);
         merged = {
           ...resource,
           ...(bindings.capacityAssignment ? { capacityAssignment: bindings.capacityAssignment } : {}),
           ...(bindings.domainRegistration ? { domainRegistration: bindings.domainRegistration } : {}),
+          ...(bindings.workspaceIdentity ? { workspaceIdentity: bindings.workspaceIdentity } : {}),
           updatedAt: new Date().toISOString(),
         };
         try {

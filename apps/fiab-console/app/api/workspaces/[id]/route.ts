@@ -5,6 +5,11 @@ import { itemsContainer, workspacesContainer } from '@/lib/azure/cosmos-client';
 import { upsertLoomDoc, deleteLoomDoc, docForWorkspace } from '@/lib/azure/loom-search';
 import { cleanupWorkspaceMetadata, type CleanupItem } from '@/lib/azure/lineage-gc';
 import { teardownWorkspaceBackends, type TeardownItem, type TeardownOutcome } from '@/lib/azure/resource-teardown';
+import {
+  cascadeDeleteWorkspaceIdentity,
+  workspaceIdentityProvisioningEnabled,
+  type WorkspaceIdentityCascadeOutcome,
+} from '@/lib/azure/workspace-identity-client';
 import { resolveWorkspaceAccessByOid, type WorkspaceAccess } from '@/lib/auth/workspace-access';
 import type { Workspace } from '@/lib/types/workspace';
 import { apiError } from '@/lib/api/respond';
@@ -139,10 +144,22 @@ export async function DELETE(req: NextRequest, props: { params: Promise<{ id: st
     // and fire-and-forget — never blocks the workspace delete. tenantId is the
     // workspace owner's partition (the value items were onboarded with).
     void cleanupWorkspaceMetadata(children, ws.tenantId);
+    // I1 delete cascade: remove the per-workspace UAMI + its role assignments
+    // (they orphan otherwise — a security liability). Best-effort BEFORE the
+    // doc goes (we need workspaceIdentity.principalId); a failed identity
+    // delete NEVER blocks the workspace delete, but the outcome is recorded
+    // in the response body (and server log).
+    let identityCascade: WorkspaceIdentityCascadeOutcome | undefined;
+    if (ws.workspaceIdentity?.status === 'provisioned' || workspaceIdentityProvisioningEnabled()) {
+      identityCascade = await cascadeDeleteWorkspaceIdentity(ws.id, ws.workspaceIdentity?.principalId);
+      if (identityCascade.status === 'failed') {
+        console.warn(`[workspace-delete] identity cascade failed for ${ws.id}: ${identityCascade.error}`);
+      }
+    }
     const wsContainer = await workspacesContainer();
     await wsContainer.item(ws.id, ws.tenantId).delete();
     void deleteLoomDoc(`ws:${ws.id}`);
-    return NextResponse.json({ ok: true, ...(teardown ? { teardown } : {}) });
+    return NextResponse.json({ ok: true, ...(teardown ? { teardown } : {}), ...(identityCascade ? { identityCascade } : {}) });
   } catch (e: any) {
     return err(e?.message || 'Failed to delete workspace', 500, 'cosmos_error');
   }

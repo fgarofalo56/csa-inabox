@@ -65,11 +65,27 @@ export const SECURITY_ENV_CHECKS: EnvSpec[] = [
     },
   },
   {
-    id: 'svc-workspace-identity', category: 'security', title: 'Workspace identity (per-workspace UAMI)', severity: 'optional',
-    anyOf: [['LOOM_WS_IDENTITY_SUB', 'LOOM_SUBSCRIPTION_ID']], warnOnMiss: true,
-    remediation: 'Set LOOM_WS_IDENTITY_SUB (falls back to LOOM_SUBSCRIPTION_ID) so workspace-identity creation provisions real per-workspace UAMIs (workspace_identity_not_configured).',
-    provisionedBy: 'modules/admin-plane/main.bicep (apps[] env)',
-    role: 'Managed Identity Contributor (Console UAMI) on the identity RG',
+    id: 'svc-workspace-identity', category: 'security', title: 'Per-workspace managed identity (shadow → enforce)', severity: 'optional',
+    required: ['LOOM_WORKSPACE_IDENTITY_MODE'],
+    anyOf: [['LOOM_WS_IDENTITY_SUB', 'LOOM_SUBSCRIPTION_ID'], ['LOOM_WS_IDENTITY_RG', 'LOOM_DLZ_RG']],
+    warnOnMiss: true,
+    // I1 — the SOLE Phase-0 exception to default-ON (loom_default_on_opt_out):
+    // identity ENFORCEMENT is a security-posture change an operator phases in
+    // shadow → enforce (operator decision recorded in the loom-next-level PRP),
+    // exactly like LOOM_PDP_ENFORCE. Unset mode = 'off' = the fully-functional
+    // intended default: every call runs as the shared Console UAMI, unchanged.
+    optionalDefault: true,
+    optionalDefaultDetail: 'mode is off (the intended day-one default) — every data-plane call runs as the shared Console UAMI, bit-for-bit today\'s behavior. Setting LOOM_WORKSPACE_IDENTITY_MODE=shadow additionally provisions a scoped uami-ws-<id> per workspace on create (recorded on the workspace doc, zero behavior change); enforce is the phased I6 posture flip.',
+    remediation: 'Set LOOM_WORKSPACE_IDENTITY_MODE=shadow (off | shadow | enforce; default off) to provision a per-workspace uami-ws-<id> + its scoped lake grant on every workspace create — best-effort, never blocking, outcome recorded on the workspace doc (workspace delete cascades the UAMI + role assignments). The UAMIs land in LOOM_WS_IDENTITY_RG (falls back to LOOM_DLZ_RG) under LOOM_WS_IDENTITY_SUB (falls back to LOOM_SUBSCRIPTION_ID); the Console UAMI needs Managed Identity Contributor there (ws-identity-rbac.bicep).',
+    provisionedBy: 'modules/admin-plane/ws-identity-rbac.bicep (Managed Identity Contributor → Console UAMI on the workspace-identity RG) + admin-plane/main.bicep workspaceIdentityConfig bag → apps[] env LOOM_WORKSPACE_IDENTITY_MODE / LOOM_WS_IDENTITY_SUB / LOOM_WS_IDENTITY_RG',
+    role: 'Managed Identity Contributor (e40ec5ca-96e0-45a2-b4ff-59039f2c2b59, Console UAMI) on the workspace-identity RG; lake grants ride the constrained RBAC-Administrator from landing-zone/storage-rbac-admin.bicep',
+    // X2 — Microsoft.ManagedIdentity + ARM role assignments are GA in every
+    // sovereign boundary (Commercial / GCC-High / IL5); role GUIDs are
+    // cloud-invariant and the ARM host resolves via armBase().
+    availability: {
+      commercial: 'ga', gccHigh: 'ga', il5: 'ga',
+      fallbackNote: 'Managed identities + role assignments are GA in all clouds. IL5/air-gap: the workspace-identity RG and lake must live inside the air-gapped subscription — ARM calls stay in-boundary (armBase()), no cross-cloud identity federation.',
+    },
   },
   {
     id: 'svc-keyvault', category: 'security', title: 'Key Vault (connection / shortcut / MCP secrets)', severity: 'recommended',

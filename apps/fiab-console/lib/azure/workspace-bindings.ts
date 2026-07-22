@@ -23,11 +23,21 @@ import { assignWorkspaceToCapacity, FabricError } from './fabric-client';
 import { registerAtlasEntity, PurviewError, PurviewNotConfiguredError } from './purview-client';
 import { marketplaceListingsContainer } from './cosmos-client';
 import { armBase, armScope } from './cloud-endpoints';
+import {
+  createWorkspaceUami,
+  ensureWorkspaceGrants,
+  workspaceIdentityConfigGate,
+  workspaceIdentityMode,
+  workspaceUamiName,
+} from './workspace-identity-client';
+
+export { workspaceIdentityProvisioningEnabled } from './workspace-identity-client';
 
 export interface BindingResult {
   capacityAssignment?: Workspace['capacityAssignment'];
   domainRegistration?: Workspace['domainRegistration'];
   backingRgProvision?: Workspace['backingRgProvision'];
+  workspaceIdentity?: Workspace['workspaceIdentity'];
 }
 
 export interface BindingOptions {
@@ -108,7 +118,54 @@ export async function applyWorkspaceBindings(ws: Workspace, opts: BindingOptions
     out.backingRgProvision = await tryProvisionBackingRg(ws);
   }
 
+  // --- I1: per-workspace managed identity (uami-ws-<id> + scoped grants) ---
+  // Always recorded (a 'skipped' status with mode off is the regression-guard
+  // receipt); provisions ONLY when LOOM_WORKSPACE_IDENTITY_MODE != off AND the
+  // sub/RG config gate is clear. Best-effort — never blocks the create.
+  out.workspaceIdentity = await applyWorkspaceIdentity(ws);
+
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// I1 — per-workspace managed identity, provision-on-create.
+//
+// Activates the DORMANT workspace-identity-client scaffolding: creates
+// uami-ws-<workspaceId> via ARM (same name the bulk/IaC path
+// landing-zone/workspace-identity.bicep uses, so the two paths converge) and
+// idempotently PUTs its scoped lake grant. All ARM writes ride the client's
+// serialized throttle queue (UAMI 2-req/s/sub create throttle + the general
+// ~200-token ARM write bucket — Learn: request-limits-and-throttling).
+// Best-effort: every outcome (including 'skipped' when mode=off, the default)
+// is captured into the returned status block; NEVER throws.
+// ---------------------------------------------------------------------------
+export async function applyWorkspaceIdentity(ws: Workspace): Promise<Workspace['workspaceIdentity']> {
+  const at = new Date().toISOString();
+  const mode = workspaceIdentityMode();
+  if (mode === 'off') return { status: 'skipped', at };
+  const gate = workspaceIdentityConfigGate();
+  if (gate) {
+    return { status: 'skipped', mode, at, error: `Per-workspace identity is ON (mode=${mode}) but not configured — set ${gate.missing}.` };
+  }
+  const location = process.env.LOOM_LOCATION || process.env.LOOM_REGION || process.env.LOOM_ALERT_LOCATION;
+  if (!location) {
+    return { status: 'failed', mode, at, uamiName: workspaceUamiName(ws.id), error: 'LOOM_LOCATION (or LOOM_REGION) is not set — cannot create the workspace UAMI.' };
+  }
+  try {
+    const uami = await createWorkspaceUami(ws.id, location);
+    const grants = await ensureWorkspaceGrants(ws, uami);
+    return {
+      status: 'provisioned',
+      uamiName: uami.name || workspaceUamiName(ws.id),
+      uamiClientId: uami.clientId,
+      principalId: uami.principalId,
+      grants,
+      mode: mode === 'enforce' ? 'enforce' : 'shadow',
+      at,
+    };
+  } catch (e: any) {
+    return { status: 'failed', mode, at, uamiName: workspaceUamiName(ws.id), error: e?.message || String(e) };
+  }
 }
 
 // ---------------------------------------------------------------------------

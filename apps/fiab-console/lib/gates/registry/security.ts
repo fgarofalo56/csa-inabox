@@ -70,8 +70,19 @@ export const SECURITY_GATE_META: Record<string, GateMeta> = {
     legacyCodes: ['kv_not_configured', 'key_vault_not_configured', 'shortcut_keyvault_not_configured', 'cert_vault_not_configured', 'cmk_not_configured'],
   },
   'svc-workspace-identity': {
-    surfaces: [{ path: '/workspaces', label: 'Workspace identity creation' }],
-    fixit: { kind: 'env-picker' },
+    surfaces: [
+      { path: '/workspaces', label: 'Workspace create — per-workspace UAMI provisioning (I1)' },
+      { path: '/api/workspaces/*', label: 'Workspace create/delete (identity provision + cascade)' },
+    ],
+    // Fix-it wizard: sets LOOM_WORKSPACE_IDENTITY_MODE (+ the sub/RG fallbacks)
+    // through the shared env-apply write path; the pre-filled fixScript/
+    // portalSteps from the self-audit check carry the exact values. The fuller
+    // "Enable per-workspace identity" wizard UI lands with I6.
+    fixit: {
+      kind: 'wizard',
+      grantNote: 'Flip LOOM_WORKSPACE_IDENTITY_MODE to shadow first (provision + record only — zero behavior change), review the recorded workspaceIdentity status blocks, then phase enforce per I6/I9. The Console UAMI needs Managed Identity Contributor on the workspace-identity RG (ws-identity-rbac.bicep, deployed by the push-button bicep).',
+    },
+    autoResolveNote: 'Unset → mode off (the intended day-one default): every call runs as the shared Console UAMI, unchanged. Phased shadow → enforce is the sole Phase-0 exception to default-ON, per the operator decision recorded in the loom-next-level PRP.',
     legacyCodes: ['workspace_identity_not_configured'],
   },
 };
