@@ -38,7 +38,7 @@ the next clean run.
   run "drift". The lanes cover the **infra** estate; app-plane drift is what
   the roll gate + `full-app-deploy-*.yml` already reconcile.
 - Live overrides baked into the lanes: `location` (centralus / usgovvirginia),
-  `loomVanityDomain=csa-loom.limitlessdata.ai` (Commercial),
+  `loomVanityDomain=<your-console-hostname>` (Commercial),
   `adminEntraGroupId` from `FIAB_ADMIN_GROUP_ID` / `FIAB_GOV_ADMIN_GROUP_ID`.
 
 ## Alerting (rev-2 standard)
