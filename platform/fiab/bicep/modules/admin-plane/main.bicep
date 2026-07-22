@@ -179,6 +179,15 @@ type functionAppsConfigT = {
 
   @description('NCRONTAB schedule (6-field) for the report-subscriptions timer tick. Default every 15 minutes so per-subscription schedules fire close to their intended time.')
   reportSubscriptionsCron: string?
+
+  @description('Deploy the secret-expiry monitor timer Function (S1) — inventories the MSAL app registration passwordCredentials + tracked Key Vault secrets, computes days-to-expiry, and fires the shared loom-default-alerts action group + a dedup GitHub issue at the 60/30/7-day thresholds (prevention for the 2026-07-19 expired-MSAL-secret sign-in outage class). Default ON.')
+  secretExpiryEnabled: bool?
+
+  @description('NCRONTAB schedule (6-field) for the secret-expiry tick. Default daily 06:00 UTC.')
+  secretExpiryCron: string?
+
+  @description('Days-to-expiry OUTER warning threshold (LOOM_SECRET_EXPIRY_WARN_DAYS). Inner 30/7-day bands are fixed. Default 60.')
+  secretExpiryWarnDays: int?
 }
 
 @description('Scheduled/background Function-app settings bag (R0). Existing label-propagation + report-subscription cron settings live here; future per-Function enable/cron/settings (E2 copilot-evaluator, C3 cost-anomaly, L3 lineage-ingest, S1 secret-expiry) add properties to functionAppsConfigT — never a new top-level param.')
@@ -304,6 +313,9 @@ param workspaceIdentityConfig object = {}
 var labelPropagationEnabled = functionAppsConfig.?labelPropagationEnabled ?? true
 var labelPropagationCron = functionAppsConfig.?labelPropagationCron ?? '0 */15 * * * *'
 var reportSubscriptionsCron = functionAppsConfig.?reportSubscriptionsCron ?? '0 */15 * * * *'
+var secretExpiryEnabled = functionAppsConfig.?secretExpiryEnabled ?? true
+var secretExpiryCron = functionAppsConfig.?secretExpiryCron ?? '0 0 6 * * *'
+var secretExpiryWarnDays = functionAppsConfig.?secretExpiryWarnDays ?? 60
 var adxSkuName = adxConfig.?adxSkuName ?? 'Dev(No SLA)_Standard_E2a_v4'
 var adxEnableOptimizedAutoscale = adxConfig.?adxEnableOptimizedAutoscale ?? false
 var adxAutoscaleMinimum = adxConfig.?adxAutoscaleMinimum ?? 2
@@ -3209,6 +3221,13 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // Defaults to the deployment location so Gov (usgov*) deployments do
             // NOT fall back to the Commercial 'eastus' default in monitor-client.ts.
             { name: 'LOOM_ALERT_LOCATION', value: location }
+            // S1 — the ONE shared derived alert sink (O1 convention): the
+            // loom-default-alerts action group. Consumed by the secret-expiry
+            // monitor + every future scheduled alerter; the Console surfaces it
+            // on /admin/health (Secret & credential health) + /admin/env-config.
+            { name: 'LOOM_ALERT_ACTION_GROUP_ID', value: defaultAlerts.outputs.actionGroupId }
+            // Secret-expiry outer warning threshold (60/30/7 bands; S1).
+            { name: 'LOOM_SECRET_EXPIRY_WARN_DAYS', value: string(secretExpiryWarnDays) }
             // ARM scope override for sovereign clouds (GCC-High / IL5). The ARM
             // endpoint itself is emitted once above (effectiveArmEndpoint).
             { name: 'LOOM_ARM_SCOPE', value: loomArmScope }
@@ -5000,6 +5019,30 @@ module labelPropagation 'label-propagation-function.bicep' = if (labelPropagatio
   }
 }
 
+// Secret-expiry monitor timer Function (S1) — MSAL app-registration credential
+// + tracked KV secret expiry inventory, 60/30/7-day band alerts through the
+// shared loom-default-alerts action group (the O1 alert convention). Default ON
+// (functionAppsConfig.secretExpiryEnabled). Every ARM role is granted inside
+// the module (own SA, hub KV Secrets User, RG Monitoring Contributor); the
+// Graph app-role Application.Read.All is the documented ONE-TIME admin consent
+// (docs/fiab/runbooks/secret-rotation.md) using the principalId output.
+module secretExpiry 'secret-expiry-monitor-function.bicep' = if (secretExpiryEnabled) {
+  name: 'secret-expiry-monitor-function'
+  params: {
+    location: location
+    msalClientId: effectiveMsalClientId
+    keyVaultName: keyvault.outputs.keyVaultName
+    keyVaultUri: keyvault.outputs.keyVaultUri
+    warnDays: secretExpiryWarnDays
+    secretExpiryCron: secretExpiryCron
+    actionGroupId: defaultAlerts.outputs.actionGroupId
+    graphBase: boundary == 'GCC-High' ? 'https://graph.microsoft.us' : (boundary == 'IL5' ? 'https://dod-graph.microsoft.us' : 'https://graph.microsoft.com')
+    skipRoleGrants: skipRoleGrants
+    appInsightsConnectionString: monitoring.outputs.appInsightsConnectionString
+    complianceTags: complianceTags
+  }
+}
+
 // Report-subscriptions delivery Logic App (Consumption + O365 Send email V2
 // with attachment) — Azure-native parity with Fabric/Power BI report
 // subscription email delivery. Deployed alongside the timer Function in the
@@ -5445,6 +5488,13 @@ output labelPropagationPrincipalId string = labelPropagationEnabled ? labelPropa
 output reportSubscriptionsFunctionName string = reportSubscriptionsEnabled ? reportSubscriptions.outputs.siteName : ''
 output reportSubscriptionsPrincipalId string = reportSubscriptionsEnabled ? reportSubscriptions.outputs.principalId : ''
 output reportSubscriptionLogicAppName string = reportSubscriptionsEnabled ? reportSubscriptionLogicApp.outputs.workflowName : ''
+// S1 secret-expiry monitor timer Function. ARM roles (own SA, hub KV Secrets
+// User, RG Monitoring Contributor) are granted inside the module; principalId
+// feeds the ONE-TIME Graph Application.Read.All admin consent
+// (docs/fiab/runbooks/secret-rotation.md).
+output secretExpiryFunctionName string = secretExpiryEnabled ? secretExpiry.outputs.siteName : ''
+output secretExpiryPrincipalId string = secretExpiryEnabled ? secretExpiry.outputs.principalId : ''
+
 // MAF orchestration tier (GCC-High / IL5). Internal endpoint the Console reads
 // as LOOM_MAF_ENDPOINT; empty when the tier isn't active.
 output copilotMafEndpoint string = copilotMafActive ? copilotMaf!.outputs.mafInternalEndpoint : ''

@@ -8,6 +8,19 @@
 import { L, type GateMeta } from './types';
 
 export const SECURITY_GATE_META: Record<string, GateMeta> = {
+  'svc-secret-expiry': {
+    surfaces: [
+      { path: '/admin/health', label: 'Health & Reliability — Secret & credential health section' },
+      { path: '/api/admin/secret-health', label: 'Secret-health inventory route' },
+    ],
+    // Fix-it wizard: the alert sink is bicep-derived (monitoring-default-alerts);
+    // the wizard writes LOOM_ALERT_ACTION_GROUP_ID / LOOM_SECRET_EXPIRY_WARN_DAYS
+    // through the shared env-apply path and shows the one-time Graph
+    // Application.Read.All consent script for the Function identity.
+    fixit: { kind: 'wizard', grantNote: 'One-time admin consent: grant the secret-expiry Function identity the Microsoft Graph app role Application.Read.All (script in docs/fiab/runbooks/secret-rotation.md). KV + Monitoring roles are granted by secret-expiry-monitor-function.bicep.' },
+    autoResolveNote: 'Auto-derived on a push-button deploy: monitoring-default-alerts.bicep creates the loom-default-alerts action group and admin-plane/main.bicep wires LOOM_ALERT_ACTION_GROUP_ID; the secret-expiry monitor Function deploys default-ON via functionAppsConfig.secretExpiryEnabled.',
+    legacyCodes: [],
+  },
   'svc-a2a-egress': {
     surfaces: [
       { path: '/admin/copilot', label: 'Copilot & Agents — outbound A2A delegation' },
