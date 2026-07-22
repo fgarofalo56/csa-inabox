@@ -43,6 +43,9 @@ import {
   Save20Regular, Database20Regular, FullScreenMaximize20Regular, LockClosed20Regular,
 } from '@fluentui/react-icons';
 import { ResizableCanvasRegion } from '@/lib/components/canvas/resizable-canvas';
+// Shared draggable width divider (G3): the palette / config panes are sized by
+// SplitPane with persisted sizingKeys instead of fixed 200px / 300px widths.
+import { SplitPane } from '@/lib/components/shared/split-pane';
 import { accentTint, CanvasRightRail } from '@/lib/components/canvas/canvas-node-kit';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { DetailsPanel, type DetailsSection } from '@/lib/components/shared/details-panel';
@@ -775,9 +778,10 @@ const useDesignerStyles = makeStyles({
   // Let the user drag the data-flow designer taller; bounded + scrollable children.
   // Height comes from ResizableCanvasRegion (G3: shared handle + persisted
   // sizingKey) — the CSS resize corner it replaces persisted nothing.
-  threePane: { display: 'flex', height: '100%', minHeight: 0, gap: tokens.spacingHorizontalS, overflow: 'hidden', boxSizing: 'border-box' },
+  // The three panes are laid out by nested SplitPanes (G3): palette + config
+  // widths are user-draggable + persisted; the region owns the height.
   palette: {
-    flexShrink: 0, width: '200px', padding: tokens.spacingVerticalS, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalSNudge,
+    minWidth: 0, padding: tokens.spacingVerticalS, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalSNudge,
     border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium,
     backgroundColor: tokens.colorNeutralBackground1, overflow: 'auto',
   },
@@ -789,7 +793,8 @@ const useDesignerStyles = makeStyles({
   },
   canvasCol: { flex: 1, minWidth: 0, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium, overflow: 'hidden' },
   configCol: {
-    flexShrink: 0, width: '300px', minWidth: 0, padding: tokens.spacingVerticalM, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalMNudge,
+    // Width comes from the wrapping SplitPane pane (user-draggable, persisted).
+    minWidth: 0, padding: tokens.spacingVerticalM, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalMNudge,
     border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium,
     backgroundColor: tokens.colorNeutralBackground1, overflow: 'auto',
   },
@@ -1014,7 +1019,17 @@ function InnerDesigner({ name, datasets, reloadKey }: DesignerProps) {
         minPx={460}
         ariaLabel="Resize data flow canvas height"
       >
-      <div className={s.threePane}>
+      {/* G3: palette + config widths are user-draggable (keyboard-accessible)
+          and persisted under loom.splitpane.mounted-adf.palette / .inspector. */}
+      <SplitPane
+        direction="horizontal"
+        primary="first"
+        storageKey="mounted-adf.palette"
+        defaultSize={200}
+        minSize={160}
+        maxSize={360}
+        dividerLabel="Resize transformation palette"
+      >
         <div className={s.palette} role="navigation" aria-label="Data flow transformation palette">
           <Subtitle2>Transformations</Subtitle2>
           {TRANSFORMS.map((t) => (
@@ -1035,6 +1050,15 @@ function InnerDesigner({ name, datasets, reloadKey }: DesignerProps) {
           </Caption1>
         </div>
 
+        <SplitPane
+          direction="horizontal"
+          primary="second"
+          storageKey="mounted-adf.inspector"
+          defaultSize={300}
+          minSize={260}
+          maxSize={520}
+          dividerLabel="Resize configuration panel"
+        >
         <div className={s.canvasCol}>
           <ReactFlow
             nodes={nodes}
@@ -1184,7 +1208,8 @@ function InnerDesigner({ name, datasets, reloadKey }: DesignerProps) {
             </>
           )}
         </div>
-      </div>
+        </SplitPane>
+      </SplitPane>
       </ResizableCanvasRegion>
     </div>
   );

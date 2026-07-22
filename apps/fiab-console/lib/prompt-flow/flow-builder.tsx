@@ -29,6 +29,9 @@ import {
   Tooltip,
 } from '@fluentui/react-components';
 import { ResizableCanvasRegion } from '@/lib/components/canvas/resizable-canvas';
+// Shared draggable width divider (G3): the side panel is sized by SplitPane
+// with a persisted sizingKey instead of a fixed 360px grid track.
+import { SplitPane } from '@/lib/components/shared/split-pane';
 import {
   Add20Regular, Delete20Regular, BrainCircuit20Regular,
   Code20Regular, DocumentText20Regular, ArrowEnterLeft20Regular, ArrowExportLtr20Regular,
@@ -42,10 +45,9 @@ import {
 const useStyles = makeStyles({
   root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalS, flex: 1, minHeight: 0 },
   toolbar: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap', padding: '4px 0' },
-  // The canvas column (1fr) is wrapped in <ResizableCanvasRegion> which owns the
-  // user-set height; the 360px side panel stretches to match. `minHeight:0` keeps
-  // both columns from blowing out the grid track.
-  body: { display: 'grid', gridTemplateColumns: '1fr 360px', gap: tokens.spacingHorizontalS, alignItems: 'stretch', minHeight: 0 },
+  // The canvas column is wrapped in <ResizableCanvasRegion> which owns the
+  // user-set height; the side panel stretches to match and its WIDTH is a
+  // SplitPane (user-draggable, persisted — G3) instead of a fixed 360px track.
   canvasWrap: {
     position: 'relative', height: '100%', minHeight: 0, overflow: 'hidden',
     backgroundColor: tokens.colorNeutralBackground3,
@@ -211,7 +213,17 @@ export function PromptFlowBuilder({ dag, onChange, connections, connectionsLoadi
         </div>
       </div>
 
-      <div className={s.body}>
+      {/* G3: canvas | panel divider is user-draggable (keyboard-accessible)
+          and persisted under loom.splitpane.prompt-flow.inspector. */}
+      <SplitPane
+        direction="horizontal"
+        primary="second"
+        storageKey="prompt-flow.inspector"
+        defaultSize={360}
+        minSize={300}
+        maxSize={640}
+        dividerLabel="Resize flow side panel"
+      >
         {/* ---- Graph canvas (drag the bottom grip to resize the canvas height) ---- */}
         <ResizableCanvasRegion storageKey="prompt-flow" defaultPx={420} minPx={280} ariaLabel="Resize prompt flow canvas height">
         <div className={s.canvasWrap} data-testid="prompt-flow-canvas" aria-label="Prompt flow graph">
@@ -311,7 +323,7 @@ export function PromptFlowBuilder({ dag, onChange, connections, connectionsLoadi
             <RawYaml dag={dag} readOnly={readOnly} onChange={onChange} />
           )}
         </div>
-      </div>
+      </SplitPane>
     </div>
   );
 }

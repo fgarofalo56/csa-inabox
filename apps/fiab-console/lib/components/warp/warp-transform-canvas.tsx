@@ -53,6 +53,9 @@ import {
   makeStyles, shorthands, tokens,
 } from '@fluentui/react-components';
 import { ResizableCanvasRegion } from '@/lib/components/canvas/resizable-canvas';
+// Shared draggable width divider (G3): the node inspector is sized by
+// SplitPane with a persisted sizingKey instead of a fixed 340px grid track.
+import { SplitPane } from '@/lib/components/shared/split-pane';
 import {
   Add20Regular, Delete20Regular, Play20Regular, Table20Regular,
   Filter20Regular, ColumnTriple20Regular, GroupList20Regular, BranchFork20Regular,
@@ -128,7 +131,8 @@ const useStyles = makeStyles({
   root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
   toolbar: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
   toolbarSpacer: { flex: 1 },
-  body: { display: 'grid', gridTemplateColumns: '1fr 340px', gap: tokens.spacingHorizontalL },
+  // The canvas | inspector row is a SplitPane (G3): inspector width is
+  // user-draggable + persisted (was a fixed 340px grid track).
   canvas: {
     position: 'relative',
     // Fill the ResizableCanvasRegion, which supplies a DEFINITE px height to
@@ -650,7 +654,17 @@ function CanvasInner(props: WarpTransformCanvasProps) {
       )}
 
       {view === 'canvas' ? (
-        <div className={s.body}>
+        // G3: canvas | inspector divider is user-draggable (keyboard-accessible)
+        // and persisted under loom.splitpane.warp-transform.inspector.
+        <SplitPane
+          direction="horizontal"
+          primary="second"
+          storageKey="warp-transform.inspector"
+          defaultSize={340}
+          minSize={300}
+          maxSize={560}
+          dividerLabel="Resize node configuration panel"
+        >
           <ResizableCanvasRegion storageKey="warp-transform" defaultPx={520} minPx={360} ariaLabel="Resize Warp transform canvas height">
           <div className={s.canvas} data-canvas="warp-transform">
             <ReactFlow
@@ -757,7 +771,7 @@ function CanvasInner(props: WarpTransformCanvasProps) {
               />
             )}
           </aside>
-        </div>
+        </SplitPane>
       ) : (
         <MonacoTextarea value={generatedSql} onChange={() => {}} language={dialect} height={420} readOnly ariaLabel="Generated transform SQL" />
       )}

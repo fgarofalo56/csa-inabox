@@ -39,6 +39,9 @@ import {
   accentTint,
 } from '@/lib/components/canvas/canvas-node-kit';
 import { ResizableCanvasRegion } from '@/lib/components/canvas/resizable-canvas';
+// Shared draggable width divider (G3): the palette / inspector panes are sized
+// by SplitPane with persisted sizingKeys instead of fixed 210px / 300px widths.
+import { SplitPane } from '@/lib/components/shared/split-pane';
 import { useCanvasHistory } from '@/lib/components/canvas/use-canvas-history';
 import {
   ESTATE_NODE_KINDS, nodeKind, bridgesFrom, bridgeById,
@@ -53,10 +56,11 @@ import { clientFetch } from '@/lib/client-fetch';
 const useStyles = makeStyles({
   root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minHeight: 0 },
   toolbar: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' },
-  body: { display: 'flex', gap: tokens.spacingHorizontalM, minHeight: 0, alignItems: 'stretch' },
+  // The palette | canvas | inspector row is laid out by nested SplitPanes (G3):
+  // both side-pane widths are user-draggable + persisted.
   canvasWrap: { flex: 1, minWidth: 0, borderRadius: tokens.borderRadiusLarge, overflow: 'hidden', border: `1px solid ${tokens.colorNeutralStroke2}` },
   palette: {
-    width: '210px', flexShrink: 0, display: 'flex', flexDirection: 'column',
+    minWidth: 0, display: 'flex', flexDirection: 'column',
     gap: tokens.spacingVerticalXS, padding: tokens.spacingVerticalS,
     borderRadius: tokens.borderRadiusLarge, border: `1px solid ${tokens.colorNeutralStroke2}`,
     background: tokens.colorNeutralBackground2, overflowY: 'auto',
@@ -70,7 +74,8 @@ const useStyles = makeStyles({
     cursor: 'pointer', width: '100%',
   },
   inspector: {
-    width: '300px', flexShrink: 0, display: 'flex', flexDirection: 'column',
+    // Width comes from the wrapping SplitPane pane (user-draggable, persisted).
+    minWidth: 0, display: 'flex', flexDirection: 'column',
     gap: tokens.spacingVerticalS, padding: tokens.spacingVerticalM,
     borderRadius: tokens.borderRadiusLarge, border: `1px solid ${tokens.colorNeutralStroke2}`,
     background: tokens.colorNeutralBackground2, overflowY: 'auto',
@@ -264,7 +269,17 @@ function InnerCanvas({ onPublish, busy }: OneCanvasProps) {
         </MessageBar>
       )}
 
-      <div className={s.body}>
+      {/* G3: palette + inspector widths are user-draggable (keyboard-accessible)
+          and persisted under loom.splitpane.estate-one-canvas.palette / .inspector. */}
+      <SplitPane
+        direction="horizontal"
+        primary="first"
+        storageKey="estate-one-canvas.palette"
+        defaultSize={210}
+        minSize={180}
+        maxSize={360}
+        dividerLabel="Resize node palette"
+      >
         {/* Palette */}
         <div className={s.palette} aria-label="Node palette">
           <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Drag the estate: add nodes, connect them into ingest → transform → serve → visualize → publish.</Caption1>
@@ -278,6 +293,15 @@ function InnerCanvas({ onPublish, busy }: OneCanvasProps) {
           ))}
         </div>
 
+        <SplitPane
+          direction="horizontal"
+          primary="second"
+          storageKey="estate-one-canvas.inspector"
+          defaultSize={300}
+          minSize={260}
+          maxSize={520}
+          dividerLabel="Resize node inspector"
+        >
         {/* Canvas */}
         <div className={s.canvasWrap}>
           <ResizableCanvasRegion storageKey="estate-one-canvas" defaultPx={520} minPx={340} ariaLabel="Resize the estate canvas height">
@@ -370,7 +394,8 @@ function InnerCanvas({ onPublish, busy }: OneCanvasProps) {
             </>
           )}
         </div>
-      </div>
+        </SplitPane>
+      </SplitPane>
     </div>
   );
 }
