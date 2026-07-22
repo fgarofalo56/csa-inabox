@@ -159,20 +159,185 @@ param loomAoaiCompletionDeployment string = ''
 // admin-plane/main.bicep is at Bicep's hard 256-parameter ceiling.
 var loomAoaiVisionDeployment = ''
 
+// ═══════════════════════════════════════════════════════════════════════════
+// R0 (loom-next-level) — config-object (bag) params.
+// This module hit the ARM 256-`param` hard cap on 2026-07-22. RULE: new
+// deploy-time settings land as properties on one of the typed bags below (or
+// a nested-module param) — NEVER as a new top-level `param`. Headroom is
+// enforced by scripts/ci/check-bicep-param-cap.mjs (warn ≥240, fail ≥250).
+// Every bag property keeps its former top-level param name, and the shim
+// `var`s below preserve the former defaults verbatim — body references and
+// deployed values are unchanged (what-if: NoChange).
+// ═══════════════════════════════════════════════════════════════════════════
+
+type functionAppsConfigT = {
+  @description('Deploy the label-propagation timer Function (F15) — polls the Loom Cosmos lineage graph and writes sensitivity-label downstream propagation state. Defaults on; a no-op without a Cosmos account.')
+  labelPropagationEnabled: bool?
+
+  @description('NCRONTAB schedule for the label-propagation timer (6-field). Default every 15 minutes.')
+  labelPropagationCron: string?
+
+  @description('NCRONTAB schedule (6-field) for the report-subscriptions timer tick. Default every 15 minutes so per-subscription schedules fire close to their intended time.')
+  reportSubscriptionsCron: string?
+}
+
+@description('Scheduled/background Function-app settings bag (R0). Existing label-propagation + report-subscription cron settings live here; future per-Function enable/cron/settings (E2 copilot-evaluator, C3 cost-anomaly, L3 lineage-ingest, S1 secret-expiry) add properties to functionAppsConfigT — never a new top-level param.')
+param functionAppsConfig functionAppsConfigT = {}
+
+type adxConfigT = {
+  @description('ADX cluster SKU. Dev SKU is ~$140/mo.')
+  adxSkuName: ('Dev(No SLA)_Standard_E2a_v4' | 'Dev(No SLA)_Standard_D11_v2' | 'Standard_E2a_v4' | 'Standard_E4a_v4' | 'Standard_E8a_v4' | 'Standard_E16a_v4' | 'Standard_E2ads_v5' | 'Standard_E4ads_v5')?
+
+  @description('Enable ADX optimized auto-scale. Requires a Standard-tier adxSkuName (Basic/Dev SKUs reject it).')
+  adxEnableOptimizedAutoscale: bool?
+
+  @description('ADX optimized auto-scale minimum instance count.')
+  @minValue(2)
+  @maxValue(1000)
+  adxAutoscaleMinimum: int?
+
+  @description('ADX optimized auto-scale maximum instance count.')
+  @minValue(2)
+  @maxValue(1000)
+  adxAutoscaleMaximum: int?
+}
+
+@description('ADX cluster tuning bag (R0) — SKU + optimized-autoscale settings for the shared admin-plane ADX cluster (adxEnabled).')
+param adxConfig adxConfigT = {}
+
+type aasConfigT = {
+  @description('AAS SKU (Standard tier). S1 (~$160/mo) is the minimum that supports the data-plane refresh REST API with a service-principal admin. S0 is the cheapest Standard SKU. S8v2 / S9v2 are the v2 high-QPU SKUs (the legacy S8 / S9 are excluded — not available in many regions).')
+  aasSkuName: ('S0' | 'S1' | 'S2' | 'S4' | 'S8v2' | 'S9v2')?
+
+  @description('Reuse an existing AAS server name instead of provisioning one (any RG). When set, the module is skipped and LOOM_AAS_SERVER_NAME points at it.')
+  existingAasServerName: string?
+
+  @description('Region of a reused existing AAS server (existingAasServerName). Empty defaults to the deployment location.')
+  existingAasServerRegion: string?
+
+  @description('OPTIONAL Azure Analysis Services XMLA endpoint backing the semantic-model Model view XMLA write path (azure-native, no Fabric). Wire from the DLZ aas.bicep xmlaEndpoint output (enableAas=true). Empty by default — the Loom-native Cosmos backend works without it.')
+  loomAasXmlaEndpoint: string?
+
+  @description('AAS / Power BI Premium service-principal object id — granted Storage Blob Data Reader on the DLZ ADLS account so the warm-cache model can read Delta Parquet. Empty skips that grant (the shim UAMI grant still applies).')
+  loomAasMiPrincipalId: string?
+
+  @description('Azure region of the AAS server (e.g. eastus2). Used by the DirectQuery source binder; falls back to the deployment location.')
+  loomAasRegion: string?
+
+  @description('Azure Analysis Services SKU when loomSemanticBackend=analysis-services. Standard tier only — S0 is the cheapest Standard SKU and is broadly available. Developer (D1) and Basic (B1/B2) tiers are excluded because they are not offered in many regions (centralus exposes only S0, S1, S2, S4, S8v2, S9v2). AAS is Commercial/GCC only — never deployed at GCC-High / IL5 (the orchestrator guards on boundary).')
+  loomAasSku: ('S0' | 'S1' | 'S2' | 'S4' | 'S8v2' | 'S9v2')?
+
+  @description('Pre-existing AAS server URL (asazure://<region>.asazure.windows.net/<name>) to wire as LOOM_AAS_SERVER_URL instead of deploying a new server. Leave empty to let analysis-services.bicep create one (requires loomSemanticBackend=analysis-services on a Commercial/GCC boundary). Power BI Premium XMLA users set LOOM_POWERBI_XMLA_ENDPOINT directly instead.')
+  loomAasServerUrl: string?
+
+  @description('Resource group hosting the AAS server (used only for the ARM server picker). Empty falls back to the Console UAMI default scope.')
+  loomAasResourceGroup: string?
+
+  @description('Service-principal client id (appId) made an AAS server admin for data-plane XMLA (RLS/OLS role authoring via LOOM_AAS_CLIENT_ID/SECRET). Empty = the Console UAMI is the sole AAS admin (composite-model path). Store the SPN secret in Key Vault and wire LOOM_AAS_CLIENT_SECRET as a secretRef.')
+  aasSpnClientId: string?
+
+  @description('Azure Analysis Services server URI for the OPT-IN tabular backend (only used when loomSemanticBackend = "analysis-services"). Accepted forms: asazure://<region>.asazure.windows.net/<server> OR an https XMLA URL. Leave empty (default) for loom-native — no AAS dependency. NOTE: Azure Analysis Services is NOT available in Azure Government (GCC-High / IL5 / DoD); leave empty there.')
+  loomAasServer: string?
+
+  @description('Azure Analysis Services model/database name (only used when loomAasServer is set). The Console UAMI must have at least Reader on the AAS server resource.')
+  loomAasDatabase: string?
+
+  @description('Azure Analysis Services tabular model (database) name to refresh after the Power Query ingest lands Delta. Empty = AAS refresh gated.')
+  loomAasModel: string?
+}
+
+@description('Azure Analysis Services settings bag (R0) — SKU/reuse/XMLA/SPN settings for the AAS semantic-model backend (aasEnabled / loomSemanticBackend).')
+param aasConfig aasConfigT = {}
+
+type eventsConfigT = {
+  @description('Loom Event Hubs resource group. Empty defaults to LOOM_DLZ_RG.')
+  loomEventHubRg: string?
+
+  @description('Loom Event Hubs subscription ID. Empty defaults to LOOM_SUBSCRIPTION_ID.')
+  loomEventHubSub: string?
+
+  @description('Optional storage account ARM resource ID to pre-fill the Event Hubs navigator Capture form (LOOM_EVENTHUB_CAPTURE_STORAGE_ID). Capture is configured per-hub at runtime; empty leaves the form blank. The Console UAMI needs Storage Blob Data Contributor on this account for Capture writes.')
+  loomEventHubCaptureStorageId: string?
+
+  @description('Optional blob container / ADLS filesystem name to pre-fill the Event Hubs navigator Capture form (LOOM_EVENTHUB_CAPTURE_CONTAINER). Only meaningful when loomEventHubCaptureStorageId is set.')
+  loomEventHubCaptureContainer: string?
+
+  @description('Event Hubs Schema Registry schema group name for server-side Avro compatibility enforcement of event-schema-set registrations. When set, the console delegates schema registration to EH Schema Registry (data-plane PUT) and the service enforces compatibility on PUT. Leave empty to use the in-process Avro validator (the Azure-native default; no Fabric, no extra infra). Live default: loom-schemas, created by modules/landing-zone/eventhubs.bicep.')
+  loomEhSchemaGroup: string?
+
+  @description('Business Events — Event Grid custom-topic resource group for the /business-events publishing surface. Empty defaults to LOOM_DLZ_RG.')
+  loomEventGridRg: string?
+
+  @description('Business Events — Event Grid custom-topic subscription ID. Empty defaults to LOOM_SUBSCRIPTION_ID.')
+  loomEventGridSub: string?
+
+  @description('Business Events — default Event Grid custom-topic name governed events publish to. Created by modules/landing-zone/eventgrid-business.bicep. Live default: loom-business-events.')
+  loomEventGridBusinessTopic: string?
+
+  @description('Business Events — default Event Hub entity the durable channel publishes governed events to (LOOM_EVENTHUB_BUSINESS_HUB). Empty uses loom-telemetry.')
+  loomEventHubBusinessHub: string?
+
+  @description('Enable the Event Hubs Data Explorer "View / Peek events" AMQP receive path (LOOM_EVENTHUB_RECEIVE_ENABLED). Default on (opt-out) — the @azure/event-hubs SDK is bundled in the Console image and loaded lazily only on the receive path; the Console UAMI Data Owner role covers receive. Set false to leave View events honestly dependency-gated.')
+  loomEventHubReceiveEnabled: bool?
+
+  @description('Business Events — Cosmos container holding the governed event-type registry (LOOM_BUSINESS_EVENTS_CONTAINER). Created on first write by business-events-store.ts. Live default: business-event-types.')
+  loomBusinessEventsContainer: string?
+}
+
+@description('Event Hubs / Event Grid / business-events settings bag (R0) — RG/sub overrides, Capture pre-fill, schema-registry group, business-events topics.')
+param eventsConfig eventsConfigT = {}
+
+@description('Observability settings bag (R0, reserved) — V1 synthetic-journey monitor, V5 bicep-drift, O1 alert-dispatch and RUM1 client-RUM settings land here as typed properties.')
+#disable-next-line no-unused-params
+param observabilityConfig object = {}
+
+@description('DR settings bag (R0, reserved) — DR0 blob-versioning/PITR, cosmosBackupTier and DR4 drill flags land here as typed properties.')
+#disable-next-line no-unused-params
+param drConfig object = {}
+
+@description('Per-workspace identity settings bag (R0, reserved) — I1 provision-on-create + I2 scoped-grant settings land here as typed properties.')
+#disable-next-line no-unused-params
+param workspaceIdentityConfig object = {}
+
+// R0 shim vars — former top-level params; defaults preserved verbatim so every
+// existing body reference resolves to the exact same value.
+var labelPropagationEnabled = functionAppsConfig.?labelPropagationEnabled ?? true
+var labelPropagationCron = functionAppsConfig.?labelPropagationCron ?? '0 */15 * * * *'
+var reportSubscriptionsCron = functionAppsConfig.?reportSubscriptionsCron ?? '0 */15 * * * *'
+var adxSkuName = adxConfig.?adxSkuName ?? 'Dev(No SLA)_Standard_E2a_v4'
+var adxEnableOptimizedAutoscale = adxConfig.?adxEnableOptimizedAutoscale ?? false
+var adxAutoscaleMinimum = adxConfig.?adxAutoscaleMinimum ?? 2
+var adxAutoscaleMaximum = adxConfig.?adxAutoscaleMaximum ?? 10
+var aasSkuName = aasConfig.?aasSkuName ?? 'S1'
+var existingAasServerName = aasConfig.?existingAasServerName ?? ''
+var existingAasServerRegion = aasConfig.?existingAasServerRegion ?? ''
+var loomAasXmlaEndpoint = aasConfig.?loomAasXmlaEndpoint ?? ''
+var loomAasMiPrincipalId = aasConfig.?loomAasMiPrincipalId ?? ''
+var loomAasRegion = aasConfig.?loomAasRegion ?? location
+var loomAasSku = aasConfig.?loomAasSku ?? 'S0'
+var loomAasServerUrl = aasConfig.?loomAasServerUrl ?? ''
+var loomAasResourceGroup = aasConfig.?loomAasResourceGroup ?? ''
+var aasSpnClientId = aasConfig.?aasSpnClientId ?? ''
+var loomAasServer = aasConfig.?loomAasServer ?? ''
+var loomAasDatabase = aasConfig.?loomAasDatabase ?? 'model'
+var loomAasModel = aasConfig.?loomAasModel ?? ''
+var loomEventHubRg = eventsConfig.?loomEventHubRg ?? ''
+var loomEventHubSub = eventsConfig.?loomEventHubSub ?? ''
+var loomEventHubCaptureStorageId = eventsConfig.?loomEventHubCaptureStorageId ?? ''
+var loomEventHubCaptureContainer = eventsConfig.?loomEventHubCaptureContainer ?? 'captures'
+var loomEhSchemaGroup = eventsConfig.?loomEhSchemaGroup ?? ''
+var loomEventGridRg = eventsConfig.?loomEventGridRg ?? ''
+var loomEventGridSub = eventsConfig.?loomEventGridSub ?? ''
+var loomEventGridBusinessTopic = eventsConfig.?loomEventGridBusinessTopic ?? 'loom-business-events'
+var loomEventHubBusinessHub = eventsConfig.?loomEventHubBusinessHub ?? 'loom-telemetry'
+var loomEventHubReceiveEnabled = eventsConfig.?loomEventHubReceiveEnabled ?? true
+var loomBusinessEventsContainer = eventsConfig.?loomBusinessEventsContainer ?? 'business-event-types'
+
 @description('Deploy the shared Data API builder preview runtime that the DAB editor\'s live REST/GraphQL testers point at via LOOM_DAB_PREVIEW_URL.')
 param dabRuntimeEnabled bool = false
 
-@description('Deploy the label-propagation timer Function (F15) — polls the Loom Cosmos lineage graph and writes sensitivity-label downstream propagation state. Defaults on; a no-op without a Cosmos account.')
-param labelPropagationEnabled bool = true
-
-@description('NCRONTAB schedule for the label-propagation timer (6-field). Default every 15 minutes.')
-param labelPropagationCron string = '0 */15 * * * *'
-
 @description('Deploy the report-subscriptions timer Function + delivery Logic App (scheduled Power BI report export → email). Default off — opt-in because it requires an Office 365 mailbox connection authorized post-deploy.')
 param reportSubscriptionsEnabled bool = false
-
-@description('NCRONTAB schedule (6-field) for the report-subscriptions timer tick. Default every 15 minutes so per-subscription schedules fire close to their intended time.')
-param reportSubscriptionsCron string = '0 */15 * * * *'
 
 @description('Delivery Logic App workflow name for report subscriptions. Deployed by integration/report-subscription-logicapp.bicep into the admin-plane RG; the Console + Function target it via LOOM_SUBSCRIPTION_LOGIC_APP_NAME. Empty (or reportSubscriptionsEnabled=false) → the subscriptions UI shows an honest delivery gate.')
 param loomSubscriptionLogicAppName string = 'logic-loom-report-subs-${location}'
@@ -192,21 +357,8 @@ param aiSearchEnabled bool = false
 @description('Deploy shared ADX cluster in the admin plane. Each DLZ then attaches its own database to this single cluster.')
 param adxEnabled bool = false
 
-@description('ADX cluster SKU. Dev SKU is ~$140/mo.')
-param adxSkuName string = 'Dev(No SLA)_Standard_E2a_v4'
-
 @description('Deploy an Azure Analysis Services (AAS) Standard server — the Azure-native semantic-model backend (no Fabric/Power BI). Hosts Import-mode tabular databases for refresh-now / scheduled-refresh. Default off.')
 param aasEnabled bool = false
-
-@description('AAS SKU (Standard tier). S1 (~$160/mo) is the minimum that supports the data-plane refresh REST API with a service-principal admin. S0 is the cheapest Standard SKU. S8v2 / S9v2 are the v2 high-QPU SKUs (the legacy S8 / S9 are excluded — not available in many regions).')
-@allowed(['S0', 'S1', 'S2', 'S4', 'S8v2', 'S9v2'])
-param aasSkuName string = 'S1'
-
-@description('Reuse an existing AAS server name instead of provisioning one (any RG). When set, the module is skipped and LOOM_AAS_SERVER_NAME points at it.')
-param existingAasServerName string = ''
-
-@description('Region of a reused existing AAS server (existingAasServerName). Empty defaults to the deployment location.')
-param existingAasServerRegion string = ''
 
 @description('Deploy the read-only Workspace-Monitoring ADX database + Azure Monitor diagnostic-export pipeline (Fabric workspace-monitoring parity). Requires adxEnabled (new cluster). Default off.')
 param workspaceMonitorEnabled bool = false
@@ -216,19 +368,6 @@ param workspaceMonitorDbName string = 'loomdb_workspace_monitor'
 
 @description('Event Hub namespace ARM resource id for the LAW→EventHub→ADX live monitoring feed. Empty → DB + seeded tables work; live continuous ingestion is wired once set.')
 param workspaceMonitorEventHubNamespaceId string = ''
-
-@description('Enable ADX optimized auto-scale. Requires a Standard-tier adxSkuName (Basic/Dev SKUs reject it).')
-param adxEnableOptimizedAutoscale bool = false
-
-@description('ADX optimized auto-scale minimum instance count.')
-@minValue(2)
-@maxValue(1000)
-param adxAutoscaleMinimum int = 2
-
-@description('ADX optimized auto-scale maximum instance count.')
-@minValue(2)
-@maxValue(1000)
-param adxAutoscaleMaximum int = 10
 
 // ---------- User access patterns (Bastion is always-on; these add reach) ----------
 
@@ -483,9 +622,6 @@ param loomAdfName string = 'adf-loom-default-${location}'
 // Power Query ingest refresh path AND the DAX tile / analysis-services
 // backend path) is declared further below alongside loomSemanticBackend.
 
-@description('Azure Analysis Services tabular model (database) name to refresh after the Power Query ingest lands Delta. Empty = AAS refresh gated.')
-param loomAasModel string = ''
-
 @description('Scaled self-hosted IR VMSS name (backs the SHIR metrics tile + scale controls). Defaults to the single-sub DLZ name; empty disables the SHIR surface (honest gate).')
 param loomShirVmssName string = 'vmss-loom-shir-default'
 
@@ -575,12 +711,6 @@ param loomMirrorCopyCadence string = '1h'
   'powerbi'
 ])
 param loomSemanticBackend string = 'loom-native'
-
-@description('Azure Analysis Services server URI for the OPT-IN tabular backend (only used when loomSemanticBackend = "analysis-services"). Accepted forms: asazure://<region>.asazure.windows.net/<server> OR an https XMLA URL. Leave empty (default) for loom-native — no AAS dependency. NOTE: Azure Analysis Services is NOT available in Azure Government (GCC-High / IL5 / DoD); leave empty there.')
-param loomAasServer string = ''
-
-@description('Azure Analysis Services model/database name (only used when loomAasServer is set). The Console UAMI must have at least Reader on the AAS server resource.')
-param loomAasDatabase string = 'model'
 
 @description('Approval Logic App workflow name (backs the Approval activity in the pipeline editor). Defaults to the deterministic DLZ convention deployed by modules/integration/approval-logicapp.bicep; empty -> the approval-logicapp route returns an honest 503 with deployment instructions.')
 param loomApprovalLogicAppName string = 'logic-loom-approval-${location}'
@@ -691,41 +821,8 @@ param loomDevCenterProject string = ''
 @description('Loom Event Hubs namespace name (backs the Event Hubs namespace navigator in the Eventstream editor). Defaults to the single-sub DLZ convention evhns-loom-default-<region> emitted by modules/landing-zone/eventhubs.bicep; override for multi-domain deployments. Empty surfaces the navigator config gate.')
 param loomEventHubNamespace string = 'evhns-loom-default-${location}'
 
-@description('Loom Event Hubs resource group. Empty defaults to LOOM_DLZ_RG.')
-param loomEventHubRg string = ''
-
-@description('Loom Event Hubs subscription ID. Empty defaults to LOOM_SUBSCRIPTION_ID.')
-param loomEventHubSub string = ''
-
-@description('Optional storage account ARM resource ID to pre-fill the Event Hubs navigator Capture form (LOOM_EVENTHUB_CAPTURE_STORAGE_ID). Capture is configured per-hub at runtime; empty leaves the form blank. The Console UAMI needs Storage Blob Data Contributor on this account for Capture writes.')
-param loomEventHubCaptureStorageId string = ''
-
-@description('Optional blob container / ADLS filesystem name to pre-fill the Event Hubs navigator Capture form (LOOM_EVENTHUB_CAPTURE_CONTAINER). Only meaningful when loomEventHubCaptureStorageId is set.')
-param loomEventHubCaptureContainer string = 'captures'
-
-@description('Event Hubs Schema Registry schema group name for server-side Avro compatibility enforcement of event-schema-set registrations. When set, the console delegates schema registration to EH Schema Registry (data-plane PUT) and the service enforces compatibility on PUT. Leave empty to use the in-process Avro validator (the Azure-native default; no Fabric, no extra infra). Live default: loom-schemas, created by modules/landing-zone/eventhubs.bicep.')
-param loomEhSchemaGroup string = ''
-
 @description('RTI hub catalog — extra subscription IDs (comma-separated) to include in cross-subscription stream discovery via Azure Resource Graph, beyond the deployment subscription. The Console UAMI needs Reader at each subscription scope.')
 param loomExtraSubscriptions string = ''
-
-@description('Business Events — Event Grid custom-topic resource group for the /business-events publishing surface. Empty defaults to LOOM_DLZ_RG.')
-param loomEventGridRg string = ''
-
-@description('Business Events — Event Grid custom-topic subscription ID. Empty defaults to LOOM_SUBSCRIPTION_ID.')
-param loomEventGridSub string = ''
-
-@description('Business Events — default Event Grid custom-topic name governed events publish to. Created by modules/landing-zone/eventgrid-business.bicep. Live default: loom-business-events.')
-param loomEventGridBusinessTopic string = 'loom-business-events'
-
-@description('Business Events — default Event Hub entity the durable channel publishes governed events to (LOOM_EVENTHUB_BUSINESS_HUB). Empty uses loom-telemetry.')
-param loomEventHubBusinessHub string = 'loom-telemetry'
-
-@description('Enable the Event Hubs Data Explorer "View / Peek events" AMQP receive path (LOOM_EVENTHUB_RECEIVE_ENABLED). Default on (opt-out) — the @azure/event-hubs SDK is bundled in the Console image and loaded lazily only on the receive path; the Console UAMI Data Owner role covers receive. Set false to leave View events honestly dependency-gated.')
-param loomEventHubReceiveEnabled bool = true
-
-@description('Business Events — Cosmos container holding the governed event-type registry (LOOM_BUSINESS_EVENTS_CONTAINER). Created on first write by business-events-store.ts. Live default: business-event-types.')
-param loomBusinessEventsContainer string = 'business-event-types'
 
 @description('Optional ARM resource ID of a default IoT Hub for ADX data connections (KQL Database → Add data connection wizard). When set, the IoT Hub picker pre-selects this hub; when empty, the wizard discovers all IoT Hubs visible to the Loom identity via Resource Graph. The ADX cluster system-assigned managed identity must hold "IoT Hub Contributor" (role ID 4763167e-fb37-48bb-8710-0fcd9d82e439, grants Microsoft.Devices/IotHubs/IotHubKeys/read) at the target IoT Hub scope for device-to-cloud ingestion to succeed — because the hub is user-selected at runtime, that grant is a one-time operator action surfaced as an honest-gate MessageBar in the editor.')
 param loomIotHubResourceId string = ''
@@ -778,9 +875,6 @@ param loomDatabricksAccountId string = ''
 @description('OPTIONAL Databricks account control-plane host override for sovereign clouds. Defaults to accounts.azuredatabricks.net (Commercial) when empty.')
 param loomDatabricksAccountHost string = ''
 
-@description('OPTIONAL Azure Analysis Services XMLA endpoint backing the semantic-model Model view XMLA write path (azure-native, no Fabric). Wire from the DLZ aas.bicep xmlaEndpoint output (enableAas=true). Empty by default — the Loom-native Cosmos backend works without it.')
-param loomAasXmlaEndpoint string = ''
-
 @description('Semantic-model write backend selector. Set to \'fabric\' to OPT INTO the Fabric REST write path (per no-fabric-dependency.md, strictly opt-in). Any other value keeps the azure-native default (Cosmos + optional AAS XMLA).')
 param loomSemanticModelBackend string = ''
 
@@ -795,9 +889,6 @@ param loomDirectLakeShimSbNamespace string = ''
 
 @description('Service Bus queue name for Delta _delta_log BlobCreated events (Direct-Lake-shim).')
 param loomDirectLakeShimQueue string = 'loom-dl-shim-events'
-
-@description('AAS / Power BI Premium service-principal object id — granted Storage Blob Data Reader on the DLZ ADLS account so the warm-cache model can read Delta Parquet. Empty skips that grant (the shim UAMI grant still applies).')
-param loomAasMiPrincipalId string = ''
 
 // ---------------------------------------------------------------------------
 // Standalone Azure Machine Learning workspace — backs aml-client.ts
@@ -1372,16 +1463,6 @@ param loomBackends object = {
 // the DAX tile / semantic execution path so a single set of env vars feeds
 // both flows. Re-declaring them here would produce BCP028.
 
-@description('Azure region of the AAS server (e.g. eastus2). Used by the DirectQuery source binder; falls back to the deployment location.')
-param loomAasRegion string = location
-
-@description('Azure Analysis Services SKU when loomSemanticBackend=analysis-services. Standard tier only — S0 is the cheapest Standard SKU and is broadly available. Developer (D1) and Basic (B1/B2) tiers are excluded because they are not offered in many regions (centralus exposes only S0, S1, S2, S4, S8v2, S9v2). AAS is Commercial/GCC only — never deployed at GCC-High / IL5 (the orchestrator guards on boundary).')
-@allowed(['S0', 'S1', 'S2', 'S4', 'S8v2', 'S9v2'])
-param loomAasSku string = 'S0'
-
-@description('Pre-existing AAS server URL (asazure://<region>.asazure.windows.net/<name>) to wire as LOOM_AAS_SERVER_URL instead of deploying a new server. Leave empty to let analysis-services.bicep create one (requires loomSemanticBackend=analysis-services on a Commercial/GCC boundary). Power BI Premium XMLA users set LOOM_POWERBI_XMLA_ENDPOINT directly instead.')
-param loomAasServerUrl string = ''
-
 @description('HTTPS XMLA endpoint for semantic-model authoring that requires the XMLA write surface (e.g. Automatic aggregations, RLS/OLS role authoring). Azure-native default: an Azure Analysis Services server (https://<server>.asazure.windows.net/xmla, or .asazure.usgovcloudapi.net in Gov). A Power BI Premium / Fabric capacity XMLA endpoint (https://api.powerbi.com/xmla, https://api.powerbigov.us/xmla) is an opt-in alternative selected purely by URL. Empty = the Aggregations + Security surfaces render but show an honest MessageBar gate (no Fabric dependency).')
 param loomPowerbiXmlaEndpoint string = ''
 
@@ -1516,12 +1597,6 @@ var loomGithubMcpPatKvSecret = loomMcpBackends.?githubPatKvSecret ?? ''
 
 // NOTE: loomAasDatabase (TMSL Catalog) is declared once earlier in this file
 // (defaulted to 'model'). The column-editor path reuses the same param.
-
-@description('Resource group hosting the AAS server (used only for the ARM server picker). Empty falls back to the Console UAMI default scope.')
-param loomAasResourceGroup string = ''
-
-@description('Service-principal client id (appId) made an AAS server admin for data-plane XMLA (RLS/OLS role authoring via LOOM_AAS_CLIENT_ID/SECRET). Empty = the Console UAMI is the sole AAS admin (composite-model path). Store the SPN secret in Key Vault and wire LOOM_AAS_CLIENT_SECRET as a secretRef.')
-param aasSpnClientId string = ''
 
 // (The former `aasSku` param — the composite `aas` module's SKU — was retired
 // with that module: the single AAS server is now sized solely by aasSkuName

@@ -188,6 +188,27 @@ health check:
 Failures surface in Console "Monitoring" pane with remediation
 suggestions.
 
+## Bicep param-bag rule (ARM 256-param cap)
+
+ARM hard-caps every template at **256 `param` declarations**.
+`platform/fiab/bicep/modules/admin-plane/main.bicep` hit that cap on
+2026-07-22 and was consolidated back to 232 (loom-next-level R0) by moving
+related params into **typed config-object (bag) params** — `aasConfig`,
+`adxConfig`, `eventsConfig`, `functionAppsConfig`, plus reserved
+`observabilityConfig` / `drConfig` / `workspaceIdentityConfig` bags for
+upcoming features. Each bag property keeps its former param name, and a shim
+`var name = bag.?name ?? <default>` preserves the former default, so the
+consolidation is behaviorally inert.
+
+**The rule:** new deploy-time settings land as a property on one of these
+bags (or as a nested-module param) — **never** as a new top-level `param` in
+`admin-plane/main.bicep` or the top-level `main.bicep` (at 248 params
+itself). To add a setting: add a typed property to the matching `*ConfigT`
+type, add the shim `var` with its default, and wire the value from the
+caller's bag literal. CI enforces headroom via
+`scripts/ci/check-bicep-param-cap.mjs` (warn ≥ 240, fail ≥ 250 on the
+admin-plane module).
+
 ## Where to next
 
 After your first deploy:
