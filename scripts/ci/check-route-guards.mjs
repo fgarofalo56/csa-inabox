@@ -122,6 +122,12 @@ const GETSESSION_RE = /getSession\s*\(|with(?:Session|WorkspaceOwner|BackendGate
 // ── Allowlist: routes that legitimately need no per-resource authorization.
 // Repo-relative POSIX paths. Each MUST carry a reason.
 const ALLOWLIST = new Map([
+  // FLAG0 runtime kill-switch READ half: returns only { flagId: boolean } for
+  // the flags in the typed RUNTIME_FLAGS registry — deployment-wide operational
+  // state with NO per-tenant/per-owner resource to scope (like a feature-flag
+  // CDN read). Session-gated read-only; the WRITE half lives under
+  // /api/admin/runtime-flags/[id] behind requireTenantAdmin.
+  ['apps/fiab-console/app/api/runtime-flags/route.ts', 'deployment-wide registered-flag booleans; read-only, no per-tenant resource; write path is admin-gated'],
   // Self-hosted map tile proxy (Gov OSS Azure-Maps replacement): fronts the
   // internal-ingress MapLibre tileserver, which serves a SHARED OSS basemap
   // (OpenMapTiles) identical for every tenant — there is no per-tenant resource
