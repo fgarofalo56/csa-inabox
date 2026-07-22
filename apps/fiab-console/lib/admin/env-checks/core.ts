@@ -274,7 +274,7 @@ export const VALUE_HINT: Record<string, string> = {
   LOOM_UAT_RESULTS_CONTAINER: 'uat-results',
   SYNTHETIC_LOGIN_UPN: '<synthetic-automation-account-upn (least-privilege, one Loom test workspace)>',
   SYNTHETIC_LOGIN_SECRET: '<automation-account-password-from-key-vault (kv secret synthetic-login-secret)>',
-  LOOM_ALERT_ACTION_GROUP_ID: '/subscriptions/<sub>/resourceGroups/<rg>/providers/microsoft.insights/actionGroups/loom-default-alerts',
+  // (LOOM_ALERT_ACTION_GROUP_ID hint lives with the S1 secret-expiry block above.)
 };
 
 /** Pick the concrete env vars an admin should set from a missing-list that may
