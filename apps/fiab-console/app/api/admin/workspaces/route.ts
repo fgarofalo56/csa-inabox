@@ -136,7 +136,9 @@ export async function POST(req: NextRequest) {
     // publish, and an optional dedicated backing resource group. Never blocks
     // the create — outcomes are captured into status fields and replaced.
     let merged: Workspace = resource;
-    if (resource.capacity || resource.domain || provisionBackingRg) {
+    // Runs unconditionally so the I1 workspaceIdentity outcome (incl. the
+    // mode-off 'skipped' regression receipt) is always recorded.
+    {
       try {
         const bindings = await applyWorkspaceBindings(resource, { provisionBackingRg });
         merged = {
@@ -144,6 +146,7 @@ export async function POST(req: NextRequest) {
           ...(bindings.capacityAssignment ? { capacityAssignment: bindings.capacityAssignment } : {}),
           ...(bindings.domainRegistration ? { domainRegistration: bindings.domainRegistration } : {}),
           ...(bindings.backingRgProvision ? { backingRgProvision: bindings.backingRgProvision } : {}),
+          ...(bindings.workspaceIdentity ? { workspaceIdentity: bindings.workspaceIdentity } : {}),
           ...(bindings.backingRgProvision?.status === 'provisioned' ? { backingRgName: bindings.backingRgProvision.rgName } : {}),
           updatedAt: new Date().toISOString(),
         };

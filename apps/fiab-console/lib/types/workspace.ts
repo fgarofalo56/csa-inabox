@@ -29,6 +29,22 @@ export interface WorkspaceImageMeta {
   updatedBy: string;
 }
 
+/**
+ * Per-grant outcome of the I1 ensureWorkspaceGrants ARM role-assignment PUTs
+ * (idempotent guid()-named assignments; 'exists' = re-run found it already
+ * granted — the idempotent no-op, not an error).
+ */
+export interface WorkspaceGrantStatus {
+  /** Backend the grant targets (e.g. 'adls-lake'; the I2 matrix adds more). */
+  backend: string;
+  /** Built-in role definition GUID (e.g. Storage Blob Data Contributor). */
+  roleDefinitionId: string;
+  /** ARM scope the assignment was PUT at (container / account / RG). */
+  scope: string;
+  status: 'granted' | 'exists' | 'failed';
+  error?: string;
+}
+
 export interface Workspace {
   id: string;
   /**
@@ -159,6 +175,24 @@ export interface Workspace {
    * customer key is bound via /api/admin/workspaces/{id}/cmk. The live ARM
    * state is always re-read on GET; this is a cached convenience copy.
    */
+  /**
+   * I1 — outcome of the per-workspace managed-identity provisioning side-effect
+   * (uami-ws-<id> + scoped grants), recorded on create alongside the sibling
+   * lifecycle blocks above. ADDITIVE + optional: pre-I1 docs simply lack the
+   * field (no MIG1 migrator needed — readers treat absence as "never
+   * attempted"). 'skipped' = mode off / config gate (the day-one default);
+   * 'queued' is reserved for the bulk-topology path.
+   */
+  workspaceIdentity?: {
+    status: 'provisioned' | 'queued' | 'failed' | 'skipped';
+    uamiName?: string;
+    uamiClientId?: string;
+    principalId?: string;
+    grants?: WorkspaceGrantStatus[];
+    mode?: 'shadow' | 'enforce';
+    at?: string;
+    error?: string;
+  };
   cmkBinding?: {
     status: 'bound' | 'unbound' | 'pending' | 'error';
     vaultUri?: string;

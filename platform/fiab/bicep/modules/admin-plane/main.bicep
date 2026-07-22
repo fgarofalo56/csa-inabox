@@ -324,9 +324,19 @@ type drConfigT = {
 @description('DR settings bag (R0) — DR0 cosmos continuous-backup tier lands here; DR4 drill flags follow as typed properties. (The DR0 lake blob-versioning/PITR posture rides the landing-zone module — drConfig.enableBlobPitr at the top-level orchestrator — not this hub bag.)')
 param drConfig drConfigT = {}
 
-@description('Per-workspace identity settings bag (R0, reserved) — I1 provision-on-create + I2 scoped-grant settings land here as typed properties.')
-#disable-next-line no-unused-params
-param workspaceIdentityConfig object = {}
+type workspaceIdentityConfigT = {
+  @description('Per-workspace managed-identity mode (loom-next-level I1): off (default — every call runs as the shared Console UAMI, unchanged), shadow (workspace create additionally provisions a scoped uami-ws-<id> + lake grant, outcome recorded on the workspace doc, zero behavior change; delete cascades it), enforce (reserved — the I6 per-workspace token-minting posture flip, gated on I9). Phased shadow → enforce is the sole Phase-0 exception to default-ON, per the operator decision recorded in the PRP.')
+  workspaceIdentityMode: ('off' | 'shadow' | 'enforce')?
+
+  @description('Subscription id hosting the per-workspace UAMIs (LOOM_WS_IDENTITY_SUB). Empty → the console falls back to LOOM_SUBSCRIPTION_ID.')
+  wsIdentitySub: string?
+
+  @description('Resource group hosting the per-workspace UAMIs (LOOM_WS_IDENTITY_RG). Empty → the console falls back to LOOM_DLZ_RG. Must match the RG the top-level ws-identity-rbac module granted the Console UAMI Managed Identity Contributor on.')
+  wsIdentityRg: string?
+}
+
+@description('Per-workspace identity settings bag (R0) — I1 provision-on-create settings ride here as typed properties; I2 scoped-grant settings extend workspaceIdentityConfigT, never a new top-level param.')
+param workspaceIdentityConfig workspaceIdentityConfigT = {}
 
 // R0 shim vars — former top-level params; defaults preserved verbatim so every
 // existing body reference resolves to the exact same value.
@@ -374,6 +384,10 @@ var syntheticMonitorCron = observabilityConfig.?syntheticMonitorCron ?? '*/15 * 
 var uatResultsContainer = observabilityConfig.?uatResultsContainer ?? 'uat-results'
 var syntheticLoginUpn = observabilityConfig.?syntheticLoginUpn ?? ''
 var syntheticLoginSecretUri = observabilityConfig.?syntheticLoginSecretUri ?? ''
+// I1 (workspaceIdentityConfig bag) — per-workspace identity shims (default off).
+var workspaceIdentityMode = workspaceIdentityConfig.?workspaceIdentityMode ?? 'off'
+var wsIdentitySub = workspaceIdentityConfig.?wsIdentitySub ?? ''
+var wsIdentityRg = workspaceIdentityConfig.?wsIdentityRg ?? ''
 
 @description('Deploy the shared Data API builder preview runtime that the DAB editor\'s live REST/GraphQL testers point at via LOOM_DAB_PREVIEW_URL.')
 param dabRuntimeEnabled bool = false
@@ -2892,6 +2906,15 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // then enforce per-domain. _aclGrants/_protectionPolicies are created
             // on-demand by the PDP context-loader/reconciler (createIfNotExists).
             { name: 'LOOM_PDP_ENFORCE', value: 'off' }
+            // I1 per-workspace managed identity: off (default, shared Console
+            // UAMI — unchanged) | shadow (provision scoped uami-ws-<id> on
+            // workspace create, record outcome, zero behavior change) | enforce
+            // (reserved for I6). Sub/RG fall back in-console to
+            // LOOM_SUBSCRIPTION_ID / LOOM_DLZ_RG when unset. The Console UAMI's
+            // Managed Identity Contributor grant on that RG is ws-identity-rbac.bicep.
+            { name: 'LOOM_WORKSPACE_IDENTITY_MODE', value: workspaceIdentityMode }
+            { name: 'LOOM_WS_IDENTITY_SUB', value: wsIdentitySub }
+            { name: 'LOOM_WS_IDENTITY_RG', value: wsIdentityRg }
             // WS-10.1 LCU-Autopilot (BTB-2) — bootstrap approval mode for the
             // self-driving FinOps loop (/admin/autopilot). 'propose' = compute +
             // surface recommendations only (day-one default, opt-out); an admin
