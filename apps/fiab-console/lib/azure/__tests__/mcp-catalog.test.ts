@@ -2,8 +2,8 @@
  * mcp-catalog — unit tests for the vetted catalog allow-list + image resolution.
  *
  * Pure logic only (no Azure SDK / network): the catalog shape, the egress
- * vetting, the container-app name sanitiser, and resolveCatalogImage()'s
- * mirror-rebasing for air-gapped boundaries.
+ * vetting, and resolveCatalogImage()'s mirror-rebasing for air-gapped
+ * boundaries.
  */
 import { describe, it, expect, afterEach } from 'vitest';
 import {
@@ -16,7 +16,6 @@ import {
   defaultRecommendedServers,
   airGapSafeServers,
 } from '../mcp-catalog';
-import { mcpContainerAppName } from '../mcp-deploy-client';
 
 const SAVED = { ...process.env };
 afterEach(() => {
@@ -126,21 +125,6 @@ describe('resolveCatalogImage', () => {
     expect(resolveCatalogImage(getCatalogEntry('filesystem')!)).toBe('loomacr.azurecr.io/mcp/filesystem:latest');
     // A fully-qualified MS image is rebased by dropping its original host.
     expect(resolveCatalogImage(getCatalogEntry('playwright')!)).toBe('loomacr.azurecr.io/playwright/mcp:latest');
-  });
-});
-
-describe('mcpContainerAppName', () => {
-  it('produces a DNS-safe name within Container Apps limits', () => {
-    const n = mcpContainerAppName('filesystem');
-    expect(n).toMatch(/^[a-z][a-z0-9-]*[a-z0-9]$/);
-    expect(n.length).toBeLessThanOrEqual(32);
-    expect(n.startsWith('mcp-filesystem')).toBe(true);
-  });
-
-  it('sanitises an id with illegal characters', () => {
-    const n = mcpContainerAppName('Weird_Id!!');
-    expect(n).toMatch(/^[a-z][a-z0-9-]*[a-z0-9]$/);
-    expect(n.length).toBeLessThanOrEqual(32);
   });
 });
 

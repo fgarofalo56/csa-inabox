@@ -365,8 +365,8 @@ export async function PATCH(req: NextRequest) {
       newParentId = body.parentId === null || String(body.parentId).trim() === ''
         ? undefined : String(body.parentId).trim();
       if (newParentId !== domain.parentId) {
-        // Shared two-level hierarchy invariants (self-parent, missing target,
-        // cycle, two-level cap) — identical to PATCH /api/governance/domains.
+        // Shared hierarchy invariants (self-parent, missing target, cycle,
+        // depth cap) — enforced via lib/azure/domain-hierarchy.
         const moveErr = validateDomainMove(doc.items, id, newParentId);
         if (moveErr) {
           return NextResponse.json({ ok: false, error: moveErr.message }, { status: moveErr.status });

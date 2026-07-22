@@ -37,15 +37,18 @@ permissive licenses only) and `docs/adr/0026-ms-learn-mcp-as-external-grounding.
 > `configSchema` consolidation and is **not** where the Microsoft additions live —
 > those are in `lib/mcp/catalog.ts`.
 
-> Reconciliation note (audit-t45): two parallel implementations of this surface
-> existed. The canonical one — documented here — is the **per-server
-> `configSchema` + per-field Key Vault secret** path in `lib/mcp/catalog.ts`. The
-> older single-`secretEnv` modules (`lib/azure/mcp-catalog.ts`,
-> `lib/azure/mcp-deploy-client.ts`, `lib/components/admin/mcp-catalog-panel.tsx`)
-> are RETAINED (the legacy gov array + its tests still build), but the duplicate
-> `app/api/admin/mcp-catalog/*` route family was removed so the panel renders ONE
-> coherent deploy surface (`ui-parity.md`). New work — including the Microsoft
-> additions + the remote built-in family — lands ONLY in `lib/mcp/catalog.ts`.
+> Reconciliation note (audit-t45; completed in the 2026-07-22 wiring cleanup):
+> two parallel implementations of this surface existed. The canonical one —
+> documented here — is the **per-server `configSchema` + per-field Key Vault
+> secret** path in `lib/mcp/catalog.ts`. The duplicate
+> `app/api/admin/mcp-catalog/*` route family was removed at audit-t45, and the
+> now-orphaned legacy modules `lib/azure/mcp-deploy-client.ts` +
+> `lib/components/admin/mcp-catalog-panel.tsx` (never mounted; its fetches
+> targeted the removed routes) were DELETED in the wiring cleanup.
+> `lib/azure/mcp-catalog.ts` (the 29-entry gov-vetted array + its tests) is
+> retained — it powers the Sovereign Agent Mesh egress policy in
+> `lib/copilot/agent-registry.ts`. New work — including the Microsoft additions
+> + the remote built-in family — lands ONLY in `lib/mcp/catalog.ts`.
 
 ## Capability inventory (the deploy lifecycle a platform admin performs)
 
