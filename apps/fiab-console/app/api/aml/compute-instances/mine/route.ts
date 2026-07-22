@@ -25,7 +25,7 @@
  * per-user CI ceiling is hit. Azure-native — no Fabric dependency.
  */
 import { NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { withSession } from '@/lib/api/route-toolkit';
 import {
   listCIs,
   createCI,
@@ -78,11 +78,8 @@ function notConfigured() {
   );
 }
 
-export async function GET() {
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-
-  const oid = s.claims.oid;
+export const GET = withSession(async (_req, { session }) => {
+  const oid = session.claims.oid;
   const policy = perUserCiConfig();
   const myName = perUserCiName(oid);
 
@@ -121,13 +118,10 @@ export async function GET() {
     const status = e instanceof AmlError ? e.status : 502;
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status });
   }
-}
+});
 
-export async function POST(req: Request) {
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-
-  const oid = s.claims.oid;
+export const POST = withSession(async (req, { session }) => {
+  const oid = session.claims.oid;
   const tid = tenantId();
   const policy = perUserCiConfig();
   const myName = perUserCiName(oid);
@@ -199,4 +193,4 @@ export async function POST(req: Request) {
     const status = e instanceof AmlError ? e.status : 502;
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status });
   }
-}
+});

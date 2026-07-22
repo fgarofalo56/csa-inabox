@@ -23,8 +23,8 @@
  * Honest gate: 200 with { ok: true, configured: false, missing, hint } when the
  * AML env / LOOM_MLFLOW_TRACKING_URI isn't set.
  */
-import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { NextResponse } from 'next/server';
+import { withSession } from '@/lib/api/route-toolkit';
 import {
   searchRuns,
   MlflowNotConfiguredError,
@@ -80,10 +80,7 @@ function gate(e: unknown) {
   );
 }
 
-export async function GET(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-
+export const GET = withSession(async (req) => {
   const url = new URL(req.url);
   const experimentIds = (url.searchParams.get('experimentIds') || '')
     .split(',')
@@ -110,12 +107,9 @@ export async function GET(req: NextRequest) {
   } catch (e) {
     return gate(e);
   }
-}
+});
 
-export async function POST(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-
+export const POST = withSession(async (req) => {
   let body: Partial<RunSearchInput> = {};
   try { body = await req.json(); } catch { /* empty / invalid body → 400 below */ }
 
@@ -140,4 +134,4 @@ export async function POST(req: NextRequest) {
   } catch (e) {
     return gate(e);
   }
-}
+});

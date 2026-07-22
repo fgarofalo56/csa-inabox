@@ -13,7 +13,7 @@
  * — no Fabric dependency.
  */
 import { NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { withSession } from '@/lib/api/route-toolkit';
 import { updateCiIdleShutdown, amlIsConfigured, AmlNotConfiguredError, AmlError } from '@/lib/azure/aml-client';
 import { computeRoleGate } from '@/lib/azure/foundry-compute-gate';
 
@@ -23,11 +23,8 @@ export const dynamic = 'force-dynamic';
 /** ISO-8601 idle-TTL durations the UI offers (dropdown only — no freeform). */
 const ALLOWED_TTL = new Set(['PT15M', 'PT30M', 'PT1H', 'PT2H', 'PT3H', 'PT4H']);
 
-export async function POST(req: Request, ctx: { params: Promise<{ name: string }> }) {
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-
-  const name = decodeURIComponent((await ctx.params).name);
+export const POST = withSession<{ name: string }>(async (req, { params }) => {
+  const name = decodeURIComponent(params.name);
   if (!name) return NextResponse.json({ ok: false, error: 'compute instance name required' }, { status: 400 });
 
   const body = await req.json().catch(() => ({} as any));
@@ -57,4 +54,4 @@ export async function POST(req: Request, ctx: { params: Promise<{ name: string }
     const status = e instanceof AmlError ? e.status : 502;
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status });
   }
-}
+});
