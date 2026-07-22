@@ -157,4 +157,15 @@ describe('FLAG0 runtime-flags helper', () => {
       expect(f.ownerItem.length).toBeGreaterThan(0);
     }
   });
+
+  it("U1 registers 'u1-report-designer-g3' — default ON with no doc (kill-switch contract)", async () => {
+    const flags = makeFlagsContainer();
+    vi.mocked(runtimeFlagsContainer).mockResolvedValue(flags as any);
+    const list = await listRuntimeFlags();
+    const u1 = list.find((f) => f.id === 'u1-report-designer-g3');
+    expect(u1).toBeTruthy();
+    expect(u1!.ownerItem).toBe('U1');
+    // No Cosmos doc → the flagged G3 layout is ON by default (opt-out, FLAG0).
+    expect(u1!.enabled).toBe(true);
+  });
 });

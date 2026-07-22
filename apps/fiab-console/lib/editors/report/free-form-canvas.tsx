@@ -155,6 +155,13 @@ export interface FreeFormCanvasProps<V extends FFVisual> {
    *  bring-to-front / send-to-back. Operates over the shared visuals+elements
    *  z-space (ids are unique across both). */
   onZStep?: (ids: string[], dir: 'forward' | 'backward') => void;
+  /** U1 (default OFF — legacy hosts keep the 70vh floor). Size to the PARENT'S
+   *  height instead of imposing `minHeight: 70vh`: set when the host wraps the
+   *  canvas in a user-resizable region (`ResizableCanvasRegion`) that owns the
+   *  height, so dragging the region shorter than 70vh actually shrinks the
+   *  canvas (the fit-mode zoom rescales via the viewport ResizeObserver)
+   *  instead of clipping it. */
+  fitParent?: boolean;
 }
 
 const useStyles = makeStyles({
@@ -163,6 +170,9 @@ const useStyles = makeStyles({
     position: 'relative', display: 'flex', flexDirection: 'column',
     minHeight: '70vh', flex: 1, gap: tokens.spacingVerticalS,
   },
+  // `fitParent`: the host's ResizableCanvasRegion owns the height — drop the
+  // 70vh floor so the canvas tracks the user-dragged region height exactly.
+  rootFill: { minHeight: 0 },
   toolbar: {
     display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS,
     flexWrap: 'wrap',
@@ -321,7 +331,7 @@ export function FreeFormCanvas<V extends FFVisual>(props: FreeFormCanvasProps<V>
   const {
     visuals, page, selectedId, selectedIds, snapToGrid, gridSize = DEFAULT_GRID,
     showGrid = false, readOnly = false, onSelect, onMarquee, onLayout, onDelete,
-    renderVisual, renderChrome, frameStyle, dragBody, onZStep,
+    renderVisual, renderChrome, frameStyle, dragBody, onZStep, fitParent = false,
   } = props;
   const styles = useStyles();
 
@@ -573,7 +583,7 @@ export function FreeFormCanvas<V extends FFVisual>(props: FreeFormCanvasProps<V>
   };
 
   return (
-    <div className={styles.root}>
+    <div className={mergeClasses(styles.root, fitParent && styles.rootFill)}>
       {/* Zoom / page-view toolbar (PBI "Page view" settings) */}
       <div className={styles.toolbar} role="toolbar" aria-label="Canvas zoom">
         <Tooltip content="Zoom out" relationship="label">

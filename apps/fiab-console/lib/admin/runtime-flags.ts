@@ -66,6 +66,14 @@ export const RUNTIME_FLAGS: readonly RuntimeFlagDef[] = [
     surface: '/browse (pins, workspaces, all-items table) + /marketplace grids',
   },
   {
+    id: 'u1-report-designer-g3',
+    label: 'Report designer — resizable canvas (G3)',
+    description:
+      'User-resizable report-canvas height (shared ResizableCanvasRegion: drag grip + keyboard, persisted under loom.canvasHeight.report-designer-canvas). OFF reverts the report designer to the pre-U1 fixed fill-height canvas on the next load. The Pages/Build width SplitPanes predate U1 (R1 #1857) and are unaffected by this switch.',
+    ownerItem: 'U1',
+    surface: 'Report designer canvas (/items/report/[id])',
+  },
+  {
     id: 'v1-journeys-tab',
     label: 'Health hub — Journeys tab',
     description: 'OFF reverts /admin/health to the pre-V1 self-audit-only layout (hides the synthetic-journey Journeys tab). The scheduled loom-synthetic-monitor job itself keeps running either way — this only controls the admin surface.',
