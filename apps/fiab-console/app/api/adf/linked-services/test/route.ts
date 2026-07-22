@@ -14,19 +14,21 @@
  */
 
 import { NextRequest } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { adfConfigGate, testLinkedService, type AdfLinkedService } from '@/lib/azure/adf-client';
-import { apiOk, apiError, apiUnauthorized, apiBadRequest } from '@/lib/api/respond';
+import { apiOk, apiError, apiBadRequest } from '@/lib/api/respond';
+import { apiHonestGateError } from '@/lib/api/gate-envelope';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function POST(req: NextRequest) {
-  const session = getSession();
-  if (!session) return apiUnauthorized();
+export const POST = withSession(async (req: NextRequest) => {
   const g = adfConfigGate();
   if (g) {
-    return apiError(`Data Factory not configured: set ${g.missing}.`, 503, { code: 'not_configured', missing: g.missing });
+    return apiHonestGateError('svc-adf', {
+      missing: [g.missing],
+      message: `Data Factory not configured: set ${g.missing}.`,
+    });
   }
   const body = await req.json().catch(() => ({}));
   const properties = body?.properties as AdfLinkedService['properties'] | undefined;
@@ -39,4 +41,4 @@ export async function POST(req: NextRequest) {
   } catch (e: any) {
     return apiError(e?.message || String(e), 502);
   }
-}
+});

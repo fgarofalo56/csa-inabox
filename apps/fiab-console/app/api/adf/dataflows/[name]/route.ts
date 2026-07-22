@@ -24,7 +24,8 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { apiHonestGateError } from '@/lib/api/gate-envelope';
+import { withSession } from '@/lib/api/route-toolkit';
 import {
   adfConfigGate, getDataFlow, upsertDataFlow, deleteDataFlow,
   type AdfDataFlow,
@@ -35,22 +36,21 @@ export const dynamic = 'force-dynamic';
 
 const NAME_RE = /^[A-Za-z0-9_]{1,260}$/;
 
+// WS-D2: ADF config gate normalized onto the shared gate envelope (check unchanged).
 function gate() {
   const g = adfConfigGate();
   if (g) {
-    return NextResponse.json(
-      { ok: false, code: 'not_configured', error: `Data Factory not configured: set ${g.missing}.`, missing: g.missing },
-      { status: 503 },
-    );
+    return apiHonestGateError('svc-adf', {
+      missing: [g.missing],
+      message: `Data Factory not configured: set ${g.missing}.`,
+    });
   }
   return null;
 }
 
-export async function GET(_req: NextRequest, ctx: { params: Promise<{ name: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const GET = withSession<{ name: string }>(async (_req, { params }) => {
   const g = gate(); if (g) return g;
-  const { name } = await ctx.params;
+  const { name } = params;
   if (!name || !NAME_RE.test(name)) return NextResponse.json({ ok: false, error: 'invalid data flow name' }, { status: 400 });
   try {
     const dataflow = await getDataFlow(name);
@@ -58,13 +58,11 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ name: stri
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }
-}
+});
 
-export async function PUT(req: NextRequest, ctx: { params: Promise<{ name: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const PUT = withSession<{ name: string }>(async (req, { params }) => {
   const g = gate(); if (g) return g;
-  const { name } = await ctx.params;
+  const { name } = params;
   if (!name || !NAME_RE.test(name)) return NextResponse.json({ ok: false, error: 'invalid data flow name' }, { status: 400 });
   const body = await req.json().catch(() => ({}));
   const properties = (body?.properties as AdfDataFlow['properties']) || undefined;
@@ -87,13 +85,11 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ name: strin
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }
-}
+});
 
-export async function DELETE(_req: NextRequest, ctx: { params: Promise<{ name: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const DELETE = withSession<{ name: string }>(async (_req, { params }) => {
   const g = gate(); if (g) return g;
-  const { name } = await ctx.params;
+  const { name } = params;
   if (!name || !NAME_RE.test(name)) return NextResponse.json({ ok: false, error: 'invalid data flow name' }, { status: 400 });
   try {
     await deleteDataFlow(name);
@@ -101,4 +97,4 @@ export async function DELETE(_req: NextRequest, ctx: { params: Promise<{ name: s
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }
-}
+});

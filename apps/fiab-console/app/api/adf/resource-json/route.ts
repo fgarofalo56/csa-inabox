@@ -18,7 +18,8 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { apiHonestGateError } from '@/lib/api/gate-envelope';
+import { withSession } from '@/lib/api/route-toolkit';
 import {
   adfConfigGate,
   getPipeline, getDataset, getDataFlow, getTrigger,
@@ -38,16 +39,13 @@ const GETTERS: Record<string, (name: string) => Promise<unknown>> = {
   cdc: getAdfCdc,
 };
 
-export async function GET(req: NextRequest) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-
+export const GET = withSession(async (req: NextRequest) => {
   const g = adfConfigGate();
   if (g) {
-    return NextResponse.json(
-      { ok: false, code: 'not_configured', error: `Data Factory not configured: set ${g.missing}.`, missing: g.missing },
-      { status: 503 },
-    );
+    return apiHonestGateError('svc-adf', {
+      missing: [g.missing],
+      message: `Data Factory not configured: set ${g.missing}.`,
+    });
   }
 
   const type = req.nextUrl.searchParams.get('type')?.trim() || '';
@@ -68,4 +66,4 @@ export async function GET(req: NextRequest) {
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }
-}
+});
