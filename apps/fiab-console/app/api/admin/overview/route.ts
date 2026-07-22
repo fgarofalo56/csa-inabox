@@ -1,5 +1,5 @@
 /**
- * GET /api/admin/overview — live counts for the 12 admin-landing tiles.
+ * GET /api/admin/overview — live counts for the 13 admin-landing tiles.
  *
  * Replaces the static "Pick an area" EmptyState on /admin with real section
  * tiles, each showing a count fetched from its own backend. Every backend
@@ -42,6 +42,7 @@ import type { SqlParameter } from '@azure/cosmos';
 import { getGraphHost, getGraphScope } from '@/lib/azure/cloud-endpoints';
 import { listResources, listAlertHistory } from '@/lib/azure/monitor-client';
 import { listSensitivityLabels } from '@/lib/azure/mip-graph-client';
+import { countFlagsOff } from '@/lib/admin/runtime-flags';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -62,7 +63,8 @@ export interface TileCount {
 export type OverviewTileKey =
   | 'workspaces' | 'domains' | 'items' | 'auditEvents' | 'permissions'
   | 'attributeGroups' | 'labeledItems' | 'tenantSettings'
-  | 'users' | 'capacity' | 'openAuditItems' | 'sensitivityLabels';
+  | 'users' | 'capacity' | 'openAuditItems' | 'sensitivityLabels'
+  | 'runtimeFlags';
 
 export type OverviewTiles = Record<OverviewTileKey, TileCount>;
 
@@ -236,6 +238,7 @@ async function computeTiles(tenantId: string): Promise<OverviewTiles> {
   const [
     workspaces, domains, items, auditEvents, permissions, attributeGroups,
     labeledItems, tenantSettings, users, capacity, openAuditItems, sensitivityLabels,
+    runtimeFlags,
   ] = await Promise.all([
     tile(() => countWhereTenant(workspacesContainer, tenantId), COSMOS_HINT),
     tile(() => domainsCount(tenantId), COSMOS_HINT),
@@ -253,10 +256,13 @@ async function computeTiles(tenantId: string): Promise<OverviewTiles> {
     tile(() => capacityResourceCount(), ARM_HINT),
     tile(() => openAuditItemsCount(), ARM_HINT),
     tile(() => sensitivityLabelCount(), MIP_HINT),
+    // FLAG0 — runtime kill-switches currently flipped OFF (surfaces reverted).
+    tile(() => countFlagsOff(), COSMOS_HINT),
   ]);
 
   return {
     workspaces, domains, items, auditEvents, permissions, attributeGroups,
     labeledItems, tenantSettings, users, capacity, openAuditItems, sensitivityLabels,
+    runtimeFlags,
   };
 }
