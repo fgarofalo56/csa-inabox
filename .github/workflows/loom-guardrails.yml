@@ -56,3 +56,5 @@ jobs:
         run: node scripts/ci/check-health-coverage.mjs
       - name: parity-doc-freshness (parity docs vs their source files; warn-first)
         run: node scripts/ci/check-parity-doc-freshness.mjs
+      - name: route-inventory (route taxonomy drift gate — WS-D D3)
+        run: node scripts/ci/generate-route-inventory.mjs --check
