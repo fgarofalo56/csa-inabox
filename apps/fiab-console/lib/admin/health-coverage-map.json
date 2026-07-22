@@ -574,11 +574,6 @@
         "svc-keyvault"
       ]
     },
-    "mcp-deploy-client": {
-      "checks": [
-        "svc-mcp-deploy"
-      ]
-    },
     "mip-graph-client": {
       "checks": [
         "probe-dlp-graph-roles"

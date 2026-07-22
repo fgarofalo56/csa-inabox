@@ -25,6 +25,7 @@ import {
 import {
   AddRegular, ShieldKeyhole24Regular, PeopleTeam24Regular, ShieldTask24Regular,
   Organization24Regular, KeyMultiple24Regular, CursorClick24Regular,
+  ShieldQuestion24Regular,
 } from '@fluentui/react-icons';
 import { AdminShell } from '@/lib/components/admin-shell';
 import { CapabilityTree } from '@/lib/components/feature-rbac/capability-tree';
@@ -35,10 +36,11 @@ import { EmptyState } from '@/lib/components/empty-state';
 import { SectionExplainer, LearnPopover } from '@/lib/components/ui/learn-popover';
 import { WorkspaceAccessPane } from '@/lib/panes/workspace-access';
 import { DomainAccessPane } from '@/lib/panes/domain-access';
+import { PdpShadowReportCard } from '@/lib/components/admin/pdp-shadow-report-card';
 import type { Capability } from '@/lib/auth/feature-catalog';
 import type { FeatureGrant } from '@/lib/auth/feature-gate';
 
-type PermTab = 'features' | 'workspace-access' | 'domain-access';
+type PermTab = 'features' | 'workspace-access' | 'domain-access' | 'pdp-shadow';
 
 const useStyles = makeStyles({
   intro: { color: tokens.colorNeutralForeground3, marginBottom: tokens.spacingVerticalL },
@@ -156,6 +158,7 @@ export default function PermissionsPage() {
         <Tab value="features" icon={<ShieldTask24Regular />}>Feature permissions</Tab>
         <Tab value="workspace-access" icon={<PeopleTeam24Regular />}>Workspace access</Tab>
         <Tab value="domain-access" icon={<Organization24Regular />}>Domain access</Tab>
+        <Tab value="pdp-shadow" icon={<ShieldQuestion24Regular />}>PDP shadow report</Tab>
       </TabList>
 
       {/* Keep both mounted to preserve each tab's loaded state; hide the inactive one. */}
@@ -168,6 +171,16 @@ export default function PermissionsPage() {
       <div className={tab === 'domain-access' ? undefined : styles.hidden}>
         <DomainAccessPane />
       </div>
+      {/* Lazy-mount so the Cosmos cross-partition report only runs when opened. */}
+      {tab === 'pdp-shadow' && (
+        <div>
+          <Body1 className={styles.intro}>
+            What the policy decision point <strong>would</strong> decide against real traffic while
+            {' '}<code>LOOM_PDP_ENFORCE=shadow</code> — vet denies and divergences here before turning enforcement on.
+          </Body1>
+          <PdpShadowReportCard />
+        </div>
+      )}
     </AdminShell>
   );
 }

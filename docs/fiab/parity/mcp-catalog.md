@@ -14,12 +14,15 @@ one-click catalog + deploy wizard. Grounded in Microsoft Learn:
 Vetting source: `temp/mcp-gov-research.md` (top-25 gov-safe MCP servers,
 permissive licenses only) and `docs/adr/0026-ms-learn-mcp-as-external-grounding.md`.
 
-> Reconciliation note (audit-t45): two parallel implementations of this surface
-> existed. The canonical one — kept and documented here — is the **per-server
-> `configSchema` + per-field Key Vault secret** path. The older single-`secretEnv`
-> implementation (`lib/azure/mcp-catalog.ts`, `lib/azure/mcp-deploy-client.ts`,
-> `lib/components/admin/mcp-catalog-panel.tsx`, `app/api/admin/mcp-catalog/*`)
-> was removed so the panel renders ONE coherent deploy surface (`ui-parity.md`).
+> Reconciliation note (audit-t45; completed in the 2026-07-22 wiring cleanup):
+> two parallel implementations of this surface existed. The canonical one —
+> kept and documented here — is the **per-server `configSchema` + per-field Key
+> Vault secret** path. The older single-`secretEnv` implementation was removed:
+> the duplicate `app/api/admin/mcp-catalog/*` route family at audit-t45, and
+> the orphaned `lib/azure/mcp-deploy-client.ts` +
+> `lib/components/admin/mcp-catalog-panel.tsx` (never mounted) in the wiring
+> cleanup. `lib/azure/mcp-catalog.ts` is retained — its gov-vetted `MCP_CATALOG`
+> powers the Sovereign Agent Mesh egress policy (`lib/copilot/agent-registry.ts`).
 
 ## Capability inventory (the deploy lifecycle a platform admin performs)
 
