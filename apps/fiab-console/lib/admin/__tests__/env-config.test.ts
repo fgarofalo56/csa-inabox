@@ -181,9 +181,10 @@ describe('admin/env-config registry', () => {
     // references are shared with svc-aoai / svc-aml.
     // 143 base → WS-5.2 svc-a2a-egress added LOOM_A2A_EGRESS_ALLOW (144) →
     // WS-10.1 svc-lcu-autopilot added LOOM_AUTOPILOT_MODE + LOOM_CAPACITY_LCU
-    // (146) → WS-9 svc-agent-mesh adds LOOM_MESH_PROFILE (the mesh egress profile
-    // override; LOOM_A2A_EGRESS_ALLOW is already counted from WS-5.2) — one NEW.
-    expect(EDITABLE_ENV.length).toBe(147);
+    // (146) → WS-9 svc-agent-mesh adds LOOM_MESH_PROFILE (147) → WS-C2
+    // svc-report-subscriptions adds LOOM_REPORT_SUBSCRIPTIONS_FUNCTION +
+    // LOOM_SUBSCRIPTION_LOGIC_APP_NAME (149) — two NEW.
+    expect(EDITABLE_ENV.length).toBe(149);
   });
 
   it('surfaces the wave-2 env vars as settable (previously dropped by the whitelist)', () => {
