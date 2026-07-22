@@ -145,7 +145,11 @@ resource bs 'Microsoft.Storage/storageAccounts/blobServices@2025-01-01' = {
   } : {})
 }
 
-var containers = ['bronze', 'silver', 'gold', 'landing', 'checkpoints', 'csv-imports', 'org-visuals']
+// uat-results: the in-VNet UAT + V1 synthetic-journey runners upload run
+// artifacts (report.json / verdicts.ndjson / screenshots / traces) here under
+// uat-runs/** — created day-one so LOOM_UAT_RESULTS_ACCOUNT/CONTAINER work on
+// a fresh push-button deploy (the runner's createIfNotExists also covers it).
+var containers = ['bronze', 'silver', 'gold', 'landing', 'checkpoints', 'csv-imports', 'org-visuals', 'uat-results']
 
 resource sc 'Microsoft.Storage/storageAccounts/blobServices/containers@2025-01-01' = [for c in containers: {
   parent: bs
@@ -154,6 +158,37 @@ resource sc 'Microsoft.Storage/storageAccounts/blobServices/containers@2025-01-0
     publicAccess: 'None'
   }
 }]
+
+// V1 retention (loom-next-level rev-2 SRE F11): synthetic/UAT run artifacts
+// accumulate fast (up to 4 runs/hr per cloud) — age them out at ~30 days.
+// Scoped to the uat-results container's uat-runs/ prefix ONLY; the medallion
+// lake containers (bronze/silver/gold/landing) are untouched.
+resource lifecycle 'Microsoft.Storage/storageAccounts/managementPolicies@2025-01-01' = {
+  parent: sa
+  name: 'default'
+  properties: {
+    policy: {
+      rules: [
+        {
+          name: 'uat-results-30d'
+          enabled: true
+          type: 'Lifecycle'
+          definition: {
+            filters: {
+              blobTypes: ['blockBlob']
+              prefixMatch: ['uat-results/uat-runs/']
+            }
+            actions: {
+              baseBlob: {
+                delete: { daysAfterModificationGreaterThan: 30 }
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}
 
 // Private endpoint — blob
 resource peBlob 'Microsoft.Network/privateEndpoints@2024-05-01' = {

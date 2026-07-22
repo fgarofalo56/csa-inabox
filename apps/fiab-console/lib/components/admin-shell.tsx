@@ -26,7 +26,7 @@ import {
 interface Section { href: string; label: string; description: string; icon: FluentIcon; }
 
 const SECTIONS: Section[] = [
-  { href: '/admin/health', label: 'Health & self-audit', icon: Heart24Regular, description: 'Self-review: identity, data plane, Azure services, permissions, and security posture — with one-click healer (admin-approved) for fixable issues.' },
+  { href: '/admin/health', label: 'Health & Reliability', icon: Heart24Regular, description: 'The one reliability hub: self-audit (identity, data plane, Azure services, permissions, security posture) with a one-click healer, backend exercise probes, and the synthetic user-journey monitor (Journeys tab — six real journeys incl. a TRUE MSAL login probe, every 15 min).' },
   { href: '/admin/tenant-settings', label: 'Tenant settings', icon: Settings24Regular, description: 'Per-area switches (Power BI, Fabric, OneLake, Real-Time, AI, Mirroring, Git).' },
   { href: '/admin/capacity', label: 'Capacity & compute', icon: Server24Regular, description: 'Underlying Azure services Loom orchestrates: ACA, Databricks, Synapse, ADF, ADLA, AML, Cosmos, ACR.' },
   { href: '/admin/scaling', label: 'Scale by SKU', icon: GaugeRegular, description: 'Scale Fabric, Synapse, ADX, Databricks, AI Search, APIM, Cosmos, Container Apps, Foundry — real ARM PATCH from inside Loom.' },

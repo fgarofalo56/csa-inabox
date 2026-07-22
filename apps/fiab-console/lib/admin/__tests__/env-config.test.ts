@@ -184,11 +184,15 @@ describe('admin/env-config registry', () => {
     // (146) → WS-9 svc-agent-mesh adds LOOM_MESH_PROFILE (147) → WS-C2
     // svc-report-subscriptions adds LOOM_REPORT_SUBSCRIPTIONS_FUNCTION +
     // LOOM_SUBSCRIPTION_LOGIC_APP_NAME (149) — two NEW → C1 svc-cost-management
-    // adds LOOM_BILLING_SCOPE (150) — the optional billing-account/enrollment
-    // rollup widener (LOOM_SUBSCRIPTION_ID it aliases is already counted) →
-    // S1 svc-secret-expiry adds LOOM_ALERT_ACTION_GROUP_ID (the ONE shared
-    // derived alert sink, O1 convention) + LOOM_SECRET_EXPIRY_WARN_DAYS (152).
-    expect(EDITABLE_ENV.length).toBe(152);
+    // adds LOOM_BILLING_SCOPE (150) → S1 svc-secret-expiry adds
+    // LOOM_ALERT_ACTION_GROUP_ID (the ONE shared derived alert sink, O1
+    // convention) + LOOM_SECRET_EXPIRY_WARN_DAYS (152) → V1 (observability
+    // fragment) adds LOOM_SYNTHETIC_MONITOR_ENABLED + LOOM_UAT_RESULTS_ACCOUNT
+    // + LOOM_UAT_RESULTS_CONTAINER (svc-synthetic-monitor) and
+    // SYNTHETIC_LOGIN_UPN + SYNTHETIC_LOGIN_SECRET (svc-synthetic-login,
+    // secret-typed honest-skip); the shared LOOM_ALERT_ACTION_GROUP_ID is
+    // already counted (157).
+    expect(EDITABLE_ENV.length).toBe(157);
   });
 
   it('surfaces the wave-2 env vars as settable (previously dropped by the whitelist)', () => {
@@ -268,6 +272,10 @@ describe('admin/env-config registry', () => {
       'LOOM_PLAN_BACKING_SQL_DATABASE', 'LOOM_PLAN_BACKING_SQL_SERVER',
       'LOOM_RESULT_CACHE_REDIS',
       'LOOM_TRANSLATOR_ENDPOINT', 'LOOM_VISION_ENDPOINT',
+      // V1 svc-synthetic-login — absence is an HONEST SKIP of the J1 MSAL
+      // login probe (minted-session journeys still monitor the app), so the
+      // pair counts as configured day-one.
+      'SYNTHETIC_LOGIN_SECRET', 'SYNTHETIC_LOGIN_UPN',
     ]);
   });
 });

@@ -296,9 +296,25 @@ type eventsConfigT = {
 @description('Event Hubs / Event Grid / business-events settings bag (R0) — RG/sub overrides, Capture pre-fill, schema-registry group, business-events topics.')
 param eventsConfig eventsConfigT = {}
 
-@description('Observability settings bag (R0, reserved) — V1 synthetic-journey monitor, V5 bicep-drift, O1 alert-dispatch and RUM1 client-RUM settings land here as typed properties.')
-#disable-next-line no-unused-params
-param observabilityConfig object = {}
+type observabilityConfigT = {
+  @description('Deploy the V1 scheduled synthetic-journey monitor (loom-synthetic-monitor Container App Job — six real journeys incl. the TRUE MSAL login probe, every 15 min, in-VNet). Default ON (opt-out) per loom_default_on_opt_out; only honored on containerApps + deployAppsEnabled (the loom-uat image carries the specs).')
+  syntheticMonitorEnabled: bool?
+
+  @description('Cron for the synthetic-journey runs. Default every 15 minutes.')
+  syntheticMonitorCron: string?
+
+  @description('Blob container the UAT/synthetic runners upload run artifacts to (LOOM_UAT_RESULTS_CONTAINER). Default uat-results, on the DLZ ADLS account.')
+  uatResultsContainer: string?
+
+  @description('UPN of the least-privilege synthetic automation account for the TRUE MSAL login probe (J1). Empty (default) → J1 records an honest SKIP; the minted-session journeys still monitor the app.')
+  syntheticLoginUpn: string?
+
+  @description('Key Vault secret URI holding the automation account password (e.g. <kvUri>secrets/synthetic-login-secret). Empty → J1 skips honestly.')
+  syntheticLoginSecretUri: string?
+}
+
+@description('Observability settings bag (R0) — V1 synthetic-journey monitor settings live here; V5 bicep-drift, O1 alert-dispatch and RUM1 client-RUM settings add properties to observabilityConfigT — never a new top-level param.')
+param observabilityConfig observabilityConfigT = {}
 
 type drConfigT = {
   @description('DR0 — continuous-backup (PITR) tier for the Console Loom store (loom-console-cosmos.bicep). Continuous30Days = GA default with a drill-wide restore window; Continuous7Days is the documented-preview lower tier. Tier switch is a hot in-place ARM update (no recreate/downtime; see the module description for the Learn-cited 7↔30 window semantics).')
@@ -352,6 +368,12 @@ var loomEventGridBusinessTopic = eventsConfig.?loomEventGridBusinessTopic ?? 'lo
 var loomEventHubBusinessHub = eventsConfig.?loomEventHubBusinessHub ?? 'loom-telemetry'
 var loomEventHubReceiveEnabled = eventsConfig.?loomEventHubReceiveEnabled ?? true
 var loomBusinessEventsContainer = eventsConfig.?loomBusinessEventsContainer ?? 'business-event-types'
+// V1 (observabilityConfig bag) — synthetic-journey monitor shims (default-ON).
+var syntheticMonitorEnabled = observabilityConfig.?syntheticMonitorEnabled ?? true
+var syntheticMonitorCron = observabilityConfig.?syntheticMonitorCron ?? '*/15 * * * *'
+var uatResultsContainer = observabilityConfig.?uatResultsContainer ?? 'uat-results'
+var syntheticLoginUpn = observabilityConfig.?syntheticLoginUpn ?? ''
+var syntheticLoginSecretUri = observabilityConfig.?syntheticLoginSecretUri ?? ''
 
 @description('Deploy the shared Data API builder preview runtime that the DAB editor\'s live REST/GraphQL testers point at via LOOM_DAB_PREVIEW_URL.')
 param dabRuntimeEnabled bool = false
@@ -3230,13 +3252,24 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // Defaults to the deployment location so Gov (usgov*) deployments do
             // NOT fall back to the Commercial 'eastus' default in monitor-client.ts.
             { name: 'LOOM_ALERT_LOCATION', value: location }
-            // S1 — the ONE shared derived alert sink (O1 convention): the
-            // loom-default-alerts action group. Consumed by the secret-expiry
-            // monitor + every future scheduled alerter; the Console surfaces it
-            // on /admin/health (Secret & credential health) + /admin/env-config.
+            // The ONE shared derived alert var (loom-next-level rev-2 alert
+            // standard): the ARM id of monitoring-default-alerts.bicep's
+            // defaultActionGroup (loom-default-alerts). Consumed by S1
+            // secret-expiry + V1 synthetic journeys and later by DR4/C3/A11/O1
+            // — one action group, no per-item groups, no parallel Logic Apps.
+            // Empty when the default alert set is skipped
+            // (svc-alert-action-group shows the honest gate).
             { name: 'LOOM_ALERT_ACTION_GROUP_ID', value: defaultAlerts.outputs.actionGroupId }
             // Secret-expiry outer warning threshold (60/30/7 bands; S1).
             { name: 'LOOM_SECRET_EXPIRY_WARN_DAYS', value: string(secretExpiryWarnDays) }
+            // V1 synthetic-journey monitor (observabilityConfig bag). The Journeys
+            // tab + /api/admin/synthetic-runs read run artifacts from this Blob
+            // location (uat-runs/synthetic/<runId>/); the loom-uat + synthetic
+            // ACA jobs upload to the same account/container. Account empty when
+            // no DLZ ADLS is bound → svc-synthetic-monitor honest-gates.
+            { name: 'LOOM_SYNTHETIC_MONITOR_ENABLED', value: string(syntheticMonitorEnabled) }
+            { name: 'LOOM_UAT_RESULTS_ACCOUNT', value: loomStorageAccount }
+            { name: 'LOOM_UAT_RESULTS_CONTAINER', value: uatResultsContainer }
             // ARM scope override for sovereign clouds (GCC-High / IL5). The ARM
             // endpoint itself is emitted once above (effectiveArmEndpoint).
             { name: 'LOOM_ARM_SCOPE', value: loomArmScope }
@@ -4981,6 +5014,43 @@ module wrangler '../integration/wrangler.bicep' = if (wranglerActive) {
     acrLoginServer: registry.outputs.acrLoginServer
     image: '${registry.outputs.acrLoginServer}/loom-wrangler-host:${appImageTags.wrangler}'
     targetPort: 8080
+    complianceTags: complianceTags
+  }
+}
+
+// =====================================================================
+// V1 — synthetic user-journey monitor (loom-next-level WS-V #1).
+// Scheduled Microsoft.App/jobs (every 15 min, in-VNet, console UAMI) running
+// the six real journeys — minted-session paths + the TRUE MSAL login probe
+// that catches the 2026-07-19 secret-drift class. Default-ON (opt-out via
+// observabilityConfig.syntheticMonitorEnabled). Runs the loom-uat image (the
+// console image is slimmed of e2e/); until that image is pushed the scheduled
+// execution fails honestly — build it via deploy-loom-uat-job.sh in the
+// post-deploy app phase. Alerting: the ONE shared action group (rev-2).
+// =====================================================================
+var syntheticMonitorActive = syntheticMonitorEnabled && containerPlatform == 'containerApps' && deployAppsEnabled
+
+module syntheticMonitor 'synthetic-monitor-job.bicep' = if (syntheticMonitorActive) {
+  name: 'synthetic-monitor-job'
+  params: {
+    location: location
+    environmentId: containerPlatformModule.outputs.caeId
+    consoleUamiId: identity.outputs.uamiConsoleId
+    consoleUamiClientId: identity.outputs.uamiConsoleClientId
+    acrLoginServer: registry.outputs.acrLoginServer
+    loomUrl: fdOn ? frontDoor.outputs.frontDoorPublicUrl : 'http://loom-console'
+    cronExpression: syntheticMonitorCron
+    // SESSION_SECRET — the SAME source precedence as the console app's own
+    // session-secret (KV-backed when the entra-app-registration bootstrap wrote
+    // it; else the stable per-RG literal), so minted sessions always validate.
+    sessionSecretKeyVaultSecretUri: sessionSecretKvBacked ? '${keyvault.outputs.keyVaultUri}secrets/session-secret' : ''
+    sessionSecretValue: empty(loomSessionSecret) ? guid(loomGeneratedSecretSeed, 'loom-session-secret-v1') : loomSessionSecret
+    resultsAccount: loomStorageAccount
+    resultsContainer: uatResultsContainer
+    syntheticLoginUpn: syntheticLoginUpn
+    syntheticLoginSecretKeyVaultSecretUri: syntheticLoginSecretUri
+    alertActionGroupId: defaultAlerts.outputs.actionGroupId
+    automationOid: effectiveTenantAdminOid
     complianceTags: complianceTags
   }
 }
