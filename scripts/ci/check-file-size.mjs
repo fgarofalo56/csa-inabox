@@ -174,7 +174,7 @@ const ALLOWLIST = {
   "apps/fiab-console/lib/components/admin-security/purview-panel.tsx": { max: 1700, reason: "pre-existing large module — ratchet-frozen" },
   "apps/fiab-console/lib/editors/azure-services-editors.tsx": { max: 1700, reason: "pre-existing large module — ratchet-frozen" },
   "apps/fiab-console/lib/azure/fabric-client.ts": { max: 1700, reason: "pre-existing large module — ratchet-frozen" },
-  "apps/fiab-console/lib/components/canvas/canvas-node-kit.tsx": { max: 1600, reason: "pre-existing large module — ratchet-frozen" },
+  "apps/fiab-console/lib/components/canvas/canvas-node-kit.tsx": { max: 1620, reason: "pre-existing large module — ratchet-frozen (+20: dark-theme readableAccent glyph boundary fix, 2026-07-22 sweep-2)" },
   "apps/fiab-console/lib/azure/apim-client.ts": { max: 1600, reason: "pre-existing large module — ratchet-frozen" },
   "apps/fiab-console/lib/azure/foundry-cs-client.ts": { max: 1600, reason: "pre-existing large module — ratchet-frozen" },
   "apps/fiab-console/lib/components/onelake/shortcut-wizard.tsx": { max: 1600, reason: "pre-existing large module — ratchet-frozen" },
