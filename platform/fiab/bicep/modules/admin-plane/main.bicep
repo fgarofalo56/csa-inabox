@@ -360,6 +360,11 @@ type observabilityConfigT = {
 
   @description('L3 — cron for the column-lineage extraction pass. Default every 15 minutes (overlap is idempotent — deterministic edge ids + processed-run cache).')
   lineageExtractorCron: string?
+  @description('C3 — deploy the cost-anomaly monitor (loom-cost-anomaly-monitor Container App Job — daily scheduled anomaly evaluation → in-product notifications + shared-action-group email). Default ON (opt-out) per loom_default_on_opt_out; only honored on containerApps + deployAppsEnabled (the loom-uat image carries the runner). Per the estate constraint this is an ACA Job, NOT a Y1 Function.')
+  costAnomalyEnabled: bool?
+
+  @description('C3 — cron (standard 5-field) for the cost-anomaly evaluation. Default daily 06:00 UTC.')
+  costAnomalyCron: string?
 }
 
 @description('Observability settings bag (R0) — V1 synthetic-journey monitor + RUM1 client-RUM settings live here (+ the COST0 program-budget props, consumed at the top-level orchestrator); V5 bicep-drift and O1 alert-dispatch add properties to observabilityConfigT — never a new top-level param.')
@@ -455,6 +460,9 @@ var rumSampleRate = observabilityConfig.?rumSampleRate ?? 100
 // L3 (observabilityConfig bag) — column-lineage extractor shims (default-ON).
 var lineageExtractorEnabled = observabilityConfig.?lineageExtractorEnabled ?? true
 var lineageExtractorCron = observabilityConfig.?lineageExtractorCron ?? '*/15 * * * *'
+// C3 (observabilityConfig bag) — cost-anomaly monitor shims (default-ON, opt-out).
+var costAnomalyEnabled = observabilityConfig.?costAnomalyEnabled ?? true
+var costAnomalyCron = observabilityConfig.?costAnomalyCron ?? '0 6 * * *'
 // I1 (workspaceIdentityConfig bag) — per-workspace identity shims (default off).
 var workspaceIdentityMode = workspaceIdentityConfig.?workspaceIdentityMode ?? 'off'
 var wsIdentitySub = workspaceIdentityConfig.?wsIdentitySub ?? ''
@@ -5217,7 +5225,7 @@ module syntheticMonitor 'synthetic-monitor-job.bicep' = if (syntheticMonitorActi
 // observabilityConfig.lineageExtractorEnabled). Runs the loom-lineage-extractor
 // image (built by scripts/csa-loom/deploy-lineage-extractor-job.sh); until that
 // image is pushed the scheduled execution exits cleanly (honest gate). Parses
-// completed ADF/Synapse Copy-activity translator.mappings → the thread-edges L1
+// completed ADF/Synapse Copy-activity translator.mappings -> the thread-edges L1
 // column model. ACA-job (NOT Y1 Function) per the 2026-07-23 estate constraint.
 // =====================================================================
 var lineageExtractorActive = lineageExtractorEnabled && containerPlatform == 'containerApps' && deployAppsEnabled
@@ -5237,6 +5245,34 @@ module lineageExtractor 'lineage-extractor-job.bicep' = if (lineageExtractorActi
     adfResourceGroup: effAdfRg
     adfSubscriptionId: byoAdfSub
     synapseWorkspace: effSynapseWorkspace
+    complianceTags: complianceTags
+  }
+}
+
+// C3 — cost-anomaly monitor (loom-next-level ws-copilot-cost.md C3).
+// Scheduled Microsoft.App/jobs (daily 06:00 UTC, in-VNet, console UAMI) running
+// e2e/run-cost-anomaly.mjs, which POSTs the console's
+// /api/internal/cost-anomaly/run -- the console then runs the REAL Cost
+// Management pull + the shared cost-anomaly-core detector + loom-notifications
+// writes + the shared-action-group alert dispatch (O1). Default-ON (opt-out via
+// observabilityConfig.costAnomalyEnabled). Runs the loom-uat image (the console
+// image is slimmed of e2e/); until that image is pushed the scheduled execution
+// fails honestly -- build it via deploy-loom-uat-job.sh in the post-deploy app
+// phase. Per the estate constraint this is an ACA Job, NOT a Y1 Function.
+// =====================================================================
+var costAnomalyActive = costAnomalyEnabled && containerPlatform == 'containerApps' && deployAppsEnabled
+
+module costAnomalyMonitor 'cost-anomaly-monitor-job.bicep' = if (costAnomalyActive) {
+  name: 'cost-anomaly-monitor-job'
+  params: {
+    location: location
+    environmentId: containerPlatformModule.outputs.caeId
+    consoleUamiId: identity.outputs.uamiConsoleId
+    consoleUamiClientId: identity.outputs.uamiConsoleClientId
+    acrLoginServer: registry.outputs.acrLoginServer
+    loomUrl: fdOn ? frontDoor.outputs.frontDoorPublicUrl : 'http://loom-console'
+    cronExpression: costAnomalyCron
+    internalToken: loomInternalToken
     complianceTags: complianceTags
   }
 }

@@ -406,6 +406,9 @@ let _canvasPresence: Container | null = null;
 // container never gates anything (loom_default_on_opt_out). See
 // lib/admin/runtime-flags.ts for the registry + audited toggle path.
 let _runtimeFlags: Container | null = null;
+// C3 — cost-anomaly watch rules (loom-cost-anomaly-rules). One+ doc per cost
+// scope, PK /scope → single-partition per-scope reads for the scheduled monitor.
+let _costAnomalyRules: Container | null = null;
 let _ensured = false;
 
 /**
@@ -1155,6 +1158,11 @@ async function ensure() {
   _copilotEvals = withMigrations((await database.containers.createIfNotExists({
     id: 'loom-copilot-evals', partitionKey: { paths: ['/surface'] }, defaultTtl: -1,
   })).container, 'loom-copilot-evals');
+  // C3 — cost-anomaly watch rules (one+ per cost scope), PK /scope so the
+  // scheduled monitor's per-scope read is single-partition. No TTL — durable
+  // until an admin deletes/edits. ARM-provisioned in cosmos.bicep's
+  // loomContainers; this createIfNotExists is the hotfix fallback.
+  _costAnomalyRules = await mk('loom-cost-anomaly-rules', '/scope');
   _ensured = true;
 }
 
@@ -1292,6 +1300,8 @@ export async function canvasCommentsContainer(): Promise<Container> { await ensu
 export async function canvasPresenceContainer(): Promise<Container> { await ensure(); return _canvasPresence!; }
 /** FLAG0 — runtime kill-switch flag docs, PK /id (missing doc = default-ON). */
 export async function runtimeFlagsContainer(): Promise<Container> { await ensure(); return _runtimeFlags!; }
+/** C3 — cost-anomaly watch rules (loom-cost-anomaly-rules), PK /scope. */
+export async function costAnomalyRulesContainer(): Promise<Container> { await ensure(); return _costAnomalyRules!; }
 
 // Foundation admin containers (shared cloud-endpoints resolver task).
 /** Admin Workspace Catalog — one row per Loom-managed workspace, PK /tenantId. */

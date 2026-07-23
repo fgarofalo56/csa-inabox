@@ -191,6 +191,21 @@ export const AZURE_SERVICES_GATE_META: Record<string, GateMeta> = {
     loaders: { LOOM_AZURE_MAPS_CLIENT_ID: L.maps },
     legacyCodes: ['maps_not_configured'],
   },
+  // C3 — the scheduled cost-anomaly monitor (default-ON; the ACA Job + the
+  // shared Cost Management Reader grant + the shared action group). Fix-it
+  // 'wizard' (deploy/enable the monitor job) — the anomaly-rule thresholds +
+  // recipients are edited on /admin/finops.
+  'svc-cost-anomaly-monitor': {
+    surfaces: [
+      { path: '/admin/finops', label: 'FinOps hub — Anomaly feed + rules' },
+      { path: '/monitor', label: 'Monitor hub — Cost tab (anomalies)' },
+    ],
+    fixit: {
+      kind: 'wizard',
+      grantNote: 'The cost-anomaly monitor is default-ON: a push-button deploy provisions the loom-cost-anomaly-monitor Container App Job (modules/admin-plane/cost-anomaly-monitor-job.bicep), which reuses the C1 Cost Management Reader grant + the shared loom-default-alerts action group. On an existing estate, redeploy the admin plane (observabilityConfig.costAnomalyEnabled=true) to add the job; edit thresholds/recipients on /admin/finops. Opt out with LOOM_COST_ANOMALY_ENABLED=false.',
+    },
+    autoResolveNote: 'Unset LOOM_COST_ANOMALY_ENABLED = default-ON: the bicep-provisioned monitor job seeds a whole-estate 3σ watch and alerts via the shared action group + in-product notifications with zero operator input.',
+  },
   'svc-loom-capacity-broker': {
     surfaces: [{ path: '/admin/usage-chargeback', label: 'LCU admission control (scale-out)' }],
     fixit: { kind: 'env-picker' },

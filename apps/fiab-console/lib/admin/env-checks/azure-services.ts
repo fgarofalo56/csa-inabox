@@ -277,6 +277,33 @@ export const AZURE_SERVICES_ENV_CHECKS: EnvSpec[] = [
     },
   },
   {
+    // C3 (loom-next-level) — the scheduled cost-anomaly monitor. An IN-VNET ACA
+    // Job (loom-cost-anomaly-monitor, NOT a Y1 Function per the estate
+    // constraint) evaluates the enabled loom-cost-anomaly-rules daily against
+    // the REAL Cost Management daily series, writes in-product notifications
+    // (loom-notifications) and dispatches email via the shared action group
+    // (LOOM_ALERT_ACTION_GROUP_ID, O1). Default-ON per loom_default_on_opt_out:
+    // unset LOOM_COST_ANOMALY_ENABLED = enabled, the job is bicep-provisioned and
+    // the Cost Management Reader grant is shared with svc-cost-management, so the
+    // monitor runs day-one with zero operator input; set =false to opt out.
+    id: 'svc-cost-anomaly-monitor', category: 'azure-services', title: 'Cost-anomaly monitor (FinOps — scheduled spike detection + alerts)', severity: 'optional',
+    required: ['LOOM_COST_ANOMALY_ENABLED'], warnOnMiss: true, optionalDefault: true,
+    optionalDefaultDetail: 'the cost-anomaly monitor runs day-one with fully-functional defaults — the loom-cost-anomaly-monitor Container App Job is bicep-provisioned (default-ON), seeds a whole-estate 3σ watch rule, and reuses the C1 Cost Management Reader grant + the shared action group; a firing anomaly writes an in-product notification and dispatches email with zero config.',
+    remediation: "Optional opt-out only — the monitor works unset (default-ON). The scheduled loom-cost-anomaly-monitor Container App Job is deployed by modules/admin-plane/cost-anomaly-monitor-job.bicep (enable flag rides the observabilityConfig bag). It reuses the C1 'Cost Management Reader' grant (cost-management-reader-rbac.bicep) to pull cost, the shared loom-default-alerts action group (LOOM_ALERT_ACTION_GROUP_ID) to email, and writes in-product notifications the console reads. Edit thresholds + recipients on /admin/finops (Anomaly rules). Set LOOM_COST_ANOMALY_ENABLED=false to opt out. Tune the schedule via observabilityConfig.costAnomalyCron (default daily 06:00 UTC).",
+    provisionedBy: 'modules/admin-plane/cost-anomaly-monitor-job.bicep (scheduled Microsoft.App/jobs) + modules/admin-plane/main.bicep (observabilityConfig bag → costAnomalyEnabled / costAnomalyCron); reuses the C1 cost-management-reader-rbac.bicep grant + the monitoring-default-alerts.bicep action group',
+    role: 'Cost Management Reader (Console UAMI) at subscription scope — the shared C1 bicep grant; the ACA Job runs as the same Console UAMI (Cosmos Data Contributor for the rules/notifications writes)',
+    docs: 'docs/fiab/runbooks/cost-anomaly.md',
+    // X-MATRIX (C3 per-cloud): the detector + Cosmos writes + in-product
+    // notifications are cloud-portable; email rides the shared action group
+    // (Commercial + Gov .us). IL5: Cost Management endpoint is unreachable →
+    // the monitor runs against the C1 CSV-ingest series and the in-product
+    // notification is the primary channel (external email honest-gated).
+    availability: {
+      commercial: 'ga', gccHigh: 'ga', il5: 'limited',
+      fallbackNote: 'Gov GCC-High: runs identically on management.usgovcloudapi.net + the .us action group. IL5/air-gapped: Cost Management is unreachable — the monitor evaluates the C1 CSV-export-ingest daily series and the in-product notification (loom-notifications) is the primary channel; external email is honest-gated when no action-group email receiver is reachable in-boundary.',
+    },
+  },
+  {
     id: 'svc-databricks-sql', category: 'azure-services', title: 'Databricks SQL warehouse (DQ monitor / MDM / DLP schemas)', severity: 'optional',
     required: ['LOOM_DATABRICKS_SQL_WAREHOUSE_ID'], warnOnMiss: true,
     remediation: 'Set LOOM_DATABRICKS_SQL_WAREHOUSE_ID (with LOOM_DATABRICKS_HOSTNAME) so DQ monitoring, MDM match-merge, and governance DLP schema surfaces run against a real Databricks SQL warehouse (warehouseConfigGate). Synapse covers the warehouse item type without it.',

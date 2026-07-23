@@ -199,6 +199,12 @@ var loomContainers = [
   // createIfNotExists in cosmos-client.ts ensure() + the Function's client is
   // the hotfix fallback.
   { name: 'loom-copilot-evals', partitionKey: '/surface', ttl: -1 }
+  // C3 (loom-next-level) — cost-anomaly watch rules read by the scheduled
+  // cost-anomaly monitor (ACA Job → /api/internal/cost-anomaly/run) and edited
+  // on /admin/finops. PK /scope → the monitor's per-scope read is
+  // single-partition. No TTL (durable until an admin deletes/edits).
+  // createIfNotExists in cosmos-client.ts ensure() is the hotfix fallback.
+  { name: 'loom-cost-anomaly-rules', partitionKey: '/scope' }
   // Tenant topology (audit-t157). One doc per tenant (id='tenant-topology')
   // holding the deployed hub's coordinates (VNet/LAW/DNS/ADX/Cosmos + Console
   // UAMI ids) written by the tenant deploy's post-bootstrap. The Setup Wizard
