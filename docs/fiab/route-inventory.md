@@ -13,12 +13,12 @@ same classic + WS-D1 toolkit export styles).
 
 | Metric | Count |
 | --- | ---: |
-| Total routes | 1567 |
+| Total routes | 1570 |
 | Public (no session) | 112 |
 | Session-only | 571 |
 | Owner-scoped | 632 |
-| Admin | 252 |
-| Gated (backend config) | 514 |
+| Admin | 255 |
+| Gated (backend config) | 516 |
 | Areas | 104 |
 
 **Auth scope** — `public`: no session check; `session-only`: signed-in but
@@ -123,6 +123,7 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `admin/copilot-quality/route.ts` | GET | admin |  | — |
 | `admin/copilot-quality/run/route.ts` | POST | admin | ● | Cosmos |
 | `admin/copilot-quality/search/route.ts` | GET | admin |  | — |
+| `admin/copilot-quality/tier/route.ts` | GET | admin |  | — |
 | `admin/copilot-usage/route.ts` | GET | admin |  | Azure Monitor |
 | `admin/copilot/memory/[id]/route.ts` | DELETE | admin |  | — |
 | `admin/copilot/memory/audit/route.ts` | GET | admin |  | — |
@@ -240,7 +241,9 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `admin/sensitivity-labels/route.ts` | GET POST DELETE | admin |  | Cosmos |
 | `admin/slo/route.ts` | GET | admin |  | — |
 | `admin/spark-telemetry/audit/route.ts` | GET POST | admin |  | — |
+| `admin/spark/chaos/route.ts` | POST | admin | ● | — |
 | `admin/spark/health/route.ts` | GET | admin | ● | Synapse |
+| `admin/spark/recover/route.ts` | GET POST | admin | ● | — |
 | `admin/synthetic-runs/route.ts` | GET | admin | ● | — |
 | `admin/tenant-settings/groups/route.ts` | GET | admin | ● | — |
 | `admin/tenant-settings/route.ts` | GET PUT | admin |  | Cosmos |
