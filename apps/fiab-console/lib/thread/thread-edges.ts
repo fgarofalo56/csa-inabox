@@ -138,35 +138,52 @@ export async function recordThreadEdge(session: SessionPayload, input: RecordEdg
     if (process.env.LOOM_PURVIEW_ACCOUNT && edgeId) {
       void (async () => {
         try {
-          const { createAtlasLineage } = await import('@/lib/azure/purview-client');
+          const { createAtlasLineage, createAtlasColumnLineage } = await import('@/lib/azure/purview-client');
+          const { loomAtlasQualifiedName } = await import('@/lib/azure/purview-autoonboard');
           const { itemsContainer } = await import('@/lib/azure/cosmos-client');
           const items = await itemsContainer();
           // Resolve both endpoints' purviewGuid from their Cosmos item state.
           // toExternal items are not Loom items — skip Purview emit for them.
           if (input.toExternal) return;
+          type EndpointRow = { state?: { purviewGuid?: string }; workspaceId?: string; itemType?: string };
+          const endpointQuery = (id: string) => items.items
+            .query<EndpointRow>({
+              query: 'SELECT c.state, c.workspaceId, c.itemType FROM c WHERE c.id = @id',
+              parameters: [{ name: '@id', value: id }],
+            })
+            .fetchAll();
           const [fromRead, toRead] = await Promise.allSettled([
-            items.items
-              .query<{ state?: { purviewGuid?: string } }>({
-                query: 'SELECT c.state FROM c WHERE c.id = @id',
-                parameters: [{ name: '@id', value: input.fromItemId }],
-              })
-              .fetchAll(),
-            items.items
-              .query<{ state?: { purviewGuid?: string } }>({
-                query: 'SELECT c.state FROM c WHERE c.id = @id',
-                parameters: [{ name: '@id', value: input.toItemId }],
-              })
-              .fetchAll(),
+            endpointQuery(input.fromItemId),
+            endpointQuery(input.toItemId),
           ]);
-          const fromGuid = fromRead.status === 'fulfilled'
-            ? fromRead.value.resources?.[0]?.state?.purviewGuid
-            : undefined;
-          const toGuid = toRead.status === 'fulfilled'
-            ? toRead.value.resources?.[0]?.state?.purviewGuid
-            : undefined;
+          const fromRow = fromRead.status === 'fulfilled' ? fromRead.value.resources?.[0] : undefined;
+          const toRow = toRead.status === 'fulfilled' ? toRead.value.resources?.[0] : undefined;
+          const fromGuid = fromRow?.state?.purviewGuid;
+          const toGuid = toRow?.state?.purviewGuid;
           // Skip emit when either GUID is missing — Purview lineage requires
           // both endpoints to exist as Atlas entities with known GUIDs.
           if (!fromGuid || !toGuid) return;
+
+          // L4 — when the edge carries column mappings AND both endpoints'
+          // Atlas qualifiedNames are reconstructable, emit process COLUMN
+          // lineage (the columnMapping attribute); else the entity-grain edge.
+          const cols = input.columnMappings?.filter((m) => m.fromColumn && m.toColumn) || [];
+          if (cols.length && fromRow?.workspaceId && fromRow?.itemType && toRow?.workspaceId && toRow?.itemType) {
+            const sourceQN = loomAtlasQualifiedName(tenantId, fromRow.workspaceId, fromRow.itemType, input.fromItemId);
+            const sinkQN = loomAtlasQualifiedName(tenantId, toRow.workspaceId, toRow.itemType, input.toItemId);
+            await createAtlasColumnLineage({
+              inputs: [fromGuid],
+              outputs: [toGuid],
+              processQualifiedName: `loom://process/${edgeId}`,
+              processName: `${input.fromName || input.fromItemId} → ${input.toName || input.toItemId} (${input.action})`,
+              datasetColumnMappings: [{
+                sourceDatasetQualifiedName: sourceQN,
+                sinkDatasetQualifiedName: sinkQN,
+                columns: cols.map((m) => ({ source: m.fromColumn, sink: m.toColumn })),
+              }],
+            });
+            return;
+          }
           await createAtlasLineage({
             inputs: [fromGuid],
             outputs: [toGuid],

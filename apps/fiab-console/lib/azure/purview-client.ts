@@ -74,6 +74,24 @@ import {
 import { discoverResourceCoordsByName } from './resource-graph-coords';
 import { derivePurviewArmResourceId, purviewArmProviderForKind } from './purview-source-mapping';
 import { dfsUrl, getBlobSuffix } from './cloud-endpoints';
+// L4 — column-lineage pure helpers/types live in a sibling module
+// (extend-then-decompose; this module is ratchet-frozen). Re-exported below so
+// the public purview-client surface is unchanged for callers.
+import {
+  buildColumnMappingAttribute,
+  parseAtlasColumnMapping,
+  type PurviewColumnEdge,
+  type DatasetColumnMapping,
+} from './purview-column-lineage';
+export {
+  buildColumnMappingAttribute,
+  parseAtlasColumnMapping,
+} from './purview-column-lineage';
+export type {
+  AtlasColumnMap,
+  DatasetColumnMapping,
+  PurviewColumnEdge,
+} from './purview-column-lineage';
 
 const PURVIEW_SCOPE = 'https://purview.azure.net/.default';
 
@@ -487,6 +505,9 @@ export interface PurviewLineageGraph {
   baseEntityGuid: string;
   guidEntityMap: Record<string, PurviewLineageNode>;
   relations: PurviewLineageEdge[];
+  /** L4 — column-grain edges parsed from Process `columnMapping` attributes.
+   *  Absent/empty on entity-grain-only graphs (fully backward compatible). */
+  columnEdges?: PurviewColumnEdge[];
 }
 
 export interface PurviewDataQualityRule {
@@ -720,6 +741,10 @@ export async function getLineageSubgraph(guid: string, depth = 3): Promise<Purvi
   const j = await readJson<any>(res);
   if (!j) return { baseEntityGuid: guid, guidEntityMap: {}, relations: [] };
   const guidEntityMap: Record<string, PurviewLineageNode> = {};
+  // L4 — parse any inline Process `columnMapping` attribute the lineage response
+  // carries into column-grain edges (no N+1 fetch storm; getProcessColumnMappings
+  // is the targeted read when the attribute isn't inlined).
+  const columnEdges: PurviewColumnEdge[] = [];
   for (const [k, v] of Object.entries(j.guidEntityMap || {})) {
     const e: any = v;
     guidEntityMap[k] = {
@@ -728,13 +753,20 @@ export async function getLineageSubgraph(guid: string, depth = 3): Promise<Purvi
       typeName: e.typeName,
       qualifiedName: e.attributes?.qualifiedName,
     };
+    const cm = e.attributes?.columnMapping;
+    if (cm) columnEdges.push(...parseAtlasColumnMapping(cm, k));
   }
   const relations: PurviewLineageEdge[] = (j.relations || []).map((r: any) => ({
     fromEntityId: r.fromEntityId,
     toEntityId: r.toEntityId,
     relationshipType: r.relationshipId,
   }));
-  return { baseEntityGuid: j.baseEntityGuid || guid, guidEntityMap, relations };
+  return {
+    baseEntityGuid: j.baseEntityGuid || guid,
+    guidEntityMap,
+    relations,
+    ...(columnEdges.length ? { columnEdges } : {}),
+  };
 }
 
 /** Asset detail — GET /datamap/api/atlas/v2/entity/guid/{guid} */
@@ -942,6 +974,108 @@ export async function createAtlasLineage(opts: CreateAtlasLineageOpts): Promise<
   const guidAssignments = j?.guidAssignments || {};
   const processGuid = Object.values(guidAssignments)[0] as string | undefined;
   return processGuid ?? null;
+}
+
+// ============================================================
+// L4 — column-level lineage (classic Data Map process column lineage).
+//   https://learn.microsoft.com/purview/data-gov-classic-lineage-user-guide#process-column-lineage
+//   https://learn.microsoft.com/purview/data-gov-classic-lineage#lineage-granularity
+// The Atlas Process entity carries a `columnMapping` ATTRIBUTE — a JSON string
+// of DatasetMapping+ColumnMapping objects (the ADF-emitted convention) — that
+// Purview renders as per-column arrows in the process's Columns panel.
+// ============================================================
+
+export interface CreateAtlasColumnLineageOpts extends CreateAtlasLineageOpts {
+  /** The per-dataset column maps stamped onto the Process `columnMapping` attr. */
+  datasetColumnMappings: DatasetColumnMapping[];
+}
+
+/**
+ * Write (or upsert) an Atlas `Process` lineage edge WITH column-level lineage —
+ * the L4 counterpart of {@link createAtlasLineage}. Identical entity-grain
+ * inputs/outputs behavior, plus the `columnMapping` attribute so Purview renders
+ * per-column arrows. Best-effort at the call site (returns the process GUID or
+ * null). Falls back to an entity-grain edge automatically when no resolvable
+ * column mapping is supplied.
+ */
+export async function createAtlasColumnLineage(opts: CreateAtlasColumnLineageOpts): Promise<string | null> {
+  purviewAccount();
+  if (!opts.processQualifiedName) throw new PurviewError(400, null, 'processQualifiedName is required');
+  if (!opts.processName) throw new PurviewError(400, null, 'processName is required');
+  const columnMapping = buildColumnMappingAttribute(opts.datasetColumnMappings);
+  const toRef = (guid: string) => ({ guid });
+  const body = {
+    entity: {
+      typeName: 'Process',
+      attributes: {
+        qualifiedName: opts.processQualifiedName,
+        name: opts.processName,
+        inputs: (opts.inputs || []).filter(Boolean).map(toRef),
+        outputs: (opts.outputs || []).filter(Boolean).map(toRef),
+        // Only stamp columnMapping when there is at least one mapped column
+        // (an empty "[]" would clobber a prior column map on re-upsert).
+        ...(columnMapping !== '[]' ? { columnMapping } : {}),
+      },
+    },
+  };
+  const res = await purviewFetch('/datamap/api/atlas/v2/entity', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+  const j = await readJson<any>(res);
+  const guidAssignments = j?.guidAssignments || {};
+  const processGuid = Object.values(guidAssignments)[0] as string | undefined;
+  return processGuid ?? null;
+}
+
+/**
+ * Best-effort bulk-create column sub-entities under a dataset so the column
+ * lineage has endpoints to attach to (hive_column-style children — Learn:
+ * classic Data Map column-level lineage). Uses the Atlas entity/bulk endpoint;
+ * each column is `<datasetQualifiedName>#<columnName>` with a `table`
+ * relationship to the parent dataset. Idempotent (Atlas dedupes on
+ * qualifiedName). Returns the count created/updated; swallows a
+ * type/relationship mismatch (not all dataset types define a column child).
+ */
+export async function ensureColumnEntities(
+  datasetTypeName: string,
+  datasetQualifiedName: string,
+  columns: string[],
+  columnTypeName?: string,
+): Promise<number> {
+  purviewAccount();
+  const cols = [...new Set((columns || []).map((c) => String(c).trim()).filter(Boolean))];
+  if (!datasetTypeName || !datasetQualifiedName || !cols.length) return 0;
+  const colType = columnTypeName || `${datasetTypeName}_column`;
+  const entities = cols.map((name) => ({
+    typeName: colType,
+    attributes: { qualifiedName: `${datasetQualifiedName}#${name}`, name },
+    relationshipAttributes: {
+      table: { typeName: datasetTypeName, uniqueAttributes: { qualifiedName: datasetQualifiedName } },
+    },
+  }));
+  const res = await purviewFetch('/datamap/api/atlas/v2/entity/bulk', {
+    method: 'POST',
+    body: JSON.stringify({ entities }),
+  });
+  // 400 (unknown column type / no table relationship for this dataset type) is a
+  // non-fatal outcome — column lineage still renders off the process columnMapping
+  // attribute; the sub-entities are an enrichment.
+  if (res.status >= 400) return 0;
+  await readJson<unknown>(res);
+  return entities.length;
+}
+
+/**
+ * Read the `columnMapping` attribute off a Process entity by GUID and parse it
+ * into {@link PurviewColumnEdge}s (the targeted READ path). Returns [] when the
+ * process has no column lineage. Best-effort (never throws for a missing attr).
+ */
+export async function getProcessColumnMappings(processGuid: string): Promise<PurviewColumnEdge[]> {
+  if (!processGuid) return [];
+  const detail = await getAssetDetail(processGuid);
+  const attr = detail?.entity?.attributes?.columnMapping;
+  return parseAtlasColumnMapping(attr, processGuid);
 }
 
 /**

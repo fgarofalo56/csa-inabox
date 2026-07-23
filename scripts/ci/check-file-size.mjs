@@ -135,7 +135,7 @@ const ALLOWLIST = {
   "apps/fiab-console/lib/azure/unity-catalog-client.ts": { max: 2900, reason: "pre-existing large module — ratchet-frozen" },
   "apps/fiab-console/lib/editors/phase4/plan-editor.tsx": { max: 2900, reason: "pre-existing large module — ratchet-frozen" },
   "apps/fiab-console/lib/editors/phase4/ontology-editor.tsx": { max: 2900, reason: "large module — WS-4.3 Security tab wiring; heavy markings UI extracted to ontology-security-panel.tsx" },
-  "apps/fiab-console/lib/azure/purview-client.ts": { max: 2800, reason: "pre-existing large module — ratchet-frozen" },
+  "apps/fiab-console/lib/azure/purview-client.ts": { max: 2900, reason: "pre-existing large module — ratchet-frozen. L4 column lineage adds createAtlasColumnLineage/ensureColumnEntities/getProcessColumnMappings (they need the module-private purviewFetch/readJson/getAssetDetail/purviewAccount helpers, so cannot move out); the SDK-free column-map serialize/parse helpers WERE extracted to purview-column-lineage.ts (extend-then-decompose). +100 justified." },
   "apps/fiab-console/lib/components/charts/loom-chart.tsx": { max: 2800, reason: "pre-existing large module — ratchet-frozen" },
   "apps/fiab-console/lib/azure/copilot-orchestrator.ts": { max: 2800, reason: "pre-existing large module — ratchet-frozen" },
   "apps/fiab-console/lib/editors/phase3/eventhouse-editor.tsx": { max: 2800, reason: "pre-existing large module — ratchet-frozen" },
