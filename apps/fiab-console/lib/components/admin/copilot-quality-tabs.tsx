@@ -1,24 +1,31 @@
 'use client';
 
 /**
- * CopilotQualityTabs — the /admin/copilot-quality tab strip (E5 + SRCH1).
- * Per the hub-consolidation rule, Copilot answer quality and federated-search
- * relevance live on ONE page as two tabs (both scored by the same evaluator
- * machinery, both read from Cosmos loom-copilot-evals).
+ * CopilotQualityTabs — the /admin/copilot-quality tab strip (E5 + SRCH1 + E6 + N13).
+ * Per the hub-consolidation rule, every Copilot-quality / LLMOps surface lives on
+ * ONE page: answer quality, federated-search relevance, and tier routing (all
+ * scored by the same evaluator machinery, all read from Cosmos
+ * loom-copilot-evals), plus N13's prompt registry and token budgets — the two
+ * planes WS-E did not cover. No orphan admin tile, no second admin page.
  */
 import { useState } from 'react';
 import { TabList, Tab, makeStyles, tokens } from '@fluentui/react-components';
-import { TargetArrow24Regular, Search24Regular, Router24Regular } from '@fluentui/react-icons';
+import {
+  TargetArrow24Regular, Search24Regular, Router24Regular,
+  DocumentBulletList24Regular, Money24Regular,
+} from '@fluentui/react-icons';
 import { CopilotQualityPanel } from '@/lib/components/admin/copilot-quality-panel';
 import { SearchQualityPanel } from '@/lib/components/admin/search-quality-panel';
 import { TierRoutingPanel } from '@/lib/components/admin/tier-routing-panel';
+import { PromptRegistryPanel } from '@/lib/components/admin/prompt-registry-panel';
+import { TokenBudgetPanel } from '@/lib/components/admin/token-budget-panel';
 
 const useStyles = makeStyles({
   root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL, minWidth: 0 },
   tabs: { marginBottom: tokens.spacingVerticalS },
 });
 
-type TabKey = 'answers' | 'search' | 'tier';
+type TabKey = 'answers' | 'search' | 'tier' | 'prompts' | 'budgets';
 
 export function CopilotQualityTabs() {
   const styles = useStyles();
@@ -33,8 +40,14 @@ export function CopilotQualityTabs() {
         <Tab value="answers" icon={<TargetArrow24Regular />}>Answer quality</Tab>
         <Tab value="search" icon={<Search24Regular />}>Search relevance</Tab>
         <Tab value="tier" icon={<Router24Regular />}>Tier routing</Tab>
+        <Tab value="prompts" icon={<DocumentBulletList24Regular />}>Prompts</Tab>
+        <Tab value="budgets" icon={<Money24Regular />}>Budgets</Tab>
       </TabList>
-      {tab === 'answers' ? <CopilotQualityPanel /> : tab === 'search' ? <SearchQualityPanel /> : <TierRoutingPanel />}
+      {tab === 'answers' ? <CopilotQualityPanel />
+        : tab === 'search' ? <SearchQualityPanel />
+          : tab === 'tier' ? <TierRoutingPanel />
+            : tab === 'prompts' ? <PromptRegistryPanel />
+              : <TokenBudgetPanel />}
     </div>
   );
 }

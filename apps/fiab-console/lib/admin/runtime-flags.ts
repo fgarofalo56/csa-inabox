@@ -214,6 +214,22 @@ export const RUNTIME_FLAGS: readonly RuntimeFlagDef[] = [
     ownerItem: 'N9',
     surface: 'Semantic-model editor → Verified Queries tab (/items/semantic-model/[id])',
   },
+  {
+    id: 'n13-prompt-registry',
+    label: 'Copilot quality — Prompts tab (LLMOps prompt registry)',
+    description:
+      'The N13 "Prompts" tab on /admin/copilot-quality: semver\'d prompt versions with their REAL copilot-evaluator scores, publish (which requests a run from the EXISTING E2 evaluator), and the audited approve / rollback controls. OFF hides the tab body behind a guided notice on the next load (no roll) — the registry Cosmos store, the runtime getActivePrompt() read, and the evaluator itself are unaffected; only this authoring surface is gated. Approval history is never deleted by a flip.',
+    ownerItem: 'N13',
+    surface: '/admin/copilot-quality (Prompts tab)',
+  },
+  {
+    id: 'n13-token-budgets',
+    label: 'Per-workspace / per-agent token budgets (enforcement + attribution)',
+    description:
+      'The N13 token-budget plane: hot-path enforcement in aoai-chat-client (an exhausted workspace/agent budget refuses the turn with an honest 429-class message + Fix-it instead of truncating), the real per-turn spend attribution written to loom-token-budgets, and the /admin/copilot-quality Budgets tab. OFF stops enforcement AND attribution on the very next turn (seconds, no roll) — the estate-wide release valve if a budget ever misfires. Configured budgets and the accumulated usage ledger are retained; the E6 tier router, model selection, and every other part of the turn are unaffected.',
+    ownerItem: 'N13',
+    surface: 'Every Azure OpenAI chat turn (aoai-chat-client hot path) + /admin/copilot-quality (Budgets tab)',
+  },
 ];
 
 /** Union of registered flag ids (`never` while the list is empty). */

@@ -51,6 +51,17 @@ import { buildAoaiBody, type AoaiChatMessage, type AoaiResponseFormat } from './
 import type { TenantCopilotConfig } from '../types/copilot-config';
 import { routeTurnTier, DEFAULT_TASK_TIER_MAP, type ModelTier, type TaskClass } from '@/lib/foundry/model-tier-router';
 import { resolveAoaiCallTarget, aoaiApimHeaders, type AoaiCallTarget } from './aoai-apim-gateway';
+// N13 — per-workspace/per-agent token budgets. Enforced AFTER the E6 tier router
+// has chosen the deployment (the tier is an INPUT here — the price coefficient
+// the spend is attributed at) and BEFORE the real AOAI fetch. Fails open on any
+// subsystem error; only a real, enabled, breached budget refuses.
+import {
+  enforceTokenBudget,
+  recordTurnSpend,
+  resolveAttribution,
+  usageFromResponse,
+  type TokenAttribution,
+} from '@/lib/copilot/token-budget';
 
 // Re-export so unified-client callers can `instanceof`-check the 503 gate
 // without also importing the orchestrator.
@@ -130,8 +141,20 @@ async function withApimFallback<T>(
  * The chosen tier is traced (`[tier-router]`) for server-side attribution; the
  * streaming orchestrator surfaces the tier on the SSE final step for the browser
  * transparency chip.
+ *
+ * N13 RENAME (was `applyTierRouting`, which returned only the target): the body
+ * is verbatim, with `sel.tier` ALSO returned. The E6 router is still invoked
+ * exactly ONCE per turn, with exactly the same inputs and the same escalate-only
+ * semantics; every call site still uses `.target` for the fetch. The extra
+ * `tier` is what N13's token attribution prices the turn's spend at (it selects
+ * the blended coefficient from `lib/copilot/cost-estimate`) — it is an OUTPUT
+ * only and is never fed back into routing, so nothing here can re-route,
+ * re-classify, or override an E6 decision. When an explicit `target` pins the
+ * deployment (the Wave-4 per-call override) routing is skipped exactly as
+ * before, and the tier reported is the caller's hint, else the task class'
+ * default, else 'standard' — used for pricing only.
  */
-function applyTierRouting(
+function routeTurn(
   base: AoaiTarget,
   opts: {
     cfg?: TenantCopilotConfig | null;
@@ -141,8 +164,11 @@ function applyTierRouting(
     messages?: readonly AoaiChatMessage[];
     tools?: readonly unknown[];
   },
-): AoaiTarget {
-  if (opts.target) return base; // explicit target = per-call override; never re-route.
+): { target: AoaiTarget; tier: ModelTier } {
+  if (opts.target) {
+    // Explicit target = per-call override; never re-route (unchanged).
+    return { target: base, tier: opts.tier ?? (opts.taskClass ? DEFAULT_TASK_TIER_MAP[opts.taskClass] : 'standard') };
+  }
   const sel = routeTurnTier({
     cfg: opts.cfg ?? null,
     tier: opts.tier,
@@ -157,9 +183,9 @@ function applyTierRouting(
         `[tier-router] tier=${sel.tier} taskClass=${sel.taskClass} deployment=${sel.deployment} base=${base.deployment}`,
       );
     } catch { /* trace only */ }
-    return { ...base, deployment: sel.deployment };
+    return { target: { ...base, deployment: sel.deployment }, tier: sel.tier };
   }
-  return base;
+  return { target: base, tier: sel.tier };
 }
 
 /**
@@ -234,6 +260,11 @@ export interface AoaiChatOptions {
   /** AIF-12: task class for the tier router when `tier` is not forced. When both
    *  are omitted the tier router is a no-op (the resolved deployment stands). */
   taskClass?: TaskClass;
+  /** N13: workspace/agent this turn is spent on — enforces the token budget and
+   *  attributes the REAL spend. Omitted here, the ambient
+   *  {@link withTokenAttribution} scope is used; with neither, the turn is
+   *  unattributed and unenforced (default-ON / opt-out — unchanged behaviour). */
+  attribution?: TokenAttribution;
 }
 
 /** Options for {@link aoaiChatJson}. */
@@ -261,6 +292,8 @@ export interface AoaiChatRawOptions {
   tier?: ModelTier;
   /** AIF-12: task class for the tier router when `tier` is not forced. */
   taskClass?: TaskClass;
+  /** N13: workspace/agent this turn is spent on (budget + attribution). */
+  attribution?: TokenAttribution;
 }
 
 // ── Text completion ──────────────────────────────────────────────────────────
@@ -276,7 +309,12 @@ export interface AoaiChatRawOptions {
 export async function aoaiChat(opts: AoaiChatOptions): Promise<string> {
   const { messages, temperature, responseFormat } = opts;
   const maxCompletionTokens = opts.maxCompletionTokens ?? defaultMaxCompletionTokens(opts);
-  const target = applyTierRouting(opts.target ?? (await resolveAoaiTarget(opts.cfg ?? null)), { ...opts, messages });
+  const routing = routeTurn(opts.target ?? (await resolveAoaiTarget(opts.cfg ?? null)), { ...opts, messages });
+  const target = routing.target;
+  // N13 — budget check AFTER routing (the tier prices the spend), BEFORE the
+  // fetch. Throws the honest 429-class TokenBudgetExceededError on a breach.
+  const attribution = resolveAttribution(opts.attribution);
+  await enforceTokenBudget(attribution);
   const token = await aoaiToken();
   return withApimFallback(target, async (call) => {
     const url = chatUrl(call);
@@ -305,6 +343,10 @@ export async function aoaiChat(opts: AoaiChatOptions): Promise<string> {
       throw new AoaiResponseError(`AOAI ${res.status}: ${t.slice(0, 300)}`);
     }
     const j = await res.json();
+    // N13 — attribute the REAL usage the response reported (never an invented
+    // estimate; best-effort, never fails a turn that already succeeded).
+    const usage = usageFromResponse(j);
+    if (usage) await recordTurnSpend(attribution, { model: call.deployment, tier: routing.tier, usage });
     return String(j?.choices?.[0]?.message?.content ?? '');
   });
 }
@@ -323,7 +365,11 @@ export async function aoaiChatJson<T = Record<string, unknown>>(opts: AoaiChatJs
   const { messages, temperature } = opts;
   const maxCompletionTokens = opts.maxCompletionTokens ?? defaultMaxCompletionTokens(opts);
   const responseFormat: AoaiResponseFormat = opts.responseFormat ?? 'json_object';
-  const target = applyTierRouting(opts.target ?? (await resolveAoaiTarget(opts.cfg ?? null)), { ...opts, messages });
+  const routing = routeTurn(opts.target ?? (await resolveAoaiTarget(opts.cfg ?? null)), { ...opts, messages });
+  const target = routing.target;
+  // N13 — budget check AFTER routing, BEFORE the fetch (honest 429 on breach).
+  const attribution = resolveAttribution(opts.attribution);
+  await enforceTokenBudget(attribution);
   const token = await aoaiToken();
   return withApimFallback(target, async (call) => {
     const url = chatUrl(call);
@@ -352,6 +398,9 @@ export async function aoaiChatJson<T = Record<string, unknown>>(opts: AoaiChatJs
       throw new AoaiResponseError(`AOAI ${res.status}: ${t.slice(0, 300)}`);
     }
     const j = await res.json();
+    // N13 — attribute the REAL usage the response reported.
+    const usage = usageFromResponse(j);
+    if (usage) await recordTurnSpend(attribution, { model: call.deployment, tier: routing.tier, usage });
     const raw = String(j?.choices?.[0]?.message?.content ?? '').trim();
     return parseJsonObject<T>(raw);
   });
@@ -373,7 +422,12 @@ export async function aoaiChatJson<T = Record<string, unknown>>(opts: AoaiChatJs
 export async function aoaiChatRaw(opts: AoaiChatRawOptions): Promise<any> {
   const { messages, tools, temperature, maxCompletionTokens } = opts;
   const toolChoice = opts.toolChoice ?? 'auto';
-  const target = applyTierRouting(opts.target ?? (await resolveAoaiTarget(opts.cfg ?? null)), { ...opts, messages, tools });
+  const routing = routeTurn(opts.target ?? (await resolveAoaiTarget(opts.cfg ?? null)), { ...opts, messages, tools });
+  const target = routing.target;
+  // N13 — budget check AFTER routing, BEFORE token acquisition + the fetch. A
+  // breach throws the honest 429-class refusal; every other failure fails open.
+  const attribution = resolveAttribution(opts.attribution);
+  await enforceTokenBudget(attribution);
   let token: string;
   try {
     token = await aoaiToken();
@@ -424,7 +478,11 @@ export async function aoaiChatRaw(opts: AoaiChatRawOptions): Promise<any> {
       const t = await res.text();
       throw new AoaiResponseError(`AOAI chat-completions failed ${res.status}: ${t.slice(0, 400)}`);
     }
-    return res.json();
+    const j = await res.json();
+    // N13 — attribute the REAL usage (the tool loop's every hop is metered).
+    const usage = usageFromResponse(j);
+    if (usage) await recordTurnSpend(attribution, { model: call.deployment, tier: routing.tier, usage });
+    return j;
   });
 }
 
@@ -528,7 +586,15 @@ export async function aoaiEmbed(opts: AoaiEmbedOptions): Promise<AoaiEmbedResult
 export async function aoaiChatStream(opts: AoaiChatOptions): Promise<Response> {
   const { messages, temperature, responseFormat } = opts;
   const maxCompletionTokens = opts.maxCompletionTokens ?? defaultMaxCompletionTokens(opts);
-  const target = applyTierRouting(opts.target ?? (await resolveAoaiTarget(opts.cfg ?? null)), { ...opts, messages });
+  const routing = routeTurn(opts.target ?? (await resolveAoaiTarget(opts.cfg ?? null)), { ...opts, messages });
+  const target = routing.target;
+  // N13 — budget check AFTER routing, BEFORE the fetch. The SSE body is owned by
+  // the caller, so this function cannot read the trailing `usage` block without
+  // consuming the stream; the streaming orchestrator therefore calls
+  // `recordTurnSpend` itself with the REAL usage it parses off the final chunk
+  // (no estimate is invented here — no-vaporware).
+  const attribution = resolveAttribution(opts.attribution);
+  await enforceTokenBudget(attribution);
   const token = await aoaiToken();
   return withApimFallback(target, async (call) => {
     const url = chatUrl(call);
