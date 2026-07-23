@@ -97,14 +97,14 @@ const FACTS = [
     id: 'route-total',
     where: 'ws-ratchets.md §0 ground truth',
     statement: 'total app/api/**/route.ts files',
-    stated: 1547, // 0→1 boundary re-baseline (Wave A/B added FLAG0 + eval-probe + synthetic-runs routes)
+    stated: 1552, // 1→2 boundary re-baseline (Wave C/D added RUM ingest + OL ingest + spark-health + forecast routes)
     live: countRoutes,
   },
   {
     id: 'route-toolkit-gap',
     where: 'PRP.md ground-truth #4 / ws-ratchets.md §0',
     statement: 'hand-rolled session routes not on the route-toolkit',
-    stated: 1359, // 0→1 boundary re-baseline; R2/R3 codemod+ratchet (Phase 1) drives this DOWN
+    stated: 1343, // 1→2 boundary re-baseline; R2 pilot + R3 touch-rule migrations shrank 1359→1343
     live: countHandRolledRoutes,
   },
   {

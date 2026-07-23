@@ -64,8 +64,43 @@ Function code publish for secret-expiry-monitor + copilot-evaluator; E2
 live HTTP-trigger receipt after that; S2's live FIC migration (runbook
 decision: MIGRATE).
 
+## Phase 1 — COMPLETE (build set, 2026-07-22→23 overnight)
+
+All Phase-1 items merged (~26 PRs). Rows (receipts in PR bodies):
+| Item | PR | Receipt summary |
+|------|----|-----------------|
+| test-projects batch (F2) | #2411 | All planned Playwright projects stubbed in ONE PR — config serialization chain dead. |
+| FRESH0 | #2420 | PRP-freshness gate, warn-only + --strict boundary mode; wired into guardrails. |
+| V3 — a11y contrast ratchet | #2433 | Baseline at reality (22 surfaces, 0 live contrast nodes); tightened-baseline teeth proven red. |
+| V2 — visual regression | #2439 | 71 committed baselines (wide+narrow projects); live capture+recompare green; seeded light-for-dark swap red at 95% px diff. |
+| V4 — route-smoke ratchet | #2440 | 113-route live run; caught 4 REAL no-h1 shells (/copilot, /copilot/skills, /thread, /admin/capacity — knownIssues baselined); floor 109/121. |
+| V5 — bicep-drift lanes | #2425 | PR what-if lane now covers platform/fiab/bicep/**; weekly scheduled what-if vs BOTH live estates w/ dedup drift issues + shared action group. |
+| O1 — unified alert-dispatch | #2429 | dispatchAlert P1/P2/P3 severity routing → the ONE action group + optional on-call webhook receiver (empty-safe); on-call runbook; S1/V1 refit. |
+| RUM1 — client RUM | #2434 | Browser vitals/errors → session-gated capped ingest → App Insights; FLAG0 flag; admin RUM surface + overview tile; PII-scrubbed. |
+| COST0 — program budget | #2427 | Consumption budget (tag-filtered, Actual 80/100% + Forecast 100%) via observabilityConfig bag → shared action group. |
+| R2 — route-toolkit codemod | #2431 | migrate-route-toolkit.mjs (dry-run/apply/--file/--family) + pilot family migrated; authz byte-identical. |
+| R3 — route-toolkit ratchet | #2432 | check-route-toolkit.mjs shrink-only + touched-file migration rule + shared _ratchet-count.mjs helper; PROVEN — caught C2/RUM1/I3 in-flight and drove gap 1359→1343. |
+| E3 — eval floors + regression | #2426 | eval-floors.json (provisional, ratchet-up-only) + check-eval-regression.mjs (deferred-judge = no-change) + raise-only ratchet script. |
+| E4 — corpus-change eval gating | #2428 | copilot-quality-evals.yml (corpus-path + nightly; in-VNet E2 trigger via the ACA-exec recipe; sticky PR comment); post-deploy eval step in full-app-deploy. |
+| C2 — real Forecast API | #2430 | forecastCost api→linear→seasonal w/ honest method labeling + bands; Gov FailedDependency fallback; fixture-tested math. (+#2454 credential-factory fix.) |
+| A10 — Spark health tab | #2444 | Health-hub Spark pools tab: real pool/session census (FAULTED + Succeeded-but-can't-launch detection, leak candidates, warm-pool state); runbook; FLAG0 flag. |
+| L2 — Spark OpenLineage ingest | #2448 | Security-redesigned in-VNet ingest (per-pool Entra/workspace-token, workspace-scoped, caps), OL→columnMappings (declared), pool-setup script as the honest gate, STRIDE row. |
+| I2 — scoped grant matrix | #2445 | Full per-backend workspace-UAMI grant matrix (workspace-grants.ts), idempotent guid() PUTs, throttle-aware. |
+| I5 — credential factory | #2449 | workspaceScopedCredential factory + ws-credential-adoption shrink-only ratchet (130) + pilot adoption; PROVEN in-flight (caught C2's direct chain → #2454). |
+| I3 — shadow divergence audit | #2451 | mode=shadow records identity.shadow divergence rows (90d TTL, sampling knob) via the factory hook — zero behavior change; feeds I4 UI next phase. |
+| DR1–DR3 — drill extensions | #2447 | dr-drill.yml scenario extensions (cosmos-pitr incl. graph/vector account, storage posture, KV validators) REDESIGNED per the DR0 HNS correction; real restored-state assertions. |
+| U1 — report-designer G3 | #2443 | ResizableCanvasRegion canvas + splitKeyPrefix rails + Build/Pages SplitPanes; FLAG0 flag. |
+| U3 — notebook per-cell resize | #2446 | Per-cell height grips (auto-until-first-drag, persisted per cell); FLAG0 flag. |
+| U4 — Workshop/Slate G3 | #2441 | Both app-builder canvases on the shared primitives w/ persisted keys. |
+| U5 — fixed-height stragglers | #2442 | The enumerated straggler list wrapped in proper primitives. |
+| U6 — Monaco query↔results divider | #2450 | SplitPane divider across the 11 Monaco editors + u6 spec (frame-paced drags per the U0 finding); FLAG0 flag. |
+| S3 — auto-rotation | (skipped-by-decision) | S2's verdict = MIGRATE to FIC; S3 documented as fallback only in the S1/S2 runbooks. |
+
+**Roll:** release 0.75.0 (`f2beaf07`) — batch roll + post-roll receipts recorded below at execution.
+
 ## Phase boundaries (FRESH0 runs)
 
 | Boundary | Date | Result |
 |----------|------|--------|
 | 0 → 1 | 2026-07-22 | `check-prp-freshness.mjs --strict` → exit 0, 0 warnings. Re-baselined in the same commit: param-cap stated 256→232 (R0 landed; top-level main.bicep at 249 = warn, consolidation pass queued), route-total 1541→1547, toolkit-gap 1356→1359; PRP ground-truth #5 corrected (HNS blocks blob versioning — DR0 shipped the Learn-correct posture) and #9 marked RESOLVED. |
+| 1 → 2 | 2026-07-23 | `--strict` → exit 0, 0 warnings. Re-baselined: route-total 1547→1552, toolkit-gap 1359→**1343** (R2 pilot + R3 touch-rule migrations — the ratchet is actively shrinking the gap). Param counts unchanged (232 / top-level 251-warn — the consolidation pass there is Phase-2's first bicep chore). |
