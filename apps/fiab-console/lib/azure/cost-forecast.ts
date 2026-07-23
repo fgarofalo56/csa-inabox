@@ -33,12 +33,7 @@
  * Every Forecast POST rides the shared C1 QPU limiter (scheduleCostCall) and
  * the shared 'cost' cache posture — real REST only, no mocks (no-vaporware.md).
  */
-import {
-  ChainedTokenCredential,
-  DefaultAzureCredential,
-  ManagedIdentityCredential,
-} from '@azure/identity';
-import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
+import { uamiArmCredential } from '@/lib/azure/arm-credential';
 import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import { armBase, armScope } from './cloud-endpoints';
 import { MonitorError } from './monitor-client';
@@ -87,12 +82,10 @@ export function forecastMethodPref(): CostForecastMethodPref {
   return raw === 'api' || raw === 'linear' || raw === 'seasonal' ? raw : 'auto';
 }
 
-// ── shared credential (same UAMI chain as every Loom ARM client) ────────────
+// ── shared credential — the ARM-plane factory helper (I5 adoption ratchet:
+// pure ARM-plane clients use uamiArmCredential, never a direct chain) ────────
 
-const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
-const credential = uamiClientId
-  ? new ChainedTokenCredential(new AcaManagedIdentityCredential(), new ManagedIdentityCredential({ clientId: uamiClientId }), new DefaultAzureCredential())
-  : new DefaultAzureCredential();
+const credential = uamiArmCredential();
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const todayIso = () => new Date().toISOString().slice(0, 10);
