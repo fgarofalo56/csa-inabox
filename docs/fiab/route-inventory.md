@@ -13,12 +13,12 @@ same classic + WS-D1 toolkit export styles).
 
 | Metric | Count |
 | --- | ---: |
-| Total routes | 1560 |
-| Public (no session) | 109 |
+| Total routes | 1562 |
+| Public (no session) | 111 |
 | Session-only | 571 |
 | Owner-scoped | 632 |
 | Admin | 248 |
-| Gated (backend config) | 511 |
+| Gated (backend config) | 513 |
 | Areas | 104 |
 
 **Auth scope** — `public`: no session check; `session-only`: signed-in but
@@ -1319,7 +1319,9 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `items/map/[id]/map-token/route.ts` | GET | owner-scoped |  | Azure Maps |
 | `items/map/[id]/route.ts` | GET PATCH DELETE | owner-scoped |  | — |
 | `items/mapping-dataflow/[id]/debug/preview/route.ts` | POST | session-only | ● | ADF |
+| `items/mapping-dataflow/[id]/debug/schema/route.ts` | POST | public | ● | ADF |
 | `items/mapping-dataflow/[id]/debug/session/route.ts` | POST | session-only | ● | ADF |
+| `items/mapping-dataflow/[id]/debug/stats/route.ts` | POST | public | ● | ADF |
 | `items/materialized-lake-view/[id]/adf-pipeline/route.ts` | GET POST | owner-scoped | ● | ADF |
 | `items/materialized-lake-view/[id]/assist/route.ts` | — | public |  | — |
 | `items/materialized-lake-view/[id]/lineage/route.ts` | GET POST | owner-scoped |  | — |

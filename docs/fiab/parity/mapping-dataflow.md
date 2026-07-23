@@ -80,9 +80,9 @@ to row-6 single-stream inline preview). UI: `dataflow-debug-panel.tsx`.
 | U7-1 | **Held debug session** (toggle Debug → 1 cluster for the loop) w/ TTL chip | ✅ built (PR-1) | `POST …/mapping-dataflow/[id]/debug/session` acquire/release → `create/deleteDataFlowDebugSession` |
 | U7-2 | **Data preview per transform** (type-badged grid + timing status bar) | ✅ built (PR-1) | `POST …/debug/preview` → `addDataFlowToDebugSession` + `executePreviewQuery`; shared `PreviewTable` |
 | U7-3 | Preview reflects **unsaved** in-canvas edits | ✅ built (PR-1) | route re-adds the live serialized graph package before each preview |
-| U7-4 | **Inspect** — in/out schema per transform + schema-drift badges | ⏳ U7 PR-2 | `GET …/debug/schema` → `parseDfsSchema`/`diffSchemas` (helper landed PR-1) |
-| U7-5 | **Statistics** — null %/distinct/min/max/mean/stddev + histograms | ⏳ U7 PR-2 | `POST …/debug/stats` → `computeColumnStats` over the sample (helper landed PR-1) |
-| U7-6 | **Quick-actions** — preview column → Typecast/Modify/Remove inserts a transform | ⏳ U7 PR-3 | preview-grid column context menu → draft graph mutation |
+| U7-4 | **Inspect** — in/out schema per transform + schema-drift badges | ✅ built (PR-2) | `POST …/debug/schema` → previews out + primary-input streams → `parseDfsSchema`/`diffSchemas` |
+| U7-5 | **Statistics** — null %/distinct/min/max/mean/stddev + histograms | ✅ built (PR-2) | `POST …/debug/stats` → `computeColumnStats` over the sample; top-value mini-histograms via `loom-chart` |
+| U7-6 | **Quick-actions** — preview column → Typecast/Modify/Remove inserts a transform | ✅ built (PR-3) | preview-grid column `⋯` menu → `buildQuickActionTransform` → designer `insertQuickAction` (draft; Cast/Derived-Column/Select) |
 
 ### Canvas + transforms (delegated to the shared designer)
 
@@ -96,8 +96,9 @@ to row-6 single-stream inline preview). UI: `dataflow-debug-panel.tsx`.
 | 14 | Per-node Optimize / Inspect / Data-preview tabs | ✅ built (U7) / ⏳ | Data-preview tab shipped (U7-2); Inspect/Statistics tabs U7 PR-2 (§U7) |
 | 15 | Rename / clone / Publish-Git shell | ❌ MISSING | direct PUT only |
 
-**Grade: B.** The standalone editor gives a real create→author→save→**live
-debug preview** loop against ADF REST, with an honest Spark-debug gate. The
-deep-authoring gaps (visual expression builder, per-node tabs, publish/git) are
-shared with the mounted-ADF surface and tracked in `adf-mapping-data-flow.md` —
-not stubs, and never Fabric-gated.
+**Grade: B+ (post-U7).** The standalone editor gives a real
+create→author→save→**held-session Debug** loop against ADF REST — per-transform
+Data Preview, Inspect (in/out schema + drift), Statistics, and preview-grid
+quick-actions — with an honest Spark-debug gate. Remaining gaps (visual
+expression builder, publish/git) are shared with the mounted-ADF surface and
+tracked in `adf-mapping-data-flow.md` — not stubs, and never Fabric-gated.

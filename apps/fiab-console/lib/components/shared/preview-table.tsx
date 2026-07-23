@@ -104,6 +104,13 @@ export interface PreviewTableProps {
   /** Grid max height (default 360px). */
   maxHeight?: number | string;
   ariaLabel?: string;
+  /**
+   * Optional per-column header affordance (e.g. the U7 debug-grid quick-actions
+   * menu). Rendered after the column name in each header cell; omit for the
+   * plain type-badged header (every existing caller is byte-identical). The
+   * consumer owns the node (usually a Fluent Menu) — the grid stays generic.
+   */
+  headerActions?: (columnName: string) => React.ReactNode;
 }
 
 interface LoadedState {
@@ -220,7 +227,7 @@ export function PreviewTable(props: PreviewTableProps) {
   const {
     sources, activeSourceId, onActiveSourceChange, onCloseSource,
     showTimeRange = false, showSearch = true, typeOverridable = false,
-    maxRows = 1000, maxHeight, ariaLabel = 'Data preview',
+    maxRows = 1000, maxHeight, ariaLabel = 'Data preview', headerActions,
   } = props;
   const s = useStyles();
   // U6 — inside an EditorResultsSplit results pane the grid flex-fills the
@@ -410,6 +417,7 @@ export function PreviewTable(props: PreviewTableProps) {
                     col={c}
                     overridable={typeOverridable}
                     onType={setColType}
+                    actions={headerActions?.(c.name)}
                     className={{ th: s.th, inner: s.thInner, badge: s.typeBadge, select: s.typeSelect }}
                   />
                 ))}
@@ -450,11 +458,12 @@ export function PreviewTable(props: PreviewTableProps) {
 }
 
 function PreviewHeader({
-  col, overridable, onType, className,
+  col, overridable, onType, actions, className,
 }: {
   col: PreviewColumn;
   overridable: boolean;
   onType: (name: string, type: PreviewCellType) => void;
+  actions?: React.ReactNode;
   className: { th: string; inner: string; badge: string; select: string };
 }) {
   const badge = TYPE_BADGE_TEXT[col.type];
@@ -465,6 +474,7 @@ function PreviewHeader({
           <span className={className.badge} aria-label={`${badge.label} column`}>{badge.text}</span>
         </Tooltip>
         <span>{col.name}</span>
+        {actions}
       </div>
       {overridable && (
         <Select

@@ -402,6 +402,8 @@ const SHARED_BACKEND_ITEM_ROUTES = [
   // per-tenant Cosmos item is read; the ADF factory is a single shared resource.
   'apps/fiab-console/app/api/items/mapping-dataflow/[id]/debug/session/route.ts',
   'apps/fiab-console/app/api/items/mapping-dataflow/[id]/debug/preview/route.ts',
+  'apps/fiab-console/app/api/items/mapping-dataflow/[id]/debug/schema/route.ts',
+  'apps/fiab-console/app/api/items/mapping-dataflow/[id]/debug/stats/route.ts',
   'apps/fiab-console/app/api/items/mirrored-database/[id]/lifecycle/route.ts',
   'apps/fiab-console/app/api/items/mirrored-database/[id]/monitor/route.ts',
   'apps/fiab-console/app/api/items/mirrored-database/[id]/open-mirror/route.ts',

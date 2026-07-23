@@ -30,7 +30,7 @@
  * user names the first transformation and Saves, which PUTs the named flow.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Spinner, MessageBar, MessageBarBody, MessageBarTitle, Field, Input, Button,
   Badge, Caption1, Text, Select,
@@ -40,7 +40,9 @@ import {
 import { ArrowSync20Regular, Dismiss20Regular, Table20Regular, Eye20Regular } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { MappingDataFlowDesigner } from '@/lib/components/pipeline/dataflow/mapping-dataflow-designer';
-import type { MappingDataFlowGraph } from '@/lib/components/pipeline/dataflow/mapping-dataflow-designer';
+import type {
+  MappingDataFlowGraph, MappingDataFlowDesignerHandle,
+} from '@/lib/components/pipeline/dataflow/mapping-dataflow-designer';
 import { DataflowDebugPanel } from '@/lib/components/pipeline/dataflow/dataflow-debug-panel';
 import { useRuntimeFlag } from '@/lib/components/ui/use-runtime-flag';
 import { clientFetch } from '@/lib/client-fetch';
@@ -211,9 +213,13 @@ export function MappingDataFlowEditor({ item, id }: EditorProps) {
   const s = useStyles();
   const isNew = id === 'new';
   // U7 (FLAG0 `u7-dataflow-debug`, default-ON) — mount the richer Debug panel
-  // (held session + preview/inspect/stats). OFF reverts to the pre-U7 single-
-  // stream inline preview below. The real ADF debug backend is unaffected.
+  // (held session + preview/inspect/stats + quick-actions). OFF reverts to the
+  // pre-U7 single-stream inline preview below. The real ADF debug backend is
+  // unaffected.
   const u7DebugPanel = useRuntimeFlag('u7-dataflow-debug');
+  // Imperative handle so a debug-grid quick-action inserts a transform into the
+  // designer's live graph (draft; published on Save).
+  const designerRef = useRef<MappingDataFlowDesignerHandle>(null);
 
   // For a new flow the user names it before saving; for an existing one the id
   // IS the data-flow name.
@@ -484,6 +490,7 @@ export function MappingDataFlowEditor({ item, id }: EditorProps) {
           )}
 
           <MappingDataFlowDesigner
+            ref={designerRef}
             key={`${reloadKey}:${isNew ? name || 'new' : id}`}
             name={isNew ? (nameValid ? name.trim() : 'dataflow1') : id}
             initial={initial}
@@ -518,6 +525,7 @@ export function MappingDataFlowEditor({ item, id }: EditorProps) {
               graph={graph}
               debugAvailable={debugAvailable}
               isNew={isNew}
+              onQuickAction={(spec) => designerRef.current?.insertQuickAction(spec)}
             />
           )}
 
