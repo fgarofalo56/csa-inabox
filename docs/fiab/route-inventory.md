@@ -13,11 +13,11 @@ same classic + WS-D1 toolkit export styles).
 
 | Metric | Count |
 | --- | ---: |
-| Total routes | 1570 |
+| Total routes | 1571 |
 | Public (no session) | 112 |
 | Session-only | 571 |
 | Owner-scoped | 632 |
-| Admin | 255 |
+| Admin | 256 |
 | Gated (backend config) | 516 |
 | Areas | 104 |
 
@@ -266,6 +266,7 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `admin/workspaces/[id]/git/route.ts` | GET POST DELETE | admin |  | — |
 | `admin/workspaces/[id]/git/status/route.ts` | GET | admin |  | — |
 | `admin/workspaces/[id]/git/sync/route.ts` | POST | admin |  | Cosmos |
+| `admin/workspaces/[id]/identity/route.ts` | GET POST | admin |  | Cosmos |
 | `admin/workspaces/[id]/m365/route.ts` | POST | admin |  | Cosmos |
 | `admin/workspaces/[id]/networking/inbound/route.ts` | GET POST | admin |  | — |
 | `admin/workspaces/[id]/networking/ip-rules/route.ts` | GET POST DELETE | admin |  | — |
