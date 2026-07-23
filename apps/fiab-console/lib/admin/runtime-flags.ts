@@ -198,6 +198,14 @@ export const RUNTIME_FLAGS: readonly RuntimeFlagDef[] = [
     ownerItem: 'A3',
     surface: 'Semantic-model DAX query view + measure test (/items/semantic-model/[id])',
   },
+  {
+    id: 'n9-verified-queries-tab',
+    label: 'Semantic model — Verified Queries tab',
+    description:
+      'The N9 "Verified Queries" tab on the semantic-model editor: the governed metric registry + the Verified Query Repository (approved question→query pairs a data agent retrieves FIRST, refusing out-of-contract questions instead of guessing). OFF hides the tab body behind a guided notice on the next load (no roll) — the read/write routes and the data-agent contract evaluation are unaffected; only this authoring surface is gated.',
+    ownerItem: 'N9',
+    surface: 'Semantic-model editor → Verified Queries tab (/items/semantic-model/[id])',
+  },
 ];
 
 /** Union of registered flag ids (`never` while the list is empty). */
