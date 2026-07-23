@@ -200,6 +200,9 @@ type functionAppsConfigT = {
 
   @description('Daily LLM-judge call cap for the copilot-evaluator (round-3 F1). Over cap → retrieval-only scoring, judge scores marked deferred.')
   copilotEvalJudgeDailyCap: int?
+
+  @description('SRCH1 — Entra object id (oid) the federated-search eval-probe runs AS (searchCatalog is ACL-scoped): the seeded Demo/service identity that owns the golden catalog items. Emitted as LOOM_EVAL_PROBE_OID on the Console + the evaluator Function. Empty → the search probe honest-gates (400) naming the var.')
+  evalProbeOid: string?
 }
 
 @description('Scheduled/background Function-app settings bag (R0). Existing label-propagation + report-subscription cron settings live here; future per-Function enable/cron/settings (E2 copilot-evaluator, C3 cost-anomaly, L3 lineage-ingest, S1 secret-expiry) add properties to functionAppsConfigT — never a new top-level param.')
@@ -4617,6 +4620,11 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // trigger; empty when the Function is disabled (the route then honest-
             // gates). Functions host key, NOT a storage key.
             { name: 'LOOM_COPILOT_EVALUATOR_KEY',  value: copilotEvaluatorEnabled ? copilotEvaluator!.outputs.functionKey : '' }
+            // SRCH1 — the identity the federated-search eval-probe runs AS
+            // (searchCatalog is ACL-scoped): the seeded Demo/service oid that owns
+            // the golden items. Empty by default → the probe honest-gates (400)
+            // naming the var; set it (or pass oid from the evaluator) to score.
+            { name: 'LOOM_EVAL_PROBE_OID', value: functionAppsConfig.?evalProbeOid ?? '' }
           ] : [
             { name: 'LOOM_UAMI_CLIENT_ID', value: identity.outputs.uamiConsoleClientId }
             { name: 'LOOM_UAMI_PRINCIPAL_ID', value: identity.outputs.uamiConsolePrincipalId }
@@ -5345,6 +5353,7 @@ module copilotEvaluator 'copilot-evaluator-function.bicep' = if (copilotEvaluato
     defaultDeployment: agentFoundryEnabled ? agentFoundry!.outputs.chatDeployment : (!empty(byoFoundryChatDeployment) ? byoFoundryChatDeployment : ((aiFoundryEnabled && empty(existingFoundryAccountName)) ? aiFoundry!.outputs.defaultChatDeploymentName : ''))
     judgeDailyCap: copilotEvalJudgeDailyCap
     aiSearchServiceName: effBuiltinMcpAiSearch
+    evalProbeOid: functionAppsConfig.?evalProbeOid ?? ''
     skipRoleGrants: skipRoleGrants
     appInsightsConnectionString: monitoring.outputs.appInsightsConnectionString
     complianceTags: complianceTags

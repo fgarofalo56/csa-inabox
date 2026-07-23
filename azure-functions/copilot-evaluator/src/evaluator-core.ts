@@ -366,6 +366,9 @@ export interface RunTotals {
   judged: number;
   deferred: number;
   autoFailed: number;
+  /** SRCH1 — NDCG@k over federated-search runs (surface 'search:<domain>');
+   *  null/absent for Copilot RAG runs (which score grounding, not NDCG). */
+  ndcgAvg?: number | null;
 }
 
 /** Roll one surface's per-question results up into the `eval-run` totals. */
@@ -417,4 +420,154 @@ export function resolveEvalRoot(cwd: string): string | null {
     dir = parent;
   }
   return null;
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// SRCH1 — federated-search relevance evals (content/evals/search/<domain>.jsonl)
+//
+// Reuses this SAME machinery to score the federated catalog search users type
+// into (lib/azure/catalog-search.searchCatalog): golden query → expectedResults
+// sets, scored hit-rate@k / MRR / NDCG@k against the REAL search path via the
+// console's /api/internal/search/eval-probe route. Search runs write the SAME
+// `eval-run`/`eval-result` docs (surface 'search:<domain>', groundingAvg null),
+// so E5's admin page + check-eval-regression pick them up unchanged.
+// ═════════════════════════════════════════════════════════════════════════════
+
+/** One golden search row (content/evals/search/_schema.json). */
+export interface SearchEvalRow {
+  id: string;
+  query: string;
+  /** Display-name tokens / item ids the search SHOULD surface in the top-K. */
+  expectedResults: string[];
+  k?: number;
+  domain: string;
+}
+
+export interface SearchEvalSet {
+  domain: string;
+  rows: SearchEvalRow[];
+}
+
+/** A retrieved federated-search hit (the eval-probe returns these, ranked). */
+export interface SearchHitRef {
+  id: string;
+  displayName: string;
+  itemType?: string;
+}
+
+/** Default top-K cutoff for hit@k / NDCG@k when a row omits `k`. */
+export const DEFAULT_SEARCH_K = 10;
+
+/**
+ * Load the search eval sets from `<evalRoot>/search/<domain>.jsonl`. `domains`
+ * filters to a subset (case-insensitive); unknown names are ignored. Files
+ * starting with '_' (the schema) are skipped. Malformed rows throw (a broken
+ * set fails loudly, never silently scores 0).
+ */
+export function loadSearchSets(evalRoot: string, domains?: string[]): SearchEvalSet[] {
+  const dir = path.join(evalRoot, 'search');
+  if (!fs.existsSync(dir)) return [];
+  const wanted = domains?.map((d) => d.trim().toLowerCase()).filter(Boolean);
+  const sets: SearchEvalSet[] = [];
+  for (const f of fs.readdirSync(dir).sort()) {
+    if (!f.endsWith('.jsonl') || f.startsWith('_')) continue;
+    const domain = path.basename(f, '.jsonl');
+    if (wanted && wanted.length > 0 && !wanted.includes(domain)) continue;
+    const lines = fs.readFileSync(path.join(dir, f), 'utf-8').split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+    const rows: SearchEvalRow[] = lines.map((l, i) => {
+      let parsed: unknown;
+      try { parsed = JSON.parse(l); } catch { throw new Error(`search/${f}:${i + 1}: invalid JSON`); }
+      const r = parsed as SearchEvalRow;
+      if (!r.id || !r.query || !Array.isArray(r.expectedResults) || r.expectedResults.length === 0) {
+        throw new Error(`search/${f}:${i + 1}: row missing id/query/expectedResults`);
+      }
+      return { ...r, domain: r.domain || domain };
+    });
+    if (rows.length > 0) sets.push({ domain, rows });
+  }
+  return sets;
+}
+
+/**
+ * Binary relevance of one retrieved hit against the expected tokens: a hit is
+ * relevant when an expected token equals its id, equals its itemType, or is a
+ * case-insensitive substring of its display name (the lenient match the search
+ * golden sets rely on — display names are seed-specific, so we test that the
+ * RIGHT item ranks, not an exact string).
+ */
+export function searchHitRelevant(expectedResults: string[], hit: SearchHitRef): boolean {
+  const id = (hit.id || '').toLowerCase();
+  const name = (hit.displayName || '').toLowerCase();
+  const type = (hit.itemType || '').toLowerCase();
+  return expectedResults.some((raw) => {
+    const t = (raw || '').trim().toLowerCase();
+    if (!t) return false;
+    return id === t || type === t || name.includes(t);
+  });
+}
+
+/**
+ * Score one federated-search query:
+ *   hit  — ≥1 relevant result in the top-K;
+ *   mrr  — 1 / (rank of the first relevant result within the top-K), else 0;
+ *   ndcg — NDCG@k over binary relevance (DCG of the actual ranking ÷ the DCG of
+ *          the ideal ranking = all relevant results first).
+ */
+export function scoreSearch(
+  expectedResults: string[],
+  retrieved: SearchHitRef[],
+  k: number = DEFAULT_SEARCH_K,
+): { hit: boolean; mrr: number; ndcg: number } {
+  const cut = Math.max(1, Math.floor(k) || DEFAULT_SEARCH_K);
+  const top = retrieved.slice(0, cut);
+  const rel: number[] = top.map((ref) => (searchHitRelevant(expectedResults, ref) ? 1 : 0));
+  const firstRank = rel.findIndex((r) => r === 1);
+  const hit = firstRank >= 0;
+  const mrr = firstRank >= 0 ? 1 / (firstRank + 1) : 0;
+  const dcg = rel.reduce((s, r, i) => s + r / Math.log2(i + 2), 0);
+  const relevantCount = rel.reduce((a, b) => a + b, 0);
+  let idcg = 0;
+  for (let i = 0; i < relevantCount; i++) idcg += 1 / Math.log2(i + 2);
+  const ndcg = idcg > 0 ? dcg / idcg : 0;
+  return { hit, mrr, ndcg };
+}
+
+/** Per-query scored search result (maps onto the shared `eval-result` doc). */
+export interface SearchEvalResult {
+  queryId: string;
+  domain: string;
+  query: string;
+  expectedResults: string[];
+  retrievedResults: string[];
+  hit: boolean;
+  mrr: number;
+  ndcg: number;
+  backend?: string;
+  latencyMs: number;
+}
+
+/** Roll a domain's search results up into RunTotals (+ ndcgAvg). pass == hit. */
+export function rollupSearchRun(results: SearchEvalResult[]): RunTotals {
+  const n = results.length;
+  const round3 = (x: number) => Math.round(x * 1000) / 1000;
+  if (n === 0) {
+    return {
+      questions: 0, retrievalHitRate: 0, mrrAvg: 0, groundingAvg: null, answerAvg: null,
+      passRate: 0, judged: 0, deferred: 0, autoFailed: 0, ndcgAvg: null,
+    };
+  }
+  const avg = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / xs.length;
+  const hits = results.filter((r) => r.hit).length;
+  return {
+    questions: n,
+    retrievalHitRate: round3(hits / n),
+    mrrAvg: round3(avg(results.map((r) => r.mrr))),
+    groundingAvg: null,
+    answerAvg: null,
+    passRate: round3(hits / n),
+    judged: 0,
+    deferred: 0,
+    autoFailed: 0,
+    ndcgAvg: round3(avg(results.map((r) => r.ndcg))),
+  };
 }

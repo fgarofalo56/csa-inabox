@@ -18,7 +18,13 @@ import {
   computePass,
   rollupRun,
   resolveEvalRoot,
+  scoreSearch,
+  searchHitRelevant,
+  rollupSearchRun,
+  loadSearchSets,
   type EvalResult,
+  type SearchHitRef,
+  type SearchEvalResult,
 } from './evaluator-core';
 
 const row = {
@@ -204,6 +210,73 @@ describe('computePass + rollupRun', () => {
   });
   it('empty run → zeroed totals with null judge averages', () => {
     expect(rollupRun([])).toMatchObject({ questions: 0, groundingAvg: null, answerAvg: null });
+  });
+});
+
+describe('SRCH1 — search relevance scoring', () => {
+  const refs = (xs: Array<[string, string, string?]>): SearchHitRef[] =>
+    xs.map(([id, displayName, itemType]) => ({ id, displayName, itemType }));
+
+  it('searchHitRelevant matches id-exact, itemType-exact, or name-substring', () => {
+    expect(searchHitRelevant(['it-1'], { id: 'it-1', displayName: 'X' })).toBe(true);
+    expect(searchHitRelevant(['lakehouse'], { id: 'a', displayName: 'x', itemType: 'lakehouse' })).toBe(true);
+    expect(searchHitRelevant(['customer'], { id: 'a', displayName: 'Customer 360' })).toBe(true);
+    expect(searchHitRelevant(['revenue'], { id: 'a', displayName: 'Sales report' })).toBe(false);
+  });
+
+  it('scoreSearch: relevant at rank 1 → hit, mrr 1, ndcg 1', () => {
+    const r = scoreSearch(['customer'], refs([['a', 'Customer 360'], ['b', 'Orders']]), 10);
+    expect(r.hit).toBe(true);
+    expect(r.mrr).toBe(1);
+    expect(r.ndcg).toBe(1);
+  });
+
+  it('scoreSearch: relevant at rank 2 → mrr 0.5, ndcg < 1', () => {
+    const r = scoreSearch(['customer'], refs([['a', 'Orders'], ['b', 'Customer 360']]), 10);
+    expect(r.hit).toBe(true);
+    expect(r.mrr).toBe(0.5);
+    expect(r.ndcg).toBeGreaterThan(0);
+    expect(r.ndcg).toBeLessThan(1);
+  });
+
+  it('scoreSearch: no relevant in top-k → miss, zeros', () => {
+    const r = scoreSearch(['customer'], refs([['a', 'Orders'], ['b', 'Inventory']]), 10);
+    expect(r).toEqual({ hit: false, mrr: 0, ndcg: 0 });
+  });
+
+  it('scoreSearch: k truncates the candidate list', () => {
+    const r = scoreSearch(['customer'], refs([['a', 'Orders'], ['b', 'Customer 360']]), 1);
+    expect(r.hit).toBe(false); // the relevant hit at rank 2 is outside k=1
+  });
+
+  it('rollupSearchRun averages hit-rate, mrr, ndcg; grounding null; pass==hit', () => {
+    const results: SearchEvalResult[] = [
+      { queryId: 'q1', domain: 'catalog', query: 'a', expectedResults: ['x'], retrievedResults: ['x'], hit: true, mrr: 1, ndcg: 1, latencyMs: 10 },
+      { queryId: 'q2', domain: 'catalog', query: 'b', expectedResults: ['y'], retrievedResults: [], hit: false, mrr: 0, ndcg: 0, latencyMs: 10 },
+    ];
+    const t = rollupSearchRun(results);
+    expect(t.questions).toBe(2);
+    expect(t.retrievalHitRate).toBe(0.5);
+    expect(t.passRate).toBe(0.5);
+    expect(t.groundingAvg).toBeNull();
+    expect(t.mrrAvg).toBe(0.5);
+    expect(t.ndcgAvg).toBe(0.5);
+  });
+
+  it('rollupSearchRun empty → zeros with null grounding/ndcg', () => {
+    expect(rollupSearchRun([])).toMatchObject({ questions: 0, groundingAvg: null, ndcgAvg: null });
+  });
+
+  it('loadSearchSets reads content/evals/search/<domain>.jsonl, skips _schema', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'srch-'));
+    const dir = path.join(root, 'search');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, '_schema.json'), '{}');
+    fs.writeFileSync(path.join(dir, 'catalog.jsonl'), JSON.stringify({ id: 'catalog-001', query: 'q', expectedResults: ['x'], domain: 'catalog' }) + '\n');
+    const sets = loadSearchSets(root);
+    expect(sets).toHaveLength(1);
+    expect(sets[0].domain).toBe('catalog');
+    expect(sets[0].rows[0].expectedResults).toEqual(['x']);
   });
 });
 

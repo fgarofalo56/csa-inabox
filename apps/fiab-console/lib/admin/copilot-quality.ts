@@ -109,6 +109,18 @@ export interface OverallStats {
 
 const round3 = (x: number): number => Math.round(x * 1000) / 1000;
 
+/** SRCH1 — a federated-search relevance surface ('search:<domain>') vs a Copilot
+ *  RAG surface. E5 splits the scorecard on this so search NDCG never mixes with
+ *  Copilot grounding. */
+export function isSearchSurface(surface: string): boolean {
+  return typeof surface === 'string' && surface.startsWith('search:');
+}
+
+/** The domain label for a search surface ('search:catalog' → 'catalog'). */
+export function searchDomainLabel(surface: string): string {
+  return isSearchSurface(surface) ? surface.slice('search:'.length) : surface;
+}
+
 /**
  * A surface's composite letter grade from its latest run totals.
  *

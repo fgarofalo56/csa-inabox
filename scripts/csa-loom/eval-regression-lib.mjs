@@ -26,11 +26,15 @@
  * content/evals/eval-floors.json _meta.deltaConvention).
  */
 
-/** Metrics the floors file may constrain, with their delta-point scaling. */
+/** Metrics the floors file may constrain, with their delta-point scaling.
+ *  ndcgAvg (SRCH1) constrains federated-search runs (surface 'search:<domain>');
+ *  it is null on Copilot RAG runs → no-floor, no-change there (like grounding on
+ *  a search run). */
 export const METRICS = /** @type {const} */ ([
   { key: 'retrievalHitRate', label: 'hit-rate', pointsPerUnit: 100, display: (v) => v == null ? '—' : v.toFixed(2) },
   { key: 'groundingAvg', label: 'grounding', pointsPerUnit: 25, display: (v) => v == null ? 'deferred' : v.toFixed(2) },
   { key: 'passRate', label: 'pass-rate', pointsPerUnit: 100, display: (v) => v == null ? '—' : v.toFixed(2) },
+  { key: 'ndcgAvg', label: 'ndcg', pointsPerUnit: 100, display: (v) => v == null ? '—' : v.toFixed(2) },
 ]);
 
 const EPS = 1e-9;
@@ -60,6 +64,7 @@ export function normalizeRuns(json) {
     retrievalHitRate: numOrNull(d.totals?.retrievalHitRate ?? d.retrievalHitRate),
     groundingAvg: numOrNull(d.totals?.groundingAvg ?? d.groundingAvg),
     passRate: numOrNull(d.totals?.passRate ?? d.passRate),
+    ndcgAvg: numOrNull(d.totals?.ndcgAvg ?? d.ndcgAvg),
   });
   if (Array.isArray(json)) {
     for (const d of json) put(fromDoc(d));
@@ -266,6 +271,7 @@ export const RATCHET_RULES = {
   retrievalHitRate: { margin: 0.05, decimals: 2, cap: 0.95 },
   groundingAvg: { margin: 0.2, decimals: 1, cap: 4.6 },
   passRate: { margin: 0.05, decimals: 2, cap: 0.95 },
+  ndcgAvg: { margin: 0.05, decimals: 2, cap: 0.95 },
 };
 
 /**

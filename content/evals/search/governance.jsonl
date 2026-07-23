@@ -1,0 +1,12 @@
+{"id":"governance-001","query":"pii","expectedResults":["pii","customer"],"k":10,"domain":"governance","note":"PII-classified items should surface for the classification token."}
+{"id":"governance-002","query":"confidential","expectedResults":["confidential"],"k":10,"domain":"governance","note":"Sensitivity-label token — an item labeled Confidential should rank."}
+{"id":"governance-003","query":"sales domain","expectedResults":["sales"],"k":10,"domain":"governance"}
+{"id":"governance-004","query":"finance domain","expectedResults":["finance"],"k":10,"domain":"governance"}
+{"id":"governance-005","query":"customer data","expectedResults":["customer"],"k":10,"domain":"governance"}
+{"id":"governance-006","query":"gdpr","expectedResults":["gdpr","pii"],"k":10,"domain":"governance","note":"Regulatory tag — items tagged for GDPR/PII should surface."}
+{"id":"governance-007","query":"restricted","expectedResults":["restricted"],"k":10,"domain":"governance"}
+{"id":"governance-008","query":"report","expectedResults":["report"],"k":10,"domain":"governance"}
+{"id":"governance-009","query":"semantic model","expectedResults":["semantic","model"],"k":10,"domain":"governance"}
+{"id":"governance-010","query":"data product","expectedResults":["data","product"],"k":10,"domain":"governance"}
+{"id":"governance-011","query":"classification","expectedResults":["classification","classified"],"k":10,"domain":"governance"}
+{"id":"governance-012","query":"marketing","expectedResults":["marketing"],"k":10,"domain":"governance"}

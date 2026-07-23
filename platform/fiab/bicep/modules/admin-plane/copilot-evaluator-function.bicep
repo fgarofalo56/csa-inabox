@@ -96,6 +96,9 @@ param judgeDailyCap int = 500
 @description('AI Search service NAME in this RG for the in-module Search Index Data Reader grant. Empty skips the grant.')
 param aiSearchServiceName string = ''
 
+@description('SRCH1 — Entra oid the federated-search eval-probe runs AS (searchCatalog is ACL-scoped). Empty → the search relevance run honest-gates (the probe 400s naming LOOM_EVAL_PROBE_OID).')
+param evalProbeOid string = ''
+
 @description('When true, skip every role grant (re-deploy where RBAC already exists, or the deployer lacks User Access Administrator).')
 param skipRoleGrants bool = false
 
@@ -171,6 +174,7 @@ var baseAppSettings = [
   { name: 'LOOM_AOAI_MINI_DEPLOYMENT', value: miniDeployment }
   { name: 'LOOM_AOAI_DEPLOYMENT', value: defaultDeployment }
   { name: 'LOOM_COPILOT_EVAL_JUDGE_DAILY_CAP', value: string(judgeDailyCap) }
+  { name: 'LOOM_EVAL_PROBE_OID', value: evalProbeOid }
   // Default-ON / opt-out (loom_default_on_opt_out): flip to false to disable.
   { name: 'LOOM_COPILOT_EVAL_ENABLED', value: 'true' }
 ]

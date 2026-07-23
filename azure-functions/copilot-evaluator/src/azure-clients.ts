@@ -32,7 +32,7 @@ import { DefaultAzureCredential } from '@azure/identity';
 import { CosmosClient, type Container } from '@azure/cosmos';
 import { bestReasoningModelFor } from '../../../apps/fiab-console/lib/foundry/model-tier-router';
 import type { LoomCloud } from '../../../apps/fiab-console/lib/azure/cloud-endpoints';
-import type { EvalResult, JudgeScores, ProbeResult, RunTotals } from './evaluator-core';
+import type { EvalResult, JudgeScores, ProbeResult, RunTotals, SearchHitRef, SearchEvalResult } from './evaluator-core';
 import { parseJudge } from './evaluator-core';
 
 const cred = new DefaultAzureCredential();
@@ -114,6 +114,73 @@ export async function readCorpusManifest(
   const j: any = await res.json().catch(() => null);
   if (!j?.ok) return null;
   return { corpusCommit: String(j.corpusCommit || ''), total: Number(j.corpusTotal ?? 0) || undefined };
+}
+
+// ── Federated-search eval-probe (SRCH1: real searchCatalog ranking) ──────────
+
+/** POST the console's internal search eval-probe → the REAL federated catalog
+ *  search ranking for one query, run AS the evaluator identity (ACL-scoped). */
+export async function probeSearch(
+  baseUrl: string,
+  internalToken: string,
+  body: { query: string; oid?: string; top?: number; types?: string[] },
+): Promise<{ results: SearchHitRef[]; backend?: string; latencyMs: number }> {
+  const res = await fetch(`${baseUrl.replace(/\/$/, '')}/api/internal/search/eval-probe`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', [INTERNAL_TOKEN_HEADER]: internalToken },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`search eval-probe ${res.status}: ${(await res.text()).slice(0, 300)}`);
+  const j: any = await res.json();
+  if (!j?.ok) throw new Error(`search eval-probe returned ok:false — ${String(j?.error || '').slice(0, 200)}`);
+  const hits: any[] = Array.isArray(j.results) ? j.results : [];
+  return {
+    results: hits.map((h: any) => ({
+      id: String(h?.id ?? ''),
+      displayName: String(h?.displayName ?? ''),
+      itemType: h?.itemType ? String(h.itemType) : undefined,
+    })),
+    backend: j.backend ? String(j.backend) : undefined,
+    latencyMs: Number(j.latencyMs ?? 0),
+  };
+}
+
+/** Write a domain's per-query search results as `eval-result` docs (surface
+ *  'search:<domain>') so E5's drill-in + check-eval-regression read them
+ *  through the SAME container/machinery. */
+export async function writeSearchResults(
+  endpoint: string,
+  database: string,
+  runId: string,
+  surface: string,
+  results: SearchEvalResult[],
+): Promise<void> {
+  const c = await evalsContainer(endpoint, database);
+  for (const r of results) {
+    await c.items.upsert({
+      id: `${runId}:${r.queryId}`,
+      surface,
+      runId,
+      docType: 'eval-result',
+      schemaVersion: 1,
+      ttl: RESULT_TTL_SECONDS,
+      questionId: r.queryId,
+      question: r.query,
+      expectedChunks: r.expectedResults,
+      retrievedChunks: r.retrievedResults,
+      retrievalHit: r.hit,
+      mrr: r.mrr,
+      ndcg: r.ndcg,
+      mentionPass: true,
+      forbiddenHit: false,
+      judgeStatus: 'deferred',
+      pass: r.hit,
+      answer: '',
+      tier: '',
+      latencyMs: r.latencyMs,
+      backend: r.backend,
+    });
+  }
 }
 
 // ── AOAI judge (unified contract: max_completion_tokens + sampling retry) ────

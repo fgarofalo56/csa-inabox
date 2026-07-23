@@ -1,0 +1,12 @@
+{"id":"catalog-001","query":"customer 360","expectedResults":["customer","360"],"k":10,"domain":"catalog","note":"The flagship Demo customer-analytics item should top-rank for its own name."}
+{"id":"catalog-002","query":"sales","expectedResults":["sales"],"k":10,"domain":"catalog","note":"Broad term — a sales-themed item/workspace should appear."}
+{"id":"catalog-003","query":"revenue report","expectedResults":["revenue","report"],"k":10,"domain":"catalog"}
+{"id":"catalog-004","query":"lakehouse","expectedResults":["lakehouse"],"k":10,"domain":"catalog","note":"Item-type token: a lakehouse item should rank for its type name."}
+{"id":"catalog-005","query":"inventory","expectedResults":["inventory"],"k":10,"domain":"catalog"}
+{"id":"catalog-006","query":"finance dashboard","expectedResults":["finance","dashboard"],"k":10,"domain":"catalog"}
+{"id":"catalog-007","query":"marketing campaign","expectedResults":["marketing","campaign"],"k":10,"domain":"catalog"}
+{"id":"catalog-008","query":"warehouse","expectedResults":["warehouse"],"k":10,"domain":"catalog","note":"Item-type token: a warehouse item should rank."}
+{"id":"catalog-009","query":"kql database","expectedResults":["kql","database"],"k":10,"domain":"catalog"}
+{"id":"catalog-010","query":"pipeline","expectedResults":["pipeline"],"k":10,"domain":"catalog","note":"A data-pipeline item should surface for its type name."}
+{"id":"catalog-011","query":"notebook","expectedResults":["notebook"],"k":10,"domain":"catalog"}
+{"id":"catalog-012","query":"orders","expectedResults":["orders","order"],"k":10,"domain":"catalog"}

@@ -203,13 +203,52 @@ for (const file of files) {
   });
 }
 
+// ── SRCH1 — federated-search relevance sets (content/evals/search/*.jsonl) ────
+// Schema-validated against content/evals/search/_schema.json; the corpus/anchor
+// checks above are Copilot-RAG-only (search rows reference item ids/names, not
+// doc chunks), so these get id/prefix/uniqueness + row-count checks instead.
+const SEARCH_DIR = path.join(EVALS_DIR, 'search');
+const SEARCH_SCHEMA_PATH = path.join(SEARCH_DIR, '_schema.json');
+let searchFiles = 0;
+let searchRows = 0;
+if (fs.existsSync(SEARCH_DIR) && fs.existsSync(SEARCH_SCHEMA_PATH)) {
+  const searchSchema = JSON.parse(fs.readFileSync(SEARCH_SCHEMA_PATH, 'utf-8'));
+  const sfiles = fs.readdirSync(SEARCH_DIR).filter((f) => f.endsWith('.jsonl')).sort();
+  for (const file of sfiles) {
+    searchFiles += 1;
+    const domain = path.basename(file, '.jsonl');
+    const lines = fs.readFileSync(path.join(SEARCH_DIR, file), 'utf-8')
+      .split(/\r?\n/).filter((l) => l.trim().length > 0);
+    if (lines.length < MIN_ROWS) {
+      errors.push(`search/${file}: only ${lines.length} rows (need >= ${MIN_ROWS})`);
+    }
+    const seenIds = new Set();
+    lines.forEach((line, i) => {
+      const at = `search/${file}:${i + 1}`;
+      let row;
+      try { row = JSON.parse(line); } catch (e) { errors.push(`${at}: invalid JSON — ${e.message}`); return; }
+      searchRows += 1;
+      validate(searchSchema, row, at, errors);
+      if (typeof row.id === 'string') {
+        if (seenIds.has(row.id)) errors.push(`${at}: duplicate id "${row.id}"`);
+        seenIds.add(row.id);
+        if (!row.id.startsWith(`${domain}-`)) errors.push(`${at}: id "${row.id}" must be prefixed "${domain}-"`);
+      }
+      if (row.domain && row.domain !== domain) {
+        errors.push(`${at}: domain "${row.domain}" must equal the file basename "${domain}"`);
+      }
+    });
+  }
+}
+
 if (errors.length > 0) {
   console.error(`lint-eval-sets: ${errors.length} error(s)\n`);
   for (const e of errors) console.error(`  ✗ ${e}`);
   process.exit(1);
 }
 console.log(
-  `lint-eval-sets: OK — ${files.length} sets, ${totalRows} rows, ` +
+  `lint-eval-sets: OK — ${files.length} Copilot sets, ${totalRows} rows, ` +
   `${slugCache.size} corpus docs referenced` +
+  (searchFiles ? `; ${searchFiles} search sets, ${searchRows} rows (SRCH1)` : '') +
   (manifest ? ` (manifest ${String(manifest.sourceCommit).slice(0, 8)}, ${manifest.fileCount} files)` : ' (no staged manifest — repo-tree check only)'),
 );

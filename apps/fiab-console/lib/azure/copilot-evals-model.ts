@@ -44,6 +44,9 @@ export interface CopilotEvalRunDoc {
     judged: number;
     deferred: number;
     autoFailed: number;
+    /** SRCH1 — NDCG@k for federated-search runs (surface 'search:<domain>');
+     *  absent/null on Copilot RAG runs. */
+    ndcgAvg?: number | null;
   };
 }
 
@@ -70,6 +73,8 @@ export interface CopilotEvalResultDoc {
   tier: string;
   latencyMs: number;
   backend?: string;
+  /** SRCH1 — NDCG@k for a federated-search result row (surface 'search:*'). */
+  ndcg?: number;
   ttl?: number;
 }
 

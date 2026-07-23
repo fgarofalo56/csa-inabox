@@ -1,0 +1,47 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://csa-loom/evals/search-row.schema.json",
+  "title": "Federated-search relevance eval row (SRCH1)",
+  "description": "One golden query → expected-results row for a content/evals/search/<domain>.jsonl set. Scored hit-rate@k / MRR / NDCG@k by the SAME evaluator machinery as the Copilot RAG evals (E1–E3), against the REAL federated catalog-search path (lib/azure/catalog-search.searchCatalog) via the internal /api/internal/search/eval-probe route. expectedResults are display-name tokens / item ids the search SHOULD surface in the top-K (matched case-insensitively, id-exact or name-substring). Floors live in content/evals/eval-floors.json under surface 'search:<domain>' and are ratcheted UP only.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "query", "expectedResults", "domain"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9-]+$",
+      "minLength": 3,
+      "maxLength": 48,
+      "description": "Stable row id; prefix MUST equal the file domain (e.g. catalog-001)."
+    },
+    "query": {
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 200,
+      "description": "The text a user types into federated catalog search."
+    },
+    "expectedResults": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 20,
+      "items": { "type": "string", "minLength": 2, "maxLength": 120 },
+      "description": "Display-name tokens / item ids the search SHOULD surface in the top-K. A retrieved hit counts as relevant when an expected token equals its id or is a case-insensitive substring of its display name / item type."
+    },
+    "k": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 50,
+      "description": "Top-K cutoff for hit@k / NDCG@k (default 10)."
+    },
+    "domain": {
+      "type": "string",
+      "enum": ["catalog", "governance"],
+      "description": "The search domain (== the file basename); becomes the surface 'search:<domain>'."
+    },
+    "note": {
+      "type": "string",
+      "maxLength": 240,
+      "description": "Optional authoring note (why this query matters)."
+    }
+  }
+}

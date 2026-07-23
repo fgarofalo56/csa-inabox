@@ -22,6 +22,8 @@
     "health": { "retrievalHitRate": 0.5, "groundingAvg": 3, "passRate": 0.4, "provisional": true },
     "report": { "retrievalHitRate": 0.5, "groundingAvg": 3, "passRate": 0.4, "provisional": true },
     "rbac": { "retrievalHitRate": 0.5, "groundingAvg": 3, "passRate": 0.4, "provisional": true },
-    "eventstream": { "retrievalHitRate": 0.5, "groundingAvg": 3, "passRate": 0.4, "provisional": true }
+    "eventstream": { "retrievalHitRate": 0.5, "groundingAvg": 3, "passRate": 0.4, "provisional": true },
+    "search:catalog": { "retrievalHitRate": 0.5, "passRate": 0.5, "ndcgAvg": 0.4, "provisional": true },
+    "search:governance": { "retrievalHitRate": 0.5, "passRate": 0.5, "ndcgAvg": 0.4, "provisional": true }
   }
 }

@@ -175,6 +175,30 @@ jobs:
             fi
             echo "::endgroup::"
           done
+          # SRCH1 — federated-search relevance evals (mode:search): one POST per
+          # search domain (content/evals/search/*.jsonl → surface 'search:<domain>').
+          # Deterministic (no judge → no token cost); responses land in the SAME
+          # eval-responses/ dir so they merge into eval-run.json and the E3 gate
+          # enforces the search:<domain> floors too.
+          if [ -d content/evals/search ]; then
+            SEARCH_DOMAINS=$(ls content/evals/search/*.jsonl 2>/dev/null | xargs -n1 basename | sed 's/\.jsonl$//' | grep -v '^_' | paste -sd, - || true)
+            for D in $(echo "$SEARCH_DOMAINS" | tr ',' ' '); do
+              [ -n "$D" ] || continue
+              echo "::group::search-eval $D"
+              HTTP=$(curl -sS --max-time 400 -o "eval-responses/search-$D.json" -w '%{http_code}' \
+                -X POST "https://$HOST/api/copilotEvaluatorHttp?code=$KEY" \
+                -H 'content-type: application/json' \
+                -d "{\"surfaces\":[\"$D\"],\"trigger\":\"$TRIGGER\",\"mode\":\"search\"}" || echo 000)
+              if [ "$HTTP" = "200" ]; then
+                node -e "const r=require('./eval-responses/search-$D.json');for(const s of r.surfaces||[])console.log(\`  \${s.surface}: \${s.questions} Q, hit-rate \${s.retrievalHitRate}, pass-rate \${s.passRate}\`)"
+              else
+                echo "::warning::search domain $D: HTTP $HTTP from the eval trigger (409 = honest-gated; 000 = timeout/unreachable)"
+                rm -f "eval-responses/search-$D.json"
+                FAILED="$FAILED search:$D"
+              fi
+              echo "::endgroup::"
+            done
+          fi
           # Merge the per-surface responses into ONE run artifact (the E3 gate
           # + delta-baseline shape — identical to a single HTTP response body).
           jq -s '{ok: (length > 0), trigger: (.[0].trigger // "manual"), surfaces: (map(.surfaces // []) | add)}' \

@@ -258,14 +258,25 @@ describe('eval-floors.json (the committed seed)', () => {
     expect(doc._meta.unblock).toContain('ratchet-eval-floors.mjs');
     const surfaces = Object.keys(doc.floors);
     expect(surfaces.sort()).toEqual(
-      ['cost', 'data-agent', 'deploy-planner', 'eventstream', 'health', 'help', 'kql-database', 'lakehouse', 'rbac', 'report'].sort(),
+      [
+        'cost', 'data-agent', 'deploy-planner', 'eventstream', 'health', 'help',
+        'kql-database', 'lakehouse', 'rbac', 'report',
+        // SRCH1 — federated-search relevance floors (no groundingAvg; ndcgAvg instead).
+        'search:catalog', 'search:governance',
+      ].sort(),
     );
     for (const s of surfaces) {
       const f = doc.floors[s];
       expect(f.retrievalHitRate).toBeGreaterThan(0);
-      expect(f.groundingAvg).toBeGreaterThanOrEqual(1);
       expect(f.passRate).toBeGreaterThan(0);
       expect(f.provisional).toBe(true); // pre-first-run seed; the ratchet flips this
+      if (s.startsWith('search:')) {
+        // Search floors gate hit-rate/pass + NDCG@k, not judge grounding.
+        expect(f.ndcgAvg).toBeGreaterThan(0);
+        expect(f.groundingAvg).toBeUndefined();
+      } else {
+        expect(f.groundingAvg).toBeGreaterThanOrEqual(1);
+      }
     }
   });
 });

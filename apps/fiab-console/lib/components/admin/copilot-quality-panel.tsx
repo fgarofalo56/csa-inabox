@@ -32,7 +32,7 @@ import {
 } from '@fluentui/react-components';
 import {
   ArrowClockwise16Regular, Play16Regular, Beaker24Regular,
-  DataTrending24Regular, TargetArrow16Regular,
+  DataTrending24Regular, TargetArrow16Regular, SearchInfo24Regular,
 } from '@fluentui/react-icons';
 import { Section } from '@/lib/components/ui/section';
 import { TileGrid } from '@/lib/components/ui/tile-grid';
@@ -40,7 +40,7 @@ import { EmptyState } from '@/lib/components/empty-state';
 import { LearnPopover } from '@/lib/components/ui/learn-popover';
 import { HonestGate } from '@/lib/components/shared/honest-gate';
 import {
-  fmtScore5, fmtPct, fmtDeltaPct,
+  fmtScore5, fmtPct, fmtDeltaPct, isSearchSurface, searchDomainLabel,
   type SurfaceSummary, type OverallStats, type RunRef, type TrendPoint,
   type QualityGrade,
 } from '@/lib/admin/copilot-quality';
@@ -342,6 +342,8 @@ export function CopilotQualityPanel() {
   }
 
   const summaries = snap?.summaries ?? [];
+  const copilotSummaries = summaries.filter((x) => !isSearchSurface(x.surface));
+  const searchSummaries = summaries.filter((x) => isSearchSurface(x.surface));
   const overall = snap?.overall;
   const evaluatorGated = snap ? !snap.evaluator.configured : false;
   const anyRuns = summaries.some((x) => x.totals);
@@ -405,7 +407,7 @@ export function CopilotQualityPanel() {
           learnMoreHref="https://learn.microsoft.com/azure/ai-foundry/concepts/evaluation-approach-gen-ai"
         />}
       >
-        {summaries.length === 0
+        {copilotSummaries.length === 0
           ? <EmptyState
               icon={<Beaker24Regular />}
               title={evaluatorGated ? 'Deploy the evaluator to start scoring Copilot quality' : 'No eval runs yet'}
@@ -416,10 +418,28 @@ export function CopilotQualityPanel() {
             />
           : (
             <TileGrid minTileWidth={280}>
-              {summaries.map((sum) => <ScoreTile key={sum.surface} sum={sum} active={sum.surface === selected} onSelect={() => { setSelected(sum.surface); setSelectedRunId(null); }} />)}
+              {copilotSummaries.map((sum) => <ScoreTile key={sum.surface} sum={sum} active={sum.surface === selected} onSelect={() => { setSelected(sum.surface); setSelectedRunId(null); }} />)}
             </TileGrid>
           )}
       </Section>
+
+      {/* SRCH1 — Search relevance (federated catalog-search golden queries) */}
+      {searchSummaries.length > 0 && (
+        <Section
+          title={<span style={{ display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalS }}>
+            <SearchInfo24Regular style={{ color: tokens.colorBrandForeground1 }} /> Search relevance
+          </span>}
+          actions={<LearnPopover
+            title="Federated-search relevance"
+            content="Golden query → expected-result sets (content/evals/search) scored against the REAL federated catalog search users type into (/catalog): hit-rate@k, MRR, and NDCG@k. Same evaluator machinery + ratcheted floors as the Copilot evals — a broken index or ranking change drops the score below floor and fails check-eval-regression. Click a domain to drill into its worst queries (expected vs retrieved items)."
+            learnMoreHref="https://learn.microsoft.com/azure/search/search-what-is-azure-search"
+          />}
+        >
+          <TileGrid minTileWidth={280}>
+            {searchSummaries.map((sum) => <ScoreTile key={sum.surface} sum={sum} active={sum.surface === selected} onSelect={() => { setSelected(sum.surface); setSelectedRunId(null); }} />)}
+          </TileGrid>
+        </Section>
+      )}
 
       {/* Drill-in: run history trend + worst questions for the selected surface */}
       {selectedSummary && selectedSummary.totals && (
@@ -528,10 +548,12 @@ export function CopilotQualityPanel() {
 function ScoreTile({ sum, active, onSelect }: { sum: SurfaceSummary; active: boolean; onSelect: () => void }) {
   const s = useStyles();
   const t = sum.totals;
+  const search = isSearchSurface(sum.surface);
   return (
-    <button className={mergeClasses(s.tile, active && s.tileActive)} onClick={onSelect} aria-label={`Copilot surface ${sum.surface}`}>
+    <button className={mergeClasses(s.tile, active && s.tileActive)} onClick={onSelect} aria-label={`${search ? 'Search domain' : 'Copilot surface'} ${sum.surface}`}>
       <div className={s.tileHead}>
-        <span className={s.tileName}>{sum.surface}</span>
+        <span className={s.tileName}>{search ? searchDomainLabel(sum.surface) : sum.surface}</span>
+        {search && <Badge appearance="outline" color="informative">search</Badge>}
         <GradePill grade={sum.grade} />
       </div>
       {!t ? (
@@ -544,20 +566,20 @@ function ScoreTile({ sum, active, onSelect }: { sum: SurfaceSummary; active: boo
               <span className={s.metricLabel}>hit-rate {fmtDeltaPct(sum.delta?.retrievalHitRate)}</span>
             </div>
             <div className={s.metric}>
-              <span className={s.metricVal}>{fmtScore5(t.groundingAvg)}</span>
-              <span className={s.metricLabel}>grounding</span>
+              <span className={s.metricVal}>{search ? fmtPct(t.ndcgAvg) : fmtScore5(t.groundingAvg)}</span>
+              <span className={s.metricLabel}>{search ? 'ndcg' : 'grounding'}</span>
             </div>
             <div className={s.metric}>
               <span className={s.metricVal}>{fmtPct(t.passRate)}</span>
-              <span className={s.metricLabel}>pass {fmtDeltaPct(sum.delta?.passRate)}</span>
+              <span className={s.metricLabel}>{search ? 'hit@k' : 'pass'} {fmtDeltaPct(sum.delta?.passRate)}</span>
             </div>
           </div>
           {sum.floorStatus && (
             <div className={s.floorDots}>
               <TargetArrow16Regular style={{ color: tokens.colorNeutralForeground3 }} />
               <FloorDot mark={sum.floorStatus.retrievalHitRate} label="hit" />
-              <FloorDot mark={sum.floorStatus.groundingAvg} label="grnd" />
-              <FloorDot mark={sum.floorStatus.passRate} label="pass" />
+              {!search && <FloorDot mark={sum.floorStatus.groundingAvg} label="grnd" />}
+              <FloorDot mark={sum.floorStatus.passRate} label={search ? 'hit@k' : 'pass'} />
             </div>
           )}
           <div className={s.chips}>
