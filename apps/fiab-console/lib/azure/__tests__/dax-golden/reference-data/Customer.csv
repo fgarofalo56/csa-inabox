@@ -1,0 +1,5 @@
+CustomerKey,CustomerName,Segment
+1,Alice,Enterprise
+2,Bob,SMB
+3,Carol,Enterprise
+4,Dan,Consumer

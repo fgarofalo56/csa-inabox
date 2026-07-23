@@ -1,0 +1,109 @@
+{
+  "_comment": "DAX golden-result fixtures for the A1-A4 DAX depth track (loom-next-level ws-lineage-depth A5). Each fixture asserts the NUMERIC result of a DAX query over the seeded Sales/Date/Customer star schema in reference-data/*.csv. A5 seeds ONLY the functions the loom-native engine supports TODAY (the 3-regex translator: EVALUATE <Table>, EVALUATE TOPN(N,<Table>), EVALUATE ROW(\"L\", CALCULATE(SUM|COUNT|AVERAGE|MIN|MAX(T[c])))). A1/A2/A3 ADD their functions' golden rows to THIS file in the SAME PR that implements the fold (status:'implemented'). The vitest provenance gate (dax-golden-fixtures.test.ts) recomputes every 'expect.value' from the CSV reference data in pure JS so a wrong golden fails locally; the live Playwright 'dax-golden' project asserts the same numbers against real Synapse serverless. See README.md for the fixture format + how to add a row.",
+  "provenance": {
+    "source": "reference-data/{Sales,Date,Customer}.csv — deterministic, hand-verifiable",
+    "referenceEngine": "Power BI Desktop parity is reproduced by fixtures.ts::referenceEvaluate (pure JS over the same CSV rows); the CSV IS the reference model, so goldens never drift from a live tenant.",
+    "salesTotalsCrosscheck": "SUM(Amount)=3500 (2023=1650, 2024=1850); 12 rows; MIN=100; MAX=600; AVG=3500/12"
+  },
+  "fixtures": [
+    {
+      "id": "eval-table-sales",
+      "fn": "EVALUATE",
+      "category": "table",
+      "since": "A5",
+      "status": "implemented",
+      "dax": "EVALUATE Sales",
+      "reference": { "op": "rowcount", "table": "Sales" },
+      "expect": { "kind": "rowCount", "value": 12 },
+      "provenance": "12 fact rows in reference-data/Sales.csv"
+    },
+    {
+      "id": "eval-table-customer",
+      "fn": "EVALUATE",
+      "category": "table",
+      "since": "A5",
+      "status": "implemented",
+      "dax": "EVALUATE Customer",
+      "reference": { "op": "rowcount", "table": "Customer" },
+      "expect": { "kind": "rowCount", "value": 4 },
+      "provenance": "4 customer rows in reference-data/Customer.csv"
+    },
+    {
+      "id": "eval-table-date",
+      "fn": "EVALUATE",
+      "category": "table",
+      "since": "A5",
+      "status": "implemented",
+      "dax": "EVALUATE 'Date'",
+      "reference": { "op": "rowcount", "table": "Date" },
+      "expect": { "kind": "rowCount", "value": 24 },
+      "provenance": "24 monthly rows (2023-01..2024-12) in reference-data/Date.csv"
+    },
+    {
+      "id": "topn-sales-5",
+      "fn": "TOPN",
+      "category": "table",
+      "since": "A5",
+      "status": "implemented",
+      "dax": "EVALUATE TOPN(5, Sales)",
+      "reference": { "op": "rowcount", "table": "Sales", "limit": 5 },
+      "expect": { "kind": "rowCount", "value": 5 },
+      "provenance": "TOPN(5) caps the 12-row fact at 5"
+    },
+    {
+      "id": "agg-sum-amount",
+      "fn": "SUM",
+      "category": "aggregation",
+      "since": "A5",
+      "status": "implemented",
+      "dax": "EVALUATE ROW(\"Total Sales\", CALCULATE(SUM(Sales[Amount])))",
+      "reference": { "op": "sum", "table": "Sales", "column": "Amount" },
+      "expect": { "kind": "scalar", "column": "Total Sales", "value": 3500 },
+      "provenance": "SUM(Amount) over 12 rows = 3500"
+    },
+    {
+      "id": "agg-count-amount",
+      "fn": "COUNT",
+      "category": "aggregation",
+      "since": "A5",
+      "status": "implemented",
+      "dax": "EVALUATE ROW(\"Sales Count\", CALCULATE(COUNT(Sales[Amount])))",
+      "reference": { "op": "count", "table": "Sales", "column": "Amount" },
+      "expect": { "kind": "scalar", "column": "Sales Count", "value": 12 },
+      "provenance": "COUNT(Amount) — all 12 rows have a non-blank Amount"
+    },
+    {
+      "id": "agg-avg-amount",
+      "fn": "AVERAGE",
+      "category": "aggregation",
+      "since": "A5",
+      "status": "implemented",
+      "dax": "EVALUATE ROW(\"Avg Sale\", CALCULATE(AVERAGE(Sales[Amount])))",
+      "reference": { "op": "average", "table": "Sales", "column": "Amount" },
+      "expect": { "kind": "scalar", "column": "Avg Sale", "value": 291.6666666666667, "tolerance": 0.01 },
+      "provenance": "AVERAGE(Amount) = 3500/12 = 291.6666..."
+    },
+    {
+      "id": "agg-min-amount",
+      "fn": "MIN",
+      "category": "aggregation",
+      "since": "A5",
+      "status": "implemented",
+      "dax": "EVALUATE ROW(\"Min Sale\", CALCULATE(MIN(Sales[Amount])))",
+      "reference": { "op": "min", "table": "Sales", "column": "Amount" },
+      "expect": { "kind": "scalar", "column": "Min Sale", "value": 100 },
+      "provenance": "MIN(Amount) = 100 (SaleKey 3)"
+    },
+    {
+      "id": "agg-max-amount",
+      "fn": "MAX",
+      "category": "aggregation",
+      "since": "A5",
+      "status": "implemented",
+      "dax": "EVALUATE ROW(\"Max Sale\", CALCULATE(MAX(Sales[Amount])))",
+      "reference": { "op": "max", "table": "Sales", "column": "Amount" },
+      "expect": { "kind": "scalar", "column": "Max Sale", "value": 600 },
+      "provenance": "MAX(Amount) = 600 (SaleKey 4)"
+    }
+  ]
+}

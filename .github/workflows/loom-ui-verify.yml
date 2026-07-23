@@ -272,6 +272,36 @@ jobs:
           CI: 'true'
 
       # -----------------------------------------------------------------------
+      # 6a3. DAX golden numeric harness (loom-next-level A5) — seed the
+      #      deterministic Sales/Date/Customer star schema into the
+      #      `loom_dax_golden` serverless DB (in-VNet: the endpoint is
+      #      PE-locked), then gate the NUMERIC results of the implemented DAX
+      #      functions against it via the `dax-golden` project. Both steps are
+      #      continue-on-error so a missing Synapse-SQL-admin grant (the seed's
+      #      honest prerequisite) annotates the run and the harness SKIPs — it
+      #      never masks the core verify gate. Once the running identity is a
+      #      Synapse SQL admin, the seed provisions the views and the harness
+      #      asserts real numbers (a mismatch is a hard fail — that is the point).
+      # -----------------------------------------------------------------------
+      - name: Seed DAX golden reference model (serverless)
+        continue-on-error: true
+        run: LOOM_SYNAPSE_WORKSPACE="${{ vars.LOOM_SYNAPSE_WORKSPACE }}" bash scripts/csa-loom/seed-dax-golden.sh
+        if: ${{ vars.LOOM_SYNAPSE_WORKSPACE != '' }}
+
+      - name: Run DAX golden harness (--project=dax-golden)
+        continue-on-error: true
+        run: |
+          if [ -d "/ms-playwright" ]; then export PLAYWRIGHT_BROWSERS_PATH=/ms-playwright; fi
+          pnpm -C apps/fiab-console exec playwright test --project=dax-golden
+        env:
+          SESSION_SECRET:       ${{ env.SESSION_SECRET }}
+          LOOM_URL:             ${{ env.LOOM_URL }}
+          LOOM_AUTOMATION_OID:  ${{ env.LOOM_AUTOMATION_OID }}
+          LOOM_AUTOMATION_UPN:  ${{ env.LOOM_AUTOMATION_UPN }}
+          LOOM_AUTOMATION_NAME: ${{ env.LOOM_AUTOMATION_NAME }}
+          CI: 'true'
+
+      # -----------------------------------------------------------------------
       # 6b. Optional browser-E2E RECEIPT (G1 / no-vaporware.md).
       #     Runs only when `target_route` is set. Uses the SAME minted-session
       #     path (scripts/csa-loom/e2e-receipt.mjs shares the exact cookie mint)

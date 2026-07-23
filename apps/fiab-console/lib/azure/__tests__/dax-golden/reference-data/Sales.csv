@@ -1,0 +1,13 @@
+SaleKey,DateKey,CustomerKey,ProductCategory,Quantity,UnitPrice,Amount
+1,20230101,1,Hardware,2,100,200
+2,20230201,2,Software,5,50,250
+3,20230301,1,Hardware,1,100,100
+4,20230601,3,Services,3,200,600
+5,20231001,2,Software,4,50,200
+6,20231201,4,Hardware,2,150,300
+7,20240101,1,Software,10,50,500
+8,20240201,3,Services,1,200,200
+9,20240301,2,Hardware,3,100,300
+10,20240601,1,Services,2,200,400
+11,20240901,4,Software,6,50,300
+12,20241201,3,Hardware,1,150,150
