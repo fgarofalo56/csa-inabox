@@ -418,11 +418,16 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
       });
       // Content-type guard: a 404/500 returns an HTML page, not JSON — calling
       // r.json() on that throws "Unexpected token <" and the answer is lost.
-      const res = await safeModelJson<{ answer?: string; query?: string; sourceUsed?: string; hint?: string; usage?: { totalTokens?: number }; model?: string; tools?: DaTool[]; mode?: string; plan?: ReasoningTraceData['plan']; steps?: ReasoningTraceData['steps']; verify?: ReasoningTraceData['verify']; modelTier?: string; reasoningConfigured?: boolean }>(r);
+      const res = await safeModelJson<{ answer?: string; query?: string; sourceUsed?: string; hint?: string; usage?: { totalTokens?: number }; model?: string; tools?: DaTool[]; mode?: string; plan?: ReasoningTraceData['plan']; steps?: ReasoningTraceData['steps']; verify?: ReasoningTraceData['verify']; modelTier?: string; reasoningConfigured?: boolean; graph?: ReasoningTraceData['graph']; repairs?: ReasoningTraceData['repairs']; plausibility?: ReasoningTraceData['plausibility'] }>(r);
       const j = res.data;
       if (res.ok && j) {
         const reasoning: ReasoningTraceData | undefined = j.mode === 'plan-execute-verify' && j.verify
-          ? { plan: j.plan || [], steps: j.steps || [], verify: j.verify, modelTier: j.modelTier, reasoningConfigured: j.reasoningConfigured }
+          ? {
+              plan: j.plan || [], steps: j.steps || [], verify: j.verify,
+              modelTier: j.modelTier, reasoningConfigured: j.reasoningConfigured,
+              // N11 graph-path citations + N12 repair attempts / plausibility.
+              graph: j.graph, repairs: j.repairs, plausibility: j.plausibility,
+            }
           : undefined;
         assistantTurn = { role: 'assistant', content: String(j.answer ?? ''), query: j.query, sourceUsed: j.sourceUsed, usage: j.usage, model: j.model, tools: j.tools, reasoning };
       } else {
@@ -632,6 +637,9 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
   const sources = normalizeDaSources(state.sources);
   const subAgents = normalizeSubAgents(state.subAgents);
   const instrLen = (typeof state.instructions === 'string' ? state.instructions : '').length;
+  // N11 — GraphRAG grounding only has a graph to traverse when an ontology /
+  // graph-model source is attached (the toggle stays visible + on either way).
+  const hasOntologySource = sources.some((sr) => sr.type === 'ontology' || sr.type === 'graph');
 
   // ---- evaluation (ground-truth set + runs) ----
   const evalSet = arr<DaEvalCase>(state.evalSet);
@@ -780,6 +788,25 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
                     value={state.instructions} maxLength={15000} rows={5}
                     onChange={(_, d) => setState((p) => ({ ...p, instructions: d.value }))}
                     placeholder="Route financial metrics to the semantic model; raw exploration to the lakehouse; log analysis to KQL…"
+                  />
+                </Field>
+                {/* N11 — GraphRAG grounding over the authored ontology. DEFAULT-ON
+                    (loom_default_on_opt_out); the deployment-wide kill switch is
+                    the runtime flag n11-graphrag-grounding on /admin/runtime-flags. */}
+                <Field
+                  label="Graph grounding"
+                  hint="Relational (multi-hop) questions retrieve over the ontology this agent is bound to — seed entities, a real multi-hop traversal on the in-VNet graph, and the precomputed community summaries — before any query is written. Graph paths are cited in the answer receipt. Runs fully in-boundary (no external egress)."
+                >
+                  <Switch
+                    checked={state.graphGrounding !== false}
+                    onChange={(_, d) => setState((p) => ({ ...p, graphGrounding: d.checked }))}
+                    label={
+                      state.graphGrounding === false
+                        ? 'Off — answers ground on tables only'
+                        : hasOntologySource
+                          ? 'On — traverses the bound ontology graph'
+                          : 'On — activates when an Ontology or Graph model source is attached'
+                    }
                   />
                 </Field>
               </div>

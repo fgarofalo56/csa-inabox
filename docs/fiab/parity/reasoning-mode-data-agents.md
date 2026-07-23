@@ -87,3 +87,93 @@ from the Foundry hub Model tiers page) — not a Fabric dependency.
 (e.g. "Compare Q1 vs Q2 revenue, then break down by product and region") showing
 the plan card, step-by-step execution with row counts, and the verify verdict —
 is owed before this surface is A-grade per `ux-baseline.md` G1.
+
+---
+
+## N11 — GraphRAG retriever over the authored Weave/AGE ontology (2026-07-23)
+
+The PLAN→EXECUTE→VERIFY loop now retrieves over the ontology the customer
+**authored**, not just over tables. A relational (multi-hop) question routes
+through `lib/azure/ontology-graphrag.ts` before any query is written.
+
+| # | Capability | Status | Where |
+| --- | --- | --- | --- |
+| 1 | Seed-entity extraction from the question (declared object types + quoted phrases + content tokens) | built ✅ | `extractSeedTerms` (pure) |
+| 2 | Real instance match against Apache AGE, **predicate filtered in JS post-fetch** (AGE gotcha) | built ✅ | `searchObjects` (real AGE read) + `scoreSeedObject` / `filterSeedObjects` (pure) |
+| 3 | Multi-hop traversal — one assembled Cypher statement per hop over the whole frontier | built ✅ | `assembleHopCypher` + `parseHopRows` + bounded BFS in `retrieveGraphContext` |
+| 4 | Subgraph + **precomputed community summaries** | built ✅ | `graphrag-index.ts` → `summariesForVertices` (Cosmos `loom-graphrag-index`, PK `/ontologyId`) |
+| 5 | Typed **graph-path citations** into the N10 Answer Receipt | built ✅ | `GraphPathCitation` → `ReasoningAnswer.graph.paths` → `reasoningReceiptExtras()` → `assembleAnswerReceipt(trace, { graphPathCitations })` |
+| 6 | Offline community-summary builder (schedulable item build step) on the **STANDARD** AOAI tier | built ✅ | `buildGraphRagIndex()` (`aoaiChat({ tier:'standard' })` — Gov-safe) |
+| 7 | Honest extractive fallback when no model is deployed (never a mock) | built ✅ | `extractiveCommunitySummary` + `modelGenerated:false` on the doc |
+| 8 | "Graph grounding" toggle on the data-agent editor (DEFAULT-ON) | built ✅ | `DataAgentEditor` Build tab → `state.graphGrounding` → BFF `resolveGraphContext()` |
+| 9 | FLAG0 kill switch `n11-graphrag-grounding` (default-ON) | built ✅ | `RUNTIME_FLAGS` + `/admin/runtime-flags` |
+| 10 | Honest infra gate when the Weave AGE backend is unwired | honest-gate ⚠️ | `weaveGate()` → `ReasoningAnswer.graph.gate` (the turn still answers, just without graph grounding) |
+
+**AGE gotcha, honoured explicitly.** Only `id(a) = <numeric literal>`
+disjunctions and `type(r)` / `label(b)` projections reach Cypher — the exact
+forms `weave-explore.traverseObject` proves live. No variable-length `-[*1..n]-`,
+no `IN [...]`, no property `WHERE`. Every property predicate runs in JS over rows
+AGE actually returned (unit-tested).
+
+**MIG1.** New Cosmos shape `loom-graphrag-index` (`CommunitySummaryDoc`,
+`schemaVersion: 1`) registers its migrator chain at module scope in
+`lib/azure/graphrag-index-model.ts` and is imported for that side effect by
+`cosmos-client.ts` before any read materializes.
+
+**AUDIT.** `buildGraphRagIndex` is a privileged mutation — it writes an
+`_auditLog` row (`graphrag.index.build`) and fans out via `emitAuditEvent`.
+
+## N12 — Self-healing / verified NL2SQL loop (2026-07-23)
+
+| # | Capability | Status | Where |
+| --- | --- | --- | --- |
+| 1 | Classify a step outcome from REAL backend metadata (query error vs. honest infra gate vs. implausible all-empty result) | built ✅ | `classifyStepFailure` (pure) |
+| 2 | Re-read the **LIVE** schema on every attempt | built ✅ | `fetchSynapseSchemaContext()` (sql-tools → live `sys.*` DMV) |
+| 3 | Consult N9's governed metric contract on every attempt | built ✅ | `matchMetric(tenantId, subQuery)` |
+| 4 | Schema-grounded rewrite | built ✅ | `buildRepairPrompt` / `buildRepairContext` → `aoaiChatTurn` |
+| 5 | **EXPLAIN cost guardrail before re-running** (a rewrite that will not compile never spends an execution) | built ✅ | `explainQuery(dedicatedTarget(), sql, true)` → `summarizeExplainXml` |
+| 6 | Pinned re-run on the real backend | built ✅ | `withPinnedQuery` → `chatGrounded` |
+| 7 | **Bounded** retries (`LOOM_NL2SQL_REPAIR_MAX_ATTEMPTS`, default 2, clamped [0,5]) | built ✅ | `nl2sqlRepairMaxAttempts` |
+| 8 | Every attempt recorded (attempt #, reason, error, rewritten query, EXPLAIN verdict, outcome, rows) | built ✅ | `RepairAttempt[]` on the step **and** the answer |
+| 9 | Plausibility pass — the answer must follow from the REAL returned rows | built ✅ | `assessPlausibility` (pure; reads `tools[].rows`); downgrades a verify `pass` it cannot support |
+| 10 | Attempts + plausibility rendered in the receipt + the reasoning trace | built ✅ | `ReceiptPanel` (`receipt-repair-attempts`, `receipt-plausibility`) + `ReasoningTrace` |
+
+## Env / gate (G2)
+
+| Var | Default (UNSET) | Gate |
+| --- | --- | --- |
+| `LOOM_GRAPHRAG_MAX_HOPS` | 2 hops — fully functional | `svc-graphrag-nl2sql-repair` (`optionalDefault`, env-picker Fix-it, `/admin/gates`) |
+| `LOOM_NL2SQL_REPAIR_MAX_ATTEMPTS` | 2 attempts — fully functional | same gate |
+
+Both are pure tuning knobs; the FEATURES are default-ON. Turning GraphRAG
+grounding off is the FLAG0 runtime flag or the per-agent toggle — never an
+unset env var. Both are emitted (empty) on the Console `apps[]` env in
+`modules/admin-plane/main.bicep` so `/admin/env-config` can set them without a
+bicep edit.
+
+## Per-cloud + SOVEREIGN MOAT (IL5 / air-gap)
+
+Identical in Commercial, GCC-High and IL5. **Apache AGE runs on an in-VNet
+Azure Database for PostgreSQL flexible server with ZERO external egress** —
+seed matching, multi-hop traversal, community summarization (in-boundary AOAI,
+standard tier) and the persisted index (in-boundary Cosmos) are all inside the
+boundary. The full capability therefore runs **DISCONNECTED in an air-gapped
+IL5 enclave** with no code-path change, and the Answer Receipt — with the exact
+graph paths, queries, row counts, repair attempts and plausibility verdict — IS
+the compliance artifact an ISSO reviews. That is the moat headline. The
+reasoning tier degrades to standard in Gov via the existing
+`reasoningConfigured:false` honest-Fix-it pattern; N11/N12 are unaffected.
+
+## Test coverage (added)
+
+| File | Scope |
+| --- | --- |
+| `lib/azure/__tests__/ontology-graphrag.test.ts` | Seed extraction, the JS-side predicate filter, multi-hop Cypher assembly + injection guard, agtype hop parsing, path citations, community join, honest no-match note — over a real agtype ontology fixture |
+| `lib/azure/__tests__/graphrag-index.test.ts` | Pure community detection (determinism, isolated-node drop, cap), title resolution, extractive fallback, STANDARD-tier summarization, real AGE reads, persistence + stale-build prune + audit row |
+| `lib/azure/__tests__/data-agent-reasoning-graphrag.test.ts` | A multi-hop question yields graph-path citations; grounding reaches the planner AND every execute step; receipt-extras mapping; FLAG0 + per-agent toggle + non-relational + no-binding short-circuits |
+| `lib/azure/__tests__/data-agent-reasoning-repair.test.ts` | Stale-schema failure → repairs + answers with every attempt recorded; BOUNDED retries; EXPLAIN guardrail rejects an invalid rewrite without spending an execution; plausibility pass/fail cases |
+
+**Browser E2E receipt owed (G1)** for N11/N12: a multi-hop question against a
+seeded ontology showing the graph-path rows in the reasoning trace + receipt,
+and a stale-schema question showing the repair attempt chain. `tsc` + vitest are
+not completion evidence.

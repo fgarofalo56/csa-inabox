@@ -59,6 +59,52 @@ export interface ReceiptSource {
   url?: string;
 }
 
+/**
+ * N11 — ONE typed GRAPH-PATH CITATION: the exact traversal over the authored
+ * ontology (Apache AGE, in-VNet PostgreSQL) that grounded the answer. Additive
+ * and OPTIONAL — a turn with no graph grounding assembles exactly as before.
+ */
+export interface ReceiptGraphPath {
+  /** Stable path id (`<seedId>-><endId>`). */
+  id?: string;
+  /** Edges traversed (>= 1). */
+  hops: number;
+  /** Human-readable path, e.g. `Acme (Customer) —[PLACED]→ SO-9 (Order)`. */
+  text: string;
+  /** Ordered node labels (`Title (ObjectType)`), seed first. */
+  nodes?: string[];
+  /** Ordered link types, one per hop. */
+  links?: string[];
+  /** The precomputed GraphRAG community the terminal node belongs to. */
+  communityId?: string;
+}
+
+/**
+ * N12 — one bounded self-healing repair attempt (query error / implausible
+ * result → live-schema re-read → metric consult → rewrite → EXPLAIN guardrail →
+ * re-run). Additive and OPTIONAL.
+ */
+export interface ReceiptRepairAttempt {
+  step: number;
+  attempt: number;
+  reason: string;
+  error?: string;
+  rewrittenQuery?: string;
+  explainSummary?: string;
+  explainError?: string;
+  metricConsulted?: string;
+  outcome: string;
+  rowCount?: number;
+}
+
+/** N12 — the verify-side check that the answer follows from the REAL rows. */
+export interface ReceiptPlausibility {
+  plausible: boolean;
+  reason: string;
+  rowsSeen: number;
+  unsupportedFigures?: string[];
+}
+
 /** One tool invocation rolled into the receipt (name · server · timing · status). */
 export interface ReceiptTool {
   name: string;
@@ -127,6 +173,15 @@ export interface AnswerReceipt {
   refusalReason?: string;
   /** N9's VQR signal, when present. */
   verification?: VerificationSignal;
+  /**
+   * N11 — typed graph-path citations from the GraphRAG retrieval over the
+   * authored ontology. ABSENT for a turn that did no graph grounding.
+   */
+  graphPathCitations?: ReceiptGraphPath[];
+  /** N12 — every bounded repair attempt the loop made. ABSENT when none. */
+  repairAttempts?: ReceiptRepairAttempt[];
+  /** N12 — did the answer follow from the real returned rows? ABSENT when unchecked. */
+  plausibility?: ReceiptPlausibility;
   /** ISO timestamp the receipt was assembled. */
   createdAt: string;
 }
@@ -156,6 +211,12 @@ export interface ReceiptTraceLike {
   tools?: Array<{ name?: unknown; serverName?: unknown; durationMs?: unknown; ok?: unknown; error?: unknown }>;
   /** Terminal error message for the turn, when any. */
   error?: string;
+  /** N11 — graph-path citations stamped onto the trace by the reasoning loop. */
+  graphPathCitations?: Array<Record<string, unknown>>;
+  /** N12 — repair attempts stamped onto the trace by the reasoning loop. */
+  repairAttempts?: Array<Record<string, unknown>>;
+  /** N12 — the plausibility verdict stamped onto the trace. */
+  plausibility?: Record<string, unknown>;
 }
 
 export interface AssembleReceiptOptions {
@@ -163,6 +224,15 @@ export interface AssembleReceiptOptions {
   receiptId?: string;
   /** Explicit verification signal (N9). Overrides any signal found on the final step. */
   verification?: VerificationSignal;
+  /**
+   * N11 — explicit graph-path citations (the reasoning loop's
+   * `ReasoningAnswer.graph.paths`). Overrides anything found on the trace.
+   */
+  graphPathCitations?: ReceiptGraphPath[];
+  /** N12 — explicit repair attempts (`ReasoningAnswer.repairs`). */
+  repairAttempts?: ReceiptRepairAttempt[];
+  /** N12 — explicit plausibility verdict (`ReasoningAnswer.plausibility`). */
+  plausibility?: ReceiptPlausibility;
   /** Deterministic timestamp (tests); defaults to now. */
   createdAt?: string;
 }
@@ -281,6 +351,81 @@ function verificationFromSteps(steps: Array<Record<string, unknown>> | undefined
   return undefined;
 }
 
+/**
+ * N11 — coerce loosely-shaped graph-path citations (from a persisted trace) into
+ * the typed receipt shape. Defensive: a malformed row is dropped, never thrown.
+ */
+function normalizeGraphPaths(raw: unknown): ReceiptGraphPath[] {
+  if (!Array.isArray(raw)) return [];
+  const out: ReceiptGraphPath[] = [];
+  for (const r of raw) {
+    if (!isRecord(r)) continue;
+    // Accept either the receipt shape (nodes: string[]) or the reasoning loop's
+    // GraphPathCitation (nodes: {title,objectType}[]).
+    const nodes = Array.isArray(r.nodes)
+      ? r.nodes
+          .map((n) =>
+            typeof n === 'string'
+              ? n
+              : isRecord(n)
+                ? `${str(n.title)}${n.objectType ? ` (${str(n.objectType)})` : ''}`.trim()
+                : '',
+          )
+          .filter(Boolean)
+      : undefined;
+    const links = Array.isArray(r.links) ? r.links.map(str).filter(Boolean) : undefined;
+    const text = str(r.text) || (nodes && nodes.length ? nodes.join(' → ') : '');
+    if (!text) continue;
+    out.push({
+      id: r.id ? str(r.id) : undefined,
+      hops: num(r.hops) ?? Math.max(1, (nodes?.length ?? 2) - 1),
+      text,
+      nodes,
+      links,
+      communityId: r.communityId ? str(r.communityId) : undefined,
+    });
+  }
+  return out;
+}
+
+/** N12 — coerce loosely-shaped repair attempts into the typed receipt shape. */
+function normalizeRepairAttempts(raw: unknown): ReceiptRepairAttempt[] {
+  if (!Array.isArray(raw)) return [];
+  const out: ReceiptRepairAttempt[] = [];
+  for (const r of raw) {
+    if (!isRecord(r)) continue;
+    const attempt = num(r.attempt);
+    if (attempt === undefined) continue;
+    out.push({
+      step: num(r.step) ?? 1,
+      attempt,
+      reason: str(r.reason),
+      error: r.error ? str(r.error) : undefined,
+      rewrittenQuery: r.rewrittenQuery ? str(r.rewrittenQuery) : undefined,
+      explainSummary: r.explainSummary ? str(r.explainSummary) : undefined,
+      explainError: r.explainError ? str(r.explainError) : undefined,
+      metricConsulted: r.metricConsulted ? str(r.metricConsulted) : undefined,
+      outcome: str(r.outcome) || 'still-failing',
+      rowCount: num(r.rowCount),
+    });
+  }
+  return out;
+}
+
+/** N12 — coerce a loosely-shaped plausibility verdict. */
+function normalizePlausibility(raw: unknown): ReceiptPlausibility | undefined {
+  if (!isRecord(raw)) return undefined;
+  if (typeof raw.plausible !== 'boolean') return undefined;
+  return {
+    plausible: raw.plausible,
+    reason: str(raw.reason),
+    rowsSeen: num(raw.rowsSeen) ?? 0,
+    unsupportedFigures: Array.isArray(raw.unsupportedFigures)
+      ? raw.unsupportedFigures.map(str).filter(Boolean)
+      : undefined,
+  };
+}
+
 /** Map a trace citation (Citation shape) to a ReceiptSource. */
 function sourceFromCitation(c: Record<string, unknown>): ReceiptSource | null {
   const id = str(c.id) || str(c.path);
@@ -383,6 +528,21 @@ export function assembleAnswerReceipt(
     total: num(usage.totalTokens),
   };
 
+  // N11/N12 — additive, optional signals from the reasoning loop. Explicit opts
+  // win; otherwise they are read off the trace. Absent ⇒ the fields are omitted
+  // and the receipt is byte-identical to N10's.
+  const graphPathCitations = opts.graphPathCitations?.length
+    ? normalizeGraphPaths(opts.graphPathCitations as unknown[])
+    : normalizeGraphPaths(t.graphPathCitations);
+  const repairAttempts = opts.repairAttempts?.length
+    ? normalizeRepairAttempts(opts.repairAttempts as unknown[])
+    : normalizeRepairAttempts(t.repairAttempts);
+  const plausibility = opts.plausibility
+    ? normalizePlausibility(opts.plausibility as unknown as Record<string, unknown>)
+    : normalizePlausibility(t.plausibility);
+  // A graph-path citation IS a graph path — keep the existing count honest.
+  graphPaths += graphPathCitations.length;
+
   const verification = opts.verification ?? verificationFromSteps(steps);
   const { refused, reason } = detectRefusal(t);
   const verdict: ReceiptVerdict = refused
@@ -412,6 +572,9 @@ export function assembleAnswerReceipt(
     refused,
     refusalReason: reason,
     verification,
+    ...(graphPathCitations.length ? { graphPathCitations } : {}),
+    ...(repairAttempts.length ? { repairAttempts } : {}),
+    ...(plausibility ? { plausibility } : {}),
     createdAt: opts.createdAt ?? new Date().toISOString(),
   };
 }

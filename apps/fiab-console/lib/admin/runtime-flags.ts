@@ -230,6 +230,14 @@ export const RUNTIME_FLAGS: readonly RuntimeFlagDef[] = [
     ownerItem: 'N13',
     surface: 'Every Azure OpenAI chat turn (aoai-chat-client hot path) + /admin/copilot-quality (Budgets tab)',
   },
+  {
+    id: 'n11-graphrag-grounding',
+    label: 'Data agents — GraphRAG grounding over the authored ontology',
+    description:
+      'N11 GraphRAG retrieval: a relational (multi-hop) data-agent question extracts seed entities from the authored Weave ontology, traverses the REAL Apache AGE graph (in-VNet PostgreSQL, zero external egress), attaches the precomputed community summaries, and layers the resulting graph facts + graph-path citations onto the planner and every execute step (and into the Answer Receipt). OFF reverts every data agent to the pre-N11 table-only grounding on the very next turn — the ontology, its instances, and the GraphRAG index are untouched, they are simply not consulted.',
+    ownerItem: 'N11',
+    surface: 'Data-agent test chat + published agent turns (/items/data-agent/[id]) — Graph grounding',
+  },
 ];
 
 /** Union of registered flag ids (`never` while the list is empty). */

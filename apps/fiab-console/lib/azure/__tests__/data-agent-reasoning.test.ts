@@ -67,7 +67,19 @@ describe('runReasoningAgent — plan → execute → verify', () => {
     expect(out.steps.every((s) => s.status === 'completed' && s.executed)).toBe(true);
     expect(out.steps[0].rowCount).toBe(3);
     // Verify verdict + grounded final answer.
-    expect(out.verify.verdict).toBe('pass');
+    // N12 (self-healing / verified NL2SQL): the verifier CLAIMS 'pass', but its
+    // finalAnswer asserts figures ($4.2M, 12) that appear nowhere in the real
+    // executed rows (this fixture's grounded backend returns only prose +
+    // rowCount, no cells). assessPlausibility traces asserted figures back to
+    // actual returned values and DOWNGRADES an unsupported 'pass' to 'partial'
+    // — refuse-not-guess applied to the verify step. A model-claimed 'pass'
+    // is no longer taken at face value; this is the guarantee, not a quirk.
+    expect(out.verify.verdict).toBe('partial');
+    expect(out.plausibility?.plausible).toBe(false);
+    // The downgrade names the exact untraceable figures — the auditable "why".
+    expect(out.plausibility?.unsupportedFigures ?? []).toEqual(
+      expect.arrayContaining(['4.2', '12']),
+    );
     expect(out.answer).toBe('West leads at $4.2M with 12 tickets.');
     // Executed once per step against the real backend.
     expect(groundedMock).toHaveBeenCalledTimes(2);

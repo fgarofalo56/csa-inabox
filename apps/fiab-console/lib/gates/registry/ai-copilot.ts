@@ -57,6 +57,19 @@ export const AI_COPILOT_GATE_META: Record<string, GateMeta> = {
     surfaces: [{ path: '/admin/mcp-servers', label: 'IQ MCP bridge' }],
     fixit: { kind: 'env-picker' },
   },
+  'svc-graphrag-nl2sql-repair': {
+    surfaces: [
+      { path: '/items/data-agent', label: 'Data agent — Graph grounding (GraphRAG over the authored ontology)' },
+      { path: '/api/items/data-agent/*/chat', label: 'Data-agent turns — plan→execute→verify + self-healing repair' },
+      { path: '/admin/runtime-flags', label: 'Runtime flags — n11-graphrag-grounding kill switch' },
+    ],
+    // Fix-it: a plain env write of two numeric tuning knobs through the ONE
+    // shared env-apply write path. There is nothing to discover in ARM.
+    fixit: { kind: 'env-picker' },
+    autoResolveNote:
+      'Unset → GraphRAG grounding traverses 2 hops and the self-healing NL2SQL loop makes up to 2 bounded repair attempts per step. Both features are DEFAULT-ON with these code defaults; the vars only tune them. Turn GraphRAG grounding off with the runtime flag n11-graphrag-grounding (seconds, no roll) or the per-agent "Graph grounding" switch — never by leaving an env var unset.',
+    legacyCodes: [],
+  },
   'svc-copilot-evaluator': {
     surfaces: [
       { path: '/admin/copilot-quality', label: 'Copilot quality — eval runs + "Run now"' },

@@ -215,7 +215,11 @@ describe('admin/env-config registry', () => {
     // svc-spark-vcore-budget (LOOM_SPARK_VCORE_BUDGET + LOOM_SPARK_TENANT_SESSION_MAX)
     // + svc-spark-chaos-drill (LOOM_SPARK_CHAOS_ENABLED) — all five optionalDefault
     // (default-ON/opt-out reliability knobs; chaos is OFF-by-default-as-intended).
-    expect(EDITABLE_ENV.length).toBe(174);
+    // Bumped to 176 by N11/N12 (GraphRAG + self-healing NL2SQL): LOOM_GRAPHRAG_MAX_HOPS
+    // (multi-hop traversal depth, code default 2, clamp [1,4]) +
+    // LOOM_NL2SQL_REPAIR_MAX_ATTEMPTS (bounded repair attempts, code default 2,
+    // clamp [0,5]) — both optional tuning knobs with safe code defaults.
+    expect(EDITABLE_ENV.length).toBe(176);
   });
 
   it('surfaces the wave-2 env vars as settable (previously dropped by the whitelist)', () => {
@@ -310,8 +314,15 @@ describe('admin/env-config registry', () => {
       'LOOM_COST_FORECAST_HORIZON_DAYS', 'LOOM_COST_FORECAST_METHOD',
       'LOOM_DIRECTLAKE_URL', 'LOOM_DOCINTEL_ENDPOINT',
       'LOOM_EVENTGRID_TOPIC_ENDPOINT', 'LOOM_EVENTGRID_TOPIC_KEY',
+      // N11 svc-graphrag — multi-hop traversal depth; unset = code default 2
+      // (GraphRAG grounding still runs, just at the default hop budget).
+      'LOOM_GRAPHRAG_MAX_HOPS',
       'LOOM_GRAPH_GROUP_SYNC_ENABLED',
-      'LOOM_LANGUAGE_ENDPOINT', 'LOOM_MESH_PROFILE', 'LOOM_ONELAKE_URL',
+      'LOOM_LANGUAGE_ENDPOINT', 'LOOM_MESH_PROFILE',
+      // N12 — bounded NL2SQL repair attempts; unset = code default 2 (the
+      // self-healing loop still repairs, just within the default budget).
+      'LOOM_NL2SQL_REPAIR_MAX_ATTEMPTS',
+      'LOOM_ONELAKE_URL',
       // L2 svc-openlineage — unset credential = the OpenLineage feed is an
       // ADDITIVE source that is silently absent while UC / dbt / ADF column
       // lineage keep flowing (default-ON preserved; pool-setup wizard adds it).
