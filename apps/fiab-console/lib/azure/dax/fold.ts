@@ -35,12 +35,35 @@ const AGG_TO_SQL: Record<string, string> = {
   SUM: 'SUM', AVERAGE: 'AVG', MIN: 'MIN', MAX: 'MAX', COUNT: 'COUNT', COUNTA: 'COUNT',
 };
 
+// A3 iterators: aggregate over a per-row projected expression.
+const X_ITER_TO_SQL: Record<string, string> = {
+  SUMX: 'SUM', AVERAGEX: 'AVG', COUNTX: 'COUNT', MINX: 'MIN', MAXX: 'MAX',
+};
+
 /** A folded scalar: the SQL expression + the single base table it reads (if any). */
 interface ScalarFold { sql: string; table?: string; qualify?: boolean; }
 
 class FoldError extends Error {}
 
 function bracket(name: string): string { return `[${name}]`; }
+
+const AGGREGATE_NAMES = new Set([
+  ...Object.keys(AGG_TO_SQL), ...Object.keys(X_ITER_TO_SQL),
+  'COUNTROWS', 'DISTINCTCOUNT', 'CALCULATE', 'RANKX',
+]);
+
+/** True if the expression contains an aggregate/iterator anywhere (guards the
+ *  per-row iterator body from illegally nesting an aggregate). */
+function containsAggregate(e: Expr): boolean {
+  switch (e.type) {
+    case 'FunctionCall':
+      if (AGGREGATE_NAMES.has(e.name.toUpperCase())) return true;
+      return e.args.some(containsAggregate);
+    case 'Unary': return containsAggregate(e.operand);
+    case 'Binary': return containsAggregate(e.left) || containsAggregate(e.right);
+    default: return false;
+  }
+}
 
 /** Parse a relationship endpoint "Table[Column]" → {table, column}. */
 function parseEndpoint(ep: string): { table: string; column: string } | null {
@@ -126,6 +149,23 @@ function foldScalarCall(e: FunctionCall, prefix?: string): ScalarFold {
   // COUNTROWS(T) → COUNT(*)
   if (name === 'COUNTROWS' && e.args.length === 1 && e.args[0].type === 'TableRef') {
     return { sql: 'COUNT(*)', table: e.args[0].name };
+  }
+  // A3 iterators: SUMX/AVERAGEX/COUNTX/MINX/MAXX(<table>, <per-row expr>) →
+  // AGG(<folded expr>) over the iterated table.
+  if (name in X_ITER_TO_SQL && e.args.length === 2 && e.args[0].type === 'TableRef') {
+    const table = e.args[0].name;
+    const inner = foldScalar(e.args[1], prefix);
+    if (containsAggregate(e.args[1])) throw new FoldError(`${name} row expression must be non-aggregate`);
+    return { sql: `${X_ITER_TO_SQL[name]}(${inner.sql})`, table };
+  }
+  // A3 RANKX(<table>, <orderBy expr> [, <value>, <order>]) → a window RANK().
+  // Default order is DESC (highest = rank 1); a 4th arg of 1/ASC flips it.
+  if (name === 'RANKX' && e.args.length >= 2) {
+    const orderExpr = foldScalar(e.args[1], prefix);
+    let dir = 'DESC';
+    const orderArg = e.args[3];
+    if (orderArg && orderArg.type === 'NumberLiteral' && orderArg.value === 1) dir = 'ASC';
+    return { sql: `RANK() OVER (ORDER BY ${orderExpr.sql} ${dir})`, table: orderExpr.table };
   }
   // CALCULATE(<agg>) with no filters (or filters handled by the table planner) →
   // the inner aggregate (CALCULATE with no filter is identity).

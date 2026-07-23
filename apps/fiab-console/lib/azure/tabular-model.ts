@@ -178,6 +178,34 @@ export function translateDaxToSql(dax: string, model?: FoldModel): string | null
   return foldDaxToSql(dax, model);
 }
 
+/**
+ * The pre-A-chain 3-regex translator, retained verbatim as the FLAG0 OFF path
+ * (`a3-dax-fold-engine` runtime kill-switch). When the fold engine is toggled
+ * OFF at runtime, evalDax falls back to THIS — the exact behavior that shipped
+ * before A1/A2/A3, so a flip is a true, instant revert with zero roll.
+ */
+export function translateDaxToSqlLegacy(dax: string): string | null {
+  const d = String(dax ?? '').trim().replace(/\s+/g, ' ');
+
+  const tableOnly = /^EVALUATE\s+'?([A-Za-z_][\w ]*?)'?$/i.exec(d);
+  if (tableOnly) return `SELECT TOP 1000 * FROM [${tableOnly[1].trim()}]`;
+
+  const topn = /^EVALUATE\s+TOPN\s*\(\s*(\d+)\s*,\s*'?([A-Za-z_][\w ]*?)'?\s*\)$/i.exec(d);
+  if (topn) return `SELECT TOP ${topn[1]} * FROM [${topn[2].trim()}]`;
+
+  const row =
+    /^EVALUATE\s+ROW\s*\(\s*"([^"]+)"\s*,\s*CALCULATE\s*\(\s*(SUM|COUNT|AVERAGE|MIN|MAX)\s*\(\s*'?([A-Za-z_][\w ]*?)'?\s*\[\s*([\w ]+?)\s*\]\s*\)\s*\)\s*\)$/i.exec(
+      d,
+    );
+  if (row) {
+    const [, label, agg, table, col] = row;
+    const sqlAgg = agg.toUpperCase() === 'AVERAGE' ? 'AVG' : agg.toUpperCase();
+    return `SELECT ${sqlAgg}([${col.trim()}]) AS [${label}] FROM [${table.trim()}]`;
+  }
+
+  return null;
+}
+
 /** Error thrown for an unsupported loom-native DAX pattern (shared message). */
 export function unsupportedDaxError(): TabularError {
   return new TabularError(

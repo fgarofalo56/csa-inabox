@@ -57,12 +57,14 @@ import {
   extractContent,
   modelBackingDatabase,
   translateDaxToSql,
+  translateDaxToSqlLegacy,
   unsupportedDaxError,
   buildDiscoverEnvelope,
   buildExecuteEnvelope,
   parseRowset,
   parseXmlaColumns,
 } from './tabular-model';
+import { runtimeFlag } from '@/lib/admin/runtime-flags';
 import type {
   TableMeta,
   MeasureMeta,
@@ -223,9 +225,14 @@ export async function evalDax(
     out = await aasEvalDax(daxQuery);
   } else {
     // loom-native: translate → Synapse serverless SQL over the backing warehouse.
-    // Pass the model (measures + relationships) so the A2 fold can inline measure
-    // references and join RELATED dimensions (SUMMARIZECOLUMNS).
-    const sql = translateDaxToSql(daxQuery, buildFoldModel(item!));
+    // FLAG0 (a3-dax-fold-engine, default-ON): the A1/A2/A3 fold engine. Toggling
+    // the flag OFF reverts to the pre-A-chain 3-regex translator — an instant,
+    // roll-free revert if a fold ever mis-plans. Pass the model (measures +
+    // relationships) so the fold can inline measures and join RELATED dims.
+    const useFold = await runtimeFlag('a3-dax-fold-engine', { default: true });
+    const sql = useFold
+      ? translateDaxToSql(daxQuery, buildFoldModel(item!))
+      : translateDaxToSqlLegacy(daxQuery);
     if (!sql) throw unsupportedDaxError();
     const db = (database && database.trim()) || modelBackingDatabase(item!);
 

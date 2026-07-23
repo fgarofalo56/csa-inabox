@@ -112,6 +112,33 @@ describe('fold — measure inlining', () => {
   });
 });
 
+describe('fold — A3 iterators', () => {
+  it('SUMX(table, expr) → SUM(<expr>)', () => {
+    expect(foldDaxToSql('EVALUATE ROW("Rev", SUMX(Sales, Sales[Amount] * Sales[Quantity]))')).toBe(
+      'SELECT SUM(([Amount] * [Quantity])) AS [Rev] FROM [Sales]',
+    );
+  });
+  it('AVERAGEX / COUNTX / MINX / MAXX', () => {
+    expect(foldDaxToSql('EVALUATE ROW("A", AVERAGEX(Sales, Sales[Amount]))')).toBe('SELECT AVG([Amount]) AS [A] FROM [Sales]');
+    expect(foldDaxToSql('EVALUATE ROW("C", COUNTX(Sales, Sales[Amount]))')).toBe('SELECT COUNT([Amount]) AS [C] FROM [Sales]');
+    expect(foldDaxToSql('EVALUATE ROW("m", MINX(Sales, Sales[Amount] + 1))')).toBe('SELECT MIN(([Amount] + 1)) AS [m] FROM [Sales]');
+    expect(foldDaxToSql('EVALUATE ROW("M", MAXX(Sales, Sales[Amount]))')).toBe('SELECT MAX([Amount]) AS [M] FROM [Sales]');
+  });
+  it('rejects an aggregate inside the iterator row expression', () => {
+    expect(foldDaxToSql('EVALUATE ROW("X", SUMX(Sales, SUM(Sales[Amount])))')).toBeNull();
+  });
+  it('RANKX inside ADDCOLUMNS → window RANK()', () => {
+    expect(foldDaxToSql('EVALUATE ADDCOLUMNS(Sales, "Rank", RANKX(ALL(Sales), Sales[Amount]))')).toBe(
+      'SELECT TOP 1000 *, RANK() OVER (ORDER BY [Amount] DESC) AS [Rank] FROM [Sales]',
+    );
+  });
+  it('RANKX ascending when the order arg is 1', () => {
+    expect(foldDaxToSql('EVALUATE ADDCOLUMNS(Sales, "Rank", RANKX(ALL(Sales), Sales[Amount], Sales[Amount], 1))')).toBe(
+      'SELECT TOP 1000 *, RANK() OVER (ORDER BY [Amount] ASC) AS [Rank] FROM [Sales]',
+    );
+  });
+});
+
 describe('fold — honest unsupported (null, never a wrong SQL)', () => {
   it('ORDER BY not folded in batch-1', () => {
     expect(foldDaxToSql('EVALUATE Sales ORDER BY Sales[Amount] DESC')).toBeNull();
@@ -119,7 +146,8 @@ describe('fold — honest unsupported (null, never a wrong SQL)', () => {
   it('exponentiation not folded', () => {
     expect(foldDaxToSql('EVALUATE ROW("P", 2 ^ 3)')).toBeNull();
   });
-  it('unsupported iterator (A3 territory) → null', () => {
-    expect(foldDaxToSql('EVALUATE ROW("Rev", SUMX(Sales, Sales[Amount] * Sales[Quantity]))')).toBeNull();
+  it('time-intelligence routes to AAS/A4 (not folded → null on the native path)', () => {
+    expect(foldDaxToSql('EVALUATE ROW("Y", TOTALYTD(SUM(Sales[Amount]), \'Date\'[Date]))')).toBeNull();
+    expect(foldDaxToSql('EVALUATE ROW("P", CALCULATE(SUM(Sales[Amount]), SAMEPERIODLASTYEAR(\'Date\'[Date])))')).toBeNull();
   });
 });
