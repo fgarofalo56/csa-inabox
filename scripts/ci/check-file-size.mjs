@@ -181,7 +181,7 @@ const ALLOWLIST = {
   "apps/fiab-console/lib/azure/sql-objects-client.ts": { max: 1600, reason: "pre-existing large module — ratchet-frozen" },
   "apps/fiab-console/lib/editors/data-api-builder-editor.tsx": { max: 1600, reason: "pre-existing large module — ratchet-frozen" },
   "apps/fiab-console/lib/azure/copilot-studio-client.ts": { max: 1600, reason: "pre-existing large module — ratchet-frozen" },
-  "apps/fiab-console/lib/azure/spark-session-pool.ts": { max: 1600, reason: "pre-existing large module — ratchet-frozen" },
+  "apps/fiab-console/lib/azure/spark-session-pool.ts": { max: 1700, reason: "A12 session-quota/vCore-budget accounting (sparkSessionQuotaStatus/enforceSparkQuota + budget-capped refill + hard-kill) + A13 chaos-drill injection hook (markPoolFaultedForDrill); bulk of the budget logic lives in the new spark-vcore-budget.ts, only the pool wiring is here (+~140 LOC, 1506→1647). Re-baselined 1600→1700 per the A11/A12/A13 item note." },
 };
 // __ALLOWLIST_END__
 

@@ -39,6 +39,8 @@ import {
   sparkPoolConfig,
   getPoolStatus,
 } from '@/lib/azure/spark-session-pool';
+import { autoRecoverTick } from '@/lib/azure/spark-pool-recovery';
+import { runtimeFlag } from '@/lib/admin/runtime-flags';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -70,12 +72,22 @@ async function keepWarm() {
   // still cold-starts. Doing one real liveness check per tick makes progress.
   const reconciled = await reconcileWarmingSlots().catch(() => ({ promoted: 0, died: 0, stillWarming: 0 }));
   await warmPool().catch(() => {});
+  // A11 — auto-recover FAULTED / "Succeeded-but-can't-launch" pools on this SAME
+  // durable heartbeat (the sole sweeper driver on serverless ACA, where the
+  // in-process setInterval sweeper is CPU-throttled between requests). Gated by
+  // the a11-spark-autorecover runtime flag (default-ON, admin-flippable in
+  // seconds) AND LOOM_SPARK_AUTORECOVER_ENABLED inside the tick. Best-effort so a
+  // recovery hiccup never fails the heartbeat.
+  let recovery: Awaited<ReturnType<typeof autoRecoverTick>> | null = null;
+  const autoOn = await runtimeFlag('a11-spark-autorecover').catch(() => true);
+  if (autoOn) recovery = await autoRecoverTick().catch(() => null);
   const cfg = sparkPoolConfig();
   const status = getPoolStatus();
   return apiOk({
     keptWarm: true,
     min: cfg.min,
     reconciled,
+    recovery,
     totals: status?.totals ?? null,
     replicaId: status?.store?.replicaId,
   });

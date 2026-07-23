@@ -2,14 +2,22 @@ name: csa-loom-spark-keepwarm
 
 # ---------------------------------------------------------------------------
 # Keep a Synapse/Databricks Spark session PERPETUALLY WARM so notebook runs are
-# instant instead of paying the multi-minute cold start.
+# instant instead of paying the multi-minute cold start — AND drive Spark
+# reliability maintenance on the SAME durable heartbeat.
 #
 # The console's in-process warm-pool sweeper (`spark-session-pool.ts`) is
 # unreliable in a serverless Container App — the Node process only lives while
 # serving requests, replicas recycle, and every roll resets the pool to cold.
-# This external heartbeat pings the internal-token-gated keep-warm endpoint on a
-# schedule (the SAME pattern the scheduler tick uses), so a warm session is
-# always standing by.
+# This external heartbeat is the SOLE durable driver on ACA: pinging the
+# internal-token-gated keep-warm endpoint every 5 minutes (the SAME pattern the
+# scheduler tick uses) makes each hit (a) start the sweeper after a recycle,
+# (b) re-adopt cross-replica warm sessions, (c) top the pool back up to `min`,
+# and (d) run the A11 auto-recovery tick — detect a FAULTED / "Succeeded but
+# can't launch" Spark pool and delete+recreate it (thrash-guarded, operator-
+# alerted; gated by the a11-spark-autorecover runtime flag + the
+# LOOM_SPARK_AUTORECOVER_ENABLED env). The #1796 leaked-session reaper + the A12
+# session-quota hard-kill ride the same in-request sweep. So a warm session is
+# always standing by AND a faulted pool self-heals within one cycle.
 #
 # Auth: LOOM_INTERNAL_TOKEN (GitHub secret) as a Bearer token. The console is
 # reachable via Front Door; the console itself reaches Livy in-VNet.

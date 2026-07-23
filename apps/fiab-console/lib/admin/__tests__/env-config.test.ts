@@ -210,7 +210,12 @@ describe('admin/env-config registry', () => {
     // code default 1.0) (168) → C3 svc-cost-anomaly-monitor adds
     // LOOM_COST_ANOMALY_ENABLED (optionalDefault opt-out flag — the scheduled
     // cost-anomaly monitor is default-ON) (169).
-    expect(EDITABLE_ENV.length).toBe(169);
+    // Bumped to 174 by A11/A12/A13 (Spark reliability): svc-spark-autorecover
+    // (LOOM_SPARK_AUTORECOVER_ENABLED + LOOM_SPARK_RECOVER_MAX_ATTEMPTS) +
+    // svc-spark-vcore-budget (LOOM_SPARK_VCORE_BUDGET + LOOM_SPARK_TENANT_SESSION_MAX)
+    // + svc-spark-chaos-drill (LOOM_SPARK_CHAOS_ENABLED) — all five optionalDefault
+    // (default-ON/opt-out reliability knobs; chaos is OFF-by-default-as-intended).
+    expect(EDITABLE_ENV.length).toBe(174);
   });
 
   it('surfaces the wave-2 env vars as settable (previously dropped by the whitelist)', () => {
@@ -315,6 +320,11 @@ describe('admin/env-config registry', () => {
       'LOOM_RESULT_CACHE_REDIS',
       // RUM1 svc-client-rum — default-ON knobs (unset = enabled @ 100%).
       'LOOM_RUM_ENABLED', 'LOOM_RUM_SAMPLE_RATE',
+      // A11/A12/A13 Spark reliability — all default-ON/opt-out (chaos default-OFF
+      // is the intended production posture): auto-recovery enable + thrash cap,
+      // the vCore-budget + session-cap ceiling, and the chaos-drill switch.
+      'LOOM_SPARK_AUTORECOVER_ENABLED', 'LOOM_SPARK_CHAOS_ENABLED',
+      'LOOM_SPARK_RECOVER_MAX_ATTEMPTS', 'LOOM_SPARK_TENANT_SESSION_MAX', 'LOOM_SPARK_VCORE_BUDGET',
       'LOOM_TRANSLATOR_ENDPOINT', 'LOOM_VISION_ENDPOINT',
       // I1 svc-workspace-identity — mode off (unset) is the fully-functional
       // intended default (shared Console UAMI, unchanged); the sole Phase-0

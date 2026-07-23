@@ -99,6 +99,14 @@ export const VALUE_HINT: Record<string, string> = {
   LOOM_COST_FORECAST_METHOD: 'auto (default) | api | linear | seasonal',
   // C3 — cost-anomaly monitor (default-ON; svc-cost-anomaly-monitor).
   LOOM_COST_ANOMALY_ENABLED: 'true  (default; false = opt out of the scheduled cost-anomaly monitor)',
+  // A11 — FAULTED Spark-pool auto-recovery (default-ON; svc-spark-autorecover).
+  LOOM_SPARK_AUTORECOVER_ENABLED: 'true  (default; false = detect + alert only, manual recreate)',
+  LOOM_SPARK_RECOVER_MAX_ATTEMPTS: '3  (recreate attempts per pool in a 6h thrash window)',
+  // A12 — Spark session quota / vCore budget ceiling (default-ON; svc-spark-vcore-budget).
+  LOOM_SPARK_VCORE_BUDGET: '400  (max estimated active Spark vCores before refusing a new session; 0 = unlimited)',
+  LOOM_SPARK_TENANT_SESSION_MAX: '50  (max concurrent active Spark sessions; 0 = unlimited)',
+  // A13 — Spark chaos-drill harness (default OFF; svc-spark-chaos-drill).
+  LOOM_SPARK_CHAOS_ENABLED: 'false  (default; true = enable fault injection in a NON-PROD drill only)',
   LOOM_DLZ_RG: '<dlz-resource-group>',
   LOOM_ADMIN_RG: '<admin-resource-group>',
   LOOM_TENANT_ADMIN_OID: '<your-entra-user-object-id>',

@@ -104,6 +104,14 @@ export const RUNTIME_FLAGS: readonly RuntimeFlagDef[] = [
     surface: '/admin/health?tab=spark',
   },
   {
+    id: 'a11-spark-autorecover',
+    label: 'Spark pools — FAULTED auto-recovery',
+    description:
+      'Auto-detect + delete/recreate a FAULTED or "Succeeded-but-can\'t-launch" Synapse Spark pool from the keep-warm heartbeat (thrash-guarded, operator-alerted). OFF keeps detection + alerting and the manual "Recreate pool" button on /admin/health → Spark pools, but stops the AUTOMATIC recreate on the next heartbeat — the seconds-fast revert if an auto-recreate ever misbehaves. The warm pool, reaper, and keep-warm heartbeat keep running either way. LOOM_SPARK_AUTORECOVER_ENABLED=0 is the env-level equivalent.',
+    ownerItem: 'A11',
+    surface: '/admin/health?tab=spark (auto-recovery + the keep-warm auto-recover tick)',
+  },
+  {
     id: 'a6-small-multiples-grid',
     label: 'Report designer — small-multiples grid controls',
     description:
