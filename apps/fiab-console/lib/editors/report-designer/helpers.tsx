@@ -313,3 +313,60 @@ export function computeAnomalyOverlay(
   if (band.length === 0 && flagged === 0) return undefined;
   return { points, band, color };
 }
+
+// ── Small multiples (A6) ──────────────────────────────────────────────────────
+
+/** The Format-pane "Small multiples" grid controls (see ReportVisualFormat). */
+export interface SmallMultiplesGridFormat {
+  columns?: number;
+  sharedY?: boolean;
+  padding?: number;
+  facetColumn?: string;
+}
+
+/** The render prop consumed by LoomChart's SmallMultiplesGrid. */
+export interface SmallMultiplesProps {
+  facetColumn: string;
+  columns?: number;
+  sharedY?: boolean;
+}
+
+/**
+ * A6 — resolve the small-multiples render prop from the facet well + the
+ * Format-pane "Small multiples" grid controls.
+ *
+ * Facet source: the `smallMultiples` field well (which already folds into the
+ * wells→SQL GROUP BY, so its column is present in the result rows). The
+ * Format-pane "Facet by" picker is an alternative source, honoured ONLY when
+ * `gridEnabled` and its column is actually present in the result rows — a column
+ * not in the GROUP BY would render an empty facet (no-vaporware).
+ *
+ * `columns` / `sharedY` come from the Format-pane grid controls and were DEAD
+ * before A6 (visual-body passed only the facet column to LoomChart). When
+ * `gridEnabled` is false (the `a6-small-multiples-grid` runtime flag is OFF) the
+ * result carries only the well facet — the exact pre-A6 behaviour.
+ *
+ * Returns undefined when no facet is resolvable (⇒ a single, un-faceted chart).
+ */
+export function resolveSmallMultiples(
+  wells: Wells,
+  grid: SmallMultiplesGridFormat | undefined,
+  rows: Array<Record<string, unknown>>,
+  gridEnabled: boolean,
+): SmallMultiplesProps | undefined {
+  const wellFacet = wells.smallMultiples?.[0]?.column || undefined;
+  const rowHasCol = (c: string) =>
+    rows.length > 0 && Object.prototype.hasOwnProperty.call(rows[0], c);
+  const fmtFacet =
+    gridEnabled && grid?.facetColumn && rowHasCol(grid.facetColumn)
+      ? grid.facetColumn
+      : undefined;
+  const facetColumn = wellFacet || fmtFacet;
+  if (!facetColumn) return undefined;
+  const out: SmallMultiplesProps = { facetColumn };
+  if (gridEnabled && grid) {
+    if (typeof grid.columns === 'number' && grid.columns > 0) out.columns = grid.columns;
+    if (typeof grid.sharedY === 'boolean') out.sharedY = grid.sharedY;
+  }
+  return out;
+}

@@ -46,7 +46,9 @@ import {
 import {
   hasBinding, cellIsNumeric, measureAggregates, splitCols, chartCategories,
   computeAnomalyOverlay, wellResultAlias, fieldLabel, queryVisual,
+  resolveSmallMultiples, type SmallMultiplesGridFormat,
 } from './helpers';
+import { useRuntimeFlag } from '@/lib/components/ui/use-runtime-flag';
 import type { DVisual, VisualState, WellField, AiVisualWiring } from './types';
 import type { Styles } from './styles';
 
@@ -180,6 +182,10 @@ export function VisualBody({ visual, state, styles, filters, selection, interact
   onPointHover?: (category: string, coords: { x: number; y: number }) => void;
   onExportData?: () => void;
 }) {
+  // A6 — small-multiples grid controls (columns / shared-Y) kill-switch. Called
+  // unconditionally as the first hook so hook order stays stable across the
+  // early-return branches below. OFF ⇒ facet from the well only (pre-A6).
+  const smallMultiplesGridEnabled = useRuntimeFlag('a6-small-multiples-grid');
   if (AI_TYPES.has(visual.type)) {
     if (!ai) return <Caption1 className={styles.muted}>Preparing…</Caption1>;
     if (visual.type === 'smartNarrative') {
@@ -356,7 +362,15 @@ export function VisualBody({ visual, state, styles, filters, selection, interact
         if (cs) symmetry = { color: cs.color };
       }
       const aliasesOf = (a?: WellField[]) => (a || []).map(wellResultAlias);
-      const facetColumn = visual.wells.smallMultiples?.[0]?.column || undefined;
+      // A6 — merge the facet well with the Format-pane grid controls (columns /
+      // shared-Y). The well remains the facet source (it folds into the SQL
+      // GROUP BY); columns/sharedY were dead controls before A6.
+      const smallMultiples = resolveSmallMultiples(
+        visual.wells,
+        (fmt as { smallMultiplesGrid?: SmallMultiplesGridFormat } | undefined)?.smallMultiplesGrid,
+        rows,
+        smallMultiplesGridEnabled,
+      );
       const detailColumn = (visual.type === 'treemap' && visual.wells.details?.[0]?.column) || undefined;
       const tooltipAliases = aliasesOf(visual.wells.tooltips);
       const comboLineSeries = aliasesOf(visual.wells.secondaryValues);
@@ -370,7 +384,7 @@ export function VisualBody({ visual, state, styles, filters, selection, interact
       const geomProps: Record<string, unknown> = {
         stackMode,
         comboLineSeries,
-        ...(facetColumn ? { smallMultiples: { facetColumn } } : {}),
+        ...(smallMultiples ? { smallMultiples } : {}),
         ...(detailColumn ? { detailColumn } : {}),
         ...(tooltipAliases.length ? { tooltips: tooltipAliases } : {}),
         ...(anomalies ? { anomalies } : {}),
