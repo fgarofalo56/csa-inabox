@@ -44,6 +44,8 @@ jobs:
         run: node scripts/ci/check-no-raw-px.mjs
       - name: no-bare-client-fetch (client /api fetch must use clientFetch)
         run: node scripts/ci/check-no-bare-client-fetch.mjs
+      - name: route-toolkit (hand-rolled session-route ratchet — loom-next-level R3)
+        run: node scripts/ci/check-route-toolkit.mjs
       - name: file-size (monolith-creep ratchet — WS-E E3)
         run: node scripts/ci/check-file-size.mjs
       - name: bicep-sync (orphan modules + env-sync core)
