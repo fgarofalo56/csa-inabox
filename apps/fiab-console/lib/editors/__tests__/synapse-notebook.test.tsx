@@ -12,6 +12,12 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, waitFor, cleanup } from '@testing-library/react';
+
+// U3 — CodeCell reads the 'u3-notebook-cell-resize' runtime flag through a
+// react-query hook; mock it so this editor mounts without a QueryClientProvider
+// and the fetch log sees ONLY the Synapse routes under test.
+vi.mock('@/lib/components/ui/use-runtime-flag', () => ({ useRuntimeFlag: () => true }));
+
 import { SynapseNotebookEditor } from '../synapse-notebook-editor';
 import { makeItem, installFetchMock } from './test-helpers';
 

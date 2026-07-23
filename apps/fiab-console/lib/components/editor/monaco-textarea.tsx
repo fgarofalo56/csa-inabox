@@ -103,13 +103,16 @@ export interface MonacoTextareaProps {
   maxHeight?: number;
   /**
    * G3 (platform UX standard): make the editor height USER-adjustable. When
-   * set (and `autoHeight` is off) the editor is wrapped in the shared
-   * {@link ResizableCanvasRegion} — a bottom drag grip (pointer + Arrow-key
-   * resize, `role="separator"`) whose chosen height persists per surface
-   * under `loom.canvasHeight.monaco.<sizingKey>`. `height` becomes the
-   * initial height (numeric only; string heights fall back to 240) and
-   * `minHeight` the floor. Ignored while `autoHeight` is on — content-driven
-   * sizing already fits the script without a fixed cage.
+   * set the editor is wrapped in the shared {@link ResizableCanvasRegion} — a
+   * bottom drag grip (pointer + Arrow-key resize, `role="separator"`) whose
+   * chosen height persists per surface under
+   * `loom.canvasHeight.monaco.<sizingKey>`. Without `autoHeight`, `height` is
+   * the initial height (numeric only; string heights fall back to 240) and
+   * `minHeight` the floor. WITH `autoHeight` (U3, notebook cells): the region
+   * stays content-driven — auto-fit, nothing persisted — until the user's
+   * first real drag/keyboard resize on the grip, then the chosen height
+   * persists and wins over content sizing (auto until first drag, so short
+   * cells stay compact and no key exists until a user actually resizes).
    */
   sizingKey?: string;
   className?: string;
@@ -391,6 +394,10 @@ export function MonacoTextarea({
   // user-resizable region — the editor box fills the region and the region owns
   // the height (drag grip + keyboard + persistence).
   const resizable = !!sizingKey && !autoHeight;
+  // U3: `sizingKey` + `autoHeight` = auto-until-first-resize — the region
+  // follows the measured content height (autoH) until the user grabs the grip.
+  const autoResizable = !!sizingKey && autoHeight;
+  const regionOwnsHeight = resizable || autoResizable;
 
   const editorBox = (
     <div
@@ -399,8 +406,8 @@ export function MonacoTextarea({
       aria-label={ariaLabel}
       aria-readonly={readOnly}
       style={{
-        height: resizable ? '100%' : autoHeight ? (autoH ?? minHeight ?? 120) : height,
-        minHeight: resizable ? undefined : minHeight,
+        height: regionOwnsHeight ? '100%' : autoHeight ? (autoH ?? minHeight ?? 120) : height,
+        minHeight: regionOwnsHeight ? undefined : minHeight,
         border: `1px solid ${tokens.colorNeutralStroke2}`,
         borderRadius: 4,
         overflow: 'hidden',
@@ -439,12 +446,16 @@ export function MonacoTextarea({
     </div>
   );
 
-  if (resizable) {
+  if (regionOwnsHeight) {
     return (
       <ResizableCanvasRegion
         storageKey={`monaco.${sizingKey}`}
         defaultPx={typeof height === 'number' ? height : 240}
         minPx={minHeight ?? 120}
+        // U3: content-driven until the first real resize gesture. autoH is
+        // already clamped to [minHeight, maxHeight] by applyAuto; the user's
+        // manual drag ceiling stays the region default (80vh).
+        autoPx={autoResizable ? (autoH ?? minHeight ?? 120) : undefined}
         ariaLabel={`Resize ${ariaLabel ?? 'code editor'}. Use Arrow Up and Arrow Down keys.`}
       >
         {editorBox}

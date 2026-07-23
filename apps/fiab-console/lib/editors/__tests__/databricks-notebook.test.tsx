@@ -10,6 +10,11 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
+
+// U3 — CodeCell reads the 'u3-notebook-cell-resize' runtime flag through a
+// react-query hook; mock it so the editor mounts without a QueryClientProvider.
+vi.mock('@/lib/components/ui/use-runtime-flag', () => ({ useRuntimeFlag: () => true }));
+
 import { DatabricksNotebookEditor } from '../databricks-editors';
 import { makeItem, installFetchMock } from './test-helpers';
 

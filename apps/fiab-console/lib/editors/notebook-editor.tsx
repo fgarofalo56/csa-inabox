@@ -47,7 +47,7 @@ import type { RibbonTab } from '@/lib/components/ribbon';
 import { useRegisterRibbonCommands } from '@/lib/components/shared/ribbon-commands';
 import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
 import { loomDocUrl } from '@/lib/learn/content';
-import { CodeCell } from '@/lib/components/notebook/code-cell';
+import { CodeCell, pruneCellHeightKey } from '@/lib/components/notebook/code-cell';
 import { MarkdownCell } from '@/lib/components/notebook/markdown-cell';
 import { CellAdder } from '@/lib/components/notebook/cell-adder';
 import { HistoryDrawer } from '@/lib/components/notebook/history-drawer';
@@ -1711,7 +1711,13 @@ export function NotebookEditor({ item, id }: Props) {
   }, [activeCellId, defaultLang]);
 
   const deleteCell = useCallback((id: string) => {
-    setCells(prev => prev.length <= 1 ? prev : prev.filter(c => c.id !== id));
+    setCells(prev => {
+      if (prev.length <= 1) return prev;
+      // U3 — drop the cell's persisted resize height with the cell so
+      // per-cell localStorage keys never outlive the cells they sized.
+      pruneCellHeightKey(id);
+      return prev.filter(c => c.id !== id);
+    });
     setDirty(true);
   }, []);
 

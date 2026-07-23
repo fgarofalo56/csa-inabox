@@ -74,6 +74,14 @@ export const RUNTIME_FLAGS: readonly RuntimeFlagDef[] = [
     surface: 'Report designer canvas (/items/report/[id])',
   },
   {
+    id: 'u3-notebook-cell-resize',
+    label: 'Notebook per-cell resize grips',
+    description:
+      'Per-cell drag/keyboard height grips on notebook code cells (auto-fit until the first resize; the chosen height then persists per cell in the browser). OFF reverts every notebook surface to the pre-U3 auto-height-only cells on the next load — saved per-cell heights are simply ignored, nothing is deleted.',
+    ownerItem: 'U3',
+    surface: 'Notebook editors (Loom, Synapse, Databricks) — code cells',
+  },
+  {
     id: 'v1-journeys-tab',
     label: 'Health hub — Journeys tab',
     description: 'OFF reverts /admin/health to the pre-V1 self-audit-only layout (hides the synthetic-journey Journeys tab). The scheduled loom-synthetic-monitor job itself keeps running either way — this only controls the admin surface.',

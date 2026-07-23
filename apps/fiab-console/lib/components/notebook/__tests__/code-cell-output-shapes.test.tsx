@@ -16,6 +16,11 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { render, screen, cleanup } from '@testing-library/react';
 import { FluentProvider, webLightTheme } from '@fluentui/react-components';
+
+// U3 — CodeCell reads the 'u3-notebook-cell-resize' runtime flag through a
+// react-query hook; mock it so these renders need no QueryClientProvider.
+vi.mock('@/lib/components/ui/use-runtime-flag', () => ({ useRuntimeFlag: () => true }));
+
 import { CodeCell, outputRichParts } from '../code-cell';
 import type { NotebookCell } from '@/lib/types/notebook-cell';
 
