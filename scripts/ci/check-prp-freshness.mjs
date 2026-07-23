@@ -97,7 +97,7 @@ const FACTS = [
     id: 'route-total',
     where: 'ws-ratchets.md §0 ground truth',
     statement: 'total app/api/**/route.ts files',
-    stated: 1567, // 2→3 boundary re-baseline (Wave E added dataflow debug/schema/stats, copilot-quality run/search, search-probe, finops forecast/anomaly/breakdown/budgets, dax-query routes)
+    stated: 1571, // 3→4 boundary re-baseline (Phase-3 added E6 copilot-quality/tier, A13 spark/chaos, I6 workspaces/[id]/identity routes)
     live: countRoutes,
   },
   {
