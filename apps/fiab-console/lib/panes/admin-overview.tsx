@@ -26,7 +26,8 @@ import {
   Building24Regular, Organization24Regular, ChartMultiple24Regular,
   ClipboardTask24Regular, Key24Regular, TagMultiple24Regular, Tag24Regular,
   Settings24Regular, People24Regular, Server24Regular, Heart24Regular,
-  ShieldCheckmark24Regular, LockClosed16Regular, ToggleLeft24Regular, type FluentIcon,
+  ShieldCheckmark24Regular, LockClosed16Regular, ToggleLeft24Regular,
+  DocumentBriefcase24Regular, type FluentIcon,
 } from '@fluentui/react-icons';
 import { SignInRequired } from '@/lib/components/sign-in-required';
 import type { OverviewTileKey, OverviewTiles, TileCount } from '@/app/api/admin/overview/route';
@@ -39,7 +40,7 @@ interface TileSpec {
   description: string;
 }
 
-// The 14 section tiles. href + icon mirror lib/components/admin-shell.tsx
+// The section tiles. href + icon mirror lib/components/admin-shell.tsx
 // SECTIONS so the landing grid and the left nav stay one-for-one.
 const TILE_SPECS: TileSpec[] = [
   { key: 'workspaces', href: '/admin/workspaces', label: 'Workspaces', icon: Building24Regular,
@@ -71,6 +72,9 @@ const TILE_SPECS: TileSpec[] = [
   // RUM1 — real-user monitoring: client JS errors seen in the last 24 h.
   { key: 'rumClientErrors', href: '/admin/rum', label: 'Real-user monitoring', icon: ChartMultiple24Regular,
     description: 'Client errors in the last 24 h' },
+  // DIAG1 — one-click support bundle; count = blocked config gates.
+  { key: 'diagnostics', href: '/admin/diagnostics', label: 'Diagnostics', icon: DocumentBriefcase24Regular,
+    description: 'Support bundle; blocked gates now' },
 ];
 
 const useStyles = makeStyles({

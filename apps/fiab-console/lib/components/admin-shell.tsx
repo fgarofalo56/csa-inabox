@@ -20,6 +20,7 @@ import {
   Molecule24Regular,
   BotSparkle24Regular,
   ToggleLeft24Regular,
+  DocumentBriefcase24Regular,
   type FluentIcon,
 } from '@fluentui/react-icons';
 
@@ -37,6 +38,7 @@ const SECTIONS: Section[] = [
   { href: '/admin/env-config', label: 'Runtime configuration', icon: Wrench24Regular, description: 'View/set the console deployment env vars (Cosmos, AOAI, Synapse, ADX, …) from the UI — real ARM revision + audit trail, no Azure portal. Includes a bicep reconcile snippet so changes survive the next deployment.' },
   { href: '/admin/gates', label: 'Gate registry', icon: Wrench24Regular, description: 'The complete registry of every configuration gate — live configured/blocked status, required env vars/roles/resources per gate, owning surfaces, and a one-click Fix-it wizard that discovers real Azure resources and applies through the audited env-config write path.' },
   { href: '/admin/runtime-flags', label: 'Runtime flags', icon: ToggleLeft24Regular, description: 'Operational kill-switches for user-visible features: flip a registered flag OFF to revert its surface to the previous behavior in seconds — no rebuild, no revision roll. Default-ON, never a spend/config gate; every flip is audited.' },
+  { href: '/admin/diagnostics', label: 'Diagnostics', icon: DocumentBriefcase24Regular, description: 'One-click support bundle: export a point-in-time, secret-scrubbed JSON of the deployment posture — version + ACA revision, gate-registry state, masked env posture, live probes, last synthetic run, and recent audit rows — to attach to an incident.' },
   { href: '/admin/readiness', label: 'Readiness', icon: GaugeRegular, description: 'Capability dependency graph + workload readiness scorecard (Ready / Partial / Blocked go/no-go) computed from live gate + probe state — each capability’s backends, env vars, RBAC role, bicep module, and probe status, with a one-click Fix it and a ready-to-run tenant profile export (JSON + report).' },
   { href: '/admin/api-management', label: 'API Management', icon: Settings24Regular, description: 'Manage APIM APIs, products, subscriptions, policies, named values, backends — full marketplace administration.' },
   { href: '/admin/domains', label: 'Domains', icon: Organization24Regular, description: 'Organize workspaces into business domains and subdomains.' },

@@ -14,11 +14,11 @@ same classic + WS-D1 toolkit export styles).
 | Metric | Count |
 | --- | ---: |
 | Total routes | 1556 |
-| Public (no session) | 109 |
+| Public (no session) | 108 |
 | Session-only | 571 |
 | Owner-scoped | 632 |
-| Admin | 244 |
-| Gated (backend config) | 510 |
+| Admin | 245 |
+| Gated (backend config) | 509 |
 | Areas | 104 |
 
 **Auth scope** — `public`: no session check; `session-only`: signed-in but
@@ -129,6 +129,7 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `admin/deploy-plan/route.ts` | GET PUT | admin |  | Cosmos |
 | `admin/developer/tokens/[id]/route.ts` | DELETE | admin |  | — |
 | `admin/developer/tokens/route.ts` | GET | admin |  | — |
+| `admin/diagnostics/bundle/route.ts` | GET | admin |  | Cosmos |
 | `admin/domains/[id]/inventory/route.ts` | GET | admin |  | — |
 | `admin/domains/assign-workspaces/route.ts` | POST | admin |  | Cosmos |
 | `admin/domains/images/route.ts` | GET | admin |  | ADLS |
@@ -868,7 +869,6 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `internal/copilot/skills/learn/route.ts` | GET POST | public |  | — |
 | `internal/copilot/tools/[name]/invoke/route.ts` | POST | public |  | — |
 | `internal/copilot/tools/route.ts` | GET | public |  | — |
-| `internal/cost-anomaly/run/route.ts` | POST | public | ● | Cosmos |
 | `internal/scheduler/tick/route.ts` | POST | public | ● | — |
 | `internal/spark/keep-warm/route.ts` | GET POST | public | ● | — |
 | `internal/topology/register-domain/route.ts` | POST | public |  | — |
