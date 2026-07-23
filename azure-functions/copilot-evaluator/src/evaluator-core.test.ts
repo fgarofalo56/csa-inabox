@@ -22,9 +22,16 @@ import {
   normalizeSearchId,
   scoreSearchRelevance,
   rollupSearchRun,
+  loadTierLabels,
+  routeTierForPrompt,
+  scoreTierDecision,
+  reduceTierConfusion,
   type EvalResult,
   type SearchResult,
+  type TierDecisionScore,
+  type TierLabelRow,
 } from './evaluator-core';
+import type { TierSelection } from '../../../apps/fiab-console/lib/foundry/model-tier-router';
 
 const row = {
   id: 'help-001',
@@ -307,5 +314,108 @@ describe('loadSearchEvalSets', () => {
     fs.mkdirSync(path.join(root, 'search'), { recursive: true });
     fs.writeFileSync(path.join(root, 'search', 'bad.jsonl'), '{"id":"x"}\n');
     expect(() => loadSearchEvalSets(root)).toThrow(/missing id\/query\/expectedResults/);
+  });
+});
+
+// ── E6 — tier-router decision evals ──────────────────────────────────────────
+
+describe('loadTierLabels', () => {
+  it('loads _tier-labels.jsonl and validates the enums', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tier-'));
+    fs.writeFileSync(
+      path.join(root, '_tier-labels.jsonl'),
+      `${JSON.stringify({ id: 'tier-001', prompt: 'What is a lakehouse?', expectedTier: 'mini', taskClass: 'lightweight' })}\n` +
+        `${JSON.stringify({ id: 'tier-002', prompt: 'Design a medallion architecture.', expectedTier: 'strong', taskClass: 'reasoning' })}\n`,
+    );
+    const set = loadTierLabels(root);
+    expect(set.rows).toHaveLength(2);
+    expect(set.rows[0]).toMatchObject({ id: 'tier-001', expectedTier: 'mini', taskClass: 'lightweight' });
+  });
+  it('returns no rows for a missing file', () => {
+    expect(loadTierLabels(fs.mkdtempSync(path.join(os.tmpdir(), 'tier-'))).rows).toEqual([]);
+  });
+  it('throws on invalid JSON', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tier-'));
+    fs.writeFileSync(path.join(root, '_tier-labels.jsonl'), 'not json\n');
+    expect(() => loadTierLabels(root)).toThrow(/_tier-labels\.jsonl:1/);
+  });
+  it('throws on an invalid tier / task-class enum', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'tier-'));
+    fs.writeFileSync(path.join(root, '_tier-labels.jsonl'),
+      `${JSON.stringify({ id: 'x', prompt: 'p', expectedTier: 'gigantic', taskClass: 'reasoning' })}\n`);
+    expect(() => loadTierLabels(root)).toThrow(/invalid expectedTier/);
+    fs.writeFileSync(path.join(root, '_tier-labels.jsonl'),
+      `${JSON.stringify({ id: 'x', prompt: 'p', expectedTier: 'mini', taskClass: 'trivial' })}\n`);
+    expect(() => loadTierLabels(root)).toThrow(/invalid taskClass/);
+  });
+});
+
+describe('routeTierForPrompt (REAL routeTurnTier, all tiers wired)', () => {
+  it('routes a short lookup to mini', () => {
+    const s = routeTierForPrompt('What is a lakehouse in CSA Loom?');
+    expect(s.tier).toBe('mini');
+    expect(s.taskClass).toBe('lightweight');
+  });
+  it('routes a plain build request to standard', () => {
+    const s = routeTierForPrompt('Create a new dashboard for the sales team.');
+    expect(s.tier).toBe('standard');
+    expect(s.taskClass).toBe('general');
+  });
+  it('routes a reasoning/analysis prompt to strong', () => {
+    expect(routeTierForPrompt('Why is my Spark pool failing to start?').tier).toBe('strong');
+    expect(routeTierForPrompt('Design a medallion lakehouse architecture.').tier).toBe('strong');
+    expect(routeTierForPrompt('Write the SQL: SELECT id FROM sales.').tier).toBe('strong');
+  });
+  it('agrees with the golden label set at or above the 0.85 floor', () => {
+    // Resolve the repo checkout content/evals (the loader walks up from cwd).
+    const root = resolveEvalRoot(process.cwd());
+    expect(root).not.toBeNull();
+    const set = loadTierLabels(root!);
+    expect(set.rows.length).toBeGreaterThanOrEqual(60);
+    const scores = set.rows.map((r) => scoreTierDecision(r, routeTierForPrompt(r.prompt)));
+    const acc = scores.filter((s) => s.correct).length / scores.length;
+    expect(acc).toBeGreaterThanOrEqual(0.85);
+  });
+});
+
+describe('scoreTierDecision (pure comparator)', () => {
+  const row: TierLabelRow = { id: 'tier-001', prompt: 'p', expectedTier: 'mini', taskClass: 'lightweight' };
+  const sel = (o: Partial<TierSelection>): TierSelection => ({ tier: 'mini', taskClass: 'lightweight', routed: false, ...o });
+  it('marks a matching tier correct + carries both classes', () => {
+    const s = scoreTierDecision(row, sel({}));
+    expect(s).toMatchObject({ correct: true, chosenTier: 'mini', expectedTier: 'mini', taskClass: 'lightweight', chosenTaskClass: 'lightweight', taskClassCorrect: true });
+  });
+  it('marks a mismatched tier incorrect', () => {
+    const s = scoreTierDecision(row, sel({ tier: 'strong', taskClass: 'reasoning' }));
+    expect(s.correct).toBe(false);
+    expect(s.taskClassCorrect).toBe(false);
+    expect(s.chosenTier).toBe('strong');
+  });
+});
+
+describe('reduceTierConfusion', () => {
+  const mk = (o: Partial<TierDecisionScore>): TierDecisionScore => ({
+    correct: true, chosenTier: 'mini', expectedTier: 'mini', taskClass: 'lightweight', chosenTaskClass: 'lightweight', taskClassCorrect: true, ...o,
+  });
+  it('builds the confusion matrix + accuracy + per-class stats', () => {
+    const t = reduceTierConfusion([
+      mk({}),
+      mk({ correct: false, chosenTier: 'standard', expectedTier: 'mini', taskClass: 'lightweight', chosenTaskClass: 'general', taskClassCorrect: false }),
+      mk({ chosenTier: 'strong', expectedTier: 'strong', taskClass: 'reasoning', chosenTaskClass: 'reasoning' }),
+    ]);
+    expect(t.rows).toBe(3);
+    expect(t.tierAccuracy).toBeCloseTo(0.667, 2);
+    expect(t.taskClassAccuracy).toBeCloseTo(0.667, 2);
+    expect(t.matrix.mini.mini).toBe(1);
+    expect(t.matrix.mini.standard).toBe(1);
+    expect(t.matrix.strong.strong).toBe(1);
+    expect(t.perClass.lightweight).toMatchObject({ total: 2, correct: 1, accuracy: 0.5 });
+    expect(t.perClass.reasoning).toMatchObject({ total: 1, correct: 1, accuracy: 1 });
+  });
+  it('empty → zeroed accuracy with a fully-zeroed matrix', () => {
+    const t = reduceTierConfusion([]);
+    expect(t).toMatchObject({ rows: 0, tierAccuracy: 0, taskClassAccuracy: 0 });
+    expect(t.matrix.mini.strong).toBe(0);
+    expect(t.perClass.general.total).toBe(0);
   });
 });

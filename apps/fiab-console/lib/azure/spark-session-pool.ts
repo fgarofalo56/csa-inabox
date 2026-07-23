@@ -103,6 +103,17 @@ import {
 import { recordPoolAcquire } from '@/lib/perf/pool-counters';
 import { recordUsageEvent, flushUsageEvents } from '@/lib/perf/usage-store';
 import { learnedTargetMin, refreshLearningCache } from '@/lib/perf/learning-cache';
+import {
+  sparkQuotaConfig,
+  quotaUnlimited,
+  vcoresForSizing,
+  computeQuotaStatus,
+  wouldExceedQuota,
+  quotaError,
+  DEFAULT_SESSION_VCORES,
+  type SparkQuotaStatus,
+  type SparkQuotaError,
+} from '@/lib/azure/spark-vcore-budget';
 
 export type SparkPoolBackend = 'synapse' | 'databricks';
 type SlotState = 'warming' | 'warm' | 'leased' | 'shared' | 'dead';
@@ -812,34 +823,115 @@ export async function reconcileWarmingSlots(): Promise<{ promoted: number; died:
 // Refill + sweep
 // ============================================================
 
+// ============================================================
+// A12 — session quota / vCore-budget accounting + guard
+// ============================================================
+
+/**
+ * Live session/vCore tally across the deployment. In cross-replica (cosmos)
+ * mode the shared lease store is the source of truth (deduped by pool#session),
+ * so a session warmed on ANY replica counts once; otherwise the local in-process
+ * registry does. vCores are EXACT for pool-tracked sessions (we hold each
+ * group's sizing) and ESTIMATED at DEFAULT_SESSION_VCORES for cross-replica
+ * lease docs (which carry only the sizing fingerprint, not the cores) — an
+ * honest estimate, never presented as an exact meter (no-vaporware.md).
+ */
+export async function sparkSessionQuotaStatus(): Promise<SparkQuotaStatus> {
+  const cfg = sparkQuotaConfig();
+  let sessions = 0;
+  let vcores = 0;
+  for (const grp of store.groups.values()) {
+    const live = slotsForGroup(grp.key).filter((s) => s.state !== 'dead');
+    sessions += live.length;
+    vcores += live.length * vcoresForSizing(grp.sizing);
+  }
+  if (leaseStoreMode() === 'cosmos') {
+    try {
+      const docs = await listAllDocs();
+      const ids = new Set<string>();
+      for (const d of docs) {
+        if (typeof d.sessionId === 'number') ids.add(`${d.poolName}#${d.sessionId}`);
+      }
+      if (ids.size > 0) {
+        sessions = ids.size;
+        vcores = ids.size * DEFAULT_SESSION_VCORES;
+      }
+    } catch {
+      /* best-effort — fall back to the local tally */
+    }
+  }
+  return computeQuotaStatus(cfg, sessions, vcores);
+}
+
+/**
+ * Guard a would-be NEW Spark session against the quota. Returns a structured
+ * SparkQuotaError — the honest "session quota reached" MessageBar path, NOT a
+ * hang — when granting a session of `sizing` would breach the session cap or
+ * vCore budget; null when there is headroom (or the quota is unlimited). A
+ * caller that must refuse a cold start calls this BEFORE creating a session.
+ */
+export async function enforceSparkQuota(sizing?: LivySessionSizing): Promise<SparkQuotaError | null> {
+  const cfg = sparkQuotaConfig();
+  if (quotaUnlimited(cfg)) return null;
+  const status = await sparkSessionQuotaStatus();
+  const res = wouldExceedQuota(cfg, status.activeSessions, status.activeVcores, vcoresForSizing(sizing));
+  return res.exceeded ? quotaError(status, res.reason || 'quota reached') : null;
+}
+
 /**
  * Bring every registered group up to `min` warm sessions (counting warming +
  * warm toward the target, and never exceeding `max`). Fire-and-forget: warms
  * happen in the background. Safe to call frequently — it is a no-op when every
  * group is already at target.
+ *
+ * A12 — the warm plan is CAPPED by the session/vCore budget so refill never
+ * creates sessions past the ceiling (the guard "before warmPool" per the item):
+ * the per-group need is computed first, then trimmed against the live headroom,
+ * with groups sharing the one budget for the tick.
  */
 export async function refillPool(): Promise<void> {
   const cfg = sparkPoolConfig();
   if (!cfg.enabled) return;
   const gate = sparkPoolBackendStatus();
   if (!gate.configured) return; // honest — nothing to warm against
-  const tasks: Promise<void>[] = [];
   const now = Date.now();
+  // 1) Plan the per-group need (circuit breaker + learned target + max).
+  const plans: Array<{ grp: PoolGroup; need: number }> = [];
   for (const grp of store.groups.values()) {
     // Circuit breaker: a group whose warms keep failing (or that hit the
     // Synapse queue-jam rejection) sits out until its backoff expires instead
     // of feeding the jam with a fresh session every sweep tick.
     if (typeof grp.backoffUntil === 'number' && grp.backoffUntil > now) continue;
     const slots = slotsForGroup(grp.key);
-    const active = slots.filter((s) => s.state === 'warming' || s.state === 'warm').length;
-    const warmingOrWarm = active;
+    const warmingOrWarm = slots.filter((s) => s.state === 'warming' || s.state === 'warm').length;
     const total = slots.filter((s) => s.state !== 'dead').length;
     // PERF-4.4 — the learned schedule modulates the warm target: boost ahead of
     // predicted-busy windows, 0 in confidently-dead hours, manual overrides win.
     // With learning off / no data this is exactly cfg.min (today's behaviour).
     const targetMin = learnedTargetMin(grp.key, cfg.min, cfg.max);
     const need = Math.min(targetMin - warmingOrWarm, cfg.max - total);
-    for (let i = 0; i < need; i++) tasks.push(warmOne(grp));
+    if (need > 0) plans.push({ grp, need });
+  }
+  if (plans.length === 0) return;
+
+  // 2) Trim the plan against the session/vCore budget (A12).
+  const qcfg = sparkQuotaConfig();
+  let quota: SparkQuotaStatus | null = null;
+  if (!quotaUnlimited(qcfg)) quota = await sparkSessionQuotaStatus().catch(() => null);
+
+  const tasks: Promise<void>[] = [];
+  for (const { grp, need } of plans) {
+    let allowed = need;
+    if (quota) {
+      const perSession = vcoresForSizing(grp.sizing);
+      const capBySessions = quota.sessionsRemaining == null ? Infinity : quota.sessionsRemaining;
+      const capByVcores = quota.vcoresRemaining == null ? Infinity : Math.floor(quota.vcoresRemaining / Math.max(1, perSession));
+      allowed = Math.max(0, Math.min(need, capBySessions, capByVcores));
+      // Decrement the running headroom so groups SHARE the one budget this tick.
+      if (quota.sessionsRemaining != null) quota.sessionsRemaining -= allowed;
+      if (quota.vcoresRemaining != null) quota.vcoresRemaining -= allowed * perSession;
+    }
+    for (let i = 0; i < allowed; i++) tasks.push(warmOne(grp));
   }
   // Don't await sequentially-blocking; kick them and let the caller move on.
   await Promise.allSettled(tasks);
@@ -1077,6 +1169,19 @@ async function sweep(): Promise<void> {
       .sort((a, b) => a.lastActivityAt - b.lastActivityAt);
     const evictable = Math.max(0, warm.length - targetMin);
     for (let i = 0; i < Math.min(evictable, overMin.length); i++) evictSlot(overMin[i]);
+  }
+  // A12 — HARD-KILL leaked LEASED/SHARED sessions idle past the hard-kill window.
+  // A lease held with no keepalive/activity is a leaked session pinning driver +
+  // executor vCores (the 2026-07-14 loombatch 80-core-for-2-days zombie class);
+  // reclaiming it frees the budget A12 accounts. The window is generous
+  // (max(idleTtl×2, reapGrace)) so a legitimately long, actively-heartbeated
+  // notebook — whose lastActivityAt is refreshed on every keepalive/release — is
+  // never killed; only a truly abandoned lease is.
+  const hardKillMs = Math.max(cfg.idleTtlMs * 2, cfg.reapGraceMs);
+  for (const slot of store.slots) {
+    if ((slot.state === 'leased' || slot.state === 'shared') && now - slot.lastActivityAt > hardKillMs) {
+      evictSlot(slot);
+    }
   }
   pruneDead();
 
@@ -1388,6 +1493,43 @@ export async function warmPool(target?: WarmTarget): Promise<{ group: Omit<PoolG
   const status = getPoolStatus();
   const grp = status.groups.find((x) => x.key === key) || null;
   return { group: { key, backend, poolName, kind, sizingKey }, status: grp };
+}
+
+// ============================================================
+// A13 — chaos-drill injection hook
+// ============================================================
+
+/**
+ * A13 chaos-drill: ARM the warm-pool circuit breaker for a Synapse pool's
+ * group(s) so `poolHealthState()` classifies it as `suspect` — the
+ * "Succeeded-but-can't-launch" fault class the A11 detector recovers. This
+ * injects the fault the SAME way a real run of consecutive warm failures would
+ * (consecFails + backoffUntil + lastFailure), so a drill exercises the genuine
+ * detection→recreate path, not a mock. Registers the default group when nothing
+ * targets the pool yet so the breaker + detection have a target. Returns the
+ * number of groups armed. Gated behind LOOM_SPARK_CHAOS_ENABLED at the route.
+ */
+export function markPoolFaultedForDrill(poolName: string, reason = 'chaos-drill injected fault'): number {
+  const arm = (grp: PoolGroup): void => {
+    grp.consecFails = (grp.consecFails ?? 0) + 5;
+    grp.lastFailure = reason;
+    grp.backoffUntil = Date.now() + 15 * 60_000;
+  };
+  let armed = 0;
+  for (const grp of store.groups.values()) {
+    if (grp.backend === 'synapse' && grp.poolName === poolName) {
+      arm(grp);
+      armed++;
+    }
+  }
+  if (armed === 0) {
+    const { sizing, sizingKey } = defaultSynapseSizing();
+    const key = groupKey('synapse', poolName, 'pyspark', sizingKey);
+    const grp = registerGroup({ key, backend: 'synapse', poolName, kind: 'pyspark', sizingKey, sizing });
+    arm(grp);
+    armed = 1;
+  }
+  return armed;
 }
 
 // ============================================================

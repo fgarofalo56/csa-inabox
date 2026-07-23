@@ -47,6 +47,21 @@ export const DATA_PLANE_GATE_META: Record<string, GateMeta> = {
     fixit: { kind: 'env-picker' },
     autoResolveNote: 'Unset → the warm pool runs per-replica (still fully functional, just not shared).',
   },
+  'svc-spark-autorecover': {
+    surfaces: [{ path: '/admin/health', label: 'Spark pool auto-recovery (Health & Reliability → Spark pools)' }],
+    fixit: { kind: 'env-picker' },
+    autoResolveNote: 'Default-ON — unset auto-detects + delete/recreates a FAULTED pool from the keep-warm heartbeat (thrash-guarded, operator-alerted). Set LOOM_SPARK_AUTORECOVER_ENABLED=0 or flip the a11-spark-autorecover runtime flag to detect-and-alert only (manual Recreate button).',
+  },
+  'svc-spark-vcore-budget': {
+    surfaces: [{ path: '/admin/health', label: 'Spark session quota / vCore budget (Health & Reliability → Spark pools)' }],
+    fixit: { kind: 'env-picker' },
+    autoResolveNote: 'Default-ON — safe built-in session cap + vCore budget apply when unset; a new session past the ceiling gets an honest "session quota reached" error, never a hang. Set the two vars to tune to your Synapse workspace vCore quota.',
+  },
+  'svc-spark-chaos-drill': {
+    surfaces: [{ path: '/admin/health', label: 'Spark chaos-drill harness (Health & Reliability → Spark pools)' }],
+    fixit: { kind: 'env-picker' },
+    autoResolveNote: 'OFF by default (the intended production posture). Enable only for a non-prod resilience drill: LOOM_SPARK_CHAOS_ENABLED=true AND a valid LOOM_INTERNAL_TOKEN on the tenant-admin request.',
+  },
   'svc-cosmos-control': {
     surfaces: [
       { path: '/admin/scaling', label: 'Cosmos account scaling' },

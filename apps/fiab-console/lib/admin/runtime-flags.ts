@@ -104,6 +104,14 @@ export const RUNTIME_FLAGS: readonly RuntimeFlagDef[] = [
     surface: '/admin/health?tab=spark',
   },
   {
+    id: 'a11-spark-autorecover',
+    label: 'Spark pools — FAULTED auto-recovery',
+    description:
+      'Auto-detect + delete/recreate a FAULTED or "Succeeded-but-can\'t-launch" Synapse Spark pool from the keep-warm heartbeat (thrash-guarded, operator-alerted). OFF keeps detection + alerting and the manual "Recreate pool" button on /admin/health → Spark pools, but stops the AUTOMATIC recreate on the next heartbeat — the seconds-fast revert if an auto-recreate ever misbehaves. The warm pool, reaper, and keep-warm heartbeat keep running either way. LOOM_SPARK_AUTORECOVER_ENABLED=0 is the env-level equivalent.',
+    ownerItem: 'A11',
+    surface: '/admin/health?tab=spark (auto-recovery + the keep-warm auto-recover tick)',
+  },
+  {
     id: 'a6-small-multiples-grid',
     label: 'Report designer — small-multiples grid controls',
     description:
@@ -133,6 +141,14 @@ export const RUNTIME_FLAGS: readonly RuntimeFlagDef[] = [
       'The /admin/copilot-quality surface: per-surface Copilot eval scorecards (retrieval hit-rate / grounding / pass-rate), run-history trends, floor status, and "Run now". OFF hides the page body (a guided notice replaces it) without a roll — the kill-switch for a rendering regression on this new admin surface. The copilot-evaluator Function, its nightly/per-roll runs, and the Cosmos data are unaffected; only this read-only admin view is gated.',
     ownerItem: 'E5',
     surface: '/admin/copilot-quality',
+  },
+  {
+    id: 'e6-tier-routing-tab',
+    label: 'Copilot quality — Tier routing tab',
+    description:
+      'The E6 "Tier routing" tab on /admin/copilot-quality: tier-router decision accuracy, the tier confusion heatmap, per-task-class accuracy, and the per-tier cost-per-quality view over the copilot-evaluator tier-run docs. OFF hides the tab body behind a guided notice (no roll) — the kill-switch for a rendering regression on this new tab. The copilot-evaluator tier mode, its nightly/per-roll runs, and the Cosmos data are unaffected; only this read-only view is gated.',
+    ownerItem: 'E6',
+    surface: '/admin/copilot-quality (Tier routing tab)',
   },
   {
     id: 'c4-finops-hub',

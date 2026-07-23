@@ -8,14 +8,30 @@ nightly + on-demand Copilot quality evals over the E1 golden sets
 the console's internal `POST /api/internal/copilot/eval-probe` route and
 written to Cosmos `loom-copilot-evals` (PK `/surface`).
 
+The same Function also runs two sibling deterministic modes on the nightly tick:
+**SRCH1** federated-search relevance (`mode:"search"`) and **E6** tier-router
+decision evals (`mode:"tier"`). The tier mode runs the REAL `routeTurnTier`
+(the exact function the aoai-chat-client hot path consults) over the golden
+`content/evals/_tier-labels.jsonl` label set and scores each decision's ridden
+tier against its `expectedTier` — a confusion matrix + `tierAccuracy` written as
+a `tier-run` doc (PK `tier:router`). It is pure (no probe, no AOAI judge), so it
+only needs Cosmos to persist; the E5 `/admin/copilot-quality` "Tier routing" tab
+reads it (accuracy, confusion heatmap, per-class accuracy, cost-per-quality).
+
 ## Normal operation
 
-- **Nightly:** `COPILOT_EVALUATOR_CRON` (default `0 0 7 * * *`, off-peak UTC).
+- **Nightly:** `COPILOT_EVALUATOR_CRON` (default `0 0 7 * * *`, off-peak UTC) —
+  runs answer, search, AND tier modes.
 - **On demand:** `POST https://<func-host>/api/copilotEvaluatorHttp?code=<function-key>`
-  body `{"surfaces":["help"],"trigger":"manual"}` — fired by the E4
-  corpus-staging workflow and the E5 admin "Run now".
+  body `{"surfaces":["help"],"trigger":"manual"}` (answer), `{"mode":"search"}`
+  (SRCH1), or `{"mode":"tier"}` (E6) — fired by the E4 corpus-staging workflow
+  and the E5 admin "Run now" / "Run tier evals".
 - **Healthy log line:**
-  `[copilot-evaluator] run help: 20 Q, hit-rate 0.9, grounding 4.3 (judged=… deferred=… auto-fail=…)`.
+  `[copilot-evaluator] run help: 20 Q, hit-rate 0.9, grounding 4.3 (judged=… deferred=… auto-fail=…)`
+  and `[copilot-evaluator/tier] run: 64 rows, tier-accuracy 1, task-class-accuracy 1`.
+- **E6 tier floor:** `content/evals/eval-floors.json` `tierFloors.router.tierAccuracy`
+  (0.85, provisional seed; ratchet-up-only) — a regression in
+  `DEFAULT_TASK_TIER_MAP` / `classifyTaskClass` drops accuracy below it.
 - **Honest gates:** missing config → `honest-gate: not configured — set …`
   warn + no-op tick; no judge deployment → judge scores marked `deferred`
   (retrieval scoring — deterministic — remains authoritative); over the daily

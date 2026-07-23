@@ -28,10 +28,12 @@ type HubTab = 'audit' | 'journeys' | 'spark' | 'slo';
 export function HealthHubTabs({
   journeysEnabled,
   sparkEnabled,
+  autorecoverEnabled,
   sloEnabled,
 }: {
   journeysEnabled: boolean;
   sparkEnabled?: boolean;
+  autorecoverEnabled?: boolean;
   sloEnabled?: boolean;
 }) {
   const [tab, setTab] = useState<HubTab>('audit');
@@ -73,7 +75,7 @@ export function HealthHubTabs({
         </>
       )}
       {tab === 'journeys' && journeysEnabled && <SyntheticJourneysPane />}
-      {tab === 'spark' && sparkEnabled && <SparkPoolsPane />}
+      {tab === 'spark' && sparkEnabled && <SparkPoolsPane autorecoverEnabled={autorecoverEnabled} />}
       {tab === 'slo' && sloEnabled && <SloPane />}
     </div>
   );

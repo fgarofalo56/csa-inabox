@@ -134,6 +134,8 @@ const ALLOWLIST = new Set([
   'LOOM_COPILOT_MEMORY_TOPIC_MIN',  // opt-in tuning knob: min tag recurrence to promote a CTS-13 topic page
   'LOOM_SPARK_POOL_CONCURRENT',     // opt-out kill switch for the FGC-10 concurrent shared-session mode (default on in code)
   'LOOM_SPARK_POOL_SHARED_MAX',     // opt-in tuning knob: max read-only leases sharing one warm session (PSR-3/FGC-10)
+  'LOOM_SPARK_VCORE_BUDGET',        // opt-in tuning knob (A12): max estimated active Spark vCores before refusing a new session; default 400 in code (0 = unlimited)
+  'LOOM_SPARK_TENANT_SESSION_MAX',  // opt-in tuning knob (A12): max concurrent active Spark sessions; default 50 in code (0 = unlimited)
   // PSR-5/6 result cache — all opt-in: unset default = in-process LRU (no Redis,
   // no behavior change). The shared Redis is the hband-shared.bicep instance
   // deployed out-of-band (admin-plane at the 256-param ceiling).

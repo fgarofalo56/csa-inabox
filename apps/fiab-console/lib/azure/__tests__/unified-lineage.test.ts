@@ -464,4 +464,93 @@ describe('getUnifiedLineage', () => {
     expect(res.edges.some((e) => e.kind === 'column')).toBe(false);
     expect(res.nodes.find((n) => n.id === 'lake1')?.columns).toBeUndefined();
   });
+
+  it('promotes UC column lineage to DEFAULT when a lineage warehouse is wired (no ?columns=true) — L7', async () => {
+    // L7 promote: with LOOM_DATABRICKS_LINEAGE_WAREHOUSE_ID configured the UC
+    // column grain is default-ON. columnLineage is NOT passed here.
+    mocks.isPurviewConfigured.mockReturnValue(false);
+    mocks.lineageWarehouseId.mockReturnValue('wh-1');
+    mocks.getTableLineageSystemTables.mockResolvedValue({
+      edges: [{ source: 'main.bronze.raw', target: 'main.bronze.customers' }],
+      entities: [],
+    });
+    mocks.getColumnLineageSystemTables.mockResolvedValue({
+      edges: [
+        { sourceTable: 'main.bronze.raw', sourceColumn: 'id', targetTable: 'main.bronze.customers', targetColumn: 'customer_id' },
+      ],
+      columnsByTable: { 'main.bronze.customers': ['customer_id'], 'main.bronze.raw': ['id'] },
+    });
+    const res = await getUnifiedLineage({ session, ucFullName: 'main.bronze.customers' });
+    // Column nodes + a kind:column edge appear WITHOUT opting in.
+    expect(res.nodes.filter((n) => n.type === 'column')).toHaveLength(2);
+    expect(res.edges.filter((e) => e.kind === 'column')).toHaveLength(1);
+    // The focus table node is still badged with its lineage columns.
+    expect(res.nodes.find((n) => n.id === 'main.bronze.customers')?.columns).toContain('customer_id');
+  });
+
+  it('keeps the default UC payload column-free when NO warehouse is wired (byte-identical table grain)', async () => {
+    // No warehouse → REST-preview fallback → table grain only, no columns even
+    // though column data would exist if queried. Proves the promote is gated on
+    // the warehouse, not always-on.
+    mocks.isPurviewConfigured.mockReturnValue(false);
+    mocks.lineageWarehouseId.mockReturnValue(null);
+    mocks.getTableLineage.mockResolvedValue([
+      { source: 'main.bronze.raw', target: 'main.bronze.customers' },
+    ]);
+    const res = await getUnifiedLineage({ session, ucFullName: 'main.bronze.customers' });
+    expect(mocks.getColumnLineageSystemTables).not.toHaveBeenCalled();
+    expect(res.nodes.some((n) => n.type === 'column')).toBe(false);
+    expect(res.edges.some((e) => e.kind === 'column')).toBe(false);
+    // Table graph intact (raw + focus).
+    expect(res.nodes.some((n) => n.id === 'main.bronze.raw')).toBe(true);
+  });
+
+  it('merges a UC column edge with a Purview columnEdges facet on the SAME col: identity (L1)', async () => {
+    // UC (system tables) AND Purview (native process columnMapping) both describe
+    // the SAME physical column raw.id → customers.customer_id. They must collapse
+    // onto ONE canonical col: node per column, multiSource=[purview, unity-catalog].
+    mocks.isPurviewConfigured.mockReturnValue(true);
+    mocks.getLineageSubgraph.mockResolvedValue({
+      baseEntityGuid: 'G1',
+      guidEntityMap: { G1: { guid: 'G1', displayText: 'main.bronze.customers', typeName: 'databricks_table' } },
+      relations: [],
+      columnEdges: [
+        {
+          processGuid: 'p1',
+          sourceDatasetQualifiedName: 'main.bronze.raw',
+          sinkDatasetQualifiedName: 'main.bronze.customers',
+          fromColumn: 'id',
+          toColumn: 'customer_id',
+        },
+      ],
+    });
+    mocks.lineageWarehouseId.mockReturnValue('wh-1');
+    mocks.getTableLineageSystemTables.mockResolvedValue({
+      edges: [{ source: 'main.bronze.raw', target: 'main.bronze.customers' }],
+      entities: [],
+    });
+    mocks.getColumnLineageSystemTables.mockResolvedValue({
+      edges: [
+        { sourceTable: 'main.bronze.raw', sourceColumn: 'id', targetTable: 'main.bronze.customers', targetColumn: 'customer_id' },
+      ],
+      columnsByTable: { 'main.bronze.customers': ['customer_id'], 'main.bronze.raw': ['id'] },
+    });
+
+    const res = await getUnifiedLineage({
+      session, purviewGuid: 'G1', ucFullName: 'main.bronze.customers', columnLineage: true,
+    });
+
+    const colNodes = res.nodes.filter((n) => n.type === 'column');
+    // raw.id + customers.customer_id — each merged across both sources (two nodes,
+    // not four), so no per-source duplicates.
+    expect(colNodes).toHaveLength(2);
+    for (const cn of colNodes) {
+      expect(cn.multiSource).toEqual(expect.arrayContaining(['purview', 'unity-catalog']));
+    }
+    // The two source column edges collapse onto the canonical ids → ONE edge.
+    const colEdges = res.edges.filter((e) => e.kind === 'column');
+    expect(colEdges).toHaveLength(1);
+    const customerId = colNodes.find((n) => n.label === 'customer_id')!;
+    expect(colEdges[0].to).toBe(customerId.id);
+  });
 });
