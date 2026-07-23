@@ -69,7 +69,8 @@ import {
 } from '@fluentui/react-icons';
 import { EmptyState } from '@/lib/components/empty-state';
 import { MapLibreCanvas } from '@/lib/components/graph/maplibre-canvas';
-import type { MapLayer } from '@/lib/components/graph/geojson-map';
+import { GeoJsonMap, type MapLayer } from '@/lib/components/graph/geojson-map';
+import { useRuntimeFlag } from '@/lib/components/ui/use-runtime-flag';
 import { formatValue, type NumberFormatPreset } from './format-pane';
 
 // ── public props ─────────────────────────────────────────────────────────────
@@ -270,6 +271,90 @@ function featureName(props: any): string {
 }
 function normKey(s: string): string { return s.trim().toLowerCase(); }
 
+// ── A8 — basemap-free shape-map fallback model ───────────────────────────────
+
+/** The resolved map well columns (subset the fallback needs). */
+export interface ResolvedMapBindings {
+  latCol?: string;
+  longCol?: string;
+  sizeCol?: string;
+  locationCol?: string;
+  legendCol?: string;
+  hasLatLong: boolean;
+}
+
+/**
+ * A8 — build a BASEMAP-FREE GeoJSON model for the Gov / no-Azure-Maps shape-map
+ * fallback (consumed by the self-contained `GeoJsonMap` SVG renderer — no external
+ * tiles, no atlas.microsoft.com hit).
+ *
+ *  - lat/long bound → offline point features (no geocoding — name→point geocoding
+ *    needs Azure Maps Search, which is gated here).
+ *  - Location + Size bound → a choropleth joining the bundled OSS TopoJSON polygons
+ *    (`topoGeo`, decoded FeatureCollection; undefined until loaded) to the
+ *    Location→Size aggregate.
+ *
+ * `kind:'none'` ⇒ nothing to draw offline (fall back to the config gate + rows).
+ */
+export function buildShapeFallbackModel(
+  rows: Array<Record<string, unknown>>,
+  resolved: ResolvedMapBindings,
+  topoGeo: { features?: Array<{ properties?: unknown }> } | undefined,
+): { geojson: { type: 'FeatureCollection'; features: unknown[] }; layers: MapLayer[]; kind: 'point' | 'choropleth' | 'none' } {
+  const { latCol, longCol, sizeCol, locationCol, legendCol, hasLatLong } = resolved;
+
+  // Bubble (lat/long) — an offline point plot; no basemap / geocoding needed.
+  if (hasLatLong && latCol && longCol) {
+    const feats: Array<Record<string, unknown>> = [];
+    for (const r of rows) {
+      const lon = Number(r[longCol]); const lat = Number(r[latCol]);
+      if (!Number.isFinite(lon) || !Number.isFinite(lat)) continue;
+      const size = sizeCol && isNum(r[sizeCol]) ? Number(r[sizeCol]) : null;
+      feats.push({
+        type: 'Feature',
+        geometry: { type: 'Point', coordinates: [lon, lat] },
+        properties: {
+          label: locationCol ? String(r[locationCol] ?? '') : `${lat.toFixed(2)}, ${lon.toFixed(2)}`,
+          size,
+          legend: legendCol ? String(r[legendCol] ?? '') : null,
+        },
+      });
+    }
+    const hasSize = !!sizeCol && feats.some((f) => (f.properties as { size?: number | null }).size != null);
+    const layer: MapLayer = {
+      id: 'loom-fallback-bubbles', type: 'point',
+      weightProp: hasSize ? 'size' : undefined, sizeByMetric: hasSize,
+      colorLow: RAMP_LO, colorHigh: RAMP_HI,
+      tooltipFields: ['label', ...(sizeCol ? ['size'] : [])],
+    };
+    return {
+      geojson: { type: 'FeatureCollection', features: feats },
+      layers: feats.length ? [layer] : [],
+      kind: feats.length ? 'point' : 'none',
+    };
+  }
+
+  // Choropleth (Location + Size) — join the OSS TopoJSON polygons to the aggregate.
+  if (locationCol && topoGeo && Array.isArray(topoGeo.features)) {
+    const byName = new Map<string, number>();
+    for (const r of rows) {
+      const k = normKey(String(r[locationCol] ?? ''));
+      if (k && sizeCol && isNum(r[sizeCol])) byName.set(k, Number(r[sizeCol]));
+    }
+    if (byName.size === 0) return { geojson: { type: 'FeatureCollection', features: [] }, layers: [], kind: 'none' };
+    const feats = topoGeo.features.map((f) => {
+      const ff = f as { properties?: unknown };
+      const nm = normKey(featureName(ff.properties));
+      const v = byName.has(nm) ? byName.get(nm)! : undefined;
+      return { ...(f as Record<string, unknown>), properties: { ...(ff.properties as Record<string, unknown>), label: featureName(ff.properties), size: v ?? null } };
+    });
+    const layer: MapLayer = { id: 'loom-fallback-fill', type: 'choropleth', weightProp: 'size', colorLow: RAMP_LO, colorHigh: RAMP_HI, tooltipFields: ['label', 'size'] };
+    return { geojson: { type: 'FeatureCollection', features: feats }, layers: [layer], kind: 'choropleth' };
+  }
+
+  return { geojson: { type: 'FeatureCollection', features: [] }, layers: [], kind: 'none' };
+}
+
 // ── styles ─────────────────────────────────────────────────────────────────
 
 const useStyles = makeStyles({
@@ -423,6 +508,9 @@ async function geocodeName(name: string, auth: MapAuth, reportId: string): Promi
 export function MapVisual(props: MapVisualProps): ReactElement {
   const { reportId, rows, cols, numberFormat, height = 360 } = props;
   const styles = useStyles();
+  // A8 — basemap-free shape-map fallback on the honest gate (Gov / no-Azure-Maps).
+  // OFF reverts the gate to the pre-A8 config-message + rows table (no map).
+  const shapeFallbackEnabled = useRuntimeFlag('a8-map-shape-fallback');
 
   // ── resolve the well columns (explicit hints win; else auto-detect) ──────────
   const resolved = useMemo(() => {
@@ -777,10 +865,18 @@ export function MapVisual(props: MapVisualProps): ReactElement {
         </Badge>
       </div>
 
-      {/* Honest Azure-Maps gate (LOOM_MAPS_BACKEND unset) — full surface + rows */}
+      {/* Honest Azure-Maps gate (LOOM_MAPS_BACKEND unset). A8: when a location
+          binding exists, render a basemap-free shape-map fallback (real offline
+          map) instead of table-only; else the config gate + rows. */}
       {token.kind === 'gate' && (
-        <GateBody styles={styles} rows={rows} cols={cols} nf={numberFormat}
-          envVar={token.envVar} bicep={token.bicep} extra={token.error} />
+        shapeFallbackEnabled && hasAnyBinding ? (
+          <ShapeMapFallback styles={styles} rows={rows} cols={cols} nf={numberFormat}
+            resolved={resolved} height={height}
+            envVar={token.envVar} bicep={token.bicep} extra={token.error} />
+        ) : (
+          <GateBody styles={styles} rows={rows} cols={cols} nf={numberFormat}
+            envVar={token.envVar} bicep={token.bicep} extra={token.error} />
+        )
       )}
 
       {/* Token / route error — honest, with the rows still shown beneath */}
@@ -971,6 +1067,72 @@ function fitToFeatures(map: Atlas, features: any[]) {
 }
 
 // ── honest gate body (mirrors the old MapVisualBody, naming the exact fix) ─────
+
+/**
+ * A8 — basemap-free shape-map fallback surfaced on the honest Azure-Maps gate
+ * (the GCC / Gov default, where Azure Maps is unavailable and no self-hosted
+ * MapLibre tileserver is deployed). Instead of dead-ending at a table, it renders
+ * a REAL offline map via the self-contained `GeoJsonMap` SVG renderer — a
+ * choropleth over the bundled OSS TopoJSON (Location + Size), or an offline point
+ * plot (lat/long) — with an HONEST info banner naming the exact fix. NO external
+ * tiles, no atlas.microsoft.com call on this path (no-vaporware / no-fabric-dep).
+ */
+function ShapeMapFallback({ styles, rows, cols, nf, resolved, height, envVar, bicep, extra }: {
+  styles: Styles; rows: Array<Record<string, unknown>>; cols: string[];
+  nf?: NumberFormatPreset; resolved: ResolvedMapBindings; height: number;
+  envVar?: string; bicep?: string; extra?: string;
+}) {
+  const [topo, setTopo] = useState<{ status: 'idle' | 'loading' | 'ready' | 'missing' | 'error'; geo?: { features?: Array<{ properties?: unknown }> }; message?: string }>({ status: 'idle' });
+  // Choropleth needs the bundled boundaries; a lat/long point plot does not.
+  const needTopo = !resolved.hasLatLong && !!resolved.locationCol;
+  useEffect(() => {
+    if (!needTopo || topo.status !== 'idle') return;
+    let alive = true;
+    setTopo({ status: 'loading' });
+    (async () => {
+      try {
+        // Same-origin `public/` asset — NOT an external tile / atlas call.
+        const r = await fetch(TOPOJSON_ASSET);
+        if (!alive) return;
+        if (r.status === 404) { setTopo({ status: 'missing' }); return; }
+        if (!r.ok) { setTopo({ status: 'error', message: `HTTP ${r.status}` }); return; }
+        const j = await r.json();
+        const gj = j?.type === 'Topology' ? topoToGeoJSON(j) : j;
+        if (alive) setTopo({ status: 'ready', geo: gj });
+      } catch (e: any) { if (alive) setTopo({ status: 'error', message: e?.message || String(e) }); }
+    })();
+    return () => { alive = false; };
+  }, [needTopo, topo.status]);
+
+  const model = useMemo(() => buildShapeFallbackModel(rows, resolved, topo.geo), [rows, resolved, topo.geo]);
+
+  return (
+    <div className={styles.section}>
+      <MessageBar intent="info">
+        <MessageBarBody>
+          <MessageBarTitle>Azure Maps unavailable in this cloud — shape-map fallback</MessageBarTitle>
+          Rendering a basemap-free {resolved.hasLatLong ? 'point plot' : 'choropleth'} over bundled OSS
+          boundaries — no external map tiles. For full basemap tiles set{' '}
+          <code>{envVar || MAPS_ENV}=azure-maps</code> (Commercial) or <code>{MAPS_ENV}=maplibre</code> with a
+          self-hosted tileserver (Gov), and deploy <code>{bicep || MAPS_BICEP}</code>. No Power BI / Fabric map
+          is required.{extra ? ` (${extra})` : ''}
+        </MessageBarBody>
+      </MessageBar>
+      {model.kind !== 'none' ? (
+        <div className={styles.canvasWrap} style={{ height }}>
+          <GeoJsonMap geojson={model.geojson} layers={model.layers} height={height} />
+        </div>
+      ) : needTopo && topo.status !== 'ready' ? (
+        <Caption1 className={styles.notes}>
+          {topo.status === 'loading'
+            ? 'Loading offline boundaries…'
+            : `Offline boundary asset unavailable at public${TOPOJSON_ASSET}${topo.message ? ` (${topo.message})` : ''}. The aggregated rows are shown below.`}
+        </Caption1>
+      ) : null}
+      <RowsTable styles={styles} rows={rows} cols={cols} nf={nf} />
+    </div>
+  );
+}
 
 function GateBody({ styles, rows, cols, nf, envVar, bicep, extra }: {
   styles: Styles; rows: Array<Record<string, unknown>>; cols: string[];

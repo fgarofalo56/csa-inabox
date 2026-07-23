@@ -290,6 +290,21 @@ are W1-W4 and are **untouched** by this wave.
   numeric harness (`__tests__/analytics-pane.test.ts`, 19 cases) pinning each
   statistic to an exact value over seeded data and proving the anomaly band flags
   a real injected outlier (A7 acceptance). No new surface ⇒ no FLAG0 flag.
+- **A8 — report Map Gov honest-gate + basemap-free choropleth fallback
+  (2026-07-23):** the report Map visual (`map-visual.tsx`) uses Azure Maps, which
+  is **unavailable in GCC/Gov**. Before A8 the gate dead-ended at a MessageBar +
+  aggregate-rows table (no map). A8 adds a basemap-free **shape-map fallback**:
+  when the visual is gated AND a location binding exists, `ShapeMapFallback`
+  renders a REAL offline map via the self-contained `GeoJsonMap` SVG renderer —
+  a choropleth over the bundled OSS TopoJSON (`public/maps/topojson/countries-110m.json`,
+  a same-origin asset — **no external tile / `atlas.microsoft.com` call on the Gov
+  path**) for Location + Size, or a lat/long point plot — with an honest **info**
+  (not red) banner: "Azure Maps unavailable in this cloud — shape-map fallback",
+  naming `LOOM_MAPS_BACKEND=azure-maps` (Commercial) / `=maplibre` (Gov tileserver)
+  + `azure-maps.bicep`. Model builder `buildShapeFallbackModel` (unit-tested,
+  `__tests__/map-shape-fallback.test.ts`, 8 cases). FLAG0 flag
+  `a8-map-shape-fallback` (default-ON; OFF reverts to the pre-A8 table-only gate).
+  **Per-cloud:** Commercial = live Azure Maps; Gov = live offline choropleth.
 - **Wells re-exposed:** queryVisual() STOPS stripping Small multiples / Tooltips /
   Details. smallMultiples → `wells.smallMultiples`, details → `wells.details`
   (trellis group cols, folded into the 2nd GROUP BY), tooltips → `wells.tooltips`
