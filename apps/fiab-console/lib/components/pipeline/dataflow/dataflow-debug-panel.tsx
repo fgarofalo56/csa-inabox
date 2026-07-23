@@ -32,18 +32,23 @@ import {
   Badge, Button, Caption1, Field, Input, MessageBar, MessageBarBody,
   MessageBarTitle, Select, Spinner, Switch, TabList, Tab, Tooltip, Text,
   Subtitle2,
+  Menu, MenuTrigger, MenuPopover, MenuList, MenuItem, MenuGroup, MenuGroupHeader,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
   Bug20Regular, Eye20Regular, TableSearch20Regular, DataHistogram20Regular,
+  MoreHorizontal16Regular, ArrowSwap16Regular, Edit16Regular, Delete16Regular,
 } from '@fluentui/react-icons';
 import { PreviewTable, type PreviewData } from '@/lib/components/shared/preview-table';
 import { LoomChart } from '@/lib/components/charts/loom-chart';
 import { clientFetch } from '@/lib/client-fetch';
 import {
-  serializeDataFlow, type MappingDataFlowGraph,
+  serializeDataFlow, type MappingDataFlowGraph, type DataflowQuickAction,
 } from './mapping-dataflow-designer';
 import type { DfsColumn, SchemaDriftEntry, ColumnStat } from '@/lib/azure/dataflow-debug';
+
+/** DFS types offered by the Typecast quick-action submenu. */
+const CAST_TYPES = ['string', 'integer', 'long', 'double', 'boolean', 'date', 'timestamp'] as const;
 
 const useStyles = makeStyles({
   root: {
@@ -134,6 +139,13 @@ export interface DataflowDebugPanelProps {
   selectedTransform?: string | null;
   /** The item hasn't been saved yet — datasets can't resolve; runs are disabled. */
   isNew?: boolean;
+  /**
+   * U7 PR-3 — apply a debug-grid column quick-action (Typecast / Modify /
+   * Remove) by inserting the generated transform into the designer's graph
+   * (draft). Omit to hide the preview-grid column menu. `fromStream` is filled
+   * by the panel (the previewed transform).
+   */
+  onQuickAction?: (spec: DataflowQuickAction) => void;
 }
 
 interface SessionState {
@@ -172,7 +184,7 @@ function fmtNum(n: number | undefined): string {
 }
 
 export function DataflowDebugPanel({
-  name, graph, debugAvailable, selectedTransform, isNew,
+  name, graph, debugAvailable, selectedTransform, isNew, onQuickAction,
 }: DataflowDebugPanelProps) {
   const s = useStyles();
 
@@ -426,6 +438,56 @@ export function DataflowDebugPanel({
     [preview, previewLabel],
   );
 
+  // U7 PR-3 — the preview-grid column context menu (Typecast / Modify / Remove).
+  // Each inserts a real transform wired off the previewed stream (draft; the
+  // published flow is untouched until Save). Rendered only when the host wired
+  // `onQuickAction` and the flow isn't read-only-new.
+  const columnMenu = useCallback((columnName: string) => {
+    if (!onQuickAction || isNew) return null;
+    const from = previewLabel || previewStream;
+    if (!from) return null;
+    const emit = (spec: DataflowQuickAction) => onQuickAction(spec);
+    return (
+      <Menu positioning="below-end">
+        <MenuTrigger disableButtonEnhancement>
+          <Button
+            size="small"
+            appearance="subtle"
+            icon={<MoreHorizontal16Regular />}
+            aria-label={`Quick actions for column ${columnName}`}
+          />
+        </MenuTrigger>
+        <MenuPopover>
+          <MenuList>
+            <MenuGroup>
+              <MenuGroupHeader>{columnName}</MenuGroupHeader>
+              <Menu positioning="after-top">
+                <MenuTrigger disableButtonEnhancement>
+                  <MenuItem icon={<ArrowSwap16Regular />}>Typecast to…</MenuItem>
+                </MenuTrigger>
+                <MenuPopover>
+                  <MenuList>
+                    {CAST_TYPES.map((ty) => (
+                      <MenuItem key={ty} onClick={() => emit({ action: 'typecast', fromStream: from, column: columnName, toType: ty })}>
+                        {ty}
+                      </MenuItem>
+                    ))}
+                  </MenuList>
+                </MenuPopover>
+              </Menu>
+              <MenuItem icon={<Edit16Regular />} onClick={() => emit({ action: 'modify', fromStream: from, column: columnName })}>
+                Modify (Derived Column)
+              </MenuItem>
+              <MenuItem icon={<Delete16Regular />} onClick={() => emit({ action: 'remove', fromStream: from, column: columnName })}>
+                Remove column
+              </MenuItem>
+            </MenuGroup>
+          </MenuList>
+        </MenuPopover>
+      </Menu>
+    );
+  }, [onQuickAction, isNew, previewLabel, previewStream]);
+
   const runDisabled = previewLoading || schemaLoading || statsLoading || !debugOn || !session || !previewStream || isNew;
   const anyLoading = previewLoading || schemaLoading || statsLoading;
   const runLabel = tab === 'preview' ? 'Preview' : tab === 'inspect' ? 'Inspect' : 'Profile';
@@ -549,13 +611,21 @@ export function DataflowDebugPanel({
             </div>
           )}
           {preview && (
-            <PreviewTable
-              sources={previewSources}
-              showSearch
-              showRefresh={false}
-              typeOverridable
-              ariaLabel={`Debug preview rows for ${previewLabel}`}
-            />
+            <>
+              {onQuickAction && !isNew && (
+                <Caption1 className={s.meta}>
+                  Tip: use a column’s <strong>⋯</strong> menu to Typecast / Modify / Remove — it inserts a transform after <code className={s.gateCode}>{previewLabel}</code> (draft; Save to publish).
+                </Caption1>
+              )}
+              <PreviewTable
+                sources={previewSources}
+                showSearch
+                showRefresh={false}
+                typeOverridable
+                headerActions={onQuickAction ? columnMenu : undefined}
+                ariaLabel={`Debug preview rows for ${previewLabel}`}
+              />
+            </>
           )}
         </>
       )}
