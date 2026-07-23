@@ -31,7 +31,38 @@ import { tagResult } from '@/lib/components/copilot-result-tagger';
 import { CitationChips } from '@/lib/components/help-copilot/citations';
 import { CopilotMarkdown } from './markdown';
 import { MessageMetadataBar } from './message-metadata-bar';
+import { ReceiptPanel } from './receipt-panel';
+import { useRuntimeFlag } from '@/lib/components/ui/use-runtime-flag';
+import { assembleAnswerReceipt, type AnswerReceipt } from '@/lib/copilot/answer-receipt';
 import type { Step, Turn } from './types';
+
+/**
+ * N10 — assemble the answer receipt for one transcript turn from its real
+ * signals (the raw tool_call/tool_result steps carry the exact queries + row
+ * counts; the final-step fields carry tier/cost/timings). Pure — the same
+ * assembler the orchestrator persists with, so the rendered receipt matches the
+ * governance-audit record. The persisted doc id + N9's verification signal are
+ * threaded off the final step (via groupTurns).
+ */
+function receiptFromTurn(turn: Turn): AnswerReceipt {
+  return assembleAnswerReceipt(
+    {
+      prompt: turn.user,
+      steps: turn.steps as unknown as Array<Record<string, unknown>>,
+      model: turn.model,
+      modelTier: turn.modelTier,
+      taskClass: turn.taskClass,
+      routedTier: turn.routedTier,
+      usage: turn.usage as unknown as Record<string, number> | undefined,
+      costUsd: turn.costUsd,
+      turnLatencyMs: turn.turnLatencyMs,
+      phaseTimings: turn.phaseTimings,
+      citations: turn.citations as unknown as Array<Record<string, unknown>> | undefined,
+      error: turn.error,
+    },
+    { receiptId: turn.receiptId, verification: turn.verification },
+  );
+}
 
 const useStyles = makeStyles({
   root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL },
@@ -154,6 +185,8 @@ export interface TranscriptProps {
 
 export function Transcript({ turns, assistantName = 'Copilot', ratings, onFeedback, onRegenerate, canRegenerate }: TranscriptProps) {
   const s = useStyles();
+  // FLAG0 — the N10 per-answer Receipt panel (default-ON, admin-flippable).
+  const receiptsOn = useRuntimeFlag('n10-answer-receipts');
   return (
     <div className={s.root}>
       {turns.map((turn, ti) => {
@@ -211,6 +244,10 @@ export function Transcript({ turns, assistantName = 'Copilot', ratings, onFeedba
                       turnDetail={turn.turnDetail}
                       citations={turn.citations}
                     />
+                  )}
+
+                  {receiptsOn && turn.final !== undefined && !turn.streaming && (
+                    <ReceiptPanel receipt={receiptFromTurn(turn)} />
                   )}
 
                   {turn.final !== undefined && !turn.streaming && (

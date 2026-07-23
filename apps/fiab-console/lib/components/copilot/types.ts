@@ -5,6 +5,9 @@
  * (which pulls in the Azure SDK).
  */
 
+import type { PhaseTiming } from '@/lib/copilot/phase-timer';
+import type { VerificationSignal } from '@/lib/copilot/answer-receipt';
+
 export interface CopilotUsage {
   promptTokens: number;
   completionTokens: number;
@@ -43,7 +46,13 @@ export type Step =
   | { kind: 'thought'; content: string }
   | { kind: 'tool_call'; name: string; args?: unknown; callId: string }
   | { kind: 'tool_result'; name: string; callId: string; durationMs: number; result?: unknown; error?: string }
-  | ({ kind: 'final'; content: string; usage?: CopilotUsage; model?: string; citations?: Citation[]; turnDetail?: TurnDetail; contextUsage?: ContextUsage } & TurnMeta)
+  | ({ kind: 'final'; content: string; usage?: CopilotUsage; model?: string; citations?: Citation[]; turnDetail?: TurnDetail; contextUsage?: ContextUsage;
+      // CTS-03 per-phase ms + WS-1.1 tier attribution + N10 receipt reference,
+      // threaded so the client Receipt panel (N10) assembles from the transcript.
+      phaseTimings?: PhaseTiming[]; modelTier?: string; taskClass?: string; receiptId?: string;
+      // N9's Verified-Query-Result signal (absent today; lights the Verified ✓ badge when present).
+      verification?: VerificationSignal;
+    } & TurnMeta)
   | { kind: 'error'; error: string; code?: string }
   | { kind: 'context_usage'; usage: ContextUsage }
   | { kind: 'proposed_change'; target: string; before: string; after: string; lang?: string; callId?: string; summary?: string };
@@ -141,6 +150,15 @@ export interface Turn extends TurnMeta {
   turnDetail?: TurnDetail;
   /** Segmented context-window breakdown (CTS-05). */
   contextUsage?: ContextUsage;
+  /** CTS-03 per-phase ms (classify / prompt-build / llm / tools) — for the N10 receipt. */
+  phaseTimings?: PhaseTiming[];
+  /** WS-1.1 tier attribution + task class — for the N10 receipt. */
+  modelTier?: string;
+  taskClass?: string;
+  /** N10 — the persisted loom-answer-receipts doc id for this answer. */
+  receiptId?: string;
+  /** N9's Verified-Query-Result signal (absent today; lights the Verified ✓ badge). */
+  verification?: VerificationSignal;
   /** True while this turn is still streaming. */
   streaming?: boolean;
   /** Monotonic index of the final answer — the feedback key (matches server). */
@@ -184,6 +202,13 @@ export function groupTurns(
       cur.routedTier = st.routedTier; // CTS-16
       cur.turnDetail = st.turnDetail;
       if (st.contextUsage) cur.contextUsage = st.contextUsage;
+      // N10: thread the receipt-relevant final-step fields so the Receipt panel
+      // assembles a complete receipt from the transcript (tier, timings, ref).
+      cur.phaseTimings = st.phaseTimings;
+      cur.modelTier = st.modelTier;
+      cur.taskClass = st.taskClass;
+      cur.receiptId = st.receiptId;
+      cur.verification = st.verification;
       cur.msgIndex = finalCount++;
       closeOpen();
     } else if (st.kind === 'error') {
