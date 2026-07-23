@@ -1,0 +1,176 @@
+{
+  "$schema": "./fixtures.ts (GoldenSuite) — validated by dax-golden.test.ts",
+  "about": "DAX golden numeric harness (A5). Each case is a DAX query whose numeric result is asserted against a Power BI Desktop reference AND independently recomputed from ./data/*.csv by the vitest cross-check (reference.kind !== 'manual'). A case with implemented:false is a PENDING row: the A1/A2/A3 PR that lands its fold flips implemented:true and the harness begins gating its live numeric result. The harness gates NUMERIC RESULTS of implemented functions, not its own existence (see ws-lineage-depth.md A5).",
+  "provenanceModel": "Sales/Date/Customer star schema; Sales grain = 12 monthly rows across 2023-2024 (see data/sales.csv). Power BI reference captured in Power BI Desktop 2.132 (June 2026) importing the same three CSVs, 2026-07-23.",
+  "defaultTolerance": 0.000001,
+  "cases": [
+    {
+      "id": "a5-eval-table-sales",
+      "fn": "EVALUATE <Table>",
+      "landedBy": "A5",
+      "implemented": true,
+      "dax": "EVALUATE Sales",
+      "expect": { "kind": "rowCount", "value": 12 },
+      "reference": { "kind": "csv-rowcount", "table": "sales" },
+      "provenance": "SELECT COUNT(*) over data/sales.csv"
+    },
+    {
+      "id": "a5-eval-table-customer",
+      "fn": "EVALUATE <Table>",
+      "landedBy": "A5",
+      "implemented": true,
+      "dax": "EVALUATE Customer",
+      "expect": { "kind": "rowCount", "value": 4 },
+      "reference": { "kind": "csv-rowcount", "table": "customer" },
+      "provenance": "SELECT COUNT(*) over data/customer.csv"
+    },
+    {
+      "id": "a5-eval-topn-5",
+      "fn": "TOPN",
+      "landedBy": "A5",
+      "implemented": true,
+      "dax": "EVALUATE TOPN(5, Sales)",
+      "expect": { "kind": "rowCount", "value": 5 },
+      "reference": { "kind": "csv-rowcount", "table": "sales", "limit": 5 },
+      "provenance": "min(5, 12 rows) over data/sales.csv"
+    },
+    {
+      "id": "a5-sum-amount",
+      "fn": "SUM",
+      "landedBy": "A5",
+      "implemented": true,
+      "dax": "EVALUATE ROW(\"TotalAmount\", CALCULATE(SUM(Sales[Amount])))",
+      "expect": { "kind": "scalar", "column": "TotalAmount", "value": 2940 },
+      "reference": { "kind": "csv-agg", "table": "sales", "op": "sum", "column": "Amount" },
+      "provenance": "SUM(Sales[Amount]) over data/sales.csv"
+    },
+    {
+      "id": "a5-sum-quantity",
+      "fn": "SUM",
+      "landedBy": "A5",
+      "implemented": true,
+      "dax": "EVALUATE ROW(\"TotalQuantity\", CALCULATE(SUM(Sales[Quantity])))",
+      "expect": { "kind": "scalar", "column": "TotalQuantity", "value": 36 },
+      "reference": { "kind": "csv-agg", "table": "sales", "op": "sum", "column": "Quantity" },
+      "provenance": "SUM(Sales[Quantity]) over data/sales.csv"
+    },
+    {
+      "id": "a5-count-amount",
+      "fn": "COUNT",
+      "landedBy": "A5",
+      "implemented": true,
+      "dax": "EVALUATE ROW(\"AmountCount\", CALCULATE(COUNT(Sales[Amount])))",
+      "expect": { "kind": "scalar", "column": "AmountCount", "value": 12 },
+      "reference": { "kind": "csv-agg", "table": "sales", "op": "count", "column": "Amount" },
+      "provenance": "COUNT(Sales[Amount]) over data/sales.csv"
+    },
+    {
+      "id": "a5-average-amount",
+      "fn": "AVERAGE",
+      "landedBy": "A5",
+      "implemented": true,
+      "dax": "EVALUATE ROW(\"AvgAmount\", CALCULATE(AVERAGE(Sales[Amount])))",
+      "expect": { "kind": "scalar", "column": "AvgAmount", "value": 245 },
+      "reference": { "kind": "csv-agg", "table": "sales", "op": "avg", "column": "Amount" },
+      "provenance": "AVERAGE(Sales[Amount]) = 2940 / 12 over data/sales.csv"
+    },
+    {
+      "id": "a5-min-amount",
+      "fn": "MIN",
+      "landedBy": "A5",
+      "implemented": true,
+      "dax": "EVALUATE ROW(\"MinAmount\", CALCULATE(MIN(Sales[Amount])))",
+      "expect": { "kind": "scalar", "column": "MinAmount", "value": 100 },
+      "reference": { "kind": "csv-agg", "table": "sales", "op": "min", "column": "Amount" },
+      "provenance": "MIN(Sales[Amount]) over data/sales.csv"
+    },
+    {
+      "id": "a5-max-amount",
+      "fn": "MAX",
+      "landedBy": "A5",
+      "implemented": true,
+      "dax": "EVALUATE ROW(\"MaxAmount\", CALCULATE(MAX(Sales[Amount])))",
+      "expect": { "kind": "scalar", "column": "MaxAmount", "value": 430 },
+      "reference": { "kind": "csv-agg", "table": "sales", "op": "max", "column": "Amount" },
+      "provenance": "MAX(Sales[Amount]) over data/sales.csv"
+    },
+
+    {
+      "id": "a2-countrows-sales",
+      "fn": "COUNTROWS",
+      "landedBy": "A2",
+      "implemented": false,
+      "dax": "EVALUATE ROW(\"Rows\", COUNTROWS(Sales))",
+      "expect": { "kind": "scalar", "column": "Rows", "value": 12 },
+      "reference": { "kind": "csv-rowcount", "table": "sales", "asScalar": true },
+      "provenance": "COUNTROWS(Sales) over data/sales.csv. PENDING: A2 flips implemented:true when the COUNTROWS fold lands."
+    },
+    {
+      "id": "a2-distinctcount-customer",
+      "fn": "DISTINCTCOUNT",
+      "landedBy": "A2",
+      "implemented": false,
+      "dax": "EVALUATE ROW(\"Customers\", DISTINCTCOUNT(Sales[CustomerId]))",
+      "expect": { "kind": "scalar", "column": "Customers", "value": 4 },
+      "reference": { "kind": "csv-agg", "table": "sales", "op": "countDistinct", "column": "CustomerId" },
+      "provenance": "DISTINCTCOUNT(Sales[CustomerId]) over data/sales.csv (C1..C4 all appear). PENDING: A2."
+    },
+    {
+      "id": "a2-summarizecolumns-region",
+      "fn": "SUMMARIZECOLUMNS",
+      "landedBy": "A2",
+      "implemented": false,
+      "dax": "EVALUATE SUMMARIZECOLUMNS(Customer[Region], \"Amt\", CALCULATE(SUM(Sales[Amount])))",
+      "expect": {
+        "kind": "groupRows",
+        "keyColumn": "Region",
+        "valueColumn": "Amt",
+        "rows": [
+          { "key": "East", "value": 1590 },
+          { "key": "West", "value": 920 },
+          { "key": "North", "value": 430 }
+        ]
+      },
+      "reference": {
+        "kind": "csv-groupagg",
+        "from": "sales",
+        "join": { "table": "customer", "leftKey": "CustomerId", "rightKey": "CustomerId" },
+        "groupBy": "customer.Region",
+        "op": "sum",
+        "column": "sales.Amount"
+      },
+      "provenance": "SUM(Sales[Amount]) grouped by Customer[Region] over the joined CSVs. PENDING: A2 (GROUP BY fold + RELATED join)."
+    },
+
+    {
+      "id": "a3-sumx-amount-times-qty",
+      "fn": "SUMX",
+      "landedBy": "A3",
+      "implemented": false,
+      "dax": "EVALUATE ROW(\"Revenue\", SUMX(Sales, Sales[Amount] * Sales[Quantity]))",
+      "expect": { "kind": "scalar", "column": "Revenue", "value": 10060 },
+      "reference": { "kind": "csv-sumproduct", "table": "sales", "columns": ["Amount", "Quantity"] },
+      "provenance": "SUMX(Sales, Amount*Quantity) over data/sales.csv. PENDING: A3 (iterator fold)."
+    },
+    {
+      "id": "a3-totalytd-2023",
+      "fn": "TOTALYTD",
+      "landedBy": "A3",
+      "implemented": false,
+      "dax": "DEFINE MEASURE Sales[YTD] = TOTALYTD(SUM(Sales[Amount]), 'Date'[Date]) EVALUATE ROW(\"YTD2023\", CALCULATE([YTD], 'Date'[Year] = 2023, 'Date'[MonthNumber] = 12))",
+      "expect": { "kind": "scalar", "column": "YTD2023", "value": 1400 },
+      "reference": { "kind": "manual" },
+      "provenance": "Power BI Desktop 2.132: TOTALYTD(SUM(Sales[Amount])) at 2023-12 = sum of all 2023 rows = 1400. PENDING: A3 (time-intelligence fold over the marked Date table)."
+    },
+    {
+      "id": "a3-sameperiodlastyear-2024q2",
+      "fn": "SAMEPERIODLASTYEAR",
+      "landedBy": "A3",
+      "implemented": false,
+      "dax": "DEFINE MEASURE Sales[PY] = CALCULATE(SUM(Sales[Amount]), SAMEPERIODLASTYEAR('Date'[Date])) EVALUATE ROW(\"PY2024\", CALCULATE([PY], 'Date'[Year] = 2024))",
+      "expect": { "kind": "scalar", "column": "PY2024", "value": 1400 },
+      "reference": { "kind": "manual" },
+      "provenance": "Power BI Desktop 2.132: SAMEPERIODLASTYEAR shifts the 2024 filter to 2023 → SUM(2023) = 1400. PENDING: A3."
+    }
+  ]
+}
