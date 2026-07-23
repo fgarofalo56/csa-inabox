@@ -82,6 +82,14 @@ export const RUNTIME_FLAGS: readonly RuntimeFlagDef[] = [
     surface: 'Notebook editors (Loom, Synapse, Databricks) — code cells',
   },
   {
+    id: 'u6-monaco-divider',
+    label: 'Query editors — query↔results split divider',
+    description:
+      'The U6 draggable query↔results divider (resizable workspace + SplitPane) across the 11 Monaco query editors (warehouse, KQL database/queryset, SQL database, unified SQL, Databricks SQL warehouse, lakehouse SQL, graph Gremlin/Cypher/GQL/vector-search). OFF reverts every adopter to the pre-U6 flow layout with the fixed 360px results cap on the next render — no roll required.',
+    ownerItem: 'U6',
+    surface: 'Query↔results panes of the 11 Monaco-based query editors',
+  },
+  {
     id: 'v1-journeys-tab',
     label: 'Health hub — Journeys tab',
     description: 'OFF reverts /admin/health to the pre-V1 self-audit-only layout (hides the synthetic-journey Journeys tab). The scheduled loom-synthetic-monitor job itself keeps running either way — this only controls the admin surface.',

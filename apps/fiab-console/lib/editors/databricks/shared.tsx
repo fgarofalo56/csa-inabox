@@ -44,6 +44,7 @@ import { WarehouseMonitoringTab } from '../components/warehouse-monitoring';
 import { ConnectionDetailsPanel } from '../components/connection-details';
 import { AiFunctionsHelper } from '../components/ai-functions-helper';
 import { SqlObjectScriptMenu, SqlRowCountBadge } from '@/lib/components/sql-object-script-menu';
+import { useInEditorResultsSplit, SPLIT_FILL_STYLE } from '@/lib/components/editor/editor-split-context';
 import { DatabricksWorkspaceTree } from '@/lib/components/databricks/databricks-workspace-tree';
 import { UcLineagePanel } from '@/lib/components/databricks/uc-lineage-panel';
 import { UcSecurityPanel } from '@/lib/panes/uc-security-panel';
@@ -220,23 +221,29 @@ function ResultsPanel({
   onOpenExcel?: () => void | Promise<void>;
 }) {
   const s = useStyles();
+  // U6 — flex-fill inside an EditorResultsSplit results pane; layout props
+  // only (no token exists for flex/min sizing).
+  const inSplit = useInEditorResultsSplit();
+  const boxStyle = inSplit
+    ? { flexGrow: 1, flexShrink: 1, flexBasis: '0%', minHeight: 0, display: 'flex', flexDirection: 'column' as const, overflow: 'auto' }
+    : undefined;
   if (loading) {
     return (
-      <div className={s.resultBox}>
+      <div className={s.resultBox} style={boxStyle}>
         <Spinner size="small" label="Executing SQL on warehouse…" labelPosition="after" />
       </div>
     );
   }
   if (!result) {
     return (
-      <div className={s.resultBox}>
+      <div className={s.resultBox} style={boxStyle}>
         <Caption1>Click <strong>Run</strong> to execute. Results appear here.</Caption1>
       </div>
     );
   }
   if (!result.ok) {
     return (
-      <div className={s.resultBox}>
+      <div className={s.resultBox} style={boxStyle}>
         <MessageBar intent={result.canceled ? 'warning' : 'error'}>
           <MessageBarBody>
             <MessageBarTitle>{result.canceled ? 'Query canceled' : 'Query failed'}</MessageBarTitle>
@@ -250,7 +257,7 @@ function ResultsPanel({
   const columns = result.columns || [];
   const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
   return (
-    <div className={s.resultBox}>
+    <div className={s.resultBox} style={boxStyle}>
       <div className={s.resultMeta}>
         <Badge appearance="filled" color="success">{result.rowCount ?? rows.length} rows</Badge>
         <Caption1>· {result.executionMs} ms</Caption1>
@@ -277,7 +284,7 @@ function ResultsPanel({
       {rows.length === 0 ? (
         <Caption1>Query returned no rows.</Caption1>
       ) : (
-        <div className={s.tableWrap}>
+        <div className={s.tableWrap} style={inSplit ? SPLIT_FILL_STYLE : undefined}>
           <Table aria-label="Query results" size="small">
             <TableHeader>
               <TableRow>

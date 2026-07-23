@@ -57,6 +57,7 @@ import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { KqlResultsPanel, type KqlResult } from './kql-results';
+import { EditorResultsSplit } from '../components/editor-results-split';
 import { AnomalyForecastDialog } from './anomaly-forecast';
 import { useStyles } from './styles';
 import { DetailsPanel } from '@/lib/components/shared/details-panel';
@@ -1409,6 +1410,14 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
               </Tooltip>
             )}
           </div>
+          {/* U6 — query↔results divider (shared EditorResultsSplit). The
+              assist bars stay in the query pane; KqlResultsPanel owns the
+              loading / error / grid states in the results pane. */}
+          <EditorResultsSplit
+            editorKey="kql-database"
+            active={loading || !!result}
+            query={
+              <>
           <MonacoTextarea
             value={kql}
             onChange={setKql}
@@ -1475,8 +1484,13 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
               </MessageBarActions>
             </MessageBar>
           )}
-          <KqlResultsPanel result={result} loading={loading} itemId={id} itemType="kql-database" onLoadMore={loadMore} loadingMore={loadingMore}
-            onCreateTile={id && id !== 'new' ? () => setTileWizardOpen(true) : undefined} />
+              </>
+            }
+            results={
+              <KqlResultsPanel result={result} loading={loading} itemId={id} itemType="kql-database" onLoadMore={loadMore} loadingMore={loadingMore}
+                onCreateTile={id && id !== 'new' ? () => setTileWizardOpen(true) : undefined} />
+            }
+          />
 
           {/* Starter schema + queries from the app-install template. Surfaced
               when the live ADX object isn't provisioned yet so a bundle-

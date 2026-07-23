@@ -37,6 +37,7 @@ import type { RibbonTab } from '@/lib/components/ribbon';
 import { ItemEditorChrome } from '../item-editor-chrome';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { KqlResultsPanel, type KqlResult } from './kql-results';
+import { EditorResultsSplit } from '../components/editor-results-split';
 import { mergePinnedTile } from './kql-pin-model';
 import { ToolbarCrossLinks } from '@/lib/components/shared/item-tab-strip';
 import { GuidedEmptyState } from '@/lib/components/shared/guided-empty-state';
@@ -544,6 +545,14 @@ export function KqlQuerysetEditor({ item, id }: { item: FabricItemType; id: stri
           {saveMsg && !saveErr && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{saveMsg}</Caption1>}
           {saveErr && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Save failed</MessageBarTitle>{saveErr}</MessageBarBody></MessageBar>}
           {qs && !qs.ok && <MessageBar intent="error"><MessageBarBody>{qs.error}</MessageBarBody></MessageBar>}
+          {/* U6 — query↔results divider (shared EditorResultsSplit). The
+              assist bars stay in the query pane; KqlResultsPanel owns the
+              loading / error / grid states in the results pane. */}
+          <EditorResultsSplit
+            editorKey="kql-queryset"
+            active={loading || !!result}
+            query={
+              <>
           <MonacoTextarea
             value={draft.kql}
             onChange={(v) => { setDraft({ ...draft, kql: v }); setDirty(true); }}
@@ -604,7 +613,12 @@ export function KqlQuerysetEditor({ item, id }: { item: FabricItemType; id: stri
               </MessageBarActions>
             </MessageBar>
           )}
-          <KqlResultsPanel result={result} loading={loading} itemId={id} itemType="kql-queryset" onLoadMore={loadMore} loadingMore={loadingMore} />
+              </>
+            }
+            results={
+              <KqlResultsPanel result={result} loading={loading} itemId={id} itemType="kql-queryset" onLoadMore={loadMore} loadingMore={loadingMore} />
+            }
+          />
 
           <Dialog open={pinDlgOpen} onOpenChange={(_: unknown, d: any) => setPinDlgOpen(d.open)}>
             <DialogSurface>

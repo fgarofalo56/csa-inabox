@@ -53,6 +53,7 @@ import {
 import { ItemEditorChrome } from './item-editor-chrome';
 import { useCollapsibleState, CollapsedRail } from '@/lib/components/collapsible-side-panel';
 import { ResultsPanel } from './components/results-panel';
+import { EditorResultsSplit } from './components/editor-results-split';
 import type { BatchQueryResponse } from './components/results-panel';
 import { buildConnectionStrings, getSqlHostSuffix } from './components/connection-strings-builder';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
@@ -1810,33 +1811,34 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
               )}
               <div className={s.queryRow}>
                 <div className={s.queryMain}>
-                  {family === 'postgres' ? (
-                    // PostgreSQL: the sys.*-fed IntelliSense + T-SQL templates are
-                    // T-SQL-specific, so the PG path keeps the plain Monaco surface
-                    // until a pg-catalog provider lands. Run still posts the script.
-                    <MonacoTextarea value={sqlText} onChange={setSqlText} language={dialect} height={240} minHeight={200} sizingKey="unified-sql-database.pg-query" ariaLabel="SQL editor" />
-                  ) : (
-                    <TsqlMonaco
-                      value={sqlText}
-                      onChange={setSqlText}
-                      onRun={(sql) => run(sql)}
-                      server={server}
-                      database={database}
-                      itemId={id}
-                      height={240}
-                      sizingKey="unified-sql-database.query"
-                      readOnly={family === 'managed-instance'}
-                      busy={qLoading}
-                      onReady={family === 'azure-sql' ? handleEditorReady : undefined}
-                    />
-                  )}
-                  {copilotEligible && (
-                    <Caption1>
-                      <Sparkle20Regular style={{ verticalAlign: 'middle', fontSize: tokens.fontSizeBase200 }} /> Copilot inline completion is on while the pane is open —
-                      write <code>-- describe what you want</code> on a new line and press <strong>Tab</strong> to accept the ghost-text T-SQL.
-                    </Caption1>
-                  )}
-                  <ResultsPanel result={qResult} loading={qLoading} />
+                  {/* U6 — query↔results divider (shared EditorResultsSplit). */}
+                  <EditorResultsSplit
+                    editorKey="unified-sql-database"
+                    active={qLoading || !!qResult}
+                    query={
+                      <>
+                        {family === 'postgres' ? (
+                          // PostgreSQL: the sys.*-fed IntelliSense + T-SQL templates are T-SQL-specific,
+                          // so the PG path keeps the plain Monaco surface. Run still posts the script.
+                          <MonacoTextarea value={sqlText} onChange={setSqlText} language={dialect} height={240} minHeight={200} sizingKey="unified-sql-database.pg-query" ariaLabel="SQL editor" />
+                        ) : (
+                          <TsqlMonaco
+                            value={sqlText} onChange={setSqlText} onRun={(sql) => run(sql)}
+                            server={server} database={database} itemId={id} height={240}
+                            sizingKey="unified-sql-database.query" readOnly={family === 'managed-instance'}
+                            busy={qLoading} onReady={family === 'azure-sql' ? handleEditorReady : undefined}
+                          />
+                        )}
+                        {copilotEligible && (
+                          <Caption1>
+                            <Sparkle20Regular style={{ verticalAlign: 'middle', fontSize: tokens.fontSizeBase200 }} /> Copilot inline completion is on while the pane is open —
+                            write <code>-- describe what you want</code> on a new line and press <strong>Tab</strong> to accept the ghost-text T-SQL.
+                          </Caption1>
+                        )}
+                      </>
+                    }
+                    results={<ResultsPanel result={qResult} loading={qLoading} />}
+                  />
                 </div>
                 {copilotOpen && family === 'azure-sql' && (
                   <div className={s.copilotPane} aria-label="SQL Copilot">

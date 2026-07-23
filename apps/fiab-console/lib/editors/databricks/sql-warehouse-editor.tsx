@@ -69,6 +69,7 @@ import {
 } from '../databricks-notebook-source';
 import { QueryParamsBar, substituteDbx, type QueryParam } from '../components/query-params';
 import { ResultVisualize } from '../components/result-visualize';
+import { EditorResultsSplit } from '../components/editor-results-split';
 import {
   useStyles, ResultsPanel, stateColor, fmtBytes,
   dbuPerHr, estimateDbxCostPerHr, estimateDwuCostPerHr,
@@ -1390,43 +1391,56 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
             onAdd={addTab}
             onClose={closeTab}
           />
-          <SqlCopilotEditor
-            engine="databricks-sql-warehouse"
-            id={id}
-            value={sqlText}
-            onChange={setSqlText}
-            language="sparksql"
-            dialectLabel="Spark SQL"
-            height={260}
-            minHeight={200}
-            sizingKey="databricks-sql-warehouse.query"
-            ariaLabel="Databricks SQL editor"
-            onReady={handleEditorReady}
-            resultError={result && !result.ok ? result.error || null : null}
-            extraBody={{
-              warehouseId: warehouseId || undefined,
-              catalog: activeCatalog || undefined,
-              schema: activeSchema || undefined,
-            }}
-            onApply={() => setResult(null)}
+          {/* U6 — query↔results divider (shared EditorResultsSplit). */}
+          <EditorResultsSplit
+            editorKey="databricks-sql-warehouse"
+            active={loading || !!result}
+            query={
+              <>
+                <SqlCopilotEditor
+                  engine="databricks-sql-warehouse"
+                  id={id}
+                  value={sqlText}
+                  onChange={setSqlText}
+                  language="sparksql"
+                  dialectLabel="Spark SQL"
+                  height={260}
+                  minHeight={200}
+                  sizingKey="databricks-sql-warehouse.query"
+                  ariaLabel="Databricks SQL editor"
+                  onReady={handleEditorReady}
+                  resultError={result && !result.ok ? result.error || null : null}
+                  extraBody={{
+                    warehouseId: warehouseId || undefined,
+                    catalog: activeCatalog || undefined,
+                    schema: activeSchema || undefined,
+                  }}
+                  onApply={() => setResult(null)}
+                />
+                <QueryParamsBar sql={sqlText} onChange={setQueryParams} />
+              </>
+            }
+            results={
+              <>
+                {result?.ok && (result.rows?.length ?? 0) > 0 && (
+                  <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center' }}>
+                    <Button
+                      size="small"
+                      appearance={showViz ? 'primary' : 'outline'}
+                      icon={<DataBarVertical20Regular />}
+                      onClick={() => setShowViz((v) => !v)}
+                    >
+                      {showViz ? 'Hide chart' : 'Visualize'}
+                    </Button>
+                  </div>
+                )}
+                {showViz && result?.ok && (result.rows?.length ?? 0) > 0 && (
+                  <ResultVisualize columns={result.columns || []} rows={result.rows || []} />
+                )}
+                <ResultsPanel result={result} loading={loading} onOpenExcel={sqlText.trim() && warehouseId ? openInExcel : undefined} />
+              </>
+            }
           />
-          <QueryParamsBar sql={sqlText} onChange={setQueryParams} />
-          {result?.ok && (result.rows?.length ?? 0) > 0 && (
-            <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center' }}>
-              <Button
-                size="small"
-                appearance={showViz ? 'primary' : 'outline'}
-                icon={<DataBarVertical20Regular />}
-                onClick={() => setShowViz((v) => !v)}
-              >
-                {showViz ? 'Hide chart' : 'Visualize'}
-              </Button>
-            </div>
-          )}
-          {showViz && result?.ok && (result.rows?.length ?? 0) > 0 && (
-            <ResultVisualize columns={result.columns || []} rows={result.rows || []} />
-          )}
-          <ResultsPanel result={result} loading={loading} onOpenExcel={sqlText.trim() && warehouseId ? openInExcel : undefined} />
           {!warehousesError && warehouses.length === 0 && (
             <div>
               <Subtitle2>No SQL Warehouses found</Subtitle2>

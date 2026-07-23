@@ -50,6 +50,8 @@ import { useRegisterRibbonCommands } from '@/lib/components/shared/ribbon-comman
 import { ForceDirectedGraph, extractGraph } from '@/lib/components/graph/force-directed-graph';
 import { cypherToKql, TranslationError } from '@/lib/azure/cypher-kql-translator';
 import { useSharedEditorStyles } from './shared-styles';
+import { EditorResultsSplit } from './components/editor-results-split';
+import { useInEditorResultsSplit, SPLIT_FILL_STYLE } from '@/lib/components/editor/editor-split-context';
 
 const useLocalStyles = makeStyles({
   editor: {
@@ -120,6 +122,8 @@ LIMIT 25`;
 
 function ResultsPreview({ result }: { result: any }) {
   const s = useStyles();
+  // U6 — flex-fill the raw-result view inside an EditorResultsSplit pane.
+  const inSplit = useInEditorResultsSplit();
   if (!result) return null;
   if (result.deferred) {
     return (
@@ -139,7 +143,7 @@ function ResultsPreview({ result }: { result: any }) {
     );
   }
   return (
-    <pre style={{ fontSize: tokens.fontSizeBase200, maxHeight: 320, overflow: 'auto', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', wordBreak: 'break-word', background: tokens.colorNeutralBackground3, padding: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusMedium }}>
+    <pre style={{ fontSize: tokens.fontSizeBase200, maxHeight: 320, overflow: 'auto', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', wordBreak: 'break-word', background: tokens.colorNeutralBackground3, padding: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusMedium, ...(inSplit ? SPLIT_FILL_STYLE : undefined) }}>
       {JSON.stringify(result, null, 2)}
     </pre>
   );
@@ -229,14 +233,27 @@ export function CosmosGremlinGraphEditor({ item, id }: { item: FabricItemType; i
               When the response contains vertices + edges the force-directed view renders below the raw JSON.
             </MessageBarBody>
           </MessageBar>
-          <MonacoTextarea value={query} onChange={setQuery} language="javascript" height={200} minHeight={160} sizingKey="graph.gremlin-query" ariaLabel="Gremlin query" />
-          <div style={{ display: 'flex', gap: tokens.spacingHorizontalS }}>
-            <Button appearance="primary" icon={<Play20Regular />} disabled={loading} onClick={run}>Run</Button>
-            <Button appearance="secondary" disabled={loading} onClick={showVertices}>Quick: Vertices</Button>
-            <Button appearance="secondary" disabled={loading} onClick={showEdges}>Quick: Edges</Button>
-          </div>
-          <GremlinViz result={result} />
-          <ResultsPreview result={result} />
+          {/* U6 — query↔results divider (shared EditorResultsSplit). */}
+          <EditorResultsSplit
+            editorKey="graph.gremlin"
+            active={loading || !!result}
+            query={
+              <>
+                <MonacoTextarea value={query} onChange={setQuery} language="javascript" height={200} minHeight={160} sizingKey="graph.gremlin-query" ariaLabel="Gremlin query" />
+                <div style={{ display: 'flex', gap: tokens.spacingHorizontalS }}>
+                  <Button appearance="primary" icon={<Play20Regular />} disabled={loading} onClick={run}>Run</Button>
+                  <Button appearance="secondary" disabled={loading} onClick={showVertices}>Quick: Vertices</Button>
+                  <Button appearance="secondary" disabled={loading} onClick={showEdges}>Quick: Edges</Button>
+                </div>
+              </>
+            }
+            results={
+              <>
+                <GremlinViz result={result} />
+                <ResultsPreview result={result} />
+              </>
+            }
+          />
         </div>
       }
     />
@@ -339,29 +356,42 @@ export function CypherGraphEditor({ item, id }: { item: FabricItemType; id: stri
               <code>{sourceTable}</code>. Switch <em>Mode</em> in the ribbon to write raw KQL.
             </MessageBarBody>
           </MessageBar>
-          <MonacoTextarea value={query} onChange={setQuery} language={mode === 'cypher' ? 'sql' : 'kql'} height={180} minHeight={140} sizingKey="graph.cypher-kql-query" ariaLabel="Cypher / KQL editor" />
-          {translateErr && (
-            <MessageBar intent="error">
-              <MessageBarBody>
-                <MessageBarTitle>Cypher → KQL translation failed</MessageBarTitle>
-                {translateErr} — switch to Mode: KQL and write the query by hand, or simplify the pattern.
-              </MessageBarBody>
-            </MessageBar>
-          )}
-          {translated && (
-            <div>
-              <Caption1>Translated KQL:</Caption1>
-              <pre style={{ fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, backgroundColor: tokens.colorNeutralBackground2, padding: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusMedium, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', wordBreak: 'break-word', maxWidth: '100%' }}>{translated}</pre>
-            </div>
-          )}
-          <Button appearance="primary" icon={<Play20Regular />} disabled={loading} onClick={run}>Run</Button>
-          {cypherGraph && (
-            <div>
-              <Caption1 style={{ marginBottom: tokens.spacingVerticalXS }}>Force-directed graph view ({cypherGraph.nodes.length} nodes, {cypherGraph.edges.length} edges)</Caption1>
-              <ForceDirectedGraph nodes={cypherGraph.nodes} edges={cypherGraph.edges} />
-            </div>
-          )}
-          <ResultsPreview result={result} />
+          {/* U6 — query↔results divider (shared EditorResultsSplit). */}
+          <EditorResultsSplit
+            editorKey="graph.cypher-kql"
+            active={loading || !!result}
+            query={
+              <>
+                <MonacoTextarea value={query} onChange={setQuery} language={mode === 'cypher' ? 'sql' : 'kql'} height={180} minHeight={140} sizingKey="graph.cypher-kql-query" ariaLabel="Cypher / KQL editor" />
+                {translateErr && (
+                  <MessageBar intent="error">
+                    <MessageBarBody>
+                      <MessageBarTitle>Cypher → KQL translation failed</MessageBarTitle>
+                      {translateErr} — switch to Mode: KQL and write the query by hand, or simplify the pattern.
+                    </MessageBarBody>
+                  </MessageBar>
+                )}
+                {translated && (
+                  <div>
+                    <Caption1>Translated KQL:</Caption1>
+                    <pre style={{ fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, backgroundColor: tokens.colorNeutralBackground2, padding: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusMedium, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', wordBreak: 'break-word', maxWidth: '100%' }}>{translated}</pre>
+                  </div>
+                )}
+                <Button appearance="primary" icon={<Play20Regular />} disabled={loading} onClick={run}>Run</Button>
+              </>
+            }
+            results={
+              <>
+                {cypherGraph && (
+                  <div>
+                    <Caption1 style={{ marginBottom: tokens.spacingVerticalXS }}>Force-directed graph view ({cypherGraph.nodes.length} nodes, {cypherGraph.edges.length} edges)</Caption1>
+                    <ForceDirectedGraph nodes={cypherGraph.nodes} edges={cypherGraph.edges} />
+                  </div>
+                )}
+                <ResultsPreview result={result} />
+              </>
+            }
+          />
         </div>
       }
     />
@@ -582,37 +612,50 @@ export function GqlGraphEditor({ item, id }: { item: FabricItemType; id: string 
               </MessageBarBody>
             </MessageBar>
           )}
-          <MonacoTextarea value={query} onChange={setQuery} language="sql" height={200} minHeight={160} sizingKey="graph.gql-query" ariaLabel={lang === 'cypher' ? 'openCypher editor' : 'GQL editor'} />
-          {translateErr && (
-            <MessageBar intent="error">
-              <MessageBarBody>
-                <MessageBarTitle>Cypher → KQL translation failed</MessageBarTitle>
-                {translateErr} — switch Language to GQL and write the query by hand, or simplify the pattern.
-              </MessageBarBody>
-            </MessageBar>
-          )}
-          {translated && (
-            <div>
-              <Caption1>Translated KQL:</Caption1>
-              <pre style={{ fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, backgroundColor: tokens.colorNeutralBackground2, padding: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusMedium, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', wordBreak: 'break-word', maxWidth: '100%' }}>{translated}</pre>
-            </div>
-          )}
-          <Button appearance="primary" icon={<Play20Regular />} disabled={loading} onClick={run}>
-            {loading ? 'Running…' : backend === 'persist-only' ? 'Save query' : 'Run'}
-          </Button>
-          {result?.translated && (
-            <div>
-              <Caption1>Translated Gremlin:</Caption1>
-              <pre style={{ fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, backgroundColor: tokens.colorNeutralBackground2, padding: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusMedium, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', wordBreak: 'break-word', maxWidth: '100%' }}>{result.translated}</pre>
-            </div>
-          )}
-          {gqlGraph && (
-            <div>
-              <Caption1 style={{ marginBottom: tokens.spacingVerticalXS }}>Force-directed graph view ({gqlGraph.nodes.length} nodes, {gqlGraph.edges.length} edges)</Caption1>
-              <ForceDirectedGraph nodes={gqlGraph.nodes} edges={gqlGraph.edges} />
-            </div>
-          )}
-          <ResultsPreview result={result} />
+          {/* U6 — query↔results divider (shared EditorResultsSplit). */}
+          <EditorResultsSplit
+            editorKey="graph.gql"
+            active={loading || !!result}
+            query={
+              <>
+                <MonacoTextarea value={query} onChange={setQuery} language="sql" height={200} minHeight={160} sizingKey="graph.gql-query" ariaLabel={lang === 'cypher' ? 'openCypher editor' : 'GQL editor'} />
+                {translateErr && (
+                  <MessageBar intent="error">
+                    <MessageBarBody>
+                      <MessageBarTitle>Cypher → KQL translation failed</MessageBarTitle>
+                      {translateErr} — switch Language to GQL and write the query by hand, or simplify the pattern.
+                    </MessageBarBody>
+                  </MessageBar>
+                )}
+                {translated && (
+                  <div>
+                    <Caption1>Translated KQL:</Caption1>
+                    <pre style={{ fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, backgroundColor: tokens.colorNeutralBackground2, padding: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusMedium, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', wordBreak: 'break-word', maxWidth: '100%' }}>{translated}</pre>
+                  </div>
+                )}
+                <Button appearance="primary" icon={<Play20Regular />} disabled={loading} onClick={run}>
+                  {loading ? 'Running…' : backend === 'persist-only' ? 'Save query' : 'Run'}
+                </Button>
+              </>
+            }
+            results={
+              <>
+                {result?.translated && (
+                  <div>
+                    <Caption1>Translated Gremlin:</Caption1>
+                    <pre style={{ fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, backgroundColor: tokens.colorNeutralBackground2, padding: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusMedium, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', wordBreak: 'break-word', maxWidth: '100%' }}>{result.translated}</pre>
+                  </div>
+                )}
+                {gqlGraph && (
+                  <div>
+                    <Caption1 style={{ marginBottom: tokens.spacingVerticalXS }}>Force-directed graph view ({gqlGraph.nodes.length} nodes, {gqlGraph.edges.length} edges)</Caption1>
+                    <ForceDirectedGraph nodes={gqlGraph.nodes} edges={gqlGraph.edges} />
+                  </div>
+                )}
+                <ResultsPreview result={result} />
+              </>
+            }
+          />
 
           {id !== 'new' && (
             <>
@@ -664,6 +707,8 @@ const LIVE_BACKENDS: ReadonlySet<VectorBackend> = new Set(['ai-search', 'pgvecto
  */
 function VectorSearchResults({ result }: { result: any }) {
   const s = useStyles();
+  // U6 — flex-fill the hits grid inside an EditorResultsSplit results pane.
+  const inSplit = useInEditorResultsSplit();
   const rows: any[] = Array.isArray(result.result?.value)
     ? result.result.value
     : Array.isArray(result.result) ? result.result : [];
@@ -720,9 +765,9 @@ function VectorSearchResults({ result }: { result: any }) {
         </Button>
       </div>
       {showRaw || columns.length === 0 ? (
-        <pre className={s.jsonView}>{JSON.stringify(result.result?.value || result.result, null, 2)}</pre>
+        <pre className={s.jsonView} style={inSplit ? SPLIT_FILL_STYLE : undefined}>{JSON.stringify(result.result?.value || result.result, null, 2)}</pre>
       ) : (
-        <div className={s.tableWrap}>
+        <div className={s.tableWrap} style={inSplit ? SPLIT_FILL_STYLE : undefined}>
           <Table aria-label="Vector search results" size="small">
             <TableHeader>
               <TableRow>
@@ -1312,48 +1357,61 @@ export function VectorStoreEditor({ item, id }: { item: FabricItemType; id: stri
                   <Search20Regular className={s.emptyIcon} />
                   <Subtitle2>Vector similarity search</Subtitle2>
                 </div>
-                <Field label={`Query vector (optional — JSON number array, ${dim}-dim)`} hint="Paste an embedding to find its nearest neighbours, or leave blank and search by text below (embedded automatically).">
-                  <Textarea value={searchVec} onChange={(_: unknown, d: any) => setSearchVec(d.value)} rows={3} placeholder="[0.12, -0.04, …]  (or use query text below)" />
-                </Field>
-                <div className={s.searchRow}>
-                  <Field className={s.fullField} label="Query text (hybrid BM25 + embed)" hint="Used for BM25 keyword ranking, the rerank lexical signal, and — when no vector is given — the embedded k-NN query.">
-                    <Input value={searchText} onChange={(_: unknown, d: any) => setSearchText(d.value)} placeholder="search text (hybrid + rerank)" />
-                  </Field>
-                  <Field className={s.kField} label="k (neighbors)">
-                    <Input type="number" min={1} value={String(k)} onChange={(_: unknown, d: any) => setK(Number(d.value || '5'))} />
-                  </Field>
-                  <Button appearance="primary" icon={searching ? <Spinner size="tiny" /> : <Search20Regular />} onClick={runSearch} disabled={searching || (!searchVec.trim() && !searchText.trim())}>{searching ? 'Searching…' : 'Search'}</Button>
-                </div>
-                <div className={s.toolbar}>
-                  <Switch checked={rerank} onChange={(_: unknown, d: any) => setRerank(d.checked)} label="Rerank results" />
-                  <Tooltip content="AI Search L2 semantic reranker (queryType=semantic) — needs a Basic+ search service with semantic ranking enabled. Falls back to the portable reranker otherwise." relationship="label">
-                    <Switch checked={semantic} onChange={(_: unknown, d: any) => setSemantic(d.checked)} disabled={backend !== 'ai-search' || !rerank} label="Semantic (AI Search L2)" />
-                  </Tooltip>
-                  {searchResult?.ok && typeof searchResult.tookMs === 'number' && (
-                    <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
-                      {searchResult.tookMs}ms{searchResult.reranked ? ' · reranked' : ''}{searchResult.semanticApplied ? ' · semantic' : ''}
-                    </Caption1>
-                  )}
-                </div>
-                {searching && <Spinner size="small" label="Running k-NN…" labelPosition="after" />}
+                {/* U6 — query↔results divider (shared EditorResultsSplit). */}
+                <EditorResultsSplit
+                  editorKey="graph.vector-search"
+                  active={searching || !!searchResult}
+                  query={
+                    <>
+                      <Field label={`Query vector (optional — JSON number array, ${dim}-dim)`} hint="Paste an embedding to find its nearest neighbours, or leave blank and search by text below (embedded automatically).">
+                        <Textarea value={searchVec} onChange={(_: unknown, d: any) => setSearchVec(d.value)} rows={3} placeholder="[0.12, -0.04, …]  (or use query text below)" />
+                      </Field>
+                      <div className={s.searchRow}>
+                        <Field className={s.fullField} label="Query text (hybrid BM25 + embed)" hint="Used for BM25 keyword ranking, the rerank lexical signal, and — when no vector is given — the embedded k-NN query.">
+                          <Input value={searchText} onChange={(_: unknown, d: any) => setSearchText(d.value)} placeholder="search text (hybrid + rerank)" />
+                        </Field>
+                        <Field className={s.kField} label="k (neighbors)">
+                          <Input type="number" min={1} value={String(k)} onChange={(_: unknown, d: any) => setK(Number(d.value || '5'))} />
+                        </Field>
+                        <Button appearance="primary" icon={searching ? <Spinner size="tiny" /> : <Search20Regular />} onClick={runSearch} disabled={searching || (!searchVec.trim() && !searchText.trim())}>{searching ? 'Searching…' : 'Search'}</Button>
+                      </div>
+                      <div className={s.toolbar}>
+                        <Switch checked={rerank} onChange={(_: unknown, d: any) => setRerank(d.checked)} label="Rerank results" />
+                        <Tooltip content="AI Search L2 semantic reranker (queryType=semantic) — needs a Basic+ search service with semantic ranking enabled. Falls back to the portable reranker otherwise." relationship="label">
+                          <Switch checked={semantic} onChange={(_: unknown, d: any) => setSemantic(d.checked)} disabled={backend !== 'ai-search' || !rerank} label="Semantic (AI Search L2)" />
+                        </Tooltip>
+                        {searchResult?.ok && typeof searchResult.tookMs === 'number' && (
+                          <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                            {searchResult.tookMs}ms{searchResult.reranked ? ' · reranked' : ''}{searchResult.semanticApplied ? ' · semantic' : ''}
+                          </Caption1>
+                        )}
+                      </div>
+                    </>
+                  }
+                  results={
+                    <>
+                      {searching && <Spinner size="small" label="Running k-NN…" labelPosition="after" />}
+                      {!searching && searchResult && (
+                        searchResult.ok ? (
+                          <VectorSearchResults result={searchResult} />
+                        ) : (
+                          <MessageBar intent={searchResult.deferred ? 'warning' : 'error'}>
+                            <MessageBarBody>
+                              <MessageBarTitle>{searchResult.deferred ? 'Backend not provisioned' : 'Search failed'}</MessageBarTitle>
+                              {searchResult.error}{searchResult.hint && <><br />{searchResult.hint}</>}
+                            </MessageBarBody>
+                          </MessageBar>
+                        )
+                      )}
+                    </>
+                  }
+                />
                 {!searching && !searchResult && (
                   <div className={s.emptyState}>
                     <DocumentSearch24Regular className={s.emptyIcon} fontSize={40} />
                     <Subtitle2>No results yet</Subtitle2>
                     <Caption1>Paste a query vector and choose <strong>Search</strong> to run a live k-NN query against the index.</Caption1>
                   </div>
-                )}
-                {!searching && searchResult && (
-                  searchResult.ok ? (
-                    <VectorSearchResults result={searchResult} />
-                  ) : (
-                    <MessageBar intent={searchResult.deferred ? 'warning' : 'error'}>
-                      <MessageBarBody>
-                        <MessageBarTitle>{searchResult.deferred ? 'Backend not provisioned' : 'Search failed'}</MessageBarTitle>
-                        {searchResult.error}{searchResult.hint && <><br />{searchResult.hint}</>}
-                      </MessageBarBody>
-                    </MessageBar>
-                  )
                 )}
               </>
             )}

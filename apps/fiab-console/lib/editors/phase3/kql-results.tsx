@@ -36,6 +36,14 @@ import {
   type ConditionalRule, type CfMatch, type CfColor, type CfIcon,
 } from '@/lib/azure/kql-dashboard-model';
 import { useStyles } from './styles';
+import { useInEditorResultsSplit } from '@/lib/components/editor/editor-split-context';
+
+/** U6 — flex-fill the result box inside an EditorResultsSplit results pane
+ * (the nested KustoResultsGrid then grows via its own split-aware styles). */
+const RESULT_BOX_FILL_STYLE = {
+  flexGrow: 1, flexShrink: 1, flexBasis: '0%', minHeight: 0,
+  display: 'flex', flexDirection: 'column', overflow: 'auto',
+} as const;
 
 export interface KqlVisualization {
   Visualization?: string;
@@ -543,6 +551,10 @@ export function KqlResultsPanel({ result, loading, itemId, itemType, onLoadMore,
   onCreateTile?: () => void;
 }) {
   const s = useStyles();
+  // U6 — inside an EditorResultsSplit results pane the panel flex-fills the
+  // user-sized pane instead of the flow-layout fixed cap.
+  const inSplit = useInEditorResultsSplit();
+  const boxStyle = inSplit ? RESULT_BOX_FILL_STYLE : undefined;
   // F19 — sensitivity-label export protection. When this panel belongs to a
   // labeled item, gate CSV export through the real /export-check BFF route so a
   // protected label blocks the download (encryption can't survive CSV/TXT).
@@ -582,11 +594,11 @@ export function KqlResultsPanel({ result, loading, itemId, itemType, onLoadMore,
   }, [result, renderViz]);
 
   if (loading) {
-    return <div className={s.resultBox}><Spinner size="small" label="Executing KQL…" labelPosition="after" /></div>;
+    return <div className={s.resultBox} style={boxStyle}><Spinner size="small" label="Executing KQL…" labelPosition="after" /></div>;
   }
   if (!result) {
     return (
-      <div className={s.resultBox}>
+      <div className={s.resultBox} style={boxStyle}>
         <EmptyState
           icon={<Play20Regular />}
           title="No results yet"
@@ -597,7 +609,7 @@ export function KqlResultsPanel({ result, loading, itemId, itemType, onLoadMore,
   }
   if (!result.ok) {
     return (
-      <div className={s.resultBox}>
+      <div className={s.resultBox} style={boxStyle}>
         <MessageBar intent="error">
           <MessageBarBody>
             <MessageBarTitle>Query failed</MessageBarTitle>
@@ -612,7 +624,7 @@ export function KqlResultsPanel({ result, loading, itemId, itemType, onLoadMore,
   const renderName = result.visualization?.Visualization;
   const vizTitle = result.visualization?.Title;
   return (
-    <div className={s.resultBox}>
+    <div className={s.resultBox} style={boxStyle}>
       <div className={s.resultMeta}>
         <Badge appearance="filled" color="success">{result.rowCount ?? rows.length} rows</Badge>
         <Caption1>· {result.executionMs} ms</Caption1>

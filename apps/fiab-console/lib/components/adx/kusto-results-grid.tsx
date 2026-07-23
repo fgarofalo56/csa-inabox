@@ -45,6 +45,7 @@ import {
   Search16Regular, Filter16Regular, FilterDismiss16Regular,
   ArrowDownload16Regular, Copy16Regular, DataHistogram16Regular,
 } from '@fluentui/react-icons';
+import { useInEditorResultsSplit, SPLIT_FILL_STYLE } from '@/lib/components/editor/editor-split-context';
 
 // ============================================================
 // Types
@@ -568,6 +569,9 @@ export function KustoResultsGrid({
   onExportCheck,
 }: KustoResultsGridProps) {
   const s = useStyles();
+  // U6 — inside an EditorResultsSplit results pane the grid viewport
+  // flex-fills the user-sized pane instead of capping at maxHeight 420.
+  const inSplit = useInEditorResultsSplit();
   const [sortCol, setSortCol] = useState<number | null>(null);
   const [sortDir, setSortDir] = useState<SortDir>(null);
   const [globalSearch, setGlobalSearch] = useState('');
@@ -722,7 +726,7 @@ export function KustoResultsGrid({
   const matched = sorted.length;
 
   return (
-    <div className={s.root}>
+    <div className={s.root} style={inSplit ? { flexGrow: 1, flexShrink: 1, flexBasis: '0%', minHeight: 0 } : undefined}>
       {/* Toolbar: search, column-filter toggle, readout, export, copy */}
       <div className={s.toolbar}>
         <Input
@@ -776,7 +780,7 @@ export function KustoResultsGrid({
       )}
 
       {/* Grid */}
-      <div className={s.scroll} role="region" aria-label="KQL results grid">
+      <div className={s.scroll} role="region" aria-label="KQL results grid" style={inSplit ? SPLIT_FILL_STYLE : undefined}>
         <table className={s.table}>
           <thead className={s.thead}>
             <tr>
