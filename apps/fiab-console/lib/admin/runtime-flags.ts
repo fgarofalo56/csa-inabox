@@ -127,6 +127,14 @@ export const RUNTIME_FLAGS: readonly RuntimeFlagDef[] = [
     surface: 'Report Map visual on the Azure-Maps honest gate (/items/report/[id])',
   },
   {
+    id: 'e5-copilot-quality-page',
+    label: 'Copilot quality admin page',
+    description:
+      'The /admin/copilot-quality surface: per-surface Copilot eval scorecards (retrieval hit-rate / grounding / pass-rate), run-history trends, floor status, and "Run now". OFF hides the page body (a guided notice replaces it) without a roll — the kill-switch for a rendering regression on this new admin surface. The copilot-evaluator Function, its nightly/per-roll runs, and the Cosmos data are unaffected; only this read-only admin view is gated.',
+    ownerItem: 'E5',
+    surface: '/admin/copilot-quality',
+  },
+  {
     id: 'rum1-client-telemetry',
     label: 'Client RUM telemetry',
     description:

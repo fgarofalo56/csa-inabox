@@ -21,6 +21,7 @@ import {
   BotSparkle24Regular,
   ToggleLeft24Regular,
   DocumentBriefcase24Regular,
+  TargetArrow24Regular,
   type FluentIcon,
 } from '@fluentui/react-icons';
 
@@ -55,6 +56,7 @@ const SECTIONS: Section[] = [
   { href: '/admin/usage', label: 'Usage metrics', icon: ChartMultiple24Regular, description: 'Feature usage & adoption report, item inventory, item details.' },
   { href: '/admin/copilot-usage', label: 'Copilot usage', icon: Sparkle24Regular, description: 'Per-persona Copilot token consumption from App Insights — real prompt + completion tokens by persona, model, day, and user (hashed). No synthetic numbers.' },
   { href: '/admin/agent-quality', label: 'Agent Quality', icon: Bot24Regular, description: 'Unified agent evals + observability: LLM-judge eval sets with regression-vs-baseline, red-team refusal results, per-agent trace timelines (token/cost/latency + model tier), and the live Copilot turn-latency SLO — one page, all real backends.' },
+  { href: '/admin/copilot-quality', label: 'Copilot quality', icon: TargetArrow24Regular, description: 'Per-surface Copilot answer quality: retrieval hit-rate / MRR against the golden eval sets, LLM-judge grounding, pass-rate vs the E3 floor, run-history trends, worst-question drill-in, and on-demand "Run now" — real copilot-evaluator runs from Cosmos, no Fabric dependency.' },
   { href: '/admin/model-fabric', label: 'Model Fabric', icon: Molecule24Regular, description: 'Closed-loop model optimization: fuses live eval + red-team + serving + latency-SLO signals to automatically promote the winning model/prompt and demote regressions across serving traffic-splits and the reasoning tier. Propose-only or Auto-apply; every promote/demote audited. Real Azure ML / Azure OpenAI backends — no Fabric dependency.' },
   { href: '/admin/autopilot', label: 'Autopilot', icon: BotSparkle24Regular, description: 'Self-driving FinOps (LCU-Autopilot): reads real LCU telemetry + Azure Monitor utilization + the gate/self-audit signal, then a policy engine (thresholds + hysteresis) recommends pausing idle compute, right-sizing the LCU capacity ceiling, or migrating workloads. Propose-only or Auto-apply; every pause/roll audited. Real Synapse/ADX pause + env-config revision — no Fabric dependency.' },
   { href: '/admin/mcp-servers', label: 'MCP Servers', icon: PlugConnected24Regular, description: 'Browse + deploy the curated catalog of gov-safe MCP servers (Azure Container Apps + Key Vault secretRef + Azure Files), manage deployed servers with live status + teardown, and connect external MCP endpoints — the single home for Model Context Protocol tools Copilot can call.' },
