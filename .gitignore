@@ -36,6 +36,9 @@ data/
 # gitignore can only re-include files if the parent dir is un-ignored first.
 !docs/learn/examples/architecture-patterns/batch/data/
 !docs/learn/examples/architecture-patterns/batch/data/**
+# Un-ignore the DAX golden harness's seed CSVs (test fixtures, not portal data).
+!apps/fiab-console/lib/azure/__tests__/dax-golden/data/
+!apps/fiab-console/lib/azure/__tests__/dax-golden/data/**
 !examples/*/data/
 # Un-ignore cookiecutter template data/ (same pattern as examples).
 !templates/example-vertical/*/data/

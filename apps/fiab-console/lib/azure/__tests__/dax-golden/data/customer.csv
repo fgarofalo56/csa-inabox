@@ -1,0 +1,5 @@
+CustomerId,Name,Region,Segment
+C1,Contoso,East,Enterprise
+C2,Fabrikam,East,SMB
+C3,Adventure Works,West,Enterprise
+C4,Northwind,North,SMB

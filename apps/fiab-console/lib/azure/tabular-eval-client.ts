@@ -57,18 +57,39 @@ import {
   extractContent,
   modelBackingDatabase,
   translateDaxToSql,
+  translateDaxToSqlLegacy,
   unsupportedDaxError,
   buildDiscoverEnvelope,
   buildExecuteEnvelope,
   parseRowset,
   parseXmlaColumns,
 } from './tabular-model';
+import { runtimeFlag } from '@/lib/admin/runtime-flags';
 import type {
   TableMeta,
   MeasureMeta,
   ModelSummary,
   TabularQueryResult,
 } from './tabular-model';
+import type { FoldModel } from './dax/fold';
+
+/**
+ * Build the DAX fold model (measures + relationships) from a semantic-model item
+ * so the A2 SQL-fold planner can inline measure references and join RELATED
+ * dimensions. Reads the same `state.content` extractContent + the content's
+ * declared relationships. Pure; no network.
+ */
+function buildFoldModel(item: WorkspaceItem): FoldModel {
+  const { measures } = extractContent(item);
+  const content = (item.state as any)?.content ?? {};
+  const rawRels: any[] = Array.isArray(content.relationships) ? content.relationships : [];
+  return {
+    measures: measures.map((m) => ({ name: m.name, table: m.table, expression: m.expression })),
+    relationships: rawRels
+      .filter((r) => r && typeof r.from === 'string' && typeof r.to === 'string')
+      .map((r) => ({ from: String(r.from), to: String(r.to), cardinality: String(r.cardinality ?? '') })),
+  };
+}
 
 // Re-export the pure surface so callers import everything from one place.
 export {
@@ -204,7 +225,14 @@ export async function evalDax(
     out = await aasEvalDax(daxQuery);
   } else {
     // loom-native: translate → Synapse serverless SQL over the backing warehouse.
-    const sql = translateDaxToSql(daxQuery);
+    // FLAG0 (a3-dax-fold-engine, default-ON): the A1/A2/A3 fold engine. Toggling
+    // the flag OFF reverts to the pre-A-chain 3-regex translator — an instant,
+    // roll-free revert if a fold ever mis-plans. Pass the model (measures +
+    // relationships) so the fold can inline measures and join RELATED dims.
+    const useFold = await runtimeFlag('a3-dax-fold-engine', { default: true });
+    const sql = useFold
+      ? translateDaxToSql(daxQuery, buildFoldModel(item!))
+      : translateDaxToSqlLegacy(daxQuery);
     if (!sql) throw unsupportedDaxError();
     const db = (database && database.trim()) || modelBackingDatabase(item!);
 

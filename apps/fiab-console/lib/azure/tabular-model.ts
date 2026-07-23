@@ -13,6 +13,7 @@
  */
 
 import { isGovCloud } from './cloud-endpoints';
+import { foldDaxToSql, type FoldModel } from './dax/fold';
 import type { WorkspaceItem } from '@/lib/types/workspace';
 
 // ---------------------------------------------------------------------------
@@ -158,17 +159,32 @@ export function modelBackingDatabase(item: WorkspaceItem): string | undefined {
 }
 
 // ---------------------------------------------------------------------------
-// loom-native: DAX → T-SQL translation (constrained, no vaporware)
+// loom-native: DAX → T-SQL translation (A1 parser + A2 fold engine)
 //
-// Supported patterns (everything else returns null → an honest error pointing
-// the user at the AAS backend for full DAX):
+// Backed by lib/azure/dax (tokenizer + Pratt parser + SQL-fold planner). Folds
+// the loom-native-supported DAX surface to Synapse T-SQL; anything outside it
+// returns null → the honest unsupportedDaxError(). Byte-identical to the prior
+// 3-regex translator on the pre-existing patterns:
 //   EVALUATE <Table>                                   → SELECT TOP 1000 * FROM [Table]
 //   EVALUATE TOPN(N, <Table>)                          → SELECT TOP N    * FROM [Table]
 //   EVALUATE ROW("Label", CALCULATE(AGG(Table[Col])))  → SELECT AGG([Col]) AS [Label] FROM [Table]
-//     where AGG ∈ {SUM, COUNT, AVERAGE→AVG, MIN, MAX}
+// plus the A2 batch: SUMMARIZECOLUMNS (GROUP BY + RELATED join), COUNTROWS,
+// DISTINCTCOUNT, COUNTA, DISTINCT/VALUES, FILTER (WHERE), CALCULATETABLE,
+// ALL/ALLEXCEPT, RELATED, ADDCOLUMNS. `model` (optional) enables measure-ref
+// inlining + relationship joins.
 // ---------------------------------------------------------------------------
 
-export function translateDaxToSql(dax: string): string | null {
+export function translateDaxToSql(dax: string, model?: FoldModel): string | null {
+  return foldDaxToSql(dax, model);
+}
+
+/**
+ * The pre-A-chain 3-regex translator, retained verbatim as the FLAG0 OFF path
+ * (`a3-dax-fold-engine` runtime kill-switch). When the fold engine is toggled
+ * OFF at runtime, evalDax falls back to THIS — the exact behavior that shipped
+ * before A1/A2/A3, so a flip is a true, instant revert with zero roll.
+ */
+export function translateDaxToSqlLegacy(dax: string): string | null {
   const d = String(dax ?? '').trim().replace(/\s+/g, ' ');
 
   const tableOnly = /^EVALUATE\s+'?([A-Za-z_][\w ]*?)'?$/i.exec(d);

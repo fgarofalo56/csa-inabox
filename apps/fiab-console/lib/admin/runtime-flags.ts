@@ -166,6 +166,14 @@ export const RUNTIME_FLAGS: readonly RuntimeFlagDef[] = [
     ownerItem: 'A9',
     surface: 'Report designer pivoted matrix visual (/items/report/[id])',
   },
+  {
+    id: 'a3-dax-fold-engine',
+    label: 'Semantic model — DAX fold engine',
+    description:
+      'The A1/A2/A3 loom-native DAX tokenizer + parser + SQL-fold engine behind the semantic-model DAX query view and measure test (evalDax → Synapse serverless). OFF instantly reverts to the pre-A-chain 3-regex translator (EVALUATE <Table> / TOPN / ROW(CALCULATE(AGG)) only; everything else → the honest unsupported-DAX message, or the opt-in AAS backend if configured) — a true revert with zero roll if a fold ever mis-plans. The report path (field-wells → SQL) is unaffected either way.',
+    ownerItem: 'A3',
+    surface: 'Semantic-model DAX query view + measure test (/items/semantic-model/[id])',
+  },
 ];
 
 /** Union of registered flag ids (`never` while the list is empty). */
