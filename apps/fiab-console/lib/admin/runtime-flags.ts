@@ -135,6 +135,14 @@ export const RUNTIME_FLAGS: readonly RuntimeFlagDef[] = [
     surface: '/admin/copilot-quality',
   },
   {
+    id: 'c4-finops-hub',
+    label: 'FinOps hub (/admin/finops)',
+    description:
+      'The C4 FinOps cockpit (/admin/finops): forecast chart, cost-anomaly feed + rules editor, per-scope breakdown, and real Azure Budgets CRUD. OFF reverts the surface to a pointer at the existing /admin/chargeback + /admin/usage-chargeback pages (which keep working) on the next load — the hub is additive, nothing else changes. The scheduled C3 cost-anomaly monitor keeps running either way; this only controls the admin surface.',
+    ownerItem: 'C4',
+    surface: '/admin/finops',
+  },
+  {
     id: 'rum1-client-telemetry',
     label: 'Client RUM telemetry',
     description:

@@ -304,6 +304,29 @@ export const AZURE_SERVICES_ENV_CHECKS: EnvSpec[] = [
     },
   },
   {
+    // C4 (loom-next-level) — REAL Azure Budgets CRUD on /admin/finops. Read
+    // (list budgets) works with the C1 Cost Management Reader grant; CREATE/
+    // UPDATE/DELETE (Microsoft.Consumption/budgets PUT/DELETE) additionally
+    // needs the Console UAMI to hold "Cost Management Contributor" at the target
+    // scope. Env-presence can't detect an RBAC grant, so this gate keys on the
+    // subscription var (the same day-one signal as svc-cost-management) and
+    // NAMES the role in its remediation; the actual 403 is surfaced honestly at
+    // the budgets route (budgets_write_forbidden) with this Fix-it.
+    id: 'svc-budgets-write', category: 'azure-services', title: 'Azure Budgets — create/update/delete (FinOps hub)', severity: 'optional',
+    anyOf: [['LOOM_SUBSCRIPTION_ID', 'LOOM_BILLING_SCOPE']], warnOnMiss: true,
+    remediation: 'Budget READ works with the C1 Cost Management Reader grant. To CREATE/UPDATE/DELETE budgets from /admin/finops, grant the Console UAMI "Cost Management Contributor" at the subscription (or billing) scope — bicep-granted by modules/admin-plane/cost-management-reader-rbac.bicep (role id 434105ed-43f6-45c7-a02f-909b2ba83430) on a push-button deploy; on an existing estate re-run the deploy with skipRoleGrants=false. On some Gov EA/MCA enrollments budget write is a billing-account admin action (document per no-vaporware).',
+    provisionedBy: 'modules/admin-plane/cost-management-reader-rbac.bicep (Cost Management Contributor, skipRoleGrants-aware) — the same module that grants the C1 reader role',
+    role: 'Cost Management Contributor (Console UAMI) at subscription scope — bicep-granted by cost-management-reader-rbac.bicep (role id 434105ed-43f6-45c7-a02f-909b2ba83430)',
+    // X-MATRIX (C4 budgets per-cloud): Microsoft.Consumption/budgets is GA in
+    // Commercial AND on management.usgovcloudapi.net (GCC-High). IL5: the
+    // Consumption API is typically unreachable → the hub degrades budgets to a
+    // Loom-native budget stored in Cosmos (design; enforced by the C3 monitor).
+    availability: {
+      commercial: 'ga', gccHigh: 'ga', il5: 'unavailable',
+      fallbackNote: 'Gov GCC-High: Microsoft.Consumption/budgets is GA on management.usgovcloudapi.net; write may be a billing-account-admin action on some EA/MCA enrollments. IL5/air-gapped: the Consumption API is unreachable — budget CRUD degrades to a Loom-native budget stored in Cosmos, with the C3 cost-anomaly monitor enforcing thresholds locally; the hub renders identically with an honest "native budget (Consumption API unavailable in this cloud)" label.',
+    },
+  },
+  {
     id: 'svc-databricks-sql', category: 'azure-services', title: 'Databricks SQL warehouse (DQ monitor / MDM / DLP schemas)', severity: 'optional',
     required: ['LOOM_DATABRICKS_SQL_WAREHOUSE_ID'], warnOnMiss: true,
     remediation: 'Set LOOM_DATABRICKS_SQL_WAREHOUSE_ID (with LOOM_DATABRICKS_HOSTNAME) so DQ monitoring, MDM match-merge, and governance DLP schema surfaces run against a real Databricks SQL warehouse (warehouseConfigGate). Synapse covers the warehouse item type without it.',

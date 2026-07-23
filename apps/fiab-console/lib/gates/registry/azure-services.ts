@@ -191,6 +191,19 @@ export const AZURE_SERVICES_GATE_META: Record<string, GateMeta> = {
     loaders: { LOOM_AZURE_MAPS_CLIENT_ID: L.maps },
     legacyCodes: ['maps_not_configured'],
   },
+  // C4 — REAL Azure Budgets CRUD on /admin/finops. Read works with the C1
+  // reader grant; write needs Cost Management Contributor → Fix-it 'role-grant'.
+  'svc-budgets-write': {
+    surfaces: [
+      { path: '/admin/finops', label: 'FinOps hub — Budgets (create/update/delete)' },
+    ],
+    fixit: {
+      kind: 'role-grant',
+      grantNote: 'Grant the Console UAMI "Cost Management Contributor" at subscription scope (role id 434105ed-43f6-45c7-a02f-909b2ba83430). The push-button deploy grants it via modules/admin-plane/cost-management-reader-rbac.bicep; on an existing estate re-run the deploy with skipRoleGrants=false. Budget READ works without it (Cost Management Reader); only create/update/delete require Contributor.',
+    },
+    legacyCodes: ['budgets_write_forbidden'],
+    autoResolveNote: 'A push-button deploy bicep-grants Cost Management Contributor alongside the C1 reader role — budget CRUD works with zero operator input.',
+  },
   // C3 — the scheduled cost-anomaly monitor (default-ON; the ACA Job + the
   // shared Cost Management Reader grant + the shared action group). Fix-it
   // 'wizard' (deploy/enable the monitor job) — the anomaly-rule thresholds +

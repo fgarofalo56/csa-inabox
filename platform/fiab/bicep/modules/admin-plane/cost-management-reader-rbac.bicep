@@ -40,3 +40,19 @@ resource consoleCostManagementReader 'Microsoft.Authorization/roleAssignments@20
     principalType: 'ServicePrincipal'
   }
 }
+
+// C4 (loom-next-level) — Cost Management Contributor (434105ed-43f6-45c7-a02f-909b2ba83430).
+// Adds the WRITE half the FinOps hub's Budgets CRUD needs
+// (Microsoft.Consumption/budgets PUT/DELETE) on top of the Reader role above.
+// Default-ON (loom_default_on_opt_out): budget create/update/delete works
+// day-one with no operator input; svc-budgets-write surfaces the honest 403
+// only when this grant is absent. skipRoleGrants-aware; the role GUID is
+// identical across all clouds. No Microsoft Fabric dependency.
+resource consoleCostManagementContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(consolePrincipalId) && !skipRoleGrants) {
+  name: guid(subscription().id, consolePrincipalId, 'cost-management-contributor')
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '434105ed-43f6-45c7-a02f-909b2ba83430')
+    principalId: consolePrincipalId
+    principalType: 'ServicePrincipal'
+  }
+}

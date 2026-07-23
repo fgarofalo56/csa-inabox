@@ -13,11 +13,11 @@ same classic + WS-D1 toolkit export styles).
 
 | Metric | Count |
 | --- | ---: |
-| Total routes | 1564 |
+| Total routes | 1567 |
 | Public (no session) | 112 |
 | Session-only | 571 |
 | Owner-scoped | 632 |
-| Admin | 249 |
+| Admin | 252 |
 | Gated (backend config) | 514 |
 | Areas | 104 |
 
@@ -145,6 +145,9 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `admin/embed-codes/route.ts` | GET POST DELETE | admin | ● | Cosmos |
 | `admin/env-config/route.ts` | GET PUT | admin |  | — |
 | `admin/feedback-forwarding/route.ts` | GET PUT | admin |  | Cosmos |
+| `admin/finops/anomalies/route.ts` | GET PUT DELETE | admin |  | Cosmos |
+| `admin/finops/breakdown/route.ts` | GET | admin |  | — |
+| `admin/finops/budgets/route.ts` | GET POST PUT DELETE | admin |  | — |
 | `admin/finops/forecast/route.ts` | GET | admin |  | — |
 | `admin/gates/[id]/options/route.ts` | GET | admin | ● | — |
 | `admin/gates/[id]/resolve/route.ts` | POST | admin | ● | — |

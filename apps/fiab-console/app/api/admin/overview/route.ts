@@ -36,6 +36,7 @@ import {
   featurePermissionsContainer,
   attributeGroupsContainer,
   labelAssignmentsContainer,
+  costAnomalyRulesContainer,
 } from '@/lib/azure/cosmos-client';
 import type { SqlParameter } from '@azure/cosmos';
 import { getGraphHost, getGraphScope } from '@/lib/azure/cloud-endpoints';
@@ -65,7 +66,7 @@ export type OverviewTileKey =
   | 'workspaces' | 'domains' | 'items' | 'auditEvents' | 'permissions'
   | 'attributeGroups' | 'labeledItems' | 'tenantSettings'
   | 'users' | 'capacity' | 'openAuditItems' | 'sensitivityLabels'
-  | 'runtimeFlags' | 'rumClientErrors' | 'diagnostics';
+  | 'runtimeFlags' | 'rumClientErrors' | 'diagnostics' | 'finops';
 
 export type OverviewTiles = Record<OverviewTileKey, TileCount>;
 
@@ -260,7 +261,7 @@ async function computeTiles(tenantId: string): Promise<OverviewTiles> {
   const [
     workspaces, domains, items, auditEvents, permissions, attributeGroups,
     labeledItems, tenantSettings, users, capacity, openAuditItems, sensitivityLabels,
-    runtimeFlags, rumClientErrors, diagnostics,
+    runtimeFlags, rumClientErrors, diagnostics, finops,
   ] = await Promise.all([
     tile(() => countWhereTenant(workspacesContainer, tenantId), COSMOS_HINT),
     tile(() => domainsCount(tenantId), COSMOS_HINT),
@@ -285,11 +286,22 @@ async function computeTiles(tenantId: string): Promise<OverviewTiles> {
       'Set LOOM_LOG_ANALYTICS_WORKSPACE_ID (auto-derived from the monitoring module) and grant the Console UAMI "Log Analytics Reader" on the workspace to count client-side errors.'),
     // DIAG1 — blocked config gates worth bundling for support (in-process).
     tile(() => blockedGateCount(), COSMOS_HINT),
+    // C4 — enabled cost-anomaly watch rules (the FinOps hub's C3 monitor).
+    tile(() => finopsRulesCount(), COSMOS_HINT),
   ]);
 
   return {
     workspaces, domains, items, auditEvents, permissions, attributeGroups,
     labeledItems, tenantSettings, users, capacity, openAuditItems, sensitivityLabels,
-    runtimeFlags, rumClientErrors, diagnostics,
+    runtimeFlags, rumClientErrors, diagnostics, finops,
   };
+}
+
+/** C4 — count enabled cost-anomaly watch rules (single-partition scan). */
+async function finopsRulesCount(): Promise<number> {
+  const c = await costAnomalyRulesContainer();
+  const { resources } = await c.items
+    .query<number>({ query: "SELECT VALUE COUNT(1) FROM c WHERE c.docType = 'cost-anomaly-rule' AND (NOT IS_DEFINED(c.enabled) OR c.enabled = true)" })
+    .fetchAll();
+  return Number(resources?.[0] ?? 0);
 }
