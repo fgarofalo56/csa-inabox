@@ -16,8 +16,7 @@
  */
 
 import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
-import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } from '@azure/identity';
-import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
+import { workspaceScopedCredential } from '@/lib/azure/workspace-credential-factory';
 import type { Workspace } from '@/lib/types/workspace';
 import { assignWorkspaceToCapacity, FabricError } from './fabric-client';
 import { registerAtlasEntity, PurviewError, PurviewNotConfiguredError } from './purview-client';
@@ -179,10 +178,9 @@ export async function applyWorkspaceIdentity(ws: Workspace): Promise<Workspace['
 // ---------------------------------------------------------------------------
 
 const ARM_RG_API = '2021-04-01';
-const armCredUami = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
-const armCredential = armCredUami
-  ? new ChainedTokenCredential(new AcaManagedIdentityCredential(), new ManagedIdentityCredential({ clientId: armCredUami }), new DefaultAzureCredential())
-  : new DefaultAzureCredential();
+// I5 pilot migration: the backing-RG ARM credential rides the factory's shared
+// chain (Aca-first → MI → DAC — arm-credential.ts), resolved per getToken call.
+const armCredential = workspaceScopedCredential();
 
 /** Build the backing RG name from the configurable prefix + a short workspace id. */
 export function backingRgName(ws: Pick<Workspace, 'id'>): string {

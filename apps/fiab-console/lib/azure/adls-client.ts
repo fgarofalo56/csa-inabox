@@ -12,13 +12,8 @@
  */
 
 import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
-import {
-  ChainedTokenCredential,
-  DefaultAzureCredential,
-  ManagedIdentityCredential,
-  type TokenCredential,
-} from '@azure/identity';
-import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
+import { type TokenCredential } from '@azure/identity';
+import { workspaceScopedCredential } from '@/lib/azure/workspace-credential-factory';
 import {
   DataLakeServiceClient,
   type DataLakeFileSystemClient,
@@ -33,15 +28,12 @@ import {
 } from '@azure/storage-blob';
 import { getBlobSuffix } from './cloud-endpoints';
 
-const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
-// MI-FIRST: ManagedIdentityCredential is always the first link (system-assigned
-// when no clientId), never a bare DefaultAzureCredential on the container path —
-// a bare DAC can collapse to dev-only credentials and skip Managed Identity.
-const credential: TokenCredential = new ChainedTokenCredential(
-  new AcaManagedIdentityCredential(),
-  new ManagedIdentityCredential(uamiClientId ? { clientId: uamiClientId } : {}),
-  new DefaultAzureCredential(),
-);
+// I5 pilot migration: credentials resolve through the per-workspace credential
+// FACTORY (lazy adapter — the underlying identity is decided per getToken call
+// by LOOM_WORKSPACE_IDENTITY_MODE; with mode off this is the memoized shared
+// Console-UAMI chain, byte-identical behavior to the former module singleton).
+// MI-FIRST is preserved inside the shared chain (arm-credential.ts).
+const credential: TokenCredential = workspaceScopedCredential({ backend: 'adls-lake' });
 
 export const KNOWN_CONTAINERS = ['bronze', 'silver', 'gold', 'landing', 'csv-imports'] as const;
 export type KnownContainer = (typeof KNOWN_CONTAINERS)[number];
@@ -840,21 +832,13 @@ export async function removePrincipalFromPathAcl(
 // container (separate from POSIX ACLs).
 // ============================================================
 
-import {
-  DefaultAzureCredential as _DefaultCredential,
-  ManagedIdentityCredential as _MICredential,
-  ChainedTokenCredential as _ChainedCredential,
-  type TokenCredential as _TokenCredential,
-} from '@azure/identity';
 import { armBase, armScope, dfsUrl } from './cloud-endpoints';
 import { discoverResourceCoordsByName } from './resource-graph-coords';
 
 const ARM_SCOPE = armScope();
-// MI-FIRST (see top-of-file credential): never a bare DefaultAzureCredential.
-const armCred: _TokenCredential = new _ChainedCredential(
-  new _MICredential(uamiClientId ? { clientId: uamiClientId } : {}),
-  new _DefaultCredential(),
-);
+// I5: the ARM-plane credential also rides the factory's shared chain
+// (Aca-first → MI → DAC, arm-credential.ts) — the proven production path.
+const armCred: TokenCredential = workspaceScopedCredential();
 
 async function armToken(): Promise<string> {
   const t = await armCred.getToken(ARM_SCOPE);
