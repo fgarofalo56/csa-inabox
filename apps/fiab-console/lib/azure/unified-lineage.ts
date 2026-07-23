@@ -224,16 +224,21 @@ export interface UnifiedLineageInput {
   /** Max hops to walk the Weave thread-edge graph from the focus item. */
   weaveDepth?: number;
   /**
-   * Surface **column-level** lineage. When set, each table node is badged with
-   * the columns that participate in lineage, and column→column edges are added
-   * between synthetic `col:<table>::<column>` nodes so the graph reads at the
-   * column grain (matching Databricks Catalog Explorer's column-level view).
-   * Column facets come from every source that carries them (L1): Databricks UC
-   * `system.access.column_lineage` (requires
-   * `LOOM_DATABRICKS_LINEAGE_WAREHOUSE_ID` — same warehouse as table lineage,
-   * no new env var) AND Weave `ThreadEdge.columnMappings` (Cosmos, no gate).
-   * Defaults to off so the table-grain graph stays the default; the Lineage
-   * tab toggles it via `?columns=true`.
+   * Surface **column-level** lineage for the OPT-IN sources. When set, the Weave
+   * `ThreadEdge.columnMappings` overlay and the Purview-native `columnEdges`
+   * facet are synthesized into synthetic `col:<table>::<column>` nodes +
+   * column→column edges so the graph reads at the column grain (matching
+   * Databricks Catalog Explorer's column-level view).
+   *
+   * NOTE (L7): the Databricks UC `system.access.column_lineage` grain is NO
+   * LONGER gated by this flag — it is **default-ON** whenever a lineage
+   * warehouse is wired (`LOOM_DATABRICKS_LINEAGE_WAREHOUSE_ID` — same warehouse
+   * as table lineage, no new env var), per `.claude/rules/ux-baseline.md` G2.
+   * All column facets (UC + Weave + Purview) collapse on the SAME canonical
+   * `col:` identity (L1 cross-source merge). This flag therefore only toggles
+   * the Weave/Purview overlays; UC columns appear as soon as the warehouse
+   * exists. When no warehouse is configured the default (table-grain) payload
+   * is byte-identical to the pre-column shape.
    */
   columnLineage?: boolean;
   /**
@@ -487,12 +492,25 @@ function ucEndpointType(t?: string): string | undefined {
   return t.toLowerCase();
 }
 
-/** Unity Catalog subgraph (system tables, with REST preview fallback). */
+/**
+ * Unity Catalog subgraph (system tables, with REST preview fallback).
+ *
+ * Column-level lineage (L1/L7): when a lineage warehouse is wired
+ * (`LOOM_DATABRICKS_LINEAGE_WAREHOUSE_ID`) the durable
+ * `system.access.column_lineage` grain is DEFAULT-ON — UC is one of N sources
+ * feeding the shared `col:<table>::<column>` model via {@link synthesizeColumnGraph},
+ * so a UC column node collapses onto the SAME UnionFind member as the Weave /
+ * Purview column node for the same physical column. There is no `?columns=true`
+ * gate on this path (L7 promote; per `.claude/rules/ux-baseline.md` G2 — zero
+ * day-one gates: when the backing warehouse is configured, the column grain is
+ * simply available). When NO warehouse is configured the REST-preview fallback
+ * below is table-grain only, so the default (no-warehouse) output stays
+ * byte-identical to the pre-column shape.
+ */
 async function unityGraph(
   host: string,
   fullName: string,
   focusIds: string[],
-  columnLineage = false,
 ): Promise<SourceGraph> {
   const nodes = new Map<string, IdentifiedNode>();
   const edges: CanvasLineageEdge[] = [];
@@ -546,8 +564,9 @@ async function unityGraph(
     }
 
     // Column-level lineage — badge each table node with its lineage columns and
-    // (when requested) draw column→column edges at the column grain. Best-effort:
-    // a column-lineage gate must NOT blank the table graph we already built.
+    // draw column→column edges at the column grain. DEFAULT-ON when a warehouse
+    // is wired (L7 promote — no `?columns=true` gate here). Best-effort: a
+    // column-lineage gate must NOT blank the table graph we already built.
     try {
       const col = await getColumnLineageSystemTables(host, fullName, warehouseId);
       for (const [table, cols] of Object.entries(col.columnsByTable)) {
@@ -558,25 +577,29 @@ async function unityGraph(
           }
         }
       }
-      if (columnLineage) {
-        // Shared, source-agnostic synthesis (L1): UC is now one of N column
-        // sources writing the same `col:<table>::<column>` model.
-        const members: ColumnGraphMember[] = col.edges.map((ce) => ({
-          fromTable: ce.sourceTable,
-          fromColumn: ce.sourceColumn,
-          toTable: ce.targetTable,
-          toColumn: ce.targetColumn,
-          confidence: 'declared' as const,
-          source: 'unity-catalog' as const,
-        }));
-        const colGraph = synthesizeColumnGraph(members, edges);
-        for (const cn of colGraph.nodes) {
-          if (nodes.has(cn.node.id)) continue;
-          if (cn.node.parentTableId) ensureEndpoint(cn.node.parentTableId);
-          nodes.set(cn.node.id, cn);
-        }
-        edges.push(...colGraph.edges);
+      // Shared, source-agnostic synthesis (L1): UC is now ONE of N column
+      // sources writing the same `col:<table>::<column>` model. Column members
+      // use the raw UC full_name for the owning table; the canonical
+      // `columnIdentity` normalization is what lets a UC column node merge in
+      // the SAME UnionFind as the Weave `ThreadEdge.columnMappings` node and the
+      // Purview `columnEdges` node for the same physical column (L1 cross-source
+      // column merge). `getColumnLineageSystemTables` output maps 1:1 onto
+      // {@link ColumnGraphMember} (sourceTable/Column → fromTable/Column, etc.).
+      const members: ColumnGraphMember[] = col.edges.map((ce) => ({
+        fromTable: ce.sourceTable,
+        fromColumn: ce.sourceColumn,
+        toTable: ce.targetTable,
+        toColumn: ce.targetColumn,
+        confidence: 'declared' as const,
+        source: 'unity-catalog' as const,
+      }));
+      const colGraph = synthesizeColumnGraph(members, edges);
+      for (const cn of colGraph.nodes) {
+        if (nodes.has(cn.node.id)) continue;
+        if (cn.node.parentTableId) ensureEndpoint(cn.node.parentTableId);
+        nodes.set(cn.node.id, cn);
       }
+      edges.push(...colGraph.edges);
     } catch {
       // Column lineage unavailable (system.access.column_lineage gate) — the
       // table-grain graph stands on its own; no fabricated columns.
@@ -791,7 +814,9 @@ export async function getUnifiedLineage(input: UnifiedLineageInput): Promise<Uni
       (async () => {
         const hosts = listWorkspaceHostnames(); // throws UnityCatalogNotConfiguredError when unset
         const host = input.ucHost || hosts[0];
-        return unityGraph(host, ucFullName!, focusIds, input.columnLineage);
+        // UC column grain is DEFAULT-ON when a lineage warehouse is wired (L7),
+        // so `input.columnLineage` is not threaded here — see unityGraph doc.
+        return unityGraph(host, ucFullName!, focusIds);
       })()
         .then((g) => {
           graphs.push(g);
