@@ -8,7 +8,7 @@
  * results to Cosmos `loom-copilot-evals`.
  */
 import { app, InvocationContext, Timer } from '@azure/functions';
-import { runEvals } from '../run-evals';
+import { runEvals, runSearchEvals } from '../run-evals';
 
 const CRON = process.env.COPILOT_EVALUATOR_CRON || '0 0 7 * * *';
 
@@ -18,6 +18,14 @@ export async function copilotEvaluatorTimer(_timer: Timer, context: InvocationCo
     `[copilot-evaluator] nightly tick complete — ran=${summary.ran}` +
       (summary.reason ? ` reason=${summary.reason}` : '') +
       ` surfaces=${summary.surfaces.length}`,
+  );
+  // SRCH1 — federated-search relevance (deterministic, no judge spend) rides the
+  // same nightly tick. Honest no-op when unconfigured (missing sets / principal).
+  const search = await runSearchEvals('nightly', undefined, context);
+  context.log(
+    `[copilot-evaluator/search] nightly tick complete — ran=${search.ran}` +
+      (search.reason ? ` reason=${search.reason}` : '') +
+      ` domains=${search.domains.length}`,
   );
 }
 

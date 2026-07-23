@@ -10,7 +10,7 @@
  * docs/fiab/runbooks/copilot-evaluator.md).
  */
 import { app, HttpRequest, HttpResponseInit, InvocationContext } from '@azure/functions';
-import { runEvals } from '../run-evals';
+import { runEvals, runSearchEvals } from '../run-evals';
 
 export async function copilotEvaluatorHttp(
   req: HttpRequest,
@@ -26,6 +26,19 @@ export async function copilotEvaluatorHttp(
     ? body.surfaces.map((s: unknown) => String(s)).filter(Boolean)
     : undefined;
   const trigger: 'corpus' | 'manual' = body?.trigger === 'corpus' ? 'corpus' : 'manual';
+
+  // SRCH1: mode 'search' runs the federated-search relevance evals instead of
+  // the Copilot answer evals (body.domains filters the search domains).
+  if (body?.mode === 'search') {
+    const domains: string[] | undefined = Array.isArray(body?.domains)
+      ? body.domains.map((s: unknown) => String(s)).filter(Boolean)
+      : undefined;
+    const s = await runSearchEvals(trigger, domains, context);
+    return {
+      status: s.ran ? 200 : 409,
+      jsonBody: { ok: s.ran, reason: s.reason, trigger, mode: 'search', domains: s.domains },
+    };
+  }
 
   const summary = await runEvals(trigger, surfaces, context);
   return {

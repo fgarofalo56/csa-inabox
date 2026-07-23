@@ -13,12 +13,12 @@ same classic + WS-D1 toolkit export styles).
 
 | Metric | Count |
 | --- | ---: |
-| Total routes | 1562 |
-| Public (no session) | 111 |
+| Total routes | 1564 |
+| Public (no session) | 112 |
 | Session-only | 571 |
 | Owner-scoped | 632 |
-| Admin | 248 |
-| Gated (backend config) | 513 |
+| Admin | 249 |
+| Gated (backend config) | 514 |
 | Areas | 104 |
 
 **Auth scope** — `public`: no session check; `session-only`: signed-in but
@@ -122,6 +122,7 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `admin/copilot-quality/[surface]/route.ts` | GET | admin |  | — |
 | `admin/copilot-quality/route.ts` | GET | admin |  | — |
 | `admin/copilot-quality/run/route.ts` | POST | admin | ● | Cosmos |
+| `admin/copilot-quality/search/route.ts` | GET | admin |  | — |
 | `admin/copilot-usage/route.ts` | GET | admin |  | Azure Monitor |
 | `admin/copilot/memory/[id]/route.ts` | DELETE | admin |  | — |
 | `admin/copilot/memory/audit/route.ts` | GET | admin |  | — |
@@ -869,6 +870,7 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | --- | --- | --- | :---: | --- |
 | `internal/copilot/eval-probe/route.ts` | GET POST | public |  | — |
 | `internal/copilot/memory/consolidate/route.ts` | GET POST | public |  | — |
+| `internal/copilot/search-probe/route.ts` | POST | public | ● | — |
 | `internal/copilot/skills/learn/route.ts` | GET POST | public |  | — |
 | `internal/copilot/tools/[name]/invoke/route.ts` | POST | public |  | — |
 | `internal/copilot/tools/route.ts` | GET | public |  | — |

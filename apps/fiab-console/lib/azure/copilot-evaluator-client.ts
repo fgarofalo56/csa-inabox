@@ -49,6 +49,10 @@ export function evaluatorRunGate(): EvaluatorGate | null {
 export interface TriggerRunInput {
   surfaces?: string[];
   trigger?: 'manual' | 'corpus';
+  /** SRCH1 — 'search' runs the federated-search relevance evals instead of the Copilot evals. */
+  mode?: 'copilot' | 'search';
+  /** Search domains to run (mode 'search'); empty = all. */
+  domains?: string[];
 }
 
 export interface TriggerRunResult {
@@ -78,10 +82,16 @@ export async function triggerEvaluatorRun(input: TriggerRunInput): Promise<Trigg
   const key = evaluatorKey();
   if (!hasInlineCode && key) headers['x-functions-key'] = key;
 
-  const payload = {
-    surfaces: Array.isArray(input.surfaces) && input.surfaces.length ? input.surfaces : undefined,
-    trigger: input.trigger === 'corpus' ? 'corpus' : 'manual',
-  };
+  const payload = input.mode === 'search'
+    ? {
+        mode: 'search' as const,
+        domains: Array.isArray(input.domains) && input.domains.length ? input.domains : undefined,
+        trigger: input.trigger === 'corpus' ? 'corpus' : 'manual',
+      }
+    : {
+        surfaces: Array.isArray(input.surfaces) && input.surfaces.length ? input.surfaces : undefined,
+        trigger: input.trigger === 'corpus' ? 'corpus' : 'manual',
+      };
 
   try {
     // The evaluator run is long — a per-surface judge pass can take minutes.

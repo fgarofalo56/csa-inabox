@@ -104,6 +104,7 @@ const ALLOWLIST = new Set([
   'LOOM_A2A_EGRESS_ALLOW',          // WS-5.2 gov-safe A2A OUTBOUND egress allow-list; runtime-only knob, unset = outbound A2A disabled (sovereign default). Inbound A2A needs no config. Also gates the WS-9 mesh A2A/MCP hops.
   'LOOM_MESH_PROFILE',              // opt-in WS-9 mesh egress profile override (commercial|gov|air-gap); unset = cloud default (gov cloud → gov, else commercial)
   'LOOM_EVAL_MONITOR_ACTION_GROUP_ID', // WS-1.5 opt-in Azure Monitor action group ARM resource ID for the eval-regression alert; unset = alert fires silently (Azure Monitor still captures it) with no email/webhook routing
+  'LOOM_EVAL_SEARCH_PRINCIPAL_OID',  // SRCH1 opt-in eval principal oid for /api/internal/copilot/search-probe (the demo/admin oid whose accessible workspaces hold the golden search items); unset = federated-search evals honest-gate (no fabricated results)
   'LOOM_MULTIUSER_ACL',             // opt-out kill switch for the multi-user ACL fallback (default on in code; rel-T11)
   'LOOM_SEMANTIC_LINK',             // opt-out kill switch for injecting the Semantic Link notebook helper preamble (default on in code; FGC-17) — Azure-native, no Fabric
   'LOOM_SCHEDULER_EMAIL_WEBHOOK',   // opt-in email relay (ACS/Logic App/SMTP) for scheduler failure alerts (rel-T81); unset = alerts land in the Loom inbox + optional webhook only

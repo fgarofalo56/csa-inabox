@@ -12,8 +12,10 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { copilotEvalsContainer } from '@/lib/azure/cosmos-client';
-import type { CopilotEvalRunDoc, CopilotEvalResultDoc } from '@/lib/azure/copilot-evals-model';
-import type { EvalFloors } from '@/lib/admin/copilot-quality';
+import type {
+  CopilotEvalRunDoc, CopilotEvalResultDoc, CopilotSearchRunDoc, CopilotSearchResultDoc,
+} from '@/lib/azure/copilot-evals-model';
+import type { EvalFloors, SearchFloors } from '@/lib/admin/copilot-quality';
 
 /** Bound the run scan — 10 surfaces × retained runs; ~200 is generous. */
 const MAX_RUN_DOCS = 400;
@@ -24,6 +26,7 @@ const MAX_RESULT_DOCS = 200;
 
 export interface EvalFloorsFile {
   floors: EvalFloors;
+  searchFloors: SearchFloors;
   meta?: { lastRatchet?: string | null; note?: string };
 }
 
@@ -56,12 +59,14 @@ function resolveFloorsPath(): string | null {
  */
 export function loadEvalFloors(): EvalFloorsFile {
   const p = resolveFloorsPath();
-  if (!p) return { floors: {} };
+  if (!p) return { floors: {}, searchFloors: {} };
   try {
-    const raw = JSON.parse(fs.readFileSync(p, 'utf-8')) as { floors?: EvalFloors; _meta?: { lastRatchet?: string | null; note?: string } };
-    return { floors: raw.floors ?? {}, meta: raw._meta };
+    const raw = JSON.parse(fs.readFileSync(p, 'utf-8')) as {
+      floors?: EvalFloors; searchFloors?: SearchFloors; _meta?: { lastRatchet?: string | null; note?: string };
+    };
+    return { floors: raw.floors ?? {}, searchFloors: raw.searchFloors ?? {}, meta: raw._meta };
   } catch {
-    return { floors: {} };
+    return { floors: {}, searchFloors: {} };
   }
 }
 
@@ -125,6 +130,63 @@ export async function surfaceResults(
       {
         query:
           "SELECT * FROM c WHERE c.docType = 'eval-result' AND c.surface = @s AND c.runId = @r OFFSET 0 LIMIT @n",
+        parameters: [
+          { name: '@s', value: surface },
+          { name: '@r', value: targetRun },
+          { name: '@n', value: MAX_RESULT_DOCS },
+        ],
+      },
+      { partitionKey: surface },
+    )
+    .fetchAll();
+  return { runId: targetRun, results: resources };
+}
+
+// ── SRCH1 — federated-search relevance reads ─────────────────────────────────
+
+/** Every retained `search-run` doc across all domains (bounded, newest first). */
+export async function listSearchRuns(): Promise<CopilotSearchRunDoc[]> {
+  const c = await copilotEvalsContainer();
+  const { resources } = await c.items
+    .query<CopilotSearchRunDoc>(
+      {
+        query:
+          "SELECT * FROM c WHERE c.docType = 'search-run' ORDER BY c.finishedAt DESC OFFSET 0 LIMIT @n",
+        parameters: [{ name: '@n', value: MAX_RUN_DOCS }],
+      },
+      { maxItemCount: MAX_RUN_DOCS },
+    )
+    .fetchAll();
+  return resources;
+}
+
+/** The per-query `search-result` docs for one domain's latest (or given) run. */
+export async function searchDomainResults(
+  domain: string,
+  runId?: string,
+): Promise<{ runId: string | null; results: CopilotSearchResultDoc[] }> {
+  const c = await copilotEvalsContainer();
+  const surface = `search:${domain}`;
+  let targetRun = runId;
+  if (!targetRun) {
+    const { resources } = await c.items
+      .query<CopilotSearchRunDoc>(
+        {
+          query:
+            "SELECT * FROM c WHERE c.docType = 'search-run' AND c.surface = @s ORDER BY c.finishedAt DESC OFFSET 0 LIMIT 1",
+          parameters: [{ name: '@s', value: surface }],
+        },
+        { partitionKey: surface },
+      )
+      .fetchAll();
+    targetRun = resources[0]?.runId;
+  }
+  if (!targetRun) return { runId: null, results: [] };
+  const { resources } = await c.items
+    .query<CopilotSearchResultDoc>(
+      {
+        query:
+          "SELECT * FROM c WHERE c.docType = 'search-result' AND c.surface = @s AND c.runId = @r OFFSET 0 LIMIT @n",
         parameters: [
           { name: '@s', value: surface },
           { name: '@r', value: targetRun },

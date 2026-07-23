@@ -23,5 +23,16 @@
     "report": { "retrievalHitRate": 0.5, "groundingAvg": 3, "passRate": 0.4, "provisional": true },
     "rbac": { "retrievalHitRate": 0.5, "groundingAvg": 3, "passRate": 0.4, "provisional": true },
     "eventstream": { "retrievalHitRate": 0.5, "groundingAvg": 3, "passRate": 0.4, "provisional": true }
+  },
+  "_searchMeta": {
+    "why": "SRCH1 — per-domain federated-search (/catalog) relevance floors. A ranking/index regression may never drop a domain below these. Enforced by scripts/csa-loom/check-eval-regression.mjs (searchFloors path). Scored hit-rate@k / NDCG@k by the copilot-evaluator searchRelevance mode against the demo-seed showcase items.",
+    "metrics": {
+      "searchHitRate": "0..1 — fraction of queries where >=1 expectedResults appears in the top-K returned by searchCatalog (deterministic)",
+      "ndcg": "0..1 — mean binary-relevance NDCG@k across the domain's queries"
+    }
+  },
+  "searchFloors": {
+    "catalog": { "searchHitRate": 0.6, "ndcg": 0.5, "provisional": true },
+    "analytics": { "searchHitRate": 0.6, "ndcg": 0.5, "provisional": true }
   }
 }

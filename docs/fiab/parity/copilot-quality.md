@@ -51,6 +51,27 @@ guided EmptyState), which is the intended behaviour.
 | Run now | `POST /api/admin/copilot-quality/run` → `triggerEvaluatorRun` → E2 `POST {LOOM_COPILOT_EVALUATOR_URL}/api/copilotEvaluatorHttp`; writes an `_auditLog` row (`kind:'copilot.eval-run-trigger'`) |
 | Kill-switch | FLAG0 `e5-copilot-quality-page` runtime flag (`/admin/runtime-flags`) |
 
+## SRCH1 — Search relevance tab (federated `/catalog` search evals)
+
+A second tab on the same page applies the WS-E machinery to the federated
+catalog search users type into directly (`lib/azure/catalog-search.ts`).
+
+| # | Capability | Status | Loom implementation |
+|---|-----------|--------|---------------------|
+| 1 | Per-domain relevance scorecard | ✅ built | Hit-rate@k + NDCG@k + MRR per domain (`buildSearchSummaries`, `compositeSearchGrade`) |
+| 2 | NDCG@k ranking quality | ✅ built | `scoreSearchRelevance` (binary-relevance NDCG@k) in the evaluator core |
+| 3 | Run-history trend | ✅ built | Per-domain trend sparkline + run count |
+| 4 | Floor / regression | ✅ built | `searchFloors` in eval-floors.json; enforced by `check-eval-regression.mjs` (search gate) |
+| 5 | Drill-in | ✅ built | Per-query table + expected-vs-retrieved-results panel |
+| 6 | On-demand run | ✅ built (honest-gate) | "Run search evals" → E2 HTTP trigger `mode:'search'`; honest gate when unwired |
+| 7 | Honest unconfigured state | ✅ built | Guided EmptyState naming `LOOM_EVAL_SEARCH_PRINCIPAL_OID` + the Function URL |
+
+**Backend:** `GET /api/admin/copilot-quality/search` → Cosmos `search-run` /
+`search-result` docs (written by the evaluator's `searchRelevance` mode, which
+POSTs `/api/internal/copilot/search-probe` → the REAL `searchCatalog` top-K as
+the configured eval principal). Golden sets: `content/evals/search/<domain>.jsonl`
+(targeting the demo-seed showcase items). Zero ❌.
+
 ## Per-cloud
 
 Cloud-neutral — same page every cloud; each reads its own Cosmos

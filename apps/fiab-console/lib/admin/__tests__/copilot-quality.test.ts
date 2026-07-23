@@ -11,9 +11,10 @@ import { describe, it, expect } from 'vitest';
 import {
   gradeHitRate, gradePassRate, worstGrade, compositeGrade, floorStatusFor,
   buildSurfaceSummaries, buildOverview, worstQuestions, worstReasonLabel,
-  type EvalFloors,
+  compositeSearchGrade, searchFloorStatusFor, buildSearchSummaries,
+  type EvalFloors, type SearchFloors,
 } from '@/lib/admin/copilot-quality';
-import type { CopilotEvalRunDoc, CopilotEvalResultDoc } from '@/lib/azure/copilot-evals-model';
+import type { CopilotEvalRunDoc, CopilotEvalResultDoc, CopilotSearchRunDoc } from '@/lib/azure/copilot-evals-model';
 
 const totals = (o: Partial<CopilotEvalRunDoc['totals']>): CopilotEvalRunDoc['totals'] => ({
   questions: 10, retrievalHitRate: 0.9, mrrAvg: 0.8, groundingAvg: 4.2,
@@ -152,5 +153,47 @@ describe('worstQuestions', () => {
     for (const r of ['forbidden-phrase', 'retrieval-miss', 'low-grounding', 'missed-mention', 'judge-error'] as const) {
       expect(worstReasonLabel(r).length).toBeGreaterThan(0);
     }
+  });
+});
+
+// ── SRCH1 — search relevance summaries ───────────────────────────────────────
+
+const searchRun = (domain: string, o: Partial<CopilotSearchRunDoc> = {}): CopilotSearchRunDoc => ({
+  id: `${domain}:r1`, surface: `search:${domain}`, domain, runId: (o.runId as string) ?? 'r1',
+  docType: 'search-run', schemaVersion: 1, startedAt: '2026-07-23T00:00:00Z',
+  finishedAt: (o.finishedAt as string) ?? '2026-07-23T00:05:00Z', trigger: 'manual', k: 5,
+  totals: { queries: 12, hitRate: 0.9, mrrAvg: 0.8, ndcgAvg: 0.85, ...(o.totals ?? {}) }, ...o,
+});
+
+describe('search relevance', () => {
+  it('compositeSearchGrade = worse of hit-rate and ndcg', () => {
+    expect(compositeSearchGrade({ queries: 5, hitRate: 0.95, mrrAvg: 0.9, ndcgAvg: 0.55 })).toBe('D');
+    expect(compositeSearchGrade({ queries: 5, hitRate: 0.95, mrrAvg: 0.9, ndcgAvg: 0.92 })).toBe('A');
+  });
+  it('searchFloorStatusFor flags below and no-floor', () => {
+    const st = searchFloorStatusFor({ queries: 5, hitRate: 0.5, mrrAvg: 0.5, ndcgAvg: 0.9 }, { searchHitRate: 0.6, ndcg: 0.5 });
+    expect(st.find((s) => s.metric === 'searchHitRate')!.verdict).toBe('below');
+    expect(st.find((s) => s.metric === 'ndcg')!.verdict).toBe('ok');
+    const none = searchFloorStatusFor({ queries: 5, hitRate: 0.5, mrrAvg: 0.5, ndcgAvg: 0.9 }, undefined);
+    expect(none.every((s) => s.verdict === 'no-floor')).toBe(true);
+  });
+  it('buildSearchSummaries groups by domain, latest first, trend oldest→newest', () => {
+    const floors: SearchFloors = { catalog: { searchHitRate: 0.6, ndcg: 0.5, provisional: true } };
+    const runs = [
+      searchRun('catalog', { runId: 'r2', finishedAt: '2026-07-23T02:00:00Z', totals: { hitRate: 0.95 } as any }),
+      searchRun('catalog', { runId: 'r1', finishedAt: '2026-07-23T01:00:00Z', totals: { hitRate: 0.4 } as any }),
+      searchRun('analytics', { runId: 'r1' }),
+    ];
+    const s = buildSearchSummaries(runs, floors);
+    expect(s.map((x) => x.domain)).toEqual(['analytics', 'catalog']);
+    const cat = s.find((x) => x.domain === 'catalog')!;
+    expect(cat.latest.runId).toBe('r2');
+    expect(cat.trend.map((t) => t.runId)).toEqual(['r1', 'r2']);
+    expect(cat.provisionalFloor).toBe(true);
+  });
+  it('belowFloor honest for search', () => {
+    const floors: SearchFloors = { catalog: { searchHitRate: 0.6, ndcg: 0.5 } };
+    const s = buildSearchSummaries([searchRun('catalog', { totals: { hitRate: 0.3, ndcgAvg: 0.2 } as any })], floors);
+    expect(s[0].belowFloor).toBe(true);
   });
 });

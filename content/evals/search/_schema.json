@@ -1,0 +1,35 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "csa-loom://content/evals/search/_schema.json",
+  "title": "CSA Loom federated-search golden query row (SRCH1)",
+  "description": "One JSON object per JSONL line in content/evals/search/<domain>.jsonl. Scored by the copilot-evaluator Function's searchRelevance mode (hit-rate@k / MRR / NDCG@k) against the REAL /catalog federated search (lib/azure/catalog-search.ts searchCatalog) via the /api/internal/copilot/search-probe route. expectedResults are matched case-insensitively (substring, either direction) against each returned result's qualified name / display name / id, so they target the demo-seed showcase items (scripts/csa-loom/demo-seed.mjs). Azure-native, no Fabric/Power BI dependency.",
+  "type": "object",
+  "required": ["id", "query", "expectedResults"],
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "Unique row id: '<domain>-<NNN>' (domain = the JSONL basename).",
+      "pattern": "^[a-z0-9]+(-[a-z0-9]+)*-[0-9]{3}$"
+    },
+    "query": {
+      "type": "string",
+      "description": "The text a user types into the /catalog federated search.",
+      "minLength": 2,
+      "maxLength": 200
+    },
+    "expectedResults": {
+      "type": "array",
+      "description": "Item identifiers the federated search SHOULD surface in its top-K (display name / qualified name / id; matched case-insensitively as a substring either direction). Targets the demo-seed showcase items.",
+      "minItems": 1,
+      "maxItems": 8,
+      "items": { "type": "string", "minLength": 2, "maxLength": 160 }
+    },
+    "k": {
+      "type": "integer",
+      "description": "Top-K ranking window for hit/MRR/NDCG (default 5).",
+      "minimum": 1,
+      "maximum": 20
+    }
+  }
+}

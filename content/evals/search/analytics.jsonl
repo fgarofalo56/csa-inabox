@@ -1,0 +1,12 @@
+{"id":"analytics-001","query":"anomaly activator","expectedResults":["Anomaly Activator"]}
+{"id":"analytics-002","query":"churn training experiment","expectedResults":["Churn Training Experiment"]}
+{"id":"analytics-003","query":"direct lake semantic model","expectedResults":["Sales Semantic Model (Direct Lake)"]}
+{"id":"analytics-004","query":"medallion orchestration pipeline","expectedResults":["Medallion Orchestration Pipeline"]}
+{"id":"analytics-005","query":"new order alert logic app","expectedResults":["New-Order Alert Logic App"]}
+{"id":"analytics-006","query":"sales copilot agent","expectedResults":["Sales Copilot Agent"]}
+{"id":"analytics-007","query":"telemetry eventhouse","expectedResults":["Telemetry Eventhouse"]}
+{"id":"analytics-008","query":"real-time dashboards demo app","expectedResults":["Demo — Real-Time Dashboards"]}
+{"id":"analytics-009","query":"finops cost demo","expectedResults":["Demo — FinOps"]}
+{"id":"analytics-010","query":"data governance demo","expectedResults":["Demo — Data Governance"]}
+{"id":"analytics-011","query":"rag builder","expectedResults":["Demo — RAG Builder"]}
+{"id":"analytics-012","query":"sovereign ai agents","expectedResults":["Demo — Sovereign AI Agents"]}

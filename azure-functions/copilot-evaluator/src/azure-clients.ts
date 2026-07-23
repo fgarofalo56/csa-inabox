@@ -32,7 +32,7 @@ import { DefaultAzureCredential } from '@azure/identity';
 import { CosmosClient, type Container } from '@azure/cosmos';
 import { bestReasoningModelFor } from '../../../apps/fiab-console/lib/foundry/model-tier-router';
 import type { LoomCloud } from '../../../apps/fiab-console/lib/azure/cloud-endpoints';
-import type { EvalResult, JudgeScores, ProbeResult, RunTotals } from './evaluator-core';
+import type { EvalResult, JudgeScores, ProbeResult, RunTotals, SearchResult, SearchRunTotals } from './evaluator-core';
 import { parseJudge } from './evaluator-core';
 
 const cred = new DefaultAzureCredential();
@@ -212,6 +212,80 @@ export async function writeResults(
     await c.items.upsert({
       id: `${runId}:${r.questionId}`,
       docType: 'eval-result',
+      schemaVersion: 1,
+      runId,
+      ttl: RESULT_TTL_SECONDS,
+      ...r,
+    });
+  }
+}
+
+// ── SRCH1 — federated-search relevance probe + writes ────────────────────────
+
+/** POST the console's internal search-probe → the REAL searchCatalog top-K.
+ *  Returns each result flattened to one matchable identifier string (qualified
+ *  name / display name / id joined) preserving rank order. */
+export async function probeSearch(
+  baseUrl: string,
+  internalToken: string,
+  body: { query: string; top?: number },
+): Promise<{ retrieved: string[]; backend?: string; latencyMs: number }> {
+  const res = await fetch(`${baseUrl.replace(/\/$/, '')}/api/internal/copilot/search-probe`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', [INTERNAL_TOKEN_HEADER]: internalToken },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`search-probe ${res.status}: ${(await res.text()).slice(0, 300)}`);
+  const j: any = await res.json();
+  if (!j?.ok) throw new Error(`search-probe returned ok:false — ${String(j?.error || '').slice(0, 200)}`);
+  const results: any[] = Array.isArray(j.results) ? j.results : [];
+  return {
+    // Join each result's identifiers so scoreSearchRelevance can match any of them.
+    retrieved: results.map((r: any) =>
+      [r?.qualifiedName, r?.displayName, r?.id].filter(Boolean).map(String).join(' | ')),
+    backend: j.backend ? String(j.backend) : undefined,
+    latencyMs: Number(j.latencyMs ?? 0),
+  };
+}
+
+export interface SearchRunDoc {
+  id: string;
+  /** PK — 'search:<domain>' so search runs partition apart from copilot surfaces. */
+  surface: string;
+  domain: string;
+  runId: string;
+  docType: 'search-run';
+  /** MIG1 versioned-doc convention: v1. */
+  schemaVersion: 1;
+  startedAt: string;
+  finishedAt: string;
+  trigger: 'corpus' | 'nightly' | 'manual';
+  k: number;
+  totals: SearchRunTotals;
+}
+
+export async function writeSearchRun(
+  endpoint: string,
+  database: string,
+  doc: SearchRunDoc,
+): Promise<void> {
+  const c = await evalsContainer(endpoint, database);
+  await c.items.upsert(doc);
+}
+
+export async function writeSearchResults(
+  endpoint: string,
+  database: string,
+  runId: string,
+  domain: string,
+  results: SearchResult[],
+): Promise<void> {
+  const c = await evalsContainer(endpoint, database);
+  for (const r of results) {
+    await c.items.upsert({
+      id: `${runId}:search:${r.queryId}`,
+      surface: `search:${domain}`,
+      docType: 'search-result',
       schemaVersion: 1,
       runId,
       ttl: RESULT_TTL_SECONDS,

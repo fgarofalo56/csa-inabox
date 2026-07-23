@@ -73,6 +73,43 @@ export interface CopilotEvalResultDoc {
   ttl?: number;
 }
 
+/** SRCH1 — per-domain federated-search relevance run rollup (retained). PK 'search:<domain>'. */
+export interface CopilotSearchRunDoc {
+  id: string;
+  surface: string; // 'search:<domain>'
+  domain: string;
+  runId: string;
+  docType: 'search-run';
+  schemaVersion: number;
+  startedAt: string;
+  finishedAt: string;
+  trigger: 'corpus' | 'nightly' | 'manual';
+  k: number;
+  totals: { queries: number; hitRate: number; mrrAvg: number; ndcgAvg: number };
+}
+
+/** SRCH1 — one scored federated-search query (ttl 180d). */
+export interface CopilotSearchResultDoc {
+  id: string;
+  surface: string; // 'search:<domain>'
+  domain: string;
+  runId: string;
+  docType: 'search-result';
+  schemaVersion: number;
+  queryId: string;
+  query: string;
+  expectedResults: string[];
+  retrieved: string[];
+  hit: boolean;
+  mrr: number;
+  ndcg: number;
+  matched: number;
+  k: number;
+  backend?: string;
+  latencyMs: number;
+  ttl?: number;
+}
+
 /** Daily judge-spend ledger (ttl 7d) — cross-replica daily-cap enforcement. */
 export interface CopilotEvalJudgeLedgerDoc {
   id: string;

@@ -12,7 +12,9 @@
  * Azure-native, no Microsoft Fabric dependency: these are analytics over the
  * Loom Copilot's own retrieval + AOAI judge path (.claude/rules/*).
  */
-import type { CopilotEvalRunDoc, CopilotEvalResultDoc } from '@/lib/azure/copilot-evals-model';
+import type {
+  CopilotEvalRunDoc, CopilotEvalResultDoc, CopilotSearchRunDoc,
+} from '@/lib/azure/copilot-evals-model';
 import { gradeAvgScore, type QualityGrade } from '@/lib/admin/agent-quality';
 
 export type { QualityGrade } from '@/lib/admin/agent-quality';
@@ -336,4 +338,112 @@ export function worstReasonLabel(reason: WorstReason): string {
     case 'missed-mention': return 'Missed mention';
     case 'judge-error': return 'Judge error';
   }
+}
+
+// ── SRCH1 — federated-search relevance roll-up ───────────────────────────────
+
+/** One domain's E3 search floor thresholds. */
+export interface SearchFloor {
+  searchHitRate?: number;
+  ndcg?: number;
+  provisional?: boolean;
+}
+export type SearchFloors = Record<string, SearchFloor>;
+
+export interface SearchTrendPoint {
+  runId: string;
+  finishedAt: string;
+  trigger: CopilotSearchRunDoc['trigger'];
+  hitRate: number;
+  ndcgAvg: number;
+  queries: number;
+}
+
+export type SearchFloorMetric = 'searchHitRate' | 'ndcg';
+
+export interface SearchFloorStatus {
+  metric: SearchFloorMetric;
+  value: number;
+  floor: number | null;
+  verdict: FloorVerdict;
+}
+
+/** Per-domain search-relevance summary the "Search relevance" tab renders. */
+export interface SearchSummary {
+  domain: string;
+  latest: {
+    runId: string;
+    finishedAt: string;
+    trigger: CopilotSearchRunDoc['trigger'];
+    k: number;
+    totals: CopilotSearchRunDoc['totals'];
+  };
+  trend: SearchTrendPoint[];
+  grade: QualityGrade;
+  floorStatus: SearchFloorStatus[];
+  belowFloor: boolean;
+  provisionalFloor: boolean;
+  runCount: number;
+}
+
+/** Grade a 0..1 NDCG (≥0.9 A, ≥0.8 B, ≥0.7 C, ≥0.5 D, else F) — same bands as hit-rate. */
+export const gradeNdcg = gradeHitRate;
+
+/** Composite search grade = worse of hit-rate and NDCG grades. */
+export function compositeSearchGrade(totals: CopilotSearchRunDoc['totals']): QualityGrade {
+  return worstGrade(gradeHitRate(totals.hitRate), gradeNdcg(totals.ndcgAvg));
+}
+
+/** Compare a search run's totals against a domain floor. */
+export function searchFloorStatusFor(
+  totals: CopilotSearchRunDoc['totals'],
+  floor: SearchFloor | undefined,
+): SearchFloorStatus[] {
+  const cmp = (metric: SearchFloorMetric, value: number, floorVal: number | undefined): SearchFloorStatus => {
+    if (floorVal == null) return { metric, value, floor: null, verdict: 'no-floor' };
+    return { metric, value, floor: floorVal, verdict: value + 1e-9 >= floorVal ? 'ok' : 'below' };
+  };
+  return [
+    cmp('searchHitRate', totals.hitRate, floor?.searchHitRate),
+    cmp('ndcg', totals.ndcgAvg, floor?.ndcg),
+  ];
+}
+
+const bySearchFinishedDesc = (a: CopilotSearchRunDoc, b: CopilotSearchRunDoc): number =>
+  (b.finishedAt || '').localeCompare(a.finishedAt || '');
+
+/** Group `search-run` docs by domain and build the per-domain summary. */
+export function buildSearchSummaries(
+  runs: CopilotSearchRunDoc[],
+  floors: SearchFloors,
+): SearchSummary[] {
+  const byDomain = new Map<string, CopilotSearchRunDoc[]>();
+  for (const r of runs) {
+    if (r?.docType !== 'search-run' || !r.domain) continue;
+    const arr = byDomain.get(r.domain) ?? [];
+    arr.push(r);
+    byDomain.set(r.domain, arr);
+  }
+  const out: SearchSummary[] = [];
+  for (const [domain, domainRuns] of byDomain) {
+    domainRuns.sort(bySearchFinishedDesc);
+    const latest = domainRuns[0];
+    const floor = floors[domain];
+    const trend: SearchTrendPoint[] = [...domainRuns].reverse().map((r) => ({
+      runId: r.runId, finishedAt: r.finishedAt, trigger: r.trigger,
+      hitRate: r.totals.hitRate, ndcgAvg: r.totals.ndcgAvg, queries: r.totals.queries,
+    }));
+    out.push({
+      domain,
+      latest: { runId: latest.runId, finishedAt: latest.finishedAt, trigger: latest.trigger, k: latest.k, totals: latest.totals },
+      trend,
+      grade: compositeSearchGrade(latest.totals),
+      floorStatus: searchFloorStatusFor(latest.totals, floor),
+      belowFloor: searchFloorStatusFor(latest.totals, floor).some((s) => s.verdict === 'below'),
+      provisionalFloor: floor?.provisional === true,
+      runCount: domainRuns.length,
+    });
+  }
+  out.sort((a, b) => a.domain.localeCompare(b.domain));
+  return out;
 }
