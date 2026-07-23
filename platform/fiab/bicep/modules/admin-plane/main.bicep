@@ -4613,6 +4613,10 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // E2 copilot-evaluator — the eval-harness Function's base URL so the
             // admin "Run now" (E5) + gate surface can reach its HTTP trigger.
             { name: 'LOOM_COPILOT_EVALUATOR_URL',  value: copilotEvaluatorEnabled ? 'https://${copilotEvaluator!.outputs.defaultHostName}' : '' }
+            // E5 — host (function) key so "Run now" can call the authLevel:function
+            // trigger; empty when the Function is disabled (the route then honest-
+            // gates). Functions host key, NOT a storage key.
+            { name: 'LOOM_COPILOT_EVALUATOR_KEY',  value: copilotEvaluatorEnabled ? copilotEvaluator!.outputs.functionKey : '' }
           ] : [
             { name: 'LOOM_UAMI_CLIENT_ID', value: identity.outputs.uamiConsoleClientId }
             { name: 'LOOM_UAMI_PRINCIPAL_ID', value: identity.outputs.uamiConsolePrincipalId }

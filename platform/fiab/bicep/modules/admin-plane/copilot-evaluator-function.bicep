@@ -269,5 +269,7 @@ resource cosmosDataRole 'Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignment
 output siteId string = site.id
 output siteName string = site.name
 output defaultHostName string = site.properties.defaultHostName
+@description('Default host (function) key — the Console reads this as LOOM_COPILOT_EVALUATOR_KEY so the E5 admin "Run now" can call the authLevel:function copilotEvaluatorHttp trigger (same pattern as scc-labels-function.functionKey). Not a storage key — this is the Functions host key.')
+output functionKey string = listKeys('${site.id}/host/default', '2024-04-01').functionKeys.default
 @description('System-assigned identity principalId (for any cross-RG data-plane grant, e.g. a DLZ-hosted Cosmos account via grant-navigator-rbac.sh).')
 output principalId string = site.identity.principalId

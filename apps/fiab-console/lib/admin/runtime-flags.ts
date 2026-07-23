@@ -104,6 +104,14 @@ export const RUNTIME_FLAGS: readonly RuntimeFlagDef[] = [
     surface: '/admin/health?tab=spark',
   },
   {
+    id: 'e5-copilot-quality',
+    label: 'Copilot quality admin view',
+    description:
+      'The /admin/copilot-quality page (per-surface Copilot eval scores, trend, worst questions, "Run now"). OFF hides the admin view on the next load — the copilot-evaluator harness (nightly + per-roll runs writing to loom-copilot-evals) keeps running either way; this only controls the surface.',
+    ownerItem: 'E5',
+    surface: '/admin/copilot-quality',
+  },
+  {
     id: 'rum1-client-telemetry',
     label: 'Client RUM telemetry',
     description:

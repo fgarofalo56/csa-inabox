@@ -104,6 +104,31 @@ test.describe('Loom admin plane — unattended smoke verify', () => {
     console.log(`[health-page] rendered OK — excerpt: ${bodyText.slice(0, 200).replace(/\n/g, ' ')}`);
   });
 
+  test('copilot-quality page hydrates (scorecard, guided-empty, or honest gate)', async ({ page }) => {
+    // E5 — /admin/copilot-quality renders one of three HONEST states, never a
+    // crash or a red error banner on first open: the per-surface scorecard when
+    // eval-run docs exist, a guided EmptyState when none do, or the shared
+    // HonestGate + Fix-it when the evaluator Function isn't wired. The client
+    // fetch hydrates after the Cosmos read, so poll for the surface heading.
+    await page.goto(`${BASE}/admin/copilot-quality`, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+    await expect
+      .poll(
+        async () => {
+          const text = (await page.locator('body').innerText().catch(() => '')).toLowerCase();
+          return text.includes('copilot quality')
+            && (text.includes('scorecard') || text.includes('run now') || text.includes('evaluator'));
+        },
+        {
+          message: 'Copilot-quality page should hydrate its heading + scorecard/run-now/gate',
+          timeout: 60_000,
+          intervals: [1_000, 2_000, 3_000],
+        },
+      )
+      .toBe(true);
+    const bodyText = await page.locator('body').innerText({ timeout: 10_000 });
+    console.log(`[copilot-quality] rendered OK — excerpt: ${bodyText.slice(0, 200).replace(/\n/g, ' ')}`);
+  });
+
   test('API endpoint probes (admin governance surfaces)', async ({ request }) => {
     const endpoints: Array<{ path: string; label: string }> = [
       {
@@ -125,6 +150,13 @@ test.describe('Loom admin plane — unattended smoke verify', () => {
       {
         path: '/api/admin/domains/purview-status',
         label: 'Purview domain status',
+      },
+      {
+        // E5 — Copilot quality snapshot. 200 with a summaries[] array even when
+        // no eval-run docs exist yet (guided-empty), OR an honest gate; a 401 or
+        // 5xx here is a real failure.
+        path: '/api/admin/copilot-quality',
+        label: 'Copilot quality snapshot',
       },
     ];
 
