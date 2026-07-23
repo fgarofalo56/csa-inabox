@@ -10,6 +10,8 @@ export default async function AdminHealthPage() {
   const journeysEnabled = await runtimeFlag('v1-journeys-tab');
   // A10: 'a10-spark-tab' OFF hides the Spark pools tab (surface-only revert).
   const sparkEnabled = await runtimeFlag('a10-spark-tab');
+  // SLO1: 'slo1-slo-tab' OFF hides the SLO / error-budget tab (surface-only revert).
+  const sloEnabled = await runtimeFlag('slo1-slo-tab');
   return (
     <AdminShell
       sectionTitle="Health & Reliability"
@@ -24,10 +26,11 @@ export default async function AdminHealthPage() {
           'Secret & credential health tracks the MSAL app secrets + tracked Key Vault credentials with days-to-expiry — rotate anything red or amber via the secret-rotation runbook before it breaks sign-in.',
           'Journeys: a red J1 with every other journey green means SIGN-IN is broken while the app is healthy — rotate/verify the MSAL client secret first (the 2026-07-19 outage class).',
           'Spark pools: a pool can report Succeeded and still be unable to launch any application (FAULTED). A "Suspect — breaker armed" badge or leak candidates mean follow the spark-pools runbook: delete + recreate, and if sessions still wedge, a NEW pool name.',
+          'SLO & error budgets: each SLI shows objective vs 28-day attainment vs error-budget burn. A red "2×+ burn" badge on an availability or latency SLI means the budget is being spent twice as fast as allowed — a P2 has already paged; follow the slo-error-budget runbook. The cache-hit SLI is an efficiency floor and never pages.',
         ],
       }}
     >
-      <HealthHubTabs journeysEnabled={journeysEnabled} sparkEnabled={sparkEnabled} />
+      <HealthHubTabs journeysEnabled={journeysEnabled} sparkEnabled={sparkEnabled} sloEnabled={sloEnabled} />
     </AdminShell>
   );
 }
