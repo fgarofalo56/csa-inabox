@@ -14,7 +14,7 @@ import {
   ANSWER_RECEIPT_TTL_SECONDS,
   type AnswerReceiptDoc,
 } from './answer-receipts-model';
-import type { AnswerReceipt } from '@/lib/copilot/answer-receipt';
+import { assembleAnswerReceipt, type AnswerReceipt, type ReceiptTraceLike } from '@/lib/copilot/answer-receipt';
 
 /** Context needed to persist a receipt. */
 export interface PersistReceiptContext {
@@ -64,6 +64,26 @@ export async function persistAnswerReceipt(receipt: AnswerReceipt, ctx: PersistR
   const container = await answerReceiptsContainer();
   await container.items.upsert(doc);
   return id;
+}
+
+/**
+ * N10 — assemble a receipt from one turn's real trace signals AND persist it,
+ * best-effort: a receipt hiccup NEVER blocks or fails the answer. Returns the
+ * persisted doc id (thread it onto the final step) or `undefined` on any error.
+ * Centralizes the two orchestrator call sites (Foundry + MAF/Gov proxy). Runs
+ * in-boundary (Gov Cosmos), so it holds air-gapped — the receipt is the IL5
+ * compliance artifact.
+ */
+export async function assembleAndPersistReceipt(
+  trace: ReceiptTraceLike,
+  ctx: PersistReceiptContext,
+): Promise<string | undefined> {
+  try {
+    const receipt = assembleAnswerReceipt(trace, { createdAt: new Date().toISOString() });
+    return await persistAnswerReceipt(receipt, ctx);
+  } catch {
+    return undefined; // best-effort — never block the answer
+  }
 }
 
 /** List a session's persisted receipts (single-partition), newest first. */

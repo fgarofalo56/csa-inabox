@@ -138,8 +138,7 @@ import { extractCitationsFromToolResult, mergeCitations } from '@/lib/copilot/to
 // agentic answer's final step assembles a receipt (exact SQL/KQL/Cypher + row
 // counts, sources, tier, cost, verdict) and persists it to loom-answer-receipts;
 // the persisted doc id is threaded back onto the final step as `receiptId`.
-import { assembleAnswerReceipt } from '@/lib/copilot/answer-receipt';
-import { persistAnswerReceipt } from '@/lib/azure/answer-receipts-store';
+import { assembleAndPersistReceipt } from '@/lib/azure/answer-receipts-store';
 
 // ---------- item-type slug normalization (build-assist robustness) ----------
 // The model often guesses item-type slugs with underscores or marketing names
@@ -2076,33 +2075,24 @@ async function* orchestrateViaMaf(
             // receipt is the IL5 compliance artifact but must never block the
             // answer. Runs in-boundary (Gov Cosmos), so it holds air-gapped.
             if (step.kind === 'final') {
-              try {
-                const f = step as Record<string, unknown>;
-                const receipt = assembleAnswerReceipt(
-                  {
-                    prompt,
-                    steps: mafSteps,
-                    model: f.model as string | undefined,
-                    modelTier: f.modelTier as string | undefined,
-                    taskClass: f.taskClass as string | undefined,
-                    routedTier: f.routedTier as string | undefined,
-                    usage: f.usage as Record<string, number> | undefined,
-                    costUsd: f.costUsd as number | undefined,
-                    turnLatencyMs: f.turnLatencyMs as number | undefined,
-                    phaseTimings: f.phaseTimings as never,
-                    citations: f.citations as Array<Record<string, unknown>> | undefined,
-                    tools: (f.turnDetail as { tools?: never } | undefined)?.tools,
-                  },
-                  { createdAt: new Date().toISOString() },
-                );
-                const receiptId = await persistAnswerReceipt(receipt, {
-                  sessionId,
-                  userOid,
-                  tenantId: opts.tenantId ?? undefined,
-                  surface: opts.persona || 'cross-item',
-                });
-                (step as { receiptId?: string }).receiptId = receiptId;
-              } catch { /* receipt is best-effort — never block the answer */ }
+              const f = step as Record<string, unknown>;
+              (step as { receiptId?: string }).receiptId = await assembleAndPersistReceipt(
+                {
+                  prompt,
+                  steps: mafSteps,
+                  model: f.model as string | undefined,
+                  modelTier: f.modelTier as string | undefined,
+                  taskClass: f.taskClass as string | undefined,
+                  routedTier: f.routedTier as string | undefined,
+                  usage: f.usage as Record<string, number> | undefined,
+                  costUsd: f.costUsd as number | undefined,
+                  turnLatencyMs: f.turnLatencyMs as number | undefined,
+                  phaseTimings: f.phaseTimings as never,
+                  citations: f.citations as Array<Record<string, unknown>> | undefined,
+                  tools: (f.turnDetail as { tools?: never } | undefined)?.tools,
+                },
+                { sessionId, userOid, tenantId: opts.tenantId ?? undefined, surface: opts.persona || 'cross-item' },
+              );
             }
             await persistStep(sessionId, userOid, step);
             yield step;
@@ -2584,32 +2574,23 @@ export async function* orchestrate(opts: OrchestrateOptions): AsyncIterable<Orch
       // assembly + a best-effort Cosmos upsert — a receipt hiccup NEVER blocks or
       // fails the answer. The persisted doc id is threaded back onto the final
       // step (`receiptId`) so the receipt surfaces its own audit reference.
-      let receiptId: string | undefined;
-      try {
-        const receipt = assembleAnswerReceipt(
-          {
-            prompt,
-            steps: turnReceiptSteps,
-            model: target.deployment,
-            modelTier,
-            taskClass,
-            routedTier,
-            usage: usage as unknown as Record<string, number>,
-            costUsd: turnCostUsd,
-            turnLatencyMs,
-            phaseTimings: turnPhaseTimings,
-            citations: turnCitations as unknown as Array<Record<string, unknown>>,
-            tools: turnTools,
-          },
-          { createdAt: new Date().toISOString() },
-        );
-        receiptId = await persistAnswerReceipt(receipt, {
-          sessionId,
-          userOid,
-          tenantId: opts.tenantId ?? undefined,
-          surface: personaTag,
-        });
-      } catch { /* receipt is best-effort — never block the answer */ }
+      const receiptId: string | undefined = await assembleAndPersistReceipt(
+        {
+          prompt,
+          steps: turnReceiptSteps,
+          model: target.deployment,
+          modelTier,
+          taskClass,
+          routedTier,
+          usage: usage as unknown as Record<string, number>,
+          costUsd: turnCostUsd,
+          turnLatencyMs,
+          phaseTimings: turnPhaseTimings,
+          citations: turnCitations as unknown as Array<Record<string, unknown>>,
+          tools: turnTools,
+        },
+        { sessionId, userOid, tenantId: opts.tenantId ?? undefined, surface: personaTag },
+      );
 
       const finalStep: OrchestratorStep = {
         kind: 'final',
