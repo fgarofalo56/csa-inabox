@@ -376,6 +376,9 @@ type workspaceIdentityConfigT = {
 
   @description('Resource group hosting the per-workspace UAMIs (LOOM_WS_IDENTITY_RG). Empty → the console falls back to LOOM_DLZ_RG. Must match the RG the top-level ws-identity-rbac module granted the Console UAMI Managed Identity Contributor on.')
   wsIdentityRg: string?
+
+  @description('I3 shadow-audit sampling rate 0..1 (LOOM_WS_IDENTITY_SHADOW_SAMPLE). Fraction of shadow-mode workspace-scoped credential resolutions that write an identity.shadow observation row to the audit log (90d TTL). Empty → 1.0 (record every observation); lower per estate to cap RU on hot paths.')
+  wsIdentityShadowSample: string?
 }
 
 @description('Per-workspace identity settings bag (R0) — I1 provision-on-create settings ride here as typed properties; I2 scoped-grant settings extend workspaceIdentityConfigT, never a new top-level param.')
@@ -447,6 +450,8 @@ var rumSampleRate = observabilityConfig.?rumSampleRate ?? 100
 var workspaceIdentityMode = workspaceIdentityConfig.?workspaceIdentityMode ?? 'off'
 var wsIdentitySub = workspaceIdentityConfig.?wsIdentitySub ?? ''
 var wsIdentityRg = workspaceIdentityConfig.?wsIdentityRg ?? ''
+// I3 — shadow-audit sampling (empty = code default 1.0).
+var wsIdentityShadowSample = workspaceIdentityConfig.?wsIdentityShadowSample ?? ''
 
 @description('Deploy the shared Data API builder preview runtime that the DAB editor\'s live REST/GraphQL testers point at via LOOM_DAB_PREVIEW_URL.')
 param dabRuntimeEnabled bool = false
@@ -2982,6 +2987,9 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_WORKSPACE_IDENTITY_MODE', value: workspaceIdentityMode }
             { name: 'LOOM_WS_IDENTITY_SUB', value: wsIdentitySub }
             { name: 'LOOM_WS_IDENTITY_RG', value: wsIdentityRg }
+            // I3 — shadow divergence-audit sampling (0..1; empty = 1.0). The
+            // identity.shadow rows carry a 90d TTL in the audit-log container.
+            { name: 'LOOM_WS_IDENTITY_SHADOW_SAMPLE', value: wsIdentityShadowSample }
             // WS-10.1 LCU-Autopilot (BTB-2) — bootstrap approval mode for the
             // self-driving FinOps loop (/admin/autopilot). 'propose' = compute +
             // surface recommendations only (day-one default, opt-out); an admin

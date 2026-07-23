@@ -27,18 +27,17 @@
  * has no tables yet, returns { ok: true, tables: [] }. No mock data ever.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { scanLakehouseTables } from '@/lib/azure/synapse-catalog-client';
 import { resolveItemAccessByOid } from '@/lib/auth/item-access';
 import { resolveLakehouseAbfss } from '@/lib/azure/lakehouse-abfss';
+import { runWithWorkspaceContext } from '@/lib/azure/workspace-credential-factory';
 import { apiServerError } from '@/lib/api/respond';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET(req: NextRequest) {
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export const GET = withSession(async (req: NextRequest, { session: s }) => {
 
   const lakehouseId = req.nextUrl.searchParams.get('lakehouseId')?.trim() || '';
   const workspaceId = req.nextUrl.searchParams.get('workspaceId')?.trim() || '';
@@ -71,13 +70,18 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const tables = await scanLakehouseTables({
-      containers: [root.container],
-      rootPrefix: root.root,
-      rowCounts,
-    });
+    // I3 pilot: establish the ambient workspace identity context so the
+    // credential factory's shadow-mode divergence audit (identity.shadow rows)
+    // observes this workspace-scoped scan — zero behavior change (the scan
+    // still runs as the shared Console UAMI; mode off skips everything).
+    const tables = await runWithWorkspaceContext(access.item.workspaceId, () =>
+      scanLakehouseTables({
+        containers: [root.container],
+        rootPrefix: root.root,
+        rowCounts,
+      }));
     return NextResponse.json({ ok: true, tables, scannedAt: new Date().toISOString() });
   } catch (e: any) {
     return apiServerError(e);
   }
-}
+});

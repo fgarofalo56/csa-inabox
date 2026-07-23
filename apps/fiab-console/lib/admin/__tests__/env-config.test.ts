@@ -205,8 +205,10 @@ describe('admin/env-config registry', () => {
     // credential registrations are secretRef-typed, not editable env) → RUM1
     // svc-client-rum adds LOOM_RUM_ENABLED + LOOM_RUM_SAMPLE_RATE +
     // APPLICATIONINSIGHTS_CONNECTION_STRING (secret-typed, monitoring-module
-    // derived) (167).
-    expect(EDITABLE_ENV.length).toBe(167);
+    // derived) (167) → I3 svc-workspace-identity adds
+    // LOOM_WS_IDENTITY_SHADOW_SAMPLE (shadow divergence-audit sampling 0..1,
+    // code default 1.0) (168).
+    expect(EDITABLE_ENV.length).toBe(168);
   });
 
   it('surfaces the wave-2 env vars as settable (previously dropped by the whitelist)', () => {
@@ -310,7 +312,9 @@ describe('admin/env-config registry', () => {
       // I1 svc-workspace-identity — mode off (unset) is the fully-functional
       // intended default (shared Console UAMI, unchanged); the sole Phase-0
       // exception to default-ON (phased shadow → enforce, operator decision).
-      'LOOM_WORKSPACE_IDENTITY_MODE', 'LOOM_WS_IDENTITY_RG', 'LOOM_WS_IDENTITY_SUB',
+      // I3 adds the shadow-audit sampling alias (unset = code default 1.0).
+      'LOOM_WORKSPACE_IDENTITY_MODE', 'LOOM_WS_IDENTITY_RG',
+      'LOOM_WS_IDENTITY_SHADOW_SAMPLE', 'LOOM_WS_IDENTITY_SUB',
       // V1 svc-synthetic-login — absence is an HONEST SKIP of the J1 MSAL
       // login probe (minted-session journeys still monitor the app), so the
       // pair counts as configured day-one.
