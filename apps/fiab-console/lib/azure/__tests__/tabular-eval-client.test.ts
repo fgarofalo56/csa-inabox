@@ -55,8 +55,21 @@ describe('translateDaxToSql — constrained DAX → T-SQL', () => {
     expect(translateDaxToSql('EVALUATE ROW("m", CALCULATE(MIN(T[X])))')).toBe('SELECT MIN([X]) AS [m] FROM [T]');
     expect(translateDaxToSql('EVALUATE ROW("M", CALCULATE(MAX(T[X])))')).toBe('SELECT MAX([X]) AS [M] FROM [T]');
   });
-  it('returns null for unsupported DAX (FILTER, measure refs)', () => {
-    expect(translateDaxToSql('EVALUATE FILTER(Sales, Sales[Amount] > 100)')).toBeNull();
+  // A2: FILTER now folds to a WHERE clause (was null under the 3-regex translator).
+  it('A2: FILTER folds to WHERE', () => {
+    expect(translateDaxToSql('EVALUATE FILTER(Sales, Sales[Amount] > 100)')).toBe(
+      'SELECT TOP 1000 * FROM [Sales] WHERE [Amount] > 100',
+    );
+  });
+  // A2: COUNTROWS / DISTINCTCOUNT / SUMMARIZECOLUMNS fold (were null before).
+  it('A2: COUNTROWS + DISTINCTCOUNT fold', () => {
+    expect(translateDaxToSql('EVALUATE ROW("R", COUNTROWS(Sales))')).toBe('SELECT COUNT(*) AS [R] FROM [Sales]');
+    expect(translateDaxToSql('EVALUATE ROW("D", DISTINCTCOUNT(Sales[CustomerId]))')).toBe(
+      'SELECT COUNT(DISTINCT [CustomerId]) AS [D] FROM [Sales]',
+    );
+  });
+  it('still returns null for unresolvable measure refs and empty input', () => {
+    // No model passed → the [Total] measure reference cannot be inlined.
     expect(translateDaxToSql('EVALUATE SUMMARIZECOLUMNS(Sales[Region], "T", [Total])')).toBeNull();
     expect(translateDaxToSql('')).toBeNull();
   });

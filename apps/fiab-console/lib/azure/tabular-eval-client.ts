@@ -69,6 +69,25 @@ import type {
   ModelSummary,
   TabularQueryResult,
 } from './tabular-model';
+import type { FoldModel } from './dax/fold';
+
+/**
+ * Build the DAX fold model (measures + relationships) from a semantic-model item
+ * so the A2 SQL-fold planner can inline measure references and join RELATED
+ * dimensions. Reads the same `state.content` extractContent + the content's
+ * declared relationships. Pure; no network.
+ */
+function buildFoldModel(item: WorkspaceItem): FoldModel {
+  const { measures } = extractContent(item);
+  const content = (item.state as any)?.content ?? {};
+  const rawRels: any[] = Array.isArray(content.relationships) ? content.relationships : [];
+  return {
+    measures: measures.map((m) => ({ name: m.name, table: m.table, expression: m.expression })),
+    relationships: rawRels
+      .filter((r) => r && typeof r.from === 'string' && typeof r.to === 'string')
+      .map((r) => ({ from: String(r.from), to: String(r.to), cardinality: String(r.cardinality ?? '') })),
+  };
+}
 
 // Re-export the pure surface so callers import everything from one place.
 export {
@@ -204,7 +223,9 @@ export async function evalDax(
     out = await aasEvalDax(daxQuery);
   } else {
     // loom-native: translate → Synapse serverless SQL over the backing warehouse.
-    const sql = translateDaxToSql(daxQuery);
+    // Pass the model (measures + relationships) so the A2 fold can inline measure
+    // references and join RELATED dimensions (SUMMARIZECOLUMNS).
+    const sql = translateDaxToSql(daxQuery, buildFoldModel(item!));
     if (!sql) throw unsupportedDaxError();
     const db = (database && database.trim()) || modelBackingDatabase(item!);
 
