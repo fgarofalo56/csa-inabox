@@ -291,6 +291,11 @@
         "probe-arm-reader"
       ]
     },
+    "budgets-client": {
+      "checks": [
+        "probe-arm-reader"
+      ]
+    },
     "azure-sql-client": {
       "checks": [
         "svc-azure-sql",
