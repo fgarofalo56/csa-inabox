@@ -31,6 +31,9 @@ import '@/lib/azure/answer-receipts-model';
 // can never cycle back into cosmos-client).
 import '@/lib/azure/prompt-registry-model';
 import '@/lib/azure/token-budget-model';
+// N11 — loom-graphrag-index doc shape + MIG1 migrator registration (module-scope
+// side effect: the chain is live before any read materializes).
+import '@/lib/azure/graphrag-index-model';
 
 let _client: CosmosClient | null = null;
 let _db: Database | null = null;
@@ -466,6 +469,12 @@ let _costAnomalyRules: Container | null = null;
 // shapes + MIG1 versioning: lib/azure/semantic-contract-model.ts. Created lazily
 // so a fresh environment needs no extra ARM/Bicep step beyond the account+database.
 let _semanticContract: Container | null = null;
+// N11 — GraphRAG community-summary index over the authored Weave/AGE ontology.
+// PK /ontologyId so "every community of this ontology" is a single-partition
+// read on the retrieval hot path. Doc shape + MIG1 versioning:
+// lib/azure/graphrag-index-model.ts; builder/readers: lib/azure/graphrag-index.ts.
+// Created lazily — a fresh environment needs no extra ARM/Bicep step.
+let _graphRagIndex: Container | null = null;
 let _ensured = false;
 
 /**
@@ -1246,6 +1255,9 @@ async function ensure() {
     })).container,
     'loom-token-budgets',
   );
+  // N11 — GraphRAG community-summary index. PK /ontologyId; created lazily so a
+  // fresh environment needs no extra ARM/Bicep step beyond the account+database.
+  _graphRagIndex = await mk('loom-graphrag-index', '/ontologyId');
   _ensured = true;
 }
 
@@ -1393,6 +1405,8 @@ export async function runtimeFlagsContainer(): Promise<Container> { await ensure
 export async function costAnomalyRulesContainer(): Promise<Container> { await ensure(); return _costAnomalyRules!; }
 /** N9 — Verified Semantic Contract + VQR (metric registry + verified query repo), PK /tenantId. */
 export async function semanticContractContainer(): Promise<Container> { await ensure(); return _semanticContract!; }
+/** N11 — GraphRAG community-summary index over the Weave/AGE ontology, PK /ontologyId. */
+export async function graphRagIndexContainer(): Promise<Container> { await ensure(); return _graphRagIndex!; }
 
 // Foundation admin containers (shared cloud-endpoints resolver task).
 /** Admin Workspace Catalog — one row per Loom-managed workspace, PK /tenantId. */

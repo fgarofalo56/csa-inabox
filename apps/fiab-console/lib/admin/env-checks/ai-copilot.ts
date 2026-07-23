@@ -112,6 +112,40 @@ export const AI_COPILOT_ENV_CHECKS: EnvSpec[] = [
     availability: { commercial: 'ga', gccHigh: 'ga', il5: 'ga' },
   },
   {
+    // N11 + N12 — TUNING KNOBS ONLY. Both features are DEFAULT-ON with code
+    // defaults and are 100% functional with these UNSET:
+    //   • LOOM_GRAPHRAG_MAX_HOPS      — GraphRAG traversal depth over the
+    //     authored Weave ontology (Apache AGE on in-VNet PostgreSQL). Unset ⇒
+    //     2 hops. Clamped to [1,4] so a mis-typed value can never widen the
+    //     blast radius. The FEATURE toggle is the FLAG0 runtime flag
+    //     `n11-graphrag-grounding` (default-ON) + the per-agent "Graph
+    //     grounding" switch — never this var.
+    //   • LOOM_NL2SQL_REPAIR_MAX_ATTEMPTS — bounded self-healing repair
+    //     attempts per plan step. Unset ⇒ 2. Clamped to [0,5]; 0 disables the
+    //     repair sub-loop entirely (the loop then behaves exactly as pre-N12).
+    // optionalDefault so the unset state is a PASS (never a red day-one gate),
+    // while the Fix-it stays discoverable on /admin/gates for an operator who
+    // wants to tune depth/attempts. The backing services are the ones the
+    // ontology + warehouse gates already cover (svc-weave-ontology, svc-synapse).
+    id: 'svc-graphrag-nl2sql-repair', category: 'ai-copilot',
+    title: 'GraphRAG grounding depth + NL2SQL self-healing attempts (tuning)', severity: 'optional',
+    required: ['LOOM_GRAPHRAG_MAX_HOPS', 'LOOM_NL2SQL_REPAIR_MAX_ATTEMPTS'],
+    warnOnMiss: true,
+    optionalDefault: true,
+    optionalDefaultDetail:
+      'GraphRAG grounding traverses 2 hops and the self-healing NL2SQL loop makes up to 2 bounded repair attempts per step — both fully functional defaults. Set LOOM_GRAPHRAG_MAX_HOPS (1–4) to widen/narrow ontology traversal and LOOM_NL2SQL_REPAIR_MAX_ATTEMPTS (0–5, 0 disables repair) to tune the repair budget.',
+    remediation:
+      'Optional. Set LOOM_GRAPHRAG_MAX_HOPS (1–4, default 2) to change how far a data agent traverses the authored ontology graph, and LOOM_NL2SQL_REPAIR_MAX_ATTEMPTS (0–5, default 2) to change the bounded self-healing repair budget per plan step. Both are pure tuning — the features are default-ON without them. To turn GraphRAG grounding OFF entirely use the runtime flag n11-graphrag-grounding on /admin/runtime-flags (seconds-fast, no roll) or the per-agent "Graph grounding" switch in the data-agent editor.',
+    provisionedBy: 'modules/admin-plane/main.bicep (apps[] env — LOOM_GRAPHRAG_MAX_HOPS / LOOM_NL2SQL_REPAIR_MAX_ATTEMPTS, emitted empty so the code defaults apply)',
+    role: 'none (the underlying grants are the Weave PostgreSQL/AGE principal + the Synapse SQL reader the ontology and warehouse gates already cover)',
+    docs: 'docs/fiab/parity/reasoning-mode-data-agents.md',
+    // X-MATRIX: the backing substrates are Azure Database for PostgreSQL
+    // (Apache AGE) + Synapse SQL + AOAI — all GA in Commercial, GCC-High and
+    // IL5. GraphRAG runs entirely in-VNet with ZERO external egress, so the
+    // capability is identical (and fully functional) in a disconnected enclave.
+    availability: { commercial: 'ga', gccHigh: 'ga', il5: 'ga' },
+  },
+  {
     id: 'svc-iq-mcp', category: 'ai-copilot', title: 'Fabric IQ MCP bridge', severity: 'optional',
     required: ['LOOM_IQ_MCP_ENABLED'], warnOnMiss: true,
     remediation: 'Set LOOM_IQ_MCP_ENABLED=true (+ LOOM_IQ_MCP_TOKEN when the bridge requires auth) so the IQ MCP panel exposes the ontology tools to Copilot. The built-in Loom tools work without it.',

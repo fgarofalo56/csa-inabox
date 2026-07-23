@@ -11,6 +11,8 @@ import {
   Warning16Regular,
   DismissCircle16Regular,
   Sparkle16Regular,
+  Flowchart16Regular,
+  Wrench16Regular,
 } from '@fluentui/react-icons';
 
 export interface ReasoningStepView {
@@ -24,12 +26,52 @@ export interface ReasoningStepView {
   error?: string;
 }
 
+/** N11 — one graph-path citation rendered under the turn. */
+export interface ReasoningGraphPathView {
+  id?: string;
+  hops: number;
+  text: string;
+  communityId?: string;
+}
+
+/** N11 — the graph-grounding signal the loop returned for this turn. */
+export interface ReasoningGraphView {
+  used: boolean;
+  hops: number;
+  seeds: { id: string; objectType: string; title: string; matchedOn?: string[] }[];
+  paths: ReasoningGraphPathView[];
+  communities: { communityId: string; summary: string; size: number }[];
+  scanned?: number;
+  gate?: string;
+  note?: string;
+}
+
+/** N12 — one bounded self-healing repair attempt. */
+export interface ReasoningRepairView {
+  step: number;
+  attempt: number;
+  reason: string;
+  error?: string;
+  rewrittenQuery?: string;
+  explainSummary?: string;
+  explainError?: string;
+  metricConsulted?: string;
+  outcome: string;
+  rowCount?: number;
+}
+
 export interface ReasoningTraceData {
   plan: { step: number; source: string; subQuery: string; rationale?: string }[];
   steps: ReasoningStepView[];
   verify: { verdict: 'pass' | 'partial' | 'fail'; reason: string };
   modelTier?: string;
   reasoningConfigured?: boolean;
+  /** N11 — GraphRAG grounding over the authored ontology. */
+  graph?: ReasoningGraphView;
+  /** N12 — the bounded repair attempts the loop made. */
+  repairs?: ReasoningRepairView[];
+  /** N12 — does the answer follow from the real returned rows? */
+  plausibility?: { plausible: boolean; reason: string; rowsSeen: number; unsupportedFigures?: string[] };
 }
 
 const VERDICT: Record<string, { color: 'success' | 'warning' | 'danger'; label: string }> = {
@@ -48,7 +90,10 @@ function StepIcon({ status }: { status?: string }) {
 export function ReasoningTrace({ data }: { data: ReasoningTraceData }) {
   const steps = data.steps || [];
   const plan = data.plan || [];
-  if (plan.length === 0 && steps.length === 0) return null;
+  const graph = data.graph;
+  const repairs = data.repairs || [];
+  const graphPaths = graph?.paths || [];
+  if (plan.length === 0 && steps.length === 0 && graphPaths.length === 0) return null;
   const verdict = VERDICT[data.verify?.verdict] || VERDICT.partial;
   const rows: ReasoningStepView[] = steps.length ? steps : plan.map((p) => ({ ...p }));
 
@@ -104,9 +149,88 @@ export function ReasoningTrace({ data }: { data: ReasoningTraceData }) {
         ))}
       </ol>
 
+      {/* N11 — graph-path citations from the authored ontology (real AGE traversal) */}
+      {graphPaths.length > 0 && (
+        <div style={{ marginTop: tokens.spacingVerticalS }} data-testid="reasoning-graph-paths">
+          <Caption1 style={{ fontWeight: tokens.fontWeightSemibold, display: 'block' }}>
+            <Flowchart16Regular style={{ verticalAlign: 'text-bottom' }} /> Graph paths ({graphPaths.length})
+            {graph?.seeds?.length ? ` · ${graph.seeds.length} seed entit${graph.seeds.length === 1 ? 'y' : 'ies'}` : ''}
+          </Caption1>
+          <ol style={{ margin: `${tokens.spacingVerticalXXS} 0 0`, paddingLeft: tokens.spacingHorizontalXL, display: 'grid', gap: tokens.spacingVerticalXXS }}>
+            {graphPaths.map((p, i) => (
+              <li key={p.id || i} style={{ minWidth: 0 }}>
+                <Caption1 style={{ fontFamily: tokens.fontFamilyMonospace, color: tokens.colorNeutralForeground2, wordBreak: 'break-word' }}>
+                  {p.text}
+                </Caption1>
+                <span style={{ display: 'inline-flex', flexWrap: 'wrap', gap: tokens.spacingHorizontalXXS, marginLeft: tokens.spacingHorizontalXS, minWidth: 0 }}>
+                  <Badge appearance="outline" color="informative" size="extra-small">{p.hops} hop{p.hops === 1 ? '' : 's'}</Badge>
+                  {p.communityId && <Badge appearance="tint" color="subtle" size="extra-small">{p.communityId}</Badge>}
+                </span>
+              </li>
+            ))}
+          </ol>
+          {!!graph?.communities?.length && (
+            <Caption1 style={{ color: tokens.colorNeutralForeground3, display: 'block', marginTop: tokens.spacingVerticalXXS }}>
+              {graph.communities.length} precomputed community summar{graph.communities.length === 1 ? 'y' : 'ies'} attached.
+            </Caption1>
+          )}
+        </div>
+      )}
+      {graph && !graph.used && (graph.gate || graph.note) && (
+        <Caption1 style={{ color: tokens.colorPaletteYellowForeground1, display: 'block', marginTop: tokens.spacingVerticalXS }}>
+          ⚠ Graph grounding: {graph.gate || graph.note}
+        </Caption1>
+      )}
+
+      {/* N12 — bounded self-healing repair attempts */}
+      {repairs.length > 0 && (
+        <div style={{ marginTop: tokens.spacingVerticalS }} data-testid="reasoning-repairs">
+          <Caption1 style={{ fontWeight: tokens.fontWeightSemibold, display: 'block' }}>
+            <Wrench16Regular style={{ verticalAlign: 'text-bottom' }} /> Self-healing repairs ({repairs.length})
+          </Caption1>
+          <ol style={{ margin: `${tokens.spacingVerticalXXS} 0 0`, paddingLeft: tokens.spacingHorizontalXL, display: 'grid', gap: tokens.spacingVerticalXXS }}>
+            {repairs.map((r, i) => (
+              <li key={i} style={{ minWidth: 0 }}>
+                <span style={{ display: 'inline-flex', flexWrap: 'wrap', gap: tokens.spacingHorizontalXXS, alignItems: 'center', minWidth: 0 }}>
+                  <Badge
+                    appearance="tint"
+                    size="extra-small"
+                    color={r.outcome === 'repaired' ? 'success' : r.outcome === 'abandoned' ? 'danger' : 'warning'}
+                  >
+                    step {r.step} · attempt {r.attempt} · {r.outcome}
+                  </Badge>
+                  {r.metricConsulted && <Badge appearance="outline" size="extra-small" color="subtle">{r.metricConsulted}</Badge>}
+                  {typeof r.rowCount === 'number' && (
+                    <Badge appearance="outline" size="extra-small" color="informative">{r.rowCount} row{r.rowCount === 1 ? '' : 's'}</Badge>
+                  )}
+                </span>
+                <Caption1 style={{ color: tokens.colorNeutralForeground2, display: 'block' }}>{r.reason}</Caption1>
+                {r.error && <Caption1 style={{ color: tokens.colorPaletteRedForeground1, display: 'block' }}>{r.error}</Caption1>}
+                {r.explainError && (
+                  <Caption1 style={{ color: tokens.colorPaletteYellowForeground1, display: 'block' }}>
+                    EXPLAIN rejected the rewrite (not executed): {r.explainError}
+                  </Caption1>
+                )}
+              </li>
+            ))}
+          </ol>
+        </div>
+      )}
+
       {data.verify?.reason && (
         <Caption1 style={{ color: tokens.colorNeutralForeground2, display: 'block', marginTop: tokens.spacingVerticalS }}>
           <strong>Verify:</strong> {data.verify.reason}
+        </Caption1>
+      )}
+      {data.plausibility && (
+        <Caption1
+          style={{
+            color: data.plausibility.plausible ? tokens.colorNeutralForeground2 : tokens.colorPaletteYellowForeground1,
+            display: 'block',
+            marginTop: tokens.spacingVerticalXXS,
+          }}
+        >
+          <strong>Plausibility:</strong> {data.plausibility.reason}
         </Caption1>
       )}
     </details>

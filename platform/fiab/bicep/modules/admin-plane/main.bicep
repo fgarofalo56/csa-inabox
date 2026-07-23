@@ -4606,6 +4606,15 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // back to the standard (chat) deployment for every task class.
             { name: 'LOOM_AOAI_MINI_DEPLOYMENT',   value: agentFoundryEnabled ? agentFoundry!.outputs.miniDeployment : '' }
             { name: 'LOOM_AOAI_STRONG_DEPLOYMENT', value: agentFoundryEnabled ? agentFoundry!.outputs.strongDeployment : '' }
+            // N11 / N12 tuning knobs — emitted EMPTY on purpose. Both features are
+            // DEFAULT-ON with code defaults (GraphRAG traversal depth 2; bounded
+            // NL2SQL self-healing repair attempts 2) and are 100% functional
+            // unset; these entries exist so an operator can tune them from
+            // /admin/env-config (the shared env-apply write path) without a bicep
+            // edit. Turning GraphRAG grounding OFF is the FLAG0 runtime flag
+            // n11-graphrag-grounding, never an env var.
+            { name: 'LOOM_GRAPHRAG_MAX_HOPS',            value: '' }
+            { name: 'LOOM_NL2SQL_REPAIR_MAX_ATTEMPTS',   value: '' }
             // Model-strategy M4 — OPT-IN APIM AI-gateway routing (default OFF /
             // direct). LOOM_AOAI_VIA_APIM flips the console onto the APIM gateway;
             // LOOM_AOAI_APIM_URL is the gateway URL, emitted ONLY when the AI-gateway
