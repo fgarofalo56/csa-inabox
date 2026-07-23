@@ -1,8 +1,16 @@
 'use client';
 
-// data-product-editor.tsx — DataProductEditor + its private types, helpers,
-// hooks, and the PublishAsApiDialog, extracted verbatim from apim-editors.tsx
-// (WS-E1 decomposition).
+// data-product-editor.tsx — DataProductEditor shell. The 12-tab editor's
+// private types + constants, pure projection helpers, picker-source data hooks,
+// and the F21 Publish-as-API dialog were extracted to ./data-product/* in the
+// R8 decomposition (loom-next-level WS-E). Pure move — no behavior change; the
+// shell keeps the shared editor state (state/dirty/status) + all tab render
+// blocks + save/publish/register handlers.
+//   ./data-product/types.ts                  — DataProductState + siblings, DP_EMPTY, GUID_RE
+//   ./data-product/content.ts                — projectDataProductContent, parseOwnerString (pure)
+//   ./data-product/hooks.ts                  — useDataProductWorkspaces, useGovernanceDomains
+//   ./data-product/publish-as-api-dialog.tsx — PublishAsApiDialog (F21)
+// (Originally itself extracted verbatim from apim-editors.tsx — WS-E1.)
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import {
@@ -10,14 +18,13 @@ import {
   Tab, TabList,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   MessageBar, MessageBarBody, MessageBarTitle,
-  Dialog, DialogTrigger, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
   Menu, MenuTrigger, MenuPopover, MenuList, MenuItem, Tooltip,
   tokens,
 } from '@fluentui/react-components';
 import {
-  Save20Regular, ArrowSync20Regular, Copy20Regular, CloudArrowUp20Regular,
+  Save20Regular, ArrowSync20Regular, CloudArrowUp20Regular,
   Document20Regular, Code20Regular, Library20Regular, BranchFork20Regular,
-  ArrowImport20Regular, Add20Regular, Delete20Regular, Eye20Regular, EyeOff20Regular, Key20Regular, Edit20Regular,
+  ArrowImport20Regular, Add20Regular, Delete20Regular, Key20Regular, Edit20Regular,
   Pulse20Regular, Database20Regular, Warning20Filled, MoreHorizontal20Regular, Link20Regular,
   ShieldCheckmark20Regular, History20Regular,
   DocumentBulletList20Regular,
@@ -26,7 +33,7 @@ import { clientFetch } from '@/lib/client-fetch';
 import { ItemEditorChrome } from '../item-editor-chrome';
 import { EmptyState } from '@/lib/components/empty-state';
 import { ManagePoliciesDialog } from '../components/manage-policies-dialog';
-import { policyTiers, type DataProductAccessPolicy } from '@/lib/types/access-policy';
+import { policyTiers } from '@/lib/types/access-policy';
 import { useObservability, DqScoreGauge, ObservabilityTabContent } from '../data-product-detail';
 import { DeleteDataProductDialog } from '../components/delete-data-product-dialog';
 import { AddDataAssetsPanel, type DataAssetRef as DataAssetWithFlags } from '../components/add-data-assets-panel';
@@ -34,8 +41,8 @@ import { ImportDataProductsFlyout } from '../components/import-data-products-fly
 import {
   SelectAttributePanel, LinkListAttributePanel, type AttrReceipt,
 } from '../components/inline-attribute-panel';
-import { UPDATE_FREQUENCIES, type ExternalLink } from '@/lib/dataproducts/attributes';
-import { OwnerPeoplePicker, type OwnerRef } from '@/lib/dataproducts/owner-picker';
+import { UPDATE_FREQUENCIES } from '@/lib/dataproducts/attributes';
+import { OwnerPeoplePicker } from '@/lib/dataproducts/owner-picker';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { useRegisterRibbonCommands } from '@/lib/components/shared/ribbon-commands';
@@ -47,302 +54,14 @@ import { PortsPanel } from '../components/ports-panel';
 import { VersionsPanel } from '../components/versions-panel';
 import { useStyles } from './styles';
 import { StatusBar } from './shared';
-
-interface DataProductDataset { name: string; typeName: string; qualifiedName: string; classifications: string[]; guid?: string; }
-interface DataProductGlossaryLink { name: string; guid?: string; }
-/** F9 — physical Data Map asset attached to the product (persisted refs only). */
-interface PersistedAssetRef { guid: string; name: string; qualifiedName?: string; entityType?: string; addedAt?: string; }
-interface DataProductState {
-  displayName: string;
-  description: string;
-  domain: string;
-  /** Legacy single free-text owner (retired in DP-17 into `owners[]`; kept as a
-   *  mirror of owners[0] for back-compat + the marketplace/AI-Search facet). */
-  owner: string;
-  /** DP-17 — rich owner records bound by the shared people-picker. */
-  owners?: OwnerRef[];
-  certified: boolean;
-  /**
-   * F7 — marketplace "Endorsed by governance" flag, distinct from the
-   * Purview-only `certified` concept. Toggled in the Data Product Edit dialog
-   * (Basic step) which PATCHes the Cosmos `dataproducts` doc; the badge below
-   * mirrors the saved value via the dialog's onSaved callback.
-   */
-  endorsed?: boolean;
-  sla: string;
-  bundle: string[];
-  // Lifecycle state — mirrors Purview Unified Catalog data-product states
-  // (Draft → Published → Expired). Delete (F13) requires Draft or Expired.
-  // NOTE: two vocabularies coexist — the Purview-mirror dropdown uses TitleCase
-  // ('Draft'/'Published'/'Expired') while the F6 publish/expire status API uses
-  // UPPERCASE ('DRAFT'/'PUBLISHED'/'EXPIRED'). The union keeps both working.
-  lifecycleStatus?: 'Draft' | 'Published' | 'Expired' | 'PUBLISHED' | 'DRAFT' | 'EXPIRED';
-  /** DP-5 — persisted certification state (managed via the Certification tab /
-   *  the /certify route); drives the header endorsement-ladder badge. */
-  certificationState?: 'draft' | 'validated' | 'certified';
-  // Phase 2 parity surfaces — datasets/assets, linked glossary terms.
-  datasets?: DataProductDataset[];
-  glossaryLinks?: DataProductGlossaryLink[];
-  // F9 — curated physical Data Map assets this product wraps (the T6 publish
-  // guard counts these). Persisted under state.dataAssets; runtime deleted /
-  // dqRunning flags live only in the Data assets tab, never in Cosmos.
-  dataAssets?: PersistedAssetRef[];
-  // Phase 1 Purview Unified Catalog wiring — populated by
-  // POST /api/items/data-product/[id]/register-purview on success.
-  purviewDataProductId?: string;
-  lastRegisteredAt?: string;
-  // F8 access-policy state. `apimPublished` is stamped by publishApimMirror and
-  // gates the Manage-policies dialog (Purview only allows managing access
-  // policies on an unpublished product). `accessPolicy` is the saved policy.
-  apimPublished?: boolean;
-  accessPolicy?: DataProductAccessPolicy;
-  // F6 — Publish/Unpublish/Expire lifecycle. Cosmos is the source of truth;
-  // managed via POST /api/data-products/[id]/status. Unset == Draft.
-  // (lifecycleStatus declared above as a union of both casings.)
-  lifecycleStatusAt?: string;
-  // F21 Publish-as-API edge — populated by
-  // POST /api/items/data-product/[id]/publish-api on success. The subscription
-  // KEY is deliberately NOT stored here (ephemeral, shown once in the receipt).
-  apimApiId?: string;
-  apimProductId?: string;
-  apimSubscriptionId?: string;
-  apimGatewayUrl?: string;
-  apimServiceUrl?: string;
-  apimApiPath?: string;
-  apimPublishedAt?: string;
-  // Inline right-rail attributes — 1:1 with the Purview Unified Catalog
-  // data-product details page (F5 / F11 / F12). Persisted to Cosmos state via
-  // the partial-merge PATCH /api/data-products/[id].
-  updateFrequency?: string;
-  termsOfUse?: ExternalLink[];
-  documentation?: ExternalLink[];
-}
-
-const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-const DP_EMPTY: DataProductState = {
-  displayName: '',
-  description: '',
-  domain: '',
-  owner: '',
-  certified: false,
-  endorsed: false,
-  sla: '',
-  bundle: [],
-  lifecycleStatus: 'DRAFT',
-  termsOfUse: [],
-  documentation: [],
-};
-
-/**
- * Project a bundle-installed data product's `state.content` (DataProductContent
- * — datasets/glossaryTerms/owner/endorsement per content-bundles/types.ts) into
- * the editor's DataProductState so an app-installed data product opens FULLY
- * BUILT-OUT (its datasets, glossary terms, owner, endorsement) instead of an
- * empty form. The editor's existing direct state fields win when present
- * (e.g. after the user has edited + saved); content only fills gaps. This
- * keeps Register-with-Purview / dataset registration hitting the real backend.
- */
-function projectDataProductContent(state: Record<string, unknown>): Partial<DataProductState> {
-  const out: Partial<DataProductState> = { ...(state as Partial<DataProductState>) };
-  const content = (state?.content as any);
-  if (!content || content.kind !== 'data-product') return out;
-
-  // Datasets: content { id, name, description, classification } → editor
-  // DataProductDataset { name, typeName, qualifiedName, classifications[] }.
-  if ((!out.datasets || out.datasets.length === 0) && Array.isArray(content.datasets)) {
-    out.datasets = content.datasets.map((d: any) => ({
-      name: d.name,
-      typeName: 'fabric_data_product',
-      qualifiedName: d.id || d.name,
-      classifications: d.classification ? [String(d.classification)] : [],
-    }));
-  }
-  // Glossary terms: content { term, definition } → editor { name }.
-  if ((!out.glossaryLinks || out.glossaryLinks.length === 0) && Array.isArray(content.glossaryTerms)) {
-    out.glossaryLinks = content.glossaryTerms.map((t: any) => ({ name: t.term }));
-  }
-  // Owner: content { name, email? } → editor owner string.
-  if (!out.owner && content.owner) {
-    out.owner = content.owner.email
-      ? `${content.owner.name} <${content.owner.email}>`
-      : (content.owner.name || '');
-  }
-  // Endorsement → certified flag (editor's only endorsement surface).
-  if (out.certified === undefined && content.endorsement) {
-    out.certified = content.endorsement === 'certified';
-  }
-  // DP-17: bind the people-picker off the rich owners[] when present; otherwise
-  // seed it from the singular legacy owner string so the picker shows it.
-  if ((!out.owners || out.owners.length === 0)) {
-    const rich = Array.isArray((state as any).owners) ? (state as any).owners as any[] : [];
-    if (rich.length) {
-      out.owners = rich.map((o) => typeof o === 'string'
-        ? { id: o, upn: o, displayName: o }
-        : { id: o.id || o.upn || o.displayName || '', upn: o.upn || '', displayName: o.displayName || o.upn || o.id || '' });
-    } else if (out.owner) {
-      out.owners = [parseOwnerString(out.owner)];
-    }
-  }
-  return out;
-}
-
-/** Parse a legacy "Name <email>" (or bare email/name) owner string into a rich
- *  owner record so it renders as a people-picker chip. */
-function parseOwnerString(s: string): OwnerRef {
-  const m = s.match(/^\s*(.+?)\s*<([^>]+)>\s*$/);
-  if (m) return { id: m[2], upn: m[2], displayName: m[1] };
-  return { id: s, upn: s, displayName: s };
-}
-
-// Hint payload returned with HTTP 501 from /register-purview when the
-// LOOM_PURVIEW_ACCOUNT env var is not set. Mirrors PurviewNotConfiguredHint
-// in lib/azure/purview-client.ts.
-interface PurviewNotConfiguredHint {
-  missingEnvVar: string;
-  bicepModule: string;
-  bicepStatus: string;
-  rolesRequired: { name: string; scope: string; reason: string }[];
-  followUp: string;
-}
-
-// Workspace picker source for creating a brand-new data product on /new.
-function useDataProductWorkspaces() {
-  const [workspaces, setWorkspaces] = useState<{ id: string; name: string }[] | null>(null);
-  const [loading, setLoading] = useState(true);
-  useEffect(() => {
-    (async () => {
-      try {
-        const r = await clientFetch('/api/loom/workspaces');
-        const j = await r.json();
-        setWorkspaces(j.ok ? (j.workspaces || []) : []);
-      } catch { setWorkspaces([]); }
-      finally { setLoading(false); }
-    })();
-  }, []);
-  return { workspaces, loading };
-}
-
-// Governance-domain picker source — resolves the Purview businessDomainId GUID
-// that register-purview requires. Honest gate: 501 (Purview unprovisioned)
-// surfaces as `notConfigured` so the form still renders.
-function useGovernanceDomains() {
-  const [domains, setDomains] = useState<{ id: string; name: string }[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [notConfigured, setNotConfigured] = useState(false);
-  const [loading, setLoading] = useState(true);
-  useEffect(() => {
-    (async () => {
-      try {
-        const r = await clientFetch('/api/catalog/domains');
-        const j = await r.json();
-        if (r.status === 501) { setNotConfigured(true); setDomains([]); }
-        else if (!j.ok) { setError(j.error || `HTTP ${r.status}`); setDomains([]); }
-        else setDomains(j.domains || []);
-      } catch (e: any) { setError(e?.message || String(e)); setDomains([]); }
-      finally { setLoading(false); }
-    })();
-  }, []);
-  return { domains, error, notConfigured, loading };
-}
-
-/**
- * F21 — Publish-as-API dialog. Captures the backing query endpoint, POSTs to
- * /publish-api, and on success renders the consumable URL + masked subscription
- * key + a copy-paste curl example. Honest-gates when APIM env vars are absent.
- */
-function PublishAsApiDialog(props: {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  serviceUrl: string;
-  onServiceUrlChange: (v: string) => void;
-  busy: boolean;
-  result: { callableUrl: string; primaryKey?: string; apiId: string; productId: string; sid: string; gatewayUrl: string } | null;
-  gate: { hint: string; missing?: string; bicepModule?: string } | null;
-  err: string | null;
-  keyVisible: boolean;
-  onToggleKey: () => void;
-  onPublish: () => void;
-  republish: boolean;
-}) {
-  const { open, onOpenChange, serviceUrl, onServiceUrlChange, busy, result, gate, err, keyVisible, onToggleKey, onPublish, republish } = props;
-  const copy = (text: string) => { try { void navigator.clipboard?.writeText(text); } catch { /* clipboard unavailable */ } };
-  const curl = result
-    ? `curl "${result.callableUrl}" \\\n  -H "Ocp-Apim-Subscription-Key: ${result.primaryKey || '<your-subscription-key>'}"`
-    : '';
-  return (
-    <Dialog open={open} onOpenChange={(_, d) => onOpenChange(d.open)}>
-      <DialogSurface style={{ maxWidth: 640 }}>
-        <DialogBody>
-          <DialogTitle>{republish ? 'Re-publish data product as API' : 'Publish data product as API'}</DialogTitle>
-          <DialogContent>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
-              <Body1>
-                Front this data product&apos;s backing query endpoint with Azure API Management. Loom creates an APIM
-                API + published product, mints an active subscription key, and returns a consumable URL. The API ref is
-                persisted on the data product.
-              </Body1>
-              {gate && (
-                <MessageBar intent="warning">
-                  <MessageBarBody>
-                    <MessageBarTitle>Azure API Management is not configured in this deployment</MessageBarTitle>
-                    {gate.missing && <>Missing env var: <code>{gate.missing}</code>. </>}
-                    {gate.hint}
-                    {gate.bicepModule && <> Bicep module: <code>{gate.bicepModule}</code>.</>}
-                  </MessageBarBody>
-                </MessageBar>
-              )}
-              {err && <MessageBar intent="error"><MessageBarBody>{err}</MessageBarBody></MessageBar>}
-              {!result && (
-                <Field label="Backing service URL (the query endpoint APIM proxies to)" required
-                  hint="The HTTPS endpoint that serves this data product's data — e.g. a Data API Builder route, a Function, or a Synapse SQL serverless REST surface.">
-                  <Input value={serviceUrl} onChange={(_, d) => onServiceUrlChange(d.value)} placeholder="https://dab.internal.example.com/api/silver_revenue" />
-                </Field>
-              )}
-              {result && (
-                <MessageBar intent="success">
-                  <MessageBarBody>
-                    <MessageBarTitle>API published — endpoint is live</MessageBarTitle>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, marginTop: tokens.spacingVerticalXXS }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' }}>
-                        <strong>Consumable URL:</strong>
-                        <code style={{ wordBreak: 'break-all' }}>{result.callableUrl}</code>
-                        <Button size="small" appearance="subtle" icon={<Copy20Regular />} onClick={() => copy(result.callableUrl)}>Copy</Button>
-                      </div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' }}>
-                        <strong>Header:</strong>
-                        <code>Ocp-Apim-Subscription-Key:</code>
-                        <code>{keyVisible ? (result.primaryKey || '—') : '••••••••••••••••'}</code>
-                        <Button size="small" appearance="subtle" icon={keyVisible ? <EyeOff20Regular /> : <Eye20Regular />} onClick={onToggleKey}>{keyVisible ? 'Hide' : 'Reveal'}</Button>
-                        {result.primaryKey && <Button size="small" appearance="subtle" icon={<Copy20Regular />} onClick={() => copy(result.primaryKey!)}>Copy key</Button>}
-                      </div>
-                      <Caption1>This subscription key is shown once and is not stored on the item — copy it now. Manage or regenerate it in the APIM navigator (subscription <code>{result.sid}</code>).</Caption1>
-                      <div style={{ display: 'flex', alignItems: 'flex-start', gap: tokens.spacingHorizontalS }}>
-                        <pre style={{ flex: 1, margin: tokens.spacingVerticalNone, padding: tokens.spacingVerticalS, background: tokens.colorNeutralBackground3, borderRadius: tokens.borderRadiusMedium, fontSize: tokens.fontSizeBase200, whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>{curl}</pre>
-                        <Button size="small" appearance="subtle" icon={<Copy20Regular />} onClick={() => copy(curl)}>Copy curl</Button>
-                      </div>
-                      <Caption1>API <code>{result.apiId}</code> · Product <code>{result.productId}</code> · Gateway <code>{result.gatewayUrl}</code></Caption1>
-                    </div>
-                  </MessageBarBody>
-                </MessageBar>
-              )}
-            </div>
-          </DialogContent>
-          <DialogActions>
-            {!result && (
-              <Button appearance="primary" icon={<Key20Regular />} onClick={onPublish} disabled={busy || !serviceUrl.trim() || !!gate}>
-                {busy ? 'Publishing…' : republish ? 'Re-publish API' : 'Publish API'}
-              </Button>
-            )}
-            <DialogTrigger disableButtonEnhancement>
-              <Button appearance="secondary">{result ? 'Done' : 'Cancel'}</Button>
-            </DialogTrigger>
-          </DialogActions>
-        </DialogBody>
-      </DialogSurface>
-    </Dialog>
-  );
-}
+import {
+  type DataProductDataset, type DataProductGlossaryLink, type PersistedAssetRef,
+  type DataProductState, type PurviewNotConfiguredHint,
+  GUID_RE, DP_EMPTY,
+} from './data-product/types';
+import { projectDataProductContent } from './data-product/content';
+import { useDataProductWorkspaces, useGovernanceDomains } from './data-product/hooks';
+import { PublishAsApiDialog } from './data-product/publish-as-api-dialog';
 
 export function DataProductEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
