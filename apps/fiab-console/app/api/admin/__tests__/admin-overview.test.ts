@@ -56,6 +56,7 @@ const containers = {
   featurePermissions: makeContainer(),
   attributeGroups: makeContainer(),
   labelAssignments: makeContainer(),
+  costAnomalyRules: makeContainer(),
 };
 
 vi.mock('@/lib/azure/cosmos-client', () => ({
@@ -66,6 +67,7 @@ vi.mock('@/lib/azure/cosmos-client', () => ({
   featurePermissionsContainer: async () => containers.featurePermissions,
   attributeGroupsContainer: async () => containers.attributeGroups,
   labelAssignmentsContainer: async () => containers.labelAssignments,
+  costAnomalyRulesContainer: async () => containers.costAnomalyRules,
 }));
 
 // --------------------------------------------------------------------------
@@ -107,6 +109,8 @@ function seedHappyCosmos() {
   containers.labelAssignments._setQuery(() => [9]);
   containers.tenantSettings._seed('domains:tenant-oid', 'tenant-oid', { items: [{ id: 'fin' }, { id: 'ops' }] });
   containers.tenantSettings._seed('tenant-oid', 'tenant-oid', { settings: { a: true, b: false, c: true } });
+  // C4 — finops tile: enabled cost-anomaly watch rules (SELECT VALUE COUNT(1)).
+  containers.costAnomalyRules._setQuery(() => [2]);
 }
 
 beforeEach(() => {
@@ -141,14 +145,14 @@ describe('/api/admin/overview', () => {
     expect((await GET()).status).toBe(401);
   });
 
-  it('GET returns all 14 tiles with real counts when every backend resolves', async () => {
+  it('GET returns all 16 tiles with real counts when every backend resolves', async () => {
     process.env.LOOM_IDENTITY_PICKER_ENABLED = 'true';
     seedHappyCosmos();
     const { GET } = await import('@/app/api/admin/overview/route');
     const j = await (await GET()).json();
     expect(j.ok).toBe(true);
     const t = j.tiles;
-    expect(Object.keys(t)).toHaveLength(14);
+    expect(Object.keys(t)).toHaveLength(16);
     expect(t.workspaces).toEqual({ count: 4, gated: false });
     expect(t.items).toEqual({ count: 42, gated: false });
     expect(t.domains).toEqual({ count: 2, gated: false });
@@ -163,6 +167,12 @@ describe('/api/admin/overview', () => {
     expect(t.sensitivityLabels).toEqual({ count: 2, gated: false });
     // RUM1 — browser JS errors (24 h) from AppExceptions via queryLogs.
     expect(t.rumClientErrors).toEqual({ count: 5, gated: false });
+    // C4 — finops tile: enabled cost-anomaly watch rules.
+    expect(t.finops).toEqual({ count: 2, gated: false });
+    // DIAG1 — diagnostics tile: blocked-gate census (in-process gate registry;
+    // env-dependent count, so assert shape not an exact number).
+    expect(t.diagnostics.gated).toBe(false);
+    expect(typeof t.diagnostics.count).toBe('number');
   });
 
   it('GET gates the rumClientErrors tile when Log Analytics is not configured', async () => {
