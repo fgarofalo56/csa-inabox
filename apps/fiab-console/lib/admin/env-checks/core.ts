@@ -97,6 +97,8 @@ export const VALUE_HINT: Record<string, string> = {
   // C2 — FinOps forecast tuning (fully-functional defaults; svc-cost-forecast).
   LOOM_COST_FORECAST_HORIZON_DAYS: '30  (forecast days, 1–90)',
   LOOM_COST_FORECAST_METHOD: 'auto (default) | api | linear | seasonal',
+  // C3 — cost-anomaly monitor (default-ON; svc-cost-anomaly-monitor).
+  LOOM_COST_ANOMALY_ENABLED: 'true  (default; false = opt out of the scheduled cost-anomaly monitor)',
   LOOM_DLZ_RG: '<dlz-resource-group>',
   LOOM_ADMIN_RG: '<admin-resource-group>',
   LOOM_TENANT_ADMIN_OID: '<your-entra-user-object-id>',

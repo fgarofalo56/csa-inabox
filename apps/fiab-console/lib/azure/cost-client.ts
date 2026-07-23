@@ -36,6 +36,7 @@ import { loomSubscriptionScope } from './loom-subscriptions';
 import { armBase, armScope } from './cloud-endpoints';
 import { getOrComputeCached, buildScopedCacheKey, type CacheMeta } from './query-result-cache';
 import { periodEndProjection, pickComputedMethod } from './cost-forecast-core';
+import { computeAnomalies, type CostAnomaly } from './cost-anomaly-core';
 
 // Sovereign-cloud ARM host + scope (Commercial / GCC-High / IL5).
 const ARM = armBase();
@@ -307,16 +308,13 @@ export interface CostBreakdownRow { key: string; cost: number; }
  * A daily-spend outlier derived PURELY from the daily series (no extra Azure
  * call): a day whose cost exceeds mean + 2σ (severity 'high' when > 3σ, else
  * 'medium'), OR a day-over-day jump > 50% that also sits above the mean.
+ *
+ * C3: the type + the detection now live in the shared pure module
+ * `cost-anomaly-core.ts` (extract-once, import-both — the scheduled monitor
+ * imports the SAME logic). Re-exported here so every existing `CostAnomaly`
+ * import keeps resolving.
  */
-export interface CostAnomaly {
-  date: string;
-  cost: number;
-  /** The series mean the day is compared against (the "expected" run-rate). */
-  expected: number;
-  /** Signed % deviation of `cost` from `expected`. */
-  deviationPct: number;
-  severity: 'high' | 'medium';
-}
+export type { CostAnomaly };
 export interface CostBudget {
   name: string;
   subscription: string;
@@ -477,42 +475,6 @@ async function resolveSubscriptionNames(subs: string[]): Promise<Record<string, 
     } catch { /* keep the id fallback */ }
   }));
   return out;
-}
-
-/**
- * Derive daily-spend anomalies from the daily series alone (no extra Azure
- * call). Flags a day when its cost is a statistical outlier (> mean + 2σ; 'high'
- * when > 3σ) OR when it jumps > 50% over the prior day AND sits above the mean.
- * `expected` is the series mean; `deviationPct` is the signed % over it. Needs
- * at least 3 days of data to have a meaningful mean/σ; otherwise returns [].
- */
-function computeAnomalies(daily: { date: string; cost: number }[]): CostAnomaly[] {
-  if (daily.length < 3) return [];
-  const costs = daily.map((d) => d.cost);
-  const n = costs.length;
-  const mean = costs.reduce((a, b) => a + b, 0) / n;
-  const variance = costs.reduce((a, b) => a + (b - mean) ** 2, 0) / n;
-  const stddev = Math.sqrt(variance);
-  const r2 = (x: number) => Math.round(x * 100) / 100;
-  const out: CostAnomaly[] = [];
-  for (let i = 0; i < daily.length; i += 1) {
-    const { date, cost } = daily[i];
-    const prev = i > 0 ? daily[i - 1].cost : null;
-    const dod = prev != null && prev > 0 ? ((cost - prev) / prev) * 100 : null;
-    const sigmaOutlier = stddev > 0 && cost > mean + 2 * stddev;
-    const dodOutlier = dod != null && dod > 50 && cost > mean;
-    if (!sigmaOutlier && !dodOutlier) continue;
-    const severity: CostAnomaly['severity'] = stddev > 0 && cost > mean + 3 * stddev ? 'high' : 'medium';
-    out.push({
-      date,
-      cost: r2(cost),
-      expected: r2(mean),
-      deviationPct: mean > 0 ? Math.round(((cost - mean) / mean) * 1000) / 10 : 0,
-      severity,
-    });
-  }
-  // Most-severe / costliest first.
-  return out.sort((a, b) => (a.severity === b.severity ? b.cost - a.cost : a.severity === 'high' ? -1 : 1));
 }
 
 /**

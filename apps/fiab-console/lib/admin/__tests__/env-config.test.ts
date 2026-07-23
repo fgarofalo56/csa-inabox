@@ -207,8 +207,10 @@ describe('admin/env-config registry', () => {
     // APPLICATIONINSIGHTS_CONNECTION_STRING (secret-typed, monitoring-module
     // derived) (167) → I3 svc-workspace-identity adds
     // LOOM_WS_IDENTITY_SHADOW_SAMPLE (shadow divergence-audit sampling 0..1,
-    // code default 1.0) (168).
-    expect(EDITABLE_ENV.length).toBe(168);
+    // code default 1.0) (168) → C3 svc-cost-anomaly-monitor adds
+    // LOOM_COST_ANOMALY_ENABLED (optionalDefault opt-out flag — the scheduled
+    // cost-anomaly monitor is default-ON) (169).
+    expect(EDITABLE_ENV.length).toBe(169);
   });
 
   it('surfaces the wave-2 env vars as settable (previously dropped by the whitelist)', () => {
@@ -292,6 +294,11 @@ describe('admin/env-config registry', () => {
       'LOOM_BROKER_REDIS', 'LOOM_BROKER_URL',
       'LOOM_CAPACITY_LCU',
       'LOOM_CONTENT_SAFETY_ENDPOINT',
+      // C3 svc-cost-anomaly-monitor — the scheduled cost-anomaly monitor is
+      // default-ON (opt-out): unset LOOM_COST_ANOMALY_ENABLED = enabled, the
+      // bicep-provisioned ACA Job seeds a whole-estate 3σ watch and alerts via
+      // the shared action group + in-product notifications with zero config.
+      'LOOM_COST_ANOMALY_ENABLED',
       // C2 svc-cost-forecast — both fully-functional-by-default tuning knobs
       // (unset → 30-day horizon, method 'auto' = real Forecast API first with
       // the computed linear/seasonal fallback, honestly labeled).
