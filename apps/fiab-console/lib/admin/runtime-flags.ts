@@ -119,6 +119,14 @@ export const RUNTIME_FLAGS: readonly RuntimeFlagDef[] = [
     surface: '/admin/health?tab=slo',
   },
   {
+    id: 'a8-map-shape-fallback',
+    label: 'Report map — basemap-free shape-map fallback (Gov)',
+    description:
+      'When the report Map visual is gated because Azure Maps is unavailable (GCC/Gov, and no self-hosted MapLibre tileserver), render a basemap-free choropleth / point plot via the offline GeoJsonMap SVG renderer over bundled OSS boundaries — no external tiles. OFF reverts the gate to the pre-A8 config-message + aggregated-rows table (no map) on the next render. Commercial Azure Maps and the MapLibre tileserver paths are unaffected.',
+    ownerItem: 'A8',
+    surface: 'Report Map visual on the Azure-Maps honest gate (/items/report/[id])',
+  },
+  {
     id: 'rum1-client-telemetry',
     label: 'Client RUM telemetry',
     description:
