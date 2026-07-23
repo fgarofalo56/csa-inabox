@@ -1,0 +1,50 @@
+{
+  "$comment": "Seeded reference semantic model for the DAX golden harness (A5). The PUT /api/items/semantic-model/[id]/content body: a Sales/Date/Customer star schema whose physical tables are the CSVs in ./data seeded into the Synapse-serverless golden database by scripts/csa-loom/seed-dax-golden.sh. sourceDatabase names that serverless DB; the harness may also pass it per-query as the dax-query `database` override.",
+  "sourceTarget": "lakehouse",
+  "sourceSchema": "dbo",
+  "sourceDatabaseEnv": "LOOM_DAX_GOLDEN_DB",
+  "sourceDatabaseDefault": "loom_dax_golden",
+  "content": {
+    "kind": "semantic-model",
+    "tables": [
+      {
+        "name": "Sales",
+        "columns": [
+          { "name": "Date", "dataType": "DateTime", "description": "Sale month (first-of-month grain); FK to Date[Date]." },
+          { "name": "CustomerId", "dataType": "String", "description": "FK to Customer[CustomerId]." },
+          { "name": "Amount", "dataType": "Decimal", "description": "Sale amount." },
+          { "name": "Quantity", "dataType": "Int64", "description": "Units sold." }
+        ]
+      },
+      {
+        "name": "Date",
+        "columns": [
+          { "name": "Date", "dataType": "DateTime", "description": "Marked Date table key (first-of-month)." },
+          { "name": "Year", "dataType": "Int64" },
+          { "name": "MonthNumber", "dataType": "Int64" },
+          { "name": "MonthName", "dataType": "String" },
+          { "name": "Quarter", "dataType": "String" }
+        ]
+      },
+      {
+        "name": "Customer",
+        "columns": [
+          { "name": "CustomerId", "dataType": "String", "description": "Customer key." },
+          { "name": "Name", "dataType": "String" },
+          { "name": "Region", "dataType": "String" },
+          { "name": "Segment", "dataType": "String" }
+        ]
+      }
+    ],
+    "measures": [
+      { "table": "Sales", "name": "Total Amount", "expression": "SUM(Sales[Amount])", "formatString": "0.00" },
+      { "table": "Sales", "name": "Total Quantity", "expression": "SUM(Sales[Quantity])" },
+      { "table": "Sales", "name": "Order Count", "expression": "COUNTROWS(Sales)" },
+      { "table": "Sales", "name": "Distinct Customers", "expression": "DISTINCTCOUNT(Sales[CustomerId])" }
+    ],
+    "relationships": [
+      { "from": "Customer[CustomerId]", "to": "Sales[CustomerId]", "cardinality": "1:many" },
+      { "from": "Date[Date]", "to": "Sales[Date]", "cardinality": "1:many" }
+    ]
+  }
+}
