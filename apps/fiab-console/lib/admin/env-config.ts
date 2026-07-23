@@ -52,9 +52,11 @@ export interface EditableEnvVar {
   optionalDefault?: boolean;
 }
 
-/** A value is treated as secret when its key matches any of these. */
+/** A value is treated as secret when its key matches any of these.
+ * `_WEBHOOK_URL$` (O1): incoming-webhook URLs (Teams workflow / PagerDuty /
+ * on-call bridge) embed a bearer token in the path — never echo them. */
 function isSecretKey(key: string): boolean {
-  return /SECRET|PASSWORD|CONNECTION_STRING|CONNECTIONSTRING|_KEY$|_KEYS$|_PWD$/i.test(key);
+  return /SECRET|PASSWORD|CONNECTION_STRING|CONNECTIONSTRING|_KEY$|_KEYS$|_PWD$|_WEBHOOK_URL$/i.test(key);
 }
 
 /** Keys whose value is constrained in the Azure Government L5 (DoD/IL5)

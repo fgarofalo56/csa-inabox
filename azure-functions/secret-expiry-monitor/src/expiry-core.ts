@@ -198,6 +198,16 @@ export function nextState(items: TrackedCredential[], nowIso: string): AlertStat
   return out;
 }
 
+/** O1 unified alert convention — P-band severity for a credential band.
+ * Mirrors lib/azure/alert-dispatch.ts routing (P1 page / P3 email):
+ * expired|critical (<7d — the 2026-07-19 outage class) → P1; warn30 → P2;
+ * warn60 and everything else → P3 (email band). */
+export function severityForBand(band: Band): 'P1' | 'P2' | 'P3' {
+  if (band === 'expired' || band === 'critical') return 'P1';
+  if (band === 'warn30') return 'P2';
+  return 'P3';
+}
+
 /** Human alert payload for the action group + the dedup GitHub issue. */
 export function buildAlertMessage(items: TrackedCredential[], warnDays: number): { subject: string; body: string } {
   const worst = items[0];

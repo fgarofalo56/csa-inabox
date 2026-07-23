@@ -28,6 +28,7 @@ import {
   alertingItems,
   nextState,
   buildAlertMessage,
+  severityForBand,
   issueTitle,
   type AlertState,
   type GraphPasswordCredential,
@@ -121,13 +122,17 @@ export async function secretExpiryMonitor(_timer: Timer, context: InvocationCont
     context.log('[secret-expiry] no band escalations — no alert this tick.');
   } else {
     const { subject, body } = buildAlertMessage(firing, warnDays);
-    context.warn(`[secret-expiry] ESCALATION: ${subject}`);
+    // O1 severity routing: worst escalated band decides the P-band (firing is
+    // sorted worst-first by mergeInventory order) — expired/critical page (P1),
+    // warn30 urgent (P2), warn60 email-band (P3). docs/fiab/runbooks/on-call.md.
+    const severity = severityForBand(firing[0].band);
+    context.warn(`[secret-expiry] ESCALATION (${severity}): ${subject}`);
 
     // 4a. Shared action group (O1 convention — LOOM_ALERT_ACTION_GROUP_ID).
     if (env.LOOM_ALERT_ACTION_GROUP_ID) {
       try {
-        const out = await fireActionGroup(armEndpoint, env.LOOM_ALERT_ACTION_GROUP_ID, subject);
-        context.log(`[secret-expiry] action group fired (status ${out.status}).`);
+        const out = await fireActionGroup(armEndpoint, env.LOOM_ALERT_ACTION_GROUP_ID, subject, severity);
+        context.log(`[secret-expiry] action group fired (${severity}, status ${out.status}).`);
       } catch (e: any) {
         context.error(`[secret-expiry] action group dispatch failed: ${e?.message || e}`);
       }

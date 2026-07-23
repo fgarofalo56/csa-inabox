@@ -336,6 +336,12 @@ type observabilityConfigT = {
 
   @description('COST0 — optional extra notification emails (finops DL) beyond the shared action group + subscription Owners. Consumed at the top-level orchestrator.')
   programBudgetContactEmails: string[]?
+
+  @description('O1 — wire the OPTIONAL on-call webhook bridge: the Console reads LOOM_ALERT_WEBHOOK_URL via a Key Vault secretRef so lib/azure/alert-dispatch.ts pages the webhook on P1/P2 (P3 stays email-band). PRE-REQ: store the webhook URL in the Loom Key Vault first (secret name alertWebhookSecretName, default loom-alert-webhook-url) — see docs/fiab/runbooks/on-call.md. Default false (empty-safe): alerting delivers via the shared action group\'s email + subscription-Owner receivers.')
+  alertWebhookEnabled: bool?
+
+  @description('Key Vault secret NAME holding the on-call webhook URL (only read when alertWebhookEnabled). Default loom-alert-webhook-url.')
+  alertWebhookSecretName: string?
 }
 
 @description('Observability settings bag (R0) — V1 synthetic-journey monitor settings live here (+ the COST0 program-budget props, consumed at the top-level orchestrator); V5 bicep-drift, O1 alert-dispatch and RUM1 client-RUM settings add properties to observabilityConfigT — never a new top-level param.')
@@ -414,6 +420,11 @@ var syntheticMonitorCron = observabilityConfig.?syntheticMonitorCron ?? '*/15 * 
 var uatResultsContainer = observabilityConfig.?uatResultsContainer ?? 'uat-results'
 var syntheticLoginUpn = observabilityConfig.?syntheticLoginUpn ?? ''
 var syntheticLoginSecretUri = observabilityConfig.?syntheticLoginSecretUri ?? ''
+// O1 (observabilityConfig bag) — optional on-call webhook bridge shims
+// (default OFF/empty-safe; the shared action-group email/ARM-role receivers
+// are the day-one channel).
+var alertWebhookEnabled = observabilityConfig.?alertWebhookEnabled ?? false
+var alertWebhookSecretName = observabilityConfig.?alertWebhookSecretName ?? 'loom-alert-webhook-url'
 // I1 (workspaceIdentityConfig bag) — per-workspace identity shims (default off).
 var workspaceIdentityMode = workspaceIdentityConfig.?workspaceIdentityMode ?? 'off'
 var wsIdentitySub = workspaceIdentityConfig.?wsIdentitySub ?? ''
@@ -1753,6 +1764,14 @@ module defaultAlerts 'monitoring-default-alerts.bicep' = {
     // email/SMS/webhook receiver to the loom-default-alerts action group from
     // the /monitor Alerts editor. Opt-out via the module's skipDefaultAlerts.
     notifyOwners: true
+    // O1: the module's @secure alertWebhookUrl (persisted on-call webhook
+    // receiver) is intentionally NOT passed here — a KV getSecret() cannot be
+    // empty-safe when the operator has not created the secret yet. The runtime
+    // path (LOOM_ALERT_WEBHOOK_URL secretRef via observabilityConfig.
+    // alertWebhookEnabled) pages P1/P2 without it; to persist the receiver on
+    // the group for the default LogAlert rules too, add it once via the
+    // /monitor Alerts editor or a .bicepparam getSecret — docs/fiab/runbooks/
+    // on-call.md §5.
   }
 }
 
@@ -3781,6 +3800,16 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           !empty(loomPostureFunctionUrl) ? [
             { name: 'LOOM_POSTURE_FUNCTION_KEY', secretRef: 'loom-posture-function-key' }
           ] : [],
+          // O1 — optional on-call webhook bridge (observabilityConfig.
+          // alertWebhookEnabled). lib/azure/alert-dispatch.ts pages this URL on
+          // P1/P2 and mirrors it into the shared loom-default-alerts
+          // notification; P3 stays email-band. Secret-typed (the URL embeds a
+          // bearer token) → KV secretRef, never a plain env literal. Absent →
+          // svc-alerting reports the honest optional-default (email + Owner
+          // ARM-role receivers deliver every severity).
+          alertWebhookEnabled ? [
+            { name: 'LOOM_ALERT_WEBHOOK_URL', secretRef: 'loom-alert-webhook-url' }
+          ] : [],
           // Paginated-report-renderer Function host key — only when wired.
           // Surfaced to the export BFF (?code=…), never to the browser. The
           // report-designer export route reads the SAME host key as
@@ -4627,6 +4656,12 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           // 'loom-posture-function-key' (see azure-functions/posture-refresh/DEPLOYMENT.md).
           !empty(loomPostureFunctionUrl) ? [
             { name: 'loom-posture-function-key', keyVaultUrl: '${keyvault.outputs.keyVaultUri}secrets/${loomPostureFunctionKeySecretName}', identity: identity.outputs.uamiConsoleId }
+          ] : [],
+          // O1 — on-call webhook URL (operator-created KV secret, default name
+          // loom-alert-webhook-url; docs/fiab/runbooks/on-call.md). Only bound
+          // when observabilityConfig.alertWebhookEnabled — empty-safe day-one.
+          alertWebhookEnabled ? [
+            { name: 'loom-alert-webhook-url', keyVaultUrl: '${keyvault.outputs.keyVaultUri}secrets/${alertWebhookSecretName}', identity: identity.outputs.uamiConsoleId }
           ] : [],
           // Paginated-report-renderer Function host key — stored in KV post-deploy
           // as 'loom-paginated-render-key' (see

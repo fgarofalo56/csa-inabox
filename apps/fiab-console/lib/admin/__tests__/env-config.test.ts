@@ -194,8 +194,11 @@ describe('admin/env-config registry', () => {
     // already counted) (157) → I1 svc-workspace-identity adds
     // LOOM_WORKSPACE_IDENTITY_MODE (off | shadow | enforce) +
     // LOOM_WS_IDENTITY_RG (falls back to LOOM_DLZ_RG) (159) → E2
-    // svc-copilot-evaluator adds LOOM_COPILOT_EVALUATOR_URL (160).
-    expect(EDITABLE_ENV.length).toBe(160);
+    // svc-copilot-evaluator adds LOOM_COPILOT_EVALUATOR_URL (160) → O1
+    // svc-alerting adds LOOM_ALERT_WEBHOOK_URL (the optional on-call webhook
+    // bridge for the unified dispatchAlert path; secret-typed, KV secretRef)
+    // (161).
+    expect(EDITABLE_ENV.length).toBe(161);
   });
 
   it('surfaces the wave-2 env vars as settable (previously dropped by the whitelist)', () => {
@@ -211,6 +214,8 @@ describe('admin/env-config registry', () => {
     // The Maps shared key is secret-typed (never echoed); the client id is not.
     expect(getEditableEnv('LOOM_AZURE_MAPS_KEY')?.secret).toBe(true);
     expect(getEditableEnv('LOOM_AZURE_MAPS_CLIENT_ID')?.secret).toBe(false);
+    // O1 — the on-call webhook URL embeds a bearer token → secret-typed.
+    expect(getEditableEnv('LOOM_ALERT_WEBHOOK_URL')?.secret).toBe(true);
     // SWA sub/rg/location fall back to the deployment-wide vars (alias groups).
     expect(aliasSatisfiedKeys((k) => k === 'LOOM_SUBSCRIPTION_ID').has('LOOM_SWA_SUBSCRIPTION_ID')).toBe(true);
     expect(aliasSatisfiedKeys((k) => k === 'LOOM_LOCATION').has('LOOM_SWA_LOCATION')).toBe(true);
@@ -261,6 +266,10 @@ describe('admin/env-config registry', () => {
     const optDefault = EDITABLE_ENV.filter((e) => e.optionalDefault).map((e) => e.key).sort();
     expect(optDefault).toEqual([
       'LOOM_A2A_EGRESS_ALLOW',
+      // O1 svc-alerting — the optional on-call webhook bridge; unset = the
+      // unified dispatch path still delivers every severity via the shared
+      // action group's email + Owner ARM-role receivers (fully functional).
+      'LOOM_ALERT_WEBHOOK_URL',
       'LOOM_AOAI_MINI_DEPLOYMENT', 'LOOM_AOAI_STRONG_DEPLOYMENT',
       'LOOM_AUDIT_DCR_ENDPOINT', 'LOOM_AUDIT_DCR_ID',
       // WS-10.1 svc-lcu-autopilot — both optionalDefault (propose mode +
