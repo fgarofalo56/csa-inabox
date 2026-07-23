@@ -36,6 +36,7 @@
  */
 
 import crypto from 'node:crypto';
+import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 
 const JWKS_TTL_MS = 60 * 60 * 1000;
 const CLOCK_SKEW_SEC = 300;
@@ -132,7 +133,7 @@ async function loadJwks(tenant: string, forceRefresh = false): Promise<JwksKey[]
     return jwksCache.keys;
   }
   const url = `${authorityHost()}/${tenant}/discovery/v2.0/keys`;
-  const res = await fetch(url, { cache: 'no-store', signal: AbortSignal.timeout(8000) });
+  const res = await fetchWithTimeout(url, { cache: 'no-store' }, 8000);
   if (!res.ok) throw new Error(`JWKS fetch failed (${res.status})`);
   const doc = (await res.json()) as { keys?: JwksKey[] };
   const keys = Array.isArray(doc.keys) ? doc.keys : [];
