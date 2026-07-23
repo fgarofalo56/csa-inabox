@@ -96,7 +96,24 @@ All Phase-1 items merged (~26 PRs). Rows (receipts in PR bodies):
 | U6 — Monaco query↔results divider | #2450 | SplitPane divider across the 11 Monaco editors + u6 spec (frame-paced drags per the U0 finding); FLAG0 flag. |
 | S3 — auto-rotation | (skipped-by-decision) | S2's verdict = MIGRATE to FIC; S3 documented as fallback only in the S1/S2 runbooks. |
 
-**Roll:** release 0.75.0 (`f2beaf07`) — batch roll + post-roll receipts recorded below at execution.
+**Roll (EXECUTED 2026-07-23):** release 0.75.0 — `loom-roll-and-validate` run
+29979456519 → **success** on `image_tag=f2beaf07…` + `expected_sha=f2beaf07`;
+live `build-marker.txt` = `sha=f2beaf07…` (image built first-try).
+
+**Post-roll live receipts (signed session vs the rolled revision):**
+- FLAG0 — `/api/runtime-flags` serves **all seven** Phase-1 flags default-ON:
+  `a10-spark-tab`, `rum1-client-telemetry`, `u1-report-designer-g3`,
+  `u10-browse-virtualization`, `u3-notebook-cell-resize`, `u6-monaco-divider`,
+  `v1-journeys-tab`.
+- A10 — `GET /api/admin/spark/health` → **200 with real data**:
+  `{ok:true, backend:{backend:'synapse',configured:true},
+  pool:{enabled:true,totals:{warm:4,leased:0,shared:0,warming:0}…` — the live
+  loompool2 census.
+- C2 — `GET /api/admin/finops/forecast` → the honest **202 warming envelope**
+  (`"The cost forecast is still aggregating…"`) on the cold path; the full
+  `method:'api'` body lands once the Cost Management fan-out warms (FD 504s
+  the >60s cold compute — the C4 finops page's polling UX absorbs this;
+  full-body receipt appends at the next warm-path check).
 
 ## Phase boundaries (FRESH0 runs)
 
