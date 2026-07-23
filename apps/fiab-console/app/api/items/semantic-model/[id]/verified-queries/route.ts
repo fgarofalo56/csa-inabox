@@ -23,7 +23,8 @@
 
 import { NextRequest } from 'next/server';
 import { getSession } from '@/lib/auth/session';
-import { apiOk, apiError, apiUnauthorized, apiServerError } from '@/lib/api/respond';
+import { withSession } from '@/lib/api/route-toolkit';
+import { apiOk, apiError, apiServerError } from '@/lib/api/respond';
 import { loadOwnedItem } from '../../../_lib/item-crud';
 import {
   registerMetric,
@@ -57,10 +58,8 @@ function actorFrom(session: NonNullable<ReturnType<typeof getSession>>): Contrac
   };
 }
 
-export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return apiUnauthorized();
-  const { id } = await ctx.params;
+export const GET = withSession(async (_req, { session, params }) => {
+  const { id } = params;
   const tenantId = session.claims.oid;
   const item = await loadOwnedItem(id, ITEM_TYPE, tenantId);
   if (!item) return apiError('Semantic model not found or not owned by you.', 404);
@@ -73,12 +72,10 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
   } catch (e) {
     return apiServerError(e, 'Failed to read the semantic contract.');
   }
-}
+});
 
-export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return apiUnauthorized();
-  const { id } = await ctx.params;
+export const POST = withSession(async (req, { session, params }) => {
+  const { id } = params;
   const tenantId = session.claims.oid;
   const item = await loadOwnedItem(id, ITEM_TYPE, tenantId);
   if (!item) return apiError('Semantic model not found or not owned by you.', 404);
@@ -98,7 +95,11 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
         label,
         owner: String(m.owner || actorFrom(session).who),
         description: String(m.description || ''),
-        synonyms: m.synonyms as string[] | string | undefined,
+        synonyms: Array.isArray(m.synonyms)
+          ? m.synonyms.map((s: unknown) => String(s))
+          : m.synonyms
+            ? [String(m.synonyms)]
+            : undefined,
         grain: String(m.grain || ''),
         sourceKind: m.sourceKind === 'measure' ? 'measure' : 'metric-view',
         sourceRef: String(m.sourceRef || id),
@@ -148,4 +149,4 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   } catch (e) {
     return apiServerError(e, 'Verified-queries operation failed.');
   }
-}
+});
