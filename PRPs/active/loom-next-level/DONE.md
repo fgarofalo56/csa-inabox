@@ -156,6 +156,44 @@ CF, C4 finops, U7 dataflow debug, E5 copilot-quality, DIAG1, SLO1) — no
 rollback. A concurrent auto-fired `workflow_run` roll was cancelled to avoid a
 double ACA write; the SHA-pinned dispatch is the authoritative one.
 
+## Phase 3 — enforcement + structure COMPLETE (build set, 2026-07-23)
+
+Two verified worktree-fan-out waves. Wave-I integrated as #2491 (7 items, zero merge
+conflicts, tsc + 560 tests + full guard suite green on the merged tree); Wave-II I6
+integrated as #2493 on top (rides I7's preflight).
+
+| Item | PR | Receipt summary |
+|------|----|-----------------|
+| I9 — threat-model / AppSec review gate | #2491 | `docs/fiab/security/loom-next-level-threat-model.md` — STRIDE over 8 new surfaces (L2 ingest, E2/C3/L3/S1 compute, V1 synthetic cred, identity.shadow store, I5/I6 enforce path), mitigations cited to shipped code + PRs, sign-off block (reviewer/date/6-row findings) making the AppSec review a hard I6 precondition (any HIGH blocks). Doc-only, cloud-neutral. |
+| E6 — tier-router eval (cost-per-quality) | #2491 | `scoreTierDecision` + tier confusion matrix over the REAL `routeTurnTier`; 64-row `_tier-labels.jsonl` spanning DEFAULT_TASK_TIER_MAP; E5 "Tier routing" tab (accuracy/heatmap/cost-per-quality via cost-estimate coefficients); `tierAccuracy≥0.85` floor. **Completes the E1→…→E6 chain — unblocks Phase-4 N13.** 51 evaluator-core tests incl. real-router agreement. |
+| X1 — cloud-endpoint literal ratchet | #2491 | `check-cloud-endpoint-literals.mjs` — baseline 217 literals / 107 keys, shrink-only, `_ratchet-count` header (owner/why/unblock); wired into the guard lane. |
+| L6 — dbt manifest lineage | #2491 | `dbt-manifest-lineage.ts` pure parser (model+column, dbt 1.6 columns, ref()-cycle safe) → `recordThreadEdge`, wired into dbt-runner run paths; reuses `svc-dbt-runner` (no new infra). 16 tests. |
+| L7 — UC column lineage rebase onto L1 | #2491 | UC column synthesis folded onto the shared L1 `synthesizeColumnGraph` (one of N `col:` sources); Gov OSS honest-gate → Loom-native columns; byte-identical default payload preserved. 26 unified-lineage tests. |
+| A11 — FAULTED-pool detection + auto-recovery | #2491 | `spark-pool-recovery.ts` — detect Failed/FAULTED → delete+recreate via synapse-dev-client w/ backoff + thrash guard; alert-dispatch (`LOOM_ALERT_ACTION_GROUP_ID`); `recreate-spark-pool.sh` runbook; A10 tab action. Env `LOOM_SPARK_AUTORECOVER_ENABLED`/`_RECOVER_MAX_ATTEMPTS` (data-plane ENV_CHECKS + registry parity). 13 tests. |
+| A12 — session quota / vCore-budget ceiling | #2491 | `spark-vcore-budget.ts` + `spark-session-pool`/`spark-lease-store` per-tenant session cap + cross-replica vCore accounting; honest "session quota reached" (no hang); hard-kill on idle-TTL. Env `LOOM_SPARK_VCORE_BUDGET`(400)/`LOOM_SPARK_TENANT_SESSION_MAX`(50), opt-in knobs. |
+| A13 — chaos-drill harness + durable-cron sweeper | #2491 | `/api/admin/spark/chaos` (tenant-admin, `LOOM_SPARK_CHAOS_ENABLED` default-off) injects faults; recovery drill asserts reaper+warm-refill+A11 recreate; keep-warm confirmed sole sweeper + durable cron wiring. |
+| I7 — migration runbook + preflight + enforce script | #2491 | `preflightWorkspaceEnforce` (real ARM/data-plane probes → ready/missingGrants/divergences/observedCalls); `workspace-identity-migration.md` 7-step runbook w/ instant `enforce:false` rollback (LRU TTL = max latency) + per-cloud appendix; `workspace-identity-enforce.mjs` (dry-run default). 9 tests. |
+| I6 — per-workspace enforce flag + admin UI + gate | #2493 | `workspaceIdentity.enforce?/enforceAt?/enforceBy?`; `/api/admin/workspaces/[id]/identity` GET readiness rollup (I7 preflight + 14-day I4 divergence + I9 sign-off → `canEnable`) / POST tenant-admin toggle w/ ATO `identity.enforce` `_auditLog` row + refuse-unless-ready; `WorkspaceIdentityPanel` Identity tab (FLAG0 `i6-ws-identity-panel`, guided, disabled Enable until ready); `identity-enforce-review.ts` sources I9 verdict. **HARD GATE: enforcement stays OFF** (review unsigned in-estate; needs I9 sign-off + ≥2wk clean shadow — operator-gated). 9 route tests. |
+
+**HARD GATE (operator-gated — NOT flipped):** I6 enforcement + I7 flip land build-complete
+but enforcement stays OFF until (a) I9 sign-off recorded AND (b) ≥2 weeks clean shadow
+divergence (I3 shadow started ~07-22 → window not met until ~08-05). Everything up to the
+gate is built; no workspace is enforced; global `LOOM_WORKSPACE_IDENTITY_MODE` default untouched.
+
+**Roll (EXECUTED 2026-07-23):** `loom-roll-and-validate` run **30045348921 → success** on
+`image_tag=48a565e8d3179f35af89d16a75996cd9481e1959` + `expected_sha=48a565e8`. Live
+`/api/version` `build.sha=48a565e8…`. **All gates green:** vitest(node 20) confirmation →
+image roll → revision health → live-URL SHA match → in-VNet `loom-uat` Playwright gate (the
+automated G1 receipt for every user-visible Phase-3 surface — E5 Tier-routing tab, I6 Identity
+panel). Roll took three dispatches (recorded for the recipe book): (1) #30044301063 failed the
+pre-flight **vitest gate** — the roll needs a `vitest (node 20)` check-run for the SHA, but a
+**squash-merge** commit has none until main-push CI produces one; waited for main-push vitest to
+conclude success on 48a565e8. (2) #30045013234 rolled back at **live-URL validation** — the
+`loom-console:48a565e8` ACR image build was still in-progress, so the roll served the newest BUILT
+image (693cb1bf) and the SHA mismatch tripped rollback. (3) #30045348921 succeeded once the console
+image finished building. A concurrent auto-fired `workflow_run` roll was cancelled each time to avoid
+a double ACA write; the SHA-pinned dispatch is authoritative.
+
 ## Phase boundaries (FRESH0 runs)
 
 | Boundary | Date | Result |
@@ -163,3 +201,4 @@ double ACA write; the SHA-pinned dispatch is the authoritative one.
 | 0 → 1 | 2026-07-22 | `check-prp-freshness.mjs --strict` → exit 0, 0 warnings. Re-baselined in the same commit: param-cap stated 256→232 (R0 landed; top-level main.bicep at 249 = warn, consolidation pass queued), route-total 1541→1547, toolkit-gap 1356→1359; PRP ground-truth #5 corrected (HNS blocks blob versioning — DR0 shipped the Learn-correct posture) and #9 marked RESOLVED. |
 | 1 → 2 | 2026-07-23 | `--strict` → exit 0, 0 warnings. Re-baselined: route-total 1547→1552, toolkit-gap 1359→**1343** (R2 pilot + R3 touch-rule migrations — the ratchet is actively shrinking the gap). Param counts unchanged (232 / top-level 251-warn — the consolidation pass there is Phase-2's first bicep chore). |
 | 2 → 3 | 2026-07-23 | `--strict` → exit 0, 0 warnings. Re-baselined: route-total 1552→**1567** (Wave E added dataflow debug/schema/stats, copilot-quality run/search + search-probe, finops forecast/anomaly/breakdown/budgets, dax-query routes). param-cap 232 / toolkit-gap 1343 unchanged. **Aggregate FRESH0 caught 3 admin-merge-bypassed gaps** (the individual stacked PRs bypassed full vitest / the health-coverage + sql-quoting guards): `budgets-client`→`probe-arm-reader` health map, DAX `fold.ts` `''`-doubling→`escapeSqlLiteral`, and `admin-overview.test` tile count 14→16 (DIAG1 diagnostics + C4 finops) — all fixed in #2488 before this boundary. Also root-caused + fixed the DAX golden CSVs never committed (`.gitignore` `data/` drop) → #2479. |
+| 3 → 4 | 2026-07-23 | Aggregate FRESH0 on merged main (48a565e8) → **clean, no admin-merge-bypassed gaps** (both Phase-3 PRs #2491/#2493 passed full required CI incl. vitest node-20 + guardrails). Re-baselined: route-total 1567→**1571** (E6 `copilot-quality/tier`, A13 `spark/chaos`, I6 `workspaces/[id]/identity` routes). param-cap 232 / toolkit-gap 1343 unchanged. Two integration fixes at merge: env-sync allowlist for the A12 opt-in spark knobs (`LOOM_SPARK_VCORE_BUDGET`/`_TENANT_SESSION_MAX`), route-inventory regen. New guard **check-cloud-endpoint-literals** (X1) live in the lane at baseline 217/107. |
