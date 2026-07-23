@@ -58,7 +58,8 @@ import { clientFetch } from '@/lib/client-fetch';
  */
 
 import {
-  forwardRef, memo, useCallback, useEffect, useMemo, useRef, useState,
+  forwardRef, memo, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState,
+  type ForwardedRef,
   type ReactNode, type PointerEvent as ReactPointerEvent,
   type KeyboardEvent as ReactKeyboardEvent,
 } from 'react';
@@ -100,6 +101,9 @@ import {
 import { CanvasCollabLayer } from '@/lib/components/canvas/canvas-collab-layer';
 import { DatasetPicker } from '../dataset-picker';
 import { ExpressionField } from '../expression-field';
+import {
+  buildQuickActionTransform, type DataflowQuickAction, type MappingDataFlowDesignerHandle,
+} from './dataflow-quick-actions';
 import type { AdfDataset, AdfDataFlow } from '@/lib/azure/adf-client';
 
 // =============================================================================
@@ -665,7 +669,7 @@ function ConfigPanel({
         ))}
 
       {/* Data preview — HONEST gate (needs a live Spark debug cluster). Hidden
-          under U7 (the <DataflowDebugPanel/> owns preview for the whole flow). */}
+          under U7 (DataflowDebugPanel owns preview). */}
       {!hideDebugControls && def.needsDebugCluster && (
         <>
           <Divider />
@@ -942,15 +946,17 @@ export interface MappingDataFlowDesignerProps {
   /** Owning item-type slug for the collab routes (defaults to 'mapping-dataflow'). */
   itemType?: string;
   /**
-   * U7 — when true the designer's OWN Debug toggle + per-transform data-preview
-   * gate are hidden because the host mounts the richer <DataflowDebugPanel/>
-   * (held session + preview/inspect/stats) which owns the Debug experience.
-   * Keeps a single Debug surface (no duplicate toggle). Default false preserves
-   * the pre-U7 in-designer toggle + honest gate for hosts that don't mount the
-   * panel (and for the `u7-dataflow-debug` runtime flag OFF revert path).
+   * U7 — hide the designer's OWN Debug toggle + per-transform data-preview gate
+   * when the host mounts the richer <DataflowDebugPanel/> (single Debug surface,
+   * no duplicate toggle). Default false = the pre-U7 in-designer toggle (the
+   * `u7-dataflow-debug` flag-OFF revert path).
    */
   hideDebugControls?: boolean;
 }
+
+// U7 debug-grid quick-actions live in ./dataflow-quick-actions; re-export the
+// types so existing importers keep `from './mapping-dataflow-designer'`.
+export type { DataflowQuickAction, MappingDataFlowDesignerHandle } from './dataflow-quick-actions';
 
 /** Next free stream name for a transform type (source1, derive2, join1, …). */
 function nextName(type: string, existing: Set<string>): string {
@@ -965,7 +971,8 @@ function DesignerInner({
   name, initial, datasets = [], datasetGate, debugClusterAvailable = false,
   onStartDebugSession, onSave, onChange, readOnly = false,
   itemId, itemType = 'mapping-dataflow', hideDebugControls = false,
-}: MappingDataFlowDesignerProps) {
+  forwardedRef,
+}: MappingDataFlowDesignerProps & { forwardedRef?: ForwardedRef<MappingDataFlowDesignerHandle> }) {
   const s = useStyles();
   const rf = useReactFlow();
   const toasterId = useId('df-toaster');
@@ -1069,6 +1076,40 @@ function DesignerInner({
     addTransform(type, { fromName: addMenu.fromName, fromSlot: addMenu.fromSlot });
     setAddMenu({ open: false });
   }, [addTransform, addMenu.fromName, addMenu.fromSlot]);
+
+  // U7 quick-action: insert a real transform (Cast / Derived Column / Select)
+  // wired off the previewed stream, pre-configured to act on `column`. Draft
+  // only — published on Save. Returns the new node name (selected for refinement).
+  const insertQuickAction = useCallback((spec: DataflowQuickAction): string | null => {
+    if (readOnly) return null;
+    const built = buildQuickActionTransform(spec);
+    if (!built) return null;
+    const from = spec.fromStream;
+
+    let newName: string | null = null;
+    setGraph((g) => {
+      if (!g.transforms.some((t) => t.name === from)) return g; // stale stream
+      const names = new Set(g.transforms.map((t) => t.name));
+      newName = nextName(built.type, names);
+      const fromPos = positionsRef.current.get(from);
+      const pos = fromPos ? { x: fromPos.x + NODE_W + 80, y: fromPos.y } : { x: 80, y: 80 };
+      positionsRef.current.set(newName, pos);
+      const inst: DfTransformInstance = {
+        name: newName,
+        type: built.type,
+        settings: { outputStreamName: newName, ...built.settings },
+        position: pos,
+      };
+      return {
+        transforms: [...g.transforms, inst],
+        streams: [...g.streams, { from, to: newName, toSlot: 0, fromSlot: 0 }],
+      };
+    });
+    if (newName) setSelectedName(newName);
+    return newName;
+  }, [readOnly]);
+
+  useImperativeHandle(forwardedRef, () => ({ insertQuickAction }), [insertQuickAction]);
 
   const patchSetting = useCallback((nodeName: string, key: string, value: unknown) => {
     setGraph((g) => ({
@@ -1445,11 +1486,11 @@ function DesignerInner({
  * MappingDataFlowDesigner — wraps the inner designer in a ReactFlowProvider so
  * `useReactFlow()` works (matching the pipeline canvas pattern).
  */
-export const MappingDataFlowDesigner = forwardRef<unknown, MappingDataFlowDesignerProps>(
-  function MappingDataFlowDesigner(props, _ref) {
+export const MappingDataFlowDesigner = forwardRef<MappingDataFlowDesignerHandle, MappingDataFlowDesignerProps>(
+  function MappingDataFlowDesigner(props, ref) {
     return (
       <ReactFlowProvider>
-        <DesignerInner {...props} />
+        <DesignerInner {...props} forwardedRef={ref} />
       </ReactFlowProvider>
     );
   },
