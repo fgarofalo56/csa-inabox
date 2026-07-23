@@ -52,6 +52,8 @@ import type { CSSProperties, ReactElement } from 'react';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import { useBiBackend } from '@/lib/components/platform-config';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { ResizableCanvasRegion } from '@/lib/components/canvas/resizable-canvas';
+import { useRuntimeFlag } from '@/lib/components/ui/use-runtime-flag';
 import { ReportPowerBiCopilot } from '@/lib/components/report/report-powerbi-copilot';
 import { DataSourcePicker } from './report/data-source-picker';
 import { LoomItemSourcePicker } from './report/loom-item-source-picker';
@@ -197,6 +199,9 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
 
   const { powerBiEnabled: pbiPublishEnabled } = useBiBackend();
 
+  // U1 (G3, FLAG0) — default-ON kill-switch; OFF = pre-U1 fixed canvas, no roll.
+  const g3CanvasResize = useRuntimeFlag('u1-report-designer-g3');
+
   // ── derived (computed before the hook so they feed the ribbon config) ──────
   const page = pages[activePage];
   const canUndo = historyRef.current.past.length > 0;
@@ -271,6 +276,16 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
   });
 
   // ── free-form canvas helpers ───────────────────────────────────────────────
+  // U1 (G3) — ON: user-resizable canvas height via the shared
+  // ResizableCanvasRegion (drag grip + keyboard, persisted per surface;
+  // 560 = initial px, the primitive's documented band). OFF: identity wrapper.
+  const wrapCanvasRegion = (enabled: boolean) => (canvas: ReactElement): ReactElement =>
+    (enabled ? (
+      <ResizableCanvasRegion storageKey="report-designer-canvas" defaultPx={560}
+        ariaLabel="Resize the report canvas height. Use Arrow Up and Arrow Down keys.">
+        {canvas}
+      </ResizableCanvasRegion>
+    ) : canvas);
   const pageDimsActive = pageDims(page);
   const ffVisuals: Array<DVisual & { layout: AbsRect }> = effectiveVisuals.map((v, i) => ({
     ...v,
@@ -642,9 +657,14 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
         </div>
       )}
 
-      {!loading && page && nodeCount > 0 && (
+      {/* U1 (G3): flag ON = resizable canvas height (loom.canvasHeight.
+          report-designer-canvas); the absolute page tolerates variable height —
+          FreeFormCanvas fit-zoom rescales off its viewport ResizeObserver
+          (free-form-canvas-variable-height.test.tsx). OFF = pre-U1 layout. */}
+      {!loading && page && nodeCount > 0 && wrapCanvasRegion(g3CanvasResize)(
         <div ref={gridRef} style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
           <FreeFormCanvas<FFNode>
+            fitParent={g3CanvasResize}
             visuals={canvasNodes}
             page={{ width: pageDimsActive.width, height: pageDimsActive.height, background: canvasBg }}
             selectedId={selectedVisual}

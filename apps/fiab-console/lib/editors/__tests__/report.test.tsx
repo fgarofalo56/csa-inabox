@@ -15,9 +15,11 @@
  * from B-grade (functional, untested) to A-grade (functional + Vitest).
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { screen, waitFor } from '@testing-library/react';
 import { ReportEditor } from '../phase3-editors';
-import { makeItem, installFetchMock } from './test-helpers';
+// U1: the designer now reads the 'u1-report-designer-g3' runtime flag via
+// useQuery, so mounts need a QueryClientProvider (renderWithProviders).
+import { makeItem, installFetchMock, renderWithProviders } from './test-helpers';
 
 describe('ReportEditor', () => {
   beforeEach(() => { installFetchMock({}); });
@@ -26,7 +28,7 @@ describe('ReportEditor', () => {
   it('mounts and surfaces at least one ribbon button', async () => {
     let err: unknown = null;
     try {
-      render(<ReportEditor item={makeItem('report', 'Report')} id="new" />);
+      renderWithProviders(<ReportEditor item={makeItem('report', 'Report')} id="new" />);
       await waitFor(() => expect(screen.getByTestId('chrome')).toBeInTheDocument(), { timeout: 5000 });
       const ribbon = screen.getByTestId('ribbon');
       expect(ribbon.querySelectorAll('button').length).toBeGreaterThan(0);
@@ -37,7 +39,7 @@ describe('ReportEditor', () => {
   it('surfaces designer ribbon controls (Themes / Data source)', async () => {
     let err: unknown = null;
     try {
-      render(<ReportEditor item={makeItem('report', 'Report')} id="new" />);
+      renderWithProviders(<ReportEditor item={makeItem('report', 'Report')} id="new" />);
       await waitFor(() => expect(screen.getByTestId('chrome')).toBeInTheDocument(), { timeout: 5000 });
       const ribbon = screen.getByTestId('ribbon');
       const txt = ribbon.textContent || '';
