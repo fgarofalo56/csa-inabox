@@ -13,6 +13,17 @@ import { clientFetch } from '@/lib/client-fetch';
  * the editor surfaces it verbatim via MessageBar — no mocks.
  *
  * Backed by /api/loom/workspaces + /api/items/notebook/**.
+ *
+ * R9 decomposition (loom-next-level WS-E): the six self-contained explorer/
+ * compute dialogs were extracted to ./notebook-editor/dialogs/* (behavior
+ * preserved — closed-over state/handlers became fully-typed props; the shell
+ * keeps the owning state + handlers). This is the browser-safe first slice of
+ * the plan's dialog seam (docs/fiab/decomposition-plan.md §4 step 2); the
+ * explorer-tree / cell-list / compute-panel / run-hook pane carving (steps 3-5,
+ * heavy shared state) remains a browser-verified follow-up per the plan's G1
+ * stipulation.
+ *   ./notebook-editor/dialogs/folder-dialogs.tsx  — folder new/rename, folder delete, move, notebook rename
+ *   ./notebook-editor/dialogs/compute-dialogs.tsx — Configure compute, New compute instance (AML)
  */
 
 import type React from 'react';
@@ -31,7 +42,7 @@ import {
   History20Regular, ArrowUpload20Regular, Open20Regular, Library20Regular, Settings20Regular, Sparkle20Regular, BracesVariable20Regular,
   Copy20Regular, Info16Regular, ChevronDown20Regular, ChevronUp20Regular, Server20Regular,
   Notebook16Regular, Database16Regular, History16Regular, Database24Regular, Stop20Regular,
-  FolderAdd20Regular, Folder20Filled, FolderArrowRight20Regular, ArrowSort20Regular,
+  FolderAdd20Regular, Folder20Filled, ArrowSort20Regular,
   Flash16Regular, CalendarClock20Regular, CalendarClock16Regular,
 } from '@fluentui/react-icons';
 import { EmptyState } from '@/lib/components/empty-state';
@@ -81,7 +92,7 @@ import type {
   AmlScheduleRow, Props, ComputeTarget, WorkspaceType,
 } from './notebook-editor/types';
 import {
-  STARTER_PY, IDLE_TTL_OPTIONS, TTL_LABEL, AML_CI_VM_SIZES,
+  STARTER_PY, TTL_LABEL, AML_CI_VM_SIZES,
 } from './notebook-editor/constants';
 import {
   cellRoutesToSpark, starterCells, splitKeep, downloadJson, decodePy,
@@ -89,6 +100,12 @@ import {
 } from './notebook-editor/helpers';
 import { useWorkspaces, useComputes, useAmlConfigured, useMyCi } from './notebook-editor/hooks';
 import { DriverLogPane } from './notebook-editor/driver-log-pane';
+import {
+  NbFolderDialog, NbFolderDeleteDialog, NbMoveDialog, NbRenameDialog,
+} from './notebook-editor/dialogs/folder-dialogs';
+import {
+  ConfigureComputeDialog, NewComputeInstanceDialog,
+} from './notebook-editor/dialogs/compute-dialogs';
 
 export function NotebookEditor({ item, id }: Props) {
   const s = useStyles();
@@ -2431,77 +2448,30 @@ export function NotebookEditor({ item, id }: Props) {
           )}
 
           {/* New / rename notebook folder */}
-          <Dialog open={!!nbFolderDialog} onOpenChange={(_e, d) => { if (!d.open) setNbFolderDialog(null); }}>
-            <DialogSurface>
-              <DialogBody>
-                <DialogTitle>{nbFolderDialog?.mode === 'rename' ? 'Rename folder' : 'New folder'}</DialogTitle>
-                <DialogContent>
-                  <Field label="Folder name" required>
-                    <Input value={nbFolderName} onChange={(_e, d) => setNbFolderName(d.value)} placeholder="My folder"
-                      onKeyDown={(e) => { if (e.key === 'Enter') void submitNbFolderDialog(); }} autoFocus />
-                  </Field>
-                </DialogContent>
-                <DialogActions>
-                  <Button appearance="secondary" onClick={() => setNbFolderDialog(null)}>Cancel</Button>
-                  <Button appearance="primary" disabled={!nbFolderName.trim() || nbFolderBusy} onClick={() => void submitNbFolderDialog()}>
-                    {nbFolderDialog?.mode === 'rename' ? 'Rename' : 'Create'}
-                  </Button>
-                </DialogActions>
-              </DialogBody>
-            </DialogSurface>
-          </Dialog>
+          <NbFolderDialog
+            state={nbFolderDialog}
+            onClose={() => setNbFolderDialog(null)}
+            name={nbFolderName}
+            onNameChange={setNbFolderName}
+            busy={nbFolderBusy}
+            onSubmit={() => void submitNbFolderDialog()}
+          />
 
           {/* Confirm delete notebook folder (cascade reparents to root) */}
-          <Dialog open={!!nbConfirmFolderDelete} onOpenChange={(_e, d) => { if (!d.open) setNbConfirmFolderDelete(null); }}>
-            <DialogSurface>
-              <DialogBody>
-                <DialogTitle>Delete folder</DialogTitle>
-                <DialogContent>
-                  <Caption1>
-                    Delete folder &quot;{nbConfirmFolderDelete?.name}&quot;? Notebooks inside move to the workspace root;
-                    subfolders reparent to the root.
-                  </Caption1>
-                </DialogContent>
-                <DialogActions>
-                  <Button appearance="secondary" onClick={() => setNbConfirmFolderDelete(null)}>Cancel</Button>
-                  <Button appearance="primary" disabled={nbFolderBusy}
-                    onClick={async () => { if (nbConfirmFolderDelete) await deleteNbFolder(nbConfirmFolderDelete.id); setNbConfirmFolderDelete(null); }}>
-                    Delete
-                  </Button>
-                </DialogActions>
-              </DialogBody>
-            </DialogSurface>
-          </Dialog>
+          <NbFolderDeleteDialog
+            target={nbConfirmFolderDelete}
+            onClose={() => setNbConfirmFolderDelete(null)}
+            busy={nbFolderBusy}
+            onDelete={deleteNbFolder}
+          />
 
           {/* Move notebook to folder */}
-          <Dialog open={!!nbMoveTarget} onOpenChange={(_e, d) => { if (!d.open) setNbMoveTarget(null); }}>
-            <DialogSurface>
-              <DialogBody>
-                <DialogTitle>Move notebook</DialogTitle>
-                <DialogContent>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS }}>
-                    <Button appearance="subtle" icon={<FolderArrowRight20Regular />}
-                      onClick={async () => { if (nbMoveTarget) await moveNbToFolder(nbMoveTarget.id, null); setNbMoveTarget(null); }}>
-                      / Workspace root
-                    </Button>
-                    {folders.map((f) => (
-                      <Button key={f.id} appearance="subtle"
-                        icon={<Folder20Filled style={{ color: 'var(--loom-accent-gold)' }} />}
-                        onClick={async () => { if (nbMoveTarget) await moveNbToFolder(nbMoveTarget.id, f.id); setNbMoveTarget(null); }}>
-                        {f.name}
-                      </Button>
-                    ))}
-                    {folders.length === 0 && (
-                      <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>No folders yet. Create one first.</Caption1>
-                    )}
-                  </div>
-                </DialogContent>
-                <DialogActions>
-                  <Button appearance="secondary" onClick={() => setNbMoveTarget(null)}>Cancel</Button>
-                </DialogActions>
-              </DialogBody>
-            </DialogSurface>
-          </Dialog>
+          <NbMoveDialog
+            target={nbMoveTarget}
+            onClose={() => setNbMoveTarget(null)}
+            folders={folders}
+            onMove={moveNbToFolder}
+          />
 
           {/* Phase 2: Data items pane — Fabric "Explorer" tab equivalent */}
           {notebookId && (
@@ -2873,68 +2843,31 @@ export function NotebookEditor({ item, id }: Props) {
                 </DialogBody>
               </DialogSurface>
             </Dialog>
-            {/* Configure compute — idle auto-shutdown TTL for the selected CI.
-                Dropdown only (loom_no_freeform_config). POST .../idle-shutdown. */}
-            <Dialog open={configCiOpen} onOpenChange={(_, d) => setConfigCiOpen(d.open)}>
-              <DialogSurface>
-                <DialogBody>
-                  <DialogTitle>Configure compute</DialogTitle>
-                  <DialogContent>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS }}>
-                      <Caption1>
-                        Auto-stop {selectedCompute?.name ? <strong>{selectedCompute.name}</strong> : 'this Compute Instance'} after it sits idle, so it stops billing.
-                      </Caption1>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS }}>
-                        <Caption1>Idle shutdown</Caption1>
-                        <Select aria-label="Idle shutdown" value={configCiTtl} onChange={(_, d) => setConfigCiTtl(d.value)}>
-                          {IDLE_TTL_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-                        </Select>
-                      </div>
-                      {configCiErr && <MessageBar intent="error"><MessageBarBody>{configCiErr}</MessageBarBody></MessageBar>}
-                    </div>
-                  </DialogContent>
-                  <DialogActions>
-                    <Button appearance="secondary" onClick={() => setConfigCiOpen(false)}>Cancel</Button>
-                    <Button appearance="primary" disabled={configCiBusy} onClick={saveCiIdleShutdown}>{configCiBusy ? 'Saving…' : 'Save'}</Button>
-                  </DialogActions>
-                </DialogBody>
-              </DialogSurface>
-            </Dialog>
-            {/* New Compute Instance — name + VM size + idle TTL (dropdowns only).
-                POST /api/aml/compute-instances → createCI. */}
-            <Dialog open={newCiOpen} onOpenChange={(_, d) => setNewCiOpen(d.open)}>
-              <DialogSurface>
-                <DialogBody>
-                  <DialogTitle>New compute instance</DialogTitle>
-                  <DialogContent>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS }}>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS }}>
-                        <Caption1>Name</Caption1>
-                        <Input placeholder="my-compute" value={newCiName} onChange={(_, d) => setNewCiName(d.value)} style={{ width: '100%' }} />
-                        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>3-24 chars · start with a letter · letters, numbers, and hyphens.</Caption1>
-                      </div>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS }}>
-                        <Caption1>Virtual machine size</Caption1>
-                        <Select aria-label="VM size" value={newCiVmSize} onChange={(_, d) => setNewCiVmSize(d.value)}>
-                          {AML_CI_VM_SIZES.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-                        </Select>
-                      </div>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS }}>
-                        <Caption1>Idle shutdown</Caption1>
-                        <Select aria-label="Idle shutdown" value={newCiTtl} onChange={(_, d) => setNewCiTtl(d.value)}>
-                          {IDLE_TTL_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-                        </Select>
-                      </div>
-                      {newCiErr && <MessageBar intent="error"><MessageBarBody>{newCiErr}</MessageBarBody></MessageBar>}
-                    </div>
-                  </DialogContent>
-                  <DialogActions>
-                    <Button appearance="secondary" onClick={() => setNewCiOpen(false)}>Cancel</Button>
-                    <Button appearance="primary" disabled={newCiBusy || !newCiName.trim()} onClick={createCiInstance}>{newCiBusy ? 'Creating…' : 'Create'}</Button>
-                  </DialogActions>
-                </DialogBody>
-              </DialogSurface>
-            </Dialog>
+            {/* Configure compute — idle auto-shutdown TTL for the selected CI. */}
+            <ConfigureComputeDialog
+              open={configCiOpen}
+              onClose={() => setConfigCiOpen(false)}
+              selectedCompute={selectedCompute}
+              ttl={configCiTtl}
+              onTtlChange={setConfigCiTtl}
+              err={configCiErr}
+              busy={configCiBusy}
+              onSave={saveCiIdleShutdown}
+            />
+            {/* New Compute Instance — name + VM size + idle TTL (dropdowns only). */}
+            <NewComputeInstanceDialog
+              open={newCiOpen}
+              onClose={() => setNewCiOpen(false)}
+              name={newCiName}
+              onNameChange={setNewCiName}
+              vmSize={newCiVmSize}
+              onVmSizeChange={setNewCiVmSize}
+              ttl={newCiTtl}
+              onTtlChange={setNewCiTtl}
+              err={newCiErr}
+              busy={newCiBusy}
+              onCreate={createCiInstance}
+            />
             {/*
               Save lives in the ribbon (Home → Item → Save) now that the
               ribbon actions are wired. Avoid a second Save here so users
@@ -3445,25 +3378,14 @@ export function NotebookEditor({ item, id }: Props) {
           />
 
           {/* R4-NB-8 — Inline rename. */}
-          <Dialog open={renameOpen} onOpenChange={(_e, d) => { if (!d.open) setRenameOpen(false); }}>
-            <DialogSurface>
-              <DialogBody>
-                <DialogTitle>Rename notebook</DialogTitle>
-                <DialogContent>
-                  <Field label="Name" required>
-                    <Input value={renameValue} onChange={(_e, d) => setRenameValue(d.value)} autoFocus
-                      onKeyDown={(e) => { if (e.key === 'Enter') void submitRename(); }} />
-                  </Field>
-                </DialogContent>
-                <DialogActions>
-                  <Button appearance="secondary" onClick={() => setRenameOpen(false)}>Cancel</Button>
-                  <Button appearance="primary" disabled={!renameValue.trim() || renameBusy} onClick={() => void submitRename()}>
-                    {renameBusy ? 'Renaming…' : 'Rename'}
-                  </Button>
-                </DialogActions>
-              </DialogBody>
-            </DialogSurface>
-          </Dialog>
+          <NbRenameDialog
+            open={renameOpen}
+            onClose={() => setRenameOpen(false)}
+            value={renameValue}
+            onValueChange={setRenameValue}
+            busy={renameBusy}
+            onSubmit={() => void submitRename()}
+          />
 
           {/* Configure session dialog — sliders + numeric field, no JSON. */}
           <SessionConfigDialog
