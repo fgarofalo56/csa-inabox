@@ -34,19 +34,22 @@ vi.mock('@azure/identity', () => ({
 }));
 vi.mock('@/lib/azure/workspace-identity-client', () => ({
   createWorkspaceUami: vi.fn(),
-  ensureWorkspaceGrants: vi.fn(),
   workspaceIdentityConfigGate: vi.fn(() => null),
   workspaceIdentityMode: vi.fn(() => 'off'),
   workspaceIdentityProvisioningEnabled: vi.fn(() => false),
   workspaceUamiName: (id: string) => `uami-ws-${id}`,
 }));
+// I2 — the grant matrix moved into its own module (workspace-grants.ts).
+vi.mock('@/lib/azure/workspace-grants', () => ({
+  ensureWorkspaceGrants: vi.fn(),
+}));
 
 import {
   createWorkspaceUami,
-  ensureWorkspaceGrants,
   workspaceIdentityConfigGate,
   workspaceIdentityMode,
 } from '@/lib/azure/workspace-identity-client';
+import { ensureWorkspaceGrants } from '@/lib/azure/workspace-grants';
 import { applyWorkspaceBindings, applyWorkspaceIdentity } from '../workspace-bindings';
 import type { Workspace } from '@/lib/types/workspace';
 

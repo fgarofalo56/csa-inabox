@@ -17,7 +17,7 @@ vi.mock('@azure/identity', () => ({ ManagedIdentityCredential: MiCred }));
 import {
   workspaceUamiName, getWorkspaceCredential, getWorkspaceUami,
   workspaceIdentityMode, workspaceIdentityProvisioningEnabled,
-  roleAssignmentGuid, workspaceLakeGrantScope, ensureWorkspaceGrants,
+  roleAssignmentGuid,
   cascadeDeleteWorkspaceIdentity,
 } from '../workspace-identity-client';
 
@@ -103,55 +103,15 @@ describe('workspaceIdentityMode / workspaceIdentityProvisioningEnabled (I1 gate)
   });
 });
 
-// ── I1 — scoped grants (idempotent role-assignment PUTs) ────────────────────
+// ── I1 — deterministic role-assignment names (bicep guid() contract) ───────
+// (The grant MATRIX tests moved with the code to workspace-grants.test.ts — I2.)
 
-describe('ensureWorkspaceGrants (I1)', () => {
-  const uami = { principalId: 'PID-1' };
-
+describe('roleAssignmentGuid', () => {
   it('derives a deterministic guid-shaped assignment name (bicep guid() contract)', () => {
     const a = roleAssignmentGuid('/scope/a', 'p1', 'r1');
     expect(a).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
     expect(roleAssignmentGuid('/scope/a', 'p1', 'r1')).toBe(a); // stable
     expect(roleAssignmentGuid('/scope/b', 'p1', 'r1')).not.toBe(a);
-  });
-
-  it('scopes to the lake CONTAINER parsed from LOOM_BRONZE_URL', () => {
-    process.env.LOOM_BRONZE_URL = 'https://lakeacct.dfs.core.windows.net/bronze';
-    const r = workspaceLakeGrantScope({});
-    expect(r).toEqual({ scope: '/subscriptions/sub-1/resourceGroups/rg-loom/providers/Microsoft.Storage/storageAccounts/lakeacct/blobServices/default/containers/bronze' });
-  });
-
-  it('PUTs the Storage Blob Data Contributor assignment and records granted', async () => {
-    process.env.LOOM_BRONZE_URL = 'https://lakeacct.dfs.core.windows.net/bronze';
-    const puts: string[] = [];
-    mockFetch((url, init) => {
-      if (init?.method === 'PUT') { puts.push(url); return { properties: {} }; }
-      return {};
-    });
-    const grants = await ensureWorkspaceGrants({ id: 'ws1' }, uami);
-    expect(grants).toHaveLength(1);
-    expect(grants[0].status).toBe('granted');
-    expect(grants[0].roleDefinitionId).toBe('ba92f5b4-2d11-453d-a403-e96b0029c9fe');
-    expect(puts[0]).toContain('/providers/Microsoft.Authorization/roleAssignments/');
-    expect(puts[0]).toContain('containers/bronze');
-  });
-
-  it('second run is a no-op: 409 RoleAssignmentExists records exists, no throw', async () => {
-    process.env.LOOM_BRONZE_URL = 'https://lakeacct.dfs.core.windows.net/bronze';
-    mockFetch((_url, init) => (init?.method === 'PUT'
-      ? { _status: 409, _body: { error: { code: 'RoleAssignmentExists', message: 'The role assignment already exists.' } } }
-      : {}));
-    const grants = await ensureWorkspaceGrants({ id: 'ws1' }, uami);
-    expect(grants[0].status).toBe('exists');
-    expect(grants[0].error).toBeUndefined();
-  });
-
-  it('records an honest failed grant when no lake scope is resolvable', async () => {
-    const f = vi.fn(); global.fetch = f as any;
-    const grants = await ensureWorkspaceGrants({ id: 'ws1' }, uami);
-    expect(grants[0].status).toBe('failed');
-    expect(grants[0].error).toContain('LOOM_BRONZE_URL');
-    expect(f).not.toHaveBeenCalled(); // no blind ARM writes
   });
 });
 

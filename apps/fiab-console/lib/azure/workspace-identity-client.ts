@@ -23,17 +23,12 @@ import { createHash } from 'node:crypto';
 import { uamiArmCredential } from '@/lib/azure/arm-credential';
 import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import { armBase, armScope } from '@/lib/azure/cloud-endpoints';
-import type { WorkspaceGrantStatus } from '@/lib/types/workspace';
 
 const ARM_SCOPE = armScope();
 // Stable GA api-version for Microsoft.ManagedIdentity/userAssignedIdentities.
 const MI_API = '2024-11-30';
 // Stable GA api-version for Microsoft.Authorization/roleAssignments.
 const RA_API = '2022-04-01';
-// Storage Blob Data Contributor — the SAME role + GUID workspace-identity.bicep
-// grants, and the ONLY role family the Console UAMI's constrained
-// RBAC-Administrator (storage-rbac-admin.bicep ABAC condition) may delegate.
-const STORAGE_BLOB_DATA_CONTRIBUTOR = 'ba92f5b4-2d11-453d-a403-e96b0029c9fe';
 
 export class WorkspaceIdentityError extends Error {
   status: number;
@@ -88,6 +83,16 @@ export function workspaceIdentityConfigGate(): { missing: string } | null {
     return { missing: 'LOOM_WS_IDENTITY_RG (or LOOM_DLZ_RG)' };
   }
   return null;
+}
+
+/**
+ * The workspace-identity ARM coordinates (sub + RG hosting the uami-ws-* pool).
+ * Exported for workspace-grants (I2) so both modules resolve the SAME config.
+ * Throws WorkspaceIdentityError(503) when unconfigured — callers gate first via
+ * {@link workspaceIdentityConfigGate}.
+ */
+export function workspaceIdentityArmConfig(): { subscriptionId: string; resourceGroup: string } {
+  return armConfig();
 }
 
 function armConfig(): { subscriptionId: string; resourceGroup: string } {
@@ -155,6 +160,19 @@ async function queuedArmWrite(url: string, init: RequestInit): Promise<Response>
   return next;
 }
 
+/** Exported ARM READ for workspace-grants (I2) — reads do NOT ride the write
+ * queue (only writes count against the throttle buckets). */
+export async function workspaceIdentityArmRead(url: string): Promise<Response> {
+  return callArm(url);
+}
+
+/** Exported ARM WRITE for workspace-grants (I2) — every grant PUT/DELETE rides
+ * the SAME serialized queue as the UAMI writes, so the two modules share one
+ * throttle budget (UAMI 2-req/s/sub + the ~200-token ARM write bucket). */
+export async function workspaceIdentityArmWrite(url: string, init: RequestInit): Promise<Response> {
+  return queuedArmWrite(url, init);
+}
+
 function shape(json: any): WorkspaceUami {
   return {
     id: json?.id ?? '',
@@ -210,7 +228,10 @@ export async function getWorkspaceCredential(workspaceId: string) {
   return uamiArmCredential();
 }
 
-// ── I1 — scoped role grants for the workspace UAMI ──────────────────────────
+// ── I1/I2 — scoped role grants for the workspace UAMI ───────────────────────
+// The grant MATRIX (ADLS container / Cosmos data-plane / Synapse SQL / ADX db /
+// Event Hubs / KV / Monitor) lives in lib/azure/workspace-grants.ts (I2). Only
+// the deterministic-name helper stays here (shared with the delete cascade).
 
 /** Deterministic role-assignment GUID from (scope, principal, role) — the SAME
  * idempotency contract as bicep's guid(): re-running the provision PUTs the
@@ -219,80 +240,6 @@ export async function getWorkspaceCredential(workspaceId: string) {
 export function roleAssignmentGuid(scope: string, principalId: string, roleDefinitionId: string): string {
   const h = createHash('sha256').update(`${scope}|${principalId}|${roleDefinitionId}`).digest('hex');
   return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20, 32)}`;
-}
-
-/**
- * Resolve the ADLS lake scope the workspace UAMI gets Storage Blob Data
- * Contributor on — the tightest scope resolvable from config, mirroring
- * workspace-identity.bicep (which grants on ONE lake container):
- *   1. an explicit per-workspace storage binding (ws.storageAccountId) → account scope;
- *   2. LOOM_BRONZE_URL / LOOM_LANDING_URL (https://<acct>.dfs...../<container>)
- *      → container scope on the DLZ lake account;
- *   3. LOOM_ADLS_ACCOUNT → account scope.
- * Null (with the missing var named) when none resolves.
- */
-export function workspaceLakeGrantScope(ws: { storageAccountId?: string }): { scope: string } | { missing: string } {
-  if (ws.storageAccountId) return { scope: ws.storageAccountId };
-  const { subscriptionId, resourceGroup } = armConfig();
-  const lakeUrl = process.env.LOOM_BRONZE_URL || process.env.LOOM_LANDING_URL || '';
-  const m = lakeUrl.match(/^https:\/\/([^./]+)\.dfs\.[^/]+\/([^/?#]+)/i);
-  const accountId = (name: string) =>
-    `/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.Storage/storageAccounts/${name}`;
-  if (m) return { scope: `${accountId(m[1])}/blobServices/default/containers/${m[2]}` };
-  const account = process.env.LOOM_ADLS_ACCOUNT || '';
-  if (account) return { scope: accountId(account) };
-  return { missing: 'LOOM_BRONZE_URL (or LOOM_LANDING_URL / LOOM_ADLS_ACCOUNT)' };
-}
-
-/**
- * Idempotently PUT the workspace UAMI's scoped role assignments (I1 — the ADLS
- * lake grant; the full per-backend matrix lands with I2). Deterministic guid()
- * names + 409 RoleAssignmentExists tolerated, so a re-run is a no-op. Writes go
- * through the serialized ARM write queue (both throttle buckets — see above).
- * NEVER throws — every outcome is recorded per grant.
- */
-export async function ensureWorkspaceGrants(
-  ws: { id: string; storageAccountId?: string },
-  uami: Pick<WorkspaceUami, 'principalId'>,
-): Promise<WorkspaceGrantStatus[]> {
-  const roleDefinitionId = STORAGE_BLOB_DATA_CONTRIBUTOR;
-  let scope = '';
-  try {
-    const resolved = workspaceLakeGrantScope(ws);
-    if ('missing' in resolved) {
-      return [{
-        backend: 'adls-lake', roleDefinitionId, scope: '', status: 'failed',
-        error: `Cannot resolve the lake grant scope — set ${resolved.missing}.`,
-      }];
-    }
-    scope = resolved.scope;
-    const { subscriptionId } = armConfig();
-    const name = roleAssignmentGuid(scope, uami.principalId, roleDefinitionId);
-    const url = `${armBase()}${scope}/providers/Microsoft.Authorization/roleAssignments/${name}?api-version=${RA_API}`;
-    const r = await queuedArmWrite(url, {
-      method: 'PUT',
-      body: JSON.stringify({
-        properties: {
-          roleDefinitionId: `/subscriptions/${subscriptionId}/providers/Microsoft.Authorization/roleDefinitions/${roleDefinitionId}`,
-          principalId: uami.principalId,
-          principalType: 'ServicePrincipal',
-        },
-      }),
-    });
-    if (r.ok) return [{ backend: 'adls-lake', roleDefinitionId, scope, status: 'granted' }];
-    const body = await r.text();
-    if (r.status === 409 && /RoleAssignmentExists|already exists/i.test(body)) {
-      return [{ backend: 'adls-lake', roleDefinitionId, scope, status: 'exists' }];
-    }
-    return [{
-      backend: 'adls-lake', roleDefinitionId, scope, status: 'failed',
-      error: `ARM ${r.status}: ${body.slice(0, 300)}${r.status === 403
-        ? ' (the Console UAMI needs the constrained RBAC-Administrator grant from landing-zone/storage-rbac-admin.bicep on the lake account)'
-        : ''}`,
-    }];
-  } catch (e: any) {
-    return [{ backend: 'adls-lake', roleDefinitionId, scope, status: 'failed', error: e?.message || String(e) }];
-  }
 }
 
 // ── I1 — delete cascade (workspace delete → UAMI + role assignments) ────────

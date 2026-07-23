@@ -25,11 +25,11 @@ import { marketplaceListingsContainer } from './cosmos-client';
 import { armBase, armScope } from './cloud-endpoints';
 import {
   createWorkspaceUami,
-  ensureWorkspaceGrants,
   workspaceIdentityConfigGate,
   workspaceIdentityMode,
   workspaceUamiName,
 } from './workspace-identity-client';
+import { ensureWorkspaceGrants } from './workspace-grants';
 
 export { workspaceIdentityProvisioningEnabled } from './workspace-identity-client';
 
