@@ -29,6 +29,7 @@ import {
   DismissCircle20Filled,
 } from '@fluentui/react-icons';
 import { PageShell } from '@/lib/components/page-shell';
+import { ResizableCanvasRegion } from '@/lib/components/canvas/resizable-canvas';
 import { SplitPane } from '@/lib/components/shared/split-pane';
 import { EmptyState } from '@/lib/components/empty-state';
 import {
@@ -46,7 +47,9 @@ const useStyles = makeStyles({
     border: `${tokens.strokeWidthThin} solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground2,
   },
-  split: { height: '68vh', minHeight: '0', border: `${tokens.strokeWidthThin} solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge, overflow: 'hidden' },
+  // Height comes from the surrounding ResizableCanvasRegion (G3 user-set,
+  // persisted under loom.canvasHeight.agent-mesh) — was a fixed 68vh.
+  split: { height: '100%', minHeight: '0', border: `${tokens.strokeWidthThin} solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge, overflow: 'hidden' },
   pane: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, padding: tokens.spacingHorizontalL, overflowY: 'auto', minWidth: '0', height: '100%' },
   paneHeader: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: tokens.spacingHorizontalM },
   agentCard: {
@@ -189,12 +192,14 @@ export function AgentMeshConsole() {
       </TabList>
 
       {tab === 'mesh' && (
-        <div className={styles.split}>
-          <SplitPane direction="horizontal" defaultSize="40%" minSize={260} storageKey="mesh-registry-run" dividerLabel="Resize registry / run">
-            {renderRegistry()}
-            {renderRunPane()}
-          </SplitPane>
-        </div>
+        <ResizableCanvasRegion storageKey="agent-mesh" defaultPx={600} minPx={320} ariaLabel="Resize mesh registry and run pane height">
+          <div className={styles.split}>
+            <SplitPane direction="horizontal" defaultSize="40%" minSize={260} storageKey="mesh-registry-run" dividerLabel="Resize registry / run">
+              {renderRegistry()}
+              {renderRunPane()}
+            </SplitPane>
+          </div>
+        </ResizableCanvasRegion>
       )}
 
       {tab === 'catalog' && renderCatalog()}

@@ -38,6 +38,7 @@ import {
 import { ItemEditorChrome } from '../item-editor-chrome';
 import { NewItemCreateGate } from '../new-item-gate';
 import { EmptyState } from '@/lib/components/empty-state';
+import { ResizableCanvasRegion } from '@/lib/components/canvas/resizable-canvas';
 import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
 import { ToolbarCrossLinks } from '@/lib/components/shared/item-tab-strip';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
@@ -1302,8 +1303,12 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
       )}
 
       {/* Tile grid — 12-col CSS grid; each tile spans its w/h. Tiles drag-reorder
-          by the header grip and resize by the corner grip (ux-fabric-a W1). */}
-      <div ref={tileGridRef} style={{ display: 'grid', gridTemplateColumns: 'repeat(12, 1fr)', gap: tokens.spacingVerticalM, gridAutoRows: 'minmax(120px, auto)' }}>
+          by the header grip and resize by the corner grip (ux-fabric-a W1).
+          The grid REGION height is user-resizable (G3, persisted under
+          loom.canvasHeight.kql-dashboard-grid); tiles keep their Fabric-RTD
+          per-tile corner resize and the grid scrolls inside the region. */}
+      <ResizableCanvasRegion storageKey="kql-dashboard-grid" defaultPx={560} minPx={280} ariaLabel="Resize dashboard tile grid height">
+        <div ref={tileGridRef} style={{ display: 'grid', gridTemplateColumns: 'repeat(12, 1fr)', gap: tokens.spacingVerticalM, gridAutoRows: 'minmax(120px, auto)', alignContent: 'start', flex: 1, minHeight: 0, overflowY: 'auto' }}>
         {tiles.map((t, i) => {
           const span = Math.max(1, Math.min(12, t.w || 4));
           const rowSpan = Math.max(1, Math.min(8, t.h || 2));
@@ -1470,6 +1475,7 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
           </div>
         )}
       </div>
+      </ResizableCanvasRegion>
 
       {/* WS-5.4 — NL "Ask" affordance: ask questions about the dashboard data.
           Backed by /api/ask → chatGrounded against the ADX-native kql source. */}
