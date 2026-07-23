@@ -216,6 +216,102 @@ export function ReceiptPanel({ receipt, defaultExpanded = false }: ReceiptPanelP
             )}
           </div>
 
+          {/* N11 — graph-path citations (the exact ontology traversal) */}
+          {!!receipt.graphPathCitations?.length && (
+            <div className={s.section} data-testid="receipt-graph-paths">
+              <span className={s.sectionTitle}>
+                <Flowchart16Regular aria-hidden />Graph paths ({receipt.graphPathCitations.length})
+              </span>
+              <ol className={s.planList}>
+                {receipt.graphPathCitations.map((p, i) => (
+                  <li key={p.id || i} className={s.planItem}>
+                    <span style={{ fontFamily: tokens.fontFamilyMonospace }}>{p.text}</span>
+                    <span style={{ display: 'inline-flex', flexWrap: 'wrap', gap: tokens.spacingHorizontalXXS, marginLeft: tokens.spacingHorizontalXS, minWidth: 0 }}>
+                      <Badge size="extra-small" appearance="outline" color="informative">
+                        {p.hops} hop{p.hops === 1 ? '' : 's'}
+                      </Badge>
+                      {p.communityId && (
+                        <Badge size="extra-small" appearance="tint" color="subtle">{p.communityId}</Badge>
+                      )}
+                    </span>
+                  </li>
+                ))}
+              </ol>
+              <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                Traversed on the authored ontology (Apache AGE on in-VNet PostgreSQL — no external egress).
+              </Caption1>
+            </div>
+          )}
+
+          {/* N12 — self-healing repair attempts */}
+          {!!receipt.repairAttempts?.length && (
+            <div className={s.section} data-testid="receipt-repair-attempts">
+              <span className={s.sectionTitle}>
+                <Wrench16Regular aria-hidden />Repair attempts ({receipt.repairAttempts.length})
+              </span>
+              {receipt.repairAttempts.map((r, i) => (
+                <div key={i} className={s.query}>
+                  <div className={s.queryHead}>
+                    <Badge
+                      size="extra-small"
+                      appearance="tint"
+                      color={r.outcome === 'repaired' ? 'success' : r.outcome === 'abandoned' ? 'danger' : 'warning'}
+                    >
+                      step {r.step} · attempt {r.attempt} · {r.outcome}
+                    </Badge>
+                    <span className={s.queryMeta}>
+                      {typeof r.rowCount === 'number' && (
+                        <Badge size="extra-small" appearance="outline" color="informative">
+                          {r.rowCount.toLocaleString()} row{r.rowCount === 1 ? '' : 's'}
+                        </Badge>
+                      )}
+                      {r.metricConsulted && (
+                        <Badge size="extra-small" appearance="outline" color="subtle" icon={<DataTrending16Regular />}>
+                          {r.metricConsulted}
+                        </Badge>
+                      )}
+                    </span>
+                  </div>
+                  <Caption1 style={{ color: tokens.colorNeutralForeground2 }}>{r.reason}</Caption1>
+                  {r.error && (
+                    <Caption1 style={{ color: tokens.colorPaletteRedForeground1 }}>— {r.error}</Caption1>
+                  )}
+                  {r.rewrittenQuery && <pre className={s.code}>{r.rewrittenQuery}</pre>}
+                  {r.explainSummary && (
+                    <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>EXPLAIN: {r.explainSummary}</Caption1>
+                  )}
+                  {r.explainError && (
+                    <Caption1 style={{ color: tokens.colorPaletteYellowForeground1 }}>
+                      EXPLAIN rejected the rewrite (not executed): {r.explainError}
+                    </Caption1>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* N12 — plausibility: does the answer follow from the real rows? */}
+          {receipt.plausibility && (
+            <div className={s.section} data-testid="receipt-plausibility">
+              <span className={s.sectionTitle}>
+                {receipt.plausibility.plausible
+                  ? <CheckmarkCircle16Regular aria-hidden className={s.ok} />
+                  : <Warning16Regular aria-hidden />}
+                Plausibility
+              </span>
+              <Caption1 style={{ color: tokens.colorNeutralForeground2 }}>
+                {receipt.plausibility.reason}
+              </Caption1>
+              {!!receipt.plausibility.unsupportedFigures?.length && (
+                <div className={s.chipRow}>
+                  {receipt.plausibility.unsupportedFigures.map((f, i) => (
+                    <Badge key={i} size="extra-small" appearance="outline" color="danger">unsupported: {f}</Badge>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Graph paths + metrics */}
           {(receipt.graphPaths > 0 || receipt.metrics.length > 0) && (
             <div className={s.section}>

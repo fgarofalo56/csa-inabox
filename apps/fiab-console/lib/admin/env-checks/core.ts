@@ -241,6 +241,9 @@ export const VALUE_HINT: Record<string, string> = {
   LOOM_POSTGRES_AAD_USER: '<entra-admin-login-for-postgres-flexible-server>',
   LOOM_PGVECTOR_HOST: '<postgres-flexible-server>.postgres.database.azure.com',
   LOOM_WEAVE_PG_FQDN: '<postgres-flexible-server>.postgres.database.azure.com',
+  // N11 / N12 tuning knobs — unset is the fully-functional default (2 / 2).
+  LOOM_GRAPHRAG_MAX_HOPS: '2   (1–4; ontology traversal depth for GraphRAG grounding)',
+  LOOM_NL2SQL_REPAIR_MAX_ATTEMPTS: '2   (0–5; 0 disables the self-healing repair loop)',
   LOOM_DBT_RUNNER_URL: 'https://loom-dbt-runner.<aca-env-domain>',
   // L2 — Synapse-Spark OpenLineage ingest (rev-2 security redesign): per-pool
   // Entra bearer (default) or per-workspace minted token; NEVER one global

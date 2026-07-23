@@ -12,7 +12,12 @@ const resolveTarget = vi.fn().mockResolvedValue({
   endpoint: 'https://acct.openai.azure.com', deployment: 'gpt-4o', apiVersion: '2024-10-21',
 });
 vi.mock('../copilot-orchestrator', () => ({ resolveAoaiTarget: () => resolveTarget() }));
-vi.mock('../semantic-contract', () => ({ evaluateContract: vi.fn().mockResolvedValue({ mode: 'none' }) }));
+vi.mock('../semantic-contract', () => ({
+  evaluateContract: vi.fn().mockResolvedValue({ mode: 'none' }),
+  // N12's repair sub-loop re-consults the metric registry; mocked so the import
+  // graph stays Cosmos-free (these tests never take a repair path).
+  matchMetric: vi.fn().mockResolvedValue(null),
+}));
 
 import { runReasoningAgent } from '../data-agent-reasoning';
 import { chatGrounded, aoaiChatTurn } from '../data-agent-client';
