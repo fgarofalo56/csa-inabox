@@ -37,12 +37,7 @@
  * GCC-High `.us` / IL5). IL5: keep LOOM_ALERT_WEBHOOK_URL unset (in-tenant
  * sinks only, per the V1 IL5 note) — the action-group leg is fully in-boundary.
  */
-import {
-  ChainedTokenCredential,
-  DefaultAzureCredential,
-  ManagedIdentityCredential,
-} from '@azure/identity';
-import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
+import { uamiArmCredential } from '@/lib/azure/arm-credential';
 import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import { armBase, armScope } from './cloud-endpoints';
 
@@ -87,19 +82,11 @@ export interface AlertDispatchDeps {
 
 const ACTION_GROUPS_API = '2023-01-01';
 
-// Same credential chain as monitor-client (ACA MSI quirk → UAMI → default).
+// Admin/ARM-plane client → the shared UAMI chain (I5 credential-factory
+// carve-out: pure ARM-plane modules use uamiArmCredential, not per-workspace).
 let cachedCredential: { getToken(scope: string): Promise<{ token?: string } | null> } | null = null;
 function credential() {
-  if (!cachedCredential) {
-    const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
-    cachedCredential = uamiClientId
-      ? new ChainedTokenCredential(
-          new AcaManagedIdentityCredential(),
-          new ManagedIdentityCredential({ clientId: uamiClientId }),
-          new DefaultAzureCredential(),
-        )
-      : new DefaultAzureCredential();
-  }
+  if (!cachedCredential) cachedCredential = uamiArmCredential();
   return cachedCredential;
 }
 
