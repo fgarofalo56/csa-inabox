@@ -20,6 +20,7 @@
  */
 import { parseDax, DaxParseError } from './parser';
 import { DaxLexError } from './tokenizer';
+import { escapeSqlLiteral } from '@/lib/sql/quoting';
 import type {
   Expr, Query, FunctionCall, ColumnRef, Binary, Unary,
 } from './ast';
@@ -97,7 +98,7 @@ function foldScalar(e: Expr, prefix?: string): ScalarFold {
 
   switch (e.type) {
     case 'NumberLiteral': return { sql: String(e.value) };
-    case 'StringLiteral': return { sql: `'${e.value.replace(/'/g, "''")}'` };
+    case 'StringLiteral': return { sql: `'${escapeSqlLiteral(e.value)}'` };
     case 'BooleanLiteral': return { sql: e.value ? '1' : '0' };
     case 'BlankLiteral': return { sql: 'NULL' };
     case 'ColumnRef': return { sql: col(e), table: e.table };

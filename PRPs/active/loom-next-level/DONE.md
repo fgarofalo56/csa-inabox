@@ -115,6 +115,34 @@ live `build-marker.txt` = `sha=f2beaf07…` (image built first-try).
   the >60s cold compute — the C4 finops page's polling UX absorbs this;
   full-body receipt appends at the next warm-path check).
 
+## Phase 2 — Wave E COMPLETE (build set, 2026-07-23)
+
+| Item | PR | Receipt summary |
+|------|----|-----------------|
+| R8 — (ratchet/route toolkit) | merged | Landed in the Wave-E merge train; tsc + route-guards + toolkit ratchet green. |
+| R9 — (ratchet/route toolkit) | merged | Landed in the Wave-E merge train; guards green. |
+| A6 — report small-multiples grid | merged | Format-pane columns/shared-Y + Facet-by picker wired to the trellis renderer; FLAG0 `a6-small-multiples-grid`. |
+| A7 — report designer | merged | Wave-E build set; tsc + tests green. |
+| A8 — report map basemap-free fallback (Gov) | merged | Offline GeoJsonMap SVG choropleth on the Azure-Maps honest gate; FLAG0 `a8-map-shape-fallback`. |
+| L3 — lineage extractor | merged | In-VNet lineage extraction module wired into admin-plane orchestrator. |
+| L4 — lineage | merged | Wave-E build set; guards green. |
+| U7 — mapping-dataflow Debug (preview/inspect/stats/quick-actions) | #2478 (+#2480) | ADF-Studio-parity Debug: held session lifecycle + per-transform Data Preview / Inspect (schema+drift) / Statistics tabs + preview-grid quick-actions; 5 quick-action tests; FLAG0 `u7-dataflow-debug`. 3-commit stack (PR-1/2/3) collapsed onto main. |
+| SLO1 — Health hub SLO & error-budget tab | merged | SLI objective vs 28-day attainment vs burn; P2 burn-rate dispatch; raw-px fixes; FLAG0 `slo1-slo-tab`. |
+| C3 — cost-anomaly monitor | #2471 | In-VNet ACA Job + shared detector + Monitor alerts (Azure-native FinOps, no Fabric). |
+| DIAG1 — one-click diagnostics/support bundle | #2474 | `/admin` support-bundle (blocked-gate census + in-process probes); overview `diagnostics` tile. |
+| E5 — /admin/copilot-quality page | #2469 | Per-surface Copilot eval scorecards (hit-rate/grounding/pass-rate), run-history, floor status, Run-now; copilot-evaluator-client health-mapped; FLAG0 `e5-copilot-quality-page`. |
+| A9 — report matrix conditional formatting | #2476 | `matrixCellPaint` paints pivoted matrix value cells with the same CF rules as the table (bg/font/icon/data-bar); 17-case golden painter harness; FLAG0 `a9-matrix-conditional-format`. |
+| SRCH1 — federated-search relevance evals | #2481 | Search hit-rate@k golden set + `/admin/copilot-quality` Search tab + search-probe route + eval-probe `evalProbeOid` wiring; 19 copilot-quality + 39 evaluator-core tests. |
+| C4 — /admin/finops hub | #2482 | FinOps cockpit: forecast chart + cost-anomaly feed/rules editor + per-scope breakdown + audited Azure **Budgets CRUD** (`budgets-client`, 10 tests); overview `finops` tile; FLAG0 `c4-finops-hub`. (+ health-coverage map fix #2488.) |
+| A5+A1+A2+A3 — DAX engine (harness + parser + fold + iterators) | #2479 | Real DAX tokenizer + Pratt parser → AST, AST→SQL fold engine, iterators/RANKX, and the A5 golden **numeric** harness. **Root-cause fix:** the golden CSVs were silently dropped by `.gitignore` `data/` — reconstructed `sales/customer/date.csv` from model.json + expected-results.json (all 30 golden cross-checks + 122 DAX tests green) and added a gitignore negation. FLAG0 `a3-dax-fold-engine`. Stack collapsed onto main; #2462/2470/2475 closed as included. |
+
+**Merge-train note:** every Wave-E PR integrated with `tsc -p tsconfig.build.json`
++ its targeted vitest + route-guards/env-sync/health-coverage before admin-merge.
+Stacked PRs whose base rode a now-merged sibling were landed via
+`git rebase --onto origin/main <old-base-sha> <branch>` (drops the already-merged
+base commit); runtime-flags array + route-inventory conflicts resolved per the
+recorded recipes.
+
 ## Phase boundaries (FRESH0 runs)
 
 | Boundary | Date | Result |
