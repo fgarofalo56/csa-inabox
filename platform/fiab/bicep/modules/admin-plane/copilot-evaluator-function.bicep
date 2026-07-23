@@ -127,10 +127,20 @@ resource sa 'Microsoft.Storage/storageAccounts@2024-01-01' = {
     allowSharedKeyAccess: false
     minimumTlsVersion: 'TLS1_2'
     supportsHttpsTrafficOnly: true
+    // Estate policy seals new storage (publicNetworkAccess=Disabled); the Y1
+    // Functions runtime reaches host storage via the trusted-services bypass —
+    // without it the host dies the way func-rptsub's did (AAD-only + key string).
+    networkAcls: {
+      bypass: 'AzureServices'
+      defaultAction: 'Allow'
+    }
   }
 }
 
-resource plan 'Microsoft.Web/serverfarms@2024-04-01' = {
+@description('Existing Linux Y1 (Dynamic) plan resource id to REUSE instead of creating a new one — the admin RG Linux-consumption webspace rejects additional plans (ExtendedCode 59324) once saturated; Y1 plans host multiple Function apps. Empty = create a dedicated plan (fresh RGs).')
+param existingPlanId string = ''
+
+resource plan 'Microsoft.Web/serverfarms@2024-04-01' = if (empty(existingPlanId)) {
   name: planName
   location: location
   tags: programTags
@@ -138,6 +148,8 @@ resource plan 'Microsoft.Web/serverfarms@2024-04-01' = {
   kind: 'functionapp,linux'
   properties: { reserved: true }
 }
+
+var effectivePlanId = empty(existingPlanId) ? plan.id : existingPlanId
 
 var baseAppSettings = [
   // Identity-based runtime storage — no key in app settings (Function standard).
@@ -170,7 +182,7 @@ resource site 'Microsoft.Web/sites@2024-04-01' = {
   kind: 'functionapp,linux'
   identity: { type: 'SystemAssigned' }
   properties: {
-    serverFarmId: plan.id
+    serverFarmId: effectivePlanId
     httpsOnly: true
     siteConfig: {
       linuxFxVersion: 'Node|20'

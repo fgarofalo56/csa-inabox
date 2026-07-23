@@ -106,6 +106,13 @@ resource sa 'Microsoft.Storage/storageAccounts@2024-01-01' = {
     allowSharedKeyAccess: true // Functions runtime host requirements; app auth is identity-based (no key in app settings)
     minimumTlsVersion: 'TLS1_2'
     supportsHttpsTrafficOnly: true
+    // Estate policy seals new storage (publicNetworkAccess=Disabled); the Y1
+    // Functions runtime reaches host storage via the trusted-services bypass —
+    // without it the host dies the way func-rptsub's did (AAD-only + key string).
+    networkAcls: {
+      bypass: 'AzureServices'
+      defaultAction: 'Allow'
+    }
   }
 }
 
@@ -120,7 +127,10 @@ resource stateContainer 'Microsoft.Storage/storageAccounts/blobServices/containe
   properties: { publicAccess: 'None' }
 }
 
-resource plan 'Microsoft.Web/serverfarms@2024-04-01' = {
+@description('Existing Linux Y1 (Dynamic) plan resource id to REUSE instead of creating a new one. The admin RG Linux-consumption webspace hit "Requested features Dynamic SKU, Linux Worker not available in resource group" (ExtendedCode 59324) once it held 5 plans — Y1 plans host multiple Function apps, so reuse is both the workaround and the cheaper posture. Empty = create a dedicated plan (fresh RGs).')
+param existingPlanId string = ''
+
+resource plan 'Microsoft.Web/serverfarms@2024-04-01' = if (empty(existingPlanId)) {
   name: planName
   location: location
   tags: programTags
@@ -133,6 +143,8 @@ resource plan 'Microsoft.Web/serverfarms@2024-04-01' = {
     reserved: true
   }
 }
+
+var effectivePlanId = empty(existingPlanId) ? plan.id : existingPlanId
 
 var baseAppSettings = [
   // Identity-based host storage — NO account key anywhere in app settings.
@@ -165,7 +177,7 @@ resource site 'Microsoft.Web/sites@2024-04-01' = {
   kind: 'functionapp,linux'
   identity: { type: 'SystemAssigned' }
   properties: {
-    serverFarmId: plan.id
+    serverFarmId: effectivePlanId
     httpsOnly: true
     siteConfig: {
       linuxFxVersion: 'Node|20'
