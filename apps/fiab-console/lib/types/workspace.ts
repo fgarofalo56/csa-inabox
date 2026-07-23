@@ -35,13 +35,24 @@ export interface WorkspaceImageMeta {
  * granted — the idempotent no-op, not an error).
  */
 export interface WorkspaceGrantStatus {
-  /** Backend the grant targets (e.g. 'adls-lake'; the I2 matrix adds more). */
+  /** Backend the grant targets (the I2 matrix: 'adls-lake' | 'cosmos-data' |
+   * 'synapse-sql' | 'adx-database' | 'eventhubs-receiver' | 'eventhubs-sender'
+   * | 'key-vault' | 'monitor'). */
   backend: string;
-  /** Built-in role definition GUID (e.g. Storage Blob Data Contributor). */
+  /** Grant mechanism (I2): ARM RBAC vs the data-plane grant families that do
+   * NOT count against the 4,000-role-assignment subscription cap. */
+  kind?: 'arm-rbac' | 'cosmos-data-rbac' | 'sql-data-plane' | 'kusto-data-plane';
+  /** Built-in role definition GUID (ARM / Cosmos data-plane) or the symbolic
+   * data-plane role set (e.g. 'db_datareader+db_datawriter', 'database-user'). */
   roleDefinitionId: string;
-  /** ARM scope the assignment was PUT at (container / account / RG). */
+  /** Scope the grant was applied at (ARM id, or a symbolic data-plane scope
+   * like 'synapse-dedicated:<ws>/<pool>' / 'kusto:<cluster>/<db>'). */
   scope: string;
-  status: 'granted' | 'exists' | 'failed';
+  /** 'skipped' (I2) = backend not configured / not applicable in this
+   * deployment — an honest no-op, recorded with the reason in `detail`. */
+  status: 'granted' | 'exists' | 'failed' | 'skipped';
+  /** Human note for granted/skipped rows (what was granted / why skipped). */
+  detail?: string;
   error?: string;
 }
 
