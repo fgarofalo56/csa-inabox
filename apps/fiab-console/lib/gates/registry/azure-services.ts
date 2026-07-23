@@ -15,6 +15,7 @@ export const AZURE_SERVICES_GATE_META: Record<string, GateMeta> = {
       { path: '/items/notebook', label: 'Notebooks (Synapse Spark)' },
       { path: '/items/data-pipeline', label: 'Pipelines' },
       { path: '/api/items/warehouse/*', label: 'Warehouse BFF routes' },
+      { path: '/admin/health?tab=spark', label: 'Spark pool health (Health hub, A10)' },
     ],
     fixit: { kind: 'resource-picker' },
     loaders: { LOOM_SYNAPSE_WORKSPACE: L.synapse },

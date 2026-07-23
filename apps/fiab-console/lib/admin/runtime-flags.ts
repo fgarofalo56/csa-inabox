@@ -80,6 +80,13 @@ export const RUNTIME_FLAGS: readonly RuntimeFlagDef[] = [
     ownerItem: 'V1',
     surface: '/admin/health?tab=journeys',
   },
+  {
+    id: 'a10-spark-tab',
+    label: 'Health hub — Spark pools tab',
+    description: 'OFF reverts /admin/health to the pre-A10 layout (hides the Spark pools tab). The warm pool, leaked-session reaper, and keep-warm heartbeat keep running either way — this only controls the admin surface.',
+    ownerItem: 'A10',
+    surface: '/admin/health?tab=spark',
+  },
 ];
 
 /** Union of registered flag ids (`never` while the list is empty). */

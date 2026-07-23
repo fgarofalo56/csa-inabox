@@ -8,6 +8,8 @@ export default async function AdminHealthPage() {
   // FLAG0 kill-switch (default-ON, fail-open): flipping 'v1-journeys-tab' OFF
   // reverts /admin/health to the pre-V1 self-audit-only layout in seconds.
   const journeysEnabled = await runtimeFlag('v1-journeys-tab');
+  // A10: 'a10-spark-tab' OFF hides the Spark pools tab (surface-only revert).
+  const sparkEnabled = await runtimeFlag('a10-spark-tab');
   return (
     <AdminShell
       sectionTitle="Health & Reliability"
@@ -21,10 +23,11 @@ export default async function AdminHealthPage() {
           'Exercise services executes a real end-to-end operation per backend — a green self-audit with a red exercise means the resource exists but cannot do work (e.g. a faulted Spark pool).',
           'Secret & credential health tracks the MSAL app secrets + tracked Key Vault credentials with days-to-expiry — rotate anything red or amber via the secret-rotation runbook before it breaks sign-in.',
           'Journeys: a red J1 with every other journey green means SIGN-IN is broken while the app is healthy — rotate/verify the MSAL client secret first (the 2026-07-19 outage class).',
+          'Spark pools: a pool can report Succeeded and still be unable to launch any application (FAULTED). A "Suspect — breaker armed" badge or leak candidates mean follow the spark-pools runbook: delete + recreate, and if sessions still wedge, a NEW pool name.',
         ],
       }}
     >
-      <HealthHubTabs journeysEnabled={journeysEnabled} />
+      <HealthHubTabs journeysEnabled={journeysEnabled} sparkEnabled={sparkEnabled} />
     </AdminShell>
   );
 }
