@@ -1389,3 +1389,13 @@ export async function listSynapseIrAuthKeys(name: string): Promise<SynapseIntegr
   return jsonOrThrow<SynapseIntegrationRuntimeAuthKeys>(r, `listSynapseIrAuthKeys(${name})`);
 }
 
+// ── L3 column-lineage (loom-next-level WS-L) ────────────────────────────────
+// Synapse pipelines share ADF's Copy-activity `translator.mappings` shape, so
+// the same SDK-free parser derives column lineage from a Synapse pipeline def.
+// Re-exported here for symmetry with adf-client for any Synapse backfill route.
+export {
+  readCopyColumnMappings,
+  type CopyActivityTranslator,
+  type CopyColumnLineage,
+} from './copy-column-mappings';
+
