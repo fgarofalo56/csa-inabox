@@ -201,6 +201,22 @@ export interface Workspace {
     principalId?: string;
     grants?: WorkspaceGrantStatus[];
     mode?: 'shadow' | 'enforce';
+    /**
+     * I6 — per-workspace enforcement flag. When true (and the global
+     * `LOOM_WORKSPACE_IDENTITY_MODE` is not 'off'), the credential factory
+     * (workspace-credential-factory) mints this workspace's own `uami-ws-<id>`
+     * for its data-plane calls (fail-safing to the shared Console UAMI when the
+     * UAMI/grant is missing or ARM is unreachable — the I7 rollback guarantee).
+     * This is DATA on the workspace doc, NOT an env var: it is flipped only by a
+     * tenant admin through the Identity settings panel / the enforce route, which
+     * REFUSES to enable until the I7 grant-check preflight is ready, the 14-day
+     * shadow divergence is zero, AND the I9 AppSec review is signed off. Absent /
+     * false = shadow-or-observe only (the shared UAMI, unchanged). */
+    enforce?: boolean;
+    /** ISO timestamp the enforce flag was last toggled (enable OR disable). */
+    enforceAt?: string;
+    /** UPN / oid of the tenant admin who last toggled the enforce flag. */
+    enforceBy?: string;
     at?: string;
     error?: string;
   };

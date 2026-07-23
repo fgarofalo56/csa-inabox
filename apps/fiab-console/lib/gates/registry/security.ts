@@ -72,15 +72,19 @@ export const SECURITY_GATE_META: Record<string, GateMeta> = {
   'svc-workspace-identity': {
     surfaces: [
       { path: '/workspaces', label: 'Workspace create — per-workspace UAMI provisioning (I1)' },
+      { path: '/workspaces?settings=identity', label: 'Workspace Settings → Identity panel — per-workspace enforcement (I6)' },
+      { path: '/api/admin/workspaces/*/identity', label: 'Per-workspace identity enforcement toggle (I6 GET/POST)' },
       { path: '/api/workspaces/*', label: 'Workspace create/delete (identity provision + cascade)' },
     ],
-    // Fix-it wizard: sets LOOM_WORKSPACE_IDENTITY_MODE (+ the sub/RG fallbacks)
-    // through the shared env-apply write path; the pre-filled fixScript/
-    // portalSteps from the self-audit check carry the exact values. The fuller
-    // "Enable per-workspace identity" wizard UI lands with I6.
+    // Fix-it wizard: the workspace Settings → Identity panel (I6) IS this gate's
+    // Fix-it surface (ux-standards G2). It sets LOOM_WORKSPACE_IDENTITY_MODE to
+    // shadow first (provision + record only — zero behavior change), then, once
+    // the I7 grant-check preflight is ready, the 14-day shadow divergence is
+    // zero, AND the I9 AppSec review is signed off, exposes the per-workspace
+    // Enable-enforcement toggle (data on the doc, no env change).
     fixit: {
       kind: 'wizard',
-      grantNote: 'Flip LOOM_WORKSPACE_IDENTITY_MODE to shadow first (provision + record only — zero behavior change), review the recorded workspaceIdentity status blocks, then phase enforce per I6/I9. The Console UAMI needs Managed Identity Contributor on the workspace-identity RG (ws-identity-rbac.bicep, deployed by the push-button bicep).',
+      grantNote: 'Flip LOOM_WORKSPACE_IDENTITY_MODE to shadow first (provision + record only — zero behavior change), review the per-workspace divergence rollup in Workspace Settings → Identity, then enable enforcement per workspace once the I7 preflight is green + the I9 review is signed off. The Console UAMI needs Managed Identity Contributor on the workspace-identity RG (ws-identity-rbac.bicep, deployed by the push-button bicep).',
     },
     autoResolveNote: 'Unset → mode off (the intended day-one default): every call runs as the shared Console UAMI, unchanged. Phased shadow → enforce is the sole Phase-0 exception to default-ON, per the operator decision recorded in the loom-next-level PRP.',
     legacyCodes: ['workspace_identity_not_configured'],

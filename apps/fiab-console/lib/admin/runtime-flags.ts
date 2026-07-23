@@ -167,6 +167,14 @@ export const RUNTIME_FLAGS: readonly RuntimeFlagDef[] = [
     surface: 'Report designer pivoted matrix visual (/items/report/[id])',
   },
   {
+    id: 'i6-ws-identity-panel',
+    label: 'Workspace settings — Identity panel (per-workspace enforcement)',
+    description:
+      'The I6 Workspace Settings → Identity panel: current identity mode, the provisioned uami-ws-<id> + per-backend grant readiness (green/red), the 14-day shadow-divergence rollup, the I9 security-review status line, and the (operator-gated, disabled-until-ready) Enable-enforcement toggle. OFF hides the Identity tab on the next open — the workspace keeps running exactly as it is (the shared Console UAMI on the default off/shadow path); nothing about provisioning, the shadow audit, or the credential factory is affected. The GET/POST enforce route stays reachable either way (tenant-admin only); this only controls the admin surface.',
+    ownerItem: 'I6',
+    surface: 'Workspace Settings flyout → Identity tab (/workspaces, admin)',
+  },
+  {
     id: 'a3-dax-fold-engine',
     label: 'Semantic model — DAX fold engine',
     description:

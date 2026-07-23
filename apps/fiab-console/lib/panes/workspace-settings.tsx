@@ -28,13 +28,15 @@ import {
 import { Dismiss24Regular, Search16Regular, Open16Regular } from '@fluentui/react-icons';
 import { isGovCloud } from '@/lib/azure/cloud-endpoints';
 import { WorkspaceImageEditor } from '@/lib/components/workspace-image-editor';
+import { WorkspaceIdentityPanel } from '@/lib/panes/workspace-identity-panel';
+import { useRuntimeFlag } from '@/lib/components/ui/use-runtime-flag';
 import type { Workspace, WorkspaceLicenseMode } from '@/lib/types/workspace';
 
 interface WsRef { id: string; name: string }
 interface FabricCapacityOpt { id: string; displayName: string; sku: string; region?: string; state?: string; }
 interface StorageOpt { id: string; name: string; isHns: boolean; resourceGroup?: string; }
 
-type TabKey = 'general' | 'image' | 'license' | 'm365' | 'onelake';
+type TabKey = 'general' | 'image' | 'license' | 'm365' | 'onelake' | 'identity';
 
 const LICENSE_MODES: { value: WorkspaceLicenseMode; label: string; govHidden?: boolean }[] = [
   { value: 'Org', label: 'Organizational (Azure-native)' },
@@ -95,6 +97,11 @@ interface Props {
 export function WorkspaceSettingsPane({ workspace, onClose, onSaved, isAdmin }: Props) {
   const styles = useStyles();
   const [tab, setTab] = useState<TabKey>('general');
+  // I6 — the per-workspace Identity enforcement panel is a tenant-admin surface
+  // gated behind the FLAG0 kill-switch (default-ON). Non-admin owners never see
+  // it (the backing route is tenant-admin only); OFF hides the tab everywhere.
+  const identityPanelOn = useRuntimeFlag('i6-ws-identity-panel');
+  const showIdentityTab = !!isAdmin && identityPanelOn;
   const [full, setFull] = useState<Workspace | null>(null);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -138,6 +145,7 @@ export function WorkspaceSettingsPane({ workspace, onClose, onSaved, isAdmin }: 
             <Tab value="license">License</Tab>
             <Tab value="m365">Teams &amp; SharePoint</Tab>
             <Tab value="onelake">OneLake storage</Tab>
+            {showIdentityTab && <Tab value="identity">Identity</Tab>}
           </TabList>
 
           {loading && <Spinner size="tiny" label="Loading workspace…" />}
@@ -148,6 +156,9 @@ export function WorkspaceSettingsPane({ workspace, onClose, onSaved, isAdmin }: 
           {full && tab === 'license' && <LicenseTab ws={full} isAdmin={isAdmin} onSaved={handleSaved} />}
           {full && tab === 'm365' && <M365Tab ws={full} onSaved={handleSaved} />}
           {full && tab === 'onelake' && <OneLakeTab ws={full} isAdmin={isAdmin} onSaved={handleSaved} />}
+          {full && tab === 'identity' && showIdentityTab && (
+            <WorkspaceIdentityPanel workspaceId={full.id} onSaved={handleSaved} />
+          )}
         </div>
       </DrawerBody>
     </Drawer>
