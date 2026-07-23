@@ -1,12 +1,49 @@
 name: dr-drill
 
 # CSA-0073 — Quarterly DR drill workflow.
-# Exercises failover/failback paths against a scratch subscription so
-# the runbooks in docs/DR.md and docs/runbooks/dr-drill.md stay honest
-# instead of rotting between real incidents.
+# Exercises restore/failover paths so the runbooks in docs/DR.md and
+# docs/runbooks/dr-drill.md stay honest instead of rotting between real
+# incidents.
 #
-# See docs/runbooks/dr-drill.md for cadence, required permissions,
-# scenario behaviours, verification steps, and rollback paths.
+# loom-next-level WS-DR (DR1–DR3) deepened this framework from echo-stubs into
+# real drills against the LIVE Loom estate (rev-2 re-scope: EXTEND this
+# workflow — no parallel dr-drill-*.yml files):
+#
+#   cosmos-pitr-restore   (DR1, formerly the `cosmos-failover` stub) — restores
+#                         the live admin-plane Loom store AND the landing-zone
+#                         graph/vector pair (SRE F15) to a recent PITR
+#                         timestamp into per-run scratch RGs, validates REAL
+#                         restored state (doc counts vs a live metric snapshot,
+#                         schema probes), then deletes the scratch RGs.
+#   adls-softdelete-restore (DR2 — REDESIGNED per DR0 #2414: blob versioning +
+#                         restorePolicy are UNSUPPORTED on the HNS lake, so the
+#                         drill validates the soft-delete restore path that
+#                         actually exists) — namespaced canary filesystem on
+#                         the live lake: upload → delete → undelete-path →
+#                         byte-for-byte hash match + posture assertions.
+#   keyvault-restore      (DR3, deepened) — canary secret on the live
+#                         kv-loom-* vault: delete → recover → value intact,
+#                         plus a purge attempt that MUST be rejected.
+#   storage-failover      (unchanged stub — RA-GRS failover rehearsal against
+#                         a scratch account; see runbook §4.2)
+#   bicep-rollback        (unchanged stub — see runbook §4.4; this scenario is
+#                         also the rollback story new Functions reference)
+#
+# The three deepened scenarios authenticate to the LIVE estate with the same
+# secret-based creds block the proven loom-roll-and-validate.yml uses
+# (AZURE_CLIENT_ID/SECRET/TENANT_ID/SUBSCRIPTION_ID; Gov: AZURE_GOV_*). The
+# legacy stub scenarios keep their scratch-subscription OIDC login untouched.
+# PE-only resources (lake, KV) get a single-IP firewall window for the runner
+# (default-action stays Deny) that is re-locked in always() — the same pattern
+# csa-loom-post-deploy-bootstrap.yml uses.
+#
+# Reports: every deepened scenario writes test-results/dr/<scenario>-<id>.json
+# (RPO/RTO evidence + per-check verdicts) and uploads it as a run artifact.
+# DR4 (Phase 2) adds the run-level summary artifact, Blob persistence for the
+# Health & Reliability hub's DR-drills tab, and action-group alerting.
+#
+# See docs/runbooks/dr-drill.md for cadence, required permissions, scenario
+# behaviours, verification steps, and rollback paths.
 
 on:
   schedule:
@@ -16,19 +53,41 @@ on:
     inputs:
       environment:
         type: choice
-        description: Target drill environment
+        description: Target drill environment (GitHub environment gate for approvals)
         options:
           - scratch
           - staging
         default: scratch
       scenarios:
         type: string
-        description: Comma-separated scenarios to run (all | cosmos-failover | storage-failover | keyvault-restore | bicep-rollback)
+        description: Comma-separated scenarios (all | cosmos-pitr-restore | adls-softdelete-restore | keyvault-restore | storage-failover | bicep-rollback; legacy alias cosmos-failover accepted)
         default: all
+      cloud:
+        type: choice
+        description: Which live estate the deepened scenarios target
+        options:
+          - commercial
+          - gov
+        default: commercial
+      live_rg:
+        type: string
+        description: Admin-plane resource group override (default rg-csa-loom-admin-centralus; REQUIRED for gov)
+        default: ""
+      cosmos_account:
+        type: string
+        description: Loom Cosmos account override (default discovered by 'loom' database)
+        default: ""
+      storage_account:
+        type: string
+        description: Lake storage account override (default discovered by 'saloom' prefix)
+        default: ""
 
 permissions:
   id-token: write
   contents: read
+
+env:
+  DR_RG_PREFIX: rg-csa-loom-drdrill
 
 jobs:
   pre-flight:
@@ -38,38 +97,335 @@ jobs:
       environment: ${{ steps.resolve.outputs.environment }}
       scenarios: ${{ steps.resolve.outputs.scenarios }}
       drill_id: ${{ steps.resolve.outputs.drill_id }}
+      cloud: ${{ steps.resolve.outputs.cloud }}
+      live_rg: ${{ steps.resolve.outputs.live_rg }}
     steps:
       - id: resolve
         run: |
           ENV="${{ inputs.environment || 'scratch' }}"
           SCEN="${{ inputs.scenarios || 'all' }}"
+          # Legacy alias: cosmos-failover → cosmos-pitr-restore (DR1 rename).
+          SCEN="${SCEN//cosmos-failover/cosmos-pitr-restore}"
+          CLOUD="${{ inputs.cloud || 'commercial' }}"
+          LIVE_RG="${{ inputs.live_rg }}"
+          if [ -z "$LIVE_RG" ]; then
+            if [ "$CLOUD" = "gov" ]; then
+              echo "::error::gov drills require the live_rg input (the Gov admin-plane RG name)"
+              exit 1
+            fi
+            LIVE_RG="rg-csa-loom-admin-centralus"
+          fi
           DRILL_ID="drill-$(date -u +%Y%m%dT%H%M%SZ)"
           echo "environment=$ENV" >> $GITHUB_OUTPUT
           echo "scenarios=$SCEN" >> $GITHUB_OUTPUT
           echo "drill_id=$DRILL_ID" >> $GITHUB_OUTPUT
-          echo "DR drill $DRILL_ID targeting $ENV, scenarios: $SCEN"
+          echo "cloud=$CLOUD" >> $GITHUB_OUTPUT
+          echo "live_rg=$LIVE_RG" >> $GITHUB_OUTPUT
+          echo "DR drill $DRILL_ID targeting $ENV ($CLOUD, $LIVE_RG), scenarios: $SCEN"
 
-  cosmos-failover:
+  # ---------------------------------------------------------------------------
+  # DR1 — Cosmos PITR restore drill (deepened from the cosmos-failover stub).
+  # Restores the LIVE admin-plane Loom store + the landing-zone graph/vector
+  # Cosmos pair into per-run scratch RGs, validates restored state with real
+  # data-plane reads, and deletes the scratch RGs in always().
+  # ---------------------------------------------------------------------------
+  cosmos-pitr-restore:
     needs: pre-flight
-    if: contains(needs.pre-flight.outputs.scenarios, 'all') || contains(needs.pre-flight.outputs.scenarios, 'cosmos-failover')
+    if: contains(needs.pre-flight.outputs.scenarios, 'all') || contains(needs.pre-flight.outputs.scenarios, 'cosmos')
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 150
     environment: ${{ needs.pre-flight.outputs.environment }}
+    env:
+      DRILL_ID: ${{ needs.pre-flight.outputs.drill_id }}
+      DRILL_CLOUD: ${{ needs.pre-flight.outputs.cloud }}
+      LIVE_RG: ${{ needs.pre-flight.outputs.live_rg }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      - uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2
+      - name: Azure login (live estate)
+        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2
         with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID_SCRATCH }}
-      - name: Trigger Cosmos DB region failover
-        run: |
-          # Runbook reference: docs/runbooks/dr-drill.md § Cosmos Failover
-          # ... az cosmosdb failover-priority-change ...
-          echo "TODO: wire to scripts/drill/cosmos-failover.sh"
-      - name: Verify failback
-        run: "echo 'TODO: wire verification'"
+          environment: ${{ needs.pre-flight.outputs.cloud == 'gov' && 'AzureUSGovernment' || 'AzureCloud' }}
+          creds: |
+            {
+              "clientId": "${{ needs.pre-flight.outputs.cloud == 'gov' && secrets.AZURE_GOV_CLIENT_ID || secrets.AZURE_CLIENT_ID }}",
+              "clientSecret": "${{ needs.pre-flight.outputs.cloud == 'gov' && secrets.AZURE_GOV_CLIENT_SECRET || secrets.AZURE_CLIENT_SECRET }}",
+              "tenantId": "${{ needs.pre-flight.outputs.cloud == 'gov' && secrets.AZURE_GOV_TENANT_ID || secrets.AZURE_TENANT_ID }}",
+              "subscriptionId": "${{ needs.pre-flight.outputs.cloud == 'gov' && secrets.AZURE_GOV_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}"
+            }
 
+      - name: Discover source accounts + take live snapshot
+        run: |
+          set -euo pipefail
+          SHORT=$(echo -n "$DRILL_ID" | tr -cd 'a-z0-9' | tail -c 10)
+          echo "SHORT=$SHORT" >> $GITHUB_ENV
+          # Admin-plane Loom store: the Cosmos account carrying the `loom` db.
+          ADMIN_ACCOUNT="${{ inputs.cosmos_account }}"
+          if [ -z "$ADMIN_ACCOUNT" ]; then
+            for acct in $(az cosmosdb list -g "$LIVE_RG" --query "[].name" -o tsv); do
+              if az cosmosdb sql database show -a "$acct" -g "$LIVE_RG" -n loom -o none 2>/dev/null; then
+                ADMIN_ACCOUNT="$acct"; break
+              fi
+            done
+          fi
+          if [ -z "$ADMIN_ACCOUNT" ]; then
+            echo "::error::No Cosmos account with a 'loom' database found in $LIVE_RG"
+            exit 1
+          fi
+          ADMIN_SUB=$(az account show --query id -o tsv)
+          ADMIN_LOC_NAME=$(az cosmosdb show -n "$ADMIN_ACCOUNT" -g "$LIVE_RG" --query "locations[0].locationName" -o tsv)
+          RG_LOC=$(az group show -n "$LIVE_RG" --query location -o tsv)
+          echo "ADMIN_ACCOUNT=$ADMIN_ACCOUNT" >> $GITHUB_ENV
+          echo "ADMIN_SUB=$ADMIN_SUB" >> $GITHUB_ENV
+          echo "ADMIN_LOC_NAME=$ADMIN_LOC_NAME" >> $GITHUB_ENV
+          echo "RG_LOC=$RG_LOC" >> $GITHUB_ENV
+          echo "Admin store: $ADMIN_ACCOUNT ($ADMIN_LOC_NAME, sub $ADMIN_SUB)"
+
+          # Landing-zone graph/vector pair (SRE F15) — may be absent on estates
+          # without cosmos-graph-vector; each is validated when found.
+          az extension add -n resource-graph --only-show-errors 2>/dev/null || true
+          VEC=$(az graph query -q "Resources | where type =~ 'microsoft.documentdb/databaseaccounts' | where name startswith 'cosmos-loom-vec-' | project name, resourceGroup, subscriptionId | limit 1" --query "data[0]" -o json 2>/dev/null || echo "")
+          GREM=$(az graph query -q "Resources | where type =~ 'microsoft.documentdb/databaseaccounts' | where name startswith 'cosmos-loom-gremlin-' | project name, resourceGroup, subscriptionId | limit 1" --query "data[0]" -o json 2>/dev/null || echo "")
+          for kind in VEC GREM; do
+            VAL="${!kind}"
+            if [ -n "$VAL" ] && [ "$VAL" != "null" ]; then
+              echo "${kind}_NAME=$(echo "$VAL" | jq -r .name)" >> $GITHUB_ENV
+              echo "${kind}_RG=$(echo "$VAL" | jq -r .resourceGroup)" >> $GITHUB_ENV
+              echo "${kind}_SUB=$(echo "$VAL" | jq -r .subscriptionId)" >> $GITHUB_ENV
+              echo "$kind account: $(echo "$VAL" | jq -r .name)"
+            else
+              echo "$kind account: not found (skipping — estate without cosmos-graph-vector)"
+            fi
+          done
+
+          # Live snapshot: the live account is PE-only, so the Azure Monitor
+          # DocumentCount metric (per-collection) is the reachable live signal
+          # from this runner. Best-effort — floors carry the assertion if the
+          # metric has no datapoints.
+          ADMIN_ID=$(az cosmosdb show -n "$ADMIN_ACCOUNT" -g "$LIVE_RG" --query id -o tsv)
+          az monitor metrics list --resource "$ADMIN_ID" --metric DocumentCount \
+            --aggregation Total --interval PT5M --offset 1h \
+            --filter "CollectionName eq '*'" -o json > snapshot-admin.json \
+            || echo '{"value":[]}' > snapshot-admin.json
+          echo "snapshot-admin.json: $(jq '[.value[].timeseries[]] | length' snapshot-admin.json) collection series"
+
+      - name: Restore to PITR timestamp into scratch RG(s)
+        run: |
+          set -euo pipefail
+          RESTORE_TS=$(date -u -d '-10 minutes' +%Y-%m-%dT%H:%M:%S+0000)
+          echo "RESTORE_TS=$RESTORE_TS" >> $GITHUB_ENV
+          SCRATCH_RG="${DR_RG_PREFIX}-${DRILL_CLOUD}-${SHORT}"
+          echo "SCRATCH_RG=$SCRATCH_RG" >> $GITHUB_ENV
+          SCRATCH_SUBS="$ADMIN_SUB"
+
+          az group create -n "$SCRATCH_RG" -l "$RG_LOC" \
+            --tags purpose=dr-drill drillId="$DRILL_ID" autodelete=true -o none
+
+          declare -a PIDS=()
+          TGT_ADMIN="drc-admin-${SHORT}"
+          echo "TGT_ADMIN=$TGT_ADMIN" >> $GITHUB_ENV
+          echo "Restoring $ADMIN_ACCOUNT → $TGT_ADMIN @ $RESTORE_TS"
+          az cosmosdb restore --account-name "$ADMIN_ACCOUNT" -g "$SCRATCH_RG" \
+            --target-database-account-name "$TGT_ADMIN" \
+            --restore-timestamp "$RESTORE_TS" --location "$ADMIN_LOC_NAME" \
+            --public-network-access Enabled --subscription "$ADMIN_SUB" -o none &
+          PIDS+=($!)
+
+          for kind in VEC GREM; do
+            NAME_VAR="${kind}_NAME"; RG_VAR="${kind}_RG"; SUB_VAR="${kind}_SUB"
+            [ -n "${!NAME_VAR:-}" ] || continue
+            K_LOWER=$(echo "$kind" | tr 'A-Z' 'a-z')
+            TGT="drc-${K_LOWER}-${SHORT}"
+            echo "TGT_${kind}=$TGT" >> $GITHUB_ENV
+            K_LOC=$(az cosmosdb show -n "${!NAME_VAR}" -g "${!RG_VAR}" --subscription "${!SUB_VAR}" --query "locations[0].locationName" -o tsv)
+            K_RG_LOC=$(az group show -n "${!RG_VAR}" --subscription "${!SUB_VAR}" --query location -o tsv)
+            if [ "${!SUB_VAR}" != "$ADMIN_SUB" ]; then
+              az group create -n "$SCRATCH_RG" -l "$K_RG_LOC" --subscription "${!SUB_VAR}" \
+                --tags purpose=dr-drill drillId="$DRILL_ID" autodelete=true -o none
+              SCRATCH_SUBS="$SCRATCH_SUBS ${!SUB_VAR}"
+            fi
+            echo "Restoring ${!NAME_VAR} → $TGT @ $RESTORE_TS"
+            az cosmosdb restore --account-name "${!NAME_VAR}" -g "$SCRATCH_RG" \
+              --target-database-account-name "$TGT" \
+              --restore-timestamp "$RESTORE_TS" --location "$K_LOC" \
+              --public-network-access Enabled --subscription "${!SUB_VAR}" -o none &
+            PIDS+=($!)
+          done
+          echo "SCRATCH_SUBS=$SCRATCH_SUBS" >> $GITHUB_ENV
+
+          FAIL=0
+          for pid in "${PIDS[@]}"; do
+            wait "$pid" || FAIL=1
+          done
+          if [ "$FAIL" != "0" ]; then
+            echo "::error::One or more PITR restores failed"
+            exit 1
+          fi
+          echo "All restores completed."
+
+      - name: Grant drill SP data-plane role on restored SQL accounts
+        run: |
+          set -euo pipefail
+          APP_ID=$(az account show --query user.name -o tsv)
+          SP_OID=$(az ad sp show --id "$APP_ID" --query id -o tsv 2>/dev/null || true)
+          if [ -z "$SP_OID" ]; then
+            echo "::error::Cannot resolve the drill SP object id via Graph — grant the SP Directory read on itself, or run with an identity that can 'az ad sp show --id <its appId>' (see docs/runbooks/dr-drill.md §3)."
+            exit 1
+          fi
+          az cosmosdb sql role assignment create --account-name "$TGT_ADMIN" -g "$SCRATCH_RG" \
+            --role-definition-id 00000000-0000-0000-0000-000000000002 \
+            --principal-id "$SP_OID" --scope "/" --subscription "$ADMIN_SUB" -o none
+          if [ -n "${TGT_VEC:-}" ]; then
+            az cosmosdb sql role assignment create --account-name "$TGT_VEC" -g "$SCRATCH_RG" \
+              --role-definition-id 00000000-0000-0000-0000-000000000002 \
+              --principal-id "$SP_OID" --scope "/" --subscription "$VEC_SUB" -o none
+          fi
+          echo "Data-plane role granted; waiting 90s for RBAC propagation…"
+          sleep 90
+
+      - name: Validate restored state (real data-plane reads)
+        run: |
+          set -euo pipefail
+          ADMIN_ENDPOINT=$(az cosmosdb show -n "$TGT_ADMIN" -g "$SCRATCH_RG" --subscription "$ADMIN_SUB" --query documentEndpoint -o tsv)
+          export ADMIN_ENDPOINT
+          if [ -n "${TGT_VEC:-}" ]; then
+            export VECTOR_ENDPOINT=$(az cosmosdb show -n "$TGT_VEC" -g "$SCRATCH_RG" --subscription "$VEC_SUB" --query documentEndpoint -o tsv)
+          fi
+          if [ -n "${TGT_GREM:-}" ]; then
+            export GREMLIN_ACCOUNT="$TGT_GREM" GREMLIN_RG="$SCRATCH_RG" GREMLIN_SUB="$GREM_SUB"
+          fi
+          export SNAPSHOT_FILE=snapshot-admin.json
+          node scripts/csa-loom/dr/validate-cosmos-restore.mjs
+
+      - name: Upload drill report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: dr-report-cosmos-pitr-restore
+          path: |
+            test-results/dr/
+            snapshot-admin.json
+          if-no-files-found: ignore
+
+      - name: Teardown scratch RG(s) — cost control
+        if: always()
+        run: |
+          set -uo pipefail
+          [ -n "${SCRATCH_RG:-}" ] || { echo "No scratch RG was created."; exit 0; }
+          RC=0
+          for sub in ${SCRATCH_SUBS:-$ADMIN_SUB}; do
+            if [ "$(az group exists -n "$SCRATCH_RG" --subscription "$sub")" = "true" ]; then
+              echo "Deleting $SCRATCH_RG in $sub…"
+              az group delete -n "$SCRATCH_RG" --subscription "$sub" --yes || RC=1
+            fi
+            EXISTS=$(az group exists -n "$SCRATCH_RG" --subscription "$sub")
+            echo "az group exists ($sub) → $EXISTS"
+            [ "$EXISTS" = "false" ] || RC=1
+          done
+          exit $RC
+
+  # ---------------------------------------------------------------------------
+  # DR2 — ADLS soft-delete restore drill (NEW scenario; REDESIGNED per DR0:
+  # blob versioning/restorePolicy are unsupported on the HNS lake, so the drill
+  # proves the soft-delete restore path + posture that actually shipped).
+  # Canary-only on the live lake; single-IP firewall window re-locked in always().
+  # ---------------------------------------------------------------------------
+  adls-softdelete-restore:
+    needs: pre-flight
+    if: contains(needs.pre-flight.outputs.scenarios, 'all') || contains(needs.pre-flight.outputs.scenarios, 'adls-softdelete-restore')
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: ${{ needs.pre-flight.outputs.environment }}
+    env:
+      DRILL_ID: ${{ needs.pre-flight.outputs.drill_id }}
+      DRILL_CLOUD: ${{ needs.pre-flight.outputs.cloud }}
+      LIVE_RG: ${{ needs.pre-flight.outputs.live_rg }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Azure login (live estate)
+        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2
+        with:
+          environment: ${{ needs.pre-flight.outputs.cloud == 'gov' && 'AzureUSGovernment' || 'AzureCloud' }}
+          creds: |
+            {
+              "clientId": "${{ needs.pre-flight.outputs.cloud == 'gov' && secrets.AZURE_GOV_CLIENT_ID || secrets.AZURE_CLIENT_ID }}",
+              "clientSecret": "${{ needs.pre-flight.outputs.cloud == 'gov' && secrets.AZURE_GOV_CLIENT_SECRET || secrets.AZURE_CLIENT_SECRET }}",
+              "tenantId": "${{ needs.pre-flight.outputs.cloud == 'gov' && secrets.AZURE_GOV_TENANT_ID || secrets.AZURE_TENANT_ID }}",
+              "subscriptionId": "${{ needs.pre-flight.outputs.cloud == 'gov' && secrets.AZURE_GOV_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}"
+            }
+
+      - name: Discover lake account + open single-IP firewall window
+        run: |
+          set -euo pipefail
+          STORAGE_ACCOUNT="${{ inputs.storage_account }}"
+          if [ -z "$STORAGE_ACCOUNT" ]; then
+            az extension add -n resource-graph --only-show-errors 2>/dev/null || true
+            HIT=$(az graph query -q "Resources | where type =~ 'microsoft.storage/storageaccounts' | where name startswith 'saloom' | project name, resourceGroup, subscriptionId | sort by name asc | limit 1" --query "data[0]" -o json 2>/dev/null || echo "")
+            if [ -z "$HIT" ] || [ "$HIT" = "null" ]; then
+              echo "::error::No 'saloom*' lake storage account visible to this SP — pass the storage_account input"
+              exit 1
+            fi
+            STORAGE_ACCOUNT=$(echo "$HIT" | jq -r .name)
+            STORAGE_RG=$(echo "$HIT" | jq -r .resourceGroup)
+            STORAGE_SUB=$(echo "$HIT" | jq -r .subscriptionId)
+          else
+            ID=$(az storage account show -n "$STORAGE_ACCOUNT" --query id -o tsv)
+            STORAGE_RG=$(echo "$ID" | cut -d/ -f5)
+            STORAGE_SUB=$(echo "$ID" | cut -d/ -f3)
+          fi
+          echo "STORAGE_ACCOUNT=$STORAGE_ACCOUNT" >> $GITHUB_ENV
+          echo "STORAGE_RG=$STORAGE_RG" >> $GITHUB_ENV
+          echo "STORAGE_SUB=$STORAGE_SUB" >> $GITHUB_ENV
+          echo "Lake: $STORAGE_ACCOUNT (rg $STORAGE_RG, sub $STORAGE_SUB)"
+
+          # PE-only account → open a single-IP window for this runner
+          # (default-action stays Deny; re-locked in always()).
+          PNA=$(az storage account show -n "$STORAGE_ACCOUNT" -g "$STORAGE_RG" --subscription "$STORAGE_SUB" --query publicNetworkAccess -o tsv)
+          echo "SA_PRIOR_PNA=$PNA" >> $GITHUB_ENV
+          if [ "$PNA" != "Enabled" ]; then
+            RUNNER_IP=$(curl -sS https://ifconfig.me 2>/dev/null || curl -sS https://api.ipify.org)
+            echo "SA_RUNNER_IP=$RUNNER_IP" >> $GITHUB_ENV
+            az storage account update -n "$STORAGE_ACCOUNT" -g "$STORAGE_RG" --subscription "$STORAGE_SUB" \
+              --public-network-access Enabled --default-action Deny -o none
+            az storage account network-rule add -n "$STORAGE_ACCOUNT" -g "$STORAGE_RG" --subscription "$STORAGE_SUB" \
+              --ip-address "$RUNNER_IP" -o none
+            # Network-rule changes propagate asynchronously (~30-90s) — poll.
+            for i in $(seq 1 12); do
+              if az storage container list --account-name "$STORAGE_ACCOUNT" --auth-mode login --subscription "$STORAGE_SUB" --num-results 1 -o none 2>/dev/null; then
+                echo "Data plane reachable after $((i*15))s"; break
+              fi
+              [ "$i" = "12" ] && { echo "::error::Lake data plane unreachable after firewall window — check the SP's Storage Blob Data Contributor grant (runbook §3)"; exit 1; }
+              sleep 15
+            done
+          fi
+
+      - name: Run soft-delete restore drill (canary, real byte-hash validation)
+        run: node scripts/csa-loom/dr/validate-adls-restore.mjs
+
+      - name: Upload drill report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: dr-report-adls-softdelete-restore
+          path: test-results/dr/
+          if-no-files-found: ignore
+
+      - name: Re-lock lake firewall
+        if: always()
+        run: |
+          set -uo pipefail
+          [ -n "${STORAGE_ACCOUNT:-}" ] || exit 0
+          if [ "${SA_PRIOR_PNA:-Enabled}" != "Enabled" ]; then
+            [ -n "${SA_RUNNER_IP:-}" ] && az storage account network-rule remove -n "$STORAGE_ACCOUNT" -g "$STORAGE_RG" --subscription "$STORAGE_SUB" --ip-address "$SA_RUNNER_IP" -o none 2>/dev/null || true
+            az storage account update -n "$STORAGE_ACCOUNT" -g "$STORAGE_RG" --subscription "$STORAGE_SUB" \
+              --public-network-access Disabled --default-action Deny -o none
+            echo "Lake $STORAGE_ACCOUNT re-locked (private endpoint only)."
+          fi
+
+  # ---------------------------------------------------------------------------
+  # legacy stub — RA-GRS customer-initiated failover rehearsal (scratch sub).
+  # Distinct from adls-softdelete-restore: this rehearses REGIONAL failover on
+  # a scratch RA-GRS account; the runbook keeps it as follow-up work.
+  # ---------------------------------------------------------------------------
   storage-failover:
     needs: pre-flight
     if: contains(needs.pre-flight.outputs.scenarios, 'all') || contains(needs.pre-flight.outputs.scenarios, 'storage-failover')
@@ -88,21 +444,80 @@ jobs:
       - name: Verify failback
         run: echo "TODO"
 
+  # ---------------------------------------------------------------------------
+  # DR3 — Key Vault secret recovery drill (deepened from the echo stub).
+  # Canary secret on the LIVE kv-loom-* vault: delete → recover → value intact,
+  # plus a purge attempt that MUST be rejected by purge protection.
+  # ---------------------------------------------------------------------------
   keyvault-restore:
     needs: pre-flight
     if: contains(needs.pre-flight.outputs.scenarios, 'all') || contains(needs.pre-flight.outputs.scenarios, 'keyvault-restore')
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 30
     environment: ${{ needs.pre-flight.outputs.environment }}
+    env:
+      DRILL_ID: ${{ needs.pre-flight.outputs.drill_id }}
+      DRILL_CLOUD: ${{ needs.pre-flight.outputs.cloud }}
+      LIVE_RG: ${{ needs.pre-flight.outputs.live_rg }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      - uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2
+      - name: Azure login (live estate)
+        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2
         with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID_SCRATCH }}
-      - name: Purge-protected soft-deleted secret restore test
-        run: "echo 'TODO: wire to scripts/drill/keyvault-restore.sh'"
+          environment: ${{ needs.pre-flight.outputs.cloud == 'gov' && 'AzureUSGovernment' || 'AzureCloud' }}
+          creds: |
+            {
+              "clientId": "${{ needs.pre-flight.outputs.cloud == 'gov' && secrets.AZURE_GOV_CLIENT_ID || secrets.AZURE_CLIENT_ID }}",
+              "clientSecret": "${{ needs.pre-flight.outputs.cloud == 'gov' && secrets.AZURE_GOV_CLIENT_SECRET || secrets.AZURE_CLIENT_SECRET }}",
+              "tenantId": "${{ needs.pre-flight.outputs.cloud == 'gov' && secrets.AZURE_GOV_TENANT_ID || secrets.AZURE_TENANT_ID }}",
+              "subscriptionId": "${{ needs.pre-flight.outputs.cloud == 'gov' && secrets.AZURE_GOV_SUBSCRIPTION_ID || secrets.AZURE_SUBSCRIPTION_ID }}"
+            }
+
+      - name: Discover vault + open single-IP firewall window
+        run: |
+          set -euo pipefail
+          KV_NAME=$(az keyvault list -g "$LIVE_RG" --query "[?starts_with(name,'kv-loom')].name | [0]" -o tsv)
+          if [ -z "$KV_NAME" ]; then
+            echo "::error::No kv-loom-* vault found in $LIVE_RG"
+            exit 1
+          fi
+          echo "KV_NAME=$KV_NAME" >> $GITHUB_ENV
+          echo "Vault: $KV_NAME"
+          # Same single-IP window pattern as csa-loom-post-deploy-bootstrap.yml:
+          # default-action stays Deny; re-locked in always().
+          KV_PNA=$(az keyvault show -n "$KV_NAME" --query "properties.publicNetworkAccess" -o tsv 2>/dev/null || echo Enabled)
+          echo "KV_PRIOR_PNA=$KV_PNA" >> $GITHUB_ENV
+          if [ "$KV_PNA" != "Enabled" ]; then
+            KV_RUNNER_IP=$(curl -sS https://ifconfig.me 2>/dev/null || curl -sS https://api.ipify.org)
+            echo "KV_RUNNER_IP=$KV_RUNNER_IP" >> $GITHUB_ENV
+            az keyvault update -n "$KV_NAME" --public-network-access Enabled --default-action Deny -o none
+            az keyvault network-rule add -n "$KV_NAME" --ip-address "$KV_RUNNER_IP" -o none
+            sleep 20
+          fi
+
+      - name: Run secret recovery drill (canary, purge-block assertion)
+        env:
+          VAULT_NAME: ${{ env.KV_NAME }}
+        run: node scripts/csa-loom/dr/validate-kv-recovery.mjs
+
+      - name: Upload drill report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: dr-report-keyvault-restore
+          path: test-results/dr/
+          if-no-files-found: ignore
+
+      - name: Re-lock vault firewall
+        if: always()
+        run: |
+          set -uo pipefail
+          [ -n "${KV_NAME:-}" ] || exit 0
+          if [ "${KV_PRIOR_PNA:-Enabled}" != "Enabled" ]; then
+            [ -n "${KV_RUNNER_IP:-}" ] && az keyvault network-rule remove -n "$KV_NAME" --ip-address "$KV_RUNNER_IP" -o none 2>/dev/null || true
+            az keyvault update -n "$KV_NAME" --public-network-access Disabled --default-action Deny -o none
+            echo "Vault $KV_NAME re-locked (private endpoint only)."
+          fi
 
   bicep-rollback:
     needs: pre-flight
@@ -121,18 +536,24 @@ jobs:
         run: "echo 'TODO: wire to scripts/drill/bicep-rollback.sh'"
 
   report:
-    needs: [pre-flight, cosmos-failover, storage-failover, keyvault-restore, bicep-rollback]
+    needs: [pre-flight, cosmos-pitr-restore, adls-softdelete-restore, storage-failover, keyvault-restore, bicep-rollback]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
       - name: Aggregate drill results
         run: |
-          echo "DR drill ${{ needs.pre-flight.outputs.drill_id }} complete."
-          echo "cosmos-failover:   ${{ needs.cosmos-failover.result }}"
-          echo "storage-failover:  ${{ needs.storage-failover.result }}"
-          echo "keyvault-restore:  ${{ needs.keyvault-restore.result }}"
-          echo "bicep-rollback:    ${{ needs.bicep-rollback.result }}"
-      - name: Post to ops channel
+          echo "DR drill ${{ needs.pre-flight.outputs.drill_id }} complete (${{ needs.pre-flight.outputs.cloud }})."
+          echo "cosmos-pitr-restore:      ${{ needs.cosmos-pitr-restore.result }}"
+          echo "adls-softdelete-restore:  ${{ needs.adls-softdelete-restore.result }}"
+          echo "storage-failover:         ${{ needs.storage-failover.result }}"
+          echo "keyvault-restore:         ${{ needs.keyvault-restore.result }}"
+          echo "bicep-rollback:           ${{ needs.bicep-rollback.result }}"
+          echo "Per-scenario RPO/RTO reports: dr-report-* artifacts on this run (test-results/dr/*.json)."
+      - name: Ops notification
         if: always()
-        run: "echo 'TODO: Teams webhook POST with result summary'"
+        # DR4 (Phase 2) replaces this with the shared alert standard
+        # (LOOM_ALERT_ACTION_GROUP_ID via lib/azure/alert-dispatch) + a dedup
+        # GitHub issue on failure, and persists the run summary for the Health
+        # & Reliability hub's DR-drills tab.
+        run: "echo 'Alerting lands with DR4 (Phase 2) via the shared action group.'"

@@ -197,6 +197,17 @@ per-component posture of the *actual* shipped platform.
 
 ## DR drill (what you can actually rehearse)
 
+> **Automated (loom-next-level WS-DR, 2026-07):** steps 1–3 below — plus an
+> ADLS soft-delete canary restore and a Key Vault secret delete→recover→
+> purge-blocked drill — now run quarterly via
+> [`.github/workflows/dr-drill.yml`](../../../.github/workflows/dr-drill.yml)
+> (scenarios `cosmos-pitr-restore`, `adls-softdelete-restore`,
+> `keyvault-restore`), with validators that assert real restored state and
+> per-scenario RPO/RTO reports. See
+> [`docs/runbooks/dr-drill.md`](../../runbooks/dr-drill.md). The manual
+> procedure below remains the operator-driven rehearsal (and the fallback
+> where the workflow's SP grants are not yet in place).
+
 A meaningful drill for the shipped posture:
 
 1. In a non-production sub, take a known-good Cosmos restore timestamp.

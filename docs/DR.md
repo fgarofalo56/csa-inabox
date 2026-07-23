@@ -315,11 +315,18 @@ disasterRecoveryConfigs` is not yet wired into the Bicep modules.
   replication. The current posture is "accept 24h RPO and re-scan from
   source after a disaster"; workloads with stricter requirements need
   a different catalog service.
-- **Automated DR drills**: §4's drill procedure is now wired into
+- **Automated DR drills**: §4's drill procedure is wired into
   [`.github/workflows/dr-drill.yml`](../.github/workflows/dr-drill.yml)
-  on a quarterly cron against a scratch subscription (CSA-0073). The
-  per-scenario shell scripts under `scripts/drill/` are still stubbed
-  and tracked as follow-ups in
+  on a quarterly cron (CSA-0073). As of loom-next-level WS-DR (2026-07),
+  three scenarios are REAL end-to-end drills with validators that assert
+  restored state: `cosmos-pitr-restore` (live Loom store + graph/vector
+  accounts restored to a PITR timestamp into a per-run scratch RG, doc
+  counts + schema validated, RG deleted), `adls-softdelete-restore`
+  (canary soft-delete undelete on the live HNS lake, byte-hash
+  validated — blob versioning is unsupported on HNS, so soft delete IS
+  the restore path), and `keyvault-restore` (canary secret delete →
+  recover → value intact + purge rejected). `storage-failover` and
+  `bicep-rollback` remain stubbed follow-ups in
   [`runbooks/dr-drill.md`](runbooks/dr-drill.md) §8.
 - **Traffic Manager + Front Door**: no global-routing layer is
   currently deployed. Clients talk to region-specific endpoints. If
@@ -334,7 +341,7 @@ disasterRecoveryConfigs` is not yet wired into the Bicep modules.
 | --------------------------- | --------------------------------------------------------- |
 | Bad deploy, region healthy  | [`ROLLBACK.md`](ROLLBACK.md)                              |
 | Region unavailable          | This document                                             |
-| Individual resource deleted | `ROLLBACK.md` §5–6 (Cosmos PITR / storage soft-delete)    |
+| Individual resource deleted | `ROLLBACK.md` §5–6 (Cosmos PITR / storage soft-delete); rehearsed quarterly by [`runbooks/dr-drill.md`](runbooks/dr-drill.md) §4.1/§4.5 |
 | dbt model regression        | `tests/load/README.md` → `benchmark_dbt_models.py`        |
 | Quarterly drill             | §4 above + [`runbooks/dr-drill.md`](runbooks/dr-drill.md) |
 
