@@ -99,27 +99,27 @@
       "id": "a2-countrows-sales",
       "fn": "COUNTROWS",
       "landedBy": "A2",
-      "implemented": false,
+      "implemented": true,
       "dax": "EVALUATE ROW(\"Rows\", COUNTROWS(Sales))",
       "expect": { "kind": "scalar", "column": "Rows", "value": 12 },
       "reference": { "kind": "csv-rowcount", "table": "sales", "asScalar": true },
-      "provenance": "COUNTROWS(Sales) over data/sales.csv. PENDING: A2 flips implemented:true when the COUNTROWS fold lands."
+      "provenance": "COUNTROWS(Sales) over data/sales.csv. A2: folds to SELECT COUNT(*) AS [Rows] FROM [Sales]."
     },
     {
       "id": "a2-distinctcount-customer",
       "fn": "DISTINCTCOUNT",
       "landedBy": "A2",
-      "implemented": false,
+      "implemented": true,
       "dax": "EVALUATE ROW(\"Customers\", DISTINCTCOUNT(Sales[CustomerId]))",
       "expect": { "kind": "scalar", "column": "Customers", "value": 4 },
       "reference": { "kind": "csv-agg", "table": "sales", "op": "countDistinct", "column": "CustomerId" },
-      "provenance": "DISTINCTCOUNT(Sales[CustomerId]) over data/sales.csv (C1..C4 all appear). PENDING: A2."
+      "provenance": "DISTINCTCOUNT(Sales[CustomerId]) over data/sales.csv (C1..C4 all appear). A2: folds to COUNT(DISTINCT [CustomerId])."
     },
     {
       "id": "a2-summarizecolumns-region",
       "fn": "SUMMARIZECOLUMNS",
       "landedBy": "A2",
-      "implemented": false,
+      "implemented": true,
       "dax": "EVALUATE SUMMARIZECOLUMNS(Customer[Region], \"Amt\", CALCULATE(SUM(Sales[Amount])))",
       "expect": {
         "kind": "groupRows",
@@ -139,7 +139,27 @@
         "op": "sum",
         "column": "sales.Amount"
       },
-      "provenance": "SUM(Sales[Amount]) grouped by Customer[Region] over the joined CSVs. PENDING: A2 (GROUP BY fold + RELATED join)."
+      "provenance": "SUM(Sales[Amount]) grouped by Customer[Region] over the joined CSVs. A2: GROUP BY fold + RELATED join."
+    },
+    {
+      "id": "a2-counta-amount",
+      "fn": "COUNTA",
+      "landedBy": "A2",
+      "implemented": true,
+      "dax": "EVALUATE ROW(\"A\", COUNTA(Sales[Amount]))",
+      "expect": { "kind": "scalar", "column": "A", "value": 12 },
+      "reference": { "kind": "csv-agg", "table": "sales", "op": "count", "column": "Amount" },
+      "provenance": "COUNTA(Sales[Amount]) over data/sales.csv. A2: folds to COUNT([Amount])."
+    },
+    {
+      "id": "a2-distinct-region",
+      "fn": "DISTINCT",
+      "landedBy": "A2",
+      "implemented": true,
+      "dax": "EVALUATE DISTINCT(Customer[Region])",
+      "expect": { "kind": "rowCount", "value": 3 },
+      "reference": { "kind": "csv-agg", "table": "customer", "op": "countDistinct", "column": "Region" },
+      "provenance": "DISTINCT(Customer[Region]) over data/customer.csv (East, West, North). A2: folds to SELECT DISTINCT [Region]."
     },
 
     {

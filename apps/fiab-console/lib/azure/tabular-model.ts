@@ -13,6 +13,7 @@
  */
 
 import { isGovCloud } from './cloud-endpoints';
+import { foldDaxToSql, type FoldModel } from './dax/fold';
 import type { WorkspaceItem } from '@/lib/types/workspace';
 
 // ---------------------------------------------------------------------------
@@ -158,36 +159,23 @@ export function modelBackingDatabase(item: WorkspaceItem): string | undefined {
 }
 
 // ---------------------------------------------------------------------------
-// loom-native: DAX → T-SQL translation (constrained, no vaporware)
+// loom-native: DAX → T-SQL translation (A1 parser + A2 fold engine)
 //
-// Supported patterns (everything else returns null → an honest error pointing
-// the user at the AAS backend for full DAX):
+// Backed by lib/azure/dax (tokenizer + Pratt parser + SQL-fold planner). Folds
+// the loom-native-supported DAX surface to Synapse T-SQL; anything outside it
+// returns null → the honest unsupportedDaxError(). Byte-identical to the prior
+// 3-regex translator on the pre-existing patterns:
 //   EVALUATE <Table>                                   → SELECT TOP 1000 * FROM [Table]
 //   EVALUATE TOPN(N, <Table>)                          → SELECT TOP N    * FROM [Table]
 //   EVALUATE ROW("Label", CALCULATE(AGG(Table[Col])))  → SELECT AGG([Col]) AS [Label] FROM [Table]
-//     where AGG ∈ {SUM, COUNT, AVERAGE→AVG, MIN, MAX}
+// plus the A2 batch: SUMMARIZECOLUMNS (GROUP BY + RELATED join), COUNTROWS,
+// DISTINCTCOUNT, COUNTA, DISTINCT/VALUES, FILTER (WHERE), CALCULATETABLE,
+// ALL/ALLEXCEPT, RELATED, ADDCOLUMNS. `model` (optional) enables measure-ref
+// inlining + relationship joins.
 // ---------------------------------------------------------------------------
 
-export function translateDaxToSql(dax: string): string | null {
-  const d = String(dax ?? '').trim().replace(/\s+/g, ' ');
-
-  const tableOnly = /^EVALUATE\s+'?([A-Za-z_][\w ]*?)'?$/i.exec(d);
-  if (tableOnly) return `SELECT TOP 1000 * FROM [${tableOnly[1].trim()}]`;
-
-  const topn = /^EVALUATE\s+TOPN\s*\(\s*(\d+)\s*,\s*'?([A-Za-z_][\w ]*?)'?\s*\)$/i.exec(d);
-  if (topn) return `SELECT TOP ${topn[1]} * FROM [${topn[2].trim()}]`;
-
-  const row =
-    /^EVALUATE\s+ROW\s*\(\s*"([^"]+)"\s*,\s*CALCULATE\s*\(\s*(SUM|COUNT|AVERAGE|MIN|MAX)\s*\(\s*'?([A-Za-z_][\w ]*?)'?\s*\[\s*([\w ]+?)\s*\]\s*\)\s*\)\s*\)$/i.exec(
-      d,
-    );
-  if (row) {
-    const [, label, agg, table, col] = row;
-    const sqlAgg = agg.toUpperCase() === 'AVERAGE' ? 'AVG' : agg.toUpperCase();
-    return `SELECT ${sqlAgg}([${col.trim()}]) AS [${label}] FROM [${table.trim()}]`;
-  }
-
-  return null;
+export function translateDaxToSql(dax: string, model?: FoldModel): string | null {
+  return foldDaxToSql(dax, model);
 }
 
 /** Error thrown for an unsupported loom-native DAX pattern (shared message). */
