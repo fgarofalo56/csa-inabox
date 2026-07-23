@@ -18,6 +18,20 @@
  */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+// E6 — the tier-router eval calls the REAL router the aoai-chat-client hot path
+// consults (routeTurnTier), imported from the shared console module (the same
+// import azure-clients.ts uses for bestReasoningModelFor — the E2 "shared pure
+// modules, import-both" rule; the router carries NO Azure-SDK/config-store dep,
+// so this stays a pure, unit-testable import — no coupling replication).
+import {
+  routeTurnTier,
+  MODEL_TIERS,
+  TASK_CLASSES,
+  type ModelTier,
+  type TaskClass,
+  type TierSelection,
+  type TierPolicyConfigShape,
+} from '../../../apps/fiab-console/lib/foundry/model-tier-router';
 
 // ── E1 eval-set row (content/evals/_schema.json) ─────────────────────────────
 
@@ -554,6 +568,197 @@ export function rollupSearchRun(results: SearchResult[]): SearchRunTotals {
     hitRate: round3(results.filter((r) => r.hit).length / n),
     mrrAvg: round3(avg(results.map((r) => r.mrr))),
     ndcgAvg: round3(avg(results.map((r) => r.ndcg))),
+  };
+}
+
+// ── E6 — tier-router decision evals (cost-per-quality) ───────────────────────
+
+/**
+ * One labeled tier-routing row (content/evals/_tier-labels.jsonl). The REAL
+ * router's decision for `prompt` is scored against `expectedTier` (the tier the
+ * labeled `taskClass` maps to under DEFAULT_TASK_TIER_MAP). Azure-native — the
+ * router is a pure Loom module, no Fabric/model dependency.
+ */
+export interface TierLabelRow {
+  id: string;
+  prompt: string;
+  expectedTier: ModelTier;
+  taskClass: TaskClass;
+}
+
+export interface TierLabelSet {
+  rows: TierLabelRow[];
+}
+
+/**
+ * Load the tier-label golden set from `<root>/_tier-labels.jsonl`. Unlike the
+ * surface/search loaders (which deliberately SKIP '_'-prefixed files) this reads
+ * the single '_'-prefixed label file by name, so the tier labels never leak into
+ * an answer-quality run. Strict-parse: a malformed / invalid-enum line throws —
+ * a broken label set fails loudly rather than silently scoring 0.
+ */
+export function loadTierLabels(fsRoot: string): TierLabelSet {
+  const p = path.join(fsRoot, '_tier-labels.jsonl');
+  if (!fs.existsSync(p)) return { rows: [] };
+  const lines = fs
+    .readFileSync(p, 'utf-8')
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+  const rows: TierLabelRow[] = lines.map((l, i) => {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(l);
+    } catch {
+      throw new Error(`_tier-labels.jsonl:${i + 1}: invalid JSON`);
+    }
+    const r = parsed as TierLabelRow;
+    if (!r.prompt || !r.expectedTier || !r.taskClass) {
+      throw new Error(`_tier-labels.jsonl:${i + 1}: row missing prompt/expectedTier/taskClass`);
+    }
+    if (!(MODEL_TIERS as readonly string[]).includes(r.expectedTier)) {
+      throw new Error(`_tier-labels.jsonl:${i + 1}: invalid expectedTier '${r.expectedTier}'`);
+    }
+    if (!(TASK_CLASSES as readonly string[]).includes(r.taskClass)) {
+      throw new Error(`_tier-labels.jsonl:${i + 1}: invalid taskClass '${r.taskClass}'`);
+    }
+    return {
+      id: r.id || `tier-${String(i + 1).padStart(3, '0')}`,
+      prompt: r.prompt,
+      expectedTier: r.expectedTier,
+      taskClass: r.taskClass,
+    };
+  });
+  return { rows };
+}
+
+/**
+ * A fully-wired synthetic tier policy: every tier resolves to a DISTINCT
+ * placeholder deployment. This isolates the router's LOGICAL decision
+ * (classifyTaskClass → DEFAULT_TASK_TIER_MAP) from deployment availability —
+ * {@link selectTier} only collapses a desired tier to `standard` when that tier
+ * has NO configured deployment, which would mask the routing decision the eval
+ * verifies. The task-class → tier mapping is NOT overridden here, so the REAL
+ * DEFAULT_TASK_TIER_MAP is exercised end-to-end.
+ */
+export const TIER_EVAL_CFG: TierPolicyConfigShape = {
+  modelTierRoutingEnabled: true,
+  modelTiers: { mini: 'eval-mini', standard: 'eval-standard', strong: 'eval-strong' },
+};
+
+/**
+ * Run the REAL tier router over one labeled prompt. Calls the shared
+ * {@link routeTurnTier} — the exact function the unified aoai-chat-client hot
+ * path consults per turn — with the fully-wired synthetic policy above, so the
+ * returned `.tier` is the router's honest classify→map decision.
+ * `escalateOnly:false` so a lightweight→mini downshift is scored as-decided
+ * rather than suppressed by the auto-path escalate-only guard (the guard only
+ * affects the deployment/routed flag, never the reported tier — passing false is
+ * explicit intent, not a behavior change).
+ */
+export function routeTierForPrompt(prompt: string): TierSelection {
+  return routeTurnTier({
+    cfg: TIER_EVAL_CFG,
+    prompt,
+    baseDeployment: 'eval-standard',
+    escalateOnly: false,
+  });
+}
+
+/** The score for ONE tier-routing decision. */
+export interface TierDecisionScore {
+  /** True when the router's ridden tier equals the labeled expected tier. */
+  correct: boolean;
+  chosenTier: ModelTier;
+  expectedTier: ModelTier;
+  taskClass: TaskClass;
+  /** The task class the router itself classified the prompt into. */
+  chosenTaskClass: TaskClass;
+  /** True when the router's classification matches the labeled task class. */
+  taskClassCorrect: boolean;
+}
+
+/**
+ * Score one tier decision — PURE. It takes a precomputed {@link TierSelection}
+ * (from {@link routeTierForPrompt}, i.e. the REAL routeTurnTier), so this
+ * comparator has ZERO coupling to router internals and is exhaustively testable
+ * without invoking the router. `correct` compares the ridden tier to the label.
+ */
+export function scoreTierDecision(row: TierLabelRow, selection: TierSelection): TierDecisionScore {
+  return {
+    correct: selection.tier === row.expectedTier,
+    chosenTier: selection.tier,
+    expectedTier: row.expectedTier,
+    taskClass: row.taskClass,
+    chosenTaskClass: selection.taskClass,
+    taskClassCorrect: selection.taskClass === row.taskClass,
+  };
+}
+
+/** A tier confusion matrix: matrix[expectedTier][chosenTier] = count. */
+export type TierMatrix = Record<ModelTier, Record<ModelTier, number>>;
+
+/** Per labeled task class: tier-decision accuracy. */
+export interface TierPerClassStat {
+  total: number;
+  correct: number;
+  accuracy: number;
+}
+
+/** The confusion + accuracy roll-up the tier-run doc carries. */
+export interface TierConfusion {
+  rows: number;
+  /** Fraction of rows whose ridden tier equals the expected tier (0..1). */
+  tierAccuracy: number;
+  /** Fraction of rows whose classified task class equals the labeled one (0..1). */
+  taskClassAccuracy: number;
+  /** matrix[expectedTier][chosenTier] = count (row = truth, col = prediction). */
+  matrix: TierMatrix;
+  /** Per labeled task class: tier-decision accuracy. */
+  perClass: Record<TaskClass, TierPerClassStat>;
+}
+
+/** An empty tier×tier matrix (every cell 0) — deterministic key order. */
+function emptyTierMatrix(): TierMatrix {
+  const m = {} as TierMatrix;
+  for (const e of MODEL_TIERS) {
+    m[e] = {} as Record<ModelTier, number>;
+    for (const c of MODEL_TIERS) m[e][c] = 0;
+  }
+  return m;
+}
+
+/**
+ * Reduce per-row tier scores into the confusion matrix + accuracy. Deterministic;
+ * `round3` matches the surface/search rollups. An empty input yields zeroed
+ * accuracy with a fully-zeroed matrix (never NaN).
+ */
+export function reduceTierConfusion(scores: TierDecisionScore[]): TierConfusion {
+  const round3 = (x: number) => Math.round(x * 1000) / 1000;
+  const matrix = emptyTierMatrix();
+  const perClass = {} as Record<TaskClass, TierPerClassStat>;
+  for (const tc of TASK_CLASSES) perClass[tc] = { total: 0, correct: 0, accuracy: 0 };
+  let correct = 0;
+  let taskClassCorrect = 0;
+  for (const s of scores) {
+    matrix[s.expectedTier][s.chosenTier] += 1;
+    if (s.correct) correct += 1;
+    if (s.taskClassCorrect) taskClassCorrect += 1;
+    const pc = perClass[s.taskClass];
+    pc.total += 1;
+    if (s.correct) pc.correct += 1;
+  }
+  for (const tc of TASK_CLASSES) {
+    const pc = perClass[tc];
+    pc.accuracy = pc.total ? round3(pc.correct / pc.total) : 0;
+  }
+  const n = scores.length;
+  return {
+    rows: n,
+    tierAccuracy: n ? round3(correct / n) : 0,
+    taskClassAccuracy: n ? round3(taskClassCorrect / n) : 0,
+    matrix,
+    perClass,
   };
 }
 

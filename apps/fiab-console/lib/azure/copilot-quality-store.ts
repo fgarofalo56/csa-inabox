@@ -14,8 +14,9 @@ import * as path from 'node:path';
 import { copilotEvalsContainer } from '@/lib/azure/cosmos-client';
 import type {
   CopilotEvalRunDoc, CopilotEvalResultDoc, CopilotSearchRunDoc, CopilotSearchResultDoc,
+  CopilotTierRunDoc, CopilotTierResultDoc,
 } from '@/lib/azure/copilot-evals-model';
-import type { EvalFloors, SearchFloors } from '@/lib/admin/copilot-quality';
+import type { EvalFloors, SearchFloors, TierFloors } from '@/lib/admin/copilot-quality';
 
 /** Bound the run scan — 10 surfaces × retained runs; ~200 is generous. */
 const MAX_RUN_DOCS = 400;
@@ -27,6 +28,7 @@ const MAX_RESULT_DOCS = 200;
 export interface EvalFloorsFile {
   floors: EvalFloors;
   searchFloors: SearchFloors;
+  tierFloors: TierFloors;
   meta?: { lastRatchet?: string | null; note?: string };
 }
 
@@ -59,14 +61,15 @@ function resolveFloorsPath(): string | null {
  */
 export function loadEvalFloors(): EvalFloorsFile {
   const p = resolveFloorsPath();
-  if (!p) return { floors: {}, searchFloors: {} };
+  if (!p) return { floors: {}, searchFloors: {}, tierFloors: {} };
   try {
     const raw = JSON.parse(fs.readFileSync(p, 'utf-8')) as {
-      floors?: EvalFloors; searchFloors?: SearchFloors; _meta?: { lastRatchet?: string | null; note?: string };
+      floors?: EvalFloors; searchFloors?: SearchFloors; tierFloors?: TierFloors;
+      _meta?: { lastRatchet?: string | null; note?: string };
     };
-    return { floors: raw.floors ?? {}, searchFloors: raw.searchFloors ?? {}, meta: raw._meta };
+    return { floors: raw.floors ?? {}, searchFloors: raw.searchFloors ?? {}, tierFloors: raw.tierFloors ?? {}, meta: raw._meta };
   } catch {
-    return { floors: {}, searchFloors: {} };
+    return { floors: {}, searchFloors: {}, tierFloors: {} };
   }
 }
 
@@ -194,6 +197,59 @@ export async function searchDomainResults(
         ],
       },
       { partitionKey: surface },
+    )
+    .fetchAll();
+  return { runId: targetRun, results: resources };
+}
+
+// ── E6 — tier-router decision reads (PK 'tier:router') ───────────────────────
+
+/** Every retained `tier-run` doc (single partition 'tier:router', newest first). */
+export async function listTierRuns(): Promise<CopilotTierRunDoc[]> {
+  const c = await copilotEvalsContainer();
+  const { resources } = await c.items
+    .query<CopilotTierRunDoc>(
+      {
+        query:
+          "SELECT * FROM c WHERE c.docType = 'tier-run' AND c.surface = 'tier:router' ORDER BY c.finishedAt DESC OFFSET 0 LIMIT @n",
+        parameters: [{ name: '@n', value: MAX_RUN_DOCS }],
+      },
+      { partitionKey: 'tier:router' },
+    )
+    .fetchAll();
+  return resources;
+}
+
+/** The per-decision `tier-result` docs for the latest (or given) tier run. */
+export async function tierRunResults(
+  runId?: string,
+): Promise<{ runId: string | null; results: CopilotTierResultDoc[] }> {
+  const c = await copilotEvalsContainer();
+  let targetRun = runId;
+  if (!targetRun) {
+    const { resources } = await c.items
+      .query<CopilotTierRunDoc>(
+        {
+          query:
+            "SELECT * FROM c WHERE c.docType = 'tier-run' AND c.surface = 'tier:router' ORDER BY c.finishedAt DESC OFFSET 0 LIMIT 1",
+        },
+        { partitionKey: 'tier:router' },
+      )
+      .fetchAll();
+    targetRun = resources[0]?.runId;
+  }
+  if (!targetRun) return { runId: null, results: [] };
+  const { resources } = await c.items
+    .query<CopilotTierResultDoc>(
+      {
+        query:
+          "SELECT * FROM c WHERE c.docType = 'tier-result' AND c.surface = 'tier:router' AND c.runId = @r OFFSET 0 LIMIT @n",
+        parameters: [
+          { name: '@r', value: targetRun },
+          { name: '@n', value: MAX_RESULT_DOCS },
+        ],
+      },
+      { partitionKey: 'tier:router' },
     )
     .fetchAll();
   return { runId: targetRun, results: resources };

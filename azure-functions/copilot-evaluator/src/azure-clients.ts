@@ -32,7 +32,9 @@ import { DefaultAzureCredential } from '@azure/identity';
 import { CosmosClient, type Container } from '@azure/cosmos';
 import { bestReasoningModelFor } from '../../../apps/fiab-console/lib/foundry/model-tier-router';
 import type { LoomCloud } from '../../../apps/fiab-console/lib/azure/cloud-endpoints';
-import type { EvalResult, JudgeScores, ProbeResult, RunTotals, SearchResult, SearchRunTotals } from './evaluator-core';
+import type {
+  EvalResult, JudgeScores, ProbeResult, RunTotals, SearchResult, SearchRunTotals, TierConfusion,
+} from './evaluator-core';
 import { parseJudge } from './evaluator-core';
 
 const cred = new DefaultAzureCredential();
@@ -286,6 +288,64 @@ export async function writeSearchResults(
       id: `${runId}:search:${r.queryId}`,
       surface: `search:${domain}`,
       docType: 'search-result',
+      schemaVersion: 1,
+      runId,
+      ttl: RESULT_TTL_SECONDS,
+      ...r,
+    });
+  }
+}
+
+// ── E6 — tier-router decision evals (deterministic, no probe/judge spend) ────
+
+export interface TierRunDoc {
+  id: string;
+  /** PK — 'tier:router' so tier runs partition apart from copilot surfaces + search. */
+  surface: 'tier:router';
+  runId: string;
+  docType: 'tier-run';
+  /** MIG1 versioned-doc convention: v1. */
+  schemaVersion: 1;
+  startedAt: string;
+  finishedAt: string;
+  trigger: 'corpus' | 'nightly' | 'manual';
+  totals: TierConfusion;
+}
+
+/** One scored tier-routing decision (the `tier-result` doc body, ttl 180d). */
+export interface TierResultRow {
+  rowId: string;
+  prompt: string;
+  expectedTier: string;
+  chosenTier: string;
+  taskClass: string;
+  chosenTaskClass: string;
+  correct: boolean;
+  taskClassCorrect: boolean;
+  deployment?: string;
+}
+
+export async function writeTierRun(
+  endpoint: string,
+  database: string,
+  doc: TierRunDoc,
+): Promise<void> {
+  const c = await evalsContainer(endpoint, database);
+  await c.items.upsert(doc);
+}
+
+export async function writeTierResults(
+  endpoint: string,
+  database: string,
+  runId: string,
+  results: TierResultRow[],
+): Promise<void> {
+  const c = await evalsContainer(endpoint, database);
+  for (const r of results) {
+    await c.items.upsert({
+      id: `${runId}:tier:${r.rowId}`,
+      surface: 'tier:router',
+      docType: 'tier-result',
       schemaVersion: 1,
       runId,
       ttl: RESULT_TTL_SECONDS,

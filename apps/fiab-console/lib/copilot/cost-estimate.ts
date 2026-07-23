@@ -52,3 +52,31 @@ export function estCostUsd(model: string, promptTokens: number, completionTokens
   const ct = Number.isFinite(completionTokens) && completionTokens > 0 ? completionTokens : 0;
   return Number(((pt / 1000) * p.in + (ct / 1000) * p.out).toFixed(4));
 }
+
+// ── E6 — per-tier price coefficients (tier-router cost-per-quality) ───────────
+
+/** The tiers the model-tier-router routes turns onto (kept structural — a bare
+ *  union here so this pure module needs no import from lib/foundry). */
+export type CostTier = 'mini' | 'standard' | 'strong';
+
+/**
+ * A representative blended (½·input + ½·output) list price per 1K tokens for
+ * each routing tier, derived from the SAME {@link PRICE_PER_1K} table the usage
+ * dashboard uses — one source of truth, never a re-typed number. The mapping
+ * follows the availability-matrix intent (mini ≈ gpt-4.1-mini, standard ≈
+ * gpt-4.1, strong ≈ gpt-4o), so the coefficients are ~0.001 / 0.005 / 0.010 —
+ * the ~10× spread that makes routing a lightweight turn to `mini` the economical
+ * choice. Used by the E6 tier-routing "cost-per-quality" view; the token COUNTS
+ * in production are always the real AOAI `usage`, so any figure derived here is
+ * an ESTIMATE (labeled as such in the UI), not a billed amount.
+ */
+export const TIER_PRICE_COEFF: Record<CostTier, number> = {
+  mini: Number((((PRICE_PER_1K['gpt-4.1-mini'].in + PRICE_PER_1K['gpt-4.1-mini'].out) / 2)).toFixed(5)),
+  standard: Number((((PRICE_PER_1K['gpt-4.1'].in + PRICE_PER_1K['gpt-4.1'].out) / 2)).toFixed(5)),
+  strong: Number((((PRICE_PER_1K['gpt-4o'].in + PRICE_PER_1K['gpt-4o'].out) / 2)).toFixed(5)),
+};
+
+/** The blended $/1K coefficient for a routing tier (defaults to `standard`). */
+export function tierPriceCoeff(tier: CostTier): number {
+  return TIER_PRICE_COEFF[tier] ?? TIER_PRICE_COEFF.standard;
+}

@@ -8,16 +8,17 @@
  */
 import { useState } from 'react';
 import { TabList, Tab, makeStyles, tokens } from '@fluentui/react-components';
-import { TargetArrow24Regular, Search24Regular } from '@fluentui/react-icons';
+import { TargetArrow24Regular, Search24Regular, Router24Regular } from '@fluentui/react-icons';
 import { CopilotQualityPanel } from '@/lib/components/admin/copilot-quality-panel';
 import { SearchQualityPanel } from '@/lib/components/admin/search-quality-panel';
+import { TierRoutingPanel } from '@/lib/components/admin/tier-routing-panel';
 
 const useStyles = makeStyles({
   root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL, minWidth: 0 },
   tabs: { marginBottom: tokens.spacingVerticalS },
 });
 
-type TabKey = 'answers' | 'search';
+type TabKey = 'answers' | 'search' | 'tier';
 
 export function CopilotQualityTabs() {
   const styles = useStyles();
@@ -31,8 +32,9 @@ export function CopilotQualityTabs() {
       >
         <Tab value="answers" icon={<TargetArrow24Regular />}>Answer quality</Tab>
         <Tab value="search" icon={<Search24Regular />}>Search relevance</Tab>
+        <Tab value="tier" icon={<Router24Regular />}>Tier routing</Tab>
       </TabList>
-      {tab === 'answers' ? <CopilotQualityPanel /> : <SearchQualityPanel />}
+      {tab === 'answers' ? <CopilotQualityPanel /> : tab === 'search' ? <SearchQualityPanel /> : <TierRoutingPanel />}
     </div>
   );
 }

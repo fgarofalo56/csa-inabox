@@ -1,0 +1,64 @@
+{"id":"tier-001","prompt":"What is a lakehouse in CSA Loom?","expectedTier":"mini","taskClass":"lightweight"}
+{"id":"tier-002","prompt":"What's the difference between a warehouse and a lakehouse?","expectedTier":"mini","taskClass":"lightweight"}
+{"id":"tier-003","prompt":"Define semantic model.","expectedTier":"mini","taskClass":"lightweight"}
+{"id":"tier-004","prompt":"List my workspaces.","expectedTier":"mini","taskClass":"lightweight"}
+{"id":"tier-005","prompt":"Show the status of my sales pipeline.","expectedTier":"mini","taskClass":"lightweight"}
+{"id":"tier-006","prompt":"Who is the owner of this dataset?","expectedTier":"mini","taskClass":"lightweight"}
+{"id":"tier-007","prompt":"Hello, can you help me get started with Loom?","expectedTier":"mini","taskClass":"lightweight"}
+{"id":"tier-008","prompt":"Thanks for the quick answer earlier.","expectedTier":"mini","taskClass":"lightweight"}
+{"id":"tier-009","prompt":"What is Azure Data Explorer used for?","expectedTier":"mini","taskClass":"lightweight"}
+{"id":"tier-010","prompt":"Translate this dashboard title into Spanish.","expectedTier":"mini","taskClass":"lightweight"}
+{"id":"tier-011","prompt":"Show me the list of catalogs.","expectedTier":"mini","taskClass":"lightweight"}
+{"id":"tier-012","prompt":"What's the default backend for an eventstream?","expectedTier":"mini","taskClass":"lightweight"}
+{"id":"tier-013","prompt":"Define data lineage.","expectedTier":"mini","taskClass":"lightweight"}
+{"id":"tier-014","prompt":"List the tables in my bronze lakehouse.","expectedTier":"mini","taskClass":"lightweight"}
+{"id":"tier-015","prompt":"Who is assigned to the finance workspace?","expectedTier":"mini","taskClass":"lightweight"}
+{"id":"tier-016","prompt":"Yes, show the KQL database overview.","expectedTier":"mini","taskClass":"lightweight"}
+{"id":"tier-017","prompt":"Okay, what is a mirrored database?","expectedTier":"mini","taskClass":"lightweight"}
+{"id":"tier-018","prompt":"What is the pass rate on my latest report?","expectedTier":"mini","taskClass":"lightweight"}
+{"id":"tier-019","prompt":"Show the columns of the customers dataset.","expectedTier":"mini","taskClass":"lightweight"}
+{"id":"tier-020","prompt":"Define KQL for me.","expectedTier":"mini","taskClass":"lightweight"}
+{"id":"tier-021","prompt":"What is the list price per query for ADX?","expectedTier":"mini","taskClass":"lightweight"}
+{"id":"tier-022","prompt":"List all of my pinned items.","expectedTier":"mini","taskClass":"lightweight"}
+{"id":"tier-023","prompt":"Create a new dashboard for the sales team.","expectedTier":"standard","taskClass":"general"}
+{"id":"tier-024","prompt":"Add a calculated column to the revenue report.","expectedTier":"standard","taskClass":"general"}
+{"id":"tier-025","prompt":"Rename the marketing workspace to Growth.","expectedTier":"standard","taskClass":"general"}
+{"id":"tier-026","prompt":"Schedule the ingestion pipeline to run every night.","expectedTier":"standard","taskClass":"general"}
+{"id":"tier-027","prompt":"Connect my ADLS Gen2 storage account to the lakehouse.","expectedTier":"standard","taskClass":"general"}
+{"id":"tier-028","prompt":"Publish the finance report to the shared workspace.","expectedTier":"standard","taskClass":"general"}
+{"id":"tier-029","prompt":"Grant read access to the analytics group.","expectedTier":"standard","taskClass":"general"}
+{"id":"tier-030","prompt":"Configure the eventstream to write into Event Hubs.","expectedTier":"standard","taskClass":"general"}
+{"id":"tier-031","prompt":"Set up a new KQL database for telemetry data.","expectedTier":"standard","taskClass":"general"}
+{"id":"tier-032","prompt":"Enable row-level security on the customers table.","expectedTier":"standard","taskClass":"general"}
+{"id":"tier-033","prompt":"Move the sales report into the Finance folder.","expectedTier":"standard","taskClass":"general"}
+{"id":"tier-034","prompt":"Duplicate the onboarding pipeline for the EU tenant.","expectedTier":"standard","taskClass":"general"}
+{"id":"tier-035","prompt":"Update the dataset refresh cadence to hourly.","expectedTier":"standard","taskClass":"general"}
+{"id":"tier-036","prompt":"Provision a Synapse serverless endpoint for the warehouse.","expectedTier":"standard","taskClass":"general"}
+{"id":"tier-037","prompt":"Tag the customer dataset as sensitive PII.","expectedTier":"standard","taskClass":"general"}
+{"id":"tier-038","prompt":"Share the executive dashboard with the leadership group.","expectedTier":"standard","taskClass":"general"}
+{"id":"tier-039","prompt":"Export the quarterly report to a PDF file.","expectedTier":"standard","taskClass":"general"}
+{"id":"tier-040","prompt":"Bind the report to the sales semantic model.","expectedTier":"standard","taskClass":"general"}
+{"id":"tier-041","prompt":"Register the new notebook in the workspace catalog.","expectedTier":"standard","taskClass":"general"}
+{"id":"tier-042","prompt":"Change the warehouse capacity to the medium size.","expectedTier":"standard","taskClass":"general"}
+{"id":"tier-043","prompt":"Why is my Spark pool failing to start?","expectedTier":"strong","taskClass":"reasoning"}
+{"id":"tier-044","prompt":"Design a medallion lakehouse architecture for retail analytics.","expectedTier":"strong","taskClass":"reasoning"}
+{"id":"tier-045","prompt":"Debug this failing KQL query and explain the error.","expectedTier":"strong","taskClass":"reasoning"}
+{"id":"tier-046","prompt":"Optimize the warehouse load so the nightly refresh finishes faster.","expectedTier":"strong","taskClass":"reasoning"}
+{"id":"tier-047","prompt":"Compare ADLS Gen2 Delta and OneLake for our workload.","expectedTier":"strong","taskClass":"reasoning"}
+{"id":"tier-048","prompt":"Analyze the cost trend across my workspaces this quarter.","expectedTier":"strong","taskClass":"reasoning"}
+{"id":"tier-049","prompt":"Troubleshoot why the eventstream stopped delivering events.","expectedTier":"strong","taskClass":"reasoning"}
+{"id":"tier-050","prompt":"Refactor this pipeline into reusable parameterized templates.","expectedTier":"strong","taskClass":"reasoning"}
+{"id":"tier-051","prompt":"What is the root cause of the slow report render?","expectedTier":"strong","taskClass":"reasoning"}
+{"id":"tier-052","prompt":"Plan a migration from Synapse dedicated pools to serverless.","expectedTier":"strong","taskClass":"reasoning"}
+{"id":"tier-053","prompt":"Derive the DAX measure for year-over-year revenue growth.","expectedTier":"strong","taskClass":"reasoning"}
+{"id":"tier-054","prompt":"Write the SQL: SELECT customer, total FROM sales_fact.","expectedTier":"strong","taskClass":"reasoning"}
+{"id":"tier-055","prompt":"Create table dim_customer with a surrogate key column.","expectedTier":"strong","taskClass":"reasoning"}
+{"id":"tier-056","prompt":"Explain the trade-offs between ADX and Synapse for log analytics.","expectedTier":"strong","taskClass":"reasoning"}
+{"id":"tier-057","prompt":"Diagnose the intermittent 504 errors on the console.","expectedTier":"strong","taskClass":"reasoning"}
+{"id":"tier-058","prompt":"How do I architect a multi-region streaming solution?","expectedTier":"strong","taskClass":"reasoning"}
+{"id":"tier-059","prompt":"Prove that the semantic model totals match the warehouse.","expectedTier":"strong","taskClass":"reasoning"}
+{"id":"tier-060","prompt":"Reason through the best partitioning strategy for the fact table.","expectedTier":"strong","taskClass":"reasoning"}
+{"id":"tier-061","prompt":"This is a complex multi-step migration; walk me through it.","expectedTier":"strong","taskClass":"reasoning"}
+{"id":"tier-062","prompt":"Summarize errors by day: | summarize count() by bin(ts, 1d).","expectedTier":"strong","taskClass":"reasoning"}
+{"id":"tier-063","prompt":"Optimize and refactor my Databricks notebook for performance.","expectedTier":"strong","taskClass":"reasoning"}
+{"id":"tier-064","prompt":"Analyze and compare retrieval quality across two search indexes.","expectedTier":"strong","taskClass":"reasoning"}

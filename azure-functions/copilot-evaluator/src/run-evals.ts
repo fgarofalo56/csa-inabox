@@ -25,16 +25,21 @@ import {
   judgeLedgerDay,
   loadEvalSets,
   loadSearchEvalSets,
+  loadTierLabels,
   resolveEvalRoot,
   scoreRetrieval,
   scoreSearchRelevance,
   rollupSearchRun,
+  routeTierForPrompt,
+  scoreTierDecision,
+  reduceTierConfusion,
   deterministicGuards,
   buildJudgeMessages,
   computePass,
   rollupRun,
   type EvalResult,
   type SearchResult,
+  type TierDecisionScore,
 } from './evaluator-core';
 import {
   probeConsole,
@@ -45,9 +50,12 @@ import {
   writeResults,
   writeSearchRun,
   writeSearchResults,
+  writeTierRun,
+  writeTierResults,
   readJudgedToday,
   writeJudgedToday,
   judgeModelHint,
+  type TierResultRow,
 } from './azure-clients';
 
 /** Default top-K ranking window for search relevance when a row omits `k`. */
@@ -311,4 +319,97 @@ export async function runSearchEvals(
     summary.domains.push({ domain: set.domain, queries: totals.queries, hitRate: totals.hitRate, ndcgAvg: totals.ndcgAvg });
   }
   return summary;
+}
+
+// ── E6 — tier-router decision run (deterministic, no probe / no judge spend) ─
+
+export interface TierRunSummary {
+  ran: boolean;
+  reason?: string;
+  rows?: number;
+  tierAccuracy?: number;
+  taskClassAccuracy?: number;
+}
+
+/**
+ * Run the tier-router decision evals: load the golden _tier-labels.jsonl set,
+ * run the REAL router (routeTierForPrompt → routeTurnTier) over each labeled
+ * prompt, score each decision against its expected tier, and write the
+ * confusion-matrix + accuracy `tier-run` (+ per-row `tier-result`) docs to
+ * Cosmos `loom-copilot-evals` (PK 'tier:router'). The router is pure, so this
+ * needs NO console probe and NO AOAI judge — only Cosmos to persist results.
+ * Honest early-exit on missing Cosmos config / no label set.
+ */
+export async function runTierEvals(
+  trigger: 'corpus' | 'nightly' | 'manual',
+  context: InvocationContext,
+): Promise<TierRunSummary> {
+  const env = process.env;
+  if (!evalEnabled(env)) {
+    context.log('[copilot-evaluator/tier] disabled via LOOM_COPILOT_EVAL_ENABLED=false — no-op.');
+    return { ran: false, reason: 'disabled' };
+  }
+  // The tier eval only needs Cosmos to persist (the router is pure — no probe,
+  // no judge), so it gates on Cosmos alone rather than the full probe config.
+  const cosmosEndpoint = env.LOOM_COSMOS_ENDPOINT;
+  if (!cosmosEndpoint) {
+    context.warn('[copilot-evaluator/tier] honest-gate: not configured — set LOOM_COSMOS_ENDPOINT. No-op.');
+    return { ran: false, reason: 'missing config: LOOM_COSMOS_ENDPOINT' };
+  }
+  const cosmosDb = env.LOOM_COSMOS_DATABASE || 'loom';
+
+  const evalRoot = resolveEvalRoot(process.cwd());
+  if (!evalRoot) {
+    context.error('[copilot-evaluator/tier] no eval root found — deploy stages content/evals → ./evals.');
+    return { ran: false, reason: 'eval sets not found' };
+  }
+  const labels = loadTierLabels(evalRoot);
+  if (labels.rows.length === 0) {
+    context.warn(`[copilot-evaluator/tier] no _tier-labels.jsonl under ${evalRoot}.`);
+    return { ran: false, reason: 'no tier labels' };
+  }
+
+  const startedAt = new Date().toISOString();
+  const runId = `${startedAt.slice(0, 19).replace(/[:T-]/g, '')}-${trigger}-tier`;
+  const scores: TierDecisionScore[] = [];
+  const results: TierResultRow[] = [];
+  for (const row of labels.rows) {
+    const selection = routeTierForPrompt(row.prompt);
+    const score = scoreTierDecision(row, selection);
+    scores.push(score);
+    results.push({
+      rowId: row.id,
+      prompt: row.prompt,
+      expectedTier: score.expectedTier,
+      chosenTier: score.chosenTier,
+      taskClass: score.taskClass,
+      chosenTaskClass: score.chosenTaskClass,
+      correct: score.correct,
+      taskClassCorrect: score.taskClassCorrect,
+      deployment: selection.deployment,
+    });
+  }
+  const totals = reduceTierConfusion(scores);
+
+  try {
+    await writeTierResults(cosmosEndpoint, cosmosDb, runId, results);
+    await writeTierRun(cosmosEndpoint, cosmosDb, {
+      id: `${runId}:tier:router`,
+      surface: 'tier:router',
+      runId,
+      docType: 'tier-run',
+      schemaVersion: 1,
+      startedAt,
+      finishedAt: new Date().toISOString(),
+      trigger,
+      totals,
+    });
+  } catch (e: any) {
+    context.error(`[copilot-evaluator/tier] Cosmos write failed: ${e?.message || e}`);
+  }
+  context.log(
+    `[copilot-evaluator/tier] run: ${totals.rows} rows, tier-accuracy ${totals.tierAccuracy}, ` +
+      `task-class-accuracy ${totals.taskClassAccuracy}`,
+  );
+  return { ran: true, rows: totals.rows, tierAccuracy: totals.tierAccuracy, taskClassAccuracy: totals.taskClassAccuracy };
 }
