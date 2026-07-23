@@ -345,6 +345,15 @@ var loomContainers = [
   // completed task. createIfNotExists in cosmos-client.ts ensure() remains the
   // hotfix fallback.
   { name: 'a2a-tasks',             partitionKey: '/tenantId', ttl: 604800 }
+  // N10 — Answer-receipt governance audit trail. One doc per agentic Copilot
+  // answer (exact SQL/KQL/Cypher + row counts, grounding sources, model tier,
+  // token cost, and the Verified/Unverified/Refused verdict) written by the
+  // orchestrator, read by the ReceiptPanel + governance audit. PK /sessionId so
+  // every per-conversation receipt read is single-partition. TTL-enabled (each
+  // doc carries a 90-day `ttl`; container-level ttl: -1 turns TTL ON without a
+  // blanket expiry) so the trail self-evicts. createIfNotExists in
+  // cosmos-client.ts ensure() remains the hotfix fallback.
+  { name: 'loom-answer-receipts',  partitionKey: '/sessionId', ttl: -1 }
 ]
 
 resource loomDb 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases@2024-12-01-preview' = {

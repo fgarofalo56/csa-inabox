@@ -191,6 +191,14 @@ export const RUNTIME_FLAGS: readonly RuntimeFlagDef[] = [
     surface: 'Workspace Settings flyout → Identity tab (/workspaces, admin)',
   },
   {
+    id: 'n10-answer-receipts',
+    label: 'Copilot — answer receipts + verified badge',
+    description:
+      'The per-answer Receipt panel in the Copilot dock: the plan the loop followed, the exact SQL/KQL/Cypher executed with real row counts, grounding sources + graph paths + metrics, the model tier, token cost, and the Verified/Unverified/Refused verdict — plus the persisted governance-audit reference. OFF hides the collapsible Receipt panel under each answer on the next render (the answer, citations, and metadata bar are unaffected); receipts still persist to loom-answer-receipts either way — this only controls the reader surface. No roll required.',
+    ownerItem: 'N10',
+    surface: 'Copilot dock transcript — per-answer Receipt panel (cross-item + per-surface Copilots)',
+  },
+  {
     id: 'a3-dax-fold-engine',
     label: 'Semantic model — DAX fold engine',
     description:

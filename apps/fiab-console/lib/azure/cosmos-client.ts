@@ -19,6 +19,9 @@ import { createTtlEnabledContainer } from '@/lib/azure/cosmos-ttl';
 // E2 — loom-copilot-evals doc shapes + MIG1 migrator registration (module-scope
 // side effect: the chain is live before any read materializes).
 import '@/lib/azure/copilot-evals-model';
+// N10 — loom-answer-receipts doc shape + MIG1 migrator registration (module-scope
+// side effect: the chain is live before any read materializes).
+import '@/lib/azure/answer-receipts-model';
 
 let _client: CosmosClient | null = null;
 let _db: Database | null = null;
@@ -271,6 +274,18 @@ let _objectSyncJobs: Container | null = null;
 // set defaultTtl -1 (TTL enabled, per-doc expiry); withMigrations wraps reads.
 // ARM-provisioned in cosmos.bicep's loomContainers; this is the hotfix fallback.
 let _copilotEvals: Container | null = null;
+// N10 — Answer-receipt governance audit trail (loom-answer-receipts). One doc
+// per agentic Copilot answer, written by the orchestrator: the exact SQL/KQL/
+// Cypher executed, row counts, grounding sources, model tier, token cost, and
+// the Verified/Unverified/Refused verdict. PK /sessionId so "every receipt for
+// this conversation" is a single-partition read and each is a point-read by
+// (id, sessionId). TTL-enabled (defaultTtl -1; each doc carries its own 90-day
+// `ttl`) so the trail self-evicts. Doc shape + MIG1 versioning:
+// lib/azure/answer-receipts-model.ts; read/write helpers: answer-receipts-store.ts.
+// Distinct createIfNotExists (not `mk`) to set defaultTtl -1; withMigrations
+// wraps reads. ARM-provisioned in cosmos.bicep's loomContainers; this is the
+// hotfix fallback.
+let _answerReceipts: Container | null = null;
 // Scoped API tokens (PAT) — BR-PAT. One doc per token, PK /id so the hot
 // resolvePat() path (every non-interactive API request) is a single-partition
 // point-read by the token id carried in the Authorization: Bearer header. Stores
@@ -1158,6 +1173,11 @@ async function ensure() {
   _copilotEvals = withMigrations((await database.containers.createIfNotExists({
     id: 'loom-copilot-evals', partitionKey: { paths: ['/surface'] }, defaultTtl: -1,
   })).container, 'loom-copilot-evals');
+  // N10 — Answer-receipt governance audit trail. PK /sessionId; defaultTtl -1 =
+  // TTL enabled, each doc carries its own 90-day `ttl`. withMigrations wraps reads.
+  _answerReceipts = withMigrations((await database.containers.createIfNotExists({
+    id: 'loom-answer-receipts', partitionKey: { paths: ['/sessionId'] }, defaultTtl: -1,
+  })).container, 'loom-answer-receipts');
   // C3 — cost-anomaly watch rules (one+ per cost scope), PK /scope so the
   // scheduled monitor's per-scope read is single-partition. No TTL — durable
   // until an admin deletes/edits. ARM-provisioned in cosmos.bicep's
@@ -1273,6 +1293,8 @@ export async function a2aTasksContainer(): Promise<Container> { await ensure(); 
 /** WS-4.4 — Dataset→object sync job progress (PK /ontologyId). */
 export async function objectSyncJobsContainer(): Promise<Container> { await ensure(); return _objectSyncJobs!; }
 export async function copilotEvalsContainer(): Promise<Container> { await ensure(); return _copilotEvals!; }
+/** N10 — Answer-receipt governance audit trail (loom-answer-receipts), PK /sessionId. */
+export async function answerReceiptsContainer(): Promise<Container> { await ensure(); return _answerReceipts!; }
 /** Scoped API tokens (PAT, BR-PAT) — PK /id; stores a SHA-256 hash of the secret only. */
 export async function loomPatTokensContainer(): Promise<Container> { await ensure(); return _loomPatTokens!; }
 /** BR-SCIM — SCIM 2.0 provisioned users (PK /id). */

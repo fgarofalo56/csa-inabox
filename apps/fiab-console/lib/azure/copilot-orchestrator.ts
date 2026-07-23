@@ -134,6 +134,12 @@ import { getLayeredContext, memoriesToCitations } from '@/lib/azure/memory-recal
 // Tool-provenance → grounding citation mapper (CTS-04). Pure; maps a tool
 // result's known provenance shapes into the Citation[] the transcript renders.
 import { extractCitationsFromToolResult, mergeCitations } from '@/lib/copilot/tool-citations';
+// N10 — Answer-receipt assembler (pure) + best-effort Cosmos persistence. Every
+// agentic answer's final step assembles a receipt (exact SQL/KQL/Cypher + row
+// counts, sources, tier, cost, verdict) and persists it to loom-answer-receipts;
+// the persisted doc id is threaded back onto the final step as `receiptId`.
+import { assembleAnswerReceipt } from '@/lib/copilot/answer-receipt';
+import { persistAnswerReceipt } from '@/lib/azure/answer-receipts-store';
 
 // ---------- item-type slug normalization (build-assist robustness) ----------
 // The model often guesses item-type slugs with underscores or marketing names
@@ -1405,6 +1411,11 @@ export type OrchestratorStep =
       // CTS-03 per-turn phase timings (classify / prompt-build / llm / tools) for
       // the admin deep-trace panel's Timeline tab. Best-effort; omitted on error.
       phaseTimings?: PhaseTiming[];
+      // N10: the persisted loom-answer-receipts doc id for this answer's receipt.
+      // Best-effort — omitted when receipt assembly/persistence is unavailable.
+      // The ReceiptPanel re-assembles the receipt from the transcript and surfaces
+      // this id as the persisted governance-audit reference.
+      receiptId?: string;
     }
   | { kind: 'error'; error: string; code?: string }
   // CTS-05: emitted once per turn at message-build time, before the AOAI loop.
@@ -2040,6 +2051,9 @@ async function* orchestrateViaMaf(
   const decoder = new TextDecoder();
   let buf = '';
   let currentEvent = '';
+  // N10: accumulate the proxied steps so the SOVEREIGN-MOAT receipt is assembled
+  // + persisted on the IL5/Gov MAF tier too — identically to the Foundry tier.
+  const mafSteps: Array<Record<string, unknown>> = [];
 
   while (true) {
     const { done, value } = await reader.read();
@@ -2056,6 +2070,40 @@ async function* orchestrateViaMaf(
           let step: OrchestratorStep | null = null;
           try { step = JSON.parse(raw) as OrchestratorStep; } catch { step = null; }
           if (step) {
+            mafSteps.push(step as unknown as Record<string, unknown>);
+            // N10: assemble + persist the answer receipt for the MAF-tier final
+            // step, threading the persisted id back onto it. Best-effort — the
+            // receipt is the IL5 compliance artifact but must never block the
+            // answer. Runs in-boundary (Gov Cosmos), so it holds air-gapped.
+            if (step.kind === 'final') {
+              try {
+                const f = step as Record<string, unknown>;
+                const receipt = assembleAnswerReceipt(
+                  {
+                    prompt,
+                    steps: mafSteps,
+                    model: f.model as string | undefined,
+                    modelTier: f.modelTier as string | undefined,
+                    taskClass: f.taskClass as string | undefined,
+                    routedTier: f.routedTier as string | undefined,
+                    usage: f.usage as Record<string, number> | undefined,
+                    costUsd: f.costUsd as number | undefined,
+                    turnLatencyMs: f.turnLatencyMs as number | undefined,
+                    phaseTimings: f.phaseTimings as never,
+                    citations: f.citations as Array<Record<string, unknown>> | undefined,
+                    tools: (f.turnDetail as { tools?: never } | undefined)?.tools,
+                  },
+                  { createdAt: new Date().toISOString() },
+                );
+                const receiptId = await persistAnswerReceipt(receipt, {
+                  sessionId,
+                  userOid,
+                  tenantId: opts.tenantId ?? undefined,
+                  surface: opts.persona || 'cross-item',
+                });
+                (step as { receiptId?: string }).receiptId = receiptId;
+              } catch { /* receipt is best-effort — never block the answer */ }
+            }
             await persistStep(sessionId, userOid, step);
             yield step;
             if (step.kind === 'final' || step.kind === 'error') return;
@@ -2426,6 +2474,11 @@ export async function* orchestrate(opts: OrchestrateOptions): AsyncIterable<Orch
   // durationMs, ok, error?}) attached to the final step so the collapsible detail
   // badge can render the full tool table with "via <server>" attribution.
   const turnTools: TurnToolDetail[] = [];
+  // N10: accumulate the raw tool_call/tool_result steps for THIS turn so the
+  // answer-receipt assembler can extract the exact SQL/KQL/Cypher executed + row
+  // counts. Lightweight (references to args/results already computed); consumed
+  // once at the final step. Never affects the stream.
+  const turnReceiptSteps: Array<Record<string, unknown>> = [];
   // CTS-04: accumulate grounding citations mapped from tool provenance (docs RAG
   // hits, agentic knowledge-base retrieval, schema reads) across the turn. Seeded
   // with the CTS-08 recalled memories so the answer attributes what it grounded on.
@@ -2521,6 +2574,43 @@ export async function* orchestrate(opts: OrchestrateOptions): AsyncIterable<Orch
       // so the tier router's latency-pressure protection + the perf SLO badge
       // read a live burn. Best-effort; never affects the turn result.
       try { recordCopilotTurn(turnLatencyMs); } catch { /* telemetry only */ }
+      // Compute once, reuse in the final step AND the N10 receipt.
+      const turnCostUsd = estCostUsd(target.deployment, usage.promptTokens, usage.completionTokens);
+      const turnPhaseTimings = phaseTimer.timings();
+
+      // N10: assemble the answer receipt from this turn's real signals (exact
+      // SQL/KQL/Cypher + row counts, grounding sources, tier, cost, verdict) and
+      // persist it to loom-answer-receipts as the governance audit trail. Pure
+      // assembly + a best-effort Cosmos upsert — a receipt hiccup NEVER blocks or
+      // fails the answer. The persisted doc id is threaded back onto the final
+      // step (`receiptId`) so the receipt surfaces its own audit reference.
+      let receiptId: string | undefined;
+      try {
+        const receipt = assembleAnswerReceipt(
+          {
+            prompt,
+            steps: turnReceiptSteps,
+            model: target.deployment,
+            modelTier,
+            taskClass,
+            routedTier,
+            usage,
+            costUsd: turnCostUsd,
+            turnLatencyMs,
+            phaseTimings: turnPhaseTimings,
+            citations: turnCitations as Array<Record<string, unknown>>,
+            tools: turnTools,
+          },
+          { createdAt: new Date().toISOString() },
+        );
+        receiptId = await persistAnswerReceipt(receipt, {
+          sessionId,
+          userOid,
+          tenantId: opts.tenantId ?? undefined,
+          surface: personaTag,
+        });
+      } catch { /* receipt is best-effort — never block the answer */ }
+
       const finalStep: OrchestratorStep = {
         kind: 'final',
         content: msg.content || '',
@@ -2532,7 +2622,7 @@ export async function* orchestrate(opts: OrchestrateOptions): AsyncIterable<Orch
         promptTokens: usage.promptTokens,
         completionTokens: usage.completionTokens,
         turnLatencyMs,
-        costUsd: estCostUsd(target.deployment, usage.promptTokens, usage.completionTokens),
+        costUsd: turnCostUsd,
         // CTS-16: the AIF-12 tier the router chose (omitted when no active swap).
         ...(routedTier ? { routedTier } : {}),
         // WS-1.1: always-present tier attribution (the trace attribute), so a
@@ -2548,7 +2638,9 @@ export async function* orchestrate(opts: OrchestrateOptions): AsyncIterable<Orch
         // replayed session restores the meter without a separate lookup.
         contextUsage,
         // CTS-03: per-phase ms for the admin deep-trace Timeline tab.
-        phaseTimings: phaseTimer.timings(),
+        phaseTimings: turnPhaseTimings,
+        // N10: the persisted receipt's Cosmos doc id (best-effort).
+        ...(receiptId ? { receiptId } : {}),
       };
       await persistStep(sessionId, userOid, finalStep);
       yield finalStep;
@@ -2610,6 +2702,10 @@ export async function* orchestrate(opts: OrchestrateOptions): AsyncIterable<Orch
             result: publicResult,
           };
           turnTools.push({ name: tc.function.name, serverName: tool.serverName, durationMs: okDurationMs, ok: true });
+          // N10: record the call+result so the receipt can surface the exact
+          // query executed (from args) + its real row count (from the result).
+          turnReceiptSteps.push({ kind: 'tool_call', name: tc.function.name, args: parsedArgs, callId: tc.id });
+          turnReceiptSteps.push({ kind: 'tool_result', name: tc.function.name, callId: tc.id, durationMs: okDurationMs, result: publicResult });
           phaseTimer.add('tools', okDurationMs); // CTS-03: tool-execution span
 
           // CTS-04: map any grounding provenance the tool returned into citations.
@@ -2664,6 +2760,14 @@ export async function* orchestrate(opts: OrchestrateOptions): AsyncIterable<Orch
         serverName: tool?.serverName,
         durationMs: resultStep.kind === 'tool_result' ? resultStep.durationMs : 0,
         ok: false,
+        error: resultStep.kind === 'tool_result' ? resultStep.error : undefined,
+      });
+      // N10: record the failed call+result so the receipt shows the attempted
+      // query and its error (no row count).
+      turnReceiptSteps.push({ kind: 'tool_call', name: tc.function.name, args: parsedArgs, callId: tc.id });
+      turnReceiptSteps.push({
+        kind: 'tool_result', name: tc.function.name, callId: tc.id,
+        durationMs: resultStep.kind === 'tool_result' ? resultStep.durationMs : 0,
         error: resultStep.kind === 'tool_result' ? resultStep.error : undefined,
       });
       phaseTimer.add('tools', resultStep.kind === 'tool_result' ? resultStep.durationMs : 0); // CTS-03
