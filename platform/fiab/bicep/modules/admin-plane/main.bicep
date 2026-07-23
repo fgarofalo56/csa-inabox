@@ -354,6 +354,12 @@ type observabilityConfigT = {
 
   @description('RUM1 — percent of browser sessions sampled (0–100). Default 100.')
   rumSampleRate: int?
+
+  @description('L3 — deploy the scheduled column-lineage extractor (loom-lineage-extractor Container App Job — parses completed ADF/Synapse Copy-activity translator.mappings → the thread-edges L1 column model, every 15 min, in-VNet). Default ON (opt-out) per loom_default_on_opt_out; only honored on containerApps + deployAppsEnabled (needs the loom-lineage-extractor image). NOT a Y1 Function — the ACA-job pattern is the estate standard.')
+  lineageExtractorEnabled: bool?
+
+  @description('L3 — cron for the column-lineage extraction pass. Default every 15 minutes (overlap is idempotent — deterministic edge ids + processed-run cache).')
+  lineageExtractorCron: string?
 }
 
 @description('Observability settings bag (R0) — V1 synthetic-journey monitor + RUM1 client-RUM settings live here (+ the COST0 program-budget props, consumed at the top-level orchestrator); V5 bicep-drift and O1 alert-dispatch add properties to observabilityConfigT — never a new top-level param.')
@@ -446,6 +452,9 @@ var costForecastMethod = observabilityConfig.?costForecastMethod ?? 'auto'
 // RUM1 (observabilityConfig bag) — client real-user monitoring shims (default-ON).
 var rumEnabled = observabilityConfig.?rumEnabled ?? true
 var rumSampleRate = observabilityConfig.?rumSampleRate ?? 100
+// L3 (observabilityConfig bag) — column-lineage extractor shims (default-ON).
+var lineageExtractorEnabled = observabilityConfig.?lineageExtractorEnabled ?? true
+var lineageExtractorCron = observabilityConfig.?lineageExtractorCron ?? '*/15 * * * *'
 // I1 (workspaceIdentityConfig bag) — per-workspace identity shims (default off).
 var workspaceIdentityMode = workspaceIdentityConfig.?workspaceIdentityMode ?? 'off'
 var wsIdentitySub = workspaceIdentityConfig.?wsIdentitySub ?? ''
@@ -5199,6 +5208,35 @@ module syntheticMonitor 'synthetic-monitor-job.bicep' = if (syntheticMonitorActi
     syntheticLoginSecretKeyVaultSecretUri: syntheticLoginSecretUri
     alertActionGroupId: defaultAlerts.outputs.actionGroupId
     automationOid: effectiveTenantAdminOid
+    complianceTags: complianceTags
+  }
+}
+
+// =====================================================================
+// L3 — column-lineage extractor (loom-lineage-extractor Container App Job,
+// observabilityConfig.lineageExtractorEnabled). Runs the loom-lineage-extractor
+// image (built by scripts/csa-loom/deploy-lineage-extractor-job.sh); until that
+// image is pushed the scheduled execution exits cleanly (honest gate). Parses
+// completed ADF/Synapse Copy-activity translator.mappings → the thread-edges L1
+// column model. ACA-job (NOT Y1 Function) per the 2026-07-23 estate constraint.
+// =====================================================================
+var lineageExtractorActive = lineageExtractorEnabled && containerPlatform == 'containerApps' && deployAppsEnabled
+
+module lineageExtractor 'lineage-extractor-job.bicep' = if (lineageExtractorActive) {
+  name: 'lineage-extractor-job'
+  params: {
+    location: location
+    environmentId: containerPlatformModule.outputs.caeId
+    consoleUamiId: identity.outputs.uamiConsoleId
+    consoleUamiClientId: identity.outputs.uamiConsoleClientId
+    acrLoginServer: registry.outputs.acrLoginServer
+    cronExpression: lineageExtractorCron
+    loomCosmosEndpoint: loomCosmosEndpointVal
+    loomCosmosDatabase: 'loom'
+    adfFactoryName: effAdfName
+    adfResourceGroup: effAdfRg
+    adfSubscriptionId: byoAdfSub
+    synapseWorkspace: effSynapseWorkspace
     complianceTags: complianceTags
   }
 }

@@ -1978,3 +1978,17 @@ export async function createFactory(args: {
     location: body.location || args.location,
   };
 }
+
+// ── L3 column-lineage (loom-next-level WS-L) ────────────────────────────────
+// Re-export the pure Copy-activity translator → column-mapping parser so BFF
+// backfill routes derive column lineage through the same shape the out-of-band
+// lineage-extractor job uses. Defined in ./copy-column-mappings (SDK-free) to
+// keep this ratchet-frozen module under its size ceiling (extend-then-decompose).
+export {
+  readCopyColumnMappings,
+  type CopyActivityTranslator,
+  type CopyColumnLineage,
+  type TabularTranslatorColumn,
+  type DatasetStructures,
+  type MappingKind,
+} from './copy-column-mappings';

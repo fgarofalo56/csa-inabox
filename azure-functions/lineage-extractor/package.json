@@ -1,0 +1,20 @@
+{
+  "name": "lineage-extractor",
+  "version": "1.0.0",
+  "description": "CSA Loom lineage-extractor (loom-next-level WS-L, L3). A scheduled in-VNet Container App Job (one-shot per execution on LINEAGE_EXTRACTOR_CRON) that derives column-level lineage from completed ADF / Synapse Copy-activity `translator.mappings` and UPSERTs it into the Loom thread-edges column model (confidence 'declared'/'derived'). Managed-identity auth, no keys. NOT a Y1 Function — this estate's Linux Consumption plan cannot reach its AAD-only storage data-plane, so the ACA-job pattern (synthetic-monitor-job.bicep) is used.",
+  "main": "dist/src/main.js",
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "start": "node dist/src/main.js"
+  },
+  "dependencies": {
+    "@azure/identity": "^4.5.0",
+    "@azure/cosmos": "^4.2.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0",
+    "vitest": "^4.1.10",
+    "@types/node": "^20.0.0"
+  }
+}
