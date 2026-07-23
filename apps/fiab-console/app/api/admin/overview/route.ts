@@ -43,6 +43,7 @@ import { listResources, listAlertHistory, queryLogs } from '@/lib/azure/monitor-
 import { listSensitivityLabels } from '@/lib/azure/mip-graph-client';
 import { countFlagsOff } from '@/lib/admin/runtime-flags';
 import { RUM_CLOUD_ROLE } from '@/lib/telemetry/rum-shared';
+import { allGateStatuses } from '@/lib/gates/registry';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -64,7 +65,7 @@ export type OverviewTileKey =
   | 'workspaces' | 'domains' | 'items' | 'auditEvents' | 'permissions'
   | 'attributeGroups' | 'labeledItems' | 'tenantSettings'
   | 'users' | 'capacity' | 'openAuditItems' | 'sensitivityLabels'
-  | 'runtimeFlags' | 'rumClientErrors';
+  | 'runtimeFlags' | 'rumClientErrors' | 'diagnostics';
 
 export type OverviewTiles = Record<OverviewTileKey, TileCount>;
 
@@ -228,6 +229,15 @@ async function rumClientErrorCount(): Promise<number> {
 }
 
 // ----------------------------------------------------------------------------
+// DIAG1 — blocked config gates (the "issues you would bundle for support")
+// ----------------------------------------------------------------------------
+
+/** Blocked gates right now — an in-process registry pass, never network-gated. */
+async function blockedGateCount(): Promise<number> {
+  return allGateStatuses().filter((g) => g.status === 'blocked').length;
+}
+
+// ----------------------------------------------------------------------------
 // Route
 // ----------------------------------------------------------------------------
 
@@ -250,7 +260,7 @@ async function computeTiles(tenantId: string): Promise<OverviewTiles> {
   const [
     workspaces, domains, items, auditEvents, permissions, attributeGroups,
     labeledItems, tenantSettings, users, capacity, openAuditItems, sensitivityLabels,
-    runtimeFlags, rumClientErrors,
+    runtimeFlags, rumClientErrors, diagnostics,
   ] = await Promise.all([
     tile(() => countWhereTenant(workspacesContainer, tenantId), COSMOS_HINT),
     tile(() => domainsCount(tenantId), COSMOS_HINT),
@@ -273,11 +283,13 @@ async function computeTiles(tenantId: string): Promise<OverviewTiles> {
     // RUM1 — browser JS errors (24 h) from AppExceptions (role loom-console-browser).
     tile(() => rumClientErrorCount(),
       'Set LOOM_LOG_ANALYTICS_WORKSPACE_ID (auto-derived from the monitoring module) and grant the Console UAMI "Log Analytics Reader" on the workspace to count client-side errors.'),
+    // DIAG1 — blocked config gates worth bundling for support (in-process).
+    tile(() => blockedGateCount(), COSMOS_HINT),
   ]);
 
   return {
     workspaces, domains, items, auditEvents, permissions, attributeGroups,
     labeledItems, tenantSettings, users, capacity, openAuditItems, sensitivityLabels,
-    runtimeFlags, rumClientErrors,
+    runtimeFlags, rumClientErrors, diagnostics,
   };
 }
