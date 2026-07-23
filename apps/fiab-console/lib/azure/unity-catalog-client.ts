@@ -999,7 +999,17 @@ function parseStructValue(v: unknown): Record<string, any> | null {
 // Column-level lineage (system.access.column_lineage)
 // ============================================================
 
-/** A column→column lineage edge from `system.access.column_lineage`. */
+/**
+ * A column→column lineage edge from `system.access.column_lineage`.
+ *
+ * Maps 1:1 onto the shared L1 `ColumnGraphMember` in `unified-lineage.ts`
+ * (`sourceTable/sourceColumn → fromTable/fromColumn`,
+ * `targetTable/targetColumn → toTable/toColumn`, `confidence:'declared'`,
+ * `source:'unity-catalog'`) so a Databricks column edge folds onto the SAME
+ * canonical `col:<table>::<column>` identity as the Weave / Purview column
+ * edges for the same physical column. Keep these field names table-first so the
+ * mapping stays a rename with no reshaping.
+ */
 export interface UCColumnLineageEdge {
   sourceTable: string;
   sourceColumn: string;
