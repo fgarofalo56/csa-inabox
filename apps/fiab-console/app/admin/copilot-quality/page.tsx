@@ -1,6 +1,6 @@
 import { TargetArrow24Regular } from '@fluentui/react-icons';
 import { AdminShell } from '@/lib/components/admin-shell';
-import { CopilotQualityPanel } from '@/lib/components/admin/copilot-quality-panel';
+import { CopilotQualityTabs } from '@/lib/components/admin/copilot-quality-tabs';
 import { TeachingBanner } from '@/lib/components/shared/teaching-toast';
 
 export const dynamic = 'force-dynamic';
@@ -40,7 +40,7 @@ export default function AdminCopilotQualityPage() {
         accent="var(--loom-accent-blue)"
         learnMoreHref="https://learn.microsoft.com/azure/ai-foundry/concepts/evaluation-approach-gen-ai"
       />
-      <CopilotQualityPanel />
+      <CopilotQualityTabs />
     </AdminShell>
   );
 }

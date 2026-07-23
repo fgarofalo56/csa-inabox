@@ -101,7 +101,12 @@ async function loadRuns() {
 
   const artifactPath = opt('--artifact');
   if (!artifactPath) {
-    console.error('check-eval-regression: pass --artifact <run.json> (the E2 HTTP-trigger response) or --cosmos');
+    // Search-only mode: a --search-artifact with no copilot artifact is valid —
+    // evaluate the search floors alone (SRCH1).
+    if (opt('--search-artifact')) {
+      return { current: new Map(), previous: null, source: 'search-only (no copilot artifact)' };
+    }
+    console.error('check-eval-regression: pass --artifact <run.json> (the E2 HTTP-trigger response), --search-artifact <search.json>, or --cosmos');
     process.exit(2);
   }
   const current = normalizeRuns(readJson(artifactPath));
@@ -114,15 +119,85 @@ async function loadRuns() {
   };
 }
 
+// ── SRCH1 — federated-search relevance floor gate (additive) ────────────────
+// Latest search-run per domain vs floorsDoc.searchFloors. Kept self-contained so
+// the copilot path (evaluateGate) is untouched. Cosmos mode queries the
+// `search-run` docs; artifact mode reads the search HTTP response
+// ({ok, mode:'search', domains:[{domain, hitRate, ndcgAvg, queries}]}).
+async function loadSearchRuns() {
+  const searchArtifact = opt('--search-artifact');
+  if (searchArtifact && fs.existsSync(searchArtifact)) {
+    const j = readJson(searchArtifact);
+    const domains = Array.isArray(j?.domains) ? j.domains : [];
+    const latest = new Map();
+    for (const d of domains) {
+      if (!d?.domain) continue;
+      latest.set(d.domain, { hitRate: Number(d.hitRate ?? d.searchHitRate ?? 0), ndcg: Number(d.ndcgAvg ?? d.ndcg ?? 0) });
+    }
+    return { latest, source: `search-artifact ${searchArtifact} (${latest.size} domain(s))` };
+  }
+  if (has('--cosmos')) {
+    const endpoint = process.env.LOOM_COSMOS_ENDPOINT;
+    const db = process.env.LOOM_COSMOS_DATABASE || 'loom';
+    const { CosmosClient } = await import('@azure/cosmos');
+    const { DefaultAzureCredential } = await import('@azure/identity');
+    const client = new CosmosClient({ endpoint, aadCredentials: new DefaultAzureCredential() });
+    const container = client.database(db).container('loom-copilot-evals');
+    const { resources } = await container.items
+      .query({ query: "SELECT c.domain, c.finishedAt, c.totals FROM c WHERE c.docType = 'search-run' ORDER BY c.finishedAt DESC OFFSET 0 LIMIT 400" })
+      .fetchAll();
+    const latest = new Map();
+    for (const r of resources) {
+      if (!r?.domain || latest.has(r.domain)) continue; // first = newest (ordered DESC)
+      latest.set(r.domain, { hitRate: Number(r.totals?.hitRate ?? 0), ndcg: Number(r.totals?.ndcgAvg ?? 0) });
+    }
+    return { latest, source: `cosmos search-run (${resources.length} doc(s))` };
+  }
+  return { latest: new Map(), source: null };
+}
+
+function evaluateSearchGate(latest, searchFloors) {
+  const failures = [];
+  const rows = [];
+  for (const [domain, m] of latest) {
+    const floor = searchFloors?.[domain];
+    const checks = [];
+    if (floor?.searchHitRate != null && m.hitRate + 1e-9 < floor.searchHitRate) {
+      failures.push(`search:${domain} hit-rate ${m.hitRate} < floor ${floor.searchHitRate}`);
+      checks.push('hit-rate<floor');
+    }
+    if (floor?.ndcg != null && m.ndcg + 1e-9 < floor.ndcg) {
+      failures.push(`search:${domain} NDCG ${m.ndcg} < floor ${floor.ndcg}`);
+      checks.push('ndcg<floor');
+    }
+    rows.push(`  ${checks.length ? 'FAIL    ' : 'ok      '}search:${domain}: hit-rate ${m.hitRate}, ndcg ${m.ndcg}`);
+  }
+  return { failures, rows };
+}
+
 const { current, previous, source } = await loadRuns();
+
+// SRCH1 — evaluate the search-relevance floor gate up front (additive).
+const searchRuns = await loadSearchRuns();
+const searchGate = evaluateSearchGate(searchRuns.latest, floorsDoc.searchFloors ?? {});
+if (searchRuns.source) {
+  console.log(`check-eval-regression: search source = ${searchRuns.source}`);
+  for (const r of searchGate.rows) console.log(r);
+  for (const f of searchGate.failures) {
+    console.error(`  FAIL: ${f}`);
+    if (process.env.GITHUB_ACTIONS) console.log(`::error::${f}`);
+  }
+}
 
 if (current.size === 0) {
   // An empty artifact means the eval run never happened (Function unreachable /
   // honest-gated) — that is a pipeline problem, not a quality regression.
-  // Warn loudly but do not fake a floor verdict either way.
-  const msg = 'check-eval-regression: artifact contains ZERO surface runs — the eval run did not execute (Function gate/timeout?). Floors NOT evaluated.';
+  // Warn loudly but do not fake a floor verdict either way. A search-only run
+  // (search runs present, no copilot artifact) still enforces its floors.
+  const msg = 'check-eval-regression: artifact contains ZERO surface runs — the copilot eval run did not execute (Function gate/timeout?). Copilot floors NOT evaluated.';
   console.warn(msg);
   if (process.env.GITHUB_ACTIONS) console.log(`::warning::${msg}`);
+  if (searchGate.failures.length > 0) process.exit(1);
   process.exit(has('--strict-missing') ? 1 : 0);
 }
 
@@ -160,11 +235,15 @@ for (const f of report.failures) {
   if (process.env.GITHUB_ACTIONS) console.log(`::error::${f}`);
 }
 
-if (report.failures.length > 0) {
+const totalFailures = report.failures.length + searchGate.failures.length;
+if (totalFailures > 0) {
   console.error(
-    `check-eval-regression: ${report.failures.length} below-floor failure(s). ` +
-    'Fix the corpus/prompt regression, or (explicit override only) edit content/evals/eval-floors.json with a justification.',
+    `check-eval-regression: ${totalFailures} below-floor failure(s) ` +
+    `(${report.failures.length} copilot, ${searchGate.failures.length} search). ` +
+    'Fix the corpus/prompt/index regression, or (explicit override only) edit content/evals/eval-floors.json with a justification.',
   );
   process.exit(1);
 }
-console.log(`check-eval-regression: OK — ${current.size} surface(s), ${report.warnings.length} warning(s).`);
+console.log(
+  `check-eval-regression: OK — ${current.size} surface(s), ${searchRuns.latest.size} search domain(s), ${report.warnings.length} warning(s).`,
+);

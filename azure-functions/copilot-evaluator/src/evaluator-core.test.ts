@@ -18,7 +18,12 @@ import {
   computePass,
   rollupRun,
   resolveEvalRoot,
+  loadSearchEvalSets,
+  normalizeSearchId,
+  scoreSearchRelevance,
+  rollupSearchRun,
   type EvalResult,
+  type SearchResult,
 } from './evaluator-core';
 
 const row = {
@@ -222,5 +227,85 @@ describe('resolveEvalRoot', () => {
   });
   it('returns null when nothing is found', () => {
     expect(resolveEvalRoot(os.tmpdir())).toBeNull();
+  });
+});
+
+// ── SRCH1 — federated-search relevance ───────────────────────────────────────
+
+describe('normalizeSearchId', () => {
+  it('lowercases, strips it: prefix, collapses whitespace', () => {
+    expect(normalizeSearchId('it:Sales   Lakehouse')).toBe('sales lakehouse');
+    expect(normalizeSearchId('it_ABC')).toBe('abc');
+  });
+});
+
+describe('scoreSearchRelevance', () => {
+  it('perfect ranking → hit, mrr 1, ndcg 1', () => {
+    const s = scoreSearchRelevance(['sales-lakehouse'], ['Demo · sales-lakehouse', 'other'], 5);
+    expect(s.hit).toBe(true);
+    expect(s.mrr).toBe(1);
+    expect(s.ndcg).toBe(1);
+    expect(s.matched).toBe(1);
+  });
+  it('match at rank 2 → mrr 0.5, ndcg < 1', () => {
+    const s = scoreSearchRelevance(['sales-lakehouse'], ['noise', 'sales-lakehouse'], 5);
+    expect(s.hit).toBe(true);
+    expect(s.mrr).toBe(0.5);
+    expect(s.ndcg).toBeLessThan(1);
+    expect(s.ndcg).toBeGreaterThan(0);
+  });
+  it('no match in top-k → all zero', () => {
+    const s = scoreSearchRelevance(['sales-lakehouse'], ['a', 'b', 'c'], 3);
+    expect(s).toMatchObject({ hit: false, mrr: 0, ndcg: 0, matched: 0 });
+  });
+  it('respects k (a hit beyond k does not count)', () => {
+    const s = scoreSearchRelevance(['x'], ['a', 'b', 'x'], 2);
+    expect(s.hit).toBe(false);
+  });
+  it('two expected, both in top-2 → ndcg 1', () => {
+    const s = scoreSearchRelevance(['alpha', 'beta'], ['alpha item', 'beta item', 'gamma'], 5);
+    expect(s.matched).toBe(2);
+    expect(s.ndcg).toBe(1);
+  });
+  it('empty expected → zero', () => {
+    expect(scoreSearchRelevance([], ['a'], 5)).toMatchObject({ hit: false, ndcg: 0 });
+  });
+});
+
+describe('rollupSearchRun', () => {
+  const mk = (o: Partial<SearchResult>): SearchResult => ({
+    queryId: 'q', domain: 'd', query: 'q', expectedResults: ['x'], retrieved: ['x'],
+    hit: true, mrr: 1, ndcg: 1, matched: 1, k: 5, latencyMs: 10, ...o,
+  });
+  it('averages hit-rate / mrr / ndcg', () => {
+    const t = rollupSearchRun([mk({}), mk({ hit: false, mrr: 0, ndcg: 0 })]);
+    expect(t.queries).toBe(2);
+    expect(t.hitRate).toBe(0.5);
+    expect(t.mrrAvg).toBe(0.5);
+    expect(t.ndcgAvg).toBe(0.5);
+  });
+  it('empty → zeroed', () => {
+    expect(rollupSearchRun([])).toMatchObject({ queries: 0, hitRate: 0, ndcgAvg: 0 });
+  });
+});
+
+describe('loadSearchEvalSets', () => {
+  it('loads search/<domain>.jsonl, skips _files, filters by domain', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'srch-'));
+    fs.mkdirSync(path.join(root, 'search'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'search', 'catalog.jsonl'),
+      JSON.stringify({ id: 'catalog-001', query: 'sales data', expectedResults: ['sales-lakehouse'] }) + '\n');
+    fs.writeFileSync(path.join(root, 'search', '_schema.json'), '{}');
+    const sets = loadSearchEvalSets(root);
+    expect(sets).toHaveLength(1);
+    expect(sets[0].domain).toBe('catalog');
+    expect(sets[0].rows[0].expectedResults).toEqual(['sales-lakehouse']);
+    expect(loadSearchEvalSets(root, ['nope'])).toHaveLength(0);
+  });
+  it('throws on a malformed row', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'srch-'));
+    fs.mkdirSync(path.join(root, 'search'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'search', 'bad.jsonl'), '{"id":"x"}\n');
+    expect(() => loadSearchEvalSets(root)).toThrow(/missing id\/query\/expectedResults/);
   });
 });

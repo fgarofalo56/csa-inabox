@@ -399,6 +399,164 @@ export function rollupRun(results: EvalResult[]): RunTotals {
   };
 }
 
+// ── SRCH1 — federated-search relevance evals ─────────────────────────────────
+
+/**
+ * One golden federated-search query row (content/evals/search/<domain>.jsonl).
+ * `expectedResults` are the item identifiers the /catalog federated search
+ * SHOULD surface in its top-K — matched case-insensitively against each
+ * returned result's qualified name / display name / id (substring either way,
+ * so 'sales lakehouse' matches 'Demo · Sales · sales-lakehouse'). `k` caps the
+ * ranking window (default 5).
+ */
+export interface SearchEvalRow {
+  id: string;
+  query: string;
+  expectedResults: string[];
+  k?: number;
+}
+
+export interface SearchEvalSet {
+  domain: string;
+  rows: SearchEvalRow[];
+}
+
+/**
+ * Load federated-search golden sets from `<root>/search/<domain>.jsonl`. Same
+ * strict-parse discipline as loadEvalSets — a malformed line throws. Files
+ * starting with '_' (the schema/README) are skipped. `domains` filters.
+ */
+export function loadSearchEvalSets(fsRoot: string, domains?: string[]): SearchEvalSet[] {
+  const dir = path.join(fsRoot, 'search');
+  if (!fs.existsSync(dir)) return [];
+  const wanted = domains?.map((s) => s.trim().toLowerCase()).filter(Boolean);
+  const sets: SearchEvalSet[] = [];
+  for (const f of fs.readdirSync(dir).sort()) {
+    if (!f.endsWith('.jsonl') || f.startsWith('_')) continue;
+    const domain = path.basename(f, '.jsonl');
+    if (wanted && wanted.length > 0 && !wanted.includes(domain)) continue;
+    const lines = fs
+      .readFileSync(path.join(dir, f), 'utf-8')
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter(Boolean);
+    const rows: SearchEvalRow[] = lines.map((l, i) => {
+      let parsed: unknown;
+      try { parsed = JSON.parse(l); } catch { throw new Error(`search/${f}:${i + 1}: invalid JSON`); }
+      const r = parsed as SearchEvalRow;
+      if (!r.id || !r.query || !Array.isArray(r.expectedResults) || r.expectedResults.length === 0) {
+        throw new Error(`search/${f}:${i + 1}: row missing id/query/expectedResults`);
+      }
+      return { id: r.id, query: r.query, expectedResults: r.expectedResults, k: r.k };
+    });
+    if (rows.length > 0) sets.push({ domain, rows });
+  }
+  return sets;
+}
+
+/** Normalize a search identifier for matching (lower, trim, strip it:/it_ id prefix, collapse ws). */
+export function normalizeSearchId(s: string): string {
+  return (s || '').toLowerCase().replace(/^it[:_]/, '').replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * True when a golden `expected` identifier matches a `retrieved` result. The
+ * retrieved side is the RICHER string (the runner joins qualifiedName |
+ * displayName | id), so the match is directional: the retrieved result must
+ * CONTAIN the full expected identifier (or equal it). A bidirectional substring
+ * would false-positive on tiny tokens (any string contains a single letter).
+ */
+function idMatches(expected: string, retrieved: string): boolean {
+  const e = normalizeSearchId(expected);
+  const r = normalizeSearchId(retrieved);
+  if (!e || !r) return false;
+  return r === e || r.includes(e);
+}
+
+/**
+ * Score one federated-search query: hit@k, MRR, and binary-relevance NDCG@k.
+ *   - `retrieved` is the ordered list of returned result identifiers (each entry
+ *     already flattened to one matchable string — the runner joins qualified
+ *     name / display name so any of them can match).
+ *   - hit  — ≥1 expected result appears in the top-k retrieved.
+ *   - mrr  — reciprocal rank of the FIRST retrieved position matching any expected.
+ *   - ndcg — DCG (rel=1 at a position matching a not-yet-credited expected) over
+ *            the ideal DCG (all expected ranked first), @k. 0 when no expected.
+ */
+export function scoreSearchRelevance(
+  expected: string[],
+  retrieved: string[],
+  k = 5,
+): { hit: boolean; mrr: number; ndcg: number; matched: number } {
+  const topK = retrieved.slice(0, Math.max(1, k));
+  const exp = expected.filter(Boolean);
+  if (exp.length === 0) return { hit: false, mrr: 0, ndcg: 0, matched: 0 };
+
+  let firstHitRank = -1;
+  let dcg = 0;
+  let matched = 0;
+  const credited = new Set<number>(); // expected indices already credited
+  for (let i = 0; i < topK.length; i++) {
+    // A position is relevant if it matches an expected result not yet credited.
+    let rel = 0;
+    for (let j = 0; j < exp.length; j++) {
+      if (credited.has(j)) continue;
+      if (idMatches(exp[j], topK[i])) { rel = 1; credited.add(j); matched += 1; break; }
+    }
+    if (rel === 1) {
+      dcg += 1 / Math.log2(i + 2);
+      if (firstHitRank < 0) firstHitRank = i;
+    }
+  }
+  const ideal = Math.min(exp.length, topK.length);
+  let idcg = 0;
+  for (let i = 0; i < ideal; i++) idcg += 1 / Math.log2(i + 2);
+  const round3 = (x: number) => Math.round(x * 1000) / 1000;
+  return {
+    hit: firstHitRank >= 0,
+    mrr: firstHitRank >= 0 ? round3(1 / (firstHitRank + 1)) : 0,
+    ndcg: idcg > 0 ? round3(dcg / idcg) : 0,
+    matched,
+  };
+}
+
+/** Per-query scored search result (the `search-result` doc body). */
+export interface SearchResult {
+  queryId: string;
+  domain: string;
+  query: string;
+  expectedResults: string[];
+  retrieved: string[];
+  hit: boolean;
+  mrr: number;
+  ndcg: number;
+  matched: number;
+  k: number;
+  backend?: string;
+  latencyMs: number;
+}
+
+export interface SearchRunTotals {
+  queries: number;
+  hitRate: number;
+  mrrAvg: number;
+  ndcgAvg: number;
+}
+
+/** Roll a domain's per-query search results up into the `search-run` totals. */
+export function rollupSearchRun(results: SearchResult[]): SearchRunTotals {
+  const n = results.length;
+  if (n === 0) return { queries: 0, hitRate: 0, mrrAvg: 0, ndcgAvg: 0 };
+  const avg = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / xs.length;
+  const round3 = (x: number) => Math.round(x * 1000) / 1000;
+  return {
+    queries: n,
+    hitRate: round3(results.filter((r) => r.hit).length / n),
+    mrrAvg: round3(avg(results.map((r) => r.mrr))),
+    ndcgAvg: round3(avg(results.map((r) => r.ndcg))),
+  };
+}
+
 /** Candidate locations for the staged eval sets, first hit wins:
  *  1. <cwd>/evals                       — the deployed Function package (deploy copies content/evals here);
  *  2. <cwd>/copilot-corpus/evals        — the console-image layout (stage-copilot-corpus.sh);

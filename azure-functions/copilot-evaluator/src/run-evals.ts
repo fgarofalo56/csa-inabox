@@ -24,24 +24,34 @@ import {
   judgeDecision,
   judgeLedgerDay,
   loadEvalSets,
+  loadSearchEvalSets,
   resolveEvalRoot,
   scoreRetrieval,
+  scoreSearchRelevance,
+  rollupSearchRun,
   deterministicGuards,
   buildJudgeMessages,
   computePass,
   rollupRun,
   type EvalResult,
+  type SearchResult,
 } from './evaluator-core';
 import {
   probeConsole,
+  probeSearch,
   readCorpusManifest,
   judgeAnswer,
   writeRun,
   writeResults,
+  writeSearchRun,
+  writeSearchResults,
   readJudgedToday,
   writeJudgedToday,
   judgeModelHint,
 } from './azure-clients';
+
+/** Default top-K ranking window for search relevance when a row omits `k`. */
+const DEFAULT_SEARCH_K = 5;
 
 export interface RunSummary {
   ran: boolean;
@@ -193,6 +203,112 @@ export async function runEvals(
       groundingAvg: totals.groundingAvg,
       passRate: totals.passRate,
     });
+  }
+  return summary;
+}
+
+// ── SRCH1 — federated-search relevance run ───────────────────────────────────
+
+export interface SearchRunSummary {
+  ran: boolean;
+  reason?: string;
+  domains: { domain: string; queries: number; hitRate: number; ndcgAvg: number }[];
+}
+
+/**
+ * Run the federated-search relevance evals: for each golden query, POST the
+ * console search-probe (REAL searchCatalog top-K) and score hit-rate@k / MRR /
+ * NDCG@k against the expected results. No LLM judge (deterministic — free).
+ * Writes `search-run` / `search-result` docs to Cosmos `loom-copilot-evals`
+ * (PK 'search:<domain>'). Honest early-exit on missing config / no sets.
+ */
+export async function runSearchEvals(
+  trigger: 'corpus' | 'nightly' | 'manual',
+  domains: string[] | undefined,
+  context: InvocationContext,
+): Promise<SearchRunSummary> {
+  const env = process.env;
+  if (!evalEnabled(env)) {
+    context.log('[copilot-evaluator/search] disabled via LOOM_COPILOT_EVAL_ENABLED=false — no-op.');
+    return { ran: false, reason: 'disabled', domains: [] };
+  }
+  const missing = missingConfig(env);
+  if (missing.length) {
+    context.warn(`[copilot-evaluator/search] honest-gate: not configured — set ${missing.join(', ')}. No-op.`);
+    return { ran: false, reason: `missing config: ${missing.join(', ')}`, domains: [] };
+  }
+
+  const cosmosEndpoint = env.LOOM_COSMOS_ENDPOINT!;
+  const cosmosDb = env.LOOM_COSMOS_DATABASE || 'loom';
+  const probeUrl = env.LOOM_EVAL_PROBE_URL!;
+  const internalToken = env.LOOM_INTERNAL_TOKEN!;
+
+  const evalRoot = resolveEvalRoot(process.cwd());
+  if (!evalRoot) {
+    context.error('[copilot-evaluator/search] no eval root found — deploy stages content/evals → ./evals.');
+    return { ran: false, reason: 'eval sets not found', domains: [] };
+  }
+  const sets = loadSearchEvalSets(evalRoot, domains);
+  if (sets.length === 0) {
+    context.warn(`[copilot-evaluator/search] no search sets under ${evalRoot}/search for domains=${JSON.stringify(domains ?? 'all')}.`);
+    return { ran: false, reason: 'no matching search domains', domains: [] };
+  }
+
+  const startedAt = new Date().toISOString();
+  const runId = `${startedAt.slice(0, 19).replace(/[:T-]/g, '')}-${trigger}-search`;
+  const summary: SearchRunSummary = { ran: true, domains: [] };
+
+  for (const set of sets) {
+    const results: SearchResult[] = [];
+    for (const row of set.rows) {
+      const k = row.k && row.k > 0 ? row.k : DEFAULT_SEARCH_K;
+      let probe;
+      try {
+        probe = await probeSearch(probeUrl, internalToken, { query: row.query, top: Math.max(k, 10) });
+      } catch (e: any) {
+        context.error(`[copilot-evaluator/search] ${set.domain}/${row.id}: search-probe failed: ${e?.message || e}`);
+        continue;
+      }
+      const s = scoreSearchRelevance(row.expectedResults, probe.retrieved, k);
+      results.push({
+        queryId: row.id,
+        domain: set.domain,
+        query: row.query,
+        expectedResults: row.expectedResults,
+        retrieved: probe.retrieved.slice(0, k),
+        hit: s.hit,
+        mrr: s.mrr,
+        ndcg: s.ndcg,
+        matched: s.matched,
+        k,
+        backend: probe.backend,
+        latencyMs: probe.latencyMs,
+      });
+    }
+
+    const totals = rollupSearchRun(results);
+    try {
+      await writeSearchResults(cosmosEndpoint, cosmosDb, runId, set.domain, results);
+      await writeSearchRun(cosmosEndpoint, cosmosDb, {
+        id: `${runId}:search:${set.domain}`,
+        surface: `search:${set.domain}`,
+        domain: set.domain,
+        runId,
+        docType: 'search-run',
+        schemaVersion: 1,
+        startedAt,
+        finishedAt: new Date().toISOString(),
+        trigger,
+        k: results[0]?.k ?? DEFAULT_SEARCH_K,
+        totals,
+      });
+    } catch (e: any) {
+      context.error(`[copilot-evaluator/search] ${set.domain}: Cosmos write failed: ${e?.message || e}`);
+    }
+    context.log(
+      `[copilot-evaluator/search] run ${set.domain}: ${totals.queries} Q, hit-rate ${totals.hitRate}, ndcg ${totals.ndcgAvg}`,
+    );
+    summary.domains.push({ domain: set.domain, queries: totals.queries, hitRate: totals.hitRate, ndcgAvg: totals.ndcgAvg });
   }
   return summary;
 }

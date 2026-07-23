@@ -1,0 +1,15 @@
+{"id":"catalog-001","query":"sales lakehouse","expectedResults":["Sales Lakehouse (Medallion)"]}
+{"id":"catalog-002","query":"medallion bronze silver gold notebook","expectedResults":["Medallion — Bronze→Silver→Gold Notebook"]}
+{"id":"catalog-003","query":"finance warehouse","expectedResults":["Finance Warehouse"]}
+{"id":"catalog-004","query":"executive sales report","expectedResults":["Executive Sales Report (Loom-native)"]}
+{"id":"catalog-005","query":"invoice paginated report","expectedResults":["Invoice Paginated Report"]}
+{"id":"catalog-006","query":"real-time ops dashboard","expectedResults":["Real-Time Ops Dashboard"]}
+{"id":"catalog-007","query":"orders eventstream","expectedResults":["Orders Eventstream"]}
+{"id":"catalog-008","query":"telemetry kql","expectedResults":["Telemetry KQL DB","Telemetry Eventhouse"]}
+{"id":"catalog-009","query":"churn prediction model","expectedResults":["Churn Prediction Model"]}
+{"id":"catalog-010","query":"sales data agent","expectedResults":["Sales Data Agent"]}
+{"id":"catalog-011","query":"orders rest api","expectedResults":["Orders REST API"]}
+{"id":"catalog-012","query":"sales graphql api","expectedResults":["Sales GraphQL API"]}
+{"id":"catalog-013","query":"enterprise ontology","expectedResults":["Enterprise Ontology"]}
+{"id":"catalog-014","query":"revenue kpi scorecard","expectedResults":["Revenue KPI Scorecard"]}
+{"id":"catalog-015","query":"sales 360 data product","expectedResults":["Sales-360 Data Product"]}
