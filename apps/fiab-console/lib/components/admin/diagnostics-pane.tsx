@@ -198,7 +198,7 @@ export function DiagnosticsPane() {
             <MessageBar intent="info" layout="multiline" style={{ marginBottom: tokens.spacingVerticalL }}>
               <MessageBarBody>
                 <MessageBarTitle>Bundle notes</MessageBarTitle>
-                <ul style={{ margin: 0, paddingLeft: tokens.spacingHorizontalXL }}>
+                <ul style={{ margin: tokens.spacingHorizontalNone, paddingLeft: tokens.spacingHorizontalXL }}>
                   {bundle.notes.map((n, i) => <li key={i}>{n}</li>)}
                 </ul>
               </MessageBarBody>
