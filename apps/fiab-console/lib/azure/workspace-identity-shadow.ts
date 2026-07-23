@@ -125,6 +125,95 @@ export async function recordIdentityShadow(obs: IdentityShadowObservation): Prom
   }
 }
 
+// ── I4 — per-workspace divergence rollup (windowed) ─────────────────────────
+
+/** A windowed rollup of `identity.shadow` observations for ONE workspace —
+ * the I4 "N calls observed, M divergences over D days → ready?" verdict the I6
+ * enforce panel + preflight surface. `divergences` counts rows where the shared
+ * UAMI succeeded but the workspace UAMI would have been DENIED. */
+export interface IdentityDivergenceRollup {
+  workspaceId: string;
+  /** The lookback window in days (default 14 — the migration-review window). */
+  windowDays: number;
+  /** ISO timestamp the window opens at (now − windowDays). */
+  since: string;
+  /** Total `identity.shadow` observations in the window. */
+  observedCalls: number;
+  /** Divergences (shared allowed / workspace would-deny) in the window. */
+  divergences: number;
+  /** Per-backend divergence tally (only backends that diverged appear). */
+  byBackend: Record<string, number>;
+  /** True when the audit-log could not be read (readiness cannot be certified). */
+  unreadable: boolean;
+  checkedAt: string;
+}
+
+/**
+ * Read the I4 divergence rollup for one workspace over the last `windowDays`
+ * (default 14) from the audit-log container. Single logical partition
+ * (`identity.shadow` rows are keyed by workspaceId). NEVER throws — an
+ * unreachable Cosmos returns zeros with `unreadable:true` so the caller can add
+ * a blocking reason (a workspace must not be certified "ready" off an unread
+ * shadow log).
+ */
+export async function identityDivergenceRollup(
+  workspaceId: string,
+  windowDays = 14,
+): Promise<IdentityDivergenceRollup> {
+  const checkedAt = new Date().toISOString();
+  const since = new Date(Date.now() - windowDays * 24 * 3600 * 1000).toISOString();
+  const base: IdentityDivergenceRollup = {
+    workspaceId,
+    windowDays,
+    since,
+    observedCalls: 0,
+    divergences: 0,
+    byBackend: {},
+    unreadable: false,
+    checkedAt,
+  };
+  try {
+    const c = await auditLogContainer();
+    const count = async (extra: string): Promise<number> => {
+      const { resources } = await c.items
+        .query<number>({
+          query:
+            "SELECT VALUE COUNT(1) FROM c WHERE c.kind = 'identity.shadow' " +
+            'AND c.workspaceId = @ws AND c.at >= @since' +
+            extra,
+          parameters: [
+            { name: '@ws', value: workspaceId },
+            { name: '@since', value: since },
+          ],
+        })
+        .fetchAll();
+      return Number(resources?.[0] ?? 0);
+    };
+    base.observedCalls = await count('');
+    base.divergences = await count(' AND c.divergence = true');
+    if (base.divergences > 0) {
+      const { resources } = await c.items
+        .query<{ backend: string; n: number }>({
+          query:
+            "SELECT c.backend AS backend, COUNT(1) AS n FROM c WHERE c.kind = 'identity.shadow' " +
+            'AND c.workspaceId = @ws AND c.at >= @since AND c.divergence = true ' +
+            'GROUP BY c.backend',
+          parameters: [
+            { name: '@ws', value: workspaceId },
+            { name: '@since', value: since },
+          ],
+        })
+        .fetchAll();
+      for (const row of resources || []) {
+        if (row?.backend) base.byBackend[row.backend] = Number(row.n ?? 0);
+      }
+    }
+    return base;
+  } catch {
+    return { ...base, unreadable: true };
+  }
+}
+
 // ── Factory hook — observe a workspace-scoped credential resolution ─────────
 
 // Per-process UAMI lookup cache (workspaceId → uami|null) so the shadow path
