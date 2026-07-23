@@ -104,6 +104,14 @@ export const RUNTIME_FLAGS: readonly RuntimeFlagDef[] = [
     surface: '/admin/health?tab=spark',
   },
   {
+    id: 'a6-small-multiples-grid',
+    label: 'Report designer — small-multiples grid controls',
+    description:
+      'Wires the report Format-pane "Small multiples" grid controls (columns count, shared-Y axis, and the Facet-by picker) into the trellis renderer. OFF reverts the report designer to the pre-A6 behaviour on the next render — small multiples still facet by the Small-multiples field well, but the columns/shared-Y controls and the Format-pane facet picker have no effect (auto-fill columns, shared Y). No roll required.',
+    ownerItem: 'A6',
+    surface: 'Report designer cartesian visuals with a Small-multiples facet (/items/report/[id])',
+  },
+  {
     id: 'rum1-client-telemetry',
     label: 'Client RUM telemetry',
     description:

@@ -267,6 +267,18 @@ are W1-W4 and are **untouched** by this wave.
   extra value result columns (cols[1..] in well order). Stacking rides a Format
   field `stacking?: 'none'|'stacked'|'stacked100'` read defensively as
   `(fmt as any).stacking`.
+- **A6 — small-multiples grid controls WIRED (2026-07-23):** before A6,
+  `visual-body.tsx` passed only `smallMultiples:{ facetColumn }` (from the
+  Small-multiples field well); the Format-pane grid controls
+  (`smallMultiplesGrid.columns` / `.sharedY` / `.facetColumn`) were persisted but
+  **dead** (no render effect — a vaporware gap). A6 adds
+  `helpers.resolveSmallMultiples(wells, grid, rows, gridEnabled)`, which merges
+  the well facet with the Format grid controls into the
+  `smallMultiples:{ facetColumn, columns?, sharedY? }` prop the existing
+  `SmallMultiplesGrid` renderer already consumes. The Format "Facet by" picker is
+  honoured only when its column is present in the result rows (no phantom facet).
+  Gated by the `a6-small-multiples-grid` FLAG0 runtime flag (default-ON; OFF
+  reverts to the pre-A6 well-facet-only path — auto-fill columns, shared Y).
 - **Wells re-exposed:** queryVisual() STOPS stripping Small multiples / Tooltips /
   Details. smallMultiples → `wells.smallMultiples`, details → `wells.details`
   (trellis group cols, folded into the 2nd GROUP BY), tooltips → `wells.tooltips`
