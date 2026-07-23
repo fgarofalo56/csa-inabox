@@ -31,6 +31,11 @@ import {
 } from '@fluentui/react-icons';
 import { useSharedEditorStyles } from '../shared-styles';
 import { PreviewTable } from '@/lib/components/shared/preview-table';
+import { useInEditorResultsSplit, SPLIT_FILL_STYLE } from '@/lib/components/editor/editor-split-context';
+
+/** U6 — flex-fill the panel box inside an EditorResultsSplit results pane
+ * (the nested PreviewTable then grows via its own split-aware styles). */
+const BOX_FILL_STYLE = { flexGrow: 1, flexShrink: 1, flexBasis: '0%', minHeight: 0 } as const;
 
 // ── Public response shape (matches the BFF route) ──
 export interface RecordsetItem {
@@ -149,6 +154,8 @@ function severityBadge(sev: number): { color: 'success' | 'warning' | 'danger'; 
 
 export function ResultsPanel({ result, loading }: { result: BatchQueryResponse | null; loading: boolean }) {
   const s = useStyles();
+  const inSplit = useInEditorResultsSplit();
+  const boxStyle = inSplit ? BOX_FILL_STYLE : undefined;
   const [activeSet, setActiveSet] = useState(0);
   const [view, setView] = useState<'results' | 'messages'>('results');
   const [filter, setFilter] = useState('');
@@ -166,14 +173,14 @@ export function ResultsPanel({ result, loading }: { result: BatchQueryResponse |
   }, [active, filter]);
 
   if (loading) {
-    return <div className={s.box}><Spinner size="small" label="Executing…" labelPosition="after" /></div>;
+    return <div className={s.box} style={boxStyle}><Spinner size="small" label="Executing…" labelPosition="after" /></div>;
   }
   if (!result) {
-    return <div className={s.box}><Caption1>Click <strong>Run</strong> to execute.</Caption1></div>;
+    return <div className={s.box} style={boxStyle}><Caption1>Click <strong>Run</strong> to execute.</Caption1></div>;
   }
   if (!result.ok) {
     return (
-      <div className={s.box}>
+      <div className={s.box} style={boxStyle}>
         <MessageBar intent={result.gated ? 'warning' : 'error'}>
           <MessageBarBody>
             <MessageBarTitle>{result.gated ? 'Query path gated' : 'Query failed'}</MessageBarTitle>
@@ -217,7 +224,7 @@ export function ResultsPanel({ result, loading }: { result: BatchQueryResponse |
   }
 
   return (
-    <div className={s.box}>
+    <div className={s.box} style={boxStyle}>
       {/* Results / Messages switcher + batch duration */}
       <div className={s.meta}>
         <TabList size="small" selectedValue={view} onTabSelect={(_, d) => setView(d.value as any)}>
@@ -327,8 +334,9 @@ export function ResultsPanel({ result, loading }: { result: BatchQueryResponse |
 
 function MessagesView({ messages, rowsAffected, executionMs }: { messages: InfoMsg[]; rowsAffected: number[]; executionMs: number }) {
   const s = useStyles();
+  const inSplit = useInEditorResultsSplit();
   return (
-    <div className={s.box} style={{ borderTop: 'none', paddingTop: tokens.spacingVerticalNone }}>
+    <div className={s.box} style={{ borderTop: 'none', paddingTop: tokens.spacingVerticalNone, ...(inSplit ? BOX_FILL_STYLE : undefined) }}>
       <div className={s.meta}>
         <Badge appearance="outline">{messages.length} message{messages.length === 1 ? '' : 's'}</Badge>
         {rowsAffected.length > 0 && <Caption1>Rows affected per statement: <strong>{rowsAffected.join(', ')}</strong></Caption1>}
@@ -337,7 +345,7 @@ function MessagesView({ messages, rowsAffected, executionMs }: { messages: InfoM
       {messages.length === 0 ? (
         <Caption1>No PRINT, warning, or info messages. {rowsAffected.length > 0 ? `Total rows affected: ${rowsAffected.reduce((a, b) => a + b, 0)}.` : 'Commands completed successfully.'}</Caption1>
       ) : (
-        <div className={s.tableWrap}>
+        <div className={s.tableWrap} style={inSplit ? SPLIT_FILL_STYLE : undefined}>
           <Table aria-label="SQL messages" size="small">
             <TableHeader><TableRow>
               <TableHeaderCell>Severity</TableHeaderCell>

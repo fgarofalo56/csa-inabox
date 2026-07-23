@@ -38,6 +38,7 @@ import {
   TYPE_BADGE_TEXT, PREVIEW_CELL_TYPES,
   type PreviewCellType, type PreviewColumn,
 } from './preview-table-shaping';
+import { useInEditorResultsSplit, SPLIT_FILL_STYLE } from '@/lib/components/editor/editor-split-context';
 
 /** Preset time ranges for the optional "Show data from" picker. */
 export interface PreviewTimeRange { id: string; label: string }
@@ -222,6 +223,9 @@ export function PreviewTable(props: PreviewTableProps) {
     maxRows = 1000, maxHeight, ariaLabel = 'Data preview',
   } = props;
   const s = useStyles();
+  // U6 — inside an EditorResultsSplit results pane the grid flex-fills the
+  // user-sized pane instead of capping at the flow-layout maxHeight.
+  const inSplit = useInEditorResultsSplit();
 
   const showTabs = props.showTabs ?? sources.length > 1;
   const showRefresh = props.showRefresh ?? sources.some((src) => typeof src.load === 'function');
@@ -295,7 +299,12 @@ export function PreviewTable(props: PreviewTableProps) {
   const totalRows = data?.rowCount ?? data?.rows?.length ?? 0;
 
   return (
-    <div className={s.root} role="region" aria-label={ariaLabel}>
+    <div
+      className={s.root}
+      role="region"
+      aria-label={ariaLabel}
+      style={inSplit ? { flexGrow: 1, flexShrink: 1, flexBasis: '0%', minHeight: 0 } : undefined}
+    >
       <div className={s.header}>
         {showTabs ? (
           <TabList selectedValue={activeId} onTabSelect={(_, d) => setActive(d.value as string)} size="small">
@@ -369,7 +378,7 @@ export function PreviewTable(props: PreviewTableProps) {
         </div>
       )}
 
-      <div className={s.body} style={maxHeight !== undefined ? { maxHeight } : undefined}>
+      <div className={s.body} style={inSplit ? SPLIT_FILL_STYLE : maxHeight !== undefined ? { maxHeight } : undefined}>
         {state.status === 'gate' && (
           <MessageBar intent="warning">
             <MessageBarBody><MessageBarTitle>Preview not available</MessageBarTitle>{state.gate}</MessageBarBody>

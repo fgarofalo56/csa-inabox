@@ -8,6 +8,7 @@ import { ArrowSync20Regular, Eye20Regular, Play20Regular } from '@fluentui/react
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { OpenInPbiDesktopButton } from '../../components/open-in-pbi-desktop-button';
 import { OpenInLoomReportBuilderButton } from '../../components/open-in-loom-report-builder-button';
+import { EditorResultsSplit, SplitFillBox } from '../../components/editor-results-split';
 import { useStyles, formatCell } from '../shared';
 import { useLakehouseCtx } from '../lakehouse-editor-context';
 
@@ -35,44 +36,55 @@ export function SqlPane() {
           Run
         </Button>
       </div>
-      <MonacoTextarea
-        value={sqlText}
-        onChange={setSqlText}
-        language="tsql"
-        height={240}
-        minHeight={180}
-        sizingKey="lakehouse.openrowset-sql"
-        ariaLabel="OPENROWSET T-SQL editor"
+      {/* U6 — query↔results divider (shared EditorResultsSplit). */}
+      <EditorResultsSplit
+        editorKey="lakehouse-sql"
+        active={sqlLoading || !!sqlResult}
+        query={
+          <MonacoTextarea
+            value={sqlText}
+            onChange={setSqlText}
+            language="tsql"
+            height={240}
+            minHeight={180}
+            sizingKey="lakehouse.openrowset-sql"
+            ariaLabel="OPENROWSET T-SQL editor"
+          />
+        }
+        results={
+          <>
+            {sqlLoading && <Spinner size="small" label="Executing…" labelPosition="after" />}
+            {!sqlLoading && sqlResult && !sqlResult.ok && (
+              <MessageBar intent="error">
+                <MessageBarBody>
+                  <MessageBarTitle>Query failed</MessageBarTitle>
+                  {sqlResult.error} {sqlResult.code && <Caption1>· {sqlResult.code}</Caption1>}
+                </MessageBarBody>
+              </MessageBar>
+            )}
+            {!sqlLoading && sqlResult?.ok && (
+              <SplitFillBox className={s.tableWrap}>
+                <Table aria-label="SQL results" size="small">
+                  <TableHeader>
+                    <TableRow>
+                      {(sqlResult.columns || []).map((c) => <TableHeaderCell key={c}>{c}</TableHeaderCell>)}
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {(sqlResult.rows || []).map((row, i) => (
+                      <TableRow key={i}>
+                        {(sqlResult.columns || []).map((_, j) => (
+                          <TableCell key={j} className={s.cell}>{formatCell((row as unknown[])[j])}</TableCell>
+                        ))}
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </SplitFillBox>
+            )}
+          </>
+        }
       />
-      {sqlLoading && <Spinner size="small" label="Executing…" labelPosition="after" />}
-      {!sqlLoading && sqlResult && !sqlResult.ok && (
-        <MessageBar intent="error">
-          <MessageBarBody>
-            <MessageBarTitle>Query failed</MessageBarTitle>
-            {sqlResult.error} {sqlResult.code && <Caption1>· {sqlResult.code}</Caption1>}
-          </MessageBarBody>
-        </MessageBar>
-      )}
-      {!sqlLoading && sqlResult?.ok && (
-        <div className={s.tableWrap}>
-          <Table aria-label="SQL results" size="small">
-            <TableHeader>
-              <TableRow>
-                {(sqlResult.columns || []).map((c) => <TableHeaderCell key={c}>{c}</TableHeaderCell>)}
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {(sqlResult.rows || []).map((row, i) => (
-                <TableRow key={i}>
-                  {(sqlResult.columns || []).map((_, j) => (
-                    <TableCell key={j} className={s.cell}>{formatCell((row as unknown[])[j])}</TableCell>
-                  ))}
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </div>
-      )}
     </>
   );
 }

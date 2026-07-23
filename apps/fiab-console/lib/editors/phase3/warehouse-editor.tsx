@@ -32,6 +32,7 @@ import {
   History20Regular, MoreHorizontal20Regular, Copy20Regular,
 } from '@fluentui/react-icons';
 import { ModelViewPanel } from '../components/model-view-canvas';
+import { EditorResultsSplit } from '../components/editor-results-split';
 import { ItemEditorChrome } from '../item-editor-chrome';
 import { OpenInPbiDesktopButton } from '../components/open-in-pbi-desktop-button';
 import { OpenInLoomReportBuilderButton } from '../components/open-in-loom-report-builder-button';
@@ -758,71 +759,83 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
           <SqlTabBar tabs={tabs} activeTabId={activeTabId} onSelect={setActiveTabId} onAdd={addTab} onClose={closeTab} />
           {/* Warehouse Copilot — NL prompt bar + loading spinner (generate mode) */}
           <WarehouseCopilotPanels copilot={copilot} />
-          <MonacoTextarea
-            value={sqlText}
-            onChange={setSqlText}
-            language="tsql"
-            height={260}
-            minHeight={200}
-            sizingKey="warehouse.sql"
-            ariaLabel="Warehouse T-SQL editor"
-            onReady={handleEditorReady}
+          {/* U6 — query↔results divider (shared EditorResultsSplit). */}
+          <EditorResultsSplit
+            editorKey="warehouse"
+            active={loading || !!result}
+            query={
+              <>
+                <MonacoTextarea
+                  value={sqlText}
+                  onChange={setSqlText}
+                  language="tsql"
+                  height={260}
+                  minHeight={200}
+                  sizingKey="warehouse.sql"
+                  ariaLabel="Warehouse T-SQL editor"
+                  onReady={handleEditorReady}
+                />
+                <QueryParamsBar sql={sqlText} onChange={setQueryParams} showTypePicker={false} />
+              </>
+            }
+            results={
+              <>
+                {loading && <Spinner size="small" label="Executing T-SQL…" labelPosition="after" />}
+                {result && !result.ok && (
+                  <MessageBar intent={result.canceled ? 'warning' : 'error'}>
+                    <MessageBarBody>
+                      <MessageBarTitle>{result.canceled ? 'Query canceled' : 'Query failed'}</MessageBarTitle>
+                      {result.error || 'Unknown error'} {result.code && <Caption1>· {result.code}</Caption1>}
+                    </MessageBarBody>
+                  </MessageBar>
+                )}
+                {result?.ok && (
+                  <>
+                    {/*
+                     * SC-5 <PreviewTable> owns the result-set status line
+                     * ("Succeeded (Xms) · Columns N · Rows N") + type-badged headers +
+                     * search, so the toolbar here keeps only the Visualize toggle.
+                     */}
+                    {(result.rows?.length ?? 0) > 0 && (
+                      <div style={{ display: 'flex', alignItems: 'center' }}>
+                        <Button size="small" appearance={showViz ? 'primary' : 'outline'} icon={<DataBarVertical20Regular />}
+                          onClick={() => setShowViz((v) => !v)} style={{ marginLeft: 'auto' }}>
+                          {showViz ? 'Hide chart' : 'Visualize'}
+                        </Button>
+                      </div>
+                    )}
+                    {showViz && (result.rows?.length ?? 0) > 0 && (
+                      <ResultVisualize columns={result.columns || []} rows={result.rows || []} />
+                    )}
+                    {(result.rows?.length ?? 0) === 0 ? (
+                      <EmptyState
+                        icon={<DataBarVertical20Regular />}
+                        title="Query returned no rows"
+                        body="The T-SQL statement ran successfully but produced no rows. Adjust the predicates and run it again."
+                      />
+                    ) : (
+                      <PreviewTable
+                        sources={[{
+                          id: `wh-result-${activeTabId}`,
+                          label: 'Results',
+                          data: {
+                            columns: result.columns || [],
+                            rows: result.rows || [],
+                            elapsedMs: result.executionMs,
+                            rowCount: result.rowCount ?? result.rows?.length,
+                            truncated: result.truncated,
+                          },
+                        }]}
+                        showTabs={false}
+                        maxRows={5000}
+                        ariaLabel="Query results"
+                      />
+                    )}
+                  </>
+                )}
+              </>
+            }
           />
-          <QueryParamsBar sql={sqlText} onChange={setQueryParams} showTypePicker={false} />
-          {loading && <Spinner size="small" label="Executing T-SQL…" labelPosition="after" />}
-          {result && !result.ok && (
-            <MessageBar intent={result.canceled ? 'warning' : 'error'}>
-              <MessageBarBody>
-                <MessageBarTitle>{result.canceled ? 'Query canceled' : 'Query failed'}</MessageBarTitle>
-                {result.error || 'Unknown error'} {result.code && <Caption1>· {result.code}</Caption1>}
-              </MessageBarBody>
-            </MessageBar>
-          )}
-          {result?.ok && (
-            <>
-              {/*
-               * SC-5 <PreviewTable> owns the result-set status line
-               * ("Succeeded (Xms) · Columns N · Rows N") + type-badged headers +
-               * search, so the toolbar here keeps only the Visualize toggle.
-               */}
-              {(result.rows?.length ?? 0) > 0 && (
-                <div style={{ display: 'flex', alignItems: 'center' }}>
-                  <Button size="small" appearance={showViz ? 'primary' : 'outline'} icon={<DataBarVertical20Regular />}
-                    onClick={() => setShowViz((v) => !v)} style={{ marginLeft: 'auto' }}>
-                    {showViz ? 'Hide chart' : 'Visualize'}
-                  </Button>
-                </div>
-              )}
-              {showViz && (result.rows?.length ?? 0) > 0 && (
-                <ResultVisualize columns={result.columns || []} rows={result.rows || []} />
-              )}
-              {(result.rows?.length ?? 0) === 0 ? (
-                <EmptyState
-                  icon={<DataBarVertical20Regular />}
-                  title="Query returned no rows"
-                  body="The T-SQL statement ran successfully but produced no rows. Adjust the predicates and run it again."
-                />
-              ) : (
-                <PreviewTable
-                  sources={[{
-                    id: `wh-result-${activeTabId}`,
-                    label: 'Results',
-                    data: {
-                      columns: result.columns || [],
-                      rows: result.rows || [],
-                      elapsedMs: result.executionMs,
-                      rowCount: result.rowCount ?? result.rows?.length,
-                      truncated: result.truncated,
-                    },
-                  }]}
-                  showTabs={false}
-                  maxRows={5000}
-                  maxHeight={360}
-                  ariaLabel="Query results"
-                />
-              )}
-            </>
-          )}
           </>
           )}
 

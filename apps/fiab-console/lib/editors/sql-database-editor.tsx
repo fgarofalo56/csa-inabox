@@ -37,6 +37,7 @@ import {
 import { ItemEditorChrome } from './item-editor-chrome';
 import { EmptyState } from '@/lib/components/empty-state';
 import { TsqlMonaco } from '@/lib/editors/components/tsql-monaco';
+import { EditorResultsSplit, SplitFillBox } from '@/lib/editors/components/editor-results-split';
 import { SqlDbTree } from '@/lib/components/sqldb/sqldb-tree';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
@@ -362,52 +363,63 @@ WHERE is_ms_shipped = 0;`,
                       <Play20Regular />
                       <Body1>T-SQL (runs through Azure SQL engine)</Body1>
                     </div>
-                    <TsqlMonaco
-                      value={sqlText}
-                      onChange={setSqlText}
-                      onRun={(sql) => runSql(sql)}
-                      itemId={dbId}
-                      workspaceId={workspaceId}
-                      height={240}
-                      sizingKey="sql-database.query"
-                      busy={sqlBusy}
+                    {/* U6 — query↔results divider (shared EditorResultsSplit). */}
+                    <EditorResultsSplit
+                      editorKey="sql-database"
+                      active={sqlBusy || !!sqlResult}
+                      query={
+                        <TsqlMonaco
+                          value={sqlText}
+                          onChange={setSqlText}
+                          onRun={(sql) => runSql(sql)}
+                          itemId={dbId}
+                          workspaceId={workspaceId}
+                          height={240}
+                          sizingKey="sql-database.query"
+                          busy={sqlBusy}
+                        />
+                      }
+                      results={
+                        <>
+                          {sqlBusy && <Spinner size="small" label="Executing…" labelPosition="after" />}
+                          {!sqlBusy && !sqlResult && (
+                            <EmptyState
+                              icon={<DocumentTable20Regular />}
+                              title="No results yet"
+                              body="Write a T-SQL statement above and run it. Result rows from the live Azure SQL engine appear here."
+                            />
+                          )}
+                          {!sqlBusy && sqlResult && !sqlResult.ok && (
+                            <MessageBar intent="error"><MessageBarBody className={s.breakAll}><MessageBarTitle>Query failed</MessageBarTitle>{sqlResult.error}</MessageBarBody></MessageBar>
+                          )}
+                          {!sqlBusy && sqlResult?.ok && (sqlResult.columns?.length ?? 0) === 0 && (
+                            <EmptyState
+                              icon={<DocumentTable20Regular />}
+                              title="Query returned no rows"
+                              body="The statement executed successfully against the live endpoint but returned no result set. Adjust the statement and run again."
+                            />
+                          )}
+                          {!sqlBusy && sqlResult?.ok && (sqlResult.columns?.length ?? 0) > 0 && (
+                            <SplitFillBox className={s.tableWrap}>
+                              <Table aria-label="Query result" size="small">
+                                <TableHeader><TableRow>
+                                  {(sqlResult.columns || []).map(c => <TableHeaderCell key={c}>{c}</TableHeaderCell>)}
+                                </TableRow></TableHeader>
+                                <TableBody>
+                                  {(sqlResult.rows || []).map((row, i) => (
+                                    <TableRow key={i}>
+                                      {(sqlResult.columns || []).map((_, j) => (
+                                        <TableCell key={j} className={s.cell}>{String((row as unknown[])[j] ?? 'NULL')}</TableCell>
+                                      ))}
+                                    </TableRow>
+                                  ))}
+                                </TableBody>
+                              </Table>
+                            </SplitFillBox>
+                          )}
+                        </>
+                      }
                     />
-                    {sqlBusy && <Spinner size="small" label="Executing…" labelPosition="after" />}
-                    {!sqlBusy && !sqlResult && (
-                      <EmptyState
-                        icon={<DocumentTable20Regular />}
-                        title="No results yet"
-                        body="Write a T-SQL statement above and run it. Result rows from the live Azure SQL engine appear here."
-                      />
-                    )}
-                    {!sqlBusy && sqlResult && !sqlResult.ok && (
-                      <MessageBar intent="error"><MessageBarBody className={s.breakAll}><MessageBarTitle>Query failed</MessageBarTitle>{sqlResult.error}</MessageBarBody></MessageBar>
-                    )}
-                    {!sqlBusy && sqlResult?.ok && (sqlResult.columns?.length ?? 0) === 0 && (
-                      <EmptyState
-                        icon={<DocumentTable20Regular />}
-                        title="Query returned no rows"
-                        body="The statement executed successfully against the live endpoint but returned no result set. Adjust the statement and run again."
-                      />
-                    )}
-                    {!sqlBusy && sqlResult?.ok && (sqlResult.columns?.length ?? 0) > 0 && (
-                      <div className={s.tableWrap}>
-                        <Table aria-label="Query result" size="small">
-                          <TableHeader><TableRow>
-                            {(sqlResult.columns || []).map(c => <TableHeaderCell key={c}>{c}</TableHeaderCell>)}
-                          </TableRow></TableHeader>
-                          <TableBody>
-                            {(sqlResult.rows || []).map((row, i) => (
-                              <TableRow key={i}>
-                                {(sqlResult.columns || []).map((_, j) => (
-                                  <TableCell key={j} className={s.cell}>{String((row as unknown[])[j] ?? 'NULL')}</TableCell>
-                                ))}
-                              </TableRow>
-                            ))}
-                          </TableBody>
-                        </Table>
-                      </div>
-                    )}
                   </>
                 )}
               </>
