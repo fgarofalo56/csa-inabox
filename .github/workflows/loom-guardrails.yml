@@ -50,6 +50,8 @@ jobs:
         run: node scripts/ci/check-file-size.mjs
       - name: ws-credential-adoption (credential-factory ratchet — loom-next-level I5)
         run: node scripts/ci/check-workspace-credential-adoption.mjs
+      - name: cloud-endpoint-literals (bare Commercial host literals ratchet — X1)
+        run: node scripts/ci/check-cloud-endpoint-literals.mjs
       - name: bicep-sync (orphan modules + env-sync core)
         run: node scripts/ci/check-bicep-sync.mjs
       - name: bicep-param-cap (ARM 256-param headroom — loom-next-level R0)
