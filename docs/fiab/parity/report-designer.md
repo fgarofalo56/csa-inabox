@@ -35,7 +35,7 @@ read-only report viewer and the report-visual-designer Power-BI canvas):
 | Persist whole definition | apps/fiab-console/app/api/items/report/[id]/definition/route.ts |
 | Data-source binding | apps/fiab-console/lib/editors/report/data-source-picker.tsx + .../data-source/route.ts |
 | Canvas layout / page model | apps/fiab-console/lib/editors/report/use-canvas-layout.ts |
-| Analytics pane (reference lines + Wave-2 error-bars/forecast/symmetry + **Wave-5 anomalies / X-lines / shaded ranges**; **A7 golden numeric harness** `__tests__/analytics-pane.test.ts`) | apps/fiab-console/lib/editors/report/analytics-pane.tsx |
+| Analytics pane (reference lines + Wave-2 error-bars/forecast/symmetry + **Wave-5 anomalies / X-lines / shaded ranges**) | apps/fiab-console/lib/editors/report/analytics-pane.tsx |
 | Bookmarks pane (**NEW** Wave 2 — right-rail tab) | apps/fiab-console/lib/editors/report/bookmarks-pane.tsx |
 | Selection pane (**NEW** Wave 2 — right-rail tab) | apps/fiab-console/lib/editors/report/selection-pane.tsx |
 | AI visuals (**Wave 3** — decomposition tree / key influencers / Q&A / smart narrative) | apps/fiab-console/lib/editors/report/ai-visuals/*.tsx |
@@ -305,6 +305,23 @@ are W1-W4 and are **untouched** by this wave.
   `__tests__/map-shape-fallback.test.ts`, 8 cases). FLAG0 flag
   `a8-map-shape-fallback` (default-ON; OFF reverts to the pre-A8 table-only gate).
   **Per-cloud:** Commercial = live Azure Maps; Gov = live offline choropleth.
+- **A9 — drill-through / interaction / conditional-format parity (2026-07-23):**
+  the interaction model already ships end-to-end — **drill-through** (right-click
+  visual → "Drill through to" a target page declaring drillthrough fields,
+  carrying the clicked row's value as a seed filter — `drillthroughTargetsFor` +
+  `navigateDrillthrough` in report-designer.tsx, `DrillthroughConfig` +
+  `DrillthroughEditor` + `page-format-panel.tsx`), **drill-up / expand-all-down**
+  on matrix hierarchies (the wells→SQL `drill` opts), and cross-filter
+  highlight/filter/none (`interactions.tsx`). The genuine residual gap: the
+  **pivoted `MatrixPivotTable` applied NO conditional formatting** while the plain
+  table did (a parity/no-vaporware gap). A9 wires `matrixCellPaint(cf, enabled,
+  alias, value)` so the pivoted matrix value cells honor the SAME background /
+  font-color / icon / data-bar rules — uniform with the table path — and adds a
+  golden painter harness (`__tests__/conditional-format.test.ts`, 17 cases:
+  every `cellStyleFor` mode + `applyConditionalFormat` column resolution + the
+  `matrixCellPaint` gate; the painter had zero tests before). FLAG0 flag
+  `a9-matrix-conditional-format` (default-ON; OFF reverts to unpainted matrix
+  cells). Zero ❌ vs Power BI interactions.
 - **Wells re-exposed:** queryVisual() STOPS stripping Small multiples / Tooltips /
   Details. smallMultiples → `wells.smallMultiples`, details → `wells.details`
   (trellis group cols, folded into the 2nd GROUP BY), tooltips → `wells.tooltips`
