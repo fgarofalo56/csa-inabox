@@ -143,6 +143,10 @@ export const VALUE_HINT: Record<string, string> = {
   // from the monitoring module). Operators normally never set these by hand.
   LOOM_ORG_VISUALS_URL: 'https://<adls-account>.blob.<storage-suffix>/org-visuals',
   LOOM_LOG_ANALYTICS_WORKSPACE_ID: '<log-analytics-workspace-customer-id-guid>',
+  // RUM1 — client-side real-user monitoring (default-ON; observabilityConfig bag).
+  LOOM_RUM_ENABLED: 'true  (default; false = opt out of browser RUM capture)',
+  LOOM_RUM_SAMPLE_RATE: '100  (percent of browser sessions sampled, 0-100)',
+  APPLICATIONINSIGHTS_CONNECTION_STRING: 'InstrumentationKey=<guid>;IngestionEndpoint=https://<region>.in.applicationinsights.<cloud-suffix>/;…  (derived from the monitoring module)',
   // SIEM audit stream (BR-SIEM) — DCE ingestion endpoint + DCR immutable id.
   LOOM_AUDIT_DCR_ENDPOINT: 'https://dce-loom-audit-<region>-<hash>.<region>.ingest.monitor.azure.com',
   LOOM_AUDIT_DCR_ID: 'dcr-<32-hex-immutable-id>',

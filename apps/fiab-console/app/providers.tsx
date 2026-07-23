@@ -3,6 +3,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ThemeProvider } from '@/lib/theme/theme-context';
 import { useSessionKeepalive } from '@/lib/auth/use-session-keepalive';
+import { RumTelemetry } from '@/lib/telemetry/rum';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -31,6 +32,10 @@ export function Providers({ children }: { children: React.ReactNode }) {
   return (
     <QueryClientProvider client={queryClient}>
       <SessionKeepalive />
+      {/* RUM1 — passive browser telemetry capture (no UI). Config-gated
+          server-side (LOOM_RUM_ENABLED + rum1-client-telemetry flag) and
+          per-session sampled; a silent no-op pre-auth or when disabled. */}
+      <RumTelemetry />
       <ThemeProvider>{children}</ThemeProvider>
     </QueryClientProvider>
   );

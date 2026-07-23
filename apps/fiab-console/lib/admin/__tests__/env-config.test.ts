@@ -202,8 +202,11 @@ describe('admin/env-config registry', () => {
     // forecast runs day-one unset: 30-day horizon, method 'auto' = real
     // Forecast API → computed linear/seasonal fallback) (163) → L2
     // svc-openlineage adds LOOM_OPENLINEAGE_AUTH_MODE (164; the per-pool
-    // credential registrations are secretRef-typed, not editable env).
-    expect(EDITABLE_ENV.length).toBe(164);
+    // credential registrations are secretRef-typed, not editable env) → RUM1
+    // svc-client-rum adds LOOM_RUM_ENABLED + LOOM_RUM_SAMPLE_RATE +
+    // APPLICATIONINSIGHTS_CONNECTION_STRING (secret-typed, monitoring-module
+    // derived) (167).
+    expect(EDITABLE_ENV.length).toBe(167);
   });
 
   it('surfaces the wave-2 env vars as settable (previously dropped by the whitelist)', () => {
@@ -270,6 +273,10 @@ describe('admin/env-config registry', () => {
     // per-replica in-memory cache with zero loss of function).
     const optDefault = EDITABLE_ENV.filter((e) => e.optionalDefault).map((e) => e.key).sort();
     expect(optDefault).toEqual([
+      // RUM1 svc-client-rum — browser RUM is strictly-additive telemetry: with
+      // the connection string unset, capture + ingest are a silent no-op with
+      // zero loss of function (the spec's optionalDefault posture).
+      'APPLICATIONINSIGHTS_CONNECTION_STRING',
       'LOOM_A2A_EGRESS_ALLOW',
       // O1 svc-alerting — the optional on-call webhook bridge; unset = the
       // unified dispatch path still delivers every severity via the shared
@@ -297,6 +304,8 @@ describe('admin/env-config registry', () => {
       'LOOM_OPENLINEAGE_AUTH_MODE',
       'LOOM_PLAN_BACKING_SQL_DATABASE', 'LOOM_PLAN_BACKING_SQL_SERVER',
       'LOOM_RESULT_CACHE_REDIS',
+      // RUM1 svc-client-rum — default-ON knobs (unset = enabled @ 100%).
+      'LOOM_RUM_ENABLED', 'LOOM_RUM_SAMPLE_RATE',
       'LOOM_TRANSLATOR_ENDPOINT', 'LOOM_VISION_ENDPOINT',
       // I1 svc-workspace-identity — mode off (unset) is the fully-functional
       // intended default (shared Console UAMI, unchanged); the sole Phase-0

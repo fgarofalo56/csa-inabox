@@ -13,13 +13,13 @@ same classic + WS-D1 toolkit export styles).
 
 | Metric | Count |
 | --- | ---: |
-| Total routes | 1550 |
+| Total routes | 1552 |
 | Public (no session) | 108 |
-| Session-only | 568 |
+| Session-only | 569 |
 | Owner-scoped | 632 |
-| Admin | 242 |
+| Admin | 243 |
 | Gated (backend config) | 507 |
-| Areas | 103 |
+| Areas | 104 |
 
 **Auth scope** — `public`: no session check; `session-only`: signed-in but
 no per-resource authz; `owner-scoped`: owner/workspace-ACL check on the
@@ -191,6 +191,7 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `admin/readiness/route.ts` | GET | admin | ● | — |
 | `admin/refresh-summary/route.ts` | GET | admin | ● | ADF, Azure Monitor, Cosmos |
 | `admin/reindex-items/route.ts` | POST | admin |  | Cosmos |
+| `admin/rum/route.ts` | GET | admin |  | Azure Monitor |
 | `admin/runtime-flags/[id]/route.ts` | PUT | admin |  | — |
 | `admin/runtime-flags/route.ts` | GET | admin |  | — |
 | `admin/scaling/adx/route.ts` | GET POST PUT | admin |  | ADX ARM |
@@ -2006,6 +2007,12 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | Route | Methods | Auth scope | Gated | Backends |
 | --- | --- | --- | :---: | --- |
 | `tabs/route.ts` | GET POST | owner-scoped |  | Cosmos |
+
+## telemetry
+
+| Route | Methods | Auth scope | Gated | Backends |
+| --- | --- | --- | :---: | --- |
+| `telemetry/rum/route.ts` | GET POST | session-only |  | — |
 
 ## tenant-theme
 

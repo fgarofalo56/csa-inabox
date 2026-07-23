@@ -45,6 +45,30 @@ export const OBSERVABILITY_ENV_CHECKS: EnvSpec[] = [
     },
   },
   {
+    // RUM1 — client-side real-user monitoring. Browser beacons (page-load
+    // timings, Web Vitals, unhandled errors — PII-scrubbed route shapes only)
+    // POST to the session-gated /api/telemetry/rum ingest route, which
+    // forwards to the SAME App Insights resource server telemetry uses via
+    // its connection string (per-cloud by construction — Gov strings carry
+    // .us ingestion endpoints). UNSET = SILENT NO-OP (optionalDefault): the
+    // console works identically, capture just costs nothing; a push-button
+    // deploy wires everything default-ON. Kill instantly (no roll) via the
+    // rum1-client-telemetry runtime flag on /admin/runtime-flags.
+    id: 'svc-client-rum', category: 'observability',
+    title: 'Client-side real-user monitoring (RUM) — browser telemetry', severity: 'optional',
+    required: ['LOOM_RUM_ENABLED', 'LOOM_RUM_SAMPLE_RATE', 'APPLICATIONINSIGHTS_CONNECTION_STRING'],
+    warnOnMiss: true, optionalDefault: true,
+    optionalDefaultDetail: 'browser RUM capture is a strictly-additive telemetry layer — with the App Insights connection string unset the client provider and the ingest route are a silent no-op (zero user impact, zero errors); server-side telemetry, synthetic journeys and every surface keep working identically.',
+    remediation: 'A push-button deploy wires this default-ON: APPLICATIONINSIGHTS_CONNECTION_STRING (the monitoring module\'s App Insights resource) + LOOM_RUM_ENABLED=true + LOOM_RUM_SAMPLE_RATE=100 (observabilityConfig bag). Real page loads then land as browserTimings/AppBrowserTimings, client errors as AppExceptions (role loom-console-browser), charted on /admin/rum. The /admin/rum view additionally needs LOOM_LOG_ANALYTICS_WORKSPACE_ID + Log Analytics Reader (already wired for /monitor). Opt out with LOOM_RUM_ENABLED=false, or kill instantly via the rum1-client-telemetry runtime flag.',
+    provisionedBy: 'modules/admin-plane/main.bicep (observabilityConfig bag → apps[] env LOOM_RUM_ENABLED / LOOM_RUM_SAMPLE_RATE; APPLICATIONINSIGHTS_CONNECTION_STRING from the monitoring module)',
+    role: 'none for capture (first-party beacons through the session-gated BFF); Log Analytics Reader (Console UAMI) for the /admin/rum view',
+    docs: 'docs/fiab/runbooks/rum.md',
+    availability: {
+      commercial: 'ga', gccHigh: 'ga', il5: 'ga',
+      fallbackNote: 'Sovereign/IL5: capture is first-party code bundled in the console image (no CDN, no external beacon — browser talks ONLY to the console BFF); ingestion uses the App Insights connection-string endpoint of the active cloud (.us in Gov / in-enclave in IL5).',
+    },
+  },
+  {
     // The ONE shared derived alert var (rev-2 alert standard) — the ARM id of
     // monitoring-default-alerts.bicep's defaultActionGroup (loom-default-alerts).
     // Consumed by every alert emitter through O1's lib/azure/alert-dispatch.ts

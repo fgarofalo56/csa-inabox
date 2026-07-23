@@ -122,6 +122,13 @@ const GETSESSION_RE = /getSession\s*\(|with(?:Session|WorkspaceOwner|BackendGate
 // ── Allowlist: routes that legitimately need no per-resource authorization.
 // Repo-relative POSIX paths. Each MUST carry a reason.
 const ALLOWLIST = new Map([
+  // RUM1 browser-telemetry ingest: WRITE-ONLY beacon sink (page-load timings /
+  // Web Vitals / scrubbed errors → App Insights). There is NO per-tenant
+  // resource to own-scope — the route reads nothing back and forwards
+  // aggregate-only, PII-scrubbed envelopes with no user identifier. Session
+  // gates abuse (plus per-oid rate limit + 64KB/30-item caps); the READ half
+  // lives at /api/admin/rum behind withTenantAdmin.
+  ['apps/fiab-console/app/api/telemetry/rum/route.ts', 'write-only PII-scrubbed telemetry sink; no per-tenant resource to scope; rate-limited + size-capped; admin read half is tenant-admin-gated'],
   // FLAG0 runtime kill-switch READ half: returns only { flagId: boolean } for
   // the flags in the typed RUNTIME_FLAGS registry — deployment-wide operational
   // state with NO per-tenant/per-owner resource to scope (like a feature-flag

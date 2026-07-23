@@ -103,6 +103,14 @@ export const RUNTIME_FLAGS: readonly RuntimeFlagDef[] = [
     ownerItem: 'A10',
     surface: '/admin/health?tab=spark',
   },
+  {
+    id: 'rum1-client-telemetry',
+    label: 'Client RUM telemetry',
+    description:
+      'Browser-side real-user monitoring: page-load timings, Web Vitals and unhandled-error beacons from every console page → App Insights. OFF stops capture on the next page load AND drops in-flight beacons at the ingest route (seconds, no roll) — the passive-capture revert story. Server-side telemetry and the synthetic journeys are unaffected.',
+    ownerItem: 'RUM1',
+    surface: 'Every console page (passive capture) + /admin/rum',
+  },
 ];
 
 /** Union of registered flag ids (`never` while the list is empty). */

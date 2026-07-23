@@ -348,9 +348,15 @@ type observabilityConfigT = {
 
   @description('C2 — FinOps forecast method (LOOM_COST_FORECAST_METHOD): auto (default — the real Cost Management Forecast API first, computed fallback on any failure), api, linear (least-squares run-rate), seasonal (7-day weekday profile × trend; the Gov FailedDependency / IL5 CSV-ingest path).')
   costForecastMethod: ('auto' | 'api' | 'linear' | 'seasonal')?
+
+  @description('RUM1 — client-side real-user monitoring (browser page-load timings, Web Vitals, unhandled errors → App Insights via the session-gated BFF ingest route). Default ON (opt-out) per loom_default_on_opt_out; capture is a silent no-op when the App Insights connection string is withheld (telemetryEnabled=false). Instant kill without a roll: the rum1-client-telemetry runtime flag.')
+  rumEnabled: bool?
+
+  @description('RUM1 — percent of browser sessions sampled (0–100). Default 100.')
+  rumSampleRate: int?
 }
 
-@description('Observability settings bag (R0) — V1 synthetic-journey monitor settings live here (+ the COST0 program-budget props, consumed at the top-level orchestrator); V5 bicep-drift, O1 alert-dispatch and RUM1 client-RUM settings add properties to observabilityConfigT — never a new top-level param.')
+@description('Observability settings bag (R0) — V1 synthetic-journey monitor + RUM1 client-RUM settings live here (+ the COST0 program-budget props, consumed at the top-level orchestrator); V5 bicep-drift and O1 alert-dispatch add properties to observabilityConfigT — never a new top-level param.')
 param observabilityConfig observabilityConfigT = {}
 
 type drConfigT = {
@@ -434,6 +440,9 @@ var alertWebhookSecretName = observabilityConfig.?alertWebhookSecretName ?? 'loo
 // C2 (observabilityConfig bag) — FinOps forecast knobs (fully-functional defaults).
 var costForecastHorizonDays = observabilityConfig.?costForecastHorizonDays ?? 30
 var costForecastMethod = observabilityConfig.?costForecastMethod ?? 'auto'
+// RUM1 (observabilityConfig bag) — client real-user monitoring shims (default-ON).
+var rumEnabled = observabilityConfig.?rumEnabled ?? true
+var rumSampleRate = observabilityConfig.?rumSampleRate ?? 100
 // I1 (workspaceIdentityConfig bag) — per-workspace identity shims (default off).
 var workspaceIdentityMode = workspaceIdentityConfig.?workspaceIdentityMode ?? 'off'
 var wsIdentitySub = workspaceIdentityConfig.?wsIdentitySub ?? ''
@@ -3085,6 +3094,16 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // with live-metrics disabled. Mirrors loomConsoleTelemetryEnabled;
             // also withholds APPLICATIONINSIGHTS_CONNECTION_STRING when false.
             { name: 'LOOM_CONSOLE_TELEMETRY_ENABLED', value: loomConsoleTelemetryEnabled ? 'true' : '' }
+            // RUM1 — client-side real-user monitoring (observabilityConfig bag,
+            // default-ON). Browser beacons (page-load timings / Web Vitals /
+            // unhandled errors, PII-scrubbed) POST to the session-gated
+            // /api/telemetry/rum route, which forwards to App Insights via the
+            // SAME connection string as server telemetry — so disabling
+            // telemetryEnabled (which withholds the connection string) also
+            // silently no-ops RUM. Kill without a roll: rum1-client-telemetry
+            // runtime flag on /admin/runtime-flags.
+            { name: 'LOOM_RUM_ENABLED', value: rumEnabled ? 'true' : 'false' }
+            { name: 'LOOM_RUM_SAMPLE_RATE', value: string(rumSampleRate) }
             { name: 'LOOM_LOG_ANALYTICS_RESOURCE_ID', value: monitoring.outputs.lawId }
             // SIEM audit stream (BR-SIEM) — the DCE ingestion endpoint + DCR
             // immutable id the Console POSTs admin-mutation events to (Logs

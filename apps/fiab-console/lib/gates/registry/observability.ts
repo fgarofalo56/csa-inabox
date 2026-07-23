@@ -31,6 +31,16 @@ export const OBSERVABILITY_GATE_META: Record<string, GateMeta> = {
     },
     autoResolveNote: 'Unset → J1 (the real MSAL login probe) records an honest SKIP while the minted-session journeys J2–J6 keep monitoring the live app — fully functional detection minus the sign-in-path check.',
   },
+  'svc-client-rum': {
+    surfaces: [
+      { path: '/admin/rum', label: 'Real-user monitoring (admin view)' },
+      { path: '/api/telemetry/rum', label: 'Browser beacon ingest (session-gated BFF)' },
+    ],
+    // Fix-it: plain env writes (enable flag + sample rate; the connection
+    // string is auto-wired by the monitoring module on a push-button deploy).
+    fixit: { kind: 'env-picker' },
+    autoResolveNote: 'Default-ON on a push-button deploy (LOOM_RUM_ENABLED=true + the App Insights connection string from the monitoring module). Unset → capture is a SILENT no-op with zero user impact; /admin/rum explains the gate. Instant kill without a roll: the rum1-client-telemetry runtime flag.',
+  },
   'svc-alert-action-group': {
     surfaces: [
       { path: '/admin/health?tab=journeys', label: 'Synthetic-failure alerting (shared action group)' },

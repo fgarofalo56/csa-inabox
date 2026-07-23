@@ -39,7 +39,7 @@ interface TileSpec {
   description: string;
 }
 
-// The 13 section tiles. href + icon mirror lib/components/admin-shell.tsx
+// The 14 section tiles. href + icon mirror lib/components/admin-shell.tsx
 // SECTIONS so the landing grid and the left nav stay one-for-one.
 const TILE_SPECS: TileSpec[] = [
   { key: 'workspaces', href: '/admin/workspaces', label: 'Workspaces', icon: Building24Regular,
@@ -68,6 +68,9 @@ const TILE_SPECS: TileSpec[] = [
     description: 'Sensitivity labels in the tenant' },
   { key: 'runtimeFlags', href: '/admin/runtime-flags', label: 'Runtime flags', icon: ToggleLeft24Regular,
     description: 'Kill-switches currently flipped off' },
+  // RUM1 — real-user monitoring: client JS errors seen in the last 24 h.
+  { key: 'rumClientErrors', href: '/admin/rum', label: 'Real-user monitoring', icon: ChartMultiple24Regular,
+    description: 'Client errors in the last 24 h' },
 ];
 
 const useStyles = makeStyles({
