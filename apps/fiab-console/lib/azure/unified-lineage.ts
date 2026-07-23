@@ -420,6 +420,7 @@ async function purviewGraph(
   depth: number,
   focusIds: string[],
   fetcher: (g: string, d: number) => Promise<PurviewLineageGraph> = getLineageSubgraph,
+  columnLineage = false,
 ): Promise<SourceGraph> {
   const graph = await fetcher(guid, depth);
   const nodes: IdentifiedNode[] = Object.values(graph.guidEntityMap).map((n) => {
@@ -452,6 +453,24 @@ async function purviewGraph(
     to: r.toEntityId,
     ...(r.relationshipType ? { type: r.relationshipType } : {}),
   }));
+  // L4 — merge Purview-native process column lineage (columnMapping attribute)
+  // into the shared `col:` model, keyed on the dataset qualifiedName's canonical
+  // identity so a Purview column node collapses onto the same UnionFind member
+  // as the UC / Weave column node for the same physical column (L1). Best-effort:
+  // absent columnEdges leave the entity-grain Purview graph unchanged.
+  if (columnLineage && graph.columnEdges?.length) {
+    const members: ColumnGraphMember[] = graph.columnEdges.map((ce) => ({
+      fromTable: normalizeIdentity(ce.sourceDatasetQualifiedName),
+      fromColumn: ce.fromColumn,
+      toTable: normalizeIdentity(ce.sinkDatasetQualifiedName),
+      toColumn: ce.toColumn,
+      confidence: 'declared' as const,
+      source: 'purview' as const,
+    }));
+    const colGraph = synthesizeColumnGraph(members, edges);
+    for (const cn of colGraph.nodes) if (!nodes.some((n) => n.node.id === cn.node.id)) nodes.push(cn);
+    edges.push(...colGraph.edges);
+  }
   return { source: 'purview', nodes, edges };
 }
 
@@ -749,7 +768,7 @@ export async function getUnifiedLineage(input: UnifiedLineageInput): Promise<Uni
   // --- Purview / Atlas ---
   if (purviewGuid && (input.atlasFetcher || isPurviewConfigured())) {
     tasks.push(
-      purviewGraph(purviewGuid, depth, focusIds, input.atlasFetcher)
+      purviewGraph(purviewGuid, depth, focusIds, input.atlasFetcher, input.columnLineage)
         .then((g) => {
           graphs.push(g);
           sources.push({ source: 'purview', ok: true, nodeCount: g.nodes.length });

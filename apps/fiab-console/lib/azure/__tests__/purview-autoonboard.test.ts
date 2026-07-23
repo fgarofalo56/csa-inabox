@@ -16,6 +16,7 @@ const h = vi.hoisted(() => ({
   registerAtlasEntity: vi.fn(),
   ensureClassificationDefs: vi.fn(),
   deleteAtlasEntityByQualifiedName: vi.fn(),
+  ensureColumnEntities: vi.fn(),
   // Cosmos item operations
   cosmosRead: vi.fn(),
   cosmosReplace: vi.fn(),
@@ -27,6 +28,7 @@ vi.mock('../purview-client', () => ({
   registerAtlasEntity: h.registerAtlasEntity,
   ensureClassificationDefs: h.ensureClassificationDefs,
   deleteAtlasEntityByQualifiedName: h.deleteAtlasEntityByQualifiedName,
+  ensureColumnEntities: h.ensureColumnEntities,
 }));
 
 vi.mock('@/lib/azure/cosmos-client', () => ({
@@ -194,5 +196,46 @@ describe('offboardFromPurview', () => {
     process.env.LOOM_PURVIEW_ACCOUNT = 'pv-test';
     h.deleteAtlasEntityByQualifiedName.mockRejectedValue(new Error('403'));
     await expect(offboardFromPurview(item, 'tenant-1')).resolves.toBeUndefined();
+  });
+});
+
+// ── L4 — column sub-entities (onboard + LIN-GC purge) ────────────────────────
+
+describe('column sub-entities (L4)', () => {
+  const colItem = { ...item, itemType: 'azure-sql-database', state: { columns: ['Id', 'Name', 'Id'] } } as any;
+
+  it('registers column sub-entities on onboard when the item carries a schema', async () => {
+    process.env.LOOM_PURVIEW_ACCOUNT = 'pv-test';
+    h.registerAtlasEntity.mockResolvedValue({ primaryGuid: undefined });
+    await autoOnboardToPurview(colItem, 'tenant-1');
+    expect(h.ensureColumnEntities).toHaveBeenCalledWith(
+      'azure_sql_db',
+      'loom://tenant-1/ws1/azure-sql-database/i1',
+      ['Id', 'Name'], // deduped by itemColumnNames
+    );
+  });
+
+  it('does NOT register column entities when the item has no schema', async () => {
+    process.env.LOOM_PURVIEW_ACCOUNT = 'pv-test';
+    h.registerAtlasEntity.mockResolvedValue({ primaryGuid: undefined });
+    await autoOnboardToPurview(item, 'tenant-1'); // state: {}
+    expect(h.ensureColumnEntities).not.toHaveBeenCalled();
+  });
+
+  it('purges column sub-entities (per column) before the parent on offboard', async () => {
+    process.env.LOOM_PURVIEW_ACCOUNT = 'pv-test';
+    await offboardFromPurview(colItem, 'tenant-1');
+    const qn = 'loom://tenant-1/ws1/azure-sql-database/i1';
+    expect(h.deleteAtlasEntityByQualifiedName).toHaveBeenCalledWith('azure_sql_db_column', `${qn}#Id`);
+    expect(h.deleteAtlasEntityByQualifiedName).toHaveBeenCalledWith('azure_sql_db_column', `${qn}#Name`);
+    // and the parent dataset entity itself
+    expect(h.deleteAtlasEntityByQualifiedName).toHaveBeenCalledWith('azure_sql_db', qn);
+  });
+
+  it('onboard still succeeds when ensureColumnEntities throws (enrichment only)', async () => {
+    process.env.LOOM_PURVIEW_ACCOUNT = 'pv-test';
+    h.registerAtlasEntity.mockResolvedValue({ primaryGuid: undefined });
+    h.ensureColumnEntities.mockRejectedValue(new Error('no column type'));
+    await expect(autoOnboardToPurview(colItem, 'tenant-1')).resolves.toBeUndefined();
   });
 });

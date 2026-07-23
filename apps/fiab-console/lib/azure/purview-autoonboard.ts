@@ -24,6 +24,7 @@ import {
   upsertScan,
   triggerScanRun,
   deleteDataSource,
+  ensureColumnEntities,
 } from './purview-client';
 import { scanRulesetName } from './purview-classification-sync';
 import { dfsSuffix } from './cloud-endpoints';
@@ -35,7 +36,23 @@ import type { WorkspaceItem } from '@/lib/types/workspace';
  * on exactly one entity (Atlas dedupes on qualifiedName).
  */
 function itemQualifiedName(item: WorkspaceItem, tenantId: string): string {
-  return `loom://${tenantId}/${item.workspaceId}/${item.itemType}/${item.id}`;
+  return loomAtlasQualifiedName(tenantId, item.workspaceId, item.itemType, item.id);
+}
+
+/**
+ * The stable Atlas qualifiedName for a Loom item, reconstructable from its raw
+ * Cosmos fields (no WorkspaceItem object needed). Exported so the Weave edge
+ * emitter (thread-edges recordThreadEdge, L4 column lineage) and LIN-GC can
+ * build the SAME qualifiedName the onboard path stamped, without re-reading the
+ * whole item. Must match {@link itemQualifiedName} exactly.
+ */
+export function loomAtlasQualifiedName(
+  tenantId: string,
+  workspaceId: string,
+  itemType: string,
+  itemId: string,
+): string {
+  return `loom://${tenantId}/${workspaceId}/${itemType}/${itemId}`;
 }
 
 /**
@@ -355,6 +372,16 @@ export async function autoOnboardToPurview(item: WorkspaceItem, tenantId: string
       }
     }
 
+    // L4 — best-effort register the item's column sub-entities so column-level
+    // lineage (the Process `columnMapping` attribute) has endpoints to attach
+    // to. Non-blocking; a dataset type without a column-child relationship is a
+    // silent no-op (column lineage still renders off the process attribute).
+    const columns = itemColumnNames(item);
+    if (columns.length) {
+      try { await ensureColumnEntities(typeName, itemQualifiedName(item, tenantId), columns); }
+      catch { /* enrichment only — never block onboarding */ }
+    }
+
     // Register the item's backing store as a Purview scan source + define a scan
     // so built-in classifications (SSN/credit-card/address) auto-detect. Best-
     // effort + non-blocking; the scan trigger is gated on LOOM_PURVIEW_AUTOSCAN.
@@ -362,6 +389,25 @@ export async function autoOnboardToPurview(item: WorkspaceItem, tenantId: string
   } catch {
     /* best-effort auto-onboard — never block or fail item creation */
   }
+}
+
+/**
+ * Extract the column names an item carries in its Cosmos state — `state.columns`
+ * (string[] or {name}[]) or `state.schema` ({name}[]). Used to register column
+ * sub-entities for column lineage (L4). Returns [] when the item has no schema.
+ */
+export function itemColumnNames(item: WorkspaceItem): string[] {
+  const state = (item.state || {}) as Record<string, unknown>;
+  const raw: unknown[] = Array.isArray(state.columns)
+    ? (state.columns as unknown[])
+    : Array.isArray(state.schema)
+      ? (state.schema as unknown[])
+      : [];
+  const names = raw
+    .map((c) => (typeof c === 'string' ? c : (c && typeof c === 'object' ? (c as any).name : undefined)))
+    .map((n) => (typeof n === 'string' ? n.trim() : ''))
+    .filter(Boolean);
+  return [...new Set(names)];
 }
 
 /**
@@ -382,9 +428,24 @@ export async function autoOnboardToPurview(item: WorkspaceItem, tenantId: string
  */
 export async function offboardFromPurview(item: WorkspaceItem, tenantId: string): Promise<void> {
   if (!process.env.LOOM_PURVIEW_ACCOUNT) return; // not configured → silent no-op
+  const typeName = loomTypeToAtlasTypeName(item.itemType);
+  const qualifiedName = itemQualifiedName(item, tenantId);
+  // L4 — purge the item's column sub-entities first (they'd otherwise dangle as
+  // orphaned children once the parent dataset is soft-deleted). Best-effort; a
+  // dataset type that never had column children is a silent no-op.
   try {
-    const typeName = loomTypeToAtlasTypeName(item.itemType);
-    await deleteAtlasEntityByQualifiedName(typeName, itemQualifiedName(item, tenantId));
+    const columns = itemColumnNames(item);
+    if (columns.length) {
+      const colType = `${typeName}_column`;
+      await Promise.allSettled(
+        columns.map((c) => deleteAtlasEntityByQualifiedName(colType, `${qualifiedName}#${c}`)),
+      );
+    }
+  } catch {
+    /* best-effort column purge — never block or fail item deletion */
+  }
+  try {
+    await deleteAtlasEntityByQualifiedName(typeName, qualifiedName);
   } catch {
     /* best-effort offboard — never block or fail item deletion */
   }
