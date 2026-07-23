@@ -22,11 +22,17 @@
  */
 
 import {
-  mkdirsWorkspace, importWorkspaceFile, createJob, getJob, updateJob, runJob,
+  mkdirsWorkspace, importWorkspaceFile, createJob, getJob, updateJob, runJob, getNotebook,
   type JobSpec,
 } from '@/lib/azure/databricks-client';
 import { DefaultAzureCredential, ManagedIdentityCredential, ChainedTokenCredential } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
+import { recordThreadEdge } from '@/lib/thread/thread-edges';
+import { getSession, type SessionPayload } from '@/lib/auth/session';
+import {
+  parseDbtManifestLineage, parseManifestJson,
+  type DbtManifest, type DbtCatalog,
+} from './dbt-manifest-lineage';
 import type { GeneratedFile } from './dbt-codegen';
 
 /** Root workspace folder Loom writes generated dbt projects into. */
@@ -112,6 +118,15 @@ export function buildWorkspaceDbtJobSpec(
 /**
  * Materialize (create or re-sync) the Databricks Job for a workspace-sourced
  * dbt project and trigger run-now. Returns the job id + run id.
+ *
+ * After the run is triggered, a best-effort L6 lineage emit runs
+ * fire-and-forget: it exports the project's `target/manifest.json` (present when
+ * the run's dbt artifacts have been committed back to the workspace project
+ * folder) and records the model→model DAG + column mappings into the Weave
+ * thread-edge graph. Wrapped so it NEVER affects the run trigger — a Databricks
+ * job run is asynchronous, so when the artifact isn't yet present the export
+ * simply no-ops (no fabricated lineage). The synchronous, always-populated
+ * lineage path is {@link runDbtOnRunner} for the Synapse/Fabric backend.
  */
 export async function runDbtOnDatabricks(opts: {
   itemId: string;
@@ -119,6 +134,8 @@ export async function runDbtOnDatabricks(opts: {
   clusterId: string;
   commands: string[];
   existingJobId?: number;
+  /** Session for the lineage emit; falls back to the request-scoped session. */
+  session?: SessionPayload;
 }): Promise<{ jobId: number; runId: number }> {
   const spec = buildWorkspaceDbtJobSpec(opts.itemId, opts.projectDir, opts.clusterId, opts.commands);
   let jobId = opts.existingJobId;
@@ -137,7 +154,28 @@ export async function runDbtOnDatabricks(opts: {
     jobId = (await createJob(spec)).job_id;
   }
   const run = await runJob(jobId!);
+  // Fire-and-forget L6 lineage emit (never blocks / never throws into the run).
+  void emitDatabricksManifestLineage(opts.projectDir, resolveEmitSession(opts.session));
   return { jobId: jobId!, runId: run.run_id };
+}
+
+/**
+ * Best-effort: export `<projectDir>/target/manifest.json` from the workspace and
+ * record its lineage. Silent on any failure (the manifest may not be committed
+ * back yet — a triggered Databricks run is asynchronous). Never throws.
+ */
+async function emitDatabricksManifestLineage(
+  projectDir: string,
+  session: SessionPayload | null,
+): Promise<void> {
+  if (!session) return;
+  try {
+    const nb = await getNotebook(`${projectDir}/target/manifest.json`);
+    const manifest = parseManifestJson(nb.content);
+    if (manifest) await emitDbtManifestLineage(session, manifest);
+  } catch {
+    // No committed manifest artifact (async run) — no lineage to emit, no error.
+  }
 }
 
 // ------------------------------------------------------------
@@ -196,6 +234,8 @@ export async function runDbtOnRunner(opts: {
   adapter: string;
   /** Optional per-run env overrides (server/database) the runner injects. */
   env?: Record<string, string>;
+  /** Session for the L6 lineage emit; falls back to the request-scoped session. */
+  session?: SessionPayload;
 }): Promise<DbtRunnerResult> {
   const base = process.env.LOOM_DBT_RUNNER_URL;
   if (!base) throw new Error('LOOM_DBT_RUNNER_URL not configured');
@@ -219,10 +259,76 @@ export async function runDbtOnRunner(opts: {
   if (!res.ok) {
     return { ok: false, log: body.log || text || `runner HTTP ${res.status}`, exitCode: body.exitCode ?? res.status };
   }
+  const ok = body.exitCode === 0 || body.ok === true;
+  // L6 lineage emit — the runner returns the dbt artifacts inline (the ODBC
+  // path is synchronous), so `target/manifest.json` is available right here.
+  // Best-effort: never lets a lineage failure affect the run result.
+  if (ok) {
+    const manifest = parseManifestJson(body.manifest ?? body.artifacts?.['manifest.json']);
+    if (manifest) {
+      const session = resolveEmitSession(opts.session);
+      if (session) {
+        const catalog = parseCatalogJson(body.catalog ?? body.artifacts?.['catalog.json']);
+        await emitDbtManifestLineage(session, manifest, catalog ? { catalog } : undefined);
+      }
+    }
+  }
   return {
-    ok: body.exitCode === 0 || body.ok === true,
+    ok,
     log: body.log || '',
     results: body.results,
     exitCode: body.exitCode,
   };
+}
+
+// ------------------------------------------------------------
+// L6 — dbt manifest lineage emit (shared by both run paths)
+// ------------------------------------------------------------
+
+/** Resolve the session for a lineage emit: explicit arg, else request-scoped. */
+function resolveEmitSession(explicit?: SessionPayload): SessionPayload | null {
+  if (explicit) return explicit;
+  try {
+    return getSession();
+  } catch {
+    return null; // no request scope (e.g. background caller) — skip the emit.
+  }
+}
+
+/** Coerce a runner `catalog.json` payload; null when absent/invalid. */
+function parseCatalogJson(raw: unknown): DbtCatalog | null {
+  try {
+    const obj = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    if (obj && typeof obj === 'object' && ('nodes' in obj || 'sources' in obj)) {
+      return obj as DbtCatalog;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Parse a dbt manifest into Weave thread-edge lineage and persist each edge via
+ * `recordThreadEdge` (itself best-effort / never-throws). Returns the number of
+ * edges recorded. Any failure is swallowed — lineage is an observability layer
+ * over the real dbt run and must never fail it (no-vaporware: the run itself is
+ * the backend; this graph mirrors it).
+ */
+export async function emitDbtManifestLineage(
+  session: SessionPayload,
+  manifest: DbtManifest,
+  opts?: { catalog?: DbtCatalog; action?: string },
+): Promise<number> {
+  try {
+    const edges = parseDbtManifestLineage(manifest, opts);
+    let recorded = 0;
+    for (const edge of edges) {
+      await recordThreadEdge(session, edge);
+      recorded += 1;
+    }
+    return recorded;
+  } catch {
+    return 0;
+  }
 }
