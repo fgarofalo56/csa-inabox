@@ -13,11 +13,11 @@ same classic + WS-D1 toolkit export styles).
 
 | Metric | Count |
 | --- | ---: |
-| Total routes | 1554 |
+| Total routes | 1555 |
 | Public (no session) | 108 |
 | Session-only | 571 |
 | Owner-scoped | 632 |
-| Admin | 243 |
+| Admin | 244 |
 | Gated (backend config) | 509 |
 | Areas | 104 |
 
@@ -230,6 +230,7 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `admin/security/purview/sources/route.ts` | GET POST DELETE | admin | ● | Purview |
 | `admin/self-audit/route.ts` | GET POST | admin |  | — |
 | `admin/sensitivity-labels/route.ts` | GET POST DELETE | admin |  | Cosmos |
+| `admin/slo/route.ts` | GET | admin |  | — |
 | `admin/spark-telemetry/audit/route.ts` | GET POST | admin |  | — |
 | `admin/spark/health/route.ts` | GET | admin | ● | Synapse |
 | `admin/synthetic-runs/route.ts` | GET | admin | ● | — |

@@ -112,6 +112,13 @@ export const RUNTIME_FLAGS: readonly RuntimeFlagDef[] = [
     surface: 'Report designer cartesian visuals with a Small-multiples facet (/items/report/[id])',
   },
   {
+    id: 'slo1-slo-tab',
+    label: 'Health hub — SLO & error budgets tab',
+    description: 'OFF hides the SLO / error-budget tab on /admin/health (reverts to the pre-SLO1 layout). The underlying SLIs (synthetic-journey verdicts, Copilot latency SLOs, cache counters) keep being measured either way — this only controls the admin surface. The burn-rate P2 dispatch is driven by the /api/admin/slo read, so flipping the tab off also stops the read that pages.',
+    ownerItem: 'SLO1',
+    surface: '/admin/health?tab=slo',
+  },
+  {
     id: 'rum1-client-telemetry',
     label: 'Client RUM telemetry',
     description:
