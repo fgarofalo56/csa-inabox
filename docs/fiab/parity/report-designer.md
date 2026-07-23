@@ -35,7 +35,7 @@ read-only report viewer and the report-visual-designer Power-BI canvas):
 | Persist whole definition | apps/fiab-console/app/api/items/report/[id]/definition/route.ts |
 | Data-source binding | apps/fiab-console/lib/editors/report/data-source-picker.tsx + .../data-source/route.ts |
 | Canvas layout / page model | apps/fiab-console/lib/editors/report/use-canvas-layout.ts |
-| Analytics pane (reference lines + Wave-2 error-bars/forecast/symmetry + **Wave-5 anomalies / X-lines / shaded ranges**) | apps/fiab-console/lib/editors/report/analytics-pane.tsx |
+| Analytics pane (reference lines + Wave-2 error-bars/forecast/symmetry + **Wave-5 anomalies / X-lines / shaded ranges**; **A7 golden numeric harness** `__tests__/analytics-pane.test.ts`) | apps/fiab-console/lib/editors/report/analytics-pane.tsx |
 | Bookmarks pane (**NEW** Wave 2 — right-rail tab) | apps/fiab-console/lib/editors/report/bookmarks-pane.tsx |
 | Selection pane (**NEW** Wave 2 — right-rail tab) | apps/fiab-console/lib/editors/report/selection-pane.tsx |
 | AI visuals (**Wave 3** — decomposition tree / key influencers / Q&A / smart narrative) | apps/fiab-console/lib/editors/report/ai-visuals/*.tsx |
@@ -279,6 +279,17 @@ are W1-W4 and are **untouched** by this wave.
   honoured only when its column is present in the result rows (no phantom facet).
   Gated by the `a6-small-multiples-grid` FLAG0 runtime flag (default-ON; OFF
   reverts to the pre-A6 well-facet-only path — auto-fill columns, shared Y).
+- **A7 — analytics-pane depth VERIFIED + golden-covered (2026-07-23):** the full
+  Power BI analytics line set already ships end-to-end — config UI (`AnalyticsPane`),
+  compute (`computeReferenceLines` for trend / constant / min / max / average /
+  median / percentile; `computeErrorBars` field/percent/value; `computeForecast`
+  linear + additive-seasonal + √h band; `computeSymmetry`; `computeAnomalies`
+  rolling z-score band + ADX `series_decompose_anomalies` opt-in) and render
+  (LoomChart `RefLinesY`/`RefLinesX`, `AnomalyOverlayV`, error-bar whiskers). A7
+  closed the remaining gap — the compute layer had **zero tests** — with a golden
+  numeric harness (`__tests__/analytics-pane.test.ts`, 19 cases) pinning each
+  statistic to an exact value over seeded data and proving the anomaly band flags
+  a real injected outlier (A7 acceptance). No new surface ⇒ no FLAG0 flag.
 - **Wells re-exposed:** queryVisual() STOPS stripping Small multiples / Tooltips /
   Details. smallMultiples → `wells.smallMultiples`, details → `wells.details`
   (trellis group cols, folded into the 2nd GROUP BY), tooltips → `wells.tooltips`
