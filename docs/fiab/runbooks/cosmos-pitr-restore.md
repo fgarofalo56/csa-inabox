@@ -20,6 +20,16 @@ database.
     non-production sub first (it is the DR drill in
     [disaster-recovery.md](../operations/disaster-recovery.md#dr-drill-what-you-can-actually-rehearse)).
 
+!!! note "Quarterly automated rehearsal"
+    Steps 1–3 (restorable-account lookup, timestamp selection, restore into a
+    scratch account) are rehearsed automatically each quarter by the
+    `cosmos-pitr-restore` scenario of
+    [`.github/workflows/dr-drill.yml`](../../../.github/workflows/dr-drill.yml),
+    which validates restored container counts + schema against the live
+    account and then deletes the scratch RG — see
+    [docs/runbooks/dr-drill.md](../../runbooks/dr-drill.md) §4.1. Steps 4–7
+    (private endpoint, role grant, Console re-point) remain incident-only.
+
 ## How PITR behaves here (know before you run)
 
 - The account is provisioned with **continuous backup** — tier
