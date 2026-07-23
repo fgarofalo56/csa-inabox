@@ -222,12 +222,6 @@
         "svc-ai-enrich"
       ]
     },
-    "aisearch-client": {
-      "checks": [
-        "svc-aisearch",
-        "probe-search-governance-index"
-      ]
-    },
     "ai-translator-client": {
       "checks": [
         "svc-ai-enrich"
@@ -236,6 +230,12 @@
     "ai-vision-client": {
       "checks": [
         "svc-ai-enrich"
+      ]
+    },
+    "aisearch-client": {
+      "checks": [
+        "svc-aisearch",
+        "probe-search-governance-index"
       ]
     },
     "aks-arm-client": {
@@ -317,6 +317,11 @@
         "svc-mcp-deploy"
       ]
     },
+    "copilot-evaluator-client": {
+      "checks": [
+        "svc-copilot-evaluator"
+      ]
+    },
     "copilot-studio-client": {
       "checks": [
         "svc-powerplatform",
@@ -360,6 +365,13 @@
         "probe-aoai"
       ]
     },
+    "data-quality-client": {
+      "checks": [
+        "svc-databricks",
+        "svc-adx",
+        "svc-synapse"
+      ]
+    },
     "databricks-client": {
       "checks": [
         "svc-databricks",
@@ -378,13 +390,6 @@
         "probe-synapse",
         "svc-adf",
         "probe-adf"
-      ]
-    },
-    "data-quality-client": {
-      "checks": [
-        "svc-databricks",
-        "svc-adx",
-        "svc-synapse"
       ]
     },
     "defender-client": {
@@ -461,6 +466,18 @@
     },
     "fabric-client": {
       "allow": "Microsoft Fabric backend is OPT-IN ONLY (no-fabric-dependency.md); it is never on the default path, so health deliberately does not gate on it."
+    },
+    "feature-store-client": {
+      "checks": [
+        "svc-feature-store",
+        "svc-databricks",
+        "svc-postgres"
+      ]
+    },
+    "fine-tuning-client": {
+      "checks": [
+        "svc-fine-tuning"
+      ]
     },
     "foundry-agent-client": {
       "checks": [
@@ -585,6 +602,11 @@
         "svc-databricks"
       ]
     },
+    "model-serving-client": {
+      "checks": [
+        "svc-model-serving"
+      ]
+    },
     "monitor-client": {
       "checks": [
         "svc-monitor-alerts",
@@ -606,13 +628,6 @@
     },
     "pgvector-client": {
       "checks": [
-        "svc-postgres"
-      ]
-    },
-    "feature-store-client": {
-      "checks": [
-        "svc-feature-store",
-        "svc-databricks",
         "svc-postgres"
       ]
     },
@@ -811,16 +826,6 @@
       "checks": [
         "cosmos-config",
         "probe-cosmos"
-      ]
-    },
-    "model-serving-client": {
-      "checks": [
-        "svc-model-serving"
-      ]
-    },
-    "fine-tuning-client": {
-      "checks": [
-        "svc-fine-tuning"
       ]
     }
   }

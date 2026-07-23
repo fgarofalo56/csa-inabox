@@ -13,12 +13,12 @@ same classic + WS-D1 toolkit export styles).
 
 | Metric | Count |
 | --- | ---: |
-| Total routes | 1557 |
+| Total routes | 1560 |
 | Public (no session) | 109 |
 | Session-only | 571 |
 | Owner-scoped | 632 |
-| Admin | 245 |
-| Gated (backend config) | 510 |
+| Admin | 248 |
+| Gated (backend config) | 511 |
 | Areas | 104 |
 
 **Auth scope** — `public`: no session check; `session-only`: signed-in but
@@ -119,6 +119,9 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `admin/coe-library/render/route.ts` | GET POST | admin |  | — |
 | `admin/coe-library/route.ts` | GET POST DELETE | admin |  | Cosmos |
 | `admin/copilot-config/route.ts` | GET PUT | admin |  | Cosmos |
+| `admin/copilot-quality/[surface]/route.ts` | GET | admin |  | — |
+| `admin/copilot-quality/route.ts` | GET | admin |  | — |
+| `admin/copilot-quality/run/route.ts` | POST | admin | ● | Cosmos |
 | `admin/copilot-usage/route.ts` | GET | admin |  | Azure Monitor |
 | `admin/copilot/memory/[id]/route.ts` | DELETE | admin |  | — |
 | `admin/copilot/memory/audit/route.ts` | GET | admin |  | — |
