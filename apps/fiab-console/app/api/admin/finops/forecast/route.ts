@@ -21,8 +21,7 @@
  * Tenant-admin gated (org-wide $ rollup), same as /api/admin/capacity/chargeback.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
-import { requireTenantAdmin } from '@/lib/auth/feature-gate';
+import { withTenantAdmin } from '@/lib/api/route-toolkit';
 import { forecastCostCached } from '@/lib/azure/cost-forecast';
 import type { CostForecastMethodPref } from '@/lib/azure/cost-forecast-core';
 import { MonitorError, MonitorNotConfiguredError, type CostTimeframe } from '@/lib/azure/cost-client';
@@ -39,11 +38,7 @@ const TIMEFRAMES: CostTimeframe[] = ['MonthToDate', 'BillingMonthToDate', 'TheLa
 const METHODS: CostForecastMethodPref[] = ['auto', 'api', 'linear', 'seasonal'];
 const SCOPE_RE = /^\/subscriptions\/[^/]+(\/resourceGroups\/[^/]+)?$/i;
 
-export async function GET(req: NextRequest) {
-  const s = getSession();
-  const gate = requireTenantAdmin(s);
-  if (gate) return gate;
-
+export const GET = withTenantAdmin(async (req: NextRequest) => {
   const q = req.nextUrl.searchParams;
   const tfParam = (q.get('timeframe') || 'MonthToDate') as CostTimeframe;
   const timeframe: CostTimeframe = TIMEFRAMES.includes(tfParam) ? tfParam : 'MonthToDate';
@@ -90,4 +85,4 @@ export async function GET(req: NextRequest) {
     }
     return apiServerError(e, 'Failed to compute the cost forecast', 'cost_forecast_failed');
   }
-}
+});
