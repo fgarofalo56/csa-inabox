@@ -19,11 +19,11 @@ import { useCallback, useEffect, useState } from 'react';
 import { clientFetch } from '@/lib/client-fetch';
 import {
   Badge, Body1Strong, Button, Caption1, Divider, MessageBar,
-  MessageBarBody, MessageBarTitle, Spinner, Subtitle2, Tooltip,
+  MessageBarActions, MessageBarBody, MessageBarTitle, Spinner, Subtitle2, Switch, Tooltip,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
-  ArrowSync24Regular, CheckmarkCircle24Filled, ErrorCircle24Filled,
+  ArrowClockwise16Regular, ArrowSync24Regular, CheckmarkCircle24Filled, ErrorCircle24Filled,
   Flash24Regular, Open16Regular, Warning24Filled,
 } from '@fluentui/react-icons';
 import { HonestGate } from '@/lib/components/shared/honest-gate';
@@ -155,12 +155,16 @@ const SESSION_COLUMNS: LoomColumn<SessionHealthRow>[] = [
   },
 ];
 
-export function SparkPoolsPane() {
+export function SparkPoolsPane({ autorecoverEnabled }: { autorecoverEnabled?: boolean } = {}) {
   const styles = useStyles();
   const [data, setData] = useState<SparkHealthPayload | null>(null);
   const [gate, setGate] = useState<GateEnvelope | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // A11 — auto-recovery toggle (a11-spark-autorecover flag) + manual recreate.
+  const [autoOn, setAutoOn] = useState<boolean>(autorecoverEnabled ?? true);
+  const [recreating, setRecreating] = useState<string | null>(null);
+  const [actionMsg, setActionMsg] = useState<{ intent: 'success' | 'warning' | 'error'; text: string } | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true); setError(null); setGate(null);
@@ -179,6 +183,53 @@ export function SparkPoolsPane() {
 
   useEffect(() => { load(); }, [load]);
 
+  // A11 — flip the auto-recovery kill-switch (audited runtime flag; seconds, no roll).
+  const toggleAuto = useCallback(async (next: boolean) => {
+    setAutoOn(next); // optimistic
+    setActionMsg(null);
+    try {
+      const r = await clientFetch('/api/admin/runtime-flags/a11-spark-autorecover', {
+        method: 'PUT', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ enabled: next }),
+      });
+      if (!r.ok) {
+        setAutoOn(!next); // revert
+        const j = await r.json().catch(() => ({}));
+        setActionMsg({ intent: 'error', text: j?.error || `Could not ${next ? 'enable' : 'disable'} auto-recovery` });
+      }
+    } catch (e: unknown) {
+      setAutoOn(!next);
+      setActionMsg({ intent: 'error', text: e instanceof Error ? e.message : String(e) });
+    }
+  }, []);
+
+  // A11 — operator-initiated delete + recreate of one pool (forces past thrash).
+  const recreate = useCallback(async (poolName: string) => {
+    setRecreating(poolName); setActionMsg(null);
+    try {
+      const r = await clientFetch('/api/admin/spark/recover', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ poolName }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || j?.ok === false) {
+        setActionMsg({ intent: 'error', text: j?.error || `recreate failed (${r.status})` });
+      } else {
+        const res = j.result as { ok?: boolean; action?: string; reason?: string; provisioningState?: string };
+        setActionMsg(
+          res?.ok
+            ? { intent: 'success', text: `Pool ${poolName} recreated — now ${res.provisioningState || 'provisioned'}.` }
+            : { intent: 'warning', text: `Recreate ${res?.action || 'did not complete'}: ${res?.reason || 'see logs'}.` },
+        );
+        await load();
+      }
+    } catch (e: unknown) {
+      setActionMsg({ intent: 'error', text: e instanceof Error ? e.message : String(e) });
+    } finally {
+      setRecreating(null);
+    }
+  }, [load]);
+
   const totals = data?.pool.totals;
   const faulted = (data?.pools || []).filter((p) => p.healthState === 'faulted' || p.healthState === 'suspect');
   const leakTotal = (data?.pools || []).reduce((n, p) => n + (p.leakSuspects || 0), 0);
@@ -193,6 +244,15 @@ export function SparkPoolsPane() {
           leaked-session candidates, and quota per pool.
         </Caption1>
         <span style={{ flex: 1 }} />
+        <Tooltip relationship="description"
+          content="Auto-detect + delete/recreate a FAULTED or 'Succeeded-but-can't-launch' pool from the keep-warm heartbeat (thrash-guarded, operator-alerted). OFF keeps detection + alerting and the manual Recreate button, but stops the automatic recreate — the seconds-fast kill switch (a11-spark-autorecover).">
+          <Switch
+            checked={autoOn}
+            onChange={(_, d) => toggleAuto(!!d.checked)}
+            label={`Auto-recovery ${autoOn ? 'ON' : 'OFF'}`}
+            aria-label="Spark pool auto-recovery"
+          />
+        </Tooltip>
         <Button appearance="subtle" icon={<Open16Regular />} as="a" href={RUNBOOK_URL}
           target="_blank" rel="noreferrer">
           Runbook
@@ -204,6 +264,12 @@ export function SparkPoolsPane() {
       </div>
 
       {gate && <HonestGate surface="Spark pools" gate={gate} onResolved={load} />}
+
+      {actionMsg && (
+        <MessageBar intent={actionMsg.intent} layout="multiline">
+          <MessageBarBody>{actionMsg.text}</MessageBarBody>
+        </MessageBar>
+      )}
 
       {error && !gate && (
         <MessageBar intent="error" layout="multiline">
@@ -233,6 +299,14 @@ export function SparkPoolsPane() {
                 the fix is delete + recreate (and if sessions still wedge, a NEW pool name).
                 Follow the runbook: <a href={RUNBOOK_URL} target="_blank" rel="noreferrer">spark-pools.md</a>.
               </MessageBarBody>
+              <MessageBarActions>
+                <Button size="small" appearance="secondary"
+                  icon={recreating === p.name ? <Spinner size="tiny" /> : <ArrowClockwise16Regular />}
+                  disabled={recreating !== null}
+                  onClick={() => recreate(p.name)}>
+                  {recreating === p.name ? 'Recreating…' : 'Recreate pool'}
+                </Button>
+              </MessageBarActions>
             </MessageBar>
           ))}
 
@@ -308,6 +382,14 @@ export function SparkPoolsPane() {
                 <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
                   warm {p.warm} · leased {p.leased} · warming {p.warming}
                 </Caption1>
+                <Tooltip relationship="description" content="Delete + recreate this Spark pool (Synapse ARM). The fix for a FAULTED / can't-launch pool; forces past the auto-recovery thrash guard.">
+                  <Button size="small" appearance="subtle"
+                    icon={recreating === p.name ? <Spinner size="tiny" /> : <ArrowClockwise16Regular />}
+                    disabled={recreating !== null}
+                    onClick={() => recreate(p.name)}>
+                    {recreating === p.name ? 'Recreating…' : 'Recreate'}
+                  </Button>
+                </Tooltip>
               </div>
               <div className={styles.poolMeta}>
                 <Badge appearance="tint" color="informative">{p.nodeSize || 'size?'}</Badge>

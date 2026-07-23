@@ -85,4 +85,57 @@ export const DATA_PLANE_ENV_CHECKS: EnvSpec[] = [
     provisionedBy: 'modules/landing-zone/cosmos.bicep (loomContainers → spark-warm-leases) + modules/compute/hband-shared.bicep (shared Redis substrate) → LOOM_SPARK_POOL_REDIS / LOOM_SPARK_POOL_LEASE_CONTAINER on the Console app',
     role: 'Cosmos DB Built-in Data Contributor (Console UAMI, already granted) on the loom database — the lease registry is a Cosmos container, no extra grant',
   },
+  // ── A11 — FAULTED Spark-pool detection + auto-recovery (Spark reliability) ──
+  //    Default-ON/opt-out: unset → the keep-warm heartbeat auto-detects a
+  //    FAULTED / "Succeeded-but-can't-launch" pool and delete+recreates it (with
+  //    a thrash guard + operator alert). Set LOOM_SPARK_AUTORECOVER_ENABLED=0 to
+  //    detect-and-alert only (recreate becomes the manual /admin/health button).
+  {
+    id: 'svc-spark-autorecover', category: 'data-plane', title: 'Spark pool auto-recovery (FAULTED detect + recreate)', severity: 'optional',
+    required: ['LOOM_SPARK_AUTORECOVER_ENABLED'], anyOf: [['LOOM_SPARK_RECOVER_MAX_ATTEMPTS']],
+    warnOnMiss: true, optionalDefault: true,
+    optionalDefaultDetail: 'auto-recovery runs day-one with fully-functional defaults — the keep-warm heartbeat (csa-loom-spark-keepwarm.yml, every 5 min) detects a pool whose ARM provisioningState is Failed/Canceled OR that reports Succeeded while the warm-pool circuit breaker is armed (the "Succeeded but can\'t launch" class), delete+recreates it via the Synapse ARM control plane with exponential backoff, and alerts via the shared action group (dispatchAlert) + an in-product notification. A thrash guard caps recreate attempts per pool (LOOM_SPARK_RECOVER_MAX_ATTEMPTS, default 3, in a 6h window) so a persistently-broken pool backs off instead of looping. Set LOOM_SPARK_AUTORECOVER_ENABLED=0 (or flip the a11-spark-autorecover runtime flag) to keep detection + alerting but require the manual "Recreate pool" action.',
+    remediation: 'Auto-recovery of a FAULTED Synapse Spark pool is DEFAULT-ON (opt out with LOOM_SPARK_AUTORECOVER_ENABLED=0 or the a11-spark-autorecover runtime flag on /admin/health → Spark pools). Tune the thrash guard with LOOM_SPARK_RECOVER_MAX_ATTEMPTS (default 3 recreate attempts per pool in a 6h window). No extra resource — it reuses the Console UAMI\'s Synapse Administrator + Contributor grant for bigDataPools delete/create and the O1 shared action group for alerts.',
+    docs: 'https://github.com/fgarofalo56/csa-inabox/blob/main/docs/fiab/runbooks/spark-pools.md',
+    provisionedBy: 'modules/landing-zone/synapse.bicep (Console UAMI Synapse Administrator + Contributor on the RG → bigDataPools delete/create) + .github/workflows/csa-loom-spark-keepwarm.yml (durable 5-min heartbeat that drives detection) + monitoring-default-alerts.bicep (LOOM_ALERT_ACTION_GROUP_ID)',
+    role: 'Synapse Administrator (workspace) + Contributor (resource group) on the Console UAMI — already granted for the warm pool; recreate is a bigDataPools ARM delete + PUT',
+    availability: {
+      commercial: 'ga', gccHigh: 'ga', il5: 'ga',
+      fallbackNote: 'Synapse Spark Big Data pools + the ARM bigDataPools control plane are GA in Azure Government through IL5, so detect + delete/recreate stays fully in-boundary. IL5 note: the same UAMI ARM path applies; only the sovereign ARM host differs (handled by cloud-endpoints).',
+    },
+  },
+  // ── A12 — Spark session quota / vCore budget ceiling (lease hygiene) ────────
+  //    Default-ON/opt-out: safe generous defaults; the warm pool refuses to warm
+  //    NEW sessions past the ceiling and hard-kills leases idle past the TTL, so
+  //    a runaway workload can't exhaust the workspace vCore quota. Unset = the
+  //    built-in defaults (session cap + vCore budget) apply.
+  {
+    id: 'svc-spark-vcore-budget', category: 'data-plane', title: 'Spark session quota — vCore budget ceiling', severity: 'optional',
+    anyOf: [['LOOM_SPARK_VCORE_BUDGET', 'LOOM_SPARK_TENANT_SESSION_MAX']],
+    warnOnMiss: true, optionalDefault: true,
+    optionalDefaultDetail: 'session-quota hygiene runs day-one with safe built-in defaults — the warm pool accounts active Spark sessions + estimated vCores (local slots + the cross-replica lease store), refuses to warm a NEW session past LOOM_SPARK_VCORE_BUDGET / LOOM_SPARK_TENANT_SESSION_MAX (returning an honest "session quota reached" structured error rather than hanging), and hard-kills sessions idle past LOOM_SPARK_POOL_IDLE_TTL so leaked leases release their vCores. Set the two vars to tune the ceiling to your Synapse workspace vCore quota; unset applies the built-in defaults.',
+    remediation: 'The Spark session-quota / vCore-budget guard is DEFAULT-ON with safe built-in defaults. Tune it with LOOM_SPARK_VCORE_BUDGET (max estimated active Spark vCores across the deployment before the pool refuses to warm a new session; 0 = unlimited) and LOOM_SPARK_TENANT_SESSION_MAX (max concurrent active sessions; 0 = unlimited) to match your Synapse workspace vCore quota. No extra resource — accounting reuses the warm-pool status + the PSR-3 cross-replica lease store.',
+    docs: 'https://github.com/fgarofalo56/csa-inabox/blob/main/docs/fiab/runbooks/spark-pools.md',
+    provisionedBy: 'in-Console warm-pool accounting (lib/azure/spark-vcore-budget.ts) over getPoolStatus() + the PSR-3 Cosmos spark-warm-leases tally — no new Azure resource',
+    role: 'none beyond the warm pool — the guard is Console-side accounting; killing an over-budget/idle session reuses the Synapse Compute Operator grant the pool already holds',
+    availability: {
+      commercial: 'ga', gccHigh: 'ga', il5: 'ga',
+      fallbackNote: 'Pure Console-side accounting over the Synapse Livy session census — available in every cloud the warm pool runs in (Commercial through IL5). No sovereign gap.',
+    },
+  },
+  // ── A13 — Spark chaos-drill harness (default OFF in prod) ───────────────────
+  {
+    id: 'svc-spark-chaos-drill', category: 'data-plane', title: 'Spark chaos-drill harness (fault injection)', severity: 'optional',
+    required: ['LOOM_SPARK_CHAOS_ENABLED'],
+    warnOnMiss: true, optionalDefault: true,
+    optionalDefaultDetail: 'the chaos-drill harness is OFF by default (the fully-functional production posture — no fault injection). It is a tenant-admin, double-gated (LOOM_SPARK_CHAOS_ENABLED=true AND a valid LOOM_INTERNAL_TOKEN) test tool that injects real faults (kill N Livy sessions, arm a pool\'s FAULTED breaker) so the A11 recovery + A12 reaper + warm-pool refill path can be exercised end-to-end in a non-prod environment. Unset/false = disabled, which is the intended default.',
+    remediation: 'The Spark chaos-drill harness (POST /api/admin/spark/chaos) is OFF by default and MUST stay off in production. To run a resilience drill in a non-prod deployment, set LOOM_SPARK_CHAOS_ENABLED=true AND present a valid LOOM_INTERNAL_TOKEN on the request (in addition to a tenant-admin session). It injects real faults — kill sessions / arm a pool\'s faulted breaker — to verify the A11 auto-recovery and A12 reaper paths.',
+    docs: 'https://github.com/fgarofalo56/csa-inabox/blob/main/docs/fiab/runbooks/spark-pools.md',
+    provisionedBy: 'in-Console route (app/api/admin/spark/chaos) gated by LOOM_SPARK_CHAOS_ENABLED + LOOM_INTERNAL_TOKEN (already wired by admin-plane/main.bicep) — no new Azure resource',
+    role: 'Tenant admin (session) + the internal trust token — the drill kills real Livy sessions via the Synapse Compute Operator grant the pool already holds',
+    availability: {
+      commercial: 'ga', gccHigh: 'ga', il5: 'ga',
+      fallbackNote: 'The harness only drives the in-boundary Synapse Livy + warm-pool paths, so it is available in every cloud (Commercial through IL5). It is OFF by default everywhere; a sovereign deployment enables it only for a scheduled non-prod drill.',
+    },
+  },
 ];

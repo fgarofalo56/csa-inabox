@@ -10,6 +10,9 @@ export default async function AdminHealthPage() {
   const journeysEnabled = await runtimeFlag('v1-journeys-tab');
   // A10: 'a10-spark-tab' OFF hides the Spark pools tab (surface-only revert).
   const sparkEnabled = await runtimeFlag('a10-spark-tab');
+  // A11: 'a11-spark-autorecover' — the AUTO toggle state for FAULTED-pool
+  // auto-recovery (default-ON). The manual "Recreate pool" button stays either way.
+  const autorecoverEnabled = await runtimeFlag('a11-spark-autorecover');
   // SLO1: 'slo1-slo-tab' OFF hides the SLO / error-budget tab (surface-only revert).
   const sloEnabled = await runtimeFlag('slo1-slo-tab');
   return (
@@ -30,7 +33,7 @@ export default async function AdminHealthPage() {
         ],
       }}
     >
-      <HealthHubTabs journeysEnabled={journeysEnabled} sparkEnabled={sparkEnabled} sloEnabled={sloEnabled} />
+      <HealthHubTabs journeysEnabled={journeysEnabled} sparkEnabled={sparkEnabled} autorecoverEnabled={autorecoverEnabled} sloEnabled={sloEnabled} />
     </AdminShell>
   );
 }
