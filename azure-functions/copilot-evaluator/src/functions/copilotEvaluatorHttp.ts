@@ -10,7 +10,7 @@
  * docs/fiab/runbooks/copilot-evaluator.md).
  */
 import { app, HttpRequest, HttpResponseInit, InvocationContext } from '@azure/functions';
-import { runEvals, runSearchEvals } from '../run-evals';
+import { runEvals, runSearchEvals, runTierEvals } from '../run-evals';
 
 export async function copilotEvaluatorHttp(
   req: HttpRequest,
@@ -37,6 +37,19 @@ export async function copilotEvaluatorHttp(
     return {
       status: s.ran ? 200 : 409,
       jsonBody: { ok: s.ran, reason: s.reason, trigger, mode: 'search', domains: s.domains },
+    };
+  }
+
+  // E6: mode 'tier' runs the tier-router decision evals (deterministic — the
+  // REAL routeTurnTier over the golden _tier-labels.jsonl set, no probe/judge).
+  if (body?.mode === 'tier') {
+    const t = await runTierEvals(trigger, context);
+    return {
+      status: t.ran ? 200 : 409,
+      jsonBody: {
+        ok: t.ran, reason: t.reason, trigger, mode: 'tier',
+        rows: t.rows, tierAccuracy: t.tierAccuracy, taskClassAccuracy: t.taskClassAccuracy,
+      },
     };
   }
 

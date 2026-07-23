@@ -34,5 +34,14 @@
   "searchFloors": {
     "catalog": { "searchHitRate": 0.6, "ndcg": 0.5, "provisional": true },
     "analytics": { "searchHitRate": 0.6, "ndcg": 0.5, "provisional": true }
+  },
+  "_tierMeta": {
+    "why": "E6 — tier-router decision floor. The copilot-evaluator tier mode runs the REAL routeTurnTier over the golden content/evals/_tier-labels.jsonl set and scores each decision against its expected tier; tierAccuracy is the fraction the router routes onto the labeled tier. A regression in DEFAULT_TASK_TIER_MAP or the classifyTaskClass heuristics drops accuracy below this floor. Ratchet-up-only, same convention as the copilot + search floors.",
+    "metrics": {
+      "tierAccuracy": "0..1 — fraction of labeled prompts whose ridden tier equals the expected tier (deterministic; the router is a pure module, no judge spend)"
+    }
+  },
+  "tierFloors": {
+    "router": { "tierAccuracy": 0.85, "provisional": true }
   }
 }

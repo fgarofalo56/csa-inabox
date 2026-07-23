@@ -128,8 +128,12 @@ const manifest = fs.existsSync(MANIFEST_PATH)
   ? JSON.parse(fs.readFileSync(MANIFEST_PATH, 'utf-8'))
   : null;
 
+// Surface sets only: '_'-prefixed .jsonl files (e.g. _tier-labels.jsonl, the E6
+// tier-router label set) are NOT surface eval sets and use a different shape, so
+// they are skipped here — matching the copilot-evaluator loaders that also skip
+// '_'-prefixed files.
 const files = fs.existsSync(EVALS_DIR)
-  ? fs.readdirSync(EVALS_DIR).filter((f) => f.endsWith('.jsonl')).sort()
+  ? fs.readdirSync(EVALS_DIR).filter((f) => f.endsWith('.jsonl') && !f.startsWith('_')).sort()
   : [];
 if (files.length === 0) {
   console.error(`lint-eval-sets: no .jsonl sets found under ${EVALS_DIR}`);

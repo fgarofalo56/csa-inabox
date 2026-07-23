@@ -135,6 +135,14 @@ export const RUNTIME_FLAGS: readonly RuntimeFlagDef[] = [
     surface: '/admin/copilot-quality',
   },
   {
+    id: 'e6-tier-routing-tab',
+    label: 'Copilot quality — Tier routing tab',
+    description:
+      'The E6 "Tier routing" tab on /admin/copilot-quality: tier-router decision accuracy, the tier confusion heatmap, per-task-class accuracy, and the per-tier cost-per-quality view over the copilot-evaluator tier-run docs. OFF hides the tab body behind a guided notice (no roll) — the kill-switch for a rendering regression on this new tab. The copilot-evaluator tier mode, its nightly/per-roll runs, and the Cosmos data are unaffected; only this read-only view is gated.',
+    ownerItem: 'E6',
+    surface: '/admin/copilot-quality (Tier routing tab)',
+  },
+  {
     id: 'c4-finops-hub',
     label: 'FinOps hub (/admin/finops)',
     description:

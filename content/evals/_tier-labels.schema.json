@@ -1,0 +1,32 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "csa-loom://content/evals/_tier-labels.schema.json",
+  "title": "CSA Loom tier-router decision label row (E6)",
+  "description": "One JSON object per JSONL line in content/evals/_tier-labels.jsonl. The copilot-evaluator tier mode runs the REAL model-tier-router (routeTurnTier) over each `prompt` and scores its ridden tier against `expectedTier` (the tier the labeled `taskClass` maps to under DEFAULT_TASK_TIER_MAP). '_'-prefixed, so the surface/search loaders and lint-eval-sets skip it. Azure-native, no Fabric dependency — the router is a pure Loom module.",
+  "type": "object",
+  "required": ["id", "prompt", "expectedTier", "taskClass"],
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "Unique row id: 'tier-<NNN>'.",
+      "pattern": "^tier-[0-9]{3}$"
+    },
+    "prompt": {
+      "type": "string",
+      "description": "The user turn the router classifies + routes.",
+      "minLength": 3,
+      "maxLength": 500
+    },
+    "expectedTier": {
+      "type": "string",
+      "description": "Expected model tier from lib/foundry/model-tier-router.ts ModelTier.",
+      "enum": ["mini", "standard", "strong"]
+    },
+    "taskClass": {
+      "type": "string",
+      "description": "Expected task class from lib/foundry/model-tier-router.ts TaskClass.",
+      "enum": ["lightweight", "general", "reasoning"]
+    }
+  }
+}

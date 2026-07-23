@@ -110,6 +110,47 @@ export interface CopilotSearchResultDoc {
   ttl?: number;
 }
 
+/** E6 — per-tier-decision confusion cell counts (matrix[expected][chosen]). */
+export type CopilotTierMatrix = Record<'mini' | 'standard' | 'strong', Record<'mini' | 'standard' | 'strong', number>>;
+
+/** E6 — tier-router decision run rollup (retained). PK 'tier:router'. */
+export interface CopilotTierRunDoc {
+  id: string;
+  surface: 'tier:router';
+  runId: string;
+  docType: 'tier-run';
+  schemaVersion: number;
+  startedAt: string;
+  finishedAt: string;
+  trigger: 'corpus' | 'nightly' | 'manual';
+  totals: {
+    rows: number;
+    tierAccuracy: number;
+    taskClassAccuracy: number;
+    matrix: CopilotTierMatrix;
+    perClass: Record<'lightweight' | 'general' | 'reasoning', { total: number; correct: number; accuracy: number }>;
+  };
+}
+
+/** E6 — one scored tier-routing decision (ttl 180d). PK 'tier:router'. */
+export interface CopilotTierResultDoc {
+  id: string;
+  surface: 'tier:router';
+  runId: string;
+  docType: 'tier-result';
+  schemaVersion: number;
+  rowId: string;
+  prompt: string;
+  expectedTier: string;
+  chosenTier: string;
+  taskClass: string;
+  chosenTaskClass: string;
+  correct: boolean;
+  taskClassCorrect: boolean;
+  deployment?: string;
+  ttl?: number;
+}
+
 /** Daily judge-spend ledger (ttl 7d) — cross-replica daily-cap enforcement. */
 export interface CopilotEvalJudgeLedgerDoc {
   id: string;

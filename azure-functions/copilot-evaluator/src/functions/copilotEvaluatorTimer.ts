@@ -8,7 +8,7 @@
  * results to Cosmos `loom-copilot-evals`.
  */
 import { app, InvocationContext, Timer } from '@azure/functions';
-import { runEvals, runSearchEvals } from '../run-evals';
+import { runEvals, runSearchEvals, runTierEvals } from '../run-evals';
 
 const CRON = process.env.COPILOT_EVALUATOR_CRON || '0 0 7 * * *';
 
@@ -26,6 +26,14 @@ export async function copilotEvaluatorTimer(_timer: Timer, context: InvocationCo
     `[copilot-evaluator/search] nightly tick complete — ran=${search.ran}` +
       (search.reason ? ` reason=${search.reason}` : '') +
       ` domains=${search.domains.length}`,
+  );
+  // E6 — tier-router decision evals (deterministic, no judge spend) ride the same
+  // nightly tick. Honest no-op when unconfigured (missing Cosmos / label set).
+  const tier = await runTierEvals('nightly', context);
+  context.log(
+    `[copilot-evaluator/tier] nightly tick complete — ran=${tier.ran}` +
+      (tier.reason ? ` reason=${tier.reason}` : '') +
+      ` tierAccuracy=${tier.tierAccuracy ?? 'n/a'}`,
   );
 }
 

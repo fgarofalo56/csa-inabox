@@ -13,9 +13,11 @@
  * Loom Copilot's own retrieval + AOAI judge path (.claude/rules/*).
  */
 import type {
-  CopilotEvalRunDoc, CopilotEvalResultDoc, CopilotSearchRunDoc,
+  CopilotEvalRunDoc, CopilotEvalResultDoc, CopilotSearchRunDoc, CopilotTierRunDoc,
 } from '@/lib/azure/copilot-evals-model';
 import { gradeAvgScore, type QualityGrade } from '@/lib/admin/agent-quality';
+import { MODEL_TIERS, TIER_LABELS, TASK_CLASS_LABELS, type ModelTier, type TaskClass } from '@/lib/foundry/model-tier-router';
+import { tierPriceCoeff } from '@/lib/copilot/cost-estimate';
 
 export type { QualityGrade } from '@/lib/admin/agent-quality';
 
@@ -446,4 +448,168 @@ export function buildSearchSummaries(
   }
   out.sort((a, b) => a.domain.localeCompare(b.domain));
   return out;
+}
+
+// ── E6 — tier-router decision roll-up (cost-per-quality) ─────────────────────
+
+/** The E6 tier-accuracy floor (single-metric). Keyed 'router' in eval-floors.json. */
+export interface TierFloor {
+  tierAccuracy?: number;
+  provisional?: boolean;
+}
+export type TierFloors = Record<string, TierFloor>;
+
+export interface TierTrendPoint {
+  runId: string;
+  finishedAt: string;
+  trigger: CopilotTierRunDoc['trigger'];
+  tierAccuracy: number;
+  taskClassAccuracy: number;
+  rows: number;
+}
+
+export interface TierFloorStatus {
+  metric: 'tierAccuracy';
+  value: number;
+  floor: number | null;
+  verdict: FloorVerdict;
+}
+
+/** One confusion-matrix row for the heatmap (expected tier × chosen-tier counts). */
+export interface TierMatrixRow {
+  /** The labeled (expected) tier this row is the truth for. */
+  expectedTier: ModelTier;
+  /** Chosen-tier counts in fixed MODEL_TIERS order. */
+  cells: { chosenTier: ModelTier; count: number }[];
+  /** Row total (labeled rows expecting this tier). */
+  total: number;
+}
+
+/** Per-task-class tier-decision accuracy (drives the per-class bars). */
+export interface TierPerClassRow {
+  taskClass: TaskClass;
+  label: string;
+  total: number;
+  correct: number;
+  accuracy: number;
+}
+
+/** The per-run tier-routing summary the "Tier routing" tab renders. */
+export interface TierSummary {
+  latest: {
+    runId: string;
+    finishedAt: string;
+    trigger: CopilotTierRunDoc['trigger'];
+    totals: CopilotTierRunDoc['totals'];
+  };
+  trend: TierTrendPoint[];
+  grade: QualityGrade;
+  floorStatus: TierFloorStatus;
+  belowFloor: boolean;
+  provisionalFloor: boolean;
+  runCount: number;
+  /** Confusion matrix rows (truth × prediction) for the heatmap. */
+  matrix: TierMatrixRow[];
+  /** Per-task-class tier accuracy rows. */
+  perClass: TierPerClassRow[];
+}
+
+/** Compare a tier run's accuracy against the 'router' floor. */
+export function tierFloorStatusFor(
+  totals: CopilotTierRunDoc['totals'],
+  floor: TierFloor | undefined,
+): TierFloorStatus {
+  const value = totals.tierAccuracy;
+  if (floor?.tierAccuracy == null) return { metric: 'tierAccuracy', value, floor: null, verdict: 'no-floor' };
+  return {
+    metric: 'tierAccuracy',
+    value,
+    floor: floor.tierAccuracy,
+    verdict: value + 1e-9 >= floor.tierAccuracy ? 'ok' : 'below',
+  };
+}
+
+const byTierFinishedDesc = (a: CopilotTierRunDoc, b: CopilotTierRunDoc): number =>
+  (b.finishedAt || '').localeCompare(a.finishedAt || '');
+
+/** Expand a tier-run's `matrix` into fixed-order heatmap rows (never NaN gaps). */
+function tierMatrixRows(matrix: CopilotTierRunDoc['totals']['matrix']): TierMatrixRow[] {
+  return MODEL_TIERS.map((expectedTier) => {
+    const cells = MODEL_TIERS.map((chosenTier) => ({
+      chosenTier,
+      count: matrix?.[expectedTier]?.[chosenTier] ?? 0,
+    }));
+    return { expectedTier, cells, total: cells.reduce((n, c) => n + c.count, 0) };
+  });
+}
+
+/** Expand a tier-run's `perClass` into labeled rows (fixed task-class order). */
+function tierPerClassRows(perClass: CopilotTierRunDoc['totals']['perClass']): TierPerClassRow[] {
+  const classes: TaskClass[] = ['lightweight', 'general', 'reasoning'];
+  return classes.map((taskClass) => {
+    const s = perClass?.[taskClass] ?? { total: 0, correct: 0, accuracy: 0 };
+    return { taskClass, label: TASK_CLASS_LABELS[taskClass], total: s.total, correct: s.correct, accuracy: s.accuracy };
+  });
+}
+
+/**
+ * Build the single-router tier summary from the retained `tier-run` docs: the
+ * latest run's confusion + accuracy, the accuracy trend, the composite grade
+ * (accuracy bands, reusing gradeHitRate), and the 'router' floor status. Returns
+ * null when no tier runs exist (the tab renders a guided EmptyState).
+ */
+export function buildTierSummary(
+  runs: CopilotTierRunDoc[],
+  floors: TierFloors,
+): TierSummary | null {
+  const tierRuns = runs.filter((r) => r?.docType === 'tier-run' && r.surface === 'tier:router');
+  if (tierRuns.length === 0) return null;
+  tierRuns.sort(byTierFinishedDesc);
+  const latest = tierRuns[0];
+  const floor = floors.router;
+  const status = tierFloorStatusFor(latest.totals, floor);
+  const trend: TierTrendPoint[] = [...tierRuns].reverse().map((r) => ({
+    runId: r.runId,
+    finishedAt: r.finishedAt,
+    trigger: r.trigger,
+    tierAccuracy: r.totals.tierAccuracy,
+    taskClassAccuracy: r.totals.taskClassAccuracy,
+    rows: r.totals.rows,
+  }));
+  return {
+    latest: { runId: latest.runId, finishedAt: latest.finishedAt, trigger: latest.trigger, totals: latest.totals },
+    trend,
+    grade: gradeHitRate(latest.totals.tierAccuracy),
+    floorStatus: status,
+    belowFloor: status.verdict === 'below',
+    provisionalFloor: floor?.provisional === true,
+    runCount: tierRuns.length,
+    matrix: tierMatrixRows(latest.totals.matrix),
+    perClass: tierPerClassRows(latest.totals.perClass),
+  };
+}
+
+/**
+ * Cost-per-quality per routing tier: judged grounding (0..5, the answer-quality
+ * mean) per estimated $ — `qualityPerDollar = (grounding / 5) / tierPriceCoeff`.
+ * A higher value = more grounded quality per list-price dollar, which is why
+ * routing a lightweight turn onto the cheap `mini` tier wins. `meanGrounding` is
+ * the program-wide judged grounding (null when no run has been judged yet → the
+ * ratio is null, shown as "—" rather than a fabricated number).
+ */
+export interface TierCostQualityRow {
+  tier: ModelTier;
+  label: string;
+  /** Blended $/1K-token list-price coefficient for the tier. */
+  coeff: number;
+  /** (grounding/5) / coeff — higher is better; null when grounding is unmeasured. */
+  qualityPerDollar: number | null;
+}
+
+export function tierCostPerQuality(meanGrounding: number | null): TierCostQualityRow[] {
+  return MODEL_TIERS.map((tier) => {
+    const coeff = tierPriceCoeff(tier);
+    const q = meanGrounding == null || coeff <= 0 ? null : round((meanGrounding / 5) / coeff, 1);
+    return { tier, label: TIER_LABELS[tier], coeff, qualityPerDollar: q };
+  });
 }

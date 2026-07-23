@@ -12,9 +12,10 @@ import {
   gradeHitRate, gradePassRate, worstGrade, compositeGrade, floorStatusFor,
   buildSurfaceSummaries, buildOverview, worstQuestions, worstReasonLabel,
   compositeSearchGrade, searchFloorStatusFor, buildSearchSummaries,
-  type EvalFloors, type SearchFloors,
+  buildTierSummary, tierFloorStatusFor, tierCostPerQuality,
+  type EvalFloors, type SearchFloors, type TierFloors,
 } from '@/lib/admin/copilot-quality';
-import type { CopilotEvalRunDoc, CopilotEvalResultDoc, CopilotSearchRunDoc } from '@/lib/azure/copilot-evals-model';
+import type { CopilotEvalRunDoc, CopilotEvalResultDoc, CopilotSearchRunDoc, CopilotTierRunDoc } from '@/lib/azure/copilot-evals-model';
 
 const totals = (o: Partial<CopilotEvalRunDoc['totals']>): CopilotEvalRunDoc['totals'] => ({
   questions: 10, retrievalHitRate: 0.9, mrrAvg: 0.8, groundingAvg: 4.2,
@@ -195,5 +196,87 @@ describe('search relevance', () => {
     const floors: SearchFloors = { catalog: { searchHitRate: 0.6, ndcg: 0.5 } };
     const s = buildSearchSummaries([searchRun('catalog', { totals: { hitRate: 0.3, ndcgAvg: 0.2 } as any })], floors);
     expect(s[0].belowFloor).toBe(true);
+  });
+});
+
+// ── E6 — tier-router decision roll-up ────────────────────────────────────────
+
+const tierTotals = (o: Partial<CopilotTierRunDoc['totals']> = {}): CopilotTierRunDoc['totals'] => ({
+  rows: 60,
+  tierAccuracy: 0.95,
+  taskClassAccuracy: 0.93,
+  matrix: {
+    mini: { mini: 19, standard: 1, strong: 0 },
+    standard: { mini: 0, standard: 20, strong: 0 },
+    strong: { mini: 0, standard: 2, strong: 18 },
+  },
+  perClass: {
+    lightweight: { total: 20, correct: 19, accuracy: 0.95 },
+    general: { total: 20, correct: 20, accuracy: 1 },
+    reasoning: { total: 20, correct: 18, accuracy: 0.9 },
+  },
+  ...o,
+});
+
+const tierRun = (o: Partial<CopilotTierRunDoc> = {}): CopilotTierRunDoc => ({
+  id: `tier:router:${o.runId ?? 'r1'}`, surface: 'tier:router', runId: (o.runId as string) ?? 'r1',
+  docType: 'tier-run', schemaVersion: 1, startedAt: '2026-07-23T00:00:00Z',
+  finishedAt: (o.finishedAt as string) ?? '2026-07-23T00:05:00Z', trigger: 'manual',
+  totals: tierTotals(o.totals as any), ...o,
+});
+
+describe('tierFloorStatusFor', () => {
+  it('ok at or above floor, below under it, no-floor when absent', () => {
+    expect(tierFloorStatusFor(tierTotals({ tierAccuracy: 0.9 }), { tierAccuracy: 0.85 }).verdict).toBe('ok');
+    expect(tierFloorStatusFor(tierTotals({ tierAccuracy: 0.8 }), { tierAccuracy: 0.85 }).verdict).toBe('below');
+    expect(tierFloorStatusFor(tierTotals({}), undefined).verdict).toBe('no-floor');
+  });
+});
+
+describe('buildTierSummary', () => {
+  it('returns null when no tier runs exist', () => {
+    expect(buildTierSummary([], {})).toBeNull();
+  });
+  it('rolls up latest run, trend (oldest→newest), grade, floor, matrix + per-class', () => {
+    const floors: TierFloors = { router: { tierAccuracy: 0.85, provisional: true } };
+    const runs = [
+      tierRun({ runId: 'r2', finishedAt: '2026-07-23T02:00:00Z', totals: tierTotals({ tierAccuracy: 0.97 }) }),
+      tierRun({ runId: 'r1', finishedAt: '2026-07-23T01:00:00Z', totals: tierTotals({ tierAccuracy: 0.6 }) }),
+    ];
+    const s = buildTierSummary(runs, floors)!;
+    expect(s.latest.runId).toBe('r2');
+    expect(s.trend.map((t) => t.runId)).toEqual(['r1', 'r2']);
+    expect(s.grade).toBe('A'); // 0.97 → A band
+    expect(s.floorStatus.verdict).toBe('ok');
+    expect(s.provisionalFloor).toBe(true);
+    expect(s.runCount).toBe(2);
+    // Matrix rows are fixed-order (mini, standard, strong) with a corner label.
+    expect(s.matrix.map((r) => r.expectedTier)).toEqual(['mini', 'standard', 'strong']);
+    expect(s.matrix[0].cells.map((c) => c.chosenTier)).toEqual(['mini', 'standard', 'strong']);
+    expect(s.matrix[0].total).toBe(20);
+    expect(s.perClass.map((c) => c.taskClass)).toEqual(['lightweight', 'general', 'reasoning']);
+    expect(s.perClass[1]).toMatchObject({ accuracy: 1, total: 20 });
+  });
+  it('belowFloor is honest', () => {
+    const s = buildTierSummary([tierRun({ totals: tierTotals({ tierAccuracy: 0.5 }) })], { router: { tierAccuracy: 0.85 } })!;
+    expect(s.belowFloor).toBe(true);
+    expect(s.floorStatus.verdict).toBe('below');
+  });
+});
+
+describe('tierCostPerQuality', () => {
+  it('quality-per-dollar rises as the tier gets cheaper', () => {
+    const rows = tierCostPerQuality(4);
+    expect(rows.map((r) => r.tier)).toEqual(['mini', 'standard', 'strong']);
+    const mini = rows.find((r) => r.tier === 'mini')!;
+    const strong = rows.find((r) => r.tier === 'strong')!;
+    expect(mini.qualityPerDollar).not.toBeNull();
+    expect(strong.qualityPerDollar).not.toBeNull();
+    // Cheaper tier → more grounded quality per $ (coeff is ~10× smaller).
+    expect(mini.qualityPerDollar!).toBeGreaterThan(strong.qualityPerDollar!);
+    expect(mini.coeff).toBeLessThan(strong.coeff);
+  });
+  it('null grounding → null ratio (no fabricated number)', () => {
+    expect(tierCostPerQuality(null).every((r) => r.qualityPerDollar === null)).toBe(true);
   });
 });
