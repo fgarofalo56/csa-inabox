@@ -63,10 +63,26 @@ for the full canvas/transform row-by-row grade)
 | 2 | Open / hydrate an existing flow | ✅ built | `GET /api/adf/dataflows/{name}` → `definitionToModel` |
 | 3 | Save (writes DFS to ADF) | ✅ built | Save → `PUT …/[name]` (`modelToTypeProperties`) |
 | 4 | Refresh / reload | ✅ built | ribbon Refresh → `reloadKey` |
-| 5 | **Debug mode toggle** + availability probe | ✅ built | `GET …/{name}/debug` → lights the designer's Debug surface |
+| 5 | **Debug mode toggle** + availability probe | ✅ built | `GET …/{name}/debug` → lights the designer's Debug surface; **U7** adds a HELD session (see §U7) |
 | 6 | **Data preview of the SELECTED transformation** | ✅ built | preview picker → `POST …/{name}/debug` `executePreviewQuery` |
 | 7 | Preview renders real rows (no faked data) | ✅ built | `normalizePreview` renders only route rows |
 | 8 | Honest gate when no debug session / factory | ⚠️ honest-gate | Fluent MessageBar naming the ADF + IR requirement |
+
+### Debug mode — held session + per-transform tabs (U7)
+
+The ADF-Studio Debug authoring loop: toggle **Debug** once to hold a session for
+the whole loop, then preview / inspect / profile any transform cheaply against
+that warm session. Behind FLAG0 flag `u7-dataflow-debug` (default-ON; OFF reverts
+to row-6 single-stream inline preview). UI: `dataflow-debug-panel.tsx`.
+
+| # | ADF Studio capability | Loom | Where / backend |
+|---|---|---|---|
+| U7-1 | **Held debug session** (toggle Debug → 1 cluster for the loop) w/ TTL chip | ✅ built (PR-1) | `POST …/mapping-dataflow/[id]/debug/session` acquire/release → `create/deleteDataFlowDebugSession` |
+| U7-2 | **Data preview per transform** (type-badged grid + timing status bar) | ✅ built (PR-1) | `POST …/debug/preview` → `addDataFlowToDebugSession` + `executePreviewQuery`; shared `PreviewTable` |
+| U7-3 | Preview reflects **unsaved** in-canvas edits | ✅ built (PR-1) | route re-adds the live serialized graph package before each preview |
+| U7-4 | **Inspect** — in/out schema per transform + schema-drift badges | ⏳ U7 PR-2 | `GET …/debug/schema` → `parseDfsSchema`/`diffSchemas` (helper landed PR-1) |
+| U7-5 | **Statistics** — null %/distinct/min/max/mean/stddev + histograms | ⏳ U7 PR-2 | `POST …/debug/stats` → `computeColumnStats` over the sample (helper landed PR-1) |
+| U7-6 | **Quick-actions** — preview column → Typecast/Modify/Remove inserts a transform | ⏳ U7 PR-3 | preview-grid column context menu → draft graph mutation |
 
 ### Canvas + transforms (delegated to the shared designer)
 
@@ -77,7 +93,7 @@ for the full canvas/transform row-by-row grade)
 | 11 | Dataset-backed Source/Sink pickers | ✅ built | `GET /api/adf/datasets` |
 | 12 | **Visual expression builder** (Add Dynamic Content) | ❌ MISSING | plain expression textareas (see `adf-mapping-data-flow.md` C9) |
 | 13 | Free edge-drawing / inline "+" between nodes | ⚠️ partial | add chains off the selected node |
-| 14 | Per-node Optimize / Inspect / Data-preview tabs | ❌ MISSING | single config pane + editor-level preview |
+| 14 | Per-node Optimize / Inspect / Data-preview tabs | ✅ built (U7) / ⏳ | Data-preview tab shipped (U7-2); Inspect/Statistics tabs U7 PR-2 (§U7) |
 | 15 | Rename / clone / Publish-Git shell | ❌ MISSING | direct PUT only |
 
 **Grade: B.** The standalone editor gives a real create→author→save→**live

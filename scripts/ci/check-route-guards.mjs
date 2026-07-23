@@ -395,6 +395,13 @@ const SHARED_BACKEND_ITEM_ROUTES = [
   'apps/fiab-console/app/api/items/lakehouse/[id]/query/route.ts',
   'apps/fiab-console/app/api/items/logic-app/[id]/route.ts',
   'apps/fiab-console/app/api/items/logic-app/[id]/run/route.ts',
+  // mapping-dataflow (U7) Debug mode — the ADF data-flow debug-session lifecycle
+  // (session + per-transform preview) operates on the deployment-default ADF
+  // factory resolved by flow name (= [id]) via the Console UAMI: the SAME
+  // shared-Azure-backend class as /api/adf/dataflows/[name]/debug (prefix A). No
+  // per-tenant Cosmos item is read; the ADF factory is a single shared resource.
+  'apps/fiab-console/app/api/items/mapping-dataflow/[id]/debug/session/route.ts',
+  'apps/fiab-console/app/api/items/mapping-dataflow/[id]/debug/preview/route.ts',
   'apps/fiab-console/app/api/items/mirrored-database/[id]/lifecycle/route.ts',
   'apps/fiab-console/app/api/items/mirrored-database/[id]/monitor/route.ts',
   'apps/fiab-console/app/api/items/mirrored-database/[id]/open-mirror/route.ts',
