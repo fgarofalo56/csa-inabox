@@ -47,6 +47,7 @@ import {
   ArrowMaximize20Regular, Flash20Regular, Database20Regular, Code20Regular,
 } from '@fluentui/react-icons';
 import { LoomChart, type LoomChartType } from '@/lib/components/charts/loom-chart';
+import { ResizableCanvasRegion } from '@/lib/components/canvas/resizable-canvas';
 import { EmptyState } from '@/lib/components/empty-state';
 import { SplitPane } from '@/lib/components/shared/split-pane';
 import type { AtelierFilter, AtelierFilterOp } from '@/lib/editors/_family-utils';
@@ -261,6 +262,9 @@ const useStyles = makeStyles({
     backgroundImage: `radial-gradient(${tokens.colorNeutralStroke2} 1px, transparent 0)`,
     backgroundSize: `${GRID}px ${GRID}px`,
   },
+  // Fills the ResizableCanvasRegion viewport (G3): the visible height is
+  // user-set via the region's grip while the content-sized canvas scrolls.
+  canvasWrapFill: { flex: 1, minHeight: 0 },
   canvas: { position: 'relative', minWidth: `${CANVAS_MIN_W}px` },
   widget: {
     position: 'absolute', display: 'flex', flexDirection: 'column', overflow: 'hidden',
@@ -1592,11 +1596,13 @@ export function WorkshopAppBuilder({ id, entityTypes, widgets, variables, onWidg
 
   // Run-mode canvas for a single page: its widgets (minus tab-nested + hidden),
   // positioned as on the design canvas. Shared by the main preview + overlays.
-  const renderRunPage = useCallback((pageId: string): ReactNode => {
+  // `fill` = viewport height comes from the surrounding ResizableCanvasRegion
+  // (main preview); overlays keep the content-sized height inside their surface.
+  const renderRunPage = useCallback((pageId: string, fill = false): ReactNode => {
     const items = normalized.filter((w) => pageIdForWidget(w, resolvedPages) === pageId && !nestedIds.has(w.id) && isVisible(w));
     const h = Math.max(CANVAS_MIN_H, items.reduce((m, w) => Math.max(m, (w.layout?.y || 0) + (w.layout?.h || 0)), 0) + GRID * 3);
     return (
-      <div className={s.canvasWrap} style={{ height: h }}>
+      <div className={mergeClasses(s.canvasWrap, fill && s.canvasWrapFill)} style={fill ? undefined : { height: h }}>
         <div className={s.canvas} style={{ height: h }}>
           {items.length === 0 ? (
             <div style={{ position: 'absolute', inset: 0 }}>
@@ -1617,21 +1623,26 @@ export function WorkshopAppBuilder({ id, entityTypes, widgets, variables, onWidg
   // Design-mode canvas block, extracted so both the SplitPane (widget selected)
   // and the plain single-column layout (nothing selected) render the same canvas
   // without duplicating JSX. Scoped to the page currently open (multi-page).
+  // The visible viewport height is user-resizable (G3) via ResizableCanvasRegion
+  // (persisted under loom.canvasHeight.workshop-app-canvas); the content-sized
+  // canvas still scrolls inside it.
   const canvasBlock = (
-    <div className={s.canvasWrap} style={{ height: canvasHeight }} onPointerDown={() => setSelectedId(null)}>
-      <div className={s.canvas} style={{ height: canvasHeight }}>
+    <ResizableCanvasRegion storageKey="workshop-app-canvas" defaultPx={CANVAS_MIN_H} ariaLabel="Resize app canvas height">
+      <div className={mergeClasses(s.canvasWrap, s.canvasWrapFill)} onPointerDown={() => setSelectedId(null)}>
+        <div className={s.canvas} style={{ height: canvasHeight }}>
         {pageWidgets.length === 0 ? (
           <div style={{ position: 'absolute', inset: 0 }}>
             <EmptyState icon={<Apps20Regular />} title="Empty page" body="Add a widget from the palette above, bind it to an ontology object type, then switch to Preview to see real data. Use the page strip to add more pages or an overlay." />
           </div>
-        ) : pageWidgets.map((w) => (
-          <CanvasWidget key={w.id} widget={w} selected={selectedId === w.id} readOnly={false}
-            onSelect={() => setSelectedId(w.id)} onMove={(x, y) => moveWidget(w.id, x, y)} onResize={(cw, ch) => resizeWidget(w.id, cw, ch)} onRemove={() => removeWidget(w.id)}>
-            {renderWidgetBody(w)}
-          </CanvasWidget>
-        ))}
+          ) : pageWidgets.map((w) => (
+            <CanvasWidget key={w.id} widget={w} selected={selectedId === w.id} readOnly={false}
+              onSelect={() => setSelectedId(w.id)} onMove={(x, y) => moveWidget(w.id, x, y)} onResize={(cw, ch) => resizeWidget(w.id, cw, ch)} onRemove={() => removeWidget(w.id)}>
+              {renderWidgetBody(w)}
+            </CanvasWidget>
+          ))}
+        </div>
       </div>
-    </div>
+    </ResizableCanvasRegion>
   );
 
   return (
@@ -1702,7 +1713,9 @@ export function WorkshopAppBuilder({ id, entityTypes, widgets, variables, onWidg
           )
         ) : (
           <>
-            {renderRunPage(currentPageId)}
+            <ResizableCanvasRegion storageKey="workshop-app-canvas" defaultPx={CANVAS_MIN_H} ariaLabel="Resize app canvas height">
+              {renderRunPage(currentPageId, true)}
+            </ResizableCanvasRegion>
             <OverlayHost
               overlay={openOverlayId ? (resolvedPages.find((p) => p.id === openOverlayId && p.kind === 'overlay') || null) : null}
               onClose={() => setOpenOverlayId(null)}
