@@ -20,6 +20,12 @@
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react';
 import { FluentProvider, webLightTheme } from '@fluentui/react-components';
+
+// U3 — CodeCell reads the 'u3-notebook-cell-resize' runtime flag through a
+// react-query hook; mock it so these tests need no QueryClientProvider and the
+// stubbed fetch sees ONLY the /assist calls under test.
+vi.mock('@/lib/components/ui/use-runtime-flag', () => ({ useRuntimeFlag: () => true }));
+
 import { CodeCell } from '../code-cell';
 import type { NotebookCell } from '@/lib/types/notebook-cell';
 

@@ -88,12 +88,22 @@ export interface UseResizableHeightResult {
  * @param defaultPx   Initial height — use the surface's current fixed/minHeight.
  * @param minPx       Floor (default 240).
  * @param maxPx       Explicit ceiling; omit to track 80vh of the viewport.
+ * @param autoPx      U3 auto-until-first-resize: while provided AND the user
+ *                    has never resized this key (no persisted height), the
+ *                    region height FOLLOWS this content-driven value (clamped
+ *                    to bounds) and nothing is written to storage — so a short
+ *                    notebook cell stays compact. The first REAL resize
+ *                    gesture (a drag that moves, or a keyboard resize) commits
+ *                    + persists and permanently switches the key to
+ *                    user-sized. A grip click with zero movement stays auto.
+ *                    Omit for the classic fixed-default behavior.
  */
 export function useResizableHeight(
   storageKey: string,
   defaultPx: number,
   minPx: number = MIN_PX_DEFAULT,
   maxPx?: number,
+  autoPx?: number,
 ): UseResizableHeightResult {
   // Height init = defaultPx so server and first client render match; the
   // persisted value is read in an effect below (avoids a hydration mismatch).
@@ -102,16 +112,28 @@ export function useResizableHeight(
     () => maxPx ?? Math.max(MAX_PX_FALLBACK, defaultPx),
   );
   const [isDragging, setIsDragging] = useState(false);
+  // True once THIS key has a user-chosen height (persisted earlier, or resized
+  // now). While false and `autoPx` is provided, the content-driven value wins.
+  const [userSized, setUserSized] = useState(false);
 
   const regionRef = useRef<HTMLDivElement | null>(null);
   const key = `${STORAGE_PREFIX}${storageKey}`;
 
+  // Auto-until-first-resize: content-driven display height while un-sized.
+  const autoActive = autoPx != null && !userSized;
+
   // Render-synced mirrors so pointer/keyboard handlers read live values
   // without being torn down and rebuilt on every height change.
   const heightRef = useRef(height);
-  heightRef.current = height;
   const maxRef = useRef(maxHeight);
   maxRef.current = maxHeight;
+  // The DISPLAYED height (what handlers should treat as current): the clamped
+  // content-driven value while auto is active, the committed state otherwise.
+  const displayHeight =
+    autoPx != null && !userSized ? clamp(autoPx, minPx, maxHeight) : height;
+  heightRef.current = displayHeight;
+  const autoActiveRef = useRef(autoActive);
+  autoActiveRef.current = autoActive;
   const draggingRef = useRef(false);
 
   // Drag bookkeeping.
@@ -144,13 +166,17 @@ export function useResizableHeight(
     return () => window.removeEventListener('resize', recompute);
   }, [maxPx]);
 
-  // Apply the persisted height once, after mount.
+  // Apply the persisted height once, after mount. A persisted value also means
+  // the user HAS sized this key before — auto-until-first-resize stays off.
   useEffect(() => {
     try {
       const raw = window.localStorage.getItem(key);
       if (raw != null) {
         const parsed = parseInt(raw, 10);
-        if (Number.isFinite(parsed)) setHeight(clamp(parsed, minPx, maxRef.current));
+        if (Number.isFinite(parsed)) {
+          setHeight(clamp(parsed, minPx, maxRef.current));
+          setUserSized(true);
+        }
       }
     } catch {
       /* ignore */
@@ -212,7 +238,12 @@ export function useResizableHeight(
     // (revert inline override to the stylesheet) and commit to state + storage.
     const committed = regionRef.current?.offsetHeight ?? heightRef.current;
     if (regionRef.current) regionRef.current.style.transition = '';
+    // Auto-until-first-resize: a grip CLICK with zero movement is not a resize
+    // — skip the commit so the region keeps following its content height
+    // instead of freezing at whatever the auto height happened to be.
+    if (autoActiveRef.current && committed === startHRef.current) return;
     commit(committed);
+    setUserSized(true);
   }, [commit]);
 
   const onKeyDown = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
@@ -240,7 +271,10 @@ export function useResizableHeight(
         return;
     }
     e.preventDefault();
+    // heightRef holds the DISPLAYED height (content-driven while auto is
+    // active), so a keyboard resize steps from what the user actually sees.
     commit(next);
+    setUserSized(true);
   }, [commit, minPx]);
 
   // Cancel any in-flight rAF on unmount and restore body styles defensively.
@@ -253,7 +287,7 @@ export function useResizableHeight(
   }, []);
 
   return {
-    height,
+    height: displayHeight,
     minHeight: minPx,
     maxHeight,
     regionRef,
@@ -344,6 +378,12 @@ export interface ResizableCanvasRegionProps {
   minPx?: number;
   /** Explicit ceiling; omit to track 80vh of the viewport. */
   maxPx?: number;
+  /**
+   * U3 auto-until-first-resize: content-driven height the region follows until
+   * the user's first real resize gesture on this key (see
+   * {@link useResizableHeight}). Nothing persists while auto is active.
+   */
+  autoPx?: number;
   /** Accessible label for the resize handle. */
   ariaLabel?: string;
   /** Optional extra class on the region wrapper. */
@@ -362,13 +402,14 @@ export function ResizableCanvasRegion({
   defaultPx,
   minPx = MIN_PX_DEFAULT,
   maxPx,
+  autoPx,
   ariaLabel,
   className,
   children,
 }: ResizableCanvasRegionProps) {
   const styles = useStyles();
   const { height, minHeight, maxHeight, regionRef, separatorProps, isDragging } =
-    useResizableHeight(storageKey, defaultPx, minPx, maxPx);
+    useResizableHeight(storageKey, defaultPx, minPx, maxPx, autoPx);
 
   return (
     <div

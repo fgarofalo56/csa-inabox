@@ -23,8 +23,33 @@ import { registerInlineCompletion, type InlineCompletionContext } from '@/lib/co
 import { registerClusterIntelliSense, type ClusterIntelliSenseContext } from '@/lib/components/editor/cluster-intellisense';
 import { type ClusterRuntime, RUNTIME_LABEL } from '@/lib/components/editor/cluster-runtime';
 import { useInlineCompleteToggle } from '@/lib/components/editor/use-inline-complete-toggle';
+import { useRuntimeFlag } from '@/lib/components/ui/use-runtime-flag';
 import { CopilotPane } from './copilot-pane';
 import { RichDisplay } from '@/lib/components/notebook/rich-display';
+
+// ── U3 — per-cell resizable height ─────────────────────────────────────────
+// Each code cell's Monaco editor gets a per-cell sizingKey so the shared
+// ResizableCanvasRegion grip can persist a user-chosen height PER CELL under
+// `loom.canvasHeight.monaco.notebook.<cellId>`. Explosion guard: a key is only
+// written on the user's FIRST real resize gesture (auto-until-first-drag), and
+// the notebook editor prunes a cell's key when the cell is deleted.
+
+/** Monaco `sizingKey` for one notebook cell (U3 spec keying). */
+export function notebookCellSizingKey(cellId: string): string {
+  return `notebook.${cellId}`;
+}
+
+/**
+ * Drop a deleted cell's persisted height so per-cell keys never accumulate
+ * beyond the cells that still exist (call from the editor's delete path).
+ */
+export function pruneCellHeightKey(cellId: string): void {
+  try {
+    window.localStorage.removeItem(`loom.canvasHeight.monaco.${notebookCellSizingKey(cellId)}`);
+  } catch {
+    /* storage unavailable — nothing persisted to prune */
+  }
+}
 
 const useStyles = makeStyles({
   shell: {
@@ -382,6 +407,9 @@ export function CodeCell({ cell, active, onFocus, onChange, onRun, onStop, onDel
   const s = useStyles();
   const [running, setRunning] = useState(false);
   const [maximized, setMaximized] = useState(false);
+  // U3 kill-switch (FLAG0): OFF reverts cells to the pre-U3 auto-height-only
+  // editor on the next load; saved per-cell heights are simply ignored.
+  const cellResizeOn = useRuntimeFlag('u3-notebook-cell-resize');
   const [completionEnabled, toggleCompletion] = useInlineCompleteToggle();
   const [copilotOpen, setCopilotOpen] = useState(false);
 
@@ -835,6 +863,9 @@ export function CodeCell({ cell, active, onFocus, onChange, onRun, onStop, onDel
           // Auto-fit: the editor grows to its content height (min 120px, up to
           // 720px then scrolls) so the cell shows everything by default without
           // the user dragging. Maximize is still available for large edits.
+          // U3: with the runtime flag ON, a per-cell sizingKey adds the shared
+          // resize grip — auto-fit until the user's first drag, then THAT
+          // cell's chosen height persists (siblings unaffected).
           <MonacoTextarea
             value={cell.source}
             onChange={setSource}
@@ -843,6 +874,7 @@ export function CodeCell({ cell, active, onFocus, onChange, onRun, onStop, onDel
             autoHeight
             minHeight={120}
             maxHeight={720}
+            sizingKey={cellResizeOn ? notebookCellSizingKey(cell.id) : undefined}
             ariaLabel={`Code cell ${cell.id}`}
             className={mergeClasses(locked && s.editorLocked)}
             onReady={handleEditorReady}

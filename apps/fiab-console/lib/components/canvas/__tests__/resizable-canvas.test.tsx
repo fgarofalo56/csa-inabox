@@ -112,3 +112,51 @@ describe('ResizableCanvasRegion', () => {
     expect(screen.getByRole('separator')).toHaveAttribute('aria-valuenow', '320');
   });
 });
+
+/**
+ * U3 — auto-until-first-resize (`autoPx`). Notebook cells feed their measured
+ * Monaco content height as `autoPx`: the region FOLLOWS content (auto-fit,
+ * nothing persisted) until the user's first real resize gesture, which commits
+ * + persists and permanently switches that key to user-sized.
+ */
+describe('ResizableCanvasRegion — autoPx (auto-until-first-resize)', () => {
+  const auto = (autoPx: number, storageKey = 't-auto') => (
+    <ResizableCanvasRegion storageKey={storageKey} defaultPx={240} minPx={120} maxPx={720} autoPx={autoPx}>
+      {CANVAS}
+    </ResizableCanvasRegion>
+  );
+
+  it('follows the content-driven autoPx (clamped to bounds) and persists nothing', () => {
+    const { rerender } = wrap(auto(150));
+    expect(screen.getByRole('separator')).toHaveAttribute('aria-valuenow', '150');
+    // Content grew → the region follows.
+    rerender(<FluentProvider theme={webLightTheme}>{auto(300)}</FluentProvider>);
+    expect(screen.getByRole('separator')).toHaveAttribute('aria-valuenow', '300');
+    // Above the ceiling → clamped.
+    rerender(<FluentProvider theme={webLightTheme}>{auto(9000)}</FluentProvider>);
+    expect(screen.getByRole('separator')).toHaveAttribute('aria-valuenow', '720');
+    // Auto mode never writes storage — keys exist only after a user resize.
+    expect(window.localStorage.getItem('loom.canvasHeight.t-auto')).toBeNull();
+  });
+
+  it('a keyboard resize steps from the DISPLAYED auto height, persists, and stops following content', () => {
+    const { rerender } = wrap(auto(300, 't-auto-kb'));
+    const sep = screen.getByRole('separator');
+    fireEvent.keyDown(sep, { key: 'ArrowDown' }); // +24 from the displayed 300
+    expect(sep).toHaveAttribute('aria-valuenow', '324');
+    expect(window.localStorage.getItem('loom.canvasHeight.t-auto-kb')).toBe('324');
+    // Content changes no longer move a user-sized region.
+    rerender(<FluentProvider theme={webLightTheme}>{auto(500, 't-auto-kb')}</FluentProvider>);
+    expect(screen.getByRole('separator')).toHaveAttribute('aria-valuenow', '324');
+  });
+
+  it('a previously persisted height wins over autoPx from the start (per-key, siblings unaffected)', () => {
+    window.localStorage.setItem('loom.canvasHeight.t-auto-persist', '400');
+    wrap(auto(150, 't-auto-persist'));
+    expect(screen.getByRole('separator')).toHaveAttribute('aria-valuenow', '400');
+    cleanup();
+    // A sibling key with no persisted height still auto-fits.
+    wrap(auto(150, 't-auto-sibling'));
+    expect(screen.getByRole('separator')).toHaveAttribute('aria-valuenow', '150');
+  });
+});
