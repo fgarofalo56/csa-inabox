@@ -11,8 +11,8 @@
  * Both use the same TDS connection shape — only the FQDN and database differ.
  */
 
-import { DefaultAzureCredential, ManagedIdentityCredential, ChainedTokenCredential } from '@azure/identity';
-import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
+import { type TokenCredential } from '@azure/identity';
+import { workspaceScopedCredential } from '@/lib/azure/workspace-credential-factory';
 import sql from 'mssql';
 import { getSqlSuffix, synapseSqlSuffix } from './cloud-endpoints';
 import { escapeSqlLiteral } from '@/lib/sql/quoting';
@@ -26,12 +26,11 @@ import { escapeSqlLiteral } from '@/lib/sql/quoting';
 function sqlScope(): string {
   return `https://${process.env.LOOM_SYNAPSE_SQL_TOKEN_SCOPE || getSqlSuffix()}/.default`;
 }
-// Prefer explicit UAMI when LOOM_UAMI_CLIENT_ID is set (Container App
-// runtime). Fall back to the default chain for local dev (az CLI).
-const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
-const credential: ChainedTokenCredential | DefaultAzureCredential = uamiClientId
-  ? new ChainedTokenCredential(new AcaManagedIdentityCredential(), new ManagedIdentityCredential({ clientId: uamiClientId }), new DefaultAzureCredential())
-  : new DefaultAzureCredential();
+// I5 pilot migration: resolve through the per-workspace credential factory
+// (lazy adapter; mode off = the memoized shared Console-UAMI chain — the
+// Aca-first → explicit-UAMI-MI → DefaultAzureCredential order is preserved
+// inside arm-credential.ts, so local dev still falls through to az CLI).
+const credential: TokenCredential = workspaceScopedCredential({ backend: 'synapse-sql' });
 
 let pools: Map<string, sql.ConnectionPool> = new Map();
 

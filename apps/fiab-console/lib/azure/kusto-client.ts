@@ -20,8 +20,7 @@
  */
 
 import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
-import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } from '@azure/identity';
-import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
+import { workspaceScopedCredential } from '@/lib/azure/workspace-credential-factory';
 import { itemsContainer, workspacesContainer } from './cosmos-client';
 import { armBase, armScope, isGovCloud, kustoClusterUri } from './cloud-endpoints';
 import { buildCreateMaterializedViewCommand } from './kusto-mv-command';
@@ -47,10 +46,10 @@ const DM_URI =
   process.env.LOOM_KUSTO_DM_URI ||
   CLUSTER_URI.replace(/^(https?:\/\/)/i, '$1ingest-');
 
-const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
-const credential = uamiClientId
-  ? new ChainedTokenCredential(new AcaManagedIdentityCredential(), new ManagedIdentityCredential({ clientId: uamiClientId }), new DefaultAzureCredential())
-  : new DefaultAzureCredential();
+// I5 pilot migration: resolve through the per-workspace credential factory
+// (lazy adapter; mode off = the memoized shared Console-UAMI chain, identical
+// behavior to the former module singleton).
+const credential = workspaceScopedCredential({ backend: 'adx-database' });
 
 export class KustoError extends Error {
   status: number;

@@ -52,25 +52,17 @@
  */
 
 import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
-import {
-  ChainedTokenCredential,
-  DefaultAzureCredential,
-  ManagedIdentityCredential,
-} from '@azure/identity';
-import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
+import { type TokenCredential } from '@azure/identity';
+import { workspaceScopedCredential } from '@/lib/azure/workspace-credential-factory';
 import { getCosmosSuffix } from './cloud-endpoints';
 
 /** Cosmos data-plane REST API version (stable). */
 const COSMOS_DATA_API_VERSION = '2018-12-31';
 
-const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
-const credential: ChainedTokenCredential | DefaultAzureCredential = uamiClientId
-  ? new ChainedTokenCredential(
-      new AcaManagedIdentityCredential(),
-      new ManagedIdentityCredential({ clientId: uamiClientId }),
-      new DefaultAzureCredential(),
-    )
-  : new DefaultAzureCredential();
+// I5 pilot migration: resolve through the per-workspace credential factory
+// (lazy adapter; mode off = the memoized shared Console-UAMI chain, identical
+// behavior to the former module singleton).
+const credential: TokenCredential = workspaceScopedCredential({ backend: 'cosmos-data' });
 
 // ---------------------------------------------------------------------------
 // Account endpoint resolution
