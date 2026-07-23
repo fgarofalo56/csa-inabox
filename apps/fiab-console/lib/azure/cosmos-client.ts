@@ -25,6 +25,12 @@ import '@/lib/azure/semantic-contract-model';
 // N10 — loom-answer-receipts doc shape + MIG1 migrator registration (module-scope
 // side effect: the chain is live before any read materializes).
 import '@/lib/azure/answer-receipts-model';
+// N13 — loom-prompt-registry + loom-token-budgets doc shapes + MIG1 migrator
+// registration (module-scope side effect; both are LEAF modules — they import
+// only cosmos-migrations (+ the pure cost-estimate price table) so this import
+// can never cycle back into cosmos-client).
+import '@/lib/azure/prompt-registry-model';
+import '@/lib/azure/token-budget-model';
 
 let _client: CosmosClient | null = null;
 let _db: Database | null = null;
@@ -289,6 +295,27 @@ let _copilotEvals: Container | null = null;
 // wraps reads. ARM-provisioned in cosmos.bicep's loomContainers; this is the
 // hotfix fallback.
 let _answerReceipts: Container | null = null;
+// N13 — Unified LLMOps prompt registry (loom-prompt-registry). Two doc kinds
+// share the partition: `docType:'prompt'` (the registered prompt — surface,
+// owner, activeVersion) and `docType:'prompt-version'` (one semver'd version
+// carrying its REAL E2 eval score + the audited approval record). PK /promptId
+// so "every version of this prompt" is a single-partition read and each is a
+// point-read by (id, promptId). NO defaultTtl — a prompt's approval history is a
+// permanent governance artifact. Doc shapes + MIG1 versioning + the pure semver
+// layer: lib/azure/prompt-registry-model.ts; store: lib/copilot/prompt-registry.ts.
+// ARM-provisioned in cosmos.bicep's loomContainers; this is the hotfix fallback.
+let _promptRegistry: Container | null = null;
+// N13 — per-workspace / per-agent token budgets (loom-token-budgets). Two doc
+// kinds share the partition: `docType:'budget'` (the configured cap) and
+// `docType:'usage'` (one accumulated-spend row per period, carrying a 400-day
+// `ttl` so history self-evicts). PK /scopeKey ('<scope>:<scopeId>') so the HOT
+// PATH check — read the budget + the current period's usage before an AOAI turn
+// — is a single-partition read. defaultTtl -1 = TTL enabled with no blanket
+// expiry (budget docs are durable; usage rows carry their own ttl). Doc shapes +
+// MIG1 versioning + the pure attribution math: lib/azure/token-budget-model.ts;
+// store + enforcement: lib/copilot/token-budget.ts. ARM-provisioned in
+// cosmos.bicep's loomContainers; this is the hotfix fallback.
+let _tokenBudgets: Container | null = null;
 // Scoped API tokens (PAT) — BR-PAT. One doc per token, PK /id so the hot
 // resolvePat() path (every non-interactive API request) is a single-partition
 // point-read by the token id carried in the Authorization: Bearer header. Stores
@@ -1202,6 +1229,23 @@ async function ensure() {
   // kinds (metric | vqr) share the partition. Created lazily so a fresh
   // environment needs no extra ARM/Bicep step beyond the account+database.
   _semanticContract = await mk('loom-semantic-contract', '/tenantId');
+  // N13 — LLMOps prompt registry. PK /promptId; no TTL (approval history is a
+  // permanent governance artifact). withMigrations wraps reads (MIG1).
+  _promptRegistry = withMigrations(
+    (await database.containers.createIfNotExists({
+      id: 'loom-prompt-registry', partitionKey: { paths: ['/promptId'] },
+    })).container,
+    'loom-prompt-registry',
+  );
+  // N13 — per-workspace/per-agent token budgets + usage ledger. PK /scopeKey;
+  // defaultTtl -1 = TTL enabled with no blanket expiry (budget docs durable,
+  // usage rows carry their own 400-day ttl). withMigrations wraps reads (MIG1).
+  _tokenBudgets = withMigrations(
+    (await database.containers.createIfNotExists({
+      id: 'loom-token-budgets', partitionKey: { paths: ['/scopeKey'] }, defaultTtl: -1,
+    })).container,
+    'loom-token-budgets',
+  );
   _ensured = true;
 }
 
@@ -1314,6 +1358,10 @@ export async function objectSyncJobsContainer(): Promise<Container> { await ensu
 export async function copilotEvalsContainer(): Promise<Container> { await ensure(); return _copilotEvals!; }
 /** N10 — Answer-receipt governance audit trail (loom-answer-receipts), PK /sessionId. */
 export async function answerReceiptsContainer(): Promise<Container> { await ensure(); return _answerReceipts!; }
+/** N13 — LLMOps prompt registry (loom-prompt-registry), PK /promptId. */
+export async function promptRegistryContainer(): Promise<Container> { await ensure(); return _promptRegistry!; }
+/** N13 — per-workspace/per-agent token budgets + usage ledger (loom-token-budgets), PK /scopeKey. */
+export async function tokenBudgetsContainer(): Promise<Container> { await ensure(); return _tokenBudgets!; }
 /** Scoped API tokens (PAT, BR-PAT) — PK /id; stores a SHA-256 hash of the secret only. */
 export async function loomPatTokensContainer(): Promise<Container> { await ensure(); return _loomPatTokens!; }
 /** BR-SCIM — SCIM 2.0 provisioned users (PK /id). */

@@ -354,6 +354,22 @@ var loomContainers = [
   // blanket expiry) so the trail self-evicts. createIfNotExists in
   // cosmos-client.ts ensure() remains the hotfix fallback.
   { name: 'loom-answer-receipts',  partitionKey: '/sessionId', ttl: -1 }
+  // N13 (Unified LLMOps) — governed PROMPT REGISTRY. Two doc kinds share the
+  // partition: `prompt` (surface, owner, activeVersion) and `prompt-version`
+  // (one semver'd version carrying its REAL copilot-evaluator score + the
+  // audited approval record). PK /promptId so "every version of this prompt" is
+  // a single-partition read. NO ttl — approval history is a permanent
+  // governance artifact (ATO evidence). createIfNotExists in cosmos-client.ts
+  // ensure() remains the hotfix fallback.
+  { name: 'loom-prompt-registry',  partitionKey: '/promptId' }
+  // N13 — per-workspace / per-agent TOKEN BUDGETS + the real-spend usage ledger.
+  // Two doc kinds share the partition: `budget` (the configured cap, durable)
+  // and `usage` (one accumulated-spend row per period, carrying its own 400-day
+  // `ttl`). PK /scopeKey ('<scope>:<scopeId>') so the aoai-chat-client hot-path
+  // check is a single-partition read. Container-level ttl: -1 turns TTL ON
+  // without a blanket expiry. createIfNotExists in cosmos-client.ts ensure()
+  // remains the hotfix fallback.
+  { name: 'loom-token-budgets',    partitionKey: '/scopeKey', ttl: -1 }
 ]
 
 resource loomDb 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases@2024-12-01-preview' = {
