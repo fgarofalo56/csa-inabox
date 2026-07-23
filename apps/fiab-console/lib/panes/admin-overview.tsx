@@ -27,7 +27,7 @@ import {
   ClipboardTask24Regular, Key24Regular, TagMultiple24Regular, Tag24Regular,
   Settings24Regular, People24Regular, Server24Regular, Heart24Regular,
   ShieldCheckmark24Regular, LockClosed16Regular, ToggleLeft24Regular,
-  DocumentBriefcase24Regular, type FluentIcon,
+  DocumentBriefcase24Regular, Money24Regular, type FluentIcon,
 } from '@fluentui/react-icons';
 import { SignInRequired } from '@/lib/components/sign-in-required';
 import type { OverviewTileKey, OverviewTiles, TileCount } from '@/app/api/admin/overview/route';
@@ -63,6 +63,8 @@ const TILE_SPECS: TileSpec[] = [
     description: 'Directory users (Graph $count)' },
   { key: 'capacity', href: '/admin/capacity', label: 'Capacity & compute', icon: Server24Regular,
     description: 'Azure resources Loom orchestrates' },
+  { key: 'finops', href: '/admin/finops', label: 'FinOps', icon: Money24Regular,
+    description: 'Forecast, cost anomalies, breakdown & budgets' },
   { key: 'openAuditItems', href: '/admin/health', label: 'Health & Reliability', icon: Heart24Regular,
     description: 'Self-audit, exercise probes & synthetic journeys' },
   { key: 'sensitivityLabels', href: '/admin/security', label: 'Security & governance', icon: ShieldCheckmark24Regular,
