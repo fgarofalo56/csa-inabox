@@ -37,6 +37,7 @@
  * `uamiArmCredential()` (they still ride the same chain this factory serves).
  */
 
+import { AsyncLocalStorage } from 'node:async_hooks';
 import type { AccessToken, GetTokenOptions, TokenCredential } from '@azure/identity';
 import { uamiArmCredential } from '@/lib/azure/arm-credential';
 import { workspaceIdentityMode } from '@/lib/azure/workspace-identity-client';
@@ -55,6 +56,28 @@ export interface CredentialContext {
 let sharedCredential: TokenCredential | undefined;
 function shared(): TokenCredential {
   return (sharedCredential ??= uamiArmCredential());
+}
+
+// ── Ambient workspace context (I3) ──────────────────────────────────────────
+// Migrated clients hold module-level lazy adapters that carry a `backend` but
+// no workspaceId. BFF routes that DO know the workspace wrap their backend
+// work in {@link runWithWorkspaceContext}; the factory then resolves the
+// ambient id at getToken time — no per-function ctx threading through client
+// call chains required. Node AsyncLocalStorage is request-safe on the Next.js
+// runtime (each request's async chain carries its own store).
+const workspaceContextStore = new AsyncLocalStorage<{ workspaceId: string }>();
+
+/** Run `fn` with an ambient workspace identity context — every factory-served
+ * credential resolution inside picks up the workspaceId (shadow observation /
+ * enforce minting) without explicit ctx threading. */
+export function runWithWorkspaceContext<T>(workspaceId: string, fn: () => Promise<T>): Promise<T> {
+  if (!workspaceId) return fn();
+  return workspaceContextStore.run({ workspaceId }, fn);
+}
+
+/** The ambient workspaceId, when a route established one. */
+export function ambientWorkspaceId(): string | undefined {
+  return workspaceContextStore.getStore()?.workspaceId;
 }
 
 // ── enforce-mode per-workspace credential LRU ───────────────────────────────
@@ -96,16 +119,25 @@ async function enforceCredential(workspaceId: string): Promise<TokenCredential> 
  */
 export async function credentialFor(ctx?: CredentialContext): Promise<TokenCredential> {
   const mode = workspaceIdentityMode();
-  if (mode === 'off' || !ctx?.workspaceId) return shared();
+  if (mode === 'off') return shared();
+  const workspaceId = ctx?.workspaceId || ambientWorkspaceId();
+  if (!workspaceId) return shared();
   if (mode === 'shadow') {
-    // I3 lands the shadow hook HERE (recordIdentityShadow — async, sampled,
-    // never blocking). In I5 the shadow branch is behaviorally identical to
-    // off: the call runs as the shared UAMI.
+    // I3 — the ONE shadow seam: the call keeps running as the shared UAMI
+    // (returned below, unchanged) while the divergence audit fires async
+    // (sampled, cached evaluation, never blocks, never throws). Lazy import
+    // keeps the off fast path free of the shadow module entirely.
+    if (ctx?.backend) {
+      const backend = ctx.backend;
+      void import('@/lib/azure/workspace-identity-shadow')
+        .then((m) => m.observeWorkspaceContext({ workspaceId, backend }))
+        .catch(() => undefined);
+    }
     return shared();
   }
   // enforce — per-workspace identity (I6 adds the per-workspace flag gate).
   try {
-    return await enforceCredential(ctx.workspaceId);
+    return await enforceCredential(workspaceId);
   } catch {
     return shared(); // belt-and-braces fail-safe (I7 rollback guarantee)
   }

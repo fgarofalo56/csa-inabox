@@ -111,6 +111,11 @@ async function writeShadowAudit(
   const divergence =
     legacyAllowed !== undefined ? legacyAllowed !== (decision.effect === 'allow') : undefined;
   await c.items.create({
+    // I3/F8 retention decision (applied to BOTH shadow families in the same
+    // PR): observation rows are access-decision recon data — 90-day TTL,
+    // honored because the audit-log container is TTL-enabled (defaultTtl -1;
+    // ordinary audit rows carry no ttl and remain permanent).
+    ttl: 90 * 24 * 3600,
     id: `pdp-shadow-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     itemId: resource.id,
     tenantId: principal.tenantId,

@@ -67,7 +67,10 @@ export const SECURITY_ENV_CHECKS: EnvSpec[] = [
   {
     id: 'svc-workspace-identity', category: 'security', title: 'Per-workspace managed identity (shadow → enforce)', severity: 'optional',
     required: ['LOOM_WORKSPACE_IDENTITY_MODE'],
-    anyOf: [['LOOM_WS_IDENTITY_SUB', 'LOOM_SUBSCRIPTION_ID'], ['LOOM_WS_IDENTITY_RG', 'LOOM_DLZ_RG']],
+    // I3: LOOM_WS_IDENTITY_SHADOW_SAMPLE is an optional tuning alias (code
+    // default 1.0) grouped with the mode var so an unset sample never warns —
+    // the svc-secret-expiry warn-days precedent. No new gate (folds here).
+    anyOf: [['LOOM_WS_IDENTITY_SUB', 'LOOM_SUBSCRIPTION_ID'], ['LOOM_WS_IDENTITY_RG', 'LOOM_DLZ_RG'], ['LOOM_WS_IDENTITY_SHADOW_SAMPLE', 'LOOM_WORKSPACE_IDENTITY_MODE']],
     warnOnMiss: true,
     // I1 — the SOLE Phase-0 exception to default-ON (loom_default_on_opt_out):
     // identity ENFORCEMENT is a security-posture change an operator phases in

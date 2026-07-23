@@ -14,14 +14,17 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
-const { uamiArmCredential, getWorkspaceCredential } = vi.hoisted(() => {
+const { uamiArmCredential, getWorkspaceCredential, observeWorkspaceContext } = vi.hoisted(() => {
   const SHARED = { __shared: true, async getToken() { return { token: 'SHARED', expiresOnTimestamp: Date.now() + 3600_000 }; } };
   return {
     uamiArmCredential: vi.fn(() => SHARED),
     getWorkspaceCredential: vi.fn(),
+    observeWorkspaceContext: vi.fn(async () => undefined),
   };
 });
 vi.mock('@/lib/azure/arm-credential', () => ({ uamiArmCredential }));
+// I3 — the shadow hook module (lazy-imported by the factory's shadow branch).
+vi.mock('@/lib/azure/workspace-identity-shadow', () => ({ observeWorkspaceContext }));
 vi.mock('@/lib/azure/workspace-identity-client', () => ({
   // The real mode fn just reads env — keep that behavior so tests drive it
   // through LOOM_WORKSPACE_IDENTITY_MODE like production does.
@@ -33,13 +36,15 @@ vi.mock('@/lib/azure/workspace-identity-client', () => ({
 }));
 
 import {
-  credentialFor, workspaceScopedCredential, __clearWorkspaceCredentialCache,
+  credentialFor, workspaceScopedCredential, runWithWorkspaceContext,
+  ambientWorkspaceId, __clearWorkspaceCredentialCache,
 } from '../workspace-credential-factory';
 
 beforeEach(() => {
   __clearWorkspaceCredentialCache();
   uamiArmCredential.mockClear();
   getWorkspaceCredential.mockReset();
+  observeWorkspaceContext.mockClear();
 });
 afterEach(() => {
   delete process.env.LOOM_WORKSPACE_IDENTITY_MODE;
@@ -60,12 +65,49 @@ describe('credentialFor — off mode (the zero-regression default)', () => {
   });
 });
 
-describe('credentialFor — shadow mode (behavior unchanged)', () => {
+describe('credentialFor — shadow mode (behavior unchanged + the I3 hook)', () => {
   it('returns the SHARED credential for a workspace-scoped call', async () => {
     process.env.LOOM_WORKSPACE_IDENTITY_MODE = 'shadow';
     const cred = await credentialFor({ workspaceId: 'ws1', backend: 'adls-lake' });
     expect((cred as any).__shared).toBe(true);
     expect(getWorkspaceCredential).not.toHaveBeenCalled();
+  });
+
+  it('I3: fires EXACTLY ONE shadow observation (async, non-blocking) and still returns shared', async () => {
+    process.env.LOOM_WORKSPACE_IDENTITY_MODE = 'shadow';
+    const cred = await credentialFor({ workspaceId: 'ws1', backend: 'adls-lake' });
+    expect((cred as any).__shared).toBe(true);
+    await new Promise((r) => setImmediate(r)); // let the fire-and-forget land
+    expect(observeWorkspaceContext).toHaveBeenCalledTimes(1);
+    expect(observeWorkspaceContext).toHaveBeenCalledWith({ workspaceId: 'ws1', backend: 'adls-lake' });
+  });
+
+  it('I3: no backend context → no observation (no noise rows)', async () => {
+    process.env.LOOM_WORKSPACE_IDENTITY_MODE = 'shadow';
+    await credentialFor({ workspaceId: 'ws1' });
+    await new Promise((r) => setImmediate(r));
+    expect(observeWorkspaceContext).not.toHaveBeenCalled();
+  });
+
+  it('I3: off mode → no observation ever (zero-regression default)', async () => {
+    await credentialFor({ workspaceId: 'ws1', backend: 'adls-lake' });
+    await new Promise((r) => setImmediate(r));
+    expect(observeWorkspaceContext).not.toHaveBeenCalled();
+  });
+});
+
+describe('runWithWorkspaceContext — ambient workspace context (I3)', () => {
+  it('threads the workspaceId to factory resolutions inside the scope', async () => {
+    process.env.LOOM_WORKSPACE_IDENTITY_MODE = 'shadow';
+    await runWithWorkspaceContext('ws-ambient', async () => {
+      expect(ambientWorkspaceId()).toBe('ws-ambient');
+      // A module-level adapter carries only a backend — the ambient id fills in.
+      const cred = await credentialFor({ backend: 'adls-lake' });
+      expect((cred as any).__shared).toBe(true);
+    });
+    await new Promise((r) => setImmediate(r));
+    expect(observeWorkspaceContext).toHaveBeenCalledWith({ workspaceId: 'ws-ambient', backend: 'adls-lake' });
+    expect(ambientWorkspaceId()).toBeUndefined(); // scope ended
   });
 });
 

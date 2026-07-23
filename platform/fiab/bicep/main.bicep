@@ -351,6 +351,9 @@ type workspaceIdentityConfigT = {
 
   @description('Resource group hosting the per-workspace UAMIs (LOOM_WS_IDENTITY_RG). Empty → the single-sub DLZ RG (which the console falls back to via LOOM_DLZ_RG). Also scopes the ws-identity-rbac Managed Identity Contributor grant for the Console UAMI.')
   wsIdentityRg: string?
+
+  @description('I3 shadow-audit sampling rate 0..1 (LOOM_WS_IDENTITY_SHADOW_SAMPLE). Empty → 1.0.')
+  wsIdentityShadowSample: string?
 }
 
 @description('Per-workspace identity settings bag (loom-next-level I1) — passed through to admin-plane workspaceIdentityConfig; wsIdentityRg additionally scopes the ws-identity-rbac grant below.')

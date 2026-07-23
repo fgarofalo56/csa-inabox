@@ -15,6 +15,7 @@ import { CosmosClient, type Container, type Database } from '@azure/cosmos';
 import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { withMigrations } from '@/lib/azure/cosmos-migrations';
+import { createTtlEnabledContainer } from '@/lib/azure/cosmos-ttl';
 // E2 — loom-copilot-evals doc shapes + MIG1 migrator registration (module-scope
 // side effect: the chain is live before any read materializes).
 import '@/lib/azure/copilot-evals-model';
@@ -729,7 +730,8 @@ async function ensure() {
   _userPrefs = await mk('user-prefs', '/userId');
   _tabsState = await mk('tabs-state', '/userId');
   _notifications = await mk('notifications', '/userId');
-  _auditLog = await mk('audit-log', '/itemId');
+  // I3/F8: TTL-enabled — shadow rows self-evict at 90d, others permanent (cosmos-ttl.ts).
+  _auditLog = withMigrations(await createTtlEnabledContainer(database, 'audit-log', '/itemId'), 'audit-log');
   _comments = await mk('comments', '/itemId');
   _shares = await mk('shares', '/itemId');
   _folders = await mk('folders', '/workspaceId');

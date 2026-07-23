@@ -87,6 +87,28 @@ The runtime verifier is `evaluateWorkspaceGrant(ws, uami, backend)` — the I3
 shadow path's "would it have had access?" resolver (live ARM/SQL/Kusto/Cosmos
 probe, cached 5 min per workspace+backend).
 
+## Shadow divergence audit (I3) — retention + classification
+
+With `LOOM_WORKSPACE_IDENTITY_MODE=shadow`, the credential factory records
+`kind:'identity.shadow'` rows into the existing `audit-log` container (never a
+new container — the `pdp.shadow` precedent). Per rev-2 **F8**:
+
+- **Classification: access-control sensitive — tenant-admin read only.** A
+  shadow row is a map of where least-privilege is NOT yet satisfied
+  (access-decision recon). The audit-log admin surfaces are tenant-admin
+  gated; the I4 report route must keep that gate (test required with I4).
+- **Retention: 90-day TTL** on every `identity.shadow` row (and the sibling
+  `pdp.shadow` rows — same decision, same PR). The audit-log container is
+  TTL-enabled (`defaultTtl: -1`) so ordinary audit rows, which carry no `ttl`
+  field, remain permanent.
+- **Cost/RU (F10):** at sampling 1.0, writes ≈ workspace-context calls/s × ~5 RU
+  on the shared serverless account; the grant evaluation itself is cached
+  (5 min per workspace+backend) so probe cost is O(workspaces×backends).
+  `LOOM_WS_IDENTITY_SHADOW_SAMPLE` (0..1, default 1.0; bicep
+  `workspaceIdentityConfig.wsIdentityShadowSample`) is the per-estate lever.
+- **Query:** rows are visible in Admin → Audit Logs (`c.kind =
+  'identity.shadow'`); the dedicated divergence report + readiness rollup is I4.
+
 ## Scale ceilings (I8 summary)
 
 - **4,000 ARM role assignments / subscription (fixed).** The matrix keeps the
