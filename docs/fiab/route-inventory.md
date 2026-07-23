@@ -13,11 +13,11 @@ same classic + WS-D1 toolkit export styles).
 
 | Metric | Count |
 | --- | ---: |
-| Total routes | 1560 |
-| Public (no session) | 109 |
+| Total routes | 1556 |
+| Public (no session) | 110 |
 | Session-only | 571 |
 | Owner-scoped | 632 |
-| Admin | 248 |
+| Admin | 243 |
 | Gated (backend config) | 511 |
 | Areas | 104 |
 
@@ -119,9 +119,6 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `admin/coe-library/render/route.ts` | GET POST | admin |  | — |
 | `admin/coe-library/route.ts` | GET POST DELETE | admin |  | Cosmos |
 | `admin/copilot-config/route.ts` | GET PUT | admin |  | Cosmos |
-| `admin/copilot-quality/[surface]/route.ts` | GET | admin |  | — |
-| `admin/copilot-quality/route.ts` | GET | admin |  | — |
-| `admin/copilot-quality/run/route.ts` | POST | admin | ● | Cosmos |
 | `admin/copilot-usage/route.ts` | GET | admin |  | Azure Monitor |
 | `admin/copilot/memory/[id]/route.ts` | DELETE | admin |  | — |
 | `admin/copilot/memory/audit/route.ts` | GET | admin |  | — |
@@ -132,7 +129,6 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `admin/deploy-plan/route.ts` | GET PUT | admin |  | Cosmos |
 | `admin/developer/tokens/[id]/route.ts` | DELETE | admin |  | — |
 | `admin/developer/tokens/route.ts` | GET | admin |  | — |
-| `admin/diagnostics/bundle/route.ts` | GET | admin |  | Cosmos |
 | `admin/domains/[id]/inventory/route.ts` | GET | admin |  | — |
 | `admin/domains/assign-workspaces/route.ts` | POST | admin |  | Cosmos |
 | `admin/domains/images/route.ts` | GET | admin |  | ADLS |
@@ -234,7 +230,6 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `admin/security/purview/sources/route.ts` | GET POST DELETE | admin | ● | Purview |
 | `admin/self-audit/route.ts` | GET POST | admin |  | — |
 | `admin/sensitivity-labels/route.ts` | GET POST DELETE | admin |  | Cosmos |
-| `admin/slo/route.ts` | GET | admin |  | — |
 | `admin/spark-telemetry/audit/route.ts` | GET POST | admin |  | — |
 | `admin/spark/health/route.ts` | GET | admin | ● | Synapse |
 | `admin/synthetic-runs/route.ts` | GET | admin | ● | — |
@@ -872,7 +867,6 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `internal/copilot/skills/learn/route.ts` | GET POST | public |  | — |
 | `internal/copilot/tools/[name]/invoke/route.ts` | POST | public |  | — |
 | `internal/copilot/tools/route.ts` | GET | public |  | — |
-| `internal/cost-anomaly/run/route.ts` | POST | public | ● | Cosmos |
 | `internal/scheduler/tick/route.ts` | POST | public | ● | — |
 | `internal/spark/keep-warm/route.ts` | GET POST | public | ● | — |
 | `internal/topology/register-domain/route.ts` | POST | public |  | — |
@@ -1319,7 +1313,9 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `items/map/[id]/map-token/route.ts` | GET | owner-scoped |  | Azure Maps |
 | `items/map/[id]/route.ts` | GET PATCH DELETE | owner-scoped |  | — |
 | `items/mapping-dataflow/[id]/debug/preview/route.ts` | POST | session-only | ● | ADF |
+| `items/mapping-dataflow/[id]/debug/schema/route.ts` | POST | public | ● | ADF |
 | `items/mapping-dataflow/[id]/debug/session/route.ts` | POST | session-only | ● | ADF |
+| `items/mapping-dataflow/[id]/debug/stats/route.ts` | POST | public | ● | ADF |
 | `items/materialized-lake-view/[id]/adf-pipeline/route.ts` | GET POST | owner-scoped | ● | ADF |
 | `items/materialized-lake-view/[id]/assist/route.ts` | — | public |  | — |
 | `items/materialized-lake-view/[id]/lineage/route.ts` | GET POST | owner-scoped |  | — |

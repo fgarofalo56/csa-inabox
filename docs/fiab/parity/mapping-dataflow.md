@@ -80,8 +80,8 @@ to row-6 single-stream inline preview). UI: `dataflow-debug-panel.tsx`.
 | U7-1 | **Held debug session** (toggle Debug → 1 cluster for the loop) w/ TTL chip | ✅ built (PR-1) | `POST …/mapping-dataflow/[id]/debug/session` acquire/release → `create/deleteDataFlowDebugSession` |
 | U7-2 | **Data preview per transform** (type-badged grid + timing status bar) | ✅ built (PR-1) | `POST …/debug/preview` → `addDataFlowToDebugSession` + `executePreviewQuery`; shared `PreviewTable` |
 | U7-3 | Preview reflects **unsaved** in-canvas edits | ✅ built (PR-1) | route re-adds the live serialized graph package before each preview |
-| U7-4 | **Inspect** — in/out schema per transform + schema-drift badges | ⏳ U7 PR-2 | `GET …/debug/schema` → `parseDfsSchema`/`diffSchemas` (helper landed PR-1) |
-| U7-5 | **Statistics** — null %/distinct/min/max/mean/stddev + histograms | ⏳ U7 PR-2 | `POST …/debug/stats` → `computeColumnStats` over the sample (helper landed PR-1) |
+| U7-4 | **Inspect** — in/out schema per transform + schema-drift badges | ✅ built (PR-2) | `POST …/debug/schema` → previews out + primary-input streams → `parseDfsSchema`/`diffSchemas` |
+| U7-5 | **Statistics** — null %/distinct/min/max/mean/stddev + histograms | ✅ built (PR-2) | `POST …/debug/stats` → `computeColumnStats` over the sample; top-value mini-histograms via `loom-chart` |
 | U7-6 | **Quick-actions** — preview column → Typecast/Modify/Remove inserts a transform | ⏳ U7 PR-3 | preview-grid column context menu → draft graph mutation |
 
 ### Canvas + transforms (delegated to the shared designer)
