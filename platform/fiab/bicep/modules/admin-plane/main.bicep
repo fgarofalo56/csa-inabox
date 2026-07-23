@@ -4087,6 +4087,21 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           atlasOnAksEnabled ? [
             { name: 'LOOM_ATLAS_ENDPOINT', value: catalog.outputs.atlasEndpoint }
           ] : [],
+          // OpenLineage Spark column-lineage ingest (loom-next-level L2, rev-2
+          // SRE-F2 redesign). AUTH_MODE selects the verifier: 'entra' (default —
+          // per-pool AAD bearer, JWKS-validated, tenant+audience pinned) or
+          // 'workspace-token' (per-WORKSPACE minted tokens). NEVER one global
+          // static secret: the per-pool credential→workspace registration
+          // (LOOM_OPENLINEAGE_POOL_PRINCIPALS) / the per-workspace token secret
+          // (LOOM_OPENLINEAGE_WORKSPACE_TOKEN secretRef) are minted + rotated by
+          // scripts/csa-loom/openlineage-pool-setup.sh (the svc-openlineage
+          // Fix-it wizard) — not baked here. ENDPOINT is the IN-VNET console URL
+          // stamped onto the Spark pools (informational + the wizard's source of
+          // truth); the ingest route itself rejects the public Front Door path.
+          [
+            { name: 'LOOM_OPENLINEAGE_AUTH_MODE', value: 'entra' }
+            { name: 'LOOM_OPENLINEAGE_ENDPOINT', value: 'https://loom-console.${containerPlatformModule.outputs.caeDefaultDomain}/api/lineage/openlineage' }
+          ],
           loomMipEnabled ? [
             { name: 'LOOM_MIP_ENABLED', value: 'true' }
           ] : [],

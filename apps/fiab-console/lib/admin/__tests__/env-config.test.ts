@@ -200,8 +200,10 @@ describe('admin/env-config registry', () => {
     // (161) → C2 svc-cost-forecast adds LOOM_COST_FORECAST_HORIZON_DAYS +
     // LOOM_COST_FORECAST_METHOD (both optionalDefault tuning knobs — the
     // forecast runs day-one unset: 30-day horizon, method 'auto' = real
-    // Forecast API → computed linear/seasonal fallback) (163).
-    expect(EDITABLE_ENV.length).toBe(163);
+    // Forecast API → computed linear/seasonal fallback) (163) → L2
+    // svc-openlineage adds LOOM_OPENLINEAGE_AUTH_MODE (164; the per-pool
+    // credential registrations are secretRef-typed, not editable env).
+    expect(EDITABLE_ENV.length).toBe(164);
   });
 
   it('surfaces the wave-2 env vars as settable (previously dropped by the whitelist)', () => {
@@ -289,6 +291,10 @@ describe('admin/env-config registry', () => {
       'LOOM_EVENTGRID_TOPIC_ENDPOINT', 'LOOM_EVENTGRID_TOPIC_KEY',
       'LOOM_GRAPH_GROUP_SYNC_ENABLED',
       'LOOM_LANGUAGE_ENDPOINT', 'LOOM_MESH_PROFILE', 'LOOM_ONELAKE_URL',
+      // L2 svc-openlineage — unset credential = the OpenLineage feed is an
+      // ADDITIVE source that is silently absent while UC / dbt / ADF column
+      // lineage keep flowing (default-ON preserved; pool-setup wizard adds it).
+      'LOOM_OPENLINEAGE_AUTH_MODE',
       'LOOM_PLAN_BACKING_SQL_DATABASE', 'LOOM_PLAN_BACKING_SQL_SERVER',
       'LOOM_RESULT_CACHE_REDIS',
       'LOOM_TRANSLATOR_ENDPOINT', 'LOOM_VISION_ENDPOINT',

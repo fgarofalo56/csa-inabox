@@ -13,13 +13,13 @@ same classic + WS-D1 toolkit export styles).
 
 | Metric | Count |
 | --- | ---: |
-| Total routes | 1549 |
-| Public (no session) | 107 |
+| Total routes | 1550 |
+| Public (no session) | 108 |
 | Session-only | 568 |
 | Owner-scoped | 632 |
 | Admin | 242 |
 | Gated (backend config) | 507 |
-| Areas | 102 |
+| Areas | 103 |
 
 **Auth scope** — `public`: no session check; `session-only`: signed-in but
 no per-resource authz; `owner-scoped`: owner/workspace-ACL check on the
@@ -1645,6 +1645,12 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | Route | Methods | Auth scope | Gated | Backends |
 | --- | --- | --- | :---: | --- |
 | `learn/notebook-import/route.ts` | GET POST | owner-scoped |  | Cosmos |
+
+## lineage
+
+| Route | Methods | Auth scope | Gated | Backends |
+| --- | --- | --- | :---: | --- |
+| `lineage/openlineage/route.ts` | POST | public |  | Cosmos |
 
 ## loom
 

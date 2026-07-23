@@ -228,6 +228,12 @@ export const VALUE_HINT: Record<string, string> = {
   LOOM_PGVECTOR_HOST: '<postgres-flexible-server>.postgres.database.azure.com',
   LOOM_WEAVE_PG_FQDN: '<postgres-flexible-server>.postgres.database.azure.com',
   LOOM_DBT_RUNNER_URL: 'https://loom-dbt-runner.<aca-env-domain>',
+  // L2 — Synapse-Spark OpenLineage ingest (rev-2 security redesign): per-pool
+  // Entra bearer (default) or per-workspace minted token; NEVER one global
+  // static secret. The endpoint is the in-VNet console URL the pool posts to.
+  LOOM_OPENLINEAGE_AUTH_MODE: 'entra  (or workspace-token)',
+  LOOM_OPENLINEAGE_ENDPOINT: 'https://loom-console.<aca-env-domain>/api/lineage/openlineage',
+  LOOM_OPENLINEAGE_POOL_PRINCIPALS: '<pool-app-client-id>=<workspace-id>[,...]  (entra mode; minted by openlineage-pool-setup.sh)',
   LOOM_APPROVAL_LOGIC_APP_NAME: '<logic-app-name (pipeline approvals)>',
   LOOM_SHIR_VMSS_NAME: '<shir-vmss-name>',
   LOOM_PURVIEW_SHIR_VMSS_NAME: '<purview-shir-vmss-name>',

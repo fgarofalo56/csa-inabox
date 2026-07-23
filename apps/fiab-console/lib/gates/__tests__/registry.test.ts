@@ -123,6 +123,21 @@ describe('gate live status (evalEnv-backed)', () => {
     expect(st.status).toBe('configured');
   });
 
+  it('svc-openlineage (L2) is default-ON absent (additive source) with a wizard Fix-it', () => {
+    // Unset credential → the OpenLineage feed is silently absent while the
+    // OTHER column-lineage sources keep flowing — optionalDefault posture, so
+    // the gate reads 'configured' (never a red day-one state).
+    delete process.env.LOOM_OPENLINEAGE_AUTH_MODE;
+    const st = gateStatus('svc-openlineage')!;
+    expect(st.status).toBe('configured');
+    // The enrichment is the pool-setup WIZARD (mint credential + pool config),
+    // never a bare env write, and both L5 lineage surfaces are named.
+    const meta = GATE_META['svc-openlineage'];
+    expect(meta.fixit.kind).toBe('wizard');
+    expect(meta.surfaces.map((s) => s.path)).toEqual(['/items/lakehouse', '/catalog']);
+    expect(meta.legacyCodes).toContain('openlineage_not_configured');
+  });
+
   it('svc-digital-twins is satisfied by the ADX graph-twin default (no Azure Digital Twins needed)', () => {
     // GCC-High has no Azure Digital Twins; the ADX graph-twin is the default
     // backend, gated on LOOM_KUSTO_CLUSTER_URI (emitted whenever adxEnabled).

@@ -93,6 +93,19 @@ param logAnalyticsLinkedServiceName string = ''
 @description('LA data-collector URI suffix. ods.opinsights.azure.com (Commercial/GCC); ods.opinsights.azure.us (Azure Government / GCC-High / IL5).')
 param logAnalyticsUriSuffix string = 'ods.opinsights.azure.com'
 
+// ── OpenLineage listener (loom-next-level L2) — R0 CONFIG BAG (never new
+//    scalar top-level params). Same split as the LA emitter above: bicep bakes
+//    ONLY the secret-free conf lines, and ONLY when an ingest URL is supplied;
+//    the per-pool CREDENTIAL (spark.openlineage.transport.auth.*) is NEVER
+//    inlined here — scripts/csa-loom/openlineage-pool-setup.sh mints it,
+//    uploads the openlineage-spark listener jar as a Synapse WORKSPACE LIBRARY
+//    (required: DEP-enabled workspaces cannot pull from public repos — Learn:
+//    apache-spark-azure-create-spark-configuration), and stamps the auth conf.
+//    Default {} → zero OL lines (deploy-safe honest gate; the pool-config step
+//    is the documented one-time action, per the svc-openlineage Fix-it wizard).
+@description('OpenLineage listener config bag: { ingestUrl: string (the in-VNet console ingest URL, e.g. https://loom-console.<cae-domain>/api/lineage/openlineage), namespace: string (default loom) }. Empty (default) omits the OpenLineage conf lines; openlineage-pool-setup.sh applies listener + credential post-deploy.')
+param openLineageConfig object = {}
+
 @description('Workload tier definitions. Each object: { name, nodeSize (Small/Medium/Large/XLarge/XXLarge), minNodes (>=3), maxNodes (<=200), autoPauseMinutes }. Sizes are parameterized; autopause stays on for every tier.')
 param sparkTiers array = [
   {
@@ -153,7 +166,22 @@ var laEmitterLines = empty(logAnalyticsWorkspaceGuid) ? [] : concat(
   ] : []
 )
 
-var sparkConfigContent = join(concat(baseConfLines, laEmitterLines), '\n')
+// ── OpenLineage listener lines (L2) — appended ONLY when an ingest URL is in
+//    the config bag. spark.extraListeners registers the openlineage-spark
+//    agent (the jar itself is a workspace library — see openlineage-pool-setup
+//    .sh); the http transport posts RunEvents to the Console's IN-VNET ingest
+//    route (rev-2 security redesign: never the public Front Door host). The
+//    transport auth conf (spark.openlineage.transport.auth.*) is a SECRET and
+//    is stamped by the setup script, never baked here.
+var openLineageIngestUrl = string(openLineageConfig.?ingestUrl ?? '')
+var openLineageLines = empty(openLineageIngestUrl) ? [] : [
+  'spark.extraListeners io.openlineage.spark.agent.OpenLineageSparkListener'
+  'spark.openlineage.transport.type http'
+  'spark.openlineage.transport.url ${openLineageIngestUrl}'
+  'spark.openlineage.namespace ${string(openLineageConfig.?namespace ?? 'loom')}'
+]
+
+var sparkConfigContent = join(concat(baseConfLines, laEmitterLines, openLineageLines), '\n')
 
 // ── The tiered pools. Auto-pause + autoscale keep idle cost at zero. A dynamic
 //    executor allocation window mirrors loompool (min 1 → max nodes-1).
