@@ -143,6 +143,19 @@ Stacked PRs whose base rode a now-merged sibling were landed via
 base commit); runtime-flags array + route-inventory conflicts resolved per the
 recorded recipes.
 
+**Roll (EXECUTED 2026-07-23):** `loom-roll-and-validate` run 30035741188 →
+**success** on `image_tag=693cb1bf724efbcc6125ab56ba13d10c7281b128` +
+`expected_sha=693cb1bf` (the #2488 SHA — last app-affecting commit; #2489 was
+docs/script-only, no image). Console image built on the 16 GB `loombuild` S3
+pool (the DAX build's tsc-step heap OOM was intermittent / pass-by-luck — a
+proactive Dockerfile heap bump is queued as the next build chore). Live receipt:
+`build-marker.txt` + `/api/version` both = `sha=693cb1bf…`. **All gates green:**
+vitest-confirmation gate → live-URL validation → in-VNet `loom-uat` Playwright
+gate (the automated G1 receipt for every user-visible Wave-E surface — A9 matrix
+CF, C4 finops, U7 dataflow debug, E5 copilot-quality, DIAG1, SLO1) — no
+rollback. A concurrent auto-fired `workflow_run` roll was cancelled to avoid a
+double ACA write; the SHA-pinned dispatch is the authoritative one.
+
 ## Phase boundaries (FRESH0 runs)
 
 | Boundary | Date | Result |
