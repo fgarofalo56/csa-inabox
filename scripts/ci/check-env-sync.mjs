@@ -93,6 +93,7 @@ const ALLOWLIST = new Set([
   'LOOM_TEMPLATE_TENANT',           // opt-in multi-tenant template mode
   'LOOM_SKIP_DEPLOY_PREFLIGHT',     // dev/opt-in escape hatch
   'LOOM_MAPS_GEOCODE_URL',          // opt-in self-hosted OSS Nominatim (OpenStreetMap) geocoder for the MapLibre (GCC-High) backend; unset => the map's address-geocode sub-feature honest-gates (503) while lat/long + filled layers render. Not a deploy dependency.
+  'LOOM_OPENLINEAGE_AUDIENCE',      // L2 opt-in override of the OpenLineage ingest's pinned token audience (defaults to the bicep-wired LOOM_MSAL_CLIENT_ID / api://<clientId>) — runtime-only, never a deploy dependency
   'LOOM_PYLSP_DEBUG',               // dev-only language-server debug flag
   'LOOM_PYLSP_PYTHON',              // dev-only python path override
   'LOOM_POWERPLATFORM_ASSUME_CRED', // opt-in Power Platform cred mode

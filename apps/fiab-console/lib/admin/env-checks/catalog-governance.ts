@@ -38,4 +38,20 @@ export const CATALOG_GOVERNANCE_ENV_CHECKS: EnvSpec[] = [
     provisionedBy: 'main.bicep (purviewEnabled) → admin-plane apps[] env',
     role: 'Purview Data Map role (Console UAMI) on the root collection',
   },
+  // L2 — Synapse-Spark OpenLineage column-lineage feed (loom-next-level WS-L).
+  // ADDITIVE source: the auth-mode var is bicep-emitted (entra default), but the
+  // per-pool credential + listener jar are a pool-config step (the pool-setup
+  // script / Fix-it wizard) — until then the OpenLineage source is silently
+  // absent while UC / dbt / ADF column lineage keep flowing (default-ON).
+  {
+    id: 'svc-openlineage', category: 'catalog-governance',
+    title: 'Spark column lineage (OpenLineage)', severity: 'optional',
+    required: ['LOOM_OPENLINEAGE_AUTH_MODE'], warnOnMiss: true,
+    optionalDefault: true,
+    availability: { commercial: 'ga', gccHigh: 'ga', il5: 'ga' },   // X2 field
+    optionalDefaultDetail: 'Column lineage still flows from Databricks UC, dbt, and ADF Copy mappings; the Synapse-Spark OpenLineage feed is an additive source.',
+    remediation: 'Run scripts/csa-loom/openlineage-pool-setup.sh to install the listener + mint the per-pool credential on the Spark pool.',
+    provisionedBy: 'modules/landing-zone/synapse-spark-pools.bicep (sparkConfigProperties + workspace library) → apps[] env',
+    role: 'Synapse Spark pool contributor (to upload the workspace library)',
+  },
 ];
