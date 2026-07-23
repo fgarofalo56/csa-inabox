@@ -1,6 +1,6 @@
 {
   "name": "@csa-loom/fiab-console",
-  "version": "0.74.0",
+  "version": "0.75.0",
   "private": true,
   "license": "MIT",
   "description": "CSA Loom Console — Microsoft Fabric workspace experience for Azure Government tenants",

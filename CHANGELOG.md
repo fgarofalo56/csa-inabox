@@ -25,6 +25,45 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.75.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.74.0...csa-inabox-v0.75.0) (2026-07-23)
+
+
+### Features
+
+* **a11y:** V3 — axe baseline ratchet with strict color-contrast gate (loom-next-level) ([#2433](https://github.com/fgarofalo56/csa-inabox/issues/2433)) ([53e6215](https://github.com/fgarofalo56/csa-inabox/commit/53e621516b9771ade65a0e6f84f7e5dceb1724fa))
+* **admin:** A10 — Spark pool health dashboard tab on the Health & Reliability hub ([#2444](https://github.com/fgarofalo56/csa-inabox/issues/2444)) ([be01e93](https://github.com/fgarofalo56/csa-inabox/commit/be01e9393c87573212b91baf0f0277f58121dbd4))
+* **ci:** E4 — copilot-quality-evals workflow (corpus triggers + nightly) + post-roll eval re-baseline ([#2428](https://github.com/fgarofalo56/csa-inabox/issues/2428)) ([30cb5b4](https://github.com/fgarofalo56/csa-inabox/commit/30cb5b408c83dd09c68a2ca8a6bf7aead650b34a))
+* **ci:** R2 — route-toolkit codemod + copilot pilot migration (20 handlers, 14 files) ([#2431](https://github.com/fgarofalo56/csa-inabox/issues/2431)) ([dfdf687](https://github.com/fgarofalo56/csa-inabox/commit/dfdf68777316f98e7abe835b8a863f5fef3378f4))
+* **ci:** R3 — shared ratchet mechanic + route-toolkit forbidding guard (baseline 1345) ([#2432](https://github.com/fgarofalo56/csa-inabox/issues/2432)) ([f8a23a9](https://github.com/fgarofalo56/csa-inabox/commit/f8a23a9f595c2cc82d043940b01d9dd78e7dddae))
+* **ci:** V5 live bicep-drift detection — FIAB PR what-if lane + weekly cross-estate drift check ([#2425](https://github.com/fgarofalo56/csa-inabox/issues/2425)) ([e514ecb](https://github.com/fgarofalo56/csa-inabox/commit/e514ecb34ba73763d98b996f5b30dd2f32d3b7d9))
+* **copilot-evals:** E3 — per-surface eval-score floors + regression gate + raise-only ratchet ([#2426](https://github.com/fgarofalo56/csa-inabox/issues/2426)) ([a9e18b3](https://github.com/fgarofalo56/csa-inabox/commit/a9e18b339524b7dff37a2caeb53b51102fce0428))
+* **cost:** COST0 — loom-next-level program run-rate budget + tag convention ([#2427](https://github.com/fgarofalo56/csa-inabox/issues/2427)) ([23bc674](https://github.com/fgarofalo56/csa-inabox/commit/23bc674cd2a4d9bfcff405834df209be921d0658))
+* **dr:** DR1-DR3 — real restore drills in dr-drill.yml (cosmos PITR + ADLS soft-delete + KV recovery) ([#2447](https://github.com/fgarofalo56/csa-inabox/issues/2447)) ([37fb28f](https://github.com/fgarofalo56/csa-inabox/commit/37fb28f55f3125b19e59fb89b07ba68b330fd81e))
+* **finops:** C2 — real Cost Management Forecast API + honest linear/seasonal fallback ([#2430](https://github.com/fgarofalo56/csa-inabox/issues/2430)) ([784dfae](https://github.com/fgarofalo56/csa-inabox/commit/784dfaebd59161aab57292cc54b25c881b0dd5d0))
+* **identity:** I2 — full per-backend scoped-grant matrix for workspace UAMIs (workspace-grants.ts) ([#2445](https://github.com/fgarofalo56/csa-inabox/issues/2445)) ([986f905](https://github.com/fgarofalo56/csa-inabox/commit/986f905616a1f2abba4629d8a2b047bd73338e2d))
+* **identity:** I5 — per-workspace credential factory + adoption ratchet (pilot batch) ([#2449](https://github.com/fgarofalo56/csa-inabox/issues/2449)) ([2e90ca8](https://github.com/fgarofalo56/csa-inabox/commit/2e90ca833c6b5ed89836438f89fc98f31bd18e6e))
+* **lineage:** L2 — Spark OpenLineage listener + security-redesigned ingest (per-pool auth, workspace-scoped, in-VNet) ([#2448](https://github.com/fgarofalo56/csa-inabox/issues/2448)) ([6652ab5](https://github.com/fgarofalo56/csa-inabox/commit/6652ab5a6b1d5baa5dfc351f49e438ee077e3d5f))
+* **notebook:** U3 — per-cell resizable height (auto-until-first-drag, FLAG0-gated) ([#2446](https://github.com/fgarofalo56/csa-inabox/issues/2446)) ([3f618fe](https://github.com/fgarofalo56/csa-inabox/commit/3f618fe870d5baa0394669949f4b49c82b933cd9))
+* **o1:** unified alert-dispatch + on-call standard (loom-next-level O1) ([#2429](https://github.com/fgarofalo56/csa-inabox/issues/2429)) ([f16bf60](https://github.com/fgarofalo56/csa-inabox/commit/f16bf60a1cdc6a97f1e28e16ad9edc7eef6092c9))
+* **rum1:** client-side real-user monitoring — browser timings/vitals/errors → App Insights ([#2434](https://github.com/fgarofalo56/csa-inabox/issues/2434)) ([fb8c675](https://github.com/fgarofalo56/csa-inabox/commit/fb8c675620abfb4409c4d9d4feb93454b14acc47))
+* **U1:** report-designer full G3 — flag-gated resizable canvas height ([#2443](https://github.com/fgarofalo56/csa-inabox/issues/2443)) ([d57474f](https://github.com/fgarofalo56/csa-inabox/commit/d57474f1deed6bd9f37af38950fb466216ef4a75))
+* **ui:** U4 — Workshop + Slate app-builder canvas viewports get G3 resizable height ([#2441](https://github.com/fgarofalo56/csa-inabox/issues/2441)) ([fe04518](https://github.com/fgarofalo56/csa-inabox/commit/fe04518ea8dcafcd940cc0e9a89568b205da2bad))
+* **ui:** U5 — fixed-height stragglers get G3 resizable regions (agent-mesh, KQL-dashboard grid, object view, entity-diagram default) ([#2442](https://github.com/fgarofalo56/csa-inabox/issues/2442)) ([160850e](https://github.com/fgarofalo56/csa-inabox/commit/160850ea2f8e85c670452868e36820e2213df508))
+* **ui:** U6 — query↔results split divider across the 11 Monaco query editors ([#2450](https://github.com/fgarofalo56/csa-inabox/issues/2450)) ([9996f7f](https://github.com/fgarofalo56/csa-inabox/commit/9996f7ff63a06e82223727646f02c67606eea41c))
+* **verify:** V4 — route-smoke coverage ratchet over every app/**/page.tsx (loom-next-level) ([#2440](https://github.com/fgarofalo56/csa-inabox/issues/2440)) ([a263401](https://github.com/fgarofalo56/csa-inabox/commit/a263401f2035399946381c8fe4bf5e681d7b93a7))
+* **visual:** V2 — screenshot-diff of 25 hub surfaces x light/dark x wide/narrow (loom-next-level) ([#2439](https://github.com/fgarofalo56/csa-inabox/issues/2439)) ([25d4802](https://github.com/fgarofalo56/csa-inabox/commit/25d480269a9327c0bd7df48d191ebb3c3224b93e))
+
+
+### Bug Fixes
+
+* **finops:** cost-forecast rides uamiArmCredential (I5 adoption ratchet — main was 131&gt;130) ([#2454](https://github.com/fgarofalo56/csa-inabox/issues/2454)) ([151b923](https://github.com/fgarofalo56/csa-inabox/commit/151b9231df32ad2e077d0b12e5938f51adcc3ccc))
+
+
+### Documentation
+
+* **prp:** loom-next-level 0→1 boundary — FRESH0 strict pass, re-baseline, Phase-0 ledger complete ([#2422](https://github.com/fgarofalo56/csa-inabox/issues/2422)) ([e9d37e1](https://github.com/fgarofalo56/csa-inabox/commit/e9d37e1d31c6cbc1e4c484886a74cb1da817f152))
+* **prp:** Phase-0 roll + live G1 receipts recorded (roll 29963010863, marker a0eded62) ([#2424](https://github.com/fgarofalo56/csa-inabox/issues/2424)) ([dec4734](https://github.com/fgarofalo56/csa-inabox/commit/dec47341d313550fa67a5b923d914adc110d5d56))
+
 ## [0.74.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.73.1...csa-inabox-v0.74.0) (2026-07-22)
 
 
