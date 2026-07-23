@@ -279,6 +279,49 @@ are W1-W4 and are **untouched** by this wave.
   honoured only when its column is present in the result rows (no phantom facet).
   Gated by the `a6-small-multiples-grid` FLAG0 runtime flag (default-ON; OFF
   reverts to the pre-A6 well-facet-only path — auto-fill columns, shared Y).
+- **A7 — analytics-pane depth VERIFIED + golden-covered (2026-07-23):** the full
+  Power BI analytics line set already ships end-to-end — config UI (`AnalyticsPane`),
+  compute (`computeReferenceLines` for trend / constant / min / max / average /
+  median / percentile; `computeErrorBars` field/percent/value; `computeForecast`
+  linear + additive-seasonal + √h band; `computeSymmetry`; `computeAnomalies`
+  rolling z-score band + ADX `series_decompose_anomalies` opt-in) and render
+  (LoomChart `RefLinesY`/`RefLinesX`, `AnomalyOverlayV`, error-bar whiskers). A7
+  closed the remaining gap — the compute layer had **zero tests** — with a golden
+  numeric harness (`__tests__/analytics-pane.test.ts`, 19 cases) pinning each
+  statistic to an exact value over seeded data and proving the anomaly band flags
+  a real injected outlier (A7 acceptance). No new surface ⇒ no FLAG0 flag.
+- **A8 — report Map Gov honest-gate + basemap-free choropleth fallback
+  (2026-07-23):** the report Map visual (`map-visual.tsx`) uses Azure Maps, which
+  is **unavailable in GCC/Gov**. Before A8 the gate dead-ended at a MessageBar +
+  aggregate-rows table (no map). A8 adds a basemap-free **shape-map fallback**:
+  when the visual is gated AND a location binding exists, `ShapeMapFallback`
+  renders a REAL offline map via the self-contained `GeoJsonMap` SVG renderer —
+  a choropleth over the bundled OSS TopoJSON (`public/maps/topojson/countries-110m.json`,
+  a same-origin asset — **no external tile / `atlas.microsoft.com` call on the Gov
+  path**) for Location + Size, or a lat/long point plot — with an honest **info**
+  (not red) banner: "Azure Maps unavailable in this cloud — shape-map fallback",
+  naming `LOOM_MAPS_BACKEND=azure-maps` (Commercial) / `=maplibre` (Gov tileserver)
+  + `azure-maps.bicep`. Model builder `buildShapeFallbackModel` (unit-tested,
+  `__tests__/map-shape-fallback.test.ts`, 8 cases). FLAG0 flag
+  `a8-map-shape-fallback` (default-ON; OFF reverts to the pre-A8 table-only gate).
+  **Per-cloud:** Commercial = live Azure Maps; Gov = live offline choropleth.
+- **A9 — drill-through / interaction / conditional-format parity (2026-07-23):**
+  the interaction model already ships end-to-end — **drill-through** (right-click
+  visual → "Drill through to" a target page declaring drillthrough fields,
+  carrying the clicked row's value as a seed filter — `drillthroughTargetsFor` +
+  `navigateDrillthrough` in report-designer.tsx, `DrillthroughConfig` +
+  `DrillthroughEditor` + `page-format-panel.tsx`), **drill-up / expand-all-down**
+  on matrix hierarchies (the wells→SQL `drill` opts), and cross-filter
+  highlight/filter/none (`interactions.tsx`). The genuine residual gap: the
+  **pivoted `MatrixPivotTable` applied NO conditional formatting** while the plain
+  table did (a parity/no-vaporware gap). A9 wires `matrixCellPaint(cf, enabled,
+  alias, value)` so the pivoted matrix value cells honor the SAME background /
+  font-color / icon / data-bar rules — uniform with the table path — and adds a
+  golden painter harness (`__tests__/conditional-format.test.ts`, 17 cases:
+  every `cellStyleFor` mode + `applyConditionalFormat` column resolution + the
+  `matrixCellPaint` gate; the painter had zero tests before). FLAG0 flag
+  `a9-matrix-conditional-format` (default-ON; OFF reverts to unpainted matrix
+  cells). Zero ❌ vs Power BI interactions.
 - **Wells re-exposed:** queryVisual() STOPS stripping Small multiples / Tooltips /
   Details. smallMultiples → `wells.smallMultiples`, details → `wells.details`
   (trellis group cols, folded into the 2nd GROUP BY), tooltips → `wells.tooltips`
