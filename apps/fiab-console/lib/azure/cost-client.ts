@@ -6,7 +6,9 @@
  * deployment spans (admin-plane + DLZ + Stream Analytics / Event Hubs / explicit
  * extras), narrowed to the Loom resource groups. For each timeframe it returns:
  *   - month-to-date / period actual cost + previous-period total (trend %)
- *   - a simple linear period-end FORECAST from the daily run-rate
+ *   - a period-end FORECAST (C2): the real Cost Management Forecast API when
+ *     available, else a computed linear/seasonal projection — `forecastMethod`
+ *     says which (cost-forecast.ts / cost-forecast-core.ts)
  *   - breakdowns by service, resource group, SUBSCRIPTION, top RESOURCE, location
  *   - a cost-allocation breakdown by TAG value (LOOM_COST_TAG_KEY, default
  *     'Environment'); honestly empty when the tenant applies no such tag
@@ -33,6 +35,7 @@ import { readMonitorConfig, MonitorError, MonitorNotConfiguredError } from './mo
 import { loomSubscriptionScope } from './loom-subscriptions';
 import { armBase, armScope } from './cloud-endpoints';
 import { getOrComputeCached, buildScopedCacheKey, type CacheMeta } from './query-result-cache';
+import { periodEndProjection, pickComputedMethod } from './cost-forecast-core';
 
 // Sovereign-cloud ARM host + scope (Commercial / GCC-High / IL5).
 const ARM = armBase();
@@ -186,6 +189,16 @@ export function runCostQuery(subscriptionId: string, body: unknown, deadline?: n
 }
 
 /**
+ * Run ANY Cost Management round-trip (e.g. the C2 Forecast POST in
+ * cost-forecast.ts) through the SAME process-wide QPU limiter as the query
+ * fan-out — the forecast endpoint shares the Cost Management QPU quota, so an
+ * unfunnelled burst would re-create the self-inflicted 429 storm C1 fixed.
+ */
+export function scheduleCostCall<T>(fn: () => Promise<T>): Promise<T> {
+  return costQueryLimiter(fn);
+}
+
+/**
  * Distinct set of subscriptions the Loom deployment spans (admin + DLZ + BYO).
  * Delegates to the shared scope resolver so the DLZ sub
  * (LOOM_DLZ_SUBSCRIPTION_ID) is always included — the live multi-sub bug was
@@ -322,8 +335,18 @@ export interface CostSummary {
   /** Previous comparable period total (null when N/A) + % change. */
   previousPeriod: number | null;
   trendPct: number | null;
-  /** Linear period-end projection from the daily run-rate. */
+  /**
+   * Period-end projection (C2): the REAL Cost Management Forecast API when it
+   * answers for every subscription, else a computed linear/seasonal projection
+   * from the daily series — see `forecastMethod` for which one produced it.
+   */
   forecast: number;
+  /**
+   * What produced `forecast` — 'api' (Cost Management Forecast API), 'linear'
+   * (least-squares run-rate) or 'seasonal' (7-day weekday profile × trend).
+   * Surfaced verbatim in the UI so the projection is honestly labeled.
+   */
+  forecastMethod: 'api' | 'linear' | 'seasonal';
   byService: CostBreakdownRow[];
   byResourceGroup: CostBreakdownRow[];
   bySubscription: CostBreakdownRow[];
@@ -736,14 +759,35 @@ export async function computeLoomCostSummary(opts: CostOptions = {}): Promise<Co
 
   const daily = Array.from(dailyMap.entries()).sort((a, b) => a[0].localeCompare(b[0])).map(([date, cost]) => ({ date, cost }));
 
-  // Period-end forecast (MTD-style only; for fixed windows forecast == total).
+  // Period-end forecast (C2) — MTD-style only; for fixed windows forecast ==
+  // total. The computed projection (cost-forecast-core) lands FIRST so a
+  // labeled number always exists: 'linear' IS the former in-line run-rate
+  // (runRatePeriodEnd — verbatim semantics), 'seasonal' the 7-day weekday
+  // profile × trend when ≥2 weeks of history. Then, unless the operator forced
+  // a computed method via LOOM_COST_FORECAST_METHOD, the REAL Cost Management
+  // Forecast API is tried (dynamic import — no module cycle): the summed
+  // forecast remainder to month end across EVERY sub upgrades the method to
+  // 'api'; any per-sub failure (Gov FailedDependency, IL5 unreachable,
+  // throttle past deadline) keeps the computed projection, honestly labeled.
   let forecast = total;
+  let forecastMethod: CostSummary['forecastMethod'] = 'linear';
   if ((timeframe === 'MonthToDate' || timeframe === 'BillingMonthToDate') && daily.length) {
-    const daysElapsed = Math.max(1, daily.length);
-    const ref = daily[daily.length - 1].date;
-    const dim = new Date(`${ref.slice(0, 7)}-01T00:00:00Z`);
-    const daysInMonth = new Date(dim.getUTCFullYear(), dim.getUTCMonth() + 1, 0).getUTCDate();
-    forecast = total > 0 ? (total / daysElapsed) * daysInMonth : 0;
+    const pref = ((): 'auto' | 'api' | 'linear' | 'seasonal' => {
+      const raw = (process.env.LOOM_COST_FORECAST_METHOD || '').trim().toLowerCase();
+      return raw === 'api' || raw === 'linear' || raw === 'seasonal' ? raw : 'auto';
+    })();
+    forecastMethod = pickComputedMethod(daily, pref);
+    forecast = periodEndProjection(total, daily, timeframe, forecastMethod);
+    if (pref === 'auto' || pref === 'api') {
+      try {
+        const { apiPeriodEndRemainder } = await import('./cost-forecast');
+        const remainder = await apiPeriodEndRemainder(subs, deadline);
+        if (remainder != null) {
+          forecast = total + remainder;
+          forecastMethod = 'api';
+        }
+      } catch { /* computed projection stands (honest fallback) */ }
+    }
   }
 
   const trendPct = previousPeriod && previousPeriod > 0
@@ -768,6 +812,7 @@ export async function computeLoomCostSummary(opts: CostOptions = {}): Promise<Co
     previousPeriod: previousPeriod == null ? null : r2(previousPeriod),
     trendPct,
     forecast: r2(forecast),
+    forecastMethod,
     byService: sortDesc(bySvc),
     byResourceGroup: sortDesc(byRg),
     bySubscription: sortDesc(bySub),

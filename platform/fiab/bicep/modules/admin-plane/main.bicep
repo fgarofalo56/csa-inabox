@@ -342,6 +342,12 @@ type observabilityConfigT = {
 
   @description('Key Vault secret NAME holding the on-call webhook URL (only read when alertWebhookEnabled). Default loom-alert-webhook-url.')
   alertWebhookSecretName: string?
+
+  @description('C2 — FinOps forecast horizon in days (LOOM_COST_FORECAST_HORIZON_DAYS). How far forward the Cost Management Forecast API / computed projection projects. Default 30 (console clamps 1–90).')
+  costForecastHorizonDays: int?
+
+  @description('C2 — FinOps forecast method (LOOM_COST_FORECAST_METHOD): auto (default — the real Cost Management Forecast API first, computed fallback on any failure), api, linear (least-squares run-rate), seasonal (7-day weekday profile × trend; the Gov FailedDependency / IL5 CSV-ingest path).')
+  costForecastMethod: ('auto' | 'api' | 'linear' | 'seasonal')?
 }
 
 @description('Observability settings bag (R0) — V1 synthetic-journey monitor settings live here (+ the COST0 program-budget props, consumed at the top-level orchestrator); V5 bicep-drift, O1 alert-dispatch and RUM1 client-RUM settings add properties to observabilityConfigT — never a new top-level param.')
@@ -425,6 +431,9 @@ var syntheticLoginSecretUri = observabilityConfig.?syntheticLoginSecretUri ?? ''
 // are the day-one channel).
 var alertWebhookEnabled = observabilityConfig.?alertWebhookEnabled ?? false
 var alertWebhookSecretName = observabilityConfig.?alertWebhookSecretName ?? 'loom-alert-webhook-url'
+// C2 (observabilityConfig bag) — FinOps forecast knobs (fully-functional defaults).
+var costForecastHorizonDays = observabilityConfig.?costForecastHorizonDays ?? 30
+var costForecastMethod = observabilityConfig.?costForecastMethod ?? 'auto'
 // I1 (workspaceIdentityConfig bag) — per-workspace identity shims (default off).
 var workspaceIdentityMode = workspaceIdentityConfig.?workspaceIdentityMode ?? 'off'
 var wsIdentitySub = workspaceIdentityConfig.?wsIdentitySub ?? ''
@@ -2971,6 +2980,12 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // idle compute + roll capacity env-config). The persisted per-tenant mode
             // in the Cosmos `autopilot` container overrides this once set.
             { name: 'LOOM_AUTOPILOT_MODE', value: 'propose' }
+            // C2 FinOps forecast (observabilityConfig bag) — horizon + method for
+            // the real Cost Management Forecast API / computed-projection fallback
+            // (lib/azure/cost-forecast.ts). Defaults are fully functional: 30-day
+            // horizon, 'auto' = Forecast API first, linear/seasonal fallback.
+            { name: 'LOOM_COST_FORECAST_HORIZON_DAYS', value: string(costForecastHorizonDays) }
+            { name: 'LOOM_COST_FORECAST_METHOD', value: costForecastMethod }
             { name: 'NEXT_PUBLIC_LOOM_VERSION', value: loomVersion }
             { name: 'LOOM_SUBSCRIPTION_ID', value: subscription().subscriptionId }
             { name: 'LOOM_ADMIN_RG', value: resourceGroup().name }

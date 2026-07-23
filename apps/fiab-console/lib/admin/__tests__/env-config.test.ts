@@ -197,8 +197,11 @@ describe('admin/env-config registry', () => {
     // svc-copilot-evaluator adds LOOM_COPILOT_EVALUATOR_URL (160) → O1
     // svc-alerting adds LOOM_ALERT_WEBHOOK_URL (the optional on-call webhook
     // bridge for the unified dispatchAlert path; secret-typed, KV secretRef)
-    // (161).
-    expect(EDITABLE_ENV.length).toBe(161);
+    // (161) → C2 svc-cost-forecast adds LOOM_COST_FORECAST_HORIZON_DAYS +
+    // LOOM_COST_FORECAST_METHOD (both optionalDefault tuning knobs — the
+    // forecast runs day-one unset: 30-day horizon, method 'auto' = real
+    // Forecast API → computed linear/seasonal fallback) (163).
+    expect(EDITABLE_ENV.length).toBe(163);
   });
 
   it('surfaces the wave-2 env vars as settable (previously dropped by the whitelist)', () => {
@@ -277,7 +280,12 @@ describe('admin/env-config registry', () => {
       'LOOM_AUTOPILOT_MODE',
       'LOOM_BROKER_REDIS', 'LOOM_BROKER_URL',
       'LOOM_CAPACITY_LCU',
-      'LOOM_CONTENT_SAFETY_ENDPOINT', 'LOOM_DIRECTLAKE_URL', 'LOOM_DOCINTEL_ENDPOINT',
+      'LOOM_CONTENT_SAFETY_ENDPOINT',
+      // C2 svc-cost-forecast — both fully-functional-by-default tuning knobs
+      // (unset → 30-day horizon, method 'auto' = real Forecast API first with
+      // the computed linear/seasonal fallback, honestly labeled).
+      'LOOM_COST_FORECAST_HORIZON_DAYS', 'LOOM_COST_FORECAST_METHOD',
+      'LOOM_DIRECTLAKE_URL', 'LOOM_DOCINTEL_ENDPOINT',
       'LOOM_EVENTGRID_TOPIC_ENDPOINT', 'LOOM_EVENTGRID_TOPIC_KEY',
       'LOOM_GRAPH_GROUP_SYNC_ENABLED',
       'LOOM_LANGUAGE_ENDPOINT', 'LOOM_MESH_PROFILE', 'LOOM_ONELAKE_URL',

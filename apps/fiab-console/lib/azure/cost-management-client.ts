@@ -9,7 +9,8 @@
  *
  *   1. Azure Cost Management  (Microsoft.CostManagement/query)  → actual $ cost
  *      by service, by resource-group / workspace (chargeback), and a daily
- *      time-series + run-rate forecast. Delegates to the battle-tested
+ *      time-series + period-end forecast (C2: real Forecast API →
+ *      linear/seasonal computed fallback). Delegates to the battle-tested
  *      multi-subscription cost-client for the throttle-aware query loop.
  *   2. Azure Monitor platform metrics (microsoft.insights/metrics) → live
  *      utilization per engine (Synapse DWU, ADX CPU/cache, Container Apps
@@ -209,6 +210,10 @@ export interface ChargebackModel {
   windowHours: number;
   totalCost: number;
   forecast: number;
+  /** C2 — what produced `forecast`: 'api' (Cost Management Forecast API),
+   * 'linear' (least-squares run-rate) or 'seasonal' (7-day weekday profile).
+   * The FinOps KPI labels the projection with this, honestly. */
+  forecastMethod: 'api' | 'linear' | 'seasonal';
   trendPct: number | null;
   perService: CostRow[];
   /**
@@ -482,6 +487,7 @@ export async function getChargebackModel(opts: ChargebackOptions = {}): Promise<
     windowHours: win.hours,
     totalCost: round(total),
     forecast: round(cost.forecast),
+    forecastMethod: cost.forecastMethod,
     trendPct: cost.trendPct,
     perService,
     perResourceType,

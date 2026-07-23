@@ -169,6 +169,19 @@ export const AZURE_SERVICES_GATE_META: Record<string, GateMeta> = {
     legacyCodes: ['cost_query_failed'],
     autoResolveNote: 'A push-button deploy auto-wires LOOM_SUBSCRIPTION_ID AND bicep-grants Cost Management Reader — cost/chargeback is default-ON with zero operator input; LOOM_BILLING_SCOPE only widens the rollup scope.',
   },
+  // C2 — the FinOps forecast tuning knobs (horizon + method). Fully-functional
+  // defaults (30-day horizon, method 'auto': real Forecast API → computed
+  // linear/seasonal fallback); env-picker Fix-it for forcing a method (Gov
+  // FailedDependency → seasonal; IL5 CSV-ingest → linear/seasonal).
+  'svc-cost-forecast': {
+    surfaces: [
+      { path: '/monitor', label: 'Monitor hub — Cost tab (period-end forecast)' },
+      { path: '/admin/usage-chargeback', label: 'Usage & chargeback — forecast KPI' },
+      { path: '/api/admin/finops/forecast', label: 'FinOps forecast feed (admin cost surfaces)' },
+    ],
+    fixit: { kind: 'env-picker' },
+    autoResolveNote: "Unset → fully-functional defaults: 30-day horizon, method 'auto' — the real Cost Management Forecast API first, computed linear/seasonal projection on any failure, honestly labeled either way.",
+  },
   'svc-azure-maps': {
     surfaces: [
       { path: '/items/report', label: 'Report Map visual' },

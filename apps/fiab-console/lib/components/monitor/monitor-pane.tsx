@@ -1468,6 +1468,8 @@ interface CostSummary {
   previousPeriod: number | null;
   trendPct: number | null;
   forecast: number;
+  /** C2 — what produced `forecast` (real Forecast API vs computed fallback); the KPI labels it verbatim. */
+  forecastMethod?: 'api' | 'linear' | 'seasonal';
   byService: CostBreakdownRow[];
   byResourceGroup: CostBreakdownRow[];
   bySubscription: CostBreakdownRow[];
@@ -1557,7 +1559,11 @@ function CostTab({ onUnauth }: { onUnauth: () => void }) {
     const out: { label: string; value: string | number; accent?: string }[] = [
       { label: `Total (${tfLabel})`, value: money(data.monthToDate, cur) },
     ];
-    if (isMtd) out.push({ label: 'Forecast (period end)', value: money(data.forecast, cur), accent: styles.statAccentWarn });
+    if (isMtd) {
+      // C2 — honestly label WHAT produced the projection (real Forecast API vs computed fallback).
+      const fm = data.forecastMethod === 'api' ? 'Forecast API' : data.forecastMethod === 'seasonal' ? '7-day seasonal projection' : 'linear run-rate projection';
+      out.push({ label: `Forecast (period end) · ${fm}`, value: money(data.forecast, cur), accent: styles.statAccentWarn });
+    }
     if (trend != null) {
       out.push({
         label: 'Trend vs prior period',
