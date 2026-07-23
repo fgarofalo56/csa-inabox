@@ -45,12 +45,39 @@ import {
   type PlanStep,
   type VerifyVerdict,
 } from './data-agent-planner';
+// N9 — Verified Semantic Contract + VQR. The reasoning loop retrieves a verified
+// query FIRST (before free NL2SQL generation), routes an unmatched-but-metric-
+// grounded question through generation, and REFUSES an out-of-contract question
+// with a guided message (refuse-not-guess). evaluateContract is FAIL-SAFE: any
+// error (or no contract adopted) yields `{ mode:'none' }`, so a tenant with no
+// contract behaves EXACTLY as pre-N9 — this wiring never breaks existing agents.
+import { evaluateContract, type ContractDecision } from './semantic-contract';
 
 export interface ReasoningRunContext {
   tenantId?: string;
   /** Tenant Copilot config for tier resolution (admin-overridable). Absent → the
    *  env day-one tiers (`LOOM_AOAI_STRONG_DEPLOYMENT` etc.) drive routing. */
   tierCfg?: TierPolicyConfigShape | null;
+  /**
+   * N9: a pre-evaluated contract decision. When the caller has already run
+   * {@link evaluateContract} (e.g. to govern the single-shot path too), it may
+   * thread the decision here to avoid a second Cosmos read. Absent → the loop
+   * evaluates the contract itself from `tenantId`.
+   */
+  contractDecision?: ContractDecision;
+}
+
+/** N9 — the contract signal N10's receipt renders (VQR hit / metric / refusal). */
+export interface ContractSignal {
+  mode: 'verified-query' | 'metric-grounded' | 'refused';
+  /** Match confidence [0,1] for verified-query / metric-grounded. */
+  confidence?: number;
+  /** The approved VQR id + its canonical question (verified-query mode). */
+  vqrId?: string;
+  vqrQuestion?: string;
+  /** The governed metric this turn grounded on (metric-grounded mode). */
+  metricId?: string;
+  metricLabel?: string;
 }
 
 /** The executed outcome of one plan step (real backend execution metadata). */
@@ -85,6 +112,14 @@ export interface ReasoningAnswer extends DataAgentAnswer {
   steps: ReasoningStepResult[];
   /** The verify verdict over the step results. */
   verify: { verdict: VerifyVerdict; reason: string };
+  /**
+   * N9 — the governed-contract signal for this turn (absent when no contract is
+   * in force). N10's receipt renders it: a green "Verified query" badge, a
+   * "Metric-grounded" note, or a "Refused (out of contract)" banner.
+   */
+  contract?: ContractSignal;
+  /** N9 — true when the turn was REFUSED as out-of-contract (no answer fabricated). */
+  refused?: boolean;
 }
 
 // ── Prompt builders (kept local — the reasoning loop's own system prompts) ────
@@ -160,6 +195,129 @@ function synthesizeFromSteps(steps: ReasoningStepResult[]): string {
   return parts.length ? parts.join('\n\n') : 'No step produced an answer.';
 }
 
+// ── N9: Verified-contract paths ──────────────────────────────────────────────
+
+/**
+ * VQR HIT — the governed, approved query IS the plan. Rather than let the model
+ * free-generate NL2SQL, pin the steward-approved query into the (source-scoped)
+ * grounding so {@link chatGrounded} runs it VERBATIM on the real Azure-native
+ * backend and answers only from the actual rows. The approved query drives the
+ * answer; the receipt records the VQR hit + confidence.
+ */
+async function answerFromVerifiedQuery(
+  cfg: DataAgentConfig,
+  history: ChatTurn[],
+  question: string,
+  vqr: { query: string; queryLang: string; sourceName: string; id: string; question: string },
+  confidence: number,
+  sel: { tier: ModelTier },
+  reasoningConfigured: boolean,
+  ctx?: ReasoningRunContext,
+): Promise<ReasoningAnswer> {
+  const scoped = scopeConfigToSource(cfg, vqr.sourceName);
+  const augmented: DataAgentConfig = {
+    ...scoped,
+    instructions: [
+      scoped.instructions || '',
+      '## VERIFIED QUERY (approved by a data steward — governed contract)',
+      `A steward-approved ${String(vqr.queryLang || '').toUpperCase()} query is the correct, governed way to answer this question.`,
+      `Run EXACTLY this query (verbatim, unmodified) against ${vqr.sourceName || 'the attached source'} and answer ONLY from its real results — emit exactly this query in your tools JSON:`,
+      '```',
+      vqr.query,
+      '```',
+    ].filter(Boolean).join('\n'),
+  };
+
+  const a = await chatGrounded(augmented, history, question, { tenantId: ctx?.tenantId });
+  const executed = !!a.tools?.some((t) => t.executed);
+  const rowCount = (a.tools || []).reduce((n, t) => n + (t.rowCount ?? 0), 0);
+  const gated = !executed && !!a.tools?.some((t) => t.gate);
+  const step: ReasoningStepResult = {
+    step: 1,
+    source: vqr.sourceName || a.tools?.[0]?.source || 'verified source',
+    subQuery: question,
+    rationale: `Verified query (approved) matched at ${(confidence * 100).toFixed(0)}% confidence.`,
+    status: gated ? 'gated' : 'completed',
+    answer: a.answer,
+    tools: a.tools,
+    executed,
+    rowCount,
+  };
+  return {
+    ...a,
+    mode: 'plan-execute-verify',
+    modelTier: sel.tier,
+    reasoningConfigured,
+    plan: [],
+    steps: [step],
+    verify: {
+      verdict: executed ? 'pass' : 'partial',
+      reason: executed
+        ? 'Answered by the steward-approved verified query, grounded on the real rows it returned.'
+        : 'The verified query matched but its source was not reachable — surfaced the honest gate.',
+    },
+    contract: {
+      mode: 'verified-query',
+      confidence,
+      vqrId: vqr.id,
+      vqrQuestion: vqr.question,
+    },
+  };
+}
+
+/**
+ * OUT OF CONTRACT — REFUSE, do not guess. Returns a structured refusal with a
+ * guided message (the questions this agent CAN answer + its governed metrics)
+ * instead of a fabricated answer. Pure — makes NO model/backend call, so a
+ * refusal never depends on an AOAI deployment being present (the compliance
+ * posture holds even in a disconnected IL5 enclave).
+ */
+function buildRefusalAnswer(
+  cfg: DataAgentConfig,
+  decision: ContractDecision & { mode: 'refuse' },
+  sel: { tier: ModelTier },
+  reasoningConfigured: boolean,
+): ReasoningAnswer {
+  const suggestionsText = decision.suggestions.length
+    ? `\n\nQuestions this agent can answer with a verified query:\n${decision.suggestions.map((q) => `• ${q}`).join('\n')}`
+    : '';
+  const metricsText = decision.metricLabels.length
+    ? `\n\nGoverned metrics available: ${decision.metricLabels.join(', ')}.`
+    : '';
+  const answer =
+    `I won't guess. ${decision.reason}` +
+    suggestionsText +
+    metricsText +
+    `\n\nRephrase to reference a governed metric above, or ask a data steward to add a verified query for this question in the semantic model's "Verified Queries" tab.`;
+  return {
+    answer,
+    raw: answer,
+    tools: [],
+    sourcesAvailable: cfg.sources.map((sr) => sr.name).filter(Boolean),
+    mode: 'plan-execute-verify',
+    modelTier: sel.tier,
+    reasoningConfigured,
+    plan: [],
+    steps: [],
+    verify: { verdict: 'fail', reason: 'Refused — the question is outside the governed semantic contract.' },
+    contract: { mode: 'refused' },
+    refused: true,
+  };
+}
+
+/** Layer a matched metric's governed definition onto the agent instructions so
+ *  unmatched-but-in-contract generation is grounded on the metric (not free). */
+function withMetricGrounding(cfg: DataAgentConfig, metricLabel: string, description: string, grain: string): DataAgentConfig {
+  const block = [
+    '## Governed metric (semantic contract)',
+    `The user is asking about the governed metric "${metricLabel}". Ground your answer on its official definition:`,
+    description ? `Definition: ${description}` : '',
+    grain ? `Grain: ${grain}` : '',
+    'Do not redefine or approximate this metric — compute it per the governed definition.',
+  ].filter(Boolean).join('\n');
+  return { ...cfg, instructions: [cfg.instructions || '', block].filter(Boolean).join('\n\n') };
+}
+
 /**
  * Run the planner→execute→verify loop for a hard, multi-hop data-agent turn.
  * The caller (route) decides WHEN to invoke this (via `shouldPlan`); this always
@@ -174,6 +332,24 @@ export async function runReasoningAgent(
   ctx?: ReasoningRunContext,
 ): Promise<ReasoningAnswer> {
   const tierCfg = ctx?.tierCfg ?? null;
+  const reasoningConfigured = reasoningTierConfigured(tierCfg);
+
+  // ── N9: governed-contract evaluation FIRST (before any model/backend call) ──
+  // Retrieve a verified query first, ground on a matched metric, or REFUSE an
+  // out-of-contract question. Fail-safe: `{ mode:'none' }` (no contract adopted,
+  // or any error) falls straight through to the pre-N9 plan→execute→verify loop.
+  const decision = ctx?.contractDecision ?? (await evaluateContract(ctx?.tenantId, question));
+
+  // REFUSE path makes NO model/backend call — so it holds even with no AOAI
+  // deployment (and in a disconnected IL5 enclave). Resolve the tier without a
+  // real target (routeTurnTier is pure).
+  if (decision.mode === 'refuse') {
+    const selLite = routeTurnTier({
+      cfg: tierCfg, prompt: question, hasTools: cfg.sources.length > 0, baseDeployment: '', taskClass: 'reasoning',
+    });
+    return buildRefusalAnswer(cfg, decision, selLite, reasoningConfigured);
+  }
+
   const target = await resolveAoaiTarget();
   const sel = routeTurnTier({
     cfg: tierCfg,
@@ -185,14 +361,32 @@ export async function runReasoningAgent(
     taskClass: 'reasoning',
   });
   const planDeployment = sel.deployment || target.deployment;
-  const reasoningConfigured = reasoningTierConfigured(tierCfg);
   const stepCtx = { tenantId: ctx?.tenantId };
+
+  // VERIFIED-QUERY HIT — run the steward-approved query verbatim (skip NL2SQL).
+  if (decision.mode === 'verified') {
+    return answerFromVerifiedQuery(cfg, history, question, decision.vqr, decision.confidence, sel, reasoningConfigured, ctx);
+  }
+
+  // METRIC-GROUNDED — the question is in-contract; layer the governed metric
+  // definition onto generation and tag the receipt (the loop below stays real).
+  let plannerCfg = cfg;
+  let contractSignal: ContractSignal | undefined;
+  if (decision.mode === 'metric') {
+    plannerCfg = withMetricGrounding(cfg, decision.metric.label, decision.metric.description, decision.metric.grain);
+    contractSignal = {
+      mode: 'metric-grounded',
+      confidence: decision.confidence,
+      metricId: decision.metric.metricId,
+      metricLabel: decision.metric.label,
+    };
+  }
 
   // ── PLAN ──────────────────────────────────────────────────────────────────
   const planResp = await aoaiChatTurn(
     target,
     [
-      { role: 'system', content: buildPlanPrompt(cfg) },
+      { role: 'system', content: buildPlanPrompt(plannerCfg) },
       ...history.map((h) => ({ role: h.role, content: h.content })),
       { role: 'user', content: question },
     ],
@@ -202,7 +396,7 @@ export async function runReasoningAgent(
 
   // No plan produced → degrade honestly to a single grounded pass (still real).
   if (plan.length === 0) {
-    const single = await chatGrounded(cfg, history, question, stepCtx);
+    const single = await chatGrounded(plannerCfg, history, question, stepCtx);
     return {
       ...single,
       mode: 'plan-execute-verify',
@@ -214,6 +408,7 @@ export async function runReasoningAgent(
         verdict: 'partial',
         reason: 'No multi-step plan was produced; answered in a single grounded pass.',
       },
+      contract: contractSignal,
     };
   }
 
@@ -221,7 +416,7 @@ export async function runReasoningAgent(
   const stepResults: ReasoningStepResult[] = [];
   const priorContext: ChatTurn[] = [...history];
   for (const st of plan) {
-    const stepCfg = scopeConfigToSource(cfg, st.source);
+    const stepCfg = scopeConfigToSource(plannerCfg, st.source);
     try {
       const a = await chatGrounded(stepCfg, priorContext, st.subQuery, stepCtx);
       const executed = !!a.tools?.some((t) => t.executed);
@@ -288,5 +483,6 @@ export async function runReasoningAgent(
     plan,
     steps: stepResults,
     verify: { verdict, reason },
+    contract: contractSignal,
   };
 }

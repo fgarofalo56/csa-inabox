@@ -13,10 +13,10 @@ same classic + WS-D1 toolkit export styles).
 
 | Metric | Count |
 | --- | ---: |
-| Total routes | 1571 |
+| Total routes | 1572 |
 | Public (no session) | 112 |
 | Session-only | 571 |
-| Owner-scoped | 632 |
+| Owner-scoped | 633 |
 | Admin | 256 |
 | Gated (backend config) | 516 |
 | Areas | 104 |
@@ -1510,6 +1510,7 @@ gates on a backend being configured (see `docs/fiab/gate-registry.md`).
 | `items/semantic-model/[id]/semantic-link/route.ts` | GET POST | owner-scoped |  | — |
 | `items/semantic-model/[id]/synonyms/route.ts` | GET PUT | owner-scoped |  | — |
 | `items/semantic-model/[id]/take-over/route.ts` | POST | session-only |  | — |
+| `items/semantic-model/[id]/verified-queries/route.ts` | GET POST | owner-scoped |  | — |
 | `items/semantic-model/aas-databases/route.ts` | GET | session-only | ● | — |
 | `items/semantic-model/build/route.ts` | POST | session-only |  | — |
 | `items/semantic-model/route.ts` | GET | owner-scoped |  | — |

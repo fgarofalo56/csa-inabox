@@ -90,6 +90,10 @@ import { SemanticModelSecurityTab } from './semantic-model-editor/security-tab';
 import { SemanticModelCopilotPane } from './semantic-model-editor/copilot-pane';
 import { SemanticModelPrepForAiPane } from './semantic-model-editor/prep-for-ai-pane';
 import { LoomNativeModelView } from './semantic-model-editor/loom-native-model-view';
+// N9 — Verified Semantic Contract + VQR authoring tab (governed metric registry
+// + approved question→query pairs; the data agent retrieves verified queries
+// first and refuses out-of-contract questions).
+import { VerifiedQueriesPane } from './semantic-model-editor/verified-queries-pane';
 
 // Re-export so `import { SemanticModelPrepForAiPane } from '.../semantic-model-editor'`
 // keeps resolving unchanged (the prep-for-ai smoke test imports it from here).
@@ -133,7 +137,7 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
   const [refreshing, setRefreshing] = useState(false);
   const [refreshErr, setRefreshErr] = useState<string | null>(null);
   const [relationships, setRelationships] = useState<Array<{ name?: string; fromTable?: string; fromColumn?: string; toTable?: string; toColumn?: string; crossFilteringBehavior?: string }>>([]);
-  const [tab, setTab] = useState<'tables' | 'relationships' | 'model' | 'entity' | 'modeling' | 'measures' | 'metrics' | 'daxquery' | 'health' | 'build' | 'aggregations' | 'refresh' | 'incremental' | 'config' | 'direct-lake' | 'direct-lake-query' | 'security' | 'access' | 'governance' | 'embed' | 'calcGroups' | 'fieldParams' | 'datasource' | 'copilot' | 'prep-for-ai' | 'ask'>('tables');
+  const [tab, setTab] = useState<'tables' | 'relationships' | 'model' | 'entity' | 'modeling' | 'measures' | 'metrics' | 'daxquery' | 'health' | 'build' | 'aggregations' | 'refresh' | 'incremental' | 'config' | 'direct-lake' | 'direct-lake-query' | 'security' | 'access' | 'governance' | 'embed' | 'calcGroups' | 'fieldParams' | 'datasource' | 'copilot' | 'prep-for-ai' | 'ask' | 'verified-queries'>('tables');
   // Loom-native Model-view sub-tab — the DEFAULT surface when no Power BI dataset
   // is selected (the Power BI dataset tab strip needs a datasetId; without one
   // the body was empty). Model / Tables / Measures over the item's own Cosmos
@@ -1497,7 +1501,7 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
               own tables / typed columns / relationships / DAX measures from the
               Azure-native model route so the editor is never an empty banner
               without a Fabric / Power BI workspace (no-fabric-dependency.md). */}
-          {!datasetId && tab !== 'build' && tab !== 'copilot' && tab !== 'prep-for-ai' && tab !== 'daxquery' && tab !== 'health' && tab !== 'metrics' && (
+          {!datasetId && tab !== 'build' && tab !== 'copilot' && tab !== 'prep-for-ai' && tab !== 'daxquery' && tab !== 'health' && tab !== 'metrics' && tab !== 'verified-queries' && (
             <LoomNativeModelView
               id={id}
               sub={nativeSub}
@@ -1506,7 +1510,7 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
               onBuild={focusBuild}
             />
           )}
-          {(datasetId || tab === 'build' || tab === 'copilot' || tab === 'prep-for-ai' || tab === 'daxquery' || tab === 'health' || tab === 'metrics') && (
+          {(datasetId || tab === 'build' || tab === 'copilot' || tab === 'prep-for-ai' || tab === 'daxquery' || tab === 'health' || tab === 'metrics' || tab === 'verified-queries') && (
             <>
               {/* ux-fabric-a W1 — tab-strip density: Fabric's item-tab strips are
                   compact (size=small) and scroll horizontally instead of wrapping
@@ -1524,6 +1528,8 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
                   <Tab value="health" icon={<Stethoscope20Regular />}>Model health</Tab>
                   <Tab value="copilot" icon={<Sparkle20Regular />}>Copilot (structure)</Tab>
                   <Tab value="prep-for-ai" icon={<Sparkle20Regular />}>Prep for AI</Tab>
+                  {/* N9 — Verified Semantic Contract + VQR (refuse-not-guess). */}
+                  <Tab value="verified-queries" icon={<Stethoscope20Regular />}>Verified Queries</Tab>
                   {/* WS-5.4 — NL "Ask" tab backed by /api/ask → chatGrounded */}
                   <Tab value="ask" icon={<Sparkle20Regular />}>Ask</Tab>                  <Tab value="calcGroups">Calc groups ({calcGroups.length})</Tab>
                   <Tab value="fieldParams">Field parameters ({fieldParams.length})</Tab>
@@ -2667,6 +2673,7 @@ function SemanticModelEditorInner({ item, id }: { item: FabricItemType; id: stri
                   </div>
                 )}
                 {tab === 'prep-for-ai' && <SemanticModelPrepForAiPane id={id} datasetId={datasetId} workspaceId={workspaceId} />}
+                {tab === 'verified-queries' && <VerifiedQueriesPane id={id} modelName={detail?.dataset?.name || ''} />}
                 {tab === 'calcGroups' && (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS}}>
                     <MessageBar intent="info">

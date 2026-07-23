@@ -17,6 +17,7 @@ import { loadOwnedItem } from '../../../_lib/item-crud';
 import { enrichSemanticModelSources } from '../../../semantic-model/_lib/prep-for-ai-store';
 import { chatGrounded, NoAoaiDeploymentError, type DataAgentConfig, type ChatTurn } from '@/lib/azure/data-agent-client';
 import { runReasoningAgent } from '@/lib/azure/data-agent-reasoning';
+import { evaluateContract } from '@/lib/azure/semantic-contract';
 import { shouldPlan } from '@/lib/azure/data-agent-planner';
 import { classifyTaskClass } from '@/lib/foundry/model-tier-router';
 import { orchestrate, type SubAgentRuntime } from '@/lib/azure/agent-orchestrator';
@@ -133,9 +134,21 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     // synthesis pass). Otherwise WS-5.5: a hard, multi-hop question runs the
     // reasoning-tier planner→execute→verify loop; a simple turn stays single-shot.
     const subAgents = await resolveSubAgents(itemState, session.claims.oid);
+    // N9 — evaluate the governed semantic contract once. Fail-safe: a tenant
+    // with no adopted contract (or any error) yields `{ mode:'none' }`, so the
+    // pre-N9 plan/single behavior is byte-identical. When a contract IS in force
+    // for THIS question we route through the reasoning loop so verified-query
+    // retrieval / metric-grounding / refuse-not-guess governs EVERY turn — not
+    // just multi-hop ones (a verified query is often a simple question).
+    const contractDecision = await evaluateContract(session.claims.oid, question);
     let answer: import('@/lib/azure/data-agent-client').DataAgentAnswer;
     if (subAgents.length > 0) {
       answer = await orchestrate(cfg, subAgents, history, question, { tenantId: session.claims.oid });
+    } else if (contractDecision.mode !== 'none') {
+      answer = await runReasoningAgent(cfg, history, question, {
+        tenantId: session.claims.oid,
+        contractDecision,
+      });
     } else {
       const wantPlan =
         mode === 'plan' ||

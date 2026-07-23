@@ -58,7 +58,12 @@ const TOOLKIT_RE = /\bwith(?:Session|WorkspaceOwner|BackendGate|TenantAdmin|DlzA
 // reason (e.g. a prologue the codemod legitimately can't transform yet). Keep
 // this SHORT — prefer running the codemod.
 const TOUCH_EXEMPT = new Map([
-  // (empty — every current baseline route is codemod-eligible or hand-migratable)
+  // N9 wired semantic-contract (VQR-first + refuse) evaluation into this streaming
+  // data-agent chat hot-path; it returns a custom SSE stream + bespoke NextResponse
+  // error envelopes, so withSession's try/catch→apiServerError wrapper would break
+  // streaming — a legitimate codemod-resistant prologue. Migrate when the streaming
+  // routes get a dedicated stream-safe toolkit wrapper.
+  ['apps/fiab-console/app/api/items/data-agent/[id]/chat/route.ts', 'N9: streaming SSE agent route, custom envelopes — not withSession-migratable yet'],
 ]);
 
 /** All route files (repo-relative POSIX paths) under app/api. */
