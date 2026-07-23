@@ -42,33 +42,21 @@ import { apiHonestGateError } from '@/lib/api/gate-envelope';
 import { withSession } from '@/lib/api/route-toolkit';
 import {
   dataFlowDebugConfigGate,
-  getDataFlow,
-  getDataset,
-  getLinkedService,
   listIntegrationRuntimes,
   createDataFlowDebugSession,
   addDataFlowToDebugSession,
   executeDataFlowDebugCommand,
   deleteDataFlowDebugSession,
-  type AdfDataset,
-  type AdfLinkedService,
 } from '@/lib/azure/adf-client';
+import {
+  DATAFLOW_NAME_RE as NAME_RE,
+  clampSampleSize,
+  flowStreamNames,
+  resolveDebugPackage,
+} from '@/lib/azure/dataflow-debug';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
-
-// ADF data-flow names: letters, digits, underscore (same charset the sibling
-// dataflows route validates with).
-const NAME_RE = /^[A-Za-z0-9_]{1,260}$/;
-
-/** A source / sink / transformation node in a MappingDataFlow's typeProperties. */
-type FlowNode = {
-  name?: string;
-  dataset?: { referenceName?: string };
-  linkedService?: { referenceName?: string };
-};
-
-const isNonEmpty = (s: unknown): s is string => typeof s === 'string' && s.length > 0;
 
 /**
  * GET — availability probe. The designer calls this to decide whether to enable
@@ -134,8 +122,7 @@ export const POST = withSession<{ name: string }>(async (req, { params }) => {
     timeToLiveMinutes?: unknown;
   };
   const requestedStream = typeof body.streamName === 'string' ? body.streamName.trim() : '';
-  const rlRaw = Number(body.rowLimits);
-  const rowLimits = Number.isFinite(rlRaw) && rlRaw > 0 ? Math.min(Math.floor(rlRaw), 1000) : 100;
+  const rowLimits = clampSampleSize(body.rowLimits);
   const computeType = typeof body.computeType === 'string' ? body.computeType : undefined;
   const coreRaw = Number(body.coreCount);
   const coreCount = Number.isFinite(coreRaw) && coreRaw > 0 ? Math.floor(coreRaw) : undefined;
@@ -144,23 +131,13 @@ export const POST = withSession<{ name: string }>(async (req, { params }) => {
 
   let sessionId: string | undefined;
   try {
-    // Bound flow definition (real ARM GET; throws if the flow doesn't exist).
-    const flow = await getDataFlow(name);
-
-    const tp = (flow.properties?.typeProperties ?? {}) as {
-      sources?: FlowNode[];
-      sinks?: FlowNode[];
-      transformations?: FlowNode[];
-    };
-    const sources: FlowNode[] = Array.isArray(tp.sources) ? tp.sources : [];
-    const sinks: FlowNode[] = Array.isArray(tp.sinks) ? tp.sinks : [];
-    const transformations: FlowNode[] = Array.isArray(tp.transformations) ? tp.transformations : [];
+    // Bound flow + its datasets / linked services + per-source row cap (shared
+    // helper — the same package the /api/items/mapping-dataflow debug routes use).
+    const pkg = await resolveDebugPackage(name, rowLimits);
 
     // Every previewable stream is a named source / transformation / sink. Validate
     // BEFORE provisioning a (costly) Spark cluster so an empty flow 400s cheaply.
-    const streamNames = [...sources, ...transformations, ...sinks]
-      .map((n) => n?.name)
-      .filter(isNonEmpty);
+    const streamNames = flowStreamNames(pkg.flow);
     if (streamNames.length === 0) {
       return NextResponse.json(
         { ok: false, error: 'data flow has no source/transformation/sink streams to preview' },
@@ -169,48 +146,6 @@ export const POST = withSession<{ name: string }>(async (req, { params }) => {
     }
     const streamName =
       requestedStream && streamNames.includes(requestedStream) ? requestedStream : streamNames[0];
-
-    // The debug cluster needs the datasets + linked services the flow references
-    // to actually read source data. Collect them from sources/sinks (and each
-    // dataset's own linked service). Per-item best-effort: a node that reads from
-    // an inline source has no dataset, and a transient read miss shouldn't abort
-    // the whole preview.
-    const datasetNames = new Set<string>();
-    const linkedServiceNames = new Set<string>();
-    for (const node of [...sources, ...sinks]) {
-      if (isNonEmpty(node?.dataset?.referenceName)) datasetNames.add(node.dataset!.referenceName!);
-      if (isNonEmpty(node?.linkedService?.referenceName)) {
-        linkedServiceNames.add(node.linkedService!.referenceName!);
-      }
-    }
-
-    const datasets: AdfDataset[] = [];
-    for (const dn of datasetNames) {
-      try {
-        const d = await getDataset(dn);
-        datasets.push(d);
-        const lsRef = d.properties?.linkedServiceName?.referenceName;
-        if (isNonEmpty(lsRef)) linkedServiceNames.add(lsRef);
-      } catch {
-        /* skip a dataset that can't be read — ADF still previews inline sources */
-      }
-    }
-
-    const linkedServices: AdfLinkedService[] = [];
-    for (const ln of linkedServiceNames) {
-      try {
-        linkedServices.push(await getLinkedService(ln));
-      } catch {
-        /* skip a linked service that can't be read */
-      }
-    }
-
-    // Cap each source's read to `rowLimits` for a fast, bounded preview.
-    const sourceSettings = sources
-      .map((s) => s?.name)
-      .filter(isNonEmpty)
-      .map((sourceName) => ({ sourceName, rowLimit: rowLimits }));
-    const debugSettings = sourceSettings.length ? { sourceSettings } : undefined;
 
     // 1) Provision the short-lived Spark debug cluster.
     const created = await createDataFlowDebugSession({
@@ -223,10 +158,10 @@ export const POST = withSession<{ name: string }>(async (req, { params }) => {
     // 2) Add the in-memory flow package (flow + datasets + linked services + limits).
     await addDataFlowToDebugSession({
       sessionId,
-      dataFlow: flow,
-      datasets: datasets.length ? datasets : undefined,
-      linkedServices: linkedServices.length ? linkedServices : undefined,
-      debugSettings,
+      dataFlow: pkg.flow,
+      datasets: pkg.datasets,
+      linkedServices: pkg.linkedServices,
+      debugSettings: pkg.debugSettings,
     });
 
     // 3) Execute the preview query for the chosen stream → real rows + schema.

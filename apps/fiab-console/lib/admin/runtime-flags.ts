@@ -111,6 +111,14 @@ export const RUNTIME_FLAGS: readonly RuntimeFlagDef[] = [
     ownerItem: 'RUM1',
     surface: 'Every console page (passive capture) + /admin/rum',
   },
+  {
+    id: 'u7-dataflow-debug',
+    label: 'Mapping data flow — Debug mode (preview/inspect/stats)',
+    description:
+      'The U7 ADF-Studio-parity Debug experience on the mapping-dataflow designer: the held debug-session lifecycle, the per-transform Data Preview / Inspect (schema + drift) / Statistics tabs, and the preview-grid quick-actions. OFF reverts the mapping-dataflow editor to the pre-U7 single-stream inline preview on the next load — the real ADF data-flow debug session, factory, and authoring path are unaffected; only the richer bottom Debug panel is hidden. Data preview / debug still require a data-flow-capable Azure Integration Runtime either way (honest gate).',
+    ownerItem: 'U7',
+    surface: 'Mapping data flow editor (/items/mapping-dataflow/[id]) — bottom Debug panel',
+  },
 ];
 
 /** Union of registered flag ids (`never` while the list is empty). */

@@ -597,11 +597,13 @@ interface ConfigPanelProps {
   onRename: (next: string) => void;
   onSetDataset: (name: string, ds: AdfDataset | undefined) => void;
   onDelete: () => void;
+  /** U7 — suppress the per-transform data-preview gate (the panel owns preview). */
+  hideDebugControls?: boolean;
 }
 
 function ConfigPanel({
   instance, datasets, datasetGate, debugActive, onStartDebug,
-  onPatch, onRename, onSetDataset, onDelete,
+  onPatch, onRename, onSetDataset, onDelete, hideDebugControls = false,
 }: ConfigPanelProps) {
   const s = useStyles();
   const def = transformByType(instance.type);
@@ -662,8 +664,9 @@ function ConfigPanel({
           <SettingField key={f.key} field={f} value={values[f.key]} onPatch={onPatch} />
         ))}
 
-      {/* Data preview — HONEST gate (needs a live Spark debug cluster). */}
-      {def.needsDebugCluster && (
+      {/* Data preview — HONEST gate (needs a live Spark debug cluster). Hidden
+          under U7 (the <DataflowDebugPanel/> owns preview for the whole flow). */}
+      {!hideDebugControls && def.needsDebugCluster && (
         <>
           <Divider />
           <div className={s.previewHeader}>
@@ -938,6 +941,15 @@ export interface MappingDataFlowDesignerProps {
   itemId?: string;
   /** Owning item-type slug for the collab routes (defaults to 'mapping-dataflow'). */
   itemType?: string;
+  /**
+   * U7 — when true the designer's OWN Debug toggle + per-transform data-preview
+   * gate are hidden because the host mounts the richer <DataflowDebugPanel/>
+   * (held session + preview/inspect/stats) which owns the Debug experience.
+   * Keeps a single Debug surface (no duplicate toggle). Default false preserves
+   * the pre-U7 in-designer toggle + honest gate for hosts that don't mount the
+   * panel (and for the `u7-dataflow-debug` runtime flag OFF revert path).
+   */
+  hideDebugControls?: boolean;
 }
 
 /** Next free stream name for a transform type (source1, derive2, join1, …). */
@@ -952,7 +964,7 @@ function nextName(type: string, existing: Set<string>): string {
 function DesignerInner({
   name, initial, datasets = [], datasetGate, debugClusterAvailable = false,
   onStartDebugSession, onSave, onChange, readOnly = false,
-  itemId, itemType = 'mapping-dataflow',
+  itemId, itemType = 'mapping-dataflow', hideDebugControls = false,
 }: MappingDataFlowDesignerProps) {
   const s = useStyles();
   const rf = useReactFlow();
@@ -1205,25 +1217,27 @@ function DesignerInner({
 
         <Divider vertical style={{ height: 24 }} />
 
-        <Tooltip
-          content={debugClusterAvailable
-            ? (debugActive ? 'Stop the data-flow debug session' : 'Start a data-flow debug session')
-            : 'A live Spark data-flow debug cluster (Azure IR with data-flow compute) is required'}
-          relationship="label"
-        >
-          <div style={{ display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXS }}>
-            <Bug20Regular style={{ color: debugActive ? 'var(--loom-accent-emerald)' : tokens.colorNeutralForeground3 }} />
-            <Switch
-              label="Data flow debug"
-              checked={debugActive}
-              disabled={readOnly}
-              onChange={(_, d) => {
-                if (d.checked) void startDebug();
-                else setDebugActive(false);
-              }}
-            />
-          </div>
-        </Tooltip>
+        {!hideDebugControls && (
+          <Tooltip
+            content={debugClusterAvailable
+              ? (debugActive ? 'Stop the data-flow debug session' : 'Start a data-flow debug session')
+              : 'A live Spark data-flow debug cluster (Azure IR with data-flow compute) is required'}
+            relationship="label"
+          >
+            <div style={{ display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXS }}>
+              <Bug20Regular style={{ color: debugActive ? 'var(--loom-accent-emerald)' : tokens.colorNeutralForeground3 }} />
+              <Switch
+                label="Data flow debug"
+                checked={debugActive}
+                disabled={readOnly}
+                onChange={(_, d) => {
+                  if (d.checked) void startDebug();
+                  else setDebugActive(false);
+                }}
+              />
+            </div>
+          </Tooltip>
+        )}
 
         <Tooltip content="Auto-layout & fit to screen" relationship="label">
           <Button size="small" appearance="subtle" icon={<FullScreenMaximize20Regular />} onClick={fitToScreen} aria-label="Fit to screen" />
@@ -1248,7 +1262,7 @@ function DesignerInner({
       </div>
 
       {/* Debug-not-available banner (honest gate, always visible while toggling). */}
-      {debugActive && !debugClusterAvailable && (
+      {!hideDebugControls && debugActive && !debugClusterAvailable && (
         <MessageBar intent="warning" className={s.debugBanner}>
           <MessageBarBody>
             <MessageBarTitle>No data-flow debug cluster</MessageBarTitle>
@@ -1372,6 +1386,7 @@ function DesignerInner({
             onRename={(nx) => renameTransform(selected.name, nx)}
             onSetDataset={(dn, ds) => setDataset(selected.name, dn, ds)}
             onDelete={() => deleteTransform(selected.name)}
+            hideDebugControls={hideDebugControls}
           />
         ) : (
           <div className={s.panelEmpty} data-config-panel="empty">

@@ -41,6 +41,8 @@ import { ArrowSync20Regular, Dismiss20Regular, Table20Regular, Eye20Regular } fr
 import { ItemEditorChrome } from './item-editor-chrome';
 import { MappingDataFlowDesigner } from '@/lib/components/pipeline/dataflow/mapping-dataflow-designer';
 import type { MappingDataFlowGraph } from '@/lib/components/pipeline/dataflow/mapping-dataflow-designer';
+import { DataflowDebugPanel } from '@/lib/components/pipeline/dataflow/dataflow-debug-panel';
+import { useRuntimeFlag } from '@/lib/components/ui/use-runtime-flag';
 import { clientFetch } from '@/lib/client-fetch';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
@@ -208,6 +210,10 @@ interface EditorProps { item: FabricItemType; id: string; }
 export function MappingDataFlowEditor({ item, id }: EditorProps) {
   const s = useStyles();
   const isNew = id === 'new';
+  // U7 (FLAG0 `u7-dataflow-debug`, default-ON) — mount the richer Debug panel
+  // (held session + preview/inspect/stats). OFF reverts to the pre-U7 single-
+  // stream inline preview below. The real ADF debug backend is unaffected.
+  const u7DebugPanel = useRuntimeFlag('u7-dataflow-debug');
 
   // For a new flow the user names it before saving; for an existing one the id
   // IS the data-flow name.
@@ -460,7 +466,7 @@ export function MappingDataFlowEditor({ item, id }: EditorProps) {
               data-flow debug session is available; once `debugAvailable` is
               true (probed from the route), the Debug toggle + Data preview run
               real queries and this banner is replaced by the results panel. */}
-          {!debugAvailable && (
+          {!u7DebugPanel && !debugAvailable && (
             <MessageBar intent="warning" className={s.debugGate}>
               <MessageBarBody className={s.breakText}>
                 <MessageBarTitle>Data preview / debug is gated in this deployment</MessageBarTitle>
@@ -493,18 +499,35 @@ export function MappingDataFlowEditor({ item, id }: EditorProps) {
             // Mirror the live graph so the editor can offer a per-transformation
             // preview selector (the designer doesn't expose its node selection).
             onChange={setGraph}
+            // U7 — hand the whole Debug experience to <DataflowDebugPanel/> below
+            // (single Debug surface; no duplicate toggle). OFF keeps the pre-U7
+            // in-designer toggle + inline preview.
+            hideDebugControls={u7DebugPanel}
             // Shared collaboration overlay (comments/presence) — keyed to the
             // saved mapping-dataflow item; no-ops for a brand-new unsaved flow.
             itemType="mapping-dataflow"
             itemId={isNew ? undefined : id}
           />
 
+          {/* U7 — the ADF-Studio-parity Debug dock (held session + per-transform
+              Data preview; Inspect + Statistics tabs land in U7 PR-2). Real ADF
+              debug session; rows only from the live cluster (no-vaporware.md). */}
+          {u7DebugPanel && (
+            <DataflowDebugPanel
+              name={isNew ? (nameValid ? name.trim() : 'dataflow1') : id}
+              graph={graph}
+              debugAvailable={debugAvailable}
+              isNew={isNew}
+            />
+          )}
+
           {/* Per-transformation data preview (ui-parity.md: ADF Studio previews
               the SELECTED transformation, not just the first stream). Pick the
               transformation whose output stream to preview, then run a REAL ADF
               data-flow debug command (executePreviewQuery) for THAT stream. Rows
-              ALWAYS come from the live debug session rendered below — never faked. */}
-          {!isNew && streamNames.length > 0 && (
+              ALWAYS come from the live debug session rendered below — never faked.
+              U7: replaced by <DataflowDebugPanel/> when the flag is ON. */}
+          {!u7DebugPanel && !isNew && streamNames.length > 0 && (
             <div className={s.previewControls} data-preview-controls>
               <Field
                 label="Preview transformation"
@@ -532,15 +555,16 @@ export function MappingDataFlowEditor({ item, id }: EditorProps) {
             </div>
           )}
 
-          {/* Real debug preview surface — only the route's rows ever appear. */}
-          {previewLoading && (
+          {/* Real debug preview surface — only the route's rows ever appear.
+              U7: hidden when the Debug panel is mounted (it renders the grid). */}
+          {!u7DebugPanel && previewLoading && (
             <div className={s.previewLoad}>
               <Spinner size="tiny" /> Starting data-flow debug preview
               {previewStream ? <> for <code className={s.gateCode}>{previewStream}</code></> : null}…
             </div>
           )}
 
-          {previewError && (
+          {!u7DebugPanel && previewError && (
             <MessageBar intent="error">
               <MessageBarBody className={s.breakText}>
                 <MessageBarTitle>Debug preview failed</MessageBarTitle>
@@ -549,7 +573,7 @@ export function MappingDataFlowEditor({ item, id }: EditorProps) {
             </MessageBar>
           )}
 
-          {preview && (
+          {!u7DebugPanel && preview && (
             <div className={s.previewPanel} data-debug-preview={preview.streamName}>
               <div className={s.previewHead}>
                 <div className={s.previewTitle}>
