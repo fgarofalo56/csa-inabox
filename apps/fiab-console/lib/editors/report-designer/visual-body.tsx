@@ -20,7 +20,7 @@ import {
 import { formatToChartProps, type ChartAdapterContext } from '@/lib/components/charts/loom-chart-format';
 import { VisualChrome } from '../report/visual-chrome';
 import { applyFilters, type ReportFilter } from '../report/filters-pane';
-import { applyConditionalFormat } from '../report/conditional-format';
+import { applyConditionalFormat, type ConditionalFormatResolver, type CondCellPaint } from '../report/conditional-format';
 import {
   applySelection, selectionFromRow,
   type InteractionMode, type VisualSelection,
@@ -54,7 +54,24 @@ import type { Styles } from './styles';
 
 // ── MatrixPivotTable ──────────────────────────────────────────────────────────
 
-export function MatrixPivotTable({ rows, rowKeys, pivotKey, valueAliases, valueLabels, nf, styles }: {
+/**
+ * A9 — resolve the conditional-format paint for one pivoted matrix VALUE cell,
+ * keyed by the measure's result alias (the same painter the plain table path uses
+ * — `no-vaporware` uniformity: a background/font/icon/data-bar rule set on a
+ * matrix measure now paints the pivoted matrix too, not just the table view).
+ * Returns undefined when CF is disabled, inactive, or the value is blank.
+ */
+export function matrixCellPaint(
+  cf: ConditionalFormatResolver | undefined,
+  cfEnabled: boolean,
+  alias: string,
+  value: number | undefined,
+): CondCellPaint | undefined {
+  if (!cfEnabled || !cf?.active || value === undefined) return undefined;
+  return cf.paintFor(alias, value);
+}
+
+export function MatrixPivotTable({ rows, rowKeys, pivotKey, valueAliases, valueLabels, nf, styles, cf, cfEnabled = false }: {
   rows: Array<Record<string, unknown>>;
   rowKeys: string[];
   pivotKey: string;
@@ -62,6 +79,10 @@ export function MatrixPivotTable({ rows, rowKeys, pivotKey, valueAliases, valueL
   valueLabels: string[];
   nf?: Parameters<typeof formatValue>[1];
   styles: Styles;
+  /** A9 — conditional-format resolver (from applyConditionalFormat); paints value cells. */
+  cf?: ConditionalFormatResolver;
+  /** A9 — runtime-flag gate for matrix conditional formatting (default off = pre-A9). */
+  cfEnabled?: boolean;
 }) {
   const multi = valueAliases.length > 1;
   const pivotValues: string[] = [];
@@ -118,8 +139,12 @@ export function MatrixPivotTable({ rows, rowKeys, pivotKey, valueAliases, valueL
             {pivotValues.map((pv) =>
               valueAliases.map((a, li) => {
                 const v = cellNum(row, pv, a);
+                const paint = matrixCellPaint(cf, cfEnabled, a, v);
                 return (
-                  <TableCell key={`c_${pv}_${li}`} style={{ textAlign: 'right' }}>
+                  <TableCell key={`c_${pv}_${li}`} style={{ textAlign: 'right', background: paint?.background, color: paint?.color }}>
+                    {paint?.icon && (
+                      <span aria-hidden style={{ color: paint.icon.color, marginInlineEnd: tokens.spacingHorizontalXXS }}>{paint.icon.glyph}</span>
+                    )}
                     {v === undefined ? '' : formatValue(v, nf)}
                   </TableCell>
                 );
@@ -186,6 +211,9 @@ export function VisualBody({ visual, state, styles, filters, selection, interact
   // unconditionally as the first hook so hook order stays stable across the
   // early-return branches below. OFF ⇒ facet from the well only (pre-A6).
   const smallMultiplesGridEnabled = useRuntimeFlag('a6-small-multiples-grid');
+  // A9 — conditional formatting on pivoted matrix value cells (uniform with the
+  // table path). OFF reverts the matrix to unpainted cells (pre-A9).
+  const matrixConditionalFormatEnabled = useRuntimeFlag('a9-matrix-conditional-format');
   if (AI_TYPES.has(visual.type)) {
     if (!ai) return <Caption1 className={styles.muted}>Preparing…</Caption1>;
     if (visual.type === 'smartNarrative') {
@@ -468,6 +496,8 @@ export function VisualBody({ visual, state, styles, filters, selection, interact
             valueLabels={valueLabels}
             nf={nf}
             styles={styles}
+            cf={cf}
+            cfEnabled={matrixConditionalFormatEnabled}
           />
         );
       }

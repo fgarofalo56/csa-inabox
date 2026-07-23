@@ -150,6 +150,14 @@ export const RUNTIME_FLAGS: readonly RuntimeFlagDef[] = [
     ownerItem: 'U7',
     surface: 'Mapping data flow editor (/items/mapping-dataflow/[id]) — bottom Debug panel',
   },
+  {
+    id: 'a9-matrix-conditional-format',
+    label: 'Report matrix — conditional formatting on cells',
+    description:
+      'Paints the pivoted report matrix value cells with the same conditional-format rules (backgrounds, font color, icons, data bars) the plain table already honors — Power BI parity uniformity. OFF reverts the matrix to unpainted value cells on the next render (the table, chart, and card conditional formatting are unaffected). No roll required.',
+    ownerItem: 'A9',
+    surface: 'Report designer pivoted matrix visual (/items/report/[id])',
+  },
 ];
 
 /** Union of registered flag ids (`never` while the list is empty). */
