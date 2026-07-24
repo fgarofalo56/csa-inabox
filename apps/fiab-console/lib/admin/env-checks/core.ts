@@ -107,6 +107,8 @@ export const VALUE_HINT: Record<string, string> = {
   LOOM_SPARK_TENANT_SESSION_MAX: '50  (max concurrent active Spark sessions; 0 = unlimited)',
   // A13 — Spark chaos-drill harness (default OFF; svc-spark-chaos-drill).
   LOOM_SPARK_CHAOS_ENABLED: 'false  (default; true = enable fault injection in a NON-PROD drill only)',
+  // CH1 — dependency-fault chaos harness (default OFF; svc-dependency-chaos-drill).
+  LOOM_DEPENDENCY_CHAOS_ENABLED: 'false  (default; true = enable Cosmos/AOAI/ADX/KV fault injection in a NON-PROD drill only)',
   LOOM_DLZ_RG: '<dlz-resource-group>',
   LOOM_ADMIN_RG: '<admin-resource-group>',
   LOOM_TENANT_ADMIN_OID: '<your-entra-user-object-id>',

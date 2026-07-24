@@ -25,6 +25,28 @@
  * No mocks. This only adds a deadline around the real `fetch`.
  */
 
+import { fetchFaultForUrl, type FetchFaultDirective } from '@/lib/resilience/fault-injection';
+
+/** Extract a URL string from any `fetch` input shape. */
+function urlString(input: string | URL | Request): string {
+  if (typeof input === 'string') return input;
+  if (input instanceof URL) return input.toString();
+  return (input as Request).url;
+}
+
+/**
+ * CH1 — consult the dependency-chaos harness for the request URL. Returns a
+ * fault directive when one is armed for the host, or null to proceed. Never
+ * throws (a chaos-side bug must never break real traffic).
+ */
+function maybeInjectFetchFault(input: string | URL | Request): FetchFaultDirective {
+  try {
+    return fetchFaultForUrl(urlString(input));
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Default server-side per-request timeout in milliseconds. Single env-driven
  * source of truth (per the loom-no-freeform-config posture) rather than a
@@ -81,6 +103,23 @@ export async function fetchWithTimeout(
   init?: RequestInit,
   timeoutMs: number = DEFAULT_SERVER_FETCH_TIMEOUT_MS,
 ): Promise<Response> {
+  // CH1 dependency-chaos chokepoint — the single bounded-transport wrapper every
+  // real Azure client (AOAI, ADX, Key Vault, ARM, …) flows through, so injecting
+  // here exercises each client's REAL 429/503/timeout handling end-to-end. Inert
+  // unless LOOM_DEPENDENCY_CHAOS_ENABLED is set AND a host-matching fault is armed
+  // (provably dead in prod). Wrapped in try/catch: a chaos bug must never break
+  // real traffic.
+  const chaos = maybeInjectFetchFault(input);
+  if (chaos) {
+    if (chaos.kind === 'timeout') {
+      throw new FetchTimeoutError(urlString(input), timeoutMs);
+    }
+    return new Response(chaos.body, {
+      status: chaos.status,
+      headers: { 'content-type': 'application/json', 'retry-after': String(chaos.retryAfterSec) },
+    });
+  }
+
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
 

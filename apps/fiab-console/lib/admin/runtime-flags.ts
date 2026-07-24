@@ -423,6 +423,15 @@ export const RUNTIME_FLAGS: readonly RuntimeFlagDef[] = [
     ownerItem: 'N8',
     surface: 'S3 gateway editor (/items/s3-gateway/[id])',
   },
+  // ── CH1 — Dependency-fault chaos harness (deliberately OPT-IN, default OFF) ──
+  {
+    id: 'ch1-dependency-chaos',
+    label: 'Health hub — Dependency chaos tab (fault injection)',
+    description:
+      'The CH1 dependency-fault chaos harness tab on /admin/health: arm a Cosmos-429, Azure OpenAI 429/timeout, ADX cold-start, or Key Vault throttle fault against THIS replica to PROVE the surface degrades to serve-stale / an honest gate — never a crash. This is the ONE deliberately OPT-IN switch of the health hub (default OFF, read with default:false) because chaos is operator-INITIATED. Turning it ON only reveals the tab; a fault still requires the triple-gated route (tenant admin + LOOM_DEPENDENCY_CHAOS_ENABLED=true + a valid LOOM_INTERNAL_TOKEN) to arm, and every armed fault auto-expires (≤5 min) so a forgotten drill self-heals. OFF hides the tab and the arming route rejects — the seconds-fast kill switch for the whole harness.',
+    ownerItem: 'CH1',
+    surface: '/admin/health?tab=chaos + POST /api/admin/chaos/dependency',
+  },
 ];
 
 /** Union of registered flag ids (`never` while the list is empty). */

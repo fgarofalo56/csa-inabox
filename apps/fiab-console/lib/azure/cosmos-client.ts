@@ -16,6 +16,7 @@ import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredenti
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { withMigrations } from '@/lib/azure/cosmos-migrations';
 import { createTtlEnabledContainer } from '@/lib/azure/cosmos-ttl';
+import { injectCosmosFault } from '@/lib/resilience/fault-injection';
 // E2 — loom-copilot-evals doc shapes + MIG1 migrator registration (module-scope
 // side effect: the chain is live before any read materializes).
 import '@/lib/azure/copilot-evals-model';
@@ -793,6 +794,11 @@ export async function probeCosmosReachable(budgetMs = 2000): Promise<void> {
 }
 
 async function ensure() {
+  // CH1 dependency-chaos chokepoint — inert unless the harness is armed AND
+  // LOOM_DEPENDENCY_CHAOS_ENABLED is set (provably dead in prod). Placed BEFORE
+  // the memo short-circuit so an armed `cosmos-429` fault injects on EVERY
+  // container accessor, not just the first (which creates the containers).
+  await injectCosmosFault();
   if (_ensured) return;
   const c = client();
   const { database } = await c.databases.createIfNotExists({ id: databaseId() });
