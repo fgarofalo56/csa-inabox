@@ -150,6 +150,12 @@ export interface CanvasFullscreenHostProps {
  */
 export function CanvasFullscreenHost({ ariaLabel, children }: CanvasFullscreenHostProps) {
   const styles = useStyles();
+  // Nested-host collapse: when a host already exists above (e.g. a canvas
+  // wrapped in its own host rendered INSIDE a ResizableCanvasRegion, which
+  // embeds one), a second provider would capture the rail's toggle and
+  // maximize only the inner subtree — leaving the outer region as dead
+  // space. Become a passthrough so exactly ONE host owns the surface.
+  const parentHost = useContext(CanvasFullscreenContext);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [announcement, setAnnouncement] = useState('');
   const hostRef = useRef<HTMLDivElement | null>(null);
@@ -235,6 +241,10 @@ export function CanvasFullscreenHost({ ariaLabel, children }: CanvasFullscreenHo
     () => ({ isFullscreen, enter, exit, toggle }),
     [isFullscreen, enter, exit, toggle],
   );
+
+  // Nested host → passthrough (after hooks, per rules-of-hooks). The parent
+  // host owns the overlay, context, and rail control for this surface.
+  if (parentHost) return <>{children}</>;
 
   return (
     <CanvasFullscreenContext.Provider value={ctx}>
