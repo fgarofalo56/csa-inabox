@@ -423,6 +423,14 @@ export const RUNTIME_FLAGS: readonly RuntimeFlagDef[] = [
     ownerItem: 'N8',
     surface: 'S3 gateway editor (/items/s3-gateway/[id])',
   },
+  {
+    id: 'u9-canvas-fullscreen',
+    label: 'Canvas full-screen mode (shared kit)',
+    description:
+      'The U9 maximize control on the shared CanvasRightRail: expands the canvas host to a fixed viewport overlay (chrome covered, canvas state / undo-redo / palette preserved; Esc, F11 or the rail button exits; focus-trapped and screen-reader announced). OFF hides the maximize button on every canvas rail on the next render — a canvas ALREADY maximized keeps its exit button + Esc/F11 so nobody is stranded. Session-scoped by design: nothing persists either way.',
+    ownerItem: 'U9',
+    surface: 'Every xyflow canvas carrying the shared CanvasRightRail (pipeline, eventstream, estate, dataflow, lineage, assets, …)',
+  },
 ];
 
 /** Union of registered flag ids (`never` while the list is empty). */
