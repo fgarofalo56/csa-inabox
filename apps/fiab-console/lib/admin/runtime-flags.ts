@@ -350,6 +350,14 @@ export const RUNTIME_FLAGS: readonly RuntimeFlagDef[] = [
     ownerItem: 'N16',
     surface: 'Code report editor (preview) + POST /api/items/code-report/[id]/render + …/validate',
   },
+  {
+    id: 'n17-incident-console',
+    label: 'Observability incident console (monitors + incidents)',
+    description:
+      'The N17 OpenLineage-backed observability console at /admin/incident-console: per-table freshness/volume/schema-drift monitors, the incident timeline (open→acknowledged→resolved), and the downstream-impact panel — plus the monitor observation feed + the N7d finding→incident consumer. OFF returns a guided "turned off" gate from the /api/observability/** routes and hides the surface on the next load; already-open incidents, emitted lineage, the OpenLineage export, and every other surface are unaffected. No roll needed.',
+    ownerItem: 'N17',
+    surface: '/admin/incident-console + /api/observability/monitors + /api/observability/incidents',
+  },
 ];
 
 /** Union of registered flag ids (`never` while the list is empty). */

@@ -27,7 +27,7 @@ import {
   ClipboardTask24Regular, Key24Regular, TagMultiple24Regular, Tag24Regular,
   Settings24Regular, People24Regular, Server24Regular, Heart24Regular,
   ShieldCheckmark24Regular, LockClosed16Regular, ToggleLeft24Regular,
-  DocumentBriefcase24Regular, Money24Regular, DatabaseLink24Regular, type FluentIcon,
+  DocumentBriefcase24Regular, Money24Regular, DatabaseLink24Regular, Alert24Regular, type FluentIcon,
 } from '@fluentui/react-icons';
 import { SignInRequired } from '@/lib/components/sign-in-required';
 import type { OverviewTileKey, OverviewTiles, TileCount } from '@/app/api/admin/overview/route';
@@ -85,6 +85,9 @@ const TILE_SPECS: TileSpec[] = [
   // DIAG1 — one-click support bundle; count = blocked config gates.
   { key: 'diagnostics', href: '/admin/diagnostics', label: 'Diagnostics', icon: DocumentBriefcase24Regular,
     description: 'Support bundle; blocked gates now' },
+  // N17 — OpenLineage-backed incident console; count = open incidents now.
+  { key: 'openIncidents', href: '/admin/incident-console', label: 'Incident console', icon: Alert24Regular,
+    description: 'Open data-observability incidents' },
 ];
 
 const useStyles = makeStyles({
