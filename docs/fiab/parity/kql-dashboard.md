@@ -35,7 +35,10 @@ global **time range**, with **auto-refresh** and **save**.
 | Share | Item-level RBAC |
 | Add tile from queryset | "Save to Dashboard" pins a queryset query as a tile |
 | Copilot tile authoring (preview) | NL → KQL for a tile |
-| Pages | Optional tile containers |
+| Pages | Named tile-container pages; a page strip switches between them |
+| Text tiles (markdown) | A tile type that renders authored markdown instead of a query result |
+| Drillthroughs | Visual Interactions > Drillthrough: clicking a data point injects the value into a dashboard parameter and can navigate to a target page |
+| Set alert on a tile | Alert on the tile's query via Activator (Reflex) |
 
 ## Loom coverage
 
@@ -64,7 +67,10 @@ global **time range**, with **auto-refresh** and **save**.
 | Create on /new | ✅ built (NEW) | `NewItemCreateGate` mints the Cosmos item so Run/Save work (was a dead `/new`) |
 | Publish dashboard definition to Fabric REST | ⚠️ honest-gate | Fabric Real-Time Dashboard items have no GA public create-definition REST for SP auth in this tenant; the model is the source of truth in Cosmos and runs against ADX directly. The `state` shape mirrors the Fabric JSON model (tiles/dataSources/parameters) for a future definition-REST sync. |
 | Copilot tile authoring (preview) | ⚠️ honest-gate | NL→KQL requires the Loom Copilot backend wiring; the KQL editor is fully functional without it |
-| Pages | ⚠️ honest-gate | single-page canvas today; multi-page is a layout-only follow-up (no backend gap) |
+| Pages | ✅ built (U8) | named tile-container pages + `DashboardPageStrip` (`kql-dashboard-page-strip.tsx`); tiles carry `pageId` (absent/unknown → first page via `resolveTilePageId`); rename inline, delete moves the page's tiles to the first remaining page; persisted in the Cosmos model (`pages[]`); flag `u8-kql-dashboard-depth` OFF reverts to the single-page canvas (nothing deleted) |
+| Text tiles (markdown) | ✅ built (U8) | `viz:'markdown'` tile with a `markdown` content field — GFM-subset render via the shared `renderMarkdown` (HTML-escaped first, injection-safe); authored in the tile flyout (Monaco `markdown` + live preview); NEVER executed (`isQueryTile` skips it in `runTiles` server-side and in the editor's runAll/runTile) |
+| Drillthroughs (param injection + target page) | ✅ built (U8) | per-tile `drillthrough { column, paramName, targetPageId? }`: clicking a data value injects it into the parameter, optionally navigates to the target page, and re-runs every tile against real ADX |
+| Set alert on a tile | ✅ built | per-tile "Set alert" → `POST /[id]/activator` mints a REAL Activator rule (sourceKind:'adx', kusto-client evaluation) + an ADX-scoped Azure Monitor scheduledQueryRule when `LOOM_ADX_ALERT_SCOPE` is provisioned (monitor-client; action group per the alert-dispatch standard) |
 | No Eventhouse / KQL DB provisioned | ⚠️ honest-gate | warning MessageBar names the resource (ARM `Microsoft.Kusto/clusters/databases`) + points to the Eventhouse editor; the **full builder still renders** |
 
 Zero ❌. Every executable control calls real Kusto; non-functional states are
@@ -102,8 +108,8 @@ honest infra/preview gates with the full UI still rendered (per
 
 - `pnpm build` — clean (the three routes compile: `/[id]`, `/[id]/run`, `/[id]/param-values`).
 - Backend Vitest contract tests:
-  - `lib/azure/__tests__/kql-dashboard-model.test.ts` (24) — substitution, base-query inlining, literal rendering, db resolution, sanitize (incl. baseQueries).
-  - `app/api/items/kql-dashboard/__tests__/routes.test.ts` (17) — auth gates, time/param/base-query substitution into executed KQL, tile→DB binding, baseQueries PUT round-trip, transient `/new` run, per-tile error isolation, query-based param values, content/structured errors.
+  - `lib/azure/__tests__/kql-dashboard-model.test.ts` — substitution, base-query inlining, literal rendering, db resolution, sanitize (incl. baseQueries, **U8 pages / markdown text tiles / drillthrough `targetPageId` / `resolveTilePageId` / `isQueryTile`**).
+  - `app/api/items/kql-dashboard/__tests__/routes.test.ts` — auth gates, time/param/base-query substitution into executed KQL, tile→DB binding, baseQueries PUT round-trip, **U8 pages+markdown PUT round-trip + markdown-tile execution skip**, transient `/new` run, per-tile error isolation, query-based param values, content/structured errors.
   - `lib/components/adx/__tests__/time-series-model.test.ts` (NEW) — datetime parsing, single/multi-series shaping, ascending-x sort, category-X fallback, series cap, multi-measure naming, legend search, zoom-window clamp, linear/log Y scaling, X-tick formatting.
 - DOM render tests (`lib/editors/__tests__/kql-dashboard.test.tsx`) cover the
   tile edit flyout + base-queries dialog; they run under jsdom once the repo-wide

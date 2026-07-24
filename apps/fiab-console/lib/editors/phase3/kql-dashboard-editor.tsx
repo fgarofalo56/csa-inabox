@@ -8,13 +8,21 @@ import { clientFetch } from '@/lib/client-fetch';
  * required): a tile grid with per-tile KQL bound to a data source + visual type
  * rendering REAL Kusto results, a data-sources panel, dashboard parameters
  * substituted into tile KQL, auto/manual refresh, and Save persisting the model
- * to Cosmos via /api/items/kql-dashboard/[id]. The editor's exclusive helpers
- * (Dash* types, DashboardState, TIME_ORDER, TILE_VIZ_OPTIONS, REFRESH_INTERVALS,
- * refreshLabel, genId, CF_*_LABELS, CfColumnField, ConditionalFormattingEditor)
- * move with it. The shared tile-render surface (TileVisual + CSV/download
- * helpers + KqlResult / TileViz models) is imported from ./kql-results; the
- * shared phase3 styles hook from ./styles. phase3-editors.tsx re-exports
- * KqlDashboardEditor from a barrel line so the registry resolves it unchanged.
+ * to Cosmos via /api/items/kql-dashboard/[id].
+ *
+ * U8 depth (flag `u8-kql-dashboard-depth`): multi-page tile containers with a
+ * page strip, markdown text tiles, and drill-through that navigates to a
+ * target page after injecting the clicked value.
+ *
+ * Decomposition (per the extend-vs-decompose convention): the parameter/filter
+ * bar lives in ./kql-dashboard-parameters (shared Dash* param types +
+ * TIME_ORDER), the page strip in ./kql-dashboard-page-strip, and the
+ * conditional-formatting editor (+ CfColumnField) in
+ * ./kql-dashboard-conditional-format. The shared tile-render surface
+ * (TileVisual + CSV/download helpers + KqlResult / TileViz models) is imported
+ * from ./kql-results; the shared phase3 styles hook from ./styles.
+ * phase3-editors.tsx re-exports KqlDashboardEditor from a barrel line so the
+ * registry resolves it unchanged.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -22,7 +30,7 @@ import {
   Caption1, Badge, Button, Input, Spinner, Field, Link,
   MessageBar, MessageBarBody, MessageBarTitle, MessageBarActions,
   Dialog, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
-  Label, Select, Textarea, Switch,
+  Select, Textarea,
   Skeleton, SkeletonItem,
   makeStyles, mergeClasses, tokens,
 } from '@fluentui/react-components';
@@ -30,7 +38,7 @@ import {
   Database20Regular, Play20Regular, Save20Regular,
   Add20Regular, Add24Regular, Delete20Regular, ArrowSync20Regular,
   MathFormula20Regular, Sparkle20Regular, ArrowDownload20Regular, Copy20Regular,
-  Alert20Regular, Open20Regular,
+  Alert20Regular, Open20Regular, TextT20Regular,
   // ux-fabric-a W1 — tile drag-reorder grip (Fabric RTD tiles drag by a grab
   // handle in the tile header; the same glyph the report canvas cards use).
   ReOrderDotsVertical16Regular,
@@ -44,15 +52,22 @@ import { ToolbarCrossLinks } from '@/lib/components/shared/item-tab-strip';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
+import { useRuntimeFlag } from '@/lib/components/ui/use-runtime-flag';
+import { renderMarkdown } from '@/lib/notebook/render-markdown';
 import {
-  CF_OPERATORS, CF_COLORS, CF_ICONS, CF_THEMES,
-  type ConditionalRule, type CfCondition,
-  type CfColor, type CfIcon, type CfOperator, type CfTheme,
+  resolveTilePageId,
+  type ConditionalRule,
 } from '@/lib/azure/kql-dashboard-model';
+import { CfColumnField, ConditionalFormattingEditor } from './kql-dashboard-conditional-format';
 import {
   TileVisual, kqlResultToCsv, downloadTextFile, slugifyForFile,
   type KqlResult, type TileViz,
 } from './kql-results';
+import {
+  DashboardParameterBar, TIME_ORDER,
+  type DashParam, type DashParamType, type DashParamDataType, type DashDataSource, type TimeRangeKey,
+} from './kql-dashboard-parameters';
+import { DashboardPageStrip, type DashPage } from './kql-dashboard-page-strip';
 import { AnomalyForecastDialog } from './anomaly-forecast';
 import { mapWithConcurrency } from '@/lib/util/concurrency';
 import { useStyles } from './styles';
@@ -174,6 +189,48 @@ const useTileChrome = makeStyles({
     },
     ':focus-visible': { border: `1px dashed ${tokens.colorBrandStroke1}`, outlineStyle: 'none' },
   },
+  /** U8 — text (markdown) tile body: rendered GFM subset with token-driven
+   *  typography so a text tile reads like the rest of the product. */
+  mdBody: {
+    marginTop: tokens.spacingVerticalS,
+    flexGrow: 1,
+    minWidth: 0,
+    minHeight: 0,
+    overflowY: 'auto',
+    color: tokens.colorNeutralForeground1,
+    fontSize: tokens.fontSizeBase300,
+    '& h1, & h2, & h3, & h4': {
+      marginTop: tokens.spacingVerticalXS,
+      marginBottom: tokens.spacingVerticalXS,
+    },
+    '& p': { marginTop: tokens.spacingVerticalXXS, marginBottom: tokens.spacingVerticalXXS },
+    '& code': {
+      fontFamily: tokens.fontFamilyMonospace,
+      fontSize: tokens.fontSizeBase200,
+      backgroundColor: tokens.colorNeutralBackground3,
+      borderRadius: tokens.borderRadiusSmall,
+      paddingLeft: tokens.spacingHorizontalXXS,
+      paddingRight: tokens.spacingHorizontalXXS,
+    },
+    '& pre.md-code': {
+      backgroundColor: tokens.colorNeutralBackground3,
+      borderRadius: tokens.borderRadiusMedium,
+      padding: tokens.spacingVerticalS,
+      overflowX: 'auto',
+    },
+    '& table.md-table': { borderCollapse: 'collapse' },
+    '& table.md-table th, & table.md-table td': {
+      border: `1px solid ${tokens.colorNeutralStroke2}`,
+      padding: tokens.spacingVerticalXXS,
+    },
+    '& blockquote': {
+      borderLeft: `3px solid ${tokens.colorNeutralStroke1}`,
+      marginLeft: 0,
+      paddingLeft: tokens.spacingHorizontalS,
+      color: tokens.colorNeutralForeground3,
+    },
+    '& a': { color: tokens.colorBrandForeground1 },
+  },
 });
 
 // ----- KQL Dashboard (Fabric Real-Time Dashboard parity) -----
@@ -188,13 +245,18 @@ interface DashTile {
   title: string;
   kql: string;
   viz: TileViz;
+  /** Text-tile content (viz:'markdown' only) — rendered, never executed. */
+  markdown?: string;
+  /** Owning page id (U8 pages). Absent/unknown → the first page. */
+  pageId?: string;
   dataSourceId?: string;
   database?: string;
   w?: number; // grid column span 1..12
   h?: number; // grid row units 1..8
   conditionalRules?: ConditionalRule[];
-  /** Drill-through: clicking a result value sets a dashboard parameter. */
-  drillthrough?: { column: string; paramName: string };
+  /** Drill-through: clicking a result value sets a dashboard parameter and
+   *  optionally navigates to a target page (U8). */
+  drillthrough?: { column: string; paramName: string; targetPageId?: string };
   result?: KqlResult;
   error?: string;
   /** PSR-7 — this tile's query is in flight (drives the per-tile skeleton/SWR). */
@@ -204,24 +266,8 @@ interface DashTile {
   durationMs?: number;
 }
 
-interface DashDataSource { id: string; name: string; database: string; clusterUri?: string; }
-
 /** A shared KQL snippet referenced by tiles via `$baseQuery('name')`. */
 interface DashBaseQuery { id: string; name: string; kql: string; }
-
-type DashParamType = 'freetext' | 'fixed' | 'multi' | 'query' | 'datasource' | 'duration';
-type DashParamDataType = 'string' | 'long' | 'int' | 'real' | 'datetime' | 'bool';
-
-interface DashParam {
-  variableName: string;
-  label?: string;
-  type: DashParamType;
-  dataType?: DashParamDataType;
-  values?: string[];
-  query?: string;
-  dataSourceId?: string;
-  value?: string | string[];
-}
 
 interface DashboardState {
   ok: boolean;
@@ -231,13 +277,11 @@ interface DashboardState {
   dataSources?: DashDataSource[];
   parameters?: DashParam[];
   baseQueries?: DashBaseQuery[];
+  pages?: DashPage[];
   timeRange?: string;
   autoRefreshMs?: number;
   error?: string;
 }
-
-type TimeRangeKey = 'last-15m' | 'last-1h' | 'last-4h' | 'last-24h' | 'last-7d' | 'last-30d' | 'all';
-const TIME_ORDER: TimeRangeKey[] = ['last-15m', 'last-1h', 'last-4h', 'last-24h', 'last-7d', 'last-30d', 'all'];
 
 const TILE_VIZ_OPTIONS: TileViz[] = ['table', 'timechart', 'line', 'column', 'bar', 'pie', 'stat', 'map'];
 
@@ -268,170 +312,6 @@ function genId(): string {
     if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID();
   } catch { /* noop */ }
   return 'ds-' + Math.random().toString(36).slice(2, 10);
-}
-
-const CF_COLOR_LABELS: Record<CfColor, string> = { red: 'Red', yellow: 'Yellow', green: 'Green', blue: 'Blue' };
-const CF_ICON_LABELS: Record<CfIcon, string> = { warning: 'Warning', error: 'Error', success: 'Success', info: 'Info' };
-const CF_THEME_LABELS: Record<CfTheme, string> = {
-  'traffic-lights': 'Traffic lights', cold: 'Cold', warm: 'Warm', blue: 'Blue', red: 'Red', yellow: 'Yellow',
-};
-
-/** A column field — Select when the live result has columns, else a free Input. */
-function CfColumnField({ value, columns, onChange, label }: { value: string; columns: string[]; onChange: (v: string) => void; label: string }) {
-  if (columns.length > 0) {
-    return (
-      <Select size="small" value={value} aria-label={label} onChange={(_: unknown, d: any) => onChange(d.value)}>
-        {!columns.includes(value) && <option value={value}>{value || '(pick column)'}</option>}
-        {columns.map((c) => <option key={c} value={c}>{c}</option>)}
-      </Select>
-    );
-  }
-  return <Input size="small" value={value} aria-label={label} placeholder="column name" onChange={(_: unknown, d: any) => onChange(d.value)} />;
-}
-
-/**
- * Per-tile conditional-formatting rule editor (Fabric Real-Time Dashboard
- * parity). Supports "Color by condition" (threshold → color/icon/tag, AND-ed
- * conditions, cells-or-row) and table-only "Color by value" (gradient theme).
- * Every field is a dropdown / typed Input — no freeform JSON (operator
- * no-freeform-config mandate). Rules apply client-side at render time.
- */
-function ConditionalFormattingEditor({ viz, rules, columns, onChange }: {
-  viz: 'table' | 'stat';
-  rules: ConditionalRule[];
-  columns: string[];
-  onChange: (rules: ConditionalRule[]) => void;
-}) {
-  const isTable = viz === 'table';
-  const update = (idx: number, patch: Partial<ConditionalRule>) =>
-    onChange(rules.map((r, i) => (i === idx ? { ...r, ...patch } : r)));
-  const removeRule = (idx: number) => onChange(rules.filter((_, i) => i !== idx));
-  const addRule = (type: 'condition' | 'value') => {
-    const col = columns[0] || '';
-    const base: ConditionalRule = type === 'condition'
-      ? { type, color: 'red', colorStyle: 'bold', applyTo: 'cells', conditions: [{ column: col, operator: '>', value: '' }] }
-      : { type, theme: 'traffic-lights', column: col, applyTo: 'cells' };
-    onChange([...rules, base]);
-  };
-  const updateCond = (ri: number, ci: number, patch: Partial<CfCondition>) =>
-    onChange(rules.map((r, i) => (i === ri ? { ...r, conditions: (r.conditions || []).map((c, j) => (j === ci ? { ...c, ...patch } : c)) } : r)));
-  const addCond = (ri: number) =>
-    onChange(rules.map((r, i) => (i === ri ? { ...r, conditions: [...(r.conditions || []), { column: columns[0] || '', operator: '>', value: '' }] } : r)));
-  const removeCond = (ri: number, ci: number) =>
-    onChange(rules.map((r, i) => (i === ri ? { ...r, conditions: (r.conditions || []).filter((_, j) => j !== ci) } : r)));
-
-  const fieldRow: React.CSSProperties = { display: 'flex', gap: tokens.spacingVerticalS, alignItems: 'center', flexWrap: 'wrap' };
-  return (
-    <div style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge, padding: tokens.spacingVerticalS, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, background: tokens.colorNeutralBackground2 }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: tokens.spacingVerticalS, flexWrap: 'wrap' }}>
-        <Caption1 style={{ fontWeight: 600 }}>Conditional formatting</Caption1>
-        <div style={{ display: 'flex', gap: tokens.spacingVerticalXS}}>
-          <Button size="small" icon={<Add20Regular />} onClick={() => addRule('condition')}>Color by condition</Button>
-          {isTable && <Button size="small" icon={<Add20Regular />} onClick={() => addRule('value')}>Color by value</Button>}
-        </div>
-      </div>
-      {columns.length === 0 && (
-        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Run the tile first to pick columns from its real result. You can still type column names below.</Caption1>
-      )}
-      {rules.length === 0 && (
-        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>No rules — cells render unstyled. Add a rule to color cells by a data threshold.</Caption1>
-      )}
-      {rules.map((rule, ri) => (
-        <div key={ri} style={{ border: `1px solid ${tokens.colorNeutralStroke3}`, borderRadius: tokens.borderRadiusMedium, padding: tokens.spacingVerticalS, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, background: tokens.colorNeutralBackground1 }}>
-          <div style={{ display: 'flex', gap: tokens.spacingVerticalS, alignItems: 'center', justifyContent: 'space-between' }}>
-            <Badge appearance="outline" color={rule.type === 'value' ? 'informative' : 'brand'}>{rule.type === 'value' ? 'Color by value' : 'Color by condition'}</Badge>
-            <Input size="small" style={{ flex: 1 }} value={rule.name || ''} placeholder={`Rule ${ri + 1} name (optional)`} aria-label={`Rule ${ri + 1} name`} onChange={(_: unknown, d: any) => update(ri, { name: d.value || undefined })} />
-            <Button size="small" appearance="subtle" icon={<Delete20Regular />} aria-label={`Delete rule ${ri + 1}`} onClick={() => removeRule(ri)} />
-          </div>
-
-          {rule.type === 'condition' ? (
-            <>
-              {(rule.conditions || []).map((cond, ci) => (
-                <div key={ci} style={fieldRow}>
-                  {ci > 0 && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>AND</Caption1>}
-                  <div style={{ minWidth: 130 }}>
-                    <CfColumnField label={`Rule ${ri + 1} condition ${ci + 1} column`} value={cond.column} columns={columns} onChange={(v) => updateCond(ri, ci, { column: v })} />
-                  </div>
-                  <Select size="small" value={cond.operator} aria-label={`Rule ${ri + 1} condition ${ci + 1} operator`} onChange={(_: unknown, d: any) => updateCond(ri, ci, { operator: d.value as CfOperator })}>
-                    {CF_OPERATORS.map((op) => <option key={op} value={op}>{op}</option>)}
-                  </Select>
-                  <Input
-                    size="small"
-                    style={{ width: 110 }}
-                    value={cond.value || ''}
-                    aria-label={`Rule ${ri + 1} condition ${ci + 1} value`}
-                    placeholder="value"
-                    disabled={cond.operator === 'is empty' || cond.operator === 'is not empty'}
-                    onChange={(_: unknown, d: any) => updateCond(ri, ci, { value: d.value })}
-                  />
-                  {(rule.conditions || []).length > 1 && (
-                    <Button size="small" appearance="subtle" icon={<Delete20Regular />} aria-label={`Remove condition ${ci + 1}`} onClick={() => removeCond(ri, ci)} />
-                  )}
-                </div>
-              ))}
-              <div>
-                <Button size="small" appearance="subtle" icon={<Add20Regular />} onClick={() => addCond(ri)}>Add condition</Button>
-              </div>
-              <div style={fieldRow}>
-                <Label size="small">Color</Label>
-                <Select size="small" value={rule.color || 'red'} aria-label={`Rule ${ri + 1} color`} onChange={(_: unknown, d: any) => update(ri, { color: d.value as CfColor })}>
-                  {CF_COLORS.map((c) => <option key={c} value={c}>{CF_COLOR_LABELS[c]}</option>)}
-                </Select>
-                <Label size="small">Style</Label>
-                <Select size="small" value={rule.colorStyle || 'bold'} aria-label={`Rule ${ri + 1} style`} onChange={(_: unknown, d: any) => update(ri, { colorStyle: d.value as 'bold' | 'light' })}>
-                  <option value="bold">Bold</option>
-                  <option value="light">Light</option>
-                </Select>
-                <Label size="small">Icon</Label>
-                <Select size="small" value={rule.icon || ''} aria-label={`Rule ${ri + 1} icon`} onChange={(_: unknown, d: any) => update(ri, { icon: (d.value || undefined) as CfIcon | undefined })}>
-                  <option value="">None</option>
-                  {CF_ICONS.map((ic) => <option key={ic} value={ic}>{CF_ICON_LABELS[ic]}</option>)}
-                </Select>
-                <Label size="small">Tag</Label>
-                <Input size="small" style={{ width: 110 }} value={rule.tag || ''} placeholder="optional" aria-label={`Rule ${ri + 1} tag`} onChange={(_: unknown, d: any) => update(ri, { tag: d.value || undefined })} />
-              </div>
-            </>
-          ) : (
-            <div style={fieldRow}>
-              <Label size="small">Column</Label>
-              <div style={{ minWidth: 130 }}>
-                <CfColumnField label={`Rule ${ri + 1} value column`} value={rule.column || ''} columns={columns} onChange={(v) => update(ri, { column: v })} />
-              </div>
-              <Label size="small">Theme</Label>
-              <Select size="small" value={rule.theme || 'traffic-lights'} aria-label={`Rule ${ri + 1} theme`} onChange={(_: unknown, d: any) => update(ri, { theme: d.value as CfTheme })}>
-                {CF_THEMES.map((th) => <option key={th} value={th}>{CF_THEME_LABELS[th]}</option>)}
-              </Select>
-              <Label size="small">Min</Label>
-              <Input size="small" type="number" style={{ width: 80 }} value={rule.minValue ?? '' as any} placeholder="auto" aria-label={`Rule ${ri + 1} min`} onChange={(_: unknown, d: any) => update(ri, { minValue: d.value === '' ? undefined : Number(d.value) })} />
-              <Label size="small">Max</Label>
-              <Input size="small" type="number" style={{ width: 80 }} value={rule.maxValue ?? '' as any} placeholder="auto" aria-label={`Rule ${ri + 1} max`} onChange={(_: unknown, d: any) => update(ri, { maxValue: d.value === '' ? undefined : Number(d.value) })} />
-              <Switch label="Reverse" checked={!!rule.reverseColors} aria-label={`Rule ${ri + 1} reverse colors`} onChange={(_: unknown, d: any) => update(ri, { reverseColors: d.checked || undefined })} />
-            </div>
-          )}
-
-          {isTable && (
-            <div style={fieldRow}>
-              <Label size="small">Apply to</Label>
-              <Select size="small" value={rule.applyTo || 'cells'} aria-label={`Rule ${ri + 1} apply to`} onChange={(_: unknown, d: any) => update(ri, { applyTo: d.value as 'cells' | 'row' })}>
-                <option value="cells">Matched cells</option>
-                <option value="row">Entire row</option>
-              </Select>
-              {(rule.applyTo || 'cells') === 'cells' && (
-                <>
-                  <Label size="small">Target column</Label>
-                  <Select size="small" value={rule.targetColumn || ''} aria-label={`Rule ${ri + 1} target column`} onChange={(_: unknown, d: any) => update(ri, { targetColumn: d.value || undefined })}>
-                    <option value="">{rule.type === 'value' ? '(graded column)' : '(all conditioned columns)'}</option>
-                    {columns.map((c) => <option key={c} value={c}>{c}</option>)}
-                  </Select>
-                  <Switch label="Hide text" checked={!!rule.hideText} aria-label={`Rule ${ri + 1} hide text`} onChange={(_: unknown, d: any) => update(ri, { hideText: d.checked || undefined })} />
-                </>
-              )}
-            </div>
-          )}
-        </div>
-      ))}
-    </div>
-  );
 }
 
 /**
@@ -493,11 +373,18 @@ export function BaseQueriesPanel({
 export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   const tc = useTileChrome();
+  // U8 runtime kill-switch (FLAG0): OFF reverts to the single-page canvas —
+  // the page strip, text-tile authoring, and page-targeted drill-through hide;
+  // saved pages/text tiles are preserved (all tiles render on one canvas).
+  const depthEnabled = useRuntimeFlag('u8-kql-dashboard-depth', true);
   const [state, setState] = useState<DashboardState | null>(null);
   const [tiles, setTiles] = useState<DashTile[]>([]);
   const [dataSources, setDataSources] = useState<DashDataSource[]>([]);
   const [params, setParams] = useState<DashParam[]>([]);
   const [baseQueries, setBaseQueries] = useState<DashBaseQuery[]>([]);
+  // U8 pages — named tile containers; [] = back-compat single-page canvas.
+  const [pages, setPages] = useState<DashPage[]>([]);
+  const [activePageId, setActivePageId] = useState<string>('');
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const [running, setRunning] = useState(false);
@@ -569,9 +456,10 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
     dataSources,
     parameters: params,
     baseQueries,
+    pages,
     timeRange,
     autoRefreshMs,
-  }), [tiles, dataSources, params, baseQueries, timeRange, autoRefreshMs]);
+  }), [tiles, dataSources, params, baseQueries, pages, timeRange, autoRefreshMs]);
 
   // Load the saved model (GET). When runTiles, GET ?run=1 executes every tile.
   const load = useCallback(async (runTiles = false) => {
@@ -596,6 +484,9 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
         setDataSources(j.dataSources || []);
         setParams(j.parameters || []);
         setBaseQueries(j.baseQueries || []);
+        const loadedPages = j.pages || [];
+        setPages(loadedPages);
+        setActivePageId((cur) => (loadedPages.some((p: DashPage) => p.id === cur) ? cur : (loadedPages[0]?.id || '')));
         if (typeof j.autoRefreshMs === 'number') setAutoRefreshMs(j.autoRefreshMs);
         if (j.timeRange && TIME_ORDER.includes(j.timeRange as TimeRangeKey)) setTimeRange(j.timeRange as TimeRangeKey);
         setDirty(false);
@@ -618,10 +509,13 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
     // Snapshot the model + tile identity at click-time so mid-run edits can't
     // change what each index runs. buildModel() strips transient result/loading.
     const model = buildModel();
-    // Mark every tile loading up front (keeps prior result → SWR, no flash).
-    setTiles((prev) => prev.map((t) => ({ ...t, loading: true, error: undefined })));
+    // Mark every QUERY tile loading up front (keeps prior result → SWR, no
+    // flash). Text (markdown) tiles never execute — they render their content.
+    setTiles((prev) => prev.map((t) => (t.viz === 'markdown' ? t : { ...t, loading: true, error: undefined })));
     try {
       await mapWithConcurrency(model.tiles, DASHBOARD_TILE_CONCURRENCY, async (tile, i) => {
+        // Text (markdown) tiles have nothing to run.
+        if (tile.viz === 'markdown') return;
         // ux-fabric-a W1 — per-tile client-measured query timing for the status footer.
         const t0 = performance.now();
         try {
@@ -682,9 +576,65 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
         title: `Tile ${prev.length + 1}`,
         kql: `// KQL for this tile. Use parameters (_startTime, _endTime, or your own _vars).\nprint value = 1`,
         viz: 'table', w: 4, h: 2,
+        pageId: pages.length > 0 ? activePageId : undefined,
       }];
       setTileFlyoutIdx(next.length - 1);
       return next;
+    });
+    setDirty(true);
+  }, [pages.length, activePageId]);
+
+  // U8 — text (markdown) tile: authored content rendered in place of a query
+  // result (Fabric RTD text-tile parity). Never executed against ADX.
+  const addTextTile = useCallback(() => {
+    setTiles((prev) => {
+      const next: DashTile[] = [...prev, {
+        title: `Text ${prev.length + 1}`,
+        kql: '',
+        viz: 'markdown',
+        markdown: '## Section heading\n\nDescribe this dashboard section. **Markdown** renders here — headings, lists, tables, links, and code.',
+        w: 4, h: 2,
+        pageId: pages.length > 0 ? activePageId : undefined,
+      }];
+      setTileFlyoutIdx(next.length - 1);
+      return next;
+    });
+    setDirty(true);
+  }, [pages.length, activePageId]);
+
+  // ── U8 — page CRUD. Pages are named tile containers; deleting a page moves
+  // its tiles to the first remaining page (nothing destroyed). The FIRST add
+  // materializes "Page 1" for the existing single-page tiles + the new page. ──
+  const addPage = useCallback(() => {
+    setPages((prev) => {
+      if (prev.length === 0) {
+        const p1: DashPage = { id: genId(), name: 'Page 1' };
+        const p2: DashPage = { id: genId(), name: 'Page 2' };
+        setActivePageId(p2.id);
+        return [p1, p2];
+      }
+      const p: DashPage = { id: genId(), name: `Page ${prev.length + 1}` };
+      setActivePageId(p.id);
+      return [...prev, p];
+    });
+    setDirty(true);
+  }, []);
+
+  const renamePage = useCallback((pageId: string, name: string) => {
+    setPages((prev) => prev.map((p) => (p.id === pageId ? { ...p, name } : p)));
+    setDirty(true);
+  }, []);
+
+  const deletePage = useCallback((pageId: string) => {
+    setPages((prev) => {
+      if (prev.length <= 1) return prev;
+      const remaining = prev.filter((p) => p.id !== pageId);
+      const fallback = remaining[0].id;
+      // Move the deleted page's tiles to the first remaining page. Tiles with
+      // no pageId already resolve to the first page — normalize deleted refs.
+      setTiles((tprev) => tprev.map((t) => (resolveTilePageId(t, prev) === pageId ? { ...t, pageId: fallback } : t)));
+      setActivePageId((cur) => (cur === pageId ? fallback : cur));
+      return remaining;
     });
     setDirty(true);
   }, []);
@@ -783,6 +733,7 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
         database: g.database || undefined,
         w: g.w || 4,
         h: g.h || 2,
+        pageId: pages.length > 0 ? activePageId : undefined,
         result: g.result,
         error: j.validated ? undefined : (j.validationError || undefined),
       };
@@ -802,7 +753,7 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
     } finally {
       setAiBusy(false);
     }
-  }, [aiPrompt, aiDataSourceId, id, timeRange]);
+  }, [aiPrompt, aiDataSourceId, id, timeRange, pages.length, activePageId]);
 
   const deleteTile = useCallback((idx: number) => {
     if (typeof window !== 'undefined' && !window.confirm('Delete this tile? This cannot be undone until you reload without saving.')) return;
@@ -854,7 +805,7 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
   // Run a single tile live (the tile-editor "Run" button — Fabric parity).
   const runTile = useCallback(async (idx: number) => {
     const t = tiles[idx];
-    if (!t) return;
+    if (!t || t.viz === 'markdown') return; // text tiles never execute
     // PSR-7 — SWR: keep the prior result on screen while re-querying (loading
     // flag drives the tile spinner/skeleton, never a whole-board block).
     updateTile(idx, { error: undefined, loading: true });
@@ -886,13 +837,13 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
     let insertedIdx = 0;
     setTiles((prev) => {
       insertedIdx = prev.length;
-      return [...prev, { title, kql, viz: 'timechart' as TileViz, database: defaultDb, w: 6, h: 3 }];
+      return [...prev, { title, kql, viz: 'timechart' as TileViz, database: defaultDb, w: 6, h: 3, pageId: pages.length > 0 ? activePageId : undefined }];
     });
     setDirty(true);
     setAnomalyOpen(false);
     setTileFlyoutIdx(insertedIdx);
     setTimeout(() => runTile(insertedIdx), 0);
-  }, [defaultDb, runTile]);
+  }, [defaultDb, runTile, pages.length, activePageId]);
 
   // Resolve the database a tile targets (explicit override → bound data source
   // → dashboard default) — mirrors the server-side resolveTileDatabase.
@@ -1115,6 +1066,10 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
       if (Array.isArray(model.dataSources)) setDataSources(model.dataSources);
       if (Array.isArray(model.parameters)) setParams(model.parameters);
       if (Array.isArray(model.baseQueries)) setBaseQueries(model.baseQueries);
+      if (Array.isArray(model.pages)) {
+        setPages(model.pages);
+        setActivePageId((cur) => (model.pages.some((p: DashPage) => p?.id === cur) ? cur : (model.pages[0]?.id || '')));
+      }
       if (typeof model.timeRange === 'string' && TIME_ORDER.includes(model.timeRange)) setTimeRange(model.timeRange);
       setDirty(true); setJsonOpen(false); setJsonErr(null);
     } catch (e: any) {
@@ -1133,8 +1088,10 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
     { id: 'home', label: 'Home', groups: [
       { label: 'Edit', actions: [
         { label: 'Add tile', onClick: addTile },
+        ...(depthEnabled ? [{ label: 'Add text tile', onClick: addTextTile }] : []),
         { label: 'Add tile with Copilot', onClick: () => { setAiErr(null); setAiNote(null); setAiOpen(true); } },
         { label: 'Add anomaly / forecast tile', onClick: () => setAnomalyOpen(true) },
+        ...(depthEnabled ? [{ label: 'Add page', onClick: addPage }] : []),
         { label: 'Data sources', onClick: () => setSourcesOpen(true) },
         { label: 'Parameters', onClick: () => setParamsOpen(true) },
         { label: 'Base queries', onClick: () => setBaseQueriesOpen(true) },
@@ -1152,7 +1109,7 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
         { label: 'Share', onClick: () => setShareOpen(true) },
       ]},
     ]},
-  ], [addTile, openJson, running, runAll, autoRefreshMs, timeRange, cycleTime, saving, save]);
+  ], [addTile, addTextTile, addPage, depthEnabled, openJson, running, runAll, autoRefreshMs, timeRange, cycleTime, saving, save]);
 
   const main = (
     <div className={s.pad}>
@@ -1174,9 +1131,13 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
       />
       <div className={s.toolbar}>
         <Badge appearance="filled" color="brand">Real-Time Dashboard</Badge>
-        <Caption1>db: <strong>{defaultDb}</strong> · {tiles.length} tiles · {dataSources.length} sources · {params.length} params</Caption1>
+        <Caption1>db: <strong>{defaultDb}</strong> · {tiles.length} tiles{depthEnabled && pages.length > 0 ? ` · ${pages.length} pages` : ''} · {dataSources.length} sources · {params.length} params</Caption1>
         {dirty && <Badge appearance="outline" color="warning">unsaved</Badge>}
         <Button size="small" appearance="outline" icon={<Add20Regular />} onClick={addTile}>Add tile</Button>
+        {depthEnabled && (
+          <Button size="small" appearance="outline" icon={<TextT20Regular />} onClick={addTextTile}
+            title="Add a text (markdown) tile — rendered content, no query">Add text tile</Button>
+        )}
         <Button size="small" appearance="primary" icon={<Sparkle20Regular />} onClick={() => { setAiErr(null); setAiNote(null); setAiOpen(true); }}>Add tile with Copilot</Button>
         <Button size="small" appearance="outline" icon={<MathFormula20Regular />} onClick={() => setAnomalyOpen(true)}>Anomaly / forecast</Button>
         <Button size="small" appearance="outline" icon={<Database20Regular />} onClick={() => setSourcesOpen(true)}>Data sources</Button>
@@ -1219,67 +1180,20 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
         </Button>
       </div>
 
-      {/* Parameter filter bar — Fabric renders selected dashboard params here. */}
-      {params.length > 0 && (
-        <div style={{ display: 'flex', gap: tokens.spacingVerticalM, flexWrap: 'wrap', alignItems: 'flex-end', padding: `${tokens.spacingVerticalXS} 0` }}>
-          {params.map((p, i) => (
-            <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS, minWidth: 160 }}>
-              <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{p.label || p.variableName}</Caption1>
-              {p.type === 'fixed' || p.type === 'datasource' ? (
-                <Select value={(p.value as string) || ''}
-                  onChange={(_: unknown, d: any) => { updateParam(i, { value: d.value }); setTimeout(() => runDependentTiles(p.variableName), 0); }}>
-                  <option value="">(all)</option>
-                  {(p.type === 'datasource' ? dataSources.map((d) => d.name) : (p.values || [])).map((v) => <option key={v} value={v}>{v}</option>)}
-                </Select>
-              ) : p.type === 'query' ? (
-                <Select value={(p.value as string) || ''}
-                  onFocus={() => { if (!paramValueCache[p.variableName]) loadParamValues(p); }}
-                  onChange={(_: unknown, d: any) => { updateParam(i, { value: d.value }); setTimeout(() => runDependentTiles(p.variableName), 0); }}>
-                  <option value="">(all)</option>
-                  {(paramValueCache[p.variableName] || []).map((v) => <option key={v} value={v}>{v}</option>)}
-                </Select>
-              ) : p.type === 'duration' ? (
-                // Time-range picker — matches the Fabric "Duration" param type.
-                // Changing it sets the global time range (which drives the
-                // synthetic _startTime/_endTime tokens) and re-runs every tile.
-                <Select value={(p.value as string) || timeRange}
-                  onChange={(_: unknown, d: any) => {
-                    updateParam(i, { value: d.value });
-                    if (TIME_ORDER.includes(d.value as TimeRangeKey)) setTimeRange(d.value as TimeRangeKey);
-                    setTimeout(() => runAll(), 0);
-                  }}>
-                  {TIME_ORDER.map((k) => <option key={k} value={k}>{k}</option>)}
-                </Select>
-              ) : p.type === 'multi' ? (
-                p.values && p.values.length > 0 ? (
-                  // Fixed-value multi-select — native <select multiple> backed
-                  // by the param's allowed values list.
-                  <select
-                    multiple
-                    size={Math.min(p.values.length, 5)}
-                    value={Array.isArray(p.value) ? (p.value as string[]) : []}
-                    onChange={(e) => updateParam(i, { value: Array.from(e.target.selectedOptions).map((o) => o.value) })}
-                    onBlur={() => runDependentTiles(p.variableName)}
-                    aria-label={p.label || p.variableName}
-                    style={{ minWidth: 160, padding: tokens.spacingVerticalXS, border: `1px solid ${tokens.colorNeutralStroke1}`, borderRadius: tokens.borderRadiusMedium, background: tokens.colorNeutralBackground1, color: tokens.colorNeutralForeground1 }}>
-                    {p.values.map((v) => <option key={v} value={v}>{v}</option>)}
-                  </select>
-                ) : (
-                  <Input placeholder="comma,separated,values"
-                    value={Array.isArray(p.value) ? p.value.join(',') : ''}
-                    onChange={(_: unknown, d: any) => updateParam(i, { value: d.value.split(',').map((x: string) => x.trim()).filter(Boolean) })}
-                    onBlur={() => runDependentTiles(p.variableName)} />
-                )
-              ) : (
-                <Input value={Array.isArray(p.value) ? '' : (p.value || '')}
-                  onChange={(_: unknown, d: any) => updateParam(i, { value: d.value })}
-                  onBlur={() => runDependentTiles(p.variableName)} />
-              )}
-            </div>
-          ))}
-          <Button size="small" appearance="primary" icon={<Play20Regular />} onClick={runAll} disabled={running}>Apply</Button>
-        </div>
-      )}
+      {/* Parameter filter bar — Fabric renders selected dashboard params here.
+          Extracted to kql-dashboard-parameters.tsx (U8 decomposition). */}
+      <DashboardParameterBar
+        params={params}
+        dataSources={dataSources}
+        timeRange={timeRange}
+        paramValueCache={paramValueCache}
+        running={running}
+        onUpdateParam={updateParam}
+        onRunDependents={runDependentTiles}
+        onRunAll={runAll}
+        onLoadParamValues={loadParamValues}
+        onTimeRangeChange={setTimeRange}
+      />
 
       {saveMsg && !saveErr && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{saveMsg}</Caption1>}
       {saveErr && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Error</MessageBarTitle>{saveErr}</MessageBarBody></MessageBar>}
@@ -1302,6 +1216,25 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
         </MessageBar>
       )}
 
+      {/* U8 — page strip: named tile-container pages (Fabric RTD Pages parity).
+          Hidden when the u8-kql-dashboard-depth kill-switch is OFF (all tiles
+          render on one canvas — the pre-U8 behavior; nothing is deleted). */}
+      {depthEnabled && (
+        <DashboardPageStrip
+          pages={pages}
+          activePageId={pages.length > 0 ? (pages.some((p) => p.id === activePageId) ? activePageId : pages[0].id) : ''}
+          tileCounts={tiles.reduce<Record<string, number>>((acc, t) => {
+            const pid = resolveTilePageId(t, pages);
+            acc[pid] = (acc[pid] || 0) + 1;
+            return acc;
+          }, {})}
+          onSelect={setActivePageId}
+          onAdd={addPage}
+          onRename={renamePage}
+          onDelete={deletePage}
+        />
+      )}
+
       {/* Tile grid — 12-col CSS grid; each tile spans its w/h. Tiles drag-reorder
           by the header grip and resize by the corner grip (ux-fabric-a W1).
           The grid REGION height is user-resizable (G3, persisted under
@@ -1310,6 +1243,11 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
       <ResizableCanvasRegion storageKey="kql-dashboard-grid" defaultPx={560} minPx={280} ariaLabel="Resize dashboard tile grid height">
         <div ref={tileGridRef} style={{ display: 'grid', gridTemplateColumns: 'repeat(12, 1fr)', gap: tokens.spacingVerticalM, gridAutoRows: 'minmax(120px, auto)', alignContent: 'start', flex: 1, minHeight: 0, overflowY: 'auto' }}>
         {tiles.map((t, i) => {
+          // U8 pages — only the active page's tiles render. Mapping over the
+          // FULL array keeps indices global, so every callback (run/edit/
+          // delete/drag/resize) stays stable across pages.
+          if (depthEnabled && pages.length > 0 && resolveTilePageId(t, pages) !== activePageId) return null;
+          const isText = t.viz === 'markdown';
           const span = Math.max(1, Math.min(12, t.w || 4));
           const rowSpan = Math.max(1, Math.min(8, t.h || 2));
           const dsName = t.dataSourceId ? (dataSources.find((d) => d.id === t.dataSourceId)?.name || t.dataSourceId) : (t.database || defaultDb);
@@ -1349,32 +1287,43 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
                   <ReOrderDotsVertical16Regular />
                 </span>
                 <div className={tc.tileMeta}>
-                  <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{t.viz.toUpperCase()} · {dsName}</Caption1>
+                  <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{isText ? 'TEXT' : <>{t.viz.toUpperCase()} · {dsName}</>}</Caption1>
                   <div className={tc.tileTitle}>{t.title}</div>
                 </div>
                 <div className={mergeClasses(tc.tileActions, 'tile-actions')}>
-                  <Button size="small" appearance="subtle" icon={<Play20Regular />} onClick={() => runTile(i)} aria-label="Run tile" title="Run this tile" />
-                  <Button
-                    size="small" appearance="subtle" icon={<Alert20Regular />}
-                    onClick={() => openSetAlert(i)}
-                    aria-label="Set alert on this tile"
-                    title="Set alert — create an Activator rule from this tile's KQL (evaluated on the ADX cluster; Azure-native, no Fabric)" />
-                  <Button
-                    size="small" appearance="subtle" icon={<ArrowDownload20Regular />}
-                    onClick={() => exportTileCsv(i)} disabled={!t.result?.ok}
-                    aria-label="Export tile result to CSV"
-                    title={t.result?.ok ? 'Export this tile’s result to CSV' : 'Run the tile first to enable export'} />
-                  <Button
-                    size="small" appearance="subtle" icon={<Copy20Regular />}
-                    onClick={() => copyTileCsv(i)} disabled={!t.result?.ok}
-                    aria-label="Copy tile result to clipboard"
-                    title={t.result?.ok ? 'Copy this tile’s result (CSV) to the clipboard' : 'Run the tile first to enable copy'} />
+                  {!isText && (
+                    <>
+                      <Button size="small" appearance="subtle" icon={<Play20Regular />} onClick={() => runTile(i)} aria-label="Run tile" title="Run this tile" />
+                      <Button
+                        size="small" appearance="subtle" icon={<Alert20Regular />}
+                        onClick={() => openSetAlert(i)}
+                        aria-label="Set alert on this tile"
+                        title="Set alert — create an Activator rule from this tile's KQL (evaluated on the ADX cluster; Azure-native, no Fabric)" />
+                      <Button
+                        size="small" appearance="subtle" icon={<ArrowDownload20Regular />}
+                        onClick={() => exportTileCsv(i)} disabled={!t.result?.ok}
+                        aria-label="Export tile result to CSV"
+                        title={t.result?.ok ? 'Export this tile’s result to CSV' : 'Run the tile first to enable export'} />
+                      <Button
+                        size="small" appearance="subtle" icon={<Copy20Regular />}
+                        onClick={() => copyTileCsv(i)} disabled={!t.result?.ok}
+                        aria-label="Copy tile result to clipboard"
+                        title={t.result?.ok ? 'Copy this tile’s result (CSV) to the clipboard' : 'Run the tile first to enable copy'} />
+                    </>
+                  )}
                   <Button size="small" appearance="subtle" onClick={() => setTileFlyoutIdx(i)} aria-label="Edit tile">
                     Edit
                   </Button>
                   <Button size="small" appearance="subtle" icon={<Delete20Regular />} onClick={() => deleteTile(i)} aria-label="Delete tile" />
                 </div>
               </div>
+
+              {/* U8 — text tile body: rendered markdown in place of a query
+                  result. renderMarkdown HTML-escapes the source FIRST so no
+                  author markup can inject elements (see render-markdown.ts). */}
+              {isText && (
+                <div className={tc.mdBody} dangerouslySetInnerHTML={{ __html: renderMarkdown(t.markdown || '') }} />
+              )}
 
               {/* PSR-7 — per-tile SWR spinner: a small "refreshing" chip when a
                   tile is re-querying but its prior result is still on screen. */}
@@ -1403,9 +1352,12 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
                     drillthrough={t.drillthrough}
                     onDrillthrough={t.drillthrough ? (paramName, value) => {
                       // Inject the clicked value into the target parameter, then
-                      // re-run every tile so the dashboard cross-filters — the
-                      // single-page Loom equivalent of Fabric drill-through.
+                      // re-run every tile so the dashboard cross-filters. When a
+                      // target page is wired (U8), also navigate to that page —
+                      // the full documented Fabric drill-through behavior.
                       setParams((prev) => prev.map((p) => p.variableName === paramName ? { ...p, value } : p));
+                      const target = t.drillthrough?.targetPageId;
+                      if (depthEnabled && target && pages.some((p) => p.id === target)) setActivePageId(target);
                       setTimeout(() => runAll(), 0);
                     } : undefined}
                   />
@@ -1416,7 +1368,7 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
                   </span>
                 </div>
               )}
-              {!t.result && !t.error && !t.loading && <Caption1 style={{ marginTop: tokens.spacingVerticalS, color: tokens.colorNeutralForeground3 }}>Run the tile to see results.</Caption1>}
+              {!isText && !t.result && !t.error && !t.loading && <Caption1 style={{ marginTop: tokens.spacingVerticalS, color: tokens.colorNeutralForeground3 }}>Run the tile to see results.</Caption1>}
 
               {/* ux-fabric-a W1 — timing/status footer: rows · query duration ·
                   updated-at, from the tile's REAL last run (client-measured). */}
@@ -1501,12 +1453,27 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
               {tileFlyoutIdx !== null && tiles[tileFlyoutIdx] && (() => {
                 const i = tileFlyoutIdx;
                 const t = tiles[i];
+                const isText = t.viz === 'markdown';
                 return (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS}}>
                     <div>
                       <Caption1>Title</Caption1>
                       <Input value={t.title} onChange={(_: unknown, d: any) => updateTile(i, { title: d.value })} placeholder="Title" aria-label="Tile title" />
                     </div>
+                    {/* U8 — move the tile between pages. */}
+                    {depthEnabled && pages.length > 0 && (
+                      <div>
+                        <Caption1>Page</Caption1>
+                        <Select
+                          value={resolveTilePageId(t, pages)}
+                          aria-label="Tile page"
+                          onChange={(_: unknown, d: any) => updateTile(i, { pageId: d.value })}
+                        >
+                          {pages.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                        </Select>
+                      </div>
+                    )}
+                    {!isText && (
                     <div style={{ display: 'flex', gap: tokens.spacingVerticalS, flexWrap: 'wrap' }}>
                       <div style={{ flex: 1, minWidth: 140 }}>
                         <Caption1>Visual</Caption1>
@@ -1522,6 +1489,7 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
                         </Select>
                       </div>
                     </div>
+                    )}
                     <div style={{ display: 'flex', gap: tokens.spacingVerticalS}}>
                       <div style={{ flex: 1 }}>
                         <Caption1>Width (1–12)</Caption1>
@@ -1532,6 +1500,28 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
                         <Input type="number" value={String(t.h || 2)} onChange={(_: unknown, d: any) => updateTile(i, { h: Math.max(1, Math.min(8, parseInt(d.value, 10) || 2)) })} aria-label="Tile height" />
                       </div>
                     </div>
+                    {isText ? (
+                      <>
+                        {/* U8 — text tile: markdown content + live preview.
+                            No query, no data source — nothing executes. */}
+                        <Caption1>Markdown content</Caption1>
+                        <MonacoTextarea
+                          value={t.markdown || ''}
+                          onChange={(v) => updateTile(i, { markdown: v })}
+                          language="markdown"
+                          height={200}
+                          minHeight={140}
+                          ariaLabel={`Tile ${i + 1} markdown content`}
+                        />
+                        <Caption1>Preview</Caption1>
+                        <div
+                          className={tc.mdBody}
+                          style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge, padding: tokens.spacingVerticalS }}
+                          dangerouslySetInnerHTML={{ __html: renderMarkdown(t.markdown || '') }}
+                        />
+                      </>
+                    ) : (
+                    <>
                     <Caption1>KQL query{baseQueries.length > 0 ? ' — reference a base query as $baseQuery(\'name\')' : ''}</Caption1>
                     <MonacoTextarea
                       value={t.kql}
@@ -1550,12 +1540,13 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
                     )}
 
                     {/* Drill-through (Fabric: visual Interactions > Drillthrough).
-                        Clicking a result value sets a dashboard parameter and
-                        re-runs every tile (single-page cross-filter). */}
+                        Clicking a result value sets a dashboard parameter, re-runs
+                        every tile (cross-filter), and optionally navigates to a
+                        target page (U8 pages). */}
                     <div style={{ borderTop: `1px solid ${tokens.colorNeutralStroke2}`, paddingTop: tokens.spacingVerticalS, marginTop: tokens.spacingVerticalXS}}>
                       <Caption1 style={{ fontWeight: 600 }}>Drill-through</Caption1>
                       <Caption1 style={{ color: tokens.colorNeutralForeground3, display: 'block', marginBottom: tokens.spacingVerticalXS}}>
-                        Clicking a value in this tile injects it into a dashboard parameter and re-runs all tiles.
+                        Clicking a value in this tile injects it into a dashboard parameter and re-runs all tiles{depthEnabled && pages.length > 0 ? ' — optionally navigating to a target page' : ''}.
                       </Caption1>
                       {params.length === 0 ? (
                         <MessageBar intent="info">
@@ -1575,7 +1566,7 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
                                   const column = d.value;
                                   const paramName = t.drillthrough?.paramName || '';
                                   updateTile(i, {
-                                    drillthrough: column.trim() || paramName ? { column, paramName } : undefined,
+                                    drillthrough: column.trim() || paramName ? { column, paramName, targetPageId: t.drillthrough?.targetPageId } : undefined,
                                   });
                                 }}
                               >
@@ -1593,7 +1584,7 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
                                   const column = d.value;
                                   const paramName = t.drillthrough?.paramName || '';
                                   updateTile(i, {
-                                    drillthrough: column.trim() || paramName ? { column, paramName } : undefined,
+                                    drillthrough: column.trim() || paramName ? { column, paramName, targetPageId: t.drillthrough?.targetPageId } : undefined,
                                   });
                                 }}
                               />
@@ -1608,7 +1599,7 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
                                 const paramName = d.value;
                                 const column = t.drillthrough?.column || '';
                                 updateTile(i, {
-                                  drillthrough: column.trim() || paramName ? { column, paramName } : undefined,
+                                  drillthrough: column.trim() || paramName ? { column, paramName, targetPageId: t.drillthrough?.targetPageId } : undefined,
                                 });
                               }}
                             >
@@ -1618,11 +1609,36 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
                               ))}
                             </Select>
                           </div>
+                          {/* U8 — navigate to a page after injecting the value. */}
+                          {depthEnabled && pages.length > 0 && (
+                            <div style={{ flex: 1, minWidth: 140 }}>
+                              <Caption1>Target page</Caption1>
+                              <Select
+                                value={t.drillthrough?.targetPageId || ''}
+                                aria-label="Drillthrough target page"
+                                disabled={!t.drillthrough?.paramName}
+                                onChange={(_: unknown, d: any) => {
+                                  if (!t.drillthrough) return;
+                                  updateTile(i, {
+                                    drillthrough: { ...t.drillthrough, targetPageId: d.value || undefined },
+                                  });
+                                }}
+                              >
+                                <option value="">(stay on this page)</option>
+                                {pages.map((p) => (
+                                  <option key={p.id} value={p.id}>{p.name}</option>
+                                ))}
+                              </Select>
+                            </div>
+                          )}
                         </div>
                       )}
                       {t.drillthrough?.column && t.drillthrough?.paramName && (
                         <Caption1 style={{ color: tokens.colorNeutralForeground3, display: 'block', marginTop: tokens.spacingVerticalXS}}>
-                          Click a value in this tile → sets <code>{t.drillthrough.paramName}</code> to the value in column <code>{t.drillthrough.column}</code> and re-runs all tiles.
+                          Click a value in this tile → sets <code>{t.drillthrough.paramName}</code> to the value in column <code>{t.drillthrough.column}</code>
+                          {t.drillthrough.targetPageId && pages.some((p) => p.id === t.drillthrough?.targetPageId)
+                            ? <>, navigates to <strong>{pages.find((p) => p.id === t.drillthrough?.targetPageId)?.name}</strong>,</>
+                            : ''} and re-runs all tiles.
                         </Caption1>
                       )}
                     </div>
@@ -1638,6 +1654,8 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
                           onChange={(rules) => updateTile(i, { conditionalRules: rules.length ? rules : undefined })}
                         />
                       </div>
+                    )}
+                    </>
                     )}
                   </div>
                 );
@@ -2057,7 +2075,7 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
           <DialogBody>
             <DialogTitle>Edit dashboard model (JSON)</DialogTitle>
             <DialogContent>
-              <Caption1>Full model: <code>{`{ tiles, dataSources, parameters, timeRange }`}</code>. An array root is accepted as just the tiles.</Caption1>
+              <Caption1>Full model: <code>{`{ tiles, dataSources, parameters, baseQueries, pages, timeRange }`}</code>. An array root is accepted as just the tiles.</Caption1>
               <Textarea
                 value={jsonText}
                 onChange={(_: unknown, d: any) => { setJsonText(d.value); setJsonErr(null); }}

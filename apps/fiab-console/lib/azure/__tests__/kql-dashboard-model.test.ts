@@ -7,7 +7,7 @@ import { describe, it, expect } from 'vitest';
 import {
   substituteTileKql, buildTileKql, paramTypeToKustoType,
   renderParamLiteral, resolveTimeFrom, resolveTileDatabase,
-  sanitizeModel, substituteBaseQueries,
+  sanitizeModel, substituteBaseQueries, resolveTilePageId, isQueryTile,
   evalConditionalRules, evalCondition, gradientColor,
   type DashboardParam, type BaseQuery, type ConditionalRule,
 } from '../kql-dashboard-model';
@@ -416,5 +416,83 @@ describe('sanitizeModel — drillthrough', () => {
     });
     expect(m.tiles[0].drillthrough!.column).toHaveLength(80);
     expect(m.tiles[0].drillthrough!.paramName).toHaveLength(80);
+  });
+});
+
+// ── U8 — pages, markdown text tiles, page-targeted drill-through ────────────
+
+describe('sanitizeModel — pages (U8)', () => {
+  it('round-trips pages and caps at 20', () => {
+    const many = Array.from({ length: 25 }, (_, i) => ({ id: `p${i}`, name: `Page ${i}` }));
+    const m = sanitizeModel({ pages: many });
+    expect(m.pages).toHaveLength(20);
+    expect(m.pages[0]).toEqual({ id: 'p0', name: 'Page 0' });
+  });
+  it('generates an id for a page without one and defaults the name', () => {
+    const m = sanitizeModel({ pages: [{ name: 'Ops' }, {}] });
+    expect(m.pages[0].name).toBe('Ops');
+    expect(m.pages[0].id.length).toBeGreaterThan(0);
+    expect(m.pages[1].name).toBe('Page');
+  });
+  it('defaults to an empty pages list (back-compat single-page model)', () => {
+    expect(sanitizeModel({}).pages).toEqual([]);
+  });
+  it('round-trips a tile pageId', () => {
+    const m = sanitizeModel({
+      pages: [{ id: 'p1', name: 'Page 1' }],
+      tiles: [{ title: 'T', kql: 'print 1', viz: 'table', pageId: 'p1' }],
+    });
+    expect(m.tiles[0].pageId).toBe('p1');
+  });
+});
+
+describe('resolveTilePageId (U8)', () => {
+  const pages = [{ id: 'p1', name: 'Page 1' }, { id: 'p2', name: 'Page 2' }];
+  it('returns the empty id for a single-page dashboard (no pages)', () => {
+    expect(resolveTilePageId({ pageId: 'p1' }, [])).toBe('');
+  });
+  it('keeps a pageId that names a real page', () => {
+    expect(resolveTilePageId({ pageId: 'p2' }, pages)).toBe('p2');
+  });
+  it('falls back to the FIRST page for absent/unknown pageId (pre-pages tiles land on page 1)', () => {
+    expect(resolveTilePageId({}, pages)).toBe('p1');
+    expect(resolveTilePageId({ pageId: 'deleted' }, pages)).toBe('p1');
+  });
+});
+
+describe('sanitizeModel — markdown text tiles (U8)', () => {
+  it('keeps a markdown tile with content and no KQL', () => {
+    const m = sanitizeModel({ tiles: [{ title: 'Note', viz: 'markdown', markdown: '## Hello', kql: '' }] });
+    expect(m.tiles).toHaveLength(1);
+    expect(m.tiles[0].viz).toBe('markdown');
+    expect(m.tiles[0].markdown).toBe('## Hello');
+  });
+  it('drops a markdown tile with no content', () => {
+    const m = sanitizeModel({ tiles: [{ title: 'Empty', viz: 'markdown', markdown: '   ', kql: '' }] });
+    expect(m.tiles).toHaveLength(0);
+  });
+  it('still drops a QUERY tile with no KQL', () => {
+    const m = sanitizeModel({ tiles: [{ title: 'q', viz: 'table', kql: '' }] });
+    expect(m.tiles).toHaveLength(0);
+  });
+  it('isQueryTile: markdown tiles never execute', () => {
+    expect(isQueryTile({ viz: 'markdown' })).toBe(false);
+    expect(isQueryTile({ viz: 'table' })).toBe(true);
+    expect(isQueryTile({ viz: undefined })).toBe(true);
+  });
+});
+
+describe('sanitizeModel — drillthrough targetPageId (U8)', () => {
+  it('round-trips a drillthrough target page', () => {
+    const m = sanitizeModel({
+      tiles: [{ title: 'T', kql: 'print 1', viz: 'table', drillthrough: { column: 'State', paramName: '_state', targetPageId: 'p2' } }],
+    });
+    expect(m.tiles[0].drillthrough).toMatchObject({ column: 'State', paramName: '_state', targetPageId: 'p2' });
+  });
+  it('leaves targetPageId undefined when absent (same-page cross-filter)', () => {
+    const m = sanitizeModel({
+      tiles: [{ title: 'T', kql: 'print 1', viz: 'table', drillthrough: { column: 'State', paramName: '_state' } }],
+    });
+    expect(m.tiles[0].drillthrough!.targetPageId).toBeUndefined();
   });
 });
