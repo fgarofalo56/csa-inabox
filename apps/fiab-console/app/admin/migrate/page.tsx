@@ -22,10 +22,12 @@ import { clientFetch } from '@/lib/client-fetch';
 import { AdminShell } from '@/lib/components/admin-shell';
 import { TileGrid } from '@/lib/components/ui/tile-grid';
 import { EmptyState } from '@/lib/components/empty-state';
+import { TranslatePanel } from './translate-panel';
 import {
   makeStyles, tokens, Subtitle2, Caption1, Body1, Badge, Spinner, Dropdown, Option,
   Button, Input, Field, MessageBar, MessageBarBody, MessageBarTitle, Tooltip,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
+  TabList, Tab,
 } from '@fluentui/react-components';
 import {
   ArrowSwap24Regular, DatabaseArrowRight20Regular, Search20Regular, CheckmarkCircle20Regular,
@@ -84,6 +86,7 @@ async function assess(sourceType: MigrationSourceType, connection: Record<string
 
 export default function MigratePage() {
   const styles = useStyles();
+  const [tab, setTab] = useState<'assess' | 'translate'>('assess');
   const [sourceType, setSourceType] = useState<MigrationSourceType>('snowflake');
   const [host, setHost] = useState('');
   const [workspaceId, setWorkspaceId] = useState('');
@@ -133,6 +136,13 @@ export default function MigratePage() {
       }}
     >
       <div className={styles.root}>
+        <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as 'assess' | 'translate')}>
+          <Tab value="assess">Assess</Tab>
+          <Tab value="translate">Translate</Tab>
+        </TabList>
+
+        {tab === 'translate' ? <TranslatePanel /> : (
+        <>
         {/* Source connection picker */}
         <div className={styles.section}>
           <div className={styles.badgeRow}>
@@ -218,6 +228,8 @@ export default function MigratePage() {
             title="Assess a source estate to begin"
             body="Pick a source type above, provide its connection, and select Assess. Loom enumerates the estate and produces a migration-readiness report — every object mapped to a Loom item type with a 1:1 / needs-review effort flag."
           />
+        )}
+        </>
         )}
       </div>
     </AdminShell>
