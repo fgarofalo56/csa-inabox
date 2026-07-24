@@ -224,6 +224,18 @@ async function writeMetricAudit(
   detail: { metric: string; engine: string; dimensions: string[]; rowCount: number; cached: boolean },
 ): Promise<void> {
   const at = new Date().toISOString();
+  // SIEM fan-out fires SYNCHRONOUSLY first — it must run even if writeMetricAudit
+  // is invoked fire-and-forget (the Cosmos write below is awaited, so anything
+  // after it would be on a later microtask and could be missed).
+  emitAuditEvent({
+    actorOid: actor.oid,
+    actorUpn: actor.who,
+    action: 'metrics.query',
+    targetType: 'metric',
+    targetId: detail.metric,
+    tenantId: actor.tenantId,
+    detail,
+  });
   try {
     const audit = await auditLogContainer();
     await audit.items
@@ -243,13 +255,4 @@ async function writeMetricAudit(
   } catch {
     /* audit failures are non-blocking */
   }
-  emitAuditEvent({
-    actorOid: actor.oid,
-    actorUpn: actor.who,
-    action: 'metrics.query',
-    targetType: 'metric',
-    targetId: detail.metric,
-    tenantId: actor.tenantId,
-    detail,
-  });
 }
