@@ -90,6 +90,14 @@ export const RUNTIME_FLAGS: readonly RuntimeFlagDef[] = [
     surface: 'Query↔results panes of the 11 Monaco-based query editors',
   },
   {
+    id: 'u8-kql-dashboard-depth',
+    label: 'KQL dashboard — pages, text tiles & page drill-through',
+    description:
+      'The U8 Real-Time Dashboard depth surface: multi-page tile containers with the page strip, markdown text tiles, and drill-through that navigates to a target page after injecting the clicked value. OFF reverts the editor to the pre-U8 single-page canvas on the next load — saved pages and text tiles are preserved (every tile renders on one canvas; text tiles keep rendering their content) and drill-through falls back to same-page cross-filtering. Nothing is deleted.',
+    ownerItem: 'U8',
+    surface: 'Real-Time Dashboard editor (/items/kql-dashboard/[id])',
+  },
+  {
     id: 'v1-journeys-tab',
     label: 'Health hub — Journeys tab',
     description: 'OFF reverts /admin/health to the pre-V1 self-audit-only layout (hides the synthetic-journey Journeys tab). The scheduled loom-synthetic-monitor job itself keeps running either way — this only controls the admin surface.',
