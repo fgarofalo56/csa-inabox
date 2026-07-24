@@ -97,6 +97,7 @@ import {
 import { itemTypeIcon } from '@/lib/catalog/item-type-icon';
 import { readableAccent } from '@/lib/components/ui/item-type-visual';
 import { useTheme } from '@/lib/theme/theme-context';
+import { CanvasFullscreenRailButton } from './canvas-fullscreen';
 
 // =============================================================================
 // A. Visual-mapping types + exports
@@ -1524,6 +1525,8 @@ export function CanvasRightRail({
         <Tooltip content="Show canvas controls" relationship="label">
           <Button size="small" appearance="subtle" icon={<ChevronDoubleLeft20Regular />} aria-label="Expand canvas controls" onClick={onToggleCollapse} />
         </Tooltip>
+        {/* U9 — keeps the EXIT affordance reachable while maximized. */}
+        <CanvasFullscreenRailButton collapsed />
       </div>
     );
   }
@@ -1555,6 +1558,8 @@ export function CanvasRightRail({
       <Tooltip content="Zoom to fit" relationship="label">
         <Button size="small" appearance="subtle" icon={<FullScreenMaximize20Regular />} aria-label="Zoom to fit" onClick={onFit} />
       </Tooltip>
+      {/* U9 — maximize/restore (renders only inside a CanvasFullscreenHost). */}
+      <CanvasFullscreenRailButton />
       {onAutoLayout && (
         <Tooltip content="Auto-layout" relationship="label">
           <Button size="small" appearance="subtle" icon={<Organization20Regular />} aria-label="Auto-layout" onClick={onAutoLayout} />

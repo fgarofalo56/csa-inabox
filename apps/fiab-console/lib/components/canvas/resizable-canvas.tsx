@@ -37,6 +37,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { makeStyles, mergeClasses, tokens } from '@fluentui/react-components';
+import { CanvasFullscreenHost, useCanvasFullscreen } from './canvas-fullscreen';
 
 // ── Inherent layout dimensions (no Fluent token expresses these) ───────────
 /** Floor for any canvas region — below this a graph canvas is unusable. */
@@ -326,6 +327,14 @@ const useStyles = makeStyles({
     transitionTimingFunction: tokens.curveEasyEase,
     '@media (prefers-reduced-motion: reduce)': { transitionProperty: 'none' },
   },
+  // U9 full-screen: while the enclosing CanvasFullscreenHost is maximized the
+  // region abandons its user-set height and simply fills the fixed overlay
+  // (the resize grip is hidden — height is the viewport's while maximized).
+  regionFullscreen: {
+    flexGrow: 1,
+    minHeight: 0,
+    height: 'auto',
+  },
   // The canvas itself fills all space above the handle (children are expected
   // to use flex:1 / height:100%, exactly as they did at their old fixed height).
   canvasFill: {
@@ -396,8 +405,23 @@ export interface ResizableCanvasRegionProps {
  * Wraps a canvas in a flex column whose height the user can drag (or keyboard-
  * resize) via a bottom grip, persisted per surface. Drop-in: replace a fixed
  * `height` container with this and render the canvas as its child.
+ *
+ * U9: the region embeds a `CanvasFullscreenHost`, so EVERY region adopter
+ * inherits canvas full-screen mode with zero wiring — any `CanvasRightRail`
+ * rendered inside the children picks the host up via context and shows the
+ * maximize/restore button. While maximized the region fills the fixed overlay
+ * (the height grip is hidden; the persisted height is untouched — full-screen
+ * is session-scoped by design).
  */
-export function ResizableCanvasRegion({
+export function ResizableCanvasRegion(props: ResizableCanvasRegionProps) {
+  return (
+    <CanvasFullscreenHost>
+      <ResizableCanvasRegionBody {...props} />
+    </CanvasFullscreenHost>
+  );
+}
+
+function ResizableCanvasRegionBody({
   storageKey,
   defaultPx,
   minPx = MIN_PX_DEFAULT,
@@ -410,28 +434,34 @@ export function ResizableCanvasRegion({
   const styles = useStyles();
   const { height, minHeight, maxHeight, regionRef, separatorProps, isDragging } =
     useResizableHeight(storageKey, defaultPx, minPx, maxPx, autoPx);
+  const isFullscreen = useCanvasFullscreen()?.isFullscreen ?? false;
 
   return (
     <div
       ref={regionRef}
-      className={mergeClasses(styles.region, className)}
-      style={{ height: `${height}px`, minHeight: `${minHeight}px` }}
+      className={mergeClasses(styles.region, isFullscreen && styles.regionFullscreen, className)}
+      // The committed height only applies windowed — maximized, the region
+      // fills the fixed overlay (regionFullscreen) so the canvas gets the
+      // viewport while the persisted preference stays exactly as it was.
+      style={isFullscreen ? undefined : { height: `${height}px`, minHeight: `${minHeight}px` }}
     >
       <div className={styles.canvasFill}>{children}</div>
-      <div
-        {...separatorProps}
-        role="separator"
-        aria-orientation="horizontal"
-        aria-valuemin={minHeight}
-        aria-valuemax={maxHeight}
-        aria-valuenow={height}
-        aria-label={ariaLabel ?? 'Resize canvas height. Use Arrow Up and Arrow Down keys.'}
-        className={mergeClasses(styles.handle, isDragging && styles.handleActive)}
-      >
-        <span className={styles.gripBar} />
-        <span className={styles.gripBar} />
-        <span className={styles.gripBar} />
-      </div>
+      {!isFullscreen && (
+        <div
+          {...separatorProps}
+          role="separator"
+          aria-orientation="horizontal"
+          aria-valuemin={minHeight}
+          aria-valuemax={maxHeight}
+          aria-valuenow={height}
+          aria-label={ariaLabel ?? 'Resize canvas height. Use Arrow Up and Arrow Down keys.'}
+          className={mergeClasses(styles.handle, isDragging && styles.handleActive)}
+        >
+          <span className={styles.gripBar} />
+          <span className={styles.gripBar} />
+          <span className={styles.gripBar} />
+        </div>
+      )}
     </div>
   );
 }

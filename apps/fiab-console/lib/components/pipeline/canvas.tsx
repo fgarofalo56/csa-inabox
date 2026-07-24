@@ -53,6 +53,7 @@ import { cloneSelection, type ClonableEdge } from '@/lib/components/canvas/canva
 import { alignPositions, distributePositions, type AlignMode, type DistributeAxis, type AlignNode } from '@/lib/components/canvas/canvas-align';
 import { CanvasPowerToolbar } from '@/lib/components/canvas/canvas-power-toolbar';
 import { CanvasShortcutDialog } from '@/lib/components/canvas/canvas-shortcut-dialog';
+import { CanvasFullscreenHost } from '@/lib/components/canvas/canvas-fullscreen';
 import { EmptyState } from '@/lib/components/empty-state';
 import type { PipelineActivity } from './types';
 
@@ -858,11 +859,16 @@ const PipelineCanvasInner = forwardRef<CanvasHandle, PipelineCanvasProps>(functi
 /**
  * Public component — wraps the inner canvas in a ReactFlowProvider so
  * useReactFlow() works, and forwards the imperative handle through.
+ * The U9 CanvasFullscreenHost wraps the provider so BOTH pipeline canvas
+ * hosts (data-pipeline editor + pipeline designer) inherit full-screen —
+ * the shared CanvasRightRail inside picks it up via context.
  */
 export const PipelineCanvas = forwardRef<CanvasHandle, PipelineCanvasProps>(function PipelineCanvas(props, ref) {
   return (
-    <ReactFlowProvider>
-      <PipelineCanvasInner {...props} ref={ref} />
-    </ReactFlowProvider>
+    <CanvasFullscreenHost ariaLabel="Pipeline canvas full screen">
+      <ReactFlowProvider>
+        <PipelineCanvasInner {...props} ref={ref} />
+      </ReactFlowProvider>
+    </CanvasFullscreenHost>
   );
 });
