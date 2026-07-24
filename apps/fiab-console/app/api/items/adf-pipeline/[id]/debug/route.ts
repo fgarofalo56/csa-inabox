@@ -10,10 +10,10 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { debugPipeline } from '@/lib/azure/adf-client';
 import { withFactoryOverride } from '@/lib/azure/adf-factory-context';
 import { resolveBinding, bindingErrorResponse, bindingFactoryOverride } from '@/lib/azure/pipeline-binding';
+import { withSession } from '@/lib/api/route-toolkit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -22,10 +22,8 @@ export const dynamic = 'force-dynamic';
 // see pipeline-binding.ts loadPipelineItem for why.
 const ACCEPTED_TYPES = ['adf-pipeline', 'data-pipeline'];
 
-export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  const { id } = await ctx.params;
+export const POST = withSession<{ id: string }>(async (req: NextRequest, { session, params }) => {
+  const { id } = params;
   const body = await req.json().catch(() => ({}));
   let binding: Awaited<ReturnType<typeof resolveBinding>>;
   try {
@@ -38,10 +36,16 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   // Debug-run against the SAME factory the item was bound against.
   return withFactoryOverride(bindingFactoryOverride(binding), async () => {
     try {
-      const res = await debugPipeline(pipelineName, body?.params || {});
+      const res = await debugPipeline(pipelineName, body?.params || {}, {
+        // U13 — recovery reruns from the in-canvas overlay ("Rerun from
+        // failed" / "Rerun from this activity"): ADF createRun isRecovery.
+        referencePipelineRunId: body?.referencePipelineRunId,
+        startActivityName: body?.startActivityName,
+        startFromFailure: body?.startFromFailure === true,
+      });
       return NextResponse.json({ ok: true, boundTo: pipelineName, ...res });
     } catch (e: any) {
       return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
     }
   });
-}
+});

@@ -316,6 +316,8 @@ export async function runPipeline(
  * Debug a pipeline run — ADF supports `isRecovery=true&referencePipelineRunId=`
  * for re-runs from a known runId. When `referencePipelineRunId` is omitted,
  * `isRecovery` is forced false so ADF treats it as a normal createRun.
+ * `startFromFailure=true` (recovery only) reruns just the referenced run's
+ * failed activities; `startActivityName` reruns from a named activity.
  *
  * The Fabric Debug button in the editor maps to this — same wire format as
  * Run but with a distinct invokedByType so the run shows up in the Output
@@ -324,12 +326,13 @@ export async function runPipeline(
 export async function debugPipeline(
   name: string,
   params?: Record<string, unknown>,
-  opts?: { referencePipelineRunId?: string; startActivityName?: string },
+  opts?: { referencePipelineRunId?: string; startActivityName?: string; startFromFailure?: boolean },
 ): Promise<PipelineRunResponse> {
   const qs = new URLSearchParams({ 'api-version': API });
   if (opts?.referencePipelineRunId) {
     qs.set('isRecovery', 'true');
     qs.set('referencePipelineRunId', opts.referencePipelineRunId);
+    if (opts.startFromFailure) qs.set('startFromFailure', 'true');
   } else {
     qs.set('isRecovery', 'false');
   }
